@@ -1,14 +1,16 @@
 #!/usr/bin/env node
 // Builds config recipes for upgrade-survivor E2E scenarios.
-import { spawnSync } from "node:child_process";
+import {
+  spawnSync,
+  type SpawnSyncOptionsWithStringEncoding,
+  type SpawnSyncReturns,
+} from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import {
-  classifyReleaseTrain,
   compareReleaseVersions,
   parsePinnedReleaseVersion,
-  parseReleaseVersion,
 } from "../../../lib/release-version.mjs";
 import { usesStructuredToolSearchAtBaseline } from "../../../lib/upgrade-survivor-policy.mjs";
 import { buildCmdExeCommandLine, resolveWindowsCmdExePath } from "../../../windows-cmd-helpers.mjs";
@@ -31,26 +33,11 @@ type UpgradeSurvivorCommandParams = {
   env?: NodeJS.ProcessEnv;
   platform?: NodeJS.Platform;
 };
-type ConfigCommandResult = {
-  error?: Error & { code?: unknown };
-  signal: NodeJS.Signals | null;
-  status: number | null;
-  stderr: string;
-  stdout: string;
-};
 type SpawnSyncCommand = (
   command: string,
   args: string[],
-  options: {
-    encoding: BufferEncoding;
-    env: NodeJS.ProcessEnv;
-    killSignal: NodeJS.Signals;
-    maxBuffer: number;
-    shell: boolean;
-    timeout: number;
-    windowsVerbatimArguments?: boolean;
-  },
-) => ConfigCommandResult;
+  options: SpawnSyncOptionsWithStringEncoding,
+) => Pick<SpawnSyncReturns<string>, "error" | "signal" | "status" | "stderr" | "stdout">;
 type ConfigCommandParams = {
   maxBufferBytes?: number;
   spawnSyncCommand?: SpawnSyncCommand;
@@ -130,6 +117,13 @@ const scenarioConfigSteps = new Map<string, ConfigStep[]>([
     "base",
     [
       {
+        // Personal-library authoring left skill_workshop for skill_library; the candidate
+        // must keep this pre-split allowlist covering it exactly once.
+        id: "tools-allow-skill-workshop",
+        intent: "skill-library-split",
+        argv: ["config", "set", "tools.allow", '["read","skill_workshop"]', "--strict-json"],
+      },
+      {
         id: "logging-file",
         intent: "logging",
         // Raw debug output stays in the isolated home, outside uploaded artifact roots.
@@ -202,19 +196,19 @@ const scenarioConfigSteps = new Map<string, ConfigStep[]>([
   ],
 ]);
 
-export function resolveScenarioConfigSteps(scenario: string): ConfigStep[] {
+function resolveScenarioConfigSteps(scenario: string): ConfigStep[] {
   return scenarioConfigSteps.get(scenario) ?? [];
 }
 
 const sharedRecipe: ConfigStep[] = [
   configSetJsonFile("gateway", "gateway", "gateway"),
   ...representativeConfigSteps,
-  {
-    id: "validate",
-    intent: "validate",
-    argv: ["config", "validate"],
-  },
 ];
+const validateStep: ConfigStep = {
+  id: "validate",
+  intent: "validate",
+  argv: ["config", "validate"],
+};
 
 const connectionOnlySharedIntents = new Set(["gateway"]);
 const connectionOnlyScenarios = new Set(["mobile-pairing-reconnect", "watchos-direct-node"]);
@@ -223,7 +217,6 @@ export function resolveUpgradeSurvivorConfigSteps(
   scenario = "base",
   configuredUpdateChannel = process.env.OPENCLAW_UPGRADE_SURVIVOR_UPDATE_CHANNEL,
 ): ConfigStep[] {
-  const validateStep = sharedRecipe.at(-1);
   const updateChannel =
     configuredUpdateChannel || (scenario === "prerelease-plugin-registry" ? "beta" : "stable");
   if (updateChannel !== "stable" && updateChannel !== "beta") {
@@ -235,7 +228,6 @@ export function resolveUpgradeSurvivorConfigSteps(
     throw new Error(`invalid selected Tool Search recipe: ${toolSearchRecipe}`);
   }
   const sharedSteps = sharedRecipe
-    .slice(0, -1)
     .filter((step) => step.intent !== "tool-search" || toolSearchRecipe === "current")
     .filter(
       (step) =>
@@ -268,7 +260,7 @@ export function resolveUpgradeSurvivorConfigSteps(
     },
     ...sharedSteps,
     ...resolveScenarioConfigSteps(scenario),
-    ...(validateStep ? [validateStep] : []),
+    validateStep,
   ];
 }
 
@@ -279,54 +271,45 @@ function adaptStepForBaseline(step: ConfigStep, baselineVersion: string | null):
       argv: [...step.argv.slice(0, 3), JSON.stringify({ mode: "tools" }), ...step.argv.slice(4)],
     };
   }
+  if (
+    step.id !== "agents" &&
+    (step.id !== "channels-discord" ||
+      compareReleaseVersions(baselineVersion ?? "", "2026.7.2-beta.4") !== -1)
+  ) {
+    return step;
+  }
+  const json = step.argv[3];
+  if (json === undefined) {
+    throw new Error(`config recipe step ${step.id} is missing its JSON value`);
+  }
+  let value = JSON.parse(json);
   if (step.id === "agents") {
-    const agentsJson = step.argv[3];
-    if (agentsJson === undefined) {
-      throw new Error(`config recipe step ${step.id} is missing its JSON value`);
+    // beta.1 retired heartbeat defaults; those baselines are idle without the legacy setting.
+    if ((compareReleaseVersions(baselineVersion ?? "", "2026.11.5-beta.1") ?? -1) >= 0) {
+      delete value.defaults.heartbeat;
     }
-    const agents = JSON.parse(agentsJson);
     // Keyed rosters shipped before explicit ownership; those baselines still
     // require the legacy default marker.
     if (compareReleaseVersions(baselineVersion ?? "", "2026.8.1-beta.2") === -1) {
-      agents.entries.main.default = true;
-      delete agents.ownership;
+      value.entries.main.default = true;
+      delete value.ownership;
     }
-    // July's extended-stable line branched before keyed rosters shipped.
-    const baselineRelease = parseReleaseVersion(baselineVersion ?? "");
-    if (
-      (baselineRelease?.year === 2026 &&
-        baselineRelease.month === 7 &&
-        classifyReleaseTrain(baselineRelease) === "extended-stable") ||
-      compareReleaseVersions(baselineVersion ?? "", "2026.7.2-beta.4") === -1
-    ) {
-      agents.list = Object.entries<Record<string, unknown>>(agents.entries).map(([id, entry]) =>
+    if (compareReleaseVersions(baselineVersion ?? "", "2026.7.2-beta.4") === -1) {
+      value.list = Object.entries<Record<string, unknown>>(value.entries).map(([id, entry]) =>
         Object.assign(entry, { id }),
       );
-      delete agents.entries;
+      delete value.entries;
     }
-    return {
-      ...step,
-      argv: [...step.argv.slice(0, 3), JSON.stringify(agents), ...step.argv.slice(4)],
-    };
-  }
-  if (
-    step.id === "channels-discord" &&
-    compareReleaseVersions(baselineVersion ?? "", "2026.7.2-beta.4") === -1
-  ) {
-    const discordJson = step.argv[3];
-    if (discordJson === undefined) {
-      throw new Error(`config recipe step ${step.id} is missing its JSON value`);
-    }
+  } else {
     // beta.4 retired nested DM policy. Older baselines retain the shipped
     // specimen so candidate Doctor must migrate it without changing access.
-    const { dmPolicy, allowFrom, ...discord } = JSON.parse(discordJson);
-    discord.dm = { policy: dmPolicy, allowFrom };
-    return {
-      ...step,
-      argv: [...step.argv.slice(0, 3), JSON.stringify(discord), ...step.argv.slice(4)],
-    };
+    const { dmPolicy, allowFrom, ...discord } = value;
+    value = { ...discord, dm: { policy: dmPolicy, allowFrom } };
   }
-  return step;
+  return {
+    ...step,
+    argv: [...step.argv.slice(0, 3), JSON.stringify(value), ...step.argv.slice(4)],
+  };
 }
 
 function* adaptRecipeForBaseline(
@@ -396,6 +379,24 @@ function* adaptRecipeForBaseline(
       continue;
     }
     yield adaptStepForBaseline(step, baselineVersion);
+    // 2026.10.5 shipped skills.workshop; later candidates move it into the plugin's config.
+    if (
+      step.id === "skills" &&
+      pinnedVersion &&
+      (compareReleaseVersions(pinnedVersion, "2026.10.5") ?? -1) >= 0
+    ) {
+      yield {
+        id: "skill-workshop-settings",
+        intent: "skill-workshop-settings",
+        argv: [
+          "config",
+          "set",
+          "skills.workshop",
+          JSON.stringify({ autonomous: { mode: "off" }, maxSkillBytes: 8000 }),
+          "--strict-json",
+        ],
+      };
+    }
   }
 }
 
@@ -417,21 +418,15 @@ export function resolveUpgradeSurvivorOpenClawCommand(
   params: UpgradeSurvivorCommandParams = {},
 ) {
   const platform = params.platform ?? process.platform;
-  if (platform === "win32") {
-    const comSpec = params.comSpec ?? resolveWindowsCmdExePath(params.env ?? process.env);
-    return {
-      command: comSpec,
-      args: ["/d", "/s", "/c", buildCmdExeCommandLine("openclaw.cmd", argv)],
-      commandLabel: ["openclaw", ...argv].join(" "),
-      shell: false,
-      windowsVerbatimArguments: true,
-    };
-  }
+  const windows = platform === "win32";
   return {
-    command: "openclaw",
-    args: argv,
+    command: windows
+      ? (params.comSpec ?? resolveWindowsCmdExePath(params.env ?? process.env))
+      : "openclaw",
+    args: windows ? ["/d", "/s", "/c", buildCmdExeCommandLine("openclaw.cmd", argv)] : argv,
     commandLabel: ["openclaw", ...argv].join(" "),
     shell: false,
+    ...(windows ? { windowsVerbatimArguments: true } : {}),
   };
 }
 

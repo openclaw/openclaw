@@ -25,21 +25,18 @@ export function resolveConfiguredProviderFallback(params: {
     params.defaultProvider,
   );
   const defaultModel = params.defaultModel?.trim();
-  const defaultProviderHasConfiguredModel =
-    Array.isArray(defaultProviderConfig?.models) &&
-    defaultProviderConfig.models.some((model) => Boolean(model?.id));
-  const defaultProviderHasDefaultModel =
-    defaultModel !== undefined &&
-    Array.isArray(defaultProviderConfig?.models) &&
-    defaultProviderConfig.models.some((model) => model?.id === defaultModel);
-  if (defaultProviderHasConfiguredModel && (!defaultModel || defaultProviderHasDefaultModel)) {
+  if (
+    defaultProviderConfig?.models?.some(
+      (model) => model?.id && (!defaultModel || model.id === defaultModel),
+    )
+  ) {
     return null;
   }
   // A utility-only row does not express primary intent. Keep the remaining
   // provider/model insertion order as the operator's fallback preference.
   for (const [provider, providerCfg] of Object.entries(configuredProviders)) {
     const models = providerCfg?.models;
-    if (!Array.isArray(models) || !models[0]?.id) {
+    if (!models?.[0]?.id) {
       continue;
     }
     const normalizedProvider = normalizeProviderId(provider);

@@ -14,7 +14,7 @@ beforeEach(() => {
 });
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { useCanvasSandboxFixture } from "./canvas-sandbox.test-support.ts";
-import { waitForChatScrollIdle } from "./chat-flow.test-support.ts";
+import { waitForChatScrollIdle, chatMessage } from "./chat-flow.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 declare global {
@@ -200,15 +200,17 @@ suite.define(() => {
             expect(await workedFor.getAttribute("aria-expanded")).toBe(String(expanded));
             expect(await widget.count()).toBe(1);
             expect(await browser.count()).toBe(1);
-            const overlaps = await page.locator(".chat-virtual-row").evaluateAll((elements) => {
-              const rects = elements.map((element) => element.getBoundingClientRect());
-              return rects.flatMap((rect, index) => {
-                const next = rects[index + 1];
-                return next && rect.bottom > next.top
-                  ? [{ bottom: rect.bottom, nextTop: next.top }]
-                  : [];
+            const overlaps = await page
+              .locator(".chat-virtual-row:not([data-prepared-row])")
+              .evaluateAll((elements) => {
+                const rects = elements.map((element) => element.getBoundingClientRect());
+                return rects.flatMap((rect, index) => {
+                  const next = rects[index + 1];
+                  return next && rect.bottom > next.top
+                    ? [{ bottom: rect.bottom, nextTop: next.top }]
+                    : [];
+                });
               });
-            });
             expect(overlaps).toEqual([]);
           }
         },
@@ -288,16 +290,14 @@ suite.define(() => {
             ],
             timestamp: 1_500,
           },
-          {
-            role: "assistant",
-            content: [{ type: "text", text: "Checking." }],
+          chatMessage("assistant", "Checking.", {
             openclawStreamFallback: {
               itemId: "worked-for-checking",
               replacementText: "Checking.",
               source: "segment",
             },
             timestamp: 2_000,
-          },
+          }),
           {
             role: "toolResult",
             toolCallId: "worked-for-tool",
@@ -305,11 +305,7 @@ suite.define(() => {
             content: "ok",
             timestamp: 3_000,
           },
-          {
-            role: "assistant",
-            content: [{ type: "text", text: "Done." }],
-            timestamp: 4_000,
-          },
+          chatMessage("assistant", "Done.", { timestamp: 4_000 }),
         ],
       });
 

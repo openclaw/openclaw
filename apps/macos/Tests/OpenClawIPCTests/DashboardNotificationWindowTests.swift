@@ -57,7 +57,7 @@ extension DashboardWindowOwnershipTests {
             self.completion(), target: .primary, sourceURL: sourceURL)
 
         // The failure is presented without a modal loop; read the pending alert directly.
-        #expect(manager._testPendingGatewayAlerts().map(\.messageText).contains(expectedTitle))
+        #expect(manager.alertPresenter._testPendingAlerts.map(\.messageText).contains(expectedTitle))
         print("\(probeKey)=ok")
     }
 
@@ -84,7 +84,7 @@ extension DashboardWindowOwnershipTests {
     @Test func `superseded failure page finish keeps navigation queued for the restoring document`() async throws {
         let server = try await DashboardHTTPFixture.start()
         defer { server.stop() }
-        let auth = DashboardWindowAuth(gatewayUrl: nil, token: nil, password: nil)
+        let auth = DashboardWindowAuth.unauthenticated
         let controller = DashboardWindowController(
             url: server.url(), auth: auth, websiteDataStore: .nonPersistent(),
             windowAutosaveName: "", requestBrowserProfileImportOffer: { _ in false })
@@ -109,7 +109,7 @@ extension DashboardWindowOwnershipTests {
         let responses = DashboardWindowOwnershipPresentationGate(released: true)
         let server = try await DashboardHTTPFixture.start(beforeResponse: { await responses.waitForRelease() })
         defer { server.stop() }
-        let auth = DashboardWindowAuth(gatewayUrl: nil, token: nil, password: nil)
+        let auth = DashboardWindowAuth.unauthenticated
         let controller = DashboardWindowController(
             url: server.url(), auth: auth, websiteDataStore: .nonPersistent(),
             windowAutosaveName: "", requestBrowserProfileImportOffer: { _ in false })
@@ -140,7 +140,7 @@ extension DashboardWindowOwnershipTests {
         let responses = DashboardWindowOwnershipPresentationGate(released: true)
         let server = try await DashboardHTTPFixture.start(beforeResponse: { await responses.waitForRelease() })
         defer { server.stop() }
-        let auth = DashboardWindowAuth(gatewayUrl: nil, token: nil, password: nil)
+        let auth = DashboardWindowAuth.unauthenticated
         let controller = DashboardWindowController(
             url: server.url(), auth: auth, websiteDataStore: .nonPersistent(),
             windowAutosaveName: "", requestBrowserProfileImportOffer: { _ in false })

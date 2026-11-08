@@ -1,4 +1,20 @@
+import { createManagedHandoffBootIdentityReader } from "../infra/update-managed-service-handoff-boot.js";
 import { getFileLockProcessStartTime, isPidDefinitelyDead } from "../shared/pid-alive.js";
+
+let bootIdentity: string | null | undefined;
+
+export function getNodeWorkerBootIdentity(): string | null {
+  if (bootIdentity === undefined) {
+    try {
+      const boot = createManagedHandoffBootIdentityReader(process.env)();
+      bootIdentity = `${boot.platform}:${boot.identity}`;
+    } catch {
+      // Unavailable OS identity retains the existing conservative recovery contract.
+      bootIdentity = null;
+    }
+  }
+  return bootIdentity;
+}
 
 export type NodeWorkerProcessIdentity = {
   pid: number;

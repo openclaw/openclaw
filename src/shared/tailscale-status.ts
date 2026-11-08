@@ -53,16 +53,6 @@ function parsePossiblyNoisyStatus<T>(schema: z.ZodType<T>, raw: string): T | nul
   return safeParseJsonWithSchema(schema, raw.slice(start, end + 1));
 }
 
-function extractTailnetHostFromStatusJson(raw: string): string | null {
-  const parsed = parsePossiblyNoisyStatus(TailscaleStatusSchema, raw);
-  const dns = parsed?.Self?.DNSName;
-  if (dns && dns.length > 0) {
-    return dns.replace(/\.$/, "");
-  }
-  const ips = parsed?.Self?.TailscaleIPs ?? [];
-  return ips.length > 0 ? (ips[0] ?? null) : null;
-}
-
 function parseLoopbackProxyPort(proxy: string, forAdoption: boolean): number | null {
   // SDK discovery accepts the shipped proxy forms; ownership requires the exact
   // HTTP loopback root written by previous managed releases.
@@ -75,17 +65,16 @@ function parseLoopbackProxyPort(proxy: string, forAdoption: boolean): number | n
     return Number.parseInt(trimmed, 10);
   }
   const normalized = trimmed.includes("://") ? trimmed : `http://${trimmed}`;
-  try {
-    const parsed = new URL(normalized);
-    const host = parsed.hostname.replace(/^\[|\]$/g, "").toLowerCase();
-    if (!(host === "localhost" || host === "::1" || /^127(?:\.\d{1,3}){3}$/.test(host))) {
-      return null;
-    }
-    const port = Number.parseInt(parsed.port, 10);
-    return Number.isInteger(port) && port >= 1 && port <= 65_535 ? port : null;
-  } catch {
+  const parsed = URL.parse(normalized);
+  if (!parsed) {
     return null;
   }
+  const host = parsed.hostname.replace(/^\[|\]$/g, "").toLowerCase();
+  if (!(host === "localhost" || host === "::1" || /^127(?:\.\d{1,3}){3}$/.test(host))) {
+    return null;
+  }
+  const port = Number.parseInt(parsed.port, 10);
+  return Number.isInteger(port) && port >= 1 && port <= 65_535 ? port : null;
 }
 
 export function extractTailscaleServeGatewayUrls(
@@ -112,32 +101,50 @@ export function extractTailscaleServeGatewayUrls(
     ) {
       continue;
     }
-    try {
-      const endpoint = new URL(`https://${hostPort}`);
-      const exclusive =
-        !forAdoption ||
-        web.filter(([other]) => URL.parse(`https://${other}`)?.port === endpoint.port).length === 1;
-      if (config.TCP?.[endpoint.port || "443"]?.HTTPS === true && exclusive) {
-        urls.add(`wss://${endpoint.host}`);
-      }
-    } catch {
+    const endpoint = URL.parse(`https://${hostPort}`);
+    if (!endpoint) {
       continue;
+    }
+    const exclusive =
+      !forAdoption ||
+      web.filter(([other]) => URL.parse(`https://${other}`)?.port === endpoint.port).length === 1;
+    if (config.TCP?.[endpoint.port || "443"]?.HTTPS === true && exclusive) {
+      urls.add(`wss://${endpoint.host}`);
     }
   }
   return [...urls].toSorted();
 }
 
-type TailscaleServeGatewayInspection =
-  | { status: "ok"; urls: string[] }
-  | { status: "unavailable" }
-  | { status: "invalid" };
+/** Reads backend state without changing connectivity or Serve configuration. */
+export async function inspectTailscaleBackendStateWithRunner(
+  runCommandWithTimeout: TailscaleStatusCommandRunner,
+): Promise<{ status: "ok"; state: string } | { status: "unavailable" | "invalid" }> {
+  let invalid = false;
+  const schema = z.object({ BackendState: z.string().min(1) });
+  for (const candidate of TAILSCALE_STATUS_COMMAND_CANDIDATES) {
+    try {
+      const result = await runCommandWithTimeout([candidate, "status", "--json"], {
+        timeoutMs: 5000,
+      });
+      // Logged-out backends can report valid status JSON with a nonzero exit.
+      const parsed = parsePossiblyNoisyStatus(schema, result.stdout);
+      if (parsed) {
+        return { status: "ok", state: parsed.BackendState };
+      }
+      invalid ||= result.code === 0;
+    } catch {
+      continue;
+    }
+  }
+  return { status: invalid ? "invalid" : "unavailable" };
+}
 
 /** Inspects persistent Serve routes without collapsing malformed output into route absence. */
 export async function inspectTailscaleServeGatewayUrlsWithRunner(
   gatewayPort: number,
   runCommandWithTimeout?: TailscaleStatusCommandRunner,
   forAdoption = false,
-): Promise<TailscaleServeGatewayInspection> {
+): Promise<{ status: "ok"; urls: string[] } | { status: "unavailable" } | { status: "invalid" }> {
   if (!runCommandWithTimeout) {
     return { status: "unavailable" };
   }
@@ -214,7 +221,9 @@ export async function resolveTailnetHostWithRunner(
       if (!raw) {
         continue;
       }
-      const host = extractTailnetHostFromStatusJson(raw);
+      const parsed = parsePossiblyNoisyStatus(TailscaleStatusSchema, raw);
+      const dns = parsed?.Self?.DNSName;
+      const host = dns && dns.length > 0 ? dns.replace(/\.$/, "") : parsed?.Self?.TailscaleIPs?.[0];
       if (host) {
         return host;
       }

@@ -1,11 +1,10 @@
 import type { AgentToolResult } from "openclaw/plugin-sdk/agent-core";
-import { isToolResultError, sanitizeToolResult } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { isToolResultError } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { sanitizeInlineImageDataUrl } from "openclaw/plugin-sdk/inline-image-data-url-runtime";
 import type { ImageContent, TextContent } from "openclaw/plugin-sdk/llm";
 import {
   estimateToolResultTextChars,
   sliceToolResultTextToBudget,
-  sliceUtf16Safe,
 } from "openclaw/plugin-sdk/text-utility-runtime";
 import { failedToolResult } from "./dynamic-tool-response-state.js";
 import { invalidInlineImageText } from "./image-payload-sanitizer.js";
@@ -19,7 +18,7 @@ export function enforceWholeSkillResult(
   if (toolName !== "skills_read" || isToolResultError(result)) {
     return result;
   }
-  const budget = sanitizeToolTextRuns(result.content).reduce(
+  const budget = result.content.reduce(
     (total, item) => total + (item.type === "text" ? estimateToolResultTextChars(item.text) : 0),
     0,
   );
@@ -30,53 +29,11 @@ export function enforceWholeSkillResult(
       );
 }
 
-function sanitizeToolTextRuns(
-  rawContent: Array<TextContent | ImageContent>,
-): Array<TextContent | ImageContent> {
-  const content: Array<TextContent | ImageContent> = [];
-  for (let index = 0; index < rawContent.length;) {
-    const item = rawContent[index]!;
-    if (item.type !== "text") {
-      content.push(item);
-      index += 1;
-      continue;
-    }
-
-    const textRun: TextContent[] = [];
-    while (index < rawContent.length) {
-      const next = rawContent[index]!;
-      if (next.type !== "text") {
-        break;
-      }
-      textRun.push(next);
-      index += 1;
-    }
-
-    const sanitizedText = sanitizeToolResult(textRun.map((entry) => entry.text).join(""));
-    let offset = 0;
-    content.push(
-      ...textRun.map((entry, runIndex) => {
-        const targetEnd =
-          runIndex === textRun.length - 1
-            ? sanitizedText.length
-            : Math.min(sanitizedText.length, offset + entry.text.length);
-        const text = sliceUtf16Safe(sanitizedText, offset, targetEnd);
-        const sanitized = Object.assign({}, entry, { text });
-        offset += text.length;
-        return sanitized;
-      }),
-    );
-  }
-  return content;
-}
 export function convertToolContents(
   rawContent: Array<TextContent | ImageContent>,
   maxChars: number,
 ): CodexDynamicToolCallOutputContentItem[] {
-  // Adjacent text items form one model-visible stream, so sanitize each full run before
-  // repartitioning and budgeting. Image blocks keep their bytes; the storage-oriented
-  // whole-result branch of sanitizeToolResult would drop them.
-  const content = sanitizeToolTextRuns(rawContent);
+  const content = rawContent;
   const totalTextChars = content.reduce(
     (total, item) => total + (item.type === "text" ? item.text.length : 0),
     0,
@@ -86,7 +43,7 @@ export function convertToolContents(
     0,
   );
   if (totalTextBudget <= maxChars) {
-    return content.flatMap(convertToolContent);
+    return content.map(convertToolContent);
   }
   const noticeText = `...(OpenClaw truncated dynamic tool result: original ${totalTextChars} chars, weighted budget ${maxChars}; rerun with narrower args.)`;
   const notice = `\n${noticeText}`;
@@ -97,7 +54,7 @@ export function convertToolContents(
   const output: CodexDynamicToolCallOutputContentItem[] = [];
   for (const item of content) {
     if (item.type !== "text") {
-      output.push(...convertToolContent(item));
+      output.push(convertToolContent(item));
       continue;
     }
     if (appendedNotice) {
@@ -127,18 +84,12 @@ export function convertToolContents(
 }
 function convertToolContent(
   content: TextContent | ImageContent,
-): CodexDynamicToolCallOutputContentItem[] {
+): CodexDynamicToolCallOutputContentItem {
   if (content.type === "text") {
-    return [{ type: "inputText", text: content.text }];
+    return { type: "inputText", text: content.text };
   }
   const imageUrl = sanitizeInlineImageDataUrl(`data:${content.mimeType};base64,${content.data}`);
-  if (!imageUrl) {
-    return [{ type: "inputText", text: invalidInlineImageText("codex dynamic tool") }];
-  }
-  return [
-    {
-      type: "inputImage",
-      imageUrl,
-    },
-  ];
+  return imageUrl
+    ? { type: "inputImage", imageUrl }
+    : { type: "inputText", text: invalidInlineImageText("codex dynamic tool") };
 }

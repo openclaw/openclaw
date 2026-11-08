@@ -1,6 +1,6 @@
 export { resolveIdentityNamePrefix } from "openclaw/plugin-sdk/agent-runtime";
 export { formatInboundEnvelope } from "openclaw/plugin-sdk/channel-inbound";
-export { resolveInboundSessionEnvelopeContext } from "openclaw/plugin-sdk/channel-inbound";
+export { resolveInboundSessionEnvelopeContextAsync } from "openclaw/plugin-sdk/channel-inbound";
 export { createChannelMessageReplyPipeline } from "openclaw/plugin-sdk/channel-outbound";
 export {
   isControlCommandMessage,

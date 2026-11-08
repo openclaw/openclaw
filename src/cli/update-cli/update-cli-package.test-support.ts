@@ -116,14 +116,12 @@ export const writeNpmPackageInstall = async (
 
 export const packageTargetStatus = (
   overrides: Partial<{
-    target: string;
     version: string | null;
     nodeEngine: string | null;
     schemaVersions: { state: number; agent: number };
     error: string;
   }> = {},
 ) => ({
-  target: "9999.0.0",
   version: "9999.0.0",
   nodeEngine: ">=22.19.0",
   ...overrides,
@@ -441,14 +439,17 @@ export function createCurrentProcessFreshDoctorFixture(
             const actual = await vi.importActual<
               typeof import("../../daemon/gateway-entrypoint.js")
             >("../../daemon/gateway-entrypoint.js");
-            return actual.resolveGatewayInstallEntrypoint(root, async (candidate) => {
-              try {
-                await fs.access(candidate);
-                return true;
-              } catch {
-                return false;
-              }
-            });
+            return actual.findFirstAccessibleGatewayEntrypoint(
+              actual.buildGatewayInstallEntrypointCandidates(root),
+              async (candidate) => {
+                try {
+                  await fs.access(candidate);
+                  return true;
+                } catch {
+                  return false;
+                }
+              },
+            );
           }
           return installedEntrypoint(root);
         });

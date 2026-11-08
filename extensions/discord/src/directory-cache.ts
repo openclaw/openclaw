@@ -1,6 +1,6 @@
+import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
 import { normalizeAccountId } from "openclaw/plugin-sdk/routing";
 import {
-  normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
   normalizeOptionalStringifiedId,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -9,7 +9,7 @@ import { discordDirectoryCacheState } from "./directory-cache-state.js";
 const DISCORD_DIRECTORY_CACHE_MAX_ENTRIES = 4000;
 const DISCORD_DISCRIMINATOR_SUFFIX = /#\d{4}$/;
 
-function normalizeSnowflake(value: string | number | bigint): string | null {
+export function normalizeDiscordSnowflake(value: string | number | bigint): string | null {
   const text = normalizeOptionalStringifiedId(value) ?? "";
   if (!/^\d+$/.test(text)) {
     return null;
@@ -28,30 +28,26 @@ export function normalizeDiscordHandleKey(raw: string): string | null {
   if (!handle || /\s/.test(handle)) {
     return null;
   }
-  return normalizeLowercaseStringOrEmpty(handle);
+  return handle.toLowerCase();
 }
 
-function ensureAccountCache(accountId?: string | null): Map<string, string> {
+function ensureAccountCache(accountId?: string | null): Map<string, string | null> {
   const cacheKey = normalizeAccountId(accountId);
   const existing = discordDirectoryCacheState.handlesByAccount.get(cacheKey);
   if (existing) {
     return existing;
   }
-  const created = new Map<string, string>();
+  const created = new Map<string, string | null>();
   discordDirectoryCacheState.handlesByAccount.set(cacheKey, created);
   return created;
 }
 
-function setCacheEntry(cache: Map<string, string>, key: string, userId: string): void {
+function setCacheEntry(cache: Map<string, string | null>, key: string, userId: string): void {
+  const previous = cache.get(key);
   cache.delete(key);
-  cache.set(key, userId);
-  if (cache.size <= DISCORD_DIRECTORY_CACHE_MAX_ENTRIES) {
-    return;
-  }
-  const oldest = cache.keys().next();
-  if (!oldest.done) {
-    cache.delete(oldest.value);
-  }
+  // Keep observed collisions unresolved until eviction; configured aliases still take precedence.
+  cache.set(key, previous === undefined || previous === userId ? userId : null);
+  pruneMapToMaxSize(cache, DISCORD_DIRECTORY_CACHE_MAX_ENTRIES);
 }
 
 export function rememberDiscordDirectoryUser(params: {
@@ -59,7 +55,7 @@ export function rememberDiscordDirectoryUser(params: {
   userId: string | number | bigint;
   handles: Array<string | null | undefined>;
 }): void {
-  const userId = normalizeSnowflake(params.userId);
+  const userId = normalizeDiscordSnowflake(params.userId);
   if (!userId) {
     return;
   }
@@ -94,13 +90,5 @@ export function resolveDiscordDirectoryUserId(params: {
   if (!handle) {
     return undefined;
   }
-  const direct = cache.get(handle);
-  if (direct) {
-    return direct;
-  }
-  const withoutDiscriminator = handle.replace(DISCORD_DISCRIMINATOR_SUFFIX, "");
-  if (!withoutDiscriminator || withoutDiscriminator === handle) {
-    return undefined;
-  }
-  return cache.get(withoutDiscriminator);
+  return cache.get(handle) ?? undefined;
 }

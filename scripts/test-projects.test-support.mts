@@ -2,10 +2,11 @@
 // scripts/test-projects.mts, and focused tests. Exports are intentionally
 // granular so project selection stays testable without spawning Vitest.
 import { spawnSync, type SpawnSyncOptionsWithStringEncoding } from "node:child_process";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import adaptiveMarkdownQualification from "../config/ci-adaptive-markdown.json" with { type: "json" };
 import {
   agentVitestProjectOwners,
   embeddedAgentVitestProjectOwners,
@@ -48,6 +49,7 @@ import {
   isGatewayServerTestFile,
 } from "../test/vitest/vitest.gateway-server-paths.mjs";
 import { intersectIncludePatterns } from "../test/vitest/vitest.include-patterns.ts";
+import { markdownTestFiles } from "../test/vitest/vitest.markdown-paths.mjs";
 import { packageContractTestFiles } from "../test/vitest/vitest.package-contract-paths.mjs";
 import { isSharedVitestExcludedPath } from "../test/vitest/vitest.pattern-file.ts";
 import {
@@ -65,9 +67,11 @@ import {
   uiIsolatedTestFiles,
 } from "../test/vitest/vitest.ui-isolated-paths.mjs";
 import {
+  getRepositoryFileInventory,
   isControlUiSourcePath,
   isPluginControlUiPath,
   isUiBrowserTestFile,
+  isUiTestTarget,
   uiE2eRealGatewayTestFiles,
   uiTimingTestFiles,
 } from "../test/vitest/vitest.ui-paths.mjs";
@@ -89,41 +93,52 @@ import {
   detectChangedLanes,
   listChangedPathsFromGit as listChangedPathsFromGitSource,
 } from "./changed-lanes.mts";
+import { isGitWorktreeRoot } from "./check-file-utils.ts";
 import { parsePermissiveBooleanToken } from "./lib/arg-utils.mts";
 import {
   getChangedPathFacts,
   isTestFileTarget,
+  isTestOnlyPath,
   isTestSupportFileTarget,
 } from "./lib/changed-path-facts.mjs";
+import { createAdaptiveMarkdownFilter } from "./lib/ci-adaptive-markdown.mjs";
 import {
   createExtensionTestProcessTargetChunks,
   listTrackedTestPlanFiles,
   resolveExtensionTestConfig,
+  shouldSplitExtensionTestProcesses,
+  splitExtensionTestJobTargets,
   splitExtensionTestProcessTargets,
 } from "./lib/extension-test-plan.mts";
-import {
-  createGatewayServerTestTargetChunks,
-  splitTestTargetChunks as splitTargetChunks,
-} from "./lib/gateway-server-test-plan.mts";
+import { createGatewayServerTestTargetChunks } from "./lib/gateway-server-test-plan.mts";
 import { GIT_LS_FILES_MAX_BUFFER_BYTES } from "./lib/list-test-files.mts";
-import { readTestSelectorSourceFacts } from "./lib/test-selector-source-facts.mts";
+import {
+  readRuntimeWorkerDescriptorReads,
+  readTestSelectorExportNames,
+  readTestSelectorImportNames,
+  readTestSelectorSourceFacts,
+  runtimeWorkerSpecifier,
+} from "./lib/test-selector-source-facts.mts";
+import { splitTestTargetChunks as splitTargetChunks } from "./lib/test-target-chunks.mts";
 // CI imports planning before dependency installation; execution owners stay outside this closure.
 import { resolveVitestCliEntry } from "./lib/vitest-build-prerequisites.mts";
 import { resolveVitestCacheRoot, resolveVitestCacheSlotPath } from "./lib/vitest-cache-slots.mts";
 import {
   collectVitestFileFilters,
+  replaceVitestFileFilters,
   resolveBooleanModeFlag,
   vitestOptionConsumesNextArg,
 } from "./lib/vitest-cli-mode.mts";
 import {
   isCiLikeEnv,
+  parseOptionalPositiveInt,
   resolveLocalFullSuiteProfile,
   type VitestHostInfo,
 } from "./lib/vitest-local-scheduling.mts";
+import { resolveVitestNodeArgs } from "./lib/vitest-node-args.mts";
 import {
   DEFAULT_VITEST_NO_OUTPUT_HEARTBEAT_MS,
   resolveDefaultVitestNoOutputTimeoutMs,
-  resolveVitestNodeArgs,
 } from "./lib/vitest-process-env.mts";
 import {
   estimateVitestTestFileSeconds,
@@ -156,12 +171,14 @@ export type FailedVitestShard = {
 };
 
 type ChangedTestTargetOptions = {
+  baseRef?: string;
   cwd?: string;
   env?: NodeJS.ProcessEnv;
   broad?: boolean;
   combineSiblingWithImportGraph?: boolean;
   boundedOwners?: boolean;
   aggressive?: { maxDirectImporters: number; maxDirectoryTests: number };
+  adaptiveMarkdown?: { isIndependentCompanion: (file: string) => boolean };
   onSelection?: (selection: { rule: string; input: string; targets: string[] }) => void;
   forceFullImportGraph?: boolean;
   resolveAliases?: boolean;
@@ -200,11 +217,14 @@ type WatchableVitestSpecShape = VitestSpecShape & Pick<VitestRunSpec, "watchMode
 type ImportGraph = {
   files: readonly string[];
   reverseImports: Map<string, string[]>;
+  reverseMocks: Map<string, string[]>;
   testFiles: Set<string>;
 };
 type ImportGraphEdges = {
   file: string;
   specifiers: string[];
+  workerExports: [string, string][];
+  mocks: string[];
   typeOnlySpecifiers: Set<string>;
   imports: Set<string>;
   references: Set<string>;
@@ -314,6 +334,7 @@ const LOGGING_VITEST_CONFIG = "test/vitest/vitest.logging.config.ts";
 const PLUGIN_SDK_LIGHT_VITEST_CONFIG = "test/vitest/vitest.plugin-sdk-light.config.ts";
 const PLUGIN_SDK_VITEST_CONFIG = "test/vitest/vitest.plugin-sdk.config.ts";
 const PLUGINS_VITEST_CONFIG = "test/vitest/vitest.plugins.config.ts";
+const MARKDOWN_VITEST_CONFIG = "test/vitest/vitest.markdown.config.ts";
 const UNIT_FAST_VITEST_CONFIG = "test/vitest/vitest.unit-fast.config.ts";
 const UNIT_FAST_ISOLATED_VITEST_CONFIG = "test/vitest/vitest.unit-fast-isolated.config.ts";
 const UNIT_FAST_FAKE_TIMERS_VITEST_CONFIG = "test/vitest/vitest.unit-fast-fake-timers.config.ts";
@@ -490,7 +511,9 @@ const BROAD_TOOLING_SCRIPT_TEST_PATTERNS = new Set([
 const BROAD_TOOLING_SCRIPT_TEST_TARGET_CHUNK_SIZE = 60;
 const FULL_SUITE_AGENTS_CORE_TEST_TARGET_CHUNK_COUNT = 6;
 const FULL_SUITE_INFRA_TEST_TARGET_CHUNK_SIZE = 64;
-const FULL_SUITE_TOOLING_TEST_TARGET_CHUNK_SIZE = 2;
+const FULL_SUITE_GATEWAY_DATABASE_TEST_TARGET_CHUNK_SIZE = 50;
+const FULL_SUITE_TOOLING_TEST_TARGET_CHUNK_SIZE = 8;
+const FULL_SUITE_UI_TEST_TARGET_CHUNK_SIZE = 8;
 const FULL_SUITE_UNIT_FAST_TEST_TARGET_CHUNK_SIZE = 70;
 const FULL_SUITE_UNIT_SRC_TEST_TARGET_CHUNK_SIZE = 150;
 const TUI_VITEST_CONFIG = "test/vitest/vitest.tui.config.ts";
@@ -506,6 +529,7 @@ const FS_MODULE_CACHE_PATH_ENV_KEY = "OPENCLAW_VITEST_FS_MODULE_CACHE_PATH";
 const FAILED_SHARD_DIGEST_LIMIT = 12;
 const CHANGED_ARGS_PATTERN = /^--changed(?:=(.+))?$/u;
 const VITEST_CONFIG_BY_KIND: Record<string, string> = {
+  markdown: MARKDOWN_VITEST_CONFIG,
   unitFast: UNIT_FAST_VITEST_CONFIG,
   unitFastIsolated: UNIT_FAST_ISOLATED_VITEST_CONFIG,
   unitFastFakeTimers: UNIT_FAST_FAKE_TIMERS_VITEST_CONFIG,
@@ -621,7 +645,7 @@ const PRECISE_SOURCE_TEST_TARGETS = new Map<string, string[]>([
     ["src/agents/bash-tools.process.liveness.test.ts"],
   ],
   [
-    "patches/vitest@5.0.1.patch",
+    "patches/vitest@5.0.5.patch",
     [
       "test/scripts/run-vitest-profile.test.ts",
       "test/scripts/run-vitest-state-cleanup.test.ts",
@@ -639,10 +663,7 @@ const PRECISE_SOURCE_TEST_TARGETS = new Map<string, string[]>([
     "src/agents/embedded-agent-runner/run/run-attempt-dispatch.ts",
   ].map<[string, string[]]>((sourcePath) => [
     sourcePath,
-    [
-      "src/agents/embedded-agent-runner/run.overflow-compaction.loop.test.ts",
-      "src/commands/onboard-guided.inference.e2e.test.ts",
-    ],
+    ["src/agents/embedded-agent-runner/run.overflow-compaction.loop.test.ts"],
   ]),
   [
     "src/plugins/contracts/tts-contract-suites.ts",
@@ -752,6 +773,22 @@ const MERMAID_RENDERER_TEST_TARGETS = [
   "ui/src/components/markdown-mermaid.runtime.browser.test.ts",
   "ui/src/components/markdown-mermaid-native.browser.test.ts",
 ];
+// Channels reach the render-aware chunker through the Plugin SDK text-chunking
+// facade, deeper than bounded import walks follow; these suites pin chunk output.
+const MARKDOWN_RENDER_CHUNKING_TEST_TARGETS = [
+  "packages/markdown-core/src/ir.test.ts",
+  "packages/markdown-core/src/render-aware-chunking.test.ts",
+  "src/plugin-sdk/format-capabilities.test.ts",
+  "src/plugin-sdk/text-chunking.test.ts",
+  "extensions/googlechat/src/format.test.ts",
+  "extensions/signal/src/format.test.ts",
+  "extensions/slack/src/format.test.ts",
+  "extensions/sms/src/send.test.ts",
+  "extensions/telegram/src/format.test.ts",
+  "extensions/whatsapp/src/send.delivery-recovery.test.ts",
+  "extensions/whatsapp/src/send.test.ts",
+  "extensions/whatsapp/src/text-runtime.test.ts",
+];
 const SOURCE_TEST_TARGETS = new Map([
   ...PRECISE_SOURCE_TEST_TARGETS,
   [
@@ -762,6 +799,10 @@ const SOURCE_TEST_TARGETS = new Map([
       "src/agents/live-target-matcher.test.ts",
       "src/agents/model-compat.test.ts",
     ],
+  ],
+  [
+    "src/plugin-sdk/lazy-value.ts",
+    ["src/plugin-sdk/core.test.ts", "src/plugin-sdk/channel-entry-contract.test.ts"],
   ],
   ["src/plugin-sdk/memory-host-events.ts", ["src/plugin-sdk/memory-host-events.test.ts"]],
   ["src/plugin-sdk/persistent-dedupe.ts", ["src/plugin-sdk/memory-host-events.test.ts"]],
@@ -791,6 +832,18 @@ const SOURCE_TEST_TARGETS = new Map([
     "packages/normalization-core/package.json",
     ["packages/normalization-core/src/package-exports.test.ts", ...MERMAID_RENDERER_TEST_TARGETS],
   ],
+  ...[
+    "ir",
+    "ir-annotations",
+    "ir-slice",
+    "ir-spans",
+    "render",
+    "render-attributed",
+    "render-aware-chunking",
+  ].map<[string, string[]]>((module) => [
+    `packages/markdown-core/src/${module}.ts`,
+    MARKDOWN_RENDER_CHUNKING_TEST_TARGETS,
+  ]),
   ["extensions/codex/package.json", CODEX_VERSION_CONTRACT_TEST_TARGETS],
   ["extensions/codex/src/app-server/version.ts", CODEX_VERSION_CONTRACT_TEST_TARGETS],
   ...["index", "harness"].map<[string, string[]]>((entry) => [
@@ -869,10 +922,6 @@ const SOURCE_TEST_TARGETS = new Map([
     ],
   ],
   [
-    "extensions/google-meet/src/cli-artifact-commands.ts",
-    ["extensions/google-meet/src/cli-artifacts.test.ts"],
-  ],
-  [
     "extensions/google-meet/src/cli-export.ts",
     ["extensions/google-meet/src/cli-artifacts.test.ts"],
   ],
@@ -880,11 +929,6 @@ const SOURCE_TEST_TARGETS = new Map([
     "extensions/google-meet/src/cli-space-commands.ts",
     ["extensions/google-meet/src/cli-artifacts.test.ts"],
   ],
-  [
-    "extensions/google-meet/src/cli-runtime-commands.ts",
-    ["extensions/google-meet/src/cli-runtime.test.ts"],
-  ],
-  ["extensions/google-meet/src/cli-doctor.ts", ["extensions/google-meet/src/cli.test.ts"]],
   [
     "extensions/google-meet/src/cli-command-context.ts",
     [
@@ -928,10 +972,6 @@ const SOURCE_TEST_TARGETS = new Map([
   [
     "src/secrets/provider-env-vars.ts",
     ["src/secrets/provider-env-vars.dynamic.test.ts", "src/secrets/provider-env-vars.test.ts"],
-  ],
-  [
-    "packages/memory-host-sdk/src/host/embedding-defaults.ts",
-    ["extensions/memory-core/src/memory/embeddings.test.ts"],
   ],
   ["src/auto-reply/reply/dispatch-from-config.ts", GROUP_VISIBLE_REPLY_TEST_TARGETS],
   ["src/auto-reply/reply/source-reply-delivery-mode.ts", GROUP_VISIBLE_REPLY_TEST_TARGETS],
@@ -1138,6 +1178,24 @@ function listUnitSrcFullSuiteTestTargets(cwd: string) {
   return cachedUnitSrcFullSuiteTestTargets;
 }
 
+function listUiFullSuiteTestTargets(cwd: string) {
+  const files =
+    getRepositoryFileInventory(cwd) ??
+    [path.join(cwd, "ui", "src"), path.join(cwd, "extensions")].flatMap((root) =>
+      fs.existsSync(root) ? listRepoFilesRecursive(root, cwd) : [],
+    );
+  return [...files]
+    .filter(
+      (file) =>
+        isUiTestTarget(file) &&
+        !isSharedVitestExcludedPath(file) &&
+        !isUiIsolatedTestFile(file) &&
+        !isUiBrowserTestFile(file) &&
+        !uiTimingTestFiles.includes(file),
+    )
+    .toSorted((left, right) => left.localeCompare(right));
+}
+
 function listAgentsCoreFullSuiteTestTargets(cwd: string) {
   const isolatedTests = new Set([
     ...cliProcessTestFiles,
@@ -1283,7 +1341,7 @@ function createBoundedExtensionPlans(
   const chunks = createExtensionTestProcessTargetChunks(
     config,
     config === EXTENSION_DATABASE_WORKERS_VITEST_CONFIG && plan.includePatterns
-      ? plan.includePatterns
+      ? expandVitestIncludePatterns(plan.includePatterns, cwd)
       : roots,
     forwardedArgs,
     cwd,
@@ -1396,6 +1454,9 @@ let cachedExplicitTestTargetFiles: string[] | null = null;
 let cachedExplicitTestTargetFilesCwd: string | null = null;
 
 function listExplicitTestTargetFilesFromGit(cwd: string) {
+  if (!isGitWorktreeRoot(cwd)) {
+    return null;
+  }
   const result = spawnSync(
     "git",
     [
@@ -1794,7 +1855,7 @@ function listImportGraphFiles(
   return files;
 }
 
-function resolveImportSpecifiers(
+export function resolveImportSpecifiers(
   importer: string,
   specifier: string,
   fileSet: ReadonlySet<string>,
@@ -1863,17 +1924,25 @@ function resolveImportSpecifiers(
     : resolved;
 }
 
+// Full-inventory facts reached 16 MiB on main in October 2026; this is not a Git inventory.
+const SOURCE_FACTS_MAX_BUFFER_BYTES = 64 * 1024 * 1024;
 const cachedImportGraphs = new Map<string, { graph: ImportGraph; additionalPaths: string }>();
 const cachedImportGraphFiles = new Map<string, string[]>();
 const cachedImportGraphGrepMatches = new Map<string, ImportGraphEdges[] | null>();
 const cachedImportGraphEdges = new Map<string, ImportGraphEdges>();
 const cachedImportGraphAliases = new Map<string, ImportGraphAlias[]>();
 
-function readImportGraphManifest(cwd: string, file: string): Record<string, unknown> {
-  if (!fs.existsSync(path.join(cwd, file))) {
+function readImportGraphManifest(
+  cwd: string,
+  file: string,
+  sources?: ReadonlyMap<string, string>,
+): Record<string, unknown> {
+  if (sources ? !sources.has(file) : !fs.existsSync(path.join(cwd, file))) {
     return {};
   }
-  const value: unknown = JSON.parse(fs.readFileSync(path.join(cwd, file), "utf8"));
+  const value: unknown = JSON.parse(
+    sources ? sources.get(file)! : fs.readFileSync(path.join(cwd, file), "utf8"),
+  );
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     throw new Error(`Invalid test selector manifest: ${file}`);
   }
@@ -1881,24 +1950,31 @@ function readImportGraphManifest(cwd: string, file: string): Record<string, unkn
 }
 
 /** Read the maintained source mappings without loading a Vitest config or installed package. */
-function getImportGraphAliases(cwd: string): ImportGraphAlias[] {
-  const cached = cachedImportGraphAliases.get(cwd);
+export function getImportGraphAliases(
+  cwd: string,
+  sources?: ReadonlyMap<string, string>,
+): ImportGraphAlias[] {
+  const cached = sources ? undefined : cachedImportGraphAliases.get(cwd);
   if (cached) {
     return cached;
   }
   const aliases: ImportGraphAlias[] = [];
-  const files = listTrackedTestPlanFiles(cwd, [
-    "package.json",
-    ":(glob)packages/*/package.json",
-    ":(glob)extensions/*/package.json",
-  ]) ?? [
-    "package.json",
-    ...["packages", "extensions"].flatMap((root) =>
-      fs.existsSync(path.join(cwd, root))
-        ? fs.readdirSync(path.join(cwd, root)).map((entry) => `${root}/${entry}/package.json`)
-        : [],
-    ),
-  ];
+  const files = sources
+    ? [...sources.keys()].filter((file) =>
+        /^(?:(?:packages|extensions)\/[^/]+\/)?package\.json$/u.test(file),
+      )
+    : (listTrackedTestPlanFiles(cwd, [
+        "package.json",
+        ":(glob)packages/*/package.json",
+        ":(glob)extensions/*/package.json",
+      ]) ?? [
+        "package.json",
+        ...["packages", "extensions"].flatMap((root) =>
+          fs.existsSync(path.join(cwd, root))
+            ? fs.readdirSync(path.join(cwd, root)).map((entry) => `${root}/${entry}/package.json`)
+            : [],
+        ),
+      ]);
   const exportTargets = (value: unknown): string[] => {
     if (typeof value === "string") {
       return [value];
@@ -1906,7 +1982,7 @@ function getImportGraphAliases(cwd: string): ImportGraphAlias[] {
     return value && typeof value === "object" ? Object.values(value).flatMap(exportTargets) : [];
   };
   for (const file of files) {
-    const manifest = readImportGraphManifest(cwd, file);
+    const manifest = readImportGraphManifest(cwd, file, sources);
     if (typeof manifest.name !== "string" || !manifest.exports) {
       continue;
     }
@@ -1935,7 +2011,7 @@ function getImportGraphAliases(cwd: string): ImportGraphAlias[] {
       }
     }
   }
-  const config = readImportGraphManifest(cwd, "tsconfig.json");
+  const config = readImportGraphManifest(cwd, "tsconfig.json", sources);
   const compiler = config.compilerOptions;
   if (compiler && typeof compiler === "object" && "paths" in compiler) {
     const paths = compiler.paths;
@@ -1956,7 +2032,9 @@ function getImportGraphAliases(cwd: string): ImportGraphAlias[] {
       (leftStar >= 0 && rightStar >= 0 ? rightStar - leftStar : 0)
     );
   });
-  cachedImportGraphAliases.set(cwd, aliases);
+  if (!sources) {
+    cachedImportGraphAliases.set(cwd, aliases);
+  }
   return aliases;
 }
 
@@ -2101,12 +2179,14 @@ function readImportGraphEdges(
   const requests = files
     .map((file) => ({ file, parseImports: !cachedImportGraphEdges.has(cacheKey(file)) }))
     .filter(({ parseImports }) => parseImports || terms.length > 0);
-  return readTestSelectorSourceFacts(cwd, requests, terms, GIT_LS_FILES_MAX_BUFFER_BYTES, {
+  return readTestSelectorSourceFacts(cwd, requests, terms, SOURCE_FACTS_MAX_BUFFER_BYTES, {
     matchingOnly: terms.length > 0,
-  }).map(({ file, imports, typeOnlyImports, matches, references }) => {
+  }).map(({ file, imports, typeOnlyImports, mocks, matches, references, workerExports }) => {
     const edges = cachedImportGraphEdges.get(cacheKey(file)) ?? {
       file,
       specifiers: imports,
+      workerExports,
+      mocks,
       typeOnlySpecifiers: new Set(typeOnlyImports),
       imports: resolve(file, imports),
       references: new Set<string>(),
@@ -2155,7 +2235,7 @@ function listImportGraphGrepMatches(
   // Git's fixed-string prefilter rescans for each term. Large frontiers use the
   // source reader's single-pass multi-term matcher over the same inventory.
   const result =
-    missing.length <= 64
+    missing.length <= 64 && isGitWorktreeRoot(cwd)
       ? spawnSync(
           "git",
           ["grep", "-l", "-z", "--fixed-strings", "-f", "-", "--", ...grepPaths],
@@ -2194,6 +2274,74 @@ function listImportGraphGrepMatches(
   return matches;
 }
 
+const cachedRuntimeWorkerReads = new Map<string, Map<string, string[]>>();
+
+function resolveRuntimeWorkerFixtures(
+  cwd: string,
+  consumer: string,
+  dependency: ImportGraphEdges,
+  fileSet: ReadonlySet<string>,
+  extensions: readonly string[],
+  aliases: readonly ImportGraphAlias[],
+  aliasResolutions: Map<string, string[]>,
+  runtimeOnly = false,
+) {
+  // Build manifests compile fixtures but do not execute them.
+  if (dependency.workerExports.length === 0 || !isTestOnlyPath(consumer)) {
+    return [];
+  }
+  const cacheKey = `${cwd}\0${consumer}`;
+  let reads = cachedRuntimeWorkerReads.get(cacheKey);
+  if (!reads) {
+    try {
+      reads = readRuntimeWorkerDescriptorReads(fs.readFileSync(path.join(cwd, consumer), "utf8"));
+    } catch {
+      reads = new Map();
+    }
+    cachedRuntimeWorkerReads.set(cacheKey, reads);
+  }
+  const paths = new Set<string>();
+  for (const [specifier, consumed] of reads) {
+    if (
+      resolveImportSpecifiers(
+        consumer,
+        specifier,
+        fileSet,
+        extensions,
+        aliases,
+        aliasResolutions,
+        runtimeOnly,
+      ).includes(dependency.file)
+    ) {
+      for (const workerPath of consumed) {
+        paths.add(workerPath);
+      }
+    }
+  }
+  const exportedPaths = new Set(dependency.workerExports.map(([workerPath]) => workerPath));
+  return dependency.workerExports.flatMap(([workerPath, sourceWorkerName]) =>
+    [...paths].some(
+      (read) =>
+        read === "*" ||
+        workerPath === read ||
+        workerPath.startsWith(`${read}.`) ||
+        (!exportedPaths.has(read) &&
+          !workerPath.includes(".") &&
+          read.startsWith(`${workerPath}.`)),
+    )
+      ? resolveImportSpecifiers(
+          dependency.file,
+          runtimeWorkerSpecifier(sourceWorkerName),
+          fileSet,
+          extensions,
+          aliases,
+          aliasResolutions,
+          runtimeOnly,
+        )
+      : [],
+  );
+}
+
 function findDirectImporters(
   importedFile: string,
   matches: ReadonlyMap<string, ImportGraphEdges[] | null>,
@@ -2219,6 +2367,22 @@ function findDirectImporters(
     }
     for (const edges of candidates) {
       const { file, imports } = edges;
+      if (
+        edges.workerExports.some(([, sourceWorkerName]) =>
+          resolveImportSpecifiers(
+            file,
+            runtimeWorkerSpecifier(sourceWorkerName),
+            resolution?.files ?? new Set([importedFile]),
+            extensions,
+            resolution?.aliases,
+            undefined,
+            resolution?.runtimeOnly,
+          ).includes(importedFile),
+        )
+      ) {
+        // Consumers name the descriptor, not its fixture; grep cannot close this frontier.
+        return null;
+      }
       const importsChanged = resolution
         ? edges.specifiers.some(
             (specifier) =>
@@ -2366,6 +2530,7 @@ function getImportGraph(
     fileSet.add(file);
   }
   const reverseImports = new Map<string, string[]>();
+  const reverseMocks = new Map<string, string[]>();
   const testFiles = new Set(
     files.filter((file) => isTestFileTarget(file) && !file.endsWith(".live.test.ts")),
   );
@@ -2376,12 +2541,35 @@ function getImportGraph(
   const extensions = options.tooling
     ? TOOLING_IMPORTABLE_FILE_EXTENSIONS
     : IMPORTABLE_FILE_EXTENSIONS;
+  const workerModules = new Map<string, ImportGraphEdges>();
+  for (const file of files) {
+    const edges = cachedImportGraphEdges.get(`${cwd}\0${options.tooling === true}\0${file}`);
+    if (edges?.workerExports.length) {
+      workerModules.set(file, edges);
+    }
+  }
   for (const file of files) {
     const edges = cachedImportGraphEdges.get(`${cwd}\0${options.tooling === true}\0${file}`);
     if (!edges) {
       continue;
     }
+    for (const specifier of edges.mocks) {
+      for (const mocked of resolveImportSpecifiers(
+        file,
+        specifier,
+        fileSet,
+        extensions,
+        aliases,
+        aliasResolutions,
+        options.runtimeOnly,
+      )) {
+        const consumers = reverseMocks.get(mocked) ?? [];
+        consumers.push(file);
+        reverseMocks.set(mocked, consumers);
+      }
+    }
     // Re-resolve cached source facts against deleted paths and this query's alias policy.
+    const fixtures = new Set<string>();
     for (const specifier of edges.specifiers) {
       if (options.runtimeOnly && edges.typeOnlySpecifiers.has(specifier)) {
         continue;
@@ -2398,11 +2586,31 @@ function getImportGraph(
         const importers = reverseImports.get(imported) ?? [];
         importers.push(file);
         reverseImports.set(imported, importers);
+        const descriptors = workerModules.get(imported);
+        if (descriptors) {
+          for (const fixture of resolveRuntimeWorkerFixtures(
+            cwd,
+            file,
+            descriptors,
+            fileSet,
+            extensions,
+            aliases,
+            aliasResolutions,
+            options.runtimeOnly,
+          )) {
+            fixtures.add(fixture);
+          }
+        }
       }
+    }
+    for (const fixture of fixtures) {
+      const importers = reverseImports.get(fixture) ?? [];
+      importers.push(file);
+      reverseImports.set(fixture, importers);
     }
   }
 
-  const graph = { files, reverseImports, testFiles };
+  const graph = { files, reverseImports, reverseMocks, testFiles };
   cachedImportGraphs.set(cacheKey, { graph, additionalPaths: missingKey });
   return graph;
 }
@@ -2434,10 +2642,10 @@ export function hasImportGraphImpactOnTargets(
   let frontier = targets;
   while (frontier.length > 0) {
     readImportGraphEdges(cwd, frontier, fileSet, options.tooling);
-    const next: string[] = [];
+    const dependencies = new Map<string, Set<string>>();
     for (const file of frontier) {
       const edges = cachedImportGraphEdges.get(`${cwd}\0${options.tooling === true}\0${file}`);
-      // Resolve raw cached facts against this query's deleted-path identities too.
+      const resolved = new Set<string>();
       for (const specifier of edges?.specifiers ?? []) {
         if (options.runtimeOnly && edges?.typeOnlySpecifiers.has(specifier)) {
           continue;
@@ -2451,13 +2659,51 @@ export function hasImportGraphImpactOnTargets(
           aliasResolutions,
           options.runtimeOnly,
         )) {
-          if (changed.has(dependency)) {
-            return true;
+          resolved.add(dependency);
+        }
+      }
+      dependencies.set(file, resolved);
+    }
+    // Read the entire dependency frontier before attributing any consumer's fixtures.
+    const dependencyFiles = new Set<string>();
+    for (const resolved of dependencies.values()) {
+      for (const dependency of resolved) {
+        dependencyFiles.add(dependency);
+      }
+    }
+    readImportGraphEdges(cwd, [...dependencyFiles], fileSet, options.tooling);
+    const next: string[] = [];
+    for (const [file, resolved] of dependencies) {
+      const fixtures = new Set<string>();
+      for (const imported of resolved) {
+        const dependency = cachedImportGraphEdges.get(
+          `${cwd}\0${options.tooling === true}\0${imported}`,
+        );
+        if (dependency) {
+          for (const fixture of resolveRuntimeWorkerFixtures(
+            cwd,
+            file,
+            dependency,
+            fileSet,
+            extensions,
+            aliases,
+            aliasResolutions,
+            options.runtimeOnly,
+          )) {
+            fixtures.add(fixture);
           }
-          if (!options.direct && !seen.has(dependency)) {
-            seen.add(dependency);
-            next.push(dependency);
-          }
+        }
+      }
+      for (const fixture of fixtures) {
+        resolved.add(fixture);
+      }
+      for (const dependency of resolved) {
+        if (changed.has(dependency)) {
+          return true;
+        }
+        if (!options.direct && !seen.has(dependency)) {
+          seen.add(dependency);
+          next.push(dependency);
         }
       }
     }
@@ -2557,6 +2803,56 @@ export function resolveImportGraphDependents(
     .toSorted((left, right) => left.localeCompare(right));
 }
 
+/** Fingerprint current workspace inputs from the same graph that selects their consumers. */
+export function createTestInputFingerprint(cwd = process.cwd(), additionalPaths: string[] = []) {
+  let dependencies: Map<string, string[]> | undefined;
+  const hashes = new Map<string, string | null>();
+  return (roots: string[]): string | null => {
+    try {
+      if (!dependencies) {
+        dependencies = new Map();
+        const graph = getImportGraph(
+          cwd,
+          { tooling: true, resolveAliases: true, runtimeOnly: true },
+          additionalPaths,
+        );
+        for (const [dependency, importers] of graph.reverseImports) {
+          for (const importer of importers) {
+            const inputs = dependencies.get(importer) ?? [];
+            inputs.push(dependency);
+            dependencies.set(importer, inputs);
+          }
+        }
+      }
+      const inputs = new Set(roots);
+      for (const file of inputs) {
+        for (const dependency of dependencies.get(file) ?? []) {
+          inputs.add(dependency);
+        }
+      }
+      const rows = [...inputs].toSorted().map((file) => {
+        if (!hashes.has(file)) {
+          const absolute = path.join(cwd, file);
+          hashes.set(
+            file,
+            fs.lstatSync(absolute).isFile()
+              ? createHash("sha256").update(fs.readFileSync(absolute)).digest("hex")
+              : null,
+          );
+        }
+        const hash = hashes.get(file);
+        if (!hash) {
+          throw new Error("Unqualified test input");
+        }
+        return [file, hash];
+      });
+      return createHash("sha256").update(JSON.stringify(rows)).digest("hex");
+    } catch {
+      return null;
+    }
+  };
+}
+
 /** Changed resolved dependencies enter the same graph at their literal import consumers. */
 export function resolveDependencyTestConsumers(
   importers: Array<{ root: string; dependencies: string[] }>,
@@ -2565,7 +2861,9 @@ export function resolveDependencyTestConsumers(
     runtimeOnly = false,
     importerBindings,
     direct = false,
+    changedPaths,
   }: Pick<ImportGraphOptions, "runtimeOnly" | "direct"> & {
+    changedPaths?: string[];
     importerBindings?: Array<{ root: string; dependencies: string[] }>;
   } = {},
 ) {
@@ -2575,6 +2873,12 @@ export function resolveDependencyTestConsumers(
   const options = { tooling: true, resolveAliases: true, runtimeOnly };
   getImportGraph(cwd, options);
   const files = listImportGraphFilesForCwd(cwd, options);
+  const affected = changedPaths
+    ? new Set([...changedPaths, ...resolveImportGraphDependents(changedPaths, cwd, options)])
+    : undefined;
+  const fileSet = affected ? new Set([...files, ...(changedPaths ?? [])]) : undefined;
+  const aliases = affected ? getImportGraphAliases(cwd) : [];
+  const aliasResolutions = new Map<string, string[]>();
   const unresolved = new Map<string, { root: string; dependency: string }>();
   for (const { root, dependencies } of importers) {
     for (const dependency of dependencies) {
@@ -2620,9 +2924,26 @@ export function resolveDependencyTestConsumers(
           // Erased imports prove type ownership; absent usage may be a CLI or
           // generated child script and must remain unresolved for the planner.
           unresolved.delete(`${root}\0${dependency}`);
-          runtimeConsumer ||= specifiers.some(
-            (specifier) => !runtimeOnly || !edges.typeOnlySpecifiers.has(specifier),
-          );
+          runtimeConsumer ||= specifiers.some((specifier) => {
+            if (runtimeOnly && edges.typeOnlySpecifiers.has(specifier)) {
+              return false;
+            }
+            if (!affected || !fileSet) {
+              return true;
+            }
+            const modules = resolveImportSpecifiers(
+              file,
+              specifier,
+              fileSet,
+              TOOLING_IMPORTABLE_FILE_EXTENSIONS,
+              aliases,
+              aliasResolutions,
+              runtimeOnly,
+            );
+            // Unknown package bindings retain coverage; resolved subpaths only
+            // retain consumers of the changed source, including barrel exports.
+            return modules.length === 0 || modules.some((module) => affected.has(module));
+          });
         }
       }
     }
@@ -2966,13 +3287,13 @@ const EXACT_TOOLING_TARGETS = new Map<string, string[]>([
   ["scripts/e2e/cron-cli-docker.sh", [dockerBuild, "docker-e2e-observability"]],
   ["scripts/ios-release-upload.sh", ["ios-release-wrapper-args", "ios-release-fastlane-gates"]],
   ["scripts/release-verify-beta.ts", ["release-wrapper-scripts"]],
+  ["scripts/container-registry-readback.mjs", ["container-registry-readback"]],
   ["scripts/lib/bundled-plugin-build-entries.mjs", ["bundled-plugin-build-entries", releaseCheck]],
   ["scripts/lib/docker-e2e-package.sh", [dockerBuild]],
   ["scripts/relay-build-limit-warnings.mts", [dockerBuild]],
   [
     "scripts/lib/release-version.mjs",
     [
-      "test/release-version.test.ts",
       "test/npm-publish-plan.test.ts",
       "test/openclaw-npm-release-check.test.ts",
       npmPostpublish,
@@ -2998,6 +3319,10 @@ const EXACT_TOOLING_TARGETS = new Map<string, string[]>([
   [
     "scripts/lib/release-context.mjs",
     ["full-release-validation-at-sha", "release-candidate-checklist", packageAcceptance],
+  ],
+  [
+    "scripts/lib/release-candidate-changelog.mts",
+    ["full-release-validation-at-sha", "release-candidate-checklist"],
   ],
   [
     "scripts/lib/clawhub-bootstrap-artifact.mjs",
@@ -3127,7 +3452,6 @@ const EXACT_TOOLING_TARGETS = new Map<string, string[]>([
     ["test/e2e/qa-lab/runtime/openai-web-search-minimal.e2e.test.ts"],
   ],
   ["scripts/e2e/qr-import-docker.sh", [dockerBuild]],
-  ["scripts/bundle-a2ui.mts", ["bundled-plugin-assets"]],
 ]);
 
 const SEMANTIC_TOOLING_TARGET_PATTERNS: Array<[RegExp, string[]]> = [
@@ -3169,6 +3493,7 @@ const SEMANTIC_TOOLING_TARGET_PATTERNS: Array<[RegExp, string[]]> = [
       "src/plugins/contracts/deprecated-internal-config-api.test.ts",
     ],
   ],
+  [/^scripts\/ci-check-plan\.mts$/u, ["ci-check-plan", workflowPlanning]],
   [
     /^\.github\/workflows\/ci\.yml$/u,
     [
@@ -3252,7 +3577,12 @@ const SEMANTIC_TOOLING_TARGET_PATTERNS: Array<[RegExp, string[]]> = [
   [/^\.github\/workflows\/package-acceptance\.yml$/u, [packageAcceptance]],
   [
     /^\.github\/workflows\/vercel-container-registry-publish\.yml$/u,
-    ["docker-channel-promote", "release-plan-producer", "vercel-container-registry-publish"],
+    [
+      "container-registry-readback",
+      "docker-channel-promote",
+      "release-plan-producer",
+      "vercel-container-registry-publish",
+    ],
   ],
   [
     /^\.github\/workflows\/plugin-clawhub-new\.yml$/u,
@@ -3310,16 +3640,7 @@ const SEMANTIC_TOOLING_TARGET_PATTERNS: Array<[RegExp, string[]]> = [
     /^scripts\/(?:lib\/tsx-cli-shim|tsx)\.mjs$/u,
     ["direct-run-entrypoints", "lint-status", "local-check-runtime"],
   ],
-  [
-    new RegExp(
-      [
-        "^scripts\\/(?:generate-prompt-snapshots|prompt-snapshot-files|",
-        "sync-codex-model-prompt-fixture)\\.ts$",
-      ].join(""),
-      "u",
-    ),
-    ["prompt-snapshots"],
-  ],
+  [/^scripts\/(?:generate-prompt-snapshots|prompt-snapshot-files)\.ts$/u, ["prompt-snapshots"]],
   [/^scripts\/e2e\/npm-telegram-live-docker\.sh$/u, ["npm-telegram-live"]],
   [
     /^scripts\/package-openclaw-for-docker\.m[jt]s$/u,
@@ -3375,7 +3696,7 @@ const SEMANTIC_TOOLING_TARGET_PATTERNS: Array<[RegExp, string[]]> = [
     ),
     ["auth-monitor"],
   ],
-  [/^scripts\/native-app-i18n\.ts$/u, ["native-app-i18n", workflowGuards]],
+  [/^scripts\/native-(?:app-i18n|i18n-inventory)\.ts$/u, ["native-app-i18n", workflowGuards]],
   [
     /^scripts\/github\/(?:dependency-guard|guard-shared)\.mjs$/u,
     ["dependency-guard-script", "security-review-workflow"],
@@ -3410,7 +3731,6 @@ const SEMANTIC_TOOLING_TARGET_PATTERNS: Array<[RegExp, string[]]> = [
   [
     /^scripts\/lib\/guard-inventory-utils\.mjs$/u,
     [
-      "test/extension-import-boundaries.test.ts",
       "test/plugin-extension-import-boundary.test.ts",
       "test/architecture-smells.test.ts",
       "test/test-helper-extension-import-boundary.test.ts",
@@ -3424,7 +3744,10 @@ const SEMANTIC_TOOLING_TARGET_PATTERNS: Array<[RegExp, string[]]> = [
     ["check-composite-action-input-interpolation", "check-no-conflict-markers", workflowGuards],
   ],
   [/^apps\/android\/fastlane\/Fastfile$/u, ["android-release-fastlane-gates"]],
-  [/^apps\/ios\/fastlane\/Fastfile$/u, ["ios-release-fastlane-gates"]],
+  [
+    /^apps\/ios\/fastlane\/Fastfile$/u,
+    ["ios-release-fastlane-gates", "ios-release-screenshot-upload"],
+  ],
   [/^scripts\/ios-release-cut\.(?:sh|ts)$/u, ["ios-release-plan"]],
   [/^scripts\/ios-release-prepare\.sh$/u, ["ios-release-prepare", "ios-release-wrapper-args"]],
   [
@@ -3581,13 +3904,7 @@ const SEMANTIC_TOOLING_TARGET_PATTERNS: Array<[RegExp, string[]]> = [
   ],
   [
     /^scripts\/e2e\/(?:mcp-code-mode-gateway-(?:live-)?docker|lib\/mcp-code-mode\/scenario)\.sh$/u,
-    [
-      dockerBuild,
-      dockerE2e,
-      pluginPrerelease,
-      "mcp-code-mode-gateway-client",
-      "session-log-mentions",
-    ],
+    [dockerBuild, dockerE2e, pluginPrerelease, "mcp-code-mode-gateway-client"],
   ],
   [
     /^scripts\/e2e\/agent-bundle-mcp-tools-docker\.sh$/u,
@@ -3787,7 +4104,7 @@ const SEMANTIC_TOOLING_TARGET_PATTERNS: Array<[RegExp, string[]]> = [
       ].join(""),
       "u",
     ),
-    ["mcp-code-mode-gateway-client", "session-log-mentions"],
+    ["mcp-code-mode-gateway-client"],
   ],
   [
     /^scripts\/e2e\/(?:mcp-channels|cron-cli|cron-mcp-cleanup)-docker\.sh$/u,
@@ -4328,6 +4645,79 @@ function resolveChangedTestOwnerAreas(targets: string[], cwd: string): string[] 
   );
 }
 
+function changedModuleExports(changedPath: string, cwd: string, baseRef: string | undefined) {
+  // Preflight already fetched and selected this base. Do not rediscover a merge
+  // base: a depth-one PR merge still has the exact comparison tree available.
+  if (!baseRef || /\.c[jt]s$/u.test(changedPath) || !fs.existsSync(path.join(cwd, changedPath))) {
+    return true;
+  }
+  const before = spawnSync("git", ["show", `${baseRef}:${changedPath}`], {
+    cwd,
+    encoding: "utf8",
+    maxBuffer: GIT_LS_FILES_MAX_BUFFER_BYTES,
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  if (before.error || before.status !== 0) {
+    return true;
+  }
+  const previous = readTestSelectorExportNames(before.stdout);
+  const current = readTestSelectorExportNames(fs.readFileSync(path.join(cwd, changedPath), "utf8"));
+  return (
+    previous === null || current === null || JSON.stringify(previous) !== JSON.stringify(current)
+  );
+}
+
+function newlyConsumedMockModules(
+  changedPath: string,
+  cwd: string,
+  baseRef: string | undefined,
+  graph: ImportGraph,
+) {
+  if (
+    !TOOLING_IMPORTABLE_FILE_EXTENSIONS.some((extension) => changedPath.endsWith(extension)) ||
+    isTestFileTarget(changedPath) ||
+    !fs.existsSync(path.join(cwd, changedPath))
+  ) {
+    return [];
+  }
+  const current = readTestSelectorImportNames(fs.readFileSync(path.join(cwd, changedPath), "utf8"));
+  const files = new Set(graph.files);
+  const aliases = getImportGraphAliases(cwd);
+  const typeOnly = cachedImportGraphEdges.get(`${cwd}\0true\0${changedPath}`)?.typeOnlySpecifiers;
+  const candidates = [...current].flatMap(([specifier, names]) => {
+    if (typeOnly?.has(specifier)) {
+      return [];
+    }
+    const modules = resolveImportSpecifiers(
+      changedPath,
+      specifier,
+      files,
+      TOOLING_IMPORTABLE_FILE_EXTENSIONS,
+      aliases,
+      undefined,
+      true,
+    ).filter((file) => graph.reverseMocks.has(file));
+    return modules.length > 0 ? [{ specifier, names, modules }] : [];
+  });
+  if (candidates.length === 0) {
+    return [];
+  }
+  const before = baseRef
+    ? spawnSync("git", ["show", `${baseRef}:${changedPath}`], {
+        cwd,
+        encoding: "utf8",
+        maxBuffer: GIT_LS_FILES_MAX_BUFFER_BYTES,
+        stdio: ["ignore", "pipe", "pipe"],
+      })
+    : undefined;
+  const previous = before?.status === 0 ? readTestSelectorImportNames(before.stdout) : undefined;
+  return uniqueOrdered(
+    candidates.flatMap(({ specifier, names, modules }) =>
+      !previous || names.some((name) => !previous.get(specifier)?.includes(name)) ? modules : [],
+    ),
+  );
+}
+
 function resolveBoundedChangedTestTargetPlan(
   changedPaths: string[],
   options: ChangedTestTargetOptions,
@@ -4336,6 +4726,16 @@ function resolveBoundedChangedTestTargetPlan(
   const targets: string[] = [];
   const ownerTargets: string[] = [];
   const ownerAreas: string[] = [];
+  const adaptiveMarkdown =
+    options.aggressive && options.adaptiveMarkdown
+      ? createAdaptiveMarkdownFilter(
+          changedPaths,
+          createTestInputFingerprint(cwd, changedPaths),
+          adaptiveMarkdownQualification,
+          options.adaptiveMarkdown.isIndependentCompanion,
+          cwd,
+        )
+      : (owners: string[]) => owners;
   const graphOptions = {
     tooling: true,
     resolveAliases: options.resolveAliases,
@@ -4368,11 +4768,18 @@ function resolveBoundedChangedTestTargetPlan(
           )
         : [];
     const explicitOwners = uniqueOrdered([...(mappedOwners ?? []), ...pluginPackageOwner]);
-    const conventionalOwners = resolveConventionalChangedOwnerTargets(
+    const conventionalCandidates = resolveConventionalChangedOwnerTargets(
       changedPath,
       cwd,
       options.aggressive?.maxDirectoryTests,
     );
+    const conventionalOwners = adaptiveMarkdown(conventionalCandidates);
+    const retainedConventional = new Set(conventionalOwners);
+    options.onSelection?.({
+      rule: "adaptive-qualified-unchanged",
+      input: changedPath,
+      targets: conventionalCandidates.filter((file) => !retainedConventional.has(file)),
+    });
     const owners = options.aggressive
       ? uniqueOrdered([
           ...explicitOwners,
@@ -4409,6 +4816,33 @@ function resolveBoundedChangedTestTargetPlan(
           : 1
         : undefined;
       affectedTests = walkAffectedTestsFromImportGraph([changedPath], graph, depth);
+    }
+    if (graph) {
+      const changedExports =
+        graph.reverseMocks.has(changedPath) &&
+        changedModuleExports(changedPath, cwd, options.baseRef);
+      const mockedModules = uniqueOrdered([
+        ...(changedExports ? [changedPath] : []),
+        ...newlyConsumedMockModules(changedPath, cwd, options.baseRef, graph),
+      ]);
+      // Newly using an existing export only affects fixtures that also execute
+      // this caller. Export-set changes retain every mock owner independently.
+      const callerTests = new Set(
+        mockedModules.some((mocked) => !changedExports || mocked !== changedPath)
+          ? walkAffectedTestsFromImportGraph([changedPath], graph)
+          : [],
+      );
+      for (const mocked of mockedModules) {
+        const mockConsumers = graph.reverseMocks.get(mocked) ?? [];
+        // Shared installers can sit arbitrarily far from tests. Ordinary
+        // importer hub/depth caps must not hide an incomplete module mock.
+        const mockTests = uniqueOrdered([
+          ...mockConsumers.filter(isTestFileTarget),
+          ...walkAffectedTestsFromImportGraph(mockConsumers, graph),
+        ]).filter((file) => (changedExports && mocked === changedPath) || callerTests.has(file));
+        targets.push(...mockTests);
+        options.onSelection?.({ rule: "mock-export-consumer", input: mocked, targets: mockTests });
+      }
     }
     // Direct readers keep their coverage without broadening the owner's transitive area.
     const importers = affectedTests.filter(
@@ -4461,8 +4895,25 @@ function resolveBoundedChangedTestTargetPlan(
       if (typeof name !== "string") {
         continue;
       }
+      const packagePaths = changedPaths.filter((file) =>
+        file.startsWith(`${path.posix.dirname(manifest)}/`),
+      );
       const consumers = resolveDependencyTestConsumers([{ root: ".", dependencies: [name] }], cwd, {
         runtimeOnly: true,
+        changedPaths:
+          packagePaths.length > 0 &&
+          packagePaths.every(
+            (file) =>
+              file.startsWith(`${path.posix.dirname(manifest)}/src/`) &&
+              TOOLING_IMPORTABLE_FILE_EXTENSIONS.some((ext) => file.endsWith(ext)) &&
+              (!isTestOnlyPath(file) || isTestFileTarget(file)) &&
+              !/(?:^|\/)(?:__fixtures__|fixtures|scripts|test-fixtures|test-utils|test-helpers|test-support|testing)\//u.test(
+                file,
+              ) &&
+              !/\.(?:config|setup|d)\.[cm]?[jt]sx?$/u.test(file),
+          )
+            ? packagePaths
+            : undefined,
         // Resolved aliases share the module graph's hub cutoff. Traversing again
         // from package readers would bypass it for mixed import styles.
         direct: true,
@@ -4654,10 +5105,7 @@ function classifyTarget(arg: string, cwd: string, beforeDatabaseWorkerOwnership 
   if (relative.endsWith(".e2e.test.ts")) {
     return "e2e";
   }
-  if (
-    relative === "src/gateway/gateway.test.ts" ||
-    relative === "src/gateway/server.startup-matrix-migration.integration.test.ts"
-  ) {
+  if (relative === "src/gateway/gateway.test.ts") {
     return "e2e";
   }
   const channelContractKind = resolveChannelContractTargetKind(relative);
@@ -4679,6 +5127,12 @@ function classifyTarget(arg: string, cwd: string, beforeDatabaseWorkerOwnership 
   }
   if (isCliProcessTestFile(relative)) {
     return "cliProcess";
+  }
+  if (
+    markdownTestFiles.includes(relative) ||
+    markdownTestFiles.includes(relative.replace(/\.ts$/u, ".test.ts"))
+  ) {
+    return "markdown";
   }
   if (resolveUnitFastTimerTestIncludePattern(relative)) {
     return "unitFastFakeTimers";
@@ -4833,6 +5287,12 @@ function classifyTarget(arg: string, cwd: string, beforeDatabaseWorkerOwnership 
 
 function resolveLightLaneIncludePatterns(kind: string, targetArg: string, cwd: string) {
   const relative = toRepoRelativeTarget(targetArg, cwd);
+  if (kind === "markdown") {
+    const test = markdownTestFiles.includes(relative)
+      ? relative
+      : relative.replace(/\.ts$/u, ".test.ts");
+    return markdownTestFiles.includes(test) ? [test] : null;
+  }
   if (kind === "unitFast") {
     const includePattern = resolveUnitFastTestIncludePattern(relative);
     return includePattern ? [includePattern] : null;
@@ -4878,7 +5338,7 @@ function shouldUseWholeConfigTarget(kind: string, targetArg: string, cwd: string
   return isControlUiSourcePath(relative);
 }
 
-function createVitestArgs(
+export function createVitestArgs(
   params: Pick<VitestRunPlan, "config" | "forwardedArgs" | "watchMode"> & {
     env?: NodeJS.ProcessEnv;
   },
@@ -4946,7 +5406,7 @@ export function buildVitestRunPlans(
   args: string[],
   cwd = process.cwd(),
   listChangedPaths: (baseRef: string, cwd: string) => string[] = listChangedPathsFromGit,
-  options: ChangedTestTargetOptions = {},
+  options: ChangedTestTargetOptions & { changedTargetArgs?: string[] | null } = {},
 ) {
   const {
     forwardedArgs,
@@ -4955,7 +5415,11 @@ export function buildVitestRunPlans(
     watchMode,
   } = parseTestProjectsArgs(args, cwd);
   const changedTargetArgs =
-    targetArgs.length === 0 ? resolveChangedTargetArgs(args, cwd, listChangedPaths, options) : null;
+    targetArgs.length === 0
+      ? options.changedTargetArgs !== undefined
+        ? options.changedTargetArgs
+        : resolveChangedTargetArgs(args, cwd, listChangedPaths, options)
+      : null;
   const requestedTargetArgs = changedTargetArgs ?? targetArgs;
   const ownedTargets = explicitIncludeTargets(targetArgs, cwd);
   if (
@@ -5372,14 +5836,14 @@ export function buildFullSuiteVitestRunPlans(args: string[], cwd = process.cwd()
       },
     ];
   }
-  const parallelShardCount = parsePositiveInt(
+  const parallelShardCount = parseOptionalPositiveInt(
     process.env.OPENCLAW_TEST_PROJECTS_PARALLEL,
     "OPENCLAW_TEST_PROJECTS_PARALLEL",
   );
   const expandToProjectConfigs =
     process.env.OPENCLAW_TEST_PROJECTS_LEAF_SHARDS === "1" ||
     (parallelShardCount !== null && parallelShardCount > 1) ||
-    shouldExpandLocalFullSuiteShardsByDefault(process.env);
+    !isCiLikeEnv(process.env);
   return fullSuiteVitestShards.flatMap((shard) => {
     if (
       process.env.OPENCLAW_TEST_SKIP_FULL_EXTENSIONS_SHARD === "1" &&
@@ -5426,11 +5890,30 @@ export function buildFullSuiteVitestRunPlans(args: string[], cwd = process.cwd()
             Math.ceil(targets.length / FULL_SUITE_INFRA_TEST_TARGET_CHUNK_SIZE),
           );
         } else if (config === TOOLING_VITEST_CONFIG) {
-          // Tooling tests spawn package managers and native helpers. Keep native
-          // process lifetime short enough that unrelated files cannot crash together.
+          // Bound package-manager/native-helper lifetimes without paying for a new
+          // Vitest config and worker startup after every two ordinary tooling files.
           const targets = listToolingFullSuiteTestTargets(cwd);
           const chunkCount = Math.ceil(targets.length / FULL_SUITE_TOOLING_TEST_TARGET_CHUNK_SIZE);
           chunks = splitTargetChunks(targets, chunkCount);
+        } else if (config === UI_VITEST_CONFIG) {
+          // A retained jsdom worker made a 16-case file grow from 8.56s alone
+          // to 542s of case time in the full run. Keep its existing harness,
+          // but retire the shared document/module generation between small batches.
+          const targets = listUiFullSuiteTestTargets(cwd);
+          chunks = splitTargetChunks(
+            targets,
+            Math.ceil(targets.length / FULL_SUITE_UI_TEST_TARGET_CHUNK_SIZE),
+          );
+        } else if (config === GATEWAY_DATABASE_WORKERS_VITEST_CONFIG) {
+          // The 485-file shared fork exhausted its 4 GiB V8 heap in a full run.
+          // Keep native worker custody and exclusive scheduling; bound its graph lifetime.
+          chunks = splitTargetChunks(
+            gatewayDatabaseWorkerTestFiles,
+            Math.ceil(
+              gatewayDatabaseWorkerTestFiles.length /
+                FULL_SUITE_GATEWAY_DATABASE_TEST_TARGET_CHUNK_SIZE,
+            ),
+          );
         } else if (config === GATEWAY_SERVER_VITEST_CONFIG) {
           chunks = createGatewayServerTestTargetChunks(cwd);
         } else {
@@ -5440,6 +5923,14 @@ export function buildFullSuiteVitestRunPlans(args: string[], cwd = process.cwd()
           }
         }
         if (chunks !== null) {
+          if (
+            config === EXTENSION_DATABASE_WORKERS_VITEST_CONFIG &&
+            !isCiLikeEnv(process.env) &&
+            shouldSplitExtensionTestProcesses(config, forwardedArgs)
+          ) {
+            // Bound the large native-worker cohorts without merging singleton process owners.
+            chunks = chunks.flatMap((targets) => splitExtensionTestJobTargets(config, targets));
+          }
           return chunks.map((targets) => ({
             config,
             forwardedArgs: [...forwardedArgs, ...targets],
@@ -5461,34 +5952,8 @@ export function buildFullSuiteVitestRunPlans(args: string[], cwd = process.cwd()
   });
 }
 
-function shouldUseLocalFullSuiteParallelByDefault(env = process.env) {
-  if (hasConservativeVitestWorkerBudget(env)) {
-    return false;
-  }
-  return env.OPENCLAW_TEST_PROJECTS_SERIAL !== "1" && !isCiLikeEnv(env);
-}
-
-function shouldExpandLocalFullSuiteShardsByDefault(env = process.env) {
-  return !isCiLikeEnv(env);
-}
-
-function parsePositiveInt(value: string | undefined, label: string) {
-  const text = value?.trim();
-  if (!text) {
-    return null;
-  }
-  if (!/^\d+$/u.test(text)) {
-    throw new Error(`${label} must be a positive integer; got: ${value}`);
-  }
-  const parsed = Number(text);
-  if (!Number.isSafeInteger(parsed) || parsed <= 0) {
-    throw new Error(`${label} must be a positive integer; got: ${value}`);
-  }
-  return parsed;
-}
-
 function hasConservativeVitestWorkerBudget(env: NodeJS.ProcessEnv) {
-  const workerBudget = parsePositiveInt(
+  const workerBudget = parseOptionalPositiveInt(
     env.OPENCLAW_VITEST_MAX_WORKERS ?? env.OPENCLAW_TEST_WORKERS,
     env.OPENCLAW_VITEST_MAX_WORKERS === undefined
       ? "OPENCLAW_TEST_WORKERS"
@@ -5546,25 +6011,17 @@ export function resolveParallelFullSuiteConcurrency(
 ) {
   let env = envInput;
   env ??= process.env;
-  const override = parsePositiveInt(
+  const override = parseOptionalPositiveInt(
     env.OPENCLAW_TEST_PROJECTS_PARALLEL,
     "OPENCLAW_TEST_PROJECTS_PARALLEL",
   );
   if (override !== null) {
     return Math.min(override, specCount);
   }
-  if (env.OPENCLAW_TEST_PROJECTS_SERIAL === "1") {
-    return 1;
-  }
-  if (isCiLikeEnv(env)) {
-    return 1;
-  }
-  if (hasConservativeVitestWorkerBudget(env)) {
-    return 1;
-  }
   if (
-    env.OPENCLAW_TEST_PROJECTS_LEAF_SHARDS !== "1" &&
-    !shouldUseLocalFullSuiteParallelByDefault(env)
+    env.OPENCLAW_TEST_PROJECTS_SERIAL === "1" ||
+    isCiLikeEnv(env) ||
+    hasConservativeVitestWorkerBudget(env)
   ) {
     return 1;
   }
@@ -5674,13 +6131,16 @@ export function applyDefaultVitestNoOutputTimeout<T extends WatchableVitestSpecS
 
 export function createVitestRunSpecs(
   args: string[],
-  params: { baseEnv?: NodeJS.ProcessEnv; cwd?: string } = {},
+  params: { baseEnv?: NodeJS.ProcessEnv; cwd?: string; changedTargetArgs?: string[] | null } = {},
 ) {
   const cwd = params.cwd ?? process.cwd();
   const baseEnv = params.baseEnv ?? process.env;
   const ownedTargets = explicitIncludeTargets(parseTestProjectsArgs(args, cwd).targetArgs, cwd);
   const plans = filterPlansForContractIncludeFile(
-    buildVitestRunPlans(args, cwd, listChangedPathsFromGit, { env: baseEnv }),
+    buildVitestRunPlans(args, cwd, listChangedPathsFromGit, {
+      env: baseEnv,
+      changedTargetArgs: params.changedTargetArgs,
+    }),
     baseEnv,
     ownedTargets,
   );
@@ -5690,7 +6150,7 @@ export function createVitestRunSpecs(
   )
     ? loadIncludePatternsForSpecFilter(baseEnv)
     : null;
-  return plans.flatMap((originalPlan, index) => {
+  const scopedPlans = plans.flatMap((originalPlan) => {
     const plan =
       originalPlan.includePatterns && inheritedIncludes
         ? {
@@ -5702,9 +6162,28 @@ export function createVitestRunSpecs(
             ),
           }
         : originalPlan;
-    if (inheritedIncludes && plan.includePatterns?.length === 0) {
-      return [];
+    return inheritedIncludes && plan.includePatterns?.length === 0 ? [] : [plan];
+  });
+  const boundedPlans = scopedPlans.flatMap((plan) => {
+    if (plan.watchMode || plan.config !== GATEWAY_SERVER_VITEST_CONFIG) {
+      return [plan];
     }
+    const chunks = createGatewayServerTestTargetChunks(
+      cwd,
+      plan.forwardedArgs,
+      baseEnv,
+      plan.includePatterns ?? undefined,
+    );
+    return chunks.length > 1
+      ? chunks.map((targets) =>
+          Object.assign({}, plan, {
+            forwardedArgs: replaceVitestFileFilters(plan.forwardedArgs, targets),
+            timingTargets: targets,
+          }),
+        )
+      : [plan];
+  });
+  return boundedPlans.map((plan, index) => {
     const includeFilePath = plan.includePatterns
       ? path.join(os.tmpdir(), `openclaw-vitest-include-${randomUUID()}-${index}.json`)
       : null;
@@ -5728,7 +6207,7 @@ export function createVitestRunSpecs(
           : baseEnv,
       includeFilePath,
       includePatterns: plan.includePatterns,
-      pnpmArgs: createVitestArgs(plan),
+      pnpmArgs: createVitestArgs({ ...plan, env: baseEnv }),
       preflightPnpmArgs: createVitestPreflightPnpmArgs(plan.config),
       watchMode: plan.watchMode,
     };

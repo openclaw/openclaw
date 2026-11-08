@@ -1,10 +1,26 @@
+import { toUSVString } from "node:util";
+import { expectDefined } from "@openclaw/normalization-core";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { readTranscriptSenderIdentity } from "../chat/sender-identity.js";
+import { getCliSessionBinding } from "../config/sessions/cli-session-binding.js";
 import type {
   SessionHistoryWorkerRequest,
   SessionHistoryWorkerResult,
 } from "../config/sessions/session-history-types.js";
+import { readCronJobNamesInDatabase } from "../cron/store/job-name.kernel.js";
+import { resolveCronStoreSelectionInDatabase } from "../cron/store/paths.js";
+import { withExistingOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
+import { getUserProfileDisplaysNative } from "../state/user-profile-list.native.js";
+import { createCurrentUserProfileMessageProjector } from "./chat-display-projection.core.js";
+import {
+  projectForwardedMessages,
+  readForwardedCronJobIds,
+} from "./chat-display-projection.history.js";
+import { projectChatHistoryWithReplies } from "./chat-history-reply-messages.js";
+import { resolveCurrentUserProfileDisplay } from "./current-user-profile-display.js";
 import type { PreparedSessionHistoryReadTarget } from "./session-history-read.types.js";
 import { createReadonlySessionHistoryReader } from "./session-history-readonly-reader.js";
-import { resolveGatewaySessionStoreReadSources } from "./session-utils-store-sources.js";
+import { resolveGatewaySessionStoreReadSources } from "./session-utils-store-candidates.js";
 
 /** Dispatch only inside the history worker's admitted database lifetime. */
 export async function readSessionHistoryRequest(
@@ -23,6 +39,18 @@ export async function readSessionHistoryRequest(
     deferProfileDisplay: true,
     resolveCronJobName: () => undefined,
   };
+  if (request.kind === "recent-usage") {
+    return {
+      kind: "recent-usage",
+      result: options.readers.readRecentUsage(request.params.maxBytes),
+    };
+  }
+  if (request.kind === "history-event-page") {
+    return {
+      kind: "history-event-page",
+      result: options.readers.readHistoryEventPage(request.params.options),
+    };
+  }
   if (request.kind === "active-accounting") {
     return {
       kind: "active-accounting",
@@ -33,6 +61,12 @@ export async function readSessionHistoryRequest(
     return {
       kind: "bounded-tail",
       result: options.readers.readBoundedMessageTail(request.params.options),
+    };
+  }
+  if (request.kind === "recent-text") {
+    return {
+      kind: "recent-text",
+      result: options.readers.readRecentConversationText(request.params.options),
     };
   }
   if (request.kind === "summary") {
@@ -171,18 +205,68 @@ export async function readSessionHistoryRequest(
       ),
     };
   }
-  if (request.kind === "rpc") {
-    const { readChatHistoryPageKernel } =
-      await import("./server-methods/chat-history-page-kernel.js");
-    const { encodeChatHistoryResponsePage } =
-      await import("./server-methods/chat-history-response-page.js");
+  if (request.kind === "rpc-message") {
+    const { readChatHistoryMessageFromReaders } = await import("./cli-session-history.js");
     return {
-      kind: "rpc",
-      page: encodeChatHistoryResponsePage(
-        await readChatHistoryPageKernel(request.params, options),
-        request.params,
-      ),
+      kind: "rpc-message",
+      result: await readChatHistoryMessageFromReaders(request.params, options.readers),
     };
+  }
+  if (request.kind === "rpc") {
+    const { readChatHistoryPageKernel } = await import("./chat-history-page-kernel.js");
+    const { encodeChatHistoryResponsePage } = await import("./chat-history-response-page.js");
+    const cli = getCliSessionBinding(request.params.entry, "claude-cli")?.sessionId
+      ? await (
+          await import("./cli-session-history.js")
+        ).prepareCliSessionHistoryReader(request.params, options.readers)
+      : undefined;
+    try {
+      const page = await readChatHistoryPageKernel(request.params, {
+        ...options,
+        ...(cli ? { readers: cli.readers, readMessageSequence: cli.sequence } : {}),
+      });
+      cli?.applyPagination(page);
+      const messages = page.messages.filter(
+        (message): message is Record<string, unknown> => asOptionalRecord(message) !== undefined,
+      );
+      page.messages = await projectChatHistoryWithReplies(messages, (displayMessages) => {
+        const profileIds = displayMessages.flatMap((message) => {
+          const identity = readTranscriptSenderIdentity(
+            asOptionalRecord(message["__openclaw"])?.senderIdentity,
+          );
+          return message.role === "user" && identity?.type === "profile" ? [identity.id] : [];
+        });
+        const { path, environment: env } = expectDefined(
+          readTarget.stateDatabase,
+          "RPC history requires its captured shared-state owner",
+        );
+        const state = { path, env };
+        const jobIds = [...new Set(readForwardedCronJobIds(displayMessages).map(toUSVString))];
+        const names = jobIds.length
+          ? withExistingOpenClawStateDatabaseReadOnly(({ db }) => {
+              const selection = resolveCronStoreSelectionInDatabase(db, undefined, env);
+              return selection.status === "ready"
+                ? readCronJobNamesInDatabase(db, jobIds, selection.storeKey)
+                : new Map<string, string>();
+            }, state)
+          : undefined;
+        let profiles: ReturnType<typeof getUserProfileDisplaysNative> | undefined;
+        const project = createCurrentUserProfileMessageProjector((id) =>
+          resolveCurrentUserProfileDisplay(id, (senderId) =>
+            (profiles ??= getUserProfileDisplaysNative(profileIds, state)).get(senderId),
+          ),
+        );
+        return projectForwardedMessages(displayMessages, (jobId) =>
+          names?.get(toUSVString(jobId)),
+        ).map(project);
+      });
+      return {
+        kind: "rpc",
+        page: encodeChatHistoryResponsePage(page, request.params),
+      };
+    } finally {
+      cli?.dispose();
+    }
   }
   const { readSessionHistorySnapshotKernel } = await import("./session-history-snapshot.js");
   return {

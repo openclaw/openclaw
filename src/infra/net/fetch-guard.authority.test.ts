@@ -1,61 +1,139 @@
-import { describe, expect, it, vi } from "vitest";
+import { setImmediate as nextTurn } from "node:timers/promises";
+import { queryObjects } from "node:v8";
+import { beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import { fetchWithSsrFGuard } from "./fetch-guard.js";
-import { withGuardedFetchRequestAuthority } from "./fetch-request-authority.js";
+import { fetchWithSsrFGuard, type GuardedFetchOptions } from "./fetch-guard.js";
+import {
+  captureGuardedFetchRequestAuthority,
+  withGuardedFetchBeforeRequest,
+  withGuardedFetchRequestAuthority as withAuthority,
+} from "./fetch-request-authority.js";
 
 const lookupFn = async () => [{ address: "93.184.216.34", family: 4 }];
+const fetchImpl = vi.fn<NonNullable<GuardedFetchOptions["fetchImpl"]>>();
+const request = (options: Partial<GuardedFetchOptions> = {}) =>
+  fetchWithSsrFGuard({ url: "https://public.example/resource", lookupFn, fetchImpl, ...options });
+beforeEach(() => {
+  fetchImpl.mockReset().mockImplementation(async () => new Response("ok"));
+});
 
-describe("guarded fetch request authority", () => {
-  it.each(["beforeRequest", "scoped authority"])(
-    "rejects an asynchronous %s callback before sending the request",
-    async (owner) => {
-      const fetchImpl = vi.fn(async () => new Response("ok"));
-      const asynchronousGuard = () => Promise.resolve();
-      await expect(
-        withGuardedFetchRequestAuthority(
-          owner === "scoped authority" ? asynchronousGuard : () => {},
-          async () =>
-            fetchWithSsrFGuard({
-              url: "https://public.example/resource",
-              fetchImpl,
-              lookupFn,
-              beforeRequest: owner === "beforeRequest" ? (asynchronousGuard as never) : undefined,
+it.each(["request", "scope", "dispatch"])("rejects asynchronous %s guards", async (owner) => {
+  const guard = () => Promise.resolve();
+  await expect(
+    withAuthority(
+      owner === "scope" ? guard : () => {},
+      () => request({ beforeRequest: owner === "request" ? (guard as never) : undefined }),
+      // oxlint-disable-next-line typescript/no-misused-promises -- Deliberately violates the synchronous final-dispatch contract.
+      owner === "dispatch" ? guard : undefined,
+    ),
+  ).rejects.toThrow("must be synchronous");
+  expect(fetchImpl).not.toHaveBeenCalled();
+});
+
+it.each([false, true])("checks inherited dispatch and redirects (%s)", async (deferred) => {
+  const events: string[] = [];
+  const release = createDeferred();
+  let prepared = false;
+  const beforeRequest = vi.fn(() => {
+    expect(prepared).toBe(true);
+    events.push("dispatch");
+  });
+  fetchImpl.mockImplementation(async (): Promise<Response> => {
+    events.push("fetch");
+    return fetchImpl.mock.calls.length === 1
+      ? new Response(null, { status: 302, headers: { location: "/redirected" } })
+      : new Response("ok");
+  });
+  await withAuthority(
+    () => events.push("scope"),
+    async () => {
+      await withAuthority(undefined, async () => {
+        const submit = () =>
+          release.promise.then(() =>
+            request({
+              lookupFn: async () => {
+                const addresses = await lookupFn();
+                prepared = true;
+                return addresses;
+              },
             }),
-        ),
-      ).rejects.toThrow("must be synchronous");
-      expect(fetchImpl).not.toHaveBeenCalled();
+          );
+        const pending = deferred
+          ? withGuardedFetchBeforeRequest(() => events.push("egress"), submit)
+          : submit();
+        events.length = 0;
+        release.resolve();
+        await (await pending).release();
+      });
     },
+    beforeRequest,
   );
+  const dispatch = ["scope", "dispatch", ...(deferred ? ["egress"] : []), "fetch"];
+  expect(events).toEqual([...dispatch, ...dispatch]);
+});
 
-  it.each([false, true])(
-    "closes retained request authority without affecting an independent request (nested: %s)",
-    async (nested) => {
-      const release = createDeferred();
-      const fetchImpl = vi.fn(async () => new Response("ok"));
-      const fetch = () =>
-        fetchWithSsrFGuard({ url: "https://public.example/resource", fetchImpl, lookupFn });
-      let retained: Promise<unknown> | undefined;
-      const retain = async () => {
-        retained = release.promise.then(fetch);
-      };
-      await withGuardedFetchRequestAuthority(
-        () => {},
-        async () => {
-          if (nested) {
-            await withGuardedFetchRequestAuthority(undefined, retain);
-            release.resolve();
-            await expect(retained).rejects.toThrow("no longer active");
-          } else {
-            await retain();
-          }
-        },
-      );
+it("releases closed callbacks without authorizing late requests", async () => {
+  const release = createDeferred();
+  const beforeRequest = () => expect.unreachable("closed scope must refuse before dispatch");
+  let retained: Promise<unknown> | undefined;
+  let captured: (() => void) | undefined;
+  await withAuthority(
+    () => {},
+    async () => {
+      const reference = await (async () => {
+        const context = { marker: "synthetic request context" };
+        await withAuthority(
+          () => expect(context.marker).toBe("synthetic request context"),
+          async () => {
+            captured = captureGuardedFetchRequestAuthority();
+            retained = release.promise.then(() => request());
+          },
+        );
+        return new WeakRef(context);
+      })();
       release.resolve();
       await expect(retained).rejects.toThrow("no longer active");
-      expect(fetchImpl).not.toHaveBeenCalled();
-      const result = await fetch();
-      expect(fetchImpl).toHaveBeenCalledOnce();
-      await result.release();
+      expect(() => captured!()).toThrow("no longer active");
+      const control = new WeakRef({});
+      await nextTurn();
+      queryObjects(WeakRef);
+      expect(control.deref()).toBeUndefined();
+      expect(reference.deref()).toBeUndefined();
     },
+    beforeRequest,
   );
+  expect(fetchImpl).not.toHaveBeenCalled();
+  const result = await request();
+  expect(fetchImpl).toHaveBeenCalledOnce();
+  await result.release();
+});
+it.each([
+  [
+    { init: { method: "POST", body: "secret" } },
+    "Refusing to follow cross-origin redirect for POST request body",
+    1,
+  ],
+  [
+    { allowCrossOriginUnsafeRedirectReplay: true },
+    "Cross-origin unsafe redirect replay cannot be both allowed and rejected",
+    0,
+  ],
+] as const)("rejects unsafe redirect policy %j", async (options, error, calls) => {
+  fetchImpl.mockResolvedValueOnce(
+    new Response(null, { status: 307, headers: { location: "https://cdn.example.com/upload-2" } }),
+  );
+  await expect(
+    request({ rejectCrossOriginUnsafeRedirectReplay: true, ...options }),
+  ).rejects.toThrow(error);
+  expect(fetchImpl).toHaveBeenCalledTimes(calls);
+});
+
+it("refuses revoked dispatch checks outside a request scope", async () => {
+  const rejected = vi.fn(() => {
+    throw new Error("egress revoked");
+  });
+  await expect(withGuardedFetchBeforeRequest(rejected, () => request())).rejects.toThrow(
+    "egress revoked",
+  );
+  expect(fetchImpl).not.toHaveBeenCalled();
 });

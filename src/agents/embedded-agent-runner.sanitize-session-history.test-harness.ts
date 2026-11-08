@@ -7,7 +7,7 @@ import type { SessionManager } from "./sessions/index.js";
 type SessionEntry = { type: string; customType: string; data: unknown };
 export type SanitizeSessionHistoryFn =
   typeof import("./embedded-agent-runner/replay-history.js").sanitizeSessionHistory;
-type SanitizeSessionHistoryMockedHelpers = typeof import("./embedded-agent-helpers.js");
+type SanitizeSessionHistoryMockedHelpers = typeof import("./embedded-agent-helpers/images.js");
 export type SanitizeSessionHistoryHarness = {
   sanitizeSessionHistory: SanitizeSessionHistoryFn;
   mockedHelpers: SanitizeSessionHistoryMockedHelpers;
@@ -36,36 +36,33 @@ export function makeInMemorySessionManager(
   entries: SessionEntry[],
   activeBranchEntries: SessionEntry[] = entries,
 ): SessionManager {
-  const appendCustomEntry = vi.fn((customType: string, data: unknown) => {
-    const entry = { type: "custom", customType, data };
-    entries.push(entry);
-    if (activeBranchEntries !== entries) {
-      activeBranchEntries.push(entry);
-    }
-  });
   return {
+    getSessionTarget: () => undefined,
     getEntries: vi.fn(() => entries),
     getBranch: vi.fn(() => activeBranchEntries),
-    appendCustomEntry,
-    appendCustomEntryAsync: async (customType: string, data: unknown) =>
-      appendCustomEntry(customType, data),
+    appendCustomEntryAsync: vi.fn(async (customType: string, data: unknown) => {
+      const entry = { type: "custom", customType, data };
+      entries.push(entry);
+      if (activeBranchEntries !== entries) {
+        activeBranchEntries.push(entry);
+      }
+      return `custom-entry-${entries.length}`;
+    }),
   } as unknown as SessionManager;
 }
 
 export function makeMockSessionManager(): SessionManager {
   return {
+    getSessionTarget: () => undefined,
     getEntries: vi.fn().mockReturnValue([]),
     getBranch: vi.fn().mockReturnValue([]),
-    appendCustomEntry: vi.fn(),
-    appendCustomEntryAsync: vi.fn(async () => {}),
+    appendCustomEntryAsync: vi.fn(async () => "custom-entry"),
   } as unknown as SessionManager;
 }
 
-export async function createSanitizeSessionHistoryHelpersMock(extra: Record<string, unknown> = {}) {
+export function createSanitizeSessionHistoryImagesMock() {
   return {
-    ...(await vi.importActual("./embedded-agent-helpers.js")),
     sanitizeSessionMessagesImages: vi.fn(async (msgs) => msgs),
-    ...extra,
   };
 }
 
@@ -80,7 +77,7 @@ export async function createSanitizeSessionHistoryProviderRuntimeMock(
     // Default to no provider plugin participation; individual tests opt in to
     // hooks so ownership boundaries stay explicit.
     resolveProviderRuntimePlugin: vi.fn(() => undefined),
-    sanitizeProviderReplayHistoryWithPlugin: vi.fn(() => undefined),
+    sanitizeProviderReplayHistoryWithPluginAsync: vi.fn(() => undefined),
     validateProviderReplayTurnsWithPlugin: vi.fn(() => undefined),
     ...extra,
   };
@@ -111,7 +108,7 @@ export async function loadSanitizeSessionHistoryWithCleanMocks(): Promise<Saniti
   vi.resetAllMocks();
   // Reload replay-history after mocks reset so each suite sees the same module
   // graph the production runner would import.
-  const mockedHelpers = await import("./embedded-agent-helpers.js");
+  const mockedHelpers = await import("./embedded-agent-helpers/images.js");
   vi.mocked(mockedHelpers.sanitizeSessionMessagesImages).mockImplementation(async (msgs) => msgs);
   const mod = await import("./embedded-agent-runner/replay-history.js");
   return {

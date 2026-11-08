@@ -1,6 +1,6 @@
 import Foundation
 
-enum GatewayAgentChannel: String, Codable, CaseIterable {
+enum GatewayAgentChannel: String, Codable, CaseIterable, Sendable {
     case last
     case whatsapp
     case telegram
@@ -26,7 +26,7 @@ enum GatewayAgentChannel: String, Codable, CaseIterable {
     }
 }
 
-struct GatewayAgentInvocation {
+struct GatewayAgentInvocation: Equatable, Sendable {
     var message: String
     var sessionKey: String = "main"
     var thinking: String?

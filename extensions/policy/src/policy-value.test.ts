@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { getPolicyPath, scopedPolicyValue } from "./policy-value.js";
+import { getPolicyPath } from "./policy-value.js";
 
 describe("policy values", () => {
   it("reads nested policy paths", () => {
@@ -16,7 +16,6 @@ describe("policy values", () => {
       },
     };
 
-    expect(scopedPolicyValue(overlay, ["agents", "tools", "deny"])).toEqual(["exec"]);
-    expect(scopedPolicyValue(overlay, [])).toBeUndefined();
+    expect(getPolicyPath(overlay, ["agents", "tools", "deny"])).toEqual(["exec"]);
   });
 });

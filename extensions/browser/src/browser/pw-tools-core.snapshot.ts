@@ -1,7 +1,3 @@
-/**
- * Snapshot, navigation, viewport, close, and PDF helpers for Playwright-backed
- * browser tools.
- */
 import { resolveIntegerOption } from "openclaw/plugin-sdk/number-runtime";
 import type { SsrFPolicy } from "openclaw/plugin-sdk/security-runtime";
 import {
@@ -40,7 +36,7 @@ import {
 } from "./pw-session.js";
 import {
   markBackendDomRefsOnPage,
-  readMainFrameDocumentIdentityForPage,
+  readDocumentIdentitiesForPage,
   withPageScopedCdpClient,
 } from "./pw-session.page-cdp.js";
 import {
@@ -53,6 +49,7 @@ import {
   type InteractionTargetOptions,
 } from "./pw-tools-core.interactions.navigation.js";
 import { runPageEmulationTransition, setViewportSizeOnPage } from "./pw-tools-core.state.js";
+import { redactSensitiveAXNodeValues } from "./sensitive-field-values.js";
 export { snapshotRoleViaPlaywright } from "./pw-role-snapshot-capture.js";
 
 type StoredSnapshotRef = RoleRefs[string] & { backendDOMNodeId?: number };
@@ -136,7 +133,7 @@ export async function storeSnapshotRefsViaPlaywright(opts: {
     run: async (assertCurrent) => {
       if (
         opts.expectedDocumentIdentity &&
-        (await readMainFrameDocumentIdentityForPage(page)) !== opts.expectedDocumentIdentity
+        (await readDocumentIdentitiesForPage(page)).mainFrame !== opts.expectedDocumentIdentity
       ) {
         throw new Error(
           "Frame changed while its browser snapshot refs were being published; retry.",
@@ -187,16 +184,18 @@ export async function snapshotAriaViaPlaywright(opts: {
     signal: opts.signal,
     deadlineMs: performance.now() + ariaTimeoutMs,
     run: async (assertCurrent) => {
-      const res = await withPageScopedCdpClient({
+      const nodes = await withPageScopedCdpClient({
         page,
         timeoutMs: ariaTimeoutMs,
         fn: async (send) => {
           await send("Accessibility.enable").catch(() => {});
-          return (await send("Accessibility.getFullAXTree")) as { nodes?: RawAXNode[] };
+          const res = (await send("Accessibility.getFullAXTree")) as { nodes?: RawAXNode[] };
+          const axNodes = Array.isArray(res?.nodes) ? res.nodes : [];
+          await redactSensitiveAXNodeValues(send, axNodes);
+          return axNodes;
         },
       });
       assertCurrent();
-      const nodes = Array.isArray(res?.nodes) ? res.nodes : [];
       const formatted = formatAriaSnapshot(nodes, limit);
       await storeSnapshotRefsViaPlaywright({
         cdpUrl: opts.cdpUrl,
@@ -212,17 +211,18 @@ export async function snapshotAriaViaPlaywright(opts: {
 }
 
 /** Navigates the target page while enforcing browser SSRF policy before and after load. */
-export async function navigateViaPlaywright(opts: {
-  cdpUrl: string;
-  targetId?: string;
-  assertCurrent?: InteractionTargetOptions["assertCurrent"];
-  resolveOperationTarget?: () => string | undefined | Promise<string | undefined>;
-  relayReference?: RelayOperationReference;
-  url: string;
-  timeoutMs?: number;
-  ssrfPolicy?: SsrFPolicy;
-  browserProxyMode?: BrowserNavigationPolicyOptions["browserProxyMode"];
-}): Promise<{ url: string; targetId?: string; download?: BrowserDownloadResult }> {
+export async function navigateViaPlaywright(
+  opts: {
+    cdpUrl: string;
+    targetId?: string;
+    assertCurrent?: InteractionTargetOptions["assertCurrent"];
+    resolveOperationTarget?: () => string | undefined | Promise<string | undefined>;
+    relayReference?: RelayOperationReference;
+    url: string;
+    timeoutMs?: number;
+    signal?: AbortSignal;
+  } & BrowserNavigationPolicyOptions,
+): Promise<{ url: string; targetId?: string; download?: BrowserDownloadResult }> {
   const isRetryableNavigateError = (err: unknown): boolean => {
     const msg =
       typeof err === "string"
@@ -242,10 +242,12 @@ export async function navigateViaPlaywright(opts: {
   }
   const navigationPolicy = withBrowserNavigationPolicy(opts.ssrfPolicy, {
     browserProxyMode: opts.browserProxyMode,
+    assertNavigationCurrent: opts.assertNavigationCurrent,
   });
   await assertBrowserNavigationAllowed({
     url,
     ...navigationPolicy,
+    ...(opts.signal ? { signal: opts.signal } : {}),
   });
   const timeout = resolveBrowserNavigationTimeoutMs(opts.timeoutMs);
   let currentTargetId = opts.targetId;
@@ -259,7 +261,9 @@ export async function navigateViaPlaywright(opts: {
       timeoutMs: timeout,
       ssrfPolicy: opts.ssrfPolicy,
       browserProxyMode: opts.browserProxyMode,
+      assertNavigationCurrent: opts.assertNavigationCurrent,
       targetId: currentTargetId,
+      ...(opts.signal ? { signal: opts.signal } : {}),
       ...(opts.resolveOperationTarget
         ? {
             assertPageCurrent: async () => {
@@ -365,7 +369,9 @@ export async function navigateViaPlaywright(opts: {
         response: navigationResult.response,
         ssrfPolicy: opts.ssrfPolicy,
         browserProxyMode: opts.browserProxyMode,
+        assertNavigationCurrent: opts.assertNavigationCurrent,
         targetId: currentTargetId,
+        ...(opts.signal ? { signal: opts.signal } : {}),
       });
     }
   } catch (err) {
@@ -387,7 +393,6 @@ export async function navigateViaPlaywright(opts: {
   };
 }
 
-/** Resizes the target page viewport within the browser action policy bounds. */
 export async function resizeViewportViaPlaywright(
   opts: InteractionTargetOptions & {
     width: number;
@@ -417,7 +422,6 @@ export async function resizeViewportViaPlaywright(
   });
 }
 
-/** Closes the target Playwright page. */
 export async function closePageViaPlaywright(opts: InteractionTargetOptions): Promise<void> {
   const page = await getPageForTargetId(opts);
   await closeResolvedPageViaPlaywright(page, {
@@ -426,7 +430,6 @@ export async function closePageViaPlaywright(opts: InteractionTargetOptions): Pr
   });
 }
 
-/** Renders the target page to a PDF buffer. */
 export async function pdfViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;

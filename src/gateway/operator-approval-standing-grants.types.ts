@@ -1,9 +1,17 @@
+import type { CronRunReceiptHandle } from "../cron/store/run-receipt.types.js";
+
 /** Cron identity plus exact operation binding recorded at approval creation. */
 export type CronStandingGrantMintSpec = {
   agentId: string;
   cronJobId: string;
   jobConfigRevision: string;
   operationBinding: string;
+};
+
+export type CronStandingGrantLookupInput = CronStandingGrantMintSpec & {
+  handle: CronRunReceiptHandle;
+  expectedGrant?: { grantId: string; mintedByApprovalId: string };
+  nowMs?: number;
 };
 
 export type CronStandingGrantRecord = CronStandingGrantMintSpec & {
@@ -23,6 +31,7 @@ export type ConsumeCronStandingGrantResult =
         | "no-grant"
         | "revoked"
         | "expired"
+        | "receipt-not-current"
         | "job-missing"
         | "job-revision-changed"
         | "approval-missing"

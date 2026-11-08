@@ -53,7 +53,7 @@ runs:
   using: composite
   steps:
     - name: Prepare Git owner
-      uses: openclaw/openclaw/.github/actions/git-owner@dd4528b6393e7d00063067a080ca7241b48ce475
+      uses: openclaw/openclaw/.github/actions/git-owner@c30efcb58a050bc5c449381e732125662e87faae
 
     - name: Create generated PR tokens
       id: tokens

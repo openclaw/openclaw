@@ -3,7 +3,8 @@ import {
   createMeetingBrowserAudioCaptureSource,
   type MeetingBrowserAudioCaptureRequest,
 } from "./browser-audio-capture-source.js";
-import type { createMeetingStatusPreludeSource } from "./status-prejoin-source.js";
+import { createMeetingStatusCallSource } from "./status-call-source.js";
+import { createMeetingStatusPreludeSource } from "./status-prejoin-source.js";
 
 type MeetingPageScriptGlobals = {
   audioOutputs: string;
@@ -13,25 +14,15 @@ type MeetingPageScriptGlobals = {
 };
 
 type MeetingPageIdentity = { expectedIdentity?: string; pageIdentitySource: string };
-type MeetingStatusPreludeParams = Parameters<typeof createMeetingStatusPreludeSource>[0];
-type MeetingPageStatusParams = Omit<
-  MeetingStatusPreludeParams,
-  keyof MeetingPageIdentity | "selectors" | "toggleStateFunction"
-> & { meetingUrl: string };
-type MeetingPageLeaveParams = {
-  leaveInitiated: boolean;
-  meetingSessionId: string;
-  meetingUrl: string;
-};
-
 export function createMeetingPageScripts(options: {
-  platform: { displayName: string; globals: MeetingPageScriptGlobals };
+  platform: Parameters<typeof createMeetingStatusPreludeSource>[1]["platform"] &
+    Parameters<typeof createMeetingStatusCallSource>[0]["platform"];
   normalizeUrl(meetingUrl: string): string | undefined;
   pageIdentitySource(expectedIdentity?: string): string;
   selectors: Readonly<Record<string, string | readonly string[]>>;
   toggleStateFunction(): string;
-  statusPreludeSource(params: MeetingStatusPreludeParams): string;
-  statusCallSource(): string;
+  statusPrelude: Omit<Parameters<typeof createMeetingStatusPreludeSource>[1], "platform">;
+  statusCall: Omit<Parameters<typeof createMeetingStatusCallSource>[0], "platform">;
   audioOwnershipSource?(identity: MeetingPageIdentity): string;
   leave: Pick<
     Parameters<typeof createMeetingLeaveSource>[0],
@@ -65,13 +56,21 @@ export function createMeetingPageScripts(options: {
     `,
       });
     },
-    status: (params: MeetingPageStatusParams): string =>
-      options.statusPreludeSource({
-        ...params,
-        ...identity(params.meetingUrl),
-        selectors: JSON.stringify(options.selectors),
-        toggleStateFunction: options.toggleStateFunction(),
-      }) + options.statusCallSource(),
+    status: (
+      params: Omit<
+        Parameters<typeof createMeetingStatusPreludeSource>[0],
+        keyof MeetingPageIdentity | "selectors" | "toggleStateFunction"
+      > & { meetingUrl: string },
+    ): string =>
+      createMeetingStatusPreludeSource(
+        {
+          ...params,
+          ...identity(params.meetingUrl),
+          selectors: JSON.stringify(options.selectors),
+          toggleStateFunction: options.toggleStateFunction(),
+        },
+        { ...options.statusPrelude, platform: options.platform },
+      ) + createMeetingStatusCallSource({ ...options.statusCall, platform: options.platform }),
     transcript: (meetingUrl: string, meetingSessionId: string, finalize: boolean): string =>
       createMeetingTranscriptSource({
         ...identity(meetingUrl),
@@ -80,7 +79,11 @@ export function createMeetingPageScripts(options: {
         meetingSessionId,
         platformDisplayName: options.platform.displayName,
       }),
-    leave: (params: MeetingPageLeaveParams): string =>
+    leave: (params: {
+      leaveInitiated: boolean;
+      meetingSessionId: string;
+      meetingUrl: string;
+    }): string =>
       createMeetingLeaveSource({
         ...options.leave,
         ...identity(params.meetingUrl),
@@ -144,8 +147,6 @@ export function createMeetingTranscriptSource(params: {
     return JSON.stringify({ urlMatched: true, sessionMatched: false, droppedLines: 0, lines: [] });
   }
   if (${JSON.stringify(params.finalize)} && Array.isArray(captions?.visible) && captions.visible.length > 0) {
-    if (captions.settleTimer !== undefined) clearTimeout(captions.settleTimer);
-    captions.settleTimer = undefined;
     captions.lines = Array.isArray(captions.lines) ? captions.lines : [];
     captions.lines.push(...captions.visible.map((entry) => ({
       at: entry.at,

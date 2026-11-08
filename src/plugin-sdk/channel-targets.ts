@@ -1,6 +1,3 @@
-/**
- * Public SDK subpath for channel target parsing, matching, and allowlist helpers.
- */
 export {
   applyChannelMatchMeta,
   buildChannelKeyCandidates,
@@ -15,12 +12,7 @@ export {
 export {
   buildMessagingTarget,
   ensureTargetId,
-  normalizeTargetId,
-  parseAtUserTarget,
   parseMentionPrefixOrAtUserTarget,
-  parseTargetMention,
-  parseTargetPrefix,
-  parseTargetPrefixes,
   requireTargetKind,
   type MessagingTarget,
   type MessagingTargetKind,

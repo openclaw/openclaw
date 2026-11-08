@@ -53,35 +53,17 @@ const PAIRING_SETUP_MAX_URLS = 8;
 export const PAIRING_GATEWAY_LOOPBACK_ERROR =
   "Gateway is only bound to loopback. Set gateway.publicOrigin to your public HTTPS origin, configure plugins.entries.device-pair.config.publicUrl, enable tailscale serve, or set gateway.bind=lan.";
 
-type PairingSetupCommandResult = {
-  code: number | null;
-  stdout: string;
-  stderr?: string;
-};
-
 type PairingSetupCommandRunner = (
   argv: string[],
   opts: { timeoutMs: number; maxOutputBytes?: number },
-) => Promise<PairingSetupCommandResult>;
+) => Promise<{
+  code: number | null;
+  stdout: string;
+  stderr?: string;
+}>;
 
 type PairingPublicOriginPreference = "fallback" | "prefer";
 type PairingUrlPathMode = "preserve" | "origin-only";
-
-type ResolvePairingSetupOptions = {
-  env?: NodeJS.ProcessEnv;
-  publicUrl?: string;
-  publicOriginPreference?: PairingPublicOriginPreference;
-  preferRemoteUrl?: boolean;
-  useLocalGateway?: boolean;
-  forceSecure?: boolean;
-  bootstrapProfile?: DeviceBootstrapProfileInput;
-  issuedBootstrap?: { token: string; expiresAtMs: number; setupId: string };
-  pairingBaseDir?: string;
-  runCommandWithTimeout?: PairingSetupCommandRunner;
-  networkInterfaces?: () => ReturnType<typeof os.networkInterfaces>;
-  localTlsFingerprint?: string;
-  loadLocalTlsFingerprint?: () => Promise<string | undefined>;
-};
 
 export function resolveConfiguredPairingPublicUrl(config: OpenClawConfig): string | undefined {
   const value = config.plugins?.entries?.["device-pair"]?.config?.["publicUrl"];
@@ -103,12 +85,6 @@ type PairingSetupResolution =
       ok: false;
       error: string;
     };
-
-type ResolveUrlResult = {
-  url?: string;
-  source?: string;
-  error?: string;
-};
 
 function describeSecureMobilePairingFix(source?: string): string {
   const sourceNote = source ? ` Resolved source: ${source}.` : "";
@@ -203,10 +179,7 @@ function validateMobilePairingUrl(url: string, source?: string): string | null {
   return describeSecureMobilePairingFix(source);
 }
 
-type ResolveAuthLabelResult = {
-  label?: "token" | "password" | "trusted-proxy";
-  error?: string;
-};
+type ResolveAuthLabelResult = { label: "token" | "password" | "trusted-proxy" } | { error: string };
 
 const GATEWAY_SCHEME_WITHOUT_AUTHORITY_RE = /^(?:https?|wss?):(?!\/\/)/i;
 const SCHEME_LIKE_PATH_RE = /^[A-Za-z][A-Za-z0-9+.-]*:\//;
@@ -291,16 +264,16 @@ function resolvePairingSetupAuthLabel(
     }
     return { label: mode };
   }
+  // Setup codes carry their own bounded bootstrap credential. Proxy-only
+  // ingress retains its label even when a password serves local direct callers.
+  if (mode === "trusted-proxy") {
+    return { label: "trusted-proxy" };
+  }
   if (token) {
     return { label: "token" };
   }
   if (password) {
     return { label: "password" };
-  }
-  // Setup codes carry their own bounded bootstrap credential. Proxy-only
-  // ingress does not need an unrelated shared secret to issue that handoff.
-  if (mode === "trusted-proxy") {
-    return { label: "trusted-proxy" };
   }
   if (mode === "none") {
     return {
@@ -323,7 +296,11 @@ export async function resolvePairingGatewayUrl(
     runCommandWithTimeout?: PairingSetupCommandRunner;
     networkInterfaces: () => ReturnType<typeof os.networkInterfaces>;
   },
-): Promise<ResolveUrlResult> {
+): Promise<{
+  url?: string;
+  source?: string;
+  error?: string;
+}> {
   const scheme = opts.forceSecure || cfg.gateway?.tls?.enabled === true ? "wss" : "ws";
   const port = resolveGatewayPort(cfg, opts.env);
 
@@ -483,7 +460,20 @@ export function decodePairingSetupCode(
 
 export async function resolvePairingSetupFromConfig(
   cfg: OpenClawConfig,
-  options: ResolvePairingSetupOptions = {},
+  options: {
+    env?: NodeJS.ProcessEnv;
+    publicUrl?: string;
+    publicOriginPreference?: PairingPublicOriginPreference;
+    preferRemoteUrl?: boolean;
+    useLocalGateway?: boolean;
+    forceSecure?: boolean;
+    bootstrapProfile?: DeviceBootstrapProfileInput;
+    issuedBootstrap?: { token: string; expiresAtMs: number; setupId: string };
+    runCommandWithTimeout?: PairingSetupCommandRunner;
+    networkInterfaces?: () => ReturnType<typeof os.networkInterfaces>;
+    localTlsFingerprint?: string;
+    loadLocalTlsFingerprint?: () => Promise<string | undefined>;
+  } = {},
 ): Promise<PairingSetupResolution> {
   assertExplicitGatewayAuthModeWhenBothConfigured(cfg);
   const env = options.env ?? process.env;
@@ -497,7 +487,7 @@ export async function resolvePairingSetupFromConfig(
     hasPasswordFallback: Boolean(normalizeOptionalString(env.OPENCLAW_GATEWAY_PASSWORD)),
   });
   const authLabel = resolvePairingSetupAuthLabel(cfgForAuth, env);
-  if (authLabel.error) {
+  if ("error" in authLabel) {
     return { ok: false, error: authLabel.error };
   }
   const explicitPublicUrl = normalizeOptionalString(options.publicUrl);
@@ -532,10 +522,6 @@ export async function resolvePairingSetupFromConfig(
     return { ok: false, error: mobilePairingUrlError };
   }
 
-  if (!authLabel.label) {
-    return { ok: false, error: "Gateway auth is not configured (no token or password)." };
-  }
-
   const requestedBootstrapProfile =
     options.bootstrapProfile ?? FULL_ACCESS_PAIRING_SETUP_BOOTSTRAP_PROFILE;
   const accessDowngraded =
@@ -563,7 +549,6 @@ export async function resolvePairingSetupFromConfig(
   const issued =
     options.issuedBootstrap ??
     (await issueDevicePairSetupBootstrapToken({
-      baseDir: options.pairingBaseDir,
       profile: issuedBootstrapProfile,
     }));
 

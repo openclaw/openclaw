@@ -1,6 +1,7 @@
 // Cron delivery plan tests cover delivery target planning rules.
 import { describe, expect, it } from "vitest";
-import { hasExplicitCronDeliveryTarget, resolveCronDeliveryPlan } from "./delivery-plan.js";
+import { resolveCronDeliveryPlan } from "./delivery-plan.js";
+import { hasExplicitCronDeliveryTarget } from "./delivery-target-validation.js";
 import { makeCronJob } from "./delivery.test-helpers.js";
 
 describe("resolveCronDeliveryPlan", () => {

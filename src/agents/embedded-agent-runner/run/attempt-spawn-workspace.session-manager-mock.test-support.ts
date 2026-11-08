@@ -2,6 +2,7 @@ import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coer
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import type { Mock } from "vitest";
 import type { AgentMessage } from "../../runtime/index.js";
+import { sessionManagerReadInitialContext } from "../../sessions/session-manager-current-turn.js";
 
 type UnknownMock = Mock<(...args: unknown[]) => unknown>;
 
@@ -12,27 +13,27 @@ export type SessionManagerMocks = {
   getHeader: UnknownMock;
   getLeafId: Mock<() => string | null>;
   getLeafEntry: UnknownMock;
+  hasLoadedTranscriptTail: () => boolean;
   getEntry: UnknownMock;
   getEntries: UnknownMock;
   getBranch: UnknownMock;
+  getToolResultProjectionEntries: UnknownMock;
   getBoundaryCount: UnknownMock;
-  branch: UnknownMock;
-  resetLeaf: UnknownMock;
+  branchAsync: UnknownMock;
+  resetLeafAsync: UnknownMock;
   buildSessionContext: Mock<() => { messages: AgentMessage[] }>;
   appendThinkingLevelChange: UnknownMock;
   appendModelChange: UnknownMock;
-  appendCustomEntry: UnknownMock;
   appendCustomEntryAsync: UnknownMock;
-  appendMessage: UnknownMock;
-  appendMessageAsync: (...args: unknown[]) => Promise<unknown>;
-  appendSessionInfo: UnknownMock;
-  appendLabelChange: UnknownMock;
+  appendMessageAsync: UnknownMock;
+  appendSessionInfoAsync: UnknownMock;
+  appendLabelChangeAsync: UnknownMock;
   flushPendingPersistence: UnknownMock;
-  flushPendingToolResults: UnknownMock;
+  flushPendingToolResultsAsync: UnknownMock;
   clearPendingToolResults: UnknownMock;
-  reloadPersistedTranscript: UnknownMock;
-  clearNextUserMessagePersistenceSuppression: UnknownMock;
-  removeTrailingEntries: UnknownMock;
+  reloadPersistedTranscriptAsync: UnknownMock;
+  setNextUserMessagePersistence: UnknownMock;
+  removeTrailingEntriesAsync: UnknownMock;
 };
 
 export function readMockSessionCacheTtlTimestamp(
@@ -82,17 +83,25 @@ export function resetSessionManagerMocks(
   sessionManager.getEntries.mockReset().mockReturnValue([]);
   sessionManager.getBranch.mockReset().mockReturnValue([]);
   sessionManager.getBoundaryCount.mockReset().mockReturnValue(0);
-  sessionManager.branch.mockReset();
-  sessionManager.resetLeaf.mockReset();
-  sessionManager.clearNextUserMessagePersistenceSuppression.mockReset();
+  sessionManager.branchAsync.mockReset();
+  sessionManager.resetLeafAsync.mockReset();
+  sessionManager.setNextUserMessagePersistence.mockReset();
   sessionManager.buildSessionContext.mockReset().mockReturnValue({ messages });
+  // Orphan repair reads the model window; it follows per-test buildSessionContext overrides.
+  Object.assign(sessionManager, {
+    [sessionManagerReadInitialContext]: async () => sessionManager.buildSessionContext(),
+  });
   sessionManager.appendThinkingLevelChange.mockReset();
   sessionManager.appendModelChange.mockReset();
-  sessionManager.appendCustomEntry.mockReset();
   sessionManager.appendCustomEntryAsync.mockReset();
-  sessionManager.appendMessage.mockReset();
-  sessionManager.appendSessionInfo.mockReset();
-  sessionManager.appendLabelChange.mockReset();
+  sessionManager.appendMessageAsync.mockReset();
+  sessionManager.appendSessionInfoAsync.mockReset();
+  sessionManager.appendLabelChangeAsync.mockReset();
   sessionManager.flushPendingPersistence.mockReset();
-  sessionManager.reloadPersistedTranscript.mockReset();
+  sessionManager.reloadPersistedTranscriptAsync.mockReset();
+  // The fake has no persistence target, so like the real manager its initial model
+  // context falls back to buildSessionContext(), keeping repair fixtures authoritative.
+  Object.assign(sessionManager, {
+    [sessionManagerReadInitialContext]: async () => sessionManager.buildSessionContext(),
+  });
 }

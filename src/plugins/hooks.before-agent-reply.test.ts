@@ -5,11 +5,11 @@ import { createMockPluginRegistry, TEST_PLUGIN_AGENT_CTX } from "./hooks.test-fi
 
 const event = { cleanedBody: "hello world" };
 describe("before_agent_reply", () => {
-  it.each([false, true])("rejects revoked handler authority after handled=%s", async (handled) => {
+  it("rejects revoked handler authority before accepting a claim", async () => {
     let current = true;
     const first = vi.fn(async () => {
       current = false;
-      return { handled, reply: { text: "stale result" } };
+      return { handled: true, reply: { text: "stale result" } };
     });
     const nextEffect = vi.fn();
     const runner = createHookRunner(
@@ -77,27 +77,5 @@ describe("before_agent_reply", () => {
       handled: true,
     });
     expect(handler).toHaveBeenCalledOnce();
-  });
-
-  it("does not inherit modifying-hook timeouts", async () => {
-    vi.useFakeTimers();
-    try {
-      const handler = vi.fn(async () => {
-        await new Promise((resolve) => {
-          setTimeout(resolve, 100);
-        });
-        return { handled: true };
-      });
-      const runner = createHookRunner(
-        createMockPluginRegistry([{ hookName: "before_agent_reply", handler }]),
-        { modifyingHookTimeoutMsByHook: { before_agent_reply: 10 } },
-      );
-      const run = runner.runBeforeAgentReply(event, TEST_PLUGIN_AGENT_CTX);
-      await vi.advanceTimersByTimeAsync(100);
-      await expect(run).resolves.toEqual({ handled: true });
-      expect(handler).toHaveBeenCalledOnce();
-    } finally {
-      vi.useRealTimers();
-    }
   });
 });

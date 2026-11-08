@@ -5,7 +5,7 @@ import YAML from "yaml";
 import { z } from "zod";
 import { qaCoverageIdSchema } from "./coverage-id.js";
 import { parseQaYamlWithContext } from "./qa-yaml.js";
-import { isRepoRootRelativeRef, resolveQaRepoPath, type QaRepoPathKind } from "./repo-path.js";
+import { isRepoRootRelativeRef, resolveQaRepoPath } from "./repo-path.js";
 import type { QaSeedScenarioWithSource } from "./scenario-catalog.js";
 
 const QA_MATURITY_TAXONOMY_PATH = "taxonomy.yaml";
@@ -381,34 +381,23 @@ const qaMaturityTaxonomySchema = z
             label: `${surface.id}.${category.id} feature ${feature.name}`,
           };
           for (const [coverageIdIndex, coverageId] of feature.coverageIds.entries()) {
+            const coveragePath = [
+              "surfaces",
+              surfaceIndex,
+              "categories",
+              categoryIndex,
+              "features",
+              featureIndex,
+              "coverageIds",
+              coverageIdIndex,
+            ];
             if (!coverageId.startsWith(`${surface.id}.`)) {
-              issue(
-                [
-                  "surfaces",
-                  surfaceIndex,
-                  "categories",
-                  categoryIndex,
-                  "features",
-                  featureIndex,
-                  "coverageIds",
-                  coverageIdIndex,
-                ],
-                `coverage ID ${coverageId} must belong to surface ${surface.id}`,
-              );
+              issue(coveragePath, `coverage ID ${coverageId} must belong to surface ${surface.id}`);
             }
             const existingOwner = coverageIdOwners.get(coverageId);
             if (existingOwner && existingOwner.key !== featureOwner.key) {
               issue(
-                [
-                  "surfaces",
-                  surfaceIndex,
-                  "categories",
-                  categoryIndex,
-                  "features",
-                  featureIndex,
-                  "coverageIds",
-                  coverageIdIndex,
-                ],
+                coveragePath,
                 `coverage ID ${coverageId} already belongs to ${existingOwner.label}; coverage IDs must identify exactly one taxonomy feature`,
               );
               continue;
@@ -440,7 +429,6 @@ type QaNativeCoverageEvidenceKind = "script" | "vitest" | "playwright";
 type QaScorecardEvidenceKind = QaNativeCoverageEvidenceKind | "qa-scenario";
 export type QaScorecardEvidenceMode = z.infer<typeof qaScorecardEvidenceModeSchema>;
 export type QaScorecardChannelDriver = z.infer<typeof qaScorecardChannelDriverSchema>;
-type QaMaturityScoreKey = (typeof QA_MATURITY_SCORE_KEYS)[number];
 export type QaMaturityScoreObject = z.infer<typeof qaMaturityScoreObjectSchema>;
 export type QaMaturityDecision = z.infer<
   | typeof qaMaturityScoreDecisionSchema
@@ -506,40 +494,7 @@ type QaScorecardCategoryFeatureCoverageReport = {
   coverageIds: string[];
 };
 
-type QaScorecardProfileReport = {
-  id: string;
-  evidenceMode: QaScorecardEvidenceMode;
-  channelDriver: QaScorecardChannelDriver;
-  categoryIds: string[];
-  coverageIds: string[];
-  scenarioRefs: string[];
-  proofRequirements?: QaProofRequirements;
-};
-
-export type QaScorecardTaxonomyReport = {
-  taxonomyPath: string | null;
-  title: string | null;
-  taxonomy: {
-    sourcePath: string;
-    identity: QaMaturityTaxonomyIdentity;
-  } | null;
-  profileCount: number;
-  profiles: QaScorecardProfileReport[];
-  categoryCount: number;
-  requiredCategoryCount: number;
-  inventoriedCategoryCount: number;
-  categoryInventoryPercent: number;
-  requiredCoverageIdCount: number;
-  inventoriedCoverageIdCount: number;
-  coverageIdInventoryPercent: number;
-  inventoryRefCount: number;
-  scenarioCoverageIdCount: number;
-  unknownCoverageIdCount: number;
-  unknownCoverageIds: string[];
-  validationIssueCount: number;
-  validationIssues: QaScorecardValidationIssue[];
-  categories: QaScorecardCategoryCoverageReport[];
-};
+export type QaScorecardTaxonomyReport = ReturnType<typeof buildQaScorecardTaxonomyReport>;
 
 type MaturityCategoryRef = {
   id: string;
@@ -548,10 +503,6 @@ type MaturityCategoryRef = {
   features: QaScorecardCategoryFeatureCoverageReport[];
   coverageIds: string[];
 };
-
-function resolveRepoPath(relativePath: string, kind: QaRepoPathKind = "file") {
-  return resolveQaRepoPath(import.meta.dirname, relativePath, kind);
-}
 
 export function readQaMaturityTaxonomySource(taxonomyPath = QA_MATURITY_TAXONOMY_PATH) {
   return parseQaYamlWithContext(
@@ -575,19 +526,19 @@ export function readValidatedQaMaturityScoreSources(params?: {
     YAML.parse(fs.readFileSync(scoresPath, "utf8")),
     scoresPath,
   );
-  const warnings = validateQaMaturityScoresAgainstTaxonomy({
+  validateQaMaturityScoresAgainstTaxonomy({
     coverageScores: params?.coverageScores,
     scores,
     taxonomy,
     scoresPath,
   });
-  return { scores, taxonomy, warnings };
+  return { scores, taxonomy };
 }
 
 function readQaMaturityTaxonomy(repoRoot: string | undefined) {
   const taxonomyPath = repoRoot
     ? path.join(repoRoot, QA_MATURITY_TAXONOMY_PATH)
-    : resolveRepoPath(QA_MATURITY_TAXONOMY_PATH);
+    : resolveQaRepoPath(import.meta.dirname, QA_MATURITY_TAXONOMY_PATH);
   if (!taxonomyPath || !fs.existsSync(taxonomyPath)) {
     return null;
   }
@@ -772,14 +723,6 @@ export function qaMaturityFamilyOrder(surfaces: readonly QaMaturityTaxonomySurfa
   return [...new Set(surfaces.map((surface) => surface.family))];
 }
 
-function averageSurfaceScore(rows: readonly QaMaturityScoreSurface[], key: QaMaturityScoreKey) {
-  return Math.round(rows.reduce((sum, row) => sum + row.scores[key].score, 0) / rows.length);
-}
-
-function averageCategoryScore(rows: readonly QaMaturityScoreCategory[], key: QaMaturityScoreKey) {
-  return Math.round(rows.reduce((sum, row) => sum + row[key].score, 0) / rows.length);
-}
-
 export function qaMaturityCoverageCategoryKey(surfaceId: string, categoryName: string) {
   return `${surfaceId}\u0000${categoryName}`;
 }
@@ -798,7 +741,6 @@ function validateQaMaturityScoresAgainstTaxonomy(params: {
   scoresPath?: string;
 }) {
   const scoresPath = params.scoresPath ?? QA_MATURITY_SCORES_PATH;
-  const warnings: string[] = [];
   const scoreSurfaces = params.scores.surfaces;
   const taxonomyIndex = buildQaMaturityTaxonomyCategoryIndex(params.taxonomy);
   if (params.scores.counts.active_surfaces !== scoreSurfaces.length) {
@@ -900,26 +842,23 @@ function validateQaMaturityScoresAgainstTaxonomy(params: {
   }
 
   const rollups = params.scores.rollups;
+  const surfaceScores = scoreSurfaces.map((surface) => surface.scores);
   for (const key of QA_MATURITY_SCORE_KEYS) {
-    const expectedSurfaceAverage = averageSurfaceScore(scoreSurfaces, key);
-    if (rollups.surface_average[key].score !== expectedSurfaceAverage) {
-      throw new Error(
-        `${scoresPath}.rollups.surface_average.${key}.score must be ${expectedSurfaceAverage}`,
-      );
-    }
-    const expectedCategoryAverage = averageCategoryScore(allScoreCategories, key);
-    if (rollups.category_average[key].score !== expectedCategoryAverage) {
-      throw new Error(
-        `${scoresPath}.rollups.category_average.${key}.score must be ${expectedCategoryAverage}`,
-      );
+    for (const [kind, rows] of [
+      ["surface_average", surfaceScores],
+      ["category_average", allScoreCategories],
+    ] as const) {
+      const expected = Math.round(rows.reduce((sum, row) => sum + row[key].score, 0) / rows.length);
+      if (rollups[kind][key].score !== expected) {
+        throw new Error(`${scoresPath}.rollups.${kind}.${key}.score must be ${expected}`);
+      }
     }
   }
-  return warnings;
 }
 
 function buildMaturityRefs(taxonomy: QaMaturityTaxonomy | null) {
   const categories = new Map<string, MaturityCategoryRef>();
-  const coverageIds = new Map<string, string[]>();
+  const coverageIds = new Map<string, string>();
   if (!taxonomy) {
     return { categories, coverageIds };
   }
@@ -933,9 +872,7 @@ function buildMaturityRefs(taxonomy: QaMaturityTaxonomy | null) {
       }));
       const categoryCoverageIds = uniqueSorted(features.flatMap((feature) => feature.coverageIds));
       for (const coverageId of categoryCoverageIds) {
-        const refs = coverageIds.get(coverageId) ?? [];
-        refs.push(categoryId);
-        coverageIds.set(coverageId, refs);
+        coverageIds.set(coverageId, categoryId);
       }
       categories.set(categoryId, {
         id: categoryId,
@@ -952,90 +889,14 @@ function buildMaturityRefs(taxonomy: QaMaturityTaxonomy | null) {
 export function readQaScorecardProfileOptions(profileId: string | undefined, repoRoot?: string) {
   const profile = profileId?.trim();
   if (!profile) {
-    return { evidenceMode: "full" as const, channelDriver: "qa-channel" as const };
+    return { evidenceMode: "full" as const };
   }
   const profileOptions = readQaMaturityTaxonomy(repoRoot)?.profiles.find(
     (entry) => entry.id === profile,
   );
   return {
     evidenceMode: profileOptions?.evidenceMode ?? "full",
-    channelDriver: profileOptions?.channelDriver ?? "qa-channel",
   };
-}
-
-function pushMissingPrimaryInventoryIssues(params: {
-  issues: QaScorecardValidationIssue[];
-  category: MaturityCategoryRef;
-  requiredCoverageIds: ReadonlySet<string>;
-  coverageIdsWithPrimaryInventory: ReadonlySet<string>;
-  coverageIdsWithSecondaryInventory: ReadonlySet<string>;
-}) {
-  for (const feature of params.category.features) {
-    for (const coverageId of feature.coverageIds) {
-      if (!params.requiredCoverageIds.has(coverageId)) {
-        continue;
-      }
-      if (params.coverageIdsWithPrimaryInventory.has(coverageId)) {
-        continue;
-      }
-      const reason = params.coverageIdsWithSecondaryInventory.has(coverageId)
-        ? "only has a secondary inventory entry"
-        : "has no primary inventory entry";
-      params.issues.push({
-        code: "coverage-id-missing-primary-inventory",
-        severity: "warning",
-        categoryId: params.category.id,
-        ref: coverageId,
-        message: `${params.category.id} feature ${feature.name} coverage ID ${coverageId} ${reason}`,
-      });
-    }
-  }
-}
-
-function collectInventoryRefsForCoverageId(params: {
-  coverageId: string;
-  role: QaCoverageEvidenceRole;
-  refs: readonly ScenarioInventoryRef[];
-  repoRoot?: string;
-  categoryId: string;
-  issues: QaScorecardValidationIssue[];
-  missingInventoryRefsByCategoryId: Map<string, Set<string>>;
-}) {
-  const grouped = new Map<string, QaScorecardInventoryRef>();
-  for (const ref of params.refs) {
-    if (ref.path && !pathExists(params.repoRoot, ref.path)) {
-      const missingRefs =
-        params.missingInventoryRefsByCategoryId.get(params.categoryId) ?? new Set();
-      missingRefs.add(ref.path);
-      params.missingInventoryRefsByCategoryId.set(params.categoryId, missingRefs);
-      params.issues.push({
-        code: "inventory-ref-not-found",
-        severity: "warning",
-        categoryId: params.categoryId,
-        ref: ref.path,
-        message: `${params.categoryId} references missing ${ref.kind} inventory target ${ref.path}`,
-      });
-      continue;
-    }
-
-    const key = `${ref.kind}\0${ref.path ?? ""}`;
-    const report =
-      grouped.get(key) ??
-      ({
-        coverageId: params.coverageId,
-        kind: ref.kind,
-        path: ref.path,
-        role: params.role,
-        scenarioRefs: [],
-      } satisfies QaScorecardInventoryRef);
-    report.scenarioRefs.push(ref.sourcePath);
-    grouped.set(key, report);
-  }
-
-  return [...grouped.values()].map((report) => {
-    report.scenarioRefs = uniqueSorted(report.scenarioRefs);
-    return report;
-  });
 }
 
 function buildQaScorecardTaxonomyReport(params: {
@@ -1043,7 +904,7 @@ function buildQaScorecardTaxonomyReport(params: {
   taxonomyPath?: string | null;
   repoRoot?: string;
   scenarios: readonly QaSeedScenarioWithSource[];
-}): QaScorecardTaxonomyReport {
+}) {
   const maturityRefs = buildMaturityRefs(params.taxonomy);
   const issues: QaScorecardValidationIssue[] = [];
   const categories: QaScorecardCategoryCoverageReport[] = [];
@@ -1056,9 +917,8 @@ function buildQaScorecardTaxonomyReport(params: {
     role: "secondary",
   });
   const allScenarioCoverageIds = uniqueSorted(params.scenarios.flatMap(scenarioCoverageIds));
-  const missingInventoryRefsByCategoryId = new Map<string, Set<string>>();
 
-  if (!pathExists(params.repoRoot, QA_MATURITY_TAXONOMY_PATH) || !params.taxonomy) {
+  if (!params.taxonomy) {
     issues.push({
       code: "taxonomy-ref-not-found",
       severity: "warning",
@@ -1115,16 +975,15 @@ function buildQaScorecardTaxonomyReport(params: {
 
       const validCategoryIds = new Set<string>();
       for (const coverageId of selectedCoverageIds) {
-        for (const categoryId of maturityRefs.coverageIds.get(coverageId) ?? []) {
-          validCategoryIds.add(categoryId);
-          const profileIds = profileCategoryIdsByCategoryId.get(categoryId) ?? new Set<string>();
-          profileIds.add(profile.id);
-          profileCategoryIdsByCategoryId.set(categoryId, profileIds);
-          const requiredCoverageIds =
-            requiredCoverageIdsByCategoryId.get(categoryId) ?? new Set<string>();
-          requiredCoverageIds.add(coverageId);
-          requiredCoverageIdsByCategoryId.set(categoryId, requiredCoverageIds);
-        }
+        const categoryId = maturityRefs.coverageIds.get(coverageId)!;
+        validCategoryIds.add(categoryId);
+        const profileIds = profileCategoryIdsByCategoryId.get(categoryId) ?? new Set<string>();
+        profileIds.add(profile.id);
+        profileCategoryIdsByCategoryId.set(categoryId, profileIds);
+        const requiredCoverageIds =
+          requiredCoverageIdsByCategoryId.get(categoryId) ?? new Set<string>();
+        requiredCoverageIds.add(coverageId);
+        requiredCoverageIdsByCategoryId.set(categoryId, requiredCoverageIds);
       }
       const validCoverageIds = uniqueSorted(selectedCoverageIds);
       const scenarioRefs =
@@ -1145,7 +1004,7 @@ function buildQaScorecardTaxonomyReport(params: {
             );
       return {
         id: profile.id,
-        evidenceMode: profile.evidenceMode ?? "full",
+        evidenceMode: profile.evidenceMode ?? ("full" as const),
         channelDriver: profile.channelDriver,
         categoryIds: uniqueSorted(validCategoryIds),
         coverageIds: validCoverageIds,
@@ -1154,19 +1013,15 @@ function buildQaScorecardTaxonomyReport(params: {
       };
     }) ?? [];
 
-  const categoryIdsWithInventory = new Set<string>();
-  for (const coverageId of [
-    ...primaryInventoryRefsByCoverageId.keys(),
-    ...secondaryInventoryRefsByCoverageId.keys(),
-  ]) {
-    const coverageRefs = maturityRefs.coverageIds.get(coverageId) ?? [];
-    for (const categoryId of coverageRefs) {
-      categoryIdsWithInventory.add(categoryId);
-    }
-  }
   const relevantCategoryIds = uniqueSorted([
     ...profileCategoryIdsByCategoryId.keys(),
-    ...categoryIdsWithInventory,
+    ...[
+      ...primaryInventoryRefsByCoverageId.keys(),
+      ...secondaryInventoryRefsByCoverageId.keys(),
+    ].flatMap((coverageId) => {
+      const categoryId = maturityRefs.coverageIds.get(coverageId);
+      return categoryId ? [categoryId] : [];
+    }),
   ]);
 
   const requiredCoverageIds = new Set<string>();
@@ -1182,20 +1037,46 @@ function buildQaScorecardTaxonomyReport(params: {
     const categoryScenarioRefs = new Set<string>();
     const inventoriedCoverageIds = new Set<string>();
     const secondaryOnlyCoverageIds = new Set<string>();
+    const missingInventoryRefs = new Set<string>();
 
     for (const coverageId of category.coverageIds) {
       for (const [role, refsByCoverageId] of [
         ["primary", primaryInventoryRefsByCoverageId],
         ["secondary", secondaryInventoryRefsByCoverageId],
       ] as const) {
-        const refs = collectInventoryRefsForCoverageId({
-          coverageId,
-          role,
-          refs: refsByCoverageId.get(coverageId) ?? [],
-          repoRoot: params.repoRoot,
-          categoryId,
-          issues,
-          missingInventoryRefsByCategoryId,
+        const sourceRefs = refsByCoverageId.get(coverageId) ?? [];
+        const repoRoot = params.repoRoot;
+        const grouped = new Map<string, QaScorecardInventoryRef>();
+        for (const ref of sourceRefs) {
+          if (ref.path && !pathExists(repoRoot, ref.path)) {
+            missingInventoryRefs.add(ref.path);
+            issues.push({
+              code: "inventory-ref-not-found",
+              severity: "warning",
+              categoryId,
+              ref: ref.path,
+              message: `${categoryId} references missing ${ref.kind} inventory target ${ref.path}`,
+            });
+            continue;
+          }
+
+          const key = `${ref.kind}\0${ref.path ?? ""}`;
+          const report =
+            grouped.get(key) ??
+            ({
+              coverageId,
+              kind: ref.kind,
+              path: ref.path,
+              role,
+              scenarioRefs: [],
+            } satisfies QaScorecardInventoryRef);
+          report.scenarioRefs.push(ref.sourcePath);
+          grouped.set(key, report);
+        }
+
+        const refs = [...grouped.values()].map((report) => {
+          report.scenarioRefs = uniqueSorted(report.scenarioRefs);
+          return report;
         });
         if (refs.length === 0) {
           continue;
@@ -1219,13 +1100,26 @@ function buildQaScorecardTaxonomyReport(params: {
           inventoriedRequiredCoverageIds.add(coverageId);
         }
       }
-      pushMissingPrimaryInventoryIssues({
-        issues,
-        category,
-        requiredCoverageIds: requiredCoverageIdsForCategory,
-        coverageIdsWithPrimaryInventory: inventoriedCoverageIds,
-        coverageIdsWithSecondaryInventory: secondaryOnlyCoverageIds,
-      });
+      for (const feature of category.features) {
+        for (const coverageId of feature.coverageIds) {
+          if (
+            !requiredCoverageIdsForCategory.has(coverageId) ||
+            inventoriedCoverageIds.has(coverageId)
+          ) {
+            continue;
+          }
+          const reason = secondaryOnlyCoverageIds.has(coverageId)
+            ? "only has a secondary inventory entry"
+            : "has no primary inventory entry";
+          issues.push({
+            code: "coverage-id-missing-primary-inventory",
+            severity: "warning",
+            categoryId: category.id,
+            ref: coverageId,
+            message: `${category.id} feature ${feature.name} coverage ID ${coverageId} ${reason}`,
+          });
+        }
+      }
       if (inventoriedCoverageIds.size === 0) {
         issues.push({
           code: "profile-category-missing-inventory",
@@ -1268,7 +1162,7 @@ function buildQaScorecardTaxonomyReport(params: {
       ),
       scenarioRefs: uniqueSorted(categoryScenarioRefs),
       missingCoverageIds: uniqueSorted(missingCoverageIds),
-      missingInventoryRefs: uniqueSorted(missingInventoryRefsByCategoryId.get(categoryId) ?? []),
+      missingInventoryRefs: uniqueSorted(missingInventoryRefs),
     });
   }
 
@@ -1316,7 +1210,7 @@ function buildQaScorecardTaxonomyReport(params: {
 }
 
 export function readQaScorecardTaxonomyReport(scenarios: readonly QaSeedScenarioWithSource[]) {
-  const taxonomyPath = resolveRepoPath(QA_MATURITY_TAXONOMY_PATH, "file");
+  const taxonomyPath = resolveQaRepoPath(import.meta.dirname, QA_MATURITY_TAXONOMY_PATH);
   const repoRoot = taxonomyPath ? path.dirname(taxonomyPath) : undefined;
   return buildQaScorecardTaxonomyReport({
     taxonomy: readQaMaturityTaxonomy(repoRoot),

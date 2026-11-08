@@ -1,9 +1,12 @@
-import path from "node:path";
 import { loadPluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.js";
 import { preparePublishedModelCatalogOwnerIdentity } from "../prepared-model-catalog-owner.js";
-import { createCatalogFixture } from "../prepared-model-catalog-worker.test-support.js";
+import {
+  catalogInput,
+  createCatalogFixture,
+} from "../prepared-model-catalog-worker.test-support.js";
 import { startSerializedSnapshotBuildBatch } from "../prepared-model-runtime.build.js";
 import { retainPreparedPluginGeneration } from "../prepared-model-runtime.plugin-lifetime.js";
+import { addCredentialOnlyProviderFixture } from "./prepared-model-catalog-credential-only.test-support.js";
 import { markPluginMetadataSnapshotProvided } from "./prepared-model-catalog-worker-fixture.js";
 
 export function createStaticCatalogSnapshotFixture(params: {
@@ -20,50 +23,41 @@ export function createStaticCatalogSnapshotFixture(params: {
       codexNativeOwner?: boolean;
       builtPluginVersion?: string;
       asyncSyntheticAuth?: boolean;
+      credentialOnlySyntheticAuth?: boolean;
       prepareInboundPluginRegistry?: boolean;
       readOnly?: boolean;
-      metadataWorkspace?: "gateway" | "none" | "activation";
+      metadataWorkspace?: "none" | "activation";
       provideMetadataToWorker?: boolean;
+      reportCodexClientVersion?: boolean;
     },
   ) {
     const fixture = await createCatalogFixture(makeTempDir, spinMs, envOverride, {
       ...options,
       receiptBroadcastName: params.receiptBroadcastName?.(),
     });
-    const { agentDir, workspaceDir, config, env, root } = fixture;
-    const input = {
-      agentId: "main",
-      agentDir,
-      inheritedAuthDir: agentDir,
-      workspaceDir,
+    const config = options?.credentialOnlySyntheticAuth
+      ? addCredentialOnlyProviderFixture(fixture)
+      : fixture.config;
+    const input = catalogInput(fixture, {
       config,
-      env,
       ...(options?.readOnly ? { readOnly: true } : {}),
-    };
-    let current = true;
+    });
     const retirement = new AbortController();
-    const isCurrent = () => current;
-    const supersede = () => {
-      current = false;
-      retirement.abort();
-    };
+    const isCurrent = () => !retirement.signal.aborted;
+    const supersede = () => retirement.abort();
     retireAfterTest(supersede);
-    const loadedMetadataSnapshot = options?.metadataWorkspace
+    let metadataSnapshot = options?.metadataWorkspace
       ? loadPluginMetadataSnapshot({
           config:
             options.metadataWorkspace === "activation"
               ? { ...config, plugins: { ...config.plugins, entries: {} } }
               : config,
-          env,
-          ...(options.metadataWorkspace === "gateway"
-            ? { workspaceDir: path.join(root, "gateway-workspace") }
-            : {}),
+          env: fixture.env,
         })
       : undefined;
-    const providedMetadataSnapshot =
-      options?.provideMetadataToWorker && loadedMetadataSnapshot
-        ? markPluginMetadataSnapshotProvided(loadedMetadataSnapshot)
-        : loadedMetadataSnapshot;
+    if (options?.provideMetadataToWorker && metadataSnapshot) {
+      metadataSnapshot = markPluginMetadataSnapshotProvided(metadataSnapshot);
+    }
     const results = await startSerializedSnapshotBuildBatch(
       [
         {
@@ -79,13 +73,14 @@ export function createStaticCatalogSnapshotFixture(params: {
       30_000,
       "static",
       undefined,
-      providedMetadataSnapshot,
+      metadataSnapshot,
     ).pending;
     const build = results[0]!;
     const releaseGeneration = retainPreparedPluginGeneration(build.pluginGeneration);
     retireAfterTest(releaseGeneration);
     return {
       ...fixture,
+      config,
       pluginMetadataSnapshot: build.pluginGeneration.pluginMetadataSnapshot,
       snapshot: build.snapshot,
       isCurrent,

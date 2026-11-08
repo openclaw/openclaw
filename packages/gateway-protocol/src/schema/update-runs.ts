@@ -129,6 +129,9 @@ export const UpdateRunRecordSchema = closedObject({
       startedAtMs: Type.Optional(timestamp),
       endedAtMs: Type.Optional(timestamp),
       exitCode: Type.Optional(Type.Union([Type.Integer(), Type.Null()])),
+      termination: Type.Optional(Type.Enum(["exit", "timeout", "no-output-timeout", "signal"])),
+      signal: Type.Optional(Type.Union([Type.String({ maxLength: 32 }), Type.Null()])),
+      stderrTail: Type.Optional(Type.String({ maxLength: 8192 })),
       detail: Type.Optional(text),
       failureFacts: Type.Optional(
         Type.Array(
@@ -250,6 +253,7 @@ export const UpdateRunRecordSchema = closedObject({
     pluginErrors: Type.Optional(Type.Array(text, { maxItems: 32 })),
     channelsReady: Type.Optional(Type.Boolean()),
     readyz: Type.Optional(Type.Boolean()),
+    coreReady: Type.Optional(Type.Boolean()),
     settled: Type.Optional(Type.Boolean()),
     noticeDelivered: Type.Optional(Type.Boolean()),
     doctorHint: Type.Optional(text),
@@ -269,6 +273,14 @@ export const UpdateRunRecordSchema = closedObject({
   finishedAtMs: Type.Union([timestamp, Type.Null()]),
   downtimeMs: Type.Union([timestamp, Type.Null()]),
 });
+
+export const UpdateRecoveryCleanupParamsSchema = Type.Union([
+  closedObject({ runId, expectedOwnerId: Type.String({ minLength: 1 }) }),
+  closedObject({
+    dryRun: Type.Optional(Type.Boolean()),
+    expectedOwnerId: Type.String({ minLength: 1 }),
+  }),
+]);
 
 export const UpdateRunsGetParamsSchema = closedObject({ runId });
 export const UpdateRunsGetResultSchema = closedObject({

@@ -1,7 +1,7 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { coerceSecretRef } from "../config/types.secrets.js";
+import { parseSecretRef } from "../config/types.secrets.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { redactSensitiveText } from "../logging/redact.js";
 import { secretRefKey } from "../secrets/ref-contract.js";
@@ -53,7 +53,7 @@ export async function prepareProviderDiscoveryAuth(
   const profiles = new Map<string, () => string>();
   for (const [profileId, credential] of Object.entries(authStore.profiles)) {
     const field = credential.type === "api_key" ? "key" : "token";
-    const ref = coerceSecretRef(
+    const ref = parseSecretRef(
       credential.type === "api_key"
         ? credential.keyRef
         : credential.type === "token"

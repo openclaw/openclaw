@@ -1,11 +1,6 @@
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-
-type InstallCommandResult = {
-  code: number | null;
-  stdout: string;
-  stderr: string;
-};
+import type { SkillInstallResult } from "./install-types.js";
 
 // Prefer explicit error lines, then the last useful line, to keep CLI failures compact.
 function summarizeInstallOutput(text: string): string | undefined {
@@ -24,7 +19,9 @@ function summarizeInstallOutput(text: string): string | undefined {
 }
 
 /** Formats a bounded install failure message from command exit and output. */
-export function formatInstallFailureMessage(result: InstallCommandResult): string {
+export function formatInstallFailureMessage(
+  result: Pick<SkillInstallResult, "code" | "stdout" | "stderr">,
+): string {
   const code = typeof result.code === "number" ? `exit ${result.code}` : "unknown exit";
   const summary = summarizeInstallOutput(result.stderr) ?? summarizeInstallOutput(result.stdout);
   if (!summary) {

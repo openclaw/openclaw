@@ -29,8 +29,7 @@ export function migrateLegacyNotifyFallback(params: {
 
     const jobName =
       normalizeOptionalString(raw.name) ?? normalizeOptionalString(raw.id) ?? "<unnamed>";
-    const notify = raw.notify === true;
-    if (!notify) {
+    if (raw.notify !== true) {
       delete raw.notify;
       changed = true;
       continue;
@@ -39,17 +38,17 @@ export function migrateLegacyNotifyFallback(params: {
     const delivery = asNullableRecord(raw.delivery);
     const mode = normalizeOptionalLowercaseString(delivery?.mode);
     const to = normalizeOptionalString(delivery?.to);
+    const validWebhookTo = to ? normalizeHttpWebhookUrl(to) : undefined;
     const hasLegacyChatDelivery =
       mode === undefined &&
       delivery !== null &&
       (normalizeOptionalString(delivery.channel) !== undefined ||
         normalizeOptionalString(delivery.accountId) !== undefined ||
         "threadId" in delivery ||
-        (to !== undefined && !normalizeHttpWebhookUrl(to)));
+        (to !== undefined && !validWebhookTo));
     const completionDestination = asNullableRecord(delivery?.completionDestination);
     const completionMode = normalizeOptionalLowercaseString(completionDestination?.mode);
     const completionTo = normalizeOptionalString(completionDestination?.to);
-    const validWebhookTo = to ? normalizeHttpWebhookUrl(to) : undefined;
     const validCompletionTo = completionTo ? normalizeHttpWebhookUrl(completionTo) : undefined;
 
     if (

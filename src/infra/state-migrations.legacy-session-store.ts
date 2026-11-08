@@ -3,35 +3,22 @@ import fs from "node:fs";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { normalizePersistedSessionEntryShape } from "../commands/doctor/shared/session-entry-shape.js";
-import { normalizeRestartRecoveryEntryFields } from "../config/sessions/restart-recovery-state.js";
+import {
+  migrateLegacySessionEntryState,
+  normalizePersistedSessionEntryShape,
+} from "../commands/doctor/shared/session-entry-shape.js";
+import { hasLegacySessionProviderState } from "../config/sessions/session-entry-state-format.js";
 import {
   ensureSessionStorePromptBlobsForPersistence,
   hydrateSessionStoreSkillPromptRefs,
   projectSessionStoreForPersistence,
 } from "../config/sessions/skill-prompt-blobs.js";
 import { stripRuntimeOnlySessionSkillsFields } from "../config/sessions/store-entry-shape.js";
-import {
-  applyFileBackedSessionStoreMaintenance,
-  type SessionMaintenanceApplyReport,
-} from "../config/sessions/store-maintenance-operations.js";
-import { planSessionEntryMaintenance } from "../config/sessions/store-maintenance-plan.js";
-import { collectSessionMaintenancePreserveKeysForStore } from "../config/sessions/store-maintenance-preserve.js";
-import { resolveMaintenanceConfig } from "../config/sessions/store-maintenance-runtime.js";
-import {
-  countUnarchivedSessionEntries,
-  type ResolvedSessionMaintenanceConfig,
-  type SessionMaintenanceWarning,
-} from "../config/sessions/store-maintenance.js";
+import { applyFileBackedSessionStoreMaintenance } from "../config/sessions/store-maintenance-operations.js";
 import { runExclusiveSessionStoreWrite } from "../config/sessions/store-writer.js";
 import { assertSupportedSessionStoreEntry } from "../config/sessions/supported-session-store.js";
-import {
-  normalizeSessionRuntimeModelFields,
-  type SessionEntry,
-  type SessionOrigin,
-} from "../config/sessions/types.js";
+import { normalizeSessionRuntimeModelFields, type SessionEntry } from "../config/sessions/types.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import type { ChannelRouteRef } from "../plugin-sdk/channel-route.js";
 import { isPluginJsonValue, type PluginJsonValue } from "../plugins/host-hook-json.js";
 import { normalizeSessionEntrySlotKey } from "../plugins/session-entry-slot-keys.js";
 import {
@@ -44,103 +31,26 @@ import { migrateLegacySessionCreator } from "../state/creator-namespace-migratio
 import {
   deliveryContextFromChannelRoute,
   isCanonicalSessionDeliveryState,
+  isInternalRouteContext,
   mergeDeliveryContext,
+  mergeExternalDeliveryContextOverInternalRoute,
   normalizeDeliveryChannelRoute,
   normalizeDeliveryContext,
   normalizeSessionDeliveryState,
+  type SessionDeliveryProjection,
 } from "../utils/delivery-context.shared.js";
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
-import {
-  INTERNAL_MESSAGE_CHANNEL,
-  isInternalNonDeliveryChannel,
-} from "../utils/message-channel-constants.js";
 import { writeTextAtomic } from "./json-files.js";
 import { readSessionStoreJson5 } from "./state-migrations.fs.js";
 
-type LegacySessionStoreLoadOptions = {
-  skipCache?: boolean;
-  maintenanceConfig?: ResolvedSessionMaintenanceConfig;
-  runMaintenance?: boolean;
-  clone?: boolean;
-  hydrateSkillPromptRefs?: boolean;
-};
-
-export type LegacySessionStoreSaveOptions = {
+type LegacySessionStoreSaveOptions = {
   skipMaintenance?: boolean;
-  takeCacheOwnership?: boolean;
-  activeSessionKey?: string;
-  onWarn?: (warning: SessionMaintenanceWarning) => void | Promise<void>;
-  onMaintenanceApplied?: (report: SessionMaintenanceApplyReport) => void | Promise<void>;
-  maintenanceOverride?: Partial<ResolvedSessionMaintenanceConfig>;
-  maintenanceConfig?: ResolvedSessionMaintenanceConfig;
-  singleEntryPersistence?: { sessionKey: string; entry: SessionEntry };
-  requireWriteSuccess?: boolean;
-};
-
-type LegacySessionStoreUpdateOptions<T> = LegacySessionStoreSaveOptions & {
-  reentrant?: boolean;
-  skipSaveWhenResult?: (result: T) => boolean;
 };
 
 const log = createSubsystemLogger("sessions/legacy-importer");
 const loadSessionArchiveRuntime = createLazyRuntimeModule(
   () => import("../gateway/session-archive.runtime.js"),
 );
-const loadTrajectoryCleanupRuntime = createLazyRuntimeModule(
-  () => import("../trajectory/cleanup.js"),
-);
-
-function normalizeOptionalDeliveryContext(value: unknown): DeliveryContext | undefined {
-  if (!isRecord(value)) {
-    return undefined;
-  }
-  const normalized = normalizeDeliveryContext({
-    channel: typeof value.channel === "string" ? value.channel : undefined,
-    to: typeof value.to === "string" ? value.to : undefined,
-    accountId: typeof value.accountId === "string" ? value.accountId : undefined,
-    threadId:
-      typeof value.threadId === "string" || typeof value.threadId === "number"
-        ? value.threadId
-        : undefined,
-  });
-  return normalized?.channel && normalized.to ? normalized : undefined;
-}
-
-function sameDeliveryContext(
-  left: DeliveryContext | undefined,
-  right: DeliveryContext | undefined,
-): boolean {
-  return (
-    (left?.channel ?? undefined) === (right?.channel ?? undefined) &&
-    (left?.to ?? undefined) === (right?.to ?? undefined) &&
-    (left?.accountId ?? undefined) === (right?.accountId ?? undefined) &&
-    (left?.threadId ?? undefined) === (right?.threadId ?? undefined)
-  );
-}
-
-function normalizeRestartRecoveryFields(entry: SessionEntry): SessionEntry {
-  let next = entry;
-  const assign = <K extends keyof SessionEntry>(key: K, value: SessionEntry[K] | undefined) => {
-    if (entry[key] === value) {
-      return;
-    }
-    if (next === entry) {
-      next = { ...entry };
-    }
-    if (value === undefined) {
-      delete next[key];
-    } else {
-      next[key] = value;
-    }
-  };
-
-  const restartContext = normalizeOptionalDeliveryContext(entry.restartRecoveryDeliveryContext);
-  if (!sameDeliveryContext(entry.restartRecoveryDeliveryContext, restartContext)) {
-    assign("restartRecoveryDeliveryContext", restartContext);
-  }
-  normalizeRestartRecoveryEntryFields(entry, assign);
-  return next;
-}
 
 function normalizeLegacyPluginState(
   entry: SessionEntry,
@@ -194,19 +104,6 @@ function normalizeLegacyPluginState(
   return next;
 }
 
-function normalizePluginExtensions(entry: SessionEntry): SessionEntry {
-  return normalizeLegacyPluginState(entry, "pluginExtensions", (value) =>
-    isPluginJsonValue(value) ? value : undefined,
-  );
-}
-
-function normalizePluginExtensionSlotKeys(entry: SessionEntry): SessionEntry {
-  return normalizeLegacyPluginState(entry, "pluginExtensionSlotKeys", (value) => {
-    const slotKey = normalizeSessionEntrySlotKey(value);
-    return slotKey.ok ? slotKey.key : undefined;
-  });
-}
-
 function normalizeLegacySessionStore(store: Record<string, SessionEntry>): void {
   for (const [key, entry] of Object.entries(store)) {
     assertSupportedSessionStoreEntry(entry);
@@ -223,17 +120,17 @@ function normalizeLegacySessionStore(store: Record<string, SessionEntry>): void 
     if (modelSelectionLocked && runtimeFields !== shaped) {
       throw new Error(`Invalid model-selection-locked session entry: ${key}`);
     }
-    store[key] = stripRuntimeOnlySessionSkillsFields(
-      normalizePluginExtensionSlotKeys(
-        normalizePluginExtensions(
-          normalizeRestartRecoveryFields(
-            normalizeLegacySessionEntryDelivery(
-              migrateLegacySessionCreator(modelSelectionLocked ? shaped : runtimeFields),
-            ),
-          ),
-        ),
-      ),
+    let normalized = normalizeLegacySessionEntryDelivery(
+      migrateLegacySessionCreator(modelSelectionLocked ? shaped : runtimeFields),
     );
+    normalized = normalizeLegacyPluginState(normalized, "pluginExtensions", (value) =>
+      isPluginJsonValue(value) ? value : undefined,
+    );
+    normalized = normalizeLegacyPluginState(normalized, "pluginExtensionSlotKeys", (value) => {
+      const slotKey = normalizeSessionEntrySlotKey(value);
+      return slotKey.ok ? slotKey.key : undefined;
+    });
+    store[key] = stripRuntimeOnlySessionSkillsFields(normalized);
   }
   const harnessError = resolveAgentHarnessSessionStoreError(store);
   if (harnessError) {
@@ -241,35 +138,11 @@ function normalizeLegacySessionStore(store: Record<string, SessionEntry>): void 
   }
 }
 
-export function loadLegacySessionStore(
-  storePath: string,
-  options: LegacySessionStoreLoadOptions = {},
-): Record<string, SessionEntry> {
+export function loadLegacySessionStore(storePath: string): Record<string, SessionEntry> {
   const { store } = readSessionStoreJson5(storePath);
-  if (options.hydrateSkillPromptRefs !== false) {
-    hydrateSessionStoreSkillPromptRefs({ storePath, store });
-  }
+  hydrateSessionStoreSkillPromptRefs({ storePath, store });
   const sessionStore = store as Record<string, SessionEntry>;
   normalizeLegacySessionStore(sessionStore);
-  if (options.runMaintenance) {
-    const maintenance = options.maintenanceConfig ?? resolveMaintenanceConfig();
-    const beforeCount = countUnarchivedSessionEntries(sessionStore);
-    if (maintenance.mode === "enforce") {
-      const preserveSessionKeys = collectSessionMaintenancePreserveKeysForStore({
-        storePath,
-        store: sessionStore,
-      });
-      planSessionEntryMaintenance({
-        profile: "legacy-read",
-        maintenance,
-        initialUnarchivedCount: beforeCount,
-        readPreserveKeys: () => preserveSessionKeys,
-        log: false,
-        readAgeCandidates: () => sessionStore,
-        readCapCandidates: () => ({ store: sessionStore, maxEntries: maintenance.maxEntries }),
-      });
-    }
-  }
   return sessionStore;
 }
 
@@ -306,8 +179,6 @@ async function archiveRemovedSessionTranscripts(params: {
   removedSessionFiles: Iterable<[string, string | undefined]>;
   referencedSessionIds: ReadonlySet<string>;
   storePath: string;
-  reason: "deleted";
-  restrictToStoreDir: true;
 }): Promise<Set<string>> {
   const { archiveSessionTranscriptsDetailed } = await loadSessionArchiveRuntime();
   const archivedDirs = new Set<string>();
@@ -319,8 +190,8 @@ async function archiveRemovedSessionTranscripts(params: {
       sessionId,
       storePath: params.storePath,
       sessionFile,
-      reason: params.reason,
-      restrictToStoreDir: params.restrictToStoreDir,
+      reason: "deleted",
+      restrictToStoreDir: true,
     });
     for (const { archivedPath } of archived) {
       archivedDirs.add(path.dirname(archivedPath));
@@ -364,19 +235,10 @@ async function writeLegacySessionStoreUnlocked(
     await applyFileBackedSessionStoreMaintenance({
       storePath,
       store,
-      activeSessionKey: options.activeSessionKey,
-      onWarn: options.onWarn,
-      onMaintenanceApplied: options.onMaintenanceApplied,
-      maintenanceOverride: options.maintenanceOverride,
-      maintenanceConfig: options.maintenanceConfig,
       log,
       commitReducedStore: () => persistLegacySessionStore(storePath, store),
       artifacts: {
         archiveRemovedSessionTranscripts,
-        removeRemovedSessionTrajectoryArtifacts: async (params) => {
-          const { removeRemovedSessionTrajectoryArtifacts } = await loadTrajectoryCleanupRuntime();
-          await removeRemovedSessionTrajectoryArtifacts(params);
-        },
         cleanupArchivedSessionTranscripts: async (params) => {
           const { cleanupArchivedSessionTranscripts } = await loadSessionArchiveRuntime();
           await cleanupArchivedSessionTranscripts(params);
@@ -407,33 +269,18 @@ export async function saveLegacySessionStore(
 export async function updateLegacySessionStore<T>(
   storePath: string,
   mutator: (store: Record<string, SessionEntry>) => Promise<T> | T,
-  options: LegacySessionStoreUpdateOptions<T> = {},
+  options: LegacySessionStoreSaveOptions = {},
 ): Promise<T> {
-  return await runExclusiveSessionStoreWrite(
-    storePath,
-    async () => {
-      const store = loadLegacySessionStore(storePath);
-      const lockedEntriesBefore = snapshotLockedEntries(store);
-      const result = await mutator(store);
-      if (!options.skipSaveWhenResult?.(result)) {
-        await writeLegacySessionStoreUnlocked(storePath, store, lockedEntriesBefore, options);
-      }
-      return result;
-    },
-    { reentrant: options.reentrant },
-  );
+  return await runExclusiveSessionStoreWrite(storePath, async () => {
+    const store = loadLegacySessionStore(storePath);
+    const lockedEntriesBefore = snapshotLockedEntries(store);
+    const result = await mutator(store);
+    await writeLegacySessionStoreUnlocked(storePath, store, lockedEntriesBefore, options);
+    return result;
+  });
 }
 
-type LegacySessionDeliveryEntry = SessionEntry & {
-  route?: ChannelRouteRef;
-  deliveryContext?: DeliveryContext;
-  origin?: SessionOrigin;
-  channel?: string;
-  lastChannel?: string;
-  lastTo?: string;
-  lastAccountId?: string;
-  lastThreadId?: string | number;
-};
+type LegacySessionDeliveryEntry = SessionEntry & SessionDeliveryProjection;
 
 const LEGACY_SESSION_DELIVERY_KEYS = [
   "route",
@@ -446,36 +293,21 @@ const LEGACY_SESSION_DELIVERY_KEYS = [
   "lastThreadId",
 ] as const;
 
-function isInternalContext(context?: DeliveryContext): boolean {
-  return Boolean(
-    context?.channel &&
-    (context.channel === INTERNAL_MESSAGE_CHANNEL || isInternalNonDeliveryChannel(context.channel)),
-  );
-}
-
 function hasExternalTarget(context?: DeliveryContext): boolean {
-  return Boolean(
-    context?.channel &&
-    context.channel !== INTERNAL_MESSAGE_CHANNEL &&
-    !isInternalNonDeliveryChannel(context.channel) &&
-    context.to,
-  );
-}
-
-function mergeExternalOverInternal(
-  external?: DeliveryContext,
-  internal?: DeliveryContext,
-): DeliveryContext | undefined {
-  return normalizeDeliveryContext({
-    channel: external?.channel,
-    to: external?.to,
-    accountId: external?.accountId ?? internal?.accountId,
-    threadId: external?.threadId ?? internal?.threadId,
-  });
+  return Boolean(context?.channel && !isInternalRouteContext(context) && context.to);
 }
 
 /** Canonicalizes file-era delivery fields before doctor imports a row into SQLite. */
-export function normalizeLegacySessionEntryDelivery(entry: SessionEntry): SessionEntry {
+export function normalizeLegacySessionEntryDelivery(entry: SessionEntry): SessionEntry;
+export function normalizeLegacySessionEntryDelivery(
+  entry: Record<string, unknown>,
+): Record<string, unknown>;
+export function normalizeLegacySessionEntryDelivery(value: SessionEntry | Record<string, unknown>) {
+  assertSupportedSessionStoreEntry(value);
+  const entry =
+    isRecord(value) && hasLegacySessionProviderState(value)
+      ? migrateLegacySessionEntryState(value).entry
+      : value;
   const legacy = entry as LegacySessionDeliveryEntry;
   const hasLegacyFields = LEGACY_SESSION_DELIVERY_KEYS.some((key) => key in legacy);
   if (isCanonicalSessionDeliveryState(entry.delivery) && !hasLegacyFields) {
@@ -486,8 +318,13 @@ export function normalizeLegacySessionEntryDelivery(entry: SessionEntry): Sessio
   const routeContext = deliveryContextFromChannelRoute(route);
   const explicitContext = normalizeDeliveryContext(legacy.deliveryContext);
   const lastChannel = normalizeDeliveryContext({ channel: legacy.lastChannel })?.channel;
-  const storedChannel = normalizeDeliveryContext({ channel: legacy.channel })?.channel;
-  const originChannel = normalizeDeliveryContext({ channel: legacy.origin?.provider })?.channel;
+  const channelContext = normalizeDeliveryContext({ channel: legacy.channel });
+  const originContext = normalizeDeliveryContext({
+    channel: legacy.origin?.provider,
+    to: legacy.origin?.to,
+    accountId: legacy.origin?.accountId,
+    threadId: legacy.origin?.threadId,
+  });
   const normalizedLastFields = normalizeDeliveryContext({
     to: legacy.lastTo,
     accountId: legacy.lastAccountId,
@@ -500,40 +337,34 @@ export function normalizeLegacySessionEntryDelivery(entry: SessionEntry): Sessio
   );
   const lastCandidate = normalizeDeliveryContext({
     channel:
-      lastChannel ?? (hasNormalizedLastFields ? (storedChannel ?? originChannel) : undefined),
+      lastChannel ??
+      (hasNormalizedLastFields ? (channelContext?.channel ?? originContext?.channel) : undefined),
     to: normalizedLastFields?.to,
     accountId: normalizedLastFields?.accountId,
     threadId: normalizedLastFields?.threadId,
   });
   const lastContext =
-    isInternalContext(lastCandidate) ||
+    isInternalRouteContext(lastCandidate) ||
     hasExternalTarget(lastCandidate) ||
     (lastChannel != null && lastCandidate?.channel != null) ||
     (lastCandidate?.channel && lastCandidate.channel === explicitContext?.channel)
       ? lastCandidate
       : undefined;
-  const channelContext = normalizeDeliveryContext({ channel: legacy.channel });
-  const originContext = normalizeDeliveryContext({
-    channel: legacy.origin?.provider,
-    to: legacy.origin?.to,
-    accountId: legacy.origin?.accountId,
-    threadId: legacy.origin?.threadId,
-  });
   const fallbackContext = mergeDeliveryContext(
     lastContext,
     mergeDeliveryContext(explicitContext, mergeDeliveryContext(channelContext, originContext)),
   );
-  const internalFallbackContext = isInternalContext(routeContext)
+  const internalFallbackContext = isInternalRouteContext(routeContext)
     ? mergeDeliveryContext(routeContext, lastContext)
-    : isInternalContext(lastContext)
+    : isInternalRouteContext(lastContext)
       ? lastContext
-      : isInternalContext(channelContext)
+      : isInternalRouteContext(channelContext)
         ? mergeDeliveryContext(channelContext, lastContext)
         : undefined;
   const hasInternalFallback =
     internalFallbackContext !== undefined && hasExternalTarget(explicitContext);
   const context = hasInternalFallback
-    ? mergeExternalOverInternal(explicitContext, internalFallbackContext)
+    ? mergeExternalDeliveryContextOverInternalRoute(explicitContext, internalFallbackContext)
     : mergeDeliveryContext(routeContext, fallbackContext);
   const migratedDelivery = normalizeSessionDeliveryState({
     route: hasInternalFallback ? undefined : route,

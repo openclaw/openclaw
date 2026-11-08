@@ -1,8 +1,10 @@
+import { rethrowIncognitoSessionError } from "openclaw/plugin-sdk/session-store-runtime";
 import {
   asOptionalRecord,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import { raceWithTimeout } from "openclaw/plugin-sdk/time-runtime";
 import { normalizeActiveSummary, truncateSummary } from "./prompt.js";
 import { extractTextContent } from "./query.js";
 import { readMergedActiveMemoryTranscriptState } from "./transcript-watch.js";
@@ -21,8 +23,6 @@ import {
   type RecallSubagentResult,
   type TranscriptReadLimits,
 } from "./types.js";
-
-let timeoutPartialDataGraceMs = TIMEOUT_PARTIAL_DATA_GRACE_MS;
 
 export function readMemoryToolResultEvidence(params: {
   toolName: string;
@@ -142,28 +142,22 @@ async function waitForSubagentPartialTimeoutData(
   if (!subagentPromise) {
     return { settled: true };
   }
-  let timeoutId: ReturnType<typeof setTimeout> | undefined;
-  const timeoutPromise = new Promise<{ settled: false }>((resolve) => {
-    timeoutId = setTimeout(() => resolve({ settled: false }), timeoutPartialDataGraceMs);
-    timeoutId.unref?.();
-  });
-  try {
-    return await Promise.race([
-      subagentPromise.then(
-        (result) => ({
-          // Cleanup may remove temporary transcripts before this result settles.
-          ...result,
-          settled: true as const,
-        }),
-        (error: unknown) => ({ ...readPartialTimeoutData(error), settled: true as const }),
-      ),
-      timeoutPromise,
-    ]);
-  } finally {
-    if (timeoutId) {
-      clearTimeout(timeoutId);
-    }
-  }
+  return await raceWithTimeout(
+    subagentPromise.then(
+      (result) => ({
+        // Cleanup may remove temporary transcripts before this result settles.
+        ...result,
+        settled: true as const,
+      }),
+      (error: unknown) => {
+        rethrowIncognitoSessionError(error);
+        return { ...readPartialTimeoutData(error), settled: true as const };
+      },
+    ),
+    TIMEOUT_PARTIAL_DATA_GRACE_MS,
+    () => ({ settled: false }),
+    { ref: false },
+  );
 }
 
 function normalizeGroundedSummary(
@@ -249,12 +243,4 @@ export function buildSubagentRecallResult(params: {
         ? "unavailable"
         : "no_relevant_memory";
   return { status, elapsedMs: params.elapsedMs, summary: null, searchDebug };
-}
-
-export function resetActiveMemoryTranscriptForTests(): void {
-  timeoutPartialDataGraceMs = TIMEOUT_PARTIAL_DATA_GRACE_MS;
-}
-
-export function setTimeoutPartialDataGraceMsForTests(value: number): void {
-  timeoutPartialDataGraceMs = Math.max(0, Math.floor(value));
 }

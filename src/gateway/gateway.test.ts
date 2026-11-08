@@ -16,7 +16,7 @@ import {
 import { resetConfigOverrides, setConfigOverride } from "../config/runtime-overrides.js";
 import type { GatewayAuthConfig, GatewayTailscaleConfig } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { readDeviceAuthTokenForTest } from "../infra/device-auth-store.test-support.js";
+import { loadDeviceAuthToken as readDeviceAuthTokenForTest } from "../infra/device-auth-store.js";
 import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
 import { getPairedDevice } from "../infra/device-pairing.js";
 import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
@@ -136,7 +136,7 @@ describe("gateway e2e", () => {
       expect(persisted.gateway?.auth?.token).toBeUndefined();
       const identity = loadOrCreateDeviceIdentity();
       expect(
-        readDeviceAuthTokenForTest({ deviceId: identity.deviceId, role: "operator" }),
+        await readDeviceAuthTokenForTest({ deviceId: identity.deviceId, role: "operator" }),
       ).toMatchObject({
         scopes: expect.arrayContaining(["operator.admin"]),
       });
@@ -621,7 +621,7 @@ describe("gateway e2e", () => {
             },
             // The request below runs sessionKey "agent:dev:mock-openai"; the
             // gateway rejects session keys whose agent id is not declared.
-            entries: { dev: { default: true } },
+            entries: { dev: {} },
           },
           models: {
             mode: "replace",
@@ -717,7 +717,7 @@ module.exports = {
       const cfg = {
         agents: {
           defaults: { workspace: workspaceDir },
-          entries: { main: { default: true, tools: { allow: ["agents_list"] } } },
+          entries: { main: { tools: { allow: ["agents_list"] } } },
         },
         plugins: {
           allow: ["http-probe"],

@@ -9,6 +9,7 @@ import { classifySystemdUnavailableDetail } from "../../daemon/systemd-unavailab
 import { isWSL } from "../../infra/wsl.js";
 import { defaultRuntime } from "../../runtime.js";
 import { createNullWriter } from "../../shared/null-writer.js";
+import type { GatewayRestartSnapshot } from "./restart-health.types.js";
 
 type DaemonAction = "install" | "uninstall" | "start" | "stop" | "restart";
 
@@ -22,56 +23,43 @@ type DaemonHintKind =
   | "wsl-systemd"
   | "generic";
 
-type DaemonHintItem = {
-  kind: DaemonHintKind;
-  text: string;
-};
-
-type DaemonActionResponse = {
+export type DaemonActionResponse = {
   ok: boolean;
   action: DaemonAction;
   result?: string;
   message?: string;
   error?: string;
   hints?: string[];
-  hintItems?: DaemonHintItem[];
+  hintItems?: {
+    kind: DaemonHintKind;
+    text: string;
+  }[];
   warnings?: string[];
   definitionBackup?: GatewayServiceDefinitionBackupReceipt;
   service?: ReturnType<typeof buildDaemonServiceSnapshot>;
+  readiness?: GatewayRestartSnapshot;
 };
 
-function emitDaemonActionJson(payload: DaemonActionResponse) {
-  const rebind = currentGatewayServiceRebindReceipt();
-  defaultRuntime.writeJson({ ...payload, ...(rebind ? { rebind } : {}) });
-}
+const DAEMON_HINT_PREFIXES: readonly (readonly [string, DaemonHintKind])[] = [
+  ["Service not installed. Run:", "install"],
+  ["Restart the container or the service that manages it for ", "container-restart"],
+  ["systemd user services are unavailable;", "systemd-unavailable"],
+  ["On a headless server (SSH/no desktop session):", "systemd-headless"],
+  ["Also check that XDG_RUNTIME_DIR is set:", "systemd-headless"],
+  [
+    "If you're in a container, run the gateway in the foreground instead of",
+    "container-foreground",
+  ],
+  ["WSL2 needs systemd enabled:", "wsl-systemd"],
+  ["Then run: wsl --shutdown", "wsl-systemd"],
+  ["Verify: systemctl --user status", "wsl-systemd"],
+];
 
 function classifyDaemonHintText(text: string): DaemonHintKind {
-  if (/\b(gateway|node) install\b/u.test(text) || text.startsWith("Service not installed. Run:")) {
+  if (/\b(gateway|node) install\b/u.test(text)) {
     return "install";
   }
-  if (text.startsWith("Restart the container or the service that manages it for ")) {
-    return "container-restart";
-  }
-  if (text.startsWith("systemd user services are unavailable;")) {
-    return "systemd-unavailable";
-  }
-  if (
-    text.startsWith("On a headless server (SSH/no desktop session):") ||
-    text.startsWith("Also ensure XDG_RUNTIME_DIR is set:")
-  ) {
-    return "systemd-headless";
-  }
-  if (text.startsWith("If you're in a container, run the gateway in the foreground instead of")) {
-    return "container-foreground";
-  }
-  if (
-    text.startsWith("WSL2 needs systemd enabled:") ||
-    text.startsWith("Then run: wsl --shutdown") ||
-    text.startsWith("Verify: systemctl --user status")
-  ) {
-    return "wsl-systemd";
-  }
-  return "generic";
+  return DAEMON_HINT_PREFIXES.find(([prefix]) => text.startsWith(prefix))?.[1] ?? "generic";
 }
 
 export function buildDaemonServiceSnapshot(service: GatewayService, loaded: boolean) {
@@ -81,46 +69,6 @@ export function buildDaemonServiceSnapshot(service: GatewayService, loaded: bool
     loadedText: service.loadedText,
     notLoadedText: service.notLoadedText,
   };
-}
-
-type DaemonEmit = (payload: Omit<DaemonActionResponse, "action">) => void;
-
-export function emitDaemonAlreadyRunning(params: {
-  serviceNoun: string;
-  service: GatewayService;
-  pid?: number;
-  warnings: string[];
-  emitMessage: DaemonEmit;
-}): void {
-  const message =
-    params.pid === undefined
-      ? `${params.serviceNoun} service already running.`
-      : `${params.serviceNoun} service already running (pid ${params.pid}).`;
-  params.emitMessage({
-    ok: true,
-    result: "already-running",
-    message,
-    service: buildDaemonServiceSnapshot(params.service, true),
-    warnings: params.warnings.length ? params.warnings : undefined,
-  });
-}
-
-export function emitDaemonScheduledRestart(params: {
-  emitMessage: DaemonEmit;
-  result: string;
-  message: string;
-  service: GatewayService;
-  loaded: boolean;
-  warnings: string[];
-}): true {
-  params.emitMessage({
-    ok: true,
-    result: params.result,
-    message: params.message,
-    service: buildDaemonServiceSnapshot(params.service, params.loaded),
-    warnings: params.warnings.length ? params.warnings : undefined,
-  });
-  return true;
 }
 
 export function createDaemonActionContext(params: {
@@ -135,7 +83,7 @@ export function createDaemonActionContext(params: {
       return;
     }
     const definitionBackup = params.definitionBackup?.();
-    emitDaemonActionJson({
+    const payloadWithContext: DaemonActionResponse = {
       action: params.action,
       ...(definitionBackup ? { definitionBackup } : {}),
       ...payload,
@@ -145,10 +93,12 @@ export function createDaemonActionContext(params: {
           ? payload.hints.map((text) => ({ kind: classifyDaemonHintText(text), text }))
           : undefined),
       warnings: payload.warnings ?? (warnings.length ? warnings : undefined),
-    });
+    };
+    const rebind = currentGatewayServiceRebindReceipt();
+    defaultRuntime.writeJson({ ...payloadWithContext, ...(rebind ? { rebind } : {}) });
   };
   // Message-bearing successes opt into text; emit remains JSON-only.
-  const emitMessage: DaemonEmit = (payload) => {
+  const emitMessage: (payload: Omit<DaemonActionResponse, "action">) => void = (payload) => {
     emit(payload);
     if (!params.json && payload.message) {
       defaultRuntime.log(payload.message);
@@ -208,22 +158,15 @@ export async function installDaemonServiceAndEmit(params: {
    */
   onVerified?: () => Promise<void>;
 }) {
+  let installed: boolean;
+  let phase = "install";
   try {
     await params.install();
-  } catch (err) {
-    params.fail(
-      `${params.serviceNoun} install failed: ${String(err)}`,
-      await buildInstallFailureHints(err),
-    );
-    return;
-  }
-
-  let installed: boolean;
-  try {
+    phase = "install verification";
     installed = await params.service.isLoaded({ env: process.env });
   } catch (err) {
     params.fail(
-      `${params.serviceNoun} install verification failed: ${String(err)}`,
+      `${params.serviceNoun} ${phase} failed: ${String(err)}`,
       await buildInstallFailureHints(err),
     );
     return;

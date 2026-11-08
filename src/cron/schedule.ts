@@ -1,9 +1,9 @@
 /** Computes at/every/cron schedule timestamps with bounded Croner caching. */
 import { asDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { Cron, CronDate } from "croner";
 import { parseOffsetlessIsoDateTimeInTimeZone } from "../infra/format-time/parse-offsetless-zoned-datetime.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
+import { resolveCronTimezone } from "./expression.js";
 import { parseAbsoluteTimeMs } from "./parse.js";
 import { coerceFiniteScheduleNumber } from "./schedule-number.js";
 import type { CronSchedule } from "./types.js";
@@ -12,14 +12,6 @@ const CRON_EVAL_CACHE_MAX = 512;
 const DAY_MS = 86_400_000;
 const cronEvalCache = new Map<string, Cron>();
 const cronTimezoneFormatters = new WeakMap<Cron, Intl.DateTimeFormat>();
-
-function resolveCronTimezone(tz?: string) {
-  const trimmed = normalizeOptionalString(tz) ?? "";
-  if (trimmed) {
-    return trimmed;
-  }
-  return Intl.DateTimeFormat().resolvedOptions().timeZone;
-}
 
 function resolveCachedCron(expr: string, timezone: string): Cron {
   const key = `${timezone}\u0000${expr}`;
@@ -244,7 +236,7 @@ export function computeNextRunAtMs(schedule: CronSchedule, nowMs: number): numbe
     return asDateTimestampMs(anchor + steps * everyMs);
   }
 
-  if (schedule.kind === "on-exit" || schedule.kind === "stream") {
+  if (schedule.kind === "on-exit" || schedule.kind === "stream" || schedule.kind === "event") {
     // Event-driven trigger: never time-due. The gateway watcher calls
     // enqueueRun when the watched command exits or a stream batch closes.
     return undefined;

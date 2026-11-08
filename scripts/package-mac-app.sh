@@ -6,9 +6,15 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 source "$ROOT_DIR/scripts/lib/plistbuddy.sh"
+source "$ROOT_DIR/scripts/lib/mac-pnpm.sh"
 source "$ROOT_DIR/scripts/lib/swift-toolchain.sh"
 source "$ROOT_DIR/scripts/lib/build-metadata.sh"
 source "$ROOT_DIR/scripts/lib/mac-app-bundle.sh"
+REUSE_SOURCE_BUILD="${OPENCLAW_MAC_REUSE_BUILD:-0}"
+case "$REUSE_SOURCE_BUILD" in
+  0 | 1) ;;
+  *) echo "ERROR: OPENCLAW_MAC_REUSE_BUILD must be 0 or 1." >&2; exit 1 ;;
+esac
 CLOUD_WORKER_HOST="${OPENCLAW_MAC_CLOUD_WORKER_HOST:-0}"
 case "$CLOUD_WORKER_HOST" in
   0 | 1) ;;
@@ -84,7 +90,7 @@ if [[ "$BUILD_CONFIG" == "release" ]]; then
   OPENCLAW_REQUIRE_BUILD_METADATA=1
 fi
 BUILD_GIT_COMMIT="$(openclaw_resolve_git_commit "$ROOT_DIR")"
-if [[ "$BUILD_CONFIG" == "release" ]]; then
+if [[ "$BUILD_CONFIG" == "release" || "$REUSE_SOURCE_BUILD" == "1" ]]; then
   /bin/bash "$ROOT_DIR/scripts/apple-release-source-check.sh" \
     --root "$ROOT_DIR" \
     --expected-commit "$BUILD_GIT_COMMIT"
@@ -193,30 +199,6 @@ trap 'interrupt_package_build INT 130' INT
 trap 'interrupt_package_build TERM 143' TERM
 trap 'interrupt_package_build HUP 129' HUP
 
-PNPM_CMD=()
-
-resolve_pnpm_cmd() {
-  if command -v corepack >/dev/null 2>&1 && (cd "$ROOT_DIR" && corepack pnpm --version >/dev/null 2>&1); then
-    PNPM_CMD=(corepack pnpm)
-    return 0
-  fi
-
-  if command -v pnpm >/dev/null 2>&1; then
-    PNPM_CMD=(pnpm)
-    return 0
-  fi
-
-  echo "ERROR: pnpm is not on PATH and corepack pnpm is unavailable. Install pnpm or run with Node/Corepack on PATH." >&2
-  exit 1
-}
-
-run_pnpm() {
-  if [[ "${#PNPM_CMD[@]}" -eq 0 ]]; then
-    resolve_pnpm_cmd
-  fi
-  (cd "$ROOT_DIR" && "${PNPM_CMD[@]}" "$@")
-}
-
 merge_framework_machos() {
   local primary="$1"
   local dest="$2"
@@ -283,7 +265,7 @@ PEEKABOO_LOCKED_SOURCE_COMMIT="$PEEKABOO_SOURCE_COMMIT"
 
 require_swift_toolchain
 
-if [[ "${SKIP_PNPM_INSTALL:-0}" != "1" ]]; then
+if [[ "$REUSE_SOURCE_BUILD" != "1" && "${SKIP_PNPM_INSTALL:-0}" != "1" ]]; then
   echo "📦 Ensuring deps (pnpm install --frozen-lockfile)"
   run_pnpm install --frozen-lockfile --config.node-linker=hoisted
 else
@@ -308,11 +290,23 @@ if [[ "$AUTO_CHECKS" == "true" && ! "$APP_BUILD" =~ ^[0-9]+$ ]]; then
   exit 1
 fi
 
-if [[ "${SKIP_TSC:-0}" == "1" ]]; then
-  echo "📦 SKIP_TSC no longer skips the app's private runtime; using the content-checked build cache"
+if [[ "$REUSE_SOURCE_BUILD" == "1" ]]; then
+  # Preserve the admitted generation's identity; a new timestamp would relabel
+  # the running Gateway and fail the private runtime's exact provenance proof.
+  BUILD_TS="$(node --import "$ROOT_DIR/scripts/tsx.mjs" \
+    "$ROOT_DIR/scripts/verify-mac-source-build.mts" "$ROOT_DIR" "$APP_VERSION" "$BUILD_GIT_COMMIT")"
+  export OPENCLAW_BUILD_TIMESTAMP="$BUILD_TS"
+  echo "📦 Reusing verified source runtime (OPENCLAW_MAC_REUSE_BUILD=1)"
+else
+  if [[ "${SKIP_TSC:-0}" == "1" ]]; then
+    echo "📦 SKIP_TSC no longer skips the app's private runtime; using the content-checked build cache"
+  fi
+  echo "📦 Building JS (pnpm build)"
+  # The private app runtime consumes JavaScript, not the published SDK declarations.
+  # Keep an explicit zero available for developers who also need the typed build.
+  export OPENCLAW_RUN_NODE_SKIP_DTS_BUILD="${OPENCLAW_RUN_NODE_SKIP_DTS_BUILD:-1}"
+  run_pnpm build
 fi
-echo "📦 Building JS (pnpm build)"
-run_pnpm build
 
 node - "$ROOT_DIR/dist/build-info.json" "$APP_VERSION" "$BUILD_GIT_COMMIT" "$BUILD_TS" <<'NODE'
 const fs = require("node:fs");

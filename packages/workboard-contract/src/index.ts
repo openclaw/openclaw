@@ -1,5 +1,16 @@
 import type { WorkboardSessionsBoardSpec } from "./sessions-board.js";
 
+export type WorkboardDatabasePortApi<Database, Input> = {
+  postgres: string;
+  inspectWorkboardPortSource(db: Database): {
+    version: number;
+    migrationRequired: boolean;
+    pendingColumns: Record<string, string[]>;
+  };
+  admitWorkboardPort(dbPath: string, input?: Input): void;
+  WorkboardPortSchemaError: new (message?: string) => Error;
+};
+
 export const WORKBOARD_STATUSES = [
   "triage",
   "backlog",
@@ -191,8 +202,15 @@ export type WorkboardWorkerLog = {
   runId?: string;
 };
 
+export const WORKBOARD_WORKER_STATES = [
+  "idle",
+  "running",
+  "completed",
+  "blocked",
+  "violated",
+] as const;
 export type WorkboardWorkerProtocol = {
-  state: "idle" | "running" | "completed" | "blocked" | "violated";
+  state: (typeof WORKBOARD_WORKER_STATES)[number];
   updatedAt: number;
   detail?: string;
 };
@@ -211,8 +229,17 @@ export type WorkboardClaim = {
   expiresAt?: number;
 };
 
+export const WORKBOARD_DIAGNOSTIC_ACTION_KINDS = [
+  "claim",
+  "unblock",
+  "promote",
+  "reclaim",
+  "reassign",
+  "add_proof",
+  "open_session",
+] as const;
 export type WorkboardDiagnosticAction = {
-  kind: "claim" | "unblock" | "promote" | "reclaim" | "reassign" | "add_proof" | "open_session";
+  kind: (typeof WORKBOARD_DIAGNOSTIC_ACTION_KINDS)[number];
   label: string;
 };
 
@@ -242,6 +269,8 @@ export const WORKBOARD_CHANGED_EVENT = "plugin.workboard.changed";
 export type WorkboardChange = {
   epoch: string;
   revision: number;
+  cardsRevision?: number;
+  sessionsRevision?: number;
 };
 
 export type WorkboardWorkspace = {
@@ -310,23 +339,12 @@ export type WorkboardBoardMetadata = {
   archivedAt?: number;
 };
 
-export type WorkboardBoardSummary = {
-  id: string;
-  kind?: "cards" | "sessions";
-  sessions?: WorkboardSessionsBoardSpec;
-  name?: string;
-  description?: string;
-  icon?: string;
-  color?: string;
-  automationJobId?: string;
-  defaultWorkspace?: WorkboardWorkspace;
-  orchestration?: WorkboardOrchestrationSettings;
+export type WorkboardBoardSummary = Omit<WorkboardBoardMetadata, "createdAt" | "updatedAt"> & {
   total: number;
   active: number;
   archived: number;
   byStatus: Partial<Record<WorkboardStatus, number>>;
   updatedAt?: number;
-  archivedAt?: number;
 };
 
 export type WorkboardOrchestrationSettings = {
@@ -393,9 +411,16 @@ export type WorkboardCard = {
   metadata?: WorkboardMetadata;
 };
 
+export type WorkboardCardCursor = {
+  position: number;
+  createdAt: number;
+  id: string;
+};
+
 export type WorkboardListResult = {
   cards: WorkboardCard[];
   statuses: readonly WorkboardStatus[];
+  nextCursor?: WorkboardCardCursor;
 };
 export {
   createDefaultWorkboardSessionsBoardSpec,
@@ -407,6 +432,7 @@ export type {
   WorkboardSessionPlacement,
   WorkboardSessionsBoard,
   WorkboardSessionsBoardRead,
+  WorkboardSessionsBoardRevision,
   WorkboardSessionsBoardSpec,
   WorkboardSessionsBoardView,
   WorkboardSessionsColumn,

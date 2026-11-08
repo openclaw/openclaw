@@ -1,10 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "@openclaw/normalization-core/string-coerce";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { findFenceSpanAt, parseFenceSpans } from "../../../packages/markdown-core/src/fences.js";
 import { resolveAgentContextLimits } from "../../agents/agent-scope.js";
@@ -41,16 +38,15 @@ function matchesSectionSet(sectionNames: string[], expectedSections: string[]): 
 type PostCompactionContextOptions = {
   cfg?: OpenClawConfig;
   agentId?: string;
-  nowMs?: number;
 };
 
 export async function readPostCompactionContext(
   workspaceDir: string,
   options?: PostCompactionContextOptions,
 ): Promise<string | null> {
-  const { cfg, agentId, nowMs } = options ?? {};
+  const { cfg, agentId } = options ?? {};
   const configuredSections = cfg?.agents?.defaults?.compaction?.postCompactionSections;
-  if (!Array.isArray(configuredSections) || configuredSections.length === 0) {
+  if (!configuredSections?.length) {
     return null;
   }
   const agentsPath = path.join(workspaceDir, "AGENTS.md");
@@ -108,7 +104,7 @@ export async function readPostCompactionContext(
       return null;
     }
 
-    const resolvedNowMs = nowMs ?? Date.now();
+    const resolvedNowMs = Date.now();
     const timezone = resolveUserTimezone(cfg?.agents?.defaults?.userTimezone);
     const dateStamp = formatDateStamp(resolvedNowMs, timezone);
     const maxContextChars =
@@ -152,49 +148,35 @@ export function extractSections(
   foundNames?: string[],
 ): string[] {
   const results: string[] = [];
-  const lines = content.split("\n");
   const fenceSpans = parseFenceSpans(content);
+  const headings: Array<{ start: number; level: number; name: string }> = [];
   let lineStart = 0;
-  // Span lookup excludes the opener line itself; opener lines never match a heading anyway.
-  const lineInFence = lines.map((line) => {
-    const inFence = findFenceSpanAt(fenceSpans, lineStart) !== undefined;
+  for (const line of content.split("\n")) {
+    const match = findFenceSpanAt(fenceSpans, lineStart)
+      ? null
+      : line.match(/^(#{1,3})\s+(.+?)\s*$/);
+    if (match) {
+      headings.push({
+        start: lineStart,
+        level: expectDefined(match[1], "heading match capture group 1").length,
+        name: normalizeLowercaseStringOrEmpty(match[2]),
+      });
+    }
     lineStart += line.length + 1;
-    return inFence;
-  });
+  }
 
   for (const name of sectionNames) {
-    const sectionLines: string[] = [];
-    let inSection = false;
-    let sectionLevel = 0;
-
-    for (const [index, line] of lines.entries()) {
-      const headingMatch = lineInFence[index] ? null : line.match(/^(#{1,3})\s+(.+?)\s*$/);
-      if (headingMatch) {
-        const level = expectDefined(headingMatch[1], "heading match capture group 1").length;
-        const headingText = headingMatch[2];
-        if (inSection && level <= sectionLevel) {
-          break;
-        }
-        // H1 headings only end a section; selection stays limited to H2/H3.
-        if (
-          !inSection &&
-          level >= 2 &&
-          normalizeLowercaseStringOrEmpty(headingText) === normalizeLowercaseStringOrEmpty(name)
-        ) {
-          inSection = true;
-          sectionLevel = level;
-        }
-      }
-
-      if (inSection) {
-        sectionLines.push(line);
-      }
+    // H1 headings only end a section; selection stays limited to H2/H3.
+    const normalizedName = normalizeLowercaseStringOrEmpty(name);
+    const start = headings.find((heading) => heading.level >= 2 && heading.name === normalizedName);
+    if (!start) {
+      continue;
     }
-
-    if (sectionLines.length > 0) {
-      results.push(sectionLines.join("\n").trim());
-      foundNames?.push(name);
-    }
+    const end = headings.find(
+      (heading) => heading.start > start.start && heading.level <= start.level,
+    );
+    results.push(content.slice(start.start, end?.start).trim());
+    foundNames?.push(name);
   }
 
   return results;
@@ -212,7 +194,7 @@ export async function appendPostCompactionRefreshPrompt(params: {
     return;
   }
 
-  const existingPrompt = normalizeOptionalString(params.followupRun.run.extraSystemPrompt);
+  const existingPrompt = params.followupRun.run.extraSystemPrompt;
   if (existingPrompt?.includes(refreshPrompt)) {
     return;
   }

@@ -32,20 +32,9 @@ type DoctorAgentMemorySchemaRepair = {
   removedTrigger: boolean;
 };
 
-type DoctorAgentMemorySchemaReport = {
-  repaired: readonly DoctorAgentMemorySchemaRepair[];
-  warnings: readonly string[];
-};
+type DoctorAgentMemorySchemaReport = Awaited<ReturnType<typeof repairDoctorAgentMemorySchemas>>;
 
-type MemoryRecallMetadataMigrationState = {
-  columns: LegacyMemoryRecallMetadataColumn[];
-  hasMetadataTable: boolean;
-  hasProvenanceTrigger: boolean;
-};
-
-function readMemoryRecallMetadataMigrationState(
-  database: DatabaseSync,
-): MemoryRecallMetadataMigrationState | null {
+function readMemoryRecallMetadataMigrationState(database: DatabaseSync) {
   const rows =
     /* sqlite-allow-raw -- Read-only schema inspection before doctor maintenance. */ database
       .prepare("PRAGMA table_info(memory_index_chunks)")
@@ -54,24 +43,19 @@ function readMemoryRecallMetadataMigrationState(
     return null;
   }
   const columns = new Set(rows.flatMap((row) => (typeof row.name === "string" ? [row.name] : [])));
+  const findSchemaObject = database.prepare(
+    "SELECT 1 FROM sqlite_schema WHERE type = ? AND name = ?",
+  );
   return {
     columns: LEGACY_MEMORY_RECALL_METADATA_COLUMNS.filter((column) => columns.has(column)),
-    hasMetadataTable: Boolean(
-      database
-        .prepare("SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name = ?")
-        .get(MEMORY_RECALL_METADATA_TABLE),
-    ),
+    hasMetadataTable: Boolean(findSchemaObject.get("table", MEMORY_RECALL_METADATA_TABLE)),
     hasProvenanceTrigger: Boolean(
-      database
-        .prepare("SELECT 1 FROM sqlite_schema WHERE type = 'trigger' AND name = ?")
-        .get(LEGACY_MEMORY_PROVENANCE_TRIGGER),
+      findSchemaObject.get("trigger", LEGACY_MEMORY_PROVENANCE_TRIGGER),
     ),
   };
 }
 
-function inspectAgentMemoryRecallMetadataMigration(
-  pathname: string,
-): MemoryRecallMetadataMigrationState | null {
+function inspectAgentMemoryRecallMetadataMigration(pathname: string) {
   const stat = fs.lstatSync(pathname);
   if (!stat.isFile()) {
     throw new Error(`OpenClaw agent database is not a regular file: ${pathname}`);
@@ -112,7 +96,7 @@ function needsAgentMemorySchemaMaintenance(env: NodeJS.ProcessEnv): boolean {
 async function repairDoctorAgentMemorySchemas(
   options: { env?: NodeJS.ProcessEnv },
   maintenance: OpenClawStateLeaseContext,
-): Promise<DoctorAgentMemorySchemaReport> {
+) {
   const env = options.env ?? process.env;
   maintenance.assertOwned();
   // The preliminary scan may have populated the memo before lease acquisition.

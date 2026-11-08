@@ -16,7 +16,10 @@ const { scheduleRestartSentinelWake } = vi.hoisted(() => ({
     vi.fn<typeof import("./server-restart-sentinel.js").scheduleRestartSentinelWake>(),
 }));
 
-vi.mock("./server-restart-sentinel.js", () => ({ scheduleRestartSentinelWake }));
+vi.mock("./server-restart-sentinel.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./server-restart-sentinel.js")>()),
+  scheduleRestartSentinelWake,
+}));
 
 beforeEach(() => {
   resetGatewayWorkAdmission();

@@ -1,6 +1,27 @@
 import * as tar from "tar";
 import type { BackupResourceInventory } from "../commands/backup-resource-inventory.js";
+import {
+  type OpenClawTestState,
+  withOpenClawTestState,
+} from "../test-utils/openclaw-test-state.js";
+import { backupCase, isolateBackupScratch } from "./backup-create-family.test-support.js";
 import type { BackupCreateResult } from "./backup-create.js";
+
+export const withIsolatedBackupState: typeof withOpenClawTestState = (options, run) =>
+  withOpenClawTestState(options, async (state) => {
+    await isolateBackupScratch(state);
+    return run(state);
+  });
+
+export function isolatedBackupCase(options: Parameters<typeof backupCase>[0]) {
+  return <Args extends unknown[]>(
+    run: (state: OpenClawTestState, ...args: Args) => Promise<void>,
+  ) =>
+    backupCase(options)(async (state, ...args: Args) => {
+      await isolateBackupScratch(state);
+      await run(state, ...args);
+    });
+}
 
 export function createBackupClassificationInventory(stateDir: string): BackupResourceInventory {
   return {
@@ -10,6 +31,7 @@ export function createBackupClassificationInventory(stateDir: string): BackupRes
     coreDatabaseSourcePaths: [],
     resolveSqliteSource: () => ({ role: "plugin" }),
     regenerableRoots: [],
+    isIncludedByOwner: () => true,
     isIncluded: () => true,
     isTraversable: () => true,
     isPackageContent: () => false,

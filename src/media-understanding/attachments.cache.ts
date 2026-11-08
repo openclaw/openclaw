@@ -20,8 +20,9 @@ import { hasErrnoCode } from "../infra/errno.js";
 import { FsSafeError, openLocalFileSafely, type OpenResult } from "../infra/fs-safe.js";
 import type { SsrFPolicy } from "../infra/net/ssrf.js";
 import { buildRandomTempFilePath } from "../infra/temp-download.js";
+import { logWarn } from "../logger.js";
 import {
-  readRemoteMediaBuffer,
+  readRemoteMediaBufferWithHeaders,
   type MediaFetchRetryOptions,
   MediaFetchError,
 } from "../media/fetch.js";
@@ -143,14 +144,12 @@ export type MediaAttachmentCacheOptions = {
 export class MediaAttachmentCache {
   private readonly entries = new Map<number, AttachmentCacheEntry>();
   private readonly stagedPaths = new Set<string>();
-  private readonly attachments: MediaAttachment[];
   private readonly localPathRoots: readonly string[];
   private readonly ssrfPolicy: SsrFPolicy | undefined;
   private readonly fallbackWorkspaceDir?: string;
   private canonicalLocalPathRoots?: Promise<readonly string[]>;
 
   constructor(attachments: MediaAttachment[], options?: MediaAttachmentCacheOptions) {
-    this.attachments = attachments;
     this.ssrfPolicy = options?.ssrfPolicy;
     this.localPathRoots =
       options?.includeDefaultLocalPathRoots === false
@@ -167,8 +166,10 @@ export class MediaAttachmentCache {
     attachmentIndex: number;
     maxBytes: number;
     timeoutMs: number;
+    signal?: AbortSignal;
   }): Promise<MediaBufferResult> {
     const entry = await this.ensureEntry(params.attachmentIndex);
+    params.signal?.throwIfAborted();
     const url = remoteFetchUrl(entry.attachment.url);
     if (entry.bufferResult) {
       if (entry.bufferResult.size > params.maxBytes) {
@@ -178,6 +179,7 @@ export class MediaAttachmentCache {
     }
 
     const local = await this.withLocalFile(entry, () => this.readEntryLocalBuffer(entry, params));
+    params.signal?.throwIfAborted();
     if (local) {
       return local;
     }
@@ -193,12 +195,13 @@ export class MediaAttachmentCache {
     }
 
     try {
-      const fetched = await readRemoteMediaBuffer({
+      const fetched = await readRemoteMediaBufferWithHeaders({
         url,
         timeoutMs: params.timeoutMs,
         maxBytes: params.maxBytes,
         ssrfPolicy: this.ssrfPolicy,
         retry: REMOTE_MEDIA_FETCH_RETRY,
+        ...(params.signal ? { requestInit: { signal: params.signal } } : {}),
       });
       const classification = await classifyAttachmentBytes({
         buffer: fetched.buffer,
@@ -206,8 +209,9 @@ export class MediaAttachmentCache {
         // Channel-declared MIME leads; the transport Content-Type stays a
         // secondary hint so byte detection can refine stale declarations.
         declaredMime: concreteMime(entry.attachment.mime),
-        additionalMimeHints: [fetched.contentType],
+        additionalMimeHints: [fetched.contentType, fetched.headerContentType],
       });
+      params.signal?.throwIfAborted();
       entry.bufferResult = {
         buffer: fetched.buffer,
         classification,
@@ -217,6 +221,7 @@ export class MediaAttachmentCache {
       };
       return entry.bufferResult;
     } catch (err) {
+      params.signal?.throwIfAborted();
       if (err instanceof MediaFetchError && err.code === "max_bytes") {
         throw maxBytesError(params);
       }
@@ -341,12 +346,9 @@ export class MediaAttachmentCache {
   }
 
   /** Returns a local path for providers that cannot accept buffers, creating a temp file if needed. */
-  async getPath(params: {
-    attachmentIndex: number;
-    maxBytes: number;
-    timeoutMs: number;
-  }): Promise<string> {
+  async getPath(params: Parameters<MediaAttachmentCache["getBuffer"]>[0]): Promise<string> {
     const entry = await this.ensureEntry(params.attachmentIndex);
+    params.signal?.throwIfAborted();
     const local = await this.withLocalFile(entry, async () => {
       await (await this.prepareLocalFile(entry))?.handle.close().catch(() => {});
       const size = entry.statSize;
@@ -358,6 +360,7 @@ export class MediaAttachmentCache {
       }
       return undefined;
     });
+    params.signal?.throwIfAborted();
     if (local) {
       return local;
     }
@@ -376,11 +379,13 @@ export class MediaAttachmentCache {
       extension,
     });
     this.stagedPaths.add(tmpPath);
-    await fs.writeFile(tmpPath, bufferResult.buffer).catch(async (error: unknown) => {
-      // A failed attempt cannot remove another borrower's file; retain failed removals for cleanup.
-      await this.removeStagedPath(tmpPath);
-      throw error;
-    });
+    await fs
+      .writeFile(tmpPath, bufferResult.buffer, { signal: params.signal })
+      .catch(async (error: unknown) => {
+        // A failed attempt cannot remove another borrower's file; retain failed removals for cleanup.
+        await this.removeStagedPath(tmpPath);
+        throw error;
+      });
     entry.tempPath = tmpPath;
     return tmpPath;
   }
@@ -399,6 +404,9 @@ export class MediaAttachmentCache {
       await fs.unlink(tmpPath);
     } catch (error) {
       if (!hasErrnoCode(error, "ENOENT")) {
+        logWarn(
+          `media-understanding: could not remove staged attachment ${tmpPath}; remove it manually if it remains: ${String(error)}`,
+        );
         return;
       }
     }
@@ -414,22 +422,13 @@ export class MediaAttachmentCache {
   }
 
   private async ensureEntry(attachmentIndex: number): Promise<AttachmentCacheEntry> {
-    const existing = this.entries.get(attachmentIndex);
-    if (existing) {
-      if (!existing.localResolutionAttempted) {
-        existing.resolvedPath = await this.resolveLocalPath(existing.attachment);
-        existing.localResolutionAttempted = true;
-      }
-      return existing;
+    const entry: AttachmentCacheEntry = this.entries.get(attachmentIndex) ?? {
+      attachment: { index: attachmentIndex },
+    };
+    if (!entry.localResolutionAttempted) {
+      entry.resolvedPath = await this.resolveLocalPath(entry.attachment);
+      entry.localResolutionAttempted = true;
     }
-    const attachment = this.attachments.find((item) => item.index === attachmentIndex) ?? {
-      index: attachmentIndex,
-    };
-    const entry: AttachmentCacheEntry = {
-      attachment,
-      resolvedPath: await this.resolveLocalPath(attachment),
-      localResolutionAttempted: true,
-    };
     this.entries.set(attachmentIndex, entry);
     return entry;
   }
@@ -541,10 +540,7 @@ export class MediaAttachmentCache {
   }
 
   private async getCanonicalLocalPathRoots(): Promise<readonly string[]> {
-    if (this.canonicalLocalPathRoots) {
-      return await this.canonicalLocalPathRoots;
-    }
-    this.canonicalLocalPathRoots = (async () =>
+    return await (this.canonicalLocalPathRoots ??= (async () =>
       mergeInboundPathRoots(
         this.localPathRoots,
         await Promise.all(
@@ -555,7 +551,6 @@ export class MediaAttachmentCache {
             return await fs.realpath(root).catch(() => root);
           }),
         ),
-      ))();
-    return await this.canonicalLocalPathRoots;
+      ))());
   }
 }

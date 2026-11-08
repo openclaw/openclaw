@@ -6,6 +6,18 @@ import Testing
 @Suite(.testWaitLimit)
 @MainActor
 struct ConnectionModeCoordinatorTests {
+    @Test func `connection setup preserves chat opened during launch`() async {
+        let tests = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+        // Compile the real owner against headless service doubles so this ordering
+        // regression does not need windows, live services, or operator state.
+        let result = await ShellExecutor.runDetailed(
+            command: ["/bin/bash", tests.appendingPathComponent("Fixtures/ConnectionModeCoordinator/run.sh").path],
+            cwd: nil,
+            env: ProcessInfo.processInfo.environment,
+            timeout: 60)
+        #expect(result.success, "\(result.stdout)\n\(result.stderr)\n\(result.errorMessage ?? "")")
+    }
+
     @Test(arguments: [
         (AppState.ConnectionMode.unconfigured, AppState.ConnectionMode.local),
         (AppState.ConnectionMode.remote, AppState.ConnectionMode.local),

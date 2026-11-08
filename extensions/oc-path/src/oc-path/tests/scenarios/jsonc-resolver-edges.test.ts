@@ -5,7 +5,7 @@ import { resolveJsoncOcPath } from "../../jsonc/resolve.js";
 import { parseOcPath } from "../../oc-path.js";
 
 function rs(raw: string, ocPath: string) {
-  return resolveJsoncOcPath(parseJsonc(raw).ast, parseOcPath(ocPath));
+  return resolveJsoncOcPath(parseJsonc(raw), parseOcPath(ocPath));
 }
 
 describe("jsonc resolver edges", () => {

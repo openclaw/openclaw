@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import {
-  findPersistedAuthProfileCredential,
+  findPersistedAuthProfileCredentialAsync,
   isPendingOAuthRefreshFence,
   isSameOAuthRefreshGeneration,
   resolveApiKeyForProfile,
@@ -9,6 +9,7 @@ import {
 } from "openclaw/plugin-sdk/agent-runtime";
 import { decodeOpenAICodexJwtPayload } from "openclaw/plugin-sdk/provider-auth";
 import type { CodexAppServerPreparedAuth } from "./auth-types.js";
+import type { CodexAppServerHomeScope } from "./config-contracts.js";
 
 // A distinct native provider selects HTTP and local summarization. OpenClaw's
 // public provider remains `openai`; this id belongs only to its private process.
@@ -21,6 +22,27 @@ export function isCodexResponsesOAuthRun(params: {
     params.runtimePlan?.auth.selectedAuthMode === "oauth" &&
     params.runtimePlan.auth.selectedAuthFlow === "chatgpt-token-sharing"
   );
+}
+
+/** Validate grants actually handed to native; a user home keeps its own native account. */
+export function resolveCodexInferenceCredential(params: {
+  authProfileId?: string;
+  authProfileStore: AuthProfileStore;
+  homeScope: CodexAppServerHomeScope;
+}): AuthProfileCredential | undefined {
+  const credential = params.authProfileId
+    ? params.authProfileStore.profiles[params.authProfileId]
+    : undefined;
+  if (
+    params.homeScope !== "user" &&
+    credential?.type === "oauth" &&
+    credential.authFlow === "chatgpt-identity"
+  ) {
+    throw new Error(
+      "ChatGPT subscription sharing was not granted; sign in again and enable sharing.",
+    );
+  }
+  return credential;
 }
 
 export function isCodexResponsesOAuthCredential(credential: AuthProfileCredential | undefined) {
@@ -84,20 +106,16 @@ export async function resolveCodexResponsesOAuthProfileFingerprint(params: {
 }
 
 /** Keep OAuth refresh and persisted grant ownership in OpenClaw, outside native Codex auth. */
-export function createCodexResponsesOAuth(params: {
+export async function createCodexResponsesOAuth(params: {
   profileId: string;
   store: AuthProfileStore;
   fingerprint: string;
   agentDir?: string;
   config?: Parameters<typeof resolveApiKeyForProfile>[0]["cfg"];
-}): CodexResponsesOAuth {
+}): Promise<CodexResponsesOAuth> {
   const persisted =
-    Boolean(findPersistedAuthProfileCredential(params)) ||
+    Boolean(await findPersistedAuthProfileCredentialAsync(params)) ||
     params.store.runtimePersistedProfileIds?.includes(params.profileId) === true;
-  const readCredential = () =>
-    persisted
-      ? findPersistedAuthProfileCredential(params)
-      : params.store.profiles[params.profileId];
   const validate = (credential: AuthProfileCredential | undefined) => {
     if (fingerprintCodexResponsesOAuth(credential) !== params.fingerprint) {
       throw new Error("ChatGPT subscription sharing identity changed; reconnect before retrying.");
@@ -130,7 +148,9 @@ export function createCodexResponsesOAuth(params: {
   };
   return {
     async resolve(forceRefresh) {
-      const credential = readCredential();
+      const credential = persisted
+        ? await findPersistedAuthProfileCredentialAsync(params)
+        : params.store.profiles[params.profileId];
       validateCurrent(credential, lastCredential);
       const resolved = await resolveApiKeyForProfile({
         cfg: params.config,
@@ -152,8 +172,12 @@ export function createCodexResponsesOAuth(params: {
       const resolvedCredential = resolved.credential;
       validate(resolvedCredential);
       lastCredential = resolvedCredential;
+      if (persisted && !resolved.readCurrentCredential) {
+        throw new Error("ChatGPT subscription sharing credential authority is unavailable.");
+      }
+      const readCredential =
+        resolved.readCurrentCredential ?? (() => params.store.profiles[params.profileId]);
       const assertCurrent = () => validateCurrent(readCredential(), resolvedCredential);
-      assertCurrent();
       return { token: resolved.apiKey, assertCurrent };
     },
   };

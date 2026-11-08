@@ -1,3 +1,4 @@
+import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import type { NodePath } from "@babel/traverse";
@@ -9,9 +10,23 @@ import type {
   Node,
   Program as BabelProgram,
 } from "@babel/types";
-import { parse, type AnyNode, type Program } from "acorn";
+import type { AnyNode, Program } from "acorn";
 import { moduleResolve } from "import-meta-resolve";
 import type { createJiti } from "jiti";
+import { markPluginSourceAcquisitionError } from "./plugin-instance-error.js";
+
+let parser: typeof import("acorn") | undefined;
+
+// Package captures and URL/package-map helpers do not parse source. Load the ESM
+// entry on demand so other host Acorn imports retain the same module identity.
+function parse(...args: Parameters<typeof import("acorn").parse>): Program {
+  if (!parser) {
+    const entry = moduleResolve("acorn", new URL(import.meta.url), new Set(["node", "import"]));
+    const loaded: typeof import("acorn") = createRequire(import.meta.url)(fileURLToPath(entry));
+    parser = loaded;
+  }
+  return parser.parse(...args);
+}
 
 export function capturedPluginModuleUrl(
   filename: string,
@@ -31,26 +46,34 @@ export function capturedPluginModuleUrl(
   return url;
 }
 
+function isPackageMapError(error: unknown, code: string): error is Error & { url?: unknown } {
+  return error instanceof Error && "code" in error && error.code === code;
+}
+
 /** Package metadata selects a target before its deferred body has been captured. */
 export function resolvePluginPackageMapTarget(
   specifier: string,
   importer: string,
   conditions: readonly string[],
-): string | undefined {
+): URL | undefined {
   let selected: URL;
   try {
     selected = moduleResolve(specifier, pathToFileURL(importer), new Set(conditions));
   } catch (error) {
-    if (!(error instanceof Error) || !("code" in error) || error.code !== "ERR_MODULE_NOT_FOUND") {
+    // Bun owns its built-in target exception and validation of other URL-shaped targets.
+    if (conditions.includes("bun") && isPackageMapError(error, "ERR_INVALID_PACKAGE_TARGET")) {
+      return undefined;
+    }
+    if (!isPackageMapError(error, "ERR_MODULE_NOT_FOUND")) {
       throw error;
     }
-    if (!("url" in error) || typeof error.url !== "string") {
+    if (typeof error.url !== "string") {
       return undefined;
     }
     // Node chose this target from immutable metadata; only its body is still uncaptured.
     selected = new URL(error.url);
   }
-  return selected.protocol === "file:" ? fileURLToPath(selected) : undefined;
+  return selected.protocol === "file:" ? selected : undefined;
 }
 
 /** Missing physical inputs stay absent without poisoning another condition's selected target. */
@@ -66,13 +89,7 @@ export function createPluginPackageMapReferences() {
       try {
         return moduleResolve(specifier, pathToFileURL(importer), new Set(conditions)).href;
       } catch (error) {
-        if (
-          error instanceof Error &&
-          "code" in error &&
-          error.code === "ERR_MODULE_NOT_FOUND" &&
-          "url" in error &&
-          typeof error.url === "string"
-        ) {
+        if (isPackageMapError(error, "ERR_MODULE_NOT_FOUND") && typeof error.url === "string") {
           const target = new URL(error.url);
           if (target.protocol === "file:") {
             recordMissingTarget(fileURLToPath(target));
@@ -173,22 +190,17 @@ export function inspectPluginTypeScriptExecutionFacts(
         {
           pre(file: { path: NodePath<BabelProgram> }) {
             file.path.traverse({
-              ImportDeclaration(declaration) {
-                const specifier = staticString(declaration.get("source").node);
+              "ImportDeclaration|ExportNamedDeclaration|ExportAllDeclaration"(
+                declaration: NodePath<
+                  ImportDeclaration | ExportNamedDeclaration | ExportAllDeclaration
+                >,
+              ) {
+                const specifier = staticString(declaration.node.source);
                 if (specifier !== undefined) {
-                  recordStaticImport(specifier, declaration.node?.specifiers?.length === 0);
-                }
-              },
-              ExportNamedDeclaration(declaration) {
-                const specifier = staticString(declaration.get("source").node);
-                if (specifier !== undefined) {
-                  recordStaticImport(specifier, false);
-                }
-              },
-              ExportAllDeclaration(declaration) {
-                const specifier = staticString(declaration.get("source").node);
-                if (specifier !== undefined) {
-                  recordStaticImport(specifier, false);
+                  recordStaticImport(
+                    specifier,
+                    declaration.isImportDeclaration() && declaration.node.specifiers.length === 0,
+                  );
                 }
               },
               ImportExpression(expression) {
@@ -310,9 +322,35 @@ function parseNativePluginJavaScript(source: string, sourceText: string): Progra
     }
     throw error;
   }
-  const needsTransform = (node: AnyNode, exportedDeclaration = false): boolean => {
+  const needsTransform = (
+    node: AnyNode,
+    exportedDeclaration = false,
+    parent?: AnyNode,
+    grandparent?: AnyNode,
+  ): boolean => {
     if (node.type === "MetaProperty") {
-      return true;
+      if (
+        node.meta.name !== "import" ||
+        node.property.name !== "meta" ||
+        parent?.type !== "MemberExpression" ||
+        parent.object !== node ||
+        parent.computed ||
+        parent.property.type !== "Identifier" ||
+        parent.property.name !== "url"
+      ) {
+        return true;
+      }
+      // These value reads do not become new literal references when Jiti inlines
+      // the URL. Assignment targets and other metadata still need its prepass.
+      return !(
+        grandparent?.type === "ArrayExpression" ||
+        (grandparent?.type === "ReturnStatement" && grandparent.argument === parent) ||
+        (grandparent?.type === "NewExpression" &&
+          grandparent.callee.type === "Identifier" &&
+          grandparent.callee.name === "URL" &&
+          grandparent.arguments.length === 2 &&
+          grandparent.arguments[1] === parent)
+      );
     }
     // Jiti moves declarations around resource disposal blocks, changing reference order.
     if (
@@ -376,6 +414,8 @@ function parseNativePluginJavaScript(source: string, sourceText: string): Progra
           child,
           exportedDeclaration ||
             (node.type === "ExportNamedDeclaration" && child === node.declaration),
+          node,
+          parent,
         )
       ) {
         return true;
@@ -400,9 +440,11 @@ function parseTransformedPluginSource(source: string, code: string): Program {
       throw error;
     }
     // Name the blocking file; positions refer to the Jiti output, not the authored source.
-    throw new SyntaxError(`${source}: could not parse transformed source: ${error.message}`, {
-      cause: error,
-    });
+    throw markPluginSourceAcquisitionError(
+      new SyntaxError(`${source}: could not parse transformed source: ${error.message}`, {
+        cause: error,
+      }),
+    );
   }
 }
 
@@ -410,7 +452,7 @@ function parseTransformedPluginSource(source: string, code: string): Program {
 export function visitPluginSourceReferences(
   source: string,
   sourceText: string,
-  resolver: ReturnType<typeof createJiti>,
+  getResolver: () => ReturnType<typeof createJiti>,
   visitReference: (reference: string, kind: "asset" | "import" | "require") => void,
 ): ReadonlySet<string> {
   const authoredStaticImports = new Set<string>();
@@ -429,7 +471,7 @@ export function visitPluginSourceReferences(
     parseNativePluginJavaScript(source, sourceText) ??
     parseTransformedPluginSource(
       source,
-      resolver.transform({
+      getResolver().transform({
         source: sourceText,
         filename: source,
         ts: /\.[cm]?tsx?$/.test(source),
@@ -440,29 +482,23 @@ export function visitPluginSourceReferences(
               pre(file: { path: NodePath<BabelProgram> }) {
                 file.path.traverse({
                   // Native type erasure retains empty requests from specifier-only type syntax.
-                  ImportDeclaration(declaration) {
+                  "ImportDeclaration|ExportNamedDeclaration"(
+                    declaration: NodePath<ImportDeclaration | ExportNamedDeclaration>,
+                  ) {
+                    const node = declaration.node;
                     if (
-                      declaration.node.importKind !== "type" &&
-                      declaration.node.specifiers.length > 0 &&
-                      declaration.node.specifiers.every(
+                      node.source &&
+                      (node.type === "ImportDeclaration" ? node.importKind : node.exportKind) !==
+                        "type" &&
+                      node.specifiers.length > 0 &&
+                      node.specifiers.every(
                         (specifier) =>
-                          specifier.type === "ImportSpecifier" && specifier.importKind === "type",
+                          (specifier.type === "ImportSpecifier" &&
+                            specifier.importKind === "type") ||
+                          (specifier.type === "ExportSpecifier" && specifier.exportKind === "type"),
                       )
                     ) {
-                      authoredStaticImports.add(declaration.node.source.value);
-                    }
-                  },
-                  ExportNamedDeclaration(declaration) {
-                    if (
-                      declaration.node.source &&
-                      declaration.node.exportKind !== "type" &&
-                      declaration.node.specifiers.length > 0 &&
-                      declaration.node.specifiers.every(
-                        (specifier) =>
-                          specifier.type === "ExportSpecifier" && specifier.exportKind === "type",
-                      )
-                    ) {
-                      authoredStaticImports.add(declaration.node.source.value);
+                      authoredStaticImports.add(node.source.value);
                     }
                   },
                   MemberExpression(member) {
@@ -509,16 +545,14 @@ export function visitPluginSourceReferences(
               },
               // Jiti runs these after TypeScript erasure and before lowering module declarations.
               visitor: {
-                ImportDeclaration(declaration: NodePath<ImportDeclaration>) {
-                  authoredStaticImports.add(declaration.node.source.value);
-                },
-                ExportNamedDeclaration(declaration: NodePath<ExportNamedDeclaration>) {
+                "ImportDeclaration|ExportNamedDeclaration|ExportAllDeclaration"(
+                  declaration: NodePath<
+                    ImportDeclaration | ExportNamedDeclaration | ExportAllDeclaration
+                  >,
+                ) {
                   if (declaration.node.source) {
                     authoredStaticImports.add(declaration.node.source.value);
                   }
-                },
-                ExportAllDeclaration(declaration: NodePath<ExportAllDeclaration>) {
-                  authoredStaticImports.add(declaration.node.source.value);
                 },
               },
             },
@@ -545,7 +579,7 @@ export function visitPluginSourceReferences(
   for (const reference of staticImports) {
     visitReference(reference, "import");
   }
-  const visit = (node: AnyNode) => {
+  const visit = (node: AnyNode, discardedResult = false) => {
     if (node.type === "ImportExpression") {
       const reference = staticString(node.source);
       if (reference !== undefined) {
@@ -566,7 +600,7 @@ export function visitPluginSourceReferences(
             callee.object.name === "require" &&
             name === "resolve";
       const asset =
-        (node.type === "NewExpression" && name === "URL") ||
+        (node.type === "NewExpression" && name === "URL" && !discardedResult) ||
         ["readFile", "readFileSync", "createReadStream"].includes(name);
       // Trace module references and explicit asset reads. Ordinary strings
       // (labels, descriptions, prompts) never confer ownership of sibling files.
@@ -586,7 +620,11 @@ export function visitPluginSourceReferences(
       }
     }
     for (const child of sourceChildren(node)) {
-      visit(child);
+      // An unused URL or its .href is not an asset read; its arguments still need inspection.
+      const discardedChild =
+        (node.type === "ExpressionStatement" && child === node.expression) ||
+        (discardedResult && node.type === "MemberExpression" && child === node.object);
+      visit(child, discardedChild);
     }
   };
   visit(tree);

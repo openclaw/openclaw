@@ -3,12 +3,21 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { closeQaRuntimeStores } from "openclaw/plugin-sdk/qa-runtime";
-import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "openclaw/plugin-sdk/runtime-config-snapshot";
+import { resolveStorePath, upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { appendSessionTranscriptMessageByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
+import { appendSqliteTrajectoryRuntimeEvents } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { vi } from "vitest";
 import { createQaBusState } from "../src/bus-state.js";
 import { createQaChannelTransport } from "../src/qa-channel-transport.js";
 import { runRuntimeToolFixture } from "../src/runtime-tool-fixture.js";
+import * as suiteRuntimeAgentMedia from "../src/suite-runtime-agent-media.js";
+import * as suiteRuntimeAgentProcess from "../src/suite-runtime-agent-process.js";
+import * as suiteRuntimeAgentSession from "../src/suite-runtime-agent-session.js";
+import * as suiteRuntimeGateway from "../src/suite-runtime-gateway.js";
 import type { QaSuiteRuntimeEnv } from "../src/suite-runtime-types.js";
 
 let suiteRoot: string | undefined;
@@ -45,7 +54,37 @@ async function makeEnv(overrides: Partial<QaSuiteRuntimeEnv> = {}): Promise<QaSu
 }
 
 type RuntimeToolFixtureConfig = Parameters<typeof runRuntimeToolFixture>[1];
-type RuntimeToolFixtureDeps = Parameters<typeof runRuntimeToolFixture>[2];
+type RuntimeToolFixtureDeps = {
+  createSession: typeof suiteRuntimeAgentSession.createSession;
+  readEffectiveTools: typeof suiteRuntimeAgentSession.readEffectiveTools;
+  runAgentPrompt: (
+    ...args: Parameters<typeof suiteRuntimeAgentProcess.runAgentPrompt>
+  ) => Promise<unknown>;
+  fetchJson: (url: string) => Promise<unknown>;
+  ensureImageGenerationConfigured: (env: QaSuiteRuntimeEnv) => Promise<unknown>;
+};
+
+function runRuntimeToolFixtureWithDeps(
+  env: QaSuiteRuntimeEnv,
+  config: RuntimeToolFixtureConfig,
+  deps: RuntimeToolFixtureDeps,
+) {
+  vi.spyOn(suiteRuntimeAgentSession, "createSession").mockImplementation(deps.createSession);
+  vi.spyOn(suiteRuntimeAgentSession, "readEffectiveTools").mockImplementation(
+    deps.readEffectiveTools,
+  );
+  vi.spyOn(suiteRuntimeAgentProcess, "runAgentPrompt").mockImplementation(async (...args) => {
+    await deps.runAgentPrompt(...args);
+    return { started: {}, waited: {} };
+  });
+  vi.spyOn(suiteRuntimeGateway, "fetchJson").mockImplementation(deps.fetchJson);
+  vi.spyOn(suiteRuntimeAgentMedia, "ensureImageGenerationConfigured").mockImplementation(
+    async (envArg) => {
+      await deps.ensureImageGenerationConfigured(envArg);
+    },
+  );
+  return runRuntimeToolFixture(env, config);
+}
 
 function transcriptToolCall(
   toolName: string,
@@ -90,7 +129,7 @@ function runLiveRuntimeToolFixture(
   } = {},
 ) {
   const toolName = params.toolName ?? "read";
-  return runRuntimeToolFixture(
+  return runRuntimeToolFixtureWithDeps(
     env,
     params.config ?? runtimeToolFixtureConfig(toolName),
     runtimeToolFixtureDeps({
@@ -111,6 +150,7 @@ function runtimeToolFixtureConfig(
     toolCoverage: {
       bucket: "openclaw-dynamic-integration",
       expectedLayer: "openclaw-dynamic",
+      capabilityLayer: "openclaw-dynamic-direct",
     },
     ...overrides,
   };
@@ -200,7 +240,7 @@ async function runMockRuntimeToolFixture(params: {
   if (params.forceCodex) {
     env.gateway.runtimeEnv.OPENCLAW_QA_FORCE_RUNTIME = "codex";
   }
-  return runRuntimeToolFixture(
+  return runRuntimeToolFixtureWithDeps(
     env,
     runtimeToolFixtureConfig(toolName, {
       promptSnippet: `target=${toolName}`,
@@ -251,6 +291,8 @@ export async function writeQaSessionTranscript(
     ...process.env,
     OPENCLAW_STATE_DIR: path.join(env.gateway.tempRoot, "state"),
   };
+  // The real transcript readers need the same authored config as the isolated writer.
+  setRuntimeConfigSnapshot(env.cfg);
   await upsertSessionEntry({
     agentId: "qa",
     env: sessionEnv,
@@ -278,11 +320,62 @@ export async function writeRuntimeToolTranscripts(
   await writeQaSessionTranscript(env, `agent:qa:runtime-tool:${toolName}:failure`, failureMessages);
 }
 
+export function writeToolSearchDiscoveryEvidence(
+  env: QaSuiteRuntimeEnv,
+  toolName: string,
+  phase: "happy" | "failure",
+  targetCallId = `call-${toolName}-${phase}`,
+  options?: { callStatus?: string | null },
+) {
+  const sessionKey = `agent:qa:runtime-tool:${toolName}:${phase}`;
+  const sessionId = sessionKey.replace(/[^a-z0-9]+/giu, "-");
+  const sessionEnv = {
+    ...process.env,
+    OPENCLAW_STATE_DIR: path.join(env.gateway.tempRoot, "state"),
+  };
+  const storePath = resolveStorePath(undefined, { agentId: "qa", env: sessionEnv });
+  appendSqliteTrajectoryRuntimeEvents({ agentId: "qa", env: sessionEnv, sessionId, storePath }, [
+    {
+      traceSchema: "openclaw-trajectory",
+      schemaVersion: 1,
+      traceId: sessionId,
+      source: "runtime",
+      type: "tool.search.discovery",
+      ts: new Date().toISOString(),
+      seq: 1,
+      sessionId,
+      sessionKey,
+      runId: `run-${phase}`,
+      data: {
+        threadId: `thread-${phase}`,
+        turnId: `turn-${phase}`,
+        search: {
+          callId: `search-${phase}`,
+          callExecution: "client",
+          ...(options?.callStatus === null
+            ? {}
+            : { callStatus: options?.callStatus ?? "completed" }),
+          outputExecution: "client",
+          outputStatus: "completed",
+          tools: [{ namespace: "openclaw", name: toolName }],
+        },
+        target: {
+          callId: targetCallId,
+          namespace: "openclaw",
+          name: toolName,
+          success: phase === "happy",
+        },
+      },
+    },
+  ]);
+}
+
 export async function cleanupRuntimeToolFixtureTempRoots() {
   if (!suiteRoot) {
     return;
   }
   await Promise.all(tempRoots.map((root) => closeQaRuntimeStores(root)));
+  clearRuntimeConfigSnapshot();
   await fs.rm(suiteRoot, { recursive: true, force: true });
   tempRoots.length = 0;
   suiteRoot = undefined;
@@ -294,6 +387,7 @@ export {
   mockToolRequests,
   runLiveRuntimeToolFixture,
   runMockRuntimeToolFixture,
+  runRuntimeToolFixtureWithDeps,
   runtimePatchAddInput,
   runtimePatchUpdateInput,
   runtimeToolFixtureConfig,

@@ -1,9 +1,22 @@
 import { note } from "../../packages/terminal-core/src/note.js";
-import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
+import { getPostgresPool } from "../infra/postgres-sync/pool.js";
+import { runtimeProcessEntrypoints } from "../infra/runtime-process-entrypoints.js";
+import { captureRuntimeWorkerSource } from "../infra/runtime-worker-generation.js";
+import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
+import { resolveSqliteInspectionSignal } from "../infra/sqlite-readonly-worker.js";
+import { captureSqliteWorkerStateContext } from "../infra/sqlite-worker-state-context.js";
+import { WorkerTaskPool } from "../infra/worker-task-pool.js";
+import { resolveCommandProcessSignal } from "../process/exec-spawn.js";
+import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
+import { captureOpenClawStateReadWorkerContext } from "../state/openclaw-state-worker-context.js";
+import { BLOAT_MIN_FILE_BYTES } from "./doctor-db-bloat.constants.js";
 import type { SqliteBloatStats } from "./doctor-db-bloat.read.js";
+import type {
+  DoctorDatabaseBloatInput,
+  DoctorDatabaseBloatResult,
+} from "./doctor-db-bloat.worker.js";
 import { formatBytes } from "./doctor-disk-space.js";
 
-const BLOAT_MIN_FILE_BYTES = 128 * 1024 * 1024;
 const BLOAT_MIN_FREE_BYTES = 32 * 1024 * 1024;
 const BLOAT_FREE_RATIO = 0.25;
 const LARGE_DB_WARN_BYTES = 1024 * 1024 * 1024;
@@ -27,14 +40,28 @@ function describeBloat(label: string, stats: SqliteBloatStats): string | null {
 }
 
 export async function noteSqliteDatabaseBloat(deps?: { env?: NodeJS.ProcessEnv }): Promise<void> {
-  const context = captureOpenClawStateWorkerContext({ env: deps?.env });
-  const { runOpenClawStateWorkerOperation } =
-    await import("../state/openclaw-state-worker-store.js");
-  const results = await runOpenClawStateWorkerOperation(
-    context,
-    (scope) => scope.execute({ type: "doctor.databaseBloat", input: undefined }),
-    { existingOnly: true },
-  );
+  const context = captureOpenClawStateReadWorkerContext({ env: deps?.env });
+  if (Object.values(context.databaseEngineSelection?.effectiveEngines ?? {}).includes("postgres")) {
+    getPostgresPool();
+  }
+  const pool = new WorkerTaskPool<DoctorDatabaseBloatInput, DoctorDatabaseBloatResult>({
+    workerUrl: captureRuntimeWorkerSource(
+      resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.doctorDatabaseBloat),
+    ).moduleUrl,
+    maxWorkers: 1,
+  });
+  let results: DoctorDatabaseBloatResult;
+  try {
+    results = await pool.run(
+      {
+        path: context.admission.databasePath,
+        context: captureSqliteWorkerStateContext(context),
+      },
+      { signal: resolveCommandProcessSignal(resolveSqliteInspectionSignal(getAsyncWorkSignal())) },
+    );
+  } finally {
+    await pool.close();
+  }
   context.admission.assertCurrent();
   const warnings = (results ?? []).flatMap(({ label, stats }) => {
     const warning = describeBloat(label, stats);

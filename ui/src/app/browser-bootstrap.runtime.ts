@@ -105,6 +105,7 @@ export function startBrowserBootstrapRecovery(
     attempted = true;
     void recover();
   };
+  // Connection receipts revoke pending credential handoffs before they can reconnect.
   const unsubscribe = gateway.subscribe(onSnapshot);
   onSnapshot(gateway.snapshot);
   return () => {

@@ -14,48 +14,27 @@ import { safeJsonStringify } from "../utils/safe-json.js";
 import { redactAgentDiagnosticPayload } from "./diagnostic-redaction.js";
 import { getQueuedFileWriter, type QueuedFileWriter } from "./queued-file-writer.js";
 import type { AgentMessage, StreamFn } from "./runtime/index.js";
+import { buildAgentTraceBase, type AgentTraceBase } from "./trace-base.js";
 
 type PayloadLogStage = "request" | "usage";
 
-type PayloadLogEvent = {
+type PayloadLogEvent = AgentTraceBase & {
   ts: string;
   stage: PayloadLogStage;
-  runId?: string;
-  sessionId?: string;
-  sessionKey?: string;
-  provider?: string;
-  modelId?: string;
-  modelApi?: string | null;
-  workspaceDir?: string;
   payload?: unknown;
   usage?: unknown;
   error?: string;
   payloadDigest?: string;
 };
 
-type PayloadLogConfig = {
-  enabled: boolean;
-  filePath: string;
-};
-
 const writers = new Map<string, QueuedFileWriter>();
 const log = createSubsystemLogger("agent/anthropic-payload");
-
-function resolvePayloadLogConfig(env: NodeJS.ProcessEnv): PayloadLogConfig {
-  const enabled = parseBooleanValue(env.OPENCLAW_ANTHROPIC_PAYLOAD_LOG) ?? false;
-  const fileOverride = env.OPENCLAW_ANTHROPIC_PAYLOAD_LOG_FILE?.trim();
-  const filePath = fileOverride
-    ? resolveUserPath(fileOverride)
-    : path.join(resolveStateDir(env), "logs", "anthropic-payload.jsonl");
-  return { enabled, filePath };
-}
 
 function formatError(error: unknown): string | undefined {
   const message =
     error instanceof Error ? error.message : typeof error === "string" ? error : undefined;
   if (message !== undefined) {
-    const redacted = redactAgentDiagnosticPayload(message);
-    return typeof redacted === "string" ? redacted : message;
+    return redactAgentDiagnosticPayload(message);
   }
   if (typeof error === "number" || typeof error === "boolean" || typeof error === "bigint") {
     return String(error);
@@ -76,52 +55,40 @@ function digest(value: unknown): string | undefined {
   return crypto.createHash("sha256").update(serialized).digest("hex");
 }
 
-function findLastAssistantUsage(messages: AgentMessage[]): Record<string, unknown> | null {
+function findLastAssistantUsage(messages: AgentMessage[]) {
   // Usage is attached to assistant messages after streaming; walk backwards to
   // avoid logging stale usage from an earlier assistant turn.
   for (let i = messages.length - 1; i >= 0; i -= 1) {
-    const msg = messages[i] as { role?: unknown; usage?: unknown };
-    if (msg?.role === "assistant" && msg.usage && typeof msg.usage === "object") {
-      return msg.usage as Record<string, unknown>;
+    const msg = messages[i];
+    if (msg?.role === "assistant") {
+      return msg.usage;
     }
   }
   return null;
 }
 
 type AnthropicPayloadLogger = {
-  enabled: true;
   wrapStreamFn: (streamFn: StreamFn) => StreamFn;
   recordUsage: (messages: AgentMessage[], error?: unknown) => void;
 };
 
-/** Create an Anthropic payload/usage logger when the env flag is enabled. */
-export function createAnthropicPayloadLogger(params: {
-  env?: NodeJS.ProcessEnv;
-  runId?: string;
-  sessionId?: string;
-  sessionKey?: string;
-  provider?: string;
-  modelId?: string;
-  modelApi?: string | null;
-  workspaceDir?: string;
-  writer?: QueuedFileWriter;
-}): AnthropicPayloadLogger | null {
+export function createAnthropicPayloadLogger(
+  params: AgentTraceBase & {
+    env?: NodeJS.ProcessEnv;
+  },
+): AnthropicPayloadLogger | null {
   const env = params.env ?? process.env;
-  const cfg = resolvePayloadLogConfig(env);
-  if (!cfg.enabled || isIncognitoSessionKey(params.sessionKey)) {
+  const enabled = parseBooleanValue(env.OPENCLAW_ANTHROPIC_PAYLOAD_LOG) ?? false;
+  const fileOverride = env.OPENCLAW_ANTHROPIC_PAYLOAD_LOG_FILE?.trim();
+  const filePath = fileOverride
+    ? resolveUserPath(fileOverride)
+    : path.join(resolveStateDir(env), "logs", "anthropic-payload.jsonl");
+  if (!enabled || isIncognitoSessionKey(params.sessionKey)) {
     return null;
   }
 
-  const writer = params.writer ?? getQueuedFileWriter(writers, cfg.filePath);
-  const base: Omit<PayloadLogEvent, "ts" | "stage"> = {
-    runId: params.runId,
-    sessionId: params.sessionId,
-    sessionKey: params.sessionKey,
-    provider: params.provider,
-    modelId: params.modelId,
-    modelApi: params.modelApi,
-    workspaceDir: params.workspaceDir,
-  };
+  const writer = getQueuedFileWriter(writers, filePath);
+  const base = buildAgentTraceBase(params);
 
   const record = (event: PayloadLogEvent) => {
     const line = safeJsonStringify(event);
@@ -131,8 +98,8 @@ export function createAnthropicPayloadLogger(params: {
     writer.write(`${line}\n`);
   };
 
-  const wrapStreamFn: AnthropicPayloadLogger["wrapStreamFn"] = (streamFn) => {
-    const wrapped: StreamFn = (model, context, options) => {
+  const wrapStreamFn: AnthropicPayloadLogger["wrapStreamFn"] =
+    (streamFn) => (model, context, options) => {
       if (model?.api !== "anthropic-messages") {
         return streamFn(model, context, options);
       }
@@ -154,8 +121,6 @@ export function createAnthropicPayloadLogger(params: {
         onPayload: nextOnPayload,
       });
     };
-    return wrapped;
-  };
 
   const recordUsage: AnthropicPayloadLogger["recordUsage"] = (messages, error) => {
     const usage = findLastAssistantUsage(messages);
@@ -180,5 +145,5 @@ export function createAnthropicPayloadLogger(params: {
   };
 
   log.info("anthropic payload logger enabled", { filePath: writer.filePath });
-  return { enabled: true, wrapStreamFn, recordUsage };
+  return { wrapStreamFn, recordUsage };
 }

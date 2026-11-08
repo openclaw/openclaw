@@ -98,9 +98,9 @@ dashboards, alerts, and recording rules that query the old names.
 
 Without `OPENCLAW_OTEL_PRELOADED=1`, trace, metric, and log providers are
 generation-private. The plugin publishes only its async context manager and
-propagator through the public OpenTelemetry APIs, and removes them only while
-those public behaviors still match the generation being stopped. A replacement
-host or later generation therefore keeps ownership through cleanup.
+propagator through the public OpenTelemetry APIs, and removes registrations it
+installed when the service stops. Stop the service before replacing these globals
+with another host SDK; replacing them while it is running is best effort.
 
 ## Sampling and flushing
 

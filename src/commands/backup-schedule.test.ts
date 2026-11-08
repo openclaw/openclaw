@@ -35,7 +35,11 @@ vi.mock("../cli/gateway-rpc.js", async (importOriginal) => {
 
 vi.mock("../config/config.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../config/config.js")>();
-  return { ...actual, getRuntimeConfig: configMocks.getRuntimeConfig };
+  const { createTestConfigReadMocks } = await import("./test-runtime-config-helpers.js");
+  return {
+    ...actual,
+    ...createTestConfigReadMocks(configMocks, "getRuntimeConfig"),
+  };
 });
 
 import { GIT_BACKUP_PUSH_CREDENTIAL_WARNING } from "./backup-git.js";
@@ -66,11 +70,32 @@ async function pushReadyRepository(): Promise<string> {
 }
 
 describe("scheduled backups", () => {
+  it("escapes terminal controls in the acknowledgement while preserving scheduled argv", async () => {
+    gatewayRpc.call.mockResolvedValue({ created: true, job: { id: "backup-job" } });
+    const runtime = createTestRuntime();
+    const repository = "/tmp/café\u001b[31m\nforged\tend\rrow\u0007";
+    await backupEnableCommand(runtime, { repository, every: "6h" });
+    expect(runtime.log).toHaveBeenCalledWith(
+      "Scheduled Git backups enabled: every 6h to /tmp/café\\nforged\\tend\\rrow",
+    );
+    expect(gatewayRpc.call).toHaveBeenCalledWith(
+      "cron.add",
+      expect.anything(),
+      expect.objectContaining({
+        payload: {
+          kind: "command",
+          argv: ["openclaw", "backup", "git", "create", "--repository", repository, "--all"],
+          timeoutSeconds: 86_400,
+        },
+      }),
+    );
+  });
+
   beforeEach(() => {
     gatewayRpc.call.mockReset();
     gatewayRpc.isImplicitLocalTarget.mockReset().mockResolvedValue(true);
     configMocks.getRuntimeConfig.mockReset().mockReturnValue({
-      agents: { list: [{ id: "main" }, { id: "ops-team" }] },
+      agents: { entries: { main: {}, "ops-team": {} } },
       storage: {
         locations: {
           archive: {
@@ -128,6 +153,7 @@ describe("scheduled backups", () => {
             "--push",
             "--exclude-secrets",
           ],
+          timeoutSeconds: 86_400,
         },
       }),
     );
@@ -202,6 +228,7 @@ describe("scheduled backups", () => {
           "--keep-monthly",
           "0",
         ],
+        timeoutSeconds: 86_400,
       });
       expect(
         summarizeBackupSchedules([
@@ -324,38 +351,20 @@ describe("scheduled backups", () => {
     { options: { to: "archive", repository: "/backups" }, message: "cannot be combined" },
     { options: { repository: "/backups", keepDaily: "7" }, message: "require --to" },
     { options: { to: "missing" }, message: 'Storage location "missing" is not configured' },
+    {
+      options: { repository: "/tmp/openclaw-backups", agent: "nope-agent" },
+      message: 'Unknown agent id "nope-agent". Run openclaw agents list to see configured agents.',
+    },
+    {
+      options: { repository: "/tmp/openclaw-backups", agent: "   " },
+      message: "--agent must not be blank",
+    },
+    {
+      options: { repository: "/tmp/openclaw-backups", every: "   " },
+      message: "Invalid duration (empty)",
+    },
   ])("rejects invalid schedule options $options", async ({ options, message }) => {
     await expect(backupEnableCommand(createTestRuntime(), options)).rejects.toThrow(message);
-    expect(gatewayRpc.call).not.toHaveBeenCalled();
-  });
-
-  it.each([
-    [
-      "unknown",
-      "nope-agent",
-      'Unknown agent id "nope-agent". Run openclaw agents list to see configured agents.',
-    ],
-    ["whitespace-only", "   ", "--agent must not be blank"],
-  ])("rejects an %s scheduled backup agent", async (_label, agent, message) => {
-    const runtime = createTestRuntime();
-
-    await expect(
-      backupEnableCommand(runtime, {
-        repository: "/tmp/openclaw-backups",
-        agent,
-      }),
-    ).rejects.toThrow(message);
-
-    expect(gatewayRpc.call).not.toHaveBeenCalled();
-  });
-
-  it("rejects an explicit blank interval before scheduling", async () => {
-    const runtime = createTestRuntime();
-    gatewayRpc.call.mockResolvedValue({ created: true, job: { id: "backup-job" } });
-
-    await expect(
-      backupEnableCommand(runtime, { repository: "/tmp/openclaw-backups", every: "   " }),
-    ).rejects.toThrow("Invalid duration (empty)");
     expect(gatewayRpc.call).not.toHaveBeenCalled();
   });
 
@@ -377,7 +386,6 @@ describe("scheduled backups", () => {
         cronEnabled: false,
         log: createNoopLogger(),
         enqueueSystemEvent: vi.fn(),
-        requestHeartbeat: vi.fn(),
         runIsolatedAgentJob: runJob,
         runCommandJob: runJob,
       });
@@ -439,7 +447,7 @@ describe("scheduled backups", () => {
         await runCli([...enableArgs, "--every", "6h"]);
         expect(await cron.readJob(managed.id)).toMatchObject({
           schedule: { everyMs: 21_600_000 },
-          payload: { argv: expect.arrayContaining(["--global"]) },
+          payload: { argv: expect.arrayContaining(["--global"]), timeoutSeconds: 86_400 },
         });
         if (renamed) {
           await runCli(["cron", "edit", managed.id, "--name", "Nightly operator backup"]);

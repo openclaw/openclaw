@@ -1,5 +1,4 @@
-// CLI startup presentation and config-before-plugin bootstrap.
-import type { ConfigFileSnapshot } from "../config/types.js";
+import type { StartupConfigPreflightOptions } from "../commands/startup-config-preflight.js";
 import { routeLogsToStderr } from "../logging/console.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
@@ -46,49 +45,27 @@ export async function ensureCliExecutionBootstrap(params: {
   commandPath: string[];
   startupPolicy: CliStartupPolicy;
   allowInvalid?: boolean;
-  beforeStatePreparation?: (snapshot?: ConfigFileSnapshot) => Promise<boolean>;
+  beforeStatePreparation?: StartupConfigPreflightOptions["beforeStatePreparation"];
   loadPlugins?: boolean;
-  skipConfigGuard?: boolean;
-  validateConfigOnly?: boolean;
 }) {
   const { runtime, commandPath, startupPolicy, allowInvalid, beforeStatePreparation } = params;
-  const { suppressDoctorStdout, pluginRegistry } = startupPolicy;
+  const { suppressDoctorStdout, pluginRegistry, skipConfigGuard, validateConfigOnly } =
+    startupPolicy;
   const loadPlugins = params.loadPlugins ?? startupPolicy.loadPlugins;
-  const skipConfigGuard = params.skipConfigGuard ?? startupPolicy.skipConfigGuard;
-  const validateConfigOnly = params.validateConfigOnly ?? startupPolicy.validateConfigOnly;
   if (!skipConfigGuard) {
     await measureCliCommandStartup("config-ready", async () => {
-      const { ensureConfigReady } = await configGuardModuleLoader.load();
-      const runConfigGuard = () =>
-        ensureConfigReady({
-          runtime,
-          commandPath,
-          measure: (stage, run) => measureCliCommandStartup(stage, run),
-          ...(allowInvalid ? { allowInvalid: true } : {}),
-          ...(validateConfigOnly ? { validateConfigOnly: true } : {}),
-          ...(beforeStatePreparation ? { beforeStatePreparation } : {}),
-          ...(suppressDoctorStdout ? { suppressDoctorStdout: true } : {}),
-        });
-      const nativeGatewayBootstrap =
-        commandPath[0] === "gateway" &&
-        (commandPath.length === 1 || (commandPath.length === 2 && commandPath[1] === "run"));
-      if (nativeGatewayBootstrap && !validateConfigOnly) {
-        const [
-          { withConfigSnapshotPreparation },
-          { prepareHostConfigSnapshot },
-          { resolveConfigPath },
-        ] = await Promise.all([
-          import("../config/io.snapshot-preparation-scope.js"),
-          import("../config/io.snapshot-preparation.js"),
-          import("../config/paths.js"),
-        ]);
-        await withConfigSnapshotPreparation(
-          { configPath: resolveConfigPath(), prepare: prepareHostConfigSnapshot },
-          runConfigGuard,
-        );
-      } else {
-        await runConfigGuard();
-      }
+      const { ensureConfigReady } = await measureCliCommandStartup("config-guard-import", () =>
+        configGuardModuleLoader.load(),
+      );
+      await ensureConfigReady({
+        runtime,
+        commandPath,
+        measure: (stage, run) => measureCliCommandStartup(stage, run),
+        ...(allowInvalid ? { allowInvalid: true } : {}),
+        ...(validateConfigOnly ? { validateConfigOnly: true } : {}),
+        ...(beforeStatePreparation ? { beforeStatePreparation } : {}),
+        ...(suppressDoctorStdout ? { suppressDoctorStdout: true } : {}),
+      });
     });
   }
   if (!loadPlugins) {

@@ -73,13 +73,13 @@ import Testing
             let openclawPath = tmp.appendingPathComponent("node_modules/.bin/openclaw")
             try makeExecutableForTests(at: openclawPath)
 
-            let start = await NodeServiceManager._testServiceCommand(["start"])
+            let start = await NodeServiceManager.serviceCommand("start")
             #expect(start == [openclawPath.path, "node", "start", "--json"])
 
-            let stop = await NodeServiceManager._testServiceCommand(["stop"])
+            let stop = await NodeServiceManager.serviceCommand("stop")
             #expect(stop == [openclawPath.path, "node", "stop", "--json"])
 
-            let restart = await NodeServiceManager._testServiceCommand(["restart"])
+            let restart = await NodeServiceManager.serviceCommand("restart")
             #expect(restart == [openclawPath.path, "node", "restart", "--json"])
         }
     }
@@ -224,11 +224,11 @@ import Testing
             options: 0)
         try data.write(to: url, options: .atomic)
 
-        #expect(NodeServiceManager._testLaunchdProgramArguments(plistURL: url) == arguments)
+        #expect(NodeServiceManager.launchdProgramArguments(plistURL: url) == arguments)
         try Data("not a plist".utf8).write(to: url, options: .atomic)
-        #expect(NodeServiceManager._testLaunchdProgramArguments(plistURL: url) == nil)
+        #expect(NodeServiceManager.launchdProgramArguments(plistURL: url) == nil)
         try FileManager.default.removeItem(at: url)
-        #expect(NodeServiceManager._testLaunchdProgramArguments(plistURL: url) == [])
+        #expect(NodeServiceManager.launchdProgramArguments(plistURL: url) == [])
     }
 
     @Test func `captures the installed node runtime and generated environment without the terminal CLI`() async throws {

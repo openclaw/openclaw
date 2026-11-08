@@ -11,7 +11,6 @@ const TIMESTAMP_ENVELOPE_PATTERN = /^\[.*\d{4}-\d{2}-\d{2} \d{2}:\d{2}/;
 interface TimestampInjectionOptions {
   timezone?: string;
   now?: Date;
-  includeTimestamp?: boolean;
 }
 
 /** Stamp historical messages with their own arrival time; return undefined for invalid zones. */
@@ -30,7 +29,6 @@ export function buildTimestampPrefix(
 /** CLI prompts need a clock; embedded messages are stamped once at the LLM boundary. */
 export function injectTimestamp(message: string, opts?: TimestampInjectionOptions): string {
   if (
-    opts?.includeTimestamp === false ||
     !message.trim() ||
     TIMESTAMP_ENVELOPE_PATTERN.test(message) ||
     message.includes(CRON_TIME_MARKER)
@@ -45,6 +43,5 @@ export function injectTimestamp(message: string, opts?: TimestampInjectionOption
 export function timestampOptsFromConfig(cfg: OpenClawConfig): TimestampInjectionOptions {
   return {
     timezone: resolveUserTimezone(cfg.agents?.defaults?.userTimezone),
-    includeTimestamp: true,
   };
 }

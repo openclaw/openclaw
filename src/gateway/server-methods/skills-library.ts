@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from "node:util";
 import {
   ErrorCodes,
   errorShape,
@@ -12,31 +13,44 @@ import {
   type SkillsLibraryActivateParams,
   type SkillLibrarySelection,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import { patchSessionEntryCore } from "../../config/sessions/session-accessor.js";
-import { SkillLibraryError } from "../../skills/library/errors.js";
-import { importSkillLibrary, uploadSkillLibrary } from "../../skills/library/import.js";
-import { changeSkillLibrarySelection } from "../../skills/library/selection.js";
+import { retainPreparedSessionEntryPredicate } from "../../config/sessions/session-accessor.sqlite-entry-cache-publication-state.js";
+import { captureSessionEntryCurrentCheckAsyncInternal } from "../../config/sessions/session-entry-current-check.js";
 import {
-  listSkillLibrary,
+  sessionEntryCommitGuardOptions,
+  prepareSessionSourceAuthority,
+  composeSessionSourceAssertion,
+  type SessionSourceAssertion,
+} from "../../config/sessions/session-source-authority.js";
+import { isIncognitoSessionKey } from "../../routing/session-key.js";
+import { importSkillLibrary, uploadSkillLibrary } from "../../skills/library/import.js";
+import {
+  assertPreparedSkillLibrarySelection,
+  changeSkillLibrarySelection,
+} from "../../skills/library/selection.js";
+import {
   readSkillLibrary,
   saveSkillLibrary,
   mutateSkillLibrary,
 } from "../../skills/library/service.js";
-import {
-  readSkillLibraryStore,
-  selectSkillLibraryRow,
-  projectSkillLibraryEntry,
-  requireSkillLibraryEntry,
-  selectSkillLibraryRevisionMetadata,
-  type SkillLibraryAuthority,
-} from "../../skills/library/store.js";
+import { captureSkillLibraryAccess } from "../../skills/library/store-access.js";
+import { projectSkillLibraryList, type SkillLibraryAuthority } from "../../skills/library/store.js";
+import { SkillLibraryError } from "../../skills/skill-library-error.js";
 import { resolvePluginSessionOwnershipError } from "../session-plugin-ownership.js";
+import { resolveSessionMutationAuthorizationAsync } from "../session-sharing-authorization-async.js";
+import { captureSessionSharingMemoryFacts } from "../session-sharing-incognito.js";
+import type { SessionSharingTarget } from "../session-sharing-policy.js";
 import {
-  authorizeSessionSharingTarget,
-  resolveSessionMutationAuthorization,
-  resolveSessionSharingTarget,
-  SessionMutationAuthorizationChangedError,
-} from "../session-sharing.js";
+  captureSessionMutationRouting,
+  prepareSessionMutationFacts,
+} from "../session-sharing-preparation.js";
+import {
+  prepareProjectedSessionSharing,
+  prepareSessionSharingProfiles,
+} from "../session-sharing-read.js";
+import { SessionMutationAuthorizationChangedError } from "../session-sharing.js";
+import { resolveSessionStoreIdentity } from "../session-store-key.js";
 import { captureGatewayClientUploadCommitGuard } from "../upload-policy.js";
 import type { GatewayRequestHandlerOptions, GatewayRequestHandlers } from "./types.js";
 import { defineValidatedGatewayHandler } from "./validation.js";
@@ -56,18 +70,23 @@ export function libraryAuthority(
     scopes: client?.connect.scopes ?? [],
     getConfig: context.getRuntimeConfig,
     assertFileMutationAllowed,
-    assertCurrent: () => {
-      assertFileMutationAllowed?.();
-      options.sessionMutationCommitGuard?.();
-      options.sessionMutationAuthorization?.assertCurrent();
-      // Synthetic agents must carry host-bound operator authority; identityless agents cannot publish.
-      if (client?.internal?.syntheticClient) {
-        throw new SkillLibraryError(
-          "IDENTITY_REQUIRED",
-          "Synthetic calls cannot acquire personal ownership. Ask the person to send a fresh attributed message or use My skills.",
-        );
-      }
-    },
+    assertCurrent: composeSessionSourceAssertion(
+      [
+        assertFileMutationAllowed,
+        options.sessionMutationCommitGuard,
+        options.sessionMutationAuthorization?.assertCurrent,
+      ],
+      (assertSources) => {
+        assertSources();
+        // Synthetic agents must carry host-bound operator authority; identityless agents cannot publish.
+        if (client?.internal?.syntheticClient) {
+          throw new SkillLibraryError(
+            "IDENTITY_REQUIRED",
+            "Synthetic calls cannot acquire personal ownership. Ask the person to send a fresh attributed message or use My skills.",
+          );
+        }
+      },
+    ),
   };
 }
 
@@ -76,129 +95,259 @@ export async function activateLibrarySelection(
   params: SkillsLibraryActivateParams,
 ) {
   const { client, context } = options;
-  const authorization = resolveSessionMutationAuthorization({
+  const resolvedAuthorization = await resolveSessionMutationAuthorizationAsync({
     client,
     context,
     method: "skills.library.activate",
     requestParams: params,
   });
+  using authorization = {
+    ...resolvedAuthorization,
+    [Symbol.dispose]: () => resolvedAuthorization.authorization?.release?.(),
+  };
   if (authorization.error) {
     throw new SessionMutationAuthorizationChangedError(authorization.error);
   }
-  const target = resolveSessionSharingTarget({
-    cfg: context.getRuntimeConfig(),
-    sessionKey: params.sessionKey,
-  });
-  if (!target) {
-    throw new SkillLibraryError("NOT_FOUND", "Session not found.");
-  }
-  const authority = libraryAuthority(options);
-  let plannedSelections: SkillLibrarySelection[] | undefined;
-  const assertCurrent = () => {
-    authority.assertCurrent();
-    authorization.authorization?.assertCurrent();
-    if (plannedSelections && params.action !== "detach") {
-      const checked = readSkillLibraryStore((db) => {
-        for (const pin of plannedSelections!) {
-          if (params.skillId && pin.skillId !== params.skillId) {
-            continue;
-          }
-          const entry = requireSkillLibraryEntry(db, pin.skillId, authority);
-          if (entry.removed || !selectSkillLibraryRevisionMetadata(db, pin.skillId, pin.revision)) {
-            throw new SkillLibraryError(
-              "CONFLICT",
-              "Skill access changed during activation. Refresh the library and retry.",
-            );
-          }
-        }
-        return true;
-      }, {});
-      if (!checked) {
-        throw new SkillLibraryError("CONFLICT", "Skill library changed during activation.");
-      }
-    }
-    const current = resolveSessionSharingTarget({
-      cfg: context.getRuntimeConfig(),
-      sessionKey: params.sessionKey,
-    });
-    if (
-      !current ||
-      current.entry.sessionId !== target.entry.sessionId ||
-      current.entry.lifecycleRevision !== target.entry.lifecycleRevision ||
-      current.storePath !== target.storePath ||
-      current.storeKey !== target.storeKey
-    ) {
-      throw new SkillLibraryError(
-        "CONFLICT",
-        "Session changed before activation; refresh and retry.",
-      );
-    }
-    const ownershipError = resolvePluginSessionOwnershipError({
-      action: "patch",
-      entry: current.entry,
-      key: current.canonicalKey,
-      pluginOwnerId: client?.internal?.pluginRuntimeOwnerId,
-    });
-    if (ownershipError) {
-      throw new SessionMutationAuthorizationChangedError(ownershipError);
-    }
-  };
-  const entry = await patchSessionEntryCore(
-    { storePath: target.storePath, sessionKey: target.storeKey, agentId: target.agentId },
-    (current) => {
-      assertCurrent();
-      const selections = changeSkillLibrarySelection(
-        authority,
-        current.skillLibrarySelections ?? [],
-        params,
-      );
-      plannedSelections = selections;
-      // Existing runs keep their prepared snapshot; the next turn rebuilds against the new pins.
-      return { skillLibrarySelections: selections, updatedAt: Date.now() };
-    },
-    { assertCommitAllowed: assertCurrent },
-  );
-  if (!entry) {
-    throw new SkillLibraryError(
-      "CONFLICT",
-      "Session changed before activation; refresh and retry.",
+  const selected = await selectedSession(options, params.sessionKey);
+  try {
+    const target = selected.target;
+    const authority = libraryAuthority(options);
+    let plannedSelections: SkillLibrarySelection[] | undefined;
+    const sessionChanged = () =>
+      new SkillLibraryError("CONFLICT", "Session changed before activation; refresh and retry.");
+    const source = selected.source;
+    const assertCurrent = composeSessionSourceAssertion(
+      [authority.assertCurrent, authorization.authorization?.assertCurrent, source],
+      (assertSources) => {
+        assertSources();
+        assertPreparedSkillLibrarySelection(plannedSelections);
+      },
     );
+    const entry = await patchSessionEntryCore(
+      { storePath: target.storePath, sessionKey: target.storeKey, agentId: target.agentId },
+      async (current) => {
+        assertCurrent();
+        plannedSelections = await changeSkillLibrarySelection(
+          authority,
+          current.skillLibrarySelections ?? [],
+          params,
+        );
+        assertCurrent();
+        // Existing runs keep their prepared snapshot; the next turn rebuilds against the new pins.
+        return { skillLibrarySelections: plannedSelections, updatedAt: Date.now() };
+      },
+      sessionEntryCommitGuardOptions(assertCurrent),
+    );
+    if (!entry) {
+      throw sessionChanged();
+    }
+    return {
+      sessionKey: target.canonicalKey,
+      selections: entry.skillLibrarySelections ?? [],
+      sessionActivation: "next-turn" as const,
+    };
+  } finally {
+    await selected.release();
   }
-  return {
-    sessionKey: target.canonicalKey,
-    selections: entry.skillLibrarySelections ?? [],
-    sessionActivation: "next-turn" as const,
-  };
 }
 
-function selectedSession(options: SkillLibraryRequestOwner, sessionKey: string) {
-  const resolve = () => {
+function assertPluginMutationCurrent(
+  options: SkillLibraryRequestOwner,
+  current: SessionSharingTarget,
+): void {
+  const error = resolvePluginSessionOwnershipError({
+    action: "patch",
+    entry: current.entry,
+    key: current.canonicalKey,
+    pluginOwnerId: options.client?.internal?.pluginRuntimeOwnerId,
+  });
+  if (error) {
+    throw new SessionMutationAuthorizationChangedError(error);
+  }
+}
+
+async function selectedSession(
+  options: SkillLibraryRequestOwner,
+  sessionKey: string,
+): Promise<{
+  target: SessionSharingTarget;
+  source: SessionSourceAssertion;
+  assertCurrent: () => void;
+  release: () => void | Promise<void>;
+}> {
+  const sourceCfg = options.context.getRuntimeConfig();
+  if (!isIncognitoSessionKey(sessionKey)) {
+    const profiles = await prepareSessionSharingProfiles(options.client);
+    const { agentId } = resolveSessionStoreIdentity({ cfg: sourceCfg, sessionKey });
+    const facts = await prepareSessionMutationFacts({ cfg: sourceCfg, sessionKey, agentId });
+    let entryRead:
+      | Awaited<ReturnType<typeof captureSessionEntryCurrentCheckAsyncInternal>>
+      | undefined;
+    let pins: ReturnType<typeof retainPreparedSessionEntryPredicate> | undefined;
+    let entryAuthority: Awaited<ReturnType<typeof prepareSessionSourceAuthority>> | undefined;
+    const release = async () => {
+      try {
+        await entryAuthority?.release?.();
+      } finally {
+        pins?.release();
+        entryRead?.release();
+        facts.release();
+      }
+    };
+    try {
+      const identity = facts.readCurrent(sourceCfg).target;
+      entryRead = await captureSessionEntryCurrentCheckAsyncInternal({
+        agentId: identity.agentId,
+        sessionKey: identity.storeKey,
+        storePath: identity.readSource?.path ?? identity.storePath,
+        fields: ["pluginOwnerId"],
+        errorMessage: "Session selection changed; refresh and retry.",
+      });
+      entryAuthority = await prepareSessionSourceAuthority(entryRead.source);
+      const entry = entryRead.entry;
+      const readSource = identity.readSource;
+      if (!entry || !readSource || typeof readSource.databaseIdentity !== "string") {
+        throw new SkillLibraryError("NOT_FOUND", "Session not found.");
+      }
+      pins = retainPreparedSessionEntryPredicate({
+        databaseIdentity: `file:${readSource.databaseIdentity}`,
+        sessionKey: identity.storeKey,
+        entry,
+        matches: (_before, after) =>
+          isDeepStrictEqual(entry.skillLibrarySelections, after?.skillLibrarySelections),
+      });
+      const currentTarget = () => {
+        entryAuthority!.assertCurrent();
+        const cfg = options.context.getRuntimeConfig();
+        const current = facts.readCurrent(cfg);
+        if (
+          !current.target ||
+          current.target.entry.sessionId !== entry.sessionId ||
+          current.target.entry.lifecycleRevision !== entry.lifecycleRevision
+        ) {
+          throw new SkillLibraryError("CONFLICT", "Session selection changed; refresh and retry.");
+        }
+        const sharing = prepareProjectedSessionSharing({
+          cfg,
+          client: options.client,
+          profiles,
+          isMember: (_target, id) => current.membership.has(id),
+        });
+        const error = sharing.authorizeTarget(current.target);
+        if (error) {
+          throw new SessionMutationAuthorizationChangedError(error);
+        }
+        return { ...current.target, entry };
+      };
+      const target = currentTarget();
+      const assertMutationCurrent = () => assertPluginMutationCurrent(options, currentTarget());
+      const source = composeSessionSourceAssertion([entryRead.source], (assertSources) => {
+        assertSources();
+        assertMutationCurrent();
+      });
+      return {
+        target,
+        source,
+        assertCurrent() {
+          currentTarget();
+          if (!pins!.isCurrent()) {
+            throw new SkillLibraryError(
+              "CONFLICT",
+              "Session selection changed; refresh and retry.",
+            );
+          }
+        },
+        release,
+      };
+    } catch (error) {
+      await release();
+      throw error;
+    }
+  }
+  const identity = resolveSessionStoreIdentity({ cfg: sourceCfg, sessionKey });
+  const profiles = await prepareSessionSharingProfiles(options.client);
+  let active = true;
+  const actorFacts = captureSessionSharingMemoryFacts(
+    {
+      sessionKey: identity.canonicalKey,
+      agentId: identity.agentId,
+      resolved: {
+        storePath: resolveSessionStorePathCore(sourceCfg.session?.store, {
+          agentId: identity.agentId,
+        }),
+      },
+    },
+    () => {
+      if (!active) {
+        throw new SkillLibraryError("CONFLICT", "Session selection was released.");
+      }
+    },
+  );
+  if (!actorFacts) {
+    throw new SkillLibraryError("NOT_FOUND", "Session not found.");
+  }
+  const assertRouting = captureSessionMutationRouting(sourceCfg);
+  const resolve = (): SessionSharingTarget => {
     const cfg = options.context.getRuntimeConfig();
-    const target = resolveSessionSharingTarget({ cfg, sessionKey });
+    assertRouting(cfg);
+    const { target, membership } = actorFacts.readCurrent();
     if (!target) {
       throw new SkillLibraryError("NOT_FOUND", "Session not found.");
     }
-    const error = authorizeSessionSharingTarget({ cfg, client: options.client, target });
+    const sharing = prepareProjectedSessionSharing({
+      cfg,
+      client: options.client,
+      profiles,
+      isMember: (_target, id) => membership.has(id),
+    });
+    const error = sharing.authorizeTarget(target);
     if (error) {
       throw new SessionMutationAuthorizationChangedError(error);
     }
     return target;
   };
   const target = resolve();
-  return {
-    target,
-    assertCurrent: () => {
+  try {
+    const currentTarget = () => {
       const current = resolve();
       if (
         current.entry.sessionId !== target.entry.sessionId ||
         current.entry.lifecycleRevision !== target.entry.lifecycleRevision ||
-        JSON.stringify(current.entry.skillLibrarySelections) !==
-          JSON.stringify(target.entry.skillLibrarySelections)
+        current.entry.pluginOwnerId !== target.entry.pluginOwnerId
       ) {
         throw new SkillLibraryError("CONFLICT", "Session selection changed; refresh and retry.");
       }
-    },
-  };
+      return current;
+    };
+    const assertCurrent = () => {
+      const current = currentTarget();
+      if (
+        JSON.stringify(current.entry.skillLibrarySelections) !==
+        JSON.stringify(target.entry.skillLibrarySelections)
+      ) {
+        throw new SkillLibraryError("CONFLICT", "Session selection changed; refresh and retry.");
+      }
+    };
+    const assertMutationCurrent = () => assertPluginMutationCurrent(options, currentTarget());
+    assertCurrent();
+    const source: SessionSourceAssertion = Object.assign(assertMutationCurrent, {
+      async prepareSessionSource() {
+        assertMutationCurrent();
+        return { assertCurrent: assertMutationCurrent, checks: [] };
+      },
+    });
+    return {
+      target,
+      assertCurrent,
+      source,
+      release: () => {
+        active = false;
+      },
+    };
+  } catch (error) {
+    active = false;
+    throw error;
+  }
 }
 
 function libraryHandler<P extends Record<string, unknown>>(
@@ -210,8 +359,10 @@ function libraryHandler<P extends Record<string, unknown>>(
     options: GatewayRequestHandlerOptions,
   ) => unknown,
 ): GatewayRequestHandlers[string] {
-  return defineValidatedGatewayHandler(name, validate, async (options) => {
-    try {
+  return defineValidatedGatewayHandler(
+    name,
+    validate,
+    async (options) => {
       options.respond(
         true,
         await run(
@@ -229,104 +380,88 @@ function libraryHandler<P extends Record<string, unknown>>(
         ),
         undefined,
       );
-    } catch (error) {
+    },
+    (error) => {
       if (error instanceof SessionMutationAuthorizationChangedError) {
-        options.respond(false, undefined, error.error);
-        return;
+        return error.error;
       }
-      options.respond(
-        false,
-        undefined,
-        error instanceof SkillLibraryError
-          ? errorShape(ErrorCodes.INVALID_REQUEST, error.message, {
-              details: {
-                code: `SKILL_LIBRARY_${error.code}`,
-                ...(error.currentRevision ? { currentRevision: error.currentRevision } : {}),
-              },
-            })
-          : errorShape(
-              ErrorCodes.UNAVAILABLE,
-              "Unable to complete the skill library operation. Review the bundle or retry the request.",
-            ),
-      );
-    }
-  });
+      return error instanceof SkillLibraryError
+        ? errorShape(ErrorCodes.INVALID_REQUEST, error.message, {
+            details: {
+              code: `SKILL_LIBRARY_${error.code}`,
+              ...(error.currentRevision ? { currentRevision: error.currentRevision } : {}),
+            },
+          })
+        : errorShape(
+            ErrorCodes.UNAVAILABLE,
+            "Unable to complete the skill library operation. Review the bundle or retry the request.",
+          );
+    },
+  );
 }
 
 export const skillsLibraryHandlers: GatewayRequestHandlers = {
   "skills.library.list": libraryHandler(
     "skills.library.list",
     validateSkillsLibraryListParams,
-    (authority, params, options) => {
-      const session = params.sessionKey ? selectedSession(options, params.sessionKey) : undefined;
-      const result = listSkillLibrary(authority, params);
-      if (session) {
-        const pins = session.target.entry.skillLibrarySelections ?? [];
-        const selections =
-          readSkillLibraryStore(
-            (db) =>
-              pins.map((pin) => {
-                const row = selectSkillLibraryRow(db, pin.skillId);
-                const entry =
-                  row && projectSkillLibraryEntry(db, row, authority, pin.revision, true);
-                if (!entry) {
-                  throw new SkillLibraryError(
-                    "NOT_FOUND",
-                    "A pinned skill revision is unavailable. Restore the library or detach it explicitly.",
-                  );
-                }
-                return {
-                  ...pin,
-                  slug: entry.slug,
-                  description: entry.description,
-                  ownerLabel: entry.ownerLabel,
-                };
-              }),
-            {},
-          ) ?? [];
-        if (selections.length !== pins.length) {
-          throw new SkillLibraryError(
-            "NOT_FOUND",
-            "Pinned skill library is unavailable. Restore it or detach the selected skills explicitly.",
-          );
+    async (authority, params, options) => {
+      const session = params.sessionKey
+        ? await selectedSession(options, params.sessionKey)
+        : undefined;
+      try {
+        const access = captureSkillLibraryAccess(authority);
+        const listed = await access.read("list", {});
+        const result = projectSkillLibraryList(listed.value, params);
+        if (session) {
+          const pins = session.target.entry.skillLibrarySelections ?? [];
+          const selected = await access.read("pins", pins);
+          listed.assertCurrent();
+          selected.assertCurrent();
+          session.assertCurrent();
+          result.session = {
+            sessionKey: session.target.canonicalKey,
+            selections: selected.value,
+            attachable: listed.value.entries.filter(
+              (entry) => !pins.some((pin) => pin.skillId === entry.skillId),
+            ),
+          };
         }
-        session.assertCurrent();
-        result.session = {
-          sessionKey: session.target.canonicalKey,
-          selections,
-          attachable: listSkillLibrary(authority).entries.filter(
-            (entry) => !pins.some((pin) => pin.skillId === entry.skillId),
-          ),
-        };
+        return result;
+      } finally {
+        await session?.release();
       }
-      return result;
     },
   ),
   "skills.library.read": libraryHandler(
     "skills.library.read",
     validateSkillsLibraryReadParams,
-    (authority, params, options) => {
+    async (authority, params, options) => {
       if (!params.sessionKey) {
         return readSkillLibrary(authority, params.skillId, params.revision);
       }
-      const session = selectedSession(options, params.sessionKey);
-      const pin = session.target.entry.skillLibrarySelections?.find(
-        (selection) =>
-          selection.skillId === params.skillId && selection.revision === params.revision,
-      );
-      if (!pin) {
-        throw new SkillLibraryError(
-          "FORBIDDEN",
-          "Session reads require an exact selected skillId and revision.",
+      const session = await selectedSession(options, params.sessionKey);
+      try {
+        const pin = session.target.entry.skillLibrarySelections?.find(
+          (selection) =>
+            selection.skillId === params.skillId && selection.revision === params.revision,
         );
+        if (!pin) {
+          session.assertCurrent();
+          throw new SkillLibraryError(
+            "FORBIDDEN",
+            "Session reads require an exact selected skillId and revision.",
+          );
+        }
+        return await readSkillLibrary(
+          authority,
+          params.skillId,
+          params.revision,
+          {},
+          { revision: pin.revision, assertSessionAccess: session.assertCurrent },
+        );
+      } finally {
+        await session.release();
       }
-      return readSkillLibrary(
-        authority,
-        params.skillId,
-        params.revision,
-        {},
-        { revision: pin.revision, assertSessionAccess: session.assertCurrent },
-      );
     },
   ),
   "skills.library.save": libraryHandler(

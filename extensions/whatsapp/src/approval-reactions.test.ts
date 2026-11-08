@@ -1,7 +1,6 @@
 // Whatsapp tests cover approval reactions plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  clearWhatsAppApprovalReactionTargetsForTest,
   maybeResolveWhatsAppApprovalReaction,
   registerWhatsAppApprovalReactionTarget,
   resolveWhatsAppApprovalReactionTargetWithPersistence,
@@ -12,6 +11,12 @@ import { resolveEquivalentWhatsAppDirectChatJids, resolveJidToE164 } from "./tar
 type LidLookup = NonNullable<
   NonNullable<Parameters<typeof resolveEquivalentWhatsAppDirectChatJids>[1]>["lidLookup"]
 >;
+
+const reactionStores = await vi.hoisted(async () =>
+  (await import("./approval-reactions.test-support.js")).createWhatsAppReactionStores(),
+);
+// mock-isolation: Preserve real exports while collecting only this suite's reaction stores.
+vi.mock("openclaw/plugin-sdk/approval-reaction-runtime", reactionStores.mockRuntime);
 
 const resolverMocks = vi.hoisted(() => ({
   resolveWhatsAppApproval: vi.fn(),
@@ -87,7 +92,7 @@ function buildReactionMessage(params: {
 
 describe("WhatsApp approval reactions", () => {
   beforeEach(() => {
-    clearWhatsAppApprovalReactionTargetsForTest();
+    reactionStores.forEach((store) => store.clearForTest());
     resolverMocks.resolveWhatsAppApproval.mockReset();
     resolverMocks.resolveWhatsAppApproval.mockResolvedValue({
       applied: true,
@@ -170,7 +175,7 @@ describe("WhatsApp approval reactions", () => {
   it("rejects persisted targets containing an invalid approval decision", async () => {
     const runtime = vi.spyOn(whatsappRuntime, "getOptionalWhatsAppRuntime").mockReturnValue({
       state: {
-        openKeyedStore: () => ({
+        openKeyedStoreV2: () => ({
           register: async () => {},
           lookup: async () => ({
             version: 1,
@@ -185,7 +190,7 @@ describe("WhatsApp approval reactions", () => {
       },
     } as never);
     try {
-      clearWhatsAppApprovalReactionTargetsForTest();
+      reactionStores.forEach((store) => store.clearForTest());
       await expect(
         resolveWhatsAppApprovalReactionTargetWithPersistence({
           accountId: "default",
@@ -195,7 +200,7 @@ describe("WhatsApp approval reactions", () => {
         }),
       ).resolves.toBeNull();
     } finally {
-      clearWhatsAppApprovalReactionTargetsForTest();
+      reactionStores.forEach((store) => store.clearForTest());
       runtime.mockRestore();
     }
   });
@@ -244,7 +249,6 @@ describe("WhatsApp approval reactions", () => {
         channel: "whatsapp",
         accountId: "default",
         senderId: "+15551230000",
-        gatewayUrl: undefined,
       });
     },
   );
@@ -316,7 +320,6 @@ describe("WhatsApp approval reactions", () => {
       channel: "whatsapp",
       accountId: "default",
       senderId: "+15551230001",
-      gatewayUrl: undefined,
     });
   });
 
@@ -382,7 +385,6 @@ describe("WhatsApp approval reactions", () => {
       channel: "whatsapp",
       accountId: "default",
       senderId: testCase.actorId,
-      gatewayUrl: undefined,
     });
   });
 

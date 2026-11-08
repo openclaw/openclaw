@@ -1,4 +1,3 @@
-import type { DatabaseSync } from "node:sqlite";
 import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
@@ -7,12 +6,43 @@ import type {
   GatewayOwnerLeaseIdentity,
   GatewayOwnerSupervisor,
 } from "./gateway-owner-lease.types.js";
+import type { EngineConnection } from "./sql-connection.js";
 import {
   parseStateLeaseProcessOwner,
   readStateLeaseProcessOwnerStatus,
 } from "./state-lease-process-owner.js";
 
 export const gatewayOwnerKey = { scope: "gateway-owner", key: "global" } as const;
+
+export type GatewayOwnerLeaseRow = NonNullable<ReturnType<typeof readOpenClawStateLease>>;
+
+export const GATEWAY_OWNER_LEASE_COLUMNS_SQL = `SELECT a.attname AS name, pg_catalog.format_type(a.atttypid, a.atttypmod) AS type
+  FROM pg_catalog.pg_class c
+  JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+  JOIN pg_catalog.pg_attribute a ON a.attrelid = c.oid
+  WHERE n.nspname = $1 AND c.relname = 'state_leases' AND c.relkind IN ('r', 'p')
+    AND a.attnum > 0 AND NOT a.attisdropped`;
+
+export function assertGatewayOwnerLeaseColumns(
+  columns: readonly { name?: unknown; type?: unknown }[],
+): void {
+  const required = {
+    scope: "text",
+    lease_key: "text",
+    owner: "text",
+    expires_at: "bigint",
+    heartbeat_at: "bigint",
+    payload_json: "text",
+    created_at: "bigint",
+  };
+  if (
+    Object.entries(required).some(
+      ([name, type]) => !columns.some((column) => column.name === name && column.type === type),
+    )
+  ) {
+    throw new Error("PostgreSQL Gateway owner lease table is missing or incompatible");
+  }
+}
 
 function parseSupervisor(value: unknown): GatewayOwnerSupervisor | null {
   if (value === null) {
@@ -33,13 +63,19 @@ function parseSupervisor(value: unknown): GatewayOwnerSupervisor | null {
 
 /** Read through the caller's admitted connection when ownership guards a write. */
 export function readGatewayOwnerLeaseFromDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   port?: number,
 ): GatewayOwnerLeaseIdentity | undefined {
   if (!tableExists(db, "state_leases")) {
     return undefined;
   }
-  const row = readOpenClawStateLease(db, gatewayOwnerKey);
+  return decodeGatewayOwnerLease(readOpenClawStateLease(db, gatewayOwnerKey), port);
+}
+
+export function decodeGatewayOwnerLease(
+  row: GatewayOwnerLeaseRow | undefined,
+  port?: number,
+): GatewayOwnerLeaseIdentity | undefined {
   if (!row) {
     return undefined;
   }
@@ -66,11 +102,16 @@ export function readGatewayOwnerLeaseFromDatabase(
   return {
     ...processOwner,
     owner: row.owner,
+    heartbeatAt: row.heartbeatAt ?? row.createdAt,
     port: payload.port,
     mode: payload.mode,
     supervisor,
+    ...(typeof payload.listeningAt === "number" ? { listeningAt: payload.listeningAt } : {}),
+    ...(typeof payload.stateDatabaseProvenance === "string"
+      ? { stateDatabaseProvenance: payload.stateDatabaseProvenance }
+      : {}),
     // Expiry cannot revoke the separate physical Gateway coordinator.
-    state: readStateLeaseProcessOwnerStatus(processOwner),
+    state: readStateLeaseProcessOwnerStatus(processOwner, row.heartbeatAt ?? row.createdAt),
     expired: row.expiresAt === null || row.expiresAt <= Date.now(),
   };
 }

@@ -1,0 +1,36 @@
+rules:
+  - id: openclaw-dangerous-host-env-override-pivots
+    message: Dangerous host env override pivot reaches host env sanitization boundary or policy.
+    severity: ERROR
+    # OpenGrep test parses mixed-language fixtures with the first language.
+    languages:
+      - typescript
+      - javascript
+      - json
+    pattern-either:
+      - patterns:
+          - pattern-inside: |
+              { ... }
+          - pattern-regex: '"(GIT_SSH_COMMAND|GIT_EXEC_PATH|GIT_TEMPLATE_DIR|YARN_RC_FILENAME|CC|CXX|CMAKE_C_COMPILER|CMAKE_CXX_COMPILER|RUSTC_WRAPPER|CARGO_BUILD_RUSTC|CARGO_BUILD_RUSTC_WRAPPER|MAKEFLAGS|MFLAGS)"'
+          # Reading an inherited value is not an override; enclosing keys still match.
+          - pattern-not-inside: resolveEnvironmentValue(...)
+      - patterns:
+          - pattern-inside: |
+              { ... }
+          - pattern-regex: '"(GIT_CONFIG_[A-Z0-9_]+|NPM_CONFIG_[A-Z0-9_]+|CARGO_REGISTRIES_[A-Z0-9_]+|TF_VAR_[A-Z0-9_]+)"'
+          - pattern-not-inside: resolveEnvironmentValue(...)
+      - patterns:
+          - pattern-either:
+              - pattern: |
+                  sanitizeHostExecEnv({ ..., overrides: { ..., $KEY: $VALUE, ... }, ... })
+              - pattern: |
+                  sanitizeSystemRunEnvOverrides({ ..., overrides: { ..., $KEY: $VALUE, ... }, ... })
+          - metavariable-regex:
+              metavariable: $KEY
+              regex: ^(GIT_SSH_COMMAND|GIT_EXEC_PATH|GIT_TEMPLATE_DIR|YARN_RC_FILENAME|CC|CXX|CMAKE_C_COMPILER|CMAKE_CXX_COMPILER|RUSTC_WRAPPER|CARGO_BUILD_RUSTC|CARGO_BUILD_RUSTC_WRAPPER|MAKEFLAGS|MFLAGS|GIT_CONFIG_[A-Z0-9_]+|NPM_CONFIG_[A-Z0-9_]+|CARGO_REGISTRIES_[A-Z0-9_]+|TF_VAR_[A-Z0-9_]+)$
+    metadata:
+      ghsa: GHSA-J425-WHC4-4JGC
+      advisory-url: https://github.com/openclaw/openclaw/security/advisories/GHSA-J425-WHC4-4JGC
+      detector-bucket: precise
+      source-run: 2026-04-17T07-37-10Z
+      source-rule-id: openclaw-dangerous-host-env-override-pivots

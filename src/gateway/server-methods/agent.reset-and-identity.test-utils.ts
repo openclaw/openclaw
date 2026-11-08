@@ -1,11 +1,17 @@
 // Imported by agent.test.ts to keep its mocked suite in one Vitest module graph.
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
+import type { sendDurableMessageBatchCore } from "../../channels/message/runtime.js";
+import { summarizeOutboundPayloadForTransport } from "../../infra/outbound/payloads.js";
+import { defaultRuntime } from "../../runtime.js";
+import { getRpcSource, type RpcSourceRef } from "../../sessions/session-controller.rpc-sources.js";
 import * as participantRecording from "../../sessions/session-participant-recording.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withTestDir } from "../../test-helpers/temp-dir.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
+import { gatewayProfile } from "../server/client-fixtures.test-support.js";
 import { registerAgentResetAuthorityTests } from "./agent.reset-authority.test-support.js";
 import {
   REAL_PNG,
@@ -22,6 +28,7 @@ import {
   mockCallArg,
   expectRespondError,
   mockMainSessionEntry,
+  mockSuccessfulAgentCommand,
   setupNewYorkTimeConfig,
   resetTimeConfig,
   expectResetCall,
@@ -34,6 +41,7 @@ import {
   invokeAgentIdentityGet,
   describe0AfterEach0,
 } from "./agent.test-harness.js";
+import { getAgentTestStorePath } from "./agent.user-turn-recorder.test-support.js";
 import type { GatewayRequestContext } from "./types.js";
 
 const mocks = getAgentTestMocks();
@@ -67,12 +75,11 @@ describe("gateway agent handler", () => {
         },
         ...(kind !== "profileless"
           ? {
-              authenticatedUserProfile: {
-                profileId: profile.id,
-                displayName: profile.displayName,
-                hasAvatar: false,
-                updatedAt: profile.updatedAt,
-              },
+              authenticatedUserProfile: gatewayProfile(
+                profile.id,
+                profile.displayName,
+                profile.updatedAt,
+              ),
             }
           : {}),
         ...(kind === "synthetic" ? { internal: { syntheticClient: true } } : {}),
@@ -113,86 +120,95 @@ describe("gateway agent handler", () => {
     },
   );
 
-  it("routes voice wake trigger to configured session target", async () => {
-    mocks.loadVoiceWakeRoutingConfig.mockResolvedValue({
-      version: 1,
-      defaultTarget: { mode: "current" },
-      routes: [],
-      updatedAtMs: 0,
-    });
-    mocks.resolveVoiceWakeRouteByTrigger.mockReturnValue({ sessionKey: "agent:main:voice" });
-
-    mocks.loadSessionEntry.mockReturnValue({
-      cfg: {},
-      storePath: "/tmp/sessions.json",
-      entry: {
-        sessionId: "voice-session-id",
-        updatedAt: Date.now(),
-      },
+  it.each([
+    {
+      name: "routes voice wake trigger to configured session target",
+      routeSessionKey: "agent:main:voice",
+      sessionId: "voice-session-id",
       canonicalKey: "agent:main:voice",
-    });
-    mocks.updateSessionStore.mockResolvedValue(undefined);
-    mocks.agentCommand.mockReturnValue(new Promise(() => {}));
-    const respond = vi.fn();
-    await invokeAgent(
-      {
-        message: "do thing",
-        sessionKey: "main",
-        voiceWakeTrigger: "robot wake",
-        idempotencyKey: "test-voice-route",
-      },
-      {
-        respond,
-        context: makeContext(),
-        reqId: "voice-1",
-      },
-    );
-
-    const callArgs = await waitForAgentCommandCall<{ sessionKey?: string }>();
-    expect(callArgs.sessionKey).toBe("agent:main:voice");
-  });
-
-  it("ignores voice wake session route targeting unknown agent", async () => {
+      runId: "test-voice-route",
+      reqId: "voice-1",
+      expectedSessionKey: "agent:main:voice",
+    },
+    {
+      name: "ignores voice wake session route targeting unknown agent",
+      routeSessionKey: "agent:ghost:main",
+      sessionId: "main-session-id",
+      canonicalKey: "agent:main:main",
+      runId: "test-voice-route-unknown",
+      reqId: "voice-2",
+      expectedSessionKey: "agent:main:main",
+    },
+  ])("$name", async (scenario) => {
+    const { routeSessionKey, sessionId, canonicalKey, runId, reqId, expectedSessionKey } = scenario;
     mocks.loadVoiceWakeRoutingConfig.mockResolvedValue({
       version: 1,
       defaultTarget: { mode: "current" },
       routes: [],
       updatedAtMs: 0,
     });
-    mocks.resolveVoiceWakeRouteByTrigger.mockReturnValue({ sessionKey: "agent:ghost:main" });
+    mocks.resolveVoiceWakeRouteByTrigger.mockReturnValue({ sessionKey: routeSessionKey });
 
     mocks.loadSessionEntry.mockReturnValue({
       cfg: {},
-      storePath: "/tmp/sessions.json",
+      storePath: getAgentTestStorePath(),
       entry: {
-        sessionId: "main-session-id",
+        sessionId,
         updatedAt: Date.now(),
       },
-      canonicalKey: "agent:main:main",
+      canonicalKey,
     });
     mocks.updateSessionStore.mockResolvedValue(undefined);
-    mocks.agentCommand.mockReturnValue(new Promise(() => {}));
+    const finishRun = createDeferred();
+    let acceptedSource: RpcSourceRef | undefined;
+    let ownerSettlement: Promise<void> | undefined;
+    mocks.agentCommand.mockImplementation(async () => {
+      acceptedSource = getRpcSource(runId);
+      ownerSettlement = acceptedSource?.input.claim?.operation?.ownerSettlement;
+      await finishRun.promise;
+      return { payloads: [{ text: "ok" }], meta: { durationMs: 1 } };
+    });
 
-    const respond = vi.fn();
-    await invokeAgent(
-      {
-        message: "do thing",
-        sessionKey: "main",
-        voiceWakeTrigger: "robot wake",
-        idempotencyKey: "test-voice-route-unknown",
-      },
-      {
-        respond,
-        context: makeContext(),
-        reqId: "voice-2",
-      },
-    );
+    try {
+      const respond = vi.fn();
+      await invokeAgent(
+        {
+          message: "do thing",
+          sessionKey: "main",
+          voiceWakeTrigger: "robot wake",
+          idempotencyKey: runId,
+        },
+        {
+          respond,
+          context: makeContext(),
+          reqId,
+        },
+      );
 
-    const callArgs = await waitForAgentCommandCall<{ sessionKey?: string }>();
-    expect(callArgs.sessionKey).toBe("agent:main:main");
+      const callArgs = await waitForAgentCommandCall<{ sessionKey?: string }>();
+      expect(callArgs.sessionKey).toBe(expectedSessionKey);
+    } finally {
+      finishRun.resolve();
+      await Promise.all([acceptedSource?.input.settlement.promise, ownerSettlement]);
+    }
   });
 
-  it("applies default voice wake route when trigger field is present but empty", async () => {
+  it.each([
+    {
+      name: "applies default voice wake route when trigger field is present but empty",
+      params: { voiceWakeTrigger: " " },
+      expectedTrigger: undefined,
+      runId: "test-voice-route-default-target",
+      reqId: "voice-3",
+    },
+    {
+      name: "trims whitespace-only delivery fields before disabling voice wake auto-routing",
+      params: { to: "   ", replyTo: "   ", voiceWakeTrigger: "robot wake" },
+      expectedTrigger: "robot wake",
+      runId: "test-voice-route-whitespace-delivery",
+      reqId: "voice-4",
+    },
+  ])("$name", async ({ params, expectedTrigger, runId, reqId }) => {
     mocks.loadVoiceWakeRoutingConfig.mockResolvedValue({
       version: 1,
       defaultTarget: { sessionKey: "agent:main:voice" },
@@ -203,7 +219,7 @@ describe("gateway agent handler", () => {
 
     mocks.loadSessionEntry.mockImplementation((sessionKey: string) => ({
       cfg: {},
-      storePath: "/tmp/sessions.json",
+      storePath: getAgentTestStorePath(),
       entry: {
         sessionId: "voice-session-id",
         updatedAt: Date.now(),
@@ -211,85 +227,30 @@ describe("gateway agent handler", () => {
       canonicalKey: sessionKey === "main" ? "agent:main:main" : sessionKey,
     }));
     mocks.updateSessionStore.mockResolvedValue(undefined);
-    mocks.agentCommand.mockResolvedValue({
-      payloads: [{ text: "ok" }],
-      meta: { durationMs: 100 },
-    });
+    mockSuccessfulAgentCommand();
 
     const respond = vi.fn();
     await invokeAgent(
       {
         message: "do thing",
         sessionKey: "main",
-        voiceWakeTrigger: " ",
-        idempotencyKey: "test-voice-route-default-target",
+        ...params,
+        idempotencyKey: runId,
       },
       {
         respond,
         context: makeContext(),
-        reqId: "voice-3",
+        reqId,
       },
     );
 
     const callArgs = await waitForAgentCommandCall<{ sessionKey?: string }>();
     expect(callArgs.sessionKey).toBe("agent:main:voice");
     const routeCall = mocks.resolveVoiceWakeRouteByTrigger.mock.calls.find(([args]) => {
-      return (args as Record<string, unknown>).trigger === undefined;
+      return (args as Record<string, unknown>).trigger === expectedTrigger;
     });
     const routeArgs = expectRecordFields(requireValue(routeCall, "route call missing")[0], {
-      trigger: undefined,
-    });
-    expect(typeof routeArgs.config).toBe("object");
-  });
-
-  it("trims whitespace-only delivery fields before disabling voice wake auto-routing", async () => {
-    mocks.loadVoiceWakeRoutingConfig.mockResolvedValue({
-      version: 1,
-      defaultTarget: { sessionKey: "agent:main:voice" },
-      routes: [],
-      updatedAtMs: 0,
-    });
-    mocks.resolveVoiceWakeRouteByTrigger.mockReturnValue({ sessionKey: "agent:main:voice" });
-
-    mocks.loadSessionEntry.mockImplementation((sessionKey: string) => ({
-      cfg: {},
-      storePath: "/tmp/sessions.json",
-      entry: {
-        sessionId: "voice-session-id",
-        updatedAt: Date.now(),
-      },
-      canonicalKey: sessionKey === "main" ? "agent:main:main" : sessionKey,
-    }));
-    mocks.updateSessionStore.mockResolvedValue(undefined);
-    mocks.agentCommand.mockResolvedValue({
-      payloads: [{ text: "ok" }],
-      meta: { durationMs: 100 },
-    });
-
-    const respond = vi.fn();
-    await invokeAgent(
-      {
-        message: "do thing",
-        sessionKey: "main",
-        to: "   ",
-        replyTo: "   ",
-        voiceWakeTrigger: "robot wake",
-        idempotencyKey: "test-voice-route-whitespace-delivery",
-      },
-      {
-        respond,
-        context: makeContext(),
-        reqId: "voice-4",
-      },
-    );
-
-    const callArgs = await waitForAgentCommandCall<{ sessionKey?: string }>();
-    expect(callArgs.sessionKey).toBe("agent:main:voice");
-    const routeCall = mocks.resolveVoiceWakeRouteByTrigger.mock.calls.find(([args]) => {
-      return (args as Record<string, unknown>).trigger === "robot wake";
-    });
-    const routeArgs = expectRecordFields(requireValue(routeCall, "route call missing")[0], {
-      trigger: "robot wake",
+      trigger: expectedTrigger,
     });
     expect(typeof routeArgs.config).toBe("object");
   });
@@ -305,7 +266,7 @@ describe("gateway agent handler", () => {
 
     mocks.loadSessionEntry.mockImplementation((sessionKey: string) => ({
       cfg: {},
-      storePath: "/tmp/sessions.json",
+      storePath: getAgentTestStorePath(),
       entry: {
         sessionId: "voice-session-id",
         updatedAt: Date.now(),
@@ -313,10 +274,7 @@ describe("gateway agent handler", () => {
       canonicalKey: sessionKey,
     }));
     mocks.updateSessionStore.mockResolvedValue(undefined);
-    mocks.agentCommand.mockResolvedValue({
-      payloads: [{ text: "ok" }],
-      meta: { durationMs: 100 },
-    });
+    mockSuccessfulAgentCommand();
     mocks.loadVoiceWakeRoutingConfig.mockClear();
     mocks.resolveVoiceWakeRouteByTrigger.mockClear();
 
@@ -342,7 +300,7 @@ describe("gateway agent handler", () => {
   });
 
   it("does not auto-route voice wake requests with another agent's explicit main session", async () => {
-    const opsAgentCfg = { agents: { list: [{ id: "main" }, { id: "ops" }] } };
+    const opsAgentCfg = { agents: { entries: { main: {}, ops: {} } } };
     mocks.listAgentIds.mockReturnValue(["main", "ops"]);
     mocks.loadVoiceWakeRoutingConfig.mockResolvedValue({
       version: 1,
@@ -354,7 +312,7 @@ describe("gateway agent handler", () => {
 
     mocks.loadSessionEntry.mockImplementation((sessionKey: string) => ({
       cfg: opsAgentCfg,
-      storePath: "/tmp/sessions.json",
+      storePath: getAgentTestStorePath(),
       entry: {
         sessionId: "voice-session-id",
         updatedAt: Date.now(),
@@ -362,10 +320,7 @@ describe("gateway agent handler", () => {
       canonicalKey: sessionKey,
     }));
     mocks.updateSessionStore.mockResolvedValue(undefined);
-    mocks.agentCommand.mockResolvedValue({
-      payloads: [{ text: "ok" }],
-      meta: { durationMs: 100 },
-    });
+    mockSuccessfulAgentCommand();
     mocks.loadVoiceWakeRoutingConfig.mockClear();
     mocks.resolveVoiceWakeRouteByTrigger.mockClear();
     mocks.agentCommand.mockClear();
@@ -402,7 +357,7 @@ describe("gateway agent handler", () => {
 
     mocks.loadSessionEntry.mockImplementation((sessionKey: string) => ({
       cfg: {},
-      storePath: "/tmp/sessions.json",
+      storePath: getAgentTestStorePath(),
       entry: {
         sessionId: sessionKey === "main" ? "main-session-id" : "voice-session-id",
         updatedAt: Date.now(),
@@ -410,10 +365,7 @@ describe("gateway agent handler", () => {
       canonicalKey: sessionKey === "main" ? "agent:main:main" : sessionKey,
     }));
     mocks.updateSessionStore.mockResolvedValue(undefined);
-    mocks.agentCommand.mockResolvedValue({
-      payloads: [{ text: "ok" }],
-      meta: { durationMs: 100 },
-    });
+    mockSuccessfulAgentCommand();
     mocks.loadVoiceWakeRoutingConfig.mockClear();
     mocks.resolveVoiceWakeRouteByTrigger.mockClear();
 
@@ -452,9 +404,9 @@ describe("gateway agent handler", () => {
     mocks.loadSessionEntry.mockReturnValue({
       cfg: {
         session: { mainKey: "work" },
-        agents: { list: [{ id: "main", default: true }] },
+        agents: { entries: { main: {} } },
       },
-      storePath: "/tmp/sessions.json",
+      storePath: getAgentTestStorePath(),
       entry: {
         sessionId: "existing-session-id",
         updatedAt: Date.now(),
@@ -473,10 +425,7 @@ describe("gateway agent handler", () => {
       capturedStore = store;
     });
 
-    mocks.agentCommand.mockResolvedValue({
-      payloads: [{ text: "ok" }],
-      meta: { durationMs: 100 },
-    });
+    mockSuccessfulAgentCommand();
 
     await invokeAgent(
       {
@@ -530,10 +479,7 @@ describe("gateway agent handler", () => {
     mockSessionResetSuccess({ reason: "new", sessionId: "reset-session-id" });
     mockMainSessionEntry({ sessionId: "reset-session-id" });
     mocks.performGatewaySessionReset.mockClear();
-    mocks.agentCommand.mockResolvedValue({
-      payloads: [{ text: "ok" }],
-      meta: { durationMs: 100 },
-    });
+    mockSuccessfulAgentCommand();
 
     await invokeAgent(
       {
@@ -652,11 +598,19 @@ describe("gateway agent handler", () => {
   });
 
   it("uses the selected session target for bare /reset delivery when to is an agent session key", async () => {
+    const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
+    const stdout = vi.spyOn(defaultRuntime, "writeStdout").mockImplementation(() => {});
+    const json = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
+    onTestFinished(() => {
+      log.mockRestore();
+      stdout.mockRestore();
+      json.mockRestore();
+    });
     const sessionKey = "agent:main:openclaw-weixin:direct:o9cq802hhmfc@im.wechat";
     mockSessionResetSuccess({ reason: "reset", key: sessionKey, sessionId: "wechat-session-id" });
     mocks.loadSessionEntry.mockImplementation((key: string) => ({
       cfg: {},
-      storePath: "/tmp/sessions.json",
+      storePath: getAgentTestStorePath(),
       entry: {
         sessionId: key === sessionKey ? "wechat-session-id" : "main-session-id",
         updatedAt: Date.now(),
@@ -682,11 +636,14 @@ describe("gateway agent handler", () => {
           }
         : undefined,
     );
-    mocks.sendDurableMessageBatch.mockResolvedValue({
-      status: "sent",
-      results: [],
-      receipt: {},
-    });
+    mocks.sendDurableMessageBatch.mockImplementation(
+      async (params: Parameters<typeof sendDurableMessageBatchCore>[0]) => {
+        for (const payload of params.payloads) {
+          params.onPayload?.(summarizeOutboundPayloadForTransport(payload));
+        }
+        return { status: "sent", results: [], receipt: {} };
+      },
+    );
     mocks.performGatewaySessionReset.mockClear();
     mocks.agentCommand.mockClear();
 
@@ -717,10 +674,14 @@ describe("gateway agent handler", () => {
       status: "sent",
       succeeded: true,
     });
+    expect(JSON.stringify([log.mock.calls, stdout.mock.calls, json.mock.calls])).not.toContain(
+      "✅ Session reset.",
+    );
     expect(mocks.sendDurableMessageBatch).toHaveBeenCalledWith(
       expect.objectContaining({
         channel: "openclaw-weixin",
         to: "o9cq802hhmfc@im.wechat",
+        payloads: [expect.objectContaining({ text: "✅ Session reset." })],
       }),
     );
   });
@@ -728,7 +689,7 @@ describe("gateway agent handler", () => {
   it("resets the selected global agent session for bare /new without startup context", async () => {
     mocks.listAgentIds.mockReturnValue(["main", "work"]);
     mocks.loadConfigReturn = {
-      agents: { list: [{ id: "main", default: true }, { id: "work" }] },
+      agents: { entries: { main: {}, work: {} } },
       session: { scope: "global" },
     };
     mocks.performGatewaySessionReset.mockClear();
@@ -803,7 +764,7 @@ describe("gateway agent handler", () => {
     setupNewYorkTimeConfig("2026-01-29T01:30:00.000Z");
     mocks.listAgentIds.mockReturnValue(["main", "work"]);
     mocks.loadConfigReturn = {
-      agents: { list: [{ id: "main", default: true }, { id: "work" }] },
+      agents: { entries: { main: {}, work: {} } },
       session: { scope: "global" },
     };
     mocks.performGatewaySessionReset.mockClear();
@@ -824,7 +785,7 @@ describe("gateway agent handler", () => {
     );
     mocks.loadSessionEntry.mockReturnValue({
       cfg: mocks.loadConfigReturn,
-      storePath: "/tmp/sessions.json",
+      storePath: getAgentTestStorePath(),
       entry: {
         sessionId: "global-work-reset-session",
         updatedAt: Date.now(),
@@ -832,10 +793,7 @@ describe("gateway agent handler", () => {
       canonicalKey: "global",
     });
     mocks.updateSessionStore.mockResolvedValue(undefined);
-    mocks.agentCommand.mockResolvedValue({
-      payloads: [{ text: "ok" }],
-      meta: { durationMs: 100 },
-    });
+    mockSuccessfulAgentCommand();
 
     await invokeAgent(
       {
@@ -870,8 +828,7 @@ describe("gateway agent handler", () => {
     );
 
     expect(mocks.agentCommand).not.toHaveBeenCalled();
-    const error = expectRespondError(respond, {});
-    expectStringFieldContains(error, "message", "malformed session key");
+    expectStringFieldContains(expectRespondError(respond, {}), "message", "malformed session key");
   });
 
   it.each(["/reset", "/new", "/reset check status"] as const)(
@@ -915,7 +872,7 @@ describe("gateway agent handler", () => {
     mocks.loadConfigReturn = {
       agents: {
         defaults: { workspace: "/tmp/workspace" },
-        list: [{ id: "main", identity: { avatar: "/Users/test/private/avatar.png" } }],
+        entries: { main: { identity: { avatar: "/Users/test/private/avatar.png" } } },
       },
     };
 
@@ -944,7 +901,7 @@ describe("gateway agent handler", () => {
       mocks.loadConfigReturn = {
         agents: {
           defaults: { workspace },
-          list: [{ id: "main", identity: { avatar: "avatars/main.png" } }],
+          entries: { main: { identity: { avatar: "avatars/main.png" } } },
         },
       };
 
@@ -968,7 +925,7 @@ describe("gateway agent handler", () => {
     ["text", "PS"],
   ] as const)("preserves %s avatar values in agent.identity.get", async (_kind, avatar) => {
     mocks.loadConfigReturn = {
-      agents: { list: [{ id: "main", identity: { avatar } }] },
+      agents: { entries: { main: { identity: { avatar } } } },
     };
 
     const respond = await invokeAgentIdentityGet(
@@ -982,7 +939,7 @@ describe("gateway agent handler", () => {
   it("prefixes same-origin avatar routes in agent.identity.get when Control UI has a base path", async () => {
     mocks.loadConfigReturn = {
       gateway: { controlUi: { basePath: "/openclaw" } },
-      agents: { list: [{ id: "main", identity: { avatar: "/avatar/main" } }] },
+      agents: { entries: { main: { identity: { avatar: "/avatar/main" } } } },
     };
 
     const respond = await invokeAgentIdentityGet(
@@ -1000,7 +957,7 @@ describe("gateway agent handler", () => {
       mocks.loadConfigReturn = {
         agents: {
           defaults: { workspace },
-          list: [{ id: "main", identity: { avatar: "avatars/missing.png" } }],
+          entries: { main: { identity: { avatar: "avatars/missing.png" } } },
         },
       };
 
@@ -1026,7 +983,7 @@ describe("gateway agent handler", () => {
         mocks.loadConfigReturn = {
           agents: {
             defaults: { workspace },
-            list: [{ id: "main", workspace, identity: { avatar: "avatar.png" } }],
+            entries: { main: { workspace, identity: { avatar: "avatar.png" } } },
           },
         };
 
@@ -1064,7 +1021,7 @@ describe("gateway agent handler", () => {
       mocks.loadConfigReturn = {
         agents: {
           defaults: { workspace },
-          list: [{ id: "main", workspace, identity: { avatar: "avatar.png" } }],
+          entries: { main: { workspace, identity: { avatar: "avatar.png" } } },
         },
       };
 
@@ -1101,7 +1058,7 @@ describe("gateway agent handler", () => {
       mocks.loadConfigReturn = {
         agents: {
           defaults: { workspace },
-          list: [{ id: "main", workspace, identity: { emoji: "🦞" } }],
+          entries: { main: { workspace, identity: { emoji: "🦞" } } },
         },
       };
 
@@ -1172,7 +1129,7 @@ describe("gateway agent handler", () => {
     ) {
       mocks.loadSessionEntry.mockReturnValue({
         cfg: {},
-        storePath: "/tmp/sessions.json",
+        storePath: getAgentTestStorePath(),
         entry: { sessionId: "existing-session-id", updatedAt: Date.now(), ...entry },
         canonicalKey: sessionKey,
       });

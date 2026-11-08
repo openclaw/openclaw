@@ -1,14 +1,18 @@
 import fs from "node:fs/promises";
 import { createServer } from "node:http";
-import path from "node:path";
 import { expect, it } from "vitest";
+import { readRequestText, respondJson } from "../../test/helpers/gateway-integration-fixtures.js";
 import { writeOpenAiResponsesText } from "../../test/helpers/openai-responses-sse.js";
 import { getAcpSessionManager } from "../acp/control-plane/manager.js";
 import { patchSessionEntryCore } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { flushLogger, setLoggerOverride } from "../logging/logger.js";
+import { parseLogLine } from "../logging/parse-log-line.js";
 import { extractFirstTextBlock } from "../shared/chat-message-content.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { closeProvider, listenProvider } from "./gateway-provider-fixture.test-support.js";
 import { disconnectGatewayClient, startGatewayWithClient } from "./test-helpers.e2e.js";
+import { createGatewayBackgroundTestEnv } from "./test-helpers.env.js";
 import { buildMockOpenAiResponsesProvider } from "./test-openai-responses-model.js";
 
 const BACKEND_ID = "acp-native-model-fixture";
@@ -22,108 +26,89 @@ type ChatEvent = {
     runId?: string;
     state?: string;
     text?: string;
+    deltaText?: string;
+    replace?: boolean;
     isError?: boolean;
     message?: unknown;
     errorMessage?: string;
   };
 };
 
-it(
-  "keeps ACP conversations intact while native side questions use native policy and user overrides",
-  { timeout: 120_000 },
-  async () => {
-    const state = await createOpenClawTestState({
-      label: "acp-native-model",
-      env: {
-        OPENCLAW_TEST_MINIMAL_GATEWAY: undefined,
-        OPENCLAW_SKIP_CHANNELS: "1",
-        OPENCLAW_SKIP_GMAIL_WATCHER: "1",
-        OPENCLAW_SKIP_CRON: "1",
-        OPENCLAW_SKIP_CANVAS_HOST: "1",
-        OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
-        OPENCLAW_SKIP_PROVIDERS: "1",
-        OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
-        OPENCLAW_GATEWAY_TOKEN: undefined,
-        OPENCLAW_GATEWAY_PASSWORD: undefined,
-      },
-    });
-    const requests: Array<{ model: string; input: unknown }> = [];
-    const events: ChatEvent[] = [];
-    let rejectNativeRequest = false;
-    const providerServer = createServer((request, response) => {
-      void (async () => {
-        const chunks: Buffer[] = [];
-        for await (const chunk of request) {
-          chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-        }
-        const body = JSON.parse(Buffer.concat(chunks).toString("utf8")) as {
-          model: string;
-          input: unknown;
-        };
-        requests.push(body);
-        if (rejectNativeRequest) {
-          response.writeHead(400, { "content-type": "application/json" }).end(
-            JSON.stringify({
-              error: {
-                message: "The selected native model is unavailable.",
-                type: "invalid_request_error",
-                code: "model_not_found",
-              },
-            }),
-          );
-          return;
-        }
-        writeOpenAiResponsesText(response, {
-          text: `NATIVE:${body.model}`,
-          messageId: `native-message-${requests.length}`,
-          responseId: `native-response-${requests.length}`,
-        });
-      })().catch((error: unknown) => response.writeHead(500).end(String(error)));
-    });
-    let gateway: Awaited<ReturnType<typeof startGatewayWithClient>> | undefined;
-    let cfg: OpenClawConfig | undefined;
-    const sessions: Array<{ agentId: string; sessionKey: string }> = [];
-    const acpAnswers = new Map<string, string>();
-    try {
-      await new Promise<void>((resolve, reject) => {
-        providerServer.once("error", reject);
-        providerServer.listen(0, "127.0.0.1", resolve);
-      });
-      const address = providerServer.address();
-      if (!address || typeof address === "string") {
-        throw new Error("native provider fixture did not bind");
+it("preserves ACP across native policy, overrides and failures", { timeout: 120_000 }, async () => {
+  const state = await createOpenClawTestState({
+    label: "acp-native-model",
+    env: {
+      ...createGatewayBackgroundTestEnv(TOKEN),
+      OPENCLAW_TEST_MINIMAL_GATEWAY: undefined,
+      OPENCLAW_GATEWAY_TOKEN: undefined,
+      OPENCLAW_GATEWAY_PASSWORD: undefined,
+    },
+  });
+  const requests: Array<{ model: string; input: unknown }> = [];
+  const events: ChatEvent[] = [];
+  const streamedText = new Map<string, string>();
+  await using cleanup = new AsyncDisposableStack();
+  cleanup.defer(() => state.cleanup());
+  let rejectNativeRequest = false;
+  let releaseAcpStream: (() => void) | undefined;
+  let acpStreamWaiting = false;
+  const providerServer = createServer((request, response) => {
+    if (request.url === "/v1/acp-stream") {
+      acpStreamWaiting = true;
+      releaseAcpStream = () => response.writeHead(200).end();
+      return;
+    }
+    void (async () => {
+      const body = JSON.parse(await readRequestText(request)) as (typeof requests)[number];
+      requests.push(body);
+      if (rejectNativeRequest) {
+        respondJson(
+          response,
+          {
+            error: {
+              message: "The selected native model is unavailable.",
+              type: "invalid_request_error",
+              code: "model_not_found",
+            },
+          },
+          400,
+        );
+        return;
       }
-      const baseUrl = `http://127.0.0.1:${address.port}/v1`;
-      const primary = buildMockOpenAiResponsesProvider(baseUrl, "native-default");
-      const qualified = buildMockOpenAiResponsesProvider(baseUrl, "agent-specific-native");
-      const override = buildMockOpenAiResponsesProvider(baseUrl, "native-user-override");
-      const missingAuth = buildMockOpenAiResponsesProvider(
-        "https://native-auth-proof.invalid/v1",
-        "native-missing-auth",
-      );
-      const pluginDir = state.path("acp-plugin");
-      await fs.mkdir(pluginDir, { recursive: true });
-      await fs.writeFile(
-        path.join(pluginDir, "package.json"),
-        JSON.stringify({
-          name: BACKEND_ID,
-          type: "commonjs",
-          peerDependencies: { openclaw: ">=2026.9.5" },
-          openclaw: { extensions: ["./index.cjs"] },
-        }),
-      );
-      await fs.writeFile(
-        path.join(pluginDir, "openclaw.plugin.json"),
-        JSON.stringify({
-          id: BACKEND_ID,
-          activation: { onStartup: true },
-          configSchema: { type: "object", additionalProperties: false, properties: {} },
-        }),
-      );
-      // The only substituted execution boundary is the external ACP backend.
-      await fs.writeFile(
-        path.join(pluginDir, "index.cjs"),
-        `const {
+      writeOpenAiResponsesText(response, {
+        text: `NATIVE:${body.model}`,
+        messageId: `native-message-${requests.length}`,
+        responseId: `native-response-${requests.length}`,
+      });
+    })().catch((error: unknown) => response.writeHead(500).end(String(error)));
+  });
+  cleanup.defer(() => closeProvider(providerServer));
+  const sessions: Array<{ agentId: string; sessionKey: string }> = [];
+  const acpAnswers = new Map<string, string>();
+  const baseUrl = await listenProvider(providerServer);
+  const primary = buildMockOpenAiResponsesProvider(baseUrl, "native-default");
+  const qualified = buildMockOpenAiResponsesProvider(baseUrl, "agent-specific-native");
+  const override = buildMockOpenAiResponsesProvider(baseUrl, "native-user-override");
+  const missingAuth = buildMockOpenAiResponsesProvider(
+    "https://native-auth-proof.invalid/v1",
+    "native-missing-auth",
+  );
+  const pluginDir = state.statePath("acp-plugin");
+  await state.writeJson("acp-plugin/package.json", {
+    name: BACKEND_ID,
+    type: "commonjs",
+    peerDependencies: { openclaw: ">=2026.9.5" },
+    openclaw: { extensions: ["./index.cjs"] },
+  });
+  await state.writeJson("acp-plugin/openclaw.plugin.json", {
+    id: BACKEND_ID,
+    activation: { onStartup: true },
+    configSchema: { type: "object", additionalProperties: false, properties: {} },
+  });
+  // The only substituted execution boundary is the external ACP backend.
+  await state.writeText(
+    "acp-plugin/index.cjs",
+    `const {
   registerAcpRuntimeBackend,
   unregisterAcpRuntimeBackend,
   tryDispatchAcpReplyHook,
@@ -138,9 +123,8 @@ module.exports = {
       ownerAwareSessions: 1,
       async ensureSession(input) {
         const key = keyFor(input);
-        let session = sessions.get(key);
-        if (!session) {
-          session = {
+        if (!sessions.has(key)) {
+          sessions.set(key, {
             handle: {
               agentId: input.agentId,
               sessionKey: input.sessionKey,
@@ -149,26 +133,28 @@ module.exports = {
               backendSessionId: "fixture-" + ++sequence,
             },
             model: input.model,
-          };
-          sessions.set(key, session);
-        } else if (input.model !== undefined) {
-          session.model = input.model;
+          });
         }
+        const session = sessions.get(key);
+        if (input.model !== undefined) session.model = input.model;
         return session.handle;
       },
-      getCapabilities() {
-        return { controls: ["session/set_config_option"], configOptionKeys: ["model"] };
-      },
+      getCapabilities: () => ({ controls: ["session/set_config_option"], configOptionKeys: ["model"] }),
       async setConfigOption({ handle, key, value }) {
         const session = sessions.get(keyFor(handle));
         if (key === "model") session.model = value;
         return { configOptions: [{ id: "model", currentValue: session.model }] };
       },
-      async *runTurn({ handle }) {
+      async *runTurn({ handle, text }) {
+        const liveProof = text.includes("Stream live ACP.");
         yield {
           type: "text_delta",
-          text: "ACP:" + sessions.get(keyFor(handle)).model + ":" + handle.backendSessionId,
+          text: "ACP:" + sessions.get(keyFor(handle)).model + ":" + handle.backendSessionId + (liveProof ? ". " : ""),
         };
+        if (liveProof) {
+          await fetch(${JSON.stringify(`${baseUrl}/acp-stream`)});
+          yield { type: "text_delta", text: "Complete." };
+        }
         yield { type: "done", stopReason: "end_turn" };
       },
       async cancel() {},
@@ -188,245 +174,261 @@ module.exports = {
   },
 };
 `,
-      );
-      const nativeModelSettings = {
-        agentRuntime: { id: "openclaw" },
-        params: { transport: "sse", openaiWsWarmup: false },
-      };
-      cfg = {
-        agents: {
-          ownership: "explicit",
-          defaults: {
-            workspace: state.workspaceDir,
-            skipBootstrap: true,
-            heartbeat: { every: "0m" },
-            model: { primary: primary.modelRef },
-            models: {
-              [primary.modelRef]: nativeModelSettings,
-              [qualified.modelRef]: nativeModelSettings,
-              [override.modelRef]: nativeModelSettings,
-              [`${MISSING_AUTH_PROVIDER_ID}/${missingAuth.modelId}`]: nativeModelSettings,
-            },
-          },
-          entries: {
-            main: {
-              model: ACP_MODEL,
-              runtime: { type: "acp", acp: { agent: "cursor", backend: BACKEND_ID } },
-            },
-            qualified: {
-              model: { primary: qualified.modelRef },
-              runtime: { type: "acp", acp: { agent: "cursor", backend: BACKEND_ID } },
-            },
-          },
-        },
-        acp: { enabled: true, backend: BACKEND_ID, allowedAgents: ["cursor"] },
+  );
+  const nativeModelSettings = {
+    agentRuntime: { id: "openclaw" },
+    params: { transport: "sse", openaiWsWarmup: false },
+  };
+  const acpRuntime = { type: "acp", acp: { agent: "cursor", backend: BACKEND_ID } } as const;
+  const cfg: OpenClawConfig = {
+    agents: {
+      ownership: "explicit",
+      defaults: {
+        workspace: state.workspaceDir,
+        skipBootstrap: true,
+        model: { primary: primary.modelRef },
         models: {
-          mode: "replace",
-          providers: {
-            [primary.providerId]: {
-              ...primary.config,
-              request: { allowPrivateNetwork: true },
-              models: [
-                ...primary.config.models,
-                ...qualified.config.models,
-                ...override.config.models,
-              ],
-            },
-            // Loopback providers intentionally synthesize auth; this declared remote model
-            // must fail before transport because it has no credentials or provider aliases.
-            [MISSING_AUTH_PROVIDER_ID]: {
-              baseUrl: missingAuth.config.baseUrl,
-              api: missingAuth.config.api,
-              models: missingAuth.config.models,
-            },
-          },
+          [primary.modelRef]: nativeModelSettings,
+          [qualified.modelRef]: nativeModelSettings,
+          [override.modelRef]: nativeModelSettings,
+          [`${MISSING_AUTH_PROVIDER_ID}/${missingAuth.modelId}`]: nativeModelSettings,
         },
-        plugins: {
-          enabled: true,
-          allow: [BACKEND_ID],
-          load: { paths: [pluginDir] },
-          entries: { [BACKEND_ID]: { enabled: true } },
-          slots: { memory: "none" },
+      },
+      entries: {
+        main: { model: ACP_MODEL, runtime: acpRuntime },
+        qualified: { model: { primary: qualified.modelRef }, runtime: acpRuntime },
+      },
+    },
+    acp: {
+      enabled: true,
+      backend: BACKEND_ID,
+      allowedAgents: ["cursor"],
+      stream: { deliveryMode: "live" },
+    },
+    models: {
+      mode: "replace",
+      providers: {
+        [primary.providerId]: {
+          ...primary.config,
+          request: { allowPrivateNetwork: true },
+          models: [...primary.config.models, ...qualified.config.models, ...override.config.models],
         },
-        tools: { profile: "minimal" },
-        gateway: { auth: { mode: "token", token: TOKEN } },
-      };
-      gateway = await startGatewayWithClient({
-        cfg,
-        configPath: state.configPath,
-        token: TOKEN,
-        scopes: ["operator.admin", "operator.read", "operator.write"],
-        onEvent: (event) => events.push(event as ChatEvent),
-      });
-      await gateway.server.startupSettled;
-      const client = gateway.client;
-      const plugins = await client.request<{
-        plugins: Array<{ id: string; runtime: { state: string; error?: string } }>;
-      }>("plugins.list", {});
-      expect(plugins.plugins.find((plugin) => plugin.id === BACKEND_ID)).toMatchObject({
-        runtime: { state: "active" },
-      });
-      const findTerminal = (runId: string) =>
-        events.find(
-          (event) =>
-            event.event === "chat" &&
-            event.payload?.runId === runId &&
-            ["final", "error", "aborted"].includes(event.payload.state ?? ""),
+        // Loopback providers intentionally synthesize auth; this declared remote model
+        // must fail before transport because it has no credentials or provider aliases.
+        [MISSING_AUTH_PROVIDER_ID]: {
+          baseUrl: missingAuth.config.baseUrl,
+          api: missingAuth.config.api,
+          models: missingAuth.config.models,
+        },
+      },
+    },
+    plugins: {
+      enabled: true,
+      allow: [BACKEND_ID],
+      load: { paths: [pluginDir] },
+      entries: { [BACKEND_ID]: { enabled: true } },
+      slots: { memory: "none" },
+    },
+    tools: { profile: "minimal" },
+    gateway: { auth: { mode: "token", token: TOKEN } },
+  };
+  const gateway = await startGatewayWithClient({
+    cfg,
+    configPath: state.configPath,
+    token: TOKEN,
+    scopes: ["operator.admin", "operator.read", "operator.write"],
+    onEvent: (event) => {
+      const chatEvent = event as ChatEvent;
+      events.push(chatEvent);
+      const payload = chatEvent.payload;
+      if (chatEvent.event === "chat" && payload?.state === "delta" && payload.runId) {
+        const snapshot = extractFirstTextBlock(payload.message);
+        streamedText.set(
+          payload.runId,
+          snapshot ??
+            (payload.replace ? "" : (streamedText.get(payload.runId) ?? "")) +
+              (payload.deltaText ?? ""),
         );
-      const send = async (sessionKey: string, message: string, runId: string) => {
-        await client.request("chat.send", { sessionKey, message, idempotencyKey: runId });
-        await expect.poll(() => findTerminal(runId), { timeout: 30_000 }).toBeDefined();
-        const terminal = findTerminal(runId);
-        expect(terminal?.payload).toMatchObject({ state: "final" });
-        return message.startsWith("/btw ")
-          ? events.find(
-              (event) => event.event === "chat.side_result" && event.payload?.runId === runId,
-            )?.payload
-          : { text: extractFirstTextBlock(terminal?.payload?.message) };
-      };
-      const manager = getAcpSessionManager();
-      for (const { agentId, harnessModel } of [
-        { agentId: "main", harnessModel: ACP_MODEL },
-        { agentId: "qualified", harnessModel: qualified.modelRef },
-      ]) {
-        const sessionKey = `agent:${agentId}:acp:native-policy`;
-        const initialized = await manager.initializeSession({
-          cfg,
-          agentId,
-          sessionKey,
-          agent: "cursor",
-          backendId: BACKEND_ID,
-          mode: "persistent",
-          runtimeOptions: { model: harnessModel },
-        });
-        sessions.push({ agentId, sessionKey });
-        const acpAnswer = `ACP:${harnessModel}:${initialized.handle.backendSessionId}`;
-        acpAnswers.set(agentId, acpAnswer);
-        const requestCount = requests.length;
-        expect(await send(sessionKey, "Remember this ACP context.", `${agentId}-first`)).toEqual({
-          text: acpAnswer,
-        });
-        expect(requests).toHaveLength(requestCount);
-        expect(
-          await send(sessionKey, "/btw Summarize that context.", `${agentId}-btw`),
-        ).toMatchObject({
-          text: `NATIVE:${primary.modelId}`,
-          isError: false,
-        });
-        expect(requests.at(-1)?.model).toBe(primary.modelId);
-        expect(JSON.stringify(requests.at(-1)?.input)).toContain(acpAnswer);
-        expect(
-          await send(sessionKey, "Continue the ACP conversation.", `${agentId}-second`),
-        ).toEqual({
-          text: acpAnswer,
-        });
-        expect(manager.resolveSession({ cfg, agentId, sessionKey })).toMatchObject({
-          kind: "ready",
-          entry: { sessionId: initialized.sessionEntry.sessionId },
-          meta: {
-            backend: BACKEND_ID,
-            agent: "cursor",
-            runtimeSessionName: initialized.meta.runtimeSessionName,
-            runtimeOptions: { model: harnessModel },
-          },
-        });
       }
-
-      const sessionKey = "agent:main:acp:native-policy";
-      await patchSessionEntryCore({ agentId: "main", sessionKey }, () => ({
-        providerOverride: override.providerId,
-        modelOverride: override.modelId,
-        modelOverrideSource: "user",
-      }));
-      expect(
-        await send(sessionKey, "/btw Use my native selection.", "native-override"),
-      ).toMatchObject({
-        text: `NATIVE:${override.modelId}`,
-        isError: false,
-      });
-      expect(requests.at(-1)?.model).toBe(override.modelId);
-
-      rejectNativeRequest = true;
-      expect(await send(sessionKey, "/btw Explain the failure.", "native-failure")).toMatchObject({
-        text: expect.stringContaining("The selected native model is unavailable."),
-        isError: true,
-      });
-      expect(requests.at(-1)?.model).toBe(override.modelId);
-      const requestCount = requests.length;
-      expect(
-        await send(sessionKey, "Continue after the native failure.", "acp-after-failure"),
-      ).toEqual({ text: acpAnswers.get("main") });
-      expect(requests).toHaveLength(requestCount);
-      expect(manager.resolveSession({ cfg, agentId: "main", sessionKey })).toMatchObject({
-        kind: "ready",
-        entry: {
-          providerOverride: override.providerId,
-          modelOverride: override.modelId,
-          modelOverrideSource: "user",
-        },
-        meta: { runtimeOptions: { model: ACP_MODEL } },
-      });
-
-      await patchSessionEntryCore({ agentId: "main", sessionKey }, () => ({
-        providerOverride: MISSING_AUTH_PROVIDER_ID,
-        modelOverride: missingAuth.modelId,
-        modelOverrideSource: "user",
-      }));
-      const missingAuthReply = await send(
-        sessionKey,
-        "/btw Use the native model without credentials.",
-        "native-missing-auth",
-      );
-      expect(missingAuthReply).toMatchObject({
-        text: expect.stringContaining(
-          `No API key found for provider "${MISSING_AUTH_PROVIDER_ID}"`,
-        ),
-        isError: true,
-      });
-      expect(missingAuthReply?.text).toContain("openclaw models auth paste-api-key");
-      expect(requests).toHaveLength(requestCount);
-      expect(
-        await send(sessionKey, "Continue after the missing native auth.", "acp-after-missing-auth"),
-      ).toEqual({ text: acpAnswers.get("main") });
-      expect(requests).toHaveLength(requestCount);
-      expect(manager.resolveSession({ cfg, agentId: "main", sessionKey })).toMatchObject({
-        kind: "ready",
-        entry: {
-          providerOverride: MISSING_AUTH_PROVIDER_ID,
-          modelOverride: missingAuth.modelId,
-          modelOverrideSource: "user",
-        },
-        meta: { runtimeOptions: { model: ACP_MODEL } },
-      });
+    },
+  });
+  cleanup.defer(async () => {
+    try {
+      await disconnectGatewayClient(gateway.client);
     } finally {
-      try {
-        if (cfg) {
-          for (const session of sessions) {
-            await getAcpSessionManager().closeSession({
-              cfg,
-              ...session,
-              reason: "native model policy proof complete",
-              clearMeta: true,
-            });
-          }
-        }
-      } finally {
-        try {
-          if (gateway) {
-            try {
-              await disconnectGatewayClient(gateway.client);
-            } finally {
-              await gateway.server.close({ reason: "native model policy proof complete" });
-            }
-          }
-        } finally {
-          providerServer.closeAllConnections();
-          await new Promise<void>((resolve) => {
-            providerServer.close(() => resolve());
-          });
-          await state.cleanup();
-        }
-      }
+      await gateway.server.close({ reason: "native model policy proof complete" });
     }
-  },
-);
+  });
+  cleanup.defer(async () => {
+    for (const session of sessions) {
+      await getAcpSessionManager().closeSession({
+        cfg,
+        ...session,
+        reason: "native model policy proof complete",
+        clearMeta: true,
+      });
+    }
+  });
+  await gateway.server.startupSettled;
+  const client = gateway.client;
+  const findTerminal = (runId: string) =>
+    events.find(
+      (event) =>
+        event.event === "chat" &&
+        event.payload?.runId === runId &&
+        ["final", "error", "aborted"].includes(event.payload.state ?? ""),
+    );
+  const send = async (sessionKey: string, message: string, runId: string) => {
+    await client.request("chat.send", { sessionKey, message, idempotencyKey: runId });
+    await expect.poll(() => findTerminal(runId), { timeout: 30_000 }).toBeDefined();
+    const terminal = findTerminal(runId);
+    expect(terminal?.payload).toMatchObject({ state: "final" });
+    return message.startsWith("/btw ")
+      ? events.find((event) => event.event === "chat.side_result" && event.payload?.runId === runId)
+          ?.payload
+      : { text: extractFirstTextBlock(terminal?.payload?.message) };
+  };
+  const manager = getAcpSessionManager();
+  const sessionConfig = cfg;
+  const userOverride = (providerOverride: string, modelOverride: string) => ({
+    providerOverride,
+    modelOverride,
+    modelOverrideSource: "user" as const,
+  });
+  const assertOverride = (provider: string, model: string) => {
+    expect(
+      manager.resolveSession({ cfg: sessionConfig, agentId: "main", sessionKey }),
+    ).toMatchObject({
+      kind: "ready",
+      entry: userOverride(provider, model),
+      meta: { runtimeOptions: { model: ACP_MODEL } },
+    });
+  };
+  for (const { agentId, harnessModel } of [
+    { agentId: "main", harnessModel: ACP_MODEL },
+    { agentId: "qualified", harnessModel: qualified.modelRef },
+  ]) {
+    const sessionKey = `agent:${agentId}:acp:native-policy`;
+    const initialized = await manager.initializeSession({
+      cfg,
+      agentId,
+      sessionKey,
+      agent: "cursor",
+      backendId: BACKEND_ID,
+      mode: "persistent",
+      runtimeOptions: { model: harnessModel },
+    });
+    sessions.push({ agentId, sessionKey });
+    const acpAnswer = `ACP:${harnessModel}:${initialized.handle.backendSessionId}`;
+    acpAnswers.set(agentId, acpAnswer);
+    if (agentId === "main") {
+      const runId = "acp-live-stream";
+      await client.request("chat.send", {
+        sessionKey,
+        message: "Stream live ACP.",
+        idempotencyKey: runId,
+      });
+      let firstStreamed = "";
+      try {
+        await expect
+          .poll(() => acpStreamWaiting || findTerminal(runId)?.payload, { timeout: 30_000 })
+          .toBe(true);
+        await expect.poll(() => streamedText.get(runId)).toBeDefined();
+        firstStreamed = streamedText.get(runId) ?? "";
+        expect(findTerminal(runId)).toBeUndefined();
+      } finally {
+        releaseAcpStream?.();
+      }
+      await expect.poll(() => findTerminal(runId), { timeout: 30_000 }).toBeDefined();
+      const terminalText = extractFirstTextBlock(findTerminal(runId)?.payload?.message) ?? "";
+      expect(terminalText).toBe(acpAnswer + ".\n\nComplete.");
+      expect(firstStreamed).toContain(acpAnswer);
+      expect(terminalText.startsWith(firstStreamed)).toBe(true);
+      expect(streamedText.get(runId)).toBe(terminalText);
+    }
+    const requestCount = requests.length;
+    expect(await send(sessionKey, "Remember this ACP context.", `${agentId}-first`)).toEqual({
+      text: acpAnswer,
+    });
+    expect(requests).toHaveLength(requestCount);
+    expect(await send(sessionKey, "/btw Summarize that context.", `${agentId}-btw`)).toMatchObject({
+      text: `NATIVE:${primary.modelId}`,
+      isError: false,
+    });
+    expect(JSON.stringify(requests.at(-1)?.input)).toContain(acpAnswer);
+    expect(await send(sessionKey, "Continue the ACP conversation.", `${agentId}-second`)).toEqual({
+      text: acpAnswer,
+    });
+    expect(manager.resolveSession({ cfg, agentId, sessionKey })).toMatchObject({
+      kind: "ready",
+      entry: { sessionId: initialized.sessionEntry.sessionId },
+      meta: {
+        backend: BACKEND_ID,
+        agent: "cursor",
+        runtimeSessionName: initialized.meta.runtimeSessionName,
+        runtimeOptions: { model: harnessModel },
+      },
+    });
+  }
+
+  const sessionKey = "agent:main:acp:native-policy";
+  const patchOverride = (provider: string, model: string) =>
+    patchSessionEntryCore({ agentId: "main", sessionKey }, () => userOverride(provider, model));
+  await patchOverride(override.providerId, override.modelId);
+  expect(await send(sessionKey, "/btw Use my native selection.", "native-override")).toMatchObject({
+    text: `NATIVE:${override.modelId}`,
+    isError: false,
+  });
+
+  const nativeFailureRequestCount = requests.length;
+  rejectNativeRequest = true;
+  expect(await send(sessionKey, "/btw Explain the failure.", "native-failure")).toMatchObject({
+    text: expect.stringContaining("Couldn't answer that side question."),
+    isError: true,
+  });
+  expect(requests.length).toBeGreaterThan(nativeFailureRequestCount);
+  expect(requests.at(-1)?.model).toBe(override.modelId);
+  const requestCount = requests.length;
+  expect(await send(sessionKey, "Continue after the native failure.", "acp-after-failure")).toEqual(
+    { text: acpAnswers.get("main") },
+  );
+  expect(requests).toHaveLength(requestCount);
+  assertOverride(override.providerId, override.modelId);
+
+  await patchOverride(MISSING_AUTH_PROVIDER_ID, missingAuth.modelId);
+  const missingAuthLogFile = state.path("native-missing-auth.log");
+  setLoggerOverride({ file: missingAuthLogFile, level: "warn", consoleLevel: "silent" });
+  try {
+    const missingAuthReply = await send(
+      sessionKey,
+      "/btw Use the native model without credentials.",
+      "native-missing-auth",
+    );
+    expect(missingAuthReply).toMatchObject({
+      text: expect.stringContaining("Couldn't answer that side question."),
+      isError: true,
+    });
+    expect(missingAuthReply?.text).toContain("openclaw logs --follow");
+  } finally {
+    setLoggerOverride(null);
+    await flushLogger();
+  }
+  expect(requests).toHaveLength(requestCount);
+  const missingAuthLogs = (await fs.readFile(missingAuthLogFile, "utf8"))
+    .split("\n")
+    .map(parseLogLine);
+  expect(missingAuthLogs).toContainEqual(
+    expect.objectContaining({
+      subsystem: "auto-reply/commands-btw",
+      level: "warn",
+      message: expect.stringContaining(
+        `Side question failed: No API key found for provider "${MISSING_AUTH_PROVIDER_ID}".`,
+      ),
+    }),
+  );
+  expect(
+    await send(sessionKey, "Continue after the missing native auth.", "acp-after-missing-auth"),
+  ).toEqual({ text: acpAnswers.get("main") });
+  expect(requests).toHaveLength(requestCount);
+  assertOverride(MISSING_AUTH_PROVIDER_ID, missingAuth.modelId);
+});

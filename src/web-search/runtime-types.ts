@@ -1,14 +1,18 @@
+import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { WebSearchProviderToolExecutionContext } from "../plugins/web-provider-types.js";
 import type { RuntimeWebSearchMetadata } from "../secrets/runtime-web-tools.types.js";
 
 // Shared web_search runtime contracts. Keep these in a types-only module so
 // provider registries and callers can import them without loading runtime code.
-type WebSearchConfig = NonNullable<NonNullable<OpenClawConfig["tools"]>["web"]>["search"];
+export type RuntimeWebSearchConfig = NonNullable<
+  NonNullable<OpenClawConfig["tools"]>["web"]
+>["search"];
 
-/** Provider/tool resolution inputs for web_search. */
 export type ResolveWebSearchDefinitionParams = {
   config?: OpenClawConfig;
   agentDir?: string;
+  authStore?: AuthProfileStore;
   sandboxed?: boolean;
   runtimeWebSearch?: RuntimeWebSearchMetadata;
   providerId?: string;
@@ -16,17 +20,15 @@ export type ResolveWebSearchDefinitionParams = {
   preferInputConfig?: boolean;
 };
 
-/** Inputs for executing a web_search request through the selected provider. */
 export type RunWebSearchParams = ResolveWebSearchDefinitionParams & {
   args: Record<string, unknown>;
   signal?: AbortSignal;
   /** Caller-owned synchronous authority check, repeated immediately before external requests. */
   assertCurrent?: () => void;
+  modelSelection?: WebSearchProviderToolExecutionContext["modelSelection"];
 };
 
-/** Normalized execution result that records which provider answered. */
 export type RunWebSearchResult = {
   provider: string;
   result: Record<string, unknown>;
 };
-export type RuntimeWebSearchConfig = WebSearchConfig;

@@ -1,11 +1,11 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { prepareGitCoauthorAttribution } from "../agents/git-coauthor-attribution.js";
+import { resolveGitHubHost } from "../agents/github-host-runtime.js";
 import type { PreparedGitHubPublicationIdentity } from "../agents/github-tool-identity.js";
-import { resolveControlUiSessionUrl } from "../config/control-ui-link-base.js";
+import type { InternalSessionEntry } from "../config/sessions/types.js";
 import type { SessionRepositoryWorkspaceRecord } from "../state/session-repository-workspaces.types.js";
 import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
-import { currentGitHubPublicationConfig } from "./github-publication-availability.js";
 import { parseGitHubPublicationBaseBranch } from "./github-publication-base.js";
+import { prepareGitHubPublicationContent } from "./github-publication-content.js";
 import {
   createGitHubPublicationExecutionIdentity,
   type GitHubPublicationIdentityOwner,
@@ -18,15 +18,16 @@ import {
   GitHubPublicationWorkspaceChangedError,
   resolveGitHubPublicationFailure,
 } from "./github-publication-failure.js";
+import { GitHubPublicationRecoveryPendingError } from "./github-publication-git-index.js";
 import {
-  appendGitHubPublicationMessage,
   githubPublicationApiArgs,
   hasGitHubPublicationMessageFooter,
   requirePublicationCommand,
   runPublicationCommand,
 } from "./github-publication-git-transport.js";
 import { findGitHubPublicationPullRequest } from "./github-publication-pull-requests.js";
-import { projectGitHubPublicationResult } from "./github-publication-store.js";
+import { projectGitHubPublicationResult } from "./github-publication-receipt.js";
+import type { RepositoryGitHubPublicationExecutionAsync } from "./github-publication-store-async.js";
 import {
   hasRepositoryGitHubPublicationWorkflowChanges,
   prepareGitHubPublicationWorkflowGuard,
@@ -36,10 +37,12 @@ import {
   readGitHubRepositoryPublicationBlob,
   type GitHubRepositoryPublicationSnapshot,
 } from "./github-repository-publication-snapshot.js";
-import type { RepositoryGitHubPublicationExecution } from "./github-repository-publication-store.js";
 import { resolveGitHubRepositoryTarget } from "./github-repository-target.js";
 import { GatewayOperatorAccessUnavailableError } from "./operator-access-policy.js";
 import { SessionMutationAuthorizationChangedError } from "./session-sharing.js";
+
+const MAX_WORKFLOW_ANCESTRY_COMMITS = 1_000;
+const MAX_WORKFLOW_ANCESTRY_BOUNDARIES = 32;
 
 async function api(
   endpoint: string,
@@ -49,7 +52,11 @@ async function api(
 ): Promise<unknown> {
   assertCurrent();
   const raw = await requirePublicationCommand(
-    githubPublicationApiArgs(endpoint, body === undefined ? "GET" : "POST"),
+    githubPublicationApiArgs(
+      endpoint,
+      body === undefined ? "GET" : "POST",
+      identity.host ?? resolveGitHubHost(),
+    ),
     {
       env: identity.env,
       beforeRun: assertCurrent,
@@ -72,7 +79,8 @@ export async function prepareRepositoryGitHubPublicationTarget(
   identity: PreparedGitHubPublicationIdentity,
   assertCurrent: () => void,
 ) {
-  const remote = parseGitHubRemoteUrl(workspace.url);
+  const githubHost = identity.host ?? resolveGitHubHost();
+  const remote = parseGitHubRemoteUrl(workspace.url, githubHost);
   if (
     !remote ||
     !/^[A-Za-z0-9_.-]+$/u.test(remote.owner) ||
@@ -120,11 +128,13 @@ export async function prepareRepositoryGitHubPublicationTarget(
 
 /** GitHub receives only accepted normalized objects; the Gateway never fetches source history. */
 export async function executeRepositoryGitHubPublication(params: {
-  execution: RepositoryGitHubPublicationExecution;
+  execution: RepositoryGitHubPublicationExecutionAsync;
   snapshot: GitHubRepositoryPublicationSnapshot;
   snapshotRoot: string;
+  requesterProfileId?: string;
   storePath: string;
   assertWorkspace: () => void;
+  readCurrentEntry: () => InternalSessionEntry | undefined;
   validateAuthority: () => boolean;
   assertWorkflowChangesAllowed: () => void;
   identity?: GitHubPublicationIdentityOwner;
@@ -182,11 +192,13 @@ export async function executeRepositoryGitHubPublication(params: {
       throw new Error("GitHub publication workspace base branch could not be verified.");
     }
     const remoteBase = objectSha(baseRef.object);
-    const readMergeBase = async (source: string) => {
+    const readMergeBase = async (source: string, target = remoteBase) => {
       const lineage = await requirePublicationCommand(
         [
           ...githubPublicationApiArgs(
-            "repos/" + repository + "/compare/" + source + "..." + remoteBase + "?per_page=1",
+            "repos/" + repository + "/compare/" + source + "..." + target + "?per_page=1",
+            "GET",
+            identity.host ?? resolveGitHubHost(),
           ),
           "--jq",
           "{sha: .merge_base_commit.sha}",
@@ -199,6 +211,106 @@ export async function executeRepositoryGitHubPublication(params: {
     // A requested topic/tag/commit may be ahead of or diverged from the PR base.
     // GitHub's merge-base proves shared history without changing the accepted source.
     const mergeBase = await readMergeBase(snapshot.baseCommit);
+    const hasUniqueWorkflowAncestor = async (sourceCommit: string, ancestor: string) => {
+      const unavailableAncestry = new GitHubPublicationKnownFailure(
+        "GitHub returned incomplete workflow ancestry.",
+        {
+          code: "unavailable",
+          nextAction: "Retry after GitHub can return the complete source commit history.",
+        },
+      );
+      const parents = new Map<string, string[]>();
+      let total = 0;
+      for (let page = 1; page === 1 || parents.size < total; page++) {
+        const raw = await requirePublicationCommand(
+          [
+            ...githubPublicationApiArgs(
+              "repos/" +
+                repository +
+                "/compare/" +
+                remoteBase +
+                "..." +
+                sourceCommit +
+                "?per_page=100&page=" +
+                page,
+              "GET",
+              identity.host ?? resolveGitHubHost(),
+            ),
+            "--jq",
+            "{total_commits, commits: [.commits[] | {sha, parents: [.parents[] | {sha}]}]}",
+          ],
+          { env: identity.env, beforeRun: assertCurrent },
+        );
+        assertCurrent();
+        const value: unknown = JSON.parse(raw);
+        if (
+          !isRecord(value) ||
+          !Array.isArray(value.commits) ||
+          typeof value.total_commits !== "number" ||
+          !Number.isSafeInteger(value.total_commits) ||
+          value.total_commits < 1 ||
+          (page > 1 && value.total_commits !== total) ||
+          value.commits.length === 0
+        ) {
+          throw unavailableAncestry;
+        }
+        total = value.total_commits;
+        if (total > MAX_WORKFLOW_ANCESTRY_COMMITS) {
+          throw new GitHubPublicationKnownFailure(
+            "Workflow inheritance exceeds the source-history limit.",
+            {
+              code: "github_rejected",
+              nextAction: `Ask a maintainer to publish this workspace; guest workflow inheritance checks at most ${MAX_WORKFLOW_ANCESTRY_COMMITS} source commits.`,
+            },
+          );
+        }
+        for (const commit of value.commits) {
+          const sha = objectSha(commit);
+          if (!isRecord(commit) || !Array.isArray(commit.parents) || parents.has(sha)) {
+            throw unavailableAncestry;
+          }
+          parents.set(sha, commit.parents.map(objectSha));
+        }
+      }
+      if (parents.size !== total || !parents.has(sourceCommit)) {
+        throw unavailableAncestry;
+      }
+      // The inverse comparison contains every source-only commit. Its boundary
+      // parents are common ancestors; all must be below the reported merge-base
+      // to prove it is unique, including when the source itself contains merges.
+      const boundary = new Set<string>();
+      for (const commitParents of parents.values()) {
+        if (!commitParents.length) {
+          // Keep merges of unrelated roots maintainer-only rather than infer
+          // workflow ownership across a history with no common boundary.
+          return false;
+        }
+        for (const parent of commitParents) {
+          if (!parents.has(parent)) {
+            boundary.add(parent);
+          }
+        }
+      }
+      if (!boundary.size) {
+        return false;
+      }
+      boundary.delete(ancestor);
+      if (boundary.size > MAX_WORKFLOW_ANCESTRY_BOUNDARIES) {
+        throw new GitHubPublicationKnownFailure(
+          "Workflow inheritance exceeds the ancestry-boundary limit.",
+          {
+            code: "github_rejected",
+            nextAction: `Ask a maintainer to publish this workspace; guest workflow inheritance checks at most ${MAX_WORKFLOW_ANCESTRY_BOUNDARIES} additional ancestry boundaries.`,
+          },
+        );
+      }
+      for (const parent of boundary) {
+        if ((await readMergeBase(parent, ancestor)) !== parent) {
+          return false;
+        }
+      }
+      return true;
+    };
     let headCommit = row.head_commit;
     let preparedCommitMessage: string | undefined;
     const verifyCommit = (value: unknown) => {
@@ -227,7 +339,11 @@ export async function executeRepositoryGitHubPublication(params: {
     const observeHead = async () => {
       const observedIdentity = await refreshIdentity();
       const raw = await requirePublicationCommand(
-        githubPublicationApiArgs(endpoint + "matching-refs/heads/" + encodeURIComponent(branch)),
+        githubPublicationApiArgs(
+          endpoint + "matching-refs/heads/" + encodeURIComponent(branch),
+          "GET",
+          observedIdentity.host ?? resolveGitHubHost(),
+        ),
         { env: observedIdentity.env },
       );
       const value: unknown = JSON.parse(raw);
@@ -239,7 +355,7 @@ export async function executeRepositoryGitHubPublication(params: {
       // Preserve an authenticated response to a lost push before checking whether
       // its admission closed during the read. This records no permission to act.
       if (headCommit && observed === headCommit) {
-        execution.recordEffect("push", { headCommit });
+        await execution.recordEffect("push", { headCommit });
       }
       assertCurrent();
       return observed;
@@ -279,6 +395,7 @@ export async function executeRepositoryGitHubPublication(params: {
         baseBranch,
         headCommit: headCommit ?? snapshot.baseCommit,
         marker,
+        host: identity.host ?? resolveGitHubHost(),
         refreshIdentity,
         assertCurrent,
         recordObserved: (url) => execution.recordEffect("pull_request", { url }),
@@ -293,16 +410,26 @@ export async function executeRepositoryGitHubPublication(params: {
           comparisonRepository,
           comparisonTree: objectSha(comparison.tree),
           readUpstream: async () => {
-            // REST exposes one merge-base, not all of them. A source base on the
-            // target's history (or containing it), followed only by our linear
-            // checkpoint commits, has a unique best common ancestor. A diverged
-            // source base cannot provide that proof without fetching its graph.
-            if (mergeBase !== snapshot.baseCommit && mergeBase !== remoteBase) {
+            const sourceCommit = row.previous_head_commit ?? snapshot.baseCommit;
+            const ancestor =
+              sourceCommit === snapshot.baseCommit ? mergeBase : await readMergeBase(sourceCommit);
+            // Prove the history of the same published/source commit whose
+            // definition the guard compares, not a potentially older snapshot base.
+            if (
+              ancestor !== sourceCommit &&
+              ancestor !== remoteBase &&
+              !(await hasUniqueWorkflowAncestor(sourceCommit, ancestor))
+            ) {
               return undefined;
             }
-            const ancestor = row.previous_head_commit
-              ? await readMergeBase(row.previous_head_commit)
-              : mergeBase;
+            if (
+              sourceCommit !== snapshot.baseCommit &&
+              mergeBase !== snapshot.baseCommit &&
+              mergeBase !== remoteBase &&
+              !(await hasUniqueWorkflowAncestor(snapshot.baseCommit, mergeBase))
+            ) {
+              return undefined;
+            }
             const readTreeSha = async (commit: string) => {
               const value = await api(
                 "repos/" + repository + "/git/commits/" + commit,
@@ -318,7 +445,13 @@ export async function executeRepositoryGitHubPublication(params: {
               readTreeSha(ancestor),
               readTreeSha(remoteBase),
             ]);
-            return { repository, ancestorTree, targetTree };
+            const sourceAncestorTree =
+              mergeBase === ancestor
+                ? ancestorTree
+                : mergeBase === remoteBase
+                  ? targetTree
+                  : await readTreeSha(mergeBase);
+            return { repository, ancestorTree, sourceAncestorTree, targetTree };
           },
           readTree: (owner, sha) =>
             api("repos/" + owner + "/git/trees/" + sha, identity, assertCurrent),
@@ -329,36 +462,30 @@ export async function executeRepositoryGitHubPublication(params: {
       assertCurrent();
     };
     assertPublicationAction();
-    const config = currentGitHubPublicationConfig();
-    const preparedAttribution = await prepareGitCoauthorAttribution({
-      agentId: row.agent_id,
-      config,
-      excludeAccountId: identity.account.accountId,
-      sessionKey: row.session_key,
-      sessionId: row.session_id,
+    const content = await prepareGitHubPublicationContent({
+      row,
+      requesterProfileId: params.requesterProfileId,
       storePath: params.storePath,
+      accountId: identity.account.accountId,
+      host: identity.host ?? resolveGitHubHost(),
+      assertCurrent: assertPublicationAction,
+      readCurrentEntry: params.readCurrentEntry,
+      description:
+        row.body?.trim() || "Published by the Gateway from the accepted repository checkpoint.",
     });
-    const attribution = preparedAttribution.attribution;
-    const assertAction = () => {
-      assertPublicationAction();
-      if (!preparedAttribution.isCurrent()) {
-        throw new GitHubPublicationCreditChangedError();
-      }
-    };
+    const { assertAction } = content;
     assertAction();
     if (
       headCommit &&
       remoteHead !== headCommit &&
       !hasGitHubPublicationMessageFooter(
         preparedCommitMessage ?? "",
-        attribution?.trailers ?? [],
+        content.trailers,
         "OpenClaw-Publication: " + row.request_id,
       )
     ) {
       throw new GitHubPublicationCreditChangedError();
     }
-    const credit = attribution?.logins.map((login) => "- @" + login).join("\n");
-    const title = row.title?.trim() || "Publish " + branch;
     if (!headCommit) {
       const shas = [
         ...new Set(
@@ -417,43 +544,42 @@ export async function executeRepositoryGitHubPublication(params: {
         parents: [row.previous_head_commit ?? snapshot.baseCommit],
         author,
         committer: author,
-        message:
-          appendGitHubPublicationMessage(credit ? title + "\n\nWorked on by:\n" + credit : title, [
-            ...(attribution?.trailers ?? []),
-            "OpenClaw-Publication: " + row.request_id,
-          ]) + "\n",
+        message: content.commitMessage,
       });
       headCommit = verifyCommit(commit);
-      execution.updateHead(headCommit);
+      await execution.updateHead(headCommit);
     }
     if (remoteHead !== headCommit) {
       identity = await refreshIdentity();
       assertAction();
-      execution.recordEffect("push");
+      await execution.recordEffect("push");
       dispatched = true;
       // GraphQL's beforeOid is an exact lease; REST's non-force update only checks ancestry.
-      const result = await runPublicationCommand(githubPublicationApiArgs("graphql", "POST"), {
-        env: identity.env,
-        beforeRun: assertAction,
-        input: JSON.stringify({
-          query:
-            "mutation($input: UpdateRefsInput!) { updateRefs(input: $input) { clientMutationId } }",
-          variables: {
-            input: {
-              repositoryId: sourceRepository.node_id,
-              clientMutationId: row.request_id,
-              refUpdates: [
-                {
-                  name: "refs/heads/" + branch,
-                  beforeOid: remoteHead ?? "0".repeat(40),
-                  afterOid: headCommit,
-                  force: false,
-                },
-              ],
+      const result = await runPublicationCommand(
+        githubPublicationApiArgs("graphql", "POST", identity.host ?? resolveGitHubHost()),
+        {
+          env: identity.env,
+          beforeRun: assertAction,
+          input: JSON.stringify({
+            query:
+              "mutation($input: UpdateRefsInput!) { updateRefs(input: $input) { clientMutationId } }",
+            variables: {
+              input: {
+                repositoryId: sourceRepository.node_id,
+                clientMutationId: row.request_id,
+                refUpdates: [
+                  {
+                    name: "refs/heads/" + branch,
+                    beforeOid: remoteHead ?? "0".repeat(40),
+                    afterOid: headCommit,
+                    force: false,
+                  },
+                ],
+              },
             },
-          },
-        }),
-      });
+          }),
+        },
+      );
       let succeeded = false;
       if (result.code === 0) {
         const reply: unknown = JSON.parse(result.stdout.toString("utf8"));
@@ -464,7 +590,7 @@ export async function executeRepositoryGitHubPublication(params: {
           isRecord(reply.data.updateRefs) &&
           reply.data.updateRefs.clientMutationId === row.request_id;
       }
-      execution.recordEffect("push", succeeded ? { headCommit } : {});
+      await execution.recordEffect("push", succeeded ? { headCommit } : {});
       assertCurrent();
       remoteHead = await observeHead();
       if (remoteHead !== headCommit) {
@@ -473,37 +599,28 @@ export async function executeRepositoryGitHubPublication(params: {
     }
     let url = await findPullRequest();
     if (!url) {
-      const sessionUrl = resolveControlUiSessionUrl(config, {
-        sessionKey: row.session_key,
-        fallbackAgentId: row.agent_id,
-        exactKey: true,
-      });
-      const description =
-        row.body?.trim() || "Published by the Gateway from the accepted repository checkpoint.";
-      const body =
-        description +
-        (credit ? "\n\n## Worked on by\n\n" + credit : "") +
-        "\n\n" +
-        marker +
-        (sessionUrl?.startsWith("https://")
-          ? "\n\n---\n[View the OpenClaw team session](" + sessionUrl + ")"
-          : "");
       identity = await refreshIdentity();
       assertAction();
-      execution.recordEffect("pull_request");
+      await execution.recordEffect("pull_request");
       dispatched = true;
       const created = await runPublicationCommand(
-        githubPublicationApiArgs(`repos/${repository}/pulls`, "POST"),
+        githubPublicationApiArgs(
+          `repos/${repository}/pulls`,
+          "POST",
+          identity.host ?? resolveGitHubHost(),
+        ),
         {
           env: identity.env,
           beforeRun: assertAction,
-          input: JSON.stringify({
-            title,
-            body,
-            head: pushOwner + ":" + branch,
-            base: baseBranch,
-            draft: true,
-          }),
+          input: () =>
+            JSON.stringify({
+              title: content.title,
+              body: content.pullRequestBody(),
+              head: pushOwner + ":" + branch,
+              base: baseBranch,
+              // Requests accepted before the choice was introduced created drafts.
+              draft: row.draft !== 0,
+            }),
         },
       );
       if (created.code === 0) {
@@ -512,7 +629,7 @@ export async function executeRepositoryGitHubPublication(params: {
           url = value.html_url;
         }
       }
-      execution.recordEffect("pull_request", url ? { url } : {});
+      await execution.recordEffect("pull_request", url ? { url } : {});
       if (!url) {
         assertCurrent();
         url = await findPullRequest();
@@ -522,7 +639,7 @@ export async function executeRepositoryGitHubPublication(params: {
       throw new Error("GitHub pull request creation was rejected.");
     }
     return projectGitHubPublicationResult(
-      execution.complete({
+      await execution.complete({
         requestId: row.request_id,
         status: "published",
         url,
@@ -534,12 +651,13 @@ export async function executeRepositoryGitHubPublication(params: {
   } catch (error) {
     if (
       error instanceof GitHubPublicationRequesterUnavailableError ||
-      error instanceof GatewayOperatorAccessUnavailableError
+      error instanceof GatewayOperatorAccessUnavailableError ||
+      error instanceof GitHubPublicationRecoveryPendingError
     ) {
       throw error;
     }
     if (dispatched && !(error instanceof GitHubPublicationKnownFailure)) {
-      const interrupted = execution.interrupt();
+      const interrupted = await execution.interrupt();
       if (error instanceof SessionMutationAuthorizationChangedError) {
         throw error;
       }
@@ -547,7 +665,7 @@ export async function executeRepositoryGitHubPublication(params: {
     }
     const failure = resolveGitHubPublicationFailure(error);
     return projectGitHubPublicationResult(
-      execution.complete({
+      await execution.complete({
         requestId: row.request_id,
         status: "failed",
         ...failure,

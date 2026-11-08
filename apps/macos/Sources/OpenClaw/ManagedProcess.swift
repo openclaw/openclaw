@@ -203,7 +203,6 @@ final class ManagedProcess: @unchecked Sendable {
         stdout: FileHandle,
         stderr: FileHandle,
         closeStdinForGracefulShutdown stdinWriter: FileHandle? = nil,
-        terminateWhenClosingStdin: Bool = false,
         gracefulShutdownTimeout: Duration = .zero) -> ManagedProcess
     {
         self.launch(
@@ -213,7 +212,6 @@ final class ManagedProcess: @unchecked Sendable {
             error: .fileDescriptor(.init(rawValue: stderr.fileDescriptor), closeAfterSpawningProcess: false),
             closeAfterSpawn: [stdin, stdout, stderr],
             closeStdinForGracefulShutdown: stdinWriter,
-            terminateWhenClosingStdin: terminateWhenClosingStdin,
             gracefulShutdownTimeout: gracefulShutdownTimeout)
     }
 

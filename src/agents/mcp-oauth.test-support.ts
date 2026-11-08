@@ -1,4 +1,4 @@
-import type { OAuthClientProvider } from "@modelcontextprotocol/sdk/client/auth.js";
+import type { OAuthClientProvider } from "@modelcontextprotocol/client";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import { ensureMcpOAuthPendingSchema } from "../state/openclaw-state-db-schema-additive.js";
 import {
@@ -67,6 +67,21 @@ export function withMcpOAuthProviderForTest<T>(
   return withMcpOAuthTestLease(params.identity.storeKey, async (lease, storeContext) => {
     const provider = await createMcpOAuthClientProvider({ ...params, lease, storeContext });
     return await run(provider);
+  });
+}
+
+export async function saveMcpOAuthAccessTokenForTest(
+  identity: McpOAuthIdentity,
+  accessToken: string,
+  expiresIn = 3600,
+): Promise<void> {
+  await withMcpOAuthProviderForTest({ identity }, async (provider) => {
+    await provider.saveTokens({
+      access_token: accessToken,
+      refresh_token: "test-auth-token",
+      token_type: "Bearer",
+      expires_in: expiresIn,
+    });
   });
 }
 

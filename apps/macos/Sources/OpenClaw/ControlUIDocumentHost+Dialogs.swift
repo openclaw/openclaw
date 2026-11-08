@@ -2,6 +2,15 @@ import AppKit
 import WebKit
 
 extension ControlUIDocumentHost {
+    static func mediaCaptureDecision(
+        _ decision: WKPermissionDecision,
+        launchPlan: AppLaunchRuntimePlan = .current) -> WKPermissionDecision
+    {
+        guard decision == .prompt, !launchPlan.allowsActivation else { return decision }
+        PermissionManager.reportDeferredRequest()
+        return .deny
+    }
+
     func confirm(
         message: String,
         host: String?,
@@ -11,13 +20,9 @@ extension ControlUIDocumentHost {
         let alert = Self.makeJavaScriptConfirmAlert(
             message: message,
             host: host)
-        if let window = parent {
-            alert.beginSheetModal(for: window) { response in
-                completionHandler(Self.javaScriptConfirmResult(for: response))
-            }
-            return
+        AppActivation.shared.presentAlert(alert, over: parent) { response in
+            completionHandler(Self.javaScriptConfirmResult(for: response))
         }
-        completionHandler(Self.javaScriptConfirmResult(for: alert.runModal()))
     }
 
     static func openPanel(
@@ -25,6 +30,12 @@ extension ControlUIDocumentHost {
         parent: NSWindow?,
         completionHandler: @escaping @MainActor @Sendable ([URL]?) -> Void)
     {
+        guard AppLaunchRuntimePlan.current.allowsActivation else {
+            Logger(subsystem: "ai.openclaw", category: "browser").warning(
+                "File selection deferred by --no-activate. Relaunch without the flag to choose a file.")
+            completionHandler(nil)
+            return
+        }
         let panel = NSOpenPanel()
         panel.canChooseFiles = true
         panel.canChooseDirectories = parameters.allowsDirectories

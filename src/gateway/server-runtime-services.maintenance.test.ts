@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { enqueueCommandInLane } from "../process/command-queue.js";
 import {
   getActiveGatewayRootWorkCount,
   resetGatewayWorkAdmission,
@@ -16,7 +17,13 @@ import {
   createMaintenanceHandles,
   createPostReadyMaintenanceScheduleParams,
   resetRuntimeServiceMocks,
+  runtimeServiceMocks,
 } from "./server-runtime-services.test-harness.js";
+
+// mock-isolation: Scheduler tests must not start channel or transcript repair lifetimes.
+vi.mock("./server-startup-plugins.js", () => ({
+  runGatewayPostReadyStartupMaintenance: vi.fn(async () => {}),
+}));
 
 const { scheduleGatewayPostReadyMaintenance } = await import("./server-runtime-services.js");
 
@@ -27,6 +34,80 @@ beforeEach(() => {
 afterEach(resetGatewayWorkAdmission);
 
 describe("post-ready maintenance scheduling", () => {
+  it("defers optional database work during recovery without delaying cron or timers", async () => {
+    const clock = createGatewaySchedulerClock();
+    const scheduler = createTestGatewayScheduler(clock.clock);
+    const ready = createDeferredCore();
+    const finishRecovery = createDeferredCore();
+    let recovery: Promise<void> | undefined;
+    const startMaintenance = vi.fn(async () => null);
+    const cron = { start: vi.fn(async () => undefined) };
+    const { runGatewayPostReadyStartupMaintenance } = await import("./server-startup-plugins.js");
+    vi.mocked(runGatewayPostReadyStartupMaintenance).mockClear();
+    scheduleGatewayPostReadyMaintenance(
+      createPostReadyMaintenanceScheduleParams({
+        scheduler,
+        waitForPostReadyWork: () => ready.promise,
+        startMaintenance,
+        cronState: createTestCronState(cron),
+      }),
+    );
+    try {
+      const pending = clock.advanceBy(1);
+      await Promise.resolve();
+      recovery = enqueueCommandInLane("background", () => finishRecovery.promise);
+      ready.resolve();
+      await pending;
+      expect(runGatewayPostReadyStartupMaintenance).not.toHaveBeenCalled();
+      expect(runtimeServiceMocks.warmGatewayDatabasePageCache).not.toHaveBeenCalled();
+      expect(startMaintenance).toHaveBeenCalledOnce();
+      expect(cron.start).toHaveBeenCalledOnce();
+      finishRecovery.resolve();
+      await recovery;
+      await clock.advanceBy(1_000);
+      await clock.advanceBy(1_000);
+      expect(runGatewayPostReadyStartupMaintenance).toHaveBeenCalledOnce();
+      expect(cron.start).toHaveBeenCalledOnce();
+    } finally {
+      ready.resolve();
+      finishRecovery.resolve();
+      await recovery;
+      await scheduler.stop();
+    }
+  });
+
+  it.skipIf(process.platform !== "linux")(
+    "warms after readiness, repeats, and cancels with its Gateway",
+    async () => {
+      const clock = createGatewaySchedulerClock();
+      const scheduler = createTestGatewayScheduler(clock.clock);
+      const ready = createDeferredCore();
+      const connectionWork = new GatewayConnectionWork();
+      scheduleGatewayPostReadyMaintenance(
+        createPostReadyMaintenanceScheduleParams({
+          scheduler,
+          signal: connectionWork.signal,
+          isClosing: () => connectionWork.signal.aborted,
+          waitForPostReadyWork: () => ready.promise,
+        }),
+      );
+      const pending = clock.advanceBy(1);
+      await Promise.resolve();
+      expect(runtimeServiceMocks.warmGatewayDatabasePageCache).not.toHaveBeenCalled();
+      ready.resolve();
+      await pending;
+      await clock.advanceBy(1_000);
+      await clock.advanceBy(1_000);
+      expect(runtimeServiceMocks.warmGatewayDatabasePageCache).toHaveBeenCalledTimes(1);
+      await clock.advanceBy(15 * 60 * 1000);
+      expect(runtimeServiceMocks.warmGatewayDatabasePageCache).toHaveBeenCalledTimes(2);
+      connectionWork.beginClose();
+      await scheduler.stop();
+      await clock.advanceBy(15 * 60 * 1000);
+      expect(runtimeServiceMocks.warmGatewayDatabasePageCache).toHaveBeenCalledTimes(2);
+    },
+  );
+
   it("starts cron and records memory when post-ready maintenance fails", async () => {
     const clock = createGatewaySchedulerClock();
     const scheduler = createTestGatewayScheduler(clock.clock);

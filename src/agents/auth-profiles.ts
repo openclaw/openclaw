@@ -24,7 +24,9 @@ export {
 } from "./auth-profiles/order.js";
 export {
   resolveAuthStatePathForDisplay,
+  resolveAuthStatePathForDisplayAsync,
   resolveAuthStorePathForDisplay,
+  resolveAuthStorePathForDisplayAsync,
 } from "./auth-profiles/paths.js";
 export {
   dedupeProfileIds,
@@ -35,6 +37,7 @@ export {
   resolveSubscriptionAuthModeForProfiles,
   setAuthProfileOrder,
   upsertAuthProfile,
+  upsertAuthProfileAsync,
   upsertAuthProfileWithLock,
 } from "./auth-profiles/profiles.js";
 export { persistAuthProfileBatch } from "./auth-profiles/upsert-with-lock.js";
@@ -52,10 +55,20 @@ export {
   withAuthProfileStoreAgentDir,
 } from "./auth-profiles/store.js";
 export {
+  hasAnyAuthProfileStoreSourceAsync,
+  hasLocalAuthProfileStoreSourceAsync,
+} from "./auth-profiles/source-check.js";
+export {
   ensureAuthProfileStore,
+  findPersistedAuthProfileCredentialAsync,
+  resolvePersistedAuthProfileOwnerAgentDirAsync,
+  ensureAuthProfileStoreAsync,
   ensureAuthProfileStoreWithoutExternalProfiles,
+  ensureAuthProfileStoreWithoutExternalProfilesAsync,
   loadAuthProfileStoreForSecretsRuntime,
+  loadAuthProfileStoreForSecretsRuntimeAsync,
   loadAuthProfileStoreWithoutExternalProfiles,
+  loadAuthProfileStoreWithoutExternalProfilesAsync,
   loadAuthProfileStoreForRuntime,
   loadAuthProfileStoreForRuntimeAsync,
   saveAuthProfileStore,
@@ -63,6 +76,7 @@ export {
 export {
   clearRuntimeAuthProfileStoreSnapshots,
   replaceRuntimeAuthProfileStoreSnapshots,
+  replaceRuntimeAuthProfileStoreSnapshotsAsync,
 } from "./auth-profiles/runtime-snapshots.js";
 export type {
   AuthProfileCredential,

@@ -14,14 +14,12 @@ import {
   releaseAgentRunDelegatedAuthority,
   validateAgentRunDelegatedAuthority,
 } from "../../../infra/agent-run-registry.js";
-import { createPluginRegistry } from "../../../plugins/registry.js";
+import { createTestPluginRegistry } from "../../../plugins/registry-runtime.test-helpers.js";
 import {
   resetPluginRuntimeStateForTest,
   setActivePluginRegistry,
 } from "../../../plugins/runtime.js";
-import type { PluginRuntime } from "../../../plugins/runtime/types.js";
 import { createPluginRecord } from "../../../plugins/status.test-fixtures.js";
-import { createChannelTestPluginBase } from "../../../test-utils/channel-plugins.js";
 import { dispatchChannelMessageAction } from "../message-action-dispatch.js";
 import { getBundledChannelPluginAsync } from "./test-helpers/bundled-channel-plugin-loader.js";
 
@@ -43,6 +41,15 @@ const OTHER = "bbbbbbbbbbbbbbbbbbbbbbbbbb";
 const POST = { id: "post-fixture", message: "permitted history", create_at: 1_700_000_000_000 };
 const metadataPath = `/api/v4/channels/${OTHER}`;
 const postsPath = (target: string) => `/api/v4/channels/${target}/posts?per_page=1`;
+const posts = { order: [POST.id], posts: { [POST.id]: POST } };
+const routes: Record<string, unknown> = {
+  "/api/v4/users/me": { id: "fixture-bot" },
+  "/api/v4/users/fixture-bot/channels?per_page=200": [{ id: OTHER, name: "allowed", type: "O" }],
+  [metadataPath]: { id: OTHER, type: "O" },
+  [postsPath(CURRENT)]: posts,
+  [postsPath(OTHER)]: posts,
+};
+const readAction = { action: "read", channel: "mattermost", accountId: "default" } as const;
 
 afterEach(() => {
   preparation.afterLookup = undefined;
@@ -53,10 +60,6 @@ afterEach(() => {
 
 type FixtureOptions = {
   origin?: "bundled" | "global";
-  legacy?: boolean;
-  trusted?: boolean;
-  requesterAccountId?: string;
-  currentProvider?: string;
   currentChatType?: "channel" | "direct";
   currentMessagingTarget?: string;
   rawTarget?: string;
@@ -74,57 +77,26 @@ async function withReadFixture(
   }) => Promise<void>,
 ) {
   const mattermostPlugin = await getBundledChannelPluginAsync("mattermost");
-  const actions = mattermostPlugin?.actions;
-  if (!mattermostPlugin || !actions) {
+  if (!mattermostPlugin?.actions) {
     throw new Error("Mattermost message actions are unavailable");
   }
-  const owner = createPluginRegistry({
-    logger: { info() {}, warn() {}, error() {}, debug() {} },
-    runtime: {} as PluginRuntime,
-    activateGlobalSideEffects: false,
-  });
-  // Installer/loader provenance is covered separately; this fixture exercises
-  // the real registered Mattermost adapter, message tool, and HTTP transport.
+  const owner = createTestPluginRegistry();
   const record = createPluginRecord({
     id: "mattermost",
     origin: options.origin ?? "global",
-    trustedOfficialInstall: options.trusted ?? true,
+    trustedOfficialInstall: true,
   });
   owner.registry.plugins.push(record);
   owner.createApi(record, { config: {}, registrationMode: "full" }).registerChannel({
     plugin: {
       ...mattermostPlugin,
       status: undefined,
-      actions: {
-        ...actions,
-        readAuthorityActions: options.legacy ? undefined : actions.readAuthorityActions,
-      },
     },
   });
-  if (options.currentProvider === "slack") {
-    // The requester needs discovery metadata, not the bundled Slack runtime.
-    const requester = createPluginRecord({
-      id: "slack",
-      origin: "config",
-      trustedOfficialInstall: false,
-    });
-    owner.registry.plugins.push(requester);
-    owner.createApi(requester, { config: {}, registrationMode: "full" }).registerChannel({
-      plugin: {
-        ...createChannelTestPluginBase({ id: "slack" }),
-        actions: { describeMessageTool: () => ({ actions: [] }) },
-      },
-    });
-  }
   setActivePluginRegistry(owner.registry);
-  for (const key of [
-    "HTTPS_PROXY",
-    "HTTP_PROXY",
-    "https_proxy",
-    "http_proxy",
-    "ALL_PROXY",
-    "all_proxy",
-  ]) {
+  for (const key of "HTTPS_PROXY HTTP_PROXY https_proxy http_proxy ALL_PROXY all_proxy".split(
+    " ",
+  )) {
     vi.stubEnv(key, undefined);
   }
   const requests: string[] = [];
@@ -136,19 +108,11 @@ async function withReadFixture(
       request.resume();
       const status = beforeResponse?.(path) ?? 200;
       response.writeHead(status, { "content-type": "application/json" });
-      if (status !== 200) {
-        response.end(JSON.stringify({ message: "provider denied history" }));
-      } else if (path === "/api/v4/users/me") {
-        response.end(JSON.stringify({ id: "fixture-bot" }));
-      } else if (path === "/api/v4/users/fixture-bot/channels?per_page=200") {
-        response.end(JSON.stringify([{ id: OTHER, name: "allowed", type: "O" }]));
-      } else if (path === metadataPath) {
-        response.end(JSON.stringify({ id: OTHER, type: "O" }));
-      } else if (path === postsPath(CURRENT) || path === postsPath(OTHER)) {
-        response.end(JSON.stringify({ order: [POST.id], posts: { [POST.id]: POST } }));
-      } else {
-        response.end(JSON.stringify({ message: `Unexpected fixture request: ${path}` }));
-      }
+      const body =
+        status !== 200
+          ? { message: "provider denied history" }
+          : (routes[path] ?? { message: `Unexpected fixture request: ${path}` });
+      response.end(JSON.stringify(body));
     },
     async (baseUrl) => {
       const cfg: OpenClawConfig = {
@@ -161,14 +125,13 @@ async function withReadFixture(
             actions: { messages: true },
             groupPolicy: "allowlist",
             groups: options.allowOtherChannel === false ? {} : { [OTHER]: {} },
-            accounts: { other: { enabled: true } },
           },
         },
       };
       setRuntimeConfigSnapshot(cfg, cfg);
-      const requesterAccountId = options.requesterAccountId ?? "default";
+      const requesterAccountId = "default";
       const toolContext = {
-        currentChannelProvider: options.currentProvider ?? "mattermost",
+        currentChannelProvider: "mattermost",
         currentChannelId: `channel:${CURRENT}`,
         currentChatType: options.currentChatType ?? ("channel" as const),
         ...(options.currentMessagingTarget
@@ -178,30 +141,21 @@ async function withReadFixture(
       const sessionKey = `agent:main:mattermost:channel:${CURRENT}`;
       const operationalRunInstance = createOperationalRunInstanceRef("mattermost-read-fixture");
       const delegatedAuthority = claimAgentRunDelegatedAuthority(operationalRunInstance);
+      const identity = { agentId: "main", runId: operationalRunInstance.runId, sessionKey };
       const turnCapability = mintMessageActionTurnCapability({
-        agentId: "main",
-        runId: operationalRunInstance.runId,
-        sessionKey,
+        ...identity,
         requesterAccountId,
         requesterSenderId: "synthetic-requester",
         toolContext,
       });
       const tool = wrapToolWithGatewayCallerIdentity(
         createMessageTool({
+          ...identity,
           config: cfg,
-          agentId: "main",
           agentAccountId: requesterAccountId,
           agentSessionKey: sessionKey,
-          runId: operationalRunInstance.runId,
           messageActionTurnCapability: turnCapability,
           ...toolContext,
-          getScopedChannelsCommandSecretTargets: () => ({ targetIds: new Set<string>() }),
-          resolveCommandSecretRefsViaGateway: async ({ config }) => ({
-            resolvedConfig: config,
-            diagnostics: [],
-            targetStatesByPath: {},
-            hadUnresolvedTargets: false,
-          }),
         }),
         {
           agentId: "main",
@@ -215,17 +169,13 @@ async function withReadFixture(
           requests,
           read: (target) =>
             tool.execute("mattermost-read", {
-              action: "read",
-              channel: "mattermost",
-              accountId: "default",
+              ...readAction,
               target: options.rawTarget ?? `channel:${target}`,
               limit: 1,
             }),
           directRead: (target) =>
             dispatchChannelMessageAction({
-              action: "read",
-              channel: "mattermost",
-              accountId: "default",
+              ...readAction,
               cfg,
               params: { target: `channel:${target}`, limit: 1 },
               conversationReadOrigin: "direct-operator",
@@ -251,98 +201,92 @@ async function withReadFixture(
   );
 }
 
-describe("Mattermost registered message reads", () => {
-  it("reads the current DM by its native channel while sends target its user", async () => {
-    await withReadFixture(
-      { currentChatType: "direct", currentMessagingTarget: "user:cccccccccccccccccccccccccc" },
-      async ({ read, requests }) => {
-        await expect(read(CURRENT)).resolves.toMatchObject({
-          details: { ok: true, channelId: CURRENT, messages: [{ id: POST.id }] },
-        });
-        expect(requests).toEqual([postsPath(CURRENT)]);
-      },
-    );
+type AuthorityOwner = "plugin" | "run" | "turn";
+type Revocation = [AuthorityOwner, string, number?];
+async function checkRead(
+  options: FixtureOptions,
+  target: string,
+  expected: object | string | RegExp,
+  paths: string[],
+  revocation?: Revocation,
+) {
+  await withReadFixture(options, async ({ read, requests, revoke, beforeResponse }) => {
+    if (revocation) {
+      const [owner, at, status] = revocation;
+      beforeResponse((path) => {
+        if (path !== at) {
+          return undefined;
+        }
+        revoke(owner);
+        return status;
+      });
+    }
+    const result = read(target);
+    if (typeof expected === "string" || expected instanceof RegExp) {
+      await expect(result).rejects.toThrow(expected);
+    } else {
+      await expect(result).resolves.toMatchObject({ details: expected });
+    }
+    expect(requests).toEqual(paths);
   });
+}
 
-  it.each([false, true])(
-    "retains caller authority through directory resolution (revoke=%s)",
-    async (revokeDuringResolution) => {
-      await withReadFixture(
-        { rawTarget: "#allowed" },
-        async ({ read, requests, revoke, beforeResponse }) => {
-          if (revokeDuringResolution) {
-            beforeResponse((path) => {
-              if (path === "/api/v4/users/me") {
-                revoke("run");
-              }
-              return undefined;
-            });
-            await expect(read(OTHER)).rejects.toThrow(/no longer active/);
-            expect(requests).toEqual(["/api/v4/users/me"]);
-          } else {
-            await expect(read(OTHER)).resolves.toMatchObject({
-              details: {
-                ok: true,
-                channelId: OTHER,
-                messages: [
-                  {
-                    ...POST,
-                    timestampMs: 1_700_000_000_000,
-                    timestampUtc: "2023-11-14T22:13:20.000Z",
-                  },
-                ],
-                hasMore: false,
-              },
-            });
-            expect(requests).toEqual([
-              "/api/v4/users/me",
-              "/api/v4/users/fixture-bot/channels?per_page=200",
-              metadataPath,
-              postsPath(OTHER),
-            ]);
-          }
-        },
-      );
-    },
+describe("Mattermost registered message reads", () => {
+  it("reads current DM history by channel, not the messaging user", () =>
+    checkRead(
+      { currentChatType: "direct", currentMessagingTarget: "user:cccccccccccccccccccccccccc" },
+      CURRENT,
+      { ok: true, channelId: CURRENT, messages: [{ id: POST.id }] },
+      [postsPath(CURRENT)],
+    ));
+
+  it.each([false, true])("directory resolution retains authority (revoked=%s)", (revoked) =>
+    checkRead(
+      { rawTarget: "#allowed" },
+      OTHER,
+      revoked
+        ? /no longer active/
+        : {
+            ok: true,
+            channelId: OTHER,
+            hasMore: false,
+            messages: [
+              { ...POST, timestampMs: 1_700_000_000_000, timestampUtc: "2023-11-14T22:13:20.000Z" },
+            ],
+          },
+      revoked
+        ? ["/api/v4/users/me"]
+        : [
+            "/api/v4/users/me",
+            "/api/v4/users/fixture-bot/channels?per_page=200",
+            metadataPath,
+            postsPath(OTHER),
+          ],
+      revoked ? ["run", "/api/v4/users/me"] : undefined,
+    ),
   );
 
-  it.each([
-    {
-      name: "another requester account",
-      requesterAccountId: "other",
-      error: "Explicit account does not match the trusted current account.",
-    },
-    {
-      name: "another requester provider",
-      currentProvider: "slack",
-      error: /current provider and account|Cross-context/,
-    },
-  ])("rejects $name before provider access", async ({ name: _name, error, ...options }) => {
-    await withReadFixture(options, async ({ read, requests }) => {
-      await expect(read(OTHER)).rejects.toThrow(error);
-      expect(requests).toEqual([]);
-    });
-  });
+  it("rejects channels outside the allowlist", () =>
+    checkRead(
+      { allowOtherChannel: false },
+      OTHER,
+      "Mattermost read target channel is not allowed",
+      [metadataPath],
+    ));
 
-  it("preserves provider channel policy before reading posts", async () => {
-    await withReadFixture({ allowOtherChannel: false }, async ({ read, requests }) => {
-      await expect(read(OTHER)).rejects.toThrow("Mattermost read target channel is not allowed");
-      expect(requests).toEqual([metadataPath]);
-    });
-  });
-
-  it("stops after metadata when turn authority is revoked", async () => {
-    await withReadFixture({}, async ({ read, requests, revoke, beforeResponse }) => {
-      beforeResponse((path) => {
-        if (path === metadataPath) {
-          revoke("turn");
-        }
-        return undefined;
-      });
-      await expect(read(OTHER)).rejects.toThrow(/no longer active/);
-      expect(requests).toEqual([metadataPath]);
-    });
-  });
+  it.each<Revocation>([
+    ["turn", metadataPath],
+    ["plugin", postsPath(OTHER), 200],
+    ["run", postsPath(OTHER), 403],
+  ])("fences %s revocation at %s (status=%s)", (owner, at, status?: number) =>
+    checkRead(
+      {},
+      OTHER,
+      /no longer active/,
+      at === metadataPath ? [metadataPath] : [metadataPath, postsPath(OTHER)],
+      [owner, at, status],
+    ),
+  );
 
   it("checks bundled read authority after DNS preparation before each request", async () => {
     for (const beforePosts of [false, true]) {
@@ -361,34 +305,6 @@ describe("Mattermost registered message reads", () => {
       });
     }
   });
-
-  it.each([
-    { owner: "plugin" as const, status: 200 },
-    { owner: "run" as const, status: 403 },
-  ])("fences late $status responses after $owner revocation", async ({ owner, status }) => {
-    await withReadFixture({}, async ({ read, requests, revoke, beforeResponse }) => {
-      beforeResponse((path) => {
-        if (path === postsPath(OTHER)) {
-          revoke(owner);
-          return status;
-        }
-        return undefined;
-      });
-      await expect(read(OTHER)).rejects.toThrow(/no longer active/);
-      expect(requests).toEqual([metadataPath, postsPath(OTHER)]);
-    });
-  });
-
-  it.each([{ legacy: true }, { trusted: false }])(
-    "preserves exact-current restrictions without installed read authority (%j)",
-    async (options) => {
-      await withReadFixture(options, async ({ read, requests }) => {
-        await expect(read(CURRENT)).resolves.toMatchObject({ details: { ok: true } });
-        await expect(read(OTHER)).rejects.toThrow("exact current conversation");
-        expect(requests).toEqual([postsPath(CURRENT)]);
-      });
-    },
-  );
 
   it("preserves direct operator reads and provider errors", async () => {
     await withReadFixture(

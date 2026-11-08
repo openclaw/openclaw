@@ -1,10 +1,9 @@
 import type { DatabaseSync as HandoffDatabase } from "node:sqlite";
 import { isChildProcessTreeAlive } from "../process/child-process-tree.js";
-import { executeSqliteQuerySync } from "./kysely-sync.js";
-import {
-  type createManagedHandoffLeaseDatabase,
-  type LeaseTable,
-  leaseQueries,
+import { findCommandReservationCandidates } from "../process/command-reservation-census.js";
+import type {
+  createManagedHandoffLeaseDatabase,
+  LeaseTable,
 } from "./update-managed-service-handoff-database.js";
 import type {
   ManagedHandoffLease,
@@ -18,19 +17,45 @@ import type {
   ManagedHandoffLeasePayload,
 } from "./update-managed-service-handoff-schema.js";
 
+type ManagedHandoffProcessState = ReturnType<
+  typeof createManagedHandoffProcessIdentityReader
+>["processState"];
+
 export function managedCommandCustody(
   lease: ManagedHandoffParent | ManagedHandoffLeasePayload | null,
 ) {
   return lease?.version === 2 && lease.action.kind === "update" ? lease.action.custody : undefined;
 }
 
-/** Tracked command reservations outlive their helper; only group extinction closes a binding. */
-export function managedCommandUnsettled(lease: ManagedHandoffLease): boolean {
-  return (
-    managedCommandCustody(lease) !== "bound" ||
-    process.platform === "win32" ||
-    isChildProcessTreeAlive(lease.executor)
-  );
+function reservationAbandoned(
+  lease: ManagedHandoffLease,
+  processState: ManagedHandoffProcessState,
+): boolean {
+  if (processState(lease.helper) !== "dead") {
+    return false;
+  }
+  try {
+    return findCommandReservationCandidates(lease.updatedAt).length === 0;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Only group extinction closes a binding. A reservation has no process identity: it
+ * closes when its spawner is dead and no process born at reservation time remains.
+ * A reservation must not fence repair forever when its spawner was killed first.
+ */
+export function managedCommandUnsettled(
+  lease: ManagedHandoffLease,
+  processState: ManagedHandoffProcessState,
+): boolean {
+  if (process.platform === "win32") {
+    return true;
+  }
+  return managedCommandCustody(lease) === "bound"
+    ? isChildProcessTreeAlive(lease.executor)
+    : !reservationAbandoned(lease, processState);
 }
 
 export function managedCommandAllowsBinding(
@@ -48,25 +73,18 @@ export function managedCommandAllowsBinding(
     : action.kind !== "update" || !action.custody;
 }
 
-export function createManagedHandoffChildReader(deps: {
-  withDatabase: ReturnType<typeof createManagedHandoffLeaseDatabase>;
-  handle: ReturnType<typeof createManagedHandoffLeaseRows>["handle"];
-  processState: ReturnType<typeof createManagedHandoffProcessIdentityReader>["processState"];
-}) {
+export function createManagedHandoffChildReader(
+  deps: Pick<ReturnType<typeof createManagedHandoffLeaseRows>, "handle" | "descendants"> & {
+    withDatabase: ReturnType<typeof createManagedHandoffLeaseDatabase>;
+    processState: ReturnType<typeof createManagedHandoffProcessIdentityReader>["processState"];
+  },
+) {
   function readChildren(
     parent: ManagedHandoffParent | string,
     connection?: HandoffDatabase,
   ): LeaseTable[] {
-    const prefix = `${typeof parent === "string" ? parent : parent.key}/.openclaw-update-child-`;
     const inspect = (db: HandoffDatabase) =>
-      executeSqliteQuerySync(
-        db,
-        leaseQueries(db)
-          .selectFrom("managed_update_handoffs")
-          .select(["install_root", "owner", "payload_json", "updated_at"])
-          .where("install_root", ">=", prefix)
-          .where("install_root", "<", prefix + "\uffff"),
-      ).rows;
+      deps.descendants(db, typeof parent === "string" ? { key: parent } : parent);
     return connection ? inspect(connection) : deps.withDatabase(false, inspect);
   }
   return {
@@ -76,13 +94,20 @@ export function createManagedHandoffChildReader(deps: {
       }
       return readChildren(parent, connection).some((entry) => {
         const child = deps.handle(entry.install_root, entry);
+        // Legacy unbound reservations name the spawner, not a detached group leader.
+        const unbound =
+          child.version === 2 &&
+          child.action.kind === "update" &&
+          !child.action.mutationProtocol &&
+          child.executor.pid === child.helper.pid &&
+          child.executor.startIdentity === child.helper.startIdentity;
         return managedCommandCustody(child)
-          ? managedCommandUnsettled(child)
+          ? managedCommandUnsettled(child, deps.processState)
           : child.version === 3 ||
               child.version === 4 ||
               deps.processState(child.helper) !== "dead" ||
               deps.processState(child.executor) !== "dead" ||
-              (process.platform !== "win32" && isChildProcessTreeAlive(child.executor));
+              (!unbound && process.platform !== "win32" && isChildProcessTreeAlive(child.executor));
       });
     },
     readCommandChildren: (roots: readonly string[], connection?: HandoffDatabase) => {

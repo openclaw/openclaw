@@ -5,7 +5,7 @@ import {
 import { buildMatrixQaCliE2eeAccountConfig } from "./scenario-runtime-e2ee-cli-config.js";
 import {
   loginMatrixQaCliDevice,
-  parseMatrixQaCliJson,
+  parseMatrixQaCliVerificationStatus,
   type MatrixQaCliBackupRestoreStatus,
   type MatrixQaCliVerificationStatus,
   writeMatrixQaCliOutputArtifacts,
@@ -13,13 +13,6 @@ import {
 import type { MatrixQaScenarioContext } from "./scenario-runtime-shared.js";
 
 export type MatrixQaCliRuntime = Awaited<ReturnType<typeof createMatrixQaOpenClawCliRuntime>>;
-
-export function requireMatrixQaE2eeOutputDir(context: MatrixQaScenarioContext) {
-  if (!context.outputDir) {
-    throw new Error("Matrix E2EE destructive QA scenarios require an output directory");
-  }
-  return context.outputDir;
-}
 
 function requireMatrixQaCliRuntimeEnv(context: MatrixQaScenarioContext) {
   if (!context.gatewayRuntimeEnv) {
@@ -58,7 +51,7 @@ export async function createMatrixQaRecoveryCliRuntime(params: {
       name: `Matrix QA ${params.label}`,
       userId: params.userId,
     }),
-    outputDir: requireMatrixQaE2eeOutputDir(params.context),
+    outputDir: params.context.outputDir,
     runtimeEnv: requireMatrixQaCliRuntimeEnv(params.context),
   });
 }
@@ -68,12 +61,7 @@ export async function loginMatrixQaRecoveryDevice(params: {
   deviceName: string;
   userId: string;
   password: string;
-}): Promise<{
-  accessToken: string;
-  deviceId: string;
-  password?: string;
-  userId: string;
-}> {
+}) {
   return await loginMatrixQaCliDevice(
     params.context.baseUrl,
     params,
@@ -82,10 +70,9 @@ export async function loginMatrixQaRecoveryDevice(params: {
   );
 }
 
-export async function runMatrixQaCliJson<T>(params: {
+export async function runMatrixQaCliJson(params: {
   allowNonZero?: boolean;
   args: string[];
-  decode?: (payload: unknown) => T;
   label: string;
   runtime: MatrixQaCliRuntime;
   stdin?: string;
@@ -101,10 +88,9 @@ export async function runMatrixQaCliJson<T>(params: {
     result,
     rootDir: params.runtime.artifactDir,
   });
-  const parsed = parseMatrixQaCliJson(result);
   return {
     artifacts,
-    payload: params.decode ? params.decode(parsed) : (parsed as T),
+    payload: parseMatrixQaCliVerificationStatus(result),
     result,
   };
 }
@@ -123,6 +109,29 @@ export function assertMatrixQaCliBackupRestoreSucceeded(
   }
   if (restore.backup?.matchesDecryptionKey !== true) {
     throw new Error(`${label} backup restore did not load the matching backup key`);
+  }
+}
+
+// A corrupt canonical snapshot is an error, not a new account: crypto ownership
+// refuses before touching it and points the operator at Doctor.
+export function assertMatrixQaCliCorruptSnapshotRefused(
+  restore: {
+    payload: MatrixQaCliBackupRestoreStatus;
+    result: Pick<MatrixQaCliRunResult, "exitCode">;
+  },
+  snapshot: { readGeneration: () => unknown },
+) {
+  if (
+    restore.result.exitCode === 0 ||
+    restore.payload.success !== false ||
+    !restore.payload.error?.includes("openclaw matrix doctor inspect")
+  ) {
+    throw new Error(
+      `Matrix corrupt crypto snapshot was not refused with Doctor guidance: ${restore.payload.error ?? "no error"}`,
+    );
+  }
+  if (snapshot.readGeneration() !== "corrupt") {
+    throw new Error("Matrix corrupt crypto snapshot was replaced after a refused restore");
   }
 }
 
@@ -178,6 +187,18 @@ export function assertMatrixQaCliBackupRestoreFailed(
   if (!expectedDiagnostic) {
     throw new Error(`${params.label} failed without the expected ${params.failureKind} diagnostic`);
   }
+}
+
+export function isMatrixQaRepairableBackupBootstrapError(error: string | undefined) {
+  const normalized = error?.toLowerCase() ?? "";
+  return (
+    normalized.includes("room key backup is not usable") ||
+    normalized.includes("room key backup is missing") ||
+    normalized.includes("no current key backup") ||
+    normalized.includes("m.megolm_backup.v1") ||
+    normalized.includes("backup decryption key could not be loaded") ||
+    normalized.includes("bad mac")
+  );
 }
 
 export function isMatrixQaVerifyStatusHealthy(status: {

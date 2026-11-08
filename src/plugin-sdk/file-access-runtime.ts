@@ -1,4 +1,3 @@
-// Safe local-file helpers for plugin runtime media and bridge code.
 import { removePathWithinRoot as removePathWithinRootCore } from "../infra/fs-safe-remove.js";
 import { statRegularFileSync as inspectRegularFileSync } from "../infra/fs-safe.js";
 
@@ -73,3 +72,15 @@ export {
 export { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 export { readFileRangeAsync } from "../config/sessions/file-range.js";
 export { createStagedInputPathMatcher } from "../media/staged-inputs.js";
+export {
+  createBoundedRemoteFileReader,
+  type RemoteWorkspaceFileReader,
+} from "../media/remote-workspace-file.js";
+
+export {
+  listDirectoryTreeStrict,
+  listDirectoryTreeStrictSync,
+  DirectoryWalkLimitError,
+  type DirectoryWalkEntry,
+  type DirectoryWalkOptions,
+} from "../infra/directory-walk.js";

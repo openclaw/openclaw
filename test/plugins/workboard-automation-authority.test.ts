@@ -2,8 +2,8 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { WorkboardCard } from "@openclaw/workboard-contract";
 import { capturePluginRegistration } from "openclaw/plugin-sdk/plugin-test-runtime";
-import { describe, expect, it, vi } from "vitest";
-import type { OpenClawPluginService } from "../../extensions/workboard/api.js";
+import { expect, it, vi } from "vitest";
+import type { OpenClawPluginApi } from "../../extensions/workboard/api.js";
 import plugin from "../../extensions/workboard/index.js";
 import {
   createOperationalRunInstanceRef,
@@ -14,18 +14,26 @@ import {
   getGatewayToolCallerIdentity,
   withGatewayToolCallerIdentity,
 } from "../../src/agents/tools/gateway-caller-context.js";
+import { createAgentLifecycleTerminalBackstop } from "../../src/auto-reply/reply/agent-lifecycle-terminal.js";
 import { CronService } from "../../src/cron/service.js";
 import {
   createCronStoreHarness,
   createFinishedBarrier,
   createNoopLogger,
 } from "../../src/cron/service.test-harness.js";
+import type { CronServiceDeps } from "../../src/cron/service/state.js";
 import type { GatewayMethodDescriptorInput } from "../../src/gateway/methods/descriptor.js";
 import { createGatewayMethodRegistry } from "../../src/gateway/methods/registry.js";
 import type { GatewayRequestHandler } from "../../src/gateway/server-methods/types.js";
 import { createContext } from "../../src/gateway/server-plugin-in-process-dispatch.test-support.js";
 import { dispatchTrustedPluginGatewayMethod } from "../../src/gateway/server-plugins.js";
+import { getAgentEventLifecycleGeneration, onAgentEvent } from "../../src/infra/agent-events.js";
+import {
+  areDiagnosticsEnabledForProcess,
+  setDiagnosticsEnabledForProcess,
+} from "../../src/infra/diagnostic-events.js";
 import type { PluginHookHandlerMap } from "../../src/plugins/hook-types.js";
+import { dispatchPluginAgentEventSubscriptions } from "../../src/plugins/host-hook-runtime.js";
 import { bindPluginRegistryRuntime } from "../../src/plugins/registry-runtime-binding.js";
 import { createEmptyPluginRegistry } from "../../src/plugins/registry.js";
 import {
@@ -38,31 +46,38 @@ import { createTestGatewayScheduler } from "../../src/test-utils/gateway-schedul
 
 const { makeStorePath } = createCronStoreHarness({ prefix: "workboard-nudge-" });
 
-describe("Workboard terminal hook automation ownership", () => {
-  it.each(
-    (["agent_end", "subagent_ended"] as const).flatMap((hook) =>
-      ([false, true] as const).map((closeCaller) => ({ hook, closeCaller })),
-    ),
-  )("enqueues after $hook with closeCaller=$closeCaller", async ({ hook, closeCaller }) => {
+it.each(["run_settled", "subagent_ended"] as const)(
+  "Workboard terminal hook %s survives closure",
+  async (hook) => {
     const sessionKey = "agent:main:subagent:workboard-d6-authority";
-    const runId = `d6-${hook}-${closeCaller}`;
+    const runId = `d6-${hook}`;
     const { storePath } = await makeStorePath();
     vi.stubEnv("OPENCLAW_STATE_DIR", path.dirname(storePath));
     const gatewayContext = createContext();
+    const gatewayScope = {
+      pluginId: "workboard",
+      pluginOrigin: "bundled" as const,
+      context: gatewayContext,
+      isWebchatConnect: () => false,
+    };
+    const inGatewayScope = <T>(run: () => T) =>
+      withPluginRuntimeGatewayRequestScope(gatewayScope, run);
     const finished = createFinishedBarrier();
-    const executeJob = vi.fn(() => {
+    const executeJob = vi.fn<NonNullable<CronServiceDeps["runSessionEvent"]>>(async () => {
       expect(getGatewayToolCallerIdentity()).toBeUndefined();
       expect(getPluginRuntimeGatewayRequestScope()?.resolveGatewayContext?.()).toBe(gatewayContext);
+      return { status: "ok" };
     });
+    const scheduler = createTestGatewayScheduler();
     const cron = new CronService({
-      scheduler: createTestGatewayScheduler(),
+      scheduler,
       nowMs: () => Date.now(),
       storePath,
       cronEnabled: false,
       defaultAgentId: "main",
       log: createNoopLogger(),
-      enqueueSystemEvent: executeJob,
-      requestHeartbeat: vi.fn(),
+      enqueueSystemEvent: vi.fn(),
+      runSessionEvent: executeJob,
       runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
       onEvent: finished.onEvent,
     });
@@ -75,8 +90,7 @@ describe("Workboard terminal hook automation ownership", () => {
       payload: { kind: "systemEvent", text: "categorize board" },
     });
     const settled = finished.waitForOk(job.id);
-    const services: OpenClawPluginService[] = [];
-    let agentEnd: PluginHookHandlerMap["agent_end"] | undefined;
+    const services: Parameters<OpenClawPluginApi["registerService"]>[0][] = [];
     let subagentEnded: PluginHookHandlerMap["subagent_ended"] | undefined;
     const methods: GatewayMethodDescriptorInput[] = [];
     const captured = capturePluginRegistration({
@@ -92,9 +106,7 @@ describe("Workboard terminal hook automation ownership", () => {
           });
         };
         api.on = (name, handler) => {
-          if (name === "agent_end") {
-            agentEnd = handler as typeof agentEnd;
-          } else if (name === "subagent_ended") {
+          if (name === "subagent_ended") {
             subagentEnded = handler as typeof subagentEnded;
           }
         };
@@ -114,28 +126,91 @@ describe("Workboard terminal hook automation ownership", () => {
         });
       },
     });
-    const service = services.find((entry) => entry.id === "workboard-automation-nudge")!;
     const warn = vi.fn();
     const registry = createEmptyPluginRegistry();
+    const pendingEvents: Promise<void>[] = [];
+    for (const subscription of captured.agentEventSubscriptions) {
+      registry.agentEventSubscriptions.push({
+        pluginId: "workboard",
+        source: "test",
+        subscription: {
+          ...subscription,
+          handle: (event, ctx) => {
+            const pending = Promise.resolve(subscription.handle(event, ctx));
+            pendingEvents.push(pending);
+            return pending;
+          },
+        },
+      });
+    }
+    const runSettled = async () => {
+      const unsubscribe = onAgentEvent((event) => {
+        if (event.runId === runId) {
+          dispatchPluginAgentEventSubscriptions({ registry, event, isLive: () => true });
+        }
+      });
+      try {
+        const terminal = createAgentLifecycleTerminalBackstop({
+          runId,
+          sessionKey,
+          getLifecycleGeneration: getAgentEventLifecycleGeneration,
+          resolveTerminationFields: () => ({}),
+        });
+        // A failed candidate can still be replaced before the owner publishes settlement.
+        terminal.capture("error", new Error("retryable candidate"));
+        terminal.replaceAttemptTerminal();
+        terminal.emit("end", { meta: {} });
+        expect(pendingEvents.length).toBeGreaterThan(0);
+        await Promise.all(pendingEvents.splice(0));
+      } finally {
+        unsubscribe();
+      }
+    };
     bindGatewayContextResolver(captured.api.runtime, () => gatewayContext);
     bindPluginRegistryRuntime(registry, captured.api.runtime);
-    registry.services.push({
-      pluginId: "workboard",
-      origin: "bundled",
-      source: "test",
-      id: service.id,
-      service: {
-        ...service,
-        start: (ctx) => service.start({ ...ctx, logger: { ...ctx.logger, warn } }),
-      },
+    for (const service of services.filter((entry) =>
+      ["workboard-automation-nudge", "workboard-lifecycle-sync"].includes(entry.id),
+    )) {
+      if (service.apiVersion === 2 || service.apiVersion === 3) {
+        throw new Error("Expected Workboard service API version 1");
+      }
+      registry.services.push({
+        pluginId: "workboard",
+        origin: "bundled",
+        source: "test",
+        id: service.id,
+        service: {
+          ...service,
+          apiVersion: 2,
+          start: (ctx) =>
+            inGatewayScope(() => service.start({ ...ctx, logger: { ...ctx.logger, warn } })),
+        },
+      });
+    }
+    const handle = await startPluginServices({
+      scheduler,
+      registry,
+      config: {},
+      getCronService: () => cron,
     });
-    const handle = await startPluginServices({ registry, config: {}, getCronService: () => cron });
     const enqueue = vi.spyOn(cron, "enqueueRun");
     const dispatch: GatewayRequestHandler = async ({ respond }) =>
       respond(true, await cron.enqueueRun(job.id, "if-enabled"));
+    const describeSession: GatewayRequestHandler = ({ respond }) => {
+      expect(getGatewayToolCallerIdentity()).toBeUndefined();
+      respond(true, {
+        session: { key: sessionKey, status: "done", updatedAt: Date.now(), hasActiveRun: false },
+      });
+    };
     gatewayContext.getGatewayMethodRegistry = () =>
       createGatewayMethodRegistry([
         ...methods,
+        {
+          name: "sessions.describe",
+          scope: "operator.read",
+          owner: { kind: "core", area: "sessions" },
+          handler: describeSession,
+        },
         {
           name: "cron.run",
           scope: "operator.admin",
@@ -144,14 +219,12 @@ describe("Workboard terminal hook automation ownership", () => {
         },
       ]);
     const request = <T>(method: string, params: Record<string, unknown>) =>
-      withPluginRuntimeGatewayRequestScope(
-        {
-          pluginId: "workboard",
-          pluginOrigin: "bundled",
-          context: gatewayContext,
-          isWebchatConnect: () => false,
-        },
-        () => dispatchTrustedPluginGatewayMethod<T>(method, params, { scopes: ["operator.admin"] }),
+      inGatewayScope(() =>
+        dispatchTrustedPluginGatewayMethod<T>(method, params, { scopes: ["operator.admin"] }),
+      );
+    const expectRunRejected = () =>
+      expect(request("cron.run", { id: job.id, mode: "if-enabled" })).rejects.toThrow(
+        "agent tool caller authority is no longer active",
       );
     const admission = prepareAgentRunAdmission({
       cfg: {},
@@ -162,6 +235,8 @@ describe("Workboard terminal hook automation ownership", () => {
       },
       operationalRunInstance: createOperationalRunInstanceRef(runId),
     });
+    const diagnosticsEnabled = areDiagnosticsEnabledForProcess();
+    setDiagnosticsEnabledForProcess(true);
     try {
       await request("workboard.boards.upsert", { id: "planning", automationJobId: job.id });
       const { card } = await request<{ card: WorkboardCard }>("workboard.cards.create", {
@@ -180,75 +255,53 @@ describe("Workboard terminal hook automation ownership", () => {
       if (!caller) {
         throw new Error("Expected an admitted worker caller");
       }
-      await withPluginRuntimeGatewayRequestScope(
-        {
-          pluginId: "workboard",
-          pluginOrigin: "bundled",
-          context: gatewayContext,
-          isWebchatConnect: () => false,
-        },
-        () =>
-          withGatewayToolCallerIdentity(caller, async () => {
-            const pending =
-              hook === "agent_end"
-                ? agentEnd!({ messages: [], success: true }, { agentId: "main", sessionKey, runId })
-                : subagentEnded!(
-                    {
-                      targetSessionKey: sessionKey,
-                      targetKind: "subagent",
-                      runId,
-                      endedAt: card.updatedAt + 1,
-                      outcome: "ok",
-                      reason: "subagent-complete",
-                    },
-                    { childSessionKey: sessionKey, runId },
-                  );
-            if (closeCaller) {
-              admission.close();
-            }
-            await pending;
-            if (closeCaller) {
-              await expect(
-                dispatchTrustedPluginGatewayMethod(
-                  "cron.run",
-                  { id: job.id, mode: "if-enabled" },
-                  { scopes: ["operator.admin"] },
-                ),
-              ).rejects.toThrow("agent tool caller authority is no longer active");
-            }
-          }),
+      await inGatewayScope(() =>
+        withGatewayToolCallerIdentity(caller, async () => {
+          const pending =
+            hook === "run_settled"
+              ? runSettled()
+              : subagentEnded!(
+                  {
+                    targetSessionKey: sessionKey,
+                    targetKind: "subagent",
+                    runId,
+                    endedAt: card.updatedAt + 1,
+                    outcome: "ok",
+                    reason: "subagent-complete",
+                  },
+                  { childSessionKey: sessionKey, runId },
+                );
+          admission.close();
+          await pending;
+          await expectRunRejected();
+        }),
       );
 
-      if (closeCaller) {
-        await withGatewayToolCallerIdentity({ ...caller }, async () => {
-          await expect(request("cron.run", { id: job.id, mode: "if-enabled" })).rejects.toThrow(
-            "agent tool caller authority is no longer active",
-          );
-        });
-      }
+      await withGatewayToolCallerIdentity({ ...caller }, async () => {
+        await expectRunRejected();
+      });
       await expect(request("workboard.cards.list", { boardId: "planning" })).resolves.toMatchObject(
         {
           cards: [expect.objectContaining({ id: card.id, status: "review" })],
         },
       );
-      expect(
-        enqueue,
-        "the service-owned automation must survive closure of the completed worker caller",
-      ).toHaveBeenCalledOnce();
+      expect(enqueue).toHaveBeenCalledOnce();
       await settled;
       expect(executeJob).toHaveBeenCalledOnce();
       // The sibling terminal event for the same card shares the service's debounce owner.
-      await agentEnd!({ messages: [], success: true }, { agentId: "main", sessionKey, runId });
+      await runSettled();
       expect(enqueue).toHaveBeenCalledOnce();
       expect(warn).not.toHaveBeenCalled();
     } finally {
+      setDiagnosticsEnabledForProcess(diagnosticsEnabled);
       admission.close();
       await handle.stop();
       cron.stop();
+      await scheduler.stop();
       for (const lifecycle of captured.runtimeLifecycles) {
         await lifecycle.dispose?.();
       }
       vi.unstubAllEnvs();
     }
-  });
-});
+  },
+);

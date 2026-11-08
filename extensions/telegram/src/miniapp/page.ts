@@ -1,7 +1,7 @@
 import { escapeHtml } from "openclaw/plugin-sdk/text-utility-runtime";
 
 export const TELEGRAM_MINIAPP_EXPIRED_MESSAGE =
-  "This link expired. Reopen the dashboard from your bot chat.";
+  "This link expired. Run /controlui again in your bot chat.";
 
 const TELEGRAM_MINIAPP_AUTH_TIMEOUT_MS = 15_000;
 
@@ -9,8 +9,6 @@ export function renderTelegramMiniAppPage(params: {
   accountId: string;
   scriptNonce: string;
 }): string {
-  const accountId = JSON.stringify(params.accountId);
-  const nonce = escapeHtml(params.scriptNonce);
   return `<!doctype html>
 <html lang="en">
 <head>
@@ -30,10 +28,10 @@ export function renderTelegramMiniAppPage(params: {
 <body>
   <main>
     <h1>OpenClaw</h1>
-    <p id="status">Opening dashboard...</p>
+    <p id="status">Opening Control UI...</p>
   </main>
-  <script nonce="${nonce}">
-    const accountId = ${accountId};
+  <script nonce="${escapeHtml(params.scriptNonce)}">
+    const accountId = ${JSON.stringify(params.accountId)};
     const launchTicket = new URLSearchParams(location.hash.slice(1)).get("launchTicket") || "";
     const status = document.getElementById("status");
     const showExpired = () => {

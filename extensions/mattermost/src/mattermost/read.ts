@@ -1,7 +1,6 @@
 import { normalizeAccountId } from "openclaw/plugin-sdk/account-id";
 import type { ChannelMessageActionContext } from "openclaw/plugin-sdk/channel-contract";
 import { resolveAllowlistProviderRuntimeGroupPolicy } from "openclaw/plugin-sdk/runtime-group-policy";
-import { isPrivateNetworkOptInEnabled } from "openclaw/plugin-sdk/ssrf-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { normalizeMattermostMessagingTarget } from "../normalize.js";
 import { resolveMattermostAccount } from "./accounts.js";
@@ -9,7 +8,6 @@ import {
   createMattermostClient,
   fetchMattermostChannel,
   fetchMattermostChannelPosts,
-  type MattermostFetch,
   type MattermostPost,
 } from "./client.js";
 import type { OpenClawConfig } from "./runtime-api.js";
@@ -29,28 +27,19 @@ function parseMattermostChannelTarget(rawTarget: string): string | undefined {
 }
 
 function isCurrentMattermostReadTarget(params: {
-  accountId: string;
   channelId: string;
   context: ReadContext;
 }): boolean {
   const toolContext = params.context.toolContext;
-  const requesterAccountId = params.context.requesterAccountId?.trim();
-  if (
-    normalizeLowercaseStringOrEmpty(toolContext?.currentChannelProvider) !== "mattermost" ||
-    !requesterAccountId ||
-    normalizeAccountId(requesterAccountId) !== normalizeAccountId(params.accountId)
-  ) {
-    return false;
-  }
   const nativeChannelId = toolContext?.currentChannelId;
-  if (typeof nativeChannelId === "string" && nativeChannelId.trim()) {
+  if (nativeChannelId?.trim()) {
     // Mattermost DMs route outbound messages via `user:<peerId>`, while the
     // trusted native channel ID remains the exact conversation identity.
     return parseMattermostChannelTarget(nativeChannelId) === params.channelId;
   }
   const messagingTarget = toolContext?.currentMessagingTarget;
   return (
-    typeof messagingTarget === "string" &&
+    messagingTarget !== undefined &&
     Boolean(messagingTarget.trim()) &&
     parseMattermostChannelTarget(messagingTarget) === params.channelId
   );
@@ -86,7 +75,6 @@ export async function readMattermostMessages(params: {
   after?: string;
   accountId?: string | null;
   context: ReadContext;
-  fetchImpl?: MattermostFetch;
 }): Promise<{ messages: MattermostPost[]; hasMore: boolean }> {
   const account = resolveMattermostAccount({ cfg: params.cfg, accountId: params.accountId });
   if (!account.enabled) {
@@ -101,16 +89,9 @@ export async function readMattermostMessages(params: {
   const client = createMattermostClient({
     baseUrl,
     botToken,
-    fetchImpl: params.fetchImpl,
-    allowPrivateNetwork: isPrivateNetworkOptInEnabled(account.config),
+    allowPrivateNetwork: account.config.network?.dangerouslyAllowPrivateNetwork === true,
   });
-  const directOperator = params.context.conversationReadOrigin === "direct-operator";
-  const currentConversation = isCurrentMattermostReadTarget({
-    accountId: account.accountId,
-    channelId: params.channelId,
-    context: params.context,
-  });
-  if (!directOperator && !currentConversation) {
+  if (params.context.conversationReadOrigin !== "direct-operator") {
     const requesterAccountId = params.context.requesterAccountId?.trim();
     const sameProvider =
       normalizeLowercaseStringOrEmpty(params.context.toolContext?.currentChannelProvider) ===
@@ -122,12 +103,14 @@ export async function readMattermostMessages(params: {
       throw new Error("Mattermost delegated reads require the current Mattermost account.");
     }
 
-    const channel = await fetchMattermostChannel(client, params.channelId);
-    if (
-      (channel.type !== "O" && channel.type !== "P") ||
-      !isConfiguredMattermostReadTarget({ cfg: params.cfg, account, channelId: params.channelId })
-    ) {
-      throw new Error("Mattermost read target channel is not allowed.");
+    if (!isCurrentMattermostReadTarget(params)) {
+      const channel = await fetchMattermostChannel(client, params.channelId);
+      if (
+        (channel.type !== "O" && channel.type !== "P") ||
+        !isConfiguredMattermostReadTarget({ cfg: params.cfg, account, channelId: params.channelId })
+      ) {
+        throw new Error("Mattermost read target channel is not allowed.");
+      }
     }
   }
 

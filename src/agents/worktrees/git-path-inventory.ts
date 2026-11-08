@@ -6,14 +6,11 @@ export function splitNullBuffer(input: Uint8Array): Buffer[] {
   const bytes = Buffer.from(input.buffer, input.byteOffset, input.byteLength);
   const fields: Buffer[] = [];
   let start = 0;
-  for (let index = 0; index < bytes.length; index++) {
-    if (bytes[index] !== 0) {
-      continue;
+  for (let end = bytes.indexOf(0, start); end !== -1; end = bytes.indexOf(0, start)) {
+    if (end > start) {
+      fields.push(bytes.subarray(start, end));
     }
-    if (index > start) {
-      fields.push(bytes.subarray(start, index));
-    }
-    start = index + 1;
+    start = end + 1;
   }
   if (start < bytes.length) {
     fields.push(bytes.subarray(start));
@@ -65,8 +62,9 @@ export async function rawPathExists(target: string | Buffer): Promise<boolean> {
   return (await rawPathStat(target)) !== undefined;
 }
 
-export type GitTreePath = { path: Buffer; mode: string };
-export type GitIndexPath = GitTreePath & { skipWorktree: boolean; assumeUnchanged: boolean };
+type GitPath = { path: Buffer; mode: string };
+export type GitTreePath = GitPath & { oid: string };
+export type GitIndexPath = GitPath & { skipWorktree: boolean; assumeUnchanged: boolean };
 
 export function parseGitTreePaths(output: Uint8Array): GitTreePath[] {
   return splitNullBuffer(output).map((entry) => {
@@ -74,7 +72,11 @@ export function parseGitTreePaths(output: Uint8Array): GitTreePath[] {
     if (separator < 0) {
       throw new Error("Git tree inventory contains an invalid entry");
     }
-    return { path: entry.subarray(separator + 1), mode: entry.subarray(0, 6).toString("ascii") };
+    return {
+      path: entry.subarray(separator + 1),
+      mode: entry.subarray(0, 6).toString("ascii"),
+      oid: entry.subarray(entry.indexOf(32, 7) + 1, separator).toString("ascii"),
+    };
   });
 }
 

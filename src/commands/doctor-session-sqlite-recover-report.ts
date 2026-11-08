@@ -6,15 +6,26 @@ import type { SessionStoreTarget } from "../config/sessions/targets.js";
 import { hasDeferredPluginSessionImport } from "../infra/deferred-plugin-session-sources.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import {
+  readMigrationArtifactIdentity,
+  sameMigrationArtifact,
+} from "../infra/session-sqlite-migration-artifact.js";
+import type { DoctorSessionSqliteIssue } from "../infra/session-sqlite-migration-issues.js";
+import {
+  assertSafeSessionSqliteMigrationDirectory,
   findLatestFailedSessionSqliteMigrationManifest,
   resolveSessionSqliteMigrationRunsDir,
+  writeSessionSqliteMigrationManifest,
   type SessionSqliteMigrationTargetInput,
 } from "../infra/session-sqlite-migration-manifest.js";
 import {
   resolveTargetSqliteOptions,
   resolveTargetSqlitePath,
 } from "../infra/session-sqlite-migration-readers.js";
-import { assertSqliteIntegrity } from "../infra/sqlite-integrity.js";
+import {
+  assertSqliteIntegrity,
+  classifySqliteFtsIntegrityFindings,
+  SqliteIntegrityError,
+} from "../infra/sqlite-integrity.js";
 import {
   inspectSqliteRecoveryFiles,
   moveSqliteFilesAside,
@@ -27,6 +38,7 @@ import {
   resolveOpenClawAgentSqlitePath,
   type OpenClawAgentDatabaseOptions,
 } from "../state/openclaw-agent-db.js";
+import { AGENT_FTS_SCHEMAS } from "../state/openclaw-agent-fts-schema.js";
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "../state/openclaw-agent-schema.js";
 import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "../state/openclaw-state-db.js";
 import type { OpenClawStateLeaseContext } from "../state/openclaw-state-lease.js";
@@ -34,6 +46,7 @@ import {
   readActiveSqliteTranscriptFiles,
   summarizeDoctorSessionSqliteReport,
 } from "./doctor-session-sqlite-diagnostics.js";
+import { readLegacySessionRecords } from "./doctor-session-sqlite-discovery.js";
 import {
   createSessionSqliteMigrationFailureIssue,
   writeSessionSqliteMigrationFailureReports,
@@ -42,7 +55,6 @@ import type { collectRecoveryInventory } from "./doctor-session-sqlite-recovery-
 import { restoreSessionSqliteMigrationRun } from "./doctor-session-sqlite-restore.js";
 import {
   createDoctorSessionSqliteTargetReport,
-  type DoctorSessionSqliteOptions,
   type DoctorSessionSqliteReport,
   type DoctorSessionSqliteTargetReport,
 } from "./doctor-session-sqlite-types.js";
@@ -58,7 +70,6 @@ const CANONICAL_AGENT_INDEX_NAMES = getCanonicalSqliteNamedIndexContracts(
 /** Restores the latest failed migration run and validates only selected manifest targets. */
 export async function recoverDoctorSessionSqliteTargets(params: {
   env: NodeJS.ProcessEnv;
-  options: DoctorSessionSqliteOptions;
   targets: readonly SessionStoreTarget[];
   historicalArchiveStores?: ReadonlySet<string>;
   recoveryInventory?: ReturnType<typeof collectRecoveryInventory>;
@@ -69,12 +80,23 @@ export async function recoverDoctorSessionSqliteTargets(params: {
     ...target,
     sqlitePath: resolveTargetSqlitePath(target, params.env),
   }));
-  const failedRun = findLatestFailedSessionSqliteMigrationManifest(params.env, trustedTargets);
+  const { failedRun, recoveredCorruptTargets } = await withAgentDatabaseMaintenanceLease(
+    { env: params.env },
+    async (maintenance) => {
+      rebindRestoredLegacyRegistries(params.recoveryInventory, trustedTargets, maintenance);
+      const latestFailed = findLatestFailedSessionSqliteMigrationManifest(
+        params.env,
+        trustedTargets,
+      );
+      return {
+        failedRun: latestFailed,
+        recoveredCorruptTargets: latestFailed
+          ? []
+          : await recoverCorruptSqliteTargets(params.targets, params.env, maintenance),
+      };
+    },
+  );
   if (!failedRun) {
-    const recoveredCorruptTargets = await withAgentDatabaseMaintenanceLease(
-      { env: params.env },
-      (maintenance) => recoverCorruptSqliteTargets(params.targets, params.env, maintenance),
-    );
     const retainedReports: DoctorSessionSqliteTargetReport[] = [...recoveredCorruptTargets];
     for (const target of trustedTargets) {
       const recovered = recoveredCorruptTargets.find(
@@ -115,9 +137,9 @@ export async function recoverDoctorSessionSqliteTargets(params: {
             artifact.outcome === "blocked" || artifact.reason === "unsupported-target-ownership",
         ))
     ) {
-      return summarizeRecoverReport(retainedReports);
+      return summarizeDoctorSessionSqliteReport("recover", retainedReports);
     }
-    return summarizeRecoverReport([
+    return summarizeDoctorSessionSqliteReport("recover", [
       createSyntheticRecoverTargetReport(
         params.env,
         "No failed session SQLite migration manifest found.",
@@ -159,13 +181,16 @@ export async function recoverDoctorSessionSqliteTargets(params: {
   const reportTarget =
     targetReports[0] ?? createSyntheticRecoverTargetReport(params.env, failedRun.manifestPath);
   reportTarget.restore = restore;
-  reportTarget.issues.push(
-    ...restore.conflicts.map((conflict) => ({
+  for (const conflict of restore.conflicts) {
+    reportTarget.issues.push({
       code: "restore_conflict",
       message: `${conflict.sourcePath}: ${conflict.reason}`,
-    })),
+    });
+  }
+  const report = summarizeDoctorSessionSqliteReport(
+    "recover",
+    targetReports.length > 0 ? targetReports : [reportTarget],
   );
-  const report = summarizeRecoverReport(targetReports.length > 0 ? targetReports : [reportTarget]);
   if (report.totals.issues === 0) {
     report.migrationRun = {
       manifestPath: failedRun.manifestPath,
@@ -191,6 +216,91 @@ export async function recoverDoctorSessionSqliteTargets(params: {
   return report;
 }
 
+/** Explicit recovery can acknowledge a same-path copy without granting archive disposal. */
+function rebindRestoredLegacyRegistries(
+  inventory: ReturnType<typeof collectRecoveryInventory> | undefined,
+  targets: readonly SessionSqliteMigrationTargetInput[],
+  maintenance: OpenClawStateLeaseContext,
+): void {
+  for (const [archivePath, refs] of inventory?.references ?? []) {
+    const first = refs[0]!;
+    if (first.move.kind !== "legacy-store") {
+      continue;
+    }
+    const target = targets.find(
+      (candidate) =>
+        candidate.agentId === first.target.agentId &&
+        candidate.storePath === first.target.storePath &&
+        candidate.sqlitePath === first.target.sqlitePath,
+    );
+    if (
+      !target ||
+      refs.some(
+        (ref) =>
+          !ref.trusted ||
+          ref.consumedByRestore ||
+          !ref.run.manifest.completedAt ||
+          ref.run.manifest.failedAt ||
+          ref.target.validationBeforeArchive !== "passed" ||
+          ref.target.agentId !== target.agentId ||
+          ref.target.storePath !== target.storePath ||
+          ref.target.sqlitePath !== target.sqlitePath ||
+          ref.move.kind !== "legacy-store" ||
+          !ref.target.completedMoves.some((move) => move.archivePath === archivePath),
+      )
+    ) {
+      continue;
+    }
+    const moves = refs.flatMap((ref) =>
+      [...ref.target.plannedMoves, ...ref.target.completedMoves].filter(
+        (move) => move.archivePath === archivePath,
+      ),
+    );
+    let identity: ReturnType<typeof readMigrationArtifactIdentity>;
+    try {
+      assertSafeSessionSqliteMigrationDirectory(path.dirname(archivePath));
+      identity = readMigrationArtifactIdentity(archivePath);
+      if (
+        moves.every(
+          (move) => move.artifact && sameMigrationArtifact(move.artifact.identity, identity),
+        ) ||
+        !moves.every(
+          (move) =>
+            move.kind === "legacy-store" &&
+            move.artifact?.disposal.state === "retained" &&
+            (["dev", "mtimeNs", "size", "sha256"] as const).every(
+              (key) => move.artifact!.identity[key] === identity[key],
+            ),
+        )
+      ) {
+        continue;
+      }
+      const issues: DoctorSessionSqliteIssue[] = [];
+      readLegacySessionRecords(target, issues, { sourcePath: archivePath });
+      if (
+        issues.length ||
+        !sameMigrationArtifact(readMigrationArtifactIdentity(archivePath), identity)
+      ) {
+        continue;
+      }
+    } catch {
+      // Normal historical discovery reports the original refusal without changing its receipt.
+      continue;
+    }
+    for (const run of new Set(refs.map((ref) => ref.run))) {
+      maintenance.assertOwned();
+      for (const ref of refs.filter((candidate) => candidate.run === run)) {
+        for (const move of [...ref.target.plannedMoves, ...ref.target.completedMoves]) {
+          if (move.archivePath === archivePath) {
+            move.artifact!.identity = identity;
+          }
+        }
+      }
+      writeSessionSqliteMigrationManifest(run);
+    }
+  }
+}
+
 async function recoverCorruptSqliteTargets(
   targets: readonly SessionStoreTarget[],
   env: NodeJS.ProcessEnv,
@@ -212,28 +322,27 @@ async function recoverCorruptSqliteTargets(
     if (recoveryFiles.existing.length === 0) {
       continue;
     }
-    if (!recoveryFiles.existing.includes(sqlitePath)) {
-      reports.push(
-        recoverCorruptSqliteTarget(
-          target,
-          sqlitePath,
-          new Error(`SQLite sidecars exist without their main database: ${sqlitePath}`),
-          () => maintenance.assertOwned(),
-        ),
-      );
-      continue;
-    }
-    const inspection = inspectSqliteForRecovery(sqlitePath, recoveryFiles.existing);
+    const hasDatabase = recoveryFiles.existing.includes(sqlitePath);
+    const inspection = hasDatabase
+      ? inspectSqliteForRecovery(sqlitePath, recoveryFiles.existing)
+      : {
+          ok: false,
+          ftsOnly: false,
+          error: new Error(`SQLite sidecars exist without their main database: ${sqlitePath}`),
+        };
     if (inspection.ok) {
       continue;
     }
-    if (!isSqliteCorruptionError(inspection.error)) {
+    if (hasDatabase && !isSqliteCorruptionError(inspection.error)) {
       reports.push(
         createRecoverInspectionFailureTargetReport(target, sqlitePath, inspection.error),
       );
       continue;
     }
-    if (!isCanonicalAgentIndexCorruptionError(inspection.error)) {
+    if (
+      !hasDatabase ||
+      (!inspection.ftsOnly && !isCanonicalAgentIndexCorruptionError(inspection.error))
+    ) {
       reports.push(
         recoverCorruptSqliteTarget(target, sqlitePath, inspection.error, () =>
           maintenance.assertOwned(),
@@ -273,7 +382,7 @@ async function repairCanonicalIndexesForRecovery(
     }
     if (!clearOpenClawAgentDatabaseOpenFailure(sqlitePath, { env: databaseOptions.env })) {
       throw new Error(
-        `Repaired canonical SQLite indexes, but could not clear the quarantine for ${sqlitePath}.`,
+        `Repaired SQLite indexes, but could not clear the quarantine for ${sqlitePath}.`,
       );
     }
     return { ok: true };
@@ -287,10 +396,11 @@ async function repairCanonicalIndexesForRecovery(
 function inspectSqliteForRecovery(
   sqlitePath: string,
   sourcePaths: readonly string[],
-): { ok: true } | { error: unknown; ok: false } {
+): { ok: true } | { error: unknown; ok: false; ftsOnly?: boolean } {
   let inspectionDir: string | undefined;
   let database: DatabaseSync | undefined;
   let inspectionError: unknown;
+  let ftsOnly = false;
   try {
     inspectionDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-sqlite-recovery-"));
     const inspectionPath = path.join(inspectionDir, path.basename(sqlitePath));
@@ -305,9 +415,18 @@ function inspectSqliteForRecovery(
     database = openNodeSqliteDatabase(inspectionPath);
     database.exec(`PRAGMA busy_timeout = ${OPENCLAW_SQLITE_BUSY_TIMEOUT_MS};`);
     database.exec("PRAGMA trusted_schema = OFF;");
-    assertSqliteIntegrity(database, inspectionPath);
+    assertSqliteIntegrity(database, inspectionPath, { allFindings: true });
   } catch (error) {
     inspectionError = error;
+    if (database && error instanceof SqliteIntegrityError && error.findings) {
+      try {
+        ftsOnly = Boolean(
+          classifySqliteFtsIntegrityFindings(database, error.findings, AGENT_FTS_SCHEMAS),
+        );
+      } catch {
+        // An unreadable file is never eligible for derived-index repair.
+      }
+    }
   }
   try {
     database?.close();
@@ -321,7 +440,9 @@ function inspectSqliteForRecovery(
   } catch (error) {
     inspectionError ??= error;
   }
-  return inspectionError === undefined ? { ok: true } : { error: inspectionError, ok: false };
+  return inspectionError === undefined
+    ? { ok: true }
+    : { error: inspectionError, ok: false, ftsOnly };
 }
 
 function recoverCorruptSqliteTarget(
@@ -398,13 +519,4 @@ function createEmptyRecoverTargetReport(
     sqlitePath,
     storePath: target.storePath,
   });
-}
-
-function summarizeRecoverReport(
-  targets: DoctorSessionSqliteTargetReport[],
-): DoctorSessionSqliteReport {
-  const report = summarizeDoctorSessionSqliteReport("recover", targets);
-  delete report.totals.archivedLegacyStoreFiles;
-  delete report.totals.reclaimedBytes;
-  return report;
 }

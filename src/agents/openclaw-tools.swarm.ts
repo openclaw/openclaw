@@ -1,9 +1,9 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { findSwarmCollectorSession } from "./subagents/registry/subagent-registry-memory.js";
 import {
-  getSubagentRunByRunId,
-  recordSwarmStructuredOutput,
-} from "./subagents/registry/subagent-registry.js";
+  findSwarmCollectorSession,
+  subagentRuns,
+} from "./subagents/registry/subagent-registry-memory.js";
+import { recordSwarmStructuredOutput } from "./subagents/registry/subagent-registry.js";
 import { resolveSwarmConfig } from "./subagents/swarm/swarm-config.js";
 import { createAgentsWaitTool } from "./tools/agents-wait-tool.js";
 import type { AnyAgentTool } from "./tools/common.js";
@@ -25,13 +25,13 @@ export type SwarmCollectorToolContext = {
  */
 export type SwarmCollectorAdmission = {
   childSessionKey?: string;
+  childAgentId?: string;
   admittedRunId?: string;
 };
 
 /**
  * A registry record answers to both its current Gateway run id and the launch id
- * retained as `swarmRunId`, which is the same pair `getSubagentRunByRunId`
- * matches. A queued relaunch swaps the first and keeps the second.
+ * retained as `swarmRunId`. A queued relaunch swaps the first and keeps the second.
  */
 function ownsAdmittedCollectorRun(
   entry: { runId: string; swarmRunId?: string },
@@ -57,7 +57,7 @@ export function resolveSwarmCollectorToolContext(
   if (!admittedRunId) {
     return undefined;
   }
-  const entry = findSwarmCollectorSession(admission.childSessionKey);
+  const entry = findSwarmCollectorSession(admission.childSessionKey, admission.childAgentId);
   if (entry?.collect !== true || !ownsAdmittedCollectorRun(entry, admittedRunId)) {
     return undefined;
   }
@@ -133,8 +133,8 @@ export function createOpenClawSwarmToolGroups(params: {
   const childSessionKey = params.runSessionKey ?? params.agentSessionKey;
   const collectorEntry =
     params.swarmCollector && params.swarmOutputSchema
-      ? ((params.runId ? getSubagentRunByRunId(params.runId) : undefined) ??
-        findSwarmCollectorSession(childSessionKey))
+      ? ((params.runId ? subagentRuns.get(params.runId) : undefined) ??
+        findSwarmCollectorSession(childSessionKey, params.effectiveRequesterAgentId))
       : undefined;
   // Key the result by the registry record's run id, which is what the collector
   // reader consumes, rather than the caller-supplied run id (absent on the http
@@ -149,7 +149,11 @@ export function createOpenClawSwarmToolGroups(params: {
             initialState: collectorEntry?.structuredOutput,
             onStateChange: (state) => {
               return recordSwarmStructuredOutput(
-                { runId: structuredOutputRunId, childSessionKey },
+                {
+                  runId: structuredOutputRunId,
+                  childSessionKey,
+                  childAgentId: params.effectiveRequesterAgentId,
+                },
                 state,
                 params.assertCollectorWriteAuthority,
               );

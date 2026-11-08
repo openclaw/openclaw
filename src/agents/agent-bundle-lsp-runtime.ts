@@ -1,32 +1,29 @@
-/** Session-scoped embedded LSP runtime and tool materialization for agent bundles. */
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createAbortError } from "../infra/abort-signal.js";
 import { toErrorObject } from "../infra/errors.js";
 import { logDebug, logWarn } from "../logger.js";
+import {
+  materializeWindowsSpawnProgram,
+  resolveWindowsSpawnProgram,
+} from "../plugin-sdk/windows-spawn.js";
 import { loadEnabledBundleLspConfig } from "../plugins/bundle-lsp.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { setPluginToolMeta } from "../plugins/tool-metadata.js";
 import {
   closeOwnedStdioProcess,
+  createOwnedStdioProcess,
   OwnedStdioCleanupError,
   type OwnedStdioProcess,
 } from "../process/owned-stdio.js";
 import { createPendingRequestRegistry } from "../shared/pending-request-registry.js";
-import { settlesWithin } from "../shared/settle-within.js";
-import { spawnLspServerProcess } from "./agent-bundle-lsp-process.js";
+import { normalizeReservedToolNames } from "./agent-bundle-mcp-names.js";
 import {
   resolveStdioMcpServerLaunchConfig,
   describeStdioMcpServerLaunchConfig,
 } from "./mcp-stdio.js";
 import { recordAgentCleanupFailure } from "./run-cleanup-timeout.js";
-import type { AgentToolResult } from "./runtime/index.js";
 import type { AnyAgentTool } from "./tools/common.js";
-
-const defaultBundleLspRuntimeDependencies = {
-  loadLspConfig: loadEnabledBundleLspConfig,
-  spawnServerProcess: spawnLspServerProcess,
-};
 
 type LspSession = {
   serverName: string;
@@ -53,7 +50,6 @@ type LspServerCapabilities = {
   [key: string]: unknown;
 };
 
-/** Materialized LSP tools plus session capabilities and cleanup handle. */
 type BundleLspToolRuntime = {
   tools: AnyAgentTool[];
   sessions: Array<{ serverName: string; capabilities: LspServerCapabilities }>;
@@ -71,19 +67,8 @@ const LSP_SHUTDOWN_GRACE_MS = 500;
 const LSP_PROCESS_TREE_KILL_GRACE_MS = 1_000;
 const activeBundleLspSessions = new Set<LspSession>();
 
-function createLspSession(serverName: string, child: OwnedStdioProcess): LspSession {
-  return {
-    serverName,
-    process: child,
-    requestId: 0,
-    pendingRequests: createPendingRequestRegistry<number, unknown, undefined>(),
-    input: { buffer: Buffer.alloc(0), length: 0 },
-    initialized: false,
-    capabilities: {},
-    disposed: false,
-    forceClose: false,
-  };
-}
+// Servers restart every turn; repeat a warning only when its server or names change.
+const warnedWithheldEnv = new Set<string>();
 
 function failLspSession(session: LspSession, error: Error): void {
   session.failure ??= error;
@@ -119,11 +104,8 @@ function attachLspProcessHandlers(session: LspSession): void {
     () => {},
     (chunk) => handleIncomingData(session, chunk),
   );
-  session.process.onStderr((chunk) => {
-    for (const line of chunk.split(/\r?\n/).filter(Boolean)) {
-      logDebug(`bundle-lsp:${session.serverName}: ${line.trim()}`);
-    }
-  });
+  // Drain the pipe without recording server output, which can contain file/tool content.
+  session.process.onStderr(() => {});
 }
 
 function encodeLspMessage(body: unknown): string {
@@ -288,7 +270,7 @@ function sendRequest(
   };
   const pending = session.pendingRequests.add(id, {
     value: undefined,
-    timeoutMs: 10_000,
+    timeoutMs: method === "shutdown" ? LSP_SHUTDOWN_GRACE_MS : 10_000,
     timeoutError: () => new Error(`LSP request ${method} timed out`),
     dispose: () => signal?.removeEventListener("abort", onAbort),
   });
@@ -408,8 +390,7 @@ function disposeSession(session: LspSession): Promise<void> {
   session.disposal = (async () => {
     if (session.initialized && !session.failure) {
       try {
-        const shutdown = sendRequest(session, "shutdown").catch(() => undefined);
-        await settlesWithin(shutdown, LSP_SHUTDOWN_GRACE_MS);
+        await sendRequest(session, "shutdown").catch(() => undefined);
         session.process.stdin?.write(
           encodeLspMessage({ jsonrpc: "2.0", method: "exit", params: null }),
         );
@@ -486,7 +467,14 @@ function createLspPositionTool(params: {
         },
         signal,
       );
-      return formatLspResult(params.session.serverName, params.method, result);
+      const text =
+        result !== null && result !== undefined
+          ? JSON.stringify(result, null, 2)
+          : `No ${params.method} result from ${params.session.serverName}`;
+      return {
+        content: [{ type: "text", text }],
+        details: { lspServer: params.session.serverName, lspMethod: params.method },
+      };
     },
   };
 }
@@ -515,32 +503,15 @@ function buildLspTools(session: LspSession): AnyAgentTool[] {
     .map((definition) => createLspPositionTool({ session, ...definition }));
 }
 
-function formatLspResult(
-  serverName: string,
-  method: string,
-  result: unknown,
-): AgentToolResult<unknown> {
-  const text =
-    result !== null && result !== undefined
-      ? JSON.stringify(result, null, 2)
-      : `No ${method} result from ${serverName}`;
-  return {
-    content: [{ type: "text", text }],
-    details: { lspServer: serverName, lspMethod: method },
-  };
-}
-
 export async function createBundleLspToolRuntime(params: {
   workspaceDir: string;
   cfg?: OpenClawConfig;
   abortSignal?: AbortSignal;
   reservedToolNames?: Iterable<string>;
   manifestRegistry?: Pick<PluginManifestRegistry, "plugins">;
-  dependencies?: typeof defaultBundleLspRuntimeDependencies;
 }): Promise<BundleLspToolRuntime> {
   throwIfLspAborted(params.abortSignal);
-  const dependencies = params.dependencies ?? defaultBundleLspRuntimeDependencies;
-  const loaded = dependencies.loadLspConfig({
+  const loaded = loadEnabledBundleLspConfig({
     workspaceDir: params.workspaceDir,
     cfg: params.cfg,
     manifestRegistry: params.manifestRegistry,
@@ -552,11 +523,28 @@ export async function createBundleLspToolRuntime(params: {
     return { tools: [], sessions: [], dispose: async () => {} };
   }
 
-  const reservedNames = new Set(
-    Array.from(params.reservedToolNames ?? [], (name) =>
-      normalizeOptionalLowercaseString(name),
-    ).filter(Boolean),
-  );
+  const {
+    collectWithheldLspEnvNames,
+    formatWithheldLspEnvHints,
+    LSP_ENV_PASSTHROUGH_DOCS_URL,
+    resolveLspServerEnv,
+  } = await import("./agent-bundle-lsp-env.js");
+
+  function warnWithheldLspEnvOnce(serverName: string, childEnv: Record<string, string>): void {
+    const hints = formatWithheldLspEnvHints(
+      collectWithheldLspEnvNames({ parentEnv: process.env, childEnv }),
+    ).join(" ");
+    const key = `${serverName}\0${hints}`;
+    if (!hints || warnedWithheldEnv.has(key)) {
+      return;
+    }
+    warnedWithheldEnv.add(key);
+    logWarn(
+      `bundle-lsp: server "${serverName}" starts without these Gateway environment variables. ${hints} See ${LSP_ENV_PASSTHROUGH_DOCS_URL}`,
+    );
+  }
+
+  const reservedNames = normalizeReservedToolNames(params.reservedToolNames);
   const sessions: LspSession[] = [];
   const tools: AnyAgentTool[] = [];
 
@@ -572,10 +560,36 @@ export async function createBundleLspToolRuntime(params: {
       let session: LspSession | undefined;
 
       try {
-        session = createLspSession(
+        const mergedEnv = resolveLspServerEnv(launchConfig.env);
+        if (serverName !== undefined) {
+          warnWithheldLspEnvOnce(serverName, mergedEnv);
+        }
+        const program = resolveWindowsSpawnProgram({
+          command: launchConfig.command,
+          env: mergedEnv,
+          allowShellFallback: true,
+        });
+        const invocation = materializeWindowsSpawnProgram(program, launchConfig.args ?? []);
+        const child = await createOwnedStdioProcess({
+          argv: [invocation.command, ...invocation.argv],
+          env: mergedEnv,
+          exactEnv: true,
+          cwd: launchConfig.cwd,
+          abortSignal: params.abortSignal,
+          // Stable LSP config permits unresolved Windows wrappers to use Node's shell parsing.
+          ...(invocation.shell === true ? { windowsShell: true } : {}),
+        });
+        session = {
           serverName,
-          await dependencies.spawnServerProcess(launchConfig, { abortSignal: params.abortSignal }),
-        );
+          process: child,
+          requestId: 0,
+          pendingRequests: createPendingRequestRegistry<number, unknown, undefined>(),
+          input: { buffer: Buffer.alloc(0), length: 0 },
+          initialized: false,
+          capabilities: {},
+          disposed: false,
+          forceClose: false,
+        };
         activeBundleLspSessions.add(session);
         attachLspProcessHandlers(session);
         throwIfLspAborted(params.abortSignal);
@@ -604,10 +618,6 @@ export async function createBundleLspToolRuntime(params: {
           });
           tools.push(tool);
         }
-
-        logDebug(
-          `bundle-lsp: started "${serverName}" (${describeStdioMcpServerLaunchConfig(launchConfig)}) with ${serverTools.length} tools`,
-        );
       } catch (error) {
         if (session) {
           await disposeSessions([session]);

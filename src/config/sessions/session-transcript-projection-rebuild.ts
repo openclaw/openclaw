@@ -1,6 +1,5 @@
-import type { DatabaseSync } from "node:sqlite";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import type { Generated, InferResult } from "kysely";
+import { sql, type Generated, type InferResult } from "kysely";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -8,8 +7,13 @@ import {
   iterateSqliteQuerySync,
   prepareSqliteQuerySync,
 } from "../../infra/kysely-sync.js";
-import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
+import { isPostgresSqlConnection, type EngineConnection } from "../../infra/sql-connection.js";
+import { runSqliteReadSnapshotSync } from "../../infra/sqlite-transaction.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
+import {
+  createSessionTranscriptActiveFactsInserter,
+  transcriptDependencyFactsProjectableSql,
+} from "./session-transcript-active-facts.js";
 import {
   createSessionTranscriptFtsInserter,
   deleteSessionTranscriptFtsRowsInTransaction,
@@ -25,7 +29,13 @@ import {
   type TranscriptIndexEntry,
 } from "./session-transcript-projection-append.js";
 import { transcriptEventReadBytesSql } from "./session-transcript-read-bytes.js";
-import { transcriptEventJsonSql, transcriptEventNavigationSql } from "./transcript-payload.js";
+import { projectTranscriptNavigationFields } from "./transcript-navigation-fields.js";
+import {
+  transcriptEventDependencyNavigationSql,
+  transcriptEventJsonSql,
+  transcriptEventNavigationSql,
+  transcriptPredicateSql,
+} from "./transcript-payload.js";
 import {
   isCanonicalSessionTranscriptEntry,
   scanSessionTranscriptTree,
@@ -57,18 +67,20 @@ export type PreparedSessionTranscriptProjectionMetadata = {
 
 export type PreparedSessionTranscriptProjection = PreparedSessionTranscriptProjectionMetadata & {
   activeRows: NonNullable<PreparedSessionTranscriptProjectionAppend["activeRow"]>[];
-  ftsRows: TranscriptIndexEntry[];
+  ftsRows: Iterable<TranscriptIndexEntry>;
 };
 
 type ProjectionDeleteChunkResult = {
   hasMore: boolean;
-  owned: boolean;
 };
 
-export type SessionTranscriptProjectionRow = {
+type SessionTranscriptProjectionRow = {
   event_json: string;
   seq: number;
   created_at: number;
+  serialized_bytes?: number;
+  dependency_navigation_json?: string | null;
+  navigation_type?: string | null;
 };
 
 type SessionTranscriptProjectionSource = {
@@ -88,26 +100,37 @@ type TranscriptProjectionSourceSnapshot = {
 const PROJECTION_FINALIZE_TAIL_ROWS = 512;
 const PROJECTION_FINALIZE_TAIL_BYTES = 256 * 1024;
 
-function getProjectionKysely(db: DatabaseSync) {
+function getProjectionKysely(db: EngineConnection) {
   return getNodeSqliteKysely<TranscriptProjectionDatabase>(db);
 }
 
-/** Older same-version writers can leave a current watermark over unclassified rows. */
-export function hasUnclassifiedSessionTranscriptEvents(
-  db: DatabaseSync,
-  sessionId: string,
-): boolean {
-  return (
-    executeSqliteQueryTakeFirstSync(
-      db,
-      getProjectionKysely(db)
-        .selectFrom("session_transcript_active_events")
-        .select("session_id")
-        .where("session_id", "=", sessionId)
-        .where("context_eligible", "is", null)
-        .limit(1),
-    ) !== undefined
-  );
+function projectionFactsColumns(db: EngineConnection) {
+  return [
+    /* kysely-allow-raw: the projection retains the exact stored byte count and JSONL separator. */ sql<number>`${transcriptEventReadBytesSql()} + 1`.as(
+      "serialized_bytes",
+    ),
+    // Eligibility is resolved by the existing JS branch owner. Capture the larger
+    // candidate set here, during its existing payload read, then narrow it below.
+    /* kysely-allow-raw: malformed and deep legacy rows retain their prior read-time projection. */ sql<
+      string | null
+    >`CASE WHEN ${transcriptDependencyFactsProjectableSql(db, "transcript_events")}
+      THEN ${transcriptEventDependencyNavigationSql(db, sql.lit(0), "transcript_events")} ELSE NULL END`.as(
+      "dependency_navigation_json",
+    ),
+    transcriptPredicateSql(db, "navigation_type").as("navigation_type"),
+  ];
+}
+
+function projectionRowFacts(row: SessionTranscriptProjectionRow, contextEligible: 0 | 1) {
+  return row.serialized_bytes === undefined || row.dependency_navigation_json == null
+    ? undefined
+    : {
+        serializedBytes: row.serialized_bytes,
+        dependencyNavigationJson:
+          row.navigation_type === "message" && contextEligible !== 0
+            ? "{}"
+            : row.dependency_navigation_json,
+      };
 }
 
 function readCanonicalEventId(event: unknown): string | null {
@@ -119,18 +142,18 @@ function readCanonicalEventId(event: unknown): string | null {
 
 /** Streams projection payloads; only navigation metadata is retained for branch resolution. */
 export function visitSessionTranscriptProjection(
-  db: DatabaseSync,
+  db: EngineConnection,
   sessionId: string,
   visitor: {
     activeRow: (row: PreparedSessionTranscriptProjection["activeRows"][number]) => void;
-    ftsRow: (row: TranscriptIndexEntry) => void;
+    ftsRow: (row: TranscriptIndexEntry, eventSeq: number) => void;
   },
 ): PreparedSessionTranscriptProjectionMetadata | undefined {
   const source = readProjectionSource(db, sessionId);
   return source ? visitProjectionSource(source, visitor) : undefined;
 }
 
-function readProjectionSession(db: DatabaseSync, sessionId: string) {
+function readProjectionSession(db: EngineConnection, sessionId: string) {
   return executeSqliteQueryTakeFirstSync(
     db,
     getProjectionKysely(db)
@@ -146,7 +169,7 @@ function readProjectionSession(db: DatabaseSync, sessionId: string) {
 }
 
 function readProjectionSource(
-  db: DatabaseSync,
+  db: EngineConnection,
   sessionId: string,
 ): SessionTranscriptProjectionSource | undefined {
   const kysely = getProjectionKysely(db);
@@ -157,6 +180,7 @@ function readProjectionSource(
   const query = kysely
     .selectFrom("transcript_events")
     .select([transcriptEventJsonSql(db).as("event_json"), "seq", "created_at"])
+    .select(projectionFactsColumns(db))
     .where("session_id", "=", sessionId);
   const read = prepareSqliteQuerySync<number, InferResult<typeof query>[number]>(db, (parameter) =>
     query.where(
@@ -175,7 +199,7 @@ function readProjectionSource(
         (navigationOnly
           ? query
               .clearSelect()
-              .select([transcriptEventNavigationSql().as("event_json"), "seq", "created_at"])
+              .select([transcriptEventNavigationSql(db).as("event_json"), "seq", "created_at"])
           : query
         ).orderBy("seq", "asc"),
       ),
@@ -193,24 +217,10 @@ function visitProjectionSource(
       for (const row of source.rows(true)) {
         sourceIndexedSeq = row.seq;
         const event: unknown = JSON.parse(row.event_json);
-        const navigation: Record<string, unknown> & { seq: number } = { seq: row.seq };
-        if (isRecord(event)) {
-          // Preserve own-property presence, including malformed controls, without retaining
-          // message/tool/compaction payloads in the ancestry graph.
-          for (const key of [
-            "type",
-            "id",
-            "parentId",
-            "targetId",
-            "appendParentId",
-            "appendMode",
-          ]) {
-            if (Object.hasOwn(event, key)) {
-              navigation[key] = event[key];
-            }
-          }
-        }
-        yield navigation;
+        yield {
+          seq: row.seq,
+          ...(isRecord(event) ? projectTranscriptNavigationFields(event) : {}),
+        };
       }
     })(),
   );
@@ -237,15 +247,17 @@ function visitProjectionSource(
     const event: unknown = JSON.parse(row.event_json);
     const indexed = extractTranscriptIndexEntry(event, row.created_at);
     if (indexed) {
-      visitor.ftsRow(indexed);
+      visitor.ftsRow(indexed, row.seq);
     }
     if (!shouldProjectActiveEvent(event)) {
       continue;
     }
     const projectsMessage = hasTranscriptMessage(event);
+    const contextEligible = transcriptEventContextEligibility(event);
     visitor.activeRow({
       activePosition: activeEventCount++,
-      contextEligible: transcriptEventContextEligibility(event),
+      contextEligible,
+      facts: projectionRowFacts(row, contextEligible),
       eventSeq: row.seq,
       messagePosition: projectsMessage ? activeMessageCount++ : null,
     });
@@ -262,40 +274,45 @@ function visitProjectionSource(
   };
 }
 
-function prepareProjectionSource(
+export function prepareProjectionSource(
   source: SessionTranscriptProjectionSource,
 ): PreparedSessionTranscriptProjection | undefined {
   const activeRows: PreparedSessionTranscriptProjection["activeRows"] = [];
-  const ftsRows: TranscriptIndexEntry[] = [];
+  const ftsEventSeqs: number[] = [];
   const metadata = visitProjectionSource(source, {
     activeRow: (row) => activeRows.push(row),
-    ftsRow: (row) => ftsRows.push(row),
+    ftsRow: (_row, seq) => ftsEventSeqs.push(seq),
   });
-  return metadata ? { ...metadata, activeRows, ftsRows } : undefined;
-}
-
-/** The worker owns these ordered raw rows; memory-backed transcripts never reopen a path. */
-export function prepareMemorySessionTranscriptProjection(
-  sessionId: string,
-  transcriptUpdatedAt: number | null,
-  rows: ReadonlyMap<number, SessionTranscriptProjectionRow>,
-  transcriptGeneration: string | null = null,
-): PreparedSessionTranscriptProjection | undefined {
-  return prepareProjectionSource({
-    sessionId,
-    transcriptGeneration,
-    transcriptUpdatedAt,
-    rows: () => rows.values(),
-    row: (seq) => rows.get(seq),
-  });
+  if (!metadata) {
+    return undefined;
+  }
+  return {
+    ...metadata,
+    activeRows,
+    // Keep only source positions through planning. Each point read finishes before
+    // yielding, so backpressure retains neither decoded history nor a WAL snapshot.
+    // A rewrite during streaming is rejected by the existing final source guard;
+    // incomplete derived rows remain dirty and are rebuilt on the next attempt.
+    ftsRows: (function* () {
+      for (const seq of ftsEventSeqs) {
+        const row = source.row(seq);
+        if (row) {
+          const indexed = extractTranscriptIndexEntry(JSON.parse(row.event_json), row.created_at);
+          if (indexed) {
+            yield indexed;
+          }
+        }
+      }
+    })(),
+  };
 }
 
 /** Reads and resolves one projection on a worker-owned SQLite snapshot. */
 export function prepareSessionTranscriptProjection(
-  db: DatabaseSync,
+  db: EngineConnection,
   sessionId: string,
 ): PreparedSessionTranscriptProjection | undefined {
-  return runSqliteDeferredTransactionSync(
+  return runSqliteReadSnapshotSync(
     db,
     () => {
       const source = readProjectionSource(db, sessionId);
@@ -309,7 +326,7 @@ export function prepareSessionTranscriptProjection(
 }
 
 function readProjectionSourceSnapshot(
-  db: DatabaseSync,
+  db: EngineConnection,
   sessionId: string,
 ): TranscriptProjectionSourceSnapshot {
   const kysely = getProjectionKysely(db);
@@ -342,7 +359,7 @@ function sourceSnapshotMatches(
 }
 
 function projectionTailFitsCatchUpBounds(
-  db: DatabaseSync,
+  db: EngineConnection,
   plan: PreparedSessionTranscriptProjectionMetadata,
   snapshot: TranscriptProjectionSourceSnapshot,
 ): boolean {
@@ -375,46 +392,13 @@ function projectionTailFitsCatchUpBounds(
   );
 }
 
-function projectionClaimIsOwned(db: DatabaseSync, sessionId: string, claimId: number): boolean {
-  const row = executeSqliteQueryTakeFirstSync(
-    db,
-    getProjectionKysely(db)
-      .selectFrom("session_transcript_index_state")
-      .select(["needs_rebuild", "updated_at"])
-      .where("session_id", "=", sessionId),
-  );
-  return row?.needs_rebuild !== 0 && row?.updated_at === claimId;
-}
-
-/** Claims a prepared snapshot. Later chunks publish only while this claim remains current. */
+/** Claims projection work; finalization validates its source before publishing. */
 export function claimPreparedSessionTranscriptProjectionInTransaction(
-  db: DatabaseSync,
+  db: EngineConnection,
   plan: PreparedSessionTranscriptProjectionMetadata,
   claimId: number,
 ): boolean {
-  const sourceSnapshot = readProjectionSourceSnapshot(db, plan.sessionId);
-  const exactSnapshot = sourceSnapshotMatches(sourceSnapshot, plan);
-  if (
-    !exactSnapshot &&
-    (plan.sourceHasInvalidLeafControl || !projectionTailFitsCatchUpBounds(db, plan, sourceSnapshot))
-  ) {
-    return false;
-  }
   const kysely = getProjectionKysely(db);
-  const current = executeSqliteQueryTakeFirstSync(
-    db,
-    kysely
-      .selectFrom("session_transcript_index_state")
-      .select(["indexed_seq", "needs_rebuild"])
-      .where("session_id", "=", plan.sessionId),
-  );
-  if (
-    current?.needs_rebuild === 0 &&
-    current.indexed_seq === sourceSnapshot.latestSeq &&
-    !hasUnclassifiedSessionTranscriptEvents(db, plan.sessionId)
-  ) {
-    return false;
-  }
   const claim = {
     active_event_count: 0,
     active_message_count: 0,
@@ -423,37 +407,60 @@ export function claimPreparedSessionTranscriptProjectionInTransaction(
     needs_rebuild: 1,
     updated_at: claimId,
   };
-  executeSqliteQuerySync(
+  const result = executeSqliteQuerySync(
     db,
     kysely
       .insertInto("session_transcript_index_state")
-      .values({ ...claim, session_id: plan.sessionId })
+      .columns([
+        "session_id",
+        "active_event_count",
+        "active_message_count",
+        "indexed_seq",
+        "leaf_event_id",
+        "needs_rebuild",
+        "updated_at",
+      ])
+      .expression(
+        kysely
+          .selectFrom("session_windows")
+          .select((eb) => [
+            "session_id",
+            eb.val(claim.active_event_count).as("active_event_count"),
+            eb.val(claim.active_message_count).as("active_message_count"),
+            eb.val(claim.indexed_seq).as("indexed_seq"),
+            eb.val(claim.leaf_event_id).as("leaf_event_id"),
+            eb.val(claim.needs_rebuild).as("needs_rebuild"),
+            eb.val(claim.updated_at).as("updated_at"),
+          ])
+          .where("session_id", "=", plan.sessionId),
+      )
       .onConflict((conflict) => conflict.column("session_id").doUpdateSet(claim)),
   );
-  return true;
+  return Number(result.numAffectedRows ?? 0n) > 0;
 }
 
-/** Deletes old rows in bounded rowid batches while the prepared claim is current. */
+/** Deletes old rows in bounded rowid batches for the active rebuild. */
 export function deletePreparedSessionTranscriptProjectionChunkInTransaction(
-  db: DatabaseSync,
-  params: { claimId: number; maxRowsPerTable: number; sessionId: string },
+  db: EngineConnection,
+  params: { maxRowsPerTable: number; sessionId: string },
 ): ProjectionDeleteChunkResult {
-  if (!projectionClaimIsOwned(db, params.sessionId, params.claimId)) {
-    return { hasMore: false, owned: false };
-  }
   // Active rows use their session index; FTS deletion uses its indexed identity owner.
   const kysely = getProjectionKysely(db);
+  const identity = isPostgresSqlConnection(db) ? "event_seq" : "rowid";
   const active = Number(
     executeSqliteQuerySync(
       db,
       kysely
         .deleteFrom("session_transcript_active_events")
+        .$if(isPostgresSqlConnection(db), (query) =>
+          query.where("session_id", "=", params.sessionId),
+        )
         .where(
-          "rowid",
+          identity,
           "in",
           kysely
             .selectFrom("session_transcript_active_events")
-            .select("rowid")
+            .select(identity)
             .where("session_id", "=", params.sessionId)
             .limit(params.maxRowsPerTable),
         ),
@@ -464,32 +471,26 @@ export function deletePreparedSessionTranscriptProjectionChunkInTransaction(
   });
   return {
     hasMore: active === params.maxRowsPerTable || fts === params.maxRowsPerTable,
-    owned: true,
   };
 }
 
-/** Appends one bounded projection chunk while its claim remains current. */
+/** Appends one bounded projection chunk for the active rebuild. */
 export function appendPreparedSessionTranscriptProjectionChunkInTransaction(
-  db: DatabaseSync,
+  db: EngineConnection,
   params: {
     activeRows?: PreparedSessionTranscriptProjection["activeRows"];
-    claimId: number;
-    ftsRows?: PreparedSessionTranscriptProjection["ftsRows"];
+    ftsRows?: TranscriptIndexEntry[];
     sessionId: string;
   },
-): boolean {
-  if (!projectionClaimIsOwned(db, params.sessionId, params.claimId)) {
-    return false;
-  }
+): void {
   insertPreparedSessionTranscriptProjectionRows(db, params);
-  return true;
 }
 
 function insertPreparedSessionTranscriptProjectionRows(
-  db: DatabaseSync,
+  db: EngineConnection,
   params: {
     activeRows?: PreparedSessionTranscriptProjection["activeRows"];
-    ftsRows?: PreparedSessionTranscriptProjection["ftsRows"];
+    ftsRows?: TranscriptIndexEntry[];
     sessionId: string;
   },
 ): void {
@@ -508,19 +509,20 @@ function insertPreparedSessionTranscriptProjectionRows(
       ),
     );
   }
+  if (params.activeRows && params.activeRows.length > 0) {
+    createSessionTranscriptActiveFactsInserter(db, params.sessionId)(params.activeRows);
+  }
   if (params.ftsRows && params.ftsRows.length > 0) {
     const insertFts = createSessionTranscriptFtsInserter(db, params.sessionId);
-    for (const row of params.ftsRows) {
-      insertFts(row);
-    }
+    insertFts(params.ftsRows);
   }
 }
 
 function prepareProjectionTailCatchUp(
-  db: DatabaseSync,
+  db: EngineConnection,
   plan: PreparedSessionTranscriptProjectionMetadata,
   snapshot: TranscriptProjectionSourceSnapshot,
-): PreparedSessionTranscriptProjection | undefined {
+) {
   const latestSeq = snapshot.latestSeq;
   if (
     plan.sourceHasInvalidLeafControl ||
@@ -534,13 +536,14 @@ function prepareProjectionTailCatchUp(
     getProjectionKysely(db)
       .selectFrom("transcript_events")
       .select([transcriptEventJsonSql(db).as("event_json"), "seq", "created_at"])
+      .select(projectionFactsColumns(db))
       .where("session_id", "=", plan.sessionId)
       .where("seq", ">", plan.sourceIndexedSeq)
       .where("seq", "<=", latestSeq)
       .orderBy("seq", "asc"),
   ).rows;
   const activeRows: PreparedSessionTranscriptProjection["activeRows"] = [];
-  const ftsRows: PreparedSessionTranscriptProjection["ftsRows"] = [];
+  const ftsRows: TranscriptIndexEntry[] = [];
   let cursor: SessionTranscriptProjectionCursor = {
     activeEventCount: plan.activeEventCount,
     activeMessageCount: plan.activeMessageCount,
@@ -564,6 +567,7 @@ function prepareProjectionTailCatchUp(
     }
     cursor = append.cursor;
     if (append.activeRow) {
+      append.activeRow.facts = projectionRowFacts(row, append.activeRow.contextEligible);
       activeRows.push(append.activeRow);
     }
     if (append.ftsRow) {
@@ -584,26 +588,10 @@ function prepareProjectionTailCatchUp(
 
 /** Publishes one current snapshot, catching up a bounded append-only tail. */
 export function finalizePreparedSessionTranscriptProjectionInTransaction(
-  db: DatabaseSync,
+  db: EngineConnection,
   plan: PreparedSessionTranscriptProjectionMetadata,
   claimId: number,
 ): boolean {
-  if (!projectionClaimIsOwned(db, plan.sessionId, claimId)) {
-    return false;
-  }
-  const baseActiveRows = executeSqliteQueryTakeFirstSync(
-    db,
-    getProjectionKysely(db)
-      .selectFrom("session_transcript_active_events")
-      .select((eb) => eb.fn.countAll<number>().as("count"))
-      .where("session_id", "=", plan.sessionId),
-  );
-  if (
-    baseActiveRows?.count !== plan.activeEventCount ||
-    hasUnclassifiedSessionTranscriptEvents(db, plan.sessionId)
-  ) {
-    return false;
-  }
   const snapshot = readProjectionSourceSnapshot(db, plan.sessionId);
   const exactSnapshot = sourceSnapshotMatches(snapshot, plan);
   const catchUpPlan = exactSnapshot ? undefined : prepareProjectionTailCatchUp(db, plan, snapshot);
@@ -618,7 +606,7 @@ export function finalizePreparedSessionTranscriptProjectionInTransaction(
       sessionId: catchUpPlan.sessionId,
     });
   }
-  executeSqliteQuerySync(
+  const result = executeSqliteQuerySync(
     db,
     getProjectionKysely(db)
       .updateTable("session_transcript_index_state")
@@ -634,5 +622,5 @@ export function finalizePreparedSessionTranscriptProjectionInTransaction(
       .where("needs_rebuild", "!=", 0)
       .where("updated_at", "=", claimId),
   );
-  return true;
+  return Number(result.numAffectedRows ?? 0n) > 0;
 }

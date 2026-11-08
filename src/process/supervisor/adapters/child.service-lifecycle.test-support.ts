@@ -3,12 +3,16 @@ import { setTimeout as realDelay } from "node:timers/promises";
 import { extractErrorCode } from "@openclaw/normalization-core/error-coercion";
 import { afterAll, aroundEach, beforeAll, describe } from "vitest";
 import { resolveRuntimeProcessEntrypointUrl } from "../../../infra/runtime-process-url.js";
+import { writeSealedRuntimeProcessFixture } from "../../../test-utils/sealed-runtime-process-fixture.js";
 import { getSpawnBroker, runWithSpawnBroker } from "../../spawn-broker/context.js";
 import { createSpawnBrokerHost } from "../../spawn-broker/host.js";
 
 /** Run the existing process-owner contracts through each supported POSIX transport. */
-export function describeSpawnTransports(name: string, register: () => void): void {
-  const transports = process.versions.bun ? ["native"] : ["native", "broker"];
+export function describeSpawnTransports(
+  name: string,
+  register: (transport: string) => void,
+  transports = process.versions.bun ? ["native"] : ["native", "broker"],
+): void {
   describe.skipIf(process.platform === "win32").each(transports)(
     `${name} (%s transport)`,
     (transport) => {
@@ -23,18 +27,21 @@ export function describeSpawnTransports(name: string, register: () => void): voi
           await broker.close();
         });
       }
-      register();
+      register(transport);
     },
   );
 }
 
 /** Separate host fixtures must establish their own process-local broker context. */
-export function serviceChildHostTransportPrelude(): string {
+export async function serviceChildHostTransportPrelude(directory: string): Promise<string> {
   // A source-loaded host must still launch the canonical built native owner.
   // Loader compiler children cannot share its exclusive kernel wait ownership.
+  const bootstrap = await writeSealedRuntimeProcessFixture(directory, "serviceChildRelay", {
+    serviceChildGroupAnchor: resolveRuntimeProcessEntrypointUrl("serviceChildGroupAnchor"),
+  });
   const nativeOwner = `
-    const { registerSealedRuntimeProcessEntrypoint } = await import(${JSON.stringify(new URL("../../../infra/runtime-process-url.ts", import.meta.url).href)});
-    registerSealedRuntimeProcessEntrypoint("serviceChildGroupAnchor", new URL(${JSON.stringify(resolveRuntimeProcessEntrypointUrl("serviceChildGroupAnchor").href)}));
+    const { registerSealedRuntimeProcessEntrypoints } = await import(${JSON.stringify(new URL("../../../infra/runtime-process-url.ts", import.meta.url).href)});
+    registerSealedRuntimeProcessEntrypoints("serviceChildRelay", ${JSON.stringify(bootstrap)});
   `;
   if (!getSpawnBroker()) {
     return nativeOwner + "const withTransport = (run) => run();";

@@ -12,11 +12,6 @@ export type SignalSender =
   | { kind: "phone"; raw: string; e164: string; aliases?: SignalSenderAliases }
   | { kind: "uuid"; raw: string; aliases?: SignalSenderAliases };
 
-type SignalAllowEntry =
-  | { kind: "any" }
-  | { kind: "phone"; e164: string }
-  | { kind: "uuid"; raw: string };
-
 export { looksLikeUuid } from "./uuid.js";
 
 function stripSignalPrefix(value: string): string {
@@ -65,7 +60,9 @@ export function resolveSignalRecipient(sender: SignalSender): string {
 
 export const resolveSignalPeerId = formatSignalSenderId;
 
-function parseSignalAllowEntry(entry: string): SignalAllowEntry | null {
+function parseSignalAllowEntry(
+  entry: string,
+): { kind: "any" } | { kind: "phone"; e164: string } | { kind: "uuid"; raw: string } | null {
   const trimmed = entry.trim();
   if (!trimmed) {
     return null;

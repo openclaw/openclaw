@@ -15,13 +15,7 @@ export function extractGoogleDriveDocumentId(value: unknown): string | undefined
     return undefined;
   }
   if (/^https?:\/\//i.test(trimmed)) {
-    try {
-      const url = new URL(trimmed);
-      const documentMatch = url.pathname.match(/\/document\/d\/([^/]+)/);
-      return documentMatch?.[1];
-    } catch {
-      return undefined;
-    }
+    return URL.parse(trimmed)?.pathname.match(/\/document\/d\/([^/]+)/)?.[1];
   }
   const segments = trimmed.split("/").filter(Boolean);
   return segments.at(-1);

@@ -5,7 +5,8 @@ import Testing
 @testable import OpenClawChatUI
 
 struct ChatSessionSidebarRowTests {
-    @Test @MainActor func `web badges preserve agent identity and never replace sharing draft or native facts`() throws {
+    @Test @MainActor
+    func `web badges preserve agent identity and never replace sharing draft or native facts`() throws {
         let owner = OpenClawWebConversation()
         owner.mode = .web
         owner.sessionFacts = try JSONDecoder().decode(NativeConversationSessionFacts.self, from: Data(#"""
@@ -18,8 +19,12 @@ struct ChatSessionSidebarRowTests {
         let context = NativeConversationContext(agentId: "research", sessionKey: "shared")
         func badges() -> [ChatSessionSidebarRowFacts.Badge] {
             ChatSessionSidebarRowFacts(
-                node: ChatSessionSidebarModel.tree(from: [session])[0], isChild: false, attention: nil,
-                showPreview: false, webFacts: owner.sidebarFacts(for: context), preview: nil,
+                node: ChatSessionSidebarModel.tree(from: [session])[0],
+                isChild: false,
+                attention: nil,
+                showPreview: false,
+                webFacts: owner.sidebarFacts(for: context),
+                preview: nil,
                 now: Date(timeIntervalSince1970: 2)).badges
         }
         #expect(badges().map(\.glyph) == [.emoji("👻"), .symbol("exclamationmark.triangle"), .symbol("pencil")])
@@ -47,8 +52,12 @@ struct ChatSessionSidebarRowTests {
     {
         let session = try JSONDecoder().decode(OpenClawChatSessionEntry.self, from: Data(wire.utf8))
         let facts = ChatSessionSidebarRowFacts(
-            node: ChatSessionSidebarModel.tree(from: [session])[0], isChild: false, attention: nil,
-            showPreview: showPreview, preview: "Cached answer", now: Date(timeIntervalSince1970: 2))
+            node: ChatSessionSidebarModel.tree(from: [session])[0],
+            isChild: false,
+            attention: nil,
+            showPreview: showPreview,
+            preview: "Cached answer",
+            now: Date(timeIntervalSince1970: 2))
         #expect(facts.subtitle == expected)
     }
 
@@ -80,8 +89,13 @@ struct ChatSessionSidebarRowTests {
         let session = try self.session(#"{"key":"agent:main:row","icon":"book","status":"running","unread":true}"#)
         for kind in [OpenClawChatAttentionRequest.Kind.question, .approval] {
             let request = OpenClawChatAttentionRequest(
-                id: "request", kind: kind, sessionKey: session.key, agentID: "main",
-                createdAtMs: 1, expiresAtMs: 99999, preview: "Choose a path")
+                id: "request",
+                kind: kind,
+                sessionKey: session.key,
+                agentID: "main",
+                createdAtMs: 1,
+                expiresAtMs: 99999,
+                preview: "Choose a path")
             let attention = OpenClawChatAttentionSummary(kind: kind, oldest: request, count: 1)
             let facts = self.facts(session, attention: attention, showPreview: false)
             #expect(facts.glyph == .symbol(kind == .question ? "hand.raised.fill" : "checkmark.shield"))
@@ -120,7 +134,8 @@ struct ChatSessionSidebarRowTests {
         ])
         #expect(badges.last?
             .label ==
-            "cloud · small · linux · 2 vCPU · 4 GB · active · 3 workspace conflicts · Cloud session disk space is critically low")
+            "cloud · small · linux · 2 vCPU · 4 GB · active · 3 workspace conflicts · " +
+            "Cloud session disk space is critically low")
         #expect(badges.last?.tone == .warning)
         let childCloud = self.facts(session, isChild: true).badges.last
         #expect(childCloud?.glyph == .symbol("globe"))
@@ -180,26 +195,39 @@ struct ChatSessionSidebarRowTests {
         """#.utf8))
         let node = try #require(ChatSessionSidebarModel.tree(from: rows).first)
         let facts = ChatSessionSidebarRowFacts(
-            node: node, isChild: false, attention: nil, showPreview: true, preview: nil,
+            node: node,
+            isChild: false,
+            attention: nil,
+            showPreview: true,
+            preview: nil,
             now: Date(timeIntervalSince1970: 2))
         #expect(facts.running && !facts.queued)
     }
 
-    @Test func `parent rows retain loaded descendant conflict and failure context`() throws {
+    @Test(arguments: ["child", "agent:main:subagent:worker"])
+    @MainActor func `parent rows retain loaded descendant conflict and failure context`(childKey: String) throws {
         let rows = try JSONDecoder().decode([OpenClawChatSessionEntry].self, from: Data(#"""
-        [{"key":"parent","childSessions":["child"]},
-         {"key":"child","label":"Worker","status":"failed","lastRunError":"Permission denied","endedAt":1000,
+        [{"key":"parent","childSessions":["\#(childKey)"]},
+         {"key":"\#(childKey)","label":"Worker","unread":true,"status":"failed",
+           "lastRunError":"Permission denied","endedAt":1000,
           "placement":{"state":"reclaimed","generation":1,"createdAtMs":1,
           "updatedAtMs":1,"stateChangedAtMs":1,"workspaceResultConflict":{"paths":["one"],"totalCount":3}}}]
         """#.utf8))
-        let node = try #require(ChatSessionSidebarModel.tree(from: rows).first)
+        let node = try #require(ChatSessionSidebarModel.sections(
+            sessions: rows, currentSessionKey: "parent", query: "", viewOptions: .init()).flatMap(\.nodes).first)
         let facts = ChatSessionSidebarRowFacts(
-            node: node, isChild: false, attention: nil, showPreview: false, preview: nil,
+            node: node,
+            isChild: false,
+            attention: nil,
+            showPreview: false,
+            preview: nil,
             now: Date(timeIntervalSince1970: 2))
         #expect(facts.badges.last?.glyph == .symbol("globe"))
         #expect(facts.badges.last?.label == "Cloud worker children: 3 workspace conflicts")
         #expect(facts.badges.last?.tone == .warning)
         #expect(facts.attentionLabel == "Child session Worker failed: Permission denied")
+        #expect(facts.unreadDescendants)
+        #expect(facts.failedDescendants)
     }
 
     @Test(arguments: [
@@ -246,8 +274,13 @@ struct ChatSessionSidebarRowTests {
         """#)
         let now = Date(timeIntervalSince1970: 20)
         let facts = ChatSessionSidebarRowFacts(
-            node: ChatSessionSidebarModel.tree(from: [row])[0], isChild: false, attention: nil,
-            showPreview: false, isConnected: false, preview: nil, now: now)
+            node: ChatSessionSidebarModel.tree(from: [row])[0],
+            isChild: false,
+            attention: nil,
+            showPreview: false,
+            isConnected: false,
+            preview: nil,
+            now: now)
         #expect(!facts.running && facts.unread)
         #expect(ChatSessionSidebarRowFacts.runtimeText(
             row, sampledAt: now.addingTimeInterval(-10), now: now, isConnected: false) == "1s")
@@ -261,7 +294,11 @@ struct ChatSessionSidebarRowTests {
         """.utf8))
         let node = try #require(ChatSessionSidebarModel.tree(from: rows).first)
         let facts = ChatSessionSidebarRowFacts(
-            node: node, isChild: false, attention: nil, showPreview: false, preview: nil,
+            node: node,
+            isChild: false,
+            attention: nil,
+            showPreview: false,
+            preview: nil,
             now: Date(timeIntervalSince1970: 2))
         #expect(facts.unreadDescendants)
         #expect(!facts.unread)
@@ -297,8 +334,12 @@ struct ChatSessionSidebarRowTests {
          {"key":"child","status":"done","hasActiveSubagentRun":true}]
         """#.utf8))
         let facts = try ChatSessionSidebarRowFacts(
-            node: #require(ChatSessionSidebarModel.tree(from: rows).first), isChild: false,
-            attention: nil, showPreview: false, preview: nil, now: Date(timeIntervalSince1970: 2))
+            node: #require(ChatSessionSidebarModel.tree(from: rows).first),
+            isChild: false,
+            attention: nil,
+            showPreview: false,
+            preview: nil,
+            now: Date(timeIntervalSince1970: 2))
         #expect(facts.running && !facts.queued)
     }
 
@@ -309,8 +350,12 @@ struct ChatSessionSidebarRowTests {
          {"key":"child","status":"\(status)","lastReadAt":2000,"endedAt":1000}]
         """.utf8))
         let facts = try ChatSessionSidebarRowFacts(
-            node: #require(ChatSessionSidebarModel.tree(from: rows).first), isChild: false,
-            attention: nil, showPreview: false, preview: nil, now: Date(timeIntervalSince1970: 2))
+            node: #require(ChatSessionSidebarModel.tree(from: rows).first),
+            isChild: false,
+            attention: nil,
+            showPreview: false,
+            preview: nil,
+            now: Date(timeIntervalSince1970: 2))
         #expect(facts.failedDescendants)
         #expect(facts.attentionLabel == nil && facts.glyph == nil && facts.subtitle == nil)
     }
@@ -326,8 +371,12 @@ struct ChatSessionSidebarRowTests {
         showPreview: Bool = true) -> ChatSessionSidebarRowFacts
     {
         ChatSessionSidebarRowFacts(
-            node: ChatSessionSidebarModel.tree(from: [session])[0], isChild: isChild, attention: attention,
-            showPreview: showPreview, preview: nil, now: Date(timeIntervalSince1970: 2))
+            node: ChatSessionSidebarModel.tree(from: [session])[0],
+            isChild: isChild,
+            attention: attention,
+            showPreview: showPreview,
+            preview: nil,
+            now: Date(timeIntervalSince1970: 2))
     }
 }
 

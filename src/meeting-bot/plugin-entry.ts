@@ -133,7 +133,7 @@ export function createMeetingPluginEntryOptions<
   const keepTrustedToolContext = (
     raw: Record<string, unknown>,
     client: GatewayRequestHandlerOptions["client"],
-  ): Record<string, unknown> => {
+  ) => {
     const { agentId: rawAgentId, requesterSessionKey: rawRequesterSessionKey, ...rest } = raw;
     const trustedOwner = client?.internal?.pluginRuntimeOwnerId === options.id;
     const agentId = trustedOwner ? normalizeOptionalString(rawAgentId) : undefined;
@@ -150,7 +150,7 @@ export function createMeetingPluginEntryOptions<
   const trustedToolAgentId = (
     raw: Record<string, unknown>,
     client: GatewayRequestHandlerOptions["client"],
-  ) => normalizeOptionalString(keepTrustedToolContext(raw, client).agentId);
+  ) => keepTrustedToolContext(raw, client).agentId;
   const joinRequest = (
     raw: Record<string, unknown>,
     joinOptions?: { allowTimeout?: boolean },

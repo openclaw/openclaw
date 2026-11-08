@@ -15,13 +15,21 @@ it.each([
 });
 
 it.each([
-  [undefined, 100],
-  ["invalid", 100],
-  ["0", 100],
-  ["-1", 100],
-  ["1", 20],
-  ["250", 250],
-  ["999999999999", 2_147_483_647],
-] as const)("bounds the polling interval %j", (value, interval) => {
-  expect(resolveFsObservationIntervalMs({ CHOKIDAR_INTERVAL: value })).toBe(interval);
-});
+  [undefined, undefined, 100],
+  ["invalid", undefined, 100],
+  ["0", undefined, 100],
+  ["-1", undefined, 100],
+  ["1", undefined, 20],
+  ["250", undefined, 250],
+  ["999999999999", undefined, 2_147_483_647],
+  [undefined, 30_000, 30_000],
+  ["invalid", 30_000, 30_000],
+  ["40", 30_000, 40],
+] as const)(
+  "resolves polling interval %j with default %j",
+  (value, defaultIntervalMs, interval) => {
+    expect(resolveFsObservationIntervalMs({ CHOKIDAR_INTERVAL: value }, defaultIntervalMs)).toBe(
+      interval,
+    );
+  },
+);

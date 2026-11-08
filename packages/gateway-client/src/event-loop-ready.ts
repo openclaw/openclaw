@@ -51,13 +51,8 @@ export async function waitForEventLoopReady(
   let maxDriftMs = 0;
 
   return await new Promise<EventLoopReadyResult>((resolve) => {
-    let settled = false;
     let timer: ReturnType<typeof setTimeout> | null = null;
     const finish = (ready: boolean, aborted = false) => {
-      if (settled) {
-        return;
-      }
-      settled = true;
       if (timer) {
         clearTimeout(timer);
         timer = null;
@@ -81,10 +76,6 @@ export async function waitForEventLoopReady(
     signal?.addEventListener("abort", onAbort, { once: true });
 
     const scheduleNext = () => {
-      if (signal?.aborted) {
-        finish(false, true);
-        return;
-      }
       const elapsedMs = Math.max(0, Date.now() - startedAt);
       const remainingMs = maxWaitMs - elapsedMs;
       if (remainingMs <= 0) {

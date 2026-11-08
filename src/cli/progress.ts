@@ -2,7 +2,7 @@ import { log, spinner, symbol } from "@clack/prompts";
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { truncateToVisibleWidth, visibleWidth } from "../../packages/terminal-core/src/ansi.js";
 import {
-  createOscProgressController,
+  formatOscProgress,
   supportsOscProgress,
 } from "../../packages/terminal-core/src/osc-progress.js";
 import {
@@ -119,7 +119,7 @@ export function createCliProgress(options: ProgressOptions): ProgressReporter {
   }
 
   const delayMs = resolveTimerTimeoutMs(options.delayMs, 0, 0);
-  const canOsc = isTty && supportsOscProgress(process.env, isTty);
+  const canOsc = isTty && supportsOscProgress(process.env);
   const stdinIsRaw = process.stdin.isRaw;
   const wantsSpinner = fallback === undefined || fallback === "spinner";
   const allowSpinner = wantsSpinner && isTty && !stdinIsRaw;
@@ -142,14 +142,6 @@ export function createCliProgress(options: ProgressOptions): ProgressReporter {
   if (isTty) {
     registerActiveProgressLine(stream);
   }
-
-  const controller = canOsc
-    ? createOscProgressController({
-        env: process.env,
-        isTty: stream.isTTY,
-        write: (chunk: string) => stream.write(chunk),
-      })
-    : null;
 
   const spin = allowSpinner ? createProgressSpinner({ output: stream }, 7) : null;
   const renderLine = allowLine
@@ -183,12 +175,8 @@ export function createCliProgress(options: ProgressOptions): ProgressReporter {
     if (!started || finished) {
       return;
     }
-    if (controller) {
-      if (indeterminate) {
-        controller.setIndeterminate(label);
-      } else {
-        controller.setPercent(label, percent);
-      }
+    if (canOsc) {
+      stream.write(formatOscProgress(indeterminate ? 3 : 1, indeterminate ? 0 : percent));
     }
     spin?.message(label);
     renderLine?.();
@@ -238,7 +226,9 @@ export function createCliProgress(options: ProgressOptions): ProgressReporter {
       timer = null;
     }
     if (started) {
-      controller?.clear();
+      if (canOsc) {
+        stream.write(formatOscProgress(0, 0));
+      }
       spin?.stop("");
       clearActiveProgressLine();
     }

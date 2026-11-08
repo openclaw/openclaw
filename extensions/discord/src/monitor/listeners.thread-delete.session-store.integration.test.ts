@@ -21,7 +21,7 @@ describe("DiscordThreadDeleteListener session-store integration", () => {
       await withEnvAsync({ OPENCLAW_STATE_DIR: await fs.realpath(stateDir) }, async () => {
         const cfg = {
           session: { store: path.join(await fs.realpath(tempRoot), "shared", "sessions.json") },
-          agents: { list: [{ id: "main", default: true }, { id: "work" }] },
+          agents: { entries: { main: {}, work: {} } },
         } satisfies OpenClawConfig;
         const session = (
           agentId: string,

@@ -23,9 +23,9 @@ import {
 import type { CodeModeExecutorId } from "../src/agents/code-mode-executor-types.js";
 import type { AgentExecEnvelope } from "../src/commands/agent-exec-result.ts";
 import type { OpenClawConfig } from "../src/config/types.openclaw.js";
-import { mergeDeep } from "../src/infra/deep-merge.js";
 import { requireOptionArgument } from "./lib/arg-utils.mts";
 import { summarizeGatewayMatrixOutcomes } from "./lib/code-mode-matrix-comparison.ts";
+import { createAgentExecMatrixConfig } from "./lib/code-mode-matrix-config.ts";
 import {
   GATEWAY_MATRIX_TASKS,
   type GatewayMatrixTask,
@@ -39,9 +39,9 @@ import {
   isMatrixPerformanceTask,
   type MatrixPerformanceTask,
 } from "./lib/code-mode-matrix-performance-fixtures.ts";
+import { prepareGatewayMatrixProcessOwner } from "./lib/code-mode-matrix-process-owner.ts";
 import {
   classifyCodeModeMatrixProviderFailure,
-  matrixModelConfig,
   matrixProviderEnv,
   matrixProviderAuthSelection,
   type MatrixProviderFailureCategory,
@@ -49,8 +49,6 @@ import {
 import type { MatrixUsageAccounting } from "./lib/code-mode-matrix-usage.ts";
 import { previewForDevToolLog, redactJsonValueForDevToolLog } from "./lib/dev-tooling-safety.ts";
 import { groupBy } from "./lib/group-by.mts";
-
-export { validateQaEvidenceSummaryJson };
 
 const execFileAsync = promisify(execFile);
 const SOURCE_PATH = "scripts/code-mode-model-matrix.ts";
@@ -69,6 +67,7 @@ const DEFAULT_ADMISSION = {
 };
 
 export type CodeModeMatrixMode = "direct" | "auto" | "code";
+export type CodeModeMatrixAutoTier = "preferred" | "capable" | "unflagged";
 const MATRIX_TASKS = [
   "read",
   "dependent-read-write",
@@ -84,6 +83,7 @@ export type CodeModeMatrixOptions = {
   allowFailures: boolean;
   dryRun: boolean;
   gatewayExecutor?: CodeModeExecutorId;
+  expectedAutoTier?: CodeModeMatrixAutoTier;
   keepState: boolean;
   models: string[];
   modes: CodeModeMatrixMode[];
@@ -117,10 +117,7 @@ type MatrixTaskFixture = {
   resultPath?: string;
 };
 
-export type MatrixRuntimeEntrypoint = {
-  args: string[];
-  cwd: string;
-};
+export type MatrixRuntimeEntrypoint = Awaited<ReturnType<typeof prepareRuntimeEntrypoint>>;
 
 type CellFailureCategory =
   | MatrixProviderFailureCategory
@@ -134,59 +131,50 @@ type CellFailureCategory =
   | "timeout"
   | "tool_execution";
 
-export type CodeModeMatrixCellResult = {
-  accounting?: MatrixUsageAccounting;
-  assistantTurns?: number;
-  bridgeCalls?: AgentExecEnvelope["bridgeCalls"];
-  buildSha256: string;
-  codeModeEngaged: boolean | null;
-  costUsd?: number;
-  diagnostics?: string;
-  elapsedMs: number;
-  evidenceOccurrenceId?: string;
-  executor?: CodeModeExecutorId;
-  error?: AgentExecEnvelope["error"];
-  expected: string;
-  failureCategory: CellFailureCategory | null;
-  final: string;
-  gitSha: string;
-  id: string;
-  mode: CodeModeMatrixMode;
-  model: string;
-  observedModel: string | null;
-  observedProvider: string | null;
-  oracle: {
-    answer: boolean | null;
-    effect: boolean;
-    engagement: boolean;
-    identity: boolean;
-    toolExecution: boolean;
+export type CodeModeMatrixCellResult = MatrixCell &
+  SourceIdentity & {
+    accounting?: MatrixUsageAccounting;
+    assistantTurns?: number;
+    bridgeCalls?: AgentExecEnvelope["bridgeCalls"];
+    buildSha256: string;
+    codeModeEngaged: boolean | null;
+    costUsd?: number;
+    diagnostics?: string;
+    elapsedMs: number;
+    evidenceOccurrenceId?: string;
+    executor?: CodeModeExecutorId;
+    error?: AgentExecEnvelope["error"];
+    expected: string;
+    failureCategory: CellFailureCategory | null;
+    final: string;
+    observedModel: string | null;
+    observedProvider: string | null;
+    oracle: {
+      answer: boolean | null;
+      effect: boolean;
+      engagement: boolean;
+      identity: boolean;
+      toolExecution: boolean;
+    };
+    passed: boolean;
+    status: AgentExecEnvelope["status"];
+    timestamp: string;
+    toolSummary?: AgentExecEnvelope["toolSummary"];
+    usage?: AgentExecEnvelope["usage"];
+    gateway?: GatewayMatrixEvidence;
+    workload?: GatewayMatrixWorkload;
   };
-  passed: boolean;
-  repetition: number;
-  sourceDirty: boolean;
-  sourcePatchSha256: string | null;
-  status: AgentExecEnvelope["status"];
-  task: CodeModeMatrixTask;
-  timestamp: string;
-  toolSummary?: AgentExecEnvelope["toolSummary"];
-  usage?: AgentExecEnvelope["usage"];
-  gateway?: GatewayMatrixEvidence;
-  workload?: GatewayMatrixWorkload;
-};
 
-export type RunCellParams = {
+export type RunCellParams = SourceIdentity & {
   abortSignal?: AbortSignal;
   buildSha256: string;
   cell: MatrixCell;
   executor?: CodeModeExecutorId;
-  gitSha: string;
+  expectedAutoTier?: CodeModeMatrixAutoTier;
   keepState: boolean;
   outputDir: string;
   repoRoot: string;
   runtime?: MatrixRuntimeEntrypoint;
-  sourceDirty: boolean;
-  sourcePatchSha256: string | null;
   thinking: string;
   timeoutSeconds: number;
 };
@@ -195,16 +183,11 @@ type MatrixRunDependencies = {
   buildCliArtifacts?: (repoRoot: string) => Promise<void>;
   now?: () => Date;
   readBuildSha256?: (repoRoot: string) => Promise<string>;
-  readGitSha?: (repoRoot: string) => Promise<string>;
   readSourceIdentity?: (repoRoot: string) => Promise<SourceIdentity>;
   runCell?: (params: RunCellParams) => Promise<CodeModeMatrixCellResult>;
 };
 
-type SourceIdentity = {
-  gitSha: string;
-  sourceDirty: boolean;
-  sourcePatchSha256: string | null;
-};
+type SourceIdentity = Awaited<ReturnType<typeof readSourceIdentity>>;
 
 function usage() {
   return `Usage: pnpm qa:code-mode-models --model <provider/model> [options]
@@ -213,15 +196,16 @@ Runs repeated Code Mode acceptance cells through the normal embedded agent path.
 
 Options:
   --model <provider/model>  Model reference; repeat for multiple models
-  --mode <mode>             direct | auto | code; repeat to select modes
+  --mode <mode>             direct | auto | code; Gateway auto omits tools.codeMode
   --executor <executor>     node | quickjs for Gateway tasks only (default: node)
+  --expect-auto-tier <tier> Assert preferred | capable | unflagged for every Gateway auto cell
   --task <task>             ${MATRIX_TASKS.join(" | ")}; repeat to select tasks
                             (default: read, dependent-read-write)
   --repetitions <n>         Runs per model/mode/task cell (default: ${DEFAULT_REPETITIONS}, max: ${MAX_REPETITIONS})
   --timeout <seconds>       Per-run agent deadline (default: ${DEFAULT_TIMEOUT_SECONDS})
   --thinking <level>        Agent thinking level (default: low)
   --concurrency <n>         Concurrent root cells per wave, 1–3 (default: 2)
-  --schedule <path>         JSON array of {model,task,repetition,firstMode} paired waves
+  --schedule <path>         JSON array of {model,task,repetition,firstMode} direct/code or direct/auto waves
   --max-cells <n>           Admit complete waves up to this count (default: 36)
   --max-tokens <n>          Stop new waves at observed token total (default: 1000000)
   --max-known-cost-usd <n>  Stop new waves at known cost (default: 25)
@@ -366,6 +350,15 @@ export function parseCodeModeMatrixOptions(
         options.gatewayExecutor = value;
         break;
       }
+      case "--expect-auto-tier": {
+        recordOnce(arg);
+        const value = requireOptionArgument(argv, index, arg);
+        if (value !== "preferred" && value !== "capable" && value !== "unflagged") {
+          throw new Error("--expect-auto-tier must be preferred, capable, or unflagged.");
+        }
+        options.expectedAutoTier = value;
+        break;
+      }
       case "--task":
         collectUnique(tasks, parseTask(requireOptionArgument(argv, index, arg)), arg);
         break;
@@ -446,9 +439,11 @@ export function parseCodeModeMatrixOptions(
   if (
     tasks.some(isMatrixPerformanceTask) &&
     modes.length > 0 &&
-    (modes.length !== 2 || !modes.includes("direct") || !modes.includes("code"))
+    (modes.length !== 2 ||
+      !modes.includes("direct") ||
+      (!modes.includes("code") && !modes.includes("auto")))
   ) {
-    throw new Error("Performance tasks require both explicit direct/code treatment arms.");
+    throw new Error("Performance tasks require paired direct/code or direct/auto treatment arms.");
   }
   if (
     options.baselineResults &&
@@ -465,6 +460,19 @@ export function parseCodeModeMatrixOptions(
         ? ["direct", "code"]
         : ["direct", "auto", "code"];
   options.tasks = tasks.length > 0 ? tasks : ["read", "dependent-read-write"];
+  if (
+    options.expectedAutoTier !== undefined &&
+    (!options.modes.includes("auto") || options.tasks.some((task) => !isGatewayTask(task)))
+  ) {
+    throw new Error("--expect-auto-tier requires a Gateway auto arm and only Gateway tasks.");
+  }
+  if (
+    seen.has("--executor") &&
+    options.tasks.some(isGatewayTask) &&
+    options.modes.includes("auto")
+  ) {
+    throw new Error("Gateway auto measures the default executor; omit --executor.");
+  }
   return options;
 }
 
@@ -682,10 +690,11 @@ type MatrixScheduleEntry = {
   model: string;
   task: CodeModeMatrixTask;
   repetition: number;
-  firstMode: "direct" | "code";
+  firstMode: CodeModeMatrixMode;
 };
 
 async function buildCellWaves(options: CodeModeMatrixOptions): Promise<MatrixCell[][]> {
+  const pairedMode = options.modes.includes("code") ? "code" : "auto";
   let schedule: MatrixScheduleEntry[];
   if (options.schedulePath) {
     const value: unknown = JSON.parse(await fs.readFile(options.schedulePath, "utf8"));
@@ -695,9 +704,9 @@ async function buildCellWaves(options: CodeModeMatrixOptions): Promise<MatrixCel
     if (
       options.modes.length !== 2 ||
       !options.modes.includes("direct") ||
-      !options.modes.includes("code")
+      !options.modes.includes(pairedMode)
     ) {
-      throw new Error("--schedule requires exactly --mode direct and --mode code.");
+      throw new Error("--schedule requires exactly direct/code or direct/auto modes.");
     }
     schedule = value.map((row: unknown): MatrixScheduleEntry => {
       if (
@@ -715,17 +724,17 @@ async function buildCellWaves(options: CodeModeMatrixOptions): Promise<MatrixCel
         row.repetition < 1 ||
         row.repetition > options.repetitions ||
         !("firstMode" in row) ||
-        (row.firstMode !== "direct" && row.firstMode !== "code")
+        (row.firstMode !== "direct" && row.firstMode !== pairedMode)
       ) {
         throw new Error(
-          "Each schedule wave must select an admitted model, task, repetition, and direct/code firstMode.",
+          "Each schedule wave must select an admitted model, task, repetition, and paired firstMode.",
         );
       }
       return {
         model: row.model,
         task: parseTask(row.task),
         repetition: row.repetition,
-        firstMode: row.firstMode,
+        firstMode: row.firstMode === "direct" ? "direct" : pairedMode,
       };
     });
   } else {
@@ -735,8 +744,7 @@ async function buildCellWaves(options: CodeModeMatrixOptions): Promise<MatrixCel
           model,
           task,
           repetition: index + 1,
-          firstMode:
-            (modelIndex + taskIndex + index) % 2 === 0 ? ("direct" as const) : ("code" as const),
+          firstMode: (modelIndex + taskIndex + index) % 2 === 0 ? ("direct" as const) : pairedMode,
         })),
       ),
     );
@@ -749,11 +757,11 @@ async function buildCellWaves(options: CodeModeMatrixOptions): Promise<MatrixCel
     }
     seen.add(key);
     const modes: CodeModeMatrixMode[] =
-      options.modes.includes("direct") && options.modes.includes("code")
+      options.modes.includes("direct") && options.modes.includes(pairedMode)
         ? [
             firstMode,
-            firstMode === "direct" ? ("code" as const) : ("direct" as const),
-            ...options.modes.filter((mode) => mode === "auto"),
+            firstMode === "direct" ? pairedMode : ("direct" as const),
+            ...options.modes.filter((mode) => mode !== "direct" && mode !== pairedMode),
           ]
         : options.modes;
     return modes.map((mode) => ({
@@ -948,7 +956,6 @@ export function classifyCodeModeMatrixCell(params: {
   mode: CodeModeMatrixMode;
   model: string;
   stdoutContractValid?: boolean;
-  task: CodeModeMatrixTask;
 }): {
   failureCategory: CellFailureCategory | null;
   oracle: CodeModeMatrixCellResult["oracle"];
@@ -1062,10 +1069,7 @@ async function cloneTreeWithHardlinks(source: string, destination: string): Prom
   }
 }
 
-async function prepareRuntimeEntrypoint(
-  repoRoot: string,
-  runtimeRoot: string,
-): Promise<MatrixRuntimeEntrypoint> {
+async function prepareRuntimeEntrypoint(repoRoot: string, runtimeRoot: string) {
   const entrypoint = path.join(repoRoot, "dist", "entry.js");
   try {
     await fs.access(entrypoint);
@@ -1076,7 +1080,11 @@ async function prepareRuntimeEntrypoint(
   const nodeModules = path.join(repoRoot, "node_modules");
   const physicalNodeModules = await fs.realpath(nodeModules);
   if (physicalNodeModules === path.resolve(nodeModules)) {
-    return { args: [entrypoint], cwd: repoRoot };
+    return {
+      args: [entrypoint],
+      cwd: repoRoot,
+      processOwnerBootstrap: await prepareGatewayMatrixProcessOwner(repoRoot, runtimeRoot),
+    };
   }
 
   const overlayDist = path.join(runtimeRoot, "dist");
@@ -1115,6 +1123,7 @@ async function prepareRuntimeEntrypoint(
   return {
     args: [path.join(runtimeRoot, "dist", "entry.js")],
     cwd: runtimeRoot,
+    processOwnerBootstrap: await prepareGatewayMatrixProcessOwner(runtimeRoot, runtimeRoot),
   };
 }
 
@@ -1150,18 +1159,10 @@ async function executeAgentExec(params: {
   if (!runtime) {
     throw new Error("matrix runtime entrypoint was not prepared");
   }
-  const provider = params.matrix.cell.model.split("/")[0]!;
   const home = path.join(params.stateDir, "home");
   const tmp = path.join(params.stateDir, "tmp");
   await Promise.all([fs.mkdir(home, { recursive: true }), fs.mkdir(tmp, { recursive: true })]);
-  const config = mergeDeep(
-    {
-      agents: { entries: { main: {} } },
-      plugins: { allow: [provider], entries: { [provider]: { enabled: true } } },
-      tools: { codeMode: { executor: "node" } },
-    },
-    { agents: matrixModelConfig(params.matrix.cell.model, params.matrix.thinking) },
-  );
+  const config = createAgentExecMatrixConfig(params.matrix.cell.model, params.matrix.thinking);
   const configPath = path.join(params.stateDir, "matrix-config.json");
   await fs.writeFile(configPath, JSON.stringify(config), { mode: 0o600 });
   const args = [
@@ -1284,7 +1285,6 @@ async function runMatrixCell(params: RunCellParams): Promise<CodeModeMatrixCellR
       mode: params.cell.mode,
       model: params.cell.model,
       stdoutContractValid: command.stdoutContractValid,
-      task: params.cell.task,
     });
     return {
       ...(command.envelope.assistantTurns !== undefined
@@ -1400,9 +1400,10 @@ function summarizeResults(results: CodeModeMatrixCellResult[]) {
       p50WallMs: summarizeMetric(group.map((result) => result.elapsedMs)).p50 ?? 0,
       metrics: {
         assistantTurns: summarizeMetric(group.map((result) => result.assistantTurns)),
-        outerToolCalls: summarizeMetric(
-          group.map((result) => result.toolSummary?.calls ?? result.gateway?.outerCalls),
-        ),
+        // Embedded tool summaries include nested terminals; only Gateway traces
+        // observe outer calls. Keep scopes separate rather than filling gaps.
+        toolCalls: summarizeMetric(group.map((result) => result.toolSummary?.calls)),
+        outerToolCalls: summarizeMetric(group.map((result) => result.gateway?.outerCalls)),
         bridgeSearchCalls: summarizeMetric(group.map((result) => result.bridgeCalls?.search)),
         bridgeDescribeCalls: summarizeMetric(group.map((result) => result.bridgeCalls?.describe)),
         bridgeToolCalls: summarizeMetric(group.map((result) => result.bridgeCalls?.call)),
@@ -1519,13 +1520,7 @@ export async function runCodeModeModelMatrix(
   const runtimeRepoRoot = options.runtimeDir ?? options.repoRoot;
   const sourceIdentity = deps.readSourceIdentity
     ? await deps.readSourceIdentity(runtimeRepoRoot)
-    : deps.readGitSha
-      ? {
-          gitSha: await deps.readGitSha(runtimeRepoRoot),
-          sourceDirty: false,
-          sourcePatchSha256: null,
-        }
-      : await readSourceIdentity(runtimeRepoRoot, STRICT_SOURCE_IDENTITY_OPTIONS);
+    : await readSourceIdentity(runtimeRepoRoot, STRICT_SOURCE_IDENTITY_OPTIONS);
   if (options.runtimeDir && sourceIdentity.sourceDirty) {
     throw new Error("--runtime-dir must identify a clean committed checkout.");
   }
@@ -1616,6 +1611,7 @@ export async function runCodeModeModelMatrix(
       ...matrixProviderAuthSelection(model),
     })),
     modes: options.modes,
+    expectedAutoTier: options.expectedAutoTier ?? null,
     ...(options.tasks.some(isGatewayTask)
       ? { gatewayExecutor: options.gatewayExecutor ?? "node" }
       : {}),
@@ -1704,6 +1700,7 @@ export async function runCodeModeModelMatrix(
           abortSignal: abortController.signal,
           buildSha256: buildSha256 ?? "dry-run",
           cell,
+          ...(cell.mode === "auto" ? { expectedAutoTier: options.expectedAutoTier } : {}),
           ...(workload ? { executor: workload.settings.executor } : {}),
           gitSha: sourceIdentity.gitSha,
           keepState: options.keepState,

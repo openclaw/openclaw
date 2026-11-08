@@ -1,6 +1,5 @@
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
-import { resolveOpenClawAgentSqlitePath } from "openclaw/plugin-sdk/sqlite-runtime";
-import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
+import { captureMemoryAgentReadTarget } from "./memory-agent-database.js";
 import type { ForgetIndexPlan, ForgetIndexReadInput } from "./memory-forget-index-task.js";
 
 const loadMemoryCpuWorkerRuntime = createLazyRuntimeModule(
@@ -9,7 +8,6 @@ const loadMemoryCpuWorkerRuntime = createLazyRuntimeModule(
 
 export async function planMemoryIndex(
   params: {
-    agentId: string;
     changedPaths: ReadonlySet<string>;
     removedPaths: ReadonlySet<string>;
     sessionIds: ReadonlySet<string>;
@@ -17,13 +15,11 @@ export async function planMemoryIndex(
     entryKeys: ReadonlySet<string>;
     corpusSnippets: ReadonlySet<string>;
   },
-  options: Parameters<typeof resolveOpenClawAgentSqlitePath>[0],
+  options: Parameters<typeof captureMemoryAgentReadTarget>[0],
 ): Promise<ForgetIndexPlan> {
   const request: ForgetIndexReadInput = {
     kind: "forget-index-plan",
-    agentId: params.agentId,
-    databasePath: resolveOpenClawAgentSqlitePath(options),
-    stateDir: resolveStateDir(options.env),
+    ...captureMemoryAgentReadTarget(options),
     changedPaths: [...params.changedPaths],
     removedPaths: [...params.removedPaths],
     sessionIds: [...params.sessionIds],

@@ -10,18 +10,11 @@ import {
   normalizeTrimmedStringList,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 
-export type FaceTimeConfig = {
-  enabled: boolean;
-  ownerHandles: string[];
-  realtime: {
-    provider?: string;
-    model?: string;
-    voice?: string;
-    sessionKey: string;
-    toolPolicy: RealtimeVoiceAgentConsultToolPolicy;
-    instructions?: string;
-    providers: Record<string, Record<string, unknown>>;
-  };
+type ProducedFaceTimeConfig = ReturnType<typeof resolveFaceTimeConfig>;
+type OptionalRealtimeFields = "provider" | "model" | "voice" | "instructions";
+export type FaceTimeConfig = Omit<ProducedFaceTimeConfig, "realtime"> & {
+  realtime: Omit<ProducedFaceTimeConfig["realtime"], OptionalRealtimeFields> &
+    Partial<Pick<ProducedFaceTimeConfig["realtime"], OptionalRealtimeFields>>;
 };
 
 const DEFAULT_INSTRUCTIONS = [
@@ -56,7 +49,7 @@ function resolveProviders(value: unknown): Record<string, Record<string, unknown
   return providers;
 }
 
-export function resolveFaceTimeConfig(input: unknown): FaceTimeConfig {
+export function resolveFaceTimeConfig(input: unknown) {
   const raw = asRecord(input);
   const realtime = asRecord(raw.realtime);
   if (typeof realtime.instructions === "string" && realtime.instructions.length > 4000) {

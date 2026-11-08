@@ -54,6 +54,8 @@ const injectedWorkerService = vi.hoisted(() => {
         providerId: profileId,
         profileId,
         leaseId: `lease-${createCount}`,
+        resourceReceipt: null,
+        retention: null,
         sharedHost: null,
         state: "ready",
         ownerEpoch: 1,
@@ -170,7 +172,7 @@ describe("Gateway agent and artifact APIs", () => {
           gateway: { auth: { mode: "token", token } },
           agents: {
             entries: {
-              main: { default: true, workspace: mainWorkspace },
+              main: { workspace: mainWorkspace },
             },
           },
         },
@@ -203,11 +205,15 @@ describe("Gateway agent and artifact APIs", () => {
       await server?.close();
       await releaseClaim?.();
     });
+    const recoveryRestart = vi.fn(() => {
+      throw new Error("Agent mutations must hot-apply without a recovery restart");
+    });
     const startServer = () =>
       startGatewayServer(claim.port, {
         bind: "loopback",
         auth: { mode: "token", token },
         controlUiEnabled: false,
+        hotReloadRecovery: recoveryRestart,
       }).catch((error: unknown) => {
         // Incomplete startup rollback can leave the listener bound; keep the port claimed.
         if (
@@ -512,5 +518,6 @@ describe("Gateway agent and artifact APIs", () => {
     await restartGateway("gateway agent artifact APIs after delete");
     const finalAgents = await client.request<{ agents: Array<{ id: string }> }>("agents.list", {});
     expect(finalAgents.agents.map((entry) => entry.id)).not.toContain(createdAgent.agentId);
+    expect(recoveryRestart).not.toHaveBeenCalled();
   }, 120_000);
 });

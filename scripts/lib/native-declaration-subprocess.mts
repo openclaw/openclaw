@@ -12,7 +12,7 @@ import { isRecord } from "./record-shared.mjs";
 
 type DeclarationRequest = Pick<
   Parameters<typeof emitNativeDeclarations>[0],
-  "cwd" | "configFile" | "roots" | "compilerOptions" | "diagnostics"
+  "cwd" | "configFile" | "roots" | "compilerOptions" | "diagnostics" | "compilerRoot"
 >;
 
 function readRequest(file: string): DeclarationRequest {
@@ -26,7 +26,8 @@ function readRequest(file: string): DeclarationRequest {
     (value.compilerOptions !== undefined && !isRecord(value.compilerOptions)) ||
     (value.diagnostics !== undefined &&
       value.diagnostics !== "declarations" &&
-      value.diagnostics !== "all")
+      value.diagnostics !== "all") ||
+    (value.compilerRoot !== undefined && typeof value.compilerRoot !== "string")
   ) {
     throw new Error("Invalid native declaration subprocess request");
   }
@@ -36,6 +37,7 @@ function readRequest(file: string): DeclarationRequest {
     roots: value.roots,
     compilerOptions: value.compilerOptions,
     diagnostics: value.diagnostics,
+    compilerRoot: value.compilerRoot,
   };
 }
 
@@ -130,6 +132,13 @@ if (import.meta.main) {
   if (!request || process.argv.length !== 3) {
     throw new Error("Expected one native declaration request path");
   }
-  const result = await emitNativeDeclarations(readRequest(request));
-  fs.writeFileSync(path.join(path.dirname(request), "result.bin"), serialize(result));
+  try {
+    const result = await emitNativeDeclarations(readRequest(request));
+    fs.writeFileSync(path.join(path.dirname(request), "result.bin"), serialize(result));
+  } catch (error) {
+    // API.close() only ends the compiler's stdin. An uncaught failure would exit
+    // before that shutdown completes; draining the event loop joins the compiler.
+    console.error(error);
+    process.exitCode = 1;
+  }
 }

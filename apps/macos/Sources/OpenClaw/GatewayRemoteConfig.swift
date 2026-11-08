@@ -45,17 +45,11 @@ enum GatewayRemoteConfig {
     }
 
     static func resolveTransportResolution(root: [String: Any]) -> TransportResolution {
-        let explicit = self.resolveExplicitTransport(root: root)
-        switch explicit {
-        case .direct:
+        if let explicit = self.resolveExplicitTransport(root: root) {
             return TransportResolution(
-                transport: .direct,
+                transport: explicit,
                 source: .explicit,
-                directURL: self.resolveGatewayUrl(root: root))
-        case .ssh:
-            return TransportResolution(transport: .ssh, source: .explicit, directURL: nil)
-        case nil:
-            break
+                directURL: explicit == .direct ? self.resolveGatewayUrl(root: root) : nil)
         }
 
         if let url = self.resolveGatewayUrl(root: root),
@@ -104,12 +98,7 @@ enum GatewayRemoteConfig {
     }
 
     static func resolveTokenString(root: [String: Any]) -> String? {
-        switch self.resolveTokenValue(root: root) {
-        case let .plaintext(token):
-            token
-        case .missing, .unsupportedNonString:
-            nil
-        }
+        self.remoteString("token", root: root)
     }
 
     static func resolvePasswordString(root: [String: Any]) -> String? {
@@ -133,8 +122,6 @@ enum GatewayRemoteConfig {
         }
         let value = remote["remotePort"]
         let port: Int? = switch value {
-        case let raw as Int:
-            raw
         case let raw as NSNumber:
             raw.intValue
         case let raw as String:
@@ -183,10 +170,8 @@ enum GatewayRemoteConfig {
         let ipv6Literal = lower.hasPrefix("[") && lower.hasSuffix("]")
             ? String(lower.dropFirst().dropLast())
             : lower
-        if LoopbackHost.isPrivateIPv6Literal(ipv6Literal) {
-            return true
-        }
-        return LoopbackHost.isPrivateOrTailnetIPv4Literal(lower)
+        return LoopbackHost.isPrivateIPv6Literal(ipv6Literal) ||
+            LoopbackHost.isPrivateOrTailnetIPv4Literal(lower)
     }
 
     static func defaultPort(for url: URL) -> Int? {

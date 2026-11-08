@@ -1,38 +1,46 @@
 import { randomUUID } from "node:crypto";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { assertRepositoryWorkspaceDiskIdentity } from "../../state/session-repository-workspaces.authority.js";
+import { getSessionRepositoryWorkspaceStore } from "../../state/session-repository-workspaces.js";
+import type { RepositoryWorkspaceDiskAuthority } from "../../state/session-repository-workspaces.types.js";
 import { runTasksWithConcurrency } from "../../utils/run-with-concurrency.js";
-import { supportsCurrentWorkerLaunch } from "./admission.js";
+import { DEVICE_FOLDER_MANIFEST_REF } from "../../worker/device-folder.js";
+import { measureGatewayRestartTrace } from "../restart-trace.js";
 import { hasForcedWorkerEnvironmentAbandonment } from "./environment-errors.js";
 import {
-  isCurrentActiveWorkerEnvironment,
   isUnavailableEnvironment,
   workerDisappearanceError,
   type WorkerActiveDispatchPlacement,
+  type WorkerDispatchPlacement,
   type WorkerDispatchEnvironmentService,
 } from "./placement-dispatch-failure.js";
-import { cleanupPendingWorkspaceResultOrphans } from "./placement-dispatch-orphan-cleanup.js";
+import {
+  cleanupPendingWorkspaceResultOrphans,
+  subscribeWorkspaceResultOrphanChanges,
+  type PendingWorkspaceResultOrphanCleanup,
+} from "./placement-dispatch-orphan-cleanup.js";
 import { recoverPendingWorkspaceResults } from "./placement-dispatch-pending-results.js";
 import { forceAbandonWorkerEnvironment } from "./placement-force-abandon.js";
-import type { WorkerSessionPlacementProjection } from "./placement-read-projection.types.js";
 import {
   placementTurnOwner,
+  projectPlacementTurnClaim,
   projectWorkerSessionTurnClaim,
-  serializeWorkerSessionTurnClaim,
 } from "./placement-record.js";
 import type {
   PlacementRecoveryDeps,
   WorkerPlacementRecoveryAdmission,
 } from "./placement-recovery-contract.js";
-import { matchesWorkerPlacementTarget } from "./placement-target.js";
+import {
+  isCurrentActiveWorkerEnvironment,
+  isExactAttachedEnvironment,
+} from "./placement-target.js";
 import { WorkerRuntimeRefreshPendingError } from "./provider-runtime-refresh.js";
-import { boundedWorkerError } from "./worker-error.js";
-
-const log = createSubsystemLogger("gateway/worker-placement");
 
 const admitRecovery: WorkerPlacementRecoveryAdmission = async (_sessionIds, run) => {
   await run();
   return true;
 };
+const log = createSubsystemLogger("gateway/worker-placement");
 
 function activePlacementExecutionError(
   placement: WorkerActiveDispatchPlacement,
@@ -56,108 +64,145 @@ function activePlacementExecutionError(
   return undefined;
 }
 
-export function createPlacementRecoveryActions(deps: PlacementRecoveryDeps) {
+export function createPlacementRecoveryActions(
+  deps: PlacementRecoveryDeps,
+  initialPlacements: readonly WorkerDispatchPlacement[],
+) {
   const { environments, failure, placements } = deps;
-  const interruptedClaims = new Set(
-    placements.list().flatMap((placement) => {
-      const claim = projectWorkerSessionTurnClaim(placement);
-      return claim ? [serializeWorkerSessionTurnClaim(claim)] : [];
-    }),
+  const startupClaims = new Map(
+    initialPlacements.map((placement) => [placement.sessionId, placement.turnClaim]),
   );
-  // Orphan Git refs carry no live authority. Scan them once in the tracked full
-  // post-start sweep, never on readiness or targeted turn recovery.
-  let orphanCleanupPending = false;
+  // Retire orphan refs in bounded post-start sweeps, never on readiness or targeted recovery.
+  // Completed roots belong to this startup pass; settlement removes new refs itself.
+  let orphanCleanupPending: PendingWorkspaceResultOrphanCleanup | undefined;
+
+  const retainDrainingWorkspace = async (
+    placement: Extract<WorkerDispatchPlacement, { state: "draining" }>,
+  ): Promise<boolean> => {
+    if (!isExactAttachedEnvironment(environments.get(placement.environmentId), placement)) {
+      return false;
+    }
+    const assertCurrent = () => {
+      if (
+        deps.isShuttingDown?.() ||
+        !isExactAttachedEnvironment(environments.get(placement.environmentId), placement)
+      ) {
+        throw new Error("Interrupted worker file handoff lost its attachment owner");
+      }
+    };
+    const claimId = `reclaim-${randomUUID()}`;
+    // A stopped placement still owns files. Fence its settlement claim before publication
+    // so custody never grants permission to resume old execution or call its tools.
+    const claim =
+      projectPlacementTurnClaim(placement) ??
+      (await placements.claimReclaimWorkspaceResult(
+        {
+          sessionId: placement.sessionId,
+          sessionKey: placement.sessionKey,
+          agentId: placement.agentId,
+          claimId,
+          runId: claimId,
+          owner: placementTurnOwner(placement),
+        },
+        (cleanupClaim) => environments.fenceWorkerTurnForRecovery(cleanupClaim),
+        assertCurrent,
+      ));
+    await placements.retainInterruptedTurnWorkspace(claim, assertCurrent);
+    return true;
+  };
 
   const reconcileActivePlacement = async (
-    initialPlacement: WorkerActiveDispatchPlacement,
+    placement: WorkerActiveDispatchPlacement,
     mode: "restart" | "runtime",
-    facts: WorkerSessionPlacementProjection,
+    diskAuthority?: RepositoryWorkspaceDiskAuthority,
   ): Promise<void> => {
-    let placement = initialPlacement;
-    let environment = environments.get(placement.environmentId);
-    // Retire the old turn, not its machine. The node stop acknowledgement fences the
-    // physical worker; the replacement turn receives a fresh claim on the same workspace.
-    const claim = projectWorkerSessionTurnClaim(placement);
-    const interrupted = claim && interruptedClaims.has(serializeWorkerSessionTurnClaim(claim));
-    if ((mode === "restart" || interrupted) && placement.turnClaim) {
-      if (
-        claim &&
-        interrupted &&
-        environment?.nodeDeviceId &&
-        isCurrentActiveWorkerEnvironment(placement, environment) &&
-        !facts.moves.has(placement.sessionId)
-      ) {
-        try {
-          await environments.stopTunnel(placement.environmentId, placement.activeOwnerEpoch);
-          await placements.closeWorkerTurnToolState(claim);
-          const current = placements.get(placement.sessionId);
-          const currentEnvironment = environments.get(placement.environmentId);
-          if (
-            current?.state !== "active" ||
-            current.generation !== placement.generation ||
-            currentEnvironment?.nodeDeviceId !== environment.nodeDeviceId ||
-            !isCurrentActiveWorkerEnvironment(current, currentEnvironment) ||
-            placements.getPlacementMove(placement.sessionId)
-          ) {
-            throw new Error("Interrupted worker owner changed while stopping");
-          }
-          await placements.retainInterruptedTurnWorkspace(claim, () => {
-            const releaseEnvironment = environments.get(placement.environmentId);
-            if (!isCurrentActiveWorkerEnvironment(placement, releaseEnvironment)) {
-              throw new Error("Interrupted worker owner changed before workspace recovery");
-            }
-          });
-          const pendingFacts = await placements.readProjection([placement.sessionId], {
-            current: true,
-          });
-          await recoverPendingWorkspaceResults(deps, pendingFacts, placement.environmentId);
-          const recovered = (
-            await placements.readProjection([placement.sessionId], { current: true })
-          ).placements.get(placement.sessionId);
-          if (
-            recovered?.state !== "active" ||
-            !matchesWorkerPlacementTarget(recovered, placement) ||
-            recovered.turnClaim
-          ) {
-            return;
-          }
-          interruptedClaims.delete(serializeWorkerSessionTurnClaim(claim));
-          placement = recovered;
-          environment = environments.get(placement.environmentId);
-        } catch (error) {
-          log.warn(
-            `Interrupted cloud worker is waiting for recovery: ${boundedWorkerError(error)}`,
-          );
-          return;
+    const environment = environments.get(placement.environmentId);
+    if (diskAuthority) {
+      try {
+        assertRepositoryWorkspaceDiskIdentity(diskAuthority, environment);
+        if (!isExactAttachedEnvironment(environment, placement)) {
+          throw new Error("Repository workspace disk is not attached to its exact placement");
         }
-      } else {
-        const error = new Error(
-          "Active worker turn claim cannot be proven live after gateway restart",
-        );
-        await failure.failActive(placement, error, { forceClaimFence: true });
+      } catch (error) {
+        log.warn(`Disk-authoritative workspace recovery held: ${String(error)}`);
         return;
       }
     }
-    const disappearance = workerDisappearanceError(environment);
-    if (disappearance || (environment && isUnavailableEnvironment(environment))) {
-      await failure.reclaimActive(
+    if (mode === "restart" && placement.turnClaim) {
+      const current = placement.turnClaim;
+      const interrupted = startupClaims.get(placement.sessionId);
+      // Background startup can reach this session after a worker or remote-exec turn
+      // has been admitted. Only the exact pre-start claim belongs to restart recovery.
+      if (
+        !interrupted ||
+        current.claimId !== interrupted.claimId ||
+        current.runId !== interrupted.runId ||
+        current.generation !== interrupted.generation ||
+        current.owner !== interrupted.owner ||
+        current.ownerEpoch !== interrupted.ownerEpoch
+      ) {
+        return;
+      }
+      const claim = projectWorkerSessionTurnClaim(placement);
+      if (claim && isExactAttachedEnvironment(environment, placement)) {
+        // Retain files before stopping the old worker; this never adopts its execution authority.
+        await placements.retainInterruptedTurnWorkspace(claim, () => {
+          if (
+            deps.isShuttingDown?.() ||
+            !isExactAttachedEnvironment(environments.get(placement.environmentId), placement)
+          ) {
+            throw new Error("Interrupted worker file handoff lost its attachment owner");
+          }
+        });
+        await recoverPendingWorkspaceResults(
+          deps,
+          await placements.readProjection([placement.sessionId], { current: true }),
+        );
+        return;
+      }
+      await failure.failActive(
         placement,
-        environment,
-        disappearance ?? new Error(`Active worker environment is ${environment?.state}`),
+        new Error("Active worker turn claim cannot be proven live after gateway restart"),
+        { forceClaimFence: true },
       );
       return;
     }
-    if (!environment || !isCurrentActiveWorkerEnvironment(placement, environment)) {
-      await failure.reclaimActive(
-        placement,
-        environment,
-        new Error("Active worker placement does not match its environment owner"),
-      );
+    if (
+      placement.workspaceBaseManifestRef === DEVICE_FOLDER_MANIFEST_REF &&
+      (!environment ||
+        workerDisappearanceError(environment) ||
+        isUnavailableEnvironment(environment))
+    ) {
+      // There is no Gateway copy to fall back to. Preserve the device binding indefinitely.
+      return;
+    }
+    const disappearance = workerDisappearanceError(environment);
+    const unavailable = environment && isUnavailableEnvironment(environment);
+    if (
+      disappearance ||
+      unavailable ||
+      !environment ||
+      !isCurrentActiveWorkerEnvironment(placement, environment)
+    ) {
+      const error =
+        disappearance ??
+        (unavailable
+          ? new Error(`Active worker environment is ${environment?.state}`)
+          : new Error("Active worker placement does not match its environment owner"));
+      if (diskAuthority) {
+        log.warn(`Disk-authoritative workspace recovery held: ${error.message}`);
+        return;
+      }
+      await failure.reclaimActive(placement, environment, error);
       return;
     }
     if (mode === "runtime") {
       const executionError = activePlacementExecutionError(placement, environment, environments);
       if (executionError) {
+        if (diskAuthority) {
+          log.warn(`Disk-authoritative workspace recovery held: ${executionError.message}`);
+          return;
+        }
         await failure.failActive(placement, executionError, { forceClaimFence: true });
       }
       return;
@@ -175,13 +220,17 @@ export function createPlacementRecoveryActions(deps: PlacementRecoveryDeps) {
           ownerEpoch: environment.ownerEpoch,
         });
       }
-      placements.adoptActive({
+      await placements.adoptActive({
         sessionId: placement.sessionId,
         expectedGeneration: placement.generation,
         environmentId: environment.environmentId,
         ownerEpoch: environment.ownerEpoch,
       });
     } catch (error) {
+      if (diskAuthority) {
+        log.warn(`Disk-authoritative workspace recovery held: ${String(error)}`);
+        return;
+      }
       if (error instanceof WorkerRuntimeRefreshPendingError) {
         // The provider still owns this machine. A failed runtime update closes
         // execution until retry; it is not evidence that the lease must be reclaimed.
@@ -197,22 +246,58 @@ export function createPlacementRecoveryActions(deps: PlacementRecoveryDeps) {
     environmentId?: string,
     resultsOnly?: "results-only",
   ): Promise<void> => {
-    let facts = await placements.readProjection([sessionId], { current: true });
-    const stagedOwners = await recoverPendingWorkspaceResults(deps, facts, environmentId);
-    if (resultsOnly === "results-only") {
+    if (deps.isShuttingDown?.()) {
       return;
     }
-    facts = await placements.readProjection([sessionId], { current: true });
+    let facts = await placements.readProjection([sessionId], { current: true });
+    if (deps.isShuttingDown?.()) {
+      return;
+    }
+    // Once recovery accepts a result, finish this session's durable settlement.
+    const stagedOwners =
+      facts.pendingResults.size > 0
+        ? await recoverPendingWorkspaceResults(deps, facts, environmentId)
+        : undefined;
+    if (resultsOnly === "results-only" || deps.isShuttingDown?.()) {
+      return;
+    }
+    if (stagedOwners) {
+      facts = await placements.readProjection([sessionId], { current: true });
+    }
+    if (deps.isShuttingDown?.()) {
+      return;
+    }
     const blocked =
-      stagedOwners.has(sessionId) ||
+      stagedOwners?.has(sessionId) ||
       facts.pendingResults.has(sessionId) ||
       facts.workspaceJournalOwnerSessionIds.has(sessionId);
-    const moveOwners =
-      (await deps.recoverPlacementMoves?.(facts, environmentId)) ?? new Set<string>();
-    if (blocked || moveOwners.has(sessionId)) {
+    const placementOwner = facts.placements.get(sessionId);
+    const diskAuthority = placementOwner
+      ? (await getSessionRepositoryWorkspaceStore().find(placementOwner))?.diskAuthority
+      : undefined;
+    const diskMove = facts.moves.get(sessionId);
+    const gatewayDiskMove =
+      placementOwner?.state === "draining" &&
+      diskMove?.target.kind === "gateway" &&
+      !diskMove.abandonSource;
+    if (
+      diskAuthority &&
+      !gatewayDiskMove &&
+      (placementOwner?.state !== "active" || facts.moves.size > 0)
+    ) {
+      // Transfer/export and destructive lifecycle support must precede activation.
+      // Recovery never replaces a disk binding with an old mirror or fresh source clone.
+      log.warn("Disk-authoritative workspace transfer or teardown is held for explicit recovery");
       return;
     }
-    facts = await placements.readProjection([sessionId], { current: true });
+    const moveOwners =
+      facts.moves.size > 0 ? await deps.recoverPlacementMoves?.(facts, environmentId) : undefined;
+    if (blocked || moveOwners?.has(sessionId) || deps.isShuttingDown?.()) {
+      return;
+    }
+    if (moveOwners) {
+      facts = await placements.readProjection([sessionId], { current: true });
+    }
     for (const placement of facts.placements.values()) {
       if (environmentId !== undefined && placement.environmentId !== environmentId) {
         continue;
@@ -221,7 +306,26 @@ export function createPlacementRecoveryActions(deps: PlacementRecoveryDeps) {
         if (placement.state === "failed") {
           await failure.retryFailedTeardown(placement);
         } else if (placement.state === "active") {
-          await reconcileActivePlacement(placement, "runtime", facts);
+          await reconcileActivePlacement(placement, "runtime", diskAuthority);
+        } else if (
+          placement.state === "draining" &&
+          !placement.turnClaim &&
+          !facts.moves.has(sessionId)
+        ) {
+          const environment = environments.get(placement.environmentId);
+          const loss = workerDisappearanceError(environment);
+          if (loss) {
+            await failure.failDraining(
+              placement,
+              new Error(
+                `Worker lost; recovery required. Unresolved workspace changes remain unverified. ${loss.message}`,
+              ),
+            );
+          } else if (isExactAttachedEnvironment(environment, placement)) {
+            // Stop can commit draining before its final-save claim. Enroll the existing
+            // file-recovery owner; later sweeps settle it without replaying input.
+            await retainDrainingWorkspace(placement);
+          }
         }
         continue;
       }
@@ -234,32 +338,16 @@ export function createPlacementRecoveryActions(deps: PlacementRecoveryDeps) {
           : undefined;
         const exactEnvironment =
           environment?.environmentId === placement.environmentId ? environment : undefined;
-        if (
-          exactEnvironment &&
-          exactEnvironment.destroyRequestedAtMs === null &&
-          (exactEnvironment.state === "requested" ||
-            exactEnvironment.state === "provisioning" ||
-            exactEnvironment.state === "bootstrapping" ||
-            ((exactEnvironment.state === "ready" || exactEnvironment.state === "idle") &&
-              supportsCurrentWorkerLaunch(exactEnvironment.bootstrapReceipt)))
-        ) {
-          // Transient provider or node-enrollment failure retains its exact durable operation.
-          continue;
-        }
         await failure.teardownEnvironment({
           placement,
           environmentId: exactEnvironment?.environmentId ?? null,
           ownerEpoch: exactEnvironment?.ownerEpoch ?? null,
-          primaryError: new Error(
-            exactEnvironment
-              ? `Provisioning worker environment cannot be recovered from ${exactEnvironment.state}`
-              : "Provisioning worker environment record is missing",
-          ),
+          primaryError: new Error("Cloud worker provisioning canceled by Gateway restart"),
         });
         continue;
       }
       if (placement.state === "active") {
-        await reconcileActivePlacement(placement, "restart", facts);
+        await reconcileActivePlacement(placement, "restart", diskAuthority);
         continue;
       }
       if (placement.state === "failed") {
@@ -271,6 +359,13 @@ export function createPlacementRecoveryActions(deps: PlacementRecoveryDeps) {
       }
       const error = new Error(`Worker dispatch interrupted in ${placement.state}`);
       if (placement.state === "draining") {
+        if (await retainDrainingWorkspace(placement)) {
+          await recoverPendingWorkspaceResults(
+            deps,
+            await placements.readProjection([sessionId], { current: true }),
+          );
+          continue;
+        }
         await failure.failDraining(placement, error, { forceClaimFence: true });
         continue;
       }
@@ -287,18 +382,42 @@ export function createPlacementRecoveryActions(deps: PlacementRecoveryDeps) {
     mode?: "startup",
     admit: WorkerPlacementRecoveryAdmission = admitRecovery,
   ): Promise<void> => {
-    // Environment reconciliation can resume provisioning through session admission.
-    // It must finish outside admission, before any recoverSession unit enters it.
+    if (deps.isShuttingDown?.()) {
+      return;
+    }
+    // Cancel old setup before environment reconciliation can perform provider work.
+    // Existing allocations, staged results, and move journals retain their cleanup owners.
     if (mode === "startup") {
-      // Older Gateways can commit draining before claiming a result, or release
-      // an unstaged failed claim. The draining placement still owes a final save.
+      // Retire interrupted setup and explicitly abandoned resources. Interrupted worker
+      // claims transfer only file custody to the existing result-settlement owner.
       for (const { sessionId } of await placements.readRecoveryCandidates()) {
+        if (deps.isShuttingDown?.()) {
+          return;
+        }
         let abandonedEnvironmentId: string | undefined;
         // A busy session has a live lifecycle operation in this process that owns its final save.
         await admit([sessionId], async () => {
+          if (deps.isShuttingDown?.()) {
+            return;
+          }
           const facts = await placements.readProjection([sessionId], { current: true });
+          if (deps.isShuttingDown?.()) {
+            return;
+          }
           const placement = facts.placements.get(sessionId);
           if (!placement || facts.moves.has(sessionId)) {
+            return;
+          }
+          if (placement.state === "provisioning") {
+            const environment = placement.environmentId
+              ? environments.get(placement.environmentId)
+              : undefined;
+            await failure.teardownEnvironment({
+              placement,
+              environmentId: environment?.environmentId ?? null,
+              ownerEpoch: environment?.ownerEpoch ?? null,
+              primaryError: new Error("Cloud worker provisioning canceled by Gateway restart"),
+            });
             return;
           }
           const environment = placement.environmentId
@@ -313,34 +432,20 @@ export function createPlacementRecoveryActions(deps: PlacementRecoveryDeps) {
             environment.ownerEpoch === placement.activeOwnerEpoch
           ) {
             await deps.workspaceOperations.run(environment.environmentId, async () => {
+              if (deps.isShuttingDown?.()) {
+                return;
+              }
               await forceAbandonWorkerEnvironment({
                 ...deps,
                 environmentId: environment.environmentId,
               });
+              abandonedEnvironmentId = environment.environmentId;
             });
-            abandonedEnvironmentId = environment.environmentId;
             return;
           }
-          if (
-            placement.state !== "draining" ||
-            placement.turnClaim ||
-            facts.pendingResults.has(sessionId)
-          ) {
-            return;
+          if (placement.state === "draining" && !facts.pendingResults.has(sessionId)) {
+            await retainDrainingWorkspace(placement);
           }
-          const claimId = `reclaim-${randomUUID()}`;
-          const claim = placements.claimReclaimWorkspaceResult(
-            {
-              sessionId: placement.sessionId,
-              sessionKey: placement.sessionKey,
-              agentId: placement.agentId,
-              claimId,
-              runId: claimId,
-              owner: placementTurnOwner(placement),
-            },
-            (recoveryClaim) => environments.fenceWorkerTurnForRecovery(recoveryClaim),
-          );
-          placements.handoffWorkspaceResultRecovery(claim);
         });
         const environmentId = abandonedEnvironmentId;
         if (environmentId) {
@@ -355,7 +460,13 @@ export function createPlacementRecoveryActions(deps: PlacementRecoveryDeps) {
       const reconciled = await runTasksWithConcurrency({
         tasks: (await placements.readRecoveryCandidates()).flatMap(({ environmentId, state }) =>
           environmentId && state !== "failed" && state !== "local" && state !== "reclaimed"
-            ? [() => environments.reconcileEnvironment(environmentId)]
+            ? [
+                async () => {
+                  if (!deps.isShuttingDown?.()) {
+                    await environments.reconcileEnvironment(environmentId);
+                  }
+                },
+              ]
             : [],
         ),
         limit: 8,
@@ -367,26 +478,72 @@ export function createPlacementRecoveryActions(deps: PlacementRecoveryDeps) {
     } else {
       await environments.reconcileOnce();
     }
+    if (deps.isShuttingDown?.()) {
+      return;
+    }
     const candidates = await placements.readRecoveryCandidates();
     if (mode === "startup") {
-      orphanCleanupPending = true;
+      const lookups = initialPlacements.map((placement) => ({
+        placement,
+        target: undefined,
+        dirty: false,
+      }));
+      orphanCleanupPending =
+        lookups.length > 0
+          ? {
+              placements: lookups,
+              initialDiscoveryPending: true,
+              unresolved: new Set(lookups),
+              rootsBySession: new Map(),
+              completedRoots: new Set(),
+            }
+          : undefined;
     }
     for (const { sessionId } of candidates) {
+      if (deps.isShuttingDown?.()) {
+        return;
+      }
       await admit([sessionId], () => recoverSession(sessionId, mode ?? "restart"));
     }
-    if (mode !== "startup" && orphanCleanupPending) {
-      orphanCleanupPending = !(await cleanupPendingWorkspaceResultOrphans(deps, admit));
+    if (
+      mode !== "startup" &&
+      orphanCleanupPending &&
+      (await cleanupPendingWorkspaceResultOrphans(deps, admit, orphanCleanupPending))
+    ) {
+      orphanCleanupPending = undefined;
     }
   };
 
-  // Runtime sweeps must not classify a live dispatch preparation as a crash. They only repair
-  // durable active ownership and retry teardown already fenced by a previous failure.
+  // Runtime sweeps leave live dispatch preparation alone. Session admission excludes live
+  // lifecycle work while interrupted drains rejoin the existing final-save owner.
   const reconcileActive = async (
     environmentId?: string,
     admit: WorkerPlacementRecoveryAdmission = admitRecovery,
   ): Promise<void> => {
-    await environments.reconcileOnce(environmentId);
-    for (const candidate of await placements.readRecoveryCandidates()) {
+    if (deps.isShuttingDown?.()) {
+      return;
+    }
+    await measureGatewayRestartTrace(
+      "worker-placement.reconcile.environments",
+      () => environments.reconcileOnce(environmentId),
+      undefined,
+      true,
+    );
+    // Cancellation can settle the environment pass while the shared store is still busy.
+    // Do not start a fresh discovery read (or its recovery writes) during shutdown.
+    if (deps.isShuttingDown?.()) {
+      return;
+    }
+    const candidates = await measureGatewayRestartTrace(
+      "worker-placement.reconcile.candidates",
+      () => placements.readRecoveryCandidates(),
+      undefined,
+      true,
+    );
+    for (const candidate of candidates) {
+      if (deps.isShuttingDown?.()) {
+        return;
+      }
       if (
         environmentId !== undefined &&
         candidate.environmentId !== environmentId &&
@@ -394,14 +551,49 @@ export function createPlacementRecoveryActions(deps: PlacementRecoveryDeps) {
       ) {
         continue;
       }
-      await admit([candidate.sessionId], (mode) =>
-        recoverSession(candidate.sessionId, "runtime", environmentId, mode),
+      if (
+        environmentId === undefined &&
+        candidate.state === "active" &&
+        !candidate.workspaceRecoveryPending
+      ) {
+        const placement = await placements.getAsync(candidate.sessionId);
+        const environment = placement?.environmentId
+          ? environments.get(placement.environmentId)
+          : undefined;
+        // Periodic healthy owners need no workspace projection or repository lookup. Interrupted
+        // results, moves, and journals remain candidates even with an unchanged attachment.
+        if (
+          placement?.state === "active" &&
+          isCurrentActiveWorkerEnvironment(placement, environment) &&
+          environment &&
+          !activePlacementExecutionError(placement, environment, environments)
+        ) {
+          continue;
+        }
+      }
+      await measureGatewayRestartTrace(
+        "worker-placement.reconcile.session",
+        () =>
+          admit([candidate.sessionId], (mode) =>
+            recoverSession(candidate.sessionId, "runtime", environmentId, mode),
+          ),
+        undefined,
+        true,
       );
     }
-    if (orphanCleanupPending && environmentId === undefined) {
-      orphanCleanupPending = !(await cleanupPendingWorkspaceResultOrphans(deps, admit));
+    if (
+      orphanCleanupPending &&
+      environmentId === undefined &&
+      (await cleanupPendingWorkspaceResultOrphans(deps, admit, orphanCleanupPending))
+    ) {
+      orphanCleanupPending = undefined;
     }
   };
 
-  return { reconcile, reconcileActive };
+  return {
+    reconcile,
+    reconcileActive,
+    subscribeOrphanWorkspaceChanges: () =>
+      subscribeWorkspaceResultOrphanChanges(() => orphanCleanupPending),
+  };
 }

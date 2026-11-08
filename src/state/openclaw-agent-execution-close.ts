@@ -1,3 +1,5 @@
+import { collectSynchronousErrors } from "../infra/error-graph-internal.js";
+import { isPostgresSqlConnection } from "../infra/sql-connection.js";
 import { throwSqliteLifecycleErrors } from "../infra/sqlite-lifecycle-errors.js";
 import { sqliteReaderDatabasePathKey } from "../infra/sqlite-reader-lifecycle.js";
 import {
@@ -15,6 +17,7 @@ import type { AgentDatabaseFileExecutionIdentity } from "./openclaw-agent-execut
 type AgentDatabaseExecutionCloseState = {
   database: OpenClawAgentDatabase | undefined;
   identity: AgentDatabaseFileExecutionIdentity | undefined;
+  releasePreparations: readonly (() => void)[];
   closeDomain: () => void;
   releaseBorrow: (() => void) | undefined;
 };
@@ -59,6 +62,7 @@ export function createAgentDatabaseExecutionCloser(
 function closeAgentDatabaseExecution({
   database,
   identity,
+  releasePreparations,
   closeDomain,
   releaseBorrow,
   releaseSharedBorrow,
@@ -66,47 +70,44 @@ function closeAgentDatabaseExecution({
   releaseSharedBorrow: () => void;
 }): SqliteWorkerCloseReceipt | undefined {
   let checkpoint: SqliteWalCheckpointSnapshot | undefined;
-  const errors: unknown[] = [];
-  for (const cleanup of [
-    closeDomain,
-    () => {
-      if (!database) {
-        return;
-      }
-      const closingPath = sqliteReaderDatabasePathKey(database.path);
-      const stopObserving = onSqliteWalCheckpoint((observation) => {
-        if (observation.databasePath === closingPath) {
-          checkpoint = {
-            health: observation.health,
-            observedAtNs: observation.observedAtNs,
-            lastCompletedAtNs: observation.lastCompletedAtNs,
-          };
+  const errors = collectSynchronousErrors(
+    [
+      ...releasePreparations,
+      closeDomain,
+      () => {
+        if (!database) {
+          return;
         }
-      });
-      try {
-        closeOpenClawAgentDatabaseByPath(database.path, database.agentId);
-      } finally {
-        stopObserving();
-      }
-    },
-    () => releaseBorrow?.(),
-    releaseSharedBorrow,
-  ]) {
-    try {
-      cleanup();
-    } catch (error) {
-      errors.push(error);
-    }
-  }
+        const closingPath = sqliteReaderDatabasePathKey(database.path);
+        const stopObserving = onSqliteWalCheckpoint((observation) => {
+          if (observation.databasePath === closingPath) {
+            checkpoint = {
+              health: observation.health,
+              observedAtNs: observation.observedAtNs,
+              lastCompletedAtNs: observation.lastCompletedAtNs,
+            };
+          }
+        });
+        try {
+          closeOpenClawAgentDatabaseByPath(database.path, database.agentId);
+        } finally {
+          stopObserving();
+        }
+      },
+      () => releaseBorrow?.(),
+      releaseSharedBorrow,
+    ],
+    (cleanup) => cleanup(),
+  );
   throwSqliteLifecycleErrors(errors, "Agent database cleanup failed");
-  if (identity && checkpoint) {
+  if (identity && (checkpoint || (database && isPostgresSqlConnection(database.db)))) {
     return {
       identity: {
         key: `file:${identity.physicalIdentity}`,
         canonicalPath: identity.nativeLocation,
       },
       incarnation: identity.incarnation,
-      checkpoint,
+      ...(checkpoint ? { checkpoint } : {}),
     };
   }
   return undefined;

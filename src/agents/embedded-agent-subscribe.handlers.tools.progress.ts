@@ -8,6 +8,7 @@ import {
   projectAgentToolActivity,
 } from "../infra/agent-activity-events.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
+import { readAutomationDisplayState } from "../infra/agent-run-registry.automation.js";
 import { peekAdjustedParamsForToolCall } from "./agent-tools.before-tool-call.state.js";
 import { extractLiveExecOutput } from "./embedded-agent-subscribe.handlers.tools.results.js";
 import {
@@ -32,23 +33,16 @@ import {
 import type { AgentEvent } from "./runtime/index.js";
 import { normalizeToolPolicyName } from "./tool-policy.js";
 
-type ChannelToolProgress = {
-  text: string;
-};
-
 const LIVE_EXEC_UPDATE_MIN_INTERVAL_MS = 250;
 
-function readChannelToolProgress(result: unknown): ChannelToolProgress | undefined {
+function readChannelToolProgress(result: unknown): string | undefined {
   const progress = readRecordField(asOptionalObjectRecord(result)?.progress);
   // Only typed progress crosses into UI; tool output/details may contain private data.
   if (progress?.visibility !== "channel" || progress.privacy !== "public") {
     return undefined;
   }
   const text = readStringValue(progress.text)?.trim();
-  if (!text) {
-    return undefined;
-  }
-  return { text: truncateLiveExecOutput(text) };
+  return text ? truncateLiveExecOutput(text) : undefined;
 }
 
 function prepareLiveExecUpdate(
@@ -56,7 +50,7 @@ function prepareLiveExecUpdate(
   toolCallId: string,
   partialResult: unknown,
   itemMetadata: ExecLiveItemMetadata,
-): { update?: { result: unknown }; emitItems: boolean } {
+): { update?: { result: unknown; output?: string }; emitItems: boolean } {
   const now = Date.now();
   const state = (ctx.state.execLiveUpdateStateById ??= new Map());
   const previous = state.get(toolCallId);
@@ -73,9 +67,11 @@ function prepareLiveExecUpdate(
   }
   // Skip payload work inside the throttle; stamp after preparation so slow
   // redaction cannot make the next detailed frame arrive back-to-back.
-  const result = capLiveExecResult(sanitizeToolResult(partialResult));
+  const sanitizedResult = sanitizeToolResult(partialResult);
+  const output = extractLiveExecOutput(sanitizedResult);
+  const result = capLiveExecResult(sanitizedResult);
   state.set(toolCallId, { lastEmittedAtMs: Date.now(), itemMetadata });
-  return { update: { result }, emitItems: true };
+  return { update: { result, output }, emitItems: true };
 }
 
 /** Handles partial tool output and emits throttled live UI updates. */
@@ -98,6 +94,7 @@ export function handleToolExecutionUpdate(
   }
   const explicitHideFromChannelProgress =
     evt.hideFromChannelProgress === true || startData?.hideFromChannelProgress === true;
+  const routineAutomation = readAutomationDisplayState(ctx.params.runId) !== "ordinary";
   const partial = evt.partialResult;
   const isExecTool = isExecToolName(toolName);
   const toolMeta = ctx.state.toolMetaById.get(toolCallId);
@@ -106,12 +103,14 @@ export function handleToolExecutionUpdate(
         name: toolName,
         meta: toolMeta?.meta,
         commandBearing: toolMeta?.commandBearing,
-        hideFromChannelProgress: explicitHideFromChannelProgress,
+        hideFromChannelProgress: explicitHideFromChannelProgress || routineAutomation,
       })
     : undefined;
   const execUpdate = execProgress?.update;
   const liveResult = isExecTool ? execUpdate?.result : sanitizeToolResult(partial);
   const toolProgress = isExecTool ? undefined : readChannelToolProgress(liveResult);
+  const hideFromChannelProgress =
+    explicitHideFromChannelProgress || (routineAutomation && !toolProgress);
   const itemData = {
     ...projectAgentToolActivity({
       toolCallId,
@@ -119,43 +118,37 @@ export function handleToolExecutionUpdate(
       phase: "update",
       args,
       meta: toolMeta?.meta,
-      hideFromChannelProgress: explicitHideFromChannelProgress,
+      hideFromChannelProgress,
     }),
     commandBearing: toolMeta?.commandBearing,
-    ...(toolProgress ? { progressText: toolProgress.text, meta: undefined } : {}),
+    ...(toolProgress ? { progressText: toolProgress, meta: undefined } : {}),
   };
-  const hideFromChannelProgress = explicitHideFromChannelProgress;
+  const updateData = (includeResult: boolean) => ({
+    phase: "update" as const,
+    name: toolName,
+    toolCallId,
+    ...(parentToolCallId ? { parentToolCallId } : {}),
+    ...(includeResult ? { partialResult: liveResult } : {}),
+    ...(hideFromChannelProgress ? { hideFromChannelProgress: true } : {}),
+  });
   // Typed progress already has a sanitized path; suppress duplicate raw previews.
   const emitDetailedLiveUpdate = !toolProgress && (!isExecTool || execUpdate !== undefined);
   if (emitDetailedLiveUpdate) {
     emitAgentEvent({
       runId: ctx.params.runId,
       stream: "tool",
-      data: {
-        phase: "update",
-        name: toolName,
-        toolCallId,
-        ...(parentToolCallId ? { parentToolCallId } : {}),
-        partialResult: liveResult,
-        ...(hideFromChannelProgress ? { hideFromChannelProgress: true } : {}),
-      },
+      data: updateData(true),
     });
   }
   emitTrackedItemEvent(ctx, itemData, execProgress?.emitItems);
   if (!toolProgress) {
     emitAgentEventCallbackBestEffort(ctx, {
       stream: "tool",
-      data: {
-        phase: "update",
-        name: toolName,
-        toolCallId,
-        ...(parentToolCallId ? { parentToolCallId } : {}),
-        ...(hideFromChannelProgress ? { hideFromChannelProgress: true } : {}),
-      },
+      data: updateData(false),
     });
   }
   if (isExecTool) {
-    const output = extractLiveExecOutput(liveResult);
+    const output = execUpdate?.output;
     if (emitDetailedLiveUpdate && output) {
       const outputData: AgentCommandOutputEventData = {
         itemId: buildCommandItemId(toolCallId),

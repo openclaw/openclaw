@@ -17,7 +17,6 @@ import {
   getAgentRunContextOwnership,
   getAgentRunContextOwnerStatus,
 } from "../../infra/agent-run-registry.js";
-import { pruneMapToMaxSize } from "../../infra/map-size.js";
 import type { WorkerConnectionIdentity } from "./connection-identity.js";
 import {
   createWorkerLiveTrajectoryRecorder,
@@ -37,6 +36,7 @@ import {
 } from "./live-event-window.js";
 import {
   captureWorkerTurnFinishing,
+  captureWorkerReplyMedia,
   type WorkerTurnTranscriptSource,
 } from "./placement-turn-claim-events.js";
 import {
@@ -48,7 +48,6 @@ const DEFAULT_WINDOW_SIZE = 128;
 const DEFAULT_MAX_PENDING_BYTES = 512 * 1024;
 const DEFAULT_MAX_SESSIONS = 128;
 const DEFAULT_MAX_ACTIVE_RUNS = 32;
-const MAX_FENCED_ENVIRONMENTS = 4096;
 
 export type WorkerLiveEventApplicationResult =
   | { ok: true; result: WorkerLiveEventResult }
@@ -59,7 +58,6 @@ type WorkerLiveEventPublication = Omit<PendingLiveEvent, "sizeBytes">;
 
 type WorkerLiveEventReceiverOptions = {
   maxActiveRuns?: number;
-  maxPendingBytes?: number;
   maxSessions?: number;
   windowSize?: number;
 };
@@ -73,14 +71,9 @@ function capacityExceeded(): WorkerLiveEventFailure {
 }
 
 export function createWorkerLiveEventReceiver(options: WorkerLiveEventReceiverOptions = {}) {
-  const fencedEnvironmentEpochs = new Map<string, number>();
   const windows = new Map<string, LiveEventWindow>();
   const windowSize = Math.max(1, Math.floor(options.windowSize ?? DEFAULT_WINDOW_SIZE));
   const maxActiveRuns = Math.max(1, Math.floor(options.maxActiveRuns ?? DEFAULT_MAX_ACTIVE_RUNS));
-  const maxPendingBytes = Math.max(
-    1,
-    Math.floor(options.maxPendingBytes ?? DEFAULT_MAX_PENDING_BYTES),
-  );
   const maxSessions = Math.max(1, Math.floor(options.maxSessions ?? DEFAULT_MAX_SESSIONS));
   const rotateCredential = (rotation: WorkerLiveCredentialRotation): boolean =>
     rotateWorkerLiveEventCredential(windows.get(rotation.sessionId), rotation);
@@ -313,12 +306,12 @@ export function createWorkerLiveEventReceiver(options: WorkerLiveEventReceiverOp
     return claimed;
   };
 
-  const publish = (
+  const publish = async (
     window: LiveEventWindow,
     publication: WorkerLiveEventPublication,
     allowBufferedTerminalCapacity: boolean,
-  ): WorkerLiveEventFailure | undefined => {
-    const { request, recordApplied, runOwner, source } = publication;
+  ): Promise<WorkerLiveEventFailure | undefined> => {
+    const { request, recordApplied, runOwner, source, prepareReplyMedia } = publication;
     if (runOwner?.isCancelled()) {
       if (!runOwner.isCancelledFinishing(request)) {
         return invalidEvent();
@@ -349,6 +342,18 @@ export function createWorkerLiveEventReceiver(options: WorkerLiveEventReceiverOp
       stream: request.event.kind,
       data: prepareWorkerLiveEventData(request.event),
     };
+    if (
+      request.event.kind === "assistant" &&
+      request.event.payload.mediaUrls?.length &&
+      prepareReplyMedia
+    ) {
+      const payload = await prepareReplyMedia(request.event.payload);
+      event.data = { ...event.data, ...payload };
+      if (payload.text !== request.event.payload.text) {
+        event.data.replace = true;
+        event.data.delta = payload.text ?? "";
+      }
+    }
     let activity;
     if (request.event.kind === "tool") {
       const tool = request.event.payload;
@@ -403,29 +408,27 @@ export function createWorkerLiveEventReceiver(options: WorkerLiveEventReceiverOp
       return invalidEvent();
     }
     const write = recordWorkerLiveTrajectoryEvent(owned.trajectoryRecorder, request.event);
-    if (write) {
-      window.trajectoryWrites.add(write);
-      void write.then(() => window.trajectoryWrites.delete(write));
-    }
+    window.trajectoryWrites.add(write);
+    void write.then(() => window.trajectoryWrites.delete(write));
     recordApplied?.(request.event);
     // Gateway handler owns cleanup so detach can revoke deferred terminal delivery.
     return undefined;
   };
 
-  const drain = (
+  const drain = async (
     window: LiveEventWindow,
     first: WorkerLiveEventPublication,
     firstPending?: PendingLiveEvent,
-  ): WorkerLiveEventApplicationResult => {
+  ): Promise<WorkerLiveEventApplicationResult> => {
     let buffered = firstPending;
     let publishedPrefix = false;
     while (true) {
       const publication = buffered ?? first;
       const { request } = publication;
-      const failed = publish(window, publication, buffered !== undefined);
+      const failed = await publish(window, publication, buffered !== undefined);
       if (failed?.details.reason === "capacity-exceeded" && buffered) {
         // Keep the ordered tail retryable while the active prefix claim drains.
-        // Later gaps still hit windowSize/maxPendingBytes and force normal resync.
+        // Later gaps still hit the sequence/byte bounds and force normal resync.
         return { ok: true, result: { ackedSeq: window.ackedSeq } };
       }
       if (buffered && window.pending.delete(request.seq)) {
@@ -457,7 +460,7 @@ export function createWorkerLiveEventReceiver(options: WorkerLiveEventReceiverOp
     return { ok: true, result: { ackedSeq: window.ackedSeq } };
   };
 
-  const applyToWindow = (
+  const applyToWindow = async (
     window: LiveEventWindow,
     params: {
       identity: WorkerConnectionIdentity;
@@ -465,7 +468,7 @@ export function createWorkerLiveEventReceiver(options: WorkerLiveEventReceiverOp
       source: WorkerTurnTranscriptSource;
     },
     runOwner: WorkerTurnLiveEventOwner | undefined,
-  ): WorkerLiveEventApplicationResult => {
+  ): Promise<WorkerLiveEventApplicationResult> => {
     if (params.request.seq <= window.ackedSeq) {
       return { ok: true, result: { ackedSeq: window.ackedSeq } };
     }
@@ -477,7 +480,13 @@ export function createWorkerLiveEventReceiver(options: WorkerLiveEventReceiverOp
       runOwner?.record(event);
       recordFinishing?.();
     };
-    const publication = { request: params.request, recordApplied, runOwner, source: params.source };
+    const publication = {
+      request: params.request,
+      recordApplied,
+      runOwner,
+      source: params.source,
+      prepareReplyMedia: captureWorkerReplyMedia(params.identity),
+    };
     const { seq } = params.request;
     const expectedSeq = window.ackedSeq + 1;
     if (seq > window.ackedSeq + windowSize) {
@@ -490,7 +499,7 @@ export function createWorkerLiveEventReceiver(options: WorkerLiveEventReceiverOp
       return { ok: true, result: { ackedSeq: window.ackedSeq } };
     }
     const sizeBytes = Buffer.byteLength(JSON.stringify(params.request.event), "utf8");
-    if (window.pendingBytes + sizeBytes > maxPendingBytes) {
+    if (window.pendingBytes + sizeBytes > DEFAULT_MAX_PENDING_BYTES) {
       return resyncWindow(window);
     }
     window.pending.set(seq, {
@@ -513,11 +522,6 @@ export function createWorkerLiveEventReceiver(options: WorkerLiveEventReceiverOp
     if (params.request.runEpoch !== params.identity.ownerEpoch) {
       return { ok: false, details: { reason: "epoch-mismatch" } };
     }
-    if (
-      params.request.runEpoch <= (fencedEnvironmentEpochs.get(params.identity.environmentId) ?? -1)
-    ) {
-      return invalidEvent();
-    }
     const sessionId = params.identity.sessionId;
     const window = resolveOrCreateWindow(sessionId, params);
     if ("ok" in window) {
@@ -528,20 +532,14 @@ export function createWorkerLiveEventReceiver(options: WorkerLiveEventReceiverOp
     try {
       let result: WorkerLiveEventApplicationResult;
       try {
-        result = applyToWindow(window, params, runOwner);
+        result = await applyToWindow(window, params, runOwner);
       } finally {
         // Snapshot this accepted prefix, including duplicate ACKs, even if a later
         // callback throws. Later requests own their own writes.
         await Promise.all(window.trajectoryWrites);
       }
       if (result.ok) {
-        if (!runOwner?.isCancelledFinishing(params.request)) {
-          try {
-            params.source.receiptAuthority();
-          } catch {
-            return invalidEvent();
-          }
-        }
+        // Source closure after publication does not revoke the accepted prefix's ACK.
         if (windows.get(sessionId) !== window) {
           return { ok: false, details: { reason: "session-not-attached" } };
         }
@@ -555,20 +553,11 @@ export function createWorkerLiveEventReceiver(options: WorkerLiveEventReceiverOp
     }
   };
 
-  const clearEnvironment = (environmentId: string, ownerEpoch: number): void => {
-    let fencedEpoch = Math.max(fencedEnvironmentEpochs.get(environmentId) ?? -1, ownerEpoch);
+  const clearEnvironment = (environmentId: string): void => {
     for (const window of windows.values()) {
       if (window.environmentId === environmentId) {
-        fencedEpoch = Math.max(fencedEpoch, window.runEpoch);
         clearWindow(window);
       }
-    }
-    if (fencedEpoch >= 0) {
-      // Oldest tombstones may expire because service/store ownership stays authoritative.
-      // Refresh recency first so a re-fenced environment keeps its newest stale-owner epoch.
-      fencedEnvironmentEpochs.delete(environmentId);
-      fencedEnvironmentEpochs.set(environmentId, fencedEpoch);
-      pruneMapToMaxSize(fencedEnvironmentEpochs, MAX_FENCED_ENVIRONMENTS);
     }
   };
 
@@ -576,7 +565,6 @@ export function createWorkerLiveEventReceiver(options: WorkerLiveEventReceiverOp
     for (const window of windows.values()) {
       clearWindow(window);
     }
-    fencedEnvironmentEpochs.clear();
   };
 
   return { apply, clear, clearEnvironment, rotateCredential };

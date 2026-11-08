@@ -15,12 +15,8 @@ const OPENROUTER_TTS_MODELS = [
 ] as const;
 const OPENROUTER_TTS_RESPONSE_FORMATS = ["mp3", "pcm"] as const;
 
-type OpenRouterTtsExtraConfig = {
-  provider?: Record<string, unknown>;
-};
-
 export function buildOpenRouterSpeechProvider(): SpeechProviderPlugin {
-  return createOpenAiCompatibleSpeechProvider<OpenRouterTtsExtraConfig>({
+  return createOpenAiCompatibleSpeechProvider({
     id: "openrouter",
     label: "OpenRouter",
     autoSelectOrder: 35,
@@ -29,6 +25,8 @@ export function buildOpenRouterSpeechProvider(): SpeechProviderPlugin {
     defaultModel: DEFAULT_OPENROUTER_TTS_MODEL,
     defaultVoice: DEFAULT_OPENROUTER_TTS_VOICE,
     defaultBaseUrl: OPENROUTER_BASE_URL,
+    // Hosted Kokoro synthesis can exceed the standard 30-second timeout.
+    defaultTimeoutMs: 120_000,
     envKey: "OPENROUTER_API_KEY",
     responseFormats: OPENROUTER_TTS_RESPONSE_FORMATS,
     defaultResponseFormat: "mp3",

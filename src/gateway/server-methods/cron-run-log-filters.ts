@@ -6,20 +6,18 @@ export function filterCronRunLogJobsByAgent(
   jobs: readonly CronJob[],
   agentId: string | undefined,
   defaultAgentId: string | undefined,
-  legacyDefaultAgentId?: string,
 ): CronJob[] {
   if (!agentId) {
     return [...jobs];
   }
   const normalizedAgentId = normalizeAgentId(agentId);
   return jobs.filter(
-    (job) =>
-      tryResolveCronJobEffectiveAgentId(job, defaultAgentId, legacyDefaultAgentId) ===
-      normalizedAgentId,
+    (job) => tryResolveCronJobEffectiveAgentId(job, defaultAgentId) === normalizedAgentId,
   );
 }
 
 export function cronRunLogPageFilters(params: {
+  view?: "full" | "summary";
   limit?: number;
   offset?: number;
   statuses?: CronRunStatus[];
@@ -31,6 +29,7 @@ export function cronRunLogPageFilters(params: {
   sortDir?: "asc" | "desc";
 }) {
   return {
+    view: params.view,
     limit: params.limit,
     offset: params.offset,
     statuses: params.statuses,

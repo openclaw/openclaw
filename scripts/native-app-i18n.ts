@@ -3,7 +3,6 @@ import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import pMap from "p-map";
-import { expectDefined } from "../packages/normalization-core/src/expect.js";
 import { isRecord } from "../packages/normalization-core/src/record-coerce.js";
 import { sliceUtf16Safe } from "../packages/normalization-core/src/utf16-slice.ts";
 import { decodeXml } from "../src/shared/xml.ts";
@@ -13,26 +12,21 @@ import {
   lineNumber,
   selectDeterministicTranslation,
 } from "./android-app-i18n.ts";
-import { translateNativeEntries } from "./control-ui-i18n.ts";
+import type { translateNativeEntries } from "./control-ui-i18n.ts"; // Verification never initializes providers.
 import { compareAscii as compareCodePoints } from "./lib/canonical-json.mjs";
+import {
+  type NativeI18nInventoryEntry,
+  type NativeI18nSite,
+  type NativeI18nSurface,
+  serializeNativeI18nInventory,
+} from "./native-i18n-inventory.ts";
 import { NATIVE_I18N_LOCALES } from "./native-i18n-locales.ts";
-
-type NativeI18nSurface = "android" | "apple";
 
 export { NATIVE_I18N_LOCALES };
 
-export type NativeI18nEntry = {
-  id: string;
-  source: string;
-  surface: NativeI18nSurface;
-  sites: NativeI18nSite[];
+export type NativeI18nEntry = NativeI18nInventoryEntry & {
   /** Request-only owner excerpt; never persisted in the source inventory. */
   sourceContext?: string;
-};
-
-export type NativeI18nSite = {
-  kind: string;
-  path: string;
 };
 
 type NativeInterpolation = {
@@ -41,20 +35,22 @@ type NativeInterpolation = {
   value: string;
 };
 
-type Candidate = NativeI18nSite & {
-  line: number;
-  source: string;
+type Candidate = NativeI18nSite &
+  Pick<NativeI18nEntry, "source" | "surface" | "sourceContext"> & {
+    line: number;
+  };
+type CandidateContext = {
+  entries: Candidate[];
   surface: NativeI18nSurface;
-  sourceContext?: string;
+  repoPath: string;
+  source: string;
 };
 type NativeTranslationArtifactV1 = {
   entries: Array<{ id: string; source: string; translated: string }>;
-  glossaryHash: string;
   locale: string;
   version: 1;
 };
 type NativeTranslationArtifact = {
-  glossaryHash: string;
   locale: string;
   translations: Record<string, string>;
   version: 2;
@@ -72,12 +68,10 @@ export type NativeI18nQualityFinding = {
   translated: string;
   words?: string[];
 };
-type NativeTranslator = typeof translateNativeEntries;
 type NativeLocaleSyncOptions = {
   force?: boolean;
   refreshIds?: string[];
-  glossary?: Array<{ source: string; target: string }>;
-  translate?: NativeTranslator;
+  translate?: typeof translateNativeEntries;
   translationsDir?: string;
 };
 type NativeI18nCommand = {
@@ -502,13 +496,8 @@ function readAdjacentStringLiterals(
   }
 }
 
-function extractUiCalls(
-  entries: Candidate[],
-  surface: NativeI18nSurface,
-  repoPath: string,
-  source: string,
-  uiCallNames: ReadonlySet<string>,
-) {
+function extractUiCalls(context: CandidateContext, uiCallNames: ReadonlySet<string>) {
+  const { source, surface } = context;
   for (const match of source.matchAll(APPLE_CALL_START)) {
     if (!match[1] || !uiCallNames.has(match[1])) {
       continue;
@@ -520,7 +509,7 @@ function extractUiCalls(
       continue;
     }
     const kind = literal.fragments > 1 ? "ui-call-concatenated" : "ui-call";
-    addCandidate(entries, surface, repoPath, literal.value, kind, lineNumber(source, offset));
+    addCandidate(context, literal.value, kind, offset);
   }
 }
 
@@ -630,14 +619,8 @@ function validateNativeTranslationStructure(
   }
 }
 
-function addCandidate(
-  entries: Candidate[],
-  surface: NativeI18nSurface,
-  repoPath: string,
-  source: string,
-  kind: string,
-  line: number,
-) {
+function addCandidate(context: CandidateContext, source: string, kind: string, offset: number) {
+  const { entries, surface, repoPath } = context;
   const normalized = decodeLiteral(source, kind);
   if (normalized.length > 500 || !normalized.trim() || !/\p{L}/u.test(normalized)) {
     return;
@@ -654,7 +637,13 @@ function addCandidate(
   if (!isTranslatableCandidate(normalized, kind, literalSource.join(""))) {
     return;
   }
-  entries.push({ kind, line, path: repoPath, source: normalized, surface });
+  entries.push({
+    kind,
+    line: lineNumber(context.source, offset),
+    path: repoPath,
+    source: normalized,
+    surface,
+  });
 }
 
 function findCapturedLiteralOffset(
@@ -671,13 +660,11 @@ function findCapturedLiteralOffset(
 }
 
 function addCapturedLiteralCandidates(
-  entries: Candidate[],
-  surface: NativeI18nSurface,
-  repoPath: string,
-  source: string,
+  context: CandidateContext,
   match: RegExpMatchArray,
   kind: string,
 ) {
+  const { source, surface } = context;
   let searchStart = match.index ?? 0;
   for (const value of match.slice(1)) {
     if (!value) {
@@ -690,12 +677,10 @@ function addCapturedLiteralCandidates(
     const literal = readAdjacentStringLiterals(surface, source, openingQuote);
     if (literal) {
       addCandidate(
-        entries,
-        surface,
-        repoPath,
+        context,
         literal.value,
         literal.fragments > 1 ? `${kind}-concatenated` : kind,
-        lineNumber(source, openingQuote),
+        openingQuote,
       );
       searchStart = literal.end;
     } else {
@@ -725,13 +710,11 @@ function skipWhitespaceAndBrace(source: string, offset: number): number {
 }
 
 function addConditionalBranchPair(
-  entries: Candidate[],
-  surface: NativeI18nSurface,
-  repoPath: string,
-  source: string,
+  context: CandidateContext,
   firstOffset: number,
   separator: RegExp,
 ) {
+  const { source, surface } = context;
   const firstStart = skipWhitespaceAndBrace(source, firstOffset);
   const first = readAdjacentStringLiterals(surface, source, firstStart);
   if (!first) {
@@ -749,54 +732,27 @@ function addConditionalBranchPair(
     branches.push({ offset: secondStart, value: second.value });
   }
   for (const branch of branches) {
-    addCandidate(
-      entries,
-      surface,
-      repoPath,
-      branch.value,
-      "conditional-branch",
-      lineNumber(source, branch.offset),
-    );
+    addCandidate(context, branch.value, "conditional-branch", branch.offset);
   }
 }
 
-function extractConditionalBranches(
-  entries: Candidate[],
-  surface: NativeI18nSurface,
-  repoPath: string,
-  source: string,
-) {
+function extractConditionalBranches(context: CandidateContext) {
+  const { source } = context;
   for (const match of source.matchAll(/\bif\s*\([^)]*\)\s*/gu)) {
-    addConditionalBranchPair(
-      entries,
-      surface,
-      repoPath,
-      source,
-      (match.index ?? 0) + match[0].length,
-      /^\s*\}?\s*else\s*/u,
-    );
+    addConditionalBranchPair(context, (match.index ?? 0) + match[0].length, /^\s*\}?\s*else\s*/u);
   }
   for (const match of source.matchAll(/\?\s*/gu)) {
-    addConditionalBranchPair(
-      entries,
-      surface,
-      repoPath,
-      source,
-      (match.index ?? 0) + match[0].length,
-      /^\s*:\s*/u,
-    );
+    addConditionalBranchPair(context, (match.index ?? 0) + match[0].length, /^\s*:\s*/u);
   }
 }
 
 function addBranchCandidates(
-  entries: Candidate[],
-  surface: NativeI18nSurface,
-  repoPath: string,
-  source: string,
+  context: CandidateContext,
   bodyOffset: number,
   body: string,
   branchStart: RegExp,
 ) {
+  const { source, surface } = context;
   for (const branch of body.matchAll(branchStart)) {
     const openingQuote = skipWhitespaceAndBrace(
       source,
@@ -804,14 +760,7 @@ function addBranchCandidates(
     );
     const literal = readAdjacentStringLiterals(surface, source, openingQuote);
     if (literal) {
-      addCandidate(
-        entries,
-        surface,
-        repoPath,
-        literal.value,
-        "conditional-branch",
-        lineNumber(source, openingQuote),
-      );
+      addCandidate(context, literal.value, "conditional-branch", openingQuote);
     }
   }
 }
@@ -826,6 +775,7 @@ export function extractNativeI18nCandidates(
   ]),
 ): Candidate[] {
   const entries: Candidate[] = [];
+  const context = { entries, surface, repoPath, source };
   const patterns: Array<readonly [RegExp, string]> =
     surface === "apple"
       ? [
@@ -844,11 +794,11 @@ export function extractNativeI18nCandidates(
         ];
   for (const [pattern, kind] of patterns) {
     for (const match of source.matchAll(pattern)) {
-      addCapturedLiteralCandidates(entries, surface, repoPath, source, match, kind);
+      addCapturedLiteralCandidates(context, match, kind);
     }
   }
-  extractConditionalBranches(entries, surface, repoPath, source);
-  extractUiCalls(entries, surface, repoPath, source, uiCallNames);
+  extractConditionalBranches(context);
+  extractUiCalls(context, uiCallNames);
   if (surface === "apple") {
     for (const property of source.matchAll(APPLE_STRING_PROPERTY)) {
       const name = property[1];
@@ -861,39 +811,7 @@ export function extractNativeI18nCandidates(
       if (!/\bswitch\b/u.test(body)) {
         continue;
       }
-      addBranchCandidates(
-        entries,
-        surface,
-        repoPath,
-        source,
-        openingBrace + 1,
-        body,
-        APPLE_SWITCH_BRANCH_START,
-      );
-    }
-    for (const match of source.matchAll(APPLE_NAMED_LITERALS)) {
-      const argumentName = match[1];
-      const callName = enclosingCallName(source, match.index ?? 0);
-      if (
-        !argumentName ||
-        !UI_STRING_NAME_RE.test(argumentName) ||
-        !callName ||
-        !uiCallNames.has(callName)
-      ) {
-        continue;
-      }
-      const multiline = match[2];
-      const literal = multiline ?? match[3];
-      if (literal) {
-        addCapturedLiteralCandidates(
-          entries,
-          surface,
-          repoPath,
-          source,
-          match,
-          multiline === undefined ? "ui-named-argument" : "ui-named-argument-multiline",
-        );
-      }
+      addBranchCandidates(context, openingBrace + 1, body, APPLE_SWITCH_BRANCH_START);
     }
   }
   if (surface === "android") {
@@ -911,7 +829,7 @@ export function extractNativeI18nCandidates(
           continue;
         }
         const body = source.slice(bodyStart, closingBrace);
-        addBranchCandidates(entries, surface, repoPath, source, bodyStart, body, /\breturn\b/gu);
+        addBranchCandidates(context, bodyStart, body, /\breturn\b/gu);
         continue;
       }
       const expression = source.slice(bodyStart);
@@ -923,28 +841,13 @@ export function extractNativeI18nCandidates(
           continue;
         }
         const body = source.slice(openingBrace + 1, closingBrace);
-        addBranchCandidates(
-          entries,
-          surface,
-          repoPath,
-          source,
-          openingBrace + 1,
-          body,
-          ANDROID_WHEN_BRANCH_START,
-        );
+        addBranchCandidates(context, openingBrace + 1, body, ANDROID_WHEN_BRANCH_START);
         continue;
       }
       const openingQuote = skipWhitespaceAndBrace(source, bodyStart);
       const literal = readAdjacentStringLiterals(surface, source, openingQuote);
       if (literal) {
-        addCandidate(
-          entries,
-          surface,
-          repoPath,
-          literal.value,
-          "conditional-branch",
-          lineNumber(source, openingQuote),
-        );
+        addCandidate(context, literal.value, "conditional-branch", openingQuote);
         continue;
       }
       const elvisFallback = expression.match(/^\s*[^\n]*\?:\s*/u);
@@ -952,30 +855,29 @@ export function extractNativeI18nCandidates(
         const fallbackQuote = skipWhitespaceAndBrace(source, bodyStart + elvisFallback[0].length);
         const fallback = readAdjacentStringLiterals(surface, source, fallbackQuote);
         if (fallback) {
-          addCandidate(
-            entries,
-            surface,
-            repoPath,
-            fallback.value,
-            "conditional-branch",
-            lineNumber(source, fallbackQuote),
-          );
+          addCandidate(context, fallback.value, "conditional-branch", fallbackQuote);
         }
       }
     }
-    for (const match of source.matchAll(ANDROID_NAMED_LITERALS)) {
-      const argumentName = match[1];
-      const callName = enclosingCallName(source, match.index ?? 0);
-      if (
-        !argumentName ||
-        !UI_STRING_NAME_RE.test(argumentName) ||
-        !callName ||
-        !uiCallNames.has(callName) ||
-        !match[2]
-      ) {
-        continue;
-      }
-      addCapturedLiteralCandidates(entries, surface, repoPath, source, match, "ui-named-argument");
+  }
+  const namedLiterals = surface === "apple" ? APPLE_NAMED_LITERALS : ANDROID_NAMED_LITERALS;
+  for (const match of source.matchAll(namedLiterals)) {
+    const argumentName = match[1];
+    const callName = enclosingCallName(source, match.index ?? 0);
+    const multiline = surface === "apple" && match[2] !== undefined;
+    const literal = surface === "apple" ? (match[2] ?? match[3]) : match[2];
+    if (
+      argumentName &&
+      UI_STRING_NAME_RE.test(argumentName) &&
+      callName &&
+      uiCallNames.has(callName) &&
+      literal
+    ) {
+      addCapturedLiteralCandidates(
+        context,
+        match,
+        multiline ? "ui-named-argument-multiline" : "ui-named-argument",
+      );
     }
   }
   if (surface === "android" && /\/res\/values\/[^/]+\.xml$/u.test(repoPath)) {
@@ -985,14 +887,7 @@ export function extractNativeI18nCandidates(
         continue;
       }
       if (match[2]) {
-        addCandidate(
-          entries,
-          surface,
-          repoPath,
-          match[2],
-          "resource-string",
-          lineNumber(source, match.index ?? 0),
-        );
+        addCandidate(context, match[2], "resource-string", match.index ?? 0);
       }
     }
     for (const collection of source.matchAll(ANDROID_RESOURCE_COLLECTIONS)) {
@@ -1006,14 +901,7 @@ export function extractNativeI18nCandidates(
         const value = item[1]?.trim();
         // Resource references inherit translatability from their target.
         if (value && !value.startsWith("@")) {
-          addCandidate(
-            entries,
-            surface,
-            repoPath,
-            value,
-            "resource-item",
-            lineNumber(source, bodyOffset + (item.index ?? 0)),
-          );
+          addCandidate(context, value, "resource-item", bodyOffset + (item.index ?? 0));
         }
       }
     }
@@ -1024,14 +912,7 @@ export function extractNativeI18nCandidates(
       const value = match[2];
       if (key && isLocalizableApplePlistKey(key) && value) {
         const valueOffset = (match.index ?? 0) + match[0].indexOf(value);
-        addCandidate(
-          entries,
-          surface,
-          repoPath,
-          decodeXml(value),
-          "plist-string",
-          lineNumber(source, valueOffset),
-        );
+        addCandidate(context, decodeXml(value), "plist-string", valueOffset);
       }
     }
   }
@@ -1093,23 +974,22 @@ function nativeEntryIdentity(entry: Pick<NativeI18nEntry, "source" | "surface">)
 }
 
 export function assignNativeI18nIds(entries: readonly Candidate[]): NativeI18nEntry[] {
-  const sitesByIdentity = new Map<string, Map<string, Candidate>>();
-  const entryByIdentity = new Map<string, Pick<NativeI18nEntry, "source" | "surface">>();
+  const entriesByIdentity = new Map<
+    string,
+    { source: string; surface: NativeI18nSurface; sites: Map<string, Candidate> }
+  >();
   for (const candidate of entries) {
     const identity = nativeEntryIdentity(candidate);
-    entryByIdentity.set(identity, { source: candidate.source, surface: candidate.surface });
-    const sites = sitesByIdentity.get(identity) ?? new Map<string, Candidate>();
-    sites.set(`${candidate.path}\u0000${candidate.kind}`, candidate);
-    sitesByIdentity.set(identity, sites);
+    let entry = entriesByIdentity.get(identity);
+    if (!entry) {
+      entry = { source: candidate.source, surface: candidate.surface, sites: new Map() };
+      entriesByIdentity.set(identity, entry);
+    }
+    entry.sites.set(`${candidate.path}\u0000${candidate.kind}`, candidate);
   }
-  return [...entryByIdentity]
+  return [...entriesByIdentity]
     .map(([identity, entry]) => {
-      const sites = [
-        ...expectDefined(
-          sitesByIdentity.get(identity),
-          `native i18n sites for ${identity}`,
-        ).values(),
-      ].toSorted(
+      const sites = [...entry.sites.values()].toSorted(
         (left, right) =>
           compareCodePoints(left.path, right.path) || compareCodePoints(left.kind, right.kind),
       );
@@ -1129,27 +1009,15 @@ export function assignNativeI18nIds(entries: readonly Candidate[]): NativeI18nEn
     );
 }
 
-async function readNativeI18nInventory(): Promise<{
-  raw: string;
-}> {
-  let raw: string;
+async function readNativeI18nInventory(): Promise<string> {
   try {
-    raw = await readFile(OUTPUT_PATH, "utf8");
+    return await readFile(OUTPUT_PATH, "utf8");
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      return { raw: "" };
+      return "";
     }
     throw error;
   }
-
-  const parsed: unknown = JSON.parse(raw);
-  if (!isRecord(parsed)) {
-    throw new Error(`invalid native app i18n inventory: ${OUTPUT_PATH}`);
-  }
-  if ((parsed.version !== 1 && parsed.version !== 2) || !Array.isArray(parsed.entries)) {
-    throw new Error(`invalid native app i18n inventory: ${OUTPUT_PATH}`);
-  }
-  return { raw };
 }
 
 export async function collectNativeI18nEntries(): Promise<NativeI18nEntry[]> {
@@ -1196,15 +1064,11 @@ export function collectNativeI18nEntriesFromSources(
     apple: new Set([...APPLE_BUILTIN_UI_CALLS, ...ANDROID_BUILTIN_UI_CALLS]),
   };
   for (const { source, surface } of sources) {
-    if (surface === "android") {
-      for (const match of source.matchAll(ANDROID_COMPOSABLE_FUNCTION)) {
-        if (match[1]) {
-          uiCallNames[surface].add(match[1]);
-        }
-      }
-      continue;
-    }
-    for (const pattern of [APPLE_VIEW_TYPE, APPLE_VIEW_FUNCTION, APPLE_ALERT_FUNCTION]) {
+    const patterns =
+      surface === "android"
+        ? [ANDROID_COMPOSABLE_FUNCTION]
+        : [APPLE_VIEW_TYPE, APPLE_VIEW_FUNCTION, APPLE_ALERT_FUNCTION];
+    for (const pattern of patterns) {
       for (const match of source.matchAll(pattern)) {
         if (match[1]) {
           uiCallNames[surface].add(match[1]);
@@ -1226,31 +1090,15 @@ export function collectNativeI18nEntriesFromSources(
   return assignNativeI18nIds(entries);
 }
 
-export function serializeNativeI18nInventory(entries: readonly NativeI18nEntry[]): string {
-  return [
-    "{",
-    '  "version": 2,',
-    '  "entries": [',
-    ...entries.map(
-      ({ id, source, surface, sites }, index) =>
-        `    ${JSON.stringify({ id, source, surface, sites })}${index === entries.length - 1 ? "" : ","}`,
-    ),
-    "  ]",
-    "}",
-    "",
-  ].join("\n");
-}
-
 async function syncNativeI18n(options: {
   checkInventory: boolean;
   checkLocales: boolean;
   reportObsolete?: (message: string) => void;
   write: boolean;
 }): Promise<NativeI18nEntry[]> {
-  const currentInventory = await readNativeI18nInventory();
+  const current = await readNativeI18nInventory();
   const entries = await collectNativeI18nEntries();
   const expected = serializeNativeI18nInventory(entries);
-  const current = currentInventory.raw;
   if (options.checkInventory && current !== expected) {
     throw new Error(
       "native app i18n inventory drift detected. Run `pnpm native:i18n:baseline` and commit apps/.i18n/native-source.json.",
@@ -1279,37 +1127,19 @@ async function syncNativeI18n(options: {
   return entries;
 }
 
-async function loadGlossary(locale: string): Promise<Array<{ source: string; target: string }>> {
-  try {
-    return JSON.parse(
-      await readFile(
-        path.join(ROOT, "ui", "src", "i18n", ".i18n", `glossary.${locale}.json`),
-        "utf8",
-      ),
-    ) as Array<{ source: string; target: string }>;
-  } catch {
-    return [];
-  }
-}
-
-function glossaryHash(glossary: readonly { source: string; target: string }[]): string {
-  return createHash("sha256").update(JSON.stringify(glossary)).digest("hex");
-}
-
 function adjacentDuplicateWords(value: string, locale: string): string[] {
   const words = [...value.matchAll(/[\p{L}\p{M}\p{N}]+/gu)].map((match) => match[0]);
   const duplicates = new Set<string>();
-  for (let index = 1; index < words.length; index += 1) {
+  let previous: string | undefined;
+  for (const word of words) {
     if (
-      expectDefined(words[index - 1], `native i18n word before index ${index}`)
-        .normalize("NFKC")
-        .toLocaleLowerCase(locale) ===
-      expectDefined(words[index], `native i18n word at index ${index}`)
-        .normalize("NFKC")
-        .toLocaleLowerCase(locale)
+      previous !== undefined &&
+      previous.normalize("NFKC").toLocaleLowerCase(locale) ===
+        word.normalize("NFKC").toLocaleLowerCase(locale)
     ) {
-      duplicates.add(expectDefined(words[index], `duplicate native i18n word at index ${index}`));
+      duplicates.add(word);
     }
+    previous = word;
   }
   return [...duplicates].toSorted(compareCodePoints);
 }
@@ -1393,31 +1223,19 @@ export function validateNativeLocaleArtifact(
   locale: string,
   inventory: readonly NativeI18nEntry[],
   artifactValue: unknown,
-  glossary: readonly { source: string; target: string }[] = [],
   reportObsolete?: (message: string) => void,
 ): NativeI18nQualityFinding[] {
   const errors: string[] = [];
   const obsolete: string[] = [];
-  if (!artifactValue || typeof artifactValue !== "object" || Array.isArray(artifactValue)) {
+  if (!isRecord(artifactValue)) {
     throw new Error(`invalid native locale artifact ${locale}: expected an object`);
   }
-  const artifact = artifactValue as {
-    glossaryHash?: unknown;
-    locale?: unknown;
-    translations?: unknown;
-    version?: unknown;
-  };
+  const artifact = artifactValue;
   if (artifact.version !== 2) {
     errors.push(`version must be 2, got ${JSON.stringify(artifact.version)}`);
   }
   if (artifact.locale !== locale) {
     errors.push(`locale must be ${JSON.stringify(locale)}, got ${JSON.stringify(artifact.locale)}`);
-  }
-  const expectedGlossaryHash = glossaryHash(glossary);
-  if (artifact.glossaryHash !== expectedGlossaryHash) {
-    errors.push(
-      `glossaryHash must be ${expectedGlossaryHash}, got ${JSON.stringify(artifact.glossaryHash)}`,
-    );
   }
   if (!isRecord(artifact.translations)) {
     errors.push("translations must be a plain object");
@@ -1480,15 +1298,7 @@ export async function checkNativeLocaleArtifacts(
     const artifactPath = path.join(translationsDir, `${locale}.json`);
     try {
       const artifact: unknown = JSON.parse(await readFile(artifactPath, "utf8"));
-      findings.push(
-        ...validateNativeLocaleArtifact(
-          locale,
-          inventory,
-          artifact,
-          await loadGlossary(locale),
-          reportObsolete,
-        ),
-      );
+      findings.push(...validateNativeLocaleArtifact(locale, inventory, artifact, reportObsolete));
     } catch (error) {
       errors.push(error instanceof Error ? error.message : String(error));
     }
@@ -1530,8 +1340,6 @@ export async function syncNativeLocale(
   // Native runtime resources are owned by the Android and Apple slices; these
   // artifacts keep the shared translation-memory handoff current between them.
   const artifactPath = path.join(options.translationsDir ?? TRANSLATIONS_DIR, `${locale}.json`);
-  const glossary = options.glossary ?? (await loadGlossary(locale));
-  const currentGlossaryHash = glossaryHash(glossary);
   let previousRaw = "";
   let previous: NativeTranslationArtifact | NativeTranslationArtifactV1 | undefined;
   try {
@@ -1569,14 +1377,8 @@ export async function syncNativeLocale(
       }
     }
   }
-  const glossaryChanged =
-    (previous?.version === 2 || (migratingV1 && refreshIds.size > 0)) &&
-    previous?.glossaryHash !== currentGlossaryHash;
   const pending = entries
-    .filter(
-      (entry) =>
-        options.force || refreshIds.has(entry.id) || glossaryChanged || !reusableById.get(entry.id),
-    )
+    .filter((entry) => options.force || refreshIds.has(entry.id) || !reusableById.get(entry.id))
     .map((entry) => ({
       id: entry.id,
       source: entry.source,
@@ -1588,10 +1390,9 @@ export async function syncNativeLocale(
   const translatePending = !migratingV1 || options.force || refreshIds.size > 0;
   const translated =
     pending.length && translatePending
-      ? await (options.translate ?? translateNativeEntries)(
+      ? await (options.translate ?? (await import("./control-ui-i18n.ts")).translateNativeEntries)(
           pending,
           locale,
-          glossary,
           validateNativeTranslationStructure,
         )
       : new Map<string, string>();
@@ -1609,10 +1410,9 @@ export async function syncNativeLocale(
   const artifact: NativeTranslationArtifact = {
     version: 2,
     locale,
-    glossaryHash: currentGlossaryHash,
     translations,
   };
-  validateNativeLocaleArtifact(locale, entries, artifact, glossary);
+  validateNativeLocaleArtifact(locale, entries, artifact);
   const rendered = `${JSON.stringify(artifact, null, 2)}\n`;
   const changed = previousRaw !== rendered;
   if (changed) {

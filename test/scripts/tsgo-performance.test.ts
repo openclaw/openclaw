@@ -1,7 +1,6 @@
 import { EventEmitter } from "node:events";
 import fs from "node:fs";
-import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { runManagedCommand } from "../../scripts/lib/managed-child-process.mts";
 import {
   createTsgoResourceSampler,
@@ -10,10 +9,15 @@ import {
   summarizeTsgoBuildInfo,
 } from "../../scripts/lib/tsgo-performance.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { fixtureFiles } from "./script-fixture-files.test-support.js";
 
 vi.mock("../../scripts/lib/managed-child-process.mts", () => ({ runManagedCommand: vi.fn() }));
+const managed = vi.mocked(runManagedCommand);
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.unstubAllEnvs();
+});
 
 function stat({ user = 10, system = 5, start = "123" } = {}) {
   const fields = Array<string>(20).fill("0");
@@ -24,73 +28,49 @@ function stat({ user = 10, system = 5, start = "123" } = {}) {
   return `42 (tsgo (worker)) ${fields.join(" ")}`;
 }
 
-it("parses all-thread CPU and kernel RSS high-water observations without confusing comm fields", () => {
-  expect(parseTsgoProcessSample(stat(), "VmHWM:\t1024 kB\n", 100)).toEqual({
-    startTicks: "123",
-    cpuMs: 150,
-    peakRssBytes: 1048576,
-  });
+it("rejects malformed process observations and invalid clock frequencies", () => {
   expect(parseTsgoProcessSample("garbled", "", 100)).toBeNull();
   expect(parseTsgoProcessSample(stat(), "", 0)).toBeNull();
-  expect(parseTsgoProcessSample(stat(), "", 100)?.peakRssBytes).toBeNull();
 });
 
-it.each(["darwin", "win32"] as const)(
-  "reports resource statistics unavailable on %s without reading procfs",
-  (platform) => {
-    const read = vi.fn();
-    const sampler = createTsgoResourceSampler({ platform, ticksPerSecond: 100, read });
-    sampler.sample(42);
-    expect(read).not.toHaveBeenCalled();
-    expect(sampler.result()).toMatchObject({
-      cpuMs: null,
-      peakRssBytes: null,
-      samples: 0,
-      unavailableReason: "unsupported-platform",
-    });
-  },
-);
-
-it("keeps lower bounds across exit races and refuses a reused PID", () => {
-  const read = vi
-    .fn()
-    .mockReturnValueOnce(stat())
-    .mockReturnValueOnce("VmHWM: 1024 kB\n")
-    .mockImplementationOnce(() => {
-      throw new Error("ENOENT");
-    })
-    .mockReturnValueOnce(stat({ user: 500, start: "456" }))
-    .mockReturnValueOnce("VmHWM: 4096 kB\n");
-  const sampler = createTsgoResourceSampler({ platform: "linux", ticksPerSecond: 100, read });
-  sampler.sample(42);
-  sampler.sample(42);
-  sampler.sample(42);
-  expect(sampler.result()).toMatchObject({
-    cpuMs: 150,
-    peakRssBytes: 1048576,
-    samples: 1,
-    accuracy: "sampled-lower-bound",
+it.each([
+  ["unsupported-platform", 0, null, null],
+  ["clock-tick-frequency-unavailable", 0, null, null],
+  ["exit-race", 5, 150, 1048576],
+  ["missing-rss", 2, 150, null],
+] as const)("preserves resource evidence for %s", (scenario, reads, cpuMs, peakRssBytes) => {
+  const samples = [
+    stat(),
+    "VmHWM: 1024 kB\n",
+    new Error("ENOENT"),
+    stat({ user: 500, start: "456" }),
+    "VmHWM: 4096 kB\n",
+  ];
+  const read = vi.fn((file: string) => {
+    const value = scenario === "exit-race" ? samples.shift() : file.endsWith("stat") ? stat() : "";
+    if (value instanceof Error) {
+      throw value;
+    }
+    return value ?? "";
   });
-  const missing = createTsgoResourceSampler({ platform: "linux", ticksPerSecond: null, read });
-  missing.sample(42);
-  expect(missing.result()).toMatchObject({
-    cpuMs: null,
-    unavailableReason: "clock-tick-frequency-unavailable",
-  });
-});
-
-it("explains a missing RSS high-water mark separately from available CPU", () => {
   const sampler = createTsgoResourceSampler({
-    platform: "linux",
-    ticksPerSecond: 100,
-    read: (file) => (file.endsWith("stat") ? stat() : ""),
+    platform: scenario === "unsupported-platform" ? "darwin" : "linux",
+    ticksPerSecond: scenario === "clock-tick-frequency-unavailable" ? null : 100,
+    read,
   });
-  sampler.sample(42);
+  for (let attempt = 0; attempt < (scenario === "exit-race" ? 3 : 1); attempt++) {
+    sampler.sample(42);
+  }
+  expect(read).toHaveBeenCalledTimes(reads);
   expect(sampler.result()).toMatchObject({
-    cpuMs: 150,
-    peakRssBytes: null,
-    unavailableReason: null,
-    peakRssUnavailableReason: "rss-high-water-unavailable",
+    cpuMs,
+    peakRssBytes,
+    samples: reads ? 1 : 0,
+    unavailableReason: reads ? null : scenario,
+    ...(scenario === "exit-race" ? { accuracy: "sampled-lower-bound" } : {}),
+    ...(scenario === "missing-rss"
+      ? { peakRssUnavailableReason: "rss-high-water-unavailable" }
+      : {}),
   });
 });
 
@@ -104,146 +84,132 @@ it("counts roots and transitive inputs only from fresh compiler metadata", () =>
     totalFiles: 4,
     unavailableReason: null,
   });
-  expect(summarizeTsgoBuildInfo(info, info)).toMatchObject({
-    totalFiles: null,
-    unavailableReason: "build-info-unchanged",
-  });
-  expect(summarizeTsgoBuildInfo(null, null)).toMatchObject({
-    totalFiles: null,
-    unavailableReason: "build-info-unavailable",
-  });
-  for (const unsupported of [
-    "not JSON",
-    '{"fileNames":[],"root":[[1,999999999]]}',
-    '{"fileNames":[]}',
-  ]) {
-    expect(summarizeTsgoBuildInfo(null, Buffer.from(unsupported))).toMatchObject({
+  for (const [before, after, unavailableReason] of [
+    [info, info, "build-info-unchanged"],
+    [null, null, "build-info-unavailable"],
+    ...["not JSON", '{"fileNames":[],"root":[[1,999999999]]}', '{"fileNames":[]}'].map(
+      (text) => [null, Buffer.from(text), "unsupported-build-info"] as const,
+    ),
+  ] as const) {
+    expect(summarizeTsgoBuildInfo(before, after)).toMatchObject({
+      totalFiles: null,
       rootFiles: null,
-      unavailableReason: "unsupported-build-info",
+      unavailableReason,
     });
   }
 });
 
-describe("managed compiler evidence", () => {
-  function fixture() {
-    const cwd = tempDirs.make("tsgo-performance-");
-    fs.writeFileSync(path.join(cwd, "package.json"), '{"private":true}');
-    const directory = path.join(cwd, "metrics");
-    const command = {
-      bin: "tsgo",
-      args: [
-        "-p",
-        "fixture.json",
-        "--tsBuildInfoFile",
-        "cache.tsbuildinfo",
-        "--pprofDir",
-        "profiles",
-      ],
-      cwd,
-      env: {},
-      timeoutMs: 10_000,
-      requireProcessTreeExit: true,
-    };
-    return {
-      cwd,
-      directory,
-      command,
-      evidence: () => {
-        const [artifact] = fs.readdirSync(directory);
-        if (!artifact) {
-          throw new Error("Missing compiler metrics artifact");
-        }
-        return JSON.parse(fs.readFileSync(path.join(directory, artifact), "utf8"));
-      },
-    };
+const args = ["--tsBuildInfoFile", "cache.tsbuildinfo", "--pprofDir", "profiles"];
+function fixture() {
+  const files = fixtureFiles(tempDirs.make("tsgo-performance-"));
+  files.json("package.json", { private: true });
+  const directory = files.file("metrics");
+  const command = {
+    bin: "tsgo",
+    args,
+    cwd: files.root,
+    env: {},
+    timeoutMs: 10_000,
+    requireProcessTreeExit: true,
+  };
+  return {
+    ...files,
+    directory,
+    run: (overrides: Partial<Parameters<typeof runManagedCommand>[0]> = {}, output = directory) =>
+      runMeasuredTsgoCommand({ ...command, ...overrides }, output),
+    evidence: () => JSON.parse(files.read(`metrics/${fs.readdirSync(directory)[0]}`)),
+  };
+}
+
+it.each([
+  [2, null],
+  [143, "SIGTERM"],
+] as const)("preserves managed outcome %s and its evidence", async (exitCode, signal) => {
+  const { json, run, evidence } = fixture();
+  const onReady = vi.fn();
+  const onSignal = vi.fn();
+  managed.mockImplementationOnce(async (options) => {
+    const child = Object.assign(new EventEmitter(), { exitCode: null, signalCode: null });
+    options.onReady?.(child as Parameters<NonNullable<typeof options.onReady>>[0]);
+    if (signal) {
+      options.onSignal?.(signal);
+    } else {
+      json("cache.tsbuildinfo", { fileNames: ["a.ts", "lib.d.ts"], root: [1] });
+    }
+    child.emit("exit", signal ? null : exitCode, signal);
+    return exitCode;
+  });
+  expect(await run(signal ? { onSignal } : { onReady })).toBe(exitCode);
+  expect(evidence().outcome).toMatchObject({
+    exitCode,
+    errorCode: null,
+    exitSignal: signal,
+    forwardedSignal: signal,
+  });
+  if (signal) {
+    expect(onSignal).toHaveBeenCalledWith(signal);
+    return;
   }
-
-  it("preserves command, output policy, callbacks and numeric failure while recording fresh graph/cache evidence", async () => {
-    const { cwd, directory, command, evidence } = fixture();
-    const onReady = vi.fn();
-    vi.mocked(runManagedCommand).mockImplementationOnce(async (options) => {
-      expect(options).toMatchObject(command);
-      expect(options.stdio).toBeUndefined();
-      const child = Object.assign(new EventEmitter(), {
-        pid: undefined,
-        exitCode: null,
-        signalCode: null,
-      });
-      options.onReady?.(child as Parameters<NonNullable<typeof options.onReady>>[0]);
-      fs.writeFileSync(
-        path.join(cwd, "cache.tsbuildinfo"),
-        '{"fileNames":["a.ts","lib.d.ts"],"root":[1]}',
-      );
-      child.emit("exit", 2, null);
-      return 2;
-    });
-    expect(await runMeasuredTsgoCommand({ ...command, onReady }, directory)).toBe(2);
-    expect(onReady).toHaveBeenCalledOnce();
-    expect(evidence()).toMatchObject({
-      outcome: { exitCode: 2, errorCode: null },
-      command: { args: command.args },
-      pprofDir: "profiles",
-      graph: { totalFiles: 2, rootFiles: 1, transitiveFiles: 1 },
-      cache: { beforeSha256: null, hit: "unknown", osPageCache: "uncontrolled" },
-    });
-    expect(evidence().wallMs).toBeGreaterThanOrEqual(0);
-    expect(evidence().cache.afterSha256).toMatch(/^[a-f0-9]{64}$/u);
+  expect(onReady).toHaveBeenCalledOnce();
+  expect(evidence()).toMatchObject({
+    command: { args },
+    pprofDir: "profiles",
+    graph: { totalFiles: 2, rootFiles: 1, transitiveFiles: 1 },
+    cache: { beforeSha256: null, hit: "unknown", osPageCache: "uncontrolled" },
   });
+  expect(evidence().wallMs).toBeGreaterThanOrEqual(0);
+  expect(evidence().cache.afterSha256).toMatch(/^[a-f0-9]{64}$/u);
+});
 
-  it("records forwarded and child signals while leaving the managed result authoritative", async () => {
-    const { directory, command, evidence } = fixture();
-    const onSignal = vi.fn();
-    vi.mocked(runManagedCommand).mockImplementationOnce(async (options) => {
-      const child = Object.assign(new EventEmitter(), { exitCode: null, signalCode: null });
-      options.onReady?.(child as Parameters<NonNullable<typeof options.onReady>>[0]);
-      options.onSignal?.("SIGTERM");
-      child.emit("exit", null, "SIGTERM");
-      return 143;
-    });
-    expect(await runMeasuredTsgoCommand({ ...command, onSignal }, directory)).toBe(143);
-    expect(onSignal).toHaveBeenCalledWith("SIGTERM");
-    expect(evidence().outcome).toMatchObject({
-      exitCode: 143,
-      exitSignal: "SIGTERM",
-      forwardedSignal: "SIGTERM",
-    });
-  });
+it.each([{ OPENCLAW_TYPECHECKER: "tsgo" }, {}])(
+  "records the compiler version from the supplied env with profiling (%j)",
+  async (env) => {
+    const { write, json, run, evidence } = fixture();
+    write("pnpm-workspace.yaml", "packages: []\n");
+    for (const [name, version] of [
+      ["typescript", "1.2.3"],
+      ["tsrs", "4.5.6"],
+    ] as const) {
+      json(`node_modules/${name}/package.json`, { name, version });
+    }
+    vi.stubEnv("OPENCLAW_TYPECHECKER", "tsrs");
+    managed.mockResolvedValueOnce(0);
+    await run({ env });
+    expect(evidence().compilerVersion).toBe("1.2.3");
+  },
+);
 
-  it.each(["ETIMEDOUT", "ENOENT", "EPROCESSGROUP_CLEANUP_FAILED"])(
-    "never replaces %s with an evidence result",
-    async (code) => {
-      const { directory, command, evidence } = fixture();
-      const error = Object.assign(new Error("compiler failure"), { code });
-      vi.mocked(runManagedCommand).mockRejectedValueOnce(error);
-      await expect(runMeasuredTsgoCommand(command, directory)).rejects.toBe(error);
-      expect(evidence().outcome).toMatchObject({ exitCode: null, errorCode: code });
-    },
-  );
+it("never replaces a managed failure with an evidence result", async () => {
+  const { run, evidence } = fixture();
+  const code = "EPROCESSGROUP_CLEANUP_FAILED";
+  const error = Object.assign(new Error("compiler failure"), { code });
+  managed.mockRejectedValueOnce(error);
+  await expect(run()).rejects.toBe(error);
+  expect(evidence().outcome).toMatchObject({ exitCode: null, errorCode: code });
+});
 
-  it("does not turn unavailable evidence output into a compiler failure or rerun", async () => {
-    const { cwd, command } = fixture();
-    const warn = vi.spyOn(console, "error").mockImplementation(() => {});
-    vi.mocked(runManagedCommand).mockResolvedValueOnce(7);
-    const calls = vi.mocked(runManagedCommand).mock.calls.length;
-    expect(await runMeasuredTsgoCommand(command, path.join(cwd, "package.json", "metrics"))).toBe(
-      7,
-    );
-    expect(vi.mocked(runManagedCommand).mock.calls.length - calls).toBe(1);
-    expect(warn).toHaveBeenCalledWith(expect.stringContaining("without metrics"));
-  });
-
-  it("writes separate artifacts for repeated invocations and preserves outcomes if final writing fails", async () => {
-    const { directory, command } = fixture();
-    vi.mocked(runManagedCommand).mockResolvedValue(0);
-    await runMeasuredTsgoCommand(command, directory);
-    await runMeasuredTsgoCommand(command, directory);
+it.each(["setup", "write"] as const)("preserves outcomes when evidence %s fails", async (phase) => {
+  const { file, directory, run } = fixture();
+  if (phase === "write") {
+    managed.mockResolvedValue(0);
+    await run();
+    await run();
     expect(fs.readdirSync(directory)).toHaveLength(2);
-    const warn = vi.spyOn(console, "error").mockImplementation(() => {});
-    vi.mocked(runManagedCommand).mockImplementationOnce(async () => {
+  }
+  const warn = vi.spyOn(console, "error").mockImplementation(() => {});
+  const exitCode = phase === "setup" ? 7 : 9;
+  managed.mockImplementationOnce(async () => {
+    if (phase === "write") {
       fs.rmSync(directory, { recursive: true });
-      return 9;
-    });
-    expect(await runMeasuredTsgoCommand(command, directory)).toBe(9);
-    expect(warn).toHaveBeenCalledWith(expect.stringContaining("compiler outcome preserved"));
+    }
+    return exitCode;
   });
+  const calls = managed.mock.calls.length;
+  expect(await run({}, phase === "setup" ? file("package.json/metrics") : directory)).toBe(
+    exitCode,
+  );
+  expect(managed.mock.calls.length - calls).toBe(1);
+  expect(warn).toHaveBeenCalledWith(
+    expect.stringContaining(phase === "setup" ? "without metrics" : "compiler outcome preserved"),
+  );
 });

@@ -13,12 +13,14 @@ import { createAbortError } from "../../infra/abort-signal.js";
 import { assertAgentRunLifecycleGenerationCurrent } from "../../infra/agent-events.js";
 import { resolveAgentExplicitRecipientSession } from "../../infra/outbound/agent-delivery.js";
 import { buildOutboundSessionContext } from "../../infra/outbound/session-context.js";
-import { resolvePluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.js";
+import { labelRuntimeContextText } from "../../llm/types.js";
+import { resolvePluginMetadataSnapshotAsync } from "../../plugins/plugin-metadata-snapshot.js";
 import {
   classifySessionKeyShape,
   isUnscopedSessionKeySentinel,
   normalizeAgentId,
   resolveAgentIdFromSessionKey,
+  scopeLegacySessionKeyToAgent,
 } from "../../routing/session-key.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import {
@@ -31,6 +33,7 @@ import {
   hasAgentDatabaseAdmissions,
   recordAgentDatabaseAdmissions,
 } from "../../state/agent-database-admission.js";
+import { waitForAgentInputAdmission } from "../../state/agent-database-preparation-context.js";
 import { resolveUserPath } from "../../utils.js";
 import { isDeliverableMessageChannel, resolveMessageChannel } from "../../utils/message-channel.js";
 import { resolveAgentRuntimeConfig } from "../agent-runtime-config.js";
@@ -39,25 +42,23 @@ import {
   listAgentIds,
   resolveAgentDir,
   resolveSessionAgentId,
+  resolveSessionAgentIds,
   resolveAgentWorkspaceDir,
 } from "../agent-scope.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../defaults.js";
-import {
-  resolveAcpPromptBody,
-  prependInternalEventContext,
-  resolveInternalEventTranscriptBody,
-} from "../internal-events.js";
+import { resolveAcpPromptBody, resolveInternalEventTranscriptBody } from "../internal-events.js";
+import { projectRuntimeContextFragments } from "../internal-runtime-context.js";
 import { AGENT_LANE_SUBAGENT } from "../lanes.js";
 import type { ModelManifestNormalizationContext } from "../model-ref-shared.js";
 import { buildConfiguredModelCatalog, resolveConfiguredModelRef } from "../model-selection.js";
+import { buildThinkingCatalog } from "../model-thinking-default-core.js";
 import type { PreparedModelRuntimePluginGeneration } from "../prepared-model-runtime.types.js";
 import { isSyntheticSourceReplyTurn } from "../reply-completion.js";
 import { normalizeSpawnedRunMetadata } from "../spawned-context.js";
 import { resolveEffectiveAgentRuntime } from "../thinking-runtime.js";
 import { resolveAgentTimeoutMs } from "../timeout.js";
 import { ensureAgentWorkspace } from "../workspace.js";
-import { acquireWorktreeRunLease, resolveWorktreeIdForPath } from "../worktrees/run-lease.js";
-import { resolveExplicitAgentCommandSessionKey } from "./explicit-session-key.js";
+import { acquireWorktreeRunLease, resolveWorktreeForPath } from "../worktrees/run-lease.js";
 import { loadAcpManagerRuntime } from "./runtime-loaders.js";
 import { resolveSession } from "./session.js";
 import type { AgentCommandOpts } from "./types.js";
@@ -65,6 +66,8 @@ import type { AgentCommandOpts } from "./types.js";
 export type PreparedAgentCommandRuntimeContext = Readonly<{
   config: OpenClawConfig;
   pluginGeneration: PreparedModelRuntimePluginGeneration;
+  /** One-shot creation fact from the isolated child's in-process launch owner. */
+  freshChild?: boolean;
 }>;
 
 export async function prepareAgentCommandExecution(
@@ -72,6 +75,12 @@ export async function prepareAgentCommandExecution(
   runtime: RuntimeEnv,
   runtimeContext?: PreparedAgentCommandRuntimeContext,
 ) {
+  const {
+    abortSignal,
+    assertSourceCurrent,
+    operatorAuthority,
+    lifecycleGeneration: preparationLifecycleGeneration,
+  } = opts;
   const isRawModelRun = opts.modelRun === true || opts.promptMode === "none";
   const message = opts.message ?? "";
   if (!message.trim()) {
@@ -100,20 +109,15 @@ export async function prepareAgentCommandExecution(
     );
   }
 
-  const cfg = await resolveAgentRuntimeConfig(runtime, {
-    runtimeTargetsChannelSecrets: opts.deliver === true,
-    runtimeChannelSecretScope:
-      opts.deliver !== true && shouldResolveExplicitRecipientSession && recipientChannel
-        ? { channel: recipientChannel, accountId: opts.accountId }
-        : undefined,
-  });
-  const normalizedSpawned = normalizeSpawnedRunMetadata({
-    spawnedBy: opts.spawnedBy,
-    groupId: opts.groupId,
-    groupChannel: opts.groupChannel,
-    groupSpace: opts.groupSpace,
-    workspaceDir: opts.workspaceDir,
-  });
+  const cfg = await (runtimeContext?.config ??
+    resolveAgentRuntimeConfig(runtime, {
+      runtimeTargetsChannelSecrets: opts.deliver === true,
+      runtimeChannelSecretScope:
+        opts.deliver !== true && shouldResolveExplicitRecipientSession && recipientChannel
+          ? { channel: recipientChannel, accountId: opts.accountId }
+          : undefined,
+    }));
+  const normalizedSpawned = normalizeSpawnedRunMetadata(opts);
   const agentIdOverrideRaw = opts.agentId?.trim();
   const agentIdOverride = agentIdOverrideRaw ? normalizeAgentId(agentIdOverrideRaw) : undefined;
   if (agentIdOverride) {
@@ -130,14 +134,24 @@ export async function prepareAgentCommandExecution(
     classifySessionKeyShape(rawExplicitSessionKey) === "legacy_or_alias" &&
     !isUnscopedSessionKeySentinel(rawExplicitSessionKey),
   );
-  const explicitSessionKey =
-    toSessionKey ??
-    resolveExplicitAgentCommandSessionKey({
-      rawExplicitSessionKey,
-      agentIdOverride,
-      shouldScopeDefaultAgentKey,
-      cfg,
+  // Storage sentinels keep their logical key; resolveSession validates the separate owner.
+  let explicitSessionKey = toSessionKey ?? rawExplicitSessionKey;
+  if (toSessionKey === undefined && !isUnscopedSessionKeySentinel(rawExplicitSessionKey)) {
+    const unscopedOwnerAgentId =
+      classifySessionKeyShape(rawExplicitSessionKey) === "legacy_or_alias" &&
+      (agentIdOverride || shouldScopeDefaultAgentKey)
+        ? resolveSessionAgentIds({
+            config: cfg,
+            agentId: agentIdOverride,
+            sessionKey: rawExplicitSessionKey,
+          }).sessionAgentId
+        : undefined;
+    explicitSessionKey = scopeLegacySessionKeyToAgent({
+      agentId: unscopedOwnerAgentId ?? agentIdOverride,
+      sessionKey: rawExplicitSessionKey,
+      mainKey: cfg.session?.mainKey,
     });
+  }
   if (explicitSessionKey && classifySessionKeyShape(explicitSessionKey) === "malformed_agent") {
     throw new Error(
       `Invalid --session-key "${explicitSessionKey}". Agent-prefixed session keys must use agent:<agent-id>:<session-key>.`,
@@ -159,9 +173,10 @@ export async function prepareAgentCommandExecution(
     if (!hasAgentDatabaseAdmissions()) {
       recordAgentDatabaseAdmissions(await evaluateAgentDatabaseAdmissions(cfg));
     }
-    assertAgentDatabaseAdmitted(
-      agentIdOverride ?? resolveSessionAgentId({ sessionKey: explicitSessionKey, config: cfg }),
-    );
+    const admissionAgentId =
+      agentIdOverride ?? resolveSessionAgentId({ sessionKey: explicitSessionKey, config: cfg });
+    await waitForAgentInputAdmission(admissionAgentId, { cfg, signal: abortSignal });
+    assertAgentDatabaseAdmitted(admissionAgentId);
   }
   const agentCfg = cfg.agents?.defaults;
 
@@ -209,13 +224,26 @@ export async function prepareAgentCommandExecution(
         threadId: explicitRecipientSession.threadId,
       }
     : selectedCommandOpts;
-  const sessionResolution = resolveSession({
+  const assertPreparationCurrent = () => {
+    if (abortSignal?.aborted) {
+      throw createAbortError("Operation aborted", { cause: abortSignal.reason });
+    }
+    assertSourceCurrent?.();
+    operatorAuthority?.assertCurrent();
+    if (preparationLifecycleGeneration !== undefined) {
+      assertAgentRunLifecycleGenerationCurrent(preparationLifecycleGeneration);
+    }
+  };
+  const sessionResolution = await resolveSession({
     cfg,
     to: commandOpts.to,
     sessionId: commandOpts.sessionId,
     sessionKey: explicitSessionKey ?? explicitRecipientSession?.sessionKey,
     agentId: agentIdOverride,
+    signal: abortSignal,
+    assertCurrent: assertPreparationCurrent,
   });
+  assertPreparationCurrent();
   const {
     sessionId,
     sessionKey,
@@ -224,6 +252,7 @@ export async function prepareAgentCommandExecution(
     storePath,
     isNewSession,
     previousSessionId,
+    automaticReset,
     persistedThinking,
     persistedVerbose,
   } = sessionResolution;
@@ -238,6 +267,8 @@ export async function prepareAgentCommandExecution(
   }
   const sessionStore: Record<string, InternalSessionEntry> =
     sessionKey && sessionEntryRaw ? { [sessionKey]: sessionEntryRaw } : {};
+  await waitForAgentInputAdmission(sessionAgentId, { cfg, signal: abortSignal });
+  assertPreparationCurrent();
   assertAgentDatabaseAdmitted(sessionAgentId);
   const outboundSession = buildOutboundSessionContext({
     cfg,
@@ -250,14 +281,7 @@ export async function prepareAgentCommandExecution(
   const { getAcpSessionManager } = await loadAcpManagerRuntime();
   const acpManager = getAcpSessionManager();
   const assertAcpPreparationCurrent = () => {
-    if (opts.abortSignal?.aborted) {
-      throw createAbortError("Operation aborted", { cause: opts.abortSignal.reason });
-    }
-    opts.assertSourceCurrent?.();
-    opts.operatorAuthority?.assertCurrent();
-    if (opts.lifecycleGeneration !== undefined) {
-      assertAgentRunLifecycleGenerationCurrent(opts.lifecycleGeneration);
-    }
+    assertPreparationCurrent();
     assertAgentDatabaseAdmitted(sessionAgentId);
   };
   const acpResolution = sessionKey
@@ -282,7 +306,7 @@ export async function prepareAgentCommandExecution(
   const preparedMetadataSnapshot = runtimeContext?.pluginGeneration.pluginMetadataSnapshot;
   const manifestMetadataSnapshot = pluginsEnabled
     ? (preparedMetadataSnapshot ??
-      resolvePluginMetadataSnapshot({ config: cfg, env: process.env, workspaceDir }))
+      (await resolvePluginMetadataSnapshotAsync({ config: cfg, env: process.env, workspaceDir })))
     : undefined;
   const modelManifestContext = {
     manifestPlugins: manifestMetadataSnapshot ?? [],
@@ -308,52 +332,59 @@ export async function prepareAgentCommandExecution(
     sessionKey,
     sessionEntry: sessionEntryRaw,
   });
-  if (
-    sessionEntryRaw &&
+  const sessionStableReplyMode = await resolveSessionStableReplyMode({
+    cfg,
+    metadataSnapshot: manifestMetadataSnapshot,
+    ctx: { CommandAuthorized: false },
+    sessionEntry: sessionEntryRaw,
+    sessionAgentId,
+    sessionKey,
+  });
+  commandOpts = {
+    ...commandOpts,
+    // Seed the same reusable policy before the first row and on later completion turns.
+    cliSessionBindingFacts: commandOpts.cliSessionBindingFacts ?? {
+      sourceReplyDeliveryMode: sessionStableReplyMode,
+    },
+    ...(sessionEntryRaw &&
     isSyntheticSourceReplyTurn({
       inputProvenance: commandOpts.inputProvenance,
-      isHeartbeat: commandOpts.bootstrapContextRunKind === "heartbeat",
     })
-  ) {
-    const sessionStableReplyMode = resolveSessionStableReplyMode({
-      cfg,
-      ctx: { CommandAuthorized: false },
-      sessionEntry: sessionEntryRaw,
-      sessionAgentId,
-      sessionKey,
-    });
-    commandOpts = {
-      ...commandOpts,
-      // A direct Gateway wake has no inbound dispatcher to apply reply policy.
-      // Bind the effective run and its delivery to the same existing policy owner,
-      // without letting explicit turn overrides change reusable CLI bindings.
-      sourceReplyDeliveryMode: commandOpts.sourceReplyDeliveryMode ?? sessionStableReplyMode,
-      cliSessionBindingFacts: commandOpts.cliSessionBindingFacts ?? {
-        sourceReplyDeliveryMode: sessionStableReplyMode,
-      },
-    };
-  }
-  const thinkingLevelsHint = formatThinkingLevels(
-    configuredModel.provider,
-    configuredModel.model,
-    ", ",
-    configuredThinkingCatalog.length > 0 ? configuredThinkingCatalog : undefined,
-    configuredThinkingRuntime,
-  );
+      ? {
+          // Direct Gateway wakes have no inbound dispatcher to apply effective reply policy.
+          sourceReplyDeliveryMode: commandOpts.sourceReplyDeliveryMode ?? sessionStableReplyMode,
+        }
+      : {}),
+  };
+  // Built only for the error, since it loads the selected model's bundled row.
+  const formatThinkingLevelsHint = () =>
+    formatThinkingLevels(
+      configuredModel.provider,
+      configuredModel.model,
+      ", ",
+      buildThinkingCatalog({
+        cfg,
+        provider: configuredModel.provider,
+        model: configuredModel.model,
+      }),
+      configuredThinkingRuntime,
+    );
   const thinkOverride = normalizeThinkLevel(opts.thinking);
   const thinkOnce = normalizeThinkLevel(opts.thinkingOnce);
   if (opts.thinking && !thinkOverride) {
-    throw new Error(`Invalid thinking level. Use one of: ${thinkingLevelsHint}.`);
+    throw new Error(`Invalid thinking level. Use one of: ${formatThinkingLevelsHint()}.`);
   }
   if (opts.thinkingOnce && !thinkOnce) {
-    throw new Error(`Invalid one-shot thinking level. Use one of: ${thinkingLevelsHint}.`);
+    throw new Error(`Invalid one-shot thinking level. Use one of: ${formatThinkingLevelsHint()}.`);
   }
   const resolvedCwd = cwd ? resolveUserPath(cwd) : undefined;
-  const worktreeId = await resolveWorktreeIdForPath({
+  const worktreeSource = await resolveWorktreeForPath({
     sessionEntry: sessionEntryRaw,
     candidatePaths: [resolvedCwd ?? workspaceDir, workspaceDir],
   });
-  const runLease = worktreeId ? await acquireWorktreeRunLease(worktreeId) : undefined;
+  const runLease = worktreeSource
+    ? await acquireWorktreeRunLease(worktreeSource.record.id, { source: worktreeSource })
+    : undefined;
   try {
     const { resolveAcpAgentWorkspaceProvisioningForTurn } =
       await import("../acp-workspace-provisioning.js");
@@ -370,6 +401,7 @@ export async function prepareAgentCommandExecution(
       ensureBootstrapFiles: !agentCfg?.skipBootstrap,
       skipOptionalBootstrapFiles: agentCfg?.skipOptionalBootstrapFiles,
       provisioning: workspaceProvisioning,
+      guard: { assertHost: assertAcpPreparationCurrent },
     });
     const runId = opts.runId?.trim() || sessionId;
     let promptMessage = message;
@@ -416,10 +448,16 @@ export async function prepareAgentCommandExecution(
         promptMessage = expansion.body;
       }
     }
+    const acpRuntimeContext = projectRuntimeContextFragments(opts.runtimeContextFragments ?? []);
     const body =
       !isRawModelRun && acpResolution?.kind === "ready"
-        ? resolveAcpPromptBody(promptMessage, opts.internalEvents, opts.inputProvenance)
-        : prependInternalEventContext(promptMessage, opts.internalEvents, opts.inputProvenance);
+        ? [
+            acpRuntimeContext ? labelRuntimeContextText(acpRuntimeContext) : "",
+            resolveAcpPromptBody(promptMessage, opts.internalEvents, opts.inputProvenance),
+          ]
+            .filter(Boolean)
+            .join("\n\n")
+        : promptMessage;
     const transcriptBody =
       opts.transcriptMessage ??
       resolveInternalEventTranscriptBody(message, opts.internalEvents, opts.inputProvenance);
@@ -444,6 +482,7 @@ export async function prepareAgentCommandExecution(
       storePath,
       isNewSession,
       previousSessionId,
+      ...(automaticReset ? { automaticReset } : {}),
       persistedThinking,
       persistedVerbose,
       sessionAgentId,

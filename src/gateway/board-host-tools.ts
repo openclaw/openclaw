@@ -1,4 +1,5 @@
 import {
+  type BoardWidgetDataQuery,
   ErrorCodes,
   errorShape,
   type ErrorShape,
@@ -12,6 +13,10 @@ import {
   GITHUB_ACTIONS_BINDING_ID,
   resolveGitHubActionsRequest,
 } from "../boards/github-actions-capability.js";
+import {
+  captureExternalSessionCommitGuard,
+  composeSessionSourceAssertion,
+} from "../config/sessions/session-source-authority.js";
 import {
   capturePluginRegistryLifecycleEpoch,
   isPluginRegistryLifecycleEpochActive,
@@ -28,12 +33,9 @@ import {
   requireBoardViewTicketAuthority,
 } from "./board-view-ticket.js";
 import { withAuthorizedBoardWidgetView } from "./board-widget-view.js";
-import { agentsHandlers } from "./server-methods/agents.js";
-import { cronHandlers } from "./server-methods/cron.js";
-import { healthHandlers } from "./server-methods/health.js";
-import { sessionReadHandlers } from "./server-methods/sessions-read.js";
+import { coreGatewayHandlers } from "./server-methods/core-handlers.js";
+import { prepareGatewayRequestHandler } from "./server-methods/lazy-core-handlers.js";
 import type { GatewayRequestHandlers } from "./server-methods/types.js";
-import { usageHandlers } from "./server-methods/usage.js";
 import { resolveRequestedSessionStoreTarget } from "./session-store-key.js";
 
 type BoardDataBindingId = (typeof CORE_BOARD_DATA_BINDING_IDS)[number];
@@ -47,6 +49,7 @@ export type BoardRequestAuthority = {
 
 export type BoardCapabilityAuthority = BoardRequestAuthority & {
   boardSession: Required<BoardSessionTarget>;
+  query?: BoardWidgetDataQuery;
   /** Validate the stored grant and start work together; assertActive only checks request liveness. */
   useCurrent: <T>(start: () => T) => Promise<Awaited<T>>;
 };
@@ -77,7 +80,7 @@ export function captureBoardCapabilityAuthority(
   store: BoardStore,
   ticket: string,
   invocation: GatewayHandlerInvocation,
-  capability: string,
+  capability: string | BoardWidgetDataQuery,
 ): BoardCapabilityAuthority {
   const authority = captureBoardRequestAuthority(invocation);
   const claims = verifyBoardViewTicket(ticket);
@@ -101,6 +104,7 @@ export function captureBoardCapabilityAuthority(
   return {
     ...authority,
     boardSession,
+    ...(typeof capability === "string" ? {} : { query: capability }),
     useCurrent: async <T>(start: () => T): Promise<Awaited<T>> =>
       await withAuthorizedBoardWidgetView(
         store,
@@ -116,12 +120,23 @@ export function captureBoardCapabilityAuthority(
               "board widget session identity changed; reload the dashboard",
             );
           }
-          if (
-            !boardWidgetHasGrantedTool(view.document.declared, view.document.grantState, capability)
-          ) {
+          const granted =
+            typeof capability === "string"
+              ? boardWidgetHasGrantedTool(
+                  view.document.declared,
+                  view.document.grantState,
+                  capability,
+                )
+              : view.document.grantState === "granted" &&
+                view.document.declared?.queries?.some(
+                  (query) => JSON.stringify(query) === JSON.stringify(capability),
+                );
+          if (!granted) {
             throw new BoardValidationError(
               "invalid_operation",
-              `board widget tool is not granted: ${capability}`,
+              typeof capability === "string"
+                ? `board widget tool is not granted: ${capability}`
+                : `board widget query is not granted: ${capability.name}`,
             );
           }
           return start();
@@ -145,30 +160,35 @@ export function captureBoardRequestAuthority(
   const pluginRegistryEpoch = pluginRegistry
     ? capturePluginRegistryLifecycleEpoch(pluginRegistry)
     : undefined;
-  const assertActive = () => {
-    try {
-      // Retained board work also belongs to the requesting caller and session authorization.
-      invocation.signal?.throwIfAborted();
-      invocation.sessionMutationCommitGuard?.();
-      invocation.sessionMutationAuthorization?.assertCurrent();
-      if (
-        isGatewaySubordinateWorkAdmissionClosed() ||
-        resolveGatewayContext() !== context ||
-        context.resolveGatewayContext !== resolveGatewayContext ||
-        (methodRegistry && context.getGatewayMethodRegistry?.() !== methodRegistry) ||
-        (pluginRegistry &&
-          (!pluginRegistryEpoch ||
-            !isPluginRegistryLifecycleEpochActive(pluginRegistry, pluginRegistryEpoch)))
-      ) {
+  const assertActive = composeSessionSourceAssertion(
+    [
+      captureExternalSessionCommitGuard(invocation.sessionMutationCommitGuard),
+      captureExternalSessionCommitGuard(invocation.sessionMutationAuthorization?.assertCurrent),
+    ],
+    (assertSources) => {
+      try {
+        // Retained board work also belongs to the requesting caller and session authorization.
+        invocation.signal?.throwIfAborted();
+        assertSources();
+        if (
+          isGatewaySubordinateWorkAdmissionClosed() ||
+          resolveGatewayContext() !== context ||
+          context.resolveGatewayContext !== resolveGatewayContext ||
+          (methodRegistry && context.getGatewayMethodRegistry?.() !== methodRegistry) ||
+          (pluginRegistry &&
+            (!pluginRegistryEpoch ||
+              !isPluginRegistryLifecycleEpochActive(pluginRegistry, pluginRegistryEpoch)))
+        ) {
+          throw new BoardGatewayUnavailableError();
+        }
+      } catch (error) {
+        if (error instanceof BoardGatewayUnavailableError) {
+          throw error;
+        }
         throw new BoardGatewayUnavailableError();
       }
-    } catch (error) {
-      if (error instanceof BoardGatewayUnavailableError) {
-        throw error;
-      }
-      throw new BoardGatewayUnavailableError();
-    }
-  };
+    },
+  );
   assertActive();
   return {
     assertActive,
@@ -195,17 +215,6 @@ export function respondBoardError(
   }
   respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, String(error)));
 }
-
-const BOARD_DATA_HANDLERS: Record<BoardDataBindingId, GatewayRequestHandlers[string]> = {
-  "sessions.list": sessionReadHandlers["sessions.list"]!,
-  // Board reads are one-shot and cannot converge an incomplete marker.
-  "usage.status": (invocation) => usageHandlers["usage.status"]!({ ...invocation, client: null }),
-  "usage.cost": usageHandlers["usage.cost"]!,
-  "cron.list": cronHandlers["cron.list"]!,
-  "cron.status": cronHandlers["cron.status"]!,
-  "agents.list": agentsHandlers["agents.list"]!,
-  health: healthHandlers.health!,
-};
 
 function isBoardDataBindingId(value: string): value is BoardDataBindingId {
   return (CORE_BOARD_DATA_BINDING_IDS as readonly string[]).includes(value);
@@ -270,11 +279,13 @@ export async function readBoardDataBinding(
     return await readBoardGitHubActions(params, invocation.context, authority, publish);
   }
   if (isBoardDataBindingId(bindingId)) {
+    const handler = await prepareGatewayRequestHandler(coreGatewayHandlers[bindingId]!);
     return await invokeGatewayHandler(
-      BOARD_DATA_HANDLERS[bindingId],
+      handler,
       bindingId,
       params,
-      invocation,
+      // Board reads are one-shot and cannot converge an incomplete marker.
+      bindingId === "usage.status" ? { ...invocation, client: null } : invocation,
       authority,
       publish,
     );
@@ -340,7 +351,7 @@ export async function triggerBoardCronJob(
   publish: GatewayHandlerInvocation["respond"],
 ): Promise<void> {
   return await invokeGatewayHandler(
-    cronHandlers["cron.run"]!,
+    await prepareGatewayRequestHandler(coreGatewayHandlers["cron.run"]!),
     "cron.run",
     { id: jobId, mode: "force" },
     invocation,

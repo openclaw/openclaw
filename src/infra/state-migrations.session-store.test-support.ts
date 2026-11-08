@@ -2,6 +2,31 @@ import fs from "node:fs";
 import path from "node:path";
 import type { OpenClawConfig } from "../config/config.js";
 import type { SessionAcpMeta } from "../config/sessions/types.js";
+import {
+  closeOpenClawAgentDatabasesAsync,
+  closeOpenClawAgentDatabasesForTest,
+} from "../state/openclaw-agent-db.js";
+import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+
+export function createEnv(stateDir: string): NodeJS.ProcessEnv {
+  return {
+    ...process.env,
+    HOME: path.dirname(stateDir),
+    OPENCLAW_STATE_DIR: stateDir,
+  };
+}
+
+export function createMigrationContext(root: string) {
+  const stateDir = path.join(root, ".openclaw");
+  const env = createEnv(stateDir);
+  return { root, stateDir, env };
+}
+
+export async function drainSessionMigrationFixture(root: string): Promise<void> {
+  await closeOpenClawAgentDatabasesAsync(root);
+  closeOpenClawAgentDatabasesForTest();
+  closeOpenClawStateDatabaseForTest();
+}
 
 export function createLegacyAcpSessionEntry(
   sessionId: string,
@@ -45,7 +70,7 @@ export function writeLegacySessionsFixture(params: {
 export function createConfig(): OpenClawConfig {
   return {
     agents: {
-      list: [{ id: "worker-1", default: true }],
+      entries: { "worker-1": {} },
     },
     session: {
       mainKey: "desk",

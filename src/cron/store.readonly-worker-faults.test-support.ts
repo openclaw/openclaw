@@ -17,14 +17,13 @@ export async function installCronSnapshotFaults(
 ) {
   const sentinel = await state.writeText("snapshot-removal-denied", "deny");
   const receipt = state.statePath("snapshot-fault-receipts.jsonl");
-  const fixtureRoot = fs.realpathSync(state.root);
   const header = `
 import fs from "node:fs";
 import path from "node:path";
 import { isMainThread, threadId } from "node:worker_threads";
 const sentinel = ${JSON.stringify(sentinel)};
 const receipt = ${JSON.stringify(receipt)};
-const root = ${JSON.stringify(fixtureRoot)};
+const root = ${JSON.stringify(fs.realpathSync(state.root))};
 const denied = () => fs.existsSync(sentinel);
 const isSnapshotDirectory = (target) => {
   if (typeof target !== "string" ||
@@ -38,10 +37,11 @@ const record = (stage, code) => fs.appendFileSync(
   receipt, JSON.stringify({ stage, code, threadId }) + "\\n",
 );
 `;
-  const stagingPreload = pathToFileURL(
-    await state.writeText(
-      "staging-removal-failure.mjs",
-      `${header}
+  const preload = async (name: string, source: string) =>
+    pathToFileURL(await state.writeText(name, header + source)).href;
+  const stagingPreload = await preload(
+    "staging-removal-failure.mjs",
+    `
 import promises from "node:fs/promises";
 const remove = promises.rm.bind(promises);
 promises.rm = async (target, options) => {
@@ -52,8 +52,7 @@ promises.rm = async (target, options) => {
   return await remove(target, options);
 };
 `,
-    ),
-  ).href;
+  );
   let cronPreload: string | undefined;
   if (coldFailure) {
     const preloadPath = state.statePath("cron-worker-failure.mjs");
@@ -91,51 +90,42 @@ if (isMainThread) {
   });
 }
 `;
-    cronPreload = pathToFileURL(
-      await state.writeText("cron-worker-failure.mjs", header + failure),
-    ).href;
+    cronPreload = await preload("cron-worker-failure.mjs", failure);
   }
   const source = captureRetainedNativeWorkerSource({ runtimeGeneration: undefined });
   const create = source.create.bind(source);
   const stagingUrl = resolveRuntimeProcessEntrypointUrl("sqliteSnapshotStaging").href;
-  const creation = vi.spyOn(source, "create").mockImplementation((filename, options, resource) => {
-    if (String(filename) !== stagingUrl) {
-      return create(filename, options, resource);
-    }
-    return create(
-      filename,
-      { ...options, execArgv: [...(options?.execArgv ?? []), "--import", stagingPreload] },
-      resource,
+  const creation = vi
+    .spyOn(source, "create")
+    .mockImplementation((filename, options, resource, taskPorts) =>
+      create(
+        filename,
+        String(filename) === stagingUrl
+          ? { ...options, execArgv: [...(options?.execArgv ?? []), "--import", stagingPreload] }
+          : options,
+        resource,
+        taskPorts,
+      ),
     );
-  });
   return {
     cronPreload,
     cronWorkerUrl: resolveRuntimeProcessEntrypointUrl("cronReadOnly").href,
     count(stage: FaultStage): number {
-      if (!fs.existsSync(receipt)) {
-        return 0;
-      }
-      return fs
-        .readFileSync(receipt, "utf8")
-        .trim()
-        .split("\n")
-        .filter((line) => {
-          const value: unknown = JSON.parse(line);
-          assert.ok(isRecord(value));
-          assert.ok(typeof value.threadId === "number");
-          if (value.stage === stage) {
-            assert.equal(value.code, stage === "read-query" ? "CONTROLLED_CRON_QUERY" : "EACCES");
-            assert.ok(stage === "copy-open" ? value.threadId === 0 : value.threadId > 0);
-            return true;
-          }
-          return false;
-        }).length;
+      const lines = fs.existsSync(receipt)
+        ? fs.readFileSync(receipt, "utf8").trim().split("\n")
+        : [];
+      return lines.reduce((count, line) => {
+        const value: unknown = JSON.parse(line);
+        assert.ok(isRecord(value) && typeof value.threadId === "number");
+        if (value.stage !== stage) {
+          return count;
+        }
+        assert.equal(value.code, stage === "read-query" ? "CONTROLLED_CRON_QUERY" : "EACCES");
+        assert.ok(stage === "copy-open" ? value.threadId === 0 : value.threadId > 0);
+        return count + 1;
+      }, 0);
     },
-    allowRemoval() {
-      fs.rmSync(sentinel, { force: true });
-    },
-    restore() {
-      creation.mockRestore();
-    },
+    allowRemoval: () => fs.rmSync(sentinel, { force: true }),
+    restore: () => creation.mockRestore(),
   };
 }

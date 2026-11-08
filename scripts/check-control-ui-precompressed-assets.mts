@@ -5,29 +5,39 @@ import path from "node:path";
 import { brotliDecompressSync, gunzipSync } from "node:zlib";
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
 const repoRoot: string = resolveRepoRoot(import.meta.url);
-const assetsDir = path.join(process.argv[2] ?? path.join(repoRoot, "dist/control-ui"), "assets");
+const outputDir = process.argv[2] ?? path.join(repoRoot, "dist/control-ui");
+const assetsDir = path.join(outputDir, "assets");
 const errors = [];
 let checked = 0;
 
-for (const entry of fs.readdirSync(assetsDir, { withFileTypes: true })) {
-  if (!entry.isFile()) {
-    continue;
-  }
-  const suffix = entry.name.endsWith(".br") ? ".br" : entry.name.endsWith(".gz") ? ".gz" : null;
+const sidecarPaths = [
+  ...fs
+    .readdirSync(assetsDir, { withFileTypes: true })
+    .filter((entry) => entry.isFile())
+    .map((entry) => path.join(assetsDir, entry.name)),
+  ...["sw.js.br", "sw.js.gz"]
+    .map((file) => path.join(outputDir, file))
+    .filter((file) => fs.existsSync(file)),
+];
+for (const sidecarPath of sidecarPaths) {
+  const suffix = sidecarPath.endsWith(".br") ? ".br" : sidecarPath.endsWith(".gz") ? ".gz" : null;
   if (!suffix) {
     continue;
   }
-  const sidecarPath = path.join(assetsDir, entry.name);
   const sourcePath = sidecarPath.slice(0, -suffix.length);
   try {
     const encoded = fs.readFileSync(sidecarPath);
     const decoded = suffix === ".br" ? brotliDecompressSync(encoded) : gunzipSync(encoded);
     const source = fs.readFileSync(sourcePath);
     if (!decoded.equals(source)) {
-      errors.push(`${entry.name}: decoded bytes differ from ${path.basename(sourcePath)}`);
+      errors.push(
+        `${path.basename(sidecarPath)}: decoded bytes differ from ${path.basename(sourcePath)}`,
+      );
     }
   } catch (error) {
-    errors.push(`${entry.name}: ${error instanceof Error ? error.message : String(error)}`);
+    errors.push(
+      `${path.basename(sidecarPath)}: ${error instanceof Error ? error.message : String(error)}`,
+    );
   }
   checked += 1;
 }

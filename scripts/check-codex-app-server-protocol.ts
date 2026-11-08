@@ -1,5 +1,4 @@
 import { spawnSync } from "node:child_process";
-// Check Codex App Server Protocol script supports OpenClaw repository automation.
 import fs from "node:fs/promises";
 import path from "node:path";
 import {
@@ -197,6 +196,9 @@ async function main(): Promise<void> {
     );
     process.exit(1);
   }
+
+  const { generateCodexValidators } = await import("./generate-codex-validators.mts");
+  await generateCodexValidators({ check: true });
 
   console.log(
     `Codex app-server generated protocol matches OpenClaw bridge assumptions: ${source.codexRepo}`,

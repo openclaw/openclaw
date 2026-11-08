@@ -3,8 +3,6 @@
 if [[ ${OSTYPE:-} == darwin* && $BASH != /bin/bash ]] && ((BASH_VERSINFO[0] > 5 || (BASH_VERSINFO[0] == 5 && BASH_VERSINFO[1] >= 3))); then
   exec /bin/bash "$0" "$@"
 fi
-# Verifies hidden runtime context transcript persistence in Docker using the
-# package-installed functional E2E image.
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"

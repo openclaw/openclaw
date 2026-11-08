@@ -18,6 +18,24 @@ export function peekSessionMcpRuntimeManager():
   >;
 }
 
+export function listAgentSessionMcpRuntimeIds(agentId: string): string[] {
+  return peekSessionMcpRuntimeManager()?.listSessionIdsForAgent(agentId) ?? [];
+}
+
+/** Live views retain leases; close them and retry before agent storage can retire. */
+export async function retireSessionMcpRuntimeForAgentDeletion(params: {
+  sessionId: string;
+  agentId: string;
+  assertCurrent: () => void;
+}): Promise<void> {
+  params.assertCurrent();
+  await peekSessionMcpRuntimeManager()?.retireSessionForAgentDeletion(
+    params.sessionId,
+    params.agentId,
+    params.assertCurrent,
+  );
+}
+
 /** Releases an acquisition after its consumer has taken ownership, or after failure. */
 export async function releaseSessionMcpRuntime(
   lease: Pick<SessionMcpRuntimeLease, "runtime" | "retireUnusedServers"> & {

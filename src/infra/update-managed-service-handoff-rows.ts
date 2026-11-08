@@ -1,8 +1,12 @@
 import fs from "node:fs";
 import type { DatabaseSync as HandoffDatabase } from "node:sqlite";
 import { z } from "zod";
-import { hasErrnoCode } from "./errno.js";
-import { executeSqliteQuerySync, prepareSqliteQueryTakeFirstSync } from "./kysely-sync.js";
+import { ignoreMissingPath } from "./errno.js";
+import {
+  createSqliteQueryCache,
+  executeSqliteQuerySync,
+  prepareSqliteQueryTakeFirstSync,
+} from "./kysely-sync.js";
 import {
   leaseQueries,
   type createManagedHandoffLeaseDatabase,
@@ -37,12 +41,17 @@ export const triageFailureSchema = z.strictObject({
   expectedVersion: z.string().max(100).optional(),
   gateway: z.enum(["verify-running", "preserve"]),
 });
-const text = managedHandoffLeaseText;
 
 type LeaseRead =
   | { kind: "absent" }
   | { kind: "unreadable"; error: unknown }
   | { kind: "current"; lease: ManagedHandoffLease };
+
+export function managedHandoffLeaseRow(
+  lease: Pick<ManagedHandoffLease, "owner" | "payload" | "updatedAt">,
+): LeaseRow {
+  return { owner: lease.owner, payload_json: lease.payload, updated_at: lease.updatedAt };
+}
 
 export function createManagedHandoffLeaseRows(
   options: { databasePath: string; existingIdentity?: ManagedUpdateLeaseDatabaseIdentity },
@@ -50,29 +59,26 @@ export function createManagedHandoffLeaseRows(
   processes: Parameters<typeof isBorrowedLegacyHandoffParentCurrent>[2],
 ) {
   const { databasePath } = options;
-  const rowReaders = new WeakMap<HandoffDatabase, (root: string) => LeaseRow | undefined>();
+  const rowReader = createSqliteQueryCache((db: HandoffDatabase) =>
+    prepareSqliteQueryTakeFirstSync<string, LeaseRow>(db, (parameter) =>
+      leaseQueries(db)
+        .selectFrom("managed_update_handoffs")
+        .select(["owner", "payload_json", "updated_at"])
+        .where(
+          "install_root",
+          "=",
+          parameter((key) => key),
+        ),
+    ),
+  );
   function row(db: HandoffDatabase, root: string) {
-    let readRow = rowReaders.get(db);
-    if (!readRow) {
-      readRow = prepareSqliteQueryTakeFirstSync<string, LeaseRow>(db, (parameter) =>
-        leaseQueries(db)
-          .selectFrom("managed_update_handoffs")
-          .select(["owner", "payload_json", "updated_at"])
-          .where(
-            "install_root",
-            "=",
-            parameter((key) => key),
-          ),
-      );
-      rowReaders.set(db, readRow);
-    }
-    return readRow(root);
+    return rowReader(db)(root);
   }
   function handle(root: string, value: LeaseRow): ManagedHandoffLease {
     const payload = parseManagedHandoffLeasePayload(value.payload_json);
     if (
       !payload ||
-      !text.safeParse(value.owner).success ||
+      !managedHandoffLeaseText.safeParse(value.owner).success ||
       (payload.version === 2 &&
         payload.mutationOriginal &&
         (payload.mutationOriginal.key === root || root.includes("/.openclaw-update-child-"))) ||
@@ -92,6 +98,17 @@ export function createManagedHandoffLeaseRows(
       updatedAt: value.updated_at,
       ...payload,
     };
+  }
+  function descendants(db: HandoffDatabase, parent: { key: string }): LeaseTable[] {
+    const prefix = `${parent.key}/.openclaw-update-child-`;
+    return executeSqliteQuerySync(
+      db,
+      leaseQueries(db)
+        .selectFrom("managed_update_handoffs")
+        .select(["install_root", "owner", "payload_json", "updated_at"])
+        .where("install_root", ">=", prefix)
+        .where("install_root", "<", prefix + "\uffff"),
+    ).rows;
   }
   function deleteRow(db: HandoffDatabase, root: string, value: LeaseRow) {
     return (
@@ -145,10 +162,7 @@ export function createManagedHandoffLeaseRows(
     try {
       fs.lstatSync(databasePath);
     } catch (error) {
-      if (hasErrnoCode(error, "ENOENT")) {
-        return [];
-      }
-      throw error;
+      return ignoreMissingPath(error) ?? [];
     }
     return withDatabase(false, (db) => {
       // Only ordinary inspection may accept an uninitialized store.
@@ -189,6 +203,7 @@ export function createManagedHandoffLeaseRows(
   return {
     row,
     handle,
+    descendants,
     deleteRow,
     updateRow,
     read,

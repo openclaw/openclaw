@@ -7,7 +7,7 @@ the platform differences listed below are retained.
 
 ## Swift decision table
 
-The canonical selector is `selectConnectAuth` in
+The reference selector is `selectConnectAuth` in
 [`GatewayChannel.swift`](../shared/OpenClawKit/Sources/OpenClawKit/GatewayChannel.swift).
 Explicit credentials are trimmed; empty values count as absent. Evaluate these
 rows in order:
@@ -30,7 +30,7 @@ one eligible rejection, a trusted endpoint may receive both `auth.token` and
 `auth.deviceToken`. When stored scope metadata is nonempty, Swift requires that
 grant to cover the requested scopes before attaching the retry token. Empty
 scope metadata does not suppress an otherwise eligible retry. It schedules at most one retry for
-`canRetryWithDeviceToken` or `AUTH_TOKEN_MISMATCH`; a retry rejected with
+`canRetryWithDeviceToken: true`; a retry rejected with
 `AUTH_DEVICE_TOKEN_MISMATCH` clears only the matching stored role token. Success
 resets the retry budget.
 
@@ -139,7 +139,7 @@ would change other Android authentication paths, outside this fix's scope:
   for scope upgrades beyond a nonempty stored grant.
 - Android's retry trust includes local cleartext hosts and existing TLS pins,
   and requires the boolean retry permission. Swift uses strict
-  loopback or a trusted WSS session, plus the boolean hint or mismatch code.
+  loopback or a trusted WSS session, plus the same explicit boolean permission.
 - Android keeps retrying a bootstrap node request with no scopes when the
   Gateway reports `not-paired` and explicitly advises waiting. Swift's channel
   classifies pairing-required as nonrecoverable.
@@ -151,7 +151,7 @@ would change other Android authentication paths, outside this fix's scope:
 ## Required implementation proof
 
 Extend the existing wire-level auth tests without adding a selector-only test
-seam. Demonstrate fresh bootstrap winning over an old device token, continued
+interface. Demonstrate fresh bootstrap winning over an old device token, continued
 bootstrap use while pairing is pending, durable role-token handoff, reconnect
 and process relaunch, and unchanged explicit-token/password/retry behavior.
 The regression must fail on the old implementation for the credential actually

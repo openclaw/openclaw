@@ -14,7 +14,7 @@ struct DashboardCloseShortcutTests {
         defer { server.stop() }
         let controller = self.makeController(server: server)
         defer { controller.closeDashboard() }
-        try await self.waitForDocument(controller)
+        try await controller.waitForDocumentLoad()
         let window = try #require(controller.window)
         try await controller.webView.evaluateJavaScript("""
         window.closeScope = null;
@@ -51,7 +51,7 @@ struct DashboardCloseShortcutTests {
         defer { server.stop() }
         let controller = self.makeController(server: server)
         defer { controller.closeDashboard() }
-        try await self.waitForDocument(controller)
+        try await controller.waitForDocumentLoad()
         let window = try #require(controller.window)
         try await controller.webView.evaluateJavaScript("""
         window.panelOpen = true;
@@ -84,7 +84,7 @@ struct DashboardCloseShortcutTests {
         defer { server.stop() }
         let controller = self.makeController(server: server)
         defer { controller.closeDashboard() }
-        try await self.waitForDocument(controller)
+        try await controller.waitForDocumentLoad()
         try await controller.webView.evaluateJavaScript("""
         window.addEventListener('openclaw:native-close-focused-panel', event => event.preventDefault());
         """)
@@ -99,7 +99,7 @@ struct DashboardCloseShortcutTests {
         defer { NSApp.mainMenu = previousMenu }
         let controller = try DashboardWindowController(
             url: #require(URL(string: "about:blank")),
-            auth: DashboardWindowAuth(gatewayUrl: nil, token: nil, password: nil),
+            auth: DashboardWindowAuth.unauthenticated,
             websiteDataStore: .nonPersistent(),
             windowAutosaveName: "",
             requestBrowserProfileImportOffer: { _ in false })
@@ -128,12 +128,12 @@ struct DashboardCloseShortcutTests {
         _ = AppKitTestSupport.application
         let controller = DashboardWindowController(
             url: server.url(),
-            auth: DashboardWindowAuth(gatewayUrl: nil, token: nil, password: nil),
+            auth: DashboardWindowAuth.unauthenticated,
             websiteDataStore: .nonPersistent(),
             windowAutosaveName: "",
             requestBrowserProfileImportOffer: { _ in false })
-        controller.loadInBackground(
-            url: server.url(), auth: DashboardWindowAuth(gatewayUrl: nil, token: nil, password: nil))
+        controller.update(
+            url: server.url(), auth: DashboardWindowAuth.unauthenticated)
         controller.show()
         return controller
     }
@@ -159,9 +159,5 @@ struct DashboardCloseShortcutTests {
         if !window.performKeyEquivalent(with: event) {
             #expect(NSApp.sendAction(#selector(NSWindow.performClose(_:)), to: window, from: nil))
         }
-    }
-
-    private func waitForDocument(_ controller: DashboardWindowController) async throws {
-        try await DashboardTestWait.document(controller, "close shortcut document") { controller.webView.url != nil }
     }
 }

@@ -3,10 +3,10 @@ package ai.openclaw.app.ui.chat
 import ai.openclaw.app.MainViewModel
 import ai.openclaw.app.i18n.nativeString
 import ai.openclaw.app.ui.design.ClawTheme
+import ai.openclaw.app.voice.SpeechRecognitionListenerAdapter
 import android.content.Context
 import android.content.Intent
 import android.os.Bundle
-import android.speech.RecognitionListener
 import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
 import androidx.compose.foundation.background
@@ -112,12 +112,16 @@ internal class AndroidChatDictationRecognizer(
   override fun start(onEvent: (ChatDictationRecognitionEvent) -> Unit) {
     generation += 1
     val operation = generation
+
+    fun emit(event: ChatDictationRecognitionEvent) {
+      if (operation == generation) onEvent(event)
+    }
     retireRecognizer()
     val active = SpeechRecognizer.createOnDeviceSpeechRecognizer(appContext)
     active.setRecognitionListener(
-      object : RecognitionListener {
+      object : SpeechRecognitionListenerAdapter() {
         override fun onReadyForSpeech(params: Bundle?) {
-          emit(operation, onEvent, ChatDictationRecognitionEvent.Ready)
+          emit(ChatDictationRecognitionEvent.Ready)
         }
 
         override fun onResults(results: Bundle?) {
@@ -128,37 +132,28 @@ internal class AndroidChatDictationRecognizer(
               ?.trim()
               .orEmpty()
           if (transcript.isEmpty()) {
-            emit(operation, onEvent, ChatDictationRecognitionEvent.Error(SpeechRecognizer.ERROR_NO_MATCH))
+            emit(ChatDictationRecognitionEvent.Error(SpeechRecognizer.ERROR_NO_MATCH))
           } else {
-            emit(operation, onEvent, ChatDictationRecognitionEvent.Transcript(transcript))
+            emit(ChatDictationRecognitionEvent.Transcript(transcript))
           }
         }
 
         override fun onError(error: Int) {
-          emit(operation, onEvent, ChatDictationRecognitionEvent.Error(error))
+          emit(ChatDictationRecognitionEvent.Error(error))
         }
 
         override fun onBeginningOfSpeech() {
-          emit(operation, onEvent, ChatDictationRecognitionEvent.Ready)
+          emit(ChatDictationRecognitionEvent.Ready)
         }
 
-        override fun onRmsChanged(rmsdB: Float) = Unit
-
-        override fun onBufferReceived(buffer: ByteArray?) = Unit
-
         override fun onEndOfSpeech() {
-          emit(operation, onEvent, ChatDictationRecognitionEvent.EndOfSpeech)
+          emit(ChatDictationRecognitionEvent.EndOfSpeech)
         }
 
         override fun onPartialResults(partialResults: Bundle?) {
           val transcript = partialResults?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull().orEmpty()
-          emit(operation, onEvent, ChatDictationRecognitionEvent.PartialTranscript(transcript))
+          emit(ChatDictationRecognitionEvent.PartialTranscript(transcript))
         }
-
-        override fun onEvent(
-          eventType: Int,
-          params: Bundle?,
-        ) = Unit
       },
     )
     recognizer = active
@@ -191,14 +186,6 @@ internal class AndroidChatDictationRecognizer(
   }
 
   override fun destroy() = cancel()
-
-  private fun emit(
-    operation: Long,
-    onEvent: (ChatDictationRecognitionEvent) -> Unit,
-    event: ChatDictationRecognitionEvent,
-  ) {
-    if (operation == generation) onEvent(event)
-  }
 
   private fun retireRecognizer() {
     val active = recognizer
@@ -305,20 +292,7 @@ internal class ChatDictationController(
 
   fun cancel() = cancel(null)
 
-  private fun cancel(operation: Long?) {
-    val pending =
-      synchronized(lock) {
-        if (operation != null && operation != generation) return
-        generation += 1
-        val active = completion
-        completion = null
-        _partialTranscript.value = ""
-        _state.value = ChatDictationState.Idle
-        active
-      }
-    retireRecognizerAndReleaseMic()
-    pending?.complete(null)
-  }
+  private fun cancel(operation: Long?) = settle(operation, ChatDictationState.Idle)
 
   fun destroy() {
     cancel()
@@ -351,7 +325,7 @@ internal class ChatDictationController(
       }
 
       is ChatDictationRecognitionEvent.Transcript -> {
-        complete(operation, event.text)
+        settle(operation, ChatDictationState.Idle, event.text, requireCompletion = true)
       }
 
       is ChatDictationRecognitionEvent.Error -> {
@@ -360,43 +334,28 @@ internal class ChatDictationController(
     }
   }
 
-  private fun complete(
-    operation: Long,
-    transcript: String,
-  ) {
-    val pending =
-      synchronized(lock) {
-        if (operation != generation) return
-        generation += 1
-        val active = completion ?: return
-        completion = null
-        _partialTranscript.value = ""
-        _state.value = ChatDictationState.Idle
-        active
-      }
-    retireRecognizerAndReleaseMic()
-    pending.complete(transcript.trim().takeIf(String::isNotEmpty))
-  }
-
   private fun fail(
     operation: Long,
     reason: ChatDictationFailure,
+  ) = settle(operation, ChatDictationState.Failure(reason))
+
+  private fun settle(
+    operation: Long?,
+    nextState: ChatDictationState,
+    transcript: String? = null,
+    requireCompletion: Boolean = false,
   ) {
     val pending =
       synchronized(lock) {
-        if (operation != generation) return
+        if (operation != null && operation != generation) return
         generation += 1
-        val active = completion
-        completion = null
-        _partialTranscript.value = ""
-        _state.value = ChatDictationState.Failure(reason)
-        active
+        if (requireCompletion && completion == null) return
+        completion.also {
+          completion = null
+          _partialTranscript.value = ""
+          _state.value = nextState
+        }
       }
-    retireRecognizerAndReleaseMic()
-    pending?.complete(null)
-  }
-
-  private fun retireRecognizerAndReleaseMic() {
     // Keep shared microphone ownership until the platform recognizer is retired;
     // otherwise another capture path can start while SpeechRecognizer still owns it.
     recognizer.cancel()
@@ -407,6 +366,7 @@ internal class ChatDictationController(
         true
       }
     if (shouldRelease) releaseMic()
+    pending?.complete(transcript?.trim()?.takeIf(String::isNotEmpty))
   }
 }
 

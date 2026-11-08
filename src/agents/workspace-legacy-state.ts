@@ -16,8 +16,6 @@ import {
   resolveWorkspaceStateIdentity,
 } from "./workspace-state-identity.js";
 
-export const LEGACY_WORKSPACE_STATE_DIRNAME = ".openclaw";
-const LEGACY_WORKSPACE_STATE_FILENAME = "workspace-state.json";
 export const LEGACY_WORKSPACE_STATE_CURRENT_FILENAME = "openclaw-workspace-state.json";
 export const LEGACY_WORKSPACE_ATTESTATION_DIRNAME = "workspace-attestations";
 const LEGACY_WORKSPACE_ATTESTATION_SUFFIX = ".attested";
@@ -36,19 +34,12 @@ type LegacyWorkspaceSourcePaths = {
   siblingAttestationPaths: string[];
 };
 
-type LegacyWorkspaceResetCleanup = {
-  removedPaths: string[];
-  warnings: string[];
-};
-
-type LegacyWorkspaceResetCandidate = {
-  rootDir: string;
-  sourcePath: string;
-  requireAttestationHeader: boolean;
-};
-
 type LegacyWorkspaceResetPlan = {
-  candidates: LegacyWorkspaceResetCandidate[];
+  candidates: {
+    rootDir: string;
+    sourcePath: string;
+    requireAttestationHeader: boolean;
+  }[];
 };
 
 function uniqueSiblingPaths(paths: readonly string[]): string[] {
@@ -85,14 +76,7 @@ export function resolveLegacyWorkspaceSourcePaths(
   ];
   return {
     workspacePath,
-    setupStatePaths: [
-      path.join(canonicalDirectoryPath, LEGACY_WORKSPACE_STATE_CURRENT_FILENAME),
-      path.join(
-        canonicalDirectoryPath,
-        LEGACY_WORKSPACE_STATE_DIRNAME,
-        LEGACY_WORKSPACE_STATE_FILENAME,
-      ),
-    ],
+    setupStatePaths: [path.join(canonicalDirectoryPath, LEGACY_WORKSPACE_STATE_CURRENT_FILENAME)],
     stateDirAttestationPaths: [...new Set(stateDirs)].flatMap((stateDir) =>
       [...new Set(workspaceKeys)].map((workspaceKey) =>
         path.join(
@@ -158,15 +142,18 @@ function workspaceMigrationError(
   blockedPaths: string[],
   env?: NodeJS.ProcessEnv,
   operation?: "doctor",
+  blockedByStepId?: string,
 ): Error {
   return new StartupMaintenanceRequiredError(
     "legacy-workspace",
     operation === "doctor"
-      ? formatDoctorStateRepairFailure(
-          `Legacy workspace setup state requires migration at ${blockedPaths.join(", ")}`,
-          "Stop the Gateway, then restore the retained setup file or claim from a verified backup.",
-        )
-      : `Legacy workspace setup state requires migration for ${blockedPaths.join(", ")}; run ${formatCliCommand("openclaw doctor --fix", env)}.`,
+      ? blockedByStepId
+        ? `Legacy workspace setup at ${blockedPaths.join(", ")} was not imported because migration step "${blockedByStepId}" refused; resolve that refusal, then rerun ${formatCliCommand("openclaw doctor --fix", env)}.`
+        : formatDoctorStateRepairFailure(
+            `Legacy workspace setup state requires migration at ${blockedPaths.join(", ")}`,
+            "Stop the Gateway, then restore the retained setup file or claim from a verified backup.",
+          )
+      : `Run ${formatCliCommand("openclaw doctor --fix", env)}. Legacy workspace setup state requires migration for ${blockedPaths.join(", ")}.`,
   );
 }
 
@@ -176,6 +163,8 @@ export function assertWorkspaceStateMigrationReady(params: {
   env?: NodeJS.ProcessEnv;
   homedir?: () => string;
   operation?: "doctor";
+  /** An earlier migration refusal prevented the workspace importer from running. */
+  blockedByStepId?: string;
 }): void {
   const blocked = params.workspaceDirs.flatMap((workspaceDir) => {
     const sourcePath = findUnmigratedWorkspaceSource(
@@ -184,7 +173,7 @@ export function assertWorkspaceStateMigrationReady(params: {
     return sourcePath ? [params.operation === "doctor" ? sourcePath : workspaceDir] : [];
   });
   if (blocked.length > 0) {
-    throw workspaceMigrationError(blocked, params.env, params.operation);
+    throw workspaceMigrationError(blocked, params.env, params.operation, params.blockedByStepId);
   }
 }
 
@@ -225,49 +214,48 @@ function isOwnedAttestationBuffer(buffer: Buffer): boolean {
 }
 
 /** Capture canonical legacy paths before a destructive workspace removal. */
-export function prepareLegacyWorkspaceStateReset(
-  workspaceDir: string,
-  options?: { env?: NodeJS.ProcessEnv; homedir?: () => string },
-): LegacyWorkspaceResetPlan {
-  const sources = resolveLegacyWorkspaceSourcePaths(workspaceDir, options);
-  const candidates = [
-    ...sources.setupStatePaths.map((sourcePath) => ({
-      rootDir: sourcePath.endsWith(LEGACY_WORKSPACE_STATE_CURRENT_FILENAME)
-        ? path.dirname(sourcePath)
-        : path.dirname(path.dirname(sourcePath)),
-      sourcePath,
-      requireAttestationHeader: false,
-    })),
-    ...sources.stateDirAttestationPaths.map((sourcePath) => ({
-      rootDir: path.dirname(path.dirname(sourcePath)),
-      sourcePath,
-      // Hashed paths inside OpenClaw-owned attestation directories are
-      // reserved state. Explicit reset must remove malformed blockers too.
-      requireAttestationHeader: false,
-    })),
-    ...sources.siblingAttestationPaths.map((sourcePath) => ({
-      rootDir: path.dirname(sourcePath),
-      sourcePath,
-      requireAttestationHeader: true,
-    })),
-  ].flatMap((candidate) => [
-    candidate,
-    {
-      ...candidate,
-      sourcePath: `${candidate.sourcePath}${WORKSPACE_DOCTOR_CLAIM_SUFFIX}`,
-      // Sibling claims remain outside OpenClaw-owned roots. Renaming a claimed
-      // marker preserves its header, so require that ownership proof there too.
-      requireAttestationHeader: candidate.requireAttestationHeader,
-    },
-  ]);
+export function prepareLegacyWorkspaceStateReset(workspaceDir: string): LegacyWorkspaceResetPlan {
+  const sources = resolveLegacyWorkspaceSourcePaths(workspaceDir);
+  // Hashed paths are reserved state; sibling markers outside owned roots need a header.
+  const groups = [
+    [sources.setupStatePaths, "workspace"],
+    [sources.stateDirAttestationPaths, "state-dir"],
+    [sources.siblingAttestationPaths, "sibling"],
+  ] as const;
+  const candidates = groups
+    .flatMap(([paths, kind]) =>
+      paths.map((sourcePath) => ({
+        rootDir:
+          kind === "state-dir" ? path.dirname(path.dirname(sourcePath)) : path.dirname(sourcePath),
+        sourcePath,
+        requireAttestationHeader: kind === "sibling",
+      })),
+    )
+    .flatMap((candidate) => [
+      candidate,
+      {
+        ...candidate,
+        sourcePath: `${candidate.sourcePath}${WORKSPACE_DOCTOR_CLAIM_SUFFIX}`,
+        // Sibling claims remain outside OpenClaw-owned roots. Renaming a claimed
+        // marker preserves its header, so require that ownership proof there too.
+        requireAttestationHeader: candidate.requireAttestationHeader,
+      },
+    ]);
   return { candidates };
 }
 
 /** Discard retired workspace files from a pre-removal reset plan. */
 export async function removeLegacyWorkspaceStateForReset(
   plan: LegacyWorkspaceResetPlan,
-  options?: { dryRun?: boolean; assertCurrent?: () => void },
-): Promise<LegacyWorkspaceResetCleanup> {
+  options?: {
+    dryRun?: boolean;
+    assertCurrent?: () => void;
+    assertCurrentAsync?: () => Promise<void>;
+  },
+): Promise<{
+  removedPaths: string[];
+  warnings: string[];
+}> {
   const removedPaths: string[] = [];
   const warnings: string[] = [];
   for (const candidate of plan.candidates) {
@@ -299,8 +287,10 @@ export async function removeLegacyWorkspaceStateForReset(
         }
       }
       if (!options?.dryRun) {
-        options?.assertCurrent?.();
-        await sourceRoot.remove(relativePath);
+        if (options?.assertCurrentAsync) {
+          await options.assertCurrentAsync();
+        }
+        await sourceRoot.remove(relativePath, { assertBeforeMutation: options?.assertCurrent });
       }
       removedPaths.push(sourcePath);
     } catch (error) {

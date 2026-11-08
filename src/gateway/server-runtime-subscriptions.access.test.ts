@@ -2,6 +2,7 @@ import path from "node:path";
 import { expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import { acceptCompactionSuccessor } from "../agents/embedded-agent-runner/compaction-successor.js";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import {
   applySessionEntryLifecycleMutation,
   loadSessionEntry,
@@ -10,7 +11,14 @@ import {
   resetSessionEntryLifecycle,
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
-import { addSessionMember, listSessionMembers } from "../config/sessions/session-sharing-store.js";
+import {
+  addSessionMember,
+  readSessionMembersInWorker,
+} from "../config/sessions/session-sharing-store.js";
+import { heartbeatNotifications } from "../infra/heartbeat-events.js";
+import { captureSessionTarget } from "../sessions/session-controller.lifecycle.js";
+import { requestRpcSourceCancellation } from "../sessions/session-controller.rpc-sources.js";
+import { rpcSourceTesting } from "../sessions/session-lifecycle-admission.test-support.js";
 import { onSessionIdentityMutation } from "../sessions/session-lifecycle-events.js";
 import {
   openOpenClawAgentDatabase,
@@ -49,6 +57,7 @@ async function withAccessFixture(
   }) => Promise<void>,
 ) {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    setRuntimeConfigSnapshot({});
     const scope = {
       agentId: "main",
       sessionKey: "agent:main:identity-access",
@@ -70,7 +79,7 @@ async function withAccessFixture(
     } finally {
       for (const subscription of subscriptions) {
         await subscription.agentUnsub();
-        subscription.heartbeatUnsub();
+        heartbeatNotifications.onEvent = () => {};
         subscription.transcriptUnsub();
         subscription.lifecycleUnsub();
       }
@@ -181,22 +190,52 @@ it("keeps concurrent draft and saved metadata reads available while another sess
   });
 });
 
-it.each([false, true])(
-  "publishes a batched same-ID reset only after commit (rollback: %s)",
-  async (rollback) => {
+it.each([
+  { mode: "batched", rollback: false },
+  { mode: "batched", rollback: true },
+  { mode: "outer transaction", rollback: false },
+  { mode: "outer transaction", rollback: true },
+])(
+  "publishes a same-ID reset only after $mode commits (rollback: $rollback)",
+  async ({ mode, rollback }) => {
     await withAccessFixture(async ({ scope, workspaceDir, start }) => {
       const entry = { sessionId: "same-session", lifecycleRevision: "before", updatedAt: 1 };
       await upsertSessionEntryCore(scope, entry);
       start();
       const revision = readGatewayAccessRevision();
-      const database = openOpenClawAgentDatabase({ agentId: scope.agentId, path: scope.storePath });
+      if (mode === "outer transaction") {
+        await patchSessionEntryCore(scope, () => ({ label: "metadata only" }));
+        expect(readGatewayAccessRevision()).toBe(revision);
+        const replace = () =>
+          runOpenClawAgentWriteTransaction(
+            () => {
+              replaceSessionEntrySync(scope, {
+                ...entry,
+                lifecycleRevision: "after",
+                updatedAt: 2,
+              });
+              expect(readGatewayAccessRevision()).toBe(revision);
+              if (rollback) {
+                throw new Error("rollback identity");
+              }
+            },
+            { agentId: scope.agentId, path: scope.storePath },
+          );
+        if (rollback) {
+          expect(replace).toThrow("rollback identity");
+          expect(readGatewayAccessRevision()).toBe(revision);
+        } else {
+          replace();
+          expect(readGatewayAccessRevision()).toBeGreaterThan(revision);
+        }
+        expect(loadSessionEntry(scope)).toMatchObject({
+          sessionId: entry.sessionId,
+          lifecycleRevision: rollback ? "before" : "after",
+        });
+        return;
+      }
       const kinds: string[] = [];
       const observe = onSessionIdentityMutation((mutation) => kinds.push(mutation.kind));
-      if (rollback) {
-        database.db.exec(`CREATE TEMP TRIGGER reject_reset_entry
-        BEFORE UPDATE OF entry_json ON session_nodes
-        BEGIN SELECT RAISE(ABORT, 'injected reset failure'); END;`);
-      }
       try {
         const reset = applySessionEntryLifecycleMutation({
           agentId: scope.agentId,
@@ -205,14 +244,21 @@ it.each([false, true])(
           upserts: [
             {
               sessionKey: scope.sessionKey,
-              entry: { ...entry, lifecycleRevision: "after", updatedAt: 2 },
+              entry: {
+                ...entry,
+                ...(rollback ? { parentSessionKey: "invalid-reset-parent" } : {}),
+                lifecycleRevision: "after",
+                updatedAt: 2,
+              },
               resetBoundary: { context: "preserve-tail", reason: "reset", cwd: workspaceDir },
             },
           ],
           skipMaintenance: true,
         });
         if (rollback) {
-          await expect(reset).rejects.toThrow("injected reset failure");
+          await expect(reset).rejects.toThrow(
+            "refusing non-canonical session key write invalid-reset-parent",
+          );
           expect(kinds).toEqual([]);
           expect(readGatewayAccessRevision()).toBe(revision);
         } else {
@@ -223,112 +269,78 @@ it.each([false, true])(
         expect(loadSessionEntry(scope)?.lifecycleRevision).toBe(rollback ? "before" : "after");
       } finally {
         observe();
-        if (rollback) {
-          database.db.exec("DROP TRIGGER reject_reset_entry");
-        }
       }
     });
   },
 );
 
-it.each([false, true])(
-  "waits for the outer same-ID reset commit (rollback: %s)",
-  async (rollback) => {
-    await withAccessFixture(async ({ scope, start }) => {
-      const entry = { sessionId: "original", lifecycleRevision: "before", updatedAt: 1 };
+it.each(["agent", "chat"] as const)(
+  "invalidates committed compaction access after the %s run is aborted and removed",
+  async (kind) => {
+    await withAccessFixture(async ({ scope, params, start }) => {
+      const entry = {
+        sessionId: "predecessor",
+        lifecycleRevision: "current-lifecycle",
+        activeWriterRunId: undefined,
+        updatedAt: 1,
+        visibility: "shared" as const,
+      };
       await upsertSessionEntryCore(scope, entry);
+      await addSessionMember(scope, { identityId: "member", addedBy: "owner" });
+      const runId = `compaction-${kind}`;
+      const run = registerSubscriptionChatRun(params, {
+        runId,
+        ...scope,
+        target: captureSessionTarget({
+          storeScope: scope.storePath,
+          sessionKey: scope.sessionKey,
+          agentId: scope.agentId,
+          incarnation: entry.sessionId,
+        }),
+        sessionId: entry.sessionId,
+        ...(kind === "agent" ? { kind: "agent" as const } : {}),
+      });
+      // An earlier identity observer can retire the live caller after COMMIT.
+      const abort = onSessionIdentityMutation((mutation) => {
+        if (mutation.kind === "replace" && mutation.previous.sessionId === entry.sessionId) {
+          requestRpcSourceCancellation(run.entry);
+          run.cleanup();
+        }
+      });
       start();
       const revision = readGatewayAccessRevision();
-      await patchSessionEntryCore(scope, () => ({ label: "metadata only" }));
-      expect(readGatewayAccessRevision()).toBe(revision);
-      const replace = () =>
-        runOpenClawAgentWriteTransaction(
-          () => {
-            replaceSessionEntrySync(scope, {
-              sessionId: "original",
-              lifecycleRevision: "after",
-              updatedAt: 2,
-            });
-            expect(readGatewayAccessRevision()).toBe(revision);
-            if (rollback) {
-              throw new Error("rollback identity");
-            }
-          },
-          { agentId: scope.agentId, path: scope.storePath },
-        );
-      if (rollback) {
-        expect(replace).toThrow("rollback identity");
+      try {
+        const input = {
+          currentTarget: { ...scope, sessionId: entry.sessionId },
+          expectedEntry: entry,
+          assertActive: () => run.entry.input.abortSignal.throwIfAborted(),
+          config: {},
+        };
+        await acceptCompactionSuccessor({ ...input, result: { ok: true, compacted: true } });
         expect(readGatewayAccessRevision()).toBe(revision);
-      } else {
-        replace();
+        const committed = await acceptCompactionSuccessor({
+          ...input,
+          result: {
+            ok: true,
+            compacted: true,
+            result: { tokensBefore: 4_096, sessionId: "successor" },
+          },
+        });
+        expect(committed.entry.sessionId).toBe("successor");
+        expect(run.entry.input.abortSignal.aborted).toBe(true);
+        expect(rpcSourceTesting.has(runId)).toBe(false);
         expect(readGatewayAccessRevision()).toBeGreaterThan(revision);
+        expect(loadSessionEntry(scope)?.visibility).toBeUndefined();
+        expect((await readSessionMembersInWorker(scope)).members).toEqual([]);
+      } finally {
+        abort();
+        run.cleanup();
+        forgetActiveSessionForShutdown(entry.sessionId);
+        forgetActiveSessionForShutdown("successor");
       }
-      expect(loadSessionEntry(scope)).toMatchObject({
-        sessionId: "original",
-        lifecycleRevision: rollback ? "before" : "after",
-      });
     });
   },
 );
-
-it("invalidates committed compaction access after the run is aborted and removed", async () => {
-  await withAccessFixture(async ({ scope, params, start }) => {
-    const entry = {
-      sessionId: "predecessor",
-      lifecycleRevision: "current-lifecycle",
-      activeWriterRunId: undefined,
-      updatedAt: 1,
-      visibility: "shared" as const,
-    };
-    await upsertSessionEntryCore(scope, entry);
-    await addSessionMember(scope, { identityId: "member", addedBy: "owner" });
-    const runId = "compaction-agent";
-    const run = registerSubscriptionChatRun(params, {
-      runId,
-      ...scope,
-      sessionId: entry.sessionId,
-      kind: "agent",
-    });
-    // An earlier identity observer can retire the live caller after COMMIT.
-    const abort = onSessionIdentityMutation((mutation) => {
-      if (mutation.kind === "replace" && mutation.previous.sessionId === entry.sessionId) {
-        run.entry.controller.abort();
-        run.cleanup();
-      }
-    });
-    start();
-    const revision = readGatewayAccessRevision();
-    try {
-      const input = {
-        currentTarget: { ...scope, sessionId: entry.sessionId },
-        expectedEntry: entry,
-        assertActive: () => run.entry.controller.signal.throwIfAborted(),
-        config: {},
-      };
-      await acceptCompactionSuccessor({ ...input, result: { ok: true, compacted: true } });
-      expect(readGatewayAccessRevision()).toBe(revision);
-      const committed = await acceptCompactionSuccessor({
-        ...input,
-        result: {
-          ok: true,
-          compacted: true,
-          result: { tokensBefore: 4_096, sessionId: "successor" },
-        },
-      });
-      expect(committed.entry.sessionId).toBe("successor");
-      expect(run.entry.controller.signal.aborted).toBe(true);
-      expect(params.chatAbortControllers.has(runId)).toBe(false);
-      expect(readGatewayAccessRevision()).toBeGreaterThan(revision);
-      expect(loadSessionEntry(scope)?.visibility).toBeUndefined();
-      expect(listSessionMembers(scope)).toEqual([]);
-    } finally {
-      abort();
-      run.cleanup();
-      forgetActiveSessionForShutdown(entry.sessionId);
-      forgetActiveSessionForShutdown("successor");
-    }
-  });
-});
 
 it("retires the identity listener with the Gateway lifecycle and installs one on restart", async () => {
   await withAccessFixture(async ({ scope, start }) => {
@@ -338,7 +350,7 @@ it("retires the identity listener with the Gateway lifecycle and installs one on
     const beforeDrainCompletion = readGatewayAccessRevision();
     replaceSessionEntrySync(scope, { sessionId: "drained", updatedAt: 2 });
     expect(readGatewayAccessRevision()).toBeGreaterThan(beforeDrainCompletion);
-    first.heartbeatUnsub();
+    heartbeatNotifications.onEvent = () => {};
     first.transcriptUnsub();
     first.lifecycleUnsub();
     const stopped = readGatewayAccessRevision();

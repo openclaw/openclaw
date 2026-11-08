@@ -1,12 +1,7 @@
-/**
- * Auth profile display labels.
- * Combines profile ids with configured human metadata for CLI/status output.
- */
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveAuthProfileMetadata } from "./identity.js";
 import type { AuthProfileStore } from "./types.js";
 
-/** Builds the human-readable profile label used in status and auth listings. */
 export function resolveAuthProfileDisplayLabel(params: {
   cfg?: OpenClawConfig;
   store: AuthProfileStore;
@@ -15,4 +10,11 @@ export function resolveAuthProfileDisplayLabel(params: {
   const { displayName, email } = resolveAuthProfileMetadata(params);
   const label = displayName || email;
   return label ? `${params.profileId} (${label})` : params.profileId;
+}
+
+export function formatAuthProfileOAuthLabel(
+  params: Parameters<typeof resolveAuthProfileDisplayLabel>[0],
+): string {
+  const { profileId } = params;
+  return `${profileId}=OAuth${resolveAuthProfileDisplayLabel(params).slice(profileId.length)}`;
 }

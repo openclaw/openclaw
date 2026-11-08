@@ -16,7 +16,7 @@ type LivePreviewFinalizerDraft<TId> = {
   clear: () => Promise<void>;
 };
 
-export type LivePreviewDraft<TId> = Omit<LivePreviewFinalizerDraft<TId>, "clear"> & {
+type LivePreviewDraft<TId> = Omit<LivePreviewFinalizerDraft<TId>, "clear"> & {
   clear: () => Promise<boolean | void>;
 };
 
@@ -98,15 +98,11 @@ export function defineFinalizableLivePreviewAdapter<TPayload, TId, TEdit>(
 }
 
 export function createLiveMessageState<TPayload = unknown>(params?: {
-  receipt?: MessageReceipt;
-  lastRendered?: RenderedMessageBatch<TPayload>;
   canFinalizeInPlace?: boolean;
 }): LiveMessageState<TPayload> {
   return {
-    phase: params?.receipt ? "previewing" : "idle",
-    canFinalizeInPlace: params?.canFinalizeInPlace ?? Boolean(params?.receipt),
-    ...(params?.receipt ? { receipt: params.receipt } : {}),
-    ...(params?.lastRendered ? { lastRendered: params.lastRendered } : {}),
+    phase: "idle",
+    canFinalizeInPlace: params?.canFinalizeInPlace ?? false,
   };
 }
 
@@ -137,19 +133,6 @@ export function createPreviewMessageReceipt(params: {
   };
 }
 
-function combineDelivery(
-  first: LivePreviewDeliveryResult | undefined,
-  next: LivePreviewDeliveryResult,
-): LivePreviewDeliveryResult {
-  if (!first || first === next) {
-    return next;
-  }
-  return createAcceptedChannelDeliveryResult({
-    deliveryResults: [first, next],
-    content: [first.content, next.content].filter(Boolean).join("\n"),
-  });
-}
-
 function warnCleanupFailure(): void {
   console.warn("Live preview cleanup failed after delivery; a stale preview may remain");
 }
@@ -169,7 +152,13 @@ async function deliverPreview<TPayload, TId, TEdit>(
     owner?.update(next);
   };
   const accept = (result: LivePreviewDeliveryResult, partial = false) => {
-    accepted = combineDelivery(accepted, result);
+    accepted =
+      !accepted || accepted === result
+        ? result
+        : createAcceptedChannelDeliveryResult({
+            deliveryResults: [accepted, result],
+            content: [accepted.content, result.content].filter(Boolean).join("\n"),
+          });
     owner?.accept(result, partial);
   };
   const send = async (

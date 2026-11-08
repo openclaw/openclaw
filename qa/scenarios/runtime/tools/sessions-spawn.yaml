@@ -10,6 +10,7 @@ scenario:
   objective: Verify sessions_spawn executes successfully across OpenClaw and Codex.
   successCriteria:
     - Effective tools expose sessions_spawn.
+    - Codex prompt snapshots and live execution keep sessions_spawn always direct with no deferred discovery requirement.
     - The happy path retains a linked successful sessions_spawn call and result.
     - The denied-input path retains a linked sessions_spawn failure result.
     - Runtime parity hard-fails missing call/result evidence in either runtime.
@@ -20,7 +21,13 @@ scenario:
     - extensions/qa-lab/src/runtime-tool-fixture.ts
   execution:
     kind: flow
-    summary: Exercise the sessions_spawn runtime tool family.
+    liveConfiguredRuntime:
+      id: codex
+      model: openai/gpt-5.5
+    summary: >-
+      For native Codex discovery proof, select --provider-mode live-frontier --model openai/gpt-5.5 --alt-model openai/gpt-5.5.
+      Other model selections retain their general runtime route.
+      Exercise the sessions_spawn runtime tool family.
     config:
       toolName: sessions_spawn
       happyPrompt: >-

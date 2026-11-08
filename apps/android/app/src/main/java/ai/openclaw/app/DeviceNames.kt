@@ -18,11 +18,9 @@ object DeviceNames {
 
     // Manufacturer/model are best-effort platform fields; keep the final
     // fallback stable so stored default names do not become blank.
-    val model =
-      listOfNotNull(Build.MANUFACTURER?.takeIf { it.isNotBlank() }, Build.MODEL?.takeIf { it.isNotBlank() })
-        .joinToString(" ")
-        .trim()
-
-    return model.ifEmpty { "Android Node" }
+    return listOfNotNull(Build.MANUFACTURER?.takeIf { it.isNotBlank() }, Build.MODEL?.takeIf { it.isNotBlank() })
+      .joinToString(" ")
+      .trim()
+      .ifEmpty { "Android Node" }
   }
 }

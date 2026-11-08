@@ -27,7 +27,7 @@ async function resolveExplicitSessionSqliteMaintenancePaths(
   // Explicit path mode intentionally bypasses runtime config. Resolve through
   // the same selector as the migration so ownership checks cover exact targets.
   const targets = resolveSessionStoreTargets(
-    { agents: { entries: { [requestedAgentId]: { default: true } } } },
+    { agents: { entries: { [requestedAgentId]: {} } } },
     {
       store: options.sessionSqliteStore,
       ...(options.sessionSqliteAgent ? { agent: options.sessionSqliteAgent } : {}),
@@ -50,6 +50,8 @@ export async function doctorCommand(
   options?: DoctorOptions,
   databasePreflight?: DoctorDatabasePreflight,
 ): Promise<void> {
+  const { preparePostgresPoolForUpdate } = await import("../infra/postgres-sync/pool.js");
+  await preparePostgresPoolForUpdate("openclaw doctor --fix");
   const outputRuntime = runtime ?? defaultRuntime;
   if (options?.stateSqlite) {
     const { runDoctorStateSqliteCompact } = await import("./doctor-state-sqlite-compact.js");
@@ -80,6 +82,7 @@ export async function doctorCommand(
       await import("../state/openclaw-state-db-readonly.js");
     const sessionSqliteOptions = {
       mode: sessionSqliteMode,
+      ...(options.fullIntegrityCheck ? { integrityCheck: "full" as const } : {}),
       ...(options.sessionSqliteStore ? { store: options.sessionSqliteStore } : {}),
       ...(options.sessionSqliteAgent ? { agent: options.sessionSqliteAgent } : {}),
       ...(options.sessionSqliteAllAgents ? { allAgents: true } : {}),
@@ -159,7 +162,7 @@ export async function doctorCommand(
     const { runPostUpgradeProbes } = await import("./doctor-post-upgrade.js");
     const { readSourceConfigBestEffort } = await import("../config/io.runtime.js");
     const config = await readSourceConfigBestEffort();
-    const report = await runPostUpgradeProbes({ updateChannel: config.update?.channel });
+    const report = await runPostUpgradeProbes(config.update?.channel);
     if (options.json) {
       writeRuntimeJson(outputRuntime, report);
     } else {
@@ -174,7 +177,12 @@ export async function doctorCommand(
     exitCliAfterOutput(outputRuntime, hasError ? 1 : 0);
   }
   const doctorHealth = await import("../flows/doctor-health.js");
-  await doctorHealth.runDoctorHealthFlow(runtime, options, undefined, databasePreflight);
+  try {
+    await doctorHealth.runDoctorHealthFlow(runtime, options, undefined, databasePreflight);
+  } catch (error) {
+    const { diagnoseDoctorStateStorageFailure } = await import("./doctor-database-preflight.js");
+    throw diagnoseDoctorStateStorageFailure(error) ?? error;
+  }
 }
 
 async function maybeCreateSessionSqliteGithubIssue(
@@ -201,8 +209,8 @@ async function maybeCreateSessionSqliteGithubIssue(
     }
     return;
   }
-  const recordFailure = (message: string) => {
-    supportIssue.github = { message, status: "failed" };
+  const recordStatus = (message: string, status: "failed" | "skipped" = "failed") => {
+    supportIssue.github = { message, status };
     if (shouldLog) {
       runtime.log(`session-sqlite recover: ${message}`);
     }
@@ -227,15 +235,12 @@ async function maybeCreateSessionSqliteGithubIssue(
     const message = canPrompt
       ? "GitHub issue creation skipped: confirmation was declined."
       : "GitHub issue creation skipped: noninteractive recovery requires --yes.";
-    supportIssue.github = { message, status: "skipped" };
-    if (shouldLog) {
-      runtime.log(`session-sqlite recover: ${message}`);
-    }
+    recordStatus(message, "skipped");
     return;
   }
   const manifestPath = report.migrationRun?.manifestPath;
   if (!manifestPath) {
-    recordFailure(
+    recordStatus(
       "GitHub issue creation is unavailable because its private retry receipt could not be prepared.",
     );
     return;
@@ -258,7 +263,7 @@ async function maybeCreateSessionSqliteGithubIssue(
     claim = undefined;
   }
   if (!claim) {
-    recordFailure(
+    recordStatus(
       "GitHub issue creation is unavailable because its private retry receipt could not be saved.",
     );
     return;
@@ -266,7 +271,7 @@ async function maybeCreateSessionSqliteGithubIssue(
   supportIssue.title = claim.issue.title;
   const claimedIssue = prepareGithubIssue({ body: supportIssue.body, title: claim.issue.title });
   if (claimedIssue.marker !== claim.issue.marker) {
-    recordFailure(
+    recordStatus(
       "GitHub issue creation is unavailable because its private retry receipt is inconsistent.",
     );
     return;
@@ -279,7 +284,7 @@ async function maybeCreateSessionSqliteGithubIssue(
       recordCreated(reconciled.url);
       return;
     }
-    recordFailure(
+    recordStatus(
       "A prior GitHub issue handoff may already have created this report; no duplicate was opened.",
     );
     return;
@@ -293,14 +298,16 @@ async function maybeCreateSessionSqliteGithubIssue(
     return;
   }
   if (created.status === "outcome-unknown") {
-    recordFailure("GitHub issue creation outcome is unknown; no duplicate was opened.");
+    recordStatus("GitHub issue creation outcome is unknown; no duplicate was opened.");
     return;
   }
-  if (created.status === "fallback-unavailable") {
-    await withSessionSqliteGithubIssueReceipt(manifestPath, (authority) =>
+  const clearUnsentClaim = () =>
+    withSessionSqliteGithubIssueReceipt(manifestPath, (authority) =>
       clearSessionSqliteMigrationGithubIssueClaim(manifestPath, claimedIssue.marker, authority),
     ).catch(() => false);
-    recordFailure(
+  if (created.status === "fallback-unavailable") {
+    await clearUnsentClaim();
+    recordStatus(
       "GitHub issue creation is unavailable, and this report is too large for a safe browser fallback.",
     );
     return;
@@ -315,11 +322,9 @@ async function maybeCreateSessionSqliteGithubIssue(
   const browserSupport = await detectBrowserOpenSupport().catch(() => ({ ok: false }));
   const opened = browserSupport.ok ? await openUrl(created.url).catch(() => false) : false;
   if (!browserSupport.ok) {
-    await withSessionSqliteGithubIssueReceipt(manifestPath, (authority) =>
-      clearSessionSqliteMigrationGithubIssueClaim(manifestPath, claimedIssue.marker, authority),
-    ).catch(() => false);
+    await clearUnsentClaim();
   }
-  recordFailure(message);
+  recordStatus(message);
   if (shouldLog) {
     runtime.log(
       opened

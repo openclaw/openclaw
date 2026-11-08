@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import {
   getChannelPlugin,
   normalizeChannelId as normalizeAnyChannelId,
@@ -5,6 +6,12 @@ import {
 import { resolveSessionConversationRef } from "../../channels/plugins/session-conversation.js";
 import { normalizeChatChannelId } from "../../channels/registry.js";
 import { parseSessionDeliveryRoute } from "../../sessions/session-key-utils.js";
+import { sanitizeAgentRunTerminalReply } from "../agent-run-terminal-reply.js";
+import { readLatestAssistantReply, type AgentWaitResult } from "../run-wait.js";
+import { jsonResult } from "./tool-results.js";
+
+export const SESSIONS_SEND_TRUNCATION_NOTE =
+  "The reply may be truncated. Ask the target for the missing section or a file containing the full reply; do not repeat the original task.";
 
 export type SessionDeliveryTarget = {
   channel: string;
@@ -12,6 +19,68 @@ export type SessionDeliveryTarget = {
   accountId?: string;
   threadId?: string; // Forum topic/thread ID
 };
+
+export function sendFailure(
+  status: "error" | "forbidden",
+  error: string,
+  sessionKey?: string,
+  runId: string = crypto.randomUUID(),
+) {
+  return jsonResult({
+    runId,
+    status,
+    error,
+    ...(sessionKey !== undefined ? { sessionKey } : {}),
+  });
+}
+
+export function sendReplyResult(
+  receipt: { runId: string; sessionKey: string; watched?: boolean },
+  result: { replyText?: string; replyTruncated?: true; sourceReplyDelivered?: boolean },
+) {
+  const { replyText: reply, replyTruncated, sourceReplyDelivered } = result;
+  if (!reply) {
+    return jsonResult({
+      ...receipt,
+      status: "no_reply" as const,
+      message: sourceReplyDelivered
+        ? "The target delivered its final reply directly to its source conversation. Do not resend."
+        : "No visible reply or pending delivery. Continue or retry if needed.",
+    });
+  }
+  return jsonResult({
+    ...receipt,
+    status: "ok" as const,
+    delivery: { status: "skipped" as const },
+    ...(replyTruncated
+      ? {
+          replyTruncated,
+          note: SESSIONS_SEND_TRUNCATION_NOTE,
+        }
+      : {}),
+    reply,
+  });
+}
+
+/** Recover the accepted run's answer under the caller's current history access. */
+export async function resolveSessionsSendReply(
+  result: AgentWaitResult & { replyText?: string },
+  params: Parameters<typeof readLatestAssistantReply>[0],
+): Promise<{ replyText?: string; replyTruncated?: true }> {
+  const { replyText } = result;
+  // A producer-owned full reply can itself end with an ellipsis.
+  if (
+    !replyText?.endsWith("…") ||
+    (result.terminalReply?.disposition === "visible" && result.terminalReply.text !== replyText)
+  ) {
+    return { replyText };
+  }
+  const stored = await readLatestAssistantReply(params).catch(() => undefined);
+  const snapshot = stored === undefined ? undefined : sanitizeAgentRunTerminalReply(stored);
+  return snapshot?.disposition === "visible" && snapshot.text === replyText
+    ? { replyText: stored }
+    : { replyText, replyTruncated: true };
+}
 
 export function resolveSessionDeliveryTargetFromKey(
   sessionKey: string,

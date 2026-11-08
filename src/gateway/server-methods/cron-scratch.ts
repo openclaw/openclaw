@@ -2,7 +2,6 @@ import {
   validateCronScratchGetParams,
   validateCronScratchSetParams,
 } from "../../../packages/gateway-protocol/src/index.js";
-import { tryGetLegacyDefaultAgentId } from "../../config/legacy.default-agent-owner.js";
 import { cronScratchReadView } from "../../cron/job-read-view.js";
 import { CRON_JOB_SCRATCH_MAX_BYTES } from "../../cron/scratch-contract.js";
 import { formatErrorMessage } from "../../infra/errors.js";
@@ -33,7 +32,6 @@ export const cronScratchHandlers: GatewayRequestHandlers = {
             job,
             callerScope: readCronCallerScope(client),
             defaultAgentId: context.cron.getDefaultAgentId(),
-            legacyDefaultAgentId: tryGetLegacyDefaultAgentId(context.getRuntimeConfig()),
           })
         ) {
           throw new Error("Cron scratch owner changed before reply");
@@ -61,20 +59,37 @@ export const cronScratchHandlers: GatewayRequestHandlers = {
     validateCronScratchSetParams,
     async (
       { params, respond, context, client, sessionMutationCommitGuard, hasCurrentClientAuthority },
-      { jobId, callerScope },
+      { jobId, callerScope, job },
     ) => {
       const p = params;
+      // Scratch is appended to the run prompt, so a conversation may not write it under operator
+      // authority. The final guard repeats the check on the locked job.
+      const operatorOnly = (candidate: { scheduledToolPolicy?: { mode: string } } | undefined) =>
+        Boolean(callerScope && !callerScope.manageAll) &&
+        candidate?.scheduledToolPolicy?.mode === "trusted";
+      const operatorOnlyMessage =
+        "This automation runs with operator access, so only a Gateway owner or an operator can change its scratch.";
+      if (operatorOnly(job)) {
+        respondInvalidCronParams(respond, "cron.scratch.set", operatorOnlyMessage);
+        return;
+      }
       try {
-        const commitGuard = resolveCronMutationCommitGuard(
+        const scopeGuard = resolveCronMutationCommitGuard(
           client,
           context,
           { callerScope, jobId },
           { sessionMutationCommitGuard, hasCurrentClientAuthority },
         );
+        const commitGuard = () => {
+          scopeGuard?.();
+          if (operatorOnly(context.cron.getJob(jobId))) {
+            throw new TypeError(operatorOnlyMessage);
+          }
+        };
         const result = await context.cron.writeScratch(jobId, {
           content: p.content,
           expectedRevision: p.expectedRevision,
-          ...(commitGuard ? { commitGuard } : {}),
+          commitGuard,
         });
         if (!result.ok) {
           respond(true, result, undefined);

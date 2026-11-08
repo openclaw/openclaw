@@ -1,14 +1,57 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { reportLimitViolations } from "../../scripts/lib/check-limits.mts";
+import { releaseBranchForChecks, reportLimitViolations } from "../../scripts/lib/check-limits.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.restoreAllMocks());
 
 describe("limit reporting", () => {
-  it.each([{}, { CI: "1" }, { GITHUB_ACTIONS: "false" }])(
+  it("selects release destinations for detached checks and dispatches", () => {
+    const root = tempDirs.make("release-limits-");
+    for (const [env, expected] of [
+      [{ OPENCLAW_RELEASE_CONTEXT_REF: "release/2026.11.4" }, "release/2026.11.4"],
+      [{ OPENCLAW_RELEASE_CONTEXT_REF: "release/2026.11.4-1" }, "release/2026.11.4-1"],
+      [
+        { GITHUB_ACTIONS: "true", GITHUB_REF: "refs/heads/extended-stable/2026.10.33" },
+        "extended-stable/2026.10.33",
+      ],
+      [
+        { GITHUB_ACTIONS: "true", GITHUB_BASE_REF: "main", GITHUB_HEAD_REF: "release/2026.11.4" },
+        undefined,
+      ],
+      [
+        {
+          GITHUB_ACTIONS: "true",
+          GITHUB_BASE_REF: "release/2026.11.4",
+          GITHUB_REF: "refs/pull/1/merge",
+        },
+        "release/2026.11.4",
+      ],
+      [{ GITHUB_ACTIONS: "true", GITHUB_REF: "refs/tags/v2026.11.4" }, undefined],
+      [{ OPENCLAW_RELEASE_CONTEXT_REF: "release/not-a-version" }, undefined],
+    ] satisfies Array<[NodeJS.ProcessEnv, string | undefined]>) {
+      expect(releaseBranchForChecks(root, env)).toBe(expected);
+    }
+    const event = path.join(root, "event.json");
+    fs.writeFileSync(
+      event,
+      JSON.stringify({
+        inputs: { target_context_ref: "release/2026.11.4", target_ref: "a".repeat(40) },
+      }),
+    );
+    expect(
+      releaseBranchForChecks(root, {
+        GITHUB_ACTIONS: "true",
+        GITHUB_EVENT_NAME: "workflow_dispatch",
+        GITHUB_EVENT_PATH: event,
+        GITHUB_REF: "refs/tags/release-ci/tooling",
+      }),
+    ).toBe("release/2026.11.4");
+  });
+
+  it.each([{ CI: "1" }, { GITHUB_ACTIONS: "false" }])(
     "keeps local checks blocking with %j",
     (env) => {
       const error = vi.spyOn(console, "error").mockImplementation(() => {});

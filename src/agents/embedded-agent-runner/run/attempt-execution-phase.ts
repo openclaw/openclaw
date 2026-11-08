@@ -11,12 +11,18 @@ import {
   type AgentRunAttemptTerminal,
 } from "../../agent-run-terminal-outcome.js";
 import { agentSessionSetContextReplacementHook } from "../../sessions/agent-session-compaction.js";
+import { getGatewayToolCallerIdentity } from "../../tools/gateway-caller-context.js";
 import { log } from "../logger.js";
+import { declarePromptHistoryRewrite } from "../prompt-cache-observability.js";
 import type { EmbeddedAgentQueueHandle } from "../runs.js";
+import { replayToolResultPromptProjections } from "../tool-result-projection-replay.js";
 import { flushPendingToolResultsAfterIdle } from "../wait-for-idle-before-flush.js";
 import { abortable as abortableWithSignal } from "./abortable.js";
 import type { EmbeddedAttemptExecutionPhaseInput } from "./attempt-execution-types.js";
-import { createEmbeddedAttemptRunAbort } from "./attempt-finalize.js";
+import {
+  createEmbeddedAttemptIdleInterruption,
+  createEmbeddedAttemptRunAbort,
+} from "./attempt-finalize.js";
 import { prepareEmbeddedAttemptHistory } from "./attempt-history-prepare.js";
 import { runEmbeddedAttemptSettledPhase } from "./attempt-settle.js";
 import { prepareEmbeddedAttemptStream } from "./attempt-stream-prepare.js";
@@ -44,6 +50,7 @@ export async function runEmbeddedAttemptExecutionPhase(
     throw new Error("embedded attempt requires an active admitted run");
   }
   activeSession[agentSessionSetContextReplacementHook]((tokensAfter) => {
+    declarePromptHistoryRewrite({ ...attempt, reason: "compaction" });
     toolBase.skillInstructionDeliveryCache.clear();
     attempt.onContextAccountingEvent?.({ kind: "compaction", tokensAfter });
   }, assertActive);
@@ -52,26 +59,41 @@ export async function runEmbeddedAttemptExecutionPhase(
     sessionId: attempt.sessionId,
     sessionKey: attempt.sessionKey,
     runId: attempt.runId,
+    watchdogAttempt: getGatewayToolCallerIdentity()?.watchdogAttempt,
   });
   const mergeTerminal = (incoming: AgentRunAttemptTerminal) => {
     state.terminal = mergeAgentRunAttemptTerminal(state.terminal, incoming);
   };
 
   const idleTimeoutTriggerRef: { current?: (error: Error) => void } = {};
-  const { onModelRequest, onModelUsage, getPromptCacheObservation } =
-    installEmbeddedAttemptStreamGuards(input, {
-      onRejectedProviderReplayRepaired: () => {
-        repairedRejectedProviderReplay = true;
-      },
-      onIdleTimeout: (error) => idleTimeoutTriggerRef.current?.(error),
-      diagnosticOwner,
-    });
+  const {
+    normalizeToolCallIds,
+    onModelRequest,
+    onModelUsage,
+    getPromptCacheObservation,
+    isModelCallActive,
+  } = installEmbeddedAttemptStreamGuards(input, {
+    onRejectedProviderReplayRepaired: () => {
+      repairedRejectedProviderReplay = true;
+    },
+    onIdleTimeout: (error) => {
+      // Compaction owns request failures and fallback; the stream watchdog
+      // already aborted that request. Keep its enclosing turn live.
+      if (!activeSession.isCompacting) {
+        idleTimeoutTriggerRef.current?.(error);
+      }
+    },
+    diagnosticOwner,
+  });
   input.setup.prepStages.mark("stream-setup");
   input.setup.emitPrepStageSummary("stream-ready");
 
   let preparedHistory: Awaited<ReturnType<typeof prepareEmbeddedAttemptHistory>>;
   try {
-    preparedHistory = await prepareEmbeddedAttemptHistory(input, assertActive);
+    preparedHistory = await withOwnedSessionTranscriptWrites(
+      input.sessionLock.ownedTranscriptWriteContext,
+      () => prepareEmbeddedAttemptHistory(input, assertActive),
+    );
   } catch (error) {
     await cleanupEmbeddedAttemptResources({
       flushPendingToolResultsAfterIdle,
@@ -96,18 +118,13 @@ export async function runEmbeddedAttemptExecutionPhase(
     state: input.state,
   });
   input.externalAbortController.setRunAbort(abortRun);
-  idleTimeoutTriggerRef.current = (error) => {
-    // Caller cancellation owns the terminal outcome when it beats a late watchdog callback.
-    if (input.runAbortController.signal.aborted) {
-      return;
-    }
-    mergeTerminal({
-      kind: "timeout",
-      phase: activeSession.isCompacting ? "compaction" : "prompt",
-      source: "idle",
-    });
-    abortRun(true, error);
-  };
+  const interruptIdleRequest = createEmbeddedAttemptIdleInterruption({
+    runAbortController: input.runAbortController,
+    activeSession,
+    state,
+    abortRun,
+  });
+  idleTimeoutTriggerRef.current = interruptIdleRequest;
   const abortable = <T>(promise: Promise<T>): Promise<T> =>
     abortableWithSignal(input.runAbortController.signal, promise);
   const promptActiveSession = (
@@ -129,26 +146,40 @@ export async function runEmbeddedAttemptExecutionPhase(
         ),
       );
     });
-  const onBlockReply = attempt.onBlockReply
-    ? bindOwnedSessionTranscriptWrites(
-        input.sessionLock.ownedTranscriptWriteContext,
-        attempt.onBlockReply,
-      )
-    : undefined;
-  const onBlockReplyFlush = attempt.onBlockReplyFlush
-    ? bindOwnedSessionTranscriptWrites(
-        input.sessionLock.ownedTranscriptWriteContext,
-        attempt.onBlockReplyFlush,
-      )
-    : undefined;
+  const bindTranscriptCallback = <TArgs extends unknown[], TResult>(
+    callback: ((...args: TArgs) => TResult) | undefined,
+  ) =>
+    callback
+      ? bindOwnedSessionTranscriptWrites(input.sessionLock.ownedTranscriptWriteContext, callback)
+      : undefined;
+  const onBlockReply = bindTranscriptCallback(attempt.onBlockReply);
+  const onBlockReplyFlush = bindTranscriptCallback(attempt.onBlockReplyFlush);
   const preparedStream = prepareEmbeddedAttemptStream({
     attempt,
     agentSession: sessionRuntime.agentSession,
+    projectSessionForkMessages: (messages) =>
+      replayToolResultPromptProjections(messages, sessionRuntime.toolResultPromptProjectionState),
+    readSessionForkBoundary: () => ({
+      timezone: sessionRuntime.boundary.boundaryTimezone,
+      includeTimestamp: sessionRuntime.boundary.includeBoundaryTimestamp,
+      projectPersistedSenderContext: sessionRuntime.boundary.includeBoundaryTimestamp,
+      userTranscriptContexts: sessionRuntime.boundary.getUserTranscriptContexts?.(),
+      appendOnlyRuntimeContext: sessionRuntime.transcriptPolicy.appendOnlyRuntimeContext,
+      inHistorySystemUpdates: sessionRuntime.transcriptPolicy.inHistorySystemUpdates,
+    }),
     onModelUsage,
     applyPermissionMode: input.lifecycle.applyPermissionMode,
     runAbortController: input.runAbortController,
     abortRun,
     markExternalAbort: () => mergeTerminal({ kind: "aborted", source: "external" }),
+    recoverStalledModelCall: () =>
+      isModelCallActive() &&
+      interruptIdleRequest(
+        Object.assign(
+          new Error("LLM idle timeout (diagnostic stuck recovery): no response from model"),
+          { code: "OPENCLAW_SESSION_WATCHDOG" },
+        ),
+      ),
     getRunState: () => {
       const terminal = projectAgentRunAttemptTerminal(state.terminal);
       return {
@@ -163,7 +194,7 @@ export async function runEmbeddedAttemptExecutionPhase(
     runtimeChannel: systemPrompt.runtimeChannel,
     hookAgentId: input.setup.sessionAgentId,
     diagnosticTrace: input.diagnostics.diagnosticTrace,
-    nestedToolActivities: toolBase.nestedToolActivities,
+    nestedToolActivityState: toolBase.nestedToolActivityState,
     isReplaySafeTool: (tool) => replaySafeTools.has(tool as never),
     diagnosticOwner,
     trajectoryRecorder: sessionRuntime.trajectoryRecorder,
@@ -192,6 +223,7 @@ export async function runEmbeddedAttemptExecutionPhase(
 
   const preparedStreamRuntime = {
     abortable,
+    normalizeToolCallIds,
     cache: {
       onModelRequest,
       getObservation: getPromptCacheObservation,

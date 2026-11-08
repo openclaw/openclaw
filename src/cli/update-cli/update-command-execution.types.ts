@@ -1,5 +1,5 @@
 import type { LegacyConfigUpdatePlan } from "../../commands/doctor/legacy-config-repair.js";
-import type { PackageActivationRuntime } from "../../infra/package-update-swap-contract.js";
+import type { PackageActivationRuntime } from "../../infra/package-update-activation-runtime.types.js";
 import type { DevUpdateTarget } from "../../infra/update-dev-target.js";
 import type { ResolvedGlobalInstallTarget } from "../../infra/update-global.js";
 import type { UpdateRunPhasePatch } from "../../infra/update-run-mutation.types.js";
@@ -18,27 +18,24 @@ import type { ManagedServiceRootRedirect } from "./update-command-service-contex
 import type { UpdateCommandRecoveryState } from "./update-command-service.js";
 
 type CapturedWriteOptions = Required<
-  Pick<
-    UpdateRunWriteOptions,
-    "env" | "context" | "assertCurrent" | "assertAccepting" | "retainSettlement"
-  >
+  Pick<UpdateRunWriteOptions, "env" | "context" | "assertAccepting" | "retainSettlement">
 > &
-  Pick<UpdateRunWriteOptions, "requireNoRecovery">;
+  Pick<UpdateRunWriteOptions, "requireNoRecovery" | "busyTimeoutMs" | "pluginCohort">;
 
 export type UpdateCommandExecutionGuards = {
   recordPhase: (phase: UpdateRunPhase, patch?: UpdateRunPhasePatch) => Promise<void>;
-  recordStep: (step: UpdateRunStep) => Promise<UpdateRunRecord>;
+  recordStep: (step: UpdateRunStep) => Promise<UpdateRunRecord | undefined>;
   captureWriteOptions: () => CapturedWriteOptions;
   onStateHandoff: () => void;
   admitExecutor: (acquired: UpdateRecoveryFence) => void;
   assertCurrent: (phase?: "restore") => void;
+  waitForCurrent: () => Promise<void>;
   assertBoundChildCurrent: () => void;
 };
 
 export type MutableUpdateExecutionParams = {
   root: string;
   installKind: "git" | "package" | "unknown";
-  updateInstallKind: "git" | "package" | "unknown";
   switchToGit: boolean;
   timeoutMs: number | undefined;
   updateStepTimeoutMs: number;
@@ -53,7 +50,6 @@ export type MutableUpdateExecutionParams = {
   devTarget?: DevUpdateTarget;
   packageInstallSpec: string | null;
   packageInstallEnv?: NodeJS.ProcessEnv;
-  packageInstallTarget?: ResolvedGlobalInstallTarget;
   stagedPackage?: StagedPackageInstallUpdate;
   packageTargetVersion?: string;
   packageTargetSchemaVersions?: OpenClawSchemaVersions;
@@ -73,4 +69,7 @@ export type MutableUpdateExecutionParams = {
     installTarget?: ResolvedGlobalInstallTarget,
   ) => Promise<void>;
   onActivation?: () => void;
-};
+} & (
+  | { updateInstallKind: "package"; packageInstallTarget: ResolvedGlobalInstallTarget }
+  | { updateInstallKind: "git"; packageInstallTarget?: ResolvedGlobalInstallTarget }
+);

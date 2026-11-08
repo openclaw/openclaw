@@ -49,6 +49,7 @@ public struct OpenClawChatSidebarQuery: Equatable, Sendable {
 
 public protocol OpenClawChatSidebarTransport: OpenClawChatTransport {
     func acquireSidebarRequest() async throws -> @Sendable (OpenClawChatGatewayRequest) async throws -> Data
+    func loadSidebarAgentAvatar(_ source: String) async -> Data?
 }
 
 extension OpenClawChatGatewayRequests {
@@ -65,7 +66,7 @@ extension OpenClawChatGatewayRequests {
             offset: offset > 0 ? offset : nil,
             configuredAgentsOnly: true)
         var params = request.params
-        // ui/src/components/command-palette.ts:49 excludes hidden discovery rows before the server limit.
+        // command-palette-controller.ts: SESSION_SEARCH_SCOPE excludes hidden rows before the server limit.
         if query.excludeCron { params["excludeCron"] = AnyCodable(true) }
         if query.excludeSystem { params["excludeSystem"] = AnyCodable(true) }
         // ui/src/components/session-data-controller-events.ts:110 enriches browsing; palette search omits enrichment.

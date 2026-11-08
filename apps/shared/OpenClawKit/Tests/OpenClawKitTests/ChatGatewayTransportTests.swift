@@ -94,18 +94,32 @@ struct ChatGatewayTransportTests {
                 if request.method == "sessions.rewind" {
                     return Data(#"{"editorText":"restored draft"}"#.utf8)
                 }
+                if request.method == "sessions.create" {
+                    return Data(#"{"key":"agent:reviewer:child"}"#.utf8)
+                }
                 throw Failure.retiredRoute
             })
 
         let response = try await transport.rewindSession(sessionKey: "global", entryId: "message-1")
         #expect(response.editorText == "restored draft")
+        #expect(try await transport.forkSession(parentKey: "global") == "agent:reviewer:child")
+        #expect(try await transport.forkSession(
+            parentKey: "global", fromLastCompleted: true, agentID: "other") == "agent:reviewer:child")
         await #expect(throws: Failure.retiredRoute) {
             try await transport.switchSessionBranch(sessionKey: "global", agentID: "other", leafEntryId: "leaf-1")
         }
         let requests = await recorder.requests
-        #expect(requests.map(\.method) == ["sessions.rewind", "sessions.branches.switch"])
+        #expect(requests.map(\.method) == [
+            "sessions.rewind", "sessions.create", "sessions.create", "sessions.branches.switch",
+        ])
         #expect(requests[0].params["agentId"]?.value as? String == "reviewer")
-        #expect(requests[1].params["agentId"]?.value as? String == "other")
+        #expect(requests[1].params["agentId"]?.value as? String == "reviewer")
+        #expect(requests[1].params["parentSessionKey"]?.value as? String == "global")
+        #expect(requests[1].params["fork"]?.value as? Bool == true)
+        #expect(requests[1].params["forkFrom"] == nil)
+        #expect(requests[2].params["agentId"]?.value as? String == "other")
+        #expect(requests[2].params["forkFrom"]?.value as? String == "last-completed")
+        #expect(requests[3].params["agentId"]?.value as? String == "other")
     }
 
     private enum Failure: Error { case unexpectedRequest, retiredRoute }

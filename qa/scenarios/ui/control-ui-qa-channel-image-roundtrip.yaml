@@ -21,10 +21,10 @@ scenario:
     - docs/concepts/qa-e2e-automation.md
     - docs/channels/qa-channel.md
   codeRefs:
-    - extensions/qa-lab/src/scenario-runtime-api.ts
+    - extensions/qa-lab/src/suite-runtime-flow.ts
     - extensions/qa-lab/src/suite.ts
     - extensions/qa-lab/src/web-runtime.ts
-    - ui/src/pages/chat/chat-view.ts
+    - ui/src/pages/chat/chat-view.tsx
   gatewayRuntime:
     forwardHostHome: true
   execution:

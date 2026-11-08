@@ -25,6 +25,30 @@ export function buildControlUiPublicSessionSharePath(
   return `${normalizeControlUiBasePath(params.basePath)}/share/session?${new URLSearchParams({ token: params.token })}`;
 }
 
+export function buildControlUiPublicSessionCardPath(
+  params: ControlUiPublicSessionShare & { basePath?: string },
+): string {
+  return buildControlUiPublicSessionSharePath(params).replace(
+    "/share/session?",
+    "/share/session/card.png?",
+  );
+}
+
+export function parseControlUiPublicSessionCardUrl(
+  url: URL,
+  basePath?: string,
+): ControlUiPublicSessionShare | null {
+  if (
+    url.pathname !== `${normalizeControlUiBasePath(basePath)}/share/session/card.png` ||
+    [...url.searchParams.keys()].some((key) => key !== "token")
+  ) {
+    return null;
+  }
+  const shareUrl = new URL(url);
+  shareUrl.pathname = `${normalizeControlUiBasePath(basePath)}/share/session`;
+  return parseControlUiPublicSessionShareUrl(shareUrl, basePath);
+}
+
 export function parseControlUiPublicSessionShareUrl(
   url: URL,
   basePath?: string,

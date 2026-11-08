@@ -1,183 +1,66 @@
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
+import assert from "node:assert/strict";
 import { setImmediate } from "node:timers/promises";
-import type { ISyncResponse } from "matrix-js-sdk/lib/matrix.js";
+import { ClientEvent, createClient, type ISyncResponse } from "matrix-js-sdk/lib/matrix.js";
+import { RustCrypto } from "matrix-js-sdk/lib/rust-crypto/rust-crypto.js";
+import { SyncState } from "matrix-js-sdk/lib/sync.js";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import {
+  resetPluginStateStoreForTests,
   createPluginStateKeyedStoreForTests,
   openOpenClawStateDatabase,
   createPluginStateSyncKeyedStoreForTests,
-  resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
-import {
-  closeOpenClawStateDatabaseAsync,
-  observeHostDataSql,
-} from "openclaw/plugin-sdk/sqlite-runtime-testing";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
+import { describe, expect, it, vi } from "vitest";
 import { getMatrixRuntime } from "../../runtime.js";
-import { installMatrixTestRuntime } from "../../test-runtime.js";
+import { MatrixClient } from "../sdk.js";
 import { SqliteBackedMatrixSyncStore } from "./file-sync-store.js";
-import { openMatrixStorageMetaStoreOptions } from "./storage-metadata.js";
 import {
   hasMatrixSyncCacheStateInStore,
   readPersistedStoreFromStore,
   openMatrixSyncCacheStoreOptions,
   type MatrixSyncCacheRecord,
 } from "./sync-cache-state.js";
-
+import { matrixSyncResponse, useSyncStoreFixture } from "./sync-store.test-support.js";
 function createSyncResponse(nextBatch: string): ISyncResponse {
-  return {
-    next_batch: nextBatch,
-    rooms: {
-      join: {
-        "!room:example.org": {
-          summary: {
-            "m.heroes": [],
-          },
-          state: { events: [] },
-          timeline: {
-            events: [
-              {
-                content: {
-                  body: "hello",
-                  msgtype: "m.text",
-                },
-                event_id: "$message",
-                origin_server_ts: 1,
-                sender: "@user:example.org",
-                type: "m.room.message",
-              },
-            ],
-            prev_batch: "t0",
-          },
-          ephemeral: { events: [] },
-          account_data: { events: [] },
-          unread_notifications: {},
-        },
-      },
-      invite: {},
-      leave: {},
-      knock: {},
-    },
-    account_data: {
-      events: [
-        {
-          content: { theme: "dark" },
-          type: "com.openclaw.test",
-        },
-      ],
-    },
+  const event = {
+    content: { body: "hello", msgtype: "m.text" },
+    event_id: "$message",
+    origin_server_ts: 1,
+    sender: "@user:example.org",
+    type: "m.room.message",
   };
+  return matrixSyncResponse(nextBatch, "!room:example.org", event, "t0", [
+    { content: { theme: "dark" }, type: "com.openclaw.test" },
+  ]);
 }
-
 describe("SqliteBackedMatrixSyncStore", () => {
-  const tempDirs: string[] = [];
-
-  function createStorageRoot(): string {
-    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-matrix-sync-store-"));
-    tempDirs.push(tempDir);
-    return tempDir;
-  }
-
-  beforeEach(() => {
-    resetPluginStateStoreForTests();
-    installMatrixTestRuntime();
-  });
-
-  afterEach(async () => {
-    vi.restoreAllMocks();
-    vi.useRealTimers();
-    await closeOpenClawStateDatabaseAsync();
-    resetPluginStateStoreForTests();
-    for (const dir of tempDirs.splice(0)) {
-      fs.rmSync(dir, { recursive: true, force: true });
-    }
-  });
-
-  it("persists sync data so restart resumes from the saved cursor", async () => {
-    const storageRoot = createStorageRoot();
-    const syncResponse = createSyncResponse("s123");
-
-    const firstStore = await SqliteBackedMatrixSyncStore.create(storageRoot);
-    expect(firstStore.hasSavedSync()).toBe(false);
-    await firstStore.setSyncData(structuredClone(syncResponse));
-    await firstStore.flush();
-    expect(fs.existsSync(path.join(storageRoot, "bot-storage.json"))).toBe(false);
-
-    const secondStore = await SqliteBackedMatrixSyncStore.create(storageRoot);
-    expect(secondStore.hasSavedSync()).toBe(true);
-    await expect(secondStore.getSavedSyncToken()).resolves.toBe("s123");
-
-    const savedSync = await secondStore.getSavedSync();
-    expect(savedSync).toEqual({
-      nextBatch: "s123",
-      accountData: syncResponse.account_data.events,
-      roomsData: {
-        join: {
-          "!room:example.org": {
-            ...syncResponse.rooms.join["!room:example.org"],
-            "org.matrix.msc4222.state_after": { events: [] },
-          },
-        },
-        invite: {},
-        leave: {},
-        knock: {},
-      },
-    });
-    expect(secondStore.hasSavedSyncFromCleanShutdown()).toBe(false);
-  });
-
-  it("loads, persists, deletes and closes the sync cache without host SQLite", async () => {
-    const storageRoot = createStorageRoot();
-    const observation = observeHostDataSql();
-    const sql = observation.calls;
-    const timings: Record<string, number> = {};
-    try {
-      let started = performance.now();
-      const store = await SqliteBackedMatrixSyncStore.create(storageRoot);
-      timings.coldLoadMs = performance.now() - started;
-      expect(store.hasSavedSync()).toBe(false);
-      expect(fs.existsSync(path.join(storageRoot, "state", "openclaw.sqlite"))).toBe(false);
-      await store.setSyncData(createSyncResponse("worker-cursor"));
-      await store.freezeSyncCursorPersistence();
+  const storage = useSyncStoreFixture("openclaw-matrix-sync-store-");
+  const openStore = () => SqliteBackedMatrixSyncStore.create(storage.root);
+  const cacheOptions = () => openMatrixSyncCacheStoreOptions(storage.root);
+  const syncCache = () =>
+    createPluginStateSyncKeyedStoreForTests<MatrixSyncCacheRecord>("matrix", cacheOptions());
+  const asyncCache = () =>
+    createPluginStateKeyedStoreForTests<MatrixSyncCacheRecord>("matrix", cacheOptions());
+  const invalidCache = { savedSync: null, cleanShutdown: false };
+  async function seededStore(token: string, clean = false) {
+    const store = await openStore();
+    await store.setSyncData(createSyncResponse(token));
+    if (clean) {
       store.markCleanShutdown();
-      started = performance.now();
-      await store.flush();
-      timings.persistMs = performance.now() - started;
-      await closeOpenClawStateDatabaseAsync();
-      started = performance.now();
-      const restored = await SqliteBackedMatrixSyncStore.create(storageRoot);
-      timings.coldRestoreMs = performance.now() - started;
-      expect(restored.hasSavedSyncFromCleanShutdown()).toBe(true);
-      expect(restored.getSyncToken()).toBe("worker-cursor");
-      started = performance.now();
-      await restored.deleteAllData();
-      timings.deleteMs = performance.now() - started;
-      await restored.freezeSyncCursorPersistence();
-      await closeOpenClawStateDatabaseAsync();
-      const deleted = await SqliteBackedMatrixSyncStore.create(storageRoot);
-      expect(deleted.hasSavedSync()).toBe(false);
-      expect(deleted.getSyncToken()).toBeNull();
-      for (const method of sql) {
-        expect(method).not.toHaveBeenCalled();
-      }
-      console.log("matrix-sync-cache-worker timings", JSON.stringify(timings));
-    } finally {
-      observation.restore();
     }
-  });
-
+    await store.flush();
+    return store;
+  }
   it("keeps a cache generation intact while another store instance publishes", async () => {
-    const storageRoot = createStorageRoot();
     const runtime = getMatrixRuntime();
-    const openStore = runtime.state.openKeyedStore.bind(runtime.state);
+    const openKeyedStore = runtime.state.openKeyedStoreV2.bind(runtime.state);
     const metadataRead = createDeferred<void>();
     const releaseRead = createDeferred<void>();
     const writeStarted = vi.fn();
     let pauseReads = false;
-    vi.spyOn(runtime.state, "openKeyedStore").mockImplementation((options) => {
-      const store = openStore(options);
+    vi.spyOn(runtime.state, "openKeyedStoreV2").mockImplementation((options) => {
+      const store = openKeyedStore(options);
       if (options.namespace !== "sync-cache") {
         return store;
       }
@@ -197,13 +80,10 @@ describe("SqliteBackedMatrixSyncStore", () => {
         },
       };
     });
-    const writer = await SqliteBackedMatrixSyncStore.create(storageRoot);
-    await writer.setSyncData(createSyncResponse("previous-generation"));
-    writer.markCleanShutdown();
-    await writer.flush();
+    const writer = await seededStore("previous-generation", true);
     writeStarted.mockClear();
     pauseReads = true;
-    const reading = SqliteBackedMatrixSyncStore.create(`${storageRoot}/.`);
+    const reading = SqliteBackedMatrixSyncStore.create(`${storage.root}/.`);
     await metadataRead.promise;
     await writer.setSyncData(createSyncResponse("next-generation"));
     const writing = writer.flush();
@@ -220,22 +100,21 @@ describe("SqliteBackedMatrixSyncStore", () => {
       expect(restored.getSyncToken()).toBe("previous-generation");
       expect(restored.hasSavedSyncFromCleanShutdown()).toBe(true);
       expect(interleaved).toBe(false);
-      const latest = await SqliteBackedMatrixSyncStore.create(storageRoot);
+      const latest = await openStore();
       expect(latest.getSyncToken()).toBe("next-generation");
+      expect(latest.hasSavedSyncFromCleanShutdown()).toBe(false);
     } finally {
       releaseRead.resolve();
       await Promise.allSettled([reading, writing]);
     }
   });
-
   it("joins deletion before freezing or persisting newer sync data", async () => {
-    const storageRoot = createStorageRoot();
     const runtime = getMatrixRuntime();
-    const openStore = runtime.state.openKeyedStore.bind(runtime.state);
+    const openKeyedStore = runtime.state.openKeyedStoreV2.bind(runtime.state);
     const deleting = createDeferred<void>();
     const release = createDeferred<void>();
-    vi.spyOn(runtime.state, "openKeyedStore").mockImplementation((options) => {
-      const store = openStore(options);
+    vi.spyOn(runtime.state, "openKeyedStoreV2").mockImplementation((options) => {
+      const store = openKeyedStore(options);
       return {
         ...store,
         delete: async (key) => {
@@ -247,9 +126,7 @@ describe("SqliteBackedMatrixSyncStore", () => {
         },
       };
     });
-    const store = await SqliteBackedMatrixSyncStore.create(storageRoot);
-    await store.setSyncData(createSyncResponse("old"));
-    await store.flush();
+    const store = await seededStore("old");
     const deletion = store.deleteAllData();
     await deleting.promise;
     await store.setSyncData(createSyncResponse("new"));
@@ -262,309 +139,354 @@ describe("SqliteBackedMatrixSyncStore", () => {
     expect(frozen).toBe(false);
     release.resolve();
     await Promise.all([deletion, flush, freeze]);
-    const restored = await SqliteBackedMatrixSyncStore.create(storageRoot);
+    const restored = await openStore();
     expect(restored.getSyncToken()).toBe("new");
   });
-
-  it.each(["bulk", "legacy"])(
-    "restores multi-chunk sync data and rejects a bad digest with %s stores",
-    async (mode) => {
-      const storageRoot = createStorageRoot();
-      const response = createSyncResponse("large-cursor");
-      response.account_data.events.push({
-        type: "com.openclaw.large",
-        content: { value: "🦞".repeat(100_000) },
-      });
-      const writer = await SqliteBackedMatrixSyncStore.create(storageRoot);
-      await writer.setSyncData(response);
-      await writer.flush();
-      const expected = await writer.getSavedSync();
-      const options = openMatrixSyncCacheStoreOptions(storageRoot);
-      const sync = createPluginStateSyncKeyedStoreForTests<MatrixSyncCacheRecord>(
-        "matrix",
-        options,
-      );
-      const asyncStore = createPluginStateKeyedStoreForTests<MatrixSyncCacheRecord>(
-        "matrix",
-        options,
-      );
-      const asyncReader =
-        mode === "bulk" ? asyncStore : { lookup: (key: string) => asyncStore.lookup(key) };
-      expect(
-        (await readPersistedStoreFromStore({ storageRootDir: storageRoot, store: asyncReader }))
-          ?.savedSync,
-      ).toEqual(expected);
-      await expect(
-        hasMatrixSyncCacheStateInStore({ storageRootDir: storageRoot, store: asyncReader }),
-      ).resolves.toBe(true);
-      const chunk = sync
-        .entries()
-        .find((row) => row.value.kind === "sync-chunk" && row.value.index === 10);
-      if (!chunk || chunk.value.kind !== "sync-chunk") {
-        throw new Error("expected sync chunk 10");
-      }
-      sync.register(chunk.key, { ...chunk.value, data: "modified" });
-      expect(
-        await readPersistedStoreFromStore({ storageRootDir: storageRoot, store: asyncReader }),
-      ).toMatchObject({
-        savedSync: null,
-        cleanShutdown: false,
-      });
-      await expect(
-        hasMatrixSyncCacheStateInStore({ storageRootDir: storageRoot, store: asyncReader }),
-      ).resolves.toBe(false);
-      const laterChunk = sync
-        .entries()
-        .find((row) => row.value.kind === "sync-chunk" && row.value.index === 11);
-      if (!laterChunk) {
-        throw new Error("expected sync chunk 11");
-      }
-      const { db } = openOpenClawStateDatabase({ env: options.env });
-      db.prepare("UPDATE plugin_state_entries SET value_json = ? WHERE entry_key = ?").run(
-        "invalid JSON",
-        laterChunk.key,
-      );
-      for (const early of ["invalid", "missing"]) {
-        if (early === "invalid") {
-          sync.register(chunk.key, { ...chunk.value, index: -1 });
-        } else {
-          sync.delete(chunk.key);
-        }
-        expect(
-          await readPersistedStoreFromStore({ storageRootDir: storageRoot, store: asyncReader }),
-        ).toMatchObject({
-          savedSync: null,
-          cleanShutdown: false,
-        });
-        await expect(
-          hasMatrixSyncCacheStateInStore({ storageRootDir: storageRoot, store: asyncReader }),
-        ).resolves.toBe(false);
-      }
-      sync.register(chunk.key, chunk.value);
-      await expect(
-        readPersistedStoreFromStore({ storageRootDir: storageRoot, store: asyncReader }),
-      ).rejects.toMatchObject({
-        code: "PLUGIN_STATE_CORRUPT",
-      });
-      await expect(
-        hasMatrixSyncCacheStateInStore({ storageRootDir: storageRoot, store: asyncReader }),
-      ).rejects.toMatchObject({ code: "PLUGIN_STATE_CORRUPT" });
-    },
-  );
-
-  it("restores the sync cache after the storage root moves", async () => {
-    const storageRoot = createStorageRoot();
-    const movedStorageRoot = `${storageRoot}-moved`;
-
-    const firstStore = await SqliteBackedMatrixSyncStore.create(storageRoot);
-    await firstStore.setSyncData(createSyncResponse("portable-token"));
-    await firstStore.flush();
-    await closeOpenClawStateDatabaseAsync();
-    resetPluginStateStoreForTests();
-    fs.renameSync(storageRoot, movedStorageRoot);
-    tempDirs.push(movedStorageRoot);
-
-    const secondStore = await SqliteBackedMatrixSyncStore.create(movedStorageRoot);
-    expect(secondStore.hasSavedSync()).toBe(true);
-    await expect(secondStore.getSavedSyncToken()).resolves.toBe("portable-token");
+  it("restores multi-chunk sync data and rejects a bad digest with lookup-only stores", async () => {
+    const response = createSyncResponse("large-cursor");
+    response.account_data.events.push({
+      type: "com.openclaw.large",
+      content: { value: "🦞".repeat(100_000) },
+    });
+    const writer = await openStore();
+    await writer.setSyncData(structuredClone(response));
+    await writer.flush();
+    const room = response.rooms.join?.["!room:example.org"];
+    assert(room);
+    room["org.matrix.msc4222.state_after"] = { events: [] };
+    const expected = {
+      nextBatch: "large-cursor",
+      accountData: response.account_data.events,
+      roomsData: response.rooms,
+    };
+    const restored = await openStore();
+    await expect(restored.getSavedSync()).resolves.toEqual(expected);
+    const sync = syncCache();
+    const asyncStore = asyncCache();
+    const asyncReader = { lookup: (key: string) => asyncStore.lookup(key) };
+    const readParams = { storageRootDir: storage.root, store: asyncReader };
+    expect((await readPersistedStoreFromStore(readParams))?.savedSync).toEqual(expected);
+    await expect(hasMatrixSyncCacheStateInStore(readParams)).resolves.toBe(true);
+    const chunk = sync
+      .entries()
+      .find((row) => row.value.kind === "sync-chunk" && row.value.index === 10);
+    if (!chunk || chunk.value.kind !== "sync-chunk") {
+      throw new Error("expected sync chunk 10");
+    }
+    sync.register(chunk.key, { ...chunk.value, data: "modified" });
+    expect(await readPersistedStoreFromStore(readParams)).toMatchObject(invalidCache);
+    await expect(hasMatrixSyncCacheStateInStore(readParams)).resolves.toBe(false);
   });
-
-  it("ignores metadata with impossible chunk counts", async () => {
-    const storageRoot = createStorageRoot();
-    const store = createPluginStateSyncKeyedStoreForTests<MatrixSyncCacheRecord>(
-      "matrix",
-      openMatrixSyncCacheStoreOptions(storageRoot),
+  it("validates selected chunk JSON after earlier gaps with bulk stores", async () => {
+    const options = cacheOptions();
+    const { db } = openOpenClawStateDatabase({ env: options.env });
+    // Seed corrupt bytes before the runtime publishes any cached chunk facts.
+    const insert = db.prepare(
+      "INSERT INTO plugin_state_entries (plugin_id, namespace, entry_key, value_json, created_at, expires_at) VALUES ('matrix', 'sync-cache', ?, ?, 1, NULL)",
     );
-    store.register("current:meta", {
+    insert.run(
+      "current:meta",
+      JSON.stringify({ kind: "meta", version: 1, generation: "corrupt", chunkCount: 2 }),
+    );
+    insert.run("current:sync:corrupt:1", "invalid JSON");
+    const sync = syncCache();
+    const readParams = { storageRootDir: storage.root, store: asyncCache() };
+    const firstKey = "current:sync:corrupt:0";
+    for (const early of ["invalid", "missing"]) {
+      if (early === "invalid") {
+        sync.register(firstKey, { kind: "sync-chunk", index: -1, data: "" });
+      } else {
+        sync.delete(firstKey);
+      }
+      expect(await readPersistedStoreFromStore(readParams)).toMatchObject(invalidCache);
+      await expect(hasMatrixSyncCacheStateInStore(readParams)).resolves.toBe(false);
+    }
+    sync.register(firstKey, { kind: "sync-chunk", index: 0, data: "" });
+    await expect(readPersistedStoreFromStore(readParams)).rejects.toMatchObject({
+      code: "PLUGIN_STATE_CORRUPT",
+    });
+    await expect(hasMatrixSyncCacheStateInStore(readParams)).rejects.toMatchObject({
+      code: "PLUGIN_STATE_CORRUPT",
+    });
+  });
+  it("ignores metadata with impossible chunk counts", async () => {
+    syncCache().register("current:meta", {
       kind: "meta",
       version: 1,
       generation: "corrupt",
       chunkCount: 20_000,
       cleanShutdown: true,
     });
-
-    const syncStore = await SqliteBackedMatrixSyncStore.create(storageRoot);
+    const syncStore = await openStore();
     expect(syncStore.hasSavedSync()).toBe(false);
     await expect(syncStore.getSavedSyncToken()).resolves.toBe(null);
   });
-
   it("fails persistence instead of silently dropping sync data when sqlite is unavailable", async () => {
-    const storageRoot = createStorageRoot();
-    const runtime = getMatrixRuntime();
-    vi.spyOn(runtime.state, "openKeyedStore").mockImplementation(() => {
+    vi.spyOn(getMatrixRuntime().state, "openKeyedStoreV2").mockImplementation(() => {
       throw new Error("sqlite unavailable");
     });
-
-    const syncStore = await SqliteBackedMatrixSyncStore.create(storageRoot);
+    const syncStore = await openStore();
     await syncStore.setSyncData(createSyncResponse("unavailable-token"));
-
     await expect(syncStore.flush()).rejects.toThrow(/sqlite store is unavailable/i);
   });
-
-  it("claims current-token storage ownership when sync state is persisted", async () => {
-    const storageRoot = createStorageRoot();
-    createPluginStateSyncKeyedStoreForTests<Record<string, unknown>>(
-      "matrix",
-      openMatrixStorageMetaStoreOptions(storageRoot),
-    ).register("current", {
-      homeserver: "https://matrix.example.org",
-      userId: "@bot:example.org",
-      accountId: "default",
-      accessTokenHash: "token-hash",
-      deviceId: null,
-    });
-
-    const store = await SqliteBackedMatrixSyncStore.create(storageRoot);
-    await store.setSyncData(createSyncResponse("claimed-token"));
-    await store.flush();
-
-    const meta = createPluginStateSyncKeyedStoreForTests<Record<string, unknown>>(
-      "matrix",
-      openMatrixStorageMetaStoreOptions(storageRoot),
-    ).lookup("current");
-    expect(meta).toMatchObject({ currentTokenStateClaimed: true });
-  });
-
-  it("only treats sync state as restart-safe after a clean shutdown persist", async () => {
-    const storageRoot = createStorageRoot();
-
-    const firstStore = await SqliteBackedMatrixSyncStore.create(storageRoot);
-    await firstStore.setSyncData(createSyncResponse("s123"));
-    await firstStore.flush();
-
-    const afterDirtyPersist = await SqliteBackedMatrixSyncStore.create(storageRoot);
-    expect(afterDirtyPersist.hasSavedSync()).toBe(true);
-    expect(afterDirtyPersist.hasSavedSyncFromCleanShutdown()).toBe(false);
-
-    firstStore.markCleanShutdown();
-    await firstStore.flush();
-
-    const afterCleanShutdown = await SqliteBackedMatrixSyncStore.create(storageRoot);
-    expect(afterCleanShutdown.hasSavedSync()).toBe(true);
-    expect(afterCleanShutdown.hasSavedSyncFromCleanShutdown()).toBe(true);
-  });
-
-  it("clears the clean-shutdown marker once fresh sync data arrives", async () => {
-    const storageRoot = createStorageRoot();
-
-    const firstStore = await SqliteBackedMatrixSyncStore.create(storageRoot);
-    await firstStore.setSyncData(createSyncResponse("s123"));
-    firstStore.markCleanShutdown();
-    await firstStore.flush();
-
-    const restartedStore = await SqliteBackedMatrixSyncStore.create(storageRoot);
-    expect(restartedStore.hasSavedSyncFromCleanShutdown()).toBe(true);
-
-    await restartedStore.setSyncData(createSyncResponse("s456"));
-    await restartedStore.flush();
-
-    const afterNewSync = await SqliteBackedMatrixSyncStore.create(storageRoot);
-    expect(afterNewSync.hasSavedSync()).toBe(true);
-    expect(afterNewSync.hasSavedSyncFromCleanShutdown()).toBe(false);
-    await expect(afterNewSync.getSavedSyncToken()).resolves.toBe("s456");
-  });
-
-  it("freezes the last admitted cursor and marks only that cursor clean", async () => {
-    const storageRoot = createStorageRoot();
-    const store = await SqliteBackedMatrixSyncStore.create(storageRoot);
-
+  it.each([false, true])("freezes the admitted cursor with discard=%s", async (discard) => {
+    const store = await openStore();
     await store.setSyncData(createSyncResponse("before-freeze"));
     await store.freezeSyncCursorPersistence();
-    await store.setSyncData(createSyncResponse("after-freeze"));
-    store.markCleanShutdown();
+    if (discard) {
+      store.discardPendingSyncCursorPersistence();
+    } else {
+      await store.setSyncData(createSyncResponse("after-freeze"));
+      store.markCleanShutdown();
+    }
     await store.flush();
-
-    const persisted = await SqliteBackedMatrixSyncStore.create(storageRoot);
-    await expect(persisted.getSavedSyncToken()).resolves.toBe("before-freeze");
-    expect(persisted.hasSavedSyncFromCleanShutdown()).toBe(true);
+    const persisted = await openStore();
+    expect(persisted.hasSavedSync()).toBe(!discard);
+    await expect(persisted.getSavedSyncToken()).resolves.toBe(discard ? null : "before-freeze");
+    expect(persisted.hasSavedSyncFromCleanShutdown()).toBe(!discard);
   });
-
-  it("waits for an in-flight pre-freeze persist before freezing the cursor", async () => {
-    const storageRoot = createStorageRoot();
-    const store = await SqliteBackedMatrixSyncStore.create(storageRoot);
-
-    await store.setSyncData(createSyncResponse("in-flight"));
-    const flush = store.flush();
-    const freeze = store.freezeSyncCursorPersistence();
-    await Promise.all([flush, freeze]);
-    store.markCleanShutdown();
-    await store.flush();
-
-    const persisted = await SqliteBackedMatrixSyncStore.create(storageRoot);
-    await expect(persisted.getSavedSyncToken()).resolves.toBe("in-flight");
-    expect(persisted.hasSavedSyncFromCleanShutdown()).toBe(true);
-  });
-
-  it("discards pending cursor writes without marking a poisoned shutdown clean", async () => {
-    const storageRoot = createStorageRoot();
-    const store = await SqliteBackedMatrixSyncStore.create(storageRoot);
-
-    await store.setSyncData(createSyncResponse("suspect"));
-    await store.freezeSyncCursorPersistence();
-    store.discardPendingSyncCursorPersistence();
-    await store.flush();
-
-    const persisted = await SqliteBackedMatrixSyncStore.create(storageRoot);
-    expect(persisted.hasSavedSync()).toBe(false);
-    expect(persisted.hasSavedSyncFromCleanShutdown()).toBe(false);
-  });
-
   it("coalesces background persistence until the debounce window elapses", async () => {
     vi.useFakeTimers();
-    const storageRoot = createStorageRoot();
-
-    const store = await SqliteBackedMatrixSyncStore.create(storageRoot);
+    const store = await openStore();
     await store.setSyncData(createSyncResponse("s111"));
     await store.setSyncData(createSyncResponse("s222"));
     await store.storeClientOptions({ lazyLoadMembers: true });
-
-    const beforeDebounce = await SqliteBackedMatrixSyncStore.create(storageRoot);
-    expect(beforeDebounce.hasSavedSync()).toBe(false);
-
+    expect((await openStore()).hasSavedSync()).toBe(false);
     await vi.advanceTimersByTimeAsync(249);
-    const beforeElapsed = await SqliteBackedMatrixSyncStore.create(storageRoot);
-    expect(beforeElapsed.hasSavedSync()).toBe(false);
-
+    expect((await openStore()).hasSavedSync()).toBe(false);
     await vi.advanceTimersByTimeAsync(1);
     await Promise.resolve();
     await store.flush();
-
-    const persisted = await SqliteBackedMatrixSyncStore.create(storageRoot);
+    const persisted = await openStore();
     expect(persisted.hasSavedSync()).toBe(true);
     await expect(persisted.getSavedSyncToken()).resolves.toBe("s222");
     await expect(persisted.getClientOptions()).resolves.toEqual({ lazyLoadMembers: true });
   });
-
-  it("persists client options alongside sync state", async () => {
-    const storageRoot = createStorageRoot();
-
-    const firstStore = await SqliteBackedMatrixSyncStore.create(storageRoot);
-    await firstStore.storeClientOptions({ lazyLoadMembers: true });
-    await firstStore.flush();
-
-    const secondStore = await SqliteBackedMatrixSyncStore.create(storageRoot);
-    await expect(secondStore.getClientOptions()).resolves.toEqual({ lazyLoadMembers: true });
+});
+const userId = "@recipient:example.org";
+const roomId = "!verification:example.org";
+const cachedEventId = "$completed-verification";
+const liveEventId = "$fresh-verification";
+function verificationSync(nextBatch: string, eventId: string): ISyncResponse {
+  const event = {
+    event_id: eventId,
+    sender: "@sender:example.org",
+    origin_server_ts: 1,
+    type: "m.room.message",
+    content: {
+      msgtype: "m.key.verification.request",
+      body: "Verification request",
+      to: userId,
+      from_device: "SENDER",
+      methods: ["m.sas.v1"],
+    },
+  };
+  return matrixSyncResponse(nextBatch, roomId, event, "pagination-cursor");
+}
+async function ingressFixture(root: string) {
+  const store = await SqliteBackedMatrixSyncStore.create(root);
+  const client = new MatrixClient("https://example.org", "fixture-token", { syncStore: store });
+  return { store, client, entered: createDeferred<void>(), release: createDeferred<void>() };
+}
+async function expectCursor(root: string, store: SqliteBackedMatrixSyncStore, token: string) {
+  await store.flush();
+  expect(store.getSyncToken()).toBe(token);
+  await expect((await SqliteBackedMatrixSyncStore.create(root)).getSavedSyncToken()).resolves.toBe(
+    token,
+  );
+}
+describe("Matrix SDK sync-cache verification routing", () => {
+  const storage = useSyncStoreFixture("openclaw-matrix-sync-sdk-", true);
+  it.each([false, true])("routes live crypto: cache=%s", async (hasCache) => {
+    if (hasCache) {
+      const seed = await SqliteBackedMatrixSyncStore.create(storage.root);
+      await seed.setSyncData(verificationSync("saved-cursor", cachedEventId));
+      seed.markCleanShutdown();
+      await seed.flush();
+      await closeOpenClawStateDatabaseAsync();
+      resetPluginStateStoreForTests();
+    }
+    const store = await SqliteBackedMatrixSyncStore.create(storage.root);
+    expect(store.hasSavedSyncFromCleanShutdown()).toBe(hasCache);
+    await expect(store.getSavedSyncToken()).resolves.toBe(hasCache ? "saved-cursor" : null);
+    const cachedPrepared = createDeferred<void>();
+    if (!hasCache) {
+      cachedPrepared.resolve();
+    }
+    const stopped = createDeferred<void>();
+    const failed = createDeferred<never>();
+    const events: Array<string | undefined> = [];
+    const syncRequests: Array<string | null> = [];
+    const unexpectedRequests: string[] = [];
+    const fetchFixture: typeof fetch = async (input) => {
+      const url = new URL(input instanceof Request ? input.url : String(input));
+      expect(url.origin).toBe("https://example.org");
+      const endpoint = url.pathname;
+      if (endpoint === "/.well-known/matrix/client") {
+        return Response.json({}, { status: 404 });
+      }
+      const fixtures: Record<string, unknown> = {
+        "/versions": { versions: ["v1.11"], unstable_features: {} },
+        "/capabilities": { capabilities: {} },
+        "/pushrules/": {
+          global: { override: [], content: [], room: [], sender: [], underride: [] },
+        },
+        "/filter": { filter_id: "fixture-filter" },
+        "/keys/upload": { one_time_key_counts: { signed_curve25519: 100 } },
+        "/keys/query": { device_keys: {}, failures: {} },
+      };
+      const fixture = Object.entries(fixtures).find(([suffix]) => endpoint.endsWith(suffix));
+      if (fixture) {
+        return Response.json(fixture[1]);
+      }
+      if (endpoint.endsWith("/rtc/transports") || endpoint.endsWith("/room_keys/version")) {
+        return Response.json({ errcode: "M_NOT_FOUND", error: "Not configured" }, { status: 404 });
+      }
+      if (endpoint.endsWith("/sync")) {
+        syncRequests.push(url.searchParams.get("since"));
+        await cachedPrepared.promise;
+        return Response.json(verificationSync("fresh-cursor", liveEventId));
+      }
+      unexpectedRequests.push(endpoint);
+      const error = new Error(`Unexpected fixture request: ${endpoint}`);
+      failed.reject(error);
+      throw error;
+    };
+    // AutoDiscovery uses global fetch independently of the client fetch option.
+    vi.stubGlobal("fetch", fetchFixture);
+    const client = createClient({
+      baseUrl: "https://example.org",
+      userId,
+      deviceId: "RECIPIENT",
+      accessToken: "test-token",
+      fetchFn: fetchFixture,
+      store,
+    });
+    // Keep real client, Rust initialization and sync wiring; observe only the
+    // verification boundary so the test does not invent peer crypto responses.
+    const cryptoInput = vi
+      .spyOn(RustCrypto.prototype, "onLiveEventFromSync")
+      .mockResolvedValue(undefined);
+    client.on(ClientEvent.Event, (event) => events.push(event.getId()));
+    client.on(ClientEvent.SyncUnexpectedError, (error) => failed.reject(error));
+    client.on(ClientEvent.Sync, (state, _previous, data) => {
+      if (state === SyncState.Prepared && data?.fromCache) {
+        cachedPrepared.resolve();
+      }
+      if (state === SyncState.Syncing) {
+        client.stopClient();
+      }
+      if (state === SyncState.Stopped) {
+        stopped.resolve();
+      }
+    });
+    let started = false;
+    try {
+      await client.initRustCrypto({ useIndexedDB: false });
+      await client.startClient();
+      started = true;
+      await Promise.race([stopped.promise, failed.promise]);
+      expect(unexpectedRequests).toEqual([]);
+      expect(syncRequests).toEqual([hasCache ? "saved-cursor" : null]);
+      expect(events).toEqual(hasCache ? [cachedEventId, liveEventId] : [liveEventId]);
+      expect(
+        client
+          .getRoom(roomId)
+          ?.getLiveTimeline()
+          .getEvents()
+          .map((event) => event.getId()),
+      ).toEqual(events);
+      expect(store.getSyncToken()).toBe("fresh-cursor");
+      expect(cryptoInput.mock.calls.map(([event]) => event.getId())).toEqual([liveEventId]);
+    } finally {
+      client.stopClient();
+      if (started) {
+        await stopped.promise;
+      }
+      await store.flush();
+    }
   });
-
-  it("ignores legacy raw sync cache files", async () => {
-    const storageRoot = createStorageRoot();
-
-    fs.writeFileSync(
-      path.join(storageRoot, "bot-storage.json"),
-      JSON.stringify({
-        next_batch: "legacy-token",
-        rooms: {
-          join: {},
-        },
-        account_data: {
-          events: [],
-        },
-      }),
-      "utf8",
-    );
-
-    const store = await SqliteBackedMatrixSyncStore.create(storageRoot);
-    expect(store.hasSavedSync()).toBe(false);
-    await expect(store.getSavedSyncToken()).resolves.toBe(null);
+});
+describe("Matrix sync ingress admission", () => {
+  const storage = useSyncStoreFixture("openclaw-matrix-sync-ingress-");
+  it("holds the cursor until admission and reports failure without losing the previous cursor", async () => {
+    const { store, client, entered, release } = await ingressFixture(storage.root);
+    const failure = new Error("ingress storage unavailable");
+    const errors: Error[] = [];
+    const savedSyncContexts: boolean[] = [];
+    client.on("sync.unexpected_error", (error) => errors.push(error));
+    const dispose = await client.bindSyncIngress(async (sync, { hasSavedSync }) => {
+      savedSyncContexts.push(hasSavedSync);
+      if (sync.next_batch === "rejected-cursor") {
+        throw failure;
+      }
+      entered.resolve();
+      await release.promise;
+    });
+    let pending: Promise<void> | undefined;
+    try {
+      // Classic sync assigns its speculative token before invoking setSyncData.
+      store.setSyncToken("accepted-cursor");
+      pending = store.setSyncData(verificationSync("accepted-cursor", liveEventId));
+      await entered.promise;
+      await store.flush();
+      expect(store.getSyncToken()).toBeNull();
+      expect((await SqliteBackedMatrixSyncStore.create(storage.root)).hasSavedSync()).toBe(false);
+      release.resolve();
+      await pending;
+      await expectCursor(storage.root, store, "accepted-cursor");
+      store.setSyncToken("rejected-cursor");
+      await expect(
+        store.setSyncData(verificationSync("rejected-cursor", "$rejected")),
+      ).rejects.toBe(failure);
+      await expectCursor(storage.root, store, "accepted-cursor");
+      expect(savedSyncContexts).toEqual([false, false]);
+      expect(errors).toEqual([failure]);
+    } finally {
+      release.resolve();
+      await pending;
+      dispose();
+      await client.stopWithoutPersist();
+    }
+  });
+  it("joins an admitted write during shutdown without publishing its frozen cursor", async () => {
+    const seed = await SqliteBackedMatrixSyncStore.create(storage.root);
+    await seed.setSyncData(verificationSync("previous-cursor", cachedEventId));
+    seed.setSyncToken("previous-cursor");
+    await seed.flush();
+    const { store, client, entered, release } = await ingressFixture(storage.root);
+    const admittedBatches: string[] = [];
+    const dispose = await client.bindSyncIngress(async (sync, { hasSavedSync }) => {
+      admittedBatches.push(sync.next_batch);
+      expect(hasSavedSync).toBe(true);
+      if (sync.next_batch === "previous-cursor") {
+        return;
+      }
+      entered.resolve();
+      await release.promise;
+    });
+    let pending: Promise<void> | undefined;
+    let freeze: Promise<void> | undefined;
+    try {
+      store.setSyncToken("shutdown-cursor");
+      pending = store.setSyncData(verificationSync("shutdown-cursor", liveEventId));
+      await entered.promise;
+      let frozen = false;
+      freeze = store.freezeSyncCursorPersistence().then(() => {
+        frozen = true;
+      });
+      await Promise.resolve();
+      expect(frozen).toBe(false);
+      release.resolve();
+      await Promise.all([pending, freeze]);
+      store.markCleanShutdown();
+      await expectCursor(storage.root, store, "previous-cursor");
+      expect(admittedBatches).toEqual(["previous-cursor", "shutdown-cursor"]);
+    } finally {
+      release.resolve();
+      await Promise.all([pending, freeze]);
+      dispose();
+      await client.stopWithoutPersist();
+    }
   });
 });

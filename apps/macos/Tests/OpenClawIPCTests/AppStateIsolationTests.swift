@@ -9,6 +9,59 @@ import Testing
 @MainActor
 struct AppStateIsolationTests {
     @Test
+    func `named remote profile stop leaves other profiles' Gateway services alone`() async throws {
+        try #require(AppProfile.current.isActive)
+        let home = try makeTempDirForTests()
+        defer { try? FileManager.default.removeItem(at: home) }
+        let config = home.appendingPathComponent("openclaw.json")
+        try Data(#"{"gateway":{"mode":"remote"}}"#.utf8).write(to: config)
+        try await TestIsolation.withIsolatedState(
+            launchAgentHomeDirectory: home,
+            env: ["OPENCLAW_CONFIG_PATH": config.path, "OPENCLAW_GATEWAY_PORT": nil])
+        {
+            let defaultProfile = AppProfile(environment: [:])
+            let plist = GatewayLaunchAgentManager.plistURL(homeDirectory: home, profile: defaultProfile)
+            let runtime = defaultProfile.stateDirectoryURL(homeDirectory: home)
+                .appendingPathComponent("runtime/build-one")
+            let original = try PropertyListSerialization.data(
+                fromPropertyList: [
+                    "ProgramArguments": [
+                        runtime.appendingPathComponent("bin/bun").path,
+                        runtime.appendingPathComponent("lib/node_modules/openclaw/openclaw.mjs").path,
+                        "gateway", "--port", String(defaultProfile.defaultGatewayPort),
+                    ],
+                ],
+                format: .xml,
+                options: 0)
+            try FileManager.default.createDirectory(
+                at: plist.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try original.write(to: plist)
+            let failure = "existing managed handoff lease is incompatible; " +
+                "retain diagnostics and run openclaw triage manually"
+            GatewayLaunchAgentManager.setTestingDisableLaunchAgentMarkerURL(home.appendingPathComponent("no-marker"))
+            GatewayLaunchAgentManager.setTestingInterceptDaemonCommands(true)
+            GatewayLaunchAgentManager.setTestingDaemonStatusPayload(#"{"ok":false,"error":"\#(failure)"}"#)
+            GatewayLaunchAgentManager.clearTestingDaemonCommandCalls()
+            defer {
+                GatewayLaunchAgentManager.setTestingDisableLaunchAgentMarkerURL(nil)
+                GatewayLaunchAgentManager.setTestingInterceptDaemonCommands(false)
+                GatewayLaunchAgentManager.setTestingDaemonStatusPayload(nil)
+                GatewayLaunchAgentManager.clearTestingDaemonCommandCalls()
+            }
+
+            let manager = GatewayProcessManager()
+            manager.desiredActive = true
+            manager.stop()
+            await manager.waitForStartupAttempt()
+
+            #expect(GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot().isEmpty)
+            #expect(manager.status == .stopped)
+            #expect(manager.lastFailureReason == nil)
+            #expect(try Data(contentsOf: plist) == original)
+        }
+    }
+
+    @Test
     func `automatic recovery preserves a named profile port ownership failure`() async throws {
         try #require(AppProfile.current.isActive)
         let configPath = TestIsolation.tempConfigPath()
@@ -95,7 +148,8 @@ struct AppStateIsolationTests {
             let state = AppStateStore.shared
             let previousMode = state.connectionMode
             state.connectionMode = .local
-            let manager = GatewayProcessManager()
+            let clock = ManualTestClock()
+            let manager = GatewayProcessManager(readinessClock: clock)
             let connection = GatewayConnection(testEndpointProvider: { throw CancellationError() })
             manager.setTestingConnection(connection)
             manager.setTestingSkipControlChannelRefresh(true)
@@ -116,6 +170,10 @@ struct AppStateIsolationTests {
             // An inconclusive inspection defers installation, so readiness fails with nothing
             // listening. No other process owns the port; the operator must see the real cause.
             manager.setActive(true)
+            await clock.waitForSleep(until: clock.now.advanced(by: .milliseconds(300)))
+            clock.advance(by: .seconds(2))
+            await clock.waitForSleep(until: clock.now.advanced(by: .milliseconds(300)))
+            clock.advance(by: .seconds(GatewayLaunchAgentManager.reusedLaunchdColdStartTolerance))
             await manager.waitForStartupAttempt()
             guard case let .failed(reason) = manager.status else {
                 Issue.record("expected a terminal startup failure")
@@ -249,7 +307,7 @@ struct AppStateIsolationTests {
 
             let stateDirectory = OpenClawPaths.stateDirURL
             #expect(stateDirectory != launchState)
-            #expect(stateDirectory.path.hasPrefix(fm.temporaryDirectory.path))
+            #expect(stateDirectory.path.hasPrefix(temporaryDirectoryForTests().path + "/"))
             #expect(OpenClawConfigFile.saveDict([
                 "gateway": [
                     "mode": "remote",
@@ -357,7 +415,7 @@ struct ProfileChatPreferencesTests {
             defaultDefaults.set(true, forKey: toolActivityKey)
 
             try await AppKitTestSupport.startApplication()
-            #expect(AppKitTestSupport.didSetActivationPolicy)
+            #expect(AppKitTestSupport.hasAccessoryActivationPolicy)
             let transport = ProfileModelPickerTransport()
             let controller = WebChatSwiftUIWindowController(
                 sessionKey: ProfileModelPickerTransport.sessionKey,

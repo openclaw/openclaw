@@ -3,13 +3,18 @@ import type {
   UnifiedModelCatalogKind,
 } from "@openclaw/model-catalog-core/model-catalog-types";
 import type { ModelCatalogEntry } from "../agents/model-catalog.types.js";
+import type { ProviderAuthResolver } from "../agents/provider-auth-resolver.types.js";
 import type { ModelProviderConfig } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ProviderCatalogOutcome } from "./provider-catalog-outcome.js";
+import type { ProviderBuildUnknownModelHintContext } from "./provider-transport.types.js";
 
 export type { ProviderCatalogOutcome } from "./provider-catalog-outcome.js";
 
-export type ProviderCatalogOrder = "simple" | "profile" | "paired" | "late";
+export const PROVIDER_CATALOG_ORDERS = ["simple", "profile", "paired", "late"] as const;
+export type ProviderCatalogOrder = (typeof PROVIDER_CATALOG_ORDERS)[number];
+
+export type ProviderConfiguredModelRef = { provider: string; modelId: string; baseUrl?: string };
 
 export type ProviderCatalogContext = {
   /** Acquisition lifetime; release awaited work and join its cleanup when aborted. */
@@ -32,16 +37,7 @@ export type ProviderCatalogContext = {
     options?: {
       oauthMarker?: string;
     },
-  ) => {
-    apiKey: string | undefined;
-    discoveryApiKey?: string;
-    mode: "api_key" | "aws-sdk" | "oauth" | "token" | "none";
-    source: "env" | "profile" | "none";
-    profileId?: string;
-    /** Credential preparation exhausted its candidates; not an unconfigured provider. */
-    preparationFailed?: boolean;
-    authFlow?: string;
-  };
+  ) => ReturnType<ProviderAuthResolver>;
 };
 
 export type ProviderCatalogResult =
@@ -59,6 +55,11 @@ export type ProviderCatalogResult =
 export type ProviderPluginCatalog = {
   order?: ProviderCatalogOrder;
   run: (ctx: ProviderCatalogContext) => Promise<ProviderCatalogResult>;
+  /** Pure advisory projection; skip other endpoints and never perform discovery or I/O. */
+  getUnlistedConfiguredModelIds?: (
+    catalog: NonNullable<ProviderCatalogOutcome["modelIdCatalog"]>,
+    configuredModels: readonly ProviderConfiguredModelRef[],
+  ) => readonly string[];
 };
 
 export type UnifiedModelCatalogProviderContext = ProviderCatalogContext & {
@@ -76,13 +77,7 @@ export type UnifiedModelCatalogProviderPlugin = {
     | Promise<readonly UnifiedModelCatalogEntry[] | null | undefined>
     | null
     | undefined;
-  liveCatalog?: (
-    ctx: UnifiedModelCatalogProviderContext,
-  ) =>
-    | readonly UnifiedModelCatalogEntry[]
-    | Promise<readonly UnifiedModelCatalogEntry[] | null | undefined>
-    | null
-    | undefined;
+  liveCatalog?: NonNullable<UnifiedModelCatalogProviderPlugin["staticCatalog"]>;
 };
 
 /**
@@ -91,15 +86,7 @@ export type UnifiedModelCatalogProviderPlugin = {
  * @deprecated Use manifest `modelCatalog.suppressions`. Runtime suppression
  * hooks are no longer called by model resolution.
  */
-export type ProviderBuiltInModelSuppressionContext = {
-  config?: OpenClawConfig;
-  agentDir?: string;
-  workspaceDir?: string;
-  env: NodeJS.ProcessEnv;
-  provider: string;
-  modelId: string;
-  baseUrl?: string;
-};
+export type ProviderBuiltInModelSuppressionContext = ProviderBuildUnknownModelHintContext;
 
 export type ProviderBuiltInModelSuppressionResult = {
   suppress: boolean;

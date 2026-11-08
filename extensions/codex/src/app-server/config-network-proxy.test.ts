@@ -13,14 +13,6 @@ describe("Codex network proxy config admission", () => {
       },
     },
     {
-      name: "invalid sibling field",
-      field: "appServer.remoteWorkspaceRoot",
-      appServer: {
-        remoteWorkspaceRoot: " ",
-        networkProxy: { enabled: true, domains: { "example.com": "allow" } },
-      },
-    },
-    {
       name: "malformed auth input",
       field: "appServer.authToken",
       appServer: {

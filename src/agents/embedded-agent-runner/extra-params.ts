@@ -9,7 +9,6 @@ import {
   isNativeWebSearchAllowedByToolPolicy,
 } from "../../agents/codex-native-web-search-core.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { createGoogleThinkingPayloadWrapper } from "../../llm/providers/stream-wrappers/google.js";
 import { createMinimaxThinkingDisabledWrapper } from "../../llm/providers/stream-wrappers/minimax.js";
 import {
   createSiliconFlowThinkingWrapper,
@@ -21,11 +20,15 @@ import {
   createOpenAIResponsesContextManagementWrapper,
   createOpenAIStringContentWrapper,
 } from "../../llm/providers/stream-wrappers/openai.js";
-import { createOpenRouterSystemCacheWrapper } from "../../llm/providers/stream-wrappers/proxy.js";
+import {
+  createOpenRouterSystemCacheWrapper,
+  OPENROUTER_RESPONSE_CACHE_TTL_KEYS,
+} from "../../llm/providers/stream-wrappers/proxy.js";
 import { streamWithPayloadPatch } from "../../llm/providers/stream-wrappers/stream-payload-utils.js";
 import type { SimpleStreamOptions } from "../../llm/types.js";
 import {
   createDeepSeekV4OpenAICompatibleThinkingWrapper,
+  createGoogleThinkingPayloadWrapper,
   createThinkingOnlyFinalTextWrapper,
 } from "../../plugin-sdk/provider-stream-shared.js";
 import {
@@ -41,11 +44,16 @@ import {
   sanitizeExtraParamsRecord,
 } from "../model-extra-params.js";
 import { createOpenAICompletionsPayloadPolicyWrapper } from "../openai-completions-payload-policy.js";
+import type { ModelCallUrgency } from "../run-trigger.js";
 import type { AgentRuntimeTransport } from "../runtime-plan/types.js";
 import type { StreamFn } from "../runtime/index.js";
 import type { SettingsManager } from "../sessions/index.js";
 import { log } from "./logger.js";
-import { parseCacheRetention, resolveCacheRetention } from "./prompt-cache-retention.js";
+import {
+  parseCacheRetention,
+  resolveCacheRetention,
+  resolveExplicitCachedContent,
+} from "./prompt-cache-retention.js";
 import type { ProviderThinkLevel } from "./utils.js";
 
 function requireBaseStreamFn(streamFn: StreamFn | undefined): StreamFn {
@@ -78,6 +86,8 @@ export function resolveExtraParams(params: {
     });
   const sources = [defaultParams, modelParams, agentModelParams, agentParams];
   const merged = Object.assign({}, ...sources);
+  canonicalizeExtraParamAlias(merged, sources, ["serviceTier", "service_tier"]);
+  canonicalizeExtraParamAlias(merged, sources, ["fastMode", "fast_mode"]);
   canonicalizeExtraParamAlias(merged, sources, ["parallel_tool_calls", "parallelToolCalls"]);
   canonicalizeExtraParamAlias(
     merged,
@@ -102,6 +112,7 @@ export function resolveExtraParams(params: {
 }
 
 type CacheRetentionStreamOptions = SimpleStreamOptions & {
+  streaming?: boolean;
   cachedContent?: string;
   topP?: number;
   frequencyPenalty?: number;
@@ -119,6 +130,7 @@ function resolveSupportedTransport(value: unknown): AgentRuntimeTransport | unde
 
 export function resolvePreparedExtraParams(params: {
   cfg: OpenClawConfig | undefined;
+  transportConfig?: OpenClawConfig;
   provider: string;
   modelId: string;
   agentDir?: string;
@@ -126,20 +138,12 @@ export function resolvePreparedExtraParams(params: {
   extraParamsOverride?: Record<string, unknown>;
   thinkingLevel?: ProviderThinkLevel;
   agentId?: string;
-  resolvedExtraParams?: Record<string, unknown>;
   model?: ProviderRuntimeModel;
   resolvedTransport?: AgentRuntimeTransport;
   providerRuntimeHandle?: ProviderRuntimePluginHandle;
   auth?: ProviderPrepareExtraParamsContext["auth"];
 }): Record<string, unknown> {
-  const resolvedExtraParams =
-    params.resolvedExtraParams ??
-    resolveExtraParams({
-      cfg: params.cfg,
-      provider: params.provider,
-      modelId: params.modelId,
-      agentId: params.agentId,
-    });
+  const resolvedExtraParams = resolveExtraParams(params);
   const override = stripRequestScopedExtraParams(
     sanitizeExtraParamsOverride(params.extraParamsOverride),
   );
@@ -147,6 +151,12 @@ export function resolvePreparedExtraParams(params: {
     ...sanitizeExtraParamsRecord(resolvedExtraParams),
     ...override,
   };
+  canonicalizeExtraParamAlias(
+    merged,
+    [resolvedExtraParams, override],
+    ["serviceTier", "service_tier"],
+  );
+  canonicalizeExtraParamAlias(merged, [resolvedExtraParams, override], ["fastMode", "fast_mode"]);
   canonicalizeMaxTokensParam({
     merged,
     sources: [resolvedExtraParams, override],
@@ -165,13 +175,13 @@ export function resolvePreparedExtraParams(params: {
   const { plugin } = ensureProviderRuntimePluginHandle({
     provider: params.provider,
     modelId: params.modelId,
-    config: params.cfg,
+    config: params.transportConfig ?? params.cfg,
     workspaceDir: params.workspaceDir,
     runtimeHandle:
       params.providerRuntimeHandle ?? getModelProviderRuntimePluginHandle(params.model),
   });
   const context = {
-    config: params.cfg,
+    config: params.transportConfig ?? params.cfg,
     agentDir: params.agentDir,
     workspaceDir: params.workspaceDir,
     provider: params.provider,
@@ -214,10 +224,6 @@ function stripRequestScopedExtraParams(
   return Object.keys(filtered).length > 0 ? filtered : undefined;
 }
 
-function hasRequestScopedExtraParams(value: Record<string, unknown>): boolean {
-  return [...REQUEST_SCOPED_EXTRA_PARAM_KEYS].some((key) => Object.hasOwn(value, key));
-}
-
 function applyDefaultOpenAIGptRuntimeParams(
   params: { provider: string; modelId: string },
   merged: Record<string, unknown>,
@@ -225,36 +231,33 @@ function applyDefaultOpenAIGptRuntimeParams(
   if (params.provider !== "openai" || !/^gpt-5(?:[.-]|$)/i.test(params.modelId)) {
     return;
   }
-  if (
-    !Object.hasOwn(merged, "parallel_tool_calls") &&
-    !Object.hasOwn(merged, "parallelToolCalls")
-  ) {
-    merged.parallel_tool_calls = true;
-  }
-  if (!Object.hasOwn(merged, "text_verbosity") && !Object.hasOwn(merged, "textVerbosity")) {
-    merged.text_verbosity = "low";
+  for (const [canonical, alias, value] of [
+    ["parallel_tool_calls", "parallelToolCalls", true],
+    ["text_verbosity", "textVerbosity", "low"],
+  ] as const) {
+    if (!Object.hasOwn(merged, canonical) && !Object.hasOwn(merged, alias)) {
+      merged[canonical] = value;
+    }
   }
 }
 
 export function resolveAgentTransportOverride(params: {
-  settingsManager: Pick<SettingsManager, "getGlobalSettings" | "getProjectSettings">;
+  settingsManager: Pick<SettingsManager, "getGlobalSettings">;
   effectiveExtraParams: Record<string, unknown> | undefined;
 }): AgentRuntimeTransport | undefined {
   const globalSettings = params.settingsManager.getGlobalSettings();
-  const projectSettings = params.settingsManager.getProjectSettings();
-  if (Object.hasOwn(globalSettings, "transport") || Object.hasOwn(projectSettings, "transport")) {
+  if (Object.hasOwn(globalSettings, "transport")) {
     return undefined;
   }
   return resolveSupportedTransport(params.effectiveExtraParams?.transport);
 }
 
 export function resolveExplicitSettingsTransport(params: {
-  settingsManager: Pick<SettingsManager, "getGlobalSettings" | "getProjectSettings">;
+  settingsManager: Pick<SettingsManager, "getGlobalSettings">;
   sessionTransport: unknown;
 }): AgentRuntimeTransport | undefined {
   const globalSettings = params.settingsManager.getGlobalSettings();
-  const projectSettings = params.settingsManager.getProjectSettings();
-  if (!Object.hasOwn(globalSettings, "transport") && !Object.hasOwn(projectSettings, "transport")) {
+  if (!Object.hasOwn(globalSettings, "transport")) {
     return undefined;
   }
   return resolveSupportedTransport(params.sessionTransport);
@@ -275,7 +278,6 @@ function createStreamFnWithExtraParams(
   baseStreamFn: StreamFn | undefined,
   extraParams: Record<string, unknown> | undefined,
   provider: string,
-  model?: ProviderRuntimeModel,
 ): StreamFn | undefined {
   if (!extraParams || Object.keys(extraParams).length === 0) {
     return undefined;
@@ -291,11 +293,16 @@ function createStreamFnWithExtraParams(
   }
 
   const streamParams: CacheRetentionStreamOptions = {};
+  if (extraParams.promptCacheTtl === "30m" || extraParams.promptCacheTtl === "12h") {
+    streamParams.promptCacheTtl = extraParams.promptCacheTtl;
+  } else if (extraParams.promptCacheTtl !== undefined) {
+    log.warn('ignoring invalid promptCacheTtl param; expected "30m" or "12h"');
+  }
   if (typeof extraParams.temperature === "number") {
     streamParams.temperature = extraParams.temperature;
   }
-  if (typeof extraParams.topP === "number") {
-    streamParams.topP = extraParams.topP;
+  if (typeof extraParams.streaming === "boolean") {
+    streamParams.streaming = extraParams.streaming;
   }
   const maxTokens = resolveMaxTokensParam(extraParams);
   if (maxTokens !== undefined) {
@@ -322,19 +329,15 @@ function createStreamFnWithExtraParams(
         : typeof extraParams.transport;
     log.warn(`ignoring invalid transport param: ${transportSummary}`);
   }
-  const cachedContent =
-    typeof extraParams.cachedContent === "string"
-      ? extraParams.cachedContent
-      : typeof extraParams.cached_content === "string"
-        ? extraParams.cached_content
-        : undefined;
-  if (typeof cachedContent === "string" && cachedContent.trim()) {
-    streamParams.cachedContent = cachedContent.trim();
+  const cachedContent = resolveExplicitCachedContent(extraParams);
+  if (cachedContent) {
+    streamParams.cachedContent = cachedContent;
   }
 
-  // Camel-case request overrides win over configured snake-case penalties.
+  // Camel-case request overrides win over configured snake-case sampling values.
   // Transports still decide which API accepts each sampling parameter.
   for (const keys of [
+    ["topP", "top_p"],
     ["frequencyPenalty", "frequency_penalty"],
     ["presencePenalty", "presence_penalty"],
   ] as const) {
@@ -351,43 +354,32 @@ function createStreamFnWithExtraParams(
     streamParams.stop = resolvedStop;
   }
 
-  const readCacheCompat = (m?: ProviderRuntimeModel) =>
-    m?.api === "openai-completions" ? resolveOpenAICompletionsCompat(m) : m?.compat;
-
-  if (log.isEnabled("debug")) {
-    const initialCacheRetention = resolveCacheRetention(
+  const resolveModelCacheRetention = (candidate?: ProviderRuntimeModel) =>
+    resolveCacheRetention(
       extraParams,
       provider,
-      typeof model?.api === "string" ? model.api : undefined,
-      typeof model?.id === "string" ? model.id : undefined,
-      readCacheCompat(model),
-      model?.baseUrl,
+      typeof candidate?.api === "string" ? candidate.api : undefined,
+      typeof candidate?.id === "string" ? candidate.id : undefined,
+      candidate?.api === "openai-completions"
+        ? resolveOpenAICompletionsCompat(candidate)
+        : candidate?.compat,
+      candidate?.baseUrl,
     );
-    if (Object.keys(streamParams).length > 0 || initialCacheRetention) {
-      const debugParams = { ...streamParams, cacheRetention: initialCacheRetention };
-      log.debug(`creating streamFn wrapper with params: ${JSON.stringify(debugParams)}`);
-    }
-  }
 
   const underlying = requireBaseStreamFn(baseStreamFn);
   return (callModel, context, options) => {
-    const cacheRetention = resolveCacheRetention(
-      extraParams,
-      provider,
-      typeof callModel.api === "string" ? callModel.api : undefined,
-      typeof callModel.id === "string" ? callModel.id : undefined,
-      readCacheCompat(callModel),
-      callModel.baseUrl,
-    );
+    const cacheRetention = resolveModelCacheRetention(callModel);
     if (Object.keys(streamParams).length === 0 && !cacheRetention) {
       return underlying(callModel, context, options);
     }
     const effectiveCacheRetention = options?.cacheRetention ?? cacheRetention;
+    const promptCacheTtl = options?.promptCacheTtl ?? streamParams.promptCacheTtl;
     return underlying(callModel, context, {
       ...streamParams,
       ...options,
       // Own undefined means no request override; explicit none/short/long still wins.
       ...(effectiveCacheRetention ? { cacheRetention: effectiveCacheRetention } : {}),
+      ...(promptCacheTtl ? { promptCacheTtl } : {}),
     });
   };
 }
@@ -407,12 +399,7 @@ function canonicalizeExtraParamAlias(
 
 const OPENROUTER_RESPONSE_CACHE_PARAM_ALIASES = [
   ["responseCache", "response_cache"],
-  [
-    "responseCacheTtlSeconds",
-    "response_cache_ttl_seconds",
-    "responseCacheTtl",
-    "response_cache_ttl",
-  ],
+  OPENROUTER_RESPONSE_CACHE_TTL_KEYS,
   ["responseCacheClear", "response_cache_clear"],
 ] as const;
 
@@ -441,160 +428,30 @@ function createParallelToolCallsWrapper(
     if (!GPT_PARALLEL_TOOL_CALLS_APIS.has(model.api)) {
       return underlying(model, context, options);
     }
-    log.debug(
-      `applying parallel_tool_calls=${enabled} for ${model.provider ?? "unknown"}/${model.id ?? "unknown"} api=${model.api}`,
-    );
     return streamWithPayloadPatch(underlying, model, context, options, (payloadObj) => {
       payloadObj.parallel_tool_calls = enabled;
     });
   };
 }
 
-type ApplyExtraParamsContext = {
-  agent: { streamFn?: StreamFn };
-  provider: string;
-  modelId: string;
-  thinkingLevel?: ProviderThinkLevel;
-  model?: ProviderRuntimeModel;
-  effectiveExtraParams: Record<string, unknown>;
-  override?: Record<string, unknown>;
-};
+const DEEPSEEK_V4_MODEL_IDS = new Set(["deepseek-flash", "deepseek-v4-flash", "deepseek-v4-pro"]);
 
-function applyPrePluginStreamWrappers(ctx: ApplyExtraParamsContext): void {
-  const baseExtraParams =
-    ctx.override && hasRequestScopedExtraParams(ctx.override)
-      ? stripRequestScopedExtraParams(ctx.effectiveExtraParams)
-      : ctx.effectiveExtraParams;
-  const streamParams = ctx.override ? { ...baseExtraParams, ...ctx.override } : baseExtraParams;
-  const wrappedStreamFn = createStreamFnWithExtraParams(
-    ctx.agent.streamFn,
-    streamParams,
-    ctx.provider,
-    ctx.model,
-  );
-
-  if (wrappedStreamFn) {
-    log.debug(`applying extraParams to agent streamFn for ${ctx.provider}/${ctx.modelId}`);
-    ctx.agent.streamFn = wrappedStreamFn;
-  }
-
-  if (
-    shouldApplySiliconFlowThinkingOffCompat({
-      provider: ctx.provider,
-      modelId: ctx.modelId,
-      thinkingLevel: ctx.thinkingLevel,
-    })
-  ) {
-    log.debug(
-      `normalizing thinking=off to thinking=null for SiliconFlow compatibility (${ctx.provider}/${ctx.modelId})`,
-    );
-    ctx.agent.streamFn = createSiliconFlowThinkingWrapper(ctx.agent.streamFn);
-  }
-}
-
-function applyPostPluginStreamWrappers(
-  ctx: ApplyExtraParamsContext & { providerWrapperHandled: boolean },
-): void {
-  const streamParams = ctx.override
-    ? { ...ctx.effectiveExtraParams, ...ctx.override }
-    : ctx.effectiveExtraParams;
-  ctx.agent.streamFn = createOpenRouterSystemCacheWrapper(ctx.agent.streamFn, streamParams);
-  ctx.agent.streamFn = createOpenAIStringContentWrapper(ctx.agent.streamFn);
-  ctx.agent.streamFn = createOpenAICompletionsStrictMessageKeysWrapper(ctx.agent.streamFn);
-  ctx.agent.streamFn = createOpenAICompletionsToolsCompatWrapper(ctx.agent.streamFn);
-
-  if (!ctx.providerWrapperHandled) {
-    ctx.agent.streamFn = createDeepSeekV4OpenAICompatibleThinkingWrapper({
-      baseStreamFn: ctx.agent.streamFn,
-      thinkingLevel: ctx.thinkingLevel,
-      shouldPatchModel: (model) =>
-        isDeepSeekV4OpenAICompletionsModel(model) &&
-        !isMicrosoftFoundryProviderId(model.provider) &&
-        deepSeekV4NativeThinkingAllowedByCompat(model),
-    });
-    ctx.agent.streamFn = createDeepSeekV4NonNativeCompatSanitizerWrapper(ctx.agent.streamFn);
-
-    // Unowned MiMo proxy routes bypass the Xiaomi hook but still need its
-    // DeepSeek-style reasoning_content format for multi-turn tool calls.
-    ctx.agent.streamFn = createDeepSeekV4OpenAICompatibleThinkingWrapper({
-      baseStreamFn: ctx.agent.streamFn,
-      thinkingLevel: ctx.thinkingLevel,
-      shouldPatchModel: isMiMoReasoningOpenAICompatibleModel,
-    });
-    // Legacy MiMo V2 can put final visible answers in reasoning_content. Apply
-    // the response-side fallback here for custom Xiaomi-compatible proxy routes.
-    ctx.agent.streamFn = createThinkingOnlyFinalTextWrapper({
-      baseStreamFn: ctx.agent.streamFn,
-      shouldPatchModel: isMiMoReasoningAsVisibleTextOpenAICompatibleModel,
-    });
-
-    // Guard Google-family payloads against invalid negative thinking budgets
-    // emitted by upstream model-ID heuristics for Gemini 3.1 variants.
-    ctx.agent.streamFn = createGoogleThinkingPayloadWrapper(ctx.agent.streamFn, ctx.thinkingLevel);
-
-    // Work around upstream shared model runtime hardcoding `store: false` for Responses API.
-    // Force `store=true` for direct OpenAI Responses models and auto-enable
-    // server-side compaction for compatible Responses payloads.
-    ctx.agent.streamFn = createOpenAIResponsesContextManagementWrapper(
-      ctx.agent.streamFn,
-      ctx.effectiveExtraParams,
-    );
-  }
-
-  // MiniMax's Anthropic-compatible stream can leak reasoning_content into the
-  // visible reply path because it does not emit native Anthropic thinking
-  // blocks. Disable thinking unless an earlier wrapper already set it.
-  ctx.agent.streamFn = createMinimaxThinkingDisabledWrapper(ctx.agent.streamFn, ctx.thinkingLevel);
-
-  ctx.agent.streamFn = createOpenAICompletionsPayloadPolicyWrapper(
-    requireBaseStreamFn(ctx.agent.streamFn),
-    [ctx.effectiveExtraParams, ctx.override],
-  );
-
-  const rawParallelToolCalls = resolveAliasedParamValue(
-    [ctx.effectiveExtraParams, ctx.override],
-    ["parallel_tool_calls", "parallelToolCalls"],
-  );
-  if (rawParallelToolCalls === undefined) {
-    return;
-  }
-  if (typeof rawParallelToolCalls === "boolean") {
-    ctx.agent.streamFn = createParallelToolCallsWrapper(ctx.agent.streamFn, rawParallelToolCalls);
-    return;
-  }
-  if (rawParallelToolCalls === null) {
-    log.debug("parallel_tool_calls suppressed by null override, skipping injection");
-    return;
-  }
-  const summary =
-    typeof rawParallelToolCalls === "string" ? rawParallelToolCalls : typeof rawParallelToolCalls;
-  log.warn(`ignoring invalid parallel_tool_calls param: ${summary}`);
-}
-
-function normalizeDeepSeekV4CandidateId(modelId: unknown): string | undefined {
-  if (typeof modelId !== "string") {
-    return undefined;
-  }
+function normalizeCompatibleModelId(modelId: string): string {
   const normalized = modelId.trim().toLowerCase();
   const suffixIndex = normalized.indexOf(":");
   const withoutSuffix = suffixIndex === -1 ? normalized : normalized.slice(0, suffixIndex);
-  return withoutSuffix.split("/").pop();
+  return withoutSuffix.slice(withoutSuffix.lastIndexOf("/") + 1);
 }
 
-function isDeepSeekV4OpenAICompletionsModel(model: Parameters<StreamFn>[0]): boolean {
-  const normalizedModelId = normalizeDeepSeekV4CandidateId(model.id);
-  return (
-    model.api === "openai-completions" &&
-    (normalizedModelId === "deepseek-flash" ||
-      normalizedModelId === "deepseek-v4-flash" ||
-      normalizedModelId === "deepseek-v4-pro")
-  );
+function isOpenAICompletionsModel(
+  model: Parameters<StreamFn>[0],
+  modelIds: ReadonlySet<string>,
+): boolean {
+  const normalizedModelId = normalizeCompatibleModelId(model.id);
+  return model.api === "openai-completions" && modelIds.has(normalizedModelId);
 }
 
-function isMicrosoftFoundryProviderId(provider: unknown): boolean {
-  if (typeof provider !== "string") {
-    return false;
-  }
+function isMicrosoftFoundryProviderId(provider: string): boolean {
   const normalizedProvider = provider.trim().toLowerCase();
   return (
     normalizedProvider === "microsoft-foundry" ||
@@ -608,23 +465,14 @@ function isMicrosoftFoundryProviderId(provider: unknown): boolean {
  * retain the model-ID fallback to DeepSeek's native wire format.
  */
 function deepSeekV4NativeThinkingAllowedByCompat(model: Parameters<StreamFn>[0]): boolean {
-  const thinkingFormat = resolveDeepSeekV4ThinkingFormatOverride(model);
-  return thinkingFormat === undefined || thinkingFormat === "deepseek";
-}
-
-function resolveDeepSeekV4ThinkingFormatOverride(
-  model: Parameters<StreamFn>[0],
-): string | undefined {
   const compat = (model as ProviderRuntimeModel).compat;
   const configured = compat && typeof compat === "object" ? compat.thinkingFormat : undefined;
   if (typeof configured === "string") {
-    return configured;
+    return configured === "deepseek";
   }
   const detected = detectOpenAICompletionsCompat(model as ProviderRuntimeModel).defaults
     .thinkingFormat;
-  return detected === "openrouter" || detected === "together" || detected === "zai"
-    ? detected
-    : undefined;
+  return detected !== "openrouter" && detected !== "together" && detected !== "zai";
 }
 
 function createDeepSeekV4NonNativeCompatSanitizerWrapper(
@@ -635,7 +483,7 @@ function createDeepSeekV4NonNativeCompatSanitizerWrapper(
   }
   return (model, context, options) => {
     if (
-      !isDeepSeekV4OpenAICompletionsModel(model) ||
+      !isOpenAICompletionsModel(model, DEEPSEEK_V4_MODEL_IDS) ||
       (!isMicrosoftFoundryProviderId(model.provider) &&
         deepSeekV4NativeThinkingAllowedByCompat(model))
     ) {
@@ -663,26 +511,6 @@ const MIMO_REASONING_OPENAI_COMPATIBLE_MODEL_IDS = new Set([
 ]);
 const MIMO_REASONING_AS_VISIBLE_TEXT_MODEL_IDS = new Set(["mimo-v2-pro", "mimo-v2-omni"]);
 
-function isMiMoReasoningOpenAICompatibleModel(model: Parameters<StreamFn>[0]): boolean {
-  const normalizedModelId = normalizeDeepSeekV4CandidateId(model.id);
-  return (
-    model.api === "openai-completions" &&
-    normalizedModelId !== undefined &&
-    MIMO_REASONING_OPENAI_COMPATIBLE_MODEL_IDS.has(normalizedModelId)
-  );
-}
-
-function isMiMoReasoningAsVisibleTextOpenAICompatibleModel(
-  model: Parameters<StreamFn>[0],
-): boolean {
-  const normalizedModelId = normalizeDeepSeekV4CandidateId(model.id);
-  return (
-    model.api === "openai-completions" &&
-    normalizedModelId !== undefined &&
-    MIMO_REASONING_AS_VISIBLE_TEXT_MODEL_IDS.has(normalizedModelId)
-  );
-}
-
 export function applyExtraParamsToAgent(
   agent: { streamFn?: StreamFn },
   cfg: OpenClawConfig | undefined,
@@ -697,51 +525,36 @@ export function applyExtraParamsToAgent(
   resolvedTransport?: AgentRuntimeTransport,
   options?: {
     preparedExtraParams?: Record<string, unknown>;
+    transportConfig?: OpenClawConfig;
+    modelCallUrgency?: ModelCallUrgency;
     auth?: ProviderPrepareExtraParamsContext["auth"];
     nativeWebSearchPolicyContext?: NativeWebSearchToolPolicyParams;
   },
 ) {
+  const selectedModel = { provider, modelId };
   const providerRuntimeHandle = ensureProviderRuntimePluginHandle({
-    provider,
-    modelId,
-    config: cfg,
+    ...selectedModel,
+    config: options?.transportConfig ?? cfg,
     workspaceDir,
     runtimeHandle: getModelProviderRuntimePluginHandle(model),
-  });
-  const resolvedExtraParams = resolveExtraParams({
-    cfg,
-    provider,
-    modelId,
-    agentId,
   });
   const override = sanitizeExtraParamsOverride(extraParamsOverride);
   const effectiveExtraParams =
     options?.preparedExtraParams ??
     resolvePreparedExtraParams({
       cfg,
-      provider,
-      modelId,
+      transportConfig: options?.transportConfig,
+      ...selectedModel,
       extraParamsOverride,
       thinkingLevel,
       agentId,
       agentDir,
       workspaceDir,
-      resolvedExtraParams,
       model,
       resolvedTransport,
       providerRuntimeHandle,
       auth: options?.auth,
     });
-  const wrapperContext: ApplyExtraParamsContext = {
-    agent,
-    provider,
-    modelId,
-    thinkingLevel,
-    model,
-    effectiveExtraParams,
-    override,
-  };
-
   const providerStreamBase = agent.streamFn;
   const nativeWebSearchAllowedByToolPolicy = options?.nativeWebSearchPolicyContext
     ? isNativeWebSearchAllowedByToolPolicy({
@@ -752,17 +565,24 @@ export function applyExtraParamsToAgent(
         ...options.nativeWebSearchPolicyContext,
       })
     : undefined;
+  const { modelParams, agentModelParams } = resolveModelExtraParamSources({
+    config: cfg,
+    provider,
+    modelId,
+    agentId,
+  });
   const pluginWrappedStreamFn =
     providerRuntimeHandle.plugin?.wrapStreamFn?.({
-      config: cfg,
+      config: options?.transportConfig ?? cfg,
       agentDir,
       workspaceDir,
       agentId,
       auth: options?.auth,
       nativeWebSearchAllowedByToolPolicy,
-      provider,
-      modelId,
+      ...selectedModel,
       extraParams: effectiveExtraParams,
+      modelParams: { ...modelParams, ...agentModelParams },
+      modelCallUrgency: options?.modelCallUrgency,
       thinkingLevel,
       model,
       streamFn: providerStreamBase,
@@ -770,14 +590,98 @@ export function applyExtraParamsToAgent(
   agent.streamFn = pluginWrappedStreamFn ?? providerStreamBase;
   // Apply caller/config extra params outside provider defaults so explicit runtime
   // transport values can override provider-added defaults.
-  applyPrePluginStreamWrappers(wrapperContext);
+  const baseExtraParams =
+    override && [...REQUEST_SCOPED_EXTRA_PARAM_KEYS].some((key) => Object.hasOwn(override, key))
+      ? stripRequestScopedExtraParams(effectiveExtraParams)
+      : effectiveExtraParams;
+  const streamParams = override ? { ...baseExtraParams, ...override } : baseExtraParams;
+  const wrappedStreamFn = createStreamFnWithExtraParams(agent.streamFn, streamParams, provider);
+
+  if (wrappedStreamFn) {
+    agent.streamFn = wrappedStreamFn;
+  }
+
+  if (
+    shouldApplySiliconFlowThinkingOffCompat({
+      ...selectedModel,
+      thinkingLevel,
+    })
+  ) {
+    agent.streamFn = createSiliconFlowThinkingWrapper(agent.streamFn);
+  }
   const providerWrapperHandled =
-    pluginWrappedStreamFn !== undefined && pluginWrappedStreamFn !== providerStreamBase;
-  applyPostPluginStreamWrappers({
-    ...wrapperContext,
-    providerWrapperHandled,
-  });
+    pluginWrappedStreamFn !== undefined &&
+    pluginWrappedStreamFn !== providerStreamBase &&
+    !pluginWrappedStreamFn.preservesGenericCompatibility;
+  const cacheStreamParams = override
+    ? { ...effectiveExtraParams, ...override }
+    : effectiveExtraParams;
+  agent.streamFn = createOpenRouterSystemCacheWrapper(agent.streamFn, cacheStreamParams);
+  agent.streamFn = createOpenAIStringContentWrapper(agent.streamFn);
+  agent.streamFn = createOpenAICompletionsStrictMessageKeysWrapper(agent.streamFn);
+  agent.streamFn = createOpenAICompletionsToolsCompatWrapper(agent.streamFn);
+
+  if (!providerWrapperHandled) {
+    agent.streamFn = createDeepSeekV4OpenAICompatibleThinkingWrapper({
+      baseStreamFn: agent.streamFn,
+      thinkingLevel,
+      shouldPatchModel: (candidateModel) =>
+        isOpenAICompletionsModel(candidateModel, DEEPSEEK_V4_MODEL_IDS) &&
+        !isMicrosoftFoundryProviderId(candidateModel.provider) &&
+        deepSeekV4NativeThinkingAllowedByCompat(candidateModel),
+    });
+    agent.streamFn = createDeepSeekV4NonNativeCompatSanitizerWrapper(agent.streamFn);
+
+    // Unowned MiMo proxy routes bypass the Xiaomi hook but still need its
+    // DeepSeek-style reasoning_content format for multi-turn tool calls.
+    agent.streamFn = createDeepSeekV4OpenAICompatibleThinkingWrapper({
+      baseStreamFn: agent.streamFn,
+      thinkingLevel,
+      shouldPatchModel: (candidateModel) =>
+        isOpenAICompletionsModel(candidateModel, MIMO_REASONING_OPENAI_COMPATIBLE_MODEL_IDS),
+    });
+    // Legacy MiMo V2 can put final visible answers in reasoning_content. Apply
+    // the response-side fallback here for custom Xiaomi-compatible proxy routes.
+    agent.streamFn = createThinkingOnlyFinalTextWrapper({
+      baseStreamFn: agent.streamFn,
+      shouldPatchModel: (candidateModel) =>
+        isOpenAICompletionsModel(candidateModel, MIMO_REASONING_AS_VISIBLE_TEXT_MODEL_IDS),
+    });
+
+    // Guard Google-family payloads against invalid negative thinking budgets
+    // emitted by upstream model-ID heuristics for Gemini 3.1 variants.
+    agent.streamFn = createGoogleThinkingPayloadWrapper(agent.streamFn, thinkingLevel);
+
+    // Work around upstream shared model runtime hardcoding `store: false` for Responses API.
+    // Force `store=true` for direct OpenAI Responses models and auto-enable
+    // server-side compaction for compatible Responses payloads.
+    agent.streamFn = createOpenAIResponsesContextManagementWrapper(
+      agent.streamFn,
+      effectiveExtraParams,
+    );
+  }
+
+  // MiniMax's Anthropic-compatible stream can leak reasoning_content into the
+  // visible reply path because it does not emit native Anthropic thinking
+  // blocks. Disable thinking unless an earlier wrapper already set it.
+  agent.streamFn = createMinimaxThinkingDisabledWrapper(agent.streamFn, thinkingLevel);
+
+  agent.streamFn = createOpenAICompletionsPayloadPolicyWrapper(
+    requireBaseStreamFn(agent.streamFn),
+    [effectiveExtraParams, override],
+  );
+
+  const rawParallelToolCalls = resolveAliasedParamValue(
+    [effectiveExtraParams, override],
+    ["parallel_tool_calls", "parallelToolCalls"],
+  );
+  if (typeof rawParallelToolCalls === "boolean") {
+    agent.streamFn = createParallelToolCallsWrapper(agent.streamFn, rawParallelToolCalls);
+  } else if (rawParallelToolCalls != null) {
+    const summary =
+      typeof rawParallelToolCalls === "string" ? rawParallelToolCalls : typeof rawParallelToolCalls;
+    log.warn(`ignoring invalid parallel_tool_calls param: ${summary}`);
+  }
 
   return { effectiveExtraParams, nativeWebSearchAllowedByToolPolicy };
 }
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

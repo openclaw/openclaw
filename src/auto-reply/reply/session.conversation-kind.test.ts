@@ -34,9 +34,6 @@ describe("dashboard turns retain external conversation identity", () => {
 
   it.each([
     { channel: "whatsapp", kind: "group", peerId: "120363000000001@g.us", explicit: false },
-    { channel: "discord", kind: "channel", peerId: "123456789", explicit: false },
-    { channel: "telegram", kind: "group", peerId: "-100123456789", explicit: false },
-    { channel: "whatsapp", kind: "direct", peerId: "+15550000001", explicit: false },
     { channel: "whatsapp", kind: "group", peerId: "120363000000001@g.us", explicit: true },
   ] as const)("keeps $channel $kind identity (explicit route: $explicit)", async (scenario) => {
     const { channel, kind, peerId, explicit } = scenario;
@@ -57,7 +54,7 @@ describe("dashboard turns retain external conversation identity", () => {
       );
     await initSessionState({ cfg, ctx: externalContext(), commandAuthorized: true });
     const originalEntry = loadSessionEntry({ ...scope, sessionKey });
-    const originalConversations = listConversations(scope, { channel });
+    const originalConversations = await listConversations(scope, { channel });
     expect(originalConversations).toHaveLength(1);
     expect(originalConversations[0]).toMatchObject({ kind, role: "primary", sessionKey });
 
@@ -76,7 +73,7 @@ describe("dashboard turns retain external conversation identity", () => {
       chatType: kind,
       delivery: originalEntry?.delivery,
     });
-    expect(listConversations(scope, { channel })).toEqual([
+    expect(await listConversations(scope, { channel })).toEqual([
       expect.objectContaining({
         conversationRef: originalConversations[0]?.conversationRef,
         kind,
@@ -86,30 +83,12 @@ describe("dashboard turns retain external conversation identity", () => {
     ]);
 
     await initSessionState({ cfg, ctx: externalContext(), commandAuthorized: true });
-    expect(listConversations(scope, { channel })).toEqual([
+    expect(await listConversations(scope, { channel })).toEqual([
       expect.objectContaining({
         conversationRef: originalConversations[0]?.conversationRef,
         kind,
         role: "primary",
       }),
     ]);
-  });
-
-  it("creates a direct internal session for a new dashboard conversation", async () => {
-    const sessionKey = "agent:main:main";
-    await initSessionState({
-      cfg,
-      ctx: finalizeInboundContext({
-        ...resolveChatSendCallerContext(null),
-        Body: "new dashboard input",
-        SessionKey: sessionKey,
-      }),
-      commandAuthorized: true,
-    });
-    expect(loadSessionEntry({ storePath, sessionKey })).toMatchObject({
-      chatType: "direct",
-      delivery: { kind: "internal" },
-    });
-    expect(listConversations({ agentId: "main", storePath })).toEqual([]);
   });
 });

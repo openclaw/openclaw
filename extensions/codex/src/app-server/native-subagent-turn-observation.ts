@@ -41,15 +41,8 @@ export class CodexNativeSubagentTurnObservation {
   }
 
   markActivityUnknown(childState: ChildState): void {
-    this.projectedActivityWaits.delete(childState);
-    childState.activityObserved = true;
-    this.callbacks.emitTaskEvent(childState, {
-      stream: "execution",
-      data: {
-        state: "unknown",
-        sourceId: this.observationSourceId,
-        executionId: childState.nativeTurnId,
-      },
+    this.observeActivity(childState, "unknown", undefined, {
+      executionId: childState.nativeTurnId,
     });
   }
 
@@ -93,6 +86,7 @@ export class CodexNativeSubagentTurnObservation {
     childState: ChildState,
     state: "running" | "waiting" | "unknown",
     wait?: NativeExecutionWait,
+    execution = childState.nativeTurnId ? { executionId: childState.nativeTurnId } : {},
   ): void {
     if (wait && wait === childState.activityWait?.wait) {
       this.projectedActivityWaits.add(childState);
@@ -105,7 +99,7 @@ export class CodexNativeSubagentTurnObservation {
       data: {
         state,
         sourceId: this.observationSourceId,
-        ...(childState.nativeTurnId ? { executionId: childState.nativeTurnId } : {}),
+        ...execution,
         ...(wait ? { wait } : {}),
       },
     });

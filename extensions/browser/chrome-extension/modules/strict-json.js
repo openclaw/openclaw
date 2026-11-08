@@ -1,3 +1,13 @@
+export function hasExactKeys(value, expected) {
+  return (
+    value !== null &&
+    typeof value === "object" &&
+    !Array.isArray(value) &&
+    Object.keys(value).length === expected.length &&
+    expected.every((key) => Object.hasOwn(value, key))
+  );
+}
+
 /** Reject duplicate object keys before JSON.parse can silently keep the last value. */
 function hasDuplicateJsonObjectKeys(text) {
   const stack = [];

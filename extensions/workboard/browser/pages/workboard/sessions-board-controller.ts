@@ -2,11 +2,13 @@ import type { UsersSelfResult } from "@openclaw/gateway-protocol";
 import type {
   WorkboardBoardSummary,
   WorkboardSessionsBoardRead,
+  WorkboardSessionsBoardRevision,
   WorkboardSessionsBoardView,
 } from "@openclaw/workboard-contract";
-import type { ControlUiHost } from "openclaw/plugin-sdk/control-ui";
+import type { ControlUiHost, ControlUiSession } from "openclaw/plugin-sdk/control-ui";
 import { t } from "../../i18n/index.ts";
 import { formatUiError } from "../../lib/format-error.ts";
+import { normalizeWorkboardChange } from "../../lib/workboard/change-payload.ts";
 
 /** Optional host contract supplied by the shared page dock owner. */
 type BoardDockHost = ControlUiHost & {
@@ -29,6 +31,7 @@ export function createSessionsBoardController(host: BoardDockHost, notify: () =>
   let attempted = false;
   let pending: Promise<boolean> | undefined;
   let snapshot: WorkboardSessionsBoardRead | undefined;
+  let revision: WorkboardSessionsBoardRevision | undefined;
   let error: string | undefined;
   let busy = false;
   let draggedKey: string | undefined;
@@ -36,8 +39,13 @@ export function createSessionsBoardController(host: BoardDockHost, notify: () =>
   let peopleFilter = "everyone";
   let viewerProfileId: string | undefined;
   let gatewayId: string | undefined;
-  let identityLoad: Promise<void> | undefined;
+  let identityLoad: Promise<{ gatewayId?: string; viewerProfileId?: string }> | undefined;
   let restoredBoardId: string | undefined;
+  const invalidate = () => {
+    generation += 1;
+    pending = undefined;
+    revision = undefined;
+  };
   const storageKey = (id: string) =>
     gatewayId && viewerProfileId
       ? `openclaw.workboard.sessions.people:${JSON.stringify([gatewayId, viewerProfileId, id])}`
@@ -50,29 +58,14 @@ export function createSessionsBoardController(host: BoardDockHost, notify: () =>
     viewerProfileId = undefined;
     restoredBoardId = undefined;
   };
-  const loadIdentity = (): Promise<void> =>
-    (identityLoad ??= (async () => {
-      const receipt = generation;
-      const [gateway, viewer] = await Promise.allSettled([
-        host.request<{ deviceId: string }>("gateway.identity.get", {}),
-        host.request<UsersSelfResult>("users.self", {}),
-      ]);
-      if (receipt !== generation) {
-        // A newer activation or board owns the scope now; reload for it so a read that
-        // was already waiting (for example after switching boards) restores the right key.
-        identityLoad = undefined;
-        if (active) {
-          await loadIdentity();
-        }
-        return;
-      }
-      if (gateway.status === "fulfilled") {
-        gatewayId = gateway.value.deviceId;
-      }
-      if (viewer.status === "fulfilled") {
-        viewerProfileId = viewer.value.profile.id;
-      }
-    })());
+  const loadIdentity = () =>
+    (identityLoad ??= Promise.allSettled([
+      host.request<{ deviceId: string }>("gateway.identity.get", {}),
+      host.request<UsersSelfResult>("users.self", {}),
+    ]).then(([gateway, viewer]) => ({
+      gatewayId: gateway.status === "fulfilled" ? gateway.value.deviceId : undefined,
+      viewerProfileId: viewer.status === "fulfilled" ? viewer.value.profile.id : undefined,
+    })));
   const restoreFilter = (id: string) => {
     if (restoredBoardId === id) {
       return;
@@ -100,22 +93,28 @@ export function createSessionsBoardController(host: BoardDockHost, notify: () =>
   const writable = () =>
     active && host.connection.connected && host.connection.canWrite && !host.signal.aborted;
 
-  const read = async (): Promise<boolean> => {
+  const read = async (more = false): Promise<boolean> => {
     if (!active || !boardId) {
       return false;
     }
     if (pending) {
       return pending;
     }
+    if (more && !snapshot?.nextCursor) {
+      return false;
+    }
     const id = boardId;
     const receipt = generation;
+    const previous = snapshot;
     attempted = true;
     const load = (async () => {
       try {
-        await loadIdentity();
+        const identity = await loadIdentity();
         if (!current(id, receipt)) {
           return false;
         }
+        gatewayId = identity.gatewayId;
+        viewerProfileId = identity.viewerProfileId;
         restoreFilter(id);
         const view: WorkboardSessionsBoardView = {
           includePeople: true,
@@ -124,14 +123,44 @@ export function createSessionsBoardController(host: BoardDockHost, notify: () =>
             ? { involvingProfileId: peopleFilter.slice(8) }
             : {}),
         };
-        const result = await host.request<WorkboardSessionsBoardRead>(
-          "workboard.sessionsBoard.read",
-          { boardId: id, view },
-        );
+        const result = await host.request<
+          | (WorkboardSessionsBoardRead & { revision: WorkboardSessionsBoardRevision })
+          | { unchanged: true; revision: WorkboardSessionsBoardRevision }
+        >("workboard.sessionsBoard.read", {
+          boardId: id,
+          view,
+          ...(more ? { after: previous?.nextCursor } : revision ? { sinceRevision: revision } : {}),
+        });
         if (!current(id, receipt)) {
           return false;
         }
-        snapshot = result;
+        if (!("unchanged" in result)) {
+          let page = result;
+          const sessions = new Map(
+            (more ? (previous?.sessions ?? []) : []).map((session) => [session.key, session]),
+          );
+          for (const session of page.sessions) {
+            sessions.set(session.key, session);
+          }
+          // A refresh restores the loaded window, while Load more requests just one page.
+          if (!more) {
+            while (page.nextCursor && sessions.size < (previous?.sessions.length ?? 0)) {
+              page = await host.request<
+                WorkboardSessionsBoardRead & { revision: WorkboardSessionsBoardRevision }
+              >("workboard.sessionsBoard.read", { boardId: id, view, after: page.nextCursor });
+              if (!current(id, receipt)) {
+                return false;
+              }
+              for (const session of page.sessions) {
+                sessions.set(session.key, session);
+              }
+            }
+          }
+          snapshot = { ...result, sessions: [...sessions.values()], nextCursor: page.nextCursor };
+        }
+        if (!more) {
+          revision = result.revision;
+        }
         error = undefined;
         return true;
       } catch (cause) {
@@ -158,6 +187,7 @@ export function createSessionsBoardController(host: BoardDockHost, notify: () =>
       return;
     }
     const id = boardId;
+    invalidate();
     const receipt = generation;
     busy = true;
     error = undefined;
@@ -183,6 +213,17 @@ export function createSessionsBoardController(host: BoardDockHost, notify: () =>
   };
 
   return {
+    hasCurrent(payload: unknown) {
+      const change = normalizeWorkboardChange(payload);
+      return Boolean(
+        active &&
+        boardId &&
+        change &&
+        revision &&
+        change.epoch === revision.epoch &&
+        change.sessionsRevision === revision.revision,
+      );
+    },
     get snapshot() {
       return snapshot;
     },
@@ -205,9 +246,8 @@ export function createSessionsBoardController(host: BoardDockHost, notify: () =>
       } catch {
         // Keep the selection for this mounted view if storage is unavailable.
       }
-      generation += 1;
-      pending = undefined;
-      snapshot = snapshot ? { ...snapshot, sessions: [] } : undefined;
+      invalidate();
+      snapshot = snapshot ? { ...snapshot, sessions: [], nextCursor: undefined } : undefined;
       error = undefined;
       void read();
     },
@@ -232,8 +272,7 @@ export function createSessionsBoardController(host: BoardDockHost, notify: () =>
     sync(board: WorkboardBoardSummary | undefined | null, enabled: boolean) {
       const nextId = board?.kind === "sessions" ? board.id : undefined;
       if (boardId !== nextId || active !== enabled) {
-        generation += 1;
-        pending = undefined;
+        invalidate();
         attempted = false;
         busy = false;
         draggedKey = undefined;
@@ -255,11 +294,8 @@ export function createSessionsBoardController(host: BoardDockHost, notify: () =>
         void read();
       }
     },
-    read,
-    refresh: () =>
-      write(async (id) => {
-        await host.request("workboard.sessionsBoard.refresh", { boardId: id });
-      }),
+    read: () => read(),
+    loadMore: () => read(true),
     move: (sessionKey: string, columnId: string) =>
       write(async (id) => {
         await host.request("workboard.sessionsBoard.move", { boardId: id, sessionKey, columnId });
@@ -288,6 +324,19 @@ export function createSessionsBoardController(host: BoardDockHost, notify: () =>
             host.agents.defaultId ??
             host.connection.assistantAgentId ??
             undefined);
+        if (sessionKey) {
+          const { session } = await host.request<{ session: ControlUiSession | null }>(
+            "sessions.describe",
+            { key: sessionKey },
+          );
+          if (!current(id, receipt) || !writable()) {
+            return;
+          }
+          agentId = session?.agentId ?? agentId;
+          if (!session?.isDock) {
+            sessionKey = undefined;
+          }
+        }
         if (!sessionKey) {
           if (createdConversation?.boardId === id) {
             ({ sessionKey, agentId } = createdConversation);
@@ -295,7 +344,12 @@ export function createSessionsBoardController(host: BoardDockHost, notify: () =>
             if (!agentId) {
               throw new Error(t("workboard.sessionsBoard.agentUnavailable"));
             }
-            sessionKey = (await host.sessions.create({ agentId, label })) ?? undefined;
+            sessionKey =
+              (await host.sessions.create({
+                agentId,
+                displayName: label,
+                surface: "plugin-dock",
+              })) ?? undefined;
             if (!sessionKey) {
               throw new Error(t("workboard.sessionsBoard.agentCreateFailed"));
             }
@@ -331,8 +385,7 @@ export function createSessionsBoardController(host: BoardDockHost, notify: () =>
       }),
     dispose() {
       active = false;
-      generation += 1;
-      pending = undefined;
+      invalidate();
     },
   };
 }

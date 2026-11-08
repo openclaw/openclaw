@@ -3,13 +3,12 @@ import {
   type EligibleNodeMessages,
   resolveEligibleNodeFromList,
 } from "openclaw/plugin-sdk/node-selection-runtime";
+import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 
-type CanvasNodeDescriptor = {
-  commands?: string[];
-  connected?: boolean;
-  invocableCommands?: string[];
-  platform?: string;
-};
+type CanvasNodeDescriptor = Pick<
+  Awaited<ReturnType<PluginRuntime["nodes"]["list"]>>["nodes"][number],
+  "commands" | "connected" | "invocableCommands" | "platform"
+>;
 
 export const CANVAS_PRESENT_COMMAND = "canvas.present";
 

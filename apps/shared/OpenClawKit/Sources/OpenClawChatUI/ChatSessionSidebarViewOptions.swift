@@ -17,6 +17,7 @@ extension ChatSessionSidebarModel {
         var status: OpenClawChatSidebarStatus = .active
         var ownerFilter = ""
         var showMessagePreview = false
+        var selectedAgentID: String?
 
         var ownerID: String? {
             self.ownerFilter.hasPrefix("owner:") ? String(self.ownerFilter.dropFirst(6)) : nil
@@ -49,21 +50,11 @@ extension ChatSessionSidebarModel {
         }
 
         func includes(_ session: OpenClawChatSessionEntry) -> Bool {
-            // Port src/shared/session-list-visibility.ts: cron keys own automation,
-            // even when system-created; other probes use provenance, never titles.
-            let key = session.key.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-            let automation = key.range(of: #"^(?:cron:|agent::*[^:]+:+cron:+[^:])"#, options: .regularExpression) != nil
-            if automation { return self.showAutomation }
-            let system: Bool
-            if session.createdActor?.type == "system" {
-                system = true
-            } else {
-                let internalSource = session.createdVia == "run" || session.createdVia == "internal"
-                let named = [session.label, session.displayName, session.subject]
-                    .contains { ChatPayloadDecoding.trimmedNonEmptyString($0) != nil }
-                system = internalSource && session.createdActor?.type != "human" && !named
+            if OpenClawChatSessionListVisibility.isCronSessionDisplayKey(session.key) {
+                return self.showAutomation
             }
-            return self.showSystem || !system
+            return self.showSystem
+                || !OpenClawChatSessionListVisibility.isSystemCreatedSessionRow(session)
         }
     }
 
@@ -91,8 +82,9 @@ extension ChatSessionSidebarModel {
         }
 
         func sortedByCreation(
-            _ sessions: [OpenClawChatSessionEntry], owners: [OpenClawChatSessionEntry.CreatedActor]? = nil)
-            -> [OpenClawChatSessionEntry]
+            _ sessions: [OpenClawChatSessionEntry],
+            owners: [OpenClawChatSessionEntry.CreatedActor]? = nil,
+            identity: (OpenClawChatSessionEntry) -> String = { $0.key }) -> [OpenClawChatSessionEntry]
         {
             /// ui/src/components/app-sidebar-session-navigation-logic.ts:
             /// valid creation dates first, descending; then first observation and key.
@@ -123,8 +115,8 @@ extension ChatSessionSidebarModel {
                     guard let right else { return true }
                     return left > right
                 }
-                let leftIndex = self.indices[lhs.key] ?? Int.max
-                let rightIndex = self.indices[rhs.key] ?? Int.max
+                let leftIndex = self.indices[identity(lhs)] ?? Int.max
+                let rightIndex = self.indices[identity(rhs)] ?? Int.max
                 return leftIndex == rightIndex ? lhs.key < rhs.key : leftIndex < rightIndex
             }
         }

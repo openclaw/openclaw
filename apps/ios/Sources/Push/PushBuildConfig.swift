@@ -71,48 +71,37 @@ struct PushBuildConfig {
     }
 
     private init(readValue: (String) -> Any?) {
-        self.mode = Self.readEnum(
-            readValue: readValue,
-            key: "OpenClawPushMode",
-            fallback: .localSandbox)
+        let rawMode = (readValue("OpenClawPushMode") as? String)?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        self.mode = PushBuildMode(rawValue: rawMode) ?? PushBuildMode(rawValue: rawMode.lowercased()) ?? .localSandbox
         let relayBaseURLOverride = Self.readURL(
             readValue: readValue,
             key: "OpenClawPushRelayBaseURL")
         switch self.mode {
-        case .localSandbox:
+        case .localSandbox, .localProduction:
             self.transport = .direct
             self.distribution = .local
             self.relayBaseURL = nil
-            self.apnsEnvironment = .sandbox
-            self.relayProfile = .deviceSandbox
-            self.proofPolicy = .appleDevelopment
-        case .localProduction:
-            self.transport = .direct
-            self.distribution = .local
-            self.relayBaseURL = nil
-            self.apnsEnvironment = .production
-            self.relayProfile = .production
-            self.proofPolicy = .appleStrict
         case .appStore:
             self.transport = .relay
             self.distribution = .official
             self.relayBaseURL = URL(string: "https://\(Self.openClawHostedRelayHost)")!
-            self.apnsEnvironment = .production
-            self.relayProfile = .production
-            self.proofPolicy = .appleStrict
-        case .deviceSandbox:
+        case .deviceSandbox, .simulatorSandbox:
             self.transport = .relay
             self.distribution = .official
             self.relayBaseURL = relayBaseURLOverride
                 ?? URL(string: "https://\(Self.openClawSandboxRelayHost)")!
+        }
+        switch self.mode {
+        case .localProduction, .appStore:
+            self.apnsEnvironment = .production
+            self.relayProfile = .production
+            self.proofPolicy = .appleStrict
+        case .localSandbox, .deviceSandbox:
             self.apnsEnvironment = .sandbox
             self.relayProfile = .deviceSandbox
             self.proofPolicy = .appleDevelopment
         case .simulatorSandbox:
-            self.transport = .relay
-            self.distribution = .official
-            self.relayBaseURL = relayBaseURLOverride
-                ?? URL(string: "https://\(Self.openClawSandboxRelayHost)")!
             self.apnsEnvironment = .sandbox
             self.relayProfile = .simulatorSandbox
             self.proofPolicy = .internalSimulator
@@ -135,15 +124,5 @@ struct PushBuildConfig {
             return nil
         }
         return components.url
-    }
-
-    private static func readEnum<T: RawRepresentable>(
-        readValue: (String) -> Any?,
-        key: String,
-        fallback: T)
-    -> T where T.RawValue == String {
-        guard let raw = readValue(key) as? String else { return fallback }
-        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        return T(rawValue: trimmed) ?? T(rawValue: trimmed.lowercased()) ?? fallback
     }
 }

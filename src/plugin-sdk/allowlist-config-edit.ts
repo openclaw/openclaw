@@ -4,9 +4,9 @@ import type { ChannelAllowlistAdapter } from "../channels/plugins/types.adapters
 import type { ChannelId } from "../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
-// Allowlist config edit helpers build safe config mutations for channel allowlists.
 import { resolveChannelAccountKey } from "../routing/account-lookup.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../routing/session-key.js";
+import { readObjectPath } from "../shared/dot-path.js";
 import { isRecord } from "../utils.js";
 
 type AllowlistConfigPaths = {
@@ -206,38 +206,19 @@ function resolveAccountScopedWriteTarget(
   };
 }
 
-function getNestedValue(root: Record<string, unknown>, path: string[]): unknown {
-  let current: unknown = root;
-  for (const key of path) {
-    if (!current || typeof current !== "object") {
-      return undefined;
-    }
-    current = (current as Record<string, unknown>)[key];
-  }
-  return current;
-}
-
-function ensureNestedObject(
-  root: Record<string, unknown>,
-  path: string[],
-): Record<string, unknown> {
-  let current = root;
-  for (const key of path) {
-    const existing = current[key];
-    if (!existing || typeof existing !== "object") {
-      current[key] = {};
-    }
-    current = current[key] as Record<string, unknown>;
-  }
-  return current;
-}
-
 function setNestedValue(root: Record<string, unknown>, path: string[], value: unknown) {
   const leaf = path.at(-1);
   if (leaf === undefined) {
     return;
   }
-  const parent = ensureNestedObject(root, path.slice(0, -1));
+  let parent = root;
+  for (const key of path.slice(0, -1)) {
+    const existing = parent[key];
+    if (!existing || typeof existing !== "object") {
+      parent[key] = {};
+    }
+    parent = parent[key] as Record<string, unknown>;
+  }
   parent[leaf] = value;
 }
 
@@ -250,7 +231,7 @@ function deleteNestedValue(root: Record<string, unknown>, path: string[]) {
     delete root[leaf];
     return;
   }
-  const parent = getNestedValue(root, path.slice(0, -1));
+  const parent = readObjectPath(root, path.slice(0, -1));
   if (!isRecord(parent)) {
     return;
   }
@@ -275,7 +256,7 @@ function applyAccountScopedAllowlistConfigEdit(params: {
   const storedEntries: unknown[] = [];
   let hasStoredList = false;
   for (const path of params.paths.readPaths) {
-    const existingRaw = getNestedValue(resolvedTarget.target, path);
+    const existingRaw = readObjectPath(resolvedTarget.target, path);
     if (!Array.isArray(existingRaw)) {
       continue;
     }

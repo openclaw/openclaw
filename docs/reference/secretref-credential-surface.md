@@ -1,5 +1,5 @@
 ---
-summary: "Canonical supported vs unsupported SecretRef credential surface"
+summary: "Supported and unsupported SecretRef credentials"
 read_when:
   - Verifying SecretRef credential coverage
   - Auditing whether a credential is eligible for `secrets configure` or `secrets apply`
@@ -7,7 +7,7 @@ read_when:
 title: "SecretRef credential surface"
 ---
 
-This page defines the canonical SecretRef credential surface: which credential fields accept a `SecretRef` (env/file/exec/store-backed reference) instead of a raw secret value.
+This page lists the credential fields that accept a `SecretRef` (env/file/exec/store-backed reference) instead of a raw secret value.
 
 Scope:
 
@@ -27,6 +27,7 @@ Source generation fails if a present channel secret-contract artifact cannot loa
 #### `agents`
 
 - `agents.entries.*.memory.search.remote.apiKey`
+- `agents.entries.*.tools.github.app.privateKey`
 - `agents.entries.*.tts.personas.*.providers.*.apiKey`
 - `agents.entries.*.tts.providers.*.apiKey`
 
@@ -66,6 +67,7 @@ Source generation fails if a present channel secret-contract artifact cannot loa
 - `channels.matrix.password`
 - `channels.mattermost.accounts.*.botToken`
 - `channels.mattermost.botToken`
+- `channels.msteams.accounts.*.appPassword`
 - `channels.msteams.appPassword`
 - `channels.nextcloud-talk.accounts.*.apiPassword`
 - `channels.nextcloud-talk.accounts.*.botSecret`
@@ -90,6 +92,14 @@ Source generation fails if a present channel secret-contract artifact cannot loa
 - `channels.telegram.accounts.*.webhookSecret`
 - `channels.telegram.botToken`
 - `channels.telegram.webhookSecret`
+- `channels.x.accounts.*.bearerToken`
+- `channels.x.accounts.*.clientSecret`
+- `channels.x.accounts.*.refreshToken`
+- `channels.x.accounts.*.verifiedFromGitHub.token`
+- `channels.x.bearerToken`
+- `channels.x.clientSecret`
+- `channels.x.refreshToken`
+- `channels.x.verifiedFromGitHub.token`
 - `channels.zalo.accounts.*.botToken`
 - `channels.zalo.accounts.*.webhookSecret`
 - `channels.zalo.botToken`
@@ -98,6 +108,10 @@ Source generation fails if a present channel secret-contract artifact cannot loa
 #### `cron`
 
 - `cron.webhookToken`
+
+#### `database`
+
+- `database.postgres.connection`
 
 #### `gateway`
 
@@ -133,6 +147,7 @@ Source generation fails if a present channel secret-contract artifact cannot loa
 - `plugins.entries.codex.config.appServer.authToken`
 - `plugins.entries.codex.config.appServer.headers.*`
 - `plugins.entries.comfy.config.headers.*`
+- `plugins.entries.deepseek.config.webSearch.apiKey`
 - `plugins.entries.exa.config.webSearch.apiKey`
 - `plugins.entries.facetime.config.realtime.providers.*.apiKey`
 - `plugins.entries.firecrawl.config.webFetch.apiKey`
@@ -149,6 +164,7 @@ Source generation fails if a present channel secret-contract artifact cannot loa
 - `plugins.entries.team-reports.config.discord.token`
 - `plugins.entries.team-reports.config.github.token`
 - `plugins.entries.typesafe.config.apiKey`
+- `plugins.entries.voice-call.config.numbers.*.tts.providers.*.apiKey`
 - `plugins.entries.voice-call.config.realtime.providers.*.apiKey`
 - `plugins.entries.voice-call.config.streaming.providers.*.apiKey`
 - `plugins.entries.voice-call.config.tts.providers.*.apiKey`
@@ -163,6 +179,10 @@ Source generation fails if a present channel secret-contract artifact cannot loa
 
 - `talk.providers.*.apiKey`
 - `talk.realtime.providers.*.apiKey`
+
+#### `tools`
+
+- `tools.github.app.privateKey`
 
 #### `tts`
 
@@ -181,7 +201,7 @@ Source generation fails if a present channel secret-contract artifact cannot loa
 - `gateway.cloudflareAccess.clientId`
 - `gateway.cloudflareAccess.clientSecret`
 
-These fields live in the node host's canonical `nodeHost.config` SQLite
+These fields live in the node host's saved `nodeHost.config` SQLite
 machine-state value,
 not `openclaw.json`. They accept the same SecretInput forms and resolve through
 the configured SecretRef providers when the node starts. The conventional
@@ -191,12 +211,13 @@ these fields automatically. They are not targets for `secrets configure` or
 
 Notes:
 
+- `database.postgres.connection` accepts env, file and exec SecretRefs only. Store-backed refs would require opening the database whose connection is being resolved; use an env, file or exec SecretRef instead.
 - Store refs use names matching `^[A-Z][A-Z0-9_]{0,127}$` and resolve only from the Gateway-wide team scope; no other store scope exists. A typical ref is `{"source":"store","provider":"default","id":"OPENAI_API_KEY"}`.
 - Auth-profile plan targets require `agentId`; plan entries target `profiles.*.key` / `profiles.*.token` and write sibling refs (`keyRef` / `tokenRef`). Auth-profile refs are included in runtime resolution and audit coverage.
 - In `openclaw.json`, SecretRefs must use structured objects such as `{"source":"env","provider":"default","id":"DISCORD_BOT_TOKEN"}`. Legacy `secretref-env:<ENV_VAR>` marker strings are rejected on SecretRef credential paths; run `openclaw doctor --fix` to migrate valid markers.
 - OAuth policy guard: `auth.profiles.<id>.mode = "oauth"` cannot be combined with SecretRef inputs for that profile. Startup/reload and auth-profile resolution fail fast when this policy is violated.
 - For SecretRef-managed model providers, generated `agents/*/agent/models.json` entries persist non-secret markers (not resolved secret values) for `apiKey`/header surfaces. Marker persistence is source-authoritative: OpenClaw writes markers from the active source config snapshot (pre-resolution), not from resolved runtime secret values.
-- Cold Gateway startup can isolate retryable resolution failures for mapped, non-Gateway owners. Current mapped classes include model providers and skills, media/TTS/cron providers, eligible auth profiles, per-agent memory, sandbox SSH, channel accounts, and manifest-declared plugin routes. Startup keeps each failed owner's explicit refs in the runtime snapshot, reports the owner through status and doctor, and rejects requests for that owner without trying lower-precedence credentials. Reload and config-write preflight use the same owner-aware policy: healthy owners refresh; an eligible failed owner stays stale only when its ref identities, provider definitions, and complete non-secret owner contract are unchanged; a new or changed failure becomes cold. Gateway ingress auth, structurally invalid refs or values, fail-closed owners, and currently unmapped owners remain strict.
+- Cold Gateway startup can isolate retryable resolution failures for mapped, non-Gateway owners. Current mapped classes include model providers and skills, media/TTS/cron providers, eligible auth profiles, per-agent memory, sandbox SSH, channel accounts, and manifest-declared plugin routes. Startup keeps each failed owner's explicit refs in the runtime snapshot, reports the owner through status and doctor, and rejects requests for that owner without trying lower-precedence credentials. Reload and config-write preflight use the same owner-aware policy: healthy owners refresh; an eligible failed owner stays stale only when its ref identities, provider definitions, and complete non-secret owner contract are unchanged; a new or changed failure becomes cold. Gateway ingress auth, structurally invalid refs or values, owners that require startup to stop on failure, and currently unmapped owners remain strict.
 - For web search: in explicit provider mode (`tools.web.search.provider` set), only the selected provider key is active. In auto mode (`tools.web.search.provider` unset), only the first provider key that resolves by precedence is active, and non-selected provider refs are treated as inactive until selected. Provider credentials use `plugins.entries.<plugin>.config.webSearch.*`.
 - Slack `identity: "user"` uses `channels.slack.userToken` with `channels.slack.appToken` for Socket Mode or `channels.slack.signingSecret` for HTTP mode. The same pairing applies under `channels.slack.accounts.*`; no bot token is required for this identity.
 

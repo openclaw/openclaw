@@ -2,12 +2,17 @@ import type {
   ContentBlockParam,
   MessageCreateParamsStreaming,
   MessageParam,
-  Tool as AnthropicTool,
   ImageBlockParam,
   TextBlockParam,
   ToolResultBlockParam,
 } from "@anthropic-ai/sdk/resources/messages.js";
-import type { Context, Model, Tool } from "@openclaw/llm-core";
+import {
+  hasRuntimeContextMarker,
+  supportsClaudeInHistorySystemMessages,
+  type Context,
+  type Model,
+  type ToolResultMessage,
+} from "@openclaw/llm-core";
 import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import { getAiTransportHost } from "../host.js";
 import {
@@ -17,6 +22,7 @@ import {
   type AnthropicInlineImageBudget,
 } from "../internal/anthropic-inline-images.js";
 import { isImageWithMediaPayload } from "../media-payload.js";
+import { preparedRequestSuffix } from "../provider-options.js";
 import type { AnthropicOptions, AnthropicThinkingDisplay } from "../provider-options.js";
 import { transformProviderMessages } from "../provider-transcript-transform.js";
 import {
@@ -26,6 +32,7 @@ import {
   requiresClaudeBetweenToolsThinking,
   resolveAnthropicThinkingEffort,
   resolveClaudeSonnet55ModelIdentity,
+  resolveClaudeHaiku55ModelIdentity,
   supportsClaudeAdaptiveThinking,
   supportsClaudeNativeXhighEffort,
 } from "../providers/anthropic-model-contract.js";
@@ -48,6 +55,7 @@ import {
   extractToolResultBlockText,
   extractToolResultText,
 } from "../providers/tool-result-text.js";
+import { STREAM_ERROR_FALLBACK_TEXT } from "../replay-turn-classification.js";
 import {
   buildAnthropicReplayPlan,
   type AnthropicCompactionBlock,
@@ -60,11 +68,11 @@ import {
   resolveAnthropicCacheOptions,
   resolveAnthropicRequestBetaHeader,
 } from "./anthropic-payload-policy.js";
+import { applyAnthropicPayloadHook } from "./anthropic-request-body.js";
 import { resolveAnthropicMessagesMaxTokens } from "./anthropic-transport-options.js";
 import { resolveProviderEndpoint } from "./host-policy.js";
 import {
   coerceTransportToolCallArguments,
-  sanitizeNonEmptyTransportPayloadText,
   sanitizeTransportPayloadText,
 } from "./transport-stream-shared.js";
 
@@ -77,15 +85,29 @@ type AnthropicReplayBlock =
     };
 
 type AnthropicWireMessage = {
-  role: "user" | "assistant";
+  role: "user" | "assistant" | "system";
   content: string | AnthropicReplayBlock[];
   reasoning_content?: string;
+  clear_at?: "next_user_message";
 };
+
+type AnthropicMessageProjection = {
+  key: string;
+  followingSources: Context["messages"];
+  message: AnthropicWireMessage | undefined;
+};
+
+// Weak source ownership releases projections with history; route and grouped-result
+// variants share the same bounded lifetime as Responses message projections.
+const anthropicMessageProjections = new WeakMap<
+  Context["messages"][number],
+  AnthropicMessageProjection[]
+>();
 
 const NON_VISION_USER_IMAGE_PLACEHOLDER = "(image omitted: model does not support images)";
 
 async function convertContentBlocks(
-  content: readonly unknown[],
+  content: Readonly<ToolResultMessage["content"]>,
   model: { input: readonly string[] },
   imageBudget: AnthropicInlineImageBudget,
   profile: "provider" | "transport",
@@ -96,39 +118,29 @@ async function convertContentBlocks(
     (profile === "provider" || model.input.includes("image")) &&
     content.some(isImageWithMediaPayload);
   if (!hasImages) {
-    return sanitizeNonEmptyTransportPayloadText(
-      extractToolResultText(content),
-      mediaPlaceholder ??
-        (profile === "transport" ? "(no output)" : isError ? "[tool error with no output]" : ""),
-    );
+    const text = extractToolResultText(content);
+    return text.trim()
+      ? text
+      : (mediaPlaceholder ??
+          (profile === "transport" ? "(no output)" : isError ? "[tool error with no output]" : ""));
   }
   const blocks: Array<TextBlockParam | ImageBlockParam> = [];
-  let hasTextBlock = false;
   for (const block of content) {
-    const record = asOptionalObjectRecord(block);
-    if (!record) {
+    if (!asOptionalObjectRecord(block)) {
       continue;
     }
     const blockText = extractToolResultBlockText(block);
     if (blockText) {
-      blocks.push({ type: "text", text: sanitizeTransportPayloadText(blockText) });
-      hasTextBlock = true;
+      blocks.push({ type: "text", text: blockText });
     }
-    if (!isImageWithMediaPayload(record)) {
+    if (!isImageWithMediaPayload(block)) {
       continue;
     }
     const [normalizedImage] = await normalizeAnthropicInlineContent(
       [
-        {
-          type: "image" as const,
-          data: typeof record.data === "string" ? record.data : "",
-          mimeType:
-            typeof record.mimeType === "string"
-              ? record.mimeType
-              : profile === "provider"
-                ? "image/jpeg"
-                : "image/png",
-        },
+        typeof block.mimeType === "string"
+          ? block
+          : { ...block, mimeType: profile === "provider" ? "image/jpeg" : "image/png" },
       ],
       imageBudget,
     );
@@ -144,52 +156,118 @@ async function convertContentBlocks(
       },
     });
   }
-  if (!hasTextBlock) {
+  if (!blocks.some((block) => block.type === "text")) {
     blocks.unshift({ type: "text", text: mediaPlaceholder ?? "(see attached image)" });
   }
   return blocks;
 }
 
-async function convertAnthropicMessages(
-  transformedMessages: Context["messages"],
+/** Assemble both public Messages routes without changing their replay/default profiles. */
+export async function buildAnthropicRequest(
   model: Model<"anthropic-messages">,
+  context: Context,
+  options: (AnthropicOptions & { authProfileId?: string }) | undefined,
+  profile: "provider" | "transport",
   isOAuthToken: boolean,
-  options: {
-    allowReasoningContentReplay?: boolean;
-    compaction?: AnthropicCompactionBlock;
-    replayThinkingEnabled?: boolean;
-    allowEmptySignature?: boolean;
-    profile: "provider" | "transport";
-    /** Emitted indexes of transient carriers that cannot anchor the cached prefix. */
-    cacheBreakpointOptOutMessageIndexes?: Set<number>;
-  },
-): Promise<AnthropicWireMessage[]> {
-  const params: AnthropicWireMessage[] = [];
+  serverSideFallback: boolean,
+  claudeCodeVersion?: string,
+) {
+  const managed = profile === "transport";
+  const maxTokens = managed
+    ? resolveAnthropicMessagesMaxTokens({
+        modelContextWindow: model.contextWindow,
+        modelMaxTokens: model.maxTokens,
+        requestedMaxTokens: options?.maxTokens,
+      })
+    : (options?.maxTokens ?? model.maxTokens);
+  if (managed && maxTokens === undefined) {
+    throw new Error(
+      `Anthropic Messages transport requires a positive maxTokens value for ${model.provider}/${model.id}`,
+    );
+  }
+  const { cacheControl, supportsCacheControlOnTools } = resolveAnthropicCacheOptions(
+    model,
+    options?.cacheRetention,
+  );
+  const system = buildAnthropicSystemBlocks(
+    context.systemPrompt,
+    isOAuthToken,
+    cacheControl,
+    claudeCodeVersion,
+    context.preparedSystemPrompt,
+  );
+  let toolProjection: AnthropicToolProjection | undefined;
+  let eagerToolInputStreaming = false;
+  if (context.tools) {
+    const tools = context.tools;
+    eagerToolInputStreaming =
+      !managed && (model.compat?.supportsEagerToolInputStreaming ?? model.provider !== "fireworks");
+    toolProjection = projectAnthropicTools(tools, (name) =>
+      isOAuthToken ? toClaudeCodeToolName(name) : name,
+    );
+  }
+  const replayPlan = buildAnthropicReplayPlan(context.messages, model, {
+    enabled: !isOAuthToken && options?.anthropicServerCompaction === true,
+    authProfileId: options?.authProfileId,
+    sessionId: options?.sessionId,
+  });
+  const cacheBreakpointOptOutMessageIndexes = new Set<number>();
+  const transformed = managed
+    ? getAiTransportHost().transformTransportMessages(
+        replayPlan.messages,
+        model,
+        normalizeAnthropicToolCallId,
+        { preserveUnframedToolResults: preparedRequestSuffix.has(context) },
+      )
+    : transformProviderMessages(replayPlan.messages, model, normalizeAnthropicToolCallId);
+  const allowReasoningContentReplay =
+    managed && resolveProviderEndpoint(model).endpointClass === "xiaomi-native";
+  const allowEmptySignature = model.compat?.allowEmptySignature;
+  const compaction = replayPlan.compaction;
+  const replayThinkingEnabled =
+    requiresClaudeAdaptiveThinking(model) || options?.thinkingEnabled === true;
+  const messages: AnthropicWireMessage[] = [];
+  const appendMessage = (message: AnthropicWireMessage) => {
+    if (message.role === "system" && (!messages.length || messages.at(-1)?.role === "assistant")) {
+      // Replay can exclude a consult's user anchor. Preserve its updates in place
+      // without moving them into the pinned system prompt or dropping instructions.
+      messages.push({ role: "user", content: "." });
+    }
+    // Interrupted turns can leave a system update last; retain it before the next user turn.
+    if (message.role === "user" && messages.at(-1)?.role === "system") {
+      messages.push({
+        role: "assistant",
+        content: [{ type: "text", text: STREAM_ERROR_FALLBACK_TEXT }],
+      });
+    }
+    messages.push(message);
+  };
   const modelRetainsRuntimeContext = bindsClaudeThinkingPrefix(model);
+  const inHistorySystemUpdates =
+    !isOAuthToken && isDirectAnthropicModel(model) && supportsClaudeInHistorySystemMessages(model);
   const imageBudget = createAnthropicInlineImageBudget();
-  const allowReasoningContentReplay = options.allowReasoningContentReplay === true;
-  const replayThinkingEnabled = options.replayThinkingEnabled !== false;
-  const managed = options.profile === "transport";
   const activeToolTurnAssistantIndex = replayThinkingEnabled
     ? -1
-    : findActiveAnthropicToolTurnAssistantIndex(transformedMessages);
-  for (let i = 0; i < transformedMessages.length; i += 1) {
-    const msg = transformedMessages[i];
-    if (!msg) {
-      continue;
-    }
+    : findActiveAnthropicToolTurnAssistantIndex(transformed);
+  const convertMessage = async (
+    msg: Context["messages"][number],
+    i: number,
+    end: number,
+  ): Promise<AnthropicWireMessage | undefined> => {
     if (msg.role === "user") {
+      const operatorMessage = inHistorySystemUpdates ? msg.operatorMessage : undefined;
+      const sourceContent = msg.content;
       let content: AnthropicWireMessage["content"];
-      if (typeof msg.content === "string") {
-        if (msg.content.trim().length === 0) {
-          continue;
+      if (typeof sourceContent === "string") {
+        if (sourceContent.trim().length === 0) {
+          return undefined;
         }
-        content = sanitizeTransportPayloadText(msg.content);
+        content = sanitizeTransportPayloadText(sourceContent);
       } else {
         const normalizedContent =
           !managed || model.input.includes("image")
-            ? await normalizeAnthropicInlineContent(msg.content, imageBudget)
-            : msg.content.map((item) =>
+            ? await normalizeAnthropicInlineContent(sourceContent, imageBudget)
+            : sourceContent.map((item) =>
                 item.type === "image"
                   ? { type: "text" as const, text: NON_VISION_USER_IMAGE_PLACEHOLDER }
                   : item,
@@ -215,21 +293,21 @@ async function convertAnthropicMessages(
             : !managed || model.input.includes("image"),
         );
         if (content.length === 0) {
-          continue;
+          return undefined;
         }
       }
-      if (
-        msg.runtimeContextCarrier &&
-        !(msg.runtimeContextCarrierRetained ?? modelRetainsRuntimeContext)
-      ) {
-        options.cacheBreakpointOptOutMessageIndexes?.add(params.length);
-      }
-      params.push({ role: "user", content });
-      continue;
+      return {
+        role: operatorMessage ? "system" : "user",
+        content: operatorMessage
+          ? typeof content === "string"
+            ? [{ type: "text", text: content }]
+            : content.filter((block) => block.type === "text")
+          : content,
+        ...(operatorMessage?.turnScoped ? { clear_at: "next_user_message" as const } : {}),
+      };
     }
     if (msg.role === "assistant") {
-      const blocks: AnthropicReplayBlock[] =
-        i === 0 && options.compaction ? [options.compaction] : [];
+      const blocks: AnthropicReplayBlock[] = i === 0 && compaction ? [compaction] : [];
       const reasoningContent: string[] = [];
       let omittedThinking = false;
       for (const block of msg.content) {
@@ -267,7 +345,7 @@ async function convertAnthropicMessages(
           if (block.thinking.trim().length === 0 && !hasNativeThinkingSignature) {
             continue;
           }
-          if (!thinkingSignature && !options.allowEmptySignature) {
+          if (!thinkingSignature && !allowEmptySignature) {
             blocks.push({
               type: "text",
               text: sanitizeTransportPayloadText(block.thinking),
@@ -308,57 +386,140 @@ async function convertAnthropicMessages(
             signature: "reasoning_content",
           });
         }
-        params.push(assistantMsg);
+        return assistantMsg;
       }
-      continue;
+      return undefined;
     }
     if (msg.role === "toolResult") {
       const toolResults: ToolResultBlockParam[] = [];
-      let j = i;
-      while (j < transformedMessages.length) {
-        const nextMsg = transformedMessages.at(j);
+      for (let j = i; j < end; j++) {
+        const nextMsg = transformed.at(j);
         if (nextMsg?.role !== "toolResult") {
           break;
         }
         toolResults.push({
           type: "tool_result",
-          tool_use_id: nextMsg.toolCallId,
+          tool_use_id: preparedRequestSuffix.has(context)
+            ? preparedRequestSuffix.toolCallId(
+                context,
+                nextMsg.toolCallId,
+                normalizeAnthropicToolCallId(nextMsg.toolCallId),
+              )
+            : nextMsg.toolCallId,
           content: await convertContentBlocks(
             nextMsg.content,
             model,
             imageBudget,
-            options.profile,
+            profile,
             nextMsg.isError,
           ),
           is_error: nextMsg.isError,
         });
-        j += 1;
       }
-      i = j - 1;
-      params.push({
+      return {
         role: "user",
         content: toolResults,
-      });
+      };
     }
+    return undefined;
+  };
+  const immutable = getAiTransportHost().immutableData;
+  const projectionKey = JSON.stringify([
+    profile,
+    model.provider,
+    model.api,
+    model.id,
+    model.baseUrl,
+    model.input.includes("image"),
+    isOAuthToken,
+    allowReasoningContentReplay,
+    allowEmptySignature,
+    replayThinkingEnabled,
+    inHistorySystemUpdates,
+  ]);
+  const activeProjectionKey = `${projectionKey}:active`;
+  const canReuse = (message: Context["messages"][number]) =>
+    Boolean(immutable?.isPlainData) &&
+    immutable?.isDeeplyFrozenPlainData(message) &&
+    (typeof message.content === "string" ||
+      !message.content.some((block) => block.type === "image"));
+  for (let i = 0; i < transformed.length;) {
+    const msg = transformed[i];
+    if (!msg) {
+      i++;
+      continue;
+    }
+    let end = i + 1;
+    if (msg.role === "toolResult") {
+      while (transformed[end]?.role === "toolResult") {
+        end++;
+      }
+    }
+    // Image budgets and prepared suffix IDs are request-scoped. Compaction inserts
+    // a request-owned block before replay; none of these enter the projection cache.
+    let reusable = !compaction && !preparedRequestSuffix.has(context) && canReuse(msg);
+    for (let j = i + 1; reusable && j < end; j++) {
+      const following = transformed[j];
+      reusable = following !== undefined && canReuse(following);
+    }
+    const key = i === activeToolTurnAssistantIndex ? activeProjectionKey : projectionKey;
+    let projections = reusable ? anthropicMessageProjections.get(msg) : undefined;
+    const projection = projections?.find(
+      (entry) =>
+        entry.key === key &&
+        entry.followingSources.length === end - i - 1 &&
+        entry.followingSources.every((source, index) => source === transformed[i + index + 1]),
+    );
+    let output = projection?.message;
+    if (!projection) {
+      output = await convertMessage(msg, i, end);
+      if (reusable && immutable) {
+        immutable.freezeJsonSnapshot(output);
+        if (!projections) {
+          projections = [];
+          anthropicMessageProjections.set(msg, projections);
+        }
+        if (projections.length >= 8) {
+          projections.shift();
+        }
+        projections.push({ key, followingSources: transformed.slice(i + 1, end), message: output });
+      }
+    }
+    if (output) {
+      appendMessage(output);
+      if (msg.role === "user") {
+        const runtimeContextRetained =
+          msg.runtimeContext !== undefined
+            ? msg.runtimeContext.retained
+            : msg.runtimeContextCarrierRetained;
+        if (
+          hasRuntimeContextMarker(msg) &&
+          !(runtimeContextRetained ?? modelRetainsRuntimeContext)
+        ) {
+          cacheBreakpointOptOutMessageIndexes.add(messages.length - 1);
+        }
+      }
+    }
+    i = end;
   }
-  return params;
-}
-
-/** Shared generation contract, after each entry point resolves its defaults and tool policy. */
-function buildAnthropicGenerationParams({
-  model,
-  options,
-  tools,
-  toolProjection,
-  profile,
-}: {
-  model: Model<"anthropic-messages">;
-  options?: AnthropicOptions;
-  tools?: AnthropicTool[];
-  toolProjection?: AnthropicToolProjection;
-  profile: "provider" | "transport";
-}) {
-  const params: Pick<
+  if (managed && messages.length === 0) {
+    messages.push({ role: "user", content: "." });
+  }
+  const params: MessageCreateParamsStreaming = {
+    model:
+      managed && isDirectAnthropicModel(model) ? model.id.replace(/^anthropic\//i, "") : model.id,
+    // SAFETY: the API accepts in-history system messages and compaction blocks absent from the SDK union.
+    messages: messages as MessageParam[],
+    max_tokens: maxTokens ?? model.maxTokens,
+    stream: true,
+  };
+  if (system) {
+    params.system = system;
+  }
+  if (serverSideFallback) {
+    Object.assign(params, { fallbacks: ANTHROPIC_SERVER_SIDE_FALLBACKS });
+  }
+  const generationParams: Pick<
     MessageCreateParamsStreaming,
     "temperature" | "stop_sequences" | "tools" | "output_config" | "metadata" | "tool_choice"
   > & {
@@ -372,15 +533,20 @@ function buildAnthropicGenerationParams({
     !options?.thinkingEnabled &&
     !supportsClaudeNativeXhighEffort(model)
   ) {
-    params.temperature = options.temperature;
+    generationParams.temperature = options.temperature;
   }
 
   if (options?.stop !== undefined && options.stop.length > 0) {
-    params.stop_sequences = options.stop;
+    generationParams.stop_sequences = options.stop;
   }
 
-  if (tools && tools.length > 0) {
-    params.tools = tools;
+  if (toolProjection && toolProjection.tools.length > 0) {
+    generationParams.tools = toolProjection.tools.map((tool) => ({
+      name: tool.wireName,
+      description: tool.description,
+      input_schema: tool.inputSchema,
+      ...(eagerToolInputStreaming ? { eager_input_streaming: true } : {}),
+    }));
   }
 
   // Configure thinking mode: always-on adaptive (Fable 5 and Mythos 5),
@@ -392,24 +558,24 @@ function buildAnthropicGenerationParams({
       // older Claude 4 models (whose API default is also "summarized").
       const display: AnthropicThinkingDisplay = options?.thinkingDisplay ?? "summarized";
       if (supportsClaudeAdaptiveThinking(model)) {
-        params.thinking = { type: "adaptive", display };
+        generationParams.thinking = { type: "adaptive", display };
         const effort =
           options?.effort ??
           (mandatoryAdaptiveThinking
             ? resolveAnthropicThinkingEffort(model, undefined)
             : undefined);
         if (effort) {
-          params.output_config = { effort };
+          generationParams.output_config = { effort };
         }
       } else {
-        params.thinking = {
+        generationParams.thinking = {
           type: "enabled",
           budget_tokens: options?.thinkingBudgetTokens ?? 1024,
           ...(profile === "provider" ? { display } : {}),
         };
       }
     } else if (options?.thinkingEnabled === false) {
-      params.thinking = requiresClaudeBetweenToolsThinking(model)
+      generationParams.thinking = requiresClaudeBetweenToolsThinking(model)
         ? { type: "between_tools" }
         : { type: "disabled" };
     }
@@ -418,155 +584,34 @@ function buildAnthropicGenerationParams({
   if (options?.metadata) {
     const userId = options.metadata.user_id;
     if (typeof userId === "string") {
-      params.metadata = { user_id: userId };
+      generationParams.metadata = { user_id: userId };
     }
   }
 
   if (options?.toolChoice) {
     const normalizedToolChoice = normalizeAnthropicToolChoice(
-      mandatoryAdaptiveThinking ||
-        options?.thinkingEnabled === true ||
-        resolveClaudeSonnet55ModelIdentity(model) !== undefined,
+      resolveClaudeHaiku55ModelIdentity(model) === undefined &&
+        (mandatoryAdaptiveThinking ||
+          options?.thinkingEnabled === true ||
+          resolveClaudeSonnet55ModelIdentity(model) !== undefined),
       options.toolChoice,
     );
     const projectedToolChoice = toolProjection
       ? reconcileAnthropicToolChoice(normalizedToolChoice, toolProjection)
       : normalizedToolChoice;
     if (projectedToolChoice) {
-      params.tool_choice = projectedToolChoice;
+      generationParams.tool_choice = projectedToolChoice;
     }
   }
 
-  return params;
-}
-
-function convertAnthropicTools(
-  tools: Tool[],
-  isOAuthTokenLocal: boolean,
-  supportsEagerToolInputStreaming = false,
-): {
-  projection: AnthropicToolProjection;
-  tools: AnthropicTool[];
-} {
-  const projection = projectAnthropicTools(tools, (name) =>
-    isOAuthTokenLocal ? toClaudeCodeToolName(name) : name,
-  );
-  return {
-    projection,
-    tools: projection.tools.map((tool) => {
-      const projected: AnthropicTool = {
-        name: tool.wireName,
-        description: tool.description,
-        input_schema: tool.inputSchema,
-      };
-      if (supportsEagerToolInputStreaming) {
-        projected.eager_input_streaming = true;
-      }
-      return projected;
-    }),
-  };
-}
-
-/** Assemble both public Messages routes without changing their replay/default profiles. */
-export async function buildAnthropicRequest(
-  model: Model<"anthropic-messages">,
-  context: Context,
-  options: (AnthropicOptions & { authProfileId?: string }) | undefined,
-  profile: "provider" | "transport",
-  isOAuthToken: boolean,
-  serverSideFallback: boolean,
-  claudeCodeVersion?: string,
-) {
-  const managed = profile === "transport";
-  const maxTokens = managed
-    ? resolveAnthropicMessagesMaxTokens({
-        modelContextWindow: model.contextWindow,
-        modelMaxTokens: model.maxTokens,
-        requestedMaxTokens: options?.maxTokens,
-      })
-    : (options?.maxTokens ?? model.maxTokens);
-  if (managed && maxTokens === undefined) {
-    throw new Error(
-      `Anthropic Messages transport requires a positive maxTokens value for ${model.provider}/${model.id}`,
-    );
-  }
-  const { cacheControl, supportsCacheControlOnTools } = resolveAnthropicCacheOptions(
-    model,
-    options?.cacheRetention,
-  );
-  const system = buildAnthropicSystemBlocks(
-    context.systemPrompt,
-    isOAuthToken,
-    cacheControl,
-    claudeCodeVersion,
-  );
-  const convertedTools = context.tools
-    ? convertAnthropicTools(
-        context.tools,
-        isOAuthToken,
-        !managed &&
-          (model.compat?.supportsEagerToolInputStreaming ?? model.provider !== "fireworks"),
-      )
-    : undefined;
-  const toolProjection = convertedTools?.projection;
-  const replayPlan = buildAnthropicReplayPlan(context.messages, model, {
-    enabled: !isOAuthToken && options?.anthropicServerCompaction === true,
-    authProfileId: options?.authProfileId,
-    sessionId: options?.sessionId,
-  });
-  const cacheBreakpointOptOutMessageIndexes = new Set<number>();
-  const transformed = managed
-    ? getAiTransportHost().transformTransportMessages(
-        replayPlan.messages,
-        model,
-        normalizeAnthropicToolCallId,
-        undefined,
-      )
-    : transformProviderMessages(replayPlan.messages, model, normalizeAnthropicToolCallId);
-  const messages = await convertAnthropicMessages(transformed, model, isOAuthToken, {
-    profile,
-    allowReasoningContentReplay:
-      managed && resolveProviderEndpoint(model).endpointClass === "xiaomi-native",
-    allowEmptySignature: model.compat?.allowEmptySignature,
-    compaction: replayPlan.compaction,
-    replayThinkingEnabled:
-      requiresClaudeAdaptiveThinking(model) || options?.thinkingEnabled === true,
-    cacheBreakpointOptOutMessageIndexes,
-  });
-  if (managed && messages.length === 0) {
-    messages.push({ role: "user", content: "." });
-  }
-  const params: MessageCreateParamsStreaming = {
-    model:
-      managed && isDirectAnthropicModel(model) ? model.id.replace(/^anthropic\//i, "") : model.id,
-    // SAFETY: the beta endpoint accepts compaction blocks omitted by the stable SDK union.
-    messages: messages as MessageParam[],
-    max_tokens: maxTokens ?? model.maxTokens,
-    stream: true,
-  };
-  if (system) {
-    params.system = system;
-  }
-  if (serverSideFallback) {
-    Object.assign(params, { fallbacks: ANTHROPIC_SERVER_SIDE_FALLBACKS });
-  }
-  Object.assign(
-    params,
-    buildAnthropicGenerationParams({
-      model,
-      options,
-      tools: convertedTools?.tools,
-      toolProjection,
-      profile,
-    }),
-  );
+  Object.assign(params, generationParams);
   applyAnthropicRequestCacheControl(
     params,
     cacheControl,
     supportsCacheControlOnTools,
     cacheBreakpointOptOutMessageIndexes,
   );
-  return { params, toolProjection, usedCompactionReplay: replayPlan.compaction !== undefined };
+  return { params, toolProjection, replayedCompaction: replayPlan.compaction };
 }
 
 /** Apply caller payload edits before restoring required request contracts and beta headers. */
@@ -578,15 +623,12 @@ export async function prepareAnthropicRequest(
 ) {
   let params = initialParams;
   applyAnthropicContextManagementToRequest(params, model, options, directApiKeyBetaHeader);
-  const nextParams = await options?.onPayload?.(params, model);
-  if (nextParams !== undefined) {
-    // SAFETY: the public payload hook owns the replacement request shape.
-    params = nextParams as MessageCreateParamsStreaming;
-  }
+  const hooked = await applyAnthropicPayloadHook(params, model, options);
+  params = hooked.params;
   applyClaudeRequestContract(params, model);
   const betaHeader = resolveAnthropicRequestBetaHeader(params, directApiKeyBetaHeader);
   const headers =
     applyAnthropicThinkingBindingControls(params, betaHeader) ??
     (betaHeader ? { "anthropic-beta": betaHeader } : undefined);
-  return { params, headers };
+  return { params, headers, messageSources: hooked.messageSources };
 }

@@ -18,10 +18,7 @@ export type UpdatePresenceData = Omit<GatewayPresenceUpdateData, "status"> & {
 };
 
 export type GatewayPluginOptions = {
-  reconnect?: { maxAttempts?: number };
   intents?: number;
-  autoInteractions?: boolean;
-  shard?: [number, number];
   url?: string;
 };
 
@@ -32,7 +29,7 @@ export type DiscordGatewayVoiceStateTransition = {
 
 export interface GatewayPluginContract {
   readonly id: "gateway";
-  readonly options: Required<Pick<GatewayPluginOptions, "autoInteractions">> & GatewayPluginOptions;
+  readonly options: GatewayPluginOptions;
   emitter: EventEmitter;
   isConnected: boolean;
   sequence: number | null;
