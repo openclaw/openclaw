@@ -549,14 +549,6 @@ export function createPluginsPage(options: {
     if (!routeDataConsumed || !gateway.connected || !gateway.client) {
       return;
     }
-    // A settings page can mount before connection; admit its reads through
-    // both route changes and connected snapshots, including Advanced.
-    if (
-      surface === "settings" ||
-      (activeRoutePluginId() && state.installedDetailTab === "configuration")
-    ) {
-      void context.runtimeConfig.ensureLoaded();
-    }
     if (routeData) {
       const { search, hash } = routeData.location;
       const params = new URLSearchParams(search);
@@ -564,6 +556,8 @@ export function createPluginsPage(options: {
         ? params.get("view") === "settings" || hash === "#configuration"
         : surface === "settings" && params.get("tab") === "advanced";
       if (needsSchema) {
+        // Inventory and overview need no editor; configuration owns these independent reads.
+        void context.runtimeConfig.ensureLoaded();
         void context.runtimeConfig.ensureSchemaLoaded();
       }
     }

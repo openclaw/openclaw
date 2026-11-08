@@ -211,8 +211,10 @@ it.each([true, false])("retries failed configuration recovery (write=%s)", async
   };
   const runtimeConfig = createRuntimeConfigHarness(refresh, configState, () => client);
   const { page } = await mountRoute(harness, result, SETTINGS_URL, runtimeConfig);
-  await waitForSolid(() =>
-    expect(page.querySelector(".plugin-editor .callout button")).not.toBeNull(),
+  // The first installed detail also loads the settings editor under CI transform load.
+  await waitForSolid(
+    () => expect(page.querySelector(".plugin-editor .callout button")).not.toBeNull(),
+    { timeout: 5_000 },
   );
   const retry = [...page.querySelectorAll<HTMLElement>(".plugin-editor .callout")]
     .find((element) => element.textContent?.includes(configState.lastError))
@@ -862,7 +864,7 @@ it.each([
   ["/settings/plugins/workboard?view=settings", true],
   ["/settings/plugins/workboard#configuration", true],
 ] as const)(
-  "loads schema after adopting configuration surfaces at %s",
+  "loads config and schema only after adopting configuration surfaces at %s",
   async (url, schemaNeeded) => {
     const { harness } = pageGateway({
       "plugins.list": () => createResult(),
@@ -878,9 +880,10 @@ it.each([
     if ("type" in route) {
       throw new Error("Expected the Plugin Settings route to load");
     }
-    expect(context.runtimeConfig.ensureLoaded).toHaveBeenCalledOnce();
+    expect(context.runtimeConfig.ensureLoaded).not.toHaveBeenCalled();
     expect(context.runtimeConfig.ensureSchemaLoaded).not.toHaveBeenCalled();
     await mountPage(context, route);
+    expect(context.runtimeConfig.ensureLoaded).toHaveBeenCalledTimes(schemaNeeded ? 1 : 0);
     expect(context.runtimeConfig.ensureSchemaLoaded).toHaveBeenCalledTimes(schemaNeeded ? 1 : 0);
   },
 );
