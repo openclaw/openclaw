@@ -13,6 +13,37 @@ OpenClaw runs one Gateway (the master) on a host and connects every client to it
 Remote clients can continue the same Gateway-owned conversation by URL or short
 reference. See [Session synchronization and attachment](/concepts/session-attachment).
 
+## OpenClaw ID nodes (Labs)
+
+With **OpenClaw ID** enabled in Labs, headless nodes can reach a claw through its
+relay and encrypted tunnel, without Tailscale, an OpenClaw ID account, or a shared
+Gateway token. Each node generates and keeps its own tunnel key. The owner
+registers a signed, single-use node invitation; the link defaults to 10 minutes
+and cannot last longer than one hour.
+
+Run the join command supplied by the owner, including the deployment's Discovery
+origin:
+
+```bash
+openclaw node join '<node-join-link>' --discovery-url https://discovery.example.test
+```
+
+Treat the join link as a secret. The node terminal and the owner's approval dialog
+show the same six-digit verification code. Compare all six digits, review the
+self-reported name, platform, commands, and capabilities, then explicitly approve.
+An open dialog never approves a node automatically. The Discovery service can
+relay a pending request but cannot admit the node.
+
+An admitted node key grants only `role: "node"` with client mode `node`. It grants
+no owner or member identity, operator scopes, plugin cookies, or operator HTTP
+access. Session-hosting nodes continue to authenticate their worker WebSocket and
+HTTP transfers with those routes' separate credentials.
+
+See [node pairing](/gateway/pairing#openclaw-id-nodes-labs) for the one-time pairing
+approval and removal behavior. Creating or signing node invitations on the Gateway
+host's command line is not supported by this flow; an owner device or recovery
+root signs admission.
+
 ## The core idea
 
 The Gateway WebSocket binds to **loopback** by default, on port `18789` (`gateway.port`). For remote use, either expose it through Tailscale Serve / a trusted LAN-Tailnet bind, or forward the loopback port over SSH.
@@ -31,6 +62,37 @@ Application previews need their own private ingress. A tunnel that forwards only
 the Gateway port does not forward portals. Use [managed private Serve or wildcard
 portal ingress](/gateway/portals#remote-access); the browser and application must
 use the service's returned portal URLs without replacing their host or port.
+
+## OpenClaw ID alongside existing access
+
+OpenClaw ID remote access is an additional entrance, not a replacement for
+Tailscale, Cloudflare Access, or the Gateway's token/password. Each entrance
+keeps its own authentication and permissions:
+
+- OpenClaw ID tunnel requests use the admitted device's owner, operator, or
+  viewer role. Proxy identity headers and other Gateway credentials cannot
+  widen that role. Viewers remain read-only; members cannot manage People.
+- Tailscale Serve and Cloudflare Access users keep their existing Gateway
+  permissions. Arriving through a proxy on `127.0.0.1` does not make them the
+  local machine owner. A direct tailnet connection is remote too.
+- Turning on remote access requires an authenticated direct-loopback
+  connection without proxy or identity headers. People, owner
+  devices, and invites are available to that local operator or an active
+  OpenClaw ID owner device, not merely to any proxy-authenticated administrator.
+  Recovery-kit secrets are generated and exported in the browser, not downloaded
+  from the Gateway.
+
+**Removing someone in People revokes their OpenClaw ID access only.** It closes
+their OpenClaw ID connections, cancels their active or queued runs from those
+connections, and revokes the associated device tokens. It does not remove them
+from your tailnet or Cloudflare Access policy, or rotate a shared Gateway token
+or password. Revoke those independent permissions separately if they must lose
+all access. Likewise, someone independently given a stronger credential can
+still use its permissions through its own entrance.
+
+A headerless SSH port forward is indistinguishable from a local process to the
+Gateway. Treat SSH access to the host as local-machine authority; do not expose
+an unmarked TCP forward to untrusted users.
 
 ## Command flow (what runs where)
 

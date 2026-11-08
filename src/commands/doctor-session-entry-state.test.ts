@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import * as terminalNote from "../../packages/terminal-core/src/note.js";
 import { expectBytesEqual } from "../../test/helpers/file-snapshots.js";
 import { readSessionEntryCount } from "../config/sessions/session-accessor.sqlite-entry-inventory.js";
 import { loadExactSessionEntryReadOnly } from "../config/sessions/session-accessor.sqlite-exact-read.js";
@@ -340,6 +341,49 @@ it("closes a captured session inspection reader before removing its private snap
       await snapshot?.cleanupAsync();
     }
   });
+});
+
+it("backs up and repairs retained ISO endedAt without losing session data or repeating repair", async () => {
+  const notes = vi.spyOn(terminalNote, "note").mockImplementation(() => {});
+  const legacy = seedEntry("june-ended-at", {
+    status: "done",
+    endedAt: "2026-06-11T17:50:58.538Z",
+    pluginExtensions: { example: { draft: { text: "retained draft" } } },
+  });
+  expect(() => loadExactSessionEntryReadOnly(legacy.scope)).toThrow(/endedAt.*finite number/);
+  expect(await repair(false)).toEqual({ found: 1, repaired: 0, scannedStores: 1 });
+  expect(legacy.readRaw()).toBe(legacy.raw);
+  expect(await applyRepair()).toEqual({ found: 1, repaired: 1, scannedStores: 1 });
+  expect(loadExactSessionEntryReadOnly(legacy.scope)?.entry).toMatchObject({
+    ...JSON.parse(legacy.raw),
+    endedAt: 1_781_200_258_538,
+  });
+  expect(legacy.row("ended_at", "session_windows")).toEqual({ ended_at: 1_781_200_258_538 });
+  using backup = readBackup(legacy.databasePath);
+  expect(legacy.readStored(backup)).toBe(legacy.raw);
+  expect(notes).toHaveBeenCalledWith(
+    "Normalized ISO-8601 endedAt timestamps for 1 durable session row(s).",
+    "Session recovery warning",
+  );
+  const repaired = legacy.readRaw();
+  notes.mockClear();
+  expect(await applyRepair()).toEqual({ found: 0, repaired: 0, scannedStores: 1 });
+  expect(legacy.readRaw()).toBe(repaired);
+  expect(notes).not.toHaveBeenCalled();
+});
+
+it.each([
+  "not-a-timestamp",
+  "2026-02-30T17:50:58.538Z",
+  "2026-06-11T17:50:58.5381Z",
+  "2026-06-11T17:50:58.538",
+])("preserves unusable endedAt %s with the existing offline-repair guidance", async (endedAt) => {
+  const legacy = seedEntry("unusable-ended-at", { endedAt });
+  expect(await applyRepair()).toEqual({ found: 1, repaired: 0, scannedStores: 1 });
+  expect(legacy.readRaw()).toBe(legacy.raw);
+  expect(() => loadExactSessionEntryReadOnly(legacy.scope)).toThrow(
+    /endedAt.*Unusable values require offline repair or restoration/,
+  );
 });
 
 it("backs up original rows and migrates pending delivery state before canonical reads", async () => {

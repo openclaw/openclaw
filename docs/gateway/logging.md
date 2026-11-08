@@ -102,6 +102,11 @@ preparations, and model calls independently of log levels.
 Per-request GitHub API timing records also use `debug`, including fetches over
 500 ms. Transport failures and rate-limit errors retain their normal handling.
 
+Slow SQLite holds for `session.transcript.append-turn` include `context.messages`,
+the number of messages submitted to that write transaction. This count includes
+replays and messages later skipped by a predicate; it is not a transcript length
+or committed-message count. It contains no message content or identities.
+
 Plugin host cleanup failures during session reset or deletion emit one
 `plugins/cleanup` warning per failure, including the operation, plugin, hook, and
 error. Check the reported cleanup error before retrying. Successful cleanup

@@ -93,7 +93,8 @@ non-empty strings. Portable Agent Plugins use the same field under
 `extensions["com.openai"].interface.defaultPrompt` in root `plugin.json`.
 
 These normalize to OpenClaw's [recommended prompt metadata](/plugins/manifest#recommended-prompts).
-Only outer whitespace is trimmed; internal whitespace and full text are preserved.
+Whitespace is trimmed and collapsed to single spaces before enforcing the limit
+of 128 Unicode code points per prompt.
 An invalid declaration is ignored as a whole with a warning, not silently shortened.
 Reading these recommendations never executes bundle content.
 

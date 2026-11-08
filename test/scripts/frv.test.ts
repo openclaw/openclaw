@@ -1613,6 +1613,35 @@ describe("FRV same-parent recovery", () => {
     expect(client.verify).toHaveBeenCalledOnce();
   });
 
+  it("exits when a rerun child fails again instead of idling on an active sibling", async () => {
+    const first = child("normalCi", "101");
+    const sibling = child("pluginPrerelease", "202");
+    const childRuns = new Map<string, { attempt: number; conclusion: string | null }>([
+      ["101", { attempt: 1, conclusion: "failure" }],
+      ["202", { attempt: 1, conclusion: null }],
+    ]);
+    const client = {
+      ...controllerClient([first, sibling], childRuns, { attempt: 1, conclusion: null }),
+      rerunFailed: vi.fn(async () => {
+        childRuns.set("101", { attempt: 2, conclusion: "failure" });
+      }),
+      rerunParent: vi.fn(),
+      verify: vi.fn(),
+    };
+    await withFastPolling(() =>
+      expect(
+        continueFailed(plan([first, sibling]), "77", client, {
+          operationDeadline: Date.now() + 2_000,
+        }),
+      ).rejects.toThrow(
+        "child normalCi failed again on attempt 2; rerun budget remaining 0; rerun pnpm frv continue --failed --run 77 to retry",
+      ),
+    );
+    expect(client.rerunFailed).toHaveBeenCalledExactlyOnceWith("101");
+    expect(childRuns.get("202")?.conclusion).toBeNull();
+    expect(client.rerunParent).not.toHaveBeenCalled();
+  });
+
   it.each([false, true])(
     "reruns the exact carried failed job once, including ambiguous response=%s",
     async (ambiguous) => {
@@ -1648,7 +1677,7 @@ describe("FRV same-parent recovery", () => {
         continueFailed(plan([selected]), "77", client, {
           job: "normalCi:selected",
         }),
-      ).rejects.toThrow("complete green composite: normalCi");
+      ).rejects.toThrow("child normalCi failed again on attempt 3; rerun budget remaining 0");
       expect(client.rerunJob).toHaveBeenCalledExactlyOnceWith(11);
       expect(client.rerunFailed).not.toHaveBeenCalled();
       expect(client.rerunParent).not.toHaveBeenCalled();
@@ -1903,7 +1932,7 @@ describe("FRV same-parent recovery", () => {
               })
             : expect(inspection).rejects.toThrow(
                 outcome === "persists"
-                  ? "duplicate job identity"
+                  ? "duplicate job identity: test; GitHub ghost jobs detected"
                   : "changed during attempt materialization",
               );
         await Promise.all([result, vi.advanceTimersByTimeAsync(60_000)]);
@@ -2453,7 +2482,11 @@ describe("FRV child rerun", () => {
   });
 
   it.each([
-    ["keeps duplicate queued jobs", 2, "attempt 2 is unsealable and holds duplicate jobs: test"],
+    [
+      "keeps duplicate queued jobs",
+      2,
+      "attempt 2 is unsealable and holds duplicate jobs: test; GitHub ghost jobs detected; stop rerunning",
+    ],
     ["exposes no jobs", 0, "attempt 2 exposed no jobs"],
   ])("fails after one POST when the new attempt %s", async (_case, copies, message) => {
     const scenario = rerunScenario({});
@@ -2915,6 +2948,46 @@ describe("FRV watch", () => {
     ]);
     expect(getJobLog).toHaveBeenCalledTimes(2);
     expect(getJobLog).toHaveBeenLastCalledWith(5, expect.anything());
+  });
+
+  it("advises a fresh FRV only for duplicate jobs that persist into a final attempt", async () => {
+    const ci = child("normalCi", "101");
+    let polls = 0;
+    const duplicateJobs = (status: string) => [
+      { ...job("test"), id: 900, status: "completed" },
+      { ...job("test", status === "completed" ? "success" : ""), id: 901, status },
+    ];
+    const client = {
+      ...unsealedWatcherReads,
+      repository: REPOSITORY,
+      getRun: async (runId: string) =>
+        runId === "77"
+          ? rootRun(1, polls > 2 ? "failure" : null)
+          : runFor(ci, 1, polls > 2 ? "failure" : null),
+      getParentJobs: async () => [
+        {
+          conclusion: "success",
+          id: 5,
+          name: "Run normal full CI",
+          run_attempt: 1,
+          status: "completed",
+        },
+      ],
+      getJobLog: async () =>
+        `2026-09-29T22:00:00.1Z Dispatched ci.yml: https://github.com/${REPOSITORY}/actions/runs/101 (attempt 1)\n`,
+      getAttemptJobs: async () => duplicateJobs(++polls > 2 ? "completed" : "queued"),
+    };
+    const messages: string[] = [];
+    await watchRelease("77", client, {
+      emit: (event: { message: string }) => messages.push(event.message),
+      intervalMs: 0,
+      statePath: path.join(tempDirs.make("frv-duplicates-"), "state.json"),
+    });
+    const duplicates = messages.filter((message) => message.includes("duplicate jobs"));
+    expect(duplicates).toEqual([
+      "normalCi run 101 attempt 1 holds duplicate jobs: test; they may still settle; recheck before rerunning",
+      "normalCi run 101 attempt 1 holds duplicate jobs: test; GitHub ghost jobs detected; stop rerunning, cancel that attempt, and start a fresh all-group FRV",
+    ]);
   });
 
   it.each(["reported", "restamped", "omitted", "rerun", "recovered"])(

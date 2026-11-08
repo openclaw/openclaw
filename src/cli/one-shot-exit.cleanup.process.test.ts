@@ -168,16 +168,17 @@ it.for([
   { leak: true, exitCode: 0, status: null, signal: "SIGTERM", terminated: true },
   // A non-zero status can be a supervisor's restart instruction, so it is only reported.
   { leak: true, exitCode: 7, status: 7, signal: null, terminated: false },
+  { leak: true, exitCode: 7, status: null, signal: "SIGTERM", terminated: true, oneShot: true },
 ])(
-  "bounds a leaked handle after settled finalization (leak=$leak, exitCode=$exitCode)",
-  ({ leak, exitCode, status, signal, terminated }, { expect }) => {
+  "bounds a leaked handle after settled finalization (leak=$leak, exitCode=$exitCode, oneShot=$oneShot)",
+  ({ leak, exitCode, status, signal, terminated, oneShot }, { expect }) => {
     if (terminated && process.platform === "win32") {
       return;
     }
     const script = `
       import { createServer } from "node:net";
       import { setTimeout as delay } from "node:timers/promises";
-      import { requestSettledExitWatchdog, runCliWithExitFinalization } from ${JSON.stringify(resolveRuntimeWorkerUrl(cliMessageExitEntrypoints.oneShotExit).href)};
+      import { requestOneShotSettledExitWatchdog, requestSettledExitWatchdog, runCliWithExitFinalization } from ${JSON.stringify(resolveRuntimeWorkerUrl(cliMessageExitEntrypoints.oneShotExit).href)};
       process.on("SIGTERM", () => {});
       if (${leak}) {
         const server = createServer().listen(0, "127.0.0.1");
@@ -187,7 +188,7 @@ it.for([
       await runCliWithExitFinalization({
         run: async () => {
           process.exitCode = ${exitCode};
-          requestSettledExitWatchdog(200);
+          ${oneShot ? "requestOneShotSettledExitWatchdog" : "requestSettledExitWatchdog"}(200);
         },
         // Finalization longer than the watchdog proves it is armed only afterwards.
         finalize: async () => {

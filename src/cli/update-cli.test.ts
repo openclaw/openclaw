@@ -9,6 +9,7 @@ import type { UpdateRunResult } from "../infra/update-runner-types.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
 import { createCommandResult as commandResult } from "../test-utils/npm-spec-install-test-helpers.js";
+import { VERSION } from "../version.js";
 import { withConsoleLogsRoutedToStderrForJson } from "./json-output-mode.js";
 import * as check from "./update-cli-assertions.test-support.js";
 import { createUpdateCliFixture } from "./update-cli-fixture.test-support.js";
@@ -100,6 +101,9 @@ describe("update-cli", () => {
   });
 
   it("keeps update completion refresh best-effort when profile install fails", async () => {
+    cli.mockGitUpdateAfterMutation(cli.makeOkUpdateResult({ after: { version: VERSION } }), false, {
+      databaseEngines: ["sqlite", "postgres"],
+    });
     setTty(true);
     mocks.checkShellCompletionStatus.mockResolvedValue({
       shell: "zsh",
@@ -118,6 +122,9 @@ describe("update-cli", () => {
   });
 
   it("prompts for optional shell completion setup without --yes", async () => {
+    cli.mockGitUpdateAfterMutation(cli.makeOkUpdateResult({ after: { version: VERSION } }), false, {
+      databaseEngines: ["sqlite", "postgres"],
+    });
     setTty(true);
     mocks.confirm.mockResolvedValue(true);
 

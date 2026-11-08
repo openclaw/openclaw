@@ -7,7 +7,10 @@ import {
   createDeferred,
   withinTest,
 } from "../../../test/helpers/promise.js";
+import type { SandboxBackendHandle } from "../../agents/sandbox/backend-handle.types.js";
 import { requireGit } from "../../agents/worktrees/git.js";
+import { withWorktreePreparationTiming } from "../../agents/worktrees/preparation-timing.js";
+import * as diagnostics from "../../infra/diagnostic-events.js";
 import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
 import { prepareSandboxCheckpointFixture } from "./local-workspace-incremental.test-support.js";
 import { withLocalWorkspaceProjection } from "./local-workspace-projection.js";
@@ -20,6 +23,77 @@ const expectText = async (directory: string, relative: string, expected: string)
   expect(await fs.readFile(path.join(directory, relative), "utf8")).toBe(expected);
 const expectMissing = async (directory: string, relative: string) =>
   expect(fs.stat(path.join(directory, relative))).rejects.toMatchObject({ code: "ENOENT" });
+
+export async function proveWorkspaceWaitAttribution(owner: LocalWorkspaceOwner) {
+  using _ = await prepareSandboxCheckpointFixture(owner);
+  const stores = await import("./local-workspace-store.js");
+  const projections = await import("./local-workspace-projection.js");
+  const entered = createDeferred();
+  const release = createDeferred();
+  const admitted = createDeferred();
+  const joined = createDeferred();
+  const events: diagnostics.DiagnosticPhaseSnapshot[] = [];
+  vi.spyOn(diagnostics, "createQueuedDiagnosticPhaseEmitter").mockReturnValue((event) =>
+    events.push(event),
+  );
+  let clock = 0;
+  vi.spyOn(performance, "now").mockImplementation(() => clock);
+  const holder = stores.withLocalWorkspaceStore({ worktreeId: owner.worktree.id }, async () => {
+    entered.resolve();
+    await release.promise;
+  });
+  await awaitGateBeforeSettlement(entered.promise, holder, "Projection custody was not acquired");
+  const withStore = stores.withLocalWorkspaceStore;
+  vi.spyOn(stores, "withLocalWorkspaceStore").mockImplementation((...args) => {
+    const result = withStore(...args);
+    admitted.resolve();
+    return result;
+  });
+  const join = projections.withLocalWorkspacePreparation;
+  let callers = 0;
+  vi.spyOn(projections, "withLocalWorkspacePreparation").mockImplementation((...args) => {
+    const result = join(...args);
+    if (++callers === 2) {
+      joined.resolve();
+    }
+    return result;
+  });
+  const prepare = () =>
+    withWorktreePreparationTiming("sandbox", () => prepareSandboxCheckpointFixture(owner));
+  const first = prepare();
+  let second: typeof first | undefined;
+  try {
+    await awaitGateBeforeSettlement(
+      admitted.promise,
+      first,
+      "Preparation did not wait for custody",
+    );
+    second = prepare();
+    await awaitGateBeforeSettlement(
+      joined.promise,
+      second,
+      "Preparation did not join its producer",
+    );
+    clock = 100;
+  } finally {
+    release.resolve();
+    const results = await Promise.allSettled([holder, first, second]);
+    for (const result of results) {
+      if (result.status === "fulfilled") {
+        result.value?.[Symbol.dispose]();
+      }
+    }
+  }
+  await Promise.all([holder, first, second]);
+  expect(events).toHaveLength(2);
+  for (const event of events) {
+    expect(event).toMatchObject({
+      durationMs: 100,
+      details: { kind: "sandbox", workspaceWait: 100, unattributedMs: 0 },
+    });
+  }
+  expect(events.some((event) => event.details?.template === "reused")).toBe(true);
+}
 
 export async function proveConcurrentWorkspacePreparation(owner: LocalWorkspaceOwner) {
   const stores = await import("./local-workspace-store.js");
@@ -467,5 +541,113 @@ export async function proveColdPreparationCapacityIsolation(
     if (secondId) {
       await deleteRegistryWorktree(process.env, secondId);
     }
+  }
+}
+
+export async function proveUnchangedSandboxCommandCheckpoints(owner: LocalWorkspaceOwner) {
+  const { bindLocalSandboxWorkspace } = await import("../../agents/sandbox/local-workspace.js");
+  const { createSandboxTestContext } = await import("../../agents/sandbox/test-fixtures.js");
+  const { createHostSandboxFsBridge } =
+    await import("../../agents/test-helpers/host-sandbox-fs-bridge.js");
+  const stores = await import("./local-workspace-store.js");
+  const registry = await import("../../agents/sandbox/registry.js");
+  const engine = await import("../../agents/sandbox/container-engine.js");
+  using projection = await prepareSandboxCheckpointFixture(owner);
+  const containerName = "unchanged-command-fixture";
+  const backend: SandboxBackendHandle = {
+    id: "docker",
+    runtimeId: containerName,
+    runtimeLabel: containerName,
+    workdir: "/workspace",
+    buildExecSpec: async () => ({ argv: ["true"], env: {}, stdinMode: "pipe-closed" }),
+    runShellCommand: async () => ({ code: 0, stdout: Buffer.alloc(0), stderr: Buffer.alloc(0) }),
+  };
+  bindLocalSandboxWorkspace(
+    createSandboxTestContext({
+      overrides: {
+        workspaceDir: projection.workspaceDir,
+        backend,
+        fsBridge: createHostSandboxFsBridge(projection.workspaceDir),
+      },
+    }),
+    projection,
+  );
+  vi.stubEnv("DOCKER_HOST", "unix:///synthetic/checkpoint-docker.sock");
+  vi.stubEnv("DOCKER_CONTEXT", undefined);
+  let paused = false;
+  let pauses = 0;
+  vi.spyOn(engine, "execContainer").mockImplementation(async (_engine, args) => {
+    let stdout = "";
+    if (args[0] === "info") {
+      stdout = "checkpoint-daemon";
+    } else if (args[0] === "inspect") {
+      stdout = args.includes("{{.State.Paused}}")
+        ? String(paused)
+        : `${"a".repeat(64)} true ${paused}`;
+    } else if (args[0] === "pause") {
+      paused = true;
+      pauses++;
+    } else if (args[0] === "unpause") {
+      paused = false;
+    }
+    return { code: 0, stdout, stderr: "" };
+  });
+  const withStore = stores.withLocalWorkspaceStore;
+  vi.spyOn(stores, "withLocalWorkspaceStore").mockImplementation((params, run) =>
+    withStore(params, (store) =>
+      run({
+        ...store,
+        manifest: (row, action) => {
+          if (action.kind === "scan") {
+            expect(paused).toBe(true);
+          }
+          return store.manifest(row, action);
+        },
+      }),
+    ),
+  );
+  await registry.updateRegistry({
+    containerName,
+    backendId: "docker",
+    sessionKey: owner.sessionKey,
+    workspaceDir: projection.workspaceDir,
+    createdAtMs: 1,
+    lastUsedAtMs: 1,
+    image: "fixture",
+  });
+  try {
+    await writeText(owner.worktree.path, "host.txt", "independent host edit\n");
+    for (let command = 0; command < 10; command++) {
+      const spec = await backend.buildExecSpec({ command: "true", env: {}, usePty: false });
+      if (command === 3) {
+        const source = path.join(projection.workspaceDir, "source.txt");
+        const before = await fs.stat(source);
+        await fs.writeFile(source, "modified\n");
+        await fs.utimes(source, before.atime, before.mtime);
+      } else if (command === 7) {
+        await fs.unlink(path.join(projection.workspaceDir, "source.txt"));
+      }
+      await backend.finalizeExec!({
+        status: "completed",
+        exitCode: 0,
+        timedOut: false,
+        token: spec.finalizeToken,
+      });
+      expect(paused).toBe(false);
+      await expectText(owner.worktree.path, "host.txt", "independent host edit\n");
+      await expectMissing(projection.workspaceDir, "host.txt");
+      if (command < 7) {
+        await expectText(
+          owner.worktree.path,
+          "source.txt",
+          command < 3 ? "original\n" : "modified\n",
+        );
+      } else {
+        await expectMissing(owner.worktree.path, "source.txt");
+      }
+    }
+    expect(pauses).toBe(2);
+  } finally {
+    await registry.removeRegistryEntry(containerName);
   }
 }

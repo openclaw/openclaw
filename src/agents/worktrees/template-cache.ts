@@ -49,7 +49,7 @@ export async function retainWorktreeTemplate(
     | WorktreeTemplateRecord
     | Pick<WorktreeTemplateRecord, "cacheKey" | "contentKey" | "backend">,
   assertCurrent: () => void,
-  unpublish?: true,
+  unpublish?: true | "retire",
 ): Promise<PreparedWorktreeTemplate | undefined> {
   const context = captureOpenClawStateWorkerContext({ env });
   const key = randomUUID();
@@ -161,8 +161,7 @@ export async function collectWorktreeTemplates(
           if (
             !current ||
             current.id !== record.id ||
-            (current.status === "ready" && current.lastUsedAt >= expiresBefore) ||
-            (await hasTemplateReadersAsync(env, current.id, guard.commitGuard))
+            (current.status === "ready" && current.lastUsedAt >= expiresBefore)
           ) {
             return;
           }
@@ -329,15 +328,32 @@ export async function prepareWorktreeTemplate(params: {
           });
           return undefined;
         }
-        setWorktreePreparationTemplate("cold", { reason: "template-disk-admission" });
+        // Preserve the observed miss after build progress replaces reason with ready.
+        setWorktreePreparationTemplate("cold", {
+          reason: "template-disk-admission",
+          missReason: !existing
+            ? "no-generation"
+            : existing.status !== "ready"
+              ? "invalid"
+              : existing.backend !== params.backend
+                ? "backend-changed"
+                : existing.sourceCommit !== params.sourceCommit
+                  ? "commit-changed"
+                  : existing.contentKey !== params.contentKey
+                    ? "content-changed"
+                    : "invalid",
+          priorSourceCommit: existing?.sourceCommit.slice(0, 12),
+          requestedSourceCommit: params.sourceCommit.slice(0, 12),
+        });
         await params.requireSpace();
-        if (
-          existing &&
-          !(await timeWorktreePreparationPhase("templateRetire", () =>
-            retireWorktreeTemplate(params.env, existing, options),
-          ))
-        ) {
-          return undefined;
+        if (existing) {
+          // Free the selection key under custody; persisted GC owns physical retirement.
+          retained = await retainWorktreeTemplate(params.env, existing, assertCurrent, "retire");
+          if (!retained) {
+            return undefined;
+          }
+          await retained.release();
+          retained = undefined;
         }
         const id = randomUUID();
         const directory = path.join(params.worktreeRoot, WORKTREE_TEMPLATE_DIRECTORY);

@@ -8,18 +8,23 @@ import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const repoRoot = fileURLToPath(new URL("../../", import.meta.url));
 
-it("records binary fixture dependencies and selects the same failure as the full oracle", async () => {
-  const root = tempDirs.make("vitest-declared-inputs-");
-  const probe = path.join(root, "probe.mjs");
-  const plugin = pathToFileURL(path.join(repoRoot, "test/vitest/vitest.declared-inputs.ts")).href;
-  fs.symlinkSync(
-    fs.realpathSync(path.join(repoRoot, "node_modules")),
-    path.join(root, "node_modules"),
-    process.platform === "win32" ? "junction" : "dir",
-  );
-  fs.writeFileSync(
-    probe,
-    `
+it.each([
+  ["src/hooks/install.test.ts", "test/fixtures/hooks-install/tar-evil-id.tar"],
+  ["src/config/defaults.ollama-output-cap.test.ts", "extensions/ollama/openclaw.plugin.json"],
+])(
+  "selects declared fixture failures for %s like the full oracle",
+  async (owner, input) => {
+    const root = tempDirs.make("vitest-declared-inputs-");
+    const probe = path.join(root, "probe.mjs");
+    const plugin = pathToFileURL(path.join(repoRoot, "test/vitest/vitest.declared-inputs.ts")).href;
+    fs.symlinkSync(
+      fs.realpathSync(path.join(repoRoot, "node_modules")),
+      path.join(root, "node_modules"),
+      process.platform === "win32" ? "junction" : "dir",
+    );
+    fs.writeFileSync(
+      probe,
+      `
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
@@ -33,10 +38,10 @@ const write = (file, data) => {
   fs.writeFileSync(target, data);
 };
 write("package.json", '{"type":"module"}');
-const owner = "src/hooks/install.test.ts";
-const input = "test/fixtures/hooks-install/tar-evil-id.tar";
+const owner = ${JSON.stringify(owner)};
+const input = ${JSON.stringify(input)};
 write(input, Buffer.from([0,255,17]));
-write(owner, 'import fs from "node:fs"; import {test,expect} from "vitest"; test("binary input",()=>expect([...fs.readFileSync("test/fixtures/hooks-install/tar-evil-id.tar")]).toEqual([0,255,17]));');
+write(owner, 'import fs from "node:fs"; import {test,expect} from "vitest"; test("declared input",()=>expect([...fs.readFileSync('+JSON.stringify(input)+')]).toEqual([0,255,17]));');
 write("src/unrelated.test.ts", 'import {test,expect} from "vitest"; test("control",()=>expect(2+2).toBe(4));');
 write("vitest.config.ts", 'import {createVitestDeclaredInputsPlugin} from '+${JSON.stringify(JSON.stringify(plugin))}+'; export default {plugins:process.env.DECLARED_INPUTS==="1"?[createVitestDeclaredInputsPlugin(process.cwd())]:[],cacheDir:".cache/vite",test:{include:["src/**/*.test.ts"],pool:"forks",maxWorkers:1,experimental:{recordDependencies:true}}};');
 const cli = path.join(path.dirname(createRequire(import.meta.url).resolve("vitest/package.json")), "vitest.mjs");
@@ -63,12 +68,14 @@ const failures = report => report.testResults.filter(r=>r.status==="failed").map
 assert.deepEqual(failures(run("selected",true,[owner],1)),[owner]);
 assert.deepEqual(failures(run("oracle",true,[],1)),[owner]);
 `,
-  );
-  const result = await runNodeScript(probe, { ...process.env, NODE_OPTIONS: "" }, 45_000, {
-    cwd: root,
-    executable: process.execPath,
-    maxBuffer: 1024 * 1024,
-  });
-  expect(result.error).toBeUndefined();
-  expect(result.status, result.stderr + result.stdout).toBe(0);
-}, 50_000);
+    );
+    const result = await runNodeScript(probe, { ...process.env, NODE_OPTIONS: "" }, 45_000, {
+      cwd: root,
+      executable: process.execPath,
+      maxBuffer: 1024 * 1024,
+    });
+    expect(result.error).toBeUndefined();
+    expect(result.status, result.stderr + result.stdout).toBe(0);
+  },
+  50_000,
+);

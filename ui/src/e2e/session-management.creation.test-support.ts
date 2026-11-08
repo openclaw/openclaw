@@ -7,7 +7,7 @@ export async function openNestedSessionMenu(page: Page, parentKey: string) {
   await row.waitFor({ state: "visible" });
   await row.hover();
   await row.click({ button: "right" });
-  const action = page.getByRole("menuitem", { name: "New Nested Session", exact: true });
+  const action = page.getByRole("menuitem", { name: "New child session", exact: true });
   await action.waitFor({ state: "visible", timeout: 10_000 });
   return { row, action };
 }

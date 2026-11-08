@@ -1364,5 +1364,9 @@
         { "path": "numbers.*.tts.providers.*.apiKey", "expected": "string" }
       ]
     }
-  }
+  },
+  "recommendedPrompts": [
+    "Check whether Voice Call is ready without placing a call.",
+    "Help me prepare a phone call and review the recipient, consent, and spending limit before dialing."
+  ]
 }

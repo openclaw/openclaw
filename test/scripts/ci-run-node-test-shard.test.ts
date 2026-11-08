@@ -20,6 +20,7 @@ import {
   clonePersistentCacheSlots,
   pruneFsModuleCache,
   resolveShardPlans,
+  resolveShardChildCommand,
   resolveTestProjectsEntrypoint,
   runShardPlans,
   type ShardGroupPlan,
@@ -38,7 +39,7 @@ import { testRunnerFixtureEnv } from "./prepared-script-wrapper.test-support.js"
 const gatewayCoreConfig = "test/vitest/vitest.gateway-core.config.ts";
 
 const nativeQualificationFixtures = vi.hoisted(() => ({
-  first: "packages/markdown-core/src/chunk-text.test.ts",
+  first: "src/utils/string-readers.test.ts",
   second: "src/utils/chunk-items.test.ts",
   helperTest: "src/agents/embedded-agent-runner/run/compaction-timeout.test.ts",
   helper: "src/agents/test-helpers/agent-message-fixtures.ts",
@@ -175,6 +176,39 @@ afterEach(() => {
 });
 
 describe("scripts/ci-run-node-test-shard.mts", () => {
+  it.each([
+    { extra: [], args: [], jobArgs: undefined, preset: "runtime" },
+    { extra: [nodeTarget], args: [], jobArgs: undefined, preset: "full" },
+    { extra: [], args: ["--root", "custom-root"], jobArgs: undefined, preset: "full" },
+    { extra: [], args: ["--root", "custom-root"], jobArgs: [], preset: "full" },
+  ])(
+    "passes the $preset artifact owner through the CI child bootstrap",
+    async ({ extra, args, jobArgs, preset }) => {
+      machine(8, 31);
+      const createWorker = vi.spyOn(workerOwner, "createVitestWorkerRun");
+      const plans = resolveShardPlans({
+        OPENCLAW_NODE_TEST_TARGETS_JSON: JSON.stringify([
+          "src/auto-reply/reply/dispatch-from-config.delivery.test.ts",
+          ...extra,
+        ]),
+      });
+      const result = await recordPlans(plans, {
+        env: {
+          OPENCLAW_NODE_TEST_VITEST_ARGS_JSON: JSON.stringify(args),
+          OPENCLAW_NODE_TEST_ENV_JSON: JSON.stringify(
+            jobArgs ? { OPENCLAW_NODE_TEST_VITEST_ARGS_JSON: JSON.stringify(jobArgs) } : {},
+          ),
+        },
+      });
+      expect(result.code).toBe(0);
+      expect(createWorker).toHaveBeenCalledTimes(1);
+      const owner = createWorker.mock.results[0]!.value;
+      expect(owner.descriptor.preset).toBe(preset);
+      const child = resolveShardChildCommand(["run"], "node", "scripts/test-projects.mts", owner);
+      expect(child.args.includes("--worker-preset=runtime")).toBe(preset === "runtime");
+    },
+  );
+
   it.each([
     { event: "schedule", runId: "101", observed: true },
     { event: "pull_request", runId: "100", observed: true },
@@ -589,7 +623,7 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
   it("keeps changed qualification inputs on Vitest without dropping their coverage", () => {
     const cwd = makeScratchDir();
     const { helperTest, helper, setup } = nativeQualificationFixtures;
-    const files = [bunTarget, helperTest, nativeBunTarget];
+    const files = [bunTarget, helperTest, nativeBunTarget].toSorted();
     const copyInput = (file: string) => {
       mkdirSync(path.dirname(path.join(cwd, file)), { recursive: true });
       writeFileSync(path.join(cwd, file), readFileSync(file));
@@ -605,7 +639,7 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
     expect(resolveCiTestRuntimeSelections(selection, "dual-all", cwd)).toEqual([
       { runtime: "node" },
       { runtime: "bun", includePatterns: [nativeBunTarget] },
-      { runtime: "bun", engine: "bun-test", files: [bunTarget, helperTest] },
+      { runtime: "bun", engine: "bun-test", files: [bunTarget, helperTest].toSorted() },
     ]);
     writeFileSync(path.join(cwd, helper), "// changed fixture helper\n");
     expect(resolveCiTestRuntimeSelections(selection, "dual-all", cwd)).toEqual([

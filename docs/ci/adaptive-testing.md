@@ -217,8 +217,48 @@ enables collection only for the sampled `unit-fast` invocations described above.
 Other configs and native Bun-test execution do not emit these pilot exports.
 Missing observations must never be interpreted as passing or irrelevant tests.
 
-Keep rollout in shadow mode until representative full-run audits establish
+Keep historical graph and learned selection in shadow mode until representative full-run audits establish
 failure recall, graph completeness, and net savings including collection cost.
+
+### Qualified Markdown skipping pilot
+
+Canonical pull requests in aggressive selection mode can omit nine qualified
+Markdown tests from the conventional directory fallback. This applies only when
+the change includes a Markdown source module and otherwise contains only test
+budget allocations, regular JavaScript/TypeScript production sources under
+`src`, `extensions` or `packages`, or companion tests with a verified separate CI process.
+Companion tests must have one explicit, complete canonical owner outside the
+shared Markdown worker. Same-worker tests, unknown owners, helpers, fixtures,
+missing or symlinked companion sources, and tooling/configuration changes retain
+full coverage. A changed production companion that affects a qualified test's
+input fingerprint retains that test. Independently checked docs
+keep their existing selection rules. Explicit owners, changed tests,
+import consumers, policy checks and smoke tests retain their existing selection.
+The stateful table test is outside this pilot. Scheduled, main and release runs
+retain their existing full coverage.
+
+Ten pure Markdown test files run in the dedicated `core-markdown` owner. It
+shares Node worker policy, hermetic environment setup, output redaction and
+resource controls with other lanes, without their application transforms or
+custom cleanup runner. The table test keeps its existing unit owner. New tests
+keep the ordinary ownership rules until explicitly moved into this lane.
+
+`config/ci-adaptive-markdown.json` records reviewed input fingerprints. The
+selector uses its existing import graph to hash each test's current transitive
+workspace inputs, plus the shared test configuration and dependency lock inputs.
+Missing, changed or symlinked inputs retain the test. A new import changes the
+importing module's fingerprint; an unqualified test is never omitted. This is
+unchanged-input reuse, not a learned prediction or historical graph fallback.
+
+The PR summary lists actual omissions after all selection rules are combined.
+Set repository variable `OPENCLAW_CI_NODE_SELECTION=full` to disable the pilot
+along with aggressive selection. Refresh fingerprints only after reviewing the
+changed input closure and repeating full-versus-selected Node/Bun proof, including
+an injected regression. A successful provider call does not qualify a test.
+
+The Markdown worker reads Node execution flags independently of the test watchdog
+and its other-lane inventories. Updating an unrelated lane's test list does not
+invalidate Markdown qualification. Changes to the Node flag policy still do.
 
 ## Plan in shadow mode
 
@@ -339,3 +379,27 @@ test-to-input mapping in `test/vitest/vitest.declared-inputs.ts`. The shared Vit
 plugin registers these inputs with native dependency recording and related-test
 selection. It does not intercept file reads or change the scheduled inventory.
 Undeclared file reads remain a graph coverage gap.
+
+## Optional Jev ranking experiment
+
+`node scripts/ci-adaptive-jev.mjs --request selection-request.json --output jev-ranking.json`
+accepts the existing selector request fields `version`, `context`, `files`, and
+`changedFiles`. Supply `TYPESAFE_API_KEY` only to this trusted command. Without
+it, the command writes null scores and keeps every scheduled file without making
+a request. Ordinary CI does not invoke this command or receive this credential.
+
+With a key, the command sends only changed paths and test identities to the
+[TypeSafe System One endpoint](https://docs.typesafe.ai/api/system-one), using
+the pinned `jev-1.14.0` model. It does not send source, outcomes, logs, environment
+values or conversation history. Each batch contains at most 25 opaque question
+IDs; requests and streamed responses are limited to 64 KiB, with a single
+ten-second deadline and no retries or redirects. At most 1,000 tests and 600
+changed paths are accepted. Invalid or incomplete responses discard all scores
+and preserve the full inventory.
+
+These are path-only experimental scores, not calibrated regression probabilities.
+The artifact records its actual inference time, input hash and reported token
+usage. A failed request can leave total usage unknown; `usage.complete` makes
+that explicit. Keep this artifact separate from frozen pre-execution decisions:
+a later replay must never be presented as a prospective prediction. Live model
+quality and billing need a key-backed experiment before any scheduling decision.
