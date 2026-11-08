@@ -11,16 +11,23 @@ const mocks = vi.hoisted(() => ({
   install: vi.fn(),
   key: vi.fn(),
 }));
-vi.mock("./config.js", () => ({
-  loadNodeHostConfig: mocks.load,
-}));
+// mock-isolation: join orchestration only; enrollment, runner, service and state owners have their own suites.
+vi.mock("./config.js", () => ({ loadNodeHostConfig: mocks.load }));
+// mock-isolation: the prepared manifest is an input here, not the behavior under test.
 vi.mock("./runtime.js", () => ({ prepareNodeHostRuntime: mocks.prepare }));
+// mock-isolation: the runner's connection and persistence are covered by runner.test.ts.
 vi.mock("./runner.js", () => ({ runNodeHost: mocks.run }));
+// mock-isolation: signed enrollment is covered against a real HTTP fixture in its own suite.
 vi.mock("./openclaw-id-enrollment.js", () => ({ enrollNode: mocks.enroll }));
+// mock-isolation: never read or create a real node key from this suite.
 vi.mock("./openclaw-id-transport.js", () => ({ loadNodeTunnelKey: mocks.key }));
+// mock-isolation: never install a real OS service from this suite.
 vi.mock("../cli/node-cli/daemon.js", () => ({ runNodeDaemonInstall: mocks.install }));
+// mock-isolation: keep the host's real OpenClaw config out of this suite.
 vi.mock("../config/config.js", () => ({ captureRuntimeConfigAsyncReader: () => async () => ({}) }));
+// mock-isolation: no real state database is opened.
 vi.mock("./startup-state-readiness.js", () => ({ ensureNodeHostStateReady: vi.fn() }));
+// mock-isolation: deterministic fallback display name.
 vi.mock("../infra/machine-name.js", () => ({ getMachineDisplayName: async () => "machine" }));
 const world = await buildWorld();
 const target = {
