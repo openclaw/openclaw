@@ -6,7 +6,7 @@ import {
   buildExecEventPrompt,
   isConversationExecCompletion,
   isCronSystemEvent,
-  isExecCompletionEvent,
+  isExecCompletionSystemEvent,
   isRelayableExecCompletionEvent,
 } from "./heartbeat-events-filter.js";
 
@@ -149,7 +149,7 @@ describe("heartbeat event classification", () => {
   );
 });
 
-describe("isExecCompletionEvent", () => {
+describe("isExecCompletionSystemEvent", () => {
   it.each(["overall-timeout"] as const)(
     "matches %s completions that carry retry guidance without output",
     (reason) => {
@@ -157,7 +157,7 @@ describe("isExecCompletionEvent", () => {
         "Exec failed (calm-del, signal SIGKILL)",
         reason,
       );
-      expect(isExecCompletionEvent(event)).toBe(true);
+      expect(isExecCompletionSystemEvent({ text: event, contextKey: "exec" })).toBe(true);
       expect(isRelayableExecCompletionEvent(event)).toBe(true);
     },
   );

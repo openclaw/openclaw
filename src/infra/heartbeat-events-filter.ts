@@ -179,7 +179,7 @@ export function isRestartContinuationEvent(event: { contextKey?: string | null }
   return event.contextKey?.startsWith(RESTART_CONTINUATION_CONTEXT_PREFIX) ?? false;
 }
 
-export function isExecCompletionEvent(evt: string): boolean {
+function isExecCompletionEvent(evt: string): boolean {
   const trimmed = evt.trimStart();
   const normalized = normalizeLowercaseStringOrEmpty(trimmed);
   return (
