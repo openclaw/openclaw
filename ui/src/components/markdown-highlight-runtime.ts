@@ -37,12 +37,16 @@ hljs.registerAliases("shell", { languageName: "bash" });
 
 /**
  * Highlight a snippet; output is escaped hljs markup safe for unsafeHTML in a code block.
- * Unlabeled fences stay plain: auto-detection scores English prose as Python above real code
- * (keywords like "from", "with", "not"), so prompts and notes rendered as noisy colored text.
+ * Unlabeled fences stay plain unless they parse as JSON: hljs auto-detection scores English
+ * prose as Python above real code ("from", "with", "not"), coloring prompts and notes.
  */
 export function highlightCodeHtml(text: string, lang: string): string {
-  const language = lang.trim().toLowerCase();
+  let language = lang.trim().toLowerCase();
   try {
+    if (!language && /^\s*[[{]/.test(text)) {
+      JSON.parse(text);
+      language = "json";
+    }
     if (language && hljs.getLanguage(language)) {
       return hljs.highlight(text, { language, ignoreIllegals: true }).value;
     }
