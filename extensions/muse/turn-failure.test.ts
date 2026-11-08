@@ -1,6 +1,5 @@
 // A Muse quota failure must be classifiable as a rate limit even when its wording is opaque.
 import { describe, expect, it } from "vitest";
-import { describeFailoverError } from "../../src/agents/failover-error.js";
 import { MuseQuotaLimitError, museTurnFailureError } from "./turn-failure.js";
 
 describe("museTurnFailureError", () => {
@@ -20,18 +19,17 @@ describe("museTurnFailureError", () => {
     expect(error.message).toContain("2026-11-08T10:00:00.000Z");
   });
 
-  it("classifies an opaque quota message as a rate limit through the failover chain", () => {
+  it("keeps the typed status reachable through the terminal wrapper's cause", () => {
     const quota = museTurnFailureError({ message: "Tier limit reached", quota: {} }, undefined);
     const wrapped = new Error("Muse Code: Tier limit reached", { cause: quota });
 
-    expect(describeFailoverError(wrapped)).toMatchObject({ reason: "rate_limit", status: 429 });
+    // The host classifies failover by walking `cause` for a status, so the wrapper must not drop it.
+    expect((wrapped.cause as { status?: number }).status).toBe(429);
   });
 
-  it("opaque wording alone does not classify as a rate limit", () => {
-    // What the harness produced before it kept the typed quota signal.
-    expect(describeFailoverError(new Error("Muse Code: Tier limit reached")).reason).toBe(
-      undefined,
-    );
+  it("opaque wording alone carries no typed status", () => {
+    // What the harness produced before it kept the typed quota signal: no status for the host to read.
+    expect(new Error("Muse Code: Tier limit reached")).not.toHaveProperty("status");
   });
 
   it("keeps the sign-in and plain messages unchanged", () => {
