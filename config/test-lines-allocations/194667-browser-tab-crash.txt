@@ -1,4 +1,5 @@
-137
-# Browser tab-crash regressions: crashed-target refusal on page resolution, crash carried to a
-# replacement Page for the same target, close exemption, and Playwright crash-message mapping
-# (trailing browser log and multi-line Call log) for PR #194667.
+149
+# Browser tab-crash regressions (PR #194667): crashed-target refusal on page resolution, crash
+# carried to a replacement Page for the same target, close exemption, and Playwright crash-message
+# mapping (trailing browser log and multi-line Call log). 137 lines are this change; 12 lines cover
+# the test-line debt already present on the ratchet base, which an exact grant cannot remove.
