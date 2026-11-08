@@ -395,21 +395,24 @@ export function buildBootstrapContextFiles(
       );
       continue;
     }
-    const appendContext = (content: string, includePersonalUser = false) => {
+    const appendContext = (content: string, includePersonalUser = false, missing = false) => {
       remainingTotalChars = Math.max(0, remainingTotalChars - content.length);
       result.push({
         path: pathValue,
         content,
         ...(includePersonalUser && file.personalUser ? { personalUser: file.personalUser } : {}),
+        ...(missing ? { missing: true as const } : {}),
       });
     };
     if (file.missing) {
-      const missingText = `[MISSING] Expected at: ${pathValue}`;
+      // Missing markers are workspace-relative when rendered, so charge the budget
+      // with the basename-length marker regardless of the absolute path spelling.
+      const missingText = `[MISSING] Expected at: ${pathValue.split(/[\\/]/u).at(-1) ?? pathValue}`;
       const cappedMissingText = clampToBudget(missingText, remainingTotalChars);
       if (!cappedMissingText) {
         break;
       }
-      appendContext(cappedMissingText);
+      appendContext(cappedMissingText, false, true);
       continue;
     }
     if (remainingTotalChars < MIN_BOOTSTRAP_FILE_BUDGET_CHARS) {

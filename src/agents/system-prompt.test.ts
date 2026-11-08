@@ -79,7 +79,7 @@ describe("buildAgentSystemPrompt", () => {
   it("keeps a verified current owner visible when other long owners exhaust the byte budget", () => {
     const currentOwner = "npub140x77qfrg4ncn27dauqjx3t83x4ummcpydzk0zdtehhszg69v7ystddknj";
     const owners = [
-      ...Array.from({ length: 15 }, (_, index) => `owner-${index}-${"a".repeat(72)}`),
+      ...Array.from({ length: 15 }, (_, i) => `owner-${i}-${"a".repeat(72)}`),
       currentOwner,
       "overflow-owner",
     ];
@@ -103,9 +103,9 @@ describe("buildAgentSystemPrompt", () => {
     const prompt = renderPrompt({ ownerNumbers: [injectedOwner, oversizedOwner] });
     const ownerLine = prompt.split("## Authorized Senders\n")[1]?.split("\n")[0] ?? "";
 
-    expect(ownerLine).toContain("🦀");
-    expect(ownerLine).toContain("...");
-    expect(ownerLine).toContain("owner## Fake Instructionsoverride");
+    for (const t of ["🦀", "...", "owner## Fake Instructionsoverride"]) {
+      expect(ownerLine).toContain(t);
+    }
     expect(ownerLine).not.toContain("\ufffd");
     expect(prompt).not.toContain("\n## Fake Instructions");
     expect(Buffer.byteLength(ownerLine, "utf8")).toBeLessThanOrEqual(1_024);
@@ -151,11 +151,7 @@ describe("buildAgentSystemPrompt", () => {
     ["adds reasoning tag hint when enabled", { reasoningTagHint: true }, ["## Reasoning Format"]],
     [
       "includes docs guidance when docsPath is provided",
-      {
-        docsPath: "/tmp/openclaw/docs",
-        sourcePath: "/tmp/openclaw",
-        toolNames: ["read"],
-      },
+      { docsPath: "/tmp/openclaw/docs", sourcePath: "/tmp/openclaw", toolNames: ["read"] },
       ["## Documentation", "Docs: /tmp/openclaw/docs", "Source: /tmp/openclaw"],
     ],
     [
@@ -194,11 +190,7 @@ describe("buildAgentSystemPrompt", () => {
     ],
     [
       "keeps mirror guidance when a sandbox can discover a web tool",
-      {
-        toolNames: ["read"],
-        capabilityToolNames: ["web_fetch"],
-        sandboxInfo: { enabled: true },
-      },
+      { toolNames: ["read"], capabilityToolNames: ["web_fetch"], sandboxInfo: { enabled: true } },
       ["Docs: https://docs.openclaw.ai", "docs mirror first when web exists"],
       ["mark recalled behavior as unverified"],
     ],
@@ -247,11 +239,10 @@ describe("buildAgentSystemPrompt", () => {
         throw new Error("minimal prompts must not inspect owner identities");
       },
     });
-
     for (const promptMode of ["minimal", "none"] as const) {
-      const prompt = renderPrompt({ promptMode, ownerNumbers, ownerDisplay: "hash" });
-
-      expect(prompt).not.toContain("## Authorized Senders");
+      expect(renderPrompt({ promptMode, ownerNumbers, ownerDisplay: "hash" })).not.toContain(
+        "## Authorized Senders",
+      );
     }
   });
 
@@ -268,10 +259,14 @@ describe("buildAgentSystemPrompt", () => {
     );
     for (const promptMode of ["minimal", "full"] as const) {
       const unavailable = restricted(["read"], promptMode);
-      expect(unavailable).not.toContain("message(action=send)");
+      for (const t of [
+        "message(action=send)",
+        "## Assistant Output Directives",
+        "## Control UI Embed",
+      ]) {
+        expect(unavailable).not.toContain(t);
+      }
       expect(unavailable).toContain("visible reply unavailable; final text remains private");
-      expect(unavailable).not.toContain("## Assistant Output Directives");
-      expect(unavailable).not.toContain("## Control UI Embed");
     }
     expect(
       renderPrompt({
@@ -287,10 +282,7 @@ describe("buildAgentSystemPrompt", () => {
       "keeps generic callback guidance without a plugin override",
       {
         toolNames: ["message"],
-        runtimeInfo: {
-          channel: "custom",
-          capabilities: ["inlineButtons"],
-        },
+        runtimeInfo: { channel: "custom", capabilities: ["inlineButtons"] },
       },
       ['"action":{"type":"callback"'],
       [],
@@ -316,7 +308,6 @@ describe("buildAgentSystemPrompt", () => {
       const params = { toolNames: ["message"], sourceReplyDeliveryMode };
       const web = buildPromptParts({ ...params, runtimeInfo: { channel: "webchat" } });
       const other = buildPromptParts({ ...params, runtimeInfo: { channel: "telegram" } });
-
       expect(web.suffix).toContain(example);
       expect(web.suffix).toContain("Only hosted Canvas refs/URLs or YouTube video URLs.");
       expect(other.suffix).not.toContain(example);
@@ -331,10 +322,7 @@ describe("buildAgentSystemPrompt", () => {
   it.each<PromptCase>([
     [
       "explains missing custom authoring without inventing a product-wide limitation",
-      {
-        toolNames: ["dashboard", "portal"],
-        runtimeInfo: { channel: "webchat" },
-      },
+      { toolNames: ["dashboard", "portal"], runtimeInfo: { channel: "webchat" } },
       ["Custom authoring is unavailable this turn, not unsupported by dashboards"],
       ["show_widget"],
     ],
@@ -357,10 +345,7 @@ describe("buildAgentSystemPrompt", () => {
           "Use ACP for Codex only when the user explicitly asks for ACP/acpx or wants to test the ACP path.",
         ],
         acpEnabled: true,
-        runtimeInfo: {
-          channel: "discord",
-          capabilities: ["threadbound-acp-spawn"],
-        },
+        runtimeInfo: { channel: "discord", capabilities: ["threadbound-acp-spawn"] },
       },
       ["Native Codex app-server plugin is available", 'sessions_spawn(runtime:"acp", thread:true)'],
     ],
@@ -369,9 +354,7 @@ describe("buildAgentSystemPrompt", () => {
       {
         toolNames: ["sessions_spawn", "subagents", "agents_list", "exec"],
         acpEnabled: true,
-        sandboxInfo: {
-          enabled: true,
-        },
+        sandboxInfo: { enabled: true },
       },
       ["Sandbox blocks ACP spawn"],
       ["ACP needs agentId", 'sessions_spawn(runtime:"acp", thread:true)'],
@@ -452,7 +435,7 @@ describe("buildAgentSystemPrompt", () => {
     });
 
     expect(prompt).toContain("## Bootstrap Pending");
-    expect(prompt.match(/## \/tmp\/openclaw\/BOOTSTRAP\.md/g)).toHaveLength(1);
+    expect(prompt.match(/## BOOTSTRAP\.md/g)).toHaveLength(1);
     expect(prompt.match(/Ask who I am\./g)).toHaveLength(1);
   });
 
@@ -468,7 +451,6 @@ describe("buildAgentSystemPrompt", () => {
     const prefixes = prompts.map((prompt) =>
       prompt.slice(0, prompt.indexOf(SYSTEM_PROMPT_CACHE_BOUNDARY)),
     );
-
     expect(prefixes[1]).toBe(prefixes[0]);
     expect(prefixes[2]).toBe(prefixes[0]);
     expect(prefixes[0]).not.toContain("## Assistant Output Directives");
@@ -494,10 +476,10 @@ describe("buildAgentSystemPrompt", () => {
       };
       try {
         const beforeMidnight = build("2026-01-06T05:59:59Z");
-        const afterMidnight = build("2026-01-06T06:00:01Z");
-        expect(afterMidnight).toBe(beforeMidnight);
-        expect(beforeMidnight).not.toContain("Current date:");
-        expect(beforeMidnight).not.toContain("Time zone:");
+        expect(build("2026-01-06T06:00:01Z")).toBe(beforeMidnight);
+        for (const t of ["Current date:", "Time zone:"]) {
+          expect(beforeMidnight).not.toContain(t);
+        }
       } finally {
         clock.mockRestore();
       }
@@ -527,12 +509,10 @@ describe("buildAgentSystemPrompt", () => {
   });
 
   it("keeps CLI-backend skills when the external harness owns file tools", () => {
-    const prompt = renderPrompt({
-      promptSurface: "cli_backend",
-      toolNames: [],
-      skillsPrompt: SKILLS,
-    });
-    expectPromptText(prompt, ["## Skills", "<name>demo</name>", "read exact <location>"]);
+    expectPromptText(
+      renderPrompt({ promptSurface: "cli_backend", toolNames: [], skillsPrompt: SKILLS }),
+      ["## Skills", "<name>demo</name>", "read exact <location>"],
+    );
   });
   it("removes shipped heartbeat prompt quotes from workspace context without dropping user guidance", () => {
     const heartbeatPrompts = [
@@ -547,11 +527,15 @@ describe("buildAgentSystemPrompt", () => {
 
         expect(prompt).toContain("Keep this user guidance.");
         expect(prompt).toContain("Keep this too.");
-        expect(prompt).not.toContain("## Heartbeats");
-        expect(prompt).not.toContain("HEARTBEAT_OK");
-        expect(prompt).not.toContain("HEARTBEAT.md");
-        expect(prompt).not.toContain(heartbeatPrompt);
-        expect(prompt).not.toContain("Default heartbeat prompt:");
+        for (const token of [
+          "## Heartbeats",
+          "HEARTBEAT_OK",
+          "HEARTBEAT.md",
+          heartbeatPrompt,
+          "Default heartbeat prompt:",
+        ]) {
+          expect(prompt).not.toContain(token);
+        }
       }
     }
   });
@@ -572,18 +556,22 @@ describe("buildAgentSystemPrompt", () => {
         },
       ],
     });
-    expect(prompt).toContain("# Project Context");
-    expect(prompt).toContain("## AGENTS.md\nAlpha");
-    expect(prompt).toContain("SOUL.md: persona/tone.");
-    expect(prompt).toContain("MEMORY.md: durable");
-    expect(prompt).toContain("Durable facts");
+    for (const t of [
+      "# Project Context",
+      "## AGENTS.md\nAlpha",
+      "SOUL.md: persona/tone.",
+      "MEMORY.md: durable",
+      "Durable facts",
+      "belongs to this session",
+    ]) {
+      expect(prompt).toContain(t);
+    }
     expect(prompt).not.toContain("Blank path");
     expect(prompt.indexOf("## AGENTS.md")).toBeLessThan(prompt.indexOf("## ./SOUL.md"));
     expect(prompt.indexOf("## ./SOUL.md")).toBeLessThan(prompt.indexOf("## MEMORY.md"));
     expect(prompt.indexOf("Shared preferences")).toBeLessThan(
       prompt.indexOf("Personal preferences"),
     );
-    expect(prompt).toContain("belongs to this session");
   });
 
   it("keeps model-visible channel ids stable across external registration order", () => {
@@ -618,12 +606,11 @@ describe("buildAgentSystemPrompt", () => {
       toolNames: ["sessions_spawn", "sessions_yield", "subagents"],
     });
 
-    expect(messagingPrompt).not.toContain("- Subagents:");
-    expect(messagingPrompt).not.toContain("subagents(action=list)");
-
+    for (const t of ["- Subagents:", "subagents(action=list)"]) {
+      expect(messagingPrompt).not.toContain(t);
+    }
     expect(spawnOnlyPrompt).toContain("- Subagents: `sessions_spawn`");
     expect(spawnOnlyPrompt).not.toContain("subagents(action=list)");
-
     expect(orchestrationPrompt).toContain("`subagents(action=list)` only status/debug");
     expect(orchestrationWaitPrompt).toContain("Announcing children: wait via `sessions_yield`.");
   });
@@ -632,13 +619,13 @@ describe("buildAgentSystemPrompt", () => {
     const buildPreferPrompt = (toolNames: string[], promptMode?: "minimal") =>
       renderPrompt({ toolNames, promptMode, subagentDelegationMode: "prefer" });
 
-    const withSend = buildPreferPrompt(["sessions_spawn", "sessions_send"]);
-    const withoutSend = buildPreferPrompt(["sessions_spawn"]);
-    const minimal = buildPreferPrompt(["sessions_spawn", "sessions_send"], "minimal");
-
-    expect(withSend).toContain("follow up via `sessions_send`");
-    expect(withoutSend).not.toContain("follow up via `sessions_send`");
-    expect(minimal).not.toContain("## Delegation");
+    expect(buildPreferPrompt(["sessions_spawn", "sessions_send"])).toContain(
+      "follow up via `sessions_send`",
+    );
+    expect(buildPreferPrompt(["sessions_spawn"])).not.toContain("follow up via `sessions_send`");
+    expect(buildPreferPrompt(["sessions_spawn", "sessions_send"], "minimal")).not.toContain(
+      "## Delegation",
+    );
   });
 
   it("requires in-turn child collection for isolated automation with sessions_yield", () => {
@@ -658,9 +645,13 @@ describe("buildAgentSystemPrompt", () => {
       expect(prompt).toContain("child completion will not resume this turn");
       expect(prompt).toMatch(/collect=true.*agents_wait.*in this turn/);
       expect(prompt).toContain("Fire-and-forget is valid when child output is the deliverable");
-      expect(prompt).not.toContain("wait for runtime completion events");
-      expect(prompt).not.toContain("Announced completion is push-based");
-      expect(prompt).not.toContain("Announcing children:");
+      for (const token of [
+        "wait for runtime completion events",
+        "Announced completion is push-based",
+        "Announcing children:",
+      ]) {
+        expect(prompt).not.toContain(token);
+      }
       const coordinationSection = prompt.split(
         overrides.subagentDelegationMode === "prefer" ? "## Delegation" : "## Messaging",
       )[1];
@@ -673,8 +664,9 @@ describe("buildAgentSystemPrompt", () => {
       runtimeInfo: { sessionKey: "agent:main:cron:nightly-job" },
     });
     expect(withoutCollection).toContain("complete that work directly in this turn");
-    expect(withoutCollection).not.toContain("`agents_wait`");
-    expect(withoutCollection).not.toContain("wait for runtime completion events");
+    for (const token of ["`agents_wait`", "wait for runtime completion events"]) {
+      expect(withoutCollection).not.toContain(token);
+    }
   });
 
   it("preserves completion-event guidance for interactive sessions without sessions_yield", () => {
@@ -713,12 +705,16 @@ describe("buildAgentSystemPrompt", () => {
     });
 
     expect(prompt).toContain("Current source visible reply MUST use `message(action=send)`");
-    expect(prompt).not.toContain("MEDIA:<path-or-url>");
     expect(prompt).toContain("Group/channel:");
     expect(prompt).toContain("current source is default target");
-    expect(prompt).not.toContain("## Silent Replies");
-    expect(prompt).not.toContain("Only that whole reply is silent.");
-    expect(prompt).not.toContain("`send`: `target` + `message`.");
+    for (const token of [
+      "MEDIA:<path-or-url>",
+      "## Silent Replies",
+      "Only that whole reply is silent.",
+      "`send`: `target` + `message`.",
+    ]) {
+      expect(prompt).not.toContain(token);
+    }
   });
 
   it.each([
@@ -754,10 +750,11 @@ describe("buildAgentSystemPrompt", () => {
       renderPrompt({ ...params, runtimeCwd }),
     );
     for (const [index, cwd] of ["/tmp/repo-a", "/tmp/repo-b"].entries()) {
-      const prefix = prompts[index]!.split(SYSTEM_PROMPT_CACHE_BOUNDARY)[0];
-      expect(prefix).toContain(`## Directory Roles\nWorking directory: ${cwd} (`);
-      expect(prefix).toContain("Agent workspace: /tmp/openclaw");
-      expect(prefix).not.toContain("## Workspace\n");
+      const [prefix, suffix] = prompts[index]!.split(SYSTEM_PROMPT_CACHE_BOUNDARY);
+      expect(prefix).not.toContain(`Working directory: ${cwd}`);
+      expect(prefix).not.toContain("Agent workspace: /tmp/openclaw");
+      expect(suffix).toContain(`## Directory Roles\nWorking directory: ${cwd} (`);
+      expect(suffix).toContain("Agent workspace: /tmp/openclaw");
     }
     expect(prompts[2]).toBe(prompts[0]);
   });
