@@ -161,6 +161,16 @@ clean-closed; a sealed-first startup experiment additionally needs a separately
 recorded, real interrupted synthetic writer before launch. Doctor runs before each
 Gateway and may change clean-close state. No filesystem or schema state is forged.
 
+For a clean-close control, the broadcast driver accepts
+`--post-doctor-fixture-script scripts/perf/team-shape-fixture-verify.mjs` with
+`--team-stress`. After native Doctor finishes, it runs the script in a separate
+process with the fixture environment and measured build root as its first argument.
+The helper performs full integrity and foreign-key checks through that build's
+owners, then closes each agent database normally. Its log and proof record remain
+in the fixture; the driver records the script hash. Preparation must succeed before
+the Gateway process starts, keeping offline verification outside Gateway process
+age and measurement. This does not change schema or manufacture clean-close receipts.
+
 Use a path with secure temp ancestors. A writable non-sticky volume ancestor can
 be rejected by the normal runtime temp owner; keep fixture state under a private
 local directory rather than changing shared volume permissions. This macOS proof
