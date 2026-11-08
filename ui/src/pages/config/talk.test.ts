@@ -931,7 +931,7 @@ describe("TalkSettingsPage realtime transport mutation", () => {
       "consultRouting",
       ["transport"],
     ],
-    ["positive rejection", { transports: ["webrtc"] }, "transport", []],
+    ["positive rejection", { transports: ["webrtc"] }, null, []],
   ] satisfies [string, TalkMutationHarnessOptions, string | null, string[]][])(
     "applies provider transport policy: %s",
     async (_name, options, removed, retained) => {
@@ -944,4 +944,89 @@ describe("TalkSettingsPage realtime transport mutation", () => {
       }
     },
   );
+
+  it("switches to a provider-supported transport when the current one is rejected", async () => {
+    const harness = createTalkMutationHarness({
+      provider: "xai",
+      transport: "gateway-relay",
+      transports: ["webrtc"],
+    });
+    await waitForSolid(() =>
+      expect(harness.page.querySelector('input[type="radio"]')).not.toBeNull(),
+    );
+
+    harness.page.changeProvider("openai");
+
+    expect(
+      harness.runtimeConfig.patchForm.mock.calls.filter(
+        ([path]) => path[2] === "transport",
+      ),
+    ).toEqual([[realtimePath("transport"), "webrtc"]]);
+    expect(harness.runtimeConfig.removeFormValue).not.toHaveBeenCalledWith(
+      realtimePath("transport"),
+    );
+  });
+
+  it("skips a provider transport rejected by the selected model family", async () => {
+    const harness = createTalkMutationHarness({
+      provider: "xai",
+      transport: "provider-websocket",
+      transports: ["provider-websocket", "webrtc"],
+    });
+    await waitForSolid(() =>
+      expect(harness.page.querySelector('input[type="radio"]')).not.toBeNull(),
+    );
+
+    harness.page.changeProvider("openai");
+
+    expect(
+      harness.runtimeConfig.patchForm.mock.calls.filter(
+        ([path]) => path[2] === "transport",
+      ),
+    ).toEqual([[realtimePath("transport"), "webrtc"]]);
+    expect(harness.runtimeConfig.removeFormValue).not.toHaveBeenCalledWith(
+      realtimePath("transport"),
+    );
+  });
+
+  it("removes a rejected transport when the provider advertises no compatible alternative", async () => {
+    const harness = createTalkMutationHarness({
+      provider: "xai",
+      transport: "provider-websocket",
+      transports: [],
+    });
+    await waitForSolid(() =>
+      expect(harness.page.querySelector('input[type="radio"]')).not.toBeNull(),
+    );
+
+    harness.page.changeProvider("openai");
+
+    expect(
+      harness.runtimeConfig.removeFormValue.mock.calls.filter(
+        ([path]) => path[2] === "transport",
+      ),
+    ).toEqual([[realtimePath("transport")]]);
+  });
+
+  it("writes a relay-only provider's supported transport once", async () => {
+    const harness = createTalkMutationHarness({
+      provider: "xai",
+      transport: "webrtc",
+      transports: ["gateway-relay"],
+    });
+    await waitForSolid(() =>
+      expect(harness.page.querySelector('input[type="radio"]')).not.toBeNull(),
+    );
+
+    harness.page.changeProvider("openai");
+
+    expect(
+      harness.runtimeConfig.patchForm.mock.calls.filter(
+        ([path]) => path[2] === "transport",
+      ),
+    ).toEqual([[realtimePath("transport"), "gateway-relay"]]);
+    expect(harness.runtimeConfig.removeFormValue).not.toHaveBeenCalledWith(
+      realtimePath("transport"),
+    );
+  });
 });

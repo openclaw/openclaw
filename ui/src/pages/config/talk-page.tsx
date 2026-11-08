@@ -594,24 +594,40 @@ function createTalkSettings(context: ApplicationContext, props: TalkSettingsPage
         option,
       ).model ?? option?.defaultModel;
     const family = resolveTalkModelFamilySettings(option, targetModel ?? null);
+    const unsupportedTransports = family?.unsupportedTransports ?? [];
     const rejectsTransport =
       configuredTransport !== null &&
       (family?.unsupportedTransports.some((candidate) => candidate === configuredTransport) ||
         talkProviderRejectsTransport(option?.transports, configuredTransport));
-    if (rejectsTransport) {
-      runtimeConfig.removeFormValue(["talk", "realtime", "transport"]);
-    }
+    const supportedTransports = option?.transports?.filter(
+      (transport) => !unsupportedTransports.includes(transport),
+    );
     runtimeConfig.patchForm(["talk", "realtime", "provider"], providerId);
-    // A relay-only provider (no client-owned transport) needs the transport
-    // written explicitly when the current selection cannot carry across.
     const relayOnly =
-      option?.transports !== undefined &&
-      option.transports.length > 0 &&
-      !option.transports.some((candidate) => TALK_CLIENT_OWNED_TRANSPORTS.has(candidate));
-    let resultingTransport = rejectsTransport ? null : configuredTransport;
-    if (relayOnly && configuredTransport !== "gateway-relay") {
-      runtimeConfig.patchForm(["talk", "realtime", "transport"], "gateway-relay");
-      resultingTransport = "gateway-relay";
+      supportedTransports !== undefined &&
+      supportedTransports.length > 0 &&
+      !supportedTransports.some((candidate) => TALK_CLIENT_OWNED_TRANSPORTS.has(candidate));
+    let resultingTransport = configuredTransport;
+    if (rejectsTransport) {
+      // Prefer the first client-owned option in catalog order (OpenAI advertises
+      // WebRTC first); otherwise use the provider's first supported transport.
+      resultingTransport =
+        supportedTransports?.find((transport) => TALK_CLIENT_OWNED_TRANSPORTS.has(transport)) ??
+        supportedTransports?.[0] ??
+        null;
+    } else if (
+      relayOnly &&
+      (configuredTransport === null || supportedTransports?.includes(configuredTransport) !== true)
+    ) {
+      // Providers with no client-owned transport need an explicit supported route.
+      resultingTransport = supportedTransports?.[0] ?? null;
+    }
+    if (resultingTransport !== configuredTransport) {
+      if (resultingTransport) {
+        runtimeConfig.patchForm(["talk", "realtime", "transport"], resultingTransport);
+      } else {
+        runtimeConfig.removeFormValue(["talk", "realtime", "transport"]);
+      }
     }
     if (
       family?.gatewayRelayHandlesAgentConsult &&

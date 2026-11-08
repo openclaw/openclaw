@@ -168,4 +168,54 @@ suite.define(() => {
       await expect.poll(() => voice.inputValue()).toBe("alloy");
     });
   });
+
+  it("selects a supported transport when the Talk provider changes", async () => {
+    await suite.withPage({}, async ({ page }) => {
+      const config = {
+        talk: { realtime: { provider: "xai", model: "grok-voice", transport: "gateway-relay" } },
+      };
+      const gateway = await installMockGateway(page, {
+        methodResponses: {
+          "config.get": { exists: true, ...configSnapshot(config, "talk-transport") },
+          "config.schema": configSchema({
+            type: "object",
+            properties: { talk: { type: "object", additionalProperties: true } },
+          }),
+          "talk.catalog": {
+            realtime: {
+              ready: true,
+              activeProvider: "xai",
+              providers: [
+                {
+                  id: "xai",
+                  label: "xAI",
+                  configured: true,
+                  models: ["grok-voice"],
+                  transports: ["gateway-relay"],
+                },
+                {
+                  id: "openai",
+                  label: "OpenAI",
+                  configured: true,
+                  models: ["gpt-realtime"],
+                  transports: ["webrtc"],
+                },
+              ],
+            },
+          },
+        },
+      });
+      await page.goto(`${suite.server.baseUrl}settings/talk`);
+      const openAi = page.getByRole("radio", { name: "OpenAI", exact: true });
+      await expect(page.getByRole("radio", { name: "xAI", exact: true })).toBeChecked();
+      await openAi.check();
+
+      const save = await gateway.waitForRequest("config.set");
+      const raw = requireString(requireRecord(save.params).raw, "saved config");
+      expect(JSON.parse(raw)).toMatchObject({
+        talk: { realtime: { provider: "openai", transport: "webrtc" } },
+      });
+      await expect(openAi).toBeChecked();
+    });
+  });
 });
