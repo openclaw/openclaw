@@ -217,6 +217,7 @@ suite.define(() => {
         let sendRequests = 0;
         let sendRequest: Frame | undefined;
         let sendResponse: Frame | undefined;
+        let proxyForwardingReturned = false;
         let connectRequests = 0;
         let historyResponses = 0;
         let successfulHistoryResponses = 0;
@@ -318,6 +319,9 @@ suite.define(() => {
                     }
                   }
                   server.send(message);
+                  if (frame.type === "req" && frame.method === "chat.send") {
+                    proxyForwardingReturned = true;
+                  }
                 });
                 server.onMessage((message) => {
                   const frame: Frame = JSON.parse(message.toString());
@@ -587,6 +591,49 @@ suite.define(() => {
                 proof.visibleReplyAndRunSettled = true;
                 stage = "draft preserved through recovery; Send completed before initial history";
               } finally {
+                // Snapshot before releasing any hold or stopping the child. Match
+                // only complete fixed lines; never copy logs or request data to proof.
+                const phaseLines = new Set(instance.logs().split(/\r?\n/));
+                const phaseMarkers = {
+                  serverAuthenticatedDispatchEntered:
+                    "OPENCLAW_SEND_DIAGNOSTIC:authenticated-dispatch-entered",
+                  serverRouterEntered: "OPENCLAW_SEND_DIAGNOSTIC:router-entered",
+                  serverRouterAuthorizationReturned:
+                    "OPENCLAW_SEND_DIAGNOSTIC:router-authorization-returned",
+                  serverLazyHandlerEntered: "OPENCLAW_SEND_DIAGNOSTIC:lazy-handler-entered",
+                  serverLazyHandlerLoaded: "OPENCLAW_SEND_DIAGNOSTIC:lazy-handler-loaded",
+                  serverSetupEntered: "OPENCLAW_SEND_DIAGNOSTIC:setup-entered",
+                  serverSetupReturned: "OPENCLAW_SEND_DIAGNOSTIC:setup-returned",
+                  serverPreAdmissionEntered: "OPENCLAW_SEND_DIAGNOSTIC:pre-admission-entered",
+                  serverPreAdmissionReturned: "OPENCLAW_SEND_DIAGNOSTIC:pre-admission-returned",
+                  serverNativeRestrictionEntered:
+                    "OPENCLAW_SEND_DIAGNOSTIC:native-restriction-entered",
+                  serverNativeRestrictionReturned:
+                    "OPENCLAW_SEND_DIAGNOSTIC:native-restriction-returned",
+                  serverAdmissionEntered: "OPENCLAW_SEND_DIAGNOSTIC:admission-entered",
+                  serverAdmissionReturned: "OPENCLAW_SEND_DIAGNOSTIC:admission-returned",
+                  serverDurableStageEntered: "OPENCLAW_SEND_DIAGNOSTIC:durable-stage-entered",
+                  serverDurableStageReturned: "OPENCLAW_SEND_DIAGNOSTIC:durable-stage-returned",
+                  serverRestartSafePersistenceEntered:
+                    "OPENCLAW_SEND_DIAGNOSTIC:restart-safe-persistence-entered",
+                  serverRestartSafePersistenceReturned:
+                    "OPENCLAW_SEND_DIAGNOSTIC:restart-safe-persistence-returned",
+                  serverAckIssued: "OPENCLAW_SEND_DIAGNOSTIC:ack-issued",
+                } as const;
+                for (const [key, marker] of Object.entries(phaseMarkers)) {
+                  proof[key] = phaseLines.has(marker);
+                }
+                proof.proxyForwardingReturned = proxyForwardingReturned;
+                proof.sendResponseReceived = sendResponse !== undefined;
+                try {
+                  await fs.writeFile(
+                    path.join(artifactDir, "proof.json"),
+                    JSON.stringify(proof, null, 2) + "\n",
+                  );
+                } catch {
+                  // A diagnostic write must not prevent the existing hold cleanup.
+                  proof.phaseSnapshotWriteFailed = true;
+                }
                 try {
                   const finalState = await browserState();
                   Object.assign(proof, {

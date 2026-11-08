@@ -40,6 +40,8 @@ export async function prepareAndAdmitChatSend(
     providerReviewAcknowledgment?: ProviderReviewAcknowledgment;
   },
 ) {
+  // Diagnostic-only, never merge: fixed lines only, no request data.
+  console.error("\nOPENCLAW_SEND_DIAGNOSTIC:setup-entered");
   const assertCurrent =
     sessionMutationAuthorization || hasCurrentClientAuthority
       ? () => {
@@ -106,6 +108,7 @@ export async function prepareAndAdmitChatSend(
       return undefined;
     }
   }
+  console.error("\nOPENCLAW_SEND_DIAGNOSTIC:pre-admission-entered");
   const shouldAdmit = await runChatSendPreAdmission({
     request: normalizedRequest.value,
     session: loadedSession.value,
@@ -114,6 +117,7 @@ export async function prepareAndAdmitChatSend(
     client,
     assertCurrent,
   });
+  console.error("\nOPENCLAW_SEND_DIAGNOSTIC:pre-admission-returned");
   if (!shouldAdmit) {
     return undefined;
   }
@@ -126,6 +130,7 @@ export async function prepareAndAdmitChatSend(
   }
   let admitted: Awaited<ReturnType<typeof admitChatSend>> | undefined;
   try {
+    console.error("\nOPENCLAW_SEND_DIAGNOSTIC:native-restriction-entered");
     const nativeRestriction = await prepareChatSendNativeRuntimeRestriction({
       request: normalizedRequest.value,
       session,
@@ -133,10 +138,12 @@ export async function prepareAndAdmitChatSend(
       context,
       assertCurrent,
     });
+    console.error("\nOPENCLAW_SEND_DIAGNOSTIC:native-restriction-returned");
     if (nativeRestriction) {
       respond(false, undefined, nativeRestriction);
       return undefined;
     }
+    console.error("\nOPENCLAW_SEND_DIAGNOSTIC:admission-entered");
     admitted = await admitChatSend({
       request: normalizedRequest.value,
       session,
@@ -147,6 +154,7 @@ export async function prepareAndAdmitChatSend(
       hasCurrentClientAuthority,
       assertCurrent,
     });
+    console.error("\nOPENCLAW_SEND_DIAGNOSTIC:admission-returned");
     if (!admitted.ok) {
       return undefined;
     }
