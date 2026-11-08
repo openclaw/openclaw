@@ -3,7 +3,9 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { hasErrnoCode } from "../infra/errno.js";
 import {
+  capturePluginNativeDirectoryAliases,
   capturePluginNativeNamespace,
   finishPluginNativeNamespace,
   pluginNativeNamespaceIsCurrent,
@@ -161,3 +163,74 @@ it.each([
     }
   },
 );
+
+it.for([false, true])(
+  "captures managed native files across devices: %s",
+  (crossDevice, { skip }) => {
+    const fixture = namespaceFixture();
+    const sourceDevice = fs.statSync(fixture.sourceDirectory, { bigint: true }).dev;
+    let capturedRoot: string | undefined;
+    if (crossDevice) {
+      for (const parent of ["/dev/shm", "/tmp", "/var/tmp"]) {
+        try {
+          if (fs.statSync(parent, { bigint: true }).dev !== sourceDevice) {
+            capturedRoot = dirs.make("plugin-native-cross-device-", parent);
+            break;
+          }
+        } catch (error) {
+          if (
+            !["ENOENT", "ENOTDIR", "EACCES", "EPERM", "EROFS"].some((code) =>
+              hasErrnoCode(error, code),
+            )
+          ) {
+            throw error;
+          }
+        }
+      }
+      if (!capturedRoot) {
+        skip("requires a writable filesystem distinct from the plugin source");
+        return;
+      }
+    } else {
+      capturedRoot = dirs.make("plugin-native-same-device-", path.dirname(fixture.sourceDirectory));
+    }
+    const nativeFile = path.join(fixture.sourceDirectory, "addon.node");
+    const bytes = Buffer.from("\x7fELF native fixture");
+    fs.writeFileSync(nativeFile, bytes);
+    const { fact } = capturePluginNativeNamespace({
+      sourceDirectory: fixture.sourceDirectory,
+      boundary: fixture.sourceDirectory,
+      capturedRoot,
+      managed: true,
+      copyOnly: false,
+    });
+    finishPluginNativeNamespace(fact);
+    const capturedFile = path.join(capturedRoot, "content", "addon.node");
+    const source = fs.statSync(nativeFile, { bigint: true });
+    const captured = fs.statSync(capturedFile, { bigint: true });
+    expect(captured.dev !== source.dev).toBe(crossDevice);
+    expect(source.nlink).toBe(crossDevice ? 1n : 2n);
+    expect(fs.readFileSync(capturedFile)).toEqual(bytes);
+    expect(fs.readFileSync(nativeFile)).toEqual(bytes);
+    expect(pluginNativeNamespaceIsCurrent(fact, fixture.sourceDirectory)).toBe(true);
+    if (crossDevice) {
+      fs.writeFileSync(capturedFile, "private capture change");
+      expect(fs.readFileSync(nativeFile)).toEqual(bytes);
+    }
+  },
+);
+
+it("maps native directory aliases through their longest owning package root", () => {
+  const fixture = namespaceFixture();
+  const fact = fixture.capture("aliases");
+  const root = fixture.sourceDirectory;
+  const nested = path.join(root, "nested");
+  const alias = path.join(nested, "native");
+  const outerCapture = path.join(root, "outer-capture");
+  const innerCapture = path.join(root, "inner-capture");
+  const aliases = capturePluginNativeDirectoryAliases(new Map([[alias, fact]]), {
+    [root]: outerCapture,
+    [nested]: innerCapture,
+  });
+  expect([...aliases]).toEqual([[path.join(innerCapture, "native"), fact.capturedRoot]]);
+});
