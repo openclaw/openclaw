@@ -92,6 +92,7 @@ async function scroll(page: Page, direction: "top" | "bottom", messageCount: num
       count: 2,
     });
   }
+  const frameGaps = trajectory.frames.map((frame) => frame.intervalMs).toSorted((a, b) => a - b);
   const evidence = {
     endpointDistancePx: endpoint.distancePx,
     endpointCorrection,
@@ -99,6 +100,7 @@ async function scroll(page: Page, direction: "top" | "bottom", messageCount: num
     minCoverage: Math.min(...trajectory.frames.map((frame) => frame.coverage)),
     maxMountedRows: Math.max(...trajectory.frames.map((frame) => frame.rows)),
     frameGapsOver50Ms: trajectory.frames.filter((frame) => frame.intervalMs > 50).length,
+    frameGapP95Ms: frameGaps[Math.ceil(frameGaps.length * 0.95) - 1]!,
     maxFrameGapMs: Math.max(...trajectory.frames.map((frame) => frame.intervalMs)),
     trajectoryMs: trajectory.completedAtMs - trajectory.startedAtMs,
   };
