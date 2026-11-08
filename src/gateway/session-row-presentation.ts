@@ -400,8 +400,8 @@ export function prepareProjectedSessionPresentation(
     // Writers replace materialized facts; only live run, placement and clock facts need
     // comparison here. These witnesses never grant disclosure to another recipient.
     const temporal = runState(record.key, record.materialized.source);
-    let published = publicationRows?.get(record.materialized.publicationIdentity);
-    if (publicationRows) {
+    let published = publicationRows?.get(record.materialized);
+    if (publicationState) {
       const liveModel = resolveProjectedAgentRunModel({
         agentId: record.agentId,
         sessionId: record.entry.sessionId,
@@ -443,28 +443,29 @@ export function prepareProjectedSessionPresentation(
       // A changed child fact retires timestamped views even when the aggregate stays equal.
       facts[22] = childActivity.revision;
       facts[23] = backgroundProcessCount;
-      facts[24] = record.materialized;
-      facts.length = 25;
+      facts.length = 24;
       if (run?.runIds) {
         for (const id of run.runIds) {
           facts.push(id);
         }
       }
       if (!sameFacts(published?.facts, facts)) {
-        // Retain only the preceding publication's observed variants for structural sharing.
-        // Current recipient checks still run before a variant can supply immutable field values.
-        const views = published?.views ?? new Map<string, SessionRowView[]>();
-        const previousRevision = published?.facts;
-        for (const [key, variants] of views) {
-          const retained = variants.filter((view) => view.revision === previousRevision);
-          if (retained.length) {
-            views.set(key, retained);
-          } else {
-            views.delete(key);
-          }
-        }
-        published = { facts, views, target: toProjectedSessionSharingTarget(record) };
-        publicationRows.set(record.materialized.publicationIdentity, published);
+        // Prior views may supply immutable fields, but must not keep retired row graphs alive.
+        // Reusing audience variants is best effort across garbage collection.
+        const previousViews = publicationState.previousViews.get(
+          record.materialized.publicationIdentity,
+        );
+        published = {
+          facts,
+          views: new Map(),
+          previousViews,
+          target: toProjectedSessionSharingTarget(record),
+        };
+        publicationState.rows.set(record.materialized, published);
+        publicationState.previousViews.set(
+          record.materialized.publicationIdentity,
+          new WeakRef(published.views),
+        );
         facts = [];
       }
     }
@@ -498,10 +499,17 @@ export function prepareProjectedSessionPresentation(
     recipientFacts[7] = recipientView?.workspaceReadDisabledReason;
     recipientFacts.length = 8;
     const variants = signature === undefined ? undefined : views?.get(signature);
-    const previous = variants?.find((cached) => sameFacts(cached.facts, recipientFacts));
-    if (previous && previous.revision === published?.facts) {
-      return projectModels(previous.row, previous);
+    const current = variants?.find((cached) => sameFacts(cached.facts, recipientFacts));
+    if (current) {
+      return projectModels(current.row, current);
     }
+    const previous =
+      signature === undefined
+        ? undefined
+        : published?.previousViews
+            ?.deref()
+            ?.get(signature)
+            ?.find((cached) => sameFacts(cached.facts, recipientFacts));
     const row = projection.present(record, {
       ...options,
       now,
@@ -564,10 +572,8 @@ export function prepareProjectedSessionPresentation(
     if (signature !== undefined) {
       // Shared-fact replies never send this raw row; encode only at the wire boundary.
       const snapshot = freezeTrustedJsonSnapshot(reuseSessionRowFields(row, previous?.row));
-      const view = { facts: recipientFacts, revision: published!.facts, row: snapshot };
-      if (previous && variants) {
-        variants[variants.indexOf(previous)] = view;
-      } else if (variants) {
+      const view = { facts: recipientFacts, row: snapshot };
+      if (variants) {
         variants.push(view);
       } else {
         views?.set(signature, [view]);

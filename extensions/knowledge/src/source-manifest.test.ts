@@ -19,24 +19,28 @@ const jsonl = (rows: unknown[]) => rows.map((row) => JSON.stringify(row)).join("
 const flags = (options: Record<string, string>) =>
   Object.entries(options).flatMap(([name, value]) => ["--" + name, value]);
 
-// Snapshot one Discord channel's rows covering [start, end), observed at `observed`.
 async function snapshot(
   dir: string,
   name: string,
   rows: unknown[],
   [start, end, observed]: string[],
   completeness = "complete",
+  options = {},
 ) {
   const input = path.join(dir, name + ".jsonl");
   const output = path.join(dir, name + ".manifest.jsonl.gz");
   const summary = path.join(dir, name + ".summary.json");
   await writeFile(input, jsonl(rows));
   const coverage = { "coverage-start": start!, "coverage-end": end!, "observed-at": observed! };
-  run(manifestScript, [
-    "snapshot",
-    ...flags({ provider: "discord", "source-key": "discord:guild:channel", ...coverage }),
-    ...flags({ completeness, input, output, summary }),
-  ]);
+  run(
+    manifestScript,
+    [
+      "snapshot",
+      ...flags({ provider: "discord", "source-key": "discord:guild:channel", ...coverage }),
+      ...flags({ completeness, input, output, summary }),
+    ],
+    options,
+  );
   return { output, summary };
 }
 
@@ -91,33 +95,28 @@ it("source manifests are deterministic, content-private, and produce overlap-awa
   expect(hash).toBe("ed2694e52b2fe820bd83b6f77118d0be33a57d9087ca71284b5705006b3d519a");
   const repeated = await snapshot(dir, "current-repeat", rows.toReversed(), window);
   expect(await readFile(repeated.output)).toStrictEqual(await readFile(current.output));
+  const newest = await plan(dir, current.output, old.output, current.output);
+  expect(newest.items.changed).toEqual([]);
+  expect(newest.items.unchanged).toEqual(["a", "b", "d"]);
+  const partial = await snapshot(dir, "partial", [], window, "partial");
+  const missing = await plan(dir, partial.output, current.output);
+  expect(missing.items.deleted).toEqual([]);
+  expect(missing.items.unresolved_missing).toEqual(["a", "b", "d"]);
   await expect(snapshot(dir, "duplicate", [rows[0], rows[0]], window)).rejects.toThrow(
     /Duplicate item id/,
   );
-  const scratch = tempDirs.make("knowledge-source-missing-");
+  const scratch = tempDirs.make("knowledge-source-scratch-");
+  const env = { ...process.env, TMPDIR: scratch, TMP: scratch, TEMP: scratch };
+  const options = { timeout: 10_000, env };
   expect(() =>
-    run(manifestScript, ["plan", "--current", path.join(scratch, "missing.gz")], {
-      timeout: 10_000,
-      env: { ...process.env, TMPDIR: scratch, TMP: scratch, TEMP: scratch },
-    }),
+    run(manifestScript, ["plan", "--current", path.join(scratch, "missing.gz")], options),
   ).toThrow(/ENOENT/);
   expect(await readdir(scratch)).toEqual([]);
-});
-
-it("newest prior observation wins independent of argument order and partial snapshots do not prove deletion", async () => {
-  const dir = tempDirs.make("knowledge-source-ingest-");
-  const at = (n: number) => [
-    "2026-09-25T00:00:00Z",
-    "2026-09-27T00:00:00Z",
-    `2026-09-27T0${n}:00:00Z`,
-  ];
-  const row = (n: number) => [{ id: "a", occurred_at: "2026-09-26T00:00:00Z", payload: { n } }];
-  const older = await snapshot(dir, "older", row(1), at(1));
-  const newer = await snapshot(dir, "newer", row(2), at(2));
-  const current = await snapshot(dir, "partial", [], at(3), "partial");
-  const result = await plan(dir, current.output, newer.output, older.output);
-  expect(result.items.deleted).toStrictEqual([]);
-  expect(result.items.unresolved_missing).toStrictEqual(["a"]);
+  await mkdir(path.join(dir, "unwritable.manifest.jsonl.gz"));
+  await expect(snapshot(dir, "unwritable", rows, window, "complete", options)).rejects.toThrow(
+    /EISDIR/,
+  );
+  expect(await readdir(scratch)).toEqual([]);
 });
 
 const DISCRAWL_SCHEMA =
@@ -138,20 +137,11 @@ async function archive(seed: (db: DatabaseSync) => void) {
   await writeFile(path.join(bin, "discrawl"), `#!/bin/sh\nprintf '%s\\n' '${report}'\n`);
   await chmod(path.join(bin, "discrawl"), 0o755);
   const output = path.join(dir, "messages.jsonl");
+  const config = path.join(dir, "config.yaml");
+  const env = { ...process.env, PATH: bin + path.delimiter + process.env.PATH };
   return async (channel: string, since: string, before: string, ...extra: string[]) => {
-    const stdout = run(
-      discrawlScript,
-      [
-        "--config",
-        path.join(dir, "config.yaml"),
-        ...flags({ channel, since, before, output }),
-        ...extra,
-      ],
-      {
-        env: { ...process.env, PATH: bin + path.delimiter + process.env.PATH },
-        stdio: ["ignore", "pipe", "pipe"],
-      },
-    );
+    const args = [...flags({ config, channel, since, before, output }), ...extra];
+    const stdout = run(discrawlScript, args, { env, stdio: ["ignore", "pipe", "pipe"] });
     expect(stdout).toBe("");
     const lines = (await readFile(output, "utf8")).trim().split("\n");
     return lines.map((line) => JSON.parse(line));
@@ -191,11 +181,18 @@ it("Discrawl adapter resolves a stable channel, bounds instants, emits attachmen
   expect(row.payload.author_bot).toBe(0);
   expect(row.payload.attachments).toBe("a:aa:fetched|b:bb:fetched");
   const day = ["20", "2026-09-27T00:00:00-07:00", "2026-09-28T00:00:00-07:00"] as const;
-  expect((await exportRows(...day)).map((message) => message.id)).toStrictEqual([
+  expect((await exportRows(...day)).map((msg) => msg.id)).toStrictEqual(["start", "30", "last"]);
+  const since = "2026-09-27T00:00:00.000000000-07:00";
+  const before = "2026-09-27T07:00:00.000000001Z";
+  expect((await exportRows("20", since, before)).map((message) => message.id)).toStrictEqual([
     "start",
-    "30",
-    "last",
   ]);
+  for (const [start, end] of [
+    [before, since],
+    [since, "2026-09-27T07:00:00Z"],
+  ]) {
+    await expect(exportRows("20", start!, end!)).rejects.toThrow(/--since must precede --before/);
+  }
   const threaded = await exportRows(...day, "--threads", "include");
   expect(
     threaded.map((message) => [message.id, message.payload.thread_name ?? null]),

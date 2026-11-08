@@ -1268,6 +1268,8 @@ const config = {
         "ffmpeg",
         // sqlite-snapshot-retirement.mts inspects its btrfs fixture with this host tool.
         "filefrag",
+        // shutdown-loaded-measure.ts uses the host fio utility for disk pressure.
+        "fio",
         "lsattr",
         "mint",
         // Muse E2E setup installs this CLI outside npm (scripts/e2e/lib/muse-runtime/setup.sh).

@@ -54,6 +54,20 @@ The measured journey includes the driver gaps between gestures; it is not
 single-wheel latency. Mobile retains the programmatic scrollport jump because
 Playwright's mobile WebKit driver does not support wheel input.
 
+For transcript geometry attribution, add `--transcript-layout-audit`
+to a separate run. This records native scroll writes and offsets,
+retained-row coordinates, streaming block coordinates, and mutation ancestry beside
+each observation, plus a bounded JPEG filmstrip in Chromium. The capture adds layout reads and is not timing evidence. Its
+timestamps let you distinguish ordinary wheel movement, same-frame compensation,
+and a residual jump in content already on screen. Layout-shift sources retain their
+row identity at observer delivery, before virtualization can remove them.
+
+`streaming-645-deltas` types into the composer every 500 ms. Use the explicit
+`streaming-645-deltas-no-input` scenario to measure the same reply without typing.
+Report both CLS and `allShiftSum`: recent input excludes shifts from CLS, including
+ordinary Markdown word wrapping and growing tables. A zero CLS while typing does
+not prove that content stayed still; compare the filmstrip and source rectangles.
+
 ## Native browser work and composited layers
 
 Use the same production route and interaction scenarios with `--native-audit`
