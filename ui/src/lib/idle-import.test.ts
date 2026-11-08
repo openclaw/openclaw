@@ -92,4 +92,19 @@ describe("createIdleImport", () => {
     expect(importModule).toHaveBeenCalledTimes(1);
     expect(onLoaded).toHaveBeenCalledTimes(1);
   });
+
+  it("bounds failed preload retries and retires them on disposal", async () => {
+    vi.spyOn(navigator, "onLine", "get").mockReturnValue(true);
+    importModule.mockRejectedValue(new Error("failed preload"));
+    await expect(idleImport.load()).rejects.toThrow("failed preload");
+    await vi.runAllTimersAsync();
+    await vi.dynamicImportSettled();
+    expect(importModule).toHaveBeenCalledTimes(2);
+    idleImport.dispose();
+    window.dispatchEvent(new Event("online"));
+    await vi.runAllTimersAsync();
+    await vi.dynamicImportSettled();
+    expect(importModule).toHaveBeenCalledTimes(2);
+    expect(onLoaded).not.toHaveBeenCalled();
+  });
 });

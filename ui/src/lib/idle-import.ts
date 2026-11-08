@@ -1,6 +1,10 @@
+import { listen } from "./reactive/listener.ts";
+
 export function createIdleImport<T>(importModule: () => Promise<T>, onLoaded?: (value: T) => void) {
   let moduleLoad: Promise<T> | null = null;
   let active = false;
+  let onlineRetryAttempted = false;
+  let stopOnline: (() => void) | undefined;
 
   const requireActive = () => {
     if (!active) {
@@ -9,23 +13,40 @@ export function createIdleImport<T>(importModule: () => Promise<T>, onLoaded?: (
   };
 
   const run = (): Promise<T> => {
-    // Recovery is already resident when the app mounts these idle consumers;
-    // keep it out of the earlier connection bundle that also shares this loader.
-    moduleLoad ??= import("../app/stale-chunk-reload.ts")
-      .then(({ retryControlUiImport }) => {
-        return retryControlUiImport(() => {
-          requireActive();
-          return importModule();
-        });
+    if (moduleLoad) {
+      return moduleLoad;
+    }
+    const attempt = importModule();
+    moduleLoad = attempt
+      .catch(async () => {
+        const { retryControlUiImport } = await import("../app/stale-chunk-reload.ts");
+        // Adopt the failed attempt without requesting the chunk again while offline.
+        return retryControlUiImport(
+          () => {
+            requireActive();
+            return importModule();
+          },
+          undefined,
+          attempt,
+        );
       })
       .then((value) => {
         requireActive();
+        stopOnline?.();
         onLoaded?.(value);
         return value;
       })
       .catch((error: unknown) => {
         // A failed chunk fetch must not pin a rejected promise forever.
         moduleLoad = null;
+        if (active) {
+          stopOnline?.();
+          stopOnline = listen(window, "online", start, { once: true });
+          if (navigator.onLine && !onlineRetryAttempted) {
+            onlineRetryAttempted = true;
+            scheduleIdle();
+          }
+        }
         throw error;
       });
     return moduleLoad;
@@ -44,17 +65,23 @@ export function createIdleImport<T>(importModule: () => Promise<T>, onLoaded?: (
     }
   };
 
+  const activate = () => {
+    active = true;
+    onlineRetryAttempted = false;
+  };
+
   return {
     schedule: (): void => {
-      active = true;
+      activate();
       scheduleIdle();
     },
     load: (): Promise<T> => {
-      active = true;
+      activate();
       return run();
     },
     dispose: () => {
       active = false;
+      stopOnline?.();
     },
   };
 }

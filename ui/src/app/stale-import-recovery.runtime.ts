@@ -3,7 +3,7 @@ import { CONTROL_UI_BUILD_INFO } from "../build-info.ts";
 import { scheduleStaleChunkReload } from "./stale-chunk-reload.ts";
 
 /** Unclaimed background failures may reload only when the serving build changed. */
-export async function recoverUnclaimedImport(url: string): Promise<void> {
+export async function recoverUnclaimedImport(url: string, canReload: () => boolean): Promise<void> {
   try {
     const response = await fetch(url, {
       cache: "no-store",
@@ -21,7 +21,7 @@ export async function recoverUnclaimedImport(url: string): Promise<void> {
     if (isRecord(buildInfo) && buildInfo.buildId === CONTROL_UI_BUILD_INFO.buildId) {
       return;
     }
-    await scheduleStaleChunkReload();
+    await scheduleStaleChunkReload({ canReload });
   } catch {
     // A second interruption cannot justify replacing a usable document.
   }

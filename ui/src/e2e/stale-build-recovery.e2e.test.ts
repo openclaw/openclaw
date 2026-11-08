@@ -5,6 +5,12 @@ import { controlUiE2eBuiltModuleRequest } from "./control-ui-built-module.test-s
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import { closeContext } from "./login-gate-e2e.test-support.ts";
 
+declare global {
+  interface Window {
+    recordWorkerRefresh: () => Promise<void>;
+  }
+}
+
 const suite = createControlUiE2eSuite({
   name: "Control UI stale-build recovery E2E",
   startServerBeforeBrowser: true,
@@ -29,8 +35,7 @@ suite.define(() => {
           installing: null,
           waiting: null,
           active: null,
-          update: () =>
-            (window as Window & { recordWorkerRefresh: () => Promise<void> }).recordWorkerRefresh(),
+          update: () => window.recordWorkerRefresh(),
         }),
       });
     });
@@ -133,7 +138,7 @@ suite.define(() => {
     }
   });
 
-  it("stops retired recovery imports when a private draft blocks document replacement", async () => {
+  it("stops retired recovery imports when a new private draft blocks document replacement", async () => {
     const context = await suite.browser.newContext({ serviceWorkers: "block" });
     const page = await context.newPage();
     const refreshModule = controlUiE2eBuiltModuleRequest("ui/src/app/sw-refresh.runtime.ts");
@@ -142,23 +147,26 @@ suite.define(() => {
     );
     let retired = false;
     let recoveries = 0;
+    const releaseRecovery = Promise.withResolvers<void>();
     await page.route(refreshModule, (route) =>
       retired ? route.fulfill({ status: 404, body: "retired" }) : route.fallback(),
     );
-    await page.route(recoveryModule, (route) => {
+    await page.route(recoveryModule, async (route) => {
       recoveries++;
+      await releaseRecovery.promise;
       return route.fulfill({ status: 404, body: "retired" });
     });
     await installMockGateway(page);
     try {
       await page.goto(`${suite.server.baseUrl}new`);
-      await page.getByRole("switch", { name: "Incognito", exact: true }).click();
       const composer = page.locator(".new-session-page__message");
-      await composer.fill("Keep this draft until I choose to reload");
       const timeOrigin = await page.evaluate(() => performance.timeOrigin);
       retired = true;
       await page.evaluate(() => window.dispatchEvent(new Event("online")));
       await expect.poll(() => recoveries).toBeGreaterThanOrEqual(1);
+      await page.getByRole("switch", { name: "Incognito", exact: true }).click();
+      await composer.fill("Keep this draft until I choose to reload");
+      releaseRecovery.resolve();
       // A recursive preload error would otherwise repeatedly request the retired chunk.
       await page.waitForTimeout(100);
       // The original failure and its retry may each finish one recovery attempt.
@@ -166,6 +174,7 @@ suite.define(() => {
       expect(await page.evaluate(() => performance.timeOrigin)).toBe(timeOrigin);
       expect(await composer.inputValue()).toBe("Keep this draft until I choose to reload");
     } finally {
+      releaseRecovery.resolve();
       await closeContext(context);
     }
   });

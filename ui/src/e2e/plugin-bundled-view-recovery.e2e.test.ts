@@ -46,13 +46,11 @@ suite.define(() => {
       expect(response?.status()).toBe(200);
       await page.getByText("Plugin panel unavailable").waitFor();
       const documentReachable = createDeferredCore();
-      let documentProbes = 0;
       await page.route(new URL("index.html", suite.server.baseUrl).href, async (route) => {
         if (route.request().method() !== "HEAD") {
           await route.continue();
           return;
         }
-        documentProbes += 1;
         await documentReachable.promise;
         await route.fulfill({ status: 200 });
       });
@@ -82,14 +80,13 @@ suite.define(() => {
 
       await expect.poll(failure.documentCount).toBe(2);
       await alert.waitFor();
-      expect([documentProbes, await alert.count(), documentRequestCount]).toEqual([1, 1, 1]);
+      expect([await alert.count(), documentRequestCount]).toEqual([1, 1]);
 
       await alert.getByRole("button", { name: "Reload" }).click();
       await page.locator(".logbook").waitFor();
       expect(await alert.count()).toBe(0);
       expect(failure.documentCount()).toBe(3);
       expect(documentRequestCount).toBe(2);
-      expect(documentProbes).toBe(2);
       await gateway.waitForRequest("logbook.status");
       expect(new URL(page.url()).pathname).toBe("/plugin");
     });

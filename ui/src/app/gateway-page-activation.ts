@@ -2,7 +2,7 @@ import { probeGatewayReachability } from "../api/gateway-browser-socket.ts";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import { listen } from "../lib/reactive/listener.ts";
 import type { ApplicationGatewaySnapshot } from "./gateway.ts";
-import { refreshControlUiServiceWorker } from "./sw-refresh.ts";
+import { retryControlUiImport } from "./stale-chunk-reload.ts";
 
 /** Revalidates suspended tabs and lost transports through the application owner. */
 export function startGatewayPageActivation(
@@ -135,9 +135,11 @@ export function startGatewayPageActivation(
         gateway.connect();
       }
       syncProbe(0);
-      void refreshControlUiServiceWorker().catch((error: unknown) => {
-        console.warn("OpenClaw service worker refresh failed after page activation.", error);
-      });
+      void retryControlUiImport(() => import("./sw-refresh.runtime.ts"))
+        .then(({ refreshControlUiServiceWorker }) => refreshControlUiServiceWorker())
+        .catch((error: unknown) => {
+          console.warn("OpenClaw service worker refresh failed after page activation.", error);
+        });
     });
   };
   const onVisibilityChange = () => {

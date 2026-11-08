@@ -70,9 +70,10 @@ function waitForImportReachability(): Promise<boolean> {
 export async function retryControlUiImport<T>(
   load: () => T | Promise<T>,
   signal?: AbortSignal,
+  initialAttempt?: Promise<T>,
 ): Promise<T> {
   try {
-    return await trackForegroundActivity(Promise.resolve(load()));
+    return await trackForegroundActivity(initialAttempt ?? Promise.resolve(load()));
   } catch (error) {
     if (!isStaleChunkImportError(error)) {
       throw error;
@@ -112,7 +113,7 @@ function probeControlUiDocument(): Promise<boolean> {
   if (inFlightDocumentProbe) {
     return inFlightDocumentProbe;
   }
-  const probe = (async () => {
+  inFlightDocumentProbe = (async () => {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), DOCUMENT_PROBE_TIMEOUT_MS);
     try {
@@ -127,14 +128,10 @@ function probeControlUiDocument(): Promise<boolean> {
     } finally {
       clearTimeout(timeout);
     }
-  })();
-  const settledProbe = probe.finally(() => {
-    if (inFlightDocumentProbe === settledProbe) {
-      inFlightDocumentProbe = null;
-    }
+  })().finally(() => {
+    inFlightDocumentProbe = null;
   });
-  inFlightDocumentProbe = settledProbe;
-  return settledProbe;
+  return inFlightDocumentProbe;
 }
 
 function persistGuardBuildId(
@@ -417,38 +414,48 @@ export async function retryStaleChunkReloadWhenReachable(
 
 /** Classify caught failures by the serving build, including exhausted background retries. */
 export function installStaleChunkReloadListener(): () => void {
-  let recovery: Promise<unknown> | undefined;
-  const onPreloadError = (event: Event & { payload?: unknown }) => {
-    if (!isStaleChunkImportError(event.payload) || recovery) {
+  let active = true;
+  const canReload = () => active;
+  let recovering = false;
+  const onPreloadError = async (event: Event & { payload?: unknown }) => {
+    if (!isStaleChunkImportError(event.payload) || recovering || !canReloadControlUiDocument()) {
       return;
     }
     // Share one decision, including errors from loading the recovery chunk itself.
-    recovery = waitForImportReachability()
-      .then(() => import("./stale-import-recovery.runtime.ts"))
-      .then(
-        ({ recoverUnclaimedImport }) => recoverUnclaimedImport(controlUiDocumentUrl()),
-        () => scheduleStaleChunkReload(),
-      )
-      .finally(() => {
-        recovery = undefined;
-      });
+    recovering = true;
+    try {
+      await waitForImportReachability();
+      if (!active) {
+        return;
+      }
+      const { recoverUnclaimedImport } = await import("./stale-import-recovery.runtime.ts");
+      if (active) {
+        await recoverUnclaimedImport(controlUiDocumentUrl(), canReload);
+      }
+    } catch {
+      await scheduleStaleChunkReload({ canReload });
+    } finally {
+      recovering = false;
+    }
   };
-  return listen(window, "vite:preloadError", onPreloadError);
+  const stop = listen(window, "vite:preloadError", (event) => void onPreloadError(event));
+  return () => {
+    active = false;
+    stop();
+  };
 }
 
 export function installMissingStylesheetRecovery(): () => void {
-  let detected = false;
-  let uninstalled = false;
   let banner: HTMLDivElement | null = null;
-
   let stopLoad: (() => void) | undefined;
 
-  const detectMissingStylesheet = async () => {
-    if (detected || uninstalled) {
+  function checkStylesheet() {
+    if (
+      getComputedStyle(document.documentElement).getPropertyValue("--openclaw-css-ok").trim() ===
+      "1"
+    ) {
       return;
     }
-    detected = true;
-    stopLoad?.();
     banner = document.createElement("div");
     banner.role = "alert";
     // All styles are inline because the entry stylesheet is broken by definition.
@@ -459,18 +466,7 @@ export function installMissingStylesheetRecovery(): () => void {
     listen(reloadButton, "click", () => void retryStaleChunkReloadWhenReachable({ timeoutMs: 0 }));
     banner.append(t("lazyView.stylesFailed"), " ", reloadButton);
     document.body.append(banner);
-    await scheduleStaleChunkReload();
-  };
-
-  function checkStylesheet() {
-    if (
-      getComputedStyle(document.documentElement).getPropertyValue("--openclaw-css-ok").trim() ===
-      "1"
-    ) {
-      stopLoad?.();
-      return;
-    }
-    void detectMissingStylesheet();
+    void scheduleStaleChunkReload();
   }
 
   // The entry stylesheet owns this sentinel. Individual resource errors include
@@ -482,7 +478,6 @@ export function installMissingStylesheetRecovery(): () => void {
   }
 
   return () => {
-    uninstalled = true;
     stopLoad?.();
     banner?.remove();
     banner = null;
