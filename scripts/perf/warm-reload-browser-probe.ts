@@ -408,30 +408,41 @@ export function installWarmReloadBrowserProbe(
       return;
     }
     domVersion++;
+    const selector = ".chat-virtual-row, .chat-details-session";
+    const roots = new Set<Element>();
     for (const record of records) {
       const nodes = record.type === "characterData" ? [record.target] : record.addedNodes;
       for (const node of nodes) {
         const element = node instanceof Element ? node : node.parentElement;
-        if (
-          !element ||
-          (!element.closest(".chat-virtual-row, .chat-details-session") &&
-            !element.querySelector(".chat-virtual-row, .chat-details-session"))
-        ) {
-          continue;
+        if (element) {
+          roots.add(element);
         }
-        const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
+      }
+    }
+    for (const root of roots) {
+      let ancestor = root.parentElement;
+      while (ancestor && !roots.has(ancestor)) {
+        ancestor = ancestor.parentElement;
+      }
+      if (ancestor) {
+        continue;
+      }
+      const context = root.closest(selector);
+      const scopes = context
+        ? [root]
+        : root.childElementCount
+          ? root.querySelectorAll(selector)
+          : [];
+      for (const scope of scopes) {
+        const identifier = (context ?? scope).matches(".chat-details-session")
+          ? "openclaw-details"
+          : "openclaw-transcript";
+        const walker = document.createTreeWalker(scope, NodeFilter.SHOW_TEXT);
         let text: Node | null;
         while ((text = walker.nextNode())) {
           const parent = text.parentElement;
-          if (
-            text.textContent?.trim() &&
-            parent?.closest(".chat-virtual-row, .chat-details-session") &&
-            !parent.hasAttribute("elementtiming")
-          ) {
-            parent.setAttribute(
-              "elementtiming",
-              parent.closest(".chat-details-session") ? "openclaw-details" : "openclaw-transcript",
-            );
+          if (parent && !parent.hasAttribute("elementtiming") && text.textContent?.trim()) {
+            parent.setAttribute("elementtiming", identifier);
           }
         }
       }
