@@ -207,7 +207,9 @@ suite.define(() => {
       });
       await page.goto(`${suite.server.baseUrl}settings/talk`);
       const openAi = page.getByRole("radio", { name: "OpenAI", exact: true });
-      await expect(page.getByRole("radio", { name: "xAI", exact: true })).toBeChecked();
+      await expect
+        .poll(() => page.getByRole("radio", { name: "xAI", exact: true }).isChecked())
+        .toBe(true);
       await openAi.check();
 
       const save = await gateway.waitForRequest("config.set");
@@ -215,7 +217,7 @@ suite.define(() => {
       expect(JSON.parse(raw)).toMatchObject({
         talk: { realtime: { provider: "openai", transport: "webrtc" } },
       });
-      await expect(openAi).toBeChecked();
+      await expect.poll(() => openAi.isChecked()).toBe(true);
     });
   });
 });

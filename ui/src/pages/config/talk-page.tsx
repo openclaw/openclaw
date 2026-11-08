@@ -74,7 +74,7 @@ type ModelDefaultResetIntent = {
 };
 
 /** Transports whose sessions are client-owned (`talk.client.create`). */
-const TALK_CLIENT_OWNED_TRANSPORTS = new Set(["webrtc", "provider-websocket"]);
+const TALK_CLIENT_OWNED_TRANSPORTS = new Set<string>(["webrtc", "provider-websocket"]);
 
 // Drafts and write ordering belong to the application Gateway, not a route
 // element. Weak ownership retains them across navigation without durable storage.
