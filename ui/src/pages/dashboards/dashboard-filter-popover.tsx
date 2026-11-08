@@ -1,7 +1,7 @@
 import { For, Show, onSettled } from "solid-js";
 import { Icon } from "../../components/solid/icon.tsx";
 import { Popover, type PopoverHandle } from "../../components/solid/popover.tsx";
-import { nextRadio } from "../../components/solid/radio.tsx";
+import { nextRadio } from "../../components/solid/radio-navigation.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { listen } from "../../lib/reactive/listener.ts";
 import type { DashboardGalleryFilters, DashboardGalleryHandlers } from "./gallery-filters.ts";

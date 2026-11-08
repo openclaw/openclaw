@@ -35,6 +35,7 @@ it.each([
       key: `child-${index}`,
       label: "Review",
       status: index === 1 ? "running" : "done",
+      session: { startedAt: Date.now() - 3000 },
     }));
     const { view, setRows, openChild, openCollection } = mountSubagents(initial, mobile);
     const buttons = view.getAllByRole("button");
@@ -44,6 +45,7 @@ it.each([
       "sr-only",
     );
     expect(buttons[0]!.querySelector(".chat-details-subagents__spinner")).not.toBeNull();
+    expect(buttons[0]!.querySelector("openclaw-elapsed-time")?.textContent).toBeTruthy();
     buttons[0]!.click();
     expect(openChild).toHaveBeenLastCalledWith("child-1");
     buttons[1]!.click();
@@ -61,8 +63,7 @@ it.each([
     flush();
     expect(view.getAllByRole("button")).toHaveLength(1);
     view.getByRole("button", { name: `All subagents. ${limit + 1} Done` }).click();
-    expect(openCollection).toHaveBeenCalledTimes(2);
-    expect(openChild).toHaveBeenCalledTimes(2);
+    expect([openCollection, openChild].map((fn) => fn.mock.calls.length)).toEqual([2, 2]);
   },
 );
 
@@ -73,8 +74,7 @@ it("omits empty content and removes collapsed activity when the last waiting chi
   setRows([{ key: "waiting-child", label: "Waiting child", status: "waiting" }]);
   flush();
   expect(view.getByRole("img", { name: "1 subagent running" })).toBeTruthy();
-  expect(view.queryByRole("button")).toBeNull();
-  expect(view.container.textContent).toBe("");
+  expect([view.queryByRole("button"), view.container.textContent]).toEqual([null, ""]);
   setRows([{ key: "waiting-child", label: "Waiting child", status: "done" }]);
   flush();
   expect(view.container.childElementCount).toBe(0);

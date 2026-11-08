@@ -741,11 +741,11 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
   }
 
   private queueLayout(): void {
-    if (
-      (this.initialRange.pending && this.rowKeys.length) ||
-      this.offsetState.scrollCommand?.target === "message"
-    ) {
-      this.renderer.queueAfterCommit(this.completeLayout);
+    const initial = this.initialRange.pending && this.rowKeys.length > 0;
+    if (initial || this.offsetState.scrollCommand?.target === "message") {
+      const yieldToBrowser =
+        initial && !this.offsetState.pendingScrollOffset && this.rowKeys.length > 1;
+      this.renderer.queueAfterCommit(this.completeLayout, yieldToBrowser);
     }
   }
 
