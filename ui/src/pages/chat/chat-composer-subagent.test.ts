@@ -278,6 +278,9 @@ describe("composer send readiness", () => {
         draw();
         expect(isInitialChatHistoryUnavailable(state)).toBe(true);
         expect(pane.chatProps?.canCompose).toBe(true);
+        expect(pane.chatProps?.canSend).toBe(false);
+        expect(pane.chatProps?.disabledReason).toBeNull();
+        expect(container.querySelector(".agent-chat__composer-status-band")).toBeNull();
         expect(primaryButton(container).disabled).toBe(true);
         const textarea = container.querySelector<HTMLTextAreaElement>("textarea")!;
         expect(textarea.disabled).toBe(false);
