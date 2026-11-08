@@ -4,6 +4,7 @@ import { createServer, type RequestListener } from "node:http";
 import type { HeapProfiler } from "node:inspector";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
+import { pathToFileURL } from "node:url";
 import { collectConfiguredModelRefs } from "@openclaw/model-catalog-core/configured-model-refs";
 import { afterEach, describe, expect, it } from "vitest";
 import { testing } from "../../scripts/bench-gateway-startup.ts";
@@ -14,6 +15,7 @@ import {
   createGatewayBenchEnv,
   waitForInitialProbe,
 } from "../../scripts/lib/gateway-bench-runtime.ts";
+import { summarizeGatewayModuleLoads } from "../../scripts/lib/gateway-startup-module-counts.mjs";
 import { isStartupTraceDuration } from "../../scripts/lib/gateway-startup-trace-ranking.js";
 import { runManagedCommand } from "../../scripts/lib/managed-child-process.mts";
 import type { OpenClawConfig } from "../../src/config/types.openclaw.js";
@@ -25,6 +27,33 @@ import { runNodeScript } from "../helpers/run-node-script.js";
 import { createTempDirTracker, useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+it("counts unique loaded files across repeated module evaluations", async ({ signal }) => {
+  const root = tempDirs.make("openclaw-startup-module-counts-");
+  const output = path.join(root, "counts.jsonl");
+  const entry = path.join(root, "entry.mjs");
+  fs.writeFileSync(path.join(root, "dependency.mjs"), "export const value = 1;");
+  fs.writeFileSync(
+    entry,
+    'await import("./dependency.mjs"); await import("./dependency.mjs?generation=2");',
+  );
+  const result = await runNodeScript(
+    [
+      "--import",
+      pathToFileURL(path.resolve("scripts/lib/gateway-startup-module-counts.mjs")).href,
+      entry,
+    ],
+    { ...process.env, OPENCLAW_BENCH_MODULE_COUNTS: output },
+    undefined,
+    { signal },
+  );
+  expect(result.error).toBeUndefined();
+  expect(result.status, result.stderr).toBe(0);
+  expect(summarizeGatewayModuleLoads(fs.readFileSync(output, "utf8"))).toEqual({
+    files: 2,
+    groups: { core: 2 },
+  });
+});
+
 it("runs startup benchmark help through a symlinked script directory", async ({ signal }) => {
   const root = tempDirs.make("openclaw-bench-symlink-");
   const scripts = path.join(root, "scripts");
@@ -120,6 +149,7 @@ function gatewaySample(overrides: Partial<GatewaySample> = {}): GatewaySample {
     signal: null,
     startupTrace: {},
     startupTraceLines: [],
+    pluginMigration: { total: 0, completed: 0, warnings: 0 },
     ...overrides,
   };
 }
@@ -379,6 +409,7 @@ server.listen(port, "127.0.0.1", () => {
   console.log("[gateway] ready (0 plugins, 0.0s)");
   console.log("startup trace: sidecars.model-runtime-build agentCount=" + (10 + sample) + " workspaceGroupCount=" + sample + " workspaceFactsMs=2.5");
   console.log("startup trace: memory.ready rssMb=32.5 heapUsedMb=16.25 externalMb=2");
+  if (teamBoot) console.log("startup trace: plugins.runtime-post-bind 1.0ms total=1.0ms");
 });
 `,
         );

@@ -1,16 +1,14 @@
 import fs from "node:fs";
 import type { DatabaseSync } from "node:sqlite";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { sql } from "kysely";
+import { expressionBuilder, sql } from "kysely";
 import { updateSqliteTranscriptEventJsonInTransaction } from "../config/sessions/session-accessor.sqlite-transcript-store.js";
 import { transcriptEventJsonSql } from "../config/sessions/transcript-payload.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db-contract.js";
 import type { OpenClawAgentDatabase } from "../state/openclaw-agent-db-contract.js";
 import { agentEngineInput } from "../state/openclaw-agent-db-engine.js";
-import {
-  OpenClawAgentDatabaseLeaseActiveError,
-  assertNoOpenClawAgentDatabaseLeasesReadOnly,
-} from "../state/openclaw-agent-db-lease.js";
+import { assertNoOpenClawAgentDatabaseLeasesReadOnly } from "../state/openclaw-agent-db-lease-inspection.js";
+import { OpenClawAgentDatabaseLeaseActiveError } from "../state/openclaw-agent-db-lease.js";
 import { assertAgentDatabaseMaintenanceAuthority } from "../state/openclaw-agent-db-maintenance-authority.js";
 import { withAgentDatabaseMaintenanceLease } from "../state/openclaw-agent-db-maintenance-lease.js";
 import {
@@ -69,7 +67,7 @@ const MIGRATION_CURSOR_VERSION = 2;
 
 type TranscriptDirectiveMigrationDatabase = Pick<
   OpenClawAgentKyselyDatabase,
-  "schema_meta" | "transcript_events"
+  "schema_meta" | "transcript_events" | "session_transcript_cold_archives"
 >;
 
 type MigrationCursor =
@@ -201,9 +199,18 @@ function transcriptCandidateFilter(
   const maskedProvider = isPostgresSqlConnection(database)
     ? /* kysely-allow-raw: substring prefilter over stored JSON columns; parsed events decide. */ sql<boolean>`(strpos(transcript_events.event_json, ${MASKED_PROVIDER_JSON}) > 0 OR strpos(transcript_events.navigation_json, ${MASKED_PROVIDER_JSON}) > 0)`
     : /* kysely-allow-raw: substring prefilter over stored JSON columns; parsed events decide. */ sql<boolean>`(instr(transcript_events.event_json, ${MASKED_PROVIDER_JSON}) > 0 OR instr(transcript_events.navigation_json, ${MASKED_PROVIDER_JSON}) > 0)`;
-  return scope === "masked-provider"
-    ? maskedProvider
-    : /* kysely-allow-raw: directive rows still need the decoded payload predicate. */ sql<boolean>`(${transcriptEventJsonSql(database)} LIKE '%[[%' OR ${maskedProvider})`;
+  const candidate =
+    scope === "masked-provider"
+      ? maskedProvider
+      : /* kysely-allow-raw: directive rows still need the decoded payload predicate. */ sql<boolean>`(${transcriptEventJsonSql(database)} LIKE '%[[%' OR ${maskedProvider})`;
+  const eb = expressionBuilder<TranscriptDirectiveMigrationDatabase, "transcript_events">();
+  // Cold payloads remain archive-owned, including exceptional inline representations.
+  const hot = eb(
+    "transcript_events.session_id",
+    "not in",
+    eb.selectFrom("session_transcript_cold_archives").select("session_id"),
+  );
+  return eb.case().when(hot).then(candidate).else(sql.lit(false)).end();
 }
 
 /**
@@ -320,9 +327,9 @@ function createArchiveLineTransform(
   };
 }
 
-function hasActiveAgentDatabaseLease(env: NodeJS.ProcessEnv): boolean {
+async function hasActiveAgentDatabaseLease(env: NodeJS.ProcessEnv): Promise<boolean> {
   try {
-    assertNoOpenClawAgentDatabaseLeasesReadOnly({ env });
+    await assertNoOpenClawAgentDatabaseLeasesReadOnly({ env });
     return false;
   } catch (error) {
     if (error instanceof OpenClawAgentDatabaseLeaseActiveError) {
@@ -340,7 +347,7 @@ async function migrateTranscriptSessions(params: {
   pathname: string;
   resolveMaskedProvider: MaskedProviderResolver;
   start: Extract<MigrationCursor, { phase: "transcripts" }>;
-  backupBeforeDirectiveRewrite: () => void;
+  backupBeforeDirectiveRewrite: () => Promise<void>;
 }): Promise<number> {
   const { scope } = params.start;
   let rewrittenSessions = 0;
@@ -362,13 +369,13 @@ async function migrateTranscriptSessions(params: {
     const restoredSeqs = planned
       .filter((row) => row.maskedProvider === "restored")
       .map((row) => row.seq);
+    if (directivesChanged) {
+      await params.backupBeforeDirectiveRewrite();
+    }
     runSqliteImmediateTransactionSync(
       params.database,
       () => {
         assertAgentDatabaseMaintenanceAuthority();
-        if (directivesChanged) {
-          params.backupBeforeDirectiveRewrite();
-        }
         updateSqliteTranscriptEventJsonInTransaction(
           params.owner,
           sessionId,
@@ -475,9 +482,10 @@ async function migrateAgentDatabase(
     let preserved = false;
     // Directive edits keep the full pre-repair backup; provider restores are undone from
     // their recorded rows.
-    const backupBeforeDirectiveRewrite = () => {
+    const backupBeforeDirectiveRewrite = async () => {
       if (!preserved) {
-        const backup = backupDoctorSqliteRepair(params.pathname, "transcript-directives");
+        const backup = await backupDoctorSqliteRepair(params.pathname, "transcript-directives");
+        maintenance.assertOwned();
         preserved = true;
         params.changes.push(`Saved pre-repair SQLite backup: ${backup}`);
       }
@@ -504,11 +512,13 @@ async function migrateAgentDatabase(
             pathname: params.pathname,
             signal: maintenance.signal,
             start: archiveCursor,
+            prepareRewrite: async () => {
+              if (archiveObservations.directivesChanged) {
+                await backupBeforeDirectiveRewrite();
+              }
+            },
             // Runs inside each archive rewrite transaction, after its batch was planned.
             beforeRewrite: () => {
-              if (archiveObservations.directivesChanged) {
-                backupBeforeDirectiveRewrite();
-              }
               const lines = [...archiveObservations.unrecordedRestoredLines];
               if (lines.length > 0) {
                 recordRestoredProviders(database, params.agentId, (record) => {
@@ -649,7 +659,7 @@ export async function migrateHistoricalTranscriptDirectives(
     const hasActiveWriter =
       discovery.targets.length > 0 &&
       agentEngineInput() === undefined &&
-      hasActiveAgentDatabaseLease(env);
+      (await hasActiveAgentDatabaseLease(env));
     const targets: AgentDatabaseMigrationTarget[] = [];
     for (const target of discovery.targets) {
       try {

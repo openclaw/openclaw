@@ -1,7 +1,32 @@
 import { getRecord, type LegacyConfigMigrationSpec } from "../../../config/legacy.shared.js";
+import {
+  materializeSkillWorkshopPlugin,
+  moveSkillWorkshopSettings,
+} from "../../../config/skill-workshop-plugin-migration.js";
 import { deleteRetiredPath } from "./legacy-config-record-shared.js";
 
 export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_SKILLS: LegacyConfigMigrationSpec[] = [
+  {
+    id: "plugins.skill-workshop-policy-while-built-in",
+    legacyRules: [
+      {
+        path: ["plugins"],
+        message:
+          'Plugin policy written while Skill Workshop was built in needs migration so Skill Workshop keeps running. Run "openclaw doctor --fix".',
+        match: (_value, root) =>
+          materializeSkillWorkshopPlugin(structuredClone(root)).changes.length > 0,
+      },
+    ],
+    apply: (raw, changes) => {
+      const migrated = materializeSkillWorkshopPlugin(raw);
+      // Marker-only conversion is stamped by the config writer, not an unrelated Doctor repair.
+      if (migrated.changes.length === 0) {
+        return;
+      }
+      Object.assign(raw, migrated.config);
+      changes.push(...migrated.changes);
+    },
+  },
   {
     id: "skills.workshop.autonomous.enabled->mode",
 
@@ -59,6 +84,20 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_SKILLS: LegacyConfigMigrationSpec[
           "Removed retired skills.workshop.allowSymlinkTargetWrites; Skill Workshop writes only inside its own directory.",
         );
       }
+    },
+  },
+  {
+    // Last: the rules above canonicalize older shapes before the settings move.
+    id: "skills.workshop->plugins.entries.skill-workshop.config",
+    legacyRules: [
+      {
+        path: ["skills", "workshop"],
+        message:
+          'skills.workshop moved to plugins.entries.skill-workshop.config. Run "openclaw doctor --fix".',
+      },
+    ],
+    apply: (raw, changes) => {
+      changes.push(...moveSkillWorkshopSettings(raw));
     },
   },
 ];

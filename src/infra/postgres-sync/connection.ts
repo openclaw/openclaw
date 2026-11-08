@@ -38,7 +38,7 @@ export class PostgresSyncConnection implements PostgresSqlConnection {
   mutationRevision = 0;
   readonly advisoryLockKey: bigint;
   private bridge?: PostgresBridge;
-  private idleCheckout = false;
+  private idleCheckout?: "reconnect" | "validate";
   private readonly bridgeParameters: Parameters<typeof createPostgresBridge>[0];
   private failure: Error | undefined;
   private outcomeUnknown = true;
@@ -47,6 +47,7 @@ export class PostgresSyncConnection implements PostgresSqlConnection {
   private pendingWrite = false;
   private readonly mainThread = threadId === 0;
   private readonly reuseKey?: string;
+  private readonly admissionReadOnly: boolean;
 
   constructor(
     url: string,
@@ -57,9 +58,11 @@ export class PostgresSyncConnection implements PostgresSqlConnection {
       lockTimeoutMs?: number;
       statementTimeoutMs?: number;
       reuse?: boolean;
+      readOnly?: boolean;
     },
   ) {
     assertEngineStoreExecutionAllowed();
+    this.admissionReadOnly = options?.readOnly === true;
     Object.defineProperty(this, Symbol.for("openclaw.postgres-sync-connection"), { value: true });
     this.advisoryLockKey = createHash("sha256").update(storeId).digest().readBigInt64BE();
     this.bridgeParameters = { url, schema, storeId, ...options };
@@ -70,11 +73,11 @@ export class PostgresSyncConnection implements PostgresSqlConnection {
   private connect(): PostgresBridge {
     const idle = this.reuseKey ? takeIdlePostgresBridge(this.reuseKey) : undefined;
     const bridge =
-      idle ??
+      idle?.bridge ??
       takePreparedPostgresBridge(this.bridgeParameters) ??
       createPostgresBridge(this.bridgeParameters);
     this.bridge = bridge;
-    this.idleCheckout = idle !== undefined;
+    this.idleCheckout = idle ? (idle.validate ? "validate" : "reconnect") : undefined;
     bridge.port.unref();
     if (idle) {
       return bridge;
@@ -96,7 +99,13 @@ export class PostgresSyncConnection implements PostgresSqlConnection {
     options?: { withCommit?: (commit: () => void) => void },
     ...modes: [readOnly?: boolean, reserved?: boolean]
   ): T {
-    return runPostgresTransactionSync(this, operation, options, ...modes);
+    return runPostgresTransactionSync(
+      this,
+      operation,
+      options,
+      this.admissionReadOnly || modes[0],
+      modes[1],
+    );
   }
 
   readRecoveryGeneration(lock = false): string {
@@ -173,11 +182,17 @@ export class PostgresSyncConnection implements PostgresSqlConnection {
     // A failed or unsettled request cannot reuse an earlier idle observation.
     bridge.inTransaction = undefined;
     const reconnectIfIdle =
-      this.idleCheckout &&
+      this.idleCheckout !== undefined &&
       (request.operation === "query" || request.operation === "recovery-generation");
-    this.idleCheckout = false;
+    const validateIfIdle = reconnectIfIdle && this.idleCheckout === "validate";
+    this.idleCheckout = undefined;
     bridge.port.postMessage(
-      { ...request, ...(reconnectIfIdle ? { reconnectIfIdle } : {}), id },
+      {
+        ...request,
+        ...(reconnectIfIdle ? { reconnectIfIdle } : {}),
+        ...(validateIfIdle ? { validateIfIdle } : {}),
+        id,
+      },
       [],
     );
     recordWorkerMessage("sqlite_request", "to_worker");

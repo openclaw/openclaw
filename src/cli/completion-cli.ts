@@ -27,6 +27,7 @@ import { getCoreCliCompletionGroups } from "./program/command-registry-core.js";
 import { getProgramContext } from "./program/program-context.js";
 import { removeCommandGroupNames } from "./program/register-command-groups.js";
 import { getSubCliCompletionGroups } from "./program/register.subclis.js";
+import { quotePowerShellArg } from "./quote-cli-arg.js";
 
 export function getCompletionScript(shell: CompletionShell, program: Command): string {
   return createCompletionScriptGenerator(program)(shell);
@@ -131,11 +132,16 @@ export function registerCompletionCli(program: Command) {
         const generateScript = createCompletionScriptGenerator(program);
         for (const writeShell of writeShells) {
           const script = generateScript(writeShell);
+          // Windows PowerShell otherwise decodes Unicode command and choice literals as ANSI.
+          const content =
+            writeShell === "powershell" && process.platform === "win32" && /\P{ASCII}/u.test(script)
+              ? `\uFEFF${script}`
+              : script;
           await publishOutputFileAtomically({
             filePath: resolveCompletionCachePath(writeShell, binName),
             tempPrefix: ".openclaw-completion-cache",
             writeTemp: async (tempPath) => {
-              await fs.writeFile(tempPath, script, { encoding: "utf-8", flag: "wx" });
+              await fs.writeFile(tempPath, content, { encoding: "utf-8", flag: "wx" });
             },
           });
         }
@@ -278,13 +284,11 @@ function generatePowerShellCompletion(tree: ShellCompletionCommandTree): string 
   const { root, descendants: contexts } = tree;
   const rootCmd = root.command.name();
   const formatPowerShellArray = (entries: string[]) =>
-    entries.length > 0
-      ? `@(${entries.map((entry) => `'${entry.replaceAll("'", "''")}'`).join(",")})`
-      : "@()";
+    `@(${entries.map(quotePowerShellArg).join(",")})`;
   const commandPathCases = contexts
     .flatMap((context) =>
       context.pathVariants.map(
-        (pathSegments) => `            '${pathSegments.join(" ")}' {
+        (pathSegments) => `            ${quotePowerShellArg(pathSegments.join(" "))} {
                 $commandPath = $candidatePath
                 $valueOptions = ${formatPowerShellArray(context.valueOptions)}
                 $requiredValueOptions = ${formatPowerShellArray(context.requiredValueOptions)}
@@ -308,7 +312,7 @@ ${commandPathCases}
         .filter(Boolean)
         .map(
           (fullPath) => `
-            if ($commandPath -eq '${fullPath}') {
+            if ($commandPath -eq ${quotePowerShellArg(fullPath)}) {
                 $completions = ${allCompletions}
                 $completions | Where-Object { $_ -like "$wordToComplete*" } | ForEach-Object {
                     [System.Management.Automation.CompletionResult]::new($_, $_, 'ParameterName', $_)
@@ -335,7 +339,7 @@ ${commandPathCases}
                 $choiceValue = if ($_ -match '^[A-Za-z0-9_./:+-]+$') {
                     $_
                 } else {
-                    "'" + $_.Replace("'", "''") + "'"
+                    "'" + [regex]::Replace($_, "['‘-‛]", '$0$0') + "'"
                 }
                 $completionText = "$choiceCompletionPrefix$choiceValue"
                 [System.Management.Automation.CompletionResult]::new($completionText, $_, 'ParameterValue', $_)
@@ -347,9 +351,7 @@ ${commandPathCases}
         )
         .join("\n");
       return pathVariants.map(
-        (
-          pathSegments,
-        ) => `    if ($commandPath -eq '${pathSegments.join(" ").replaceAll("'", "''")}') {
+        (pathSegments) => `    if ($commandPath -eq ${quotePowerShellArg(pathSegments.join(" "))}) {
 ${optionChoiceCases}
     }`,
       );

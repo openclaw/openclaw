@@ -95,22 +95,35 @@ it("re-arms a pending heartbeat when inspection shortens the idle window", async
 });
 
 it("refreshes Sandbox activity without requesting an idle policy replacement", async () => {
-  const { provider, heartbeat, warnings } = heartbeatFixture(async (argv) =>
-    argv.includes("--idle-timeout")
-      ? commandResult({
-          code: 2,
-          stderr:
-            "provider=azure-sandbox does not support replacing the lease idle timeout while heartbeating",
-        })
-      : commandResult({
-          stdout: JSON.stringify({ id: LEASE_ID, provider: "azure-sandbox", state: "Running" }),
-        }),
+  const { provider, heartbeat, warnings } = heartbeatFixture(
+    async (argv) =>
+      argv.includes("--idle-timeout")
+        ? commandResult({
+            code: 2,
+            stderr:
+              "provider=azure-sandbox does not support replacing the lease idle timeout while heartbeating",
+          })
+        : commandResult({
+            stdout: JSON.stringify({ id: LEASE_ID, provider: "azure-sandbox", state: "Running" }),
+          }),
+    () =>
+      inspectJson({
+        provider: "azure-sandbox",
+        serverId: "fixture-sandbox",
+        slug: "fixture-slug",
+        labels: {
+          crabbox_lease: LEASE_ID,
+          crabbox_attempt: "fixture-attempt",
+          crabbox_fingerprint: "fixture-fingerprint",
+        },
+      }),
   );
   const profile = { ...PROFILE, provider: "azure-sandbox", class: "small" };
   try {
     await provider.provision(profile, `provision:v2:${"0".repeat(64)}`, {
       assertCurrent: () => {},
       beginNodeEnrollment: async () => nodeEnrollmentFixture("fixture-setup-code", "Sandbox test"),
+      recordResourceReceipt: async () => {},
     });
     await vi.advanceTimersByTimeAsync(0);
     await vi.advanceTimersByTimeAsync(60_000);

@@ -510,8 +510,6 @@ describeLive("gateway live trajectory export", () => {
         token,
         workspace: workspaceDir,
       });
-      const runtimeConfig = useLiveTestRuntimeConfig(config);
-      cleanup.push(async () => runtimeConfig[Symbol.dispose]());
       logLiveStep("config-written", { configPath, modelKey, port, workspaceDir });
 
       const server = await startGatewayServer(port, {
@@ -520,6 +518,10 @@ describeLive("gateway live trajectory export", () => {
         controlUiEnabled: false,
       });
       logLiveStep("gateway-started", { port });
+      // Gateway startup prepares its own snapshot. Retain this fixture's exact
+      // config only after startup so later tool reads cannot observe it cleared.
+      const runtimeConfig = useLiveTestRuntimeConfig(config);
+      cleanup.push(async () => runtimeConfig[Symbol.dispose]());
       cleanup.push(async () => {
         await server.close();
       });
@@ -548,6 +550,9 @@ describeLive("gateway live trajectory export", () => {
       });
       logLiveStep("agent-turn:done", { firstReply });
       expect(firstReply.trim()).toBe(replyToken);
+      // The native harness retires its runtime-config owner when the first turn
+      // settles. Republish this fixture before the follow-up gateway command.
+      useLiveTestRuntimeConfig(config);
 
       const { entry, storePath } = await loadSessionEntryAsync(sessionKey);
       if (!entry?.sessionId) {

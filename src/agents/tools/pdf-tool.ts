@@ -8,7 +8,6 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { captureAmbientGatewayOperatorAuthority } from "../../gateway/operator-invocation-authority.js";
 import { createMediaAssistantTextCoercer } from "../../media-understanding/assistant-text.js";
 import { providerSupportsNativePdfDocument } from "../../media-understanding/defaults.js";
-import { renderDocumentTruncationNotice } from "../../media/document-extraction-metadata.js";
 import {
   classifyMediaReferenceSource,
   normalizeMediaReferenceSource,
@@ -479,7 +478,7 @@ export function createPdfTool(options?: {
                 signal: modelSignal,
               });
               assertModelCurrent();
-              return { text, provider, model: modelId, native: true, extractions: [] };
+              return { text, provider, model: modelId, native: true, truncationNotices: [] };
             }
           }
 
@@ -508,7 +507,7 @@ export function createPdfTool(options?: {
             );
           }
 
-          const context = buildPdfExtractionContext(
+          const { context, truncationNotices } = buildPdfExtractionContext(
             promptRaw,
             effectiveExtractions,
             explicitSelectionLimit,
@@ -537,12 +536,12 @@ export function createPdfTool(options?: {
             provider,
             model: modelId,
             native: false,
-            extractions: effectiveExtractions,
+            truncationNotices,
           };
         },
       });
 
-      const { extractions: completedExtractions, ...completionResult } = fallbackResult.result;
+      const { truncationNotices, ...completionResult } = fallbackResult.result;
       const result = {
         ...completionResult,
         attempts: fallbackResult.attempts.map((a) => ({
@@ -554,15 +553,6 @@ export function createPdfTool(options?: {
 
       const pdfDetails = buildMediaReferenceDetails(loadedPdfs, "pdf");
 
-      const truncationNotices = result.native
-        ? []
-        : completedExtractions.flatMap((extraction, index) => {
-            const notice = renderDocumentTruncationNotice(
-              extraction.metadata,
-              pageSelection?.truncated ? pageSelection.pages.length : undefined,
-            );
-            return notice ? (loadedPdfs.length > 1 ? `PDF ${index + 1}: ${notice}` : notice) : [];
-          });
       const text = [...truncationNotices, result.text].join("\n");
       return buildTextToolResult({ ...result, text }, { native: result.native, ...pdfDetails });
     };

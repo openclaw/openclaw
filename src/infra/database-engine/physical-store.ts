@@ -1,11 +1,19 @@
 import type { DatabaseSync } from "node:sqlite";
+import { isArtifactPreservingStateRead } from "../../state/artifact-preserving-state-reads.js";
+import {
+  StateDatabaseAdmissionPendingError,
+  StateDatabaseOfflineMaintenanceError,
+} from "../gateway-state-owner-errors.js";
 import { openNodeSqliteDatabase } from "../node-sqlite.js";
-import { prepareSqliteReadOnlyLocationSync } from "../sqlite-snapshot-source.js";
+import { isSqliteLockError } from "../sqlite-error-diagnostics.js";
+import { runWithSqliteCleanup, SqliteSnapshotCleanupError } from "../sqlite-lifecycle-errors.js";
+import { tryInspectSqliteReadOnlyInProcess } from "../sqlite-readonly-inspection.js";
+import { prepareSqliteReadOnlyCopyInProcess } from "../sqlite-readonly-location.js";
+import { runSqliteReadOnlyWorkerSync } from "../sqlite-readonly-worker.js";
 import { readEngineAnchor } from "./open.js";
+import type { BackupEngine } from "./types.js";
 
-export type BackupEngine =
-  | { engine: "sqlite" }
-  | { engine: "postgres"; storeId: string; namespace: string };
+export type { BackupEngine } from "./types.js";
 
 /** Reads an already captured private image without reacquiring its live source. */
 export function readBackupEngineImage(imagePath: string, sourcePath: string): BackupEngine {
@@ -31,12 +39,67 @@ export function readEngineAnchorIdentity(db: DatabaseSync, sourcePath: string): 
   return { engine: "postgres", storeId: row.store_id, namespace: row.schema };
 }
 
-/** Acquire the private image in a child so source descriptor closes preserve live POSIX locks. */
+/** Source opens and closes stay in a child to preserve the caller's live POSIX locks. */
 export function readBackupEngine(sourcePath: string): BackupEngine {
-  const prepared = prepareSqliteReadOnlyLocationSync(sourcePath);
-  try {
-    return readBackupEngineImage(prepared.location, sourcePath);
-  } finally {
-    prepared.cleanup();
+  return runSqliteReadOnlyWorkerSync(
+    sourcePath,
+    undefined,
+    isArtifactPreservingStateRead("shared", sourcePath)
+      ? "backup-engine-preserving"
+      : "backup-engine",
+  );
+}
+
+/** Child-only: ordinary live reads need only the schema and anchor pages. */
+export async function readBackupEngineInProcess(
+  sourcePath: string,
+  preserveSourceArtifacts = false,
+): Promise<BackupEngine> {
+  return inspectPhysicalStoreInProcess(sourcePath, preserveSourceArtifacts, (db) =>
+    readEngineAnchorIdentity(db, sourcePath),
+  );
+}
+
+/** Child-only physical inspection shares the engine reader's source and cleanup custody. */
+export async function inspectPhysicalStoreInProcess<T>(
+  sourcePath: string,
+  preserveSourceArtifacts: boolean,
+  inspect: (db: DatabaseSync) => T,
+): Promise<T> {
+  if (!preserveSourceArtifacts) {
+    try {
+      const inspected = tryInspectSqliteReadOnlyInProcess(sourcePath, inspect);
+      if (inspected) {
+        return inspected.value;
+      }
+    } catch (error) {
+      // Offline custody and exclusive source locks can prevent native inspection.
+      // A private read keeps the established committed-image inspection contract.
+      if (
+        !(error instanceof StateDatabaseAdmissionPendingError) &&
+        !(error instanceof StateDatabaseOfflineMaintenanceError) &&
+        !isSqliteLockError(error)
+      ) {
+        throw error;
+      }
+    }
   }
+  // Strict captures, hot journals, and incomplete WAL families keep private bytes.
+  const prepared = await prepareSqliteReadOnlyCopyInProcess(sourcePath);
+  return runWithSqliteCleanup(
+    {
+      release() {
+        if (!prepared.cleanup()) {
+          throw new SqliteSnapshotCleanupError(
+            `SQLite engine inspection cleanup failed: ${sourcePath}`,
+          );
+        }
+      },
+    },
+    "SQLite engine inspection",
+    () => {
+      using db = openNodeSqliteDatabase(prepared.location, { readOnly: true });
+      return inspect(db);
+    },
+  );
 }

@@ -90,6 +90,7 @@ vi.mock("../../agents/model-selection.js", () => ({
 
 // mock-isolation: Keep host discovery outside command prompt fixtures.
 vi.mock("../../agents/system-prompt-params.js", () => ({
+  resolveSystemPromptRepoRoot: async () => undefined,
   buildSystemPromptParams: vi.fn(() => ({
     runtimeInfo: { host: "unknown", os: "unknown", arch: "unknown", node: process.version },
   })),
@@ -104,10 +105,9 @@ vi.mock("../../agents/agent-tools.js", () => ({
   createOpenClawCodingToolsAsync: createOpenClawCodingToolsAsyncMock,
 }));
 
-vi.mock("../../tts/tts-settings.js", () => ({
-  buildTtsSystemPromptHint: vi.fn(() => undefined),
-  resolveModelOverridePolicy: vi.fn(),
-  setTtsMachinePrefsPathResolver: vi.fn(),
+vi.mock("../../tts/tts-settings.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../tts/tts-settings.js")>()),
+  buildTtsSystemPromptHintAsync: vi.fn(async () => undefined),
 }));
 
 function makeParams(overrides: Partial<HandleCommandsParams> = {}): HandleCommandsParams {

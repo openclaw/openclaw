@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { SpeechProviderPlugin } from "../plugins/types.js";
 import { createSpeechDirectiveParser } from "./directive-parser.js";
-import { createTtsDirectiveTextStreamCleaner, parseTtsDirectives } from "./directives.js";
+import { parseTtsDirectives } from "./directives.js";
 import type { SpeechModelOverridePolicy } from "./provider-types.js";
 import { createSpeechPolicy, speechProvider } from "./speech-provider.test-support.js";
 
@@ -159,49 +159,5 @@ describe("parseTtsDirectives provider-aware routing", () => {
       warnings: [],
       hasDirective: false,
     });
-  });
-});
-
-describe("createTtsDirectiveTextStreamCleaner", () => {
-  const hidden = "[[tts:text]]Press the ` key.[[/tts:text]]";
-  it.each([
-    [
-      ["Hello [[tts:voice=al", "loy]]world[[/tt", "s]]"],
-      ["Hello ", "world", ""],
-    ],
-    [
-      ["Shown [[tts:text]]hid", "den[[/tts:text]] visible"],
-      ["Shown ", " visible"],
-    ],
-  ] as const)("cleans every incremental chunk: %j", (chunks, expected) => {
-    const cleaner = createTtsDirectiveTextStreamCleaner();
-    expect(chunks.map((chunk) => cleaner.push(chunk))).toEqual(expected);
-    expect(cleaner.flush()).toBe("");
-  });
-
-  it.each([
-    [["Some [[tts:hello there]] note"], "Some hello there note"],
-    [["Go [[tts:", "answered aloud]] back"], "Go answered aloud back"],
-    [["Done. [[tts:first line\nsecond line]] more"], "Done. first line\nsecond line more"],
-    [["Go [[tts:\nhello]] now"], "Go hello now"],
-    [["[[tts]]read", " this[[/tts]] now"], "read this now"],
-    [["See [[note"], "See [[note"],
-    [[`${hidden} Visible. [[tts:text]]Audio only.[[/tts:text]]`], " Visible. "],
-    [[hidden, " Visible. [[tts:text]]Audio only.[[/tts:text]]"], " Visible. "],
-  ] as const)("preserves visible reply text across chunks: %j", (chunks, expected) => {
-    const cleaner = createTtsDirectiveTextStreamCleaner();
-    expect(chunks.map((chunk) => cleaner.push(chunk)).join("") + cleaner.flush()).toBe(expected);
-  });
-
-  it.each([
-    ["```\n", "[[tts:literal", " speech]]\n", "```\n"],
-    ["Use `", "[[tts:literal", " speech]]", "` here."],
-    ["~~~\n~~~ [[note]]\n[[tts:Literal speech]]\n~~~"],
-    ["~~~\n~~~ [[tts:voice=alloy]]\n[[tts:Literal speech]]\n~~~"],
-  ])("preserves code literals across chunks: %j", (...chunks) => {
-    const cleaner = createTtsDirectiveTextStreamCleaner();
-    expect(chunks.map((chunk) => cleaner.push(chunk)).join("")).toBe(chunks.join(""));
-    expect(cleaner.push("\n[[tts:Visible speech]]")).toBe("\nVisible speech");
-    expect(cleaner.flush()).toBe("");
   });
 });

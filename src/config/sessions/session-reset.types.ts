@@ -5,10 +5,12 @@ import type {
 } from "./session-accessor.lifecycle-types.js";
 import type { SessionEntryReplacementPublication } from "./session-accessor.sqlite-entry-cache.types.js";
 import type { SqliteLifecycleTargetSnapshot } from "./session-accessor.sqlite-entry-equality.js";
+import type { SessionCreationOperation } from "./session-creation-operation.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
 
 /** The reset builder runs once on the host; the full selected target is compared in the worker. */
 export type SessionResetCommit = {
+  creationOperation?: SessionCreationOperation;
   agentId: string;
   target: SessionLifecycleStoreTarget;
   prepared: SqliteLifecycleTargetSnapshot;

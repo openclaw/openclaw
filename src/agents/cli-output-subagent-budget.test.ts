@@ -24,10 +24,14 @@ function runTurn(parentToolUseId: string | null, records: number, chars: number)
   };
   push({ type: "assistant", message: { id: "parent-call", content: [agentCall] } });
   for (let index = 0; index < records; index += 1) {
+    // Mixed parent records retain raw accounting; only child attribution earns a discount.
     push({
       type: "user",
       message: {
-        content: [{ type: "tool_result", tool_use_id: `sub-${index}`, content: "r".repeat(chars) }],
+        content: [
+          { type: "tool_result", tool_use_id: `sub-${index}`, content: "r".repeat(chars) },
+          { type: "text", text: "note" },
+        ],
       },
       parent_tool_use_id: parentToolUseId,
     });

@@ -1,7 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { onTestFinished, afterEach, beforeEach, expect, it, vi } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import { retainSessionEntryWorkerPublication } from "../../config/sessions/session-accessor.sqlite-entry-worker-publication.js";
@@ -17,6 +16,7 @@ import {
 import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
 import { listManagedImageRecordEntries } from "../managed-image-record-store.js";
 import { loadSessionEntryAsync } from "../session-entry-load.test-support.js";
+import { gateMediaOpen } from "./chat-media-fixture.test-support.js";
 import {
   captureWebchatReplyMediaScope,
   prepareWebchatReplyMediaForDisplay,
@@ -95,22 +95,7 @@ it.each([
     });
     expect(scope.workspace).toEqual({ remote: false, workspaceDir: selected });
     onTestFinished(scope.release);
-    const opened = createDeferred();
-    const release = createDeferred();
-    const audioReadCounts: Array<() => number> = [];
-    const nativeOpen = fs.open;
-    vi.spyOn(fs, "open").mockImplementation(async (...args) => {
-      const handle = await nativeOpen(...args);
-      if (String(args[0]) === audioSource) {
-        const read = vi.spyOn(handle, "read");
-        audioReadCounts.push(() => read.mock.calls.length);
-        if (audioReadCounts.length === (phase === "metadata" ? 1 : 2)) {
-          opened.resolve();
-          await release.promise;
-        }
-      }
-      return handle;
-    });
+    const gate = gateMediaOpen(audioSource, phase === "metadata" ? 1 : 2);
     const controller = new AbortController();
     const delivery = prepareWebchatReplyMediaForDisplay({
       scope,
@@ -126,7 +111,7 @@ it.each([
     );
     let authorityChanged = false;
     try {
-      await opened.promise;
+      await gate.opened;
       const staged = await fs.readdir(outbound);
       expect(staged).toHaveLength(1);
       expect(await fs.readFile(path.join(outbound, staged[0]!))).toEqual(PNG_BYTES);
@@ -150,14 +135,13 @@ it.each([
       if (!authorityChanged) {
         controller.abort();
       }
-      release.resolve();
+      gate.release();
       await settled;
     }
     await expect(delivery).rejects.toThrow(
       change === "abort" ? "aborted" : "Session media access changed",
     );
-    expect(audioReadCounts.length).toBeGreaterThan(0);
-    expect(audioReadCounts.reduce((total, count) => total + count(), 0)).toBe(0);
+    gate.assertUnread();
     expect(await fs.readdir(outbound)).toEqual([]);
     expect(await fs.readdir(originals)).toEqual([]);
     expect(await listManagedImageRecordEntries({ stateDir: state.stateDir })).toEqual([]);

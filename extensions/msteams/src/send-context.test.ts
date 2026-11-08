@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { MSTeamsConfig, OpenClawConfig } from "../runtime-api.js";
+import { msTeamsApprovalNativeRuntime } from "./approval-handler.runtime.js";
 import type { StoredConversationReference } from "./conversation-store.js";
 import { resolveMSTeamsSendContext } from "./send-context.js";
 import { sendMessageMSTeams } from "./send.js";
@@ -8,7 +9,13 @@ import { createMSTeamsTestConfig } from "./setup.test-support.js";
 const sendContextMockState = vi.hoisted(() => {
   const getAccessToken = vi.fn();
   const createActivity = vi.fn(async () => ({ id: "message-1" }));
-  const getActivities = vi.fn(() => ({ create: createActivity }));
+  const updateActivity = vi.fn(async () => ({ id: "message-1" }));
+  const getActivities = vi.fn(() => ({ create: createActivity, update: updateActivity }));
+  const createConversation = vi.fn(async () => ({ id: "a:opened-chat" }));
+  const fromServiceUrl = vi.fn(({ serviceUrl }: { serviceUrl: string }) => ({
+    serviceUrl,
+    conversations: { create: createConversation, activities: getActivities },
+  }));
   const store = {
     upsert: vi.fn(),
     get: vi.fn(),
@@ -24,17 +31,17 @@ const sendContextMockState = vi.hoisted(() => {
         id: "mock-app",
         api: {
           serviceUrl: "https://smba.trafficmanager.net/amer/",
-          fromServiceUrl: ({ serviceUrl }: { serviceUrl: string }) => ({
-            serviceUrl,
-            conversations: { activities: getActivities },
-          }),
+          fromServiceUrl,
           conversations: { activities: getActivities },
         },
       },
     })),
     createMSTeamsTokenProvider: vi.fn(() => ({ getAccessToken })),
     createActivity,
+    updateActivity,
     getActivities,
+    createConversation,
+    fromServiceUrl,
     getAccessToken,
     logInfo: vi.fn(),
     logWarn: vi.fn(),
@@ -69,7 +76,10 @@ const {
   loadMSTeamsSdkWithAuth,
   createMSTeamsTokenProvider,
   createActivity,
+  updateActivity,
   getActivities,
+  createConversation,
+  fromServiceUrl,
   getAccessToken,
   logInfo,
   logWarn,
@@ -114,7 +124,10 @@ beforeEach(() => {
     loadMSTeamsSdkWithAuth,
     createMSTeamsTokenProvider,
     createActivity,
+    updateActivity,
     getActivities,
+    createConversation,
+    fromServiceUrl,
   ]) {
     mock.mockClear();
   }
@@ -125,6 +138,82 @@ beforeEach(() => {
 });
 
 describe("resolveMSTeamsSendContext", () => {
+  it.each([
+    ["a:personal-chat", "allow-once", "Allowed once"],
+    ["a:personal-chat", "deny", "Denied"],
+    ["19:channel@thread.tacv2", "deny", "Denied"],
+  ] as const)(
+    "edits the original approval card in %s after %s",
+    async (targetId, decision, label) => {
+      storedChannel({
+        conversation: {
+          id: targetId,
+          conversationType: targetId.startsWith("a:") ? "personal" : "channel",
+        },
+      });
+      const resolved = { id: "approval-1", decision, resolvedBy: "approver-1", ts: 1 };
+      const request = {
+        id: resolved.id,
+        request: { command: "echo approved" },
+        createdAtMs: 0,
+        expiresAtMs: 2,
+      };
+      const context = {
+        cfg: createConfig(),
+        accountId: "default",
+        request,
+        entry: {
+          accountId: "default",
+          conversationId: targetId,
+          activityId: "message-1",
+          actionTokens: [],
+        },
+      };
+      const final = await msTeamsApprovalNativeRuntime.presentation.buildResolvedResult({
+        ...context,
+        resolved,
+        view: {
+          approvalId: resolved.id,
+          approvalKind: "exec",
+          phase: "resolved",
+          title: "Exec Approval",
+          commandText: "echo approved",
+          metadata: [],
+          decision,
+          resolvedBy: resolved.resolvedBy,
+        },
+      });
+      if (final.kind !== "update") {
+        throw new Error("Expected resolved approval card update");
+      }
+      await msTeamsApprovalNativeRuntime.transport.updateEntry?.({
+        ...context,
+        approvalKind: "exec",
+        phase: "resolved",
+        payload: final.payload,
+      });
+      expect(store.findPreferredDmByUserId).not.toHaveBeenCalled();
+      expect(getActivities).toHaveBeenCalledExactlyOnceWith(targetId);
+      expect(updateActivity).toHaveBeenCalledExactlyOnceWith(
+        "message-1",
+        expect.objectContaining({
+          id: "message-1",
+          attachments: [
+            expect.objectContaining({
+              content: expect.objectContaining({
+                body: expect.arrayContaining([
+                  expect.objectContaining({ text: `Exec Approval: ${label}` }),
+                ]),
+              }),
+            }),
+          ],
+        }),
+      );
+      expect(final.payload).not.toHaveProperty("actions");
+      expect(resolved).toEqual({ id: "approval-1", decision, resolvedBy: "approver-1", ts: 1 });
+    },
+  );
+
   it("rejects an unavailable selected certificate before reading conversation state", async () => {
     const certificatePath = "/private/openclaw-msteams-unavailable-send.pem";
     const cfg = createMSTeamsTestConfig({
@@ -207,6 +296,91 @@ describe("resolveMSTeamsSendContext", () => {
       );
     },
   );
+
+  it.each([
+    ["the global endpoint", [], "https://smba.trafficmanager.net/teams"],
+    [
+      "a stored regional endpoint",
+      [{ conversationId, reference: channelRef({ serviceUrl }) }],
+      "https://smba.trafficmanager.net/amer",
+    ],
+  ])(
+    "opens a personal chat via %s for an installed user who never messaged",
+    async (_label, stored, openedVia) => {
+      const userId = "00000000-0000-4000-8000-000000000001";
+      store.findPreferredDmByUserId.mockResolvedValue(null);
+      store.list.mockResolvedValue(stored);
+
+      await sendMessageMSTeams({ cfg: createConfig(), to: `user:${userId}`, text: "hello" });
+
+      expect(fromServiceUrl).toHaveBeenCalledWith({ serviceUrl: openedVia });
+      expect(createConversation).toHaveBeenCalledExactlyOnceWith({
+        isGroup: false,
+        members: [{ id: userId }],
+        tenantId: "tenant-id",
+        channelData: { tenant: { id: "tenant-id" } },
+      });
+      expect(store.upsert).toHaveBeenCalledExactlyOnceWith(
+        "a:opened-chat",
+        expect.objectContaining({
+          user: { id: userId, aadObjectId: userId },
+          agent: { id: "28:app-id" },
+          conversation: {
+            id: "a:opened-chat",
+            conversationType: "personal",
+            tenantId: "tenant-id",
+          },
+          serviceUrl: openedVia,
+        }),
+      );
+      expect(getActivities).toHaveBeenCalledExactlyOnceWith("a:opened-chat");
+      expect(createActivity).toHaveBeenCalledWith(
+        expect.objectContaining({
+          text: "hello",
+          conversation: expect.objectContaining({ id: "a:opened-chat" }),
+          channelData: expect.objectContaining({ tenant: { id: "tenant-id" } }),
+        }),
+      );
+    },
+  );
+
+  it("skips Connector URLs from another cloud before any create request", async () => {
+    store.findPreferredDmByUserId.mockResolvedValue(null);
+    store.list.mockResolvedValue([{ conversationId, reference: channelRef({ serviceUrl }) }]);
+
+    await expect(
+      sendMessageMSTeams({ cfg: createConfig({ cloud: "China" }), to: "user:user-aad", text: "x" }),
+    ).rejects.toThrow("No conversation reference found for user:user-aad");
+
+    expect(fromServiceUrl).not.toHaveBeenCalled();
+    expect(createConversation).not.toHaveBeenCalled();
+    expect(store.upsert).not.toHaveBeenCalled();
+  });
+
+  it("does not open a personal chat after delivery authority closes during lookup", async () => {
+    const authority = { active: true };
+    store.findPreferredDmByUserId.mockImplementation(async () => {
+      authority.active = false;
+      return null;
+    });
+    store.list.mockResolvedValue([]);
+
+    await expect(
+      sendMessageMSTeams({
+        cfg: createConfig(),
+        to: "user:user-aad",
+        text: "x",
+        assertDirectAdapterHandoff: () => {
+          if (!authority.active) {
+            throw new Error("delivery authority closed");
+          }
+        },
+      }),
+    ).rejects.toThrow("delivery authority closed");
+
+    expect(createConversation).not.toHaveBeenCalled();
+    expect(store.upsert).not.toHaveBeenCalled();
+  });
 
   it("removes stored conversation references with blocked serviceUrl hosts", async () => {
     storedChannel({ serviceUrl: "https://attacker.example.com/teams/" });

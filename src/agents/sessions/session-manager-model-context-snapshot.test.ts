@@ -24,7 +24,10 @@ import type { SessionTranscriptAnchorFacts } from "../../config/sessions/session
 import * as transcriptHydration from "../../config/sessions/session-transcript-hydration.js";
 import { runWithSessionTranscriptReadFence } from "../../config/sessions/session-transcript-read-fence.js";
 import * as contextWorker from "../../config/sessions/session-transcript-read-worker-runtime.js";
-import { waitForSessionTranscriptProjection } from "../../config/sessions/session-transcript-reconcile.js";
+import {
+  waitForSessionTranscriptIndexReconcile,
+  waitForSessionTranscriptProjection,
+} from "../../config/sessions/session-transcript-reconcile.js";
 import { buildSessionTranscriptTurnExpectedState } from "../../config/sessions/session-transcript-turn-state.js";
 import {
   historyLane,
@@ -136,13 +139,6 @@ it("reuses resident transcript bytes for admitted reads outside the actor withou
       const prepareHydration = () =>
         transcriptHydration.prepareSessionTranscriptHydration(target, limits);
       const cohort = { sessionKey: target.sessionKey, entryIds: [entryId] };
-      const expected = await prepareHydration().read();
-      await prepareHydration().readCohort!(cohort, () => {});
-      const hot = actor.snapshot({ assertCurrent() {}, authorize() {} });
-      assert(hot);
-      const retained = readSessionActorTranscriptReplica(hot);
-      assert(retained?.context);
-      const retainedBytes = serialize(retained).byteLength;
       const replies: number[] = [];
       const spies = [historyLane, targetDiscoveryLane].map(({ pool }) => {
         const run = pool.run.bind(pool);
@@ -161,6 +157,25 @@ it("reuses resident transcript bytes for admitted reads outside the actor withou
         });
       });
       try {
+        const [expected, ...joined] = await runWithoutOwnedSessionTranscriptWrites(() =>
+          Promise.all(Array.from({ length: 4 }, () => prepareHydration().read())),
+        );
+        assert(expected);
+        expect(expected.snapshot.events).toEqual(source.getPersistedEntries());
+        expect(replies).toHaveLength(1);
+        for (const result of joined) {
+          expect(result.snapshot).toEqual(expected.snapshot);
+          result.snapshot.events.length = 0;
+        }
+        await runWithoutOwnedSessionTranscriptWrites(() =>
+          prepareHydration().readCohort!(cohort, () => {}),
+        );
+        const hot = actor.snapshot({ assertCurrent() {}, authorize() {} });
+        assert(hot);
+        const retained = readSessionActorTranscriptReplica(hot);
+        assert(retained?.context);
+        const retainedBytes = serialize(retained).byteLength;
+        replies.length = 0;
         await runWithoutOwnedSessionTranscriptWrites(async () => {
           for (let index = 0; index < 10; index++) {
             const actual = await prepareHydration().read();
@@ -772,6 +787,10 @@ it.each(["append", "rewrite"] as const)(
   (mutation) =>
     withSessionState("admitted-context", async ({ scope }) => {
       const { source } = await seedUser(scope);
+      const expectedMessages =
+        mutation === "rewrite"
+          ? [{ content: "changed" }]
+          : [{ content: "original" }, { content: "changed" }];
       await withSelectedTranscriptReader(scope, async () => {
         const options = { limits: contextLimits };
         const spy = afterModelRead(async () => {
@@ -779,20 +798,17 @@ it.each(["append", "rewrite"] as const)(
             expect(source.removeTrailingEntries((entry) => entry.type === "message")).toBe(1);
           }
           await source.appendMessageAsync(userMessage("changed", 2));
+          // Finish the rewrite's derived writes before measuring its single retry.
+          await waitForSessionTranscriptIndexReconcile({
+            agentId: scope.agentId,
+            path: scope.storePath,
+          });
         });
         await withRestoredMocks([spy], async () => {
-          expect(await readMessages(scope, options)).toMatchObject(
-            mutation === "rewrite"
-              ? [{ content: "changed" }]
-              : [{ content: "original" }, { content: "changed" }],
-          );
+          expect(await readMessages(scope, options)).toMatchObject(expectedMessages);
           expect(spy).toHaveBeenCalledTimes(2);
         });
-        expect(await readMessages(scope, options)).toMatchObject(
-          mutation === "rewrite"
-            ? [{ content: "changed" }]
-            : [{ content: "original" }, { content: "changed" }],
-        );
+        expect(await readMessages(scope, options)).toMatchObject(expectedMessages);
       });
     }),
 );

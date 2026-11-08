@@ -21,7 +21,7 @@ import { resolveCommandConfigWithSecrets } from "../../cli/command-config-resolu
 import { formatCliCommand } from "../../cli/command-format.js";
 import { getChannelsCommandSecretTargetIds } from "../../cli/command-secret-targets.js";
 import { formatUnknownChannelMessage } from "../../cli/error-format.js";
-import { ExpectedCliError } from "../../cli/failure-output.js";
+import { ExpectedCliError } from "../../cli/expected-cli-error.js";
 import { parseTimeoutMsWithFallback } from "../../cli/parse-timeout.js";
 import { captureRuntimeConfigAsyncReader, type OpenClawConfig } from "../../config/config.js";
 import { danger } from "../../globals.js";

@@ -7,7 +7,7 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { isPidDefinitelyDead } from "../src/shared/pid-alive.ts";
 import { normalizeControlUiBuildInfo } from "../ui/src/build-info-normalizers.ts";
-import { resolveBuildIdentityEnvironment } from "./lib/build-identity.mts";
+import { readCurrentGitCommit, resolveBuildIdentityEnvironment } from "./lib/build-identity.mts";
 import {
   distArtifactEntryArgs,
   withDistArtifactOwnership,
@@ -18,6 +18,7 @@ import {
   controlUiBuildSiblingPid,
 } from "./lib/output-root-guard.mjs";
 import { prepareControlUiSettings } from "./lib/prepare-control-ui-settings.mts";
+import { resolveVitestNodeArgs } from "./lib/vitest-node-args.mts";
 import { createPnpmRunnerSpawnSpec } from "./pnpm-runner.mts";
 import { resolveNodePackageBin } from "./run-node-package-bin.mts";
 
@@ -38,15 +39,6 @@ type UiBuildEnvironmentSources = {
   readGitCommit?: () => string | null;
   readPackageVersion?: () => string | null;
 };
-
-function readCurrentGitCommit(): string | null {
-  const result = spawnSync("git", ["rev-parse", "HEAD"], {
-    cwd: repoRoot,
-    encoding: "utf8",
-    stdio: ["ignore", "pipe", "ignore"],
-  });
-  return result.status === 0 ? result.stdout.trim() : null;
-}
 
 function readCurrentPackageVersion(): string | null {
   try {
@@ -78,7 +70,7 @@ export function resolveUiBuildEnvironment(
     commitLabel: "Control UI build commit",
     env,
     now: sources.now,
-    readGitCommit: sources.readGitCommit ?? readCurrentGitCommit,
+    readGitCommit: sources.readGitCommit ?? (() => readCurrentGitCommit(repoRoot)),
   });
   if (env.OPENCLAW_BUILD_TIMESTAMP?.trim() || env.OPENCLAW_CONTROL_UI_BUILD_ID?.trim()) {
     return buildEnv;
@@ -617,7 +609,12 @@ export async function runUiCli(argv: string[] = process.argv.slice(2)): Promise<
   const env = action === "build" ? resolveUiBuildEnvironment() : process.env;
   const toolCall = resolveSpawnCall(
     process.execPath,
-    [resolveNodePackageBin(tool, requireFromUi), ...args, ...rest],
+    [
+      ...(action === "test" && !process.versions.bun ? resolveVitestNodeArgs(env) : []),
+      resolveNodePackageBin(tool, requireFromUi),
+      ...args,
+      ...rest,
+    ],
     env,
   );
   if (action === "build") {

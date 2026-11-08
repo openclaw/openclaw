@@ -278,7 +278,7 @@ describe("resolveLogicalVisibleModelCatalog", () => {
     ]);
   });
 
-  it("keeps deprecated configured primary and alias-key rows visible", async () => {
+  it("keeps a deprecated configured primary visible but not alias-only map rows", async () => {
     const catalog: ModelCatalogEntry[] = [
       { provider: "demo", id: "primary", name: "Primary", status: "deprecated" },
       { provider: "demo", id: "alias-key", name: "Alias Key", status: "deprecated" },
@@ -312,7 +312,8 @@ describe("resolveLogicalVisibleModelCatalog", () => {
       policy,
     });
 
-    expect(result.map((entry) => entry.id).toSorted()).toEqual(["alias-key", "primary"]);
+    // Aliases and per-model params are metadata; only selected models are pinned.
+    expect(result.map((entry) => entry.id).toSorted()).toEqual(["primary"]);
   });
 
   it("dedupes physical routes after selected-route projection in the default view", async () => {

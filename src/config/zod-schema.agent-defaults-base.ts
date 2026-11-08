@@ -1,7 +1,11 @@
 import { z } from "zod";
 import { ALL_THINKING_LEVELS } from "../auto-reply/thinking.shared.js";
 import { isValidNonNegativeByteSizeString } from "./byte-size.js";
-import { AgentModelMapSchema, AgentModelPolicySchema } from "./zod-schema.agent-entry-base.js";
+import {
+  AgentModelMapSchema,
+  AgentModelPolicySchema,
+  WorkspaceFileModeSchema,
+} from "./zod-schema.agent-entry-base.js";
 import {
   AgentModelSchema,
   AgentToolModelSchema,
@@ -60,6 +64,7 @@ export const AgentDefaultsBaseSchema = z.strictObject({
   models: AgentModelMapSchema.optional(),
   modelPolicy: AgentModelPolicySchema.optional(),
   workspace: z.string().optional(),
+  workspaceFileMode: WorkspaceFileModeSchema.optional(),
   cwd: z.string().optional(),
   skills: z.array(z.string()).optional(),
   silentReply: SilentReplyPolicyConfigSchema.optional(),
@@ -154,12 +159,11 @@ export const AgentDefaultsBaseSchema = z.strictObject({
           maxRetries: z.number().int().nonnegative().optional(),
         })
         .optional(),
-      /** Mid-turn precheck for tool-loop context pressure. Default: disabled. */
+      /** Optional estimated-pressure threshold; hard window admission remains active. */
       midTurnPrecheck: z
         .strictObject({
           /**
-           * Enable structured context pressure checks after tool results are appended
-           * and before the next agent model call. Default: false.
+           * Reserve compaction headroom against estimated tool-loop pressure. Default: false.
            */
           enabled: z.boolean().optional(),
         })

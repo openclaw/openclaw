@@ -36,7 +36,7 @@ struct AboutSettings: View {
                 Link(destination: URL(string: "https://github.com/openclaw/openclaw")!) {
                     Label("GitHub", systemImage: "chevron.left.forwardslash.chevron.right")
                 }
-                Link(destination: URL(string: "https://discord.gg/clawd")!) {
+                Link(destination: URL(string: "https://openclaw.ai/discord?from=openclaw-app-macos-about")!) {
                     Label("Discord", systemImage: "bubble.left.and.bubble.right")
                 }
             }

@@ -1,6 +1,7 @@
 import { z } from "zod";
 import type { SessionDiffFile } from "../../../packages/gateway-protocol/src/index.js";
 import { workerProtocolObject } from "../../worker/protocol-record.js";
+import type { WorkspaceReconciliationPreparation } from "./workspace-manifest-comparison.js";
 import type {
   WorkerWorkspaceManifest,
   WorkerWorkspaceManifestEntry,
@@ -62,13 +63,24 @@ export type StagedWorkerWorkspaceInventory = {
   currentManifestRef: string;
   base: WorkerWorkspaceManifest;
   current: WorkerWorkspaceManifest;
+  reconciliation: WorkspaceReconciliationPreparation;
   changed: boolean;
   changedEntries: WorkerWorkspaceManifestEntry[];
   objectsByPath: Map<string, { mode: string; objectId: string }>;
 };
 
+export type StagedWorkerWorkspaceResult = Pick<
+  StagedWorkerWorkspaceInventory,
+  "gitHistory" | "baseManifestRef" | "currentManifestRef" | "changed"
+> & {
+  base: Pick<WorkerWorkspaceManifest, "baseCommit">;
+  current: Pick<WorkerWorkspaceManifest, "baseCommit">;
+  changedEntryCount: number;
+};
+
 export const STAGED_WORKSPACE_READ_MAX_ENTRIES = 256;
-export const STAGED_WORKSPACE_READ_MAX_BYTES = 8 * 1024 * 1024;
+// A single accepted file can be 64 MiB; the same hard ceiling applies to every batch.
+export const STAGED_WORKSPACE_READ_MAX_BYTES = 64 * 1024 * 1024;
 
 export type StagedWorkerWorkspaceReadEntry = {
   object: { mode: string; objectId: string };

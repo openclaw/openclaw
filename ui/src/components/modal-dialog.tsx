@@ -2,6 +2,7 @@ import type { JSX as SolidJSX } from "@solidjs/web";
 import { onSettled } from "solid-js";
 import { acquireNativeOverlayOcclusion } from "../lib/native-overlay-occlusion.ts";
 import { composedParent } from "../lib/navigation-click.ts";
+import { focusProgrammatically } from "../lib/programmatic-focus.ts";
 import { listen } from "../lib/reactive/listener.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../lib/solid-bridge.ts";
 import { activeElement, isHtmlElement, tabbableElements } from "./focus-navigation.ts";
@@ -9,6 +10,7 @@ import { createOverlay, findOverlayParent } from "./overlay-lifecycle.ts";
 import { containsComposed } from "./overlay-registry.ts";
 import { ModalDialogContent } from "./solid/modal-dialog.tsx";
 import { retainShadowStyles } from "./solid/shadow-styles.ts";
+import iconButtonStyles from "./solid/icon-button.css?inline";
 import modalStyles from "./solid/modal-dialog.css?inline";
 import modalScrollLockStyles from "./solid/modal-scroll-lock.css?inline";
 import overlayStyles from "./solid/overlay.css?inline";
@@ -106,7 +108,8 @@ function acquirePresentation(host: HTMLElement): () => void {
 }
 
 function restoreFocus(target: HTMLElement) {
-  target.focus({ preventScroll: true });
+  // Native close may already have returned focus here with the browser's own ring decision.
+  focusProgrammatically(target, { preventScroll: true });
   target.dispatchEvent(new Event("openclaw:restore-focus"));
 }
 
@@ -168,13 +171,20 @@ function createModalPolicy(host: OpenClawModalDialog): ModalPolicy {
       containsComposed(dialog, active) &&
       (!initial || active === autofocus)
     ) {
+      // Native autofocus chose this control; the ring still follows the opening input.
+      if (initial) {
+        focusProgrammatically(active, { preventScroll: true });
+      }
       return;
     }
     const target =
       focusBeforeChrome?.isConnected && containsComposed(dialog, focusBeforeChrome)
         ? focusBeforeChrome
         : (autofocus ?? dialog);
-    target.focus({ preventScroll: true });
+    // Refocusing the dialog from its own focusin would loop.
+    if (initial || target !== active) {
+      focusProgrammatically(target, { preventScroll: true });
+    }
   };
 
   const clearReturnFocus = () => {
@@ -267,7 +277,8 @@ function createModalPolicy(host: OpenClawModalDialog): ModalPolicy {
       }
       return dispatch(type, cancelable);
     },
-    onRootChange: (root) => retainShadowStyles(root, [overlayStyles, modalStyles]),
+    onRootChange: (root) =>
+      retainShadowStyles(root, [overlayStyles, iconButtonStyles, modalStyles]),
     native: {
       isOpen: () => dialog.open,
       show: () => {

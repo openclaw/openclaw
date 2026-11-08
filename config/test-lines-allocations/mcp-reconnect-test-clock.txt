@@ -1,0 +1,2 @@
+# Synchronize notification readiness and close the test client before restoring its clock.
+7

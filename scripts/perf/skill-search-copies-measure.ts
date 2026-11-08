@@ -1,8 +1,11 @@
 /**
+ * --synthetic composes 135 unique bodies from public bundled templates, capped at
+ * 2/4/8/12/16 KiB. --collect runs GC after each attempt to model idle collection;
+ * its elapsed/CPU include forced GC, while per-search timings exclude it.
  * Compare fresh-run skill searches over 64 bundled skill bodies, 2,000 operations.
  * --source files exercises freshly admitted local files; inline is the default.
- * Save baseline catalog/index modules beside originals, and point the saved
- * catalog at the saved index so relative imports stay intact:
+ * Save baseline catalog/index/ranking modules beside originals; point the saved
+ * catalog at the saved index and that index at the saved ranking module:
  * node --expose-gc --import ./scripts/tsx.mjs scripts/perf/skill-search-copies-measure.ts
  *   --catalog-owner src/agents/installed-skill-catalog.baseline.ts
  * Run five paired repetitions, swapping placement/order. Repeat with --allocations
@@ -29,6 +32,8 @@ const { values } = parseArgs({
     iterations: { type: "string", default: "2000" },
     allocations: { type: "boolean", default: false },
     source: { type: "string", default: "inline" },
+    synthetic: { type: "boolean", default: false },
+    collect: { type: "boolean", default: false },
   },
 });
 assert(global.gc, "Run with --expose-gc");
@@ -38,7 +43,7 @@ assert(Number.isInteger(iterations) && iterations > 0);
 const { searchInstalledSkills } = (await import(
   pathToFileURL(path.resolve(values["catalog-owner"])).href
 )) as typeof import("../../src/agents/installed-skill-catalog.js");
-const bodies = readdirSync("skills", { withFileTypes: true })
+const bundledBodies = readdirSync("skills", { withFileTypes: true })
   .filter((entry) => entry.isDirectory())
   .map((entry) => path.join("skills", entry.name, "SKILL.md"))
   .toSorted()
@@ -49,16 +54,31 @@ const bodies = readdirSync("skills", { withFileTypes: true })
       return [];
     }
   });
+const bodies = values.synthetic
+  ? Array.from({ length: 135 }, (_, index) => ({
+      filePath: `/synthetic/skills/${index}/SKILL.md`,
+      content: (
+        `# Synthetic guide ${index}\n` +
+        bundledBodies[index % bundledBodies.length]!.content.repeat(
+          Math.ceil(16384 / bundledBodies[index % bundledBodies.length]!.content.length),
+        )
+      ).slice(0, [2048, 4096, 8192, 12288, 16384][index % 5]),
+    }))
+  : bundledBodies;
+assert(!values.synthetic || values.source === "inline");
 assert(bodies.length > 0);
-const templates: InstalledSkill[] = Array.from({ length: 64 }, (_, index) => ({
-  name: `guide-${index}`,
-  description: `Synthetic guide ${index} for file search, messages and scheduled tasks`,
-  location: `/synthetic/skills/${index}/SKILL.md`,
-  source: {
-    filePath: bodies[index % bodies.length]!.filePath,
-    readContent: values.source === "inline" ? bodies[index % bodies.length]!.content : undefined,
-  },
-}));
+const templates: InstalledSkill[] = Array.from(
+  { length: values.synthetic ? 135 : 64 },
+  (_, index) => ({
+    name: `guide-${index}`,
+    description: `Synthetic guide ${index} for file search, messages and scheduled tasks`,
+    location: `/synthetic/skills/${index}/SKILL.md`,
+    source: {
+      filePath: bodies[index % bodies.length]!.filePath,
+      readContent: values.source === "inline" ? bodies[index % bodies.length]!.content : undefined,
+    },
+  }),
+);
 const queries = ["file search", "scheduled tasks", "message", "guide-3", "no_such_capability"];
 async function operation(iteration: number) {
   // Readers and result mappings remain run-owned; only text postings can be shared.
@@ -71,6 +91,12 @@ async function operation(iteration: number) {
     () => true,
   );
 }
+await yieldTurn();
+global.gc();
+const initialHeap = process.memoryUsage().heapUsed;
+const coldAt = performance.now();
+await operation(0);
+const coldMs = performance.now() - coldAt;
 for (let index = 0; index < 20; index++) {
   await operation(index);
 }
@@ -106,8 +132,11 @@ for (let index = 0; index < iterations; index++) {
   const result = await operation(index);
   timings.push(performance.now() - at);
   digest.update(JSON.stringify(result));
-  if (index % 20 === 0) {
+  if (values.collect || index % 20 === 0) {
     await yieldTurn();
+    if (values.collect) {
+      global.gc();
+    }
   }
 }
 const cpu = process.threadCpuUsage(cpuStart);
@@ -123,6 +152,7 @@ if (profiler) {
   allocatedBytes = sum(profile.head);
   profiler.disconnect();
 }
+await yieldTurn();
 global.gc();
 const retained = process.memoryUsage();
 timings.sort((a, b) => a - b);
@@ -132,6 +162,8 @@ console.log(
     sampled: values.allocations,
     source: values.source,
     iterations,
+    coldMs,
+    retainedBytesPer100Skills: ((retained.heapUsed - initialHeap) * 100) / templates.length,
     digest: digest.digest("hex"),
     skillBodies: templates.length,
     textChars: templates.reduce(
