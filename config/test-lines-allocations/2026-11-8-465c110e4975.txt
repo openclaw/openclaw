@@ -1,0 +1,5 @@
+2
+# LOCAL 2026.11.8 row 194; source 465c110e4975690406b48709d58a581756c85b82.
+# Matches Ollama API as well as provider id at shared classifier; zero-token intentional stop remains silent. Scope limits: Classification/recovery only, no live Ollama/llmman model.
+# Keeps distinct regression invariants; exact net LF measured at integration.
+# Scalar baseline unchanged; focused private proof retained.
