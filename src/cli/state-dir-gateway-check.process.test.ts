@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { writeFixtureJson } from "./cli-fixtures.test-support.js";
 import { runCliProcessChild } from "./cli-process-child.test-helpers.js";
 import {
   closeActiveGatewayServers,
@@ -25,16 +26,13 @@ describe("CLI Gateway state target guard", () => {
       configPath: path.join(gatewayStateDir, "openclaw.json"),
     });
     await fs.mkdir(stateDir, { recursive: true });
-    await fs.writeFile(
-      configPath,
-      JSON.stringify({
-        gateway: {
-          mode: "local",
-          port: Number(new URL(gateway.url).port),
-          auth: { mode: "none" },
-        },
-      }),
-    );
+    await writeFixtureJson(configPath, {
+      gateway: {
+        mode: "local",
+        port: Number(new URL(gateway.url).port),
+        auth: { mode: "none" },
+      },
+    });
 
     const result = await runCliProcessChild({
       nodeArgs: [

@@ -7,20 +7,15 @@ import {
   type PluginsInspectResult,
   type PluginsListResult,
 } from "../../packages/gateway-protocol/src/schema/plugins.js";
+import { createPluginDeclaredSurface } from "../../test/helpers/plugin-declared-surface.js";
 import {
   joinClawHubPluginCatalog,
   joinLocalPluginDetail,
   resolvePluginDiscoveryIdentity,
 } from "./catalog-discovery.js";
+import { createRemotePluginCatalogFixture } from "./catalog-discovery.test-support.js";
 
-const remote = {
-  packageName: "@alice/memory-plus",
-  displayName: "Memory Plus",
-  family: "code-plugin" as const,
-  isOfficial: false,
-  categories: ["memory"],
-  runtimeId: "memory-plus",
-};
+const remote = createRemotePluginCatalogFixture();
 
 function catalogState(plugins: PluginCatalogEntry[], mutationAllowed = true): PluginsListResult {
   return { plugins, diagnostics: [], mutationAllowed };
@@ -38,6 +33,14 @@ function installed(overrides: Partial<PluginCatalogEntry>): PluginCatalogEntry {
 }
 
 describe("plugin discovery identity and local join", () => {
+  it("keeps third-party prompt text in local detail without requiring runtime inspection", () => {
+    const recommendedPrompts = ["Plan my week. Prioritize commitments."];
+    const plugin = installed({ id: "community-planner", origin: "global", recommendedPrompts });
+    const { detail } = joinLocalPluginDetail({ plugin, local: catalogState([plugin]) });
+    expect(detail.recommendedPrompts).toEqual(recommendedPrompts);
+    expect(Value.Check(PluginDiscoveryDetailSchema, detail)).toBe(true);
+  });
+
   it.each([
     [false, true],
     [true, true],
@@ -56,7 +59,7 @@ describe("plugin discovery identity and local join", () => {
       const inspection: PluginsInspectResult = {
         ok: true,
         plugin,
-        declared: {
+        declared: createPluginDeclaredSurface({
           channels: ["sibling-channel"],
           providers: ["media-models", "sibling-models"],
           tools,
@@ -67,13 +70,8 @@ describe("plugin discovery identity and local join", () => {
             "videoGenerationProviders: sibling-video",
             ...(includeTools ? ["tools: media_render"] : []),
           ],
-          hooks: [],
           mcpServers: ["supported", "unsupported"],
-          cliCommands: [],
-          cliBackends: [],
-          skills: [],
-          dangerousConfigFlags: [],
-        },
+        }),
         ...(includeOverview
           ? {
               overview: {
@@ -523,7 +521,7 @@ describe("plugin discovery identity and local join", () => {
     ({ categories }) => {
       const plugin = {
         id: "calendar-local",
-        name: "Memory Calendar",
+        name: categories ? "Memory Cafe\u0301" : "Memory Café",
         description: "Coordinate a local calendar.",
         packageName: "@openclaw/calendar-local",
         installed: false,
@@ -541,7 +539,10 @@ describe("plugin discovery identity and local join", () => {
       } as const;
 
       const matches = joinClawHubPluginCatalog({ ...common, query: "memory" });
-      expect(matches.map((item) => item.catalog.name)).toEqual(["Memory Calendar", "Memory Plus"]);
+      expect(matches.map((item) => item.catalog.name)).toEqual([plugin.name, "Memory Plus"]);
+      const query = categories ? "CAFÉ" : "CAFE\u0301";
+      const filtered = joinClawHubPluginCatalog({ ...common, remote: [], query });
+      expect(filtered.map((item) => item.catalog.name)).toEqual([plugin.name]);
       expect(joinClawHubPluginCatalog({ ...common, remote: [], query: "unrelated" })).toHaveLength(
         0,
       );

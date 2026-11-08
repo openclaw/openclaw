@@ -3,7 +3,7 @@
 // the embedding application (OpenClaw core installs its implementations via
 // configureAiTransportHost); the library defaults below are inert so external
 // consumers get safe, dependency-free behavior without wiring anything.
-import type { Api, Context, Model, StreamFn } from "@openclaw/llm-core";
+import type { Api, Context, Model, ModelRequestHeaders, StreamFn } from "@openclaw/llm-core";
 import type { ApiRegistry } from "./api-registry.js";
 import { transformMessages } from "./transcript-transform.js";
 
@@ -174,21 +174,29 @@ export interface AiTransportHost {
     provider?: string;
     api?: string;
     baseUrl?: string;
-    providerHeaders?: Record<string, string>;
-    callerHeaders?: Record<string, string>;
+    providerHeaders?: ModelRequestHeaders;
+    callerHeaders?: ModelRequestHeaders;
     precedence?: "caller-wins" | "defaults-win";
     model?: object;
-  }): Record<string, string> | undefined;
+  }): ModelRequestHeaders | undefined;
   /** Returns the host-configured request timeout attached to a model. */
   resolveModelRequestTimeoutMs(model: Model): number | undefined;
   /** With scope "fetch", requires guarded fetch dispatch; native WebSockets must also exclude it. */
   requiresManagedTransport(model: Model, scope?: "fetch"): boolean;
   /** Copies host-owned managed-transport state onto a projected model. */
   inheritManagedTransport(source: Model, target: Model): Model;
+  /** Host-owned deep-immutability proof; absent hosts simply convert each request. */
+  immutableData?: {
+    isPlainData?(this: void, value: unknown): boolean;
+    isDeeplyFrozenPlainData(value: unknown): boolean;
+    freezeJsonSnapshot<T>(value: T): T;
+  };
   /** Applies host-owned transcript replay and pairing rules. */
   transformTransportMessages: AiTransformTransportMessages;
   /** Registers a custom transport API with the host's stream error bridge. */
   registerCustomApi(registry: ApiRegistry, api: Api, streamFn: StreamFn): boolean;
+  /** Optional for existing embedding hosts; omitted means the host decides at emission. */
+  isLogEnabled?(subsystem: string, level: "debug" | "info" | "warn"): boolean;
   /**
    * Emits one transport diagnostic; build runs only when the host logs it and
    * may return null to suppress the entry (e.g. de-duplication).
@@ -265,16 +273,13 @@ const inertAiTransportHost: ActiveAiTransportHost = {
   transformTransportMessages: (messages, model, normalizeToolCallId) =>
     transformMessages(messages, model, normalizeToolCallId),
   registerCustomApi: queueCustomApiRegistration,
+  isLogEnabled: () => true,
   logDebug: () => {},
   logInfo: () => {},
   logWarn: () => {},
 };
 
 let activeAiTransportHost: ActiveAiTransportHost = inertAiTransportHost;
-type AiTransportHostScope = {
-  getStore(): ActiveAiTransportHost | undefined;
-  run<T>(store: ActiveAiTransportHost, callback: () => T): T;
-};
 type ProcessWithAsyncHooksBuiltin = NodeJS.Process & {
   getBuiltinModule?: (id: "node:async_hooks") => {
     AsyncLocalStorage: new <T>() => {
@@ -284,7 +289,7 @@ type ProcessWithAsyncHooksBuiltin = NodeJS.Process & {
   };
 };
 
-function createAiTransportHostScope(): AiTransportHostScope | undefined {
+function createAiTransportHostScope() {
   if (typeof process === "undefined") {
     return undefined;
   }
@@ -390,17 +395,16 @@ export function getAiTransportHost(): ActiveAiTransportHost {
 
 /** Resolves sentinel substrings in custom headers at a no-fetch adapter boundary. */
 export function resolveAiTransportHeaderSentinels(
-  headers: Record<string, string> | undefined,
-): Record<string, string> | undefined {
+  headers: ModelRequestHeaders | undefined,
+): ModelRequestHeaders | undefined {
   if (!headers) {
     return undefined;
   }
   const host = getAiTransportHost();
-  let resolvedHeaders: Record<string, string> | undefined;
+  let resolvedHeaders: ModelRequestHeaders | undefined;
   for (const [name, value] of Object.entries(headers)) {
     if (value === null) {
-      // applyLocalNoAuthHeaderOverride marks no-auth local providers with a
-      // runtime null marker outside the public string-only Model contract.
+      // Keep SDK deletion sentinels opaque to credential resolution.
       continue;
     }
     const resolved = host.resolveSecretSentinel(value);

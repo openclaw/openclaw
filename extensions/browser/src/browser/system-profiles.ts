@@ -15,7 +15,6 @@ import {
   SUPPORTED_SYSTEM_BROWSERS,
   type CookieImportCounts,
   type KeychainSecretReader,
-  type PlaywrightCookie,
   type SystemBrowser,
 } from "./system-chrome-cookies.js";
 
@@ -105,11 +104,7 @@ export function assertSystemCookiePlatform(operation = "cookie access"): void {
 export async function resolveSystemCookieSource(params: {
   browser?: string;
   systemProfile?: string;
-}): Promise<{
-  browser: SystemBrowser;
-  systemProfile: string;
-  cookiesFile: string;
-}> {
+}) {
   const browser = resolveSystemBrowser(params.browser);
   const systemProfile = params.systemProfile?.trim() || "Default";
   const root = resolveSystemBrowserRoot(browser);
@@ -199,13 +194,7 @@ export async function readSystemProfileCookies(
     signal?: AbortSignal;
   },
   options: { readSecret?: KeychainSecretReader } = {},
-): Promise<{
-  browser: SystemBrowser;
-  systemProfile: string;
-  cookies: PlaywrightCookie[];
-  counts: CookieImportCounts;
-  domains: string[];
-}> {
+) {
   assertSystemCookiePlatform();
   const source = await resolveSystemCookieSource(params);
   const preparation = startSqliteReadOnlyLocationAsync(source.cookiesFile, {

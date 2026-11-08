@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import type { DeferredHookWake } from "../../cron/service/wake.js";
+import type { DeferredHookWake } from "../../cron/wake-contract.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { resetGatewayWorkAdmission } from "../../process/gateway-work-admission.js";
 import type { HookAgentDispatchPayload as HookPayload } from "../hooks.js";

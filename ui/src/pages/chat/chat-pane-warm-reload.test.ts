@@ -1,4 +1,3 @@
-/* @vitest-environment jsdom */
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { IDBFactory } from "fake-indexeddb";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -6,11 +5,14 @@ import { loadSettings } from "../../app/settings.ts";
 import { transactionComplete } from "../../lib/chat/control-ui-database.runtime.ts";
 import { createTestSessionCapability } from "../../lib/sessions/session-capability.test-support.ts";
 import { createGatewayRequestMock } from "../../test-helpers/gateway-client.ts";
-import { loadChatHistory, resumePendingChatHistoryLoad } from "./chat-history.ts";
-import { ChatPaneRuntime } from "./chat-pane-render.ts";
 import {
   createGatewayBrowserClientFixture,
   createInitializationContext,
+} from "./chat-application-context.test-support.ts";
+import { chatHistoryRequests } from "./chat-history-state.ts";
+import { loadChatHistory, resumePendingChatHistoryLoad } from "./chat-history.ts";
+import { ChatPaneRuntime } from "./chat-pane-render.ts";
+import {
   createPaneTestHost,
   getPaneTestRuntime,
   nativeHistoryMessage,
@@ -31,6 +33,8 @@ import {
 import { clearStoredChatSnapshots } from "./session-snapshot-invalidation.ts";
 import { resolveChatSnapshotKey } from "./session-snapshot-key.ts";
 import { SessionSnapshotStore } from "./session-snapshot-store.ts";
+/* @vitest-environment jsdom */
+import { writeSnapshotFixture } from "./session-snapshot.test-support.ts";
 import "./chat-pane.tsx";
 
 describe("chat pane warm reload", () => {
@@ -87,7 +91,7 @@ describe("chat pane warm reload", () => {
         { settings: loadSettings(), client: { offlineRecoveryScope: "test-recovery-scope" } },
         { sessionKey },
       );
-      writer.write(snapshotKey, snapshot);
+      writeSnapshotFixture(writer, snapshotKey, snapshot);
       await writer.flush();
       if (priorProjection) {
         const database = await openSessionSnapshotDatabase();
@@ -156,16 +160,21 @@ describe("chat pane warm reload", () => {
         expect(() => getPaneTestRuntime(pane).start()).toThrow(attached);
         await loadChatHistory(pane.state, { startup: true });
         await read.mock.results[0]?.value;
+        await chatHistoryRequests(pane.state).initialSnapshotHydration?.promise;
         expect(pane.state.chatMessages).toEqual(priorProjection ? [] : messages);
         expect(pane.state.connected).toBe(false);
         expect(request).not.toHaveBeenCalled();
         view = mountChatThread(
-          threadProps("warm-reload-pane", sessionKey, pane.state.chatMessages),
+          {
+            ...threadProps("warm-reload-pane", sessionKey, pane.state.chatMessages),
+            mediaReadAllowed: false,
+          },
           transcript,
         );
         const { container } = view;
         transcript.start();
         transcript.update();
+        expect(container.querySelector(".chat-thread")?.hasAttribute("inert")).toBe(false);
         if (!empty && !priorProjection) {
           expect(container.textContent).toContain("The browser remembers this conversation.");
         }

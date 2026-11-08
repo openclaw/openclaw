@@ -29,10 +29,8 @@ import {
   type BuildSessionEntryOptions,
   type SessionFileEntry,
 } from "./session-files.js";
-import {
-  readSessionResetRecallCutoff as readCutoff,
-  readSessionResetRecallCutoffInProcess as readCutoffInline,
-} from "./session-reset-recall-read.js";
+import { readSessionResetRecallCutoff as readCutoff } from "./session-reset-recall-read.js";
+import { readSessionResetRecallCutoffInProcess as readCutoffInline } from "./session-reset-recall-read.worker.js";
 
 function requireSessionEntry(entry: SessionFileEntry | null): SessionFileEntry {
   assert(entry, "expected session entry");

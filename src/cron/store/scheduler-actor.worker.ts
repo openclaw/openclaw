@@ -7,6 +7,7 @@ import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.
 import { tryResolveCronJobEffectiveAgentId } from "../agent-id.js";
 import { resolveCronJobConfigRevision } from "../config-revision.js";
 import {
+  computeJobPreviousRunAtOrBeforeMs,
   DEFAULT_ERROR_BACKOFF_SCHEDULE_MS,
   hasActiveCronRun,
   hasScheduledNextRunAtMs,
@@ -24,7 +25,7 @@ import {
   DEFAULT_STARTUP_DEFERRED_MISSED_AGENT_JOB_DELAY_MS,
   MAX_CRON_TIMER_DELAY_MS,
   MIN_REFIRE_GAP_MS,
-} from "../service/timer-execution-timeout.js";
+} from "../service/timer-constants.js";
 import { hasMissedCronSlotSinceLastRun, isRunnableJob } from "../service/timer-runnable.js";
 import type { CronJob } from "../types.js";
 import { hasCanonicalCronDeliveryMode } from "./delivery-codec.js";
@@ -234,7 +235,10 @@ function armActor(
       !waitsForStartupBatch(actor, job) &&
       hasScheduledNextRunAtMs(job.state.nextRunAtMs)
     ) {
-      nextWakeAtMs = Math.min(nextWakeAtMs ?? Infinity, job.state.nextRunAtMs);
+      nextWakeAtMs = Math.min(
+        nextWakeAtMs ?? Infinity,
+        Math.max(job.state.nextRunAtMs, job.state.admissionDeferred?.retryAtMs ?? 0),
+      );
     }
   }
   if (!enabled) {
@@ -262,7 +266,7 @@ function boundedCatchup(
   nowMs: number,
   result: CronSchedulerResult,
   jobs: ReadonlyMap<string, CronJob>,
-  options?: { skipJobIds?: string[]; deferAgentWork?: boolean },
+  options?: { skipJobIds?: string[]; deferAgentWork?: boolean; liveSinceMs?: number },
 ): { immediate: CronJob[]; overflow: Map<string, StartupOverflow> } {
   if (jobs.size === 0) {
     return { immediate: [], overflow: new Map() };
@@ -294,6 +298,8 @@ function boundedCatchup(
       for (const job of jobs.values()) {
         if (
           !isJobEnabled(job) ||
+          // Pending admission already owns its slot and retry deadline across restarts.
+          job.state.admissionDeferred !== undefined ||
           skipped.has(job.id) ||
           waitsForStartupBatch(actor, job) ||
           active.has(job.id) ||
@@ -340,13 +346,27 @@ function boundedCatchup(
         }
       }
       missed.sort((left, right) => (left.state.nextRunAtMs ?? 0) - (right.state.nextRunAtMs ?? 0));
-      const eligible = options?.deferAgentWork ? missed.filter((job) => !isAgentWork(job)) : missed;
+      // Startup defers agent work missed during downtime. A due slot that came due
+      // after this Gateway went live, such as a job added before the scheduler
+      // finished starting, is only late; deferring it would push its first run out.
+      // A future nextRunAtMs means the miss was found from persisted lastRun state,
+      // which is downtime.
+      const isLateLiveSlot = (job: CronJob) => {
+        const dueAtMs = job.state.nextRunAtMs;
+        return (
+          options?.liveSinceMs !== undefined &&
+          dueAtMs !== undefined &&
+          dueAtMs >= options.liveSinceMs &&
+          dueAtMs <= nowMs
+        );
+      };
+      const deferAgentWork = (job: CronJob) =>
+        options?.deferAgentWork === true && isAgentWork(job) && !isLateLiveSlot(job);
+      const eligible = missed.filter((job) => !deferAgentWork(job));
       const immediate = eligible.slice(0, maxImmediate);
       const deferred = [
         ...eligible.slice(maxImmediate).map((job) => ({ job, delayMs: undefined })),
-        ...(options?.deferAgentWork
-          ? missed.filter(isAgentWork).map((job) => ({ job, delayMs: agentDelayMs }))
-          : []),
+        ...missed.filter(deferAgentWork).map((job) => ({ job, delayMs: agentDelayMs })),
       ];
       const overflow = new Map<string, StartupOverflow>();
       for (const [index, { job, delayMs }] of deferred.entries()) {
@@ -477,10 +497,11 @@ export function runCronSchedulerInWorker(
       candidates = catchup.immediate;
       overflow = catchup.overflow;
     } else if (command.type !== "cron.schedulerRefresh") {
+      const allowCronMissedRunByLastRun = snapshot.config.cronConfig?.skipMissedJobs !== true;
       candidates = currentJobs().filter(
         (job) =>
           !waitsForStartupBatch(actor, job) &&
-          isRunnableJob({ job, nowMs, activeInProcess: false }),
+          isRunnableJob({ job, nowMs, allowCronMissedRunByLastRun, activeInProcess: false }),
       );
     }
     const ownerless = candidates.filter(
@@ -525,6 +546,12 @@ export function runCronSchedulerInWorker(
         currentJobs().some((job) => job.state.queuedAtMs !== undefined))
     ) {
       currentJobs();
+      for (const job of owned) {
+        if (job.state.nextRunAtMs !== undefined && job.state.nextRunAtMs > nowMs) {
+          // Recovery must not consume the future occurrence's receipt identity.
+          job.state.nextRunAtMs = computeJobPreviousRunAtOrBeforeMs(job, nowMs);
+        }
+      }
       const requested = requestAndDrainCronRunsInWorker(
         database,
         {

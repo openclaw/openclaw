@@ -12,31 +12,6 @@ import type {
 } from "../../channels/plugins/types.public.js";
 import { hasPotentialPluginActionParam } from "./message-action-param-keys.js";
 
-/** Maps canonical `target` into the legacy field required by the action implementation. */
-export function applyTargetToParams(params: {
-  action: string;
-  args: Record<string, unknown>;
-}): void {
-  const target = normalizeOptionalString(params.args.target) ?? "";
-  const hasLegacyTo = hasNonEmptyString(params.args.to);
-  const hasLegacyChannelId = hasNonEmptyString(params.args.channelId);
-  const mode = resolveChannelMessageActionFacts(params.action)?.targetMode ?? "none";
-
-  if (mode !== "none" && (hasLegacyTo || hasLegacyChannelId)) {
-    throw new Error("Use `target` instead of `to`/`channelId`.");
-  } else if (mode === "none" && hasLegacyTo) {
-    throw new Error("Use `target` for actions that accept a destination.");
-  }
-
-  if (!target) {
-    return;
-  }
-  if (mode === "none") {
-    throw new Error(`Action ${params.action} does not accept a target.`);
-  }
-  params.args[mode] = target;
-}
-
 export type ActionDeliveryTargetAliasSpec = NonNullable<
   NonNullable<ChannelMessageActionAdapter["messageActionTargetAliases"]>[ChannelMessageActionName]
 >;

@@ -7,12 +7,17 @@ import {
   pathKey,
   type JsonSchema,
 } from "../lib/config-form-utils.ts";
+import type { ConfigSecretFields } from "../lib/config/config-secret-fields.ts";
 
 export type ConfigFormProps = {
   schema: JsonSchema | null;
   uiHints: ConfigUiHints;
   value: Record<string, unknown> | null;
   rawAvailable?: boolean;
+  /** Names already on screen, such as the active tab; a heading they open with is dropped. */
+  repeatedHeadings?: ReadonlyArray<string | undefined>;
+  /** Switches this page to its Raw tab; absent where the page has none. */
+  onOpenRaw?: () => void;
   disabled?: boolean;
   unsupportedPaths?: string[];
   searchQuery?: string;
@@ -24,12 +29,29 @@ export type ConfigFormProps = {
   onHideAdvanced?: () => void;
   sectionActions?: JSX.Element;
   showSectionDocs?: boolean;
+  /** Replaces the section's own heading and description. */
+  sectionTitle?: string;
   sectionPrelude?: JSX.Element;
+  /**
+   * Sections a curated page has already explained: its own title, no tier split, and
+   * each group of settings closed until opened.
+   */
+  curatedSections?: Readonly<
+    Record<
+      string,
+      {
+        label: JSX.Element;
+        summarizeObject?: (path: Array<string | number>, value: unknown) => JSX.Element;
+      }
+    >
+  >;
   embedded?: boolean;
+  progressive?: boolean;
   revealSensitive?: boolean;
   maskSensitive?: boolean;
   isSensitivePathRevealed?: (path: Array<string | number>) => boolean;
   onToggleSensitivePath?: (path: Array<string | number>) => void;
+  secretFields?: ConfigSecretFields;
   onPatch: (path: Array<string | number>, value: unknown) => void;
   onRemove?: (path: Array<string | number>) => void;
 };
@@ -43,6 +65,8 @@ export type ConfigTierGroupsProps = {
   onHideAdvanced?: () => void;
   renderTier: (node: () => JsonSchema) => JSX.Element;
   commonPrelude?: JSX.Element;
+  /** Show both tiers in one group, with no Advanced disclosure between them. */
+  flat?: boolean;
 };
 
 export {
@@ -76,10 +100,6 @@ export function configFieldId(path: Array<string | number>, suffix: string): str
 const MAX_SENSITIVE_SCAN_DEPTH = 64;
 const MAX_SENSITIVE_SCAN_NODES = 20_000;
 
-type SensitiveScanState = {
-  visited: number;
-};
-
 export function hasSensitiveConfigData(
   value: unknown,
   path: Array<string | number>,
@@ -100,7 +120,9 @@ function countSensitiveConfigValuesInner(
   value: unknown,
   path: Array<string | number>,
   hints: ConfigUiHints,
-  scan: SensitiveScanState,
+  scan: {
+    visited: number;
+  },
   depth: number,
   limit: number,
 ): number {

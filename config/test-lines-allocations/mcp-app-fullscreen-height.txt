@@ -1,0 +1,2 @@
+140
+# Browser regression protects transcript MCP App Edit expansion, viewport resize, and return to inline in Chromium and WebKit.

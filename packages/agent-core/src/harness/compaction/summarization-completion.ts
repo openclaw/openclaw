@@ -3,6 +3,7 @@ import { resolveCompletionTokenReservation } from "@openclaw/ai/transports";
 import {
   resolveClaudeFable5ModelIdentity,
   type Model,
+  type ModelRequestHeaders,
   type SimpleStreamOptions,
   type StreamFn,
 } from "@openclaw/llm-core";
@@ -66,7 +67,7 @@ export interface SummarizationCompletionParams {
   model: Model;
   maxTokens: number;
   apiKey: string | undefined;
-  headers?: Record<string, string>;
+  headers?: ModelRequestHeaders;
   signal?: AbortSignal;
   thinkingLevel?: ThinkingLevel;
   streamFn?: StreamFn;

@@ -3,8 +3,12 @@ import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import type {
   AgentsListResult,
   ModelsListResult,
+  ModelChoice,
 } from "../../packages/gateway-protocol/src/index.js";
+import type { AdmittedRunOperatorAuthority } from "../agents/admitted-run-operator-authority.types.js";
+import { listRegisteredAgentHarnesses } from "../agents/harness/registry.js";
 import type { ModelCatalogEntry } from "../agents/model-catalog.types.js";
+import { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
 import { modelKey } from "../agents/model-ref-shared.js";
 import { resolveDefaultModelForAgent } from "../agents/model-selection-config.js";
 import {
@@ -12,6 +16,10 @@ import {
   resolveModelRefFromString,
 } from "../agents/model-selection-shared.js";
 import { createModelVisibilityPolicy } from "../agents/model-visibility-policy.js";
+import {
+  isOperatorAccessProgramAllowed,
+  resolveAgentHarnessOperatorPolicyError,
+} from "../agents/operator-access-program.js";
 import {
   prepareOperatorModelPolicy,
   readOperatorModelPolicyMembership,
@@ -22,6 +30,7 @@ import { readUtilityModelSetting } from "../agents/utility-model-setting.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getGatewayPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-state.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
+import { intersectOperatorScopes } from "../shared/operator-scope-compat.js";
 import { isTranscriptOnlyOpenClawAssistantModel } from "../shared/transcript-only-openclaw-assistant.js";
 import { resolveOperatorRolePolicy } from "./operator-role-policy.js";
 import { SerializedJsonArray } from "./serialized-json.js";
@@ -127,7 +136,7 @@ export function projectOperatorModelRead<
     policyConfig: scope.context.getCommittedRuntimeConfig?.() ?? cfg,
     client: scope.client,
   });
-  if (!presentation) {
+  if (!presentation || (!presentation.restrictsModels && !result.metadata)) {
     return result;
   }
   const policy =
@@ -139,7 +148,8 @@ export function projectOperatorModelRead<
     ...(result.defaults && policy ? { defaults: policy.defaults(result.defaults) } : {}),
     ...(result.metadata && policy ? { metadata: policy.metadata(result.metadata) } : {}),
     ...(result.sessionInfo ? { sessionInfo: presentation.session(result.sessionInfo) } : {}),
-    ...(result.messages
+    // Access-only metadata filtering must not decode and re-encode unchanged history.
+    ...(result.messages && presentation.restrictsModels
       ? {
           messages: (result.messages instanceof SerializedJsonArray
             ? result.messages.materialize()
@@ -160,8 +170,8 @@ export function prepareOperatorModelPresentation(params: {
 }) {
   const { cfg, policyConfig, client } = params;
   // Catalog facts retain their runtime owner; permissions exclude tentative config activation.
-  const modelPolicy = resolveOperatorRolePolicy(client, policyConfig)?.modelPolicy;
-  if (!modelPolicy) {
+  const role = resolveOperatorRolePolicy(client, policyConfig);
+  if (!role) {
     return undefined;
   }
   const metadataSnapshot =
@@ -171,37 +181,127 @@ export function prepareOperatorModelPresentation(params: {
   const manifestPlugins = metadataSnapshot ?? [];
   const policy = prepareOperatorModelPolicy({
     cfg: policyConfig,
-    policy: modelPolicy,
+    policy: role.modelPolicy,
     manifestPlugins,
   });
-  return prepareOperatorModelPolicyPresentation({ cfg, policy, metadataSnapshot });
+  const clientScopes = client?.connect.scopes ?? [];
+  // Internal adapters may hold broader RPC scopes than the original requester.
+  const scopes = intersectOperatorScopes(
+    client?.internal?.operatorRunAuthority?.scopes ?? clientScopes,
+    intersectOperatorScopes(clientScopes, role.scopes),
+  );
+  return prepareOperatorModelPolicyPresentation({
+    cfg,
+    policy,
+    rolePolicy: role,
+    scopes,
+    metadataSnapshot,
+  });
 }
 
 /** Same projection for a host-admitted requester without synthesizing a Gateway client. */
 export function prepareOperatorModelPolicyPresentation(params: {
   cfg: OpenClawConfig;
   policy?: PreparedOperatorModelPolicy;
+  rolePolicy?: Pick<NonNullable<AdmittedRunOperatorAuthority["rolePolicy"]>, "accessPrograms">;
+  scopes?: readonly string[];
   metadataSnapshot?: PluginMetadataSnapshot | null;
 }) {
-  const { cfg, policy, metadataSnapshot } = params;
-  if (!policy) {
+  const { cfg, policy, rolePolicy, metadataSnapshot } = params;
+  const accessPolicy = { rolePolicy, scopes: params.scopes ?? [] };
+  if (!policy && !rolePolicy) {
     return undefined;
   }
   const manifestPlugins = metadataSnapshot ?? [];
-  const filterModels = <T extends { provider: string; id: string }>(models: T[]) =>
-    models.filter((model) => policy.allows({ provider: model.provider, model: model.id }));
+  const projectAccess = <T extends Pick<ModelChoice, "availableAccessPrograms">>(entry: T): T =>
+    entry.availableAccessPrograms
+      ? {
+          ...entry,
+          availableAccessPrograms: {
+            cyber: entry.availableAccessPrograms.cyber.filter((program) =>
+              isOperatorAccessProgramAllowed(accessPolicy, program),
+            ),
+          },
+        }
+      : entry;
+  const filterModels = <T extends ModelChoice>(models: T[]): T[] => {
+    const harnesses = new Map(
+      listRegisteredAgentHarnesses().map(({ harness }) => [harness.id, harness]),
+    );
+    const projectRuntime = <
+      R extends Pick<ModelChoice, "agentRuntime" | "availableAccessPrograms">,
+    >(
+      entry: R,
+    ): R => {
+      const projected = projectAccess(entry);
+      const harness = entry.agentRuntime && harnesses.get(entry.agentRuntime.id);
+      return resolveAgentHarnessOperatorPolicyError(harness || undefined, {
+        modelPolicy: policy,
+        ...accessPolicy,
+      })
+        ? { ...projected, available: false, unavailableReason: "unsupported-runtime" }
+        : projected;
+    };
+    const visible: T[] = [];
+    for (const model of models) {
+      if (policy && !policy.allows({ provider: model.provider, model: model.id })) {
+        continue;
+      }
+      const projected = projectRuntime(model);
+      visible.push(
+        model.runtimeChoices
+          ? { ...projected, runtimeChoices: model.runtimeChoices.map(projectRuntime) }
+          : projected,
+      );
+    }
+    return visible;
+  };
+  const projectUtilitySelection = (result: ModelsListResult) => {
+    const selection = result.utilityModel;
+    if (!selection?.modelRef) {
+      return selection;
+    }
+    const { model, profile } = splitTrailingAuthProfile(selection.modelRef);
+    const disclosedProfileId =
+      result.accountSelection?.kind === "automatic"
+        ? undefined
+        : result.accountSelection?.authProfileId;
+    return profile && profile !== disclosedProfileId
+      ? { ...selection, modelRef: model }
+      : selection;
+  };
   const hidden = (provider: unknown, model: unknown) =>
+    policy !== undefined &&
     (provider != null || model != null) &&
     (typeof provider !== "string" ||
       typeof model !== "string" ||
       !policy.allows({ provider, model }));
-  const projectSession = <T extends HistoricalModelFields>(row: T): T => {
+  // Variants belong to this exact immutable row; visibility is still evaluated on every read.
+  const projectSession = <T extends HistoricalModelFields>(row: T, variants?: T[]): T => {
     const hideModel = hidden(row.modelProvider, row.model);
     const hideActiveModel = hidden(row.activeModelProvider, row.activeModel);
     const budget = asOptionalRecord(row.contextBudgetStatus);
     const hideBudget = budget && hidden(budget.provider, budget.model);
     if (!hideModel && !hideActiveModel && !hideBudget) {
       return row;
+    }
+    if (variants) {
+      for (const existing of variants) {
+        if (
+          existing.modelProvider ===
+            (hideModel && row.modelProvider != null ? undefined : row.modelProvider) &&
+          existing.model === (hideModel && row.model != null ? undefined : row.model) &&
+          existing.activeModelProvider ===
+            (hideActiveModel && row.activeModelProvider != null
+              ? undefined
+              : row.activeModelProvider) &&
+          existing.activeModel ===
+            (hideActiveModel && row.activeModel != null ? undefined : row.activeModel) &&
+          existing.contextBudgetStatus === (hideBudget ? undefined : row.contextBudgetStatus)
+        ) {
+          return existing;
+        }
+      }
     }
     const projected = { ...row };
     // Nulls clear merge-event state; omit identifiers without replacing those clearing facts.
@@ -217,6 +317,10 @@ export function prepareOperatorModelPolicyPresentation(params: {
     }
     if (hideBudget) {
       delete projected.contextBudgetStatus;
+    }
+    if (variants) {
+      Object.freeze(projected);
+      variants.push(projected);
     }
     return projected;
   };
@@ -240,6 +344,7 @@ export function prepareOperatorModelPolicyPresentation(params: {
   };
 
   return {
+    restrictsModels: policy !== undefined,
     session: projectSession,
     message: projectMessage,
     deltaMessage(this: void, value: unknown): unknown {
@@ -259,6 +364,25 @@ export function prepareOperatorModelPolicyPresentation(params: {
       };
     },
     forAgent(agentId: string, catalog: ModelCatalogEntry[] = []) {
+      // Access-only roles must not introduce model restrictions or change defaults.
+      if (!policy) {
+        return {
+          catalog: (result: ModelsListResult): ModelsListResult => ({
+            ...result,
+            models: filterModels(result.models),
+            ...(result.utilityModel ? { utilityModel: projectUtilitySelection(result) } : {}),
+            ...(result.decisionModels
+              ? { decisionModels: filterModels(result.decisionModels) }
+              : {}),
+          }),
+          metadata: (result: ChatMetadataResult): ChatMetadataResult => ({
+            ...result,
+            ...(result.models ? { models: filterModels(result.models) } : {}),
+          }),
+          defaults: (defaults: GatewaySessionsDefaults) => defaults,
+          agent: (row: AgentsListResult["agents"][number]) => row,
+        };
+      }
       const normalization = {
         cfg,
         agentId,
@@ -326,6 +450,11 @@ export function prepareOperatorModelPolicyPresentation(params: {
       };
       return {
         catalog(result: ModelsListResult): ModelsListResult {
+          const { utilityModel: selectedUtilityModel, ...catalogResult } = result;
+          const visibleUtilitySelection =
+            !selectedUtilityModel?.modelRef || allowedReference(selectedUtilityModel.modelRef)
+              ? projectUtilitySelection(result)
+              : undefined;
           const models = filterModels(result.models);
           const decisionModels = result.decisionModels && filterModels(result.decisionModels);
           const utilityModel = result.defaultModels?.automaticUtilityModel
@@ -361,8 +490,9 @@ export function prepareOperatorModelPolicyPresentation(params: {
               visibleProviders.has(provider) && (!profileId || profileId === disclosedProfileId),
           );
           return {
-            ...result,
+            ...catalogResult,
             models,
+            ...(visibleUtilitySelection ? { utilityModel: visibleUtilitySelection } : {}),
             modelSelectionPolicy,
             pendingProviders: (result.pendingProviders ?? []).filter((provider) =>
               visibleProviders.has(provider),

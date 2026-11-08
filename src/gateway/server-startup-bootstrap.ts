@@ -12,7 +12,7 @@ import {
   readConfigFileSnapshotWithPluginMetadata,
   setAppliedRuntimeConfigSnapshot,
 } from "../config/io.js";
-import { normalizeStateDirEnv } from "../config/paths.js";
+import { isNamedProfile, normalizeStateDirEnv, resolveStateDir } from "../config/paths.js";
 import { copyConfigResolutionFacts } from "../config/resolution-facts.js";
 import { captureConfigOverrideApplier } from "../config/runtime-overrides.js";
 import { resolveSystemMainSessionTarget } from "../config/sessions.js";
@@ -21,6 +21,7 @@ import type { GatewayAuthConfig } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isSecretRef } from "../config/types.secrets.js";
 import { resolveCronJobsStorePathFromConfigAsync } from "../cron/store/paths.js";
+import { resolveConfigDir } from "../infra/config-dir.js";
 import {
   isDiagnosticsEnabled,
   setDiagnosticsEnabledForProcess,
@@ -42,7 +43,10 @@ import {
   selectCurrentPluginMetadataCache,
 } from "../plugins/current-plugin-metadata-state.js";
 import { getPluginMetadataSnapshotCache } from "../plugins/plugin-cache.js";
-import { withArtifactPreservingStateReads } from "../state/openclaw-state-db-readonly.js";
+import {
+  withArtifactPreservingStateReads,
+  withLiveStateReads,
+} from "../state/artifact-preserving-state-reads.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { assertOpenClawStateWriteAllowedAtPath } from "../state/openclaw-state-ownership-preflight.js";
 import { mergeGatewayAuthConfig } from "./auth-resolve.js";
@@ -111,33 +115,43 @@ async function prepareGatewayServerBootstrapSelected(input: {
   if (startupElapsedMs > 0) {
     startupTrace.mark("process.bootstrap");
   }
-  const startupConfigSnapshotRead = await withArtifactPreservingStateReads(async () => {
-    if (
-      !resumeGatewayRestartTraceFromEnv(process.env, [["source", "env"]]) &&
-      isTruthyEnvValue(process.env.OPENCLAW_GATEWAY_RESTART_TRACE)
-    ) {
-      const restartHandoff = await readGatewayRestartHandoff();
-      resumeGatewayRestartTraceFromHandoff(restartHandoff?.restartTrace, [
-        ["source", restartHandoff?.source],
-        ["restartKind", restartHandoff?.restartKind],
-        ["supervisorMode", restartHandoff?.supervisorMode],
-      ]);
-    }
-    const read =
-      opts.startupConfigSnapshotRead ??
-      (await startupTrace.measure("config.snapshot.read", () =>
-        readConfigFileSnapshotWithPluginMetadata({
-          observe: false,
-          measure: (name, run) => startupTrace.measure(name, run),
-        }),
-      ));
-    await assertConfiguredWorkspaceStateReady({
-      cfg: captureConfigOverrideApplier()(read.snapshot.config),
-    });
-    return read;
-  });
+  const startupConfigSnapshotRead = await withLiveStateReads(() =>
+    withArtifactPreservingStateReads(async () => {
+      if (
+        !resumeGatewayRestartTraceFromEnv(process.env, [["source", "env"]]) &&
+        isTruthyEnvValue(process.env.OPENCLAW_GATEWAY_RESTART_TRACE)
+      ) {
+        const restartHandoff = await readGatewayRestartHandoff();
+        resumeGatewayRestartTraceFromHandoff(restartHandoff?.restartTrace, [
+          ["source", restartHandoff?.source],
+          ["restartKind", restartHandoff?.restartKind],
+          ["supervisorMode", restartHandoff?.supervisorMode],
+        ]);
+      }
+      const read =
+        opts.startupConfigSnapshotRead ??
+        (await startupTrace.measure("config.snapshot.read", () =>
+          readConfigFileSnapshotWithPluginMetadata({
+            observe: false,
+            measure: (name, run) => startupTrace.measure(name, run),
+          }),
+        ));
+      await assertConfiguredWorkspaceStateReady({
+        cfg: captureConfigOverrideApplier()(read.snapshot.config),
+      });
+      return read;
+    }),
+  );
   const inspectStateOwnership = async (signal?: AbortSignal) => {
     normalizeStateDirEnv(process.env);
+    // Preserve split-config roots and named profiles whose dotenv/socket defaults
+    // distinguish an implicit state directory from an explicit override.
+    if (!process.env.OPENCLAW_STATE_DIR?.trim() && !isNamedProfile(process.env)) {
+      const stateDir = resolveStateDir(process.env);
+      if (resolveConfigDir(process.env) === stateDir) {
+        process.env.OPENCLAW_STATE_DIR = stateDir;
+      }
+    }
     await assertOpenClawStateWriteAllowedAtPath({
       databasePath: resolveOpenClawStateSqlitePath(process.env),
       env: process.env,
@@ -161,16 +175,19 @@ async function prepareGatewayServerBootstrapSelected(input: {
       () => import("../state/openclaw-database-preflight.js"),
     );
     const inspectDatabaseSchemas = (signal?: AbortSignal) =>
-      preflightOpenClawDatabaseSchemas({
-        signal,
-        env: process.env,
-        reuseStartupSchemaPreparation: true,
-        agentAdmissionConfig: captureConfigOverrideApplier()(
-          startupConfigSnapshotRead.snapshot.config,
-        ),
-        onAgentInspection: (stats) =>
-          startupTrace.detail("state.schema-preflight", Object.entries(stats)),
-      });
+      preflightOpenClawDatabaseSchemas(
+        {
+          signal,
+          env: process.env,
+          reuseStartupSchemaPreparation: true,
+          agentAdmissionConfig: captureConfigOverrideApplier()(
+            startupConfigSnapshotRead.snapshot.config,
+          ),
+          onAgentInspection: (stats) =>
+            startupTrace.detail("state.schema-preflight", Object.entries(stats)),
+        },
+        "runtime",
+      );
     const databaseSchemas = await startupTrace.measure("state.schema-preflight", () =>
       opts.startupOperation
         ? opts.startupOperation(inspectDatabaseSchemas)

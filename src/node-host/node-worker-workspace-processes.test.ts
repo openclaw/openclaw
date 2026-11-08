@@ -8,6 +8,7 @@ import {
 } from "../../test/helpers/fixture-receipts.js";
 import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { createEnteredGate } from "../agents/entered-gate.test-support.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import {
   NODE_WORKSPACE_DRAIN_COMMAND,
@@ -267,25 +268,17 @@ it("revokes a queued reset command but reopens fresh execution at the retained e
 it("keeps overlapping stops sealed and excludes higher epochs from stale stop", async () => {
   const { workspace, stop, rejectRetired } = fixture(true);
   const first = createDeferredCore();
-  const second = createDeferredCore();
-  const secondStarted = createDeferredCore();
+  const secondGate = createEnteredGate();
   const command = nodeCommand("process.stdout.write('fresh')", { nativeProcessOwner: true });
   const stopping = stop(1, () => first.promise);
-  const overlapping = stop(1, async () => {
-    secondStarted.resolve();
-    await second.promise;
-  });
+  const overlapping = stop(1, secondGate.wait);
   try {
     await rejectRetired(command);
     first.resolve();
     await stopping;
-    await awaitGateBeforeSettlement(
-      secondStarted.promise,
-      overlapping,
-      "second stop did not begin",
-    );
+    await awaitGateBeforeSettlement(secondGate.entered, overlapping, "second stop did not begin");
     await rejectRetired(command);
-    second.resolve();
+    secondGate.release();
     await overlapping;
     expect((await workspace.exec(command)).stdout).toBe("fresh");
     await stop(2);
@@ -295,20 +288,12 @@ it("keeps overlapping stops sealed and excludes higher epochs from stale stop", 
       release();
       expect((await higher).stdout).toBe("fresh");
     });
-    const lowerStarted = createDeferredCore();
-    const finishLower = createDeferredCore();
-    const lower = stop(1, async () => {
-      lowerStarted.resolve();
-      await finishLower.promise;
-    });
+    const lowerGate = createEnteredGate();
+    const lower = stop(1, lowerGate.wait);
     let closed = false;
     let closing: Promise<void> | undefined;
     try {
-      await awaitGateBeforeSettlement(
-        lowerStarted.promise,
-        lower,
-        "lower-epoch stop did not begin",
-      );
+      await awaitGateBeforeSettlement(lowerGate.entered, lower, "lower-epoch stop did not begin");
       expect(workspace.processes.hasActiveWork()).toBe(true);
       closing = workspace.processes.close().then(() => {
         closed = true;
@@ -316,16 +301,16 @@ it("keeps overlapping stops sealed and excludes higher epochs from stale stop", 
       const drained = await workspace.exec({ ...identity, argv: [NODE_WORKSPACE_DRAIN_COMMAND] });
       expect(drained.stdout.trim()).toBe("drained");
       expect(closed).toBe(false);
-      finishLower.resolve();
+      lowerGate.release();
       await closing;
       await rejectRetired({ ...command, generation: 3 });
     } finally {
-      finishLower.resolve();
+      lowerGate.release();
       await Promise.allSettled([lower, closing]);
     }
   } finally {
     first.resolve();
-    second.resolve();
+    secondGate.release();
     await Promise.allSettled([stopping, overlapping]);
   }
 });

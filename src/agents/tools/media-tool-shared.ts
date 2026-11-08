@@ -5,6 +5,7 @@ import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import {
+  buildCapabilityProviderDefaultRefs,
   findCapabilityProviderById,
   resolveCapabilityModelRefForProviders,
 } from "../../../packages/media-generation-core/src/capability-model-ref.js";
@@ -13,6 +14,7 @@ import type { AgentModelConfig } from "../../config/types.agents-shared.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { SsrFPolicy } from "../../infra/net/ssrf.js";
 import { resolveChannelInboundAttachmentRootsForChannel } from "../../media/channel-inbound-roots.js";
+import type { decodeDataUrl } from "../../media/image-data-url.js";
 import { getDefaultLocalRootsCore } from "../../media/local-media-access.js";
 import {
   classifyMediaReferenceSource,
@@ -45,7 +47,6 @@ import {
   readStringArrayParam,
   readToolStringParam,
 } from "./common.js";
-import type { decodeDataUrl } from "./image-tool.helpers.js";
 import {
   capabilityAuthOperation,
   getCurrentCapabilityMetadataSnapshot,
@@ -60,17 +61,15 @@ import {
   type ToolModelConfig,
 } from "./model-config.helpers.js";
 
-type TextToolAttempt = {
-  provider: string;
-  model: string;
-  error: string;
-};
-
 type TextToolResult = {
   text: string;
   provider: string;
   model: string;
-  attempts: TextToolAttempt[];
+  attempts: {
+    provider: string;
+    model: string;
+    error: string;
+  }[];
 };
 
 export const REMOTE_MEDIA_READ_IDLE_TIMEOUT_MS = 120_000;
@@ -110,11 +109,6 @@ type CapabilityProviderSource =
   | readonly CapabilityProvider[]
   | (() => readonly CapabilityProvider[]);
 
-type GenerationCapabilityProviderKey =
-  | "imageGenerationProviders"
-  | "videoGenerationProviders"
-  | "musicGenerationProviders";
-
 /** @deprecated Only synchronous tool-constructor compatibility uses this path. */
 export function isCapabilityProviderConfigured<T extends CapabilityProvider>(params: {
   providers: readonly T[];
@@ -124,7 +118,6 @@ export function isCapabilityProviderConfigured<T extends CapabilityProvider>(par
   workspaceDir?: string;
   agentDir?: string;
   authStore?: AuthProfileStore;
-  authProfileStoreSource?: boolean;
 }): boolean {
   const provider =
     params.provider ??
@@ -154,7 +147,6 @@ export function isCapabilityProviderConfigured<T extends CapabilityProvider>(par
     workspaceDir: params.workspaceDir,
     agentDir: params.agentDir,
     authStore: params.authStore,
-    authProfileStoreSource: params.authProfileStoreSource,
   });
 }
 
@@ -216,14 +208,14 @@ async function resolveCapabilityModelCandidatesForTool(params: {
   authStore?: AuthProfileStore;
   providers: readonly CapabilityProvider[];
 }): Promise<string[]> {
-  const providerDefaults = new Map<string, { ref: string; aliases: string[] }>();
+  const configuredProviders = new Map<string, CapabilityProvider>();
   for (const provider of params.providers) {
     const providerId = provider.id.trim();
     const modelId = provider.defaultModel?.trim();
     if (
       !providerId ||
       !modelId ||
-      providerDefaults.has(providerId) ||
+      configuredProviders.has(providerId) ||
       !(await isCapabilityProviderConfiguredAsync({
         ...params,
         provider,
@@ -231,24 +223,16 @@ async function resolveCapabilityModelCandidatesForTool(params: {
     ) {
       continue;
     }
-    const aliases = (provider.aliases ?? []).flatMap((alias) => {
-      const normalized = normalizeProviderId(alias);
-      return normalized ? [normalized] : [];
-    });
-    providerDefaults.set(providerId, { ref: `${providerId}/${modelId}`, aliases });
+    configuredProviders.set(providerId, provider);
   }
 
-  const primaryProvider = resolveDefaultModelRef(params.cfg).provider;
-  const normalizedPrimaryProvider = normalizeProviderId(primaryProvider);
-  const providerIds = [...providerDefaults.keys()].toSorted();
-  const matchesPrimaryProvider = (providerId: string): boolean =>
-    normalizeProviderId(providerId) === normalizedPrimaryProvider ||
-    providerDefaults.get(providerId)!.aliases.includes(normalizedPrimaryProvider);
-  const orderedProviders = [
-    ...providerIds.filter(matchesPrimaryProvider),
-    ...providerIds.filter((providerId) => !matchesPrimaryProvider(providerId)),
-  ];
-  return uniqueStrings(orderedProviders.map((id) => providerDefaults.get(id)!.ref));
+  return uniqueStrings(
+    buildCapabilityProviderDefaultRefs({
+      providers: [...configuredProviders.values()],
+      preferredProvider: resolveDefaultModelRef(params.cfg).provider,
+      normalizeProviderId,
+    }),
+  );
 }
 
 /**
@@ -286,10 +270,9 @@ export function hasGenerationToolAvailability(params: {
   agentDir?: string;
   workspaceDir?: string;
   authStore?: AuthProfileStore;
-  authProfileStoreSource?: boolean;
   modelConfig?: AgentModelConfig;
   providers?: CapabilityProviderSource;
-  providerKey: GenerationCapabilityProviderKey;
+  providerKey: "imageGenerationProviders" | "videoGenerationProviders" | "musicGenerationProviders";
 }): boolean {
   if (params.cfg?.plugins?.enabled === false) {
     return false;
@@ -333,7 +316,6 @@ export function hasGenerationToolAvailability(params: {
       workspaceDir: params.workspaceDir,
       agentDir: params.agentDir,
       authStore: params.authStore,
-      authProfileStoreSource: params.authProfileStoreSource,
       capability: capabilityAuthOperation(params.providerKey),
     }),
   );
@@ -577,7 +559,7 @@ export async function loadMediaToolReferences<T>(params: {
     let media: LoadedToolReferenceMedia;
     try {
       if (reference.isDataUrl) {
-        const { decodeDataUrl } = await import("./image-tool.helpers.js");
+        const { decodeDataUrl } = await import("../../media/image-data-url.js");
         params.signal?.throwIfAborted();
         media = decodeDataUrl(resolvedInput, { maxBytes: params.maxBytes });
       } else {

@@ -61,7 +61,7 @@ import type {
 import type { GatewayCronServiceContract } from "../server-cron-contract.js";
 import type {
   GatewayApprovalEventPublisher,
-  GatewayRecoveryRuntime,
+  GatewayLifecycleRuntime,
 } from "../server-instance-runtime.types.js";
 import type {
   GatewayModelCatalogSnapshot,
@@ -199,13 +199,8 @@ type GatewayKernelContext = {
   cronStorePath: string;
   getRuntimeConfig: () => OpenClawConfig;
   /** Instance-owned startup observation; never lends preparation or write authority. */
-  agentDatabaseStartup?: {
-    readonly hasPendingAgents: boolean;
-    waitForAgentPreparation: (
-      agentId: string,
-      options?: { signal?: AbortSignal; forWrite?: boolean },
-    ) => Promise<void> | undefined;
-  };
+  agentDatabaseStartup?: import("../../state/agent-database-preparation-context.js").AgentDatabasePreparation;
+  restartResumeWindows?: import("../../infra/gateway-boot-lifecycle.js").GatewayRestartResumeWindows;
   channelAdmissionAudit?: import("../../channels/message-access/admission-evidence.js").ChannelAdmissionAudit;
   /** Last serving policy committed by this Gateway, excluding tentative secret activation. */
   getCommittedRuntimeConfig?: () => OpenClawConfig;
@@ -278,9 +273,12 @@ type GatewayKernelContext = {
     agentId?: string;
     agentDir?: string;
     workspaceDir?: string;
+    /** Display-only consumers can omit the eager session-row invalidation snapshot. */
+    includeSessionRowPolicy?: boolean;
   }) => Promise<PreparedGatewayModelCatalog | undefined>;
   readPreparedGatewayModelCatalogBatch?: (
     agentIds: readonly string[],
+    options?: { includeSessionRowPolicy?: boolean },
   ) => Promise<PreparedGatewayModelCatalogReadResult[]>;
   readChatMetadata: (params: ChatMetadataReadParams) => Promise<ChatMetadataResult>;
   readPreparedModelsList?: (
@@ -301,7 +299,7 @@ type GatewayKernelContext = {
   getPresenceSnapshot: () => import("../../../packages/gateway-protocol/src/schema/snapshot.js").PresenceEntry[];
   /** Instance-local native approval subscribers; never derived from a network client. */
   approvalEvents?: GatewayApprovalEventPublisher;
-  recoveryRuntime?: GatewayRecoveryRuntime;
+  lifecycleRuntime?: GatewayLifecycleRuntime;
   sharedGatewaySessionGenerationState?: import("../server-shared-auth-generation.js").SharedGatewaySessionGenerationState;
   /** Uses the lifecycle owner's module graph for plugin and detached agent turns. */
   createAgentTurnFacade?: InternalAgentTurnFacadeFactory;
@@ -332,10 +330,6 @@ type GatewayKernelContext = {
   wizardRunner: import("./wizard.js").SetupWizardRunner;
   channelWizardRunner: import("./wizard.js").ChannelSetupWizardRunner;
   unavailableGatewayMethods?: ReadonlySet<string>;
-  inputRecovery?: Pick<
-    import("../agent-input-recovery.js").GatewayInputRecovery,
-    "isPending" | "waitForAgentInputRecovery"
-  >;
 };
 
 /** Socket-bound services and connection state supplied by the Gateway transports. */
@@ -414,6 +408,8 @@ type GatewayResidentBridgeContext = {
   workerEnvironmentService?: WorkerEnvironmentServiceContract;
   /** Gateway-host desktop acquisition and observation; present only after enabled startup. */
   hostDesktopService?: import("../desktop/host-source.js").HostDesktopService;
+  /** Experimental OpenClaw ID remote access owner; inert while its Labs switch is off. */
+  openclawIdService?: import("../openclaw-id/service.js").OpenClawIdService;
   /** Local computer provider shared with the node host, owned by this Gateway lifetime. */
   gatewayComputerService?: import("../desktop/computer-service.js").GatewayComputerService;
   /** Durable per-session worker placement; absent only from lightweight in-process contexts. */
@@ -519,6 +515,8 @@ export type SessionMutationAuthorization = {
   release?: () => void;
   /** Retain these facts until a detached effect settles, independently of the request. */
   retain?: () => () => void;
+  /** Retain published sharing facts for a run, independently of request and writer guards. */
+  retainForRun?: () => { assertCurrent: () => void; release: () => void };
   /** Transfer retained facts to admitted work; request cleanup then leaves them with that owner. */
   takeRelease?: () => () => void;
   bindCreation?: (
@@ -590,7 +588,18 @@ export type GatewayRequestHandlerOptions = Omit<
   "methodRegistry" | "expectedProfileBinding" | "prepareDispatchCurrent"
 > & {
   params: Record<string, unknown>;
+  /** Plugin registrations receive a live owner fence; recheck after awaits and before effects. */
+  assertHandlerCurrent?: () => void;
   sessionMutationAuthorization?: SessionMutationAuthorization;
+  /** Source-authorized plugin adoption; bound to this request's caller and lifetime. */
+  copySessionCatalogToGateway?: (source: {
+    provider: import("../../plugins/session-catalog.js").SessionCatalogProvider;
+    request: import("../../../packages/gateway-protocol/src/index.js").SessionsCatalogContinueParams;
+    assertCurrent: () => void;
+    /** Resolve an existing handoff under read policy; never imports, creates, or binds. */
+    resolveOnly?: true;
+  }) => Promise<void>;
+  sessionCreationOperation?: import("../../config/sessions/session-creation-operation.js").SessionCreationOperation;
   /** Synchronously consume current chat.send authority without starting a turn. */
   withSessionTurnAuthority?: <T>(
     target: { sessionKey: string; agentId?: string; sessionId: string },
@@ -619,7 +628,9 @@ export type SessionEventProjection = {
   serializeSession?: () => string;
   /** Publication-owned UTF-8 message field, including its trailing comma. */
   serializeMessage?: () => Buffer;
-  delivered?: () => void;
+  /** Producer-owned payload fragment; three segments preserve the shared message compression boundary. */
+  serializePayload?: () => readonly [Buffer] | readonly [Buffer, Buffer, Buffer];
+  delivered?: (client: GatewayClient) => void;
 };
 
 type SessionEventProjectionScope = {
@@ -636,7 +647,6 @@ type SessionEventProjectionContext = {
   ) => readonly [string | undefined, string | undefined, string | undefined] | null;
   forgetAncestors: (key?: string) => void;
   references: (client: GatewayClient) => ConnectionSessionRows;
-  forgetConnectionAncestors: (client: GatewayClient) => void;
   createRunProjector: () => VisibleActiveSessionRunProjector;
 };
 

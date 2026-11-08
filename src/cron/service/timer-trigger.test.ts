@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { createCronRegressionState } from "../../../test/helpers/cron/service-regression-fixtures.js";
 import { makeCronJob } from "../delivery.test-helpers.js";
+import { resolveCronRunErrorReason } from "../run-error-reason.js";
 import type { CronServiceDeps } from "./state.js";
 import { executeJobCore } from "./timer-execution.js";
 import { applyJobResult } from "./timer-outcomes.js";
@@ -27,10 +28,21 @@ async function executeAndApply(job: ReturnType<typeof makeJob>, deps: Partial<Cr
     ...deps,
   });
   state.store = { version: 1, jobs: [job] };
+  const result = await executeJobCore(state, job);
   applyJobResult(
     state,
     job,
-    { ...(await executeJobCore(state, job)), executionStarted: true, startedAt, endedAt },
+    {
+      ...result,
+      errorReason: resolveCronRunErrorReason(
+        result.error,
+        result.provider,
+        result.errorClassification,
+      ),
+      executionStarted: true,
+      startedAt,
+      endedAt,
+    },
     { deferredNotifications: [] },
   );
 }

@@ -10,6 +10,7 @@ import { getReplyPayloadMetadata, isReplyPayloadTerminalContent } from "../reply
 import type { ReplyPayload } from "../types.js";
 import { isStrandedPrivateMessageToolFinal } from "./private-message-tool-final.js";
 import type { FollowupRun } from "./queue/types.js";
+import { expireSkillLibraryAuthoring } from "./transcript-followup-run.js";
 
 const STRANDED_REPLY_RETRY_MARKER = "stranded-reply-retry";
 
@@ -74,6 +75,10 @@ export function resolveStrandedReplyRecovery(params: {
         ...params.base.run,
         sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
         suppressNextUserMessagePersistence: true,
+        skillLibraryAuthoring: expireSkillLibraryAuthoring(
+          params.base.run.skillLibraryAuthoring,
+          "Skill authoring is unavailable while retrying an undelivered reply. Send a fresh message requesting the change.",
+        ),
       },
     },
   };

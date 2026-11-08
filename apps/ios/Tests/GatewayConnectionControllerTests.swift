@@ -172,6 +172,31 @@ private let preconnectTimeoutProblem = GatewayConnectionProblem(
     retryable: true,
     pauseReconnect: false)
 
+@MainActor
+private func makeTestGatewayIngressController() -> GatewayIngressController {
+    GatewayIngressController(
+        persistence: .init(
+            load: { _ in nil },
+            save: { _, _ in true },
+            delete: { _ in true }),
+        requestFactory: { _ in
+            { request, _ in
+                guard let url = request.url,
+                      let response = HTTPURLResponse(
+                          url: url,
+                          statusCode: 200,
+                          httpVersion: nil,
+                          headerFields: nil)
+                else { throw URLError(.badURL) }
+                return (Data(), response)
+            }
+        },
+        customHeaders: { _ in [:] },
+        profiles: { [] },
+        saveProfileOrigin: { _, _ in true },
+        retireTransports: { _ in })
+}
+
 private struct ControllableTLSProbe {
     let started = AsyncStream<Void>.makeStream()
     let results = AsyncStream<GatewayTLSFingerprintProbeResult>.makeStream()
@@ -312,6 +337,55 @@ private func pendingHandoffDiagnostic(
         controller.setScenePhase(.background)
 
         #expect(!controller._test_hasOperatorFleetReconcileTask())
+    }
+
+    enum LocalNetworkUserAction: String, CaseIterable {
+        case explicitRequest
+        case manualConnect
+        case discoveredGatewayConnect
+    }
+
+    @Test(arguments: LocalNetworkUserAction.allCases)
+    @MainActor func `deferred discovery starts only from user actions`(action: LocalNetworkUserAction) async {
+        await withUserDefaults(["gateway.discovery.debugLogs": true, "gateway.autoconnect": false]) {
+            let discovery = GatewayDiscoveryModel()
+            defer { discovery.stop() }
+            let appModel = NodeAppModel()
+            defer { appModel.disconnectGateway() }
+            let controller = GatewayConnectionController(
+                appModel: appModel,
+                discovery: discovery,
+                deferDiscoveryUntilLocalNetworkRequest: true,
+                serviceEndpointResolver: { _ in nil },
+                ingress: makeOrdinaryIngress())
+
+            controller.setScenePhase(.active)
+            #expect(!discovery.debugLog.contains { $0.message == "start()" })
+
+            switch action {
+            case .explicitRequest:
+                controller.requestLocalNetworkAccess(reason: "test")
+            case .manualConnect:
+                // The out-of-range port ends the attempt before any network work.
+                await controller.connectManual(host: "gateway.example.test", port: 70000, useTLS: true)
+            case .discoveredGatewayConnect:
+                let gateway = GatewayDiscoveryModel.DiscoveredGateway(
+                    name: "Nearby",
+                    endpoint: .service(name: "Nearby", type: "_openclaw-gw._tcp", domain: "local.", interface: nil),
+                    stableID: "test|\(UUID().uuidString)",
+                    debugID: "nearby",
+                    lanHost: nil,
+                    tailnetDns: nil,
+                    gatewayPort: nil,
+                    tlsEnabled: true,
+                    tlsFingerprintSha256: nil,
+                    cliPath: nil)
+                // The endpoint resolver returns nil, so the attempt ends before any network work.
+                #expect(await controller.connectWithDiagnostics(gateway) != nil)
+            }
+
+            #expect(discovery.debugLog.contains { $0.message == "start()" })
+        }
     }
 
     @Test @MainActor func `chat owner survives reconnect while session refresh identity changes`() {
@@ -1775,6 +1849,69 @@ private func pendingHandoffDiagnostic(
         }
     }
 
+    @Test @MainActor func `reconnects keep the user's auto-connect choice`() async throws {
+        let registryIsolation = await GatewayRegistryTestIsolation()
+        defer { registryIsolation.restore() }
+        let state = try TemporaryOpenClawState(instanceID: "autoconnect-\(UUID().uuidString)")
+        defer { state.restore() }
+        try await withUserDefaults(["gateway.autoconnect": false]) {
+            let defaults = UserDefaults.standard
+            let server = try await NativeGatewayWebSocketFixture.start(issuedDeviceTokens: [])
+            defer { server.stop() }
+            server.acceptedOperatorScopes = []
+            let stableID = "autoconnect-\(UUID().uuidString)"
+            let config = try GatewayConnectConfig(
+                url: server.url(),
+                stableID: stableID,
+                tls: GatewayTLSParams(required: false, expectedFingerprint: nil, allowTOFU: false, storeKey: nil),
+                token: nil,
+                bootstrapToken: nil,
+                password: nil,
+                nodeOptions: GatewayConnectOptions(
+                    role: "node",
+                    scopes: [],
+                    caps: [],
+                    commands: [],
+                    permissions: [:],
+                    clientId: "openclaw-ios",
+                    clientMode: "node",
+                    clientDisplayName: "Auto-connect Test",
+                    deviceAuthGatewayID: stableID),
+                ingressAuthorization: nil)
+            let model = NodeAppModel(audioAdmissionInitiallyAllowed: false)
+            model.setScenePhase(.active)
+            func nodeConnects() -> Int {
+                server.roles.filter { $0 == "node" }.count
+            }
+            do {
+                model.applyGatewayConnectConfig(config)
+                try await TestWait.observed("node connected") { model.gatewayConnected }
+                #expect(defaults.bool(forKey: "gateway.autoconnect"))
+
+                // The user turns "Auto-connect on launch" off, then the app returns to the foreground
+                // and replaces a stale socket within the same connect attempt.
+                defaults.set(false, forKey: "gateway.autoconnect")
+                let connectsBeforeRestart = nodeConnects()
+                await model.restartGatewaySessionsAfterForegroundStaleConnection()
+                try await TestWait.state("node reconnected") { nodeConnects() > connectsBeforeRestart }
+                try await TestWait.observed("node connected again") { model.gatewayConnected }
+                #expect(!defaults.bool(forKey: "gateway.autoconnect"))
+
+                // A new connect attempt is an explicit connect and enables launch auto-connect again.
+                let connectsBeforeExplicit = nodeConnects()
+                model.applyGatewayConnectConfig(config, forceReconnect: true)
+                try await TestWait.state("explicit connect") { nodeConnects() > connectsBeforeExplicit }
+                try await TestWait.state("auto-connect enabled") { defaults.bool(forKey: "gateway.autoconnect") }
+            } catch {
+                model.disconnectGateway()
+                await model.waitForGatewaySessionResetIfNeeded()
+                throw error
+            }
+            model.disconnectGateway()
+            await model.waitForGatewaySessionResetIfNeeded()
+        }
+    }
+
     @Test @MainActor func `newer gateway connect generation rejects queued config`() throws {
         let appModel = NodeAppModel()
         defer { appModel.disconnectGateway() }
@@ -2344,6 +2481,36 @@ private func pendingHandoffDiagnostic(
             #expect(!controller._test_didAutoConnect())
             #expect(!controller._test_isAutoConnectSuppressed())
             #expect(appModel.activeGatewayConnectConfig == nil)
+        }
+    }
+
+    @Test @MainActor func `legacy manual auto connect registers route before Access admission`() async {
+        let registryIsolation = await GatewayRegistryTestIsolation()
+        defer { registryIsolation.restore() }
+        let host = "legacy-access-\(UUID().uuidString).example.invalid"
+        let stableID = "manual|\(host.lowercased())|443"
+        await withUserDefaults([
+            "gateway.autoconnect": false,
+            "gateway.manual.enabled": true,
+            "gateway.manual.host": host,
+            "gateway.manual.port": 443,
+            "gateway.manual.tls": true,
+            "node.instanceId": "ios-test",
+        ]) {
+            let appModel = NodeAppModel()
+            defer { appModel.disconnectGateway() }
+            let controller = GatewayConnectionController(appModel: appModel, startDiscovery: false)
+            #expect(GatewaySettingsStore.loadGatewayRegistry().entries.isEmpty)
+
+            UserDefaults.standard.set(true, forKey: "gateway.autoconnect")
+            controller._test_triggerAutoConnect()
+
+            let entry = GatewaySettingsStore.loadGatewayRegistry().entries.first {
+                GatewayStableIdentifier.matches($0.stableID, stableID)
+            }
+            #expect(entry?.kind == .manual)
+            #expect(entry?.host == host)
+            #expect(GatewaySettingsStore.activeGatewayEntry()?.stableID == stableID)
         }
     }
 
@@ -3160,7 +3327,8 @@ private func pendingHandoffDiagnostic(
         let controller = GatewayConnectionController(
             appModel: appModel,
             startDiscovery: false,
-            forceReconnectReset: { _ in })
+            forceReconnectReset: { _ in },
+            ingress: makeTestGatewayIngressController())
 
         appModel.isGatewayPickerRequestInFlight = true
         let result = await controller.switchToGateway(stableID: targetID)

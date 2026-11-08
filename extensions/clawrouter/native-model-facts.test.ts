@@ -8,6 +8,7 @@ import {
   type LiveModelCatalogFetchGuard,
 } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import * as ssrfRuntime from "openclaw/plugin-sdk/ssrf-runtime";
+import { createZeroUsageFixture } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 
 const providerAuthRuntimeMocks = vi.hoisted(() => ({
@@ -127,6 +128,45 @@ describe("ClawRouter native model facts", () => {
     clearLiveCatalogCacheForTests();
   });
 
+  it("sends Mistral's native completion fields through the router", async () => {
+    const catalog = await buildCatalog([
+      {
+        ...catalogProvider("mistral", "mistral-large-latest", ["llm.chat"]),
+        openaiCompatible: true,
+      },
+    ]);
+    const row = catalog.models[0];
+    if (!row || row.api !== "openai-completions") {
+      throw new Error("missing routed Mistral model");
+    }
+    const model: Model = {
+      ...row,
+      provider: "clawrouter",
+      api: row.api,
+      baseUrl: row.baseUrl ?? catalog.baseUrl,
+      input: ["text"],
+    };
+    const registered = await registerSingleProviderPlugin(plugin);
+    const wrapped = registered.wrapStreamFn?.({
+      provider: "clawrouter",
+      modelId: model.id,
+      streamFn: streamSimple,
+    });
+    if (!wrapped) {
+      throw new Error("missing ClawRouter stream wrapper");
+    }
+    const body = await captureRequestBody(() =>
+      wrapped(
+        model,
+        { messages: [{ role: "user", content: "hi", timestamp: 0 }] },
+        { apiKey: "fixture-key", maxTokens: 64 },
+      ),
+    );
+    expect(body).toMatchObject({ model: "mistral/mistral-large-latest", max_tokens: 64 });
+    expect(body).not.toHaveProperty("max_completion_tokens");
+    expect(body).not.toHaveProperty("store");
+  });
+
   it("gives routed OpenAI and Claude rows the native facts for the same upstream model", async () => {
     const provider = await buildCatalog([
       catalogProvider("openai", "gpt-6.1-sol", ...RESPONSES, [], {
@@ -160,10 +200,11 @@ describe("ClawRouter native model facts", () => {
       codeMode: "capable",
       mediaInput: { image: { maxSidePx: 1568 } },
     });
-    // The service catalog keeps ownership of the route's reasoning contract.
+    // The service catalog owns route-level reasoning and tool-strictness contracts.
     expect(provider.models.find(({ id }) => id === "openai/gpt-6.1-sol")?.compat).toEqual({
       codeMode: "preferred",
       supportsTemperature: false,
+      supportsStrictMode: true,
       supportsReasoningEffort: true,
       supportedReasoningEfforts: ["low", "high"],
     });
@@ -188,7 +229,10 @@ describe("ClawRouter native model facts", () => {
       "openai/gpt-6-unknown",
     ]);
     for (const model of provider.models) {
-      expect(model.compat, model.id).toBeUndefined();
+      // Strictness support belongs to the routed API, not inherited model identity.
+      expect(model.compat, model.id).toEqual(
+        model.api === "openai-responses" ? { supportsStrictMode: true } : undefined,
+      );
       expect(model.mediaInput, model.id).toBeUndefined();
     }
   });
@@ -348,14 +392,7 @@ describe("ClawRouter native model facts", () => {
             api: "anthropic-messages",
             provider: "clawrouter",
             model: model.id,
-            usage: {
-              input: 0,
-              output: 0,
-              cacheRead: 0,
-              cacheWrite: 0,
-              totalTokens: 0,
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-            },
+            usage: createZeroUsageFixture(),
             stopReason: "stop",
             timestamp: 1,
           },

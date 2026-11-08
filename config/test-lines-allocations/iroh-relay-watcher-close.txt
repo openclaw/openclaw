@@ -1,0 +1,2 @@
+# Native watcher close completion and natural Node process exit (pending and later next).
+35

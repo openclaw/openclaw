@@ -69,6 +69,8 @@ it.each([
   "cache",
   "formatter",
   "instance",
+  "inspection",
+  "inspection-loader",
   "recovery-source",
   "recovery-bundled-cjs",
   "recovery-bundled-mjs",

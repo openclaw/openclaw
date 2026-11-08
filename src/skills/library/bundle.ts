@@ -1,3 +1,4 @@
+import { isAscii } from "node:buffer";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { containsAsciiControlCharacter } from "@openclaw/normalization-core/string-normalization";
@@ -87,8 +88,7 @@ export async function readSkillLibraryManifestTree(
     }
     files.push({
       path: file.path,
-      content: buffer.toString("base64"),
-      encoding: "base64",
+      ...encodeSkillLibraryFile(buffer),
       executable: file.executable,
     });
   }
@@ -141,6 +141,20 @@ export function decodeSkillLibraryFile(file: SkillLibraryFile): Buffer {
     throw new SkillLibraryError("INVALID_BUNDLE", `Invalid base64: ${file.path}`);
   }
   return bytes;
+}
+
+function encodeSkillLibraryFile(buffer: Buffer): Pick<SkillLibraryFile, "content" | "encoding"> {
+  // ASCII stays a one-byte JS string; a single non-Latin-1 character can double it.
+  if (isAscii(buffer)) {
+    const content = buffer.toString("utf8");
+    if (
+      !content.includes("\0") &&
+      JSON.stringify(content).length - 2 <= Math.ceil(buffer.length / 3) * 4
+    ) {
+      return { content, encoding: "utf8" };
+    }
+  }
+  return { content: buffer.toString("base64"), encoding: "base64" };
 }
 
 /** Validate exact portable artifacts without imposing publication metadata on loaded skills. */
@@ -442,8 +456,7 @@ export async function readSkillBundleTree(
     }
     files.push({
       path: portablePath,
-      content: buffer.toString("base64"),
-      encoding: "base64",
+      ...encodeSkillLibraryFile(buffer),
       executable: (stat.mode & 0o111) !== 0,
     });
   }

@@ -1,6 +1,7 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/config.js";
 import { resetAgentRunRegistryForTest } from "../../infra/agent-run-registry.js";
+import { createOpenClawOnlyToolConstructionPlan } from "../test-helpers/tool-construction-plan.js";
 import { createAdmittedHostCapabilityTestFixture } from "./host-capability.test-support.js";
 
 const mocks = vi.hoisted(() => ({
@@ -58,13 +59,7 @@ async function readBoardThroughHost(targets?: {
       sessionKey: RUN_KEY,
       runSessionKey: RUN_KEY,
       runtimeToolAllowlist: ["dashboard"],
-      toolConstructionPlan: {
-        includeBaseCodingTools: false,
-        includeShellTools: false,
-        includeChannelTools: false,
-        includeOpenClawTools: true,
-        includePluginTools: false,
-      },
+      toolConstructionPlan: createOpenClawOnlyToolConstructionPlan(),
     })) ?? [];
   const dashboard = tools.find((tool) => tool.name === "dashboard");
   expect(dashboard).toBeDefined();

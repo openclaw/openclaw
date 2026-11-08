@@ -1,12 +1,23 @@
+import { createHash } from "node:crypto";
 import http, { type ClientRequest, type IncomingMessage } from "node:http";
 import https from "node:https";
+import path from "node:path";
 import type { TLSSocket } from "node:tls";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeTlsFingerprint } from "../../packages/gateway-client/src/client-address-utils.js";
 import {
   buildCloudflareAccessHeaders,
   type CloudflareAccessCredentials,
 } from "../../packages/gateway-client/src/cloudflare-access.js";
+import { MAX_WORKSPACE_INVENTORY_TOTAL_BYTES } from "../gateway/worker-environments/workspace-inventory-limits.js";
+import type { Root } from "../infra/fs-safe.js";
+import { isPathInside } from "../infra/path-guards.js";
 import { createDeferredCore, type Deferred } from "../shared/deferred.js";
+import { readWorkspaceTransferBody as readResponseBody } from "../worker/node-workspace-transfer-body.js";
+import {
+  isNodeWorkspaceTransferInvalidReason,
+  NodeWorkerWorkspaceTransferError,
+} from "../worker/node-workspace-transfer-protocol.js";
 
 type NodeWorkerTransferHttpErrorReason =
   | "invalid-gateway-transport"
@@ -42,18 +53,9 @@ function transferUrl(gatewayUrl: string, routePath: string): URL {
   return url;
 }
 
-function waitForTlsPin(request: ClientRequest, expectedRaw?: string): Promise<void> {
-  if (!expectedRaw?.trim()) {
-    return Promise.resolve();
-  }
-  const expected = normalizeTlsFingerprint(expectedRaw);
+function waitForTlsPin(request: ClientRequest, expected: string): Promise<void> {
   if (!expected) {
-    return Promise.reject(
-      new NodeWorkerTransferHttpError(
-        "invalid-tls-fingerprint",
-        "worker transfer gateway TLS fingerprint is invalid",
-      ),
-    );
+    return Promise.resolve();
   }
   return new Promise<void>((resolve, reject) => {
     let settled = false;
@@ -130,6 +132,13 @@ export async function withNodeWorkerTransferHttpRequest<T>(
       "Cloudflare Access credentials require HTTPS worker transfer",
     );
   }
+  const tlsFingerprint = normalizeTlsFingerprint(params.tlsFingerprint);
+  if (url.protocol === "https:" && params.tlsFingerprint?.trim() && !tlsFingerprint) {
+    throw new NodeWorkerTransferHttpError(
+      "invalid-tls-fingerprint",
+      "worker transfer gateway TLS fingerprint is invalid",
+    );
+  }
   const transport = url.protocol === "https:" ? https : http;
   const request = transport.request(url, {
     method: params.method,
@@ -139,7 +148,7 @@ export async function withNodeWorkerTransferHttpRequest<T>(
       ...(params.cloudflareAccess ? buildCloudflareAccessHeaders(params.cloudflareAccess) : {}),
     },
     signal: params.signal,
-    ...(url.protocol === "https:" && params.tlsFingerprint
+    ...(url.protocol === "https:" && tlsFingerprint
       ? { rejectUnauthorized: false, session: Buffer.alloc(0) }
       : {}),
   });
@@ -185,7 +194,7 @@ export async function withNodeWorkerTransferHttpRequest<T>(
   });
   const send = async () => {
     if (url.protocol === "https:") {
-      await waitForTlsPin(request, params.tlsFingerprint);
+      await waitForTlsPin(request, tlsFingerprint);
     }
     writerSignal.throwIfAborted();
     await params.writeBody?.(async (chunk) => {
@@ -272,4 +281,90 @@ export async function withNodeWorkerTransferHttpRequest<T>(
   }
   params.signal?.throwIfAborted();
   return consumed.value;
+}
+
+export async function requireNodeWorkerTransferOk(response: IncomingMessage): Promise<void> {
+  if (response.statusCode === 200) {
+    return;
+  }
+  const body = (await readResponseBody(response, 64 * 1024)).toString("utf8");
+  let payload: unknown;
+  try {
+    payload = JSON.parse(body);
+  } catch {
+    payload = undefined;
+  }
+  if (
+    response.statusCode === 413 &&
+    isRecord(payload) &&
+    payload.error === "workspace_transfer_limit"
+  ) {
+    throw new NodeWorkerWorkspaceTransferError(
+      "workspace-transfer-limit: gateway rejected workspace transfer caps",
+    );
+  }
+  if (
+    response.statusCode === 400 &&
+    isRecord(payload) &&
+    payload.error === "workspace_transfer_invalid" &&
+    isNodeWorkspaceTransferInvalidReason(payload.reason)
+  ) {
+    throw new NodeWorkerWorkspaceTransferError(
+      `workspace-transfer-invalid: gateway rejected workspace transfer payload (${payload.reason})`,
+    );
+  }
+  throw new NodeWorkerWorkspaceTransferError(
+    `workspace-transfer-failed: gateway returned ${response.statusCode ?? 0}`,
+  );
+}
+
+export async function downloadNodeWorkerTransferFile(params: {
+  request: NodeWorkerTransferHttpRequest;
+  root: Root;
+  relativePath: string;
+  expectedBytes?: number;
+  expectedSha256?: string;
+  maxBytes?: number;
+  mode?: number;
+}): Promise<void> {
+  await withNodeWorkerTransferHttpRequest(params.request, async (response) => {
+    await requireNodeWorkerTransferOk(response);
+    await params.root.create(
+      nodeWorkerTransferWorkspacePath(params.root.rootReal, params.relativePath),
+      (async function* () {
+        const hash = params.expectedSha256 === undefined ? undefined : createHash("sha256");
+        let bytes = 0;
+        for await (const value of response) {
+          const chunk = Buffer.isBuffer(value) ? value : Buffer.from(value);
+          bytes += chunk.byteLength;
+          hash?.update(chunk);
+          yield chunk;
+        }
+        // Reject invalid content before the completed file is published.
+        if (
+          (params.expectedBytes !== undefined && bytes !== params.expectedBytes) ||
+          (hash && hash.digest("hex") !== params.expectedSha256)
+        ) {
+          throw new Error("workspace transfer blob failed integrity validation");
+        }
+      })(),
+      {
+        mode: params.mode ?? 0o600,
+        maxBytes: Math.min(
+          params.maxBytes ?? Infinity,
+          params.expectedBytes ?? Infinity,
+          MAX_WORKSPACE_INVENTORY_TOTAL_BYTES,
+        ),
+        signal: params.request.signal,
+      },
+    );
+  });
+}
+
+export function nodeWorkerTransferWorkspacePath(root: string, relative: string): string {
+  const candidate = path.join(root, ...relative.split("/"));
+  if (candidate !== root && !isPathInside(root, candidate)) {
+    throw new Error("workspace transfer manifest escaped its workspace");
+  }
+  return candidate;
 }

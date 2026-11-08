@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
+import pMap from "p-map";
 import {
   ErrorCodes,
   errorShape,
@@ -16,6 +17,7 @@ import { readSessionTranscriptUpdateVersion } from "../../sessions/transcript-ev
 import type { TranscriptReadWindow } from "../../sessions/transcript-read-window.js";
 import { resolveChatAttachmentFrameBudgetBytes } from "../../shared/chat-attachment-frame-budget.js";
 import { normalizeChatImageRenditionWidth } from "../../shared/chat-image-renditions.js";
+import { SCRATCH_EXPIRED_MESSAGE } from "../../shared/scratch-expiry.js";
 import { getOrCreateWeakOwnerMap } from "../../shared/weak-owner-map.js";
 import {
   canCreateArtifactDownload,
@@ -23,6 +25,12 @@ import {
   createManagedArtifactDownload,
 } from "../artifact-download-grants.js";
 import type { PreparedArtifactDownload } from "../artifact-download-projection.js";
+import {
+  type ArtifactLookup,
+  type ArtifactRecord,
+  toArtifactSummary,
+  resolveArtifactAvailability,
+} from "../artifacts-content.js";
 import {
   parseManagedOutgoingArtifactId,
   resolveManagedOutgoingMediaArtifactDownload,
@@ -37,11 +45,6 @@ import { tryResolveSessionCompatibilityOwnerAgentId } from "../session-request-a
 import { getSessionRowProjection } from "../session-row-projection-access.js";
 import { readSessionArtifacts } from "../session-transcript-readers.js";
 import { parseTranscriptImageArtifactId } from "../transcript-image-artifacts.js";
-import {
-  type ArtifactLookup,
-  type ArtifactRecord,
-  toArtifactSummary,
-} from "./artifacts-content.js";
 import { prepareArtifactSessionRead } from "./artifacts-session-read.js";
 import {
   ArtifactSessionResolutionError,
@@ -196,7 +199,7 @@ async function loadArtifacts(
     }
     assertCurrent();
     return {
-      artifacts: page.artifacts,
+      artifacts: await pMap(page.artifacts, resolveArtifactAvailability, { concurrency: 8 }),
       ...(nextCursor ? { nextCursor } : {}),
       ...(page.omittedOversized ? { omittedOversized: true } : {}),
       sessionKey,
@@ -238,7 +241,10 @@ async function loadArtifacts(
       includeDownloadData: opts.includeDownloadData,
       downloadArtifactIds: downloadIds ? [...downloadIds] : undefined,
     });
-    return { sessionKey, artifacts };
+    return {
+      sessionKey,
+      artifacts: await pMap(artifacts, resolveArtifactAvailability, { concurrency: 8 }),
+    };
   };
   const result = queuedKey && downloadIds ? Promise.resolve().then(collect) : collect();
   if (queuedKey && downloadIds) {
@@ -328,7 +334,10 @@ async function prepareDownload(
   };
   return selection?.kind === "prepared"
     ? { ...result, artifact: selection.download.artifact, download: selection.download }
-    : { ...result, artifact: selection?.artifact };
+    : {
+        ...result,
+        artifact: selection?.artifact && (await resolveArtifactAvailability(selection.artifact)),
+      };
 }
 
 async function respondManagedArtifactDownload(
@@ -510,9 +519,13 @@ export const artifactsHandlers: GatewayRequestHandlers = {
       respond(
         false,
         undefined,
-        sessionFilesError("artifact_download_unsupported", "artifact download is unsupported", {
-          artifactId: artifact.id,
-        }),
+        sessionFilesError(
+          artifact.expired ? "artifact_file_expired" : "artifact_download_unsupported",
+          artifact.expired ? SCRATCH_EXPIRED_MESSAGE : "artifact download is unsupported",
+          {
+            artifactId: artifact.id,
+          },
+        ),
       );
       return;
     }

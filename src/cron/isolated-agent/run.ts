@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { retireSessionMcpRuntime } from "../../agents/agent-bundle-mcp-tools.js";
+import { readAgentTerminalSnapshot } from "../../agents/agent-terminal-snapshot.js";
 import { resolveDiagnosticModelResponse } from "../../agents/diagnostic-model-response.js";
 import { withPreparedModelRuntimePluginGenerationScope } from "../../agents/prepared-model-runtime-generation-scope.js";
 import {
@@ -8,6 +9,8 @@ import {
 } from "../../agents/run-termination.js";
 import { createAgentLifecycleTerminalBackstop } from "../../auto-reply/reply/agent-lifecycle-terminal.js";
 import { cleanupBrowserSessionsForLifecycleEnd } from "../../browser-lifecycle-cleanup.js";
+import { selectLiveRuntimeConfig } from "../../config/runtime-snapshot.js";
+import type { restoreCronOperatorSource } from "../../gateway/cron-operator-source.js";
 import {
   assertAgentRunLifecycleGenerationCurrent,
   getAgentEventLifecycleGeneration,
@@ -26,6 +29,7 @@ import {
   runWithDiagnosticTraceContext,
 } from "../../infra/diagnostic-trace-context.js";
 import { isFastTestRuntimeEnv } from "../../infra/env.js";
+import { GatewayDispatchUnavailableError } from "../../infra/restart-recovery-errors.js";
 import {
   logMessageDispatchCompleted,
   logMessageDispatchStarted,
@@ -38,6 +42,7 @@ import { getCurrentSessionControllerOwner } from "../../sessions/session-control
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { isCronWithinActiveHours } from "../active-hours.js";
 import { isCronExecutionIdle } from "../execution-idle.js";
+import { resolveCronOwnerTransferRecoveryError } from "../human-owner.js";
 import { CronOperatorSourceError } from "../operator-source-error.js";
 import { CronSessionLifecycleClaimError } from "../run-authority.js";
 import { removeCronRunContinuationSessionIfIdle } from "../run-continuation-cleanup.js";
@@ -49,8 +54,6 @@ import {
 } from "../service/execution-errors.js";
 import { isCronOneShotContinuationJob } from "../service/one-shot-schedule.js";
 import type { CronAgentExecutionPhaseUpdate } from "../types.js";
-import { persistCronAutomationResult } from "./run-automation-context.js";
-import { resolveCronActiveRuntimeConfig } from "./run-config.js";
 import type { CronRunExecutionParams } from "./run-execution.types.js";
 import { finalizeCronRun } from "./run-finalize.js";
 import type { RunCronAgentTurnParams } from "./run-prepare-runtime.js";
@@ -102,6 +105,10 @@ async function runCronIsolatedAgentTurnInTrace(
   params: RunCronAgentTurnParams,
 ): Promise<RunCronAgentTurnResult> {
   params.assertCurrent?.();
+  const ownerTransferError = resolveCronOwnerTransferRecoveryError(params.job);
+  if (ownerTransferError) {
+    return { status: "error", error: ownerTransferError };
+  }
   const admittedLifecycleGeneration = getAgentEventLifecycleGeneration();
   const upstreamAbortSignal = params.abortSignal ?? params.signal;
   const lifecycleAbortController = new AbortController();
@@ -112,6 +119,7 @@ async function runCronIsolatedAgentTurnInTrace(
   const abortReason = () =>
     resolveCronAbortReasonText(abortSignal?.reason) ?? "cron: job execution timed out";
   const isFastTestEnv = isFastTestRuntimeEnv();
+  await using runtimeResources = new AsyncDisposableStack();
   let preparation: Awaited<ReturnType<typeof prepareCronRunContext>>;
   try {
     preparation = await prepareCronRunContext({
@@ -141,6 +149,21 @@ async function runCronIsolatedAgentTurnInTrace(
   async function runPreparedCronTurn(
     context: PreparedCronRunContext,
   ): Promise<RunCronAgentTurnResult> {
+    const preparedRuntimeLease = runtimeResources.use(context.preparedModelRuntimeLease);
+    if (context.runContinuationSession) {
+      // Native deletion drains the turn owner; release admission before cleanup and its runtime.
+      runtimeResources.defer(async () => {
+        try {
+          await withPluginRuntimeGenerationScope(preparedRuntimeLease.snapshot, () =>
+            removeCronRunContinuationSessionIfIdle(context.runSessionKey),
+          );
+        } catch (error) {
+          logWarn(
+            `[cron:${params.job.id}] Failed to remove unused run continuation: ${String(error)}`,
+          );
+        }
+      });
+    }
     const prepared = { context };
     using operatorLease = new DisposableStack();
     await using _ = {
@@ -148,12 +171,19 @@ async function runCronIsolatedAgentTurnInTrace(
         await prepared.context.workspaceLease?.release();
       },
     };
-    await using preparedRuntimeLease = prepared.context.preparedModelRuntimeLease;
     let leaseActive = true;
     // Accounting, delivery, and teardown use the same metadata as inference. Keep
     // the lease open until cleanup finishes, then fence detached borrowed work.
     try {
-      return await withPreparedModelRuntimePluginGenerationScope(
+      const runTurn: typeof withPreparedModelRuntimePluginGenerationScope = (
+        generation,
+        run,
+        borrow,
+      ) =>
+        preparedRuntimeLease.run(() =>
+          withPreparedModelRuntimePluginGenerationScope(generation, run, borrow),
+        );
+      return await runTurn(
         preparedRuntimeLease.pluginGeneration,
         () =>
           withPluginRuntimeGenerationScope(preparedRuntimeLease.snapshot, async () => {
@@ -177,7 +207,7 @@ async function runCronIsolatedAgentTurnInTrace(
             let admissionDeferredReason: "busy" | "active-hours" | undefined;
             const ownReplyOperation = getCurrentSessionControllerOwner();
             const resolveStartDeferral = (): "busy" | "active-hours" | undefined => {
-              const cfg = resolveCronActiveRuntimeConfig(params.cfg);
+              const cfg = selectLiveRuntimeConfig(params.cfg);
               if (
                 !isCronWithinActiveHours(
                   params.job.activeHours,
@@ -373,18 +403,35 @@ async function runCronIsolatedAgentTurnInTrace(
                 },
               );
               const { executeCronRun } = await cronExecutorRuntimeLoader.load();
-              const operator = params.job.operatorSource
-                ? await (
-                    await cronOperatorSourceLoader.load()
-                  ).restoreCronOperatorSource({
-                    job: params.job,
-                    agentId: prepared.context.agentId,
-                    sessionKey: prepared.context.runSessionKey,
-                    entry: prepared.context.cronSession.sessionEntry,
-                    signal: abortSignal,
-                    deliveryAttemptFence: params.deliveryAttemptFence,
-                  })
-                : undefined;
+              let operator: Awaited<ReturnType<typeof restoreCronOperatorSource>>;
+              try {
+                operator = params.job.operatorSource
+                  ? await (
+                      await cronOperatorSourceLoader.load()
+                    ).restoreCronOperatorSource({
+                      job: params.job,
+                      target: {
+                        agentId: prepared.context.agentId,
+                        sessionKey: prepared.context.runSessionKey,
+                        entry: prepared.context.cronSession.sessionEntry,
+                      },
+                      signal: abortSignal,
+                      deliveryAttemptFence: params.deliveryAttemptFence,
+                    })
+                  : undefined;
+              } catch (error) {
+                if (!(error instanceof GatewayDispatchUnavailableError) || !error.retryable) {
+                  throw error;
+                }
+                // Source recovery precedes model/tool admission. Keep its typed
+                // transient disposition so a one-shot retries the same intent.
+                return {
+                  status: "error",
+                  error: normalizeCronRunErrorText(error),
+                  executionStarted: false,
+                  errorClassification: { kind: "reason", reason: "server_error" },
+                };
+              }
               if (operator) {
                 operatorLease.defer(operator.release);
               }
@@ -445,18 +492,6 @@ async function runCronIsolatedAgentTurnInTrace(
               if (automationRun) {
                 automationRun.closed = true;
               }
-              await persistCronAutomationResult({
-                cfg: prepared.context.cfgWithAgentDefaults,
-                job: params.job,
-                runId,
-                result: automationResult,
-                resultTarget: prepared.context.resultTarget,
-                agentId: prepared.context.agentId,
-                runSessionKey: prepared.context.runSessionKey,
-                runSessionId: prepared.context.currentRunSessionId(),
-                storePath: prepared.context.cronSession.storePath,
-                assertCurrent: assertInvocationCurrent,
-              });
               const finalized = await finalizeCronRun({
                 automationResult,
                 prepared: prepared.context,
@@ -479,6 +514,7 @@ async function runCronIsolatedAgentTurnInTrace(
                   "restart";
                 if (finalized.interruptedByRestart) {
                   finalized.errorClassification = { kind: "aborted" };
+                  finalized.agentTerminal = undefined;
                 }
               }
               const delayMs = consumeCronNextCheckProposal(runId, params.job.id);
@@ -524,6 +560,12 @@ async function runCronIsolatedAgentTurnInTrace(
               return prepared.context.withRunSession({
                 status: "error",
                 error,
+                ...(!isCronLaneTimeout &&
+                !interruptedByRestart &&
+                executionStarted &&
+                !admissionDisposition
+                  ? { agentTerminal: readAgentTerminalSnapshot(err) }
+                  : {}),
                 interruptedByRestart,
                 errorClassification: interruptedByRestart
                   ? { kind: "aborted" }
@@ -608,17 +650,6 @@ async function runCronIsolatedAgentTurnInTrace(
                       });
                     } finally {
                       prepared.context.sessionPreparationEffect.release();
-                    }
-                    if (prepared.context.runContinuationSession) {
-                      try {
-                        await removeCronRunContinuationSessionIfIdle(
-                          prepared.context.runSessionKey,
-                        );
-                      } catch (error) {
-                        logWarn(
-                          `[cron:${params.job.id}] Failed to remove unused run continuation: ${String(error)}`,
-                        );
-                      }
                     }
                   } finally {
                     // Only run-scoped browser identities end here; persistent targets keep tracked tabs.

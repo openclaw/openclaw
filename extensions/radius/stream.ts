@@ -8,7 +8,9 @@ import {
   type ToolCall,
 } from "openclaw/plugin-sdk/llm";
 import { createProviderHttpError } from "openclaw/plugin-sdk/provider-http";
+import { omitNullRequestHeaders } from "openclaw/plugin-sdk/provider-request-headers";
 import {
+  applyProviderPayloadHook,
   buildGuardedModelFetch,
   buildAssistantMessage,
   createEmptyTransportUsage,
@@ -16,6 +18,7 @@ import {
   notifyProviderHttpResponse,
   parseTerminalToolCallArguments,
   iterateSseFrames,
+  mergeTransportHeaders,
 } from "openclaw/plugin-sdk/provider-transport-runtime";
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 
@@ -61,10 +64,10 @@ async function* readEvents(body: ReadableStream<Uint8Array>, signal?: AbortSigna
         signal?.throwIfAborted();
         return chunk;
       },
-      (pending) => {
-        if (Buffer.byteLength(pending, "utf8") > MAX_SSE_EVENT_BYTES) {
-          throw new Error("Radius SSE event exceeds 16 MiB");
-        }
+      {
+        max: MAX_SSE_EVENT_BYTES,
+        unit: "bytes",
+        message: "Radius SSE event exceeds 16 MiB",
       },
     )) {
       const data = frame
@@ -268,23 +271,24 @@ export function createRadiusStreamFn(): StreamFunction<string, RadiusStreamOptio
             toolChoice: options.toolChoice,
           },
         };
-        const replacement = await options.onPayload?.(payload, model);
-        if (replacement !== undefined) {
-          payload = replacement;
-        }
+        payload = await applyProviderPayloadHook(options, payload, model);
         options.signal?.throwIfAborted();
         const guardedFetch = buildGuardedModelFetch(model, options.timeoutMs, {
           sanitizeSse: false,
         });
         response = await guardedFetch(`${model.baseUrl.replace(/\/+$/u, "")}/messages`, {
           method: "POST",
-          headers: {
-            authorization: `Bearer ${options.apiKey}`,
-            accept: "text/event-stream",
-            "content-type": "application/json",
-            ...model.headers,
-            ...options.headers,
-          },
+          headers: omitNullRequestHeaders(
+            mergeTransportHeaders(
+              {
+                authorization: `Bearer ${options.apiKey}`,
+                accept: "text/event-stream",
+                "content-type": "application/json",
+              },
+              model.headers,
+              options.headers,
+            ),
+          ),
           body: JSON.stringify(payload),
           signal: options.signal,
         });

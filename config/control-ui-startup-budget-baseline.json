@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 281233,
-  "reason": "Defer optional root English at consuming routes: matched bf93c438 startup 282747 to 281233 B gzip; 7 JS and 1 CSS request unchanged.",
-  "updatedAt": "2026-10-23"
+  "startupJsGzipBytes": 90908,
+  "reason": "PR #194142 (L293): Details first-frame prewarm loader in startup; lead byte exception",
+  "updatedAt": "2026-11-07"
 }

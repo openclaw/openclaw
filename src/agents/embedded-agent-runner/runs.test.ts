@@ -11,10 +11,7 @@ import { resetDiagnosticRunActivityForTest } from "../../logging/diagnostic-run-
 import { diagnosticLogger } from "../../logging/diagnostic-runtime.js";
 import { resetDiagnosticSessionStateForTest } from "../../logging/diagnostic-session-state.js";
 import { createReplyOperation } from "../../sessions/session-controller.js";
-import {
-  isSessionRunActive,
-  isSessionRunCompactionBlocked,
-} from "../../sessions/session-controller.queries.js";
+import { isSessionRunActive } from "../../sessions/session-controller.queries.js";
 import { getSessionControllerEntryForOperation } from "../../sessions/session-controller.state.js";
 import { supersedeReplyRunByRunId } from "../../sessions/session-controller.stop-runtime.js";
 import {
@@ -171,44 +168,12 @@ describe("embedded run ownership", () => {
     unused(unknown, normal);
   });
 
-  it("keeps queued reply operations out of compact abort checks", () => {
-    const operation = createReplyOperation({
-      sessionKey: "agent:main:main",
-      sessionId: "session-reply-run",
-      resetTriggered: false,
-    });
-
-    expect(isSessionRunCompactionBlocked("session-reply-run")).toBe(false);
-
-    operation.setPhase("running");
-
-    expect(isSessionRunCompactionBlocked("session-reply-run")).toBe(true);
-  });
-
-  it("aborts every active run in all mode", () => {
-    const abortA = vi.fn();
-    const abortB = vi.fn();
-
-    setActiveEmbeddedRun(
-      "session-a",
-      createEmbeddedRunHandle({ isCompacting: true, abort: abortA }),
-    );
-
-    setActiveEmbeddedRun("session-b", createEmbeddedRunHandle({ abort: abortB }));
-
-    const aborted = abortEmbeddedAgentRun(undefined, { mode: "all" });
-    expect(aborted).toBe(true);
-    expect(abortA).toHaveBeenCalledTimes(1);
-    expect(abortB).toHaveBeenCalledTimes(1);
-  });
-
   it("keeps finalizing runs active while rejecting abort requests", () => {
     const abort = vi.fn();
     const handle = createEmbeddedRunHandle({ abort, isAbortable: false });
     const { operation, backend } = startReply(handle);
     expect(abortEmbeddedAgentRun(sessionId)).toBe(false);
     expect(abortEmbeddedAgentRun(undefined, { mode: "all", reason: "restart" })).toBe(false);
-    expect(isSessionRunCompactionBlocked(sessionId)).toBe(true);
     expect(isEmbeddedAgentRunHandleActive(sessionId)).toBe(true);
     expect(operation.result).toBeNull();
     expect(isSessionRunActive(sessionId)).toBe(true);
@@ -283,16 +248,19 @@ describe("embedded run ownership", () => {
     operation.complete();
   });
 
-  it.each([false, true])("propagates restart cancellation (throwing backend: %s)", (throws) => {
+  it.each([false, true])("restarts all runs even with a throwing backend: %s", (throws) => {
     const abort = vi.fn(() => {
       if (throws) {
         throw new Error("cancel failed");
       }
     });
-    const { operation } = startReply(createRunHandle({ abort }));
+    const otherAbort = vi.fn();
+    const { operation } = startReply(createRunHandle({ abort, isCompacting: true }));
+    setActiveEmbeddedRun("other", createRunHandle({ abort: otherAbort }));
     expect(abortEmbeddedAgentRun(undefined, { mode: "all", reason: "restart" })).toBe(true);
     expect(operation.result).toEqual({ kind: "aborted", code: "aborted_for_restart" });
     expect(abort).toHaveBeenCalledExactlyOnceWith("restart");
+    expect(otherAbort).toHaveBeenCalledExactlyOnceWith("restart");
   });
 
   it.each(["all", "compacting"] as const)(
@@ -477,40 +445,35 @@ describe("embedded run ownership", () => {
     unused(firstAbort, secondAbort);
   });
 
-  it.each([false, true])(
-    "joins the original producer after replacement even if the observer releases: %s",
-    async (releaseObserver) => {
-      const original = createRunHandle({ runId: "original" });
-      const replacementAbort = vi.fn();
-      const replacement = createRunHandle({ runId: "replacement", abort: replacementAbort });
-      const operation = setActiveEmbeddedRun(sessionId, original, sessionKey);
-      expect(captureEmbeddedRunDrainTarget(sessionId, { agentId: "other" })).toBeUndefined();
-      const target = captureEmbeddedRunDrainTarget(sessionId, { agentId: "main" })!;
-      try {
-        operation.complete();
-        setActiveEmbeddedRun(sessionId, replacement, sessionKey);
-        expect(target.abort()).toBe(false);
-        let settled = false;
-        const drained = target.waitForEnd(null).then((ended) => {
-          settled = true;
-          return ended;
-        });
-        if (releaseObserver) {
-          target.release();
-        }
-        await Promise.resolve();
-        expect(settled).toBe(false);
-        clearActiveEmbeddedRun(sessionId, original);
-        await expect(drained).resolves.toBe(true);
-        expect(isEmbeddedAgentRunHandleActive(sessionId)).toBe(true);
-        unused(replacementAbort);
-      } finally {
-        target.release();
-        clearActiveEmbeddedRun(sessionId, original);
-        clearActiveEmbeddedRun(sessionId, replacement);
-      }
-    },
-  );
+  it("joins the original producer after replacement even if the observer releases", async () => {
+    const original = createRunHandle({ runId: "original" });
+    const replacementAbort = vi.fn();
+    const replacement = createRunHandle({ runId: "replacement", abort: replacementAbort });
+    const operation = setActiveEmbeddedRun(sessionId, original, sessionKey);
+    expect(captureEmbeddedRunDrainTarget(sessionId, { agentId: "other" })).toBeUndefined();
+    const target = captureEmbeddedRunDrainTarget(sessionId, { agentId: "main" })!;
+    try {
+      operation.complete();
+      setActiveEmbeddedRun(sessionId, replacement, sessionKey);
+      expect(target.abort()).toBe(false);
+      let settled = false;
+      const drained = target.waitForEnd(null).then((ended) => {
+        settled = true;
+        return ended;
+      });
+      target.release();
+      await Promise.resolve();
+      expect(settled).toBe(false);
+      clearActiveEmbeddedRun(sessionId, original);
+      await expect(drained).resolves.toBe(true);
+      expect(isEmbeddedAgentRunHandleActive(sessionId)).toBe(true);
+      unused(replacementAbort);
+    } finally {
+      target.release();
+      clearActiveEmbeddedRun(sessionId, original);
+      clearActiveEmbeddedRun(sessionId, replacement);
+    }
+  });
 
   it("stops captured manual compaction without a run ID", () => {
     const abort = vi.fn();

@@ -26,15 +26,54 @@ import { resolveGatewaySessionStoreTargetInWorker } from "./session-utils-store-
 type SessionCreation = NonNullable<CreateGatewaySessionParams["creation"]> &
   Pick<SessionEntry, "inheritedGitContributorProfileIds">;
 
+/**
+ * Classify a create request. A standalone root is a new top-level conversation:
+ * no requested parent, fork, plugin owner, incognito boundary, or main target.
+ * Durable dashboard roots parent to main for follow-up notices and sidebar threads
+ * only under the default DM and session scopes. Incognito roots omit durable
+ * lineage so notices cannot cross the storage boundary.
+ */
+export function resolveSessionCreateRoot(
+  params: Pick<CreateGatewaySessionParams, "cfg" | "authorizedPluginId" | "fork">,
+  facts: {
+    parentSessionKey: string | undefined;
+    incognito: boolean;
+    targetSessionKey: string;
+    mainSessionKey: string;
+  },
+): { standalone: boolean; mainParentSessionKey?: string } {
+  const standalone =
+    !facts.parentSessionKey &&
+    !params.authorizedPluginId &&
+    !facts.incognito &&
+    params.fork !== true &&
+    facts.targetSessionKey !== facts.mainSessionKey;
+  const groupedUnderMain =
+    standalone &&
+    (params.cfg.session?.dmScope ?? "main") === "main" &&
+    params.cfg.session?.scope !== "global";
+  return {
+    standalone,
+    ...(groupedUnderMain ? { mainParentSessionKey: facts.mainSessionKey } : {}),
+  };
+}
+
 /** Inherit parent selection without replacing explicitly requested choices. */
 export function inheritSessionCreateParentFields(params: {
   parent: SessionEntry | undefined;
   newExplicitChild: boolean;
   newDashboardRoot: boolean;
+  /** A new standalone root created by an operator, under any DM or session scope. */
+  newOperatorRoot: boolean;
   selectedModel?: string;
   overrides: Pick<
     CreateGatewaySessionParams,
-    "catalogTarget" | "model" | "toolOverrides" | "fastMode" | "communication"
+    | "catalogTarget"
+    | "model"
+    | "toolOverrides"
+    | "fastMode"
+    | "communication"
+    | "cyberAccessProgram"
   >;
 }): Partial<InternalSessionEntry> {
   const { parent, overrides } = params;
@@ -44,6 +83,9 @@ export function inheritSessionCreateParentFields(params: {
       : inheritSessionSelection(parent);
   if (overrides.toolOverrides !== undefined) {
     delete inherited.toolOverrides;
+  }
+  if (overrides.cyberAccessProgram !== undefined) {
+    delete inherited.cyberAccessProgram;
   }
   if (overrides.fastMode !== undefined) {
     // Explicit choices have already been validated by the canonical patch owner.
@@ -58,10 +100,11 @@ export function inheritSessionCreateParentFields(params: {
   if (params.newDashboardRoot && !params.selectedModel) {
     inherited.modelOverrideSource = "default";
   }
-  // A dashboard root is a direct chat with its operator, whichever turn path
-  // (chat.send, sessions_send, cron) first runs it. Memory audience resolution
-  // reads this durable root fact; each turn still decides owner status.
-  if (params.newDashboardRoot) {
+  // An operator-created root is a direct chat with its operator, whichever turn
+  // path (chat.send, sessions_send, cron, the agent method) first runs it.
+  // Memory audience resolution reads this durable root fact; each turn still
+  // decides owner status.
+  if (params.newOperatorRoot) {
     inherited.chatType = "direct";
   }
   return inherited;

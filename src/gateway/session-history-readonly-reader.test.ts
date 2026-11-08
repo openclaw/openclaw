@@ -1,3 +1,4 @@
+import fs from "node:fs/promises";
 import { DatabaseSync, type StatementSync } from "node:sqlite";
 import { expect, it, vi } from "vitest";
 import {
@@ -10,7 +11,7 @@ import {
   replaceSessionEntry,
   waitForSessionTranscriptProjection,
 } from "../config/sessions/session-accessor.js";
-import { readActiveTranscriptEntryAnchor } from "../config/sessions/session-accessor.sqlite-transcript-anchor.js";
+import { readActiveTranscriptEntryAnchor } from "../config/sessions/session-accessor.sqlite-transcript-admitted-read.js";
 import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import { captureDurableSessionActor } from "../config/sessions/session-actor-durable.js";
 import { readSessionActorProjectionReceipt } from "../config/sessions/session-actor-replica.js";
@@ -18,6 +19,15 @@ import {
   markCanonicalSessionValidationPending,
   setCanonicalSqliteSessionMainKey,
 } from "../config/sessions/session-canonical-key.js";
+import { readSessionColdChunks } from "../config/sessions/session-cold-storage-chunks.js";
+import { resolveSessionColdArchivePath } from "../config/sessions/session-cold-storage-codec.js";
+import { readSessionColdTranscript } from "../config/sessions/session-cold-storage-state.js";
+import {
+  restoreSessionColdTranscript,
+  runSessionColdStorageMaintenance,
+} from "../config/sessions/session-cold-storage.js";
+import { maintenanceConfig } from "../config/sessions/session-cold-storage.test-support.js";
+import { readSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import { withSessionTranscriptProjectionReceipt } from "../config/sessions/session-transcript-projection-facts-scope.js";
 import { runWithSessionTranscriptReadFence } from "../config/sessions/session-transcript-read-fence.js";
 import { clearNodeSqliteKyselyCacheForDatabase } from "../infra/kysely-sync.js";
@@ -28,12 +38,16 @@ import {
   withScopedOpenClawAgentDatabaseReadOnly,
 } from "../state/openclaw-agent-db-readonly-scope.js";
 import { invalidateOpenClawAgentDatabaseValidation } from "../state/openclaw-agent-db-validation-cache.js";
-import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
+import {
+  openOpenClawAgentDatabase,
+  runOpenClawAgentWriteTransaction,
+} from "../state/openclaw-agent-db.js";
 import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { expectMessageIds, messageEvent } from "./session-history-events.test-support.js";
 import type { PreparedSessionHistoryReadTarget } from "./session-history-read.types.js";
 import { createReadonlySessionHistoryReader } from "./session-history-readonly-reader.js";
+import { readChatHistoryAnchorPage } from "./session-history-tail.js";
 import { readSessionHistoryRequest } from "./session-history-worker-reader.js";
 
 type HistoryTarget = PreparedSessionHistoryReadTarget & { transcript: { sessionKey: string } };
@@ -89,164 +103,367 @@ async function withHistory(
   });
 }
 
-it("reuses complete accounting facts and reloads them after a transcript write", async () => {
+it("pages retained cold branches and resets without changing cursor identity or restoring payloads", async () => {
   await withHistory(async ({ target, database, reader }) => {
-    const identity = readOpenClawAgentDatabaseIdentity(database);
-    if (typeof identity.identity !== "string") {
-      throw new Error("Accounting receipt proof requires a physical database");
-    }
-    const actorTarget = {
-      sessionKey: target.transcript.sessionKey,
-      database: {
-        kind: "file" as const,
-        physicalIdentity: identity.identity,
-        birthtime: identity.birthtime,
-        nativeLocation: database.path,
-      },
+    const transcript = target.transcript;
+    await replaceTranscriptEvents(transcript, [
+      { type: "session", version: 3, id: transcript.sessionId },
+      messageEvent("old-user", { role: "user", content: "Old question" }),
+      messageEvent("old-answer", { role: "assistant", content: "Old answer" }, "old-user"),
+      messageEvent("off-path", { role: "assistant", content: "Other branch" }, "old-user"),
+      messageEvent("kept-user", { role: "user", content: "Keep this" }, "old-answer"),
+      messageEvent("kept-answer", { role: "assistant", content: "雪🦞".repeat(2048) }, "kept-user"),
+      { type: "reset", id: "reset", parentId: "kept-answer", firstKeptEntryId: "kept-user" },
+      messageEvent("new-user", { role: "user", content: "New question" }, "reset"),
+      messageEvent("new-answer", { role: "assistant", content: "New answer" }, "new-user"),
+      messageEvent(
+        "worker-input",
+        {
+          role: "user",
+          content: "Internal progress",
+          idempotencyKey: "worker-run:user",
+          provenance: {
+            kind: "inter_session",
+            sourceTool: "sessions_send",
+            sourceRole: "subagent",
+          },
+        },
+        "new-answer",
+      ),
+      messageEvent(
+        "worker-answer",
+        {
+          role: "assistant",
+          content: "Internal acknowledgement",
+          __openclaw: { runId: "worker-run" },
+        },
+        "worker-input",
+      ),
+      messageEvent(
+        "human-steer",
+        {
+          role: "user",
+          content: "Explain the result",
+          __openclaw: { steerTargetRunId: "worker-run" },
+        },
+        "worker-answer",
+      ),
+      messageEvent(
+        "human-answer",
+        {
+          role: "assistant",
+          content: "Visible result",
+          __openclaw: { runId: "worker-run" },
+        },
+        "human-steer",
+      ),
+    ]);
+    await waitForSessionTranscriptProjection(transcript);
+    const options = { offset: 0, maxMessages: 20, maxBytes: 65_536, captureReadWindow: true };
+    const page = reader.readHistoryEventPage(options);
+    expect(page.events.map(({ event }) => event)).toEqual(
+      [
+        "kept-user",
+        "kept-answer",
+        "reset",
+        "new-user",
+        "new-answer",
+        "worker-input",
+        "worker-answer",
+        "human-steer",
+        "human-answer",
+      ].map((id) => expect.objectContaining({ id })),
+    );
+    const around = {
+      messageId: "old-answer",
+      direction: "older" as const,
+      maxMessages: 2,
+      maxBytes: 65_536,
     };
-    const authority = { assertCurrent() {}, assertReadable() {}, authorize() {} };
-    const actor = captureDurableSessionActor({
-      database: target.database,
-      target: actorTarget,
-      lifetime: authority,
+    const historical = await reader.readSessionMessagesAroundIdWithStatsAsync(transcript, around);
+    expectMessageIds(historical.messages, ["old-user", "old-answer"]);
+    const delta = reader.readTranscriptDisplayDelta({ maxEvents: 20, maxBytes: 65_536 });
+    if (delta.kind !== "page") {
+      throw new Error("Expected initial display delta");
+    }
+    await replaceSessionEntry(transcript, { sessionId: "successor", updatedAt: 1 });
+    runOpenClawAgentWriteTransaction(({ db }) => {
+      db.prepare(
+        "UPDATE session_windows SET previous_session_id = NULL, updated_at = 1, transcript_updated_at = 1 WHERE session_id = ?",
+      ).run(transcript.sessionId);
+    }, target.database);
+    expect(
+      await runSessionColdStorageMaintenance({ config: maintenanceConfig(database.path) }),
+    ).toMatchObject({ archivedTranscripts: 1 });
+    const archive = readSessionColdTranscript(database.db, transcript.sessionId);
+    expect(archive).toBeDefined();
+    const visibility = createReadonlySessionHistoryReader(target).subagentCoordination;
+    expect(visibility.isSubagentRunMessage("worker-run", 7)).toBe(true);
+    expect(visibility.isSubagentRunMessage("worker-run", 9)).toBe(false);
+    expect(reader.readHistoryEventPage(options)).toEqual(page);
+    expect(reader.readTranscriptDisplayDelta({ maxEvents: 20, maxBytes: 65_536 })).toEqual(delta);
+    expect(await reader.readSessionMessagesAroundIdWithStatsAsync(transcript, around)).toEqual(
+      historical,
+    );
+    expect(reader.readTranscriptDisplayDelta({ cursor: delta.cursor })).toMatchObject({
+      kind: "page",
+      events: [],
     });
-    const owner = new OpenClawAgentDatabaseReadOnlyScope();
-
-    const options = { includeByteSize: true, includeUsage: false };
-    const read = () => owner.run(target.database, () => reader.readTranscriptAccounting(options));
+    expect(await reader.readSessionMessageByIdAsync(transcript, "off-path")).toMatchObject({
+      found: false,
+    });
+    expect(readSessionColdTranscript(database.db, transcript.sessionId)).toEqual(archive);
+    const chunk = readSessionColdChunks(database.db, archive!)[0] ?? archive!;
+    const archivePath = resolveSessionColdArchivePath(database.path, chunk.archive_name);
+    const original = await fs.readFile(archivePath);
     try {
-      const before = read();
-      await actor.read(authority);
-      const receipt = readSessionActorProjectionReceipt({
-        path: database.path,
-        sessionKey: actorTarget.sessionKey,
-        sessionId: target.transcript.sessionId,
-      });
-      expect(receipt).toBeDefined();
-      const observed = observeSqliteReadSql(Object.getPrototypeOf(database.db.prepare("SELECT 1")));
-      const redundant = () =>
-        observed.queries.filter(
-          (sql) =>
-            sql.includes('from "session_nodes"') ||
-            sql.includes('from "session_participants"') ||
-            sql.includes('"reset_active_position"'),
-        );
-      try {
-        expect(withSessionTranscriptProjectionReceipt(receipt, read)).toEqual(before);
-        expect(redundant()).toEqual([]);
-        await appendTranscriptMessage(target.transcript, {
-          eventId: "accounting-next",
-          parentId: "requested-message",
-          message: { role: "user", content: "Updated accounting" },
-        });
-        await waitForSessionTranscriptProjection(target.transcript);
-        observed.queries.length = 0;
-        expect(withSessionTranscriptProjectionReceipt(receipt, read).eventCount).toBe(
-          before.eventCount! + 1,
-        );
-        expect(redundant().length).toBeGreaterThan(0);
-      } finally {
-        observed.restore();
-      }
+      await fs.writeFile(archivePath, Buffer.from("corrupt synthetic chunk"));
+      expect(() => reader.readHistoryEventPage(options)).toThrow("failed verification");
+      expect(readSessionColdTranscript(database.db, transcript.sessionId)).toEqual(archive);
     } finally {
-      await actor.release();
-      owner.close();
+      await fs.writeFile(archivePath, original);
+    }
+    await restoreSessionColdTranscript(transcript);
+    expect(reader.readHistoryEventPage(options)).toEqual(page);
+    expect(reader.readTranscriptDisplayDelta({ cursor: delta.cursor })).toMatchObject({
+      kind: "page",
+      events: [],
+    });
+  });
+});
+
+it("continues byte-limited cold anchors in both directions across current and closed reset intervals", async () => {
+  await withHistory(async ({ target, database, reader }) => {
+    const transcript = target.transcript;
+    let parentId: string | null = null;
+    const events: unknown[] = [{ type: "session", version: 3, id: transcript.sessionId }];
+    for (const interval of ["old", "current"]) {
+      if (interval === "current") {
+        events.push({ type: "reset", id: "reset", parentId });
+        parentId = "reset";
+      }
+      for (let index = 0; index < 3; index++) {
+        const id = `${interval}-${index}`;
+        events.push(messageEvent(id, { role: "user", content: "x".repeat(700) }, parentId));
+        parentId = id;
+      }
+    }
+    await replaceTranscriptEvents(transcript, events);
+    await waitForSessionTranscriptProjection(transcript);
+    await replaceSessionEntry(transcript, { sessionId: "successor", updatedAt: 1 });
+    runOpenClawAgentWriteTransaction(({ db }) => {
+      db.prepare(
+        "UPDATE session_windows SET previous_session_id = NULL, updated_at = 1, transcript_updated_at = 1 WHERE session_id = ?",
+      ).run(transcript.sessionId);
+    }, target.database);
+    expect(
+      await runSessionColdStorageMaintenance({ config: maintenanceConfig(database.path) }),
+    ).toMatchObject({ archivedTranscripts: 1 });
+    const archive = readSessionColdTranscript(database.db, transcript.sessionId);
+    expect(archive).toBeDefined();
+    for (const interval of ["old", "current"]) {
+      for (const direction of ["older", "newer"] as const) {
+        const options = {
+          messageId: `${interval}-1`,
+          direction,
+          maxMessages: 2,
+          maxBytes: 1024,
+          captureReadWindow: true,
+        };
+        const anchor = await reader.readSessionMessagesAroundIdWithStatsAsync(transcript, options);
+        expectMessageIds(anchor.messages, [options.messageId]);
+        expect(anchor.readWindow).toBeDefined();
+        const neighbor = await reader.readSessionMessagesAroundIdWithStatsAsync(transcript, {
+          ...options,
+          excludeAnchor: true,
+          expectedReadWindow: anchor.readWindow,
+        });
+        expect(neighbor.windowReset).not.toBe(true);
+        expectMessageIds(neighbor.messages, [`${interval}-${direction === "older" ? 0 : 2}`]);
+        const continued = await readChatHistoryAnchorPage(reader, transcript, options);
+        expect(continued.windowReset).not.toBe(true);
+        expectMessageIds(
+          continued.messages,
+          (direction === "older" ? [0, 1] : [1, 2]).map((index) => `${interval}-${index}`),
+        );
+        expect(readSessionColdTranscript(database.db, transcript.sessionId)).toEqual(archive);
+      }
     }
   });
 });
 
-it("reuses artifact summaries without payload reads and invalidates after transcript writes", async () => {
-  await withHistory(async ({ target, database }) => {
-    const owner = new OpenClawAgentDatabaseReadOnlyScope();
-    const transcript = target.transcript;
-    const message = (title: string, role = "assistant") => ({
-      role,
-      content: [{ type: "file", title, data: "aGVsbG8=", mimeType: "text/plain" }],
+it.each(["entry", "actor"] as const)(
+  "reuses %s accounting facts and reloads them after a transcript write",
+  async (source) => {
+    await withHistory(async ({ target, database, reader }) => {
+      const identity = readOpenClawAgentDatabaseIdentity(database);
+      if (typeof identity.identity !== "string") {
+        throw new Error("Accounting receipt proof requires a physical database");
+      }
+      const actorTarget = {
+        sessionKey: target.transcript.sessionKey,
+        database: {
+          kind: "file" as const,
+          physicalIdentity: identity.identity,
+          birthtime: identity.birthtime,
+          nativeLocation: database.path,
+        },
+      };
+      const authority = { assertCurrent() {}, assertReadable() {}, authorize() {} };
+      const actor = captureDurableSessionActor({
+        database: target.database,
+        target: actorTarget,
+        lifetime: authority,
+      });
+      const owner = new OpenClawAgentDatabaseReadOnlyScope();
+
+      const options = { includeByteSize: true, includeUsage: false };
+      const read = () => owner.run(target.database, () => reader.readTranscriptAccounting(options));
+      try {
+        const before = read();
+        if (source === "actor") {
+          await actor.read(authority);
+        } else {
+          await readSessionEntryReadOnlyInWorker(target.transcript);
+        }
+        const receipt = readSessionActorProjectionReceipt({
+          path: database.path,
+          sessionKey: actorTarget.sessionKey,
+          sessionId: target.transcript.sessionId,
+        });
+        const observed = observeSqliteReadSql(
+          Object.getPrototypeOf(database.db.prepare("SELECT 1")),
+        );
+        const redundant = () =>
+          observed.queries.filter(
+            (sql) =>
+              sql.includes('from "session_nodes"') ||
+              sql.includes('from "session_participants"') ||
+              (source === "actor" && sql.includes('"reset_active_position"')),
+          );
+        try {
+          expect(withSessionTranscriptProjectionReceipt(receipt, read)).toEqual(before);
+          expect(redundant()).toEqual([]);
+          await appendTranscriptMessage(target.transcript, {
+            eventId: "accounting-next",
+            parentId: "requested-message",
+            message: { role: "user", content: "Updated accounting" },
+          });
+          await waitForSessionTranscriptProjection(target.transcript);
+          observed.queries.length = 0;
+          expect(withSessionTranscriptProjectionReceipt(receipt, read).eventCount).toBe(
+            before.eventCount! + 1,
+          );
+          expect(redundant().length).toBeGreaterThan(0);
+        } finally {
+          observed.restore();
+        }
+      } finally {
+        await actor.release();
+        owner.close();
+      }
     });
-    const read = async (assistantOnly = false) => {
-      const result = await owner.run(target.database, () =>
-        readSessionHistoryRequest(
-          {
-            kind: "artifacts",
-            params: {
-              target: transcript,
-              query: {
-                kind: "list",
-                sessionKey: transcript.sessionKey,
-                includeDownloadData: false,
-                ...(assistantOnly ? { messageRole: "assistant" as const } : {}),
+  },
+);
+
+it.each([
+  { source: { data: "aGVsbG8=" }, mode: "bytes" },
+  { source: { url: "https://example.com/result.txt", sizeBytes: 5 }, mode: "url" },
+])(
+  "reuses $mode artifact summaries without download payloads and invalidates after transcript writes",
+  async ({ source, mode }) => {
+    await withHistory(async ({ target, database }) => {
+      const owner = new OpenClawAgentDatabaseReadOnlyScope();
+      const transcript = target.transcript;
+      const message = (title: string, role = "assistant") => ({
+        role,
+        content: [{ type: "file", title, ...source, mimeType: "text/plain" }],
+      });
+      const read = async (assistantOnly = false, includeDownloadData = false) => {
+        const result = await owner.run(target.database, () =>
+          readSessionHistoryRequest(
+            {
+              kind: "artifacts",
+              params: {
+                target: transcript,
+                query: {
+                  kind: "list",
+                  sessionKey: transcript.sessionKey,
+                  includeDownloadData,
+                  ...(assistantOnly ? { messageRole: "assistant" as const } : {}),
+                },
               },
             },
-          },
-          target,
-        ),
-      );
-      if (result.kind !== "artifacts" || result.result.kind !== "list") {
-        throw new Error("expected artifact list");
-      }
-      return result.result.artifacts;
-    };
-    const replace = async (title: string) => {
-      await replaceTranscriptEvents(transcript, [
-        { type: "session", version: 3, id: transcript.sessionId },
-        messageEvent("artifact", message(title)),
-      ]);
-      await waitForSessionTranscriptProjection(transcript);
-    };
-    const prototype: StatementSync = Object.getPrototypeOf(database.db.prepare("SELECT 1"));
-    const payloadReads: string[] = [];
-    // oxlint-disable-next-line typescript/unbound-method -- Forward with the native statement receiver.
-    const iterate = prototype.iterate;
-    const observer = vi.spyOn(prototype, "iterate").mockImplementation(function (
-      this: StatementSync,
-      ...args
-    ) {
-      if (
-        this.sourceSQL.includes("event_json") &&
-        this.sourceSQL.includes("session_transcript_active_events")
+            target,
+          ),
+        );
+        if (result.kind !== "artifacts" || result.result.kind !== "list") {
+          throw new Error("expected artifact list");
+        }
+        return result.result.artifacts;
+      };
+      const replace = async (title: string) => {
+        await replaceTranscriptEvents(transcript, [
+          { type: "session", version: 3, id: transcript.sessionId },
+          messageEvent("artifact", message(title)),
+        ]);
+        await waitForSessionTranscriptProjection(transcript);
+      };
+      const prototype: StatementSync = Object.getPrototypeOf(database.db.prepare("SELECT 1"));
+      const payloadReads: string[] = [];
+      // oxlint-disable-next-line typescript/unbound-method -- Forward with the native statement receiver.
+      const iterate = prototype.iterate;
+      const observer = vi.spyOn(prototype, "iterate").mockImplementation(function (
+        this: StatementSync,
+        ...args
       ) {
-        payloadReads.push(this.sourceSQL);
-      }
-      return iterate.apply(this, args);
-    });
-    try {
-      await replace("first.txt");
-      // Cold canonical admission uses a publication scope, which cannot populate derived caches.
-      await owner.run(target.database, () =>
-        createReadonlySessionHistoryReader(target).readSessionMessageCountAsync(transcript),
-      );
-      const first = await read();
-      expect(first).toMatchObject([
-        { title: "first.txt", sizeBytes: 5, download: { mode: "bytes" } },
-      ]);
-      expect(first[0]).not.toHaveProperty("data");
-      expect(payloadReads.length).toBeGreaterThan(0);
-      payloadReads.length = 0;
-      expect(await read()).toEqual(first);
-      expect(payloadReads).toEqual([]);
-
-      await appendTranscriptMessage(transcript, {
-        eventId: "upload",
-        parentId: "artifact",
-        message: message("uploaded.txt", "user"),
+        if (
+          this.sourceSQL.includes("event_json") &&
+          this.sourceSQL.includes("session_transcript_active_events")
+        ) {
+          payloadReads.push(this.sourceSQL);
+        }
+        return iterate.apply(this, args);
       });
-      await waitForSessionTranscriptProjection(transcript);
-      expect((await read()).map((a) => a.title)).toEqual(["first.txt", "uploaded.txt"]);
-      expect((await read(true)).map((a) => a.title)).toEqual(["first.txt"]);
-      await replace("replacement.txt");
-      expect((await read()).map((a) => a.title)).toEqual(["replacement.txt"]);
-      await replace("same-length-rewrite.txt");
-      expect((await read()).map((a) => a.title)).toEqual(["same-length-rewrite.txt"]);
-      await replaceTranscriptEvents(transcript, [
-        { type: "session", version: 3, id: transcript.sessionId },
-      ]);
-      expect(await read()).toEqual([]);
-    } finally {
-      observer.mockRestore();
-      owner.close();
-    }
-  });
-});
+      try {
+        await replace("first.txt");
+        // Cold canonical admission uses a publication scope, which cannot populate derived caches.
+        await owner.run(target.database, () =>
+          createReadonlySessionHistoryReader(target).readSessionMessageCountAsync(transcript),
+        );
+        const first = await read();
+        expect(first).toMatchObject([{ title: "first.txt", sizeBytes: 5, download: { mode } }]);
+        expect(first[0]).not.toHaveProperty("data");
+        expect(first[0]).not.toHaveProperty("url");
+        expect(payloadReads.length).toBeGreaterThan(0);
+        payloadReads.length = 0;
+        expect(await read()).toEqual(first);
+        expect(payloadReads).toEqual([]);
+        expect((await read(false, true))[0]).toMatchObject(source);
+
+        await appendTranscriptMessage(transcript, {
+          eventId: "upload",
+          parentId: "artifact",
+          message: message("uploaded.txt", "user"),
+        });
+        await waitForSessionTranscriptProjection(transcript);
+        expect((await read()).map((a) => a.title)).toEqual(["first.txt", "uploaded.txt"]);
+        expect((await read(true)).map((a) => a.title)).toEqual(["first.txt"]);
+        await replace("replacement.txt");
+        expect((await read()).map((a) => a.title)).toEqual(["replacement.txt"]);
+        await replace("same-length-rewrite.txt");
+        expect((await read()).map((a) => a.title)).toEqual(["same-length-rewrite.txt"]);
+        await replaceTranscriptEvents(transcript, [
+          { type: "session", version: 3, id: transcript.sessionId },
+        ]);
+        expect(await read()).toEqual([]);
+      } finally {
+        observer.mockRestore();
+        owner.close();
+      }
+    });
+  },
+);
 
 it.each(["cold", "warm", "policy", "receipt"] as const)(
   "keeps canonical admission and history materialization on one retained snapshot (%s)",

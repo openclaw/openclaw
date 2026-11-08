@@ -147,9 +147,10 @@ function pickPressure(
   heapLimitBytes: number | undefined,
   rssLimitBytes: number | undefined,
   thresholds?: DiagnosticMemoryThresholds,
+  processMemory?: { usedBytes: number; limitBytes: number },
 ): MemoryPressure | null {
   // Compare isolates to their own limits, never summed worker heaps to the main heap.
-  // Within each severity the main heap is primary, followed by workers and process RSS.
+  // Within each severity prefer heap and RSS ownership over shared allowance pressure.
   const signals: {
     reason: MemoryPressure["reason"];
     usedBytes: number;
@@ -180,6 +181,7 @@ function pickPressure(
       warning: thresholds?.rssWarningBytes,
       critical: thresholds?.rssCriticalBytes,
     },
+    ...(processMemory ? [{ reason: "process_memory_threshold" as const, ...processMemory }] : []),
   ];
   for (const [level, ratio] of [
     ["critical", CRITICAL_RATIO],
@@ -275,6 +277,11 @@ function logMemoryPressure(pressure: MemoryPressure): void {
       pressure.memory.workerArrayBuffersBytes,
     ) +
     formatOptionalPressureMetric("workerCount", pressure.memory.workerCount) +
+    formatOptionalPressureMetric("postgresBridgeCount", pressure.memory.postgresBridgeCount) +
+    formatOptionalPressureMetric(
+      "postgresPoolSelfRootCount",
+      pressure.memory.postgresPoolSelfRootCount,
+    ) +
     formatOptionalPressureMetric("workerHeapSampledCount", pressure.memory.workerHeapSampledCount) +
     formatOptionalPressureMetric(
       "workerArrayBuffersSampledCount",
@@ -298,7 +305,7 @@ function logMemoryPressure(pressure: MemoryPressure): void {
     formatOptionalPressureMetric("usedBytes", pressure.usedBytes) +
     formatOptionalPressureMetric("workerThreadId", pressure.workerThreadId) +
     (pressure.memory.workerCount
-      ? " workerLimitScope=js-heap-only; external/ArrayBuffers are not capped; nested workers are not included."
+      ? " workerLimitScope=js-heap-only; external/ArrayBuffers are not capped; nested worker heaps are not included."
       : "") +
     ` ${nextStep}`;
   log.warn(message);
@@ -328,10 +335,26 @@ export function emitDiagnosticMemorySample(
     ? undefined
     : (options?.heapSizeLimitBytes ??
       (defaultHeapSizeLimitBytes ??= getHeapStatistics().heap_size_limit));
-  const memoryLimits = [
-    options?.processMemoryLimitBytes ?? DEFAULT_PROCESS_MEMORY_LIMIT_BYTES,
-    options?.physicalMemoryBytes ?? DEFAULT_PHYSICAL_MEMORY_BYTES,
-  ].filter(isPositiveMemoryLimit);
+  const processLimitBytes = options?.processMemoryLimitBytes ?? DEFAULT_PROCESS_MEMORY_LIMIT_BYTES;
+  const physicalMemoryBytes = options?.physicalMemoryBytes ?? DEFAULT_PHYSICAL_MEMORY_BYTES;
+  const memoryLimits = [processLimitBytes, physicalMemoryBytes].filter(isPositiveMemoryLimit);
+  // Node/Linux accounts for cgroup charges that RSS does not include. Unconstrained
+  // hosts and other runtimes do not provide this same remaining-allowance signal.
+  const availableMemoryBytes =
+    !isBun &&
+    process.platform === "linux" &&
+    isPositiveMemoryLimit(processLimitBytes) &&
+    isPositiveMemoryLimit(physicalMemoryBytes) &&
+    processLimitBytes < physicalMemoryBytes
+      ? process.availableMemory()
+      : undefined;
+  const processMemory =
+    availableMemoryBytes !== undefined &&
+    Number.isFinite(availableMemoryBytes) &&
+    availableMemoryBytes >= 0 &&
+    availableMemoryBytes <= processLimitBytes
+      ? { usedBytes: processLimitBytes - availableMemoryBytes, limitBytes: processLimitBytes }
+      : undefined;
   const rssLimitBytes = memoryLimits.length ? Math.min(...memoryLimits) : undefined;
   const shouldEmitSample = collectDiagnostics && options?.emitSample !== false;
   memory.heapSizeLimitBytes = heapLimitBytes;
@@ -341,7 +364,13 @@ export function emitDiagnosticMemorySample(
     publishMemorySample(memory, options?.uptimeMs ?? Math.round(process.uptime() * 1000));
   }
 
-  const pressure = pickPressure(memory, heapLimitBytes, rssLimitBytes, options?.thresholds);
+  const pressure = pickPressure(
+    memory,
+    heapLimitBytes,
+    rssLimitBytes,
+    options?.thresholds,
+    processMemory,
+  );
   if (pressure?.level === "critical") {
     memoryPressure.publish(undefined);
   }

@@ -53,10 +53,7 @@ function createSharedModuleBinding(
   loader: PluginModuleLoader,
   root: string,
   currentIdentity: string | undefined,
-  sourceCustody?: {
-    bind(instance: PluginModuleLoaderOwner): void;
-    capture(): PluginModuleLoaderRecovery;
-  },
+  sourceCustody?: Parameters<typeof bindSharedPluginModuleLoader>[0]["source"],
 ) {
   const load = (source: string) => withPluginCache(cache, () => loader(toSafeImportPath(source)));
   const bind = (target: PluginModuleLoaderOwner, recovery?: PluginModuleLoaderRecovery) => {

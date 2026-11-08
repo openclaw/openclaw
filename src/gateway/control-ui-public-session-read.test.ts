@@ -465,7 +465,7 @@ describe("anonymous published session reader", () => {
               const readers = createReaders(...args);
               const readMembership = readers.readMembershipFacts;
               readers.readMembershipFacts = async (...input) => {
-                const result = await readMembership(...input);
+                const result = await readMembership.call(readers, ...input);
                 if (holdMembership) {
                   membershipRead.resolve();
                   await withinTest(releaseMembership.promise, signal);

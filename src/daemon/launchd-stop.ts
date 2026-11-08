@@ -1,6 +1,7 @@
 import { isDeepStrictEqual } from "node:util";
 import { readLockPayloadSync, resolveGatewayLockPaths } from "../infra/gateway-lock.js";
-import { readGatewayOwnerLease } from "../infra/gateway-owner-lease.js";
+import { readGatewayOwnerLeaseAsync } from "../infra/gateway-owner-lease.js";
+import { readGatewayOwnerLeaseFromDatabase } from "../infra/gateway-owner-lease.read.js";
 import { formatPortDiagnostics } from "../infra/ports-format.js";
 import { inspectPortUsage } from "../infra/ports-inspect.js";
 import { probePortUsage } from "../infra/ports-probe.js";
@@ -9,9 +10,12 @@ import {
   prepareGatewayRestartIntentLegacyProcess,
   writeGatewayServiceRestartIntentSync,
 } from "../infra/restart-intent.js";
-import { cleanStaleGatewayProcessesSync } from "../infra/restart-stale-pids.js";
+import { cleanStaleGatewayProcesses } from "../infra/restart-stale-pids.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
+import { resolveSqliteInspectionSignal } from "../infra/sqlite-readonly-worker.js";
 import { resolveUpdateInstallRoot } from "../infra/update-install-root.js";
 import { createManagedHandoffLeaseStore } from "../infra/update-managed-service-handoff-lease.js";
+import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import {
   getFileLockProcessStartTime,
   isPidAlive,
@@ -76,13 +80,16 @@ function verifyLaunchAgentStopProbe(
   return probe.runtime.pid;
 }
 
-async function waitForLaunchAgentUnloaded(
+/** Waits until launchd unloads the job and every PID it ran has exited. */
+export async function waitForLaunchAgentUnloaded(
   serviceTarget: string,
-  initialPid: number | undefined,
+  initialPids: readonly number[],
   assertCurrent?: () => void,
+  onWait?: (pids: readonly number[]) => void,
 ): Promise<void> {
-  const pids = new Set<number>(initialPid === undefined ? [] : [initialPid]);
-  const deadline = Date.now() + LAUNCH_AGENT_STOP_TIMEOUT_MS;
+  const pids = new Set(initialPids);
+  const deadline = performance.now() + LAUNCH_AGENT_STOP_TIMEOUT_MS;
+  let warned = false;
   for (;;) {
     const probe = await probeLaunchAgentState(serviceTarget, 5_000);
     assertCurrent?.();
@@ -94,13 +101,17 @@ async function waitForLaunchAgentUnloaded(
     if (probe.state === "not-loaded" && alivePids.length === 0) {
       return;
     }
-    if (Date.now() >= deadline) {
+    if (probe.state === "not-loaded" && !warned) {
+      warned = true;
+      onWait?.(alivePids);
+    }
+    if (performance.now() >= deadline) {
       throw launchAgentStopError(
         serviceTarget,
         `LaunchAgent stop did not complete: ${serviceTarget} is ${probe.state === "not-loaded" ? "unloaded" : "still loaded"}${alivePids.length ? `; PID ${alivePids.join(", ")} is still alive` : ""}`,
       );
     }
-    await sleep(Math.min(100, Math.max(0, deadline - Date.now())));
+    await sleep(Math.min(100, Math.max(0, deadline - performance.now())));
   }
 }
 
@@ -108,9 +119,9 @@ async function waitForGatewayPortRelease(
   port: number,
   probeHosts: readonly string[],
 ): Promise<boolean> {
-  const deadline = Date.now() + LAUNCH_AGENT_STOP_PORT_RELEASE_TIMEOUT_MS;
-  while (Date.now() < deadline) {
-    await sleep(Math.min(LAUNCH_AGENT_STOP_PORT_RELEASE_POLL_MS, deadline - Date.now()));
+  const deadline = performance.now() + LAUNCH_AGENT_STOP_PORT_RELEASE_TIMEOUT_MS;
+  while (performance.now() < deadline) {
+    await sleep(Math.min(LAUNCH_AGENT_STOP_PORT_RELEASE_POLL_MS, deadline - performance.now()));
     const status = await probePortUsage(port, probeHosts);
     if (status === "free") {
       return true;
@@ -122,6 +133,7 @@ async function waitForGatewayPortRelease(
 async function assertGatewayPortReleasedAfterStop(
   env: GatewayServiceEnv,
   assertCurrent: () => Promise<void>,
+  assertNativeCurrent: () => void,
 ): Promise<void> {
   const { env: cleanupEnv, port, probeHosts } = await resolveLaunchAgentGatewayContext(env);
   if (port === null) {
@@ -129,9 +141,9 @@ async function assertGatewayPortReleasedAfterStop(
   }
   await assertCurrent();
   assertGatewayServiceUpdateCurrent();
-  cleanStaleGatewayProcessesSync(port, {
+  await cleanStaleGatewayProcesses(port, {
     env: cleanupEnv,
-    assertCurrent: assertGatewayServiceUpdateCurrent,
+    assertCurrent: assertNativeCurrent,
   });
   const diagnostics = await inspectPortUsage(port, {
     probeHosts,
@@ -158,6 +170,7 @@ export async function stopLaunchAgent({
   assertCurrent,
   updateHandoff,
 }: GatewayServiceControlArgs): Promise<void> {
+  const signal = resolveSqliteInspectionSignal(getAsyncWorkSignal());
   const serviceEnv = env ?? (process.env as GatewayServiceEnv);
   const domain = resolveLaunchAgentGuiDomain();
   const label = resolveLaunchAgentLabel(serviceEnv);
@@ -167,6 +180,7 @@ export async function stopLaunchAgent({
   const updateOwned = isUpdateOwnedGatewayServiceCommand();
   let intentEnv = serviceEnv;
   const assertNativeCurrent = () => {
+    signal?.throwIfAborted();
     assertCurrent?.();
     assertGatewayServiceUpdateCurrent();
   };
@@ -211,8 +225,9 @@ export async function stopLaunchAgent({
     serviceTarget,
     await probeLaunchAgentState(serviceTarget, 5_000),
   );
+  const stoppingPids = new Set(initialPid === undefined ? [] : [initialPid]);
   let clearIntent: (() => void) | undefined;
-  let assertServingCurrent = assertNativeCurrent;
+  let assertServingCurrent = async () => assertNativeCurrent();
   let warning: string | undefined;
   try {
     if (updateOwned) {
@@ -223,7 +238,8 @@ export async function stopLaunchAgent({
       }
       intentEnv = mergeGatewayServiceEnv(serviceEnv, command);
       await assertStopCurrent();
-      const owner = readGatewayOwnerLease({ env: intentEnv, current: true });
+      const owner = await readGatewayOwnerLeaseAsync({ env: intentEnv, signal });
+      assertNativeCurrent();
       const legacyLockPath = owner ? undefined : resolveGatewayLockPaths(intentEnv).stateLockPath;
       const legacyLock = legacyLockPath ? readLockPayloadSync(legacyLockPath, true) : undefined;
       const legacyProcess = await prepareGatewayRestartIntentLegacyProcess({
@@ -238,7 +254,7 @@ export async function stopLaunchAgent({
       if (verifyLaunchAgentStopProbe(serviceTarget, currentProbe) !== initialPid) {
         throw new GatewayRestartPreparationError("serving-owner");
       }
-      const assertIntentCurrent = () => {
+      const assertServingPhysicalCurrent = () => {
         assertNativeCurrent();
         // Published Gateways can have only a file lock. An absent SQLite owner
         // cannot attest that the native wrapper or its serving child is unchanged.
@@ -254,7 +270,10 @@ export async function stopLaunchAgent({
         ) {
           throw new GatewayRestartPreparationError("serving-owner");
         }
-        const currentOwner = readGatewayOwnerLease({ env: intentEnv, current: true });
+      };
+      const assertOwnerMatches = (
+        currentOwner: ReturnType<typeof readGatewayOwnerLeaseFromDatabase>,
+      ) => {
         if (
           currentOwner?.owner !== owner?.owner ||
           currentOwner?.pid !== owner?.pid ||
@@ -264,7 +283,17 @@ export async function stopLaunchAgent({
           throw new GatewayRestartPreparationError("serving-owner");
         }
       };
-      assertServingCurrent = assertIntentCurrent;
+      const assertIntentCurrent = (database?: EngineConnection) => {
+        assertServingPhysicalCurrent();
+        if (database) {
+          assertOwnerMatches(readGatewayOwnerLeaseFromDatabase(database));
+        }
+      };
+      assertServingCurrent = async () => {
+        const currentOwner = await readGatewayOwnerLeaseAsync({ env: intentEnv, signal });
+        assertServingPhysicalCurrent();
+        assertOwnerMatches(currentOwner);
+      };
       // False means a verified stopped service with no serving owner. Recording
       // failure for a serving process throws; never treat it as best-effort.
       writeGatewayServiceRestartIntentSync({
@@ -279,10 +308,16 @@ export async function stopLaunchAgent({
           clearIntent = clear;
         },
       });
+      // Intent admission verifies the serving child's membership in this job.
+      // Its listener and launchd wrapper can disappear before database cleanup.
+      const servingPid = owner?.pid ?? legacyLock?.pid;
+      if (servingPid !== undefined) {
+        stoppingPids.add(servingPid);
+      }
     }
     if (persistDisable) {
       await assertStopCurrent();
-      assertServingCurrent();
+      await assertServingCurrent();
       const disabled = await execLaunchctl(["disable", serviceTarget]);
       if (disabled.code === 0) {
         reportMutation("disable");
@@ -294,7 +329,7 @@ export async function stopLaunchAgent({
     // A stopped but loaded job can still respawn. Both stop modes must boot it out;
     // --disable additionally preserves the operator's policy across login/reboot.
     await assertStopCurrent();
-    assertServingCurrent();
+    await assertServingCurrent();
     const bootout = await execLaunchctl(["bootout", serviceTarget], LAUNCH_AGENT_STOP_TIMEOUT_MS);
     if (bootout.code !== 0 && !isLaunchctlNotLoaded(bootout)) {
       throw launchAgentStopError(
@@ -308,11 +343,15 @@ export async function stopLaunchAgent({
     throw error;
   }
   reportMutation(persistDisable ? "disable-bootout" : "bootout");
-  await waitForLaunchAgentUnloaded(serviceTarget, initialPid, assertCurrent);
+  await waitForLaunchAgentUnloaded(serviceTarget, [...stoppingPids], assertCurrent, (pids) => {
+    stdout.write(
+      `${formatLine("Warning", `Waiting for Gateway PID ${pids.join(", ")} to exit and release its databases before continuing.`)}\n`,
+    );
+  });
   if (warning) {
     stdout.write(`${formatLine("Warning", warning)}\n`);
   }
-  await assertGatewayPortReleasedAfterStop(serviceEnv, assertStopCurrent);
+  await assertGatewayPortReleasedAfterStop(serviceEnv, assertStopCurrent, assertNativeCurrent);
   assertCurrent?.();
   stdout.write(
     `${formatLine(warning ? "Stopped LaunchAgent (degraded)" : "Stopped LaunchAgent", serviceTarget)}\n`,

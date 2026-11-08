@@ -1,11 +1,14 @@
-import { appendFileSync, existsSync, readFileSync } from "node:fs";
+import { appendFileSync, existsSync, lstatSync, readFileSync } from "node:fs";
 import path, { matchesGlob } from "node:path";
 import { pathToFileURL } from "node:url";
 import { resolveTestGitCommits } from "../.github/actions/git-owner/test-prerequisites.mjs";
+import { isTestFileTarget } from "./lib/changed-path-facts.mjs";
+import { blacksmithRunnerLabel } from "./lib/ci-blacksmith-capacity.mjs";
 import {
   formatIosSimulatorSelectionSummary,
   resolveIosSimulatorTestSelection,
 } from "./lib/ci-ios-smoke-plan.mjs";
+import { resolveSkillsPythonTargets } from "./lib/ci-skills-python-plan.mjs";
 import { resolveReleaseContextIdentity } from "./lib/release-context.mjs";
 import { classifyReleaseTrain, parseReleaseVersion } from "./lib/release-version.mjs";
 
@@ -141,7 +144,12 @@ const createPluginContractTestShards =
           task: "contracts-plugins",
         },
       ];
-const createMatrix = (include) => ({ include });
+const createMatrix = (include) => ({
+  include: include.map((row) => {
+    const label = row.runner_label ?? blacksmithRunnerLabel(row.runner);
+    return label ? { ...row, runner_label: label } : row;
+  }),
+});
 // Share setup without combining the target planner's process envelopes.
 const createContractMatrix = (shards, task) =>
   createMatrix(
@@ -201,6 +209,9 @@ if (
   );
 }
 const npmQualification = releaseScope === "npm-beta" || releaseScope === "npm-stable";
+// Stable tags also ship the macOS app, and its post-tag validation is too late
+// to block the tag, so only beta defers macOS Swift proof.
+const deferMacosSwift = releaseScope === "npm-beta";
 const fullNativeValidation =
   eventName === "workflow_dispatch" && !mainValidation && !releaseGate && releaseScope === "full";
 if (releaseScope !== "full" && !npmQualification) {
@@ -279,6 +290,10 @@ const runNodeFastOnly =
   !toolingOwnerChange &&
   parseCiEnvFlag(process.env.OPENCLAW_CI_RUN_NODE_FAST_ONLY);
 const runNodeFull = runNode && !runNodeFastOnly;
+const runBuiltSourceVerifiers =
+  runNodeFull &&
+  !frozenTarget &&
+  changedPaths?.includes("scripts/test-built-source-verifiers.mts") === true;
 // release-fast-lane: label-admitted narrow gate for release tooling PRs.
 // Canonical PR CI only; declined runs keep every ordinary decision.
 const releaseFastLaneLabel = parseCiEnvFlag(process.env.OPENCLAW_CI_RELEASE_FAST_LANE_LABEL);
@@ -377,7 +392,7 @@ const supportsCurrentMacosSwiftCi =
   existsSync("scripts/format-swift.sh");
 const runMacosSwift =
   runMacos &&
-  !npmQualification &&
+  !deferMacosSwift &&
   (!frozenTarget || compatibilityTarget || supportsCurrentMacosSwiftCi);
 const supportsIosBuild = hasPackageScript("ios:build");
 const supportsCurrentIosCi = supportsIosBuild && supportsCurrentMacosSwiftCi;
@@ -455,11 +470,11 @@ const includeReleaseOnlyUiTests =
     !isCanonicalRepository ||
     compatibilityTarget ||
     changedPaths === null);
-// Ordinary CI shares eight 16-class browser jobs; full inventories retain
-// twelve. Private source-server projects keep their own one-worker limit.
+// Match four observed CPUs per 16-class job while retaining 24 worker slots.
+// Private source-server projects remain serial.
 const compactUiE2e = supportsUiE2eProjects && !includeReleaseOnlyUiTests;
 let uiE2eJobCount = compactUiE2e
-  ? 9
+  ? 7
   : supportsUiE2eProjects
     ? 13
     : usesHostedRunnerProfile
@@ -494,6 +509,24 @@ const supportsPublishedDriverUpdate = targetWorkflow.includes(
 );
 const useCompatibleAndroidCi = compatibilityTarget && !supportsCurrentAndroidCi;
 const androidTestTier = !fullNativeValidation && !useCompatibleAndroidCi;
+// Wear production strings feed the phone generator; only its test/debug inputs
+// are independent. Shared modules, build inputs and missing paths keep all rows.
+const narrowAndroidUnitTests =
+  ordinaryPullRequest &&
+  !frozenTarget &&
+  !useCompatibleAndroidCi &&
+  changedPaths !== null &&
+  changedPaths.length > 0 &&
+  changedPaths.every(
+    (file) =>
+      /^(?:apps\/android\/app\/src\/|apps\/android\/wear\/src\/(?:test|androidTest|debug)\/)/u.test(
+        file,
+      ) && lstatSync(file, { throwIfNoEntry: false })?.isFile(),
+  );
+const runAndroidPhoneTests =
+  !narrowAndroidUnitTests || changedPaths?.some((file) => file.startsWith("apps/android/app/"));
+const runAndroidWearTests =
+  !narrowAndroidUnitTests || changedPaths?.some((file) => file.startsWith("apps/android/wear/"));
 // Unit tests do not compile the benchmark. Keep its build when inputs
 // change, or when the existing changed-path manifest cannot narrow scope.
 const androidBenchmarkChanged =
@@ -592,6 +625,13 @@ if (runtimePullRequest && runNodeFull) {
     includeReleaseOnlyRuntimeTests,
     includePrExemptRuntimeTests,
     selectionMode: nodeSelectionMode,
+    adaptiveMarkdown:
+      isCanonicalRepository &&
+      compactPullRequest &&
+      !releaseGate &&
+      !frozenTarget &&
+      !compatibilityTarget &&
+      nodeSelectionMode === "aggressive",
     onSelection: (selection) => nodeSelectionReasons.push(selection),
   });
 }
@@ -723,7 +763,7 @@ const uiWebkitOwners = [
   "ui/src/pages/{cron/view-jobs-filter,plugins/settings-editor,plugins/settings-view}.{ts,tsx,css}",
   "ui/src/pages/chat/chat-composer*.{ts,tsx}",
   "ui/src/pages/chat/components/chat-{composer*,picker-overlay*,model-picker*,effort-picker*}.{ts,tsx}",
-  "ui/src/pages/chat/{chat-pane-header,components/chat-pane-header*,components/chat-pane-versions-menu*}.{ts,tsx}",
+  "ui/src/pages/chat/{chat-pane-header,components/chat-pane-header*}.{ts,tsx}",
   "ui/src/lib/solid-bridge.ts",
   "ui/src/lib/solid-bridge-view.tsx",
   "ui/src/lib/presentation.ts",
@@ -834,7 +874,7 @@ if (runtimePullRequest && runNodeFull) {
     selectedTestTargets,
     // Changed compiler plans validate every consuming graph, with full fallback on ambiguity.
     dedicatedCoreTypeChecks: runNodeFull,
-    dedicatedBuildArtifacts: false,
+    dedicatedBuildArtifacts: runBuiltSourceVerifiers,
     dedicatedNativeChecks: { macos: runMacos, ios: runIosBuild, android: runAndroid },
     includeReleaseOnlyToolingShards: false,
     includeReleaseOnlyRuntimeTests,
@@ -876,12 +916,39 @@ const extensionLintMode =
       : "affected"
     : undefined;
 const runCheckPlan = Boolean(runCheck && (narrowCheckScope || extensionLintMode));
+let preserveFullChecks = !narrowCheckScope;
 let typeGraphBoundaryOwner = "";
 if (runCheckPlan && proposedCheckScope?.types) {
   const { resolveChangedCiTsgoInputs } = await import(
     fromTarget("./scripts/lib/tsgo-core-test-shards.mts")
   );
   const compilerPaths = resolveChangedCiTsgoInputs(changedPaths, existsSync);
+  if (preserveFullChecks && extensionLintMode && !releaseFastLane && compilerPaths) {
+    const { getChangedPathFacts, isTestLineAllocationPath } = await import(
+      fromTarget("./scripts/lib/changed-path-facts.mjs")
+    );
+    const { resolveCiCheckFamilyScope } = await import(
+      fromTarget("./scripts/lib/ci-check-family-scope.mts")
+    );
+    const budgetCompanions = changedPaths.filter((file) => !isTestLineAllocationPath(file));
+    const budgetOnlyFallback =
+      budgetCompanions.length < changedPaths.length &&
+      resolveCiCheckFamilyScope(budgetCompanions).mode === "scoped";
+    // Shared tests and numeric allocations retain every guard family, including
+    // allocation validation. A budget record does not widen otherwise scoped
+    // source companions; compiler/lint owners still discover all consumers.
+    preserveFullChecks = !changedPaths.every((file) => {
+      const facts = getChangedPathFacts(file);
+      return (
+        path.posix.normalize(file) === file &&
+        !file.includes("\\") &&
+        (isTestLineAllocationPath(file) ||
+          (budgetOnlyFallback && facts.surface === "docs") ||
+          (["source", "package", "ui", "extension"].includes(facts.surface) &&
+            (budgetOnlyFallback || (facts.isTestOnly && facts.isChangedLaneTest))))
+      );
+    });
+  }
   typeGraphBoundaryOwner =
     runNodeFull &&
     !releaseFastLane &&
@@ -987,6 +1054,16 @@ const runSqliteSessionLifecycle =
   supportsSqliteSessionLifecycleProof &&
   (changedScopeHasSqliteSessionLifecycleImpact ||
     selectedOwnerTest("test/scripts/sqlite-sessions-transcripts-flip-proof.built-cli.e2e.test.ts"));
+const postgresConformancePlan = existsSync("scripts/lib/postgres-conformance-shards.mts")
+  ? await import(fromTarget("./scripts/lib/postgres-conformance-shards.mts"))
+  : {};
+if (
+  "isPostgresConformanceTestTarget" in postgresConformancePlan &&
+  typeof postgresConformancePlan.isPostgresConformanceTestTarget !== "function"
+) {
+  throw new Error("PostgreSQL conformance test ownership must be a function");
+}
+const { isPostgresConformanceTestTarget } = postgresConformancePlan;
 const postgresConformancePaths = [
   ".github/actions/postgres-conformance/**",
   "**/*.postgres.test.ts",
@@ -994,6 +1071,9 @@ const postgresConformancePaths = [
   "src/config/sessions/**",
   "src/agents/harness/context-engine-turn-outbox*",
   "src/gateway/server*.ts",
+  "src/gateway/server-methods/cron.ts",
+  "src/gateway/server-methods/cron-add.ts",
+  "src/gateway/server-methods/cron-run.ts",
   "src/cli/gateway-cli/run.ts",
   "src/commands/*preflight*.ts",
   "src/commands/doctor-database-*.ts",
@@ -1029,6 +1109,11 @@ const postgresConformancePaths = [
   "src/state/openclaw-state-db-contract.ts",
   "src/state/postgres-schema.generated/**",
   "src/cron/store/runtime-authority-store.ts",
+  "src/cron/store/row-codec.ts",
+  "src/cron/store/runtime-rows.kernel.ts",
+  "src/cron/store/run-finalization.worker.ts",
+  "src/cron/service.ts",
+  "src/cron/service/ops-run.ts",
   "src/infra/database-engine/**",
   "src/infra/postgres-sync/**",
   "src/infra/sql-connection.ts",
@@ -1069,7 +1154,7 @@ const postgresConformancePaths = [
   "packages/memory-host-sdk/src/memory-entry-origins.ts",
   "src/config/zod-schema.database.ts",
   "scripts/test-database-conformance*.mjs",
-  "scripts/lib/weighted-test-shards.mts",
+  "scripts/lib/postgres-conformance-shards.mts",
   "config/postgres-conformance-timings.json",
 ];
 const runPostgresConformance =
@@ -1082,9 +1167,18 @@ const runPostgresConformance =
         changedPaths.some(
           (file) =>
             !changedNodeTestPlan.isCiDocumentationPath?.(file) &&
-            postgresConformancePaths.some((pattern) => matchesGlob(file, pattern)),
+            (isPostgresConformanceTestTarget?.(file) ||
+              postgresConformancePaths.some(
+                (pattern) =>
+                  matchesGlob(file, pattern) &&
+                  // Older targets lack inventory ownership; retain their broad routing.
+                  (!isPostgresConformanceTestTarget ||
+                    !isTestFileTarget(file) ||
+                    isTestFileTarget(pattern)),
+              )),
         ))));
 const runBuildArtifacts =
+  runBuiltSourceVerifiers ||
   publishedDriverUpdate ||
   (runMacosSwift && existsSync("apps/macos/Sources/OpenClaw/NativeExecPolicyOwner.swift")) ||
   (runNodeFull &&
@@ -1095,6 +1189,17 @@ const runBuildArtifacts =
       runDiscordComponentProof ||
       runGatewayWatch ||
       selectedTuiPty));
+// Reuse only an already-selected public build; frozen and standalone browser plans
+// keep their local preparation without adding a serial build dependency.
+const reuseBrowserExtensionBuild =
+  runBrowserExtensionE2e && runBuildArtifacts && !frozenTarget && !compatibilityTarget;
+// Keep dispatch/frozen locale jobs separate for release diagnostics and historical tooling.
+const reuseControlUiI18nSetup =
+  runControlUiI18n &&
+  runBuildArtifacts &&
+  ["pull_request", "push", "schedule"].includes(workflowEventName) &&
+  !frozenTarget &&
+  !compatibilityTarget;
 const runControlUiPerformance =
   !releaseFastLane &&
   (runNodeFull || runUiTests) &&
@@ -1299,9 +1404,17 @@ const nodeTestShards = targetNodeTestShards
     const row = {
       check_name: shard.checkName,
       test_runtime_policy: shard.requiresDist ? "node" : testRuntimeMode,
+      adaptive_observations:
+        (shard.groups ?? [shard]).some((group) =>
+          group.configs?.includes("test/vitest/vitest.unit-fast.config.ts"),
+        ) || undefined,
       requires_bun:
         !shard.requiresDist &&
-        Boolean(testRuntimePolicy?.ciTestShardRequiresBun(shard, testRuntimeMode)),
+        (Boolean(testRuntimePolicy?.ciTestShardRequiresBun(shard, testRuntimeMode)) ||
+          // Node-hosted packaging proof also launches a pinned Bun child.
+          shardRequiresTests(shard, ["test/scripts/bun-standalone-codegen.test.ts"], (plan) =>
+            plan.configs?.includes(goToolingConfig),
+          )),
       shard_name: shard.shardName,
       groups_gzip_base64: packedGroups,
       groups: groups && !nodeTestGroupsCodec ? groups : undefined,
@@ -1312,6 +1425,10 @@ const nodeTestShards = targetNodeTestShards
       git_commits: resolveTestGitCommits(shard),
       requires_dist: shard.requiresDist,
       runner: shard.runner,
+      runner_label: blacksmithRunnerLabel(
+        shard.runner,
+        Math.max(0, ...(shard.groups ?? []).map((group) => group.minTotalMemoryBytes ?? 0)),
+      ),
       timeout_minutes:
         !shard.requiresDist && testRuntimeMode === "dual-all"
           ? 2 * (shard.timeoutMinutes ?? 60)
@@ -1348,6 +1465,11 @@ const nodeTestShards = targetNodeTestShards
             plan.shard_name ?? plan.shardName,
           ),
       ),
+      requires_native_secret_service: shardRequiresTests(
+        shard,
+        ["test/e2e/qa-lab/runtime/codex-native-command-auth.e2e.test.ts"],
+        (plan) => plan.configs?.includes("test/vitest/vitest.e2e.config.ts") ?? false,
+      ),
       requires_sandbox_image: shardRequiresTests(
         shard,
         [
@@ -1365,6 +1487,7 @@ const nodeTestShards = targetNodeTestShards
         "requires_dist",
         "requires_go",
         "requires_ripgrep",
+        "requires_native_secret_service",
         "requires_sandbox_image",
       ]) {
         if (row[key] === false) {
@@ -1514,10 +1637,14 @@ const additionalChecks = [
         : narrowCheckScope.additionalGroups.includes(group))),
 );
 // Move an already-selected boundary row; sharing must never add another CI job.
+// Older target planners cannot mark the combined GitHub lint rows as SDK consumers.
+const supportsCombinedLintSdk =
+  existsSync("scripts/ci-check-plan.mts") &&
+  readFileSync("scripts/ci-check-plan.mts", "utf8").includes("requires_sdk_declarations");
 const sharedSdkDeclarations =
   workflowEventName === "pull_request" &&
   isCanonicalRepository &&
-  runnerProfile === "hybrid" &&
+  (runnerProfile === "hybrid" || (runnerProfile === "github" && supportsCombinedLintSdk)) &&
   runCheckPlan &&
   runNodeFull &&
   !releaseFastLane &&
@@ -1614,6 +1741,7 @@ const manifest = {
   run_skills_python: runSkillsPython,
   run_windows: runWindows,
   run_build_artifacts: runBuildArtifacts,
+  run_built_source_verifiers: runBuiltSourceVerifiers,
   run_proof_tier: runProofTier,
   run_browser_native_host: runBrowserNativeHost,
   run_doctor_plugin_index: runDoctorPluginIndex,
@@ -1664,7 +1792,7 @@ const manifest = {
         ...(extensionLintMode
           ? {
               extensionLintMode,
-              preserveFullChecks: !narrowCheckScope,
+              preserveFullChecks,
               ...(process.env.OPENCLAW_CI_CHANGED_BASE
                 ? { changedBaseRef: process.env.OPENCLAW_CI_CHANGED_BASE }
                 : {}),
@@ -1701,6 +1829,7 @@ const manifest = {
   run_docs_content: !(ordinaryPullRequest && docsOnly && rootProseOnly),
   run_format_check: runFormatCheck,
   run_control_ui_i18n: runControlUiI18n,
+  reuse_control_ui_i18n_setup: reuseControlUiI18nSetup,
   run_ui_tests: runUiTests,
   run_ui_webkit: runUiWebkit,
   ui_test_runtime_policy: uiTestRuntimePolicy,
@@ -1723,7 +1852,8 @@ const manifest = {
     ),
   ),
   run_control_ui_performance: runControlUiPerformance,
-  run_ui_e2e: runUiE2e,
+  run_ui_e2e: runControlUiE2e || (runBrowserExtensionE2e && !reuseBrowserExtensionBuild),
+  reuse_browser_extension_build: reuseBrowserExtensionBuild,
   run_ui_real_gateway: runUiRealGateway,
   ui_e2e_matrix: createMatrix(
     Array.from({ length: uiE2eJobCount }, (_, index) => {
@@ -1733,14 +1863,19 @@ const manifest = {
         shard_count: uiE2eJobCount,
         task: shard === uiE2eJobCount ? "browser-extension" : "control-ui",
         vitest_shard_count: uiE2eJobCount - 1,
-        vitest_max_workers: compactUiE2e ? 3 : 2,
+        vitest_max_workers: compactUiE2e ? 4 : 2,
       };
     }).filter((row) =>
-      row.task === "browser-extension" ? runBrowserExtensionE2e : runControlUiE2e,
+      row.task === "browser-extension"
+        ? runBrowserExtensionE2e && !reuseBrowserExtensionBuild
+        : runControlUiE2e,
     ),
   ),
   run_native_i18n: runNativeI18n,
   run_skills_python_job: runSkillsPython,
+  skills_python_targets_json: resolveSkillsPythonTargets(changedPaths, {
+    full: !ordinaryPullRequest || frozenTarget,
+  }),
   run_checks_windows: runWindows,
   // Current targets balance the complete Windows inventory by measured
   // file cost; historical targets retain their original package commands.
@@ -1759,7 +1894,7 @@ const manifest = {
       : [],
   ),
   run_macos_swift: runMacosSwift,
-  run_openclawkit_tests: runMacos && !npmQualification && supportsOpenClawKitTests,
+  run_openclawkit_tests: runMacos && !deferMacosSwift && supportsOpenClawKitTests,
   run_ios_build: runIosBuild,
   run_ios_voice_cleanup_tests: iosSimulatorSelection.voice.selected,
   run_ios_lifecycle_tests: iosSimulatorSelection.lifecycle.selected,
@@ -1772,15 +1907,20 @@ const manifest = {
     runAndroid
       ? [
           // android-ci-contract-v3: phone variants, Wear modules, Android lint, benchmark, and ktlint.
-          {
-            check_name: "android-test-play",
-            task: useCompatibleAndroidCi ? "test-play-compat" : "test-play",
-          },
-          {
-            check_name: "android-test-third-party",
-            task: "test-third-party",
-          },
-          ...(!useCompatibleAndroidCi
+          ...(runAndroidPhoneTests
+            ? [
+                {
+                  check_name: "android-test-play",
+                  task: useCompatibleAndroidCi ? "test-play-compat" : "test-play",
+                },
+                {
+                  check_name: "android-test-third-party",
+                  task: "test-third-party",
+                  ...(androidTestTier && !runAndroidWearTests ? { app_lint: "third-party" } : {}),
+                },
+              ]
+            : []),
+          ...(!useCompatibleAndroidCi && runAndroidWearTests
             ? [
                 {
                   check_name: "android-test-wear",
@@ -1871,7 +2011,7 @@ if (hybridHostedEligible) {
     "control-ui-performance": count(manifest.run_control_ui_performance),
     "published-driver-update": count(manifest.run_published_driver_update),
     "native-i18n": count(manifest.run_native_i18n),
-    "control-ui-i18n": count(manifest.run_control_ui_i18n),
+    "control-ui-i18n": count(manifest.run_control_ui_i18n && !manifest.reuse_control_ui_i18n_setup),
     "checks-baseline-ratchets": count(hostedRatchets && manifest.run_baseline_ratchets),
     "checks-fast-core": count(
       manifest.run_checks_fast_core,
@@ -1902,6 +2042,10 @@ if (hybridHostedEligible) {
     "check-docs": count(manifest.run_check_docs),
     "postgres-conformance": count(manifest.run_postgres_conformance, 3),
     "skills-python": count(manifest.run_skills_python_job),
+    "checks-windows": count(
+      manifest.run_checks_windows,
+      manifest.checks_windows_matrix.include.length,
+    ),
     "macos-node": count(manifest.run_macos_node, manifest.macos_node_matrix.include.length),
     "macos-swift": count(manifest.run_macos_swift, 2),
     "ios-build": count(manifest.run_ios_build),
@@ -2077,6 +2221,13 @@ if (process.env.GITHUB_STEP_SUMMARY) {
     );
   }
   if (selectedTestTargets) {
+    const adaptiveOmissions = [
+      ...new Set(
+        nodeSelectionReasons
+          .filter(({ rule }) => rule === "adaptive-qualified-unchanged")
+          .flatMap(({ targets }) => targets),
+      ),
+    ];
     /** @type {Map<string, Set<string>>} */
     const reasons = new Map();
     for (const { rule, targets } of nodeSelectionReasons) {
@@ -2092,6 +2243,9 @@ if (process.env.GITHUB_STEP_SUMMARY) {
       `### PR Node test selection (${nodeSelectionMode})\n\n` +
         `Selected ${selectedTestTargets.length} files; ${changedNodeTestShards?.filter((shard) => !shard.requiresDist).length ?? 0} Node rows. ` +
         "Set repository variable `OPENCLAW_CI_NODE_SELECTION=full` to restore the previous selection.\n\n" +
+        (adaptiveOmissions.length
+          ? `Adaptive Markdown pilot omitted ${adaptiveOmissions.length} unchanged qualified tests. Scheduled and release runs retain the full suite.\n\n<details><summary>Omitted Markdown tests</summary>\n<pre>${adaptiveOmissions.map(escapeSummaryHtml).join("\n")}</pre>\n</details>\n\n`
+          : "") +
         "<details><summary>Selected files and selection rules</summary>\n<pre>" +
         selectedTestTargets
           .map((file) =>
@@ -2106,9 +2260,11 @@ if (process.env.GITHUB_STEP_SUMMARY) {
   appendFileSync(
     process.env.GITHUB_STEP_SUMMARY,
     `### CI release qualification\n\n- Scope: \`${releaseScope}\`\n- Target: \`${checkoutRevision}\`\n` +
-      (npmQualification
+      (deferMacosSwift
         ? "- Native app qualification: deferred; Linux, macOS, and Windows Node coverage retained.\n"
-        : ""),
+        : npmQualification
+          ? "- Native app qualification: deferred except macOS Swift; Linux, macOS, and Windows Node coverage retained.\n"
+          : ""),
   );
 }
 

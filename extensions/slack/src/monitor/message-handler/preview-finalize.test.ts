@@ -3,11 +3,10 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const editSlackMessageMock = vi.fn();
 
+// mock-isolation: Capture preview edits without Slack API calls.
 vi.mock("../../actions.js", () => ({
-  editSlackMessage: (...args: unknown[]) =>
-    editSlackMessageMock(...(args as Parameters<typeof editSlackMessageMock>)),
-  editSlackRenderedMessage: (...args: unknown[]) =>
-    editSlackMessageMock(...(args as Parameters<typeof editSlackMessageMock>)),
+  editSlackMessage: editSlackMessageMock,
+  editSlackRenderedMessage: editSlackMessageMock,
 }));
 
 let finalizeSlackPreviewEdit: typeof import("./preview-finalize.js").finalizeSlackPreviewEdit;
@@ -39,12 +38,15 @@ function finalize(client: WebClient, overrides: Partial<FinalizeParams> = {}) {
 }
 
 function createClient(historyMessages: Array<Record<string, unknown>> = []) {
-  return {
+  const replies = vi.fn<WebClient["conversations"]["replies"]>();
+  replies.mockResolvedValue({ ok: true, messages: [] });
+  const client = {
     conversations: {
       history: vi.fn(async () => ({ messages: historyMessages })),
-      replies: vi.fn(async () => ({ messages: [] })),
+      replies,
     },
   } as unknown as WebClient;
+  return { client, replies };
 }
 
 describe("finalizeSlackPreviewEdit", () => {
@@ -57,29 +59,22 @@ describe("finalizeSlackPreviewEdit", () => {
   });
 
   it("recovers an applied edit beyond the first busy-thread readback page", async () => {
-    editSlackMessageMock.mockReset().mockRejectedValueOnce(new Error("socket closed after commit"));
     const messageId = "171234.000101";
     const threadMessages = Array.from({ length: 102 }, (_, index) => ({
       ts: `171234.${String(index).padStart(6, "0")}`,
       text: index === 101 ? "final answer" : `message ${String(index)}`,
     }));
-    const client = createClient();
-    (client.conversations.replies as unknown as ReturnType<typeof vi.fn>).mockImplementationOnce(
-      ({
-        oldest,
-        latest,
-        inclusive,
-        limit,
-      }: Parameters<WebClient["conversations"]["replies"]>[0]) => ({
-        messages: threadMessages
-          .filter(
-            (message) =>
-              (!oldest || message.ts > oldest || (inclusive && message.ts === oldest)) &&
-              (!latest || message.ts < latest || (inclusive && message.ts === latest)),
-          )
-          .slice(0, limit),
-      }),
-    );
+    const { client, replies } = createClient();
+    replies.mockImplementationOnce(async ({ oldest, latest, inclusive, limit }) => ({
+      ok: true,
+      messages: threadMessages
+        .filter(
+          (message) =>
+            (!oldest || message.ts > oldest || (inclusive && message.ts === oldest)) &&
+            (!latest || message.ts < latest || (inclusive && message.ts === latest)),
+        )
+        .slice(0, limit),
+    }));
 
     await expect(
       finalize(client, { messageId, threadTs: "171234.000000" }),
@@ -87,7 +82,7 @@ describe("finalizeSlackPreviewEdit", () => {
   });
 
   it("rethrows when readback does not match the expected final text", async () => {
-    const client = createClient([{ ts: "171234.567", text: "partial draft" }]);
+    const { client } = createClient([{ ts: "171234.567", text: "partial draft" }]);
 
     await expect(finalize(client)).rejects.toThrow("socket closed");
   });
@@ -101,7 +96,7 @@ describe("finalizeSlackPreviewEdit", () => {
           text: { type: "mrkdwn", text: fallbackText, verbatim: true },
         },
       ];
-      const client = createClient([
+      const { client } = createClient([
         { ts: "171234.567", text: fallbackText, ...(withBlocks ? { blocks: fallbackBlocks } : {}) },
       ]);
 

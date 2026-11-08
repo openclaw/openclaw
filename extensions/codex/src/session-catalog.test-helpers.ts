@@ -282,15 +282,7 @@ type SessionEntrySummary = ReturnType<SessionRuntime["listSessionEntries"]>[numb
 type OptionalCatalogAgent<T extends { agentId?: string }> = Omit<T, "agentId"> & {
   agentId?: string;
 };
-type CatalogMethodName = "list" | "read" | "continueSession" | "archive" | "openTerminal";
-type CatalogMethod<K extends CatalogMethodName> = (
-  params: OptionalCatalogAgent<Parameters<NonNullable<RegisteredSessionCatalogProvider[K]>>[0]>,
-) => ReturnType<NonNullable<RegisteredSessionCatalogProvider[K]>>;
-type SessionCatalogProvider = {
-  [K in keyof RegisteredSessionCatalogProvider]: K extends CatalogMethodName
-    ? CatalogMethod<K>
-    : RegisteredSessionCatalogProvider[K];
-};
+type SessionCatalogProvider = RegisteredSessionCatalogProvider;
 
 function bindTestCatalogOwner(provider: RegisteredSessionCatalogProvider): SessionCatalogProvider {
   const forAgent = <P extends { agentId?: string }>(params: P) => ({ agentId: "main", ...params });
@@ -502,7 +494,6 @@ export function createRuntime(
     entries?: SessionEntrySummary[];
     nodes?: Array<Record<string, unknown>>;
     invoke?: PluginRuntime["nodes"]["invoke"];
-    failAfterCreate?: () => boolean;
   } = {},
 ) {
   const entries = params.entries ?? [];
@@ -543,9 +534,6 @@ export function createRuntime(
         afterCreate: async (created) => {
           refresh();
           const patch = await createParams.afterCreate?.(created);
-          if (params.failAfterCreate?.()) {
-            throw new Error("session finalization failed after binding commit");
-          }
           if (!patch) {
             throw new Error("catalog fixture requires its initializer's final patch");
           }

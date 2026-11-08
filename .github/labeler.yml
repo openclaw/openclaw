@@ -1,3 +1,7 @@
+"plugin: openclaw-id-access":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/openclaw-id-access/**"
 "plugin: azure-speech":
   - changed-files:
       - any-glob-to-any-file:
@@ -101,6 +105,19 @@
           - "extensions/logbook/**"
           - "docs/plugins/logbook.md"
           - "docs/plugins/reference/logbook.md"
+"plugin: knowledge":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/knowledge/**"
+          - "docs/plugins/knowledge.md"
+          - "docs/plugins/knowledge/**"
+          - "docs/plugins/reference/knowledge.md"
+"plugin: skill-workshop":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/skill-workshop/**"
+          - "docs/plugins/reference/skill-workshop.md"
+          - "docs/tools/skill-workshop.md"
 "plugin: imap":
   - changed-files:
       - any-glob-to-any-file:
@@ -555,6 +572,11 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/acpx/**"
+"extensions: abliteration":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/abliteration/**"
+          - "docs/providers/abliteration.md"
 "extensions: arcee":
   - changed-files:
       - any-glob-to-any-file:
@@ -588,6 +610,10 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/crabbox/**"
+"extensions: deep-research":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/deep-research/**"
 "extensions: deepseek":
   - changed-files:
       - any-glob-to-any-file:
@@ -681,6 +707,16 @@
       - any-glob-to-any-file:
           - "extensions/litellm/**"
           - "docs/providers/litellm.md"
+"extensions: rerank":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/rerank/**"
+          - "docs/providers/rerank.md"
+"extensions: liquid-ai":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/liquid-ai/**"
+          - "docs/providers/liquid-ai.md"
 "extensions: bifrost":
   - changed-files:
       - any-glob-to-any-file:
@@ -971,6 +1007,12 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/parallel/**"
+"extensions: particle":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/particle/**"
+          - "docs/providers/particle.md"
+          - "docs/plugins/reference/particle.md"
 "extensions: perplexity":
   - changed-files:
       - any-glob-to-any-file:

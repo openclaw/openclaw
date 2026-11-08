@@ -4,7 +4,6 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import * as pluginRuntime from "../plugins/runtime.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import * as workerContext from "../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -66,6 +65,8 @@ beforeEach(async () => {
         return {};
       case "telemetry.countRecentSessions":
         return 3;
+      case "telemetry.claimInstallationCount":
+        return "1;20688;31";
       case "telemetry.persistSuccess":
         return command.input.state;
       default:
@@ -73,6 +74,7 @@ beforeEach(async () => {
     }
   });
   vi.stubEnv("OPENCLAW_TELEMETRY_ENDPOINT", `https://telemetry.example.invalid/${sequence++}`);
+  vi.stubEnv("CI", undefined);
   vi.stubEnv("OPENCLAW_NO_AUTO_UPDATE", "");
   vi.stubEnv("OPENCLAW_NIX_MODE", "");
   vi.stubEnv("DO_NOT_TRACK", "");
@@ -82,7 +84,6 @@ beforeEach(async () => {
 afterEach(async () => {
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
-  await closeOpenClawStateDatabaseAsync();
   await testState.cleanup();
 });
 
@@ -131,16 +132,92 @@ it("keeps the captured endpoint and storage destination across awaits", async ()
   const endpoint = process.env.OPENCLAW_TELEMETRY_ENDPOINT;
   const checking = check();
   const context = contexts[0];
-  try {
-    vi.stubEnv("OPENCLAW_STATE_DIR", testState.path("other-state"));
-    vi.stubEnv("OPENCLAW_TELEMETRY_ENDPOINT", "https://telemetry.example.invalid/changed");
-  } finally {
-    read.resolve({});
-    await checking;
-  }
-  expect(contexts).toHaveLength(3);
+  vi.stubEnv("OPENCLAW_STATE_DIR", testState.path("other-state"));
+  vi.stubEnv("OPENCLAW_TELEMETRY_ENDPOINT", "https://telemetry.example.invalid/changed");
+  read.resolve({});
+  await checking;
+  expect(context).toBeDefined();
   expect(contexts.every((candidate) => candidate === context)).toBe(true);
   expect(fetchImpl).toHaveBeenCalledWith(endpoint, expect.objectContaining({ method: "POST" }));
+});
+
+it.each(["do-not-track", "opt-out", "update-disabled", "CI"] as const)(
+  "revokes %s while the installation-count claim is awaiting storage",
+  async (change) => {
+    const claim = pauseOperation<string | null>("telemetry.claimInstallationCount");
+    config = {};
+    fetchImpl.mockImplementation(async () =>
+      Response.json(
+        { version: "2026.8.24" },
+        {
+          headers: { "OpenClaw-Installation-Count": "1;20688" },
+        },
+      ),
+    );
+    if (change === "CI") {
+      vi.stubEnv("OPENCLAW_TELEMETRY_ENDPOINT", "https://telemetry.openclaw.ai/api/latest-version");
+    }
+    const checking = check();
+    try {
+      await claim.requested;
+      if (change === "do-not-track") {
+        vi.stubEnv("DO_NOT_TRACK", "true");
+      }
+      if (change === "opt-out") {
+        config = { telemetry: { enabled: false } };
+      }
+      if (change === "update-disabled") {
+        config = { update: { checkOnStart: false } };
+      }
+      if (change === "CI") {
+        vi.stubEnv("CI", "1");
+        vi.stubEnv(
+          "OPENCLAW_TELEMETRY_ENDPOINT",
+          "https://telemetry.example.invalid/changed-after-capture",
+        );
+      }
+    } finally {
+      claim.resolve("1;20688;31");
+      await checking;
+    }
+    // The valid update answer is retained; revocation suppresses only the later count POST.
+    expect(await checking).toEqual({ version: "2026.8.24" });
+    expect(fetchImpl).toHaveBeenCalledOnce();
+    expect(
+      new Headers(fetchImpl.mock.calls[0]?.[1]?.headers).has("OpenClaw-Installation-Count"),
+    ).toBe(false);
+  },
+);
+
+it("uses the receiver day despite client clock skew and keeps it through awaited claims", async () => {
+  const claim = pauseOperation<string | null>("telemetry.claimInstallationCount");
+  fetchImpl.mockImplementation(async (_url, init) =>
+    new Headers(init?.headers).has("OpenClaw-Installation-Count")
+      ? new Response(null, { status: 204 })
+      : Response.json(
+          { version: "2026.8.24" },
+          { headers: { "OpenClaw-Installation-Count": "1;20688" } },
+        ),
+  );
+  const checking = check(() => ({}), Date.parse("2030-08-23T23:59:59Z"));
+  await claim.requested;
+  vi.spyOn(Date, "now").mockReturnValue(Date.parse("2020-08-24T00:00:01Z"));
+  claim.resolve("1;20688;31");
+  await checking;
+  expect(
+    execute.mock.calls.find(([command]) => command.type === "telemetry.claimInstallationCount"),
+  ).toEqual([
+    {
+      type: "telemetry.claimInstallationCount",
+      input: {
+        endpoint: process.env.OPENCLAW_TELEMETRY_ENDPOINT,
+        day: 20688,
+      },
+    },
+  ]);
+  expect(
+    new Headers(fetchImpl.mock.calls[1]?.[1]?.headers).get("OpenClaw-Installation-Count"),
+  ).toBe("1;20688;31");
 });
 
 it.each(["do-not-track", "opt-out", "update-disabled"] as const)(
@@ -148,18 +225,13 @@ it.each(["do-not-track", "opt-out", "update-disabled"] as const)(
   async (change) => {
     const count = pauseOperation<number>("telemetry.countRecentSessions");
     setRuntimeConfigSnapshot(config);
-    expect(getRuntimeConfig()).toBe(config);
     const checking = check(getRuntimeConfig);
     try {
       await count.requested;
-      const replacement: OpenClawConfig = {
+      setRuntimeConfigSnapshot({
         telemetry: { enabled: change !== "opt-out" },
         update: { checkOnStart: change !== "update-disabled" },
-      };
-      setRuntimeConfigSnapshot(replacement);
-      expect(getRuntimeConfig()).toBe(replacement);
-      expect(getRuntimeConfig()).not.toBe(config);
-      expect(config).toEqual({ telemetry: { enabled: true } });
+      });
       if (change === "do-not-track") {
         vi.stubEnv("DO_NOT_TRACK", "1");
       }

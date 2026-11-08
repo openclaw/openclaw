@@ -374,7 +374,9 @@ the decoded value only if it matches the schema. Valid string results stay uncha
 integer literals outside JavaScript's safe range are preserved as strings.
 An invalid payload gets one corrective nudge. If no payload is submitted, or the
 retry still does not validate, the collector completion keeps the child's raw
-text, leaves `structured` unset, and includes `schemaError`. The low-level `agents_wait`
+text, leaves `structured` unset, and includes `schemaError`. Later `structured_output`
+calls in that run are not evaluated; they return `reason: "retry_budget_exhausted"`
+rather than a verdict on the new payload. The low-level `agents_wait`
 result exposes those fields for explicit recovery logic.
 
 ### Keep collector groups flat
@@ -612,6 +614,13 @@ type AgentsWaitResult = {
   }>;
 };
 ```
+
+`not_found` means no collector run with that ID is visible to the caller. When
+every requested ID is your own announcing child (started without `collect=true`
+and with completion messages enabled), the call is rejected as an input error
+instead: its result arrives as a completion message to your session, so continue
+other work or end the turn. Mixed batches keep their other results and report
+those children as `not_found`.
 
 A completed item can contain partial `structured` data and still have
 `status: "failed"` when the provider or runtime fails afterward. In that case,

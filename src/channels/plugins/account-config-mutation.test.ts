@@ -32,22 +32,20 @@ function prepare(
 
 it("prepares, validates, applies, and reports lifecycle changes in order", async () => {
   const callOrder: string[] = [];
-  const beforePersistentEffect = vi.fn(async () => {
-    callOrder.push("authority");
-  });
+  function record<T>(name: string, result: T) {
+    callOrder.push(name);
+    return result;
+  }
+  const beforePersistentEffect = async () => record("authority", undefined);
   const cfg = { channels: { "test-chat": { token: "old-token" } } } satisfies OpenClawConfig;
   const plugin = {
     ...createChannelTestPluginBase({ id: "test-chat" }),
     setup: {
       singleAccountKeysToMove: ["token"],
-      prepareAccountConfigInput: ({ input }: { input: Record<string, unknown> }) => {
-        callOrder.push("prepare");
-        return { ...input, token: "prepared-token" };
-      },
-      validateInput: ({ input }: { input: Record<string, unknown> }) => {
-        callOrder.push("validate");
-        return input.token === "prepared-token" ? null : "input was not prepared";
-      },
+      prepareAccountConfigInput: ({ input }: { input: Record<string, unknown> }) =>
+        record("prepare", { ...input, token: "prepared-token" }),
+      validateInput: ({ input }: { input: Record<string, unknown> }) =>
+        record("validate", input.token === "prepared-token" ? null : "input was not prepared"),
       applyAccountConfig: ({ cfg: inputCfg, accountId, input }) => {
         callOrder.push("apply");
         const accounts: Record<string, { token: string }> =
@@ -71,16 +69,14 @@ it("prepares, validates, applies, and reports lifecycle changes in order", async
     },
   } as ChannelPlugin;
 
-  const options = { cfg, requestedAccountId: "Work", beforePersistentEffect };
+  const options = { cfg, runtime, requestedAccountId: "Work", beforePersistentEffect };
   const prepared = await prepare(plugin, { token: "raw-token" }, options);
   assert(prepared.ok, "expected prepared account configuration");
 
   const applied = await applyPreparedChannelAccountConfiguration({
-    cfg,
+    ...options,
     channel: "test-chat",
     prepared: prepared.value,
-    runtime,
-    beforePersistentEffect,
   });
 
   expect(callOrder).toEqual([

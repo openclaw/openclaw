@@ -2,7 +2,7 @@ import { expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiSessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
-import { exactButton } from "./chat-flow.test-support.ts";
+import { exactButton, chatMessage } from "./chat-flow.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import { captureFrame } from "./sidebar-assertions.test-support.ts";
 
@@ -37,10 +37,7 @@ suite.define(() => {
           sessionKey: "agent:main:main",
           heldMethods: [method],
           historyMessages: [
-            {
-              role: "assistant",
-              content: [{ type: "text", text: "The deployment checklist is paused for review." }],
-            },
+            chatMessage("assistant", "The deployment checklist is paused for review."),
           ],
           sessions: [
             createControlUiSessionRow("agent:main:main", "Deployment checklist", now, {
@@ -73,7 +70,7 @@ suite.define(() => {
           ]);
         }
         await exactButton(dialog, "Cancel").click();
-        expect(await input.inputValue()).toBe(`/goal ${proposed}`);
+        expect(await input.inputValue()).toBe(proposed);
         expect(await gateway.getRequests(method)).toHaveLength(0);
         if (artifacts) {
           await captureFrame(artifacts, "cancelled.png", page.locator("body"), [card, input]);
@@ -102,7 +99,7 @@ suite.define(() => {
           .poll(() => card.locator(".agent-chat__goal-objective").textContent())
           .toBe(proposed);
         expect(await card.locator(".agent-chat__goal-label").textContent()).toBe("Goal paused");
-        expect(await card.locator(".agent-chat__goal-elapsed").textContent()).toBe("1m 00s");
+        expect(await card.locator(".agent-chat__goal-elapsed").textContent()).toBe("1m");
         expect(await gateway.getRequests("chat.send")).toHaveLength(0);
         expect(await gateway.getRequests("sessions.goal.clear")).toHaveLength(0);
         if (artifacts) {
@@ -194,7 +191,7 @@ suite.define(() => {
         await page.goto(suite.server.baseUrl + "chat/main");
         const card = page.locator(".agent-chat__goal");
         const input = page.locator(".agent-chat__composer-combobox textarea");
-        await exactButton(page, "Stop generating").waitFor();
+        await exactButton(page, "Stop").waitFor();
         const proposal = "Verify the deployment and write the rollout notes";
         await input.fill("/goal " + proposal);
         await exactButton(page, "Replace objective").waitFor();
@@ -205,7 +202,7 @@ suite.define(() => {
         const dialog = page.getByRole("dialog", { name: "Replace goal objective?" });
         await dialog.waitFor();
         expect(await dialog.textContent()).toContain(
-          "Interrupt this turn, update the objective, then resume the goal.",
+          "Interrupt this reply, replace the objective, and resume the goal.",
         );
         if (artifacts) {
           await captureFrame(artifacts, "running-confirmation.png", page.locator("body"), [
@@ -215,7 +212,7 @@ suite.define(() => {
           ]);
         }
         await exactButton(dialog, "Cancel").click();
-        expect(await input.inputValue()).toBe("/goal " + proposal);
+        expect(await input.inputValue()).toBe(proposal);
         expect(await gateway.getRequests(method)).toHaveLength(0);
         expect(await gateway.getRequests("chat.abort")).toHaveLength(0);
         if (artifacts) {
@@ -225,6 +222,7 @@ suite.define(() => {
           ]);
         }
         // The ordinary picker must remain usable while the same turn is executing.
+        await input.press("Escape");
         await input.fill("/goal");
         await input.press("Enter");
         await page.locator(".agent-chat__goal-mode").waitFor();
@@ -279,15 +277,10 @@ suite.define(() => {
           seq: 2,
           state: "delta",
           deltaText: "I have resumed with the updated objective and am drafting the rollout notes.",
-          message: {
-            role: "assistant",
-            content: [
-              {
-                type: "text",
-                text: "I have resumed with the updated objective and am drafting the rollout notes.",
-              },
-            ],
-          },
+          message: chatMessage(
+            "assistant",
+            "I have resumed with the updated objective and am drafting the rollout notes.",
+          ),
         });
         await page
           .getByRole("paragraph")
@@ -296,7 +289,7 @@ suite.define(() => {
           })
           .waitFor();
         await card.getByText("Pursuing goal", { exact: true }).waitFor();
-        await exactButton(page, "Stop generating").waitFor();
+        await exactButton(page, "Stop").waitFor();
         expect(await gateway.getRequests("chat.send")).toHaveLength(0);
         if (artifacts) {
           await captureFrame(artifacts, "running-after.png", page.locator("body"), [card, input]);

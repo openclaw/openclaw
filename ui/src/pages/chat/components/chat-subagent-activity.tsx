@@ -1,14 +1,14 @@
+import { Dynamic } from "@solidjs/web";
 import { For, Show } from "solid-js";
-import { currentThemeBranding } from "../../../app/theme-branding.ts";
+import { fnv1aUtf16 } from "../../../../../src/shared/fnv1a.js";
 import { ElapsedTime } from "../../../components/elapsed-time.tsx";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { createTextOverflow } from "../../../components/solid/text-overflow.ts";
-import { ThemeBrandIcon } from "../../../components/theme-brand-icon.tsx";
 import { registerChatDetailsEnglish } from "../../../i18n/locales/en-chat-details.ts";
 import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
-import { fnv1aUtf16 } from "../../../lib/fnv1a.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import "./chat-subagent-activity.css";
+import type { DetailsSubagent } from "../chat-details-snapshot.ts";
 import type { ChatSubagentActivity } from "../chat-subagent-wait.ts";
 
 registerEnglishCatalog(registerChatSessionEnglish);
@@ -16,13 +16,13 @@ registerEnglishCatalog(registerChatDetailsEnglish);
 
 export type SubagentActivityProps = {
   rows: readonly ChatSubagentActivity[];
+  /** A bounded display receipt, never a hydrated child roster. */
+  presentation?: readonly DetailsSubagent[];
+  onPresentation?: (rows: readonly ChatSubagentActivity[]) => void;
   onOpenSubagent?: (key: string) => void;
   onOpenSession?: (key: string) => void;
-  compact?: boolean;
-  presented?: boolean;
-  /** Limits rendering and narration subscriptions to the displayed rows. */
+  /** Limits rendering to the displayed rows. */
   limit?: number;
-  turnStartedAt?: number;
 };
 
 const STATUS_KEYS = {
@@ -34,10 +34,14 @@ const STATUS_KEYS = {
   stopped: "chat.sessionDetails.stopped",
 } as const;
 
-function SubagentActivityRow(props: SubagentActivityProps & { row: ChatSubagentActivity }) {
+function SubagentActivityRow(props: SubagentActivityProps & { row: DetailsSubagent }) {
   const status = () => t(STATUS_KEYS[props.row.status]);
   const open = () =>
-    props.row.listed ? (props.onOpenSubagent ?? props.onOpenSession) : props.onOpenSession;
+    props.presentation
+      ? undefined
+      : props.row.listed
+        ? (props.onOpenSubagent ?? props.onOpenSession)
+        : props.onOpenSession;
   const steps = () =>
     props.row.progress &&
     t("chat.sessionDetails.planSteps", {
@@ -46,35 +50,18 @@ function SubagentActivityRow(props: SubagentActivityProps & { row: ChatSubagentA
     });
   const description = () =>
     [props.row.label, status(), props.row.activity, steps()].filter(Boolean).join(". ");
-  const content = () => (
-    <>
-      <Show
-        when={props.compact}
-        fallback={
-          <span
-            class={[
-              "chat-subagent-activity__icon",
-              { "chat-reading-indicator": props.row.status === "running" },
-            ]}
-            aria-hidden="true"
-          >
-            <Show when={props.row.status === "running"} fallback={<Icon name="clock" />}>
-              <Show
-                when={currentThemeBranding().brandIcon === "claw"}
-                fallback={
-                  <Show
-                    when={currentThemeBranding().brandIcon === "mark"}
-                    fallback={<ThemeBrandIcon />}
-                  >
-                    <Icon name="mark" />
-                  </Show>
-                }
-              >
-                <Icon name="claw" />
-              </Show>
-            </Show>
-          </span>
-        }
+  return (
+    <div role="listitem" data-subagent-session-key={props.row.key}>
+      <Dynamic
+        component={open() ? "button" : "div"}
+        class={[
+          "chat-subagent-activity__row",
+          { "chat-subagent-activity__row--preview": Boolean(props.row.activity) },
+        ]}
+        type={open() ? "button" : undefined}
+        title={description()}
+        aria-label={open() ? description() : undefined}
+        onClick={open() ? () => open()?.(props.row.key) : undefined}
       >
         <span
           class="chat-details__agent-avatar"
@@ -84,25 +71,18 @@ function SubagentActivityRow(props: SubagentActivityProps & { row: ChatSubagentA
         >
           <Icon name="bot" />
         </span>
-      </Show>
-      <span
-        ref={createTextOverflow(() => props.row.label)}
-        class="chat-subagent-activity__name"
-        title={props.row.label}
-      >
-        {props.row.label}
-      </span>
-      <Show when={!props.compact}>
-        <span class="chat-subagent-activity__separator" aria-hidden="true">
-          ·
+        <span
+          ref={createTextOverflow(() => props.row.label)}
+          class="chat-subagent-activity__name"
+          title={props.row.label}
+        >
+          {props.row.label}
         </span>
-      </Show>
-      <span class="chat-subagent-activity__status">{props.row.activity || status()}</span>
-      <Show when={props.compact}>
+        <span class="chat-subagent-activity__status">{props.row.activity || status()}</span>
         <span class="chat-subagent-activity__elapsed-compact" aria-hidden="true">
-          <Show when={props.row.status !== "queued" && props.row.session.startedAt}>
+          <Show when={props.row.status !== "queued" && props.row.session?.startedAt}>
             {(startedAt) => (
-              <ElapsedTime startMs={startedAt()} endMs={props.row.session.endedAt ?? null} />
+              <ElapsedTime startMs={startedAt()} endMs={props.row.session?.endedAt ?? null} />
             )}
           </Show>
         </span>
@@ -119,64 +99,22 @@ function SubagentActivityRow(props: SubagentActivityProps & { row: ChatSubagentA
             </span>
           )}
         </Show>
-      </Show>
-    </>
-  );
-  return (
-    <div role="listitem" data-subagent-session-key={props.row.key}>
-      <Show
-        when={open()}
-        fallback={
-          <div
-            class={[
-              "chat-subagent-activity__row",
-              { "chat-subagent-activity__row--preview": Boolean(props.row.activity) },
-            ]}
-            title={description()}
-          >
-            {content()}
-          </div>
-        }
-      >
-        <button
-          class={[
-            "chat-subagent-activity__row",
-            { "chat-subagent-activity__row--preview": Boolean(props.row.activity) },
-          ]}
-          type="button"
-          title={description()}
-          aria-label={description()}
-          onClick={() => open()?.(props.row.key)}
-        >
-          {content()}
-        </button>
-      </Show>
+      </Dynamic>
     </div>
   );
 }
 
 export function SubagentActivity(props: SubagentActivityProps) {
+  const rows = () => props.presentation ?? props.rows;
   return (
-    <Show when={props.rows.length > 0}>
-      <div class="chat-subagent-activity-shell">
-        <div class="chat-subagent-activity" role="list" aria-label={t("chat.subagentsPanel.title")}>
-          <For
-            each={props.limit === undefined ? props.rows : props.rows.slice(0, props.limit)}
-            keyed={(row) => row.key}
-          >
-            {(row) => <SubagentActivityRow {...props} row={row()} />}
-          </For>
-        </div>
-        <Show when={props.turnStartedAt !== undefined}>
-          <span
-            class="chat-subagent-activity__elapsed"
-            title={t("chat.turnElapsed")}
-            aria-live="off"
-          >
-            <span class="sr-only">{t("chat.turnElapsed")}: </span>
-            <ElapsedTime startMs={props.turnStartedAt} />
-          </span>
-        </Show>
+    <Show when={rows().length > 0}>
+      <div class="chat-subagent-activity" role="list" aria-label={t("chat.subagentsPanel.title")}>
+        <For
+          each={props.limit === undefined ? rows() : rows().slice(0, props.limit)}
+          keyed={(row) => row.key}
+        >
+          {(row) => <SubagentActivityRow {...props} row={row()} />}
+        </For>
       </div>
     </Show>
   );

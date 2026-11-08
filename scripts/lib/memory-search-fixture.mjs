@@ -61,7 +61,7 @@ export function embedding(seed, rounded = false) {
   return vector.map((value) => (rounded ? Math.fround(value / norm) : value / norm));
 }
 
-export function createMemorySearchFixture(n) {
+export function createMemorySearchFixture(n, createEmbedding = embedding) {
   if (!Number.isInteger(n) || n <= 0 || n % 10 !== 0) {
     throw new Error("Fixture chunk count must be a positive multiple of 10");
   }
@@ -110,7 +110,7 @@ export function createMemorySearchFixture(n) {
         : { source }),
       entry,
       chunks,
-      embeddings: chunks.map((_, index) => embedding(sourceIndex * 10 + index)),
+      embeddings: chunks.map((_, index) => createEmbedding(sourceIndex * 10 + index)),
       model: identity.model,
       now: 1_760_000_000_000,
       vectorReady: true,

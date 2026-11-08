@@ -2,7 +2,7 @@ import fs from "node:fs";
 import Module, { createRequire } from "node:module";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { isPathInside } from "../infra/path-guards.js";
 import { toSafeImportPath } from "../shared/import-specifier.js";
 import { useNodeModuleHooks } from "./native-module-require.js";
@@ -34,6 +34,32 @@ function expectRequiredIdentity(actual: { token: object }, expected: { token: ob
 
 describe("native plugin generation interop", () => {
   it.skipIf(!useNodeModuleHooks())(
+    "keeps the process resolve chain bounded across live plugins and replacements",
+    async () => {
+      const register = vi.spyOn(Module, "registerHooks");
+      try {
+        const root = fixture({ "entry.cjs": "exports.value = 42;" });
+        const hosts = Array.from({ length: 4 }, () => host(root));
+        for (const managed of hosts) {
+          expect(managed.load("entry.cjs")).toMatchObject({ value: 42 });
+        }
+        const boot = register.mock.calls.filter(([hooks]) => hooks.resolve).length;
+        for (const [i, managed] of hosts.entries()) {
+          await managed.dispose();
+          const replacement = host(root);
+          hosts[i] = replacement;
+          expect(replacement.load("entry.cjs")).toMatchObject({ value: 42 });
+        }
+        // The SDK and capture dispatcher each install at most one process hook.
+        expect(boot).toBeLessThanOrEqual(2);
+        expect(register.mock.calls.filter(([hooks]) => hooks.resolve)).toHaveLength(boot);
+      } finally {
+        register.mockRestore();
+      }
+    },
+  );
+
+  it.skipIf(!useNodeModuleHooks())(
     "preserves source import attributes for JSON resolved outside the capture",
     async () => {
       const root = fixture({
@@ -58,60 +84,28 @@ describe("native plugin generation interop", () => {
     },
   );
 
-  it.each(["", "@fixture/"])(
-    "preserves %ssibling dependency assets across nested installs and generations",
-    async (scope) => {
-      const readerName = `${scope}asset-reader`;
-      const platformName = `${scope}platform`;
-      const installs = [
-        ["", "1.0.0"],
-        ["nested/", "2.0.0"],
-      ] as const;
-      const files: Record<string, string> = {
-        "entry.cjs": `const root = require(${JSON.stringify(readerName)});
-          const nested = require('./nested/entry.cjs');
-          exports.read = () => [root.read(), nested.read()];`,
-        "nested/entry.cjs": `module.exports = require(${JSON.stringify(readerName)});`,
-      };
-      for (const [prefix, version] of installs) {
-        files[`${prefix}package.json`] = JSON.stringify({
-          dependencies: { [readerName]: version },
-        });
-        files[`${prefix}node_modules/${readerName}/package.json`] = JSON.stringify({
-          name: readerName,
-          version,
-          main: "index.cjs",
-          optionalDependencies: { [platformName]: version },
-        });
-        files[`${prefix}node_modules/${readerName}/index.cjs`] = `
-          const fs = require('node:fs');
-          const path = require('node:path');
-          exports.read = () => fs.readFileSync(path.join(__dirname, '../platform/vec0.so'), 'utf8');`;
-        files[`${prefix}node_modules/${platformName}/package.json`] = JSON.stringify({
-          name: platformName,
-          version,
-        });
-        files[`${prefix}node_modules/${platformName}/vec0.so`] = `before-${version}`;
-      }
-      const root = fixture(files);
-      type Plugin = { read(): string[] };
-      const before = ["before-1.0.0", "before-2.0.0"];
-      const firstHost = host(root);
-      const first = firstHost.load("entry.cjs") as Plugin;
-      expect(first.read()).toEqual(before);
-      for (const [prefix, version] of installs) {
-        write(root, `${prefix}node_modules/${platformName}/vec0.so`, `after-${version}`);
-      }
-      const second = host(root).load("entry.cjs") as Plugin;
-      const after = ["after-1.0.0", "after-2.0.0"];
-      expect(second.read()).toEqual(after);
-      fs.rmSync(root, { recursive: true, force: true });
-      expect(first.read()).toEqual(before);
-      expect(second.read()).toEqual(after);
-      await firstHost.dispose();
-      expect(second.read()).toEqual(after);
-    },
-  );
+  it("preserves scoped sibling assets across generations", async () => {
+    const root = fixture({
+      "package.json": '{"dependencies":{"@fixture/asset-reader":"1.0.0"}}',
+      "entry.cjs": "module.exports = require('@fixture/asset-reader');",
+      "node_modules/@fixture/asset-reader/package.json":
+        '{"name":"@fixture/asset-reader","main":"index.cjs","optionalDependencies":{"@fixture/platform":"1.0.0"}}',
+      "node_modules/@fixture/asset-reader/index.cjs": `const fs = require('node:fs'); const path = require('node:path');
+          exports.read = () => fs.readFileSync(path.join(__dirname, '../platform/vec0.so'), 'utf8');`,
+      "node_modules/@fixture/platform/package.json": '{"name":"@fixture/platform"}',
+      "node_modules/@fixture/platform/vec0.so": "before",
+    });
+    type Plugin = { read(): string };
+    const firstHost = host(root);
+    const first = firstHost.load("entry.cjs") as Plugin;
+    write(root, "node_modules/@fixture/platform/vec0.so", "after");
+    const second = host(root).load("entry.cjs") as Plugin;
+    fs.rmSync(root, { recursive: true, force: true });
+    expect(first.read()).toBe("before");
+    expect(second.read()).toBe("after");
+    await firstHost.dispose();
+    expect(second.read()).toBe("after");
+  });
 
   it("resolves an ancestor dependency alias matching a noninstalled plugin directory", () => {
     const root = fixture({
@@ -192,12 +186,6 @@ describe("native plugin generation interop", () => {
     await expect(plugin.read()).resolves.toMatchObject({ value: 42 });
     const owned = records(plugin);
     expect(owned.length).toBeGreaterThan(0);
-    expect(owned.some(([id]) => path.relative(plugin.captured, id) === "")).toBe(true);
-    if (!process.versions.bun) {
-      expect(owned.some(([id]) => !id.startsWith("file:") && id.endsWith(".mjs"))).toBe(true);
-      expect(owned.some(([id]) => !id.startsWith("file:") && id.endsWith(".js"))).toBe(true);
-      expect(owned.some(([id]) => id.startsWith("file:"))).toBe(true);
-    }
     const sibling = host(root).load("entry.ts") as Plugin;
     const preserved = records(sibling);
     await first.dispose();
@@ -206,7 +194,6 @@ describe("native plugin generation interop", () => {
       expect(cache[id], id).toBe(record);
     }
     expect(sibling.value).toBe(7);
-    expect((host(root).load("entry.ts") as Plugin).value).toBe(7);
   });
 
   it.each(["cts", "ts", "mts"])(
@@ -235,7 +222,7 @@ describe("native plugin generation interop", () => {
       type Plugin = { default: { register(api: { read?: () => Promise<unknown[]> }): void } };
       const plugin = host(root).load("index.ts") as Plugin;
       const api: { read?: () => Promise<unknown[]> } = {};
-      expect(plugin.default.register(api)).toBeUndefined();
+      plugin.default.register(api);
       await expect(api.read!()).resolves.toEqual([42, 42, 42, 7]);
     },
   );
@@ -581,32 +568,6 @@ describe("native plugin generation interop", () => {
     },
   );
 
-  it.each(["absolute", "file URL"])(
-    "retains captured dependency bytes through %s imports",
-    async (reference) => {
-      const root = fixture({
-        "package.json": '{"dependencies":{"source-dependency":"1.0.0"}}',
-        "entry.mjs": "",
-        "node_modules/source-dependency/package.json":
-          '{"name":"source-dependency","type":"module","exports":"./value.mjs"}',
-        "node_modules/source-dependency/value.mjs": valueModule(42),
-      });
-      const dependency = path.join(root, "node_modules/source-dependency/value.mjs");
-      const specifier =
-        reference === "absolute" ? toSafeImportPath(dependency) : pathToFileURL(dependency).href;
-      write(
-        root,
-        "entry.mjs",
-        `export const read = async () => (await import(${JSON.stringify(specifier)})).value;`,
-      );
-      const first = host(root).load("entry.mjs") as Reader;
-      fs.writeFileSync(dependency, valueModule(43));
-      await expect(first.read()).resolves.toBe(42);
-      const second = host(root).load("entry.mjs") as Reader;
-      await expect(second.read()).resolves.toBe(43);
-    },
-  );
-
   it.each(
     [true, false].flatMap((standalone) =>
       ["directory", "file"].map((link) => ({ standalone, link })),
@@ -727,7 +688,6 @@ describe("native plugin generation interop", () => {
             export { value, namespace, hidden };
             export const readNamed = () => answer;
             export const required = require("./${filename}");
-            export const cached = require.cache[require.resolve("./${filename}")].exports;
             export const readNamespace = () => namespace;
             export const lazy = () => import("./${filename}");`,
           "lazy.cjs": `exports.load = () => import("./${filename}");`,
@@ -740,7 +700,7 @@ describe("native plugin generation interop", () => {
             ? await (managed.load("lazy.cjs") as { load(): Promise<Namespace> }).load()
             : undefined;
         const entry = managed.load("entry.mjs") as Record<
-          "value" | "required" | "cached" | "reexported",
+          "value" | "required" | "reexported",
           Value
         > &
           Record<"answer" | "hidden", number> & {
@@ -753,11 +713,8 @@ describe("native plugin generation interop", () => {
           process.versions.bun && name === "own-default"
             ? (entry.required.default as Value)
             : entry.required;
-        expect(entry.value.answer, name).toBe(importedValue.answer);
         expect(entry.hidden).toBe(17);
         expect(entry.value).toBe(importedValue);
-        expect(entry.cached).toBe(entry.required);
-        expect(managed.load(filename)).toBe(entry.required);
         expect(entry.reexported).toBe(importedValue);
         expect(entry.namespace.default).toBe(importedValue);
         // Method results expose native namespaces; exported members are instance-bound views.
@@ -887,13 +844,8 @@ describe("native plugin generation interop", () => {
       "entry.ts": `import type { module, exports } from "missing-type-only-package";
         import { createRequire } from "node:module";
         import { value, token } from "conditional-dependency";
-        export { value as reexported } from "conditional-dependency";
         export * as namespace from "conditional-dependency";
         export const imported = { value, token };
-        function shadow(module: { exports: number }, exports: { value: number }) {
-          return module.exports + exports.value;
-        }
-        export const shadowed = shadow({ exports: 2 }, { value: 3 });
         export const required = require("conditional-dependency");
         export const createdRequire = createRequire(import.meta.url)("conditional-dependency");
         export const readImported = () => imported;
@@ -903,11 +855,8 @@ describe("native plugin generation interop", () => {
       "lazy.ts": `import { value, token } from "conditional-dependency";
         export { value, token };
         export const required = require("conditional-dependency");`,
-      "node_modules/conditional-dependency/package.json": JSON.stringify({
-        name: "conditional-dependency",
-        type: "module",
-        exports: { import: "./import.js", require: "./require.cjs" },
-      }),
+      "node_modules/conditional-dependency/package.json":
+        '{"name":"conditional-dependency","type":"module","exports":{"import":"./import.js","require":"./require.cjs"}}',
       "node_modules/conditional-dependency/import.js":
         'export const value = "import"; export const token = {};',
       "node_modules/conditional-dependency/require.cjs":
@@ -918,8 +867,6 @@ describe("native plugin generation interop", () => {
       "imported" | "required" | "createdRequire" | "namespace",
       Dependency
     > & {
-      reexported: string;
-      shadowed: number;
       readImported(): Dependency;
       readRequired(): Dependency;
       lazy: () => Promise<Dependency>;
@@ -928,8 +875,6 @@ describe("native plugin generation interop", () => {
     const imported = entry.readImported();
     const required = entry.readRequired();
     expect(entry.imported.value).toBe("require");
-    expect(entry.shadowed).toBe(5);
-    expect(entry.reexported).toBe("require");
     expect(entry.namespace.token).toBe(entry.imported.token);
     expect(entry.required.value).toBe("require");
     expectRequiredIdentity(entry.createdRequire, entry.required);

@@ -53,7 +53,20 @@ For legacy SSE servers, reconnecting to the same session endpoint preserves the
 session. If the server announces a new endpoint, OpenClaw reconnects and
 initializes a fresh session before sending further tool calls.
 
+If a Streamable HTTP server does not confirm its session DELETE, OpenClaw logs a
+warning and continues local cleanup. Once the local transport and client close,
+the next turn can replace the runtime. Failed local cleanup still blocks
+replacement. The remote server may retain the abandoned session until it expires it.
+
 When OpenClaw's built-in MCP client cannot start a server, it retries with exponential backoff: 30 seconds, doubling up to 10 minutes. The runtime that encountered the first failure can retry once on its normal five-second catalog schedule, using a fresh connection after retiring the failed one. The first connection for a server configuration and requester still waits for bounded initialization and catalog listing. After a startup failure, turns never wait for retries: recovery runs in the background, and recovered tools become available at the next turn boundary. If that recovery attempt also fails, the same exponential backoff applies to it. Failure state survives ordinary session cleanup and is scoped to the server configuration and requester. The effective tool inventory keeps one unavailable notice per server while the failure persists, with that runtime's next retry time and a reachability check as the next step; recovery removes the notice without adding chat or transcript messages. Each failed retry logs once; skipped runs do not repeat the warning. A successful connection, config publication, or explicit MCP reload clears the backoff. Reload the process that owns the connection; a CLI reload does not reset a separate Gateway.
+
+Native OAuth authorization failures wait for a credential change instead of a
+timer. The Gateway remembers the failure across sessions, logs it once, and hides
+that server's tools while retaining the sign-in guidance in its catalog diagnostic.
+Signing in, updating that credential, changing the server configuration, or
+explicitly reloading MCP allows discovery again. Other users' credential changes
+do not clear the failure. Inspect `openclaw mcp status --verbose` or
+`openclaw mcp doctor <name>` for authorization status and sign-in instructions.
 
 ## Add a server from the composer
 
@@ -115,7 +128,7 @@ The same `docs` server, written straight into config:
 }
 ```
 
-An enabled server needs either a command (stdio) or a URL (SSE or Streamable HTTP). The exact server name `__proto__` is reserved; choose a different name. Setting `enabled: false` keeps the definition around without connecting it. Keep credentials out of config literals — store sensitive headers and environment values through the supported secret mechanisms.
+An enabled server needs either a command (stdio) or a URL (SSE or Streamable HTTP). Config validation rejects definitions containing both, and writes reject new or edited mixed definitions. Existing mixed definitions keep their prior runtime behavior with a warning so upgrades can start. Doctor can normalize aliases but leaves the transport choice and authentication settings unchanged. For HTTP, remove the command, arguments, environment, and working directory; for stdio, remove the URL and HTTP transport, headers, OAuth, and TLS options. Updates can still record their channel before this explicit repair. The exact server name `__proto__` is reserved; choose a different name. Setting `enabled: false` keeps the definition around without connecting it. Keep credentials out of config literals — store sensitive headers and environment values through the supported secret mechanisms.
 
 Local `claude-cli` turns receive configured server tools through the Gateway's
 MCP bridge as `<server>__<tool>`, including when `tools.exec.host` is `"node"`.
@@ -155,6 +168,19 @@ the agent so it can follow the server's recovery guidance. The tool's
 `outputSchema` validates successful structured results only; structured error
 details do not need to match that schema.
 
+### JSON Schema validation
+
+MCP schemas use draft-07 unless they declare draft-2020-12. Draft-07 checks known
+formats such as `email`; draft-2020-12 treats formats as annotations. Schema URLs
+identify resources; validation does not fetch them from the network. Local
+references and resources already registered by the same MCP client are supported.
+
+Node, Bun, and JIT standalone hosts retain compiled validators. AOT standalone
+hosts evaluate cached schemas without generating JavaScript. In AOT hosts,
+`__proto__`, `constructor`, and `prototype` must be actual input properties when
+a schema requires them; inherited JavaScript prototype members do not satisfy
+those requirements.
+
 ### The server appears in Settings but exposes no tools
 
 Run `openclaw mcp doctor <name> --probe`. Doctor validates the saved definition first, then opens a live connection and reports the tools and other capabilities the server advertises. If it connects but expected tools are missing, check `toolFilter.include` and `toolFilter.exclude`.
@@ -188,7 +214,9 @@ openclaw mcp login <name>
 
 Follow the printed authorization URL. OpenClaw normally captures the loopback redirect and saves the credentials automatically; use the printed `--code` command when the browser cannot reach the callback listener.
 
-The CLI signs in only to servers defined under `mcp.servers`. A server that a plugin declares signs in from the plugin's page (**Accounts** → **Connect**); a failed browser sign-in for it points back to the plugin settings instead of a CLI command.
+The CLI signs in only to servers defined under `mcp.servers`. A server that a plugin declares signs in from the plugin's page (**Sign in**, or **Accounts** → **Sign in**); a failed browser sign-in for it points back to the plugin settings instead of a CLI command.
+
+To sign out of a plugin-declared server, open the plugin's page and select **Accounts** → **Sign out**. OpenClaw removes the saved credentials on the Gateway; the plugin's tools need a new sign-in before their next call. Uninstalling the plugin also removes the saved sign-ins for its servers, so a reinstall starts signed out. A server under `mcp.servers` with the same name and URL keeps its credentials.
 
 ### Changes do not reach an active agent
 

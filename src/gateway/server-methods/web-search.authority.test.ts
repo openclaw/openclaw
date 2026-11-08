@@ -1,13 +1,14 @@
+import "./web-search-runtime.test-support.js";
 import { afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PluginWebSearchProviderEntry, WebSearchProviderPlugin } from "../../plugins/types.js";
 import { loadBundledPluginFacade } from "../../test-utils/bundled-plugin-public-surface.js";
+import { holdPushStorage as holdAsyncBoundary } from "./push.test-support.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
+const { preparedWebSearchCatalog: preparedCatalog, webSearchRuntimeMocks: runtimeMocks } =
+  await import("./web-search-runtime.test-support.js");
 
 const mocks = vi.hoisted(() => ({
-  catalog: vi.fn(),
-  runtime: vi.fn(),
   assertProfile: vi.fn(),
   providers: [] as PluginWebSearchProviderEntry[],
   beforeImport: vi.fn<() => Promise<void>>(),
@@ -18,51 +19,6 @@ vi.mock("./users-profile-access.js", () => ({
     profileId: "original-profile",
     assertCurrent: mocks.assertProfile,
   }),
-}));
-// mock-isolation: Search projection uses synthetic prepared auth without reading machine stores.
-vi.mock("../../agents/auth-profiles/store.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../agents/auth-profiles/store.js")>()),
-  getPreparedRuntimeAuthProfileStoreSnapshot: () => undefined,
-}));
-// mock-isolation: The synthetic Gateway request has one fixed agent, not machine agent state.
-vi.mock("./model-auth-agent-scope.js", () => ({
-  resolveModelAuthAgentScope: () => ({ ok: true, agentId: "main", agentDir: "/synthetic/agent" }),
-}));
-// mock-isolation: Fix model selection before exercising real search status projection.
-vi.mock("../../agents/model-selection.js", () => ({
-  resolveDefaultModelForAgent: () => ({ provider: "local", model: "local-model" }),
-}));
-// mock-isolation: This request fixture does not load the provider discovery registry.
-vi.mock("../../config/io.plugin-metadata.js", () => ({
-  resolveConfigWidePluginMetadataSnapshotAsync: async () => ({ byPluginId: new Map() }),
-}));
-// mock-isolation: Discovery policy is an input, not machine state under test here.
-vi.mock("../../plugins/bundled-discovery-state.js", () => ({
-  prepareBundledDiscoveryMode: async () => () => {},
-  readBundledDiscoveryModeMemoized: () => undefined,
-}));
-vi.mock("../../config/runtime-snapshot.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../config/runtime-snapshot.js")>()),
-  getRuntimeConfigSourceSnapshot: () => undefined,
-  selectLiveRuntimeConfig: (config?: OpenClawConfig) => config,
-}));
-// mock-isolation: Tool eligibility is fixed input; projection and handler authority stay real.
-vi.mock("../../agents/web-search-tool-policy.js", () => ({
-  resolveWebSearchToolPolicy: () => ({ allowed: true }),
-}));
-// mock-isolation: Catalog publication is fixed input; no credential/catalog initialization runs.
-vi.mock("../server-model-catalog-auth.js", () => ({ readPreparedCatalog: mocks.catalog }));
-// mock-isolation: Fixed catalog decisions select a runtime without initializing model accounts.
-vi.mock("../../agents/model-catalog-decisions.js", () => ({
-  prepareModelCatalogDecisions: async () => ({
-    evaluateEntry: () => ({}),
-    evaluateNative: () => ({}),
-  }),
-  resolveCatalogDecisionRuntime: mocks.runtime,
-}));
-// mock-isolation: Use a managed model route while retaining real service probing.
-vi.mock("../../agents/native-web-search.js", () => ({
-  resolveNativeWebSearchRoute: () => ({ kind: "managed" }),
 }));
 // mock-isolation: Expose the real provider facade as status input without setup discovery.
 vi.mock("../../flows/search-setup.js", () => ({
@@ -84,13 +40,6 @@ vi.mock("openclaw/plugin-sdk/lazy-runtime", () => ({
 import { webSearchHandlers } from "./web-search.js";
 
 let config: OpenClawConfig;
-const preparedCatalog = () => ({
-  entries: [{ provider: "local", id: "local-model" }],
-  routeVariants: [],
-  metadataSnapshot: {},
-  authStore: { version: 1, profiles: {} },
-  isCurrent: () => true,
-});
 
 beforeAll(async () => {
   const { createParallelWebSearchProvider } = await loadBundledPluginFacade<{
@@ -107,8 +56,8 @@ beforeEach(() => {
     tools: { web: { search: { provider: "parallel", cacheTtlMinutes: 0 } } },
     plugins: { entries: { parallel: { config: { webSearch: { apiKey: "synthetic" } } } } },
   };
-  mocks.catalog.mockImplementation(async () => preparedCatalog());
-  mocks.runtime.mockReturnValue({ id: "openclaw" });
+  runtimeMocks.catalog.mockImplementation(async () => preparedCatalog());
+  runtimeMocks.runtime.mockReturnValue({ id: "openclaw" });
 });
 
 afterEach(() => vi.unstubAllGlobals());
@@ -119,22 +68,17 @@ it.each([
   ["redirect", "config"],
   ["redirect", "none"],
 ] as const)("Search provider authority at %s with %s revocation", async (stage, loss) => {
-  const entered = createDeferred();
-  const release = createDeferred();
-  const pause = async () => {
-    entered.resolve();
-    await release.promise;
-  };
+  const boundary = holdAsyncBoundary();
   const fetch = vi.fn(async () =>
     Response.json({
       results: [{ title: "Source", url: "https://example.com", excerpts: ["text"] }],
     }),
   );
   if (stage === "lazy import") {
-    mocks.beforeImport.mockImplementationOnce(pause);
+    mocks.beforeImport.mockImplementationOnce(() => boundary.wait());
   } else {
     fetch.mockImplementationOnce(async () => {
-      await pause();
+      await boundary.wait();
       return new Response(null, {
         status: 307,
         headers: { location: "https://api.parallel.ai/v1/redirected-search" },
@@ -150,18 +94,17 @@ it.each([
     respond: vi.fn(),
   } as unknown as GatewayRequestHandlerOptions;
   const pending = webSearchHandlers["webSearch.test"]!(options);
-  await entered.promise;
-  if (loss === "client") {
-    options.client!.invalidated = true;
-  } else if (loss === "profile") {
-    mocks.assertProfile.mockImplementation(() => {
-      throw new Error("profile authority changed");
-    });
-  } else if (loss === "config") {
-    config = { tools: { web: { search: { enabled: false } } } };
-  }
-  release.resolve();
-  await pending;
+  await boundary.settle(Promise.resolve(pending), () => {
+    if (loss === "client") {
+      options.client!.invalidated = true;
+    } else if (loss === "profile") {
+      mocks.assertProfile.mockImplementation(() => {
+        throw new Error("profile authority changed");
+      });
+    } else if (loss === "config") {
+      config = { tools: { web: { search: { enabled: false } } } };
+    }
+  });
   const succeeded = loss === "none";
   expect(fetch).toHaveBeenCalledTimes(stage === "lazy import" ? 0 : succeeded ? 2 : 1);
   expect(options.respond).toHaveBeenCalledWith(

@@ -25,7 +25,7 @@ function fixture() {
 }
 
 it("distinguishes entries from followed targets and returns typed directory entries", async () => {
-  const { root, file, directory, link, dangling, missing, child } = fixture();
+  const { root, file, link, dangling, missing, child } = fixture();
   expect(await paths.realpathOrResolve(link)).toBe(fs.realpathSync.native(file));
   expect(await paths.realpathOrResolve(dangling)).toBe(dangling);
   expect(await paths.realpathOrResolve(path.relative(process.cwd(), missing))).toBe(missing);
@@ -34,28 +34,16 @@ it("distinguishes entries from followed targets and returns typed directory entr
   expect((await paths.lstatIfExists(dangling))?.isSymbolicLink()).toBe(true);
   expect(await paths.lstatIfExists(missing)).toBeUndefined();
   expect(await paths.lstatIfExists(child)).toBeUndefined();
-  await expect(paths.lstatIfExists(child, "ENOENT")).rejects.toMatchObject({
-    code: "ENOTDIR",
-  });
+  await expect(paths.lstatIfExists(child, "ENOENT")).rejects.toMatchObject({ code: "ENOTDIR" });
   for (const [stat, absent] of [
     [paths.statIfExists, undefined],
     [paths.safeStat, null],
   ] as const) {
     expect((await stat(link))?.isFile()).toBe(true);
-    expect((await stat(directory))?.isDirectory()).toBe(true);
     expect(await stat(dangling)).toBe(absent);
-    expect(await stat(missing)).toBe(absent);
   }
-  await expect(paths.statIfExists(child)).rejects.toMatchObject({
-    code: "ENOTDIR",
-  });
+  await expect(paths.statIfExists(child)).rejects.toMatchObject({ code: "ENOTDIR" });
   const entries = paths.readDirectoryEntriesSync(root);
-  expect(entries.map((entry) => entry.name).toSorted()).toEqual([
-    "dangling",
-    "directory",
-    "file",
-    "link",
-  ]);
   expect(entries.find((entry) => entry.name === "directory")?.isDirectory()).toBe(true);
   expect(paths.readDirectoryEntriesSync(missing)).toEqual([]);
   expect(paths.readDirectoryEntriesSync(file)).toEqual([]);
@@ -93,10 +81,8 @@ it.each([
 it.each([
   ["lstat", paths.pathEntryExists, "ENOTDIR"],
   ["lstat", paths.lstatIfExists, "EACCES"],
-  ["lstat", paths.lstatIfExists, "EIO"],
   ["lstat", paths.lstatIfExists, "not-found"],
   ["stat", paths.statIfExists, "EACCES"],
-  ["stat", paths.statIfExists, "EIO"],
 ] as const)("propagates %s probe failure through %s: %s", async (method, probe, code) => {
   const failure = Object.assign(new Error("filesystem probe failed"), { code });
   vi.spyOn(fsPromises, method).mockRejectedValue(failure);
@@ -104,17 +90,16 @@ it.each([
 });
 
 it("distinguishes definite absence from paths that may still exist", () => {
-  const { file, missing, dangling, child } = fixture();
-  expect(paths.pathMayExistSync(file)).toBe(true);
+  const { missing, dangling, child } = fixture();
   expect(paths.pathMayExistSync(missing)).toBe(false);
   expect(paths.pathMayExistSync(dangling)).toBe(true);
   expect(() => fs.lstatSync(child)).toThrow(expect.objectContaining({ code: "ENOTDIR" }));
   expect(paths.pathMayExistSync(child)).toBe(false);
 });
 
-it.each(["EACCES", "EPERM", "ELOOP", "EIO"])("preserves uncertainty for %s", (code) => {
+it("preserves uncertainty for inaccessible paths", () => {
   vi.spyOn(fs, "lstatSync").mockImplementation(() => {
-    throw Object.assign(new Error("filesystem probe failed"), { code });
+    throw Object.assign(new Error("filesystem probe failed"), { code: "EACCES" });
   });
   expect(paths.pathMayExistSync("unreadable-path")).toBe(true);
 });

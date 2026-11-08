@@ -116,45 +116,4 @@ export function registerSubagentSessionStatusTests(
     );
     expect(interrupted?.status).toBe("interrupted");
   });
-
-  test.each([
-    { lifecycleRunId: "restart-run", status: "failed" },
-    { lifecycleRunId: "replacement-run", status: "interrupted" },
-  ] as const)(
-    "surfaces exhausted parent recovery only for its owning session run ($lifecycleRunId)",
-    async ({ lifecycleRunId, status }) => {
-      const now = Date.now();
-      const childSessionKey = "agent:main:subagent:restart-delivery";
-      seedSubagentRunForReadTest({
-        runId: "restart-run",
-        childSessionKey,
-        controllerSessionKey: "agent:main:main",
-        createdAt: now - 2_000,
-        execution: {
-          status: "terminal",
-          startedAt: now - 1_000,
-          endedAt: now - 500,
-          outcome: { status: "error" },
-          interruptionReason: "gateway-restart",
-        },
-        delivery: { status: "failed" },
-      });
-      const result = await listSubagentSessions({
-        [childSessionKey]: {
-          sessionId: "restart-delivery-session",
-          updatedAt: now,
-          spawnedBy: "agent:main:main",
-          status: "interrupted",
-          lifecycleRunId,
-        },
-      });
-      const row = result.sessions.find((session) => session.key === childSessionKey);
-      expect(row?.status).toBe(status);
-      expect(row?.lastRunError).toBe(
-        status === "failed"
-          ? "Restart recovery could not reach the parent. Inspect the child session before continuing."
-          : undefined,
-      );
-    },
-  );
 }

@@ -3,6 +3,7 @@ import type { PersonActivityRouting } from "../../../components/person-activity-
 import type { MessageGroup } from "../../../lib/chat/chat-types.ts";
 import type { ForwardedAvatarOptions } from "../chat-avatar-view.tsx";
 import type { AssistantMessageExpansionState } from "../chat-message-recovery.ts";
+import type { PendingSteer } from "../chat-pending-inputs.ts";
 import type { TurnRecap } from "../chat-progress.ts";
 import type { GroupedMessageOptions } from "./chat-message-bubble-options.ts";
 import type { MessageReplyTarget } from "./chat-message-markdown.types.ts";
@@ -15,12 +16,7 @@ import type { SidebarContent, SidebarFullMessageLoader } from "./chat-sidebar-co
 
 export type RenderMessageGroupOptions = Omit<
   GroupedMessageOptions,
-  | "isStreaming"
-  | "duplicateCount"
-  | "assistantMessageDisclosure"
-  | "messageActions"
-  | "entryId"
-  | "replyLine"
+  "isStreaming" | "assistantMessageDisclosure" | "messageActions" | "entryId" | "replyLine"
 > &
   ChatSendStatusActions &
   ForwardedAvatarOptions & {
@@ -53,10 +49,11 @@ export type RenderMessageGroupOptions = Omit<
     /** Only this run may supply live copy for an activity disclosure. */
     activityRunId?: string | null;
     activityGroupKey?: string;
+    bubbleActivityGroupKey?: string;
     turnRecap?: TurnRecap;
-    hideTurnRecapDuration?: boolean;
     /** Frame bodies are pre-rendered by the frame owner; ordinary groups omit them. */
     frameContent?: readonly unknown[];
     frameActionOwner?: MessageGroup["messages"][number] | null;
     latestAssistant?: boolean;
+    pendingSteer?: (message: unknown) => PendingSteer | undefined;
   } & MessageReactionOptions;

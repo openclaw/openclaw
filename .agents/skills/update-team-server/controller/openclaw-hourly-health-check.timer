@@ -1,0 +1,12 @@
+[Unit]
+Description=Run OpenClaw Team health and update freshness check hourly
+
+[Timer]
+OnCalendar=hourly
+Persistent=true
+RandomizedDelaySec=300
+AccuracySec=1min
+Unit=openclaw-hourly-health-check.service
+
+[Install]
+WantedBy=timers.target

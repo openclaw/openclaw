@@ -6,7 +6,7 @@ import type {
   HumanMention,
 } from "../../lib/chat/chat-types.ts";
 import type { StoredChatOutboxScope } from "../../lib/chat/outbox-store-scope.ts";
-import { visibleSessionMatches } from "../../lib/sessions/index.ts";
+import { visibleSessionMatches } from "../../lib/sessions/navigation.ts";
 import {
   getChatAttachmentDataUrl,
   releaseChatAttachmentPayloads,
@@ -79,6 +79,7 @@ export function clearSubmittedComposerState(
   resetChatInputHistoryNavigation(host);
   host.composerDraftChanged?.();
   return {
+    retainedAttachments: retainAttachments === "all",
     previousAttachments: submittedAttachments,
     previousDraft: submittedDraft,
     previousMentions: submittedMentions,
@@ -192,13 +193,16 @@ function commandComposerFallbackRetainsAttachments(
   );
 }
 
-function composerRetainsSubmittedAnnotations(
+function composerRetainsSubmittedAttachments(
   host: ChatHost,
   submittedAttachments?: readonly ChatAttachment[],
+  retainAll = false,
 ): boolean {
-  const retained = submittedAttachments?.filter(
-    (attachment) => attachment.browserAnnotation || attachment.selectionAnnotation,
-  );
+  const retained = retainAll
+    ? submittedAttachments
+    : submittedAttachments?.filter(
+        (attachment) => attachment.browserAnnotation || attachment.selectionAnnotation,
+      );
   return Boolean(
     retained?.length &&
     retained.length === host.chatAttachments.length &&
@@ -254,7 +258,11 @@ function restoreFailedCommandComposer(
   }
   if (
     owner.chatAttachments.length > 0 &&
-    !composerRetainsSubmittedAnnotations(owner, composer.previousAttachments)
+    !composerRetainsSubmittedAttachments(
+      owner,
+      composer.previousAttachments,
+      composer.retainedAttachments,
+    )
   ) {
     clearOwnedCommandComposerFallback(host, recovery);
     return composer.previousAttachments.length === 0;
@@ -300,6 +308,7 @@ export function settleChatCommandComposer(
 }
 
 export type PendingComposerSnapshot = {
+  retainedAttachments?: boolean;
   previousAttachments?: ChatAttachment[];
   previousDraft?: string;
   previousMentions?: readonly HumanMention[];
@@ -315,7 +324,11 @@ function strictComposerRestore(host: ChatHost, snapshot: PendingComposerSnapshot
     !host.chatReplyTarget &&
     (!host.chatGoalDraftMode || host.chatGoalDraftMode === snapshot.previousGoalDraftMode) &&
     (host.chatAttachments.length === 0 ||
-      composerRetainsSubmittedAnnotations(host, snapshot.previousAttachments));
+      composerRetainsSubmittedAttachments(
+        host,
+        snapshot.previousAttachments,
+        snapshot.retainedAttachments,
+      ));
   const attachments = Boolean(snapshot.previousAttachments?.length && composerBlank);
   const draft = snapshot.previousDraft != null && composerBlank;
   return {

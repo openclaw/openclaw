@@ -49,7 +49,7 @@ export class PlaywrightDiffScreenshotter {
     outputPath: string;
     theme: DiffTheme;
     image: DiffRenderOptions["image"];
-  }): Promise<string> {
+  }): Promise<number> {
     let lease: BrowserLease;
     try {
       lease = await acquireSharedBrowser(this.config);
@@ -202,7 +202,7 @@ export class PlaywrightDiffScreenshotter {
               });
             },
           });
-          return params.outputPath;
+          return params.image.scale;
         }
 
         const dpr = await page.evaluate(() => window.devicePixelRatio || 1);
@@ -256,7 +256,7 @@ export class PlaywrightDiffScreenshotter {
             });
           },
         });
-        return params.outputPath;
+        return dpr;
       }
       throw new Error(IMAGE_SIZE_LIMIT_ERROR);
     } finally {
@@ -319,6 +319,14 @@ async function resolveBrowserExecutablePath(config: OpenClawConfig): Promise<str
     if (await canAccess(candidate, fsConstants.X_OK)) {
       return candidate;
     }
+  }
+
+  // Full-only images omit the shell selected by an unspecified headless launch.
+  // Keep discovery owned by the shared browser promise, using Playwright's public
+  // full-browser path; absence preserves its default shell-only selection.
+  const playwrightPath = chromium.executablePath();
+  if (await canAccess(playwrightPath, fsConstants.X_OK)) {
+    return playwrightPath;
   }
 
   return undefined;

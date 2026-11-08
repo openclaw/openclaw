@@ -16,6 +16,8 @@ import {
 const commit = "a".repeat(40);
 const buildInfo = { version: "2026.9.6", commit, buildId: "fixture-build" };
 const temporary = useAutoCleanupTempDirTracker(afterEach);
+const writeReceipt = (root, name, value) =>
+  fs.writeFileSync(path.join(root, name), JSON.stringify(value));
 
 test("requires an exact published baseline and unambiguous absolute paths", () => {
   const args = [
@@ -137,7 +139,7 @@ test("confirmed process-group cleanup cannot qualify a killed or failed Gateway 
 test("public failure evidence keeps typed outcomes while dropping credentials, identities and raw RPC text", () => {
   const root = temporary.make("telegram-upgrade-contract-");
   const secret = "PRIVATE_CREDENTIAL_AND_CHAT_CANARY";
-  const write = (name, value) => fs.writeFileSync(path.join(root, name), JSON.stringify(value));
+  const write = (name, value) => writeReceipt(root, name, value);
   write("updater-readback.json", {
     exitCode: 17,
     joined: true,
@@ -214,34 +216,25 @@ test("public failure evidence keeps typed outcomes while dropping credentials, i
 test("public success retains actual shutdown and updater receipts without private proof references", () => {
   const root = temporary.make("telegram-upgrade-success-");
   const secret = "PRIVATE_CREDENTIAL_AND_CHAT_CANARY";
-  fs.writeFileSync(
-    path.join(root, "cleanup.json"),
-    JSON.stringify({ ok: true, leaseReleased: true, groupId: secret }),
-  );
-  fs.writeFileSync(
-    path.join(root, "updater-readback.json"),
-    JSON.stringify({
-      exitCode: 0,
-      joined: true,
-      durationMs: 12345,
-      beforeBuild: buildInfo,
-      afterBuild: buildInfo,
-      stateDir: secret,
-    }),
-  );
+  writeReceipt(root, "cleanup.json", { ok: true, leaseReleased: true, groupId: secret });
+  writeReceipt(root, "updater-readback.json", {
+    exitCode: 0,
+    joined: true,
+    durationMs: 12345,
+    beforeBuild: buildInfo,
+    afterBuild: buildInfo,
+    stateDir: secret,
+  });
   const phases = ["baseline-before-update", "candidate-restart", "candidate-final"];
   for (const [index, phase] of phases.entries()) {
-    fs.writeFileSync(
-      path.join(root, `gateway-stop-${phase}.json`),
-      JSON.stringify({
-        phase,
-        joined: true,
-        exitCode: 0,
-        signal: null,
-        durationMs: 100 + index,
-        runtime: secret,
-      }),
-    );
+    writeReceipt(root, `gateway-stop-${phase}.json`, {
+      phase,
+      joined: true,
+      exitCode: 0,
+      signal: null,
+      durationMs: 100 + index,
+      runtime: secret,
+    });
   }
   const result = {
     ok: true,

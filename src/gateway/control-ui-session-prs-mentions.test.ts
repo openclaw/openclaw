@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { textAssistant } from "../agents/test-helpers/sparse-transcript.test-support.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import {
   appendTranscriptMessage,
@@ -76,15 +77,7 @@ describe("session PR mention isolation", () => {
       );
 
       await appendTranscriptMessage(scope, {
-        message: {
-          role: "assistant",
-          content: [
-            {
-              type: "text",
-              text: "For comparison only: https://github.com/openclaw/openclaw/pull/42",
-            },
-          ],
-        },
+        message: textAssistant("For comparison only: https://github.com/openclaw/openclaw/pull/42"),
       });
       const afterMention = await load();
       expect(afterMention.pullRequests).toEqual(initial.pullRequests);

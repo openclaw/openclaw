@@ -29,6 +29,7 @@ const REVIEWED_CRITICAL_FINDING_LIMITS = new Map<string, number>([
   ["dist:@openclaw/codex:dangerous-exec:dist/client-<hash>.js", 1],
   ["dist:@openclaw/codex:dangerous-exec:dist/dynamic-tools-<hash>.js", 2],
   ["dist:@openclaw/codex:dangerous-exec:dist/session-catalog-<hash>.js", 1],
+  ["dist:@openclaw/codex:dangerous-exec:dist/stdio.worker.js", 1],
   ["dist:@openclaw/codex:dangerous-exec:dist/transport-stdio-<hash>.js", 1],
   ["source:@openclaw/codex:dangerous-exec:src/app-server/managed-launcher-failure.ts", 1],
   ["source:@openclaw/codex:dangerous-exec:src/app-server/sandbox-exec-server/http.ts", 1],
@@ -62,6 +63,7 @@ const REVIEWED_CRITICAL_FINDING_LIMITS = new Map<string, number>([
   ["dist:@openclaw/mxc-sandbox:dangerous-exec:dist/index.js", 2],
   ["source:@openclaw/mxc-sandbox:dangerous-exec:src/readiness.ts", 2],
   ["setup:@openclaw/onnx:dangerous-exec:dist/.setup/worker-client-<hash>.mjs", 1],
+  ["setup:@openclaw/openshell-sandbox:dangerous-exec:dist/.setup/worker-cli-<hash>.mjs", 1],
   ["source:@openclaw/onnx:dangerous-exec:src/worker-client.ts", 1],
   ["dist:@openclaw/raft:dangerous-exec:dist/channel-plugin-api.js", 1],
   ["source:@openclaw/raft:dangerous-exec:src/gateway.ts", 1],
@@ -77,6 +79,10 @@ const REVIEWED_CRITICAL_FINDING_CONTENT_SHA256 = new Map<string, string>([
   [
     "setup:@openclaw/imessage:dangerous-exec:dist/.setup/sanitize-outbound-<hash>.mjs",
     "34833261f1e012015e6e28f35903d78f77efcfdac68f924310b8a3761264878b",
+  ],
+  [
+    "setup:@openclaw/openshell-sandbox:dangerous-exec:dist/.setup/worker-cli-<hash>.mjs",
+    "c5050d4065ef0365ffd611b558809a848994584f1f11c08854fe7ae3cf7072d7",
   ],
 ]);
 
@@ -107,7 +113,8 @@ const REVIEWED_DEPENDENCY_FINDING_LIMITS = new Map<string, number>([
   ["dangerous-exec:node_modules/node-addon-api/tools/check-napi.js", 1],
   ["dangerous-exec:node_modules/node-addon-api/tools/clang-format.js", 1],
   ["dangerous-exec:node_modules/node-addon-api/tools/eslint-format.js", 3],
-  ["dangerous-exec:node_modules/playwright-core/lib/coreBundle.js", 3],
+  ["dangerous-exec:node_modules/openai/helpers/audio.mjs", 2],
+  ["dangerous-exec:node_modules/playwright-core/lib/coreBundle.js", 4],
   ["dangerous-exec:node_modules/playwright-core/lib/utilsBundle.js", 10],
   ["dangerous-exec:node_modules/prism-media/src/core/FFmpeg.js", 2],
   ["dangerous-exec:node_modules/tokenjuice/dist/core/cli-client.js", 1],
@@ -116,6 +123,8 @@ const REVIEWED_DEPENDENCY_FINDING_LIMITS = new Map<string, number>([
   ["dangerous-exec:node_modules/tokenjuice/dist/hosts/localcode/index.js", 2],
   ["dynamic-code-execution:node_modules/@napi-rs/wasm-runtime/dist/fs.js", 1],
   ["dynamic-code-execution:node_modules/@noble/curves/abstract/fft.js", 2],
+  ["dynamic-code-execution:node_modules/apache-arrow/Arrow.es2015.min.js", 1],
+  ["dynamic-code-execution:node_modules/apache-arrow/Arrow.esnext.min.js", 1],
   ["dynamic-code-execution:node_modules/ajv/dist/compile/index.js", 1],
   ["dynamic-code-execution:node_modules/ajv/dist/compile/jtd/parse.js", 1],
   ["dynamic-code-execution:node_modules/ajv/dist/compile/jtd/serialize.js", 1],
@@ -132,6 +141,7 @@ const REVIEWED_DEPENDENCY_FINDING_LIMITS = new Map<string, number>([
   ["dynamic-code-execution:node_modules/setimmediate/setImmediate.js", 1],
   ["env-harvesting:node_modules/@tybys/wasm-util/dist/wasm-util.esm.min.js", 1],
   ["env-harvesting:node_modules/@tybys/wasm-util/dist/wasm-util.min.js", 1],
+  ["env-harvesting:node_modules/playwright-core/lib/bootstrap.js", 1],
 ]);
 
 type CriticalFinding = Pick<SkillScanFinding, "line" | "ruleId"> & {
@@ -157,6 +167,7 @@ function normalizeFindingPath(file: string): string {
     "session-catalog",
     "transport-stdio",
     "worker-client",
+    "worker-cli",
   ]) {
     const match = new RegExp(`^${prefix}-[A-Za-z0-9_-]{8}\\.(m?js)$`, "u").exec(name);
     if (match?.[1]) {
@@ -246,6 +257,13 @@ function dependencyFindingPath(file: string): string | undefined {
   const marker = "node_modules/";
   const index = file.lastIndexOf(marker);
   return index === -1 ? undefined : file.slice(index);
+}
+
+/** Packages whose own files carry reviewed critical findings. */
+export function reviewedCriticalFindingPackageNames(): Set<string> {
+  return new Set(
+    [...REVIEWED_CRITICAL_FINDING_LIMITS.keys()].flatMap((key) => key.split(":").slice(1, 2)),
+  );
 }
 
 export function scanPluginNpmArtifactSecurity(params: {

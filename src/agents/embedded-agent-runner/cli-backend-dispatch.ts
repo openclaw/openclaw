@@ -4,7 +4,7 @@ import type { SessionTranscriptRuntimeTarget } from "../../config/sessions/sessi
 import { onAgentEventForRun } from "../../infra/agent-events.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { resolvePreparedRunAdmission } from "../admitted-run-context.js";
-import { stripOpenClawMcpToolPrefix } from "../cli-runner/tool-policy.js";
+import { stripOpenClawMcpToolPrefix } from "../tool-display-call.js";
 import { normalizeToolPolicyName } from "../tool-policy.js";
 import { isToolResultError } from "../tool-result-error.js";
 import { resolveEmbeddedCliBackendDispatchEligibilityAsync } from "./cli-backend-dispatch-eligibility.js";

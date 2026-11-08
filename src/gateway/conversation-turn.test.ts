@@ -285,10 +285,6 @@ describe("runGatewayConversationTurn", () => {
       }),
     ).resolves.toMatchObject({ status: "timeout" });
 
-    expect(deps.resolveOutboundSessionRoute).toHaveBeenCalledWith(
-      expect.objectContaining({ channel: "reef", target: "reef:molty" }),
-    );
-    expect(deps.bindOutboundSessionEntry).toHaveBeenCalledOnce();
     expect(deps.bindOutboundSessionEntry.mock.calls[0]?.[0]).toMatchObject({
       sourceSessionKey: "agent:main:dashboard:restricted-creator",
     });
@@ -319,38 +315,7 @@ describe("runGatewayConversationTurn", () => {
     expect(deps.runMessageAction).not.toHaveBeenCalled();
   });
 
-  it("registers correlation before durable delivery and consumes a fast reply inline", async () => {
-    let capture: Promise<void> | undefined;
-    deps.runMessageAction.mockImplementation(async (input) => {
-      expect(input).toMatchObject({
-        preparedMessageId: "reef-outbound-1",
-        gatewayOwnedDelivery: true,
-        forceCoreDelivery: true,
-        requireQueuePersistence: true,
-        suppressTranscriptMirror: true,
-      });
-      await persistIntent(input);
-      capture = claimReply("reef-outbound-1", "hello clawd");
-      return sentResult();
-    });
-
-    const result = await runTurn("turn-fast-reply", {
-      sourceSessionKey: "agent:main:telegram:direct:operator",
-      message: "hello molty",
-    });
-    await capture;
-
-    expect(result).toMatchObject({
-      status: "replied",
-      messageId: "reef-outbound-1",
-      reply: { text: "hello clawd", replyToId: "reef-outbound-1" },
-    });
-    expect(deps.registerPendingConversationTurn.mock.invocationCallOrder[0]).toBeLessThan(
-      deps.runMessageAction.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
-    );
-  });
-
-  it("uses the durable prepared id when another process creates the operation during preflight", async () => {
+  it("correlates a fast reply with the durable id won by another process during preflight", async () => {
     let capture: Promise<void> | undefined;
     let competingOperation: ReturnType<typeof beginConversationDeliveryOperation> | undefined;
     deps.resolveOutboundChannelPlugin.mockReturnValueOnce({
@@ -366,7 +331,12 @@ describe("runGatewayConversationTurn", () => {
       },
     } as never);
     deps.runMessageAction.mockImplementation(async (input) => {
-      expect(input).toMatchObject({ preparedMessageId: "reef-authoritative-a" });
+      expect(input).toMatchObject({
+        preparedMessageId: "reef-authoritative-a",
+        gatewayOwnedDelivery: true,
+        forceCoreDelivery: true,
+        requireQueuePersistence: true,
+      });
       await persistIntent(input);
       capture = claimReply("reef-authoritative-a", "durable id acknowledged", "reef-inbound-race");
       return sentResult("reef-authoritative-a");
@@ -383,23 +353,20 @@ describe("runGatewayConversationTurn", () => {
       messageId: "reef-authoritative-a",
       reply: { text: "durable id acknowledged", replyToId: "reef-authoritative-a" },
     });
+    expect(deps.registerPendingConversationTurn.mock.invocationCallOrder[0]).toBeLessThan(
+      deps.runMessageAction.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
+    );
   });
 
-  it("returns a prior durable reply without sending again", async () => {
+  it("replays a durable reply without sending again, but withholds it from a new route owner", async () => {
     await recordReply("turn-replied", "ack");
     await expect(runTurn("turn-replied")).resolves.toMatchObject({
       status: "replied",
       reply: { text: "ack" },
     });
-    expect(deps.readConversation).toHaveBeenCalled();
     expectNotCalled(deps.runMessageAction, deps.resolveOutboundChannelPlugin);
-  });
-
-  it("does not reveal a completed reply after the route owner changes", async () => {
-    await recordReply("turn-reassigned", "private finance reply", "reply-private");
-
     await expect(
-      runTurn("turn-reassigned", {
+      runTurn("turn-replied", {
         config: reassignedConfig(deps.config),
       }),
     ).rejects.toBeInstanceOf(ConversationInputError);

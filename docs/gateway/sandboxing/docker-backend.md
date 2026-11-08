@@ -57,6 +57,17 @@ change behavior: a hot container stays running with a recreation notice, while
 a stopped or expired container is replaced. Recreate explicitly to apply those
 options immediately.
 
+After a Gateway restart, Docker and Podman tool containers can be replaced on
+their first use when an upgrade adds Gateway-managed read-only skill or resource
+mounts. Every existing mount must still match; replaced sources do not qualify. The
+old container must have a read-only root, no image volumes, and no retained
+persistent-exec custody; its last successful use must predate this Gateway
+process. Workspace and user bind sources and access modes must still match.
+Workspace files remain on the host, but replacement discards temporary container
+state and untracked background processes. Writable roots, user mount changes,
+restricted dispatch requiring current config, and hot browser containers still
+require explicit recreation.
+
 To expose host GPUs, set `agents.defaults.sandbox.docker.gpus` (or the per-agent override) to a value like `"all"` or `"device=GPU-uuid"`. This is passed to the selected container engine's Docker-compatible `--gpus` flag and requires compatible host GPU setup. Podman requires version 5.0 or newer for this option.
 
 <Warning>
@@ -82,6 +93,38 @@ On Ubuntu/AppArmor hosts with Docker sandbox mode enabled, Codex app-server `wor
 
 These Codex bwrap checks run in standalone `openclaw doctor` and are omitted during `openclaw update`; run `openclaw doctor` after the update. Doctor checks the user namespace with `unshare`. When Docker sandbox egress is disabled and a local Codex runtime is configured, it also runs the configured Codex binary's own `workspace-write` sandbox with network access disabled, exercising Bubblewrap's loopback setup. Unrecognized check failures are reported as unverified rather than as a namespace diagnosis. If doctor reports a Codex bwrap namespace check failure, prefer an AppArmor profile that grants the required namespaces to the OpenClaw service process. `kernel.apparmor_restrict_unprivileged_userns=0` is a host-wide fallback with security tradeoffs; use it only when that host posture is acceptable. Do not grant broader Docker container privileges just to satisfy nested `bwrap`.
 </Warning>
+
+### Container user
+
+When `agents.defaults.sandbox.docker.user` is unset, Docker uses the mounted
+workspace owner's numeric `uid:gid`: the agent workspace for
+`workspaceAccess: "rw"`, otherwise the sandbox workspace. A root-owned workspace can therefore
+run as root; if ownership cannot be read, the image's default user applies.
+Set `docker.user` explicitly to override this. `setupCommand` runs as the same
+container user. See [Podman backend](/gateway/sandboxing/podman-backend) for its
+user-namespace and root-user restrictions.
+
+### Shell environment
+
+Sandboxed `exec` commands default `HOME` to the sandbox workspace root, even when
+`workdir` selects a task subdirectory. Home-based configuration and package stores
+therefore persist across commands in that workspace. Explicit `sandbox.docker.env`
+or command `env` values can override `HOME` and XDG paths. The host user's home and
+package stores are not mounted or inherited by this default; separate sandbox
+workspaces keep separate stores.
+
+### Docker daemon
+
+The Docker CLI inherits the Gateway process environment. Choose the daemon with
+`DOCKER_HOST` or `DOCKER_CONTEXT` (set only one), or the CLI's current context;
+there is no `sandbox.docker` daemon-selection config key. For rootless Docker,
+set `DOCKER_HOST=unix:///run/user/<uid>/docker.sock` in the
+[Gateway service environment](/help/environment), then restart the Gateway.
+This differs from `sandbox.docker.env`, which configures the container environment.
+
+For local Unix sockets, OpenClaw records the endpoint and daemon ID per runtime
+and refuses reuse if the selected daemon changes. Restore the original connection
+or recreate the runtime while its recorded daemon is reachable.
 
 ### Sandboxed browser
 

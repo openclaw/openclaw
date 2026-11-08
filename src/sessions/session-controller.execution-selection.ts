@@ -26,8 +26,6 @@ type ExecutionSelectionEntry = Pick<
   | "providerOverride"
   | "modelOverride"
   | "modelOverrideSource"
-  | "restartRecoveryDeliveryRunId"
-  | "restartRecoveryDeliverySourceRunId"
 >;
 
 type ExecutionSelectionRun = {
@@ -105,11 +103,6 @@ export function captureReplyExecutionSelection(params: {
   const selectedAuth = run.authProfileId && run.authProfileIdSource !== "auto";
   return {
     kind: "execution" as const,
-    // Retained delivery belongs to its original source, not every later execution.
-    recoveryDeliveryClaim: {
-      restartRecoveryDeliveryRunId: params.sessionEntry?.restartRecoveryDeliveryRunId,
-      restartRecoveryDeliverySourceRunId: params.sessionEntry?.restartRecoveryDeliverySourceRunId,
-    },
     binding: {
       agentDir: run.agentDir,
       sessionFile: run.sessionFile,
@@ -135,10 +128,7 @@ export function isSameReplyExecutionSelection(
   left: ReplyExecutionSelection,
   right: ReplyIncomingExecutionSelection,
 ): boolean {
-  // Recovery custody is checked against the admitted owner's capture by delivery preparation.
-  // It is not an incoming request to change execution settings.
   return right.kind === "execution"
-    ? isDeepStrictEqual(left.binding, right.binding) &&
-        isDeepStrictEqual(left.session, right.session)
+    ? isDeepStrictEqual(left, right)
     : isDeepStrictEqual(left.session, right);
 }

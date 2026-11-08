@@ -1275,6 +1275,84 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
 }
 
 @Suite(.serialized, .testWaitLimit) struct NodeAppModelInvokeTests {
+    @Test @MainActor func `first model frame already targets the last chat`() {
+        let registry = GatewaySettingsStore.loadGatewayRegistry()
+        let stableID = "scroll-launch-\(UUID().uuidString)"
+        let sessionKey = "agent:main:dashboard:last-used"
+        defer {
+            _ = GatewaySettingsStore.saveGatewayRegistry(registry)
+            GatewaySettingsStore.saveGatewayFocusedChatSessionKey(stableID: stableID, sessionKey: nil)
+            GatewaySettingsStore.saveGatewaySelectedAgentId(stableID: stableID, agentId: nil)
+        }
+        #expect(GatewaySettingsStore.upsertGatewayRegistryEntry(.init(
+            stableID: stableID, kind: .manual, name: "Launch test", host: "localhost", port: 443,
+            useTLS: true, contextPath: nil, lastConnectedAtMs: nil), activate: true))
+        GatewaySettingsStore.saveGatewayFocusedChatSessionKey(stableID: stableID, sessionKey: sessionKey)
+        GatewaySettingsStore.saveGatewaySelectedAgentId(stableID: stableID, agentId: "main")
+        let model = NodeAppModel(restoringSavedGatewayRoute: true)
+        defer { model.voiceWake.stop() }
+        #expect(model.chatSessionKey == sessionKey)
+        #expect(model.connectedGatewayID == stableID)
+        #expect(model.selectedAgentId == "main")
+        model.prepareForGatewayConnect(stableID: stableID)
+        #expect(model.chatSessionKey == sessionKey)
+        model.chatSessionRoutingRestoreTask?.cancel()
+    }
+
+    @Test @MainActor func `agent switch forgets the previous agent's saved chat`() {
+        let registry = GatewaySettingsStore.loadGatewayRegistry()
+        let stableID = "agent-switch-\(UUID().uuidString)"
+        let agentAChat = "agent:alpha:dashboard:last-used"
+        defer {
+            _ = GatewaySettingsStore.saveGatewayRegistry(registry)
+            GatewaySettingsStore.saveGatewayFocusedChatSessionKey(stableID: stableID, sessionKey: nil)
+            GatewaySettingsStore.saveGatewaySelectedAgentId(stableID: stableID, agentId: nil)
+        }
+        #expect(GatewaySettingsStore.upsertGatewayRegistryEntry(.init(
+            stableID: stableID, kind: .manual, name: "Agent switch test", host: "localhost", port: 443,
+            useTLS: true, contextPath: nil, lastConnectedAtMs: nil), activate: true))
+        GatewaySettingsStore.saveGatewaySelectedAgentId(stableID: stableID, agentId: "alpha")
+        let model = NodeAppModel(restoringSavedGatewayRoute: true)
+        defer { model.voiceWake.stop() }
+        model.focusChatSession(agentAChat)
+        #expect(GatewaySettingsStore.loadGatewayFocusedChatSessionKey(stableID: stableID) == agentAChat)
+        model.setSelectedAgentId("beta")
+        #expect(GatewaySettingsStore.loadGatewayFocusedChatSessionKey(stableID: stableID) == nil)
+        let relaunched = NodeAppModel(restoringSavedGatewayRoute: true)
+        defer { relaunched.voiceWake.stop() }
+        #expect(relaunched.selectedAgentId == "beta")
+        #expect(relaunched.chatSessionKey != agentAChat)
+    }
+
+    @Test @MainActor func `roster removal of the selected agent forgets its saved chat`() {
+        let registry = GatewaySettingsStore.loadGatewayRegistry()
+        let stableID = "agent-roster-\(UUID().uuidString)"
+        let alphaChat = "agent:alpha:dashboard:last-used"
+        defer {
+            _ = GatewaySettingsStore.saveGatewayRegistry(registry)
+            GatewaySettingsStore.saveGatewayFocusedChatSessionKey(stableID: stableID, sessionKey: nil)
+            GatewaySettingsStore.saveGatewaySelectedAgentId(stableID: stableID, agentId: nil)
+        }
+        #expect(GatewaySettingsStore.upsertGatewayRegistryEntry(.init(
+            stableID: stableID, kind: .manual, name: "Agent roster test", host: "localhost", port: 443,
+            useTLS: true, contextPath: nil, lastConnectedAtMs: nil), activate: true))
+        GatewaySettingsStore.saveGatewaySelectedAgentId(stableID: stableID, agentId: "alpha")
+        let model = NodeAppModel(restoringSavedGatewayRoute: true)
+        defer { model.voiceWake.stop() }
+        model.focusChatSession(alphaChat)
+        #expect(model.chatSessionKey == alphaChat)
+        model.retireSelectedAgentIfRemoved(from: [AgentSummary(
+            id: "beta", name: "Beta", identity: nil, workspace: nil, workspacegit: nil,
+            model: nil, agentruntime: nil)])
+        #expect(model.selectedAgentId == nil)
+        #expect(model.chatSessionKey != alphaChat)
+        #expect(GatewaySettingsStore.loadGatewayFocusedChatSessionKey(stableID: stableID) == nil)
+        let relaunched = NodeAppModel(restoringSavedGatewayRoute: true)
+        defer { relaunched.voiceWake.stop() }
+        #expect(relaunched.selectedAgentId == nil)
+        #expect(relaunched.chatSessionKey != alphaChat)
+    }
+
     @Test(arguments: [false, true]) @MainActor
     func `chat preserves a typed draft on initial agent resolution only for the same account`(
         changesAccount: Bool) throws
@@ -4518,6 +4596,41 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
         #expect(talkMode.canKeepContinuousTalkActiveInBackground)
     }
 
+    @Test @MainActor func `background expiry preserves continuous Talk until it stops`() async {
+        let defaults = UserDefaults.standard
+        let previous = defaults.object(forKey: "talk.background.enabled")
+        defaults.set(true, forKey: "talk.background.enabled")
+        let (talkMode, appModel) = makeTalkModel()
+        talkMode.updateGatewayConnected(true)
+        talkMode.isEnabled = true
+        talkMode._test_setContinuousTranscriptProcessingActive(true)
+        appModel.gatewayConnected = true
+        defer {
+            talkMode.stop()
+            appModel.setScenePhase(.active)
+            if let previous {
+                defaults.set(previous, forKey: "talk.background.enabled")
+            } else {
+                defaults.removeObject(forKey: "talk.background.enabled")
+            }
+        }
+
+        appModel.setScenePhase(.background)
+        appModel.suppressBackgroundReconnect(reason: "background_grace_timer")
+
+        #expect(!appModel.backgroundReconnectSuppressed)
+        #expect(appModel.gatewayConnected)
+        #expect(talkMode.isGatewayConnected)
+        #expect(talkMode.canKeepContinuousTalkActiveInBackground)
+
+        talkMode.stop()
+        appModel.suppressBackgroundReconnect(reason: "node_loop:lease_expired")
+        #expect(appModel.backgroundReconnectSuppressed)
+        await waitForTalkCondition { !talkMode.isGatewayConnected }
+        #expect(!appModel.gatewayConnected)
+        #expect(appModel.gatewayStatusText == "Background idle")
+    }
+
     @Test @MainActor func `late finalizer release cannot restart Voice Wake in background`() async throws {
         let (talkMode, appModel) = makeTalkModel()
         let barrier = TalkPreparationBarrier()
@@ -5912,7 +6025,7 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
         let gatewayStableID = " gateway-watch-snapshot "
         appModel.gatewayConnected = true
         appModel.setOperatorConnected(true)
-        appModel.connectedGatewayID = gatewayStableID
+        configureMockApprovalRoute(appModel, stableID: gatewayStableID)
         appModel.gatewayStatusText = "Connected"
         appModel.talkMode.setEnabled(true)
         appModel.talkMode.statusText = "Listening"
@@ -6214,11 +6327,68 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
         #expect(watchService.lastSentAppSnapshot?.sessionKey == "incident-42")
     }
 
+    @Test(arguments: [OpenClawWatchAppCommand.openChat, .startTalk]) @MainActor
+    func `restored startup rejects tagged watch actions until a route is configured`(
+        command: OpenClawWatchAppCommand) async throws
+    {
+        let isolation = await GatewayRegistryTestIsolation()
+        defer { isolation.restore() }
+        let state = try TemporaryOpenClawState(instanceID: "startup-watch-action-\(UUID().uuidString)")
+        defer { state.restore() }
+        let stableID = "startup-watch-action-\(UUID().uuidString)"
+        let savedChat = "agent:main:dashboard:startup-watch-action"
+        defer {
+            GatewaySettingsStore.saveGatewayFocusedChatSessionKey(stableID: stableID, sessionKey: nil)
+            GatewaySettingsStore.saveGatewaySelectedAgentId(stableID: stableID, agentId: nil)
+        }
+        try #require(GatewaySettingsStore.upsertGatewayRegistryEntry(.init(
+            stableID: stableID, kind: .manual, name: "Startup Watch action test",
+            host: "watch-fixture.example.test", port: 443, useTLS: true,
+            contextPath: nil, lastConnectedAtMs: nil), activate: true))
+        GatewaySettingsStore.saveGatewaySelectedAgentId(stableID: stableID, agentId: "main")
+        GatewaySettingsStore.saveGatewayFocusedChatSessionKey(stableID: stableID, sessionKey: savedChat)
+
+        let messaging = MockWatchMessagingService()
+        let model = NodeAppModel(
+            notificationCenter: MockBootstrapNotificationCenter(),
+            watchMessagingService: messaging,
+            audioAdmissionInitiallyAllowed: false, restoringSavedGatewayRoute: true)
+        defer { model.voiceWake.stop() }
+        #expect(model.connectedGatewayID == stableID)
+        #expect(model.chatSessionKey == savedChat)
+        #expect(model.activeGatewayConnectConfig == nil)
+        #expect(await model.operatorSession.currentRoute() == nil)
+        model.setTalkEnabled(false)
+        let opened = model.openChatRequestID
+
+        messaging.emitAppCommand(makeWatchAppCommand(
+            "startup-tagged-action", command, session: "watch-requested-session",
+            gateway: stableID, sentAt: 125, transport: "transferUserInfo"))
+        try #require(await waitForMainActorWork { messaging.lastSentAppSnapshot != nil })
+        #expect(model.openChatRequestID == opened)
+        #expect(model.chatSessionKey == savedChat)
+        #expect(!model.talkMode.isEnabled)
+        #expect(messaging.lastSentAppSnapshot?.gatewayStableID == nil)
+
+        // The same tagged target is valid once an actual connection config owns it.
+        configureMockApprovalRoute(model, stableID: stableID)
+        messaging.emitAppCommand(makeWatchAppCommand(
+            "configured-tagged-action", command, session: "watch-requested-session",
+            gateway: stableID, sentAt: 126, transport: "transferUserInfo"))
+        try #require(await waitForMainActorWork {
+            command == .openChat ? model.openChatRequestID == opened + 1 : model.talkMode.isEnabled
+        })
+        if command == .openChat {
+            #expect(model.chatSessionKey == "watch-requested-session")
+        }
+        model.setTalkEnabled(false)
+    }
+
     @Test @MainActor func `watch app commands reject stale gateway targets`() async {
         let watchService = MockWatchMessagingService()
         let talkMode = TalkModeManager(allowSimulatorCapture: true)
         let appModel = NodeAppModel(watchMessagingService: watchService, talkMode: talkMode)
-        appModel.connectedGatewayID = "gateway-current"
+        configureMockApprovalRoute(appModel, stableID: "gateway-current")
         appModel.setTalkEnabled(false)
 
         for command in [OpenClawWatchAppCommand.openChat, .startTalk] {
@@ -8211,6 +8381,20 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
                 token: nil,
                 bootstrapToken: nil,
                 password: nil,
+                hasStoredOperatorToken: false,
+                hasVerifiedIngressPrincipal: true))
+        #expect(
+            !NodeAppModel.shouldStartOperatorGatewayLoop(
+                token: nil,
+                bootstrapToken: "fresh-bootstrap-token",
+                password: nil,
+                hasStoredOperatorToken: false,
+                hasVerifiedIngressPrincipal: true))
+        #expect(
+            NodeAppModel.shouldStartOperatorGatewayLoop(
+                token: nil,
+                bootstrapToken: nil,
+                password: nil,
                 hasStoredOperatorToken: true))
         #expect(
             NodeAppModel.shouldStartOperatorGatewayLoop(
@@ -9121,7 +9305,7 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
         case "whitespace", "trimmed-is-other": " gateway-\(suffix) "
         default: nil
         }
-        model.connectedGatewayID = currentID
+        configureMockApprovalRoute(model, stableID: currentID)
         model.selectedAgentId = "ui-other"
         model.gatewayDefaultAgentId = "main"
         let databases = try OpenClawClientDatabases(directoryURL: #require(NodeAppModel.chatDatabaseDirectoryURL()))
@@ -9230,18 +9414,6 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
         #expect(ShareGatewayRelaySettings.loadLastEvent()?.contains("gateway not connected") == true)
     }
 
-    @Test func `agent deep link logging excludes the original URL`() throws {
-        let source = try String(contentsOf: Self.nodeAppModelSourceURL(), encoding: .utf8)
-        let start = try #require(source.range(of: "private func handleAgentDeepLink("))
-        let end = try #require(
-            source.range(
-                of: "private func effectiveAgentDeepLinkForPrompt(",
-                range: start.upperBound..<source.endIndex))
-        let handler = String(source[start.lowerBound..<end.lowerBound])
-
-        #expect(!handler.contains("originalURL.absoluteString, privacy: .public"))
-    }
-
     @Test @MainActor func `handle deep link records oversized message rejection`() async throws {
         let appModel = NodeAppModel()
         let msg = String(repeating: "a", count: 20001)
@@ -9320,7 +9492,7 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
         #expect(ShareGatewayRelaySettings.loadLastEvent()?.contains("Sent to gateway") == true)
     }
 
-    @Test @MainActor func `operator scopes use the active gateway token`() throws {
+    @Test @MainActor func `stored operator scopes request permissions without granting disconnected authority`() throws {
         let tempDir = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
         try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
@@ -9366,8 +9538,7 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
             token: "operator-token",
             scopes: ["operator.read", "operator.admin", "operator.approvals"],
             gatewayID: authenticationOwnerID)
-        appModel.refreshOperatorAdminScopeFromStore()
-        #expect(appModel.hasOperatorAdminScope == true)
+        #expect(appModel.hasOperatorAdminScope == false)
         #expect(appModel._test_shouldRequestStoredOperatorAdminScope(gatewayID: authenticationOwnerID))
         #expect(appModel._test_shouldRequestStoredOperatorApprovalScope(
             gatewayID: authenticationOwnerID,
@@ -9383,7 +9554,6 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
             deviceId: identity.deviceId,
             role: "operator",
             gatewayID: authenticationOwnerID)
-        appModel.refreshOperatorAdminScopeFromStore()
         #expect(appModel.hasOperatorAdminScope == false)
     }
 
@@ -9415,12 +9585,105 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
         }
         #expect(errors == [.cancelled])
     }
+}
 
-    private static func nodeAppModelSourceURL() -> URL {
-        URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-            .appendingPathComponent("Sources/Model/NodeAppModel.swift")
+extension TalkModeManagerTests {
+    @Test(.serialized, .testWaitLimit, arguments: ["ready", "stop", "session-switch"])
+    @MainActor func `PTT startup refusal preserves its send until acceptance or invalidation`(
+        action: String) async throws
+    {
+        let talkMode = TalkModeManager(allowSimulatorCapture: true)
+        let gateway = GatewayNodeSession()
+        let refusal = TalkPreparationBarrier()
+        var sends: [Data] = []
+        var accepted = false
+        let recordSend: @MainActor @Sendable (Data) -> Int = { params in
+            sends.append(params)
+            return sends.count
+        }
+        let finishAcceptedTurn: @MainActor @Sendable () -> Void = {
+            accepted = true
+            // Admission is the boundary under test; stop before starting real speech output.
+            talkMode.stop()
+        }
+        defer {
+            refusal.release()
+            talkMode.stop()
+        }
+        let socket = GatewayTestWebSocketTask(sendHook: { socket, message, _ in
+            let data: Data = switch message {
+            case let .data(value): value
+            case let .string(value): Data(value.utf8)
+            @unknown default: Data()
+            }
+            let frame = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+            guard let method = frame["method"] as? String, method != "connect" else { return }
+            var response: [String: Any] = try [
+                "type": "res", "id": #require(frame["id"] as? String), "ok": true, "payload": [:],
+            ]
+            var holdRefusal = false
+            if method == "chat.send" {
+                let params = try #require(frame["params"] as? [String: Any])
+                let attempt = try await recordSend(JSONSerialization.data(withJSONObject: params, options: .sortedKeys))
+                if attempt == 1 {
+                    response["ok"] = false
+                    response["error"] = [
+                        "code": "UNAVAILABLE", "message": "Agent is preparing", "retryable": true,
+                        "retryAfterMs": 1,
+                        "details": ["reason": "startup-sidecars", "method": "chat.send"],
+                    ]
+                    holdRefusal = action != "ready"
+                } else {
+                    response["payload"] = try [
+                        "runId": #require(params["idempotencyKey"] as? String), "status": "ok",
+                    ]
+                }
+            } else if method == "chat.history" {
+                await finishAcceptedTurn()
+            }
+            try socket.emitReceiveSuccess(.data(JSONSerialization.data(withJSONObject: response)))
+            if holdRefusal { await refusal.suspendFirstPreparation() }
+        }, receiveHook: { socket, index in
+            if index == 0 { return .data(GatewayWebSocketTestSupport.connectChallengeData()) }
+            return .data(GatewayWebSocketTestSupport.connectOkData(
+                id: socket.snapshotConnectRequestID() ?? "connect",
+                capabilities: [GatewayServerCapability.chatSendRoutingContract.rawValue]))
+        })
+        var options = GatewayWebSocketTestSupport.identityFreeOperatorConnectOptions
+        options.allowStoredDeviceAuth = false
+        try await gateway.connect(
+            url: #require(URL(string: "ws://talk-startup-test.invalid")),
+            credentials: .init(),
+            connectOptions: options,
+            sessionBox: WebSocketSessionBox(session: GatewayTestWebSocketSession(taskFactory: { socket })),
+            onConnected: {},
+            onDisconnected: { _ in },
+            onInvoke: { BridgeInvokeResponse(id: $0.id, ok: true) })
+        talkMode.attachGateway(gateway)
+        talkMode.updateMainSessionKey("agent:main:startup-test")
+        talkMode.updateGatewayConnected(true)
+        let capture = try await talkMode.beginPushToTalk()
+        await talkMode._test_handlePushToTalkTranscript(
+            "Keep this spoken message", isFinal: false, captureId: capture.captureId)
+        #expect(talkMode.endPushToTalk(captureId: capture.captureId).status == "queued")
+        if action != "ready" {
+            await refusal.waitUntilEntered()
+            if action == "stop" {
+                talkMode.stop()
+            } else {
+                talkMode.updateMainSessionKey("agent:main:replacement")
+            }
+            refusal.release()
+        }
+        await waitForTalkCondition { talkMode._test_finishingPushToTalkCaptureId() == nil }
+        await gateway.disconnect()
+        #expect(accepted == (action == "ready"))
+        try #require(sends.count == (action == "ready" ? 2 : 1))
+        let first = try #require(JSONSerialization.jsonObject(with: sends[0]) as? [String: Any])
+        #expect((first["message"] as? String)?.contains("Keep this spoken message") == true)
+        #expect(first["sessionKey"] as? String == "agent:main:startup-test")
+        #expect((first["idempotencyKey"] as? String)?.isEmpty == false)
+        if action == "ready" { #expect(sends[0] == sends[1]) }
     }
 }
 
