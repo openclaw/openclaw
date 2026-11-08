@@ -1,3 +1,4 @@
+import { t } from "./i18n/index.js";
 import type { Page } from "./page-context.js";
 import { button, el, type Detail } from "./page-dom.js";
 
@@ -31,21 +32,18 @@ export function ask(ui: Page, record: AskRecord, correct = false, candidate?: Ca
   panel.setAttribute(
     "aria-label",
     candidate
-      ? `${askLabel()} to check this match`
+      ? t("knowledge.ask.checkMatch", { agent: agentName() ?? t("knowledge.common.yourAgent") })
       : correct
-        ? `${askLabel()} to correct this`
+        ? t("knowledge.ask.correct", { agent: agentName() ?? t("knowledge.common.yourAgent") })
         : askLabel(),
   );
   panel.append(
     el("h3", panel.getAttribute("aria-label")!),
-    el(
-      "p",
-      `Starts a new chat with ${agentName() ?? "your agent"}. The record reference is sent with your request.`,
-    ),
+    el("p", t("knowledge.ask.body", { agent: agentName() ?? t("knowledge.common.yourAgent") })),
   );
   const prompt = el("textarea");
   prompt.rows = 5;
-  prompt.setAttribute("aria-label", "Request");
+  prompt.setAttribute("aria-label", t("knowledge.ask.request"));
   prompt.value = initialRequest(record, correct, candidate);
   const feedback = el("p");
   feedback.setAttribute("role", "status");
@@ -54,7 +52,7 @@ export function ask(ui: Page, record: AskRecord, correct = false, candidate?: Ca
     panel.remove();
     previousFocus?.focus();
   };
-  const send = button("Ask", () => {
+  const send = button(t("knowledge.ask.send"), () => {
     void submit();
   });
   const refreshSend = () => {
@@ -72,11 +70,13 @@ export function ask(ui: Page, record: AskRecord, correct = false, candidate?: Ca
         message: `${prompt.value.trim()}\n\n${recordReference(record, candidate)}`,
       });
       if (!created?.key) {
-        feedback.textContent = "Chat was not started. Your request is still here.";
+        feedback.textContent = t("knowledge.ask.notStarted");
         return;
       }
       if (created.runError) {
-        feedback.textContent = `Chat was started but the request was not sent: ${errorText(created.runError.message ?? "unknown error")}`;
+        feedback.textContent = t("knowledge.ask.notSent", {
+          details: errorText(created.runError.message ?? t("knowledge.common.unknownError")),
+        });
         return;
       }
       dismiss();
@@ -93,7 +93,7 @@ export function ask(ui: Page, record: AskRecord, correct = false, candidate?: Ca
     dismiss();
   });
   const footer = el("div", undefined, "knowledge-actions");
-  footer.append(button("Cancel", dismiss, "knowledge-quiet"), send);
+  footer.append(button(t("knowledge.common.cancel"), dismiss, "knowledge-quiet"), send);
   panel.append(prompt, footer, feedback);
   root.append(panel);
   panel.showModal();

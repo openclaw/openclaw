@@ -4,6 +4,7 @@ import { browse } from "./browse-view.js";
 import { browserContract } from "./browser-contract.js";
 import { coalesceChanges } from "./change-refresh.js";
 import type { contract } from "./contract.js";
+import { bindLocale, t } from "./i18n/index.js";
 import { agentDisplayName } from "./knowledge-presentation.js";
 import type { Page } from "./page-context.js";
 import { button, el } from "./page-dom.js";
@@ -21,22 +22,23 @@ import { settings } from "./settings-view.js";
 import { viewingClient } from "./store-view-client.js";
 import { storeBar, storeLabel, storeNotice, storeOf, type SettingsSection } from "./stores-view.js";
 import { icon } from "./ui-icons.js";
-import { commitContent, prepareLoading, showLoadingFailure } from "./view-frame.js";
 import "./control-ui.css";
+import { commitContent, prepareLoading, showLoadingFailure } from "./view-frame.js";
 
 export default defineControlUiPlugin({
   id: browserContract.pluginId,
   activate(host) {
+    bindLocale(host);
     const removeSessionPanel = registerSessionPanel(host);
     const removeNavigation = host.ui.registerNavigation({
       id: "knowledge",
-      label: "Knowledge",
+      label: t("knowledge.common.knowledge"),
       page: { id: "overview" },
       icon: "book",
     });
     const removePage = host.ui.registerPage({
       id: "overview",
-      label: "Knowledge",
+      label: t("knowledge.common.knowledge"),
       mount(container, initialContext) {
         const s = createPageState(initialContext, readLocation(initialContext.props));
         // Store settings and the viewing selector. Every other call goes through
@@ -52,15 +54,15 @@ export default defineControlUiPlugin({
           title = el("div"),
           actions = el("div", undefined, "knowledge-actions");
         const subtitle = el("p", undefined, "knowledge-subtitle");
-        title.append(el("h1", "Knowledge"), subtitle);
+        title.append(el("h1", t("knowledge.common.knowledge")), subtitle);
         // Silent until there is something to report: loading placeholders already say so.
         const status = el("span", "", "knowledge-status");
         status.hidden = true;
         status.setAttribute("role", "status");
         status.setAttribute("aria-live", "polite");
         const settingsButton = button("", () => openSettings("stores"), "knowledge-icon-button");
-        settingsButton.setAttribute("aria-label", "Settings");
-        settingsButton.title = "Stores, vocabulary and vault status";
+        settingsButton.setAttribute("aria-label", t("knowledge.common.settings"));
+        settingsButton.title = t("knowledge.page.settingsHint");
         settingsButton.append(icon("settings"));
         actions.append(status, settingsButton);
         const storeContext = el("div", undefined, "knowledge-store-slot");
@@ -80,12 +82,24 @@ export default defineControlUiPlugin({
         announcer.setAttribute("role", "status");
         announcer.setAttribute("aria-live", "polite");
         const nav = el("nav", undefined, "knowledge-tabs");
-        nav.setAttribute("aria-label", "Knowledge views");
+        nav.setAttribute("aria-label", t("knowledge.page.views"));
         // These are text navigation tabs, not host .btn controls. Theme-specific
         // .btn rules otherwise reintroduce filled backgrounds in light mode.
-        const recentTab = button("Recent", () => navigate("recent"), "knowledge-tab"),
-          browseTab = button("Browse", () => navigate("browse"), "knowledge-tab"),
-          scribesTab = button("Scribes", () => navigate("scribes"), "knowledge-tab");
+        const recentTab = button(
+            t("knowledge.page.tabs.recent"),
+            () => navigate("recent"),
+            "knowledge-tab",
+          ),
+          browseTab = button(
+            t("knowledge.page.tabs.browse"),
+            () => navigate("browse"),
+            "knowledge-tab",
+          ),
+          scribesTab = button(
+            t("knowledge.page.tabs.scribes"),
+            () => navigate("scribes"),
+            "knowledge-tab",
+          );
         // Count slots are reserved so the centered tabs barely move when the counts arrive.
         for (const tab of [browseTab, scribesTab]) {
           const pending = el("span", undefined, "knowledge-tab-count knowledge-tab-count-pending");
@@ -129,15 +143,20 @@ export default defineControlUiPlugin({
         const recentBack: RecentCursor[] = [];
         const recentExpanded = new Set<number | string>();
         const agentName = (id = s.agentId) => agentDisplayName(id, s.context.host.agents.rows);
-        const askLabel = () => `Ask ${agentName() ?? "your agent"}`;
+        const askLabel = () =>
+          t("knowledge.page.ask", { agent: agentName() ?? t("knowledge.common.yourAgent") });
         const searchPlaceholder = () =>
-          `Find a person, project, or anything ${agentName() ?? "your agent"} saved…`;
+          t("knowledge.page.searchPlaceholder", {
+            agent: agentName() ?? t("knowledge.common.yourAgent"),
+          });
         // Header copy names the configured agent; rerun when its identity or name changes.
         const renderAgentCopy = () => {
           subtitle.textContent =
             s.storesSnapshot && storeOf(s.storesSnapshot, viewedAgent())?.kind === "named"
-              ? "Knowledge saved here, and where it came from."
-              : `What ${agentName() ?? "your agent"} has saved, and where it came from.`;
+              ? t("knowledge.page.subtitleNamed")
+              : t("knowledge.page.subtitle", {
+                  agent: agentName() ?? t("knowledge.common.yourAgent"),
+                });
           const input = root.querySelector<HTMLInputElement>(
             ".knowledge-search:not(.knowledge-search-compact) input",
           );
@@ -387,7 +406,12 @@ export default defineControlUiPlugin({
           content.replaceChildren();
           const entry = s.storesSnapshot && storeOf(s.storesSnapshot, agent);
           announce(
-            `Viewing ${displayName(agent)}’s knowledge${entry ? `: ${storeLabel(entry, displayName)}` : ""}.`,
+            entry
+              ? t("knowledge.page.viewingStore", {
+                  agent: displayName(agent),
+                  store: storeLabel(entry, displayName),
+                })
+              : t("knowledge.page.viewing", { agent: displayName(agent) }),
           );
           renderStoreContext();
           s.tab = s.tab === "settings" || s.tab === "scribes" ? s.tab : "recent";
@@ -466,11 +490,8 @@ export default defineControlUiPlugin({
             await (async () => {
               if (s.scopeMismatch) {
                 target.replaceChildren(
-                  empty(
-                    "This link belongs to a different knowledge store",
-                    "The selected agent no longer uses the store named in this link. No page from another store has been opened.",
-                  ),
-                  button("Open current store", () => {
+                  empty(t("knowledge.page.otherStoreTitle"), t("knowledge.page.otherStoreBody")),
+                  button(t("knowledge.page.openCurrentStore"), () => {
                     s.expectedVault = "";
                     s.scopeChecked = false;
                     s.scopeMismatch = false;
@@ -499,7 +520,7 @@ export default defineControlUiPlugin({
                       : undefined,
                     s.storeState,
                     s.storeMessage,
-                    agentName() ?? "your agent",
+                    agentName() ?? t("knowledge.common.yourAgent"),
                     displayName,
                     () => openSettings("stores"),
                     () => void refresh(),
@@ -571,7 +592,7 @@ export default defineControlUiPlugin({
           } catch (error) {
             if (live(n) && n === s.generation) {
               if (background) {
-                status.textContent = "Refresh unavailable";
+                status.textContent = t("knowledge.page.refreshFailed");
                 status.hidden = false;
               } else {
                 showLoadingFailure(ui, error, () => {

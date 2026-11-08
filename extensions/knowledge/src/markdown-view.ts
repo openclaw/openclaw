@@ -1,4 +1,5 @@
 import DOMPurify from "dompurify";
+import { t } from "./i18n/index.js";
 import { markdown, type LinkResolution } from "./markdown-links.js";
 
 // True when `href` holds a C0 control character, space or DEL.
@@ -81,7 +82,10 @@ export function markdownView(
       });
     } else if (resolved) {
       link.className = "knowledge-unresolved-link";
-      link.title = resolved.status === "ambiguous" ? "Ambiguous page link" : "Page unavailable";
+      link.title =
+        resolved.status === "ambiguous"
+          ? t("knowledge.markdown.ambiguousLink")
+          : t("knowledge.common.pageUnavailable");
       link.setAttribute("aria-disabled", "true");
     }
   }

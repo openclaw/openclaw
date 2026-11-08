@@ -1,6 +1,7 @@
 import type { ControlUiViewContext } from "openclaw/plugin-sdk/control-ui";
 import type { FeatureOutput } from "openclaw/plugin-sdk/feature-contract";
 import type { contract } from "./contract.js";
+import { t } from "./i18n/index.js";
 import type { loadVocabulary } from "./inspection-client.js";
 import { locationKey, type KnowledgeLocation } from "./page-location.js";
 
@@ -130,14 +131,16 @@ export function createPageState(
 // Loading belongs to the destination pane, not the whole application.
 export function loadingLabel(s: PageState) {
   return s.selectedId
-    ? "Opening record…"
-    : "Loading " +
-        (s.tab === "browse"
-          ? s.kind === "relationship"
-            ? "connections"
-            : s.kind === "claim"
-              ? "claims"
-              : "pages"
-          : s.tab) +
-        "…";
+    ? t("knowledge.loading.record")
+    : t(
+        `knowledge.loading.${
+          s.tab === "browse"
+            ? s.kind === "relationship"
+              ? "connections"
+              : s.kind === "claim"
+                ? "claims"
+                : "pages"
+            : s.tab
+        }`,
+      );
 }

@@ -1,4 +1,5 @@
 import { claimCard, summaryLink } from "./claim-view.js";
+import { t } from "./i18n/index.js";
 import { confidenceView } from "./knowledge-presentation.js";
 import { loadingPlaceholder } from "./loading-view.js";
 import type { Page } from "./page-context.js";
@@ -16,14 +17,7 @@ import {
 import { icon } from "./ui-icons.js";
 
 // Plural group headings for built-in claim kinds; other kinds use their humanized label.
-const CLAIM_GROUP_LABELS: Record<string, string> = {
-  belief: "Beliefs",
-  commitment: "Commitments",
-  decision: "Decisions",
-  preference: "Preferences",
-  fact: "Facts",
-  event: "Events",
-};
+const CLAIM_GROUPS = new Set(["belief", "commitment", "decision", "preference", "fact", "event"]);
 /** Sections of an open record whose rows load after the primary content commits. */
 export type RecordPanels = {
   id: string;
@@ -73,9 +67,9 @@ export async function recordPanels(ui: Page, view: RecordPanels) {
   } = view;
   const claimSurface = el("div", undefined, "knowledge-surface knowledge-claim-groups");
   claims.append(claimSurface);
-  const connectionLoading = loadingPlaceholder("rows", "Loading connections…", 3);
+  const connectionLoading = loadingPlaceholder("rows", t("knowledge.loading.connections"), 3);
   refs.append(connectionLoading);
-  const claimsLoading = loadingPlaceholder("cards", "Loading saved claims…", 2);
+  const claimsLoading = loadingPlaceholder("cards", t("knowledge.panels.loadingClaims"), 2);
   if (r.kind === "page" && !merged) {
     claimSurface.append(claimsLoading);
   }
@@ -108,7 +102,7 @@ export async function recordPanels(ui: Page, view: RecordPanels) {
       includeEndpoints: direction === "incoming" || direction === "outgoing",
     });
     if (live(n) && snapshot && snapshot !== page.snapshot) {
-      throw new Error("Connections changed; reopen this page to refresh.");
+      throw new Error(t("knowledge.panels.changed"));
     }
     snapshot = page.snapshot;
     return page;
@@ -121,7 +115,7 @@ export async function recordPanels(ui: Page, view: RecordPanels) {
     claimsLoading.remove();
     for (const link of page.connections) {
       if (!isFullSummary(link.record)) {
-        throw new Error("Full connection record required.");
+        throw new Error(t("knowledge.panels.recordRequired"));
       }
       const card = claimCard(ui, link.record, n, id);
       // A meeting's own event claim restates the meeting page and its
@@ -149,16 +143,21 @@ export async function recordPanels(ui: Page, view: RecordPanels) {
       group.append(card);
       const count = group.querySelectorAll(".knowledge-claim").length;
       group.querySelector("h4")!.textContent =
-        `${CLAIM_GROUP_LABELS[kind] ?? label(kind)} · ${count}`;
+        `${CLAIM_GROUPS.has(kind) ? t(`knowledge.panels.groups.${kind}`) : label(kind)} · ${count}`;
     }
     const count = claims.querySelectorAll(".knowledge-claim").length;
     claims
       .querySelector("h3")!
       .replaceChildren(
-        document.createTextNode(`What ${agentName() ?? "your agent"} knows `),
+        document.createTextNode(
+          `${t("knowledge.record.knows", { agent: agentName() ?? t("knowledge.common.yourAgent") })} `,
+        ),
         el(
           "span",
-          `${count} ${count === 1 ? "claim" : "claims"}${page.nextOffset !== null ? " shown" : ""}`,
+          t(
+            `knowledge.panels.claims${count === 1 ? "One" : ""}${page.nextOffset !== null ? "Shown" : ""}`,
+            { count: String(count) },
+          ),
           "knowledge-section-count",
         ),
       );
@@ -171,7 +170,12 @@ export async function recordPanels(ui: Page, view: RecordPanels) {
       claims.append(
         el(
           "p",
-          `No claims about ${r.title}.${r.type === "person" && attendanceIds.size ? " Only attendance is recorded." : ""}`,
+          t(
+            r.type === "person" && attendanceIds.size
+              ? "knowledge.panels.noClaimsAttendance"
+              : "knowledge.panels.noClaims",
+            { title: r.title },
+          ),
         ),
       );
     }
@@ -197,7 +201,7 @@ export async function recordPanels(ui: Page, view: RecordPanels) {
         const row = el("div", undefined, "knowledge-connection"),
           target = endpoints[i] ?? link.record;
         if (!isFullSummary(target)) {
-          throw new Error("Full connection endpoint required.");
+          throw new Error(t("knowledge.panels.endpointRequired"));
         }
         // A wikilink to a record already shown as a typed connection adds nothing.
         if (
@@ -216,7 +220,11 @@ export async function recordPanels(ui: Page, view: RecordPanels) {
             const attendee = el("div", undefined, "knowledge-attendee");
             attendee.append(
               summaryLink(ui, target),
-              el("p", link.record.attributionConfidence?.basis ?? "No attribution basis recorded"),
+              el(
+                "p",
+                link.record.attributionConfidence?.basis ??
+                  t("knowledge.common.noAttributionBasis"),
+              ),
               confidenceView(link.record.attributionConfidence, true),
             );
             attendanceRows.append(attendee);
@@ -241,8 +249,8 @@ export async function recordPanels(ui: Page, view: RecordPanels) {
         }
         if (endpoints[i]) {
           const detail = button("", () => open(link.record.id), "knowledge-connection-evidence");
-          detail.setAttribute("aria-label", "Relationship evidence");
-          detail.title = "Relationship evidence";
+          detail.setAttribute("aria-label", t("knowledge.panels.relationshipEvidence"));
+          detail.title = t("knowledge.panels.relationshipEvidence");
           detail.append(icon("paperclip", 13));
           row.append(detail);
         }
@@ -257,13 +265,18 @@ export async function recordPanels(ui: Page, view: RecordPanels) {
       }
     }
     // Counts say "shown" only while more connections remain unloaded.
-    const partial = railMore() ? " shown" : "";
+    const partial = railMore() ? "Shown" : "";
     if (attendanceIds.size && r.type === "person") {
-      knownFrom.textContent = `Known from ${attendanceIds.size} meeting${attendanceIds.size === 1 ? "" : "s"}${partial}`;
+      knownFrom.textContent = t(
+        `knowledge.panels.knownFrom${attendanceIds.size === 1 ? "One" : ""}${partial}`,
+        { count: String(attendanceIds.size) },
+      );
     }
     if (attendanceIds.size && r.type === "meeting") {
-      attended.querySelector("h3")!.textContent =
-        `Attended · ${attendanceIds.size} ${attendanceIds.size === 1 ? "person" : "people"}${partial} · from attendance connections`;
+      attended.querySelector("h3")!.textContent = t(
+        `knowledge.panels.attended${attendanceIds.size === 1 ? "One" : ""}${partial}`,
+        { count: String(attendanceIds.size) },
+      );
     }
     connectionLoading.remove();
     loadMore.remove();
@@ -271,7 +284,7 @@ export async function recordPanels(ui: Page, view: RecordPanels) {
       connections.append(loadMore);
     } else if (!refs.children.length) {
       refs.remove();
-      connections.append(el("p", "No connections recorded.", "knowledge-muted"));
+      connections.append(el("p", t("knowledge.panels.noConnections"), "knowledge-muted"));
     }
   }
   const pageLoader =
@@ -287,11 +300,11 @@ export async function recordPanels(ui: Page, view: RecordPanels) {
         });
     };
   const loadMore = button(
-    "More connections",
+    t("knowledge.panels.moreConnections"),
     pageLoader(moreConnections, () => loadMore, connections),
   );
   const moreClaimsButton = button(
-    "More claims",
+    t("knowledge.panels.moreClaims"),
     pageLoader(moreClaims, () => moreClaimsButton, claims),
     "knowledge-quiet",
   );
@@ -300,7 +313,7 @@ export async function recordPanels(ui: Page, view: RecordPanels) {
     read: () => Promise<void>,
     placeholder: HTMLElement,
     section: HTMLElement,
-    name: string,
+    name: "claims" | "connections",
   ) => {
     try {
       await read();
@@ -314,10 +327,14 @@ export async function recordPanels(ui: Page, view: RecordPanels) {
       placeholder.replaceChildren(
         failure(error),
         button(
-          "Retry " + name,
+          t(`knowledge.panels.retry.${name}`),
           () => {
             placeholder.replaceChildren(
-              loadingPlaceholder(name === "claims" ? "cards" : "rows", "Loading " + name + "…", 2),
+              loadingPlaceholder(
+                name === "claims" ? "cards" : "rows",
+                t(`knowledge.loading.${name}`),
+                2,
+              ),
             );
             void readPanel(read, placeholder, section, name);
           },
@@ -364,12 +381,12 @@ export async function recordPanels(ui: Page, view: RecordPanels) {
   }
   if (result.references?.length) {
     const references = el("details");
-    references.append(el("summary", "Record references · not asserted relationships"));
+    references.append(el("summary", t("knowledge.panels.references")));
     for (const ref of result.references) {
       references.append(summaryLink(ui, ref));
     }
     if (result.nextReferenceOffset != null) {
-      references.append(el("p", "Showing the first 20 references."));
+      references.append(el("p", t("knowledge.panels.referencesLimit")));
     }
     technical.append(references);
   }
@@ -381,24 +398,32 @@ export async function recordPanels(ui: Page, view: RecordPanels) {
           return;
         }
         const checkpoint = history.mutations.find((m) => m.hash === r.hash)?.git;
-        checkpointValue.textContent = checkpoint ? label(checkpoint.state) : "Not recorded";
-        checkpointValue.title =
-          checkpoint?.message ?? "No Git checkpoint recorded for this revision.";
+        checkpointValue.textContent = checkpoint
+          ? label(checkpoint.state)
+          : t("knowledge.panels.notRecorded");
+        checkpointValue.title = checkpoint?.message ?? t("knowledge.panels.noCheckpoint");
         for (const entry of history.entries) {
           historyList.append(
-            el("p", `Revision ${entry.revision} · ${date(entry.at)} · ${human(entry.provenance)}`),
+            el(
+              "p",
+              t("knowledge.panels.historyEntry", {
+                revision: String(entry.revision),
+                date: date(entry.at),
+                provenance: human(entry.provenance),
+              }),
+            ),
           );
         }
         if (!history.entries.length) {
-          historyList.append(el("p", "No saved history recorded."));
+          historyList.append(el("p", t("knowledge.panels.noHistory")));
         }
         if (history.nextOffset !== null) {
-          historyList.append(el("p", "Showing the latest 10 revisions."));
+          historyList.append(el("p", t("knowledge.panels.historyLimit")));
         }
       })
       .catch((error: unknown) => {
         if (live(n)) {
-          checkpointValue.textContent = "Unavailable";
+          checkpointValue.textContent = t("knowledge.common.unavailable");
           historyList.append(failure(error));
         }
       }),

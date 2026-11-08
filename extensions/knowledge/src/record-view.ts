@@ -1,6 +1,7 @@
 import { ask } from "./ask-dialog.js";
 import { renderClaim, summaryLink } from "./claim-view.js";
-import { evidenceView, originalDownload } from "./evidence-view.js";
+import { evidenceView } from "./evidence-view.js";
+import { t } from "./i18n/index.js";
 import { displayAliases, identityTag } from "./knowledge-presentation.js";
 import { markdownView } from "./markdown-view.js";
 import type { Page } from "./page-context.js";
@@ -10,8 +11,6 @@ import {
   date,
   disclosureLabel,
   el,
-  fileKind,
-  fileSize,
   human,
   identificationDetails,
   label,
@@ -21,9 +20,10 @@ import {
 } from "./page-dom.js";
 import { fileDetails } from "./record-files.js";
 import { recordPanels } from "./record-panels.js";
+import { sourcesRail } from "./record-sources.js";
 import { recordTimeline } from "./record-timeline.js";
 import { claimVersions } from "./record-versions.js";
-import { formatSourceDate, sourceDateNote } from "./temporal.js";
+import { formatSourceDate, validSourceDate } from "./temporal.js";
 import { foldTimeline } from "./timeline-fold.js";
 import { icon } from "./ui-icons.js";
 
@@ -34,6 +34,27 @@ const fieldText = (name: string, value: unknown) =>
     : typeof value === "string" || typeof value === "number" || typeof value === "boolean"
       ? String(value)
       : JSON.stringify(value);
+
+/** Explain storage-day differences without changing source precision. */
+function sourceDateNote(value: string): string {
+  if (!validSourceDate(value)) {
+    return "";
+  }
+  if (/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+    return t("knowledge.record.dateOnlyNote");
+  }
+  const instant = new Date(value);
+  const local = [
+    instant.getFullYear(),
+    String(instant.getMonth() + 1).padStart(2, "0"),
+    String(instant.getDate()).padStart(2, "0"),
+  ].join("-");
+  return local !== instant.toISOString().slice(0, 10)
+    ? t("knowledge.record.storedAs", {
+        time: instant.toISOString().slice(0, 16).replace("T", " "),
+      })
+    : "";
+}
 
 /** Full record page: header, notes or statement, and the aside; panels load after commit. */
 export async function showDetail(
@@ -71,10 +92,7 @@ export async function showDetail(
   }
   if (!result.record) {
     detailTarget.replaceChildren(
-      empty(
-        "Record unavailable",
-        "This record cannot be opened in the current scope. No matching record was selected arbitrarily.",
-      ),
+      empty(t("knowledge.record.unavailable"), t("knowledge.record.unavailableBody")),
     );
     return;
   }
@@ -88,7 +106,13 @@ export async function showDetail(
     meta?.occurred_at ??
     (typeof meta?.fields?.occurred_at === "string" ? meta.fields.occurred_at : undefined);
   if (occurred) {
-    heading.append(el("p", `Occurred ${formatSourceDate(occurred)}`, "knowledge-occurred"));
+    heading.append(
+      el(
+        "p",
+        t("knowledge.common.occurred", { date: formatSourceDate(occurred) }),
+        "knowledge-occurred",
+      ),
+    );
     const note = sourceDateNote(occurred);
     if (note) {
       heading.append(el("p", note, "knowledge-muted"));
@@ -102,7 +126,7 @@ export async function showDetail(
     (result.mergedFrom ?? []).map((page) => page.title),
   );
   if (names.length) {
-    const aliases = el("span", "Also called ", "knowledge-aliases");
+    const aliases = el("span", `${t("knowledge.record.aliases")} `, "knowledge-aliases");
     for (const alias of names) {
       aliases.append(chip(alias));
     }
@@ -144,7 +168,7 @@ export async function showDetail(
   entityTile.classList.remove("knowledge-tile-plain");
   head.append(entityTile, heading, askButton);
   const back = button(
-    "← Knowledge",
+    t("knowledge.record.back"),
     () => {
       s.selectedId = "";
       renderToolbar();
@@ -152,44 +176,62 @@ export async function showDetail(
     },
     "knowledge-back",
   );
-  back.setAttribute("aria-label", "← Knowledge");
-  back.replaceChildren(icon("arrowLeft", 14), el("span", "Knowledge"));
+  back.setAttribute("aria-label", t("knowledge.record.backLabel"));
+  back.replaceChildren(icon("arrowLeft", 14), el("span", t("knowledge.common.knowledge")));
   const breadcrumb = el("nav", undefined, "knowledge-breadcrumb");
-  breadcrumb.setAttribute("aria-label", "Breadcrumb");
+  breadcrumb.setAttribute("aria-label", t("knowledge.record.breadcrumb"));
   breadcrumb.append(back, icon("chevronRight", 12), el("span", label(r.type)));
   const grid = el("div", undefined, "knowledge-entity-grid"),
     main = el("div", undefined, "knowledge-entity-main"),
     aside = el("aside", undefined, "knowledge-entity-aside");
   if (!r.valid) {
-    main.append(el("p", "This record has validation issues.", "knowledge-notice"));
+    main.append(el("p", t("knowledge.record.invalid"), "knowledge-notice"));
   }
   if (r.lifecycle === "merged") {
     // A merged page is history; its name, links and claims now belong to the survivor.
     const into = result.mergedInto,
       notice = el(
         "p",
-        `Merged${meta?.lifecycle_change?.at ? ` ${date(meta.lifecycle_change.at)}` : ""} into ${into?.title ?? "another page"}. Its name, links and claims now count toward that page.`,
+        t(meta?.lifecycle_change?.at ? "knowledge.record.mergedOn" : "knowledge.record.merged", {
+          date: meta?.lifecycle_change?.at ? date(meta.lifecycle_change.at) : "",
+          page: into?.title ?? t("knowledge.record.anotherPage"),
+        }),
         "knowledge-notice",
       );
     head.classList.add("knowledge-historical");
     main.append(notice);
     askButton.remove();
     if (into) {
-      main.append(button(`Open ${into.title} →`, () => open(into.id), "knowledge-quiet"));
+      main.append(
+        button(
+          t("knowledge.record.openMerged", { page: into.title }),
+          () => open(into.id),
+          "knowledge-quiet",
+        ),
+      );
     }
   } else if (r.lifecycle !== "active") {
     head.classList.add("knowledge-historical");
     main.append(
       el(
         "p",
-        `Viewing history · ${r.lifecycle === "withdrawn" ? "Withdrawn" : "Replaced"}${meta?.lifecycle_change?.at ? ` ${date(meta.lifecycle_change.at)}` : ""}. ${r.lifecycle === "withdrawn" ? "Not used in search, connections or answers." : "An earlier version. Search and answers use the current one."}`,
+        t(
+          `knowledge.record.history.${r.lifecycle === "withdrawn" ? "withdrawn" : "replaced"}${meta?.lifecycle_change?.at ? "On" : ""}`,
+          {
+            date: meta?.lifecycle_change?.at ? date(meta.lifecycle_change.at) : "",
+          },
+        ),
         "knowledge-notice",
       ),
     );
     askButton.remove();
   }
   if (result.mergedFrom?.length) {
-    const from = el("p", "Merged from ", "knowledge-merged-from knowledge-muted");
+    const from = el(
+      "p",
+      `${t("knowledge.record.mergedFrom")} `,
+      "knowledge-merged-from knowledge-muted",
+    );
     for (const page of result.mergedFrom) {
       from.append(summaryLink(ui, page));
     }
@@ -205,25 +247,33 @@ export async function showDetail(
     r.kind === "claim" && r.lifecycle === "active" && Boolean(meta?.supersedes);
   // A merge reason explains the banner above it rather than warning again.
   if (reason && r.lifecycle === "merged") {
-    main.append(el("p", `Reason: ${reason}`, "knowledge-muted knowledge-merge-reason"));
+    main.append(
+      el("p", t("knowledge.record.reason", { reason }), "knowledge-muted knowledge-merge-reason"),
+    );
   } else if (reason && !reasonInVersions) {
     main.append(el("p", reason, "knowledge-notice"));
   }
   const supersededBy = meta?.superseded_by;
   if (typeof supersededBy === "string") {
-    main.append(button("View replacement →", () => open(supersededBy), "knowledge-quiet"));
+    main.append(
+      button(t("knowledge.record.viewReplacement"), () => open(supersededBy), "knowledge-quiet"),
+    );
   }
   const supersedes = meta?.supersedes;
   if (typeof supersedes === "string" && r.kind !== "claim") {
-    main.append(button("View original assertion", () => open(supersedes), "knowledge-quiet"));
+    main.append(
+      button(t("knowledge.record.viewOriginal"), () => open(supersedes), "knowledge-quiet"),
+    );
   }
   let versionsNode: HTMLElement | undefined;
   if (r.kind === "claim" && (meta?.supersedes || meta?.superseded_by)) {
     const versions = el("section", undefined, "knowledge-versions");
     versionsNode = versions;
-    versions.append(el("h3", "Versions"));
+    versions.append(el("h3", t("knowledge.record.versions")));
     if (reason && reasonInVersions) {
-      versions.append(el("p", `Correction reason: ${reason}`, "knowledge-muted"));
+      versions.append(
+        el("p", t("knowledge.record.correctionReason", { reason }), "knowledge-muted"),
+      );
     }
     // A correction writes a new record (revision 1) and rewrites the old one as superseded,
     // so per-record revisions don't order versions. Number them by position in the
@@ -264,7 +314,7 @@ export async function showDetail(
           return;
         }
         if (page.record?.hash !== r.hash) {
-          throw new Error("Record changed; reopen it before reading more notes.");
+          throw new Error(t("knowledge.record.notesChanged"));
         }
         // Reparse the accumulated source: comments, code fences and links
         // may span transport windows and must not become separate documents.
@@ -293,7 +343,7 @@ export async function showDetail(
       }
     };
     const more = button(
-      "Read more notes",
+      t("knowledge.record.readMore"),
       () => {
         void readMore();
       },
@@ -307,7 +357,9 @@ export async function showDetail(
     const notes = el("details", undefined, "knowledge-notes-toggle"),
       summary = el("summary");
     notes.dataset.readingKey = `notes:${id}`;
-    summary.append(disclosureLabel("Show full notes", "Show less"));
+    summary.append(
+      disclosureLabel(t("knowledge.record.showFullNotes"), t("knowledge.common.showLess")),
+    );
     notes.append(summary);
     body.dataset.clamped = "true";
     body.append(notes);
@@ -315,7 +367,17 @@ export async function showDetail(
   body.append(
     el(
       "span",
-      `${r.writtenByAgentId ? `Saved by ${agentName(r.writtenByAgentId)}` : "Author not recorded"} · revision ${r.revision}${meta?.updated_at ? ` · updated ${date(meta.updated_at)}` : ""}`,
+      [
+        r.writtenByAgentId
+          ? t("knowledge.record.savedBy", {
+              agent: agentName(r.writtenByAgentId) ?? r.writtenByAgentId,
+            })
+          : t("knowledge.record.authorUnknown"),
+        t("knowledge.record.revision", { revision: String(r.revision) }),
+        meta?.updated_at ? t("knowledge.record.updatedOn", { date: date(meta.updated_at) }) : "",
+      ]
+        .filter(Boolean)
+        .join(" · "),
       "knowledge-summary-meta",
     ),
   );
@@ -328,24 +390,28 @@ export async function showDetail(
   }
   if (meta?.identity?.candidates?.length) {
     const candidates = el("section");
-    candidates.append(el("h3", "Possible identity matches"));
+    candidates.append(el("h3", t("knowledge.record.candidates")));
     for (const candidate of meta.identity.candidates) {
       const match = result.references?.find((ref) => ref.id === candidate.id);
       const card = el("section", undefined, "knowledge-candidate knowledge-surface");
       card.append(
         button(
-          `Possible match: ${match?.title ?? "Candidate identity"}`,
+          t("knowledge.record.candidate", {
+            title: match?.title ?? t("knowledge.record.candidateUnknown"),
+          }),
           () => open(candidate.id),
           "knowledge-quiet",
         ),
         el("p", candidate.basis),
         el(
           "p",
-          `Both records stay separate unless ${agentName() ?? "your agent"} finds evidence they’re the same person.`,
+          t("knowledge.record.candidateBody", {
+            agent: agentName() ?? t("knowledge.common.yourAgent"),
+          }),
           "knowledge-muted",
         ),
         button(
-          `${askLabel()} to check`,
+          t("knowledge.record.askCheck", { agent: agentName() ?? t("knowledge.common.yourAgent") }),
           () => ask(ui, r, false, { id: candidate.id, title: match?.title ?? candidate.id }),
           "knowledge-quiet",
         ),
@@ -371,7 +437,14 @@ export async function showDetail(
           card.append(
             el(
               "p",
-              `Evidence: ${evidence.filename ?? evidence.path}${evidence.start_line ? ` · lines ${evidence.start_line}–${evidence.end_line ?? evidence.start_line}` : ""}. Open the record to inspect this citation.`,
+              t("knowledge.record.candidateEvidence", {
+                file: evidence.start_line
+                  ? `${evidence.filename ?? evidence.path} · ${t("knowledge.common.lines", {
+                      from: String(evidence.start_line),
+                      to: String(evidence.end_line ?? evidence.start_line),
+                    })}`
+                  : (evidence.filename ?? evidence.path),
+              }),
               "knowledge-muted",
             ),
           );
@@ -387,7 +460,9 @@ export async function showDetail(
     const notes = el("details", undefined, "knowledge-merged-notes"),
       summary = el("summary");
     notes.dataset.readingKey = `merged-notes:${id}`;
-    summary.append(disclosureLabel("Notes from before the merge", "Hide notes"));
+    summary.append(
+      disclosureLabel(t("knowledge.record.mergedNotes"), t("knowledge.record.hideNotes")),
+    );
     notes.append(summary, body);
     main.append(notes);
   } else if (r.kind === "page") {
@@ -396,7 +471,7 @@ export async function showDetail(
     const statement = el("section", undefined, "knowledge-statement"),
       surface = el("div", undefined, "knowledge-surface knowledge-claim-groups");
     if (r.kind !== "claim") {
-      statement.append(el("h3", "Relationship & evidence"));
+      statement.append(el("h3", t("knowledge.record.relationship")));
     }
     surface.append(
       renderClaim(
@@ -422,7 +497,7 @@ export async function showDetail(
     attendanceRows = el("div", undefined, "knowledge-surface");
   const attendanceIds = new Set<string>();
   if (r.type === "meeting") {
-    attended.append(el("h3", "Attended"), attendanceRows);
+    attended.append(el("h3", t("knowledge.record.attended")), attendanceRows);
     main.append(attended);
   }
   const knownFrom = el("span");
@@ -430,7 +505,7 @@ export async function showDetail(
     facts.append(knownFrom);
   }
   const owned = el("section");
-  owned.append(el("h3", `Commitments owned · owner only, not about ${r.title}`));
+  owned.append(el("h3", t("knowledge.record.owned", { title: r.title })));
   const claims = el("section"),
     connections = el("section"),
     learned = el("section");
@@ -439,128 +514,48 @@ export async function showDetail(
     if (r.type !== "meeting") {
       main.append(recordTimeline(ui, id, n, pending));
     }
-    claims.append(el("h3", `What ${agentName() ?? "your agent"} knows`));
+    claims.append(
+      el(
+        "h3",
+        t("knowledge.record.knows", { agent: agentName() ?? t("knowledge.common.yourAgent") }),
+      ),
+    );
     main.append(claims, owned);
     owned.hidden = true;
   }
-  connections.append(el("h3", "Connections"));
+  connections.append(el("h3", t("knowledge.record.connections")));
   // Claims and connections naming a merged page resolve to the survivor, so they're listed there.
   if (merged) {
     const survivor = result.mergedInto,
-      moved = el("p", "Connections now appear on ", "knowledge-muted");
+      moved = el(
+        "p",
+        survivor
+          ? `${t("knowledge.record.connectionsMoved")} `
+          : t("knowledge.record.connectionsMovedUnknown"),
+        "knowledge-muted",
+      );
     if (survivor) {
       moved.append(button(survivor.title, () => open(survivor.id), "knowledge-quiet"));
-    } else {
-      moved.append("the page this was merged into.");
     }
     connections.append(moved);
   }
-  learned.append(el("h3", "Learned in"), el("p", "Conversation not recorded.", "knowledge-muted"));
+  learned.append(
+    el("h3", t("knowledge.record.learnedIn")),
+    el("p", t("knowledge.record.sessionUnknown"), "knowledge-muted"),
+  );
   aside.append(connections, learned);
   const { files, filePanel, checkpointValue, historyList, technical } = fileDetails(ui, r, id, n);
   aside.append(files);
-  /** Cited and uncited retained files for a page, inserted above `learned` in the aside. */
-  if (r.kind === "page" && result.sourceFiles?.length) {
-    // One compact row per file. Downloads need the retaining record's
-    // authority, so a file retained only by a citing claim downloads there.
-    const sourceFile = (file: NonNullable<typeof result.sourceFiles>[number]) => {
-      const e = file.evidence,
-        name = e.filename ?? e.path.split("/").at(-1)!,
-        row = el("div", undefined, "knowledge-source-file"),
-        copy = el("span", undefined, "knowledge-source-file-copy");
-      const title = el("span", name, "knowledge-source-file-name");
-      title.title = e.attribution ? `${name}\n${e.attribution}` : name;
-      copy.append(
-        title,
-        el(
-          "small",
-          [
-            fileKind(e),
-            e.size !== undefined ? fileSize(e.size) : "",
-            file.citations
-              ? `${file.citations} cited ${file.citations === 1 ? "passage" : "passages"}`
-              : "",
-          ]
-            .filter(Boolean)
-            .join(" · "),
-        ),
-      );
-      if (!e.verified) {
-        const warning = el("small", "Source file unavailable", "knowledge-unverified");
-        warning.prepend(icon("alertTriangle", 12));
-        copy.append(warning);
-      }
-      row.append(icon("fileText", 14), copy);
-      const own = result.evidence?.some((o) => o.path === e.path && o.sha256 === e.sha256);
-      if (own && e.verified) {
-        const { download, status } = originalDownload(
-          feature,
-          id,
-          e,
-          () => live(n),
-          errorText,
-          true,
-        );
-        download.className = "knowledge-source-download";
-        copy.append(status);
-        row.append(download);
-      } else if (e.verified) {
-        row.title = "Download this file from the claim that cites it.";
-      }
-      return row;
-    };
-    // Cited files lead and uncited retained files collapse beneath them.
-    // Outside meetings a page's own retained files already live in File
-    // details, so the rail appears only when claims sourced here cite files.
-    const cited = result.sourceFiles.filter((file) => file.citations),
-      uncited = result.sourceFiles.filter((file) => !file.citations);
-    if (cited.length || r.type === "meeting") {
-      const sources = el("section", undefined, "knowledge-sources"),
-        passages = cited.reduce((sum, file) => sum + file.citations, 0),
-        total = result.sourceFilesTotal ?? result.sourceFiles.length;
-      sources.append(
-        el("h3", "Sources"),
-        el(
-          "p",
-          `${passages} cited ${passages === 1 ? "passage" : "passages"} · ${total} ${total === 1 ? "file" : "files"}`,
-          "knowledge-muted",
-        ),
-      );
-      if (cited.length) {
-        const list = el("div", undefined, "knowledge-surface knowledge-source-files");
-        list.append(...cited.map(sourceFile));
-        sources.append(list);
-      }
-      if (uncited.length) {
-        const rest = el("details", undefined, "knowledge-source-uncited"),
-          summary = el(
-            "summary",
-            `${uncited.length} ${cited.length ? "more " : ""}${uncited.length === 1 ? "file" : "files"} not cited directly`,
-          ),
-          list = el("div", undefined, "knowledge-surface knowledge-source-files");
-        rest.dataset.readingKey = `uncited:${id}`;
-        rest.open = !cited.length;
-        summary.append(icon("chevronDown", 12));
-        list.append(...uncited.map(sourceFile));
-        rest.append(summary, list);
-        sources.append(rest);
-      }
-      if (total > result.sourceFiles.length) {
-        sources.append(
-          el(
-            "p",
-            "Showing the first 100 files. Other files remain available from their citing claims.",
-            "knowledge-muted",
-          ),
-        );
-      }
+  if (r.kind === "page") {
+    const sources = sourcesRail(ui, result, r.type, id, n);
+    if (sources) {
       aside.insertBefore(sources, learned);
     }
   }
   if (r.kind === "page" && result.evidence?.length) {
     const originals = el("details", undefined, "knowledge-retained-originals");
     originals.append(
-      el("summary", "Retained originals"),
+      el("summary", t("knowledge.record.originals")),
       evidenceView(feature, result, () => live(n), errorText),
     );
     filePanel.append(originals);
@@ -571,7 +566,7 @@ export async function showDetail(
   if (r.kind === "claim" && meta?.entities?.length) {
     const about = el("section", undefined, "knowledge-about"),
       targets = el("div", undefined, "knowledge-surface knowledge-connections");
-    about.append(el("h3", "About"), targets);
+    about.append(el("h3", t("knowledge.claim.about")), targets);
     aside.prepend(about);
     const ids = [...new Set(meta.entities)].slice(0, 20);
     pending.push(
@@ -594,10 +589,12 @@ export async function showDetail(
             }
           }
           if (!targets.children.length) {
-            targets.append(el("p", "Linked records are unavailable.", "knowledge-aside-empty"));
+            targets.append(
+              el("p", t("knowledge.record.linkedUnavailable"), "knowledge-aside-empty"),
+            );
           }
           if (meta.entities!.length > ids.length) {
-            about.append(el("p", "Showing the first 20 linked entities.", "knowledge-muted"));
+            about.append(el("p", t("knowledge.record.linkedLimit"), "knowledge-muted"));
           }
         })
         .catch((error: unknown) => {
@@ -612,12 +609,15 @@ export async function showDetail(
   /** A relationship's From and To endpoints, resolved to page links as they load. */
   if (r.kind === "relationship") {
     for (const [role, endpointId] of [
-      ["From", meta?.from],
-      ["To", meta?.to],
+      [t("knowledge.record.from"), meta?.from],
+      [t("knowledge.record.to"), meta?.to],
     ] as const) {
       const row = el("div", undefined, "knowledge-connection"),
         copy = el("span", undefined, "knowledge-connection-copy");
-      copy.append(el("small", role), el("span", endpointId ? "Loading…" : "Page not recorded."));
+      copy.append(
+        el("small", role),
+        el("span", t(endpointId ? "knowledge.common.loading" : "knowledge.record.pageUnknown")),
+      );
       row.append(copy);
       refs.append(row);
       if (!endpointId) {
@@ -631,7 +631,10 @@ export async function showDetail(
           if (!live(n)) {
             return;
           }
-          copy.replaceChildren(el("small", role), el("span", target?.title ?? "Page unavailable."));
+          copy.replaceChildren(
+            el("small", role),
+            el("span", target?.title ?? t("knowledge.record.pageUnavailable")),
+          );
           if (target) {
             const destination = button("", () => open(target.id), "knowledge-connection-link");
             destination.append(tile(target.type, 24, target.kind), copy);
@@ -639,7 +642,10 @@ export async function showDetail(
           }
         })().catch((error: unknown) => {
           if (live(n)) {
-            copy.replaceChildren(el("small", role), el("span", "Page unavailable."));
+            copy.replaceChildren(
+              el("small", role),
+              el("span", t("knowledge.record.pageUnavailable")),
+            );
             row.append(failure(error));
           }
         }),

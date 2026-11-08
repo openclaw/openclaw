@@ -157,7 +157,7 @@ it("lists On and Available scribes with honest detection and a tab count", async
     "On · 1",
     "Available · 3",
   ]);
-  expect(view.textContent).toContain("148 active · 1,204 archived conversations on Main");
+  expect(view.textContent).toContain("148 active · 1,204 archived sessions on Main");
   expect(view.textContent).toContain("Found Memory on Main · MEMORY.md 8 KB");
   expect(view.querySelector(".scribe-chip-on")?.textContent).toBe("On");
   expect(scribesTab.textContent).toBe("Scribes1");
@@ -167,7 +167,7 @@ it("asks for the Granola plugin before the Granola scribe can start", async () =
   const { render } = fixture({});
   const view = await render();
   const row = buttonNamed(view, "Install Granola…").closest(".scribe-row")!;
-  expect(row.textContent).toContain("Needs the Granola plugin, which is not installed");
+  expect(row.textContent).toContain("Needs the Granola plugin, which isn’t installed");
   expect(buttonNamed(row, "Set up…").disabled).toBe(true);
 
   const signIn = await fixture({ granola: { installed: true, enabled: true } }).render();
@@ -236,7 +236,7 @@ it("starts a conversations scribe: creates its titled conversation and sends the
   const view = await render();
   buttonNamed(view, "Set up…").click();
   const dialog = page.querySelector("dialog")!;
-  expect(dialog.textContent).toContain("148 conversations in your sidebar.");
+  expect(dialog.textContent).toContain("148 sessions in your sidebar.");
   (dialog.querySelector("#scribe-often-once") as HTMLInputElement).click();
   (dialog.querySelector("#scribe-which-all") as HTMLInputElement).click();
   const select = dialog.querySelector("select")!;
@@ -282,7 +282,7 @@ it.each([
   expect(dialog.querySelector("legend")?.textContent).toBe("How often");
   expect((dialog.querySelector("#scribe-review-weekly") as HTMLInputElement).checked).toBe(true);
   expect(dialog.textContent).toContain("Sundays at 3:45 AM.");
-  expect(dialog.textContent).toContain("Each run is an agent turn over every unlinked claim");
+  expect(dialog.textContent).toContain("Each run is one agent reply over every unlinked claim");
   if (pick) {
     (dialog.querySelector(pick) as HTMLInputElement).click();
   }
@@ -444,7 +444,7 @@ it("runs, pauses, turns off and opens an On scribe from its detail", async () =>
     "cron.update",
     { id: "job-review", patch: { enabled: false }, expectedConfigRevision: "rev-7" },
   ]);
-  buttonNamed(view, "Open conversation").click();
+  buttonNamed(view, "Open session").click();
   expect(open).toHaveBeenCalledWith({ sessionKey: "s-review", agentId: "main" });
   buttonNamed(view, "Turn off…").click();
   const confirm = page.querySelector("dialog")!;
@@ -495,7 +495,7 @@ it("repairs an archived scribe by restoring its conversation and turning it on, 
   });
   ui.s.scribe = "claim-consolidation";
   const view = await render();
-  expect(view.querySelector(".scribe-chip-warn")?.textContent).toBe("Conversation not found");
+  expect(view.querySelector(".scribe-chip-warn")?.textContent).toBe("Session not found");
   expect(buttonNamed(view, "Run now")).toBeUndefined();
   buttonNamed(view, "Repair").click();
   await vi.waitFor(() => expect(calls.at(-1)?.[0]).toBe("cron.update"));
@@ -580,7 +580,7 @@ it("tries the first run again on the next load when forcing it failed", async ()
   expect(view.textContent).not.toContain("First run");
   expect(ui.announce).toHaveBeenCalledWith(
     expect.stringContaining(
-      "the first run did not start. Error: The run did not start: the scheduler is stopped.",
+      "Couldn’t start the first run of Knowledge Consolidation. Knowledge tries again on the next refresh. Error: Couldn’t start the run because the scheduler is stopped.",
     ),
   );
   expect((await render()).textContent).not.toContain("First run");

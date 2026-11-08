@@ -1,4 +1,5 @@
 import type { ChronicleOutput } from "./chronicle-contract.js";
+import { t } from "./i18n/index.js";
 import { loadingPlaceholder } from "./loading-view.js";
 import { markdownView } from "./markdown-view.js";
 import type { Page } from "./page-context.js";
@@ -17,11 +18,11 @@ export function recordTimeline(ui: Page, id: string, n: number, pending: Promise
   const { feature, live, failure, open } = ui;
   const section = el("section", undefined, "knowledge-timeline"),
     rows = el("div", undefined, "knowledge-surface knowledge-timeline-rows"),
-    loading = loadingPlaceholder("rows", "Loading timeline…", 3);
-  section.append(el("h3", "Timeline"), loading);
+    loading = loadingPlaceholder("rows", t("knowledge.timeline.loading"), 3);
+  section.append(el("h3", t("knowledge.timeline.title")), loading);
   let offset = 0,
     snapshot: string | undefined;
-  const more = button("Earlier", () => void page(), "knowledge-quiet");
+  const more = button(t("knowledge.timeline.earlier"), () => void page(), "knowledge-quiet");
   // Each page continues the first page's snapshot; a changed vault asks for a reopen.
   async function page() {
     more.disabled = true;
@@ -43,19 +44,20 @@ export function recordTimeline(ui: Page, id: string, n: number, pending: Promise
       }
       if (!rows.isConnected) {
         section.append(
-          result.items.length
-            ? rows
-            : el("p", "No dated sources mention this page yet.", "knowledge-muted"),
+          result.items.length ? rows : el("p", t("knowledge.timeline.empty"), "knowledge-muted"),
         );
       }
       const count = rows.children.length;
       section
         .querySelector("h3")!
         .replaceChildren(
-          document.createTextNode("Timeline "),
+          document.createTextNode(`${t("knowledge.timeline.title")} `),
           el(
             "span",
-            `${count} ${count === 1 ? "source" : "sources"}${result.nextOffset !== null ? " shown" : ""}`,
+            t(
+              `knowledge.timeline.sources${count === 1 ? "One" : ""}${result.nextOffset !== null ? "Shown" : ""}`,
+              { count: String(count) },
+            ),
             "knowledge-section-count",
           ),
         );

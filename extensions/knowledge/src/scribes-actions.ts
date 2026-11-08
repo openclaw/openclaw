@@ -1,6 +1,7 @@
 /** Gateway writes behind the Scribes controls: start, run now, pause, turn off and repair. */
 import type { ControlUiHost } from "openclaw/plugin-sdk/control-ui";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { t } from "./i18n/index.js";
 import { repairPrompt, scribeLabel, setupIdempotencyKey } from "./scribes-catalog.js";
 import type { ScribeJob, ScribeSnapshot } from "./scribes-state.js";
 
@@ -31,7 +32,7 @@ async function conversation(host: ScribeHost, snapshot: ScribeSnapshot, agentId:
     surface: "plugin-dock",
   });
   if (!key) {
-    throw new Error("The scribe’s conversation could not be created.");
+    throw new Error(t("knowledge.scribes.sessionNotCreated"));
   }
   // A retry after a failed send reuses this conversation instead of creating another.
   snapshot.session = { key, displayName: scribeLabel(snapshot.scribe) };
@@ -97,12 +98,7 @@ export async function repairScribe(
 }
 
 // What a refused run means for the operator, by the scheduler's reason.
-const RUN_REFUSALS: Record<string, string> = {
-  stopped: "the scheduler is stopped",
-  disabled: "the automation is paused",
-  ownerless: "the automation lost its owner; open the conversation and ask it to repair its setup",
-  "invalid-spec": "its schedule is invalid; open the conversation and ask it to repair its setup",
-};
+const RUN_REFUSALS = new Set(["stopped", "disabled", "ownerless", "invalid-spec"]);
 
 /**
  * Run the scribe's automation now, even when it is not due. Rejects unless the scheduler queued
@@ -117,7 +113,13 @@ export async function runScribeNow(host: ScribeHost, job: ScribeJob) {
     return;
   }
   const reason = isRecord(answer) && typeof answer.reason === "string" ? answer.reason : "";
-  throw new Error(`The run did not start: ${(RUN_REFUSALS[reason] ?? reason) || "not accepted"}.`);
+  throw new Error(
+    RUN_REFUSALS.has(reason)
+      ? t(`knowledge.scribes.refusals.${reason}`)
+      : t("knowledge.scribes.refusals.other", {
+          reason: reason || t("knowledge.scribes.refusals.notAccepted"),
+        }),
+  );
 }
 
 /** Pause or resume the scribe's automation; rejected if it changed since it was read. */

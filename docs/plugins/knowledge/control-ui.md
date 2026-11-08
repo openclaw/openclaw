@@ -14,7 +14,7 @@ The Knowledge page and chat panel. Part of the
 The Knowledge UI is a read-only inspector of vault records, even when agent
 writes are enabled. The Scribes tab is the exception: it starts and controls
 scribe conversations and their automations, never vault records directly.
-**Ask** starts a new chat with the selected agent and sends your request as its
+**Ask** starts a new session with the selected agent and sends your request as its
 first message, with the exact observed record ID, revision, and hash attached.
 The dialog shows only the editable request. Native UI from an enabled bundled plugin
 does not need the **Custom plugin UI** Labs setting.

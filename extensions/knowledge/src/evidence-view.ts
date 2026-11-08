@@ -1,5 +1,6 @@
 import type { FeatureClient, FeatureOutput } from "openclaw/plugin-sdk/feature-contract";
 import type { contract } from "./contract.js";
+import { t } from "./i18n/index.js";
 import { confidenceView } from "./knowledge-presentation.js";
 import { icon } from "./ui-icons.js";
 
@@ -33,9 +34,17 @@ export function evidenceView(
     id = result.record!.id,
     hash = result.record!.hash;
   root.className = "knowledge-evidence-list";
-  root.setAttribute("aria-label", "Source evidence");
+  root.setAttribute("aria-label", t("knowledge.evidence.label"));
   if ((result.evidenceTotal ?? 0) > 1 || (result.evidenceSourceTotal ?? 0) > 1) {
-    root.append(el("p", `${result.evidenceTotal} citations · ${result.evidenceSourceTotal} files`));
+    root.append(
+      el(
+        "p",
+        t("knowledge.evidence.totals", {
+          citations: String(result.evidenceTotal),
+          files: String(result.evidenceSourceTotal),
+        }),
+      ),
+    );
   }
   const sources = new Map<
     string,
@@ -83,19 +92,34 @@ export function evidenceView(
     caption.append(
       el(
         "strong",
-        result.record?.assertionOrigin === "agent_inference" ? "PREMISE · EXCERPT" : "EXCERPT",
+        t(
+          result.record?.assertionOrigin === "agent_inference"
+            ? "knowledge.evidence.premiseExcerpt"
+            : "knowledge.evidence.excerpt",
+        ),
       ),
       el(
         "code",
-        `${e.filename ?? e.path.split("/").at(-1)}${e.start_line ? ` · lines ${e.start_line}–${e.end_line ?? e.start_line}` : ""}${e.excerptTruncated ? " · Truncated" : ""}`,
+        [
+          e.filename ?? e.path.split("/").at(-1),
+          e.start_line
+            ? t("knowledge.common.lines", {
+                from: String(e.start_line),
+                to: String(e.end_line ?? e.start_line),
+              })
+            : "",
+          e.excerptTruncated ? t("knowledge.evidence.truncated") : "",
+        ]
+          .filter(Boolean)
+          .join(" · "),
       ),
     );
     quote.append(caption);
     if (!e.verified) {
       quote.classList.add("knowledge-source-unavailable");
       quote.append(
-        el("strong", "Source file unavailable"),
-        el("p", "The retained file or cited location could not be verified."),
+        el("strong", t("knowledge.common.sourceFileUnavailable")),
+        el("p", t("knowledge.evidence.unverified")),
       );
     } else if (e.excerpt) {
       quote.append(excerptQuote(e.excerpt));
@@ -107,8 +131,8 @@ export function evidenceView(
         toggle.className = "knowledge-excerpt-toggle";
         control.className = "knowledge-disclosure-label";
         toggle.dataset.readingKey = `${id}:excerpt:${e.path}:${e.sha256}:${e.start_line ?? ""}:${e.end_line ?? ""}`;
-        const closed = el("span", "Show full excerpt"),
-          opened = el("span", "Show less");
+        const closed = el("span", t("knowledge.evidence.showFull")),
+          opened = el("span", t("knowledge.common.showLess"));
         closed.className = "knowledge-when-closed";
         opened.className = "knowledge-when-open";
         control.append(closed, opened, icon("chevronDown", 12));
@@ -118,16 +142,14 @@ export function evidenceView(
         quote.append(toggle);
       }
     } else {
-      quote.append(
-        el("p", "No text preview available. Open the original file to inspect this source."),
-      );
+      quote.append(el("p", t("knowledge.evidence.noPreview")));
     }
     if (e.excerptTruncated) {
-      quote.append(el("small", "Excerpt · Original retained in full."));
+      quote.append(el("small", t("knowledge.evidence.retainedInFull")));
     }
     const attribution = e.attribution;
     metadata.append(
-      el("span", attribution ?? "Speaker not identified"),
+      el("span", attribution ?? t("knowledge.evidence.speakerUnknown")),
       confidenceView(result.record?.metadata?.attribution_confidence),
     );
     // The filename is the disclosure: hashes and other file mechanics stay out
@@ -139,11 +161,18 @@ export function evidenceView(
     if (e.start_line !== undefined) {
       sourceName.append(
         document.createTextNode(
-          ` · ${e.start_line === e.end_line ? `line ${e.start_line}` : `lines ${e.start_line}–${e.end_line ?? e.start_line}`}`,
+          ` · ${
+            e.start_line === e.end_line
+              ? t("knowledge.common.line", { line: String(e.start_line) })
+              : t("knowledge.common.lines", {
+                  from: String(e.start_line),
+                  to: String(e.end_line ?? e.start_line),
+                })
+          }`,
         ),
       );
     }
-    sourceName.title = "Source file details";
+    sourceName.title = t("knowledge.evidence.fileDetails");
     const technical = el("div");
     technical.className = "knowledge-source-technical";
     technical.append(el("code", `${e.path}\nSHA-256: ${e.sha256}`));
@@ -151,18 +180,31 @@ export function evidenceView(
       technical.append(
         el(
           "p",
-          [e.mediaType, e.size !== undefined ? `${e.size.toLocaleString()} bytes` : ""]
+          [
+            e.mediaType,
+            e.size !== undefined
+              ? t("knowledge.evidence.bytes", { count: e.size.toLocaleString() })
+              : "",
+          ]
             .filter(Boolean)
             .join(" · "),
         ),
       );
     }
     if (result.record?.attribution && result.record.attribution !== attribution) {
-      technical.append(el("p", `Assertion attribution: ${result.record.attribution}`));
+      technical.append(
+        el(
+          "p",
+          t("knowledge.evidence.assertionAttribution", { attribution: result.record.attribution }),
+        ),
+      );
     }
     details.append(sourceName, technical);
     metadata.append(details);
-    const retained = el("span", e.verified ? "File verified" : "Source file unavailable");
+    const retained = el(
+      "span",
+      t(e.verified ? "knowledge.evidence.verified" : "knowledge.common.sourceFileUnavailable"),
+    );
     retained.className = e.verified ? "knowledge-retained" : "knowledge-unverified";
     retained.prepend(icon(e.verified ? "badgeCheck" : "info", 12));
     metadata.append(retained);
@@ -191,7 +233,7 @@ export function evidenceView(
   }
   let offset = result.nextEvidenceOffset;
   if (offset != null) {
-    const more = el("button", "More source files");
+    const more = el("button", t("knowledge.evidence.more"));
     more.type = "button";
     root.append(more);
     const loadMore = async () => {
@@ -209,7 +251,7 @@ export function evidenceView(
           return;
         }
         if (page.record?.hash !== hash) {
-          throw new Error("Record changed; reopen it to refresh sources.");
+          throw new Error(t("knowledge.evidence.recordChanged"));
         }
         page.evidence?.forEach(append);
         offset = page.nextEvidenceOffset;
@@ -248,14 +290,14 @@ export function originalDownload(
   compact = false,
 ) {
   const name = e.filename ?? e.path.split("/").at(-1)!;
-  const download = el("button", compact ? undefined : "Original file"),
+  const download = el("button", compact ? undefined : t("knowledge.evidence.original")),
     status = el("p");
   download.type = "button";
   download.prepend(icon("download", compact ? 14 : 16));
   download.disabled = !e.verified;
   if (compact) {
-    download.setAttribute("aria-label", `Download ${name}`);
-    download.title = `Download ${name}`;
+    download.setAttribute("aria-label", t("knowledge.evidence.download", { name }));
+    download.title = t("knowledge.evidence.download", { name });
   }
   status.className = "knowledge-download-status";
   status.setAttribute("role", "status");
@@ -273,7 +315,7 @@ export function originalDownload(
       let offset = 0;
       while (true) {
         if (!alive()) {
-          throw new Error("Record view changed; download canceled.");
+          throw new Error(t("knowledge.evidence.downloadCanceled"));
         }
         const page = await feature.invoke("attachment", {
           id,
@@ -284,14 +326,17 @@ export function originalDownload(
         const binary = atob(page.data),
           bytes = Uint8Array.from(binary, (c) => c.charCodeAt(0));
         if (page.offset !== offset || page.sha256 !== e.sha256) {
-          throw new Error("Source changed during download");
+          throw new Error(t("knowledge.evidence.downloadSourceChanged"));
         }
         if (writer) {
           await writer.write(bytes);
         } else {
           chunks.push(bytes.buffer);
         }
-        status.textContent = `${(offset + bytes.length).toLocaleString()} / ${page.size.toLocaleString()} bytes`;
+        status.textContent = t("knowledge.evidence.progress", {
+          done: (offset + bytes.length).toLocaleString(),
+          total: page.size.toLocaleString(),
+        });
         if (page.nextOffset === null) {
           break;
         }
@@ -307,10 +352,12 @@ export function originalDownload(
         link.click();
         setTimeout(() => URL.revokeObjectURL(url), 60000);
       }
-      status.textContent = "Original file downloaded.";
+      status.textContent = t("knowledge.evidence.downloaded");
     } catch (error) {
       await writer?.abort().catch(() => {});
-      status.textContent = redact(String(error));
+      status.textContent = t("knowledge.evidence.downloadFailed", {
+        details: redact(error instanceof Error ? error.message : String(error)),
+      });
     } finally {
       download.disabled = !e.verified;
     }

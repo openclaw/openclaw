@@ -1,6 +1,7 @@
 import type { FeatureOutput } from "openclaw/plugin-sdk/feature-contract";
 import { claimCard, summaryLink } from "./claim-view.js";
 import type { contract } from "./contract.js";
+import { t } from "./i18n/index.js";
 import { assertionOrigin as origin, confidenceView } from "./knowledge-presentation.js";
 import { loadingPlaceholder } from "./loading-view.js";
 import type { Page } from "./page-context.js";
@@ -19,32 +20,26 @@ import { loadingLabel } from "./page-state.js";
 import { formatSourceDate } from "./temporal.js";
 
 // Facet headings for ontology primitives; unknown primitives fall back to a humanized name.
-const PRIMITIVE_LABELS: Record<string, string> = {
-  entity: "People & things",
-  concept: "Ideas & projects",
-  media: "Sources & writing",
-  temporal: "Events & conversations",
-  annotation: "Annotations",
-};
+const PRIMITIVES = new Set(["entity", "concept", "media", "temporal", "annotation"]);
 // Plural facet labels for built-in page types; other types keep their own label.
-const TYPE_LABELS: Record<string, string> = {
-  Person: "People",
-  Company: "Companies",
-  Project: "Projects",
-  Concept: "Concepts",
-  Meeting: "Meetings",
-  Note: "Notes",
-  Source: "Sources",
-};
+const PLURAL_TYPES = new Set([
+  "Person",
+  "Company",
+  "Project",
+  "Concept",
+  "Meeting",
+  "Note",
+  "Source",
+]);
 // Pages arrive newest-updated first, so rows group under day headings and show only the
 // time of day; the full timestamp stays in each time's tooltip.
 function pageTable(ui: Page, records: Summary[]) {
   const table = el("table", undefined, "data-table knowledge-table"),
     head = el("thead"),
     headRow = el("tr");
-  for (const name of ["Name", "Type", "Occurred", "Last updated"]) {
-    const th = el("th", name);
-    if (name === "Last updated") {
+  for (const name of ["name", "type", "occurred", "updated"] as const) {
+    const th = el("th", t(`knowledge.browse.columns.${name}`));
+    if (name === "updated") {
       th.setAttribute("aria-sort", "descending");
       th.append(el("span", " ↓", "knowledge-sort-indicator"));
     }
@@ -56,7 +51,7 @@ function pageTable(ui: Page, records: Summary[]) {
   let currentDay: string | undefined;
   for (const record of records) {
     // A heading row starts whenever the update day changes.
-    const day = record.updatedAt ? dayHeading(record.updatedAt) : "Time not recorded";
+    const day = record.updatedAt ? dayHeading(record.updatedAt) : t("knowledge.common.timeUnknown");
     if (day !== currentDay) {
       currentDay = day;
       const dayRow = el("tr", undefined, "knowledge-day-row"),
@@ -73,7 +68,9 @@ function pageTable(ui: Page, records: Summary[]) {
       updated = el("td", undefined, "knowledge-updated-cell");
     name.append(summaryLink(ui, record));
     if (record.occurredAt) {
-      occurred.textContent = `${formatSourceDate(record.occurredAt)}${/^\d{4}-\d{2}-\d{2}$/.test(record.occurredAt) ? " · date only" : ""}`;
+      occurred.textContent = /^\d{4}-\d{2}-\d{2}$/.test(record.occurredAt)
+        ? t("knowledge.common.dateOnly", { date: formatSourceDate(record.occurredAt) })
+        : formatSourceDate(record.occurredAt);
     }
     if (record.updatedAt) {
       updated.textContent = clock(record.updatedAt);
@@ -114,7 +111,7 @@ export function renderBrowse(
   const { s, empty, open, load } = ui;
   const layout = el("div", undefined, "knowledge-browse"),
     facets = el("nav", undefined, "knowledge-facets");
-  facets.setAttribute("aria-label", "Types");
+  facets.setAttribute("aria-label", t("knowledge.browse.typesLabel"));
   layout.dataset.kind = s.kind;
   const facet = (name: string, text: string, count?: number) => {
     const control = button(
@@ -136,7 +133,7 @@ export function renderBrowse(
   };
   facet(
     "",
-    s.kind === "claim" ? "All claims" : "Everything",
+    t(s.kind === "claim" ? "knowledge.browse.allClaims" : "knowledge.browse.everything"),
     s.kind === "page" && s.vocabulary
       ? s.vocabulary.definitions.reduce((sum, d) => sum + d.recordCount, 0)
       : !s.type
@@ -154,20 +151,32 @@ export function renderBrowse(
       )) {
       if (group !== def.primitive) {
         group = def.primitive;
-        facets.append(el("h3", PRIMITIVE_LABELS[group] ?? human(group), "knowledge-eyebrow"));
+        facets.append(
+          el(
+            "h3",
+            PRIMITIVES.has(group) ? t(`knowledge.ontology.page.${group}.label`) : human(group),
+            "knowledge-eyebrow",
+          ),
+        );
       }
-      facet(def.name, TYPE_LABELS[def.label] ?? def.label, def.recordCount);
+      facet(
+        def.name,
+        PLURAL_TYPES.has(def.label) ? t(`knowledge.browse.types.${def.label}`) : def.label,
+        def.recordCount,
+      );
     }
     facets.append(
       el(
         "p",
-        `${s.vocabulary.definitions.filter((d) => !d.recordCount).length} empty types hidden`,
+        t("knowledge.browse.emptyTypesHidden", {
+          count: String(s.vocabulary.definitions.filter((d) => !d.recordCount).length),
+        }),
         "knowledge-muted",
       ),
     );
   }
   if (s.kind === "claim" && result?.facets) {
-    facets.prepend(el("h3", "Claim kinds", "knowledge-eyebrow"));
+    facets.prepend(el("h3", t("knowledge.browse.claimKinds"), "knowledge-eyebrow"));
     for (const [name, count] of Object.entries(result.facets.kinds)) {
       if (count > 0) {
         facet(name, label(name), count);
@@ -177,20 +186,26 @@ export function renderBrowse(
     facets.append(
       el(
         "p",
-        `${origins.length === 1 && origins[0]![0] === "source" ? `All ${origins[0]![1]} claims are from sources.` : origins.map(([name, count]) => `${count} ${origin(name)}`).join(" · ")} Kinds with no claims are hidden.`,
+        origins.length === 1 && origins[0]![0] === "source"
+          ? t("knowledge.browse.allFromSources", { count: String(origins[0]![1]) })
+          : t("knowledge.browse.originCounts", {
+              counts: origins.map(([name, count]) => `${count} ${origin(name)}`).join(" · "),
+            }),
         "knowledge-muted",
       ),
     );
   }
   if ((s.kind === "page" && !s.vocabulary) || (s.kind === "claim" && !result)) {
-    facets.append(loadingPlaceholder("rows", "Loading types…", 4));
+    facets.append(loadingPlaceholder("rows", t("knowledge.browse.loadingTypes"), 4));
   }
   const panel = el("div", undefined, "knowledge-surface knowledge-table-wrap"),
     controls = el("div", undefined, "knowledge-table-toolbar");
   const filter = el("form", undefined, "knowledge-browse-filter"),
     input = el("input");
   input.type = "search";
-  input.placeholder = s.kind === "claim" ? "Filter claim text" : "Filter by name or alias";
+  input.placeholder = t(
+    s.kind === "claim" ? "knowledge.browse.filterClaims" : "knowledge.browse.filterPages",
+  );
   input.setAttribute("aria-label", input.placeholder);
   input.value = s.browseQuery;
   filter.append(input);
@@ -208,11 +223,11 @@ export function renderBrowse(
   controls.append(filter);
   const kinds = el("div", undefined, "knowledge-kind-switch");
   kinds.setAttribute("role", "group");
-  kinds.setAttribute("aria-label", "Record kind");
+  kinds.setAttribute("aria-label", t("knowledge.browse.recordKind"));
   for (const [value, text] of [
-    ["page", "Pages"],
-    ["claim", "Claims"],
-    ["relationship", "Connections"],
+    ["page", t("knowledge.browse.kinds.page")],
+    ["claim", t("knowledge.browse.kinds.claim")],
+    ["relationship", t("knowledge.browse.kinds.relationship")],
   ] as const) {
     const b = button(
       text,
@@ -230,8 +245,8 @@ export function renderBrowse(
   controls.append(kinds);
   const history = el("div", undefined, "knowledge-kind-switch");
   for (const [all, name] of [
-    [false, "Current"],
-    [true, "Include history"],
+    [false, t("knowledge.browse.current")],
+    [true, t("knowledge.browse.includeHistory")],
   ] as const) {
     const b = button(
       name,
@@ -248,9 +263,9 @@ export function renderBrowse(
   controls.append(history);
   if (s.kind === "claim" && result?.facets && Object.keys(result.facets.origins).length > 1) {
     const select = el("select");
-    select.setAttribute("aria-label", "Assertion origin");
+    select.setAttribute("aria-label", t("knowledge.browse.origin"));
     for (const value of ["", ...Object.keys(result.facets.origins)]) {
-      const option = el("option", value ? origin(value) : "All origins");
+      const option = el("option", value ? origin(value) : t("knowledge.browse.allOrigins"));
       option.value = value;
       select.append(option);
     }
@@ -296,7 +311,7 @@ export function renderBrowse(
           summaryLink(ui, record),
           el(
             "small",
-            `${record.lifecycle === "withdrawn" ? "Withdrawn" : "Replaced"} · ${record.updatedAt ? date(record.updatedAt) : "Time not recorded"}`,
+            `${record.lifecycle === "withdrawn" ? "Withdrawn" : "Replaced"} · ${record.updatedAt ? date(record.updatedAt) : t("knowledge.common.timeUnknown")}`,
           ),
         );
         data.append(row);
@@ -314,13 +329,17 @@ export function renderBrowse(
           row.append(el("span", label(record.label ?? record.type)));
         }
         const endpoint = id ? endpoints.get(id) : undefined;
-        row.append(endpoint ? summaryLink(ui, endpoint) : el("span", "Page unavailable"));
+        row.append(
+          endpoint ? summaryLink(ui, endpoint) : el("span", t("knowledge.common.pageUnavailable")),
+        );
       }
       row.append(
         record.lifecycle === "active"
           ? confidenceView(record.attributionConfidence, true)
           : button(
-              `Withdrawn · ${record.updatedAt ? date(record.updatedAt) : "Time not recorded"}`,
+              t("knowledge.browse.withdrawn", {
+                date: record.updatedAt ? date(record.updatedAt) : t("knowledge.common.timeUnknown"),
+              }),
               () => open(record.id),
               "knowledge-quiet",
             ),
@@ -331,26 +350,42 @@ export function renderBrowse(
     data.append(pageTable(ui, result.records));
   }
   if (!result.records.length) {
-    data.append(
-      empty("Nothing here yet", "Tell your agent in chat and saved knowledge will appear here."),
-    );
+    data.append(empty(t("knowledge.browse.emptyTitle"), t("knowledge.browse.emptyBody")));
   }
   const pages = el("div", undefined, "knowledge-pagination");
   const capped = result.nextOffset !== null && result.nextOffset > 500;
   pages.append(
     el(
       "span",
-      `${result.total ? s.offset + 1 : 0}–${s.offset + result.records.length} of ${result.total.toLocaleString()} · ${result.total > 550 ? "partial browse access" : `complete list${s.includeHistory ? " · including history" : ""}`}`,
+      t(
+        result.total > 550
+          ? "knowledge.browse.rangePartial"
+          : s.includeHistory
+            ? "knowledge.browse.rangeHistory"
+            : "knowledge.browse.range",
+        {
+          from: String(result.total ? s.offset + 1 : 0),
+          to: String(s.offset + result.records.length),
+          total: result.total.toLocaleString(),
+        },
+      ),
     ),
   );
   const previousOffset = s.browseBack.findLast((seen) => seen < s.offset);
-  const previous = button(previousOffset === undefined && s.offset ? "First" : "Previous", () => {
-    s.offset = previousOffset ?? 0;
-    s.browseBack = s.browseBack.filter((seen) => seen < s.offset);
-    void load();
-  });
+  const previous = button(
+    t(
+      previousOffset === undefined && s.offset
+        ? "knowledge.common.first"
+        : "knowledge.common.previous",
+    ),
+    () => {
+      s.offset = previousOffset ?? 0;
+      s.browseBack = s.browseBack.filter((seen) => seen < s.offset);
+      void load();
+    },
+  );
   previous.disabled = !s.offset;
-  const next = button("Next", () => {
+  const next = button(t("knowledge.common.next"), () => {
     s.browseBack = [...s.browseBack.filter((seen) => seen < s.offset), s.offset];
     s.offset = result.nextOffset!;
     void load();
@@ -359,13 +394,7 @@ export function renderBrowse(
   pages.append(previous, next);
   data.append(pages);
   if (capped) {
-    data.append(
-      el(
-        "p",
-        "This server cannot page beyond 550 records. Narrow the type filter to see more.",
-        "knowledge-notice",
-      ),
-    );
+    data.append(el("p", t("knowledge.browse.pageLimit"), "knowledge-notice"));
   }
   const results = el("div", undefined, "knowledge-browse-results");
   results.append(panel);

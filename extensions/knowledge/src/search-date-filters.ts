@@ -1,4 +1,5 @@
 import type { TimelineInput } from "./chronicle-contract.js";
+import { t } from "./i18n/index.js";
 import { button, el } from "./page-dom.js";
 import { validTemporalDate } from "./temporal-query.js";
 
@@ -7,23 +8,18 @@ export type TemporalSelection = {
   until: string;
   timeField: NonNullable<TimelineInput["timeField"]>;
 };
-const fields = {
-  occurred_at: "Occurred",
-  recorded_at: "Recorded",
-  updated_at: "Updated",
-  due_at: "Due",
-} as const;
+const fields = ["occurred_at", "recorded_at", "updated_at", "due_at"] as const;
 
 /** Validate explicit dates without silently widening an invalid query. */
 export function temporalSelectionError(value: TemporalSelection): string {
   for (const key of ["since", "until"] as const) {
     if (value[key] && !validTemporalDate(value[key])) {
-      return `${key === "since" ? "Since" : "Until"} must be a real YYYY-MM-DD date or ISO timestamp with seconds and an explicit timezone.`;
+      return t(key === "since" ? "knowledge.dates.invalidSince" : "knowledge.dates.invalidUntil");
     }
   }
   const end = Date.parse(value.until) + (value.until.length === 10 ? 86_400_000 - 1 : 0);
   return value.since && value.until && Date.parse(value.since) > end
-    ? "Since must not be after Until."
+    ? t("knowledge.dates.sinceAfterUntil")
     : "";
 }
 
@@ -42,7 +38,7 @@ export function temporalFilterForm(
   apply: (next: TemporalSelection) => void,
 ): HTMLFormElement {
   const form = el("form", undefined, "knowledge-temporal-filters");
-  form.setAttribute("aria-label", "Search date filters");
+  form.setAttribute("aria-label", t("knowledge.dates.label"));
   const wrap = (name: string, control: HTMLElement) => {
     const label = el("label", name);
     label.append(control);
@@ -50,13 +46,13 @@ export function temporalFilterForm(
   };
   const field = el("select");
   field.name = "timeField";
-  for (const [fieldName, name] of Object.entries(fields)) {
-    const option = el("option", `${name} (${fieldName})`);
+  for (const fieldName of fields) {
+    const option = el("option", `${t(`knowledge.dates.fields.${fieldName}`)} (${fieldName})`);
     option.value = fieldName;
     field.append(option);
   }
   field.value = value.timeField;
-  wrap("Date field", field);
+  wrap(t("knowledge.dates.field"), field);
   // Text inputs accept both authored calendar dates and timezone-bearing instants.
   const inputs = { since: el("input"), until: el("input") };
   for (const key of ["since", "until"] as const) {
@@ -65,21 +61,17 @@ export function temporalFilterForm(
     input.value = value[key];
     input.type = "text";
     input.maxLength = 40;
-    input.placeholder = "YYYY-MM-DD or ISO timestamp";
-    wrap(key === "since" ? "Since (inclusive)" : "Until (inclusive)", input);
+    input.placeholder = t("knowledge.dates.placeholder");
+    wrap(t(key === "since" ? "knowledge.dates.since" : "knowledge.dates.until"), input);
   }
-  const submit = el("button", "Apply dates");
+  const submit = el("button", t("knowledge.dates.apply"));
   submit.type = "submit";
   const reset = button(
-    "Clear filters",
+    t("knowledge.dates.clear"),
     () => apply({ since: "", until: "", timeField: "occurred_at" }),
     "knowledge-quiet",
   );
-  const help = el(
-    "p",
-    "Dates use UTC range boundaries; Until includes the whole calendar day. Occurred never falls back to recorded time.",
-    "knowledge-muted knowledge-temporal-help",
-  );
+  const help = el("p", t("knowledge.dates.help"), "knowledge-muted knowledge-temporal-help");
   const error = el("p", "", "knowledge-error knowledge-temporal-help");
   error.setAttribute("role", "alert");
   form.append(submit, reset, help, error);
@@ -88,7 +80,7 @@ export function temporalFilterForm(
     const next = {
       since: inputs.since.value.trim(),
       until: inputs.until.value.trim(),
-      // SAFETY: field is the select built above whose option values are exactly the keys of fields.
+      // SAFETY: field is the select built above whose option values are exactly the fields.
       timeField: field.value as TemporalSelection["timeField"],
     };
     error.textContent = temporalSelectionError(next);

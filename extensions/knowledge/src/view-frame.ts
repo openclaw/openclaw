@@ -1,4 +1,5 @@
 import { renderBrowse } from "./browse-view.js";
+import { t } from "./i18n/index.js";
 import { commitBrowse, loadingPlaceholder, syncBrowseControls } from "./loading-view.js";
 import type { Page } from "./page-context.js";
 import { button, el } from "./page-dom.js";
@@ -83,7 +84,7 @@ export function prepareLoading(ui: Page, n: number) {
       loadingLabel(s) +
       (data.querySelector(".knowledge-placeholder")
         ? ""
-        : " Showing previous results until ready.");
+        : " " + t("knowledge.page.showingPrevious"));
     loading.hidden = true;
   } else {
     // Recent, Search and detail reloads have the same local data boundary.
@@ -102,7 +103,7 @@ export function prepareLoading(ui: Page, n: number) {
       loadingLabel(s) +
       (data.querySelector(".knowledge-placeholder")
         ? ""
-        : " Showing previous results until ready.");
+        : " " + t("knowledge.page.showingPrevious"));
     loading.hidden = true;
   }
   announce(loadingLabel(s));
@@ -139,6 +140,9 @@ export function showLoadingFailure(ui: Page, error: unknown, retry: () => void) 
     )
     .forEach((node) => node.remove());
   const feedback = content.querySelector<HTMLElement>(".knowledge-pane-status") ?? loading;
-  feedback.replaceChildren(failure(error), button("Retry", retry, "knowledge-quiet"));
+  feedback.replaceChildren(
+    failure(error),
+    button(t("knowledge.common.retry"), retry, "knowledge-quiet"),
+  );
   feedback.hidden = false;
 }

@@ -19,7 +19,7 @@ it("temporal UI accepts only real explicit calendar dates or timezone-bearing ti
     expect(temporalSelectionError(selection({ since }))).toMatch(/Since must/);
   }
   expect(temporalSelectionError(selection({ since: "2026-10-05", until: "2026-10-04" }))).toMatch(
-    /Since must not be after Until/,
+    /Since can’t be after Until/,
   );
   expect(
     temporalSelectionError(selection({ since: "2026-10-04T23:59:59Z", until: "2026-10-04" })),

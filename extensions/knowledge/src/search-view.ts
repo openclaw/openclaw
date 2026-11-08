@@ -1,4 +1,5 @@
 import { summaryLink } from "./claim-view.js";
+import { t } from "./i18n/index.js";
 import { identityTag } from "./knowledge-presentation.js";
 import type { Page } from "./page-context.js";
 import { button, el, tile } from "./page-dom.js";
@@ -19,14 +20,14 @@ export function searchForm(ui: Page, compact = false) {
   input.maxLength = 200;
   input.placeholder = searchPlaceholder();
   input.value = s.query;
-  input.setAttribute("aria-label", "Search knowledge");
+  input.setAttribute("aria-label", t("knowledge.search.label"));
   if (compact) {
-    input.placeholder = "Search names, aliases, or text";
+    input.placeholder = t("knowledge.search.compactPlaceholder");
   }
   const submit = el("button", undefined, "knowledge-search-submit");
   submit.type = "submit";
-  submit.setAttribute("aria-label", "Search all text");
-  submit.title = "Search all text";
+  submit.setAttribute("aria-label", t("knowledge.search.allText"));
+  submit.title = t("knowledge.search.allText");
   submit.append(s.query ? icon("cornerDownLeft", 14) : el("kbd", "/"));
   const searchIcon = el("span", undefined, "knowledge-search-icon");
   searchIcon.append(icon("search", compact ? 14 : 16));
@@ -65,10 +66,10 @@ export function searchForm(ui: Page, compact = false) {
             return;
           }
           suggestions.replaceChildren();
-          suggestions.append(el("small", "Exact matches"));
+          suggestions.append(el("small", t("knowledge.search.exactMatches")));
           const hits = result.hits.filter(isFullHit);
           if (!hits.length) {
-            suggestions.append(el("p", `No page is named exactly "${s.query}".`));
+            suggestions.append(el("p", t("knowledge.search.noExactMatch", { query: s.query })));
           }
           for (const hit of hits) {
             const item = button(
@@ -82,7 +83,7 @@ export function searchForm(ui: Page, compact = false) {
           }
           suggestions.append(
             button(
-              `Search all text for "${s.query}" · ranked`,
+              t("knowledge.search.allTextFor", { query: s.query }),
               () => form.requestSubmit(),
               "knowledge-suggestion",
             ),
@@ -104,14 +105,12 @@ export function searchForm(ui: Page, compact = false) {
 export async function searchResults(ui: Page, n: number, target: HTMLElement) {
   const { s, feature, live, empty, load, writeLocation, temporalSelection } = ui;
   if (!s.query.trim()) {
-    target.replaceChildren(
-      empty("Search knowledge", "Enter a name or a few words to search all saved text."),
-    );
+    target.replaceChildren(empty(t("knowledge.search.label"), t("knowledge.search.emptyBody")));
     return;
   }
   const invalid = temporalSelectionError(temporalSelection());
   if (invalid) {
-    target.replaceChildren(empty("Invalid date range", invalid));
+    target.replaceChildren(empty(t("knowledge.search.invalidDates"), invalid));
     return;
   }
   const result = await feature.invoke("grep", {
@@ -124,16 +123,14 @@ export async function searchResults(ui: Page, n: number, target: HTMLElement) {
     return;
   }
   if (result.index.state !== "ready") {
-    target.replaceChildren(empty("Search unavailable", result.index.message));
+    target.replaceChildren(empty(t("knowledge.search.failed"), result.index.message));
     return;
   }
   if (s.offset && s.searchSnapshot && s.searchSnapshot !== result.index.snapshot) {
     s.offset = 0;
     s.searchSnapshot = undefined;
     writeLocation(true);
-    target.replaceChildren(
-      empty("Knowledge changed", "Run the search again to restart from the current snapshot."),
-    );
+    target.replaceChildren(empty(t("knowledge.search.changed"), t("knowledge.search.changedBody")));
     return;
   }
   s.searchSnapshot = result.index.snapshot;
@@ -141,7 +138,9 @@ export async function searchResults(ui: Page, n: number, target: HTMLElement) {
   list.append(
     el(
       "p",
-      `${result.total} matches · Ranked text search, not a complete inventory`,
+      t(result.total === 1 ? "knowledge.search.totalOne" : "knowledge.search.total", {
+        count: (result.total ?? 0).toLocaleString(),
+      }),
       "knowledge-list-note",
     ),
   );
@@ -155,38 +154,37 @@ export async function searchResults(ui: Page, n: number, target: HTMLElement) {
       el("p", hit.snippet.text),
       el(
         "small",
-        `${hit.snippet.matchLocated === false ? "Opening excerpt · " : ""}Revision ${hit.citation.revision} · ${hit.citation.path}`,
+        t(
+          hit.snippet.matchLocated === false
+            ? "knowledge.search.hitOpeningExcerpt"
+            : "knowledge.search.hitMeta",
+          { revision: String(hit.citation.revision), path: hit.citation.path },
+        ),
       ),
     );
     list.append(row);
   }
   if (!result.total) {
-    list.append(empty("No matches", "Try another name or phrase, or browse by type."));
+    list.append(empty(t("knowledge.search.noMatches"), t("knowledge.search.noMatchesBody")));
   }
   const pages = el("div", undefined, "knowledge-pagination");
   if (s.offset) {
     pages.append(
-      button("Previous", () => {
+      button(t("knowledge.common.previous"), () => {
         s.offset = Math.max(0, s.offset - 20);
         void load();
       }),
     );
   }
   if (result.nextOffset !== null) {
-    const next = button("Next", () => {
+    const next = button(t("knowledge.common.next"), () => {
       s.offset = result.nextOffset!;
       void load();
     });
     next.disabled = result.nextOffset > 500;
     pages.append(next);
     if (next.disabled) {
-      list.append(
-        el(
-          "p",
-          "This server cannot page beyond 520 search results. Refine your query to see more.",
-          "knowledge-notice",
-        ),
-      );
+      list.append(el("p", t("knowledge.search.pageLimit"), "knowledge-notice"));
     }
   }
   list.append(pages);
