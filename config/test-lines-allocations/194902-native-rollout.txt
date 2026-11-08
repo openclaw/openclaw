@@ -1,0 +1,2 @@
+49
+# Saved-rollout preservation through startup and native history reuse; retains token and safe-path guards.

@@ -1,3 +1,4 @@
+import fs from "node:fs/promises";
 import path from "node:path";
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import type { EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness";
@@ -115,6 +116,11 @@ async function runTurn(
 it.each([false, true])("prepares only fresh native history (engine: %s)", async (engine) => {
   const { params, assemble } = seedParams();
   delete params.authoredContextTokenCap;
+  params.agentDir = path.join(tempDir, "agent");
+  params.config = {
+    ...params.config,
+    agents: { defaults: { compaction: { maxActiveTranscriptBytes: "2mb" } } },
+  };
   if (!engine) {
     delete params.contextEngine;
   }
@@ -147,6 +153,35 @@ it.each([false, true])("prepares only fresh native history (engine: %s)", async 
   expect(JSON.stringify(selectedItems(first))).toContain("BOUNDED_SELECTED_HISTORY");
   expect(JSON.stringify(selectedItems(first)).split("Scheduled report ready.")).toHaveLength(2);
   expect(JSON.stringify(first)).not.toContain("Local delivery bookkeeping.");
+  // A native-compacted rollout still retains the pre-compaction records on disk.
+  const rolloutPath = path.join(
+    params.agentDir,
+    "codex-home",
+    "sessions",
+    "rollout-thread-selected-1.jsonl",
+  );
+  await fs.mkdir(path.dirname(rolloutPath), { recursive: true });
+  await fs.writeFile(
+    rolloutPath,
+    [
+      JSON.stringify({ type: "response_item", payload: { text: "x".repeat(2_100_000) } }),
+      JSON.stringify({
+        type: "compacted",
+        payload: { message: "summary", replacement_history: [] },
+      }),
+      JSON.stringify({
+        type: "event_msg",
+        payload: {
+          type: "token_count",
+          info: {
+            last_token_usage: { total_tokens: 12_000 },
+            total_token_usage: { total_tokens: 500_000 },
+            model_context_window: 500_000,
+          },
+        },
+      }),
+    ].join("\n"),
+  );
   assemble.mockResolvedValue({
     messages: [userMessage(original.repeat(1_000), 1)],
     estimatedTokens: 20_000,
@@ -156,6 +191,9 @@ it.each([false, true])("prepares only fresh native history (engine: %s)", async 
   expect(selectedItems(next)).toEqual([]);
   expect(next.some(({ method }) => method === "thread/start")).toBe(false);
   expect(next.some(({ method }) => method === "thread/compact/start")).toBe(false);
+  await expect(readCodexAppServerBinding(params.sessionFile)).resolves.toMatchObject({
+    threadId: "thread-selected-1",
+  });
 });
 
 it("installs >1,048,576 characters in UTF-8-bounded quotes with ordered media before readiness", async () => {
