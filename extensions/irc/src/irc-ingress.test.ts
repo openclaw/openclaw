@@ -174,7 +174,7 @@ describe("IRC durable ingress", () => {
         receivedAt: Date.now(),
         connectionEpoch: "connection-legacy",
         connectedNick: "bot",
-        rawLine: ":alice!ident@example.org PRIVMSG +modeless :hello",
+        rawLine: ":alice!ident@example.org PRIVMSG #room :hello",
       });
       const ingress = start(queue, dispatch);
       try {
