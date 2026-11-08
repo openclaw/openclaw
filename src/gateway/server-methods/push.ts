@@ -262,7 +262,7 @@ export const pushHandlers = {
                   p: { key: params.sessionKey },
                   isCurrent: () => getSessionRowProjection(context) === projection,
                 };
-                return await withPreparedSessionResolve(selection, (resolved) => {
+                const preparedAlert = await withPreparedSessionResolve(selection, (resolved) => {
                   sessionMutationAuthorization?.assertCurrent();
                   if (!resolved.ok || !("key" in resolved)) {
                     throw new Error("Push chat destination is unavailable");
@@ -279,12 +279,13 @@ export const pushHandlers = {
                       return false;
                     }
                   };
-                  return sendApnsAlert({
+                  return {
                     ...alert,
                     destination: { gatewayDeviceId: identity.deviceId, sessionKey: resolved.key },
                     isCurrent,
-                  });
+                  };
                 });
+                return await sendApnsAlert(preparedAlert);
               })();
         if (
           shouldClearStoredApnsRegistration({

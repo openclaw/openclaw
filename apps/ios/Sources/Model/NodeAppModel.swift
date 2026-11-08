@@ -3202,7 +3202,7 @@ extension NodeAppModel {
                     let params = try JSONEncoder().encode(["key": sessionKey])
                     let response = try await self.operatorGateway.request(
                         method: "sessions.resolve",
-                        paramsJSON: String(decoding: params, as: UTF8.self),
+                        paramsJSON: String(data: params, encoding: .utf8),
                         timeoutSeconds: 8,
                         ifCurrentRoute: route)
                     struct Resolution: Decodable {
@@ -3221,9 +3221,9 @@ extension NodeAppModel {
             // preferences or retargets Talk. A push never creates or sends to a session.
             self.openChat(sessionKey: key)
         } catch {
-            // Preserve a disconnected tap for the existing reconnect owner. A refused
-            // destination on a live connection falls back to the current screen.
-            if stillCurrent() {
+            // RPC failures can resume before the model's disconnect callback. Only
+            // an error from the still-current socket consumes the selected tap.
+            if await self.operatorGateway.currentRoute() == route, stillCurrent() {
                 self.pendingChatNotification = nil
                 self.lastHandledChatNotificationID = request.notificationID
             }
@@ -4188,6 +4188,22 @@ extension NodeAppModel {
                 self.operatorTalkHydrationGeneration = nil
             }
         }
+        let shouldContinue: @MainActor @Sendable () -> Bool = { [weak self] in
+            guard let self else { return false }
+            return self.operatorTalkConnectionGeneration == talkConnectionGeneration &&
+                self.isCurrentGatewayRoute(generation: routeGeneration, stableID: stableID)
+        }
+        let previousRoutingRestore = self.chatSessionRoutingRestoreTask
+        let routingRestore = Task { [weak self] in
+            await previousRoutingRestore?.value
+            guard let self, !Task.isCancelled, shouldContinue() else { return }
+            // Roster reconciliation can retire a saved agent and clear chat focus.
+            // Notification navigation waits on this same routing owner before opening.
+            await self.refreshBrandingFromGateway(shouldApply: shouldContinue)
+            guard shouldContinue() else { return }
+            await self.refreshAgentsFromGateway(shouldApply: shouldContinue)
+        }
+        self.chatSessionRoutingRestoreTask = routingRestore
         self.setOperatorConnected(true, scopes: scopes ?? [])
         await self.refreshDesktopObserveAvailability(
             stableID: stableID,
@@ -4197,23 +4213,12 @@ extension NodeAppModel {
         GatewayDiagnostics.log(
             "operator gateway connected host=\(url.host ?? "?") scheme=\(url.scheme ?? "?")")
 
-        let shouldContinue: @MainActor @Sendable () -> Bool = { [weak self] in
-            guard let self else { return false }
-            return self.operatorTalkConnectionGeneration == talkConnectionGeneration &&
-                self.isCurrentGatewayRoute(generation: routeGeneration, stableID: stableID)
-        }
         // Watch approval resolutions flush from the reconcile-gated watch path
         // (reconcileWatchExecApprovalCache), not eagerly on operator connect.
-        if let chatSessionRoutingRestoreTask {
-            await chatSessionRoutingRestoreTask.value
-        }
+        await routingRestore.value
         guard shouldContinue() else { return }
         self.chatSessionRoutingRestoreTask = nil
         await self.deliverPendingChatNotification()
-        guard shouldContinue() else { return }
-        await self.refreshBrandingFromGateway(shouldApply: shouldContinue)
-        guard shouldContinue() else { return }
-        await self.refreshAgentsFromGateway(shouldApply: shouldContinue)
         guard shouldContinue() else { return }
         await self.talkMode.reloadConfig(shouldApply: shouldContinue)
         guard shouldContinue() else { return }

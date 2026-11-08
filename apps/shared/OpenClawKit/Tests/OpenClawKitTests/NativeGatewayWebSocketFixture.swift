@@ -44,6 +44,40 @@ final class NativeGatewayWebSocketFixture: @unchecked Sendable {
 
     typealias HTTPResponseHandler = @MainActor @Sendable (Request) -> HTTPResponse
 
+    enum RPCReply: Sendable {
+        case payload(String)
+        case heldPayload(String)
+        case failure(String)
+        case disconnect
+    }
+
+    /// Opt-in post-hello script; existing fixture users retain their handshake-only behavior.
+    var rpcReplies: [String: [RPCReply]]? {
+        get { self.queue.sync { self.rpcReplyScript } }
+        set { self.queue.sync { self.rpcReplyScript = newValue } }
+    }
+
+    var rpcMethods: [String] {
+        self.queue.sync { self.receivedRPCMethods }
+    }
+
+    private var rpcReplyScript: [String: [RPCReply]]?
+    private var receivedRPCMethods: [String] = []
+    private var heldRPCPayloads: [(id: String, index: Int, json: String)] = []
+
+    func releaseHeldRPCPayloads() {
+        self.queue.sync {
+            let replies = self.heldRPCPayloads
+            self.heldRPCPayloads.removeAll()
+            for reply in replies {
+                let payload = try? JSONSerialization.jsonObject(with: Data(reply.json.utf8))
+                self.sendJSON([
+                    "type": "res", "id": reply.id, "ok": true, "payload": payload ?? [:],
+                ], index: reply.index)
+            }
+        }
+    }
+
     var httpResponse: HTTPResponseHandler? {
         get { self.queue.sync { self.httpResponseHandler } }
         set { self.queue.sync { self.httpResponseHandler = newValue } }
@@ -426,12 +460,17 @@ final class NativeGatewayWebSocketFixture: @unchecked Sendable {
     }
 
     private func handleText(_ data: Data, index: Int) {
-        guard var client = self.clients[index], client.phase == .connect,
+        guard var client = self.clients[index],
               let request = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               request["type"] as? String == "req",
-              request["method"] as? String == "connect",
+              let method = request["method"] as? String,
               let id = request["id"] as? String
         else { return }
+        if client.phase == .open {
+            self.replyToRPC(method: method, id: id, index: index)
+            return
+        }
+        guard client.phase == .connect, method == "connect" else { return }
 
         let params = request["params"] as? [String: Any]
         let auth = params?["auth"] as? [String: Any]
@@ -448,6 +487,31 @@ final class NativeGatewayWebSocketFixture: @unchecked Sendable {
             self.sendConnectFailure(id: id, failure: failure, index: index)
         } else {
             self.sendConnectOK(id: id, role: role, index: index)
+        }
+    }
+
+    private func replyToRPC(method: String, id: String, index: Int) {
+        guard self.rpcReplyScript != nil else { return }
+        self.receivedRPCMethods.append(method)
+        var replies = self.rpcReplyScript?[method] ?? []
+        let reply = replies.first ?? .payload("{}")
+        if replies.count > 1 {
+            replies.removeFirst()
+            self.rpcReplyScript?[method] = replies
+        }
+        switch reply {
+        case let .heldPayload(json):
+            self.heldRPCPayloads.append((id, index, json))
+        case let .payload(json):
+            let payload = try? JSONSerialization.jsonObject(with: Data(json.utf8))
+            self.sendJSON(["type": "res", "id": id, "ok": true, "payload": payload ?? [:]], index: index)
+        case let .failure(code):
+            self.sendJSON([
+                "type": "res", "id": id, "ok": false,
+                "error": ["code": code, "message": "Fixture destination refused"],
+            ], index: index)
+        case .disconnect:
+            self.close(index)
         }
     }
 
