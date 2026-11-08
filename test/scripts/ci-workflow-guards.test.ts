@@ -1520,9 +1520,11 @@ AFTER_CD
             eventName: "pull_request",
             repository: "openclaw/openclaw",
             runAttempt: 1,
+            failed: true,
             preflightOutputs: { run_docs_content: enabled },
             steps: {
               node_setup: { outcome: "success", outputs: {} },
+              bun_setup: { outcome: "failure", outputs: {} },
               clawhub_docs: { outcome: "success", outputs: {} },
             },
           }),
@@ -1532,15 +1534,20 @@ AFTER_CD
     }
     const format = job.steps.find((step: WorkflowStep) => step.name === "Check formatting");
     expect(format.if).not.toContain("run_docs_content");
-    expect(
-      evaluateWorkflowCondition(format.if, {
-        eventName: "pull_request",
-        repository: "openclaw/openclaw",
-        runAttempt: 1,
-        preflightOutputs: { run_docs_content: "false", run_format_check: "true" },
-        steps: { node_setup: { outcome: "success", outputs: {} } },
-      }),
-    ).toBe(true);
+    for (const outcome of ["success", "failure"] as const) {
+      expect(
+        evaluateWorkflowCondition(format.if, {
+          eventName: "pull_request",
+          repository: "openclaw/openclaw",
+          runAttempt: 1,
+          preflightOutputs: { run_docs_content: "false", run_format_check: "true" },
+          steps: {
+            node_setup: { outcome: "success", outputs: {} },
+            bun_setup: { outcome, outputs: {} },
+          },
+        }),
+      ).toBe(outcome === "success");
+    }
     const preflight = readCiWorkflow().jobs.preflight;
     expect(preflight.outputs.run_docs_content).toBe(
       "${{ steps.manifest.outputs.run_docs_content }}",
@@ -3850,6 +3857,99 @@ server.listen(0, "127.0.0.1", () => {
       );
       expect(reader.with?.["cache-mode"]).toBe("${{ needs.preflight.outputs.cache_mode }}");
     }
+    for (const [name, condition] of [
+      ["check-docs", "needs.preflight.outputs.run_format_check == 'true'"],
+      ["check-additional-shard", "matrix.group == 'boundaries'"],
+    ] as const) {
+      const reader = requiredWorkflowStep(
+        readCiWorkflow().jobs[name].steps,
+        "Setup pinned Bun parity runtime",
+      );
+      expect(reader).toMatchObject({
+        id: "bun_setup",
+        if: condition,
+        uses: "./.ci-harness/.github/actions/setup-test-bun",
+        with: { "cache-mode": "${{ needs.preflight.outputs.cache_mode }}" },
+      });
+      for (const enabled of [true, false]) {
+        expect(
+          evaluateWorkflowCondition(reader.if, {
+            eventName: "pull_request",
+            repository: "openclaw/openclaw",
+            runAttempt: 1,
+            preflightOutputs: { run_format_check: String(enabled) },
+            matrix: { group: enabled ? "boundaries" : "source-contracts" },
+          }),
+        ).toBe(enabled);
+      }
+    }
+  });
+
+  it("prepares Bun once for lint consumers and prevents restaging after setup failure", () => {
+    const workflow = readCiWorkflow();
+    const context = {
+      eventName: "pull_request",
+      repository: "openclaw/openclaw",
+      runAttempt: 1,
+    } as const;
+    for (const [name, task] of [
+      ["check-shard", "lint"],
+      ["checks-fast-core", "release-lint-core-1"],
+      ["check-lint-hosted-core-shard", ""],
+      ["check-lint-hosted-extension-shard", ""],
+    ] as const) {
+      const reader = requiredWorkflowStep(
+        workflow.jobs[name].steps,
+        "Setup pinned Bun parity runtime",
+      );
+      expect(reader).toMatchObject({
+        id: "bun_setup",
+        uses: "./.ci-harness/.github/actions/setup-test-bun",
+        with: { "cache-mode": "${{ needs.preflight.outputs.cache_mode }}" },
+      });
+      if (task) {
+        for (const selected of [true, false]) {
+          expect(
+            evaluateWorkflowCondition(reader.if, {
+              ...context,
+              matrix: { task: selected ? task : "npm-lock" },
+            }),
+          ).toBe(selected);
+        }
+      } else {
+        expect(reader.if).toBeUndefined();
+      }
+    }
+    for (const [job, name] of [
+      ["check-shard", "Run changed lint"],
+      ["check-shard", "Run check shard"],
+      ["check-lint-hosted-core-shard", "Run shared central lint"],
+    ] as const) {
+      const step = requiredWorkflowStep(workflow.jobs[job].steps, name);
+      expect(
+        evaluateWorkflowCondition(step.if, {
+          ...context,
+          failed: true,
+          steps: {
+            check_setup: { outputs: {}, outcome: "success" },
+            bun_setup: { outputs: {}, outcome: "failure" },
+          },
+          matrix: { task: "lint", shared_central_lint_selection_json: "{}" },
+          preflightOutputs: { central_lint_selection_json: name === "Run check shard" ? "" : "{}" },
+        }),
+      ).toBe(false);
+    }
+    const otherCheck = requiredWorkflowStep(workflow.jobs["check-shard"].steps, "Run check shard");
+    expect(
+      evaluateWorkflowCondition(otherCheck.if, {
+        ...context,
+        steps: {
+          check_setup: { outputs: {}, outcome: "success" },
+          bun_setup: { outputs: {}, outcome: "skipped" },
+        },
+        matrix: { task: "npm-lock" },
+      }),
+    ).toBe(true);
   });
 
   it("persists isolated transform and compile caches through immutable protected archives", () => {
