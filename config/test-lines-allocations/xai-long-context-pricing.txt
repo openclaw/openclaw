@@ -1,2 +1,2 @@
-10
-# xAI long-context pricing: whole-request 200k-token tier on every priced Grok row, pinned through the plugin catalog contract.
+45
+# xAI long-context pricing: whole-request 200k-token tier on every priced Grok row, pinned through the plugin catalog contract, plus the Doctor repair that adds it to OAuth rows saved at flat catalog rates.

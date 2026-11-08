@@ -1,5 +1,6 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { readMigrationConfigPath } from "openclaw/plugin-sdk/migration";
+import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import { describe, expect, it } from "vitest";
 import { legacyConfigRules, normalizeCompatibilityConfig } from "./doctor-contract-api.js";
 import { xaiPluginConfig as pluginConfig } from "./plugin-config.test-support.js";
@@ -82,6 +83,40 @@ describe("xAI doctor contract", () => {
     });
 
     expect(normalizeCompatibilityConfig({ cfg: config })).toEqual({ config, changes: [] });
+  });
+
+  it("adds the long-context tier to OAuth rows saved at the catalog's flat rates", () => {
+    // The shape OAuth sign-in saved before the catalog carried tiers.
+    const saved = (id: string, cost: ModelDefinitionConfig["cost"]): ModelDefinitionConfig => ({
+      id,
+      name: id,
+      api: "openai-responses",
+      baseUrl: "https://example.invalid/v1",
+      reasoning: true,
+      input: ["text"],
+      cost,
+      contextWindow: 256_000,
+      maxTokens: 64_000,
+      compat: {},
+    });
+    const flat = { input: 2, output: 6, cacheRead: 0.3, cacheWrite: 0 };
+    const unchanged = [
+      saved("grok-4.5", { ...flat, input: 1 }),
+      saved("grok-4.5", { ...flat, tieredPricing: [] }),
+      saved("grok-4.7-build-fast", { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }),
+    ];
+    const config: OpenClawConfig = {
+      models: {
+        providers: { xai: { baseUrl: "", models: [saved("grok-4.5", flat), ...unchanged] } },
+      },
+    };
+    const result = migrate(config, 1);
+    const [repaired, ...rest] = result.config.models?.providers?.xai?.models ?? [];
+    expect(repaired?.cost.tieredPricing?.map((tier) => [tier.range, tier.input])).toEqual([
+      [[0, 200_000], 2],
+      [[200_000], 4],
+    ]);
+    expect(rest).toEqual(unchanged);
   });
 
   it.each([
