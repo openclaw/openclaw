@@ -37,6 +37,7 @@ import { runWithModelFallback } from "../model-fallback-runner.js";
 import { acquireAgentRunPreparedModelRuntime } from "../prepared-model-runtime.js";
 import { prepareAgentPromptProjects } from "../prompt-projects.js";
 import { resolveProviderIdForAuth } from "../provider-auth-aliases.js";
+import { buildProviderAuthRecoveryHint } from "../provider-auth-recovery-hint.js";
 import {
   applyAgentRunSessionTargetIdentity,
   resolveAgentRunSessionTarget,
@@ -122,8 +123,14 @@ export async function compactNativeCliSession(params: {
         });
       } catch (err) {
         if (err instanceof CliExecutionAuthProfileError) {
+          // Never substitute another account; tell the user how to restore or switch it.
+          const recovery = buildProviderAuthRecoveryHint({
+            provider: params.compactParams.provider ?? DEFAULT_PROVIDER,
+            config,
+            workspaceDir: params.compactParams.workspaceDir,
+          });
           return buildCompactionFailureResult(
-            `CLI backend "${runtime}" cannot compact with the selected account: ${err.message}`,
+            `CLI backend "${runtime}" cannot compact with the selected account: ${err.message} ${recovery} Or select an available account with /model, then run /compact again.`,
           );
         }
         throw err;

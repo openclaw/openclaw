@@ -162,6 +162,8 @@ describe("session pin conversion for the CLI child", () => {
       }),
     });
     expect(result).toMatchObject({ ok: false, compacted: false });
+    expect(result?.reason).toContain('No credentials found for profile "anthropic:missing"');
+    expect(result?.reason).toContain("then run /compact again");
     expect(runCliAgentMock).not.toHaveBeenCalled();
   });
 });
