@@ -19,7 +19,7 @@ import { sessionsListResponse } from "./session-management.test-support.ts";
 const suite = createControlUiE2eSuite({ name: "Chat waiting on subagents" });
 
 suite.define(() => {
-  it("updates compact Details from observers without reading child histories", async () => {
+  it("updates observer previews alongside native Details without reading child histories", async () => {
     const artifactParent = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
     const artifactDir = artifactParent
       ? createControlUiE2eArtifactDir("subagent-details-observer", artifactParent)
@@ -31,7 +31,8 @@ suite.define(() => {
         await page.clock.setFixedTime(now);
         await page.addInitScript(
           ({ key }) => {
-            localStorage.setItem(key, JSON.stringify({ themeMode: "dark", navCollapsed: true }));
+            localStorage.setItem(key, JSON.stringify({ themeMode: "dark", navCollapsed: false }));
+            localStorage.setItem("openclaw:sidebar:sessions:show-preview", "true");
           },
           { key: controlUiBundledSettingsStorageKey(suite.server.baseUrl) },
         );
@@ -55,9 +56,10 @@ suite.define(() => {
         const children = titles.map(
           (label, index) =>
             ({
-              key: "agent:main:dependency-" + index,
+              key: "agent:main:subagent:dependency-" + index,
               sessionId: "dependency-" + index,
               kind: "direct",
+              classification: "subagent",
               label,
               status: "running",
               hasActiveRun: true,
@@ -94,25 +96,24 @@ suite.define(() => {
         if ((await summary.getAttribute("aria-expanded")) !== "true") {
           await summary.click();
         }
-        const activity = group.locator(".chat-subagent-activity");
-        const rows = activity.locator(".chat-subagent-activity__row");
-        await expect.poll(() => rows.count()).toBe(3);
+        const rows = group.locator(".chat-details-subagents__row");
+        await expect.poll(() => rows.count()).toBe(4);
+        const preview = page.locator(`.sidebar-recent-session[data-session-key="${parent.key}"]`);
+        await gateway.waitForRequest("sessions.messages.subscribe", { match: { key: parent.key } });
         const capture = async (name: string) => {
           if (!artifactDir) {
             return;
           }
-          const frame = await takeControlUiScreenshotFrame(page, pane, [activity], {
+          const frame = await takeControlUiScreenshotFrame(page, pane, [group, preview], {
             animations: "disabled",
           });
           await writeFile(path.join(artifactDir, name), frame.png);
         };
         await capture("initial-wide.png");
-        // The lazy fallback has inert rows until live observation is mounted.
-        await activity.locator("button.chat-subagent-activity__row").first().waitFor();
-        const emit = (text: string, runId = "child-run-0", revision = 1) =>
+        const emit = (text: string, runId = "parent-run", revision = 1) =>
           gateway.emitGatewayEvent("session.observer", {
-            sessionKey: children[0]!.key,
-            sessionId: children[0]!.sessionId,
+            sessionKey: parent.key,
+            sessionId: parent.sessionId,
             agentId: "main",
             runId,
             revision,
@@ -121,19 +122,19 @@ suite.define(() => {
             headline: text,
           });
         await emit("Verifying the Android dependency graph.");
-        await rows
-          .first()
+        await preview
           .getByText("Verifying the Android dependency graph.", { exact: true })
           .waitFor();
+        // Sidebar previews stay visible for two seconds; advance the frozen fixture clock.
+        await page.clock.setFixedTime(now + 2_000);
         await emit("This is from an obsolete run.", "old-run");
-        expect(await rows.first().textContent()).not.toContain("obsolete");
-        await emit("Checking CocoaPods and Gradle compatibility.", "child-run-0", 2);
-        await rows
-          .first()
+        expect(await preview.textContent()).not.toContain("obsolete");
+        await emit("Checking CocoaPods and Gradle compatibility.", "parent-run", 2);
+        await preview
           .getByText("Checking CocoaPods and Gradle compatibility.", { exact: true })
           .waitFor();
         await capture("live-wide.png");
-        expect(await activity.locator(".chat-reading-indicator").count()).toBe(0);
+        expect(await group.locator(".chat-reading-indicator").count()).toBe(0);
         expect(await pane.locator(".chat-thread .chat-subagent-activity").count()).toBe(0);
         await closeChatDetails(pane);
         for (const child of children) {
@@ -511,8 +512,7 @@ suite.define(() => {
           await indicator.evaluate((element) => element.scrollWidth <= element.clientWidth),
         ).toBe(true);
         await page.setViewportSize({ width: 1280, height: 900 });
-        // The full panel reads activity from session snapshots; the compact
-        // Details observer stream is covered independently above.
+        // The full panel reads activity from session snapshots.
         await changeSession(
           snapshot(runningChild, 63_001, {
             observerDigest: {
