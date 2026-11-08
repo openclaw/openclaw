@@ -958,7 +958,7 @@ if (runCheckPlan && proposedCheckScope?.types) {
     runNodeFull &&
     !releaseFastLane &&
     proposedCheckScope.additionalGroups.includes("boundaries") &&
-    (!narrowCheckScope ||
+    (preserveFullChecks ||
       !compilerPaths ||
       compilerPaths.every((file) => file.startsWith("extensions/")))
       ? "additional-checks"
