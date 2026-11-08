@@ -902,8 +902,10 @@ describe("openclaw path CLI", () => {
     });
 
     // Root and DAC-override containers ignore the 0o444 mode, so the write would
-    // succeed; match the permission-fixture guard used by root-memory-files.test.ts.
-    const canDenyWrites = process.platform !== "win32" && process.getuid?.() !== 0;
+    // succeed there; skip those the way root-memory-files.test.ts does. Windows keeps
+    // the case: 0o444 becomes the read-only attribute and fs.writeFile fails at open,
+    // and fs.rmSync chmods read-only entries before retrying its own cleanup.
+    const canDenyWrites = process.getuid?.() !== 0;
     it.runIf(canDenyWrites).each<[string, { json?: boolean; human?: boolean }]>([
       ["json", { json: true }],
       ["human", { human: true }],
