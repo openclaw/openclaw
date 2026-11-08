@@ -66,6 +66,8 @@ describe("Control UI build chunking", () => {
     const hints = modulePath("../i18n/lib/config-hint-translation.ts");
     const items = modulePath("../components/config-form.array-items.ts");
     const controls = modulePath("../components/solid/settings-ui.tsx");
+    const toggle = modulePath("../components/solid/switch.tsx");
+    const checked = modulePath("../lib/reactive/live-checked.ts");
     const header = modulePath("../pages/config/settings-section-header.tsx");
     const copy = modulePath("../i18n/locales/en-settings.ts");
     const entry = "\0settings-helper-fixture";
@@ -107,7 +109,15 @@ describe("Control UI build chunking", () => {
           header,
           `import { control } from ${JSON.stringify(controls)}; export const header = control + 'header';`,
         ],
-        [controls, "export const control = 'control';"],
+        [
+          controls,
+          `import { toggle } from ${JSON.stringify(toggle)}; export const control = toggle('control');`,
+        ],
+        [
+          toggle,
+          `import { checked } from ${JSON.stringify(checked)}; export const toggle = (value) => checked(value);`,
+        ],
+        [checked, "export const checked = (value) => value;"],
         [
           lightConsumer,
           `import { value } from ${JSON.stringify(utils)}; export const credential = value;`,
@@ -133,7 +143,7 @@ describe("Control UI build chunking", () => {
     for (const [name, chunk, modules] of [
       ["config-form-analysis-runtime", analysisChunk, [analyze, shared, sensitive]],
       ["config-form-utils-runtime", utilsChunk, [utils, hints, items]],
-      ["settings-controls-runtime", controlsChunk, [controls, header]],
+      ["settings-controls-runtime", controlsChunk, [controls, header, toggle, checked]],
     ] as const) {
       expect(chunk.fileName).toContain(name);
       expect(modules.every((id) => id in chunk.modules)).toBe(true);
@@ -408,6 +418,8 @@ describe("Control UI build chunking", () => {
     const settingsSelect = modulePath("../components/solid/settings-select.tsx");
     const routeSubtitles = modulePath("../i18n/locales/en-route-subtitles.ts");
     const talk = modulePath("../pages/talk/talk-page.tsx");
+    const channels = modulePath("../pages/channels/channels-page.tsx");
+    const checkbox = modulePath("../components/solid/checkbox.tsx");
     const terminal = modulePath("../pages/terminal/terminal-page.tsx");
     const terminalRailStyle = modulePath("../styles/session-panel-rail.css");
     const terminalHelpers = [
@@ -594,6 +606,7 @@ describe("Control UI build chunking", () => {
     const helperPage = "\0helper-only-route";
     for (const [page, helpers, prefix, name, value] of [
       [helperPage, sharedHelpers, "helper", "helpers", "shared"],
+      [channels, [checkbox], "checkbox", "channels", "checkbox"],
       [terminal, terminalHelpers, "terminal", "terminal", "terminal-owner"],
     ] as const) {
       const imports = helpers
@@ -620,7 +633,9 @@ describe("Control UI build chunking", () => {
         // Exercise grouping below the production chunk-size floor.
         minSize: 0,
         ...(group.name === "control-ui-boot-chat"
-          ? { test: (id: string) => sharedHelpers.includes(id) || group.test(id) }
+          ? {
+              test: (id: string) => id === checkbox || sharedHelpers.includes(id) || group.test(id),
+            }
           : {}),
         ...(group.name === "control-ui-boot-shared"
           ? {
@@ -687,6 +702,7 @@ describe("Control UI build chunking", () => {
       [templates, [creatorPublication]],
       [security, [coreToolFacts, automationsName]],
       [helperPage, sharedHelpers],
+      [channels, [checkbox]],
       [terminal, terminalHelpers],
     ] as const) {
       const pageChunk = chunkFor(page);
@@ -825,6 +841,7 @@ describe("Control UI build chunking", () => {
       [modulePath("../components/config-form.shared.ts"), "config-form-analysis-runtime"],
       [modulePath("../components/cloud-profile-icon-data.ts"), "route-controls-runtime"],
       [modulePath("../components/solid/cloud-profile-icon.tsx"), "route-controls-runtime"],
+      [modulePath("../components/solid/radio-navigation.ts"), "navigation-helpers"],
       ["/repo/ui/src/lib/clipboard.ts", undefined],
       ["/repo/ui/src/build-info.ts", undefined],
       ["/repo/ui/src/build-info-normalizers.ts", undefined],

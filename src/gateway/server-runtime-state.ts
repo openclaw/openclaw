@@ -175,6 +175,7 @@ export async function createGatewayHttpTransport(params: {
           deps: params.deps,
           logHooks: params.logHooks,
           deferHookWake: params.deferHookWake,
+          resolvePluginRegistry: resolvePluginRouteRegistry,
           ...(params.getGatewayRequestContext
             ? { resolveGatewayContext: params.getGatewayRequestContext }
             : {}),

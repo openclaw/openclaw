@@ -10,7 +10,7 @@ import {
 import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { getOrCreatePromise } from "../shared/lazy-promise.js";
 import { buildPdfPreviewWorkerCspHeader } from "./control-ui-csp.js";
-import type { ControlUiRootAsset } from "./control-ui-file.js";
+import { isControlUiCompressibleAsset, type ControlUiRootAsset } from "./control-ui-file.js";
 import { respondPlainText } from "./control-ui-http-utils.js";
 import { matchesHttpIfModifiedSince } from "./http-conditional.js";
 import {
@@ -24,16 +24,6 @@ const CONTROL_UI_ASSETS_MISSING_MESSAGE =
 
 const CONTROL_UI_IMMUTABLE_CACHE_CONTROL = "public, max-age=31536000, immutable";
 const CONTROL_UI_HTML_COMPRESSION_CACHE_MAX_ENTRIES = 4;
-const CONTROL_UI_COMPRESSIBLE_EXTENSIONS = new Set([
-  ".css",
-  ".html",
-  ".js",
-  ".json",
-  ".svg",
-  ".txt",
-  ".wasm",
-  ".webmanifest",
-]);
 
 const CONTROL_UI_CONTENT_TYPES: Readonly<Record<string, string>> = {
   ".html": "text/html; charset=utf-8",
@@ -76,10 +66,6 @@ export function resolveControlUiHtmlEncoding(req: IncomingMessage): ControlUiEnc
   );
 }
 
-export function isControlUiCompressibleAsset(filePath: string): boolean {
-  return CONTROL_UI_COMPRESSIBLE_EXTENSIONS.has(path.extname(filePath).toLowerCase());
-}
-
 type ControlUiRepresentation = {
   file: ControlUiRootAsset["file"];
   encoding?: ControlUiContentEncoding;
@@ -120,11 +106,11 @@ function resolveControlUiRepresentation(
 
 function setControlUiEncodingHeaders(
   res: ServerResponse,
-  extension: string,
+  filePath: string,
   encoding: ControlUiRepresentationEncoding,
 ) {
   res.setHeader("Vary", "Accept-Encoding");
-  if (!CONTROL_UI_COMPRESSIBLE_EXTENSIONS.has(extension)) {
+  if (!isControlUiCompressibleAsset(filePath)) {
     return;
   }
   if (encoding !== "identity") {
@@ -151,7 +137,7 @@ function setControlUiFileHeaders(
   if (options?.lastModifiedMs !== undefined) {
     res.setHeader("Last-Modified", new Date(options.lastModifiedMs).toUTCString());
   }
-  setControlUiEncodingHeaders(res, extension, options?.encoding ?? "identity");
+  setControlUiEncodingHeaders(res, filePath, options?.encoding ?? "identity");
 }
 
 /** Revalidate no-cache static assets without generating entity tags. */
@@ -335,7 +321,7 @@ export async function sendControlUiHtmlBody(
     respondControlUiNotAcceptable(res);
     return;
   }
-  setControlUiEncodingHeaders(res, ".html", encoding);
+  setControlUiEncodingHeaders(res, "index.html", encoding);
   const encoded =
     encoding === "identity" ? body : await cachedCompressedControlUiHtml(body, encoding);
   const ingress = getRemoteControlUiIngressContext(req);

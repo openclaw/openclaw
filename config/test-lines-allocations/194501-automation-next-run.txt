@@ -1,0 +1,2 @@
+46
+# Automation next-run tooltip: content and paused/auto-disabled cases, today/tomorrow/next-year wording, and mocked-browser hover proof.

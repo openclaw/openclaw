@@ -12,7 +12,7 @@ export async function missingCommitObjects(
   const objects = (
     await requireGitBuffer(
       repoRoot,
-      ["rev-list", "--objects", "--missing=print", "--no-object-names", "--max-count=1", commit],
+      ["rev-list", "--objects", "--missing=print", "--quiet", "--max-count=1", commit],
       { ...options, env: { ...options.env, GIT_NO_LAZY_FETCH: "1", GIT_ALLOW_PROTOCOL: "" } },
     )
   ).toString("utf8");

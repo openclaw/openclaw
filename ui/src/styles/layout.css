@@ -342,11 +342,17 @@ html.openclaw-native-desktop .shell:not(.shell--mobile-nav) {
 
 .shell--onboarding {
   grid-template-columns: 0 minmax(0, 1fr);
-  grid-template-rows: 0 auto minmax(0, 1fr);
   --shell-nav-width: 0px;
+  /* The incoming page already fills the viewport; do not sweep it through the old sidebar. */
+  transition: none;
 }
 
-.shell--onboarding .topbar,
+/* Keep mobile's one-column layout, but never restore its app-header row during setup. */
+div.shell.shell--onboarding {
+  grid-template-rows: 0 auto minmax(0, 1fr);
+}
+
+.shell.shell--onboarding .topbar,
 .shell--onboarding .shell-nav {
   display: none;
 }
@@ -1838,12 +1844,16 @@ html.openclaw-native-desktop .shell:not(.shell--mobile-nav) {
   :hover,
   :focus-within,
   .sidebar-recent-session--active,
-  .sidebar-recent-session--selected
+  .sidebar-recent-session--selected,
+  .sidebar-recent-session--menu-open
 ) {
   --session-row-muted: var(--text);
 }
 
-.sidebar-recent-session:hover {
+/* An open row menu moves the pointer off the row; keep its hover fill so the
+   menu's target stays identifiable. */
+.sidebar-recent-session:hover,
+.sidebar-recent-session.sidebar-recent-session--menu-open {
   --session-row-bg: var(--session-row-hover-tint, var(--surface-hover));
 
   color: var(--text);
@@ -2770,7 +2780,8 @@ a:is(
   }
 }
 
-.sidebar-zone-entry .sidebar-recent-session:hover {
+.sidebar-zone-entry .sidebar-recent-session:hover,
+.sidebar-zone-entry .sidebar-recent-session.sidebar-recent-session--menu-open {
   --session-row-bg: var(--session-row-hover-tint, var(--surface-hover));
 
   color: var(--text);
@@ -2782,7 +2793,8 @@ a:is(
   color: var(--text-strong);
 }
 
-.sidebar-recent-session.sidebar-recent-session--active:hover {
+.sidebar-recent-session.sidebar-recent-session--active:hover,
+.sidebar-recent-session.sidebar-recent-session--active.sidebar-recent-session--menu-open {
   --session-row-bg: var(--surface-selected-hover);
 }
 
@@ -2804,7 +2816,10 @@ a:is(
   ),
 .sidebar-recent-session--colored.sidebar-recent-session--active:not(
     .sidebar-recent-session--selected
-  ):hover {
+  ):hover,
+.sidebar-recent-session--colored.sidebar-recent-session--active.sidebar-recent-session--menu-open:not(
+    .sidebar-recent-session--selected
+  ) {
   --session-row-bg: color-mix(
     in srgb,
     var(--session-color) calc(var(--session-color-tint) * 2.4),
@@ -3588,6 +3603,7 @@ openclaw-tooltip.sidebar-hover-tooltip {
   margin-top: 14px;
 }
 
+.content--chat > openclaw-router-outlet,
 .content--workboard > openclaw-router-outlet,
 .content--custodian > openclaw-router-outlet,
 .content.content--systems > openclaw-router-outlet {
@@ -3613,7 +3629,6 @@ openclaw-tooltip.sidebar-hover-tooltip {
   margin-top: 0;
 }
 
-.content--chat > openclaw-router-outlet,
 .content.content--plugin-embed > openclaw-router-outlet {
   display: flex;
   flex: 1 1 0;
