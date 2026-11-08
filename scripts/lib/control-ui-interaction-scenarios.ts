@@ -42,6 +42,7 @@ import {
 } from "./control-ui-interaction-navigation.ts";
 import { runProjectionFixture } from "./control-ui-projection-fixtures.ts";
 import type { ControlUiResourceCounts } from "./control-ui-resource-counts.ts";
+import { skillsReadinessScenarios } from "./control-ui-skills-readiness-scenarios.ts";
 import {
   exerciseWorkboardResourceFixture,
   idleWorkboardResourceFixture,
@@ -1870,6 +1871,7 @@ async function searchProviderModels(page: Page) {
 }
 
 export const interactionScenarios: readonly InteractionScenario[] = [
+  ...skillsReadinessScenarios,
   ...dataActivityLiveScenarios,
   ...dataActivityScenarios,
   ...dataBoardScenarios,
