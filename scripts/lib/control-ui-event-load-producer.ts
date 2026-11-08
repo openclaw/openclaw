@@ -34,7 +34,8 @@ export function createEventLoadProducer(
   gateway: EventLoadProducerGateway,
   options: EventLoadOptions,
 ) {
-  const started = performance.now();
+  let started = performance.now();
+  let backgroundStarted = false;
   let sequence = 0;
   let tools = 0;
   let completedTools = 0;
@@ -525,7 +526,7 @@ export function createEventLoadProducer(
     // Independent sessions have deterministic phases and a finite socket-like
     // backlog. Drain at most one due receipt/session/tick; never drop final work.
     for (const schedule of backgroundSchedules) {
-      if (schedule.tick >= ticksPerSession || now < schedule.next) {
+      if (!backgroundStarted || schedule.tick >= ticksPerSession || now < schedule.next) {
         continue;
       }
       const late = performance.now() - schedule.next;
@@ -567,6 +568,13 @@ export function createEventLoadProducer(
   }, 20);
   return {
     ready,
+    startBackground() {
+      started = performance.now();
+      backgroundStarted = true;
+      for (const [index, schedule] of backgroundSchedules.entries()) {
+        schedule.next = started + (index * 500) / keys.length;
+      }
+    },
     admitTypingTools: () => admitTypingTools(),
     admitScrollTools: () => admitScrollTools(),
     currentRows: () => observedKeys.map((key) => gateway.getSessionRow(key)),

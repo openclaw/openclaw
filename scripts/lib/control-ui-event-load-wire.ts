@@ -1,4 +1,5 @@
 import { WebSocket, WebSocketServer } from "ws";
+import { rawDataToString } from "../../packages/gateway-client/src/websocket-data.ts";
 import type {
   ControlUiMockRequestHandler,
   MockGatewayRequest,
@@ -34,7 +35,8 @@ export async function createEventLoadWire(rows: EventLoadRow[]) {
   server.on("connection", (client) => {
     socket = client;
     client.on("message", (raw) => {
-      const command = (JSON.parse(raw.toString()) as { eventLoadCommand: string }).eventLoadCommand;
+      const command = (JSON.parse(rawDataToString(raw)) as { eventLoadCommand: string })
+        .eventLoadCommand;
       if (command === "typing") {
         producer?.admitTypingTools();
       } else if (command === "scroll") {
@@ -102,6 +104,9 @@ export async function createEventLoadWire(rows: EventLoadRow[]) {
         },
         options,
       );
+    },
+    startBackground() {
+      producer!.startBackground();
     },
     request(method: string, params: unknown) {
       const handler = handlers.get(method);

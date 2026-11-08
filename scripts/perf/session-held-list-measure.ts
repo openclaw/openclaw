@@ -184,28 +184,7 @@ async function measureCapability(inventory: number, instrumented: boolean) {
     ownerMs: [],
   };
   const cpuUs = { decode: 0, rowDecode: 0, owner: 0 };
-  const work = { sortCalls: 0, sortRows: 0, comparisons: 0, primaryNewRows: 0, heldNewRows: 0 };
-  const originalSort = Array.prototype.sort;
-  if (instrumented) {
-    // Diagnostic-only interception; restored before any asynchronous cleanup.
-    // eslint-disable-next-line no-extend-native -- Count production sorts without a production instrumentation seam.
-    Array.prototype.sort = function (compare) {
-      const rowSort = this.length > 0 && this[0]?.key?.startsWith("agent:main:held-");
-      if (rowSort) {
-        work.sortCalls++;
-        work.sortRows += this.length;
-      }
-      return originalSort.call(
-        this,
-        rowSort && compare
-          ? (a, b) => {
-              work.comparisons++;
-              return compare(a, b);
-            }
-          : compare,
-      );
-    };
-  }
+  const work = { primaryNewRows: 0, heldNewRows: 0 };
   const profiler = values.profile && !instrumented ? new Session() : undefined;
   let profile: Profiler.Profile | undefined;
   if (profiler) {
@@ -250,8 +229,6 @@ async function measureCapability(inventory: number, instrumented: boolean) {
       }
     }
   } finally {
-    // eslint-disable-next-line no-extend-native -- Restore the process-local diagnostic interception, including failures.
-    Array.prototype.sort = originalSort;
     if (profiler) {
       profile = (await profiler.post("Profiler.stop")).profile;
       profiler.disconnect();
@@ -438,7 +415,7 @@ for (const inventory of [1000, 5000]) {
 const report = {
   scope:
     values.mode === "capability"
-      ? "JSON parse, production GatewaySessionRowEvents delta reconstruction and complete synchronous createSessionCapability gateway event subscribers measured separately, with primary and held all-archive query. First100 full rows establish decoder baselines; measured events are versioned patches. Includes normalization, receipts, reconciliation, sorting, permission/mutation/deletion overlays and listener notification; excludes socket, Solid rendering, sidebar and Sessions-page projections, filter/search indexes and timer-driven refresh. Instrumented pass separately counts row-array sorts and retained-row reference changes. Profile samples are diagnostic, not browser acceptance."
+      ? "JSON parse, production GatewaySessionRowEvents delta reconstruction and complete synchronous createSessionCapability gateway event subscribers measured separately, with primary and held all-archive query. First100 full rows establish decoder baselines; measured events are versioned patches. Includes normalization, receipts, reconciliation, sorting, permission/mutation/deletion overlays and listener notification; excludes socket, Solid rendering, sidebar and Sessions-page projections, filter/search indexes and timer-driven refresh. Instrumented pass separately counts retained-row reference changes; it does not count sorts or comparisons. Profile samples are diagnostic, not browser acceptance."
       : "resolveSessionNavigation with selected row at tail of held inventory; includes matching, visibility filtering and sorting, but excludes Solid and DOM work. Separate instrumented pass counts hello reads; Node timing is diagnostic, not browser acceptance.",
   mode: values.mode,
   sourceRoot,

@@ -141,7 +141,6 @@ function installEventLoadProbe() {
   let backgroundBytes = 0;
   let mutations = 0;
   let addedRows = 0;
-  let liveProvenAt = 0;
   let typingStartedAt = 0;
   let admitTypingTools = () => {};
   let admitScrollTools = () => {};
@@ -416,9 +415,6 @@ function installEventLoadProbe() {
         socketCloses,
       };
     },
-    liveProven() {
-      liveProvenAt = performance.now();
-    },
     beginScroll() {
       admitScrollTools();
     },
@@ -442,7 +438,6 @@ function installEventLoadProbe() {
         addedRows,
         tools: progress.tools,
         completedTools: progress.completedTools,
-        liveProofMs: liveProvenAt ? liveProvenAt - started : 0,
         backgroundReceipts,
         targetBackgroundReceipts: progress.targetBackgroundReceipts,
         socketsOpened: socketGeneration,
@@ -477,6 +472,7 @@ export function createEngineEventLoadScenarios(
     let wire: Awaited<ReturnType<typeof createEventLoadWire>>;
     let fixtureRows: Parameters<typeof createEventLoadWire>[0];
     let heldRows = 0;
+    let toolPreparationMs = 0;
     let roster: ReturnType<typeof createTeamScaleSidebarListOwner>;
     return {
       id: count === -1 ? "event-load-unloaded" : `event-load-${count}`,
@@ -593,16 +589,10 @@ export function createEngineEventLoadScenarios(
             });
           }
         }, wire.url);
-      },
-      run: async (page) => {
         const initial = await page.evaluate(() => ({
           requests: (window as MockGatewayWindow).openclawControlUiE2eGateway!.requests,
           sequence: Reflect.get(window, "__eventLoad").ready().lastSequence as number,
         }));
-        const requestsBefore = initial.requests.length;
-        await page.evaluate((options) => Reflect.get(window, "__eventLoad").start(options), {
-          duration,
-        });
         wire.start(
           {
             count: Math.max(0, count),
@@ -616,6 +606,37 @@ export function createEngineEventLoadScenarios(
           initial.requests,
           initial.sequence,
         );
+        const preparationStarted = performance.now();
+        if (count >= 0) {
+          await page.waitForFunction(() => Reflect.get(window, "__eventLoad").ready().tools > 0);
+          const summary = page
+            .locator(`${pane} .chat-tool-msg-summary[aria-expanded]`)
+            .filter({ hasText: "verify-event-load-1" });
+          await summary.waitFor({ state: "visible" });
+          if ((await summary.getAttribute("aria-expanded")) === "false") {
+            // This is fixture setup; keep the composer's native typing focus.
+            await summary.evaluate((element: HTMLElement) => element.click());
+          }
+          const tool = page
+            .locator(`${pane} .chat-tool-msg-collapse`)
+            .filter({ hasText: "verify-event-load-1" })
+            .first();
+          await tool.waitFor({ state: "visible" });
+          await tool
+            .getByText("Tool 1: live output 2", { exact: false })
+            .waitFor({ state: "visible" });
+        }
+        toolPreparationMs = performance.now() - preparationStarted;
+        await page.locator(composer).focus();
+      },
+      run: async (page) => {
+        const requestsBefore = await page.evaluate(
+          () => (window as MockGatewayWindow).openclawControlUiE2eGateway!.requests.length,
+        );
+        await page.evaluate((options) => Reflect.get(window, "__eventLoad").start(options), {
+          duration,
+        });
+        wire.startBackground();
         const evidence: Record<string, number | boolean> = {};
         const recordPhase = (
           name: string,
@@ -649,26 +670,6 @@ export function createEngineEventLoadScenarios(
           }
         };
         try {
-          if (count >= 0) {
-            await page.waitForFunction(() => Reflect.get(window, "__eventLoad").ready().tools > 0);
-            const summary = page
-              .locator(`${pane} .chat-tool-msg-summary[aria-expanded]`)
-              .filter({ hasText: "verify-event-load-1" });
-            await summary.waitFor({ state: "visible" });
-            if ((await summary.getAttribute("aria-expanded")) === "false") {
-              await summary.press("Enter");
-            }
-            const tool = page
-              .locator(`${pane} .chat-tool-msg-collapse`)
-              .filter({ hasText: "verify-event-load-1" })
-              .first();
-            await tool.waitFor({ state: "visible" });
-            await tool
-              .getByText("Tool 1: live output 2", { exact: false })
-              .waitFor({ state: "visible" });
-            await page.evaluate(() => Reflect.get(window, "__eventLoad").liveProven());
-            evidence.liveToolOutputVisible = true;
-          }
           const text = "Event load typing preserves every character.";
           const typing = await phase(page, "typing", async () => {
             await page.locator(composer).pressSequentially(text, {
@@ -972,7 +973,8 @@ export function createEngineEventLoadScenarios(
             foregroundTools: result.tools,
             completedTools: result.completedTools,
             producerElapsedMs: offered.producerElapsedMs ?? 0,
-            liveProofMs: result.liveProofMs,
+            toolPreparationMs,
+            liveToolOutputVisible: count >= 0,
             foregroundDrainMs: offered.foregroundDrainMs ?? 0,
             lateBackgroundEmissions: offered.lateBackgroundEmissions ?? 0,
             backgroundReceipts: result.backgroundReceipts,

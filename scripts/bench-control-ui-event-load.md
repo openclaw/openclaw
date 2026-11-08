@@ -29,8 +29,10 @@ would leave the normal 200-row sidebar window. It changes held rows, not active 
 `--event-load-tools` defaults to 200 and
 `--event-load-duration-ms` to 240000. Duration is a safety ceiling, not a trailing
 wait: measurement ends after the last action. Every loaded action must start and
-finish before that ceiling while background work remains active. After the first
-live output is verified, trusted typing admits the first half of the foreground
+finish before that ceiling while background work remains active. Setup primes
+and verifies the first live tool before background delivery starts; this keeps
+setup backlog out of the interaction measurement. The measured clock starts
+with background delivery, then trusted typing admits the first half of the foreground
 calls. The browser-side scroll loop admits the remainder over its control socket. One producer retains
 the six-second total offering rate, pausing between waves if necessary. Every
 start, update and result has a nominal deadline; delayed delivery drains that
