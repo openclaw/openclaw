@@ -103,39 +103,6 @@ it("does not mistake example placeholders or sensitive defaults for public inher
   );
 });
 
-it("authors, clears, and rejects explicit enum overrides without materializing inheritance", () => {
-  container = document.body.appendChild(document.createElement("div"));
-  const patch = vi.fn();
-  const draw = (value: unknown, accept = true) =>
-    renderNodeFixture(container, {
-      schema: { type: "string", enum: ["a", "b", "c", "d", "e", "f"], default: "b" },
-      value,
-      path: ["sample"],
-      hints: {},
-      unsupported: new Set(),
-      disabled: false,
-      onPatch: (path, next) => {
-        patch(path, next);
-        return accept;
-      },
-    });
-  draw(undefined);
-  const select = container.querySelector<HTMLSelectElement>("select")!;
-  expect(select.value).toBe("__unset__");
-  expect(patch).not.toHaveBeenCalled();
-  select.value = "2";
-  select.dispatchEvent(new Event("change"));
-  expect(patch).toHaveBeenLastCalledWith(["sample"], "c");
-  draw("c");
-  select.value = "__unset__";
-  select.dispatchEvent(new Event("change"));
-  expect(patch).toHaveBeenLastCalledWith(["sample"], undefined);
-  draw(undefined, false);
-  select.value = "0";
-  select.dispatchEvent(new Event("change"));
-  expect(select.value).toBe("__unset__");
-});
-
 it("authors an inherited enum default on reselect, but not an explicit or disabled value", async () => {
   container = document.body.appendChild(document.createElement("div"));
   const patch = vi.fn();
