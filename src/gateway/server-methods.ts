@@ -61,6 +61,7 @@ import {
 import type {
   GatewayRequestHandler,
   GatewayRequestHandlers,
+  GatewayRequestHandlerOptions,
   GatewayRequestOptions,
 } from "./server-methods/types.js";
 import type { GatewayRequestEntry } from "./server-request-entry.js";
@@ -513,37 +514,78 @@ export async function handleGatewayRequest(
           respond(false, undefined, uploadError);
           return;
         }
-        const handlerOptions = bindGatewayRequestHandlerMutationAuthority(
-          opts,
-          {
-            req,
-            params: (req.params ?? {}) as Record<string, unknown>,
-            client,
-            isWebchatConnect,
-            respond: respondAuthorized,
-            acceptsSerializedJson: opts.acceptsSerializedJson,
-            acceptsDeflatedSegments: opts.acceptsDeflatedSegments,
-            context,
-            signal,
-            ...(hasCurrentClientAuthority ? { hasCurrentClientAuthority } : {}),
-            sessionMutationCommitGuard: opts.sessionMutationCommitGuard,
-            sessionMutationAuthorization,
-            withSessionTurnAuthority,
-            markSessionSubscribePhase: subscribeDiagnostics?.mark,
-            diffTiming,
-            ...(authorization.sessionAccessAuthority
-              ? { sessionAccessAuthority: authorization.sessionAccessAuthority }
-              : {}),
-          },
-          profileBinding,
-          authorization.sessionScope,
-          profileBinding || runtimeAuthority
-            ? composeSessionSourceAssertion([
-                profileBinding?.assertCurrent,
-                runtimeAuthority?.assertCurrent,
-              ])
-            : undefined,
-        );
+        const handlerOptions: GatewayRequestHandlerOptions =
+          bindGatewayRequestHandlerMutationAuthority(
+            opts,
+            {
+              req,
+              params: (req.params ?? {}) as Record<string, unknown>,
+              client,
+              isWebchatConnect,
+              respond: respondAuthorized,
+              acceptsSerializedJson: opts.acceptsSerializedJson,
+              acceptsDeflatedSegments: opts.acceptsDeflatedSegments,
+              context,
+              signal,
+              ...(hasCurrentClientAuthority ? { hasCurrentClientAuthority } : {}),
+              sessionMutationCommitGuard: opts.sessionMutationCommitGuard,
+              sessionMutationAuthorization,
+              withSessionTurnAuthority,
+              markSessionSubscribePhase: subscribeDiagnostics?.mark,
+              diffTiming,
+              ...(authorization.sessionAccessAuthority
+                ? { sessionAccessAuthority: authorization.sessionAccessAuthority }
+                : {}),
+            },
+            profileBinding,
+            authorization.sessionScope,
+            profileBinding || runtimeAuthority
+              ? composeSessionSourceAssertion([
+                  profileBinding?.assertCurrent,
+                  runtimeAuthority?.assertCurrent,
+                ])
+              : undefined,
+          );
+        handlerOptions.copySessionCatalogToGateway = async (source) => {
+          if (!sessionMutationAuthorization) {
+            throw new Error("Session mutation authority is unavailable");
+          }
+          const assertCurrent = () => {
+            handlerOptions.sessionMutationCommitGuard?.();
+            sessionMutationAuthorization.assertCurrent();
+            signal?.throwIfAborted();
+            source.assertCurrent();
+          };
+          assertCurrent();
+          const {
+            createSessionCatalogGatewayCopyHandler,
+            resolveSessionCatalogGatewayConversation,
+          } = await import("./server-methods/session-catalog-gateway-copy.js");
+          assertCurrent();
+          if (source.resolveOnly) {
+            const result = await resolveSessionCatalogGatewayConversation({
+              provider: source.provider,
+              request: source.request,
+              client,
+              context,
+              assertCurrent,
+            });
+            if (result.ok) {
+              handlerOptions.respond(
+                true,
+                result.sessionKey ? { sessionKey: result.sessionKey } : null,
+              );
+            } else {
+              handlerOptions.respond(false, undefined, result.error);
+            }
+            return;
+          }
+          await createSessionCatalogGatewayCopyHandler(source.provider)({
+            ...handlerOptions,
+            params: source.request,
+            sessionMutationCommitGuard: assertCurrent,
+          });
+        };
         bindChatSendDiagnostics(handlerOptions, chatSendDiagnostics);
         handlerOptions.sessionMutationCommitGuard?.();
         assertOperatorCurrent();

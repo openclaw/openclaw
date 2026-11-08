@@ -94,7 +94,7 @@ it("renders and clears environment presentation, including the sidebar badge and
 
   expect(document.querySelector(".control-ui-environment-stripe")).not.toBeNull();
   expectStyle("--control-ui-environment-color", "var(--control-ui-environment-amber)");
-  expectStyle("--ring", "#123456");
+  expectStyle("--ring", "#ffffff");
   await waitForSolid(() =>
     expect(sidebar.querySelector(".control-ui-environment-pill")?.textContent).toBe("edge"),
   );
@@ -121,7 +121,7 @@ it("renders and clears environment presentation, including the sidebar badge and
 it("clears seam-only presentation when bootstrap becomes unset", async () => {
   const config = setupConfig({ seamColor: "#123456" }, {});
   await refresh(config);
-  expectStyle("--ring", "#123456");
+  expectStyle("--ring", "#ffffff");
   expectStyle("--accent", "#123456");
   await refresh(config);
   expectStyle("--ring", "");

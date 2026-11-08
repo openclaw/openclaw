@@ -18,6 +18,7 @@ import {
   createInspectResult,
   createGateway,
   createPlugin,
+  createPluginCapabilities,
   createPluginsRouteData,
   createPluginsRouteLocation,
   createResult,
@@ -85,10 +86,13 @@ beforeEach(async () => {
 });
 
 it("does not republish the page when an iconless tile joins the rendered inventory", async () => {
-  const { gateway } = iconGateway();
+  const inventory = createResult([createPlugin({ id: "first" }), createPlugin({ id: "second" })]);
+  const { gateway } = iconGateway(async (method) =>
+    method === "plugins.list" ? inventory : requestResult(method),
+  );
   const routeData = createPluginsRouteData(
     gateway,
-    createResult([createPlugin({ id: "first" }), createPlugin({ id: "second" })]),
+    null,
     createPluginsRouteLocation("/settings/plugins"),
   );
   const published = vi.fn();
@@ -144,13 +148,16 @@ it("loads artwork when a retained tile changes identity without a page refresh",
   const { revoke } = stubUrls(() => `blob:icon-${++nextUrl}`);
   const fetchMock = vi.fn(async (_url: string) => iconResponse());
   vi.stubGlobal("fetch", fetchMock);
-  const { gateway } = iconGateway();
+  const inventory = createResult([
+    createPlugin({ id: "first", hasIcon: true }),
+    createPlugin({ id: "second", hasIcon: true }),
+  ]);
+  const { gateway } = iconGateway(async (method) =>
+    method === "plugins.list" ? inventory : requestResult(method),
+  );
   const routeData = createPluginsRouteData(
     gateway,
-    createResult([
-      createPlugin({ id: "first", hasIcon: true }),
-      createPlugin({ id: "second", hasIcon: true }),
-    ]),
+    null,
     createPluginsRouteLocation("/settings/plugins"),
   );
   let changeSlug!: (slug: string) => void;
@@ -475,7 +482,7 @@ it("reuses installed artwork across navigation and retires it on a new plugin ge
       }),
   );
   vi.stubGlobal("fetch", fetchMock);
-  const result = { ...createResult(createPlugin({ hasIcon: true })), generation: 1 };
+  let result = { ...createResult(createPlugin({ hasIcon: true })), generation: 1 };
   const { client } = createClient(async (method) =>
     method === "plugins.inspect" ? createInspectResult() : result,
   );
@@ -495,11 +502,8 @@ it("reuses installed artwork across navigation and retires it on a new plugin ge
   expect(page.querySelector(".plugin-catalog-detail__hero img")?.getAttribute("src")).toBe(
     "blob:icon-1",
   );
-  page.routeData = createPluginsRouteData(
-    harness.gateway,
-    { ...result, generation: 2 },
-    detailRoute,
-  );
+  result = { ...result, generation: 2 };
+  harness.emit(client, true, { pluginCapabilities: createPluginCapabilities(2) });
   await vi.advanceTimersByTimeAsync(0);
   expect(revokeObjectURL).toHaveBeenCalledWith("blob:icon-1");
   expect(fetchMock).toHaveBeenCalledTimes(2);

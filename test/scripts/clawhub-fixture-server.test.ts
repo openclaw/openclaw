@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import { cpSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core/expect";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { checkClawHubPackageTrust } from "../../src/infra/clawhub-install-trust.js";
 import { withinTest } from "../helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
@@ -13,6 +13,7 @@ const servers: ChildProcess[] = [];
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(async () => {
+    vi.unstubAllEnvs();
     // Keep startup records and artifacts alive until every fixture process has exited.
     await Promise.all(servers.splice(0).map(stopServer));
     cleanup();
@@ -145,6 +146,11 @@ function runFixtureAssertion(cwd: string, ...args: string[]) {
 }
 
 describe("ClawHub fixture server", () => {
+  beforeEach(() => {
+    // Fixture traffic stays on loopback even when the host has an outbound proxy.
+    vi.stubEnv("no_proxy", "127.0.0.1");
+  });
+
   it("serves an accepted install audit for the kitchen-sink-plugin profile", async ({ signal }) => {
     const { baseUrl } = await startFixtureServer("kitchen-sink-plugin", signal);
     const packageName = "@openclaw/kitchen-sink";

@@ -124,6 +124,7 @@ describe("Skills discovery lifecycle", () => {
   });
 
   it("keeps installed selection responsive while verdict enrichment refreshes", async () => {
+    await import("./skill-detail.tsx"); // Module loading is setup for the selection invariant.
     const report = {
       workspaceDir: "/workspace",
       managedSkillsDir: "/managed",
@@ -165,9 +166,8 @@ describe("Skills discovery lifecycle", () => {
     page.querySelector<HTMLInputElement>('input[value="workspace"]')!.click();
     await waitForFast(() => expect(page.textContent).toContain("Unavailable"));
     page.querySelector<HTMLButtonElement>('[aria-label="Open Linked Skill details"]')!.click();
-    await waitForFast(() =>
-      expect(page.querySelector(".exec-approval-title")?.textContent).toBe("Linked Skill"),
-    );
+    const { modal } = await getRenderedModalDialog(page);
+    expect(modal.querySelector(".exec-approval-title")?.textContent).toBe("Linked Skill");
     const dialog = page.querySelector(".skill-reader-dialog");
     [...page.querySelectorAll<HTMLButtonElement>("button")]
       .find((button) => button.getAttribute("aria-label") === "Refresh")!

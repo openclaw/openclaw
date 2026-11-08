@@ -44,7 +44,7 @@ import {
   readLiveRegistryWorktreeByPath,
   readLiveRegistryWorktreeByOwner,
 } from "./registry-read.js";
-import { deferFailedWorktreeRemoval, isWorktreeRemovalTimeout } from "./registry-retirement.js";
+import { deferFailedWorktreeRemoval, removalDeferralReason } from "./registry-retirement.js";
 import {
   assertWorktreeRemovalAvailable,
   insertRegistryWorktree,
@@ -78,6 +78,7 @@ import {
   createWithWorktreeAllocation,
   reserveOwnedWorktree,
   prepareWorktreeDestination,
+  prepareWorktreeRepository,
   readWorktreeGitInventory,
   findWorktreeByName,
   rebindLiveWorktreeRepository,
@@ -234,8 +235,7 @@ export class ManagedWorktreeService {
   ): Promise<ManagedWorktreeCreationOutcome & { sourceRoot: string }> {
     return withWorktreePreparationTiming("managed", () =>
       withWorktreeRunEnd(this.env, async () => {
-        params.signal?.throwIfAborted();
-        const repository = await resolveRepository(params.repoRoot);
+        const repository = await prepareWorktreeRepository(params, this.env);
         const outcome = await withWorktreeBasePreparation(repository, async (prepareBase) =>
           createWithWorktreeAllocation(
             { ...params, env: this.env },
@@ -827,13 +827,13 @@ export class ManagedWorktreeService {
       }
       let failure = error;
       try {
-        if (timing && isWorktreeRemovalTimeout(error)) {
-          const progress = timing.removalProgress();
+        const reason = await removalDeferralReason(error);
+        if (timing && reason) {
           const deferred = await deferFailedWorktreeRemoval({
             env: this.env,
             id: record.id,
-            ...progress,
-            reason: `Git ${progress.stage} timed out; cleanup deferred`,
+            ...timing.removalProgress(),
+            reason,
             now: Date.now(),
             previousAttempts: record.gcRetry?.attempts ?? 0,
             claimToken,
@@ -847,7 +847,7 @@ export class ManagedWorktreeService {
         }
         failure = new AggregateError(
           [error, deferralError],
-          "Worktree removal and timeout recording failed",
+          "Worktree removal and deferral recording failed",
           { cause: deferralError },
         );
       }

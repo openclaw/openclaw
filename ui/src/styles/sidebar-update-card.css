@@ -3,38 +3,9 @@
   margin: 0 8px 10px;
 }
 
-.sidebar-update-card--floating .sidebar-update-card {
-  width: min(360px, calc(100% - 32px));
-  margin: 12px 16px 0;
-}
-
 .sidebar-update-card__actions {
   display: flex;
   gap: 5px;
-}
-
-/* Clear the collapsed three-button chrome cluster plus an 8px breathing gap. */
-.shell:not(.shell--mobile-nav) .sidebar-update-card--floating .sidebar-update-card {
-  width: min(360px, calc(100% - var(--shell-chrome-safe-area-left) - 16px));
-  margin-left: var(--shell-chrome-safe-area-left);
-}
-
-/* Legacy native hosts hide the web cluster; onboarding never mounts it. */
-html.openclaw-native-nav:not(.openclaw-native-web-chrome)
-  .shell:not(.shell--mobile-nav)
-  .sidebar-update-card--floating
-  .sidebar-update-card,
-.shell--onboarding:not(.shell--mobile-nav) .sidebar-update-card--floating .sidebar-update-card {
-  width: min(360px, calc(100% - 32px));
-  margin-left: 16px;
-}
-
-/* Native dashboard actions must also clear the window's titlebar. */
-html:is(.openclaw-native-macos, .openclaw-native-desktop)
-  .shell:not(.shell--mobile-nav)
-  .sidebar-update-card--floating
-  .sidebar-update-card {
-  margin-top: calc(var(--openclaw-native-titlebar-height, 50px) + 2px);
 }
 
 .sidebar-update-card__action {
@@ -54,12 +25,6 @@ html:is(.openclaw-native-macos, .openclaw-native-desktop)
   transition:
     background var(--duration-fast) ease,
     border-color var(--duration-fast) ease;
-}
-
-@media (pointer: coarse) {
-  .sidebar-update-card--floating .sidebar-update-card__action {
-    min-height: var(--settings-touch-control-height);
-  }
 }
 
 .sidebar-update-card__action:hover:not(:disabled):not([aria-disabled="true"]),
@@ -214,4 +179,65 @@ body.update-dialog-open .sidebar-update-card__status {
   stroke-width: 1.7px;
   stroke-linecap: round;
   stroke-linejoin: round;
+}
+
+/* Server-updated refresh notice: over the sidebar's bottom edge like the reconnecting
+   row, bottom-left while collapsed, below the phone header like its badge. */
+.refresh-notice {
+  position: fixed;
+  z-index: 45;
+  bottom: 8px;
+  left: 60px;
+  width: calc(var(--shell-nav-width) - 68px);
+}
+
+.shell--nav-collapsed .refresh-notice {
+  left: calc(var(--shell-nav-width) + 12px);
+  width: 280px;
+}
+
+.refresh-notice__surface {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: center;
+  gap: 2px 8px;
+  width: 100%;
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--bg-elevated);
+  text-align: start;
+}
+
+.refresh-notice__detail {
+  grid-area: 2 / 1 / 3 / 3;
+}
+
+.refresh-notice__action {
+  grid-area: 1 / 2;
+}
+
+.refresh-notice__surface--warn,
+.refresh-notice__surface--warn > * {
+  border-color: var(--warn);
+  color: var(--warn);
+}
+
+.shell--mobile-nav .refresh-notice {
+  top: calc(var(--safe-area-top) + 62px);
+  bottom: auto;
+  left: 50%;
+  width: max-content;
+  translate: -50%;
+
+  & .refresh-notice__surface {
+    display: flex;
+    min-height: 44px;
+    padding: 5px 5px 5px 16px;
+    border-radius: 99px;
+  }
+
+  & .refresh-notice__detail + span {
+    display: none;
+  }
 }

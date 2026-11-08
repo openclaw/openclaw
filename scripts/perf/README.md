@@ -1,5 +1,44 @@
 # Team-shaped synthetic state
 
+## Cold archive eligibility (counts only)
+
+Run the same real-worker full/mixed maintenance fixture used by the integration
+suite, with native statement/row observation enabled only for this workload:
+
+```sh
+node scripts/perf/session-cold-storage-eligibility.mjs \
+  --expect-head "$(git rev-parse HEAD)" \
+  --output .openclaw/tmp/cold-eligibility-candidate
+```
+
+Use a new output directory and a reviewed, isolated checkout; pass the recorded
+full HEAD explicitly when comparing revisions. The runner never switches source.
+It records HEAD and SHA256 of the two owners, shared fixture, runner and preload,
+and refuses changed inputs after execution. It runs only the focused file through
+the canonical package test entrypoint (`pnpm test ... --maxWorkers=1`) under Node. Output includes the real test log,
+source guard, native counts, summary, and whole-command cost (not product latency).
+
+Acceptance, declared before measurement: one deterministic counts sample per arm,
+fresh wrapper/isolated synthetic database and files, fixture setup excluded. The
+public maintenance batch limit is fixed at 128: the full fixture must externalize
+128, archive 0, preserve every archive byte and hot-history snapshot. Eligibility
+SQL and metadata materialization must be zero in selection and mutation, while
+four admission/ownership reads remain. Mixed control must archive 1/externalize 1,
+retain explicitly referenced hot history, execute two eligibility reads in each
+consumer, and retain four admission reads. Setup/mixed positive controls reject
+an absent observer. Call-stack attribution is observation only, not product policy.
+
+Both baseline and candidate use these same fixture/observer/checker bytes against
+their respective production owners. The original base exits 1 at the zero-work
+assertion with selection=2/mutation=2 after both preservation tests pass; the
+candidate exits 0 with 0/0. To replay a base revision, apply only the workload/test
+files there, leaving its production owners unchanged. Do not point a current
+worker build at an older owner. Keep sources frozen for each invocation.
+
+This is opt-in counts proof, not a new normal-CI performance threshold or a
+Gateway/model, latency, CPU, allocation or incident-cause claim. No ABAB timing
+claim is made. Normal test execution does not install the native preload.
+
 ## Slack shutdown retirement
 
 `slack-shutdown-retirement-measure.ts` runs a real Slack SDK startup with a synthetic
@@ -5689,6 +5728,21 @@ include source reads and bytes per turn, retained payload characters, JSON bytes
 and post-GC retained heap. The transfer readback is performed by the verifier,
 not a model.
 
+For aggregate overflow, prepare with `--large-catalog --background-files 61700`
+in a separate directory. This creates 150 synthetic skills (300 files, about
+12 MB) beside 61,700 unrelated project files (about 1.1 GB). Repeat those flags
+with `--existing --operations 5 --concurrency 1`. A frozen sibling source module
+can be selected with `--source-module <path>` to compare the baseline resource
+owner with identical dependencies. Baseline delivery-limit failures are counted;
+other failures remain fatal. Use four baseline A/A controls, five interleaved
+baseline/candidate pairs, and separate allocation runs. Acceptance is successful
+bounded delivery on overflow, unchanged reads/payloads for the ordinary fixture,
+and explicit reporting of the cost of processing the remaining skills. These are
+preparation measurements, not full turn latency: baseline failed work and
+candidate successful work have different outcomes. This owner does not read a
+session database or traverse unrelated project files; no database-size or btrfs
+performance claim follows from this fixture.
+
 Measure promotion in a separate pass with `--trace-gc-nvp --gc-log /path/to/run.log`
 and redirect stdout to that log. The existing warmup collection identifies the
 main isolate; capture markers exclude warmup and post-capture collections. The
@@ -6134,3 +6188,39 @@ generated-path tests cover nearby reports, nested fixtures, and staged inputs.
 Reports distinguish logical payload and emitted fast-import bytes; physical
 device writes are unavailable. These measurements do not qualify btrfs, Podman,
 full Gateway preparation, or the unrelated agent database.
+
+## Command lane wait attribution
+
+`command-lane-wait-measure.ts` queues 4,096 synthetic session identities in 32
+waves, each with 32 admitted holders and 96 waiting turns. It verifies settlement
+and records queue entries available for deferred attribution, owner wall time, CPU, and optional collected
+allocation/CPU profiles. The owner is entirely in memory; database and workspace
+size are outside this measurement. It does not qualify whole-Gateway latency.
+
+```sh
+node --expose-gc --import ./scripts/tsx.mjs scripts/perf/command-lane-wait-measure.ts \
+  --output .local/queue-measure.json
+```
+
+Run five A/A pairs and five AB/BA blocks (ten samples per arm); add
+`--allocations` for separate profile runs. All 4,096 tasks must settle and all
+3,072 candidate waits must expose their existing queue record. Admission must
+build no holder arrays, serialized diagnostics, or extra task closures. Target
+median wall, CPU, and allocation within 5% of the base and within A/A noise.
+The controller regression separately checks live-holder and completed-wait
+reporting, including writer and placement transitions.
+
+For an immutable original-source comparison, put the base queue files in a
+sparse repository-relative overlay and use the existing loader:
+
+```sh
+OPENCLAW_BENCH_BASELINE_DIR=/absolute/original-source-overlay \
+  node --expose-gc --import ./scripts/tsx.mjs \
+  --import ./scripts/perf/worker-retained-heap-preload.ts \
+  scripts/perf/command-lane-wait-measure.ts --output .local/queue-base.json
+```
+
+Use the same A/A and AB/BA order for ordinary `skill-resource-delivery-measure.ts`
+preparation, with `--operations 50 --concurrency 1 --existing` against one prepared
+32-file fixture. Time and profile separately; retain the baseline SHA and raw
+results. These owner measurements do not qualify storage or whole-Gateway latency.

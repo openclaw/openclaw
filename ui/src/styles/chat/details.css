@@ -93,7 +93,7 @@ openclaw-chat-details[mobile] {
   box-shadow: var(--shadow-lg);
   overflow: auto;
   overscroll-behavior: contain;
-  scrollbar-width: thin;
+  --scrollbar-size: var(--scrollbar-size-compact);
   font-size: 12px;
 }
 .chat-details--docked {
@@ -845,4 +845,11 @@ button.chat-details__process:is(:hover, :focus-visible) {
   width: 15px;
   height: 15px;
   color: var(--muted);
+}
+
+/* Loading hints stay subordinate to the conversation, in both Details hosts. */
+.chat-details .skeleton::after,
+.chat-mobile-host__details .skeleton::after {
+  opacity: 0.25;
+  animation-duration: calc(var(--skeleton-duration) * 1.8);
 }

@@ -10,6 +10,7 @@ import { createAuthProfileStoreRuntime } from "../../auth-profiles/store.js";
 import type { AuthProfileStore } from "../../auth-profiles/types.js";
 import { makeProviderModelFixture } from "../../test-helpers/provider-model-fixture.js";
 import { createEmbeddedRunAuthController, type EmbeddedRunAuthState } from "./auth-controller.js";
+import type { EmbeddedRunAuthControllerParams } from "./auth-controller.types.js";
 import { createScopedAuthProfileStore } from "./auth-store.js";
 
 export const provider = "request-auth-fixture";
@@ -36,11 +37,13 @@ export async function withRequestFixture(
     sharedStateOwner = false,
     replacement = false,
     externalProfile,
+    getDeadline,
   }: {
     agentId?: string;
     sharedStateOwner?: boolean;
     replacement?: boolean;
     externalProfile?: Pick<ProviderExternalAuthProfile, "profileId" | "persistence">;
+    getDeadline?: EmbeddedRunAuthControllerParams["getDeadline"];
   } = {},
 ) {
   await withOpenClawTestState(
@@ -128,6 +131,7 @@ export async function withRequestFixture(
         modelId: model.id,
         state: authState,
         log: { debug() {}, info() {}, warn() {} },
+        getDeadline,
       });
 
       try {

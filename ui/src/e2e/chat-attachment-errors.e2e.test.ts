@@ -17,7 +17,14 @@ const attachmentFile = (name: string, content: string | number) => ({
 async function expectToastPosition(toast: Locator, viewport: { width: number; height: number }) {
   const bounds = await toast.boundingBox();
   expect(bounds).not.toBeNull();
-  expect(bounds!.x + bounds!.width / 2).toBeCloseTo(viewport.width / 2, 0);
+  // Inside the shell the center lane centers on the content column, not the window.
+  const contentCenter = await toast.evaluate((element) => {
+    const style = getComputedStyle(element);
+    const nav = Number.parseFloat(style.getPropertyValue("--shell-nav-width")) || 0;
+    const dock = Number.parseFloat(style.getPropertyValue("--shell-dock-reserve-right")) || 0;
+    return nav + (window.innerWidth - nav - dock) / 2;
+  });
+  expect(bounds!.x + bounds!.width / 2).toBeCloseTo(contentCenter, 0);
   expect(bounds!.y).toBeLessThan(viewport.height / 4);
 }
 
@@ -60,8 +67,9 @@ suite.define(() => {
           const toast = page.locator(".app-toast");
           await toast.waitFor();
           await expectAttachmentErrorToast(toast, theme === "beacon" ? 7 : 4.5);
-          expect(await toast.locator(".app-toast__message").textContent()).toBe(
-            "File too large. Try a smaller file.",
+          expect(await toast.locator(".app-toast__message").textContent()).toBe("File too large.");
+          expect(await toast.locator(".app-toast__description").textContent()).toBe(
+            "Try a smaller file.",
           );
           await expectToastPosition(toast, viewport);
           expect(await toast.getAttribute("role")).toBe("alert");

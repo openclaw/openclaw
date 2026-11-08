@@ -546,6 +546,8 @@ export async function startXAccount(ctx: ChannelGatewayContext<ResolvedXAccount>
       signal: ctx.abortSignal,
       onStatus: publish,
       onWarning: (message) => log.warn(message),
+      onStreamTiming: (step, elapsedMs) =>
+        log.info(`activity stream timing step=${step} elapsedMs=${Math.round(elapsedMs)}`),
       getCursor: async () => (await cursor.lookup(account.accountId)) ?? {},
       setCursor: async (next) => {
         await cursor.register(

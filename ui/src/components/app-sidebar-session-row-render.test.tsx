@@ -133,6 +133,7 @@ it("keeps named glyphs visible and updates their kind without replacing the lead
 
 it("restores only active dashboards in saved order after alphabetized built-in Pages", async () => {
   const { host, context, dom } = await createCachedHost();
+  host.sidebarAgentsMode = "roster";
   const dashboardKeys = ["agent:main:dashboard:zulu", "agent:main:dashboard:alpha"];
   host.restoreSidebarSnapshot({
     ...emptySnapshot,
@@ -172,7 +173,7 @@ it("restores only active dashboards in saved order after alphabetized built-in P
 
 it("paints the restored roster and workspace before live data arrives", async () => {
   const { host, dom } = await createCachedHost();
-  host.sidebarAgentsMode = "chip";
+  host.sidebarAgentsMode = "roster";
   host.sidebarLiveActivity = false;
 
   host.restoreSidebarSnapshot({
@@ -332,7 +333,7 @@ it.each([undefined, 1])(
   },
 );
 
-it("keeps hidden child background activity off the idle parent's own glyph", () => {
+it("keeps hidden child activity off the idle parent row", () => {
   const { dom } = mountRow(
     { icon: "book", unread: true },
     {
@@ -342,7 +343,7 @@ it("keeps hidden child background activity off the idle parent's own glyph", () 
     },
   );
   expect(dom.query(".sidebar-session-indicator .session-glyph__ring")).toBeNull();
-  expect(dom.query(".sidebar-child-session-toggle .session-run-spinner")).not.toBeNull();
+  expect(dom.query(".sidebar-child-session-toggle .session-run-spinner")).toBeNull();
   expect(dom.all('[aria-label="Unread"]')).toHaveLength(1);
   expect(dom.query(".sidebar-recent-session__link")?.getAttribute("aria-describedby")).toBeNull();
 });
