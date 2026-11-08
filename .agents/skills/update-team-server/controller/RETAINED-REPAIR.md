@@ -144,6 +144,41 @@ Never use ordinary `--recover`, unlink the journal, or retire `REPAIR_FAILED`.
 
 The exceptional adoption owner binds the exact retained V1 incident, old four-file closure, approved replacement closure and actual canonical FD9 inode. An already gate-aware incumbent uses ordinary `prepare` and `apply`. An ungated V2 incumbent first uses the explicit `retained-controller-adoption bootstrap ROOT REQUEST_JSON` action from the approved off-path replacement library; it never treats a gate file, Boolean, timer stop or flock alone as reader exclusion.
 
+When the fixed gate completed for an earlier incident, use the explicit
+`historical-successor` action from the approved replacement library. Its request
+contains exactly `{version:1,operation,source,oldClosure,replacement,historical}`,
+where `historical` is `{gate,complete}`. Every descriptor is
+`{path,device,inode,sha256}`; both closure arrays contain the shell, library,
+suspension helper, and startup helper in that order. `source` binds the current
+retained V1 `ROLLBACK_FAILED` journal and must differ from the historical source.
+`oldClosure` binds all four actual installed files, independently reviewed even
+if a later ordinary installation differs from the old completion's output.
+`replacement` binds the four approved staged files. Historical adoption cannot
+be combined with accepted-incident retirement or bootstrap.
+
+```sh
+node "$STAGE/release-lib.mjs" retained-controller-adoption historical-successor "$ROOT" @stdin < request.json > binding.json
+node "$STAGE/release-lib.mjs" retained-controller-adoption apply "$ROOT" @stdin < binding.json > adopted.json
+node "$STAGE/release-lib.mjs" retained-controller-adoption context "$ROOT" @stdin < binding.json
+```
+
+Hold the existing exclusive FD9 lock across these commands. The owner validates
+the historical completion's immutable intent, archives, and replacement steps
+without treating its source or closure as current authority. It separately
+checks the current source, lock, actual installed closure, ownership, modes, and
+audited entry hooks. Protocol markers identify separately audited code; they do
+not replace review of the exact four incumbent hashes. Ordinary `prepare` and
+entry admission retain their current-closure requirements.
+
+The existing owner archives the unchanged old gate and actual incumbent files,
+then publishes the successor gate and four replacements through its existing
+durable intents. An interruption replays the same `historical-successor` request
+and returned binding through `apply`; preserve the original staging inodes,
+operation, source, lock, and all history. No gate deletion or manual installation
+is part of recovery. After completion, the installed shell can prepare the new
+retained repair; preparation still owns process, target, and native config-audit
+admission. Historical completion grants no lifecycle or config authority.
+
 Bootstrap durably archives the original journal, all four original files, approved replacements and two argument-independent fail-closed bridges. Each bridge replacement has a persisted old/stage/new inode intent: the library bridge is installed and directory-fsynced first, then the shell bridge. Only afterward does a genuine `/proc` census exclude every previously loaded canonical reader, including stopped, stdin-blocked and FD9-less readers. Unobservable process or namespace state fails closed. The exact original journal is checked again before an immutable exclusion receipt is retained; drift is never restored or rewound. Refusal leaves bridges and evidence in place for exact replay.
 
 Ordinary adoption consumes that receipt, retains the original backups (not bridge backups), and replaces all four files using the existing exact per-step intents. First two predecessor inodes are the verified bridges; helper predecessors remain the originals. New entry gates reject every incomplete mixed closure. A private approved `.mjs` archive can resume after the original staging directory is gone. Completed admission validates retained history without requiring the canonical journal to revert to V1.
