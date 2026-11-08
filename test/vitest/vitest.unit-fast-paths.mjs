@@ -168,6 +168,9 @@ const ownerRoutedUnitTestPatterns = [
   "test/scripts/release-stable-post.test.ts",
   "test/scripts/ci-linux-git.test.ts",
   "test/scripts/ci-platform-checkout.test.ts",
+  // The family-attempt stall proof needs Node's real attempt timer. The shared
+  // unit-fast runner hides that ordering, so a broken budget still passes there.
+  "src/infra/net/undici-family-policy.attempt-timeout.test.ts",
   // Detached handoff and service-manager fixtures retain their infra owner when shared.
   "src/infra/update-managed-service-handoff-lifecycle.test.ts",
   "src/infra/update-managed-service-handoff-native-lifecycle.test.ts",
