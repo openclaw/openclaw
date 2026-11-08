@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
 import type { Model } from "../../../llm/types.js";
 import type { CommandQueueTaskDeadline } from "../../../process/command-queue.types.js";
 import { resolveSecretSentinel } from "../../../secrets/sentinel.js";
@@ -77,13 +78,18 @@ const credential = {
   profileId: "first",
 };
 
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
 beforeEach(() => {
+  // Metadata discovery must not borrow an earlier test's persisted state and its reader TTL.
+  vi.stubEnv("OPENCLAW_STATE_DIR", tempDirs.make("openclaw-auth-deadline-"));
   vi.useFakeTimers();
   mocks.lookup.mockReset().mockResolvedValue(credential);
   mocks.exchange.mockReset().mockResolvedValue(undefined);
 });
 afterEach(() => {
   vi.useRealTimers();
+  vi.unstubAllEnvs();
 });
 
 it.each(["credential resolution", "runtime auth exchange", "AWS runtime auth exchange"])(
