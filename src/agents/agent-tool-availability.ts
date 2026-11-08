@@ -46,20 +46,23 @@ export function isAgentToolExecutionAvailable(tool: object): boolean {
   return availabilityBindings.get(tool)?.executionDenied !== true;
 }
 
-export function copyAgentToolAvailability<T extends object>(source: object, target: T): T {
+export function copyAgentToolAvailability<T extends Pick<AnyAgentTool, "parameters">>(
+  source: Pick<AnyAgentTool, "parameters">,
+  target: T,
+): T {
   const metadata = availabilityBindings.get(source);
   if (metadata) {
     availabilityBindings.set(target, metadata);
   }
   const executionSchema = executionSchemas.get(source);
   if (executionSchema !== undefined) {
-    const sourceParameters = (source as { parameters?: unknown }).parameters;
+    const sourceParameters = source.parameters;
     executionSchemas.set(target, {
       canonical:
         sourceParameters === executionSchema.projected
           ? executionSchema.canonical
           : sourceParameters,
-      projected: (target as { parameters?: unknown }).parameters,
+      projected: target.parameters,
     });
   }
   return target;
@@ -137,10 +140,13 @@ const executionSchemas = new WeakMap<object, { canonical: unknown; projected: un
  * provider projection. Tool owners keep using `executionSchema` on their
  * availability binding; this covers projections the framework applies itself.
  */
-export function bindAgentToolExecutionSchema<T extends object>(tool: T, schema: unknown): T {
+export function bindAgentToolExecutionSchema<T extends Pick<AnyAgentTool, "parameters">>(
+  tool: T,
+  schema: unknown,
+): T {
   executionSchemas.set(tool, {
     canonical: schema,
-    projected: (tool as { parameters?: unknown }).parameters,
+    projected: tool.parameters,
   });
   return tool;
 }
