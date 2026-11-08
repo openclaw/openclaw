@@ -1,2 +1,0 @@
-5
-# Isolate the default-success CLI exit regression in a fresh process without clearing native exit state.

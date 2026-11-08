@@ -199,21 +199,6 @@ describe("one-shot CLI completion", () => {
     expect(process.exitCode).toBe(6);
   });
 
-  it("preserves the default successful outcome", () => {
-    const result = runCliChild(`
-      import { requestExitAfterOneShotOutput, runCliWithExitFinalization } from ${JSON.stringify(oneShotExitUrl.href)};
-      const defaultUnset = process.exitCode === undefined;
-      await runCliWithExitFinalization({
-        run: async () => { requestExitAfterOneShotOutput(); },
-        onError: (error) => { throw error; },
-      });
-      process.stdout.write(JSON.stringify({ defaultUnset, exitCode: process.exitCode }));
-    `);
-    expect(result.error).toBeUndefined();
-    expect(result.status).toBe(0);
-    expect(JSON.parse(result.stdout)).toEqual({ defaultUnset: true, exitCode: 0 });
-  });
-
   it.each(["before cleanup", "during cleanup"])(
     "retains terminal signal outcome %s",
     async (phase) => {
@@ -317,12 +302,14 @@ describe("one-shot CLI completion", () => {
 
   it.each([
     { name: "deferred hooks failure", exitCode: 1, explicitRequest: true },
+    { name: "default successful completion", exitCode: 0, explicitRequest: "default" },
     {
       name: "natural successful completion",
       exitCode: 0,
       explicitRequest: false,
     },
   ])("keeps real dual-TTY JSON clean for $name", ({ exitCode, explicitRequest }) => {
+    const exitArgs = explicitRequest === "default" ? "" : `defaultRuntime, ${exitCode}`;
     const script = `
       import { requestExitAfterOneShotOutput, runCliWithExitFinalization } from ${JSON.stringify(oneShotExitUrl.href)};
       import { defaultRuntime } from ${JSON.stringify(resolveRuntimeWorkerUrl(doctorConfigRuntimeEntrypoints.runtime).href)};
@@ -330,10 +317,11 @@ describe("one-shot CLI completion", () => {
       Object.defineProperty(process.stdout, "isTTY", { value: true, configurable: true });
       Object.defineProperty(process.stderr, "isTTY", { value: true, configurable: true });
       loggingState.forceConsoleToStderr = true;
+      if (${explicitRequest === "default"} && process.exitCode !== undefined) throw new Error("default exit status must start unset");
       await runCliWithExitFinalization({
         run: async () => {
           defaultRuntime.writeStdout(JSON.stringify({ ok: ${exitCode === 0} }));
-          ${explicitRequest ? `requestExitAfterOneShotOutput(defaultRuntime, ${exitCode});` : ""}
+          ${explicitRequest ? `requestExitAfterOneShotOutput(${exitArgs});` : ""}
         },
         finalize: async () => {
           await Promise.resolve();
@@ -341,6 +329,7 @@ describe("one-shot CLI completion", () => {
         },
         onError: (error) => { throw error; },
       });
+      if (${explicitRequest === "default"} && process.exitCode !== 0) throw new Error("default exit status must become zero");
     `;
 
     const result = runCliChild(script);
