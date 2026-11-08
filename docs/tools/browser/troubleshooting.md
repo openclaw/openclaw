@@ -104,6 +104,46 @@ Close the browser using that profile and check its Chromium lock before retrying
 Locks naming another hostname remain unverified, including after a machine rename;
 starting the browser also preserves that locked profile's preferences.
 
+### Recovering from a stale lock
+
+A Chromium profile lock is a `SingletonLock` symlink inside the profile's user-data
+directory (`<config dir>/browser/<profile>/user-data`, for example
+`~/.openclaw/browser/openclaw/user-data`) whose target is `<hostname>-<pid>`. OpenClaw
+only treats that lock as its own browser when the recorded hostname matches the
+current one, so a renamed host — common on macOS when `scutil --get HostName`
+reports `not set` and DHCP hands out `<name>.local` one day and
+`<name>.<router-domain>` the next — makes `openclaw browser start` fail with
+`Chromium profile lock names another hostname`.
+
+Confirm the lock is stale before touching it:
+
+1. `readlink <user-data-dir>/SingletonLock` names this Mac's **previous** hostname
+   and a PID.
+2. `ps -p <pid>` reports no such process, and no other browser window uses that
+   profile.
+
+Then remove the lock entries and retry:
+
+```bash
+cd <user-data-dir>
+rm -f SingletonLock SingletonSocket SingletonCookie
+openclaw browser start
+```
+
+Those three names are Chromium's lock bookkeeping, not profile data: cookies,
+history, logins, and preferences stay in the profile directory and OpenClaw keeps
+using them. Remove them only when step 1 and 2 both hold — on a live profile they
+belong to a running browser.
+
+To stop the lock from going stale again on macOS, pin a stable host name so the
+machine does not alternate between `.local` and a DHCP domain:
+
+```bash
+sudo scutil --set HostName <stable-name>
+```
+
+Restart the managed browser afterwards so the new lock records the stable name.
+
 Security guidance:
 
 - Do **not** relax browser SSRF policy by default.
