@@ -6,6 +6,10 @@ import { formatErrorMessage } from "../infra/errors.js";
 import { compareOpenClawReleaseVersions } from "../infra/npm-registry-spec.js";
 import { resolveCompatibilityHostVersion } from "../version.js";
 import { inspectBundleMcpRuntimeSupport } from "./bundle-mcp.js";
+import {
+  resolveImmutableInstallIdentity,
+  resolvePluginCandidateInstallOwner,
+} from "./candidate-install-owner.js";
 import { capabilityCatalogFamilies, resolvePluginCapabilityCatalog } from "./capability-catalog.js";
 import { resolveMemorySlotDecision } from "./config-state.js";
 import {
@@ -506,6 +510,11 @@ export function loadRuntimePluginCandidate(params: {
         rootDir: moduleRoot,
         registry,
         standalone: manifestRecord.manifestPath === candidate.source,
+        immutableInstallIdentity: resolveImmutableInstallIdentity(
+          candidate.origin,
+          resolvePluginCandidateInstallOwner(candidate),
+          context.installRecords,
+        ),
       });
     };
     const mod = withProfile(

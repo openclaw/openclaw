@@ -8,6 +8,7 @@ import { getPluginInstance, getPluginValueInstance } from "./plugin-instance-sco
 import { PluginInstance } from "./plugin-instance.js";
 import { withProfile } from "./plugin-load-profile.js";
 import { getCachedPluginModuleLoader } from "./plugin-module-loader-cache.js";
+import { nativeAdmissionStateFor } from "./plugin-native-admission-state.js";
 import { installOpenClawPluginSdkNativeResolver } from "./plugin-sdk-native-resolver.js";
 import { getPluginRegistryInspectionResources } from "./registry-inspection-resources.js";
 import type { PluginRecord, PluginRegistry } from "./registry-types.js";
@@ -144,6 +145,7 @@ export function createPluginModuleLoader(options: {
       rootDir: string;
       registry: PluginRegistry;
       standalone?: boolean;
+      immutableInstallIdentity?: string;
     },
   ): unknown =>
     withPluginCache(cache, () => {
@@ -160,6 +162,12 @@ export function createPluginModuleLoader(options: {
           rootDir: owner.rootDir,
           standalone: owner.standalone,
           expectedSourceDigest: captured.expectedSourceDigests?.[owner.record.id],
+          ...(getPluginRegistryInspectionResources(owner.registry)
+            ? {
+                inspectionSourceIdentity: owner.immutableInstallIdentity,
+                inspectionRetention: nativeAdmissionStateFor(cache).inspectionNativeEsm,
+              }
+            : {}),
           devSourceRoot: captured.devSourceRoot,
           pluginSdkResolution: captured.pluginSdkResolution,
           createHostModuleLoader: () => createLoaderForModule(modulePath),

@@ -13,6 +13,7 @@ export const nativeLoaderPluginTestFiles = [
   "src/plugins/bundled-plugin-metadata.public-surfaces.test.ts",
   "src/plugins/capability-provider-runtime.generation.test.ts",
   "src/plugins/loader.lazy-alias.test.ts",
+  "src/plugins/loader.main-inspection-authority.test.ts",
   "src/plugins/manifest-registry.test.ts",
   "src/plugins/plugin-module-generation.interop.test.ts",
   "src/plugins/plugin-module-generation.test.ts",
