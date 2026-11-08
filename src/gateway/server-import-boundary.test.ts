@@ -20,6 +20,7 @@ const graph = createRuntimeImportGraph(
     "src/auto-reply/reply/agent-runner-run.ts",
     "src/auto-reply/reply/session-updates.ts",
     "src/agents/command/attempt-execution.ts",
+    "src/gateway/agent-turn/agent-turn-service.ts",
   ],
   { sourceImports: true },
 );
@@ -41,6 +42,12 @@ function collectStaticValueImports(entryRelativePath: string): string[] {
 }
 
 describe("gateway startup import boundaries", () => {
+  it("prepares Gateway turns without local command or broad session runtimes", () => {
+    const modules = collectStaticValueImports("src/gateway/agent-turn/agent-turn-service.ts");
+    expect(modules).not.toContain(path.normalize("src/agents/agent-command-local.ts"));
+    expect(modules).not.toContain(path.normalize("src/agents/sessions/index.ts"));
+  });
+
   it.each([
     "src/agents/embedded-agent-runner/run/attempt.ts",
     "src/agents/embedded-agent-runner/run-orchestrator.ts",
