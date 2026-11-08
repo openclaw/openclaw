@@ -290,7 +290,7 @@ export class ChatTranscriptRenderer {
     }
   }
 
-  queueAfterCommit(effect: () => void): void {
+  queueAfterCommit(effect: () => void, yieldToBrowser = false): void {
     if (!this.lifecycle || this.layoutEffects.has(effect)) {
       return;
     }
@@ -299,29 +299,39 @@ export class ChatTranscriptRenderer {
       this.layoutEffects.delete(effect);
     };
     this.lifecycle.afterCommit((done) => {
-      let cancelled = false;
-      const measure = () => {
-        release();
-        if (!cancelled && this.isPresented()) {
-          effect();
-        }
-        done();
-      };
-      // The initial measurement ladder otherwise constructs all visible rows
-      // in one microtask chain. Let the browser run between measurement steps.
+      // The initial tail ladder can yield between rows. Position restoration
+      // and other geometry effects keep their before-paint microtask timing.
       // SAFETY: scheduler.yield is an optional browser scheduling capability.
       const browser = globalThis as typeof globalThis & {
         scheduler?: { yield?: () => Promise<void> };
       };
-      if (this.accepted?.initialPositionPending() && browser.scheduler?.yield) {
-        void browser.scheduler.yield().then(measure);
-      } else {
+      if (!yieldToBrowser || !browser.scheduler?.yield) {
         // Nested row islands finish their commits before geometry is read.
-        queueMicrotask(measure);
+        queueMicrotask(() => {
+          release();
+          if (this.isPresented()) {
+            effect();
+          }
+        });
+        return undefined;
       }
-      return () => {
-        cancelled = true;
+      let pending = true;
+      void browser.scheduler.yield().then(() => {
+        if (!pending) {
+          return;
+        }
+        pending = false;
         release();
+        if (this.isPresented()) {
+          effect();
+        }
+        done();
+      });
+      return () => {
+        if (pending) {
+          pending = false;
+          release();
+        }
       };
     }, release);
   }
