@@ -15,10 +15,7 @@ export function forceFullGc(): void {
   globalThis.gc();
 }
 
-export async function expectLiveObjects(
-  refs: readonly WeakRef<object>[],
-  count: number,
-): Promise<void> {
+async function expectLiveObjects(refs: readonly WeakRef<object>[], count: number): Promise<void> {
   await collectForRetentionCheck("live-objects", 1);
   assert.equal(refs.filter((ref) => ref.deref() !== undefined).length, count);
 }
