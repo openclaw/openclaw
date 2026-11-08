@@ -331,93 +331,23 @@ describe.runIf(process.platform !== "win32")(
   "missing descendants under symlinked roots (#194406)",
   () => {
     type Verdict = "ok" | "not-found" | "path-not-allowed";
-    type Case = {
-      name: string;
-      // Raw spellings: path.join would normalize ".." before the filesystem sees it.
-      target: (prefix: string, base: string) => string;
-      assert: "allowed" | "path-not-allowed";
-      read: Verdict;
-    };
-
-    const cases: Case[] = [
-      {
-        name: "inside / file exists",
-        target: (p) => `${p}/workspace/exists.png`,
-        assert: "allowed",
-        read: "ok",
-      },
-      {
-        name: "inside / parent exists",
-        target: (p) => `${p}/workspace/dir/missing.png`,
-        assert: "allowed",
-        read: "not-found",
-      },
-      {
-        name: "inside / only an ancestor exists",
-        target: (p) => `${p}/workspace/tmp-view/deep/p-1.png`,
-        assert: "allowed",
-        read: "not-found",
-      },
-      {
-        name: "inside / nothing below a missing root exists",
-        target: (p) => `${p}/missing-root/a/p-1.png`,
-        assert: "allowed",
-        read: "not-found",
-      },
-      {
-        name: "inside / .. through an existing folder",
-        target: (p) => `${p}/workspace/dir/../exists.png`,
-        assert: "allowed",
-        read: "ok",
-      },
-      {
-        name: "outside / file exists",
-        target: (_p, base) => `${base}/outside/secret.png`,
-        assert: "path-not-allowed",
-        read: "path-not-allowed",
-      },
-      {
-        name: "outside / parent exists",
-        target: (_p, base) => `${base}/outside/missing.png`,
-        assert: "path-not-allowed",
-        read: "path-not-allowed",
-      },
-      {
-        name: "outside / nothing exists",
-        target: (_p, base) => `${base}/nowhere/deep/p-1.png`,
-        assert: "path-not-allowed",
-        read: "path-not-allowed",
-      },
-      {
-        name: ".. escape after a missing folder",
-        target: (p) => `${p}/workspace/missing/../../../outside/secret.png`,
-        assert: "path-not-allowed",
-        read: "path-not-allowed",
-      },
-      {
-        name: ".. after a missing folder that stays lexically inside",
-        target: (p) => `${p}/workspace/missing/../exists.png`,
-        assert: "path-not-allowed",
-        read: "path-not-allowed",
-      },
-      {
-        name: "outward symlink / file exists",
-        target: (p) => `${p}/workspace/out-link/secret.png`,
-        assert: "path-not-allowed",
-        read: "path-not-allowed",
-      },
-      {
-        name: "outward symlink / missing descendant",
-        target: (p) => `${p}/workspace/out-link/missing/p-1.png`,
-        assert: "path-not-allowed",
-        read: "path-not-allowed",
-      },
-      {
-        name: "dangling outward symlink / missing descendant",
-        target: (p) => `${p}/workspace/dangling/p-1.png`,
-        assert: "path-not-allowed",
-        read: "path-not-allowed",
-      },
+    type Short = "ok" | "missing" | "deny";
+    const full = { ok: "ok", missing: "not-found", deny: "path-not-allowed" } as const;
+    // [name, raw target (P = prefix, B = base; never path.join, which folds ".."), assert, read]
+    const cases: [string, string, Short, Short][] = [
+      ["inside / file exists", "P/workspace/exists.png", "ok", "ok"],
+      ["inside / parent exists", "P/workspace/dir/missing.png", "ok", "missing"],
+      ["inside / only an ancestor exists", "P/workspace/tmp-view/deep/p-1.png", "ok", "missing"],
+      ["inside / under a missing root", "P/missing-root/a/p-1.png", "ok", "missing"],
+      ["inside / .. through an existing folder", "P/workspace/dir/../exists.png", "ok", "ok"],
+      ["outside / file exists", "B/outside/secret.png", "deny", "deny"],
+      ["outside / parent exists", "B/outside/missing.png", "deny", "deny"],
+      ["outside / nothing exists", "B/nowhere/deep/p-1.png", "deny", "deny"],
+      [".. escape after missing", "P/workspace/gone/../../../outside/secret.png", "deny", "deny"],
+      [".. after missing, lexically inside", "P/workspace/gone/../exists.png", "deny", "deny"],
+      ["outward symlink / file exists", "P/workspace/out-link/secret.png", "deny", "deny"],
+      ["outward symlink / missing below", "P/workspace/out-link/gone/p.png", "deny", "deny"],
+      ["dangling outward symlink", "P/workspace/dangling/p-1.png", "deny", "deny"],
     ];
 
     async function layout() {
@@ -451,15 +381,13 @@ describe.runIf(process.platform !== "win32")(
     }
 
     for (const spelling of ["plain", "symlinked"] as const) {
-      it.each(cases)(`${spelling} prefix: $name`, async (testCase) => {
+      it.each(cases)(`${spelling} prefix: %s`, async (_name, raw, assertVerdict, readVerdict) => {
         const { base, real, alias } = await layout();
         const prefix = spelling === "plain" ? real : alias;
         const roots = [path.join(prefix, "workspace"), path.join(prefix, "missing-root")];
-        const target = testCase.target(prefix, base);
-
-        const asserted = await verdict(assertLocalMediaAllowed(target, roots));
-        expect(asserted === "ok" ? "allowed" : asserted).toBe(testCase.assert);
-        expect(await verdict(read(target, roots))).toBe(testCase.read);
+        const target = raw.replace(/^P/, prefix).replace(/^B/, base);
+        expect(await verdict(assertLocalMediaAllowed(target, roots))).toBe(full[assertVerdict]);
+        expect(await verdict(read(target, roots))).toBe(full[readVerdict]);
       });
     }
 
