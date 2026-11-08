@@ -242,6 +242,42 @@ function scrollReader(viewport: HTMLElement, offset: number) {
   flush();
 }
 
+it.each([30, "estimate"] as const)(
+  "keeps retained content still before a new predecessor's first resize delivery (%s)",
+  async (size) => {
+    const { host, viewport, virtualizer } = await mountPane(false, 120, undefined, 500);
+    const retained = requireElement(host, '.chat-virtual-row[data-index="4"]');
+    expect(host.querySelector('.chat-virtual-row[data-index="2"]')).toBeNull();
+    const style = document.createElement("style");
+    const height = size === "estimate" ? virtualizer.options.estimateSize(2) : size;
+    style.textContent = `.geometry-transcript-fixture .chat-virtual-row[data-index="2"] { height: ${height}px; }`;
+    host.append(style);
+    const before = retained.getBoundingClientRect().top;
+    const painted = vi.fn();
+    const frame = requestAnimationFrame(painted);
+    try {
+      scrollReader(viewport, 499);
+      await Promise.resolve();
+      flush();
+      await Promise.resolve();
+      flush();
+      expect(
+        requireElement(host, '.chat-virtual-row[data-index="2"]').getBoundingClientRect().height,
+      ).toBe(height);
+      expect(requireElement(host, '.chat-virtual-row[data-index="4"]')).toBe(retained);
+      expect(painted).not.toHaveBeenCalled();
+      expect(viewport.scrollTop).toBe(499);
+      expect(Math.abs(retained.getBoundingClientRect().top - before - 1)).toBeLessThanOrEqual(1);
+      await settleLayout();
+      expect(
+        requireElement(host, '.chat-virtual-row[data-index="2"]').hasAttribute("data-prepared-row"),
+      ).toBe(false);
+    } finally {
+      cancelAnimationFrame(frame);
+    }
+  },
+);
+
 it.each([
   { name: "interior", offset: 100, height: 1600, resize: false, expected: 100 },
   { name: "clamped", offset: 1400, height: 1600, resize: true, expected: 1200 },

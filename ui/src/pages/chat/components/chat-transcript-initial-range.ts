@@ -150,10 +150,26 @@ export class TranscriptInitialRange {
       }
     }
     this.retainViewportRows();
+    const active = this.activeIndexes();
+    const virtualizer = this.virtualizer();
+    const first = active[0];
+    const predecessor =
+      !this.pending &&
+      !this.preparingEnd &&
+      first !== undefined &&
+      first === (virtualizer.range?.startIndex ?? 0) - 1 &&
+      !this.cachedRowSize(first) &&
+      !virtualizer.itemSizeCache.has(virtualizer.options.getItemKey(first)) &&
+      !this.rowsMeasured([first])
+        ? active.shift()
+        : undefined;
+    if (predecessor !== undefined && this.preparingRowKey !== rows[predecessor]!.key) {
+      // Incoming overscan takes priority over speculative background preparation.
+      this.preparingRowKey = rows[predecessor]!.key;
+      this.prepareStarted = performance.now();
+    }
     return {
-      activeRowKeys: new Set(
-        [...this.activeIndexes(), ...this.endIndexes()].map((index) => rows[index]!.key),
-      ),
+      activeRowKeys: new Set([...active, ...this.endIndexes()].map((index) => rows[index]!.key)),
       preparingRowKey: this.preparingRowKey,
     };
   }
