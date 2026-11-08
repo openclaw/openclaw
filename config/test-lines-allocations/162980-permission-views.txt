@@ -2,4 +2,5 @@
 # access-gain loading, canonical profile invalidation with stale replies, and
 # popover navigation plus production-browser capture/guest RPC boundaries.
 # Exact net LF growth for the current-base #162980 permission-view implementation.
-406
+# Includes the shared People page-census integration regression.
+418
