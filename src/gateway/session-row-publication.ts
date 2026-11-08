@@ -7,7 +7,6 @@ import type { GatewaySessionRow } from "./session-utils.types.js";
 
 export type SessionRowView = {
   facts: readonly unknown[];
-  revision: readonly unknown[];
   row: Readonly<GatewaySessionRow>;
   modelRows?: Readonly<GatewaySessionRow>[];
 };
@@ -15,12 +14,17 @@ export type SessionRowView = {
 type Publication = {
   factsRevision: number;
   rows: WeakMap<
-    records.MaterializedRow["materialized"]["publicationIdentity"],
+    records.MaterializedRow["materialized"],
     {
       facts: readonly unknown[];
       views: Map<string, SessionRowView[]>;
+      previousViews?: WeakRef<Map<string, SessionRowView[]>>;
       target: SessionSharingTarget;
     }
+  >;
+  previousViews: WeakMap<
+    records.MaterializedRow["materialized"]["publicationIdentity"],
+    WeakRef<Map<string, SessionRowView[]>>
   >;
   lists: SessionListViewCache;
 };
@@ -49,6 +53,7 @@ export function prepareSessionRowPublicationView(
         identityRevision,
         factsRevision: 0,
         rows: new WeakMap(),
+        previousViews: new WeakMap(),
         lists: new SessionListViewCache(),
       };
       publications.set(projection, publication);
