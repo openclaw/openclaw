@@ -51,9 +51,10 @@ function readLinuxProcessUid(pid: number): number | undefined {
         : null;
     const ids = fields?.slice(1).map(Number);
     const inspectorUid = process.getuid?.();
-    // Any matching credential UID denotes our account; otherwise retain the real UID.
+    // Any matching credential UID denotes our account. Root in any credential
+    // slot can also access our private runtimes; otherwise retain the real UID.
     return ids?.every((uid) => Number.isSafeInteger(uid) && uid <= 0xffff_ffff)
-      ? (ids.find((uid) => uid === inspectorUid) ?? ids[0])
+      ? (ids.find((uid) => uid === inspectorUid) ?? ids.find((uid) => uid === 0) ?? ids[0])
       : undefined;
   } catch {
     return undefined;

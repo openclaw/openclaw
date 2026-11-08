@@ -210,6 +210,8 @@ it("joins Darwin ancestry and relative ownership to exact native command facts",
 
 it.each([
   { status: "Uid:\t1000\t0\t0\t0\n", uid: 1000 },
+  { status: "Uid:\t2000\t0\t2000\t2000\n", uid: 0 },
+  { status: "Uid:\t2000\t2000\t0\t2000\n", uid: 0 },
   { status: "Uid:\t1000\t1000\t1000\t1000\nUid:\t2000\t2000\t2000\t2000\n", uid: undefined },
   { status: "Uid:\t1000\t1000\t1000\n", uid: undefined },
   { status: "Uid:\t4294967296\t0\t0\t0\n", uid: undefined },

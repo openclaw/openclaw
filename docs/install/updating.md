@@ -2299,6 +2299,11 @@ On Linux, `openclaw doctor --fix` can reclaim abandoned updater runtimes even
 after a systemd user-manager re-exec. The manager's `--deserialize` argument and
 its protected `(sd-pam)` child do not count as runtime holders. Actual runtime
 references and unverified processes still preserve the affected artifacts.
+An unreadable working directory in a different, non-root account does not block
+cleanup when the runtime is verified private to the updating account and the
+process has no runtime references. Root and same-account uncertainty still
+preserve the runtime. The updater performing cleanup must contain this fix;
+it also applies to runtimes left by older versions.
 
 On Windows, the same reclamation reads native process command lines and working
 directories. Processes owned by another account and protected system processes

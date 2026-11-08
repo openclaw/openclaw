@@ -1,3 +1,4 @@
+import { lstatSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { readProcessAncestry } from "@openclaw/proc-safe/identity";
@@ -119,6 +120,7 @@ function classifyProcessArtifactCustody(
   command: ProcessCommand | undefined,
   pid: number,
   cwd: string | undefined,
+  privateRuntimeUid?: number,
 ): ArtifactCustody {
   if (!command) {
     return { kind: "unknown", reason: "process command is unavailable" };
@@ -178,10 +180,16 @@ function classifyProcessArtifactCustody(
     // Unrelated commands do not own runtimes merely because cwd is unreadable.
     // Explicit artifact references above still preserve their custody.
     if (
-      identity.kind === "other" &&
-      typeof position !== "number" &&
-      position.kind === "not-runtime" &&
-      references.length === 0
+      !artifactEvidence &&
+      ((identity.kind === "other" &&
+        typeof position !== "number" &&
+        position.kind === "not-runtime") ||
+        // A foreign, non-root account cannot traverse this private runtime.
+        // OpenClaw never launches runtime holders by changing credentials.
+        (privateRuntimeUid !== undefined &&
+          command.uid !== undefined &&
+          command.uid !== 0 &&
+          command.uid !== privateRuntimeUid))
     ) {
       return { kind: "not-holder" };
     }
@@ -474,6 +482,21 @@ export function inspectOtherOpenClawProcesses(references?: HandoffReferences | s
       artifactPaths.filter((value) => !sharedRoots.has(rootKey(value))),
     );
     const inspectorUid = process.getuid?.();
+    let privateRuntimeUid: number | undefined;
+    if (process.platform === "linux" && runtimeDirectory && inspectorUid !== undefined) {
+      try {
+        const directory = lstatSync(runtimeDirectory);
+        if (
+          directory.isDirectory() &&
+          directory.uid === inspectorUid &&
+          (directory.mode & 0o077) === 0
+        ) {
+          privateRuntimeUid = inspectorUid;
+        }
+      } catch {
+        // Missing permission evidence cannot release an otherwise uncertain holder.
+      }
+    }
     // Positive start-ordered ancestry proves work is not the handoff family's:
     // this inspector's own descendants, or work whose whole live ancestry began
     // after the family deadline. Missing or unreadable ancestry proves nothing.
@@ -596,7 +619,7 @@ export function inspectOtherOpenClawProcesses(references?: HandoffReferences | s
       const custody =
         observation && !command
           ? classifyOpaqueWindowsCustody(observation, pid)
-          : classifyProcessArtifactCustody(command, pid, directories.get(pid));
+          : classifyProcessArtifactCustody(command, pid, directories.get(pid), privateRuntimeUid);
       if (custody.kind === "not-holder") {
         continue;
       }
