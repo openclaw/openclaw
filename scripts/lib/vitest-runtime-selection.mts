@@ -25,6 +25,7 @@ const runtimeOnlyBuiltCliFiles = new Set([
 
 // These owner tests use production workers, without compiled test-only fixtures.
 const runtimeOnlyUnitFiles = new Set([
+  "src/agents/subagents/announce/subagent-announce.incognito.test.ts",
   "src/auto-reply/reply/commands-system-prompt.test.ts",
   "src/auto-reply/reply/dispatch-acp.test.ts",
   "src/auto-reply/reply/dispatch-from-config.delivery.test.ts",
@@ -33,8 +34,16 @@ const runtimeOnlyUnitFiles = new Set([
   "src/auto-reply/reply/followup-runner.test.ts",
   "src/auto-reply/reply/groups.test.ts",
   "src/gateway/client-callsites.guard.test.ts",
+  "src/plugins/loader.runtime-registry.test.ts",
+  "test/canonical-descendant.integration.test.ts",
+  "test/codex-web-search-native.integration.test.ts",
+  "test/codex-web-search-policy.integration.test.ts",
+  "test/cron-conversation-delivery.codex.integration.test.ts",
+  "test/decision-tool.codex.integration.test.ts",
   "test/plugins/chat-abort-codex.gateway.test.ts",
   "test/plugins/codex-native-search.gateway.test.ts",
+  "test/scripts/type-suppression-inventory.test.ts",
+  "test/skill-usage.codex.integration.test.ts",
 ]);
 
 export function areRuntimeOnlyVitestUnitFiles(files: readonly string[]): boolean {
@@ -64,6 +73,8 @@ export function shouldUseRuntimeOnlyVitestWorkers(
     (config === "test/vitest/vitest.auto-reply.config.ts" ||
       config === "test/vitest/vitest.auto-reply-reply.config.ts" ||
       config === "test/vitest/vitest.infra.config.ts" ||
+      config === "test/vitest/vitest.unit-fast.config.ts" ||
+      config === "test/vitest/vitest.unit-fast-isolated.config.ts" ||
       config === "test/vitest/vitest.gateway-client.config.ts" ||
       config === "test/vitest/vitest.gateway-database-workers.config.ts") &&
     areRuntimeOnlyVitestUnitFiles(files)
