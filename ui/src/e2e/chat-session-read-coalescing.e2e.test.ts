@@ -58,30 +58,31 @@ suite.define(() => {
           ]);
         const instrument = (Base: typeof WebSocket) =>
           class extends Base {
-            override send(data: Parameters<WebSocket["send"]>[0]) {
-              if (typeof data === "string") {
-                const frame = JSON.parse(data) as MockGatewayRequest & { type: string };
-                if (frame.type === "req") {
-                  const key = signature(frame);
-                  if (
-                    methods.has(frame.method) &&
-                    [...wire.pending.values()].some((other) => signature(other) === key)
-                  ) {
-                    wire.duplicates.push(key);
+            constructor(...args: ConstructorParameters<typeof WebSocket>) {
+              super(...args);
+              const send = this.send.bind(this);
+              this.send = (data) => {
+                if (typeof data === "string") {
+                  const frame = JSON.parse(data) as MockGatewayRequest & { type: string };
+                  if (frame.type === "req") {
+                    const key = signature(frame);
+                    if (
+                      methods.has(frame.method) &&
+                      [...wire.pending.values()].some((other) => signature(other) === key)
+                    ) {
+                      wire.duplicates.push(key);
+                    }
+                    wire.pending.set(frame.id, frame);
                   }
-                  wire.pending.set(frame.id, frame);
                 }
-              }
-              return super.send(data);
-            }
-            override dispatchEvent(event: Event) {
-              if (event instanceof MessageEvent) {
+                return send(data);
+              };
+              this.addEventListener("message", (event) => {
                 const frame = JSON.parse(String(event.data)) as { type: string; id: string };
                 if (frame.type === "res") {
                   wire.pending.delete(frame.id);
                 }
-              }
-              return super.dispatchEvent(event);
+              });
             }
           };
         // Init-script order is unspecified; instrument the mock's replacement too.
@@ -235,8 +236,27 @@ suite.define(() => {
       // The startup fixture omitted commands; acquire them beside the pending catalog once.
       expect(await count("chat.metadata", metadataScope)).toBe(metadataBefore + 1);
       expect(await count("models.list", scope)).toBe(modelsBefore + 1);
+      const heldCatalogRequest = (await gateway.getRequests("models.list", scope)).at(-1);
+      if (!heldCatalogRequest) {
+        throw new Error("expected the existing held catalog request");
+      }
+      expect
+        .soft(
+          await page.evaluate(
+            (id) => window.readCoalescingWire.pending.has(id),
+            heldCatalogRequest.id,
+          ),
+          "records the existing held catalog request",
+        )
+        .toBe(true);
       await gateway.resolveDeferred("models.list");
       await settle();
+      expect(
+        await page.evaluate(
+          (id) => window.readCoalescingWire.pending.has(id),
+          heldCatalogRequest.id,
+        ),
+      ).toBe(false);
       expect
         .soft(await count("models.list", scope), "no replacement catalog read")
         .toBe(modelsBefore + 1);
