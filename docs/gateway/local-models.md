@@ -166,7 +166,14 @@ openclaw config patch --file ./local-provider.patch.json5
 openclaw models fallbacks add "local/my-model"
 ```
 
-When the Gateway runs in a container, run steps 2–3 through that container (`openclaw --container <name> ...` or `podman exec`) once it is up — the running gateway locks the config file. See [Podman](/install/podman#reaching-model-servers-on-the-host) for the `baseUrl` choice.
+When the Gateway runs in a container, run steps 2–3 from the host through the container-aware CLI (`openclaw --container <name> ...`) once it is up — the running gateway locks the config file. The container only sees files mounted into it, so pipe the host patch file in via stdin rather than pointing `--file` at a host path:
+
+```bash
+openclaw --container <name> config patch --stdin < ./local-provider.patch.json5
+openclaw --container <name> models fallbacks add "local/my-model"
+```
+
+See [Podman](/install/podman#reaching-model-servers-on-the-host) for the `baseUrl` choice.
 
 OpenClaw fallbacks switch models per turn on provider errors. For per-request routing that keeps small prompts on the local model and sends only oversized ones to a hosted model, see [Hybrid inference](/providers/llmman#hybrid-inference) with llmman.
 
