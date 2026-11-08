@@ -236,6 +236,7 @@ const DEFAULT_NODE_TEST_RUNNER = "blacksmith-8vcpu-ubuntu-2404";
 // serial tail per job; the shard runner overlaps two children at a time.
 const CHANGED_NODE_TEST_TARGETS_PER_JOB = 12;
 const PR_NODE_TEST_SECONDS = 150;
+const CHANGED_PRIVATE_QA_JOB_SECONDS = 300;
 // Memory Core targets perform real SQLite/indexing work. Two concurrent Vitest
 // processes starve each other on 4-vCPU runners and push otherwise healthy
 // integration tests past the global timeout.
@@ -696,22 +697,61 @@ function createChangedTargetShards(
         inheritedPolicies.set(target, policy);
       }
     }
+    // Amortize private QA preparation only within an already selected slow
+    // policy's envelope, and reserve the build inside the 300-second job budget.
+    const policySeconds = new Map<string, number>();
+    for (const { target } of targets) {
+      const policy = inheritedPolicies.get(target)!;
+      if (policy.mode === "private-qa") {
+        const key = JSON.stringify(policy);
+        policySeconds.set(
+          key,
+          Math.max(
+            policySeconds.get(key) ?? PR_NODE_TEST_SECONDS,
+            Math.min(
+              costOf(target),
+              CHANGED_PRIVATE_QA_JOB_SECONDS - VITEST_PRETEST_BUILD_SECONDS["private-qa"],
+            ),
+          ),
+        );
+      }
+    }
     // Longest-first placement avoids stranding a slow target with cheap neighbors.
-    const bins: { targets: typeof targets; seconds: number; policy: string }[] = [];
-    for (const entry of targets.toSorted((a, b) => costOf(b.target) - costOf(a.target))) {
-      const cost = costOf(entry.target);
-      const policy = JSON.stringify(inheritedPolicies.get(entry.target));
-      const bin = bins.find(
-        (candidate) =>
-          candidate.policy === policy &&
-          candidate.targets.length < CHANGED_NODE_TEST_TARGETS_PER_JOB &&
-          candidate.seconds + cost <= PR_NODE_TEST_SECONDS,
-      );
-      if (bin) {
-        bin.targets.push(entry);
-        bin.seconds += cost;
-      } else {
-        bins.push({ targets: [entry], seconds: cost, policy });
+    const sortedTargets = targets.toSorted((a, b) => costOf(b.target) - costOf(a.target));
+    const pack = (limits?: ReadonlyMap<string, number>) => {
+      const bins: { targets: typeof targets; seconds: number; policy: string }[] = [];
+      for (const entry of sortedTargets) {
+        const cost = costOf(entry.target);
+        const policy = JSON.stringify(inheritedPolicies.get(entry.target));
+        const bin = bins.find(
+          (candidate) =>
+            candidate.policy === policy &&
+            candidate.targets.length < CHANGED_NODE_TEST_TARGETS_PER_JOB &&
+            candidate.seconds + cost <= (limits?.get(policy) ?? PR_NODE_TEST_SECONDS),
+        );
+        if (bin) {
+          bin.targets.push(entry);
+          bin.seconds += cost;
+        } else {
+          bins.push({ targets: [entry], seconds: cost, policy });
+        }
+      }
+      return bins;
+    };
+    let bins = pack();
+    if (policySeconds.size > 0) {
+      const packed = pack(policySeconds);
+      // First-fit placement can need more bins at a larger capacity. Retain the
+      // original plan unless fewer jobs are needed and neither QA policy grows.
+      if (
+        packed.length < bins.length &&
+        [...policySeconds.keys()].every(
+          (policy) =>
+            packed.filter((bin) => bin.policy === policy).length <=
+            bins.filter((bin) => bin.policy === policy).length,
+        )
+      ) {
+        bins = packed;
       }
     }
     targetChunks.push(...bins.map((bin) => bin.targets));
