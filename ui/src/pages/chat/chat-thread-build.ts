@@ -379,6 +379,9 @@ export function buildChatItems(
   const boundToPendingInputs = (
     bounds: TurnInsertionBounds | null | undefined,
   ): TurnInsertionBounds | undefined => {
+    if (pendingKeys.size === 0) {
+      return bounds ?? undefined;
+    }
     const { minimum, maximum } = insertionIndexesForBounds(items, bounds ?? undefined);
     const pending = items.find(
       (item, index) => index >= minimum && index < maximum && pendingKeys.has(item.key),

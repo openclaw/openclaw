@@ -112,6 +112,12 @@ Whole-action
 CPU includes different amounts of background work when an action takes longer;
 do not divide total scenario CPU by offered events or subtract unequal windows.
 
+For exact function-call counts, run Chromium separately with `--function-coverage`.
+The `.coverage.json` artifacts contain V8 function ranges, counts and script URLs;
+use the matching bundle's source maps to attribute them. Coverage disables normal
+optimization and adds overhead, so its timings are diagnostic only. It cannot be
+combined with tracing, CPU profiling or the other diagnostic audit modes.
+
 For a candidate, use the harness's immutable base, candidate and identical-base
 control bundle options. Retain at least 20 rotated pairs plus A/A across the
 required engines and viewports before accepting a performance change. Record

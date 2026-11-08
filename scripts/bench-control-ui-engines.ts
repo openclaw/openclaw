@@ -176,6 +176,7 @@ const { values } = parseArgs({
     "gesture-geometry": { type: "boolean", default: false },
     "cpu-only": { type: "boolean", default: false },
     "cpu-profile": { type: "boolean", default: false },
+    "function-coverage": { type: "boolean", default: false },
     "native-audit": { type: "boolean", default: false },
     allocations: { type: "boolean", default: false },
     "mutation-audit": { type: "boolean", default: false },
@@ -297,6 +298,21 @@ if (values["control-bundle-dir"]?.length && !values["compare-bundle-dir"]) {
 }
 if (values.trace && values["cpu-only"]) {
   throw new Error("Choose --trace or --cpu-only; use separate untraced timing runs");
+}
+if (
+  values["function-coverage"] &&
+  (engines.some((engine) => engine !== "chromium") ||
+    values.trace ||
+    values["cpu-only"] ||
+    values["cpu-profile"] ||
+    values["native-audit"] ||
+    values.allocations ||
+    values["mutation-audit"] ||
+    values["transcript-layout-audit"] ||
+    values["live-region-audit"] ||
+    values["remount-audit"])
+) {
+  throw new Error("--function-coverage requires Chromium and a separate diagnostic run");
 }
 if (
   values["transcript-layout-audit"] &&
@@ -761,6 +777,7 @@ try {
     gestureGeometry: values["gesture-geometry"],
     cpuOnly: values["cpu-only"],
     cpuProfile: values["cpu-profile"],
+    functionCoverage: values["function-coverage"],
     nativeAudit: values["native-audit"],
     idleWarmupOverrideMs: idleWarmupOverrideMs ?? null,
     idleDurationMs,
@@ -776,25 +793,27 @@ try {
       : undefined,
     cpuThrottle,
     memorySoakRounds,
-    collection: values["transcript-layout-audit"]
-      ? "Transcript frame geometry, mutation ancestry and Chromium screencast; diagnostic overhead, not timing proof"
-      : values["live-region-audit"]
-        ? "Live-region MutationObserver diagnostic; DOM update candidates, not screen-reader speech or timing proof"
-        : values.allocations
-          ? "V8 sampled allocations including major/minor-GC collected objects; diagnostic overhead, not timing proof"
-          : values["remount-audit"]
-            ? "DOM attachment census with synchronous removal snapshots; diagnostic overhead, not timing proof. DOM detach is not Solid disposal."
-            : values["mutation-audit"]
-              ? "MutationObserver over document/open shadow roots and formatter wrappers; diagnostic overhead, not timing proof. Pixel differences include caret/animation changes. Child-content identity is sampled at observer delivery."
-              : values["native-audit"]
-                ? "Chromium native timeline, V8 samples and LayerTree; diagnostic instrumentation, not timing proof"
-                : values["cpu-profile"]
-                  ? "V8 sampled self-time census; diagnostic attribution, not timing proof"
-                  : values.trace
-                    ? "Playwright tracing and engine Inspector/Profiler; overhead included"
-                    : values["cpu-only"]
-                      ? "WebKit smoothed utilization diagnostic (not action CPU) and Chromium CDP thread CPU; no timeline or script profiler"
-                      : "Untraced wall and browser-local application time; Chromium CDP counters only, unavailable WebKit/Firefox counters are null",
+    collection: values["function-coverage"]
+      ? "V8 precise function call counts in separate coverage artifacts; diagnostic overhead, not timing proof"
+      : values["transcript-layout-audit"]
+        ? "Transcript frame geometry, mutation ancestry and Chromium screencast; diagnostic overhead, not timing proof"
+        : values["live-region-audit"]
+          ? "Live-region MutationObserver diagnostic; DOM update candidates, not screen-reader speech or timing proof"
+          : values.allocations
+            ? "V8 sampled allocations including major/minor-GC collected objects; diagnostic overhead, not timing proof"
+            : values["remount-audit"]
+              ? "DOM attachment census with synchronous removal snapshots; diagnostic overhead, not timing proof. DOM detach is not Solid disposal."
+              : values["mutation-audit"]
+                ? "MutationObserver over document/open shadow roots and formatter wrappers; diagnostic overhead, not timing proof. Pixel differences include caret/animation changes. Child-content identity is sampled at observer delivery."
+                : values["native-audit"]
+                  ? "Chromium native timeline, V8 samples and LayerTree; diagnostic instrumentation, not timing proof"
+                  : values["cpu-profile"]
+                    ? "V8 sampled self-time census; diagnostic attribution, not timing proof"
+                    : values.trace
+                      ? "Playwright tracing and engine Inspector/Profiler; overhead included"
+                      : values["cpu-only"]
+                        ? "WebKit smoothed utilization diagnostic (not action CPU) and Chromium CDP thread CPU; no timeline or script profiler"
+                        : "Untraced wall and browser-local application time; Chromium CDP counters only, unavailable WebKit/Firefox counters are null",
     order:
       "Serial network profiles alternate each pair; engine/configuration/bundle positions rotate and reverse across pairs; fresh browser context per observation",
     acceptance:
@@ -1355,6 +1374,7 @@ try {
                 trace: values.trace,
                 cpuOnly: values["cpu-only"],
                 cpuProfile: values["cpu-profile"],
+                functionCoverage: values["function-coverage"],
                 nativeAudit: values["native-audit"],
                 allocations: values.allocations,
               });
@@ -1473,6 +1493,9 @@ try {
               measurement = undefined;
               const captured = await activeMeasurement.stop();
               observation.metrics = captured.metrics;
+              if (captured.functionCoverage) {
+                await writeJson(`${artifactPrefix}.coverage.json`, captured.functionCoverage);
+              }
               if (scenario.id.startsWith("event-load-")) {
                 observation.evidence = {
                   ...observation.evidence,
@@ -1711,7 +1734,11 @@ try {
                   if (scenario.id.startsWith("event-load-")) {
                     observation.metrics = interrupted.metrics;
                   }
-                  await writeJson(`${artifactPrefix}.interrupted-inspector.json`, interrupted);
+                  const { functionCoverage, ...inspector } = interrupted;
+                  if (functionCoverage) {
+                    await writeJson(`${artifactPrefix}.coverage.json`, functionCoverage);
+                  }
+                  await writeJson(`${artifactPrefix}.interrupted-inspector.json`, inspector);
                 }
                 if (scenario.id.startsWith("streaming-")) {
                   const streaming = await page.evaluate(() =>
@@ -2095,7 +2122,7 @@ await writeFile(
   [
     "# Control UI engine comparison",
     "",
-    `Synthetic Gateway; production HTTP/bundle. ${values.trace ? "Traced samples include profiler overhead." : values["cpu-only"] ? "Sampled WebKit process CPU; Chromium main-thread CPU. No timeline or script profiler." : "Untraced wall samples; WebKit/Firefox native counters are unavailable (null)."} Wall time includes automation and assertions, not INP. WebKit Inspector script/layout/style durations are wall time; Chromium CDP uses thread CPU. Do not compare these as CPU ratios. Cold contexts are fresh; warm reload retains IndexedDB but mock routing disables HTTP cache.`,
+    `Synthetic Gateway; production HTTP/bundle. ${values["function-coverage"] ? "Function coverage is diagnostic; instrumented times are not timing proof. Counts are retained in separate .coverage.json artifacts." : values.trace ? "Traced samples include profiler overhead." : values["cpu-only"] ? "Sampled WebKit process CPU; Chromium main-thread CPU. No timeline or script profiler." : "Untraced wall samples; WebKit/Firefox native counters are unavailable (null)."} Wall time includes automation and assertions, not INP. WebKit Inspector script/layout/style durations are wall time; Chromium CDP uses thread CPU. Do not compare these as CPU ratios. Cold contexts are fresh; warm reload retains IndexedDB but mock routing disables HTTP cache.`,
     "",
     `Completed ${observations.length}/${planned} observations; ${observations.filter(({ status }) => status === "failed").length} failed; ${observations.filter(({ status }) => status === "skipped").length} unsupported-viewport cells skipped. Timing summaries retain completed intervals with browser errors; failures are never passing proof. Browser-local boot milestones, metrics, counts, CPU coverage, host load and errors: [observations](observations.json), [summary](summary.json), [manifest](manifest.json).`,
     "",

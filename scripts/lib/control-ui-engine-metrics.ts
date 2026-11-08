@@ -58,6 +58,7 @@ export type EngineMeasurement = {
   metrics: EngineMetrics;
   timeline?: unknown[];
   profile?: unknown;
+  functionCoverage?: unknown;
   allocations?: ControlUiAllocationProfile;
   cpuSamples?: WebKitCpuEvent[];
 };
@@ -66,6 +67,7 @@ type MeasurementOptions = {
   trace: boolean;
   cpuOnly?: boolean;
   cpuProfile?: boolean;
+  functionCoverage?: boolean;
   nativeAudit?: boolean;
   allocations?: boolean;
 };
@@ -261,6 +263,17 @@ export async function startEngineMeasurement(
   engine: ControlUiEngine,
   options: MeasurementOptions,
 ) {
+  if (
+    options.functionCoverage &&
+    (engine !== "chromium" ||
+      options.trace ||
+      options.cpuOnly ||
+      options.cpuProfile ||
+      options.nativeAudit ||
+      options.allocations)
+  ) {
+    throw new Error("Function coverage requires Chromium and a separate diagnostic run");
+  }
   if (engine !== "chromium") {
     if (engine === "firefox" || (!options.trace && !options.cpuOnly)) {
       if (
@@ -304,6 +317,27 @@ export async function startEngineMeasurement(
   const session = await page.context().newCDPSession(page);
   const timeline: unknown[] = [];
   const scriptUrls = new Map<string, string>();
+  let coverageProfilerEnabled = false;
+  let preciseCoverageStarted = false;
+  const stopPreciseCoverage = async () => {
+    if (preciseCoverageStarted) {
+      preciseCoverageStarted = false;
+      await session.send("Profiler.stopPreciseCoverage");
+    }
+  };
+  const closeSession = async () => {
+    try {
+      await stopPreciseCoverage();
+    } finally {
+      try {
+        if (coverageProfilerEnabled) {
+          await session.send("Profiler.disable");
+        }
+      } finally {
+        await session.detach();
+      }
+    }
+  };
   try {
     await session.send("Performance.enable", { timeDomain: "threadTicks" });
     if (options.trace || options.nativeAudit) {
@@ -318,6 +352,12 @@ export async function startEngineMeasurement(
     if (options.trace || options.cpuProfile || options.nativeAudit) {
       await session.send("Profiler.enable");
       await session.send("Profiler.start");
+    }
+    if (options.functionCoverage) {
+      await session.send("Profiler.enable");
+      coverageProfilerEnabled = true;
+      await session.send("Profiler.startPreciseCoverage", { callCount: true, detailed: false });
+      preciseCoverageStarted = true;
     }
     const read = async () => {
       const { metrics } = await session.send("Performance.getMetrics");
@@ -338,6 +378,10 @@ export async function startEngineMeasurement(
       async stop(): Promise<EngineMeasurement> {
         try {
           const after = await read();
+          const functionCoverage = options.functionCoverage
+            ? await session.send("Profiler.takePreciseCoverage")
+            : undefined;
+          await stopPreciseCoverage();
           const allocations = options.allocations
             ? (await session.send("HeapProfiler.stopSampling")).profile
             : undefined;
@@ -392,19 +436,23 @@ export async function startEngineMeasurement(
                 ...(options.trace || options.cpuProfile || options.nativeAudit
                   ? ["V8 sampling adds instrumentation overhead; use separate timing runs."]
                   : []),
+                ...(options.functionCoverage
+                  ? ["V8 precise function coverage adds overhead; this is not timing proof."]
+                  : []),
               ],
             },
             ...(options.trace || options.nativeAudit ? { timeline } : {}),
             ...(options.trace || options.cpuProfile || options.nativeAudit ? { profile } : {}),
+            ...(functionCoverage ? { functionCoverage } : {}),
             ...(allocations ? { allocations } : {}),
           };
         } finally {
-          await session.detach();
+          await closeSession();
         }
       },
     };
   } catch (error) {
-    await session.detach();
+    await closeSession();
     throw error;
   }
 }

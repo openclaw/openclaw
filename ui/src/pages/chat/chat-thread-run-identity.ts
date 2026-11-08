@@ -75,6 +75,7 @@ export function createRunTurnLookup(items: ChatItem[]) {
   let bounds: Map<string, TurnInsertionBounds> | undefined;
   const inputs = new Map<string, TurnInsertionBounds>();
   const pagedInputCeilings = new Map<string, TurnInsertionBounds>();
+  const causalBounds = new Map<string, TurnInsertionBounds | null>();
   let messages: unknown[] | undefined;
   const startsExecutionTurn = (item: ChatItem) =>
     chatItemStartsUserTurn(item) &&
@@ -132,9 +133,16 @@ export function createRunTurnLookup(items: ChatItem[]) {
     if (retainedInputBounds) {
       return retainedInputBounds;
     }
+    // This lookup owns a fixed item snapshot. Sibling tools share its causal scan,
+    // including absent bounds, while distinct observed inputs stay independent.
+    const key = JSON.stringify([runId, afterUserSendId]);
+    if (causalBounds.has(key)) {
+      return causalBounds.get(key)!;
+    }
     messages ??= items.map((item) => (item.kind === "message" ? item.message : null));
     const interval = knownStreamCausalInterval(messages, { runId }, afterUserSendId);
     if (!interval) {
+      causalBounds.set(key, null);
       return null;
     }
     const ceiling = items.find(
@@ -144,10 +152,12 @@ export function createRunTurnLookup(items: ChatItem[]) {
         startsExecutionTurn(item) &&
         (item.kind !== "message" || transcriptRunId(item.message) !== runId),
     );
-    return {
+    const result = {
       afterKey: items[interval.start - 1]?.key,
       beforeKey: ceiling?.key ?? items[interval.end]?.key,
     };
+    causalBounds.set(key, result);
+    return result;
   };
 }
 

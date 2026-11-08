@@ -1550,24 +1550,39 @@ export async function verifyEngineEventLoad(page: Page, count: number, toolCount
       ({ key, count: resultCount }) => {
         const host = document.querySelector(".chat-pane-cache__pane--active");
         const snapshots:
-          | Map<string, { snapshot: { messages: Array<{ role?: string; toolCallId?: string }> } }>
+          | Map<
+              string,
+              {
+                snapshot: {
+                  messages: Array<{
+                    role?: string;
+                    toolCallId?: string;
+                    content?: Array<{ type?: string; text?: string }>;
+                  }>;
+                };
+              }
+            >
           | undefined = host ? Reflect.get(host, "chatMessagesBySession") : undefined;
         const messages =
           snapshots &&
           [...snapshots].find(([stored]) => stored.endsWith(`\u0000${key}`))?.[1].snapshot.messages;
-        const results = new Set(
-          messages
-            ?.filter((message) => message.role === "toolResult")
-            .map((message) => message.toolCallId),
+        const results = messages?.filter((message) => message.role === "toolResult");
+        return (
+          results?.length === resultCount &&
+          results.every(
+            (message, index) =>
+              message.toolCallId === `event-load-tool-${index + 1}` &&
+              message.content?.length === 1 &&
+              message.content[0]?.type === "text" &&
+              message.content[0].text === `Tool ${index + 1} complete.`,
+          )
         );
-        return Array.from(
-          { length: resultCount },
-          (_, index) => `event-load-tool-${index + 1}`,
-        ).every((id) => results.has(id));
       },
       { key: foreground, count: toolCount },
     );
     evidence.allToolResultsRetained = true;
+    evidence.allToolResultsOrdered = true;
+    evidence.allToolResultsExact = true;
   }
   return evidence;
 }
