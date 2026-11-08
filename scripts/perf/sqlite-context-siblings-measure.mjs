@@ -45,12 +45,16 @@ const add = (kind, owner) => {
   counters[kind] ??= {};
   counters[kind][owner] = (counters[kind][owner] ?? 0) + 1;
 };
-// eslint-disable-next-line @typescript-eslint/unbound-method -- Instrumentation restores the exact method and supplies the original receiver with call().
-const originalEnterWith = AsyncLocalStorage.prototype.enterWith;
-// eslint-disable-next-line @typescript-eslint/unbound-method -- Instrumentation restores the exact method and supplies the original receiver with call().
-const originalRun = AsyncLocalStorage.prototype.run;
-// eslint-disable-next-line @typescript-eslint/unbound-method -- Native static snapshot is restored after the diagnostic pass.
-const originalSnapshot = AsyncLocalStorage.snapshot;
+/** @type {{
+ * enterWith: (this: AsyncLocalStorage<unknown>, value: unknown) => void,
+ * run: <R, A extends unknown[]>(this: AsyncLocalStorage<unknown>, value: unknown, run: (...args: A) => R, ...args: A) => R
+ * }} */
+const nativePrototype = AsyncLocalStorage.prototype;
+/** @type {{snapshot: (this: typeof AsyncLocalStorage) => ReturnType<typeof AsyncLocalStorage.snapshot>}} */
+const nativeStorage = AsyncLocalStorage;
+const originalEnterWith = nativePrototype.enterWith;
+const originalRun = nativePrototype.run;
+const originalSnapshot = nativeStorage.snapshot;
 const originalKeys = Object.keys;
 AsyncLocalStorage.prototype.enterWith = function (value) {
   add(this.getStore() === value ? "enterWithSame" : "enterWithChanged", stack());

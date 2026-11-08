@@ -53,10 +53,12 @@ const scope = {
 const stores = Array.from({ length: 26 }, () => new AsyncLocalStorage());
 const inOwner = (invoke) =>
   stores.reduceRight((next, store) => () => store.run(scope, next), invoke)();
-// eslint-disable-next-line @typescript-eslint/unbound-method -- Restore the exact native method; the probe calls it with its original receiver.
-const originalSnapshot = AsyncLocalStorage.snapshot;
-// eslint-disable-next-line @typescript-eslint/unbound-method -- Each invocation supplies its AsyncLocalStorage receiver with call().
-const originalEnter = AsyncLocalStorage.prototype.enterWith;
+/** @type {{snapshot: (this: typeof AsyncLocalStorage) => ReturnType<typeof AsyncLocalStorage.snapshot>}} */
+const nativeStorage = AsyncLocalStorage;
+/** @type {{enterWith: (this: AsyncLocalStorage<unknown>, value: unknown) => void}} */
+const nativePrototype = AsyncLocalStorage.prototype;
+const originalSnapshot = nativeStorage.snapshot;
+const originalEnter = nativePrototype.enterWith;
 const originalKeys = Object.keys;
 let counting = false;
 let snapshots = 0;

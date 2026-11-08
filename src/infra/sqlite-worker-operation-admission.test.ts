@@ -140,8 +140,9 @@ it.each(["rotated", "expired"] as const)(
     const replacement = createEmptyPluginRegistry();
     const scope = createRegistryScope(registry, undefined);
     let expired = false;
-    // eslint-disable-next-line @typescript-eslint/unbound-method -- The simulated collection probe calls this native method with the original WeakRef receiver.
-    const deref = WeakRef.prototype.deref;
+    const nativePrototype: { deref: (this: WeakRef<object>) => object | undefined } =
+      WeakRef.prototype;
+    const deref = nativePrototype.deref;
     // Collection cannot happen within one JS job; simulate loss of this weak target.
     vi.spyOn(WeakRef.prototype, "deref").mockImplementation(function (this: WeakRef<object>) {
       const value: unknown = deref.call(this);
