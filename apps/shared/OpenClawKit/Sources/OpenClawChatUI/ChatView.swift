@@ -492,9 +492,7 @@ extension OpenClawChatView {
             // Lazy row sizing can cross the threshold repeatedly within one layout. Observe the
             // distance so a coalesced update still reconciles the stored live-edge state.
             .onScrollGeometryChange(for: CGFloat.self) { geometry in
-                // Safe-area insets can expand visibleRect underneath the footer and keyboard.
-                let visibleBottom = geometry.contentOffset.y + geometry.containerSize.height
-                return geometry.contentSize.height - visibleBottom
+                geometry.contentSize.height - geometry.visibleRect.maxY
             } action: { _, distanceFromBottom in
                 let isAtLiveEdge = distanceFromBottom <= Layout.liveEdgeThreshold
                 guard self.scroll.isAtLiveEdge != isAtLiveEdge else { return }
