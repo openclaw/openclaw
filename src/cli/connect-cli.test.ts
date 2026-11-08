@@ -390,6 +390,19 @@ describe("connect cli", () => {
     expect(mocks.runNodeDaemonInstall).not.toHaveBeenCalled();
   });
 
+  it.each([
+    [new Error("getaddrinfo ENOTFOUND gateway.example"), "getaddrinfo ENOTFOUND gateway.example"],
+    [
+      new TypeError("fetch failed", { cause: new Error("connect ECONNREFUSED 127.0.0.1:443") }),
+      "connect ECONNREFUSED 127.0.0.1:443",
+    ],
+  ])("names why the join lookup could not connect (%s)", async (error, reason) => {
+    mocks.fetchWithSsrFGuard.mockRejectedValueOnce(error);
+    await runConnect([`https://gateway.example/j/${"a".repeat(22)}`]);
+
+    expectFailure(`Could not fetch the Gateway join payload securely: ${reason}`);
+  });
+
   it("refuses plain HTTP join URLs for non-loopback gateways", async () => {
     await runConnect([`http://gateway.example/j/${"a".repeat(22)}`]);
 
