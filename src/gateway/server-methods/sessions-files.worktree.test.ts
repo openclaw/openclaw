@@ -31,15 +31,14 @@ const hooks = vi.hoisted(() => ({
 }));
 
 // Real read preparation; change session state or cache residency across its await.
-vi.mock("../worker-environments/local-workspace-read.js", async (importOriginal) => {
-  const actual =
-    await importOriginal<typeof import("../worker-environments/local-workspace-read.js")>();
+vi.mock("./session-file-read.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./session-file-read.js")>();
   return {
     ...actual,
-    readLocalWorkspacePath: (async (params) => {
+    prepareSessionFileReadPath: (async (params) => {
       await hooks.duringReadPreparation?.();
-      return await actual.readLocalWorkspacePath(params);
-    }) satisfies typeof actual.readLocalWorkspacePath,
+      return await actual.prepareSessionFileReadPath(params);
+    }) satisfies typeof actual.prepareSessionFileReadPath,
   };
 });
 

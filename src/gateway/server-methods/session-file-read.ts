@@ -51,7 +51,7 @@ export async function prepareSessionFileReadPath(
   let runtimeWorkspaceDir: string | undefined = sandbox?.runtimeWorkspaceDir;
   let backingRoot = sandbox?.hostRoot;
   let readRoot: string | undefined;
-  if (params.worktreeId && params.root && !params.historical) {
+  if (sandbox && params.worktreeId && params.root && !params.historical) {
     const { readLocalWorkspacePath } =
       await import("../worker-environments/local-workspace-read.js");
     const backing = await readLocalWorkspacePath({
