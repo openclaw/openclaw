@@ -4,6 +4,7 @@ import type {
   EnvironmentSummary,
   PortalSummary,
   SkillWorkshopChange,
+  SystemAgentChatResult,
   SystemChangeEntry,
   SystemChangesListResult,
 } from "../../packages/gateway-protocol/src/index.ts";
@@ -2197,6 +2198,54 @@ export function createEnginePageScenarios(
         },
       };
       return [visit, revisit, action, leave, browse].concat(noChanges);
+    }
+    if (id === "custodian") {
+      const greetingDefinition: PageDefinition = {
+        ...definition,
+        ready:
+          'openclaw-custodian-page .custodian__messages .chat-group.assistant .chat-text a[href="https://custodian-greeting.example.invalid/ready"]',
+        completion: [{ selector: "openclaw-custodian-page textarea:not(:disabled)", minimum: 1 }],
+      };
+      const greeting: EngineScenario = {
+        ...common,
+        id: "page-custodian-greeting-visit",
+        expected:
+          "First Custodian visit renders its synthetic Markdown greeting and enabled composer after empty history.",
+        prepare: boot,
+        fixtureOverrides: (sandbox, base) => {
+          const fixture = common.fixtureOverrides(sandbox, base);
+          return {
+            ...fixture,
+            methodResponses: {
+              ...fixture.methodResponses,
+              "openclaw.chat.history": { turns: [] },
+              "openclaw.chat": {
+                sessionId: "census-custodian-greeting",
+                reply:
+                  "I am **ready** to help with this Gateway. [Census greeting](https://custodian-greeting.example.invalid/ready).",
+                action: "none",
+              } satisfies SystemAgentChatResult,
+            },
+          };
+        },
+        run: async (page) => {
+          const timing = await measureVisit(page, id, greetingDefinition);
+          await page
+            .locator(".custodian__messages .chat-text strong")
+            .getByText("ready", {
+              exact: true,
+            })
+            .waitFor({ state: "visible" });
+          return {
+            visitStartedAtMs: timing.startedAtMs,
+            visitReadyMs: timing.readyMs,
+            visitReadyAtMs: timing.readyAtMs,
+            contentReadyMs: timing.contentReadyMs,
+            greetingVisible: true,
+          };
+        },
+      };
+      return [visit, greeting, revisit, action, leave].concat(noChanges);
     }
     if (id === "model-providers") {
       const marker = "Refreshed credential";
