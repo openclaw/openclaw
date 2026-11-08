@@ -1,2 +1,2 @@
-# Telegram ingress topic isolation and cron creator-route regression coverage.
-81
+# Telegram topic/creator-route regressions and auto-disable live-authority controls.
+116
