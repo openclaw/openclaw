@@ -30,7 +30,7 @@ export function consumeOpenClawIdNodePairingInWorker(
   return true;
 }
 
-export type OpenClawIdNodePairingInput = {
+type OpenClawIdNodePairingInput = {
   requestId: string;
   peerKey: string;
   authority: OpenClawIdNodePairingProvenance["authority"];

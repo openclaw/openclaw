@@ -31,10 +31,11 @@ import { resolveRuntimeWorkerArgv } from "../infra/runtime-worker-url.js";
 import { createNodeHostGatewayCandidateConnection } from "../node-host/gateway-candidate-connection.js";
 import { runNodeStreamTransport } from "../node-host/node-stream-transport.js";
 import { withNodeWorkerTransferHttpRequest } from "../node-host/node-worker-transfer-http.js";
-import { startNodeTunnelTransport, loadNodeTunnelKey } from "../node-host/openclaw-id-transport.js";
+import { startNodeTunnelTransport } from "../node-host/openclaw-id-transport.js";
 import { createWorkerConnection } from "../worker/worker-connection.js";
 import { startOpenClawIdIngressListener } from "./openclaw-id/ingress-listener.js";
 import { loadIrohBinding } from "./openclaw-id/tunnel-child/addon.js";
+import { loadOrCreateEndpointKey } from "./openclaw-id/tunnel-child/keyfile.js";
 import type { TunnelReadyMessage } from "./openclaw-id/tunnel-ipc.js";
 import {
   setOpenClawIdTunnelPrincipalLookup,
@@ -164,9 +165,8 @@ describe.skipIf(!hasBinding)("native OpenClaw ID node transport", () => {
       gatewayServer: () => upstream,
       log: { warn: () => {} },
     });
-    const peerKey = formatIrohEndpointKey(
-      (await ed25519SignerFromSeed(loadNodeTunnelKey(dir))).publicKey,
-    );
+    const seed = loadOrCreateEndpointKey(path.join(dir, "node-openclaw-id", "endpoint.key")).key;
+    const peerKey = formatIrohEndpointKey((await ed25519SignerFromSeed(seed)).publicKey);
     const principal = { kind: "owner" as const, peerKey };
     // Until the node-principal stack lands, use the existing test resolver; no Gateway auth changes.
     setOpenClawIdTunnelPrincipalResolver(async (key) => (key === peerKey ? principal : undefined));

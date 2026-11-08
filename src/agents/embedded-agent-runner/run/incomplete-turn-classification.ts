@@ -109,7 +109,7 @@ export function hasComposedVisibleAnswerAfterSettledTools(params: {
   });
 }
 
-/** Excludes pre-tool progress and generated failures; structured delivery remains evidence. */
+/** Excludes pre-tool progress, displayed reasoning and generated failures; structured delivery remains evidence. */
 export function countSettledTurnDeliveryPayloads(params: {
   payloads: EmbeddedAgentRunResult["payloads"];
   attempt: IncompleteTurnAttempt;
@@ -145,12 +145,13 @@ export function countSettledTurnDeliveryPayloads(params: {
     }
     const text = typeof payload.text === "string" ? payload.text.trim() : "";
     const hasNonTextDelivery = Object.entries(payload).some(
-      ([key, value]) => key !== "text" && value !== undefined && value !== false,
+      ([key, value]) =>
+        key !== "text" && key !== "isReasoning" && value !== undefined && value !== false,
     );
     return (
       hasNonTextDelivery ||
-      !text ||
-      !params.attempt.assistantTexts.some((candidate) => candidate.trim() === text)
+      (payload.isReasoning !== true &&
+        (!text || !params.attempt.assistantTexts.some((candidate) => candidate.trim() === text)))
     );
   }).length;
 }
