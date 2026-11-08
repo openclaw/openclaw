@@ -41,8 +41,15 @@ import {
   readSubagentRunRow,
 } from "../registry/subagent-registry.store.sqlite.js";
 import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
-import { sameRequesterSettleRunIdentity } from "../registry/subagent-requester-settle-identity.js";
-import { compareSubagentRunGeneration } from "../registry/subagent-run-generation.js";
+import {
+  isFulfilledUnboundRequesterSettleWake,
+  isRequesterCompletionCohortCurrent,
+  sameRequesterSettleRunIdentity,
+} from "../registry/subagent-requester-settle-identity.js";
+import {
+  compareSubagentRunGeneration,
+  latestSubagentRun,
+} from "../registry/subagent-run-generation.js";
 import type {
   BlockSubagentCompletionRequest,
   SubagentCompletionMutation,
@@ -450,16 +457,33 @@ function reconcileRequesterWake(
       throw new Error("Requester wake reconciliation lost its original generation");
     }
     const row = readSubagentRunRow(database, expected.runId);
-    if (
-      loadSubagentRunsForChildSessionFromSqlite(originalCanonical.childSessionKey, database).some(
-        (candidate) =>
-          matchesSubagentChildSessionOwner(
-            candidate,
-            originalCanonical.childSessionKey,
-            resolveSubagentChildAgentId(originalCanonical),
-          ) && compareSubagentRunGeneration(candidate, originalCanonical) > 0,
-      )
-    ) {
+    const siblings = loadSubagentRunsForChildSessionFromSqlite(
+      originalCanonical.childSessionKey,
+      database,
+    ).filter((candidate) =>
+      matchesSubagentChildSessionOwner(
+        candidate,
+        originalCanonical.childSessionKey,
+        resolveSubagentChildAgentId(originalCanonical),
+      ),
+    );
+    // Only this fulfilled original's quiet completion retains task custody after
+    // child reuse. Transitions and outcome settlement still require session custody.
+    const fulfilledOriginal =
+      params.kind === "requesterWake" &&
+      params.operation.kind === "complete" &&
+      params.entries.length === 1 &&
+      committed.entries.length === 1 &&
+      isFulfilledUnboundRequesterSettleWake(originalCanonical);
+    const superseded = fulfilledOriginal
+      ? !isRequesterCompletionCohortCurrent(
+          originalCanonical,
+          (_sessionKey, matches) => latestSubagentRun(siblings, matches) ?? null,
+        )
+      : siblings.some(
+          (candidate) => compareSubagentRunGeneration(candidate, originalCanonical) > 0,
+        );
+    if (superseded) {
       throw new Error("Requester wake reconciliation was superseded");
     }
     if (committed.result.retiredRunIds.includes(expected.runId)) {

@@ -19,7 +19,7 @@ import { isQuietSubagentRestartContinuation } from "../registry/subagent-recover
 import { subagentRuns } from "../registry/subagent-registry-memory.js";
 import {
   matchesSubagentRequesterSession,
-  selectConnectedSettledSubagentWave,
+  selectRequesterWake,
 } from "../registry/subagent-registry-queries.js";
 import {
   getLatestLiveSubagentRunByChildSessionKey,
@@ -29,10 +29,11 @@ import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
 import {
   buildRequesterSettleWakeIdentity,
   hasRequesterCompletionCohort,
+  isRequesterCompletionCohortCurrent,
+  isFulfilledUnboundRequesterSettleWake,
   resolveCurrentRequesterSettleWakeBatch,
 } from "../registry/subagent-requester-settle-identity.js";
 import { isSameSubagentRunOwner } from "../registry/subagent-run-generation.js";
-import { hasSubagentRunEnded } from "../registry/subagent-run-liveness.js";
 import { withRequesterCronAuthority } from "../requester-cron-authority.js";
 import {
   finalizeRequesterFinalAttachment,
@@ -165,37 +166,8 @@ async function maybeWakeRequesterAfterAllChildrenSettledBound(
   const frozenBatchRunIds = currentState.batchRunIds;
   const frozen = Boolean(frozenBatchRunIds?.length);
   const currentRearmGeneration = currentState.rearmGeneration;
-  const hasCurrentWake = (entry: SubagentRunRecord | undefined): entry is SubagentRunRecord =>
-    Boolean(entry?.requesterSettleWake) &&
-    entry?.requesterSettleWake?.rearmGeneration === currentRearmGeneration;
-  const hasSettled = (entry: SubagentRunRecord) =>
-    entry.execution.status !== "running" &&
-    entry.pauseReason !== "sessions_yield" &&
-    hasSubagentRunEnded(entry);
-  let settledBatch: SubagentRunRecord[];
-  if (pauseNotice) {
-    settledBatch = [currentSettledEntry];
-  } else if (frozenBatchRunIds && frozen) {
-    const runsById = new Map(requesterRuns.map((entry) => [entry.runId, entry]));
-    // Retired rows no longer own completion, but every surviving frozen member
-    // must be terminal before this batch can wake its requester.
-    settledBatch = frozenBatchRunIds.map((runId) => runsById.get(runId)).filter(hasCurrentWake);
-    if (!settledBatch.every(hasSettled)) {
-      return false;
-    }
-  } else {
-    // An unfrozen wave cannot absorb a different requester-yield generation.
-    // Its frozen cohort still owns its deadline, retry budget, and visible final.
-    settledBatch = selectConnectedSettledSubagentWave(
-      requesterRuns.filter((entry) => hasCurrentWake(entry) && hasSettled(entry)),
-      currentSettledEntry,
-    );
-  }
-  // Required completions stay with their requester turn; other rows keep its ID for cancellation.
-  if (
-    settledBatch.length === 0 ||
-    settledBatch.some((run) => run.expectsCompletionMessage === true && run.requesterTurnRunId)
-  ) {
+  let settledBatch = selectRequesterWake(requesterRuns, currentSettledEntry, currentState, pause);
+  if (settledBatch.length === 0) {
     return false;
   }
 
@@ -355,6 +327,31 @@ async function maybeWakeRequesterAfterAllChildrenSettledBound(
       // Cancellation already owns the task result; only consume its obsolete wake.
       await completeBatch(settledBatch, selectedState);
       return false;
+    }
+    // A reused child can finish its saved original announcement without owning
+    // the newer task's session. Its fresh, unbound wake has nothing left to send;
+    // consume only that delivered obligation, never a yielded or attempted wave.
+    if (!pauseNotice && !frozen && settledBatch.length === 1) {
+      const fulfilledBatch = resolveCurrentRequesterSettleWakeBatch({
+        observed: settledBatch,
+        currentRuns: readRequesterRuns(),
+        rearmGeneration: currentRearmGeneration,
+        pause: false,
+        requireUnchangedProgress: true,
+      });
+      const fulfilled = fulfilledBatch?.[0];
+      if (
+        fulfilled &&
+        isFulfilledUnboundRequesterSettleWake(fulfilled) &&
+        currentCompletionRows([fulfilled]).length === 0 &&
+        isRequesterCompletionCohortCurrent(fulfilled, getLatestLiveSubagentRunByChildSessionKey)
+      ) {
+        if (params.signal?.aborted || !params.isSourceCurrent() || !acquireBatch()) {
+          return false;
+        }
+        await completeBatch([fulfilled], selectedState);
+        return false;
+      }
     }
     const deferBatch = createRequesterSettleBatchDeferral({
       readDescendants: readRequesterDescendants,

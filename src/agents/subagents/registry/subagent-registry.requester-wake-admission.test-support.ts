@@ -1,4 +1,8 @@
 import { expect, it, vi } from "vitest";
+import {
+  loadExactSessionEntryReadOnly,
+  replaceSessionEntry,
+} from "../../../config/sessions/session-accessor.js";
 import type { GatewayRequestContext } from "../../../gateway/server-methods/types.js";
 import { WorkerTaskError } from "../../../infra/worker-task-pool.js";
 import {
@@ -23,6 +27,8 @@ export function registerRequesterStartupAdmissionTests({
   createGatewayContext,
   flushOwnedWork,
   getRequesterWakeCalls,
+  getAgentCalls,
+  waitForDeliveredCleanup,
   wakeRequester,
 }: {
   requesterSessionKey: string;
@@ -35,8 +41,96 @@ export function registerRequesterStartupAdmissionTests({
   createGatewayContext: () => GatewayRequestContext;
   flushOwnedWork: () => Promise<void>;
   getRequesterWakeCalls: () => GatewayRequest[];
+  getAgentCalls: () => GatewayRequest[];
+  waitForDeliveredCleanup: (runId: string) => Promise<void>;
   wakeRequester: typeof maybeWakeRequesterAfterAllChildrenSettled;
 }) {
+  it("delivers a saved interrupted result once after its child session is reused", async () => {
+    const { sessionStore, sessionStorePath } = getFixture();
+    vi.setSystemTime(100_000);
+    const context = createGatewayContext();
+    await registry.initSubagentRegistry();
+    const childSessionKey = "agent:main:subagent:reused-child";
+    const sessionEntry = await prepareChildSession(childSessionKey, "reused-session");
+    const common = {
+      childSessionKey,
+      childAgentId: "main",
+      childSessionIdentity: {
+        sessionId: sessionEntry.sessionId,
+        lifecycleRevision: sessionEntry.lifecycleRevision,
+      },
+      requesterSessionKey: MAIN_REQUESTER_SESSION_KEY,
+      requesterAgentId: "main",
+      requesterDisplayKey: "main",
+      completionRequesterSessionId: "sess-main",
+      cleanup: "keep" as const,
+    };
+    await registry.addSubagentRunForTests({
+      ...common,
+      runId: "saved-interrupted",
+      generation: 1,
+      createdAt: 1_000,
+      execution: {
+        status: "terminal",
+        endedAt: 2_000,
+        outcome: { status: "error", error: "saved interruption" },
+      },
+      endedReason: "subagent-error",
+      terminalOwner: "interrupted-recovery",
+      expectsCompletionMessage: true,
+      completion: { required: true, capturedAt: 2_000, resultText: "SAVED ORIGINAL RESULT" },
+      delivery: { status: "pending" },
+    });
+    await registry.addSubagentRunForTests({
+      ...common,
+      runId: "reused-successor",
+      generation: 2,
+      createdAt: 3_000,
+      execution: { status: "terminal", endedAt: 4_000, outcome: { status: "ok" } },
+      cleanupCompletedAt: 4_000,
+      expectsCompletionMessage: false,
+      delivery: { status: "not_required" },
+    });
+    const successor = registry.getSubagentRunByRunId("reused-successor");
+    const newerSession = { ...sessionEntry, lifecycleRunId: "reused-successor" };
+    sessionStore[childSessionKey] = newerSession;
+    await replaceSessionEntry(
+      { storePath: sessionStorePath, sessionKey: childSessionKey },
+      newerSession,
+    );
+    await registry.resetSubagentRegistryForTests({ persist: false });
+    await registry.initSubagentRegistry();
+    await registry.activateSubagentRegistry(() => context);
+    await flushOwnedWork();
+    await waitForDeliveredCleanup("saved-interrupted");
+    expect(getAgentCalls()).toHaveLength(1);
+    const deliveredParams = getAgentCalls()[0]?.params;
+    expect(deliveredParams?.message).toBe("Continue the OpenClaw runtime event.");
+    expect(deliveredParams?.internalEvents).toHaveLength(1);
+    expect(deliveredParams?.internalEvents).toEqual([
+      expect.objectContaining({
+        type: "task_completion",
+        source: "subagent",
+        childSessionKey,
+        status: "error",
+        result: "SAVED ORIGINAL RESULT",
+      }),
+    ]);
+    expect(deliveredParams?.inputProvenance).toMatchObject({
+      kind: "inter_session",
+      sourceSessionKey: childSessionKey,
+      sourceTool: "subagent_announce",
+    });
+    expect(registry.getSubagentRunByRunId("reused-successor")).toEqual(successor);
+    expect(
+      loadExactSessionEntryReadOnly({ storePath: sessionStorePath, sessionKey: childSessionKey })
+        ?.entry,
+    ).toEqual(newerSession);
+    await registry.testing.sweepOnceForTests();
+    await flushOwnedWork();
+    expect(getAgentCalls()).toHaveLength(1);
+  });
+
   it.each(["retry", "cancel", "replace"] as const)(
     "preserves a saved wake through worker capacity preparation (%s)",
     async (outcome) => {

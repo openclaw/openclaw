@@ -299,6 +299,30 @@ describe("subagent registry restart recovery", () => {
   });
 
   describe("orphaned session executions", () => {
+    it.each([undefined, "interrupted"] as const)(
+      "recovers an accepted child with no run identities (status=%s)",
+      async (status) => {
+        const entry = run();
+        entry.execution.lifecycleGeneration = getAgentEventLifecycleGeneration();
+        rotateAgentEventLifecycleGeneration();
+        Object.assign(mocks.entries[childSessionKey]!, {
+          status,
+          lifecycleRunId: undefined,
+          lastRunId: undefined,
+          abortedLastRun: false,
+        });
+        const updatedAt = mocks.entries[childSessionKey]!.updatedAt;
+
+        expect(await recover(entry)).toMatchObject({
+          status: "terminal",
+          error: expect.stringContaining("Gateway restart"),
+        });
+        expect(mocks.entries[childSessionKey]).toMatchObject({ abortedLastRun: true, updatedAt });
+        expect(dispatchAgent).not.toHaveBeenCalled();
+        expect(gatewayRuntime.sendRecoveryNotice).not.toHaveBeenCalled();
+      },
+    );
+
     it.each([
       { originalRevision: "original-revision", currentRevision: undefined },
       { originalRevision: "original-revision", currentRevision: "replacement-revision" },
@@ -364,6 +388,8 @@ describe("subagent registry restart recovery", () => {
     it.each([
       "current lifecycle",
       "different run",
+      "different last run",
+      "accepted current lifecycle",
       "completed session",
       "completed session with stale abort marker",
       "legacy completed session",
@@ -371,12 +397,18 @@ describe("subagent registry restart recovery", () => {
     ])("does not invent a restart interruption for a %s", async (scenario) => {
       const entry = run(scenario.startsWith("legacy") ? { childSessionIdentity: undefined } : {});
       entry.execution.lifecycleGeneration = getAgentEventLifecycleGeneration();
-      if (scenario !== "current lifecycle") {
+      if (scenario !== "current lifecycle" && scenario !== "accepted current lifecycle") {
         rotateAgentEventLifecycleGeneration();
       }
       Object.assign(mocks.entries[childSessionKey]!, {
         status: scenario.includes("completed session") ? "done" : undefined,
-        lifecycleRunId: scenario === "different run" ? "newer-run" : entry.runId,
+        lifecycleRunId:
+          scenario === "different last run" || scenario === "accepted current lifecycle"
+            ? undefined
+            : scenario === "different run"
+              ? "newer-run"
+              : entry.runId,
+        lastRunId: scenario === "different last run" ? "newer-run" : undefined,
         abortedLastRun: scenario.endsWith("stale abort marker"),
       });
       expect(await recover(entry)).toEqual({ status: "ignored" });
@@ -402,13 +434,15 @@ describe("subagent registry restart recovery", () => {
     });
 
     it.each([
-      ["run", false],
-      ["admission", false],
-      ["run", true],
-      ["admission", true],
+      ["run", false, false],
+      ["admission", false, false],
+      ["run", true, false],
+      ["admission", true, false],
+      ["run", false, true],
+      ["admission", false, true],
     ] as const)(
-      "does not mark a hard-kill orphan after a fresh %s owns its session (recovered=%s)",
-      async (owner, recovered) => {
+      "does not mark a hard-kill orphan after a fresh %s owns its session (recovered=%s, accepted=%s)",
+      async (owner, recovered, accepted) => {
         const entry = run();
         if (recovered) {
           entry.taskRunId = "original-task-run";
@@ -418,7 +452,8 @@ describe("subagent registry restart recovery", () => {
         rotateAgentEventLifecycleGeneration();
         Object.assign(mocks.entries[childSessionKey]!, {
           status: undefined,
-          lifecycleRunId: recovered ? "steered-source" : entry.runId,
+          lifecycleRunId: accepted ? undefined : recovered ? "steered-source" : entry.runId,
+          lastRunId: undefined,
           abortedLastRun: false,
           subagentRecovery: recovered
             ? { lastRunId: entry.runId, sessionLifecycleRunId: "steered-source" }
@@ -482,7 +517,7 @@ describe("subagent registry restart recovery", () => {
       expect(mocks.applySessionEntryExactReplacements).not.toHaveBeenCalled();
     });
 
-    it.each(["session", "visible turn"])(
+    it.each(["session", "visible turn", "accepted"])(
       "keeps a replacement %s untouched when orphan marking waits for the store",
       async (replacementKind) => {
         const entry = run();
@@ -494,13 +529,22 @@ describe("subagent registry restart recovery", () => {
         rotateAgentEventLifecycleGeneration();
         Object.assign(mocks.entries[childSessionKey]!, {
           status: undefined,
-          lifecycleRunId: replacementKind === "visible turn" ? "steered-source" : entry.runId,
+          lifecycleRunId:
+            replacementKind === "accepted"
+              ? undefined
+              : replacementKind === "visible turn"
+                ? "steered-source"
+                : entry.runId,
+          lastRunId: undefined,
           abortedLastRun: false,
-          subagentRecovery: {
-            lastRunId: entry.runId,
-            sessionLifecycleRunId:
-              replacementKind === "visible turn" ? "steered-source" : entry.runId,
-          },
+          subagentRecovery:
+            replacementKind === "accepted"
+              ? undefined
+              : {
+                  lastRunId: entry.runId,
+                  sessionLifecycleRunId:
+                    replacementKind === "visible turn" ? "steered-source" : entry.runId,
+                },
         });
         const replacementSessionId =
           replacementKind === "session" ? "replacement-session" : "session-id";

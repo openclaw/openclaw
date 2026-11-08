@@ -163,6 +163,30 @@ export function hasRequesterCompletionCohort(entry: SubagentRunRecord): boolean 
   );
 }
 
+/** A delivered original has no new reply obligation in its unbound, unattempted wake. */
+export function isFulfilledUnboundRequesterSettleWake(entry: SubagentRunRecord): boolean {
+  const wake = entry.requesterSettleWake;
+  return (
+    wake !== undefined &&
+    entry.pauseReason !== "sessions_yield" &&
+    !entry.requesterTurnRunId &&
+    !wake.batchRunIds?.length &&
+    !wake.requesterYieldBatch &&
+    !wake.afterRequesterYield &&
+    wake.rearmGeneration === undefined &&
+    wake.status === "pending" &&
+    wake.attemptCount === 0 &&
+    wake.nextAttemptAt === undefined &&
+    entry.expectsCompletionMessage === true &&
+    entry.completion?.required === true &&
+    entry.delivery?.status === "delivered" &&
+    typeof entry.cleanupCompletedAt === "number" &&
+    entry.execution.status === "terminal" &&
+    entry.execution.interruptionReason === "gateway-restart" &&
+    entry.execution.suppressSessionEffects === true
+  );
+}
+
 /**
  * A newer task cannot revoke another task's exact completion custody. A
  * yield-paused run holds no result, only its continuation: a newer execution of

@@ -9,7 +9,7 @@ import {
   resolveControllerSessionKey,
 } from "./subagent-registry-read-topology.js";
 import type { SubagentRunReadRecord } from "./subagent-registry-read.types.js";
-import type { SubagentRunRecord } from "./subagent-registry.types.js";
+import type { RequesterSettleWakeState, SubagentRunRecord } from "./subagent-registry.types.js";
 import {
   isSameSubagentRun,
   latestSubagentRun,
@@ -137,6 +137,46 @@ export function selectConnectedSettledSubagentWave(
     .filter((item) => item.originalIndex !== targetIndex)
     .toSorted((a, b) => a.originalIndex - b.originalIndex);
   return [target, ...component.map((item) => item.entry)];
+}
+
+/** Selects the admitted wake generation without borrowing another yielded cohort. */
+export function selectRequesterWake(
+  requesterRuns: readonly SubagentRunRecord[],
+  settledEntry: SubagentRunRecord,
+  state: RequesterSettleWakeState,
+  pause: boolean,
+): SubagentRunRecord[] {
+  const hasCurrentWake = (entry: SubagentRunRecord | undefined): entry is SubagentRunRecord =>
+    Boolean(entry?.requesterSettleWake) &&
+    entry?.requesterSettleWake?.rearmGeneration === state.rearmGeneration;
+  const hasSettled = (entry: SubagentRunRecord) =>
+    entry.execution.status !== "running" &&
+    entry.pauseReason !== "sessions_yield" &&
+    hasSubagentRunEnded(entry);
+  const frozenBatchRunIds = state.batchRunIds;
+  let settledBatch: SubagentRunRecord[];
+  if (pause) {
+    settledBatch = [settledEntry];
+  } else if (frozenBatchRunIds?.length) {
+    const runsById = new Map(requesterRuns.map((entry) => [entry.runId, entry]));
+    // Retired rows no longer own completion, but every surviving frozen member
+    // must be terminal before this batch can wake its requester.
+    settledBatch = frozenBatchRunIds.map((runId) => runsById.get(runId)).filter(hasCurrentWake);
+    if (!settledBatch.every(hasSettled)) {
+      return [];
+    }
+  } else {
+    // An unfrozen wave cannot absorb a different requester-yield generation.
+    // Its frozen cohort still owns its deadline, retry budget, and visible final.
+    settledBatch = selectConnectedSettledSubagentWave(
+      requesterRuns.filter((entry) => hasCurrentWake(entry) && hasSettled(entry)),
+      settledEntry,
+    );
+  }
+  // Required completions stay with their requester turn; other rows keep its ID for cancellation.
+  return settledBatch.some((run) => run.expectsCompletionMessage === true && run.requesterTurnRunId)
+    ? []
+    : settledBatch;
 }
 
 export function listRunsForControllerFromRuns<T extends SubagentRunReadRecord>(

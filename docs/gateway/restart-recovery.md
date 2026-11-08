@@ -970,6 +970,13 @@ Subagent runs are persisted in the shared SQLite state database, so the
 subagent registry survives the process. On boot, interrupted child runs settle
 through their normal completion path as soon as startup restores requester ownership,
 without waiting for the periodic registry sweep. The sweep remains a retry backstop.
+A child accepted just before the crash may have no lifecycle run recorded yet. If
+its session still belongs to that retired launch and has no different last-run
+owner, startup marks it interrupted through the same ownership checks. Children
+without an executable retained turn settle promptly and notify their requester
+through normal completion delivery rather than waiting for lost-run cleanup
+backoff. A session that records a different run owner is not adopted as the
+interrupted child.
 The crash-loop breaker pauses this settlement too; the same sweep retries when
 the breaker's recovery window ends.
 Startup restores completed runs directly from the registry. Any retained delivery

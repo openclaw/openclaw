@@ -1,9 +1,11 @@
 import { expect, it } from "vitest";
+import { observeHostDataSql } from "../../../../test/helpers/sqlite-statement-execution-counter.js";
 import {
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabase,
 } from "../../../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
+import { subagentRuns } from "../registry/subagent-registry-memory.js";
 import { loadSubagentRegistryFromSqlite } from "../registry/subagent-registry-state.fixture.test-support.js";
 import { mutateRequesterCompletionBatch } from "./subagent-completion-admission.store.js";
 import {
@@ -12,6 +14,7 @@ import {
   records,
 } from "./subagent-completion-admission.test-helpers.js";
 import { mutateSubagentCompletionInDatabase } from "./subagent-completion-mutation.kernel.js";
+import type { RequesterWakeCommittedWrite } from "./subagent-completion-mutation.types.js";
 
 export function registerRequesterWakeOwnershipTests({
   database: getDatabase,
@@ -20,6 +23,65 @@ export function registerRequesterWakeOwnershipTests({
   database: () => OpenClawStateDatabase;
   persistOwner: (input: ReturnType<typeof records>) => unknown;
 }) {
+  it("reconciles an acknowledged retirement without even a no-op data write", async () => {
+    const database = getDatabase();
+    const input = armRequesterWake(records());
+    input.subagent.expectsCompletionMessage = false;
+    input.subagent.delivery = { status: "not_required" };
+    input.subagent.requesterSettleWake!.retireAfterSettle = true;
+    persistOwner(input);
+    let committed: RequesterWakeCommittedWrite | undefined;
+    await expect(
+      mutateRequesterCompletionBatch({
+        entries: [input.subagent],
+        operation: { kind: "complete" },
+        context: captureOpenClawStateWorkerContext(),
+        assertCurrent() {
+          if (subagentRuns.get(input.subagent.runId) !== input.subagent) {
+            throw new Error("Retirement lost its exact registered owner");
+          }
+        },
+        onCommitted: (receipt) => {
+          committed = receipt;
+        },
+        onPublished: () => {},
+      }),
+    ).resolves.toEqual({ applied: true, publication: "published" });
+    if (!committed) {
+      throw new Error("Retirement did not return its native receipt");
+    }
+    const receipt = committed;
+    expect(loadSubagentRegistryFromSqlite().has(input.subagent.runId)).toBe(false);
+    runOpenClawStateWriteTransaction(
+      () => {
+        const sql = observeHostDataSql();
+        try {
+          const result = mutateSubagentCompletionInDatabase(database, {
+            kind: "requesterWake",
+            entries: receipt.entries,
+            operation: { kind: "complete" },
+            committed: receipt,
+          });
+          expect(result).toMatchObject({ applied: true, retiredRunIds: [input.subagent.runId] });
+          const isSelectedRead = (query: string) =>
+            /^\s*select\b/i.test(query) && query.includes("subagent_runs");
+          const selectedPreparations = sql.calls[0]!.mock.calls.filter(
+            ([query]) => typeof query === "string" && isSelectedRead(query),
+          ).length;
+          // Count actual executions beyond prepares of these same SELECTs, including cached reads.
+          expect(sql.queries.filter(isSelectedRead).length).toBeGreaterThan(selectedPreparations);
+          expect(
+            sql.queries.filter((query) => /^\s*(?:insert|update|delete)\b/i.test(query)),
+          ).toEqual([]);
+        } finally {
+          sql.restore();
+        }
+      },
+      { database, path: database.path },
+    );
+    expect(loadSubagentRegistryFromSqlite().has(input.subagent.runId)).toBe(false);
+  });
+
   it.each(["owner", "incarnation"] as const)(
     "reconciles aged cancellation only with known child ownership (missing: %s)",
     (missing) => {
