@@ -164,6 +164,9 @@ async function prepareSimpleCompletionModelCore(
   context: PreparedSimpleCompletionResolverContext,
   assertCurrent?: () => void,
 ): Promise<PreparedStreamCompletionModel> {
+  const assertAgentAdmitted = params.agentId
+    ? captureAgentDatabaseAdmission(params.agentId, { access: "read" })
+    : undefined;
   const blocked = resolveSimpleCompletionWorkerBlock(params, context.preparedModelRuntime);
   if (blocked) {
     return blocked;
@@ -410,10 +413,26 @@ async function prepareSimpleCompletionModelCore(
     resolvedModel = applyPreparedRuntimeAuthToModel(resolvedModel, preparedAuth);
   }
 
-  const resolvedAuth: ResolvedProviderAuth = {
+  let resolvedAuth: ResolvedProviderAuth = {
     ...auth,
     apiKey: authValue,
   };
+  if (assertAgentAdmitted) {
+    const assertCredentialCurrent = getProviderAuthAuthority(auth);
+    const assertRuntimeCredentialCurrent = getProviderAuthAuthority(resolvedModel);
+    // Request-scoped copies retain live agent admission through every transport projection.
+    resolvedAuth = attachProviderAuthAuthority(resolvedAuth, () => {
+      assertAgentAdmitted();
+      assertCredentialCurrent?.();
+      if (assertRuntimeCredentialCurrent !== assertCredentialCurrent) {
+        assertRuntimeCredentialCurrent?.();
+      }
+    });
+    resolvedModel = attachProviderAuthAuthority(
+      resolvedModel,
+      getProviderAuthAuthority(resolvedAuth),
+    );
+  }
   const profileCredential = params.profileId ? authStore?.profiles[params.profileId] : undefined;
   const sourceAuthFingerprint = params.bindAuthOwner
     ? profileCredential?.type === "oauth" && params.profileId
@@ -531,7 +550,6 @@ async function acquireCommittedSimpleCompletionModel(
     return blocked;
   }
   const agentId = params.agentId ?? resolveDefaultAgentId(params.cfg);
-  const assertAgentAdmitted = captureAgentDatabaseAdmission(agentId, { access: "read" });
   const agentDir = params.agentDir?.trim() || resolveAgentDir(params.cfg, agentId);
   const tentativeRequest = resolveRequest();
   if (!tentativeRequest) {
@@ -631,7 +649,6 @@ async function acquireCommittedSimpleCompletionModel(
           if (callerReleased) {
             throw new Error("Prepared completion model has been released");
           }
-          assertAgentAdmitted();
         },
       });
     const context = createPreparedSimpleCompletionResolverContext({
@@ -641,6 +658,7 @@ async function acquireCommittedSimpleCompletionModel(
     });
     const preparationParams: PrepareSimpleCompletionModelParams = {
       ...params,
+      agentId,
       transport: "simple-completion",
       provider: selection.provider,
       modelId: selection.modelId,

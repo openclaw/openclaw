@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, expect, it, vi } from "vitest";
 import { withinTest } from "../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
@@ -33,6 +34,7 @@ installGatewayTestHooks();
 afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
+  vi.unstubAllGlobals();
 });
 
 function expectPreparedModel(agentId: string) {
@@ -55,7 +57,10 @@ it.for([
       ownership: "explicit",
       entries: { main: {}, carlos: {}, hal: {} },
     };
-    testState.agentConfig = { systemAgent: { agentId: "main" } };
+    testState.agentConfig = {
+      systemAgent: { agentId: "main" },
+      pdfModel: "anthropic/claude-opus-4-6",
+    };
     vi.stubEnv("OPENCLAW_TEST_FLEET_SECRET", "synthetic-shared-fleet-secret");
     fs.mkdirSync(testConfigRoot.value, { recursive: true });
     fs.writeFileSync(
@@ -65,7 +70,7 @@ it.for([
           providers: {
             anthropic: {
               api: "anthropic-messages",
-              baseUrl: "https://provider.synthetic.invalid",
+              baseUrl: "http://127.0.0.1:43991/v1",
               models: [
                 modelDefinition("claude-opus-4-6", {
                   api: "anthropic-messages",
@@ -128,6 +133,11 @@ it.for([
       if (effects) {
         expect(effects.first.auth.source).toBe("profile:anthropic:fleet");
         await expect(effects.first.complete()).resolves.toMatchObject({ stopReason: "stop" });
+        await expect(effects.first.directComplete()).resolves.toMatchObject({ stopReason: "stop" });
+        await expect(effects.first.isolated()).resolves.toMatchObject({
+          assistant: { stopReason: "stop" },
+        });
+        await expect(effects.first.nativePdf()).resolves.toBe("Stubbed PDF completed");
         effects.arm();
         await effects.first.session.reloadPersistedTranscriptAsync();
         expect(effects.sql()).toContain(`${firstAgent}:read`);
@@ -163,11 +173,16 @@ it.for([
         expect(activateSecretsRuntimeSnapshotIfCurrent(staleSecrets!, secretsRevision)).toBe(false);
         expect(getPreparedModelRuntimeSnapshot(siblingInput)).toBe(siblingModel);
         const refusal = readAgentDatabaseAdmissionRefusal(firstAgent, { env });
+        const refusalReason = expectDefined(refusal?.reason, "failed admission reason");
         const refused = { name: "AgentDatabaseAdmissionError", refusal };
         effects!.arm();
         const hostSql = observeHostDataSql();
         try {
           await expect.soft(effects!.first.complete()).rejects.toMatchObject(refused);
+          await expect.soft(effects!.first.directComplete()).rejects.toMatchObject(refused);
+          await expect.soft(effects!.first.isolated()).rejects.toMatchObject(refused);
+          await expect.soft(effects!.first.nativePdf()).rejects.toMatchObject(refused);
+          await expect.soft(effects!.first.pdfTool()).rejects.toThrow(refusalReason);
           await expect
             .soft(effects!.first.session.reloadPersistedTranscriptAsync())
             .rejects.toMatchObject(refused);
@@ -189,6 +204,16 @@ it.for([
         await expect(effects!.sibling.complete()).resolves.toMatchObject({
           content: [{ type: "text", text: "Stubbed provider completed" }],
         });
+        await expect(effects!.sibling.directComplete()).resolves.toMatchObject({
+          stopReason: "stop",
+        });
+        await expect(effects!.sibling.isolated()).resolves.toMatchObject({
+          assistant: { stopReason: "stop" },
+        });
+        await expect(effects!.sibling.nativePdf()).resolves.toBe("Stubbed PDF completed");
+        await expect(effects!.sibling.pdfTool()).resolves.toMatchObject({
+          details: { native: false },
+        });
         await expect(
           effects!.sibling.session.appendMessageAsync({
             role: "user",
@@ -201,7 +226,7 @@ it.for([
           expect.objectContaining({ role: "user", content: "Healthy sibling write" }),
         );
         expect(effects!.providerCalls.slice(providerCallsBeforeRefusal)).toEqual([
-          siblingInput.agentId,
+          ...Array<string>(5).fill(expectDefined(siblingInput.agentId, "prepared sibling agent")),
         ]);
         expect(effects!.sql()).toContain(`${siblingInput.agentId}:write`);
         expect(effects!.sql().some((operation) => operation.startsWith(`${firstAgent}:`))).toBe(
