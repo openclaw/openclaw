@@ -268,12 +268,48 @@ describe("memory-core plugin runtime registration", () => {
     vi.clearAllMocks();
   });
 
-  it("accepts snake_case search arguments through the registered lazy tool", () => {
+  it.each([
+    { min_score: 0.3, max_results: 3 },
+    { minScore: 0.3, maxResults: 3 },
+    { minScore: 0.3, limit: 3 },
+    { minScore: 0.3, maxResults: 3, limit: 10 },
+    { minScore: 0.3, max_results: 3, limit: 10 },
+    { limit: 10, max_results: 5, maxResults: 3, min_score: 0.8, minScore: 0.3 },
+  ])("normalizes search aliases through the registered lazy tool: %j", (aliases) => {
     const { search } = captureMemoryModelContract({});
-    const args = { query: "X", min_score: 0.3, max_results: 3 };
+    const args = { query: "X", ...aliases };
     const prepared = search.prepareArguments?.(args) ?? args;
     expect(Value.Check(search.parameters, prepared)).toBe(true);
     expect(prepared).toEqual({ query: "X", minScore: 0.3, maxResults: 3 });
+  });
+
+  it.each([0, -1, 1.5, "3", null])(
+    "rejects an invalid winning result cap through the registered lazy tool: %j",
+    (value) => {
+      const { search } = captureMemoryModelContract({});
+      for (const caps of [
+        { limit: value },
+        { maxResults: value },
+        { maxResults: value, max_results: 3, limit: 10 },
+        { max_results: value, limit: 10 },
+      ]) {
+        const args = { query: "X", ...caps };
+        const prepared = search.prepareArguments?.(args) ?? args;
+        expect(prepared).toEqual({ query: "X", maxResults: value });
+        expect(Value.Check(search.parameters, prepared)).toBe(false);
+      }
+    },
+  );
+
+  it("preserves defaults and score validation through the registered lazy tool", () => {
+    const { search } = captureMemoryModelContract({});
+    const args = { query: "X" };
+    expect(search.prepareArguments?.(args)).toBe(args);
+    expect(Value.Check(search.parameters, args)).toBe(true);
+    for (const scores of [{ min_score: "0.3" }, { minScore: null, min_score: 0.3 }]) {
+      const prepared = search.prepareArguments?.({ query: "X", ...scores });
+      expect(Value.Check(search.parameters, prepared)).toBe(false);
+    }
   });
 
   it("does not resolve prompt config when no memory tools are exposed", () => {
