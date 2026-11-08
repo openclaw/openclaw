@@ -91,12 +91,52 @@ function commitReceipt(value: unknown): DevicePairingCommitReceipt {
       updatedAtMs: environment.updatedAtMs,
     };
   }
+  let nodeApproval: DevicePairingCommitReceipt["nodeApproval"];
+  if (value.nodeApproval !== undefined) {
+    const approved = value.nodeApproval;
+    if (
+      !isRecord(approved) ||
+      typeof approved.nodeId !== "string" ||
+      typeof approved.pairingIdentity !== "string" ||
+      (approved.previousPairingGeneration !== undefined &&
+        typeof approved.previousPairingGeneration !== "string") ||
+      typeof approved.nextPairingGeneration !== "string" ||
+      !isRecord(approved.surface) ||
+      !Array.isArray(approved.surface.caps) ||
+      !approved.surface.caps.every((cap) => typeof cap === "string") ||
+      !Array.isArray(approved.surface.commands) ||
+      !approved.surface.commands.every((command) => typeof command === "string")
+    ) {
+      throw new Error("Invalid node approval receipt");
+    }
+    let permissions: Record<string, boolean> | undefined;
+    if (approved.surface.permissions !== undefined) {
+      if (!isRecord(approved.surface.permissions)) {
+        throw new Error("Invalid node approval permissions receipt");
+      }
+      permissions = {};
+      for (const [key, allowed] of Object.entries(approved.surface.permissions)) {
+        if (typeof allowed !== "boolean") {
+          throw new Error("Invalid node approval permissions receipt");
+        }
+        permissions[key] = allowed;
+      }
+    }
+    nodeApproval = {
+      nodeId: approved.nodeId,
+      pairingIdentity: approved.pairingIdentity,
+      previousPairingGeneration: approved.previousPairingGeneration,
+      nextPairingGeneration: approved.nextPairingGeneration,
+      surface: { caps: approved.surface.caps, commands: approved.surface.commands, permissions },
+    };
+  }
   return {
     kind: "devicePairing",
     beforeRevision: value.beforeRevision,
     revision: value.revision,
     ...(tokensReplaced ? { tokensReplaced } : {}),
     ...(workerEnvironment ? { workerEnvironment } : {}),
+    ...(nodeApproval ? { nodeApproval } : {}),
     changed: value.changed.map((entry) => ({
       deviceId: entry.deviceId,
       binding:
@@ -119,6 +159,7 @@ export function executeDevicePairingMutation<Key extends keyof DevicePairingWork
     assertCurrent?: () => void;
     admit?: (facts: DevicePairingAdmissionFacts) => void;
     onTokensReplaced?: (deviceId: string, roles: readonly string[]) => void;
+    onNodeApproved?: (approval: NonNullable<DevicePairingCommitReceipt["nodeApproval"]>) => void;
   } = {},
 ): Promise<DevicePairingWorkerOperations[Key]["output"]> {
   const context = captureOpenClawStateWorkerContext(
@@ -146,10 +187,13 @@ export function executeDevicePairingMutation<Key extends keyof DevicePairingWork
             updatedAtMs: environment.updatedAtMs,
           });
         }
-        mutation.publish(receipt);
-        invalidatePairedCardRendererCache();
         // A callback can throw or read publication recursively; the commit is already installed.
         published = true;
+        mutation.publish(receipt);
+        if (receipt.nodeApproval) {
+          options.onNodeApproved?.(receipt.nodeApproval);
+        }
+        invalidatePairedCardRendererCache();
         if (environmentPublished) {
           sessionChanges.emit({ all: true, scope: "worker-environments" });
         }

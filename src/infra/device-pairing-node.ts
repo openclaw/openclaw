@@ -21,6 +21,7 @@ import {
   type RecordPairedNodeConnectionResult,
   type RequestNodePairingResult,
 } from "./device-pairing-node.records.js";
+import type { DevicePairingCommitReceipt } from "./device-pairing-read.types.js";
 import {
   DevicePairingAuthorityRefusedError,
   executeDevicePairingMutation,
@@ -215,7 +216,10 @@ export async function reusePendingNodePairingForReconnect(
 
 export async function approveNodePairing(
   requestId: string,
-  options: { callerScopes?: readonly string[] },
+  options: {
+    callerScopes?: readonly string[];
+    onApproved?: (approval: NonNullable<DevicePairingCommitReceipt["nodeApproval"]>) => void;
+  },
   baseDir?: string,
 ): Promise<ApproveNodePairingResult> {
   try {
@@ -226,6 +230,7 @@ export async function approveNodePairing(
       },
       {
         baseDir,
+        onNodeApproved: options.onApproved,
         admit: (facts) => {
           if (
             !isRecord(facts) ||

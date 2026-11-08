@@ -19,6 +19,7 @@ import type {
   DevicePairingNodeMutation,
   DevicePairingNodeWorkerOperations,
 } from "./device-pairing-node.worker-contract.js";
+import type { DevicePairingCommitReceipt } from "./device-pairing-read.types.js";
 import {
   persistDevicePairingStoreState,
   readDevicePairingStoreStateFromDatabase,
@@ -46,6 +47,7 @@ function mutatePairedDevices<T>(
 export function executeDevicePairingNodeMutation(
   command: DevicePairingNodeMutation,
   database: OpenClawStateDatabase,
+  recordNodeApproval: (facts: NonNullable<DevicePairingCommitReceipt["nodeApproval"]>) => void,
 ): NodeMutationResult {
   switch (command.type) {
     case "node.request": {
@@ -160,6 +162,19 @@ export function executeDevicePairingNodeMutation(
           }
           clearNodePairingGenerationState(device, previousPairingGeneration);
           const node = toPairedNode(device);
+          if (node) {
+            recordNodeApproval({
+              nodeId: node.nodeId,
+              pairingIdentity: nextPairingState.identity.key,
+              previousPairingGeneration: previousPairingGeneration?.key,
+              nextPairingGeneration,
+              surface: {
+                caps: node.caps ?? [],
+                commands: node.commands ?? [],
+                permissions: node.permissions,
+              },
+            });
+          }
           return node
             ? {
                 value: {
