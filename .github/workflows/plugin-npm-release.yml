@@ -145,6 +145,8 @@ env:
   PREPARED_NPM_SELECTION_MODE: ${{ inputs.publish_scope }}
   PREPARED_NPM_PLUGINS: ${{ inputs.plugins }}
   PREPARED_NPM_DIST_TAG: ${{ inputs.npm_dist_tag }}
+  PREPARED_NPM_PARENT_RUN_ID: ${{ inputs.release_publish_run_id }}
+  PREPARED_NPM_PARENT_RUN_ATTEMPT: ${{ inputs.release_publish_run_attempt }}
 
 jobs:
   preview_plugins_npm:
@@ -160,6 +162,9 @@ jobs:
       contents: read
     outputs:
       ref_revision: ${{ steps.ref.outputs.sha }}
+      evidence_id: ${{ steps.evidence_upload.outputs.artifact-id }}
+      evidence_digest: ${{ steps.evidence_upload.outputs.artifact-digest }}
+      evidence_attempt: ${{ steps.prepared_plan.outputs.evidence_attempt }}
       has_candidates: ${{ steps.prepared_plan.outputs.has_candidates || steps.plan.outputs.has_candidates }}
       candidate_count: ${{ steps.prepared_plan.outputs.candidate_count || steps.plan.outputs.candidate_count }}
       has_selection: ${{ steps.prepared_plan.outputs.has_selection || steps.plan.outputs.has_selection }}
@@ -262,6 +267,10 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p .local
+          EVIDENCE_ARGS=()
+          if [[ -n "$PREPARED_NPM_FRV_RUN_ID" && -n "$PREPARED_NPM_PARENT_RUN_ID" ]]; then
+            EVIDENCE_ARGS=(--evidence-output "$RUNNER_TEMP/plugin-npm-evidence.json")
+          fi
           node .release-tooling/scripts/plugin-npm-prepared-release.mjs load \
             --artifact "$PREPARED_ARTIFACT" \
             --source-sha "$SOURCE_SHA" \
@@ -270,8 +279,20 @@ jobs:
             --npm-dist-tag "$NPM_DIST_TAG" \
             --policy-file .release-tooling/.github/workflows/plugin-npm-release.yml \
             --archive-path "$RUNNER_TEMP/plugin-npm-prepared.zip" \
+            "${EVIDENCE_ARGS[@]}" \
             --output .local/plugin-npm-prepared.json \
             --github-output "$GITHUB_OUTPUT"
+          echo "evidence_attempt=$GITHUB_RUN_ATTEMPT" >> "$GITHUB_OUTPUT"
+
+      - name: Upload immutable publication evidence
+        id: evidence_upload
+        if: inputs.prepared_artifact != '' && inputs.full_release_validation_run_id != '' && inputs.release_publish_run_id != ''
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: plugin-npm-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/plugin-npm-evidence.json
+          if-no-files-found: error
+          retention-days: 7
 
       - name: Setup Node environment
         if: inputs.prepared_artifact == ''
@@ -1429,6 +1450,9 @@ jobs:
       attestations: read
       contents: read
       id-token: write
+    env:
+      PREPARED_NPM_EVIDENCE_ID: ${{ needs.preview_plugins_npm.outputs.evidence_attempt == github.run_attempt && needs.preview_plugins_npm.outputs.evidence_id || '' }}
+      PREPARED_NPM_EVIDENCE_DIGEST: ${{ needs.preview_plugins_npm.outputs.evidence_attempt == github.run_attempt && needs.preview_plugins_npm.outputs.evidence_digest || '' }}
     strategy:
       fail-fast: false
       matrix:
@@ -1791,6 +1815,9 @@ jobs:
           publish_log="$(mktemp "${RUNNER_TEMP}/plugin-npm-publish.XXXXXX")"
           trap 'rm -f "$npmrc" "$publish_log"' EXIT
           # Publish the attested bytes; rebuilding here loses the candidate's patched install.
+          if [[ -n "$PREPARED_NPM_ARTIFACT" ]]; then
+            node scripts/plugin-npm-prepared-release.mjs authorize --source-sha "$RELEASE_TARGET_SHA"
+          fi
           node scripts/release-tooling-identity.mjs verify \
             --repository "$OPENCLAW_RELEASE_TOOLING_REPOSITORY" \
             --workflow-ref "$OPENCLAW_RELEASE_TOOLING_REF" \
@@ -1812,9 +1839,6 @@ jobs:
               --workflow-sha "$RELEASE_TARGET_SHA" \
               --allow-prevalidated-ref
             node scripts/openclaw-npm-extended-stable-release.mjs validate-active-line
-          fi
-          if [[ -n "$PREPARED_NPM_ARTIFACT" ]]; then
-            node scripts/plugin-npm-prepared-release.mjs authorize --source-sha "$RELEASE_TARGET_SHA"
           fi
           set +e
           NPM_CONFIG_USERCONFIG="$npmrc" \
@@ -1988,6 +2012,9 @@ jobs:
           unset NODE_AUTH_TOKEN NPM_TOKEN NODE_OPTIONS
           # A timeout can race a committed publish. On rerun, the preceding check
           # accepts only this tarball's exact integrity and shasum before skipping.
+          if [[ -n "$PREPARED_NPM_ARTIFACT" ]]; then
+            node scripts/plugin-npm-prepared-release.mjs authorize --source-sha "$PREPARED_NPM_SOURCE_SHA"
+          fi
           node scripts/release-tooling-identity.mjs verify \
             --repository "$GITHUB_REPOSITORY" \
             --workflow-ref "$WORKFLOW_REF" \
@@ -1998,9 +2025,6 @@ jobs:
             --release-publish-ref "$RELEASE_PUBLISH_REF" \
             --release-publish-full-ref "$RELEASE_PUBLISH_FULL_REF" \
             --release-publish-parent-state-policy "$RELEASE_PUBLISH_PARENT_STATE_POLICY"
-          if [[ -n "$PREPARED_NPM_ARTIFACT" ]]; then
-            node scripts/plugin-npm-prepared-release.mjs authorize --source-sha "$PREPARED_NPM_SOURCE_SHA"
-          fi
           HOME="$publish_home" \
             NPM_CONFIG_GLOBALCONFIG=/dev/null \
             NPM_CONFIG_IGNORE_SCRIPTS=true \

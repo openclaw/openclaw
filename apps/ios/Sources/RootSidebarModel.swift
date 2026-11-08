@@ -25,6 +25,22 @@ struct ChatSessionRosterSnapshot: Sendable {
         self.isComplete = isComplete
     }
 
+    /// User-facing notice for a partial roster (a later page failed or a scan bound was hit),
+    /// letting consumers keep the retained rows visible while offering a refresh path.
+    /// `nil` when the snapshot is complete or served from cache.
+    var incompleteLoadMessage: String? {
+        guard !self.isComplete, !self.isCached else { return nil }
+        if let totalCount = self.totalCount {
+            // Localization: arguments (20, 100) mean 20 displayed out of 100 total, with 80 still to load.
+            // Keep the displayed count first; rephrase the sentence instead of reversing argument roles.
+            return String(
+                format: String(localized: "Showing %lld sessions; %lld total. Refresh to load the rest."),
+                self.sessions.count,
+                totalCount)
+        }
+        return String(localized: "Some sessions could not be loaded. Refresh to try again.")
+    }
+
     @MainActor
     static func collect(
         fetchPage: @MainActor (Int) async throws -> OpenClawChatSessionsListResponse) async throws -> Self
@@ -571,20 +587,7 @@ final class RootSidebarModel {
                 activeAgentId: activeAgentID)?.first ?? held
         }
         self.isSessionRosterComplete = roster.isComplete
-        guard !roster.isComplete, !roster.isCached else {
-            self.sessionErrorText = nil
-            return
-        }
-        if let totalCount = roster.totalCount {
-            // Localization: arguments (20, 100) mean 20 displayed out of 100 total, with 80 still to load.
-            // Keep the displayed count first; rephrase the sentence instead of reversing argument roles.
-            self.sessionErrorText = String(
-                format: String(localized: "Showing %lld sessions; %lld total. Refresh to load the rest."),
-                roster.sessions.count,
-                totalCount)
-        } else {
-            self.sessionErrorText = String(localized: "Some sessions could not be loaded. Refresh to try again.")
-        }
+        self.sessionErrorText = roster.incompleteLoadMessage
     }
 
     private func loadRoster(

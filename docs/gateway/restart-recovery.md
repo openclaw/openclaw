@@ -14,6 +14,12 @@ ordinary system input asking the agent to inspect current state and continue.
 The transcript remains the agent's context; the Gateway does not reconstruct or
 replay the old execution.
 
+During graceful shutdown, interrupted embedded runs have a short abort-settle
+budget (normally two seconds) to deliver their terminal partial reply before their
+writers close. Already accepted transcript writes still drain. A provider that
+ignores cancellation stops blocking the stream consumer after this grace, but
+unsettled underlying work remains retained until it actually closes.
+
 The recovery input stays intact in the agent transcript but is hidden from the
 Control UI chat feed, including queued, live, and reloaded history. The continued
 answer remains visible as its own turn. This is not the separate update outcome
@@ -214,8 +220,11 @@ missing previews.
 After marker persistence and cancellation, process-owned shutdown logs a warning
 when required connection cleanup exceeds five seconds, then keeps joining its
 accepted finalizers before releasing the Gateway lock and state admission. The
-existing process shutdown deadline still bounds this join. Embedded hosts also
-join those resources before reusing the runtime.
+existing process shutdown deadline still bounds this join. Session admissions and
+cron finalizers that settle after their grace warning still proceed through database
+retirement; the warning does not permanently abandon the close operation. Resume
+markers do not replace pending transcript or cron outcome writes. Embedded hosts
+also join those resources before reusing the runtime.
 
 A plain stop (`SIGTERM` or `SIGINT`) arriving during an in-process restart makes
 the Gateway finish its bounded shutdown and exit instead of starting again.

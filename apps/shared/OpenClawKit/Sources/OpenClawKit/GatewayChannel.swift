@@ -658,10 +658,14 @@ public actor GatewayChannelActor {
                 explicitGatewayToken: self.token?.trimmedNonEmpty,
                 storedToken: selectedAuth.storedToken,
                 attemptedDeviceTokenRetry: selectedAuth.authDeviceToken != nil)
+            // A rejected Share token marks a revoked or removed companion. Keeping it prevents
+            // the paired app from automatically enrolling Share again.
+            let clearsRejectedToken = options.deviceIdentityProfile != .shareExtension
             if shouldRetryWithDeviceToken {
                 self.pendingDeviceTokenRetry = true
                 self.deviceTokenRetryBudgetUsed = true
-            } else if selectedAuth.authDeviceToken != nil,
+            } else if clearsRejectedToken,
+                      selectedAuth.authDeviceToken != nil,
                       let identity,
                       (error as? GatewayConnectAuthError)?.detail == .authDeviceTokenMismatch
             {
@@ -672,7 +676,8 @@ public actor GatewayChannelActor {
                     gatewayID: options.deviceAuthGatewayID,
                     profile: options.deviceIdentityProfile,
                     observedToken: selectedAuth.authDeviceToken)
-            } else if let identity,
+            } else if clearsRejectedToken,
+                      let identity,
                       let rejectedToken = Self.rejectedStoredDeviceTokenOnlyAuth(
                           selectedAuth: selectedAuth,
                           explicitGatewayToken: self.token?.trimmedNonEmpty,

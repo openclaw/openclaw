@@ -298,7 +298,10 @@ export async function proveSharedSandboxCheckpoints(
         ...store,
         manifest: async (row, action) => {
           const result = await store.manifest(row, action);
-          if (action.kind === "scan" && action.target === "canonical") {
+          if (
+            (action.kind === "scan" || (action.kind === "probe" && result.kind === "scan")) &&
+            action.target === "canonical"
+          ) {
             scans++;
             await afterScan?.();
           }
