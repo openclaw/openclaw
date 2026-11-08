@@ -25,6 +25,8 @@ import {
   readActiveTranscriptEntryAnchor,
   replaceSessionEntry,
 } from "../config/sessions/session-accessor.js";
+import { stageSessionPendingInput } from "../config/sessions/session-accessor.pending-inputs.js";
+import * as pendingInputSource from "../config/sessions/session-pending-input-source.js";
 import { runWithSessionTranscriptReadFence } from "../config/sessions/session-transcript-read-fence.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import { registerChatAbortController } from "../gateway/chat-abort.js";
@@ -381,6 +383,92 @@ describe("host-owned harness completion recovery", () => {
           recoveryBlocked: true,
           error: "completion requester locator is missing or replaced",
         });
+      });
+    },
+  );
+
+  it.each([
+    "interrupted",
+    "cancelled",
+    "committed",
+    "owned",
+    "settled-during-read",
+    "read-failed",
+  ] as const)(
+    "only permits a completion successor with decisive interrupted evidence: %s",
+    async (kind) => {
+      await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+        const { entry, target, request } = await admit(state);
+        await replaceSessionEntry(target, {
+          ...entry,
+          restartRecoveryHarnessCompletion: undefined,
+          restartRecoveryDeliverySourceRunId: undefined,
+          restartRecoveryDeliveryRunId: undefined,
+        });
+        const scope = { ...target, sessionId: entry.sessionId };
+        const receipt = await stageSessionPendingInput(scope, {
+          runId: announceId,
+          message: {
+            role: "user",
+            content: "Synthetic completion",
+            timestamp: 1,
+            idempotencyKey: `${announceId}:user`,
+          },
+          assertCurrent() {},
+        });
+        if (!receipt) {
+          throw new Error("Expected completion input");
+        }
+        let restoreRead = () => {};
+        try {
+          if (kind === "committed") {
+            if (!receipt.runAsync) {
+              throw new Error("Expected pending input persistence context");
+            }
+            await receipt.runAsync(() =>
+              appendTranscriptMessage(scope, { message: receipt.message }),
+            );
+          }
+          if (kind !== "owned" && kind !== "settled-during-read") {
+            receipt.finish(kind === "cancelled" ? "cancelled" : "interrupted");
+            await receipt.settled?.();
+          }
+          if (kind === "settled-during-read" || kind === "read-failed") {
+            const readSource = pendingInputSource.readPendingInputSource;
+            const read = vi
+              .spyOn(pendingInputSource, "readPendingInputSource")
+              .mockImplementation(async (...args) => {
+                if (args[3]) {
+                  if (kind === "read-failed") {
+                    throw new Error("Synthetic source read failure");
+                  }
+                  const snapshot = await readSource(...args);
+                  receipt.finish("interrupted");
+                  await receipt.settled?.();
+                  return snapshot;
+                }
+                return readSource(...args);
+              });
+            restoreRead = () => read.mockRestore();
+          }
+          if (["owned", "settled-during-read", "read-failed"].includes(kind)) {
+            await expect(reconcileHarnessCompletionDelivery(request)).rejects.toThrow(
+              kind === "read-failed" ? "Synthetic source read failure" : "still unresolved",
+            );
+          } else {
+            expect(await reconcileHarnessCompletionDelivery(request)).toBe(
+              kind === "interrupted" ? "interrupted" : "blocked",
+            );
+          }
+          if (kind === "settled-during-read") {
+            restoreRead();
+            expect(await reconcileHarnessCompletionDelivery(request)).toBe("interrupted");
+          }
+        } finally {
+          restoreRead();
+          receipt.finish("interrupted");
+          await receipt.settled?.();
+        }
       });
     },
   );

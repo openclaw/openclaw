@@ -163,6 +163,13 @@ admission are rechecked after awaited routing and before new effects.
 Native runtime history, cancellation, and submission receipts remain owned by
 the harness; there is no generic task registry or managed-flow API.
 
+If completion admission leaves an interrupted input without a recovery claim,
+delivery can use up to three deterministic successor identities. Each successor
+requires an unconsumed, unowned input and authoritative absence of a transcript
+commit. Cancelled or committed inputs remain blocked. Unavailable evidence
+fails the attempt for the harness monitor to retry under its existing bounds;
+readmission never revives the old input or changes requester authority.
+
 For detached native work, await `captureAgentHarnessCompletionCustody(scope)`
 during the admitting parent registration, before publishing the registration or
 starting native child work. Preparation retains the original requester lifecycle

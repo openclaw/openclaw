@@ -6,12 +6,14 @@ import {
 } from "../config/sessions/restart-recovery-state.js";
 import type { HarnessCompletionRecovery } from "../config/sessions/restart-recovery-types.js";
 import { readSessionSubmittedInput } from "../config/sessions/session-accessor.js";
+import { hasRegisteredSessionPendingInputOwner } from "../config/sessions/session-accessor.sqlite-pending-inputs.js";
 import {
   captureSessionActorStorageOwner,
   withSessionActorStorage,
   type SessionActorStorageBinding,
 } from "../config/sessions/session-actor-storage-binding.js";
 import { readSessionEntriesFromStoreInWorker } from "../config/sessions/session-entry-read-runtime.js";
+import { readPendingInputSource } from "../config/sessions/session-pending-input-source.js";
 import type { InternalSessionEntry as SessionEntry } from "../config/sessions/types.js";
 import {
   getAgentRunContext,
@@ -108,7 +110,7 @@ export async function reconcileHarnessCompletionDelivery(
     sourceRunId: string;
     taskRunId?: string;
   },
-): Promise<"unowned" | "pending" | "delivered" | "blocked"> {
+): Promise<"unowned" | "pending" | "delivered" | "blocked" | "interrupted"> {
   const memory = captureSessionActorStorageOwner(params, { assertCurrent() {}, authorize() {} });
   if (memory) {
     return (
@@ -172,7 +174,7 @@ function reconcileMemoryHarnessCompletionDelivery(
 
 async function reconcileCurrentHarnessCompletionDelivery(
   params: CompletionTarget & { sourceRunId: string; taskRunId?: string },
-): Promise<"unowned" | "pending" | "delivered" | "blocked"> {
+): Promise<"unowned" | "pending" | "delivered" | "blocked" | "interrupted"> {
   const entry = await readCurrent(params);
   if (!entry) {
     // No saved claim means this reconciler owns nothing; normal admission still
@@ -193,21 +195,71 @@ async function reconcileCurrentHarnessCompletionDelivery(
     ) {
       return "blocked";
     }
+    // A failed admission can leave an input without a recovery claim. Only an
+    // interrupted, unowned input with no transcript commit permits a successor.
+    // Read failures propagate to the monitor's bounded retry, never mean absence.
     const submitted = await readSessionSubmittedInput(
       { ...params, sessionId: entry.sessionId },
       `${params.sourceRunId}:user`,
     );
     const current = await readCurrent(params);
-    return !current ||
+    if (
+      !current ||
       current.sessionId !== entry.sessionId ||
       current.lifecycleRevision !== entry.lifecycleRevision ||
       current.restartRecoveryDeliverySourceRunId === params.sourceRunId ||
       current.restartRecoveryHarnessCompletion?.sourceRunId === params.sourceRunId ||
       hasRestartRecoveryTerminalRun(current, params.sourceRunId) ||
-      getRestartRecoveryTerminalDeliveryEvidence(current, params.sourceRunId)?.harnessCompletion ||
-      submitted
-      ? "blocked"
-      : "unowned";
+      getRestartRecoveryTerminalDeliveryEvidence(current, params.sourceRunId)?.harnessCompletion
+    ) {
+      return "blocked";
+    }
+    if (!submitted) {
+      return "unowned";
+    }
+    const source = await readPendingInputSource(
+      { ...params, sessionId: entry.sessionId },
+      `${params.sourceRunId}:user`,
+      false,
+      true,
+    );
+    const latest = await readCurrent(params);
+    if (
+      !latest ||
+      latest.sessionId !== entry.sessionId ||
+      latest.lifecycleRevision !== entry.lifecycleRevision ||
+      latest.restartRecoveryDeliverySourceRunId === params.sourceRunId ||
+      latest.restartRecoveryHarnessCompletion?.sourceRunId === params.sourceRunId ||
+      hasRestartRecoveryTerminalRun(latest, params.sourceRunId) ||
+      getRestartRecoveryTerminalDeliveryEvidence(latest, params.sourceRunId)?.harnessCompletion
+    ) {
+      return "blocked";
+    }
+    source?.assertCurrent();
+    if (!source?.snapshot.current) {
+      throw new Error("Completion input evidence is unavailable");
+    }
+    const { pending, committed } = source.snapshot;
+    if (committed) {
+      return "blocked";
+    }
+    if (!pending) {
+      return "blocked";
+    }
+    if (pending.state === "queued") {
+      throw new Error("Completion input admission is still unresolved");
+    }
+    if (
+      pending.state !== "interrupted" ||
+      pending.consumed_event_id != null ||
+      pending.run_id !== params.sourceRunId
+    ) {
+      return "blocked";
+    }
+    if (hasRegisteredSessionPendingInputOwner(source.path, pending)) {
+      throw new Error("Completion input settlement is still owned");
+    }
+    return "interrupted";
   }
   const classified = classifyCompletionClaim(params, entry, claim);
   if (classified) {

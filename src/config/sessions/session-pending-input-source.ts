@@ -13,6 +13,7 @@ export async function readPendingInputSource(
   scope: PendingInputScope,
   idempotencyKey: string,
   pendingOnly: boolean,
+  includeCommitted = false,
 ) {
   const memory = captureSessionActorStorageOwner(scope, { assertCurrent() {}, authorize() {} });
   if (memory) {
@@ -32,6 +33,7 @@ export async function readPendingInputSource(
               sessionId: scope.sessionId,
               idempotencyKey,
               pendingOnly,
+              ...(includeCommitted ? { includeCommitted } : {}),
             },
           },
           binding.authority,
@@ -71,6 +73,7 @@ export async function readPendingInputSource(
     sessionId: captured.sessionId,
     idempotencyKey,
     pendingOnly,
+    ...(includeCommitted ? { includeCommitted } : {}),
   };
   const target = captureSessionStoreReadTarget(
     captured,

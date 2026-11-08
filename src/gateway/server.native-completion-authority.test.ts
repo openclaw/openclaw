@@ -28,6 +28,7 @@ import * as sessionAccessor from "../config/sessions/session-accessor.js";
 import * as pendingInputs from "../config/sessions/session-accessor.pending-inputs.js";
 import { listSessionPendingInputs } from "../config/sessions/session-accessor.pending-inputs.js";
 import { readMessageIdempotencyKey } from "../config/sessions/transcript-message-identity.js";
+import { createSessionWorkStartChangedError } from "../config/sessions/work-start-error.js";
 import { createAssistantMessageEventStream } from "../llm/utils/event-stream.js";
 import {
   captureAgentHarnessCompletionCustody,
@@ -184,6 +185,72 @@ describe("native completion final-effect authority", () => {
   });
   registerAgentSessionLoopTestLifecycle();
   afterEach(() => vi.restoreAllMocks());
+
+  it.for([1, 4])(
+    "recovers a native completion after %i interrupted admissions with bounded, deduplicated execution",
+    async (failures) => {
+      await prepareGatewayReplyRuntimeForTest();
+      const context = kernel.gatewayRequestContext;
+      using completion = await createCompletion(context);
+      const attempts: string[] = [];
+      let executions = 0;
+      const requestWork = vi.spyOn(context, "trackExecution");
+      const settleRequests = () =>
+        Promise.allSettled(
+          requestWork.mock.results.flatMap((result) =>
+            result.type === "return" ? [result.value] : [],
+          ),
+        );
+      agentCommandMock.mockImplementation(async (input) => {
+        const command = input as AgentCommandOpts;
+        attempts.push(command.runId!);
+        if (attempts.length <= failures) {
+          // Real Gateway staging has accepted the hidden input, but no model or
+          // transcript commit has begun. Match the observed work-start rejection.
+          throw createSessionWorkStartChangedError(completion.sessionScope.sessionKey);
+        }
+        const recorder = expectDefined(
+          command.userTurnTranscriptRecorder,
+          "native completion recorder",
+        );
+        expect(await recorder.persistApproved()).toMatchObject({ appended: true });
+        executions += 1;
+        return { payloads: [{ text: "Child received", mediaUrl: null }], meta: { durationMs: 1 } };
+      });
+      try {
+        for (let attempt = 0; attempt < failures; attempt += 1) {
+          expect((await completion.deliver()).delivered).toBe(false);
+          await settleRequests();
+        }
+        const recovered = await completion.deliver();
+        await settleRequests();
+        expect(recovered.delivered).toBe(failures === 1);
+        if (failures === 4) {
+          expect(recovered).toMatchObject({ recoveryBlocked: true });
+        }
+        await completion.deliver();
+        await settleRequests();
+        expect(executions).toBe(failures === 1 ? 1 : 0);
+        expect(attempts).toEqual(
+          Array.from({ length: failures === 1 ? 2 : 4 }, (_, index) =>
+            index ? `${completion.idempotencyKey}:readmit:${index}` : completion.idempotencyKey,
+          ),
+        );
+        const pending = await listSessionPendingInputs(completion.sessionScope);
+        expect(pending.items).toHaveLength(failures);
+        expect(pending.items.every((input) => input.state === "interrupted")).toBe(true);
+        const events = sessionAccessor.loadTranscriptEventsSync(completion.sessionScope);
+        const keys = events.flatMap((event) =>
+          isRecord(event) && isRecord(event.message) && event.message.role === "user"
+            ? [readMessageIdempotencyKey(event.message)]
+            : [],
+        );
+        expect(keys).toEqual(failures === 1 ? [`${completion.idempotencyKey}:readmit:1:user`] : []);
+      } finally {
+        await settleRequests();
+      }
+    },
+  );
 
   it.for(["predecessor", "successor"] as const)(
     "keeps registered turn delivery independent when %s source is revoked in flight",

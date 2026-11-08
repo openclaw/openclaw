@@ -15,6 +15,7 @@ import {
 import { upsertSessionEntryCore } from "./session-accessor.sqlite-entry.js";
 import { resolveSqliteScope, toDatabaseOptions } from "./session-accessor.sqlite-scope.js";
 import { appendTranscriptMessage } from "./session-accessor.sqlite-transcript-write.js";
+import { readPendingInputSource } from "./session-pending-input-source.js";
 import { SessionTranscriptProjectionUnavailableError } from "./session-transcript-projection-error.js";
 import { useTempSessionsFixture } from "./test-helpers.js";
 import { prepareTranscriptPayload } from "./transcript-payload.js";
@@ -119,6 +120,39 @@ describe("submitted input source evidence", () => {
         } finally {
           db.exec("PRAGMA query_only = OFF");
         }
+      }
+    },
+  );
+
+  it.each(["current", "dirty"] as const)(
+    "checks %s transcript evidence even when an interrupted pending row is retained",
+    async (projection) => {
+      const receipt = await stage("retained-source");
+      const db = database().db;
+      const row = db
+        .prepare("SELECT * FROM session_pending_inputs WHERE input_id = ?")
+        .get(receipt.inputId)!;
+      await promote(receipt);
+      // Model a retained unconsumed row after transcript bookkeeping drift.
+      // The transcript commit must still prevent a second completion execution.
+      const fields = Object.keys(row);
+      const values = { ...row, state: "interrupted", consumed_event_id: null };
+      db.prepare(
+        `INSERT OR REPLACE INTO session_pending_inputs (${fields.join(",")}) VALUES (${fields.map(() => "?").join(",")})`,
+      ).run(...fields.map((field) => values[field as keyof typeof values]));
+      if (projection === "dirty") {
+        db.prepare(
+          "UPDATE session_transcript_index_state SET needs_rebuild = 1 WHERE session_id = ?",
+        ).run(sessionId);
+        await expect(
+          readPendingInputSource(scope(), "retained-source:user", false, true),
+        ).rejects.toBeInstanceOf(SessionTranscriptProjectionUnavailableError);
+      } else {
+        const source = await readPendingInputSource(scope(), "retained-source:user", false, true);
+        expect(source?.snapshot).toMatchObject({
+          pending: { state: "interrupted", consumed_event_id: null },
+          committed: { idempotencyKey: "retained-source:user", content: "Synthetic source" },
+        });
       }
     },
   );

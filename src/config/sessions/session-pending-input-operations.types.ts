@@ -23,6 +23,8 @@ type PendingInputStageRead = PendingInputIdentity & {
 export type PendingInputSourceRead = PendingInputIdentity & {
   kind: "source";
   pendingOnly: boolean;
+  /** Check transcript evidence even when a retained pending row exists. */
+  includeCommitted?: boolean;
 };
 
 export type PendingInputSourceSnapshot = {
