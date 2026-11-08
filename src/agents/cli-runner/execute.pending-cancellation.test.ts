@@ -162,6 +162,7 @@ describe("CLI execution cancellation", () => {
       context.preparedBackend.backend.jsonlDialect = "claude-stream-json";
       context.backendResolved.parseJsonlEvent = (line) => {
         if (JSON.parse(line).type === "parser-failure") {
+          controller.abort();
           throw new Error("Unrelated parser failure");
         }
         return null;
