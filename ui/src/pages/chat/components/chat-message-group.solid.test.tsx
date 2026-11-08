@@ -254,7 +254,6 @@ it.each([false, true])(
             onReply,
             onReact: vi.fn(),
           }),
-          partDependencies: (part) => [part, bubbleMode],
           isWorkExpanded: () => false,
           onToggleWork: () => {},
         }}

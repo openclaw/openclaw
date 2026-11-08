@@ -745,7 +745,11 @@ function installEventLoadProbe() {
         sortToolEvents();
       };
       admitScrollTools = () => {
-        const at = Math.max(performance.now(), firstWaveLastStart + toolInterval);
+        // A sole first-wave tool was already running before typing began.
+        const at = Math.max(
+          performance.now(),
+          firstWaveTools === 1 ? 0 : firstWaveLastStart + toolInterval,
+        );
         for (let tool = firstWaveTools + 1; tool <= options.toolCount; tool++) {
           scheduleTool(tool, at + (tool - firstWaveTools - 1) * toolInterval);
         }

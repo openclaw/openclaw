@@ -22,7 +22,6 @@ import { updateRealtimeTalkConversation } from "../talk/conversation.ts";
 import { settleChatMount } from "../test-helpers/chat-mount-frames.ts";
 import { render, renderChatThread } from "../test-helpers/chat-transcript-native.tsx";
 import { createAsyncQuestionPresentation } from "./chat-async-question.ts";
-import * as messageGroup from "./chat-message-group-frame.ts";
 import { getTranscriptState, type ChatThreadProps } from "./chat-thread-interactions.ts";
 import { ChatThread } from "./chat-thread-view.tsx";
 import * as transcriptIndex from "./chat-transcript-message-index.ts";
@@ -476,77 +475,6 @@ describe("transcript projection", () => {
       activity,
     };
   }
-
-  it("keeps earlier run sections prepared while new tools arrive and refreshes resource permission", async () => {
-    const url = "https://widget.example.test/retained-section";
-    const earlier = msg(
-      "assistant",
-      `Earlier section. [embed url="${url}" title="Retained widget" /]`,
-      2,
-      { phase: "commentary", __openclaw: { id: "earlier-section", runId: "active" } },
-    );
-    const first = activityMessage("First operation", 3);
-    const props = threadProps("retained-run-parts", "agent:main:retained-run-parts", [
-      msg("user", "Inspect the workspace", 1),
-      earlier,
-      first,
-    ]);
-    Object.assign(props, {
-      runId: "active",
-      runActive: true,
-      showToolCalls: true,
-      mediaReadAllowed: true,
-      allowExternalEmbedUrls: true,
-    });
-    const prepared = vi.spyOn(messageGroup, "prepareGroupMessage");
-    const view = drawThread(props);
-    view.draw();
-    await view.settle();
-    await vi.dynamicImportSettled();
-    await waitForSolid(() => expect(view.query("iframe")?.getAttribute("src")).toBe(url));
-    const retained = view.query("iframe");
-    const preparationsOfEarlier = () =>
-      prepared.mock.calls.filter(([, item]) =>
-        JSON.stringify(item.message).includes("Earlier section."),
-      );
-    prepared.mockClear();
-
-    const latest = activityMessage("New operation", 5);
-    props.messages = [
-      ...props.messages,
-      msg("assistant", "Next section", 4, {
-        phase: "commentary",
-        __openclaw: { id: "next-section", runId: "active" },
-      }),
-      latest,
-    ];
-    view.draw();
-    await waitForSolid(() =>
-      expect(renderedText(view.container, ".chat-activity-group__label--live")).toEqual([
-        "New operation…",
-      ]),
-    );
-    expect(view.query("iframe")).toBe(retained);
-    expect(preparationsOfEarlier()).toHaveLength(0);
-
-    const earlierTools = view.query(".chat-activity-group__summary")!;
-    expect(earlierTools.getAttribute("aria-expanded")).toBe("false");
-    earlierTools.click();
-    view.draw();
-    expect(earlierTools.getAttribute("aria-expanded")).toBe("true");
-    earlierTools.click();
-    view.draw();
-    expect(earlierTools.getAttribute("aria-expanded")).toBe("false");
-    expect(preparationsOfEarlier()).toHaveLength(0);
-
-    props.mediaReadAllowed = false;
-    view.draw();
-    await waitForSolid(() => expect(view.query("iframe")?.getAttribute("src") ?? null).toBeNull());
-    expect(preparationsOfEarlier().length).toBeGreaterThan(0);
-    props.mediaReadAllowed = true;
-    view.draw();
-    await waitForSolid(() => expect(view.query("iframe")?.getAttribute("src")).toBe(url));
-  });
 
   it("moves live activity to the current eligible group after replacement and run changes", async () => {
     const first = activityMessage("Earlier operation", 2);

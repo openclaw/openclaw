@@ -1,49 +1,11 @@
 import { chatItemGroups } from "../chat-agent-run-grouping.ts";
-import type { TurnRecap } from "../chat-progress.ts";
 import type { SystemEventRenderItem } from "../chat-system-event-grouping.ts";
-import type { NativeMessageGroupOptions } from "./chat-message-group-frame.ts";
 import type { LoadedReplySource } from "./chat-reply-preview.ts";
 import type { ChatThreadProps, ChatThreadState } from "./chat-thread-interactions.ts";
 import { transcriptArraysEqual } from "./chat-transcript-memo.ts";
 import type { NativeTranscriptView } from "./chat-transcript-rows.ts";
 
 type ChatRenderItem = SystemEventRenderItem;
-
-export function createTranscriptStatusSignature(
-  workingUsageKey: string,
-  latestAssistantItemKey: string | null,
-  recapForGroup: (key: string) => TurnRecap | undefined,
-  continuations: ReadonlyMap<string, readonly { key: string }[]>,
-  searchFiltering: boolean,
-) {
-  return (item: ChatRenderItem): string => {
-    if (item.kind === "stream-run") {
-      return item.parts.some((part) => part.kind === "reading-indicator") ? workingUsageKey : "";
-    }
-    if (item.kind !== "group" && item.kind !== "agent-run-frame") {
-      return "";
-    }
-    const recap = recapForGroup(item.key);
-    const recapKey = recap ? `${recap.runtimeMs}:${recap.outputTokens ?? ""}` : "";
-    const statusKey = `${recapKey}|${item.key === latestAssistantItemKey ? "latest-assistant" : ""}`;
-    if (item.kind === "agent-run-frame") {
-      const hasWorkingIndicator = item.parts.some(
-        (part) =>
-          part.kind === "stream-run" &&
-          part.parts.some((streamPart) => streamPart.kind === "reading-indicator"),
-      );
-      return `${hasWorkingIndicator ? workingUsageKey : ""}|${statusKey}`;
-    }
-    const continuation = continuations.get(item.key);
-    // Part keys stand in for the rest of the continuation: its remaining
-    // options mirror props that already invalidate every row through the
-    // shared render context.
-    const continuationKey = continuation
-      ? `${continuation.map((part) => part.key).join(" ")}${workingUsageKey}`
-      : "";
-    return `${continuationKey}|${statusKey}|${searchFiltering ? "search-result" : ""}`;
-  };
-}
 
 /** The keyed virtual row owns the dependency memo and its rendered content. */
 export class GuardedTranscriptItem {
@@ -85,28 +47,27 @@ function itemDependencies(item: ChatRenderItem): readonly unknown[] {
   return [item];
 }
 
-export function appendTranscriptContextDependencies(
-  dependencies: unknown[],
+export function transcriptContextDependencies(
   item: ChatRenderItem,
-  groups: ReturnType<typeof chatItemGroups>,
   loadedSources: ReadonlyMap<string, LoadedReplySource>,
-  props: ChatThreadProps,
-  pendingSteer: NativeMessageGroupOptions["pendingSteer"],
-): void {
+  props: Pick<
+    ChatThreadProps,
+    "onRetryRun" | "failedMessageEditSource" | "failureActionsRunId" | "modelCatalog"
+  >,
+): unknown[] {
   if (item.kind === "notice") {
-    dependencies.push(
+    return [
       props.onRetryRun,
       props.failedMessageEditSource,
       props.failureActionsRunId,
       item.modelChange ? props.modelCatalog : undefined,
-    );
+    ];
   }
+  const dependencies: unknown[] = [];
   // The first fragment presents the final answer's reply attribution above the run.
-  const replyGroups =
-    item.kind === "agent-run-frame" && item.fragment?.first
-      ? chatItemGroups(item.fragment.source)
-      : groups;
-  for (const group of replyGroups) {
+  const replySource =
+    item.kind === "agent-run-frame" && item.fragment?.first ? item.fragment.source : item;
+  for (const group of chatItemGroups(replySource)) {
     for (const source of group.messages) {
       if (source.replyTarget?.kind === "id") {
         const loaded = loadedSources.get(source.replyTarget.id);
@@ -114,13 +75,7 @@ export function appendTranscriptContextDependencies(
       }
     }
   }
-  if (pendingSteer) {
-    for (const group of groups) {
-      for (const { message } of group.messages) {
-        dependencies.push(pendingSteer(message));
-      }
-    }
-  }
+  return dependencies;
 }
 
 export function trackTranscriptRenderDependencies(
@@ -139,14 +94,9 @@ export function guardChatRenderItems(
   presentationDependencies: (item: ChatRenderItem) => readonly unknown[],
   nativeFor: (item: ChatRenderItem) => NativeTranscriptView | undefined,
 ) {
-  const dependenciesFor = (item: ChatRenderItem) => [
-    ...itemDependencies(item),
-    renderDependencies,
-    ...presentationDependencies(item),
-  ];
-  return {
-    dependenciesFor,
-    render: (item: ChatRenderItem) =>
-      new GuardedTranscriptItem(dependenciesFor(item), nativeFor(item)),
-  };
+  return (item: ChatRenderItem) =>
+    new GuardedTranscriptItem(
+      [...itemDependencies(item), renderDependencies, ...presentationDependencies(item)],
+      nativeFor(item),
+    );
 }
