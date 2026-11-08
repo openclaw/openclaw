@@ -150,6 +150,7 @@ vi.mock("./server-startup-model-runtime.js", async (importOriginal) => {
 // mock-isolation: Sidecar scheduling does not own catalog or native-runtime preparation.
 vi.mock("../agents/prepared-model-catalog.js", () => ({
   loadProviderScopedThinkingCatalog: vi.fn(async () => []),
+  prewarmDefaultNativeModelCatalog: vi.fn(async () => {}),
   loadPreparedModelCatalogOwnerSnapshot: async (options: unknown) => ({
     modelCatalog: { entries: await postAttachMocks.loadModelCatalog(options) },
   }),

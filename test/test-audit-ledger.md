@@ -217,6 +217,23 @@ Its failed CI remains failed; no current-head CI success is claimed. PR189510 re
 
 ## Current qualification
 
+Batch115, pinned main `230f05c7ca37`, repairs the read-coalescing recorder
+on the actual socket returned by the mock constructor. The unchanged browser
+case passed; adding a positive assertion for its already-held `models.list`
+request failed on the original observer. The repaired observer records that same
+request and clears its exact ID on response. One final untraced full-file run
+passed (1/1, 16.88s Vitest; 61.647s routed), preserving all existing request
+counts, metadata/branch-read oracles and the global duplicate negative. A prior
+in-memory diagnostic correlated 11 unique sends and 11 responses with the actual
+Gateway fixture requests; no current overlap occurred. The historical overlapping
+`sessions.describe` signature remains an unattributed lead, not a production
+verdict or a repaired coalescing defect. The case inventory and source census are
+unchanged. The +20-line allocation covers actual-instance hooks and the paired
+held-request/response observer checks; production and shared fixtures are unchanged.
+Targeted typecheck and typed lint passed. Formatting, ledger MDX, whitespace and
+the exact growth allocation are checked separately; fresh review and exact-head
+hosted admission remain pending.
+
 Batches113–118, pinned main `a07facd84480`, used one native checkout and
 separate scoped proofs. Unchanged baselines passed: destinations6, History1,
 read coalescing1, fallback8, dictation33 and annotation lifetime11.

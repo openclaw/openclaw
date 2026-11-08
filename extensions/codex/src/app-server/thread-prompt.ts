@@ -139,7 +139,7 @@ function buildCodexBaseInstructions(
 }
 
 // Neither key has a Codex default, so a string in the effective config is authored.
-function hasAuthoredCodexBaseInstructions(
+export function hasAuthoredCodexBaseInstructions(
   options: Pick<CodexThreadConfigurationOptions, "config" | "nativeConfig">,
 ): boolean {
   return ["model_instructions_file", "instructions"].some((key) =>

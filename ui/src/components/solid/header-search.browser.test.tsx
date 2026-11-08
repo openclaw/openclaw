@@ -38,6 +38,8 @@ it("focuses an autofocus search on first and retained popover openings", async (
     .toBe(false);
   await trigger.click();
   await expect.element(search).toHaveFocus();
-  await userEvent.keyboard("s");
+  await expect.element(search).toHaveValue("project");
+  await userEvent.keyboard("{ControlOrMeta>}a{/ControlOrMeta}");
+  await userEvent.keyboard("projects");
   await expect.element(search).toHaveValue("projects");
 });

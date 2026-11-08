@@ -341,7 +341,7 @@ export function Logbook(props: LogbookProps) {
   const timelineRead = createMemo(() => completion());
   const load = (options?: Parameters<LogbookModel["load"]>[0]) => {
     const admitted = model.load(options);
-    void setCompletion(admitted);
+    void setCompletion(model.timelineRead);
     return admitted;
   };
   const readTimeline = () => {

@@ -482,6 +482,11 @@ export const sessionsFilesHandlers: GatewayRequestHandlers = {
         if (repository?.kind === "stored") {
           throw new Error("Start this cloud session before editing its repository files.");
         }
+        if (!repository && loaded.entry.worktree?.id && loaded.root) {
+          const { checkpointLocalWorkspacePath } =
+            await import("../worker-environments/local-workspace-projection.js");
+          await checkpointLocalWorkspacePath({ cwd: loaded.root, assertCurrent: authorize });
+        }
         const update = repository
           ? await repository.inspect(
               "set",
