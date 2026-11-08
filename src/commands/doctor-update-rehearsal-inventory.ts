@@ -1,8 +1,13 @@
 import { lstatSync, readFileSync, readdirSync, realpathSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { isDeepStrictEqual } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveUserPath } from "../infra/home-dir.js";
+import {
+  readUpdateCandidatePluginAssets,
+  UPDATE_PLUGIN_ASSET_RECEIPT_ENV,
+} from "../infra/update-candidate-plugin-assets.js";
 import type { UpdateCandidatePluginCodeLink } from "../infra/update-candidate-plugin-code-links.js";
 import { buildUpdateRehearsalPathEnv } from "../infra/update-rehearsal-paths.js";
 import type { PluginDoctorMigrationBackupWarning } from "../plugins/doctor-contract-module.js";
@@ -166,6 +171,20 @@ export async function inspectPreparedDoctorRehearsal(params: {
     }
     required[key] = env[key];
   }
+  try {
+    const assets = readUpdateCandidatePluginAssets(stateDir, env[UPDATE_PLUGIN_ASSET_RECEIPT_ENV]);
+    if (
+      !isDeepStrictEqual(
+        assets,
+        (params.pluginCodeLinks ?? []).filter((fact) => fact.asset),
+      )
+    ) {
+      throw new Error("Private plugin asset inventory does not match producer facts");
+    }
+  } catch {
+    refuse("the isolated environment changed or retained an invalid private asset receipt");
+  }
+  required[UPDATE_PLUGIN_ASSET_RECEIPT_ENV] = env[UPDATE_PLUGIN_ASSET_RECEIPT_ENV];
   const assertEnv = () => {
     if (Object.entries(required).some(([key, value]) => env[key] !== value)) {
       refuse("the isolated environment changed or retained live selectors");

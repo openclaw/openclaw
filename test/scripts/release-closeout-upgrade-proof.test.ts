@@ -7,10 +7,12 @@ import { test } from "vitest";
 import {
   assertIdentity,
   assertLifecycle,
+  assertOwnership,
   assertSettingsPreserved,
   assertStable,
   assertUpdate,
   lifecycleObserverSource,
+  pluginManifestFixture,
   pluginSource,
   settingsFixture,
   verifyPair,
@@ -19,6 +21,84 @@ import {
 const head = "a".repeat(40),
   sha = "b".repeat(64),
   version = "2026.11.2";
+test("ownership fixture explicitly activates and records only proven runtime ownership", () => {
+  assert.deepEqual(pluginManifestFixture().activation, { onStartup: true });
+  const parent = path.resolve(".openclaw/tmp");
+  fs.mkdirSync(parent, { recursive: true });
+  const dir = fs.mkdtempSync(path.join(parent, "ownership-fixture-"));
+  try {
+    const state = path.join(dir, "operator-state");
+    const plugin = path.join(dir, "operator-plugin");
+    const source = path.join(dir, "operator-asset");
+    const ledger = path.join(dir, "observations.jsonl");
+    const privateState = path.join(dir, "openclaw-update-canary-test");
+    const privatePlugin = path.join(privateState, "plugin");
+    fs.mkdirSync(plugin);
+    fs.mkdirSync(privatePlugin, { recursive: true });
+    fs.writeFileSync(source, "release-closeout-external-asset\n");
+    fs.symlinkSync(source, path.join(plugin, "config.txt"));
+    fs.copyFileSync(source, path.join(privatePlugin, "config.txt"));
+    const moduleFile = path.join(privatePlugin, "index.mjs");
+    fs.writeFileSync(moduleFile, pluginSource({ plugin, source, state, ledger }));
+    const invoke = () =>
+      spawnSync(
+        process.execPath,
+        [
+          "--input-type=module",
+          "-e",
+          `const {default: plugin} = await import(${JSON.stringify(moduleFile)}); plugin.register();`,
+          "--",
+          "--update-canary",
+        ],
+        { env: { ...process.env, OPENCLAW_STATE_DIR: privateState }, encoding: "utf8" },
+      );
+    const result = invoke();
+    assert.equal(result.status, 0, result.stderr);
+    const observations = fs
+      .readFileSync(ledger, "utf8")
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line));
+    assertOwnership(observations);
+    assert.equal(fs.readFileSync(source, "utf8"), "release-closeout-external-asset\n");
+    assert.equal(
+      fs.readFileSync(path.join(privatePlugin, "config.txt"), "utf8"),
+      "release-closeout-external-asset\n",
+    );
+    fs.writeFileSync(source, "unexpected mutation");
+    assert.notEqual(invoke().status, 0);
+    assert.equal(fs.readFileSync(ledger, "utf8").trim().split("\n").length, 1);
+    const diagnostics = fs
+      .readFileSync(ledger + ".diagnostics.jsonl", "utf8")
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line));
+    assert(diagnostics.some((record) => record.phase === "error"));
+    assert.throws(() => assertOwnership(diagnostics));
+    for (const override of [
+      { surface: "doctor-contract" },
+      { argv: [] },
+      { privateWriteProven: false },
+      { sourceUnchanged: false },
+      { unrelatedAbsent: false },
+    ]) {
+      assert.throws(() => assertOwnership([{ ...observations[0], ...override }]));
+    }
+    // Doctor can prove the write first; runtime must observe that same private copy.
+    assertOwnership([
+      { ...observations[0], privateWriteProven: false },
+      { ...observations[0], surface: "doctor-contract" },
+    ]);
+    assert.throws(() =>
+      assertOwnership([
+        { ...observations[0], privateWriteProven: false },
+        { ...observations[0], surface: "doctor-contract", root: "/another-private-copy" },
+      ]),
+    );
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
 function proof(lane: "node" | "bun") {
   return {
     schema: 1,
@@ -143,34 +223,52 @@ test("only a real staged postinstall receipt with generated shim and owned launc
     phase: "exit",
     code: 0,
     packageVersion: version,
-    cwd: "/stage/openclaw",
-    localPrefix: null,
+    cwd: "/stage/node_modules/openclaw",
+    localPrefix: "/stage",
     path: [
-      "/stage/openclaw/node_modules/.bin",
+      "/stage/node_modules/openclaw/node_modules/.bin",
       "/usr/bin",
-      "/tmp/.ade21d781aa39b9e-375.node-gyp",
+      "/inherited/.ade21d781aa39b9e-1.node-gyp",
+      "/inherited/bun-node-unrelated",
+      "/tmp/.9d7a7447835bd8eb-3C.node-gyp",
       "/tmp/bun-node-0-191755ec1",
+      "/stage/node_modules/node_modules/.bin",
       "/stage/node_modules/.bin",
       "/node_modules/.bin",
     ].join(":"),
-    argv: ["/bun", "/stage/openclaw/scripts/postinstall-bundled-plugins.mjs"],
+    argv: ["/bun", "/stage/node_modules/openclaw/scripts/postinstall-bundled-plugins.mjs"],
     executable: "/bun",
-    nodes: [{ file: "/tmp/bun-node-test/node", target: "/bun" }],
+    nodes: [{ file: "/tmp/bun-node-0-191755ec1/node", target: "/bun" }],
     symlink: false,
-    content: "#!/bin/sh\n# OpenClaw Bun launcher\n",
+    content:
+      "#!/bin/sh\n# OpenClaw Bun launcher\n#openclaw-bun=/bun\n#openclaw-entry=/stage/node_modules/openclaw/openclaw.mjs\n",
   };
   assertLifecycle([receipt], "/installed/openclaw", version);
+  assertLifecycle([{ ...receipt, localPrefix: null }], "/installed/openclaw", version);
+  assertLifecycle(
+    [{ ...receipt, path: receipt.path.replace("-3C.node-gyp", "-375.node-gyp") }],
+    "/installed/openclaw",
+    version,
+  );
   for (const override of [
     { event: "preinstall" },
     { phase: "enter" },
     { code: 1 },
     { cwd: "/installed/openclaw" },
     { nodes: [] },
-    { localPrefix: "/stage" },
+    { localPrefix: "/unrelated-project" },
+    { nodes: [{ file: "/inherited/bun-node-unrelated/node", target: "/bun" }] },
+    { nodes: [{ file: "/tmp/bun-node-0-191755ec1/node", target: "/other-bun" }] },
+    { path: receipt.path.replace("-3C.node-gyp", "-ZZ.node-gyp") },
+    { path: receipt.path.replace(":/stage/node_modules/node_modules/.bin", "") },
+    { path: receipt.path + ":/unexpected" },
     { path: "/usr/bin" },
     { symlink: true },
     { content: "#!/bin/sh\n" },
+    { content: receipt.content.replace("#openclaw-bun=/bun", "#openclaw-bun=/other-bun") },
+    { content: receipt.content.replace("openclaw/openclaw.mjs", "elsewhere/openclaw.mjs") },
     { argv: ["/doctor.mjs"] },
+    { argv: ["/other-package/scripts/postinstall-bundled-plugins.mjs"] },
     { packageVersion: "old" },
   ]) {
     assert.throws(() =>

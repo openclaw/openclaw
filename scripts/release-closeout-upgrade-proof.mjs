@@ -34,6 +34,15 @@ const hash = (bytes) => createHash("sha256").update(bytes).digest("hex");
 const readJson = (file) => JSON.parse(fs.readFileSync(file, "utf8"));
 const writeJson = (file, value) => fs.writeFileSync(file, JSON.stringify(value, null, 2) + "\n");
 
+export function pluginManifestFixture() {
+  return {
+    id: "closeout-owner-proof",
+    activation: { onStartup: true },
+    doctorContract: { configRepair: true },
+    configSchema: { type: "object", properties: {}, additionalProperties: false },
+  };
+}
+
 export function settingsFixture({ workspace, plugin }) {
   return {
     gateway: {
@@ -132,22 +141,32 @@ export function verifyPair(node, bun, head, sha256) {
     build: node.build,
   };
 }
+export function assertOwnership(observations) {
+  assert(
+    observations.some(
+      (runtime) =>
+        runtime.surface === "runtime" &&
+        runtime.argv?.includes("--update-canary") &&
+        typeof runtime.root === "string" &&
+        typeof runtime.stateDir === "string" &&
+        observations.some(
+          (owner) =>
+            owner.root === runtime.root &&
+            owner.stateDir === runtime.stateDir &&
+            owner.privateWriteProven === true &&
+            owner.sourceUnchanged === true &&
+            owner.unrelatedAbsent === true,
+        ),
+    ),
+    "No real private Gateway observation proved external-file ownership",
+  );
+}
+
 export function observedGeneratedLayout(record) {
-  if (record.localPrefix) {
+  if (record.localPrefix && record.localPrefix !== path.dirname(path.dirname(record.cwd))) {
     return false;
   }
   const entries = (record.path ?? "").split(path.delimiter);
-  const gyp = entries.findIndex((entry) =>
-    /^\.[0-9a-f]+-[0-9]+\.node-gyp$/u.test(path.basename(entry)),
-  );
-  const shim = entries[gyp + 1] ?? "";
-  if (
-    gyp < 1 ||
-    !path.basename(shim).startsWith("bun-node-") ||
-    entries[0] !== path.join(record.cwd, "node_modules/.bin")
-  ) {
-    return false;
-  }
   const suffix = [];
   for (let directory = path.dirname(record.cwd); ; directory = path.dirname(directory)) {
     suffix.push(path.join(directory, "node_modules/.bin"));
@@ -155,7 +174,21 @@ export function observedGeneratedLayout(record) {
       break;
     }
   }
-  return JSON.stringify(entries.slice(gyp + 2)) === JSON.stringify(suffix);
+  // Bun appends the generated pair immediately before its complete ancestor-bin suffix.
+  // A similarly named inherited PATH entry must not select a different shim.
+  const gyp = entries.length - suffix.length - 2;
+  const shim = entries[gyp + 1] ?? "";
+  return (
+    gyp >= 1 &&
+    /^\.[0-9a-f]+-[0-9a-f]+\.node-gyp$/iu.test(path.basename(entries[gyp])) &&
+    path.isAbsolute(shim) &&
+    path.basename(shim).startsWith("bun-node-") &&
+    entries[0] === path.join(record.cwd, "node_modules/.bin") &&
+    JSON.stringify(entries.slice(gyp + 2)) === JSON.stringify(suffix) &&
+    record.nodes.some(
+      (node) => node.file === path.join(shim, "node") && node.target === record.executable,
+    )
+  );
 }
 export function assertLifecycle(records, packageRoot, version) {
   const exits = records.filter(
@@ -165,15 +198,16 @@ export function assertLifecycle(records, packageRoot, version) {
       r.code === 0 &&
       r.packageVersion === version &&
       r.cwd !== packageRoot &&
-      r.argv.some((arg) => arg.endsWith("/scripts/postinstall-bundled-plugins.mjs")),
+      r.argv.includes(path.join(r.cwd, "scripts/postinstall-bundled-plugins.mjs")),
   );
   assert(
     exits.some(
       (r) =>
         observedGeneratedLayout(r) &&
-        r.nodes.some((n) => n.target === r.executable) &&
         r.symlink === false &&
-        r.content?.startsWith("#!/bin/sh\n# OpenClaw Bun launcher\n"),
+        r.content?.startsWith("#!/bin/sh\n# OpenClaw Bun launcher\n") &&
+        r.content.includes("\n#openclaw-bun=" + r.executable + "\n") &&
+        r.content.includes("\n#openclaw-entry=" + path.join(r.cwd, "openclaw.mjs") + "\n"),
     ),
     "No actual candidate postinstall with generated Node shim produced the owned launcher",
   );
@@ -217,7 +251,7 @@ import {fileURLToPath} from "node:url";
 import assert from "node:assert/strict";
 const originalPlugin=__PLUGIN__, originalState=__STATE__, source=__SOURCE__, ledger=__LEDGER__;
 const payload="release-closeout-external-asset\n";
-function observe(surface) {
+function observePrivate(surface) {
   const privateState=process.env.OPENCLAW_STATE_DIR;
   const root=path.dirname(fileURLToPath(import.meta.url));
   if (!privateState || privateState === originalState) return;
@@ -250,6 +284,12 @@ function observe(surface) {
   }
   fs.appendFileSync(ledger,JSON.stringify({surface,pid:process.pid,stateDir:privateState,root,physical,
     argv:process.argv,privateWriteProven:owner!==undefined,sourceUnchanged:true,unrelatedAbsent:true})+"\n");
+}
+function observe(surface) {
+  const diagnostic=(phase,message) => fs.appendFileSync(ledger+".diagnostics.jsonl",
+    JSON.stringify({surface,phase,message,pid:process.pid,stateDir:process.env.OPENCLAW_STATE_DIR})+"\n");
+  diagnostic("enter");
+  try { observePrivate(surface); } catch(error) { diagnostic("error",String(error.message)); throw error; }
 }
 export default { id:"closeout-owner-proof", register() { observe("runtime"); } };
 export function normalizeCompatibilityConfig({cfg}) { observe("doctor-contract"); return {config:cfg,changes:[]}; }
@@ -446,11 +486,7 @@ async function runLane(options) {
     );
     fs.writeFileSync(
       path.join(plugin, "openclaw.plugin.json"),
-      JSON.stringify({
-        id: "closeout-owner-proof",
-        doctorContract: { configRepair: true },
-        configSchema: { type: "object", properties: {}, additionalProperties: false },
-      }),
+      JSON.stringify(pluginManifestFixture()),
     );
     fs.writeFileSync(
       path.join(plugin, "index.mjs"),
@@ -605,14 +641,7 @@ async function runLane(options) {
     assert.equal(fs.readlinkSync(path.join(plugin, "config.txt")), source);
     proof.assertions.settingsPreserved = true;
     const observations = fs.readFileSync(ledger, "utf8").trim().split("\n").map(JSON.parse);
-    assert(
-      observations.some((o) => o.surface === "runtime" && o.argv.includes("--update-canary")),
-      "Real private Gateway did not load fixture",
-    );
-    assert(
-      observations.some((o) => o.privateWriteProven && o.sourceUnchanged && o.unrelatedAbsent),
-      "No private-file ownership proof",
-    );
+    assertOwnership(observations);
     proof.assertions.externalFilePrivateOwnership = true;
     if (kind === "bun") {
       const lifecycle = fs

@@ -217,6 +217,7 @@ export async function preparePluginGenerationArtifact(
           params.standalone ? params.source : undefined,
           params.bundledReload,
           admission.viewKey,
+          resolvePluginSourceCaptureStorage().privateAssetReceipt,
           admission.owners.get(rootDir),
         ]),
         async () => {

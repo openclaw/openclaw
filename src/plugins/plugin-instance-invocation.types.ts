@@ -11,6 +11,7 @@ export type PluginInstanceInvocation = {
 export type PluginSourceCaptureStorage = Readonly<{
   stateDir: string;
   placement: "state" | "temporary";
+  privateAssetReceipt?: string;
 }>;
 
 export type PluginExecutionScopes = {

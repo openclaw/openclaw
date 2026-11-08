@@ -1,9 +1,14 @@
+import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { writeFixtureJson } from "../cli/cli-fixtures.test-support.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import {
+  readUpdateCandidatePluginAssets,
+  UPDATE_PLUGIN_ASSET_RECEIPT_ENV,
+} from "../infra/update-candidate-plugin-assets.js";
 import { prepareUpdateCandidateRehearsal } from "../infra/update-candidate-rehearsal.js";
 import { materializeUpdateCandidateStateWorker } from "../infra/update-candidate-state.test-support.js";
 import {
@@ -25,6 +30,9 @@ it("admits real producer plugin host, dependency and basename links without trav
     await fs.mkdir(candidate);
     await materializeUpdateCandidateStateWorker(candidate);
     await fs.mkdir(plugin);
+    const asset = path.join(root, "external-config.txt");
+    await fs.writeFile(asset, "producer-owned external configuration");
+    await fs.symlink(asset, path.join(plugin, "config.txt"));
     await fs.symlink(plugin, locator, "dir");
     await fs.mkdir(path.join(modules, "dependency"), { recursive: true });
     await fs.writeFile(path.join(candidate, "retained.txt"), "candidate is not migration data");
@@ -65,6 +73,16 @@ it("admits real producer plugin host, dependency and basename links without trav
       expect(
         (await fs.lstat(path.join(await fs.realpath(alias), "node_modules"))).isSymbolicLink(),
       ).toBe(true);
+      const assets = readUpdateCandidatePluginAssets(
+        rehearsal.stateDir,
+        rehearsal.env[UPDATE_PLUGIN_ASSET_RECEIPT_ENV],
+      );
+      const configuration = assets.find((edge) => path.basename(edge.path) === "config.txt");
+      assert.ok(configuration?.target);
+      expect(await fs.readFile(configuration.target.path, "utf8")).toBe(
+        "producer-owned external configuration",
+      );
+      expect(await fs.readFile(asset, "utf8")).toBe("producer-owned external configuration");
       const host = rehearsal.pluginCodeLinks!.find((fact) => fact.target?.path === candidate)!;
       expect(host).toBeDefined();
       const admitted = await inspectPreparedDoctorRehearsal(params);
@@ -93,6 +111,7 @@ it("admits real producer plugin host, dependency and basename links without trav
         "OPENCLAW_SKIP_STARTUP_MODEL_PREWARM",
         "OPENCLAW_NO_AUTO_UPDATE",
         "NODE_DISABLE_COMPILE_CACHE",
+        UPDATE_PLUGIN_ASSET_RECEIPT_ENV,
       ]) {
         const original = params.env[key];
         params.env[key] = "changed";

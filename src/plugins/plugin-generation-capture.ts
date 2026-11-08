@@ -3,6 +3,10 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { isPathInside } from "../infra/path-guards.js";
 import {
+  isUpdateCandidatePluginAssetPath,
+  readUpdateCandidatePluginAssets,
+} from "../infra/update-candidate-plugin-assets.js";
+import {
   bundledSharedModuleResolver,
   resolveBundledSharedModule,
   type BundledPluginReloadSource,
@@ -53,6 +57,7 @@ import {
   isPluginPackageFile as inPackage,
   findPluginCapturedPackage,
 } from "./plugin-package-metadata-capture.js";
+import { resolvePluginSourceCaptureStorage } from "./plugin-source-capture-context.js";
 import {
   createPluginSourceDirectoryCapture,
   inspectPluginCaptureSource,
@@ -125,6 +130,13 @@ export function createPluginGenerationArtifact(
   sourceOnly = false,
   resolveFrozenInput?: (filename: string) => string,
 ): PluginGenerationArtifact {
+  const storage = resolvePluginSourceCaptureStorage();
+  const privateAssets = new Map(
+    (isUpdateCandidatePluginAssetPath(storage.stateDir, rootDir)
+      ? readUpdateCandidatePluginAssets(storage.stateDir, storage.privateAssetReceipt)
+      : []
+    ).map((edge) => [edge.path, edge]),
+  );
   const metrics = getPluginGenerationMetrics();
   if (metrics) {
     metrics.captures++;
@@ -152,6 +164,7 @@ export function createPluginGenerationArtifact(
     entryFiles,
     nativeRecovery,
     sourceCapture.outputRoot,
+    privateAssets,
   );
   const metadataCapture = createPluginPackageMetadataCapture({
     sourceForCaptured: (filename) => originalSources.get(filename),
@@ -272,6 +285,7 @@ export function createPluginGenerationArtifact(
       sourceLinks,
       deferExternalLinks: Boolean(execute),
       nativeAdmission,
+      privateAssets,
       sourceOnly,
       retainedSnapshotSource: resolveFrozenInput !== undefined,
       receipt,

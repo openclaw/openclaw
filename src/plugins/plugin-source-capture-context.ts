@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { resolveStateDir } from "../config/state-dir.js";
 import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
+import { UPDATE_PLUGIN_ASSET_RECEIPT_ENV } from "../infra/update-candidate-plugin-assets.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import {
   createPluginExecutionFrame,
@@ -39,11 +40,19 @@ export function getPluginSourceCaptureStorage(): PluginSourceCaptureStorage | un
 export function resolvePluginSourceCaptureStorage(
   stateDir?: string,
   placement?: PluginSourceCaptureStorage["placement"],
+  privateAssetReceipt?: { value: string | undefined },
 ): PluginSourceCaptureStorage {
-  const inherited = stateDir === undefined ? getPluginSourceCaptureStorage() : undefined;
+  const current = getPluginSourceCaptureStorage();
+  const inherited = stateDir === undefined ? current : undefined;
   return Object.freeze({
     stateDir: path.resolve(stateDir ?? inherited?.stateDir ?? resolveStateDir()),
     placement: placement ?? inherited?.placement ?? "state",
+    // Absence in an explicit selection or inherited scope is not ambient authority.
+    privateAssetReceipt: privateAssetReceipt
+      ? privateAssetReceipt.value
+      : current
+        ? current.privateAssetReceipt
+        : process.env[UPDATE_PLUGIN_ASSET_RECEIPT_ENV],
   });
 }
 
@@ -60,6 +69,9 @@ export function withPluginSourceCaptureStorage<T>(
         sourceCaptureStorage: resolvePluginSourceCaptureStorage(
           storage.stateDir,
           storage.placement,
+          Object.hasOwn(storage, "privateAssetReceipt")
+            ? { value: storage.privateAssetReceipt }
+            : undefined,
         ),
       },
       current,
