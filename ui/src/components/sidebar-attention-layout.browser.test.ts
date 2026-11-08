@@ -218,18 +218,19 @@ describe.runIf("__vitest_browser__" in globalThis)("Inbox panel layout", () => {
     params.mentions.snapshot.phase = "loading";
 
     const all = mountPanel(params, shellFor());
-    expect(part(all, "loading")).toBeNull();
-    expect(part(all, "mentions-note")).toBeNull();
-    expect(part(all, "empty")).toBeNull();
-
+    expect([part(all, "loading"), part(all, "mentions-note"), part(all, "empty")]).toEqual([
+      null,
+      null,
+      null,
+    ]);
     const mentions = mountPanel({ ...params, selectedTab: "mentions" }, shellFor());
-    expect(part(mentions, "loading")?.textContent).toBe("Loading mentions…");
-    expect(part(mentions, "empty")).toBeNull();
-
+    expect([part(mentions, "loading")?.textContent, part(mentions, "empty")]).toEqual([
+      "Loading mentions…",
+      null,
+    ]);
     params.mentions.snapshot.phase = "ready";
     const loaded = mountPanel({ ...params, selectedTab: "mentions" }, shellFor());
-    expect(part(loaded, "loading")).toBeNull();
-    expect(part(loaded, "empty")).not.toBeNull();
+    expect([part(loaded, "loading"), part(loaded, "empty")?.tagName]).toEqual([null, "DIV"]);
   });
 
   it("keeps existing mentions visible with a refresh action after a request fails", () => {

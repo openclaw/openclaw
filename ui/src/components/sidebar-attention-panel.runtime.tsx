@@ -486,7 +486,7 @@ export function SidebarAttentionPanel(
               </Show>
               <Show when={mentionsLoading()}>
                 <div class="sidebar-issues-panel__loading" role="status">
-                  <Icon name="loaderCircle" />
+                  <span class="btn__spinner" aria-hidden="true" />
                   <span class="sr-only">{t("attention.mentions.loading")}</span>
                 </div>
               </Show>

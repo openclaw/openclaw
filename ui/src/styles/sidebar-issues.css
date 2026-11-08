@@ -240,31 +240,7 @@
 
 /* Fast loads finish before the indicator appears, so it never flashes. */
 .sidebar-issues-panel__loading {
-  animation: sidebar-issues-loading-reveal 160ms ease-out 300ms backwards;
-}
-
-.sidebar-issues-panel__loading > svg {
-  width: 18px;
-  height: 18px;
-  animation: sidebar-issues-loading-spin 900ms linear infinite;
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .sidebar-issues-panel__loading > svg {
-    animation: none;
-  }
-}
-
-@keyframes sidebar-issues-loading-reveal {
-  from {
-    opacity: 0;
-  }
-}
-
-@keyframes sidebar-issues-loading-spin {
-  to {
-    transform: rotate(360deg);
-  }
+  animation: fade-in 160ms 300ms backwards;
 }
 
 .sidebar-issues-panel__empty strong {
