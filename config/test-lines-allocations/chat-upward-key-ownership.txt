@@ -1,2 +1,3 @@
-# Upward-key intent at the native end must lock follow before native movement.
-24
+# Upward-key regression: 24 new lines plus 18 lines of measured base debt.
+# Exact allocation; no unused headroom.
+42
