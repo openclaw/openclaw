@@ -34,6 +34,7 @@ function definePluginsPage(routeId: "plugins" | "plugin-settings", surface: Plug
   });
 }
 
-const page = definePluginsPage("plugins", "discovery");
-const settingsPage = definePluginsPage("plugin-settings", "settings");
-export const pages = [page, settingsPage] as const;
+export const pages = [
+  definePluginsPage("plugins", "discovery"),
+  definePluginsPage("plugin-settings", "settings"),
+] as const;
