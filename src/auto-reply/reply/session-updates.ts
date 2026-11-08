@@ -25,6 +25,7 @@ import { resolveReusableWorkspaceSkillSnapshot } from "../../skills/runtime/sess
 import { publishReplySessionEntry, type ReplySessionEntryHandle } from "./session-entry-handle.js";
 
 async function persistSkillSnapshot(params: {
+  agentId: string;
   sessionEntryHandle?: ReplySessionEntryHandle;
   sessionStore?: Record<string, SessionEntry>;
   sessionKey: string;
@@ -52,6 +53,7 @@ async function persistSkillSnapshot(params: {
   }
   const persistedEntry = await applySessionEntryOperation(
     {
+      agentId: params.agentId,
       storePath: params.storePath,
       sessionKey: params.sessionKey,
     },
