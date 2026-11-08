@@ -1,6 +1,6 @@
 # Diagnostic-only branch. Never merge this workflow into the release branch.
 name: Release 37 UI diagnostic (non-qualifying)
-run-name: Release 37 original-shard diagnostic ${{ inputs.dispatch_id }}
+run-name: Release 37 controlled-Send diagnostic ${{ inputs.dispatch_id }}
 on:
   workflow_dispatch:
     inputs:
@@ -53,20 +53,13 @@ jobs:
           OPENCLAW_BUILD_PRIVATE_QA: "1"
           OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "1"
         run: pnpm build
-      - name: Restore original failed shard selection
+      - name: Diagnose controlled ordinary Send boundary
         env:
-          INCLUDE_PATTERNS: '["ui/src/e2e/quota-reset-status.real-gateway.e2e.test.ts","ui/src/e2e/chat-flow.catalog-bootstrap.e2e.test.ts","ui/src/e2e/worker-initial-setup.real-gateway.e2e.test.ts","ui/src/e2e/agent-file-lifecycle.real-gateway.e2e.test.ts","ui/src/e2e/chat-composer-websearch-kill-switch.real-gateway.e2e.test.ts","ui/src/e2e/chat-agent-avatar.real-gateway.e2e.test.ts","ui/src/e2e/chat-stop-finished-run.real-gateway.e2e.test.ts","ui/src/e2e/chat-thinking-metadata.real-gateway.e2e.test.ts","ui/src/e2e/control-ui-auth-transports.e2e.test.ts","ui/src/e2e/cron-duration-save.real-gateway.e2e.test.ts","ui/src/e2e/device-alias-rename.real-gateway.e2e.test.ts","ui/src/e2e/logs-lifecycle.e2e.test.ts","ui/src/e2e/model-picker-search.real-gateway.e2e.test.ts","ui/src/e2e/profile-page.real-gateway.e2e.test.ts","extensions/qa-lab/src/session-host-command-state.real-gateway.e2e.test.ts","ui/src/e2e/session-progress-hovercard.real-gateway.e2e.test.ts","extensions/qa-lab/src/control-ui-media-transcript.real-gateway.e2e.test.ts","extensions/qa-lab/src/control-ui-openclaw-delegation.real-gateway.e2e.test.ts","extensions/qa-lab/src/control-ui-automation-management.real-gateway.e2e.test.ts"]'
-        run: |
-          mkdir -p .artifacts
-          node -e 'const fs = require("node:fs"); const paths = JSON.parse(process.env.INCLUDE_PATTERNS); if (paths.length !== 19) throw new Error("Expected original 19-file shard"); fs.writeFileSync(".artifacts/release37-ui-shard-include.json", JSON.stringify(paths));'
-      - name: Diagnose original 19-file shard
-        env:
-          OPENCLAW_VITEST_INCLUDE_FILE: .artifacts/release37-ui-shard-include.json
           OPENCLAW_CAPTURE_UI_PROOF: "0"
           OPENCLAW_UI_E2E_ARTIFACT_DIR: .artifacts/release37-ui-diagnostic
           OPENCLAW_UI_E2E_DIAGNOSTIC_DIR: .artifacts/release37-ui-timeouts
         run: |
-          node scripts/run-vitest.mjs run --config test/vitest/vitest.ui-e2e-prebuilt.config.ts --configLoader runner --reporter verbose --reporter github-actions --reporter default --reporter ./scripts/lib/vitest-resource-reporter.mts --exclude ui/src/e2e/desktop-resize.real-gateway.e2e.test.ts
+          node scripts/run-vitest.mjs run --config test/vitest/vitest.ui-e2e-prebuilt.config.ts --configLoader runner --reporter verbose --reporter github-actions --reporter default --reporter ./scripts/lib/vitest-resource-reporter.mts ui/src/e2e/chat-stop-finished-run.real-gateway.e2e.test.ts --testNamePattern 'diagnoses ordinary Send dropped while recovery and initial history are pending'
       - name: Retain only sanitized diagnostic counters
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7

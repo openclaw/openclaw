@@ -11,6 +11,7 @@ import {
 } from "../../../test/helpers/openclaw-test-instance.ts";
 import { createDeferred } from "../../../test/helpers/promise.ts";
 import type { SessionsListResult } from "../api/types.ts";
+import type { ChatPageHost } from "../pages/chat/chat-state-host.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -188,6 +189,336 @@ const suite = createControlUiE2eSuite({
 });
 
 suite.define(() => {
+  // Diagnostic, not a regression/fix: preserve the observed dropped-click outcome.
+  // A fresh browser has no accepted history; hold real replies independently of
+  // the real post-hello recovery digest, without replacing either result.
+  it("diagnoses ordinary Send dropped while recovery and initial history are pending", async (context) => {
+    await suite.runScenario(context, {
+      retainedState: () => instance.stateDir,
+      run: async () => {
+        const diagnosticSession = "agent:main:send-boundary";
+        const created = await instance.cli([
+          "gateway",
+          "call",
+          "sessions.create",
+          "--json",
+          "--params",
+          JSON.stringify({ key: diagnosticSession, agentId: "main", label: "Send boundary" }),
+        ]);
+        expect(created.code, created.stderr).toBe(0);
+        const handoff = await instance.cli(["dashboard", "--json"]);
+        expect(handoff.code, handoff.stderr).toBe(0);
+        const { browserUrl }: { browserUrl: string } = JSON.parse(handoff.stdout);
+        const url = new URL(browserUrl);
+        url.pathname = "/chat/main/send-boundary";
+        url.search = "";
+        let stage = "install independent recovery and history holds";
+        let sendRequests = 0;
+        let connectRequests = 0;
+        let historyResponses = 0;
+        let successfulHistoryResponses = 0;
+        let deliveredHistoryResponses = 0;
+        let holdHistory = true;
+        const heldHistory: Array<() => void> = [];
+        const pending = new Map<string, { method?: string; sessionKey?: unknown }>();
+        try {
+          await suite.withPage(
+            { locale: "en-US", serviceWorkers: "block", viewport: { width: 1280, height: 900 } },
+            async ({ page }) => {
+              await page.addInitScript(() => {
+                localStorage.setItem(
+                  "openclaw:control-ui:community-invite",
+                  JSON.stringify({ dismissedAtMs: 1770000000000 }),
+                );
+                const nativeDigest = crypto.subtle.digest;
+                const NativeWebSocket = window.WebSocket;
+                let armed = false;
+                let releaseDigest!: () => void;
+                const released = new Promise<void>((resolve) => {
+                  releaseDigest = resolve;
+                });
+                // Only the first digest synchronously initiated by the delivered
+                // connect response is delayed. Device identity/signing precedes
+                // hello; all digest bytes/results and authentication stay real.
+                crypto.subtle.digest = function (...args) {
+                  const result = nativeDigest.apply(this, args);
+                  if (!armed) return result;
+                  armed = false;
+                  document.documentElement.dataset.diagnosticHeldDigests = String(
+                    Number(document.documentElement.dataset.diagnosticHeldDigests ?? 0) + 1,
+                  );
+                  return result.then(async (digest) => {
+                    await released;
+                    return digest;
+                  });
+                };
+                window.WebSocket = class extends NativeWebSocket {
+                  private connectId: string | undefined;
+                  constructor(url: string | URL, protocols?: string | string[]) {
+                    super(url, protocols);
+                    this.addEventListener("message", (event: MessageEvent) => {
+                      if (typeof event.data !== "string") return;
+                      const frame = JSON.parse(event.data) as {
+                        type?: string;
+                        id?: string;
+                        ok?: boolean;
+                      };
+                      if (
+                        frame.type === "res" &&
+                        frame.id === this.connectId &&
+                        frame.ok === true
+                      ) {
+                        // Installed before the application's message listener.
+                        armed = true;
+                      }
+                    });
+                  }
+                  override send(...args: Parameters<WebSocket["send"]>) {
+                    const [data] = args;
+                    if (typeof data === "string") {
+                      const frame = JSON.parse(data) as {
+                        type?: string;
+                        method?: string;
+                        id?: string;
+                      };
+                      if (frame.type === "req" && frame.method === "connect")
+                        this.connectId = frame.id;
+                    }
+                    super.send(...args);
+                  }
+                };
+                (window as Window & { releaseSendDiagnostic?: () => void }).releaseSendDiagnostic =
+                  () => {
+                    armed = false;
+                    releaseDigest();
+                    crypto.subtle.digest = nativeDigest;
+                    window.WebSocket = NativeWebSocket;
+                  };
+              });
+              page.on("pageerror", () => {
+                proof.browserFailed = true;
+              });
+
+              await page.routeWebSocket(`ws://127.0.0.1:${instance.port}/**`, (socket) => {
+                const server = socket.connectToServer();
+                socket.onMessage((message) => {
+                  const frame: Frame = JSON.parse(message.toString());
+                  if (frame.type === "req" && frame.id) {
+                    pending.set(frame.id, {
+                      method: frame.method,
+                      sessionKey: frame.params?.sessionKey,
+                    });
+                    if (frame.method === "connect") connectRequests += 1;
+                    if (frame.method === "chat.send") sendRequests += 1;
+                  }
+                  server.send(message);
+                });
+                server.onMessage((message) => {
+                  const frame: Frame = JSON.parse(message.toString());
+                  const request = frame.id ? pending.get(frame.id) : undefined;
+                  const history =
+                    frame.type === "res" &&
+                    ["chat.startup", "chat.history"].includes(request?.method ?? "") &&
+                    request?.sessionKey === diagnosticSession;
+                  const deliver = () => {
+                    if (frame.type === "res" && frame.id) pending.delete(frame.id);
+                    if (history) deliveredHistoryResponses += 1;
+                    socket.send(message);
+                  };
+                  if (history) {
+                    historyResponses += 1;
+                    if (frame.ok === true && frame.payload?.sessionKey === diagnosticSession) {
+                      successfulHistoryResponses += 1;
+                    }
+                  }
+                  if (history && holdHistory) heldHistory.push(deliver);
+                  else deliver();
+                });
+              });
+              const pane = page.locator('openclaw-chat-pane[aria-hidden="false"]');
+              const browserState = () =>
+                pane.evaluate((element) => {
+                  const host = element as HTMLElement & {
+                    state: ChatPageHost;
+                    context: { gateway: { snapshot: { phase: string } } };
+                  };
+                  const state = host.state;
+                  return {
+                    phase: host.context.gateway.snapshot.phase,
+                    sessionMatches: state.sessionKey === "agent:main:send-boundary",
+                    connected: state.connected,
+                    recoveryReady: state.client?.recoveryScopeReady === true,
+                    recoveryPending: state.client?.recoveryScopeReady === false,
+                    historyLoading: state.chatLoading,
+                    draftLength: state.chatMessage.length,
+                    // chatQueue is the real outbox owner's current-scope projection,
+                    // not a test-owned array or a count inferred from the DOM.
+                    outboxCount: state.chatQueue.length,
+                    handlerEntries: Number(
+                      element.getAttribute("data-diagnostic-handler-entries") ?? 0,
+                    ),
+                    handlerSettled: Number(
+                      element.getAttribute("data-diagnostic-handler-settled") ?? 0,
+                    ),
+                    heldDigests: Number(
+                      document.documentElement.dataset.diagnosticHeldDigests ?? 0,
+                    ),
+                    activeSubmitGuards: state.chatSubmitGuards?.size ?? 0,
+                  };
+                });
+              let restoreHandler = false;
+              const release = async () => {
+                holdHistory = false;
+                await page.evaluate(() => {
+                  (
+                    window as Window & { releaseSendDiagnostic?: () => void }
+                  ).releaseSendDiagnostic?.();
+                });
+                for (const deliver of heldHistory.splice(0)) deliver();
+              };
+              try {
+                stage = "qualify connected with recovery and initial history held";
+                await page.goto(url.href);
+                await waitForControlUiGatewayReady(page);
+                await expect.poll(() => successfulHistoryResponses).toBeGreaterThan(0);
+                await expect.poll(browserState).toMatchObject({
+                  phase: "connected",
+                  sessionMatches: true,
+                  connected: true,
+                  recoveryReady: false,
+                  recoveryPending: true,
+                  historyLoading: true,
+                  heldDigests: 1,
+                  outboxCount: 0,
+                });
+                expect(deliveredHistoryResponses).toBe(0);
+                expect(connectRequests).toBe(1);
+                const composer = page.getByRole("textbox", { name: "Chat composer", exact: true });
+                const draft = "Finish this fixture turn.";
+                await composer.fill(draft);
+                const send = page.getByRole("button", { name: "Send message", exact: true });
+                await expect.poll(() => send.isEnabled()).toBe(true);
+                await pane.evaluate((element) => {
+                  const host = element as HTMLElement & {
+                    state: ChatPageHost;
+                    restoreDiagnosticHandler?: () => void;
+                  };
+                  const original = host.state.handleSendChat;
+                  host.state.handleSendChat = function (...args) {
+                    element.setAttribute(
+                      "data-diagnostic-handler-entries",
+                      String(
+                        Number(element.getAttribute("data-diagnostic-handler-entries") ?? 0) + 1,
+                      ),
+                    );
+                    const result = original.apply(this, args);
+                    // Observe settlement without replacing the returned promise.
+                    void result.then(
+                      () => {
+                        element.setAttribute(
+                          "data-diagnostic-handler-settled",
+                          String(
+                            Number(element.getAttribute("data-diagnostic-handler-settled") ?? 0) +
+                              1,
+                          ),
+                        );
+                      },
+                      () => {
+                        element.setAttribute("data-diagnostic-handler-failed", "true");
+                      },
+                    );
+                    return result;
+                  };
+                  host.restoreDiagnosticHandler = () => {
+                    host.state.handleSendChat = original;
+                  };
+                });
+                restoreHandler = true;
+                stage = "click enabled Send and observe dropped admission";
+                await send.click();
+                await expect
+                  .poll(browserState)
+                  .toMatchObject({ handlerEntries: 1, handlerSettled: 1, activeSubmitGuards: 0 });
+                const afterClick = await browserState();
+                Object.assign(proof, {
+                  connectedAtClick: afterClick.connected,
+                  recoveryReadyAtClick: afterClick.recoveryReady,
+                  // Fresh pane + no delivered startup/history + its loading flag:
+                  // evidence for initial unavailability, not a replaced predicate.
+                  initialHistoryUnavailableAtClick:
+                    afterClick.historyLoading && deliveredHistoryResponses === 0,
+                  sendEnabledAtClick: true,
+                  draftLengthAfterClick: afterClick.draftLength,
+                  handlerEntries: afterClick.handlerEntries,
+                  handlerSettled: afterClick.handlerSettled,
+                  outboxCountAfterClick: afterClick.outboxCount,
+                  sendRequestsAfterClick: sendRequests,
+                  heldRecoveryDigests: afterClick.heldDigests,
+                });
+                // This deliberately asserts the broken outcome, not the desired fix.
+                expect(afterClick).toMatchObject({
+                  recoveryReady: false,
+                  historyLoading: true,
+                  draftLength: draft.length,
+                  outboxCount: 0,
+                });
+                expect(deliveredHistoryResponses).toBe(0);
+                expect(sendRequests).toBe(0);
+                expect(await composer.inputValue()).toBe(draft);
+                stage = "release real recovery and history; observe no automatic send";
+                await release();
+                await expect.poll(browserState).toMatchObject({
+                  phase: "connected",
+                  recoveryReady: true,
+                  historyLoading: false,
+                  handlerEntries: 1,
+                  handlerSettled: 1,
+                  activeSubmitGuards: 0,
+                  draftLength: draft.length,
+                  outboxCount: 0,
+                });
+                // Named completion boundaries, not a speculative sleep: recovery
+                // notification, authoritative history, and the pane's render settle.
+                await pane.evaluate(async (element) => {
+                  await (element as HTMLElement & { updateComplete: Promise<boolean> })
+                    .updateComplete;
+                });
+                expect(await composer.inputValue()).toBe(draft);
+                expect(sendRequests).toBe(0);
+                expect(connectRequests).toBe(1);
+                expect(deliveredHistoryResponses).toBeGreaterThan(0);
+                expect(proof.browserFailed).not.toBe(true);
+                proof.noAutomaticSendAtRecoveryCompletion = true;
+                stage = "controlled dropped Send reproduced";
+              } finally {
+                await release();
+                if (restoreHandler)
+                  await pane.evaluate((element) => {
+                    (
+                      element as HTMLElement & { restoreDiagnosticHandler?: () => void }
+                    ).restoreDiagnosticHandler?.();
+                  });
+                proof.heldHistoryResponses = historyResponses;
+                proof.successfulHistoryResponses = successfulHistoryResponses;
+                proof.deliveredHistoryResponses = deliveredHistoryResponses;
+                proof.pendingHeldHistoryResponses = heldHistory.length;
+                proof.connectRequests = connectRequests;
+                proof.sendRequests = sendRequests;
+                proof.providerRequests = provider.requests();
+              }
+            },
+          );
+        } finally {
+          proof.stage = stage;
+          await fs.writeFile(
+            path.join(artifactDir, "proof.json"),
+            JSON.stringify(proof, null, 2) + "\n",
+          );
+        }
+      },
+    });
+  }, 120_000);
+
   it("restores the composer after Stop targets a run the Gateway already finished", async (context) => {
     await suite.runScenario(context, {
       retainedState: () => instance.stateDir,
