@@ -12,7 +12,6 @@ import { hasModalSurface, registryFor } from "../../components/overlay-registry.
 import { formatUiError } from "../../lib/format-error.ts";
 import { GatewayPageBinding, type GatewayPageChange } from "../../lib/gateway-page-binding.ts";
 import { isComposingKeyboardEvent } from "../../lib/ime.ts";
-import { createPageRequest } from "../../lib/page-request.ts";
 import type { PluginListResult, PluginMutationResult } from "../../lib/plugins/index.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { listen } from "../../lib/reactive/listener.ts";
@@ -26,6 +25,10 @@ import { createPluginPageTargets } from "./plugin-removal-focus.ts";
 import { pluginRowKey, type PluginRowMessage } from "./plugin-row-message.tsx";
 import { pluginMutationWarnings, createPluginsConsent } from "./plugins-consent.ts";
 import { createPluginDetailReads } from "./plugins-detail-reads.ts";
+import {
+  createPluginsInventoryRequest,
+  takePluginsInventoryRead,
+} from "./plugins-inventory-read.ts";
 import { createPluginsMutationPresentation } from "./plugins-mutation-presentation.ts";
 import { createPluginsPageIcons } from "./plugins-page-icons.ts";
 import {
@@ -34,7 +37,7 @@ import {
   pluginMutationBlockedReason,
   type PluginMutationAction,
 } from "./plugins-page-model.ts";
-import type { PluginsRouteData } from "./route-data.ts";
+import type { PluginsInventoryRead, PluginsRouteData } from "./route-data.ts";
 import type { PluginSettingsEditorProps } from "./settings-editor.tsx";
 import type { PluginSettingsTab } from "./settings-view.tsx";
 import { createPluginPreview } from "./skill-preview.tsx";
@@ -233,9 +236,7 @@ export function createPluginsPage(options: {
     onMutationSuccess: promptLaunch.complete,
     onConsentDismiss: promptLaunch.reset,
   });
-  const catalogTask = createPageRequest(publish, {
-    task: ([client]: readonly [NonNullable<GatewayPageBinding["client"]>], { signal }) =>
-      client.request<PluginListResult>("plugins.list", {}, { signal }),
+  const catalogTask = createPluginsInventoryRequest(gateway, publish, {
     onComplete: (result) => {
       replaceResult(result);
       if (surface === "settings") {
@@ -273,7 +274,7 @@ export function createPluginsPage(options: {
       routeData = nextRouteData ?? routeData;
       surface = nextRouteData ? nextSurface : surface;
       gateway.refresh();
-      if (previous !== routeData) {
+      if (routeData && previous !== routeData) {
         credentialPresentation.retire();
         skillPreview.close();
         if (previous?.location.pathname !== routeData?.location.pathname) {
@@ -281,7 +282,7 @@ export function createPluginsPage(options: {
           promptLaunch.reset();
           mcpLogin.reset();
         }
-        applyRouteData(previous?.location.pathname !== routeData?.location.pathname);
+        applyRouteData(routeData, previous?.location.pathname !== routeData.location.pathname);
       }
       publish();
     },
@@ -424,11 +425,8 @@ export function createPluginsPage(options: {
     ensureInitialData();
   }
 
-  function applyRouteData(refreshInventory: boolean) {
-    const data = routeData;
-    if (!data) {
-      return;
-    }
+  function applyRouteData(data: PluginsRouteData, refreshInventory: boolean) {
+    const inventory = takePluginsInventoryRead(data, gateway);
     routeDataConsumed = true;
     const detailPluginId = surface === "settings" ? activeRoutePluginId() : null;
     const catalogId = surface === "discovery" ? activeRoutePluginId() : null;
@@ -458,7 +456,10 @@ export function createPluginsPage(options: {
     if (catalogId !== state.catalogDetail?.id) {
       void showCatalogDetail(catalogId);
     }
-    ensureInitialData(refreshInventory);
+    if (inventory) {
+      void refreshCatalog(gateway.client, inventory);
+    }
+    ensureInitialData(refreshInventory && !inventory);
   }
 
   function invalidateRequests(invalidateCatalog: boolean, retirePresentation = true) {
@@ -566,7 +567,10 @@ export function createPluginsPage(options: {
     }
   }
 
-  async function refreshCatalog(client = gateway.connected ? gateway.client : null) {
+  async function refreshCatalog(
+    client = gateway.connected ? gateway.client : null,
+    inventory?: PluginsInventoryRead,
+  ) {
     if (!client || readAccess === false) {
       return;
     }
@@ -575,7 +579,7 @@ export function createPluginsPage(options: {
     if (surface === "discovery" && !activeRoutePluginId()) {
       void discovery.refresh();
     }
-    const promise = catalogTask.run([client]);
+    const promise = catalogTask.run([client, inventory]);
     void setCatalog(promise);
     await promise;
   }

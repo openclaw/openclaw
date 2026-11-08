@@ -492,7 +492,7 @@ it.each([
     if ("type" in routeData) {
       throw new Error("Expected the discovery route to load");
     }
-    expect(inventoryReads).toBe(0);
+    expect(inventoryReads).toBe(1);
     const { page } = await mountPage(context, routeData);
     expect(inventoryReads).toBe(1);
     if (detail === "return") {
@@ -551,75 +551,74 @@ it.each([
   },
 );
 
-it.each(["success", "failure", "metadata", "replacement", "reconnect"])(
-  "refreshes installed inventory at page adoption with %s",
-  async (outcome) => {
-    const inventory = deferred<PluginListResult>();
-    let reads = 0;
-    const { client, request, harness } = pageGateway({
-      "plugins.list": () =>
-        ++reads === 1 ? inventory.promise : createResult(createPlugin({ name: "Fresh plugin" })),
-    });
-    const context = createContext(harness.gateway);
-    const route = await pages[1].loader!(
-      context,
-      createRouteLoaderOptions(createPluginsRouteLocation()),
+it.each([
+  "success",
+  "failure",
+  "early-success",
+  "early-failure",
+  "metadata",
+  "replacement",
+  "reconnect",
+])("adopts the early installed inventory read with %s", async (outcome) => {
+  const inventory = deferred<PluginListResult>();
+  let reads = 0;
+  const { client, request, harness } = pageGateway({
+    "plugins.list": () =>
+      ++reads === 1 ? inventory.promise : createResult(createPlugin({ name: "Fresh plugin" })),
+  });
+  const context = createContext(harness.gateway);
+  const route = await pages[1].loader!(
+    context,
+    createRouteLoaderOptions(createPluginsRouteLocation()),
+  );
+  expect(methodCalls(request, "plugins.list")).toHaveLength(1);
+  if ("type" in route) {
+    throw new Error("Expected the installed Plugins route to load");
+  }
+  if (outcome === "early-success") {
+    inventory.resolve(createResult());
+    await settlePlugins();
+  } else if (outcome === "early-failure") {
+    inventory.reject(new Error("Inventory unavailable"));
+    await settlePlugins();
+  }
+  const { page } = await mountPage(context, route);
+  expect(reads).toBe(1);
+  if (outcome === "metadata") {
+    harness.emit(client, true, { hello: harness.gateway.snapshot.hello });
+  }
+  if (outcome === "replacement") {
+    const fresh = createClient(async () => createResult(createPlugin({ name: "Fresh plugin" })));
+    harness.emit(fresh.client, true);
+  }
+  if (outcome === "reconnect") {
+    harness.emit(client, false);
+    harness.emit(client, true, { hello: gatewayHelloForMethods(["plugins.list"]) });
+  }
+  if (outcome === "replacement" || outcome === "reconnect") {
+    await waitForSolid(() => expect(page.textContent).toContain("Fresh plugin"));
+    inventory.resolve(createResult(createPlugin({ name: "Retired plugin" })));
+    await inventory.promise;
+    await settlePage(page);
+    expect(page.textContent).not.toContain("Retired plugin");
+  } else if (outcome === "early-success" || outcome === "early-failure") {
+    await waitForSolid(() =>
+      expect(page.textContent).toContain(
+        outcome === "early-success" ? "Workboard" : "Inventory unavailable",
+      ),
     );
-    expect(request).not.toHaveBeenCalled();
-    if ("type" in route) {
-      throw new Error("Expected the installed Plugins route to load");
-    }
-    const { page } = await mountPage(context, route);
-    expect(reads).toBe(1);
-    if (outcome === "metadata") {
-      harness.emit(client, true, { hello: harness.gateway.snapshot.hello });
-    }
-    if (outcome === "replacement") {
-      const fresh = createClient(async () => createResult(createPlugin({ name: "Fresh plugin" })));
-      harness.emit(fresh.client, true);
-    }
-    if (outcome === "reconnect") {
-      harness.emit(client, false);
-      harness.emit(client, true, { hello: gatewayHelloForMethods(["plugins.list"]) });
-    }
-    if (outcome === "replacement" || outcome === "reconnect") {
-      await waitForSolid(() => expect(page.textContent).toContain("Fresh plugin"));
-      inventory.resolve(createResult(createPlugin({ name: "Retired plugin" })));
-      await inventory.promise;
-      await settlePage(page);
-      expect(page.textContent).not.toContain("Retired plugin");
+  } else {
+    expect(page.querySelector('.settings-loading-skeleton[aria-busy="true"]')).not.toBeNull();
+    if (outcome === "failure") {
+      inventory.reject(new Error("Inventory unavailable"));
+      await waitForSolid(() => expect(page.textContent).toContain("Inventory unavailable"));
     } else {
-      expect(page.querySelector('.settings-loading-skeleton[aria-busy="true"]')).not.toBeNull();
-      if (outcome === "failure") {
-        inventory.reject(new Error("Inventory unavailable"));
-        await waitForSolid(() => expect(page.textContent).toContain("Inventory unavailable"));
-      } else {
-        inventory.resolve(createResult());
-        await waitForSolid(() => expect(page.textContent).toContain("Workboard"));
-      }
+      inventory.resolve(createResult());
+      await waitForSolid(() => expect(page.textContent).toContain("Workboard"));
     }
-    expect(methodCalls(request, "plugins.list")).toHaveLength(outcome === "reconnect" ? 2 : 1);
-  },
-);
-
-it.each(["denied", "cancelled"])(
-  "does not load Plugins inventory before page adoption when %s",
-  async (reason) => {
-    const { client, request, harness } = pageGateway({ "plugins.list": () => createResult() });
-    if (reason === "denied") {
-      harness.emit(client, true, { hello: gatewayHelloForMethods([], ["operator.sessions.read"]) });
-    }
-    const context = createContext(harness.gateway);
-    const route = await pages[1].loader!(context, {
-      ...createRouteLoaderOptions(createPluginsRouteLocation()),
-      shouldRun: () => reason !== "cancelled",
-    });
-    if (reason === "denied" && !("type" in route)) {
-      await mountPage(context, route);
-    }
-    expect(request).not.toHaveBeenCalled();
-  },
-);
+  }
+  expect(methodCalls(request, "plugins.list")).toHaveLength(outcome === "reconnect" ? 2 : 1);
+});
 
 it("keeps the latest Install request while an older catalog detail is pending", async () => {
   const details = ["Alpha", "Beta"].map((name) =>

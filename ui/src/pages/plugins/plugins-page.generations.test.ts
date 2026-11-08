@@ -9,6 +9,7 @@ import { i18n } from "../../i18n/index.ts";
 import type { JsonSchema } from "../../lib/config-form-utils.ts";
 import { sourceConfigSnapshot } from "../../lib/config/config-snapshot.test-support.ts";
 import type { PluginMutationResult } from "../../lib/plugins/index.ts";
+import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { createRouteLoaderOptions } from "../../test-helpers/route-loader-options.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { pageFixture, queryWithin, runtimeFixture } from "./plugins-page.lifecycle-test-support.ts";
@@ -39,6 +40,31 @@ afterEach(resetPluginsPageTestState);
 function objectSchema(properties: Record<string, JsonSchema>): JsonSchema {
   return { type: "object", properties };
 }
+
+it.each(["denied", "cancelled", "aborted"])(
+  "does not start Plugins inventory when %s",
+  async (reason) => {
+    const harness = pageFixture({ "plugins.list": () => createResult() });
+    if (reason === "denied") {
+      harness.emit(harness.client, true, {
+        hello: gatewayHelloForMethods([], ["operator.sessions.read"]),
+      });
+    }
+    const controller = new AbortController();
+    if (reason === "aborted") {
+      controller.abort();
+    }
+    const route = await pages[1].loader!(harness.context, {
+      ...createRouteLoaderOptions(createPluginsRouteLocation()),
+      signal: controller.signal,
+      shouldRun: () => reason !== "cancelled",
+    });
+    if (reason === "denied" && !("type" in route)) {
+      await mountPage(harness.context, route);
+    }
+    expect(harness.request).not.toHaveBeenCalled();
+  },
+);
 
 it("accepts a changed schema with the same version while retaining drafts during unrelated revisions", async () => {
   const schema = (fields: Record<string, JsonSchema>) =>
@@ -228,12 +254,13 @@ it.each([
 );
 
 it.each([
-  ["/plugins", "discovery"],
-  ["/plugins/catalog-workboard", "discovery"],
-  ["/settings/plugins/workboard", "settings"],
+  ["/plugins", "discovery", false],
+  ["/plugins/catalog-workboard", "discovery", false],
+  ["/settings/plugins/workboard", "settings", false],
+  ["/settings/plugins/workboard", "settings", true],
 ] as const)(
-  "refreshes published inventory after a delayed page read on %s (%s)",
-  async (path, surface) => {
+  "refreshes published inventory after a delayed page read on %s (%s, before adoption=%s)",
+  async (path, surface, beforeAdoption) => {
     const selector = path === "/plugins" ? ".plugin-catalog-card" : ".plugin-catalog-detail";
     const plugin = createPlugin({ name: "Fresh route plugin", catalogId: "catalog-workboard" });
     const result = { ...createResult(plugin), generation: 1 };
@@ -266,12 +293,17 @@ it.each([
     if ("type" in route) {
       throw new Error("Expected the Plugins route to load");
     }
-    expect(inventoryReads).toBe(0);
-    const { page } = await mountPage(harness.context, route, surface);
     expect(inventoryReads).toBe(1);
+    if (beforeAdoption) {
+      harness.publishGeneration(1);
+    }
+    const { page } = await mountPage(harness.context, route, surface);
+    expect(inventoryReads).toBe(beforeAdoption ? 2 : 1);
     const find = queryWithin(page);
     const connect = vi.spyOn(harness.gateway, "connect");
-    harness.publishGeneration(1);
+    if (!beforeAdoption) {
+      harness.publishGeneration(1);
+    }
     await page.updateComplete;
     preload.resolve({ ...createResult(), generation: 0 });
     await waitForSolid(() => expect(find(selector)?.textContent).toContain(plugin.name));
@@ -300,6 +332,7 @@ it("targets the selected installed route after its inventory refresh fails", asy
   const { page, find } = await harness.mount("/settings/plugins/alpha#lifecycle", inventory);
   await waitForSolid(() => expect(find("h1")?.textContent).toBe(alpha.name));
   try {
+    response = refresh.promise;
     const route = await pages[1].loader!(
       harness.context,
       createRouteLoaderOptions(createPluginsRouteLocation("/settings/plugins/beta#lifecycle")),
@@ -307,7 +340,6 @@ it("targets the selected installed route after its inventory refresh fails", asy
     if ("type" in route) {
       throw new Error("Expected the installed Plugins route to load");
     }
-    response = refresh.promise;
     page.routeData = route;
     await page.updateComplete;
     await waitForSolid(() => expect(harness.calls("plugins.list")).toHaveLength(1));
@@ -532,5 +564,5 @@ it("keeps the adopted plugin through pending route data and reloads only a new i
   page.routeData = { location: createPluginsRouteLocation("/settings/plugins/beta") };
   await waitForSolid(() => expect(find("h1")?.textContent).toBe("Beta"));
   expect(harness.calls("plugins.list")).toHaveLength(reads + 1);
-  expect(harness.calls("plugins.inspect")).toHaveLength(2);
+  await waitForSolid(() => expect(harness.calls("plugins.inspect")).toHaveLength(2));
 });

@@ -2,6 +2,8 @@ import { definePage, type RouteLoaderOptions, type RouteLocation } from "@opencl
 import { routePageSpec } from "../../app-route-paths.ts";
 import type { SolidRouteProps } from "../../app-route-types.tsx";
 import type { ApplicationContext } from "../../app/context.ts";
+import { hasOperatorReadAccess } from "../../app/operator-access.ts";
+import type { PluginListResult } from "../../lib/plugins/index.ts";
 import { pluginsRouteLocation, type PluginsRouteData } from "./route-data.ts";
 
 type PluginsSurface = "discovery" | "settings";
@@ -13,9 +15,31 @@ function definePluginsPage(routeId: "plugins" | "plugin-settings", surface: Plug
       const routeLocation = pluginsRouteLocation(location);
       return `${routeLocation.pathname}\u0000${routeLocation.search}\u0000${routeLocation.hash}`;
     },
-    loader: (_context: ApplicationContext, options: RouteLoaderOptions) => {
-      const location = pluginsRouteLocation(options.location);
-      return { location } satisfies PluginsRouteData;
+    loader: (context: ApplicationContext, options: RouteLoaderOptions) => {
+      const data: PluginsRouteData = { location: pluginsRouteLocation(options.location) };
+      const gateway = context.gateway;
+      const snapshot = gateway.snapshot;
+      if (
+        options.shouldRun() &&
+        !options.signal.aborted &&
+        snapshot.phase === "connected" &&
+        snapshot.client &&
+        hasOperatorReadAccess(snapshot.hello?.auth ?? null)
+      ) {
+        const signal = options.signal;
+        data.inventory = {
+          gateway,
+          gatewaySnapshot: { ...snapshot },
+          generation: snapshot.pluginCapabilities?.generation,
+          signal,
+          // Observe rejection now, even if navigation never adopts this page.
+          result: snapshot.client.request<PluginListResult>("plugins.list", {}, { signal }).then(
+            (value) => ({ value }),
+            (error: unknown) => ({ error }),
+          ),
+        };
+      }
+      return data;
     },
     component: async () => {
       const { PluginsPage } = await import("./plugins-page.tsx");

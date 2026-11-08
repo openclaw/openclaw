@@ -7,8 +7,20 @@ import {
   pluginCatalogIdFromPath,
   restoreBridgedRouteLocation,
 } from "../../app-route-paths.ts";
+import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
+import type { PluginListResult } from "../../lib/plugins/index.ts";
+
+export type PluginsInventoryRead = {
+  readonly gateway: ApplicationContext["gateway"];
+  readonly gatewaySnapshot: ApplicationGatewaySnapshot;
+  readonly generation: number | undefined;
+  readonly signal: AbortSignal;
+  readonly result: Promise<{ value: PluginListResult } | { error: unknown }>;
+};
+
 export type PluginsRouteData = {
   location: RouteLocation;
+  inventory?: PluginsInventoryRead;
 };
 
 export function pluginsRouteLocation(location: RouteLocation): RouteLocation {
