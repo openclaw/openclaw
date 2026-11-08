@@ -522,9 +522,16 @@ it.each([
   },
 );
 
-it.each(["admin", "caller", "non-admin", "revoked"] as const)(
-  "enforces native-app final-write authority: %s",
-  async (scenario) => {
+it.each(
+  (["openclaw-macos", "gateway-client"] as const).flatMap((clientId) =>
+    (["admin", "caller", "non-admin", "revoked"] as const).map((scenario) => ({
+      clientId,
+      scenario,
+    })),
+  ),
+)(
+  "enforces native-app final-write authority: $clientId/$scenario",
+  async ({ clientId, scenario }) => {
     const scope = scenario === "caller" ? "caller" : undefined;
     const caller = captureGatewayDeviceRevocation(
       fixture.context,
@@ -545,10 +552,10 @@ it.each(["admin", "caller", "non-admin", "revoked"] as const)(
       scopes: [scenario === "non-admin" ? "operator.write" : "operator.admin"],
     });
     client.connect.client = {
-      id: "openclaw-macos",
+      id: clientId,
       mode: "ui",
       version: "test",
-      platform: "macOS",
+      platform: clientId === "gateway-client" ? "win32" : "macOS",
     };
     client.internal = { authenticatedOperator: true };
     const runId = "native-admin-management";

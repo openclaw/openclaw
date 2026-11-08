@@ -921,6 +921,10 @@ original device, profile, scopes, and live authority. Timing-only edits cannot
 upgrade a job's standing delegation. Historical browser grants remain valid;
 historical native sources without recorded delegation are not upgraded.
 
+Authenticated interactive `gateway-client` connections in `ui` mode, including
+the Windows Companion, use the same administrator admission. Other modes of
+`gateway-client` do not receive this UI delegation.
+
 This does not make native clients browser clients, grant direct-local command
 execution, or equate distinct personal administrators. Authenticated shared-owner native UI
 turns use the same continuation rules as shared-owner browser turns. Native UI

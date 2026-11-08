@@ -1,4 +1,8 @@
-import { isNativeAppUiClient } from "../../packages/gateway-protocol/src/client-info.js";
+import {
+  GATEWAY_CLIENT_IDS,
+  GATEWAY_CLIENT_MODES,
+  isNativeAppUiClient,
+} from "../../packages/gateway-protocol/src/client-info.js";
 
 export const ADMIN_SCOPE = "operator.admin" as const;
 export const READ_SCOPE = "operator.read" as const;
@@ -67,7 +71,9 @@ export function resolveGatewayUiAdminSource(
     return "control-ui-admin";
   }
   return client?.internal?.authenticatedOperator === true &&
-    isNativeAppUiClient(client.connect.client)
+    (isNativeAppUiClient(client.connect.client) ||
+      (client.connect.client.id === GATEWAY_CLIENT_IDS.GATEWAY_CLIENT &&
+        client.connect.client.mode === GATEWAY_CLIENT_MODES.UI))
     ? "native-app-admin"
     : undefined;
 }
