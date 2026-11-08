@@ -13,10 +13,10 @@ import {
   formatPreservedWorktreesNotice,
 } from "../lib/sessions/worktree-preservation.ts";
 import { showToast } from "../lib/toast.ts";
-import {
-  type SidebarRecentSession,
-  type SidebarSessionMutationResult,
-  type SidebarSessionMutationScope,
+import type {
+  SidebarRecentSession,
+  SidebarSessionMutationResult,
+  SidebarSessionMutationScope,
 } from "./app-sidebar-session-types.ts";
 import { requestCloudWorkerStop } from "./cloud-worker-stop.runtime.ts";
 import { showConfirmDialog, type ConfirmDialogSkipPreference } from "./confirm-dialog.ts";
