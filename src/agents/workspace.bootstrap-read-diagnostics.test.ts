@@ -193,7 +193,13 @@ describe("workspace bootstrap read diagnostics", () => {
     const release = registerAgentWorkspaceAccess(workspace, { bridge });
     try {
       const kept = await loadExtraBootstrapFilesWithDiagnostics(workspace, ["*/AGENTS.md"]);
-      expect(kept.diagnostics).toEqual([]);
+      expect(kept.diagnostics).toEqual([
+        {
+          path: path.join(workspace, "fat"),
+          reason: "io",
+          detail: "Directory listing exceeded 32 pages",
+        },
+      ]);
       expect(kept.files.map((file) => file.content)).toEqual(["kept instructions"]);
       expect(readDirectory.mock.calls.map(([params]) => params.filePath).toSorted()).toEqual([
         ".",
