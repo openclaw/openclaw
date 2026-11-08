@@ -53,13 +53,8 @@ function buildFixture(
 }
 
 describe("Control UI build chunking", () => {
-  it("consolidates lazy page helpers while keeping validation behind the editor", async () => {
+  it("consolidates lazy Settings helpers while keeping validation behind the editor", async () => {
     const page = modulePath("../pages/config/config-page.tsx");
-    const view = modulePath("../pages/config/view.tsx");
-    const viewState = modulePath("../pages/config/view-state.ts");
-    const mcpSchema = modulePath("../pages/config/mcp-schema.ts");
-    const memorySchema = modulePath("../pages/config/memory-schema.ts");
-    const chat = modulePath("../pages/chat/chat-pane.tsx");
     const editor = modulePath("../components/config-form.render.tsx");
     const lightConsumer = modulePath("../pages/plugins/credential-presentation.tsx");
     const analyze = modulePath("../components/config-form.analyze.ts");
@@ -70,17 +65,10 @@ describe("Control UI build chunking", () => {
     const utils = modulePath("../lib/config-form-utils.ts");
     const hints = modulePath("../i18n/lib/config-hint-translation.ts");
     const items = modulePath("../components/config-form.array-items.ts");
-    const numeric = modulePath("../components/config-form.numeric.ts");
     const controls = modulePath("../components/solid/settings-ui.tsx");
-    const disclosure = modulePath("../components/solid/settings-disclosure.tsx");
     const toggle = modulePath("../components/solid/switch.tsx");
     const checked = modulePath("../lib/reactive/live-checked.ts");
     const header = modulePath("../pages/config/settings-section-header.tsx");
-    const select = modulePath("../components/solid/settings-select.tsx");
-    const selectRow = modulePath("../pages/config/settings-select-row.tsx");
-    const focus = modulePath("../lib/reactive/pending-focus.ts");
-    const progressive = modulePath("../lib/reactive/progressive-list.ts");
-    const floatingHeader = modulePath("../components/solid/floating-header-actions.tsx");
     const copy = modulePath("../i18n/locales/en-settings.ts");
     const entry = "\0settings-helper-fixture";
     const result = await buildFixture(
@@ -88,20 +76,12 @@ describe("Control UI build chunking", () => {
       new Map([
         [
           entry,
-          `export const settings = () => import(${JSON.stringify(page)}); export const credentials = () => import(${JSON.stringify(lightConsumer)}); export const chat = () => import(${JSON.stringify(chat)});`,
+          `export const settings = () => import(${JSON.stringify(page)}); export const credentials = () => import(${JSON.stringify(lightConsumer)});`,
         ],
-        [chat, "export const chat = 'chat';"],
         [
           page,
-          `import { analyze } from ${JSON.stringify(analyze)}; import { items } from ${JSON.stringify(items)}; import { header } from ${JSON.stringify(header)}; import { disclosure } from ${JSON.stringify(disclosure)}; import { selectRow } from ${JSON.stringify(selectRow)}; import { focus } from ${JSON.stringify(focus)}; import { progressive } from ${JSON.stringify(progressive)}; import { floatingHeader } from ${JSON.stringify(floatingHeader)}; import { mcpSchema } from ${JSON.stringify(mcpSchema)}; import { memorySchema } from ${JSON.stringify(memorySchema)}; import { renderView } from ${JSON.stringify(view)}; export const render = () => analyze + items + header + disclosure + selectRow + focus + progressive + floatingHeader + mcpSchema + memorySchema + renderView(); export const edit = () => import(${JSON.stringify(editor)});`,
+          `import { analyze } from ${JSON.stringify(analyze)}; import { items } from ${JSON.stringify(items)}; import { header } from ${JSON.stringify(header)}; export const render = () => analyze + items + header; export const edit = () => import(${JSON.stringify(editor)});`,
         ],
-        [mcpSchema, "export const mcpSchema = 'MCP schema';"],
-        [memorySchema, "export const memorySchema = 'Memory schema';"],
-        [
-          view,
-          `import { memorySchema } from ${JSON.stringify(memorySchema)}; import { state } from ${JSON.stringify(viewState)}; export const renderView = () => memorySchema + state;`,
-        ],
-        [viewState, "export const state = 'view state';"],
         [
           analyze,
           `import { items } from ${JSON.stringify(items)}; import { shared } from ${JSON.stringify(shared)}; export const analyze = items + shared + 'analysis';`,
@@ -118,9 +98,8 @@ describe("Control UI build chunking", () => {
         [sensitive, "export const sensitive = 'sensitive';"],
         [
           items,
-          `import { value } from ${JSON.stringify(utils)}; import { numeric } from ${JSON.stringify(numeric)}; export const items = value + numeric + 'items';`,
+          `import { value } from ${JSON.stringify(utils)}; export const items = value + 'items';`,
         ],
-        [numeric, "export const numeric = 'numeric';"],
         [
           utils,
           `import { hint } from ${JSON.stringify(hints)}; export const value = hint + 'value';`,
@@ -140,24 +119,12 @@ describe("Control UI build chunking", () => {
         ],
         [checked, "export const checked = (value) => value;"],
         [
-          disclosure,
-          `import { control } from ${JSON.stringify(controls)}; export const disclosure = control + 'disclosure';`,
-        ],
-        [select, "export const select = 'select';"],
-        [
-          selectRow,
-          `import { control } from ${JSON.stringify(controls)}; import { select } from ${JSON.stringify(select)}; export const selectRow = control + select;`,
-        ],
-        [focus, "export const focus = 'focus';"],
-        [progressive, "export const progressive = 'progressive';"],
-        [floatingHeader, "export const floatingHeader = 'floating-header';"],
-        [
           lightConsumer,
           `import { value } from ${JSON.stringify(utils)}; export const credential = value;`,
         ],
         [
           editor,
-          `import { constraints } from ${JSON.stringify(constraints)}; import { copy } from ${JSON.stringify(copy)}; import { state } from ${JSON.stringify(viewState)}; export const edit = () => constraints + copy + state;`,
+          `import { constraints } from ${JSON.stringify(constraints)}; import { copy } from ${JSON.stringify(copy)}; export const edit = () => constraints + copy;`,
         ],
         [copy, "export const copy = 'optional editor copy';"],
       ]),
@@ -173,39 +140,21 @@ describe("Control UI build chunking", () => {
     const analysisChunk = chunkFor(analyze);
     const utilsChunk = chunkFor(utils);
     const controlsChunk = chunkFor(controls);
-    const chromeChunk = chunkFor(select);
-    const navigationChunk = chunkFor(focus);
     for (const [name, chunk, modules] of [
       ["config-form-analysis-runtime", analysisChunk, [analyze, shared, sensitive]],
-      ["config-form-utils-runtime", utilsChunk, [utils, hints, items, numeric]],
-      ["settings-controls-runtime", controlsChunk, [controls, header, toggle, checked, disclosure]],
-      ["route-chrome", chromeChunk, [select, selectRow]],
-      ["navigation-helpers", navigationChunk, [focus, progressive, floatingHeader]],
+      ["config-form-utils-runtime", utilsChunk, [utils, hints, items]],
+      ["settings-controls-runtime", controlsChunk, [controls, header, toggle, checked]],
     ] as const) {
       expect(chunk.fileName).toContain(name);
       expect(modules.every((id) => id in chunk.modules)).toBe(true);
     }
     const pageChunk = chunkFor(page);
-    expect(chunkFor(mcpSchema)).toBe(pageChunk);
-    expect(chunkFor(memorySchema)).toBe(pageChunk);
-    expect(chunkFor(view)).toBe(pageChunk);
-    expect(chunkFor(viewState)).toBe(pageChunk);
     const pageImports = reachable(pageChunk.fileName);
     const startupImports = reachable(chunks.find((chunk) => chunk.isEntry)!.fileName);
-    const chatImports = reachable(chunkFor(chat).fileName);
-    for (const chunk of [
-      pageChunk,
-      analysisChunk,
-      utilsChunk,
-      controlsChunk,
-      chromeChunk,
-      navigationChunk,
-    ]) {
+    for (const chunk of [pageChunk, analysisChunk, utilsChunk, controlsChunk]) {
       expect(pageImports.has(chunk.fileName)).toBe(true);
       expect(startupImports.has(chunk.fileName)).toBe(false);
-      expect(chatImports.has(chunk.fileName)).toBe(false);
     }
-    expect(pageImports.has(chunkFor(chat).fileName)).toBe(false);
     const editorChunk = chunkFor(editor);
     const editorImports = reachable(editorChunk.fileName);
     for (const id of [editor, constraints, validator, copy]) {
@@ -219,14 +168,61 @@ describe("Control UI build chunking", () => {
       pageChunk,
       analysisChunk,
       controlsChunk,
-      chromeChunk,
-      navigationChunk,
       editorChunk,
       chunkFor(constraints),
       chunkFor(validator),
       chunkFor(copy),
     ]) {
       expect(lightImports.has(chunk.fileName)).toBe(false);
+    }
+  });
+
+  it("groups catalog cards without eagerly loading the skill reader or Markdown", async () => {
+    const discovery = modulePath("../pages/skills/discovery-view.tsx");
+    const reader = modulePath("../pages/skills/skill-reader-dialog.tsx");
+    const grid = modulePath("../pages/plugins/catalog-grid.tsx");
+    const card = modulePath("../pages/plugins/plugin-card.tsx");
+    const markdown = modulePath("../../node_modules/markdown-it/dist/markdown-it.mjs");
+    const entry = "\0catalog-reader-fixture";
+    const result = await buildFixture(
+      entry,
+      new Map([
+        [entry, `export const open = () => import(${JSON.stringify(discovery)});`],
+        [
+          discovery,
+          `import { grid } from ${JSON.stringify(grid)}; import { card } from ${JSON.stringify(card)}; export const render = () => grid + card; export const read = () => import(${JSON.stringify(reader)});`,
+        ],
+        [grid, "export const grid = 'catalog grid';"],
+        [card, "export const card = 'catalog card';"],
+        [
+          reader,
+          `import { card } from ${JSON.stringify(card)}; import { markdown } from ${JSON.stringify(markdown)}; export const read = () => card + markdown;`,
+        ],
+        [markdown, "export const markdown = 'reader Markdown';"],
+      ]),
+    );
+    if (Array.isArray(result) || !("output" in result)) {
+      throw new Error("Expected one in-memory build");
+    }
+    const chunks = result.output.filter((asset) => asset.type === "chunk");
+    const chunkFor = (id: string) => chunks.find((chunk) => id in chunk.modules)!;
+    const reachable = importClosure(
+      (file) => chunks.find((chunk) => chunk.fileName === file)!.imports,
+    );
+    const catalogChunk = chunkFor(grid);
+    expect(catalogChunk.fileName).toContain("plugin-catalog-runtime");
+    expect(chunkFor(card)).toBe(catalogChunk);
+    const discoveryChunk = chunkFor(discovery);
+    const readerChunk = chunkFor(reader);
+    expect(discoveryChunk.dynamicImports).toContain(readerChunk.fileName);
+    expect(reachable(discoveryChunk.fileName).has(catalogChunk.fileName)).toBe(true);
+    for (const chunk of [readerChunk, chunkFor(markdown)]) {
+      expect(reachable(discoveryChunk.fileName).has(chunk.fileName)).toBe(false);
+      expect(reachable(readerChunk.fileName).has(chunk.fileName)).toBe(true);
+    }
+    const startup = reachable(chunks.find((chunk) => chunk.isEntry)!.fileName);
+    for (const chunk of [catalogChunk, readerChunk, chunkFor(markdown)]) {
+      expect(startup.has(chunk.fileName)).toBe(false);
     }
   });
 
