@@ -1,3 +1,0 @@
-# Regression cases proving preflight and post-turn command maintenance budget the selected model's catalog window.
-# Exact net test-line growth for this change.
-43
