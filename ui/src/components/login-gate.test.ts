@@ -252,6 +252,45 @@ describe("login gate failure recovery", () => {
     expect(element.props.onConnect).toHaveBeenCalledOnce();
   });
 
+  it("does not connect while an IME candidate is being composed", async () => {
+    const element = await mountFailure("", null);
+    const input = element.querySelector<HTMLInputElement>("#login-gate-credential")!;
+    element.props = { ...element.props, secret: "draft", showGatewaySecret: true };
+    await element.updateComplete;
+    input.value = "draft";
+    for (const composing of [
+      { isComposing: true },
+      { keyCode: 229 },
+      { isComposing: true, ctrlKey: true },
+      { keyCode: 229, metaKey: true },
+    ] as const) {
+      input.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "Enter", bubbles: true, ...composing }),
+      );
+      expect(element.props.onConnect).not.toHaveBeenCalled();
+    }
+    // WebKit can deliver the committing Enter after compositionend with both flags
+    // cleared; the input-local grace keeps it from connecting mid-composition.
+    input.dispatchEvent(new CompositionEvent("compositionend", { bubbles: true }));
+    input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    expect(element.props.onConnect).not.toHaveBeenCalled();
+    // An intentional Enter after composition retires the grace and connects.
+    input.dispatchEvent(new KeyboardEvent("keyup", { key: "Enter", bubbles: true }));
+    input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    expect(element.props.onConnect).toHaveBeenCalledOnce();
+  });
+
+  it("keeps IME composition from connecting from the Gateway URL field", async () => {
+    const element = await mountFailure("", null);
+    const input = element.querySelector<HTMLInputElement>("#login-gate-url")!;
+    input.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Enter", bubbles: true, isComposing: true }),
+    );
+    expect(element.props.onConnect).not.toHaveBeenCalled();
+    input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    expect(element.props.onConnect).toHaveBeenCalledOnce();
+  });
+
   it("explains a password mismatch without changing the input or suggesting token recovery", async () => {
     const element = await mountFailure(
       "unauthorized",
