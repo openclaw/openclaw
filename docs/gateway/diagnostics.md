@@ -483,6 +483,11 @@ the profile before sharing it. Full profiles retain graph edges, native signed s
 emit samples out of timestamp order, so signed time deltas are preserved for profile
 viewers to reconstruct timestamps and order samples.
 
+`actualDurationMs` uses a monotonic clock from requesting profiler startup until
+profiler stop completes. It includes `startBlockedMs` and asynchronous startup and
+stop overhead. Native `profile.startTime` and `profile.endTime` remain unchanged
+and can describe a shorter sampling interval.
+
 Sampling can outlast the requested interval when the event loop is blocked. The
 response limit does not bound the runtime's internal allocation during that delay. Profile
 samples describe this isolate, not all process threads, and are not exact

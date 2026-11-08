@@ -35,7 +35,7 @@ type ExperienceReviewAgentEndEvent = {
 };
 
 /** The finished turn's final transcript entry: `ctx.completedTurn` plus its session. */
-export type ExperienceReviewSource = {
+type ExperienceReviewSource = {
   agentId: string;
   sessionKey: string;
   sessionId: string;
@@ -72,10 +72,7 @@ export type ExperienceReviewCandidate = {
 };
 
 /** Starts one delayed callback; the returned function cancels it. */
-export type ExperienceReviewTimer = (
-  delayMs: number,
-  run: () => Promise<void> | undefined,
-) => () => void;
+type ExperienceReviewTimer = (delayMs: number, run: () => Promise<void> | undefined) => () => void;
 
 type ExperienceReviewSchedulerDeps = {
   isSystemActive: () => boolean | Promise<boolean>;

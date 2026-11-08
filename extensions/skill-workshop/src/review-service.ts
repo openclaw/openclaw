@@ -37,7 +37,7 @@ const defaultScheduler = createSkillExperienceReviewScheduler({
 });
 
 /** Counts the finished turn toward a background review; never affects the turn's result. */
-export function scheduleSkillExperienceReview(
+function scheduleSkillExperienceReview(
   params: Omit<SkillExperienceReviewParams, "workshopMutated">,
 ): void {
   const runId = params.ctx.runId?.trim();
@@ -61,7 +61,7 @@ export function scheduleSkillExperienceReview(
  * suppresses the stopped runs until their own aborted completions arrive. Best-effort so review
  * bookkeeping never fails Stop; `run_stopped` fires only after the Stop's authority is confirmed.
  */
-export function stopSkillExperienceReview(params: {
+function stopSkillExperienceReview(params: {
   sessions: readonly { agentId?: string; sessionKey?: string }[];
   runIds: Iterable<string>;
 }): void {
@@ -94,7 +94,7 @@ export function stopSkillExperienceReview(params: {
  * never affects its result. It runs as a job of the plugin service's scheduler, so a graceful
  * restart waits for a running archive while the stop signal ends the diet's model call.
  */
-export function scheduleDailyWorkshopMaintenance(config: OpenClawConfig, agentId: string): void {
+function scheduleDailyWorkshopMaintenance(config: OpenClawConfig, agentId: string): void {
   if (resolveSkillWorkshopConfig(config).autonomous.mode !== "auto") {
     return;
   }

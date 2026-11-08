@@ -2,6 +2,7 @@ import { setImmediate as nextTurn } from "node:timers/promises";
 import { expect, it } from "vitest";
 import { setRuntimeConfigSnapshot } from "../config/config.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
+import { readGlobalSingleton } from "../shared/global-singleton.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
   createSessionCatalogRequestEntrySnapshot,
@@ -74,6 +75,13 @@ it("collects superseded resident rows and their materializations after metadata 
       write(key, 0);
     }
     // Optional transcript work must not borrow a row while collection is measured.
+    const listeners = readGlobalSingleton(
+      Symbol.for("openclaw.internalSessionTranscriptListeners"),
+    );
+    if (!(listeners instanceof Set)) {
+      throw new Error("Transcript listener registry is unavailable");
+    }
+    const listenersBefore = listeners.size;
     const release = holdForeground();
     const projection = await createTestProjection({ cfg, modelCatalog: [] });
     const rows = () => projection.selectEntries().filter(ready);
@@ -94,7 +102,7 @@ it("collects superseded resident rows and their materializations after metadata 
     const control = weakControl();
     function refreshEntries(revision: number) {
       for (const row of rows()) {
-        retired.push(...[row, row.entry, row.materialized].map(weak));
+        retired.push(...[row, row.entry, row.materialized, row.materialized.row].map(weak));
         write(row.key, revision);
       }
     }
@@ -135,6 +143,7 @@ it("collects superseded resident rows and their materializations after metadata 
       const disposedEntries = projection.selectEntries().map((row) => weak(row.entry));
       captureSelections();
       projection.dispose();
+      expect(listeners.size).toBe(listenersBefore);
       await expectCollected(...materializations, ...disposedEntries, ...selections);
     } finally {
       projection.dispose();

@@ -237,7 +237,7 @@ it.each([
   const button = container.querySelector<HTMLButtonElement>("tbody button")!;
   expect(button.textContent).toContain(label);
   expect(container.textContent).not.toContain("opaque-key");
-  expect(container.textContent).toContain("not per-turn billing");
+  expect(container.textContent).toContain("not by who sent each message");
   button.click();
   expect(onSelect).toHaveBeenCalledWith("unattributed:opaque-key");
 });

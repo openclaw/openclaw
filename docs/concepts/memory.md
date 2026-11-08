@@ -205,6 +205,15 @@ recall fully answers the question. It uses memory tools to retrieve missing fact
 when that context is absent or only answers part of the question. Partial, stale,
 or unavailable recall still requires disclosure.
 
+Automatic project recall has a one-second preparation budget, including provider
+startup and cleanup. If the budget expires, the turn continues without project
+candidates and the Gateway logs `project memory recall skipped` with the reason.
+Late results are discarded. The read may finish under the current turn's existing
+authority; the budget does not cancel storage work. Memory tools remain available
+for explicit retrieval.
+Cold or busy stores can therefore omit automatic recall on consecutive turns;
+explicit retrieval uses the memory tool's own lifetime rather than this budget.
+
 If `memory_search` reports that its storage scope closed, run
 `openclaw plugins reload memory-core`, or restart the Gateway, then retry.
 This is a storage lifecycle failure, not an embedding provider error. See

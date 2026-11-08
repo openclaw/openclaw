@@ -106,7 +106,10 @@ export async function runPluginForkedTurn<T>(
           );
         }
         // Lazy: the fork runtime stays out of the Gateway startup chunk.
-        const [{ readActiveTranscriptEntryAnchorAsync }, sessionFork] = await Promise.all([
+        const [
+          { readActiveTranscriptEntryAnchorAsync },
+          { readSessionForkTurn, prepareSessionFork, runSessionFork },
+        ] = await Promise.all([
           import("../config/sessions/session-transcript-anchor-read.js"),
           import("../agents/session-fork-run.js"),
         ]);
@@ -124,12 +127,12 @@ export async function runPluginForkedTurn<T>(
           );
         }
         // The anchored turn supplies its own requester and model, never the plugin.
-        const turn = await sessionFork.readSessionForkTurn(source, params.signal);
+        const turn = await readSessionForkTurn(source, params.signal);
         assertCurrent();
         if (!turn) {
           // Without the turn's own requester, sender-specific policy cannot be checked.
           throw new Error(
-            `Session "${params.sessionKey}" no longer holds the input of entry "${params.through.entryId}".`,
+            `Session "${params.sessionKey}" no longer holds the input within the bounded fork context of entry "${params.through.entryId}".`,
           );
         }
         const sessionModel = resolveSessionModelRef(cfg, target.entry, agentId);
@@ -160,7 +163,7 @@ export async function runPluginForkedTurn<T>(
           deps.authorizeModelOverride(model, override.profile);
         }
         assertOperatorModelAllowed(execution.operatorAuthority, model);
-        const prepared = await sessionFork.prepareSessionFork({
+        const prepared = await prepareSessionFork({
           config: cfg,
           source,
           tools,
@@ -175,7 +178,7 @@ export async function runPluginForkedTurn<T>(
         }
         let admitted: SubagentForkedTurnSource | undefined;
         const value = await execution.run(() =>
-          sessionFork.runSessionFork(
+          runSessionFork(
             {
               config: cfg,
               source,

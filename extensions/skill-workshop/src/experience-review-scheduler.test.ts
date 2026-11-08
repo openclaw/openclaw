@@ -3,7 +3,6 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import {
   createSkillExperienceReviewScheduler,
   type ExperienceReviewCandidate,
-  type ExperienceReviewSource,
   type SkillExperienceReviewParams,
 } from "./experience-review-scheduler.js";
 
@@ -11,7 +10,7 @@ import {
 const workshopPluginConfig = (settings: Record<string, unknown>) => ({
   plugins: { entries: { "skill-workshop": { config: settings } } },
 });
-const source: ExperienceReviewSource = {
+const source: NonNullable<SkillExperienceReviewParams["source"]> = {
   agentId: "main",
   sessionId: "session-1",
   sessionKey: "agent:main:telegram:direct:42",

@@ -183,7 +183,6 @@ describe("chat pane header", () => {
     expect(menu.querySelector('[data-value="layout:side-panel"]')).toBeNull();
     await selectNativeMenu(menu, "layout:close-pane");
     expect(onClosePane).toHaveBeenCalledExactlyOnceWith("pane-1");
-    await selectNativeMenu(menu, "compact:open-advanced");
     await selectNativeMenu(menu, "compact:open-open-in");
     await selectNativeMenu(menu, "split-below");
     expect(onSplitDown).toHaveBeenCalledExactlyOnceWith("pane-1");
@@ -300,7 +299,7 @@ describe("chat pane header", () => {
     expect(crumbs.parentElement).toBe(placement.parentElement);
     expect(crumbs.compareDocumentPosition(placement)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
     expect(query(container, ".chat-pane__header-trailing .chat-pane__presence")).not.toBeNull();
-    expect(text(container, ".chat-pane__placement-chip")).toBe("Runs on Cloud");
+    expect(text(container, ".chat-pane__placement-chip")).toBe("Cloud device");
     const menu = container.querySelector(".chat-pane__placement-menu")!;
     await openNativeMenu(menu);
     await selectNativeMenu(menu, "move");
@@ -644,12 +643,15 @@ describe("chat pane header", () => {
     },
   );
 
-  it("names incognito threads and supplies their lifetime to the accessible reveal tooltip", async () => {
+  it("marks incognito threads with a trailing icon whose tooltip carries their lifetime", async () => {
     const { container } = mountHeader({ session: row({ incognito: true }) });
     const indicator = container.querySelector<HTMLButtonElement>("button.chat-pane__incognito")!;
     const tooltip = indicator.closest("openclaw-tooltip")!;
     await tooltip.updateComplete;
-    expect(indicator?.textContent).toContain("Incognito");
+    expect(indicator.closest(".chat-pane__actions")).not.toBeNull();
+    expect(container.querySelector(".chat-pane__header-leading .chat-pane__incognito")).toBeNull();
+    expect(indicator.getAttribute("aria-label")).toBe("Incognito");
+    expect(indicator.textContent?.trim()).toBe("");
     expect(tooltip.content).toBe(
       "Incognito session. History expires 24 hours after creation or when the Gateway restarts, whichever comes first.",
     );
@@ -657,15 +659,15 @@ describe("chat pane header", () => {
     expect(mountHeader().container.querySelector(".chat-pane__incognito")).toBeNull();
   });
 
-  it("keeps Incognito identity and limits visible when only the canonical key marks it private", () => {
+  it("marks Incognito without a limits banner when only the canonical key marks it private", () => {
     const { container } = mountHeader({
       session: row({ key: "agent:main:dashboard:incognito-private" }),
     });
-    const notice = container.querySelector(".chat-pane__incognito-notice");
-    expect(container.querySelector(".chat-pane__incognito")?.textContent).toContain("Incognito");
-    expect(notice?.textContent).toContain("History expires 24 hours after creation");
-    expect(notice?.textContent).toContain("Tools, plugins, and uploads may save data.");
-    expect(mountHeader().container.querySelector(".chat-pane__incognito-notice")).toBeNull();
+    expect(container.querySelector(".chat-pane__incognito")?.getAttribute("aria-label")).toBe(
+      "Incognito",
+    );
+    expect(container.textContent).not.toContain("History expires 24 hours after creation");
+    expect(container.textContent).not.toContain("Tools, plugins, and uploads may save data.");
   });
 });
 

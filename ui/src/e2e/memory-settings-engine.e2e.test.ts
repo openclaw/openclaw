@@ -182,7 +182,9 @@ suite.define(() => {
       });
 
       await expect.poll(() => engineGroup.inputValue()).toBe("memory-core");
-      await expect.poll(() => page.getByText("Could not change the memory engine").count()).toBe(0);
+      await expect
+        .poll(() => page.getByText("Couldn’t change the memory engine. Try again.").count())
+        .toBe(0);
 
       if (captureUiProofEnabled) {
         await page
@@ -254,9 +256,9 @@ suite.define(() => {
       await expect.poll(() => toggle.isChecked()).toBe(true);
       await page.getByText("Needs attention", { exact: true }).first().waitFor();
       await page
-        .getByText("Could not refresh Control UI configuration: authoritative snapshot unavailable")
+        .getByText("Couldn’t refresh settings. Try again. authoritative snapshot unavailable")
         .waitFor();
-      expect(await page.getByText("Could not update Active memory").count()).toBe(0);
+      expect(await page.getByText("Couldn’t update Active memory. Try again.").count()).toBe(0);
       expect(pageErrors).toEqual([]);
 
       if (captureUiProofEnabled) {

@@ -204,7 +204,7 @@ suite.define(() => {
       await installMockGateway(page, { awaitInitialRoster: false });
       await page.goto(`${suite.server.baseUrl}chat/main`);
       const error = page.locator(".lazy-view-error");
-      await error.getByText("Panel failed to load", { exact: true }).waitFor();
+      await error.getByText("Couldn’t load this panel.", { exact: true }).waitFor();
       expect(await error.getByRole("button", { name: "Retry", exact: true }).isVisible()).toBe(
         true,
       );
@@ -273,7 +273,7 @@ suite.define(() => {
           await composer.fill(draft);
           await page.locator('a.markdown-file-link[data-file-path="notes.txt"]').click();
           const failure = page.locator(".sidebar-region__right-runtime .lazy-view-error");
-          await failure.getByText("Panel failed to load", { exact: true }).waitFor();
+          await failure.getByText("Couldn’t load this panel.", { exact: true }).waitFor();
           expect(failedImports).toBe(1);
           const close = page.getByRole("button", { name: "Close Files", exact: true });
           expect(await close.count()).toBe(1);
@@ -308,33 +308,38 @@ suite.define(() => {
     },
   );
 
-  it.each(["login", "focus"] as const)("does not acquire the shell for %s", async (mode) => {
-    await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
-      const shellRequests: string[] = [];
-      page.on("request", (request) => {
-        if (shellModule.test(request.url())) {
-          shellRequests.push(request.url());
-        }
-      });
-      const gateway = await installMockGateway(page, {
-        awaitInitialRoster: false,
-        terminalEnabled: false,
-        ...(mode === "login" ? { deferredMethods: ["connect"] } : {}),
-      });
-      await page.goto(`${suite.server.baseUrl}${mode === "focus" ? "focus/terminal" : "new"}`);
-      await gateway.waitForRequest("connect");
-      if (mode === "login") {
-        await gateway.rejectDeferred("connect", {
-          code: "INVALID_REQUEST",
-          message: "token missing",
-          details: { code: ConnectErrorDetailCodes.AUTH_TOKEN_MISSING },
+  it.each(["login", "focus"] as const)(
+    "keeps %s outside the shell after admission",
+    async (mode) => {
+      await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
+        const shellRequests: string[] = [];
+        page.on("request", (request) => {
+          if (shellModule.test(request.url())) {
+            shellRequests.push(request.url());
+          }
         });
-        await page.locator('.login-gate__failure[data-kind="auth-required"]').waitFor();
-      } else {
-        await page.locator(".terminal-view-unavailable").waitFor();
-      }
-      expect(await page.locator("openclaw-app-shell").count()).toBe(0);
-      expect(shellRequests).toEqual([]);
-    });
-  });
+        const gateway = await installMockGateway(page, {
+          awaitInitialRoster: false,
+          terminalEnabled: false,
+          ...(mode === "login" ? { deferredMethods: ["connect"] } : {}),
+        });
+        await page.goto(`${suite.server.baseUrl}${mode === "focus" ? "focus/terminal" : "new"}`);
+        await gateway.waitForRequest("connect");
+        if (mode === "login") {
+          await page.locator("openclaw-app-shell").waitFor();
+          expect(shellRequests).toHaveLength(1);
+          await gateway.rejectDeferred("connect", {
+            code: "INVALID_REQUEST",
+            message: "token missing",
+            details: { code: ConnectErrorDetailCodes.AUTH_TOKEN_MISSING },
+          });
+          await page.locator('.login-gate__failure[data-kind="auth-required"]').waitFor();
+        } else {
+          await page.locator(".terminal-view-unavailable").waitFor();
+        }
+        expect(await page.locator("openclaw-app-shell").count()).toBe(0);
+        expect(shellRequests).toHaveLength(mode === "login" ? 1 : 0);
+      });
+    },
+  );
 });

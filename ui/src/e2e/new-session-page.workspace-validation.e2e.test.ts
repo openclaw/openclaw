@@ -242,7 +242,7 @@ suite.define(() => {
       });
       await gateway.emitGatewayEvent("worktrees.branches.changed", { repoRoot: WORKSPACE });
       await picker
-        .getByText("Couldn't verify Git for this folder. Choose it again to retry.", {
+        .getByText("Couldn’t verify Git for this folder. Try again.", {
           exact: true,
         })
         .waitFor({ state: "visible" });
@@ -465,13 +465,13 @@ suite.define(() => {
             expect(await worktree.isDisabled()).toBe(true);
             await expect
               .poll(() => tooltipTitleText(worktree))
-              .toBe("Couldn't verify Git for this folder. Choose it again to retry.");
+              .toBe("Couldn’t verify Git for this folder. Try again.");
           }
           await checkoutPopover(page).getByRole("button", { name: "Current checkout" }).click();
           await expectAttribute(trigger, "data-worktree", "false");
           expect(await trigger.isVisible()).toBe(true);
           await checkoutPopover(page)
-            .getByText("Couldn't verify Git for this folder. Choose it again to retry.", {
+            .getByText("Couldn’t verify Git for this folder. Try again.", {
               exact: true,
             })
             .waitFor({ state: "visible" });

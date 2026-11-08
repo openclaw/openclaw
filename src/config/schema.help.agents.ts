@@ -33,7 +33,7 @@ export const AGENT_FIELD_HELP: Record<string, string> = {
     "Per-plugin enablement override for a specific entry, applied on top of global plugin policy. With the default hybrid reload mode, changes hot-reload the plugin runtime for new agent turns without restarting the Gateway unless the plugin requires a restart for this path. Use this to stage plugin rollout gradually across environments.",
   "plugins.entries.*.hooks":
     "Per-plugin typed hook policy controls for core-enforced safety gates. Use this to constrain high-impact hook categories without disabling the entire plugin.",
-  "plugins.entries.*.hooks.allowPromptInjection":
+  "plugins.entries.*.hooks.allowPromptModification":
     "Allows this plugin to add or change the context and instructions sent to the model, which can influence its responses. Only allow this for plugins you trust. Allowed by default. Set false to block prompt-modifying hooks, tool prompt guidance, next-turn prompt contributions, and active-run steering.",
   "plugins.entries.*.hooks.allowConversationAccess":
     "Controls whether this plugin may read raw conversation content from typed hooks such as `before_agent_run`, `before_model_resolve`, `before_agent_reply`, `llm_input`, `llm_output`, `before_agent_finalize`, and `agent_end`. Non-bundled plugins must opt in explicitly.",

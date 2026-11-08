@@ -29,7 +29,6 @@ import "../../styles/chat/composer-context-strip.css";
 import "../../styles/chat/composer-progress.css";
 import "../../styles/chat/composer-queue.css";
 import { resetChatComposerState } from "./components/chat-composer-state.ts";
-import { ReplyPreview } from "./components/chat-composer-view.tsx";
 
 const attachments = Array.from({ length: 7 }, (_, index) => ({
   id: `overflow-${index}`,
@@ -76,7 +75,7 @@ const drawComposer = (input: Parameters<typeof renderComposerInto>[1]) =>
   renderComposerInto(container, input);
 
 beforeEach(async () => {
-  await Promise.all([page.viewport(1200, 800), ReplyPreview.preload()]);
+  await page.viewport(1200, 800);
   container = createComposerContainer();
   container.className = "agent-chat__input";
   container.style.width = "760px";
@@ -166,6 +165,7 @@ it.each([
     onDraftChange: () => dismissed.push("mentions"),
   });
   drawComposer({ ...props });
+  await waitForSolid(() => expect(query(".chat-reply-preview:not([role])")).not.toBeNull());
   await afterLayout();
   await waitForSolid(() => expect(query(".chat-attachment-thumb")).not.toBeNull());
   const attachmentBox = rect(".chat-attachment-thumb", rail());

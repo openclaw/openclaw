@@ -149,13 +149,13 @@ it("preserves drafts and numeric admission across config refreshes", () => {
     />
   ));
   flush();
-  const frequency = numberInput(view.container, "Dreaming frequency");
+  const frequency = numberInput(view.container, "Schedule (cron)");
   const lookback = numberInput(view.container, "Lookback days");
   frequency.value = "0 4 * * *";
   lookback.value = "14";
   setConfig(draft("0 3 * * *", 7, { verboseLogging: true }));
   flush();
-  expect(numberInput(view.container, "Dreaming frequency")).toBe(frequency);
+  expect(numberInput(view.container, "Schedule (cron)")).toBe(frequency);
   expect(frequency.value).toBe("0 4 * * *");
   expect(lookback.value).toBe("14");
   expect(onPatch).not.toHaveBeenCalled();
@@ -235,10 +235,10 @@ it("submits edited values and removals through the shared config owner without m
     );
     toggle.checked = false;
     toggle.dispatchEvent(new Event("change", { bubbles: true }));
-    const frequency = numberInput(view.container, "Dreaming frequency");
+    const frequency = numberInput(view.container, "Schedule (cron)");
     editNumber(frequency, "");
     flush();
-    expect(numberInput(view.container, "Dreaming frequency")).toBe(frequency);
+    expect(numberInput(view.container, "Schedule (cron)")).toBe(frequency);
     expect(frequency.value).toBe("");
     runtimeConfig.patchForm(["agents", "defaults", "userTimezone"], "Etc/UTC");
     await vi.advanceTimersByTimeAsync(CONFIG_FORM_AUTO_SAVE_DEBOUNCE_MS);

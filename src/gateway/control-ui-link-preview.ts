@@ -131,7 +131,12 @@ function createPreviewExtraction(): PreviewExtractionState {
   return state;
 }
 
-async function readPageMetadata(response: Response, finalUrl: string, signal: AbortSignal) {
+async function readPageMetadata(
+  response: Response,
+  finalUrl: string,
+  signal: AbortSignal,
+  allowSvgIcons: boolean,
+) {
   let state = createPreviewExtraction();
   const reader = response.body?.getReader();
   if (reader) {
@@ -220,8 +225,8 @@ async function readPageMetadata(response: Response, finalUrl: string, signal: Ab
       continue;
     }
     const url = parseControlUiLinkPreviewUrl(attrs.href, baseUrl)?.href;
-    // The presentation contract carries raster/ICO only; unsupported vectors fall back to /favicon.ico.
-    if (url && attrs.type !== "image/svg+xml" && !icons.includes(url)) {
+    // Link previews carry raster/ICO only; the favicon proxy also sanitizes SVG icons.
+    if (url && (allowSvgIcons || attrs.type !== "image/svg+xml") && !icons.includes(url)) {
       icons.push(url);
       if (icons.length === 2) {
         break;
@@ -244,6 +249,7 @@ async function fetchPreviewResource<T>(
   signal: AbortSignal,
   isEnabled: () => boolean,
   read: (response: Response, finalUrl: string) => Promise<T>,
+  requireHttps = false,
 ): Promise<T | undefined> {
   try {
     const { response, finalUrl, release } = await fetchWithSsrFGuard(
@@ -262,7 +268,10 @@ async function fetchPreviewResource<T>(
         },
         // Preserve the anonymous public URL contract on redirects as well as initial requests.
         resolveDispatcherPolicy: (target) => {
-          if (!parseControlUiLinkPreviewUrl(target.href)) {
+          if (
+            !parseControlUiLinkPreviewUrl(target.href) ||
+            (requireHttps && target.protocol !== "https:")
+          ) {
             throw new Error("Not a public preview URL");
           }
           return undefined;
@@ -315,15 +324,13 @@ async function loadImage(bytes: Buffer | undefined, icon: boolean, signal: Abort
   }
 }
 
-async function loadPreview(
+export function loadControlUiLinkMetadata(
   url: URL,
   isEnabled: () => boolean,
   signal: AbortSignal,
-): Promise<ControlUiLinkPreview> {
-  if (signal.aborted || !isEnabled()) {
-    return {};
-  }
-  const page = await fetchPreviewResource(
+  options: { requireHttps?: boolean; allowSvgIcons?: boolean } = {},
+) {
+  return fetchPreviewResource(
     url.href,
     "text/html,application/xhtml+xml",
     signal,
@@ -333,9 +340,24 @@ async function loadPreview(
       if (type !== "text/html" && type !== "application/xhtml+xml") {
         return undefined;
       }
-      return { ...(await readPageMetadata(response, finalUrl, signal)), finalUrl };
+      return {
+        ...(await readPageMetadata(response, finalUrl, signal, options.allowSvgIcons === true)),
+        finalUrl,
+      };
     },
+    options.requireHttps,
   );
+}
+
+async function loadPreview(
+  url: URL,
+  isEnabled: () => boolean,
+  signal: AbortSignal,
+): Promise<ControlUiLinkPreview> {
+  if (signal.aborted || !isEnabled()) {
+    return {};
+  }
+  const page = await loadControlUiLinkMetadata(url, isEnabled, signal);
   const iconUrls = new Set([
     ...(page?.icons ?? []),
     new URL("/favicon.ico", page?.finalUrl ?? url.href).href,

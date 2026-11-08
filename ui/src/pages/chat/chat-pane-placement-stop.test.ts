@@ -5,6 +5,7 @@ import { createComponent } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewaySessionRow } from "../../api/types.ts";
+import { resolveCloudWorkerStopAction } from "../../components/cloud-worker-stop.ts";
 import { t } from "../../i18n/index.ts";
 import { createSessionsListResult } from "../../test-helpers/chat-model.ts";
 import {
@@ -140,11 +141,21 @@ describe("chat pane startup worker copy", () => {
 });
 
 describe("chat pane worker stop", () => {
+  it("labels only active cloud ownership as a cloud stop", () => {
+    const cloud = activePlacementSession().placement;
+    const device = offlineDeviceSession().placement;
+    expect(resolveCloudWorkerStopAction(cloud)?.copyKey).toBe("sessionsView.stopCloudWorker");
+    expect(resolveCloudWorkerStopAction(device)?.copyKey).toBe("sessionsView.stopWorker");
+    expect(resolveCloudWorkerStopAction(startupPlacements[0])?.copyKey).toBe(
+      "sessionsView.stopWorker",
+    );
+    expect(resolveCloudWorkerStopAction(undefined)).toBeNull();
+  });
   it.each([
-    [0, "device", "Runs on device", "Stop device worker…"],
-    [0, "profile", "Runs on Cloud", "Stop cloud worker…"],
-    [2, "profile", "device-service · device-profile", "Stop cloud worker…"],
-    [3, undefined, "Runs on worker", "Stop worker…"],
+    [0, "device", "Runs on device", "Stop session on device…"],
+    [0, "profile", "Cloud device", "Stop cloud device…"],
+    [2, "profile", "Cloud device · device-profile", "Stop cloud device…"],
+    [3, undefined, "Runs on a device", "Stop session on device…"],
   ] as const)("presents startup worker %s/%s", (index, targetKind, label, stopLabel) => {
     const placement = startupPlacements[index];
     expect(
@@ -192,14 +203,14 @@ describe("chat pane worker stop", () => {
       ).toBe(true),
     );
     const stop = container.querySelector<HTMLButtonElement>(".chat-pane__placement-reclaim");
-    expect(stop?.textContent?.trim()).toBe("Stop device worker…");
+    expect(stop?.textContent?.trim()).toBe("Stop session on device…");
     stop?.click();
     const actions = await waitForConfirmDialogActions();
     expect(document.querySelector("openclaw-modal-dialog")?.textContent).toContain(
-      "This will save workspace changes and stop this session’s worker",
+      "This session stops working on this device after saving workspace changes",
     );
     expect(actions.querySelector(".btn.danger [aria-hidden=false]")?.textContent?.trim()).toBe(
-      "Stop worker",
+      "Stop",
     );
     answerConfirmDialog(actions, "confirm");
     await reclaim;
@@ -254,9 +265,9 @@ describe("chat pane worker stop", () => {
       answerConfirmDialog(actions, "confirm");
       await reclaim;
 
-      expect(actionText).toContain("Stop worker");
-      expect(confirmation).toContain("Stop worker?");
-      expect(confirmation).toContain("Send a new message to continue.");
+      expect(actionText).toContain("Stop");
+      expect(confirmation).toContain("Stop this session on the device?");
+      expect(confirmation).toContain("Other sessions on the device keep running.");
       expect(pausesBeforeConfirmation).toBe(0);
       expect(request).toHaveBeenCalledWith(
         "sessions.reclaim",
@@ -265,7 +276,7 @@ describe("chat pane worker stop", () => {
       );
       expect(pane.context.placementStartup.pause).toHaveBeenCalledExactlyOnceWith(
         session.key,
-        "Worker stop requested. Review the initial message before retrying.",
+        "Device stop requested. Review the initial message before retrying.",
         expect.objectContaining({
           readSessionPlacementRecovery: expect.any(Function),
           pauseSessionPlacementRecovery: expect.any(Function),

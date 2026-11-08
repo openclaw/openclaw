@@ -6,6 +6,7 @@ import type {
   ConfigSecretFields,
   StoredSecretSources,
 } from "../lib/config/config-secret-fields.ts";
+import { formatUiError } from "../lib/format-error.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import { Icon } from "./solid/icon.tsx";
 
@@ -104,7 +105,7 @@ export function createSecretFieldHold(read: () => SecretFieldSource) {
       setSaving(true);
       const result = await secretFields
         .save(path, value)
-        .catch((cause: unknown) => ({ ok: false as const, error: String(cause) }));
+        .catch((cause: unknown) => ({ ok: false as const, error: formatUiError(cause) }));
       setSaving(false);
       if (!result.ok) {
         error = result.error;

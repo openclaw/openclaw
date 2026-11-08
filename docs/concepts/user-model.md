@@ -61,6 +61,8 @@ Git worktree. For manual host-side editing, obtain the durable profile ID from t
 Gateway's authenticated profile/People data; do not use a display name, GitHub
 login, email, or a profile ID pasted into a message. This uses existing session
 ownership and creation records; no schema or configuration change is needed.
+Worktree sessions load that same saved personal file, not a copy committed in the
+worktree. Shared bootstrap files still come from the session's selected workspace.
 
 Each session selects **one personal `USER.md`**: the assigned human owner's file
 first, otherwise the authenticated human creator's file. An agent or system
@@ -359,7 +361,7 @@ Unlinking takes effect on subsequent turns without a restart.
 
 ## GitHub connections
 
-Open **Settings → Profile → GitHub connections** to connect **My GitHub** without changing the shared **System GitHub** account. Both accounts and their connection status remain visible together. Viewing these connections does not require selecting an agent or configuring a default agent. Connecting a credential does not change your verified GitHub sign-in identity, display name, avatar, Git co-author credit preference, or OpenClaw permissions.
+Open **Settings → Profile → GitHub accounts** to connect **My GitHub** without changing the shared **System GitHub** account. Both accounts and their connection status remain visible together. Viewing these connections does not require selecting an agent or configuring a default agent. Connecting a credential does not change your verified GitHub sign-in identity, display name, avatar, Git co-author credit preference, or OpenClaw permissions.
 
 My GitHub requires an authenticated, durable Gateway profile, including the local owner profile. An identified operator with `operator.read` can manage only their own connection, even without administrative or general write access. Shared-secret devices using the owner profile share that connection. Use per-person sign-in for a team. System and per-agent connection changes still require `operator.admin`.
 
@@ -424,7 +426,7 @@ Shared publication also supports `operator.sessions.write` for the session creat
 
 Personal publication and confirmation require `operator.write` and current access to change the session. Connecting your account alone does not grant either permission.
 
-Personal GitHub is a Gateway-brokered publication connection, not a session-wide shell identity. Ordinary agent `git`/`gh` commands, model-initiated publication, and repository previews and discovery keep their existing credential behavior. OpenClaw cloud workers use the shared execution identity, never your personal connection. For a repository-only session, finish the current turn and wait for its accepted Git-normalized checkpoint. Personal publication is available while the worker is idle or after Stop, without a Gateway checkout. Remote sessions sourced from a Gateway worktree still require **Stop cloud worker…** before personal publication. See [`tools.github`](/gateway/config-tools#tools-github) for shared agent execution.
+Personal GitHub is a Gateway-brokered publication connection, not a session-wide shell identity. Ordinary agent `git`/`gh` commands, model-initiated publication, and repository previews and discovery keep their existing credential behavior. OpenClaw cloud workers use the shared execution identity, never your personal connection. For a repository-only session, finish the current turn and wait for its accepted Git-normalized checkpoint. Personal publication is available while the worker is idle or after Stop, without a Gateway checkout. Remote sessions sourced from a Gateway worktree still require **Stop cloud device…** before personal publication. See [`tools.github`](/gateway/config-tools#tools-github) for shared agent execution.
 
 The Gateway binds personal publication to your authenticated profile, the selected account, and the accepted worktree snapshot or repository checkpoint. Another participant's message cannot switch that account or authorize later work using your connection. If the account becomes unavailable or the workspace changes, publication stops with a recovery action instead of falling back to System or native credentials.
 

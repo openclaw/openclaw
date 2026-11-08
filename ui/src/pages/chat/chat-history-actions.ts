@@ -138,7 +138,10 @@ export async function clearChatHistory(
   try {
     const resetResult = await state.sessions.reset(sessionKey, agentParams);
     if (resetResult === "not-started") {
-      setChatError(state, "Gateway was unavailable before chat history could be cleared.");
+      setChatError(
+        state,
+        "Couldn’t clear the conversation. The Gateway was unavailable before clearing started. Reconnect and try again.",
+      );
       scheduleChatScroll(state);
       return "failed";
     }
