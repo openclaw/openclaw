@@ -1632,9 +1632,9 @@ describe("sendMessageIMessage receipts", () => {
     "sends media over RPC when native attachment cannot serve $target",
     async ({ target, error, guid, command, rpcTarget }) => {
       const client = createClient({ message_id: 12345 });
-      const runCliJson = mockCliSend();
-      if (guid) runCliJson.mockResolvedValueOnce({ guid });
-      else runCliJson.mockRejectedValueOnce(new Error(error));
+      const runCliJson = guid
+        ? mockCliSend().mockResolvedValueOnce({ guid })
+        : mockCliSend().mockRejectedValueOnce(new Error(error));
       mockAttachment({ path: "/tmp/image.png", contentType: "image/png" });
 
       const result = await sendMessageIMessage(target, "", {
