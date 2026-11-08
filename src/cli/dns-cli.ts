@@ -155,24 +155,26 @@ function readMacOsAclEntries(filePath: string): MacOsAclEntry[] {
  * while they are staged), and a fresh publication restores them so a
  * protective denial - or any other inherited policy - survives creation the
  * way the plain write's inherited behavior provided it. The inheritance
- * flags are dropped from the re-applied form, matching chmod +a semantics.
+ * flags are dropped from the re-appliable form and the recorded positions are
+ * renumbered contiguously, so the restored order matches the original.
  */
-function readInheritedMacOsAclEntries(dirPath: string): string[] {
+function readInheritedMacOsAclEntries(dirPath: string): MacOsAclEntry[] {
   if (os.platform() !== "darwin") {
     return [];
   }
   return readMacOsAclEntries(dirPath)
-    .filter((entry) => entry.includes("file_inherit"))
-    .map((entry) =>
-      entry
-        .replace(/\bfile_inherit\b/g, "")
-        .replace(/\bdirectory_inherit\b/g, "")
-        .replace(/\blimit_inherit\b/g, "")
-        .replace(/\bonly_inherit\b/g, "")
-        .replace(/\s+/g, " ")
+    .filter((captured) => captured.entry.includes("file_inherit"))
+    .map((captured) => ({
+      entry: captured.entry
+        .replace(/\\bfile_inherit\\b/g, "")
+        .replace(/\\bdirectory_inherit\\b/g, "")
+        .replace(/\\blimit_inherit\\b/g, "")
+        .replace(/\\bonly_inherit\\b/g, "")
+        .replace(/\\s+/g, " ")
         .trim(),
-    )
-    .filter((entry) => entry.length > 0);
+    }))
+    .filter((captured) => captured.entry.length > 0)
+    .map((captured, index) => ({ position: index, entry: captured.entry }));
 }
 
 /** Restore the captured access policy on the staged file at its original positions. */
@@ -230,7 +232,7 @@ function stagingFilesystem(): ReplaceFileAtomicSyncFileSystem {
         flags === "wx" &&
         path.basename(stagedPath).startsWith(".openclaw-dns-config")
       ) {
-        const stripped = spawnSync("chmod", ["-N", stagedPath], { encoding: "utf-8" });
+        const stripped = spawnSync("/bin/chmod", ["-N", stagedPath], { encoding: "utf-8" });
         if (stripped.status !== 0) {
           // Configuration must not be written while an inherited grant may
           // still allow an excluded principal to read the staging file.
@@ -419,7 +421,7 @@ function publishConfigFileWithSudo(filePath: string, content: string): void {
     // 0600 mode does not remove them; strip them before any configuration
     // byte exists, and restore the operator's own entries below.
     if (os.platform() === "darwin") {
-      run("sudo", ["chmod", "-N", tempPath]);
+      run("sudo", ["/bin/chmod", "-N", tempPath]);
     }
     const staged = spawnSync("sudo", ["tee", tempPath], {
       input: content,
