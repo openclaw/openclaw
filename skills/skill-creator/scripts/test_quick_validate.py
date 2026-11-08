@@ -25,18 +25,6 @@ class TestQuickValidate(TestCase):
         content = "---\r\nname: crlf-skill\r\ndescription: ok\r\n---\r\n# Skill\r\n"
         self.assertTrue(*self.validate_content(content))
 
-    def test_indented_frontmatter_marker_remains_description_content(self):
-        for header in ("|", ">"):
-            for description, expected in (
-                ("---\n  Summarize reports.", True),
-                ("Summarize\n  ---\n  <reports>", False),
-            ):
-                with self.subTest(header=header, description=description):
-                    valid, message = self.validate_content(
-                        f"---\nname: marker-skill\ndescription: {header}\n  {description}\n---  \n"
-                    )
-                    self.assertEqual(valid, expected, message)
-
     def test_rejects_missing_frontmatter_closing_fence(self):
         content = "---\nname: bad-skill\ndescription: missing end\n# no closing fence\n"
         self.assertEqual(self.validate_content(content), (False, "Invalid frontmatter format"))
@@ -53,17 +41,17 @@ metadata: |
   }
 ---
 # Skill
-"""
+""".replace("\n---\n", "\n--- \t\n")
         with patch.object(quick_validate, "yaml", None):
             cases = [
                 ("Works without pyyaml\n  Use for notes.", True),
                 *[
-                    (f"{header}\n  Summarize meetings.\n  Use for notes.", True)
+                    (f"{header}\n  ---\n  Summarize meetings.\n  Use for notes.", True)
                     for header in (">", ">-", ">+", ">2-", ">-2", "> # notes", "|-", "|2+")
                 ],
                 ("'>'", False),
                 ('">-"', False),
-                (">-\n  Summarize <meetings>.", False),
+                (">-\n  Summarize\n  ---\n  <meetings>.", False),
                 (">-\n  Summarize meetings.\n  # <notes>", False),
                 (">-", False),
                 ("|-", False),
@@ -104,7 +92,7 @@ metadata: |
             ("comment-skill", r'"Summarize \" # <reports>" # notes', False),
             ("comment-skill", "'Summarize user''s # <reports>' # notes", False),
             ("comment-skill", "Summarize#<reports>", False),
-            ("comment-skill", "|\n  Summarize # <reports>", False),
+            ("comment-skill", "|\n  Summarize\n  ---\n  reports # <reports>", False),
             ("comment-skill", "Summarize\n  reports # <notes>", True),
             ("comment-skill", "\n  Summarize reports # <notes>", True),
             ("comment-skill", "Summarize\n  reports # " + "x" * 1024, True),
