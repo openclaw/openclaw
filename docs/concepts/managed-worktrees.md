@@ -124,7 +124,9 @@ the original PR selected for subsequent publication; the earlier publication
 receipt remains unchanged.
 Publication and base refresh reuse exact commits already stored locally instead
 of fetching them again. Partial clones still fetch missing contents when the
-operation needs those files.
+operation needs those files. Missing publication commits use the cached target
+and default base tips for fetch negotiation when available, avoiding unrelated
+session histories while retaining commit ancestry and trees.
 Only sessions with a writable managed sandbox are offered this action; direct
 host sessions merge the base with git in their workspace before publishing.
 Resolve reported conflicts and repeat it with `conflictsResolved: true` and the
