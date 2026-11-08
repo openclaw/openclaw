@@ -28,12 +28,14 @@ export function localWorkspaceProjectionPath(owner: Pick<LocalWorkspaceOwner, "w
   );
 }
 
-/** Build independent, source-only Git metadata before any guest can write this checkout. */
+/** Build or refresh private source-only metadata before any guest can write this checkout. */
 export async function prepareLocalWorkspaceCheckout(params: {
   source: string;
   destination: string;
   temporaryRoot: string;
   baseCommit: string;
+  /** The exclusive template owner has validated this existing checkout. */
+  retainedCommit?: string;
   branch: string;
   signal: AbortSignal;
   assertCurrent: () => void;
@@ -54,6 +56,7 @@ export async function prepareLocalWorkspaceCheckout(params: {
           prepareWorkerWorkspaceGitPack({
             root: params.source,
             baseCommit: params.baseCommit,
+            retainedCommit: params.retainedCommit,
             temporaryRoot: temporary,
             signal,
             baseEnv,
@@ -80,15 +83,17 @@ export async function prepareLocalWorkspaceCheckout(params: {
         signal,
         beforeRun: current,
       });
-    await git([
-      "init",
-      "--quiet",
-      "--template=",
-      "--object-format=" + (params.baseCommit.length === 40 ? "sha1" : "sha256"),
-    ]);
+    if (!params.retainedCommit) {
+      await git([
+        "init",
+        "--quiet",
+        "--template=",
+        "--object-format=" + (params.baseCommit.length === 40 ? "sha1" : "sha256"),
+      ]);
+    }
     current();
     await runWorkspaceInventoryCommandToFile({
-      argv: ["git", "-C", repo, "index-pack", "--stdin"],
+      argv: ["git", "-C", repo, "index-pack", "--stdin", "--fix-thin"],
       inputPath: pack,
       outputPath: path.join(temporary, "index-pack-result"),
       baseEnv: gitEnvironment(cleanEnv),
@@ -98,10 +103,25 @@ export async function prepareLocalWorkspaceCheckout(params: {
     });
     current();
     phases.mark(`${RECONCILE_PHASE}.checkout.materialize`);
-    await fs.writeFile(path.join(repo, ".git", "shallow"), params.baseCommit + "\n", {
+    // Earlier snapshot commits remain in objects/reflogs and still lack their ancestors.
+    await fs.appendFile(path.join(repo, ".git", "shallow"), params.baseCommit + "\n", {
       mode: 0o600,
     });
-    await git(["checkout", "--quiet", "-b", params.branch, params.baseCommit]);
+    await git([
+      "checkout",
+      "--quiet",
+      params.retainedCommit ? "-B" : "-b",
+      params.branch,
+      params.baseCommit,
+    ]);
+    if (params.retainedCommit) {
+      // A session may receive only this commit's source, including through Git objects.
+      // Template metadata is host-owned; every imported object lives in a pack.
+      await git(["reflog", "expire", "--expire=all", "--all"]);
+      await git(["repack", "-ad"]);
+      current();
+      await fs.writeFile(path.join(repo, ".git", "shallow"), params.baseCommit + "\n");
+    }
   } finally {
     phases.mark(`${RECONCILE_PHASE}.checkout.cleanup`);
     await fs.rm(temporary, { recursive: true, force: true });

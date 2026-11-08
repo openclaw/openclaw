@@ -305,6 +305,7 @@ export async function prepareSandboxDependencyTemplate(params: {
       const installTimeout = AbortSignal.timeout(15 * 60_000);
       timeout = installTimeout;
       phases.mark(`${DEPENDENCY_PHASE}.install`);
+      // Retained dependencies must still run lifecycle scripts for the new source commit.
       const installed = await timeWorktreePreparationPhase("setup", () =>
         execContainer(
           identity.engine,
@@ -315,7 +316,7 @@ export async function prepareSandboxDependencyTemplate(params: {
             containerId,
             "/bin/sh",
             "-c",
-            `exec pnpm install ${docker.network === "none" ? "--offline " : ""}--frozen-lockfile --store-dir "$XDG_DATA_HOME/pnpm/store"`,
+            `exec pnpm install ${docker.network === "none" ? "--offline " : ""}--frozen-lockfile --config.optimistic-repeat-install=false --store-dir "$XDG_DATA_HOME/pnpm/store"`,
           ],
           {
             allowFailure: true,

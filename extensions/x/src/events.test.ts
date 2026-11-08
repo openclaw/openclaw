@@ -83,6 +83,31 @@ afterEach(() => {
 });
 
 describe("X event transport", () => {
+  it.each([401, 403])("surfaces terminal polling authentication failure %s", async (status) => {
+    vi.useFakeTimers();
+    const api = budgetApi(createXTestSpend(), () => Response.json({}, { status }));
+    const failed = Promise.withResolvers<void>();
+    const test = streamFixture({
+      api,
+      mode: "poll",
+      onStatus: (value) => {
+        if (value.message?.includes("failed")) {
+          failed.resolve();
+        }
+      },
+    });
+    try {
+      await failed.promise;
+      expect(test.statuses.at(-1)).toMatchObject({
+        terminalDisconnect: true,
+        message: "mentions polling authentication failed; check X credentials",
+      });
+      await expect(test.run).rejects.toThrow(`HTTP ${status}`);
+    } finally {
+      await test.stop().catch(() => {});
+    }
+  });
+
   it("times retry sleep, both budget checks, response headers, and first byte separately", async () => {
     vi.useFakeTimers();
     const delay = (ms: number) =>
@@ -315,6 +340,7 @@ describe("X event transport", () => {
       onStatus: (value) => {
         if (
           value.cursor ||
+          value.terminalDisconnect ||
           value.message === "mentions poll failed; retrying after the poll interval"
         ) {
           settled.resolve();
@@ -336,7 +362,11 @@ describe("X event transport", () => {
           : {}),
       });
     } finally {
-      await test.stop();
+      if (testCase.mode === "forbidden") {
+        await expect(test.stop()).rejects.toThrow("HTTP 403");
+      } else {
+        await test.stop();
+      }
     }
   });
 
