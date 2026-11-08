@@ -274,6 +274,18 @@ describe("buildGuardedModelFetch", () => {
     await expect(parseSse(response)).resolves.toEqual([{ ok: true }]);
   });
 
+  it.each(["\n", "\r\n", "\r"])(
+    "preserves multiline JSON with %j line endings in synthesized SSE",
+    async (lineEnding) => {
+      const payload = { text: "first\nsecond 🦞", nested: { ok: true } };
+      const json = JSON.stringify(payload, null, 2).replaceAll("\n", lineEnding);
+      mockStream([json.slice(0, 4), json.slice(4)], "application/json");
+      const response = await request(streaming);
+      expect(response.headers.get("content-type")).toContain("text/event-stream");
+      await expect(parseSse(response)).resolves.toEqual([payload]);
+    },
+  );
+
   it.each([undefined, "application/json; charset=utf-8"])(
     "recognizes split SSE before EOF with content-type %s",
     async (contentType) => {
