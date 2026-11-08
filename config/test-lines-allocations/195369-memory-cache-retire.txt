@@ -1,0 +1,2 @@
+# Memory embedding cache duplicate retirement: kernel predicate, fences and paging on SQLite and PostgreSQL, manager sync/rebuild/failed-run scenarios, and holds in existing cache-probe tests.
+735
