@@ -2,6 +2,7 @@
  * Real tool-call normalization with cumulative provider snapshots and small deltas.
  * node --expose-gc --import ./scripts/tsx.mjs scripts/perf/tool-call-markdown-measure.ts --kind inline
  * --owner points at a pinned package source tree; preserve its relative imports.
+ * --incremental uses the per-stream ownership checkpoint; --compare-owner remains stateless.
  * Run base/candidate alternately at least five times, plus unchanged A/A controls.
  * Repeat with --mode allocation; sampled CPU is not timing evidence.
  * Acceptance: identical replay, lower parsed characters/allocation, no >20% CPU regression.
@@ -9,11 +10,11 @@
  */
 import assert from "node:assert/strict";
 import { Session, type HeapProfiler } from "node:inspector/promises";
+import { registerHooks } from "node:module";
 import { loadavg } from "node:os";
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
-import { findMarkdownCodeRegions } from "../../packages/markdown-core/src/reasoning-tags.js";
 import type * as repair from "../../packages/tool-call-repair/src/index.js";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.js";
 
@@ -23,6 +24,7 @@ const { values } = parseArgs({
     mode: { type: "string", default: "timing" },
     owner: { type: "string", default: "packages/tool-call-repair/src/index.ts" },
     "compare-owner": { type: "string" },
+    incremental: { type: "boolean", default: false },
     turns: { type: "string", default: "5" },
     paragraphs: { type: "string", default: "128" },
     "chunk-size": { type: "string", default: "16" },
@@ -35,6 +37,34 @@ const count = (label: "turns" | "paragraphs" | "chunk-size", fallback: number) =
 const turns = count("turns", 5);
 const paragraphs = count("paragraphs", 128);
 const chunkSize = count("chunk-size", 16);
+// Observe the parser boundary, not the growing resolver input: checkpointed scans parse suffixes.
+// The wrapper delegates unchanged to the installed dependency in every measured variant.
+const parseWork = { calls: 0, characters: 0, largest: 0 };
+const counterKey = "openclaw.tool-call-markdown-measure";
+Reflect.set(globalThis, Symbol.for(counterKey), (length: number) => {
+  parseWork.calls++;
+  parseWork.characters += length;
+  parseWork.largest = Math.max(parseWork.largest, length);
+});
+registerHooks({
+  resolve(specifier, context, nextResolve) {
+    const resolved = nextResolve(specifier, context);
+    if (specifier !== "mdast-util-from-markdown") {
+      return resolved;
+    }
+    const wrapperSource = `import { fromMarkdown as parse } from ${JSON.stringify(resolved.url)};
+export function fromMarkdown(text, ...options) {
+  globalThis[Symbol.for(${JSON.stringify(counterKey)})](text.length);
+  return parse(text, ...options);
+}`;
+    return { url: `data:text/javascript,${encodeURIComponent(wrapperSource)}`, shortCircuit: true };
+  },
+});
+const { findMarkdownCodeRegions } =
+  await import("../../packages/markdown-core/src/reasoning-tags.js");
+const createCodeRegionResolver = values.incremental
+  ? (await import("../../src/shared/text/code-regions.js")).createCodeRegionResolver
+  : undefined;
 const owner: typeof repair = await import(pathToFileURL(resolve(values.owner)).href);
 const nameList = Array.from({ length: 40 }, (_, index) => `read_${index}`);
 const names = new Set(nameList);
@@ -73,51 +103,48 @@ events.push({ type: "text_end", contentIndex: 0, content: input, partial: messag
 events.push({ type: "done", reason: "stop", message: message(input) });
 const deltas = Math.ceil(input.length / chunkSize);
 let resolverCalls = 0;
-let parsedCalls = 0;
-let parsedCharacters = 0;
-let largestParse = 0;
-const resolveProtectedRanges: repair.PlainTextToolCallProtectedRangeResolver = (text) => {
-  resolverCalls++;
-  // This is the canonical resolver's exact early-return guard; only the other branch parses.
-  if (/[`~\t]| {4}/u.test(text)) {
-    parsedCalls++;
-    parsedCharacters += text.length;
-    largestParse = Math.max(largestParse, text.length);
-  }
-  return findMarkdownCodeRegions(text);
-};
 const options = (
   implementation: typeof repair,
-): repair.PlainTextToolCallStreamNormalizerOptions => ({
-  matcher,
-  resolveProtectedRanges,
-  protectedRangesFenceCompatible: true,
-  createPromotedToolCallEvents: implementation.createPromotedPlainTextToolCallEvents,
-  normalizeTerminalMessage: ({ allowPromotion, ...params }) => {
-    const promoted =
-      allowPromotion &&
-      implementation.projectStandalonePlainTextToolCallMessage({
+): repair.PlainTextToolCallStreamNormalizerOptions => {
+  const resolveRegions =
+    implementation === owner && createCodeRegionResolver
+      ? createCodeRegionResolver()
+      : findMarkdownCodeRegions;
+  const resolveProtectedRanges: repair.PlainTextToolCallProtectedRangeResolver = (text) => {
+    resolverCalls++;
+    return resolveRegions(text);
+  };
+  return {
+    matcher,
+    resolveProtectedRanges,
+    protectedRangesFenceCompatible: true,
+    createPromotedToolCallEvents: implementation.createPromotedPlainTextToolCallEvents,
+    normalizeTerminalMessage: ({ allowPromotion, ...params }) => {
+      const promoted =
+        allowPromotion &&
+        implementation.projectStandalonePlainTextToolCallMessage({
+          ...params,
+          allowedToolNames: names,
+          resolveProtectedRanges,
+          createToolCallBlock: (block, name) => ({
+            type: "toolCall",
+            id: "fixture-call",
+            name,
+            arguments: block.arguments,
+          }),
+        });
+      if (promoted) {
+        return { kind: "promoted", ...promoted };
+      }
+      const scrubbed = implementation.projectScrubbedPlainTextToolCallMessage({
         ...params,
-        allowedToolNames: names,
+        matcher,
         resolveProtectedRanges,
-        createToolCallBlock: (block, name) => ({
-          type: "toolCall",
-          id: "fixture-call",
-          name,
-          arguments: block.arguments,
-        }),
       });
-    if (promoted) {
-      return { kind: "promoted", ...promoted };
-    }
-    const scrubbed = implementation.projectScrubbedPlainTextToolCallMessage({
-      ...params,
-      matcher,
-      resolveProtectedRanges,
-    });
-    return scrubbed ? { kind: "scrubbed", ...scrubbed } : undefined;
-  },
-});
+      return scrubbed ? { kind: "scrubbed", ...scrubbed } : undefined;
+    },
+  };
+};
 async function* source() {
   yield* events;
 }
@@ -171,7 +198,7 @@ if (values["compare-owner"]) {
 }
 await run();
 globalThis.gc?.();
-resolverCalls = parsedCalls = parsedCharacters = largestParse = 0;
+resolverCalls = parseWork.calls = parseWork.characters = parseWork.largest = 0;
 const inspector = values.mode === "allocation" ? new Session() : undefined;
 if (inspector) {
   inspector.connect();
@@ -206,6 +233,7 @@ console.log(
     kind: values.kind,
     mode: values.mode,
     owner: values.owner,
+    incremental: values.incremental,
     turns,
     paragraphs,
     chunkSize,
@@ -214,10 +242,10 @@ console.log(
     inputEventsPerTurn: events.length,
     outputEventsPerTurn: outputEvents / turns,
     resolverCallsPerTurn: resolverCalls / turns,
-    parsedCallsPerTurn: parsedCalls / turns,
-    parsedCharactersPerTurn: parsedCharacters / turns,
-    parsedCharactersPerDelta: parsedCharacters / turns / deltas,
-    largestParse,
+    parsedCallsPerTurn: parseWork.calls / turns,
+    parsedCharactersPerTurn: parseWork.characters / turns,
+    parsedCharactersPerDelta: parseWork.characters / turns / deltas,
+    largestParse: parseWork.largest,
     coldMs,
     coldCpuMs: (coldCpu.user + coldCpu.system) / 1000,
     wallMs,

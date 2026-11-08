@@ -56,6 +56,7 @@ import {
 import { withLocalWorkspaceProjection } from "./local-workspace-projection.js";
 import { proveRejectedWorkspaceCheckpoint } from "./local-workspace-recovery.test-support.js";
 import {
+  proveUnchangedSandboxCommandCheckpoints,
   proveConcurrentWorkspacePreparation,
   proveColdPreparationCapacityIsolation,
   provePreparationObservationBoundary,
@@ -183,6 +184,9 @@ afterEach(async () => {
 });
 
 it("checkpoints sandbox file writes once", () => proveSandboxMutationCheckpoints(owner));
+
+it("keeps unchanged commands running while checkpointing edits and deletions", () =>
+  proveUnchangedSandboxCommandCheckpoints(owner));
 
 it.each(["canonical", "projection"] as const)(
   "quarantines rejected checkpoints while allowing new agent work: %s",
@@ -779,6 +783,7 @@ it.for([false, true])(
       usePty: false,
     });
     events.length = 0;
+    await writeText(projection.workspaceDir, "source.txt", "accepted command output\n");
     const finalize = (spec: typeof accepted) =>
       backend.finalizeExec!({
         status: "completed",

@@ -1132,7 +1132,6 @@
         --mount-fallback-divider: #36373c;
         --mount-fallback-edge: #1d1f24;
         --mount-fallback-text: var(--text-strong, #f4f4f5);
-        --mount-fallback-heading: var(--text, #bcbcc0);
         --mount-fallback-muted: var(--muted, #8e8e97);
         --mount-fallback-glyph: rgba(188, 188, 192, 0.484);
         --mount-fallback-selected: #222429;
@@ -1140,10 +1139,6 @@
         --mount-fallback-skeleton-strong: rgba(142, 142, 151, 0.12);
         --mount-fallback-placeholder: rgba(142, 142, 151, 0.16);
         --mount-fallback-placeholder-strong: rgba(142, 142, 151, 0.2);
-        --mount-fallback-accent: #ff5c5c;
-        --mount-fallback-tile: #1c1e23;
-        --mount-fallback-tile-border: #23252a;
-        --mount-fallback-link: var(--link, #ff7070);
         --mount-fallback-ring: var(--ring, #ff5c5c);
         --mount-fallback-ground: radial-gradient(
           closest-side,
@@ -1640,7 +1635,6 @@
         --mount-fallback-divider: #d1d1d1;
         --mount-fallback-edge: #ededed;
         --mount-fallback-text: var(--text-strong, #202020);
-        --mount-fallback-heading: var(--text, #353535);
         --mount-fallback-muted: var(--muted, #5e5e5e);
         --mount-fallback-glyph: rgba(53, 53, 53, 0.6);
         --mount-fallback-selected: #e5e5e5;
@@ -1648,10 +1642,6 @@
         --mount-fallback-skeleton-strong: rgba(94, 94, 94, 0.12);
         --mount-fallback-placeholder: rgba(94, 94, 94, 0.16);
         --mount-fallback-placeholder-strong: rgba(94, 94, 94, 0.2);
-        --mount-fallback-accent: #bd4531;
-        --mount-fallback-tile: #fcfcfc;
-        --mount-fallback-tile-border: #eaeaea;
-        --mount-fallback-link: var(--link, #ad3623);
         --mount-fallback-ring: var(--ring, #bd4531);
         --mount-fallback-ground: radial-gradient(
           closest-side,
@@ -1725,17 +1715,58 @@
           animation-duration: 12s;
         }
 
-        .mount-fallback__mascot-figure,
-        .mount-fallback__mascot-ground,
-        .mount-fallback__mascot-claw-left,
-        .mount-fallback__mascot-claw-right,
-        .mount-fallback .mount-fallback__mascot-lids {
+        .mount-fallback
+          :is(
+            .mount-fallback__mascot-figure,
+            .mount-fallback__mascot-ground,
+            .mount-fallback__mascot-claw-left,
+            .mount-fallback__mascot-claw-right,
+            .mount-fallback__mascot-lids
+          ) {
           animation: none !important;
         }
       }
     </style>
   </head>
   <body>
+    <svg width="0" height="0" aria-hidden="true" focusable="false" style="position: absolute">
+      <defs>
+        <g id="openclaw-wordmark-letters">
+          <path
+            d="M385 -10Q219 -10 122.0 84.0Q25 178 25.0 335.0Q25 492 122.0 586.0Q219 680 385 680Q554 680 651.5 586.5Q749 493 749.0 335.0Q749 177 651.5 83.5Q554 -10 385 -10ZM229.0 179.0Q274 134 385.0 134.0Q496 134 542.5 179.0Q589 224 589.0 335.0Q589 446 542.5 491.0Q496 536 385.0 536.0Q274 536 229.0 491.0Q184 446 184.0 335.0Q184 224 229.0 179.0Z"
+            transform="translate(0.0000 0.0000) scale(0.108000 -0.108000)"
+          />
+          <path
+            d="M190 -170H40V501H179V364H189Q217 511 389 511Q503 511 566.0 441.0Q629 371 629.0 250.0Q629 129 567.5 59.5Q506 -10 394 -10Q309 -10 259.5 28.5Q210 67 197 135H190ZM190 243Q190 181 226.5 154.0Q263 127 336 127Q410 127 443.5 155.0Q477 183 477.0 250.0Q477 317 443.5 345.0Q410 373 337 373Q262 373 226.0 344.5Q190 316 190 251Z"
+            transform="translate(85.7520 0.0000) scale(0.108000 -0.108000)"
+          />
+          <path
+            d="M306 -10Q176 -10 100.5 55.5Q25 121 25 250Q25 369 101.5 440.0Q178 511 303.0 511.0Q428 511 502.0 447.5Q576 384 576 268Q576 254 572 220H164Q167 161 198.0 135.5Q229 110 301 110Q366 110 393.5 126.5Q421 143 421 176V186H571V175Q571 93 498.0 41.5Q425 -10 306 -10ZM166 299H432Q429 349 397.5 371.5Q366 394 300.0 394.0Q234 394 202.5 371.0Q171 348 166 299Z"
+            transform="translate(158.2200 0.0000) scale(0.108000 -0.108000)"
+          />
+          <path
+            d="M190 0H40V501H179V347H188Q199 417 249.5 464.0Q300 511 392 511Q491 511 542.5 455.5Q594 400 594 312V0H444V262Q444 323 415.5 349.5Q387 376 319 376Q249 376 219.5 347.0Q190 318 190 253Z"
+            transform="translate(225.1800 0.0000) scale(0.108000 -0.108000)"
+          />
+          <path
+            d="M383 -10Q218 -10 121.5 84.0Q25 178 25.0 335.0Q25 492 121.5 586.0Q218 680 383 680Q540 680 632.5 606.5Q725 533 725 406V391H558V406Q558 473 517.0 504.5Q476 536 386 536Q275 536 229.5 491.0Q184 446 184.0 335.0Q184 224 229.5 179.0Q275 134 386 134Q476 134 517.0 165.5Q558 197 558 264V279H725V264Q725 137 632.5 63.5Q540 -10 383 -10Z"
+            transform="translate(295.3800 0.0000) scale(0.108000 -0.108000)"
+          />
+          <path
+            d="M190 0H40V670H190Z"
+            transform="translate(378.5400 0.0000) scale(0.108000 -0.108000)"
+          />
+          <path
+            d="M194 -10Q113 -10 67.0 25.5Q21 61 21 124Q21 238 183 255L398 277V296Q398 344 374.0 361.5Q350 379 289 379Q231 379 206.5 361.5Q182 344 182 302V298H31V301Q31 395 104.0 453.0Q177 511 300 511Q422 511 484.0 453.0Q546 395 546 294V0H406V115H398Q380 56 328.0 23.0Q276 -10 194 -10ZM172 134Q172 96 237 96Q316 96 355.5 117.5Q395 139 398 191L224 171Q172 167 172 134Z"
+            transform="translate(405.4320 0.0000) scale(0.108000 -0.108000)"
+          />
+          <path
+            d="M324 0H137L0 501H155L214 272L235 116H245L285 287L361 501H554L629 287L669 116H679L701 272L759 501H912L770 0H583L497 241L460 379H449L411 241Z"
+            transform="translate(470.4480 0.0000) scale(0.108000 -0.108000)"
+          />
+        </g>
+      </defs>
+    </svg>
     <openclaw-app>
       <main
         id="openclaw-boot-shell"
@@ -1995,38 +2026,7 @@
               </g>
             </g>
             <g fill="currentColor" transform="translate(200.5 116.564)">
-              <path
-                d="M385 -10Q219 -10 122.0 84.0Q25 178 25.0 335.0Q25 492 122.0 586.0Q219 680 385 680Q554 680 651.5 586.5Q749 493 749.0 335.0Q749 177 651.5 83.5Q554 -10 385 -10ZM229.0 179.0Q274 134 385.0 134.0Q496 134 542.5 179.0Q589 224 589.0 335.0Q589 446 542.5 491.0Q496 536 385.0 536.0Q274 536 229.0 491.0Q184 446 184.0 335.0Q184 224 229.0 179.0Z"
-                transform="translate(0.0000 0.0000) scale(0.108000 -0.108000)"
-              />
-              <path
-                d="M190 -170H40V501H179V364H189Q217 511 389 511Q503 511 566.0 441.0Q629 371 629.0 250.0Q629 129 567.5 59.5Q506 -10 394 -10Q309 -10 259.5 28.5Q210 67 197 135H190ZM190 243Q190 181 226.5 154.0Q263 127 336 127Q410 127 443.5 155.0Q477 183 477.0 250.0Q477 317 443.5 345.0Q410 373 337 373Q262 373 226.0 344.5Q190 316 190 251Z"
-                transform="translate(85.7520 0.0000) scale(0.108000 -0.108000)"
-              />
-              <path
-                d="M306 -10Q176 -10 100.5 55.5Q25 121 25 250Q25 369 101.5 440.0Q178 511 303.0 511.0Q428 511 502.0 447.5Q576 384 576 268Q576 254 572 220H164Q167 161 198.0 135.5Q229 110 301 110Q366 110 393.5 126.5Q421 143 421 176V186H571V175Q571 93 498.0 41.5Q425 -10 306 -10ZM166 299H432Q429 349 397.5 371.5Q366 394 300.0 394.0Q234 394 202.5 371.0Q171 348 166 299Z"
-                transform="translate(158.2200 0.0000) scale(0.108000 -0.108000)"
-              />
-              <path
-                d="M190 0H40V501H179V347H188Q199 417 249.5 464.0Q300 511 392 511Q491 511 542.5 455.5Q594 400 594 312V0H444V262Q444 323 415.5 349.5Q387 376 319 376Q249 376 219.5 347.0Q190 318 190 253Z"
-                transform="translate(225.1800 0.0000) scale(0.108000 -0.108000)"
-              />
-              <path
-                d="M383 -10Q218 -10 121.5 84.0Q25 178 25.0 335.0Q25 492 121.5 586.0Q218 680 383 680Q540 680 632.5 606.5Q725 533 725 406V391H558V406Q558 473 517.0 504.5Q476 536 386 536Q275 536 229.5 491.0Q184 446 184.0 335.0Q184 224 229.5 179.0Q275 134 386 134Q476 134 517.0 165.5Q558 197 558 264V279H725V264Q725 137 632.5 63.5Q540 -10 383 -10Z"
-                transform="translate(295.3800 0.0000) scale(0.108000 -0.108000)"
-              />
-              <path
-                d="M190 0H40V670H190Z"
-                transform="translate(378.5400 0.0000) scale(0.108000 -0.108000)"
-              />
-              <path
-                d="M194 -10Q113 -10 67.0 25.5Q21 61 21 124Q21 238 183 255L398 277V296Q398 344 374.0 361.5Q350 379 289 379Q231 379 206.5 361.5Q182 344 182 302V298H31V301Q31 395 104.0 453.0Q177 511 300 511Q422 511 484.0 453.0Q546 395 546 294V0H406V115H398Q380 56 328.0 23.0Q276 -10 194 -10ZM172 134Q172 96 237 96Q316 96 355.5 117.5Q395 139 398 191L224 171Q172 167 172 134Z"
-                transform="translate(405.4320 0.0000) scale(0.108000 -0.108000)"
-              />
-              <path
-                d="M324 0H137L0 501H155L214 272L235 116H245L285 287L361 501H554L629 287L669 116H679L701 272L759 501H912L770 0H583L497 241L460 379H449L411 241Z"
-                transform="translate(470.4480 0.0000) scale(0.108000 -0.108000)"
-              />
+              <use href="#openclaw-wordmark-letters" />
             </g>
           </svg>
           <div class="mount-fallback__skeleton-rows">
@@ -2049,38 +2049,7 @@
             fill="none"
           >
             <g fill="currentColor" transform="translate(200.5 116.564)">
-              <path
-                d="M385 -10Q219 -10 122.0 84.0Q25 178 25.0 335.0Q25 492 122.0 586.0Q219 680 385 680Q554 680 651.5 586.5Q749 493 749.0 335.0Q749 177 651.5 83.5Q554 -10 385 -10ZM229.0 179.0Q274 134 385.0 134.0Q496 134 542.5 179.0Q589 224 589.0 335.0Q589 446 542.5 491.0Q496 536 385.0 536.0Q274 536 229.0 491.0Q184 446 184.0 335.0Q184 224 229.0 179.0Z"
-                transform="translate(0.0000 0.0000) scale(0.108000 -0.108000)"
-              />
-              <path
-                d="M190 -170H40V501H179V364H189Q217 511 389 511Q503 511 566.0 441.0Q629 371 629.0 250.0Q629 129 567.5 59.5Q506 -10 394 -10Q309 -10 259.5 28.5Q210 67 197 135H190ZM190 243Q190 181 226.5 154.0Q263 127 336 127Q410 127 443.5 155.0Q477 183 477.0 250.0Q477 317 443.5 345.0Q410 373 337 373Q262 373 226.0 344.5Q190 316 190 251Z"
-                transform="translate(85.7520 0.0000) scale(0.108000 -0.108000)"
-              />
-              <path
-                d="M306 -10Q176 -10 100.5 55.5Q25 121 25 250Q25 369 101.5 440.0Q178 511 303.0 511.0Q428 511 502.0 447.5Q576 384 576 268Q576 254 572 220H164Q167 161 198.0 135.5Q229 110 301 110Q366 110 393.5 126.5Q421 143 421 176V186H571V175Q571 93 498.0 41.5Q425 -10 306 -10ZM166 299H432Q429 349 397.5 371.5Q366 394 300.0 394.0Q234 394 202.5 371.0Q171 348 166 299Z"
-                transform="translate(158.2200 0.0000) scale(0.108000 -0.108000)"
-              />
-              <path
-                d="M190 0H40V501H179V347H188Q199 417 249.5 464.0Q300 511 392 511Q491 511 542.5 455.5Q594 400 594 312V0H444V262Q444 323 415.5 349.5Q387 376 319 376Q249 376 219.5 347.0Q190 318 190 253Z"
-                transform="translate(225.1800 0.0000) scale(0.108000 -0.108000)"
-              />
-              <path
-                d="M383 -10Q218 -10 121.5 84.0Q25 178 25.0 335.0Q25 492 121.5 586.0Q218 680 383 680Q540 680 632.5 606.5Q725 533 725 406V391H558V406Q558 473 517.0 504.5Q476 536 386 536Q275 536 229.5 491.0Q184 446 184.0 335.0Q184 224 229.5 179.0Q275 134 386 134Q476 134 517.0 165.5Q558 197 558 264V279H725V264Q725 137 632.5 63.5Q540 -10 383 -10Z"
-                transform="translate(295.3800 0.0000) scale(0.108000 -0.108000)"
-              />
-              <path
-                d="M190 0H40V670H190Z"
-                transform="translate(378.5400 0.0000) scale(0.108000 -0.108000)"
-              />
-              <path
-                d="M194 -10Q113 -10 67.0 25.5Q21 61 21 124Q21 238 183 255L398 277V296Q398 344 374.0 361.5Q350 379 289 379Q231 379 206.5 361.5Q182 344 182 302V298H31V301Q31 395 104.0 453.0Q177 511 300 511Q422 511 484.0 453.0Q546 395 546 294V0H406V115H398Q380 56 328.0 23.0Q276 -10 194 -10ZM172 134Q172 96 237 96Q316 96 355.5 117.5Q395 139 398 191L224 171Q172 167 172 134Z"
-                transform="translate(405.4320 0.0000) scale(0.108000 -0.108000)"
-              />
-              <path
-                d="M324 0H137L0 501H155L214 272L235 116H245L285 287L361 501H554L629 287L669 116H679L701 272L759 501H912L770 0H583L497 241L460 379H449L411 241Z"
-                transform="translate(470.4480 0.0000) scale(0.108000 -0.108000)"
-              />
+              <use href="#openclaw-wordmark-letters" />
             </g>
           </svg>
         </header>
@@ -2368,7 +2337,10 @@
             setSummary("Check your connection, then reload the page.");
             document.getElementById("openclaw-mount-help").hidden = true;
             fallback.hidden = false;
-            document.body.replaceChildren(fallback);
+            document.body.replaceChildren(
+              document.getElementById("openclaw-wordmark-letters").ownerSVGElement,
+              fallback,
+            );
             document.body.classList.add("openclaw-mount-fallback-active");
             setManualRecovery(true);
             retry.focus();

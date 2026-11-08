@@ -1827,6 +1827,7 @@ describe("CI changed Node test plan", () => {
       target,
       "test/scripts/ci-changed-node-test-plan.test.ts",
       "test/scripts/ci-node-test-plan.test.ts",
+      "test/scripts/test-projects-build-admission.test.ts",
     ]);
     const qaOwners = shards?.filter((shard) =>
       shard.groups?.some((group) => group.includePatterns?.includes(target)),
@@ -1840,14 +1841,13 @@ describe("CI changed Node test plan", () => {
       configs: ["test/vitest/vitest.infra.config.ts"],
       pretestBuildMode: "private-qa",
     });
-    // Each config in the pair keeps its complete, separate include inventory.
+    // A single selected config keeps its process policy without the unrelated pair.
     const paired = groups.filter((group) => group.shard_name === "core-tooling-isolated");
     expect(paired).toHaveLength(1);
-    expect(paired[0]?.configs).toEqual([
-      "test/vitest/vitest.tooling-docker.config.ts",
-      "test/vitest/vitest.tooling-isolated.config.ts",
+    expect(paired[0]?.configs).toEqual(["test/vitest/vitest.tooling-isolated.config.ts"]);
+    expect(paired[0]?.includePatterns).toEqual([
+      "test/scripts/test-projects-build-admission.test.ts",
     ]);
-    expect(paired[0]?.includePatterns).toBeUndefined();
     expect(paired[0]?.env?.OPENCLAW_VITEST_MAX_WORKERS).toBe("2");
     expect(shards?.find((job) => job.groups?.includes(paired[0]!))?.planConcurrency).toBe(1);
     expect(
@@ -1863,6 +1863,37 @@ describe("CI changed Node test plan", () => {
         includePatterns: [target],
       }),
     ]);
+  });
+
+  it.each([
+    ["test/scripts/control-ui-i18n.test.ts", "test/vitest/vitest.tooling-isolated.config.ts"],
+    ["test/scripts/docker-build-helper.test.ts", "test/vitest/vitest.tooling-docker.config.ts"],
+  ])("selects only the canonical tooling config for %s", (target, config) => {
+    const jobs = createSelectedNodeTestShardBundles([target]);
+    expect(jobs).not.toBeNull();
+    const groups = jobs?.flatMap((job) => job.groups ?? []);
+    expect(groups).toHaveLength(1);
+    expect(groups?.[0]).toMatchObject({
+      configs: [config],
+      includePatterns: [target],
+      env: { OPENCLAW_VITEST_MAX_WORKERS: "2" },
+    });
+    expect(jobs?.[0]?.planConcurrency).toBe(1);
+    expect(jobs?.[0]?.requiresDist).toBe(false);
+  });
+
+  it("retains separate whole inventories for a mixed tooling pair", () => {
+    const jobs = createSelectedNodeTestShardBundles([
+      "test/scripts/control-ui-i18n.test.ts",
+      "test/scripts/docker-build-helper.test.ts",
+    ]);
+    const groups = jobs?.flatMap((job) => job.groups ?? []);
+    expect(groups).toHaveLength(1);
+    expect(groups?.[0]?.configs).toEqual([
+      "test/vitest/vitest.tooling-docker.config.ts",
+      "test/vitest/vitest.tooling-isolated.config.ts",
+    ]);
+    expect(groups?.[0]?.includePatterns).toBeUndefined();
   });
 
   it("routes lifecycle edits to the prepared QA config without losing boundary coverage", () => {
