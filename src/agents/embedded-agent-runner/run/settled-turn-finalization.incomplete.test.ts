@@ -78,11 +78,7 @@ it.each([
     label: "keeps the user's request in view after a screenshot-heavy cut-off",
   },
 ])("$label", async ({ interrupted, screenshots }) => {
-  const sessionId = screenshots
-    ? "screenshot-finalization"
-    : interrupted
-      ? "interrupted-finalization"
-      : "completed-finalization";
+  const sessionId = `finalization-${interrupted}-${screenshots}`;
   await withOpenClawTestState({ label: sessionId }, async (state) => {
     const bundled = state.path("bundled");
     await fs.mkdir(bundled);
@@ -247,7 +243,6 @@ it.each([
               },
               provider: "anthropic",
               model: modelId,
-              thinkLevel: "low",
               reasoningLevel: interrupted ? "off" : "on",
               prompt,
               toolsAllow: ["read", "write"],

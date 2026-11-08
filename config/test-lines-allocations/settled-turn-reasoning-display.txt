@@ -1,2 +1,0 @@
-3
-# Exercise the reasoning-enabled provider and display setting in the existing two-write recovery test.
