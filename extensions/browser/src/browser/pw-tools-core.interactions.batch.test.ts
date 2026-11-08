@@ -185,6 +185,18 @@ describe("executeActViaPlaywright batches", () => {
     expect(closePageViaPlaywright).toHaveBeenCalledWith(target);
   });
 
+  it("resolves a crashed target so a close-only batch can clean it up", async () => {
+    // Batch admission belongs to each child: close keeps its crash exemption,
+    // while a click child still refuses the dead renderer through its own resolver.
+    const result = await batch([{ kind: "close" }]);
+
+    expect(result).toEqual({ targetId: "tab-1", results: [{ ok: true }] });
+    expect(session.getPageForTargetId).toHaveBeenCalledWith(
+      expect.objectContaining({ allowCrashed: true }),
+    );
+    expect(closePageViaPlaywright).toHaveBeenCalledWith(target);
+  });
+
   it.each([
     { kind: "scrollIntoView", ref: "1" },
     { kind: "drag", startRef: "1", endRef: "2" },

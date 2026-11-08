@@ -4,6 +4,7 @@ import { BROWSER_ACTION_NAVIGATION_GRACE_MS } from "./act-policy.js";
 import type { BrowserBatchAbort, BrowserBatchActionResult } from "./client-actions-types.js";
 import type { BrowserActRequest } from "./client-actions.types.js";
 import type { BrowserDownloadResult } from "./download-types.js";
+import { BrowserTabCrashedError } from "./errors.js";
 import { assertBrowserNavigationResultAllowed } from "./navigation-guard.js";
 import { pageTargetInfo } from "./pw-session-connection.js";
 import {
@@ -162,7 +163,9 @@ export async function executeActViaPlaywright(
     targetId: opts.targetId,
     ssrfPolicy: opts.ssrfPolicy,
     // Closing a crashed tab is how an agent recovers; only action traffic is refused.
-    allowCrashed: opts.action.kind === "close",
+    // A batch admits each child action on its own, so a close-only batch can still
+    // reach the close helper's crash exemption instead of failing at the parent.
+    allowCrashed: opts.action.kind === "close" || opts.action.kind === "batch",
   });
   const withOperationTarget = async <T extends Record<string, unknown>>(payload: T) => {
     const targetId = (await pageTargetInfo(page).catch(() => null))?.targetId;
@@ -269,7 +272,9 @@ async function batchViaPlaywright(
   },
 ): Promise<{ results: BrowserBatchActionResult[]; aborted?: BrowserBatchAbort }> {
   const navigationPolicy = interactionNavigationPolicy(opts);
-  const page = opts.page ?? (await getPageForTargetId(opts));
+  // Children admit themselves: close keeps its crash exemption, every other
+  // action still refuses a dead renderer through its own page resolution.
+  const page = opts.page ?? (await getPageForTargetId({ ...opts, allowCrashed: true }));
   const results: BrowserBatchActionResult[] = [];
   const finishAborted = (
     reason: BrowserBatchAbort["reason"],
@@ -317,7 +322,10 @@ async function batchViaPlaywright(
       } catch (err) {
         if (
           isBrowserObservedDialogBlockedError(err) ||
-          err instanceof BrowserInteractionAuthorityError
+          err instanceof BrowserInteractionAuthorityError ||
+          // A crashed tab is a target-level failure, not a child result: keep the
+          // typed conflict and stop before later children touch the dead renderer.
+          err instanceof BrowserTabCrashedError
         ) {
           throw err;
         }

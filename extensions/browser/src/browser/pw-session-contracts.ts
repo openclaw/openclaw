@@ -130,6 +130,11 @@ export type PageState = {
   roleRefsFrame?: Frame;
   /** Target-cache entry owned by the current role refs. */
   roleRefsTargetKey?: string;
+  /**
+   * CDP target this Page belongs to, independent of role refs. Navigation
+   * invalidates refs but not the target, so crash facts bind here.
+   */
+  targetKey?: string;
   /** Navigation observed before target discovery invalidates the eventual cache entry. */
   roleRefsInvalidated?: boolean;
   /** Renderer crash observed for this page; the target survives but every action must refuse. */

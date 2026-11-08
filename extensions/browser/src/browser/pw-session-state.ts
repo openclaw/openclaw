@@ -58,6 +58,9 @@ export function bindRoleRefsTarget(page: Page, cdpUrl: string, targetId?: string
   }
   state.roleRefsInvalidated = false;
   state.roleRefsTargetKey = key;
+  // Crash facts outlive refs: navigation clears roleRefsTargetKey but the Page
+  // still belongs to the same target, so a later crash must still be recorded.
+  state.targetKey = key;
   if (crashedTargets.has(key)) {
     state.crashed = true;
   }
@@ -281,7 +284,7 @@ export function ensurePageState(page: Page): PageState {
   // operations hang until their own timeout; record the crash instead of waiting for them.
   page.on("crash", () => {
     state.crashed = true;
-    const key = state.roleRefsTargetKey;
+    const key = state.targetKey;
     if (key) {
       crashedTargets.set(key, true);
       if (crashedTargets.size > MAX_CRASHED_TARGETS) {
@@ -319,7 +322,7 @@ export function isPageCrashed(page: Page): boolean {
   if (state.crashed) {
     return true;
   }
-  const key = state.roleRefsTargetKey;
+  const key = state.targetKey;
   return key ? crashedTargets.has(key) : false;
 }
 

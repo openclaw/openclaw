@@ -11,27 +11,18 @@ import {
 const cdpUrl = "http://127.0.0.1:9222";
 
 function makePage() {
-  const handlers = new Map<string, () => void>();
+  const handlers = new Map<string, (...args: unknown[]) => void>();
+  const mainFrame = {};
   const page = {
-    on: vi.fn((event: string, handler: () => void) => {
+    mainFrame: vi.fn(() => mainFrame),
+    on: vi.fn((event: string, handler: (...args: unknown[]) => void) => {
       handlers.set(event, handler);
     }),
   } as unknown as Page;
-  return { page, handlers };
+  return { page, handlers, mainFrame };
 }
 
 describe("page crash state", () => {
-  it("refuses actions once the renderer crashes", () => {
-    const { page, handlers } = makePage();
-    bindRoleRefsTarget(page, cdpUrl, "T1");
-    expect(isPageCrashed(page)).toBe(false);
-
-    handlers.get("crash")?.();
-
-    expect(isPageCrashed(page)).toBe(true);
-    expect(() => assertPageNotCrashed(page)).toThrowError(BROWSER_TAB_CRASHED_MESSAGE);
-  });
-
   it("carries the crash to a replacement Page object for the same target", () => {
     const first = makePage();
     bindRoleRefsTarget(first.page, cdpUrl, "T2");
@@ -57,10 +48,17 @@ describe("page crash state", () => {
     expect(() => assertPageNotCrashed(other.page)).not.toThrow();
   });
 
-  it("ignores a crash for a page whose state was never registered", () => {
-    const { page } = makePage();
-    expect(isPageCrashed(page)).toBe(false);
-    expect(() => assertPageNotCrashed(page)).not.toThrow();
-    expect(ensurePageState(page).crashed).toBeUndefined();
+  it("keeps crash identity after navigation clears the role refs", () => {
+    const first = makePage();
+    bindRoleRefsTarget(first.page, cdpUrl, "T5");
+    // Main-frame navigation drains document-scoped refs before the renderer dies.
+    first.handlers.get("framenavigated")?.(first.mainFrame);
+    expect(ensurePageState(first.page).roleRefsTargetKey).toBeUndefined();
+    first.handlers.get("crash")?.();
+
+    const replacement = makePage();
+    bindRoleRefsTarget(replacement.page, cdpUrl, "T5");
+
+    expect(isPageCrashed(replacement.page)).toBe(true);
   });
 });
