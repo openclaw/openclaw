@@ -409,7 +409,13 @@ function coalesceTurn(items: ChatItem[]): ChatItem[] {
       key: `${owner.source.item.key}:invocation:${identity(owner)}:${owner.name}`,
       message: {
         ...message,
-        role: invocation.call ? "assistant" : message.role,
+        // Result media stays tool-owned when the invocation moves to its call row.
+        role:
+          invocation.attachments.length > 0
+            ? "toolResult"
+            : invocation.call
+              ? "assistant"
+              : message.role,
         runId: owner.runId,
         content,
         activity: ownsActivity ? [...prepared.values()] : undefined,

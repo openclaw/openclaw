@@ -234,6 +234,33 @@ describe("grouped chat rendering", () => {
     expectAbsent(".chat-tool-msg-body details, .code-block-json-mode");
   });
 
+  it("keeps inspected images in tool details instead of repeating the delivered gallery", async () => {
+    const images = ["one", "two", "three"].map((alt) => ({
+      type: "image",
+      data: "cG5n",
+      mimeType: "image/png",
+      alt,
+    }));
+    const call = createAssistantMessage([
+      createToolCall("inspect", "view_image", { path: "avatar-previews.png" }),
+    ]);
+    const result = createToolResultMessage("inspect", "view_image", [
+      { type: "text", text: "Loaded 3 images for inspection." },
+      ...images,
+    ]);
+    const delivered = createAssistantMessage(images);
+    const groups = buildItems({ messages: [call, result, delivered] }).filter(
+      (item) => item.kind === "group",
+    );
+    for (const expanded of [false, true, false]) {
+      await renderToolGroups(groups, { isToolMessageExpanded: () => expanded });
+      expect(elementText(".chat-tool-msg-summary")).toContain("avatar-previews.png");
+      expectCount(".chat-group.assistant .chat-message-image", 3);
+      expectCount(".chat-tool-msg-body .chat-message-image", expanded ? 3 : 0);
+      expectCount(".chat-message-image", expanded ? 6 : 3);
+    }
+  });
+
   it("keeps text visible beside an orphan tool-result image", async () => {
     await renderToolGroups(
       [
