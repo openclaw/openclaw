@@ -554,4 +554,15 @@ it("reloads a recorded skill_library listing for a settle after restart", async 
     createSkillLibraryTool(live!).description,
   );
   expect(restarted?.turnRefusal).toContain("no human requester");
+  const frozen = Object.freeze({ sessionId: "frozen-listing" });
+  const frozenGrant = await resolveGatewaySkillLibraryPromptGrant({
+    owner,
+    sessionKey: "agent:main:skill-library-frozen",
+    isHumanTurn: true,
+    sessionEntry: frozen,
+  });
+  expect(createSkillLibraryTool(frozenGrant!).description).toBe(
+    createSkillLibraryTool(live!).description,
+  );
+  expect(frozen).not.toHaveProperty("skillLibraryPromptListing");
 });

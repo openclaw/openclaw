@@ -806,6 +806,7 @@ src/config/sessions/session-transcript-read-pools.ts
 src/config/sessions/session-transcript-read-worker-runtime.ts
 src/config/sessions/session-transcript-report-facts.ts
 src/config/sessions/store-entry-shape.ts
+src/config/sessions/skill-library-prompt-listing.ts
 src/config/sessions/store-entry.ts
 src/config/sessions/targets-collision.ts
 src/config/sessions/targets-configured-agents.ts

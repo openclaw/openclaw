@@ -63,7 +63,13 @@ function assignPromptListing(
   sessionEntry: { skillLibraryPromptListing?: SkillLibraryPromptListing } | undefined,
   listing: SkillLibraryPromptListing | undefined,
 ) {
-  if (!sessionEntry || listingsMatch(sessionEntry.skillLibraryPromptListing, listing)) {
+  // Admitted entries are frozen. The process map and the session patch own the
+  // listing; only a mutable caller snapshot can carry it on the object itself.
+  if (
+    !sessionEntry ||
+    !Object.isExtensible(sessionEntry) ||
+    listingsMatch(sessionEntry.skillLibraryPromptListing, listing)
+  ) {
     return;
   }
   if (listing) {
