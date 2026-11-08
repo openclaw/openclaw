@@ -381,6 +381,7 @@ suite.define(() => {
                           text: string;
                           sendRunId?: string;
                           sendAttempts?: number;
+                          queueMode?: string;
                         }>;
                       }
                     >;
@@ -408,6 +409,7 @@ suite.define(() => {
                     persistedMatchesProjection: persisted[0]?.id === state.chatQueue[0]?.id,
                     persistedRunId: persisted[0]?.sendRunId,
                     persistedSendAttempts: persisted[0]?.sendAttempts ?? 0,
+                    persistedQueueMode: persisted[0]?.queueMode,
                     handlerEntries: Number(
                       element.getAttribute("data-diagnostic-handler-entries") ?? 0,
                     ),
@@ -562,6 +564,7 @@ suite.define(() => {
                   persistedOriginalDraft: true,
                   persistedMatchesProjection: true,
                   persistedSendAttempts: 0,
+                  persistedQueueMode: "steer",
                   runId: null,
                   hasError: false,
                 });
@@ -579,6 +582,7 @@ suite.define(() => {
                   originalDraftQueuedBeforeHistory: true,
                   durableOriginalDraftBeforeHistory: true,
                   durableSendAttemptsBeforeHistory: 0,
+                  durableSteerPolicyBeforeHistory: true,
                   sendRequestsBeforeHistoryRelease: sendRequests,
                   providerRequestsBeforeHistoryRelease: provider.requests(),
                   deliveredHistoryResponsesBeforeRelease: deliveredHistoryResponses,
@@ -588,8 +592,9 @@ suite.define(() => {
                 // The documented contract joins authoritative session/branch history
                 // before delivery; this is not a Gateway ACK-before-history guarantee.
                 stage = "release authoritative history and deliver the queued draft once";
-                expect(authoritativeHistory?.sessionId).toEqual(expect.any(String));
-                expect(authoritativeHistory?.activeLeafEntryId).toBeNull();
+                const initialHistory = { ...authoritativeHistory };
+                expect(initialHistory.sessionId).toEqual(expect.any(String));
+                expect(initialHistory.activeLeafEntryId).toBeNull();
                 releaseHistory();
                 await expect
                   .poll(() => sendResponse)
@@ -602,9 +607,12 @@ suite.define(() => {
                   sessionKey: diagnosticSession,
                   message: draft,
                   idempotencyKey: queuedRunId,
-                  sessionId: authoritativeHistory?.sessionId,
-                  expectedLeafEntryId: authoritativeHistory?.activeLeafEntryId,
+                  sessionId: initialHistory.sessionId,
+                  queueMode: "steer",
                 });
+                // Start-or-steer follows the Gateway-owned branch, including when idle.
+                // Later history may advance its leaf after this accepted send.
+                expect(sendRequest?.params).not.toHaveProperty("expectedLeafEntryId");
                 const runId = queuedRunId;
                 expect(sendResponse?.payload?.runId).toBe(runId);
                 await expect.poll(() => provider.requests()).toBe(1);
@@ -628,7 +636,7 @@ suite.define(() => {
                   sendAccepted:
                     sendResponse?.ok === true && sendResponse.payload?.status === "started",
                   acceptedRunMatchesRequest: sendResponse?.payload?.runId === runId,
-                  deliveredToAuthoritativeSessionAndLeaf: true,
+                  deliveredToAuthoritativeSessionWithSteerPolicy: true,
                   providerRequestsAfterHistory: provider.requests(),
                   stopVisibleAfterHistory: await stop.isVisible(),
                   historyPendingAfterSend: (await browserState()).historyLoading,
