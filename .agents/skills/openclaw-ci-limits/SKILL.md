@@ -672,7 +672,8 @@ These are intentionally guarded by the `ci-workflow-guards`,
   exceeded the existing memory reserve before the three resource-gated cases ran.
 - Numbered tooling measurements in `toolingFileSeconds` drive file packing with
   native profile costs; a hosted fallback scales measured Blacksmith costs.
-  The daily refit samples the newest five contributing successful PR CI runs.
+  The daily refit samples successful jobs from the newest five contributing
+  completed PR CI runs, including workflows where other jobs failed.
   Those measurements describe the PR merge-ref and update exact compact and tooling identities;
   main compact and release sampling retain their existing provenance. Preserve
   independent-run medians, runner profiles and partial-plan history. An explicit
@@ -696,6 +697,9 @@ These are intentionally guarded by the `ci-workflow-guards`,
   ownership. Test-only files and unrelated runtime changes omit this lane;
   manual runs, unknown paths and older planners retain coverage. Preserve the
   target's existing performance-script capability checks.
+- Partial PR UI unit selections target three files per job within the existing
+  three-row cap and three-worker limit. Full UI owners and manual validation
+  retain their established shards, runtime policy and first-row WebKit checks.
 - Eligible Control UI E2E rows request the 16-vCPU class with unchanged live
   backend/event routing. Compact plans use six mocked Control UI shards with four
   workers each, matching four observed CPUs per runner and retaining 24 aggregate

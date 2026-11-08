@@ -156,7 +156,8 @@ async function finalizeMigratedUpdate(): Promise<void> {
     return;
   }
   if (process.argv[2] === "--post-core") {
-    return await runDelegatedPostCore(readUpdatePostCoreInput(JSON.parse(text)));
+    const postCoreInput = readUpdatePostCoreInput(JSON.parse(text));
+    return await withSqliteSnapshotReuse(() => runDelegatedPostCore(postCoreInput));
   }
   if (process.argv[2] === "--doctor") {
     const doctorInput = readUpdateDoctorInput(JSON.parse(text));

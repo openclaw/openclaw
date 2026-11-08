@@ -32,6 +32,10 @@ import {
 } from "./agent-database-startup-integrity.js";
 import { assertAgentDeletionRecoveryAllowsMutation } from "./agent-deletion-journal-recovery.js";
 import * as agentDeletion from "./agent-deletion-journal.js";
+import {
+  AGENT_ACTIVE_EVENT_FACTS_SCHEMA_VERSION,
+  AGENT_ACTIVE_EVENT_FACTS_SQL,
+} from "./openclaw-agent-active-event-facts-schema.js";
 import { ensureOpenClawAgentBoardSchemaInTransaction } from "./openclaw-agent-board-schema.js";
 import {
   ensureLegacySessionEntryValidityTriggers,
@@ -382,6 +386,9 @@ function ensureAgentSchema(
         if (crossesVersion(AGENT_CREATION_OPERATIONS_SCHEMA_VERSION)) {
           db.exec(AGENT_CREATION_OPERATIONS_SQL);
         }
+        if (crossesVersion(AGENT_ACTIVE_EVENT_FACTS_SCHEMA_VERSION)) {
+          db.exec(AGENT_ACTIVE_EVENT_FACTS_SQL);
+        }
         // Historical rebuilds also converge indexes. Later version steps own
         // only their declared tables; additive index repair stays at admission.
         if (previousVersion < CANONICAL_SESSION_WRITER_VALIDATION_SCHEMA_VERSION) {
@@ -399,11 +406,20 @@ function ensureAgentSchema(
           identityMigration,
           assertMigration,
           schemaMigration
-            ? resolveSchemaMigrationIntegrityTables({
-                kind: "agent",
-                foundVersion: previousVersion,
-                supportedVersion: targetVersion,
-              })
+            ? {
+                tables: resolveSchemaMigrationIntegrityTables({
+                  kind: "agent",
+                  foundVersion: previousVersion,
+                  supportedVersion: targetVersion,
+                }),
+                // The empty-table step adds one FK and cannot change existing relations.
+                // Earlier crossings and explicit FULL verification retain the global check.
+                ...(previousVersion === 40 &&
+                targetVersion === AGENT_ACTIVE_EVENT_FACTS_SCHEMA_VERSION &&
+                integrity.check === "quick"
+                  ? { foreignKeyTables: ["session_transcript_active_event_facts"] }
+                  : {}),
+              }
             : undefined,
         );
       };

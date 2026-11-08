@@ -116,7 +116,7 @@ export type ChatReplyTarget = {
 };
 
 export type ChatGoalDraftMode = { sessionId?: string } & (
-  | { action: "start" }
+  | { action: "start"; fromCommand?: true }
   | { action: "edit"; goalId: string; previousDraft: string }
 );
 

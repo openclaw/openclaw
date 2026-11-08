@@ -1,2 +1,2 @@
-65
-# Prove account-bound pending-start recovery and first-account readiness.
+34
+# Prove plugin view reactivation when the first recovery account becomes ready.

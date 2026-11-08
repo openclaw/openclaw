@@ -36,6 +36,7 @@ export async function loadStagedWorkerWorkspace(
   root: string,
   stagedResultRef: string,
   buildCacheInputs?: string[],
+  reconciliation?: { baseManifestRef: string; alreadyAccepted?: boolean },
 ): Promise<
   Omit<StagedWorkerWorkspaceInventory, "reconciliation"> & {
     nodes: {
@@ -123,10 +124,19 @@ export async function loadStagedWorkerWorkspace(
   ) {
     throw new Error("Cloud workspace staged Git history is invalid");
   }
-  // Stored receipts predate admission limits. Keep accepted work recoverable;
-  // manifests, payload bytes, and the apply owner's rollback records stay bounded.
+  // Inspect accepted receipts without replaying them. Unapplied historical results
+  // must pass the same admission as new publication before materializing any files.
   const nodes = { baseNodes: manifestNodes(base), currentNodes: manifestNodes(current) };
-  const changedResult = parseChangedWorkspaceResult(base, current, false, nodes);
+  const changedResult = parseChangedWorkspaceResult(
+    base,
+    current,
+    Boolean(
+      reconciliation &&
+      !reconciliation.alreadyAccepted &&
+      reconciliation.baseManifestRef === baseManifestRef,
+    ),
+    nodes,
+  );
   const changedEntries = changedResult.entries;
   const treeEntries =
     version === 1

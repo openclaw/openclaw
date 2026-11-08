@@ -1,5 +1,7 @@
 import childProcess from "node:child_process";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { createSubsystemLogger } from "../logging/subsystem.js";
+import { shortenHomeInString, shortenHomePath } from "../utils.js";
 import { describeLockedBackupSource } from "./backup-locked-source.js";
 import { hasErrnoCode } from "./errno.js";
 import { runtimeProcessEntrypoints } from "./runtime-process-entrypoints.js";
@@ -7,6 +9,7 @@ import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "./runtime-wor
 
 const SQLITE_HEADER_PROBE_BATCH_SIZE = 4096;
 const SQLITE_HEADER_PROBE_TIMEOUT_MS = 10_000;
+const log = createSubsystemLogger("backup");
 
 function probeSqliteHeaderBatch(
   workerArgv: string[],
@@ -33,8 +36,11 @@ function probeSqliteHeaderBatch(
     throw result.error;
   }
   if (result.status === 3) {
+    const failure = asOptionalRecord(JSON.parse(result.stderr));
     throw Object.assign(new Error("Header probe could not read a source"), {
-      ...asOptionalRecord(JSON.parse(result.stderr)),
+      code: failure?.code,
+      errno: failure?.errno,
+      path: failure?.path,
     });
   }
   if (result.status !== 0) {
@@ -47,6 +53,10 @@ function probeSqliteHeaderBatch(
     !answers.every((answer): answer is boolean => typeof answer === "boolean")
   ) {
     throw new Error("Header probe returned an incomplete result");
+  }
+  if (result.stderr.trim()) {
+    const warning = `SQLite header probe recovered after retrying source reads: ${result.stderr.trim()}`;
+    log.warn(warning, { consoleMessage: shortenHomeInString(warning) });
   }
   for (let index = 0; index < batch.length; index++) {
     results.set(batch[index]!, answers[index]!);
@@ -73,16 +83,20 @@ export function probeSqliteDatabaseHeaders(pathnames: Iterable<string>): Map<str
     }
     return results;
   } catch (cause) {
-    const hint = describeLockedBackupSource(cause);
+    const failure = asOptionalRecord(cause);
+    // A locked managed-browser profile names its stop step; other sources keep the generic hint.
+    const browserHint = describeLockedBackupSource(cause);
+    const hint = browserHint.includes("--browser-profile")
+      ? browserHint
+      : typeof failure?.path === "string"
+        ? ` Backup source ${shortenHomePath(failure.path)} could not be read (${typeof failure.code === "string" ? failure.code : "unknown error"}). Check read permissions or close the program using it, then retry the backup or update.`
+        : " Check that the backup worker can run and the source files are readable, then retry the backup.";
     throw new Error(
       hasErrnoCode(cause, "ETIMEDOUT")
         ? `SQLite header probe timed out after ${SQLITE_HEADER_PROBE_TIMEOUT_MS} ms while checking ${paths.length} backup paths. ` +
             "For a blocked update, preserve a verified backup and follow the manual package-manager hop: " +
             "https://docs.openclaw.ai/install/updating/update-methods#alternative-manual-npm-pnpm-or-bun"
-        : hint
-          ? `Could not determine whether backup files are SQLite databases.${hint}`
-          : "Could not determine whether backup files are SQLite databases. " +
-            "Check that the backup worker can run and the source files are readable, then retry the backup.",
+        : `Could not determine whether backup files are SQLite databases.${hint}`,
       { cause },
     );
   }

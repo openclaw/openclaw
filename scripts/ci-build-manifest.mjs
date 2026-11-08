@@ -733,7 +733,12 @@ if (selectedTestTargets) {
     selected.has("extensions/browser/chrome-extension/bootstrap.chromium.test.ts");
   runUiRealGateway = e2eTargets.some((file) => realGatewayTargets.has(file));
   runUiE2e = runControlUiE2e || runBrowserExtensionE2e;
-  uiTestShardCount = Math.min(3, uiTargets.length);
+  // Small PR selections share the existing three-worker row instead of repeating setup.
+  // Full UI owners and manual validation retain their established shard layout.
+  uiTestShardCount = Math.min(
+    3,
+    ordinaryPullRequest && !uiOwnerScope.unit ? Math.ceil(uiTargets.length / 3) : uiTargets.length,
+  );
   // Keep the existing worker/row cap; omit empty file partitions.
   uiE2eJobCount = Math.min(uiE2eJobCount - 1, controlTargets.length) + 1;
 }
@@ -934,17 +939,23 @@ if (runCheckPlan && proposedCheckScope?.types) {
     const budgetOnlyFallback =
       budgetCompanions.length < changedPaths.length &&
       resolveCiCheckFamilyScope(budgetCompanions).mode === "scoped";
+    const sourceOnlyFallback = compilerPaths.every((file) => file.startsWith("src/"));
     // Shared tests and numeric allocations retain every guard family, including
     // allocation validation. A budget record does not widen otherwise scoped
-    // source companions; compiler/lint owners still discover all consumers.
+    // companions. Ordinary source inputs can also use complete compiler/lint
+    // consumer discovery even when a fixture requires all guard families.
     preserveFullChecks = !changedPaths.every((file) => {
       const facts = getChangedPathFacts(file);
       return (
         path.posix.normalize(file) === file &&
         !file.includes("\\") &&
         (isTestLineAllocationPath(file) ||
+          (budgetOnlyFallback && facts.surface === "rootTest") ||
+          ((budgetOnlyFallback || sourceOnlyFallback) && facts.surface === "docs") ||
           (["source", "package", "ui", "extension"].includes(facts.surface) &&
-            (budgetOnlyFallback || (facts.isTestOnly && facts.isChangedLaneTest))))
+            (budgetOnlyFallback ||
+              sourceOnlyFallback ||
+              (facts.isTestOnly && facts.isChangedLaneTest))))
       );
     });
   }
@@ -952,7 +963,7 @@ if (runCheckPlan && proposedCheckScope?.types) {
     runNodeFull &&
     !releaseFastLane &&
     proposedCheckScope.additionalGroups.includes("boundaries") &&
-    (!narrowCheckScope ||
+    (preserveFullChecks ||
       !compilerPaths ||
       compilerPaths.every((file) => file.startsWith("extensions/")))
       ? "additional-checks"
@@ -1070,6 +1081,9 @@ const postgresConformancePaths = [
   "src/config/sessions/**",
   "src/agents/harness/context-engine-turn-outbox*",
   "src/gateway/server*.ts",
+  "src/gateway/server-methods/cron.ts",
+  "src/gateway/server-methods/cron-add.ts",
+  "src/gateway/server-methods/cron-run.ts",
   "src/cli/gateway-cli/run.ts",
   "src/commands/*preflight*.ts",
   "src/commands/doctor-database-*.ts",
@@ -1105,6 +1119,11 @@ const postgresConformancePaths = [
   "src/state/openclaw-state-db-contract.ts",
   "src/state/postgres-schema.generated/**",
   "src/cron/store/runtime-authority-store.ts",
+  "src/cron/store/row-codec.ts",
+  "src/cron/store/runtime-rows.kernel.ts",
+  "src/cron/store/run-finalization.worker.ts",
+  "src/cron/service.ts",
+  "src/cron/service/ops-run.ts",
   "src/infra/database-engine/**",
   "src/infra/postgres-sync/**",
   "src/infra/sql-connection.ts",

@@ -93,14 +93,9 @@
   flex-shrink: 0;
 }
 
-.chat-footer
-  .chat-footer__context
-  :is(
-    .session-progress-card__body,
-    .chat-queue__scroll,
-    .agent-chat__goal-detail-objective,
-    .chat-error__diagnostic
-  ) {
+.chat-footer .chat-footer__context .session-progress-card__body,
+.chat-footer .chat-footer__context .chat-queue__scroll,
+.chat-footer .chat-footer__context .agent-chat__goal-detail-objective {
   overscroll-behavior: auto;
 }
 
@@ -147,11 +142,7 @@
 .agent-chat__input,
 .agent-chat__disabled-banner.callout,
 .agent-chat__composer-notices
-  :is(
-    .chat-composer-neighbor-card,
-    .agent-chat__composer-errors--standalone,
-    .agent-chat__talk-status.callout
-  ) {
+  :is(.chat-composer-neighbor-card, .agent-chat__composer-alert, .agent-chat__talk-status.callout) {
   border-radius: var(--chat-composer-radius);
   corner-shape: var(--chat-composer-corner-shape);
 }

@@ -214,6 +214,24 @@ suite.define(() => {
           await page.getByText(transcript, { exact: true }).waitFor();
           await gateway.waitForRequest("sessions.resolve");
           await gateway.waitForRequest("chat.startup");
+          if (outcome === "moved") {
+            await gateway.resolveDeferred("chat.startup", {
+              messages: [{ role: "assistant", content: transcript }],
+              sessionInfo: {
+                ...row,
+                displayName: "Live snapshot conversation",
+                label: "Live snapshot conversation",
+                updatedAt: 2,
+              },
+            });
+            await page
+              .locator(".chat-pane-cache__pane--active")
+              .getByText("Live snapshot conversation", { exact: true })
+              .filter({ visible: true })
+              .first()
+              .waitFor();
+            expect(new URL(page.url()).pathname).toBe(`/chat/main/${reference}`);
+          }
           if (captureUiProof) {
             await page.screenshot({ path: path.join(suite.artifactDir, `cached-${outcome}.png`) });
           }
