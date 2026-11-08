@@ -52,6 +52,12 @@ Recording a steering receipt while another input is being persisted keeps the ac
 
 If the built-in runtime reaches its 120-second transcript-delivery deadline and proves that it removed the exact queued message before submission, that input returns to followup custody in its original queue position. Younger steers already accepted by the active run stay there and are not replayed. A timeout without proven withdrawal remains non-replayable because the runtime may still consume the input; this also applies to the native Codex confirmation timeout.
 
+After that fallback, **Send now** stays below the waiting message while the
+original run still has supported, interruptible tools running. Clicking it stops
+those tool calls through the same cleanup path. The queued message keeps its
+place and is delivered once when the run can accept it or the next turn starts.
+The action never targets a later run. Unsupported tools keep the wait explanation.
+
 A steered channel reply carries that message's quoted or forwarded context into
 the model input. Quoted content stays conversation data; commands and answers to
 pending questions use the literal incoming text. Text-only transcript entries

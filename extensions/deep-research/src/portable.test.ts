@@ -223,6 +223,56 @@ describe("portable research", () => {
     expect(io.complete).toHaveBeenCalledTimes(1);
     expect(io.search).not.toHaveBeenCalled();
   });
+  it("keeps verified findings when a model reply lists more items than the schema allows", async () => {
+    const { io, evidence, verdict } = fixture();
+    const extra = (prefix: string, count: number) =>
+      Array.from({ length: count }, (_, index) => `${prefix} ${index}`);
+    const responses = [
+      { questions: extra("river question", 6) },
+      {
+        findings: [{ statement: "The river is 12 km long.", evidence: [evidence] }],
+        gaps: [],
+        queries: extra("follow-up", 6),
+      },
+      { verdicts: [verdict], unanswered: extra("open question", 10) },
+    ];
+    io.complete = vi.fn(async () => ({ text: JSON.stringify(responses.shift()) }));
+    const result = await runPortableResearch(
+      { question: "How long is the river?", budget: { modelCalls: 3 } },
+      io,
+    );
+    expect(result.findings).toMatchObject([{ statement: "The river is 12 km long." }]);
+    expect(result.gaps).not.toContain(
+      "Research response did not satisfy the evidence contract; no repair call was made.",
+    );
+    expect(vi.mocked(io.search).mock.calls.length).toBeLessThanOrEqual(4);
+    expect(result.gaps.filter((gap) => gap.startsWith("open question"))).toHaveLength(8);
+  });
+  it("rejects an audit that repeats a verdict instead of trimming away its contradiction", async () => {
+    const { io, evidence } = fixture();
+    const supported = { index: 0, verdict: "supported", reason: "Direct evidence" };
+    const responses = [
+      { questions: ["river length"] },
+      {
+        findings: [{ statement: "The river is 12 km long.", evidence: [evidence] }],
+        gaps: [],
+        queries: [],
+      },
+      {
+        verdicts: [
+          ...Array.from({ length: 12 }, (_, index) => ({ ...supported, index })),
+          { index: 0, verdict: "contradicted", reason: "Later measurement" },
+        ],
+        unanswered: [],
+      },
+    ];
+    io.complete = vi.fn(async () => ({ text: JSON.stringify(responses.shift()) }));
+    const result = await runPortableResearch({ question: "How long is the river?" }, io);
+    expect(result.findings).toEqual([]);
+    expect(result.gaps).toContain(
+      "Research response did not satisfy the evidence contract; no repair call was made.",
+    );
+  });
   it.each(["unsupported", "contradicted"])(
     "reaudits retained findings on later rounds without erasing them on an %s sample",
     async (verdict) => {

@@ -389,6 +389,7 @@ export type AppSidebarMethods = {
     sessionKey: string,
   ): ReturnType<AppSidebarOwner["findSidebarHovercardRowByKey"]> | undefined;
   promoteCreatedSession(sessionKey: string): void;
+  snapshotCaptureStatus(): string | undefined;
 };
 export type AppSidebarElement = SolidBridgeElement<AppSidebarProps, AppSidebarMethods>;
 
@@ -408,6 +409,7 @@ export const AppSidebar = defineSolidBridge<AppSidebarProps, AppSidebarMethods>(
       });
     },
     methods: {
+      snapshotCaptureStatus: (host) => sidebarOwners.get(host)?.snapshot.read().captureStatus,
       activeNavigationViewElement: (host) => sidebarOwners.get(host)?.activeNavigationViewElement(),
       dismissTransientMenus: dismissSidebarTransientMenus,
       expandedAgentId: (host) => sidebarOwners.get(host)?.expandedAgentId() ?? "",

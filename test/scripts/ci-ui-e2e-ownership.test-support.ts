@@ -172,6 +172,7 @@ export function assertControlUiE2eOwnership(
     "ui/src/e2e/boot-module-boundaries.e2e.test.ts",
     "ui/src/e2e/control-ui-build-publication.e2e.test.ts",
     "ui/src/e2e/control-ui-stale-build-reload.e2e.test.ts",
+    "ui/src/e2e/gateway-fresh-visit.http.e2e.test.ts",
     "ui/src/e2e/phone-stale-build-recovery.e2e.test.ts",
     "ui/src/e2e/post-deploy-session-entry.e2e.test.ts",
     "ui/src/e2e/service-worker-update.e2e.test.ts",
@@ -190,6 +191,7 @@ export function assertControlUiE2eOwnership(
   assertPartition(ordinarySelected, ordinary);
 
   const productionArtifactFiles = [
+    "ui/src/e2e/gateway-fresh-visit.http.e2e.test.ts",
     "ui/src/e2e/phone-stale-build-recovery.e2e.test.ts",
     "ui/src/e2e/service-worker-update.e2e.test.ts",
   ];

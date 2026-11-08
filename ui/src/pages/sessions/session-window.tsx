@@ -342,6 +342,13 @@ export function SessionWindow(props: SessionsProps & { entries: SessionEntry[] }
                   (field.top < viewport.top || field.bottom > viewport.bottom)
                 ) {
                   target.scrollIntoView({ block: "nearest", inline: "nearest" });
+                  // Native scrolling can round away a subpixel reveal.
+                  const revealed = target.getBoundingClientRect();
+                  if (revealed.top < viewport.top) {
+                    scroller.scrollTop -= Math.ceil(viewport.top - revealed.top);
+                  } else if (revealed.bottom > viewport.bottom) {
+                    scroller.scrollTop += Math.ceil(revealed.bottom - viewport.bottom);
+                  }
                 }
               });
             });

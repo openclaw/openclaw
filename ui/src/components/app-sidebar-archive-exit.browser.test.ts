@@ -6,6 +6,7 @@ import {
   mountSidebar,
   successfulSessionPatch,
 } from "../test-helpers/app-sidebar.ts";
+import { closeArchiveUndoToast } from "../test-helpers/archive-undo-window.ts";
 import { createTestGatewayClient } from "../test-helpers/gateway-client.ts";
 import { gatewayHelloForMethods } from "../test-helpers/gateway-methods.ts";
 import { waitForSolid } from "../test-helpers/solid-settle.ts";
@@ -14,7 +15,7 @@ import "../test-helpers/load-styles.ts";
 setupSidebarTest();
 
 it.each([false, true])(
-  "archives immediately with a presentation-only exit (reduced motion: %s)",
+  "hides an archived row immediately with a presentation-only exit (reduced motion: %s)",
   async (reducedMotion) => {
     const media = window.matchMedia.bind(window);
     vi.spyOn(window, "matchMedia").mockImplementation((query) => {
@@ -56,9 +57,9 @@ it.each([false, true])(
     expect(archive.disabled, archive.outerHTML).toBe(false);
     archive.click();
     await waitForSolid(() =>
-      expect(sessions.patch, document.body.textContent ?? "").toHaveBeenCalledOnce(),
+      expect(sessions.sessions.archiveVisibility(archivedKey)).toBe("pending"),
     );
-    expect(sessions.sessions.archiveVisibility(archivedKey)).toBe("pending");
+    expect(sessions.patch).not.toHaveBeenCalled();
     await waitForSolid(() =>
       expect(sidebar.querySelector(`[data-session-key="${archivedKey}"]`)).toBeNull(),
     );
@@ -94,7 +95,8 @@ it.each([false, true])(
       expect(list.hasAttribute("data-sidebar-archive-exiting")).toBe(false);
       expect(next.getBoundingClientRect().top).toBeLessThan(beforeTop);
     }
-    expect(sessions.patch).toHaveBeenCalledOnce();
+    await closeArchiveUndoToast();
+    await waitForSolid(() => expect(sessions.patch).toHaveBeenCalledOnce());
     finishPatch(successfulSessionPatch(archivedKey));
     await sidebar.updateComplete;
   },

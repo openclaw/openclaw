@@ -212,7 +212,7 @@ export const worktreeTemplateOperations = {
         key: string;
         owner: StateLeaseProcessOwner;
       } & (
-        | { id: string; unpublish?: true }
+        | { id: string; unpublish?: true | "retire" }
         | { selection: Pick<WorktreeTemplateRecord, "cacheKey" | "contentKey" | "backend"> }
       ),
     ) => {
@@ -244,7 +244,13 @@ export const worktreeTemplateOperations = {
       if (unpublish) {
         executeSqliteQuerySync(
           db,
-          k.updateTable("worktree_templates").set({ status: "preparing" }).where("id", "=", row.id),
+          k
+            .updateTable("worktree_templates")
+            .set({
+              status: "preparing",
+              cache_key: unpublish === "retire" ? `retired:${row.id}` : row.cache_key,
+            })
+            .where("id", "=", row.id),
         );
       }
       const now = Date.now();
