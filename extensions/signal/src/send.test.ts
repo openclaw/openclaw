@@ -116,7 +116,11 @@ describe("sendMessageSignal receipts", () => {
       maxBytes,
       expect.objectContaining({ localRoots: ["/tmp"] }),
     );
-    expectSend({ attachments: ["/tmp/image.png"], message: "" }, { maxAttachmentBytes: maxBytes });
+    // A 12 MiB cap allows 30 s + 48 s, so a slow upload is not reported as a failed send.
+    expectSend(
+      { attachments: ["/tmp/image.png"], message: "" },
+      { maxAttachmentBytes: maxBytes, timeoutMs: 78_000 },
+    );
     expect(result).toMatchObject(receiptAt(1234567891));
     expect(result.receipt).toMatchObject({
       platformMessageIds: ["1234567891"],
