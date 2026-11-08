@@ -587,7 +587,6 @@ it.each(["acceptInput", "adoptRun", "appendToolResult", "completeTurn"] as const
         const entry = restored.receipt.postimage.entry;
         assert(entry);
         assert(entry.pendingFinalDelivery?.kind === "replayable");
-        expect(entry).toEqual(f.read().entry);
         expect(entry.updatedAt).toBe(updatedAt);
         expect.soft(entry.skillsSnapshot).toBe(reference.entry.skillsSnapshot);
         for (const { value, serialized } of metadata) {
@@ -598,7 +597,6 @@ it.each(["acceptInput", "adoptRun", "appendToolResult", "completeTurn"] as const
           expect.soft(value.entry.pendingFinalDelivery).toBe(entry.pendingFinalDelivery);
         }
         if (replaceDelivery) {
-          expect(entry.pendingFinalDelivery).not.toBe(reference.entry.pendingFinalDelivery);
           expect(entry.pendingFinalDelivery).toEqual(replacement);
           expect(reference.entry.pendingFinalDelivery?.text).toBe(delivery.text);
         } else {

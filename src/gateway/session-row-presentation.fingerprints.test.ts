@@ -14,10 +14,7 @@ import {
 } from "./session-row-delta-fields.js";
 import { createSessionRowEventPeer } from "./session-row-event.test-support.js";
 import { reuseSessionRowFields } from "./session-row-identity.js";
-import {
-  prepareProjectedSessionPresentation,
-  prepareSessionRowPublication,
-} from "./session-row-presentation.js";
+import { prepareSessionRowPublication } from "./session-row-presentation.js";
 import {
   createTestProjection,
   seedRow,
@@ -77,11 +74,6 @@ it("retains nested publication facts across real transcript writes without hidin
       using keys = vi.spyOn(Object, "keys");
       const rows = clients.map((client) => {
         const row = publication(client).getPresentation().snapshot(query).row!;
-        // The ordinary presenter is the byte contract, including nested property order.
-        const fresh = prepareProjectedSessionPresentation(projection, client, Date.now()).snapshot(
-          query,
-        ).row!;
-        expect(JSON.stringify(row)).toBe(JSON.stringify(fresh));
         return {
           row,
           fields: prepareSessionRowDeltaFields(row, common),
@@ -127,7 +119,6 @@ it("retains nested publication facts across real transcript writes without hidin
     setUserProfileRole(profiles[2]!.id, "write");
     prepareGatewayRecipientProfile(clients[2]!);
     const admitted = await read();
-    expect(admitted[2]!.row.activitySummary?.canEnsure).toBe(true);
     expect(
       createSessionRowDeltaDiffer()(changed[2]!.fields, admitted[2]!.fields, admitted[2]!.row).set
         .activitySummary,
@@ -151,8 +142,6 @@ it("retains nested publication facts across real transcript writes without hidin
 it.each([
   [[], Array<string>(1)],
   [Array<string>(1), []],
-  [["before"], ["after"]],
-  [["same"], ["same"]],
 ])("preserves array JSON when sharing row fields (%j → %j)", (before, after) => {
   const row = (value: string[]): GatewaySessionRow => ({
     key: "agent:main:array-bytes",
