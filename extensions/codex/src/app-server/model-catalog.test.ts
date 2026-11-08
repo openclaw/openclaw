@@ -284,6 +284,11 @@ describe("Codex app-server model catalog", () => {
       listModelsMock.mockResolvedValue(opaqueCatalog());
       await owner.load(catalogParams, nativePluginConfig);
       expect(read({}, nativePluginConfig)).toEqual({ accountType: "chatgpt", authMode: mode });
+      expect(read({ modelId: "gpt-future", scope: "account" }, nativePluginConfig)).toEqual({
+        accountType: "chatgpt",
+        authMode: mode,
+      });
+      expect(read({ modelId: "gpt-future" }, nativePluginConfig)).toBeUndefined();
       rpc.epoch += 1;
       expect(read({}, nativePluginConfig)).toBeUndefined();
     },

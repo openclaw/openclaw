@@ -73,15 +73,21 @@ export function createCodexAppServerModelCatalog(runtime: string) {
       disposed = true;
     },
     read(
-      params: AgentHarnessModelCatalogParams & { provider: string; modelId: string },
+      params: AgentHarnessModelCatalogParams & {
+        provider: string;
+        modelId: string;
+        scope?: "model" | "account";
+      },
       pluginConfig: unknown,
     ) {
       const observation = scopes.get(params.config)?.get(scopeKey(params));
+      const listed =
+        params.scope === "account" ? true : observation?.models?.has(params.modelId) === true;
       return !disposed &&
         params.provider === "openai" &&
         observation !== undefined &&
         observation.pluginConfig === pluginConfig &&
-        observation.models?.has(params.modelId) &&
+        listed &&
         observation.accountType &&
         observation.isCurrent?.()
         ? {

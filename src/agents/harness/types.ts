@@ -746,7 +746,15 @@ type AgentHarnessContract<
    * When known, authMode describes this same account observation.
    */
   readModelCatalogReadiness?(
-    params: AgentHarnessModelCatalogParams & { provider: string; modelId: string },
+    params: AgentHarnessModelCatalogParams & {
+      provider: string;
+      modelId: string;
+      /**
+       * `account` reports the current login without treating an unlisted model as catalog
+       * membership. The default `model` scope stays membership-gated.
+       */
+      scope?: "model" | "account";
+    },
   ): { accountType: string; authMode?: string } | undefined;
 };
 

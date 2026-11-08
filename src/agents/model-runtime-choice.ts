@@ -10,6 +10,7 @@ import {
 import { isUserModelAuthProfileId } from "../state/user-model-account-id.js";
 import { resolveNativeOwnedRuntimeModel } from "./defaults.js";
 import { FailoverError } from "./failover/error.js";
+import { readCodexAccountAuthMode } from "./harness/model-catalog.js";
 import { resolveAgentHarnessPolicy } from "./harness/policy.js";
 import type { AgentHarness } from "./harness/types.js";
 import type { ModelAuthAvailabilityEvaluation } from "./model-auth-availability.js";
@@ -506,10 +507,26 @@ export async function preparePublishedModelRuntimeChoice(params: {
         ? params.preferredRuntimeId
         : undefined);
     const selectedAuth = decisions.evaluateEntry(requestedEntry, undefined, materializationRuntime);
-    const authProfileMode = resolveProviderModelMaterializationAuthMode(
-      selectedAuth.selectedAuthMode,
-    );
-    if (selectedAuth.availability !== true || !authProfileMode) {
+    const codexHarness =
+      materializationRuntime === "codex"
+        ? owner.pluginRegistry?.agentHarnesses.find(
+            (registration) => registration.harness.id === "codex",
+          )?.harness
+        : undefined;
+    const accountAuthMode =
+      selectedAuth.selectedProfileId || !owner.agentDir || !owner.workspaceDir
+        ? undefined
+        : readCodexAccountAuthMode(codexHarness, {
+            config: owner.config,
+            agentId: owner.agentId ?? params.agentId,
+            agentDir: owner.agentDir,
+            workspaceDir: owner.workspaceDir,
+            provider: params.provider,
+            modelId: params.model,
+          });
+    const authProfileMode =
+      resolveProviderModelMaterializationAuthMode(selectedAuth.selectedAuthMode) ?? accountAuthMode;
+    if ((selectedAuth.availability !== true && accountAuthMode === undefined) || !authProfileMode) {
       return {
         kind: "unavailable",
         message: await describeUnavailable(requestedEntry, selectedAuth, materializationRuntime),
