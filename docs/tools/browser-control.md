@@ -314,6 +314,7 @@ openclaw browser download e12 report.pdf
 openclaw browser waitfordownload report.pdf
 openclaw browser upload /tmp/openclaw/uploads/file.pdf
 openclaw browser upload /tmp/openclaw/uploads/file.pdf --ref e12
+openclaw browser upload job-a/report.pdf --ref e12
 openclaw browser upload media://inbound/file.pdf
 openclaw browser fill --fields '[{"ref":"1","type":"text","value":"Ada"}]'
 openclaw browser dialog --accept
@@ -369,6 +370,12 @@ Notes:
   `media://inbound/<id>`, sandbox-relative `media/inbound/<id>`, or a resolved
   path inside the managed inbound media directory. Nested media refs,
   traversal, symlinks, hardlinks, and arbitrary local paths are still rejected.
+- For generated files with the same name, create a separate job folder under the
+  temp uploads root. For example, keep `<uploads-root>/job-a/report.pdf` and
+  `<uploads-root>/job-b/report.pdf`, then pass `job-a/report.pdf` or
+  `job-b/report.pdf` to `upload`. Relative paths start at the uploads root.
+  Copy or generate regular files there instead of linking them. Job folders
+  under `media/inbound` are not supported.
 - `upload` can also set file inputs directly via `--input-ref` or `--element`; these operations honor the upload timeout.
 - Dialog prompt text preserves whitespace and empty strings exactly. Reading all local or session storage preserves empty keys and keys such as `__proto__`.
 
