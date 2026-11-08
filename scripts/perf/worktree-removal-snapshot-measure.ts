@@ -104,6 +104,7 @@ const fingerprint = createHash("sha256");
 for (const relative of [
   "src/agents/worktrees/removal.ts",
   "src/agents/worktrees/service.ts",
+  "src/agents/worktrees/gc-protection.ts",
   "src/agents/worktrees/registry-retirement.ts",
   "src/agents/worktrees/snapshot-host.ts",
   "src/agents/worktrees/snapshot-inventory.ts",

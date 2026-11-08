@@ -97,7 +97,7 @@ function cli() {
 }
 
 it.each(["checkpoint", "archive"] as const)(
-  "records oversized idle %s results once and exposes recovery guidance after reopening",
+  "records oversized idle %s results once across warm sweeps and reopening",
   async (phase) => {
     const creator = new ManagedWorktreeService({ env });
     const created = await creator.create({
@@ -135,8 +135,11 @@ it.each(["checkpoint", "archive"] as const)(
     const remove = vi.spyOn(ManagedWorktreeService.prototype, "remove");
     await updateRegistryWorktree(env, record.id, { lastActiveAt: now - IDLE_GC_MS - 3_600_001 });
     let rejection: unknown;
+    let service = creator;
     for (let pass = 0; pass < 3; pass++) {
-      const service = new ManagedWorktreeService({ env });
+      if (pass === 2) {
+        service = new ManagedWorktreeService({ env });
+      }
       const result = await service.gc();
       expect(result, JSON.stringify(result)).toMatchObject({
         outcome: "deferred",
@@ -161,7 +164,9 @@ it.each(["checkpoint", "archive"] as const)(
       expect((await fs.stat(path.join(projection, ".artifacts/artifact-0.bin"))).size).toBe(
         64 * 1024 * 1024,
       );
-      await closeOpenClawStateDatabaseAsync();
+      if (pass === 1) {
+        await closeOpenClawStateDatabaseAsync();
+      }
     }
     expect(stage).toHaveBeenCalledTimes(1);
     expect(remove).toHaveBeenCalledTimes(1);
