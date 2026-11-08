@@ -46,6 +46,10 @@ export async function withOwnerSidebar(
     gateway: ReturnType<typeof createGatewayHarness>;
   }) => Promise<void>,
   savedOwnerId?: string,
+  interceptList?: (
+    params: Record<string, unknown>,
+    rows: GatewaySessionRow[],
+  ) => Promise<SessionsListResult> | undefined,
 ) {
   const requests: Record<string, unknown>[] = [];
   const inventoryRequests: Record<string, unknown>[] = [];
@@ -81,7 +85,14 @@ export async function withOwnerSidebar(
           (!params?.agentId || row.agentId === params.agentId) &&
           (!params?.ownerId || row.owner?.actor.id === params.ownerId),
       );
-      return { ...sessionsResult(selected, 1), owners };
+      const intercepted = params && interceptList?.(params, selected);
+      if (intercepted) {
+        return intercepted;
+      }
+      return {
+        ...sessionsResult(params?.source === "agent-roster" ? selected.slice(0, 300) : selected, 1),
+        owners,
+      };
     }),
   );
   gateway.publish({ selfUser: { id: viewer.id, name: viewer.label } });

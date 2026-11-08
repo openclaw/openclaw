@@ -19,11 +19,11 @@ import {
   sessionNavigationTarget,
 } from "../lib/sessions/route-navigation.ts";
 import {
-  buildAgentMainSessionKey,
   normalizeAgentId,
   resolveUiDefaultAgentId,
   resolveUiSessionRowAgentId,
 } from "../lib/sessions/session-key.ts";
+import { switchSidebarChipAgent } from "./app-sidebar-agent-selection.ts";
 import {
   projectSidebarAgentSessionRows,
   type SidebarHomeSession,
@@ -59,7 +59,6 @@ import {
   findProjectedSidebarSession,
   findSidebarSessionInTree,
   projectSidebarVisibleMainSession,
-  resolveLatestSidebarAgentSession,
   resolveSidebarMainSessionKey,
   restoreSnapshotNavigation,
   type SidebarSessionNavigationState,
@@ -112,6 +111,7 @@ import type { SidebarSnapshotModel } from "./sidebar-snapshot-model.ts";
 import { mountedViewerSessionKeys } from "./solid/viewer-facepile.tsx";
 
 export abstract class AppSidebarSessionNavigationElement extends AppSidebarBase {
+  private agentNavigationIntent = 0;
   readonly personCardTriggers = new WeakMap<HTMLElement, HTMLElement>();
   readonly presencePeople = new Map<string, HTMLElement>();
 
@@ -602,28 +602,20 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarBase 
     });
   }
 
-  private agentResumeKey(agentId: string): string {
-    const latest = resolveLatestSidebarAgentSession({
-      agentId,
-      result: this.agentNavigationResult(agentId),
-      context: this.context,
-    });
-    return latest?.key ?? buildAgentMainSessionKey({ agentId, mainKey: this.sessionMainKey() });
-  }
-
   switchChipAgent(agentId: string) {
-    const resumeKey = this.agentResumeKey(agentId);
-    this.sidebarMenus.closeAgentMenu();
-    this.expandAgent(agentId);
-    // Skills uses the shared agent selection in place; opening chat would
-    // discard the discovery page instead of updating its workspace scope.
-    if (this.activeRouteId !== "skills") {
-      if (this.connected) {
-        this.selectSession(resumeKey);
-      } else {
-        this.onNavigate?.("appearance");
-      }
+    const intent = ++this.agentNavigationIntent;
+    const context = this.context;
+    if (!context) {
+      return;
     }
+    void switchSidebarChipAgent(
+      this,
+      agentId,
+      context,
+      () => intent === this.agentNavigationIntent && this.context === context,
+      (id) => this.expandAgent(id),
+      () => this.sessionMainKey(),
+    );
   }
 
   knownSessionGroups(): string[] {
