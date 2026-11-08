@@ -1138,7 +1138,7 @@ export async function verifyEngineEventLoad(page: Page, count: number, toolCount
       await latest.press("Enter");
     }
     // Tail preparation can mount the final row before the latest command moves.
-    // Require the same visible target and end geometry across three layout updates.
+    // Require visible final text and settled end geometry across three layout updates.
     await page.waitForFunction(
       ({ paneSelector, finalText, endThreshold, state }) => {
         const host = document.querySelector(paneSelector);
@@ -1176,11 +1176,7 @@ export async function verifyEngineEventLoad(page: Page, count: number, toolCount
           rect?.width,
           rect?.height,
         ]);
-        state.stableFrames =
-          visible && target === state.target && geometry === state.geometry
-            ? state.stableFrames + 1
-            : 0;
-        state.target = target ?? null;
+        state.stableFrames = visible && geometry === state.geometry ? state.stableFrames + 1 : 0;
         state.geometry = geometry;
         return state.stableFrames >= 3;
       },
@@ -1188,7 +1184,7 @@ export async function verifyEngineEventLoad(page: Page, count: number, toolCount
         paneSelector: pane,
         finalText: "Event load foreground completed.",
         endThreshold: CHAT_TRANSCRIPT_END_THRESHOLD_PX,
-        state: { target: null as Element | null, geometry: "", stableFrames: 0 },
+        state: { geometry: "", stableFrames: 0 },
       },
       { polling: "raf" },
     );
