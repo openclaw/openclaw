@@ -3,6 +3,9 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { prepareSystemAgentRunAdmission } from "../agents/admitted-run-context.js";
 import { bindAgentToolExecutionLocation } from "../agents/agent-tool-metadata.js";
+import { registerHeadlessToolSearchCatalog } from "../agents/tool-search-catalog.js";
+import { buildToolSchemaDirectoryPrompt } from "../agents/tool-search-directory.js";
+import type { ToolSearchCatalogRef } from "../agents/tool-search-types.js";
 import { createToolSurfacePresentationForTest } from "../agents/tool-surface-plan.test-support.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
 import { withGatewayToolCallerIdentity } from "../agents/tools/gateway-caller-context.js";
@@ -200,7 +203,28 @@ describe("human personal namespace authority", () => {
   it("requires admission, refuses synthetic authority, and invalidates a mixed-person steer", async () => {
     const { alice, bob, request } = await setup();
     const owner = request(alice.id);
-    expect(await prepareGatewaySkillAuthoring(owner, "agent:main:shared", false)).toBeUndefined();
+    const listed = await prepareGatewaySkillAuthoring(owner, "agent:main:shared", false);
+    if (!listed) {
+      throw new Error("expected a directory skill_library capability");
+    }
+    const human = await authoring(owner);
+    expect(listed.multipleProfiles).toBe(human.multipleProfiles);
+    const listedTool = createSkillLibraryTool(listed);
+    const humanTool = createSkillLibraryTool(human);
+    expect(listedTool.description).toBe(humanTool.description);
+    const directory = (tool: AnyAgentTool) => {
+      const catalogRef: ToolSearchCatalogRef = {};
+      registerHeadlessToolSearchCatalog({ catalogRef, tools: [tool] });
+      return buildToolSchemaDirectoryPrompt({ catalogRef });
+    };
+    const listedDirectory = directory(listedTool);
+    expect(listedDirectory).toBe(directory(humanTool));
+    expect(listedDirectory).toContain("skill_library");
+    const admission = prepareSystemAgentRunAdmission({}, "listed-turn", "main", "test");
+    listed.bind(await admission.admit("embedded"));
+    admission.close();
+    await expect(listed.invoke({ action: "list" })).rejects.toMatchObject({ code: "FORBIDDEN" });
+    expect((await listSkillLibrary(libraryAuthority(owner))).entries).toHaveLength(0);
     expect(
       await prepareGatewaySkillAuthoring(
         { ...owner, client: { ...owner.client!, internal: { syntheticClient: true } } },

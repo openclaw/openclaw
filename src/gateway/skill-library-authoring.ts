@@ -49,10 +49,9 @@ export function invalidateSkillAuthoringForOtherRequester(
   }
 }
 
-function canPrepareSkillAuthoring(options: SkillLibraryRequestOwner, isHumanTurn: boolean) {
+function canListSkillLibrary(options: SkillLibraryRequestOwner) {
   const client = options.client;
   return Boolean(
-    isHumanTurn &&
     client?.authenticatedUserProfile &&
     !client.internal?.syntheticClient &&
     !client.internal?.agentRuntimeIdentity &&
@@ -62,6 +61,10 @@ function canPrepareSkillAuthoring(options: SkillLibraryRequestOwner, isHumanTurn
     !client.internal?.cronRunContinuation &&
     !client.internal?.delegatedToolPolicyHandoffId,
   );
+}
+
+function canPrepareSkillAuthoring(options: SkillLibraryRequestOwner, isHumanTurn: boolean) {
+  return isHumanTurn && canListSkillLibrary(options);
 }
 
 async function prepareGatewaySkillLibrarySession(
@@ -112,7 +115,9 @@ export async function prepareGatewaySkillAuthoring(
   isHumanTurn: boolean,
   prepared?: PreparedSkillLibrarySession,
 ): Promise<SkillLibraryAuthoringCapability | undefined> {
-  if (!canPrepareSkillAuthoring(options, isHumanTurn)) {
+  // The deferred tool directory is part of the stable prompt suffix. A settle or
+  // steer run keeps the same skill_library entry and refuses the call.
+  if (!canListSkillLibrary(options)) {
     return undefined;
   }
   const authority = libraryAuthority(options);
@@ -121,6 +126,22 @@ export async function prepareGatewaySkillAuthoring(
   authority.assertCurrent();
   if (!library.profileId || library.defaultTarget === "unavailable") {
     return undefined;
+  }
+  if (!isHumanTurn) {
+    return {
+      target: "personal",
+      defaultTarget: library.defaultTarget,
+      multipleProfiles: library.multipleProfiles,
+      bind() {
+        return undefined;
+      },
+      async invoke() {
+        throw new SkillLibraryError(
+          "FORBIDDEN",
+          "Skill library authoring is only available on a direct user turn.",
+        );
+      },
+    };
   }
   const profileId = library.profileId;
   invalidateSkillAuthoringForOtherRequester(sessionKey, profileId);
