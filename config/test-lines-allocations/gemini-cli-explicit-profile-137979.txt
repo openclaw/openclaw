@@ -1,0 +1,2 @@
+# Explicit Gemini CLI account admission, credential materialization, and recovery controls.
+392

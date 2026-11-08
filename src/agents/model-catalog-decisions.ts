@@ -203,6 +203,10 @@ export function createModelCatalogDecisions(params: ModelCatalogDecisionParams) 
       }
     : params.snapshot;
   const selectedProfileId = params.preferredProfileId ?? params.pinnedProfileId;
+  const cliModelProvider = (provider: string) =>
+    cliRuntimeBindings.find(
+      (binding) => binding.provider === provider || binding.runtime === provider,
+    )?.provider;
   const profileProvider =
     params.profileProvider ??
     (selectedProfileId
@@ -249,7 +253,10 @@ export function createModelCatalogDecisions(params: ModelCatalogDecisionParams) 
   // login; the harness evaluator already applies this rule to session pins.
   const evaluateNative: typeof nativeEvaluator = (entry, host, runtimeId) =>
     preferredProfilesByProvider.has(normalizeProviderId(entry.provider)) ||
-    configuredPinForEntry(entry)
+    configuredPinForEntry(entry) ||
+    (params.pinnedProfileId &&
+      cliModelProvider(entry.provider) &&
+      isSelectedProvider(entry.provider))
       ? host
       : nativeEvaluator(entry, host, runtimeId);
   // Retire the captured host evaluation so its caller prepares fresh facts.
@@ -327,8 +334,13 @@ export function createModelCatalogDecisions(params: ModelCatalogDecisionParams) 
   const pinnedProfileIdForCatalog = params.pinnedProfileId || undefined;
   const normalizeAuthProvider = (provider: string) =>
     resolveProviderIdForAuth(provider, { config: params.cfg, metadataSnapshot });
+  const selectionProvider = (provider: string) =>
+    normalizeAuthProvider(
+      cliRuntimeBindings.find((binding) => binding.runtime === normalizeProviderId(provider))
+        ?.provider ?? provider,
+    );
   const isSelectedProvider = (provider: string) =>
-    !profileProvider || normalizeAuthProvider(profileProvider) === normalizeAuthProvider(provider);
+    !profileProvider || selectionProvider(profileProvider) === selectionProvider(provider);
   const pinnedProfileForEntry = (entry: Pick<ModelCatalogEntry, "provider" | "id">) =>
     (isSelectedProvider(entry.provider) ? pinnedProfileIdForCatalog : undefined) ??
     preferredProfilesByProvider.get(normalizeProviderId(entry.provider)) ??

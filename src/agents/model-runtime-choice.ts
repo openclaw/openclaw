@@ -441,7 +441,10 @@ export async function preparePublishedModelRuntimeChoice(params: {
       params.sessionEntry?.authProfileOverrideSource === "user"
         ? params.sessionEntry.authProfileOverride
         : undefined,
-    profileProvider: params.sessionEntry?.providerOverride ?? params.sessionEntry?.modelProvider,
+    profileProvider:
+      params.sessionEntry?.providerOverride ??
+      params.sessionEntry?.modelProvider ??
+      params.provider,
   });
   // Recovery belongs to the failed account, which may differ from the runtime's native login.
   const describeUnavailable = async (
