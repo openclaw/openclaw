@@ -43,6 +43,7 @@ import type {
   DiscordSendResult,
 } from "./send.types.js";
 import { parseAndResolveDiscordTarget } from "./target-resolver.js";
+
 type DiscordSendOpts = Omit<DiscordReactOpts, "timeoutMs"> &
   DiscordOutboundMediaOpts & {
     mediaUrl?: string;
@@ -119,8 +120,12 @@ export async function sendMessageDiscord(
       { defaultKind: "channel" },
     );
     const { channelId: resolvedChannelId } = await resolveChannelId(rest, recipient, request);
-    // autoThread "on-first-message": opens the thread now, with this send as its first message.
-    const channelId = await resolvePendingDiscordAutoThreadChannel(resolvedChannelId);
+
+    // Resolve deferred auto-thread creation using the current Discord account.
+    const channelId = await resolvePendingDiscordAutoThreadChannel(
+      accountInfo.accountId,
+      resolvedChannelId,
+    );
 
     // Forum/Media channels reject POST /messages; auto-create a thread post instead.
     const channel = await resolveDiscordChannel(rest, channelId);
@@ -340,8 +345,13 @@ async function sendDiscordStructuredMessage(
       { defaultKind: "channel" },
     );
     const { channelId: resolvedChannelId } = await resolveChannelId(rest, recipient, request);
-    // autoThread "on-first-message": opens the thread now, with this send as its first message.
-    const channelId = await resolvePendingDiscordAutoThreadChannel(resolvedChannelId);
+
+    // Resolve deferred auto-thread creation using the current Discord account.
+    const channelId = await resolvePendingDiscordAutoThreadChannel(
+      account.accountId,
+      resolvedChannelId,
+    );
+
     const content = opts.content?.trim()
       ? rewriteDiscordKnownMentions(opts.content, {
           accountId: account.accountId,

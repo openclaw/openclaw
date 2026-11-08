@@ -82,7 +82,7 @@ async function runFfmpegToOutput(
 
 type VoiceMessageMetadata = {
   durationSecs: number;
-  waveform: string; // base64 encoded
+  waveform: string;
 };
 
 async function getAudioDuration(filePath: string): Promise<number> {
@@ -136,7 +136,6 @@ async function generateWaveformFromPcm(filePath: string): Promise<string> {
         sum += Math.abs(expectDefined(samples.at(i * step + j), "bounded PCM waveform sample"));
       }
       const avg = sum / count;
-      // Normalize to 0-255 (16-bit signed max is 32767)
       const normalized = Math.min(255, Math.round((avg / 32767) * 255));
       waveform[i] = normalized;
     }
@@ -157,12 +156,11 @@ function generatePlaceholderWaveform(): string {
 }
 
 /**
- * Convert audio file to OGG/Opus format if needed
- * Returns path to the OGG file (may be same as input if already OGG/Opus)
+ * Convert audio file to OGG/Opus format if needed.
+ * Returns path to the OGG file (may be same as input if already OGG/Opus).
  */
 async function ensureOggOpus(filePath: string): Promise<{ path: string; cleanup: boolean }> {
   const trimmed = filePath.trim();
-  // Defense-in-depth: callers should never hand ffmpeg/ffprobe a URL/protocol path.
   if (/^[a-z][a-z0-9+.-]*:\/\//i.test(trimmed)) {
     throw new Error(
       `Voice message conversion requires a local file path; received a URL/protocol source: ${trimmed}`,
@@ -172,7 +170,6 @@ async function ensureOggOpus(filePath: string): Promise<{ path: string; cleanup:
   const ext = normalizeLowercaseStringOrEmpty(path.extname(filePath));
 
   if (ext === ".ogg") {
-    // Fast-path only when the file is Opus at Discord's expected 48kHz.
     try {
       const stdout = await runFfprobe([
         "-v",
@@ -190,12 +187,10 @@ async function ensureOggOpus(filePath: string): Promise<{ path: string; cleanup:
         return { path: filePath, cleanup: false };
       }
     } catch {
-      // If probe fails, convert anyway
+      // If probe fails, convert anyway.
     }
   }
 
-  // Always resample to 48kHz to ensure Discord voice messages play at correct speed
-  // (Discord expects 48kHz; lower sample rates like 24kHz from some TTS providers cause 0.5x playback)
   const tempDir = resolvePreferredOpenClawTmpDir();
   const outputPath = path.join(tempDir, `voice-${crypto.randomUUID()}.ogg`);
 
@@ -283,8 +278,6 @@ export async function sendVoiceMessageDiscord(
 ): Promise<DiscordSendResult> {
   return await withDiscordRequestAuthority(opts.assertPlatformSendAuthorized, async () => {
     const cfg = requireRuntimeConfig(opts.cfg, "Discord voice send");
-    // Security: reuse the standard media loader so we apply SSRF guards + allowed-local-root checks.
-    // Then write to a private temp file so ffmpeg/ffprobe never sees the original URL/path string.
     const media = await loadWebMediaRaw(
       audioPath,
       buildOutboundMediaLoadOptions({
@@ -317,6 +310,7 @@ export async function sendVoiceMessageDiscord(
             { defaultKind: "channel" },
           );
           const resolvedChannelId = await resolvePendingDiscordAutoThreadChannel(
+            accountInfo.accountId,
             (await resolveChannelId(rest, recipient, request)).channelId,
           );
           channelId = resolvedChannelId;
@@ -326,11 +320,8 @@ export async function sendVoiceMessageDiscord(
           const metadata = await getVoiceMessageMetadata(ogg.path);
           const audioBuffer = await fs.readFile(ogg.path);
           const filename = "voice-message.ogg";
-          // Capture the environment-selected endpoint for the whole retrying operation.
           const endpointRuntime = getDiscordEndpointRuntime() ?? null;
 
-          // RequestClient auto-converts "files" bodies to multipart/form-data, but Discord's
-          // /attachments endpoint expects JSON, so this path uses a guarded raw HTTP call.
           if (!token) {
             throw new Error("Discord bot token is required for voice message upload");
           }
@@ -362,8 +353,6 @@ export async function sendVoiceMessageDiscord(
               : await fetchWithSsrFGuard({
                   url,
                   init: uploadUrlInit,
-                  // Keep control-plane negotiation on the REST budget; the binary upload below
-                  // needs the longer attachment-transfer budget.
                   timeoutMs: rest.options.timeout,
                   policy: DISCORD_VOICE_UPLOAD_SSRF_POLICY,
                   auditContext: "discord.voice.upload-url",
@@ -470,7 +459,6 @@ export async function sendVoiceMessageDiscord(
               { safety: "nonce-protected-create" },
             );
           } catch (error) {
-            // Only this final request can commit a message; upload/preflight failures cannot.
             if (messageCreateMayHaveCommitted) {
               recordDiscordMessageCreateAmbiguity(error);
             }

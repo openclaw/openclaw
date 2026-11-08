@@ -138,7 +138,13 @@ async function writeDiscordComponentMessage(
     { defaultKind: "channel" },
   );
   const { channelId: resolvedChannelId } = await resolveChannelId(rest, recipient, request);
-  const channelId = await resolvePendingDiscordAutoThreadChannel(resolvedChannelId);
+
+  // Resolve deferred auto-thread creation using the current Discord account.
+  const channelId = await resolvePendingDiscordAutoThreadChannel(
+    accountInfo.accountId,
+    resolvedChannelId,
+  );
+
   if (creating) {
     const channel = await resolveDiscordChannel(rest, channelId);
     if (channel && DISCORD_FORUM_LIKE_TYPES.has(channel.type)) {

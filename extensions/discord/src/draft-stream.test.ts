@@ -17,12 +17,15 @@ function createHarness(
   } else {
     post.mockResolvedValue({ id: "1001" });
   }
+
   const rest = { post, patch: vi.fn(async () => undefined), delete: remove };
   const stream = createDiscordDraftStream({
     rest: rest as never,
+    accountId: "account-1",
     channelId: "c1",
     ...options,
   });
+
   return { rest, stream };
 }
 
@@ -39,6 +42,7 @@ describe("createDiscordDraftStream", () => {
   it("opens a deferred autoThread with the first draft message", async () => {
     const create = vi.fn(async () => "thread-9");
     const dispose = registerPendingDiscordAutoThread({
+      accountId: "account-1",
       threadId: "thread-9",
       parentChannelId: "parent",
       create,
@@ -58,6 +62,7 @@ describe("createDiscordDraftStream", () => {
 
   it("posts the first draft in the parent when deferred thread creation fails", async () => {
     const dispose = registerPendingDiscordAutoThread({
+      accountId: "account-1",
       threadId: "thread-10",
       parentChannelId: "parent",
       create: async () => undefined,

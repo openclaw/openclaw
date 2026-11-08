@@ -9,6 +9,7 @@ import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
  * registry first, so the thread opens with that message already inside it.
  */
 type PendingDiscordAutoThread = {
+  accountId: string;
   parentChannelId: string;
   create: () => Promise<string | undefined>;
   state: "pending" | "created" | "failed";
@@ -18,6 +19,10 @@ type PendingDiscordAutoThread = {
 
 const pendingThreads = new Map<string, PendingDiscordAutoThread>();
 
+function getPendingAutoThreadKey(accountId: string, threadId: string): string {
+  return JSON.stringify([accountId, threadId]);
+}
+
 /**
  * Entries are normally removed as soon as the thread exists. A turn that never sends
  * anything (for example NO_REPLY) leaves its entry behind, so every entry also expires.
@@ -25,28 +30,39 @@ const pendingThreads = new Map<string, PendingDiscordAutoThread>();
 const PENDING_AUTO_THREAD_TTL_MS = 24 * 60 * 60 * 1000;
 
 export function registerPendingDiscordAutoThread(params: {
+  accountId: string;
   threadId: string;
   parentChannelId: string;
   create: () => Promise<string | undefined>;
 }): () => void {
+  const key = getPendingAutoThreadKey(params.accountId, params.threadId);
+
   const entry: PendingDiscordAutoThread = {
+    accountId: params.accountId,
     parentChannelId: params.parentChannelId,
     create: params.create,
     state: "pending",
   };
-  pendingThreads.set(params.threadId, entry);
+
+  pendingThreads.set(key, entry);
+
   let expiry: ReturnType<typeof setTimeout> | undefined;
+
   const dispose = () => {
     if (expiry) {
       clearTimeout(expiry);
     }
-    if (pendingThreads.get(params.threadId) === entry) {
-      pendingThreads.delete(params.threadId);
+
+    if (pendingThreads.get(key) === entry) {
+      pendingThreads.delete(key);
     }
   };
+
   expiry = setTimeout(dispose, PENDING_AUTO_THREAD_TTL_MS);
   expiry.unref?.();
+
   entry.dispose = dispose;
+
   return dispose;
 }
 
@@ -56,11 +72,16 @@ export function registerPendingDiscordAutoThread(params: {
  * promise) and returns the thread id, or the parent channel when creation
  * failed so the reply is still delivered, just not in a thread.
  */
-export async function resolvePendingDiscordAutoThreadChannel(channelId: string): Promise<string> {
-  const entry = pendingThreads.get(channelId);
+export async function resolvePendingDiscordAutoThreadChannel(
+  accountId: string,
+  channelId: string,
+): Promise<string> {
+  const entry = pendingThreads.get(getPendingAutoThreadKey(accountId, channelId));
+
   if (!entry) {
     return channelId;
   }
+
   entry.resolved ??= entry
     .create()
     .then((createdId) => {
@@ -70,6 +91,7 @@ export async function resolvePendingDiscordAutoThreadChannel(channelId: string):
         entry.dispose?.();
         return createdId;
       }
+
       entry.state = "failed";
       return entry.parentChannelId;
     })
@@ -78,14 +100,17 @@ export async function resolvePendingDiscordAutoThreadChannel(channelId: string):
       entry.state = "failed";
       return entry.parentChannelId;
     });
+
   return await entry.resolved;
 }
 
 /** Typing indicators cannot target a thread that does not exist yet; use its parent. */
-export function resolveDiscordTypingChannelId(channelId: string): string {
-  const entry = pendingThreads.get(channelId);
+export function resolveDiscordTypingChannelId(accountId: string, channelId: string): string {
+  const entry = pendingThreads.get(getPendingAutoThreadKey(accountId, channelId));
+
   if (!entry) {
     return channelId;
   }
+
   return entry.state === "created" ? channelId : entry.parentChannelId;
 }

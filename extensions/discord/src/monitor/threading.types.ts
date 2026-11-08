@@ -62,6 +62,7 @@ export type DiscordAutoThreadContext = {
 /** A thread whose session identity is fixed but whose Discord thread is not created yet. */
 export type DiscordPendingAutoThread = {
   /** Same id the thread will have: Discord reuses the starter message id. */
+  accountId: string;
   threadId: string;
   parentChannelId: string;
   /** Creates (or finds) the thread. Returns its id, or undefined when it could not be created. */
@@ -75,6 +76,7 @@ export type DiscordAutoThreadReplyPlan = DiscordReplyDeliveryPlan & {
 };
 
 export type MaybeCreateDiscordAutoThreadParams = {
+  accountId: string;
   client: Client;
   message: DiscordMessageEvent["message"];
   messageChannelId?: string;

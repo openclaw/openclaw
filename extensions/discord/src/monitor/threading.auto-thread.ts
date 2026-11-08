@@ -369,6 +369,7 @@ export function planDeferredDiscordAutoThread(
     return undefined;
   }
   return {
+    accountId: params.accountId,
     threadId: params.message.id,
     parentChannelId: messageChannelId,
     create: async () => {
