@@ -1,5 +1,27 @@
 import { expect, it, type Mock } from "vitest";
-import { interruptCapability, runCapability } from "./capability-cli.test-harness.js";
+import { AsyncWorkScope } from "../shared/async-work-scope.js";
+import { runCapability } from "./capability-cli.test-harness.js";
+
+export async function interruptCapability(
+  run: (waitForAbort: (signal?: AbortSignal) => Promise<never>) => Promise<void>,
+): Promise<void> {
+  const scope = new AsyncWorkScope();
+  let cancelled = false;
+  const waitForAbort = (signal?: AbortSignal) => {
+    const { promise, reject } = Promise.withResolvers<never>();
+    expect(signal).toBeDefined();
+    const onAbort = () => {
+      cancelled = true;
+      reject(signal?.reason);
+    };
+    signal?.addEventListener("abort", onAbort, { once: true });
+    scope.beginClose(new Error("interrupted"));
+    return promise;
+  };
+  await scope.track(() => run(waitForAbort));
+  expect(cancelled).toBe(true);
+  await scope.drain();
+}
 
 export function registerEmbeddingCapabilityCliTests({
   embedBatch,

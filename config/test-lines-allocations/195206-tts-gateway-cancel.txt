@@ -1,5 +1,0 @@
-# Four TTS Gateway RPC cancellation cases (status, providers, personas, shared state
-# mutation) plus the extracted cancellation matrix that the oversized parent suite
-# cannot grow. Net growth only; the scalar stays unchanged.
-# Exact net growth for PR #195206.
-11
