@@ -827,7 +827,7 @@ export class ManagedWorktreeService {
       }
       let failure = error;
       try {
-        const reason = await removalDeferralReason(error);
+        const reason = removalDeferralReason(error);
         if (timing && reason) {
           const deferred = await deferFailedWorktreeRemoval({
             env: this.env,

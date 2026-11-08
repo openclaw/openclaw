@@ -6,7 +6,10 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { registerWorktreesCli } from "../../cli/worktrees-cli.js";
 import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../../config/config.js";
-import { withLocalWorkspaceProjection } from "../../gateway/worker-environments/local-workspace-projection.js";
+import {
+  checkpointLocalWorkspace,
+  withLocalWorkspaceProjection,
+} from "../../gateway/worker-environments/local-workspace-projection.js";
 import { readLocalWorkspaceProjection } from "../../gateway/worker-environments/local-workspace-store.test-support.js";
 import { workerWorkspaceResultStaging } from "../../gateway/worker-environments/workspace-result-staging.js";
 import { defaultRuntime, ExitError } from "../../runtime.js";
@@ -93,19 +96,20 @@ function cli() {
   };
 }
 
-it("records oversized idle results once and exposes recovery guidance after reopening", async () => {
-  const creator = new ManagedWorktreeService({ env });
-  const created = await creator.create({
-    repoRoot: repo,
-    name: "oversized",
-    baseRef: "HEAD",
-    runSetupScript: false,
-    ownerKind: "session",
-    ownerId: "agent:main:oversized",
-  });
-  const record = (await creator.list()).find((item) => item.id === created.id)!;
-  const projection = await withLocalWorkspaceProjection(
-    {
+it.each(["checkpoint", "archive"] as const)(
+  "records oversized idle %s results once and exposes recovery guidance after reopening",
+  async (phase) => {
+    const creator = new ManagedWorktreeService({ env });
+    const created = await creator.create({
+      repoRoot: repo,
+      name: "oversized",
+      baseRef: "HEAD",
+      runSetupScript: false,
+      ownerKind: "session",
+      ownerId: "agent:main:oversized",
+    });
+    const record = (await creator.list()).find((item) => item.id === created.id)!;
+    const owner = {
       worktree: record,
       env,
       agentId: "main",
@@ -113,48 +117,75 @@ it("records oversized idle results once and exposes recovery guidance after reop
       sessionId: "oversized-session",
       lifecycleRevision: null,
       assertCurrent: () => {},
-    },
-    (state) => state.prepare(),
-  );
-  // Each file is admissible; their combined size exceeds the real 768 MiB result cap.
-  for (let index = 0; index < 13; index++) {
-    const file = path.join(projection, `artifact-${index}.bin`);
-    await fs.writeFile(file, "recoverable guest bytes\n");
-    await fs.truncate(file, 64 * 1024 * 1024);
-  }
-  const stage = vi.spyOn(workerWorkspaceResultStaging, "stageWorkerWorkspaceResult");
-  const remove = vi.spyOn(ManagedWorktreeService.prototype, "remove");
-  await updateRegistryWorktree(env, record.id, { lastActiveAt: now - IDLE_GC_MS - 3_600_001 });
-  let rejection: unknown;
-  for (let pass = 0; pass < 3; pass++) {
-    const service = new ManagedWorktreeService({ env });
-    const result = await service.gc();
-    expect(result, JSON.stringify(result)).toMatchObject({
-      outcome: "deferred",
-      failedCount: 0,
-      removed: [],
-    });
-    const pending = (await readLocalWorkspaceProjection(record.id, env))!;
-    expect(pending.pending_ref).toBeTruthy();
-    expect(pending.rejectedResult?.ref).toBe(pending.pending_ref);
-    expect(getRegistryWorktree(env, record.id)?.gcRetry).toBeUndefined();
-    if (pass === 0) {
-      rejection = pending.rejectedResult;
+    };
+    await fs.writeFile(path.join(record.path, ".gitignore"), ".artifacts/\n");
+    const projection = await withLocalWorkspaceProjection(owner, (state) => state.prepare());
+    await fs.mkdir(path.join(projection, ".artifacts"));
+    // Each file is admissible; their combined size exceeds the real 768 MiB result cap.
+    for (let index = 0; index < 13; index++) {
+      const file = path.join(projection, `.artifacts/artifact-${index}.bin`);
+      await fs.writeFile(file, "recoverable guest bytes\n");
+      await fs.truncate(file, 64 * 1024 * 1024);
+      if (phase === "archive" && (index === 6 || index === 12)) {
+        // Individually accepted checkpoints can exceed the archive overlay cap together.
+        await withLocalWorkspaceProjection(owner, (state) => state.synchronize("canonical"));
+      }
     }
-    expect(pending.rejectedResult).toEqual(rejection);
-    const visible = formatWorktreeGcResult(result);
-    expect(visible).toContain("too large to apply automatically");
-    expect(visible).toContain(pending.pending_ref);
-    expect(visible).toContain("Reduce the change");
-    expect((await service.list()).find((item) => item.id === record.id)?.gcProtection).toContain(
-      pending.pending_ref,
+    const stage = vi.spyOn(workerWorkspaceResultStaging, "stageWorkerWorkspaceResult");
+    const remove = vi.spyOn(ManagedWorktreeService.prototype, "remove");
+    await updateRegistryWorktree(env, record.id, { lastActiveAt: now - IDLE_GC_MS - 3_600_001 });
+    let rejection: unknown;
+    for (let pass = 0; pass < 3; pass++) {
+      const service = new ManagedWorktreeService({ env });
+      const result = await service.gc();
+      expect(result, JSON.stringify(result)).toMatchObject({
+        outcome: "deferred",
+        failedCount: 0,
+        removed: [],
+      });
+      const pending = (await readLocalWorkspaceProjection(record.id, env))!;
+      expect(pending.pending_ref).toBeTruthy();
+      expect(pending.rejectedResult?.ref).toBe(pending.pending_ref);
+      expect(getRegistryWorktree(env, record.id)?.gcRetry).toBeUndefined();
+      if (pass === 0) {
+        rejection = pending.rejectedResult;
+      }
+      expect(pending.rejectedResult).toEqual(rejection);
+      const visible = formatWorktreeGcResult(result);
+      expect(visible).toContain("too large to apply automatically");
+      expect(visible).toContain(pending.pending_ref);
+      expect(visible).toContain("Reduce the change");
+      expect((await service.list()).find((item) => item.id === record.id)?.gcProtection).toContain(
+        pending.pending_ref,
+      );
+      expect((await fs.stat(path.join(projection, ".artifacts/artifact-0.bin"))).size).toBe(
+        64 * 1024 * 1024,
+      );
+      await closeOpenClawStateDatabaseAsync();
+    }
+    expect(stage).toHaveBeenCalledTimes(1);
+    expect(remove).toHaveBeenCalledTimes(1);
+    await expect(checkpointLocalWorkspace(owner)).rejects.toThrow("byte limit");
+    expect(stage).toHaveBeenCalledTimes(1);
+    for (let index = 0; index < 13; index++) {
+      await fs.writeFile(
+        path.join(projection, `.artifacts/artifact-${index}.bin`),
+        "corrected result\n",
+      );
+      if (phase === "archive" && index === 6) {
+        // Keep each repair's rollback payload within the same real byte cap.
+        await checkpointLocalWorkspace(owner);
+      }
+    }
+    await checkpointLocalWorkspace(owner);
+    const recovered = await new ManagedWorktreeService({ env }).gc({ retryDeferred: true });
+    expect(recovered.removed).toEqual([record.id]);
+    const restored = await creator.restore({ id: record.id });
+    expect(await fs.readFile(path.join(restored.path, ".artifacts/artifact-1.bin"), "utf8")).toBe(
+      "corrected result\n",
     );
-    expect((await fs.stat(path.join(projection, "artifact-0.bin"))).size).toBe(64 * 1024 * 1024);
-    await closeOpenClawStateDatabaseAsync();
-  }
-  expect(stage).toHaveBeenCalledTimes(1);
-  expect(remove).toHaveBeenCalledTimes(1);
-});
+  },
+);
 
 async function bindFixtureRepository(ids: string[]) {
   const identity = await resolveRepository(repo);
