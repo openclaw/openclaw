@@ -4,7 +4,7 @@ import {
 } from "./lib/actions-artifact-archive.mjs";
 import { createReleaseEvidenceReplay, MAX_REPLAY_BYTES } from "./lib/release-evidence-replay.mjs";
 
-export const NPM_EVIDENCE_FILE = "plugin-npm-evidence.json";
+const NPM_EVIDENCE_FILE = "plugin-npm-evidence.json";
 const WORKFLOW = ".github/workflows/plugin-npm-release.yml";
 
 export function npmEvidenceBinding(params, env = process.env) {
