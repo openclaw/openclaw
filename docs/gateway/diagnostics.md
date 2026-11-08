@@ -1091,6 +1091,29 @@ counters use the existing bounded asynchronous diagnostics path. OpenTelemetry
 names are `openclaw.sessions.list.baseline_retirements` and
 `openclaw.sessions.list.base_misses`, with the same labels.
 
+`openclaw_session_projection_rows_retained_entries` counts the actual resident
+entries in the Gateway's session-row projection maps. This inventory supports
+session selection, sharing, and display; it is separate from connection event
+baselines and diagnostic session activity states. `openclaw_session_projection_owners`
+counts live projection owners. Both gauges have no labels or session identities.
+
+`openclaw_session_projection_rows_retained_bytes` estimates plain data reachable
+from those rows, deduplicating shared objects within each projection. Sampling
+uses existing memory samples (normally every 30 seconds during diagnostic
+activity), with a fixed 100,000-visit and 64-depth budget per projection. It
+never serializes contents, invokes getters, reads SQLite, or walks data on writes
+or Prometheus scrapes. `openclaw_session_projection_rows_estimate_truncated`
+counts owners whose estimate hit that budget or unsupported data; a nonzero value
+means the byte estimate covers only part of the graph. Even an untruncated estimate
+excludes closure captures and native storage and is not V8 retained-size attribution.
+Use exact entry counts to distinguish inventory growth from increasing bytes per
+row; use heap snapshots to attribute references hidden inside closures.
+
+Owners unregister on disposal and subtract their last sample, returning these
+gauges to zero when the last projection closes. OpenTelemetry uses the same names
+with the `openclaw.` prefix in place of `openclaw_`. The diagnostic event is
+`sessions.projection.retention`, carrying only aggregate numeric fields.
+
 `openclaw_session_event_rows_retained_entries` and
 `openclaw_session_event_rows_retained_bytes` report aggregate count and estimated
 memory for the field-hash vectors retained by session-event connections. Both

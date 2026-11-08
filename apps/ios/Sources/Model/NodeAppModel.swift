@@ -1392,10 +1392,13 @@ final class NodeAppModel {
             Task { [weak self] in
                 guard let self else { return }
                 guard !self.forceOperatorTalkPermissionUpgradeRequest else { return }
-                await self.talkMode.reloadConfig(shouldApply: { [weak self] in
-                    guard let self else { return false }
-                    return self.talkMode.isEnabled && !self.forceOperatorTalkPermissionUpgradeRequest
-                })
+                // Runs beside the start's own refresh; a failure must not drop the config that start keeps.
+                await self.talkMode.reloadConfig(
+                    keepLastGoodOnFailure: self.talkMode.gatewayTalkConfigLoaded,
+                    shouldApply: { [weak self] in
+                        guard let self else { return false }
+                        return self.talkMode.isEnabled && !self.forceOperatorTalkPermissionUpgradeRequest
+                    })
                 self.requestTalkPermissionUpgradeIfNeeded()
             }
         }
@@ -4198,6 +4201,13 @@ extension NodeAppModel {
         await self.startVoiceWakeSync(shouldContinue: shouldContinue)
         guard shouldContinue() else { return }
         self.startGatewayHealthMonitor()
+        await self.prepareShareGatewayDeviceAuth(stableID: stableID, shouldContinue: shouldContinue)
+    }
+
+    private func prepareShareGatewayDeviceAuth(
+        stableID: String,
+        shouldContinue: @escaping @MainActor @Sendable () -> Bool) async
+    {
         guard let config = self.activeGatewayConnectConfig,
               config.ingressAuthorization == nil
         else { return }
@@ -4206,7 +4216,14 @@ extension NodeAppModel {
                 operatorGateway: self.operatorGateway,
                 url: config.url,
                 gatewayStableID: config.nodeOptions.deviceAuthGatewayID ?? stableID,
-                sessionBox: config.webSocketSessionBox())
+                sessionBox: ShareGatewayRelaySettings.webSocketSessionBox(
+                    tlsFingerprintSHA256: config.tls?.expectedFingerprint),
+                extraHeadersProvider: {
+                    try await MainActor.run {
+                        guard shouldContinue() else { throw CancellationError() }
+                        return GatewaySettingsStore.loadGatewayCustomHeaders(gatewayStableID: stableID)
+                    }
+                })
         } catch {
             guard shouldContinue() else { return }
             ShareGatewayRelaySettings.saveLastEvent(
@@ -4265,7 +4282,11 @@ extension NodeAppModel {
             sessionKey: self.mainSessionKey,
             deliveryChannel: self.shareDeliveryChannel,
             deliveryTo: self.shareDeliveryTo,
-            requiresForegroundSignIn: requiresForegroundSignIn))
+            requiresForegroundSignIn: requiresForegroundSignIn,
+            tlsFingerprintSHA256: requiresForegroundSignIn
+                ? nil : self.activeGatewayConnectConfig?.tls?.expectedFingerprint,
+            customHeaders: requiresForegroundSignIn ? nil : GatewaySettingsStore.loadGatewayCustomHeaders(
+                gatewayStableID: stableID)))
         GatewayDiagnostics.log(
             "gateway connected host=\(url.host ?? "?") scheme=\(url.scheme ?? "?")")
 
@@ -5137,7 +5158,9 @@ extension NodeAppModel {
             sessionKey: self.mainSessionKey,
             deliveryChannel: self.shareDeliveryChannel,
             deliveryTo: self.shareDeliveryTo,
-            requiresForegroundSignIn: relay.requiresForegroundSignIn))
+            requiresForegroundSignIn: relay.requiresForegroundSignIn,
+            tlsFingerprintSHA256: relay.tlsFingerprintSHA256,
+            customHeaders: relay.customHeaders))
     }
 
     func recordShareEvent(_ text: String) {

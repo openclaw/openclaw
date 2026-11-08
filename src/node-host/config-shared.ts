@@ -4,9 +4,16 @@ import {
   normalizeNodeHostCloudflareAccessConfig,
   type NodeHostCloudflareAccessConfig,
 } from "./gateway-cloudflare-access.js";
+import {
+  parseNodeHostOpenClawIdTarget,
+  type NodeHostOpenClawIdTarget,
+} from "./openclaw-id-target.js";
 
 /** Gateway endpoint metadata persisted with node-host config. */
 export type NodeHostGatewayConfig = {
+  /** Labs: a verified OpenClaw ID target, never a ws/wss fallback. */
+  kind?: "openclaw-id";
+  openclawId?: NodeHostOpenClawIdTarget;
   host?: string;
   port?: number;
   tls?: boolean;
@@ -76,6 +83,12 @@ export function normalizeStoredNodeHostConfig(value: unknown): NodeHostConfig {
   }
   const gateway = storedGateway
     ? normalizeGatewayConfig({
+        ...(storedGateway.kind === "openclaw-id"
+          ? {
+              kind: "openclaw-id" as const,
+              openclawId: parseNodeHostOpenClawIdTarget(storedGateway.openclawId),
+            }
+          : {}),
         host: optionalNonEmptyString(storedGateway.host, "gateway_host"),
         port: validatePort(storedGateway.port, "SQLite gateway_port"),
         tls: typeof gatewayTls === "boolean" ? gatewayTls : undefined,
@@ -119,6 +132,9 @@ function cloudflareAccessEntry(cloudflareAccess: NodeHostCloudflareAccessConfig 
 export function normalizeGatewayConfig(
   gateway: NodeHostGatewayConfig,
 ): NodeHostGatewayConfig | undefined {
+  if (gateway.kind === "openclaw-id") {
+    return { kind: "openclaw-id", openclawId: parseNodeHostOpenClawIdTarget(gateway.openclawId) };
+  }
   const normalized: NodeHostGatewayConfig = {
     host: normalizeOptionalString(gateway.host),
     port: validatePort(gateway.port, "gateway port"),
