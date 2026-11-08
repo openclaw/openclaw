@@ -23,7 +23,7 @@ const runtimeOnlyBuiltCliFiles = new Set([
   "test/scripts/sqlite-sessions-transcripts-flip-proof.built-cli.e2e.test.ts",
 ]);
 
-// These owner tests use production workers, without compiled test-only fixtures.
+// These selections need no compiled test-only fixtures.
 const runtimeOnlyUnitFiles = new Set([
   "src/agents/subagents/announce/subagent-announce.incognito.test.ts",
   "src/auto-reply/reply/commands-system-prompt.test.ts",
@@ -36,14 +36,21 @@ const runtimeOnlyUnitFiles = new Set([
   "src/gateway/client-callsites.guard.test.ts",
   "src/plugins/loader.runtime-registry.test.ts",
   "test/canonical-descendant.integration.test.ts",
+  "test/codex-settled-turn-finalization.integration.test.ts",
   "test/codex-web-search-native.integration.test.ts",
   "test/codex-web-search-policy.integration.test.ts",
+  "test/conversation-tools.codex.integration.test.ts",
   "test/cron-conversation-delivery.codex.integration.test.ts",
   "test/decision-tool.codex.integration.test.ts",
   "test/plugins/chat-abort-codex.gateway.test.ts",
   "test/plugins/codex-native-search.gateway.test.ts",
+  "test/scripts/eager-import-closure.test.ts",
+  "test/scripts/lint-suppressions.test.ts",
+  "test/scripts/plugin-sdk-surface-report.test.ts",
+  "test/scripts/pr-wrapper-source-closure.test.ts",
   "test/scripts/type-suppression-inventory.test.ts",
   "test/skill-usage.codex.integration.test.ts",
+  "test/vitest-projects-config.test.ts",
 ]);
 
 export function areRuntimeOnlyVitestUnitFiles(files: readonly string[]): boolean {
@@ -73,6 +80,7 @@ export function shouldUseRuntimeOnlyVitestWorkers(
     (config === "test/vitest/vitest.auto-reply.config.ts" ||
       config === "test/vitest/vitest.auto-reply-reply.config.ts" ||
       config === "test/vitest/vitest.infra.config.ts" ||
+      config === "test/vitest/vitest.tooling.config.ts" ||
       config === "test/vitest/vitest.unit-fast.config.ts" ||
       config === "test/vitest/vitest.unit-fast-isolated.config.ts" ||
       config === "test/vitest/vitest.gateway-client.config.ts" ||
