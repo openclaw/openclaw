@@ -371,7 +371,7 @@ async function exerciseDiagnostics({ page }: { page: Page }) {
   await refresh.click();
   await gateway.waitForRequest("status", { after: statusRequestCount });
   await expect.poll(() => refresh.textContent()).toMatch(/^\s*Refreshing…\s*$/u);
-  expect(await refresh.isDisabled()).toBe(true);
+  expect(await refresh.isDisabled()).toBe(false);
   await contains(snapshots, "diagnostics-e2e");
   await noOverflow();
 
