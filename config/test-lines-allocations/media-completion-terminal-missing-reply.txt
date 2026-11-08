@@ -1,0 +1,2 @@
+27
+# Regression: queued media completion settles once its dialogue ends without a visible reply, past dedupe expiry.
