@@ -4,6 +4,7 @@ import { parseFiniteNumber } from "openclaw/plugin-sdk/number-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { ConsoleMessage, Dialog, Frame, Page, Request, Response } from "playwright-core";
+import { BrowserTabCrashedError } from "./errors.js";
 import { saveBrowserDownload } from "./pw-download-capture.js";
 import {
   MAX_CONSOLE_MESSAGES,
@@ -26,7 +27,11 @@ import {
 // Best-effort cache to make role refs stable even if Playwright returns a different Page object
 // for the same CDP target across requests.
 const roleRefsByTarget = new Map<string, RoleRefsCacheEntry>();
+// Crash facts by target key: the Page object is recreated across requests/reconnects, the target
+// id is not, so a crash learned on one Page still refuses the replacement Page for that target.
+const crashedTargets = new Map<string, true>();
 const MAX_ROLE_REFS_CACHE = 50;
+const MAX_CRASHED_TARGETS = 200;
 const MAX_OBSERVED_PAGE_TEXT_CHARS = 2_048;
 
 function truncateObservedPageText(value: string): string {
@@ -53,6 +58,9 @@ export function bindRoleRefsTarget(page: Page, cdpUrl: string, targetId?: string
   }
   state.roleRefsInvalidated = false;
   state.roleRefsTargetKey = key;
+  if (crashedTargets.has(key)) {
+    state.crashed = true;
+  }
 }
 
 export function storeRoleRefsForTarget(opts: {
@@ -269,6 +277,21 @@ export function ensurePageState(page: Page): PageState {
   };
   page.on("framenavigated", (frame) => invalidateFrameRefs(frame, true));
   page.on("framedetached", (frame) => invalidateFrameRefs(frame, false));
+  // A crashed renderer leaves the target listed and the Page object usable, so Playwright
+  // operations hang until their own timeout; record the crash instead of waiting for them.
+  page.on("crash", () => {
+    state.crashed = true;
+    const key = state.roleRefsTargetKey;
+    if (key) {
+      crashedTargets.set(key, true);
+      if (crashedTargets.size > MAX_CRASHED_TARGETS) {
+        const oldest = crashedTargets.keys().next().value;
+        if (oldest !== undefined) {
+          crashedTargets.delete(oldest);
+        }
+      }
+    }
+  });
   page.on("close", () => {
     const emulationSession = state.emulation?.session;
     state.emulation = undefined;
@@ -285,6 +308,26 @@ export function ensurePageState(page: Page): PageState {
   });
 
   return state;
+}
+
+/** True once Playwright reported a renderer crash for this page or its target. */
+export function isPageCrashed(page: Page): boolean {
+  const state = pageStates.get(page);
+  if (!state) {
+    return false;
+  }
+  if (state.crashed) {
+    return true;
+  }
+  const key = state.roleRefsTargetKey;
+  return key ? crashedTargets.has(key) : false;
+}
+
+/** Refuse actions on a crashed tab before they can hang on a dead renderer. */
+export function assertPageNotCrashed(page: Page): void {
+  if (isPageCrashed(page)) {
+    throw new BrowserTabCrashedError();
+  }
 }
 
 export function getObservedBrowserStateForPage(page: Page): BrowserObservedState {

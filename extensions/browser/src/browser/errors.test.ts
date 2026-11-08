@@ -2,6 +2,7 @@ import { expect, it } from "vitest";
 import {
   BROWSER_ACT_ERROR_CODES,
   BROWSER_ERROR_REASONS,
+  BROWSER_TAB_CRASHED_MESSAGE,
   BrowserProfileUnavailableError,
   BrowserTabNotFoundError,
   parseBrowserErrorPayload,
@@ -37,6 +38,33 @@ it("teaches agents that bare numbers are not stable tab targets", () => {
   expect(new BrowserTabNotFoundError({ input: "2" }).message).toBe(
     'tab not found: browser tab "2" not found. Numeric values are not tab targets; use a stable tab id like "t1", a label, or a raw targetId. For positional selection, use "openclaw browser tab select 2".',
   );
+});
+it("maps a crashed renderer to an explicit tab-crash conflict", () => {
+  // Captured from playwright-core 1.64.1 against a renderer crashed with CDP Page.crash: CDP
+  // commands report "Target crashed" (with a trailing space and browser log) and in-flight work
+  // reports "Page crashed" followed by the call log.
+  for (const message of [
+    "page.screenshot: Target crashed \nCall log:\n  - taking page screenshot",
+    "page.evaluate: Target crashed ",
+    "page.goto: Page crashed\nCall log:\n  - navigating",
+    "locator.click: Page crashed\nCall log:\n  - waiting for locator('b')",
+    "page.waitForTimeout: Page crashed",
+    "Page crashed.",
+    "Target crashed",
+  ]) {
+    expect(toBrowserErrorResponse(new Error(message))).toEqual({
+      status: 409,
+      message: BROWSER_TAB_CRASHED_MESSAGE,
+    });
+  }
+  // A live page whose script threw, and the ordinary close reason, stay untouched.
+  for (const message of [
+    "page.evaluate: Error: Target crashed",
+    "Target page, context or browser has been closed",
+    "page.screenshot: unknown failure",
+  ]) {
+    expect(toBrowserErrorResponse(new Error(message))).toBeNull();
+  }
 });
 const details = {
   profile: "openclaw",

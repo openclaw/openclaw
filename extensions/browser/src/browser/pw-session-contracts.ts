@@ -132,6 +132,8 @@ export type PageState = {
   roleRefsTargetKey?: string;
   /** Navigation observed before target discovery invalidates the eventual cache entry. */
   roleRefsInvalidated?: boolean;
+  /** Renderer crash observed for this page; the target survives but every action must refuse. */
+  crashed?: boolean;
 };
 
 export type RoleRefs = NonNullable<PageState["roleRefs"]>;

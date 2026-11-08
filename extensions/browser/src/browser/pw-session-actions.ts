@@ -648,7 +648,7 @@ export async function closePageByTargetIdViaPlaywright(opts: {
   ssrfPolicy?: SsrFPolicy;
   signal?: AbortSignal;
 }): Promise<void> {
-  const page = await getPageForTargetId(opts);
+  const page = await getPageForTargetId({ ...opts, allowCrashed: true });
   await closeResolvedPageViaPlaywright(page, opts);
 }
 

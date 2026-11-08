@@ -423,7 +423,7 @@ export async function resizeViewportViaPlaywright(
 }
 
 export async function closePageViaPlaywright(opts: InteractionTargetOptions): Promise<void> {
-  const page = await getPageForTargetId(opts);
+  const page = await getPageForTargetId({ ...opts, allowCrashed: true });
   await closeResolvedPageViaPlaywright(page, {
     cdpUrl: opts.cdpUrl,
     assertCurrent: opts.assertCurrent ? () => assertInteractionCurrent(opts) : undefined,

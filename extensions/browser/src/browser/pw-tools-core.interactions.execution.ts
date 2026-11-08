@@ -161,6 +161,8 @@ export async function executeActViaPlaywright(
     cdpUrl: opts.cdpUrl,
     targetId: opts.targetId,
     ssrfPolicy: opts.ssrfPolicy,
+    // Closing a crashed tab is how an agent recovers; only action traffic is refused.
+    allowCrashed: opts.action.kind === "close",
   });
   const withOperationTarget = async <T extends Record<string, unknown>>(payload: T) => {
     const targetId = (await pageTargetInfo(page).catch(() => null))?.targetId;

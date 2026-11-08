@@ -1,5 +1,18 @@
 const BROWSER_ENDPOINT_BLOCKED_MESSAGE = "browser endpoint blocked by policy";
 const BROWSER_NAVIGATION_BLOCKED_MESSAGE = "browser navigation blocked by policy";
+export const BROWSER_TAB_CRASHED_MESSAGE =
+  "tab crashed (renderer exited); open the URL in a new tab and retry";
+// Playwright words a dead renderer as "Target crashed" for CDP commands and "Page crashed" when it
+// rejects in-flight work, and it appends the browser log plus a multi-line "Call log:" block to
+// action errors. Match the first line only, so those suffixes do not defeat the check, and keep the
+// match on Playwright's own framing so a page-script error is not rewritten.
+const BROWSER_TAB_CRASHED_LINE_RE =
+  /^(?:(?:page|locator|frame|elementHandle|browserContext|request)\.[\w$.]+: )?(?:Target|Page) crashed\.?$/i;
+
+function isTabCrashedError(err: Error): boolean {
+  const firstLine = err.message.split("\n", 1)[0]?.trimEnd() ?? "";
+  return BROWSER_TAB_CRASHED_LINE_RE.test(firstLine);
+}
 
 export const BROWSER_ERROR_REASONS = {
   noDisplayForHeadedProfile: "no_display_for_headed_profile",
@@ -126,6 +139,12 @@ export class BrowserResetUnsupportedError extends BrowserError {
   }
 }
 
+export class BrowserTabCrashedError extends BrowserError {
+  constructor(options?: ErrorOptions) {
+    super(BROWSER_TAB_CRASHED_MESSAGE, 409, options);
+  }
+}
+
 export class BrowserProfileUnavailableError extends BrowserError {
   readonly metadata?: BrowserNoDisplayErrorMetadata;
 
@@ -175,6 +194,9 @@ export function toBrowserErrorResponse(err: unknown): BrowserErrorResponse | nul
   }
   if (err instanceof Error && err.name === "InvalidBrowserNavigationUrlError") {
     return { status: 400, message: err.message, reason: BROWSER_ERROR_REASONS.navigationBlocked };
+  }
+  if (err instanceof Error && isTabCrashedError(err)) {
+    return { status: 409, message: BROWSER_TAB_CRASHED_MESSAGE };
   }
   return null;
 }
