@@ -167,9 +167,9 @@ describe("validateConfigObjectWithPlugins DM policy warnings", () => {
     },
   );
 
-  it("uses manifest metadata to skip nested-only DM config shapes", () => {
+  it("accepts a wildcard in canonical nested-only DM config", () => {
     const result = validateDmPolicy(
-      { matrix: { dm: { policy: "open" } } },
+      { matrix: { dm: { policy: "open", allowFrom: ["*"] } } },
       { dmAllowFromMode: "nestedOnly" },
     );
     expect(result.ok).toBe(true);
@@ -212,4 +212,59 @@ describe("validateConfigObjectWithPlugins DM policy warnings", () => {
     );
     expect(warning?.message).not.toContain("(or channels.mattermost.allowFrom)");
   });
+});
+
+it.each([
+  {
+    name: "missing root wildcard inherited by an account",
+    matrix: { dm: { policy: "open" }, accounts: { team: { dm: {} } } },
+    paths: ["channels.matrix.dm.allowFrom", "channels.matrix.accounts.team.dm.allowFrom"],
+  },
+  {
+    name: "empty account override of a root wildcard",
+    matrix: {
+      dm: { policy: "open", allowFrom: ["*"] },
+      accounts: { team: { dm: { allowFrom: [] } } },
+    },
+    paths: ["channels.matrix.accounts.team.dm.allowFrom"],
+  },
+  {
+    name: "explicit DM enablement overriding a disabled root",
+    matrix: {
+      dm: { enabled: false, policy: "open" },
+      accounts: { team: { dm: { enabled: true } }, disabled: { dm: {} } },
+    },
+    paths: ["channels.matrix.accounts.team.dm.allowFrom"],
+  },
+  {
+    name: "runtime-ignored account wildcard",
+    matrix: {
+      dm: { policy: "allowlist", allowFrom: [] },
+      accounts: { team: { allowFrom: ["*"] } },
+    },
+    paths: ["channels.matrix.dm.allowFrom", "channels.matrix.accounts.team.dm.allowFrom"],
+  },
+  {
+    name: "runtime-ignored account alias before inherited wildcard",
+    matrix: {
+      dm: { policy: "open", allowFrom: ["*"] },
+      accounts: { team: { allowFrom: [] } },
+    },
+    paths: [],
+  },
+  {
+    name: "runtime-ignored account policy",
+    matrix: { accounts: { team: { dmPolicy: "open", dm: { allowFrom: [] } } } },
+    paths: [],
+  },
+])("uses canonical nested DM fields for $name", ({ matrix, paths }) => {
+  const issues = validateDmPolicy({ matrix }, { dmAllowFromMode: "nestedOnly" }).warnings.filter(
+    (issue) => issue.path.startsWith("channels.matrix"),
+  );
+  expect(issues.map((issue) => issue.path)).toEqual(paths);
+  for (const issue of issues) {
+    expect(issue.message).toContain(".dm.policy=");
+    expect(issue.message).not.toContain(".dmPolicy");
+    expect(issue.message).not.toContain("channels.matrix.allowFrom");
+  }
 });
