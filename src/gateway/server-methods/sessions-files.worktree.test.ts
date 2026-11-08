@@ -27,19 +27,19 @@ import {
 import type { GatewayClient } from "./types.js";
 
 const hooks = vi.hoisted(() => ({
-  duringSettlement: undefined as (() => Promise<void>) | undefined,
+  duringReadPreparation: undefined as (() => Promise<void>) | undefined,
 }));
 
-// Real settlement; the hook changes session state or cache residency while it is in progress.
-vi.mock("../worker-environments/local-workspace-projection.js", async (importOriginal) => {
+// Real read preparation; change session state or cache residency across its await.
+vi.mock("../worker-environments/local-workspace-read.js", async (importOriginal) => {
   const actual =
-    await importOriginal<typeof import("../worker-environments/local-workspace-projection.js")>();
+    await importOriginal<typeof import("../worker-environments/local-workspace-read.js")>();
   return {
     ...actual,
-    checkpointLocalWorkspacePath: (async (params) => {
-      await hooks.duringSettlement?.();
-      return await actual.checkpointLocalWorkspacePath(params);
-    }) satisfies typeof actual.checkpointLocalWorkspacePath,
+    readLocalWorkspacePath: (async (params) => {
+      await hooks.duringReadPreparation?.();
+      return await actual.readLocalWorkspacePath(params);
+    }) satisfies typeof actual.readLocalWorkspacePath,
   };
 });
 
@@ -50,7 +50,7 @@ const expectedHash = createHash("sha256").update(preview).digest("hex");
 const file = (root: string) => path.join(root, "preview.html");
 const readPreview = (root: string) => fs.readFileSync(file(root), "utf8");
 afterEach(() => {
-  hooks.duringSettlement = undefined;
+  hooks.duringReadPreparation = undefined;
 });
 
 function successful(response: Awaited<ReturnType<typeof dispatch>>) {
@@ -302,12 +302,12 @@ describe("sessions.files for managed-worktree sessions", () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const evict = seedReplicaPressure(state.env);
       await seedWorktreeSession(state.workspaceDir);
-      hooks.duringSettlement = async () => {
-        hooks.duringSettlement = undefined;
+      hooks.duringReadPreparation = async () => {
+        hooks.duringReadPreparation = undefined;
         await evict();
       };
       const response = await dispatch("sessions.files.get", "preview.html");
-      expect(hooks.duringSettlement).toBeUndefined();
+      expect(hooks.duringReadPreparation).toBeUndefined();
       expect(successful(response)).toMatchObject({ file: { content: preview } });
     });
   });
@@ -336,11 +336,11 @@ describe("sessions.files for managed-worktree sessions", () => {
     });
   });
 
-  it("refuses the read when the session moves to another worktree during settlement", async () => {
+  it("refuses the read when the session moves to another worktree during read preparation", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const entry = await seedWorktreeSession(state.workspaceDir);
-      hooks.duringSettlement = async () => {
-        hooks.duringSettlement = undefined;
+      hooks.duringReadPreparation = async () => {
+        hooks.duringReadPreparation = undefined;
         await sessions.upsertSessionEntryCore(scope, {
           ...entry,
           updatedAt: 2,
@@ -348,7 +348,7 @@ describe("sessions.files for managed-worktree sessions", () => {
         });
       };
       const response = await dispatch("sessions.files.get", "preview.html");
-      expect(hooks.duringSettlement).toBeUndefined();
+      expect(hooks.duringReadPreparation).toBeUndefined();
       expect(response).toHaveBeenCalledOnce();
       expect(response.mock.calls[0]?.[0]).toBe(false);
       expect(response.mock.calls[0]?.[2]).toMatchObject({

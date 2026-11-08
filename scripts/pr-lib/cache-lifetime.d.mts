@@ -37,3 +37,23 @@ export declare function assertDependencyTarget(target: string, destination: stri
 export declare function privateDependencyDonor(root: string, destination: string): boolean;
 export declare function collectUnusedDependencyCaches(lock: CacheLock, current?: string): string[];
 export declare function retireAnchorDependencies(anchor: AnchorIdentity, retire: () => void): void;
+
+export type DependencyHold = {
+  path: string;
+  dev: string;
+  ino: string;
+  uid: string;
+  mode: string;
+  holds: Array<Omit<DependencyHold, "path" | "holds"> & { key: string }>;
+};
+export declare function readDependencyHolds(): { cache: string; holds: DependencyHold[] };
+export declare function dependencyHoldState(hold: DependencyHold): {
+  anchor: "present" | "missing" | "changed";
+  created?: string;
+  entriesIntact: boolean;
+};
+export declare function releaseFinishedAnchor(reviewed: DependencyHold): {
+  state: "released" | "already-released";
+  settled: string[];
+  retained: string[];
+};

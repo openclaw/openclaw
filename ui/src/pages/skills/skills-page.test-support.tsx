@@ -1,6 +1,6 @@
 import type { SkillsLibraryListResult } from "@openclaw/gateway-protocol";
 import { createRouter, definePage } from "@openclaw/uirouter";
-import { createSignal, flush } from "solid-js";
+import { Show, createSignal, flush } from "solid-js";
 import { onTestFinished, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { createAgentSelectionCapability } from "../../app/agent-selection.ts";
@@ -35,6 +35,7 @@ export const remoteSkill = {
 export function mountSkills(
   request: (method: string, params?: unknown) => Promise<unknown>,
   surface: "discovery" | "settings" = "discovery",
+  options: { pendingRoute?: boolean } = {},
 ) {
   const client = { request } as unknown as GatewayBrowserClient;
   const connection = createApplicationGateway(
@@ -96,17 +97,24 @@ export function mountSkills(
     report: { workspaceDir: "/workspace", managedSkillsDir: "/managed", skills: [] },
     error: null,
   };
-  const [routeData, setRouteData] = createSignal(initialRouteData, { ownedWrite: true });
+  const [routeData, setRouteData] = createSignal<SkillsRouteData | undefined>(
+    options.pendingRoute ? undefined : initialRouteData,
+    { ownedWrite: true },
+  );
   const [currentSurface, setCurrentSurface] = createSignal(surface);
   const mounted = mountSolid(() => (
     <ApplicationProvider value={context}>
-      <SkillsPage routeData={routeData()} surface={currentSurface()} />
+      <Show when={Boolean(routeData())}>
+        <SkillsPage routeData={routeData()} surface={currentSurface()} />
+      </Show>
     </ApplicationProvider>
   ));
   flush();
-  const page = mounted.container.querySelector<HTMLElement>("openclaw-skills-page")!;
   return {
-    page,
+    get page() {
+      return mounted.container.querySelector<HTMLElement>("openclaw-skills-page")!;
+    },
+    container: mounted.container,
     unmount: mounted.unmount,
     connection,
     agents,
