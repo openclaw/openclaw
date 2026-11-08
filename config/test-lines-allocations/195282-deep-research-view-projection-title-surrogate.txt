@@ -1,0 +1,4 @@
+# Regression for PR #195282: retained-job title truncation must not split a surrogate pair
+# at the 160-UTF-16-unit boundary. Adds one regression test
+# (extensions/deep-research/src/view-projection.test.ts) of 11 net test lines.
+11
