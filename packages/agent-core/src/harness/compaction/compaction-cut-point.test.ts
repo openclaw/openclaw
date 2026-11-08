@@ -196,3 +196,44 @@ describe("findCutPoint", () => {
     expect(result.firstKeptEntryIndex).toBe(3);
   });
 });
+
+describe("findCutPoint with metadata before the selected message", () => {
+  // Gateway runs write these entries: a model snapshot inside a turn, and the bootstrap
+  // marker after each completed run, right before the next user message.
+  const metadata = (index: number, customType: string): SessionTreeEntry => ({
+    type: "custom",
+    customType,
+    data: { timestamp: index },
+    id: `entry-${index}`,
+    parentId: `entry-${index - 1}`,
+    timestamp: new Date(index).toISOString(),
+  });
+  const long = (label: string) => `${label} ${"checklist line. ".repeat(250)}`;
+  const transcript = (turn2User: string, turn2Reply: string) => [
+    messageEntry(userText(long("turn 1"), 1), 0),
+    messageEntry(assistantText("reply 1", 2), 1),
+    metadata(2, "openclaw:bootstrap-context:full"),
+    messageEntry(userText(turn2User, 4), 3),
+    metadata(4, "model-snapshot"),
+    messageEntry(assistantText(turn2Reply, 6), 5),
+    metadata(6, "openclaw:bootstrap-context:full"),
+  ];
+
+  it("keeps the marker without splitting the previous complete turn", () => {
+    const entries = transcript(long("turn 2"), "reply 2");
+    expect(findCutPoint(entries, 0, entries.length, 500)).toEqual({
+      firstKeptEntryIndex: 2,
+      turnStartIndex: -1,
+      isSplitTurn: false,
+    });
+  });
+
+  it("still splits a turn when metadata precedes a cut inside it", () => {
+    const entries = transcript("turn 2", long("reply 2"));
+    expect(findCutPoint(entries, 0, entries.length, 500)).toEqual({
+      firstKeptEntryIndex: 4,
+      turnStartIndex: 3,
+      isSplitTurn: true,
+    });
+  });
+});
