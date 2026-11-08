@@ -41,7 +41,7 @@ type Args = {
 
 const GIT_MAX_BUFFER = 64 * 1024 * 1024;
 const SCRIPT_PATH = fileURLToPath(import.meta.url);
-const TSX_PRELOAD_PATH = fileURLToPath(new URL("./tsx.mjs", import.meta.url));
+const TSX_PRELOAD_PATH = import.meta.resolve("tsx");
 
 function usage(): never {
   console.error(
