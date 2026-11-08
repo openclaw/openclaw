@@ -9,6 +9,7 @@ import { i18n } from "../../i18n/index.ts";
 import type { JsonSchema } from "../../lib/config-form-utils.ts";
 import { sourceConfigSnapshot } from "../../lib/config/config-snapshot.test-support.ts";
 import type { PluginMutationResult } from "../../lib/plugins/index.ts";
+import { createRouteLoaderOptions } from "../../test-helpers/route-loader-options.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { pageFixture, queryWithin, runtimeFixture } from "./plugins-page.lifecycle-test-support.ts";
 import {
@@ -17,11 +18,13 @@ import {
   createDiscoveryDetail,
   createInspectResult,
   createPlugin,
+  createPluginsRouteLocation,
   createResult,
   mountPage,
   resetPluginsPageTestState,
   settlePlugins,
 } from "./plugins-page.test-support.ts";
+import { pages } from "./route.tsx";
 
 vi.mock("../../components/confirm-dialog.ts", () => ({ showConfirmDialog: vi.fn() }));
 // The page lazy-loads its detail views. Import them once up front so the first test's
@@ -234,11 +237,13 @@ it.each([
     const selector = path === "/plugins" ? ".plugin-catalog-card" : ".plugin-catalog-detail";
     const plugin = createPlugin({ name: "Fresh route plugin" });
     const result = { ...createResult(plugin), generation: 1 };
+    const preload = deferred<typeof result>();
+    let inventoryReads = 0;
     const detail = createDiscoveryDetail(plugin);
     detail.plugin.id = "catalog-workboard";
     detail.plugin.catalog.categories = ["productivity"];
     const harness = pageFixture({
-      "plugins.list": () => result,
+      "plugins.list": () => (++inventoryReads === 1 ? preload.promise : result),
       "plugins.catalog.browse": () => ({
         items: [detail.plugin],
         categories: [
@@ -254,7 +259,14 @@ it.each([
       "plugins.catalog.get": () => detail,
       "plugins.inspect": () => createInspectResult({ plugin }),
     });
-    const route = harness.route(path, { ...createResult(), generation: 0 });
+    const route = await pages[surface === "settings" ? 1 : 0].loader!(
+      harness.context,
+      createRouteLoaderOptions(createPluginsRouteLocation(path)),
+    );
+    if ("type" in route) {
+      throw new Error("Expected the Plugins route to load");
+    }
+    expect(inventoryReads).toBe(1);
     const { page } = await mountPage(harness.context, undefined, surface);
     const find = queryWithin(page);
     const connect = vi.spyOn(harness.gateway, "connect");
@@ -262,8 +274,9 @@ it.each([
     await page.updateComplete;
     page.routeData = route;
     await page.updateComplete;
+    preload.resolve({ ...createResult(), generation: 0 });
     await waitForSolid(() => expect(find(selector)?.textContent).toContain(plugin.name));
-    expect(harness.calls("plugins.list").length).toBeGreaterThan(0);
+    expect(inventoryReads).toBe(2);
     expect(connect).not.toHaveBeenCalled();
   },
 );
@@ -273,8 +286,9 @@ it("targets the selected installed route after its stale inventory refresh fails
   const beta = createPlugin({ id: "beta", name: "Beta" });
   const inventory = { ...createResult([alpha, beta]), generation: 1 };
   const refresh = deferred<typeof inventory>();
+  let response = Promise.resolve({ ...inventory, generation: 0 });
   const harness = pageFixture({
-    "plugins.list": () => refresh.promise,
+    "plugins.list": () => response,
     "plugins.inspect": (params) => {
       const plugin = (params as { pluginId: string }).pluginId === alpha.id ? alpha : beta;
       return createInspectResult({ plugin });
@@ -287,12 +301,17 @@ it("targets the selected installed route after its stale inventory refresh fails
   const { page, find } = await harness.mount("/settings/plugins/alpha#lifecycle", inventory);
   await waitForSolid(() => expect(find("h1")?.textContent).toBe(alpha.name));
   try {
-    page.routeData = harness.route("/settings/plugins/beta#lifecycle", {
-      ...inventory,
-      generation: 0,
-    });
+    const route = await pages[1].loader!(
+      harness.context,
+      createRouteLoaderOptions(createPluginsRouteLocation("/settings/plugins/beta#lifecycle")),
+    );
+    if ("type" in route) {
+      throw new Error("Expected the installed Plugins route to load");
+    }
+    response = refresh.promise;
+    page.routeData = route;
     await page.updateComplete;
-    await harness.waitForCall("plugins.list");
+    await waitForSolid(() => expect(harness.calls("plugins.list")).toHaveLength(2));
     refresh.reject(new Error("Inventory unavailable"));
     await waitForSolid(() => expect(find('[aria-label="Enable Beta"]')).not.toBeNull());
     await page.updateComplete;
