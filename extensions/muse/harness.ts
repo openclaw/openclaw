@@ -41,6 +41,7 @@ import {
 import { consumeTurn } from "./src/events.js";
 import { MusePool, openMuseSession } from "./src/runtime.js";
 import { MuseCatalogReader } from "./src/verify-setup.js";
+import { museReplayMetadata, observeMuseViewCompleteness } from "./src/view-completeness.js";
 
 type MuseInputPart = Parameters<Session["sendUserTurn"]>[0]["input"][number];
 
@@ -215,6 +216,7 @@ export function createMuseAgentHarness(options: MuseHarnessOptions): AgentHarnes
       let activeAttachment: ReturnType<typeof setActiveEmbeddedRun> | undefined;
       const messages: AgentMessage[] = [];
       let text = "";
+      let nativeViewIncomplete = false;
       let lastToolError: AgentHarnessAttemptResult["lastToolError"];
       let assistantTranscriptOwned = false;
       const lifecycle = createAgentHarnessAttemptLifecycle({
@@ -510,6 +512,16 @@ export function createMuseAgentHarness(options: MuseHarnessOptions): AgentHarnes
         });
         text = result.visibleText;
         lastToolError = result.lastToolError;
+        // Keep known incompleteness even when authority revalidation rejects reporting.
+        nativeViewIncomplete = !session.fold.current;
+        await observeMuseViewCompleteness({
+          incomplete: nativeViewIncomplete,
+          params,
+          outcome: result.outcome,
+          interrupted: Boolean(failure) || aborted,
+          logger: options.logger,
+          assertCurrent: assertDispatchActive,
+        });
         if (result.outcome.kind !== "completed") {
           throw new Error(`Muse turn ended without a terminal result (${result.outcome.kind}).`);
         }
@@ -608,12 +620,12 @@ export function createMuseAgentHarness(options: MuseHarnessOptions): AgentHarnes
         sessionIdUsed: params.sessionId,
         sessionFileUsed: params.sessionFile,
         yieldDetected: false,
-        replayMetadata: {
-          replaySafe:
-            !failure && !params.initialReplayState?.replayInvalid && toolMetas.length === 0,
-          hadPotentialSideEffects:
-            params.initialReplayState?.hadPotentialSideEffects === true || toolMetas.length > 0,
-        },
+        replayMetadata: museReplayMetadata({
+          incomplete: nativeViewIncomplete,
+          failure,
+          initialReplayState: params.initialReplayState,
+          toolCount: toolMetas.length,
+        }),
       };
     });
     inFlight.add(operation);
