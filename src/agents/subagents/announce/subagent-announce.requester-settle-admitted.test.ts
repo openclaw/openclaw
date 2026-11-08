@@ -153,6 +153,21 @@ describe("admitted requester settle delivery", () => {
     },
   );
 
+  it("still ends an admitted delivery when a batch child is retired", async () => {
+    const { children, params } = setup();
+    const delivered: string[] = [];
+    deliverSpy.mockImplementation(
+      gatewayDelivery(
+        () => {},
+        // Kill retirement removes the child from the requester's live completion rows.
+        () => registryRuntimeMock.listSubagentRunsForRequester.mockReturnValue([children[1]!]),
+        delivered,
+      ),
+    );
+    expect(await maybeWakeRequesterAfterAllChildrenSettled(params)).toBe(false);
+    expect(delivered).toHaveLength(0);
+  });
+
   it("still ends an admitted delivery when the requester session is replaced", async () => {
     const { params } = setup();
     const delivered: string[] = [];

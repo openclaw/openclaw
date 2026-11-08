@@ -450,21 +450,19 @@ async function maybeWakeRequesterAfterAllChildrenSettledBound(
     let dispatchPrepared = false;
     let dispatchAccepted = false;
     // Once the requester session accepts the turn, that turn owns this delivery until it
-    // ends. Only Stop or abort, Gateway close, or requester session replacement or
-    // deletion revokes it; the requester run, follow-up custody and batch membership
-    // decide admission only.
+    // ends. Requester-run turnover (its yielded run ending or a follow-up replacing it)
+    // decides admission only. Stop or abort, Gateway close, requester session
+    // replacement, requester kill and child cancellation or retirement still revoke it.
     const isAdmittedTurnCurrent = () =>
       !params.signal?.aborted &&
       params.isSourceCurrent() &&
       sourceReceiptAdmission.isStoreCurrent() &&
       sourceReceiptAdmission.isRequesterCurrent() &&
-      !isGatewayClosed();
-    const isAdmissionCurrent = () =>
-      isAdmittedTurnCurrent() &&
       preparedFindings.isCurrent() &&
+      !isGatewayClosed() &&
       areCompletionRowsCurrent() &&
-      isRequesterCurrent() &&
       !isBatchDeliveryClosed();
+    const isAdmissionCurrent = () => isAdmittedTurnCurrent() && isRequesterCurrent();
     const isSourceSessionEffectsAllowed = () =>
       dispatchAccepted ? isAdmittedTurnCurrent() : isAdmissionCurrent();
     const continuationCaller = captureRequesterContinuationCaller({
