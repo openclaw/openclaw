@@ -11,12 +11,16 @@ import {
   wrapToolWithBeforeToolCallHook as wrapHook,
 } from "./agent-tools.before-tool-call.js";
 import { finalizeAgentTools } from "./agent-tools.finalize.js";
+import { createCodeModeToolApiFile } from "./code-mode-tool-api.js";
+import { finalizeOpenClawTools } from "./openclaw-tools.finalize.js";
 import { SWARM_CODE_MODE_IDEMPOTENCY_KEY } from "./subagents/swarm/swarm-code-mode.js";
+import { filterToolsByPolicy } from "./tool-policy-match.js";
 import {
   applyToolSearchCatalog as applyCatalog,
   clearToolSearchCatalog,
   createToolSearchCatalogRef,
   createToolSearchTools,
+  registerHeadlessToolSearchCatalog,
   restrictToolSearchCatalog as restrictCatalog,
 } from "./tool-search.js";
 import { createAgentsWaitTool } from "./tools/agents-wait-tool.js";
@@ -143,6 +147,50 @@ describe("execution allowlist availability", () => {
 });
 
 describe("collector tool availability", () => {
+  it.each([false, true])(
+    "keeps canonical collector inputs aligned with an offered reader: %s",
+    async (offered) => {
+      const source = spawnTool();
+      const wait = reader();
+      const tools = offered
+        ? [source, wait]
+        : filterToolsByPolicy(
+            finalizeOpenClawTools({
+              tools: [source, wait],
+              options: { wrapBeforeToolCallHook: false },
+              config,
+              hookAgentId: "main",
+              gatewayCallerAccountId: undefined,
+            }),
+            { deny: ["agents_wait"] },
+          );
+      const finalized = finalizeAgentTools({
+        tools,
+        modelProvider: "google",
+        hookContext: {},
+        wrapBeforeToolCallHook: false,
+      });
+      const finalizedSpawn = finalized.find((tool) => tool.name === "sessions_spawn");
+      assert.ok(finalizedSpawn);
+      const catalogRef = createToolSearchCatalogRef();
+      onTestFinished(() => clearToolSearchCatalog({ catalogRef }));
+      registerHeadlessToolSearchCatalog({ catalogRef, tools: finalized });
+      const entry = catalogRef.current?.entries.find((tool) => tool.name === "sessions_spawn");
+      assert.ok(entry);
+
+      expectCollection(finalizedSpawn, offered);
+      expectCollection({ parameters: entry.parameters, description: entry.description }, offered);
+      const declaration = (await createCodeModeToolApiFile(entry.name, entry)).content;
+      for (const field of ["collect", "outputSchema", "groupId"]) {
+        const check = (value: string) => (offered ? expect(value) : expect(value).not);
+        check(declaration).toContain(`${field}?:`);
+      }
+      if (offered) {
+        expectNormalizedCollector(finalizedSpawn);
+      }
+    },
+  );
+
   it("rechecks execution caps on catalog restriction and rebuild", async () => {
     const allow = ["sessions_spawn", "agents_wait"];
     const { tool, params, catalogRef, apply } = catalogFixture(reader(), allow);

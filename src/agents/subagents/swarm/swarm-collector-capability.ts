@@ -114,6 +114,7 @@ export function bindCollectorSpawnTool<T extends AnyAgentTool>(
   const fields = selectCollectorFields(properties);
   const capability: SpawnCapability = { nativeReader: undefined, signal };
   const binding: AgentToolAvailabilityBinding = {
+    prepareBeforeNormalization: true,
     prepare(current, callableTools, offeredTools) {
       const schema = current.parameters;
       const retainedFields = collectorFieldsBySchema.get(schema);
