@@ -270,6 +270,26 @@ export async function summarizeGatewayServiceLayout(
   };
 }
 
+/**
+ * Physical installation root a command would serve. A rebuild cleans its dist
+ * entrypoints before recompiling, so the entry file may be missing exactly while
+ * the checkout needs protection; the package-root walk resolves from the path
+ * string through that window. Unresolvable commands exclude nothing.
+ */
+export async function resolveGatewayServiceCommandPackageRoot(
+  command: Pick<GatewayServiceCommandConfig, "programArguments" | "workingDirectory"> | null,
+): Promise<string | undefined> {
+  if (!command) {
+    return undefined;
+  }
+  const layout = await summarizeGatewayServiceLayout(command).catch(() => undefined);
+  if (layout?.packageRootReal) {
+    return layout.packageRootReal;
+  }
+  const entrypoint = resolveServiceEntrypoint(command);
+  return entrypoint ? await resolveOpenClawPackageRoot(entrypoint) : undefined;
+}
+
 /** Physical installation overlap only; deployment current/releases names are not evidence. */
 export async function gatewayServiceCommandOverlapsPhysicalInstallation(
   root: string,

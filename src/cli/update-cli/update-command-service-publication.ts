@@ -8,15 +8,20 @@ import {
   readWindowsStartupFallbackRuntimeForUpdate,
 } from "../../daemon/schtasks-runtime.js";
 import { ServiceInspectionError } from "../../daemon/service-inspection-error.js";
-import { summarizeGatewayServiceLayout } from "../../daemon/service-layout.js";
+import {
+  gatewayServiceCommandOverlapsPhysicalInstallation,
+  summarizeGatewayServiceLayout,
+} from "../../daemon/service-layout.js";
 import { withGatewayServiceOperationLock } from "../../daemon/service-operation-lock.js";
 import type { GatewayServiceState } from "../../daemon/service-types.js";
+import { assertGatewayServiceUpdateCurrent } from "../../daemon/service-update-authority.js";
 import { readGatewayServiceState, resolveGatewayService } from "../../daemon/service.js";
 import { ignoreMissingPath } from "../../infra/errno.js";
 import { readActiveGatewayLockIdentity } from "../../infra/gateway-lock.js";
 import { acquireGatewayStateOwner } from "../../infra/gateway-state-owner.js";
 import { isPathInside } from "../../infra/path-guards.js";
 import { probePortUsage } from "../../infra/ports-probe.js";
+import { withRuntimePublicationExclusion } from "../../infra/runtime-publication-exclusion.js";
 import { throwSqliteLifecycleErrors } from "../../infra/sqlite-lifecycle-errors.js";
 import {
   createOpenClawDatabaseMaintenanceScope,
@@ -46,21 +51,59 @@ export async function isManagedGatewayServiceOffline(state: GatewayServiceState)
   );
 }
 
+type RuntimeArtifactPublicationParams = {
+  root: string;
+  env: NodeJS.ProcessEnv;
+  timeoutMs: number;
+  assertCurrent: () => void;
+  outputPaths?: readonly string[];
+};
+
+/** The unlocked inspection turned out to be service-affecting; only the lifecycle lock may run it. */
+class GatewayServicePublicationRequiresOperationLock extends Error {}
+
+/** Physical relevance decides whether a rebuild must queue behind the profile's
+ * machine-wide service lifecycle lock. A checkout the installed Gateway does not
+ * resolve inside cannot change what that Gateway runs, and a definitively absent
+ * service has no installation to change. Uncertain facts keep the lock. */
+async function gatewayServicePublicationMayAffectService(
+  params: RuntimeArtifactPublicationParams,
+): Promise<boolean> {
+  try {
+    const state = await readGatewayServiceState(resolveGatewayService(), {
+      env: params.env,
+      requireEffective: true,
+      requireLoadedCommand: true,
+      timeoutMs: params.timeoutMs,
+    });
+    if (state.command) {
+      return (
+        (await gatewayServiceCommandOverlapsPhysicalInstallation(params.root, state.command)) !==
+        false
+      );
+    }
+    return !(
+      !state.installed &&
+      state.loadState.status === "not-loaded" &&
+      state.runtime?.missingUnit === true
+    );
+  } catch {
+    return true;
+  }
+}
+
 /** Changed runtime artifacts require an offline physical target, not logical
  * ownership of a deployment's current/releases namespace. No service is stopped here. */
 export async function withGatewayRuntimeArtifactPublication<T>(
-  params: {
-    root: string;
-    env: NodeJS.ProcessEnv;
-    timeoutMs: number;
-    assertCurrent: () => void;
-    outputPaths?: readonly string[];
-  },
+  params: RuntimeArtifactPublicationParams,
   publish: (assertPublicationCurrent: () => Promise<void>) => Promise<T>,
 ): Promise<T> {
   const assertCaller = params.assertCurrent;
   assertCaller();
-  return await withGatewayServiceOperationLock(params.env, async (assertNative) => {
+  const runPublication = async (
+    assertNative: () => void,
+    requireServiceIrrelevance: boolean,
+  ): Promise<T> => {
     let processOwner: ReturnType<typeof acquireGatewayStateOwner> | undefined;
     let maintenance: OpenClawDatabaseMaintenanceScope | undefined;
     const assertCurrent = () => {
@@ -239,11 +282,16 @@ export async function withGatewayRuntimeArtifactPublication<T>(
           return consumer ? !consumer.disjoint : null;
         },
       });
-      return { disjoint, database, serving, root: target.real, destinations };
+      return { disjoint, absent, database, serving, root: target.real, destinations };
     };
     const inspect = () => readInspection().catch(inspectionFailed);
     const before = await inspect();
     assertCurrent();
+    if (requireServiceIrrelevance && !before.disjoint && !before.absent) {
+      // Inspection replaced the probe's facts: this publication can reach the
+      // installed Gateway, so it re-runs under the service lifecycle lock.
+      throw new GatewayServicePublicationRequiresOperationLock();
+    }
     if (before.serving && !before.serving.entrypoint.stat) {
       refuse();
     }
@@ -308,5 +356,34 @@ export async function withGatewayRuntimeArtifactPublication<T>(
       "Runtime publication and maintenance cleanup failed.",
     );
     return publicationResult;
-  });
+  };
+  if (!(await gatewayServicePublicationMayAffectService(params))) {
+    // Independent checkouts sharing one profile must not serialize their builds
+    // behind a lock keyed on the profile's service identity. The checkout's own
+    // publication exclusion still covers this writer interval, so a service
+    // retarget or start aimed at these outputs waits instead of consuming them.
+    try {
+      return await withRuntimePublicationExclusion(
+        params.root,
+        () =>
+          runPublication(() => {
+            assertGatewayServiceUpdateCurrent();
+          }, true),
+        params.outputPaths,
+      );
+    } catch (error) {
+      if (!(error instanceof GatewayServicePublicationRequiresOperationLock)) {
+        throw error;
+      }
+    }
+  }
+  // Lock ordering is profile lifecycle lock, then checkout publication exclusion;
+  // service mutations take them in the same order.
+  return await withGatewayServiceOperationLock(params.env, (assertNative) =>
+    withRuntimePublicationExclusion(
+      params.root,
+      () => runPublication(assertNative, false),
+      params.outputPaths,
+    ),
+  );
 }

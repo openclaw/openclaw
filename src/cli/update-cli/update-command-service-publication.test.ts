@@ -5,6 +5,7 @@ import * as sourcePreparation from "../../../scripts/lib/source-update-artifact-
 import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
 import { runNodeMain } from "../../../test/scripts/run-node-boundary.test-support.js";
 import * as serviceFiles from "../../daemon/inspect-files.js";
+import * as managedBindings from "../../daemon/managed-gateway-bindings.js";
 import { ServiceInspectionError } from "../../daemon/service-inspection-error.js";
 import { withGatewayServiceOperationLock } from "../../daemon/service-operation-lock.js";
 import type { GatewayService } from "../../daemon/service.js";
@@ -17,6 +18,7 @@ import * as lockPayload from "../../infra/gateway-lock-payload.js";
 import * as gatewayLocks from "../../infra/gateway-lock.js";
 import { tryAcquireGatewayStateOwner } from "../../infra/gateway-state-owner.js";
 import * as portProbe from "../../infra/ports-probe.js";
+import { withRuntimePublicationExclusion } from "../../infra/runtime-publication-exclusion.js";
 import * as updateCheck from "../../infra/update-check.js";
 import { withPluginLifecycleLease } from "../../plugins/plugin-lifecycle-lease.js";
 import { retainCommandProcessCleanup } from "../../process/exec-spawn.js";
@@ -42,7 +44,33 @@ vi.mock("../../daemon/service.js", async (importOriginal) => ({
   resolveGatewayService: mocks.service,
 }));
 
-beforeEach(() => mockSystemAccountHome());
+/** Signals the exact moment a waiter attempts a runtime-publication lock. */
+const exclusionAdmission = vi.hoisted(() => ({
+  notify: null as ((lockPath: string) => void) | null,
+}));
+// Pass-through wrapper: real lock semantics, plus an observable admission
+// boundary so tests synchronize on the lock attempt instead of sleeping.
+vi.mock("../../infra/file-lock.js", async (importOriginal) => {
+  const mod = await importOriginal<typeof import("../../infra/file-lock.js")>();
+  return {
+    ...mod,
+    withFileLock: <T>(
+      filePath: string,
+      options: Parameters<typeof mod.withFileLock>[1],
+      fn: () => Promise<T>,
+    ): Promise<T> => {
+      if (filePath.includes("runtime-publication-")) {
+        exclusionAdmission.notify?.(filePath);
+      }
+      return mod.withFileLock(filePath, options, fn);
+    },
+  };
+});
+
+beforeEach(() => {
+  mockSystemAccountHome();
+  exclusionAdmission.notify = null;
+});
 afterEach(() => vi.restoreAllMocks());
 
 async function writeRuntimeRoot(root: string) {
@@ -774,4 +802,189 @@ it("settles cleanup writes and releases publication custody after disposal fails
       await publication;
       closeOpenClawStateDatabaseForTest();
     }
+  }));
+
+/** The profile's machine-wide lifecycle lock, held by an unrelated long operation.
+ * Every state transition is recorded so ordering replaces wall-clock waits. */
+async function withForeignServiceLockHeld<T>(
+  env: NodeJS.ProcessEnv,
+  events: string[],
+  run: (contended: () => boolean) => Promise<T>,
+): Promise<T> {
+  const entered = createDeferredCore();
+  const release = createDeferredCore();
+  let released = false;
+  const holder = withGatewayServiceOperationLock(env, async () => {
+    entered.resolve();
+    await release.promise;
+  });
+  await entered.promise;
+  try {
+    return await run(() => !released);
+  } finally {
+    released = true;
+    events.push("foreign-lock-released");
+    release.resolve();
+    await holder;
+  }
+}
+
+/** These assertions are about lock queueing, not about host service discovery. */
+function skipHostBindingDiscovery(): void {
+  vi.spyOn(managedBindings, "discoverManagedGatewayBindings").mockResolvedValue([]);
+}
+
+async function writeServingCheckout(home: string): Promise<string> {
+  const serving = path.join(home, "serving-checkout");
+  await writeRuntimeRoot(serving);
+  await fs.mkdir(path.join(serving, "dist-runtime"), { recursive: true });
+  return serving;
+}
+
+it("publishes an independent checkout's rebuild without queueing on the profile service lock", () =>
+  withRuntimePublicationFixture(async ({ home, root, env, service, publish }) => {
+    skipHostBindingDiscovery();
+    const serving = await writeServingCheckout(home);
+    // The profile's Gateway serves another installation and is live: this
+    // checkout's outputs cannot reach it, so its rebuild must not serialize.
+    vi.mocked(service.readCommand).mockResolvedValue({
+      programArguments: serviceCommand(serving),
+    });
+    vi.mocked(service.readRuntime).mockResolvedValue(serviceRuntime("running"));
+    const artifact = path.join(root, "dist-runtime", "published.txt");
+    await fs.writeFile(artifact, "original");
+    const events: string[] = [];
+    await withForeignServiceLockHeld(env, events, async (contended) => {
+      let publishedWhileContended = false;
+      // A regressed publication surfaces here as the waiter's file_lock_timeout.
+      const publication = publish(async (assertPublicationCurrent) => {
+        await assertPublicationCurrent();
+        publishedWhileContended = contended();
+        events.push("published");
+        await fs.writeFile(artifact, "candidate");
+      });
+      publication.catch(() => undefined);
+      await expect(publication).resolves.toBeUndefined();
+      expect(publishedWhileContended).toBe(true);
+    });
+    expect(events).toEqual(["published", "foreign-lock-released"]);
+    expect(await fs.readFile(artifact, "utf8")).toBe("candidate");
+  }));
+
+it("keeps the served checkout excluded while an independent publication writes", () =>
+  withRuntimePublicationFixture(async ({ home, root, service, publish }) => {
+    skipHostBindingDiscovery();
+    const serving = await writeServingCheckout(home);
+    vi.mocked(service.readCommand).mockResolvedValue({
+      programArguments: serviceCommand(serving),
+    });
+    vi.mocked(service.readRuntime).mockResolvedValue(serviceRuntime("running"));
+    const events: string[] = [];
+    const writing = createDeferredCore();
+    const finished = createDeferredCore();
+    const publication = publish(async (assertPublicationCurrent) => {
+      await assertPublicationCurrent();
+      events.push("published");
+      writing.resolve();
+      await finished.promise;
+      events.push("publication-finished");
+    });
+    publication.catch(() => undefined);
+    await writing.promise;
+    // A service retarget aimed at these outputs must wait for the writer interval,
+    // even though this publication holds no profile service lifecycle lock.
+    const served = createDeferredCore();
+    const admitted = createDeferredCore();
+    exclusionAdmission.notify = () => admitted.resolve();
+    const serve = withRuntimePublicationExclusion(root, async () => {
+      events.push("service-served");
+      served.resolve();
+    });
+    const gate = awaitGateBeforeSettlement(
+      publication.then(() => undefined),
+      served.promise,
+      "Service served the checkout during its publication",
+    );
+    // Synchronize on the waiter's lock-attempt boundary: a serve that never
+    // consults the exclusion leaves this pending until the Vitest timeout, and
+    // one that consults it but fails to block is caught by the order assertions.
+    await admitted.promise;
+    expect(events).toEqual(["published"]);
+    finished.resolve();
+    await expect(gate).resolves.toBeUndefined();
+    await expect(publication).resolves.toBeUndefined();
+    await serve;
+    expect(events).toEqual(["published", "publication-finished", "service-served"]);
+  }));
+
+it("publishes a rebuild with no installed Gateway without queueing on the profile service lock", () =>
+  withRuntimePublicationFixture(async ({ root, env, service, publish }) => {
+    skipHostBindingDiscovery();
+    service.isAbsent = vi.fn(async () => true);
+    const artifact = path.join(root, "dist-runtime", "published.txt");
+    await fs.writeFile(artifact, "original");
+    try {
+      const events: string[] = [];
+      await withForeignServiceLockHeld(env, events, async (contended) => {
+        let publishedWhileContended = false;
+        const publication = publish(async (assertPublicationCurrent) => {
+          await assertPublicationCurrent();
+          publishedWhileContended = contended();
+          events.push("published");
+          await fs.writeFile(artifact, "candidate");
+        });
+        publication.catch(() => undefined);
+        await expect(publication).resolves.toBeUndefined();
+        expect(publishedWhileContended).toBe(true);
+      });
+      expect(events).toEqual(["published", "foreign-lock-released"]);
+      expect(await fs.readFile(artifact, "utf8")).toBe("candidate");
+    } finally {
+      closeOpenClawStateDatabaseForTest();
+    }
+  }));
+
+it("still queues behind the profile service lock when the Gateway serves this checkout", () =>
+  withRuntimePublicationFixture(async ({ env, publish }) => {
+    skipHostBindingDiscovery();
+    const events: string[] = [];
+    let publication: Promise<unknown> | undefined;
+    await withForeignServiceLockHeld(env, events, async () => {
+      publication = publish(async (assertPublicationCurrent) => {
+        await assertPublicationCurrent();
+        events.push("published");
+      });
+      publication.catch(() => undefined);
+      expect(events).toEqual([]);
+    });
+    await expect(publication).resolves.toBeUndefined();
+    expect(events).toEqual(["foreign-lock-released", "published"]);
+  }));
+
+it("still queues behind the profile service lock when the serving installation moves into this checkout", () =>
+  withRuntimePublicationFixture(async ({ home, root, env, service, publish }) => {
+    skipHostBindingDiscovery();
+    const serving = await writeServingCheckout(home);
+    // Only the relevance probe observes the foreign installation; by the time
+    // publication is inspected, the profile's Gateway serves this checkout.
+    vi.mocked(service.readCommand)
+      .mockResolvedValueOnce({ programArguments: serviceCommand(serving) })
+      .mockResolvedValue({ programArguments: serviceCommand(root) });
+    const artifact = path.join(root, "dist-runtime", "published.txt");
+    await fs.writeFile(artifact, "original");
+    const events: string[] = [];
+    let publication: Promise<unknown> | undefined;
+    await withForeignServiceLockHeld(env, events, async () => {
+      publication = publish(async (assertPublicationCurrent) => {
+        await assertPublicationCurrent();
+        events.push("published");
+        await fs.writeFile(artifact, "candidate");
+      });
+      publication.catch(() => undefined);
+      expect(events).toEqual([]);
+      expect(await fs.readFile(artifact, "utf8")).toBe("original");
+    });
+    await expect(publication).resolves.toBeUndefined();
+    expect(events).toEqual(["foreign-lock-released", "published"]);
+    expect(await fs.readFile(artifact, "utf8")).toBe("candidate");
   }));
