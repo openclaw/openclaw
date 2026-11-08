@@ -16,13 +16,13 @@ import {
   XAI_DEFAULT_CONTEXT_WINDOW,
   XAI_IMAGE_MODELS,
   XAI_DEFAULT_MAX_TOKENS,
+  XAI_GROK_OAUTH_BASE_URL,
   XAI_UNKNOWN_MODEL_COST,
 } from "./model-definitions.js";
 import { normalizeXaiReasoningEfforts } from "./model-id.js";
 
 const PROVIDER_ID = "xai";
 const XAI_MODELS_ENDPOINT = `${XAI_BASE_URL}/models`;
-const XAI_GROK_OAUTH_BASE_URL = "https://cli-chat-proxy.grok.com/v1";
 const XAI_GROK_OAUTH_MODELS_ENDPOINT = `${XAI_GROK_OAUTH_BASE_URL}/models`;
 const XAI_MODELS_CACHE_TTL_MS = 60_000;
 const XAI_GROK_OAUTH_MODELS_CACHE_TTL_MS = 60_000;

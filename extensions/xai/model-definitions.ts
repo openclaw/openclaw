@@ -7,6 +7,8 @@ import { isXaiFrontierModelId, normalizeXaiModelId } from "./model-id.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
 
 export const XAI_BASE_URL = manifest.modelCatalog.providers.xai.baseUrl;
+/** Grok OAuth subscription route. */
+export const XAI_GROK_OAUTH_BASE_URL = "https://cli-chat-proxy.grok.com/v1";
 export const XAI_DEFAULT_IMAGE_MODEL = "grok-imagine-image";
 export const XAI_IMAGE_MODELS = [
   "grok-imagine-image",

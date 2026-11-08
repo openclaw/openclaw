@@ -87,11 +87,15 @@ describe("xAI doctor contract", () => {
 
   it("adds the long-context tier to OAuth rows saved at the catalog's flat rates", () => {
     // The shape OAuth sign-in saved before the catalog carried tiers.
-    const saved = (id: string, cost: ModelDefinitionConfig["cost"]): ModelDefinitionConfig => ({
+    const saved = (
+      id: string,
+      cost: ModelDefinitionConfig["cost"],
+      baseUrl = "https://cli-chat-proxy.grok.com/v1",
+    ): ModelDefinitionConfig => ({
       id,
       name: id,
       api: "openai-responses",
-      baseUrl: "https://example.invalid/v1",
+      baseUrl,
       reasoning: true,
       input: ["text"],
       cost,
@@ -104,6 +108,8 @@ describe("xAI doctor contract", () => {
       saved("grok-4.5", { ...flat, input: 1 }),
       saved("grok-4.5", { ...flat, tieredPricing: [] }),
       saved("grok-4.7-build-fast", { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }),
+      // A custom route owns its billing, even at the catalog's flat rates.
+      saved("grok-4.5", flat, "https://proxy.example.test/v1"),
     ];
     const config: OpenClawConfig = {
       models: {
@@ -117,6 +123,17 @@ describe("xAI doctor contract", () => {
       [[200_000], 4],
     ]);
     expect(rest).toEqual(unchanged);
+
+    const { baseUrl: _route, ...unrouted } = saved("grok-4.5", flat);
+    const customProvider: OpenClawConfig = {
+      models: {
+        providers: { xai: { baseUrl: "https://proxy.example.test/v1", models: [unrouted] } },
+      },
+    };
+    expect(normalizeCompatibilityConfig({ cfg: customProvider })).toEqual({
+      config: customProvider,
+      changes: [],
+    });
   });
 
   it.each([
