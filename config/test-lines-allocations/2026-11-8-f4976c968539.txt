@@ -1,0 +1,5 @@
+41
+# LOCAL 2026.11.8 row 1; source f4976c968539eda937ce3ffdaaa5146c55bcb1bd.
+# Project-local adoption preserves registered project identity, rejecting foreign roots and linked workspaces.
+# Keeps distinct regression invariants; exact net LF measured at integration.
+# Scalar baseline unchanged; focused private proof retained.
