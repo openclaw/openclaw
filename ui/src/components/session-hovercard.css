@@ -417,6 +417,12 @@ button.session-hovercard__attribution-others:is(:hover, :focus-visible) {
   white-space: pre-wrap;
 }
 
+.session-hovercard__error-dismiss {
+  grid-column: 1 / -1;
+  justify-self: end;
+  color: var(--text);
+}
+
 .session-hovercard__error-icon {
   white-space: normal;
 }

@@ -17,24 +17,19 @@ export function SessionHovercardError(props: {
           <span class="session-hovercard__error-icon" aria-hidden="true">
             <Icon name="alertTriangle" />
           </span>
-          <span>
-            {sessionAttentionSubtitle(attention(), t)}
-            <Show when={props.dismiss}>
-              {(dismiss) => (
-                <>
-                  <br />
-                  <button
-                    ref={createHovercardControlRef()}
-                    class="btn btn--ghost btn--xs"
-                    type="button"
-                    onClick={() => dismiss()()}
-                  >
-                    {t("common.dismiss")}
-                  </button>
-                </>
-              )}
-            </Show>
-          </span>
+          <span>{sessionAttentionSubtitle(attention(), t)}</span>
+          <Show when={props.dismiss}>
+            {(dismiss) => (
+              <button
+                ref={createHovercardControlRef()}
+                class="btn btn--sm session-hovercard__error-dismiss"
+                type="button"
+                onClick={() => dismiss()()}
+              >
+                {t("common.dismiss")}
+              </button>
+            )}
+          </Show>
         </section>
       )}
     </Show>
