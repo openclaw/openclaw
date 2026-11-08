@@ -242,7 +242,7 @@ const PORTAL_RECOVERY_SCRIPT = `(() => {
       clearTimeout(timeout);
       controller = undefined;
       if (!stopped) {
-        if (++attempts >= 6) status.textContent = "The app is still unavailable. Check that it’s running on port " + document.body.dataset.portalWaiting + ".";
+        if (++attempts === 6) status.textContent = "The app is still unavailable. Check that it’s running on port " + document.body.dataset.portalWaiting + ".";
         timer = setTimeout(check, Math.min(15000, 1000 * 2 ** Math.min(attempts - 1, 4)));
       }
     }
