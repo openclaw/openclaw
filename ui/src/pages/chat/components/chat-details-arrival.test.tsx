@@ -284,7 +284,7 @@ it("retains cached Subagents until the roster observes its parent, then adopts n
 });
 
 it.each(["empty", "unavailable", "unavailable-with-parent-facts"] as const)(
-  "retains ordinary child display until its live roster is %s, without cached navigation",
+  "omits cached ordinary children while its live roster becomes %s",
   async (outcome) => {
     const remember = vi.fn<NonNullable<ChatDetailsProps["onDetailsSnapshot"]>>();
     const open = vi.fn();
@@ -309,10 +309,7 @@ it.each(["empty", "unavailable", "unavailable-with-parent-facts"] as const)(
       },
     });
     await advance();
-    await waitForSolid(() =>
-      expect(view.group("subagents")?.textContent).toContain("Cached review"),
-    );
-    expect(view.group("subagents")!.querySelector("button.chat-subagent-activity__row")).toBeNull();
+    expect(view.group("subagents")).toBeNull();
     expect(remember).not.toHaveBeenCalled();
     view.update({
       selectedSession: { key: view.initial.sessionKey, kind: "direct" },
@@ -320,7 +317,7 @@ it.each(["empty", "unavailable", "unavailable-with-parent-facts"] as const)(
       subagentSessions: [],
     });
     await advance();
-    expect(view.group("subagents")?.textContent).toContain("Cached review");
+    expect(view.group("subagents")).toBeNull();
     expect(remember).not.toHaveBeenCalled();
     const parent = { key: view.initial.sessionKey, kind: "direct" as const };
     view.update(
@@ -345,12 +342,7 @@ it.each(["empty", "unavailable", "unavailable-with-parent-facts"] as const)(
           },
     );
     await advance();
-    if (outcome === "unavailable-with-parent-facts") {
-      expect(view.group("subagents")?.textContent).toContain("Known live review");
-      expect(view.group("subagents")?.textContent).not.toContain("Cached review");
-    } else {
-      expect(view.group("subagents")).toBeNull();
-    }
+    expect(view.group("subagents")).toBeNull();
     expect(remember).toHaveBeenCalledWith(
       expect.objectContaining({
         subagents: {
