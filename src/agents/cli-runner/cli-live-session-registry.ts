@@ -108,8 +108,11 @@ export async function restartCliLiveSession(
     "cli-live-session-close",
     async () => {
       assertActive();
-      await context.preparedBackend.closeLiveSession?.("restart");
-      await pendingCleanup;
+      // An unexited process stays retired and blocks registration; an aborted run stops waiting.
+      await racePromiseWithAbortSignal(async () => {
+        await context.preparedBackend.closeLiveSession?.("restart");
+        await pendingCleanup;
+      }, signal);
     },
     "required",
   );
@@ -120,7 +123,7 @@ export async function restartCliLiveSession(
       () => {
         // One-shot cleanup schedules this callback; fence the actual close.
         assertActive();
-        return closeRecord(record, "restart");
+        return racePromiseWithAbortSignal(() => closeRecord(record, "restart"), signal);
       },
       "required",
     );

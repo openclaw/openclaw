@@ -381,6 +381,43 @@ describe("generic plugin-owned live session registry", () => {
     },
   );
 
+  it.each(["retired", "registered"] as const)(
+    "releases an aborted restart that is waiting on an unexited %s process",
+    async (ownerState) => {
+      const owner = await registeredOwner({ deferExit: true });
+      if (ownerState === "retired") {
+        owner.session.close("abort");
+      }
+      const next = await createOwner({ sessionId: owner.sessionId });
+      const replacement = vi.fn();
+      const restarting = restartCliLiveSession(next.context)
+        .then(replacement)
+        .then(
+          () => undefined,
+          (error: unknown) => error,
+        );
+      try {
+        await vi.waitFor(() => expect(owner.close).toHaveBeenCalledOnce());
+        next.controller.abort(new Error("stuck run recovered"));
+        const failure = await restarting;
+        expect(failure).toMatchObject({ name: "AbortError" });
+        expect(hasModelFallbackStop(failure)).toBe(true);
+        expect(replacement).not.toHaveBeenCalled();
+        // The unexited process still blocks replacement until it exits.
+        const blocked = await createOwner({ sessionId: owner.sessionId });
+        expect(() => blocked.register()).toThrow("cleanup has not settled");
+      } finally {
+        owner.exited.resolve();
+        await restarting;
+      }
+      const successor = await createOwner({ sessionId: owner.sessionId });
+      await restartCliLiveSession(successor.context);
+      successor.register();
+      expect(successor.capability.current()).toBe(successor.session);
+      expect(owner.close).toHaveBeenCalledOnce();
+    },
+  );
+
   it("joins natural retirement that starts while restart is awaiting the previous owner", async () => {
     const held = createDeferred();
     const cleanup = vi.fn(() => held.promise);
