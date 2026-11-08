@@ -80,8 +80,10 @@ public enum GatewayDeviceAuthPayload {
             self.normalizeMetadataField(fields.deviceFamily),
             personalIdentity.signatureValue,
         ]
-        guard let data = try? JSONSerialization.data(withJSONObject: value, options: [.fragmentsAllowed]),
-              let payload = String(data: data, encoding: .utf8)
+        guard let data = try? JSONSerialization.data(
+            withJSONObject: value,
+            options: [.fragmentsAllowed, .withoutEscapingSlashes]),
+            let payload = String(data: data, encoding: .utf8)
         else {
             return ""
         }

@@ -52,8 +52,8 @@ struct DeviceAuthPayloadTests {
                 role: "operator",
                 scopes: ["operator.admin", "operator.read"],
                 signedAtMs: 1_800_000_000_000,
-                token: nil,
-                nonce: "nonce-abc",
+                token: "tok/123",
+                nonce: "nonce/abc",
                 personalIdentity: GatewayPersonalIdentityIntent.bind(bindingId: "binding-1")
                     .signed(at: 1_800_000_000_000),
                 platform: "  MACOS ",
@@ -61,7 +61,8 @@ struct DeviceAuthPayloadTests {
 
         #expect(
             payload
-                == "[\"openclaw-device-auth\",\"v4\",\"dev-1\",\"openclaw-macos\",\"ui\",\"operator\",[\"operator.admin\",\"operator.read\"],\"1800000000000\",\"\",\"nonce-abc\",\"macos\",\"desktop\",[\"personal-identity\",\"tailscale\",\"bind\",\"binding-1\",\"1800000000000\"]]")
+                ==
+                "[\"openclaw-device-auth\",\"v4\",\"dev-1\",\"openclaw-macos\",\"ui\",\"operator\",[\"operator.admin\",\"operator.read\"],\"1800000000000\",\"tok/123\",\"nonce/abc\",\"macos\",\"desktop\",[\"personal-identity\",\"tailscale\",\"bind\",\"binding-1\",\"1800000000000\"]]")
     }
 
     @Test
