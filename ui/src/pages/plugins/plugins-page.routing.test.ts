@@ -531,6 +531,7 @@ it.each(["success", "failure", "metadata", "replacement", "reconnect"])(
       harness.emit(fresh.client, true);
     }
     if (outcome === "reconnect") {
+      harness.emit(client, false);
       harness.emit(client, true, { hello: gatewayHelloForMethods(["plugins.list"]) });
     }
     if (outcome === "replacement" || outcome === "reconnect") {

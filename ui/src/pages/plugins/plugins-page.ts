@@ -275,7 +275,7 @@ export function createPluginsPage(options: {
           promptLaunch.reset();
           mcpLogin.reset();
         }
-        applyRouteData();
+        applyRouteData(previous?.location.pathname !== routeData?.location.pathname);
       }
       publish();
     },
@@ -414,7 +414,7 @@ export function createPluginsPage(options: {
     ensureInitialData();
   }
 
-  function applyRouteData() {
+  function applyRouteData(refreshInventory: boolean) {
     const data = routeData;
     if (!data) {
       return;
@@ -447,7 +447,7 @@ export function createPluginsPage(options: {
     if (catalogId !== state.catalogDetail?.id) {
       void showCatalogDetail(catalogId);
     }
-    ensureInitialData(true);
+    ensureInitialData(refreshInventory);
   }
 
   function invalidateRequests(invalidateCatalog: boolean, retirePresentation = true) {
@@ -492,8 +492,14 @@ export function createPluginsPage(options: {
     }
     setState({ messages: consent.reconcileInstallMessages(result) });
     setState({ result });
-    // Detail selection needs the installed identity before choosing its local reader.
-    if (result && surface === "discovery" && activeRoutePluginId()) {
+    // Installed identity needs reconciliation; an uninstalled catalog read stays independent.
+    const catalogId = surface === "discovery" ? activeRoutePluginId() : null;
+    if (
+      result &&
+      catalogId &&
+      (state.detail ||
+        result.plugins.some((plugin) => plugin.installed && plugin.catalogId === catalogId))
+    ) {
       void refreshDiscovery();
     }
   }
