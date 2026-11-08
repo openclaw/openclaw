@@ -75,6 +75,8 @@ it.runIf(["darwin", "linux"].includes(process.platform)).concurrent.for([
   ["release-identity", "release tag mismatch"],
   ["release-artifact", "release artifact differs from pin"],
   ["release-archive-checksum", "sha256 mismatch"],
+  ["missing-asset", "Missing or duplicate Bun release asset"],
+  ["duplicate-asset", "Missing or duplicate Bun release asset"],
 ] as const)(
   "admits only pinned native payloads: %s",
   ([scenario, expectedError], { command, expect }) =>
@@ -91,7 +93,6 @@ it.runIf(["darwin", "linux"].includes(process.platform)).concurrent.for([
       const redownload = ["download", "archive-checksum"].includes(scenario);
       const binaries = await revisionExecutables(root, command);
       const tag = "fixture-release";
-      await mkdir(file("downloads"));
       const arches: Arch[] =
         scenario === "cached" && process.platform === "darwin" ? ["arm64", "x64"] : [hostArch];
       const artifacts: Record<
@@ -148,14 +149,34 @@ it.runIf(["darwin", "linux"].includes(process.platform)).concurrent.for([
           ),
         ].join("\n") + "\n",
       );
+      const assetNames = ["SHA256SUMS", "manifest.json"];
+      assetNames.push(...Object.values(artifacts).map((artifact) => artifact.asset));
+      const releaseAssets = assetNames.map((name, index) => ({ name, id: index + 1 }));
+      for (const asset of releaseAssets) {
+        await copyFile(file(`downloads/${asset.name}`), file(`downloads/${asset.id}`));
+      }
+      const invalidAsset = scenario === "missing-asset" || scenario === "duplicate-asset";
+      if (scenario === "missing-asset") {
+        releaseAssets.pop();
+      }
+      if (scenario === "duplicate-asset") {
+        releaseAssets.push({ name: assetNames[2]!, id: 99 });
+      }
+      await write("downloads/release.json", JSON.stringify({ assets: releaseAssets }));
       const curlLog = file("curl-log");
       await write(
         "tools/curl",
-        `#!/bin/bash
-set -euo pipefail
-printf 'download\\n' >> "$fixture_curl_log"
-while [[ "$1" != --output ]]; do shift; done
-cp "$fixture_downloads/$(basename "$2")" "$2"
+        `#!/usr/bin/env node
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const args = process.argv.slice(2);
+const url = args.at(-1);
+const metadata = url === 'https://api.github.com/repos/openclaw/bun/releases/tags/fixture-release';
+if (!metadata) assert.equal(url, 'https://api.github.com/repos/openclaw/bun/releases/assets/' + Number(url.split('/').at(-1)));
+const headers = args.flatMap((arg, index) => arg === '--header' ? [args[index + 1]] : []);
+assert.deepEqual(headers, ['Accept: ' + (metadata ? 'application/vnd.github+json' : 'application/octet-stream'), ...(process.env.fixture_authorization ? ['Authorization: ' + process.env.fixture_authorization] : [])]);
+fs.appendFileSync(process.env.fixture_curl_log, url + '\\n');
+fs.copyFileSync(process.env.fixture_downloads + '/' + (metadata ? 'release.json' : url.split('/').at(-1)), args[args.indexOf('--output') + 1]);
 `,
         0o755,
       );
@@ -171,15 +192,25 @@ cp "$fixture_downloads/$(basename "$2")" "$2"
             TMPDIR: root,
             fixture_downloads: file("downloads"),
             fixture_curl_log: curlLog,
+            GH_TOKEN: scenario === "download" ? "fixture-token" : "",
+            fixture_authorization: scenario === "download" ? "Bearer fixture-token" : "",
             HOME: root,
           },
         },
       );
       const downloadsMade = await readFile(curlLog, "utf8");
-      expect(downloadsMade).toBe("download\ndownload\n" + (redownload ? "download\n" : ""));
+      const api = "https://api.github.com/repos/openclaw/bun/releases";
+      expect(downloadsMade.trim().split("\n")).toEqual([
+        `${api}/tags/fixture-release`,
+        ...(invalidAsset ? [] : [`${api}/assets/1`, `${api}/assets/2`]),
+        ...(redownload ? [`${api}/assets/3`] : []),
+      ]);
       if (expectedError) {
         expect(result.status).not.toBe(0);
         expect(result.stderr).toContain(expectedError);
+        if (invalidAsset) {
+          expect(result.stderr).toContain(assetNames[2]);
+        }
         expect(await readFile(bun, "utf8")).toBe("previous runtime");
         return;
       }

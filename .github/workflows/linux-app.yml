@@ -164,6 +164,8 @@ jobs:
 
       - name: Build native inline browser candidate
         working-directory: apps/linux/src-tauri
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           node ../scripts/stage-runtime.mjs --runtime-only
           # The native fixture supplies its CLI at the same build-time boundary.
@@ -324,6 +326,7 @@ jobs:
         if: github.event_name == 'workflow_dispatch'
         working-directory: apps/linux/src-tauri
         env:
+          GH_TOKEN: ${{ github.token }}
           # appimagetool strips fail on CI runners; Tauri documents NO_STRIP for Actions.
           NO_STRIP: "true"
           XDG_CACHE_HOME: ${{ runner.temp }}/openclaw-tauri-cache

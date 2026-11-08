@@ -6,6 +6,7 @@ runs:
     - name: Install pinned Bun test runtime
       shell: bash
       env:
+        GH_TOKEN: ${{ github.token }}
         OPENCLAW_BUN_ACTION_PATH: ${{ github.action_path }}
       run: |
         set -euo pipefail

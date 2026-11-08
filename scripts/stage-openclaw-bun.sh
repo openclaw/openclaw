@@ -21,10 +21,34 @@ trap 'rm -rf "$WORK"' EXIT
 TAG="$(node -p 'require(process.argv[1]).tag' "$PIN")"
 CACHE_DIR="$ROOT_DIR/.cache/openclaw-bun/$TAG"
 mkdir -p "$CACHE_DIR"
-download() {
+api_get() {
+  local headers=(--header "Accept: $2")
+  [[ -z "${GH_TOKEN:-}" ]] || headers+=(--header "Authorization: Bearer $GH_TOKEN")
   curl --fail --location --proto '=https' --proto-redir '=https' --no-progress-meter --show-error \
     --connect-timeout 15 --max-time 300 --retry 7 --retry-max-time 300 \
-    --output "$WORK/$1" "https://github.com/openclaw/bun/releases/download/$TAG/$1"
+    "${headers[@]}" \
+    --output "$WORK/$1" "https://api.github.com/repos/openclaw/bun/$3"
+}
+api_get release.json application/vnd.github+json "releases/tags/$TAG"
+node - "$PIN" "$WORK" "$PLATFORM" "$@" <<'JS'
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const [pinPath, work, platform, ...arches] = process.argv.slice(2);
+const pin = JSON.parse(fs.readFileSync(pinPath, 'utf8'));
+const release = JSON.parse(fs.readFileSync(`${work}/release.json`, 'utf8'));
+const names = ['SHA256SUMS', 'manifest.json', ...arches.map(arch => pin.artifacts[`${platform}-${arch}`].asset)];
+const ids = Object.fromEntries(names.map(name => {
+  const matches = release.assets.filter(asset => asset.name === name);
+  assert.equal(matches.length, 1, `Missing or duplicate Bun release asset: ${name}`);
+  assert(Number.isSafeInteger(matches[0].id) && matches[0].id > 0, `Invalid Bun release asset id: ${name}`);
+  return [name, matches[0].id];
+}));
+fs.writeFileSync(`${work}/asset-ids.json`, JSON.stringify(ids));
+JS
+download() {
+  local asset_id
+  asset_id="$(node -p 'require(process.argv[1])[process.argv[2]]' "$WORK/asset-ids.json" "$1")"
+  api_get "$1" application/octet-stream "releases/assets/$asset_id"
 }
 download SHA256SUMS
 download manifest.json

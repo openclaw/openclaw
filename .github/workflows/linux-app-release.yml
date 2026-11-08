@@ -383,6 +383,7 @@ jobs:
         id: bundle-build
         working-directory: apps/linux/src-tauri
         env:
+          GH_TOKEN: ${{ github.token }}
           # appimagetool strips fail on CI runners; Tauri documents NO_STRIP for Actions.
           NO_STRIP: "true"
           LDAI_RUNTIME_FILE: ${{ runner.temp }}/openclaw-tauri-cache/tauri/.appimage-runtime-x86_64
@@ -652,6 +653,7 @@ jobs:
       - name: Build macOS test bundles
         working-directory: apps/linux/src-tauri
         env:
+          GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ needs.validate_release.outputs.release_tag }}
           RELEASE_SHA: ${{ needs.validate_release.outputs.tag_sha }}
         run: |

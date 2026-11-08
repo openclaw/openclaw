@@ -226,6 +226,7 @@ evidence and is never treated as a timing sample.
 
 CI's `setup-test-bun` action consumes `scripts/lib/openclaw-bun.json` through
 `scripts/stage-openclaw-bun.sh`, the same owner used by the macOS and Tauri apps.
+The shared stager resolves asset IDs from GitHub's release API and downloads through its release-asset API, using `GH_TOKEN` when available while keeping integrity anchored to the in-repo pin.
 Every pin bump requires **both** the paired CI Bun-lane replay and Bun-only smoke,
 and the macOS runtime checks plus two-binary test set, against the same published
 fork tag. Neither app nor CI advances if either gate fails; Linux-only runtime
