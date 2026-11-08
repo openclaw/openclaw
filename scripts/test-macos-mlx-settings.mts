@@ -118,9 +118,9 @@ await runWithFailedTrailer("macos-mlx-settings", async () => {
         return { relative, mode: mode!, blob: blob! };
       });
   };
-  const verify = (source: string, tree: Entry[]) => {
+  const verify = (source: string, tree: Entry[], cleanup = false) => {
     for (const entry of tree) {
-      budget.timeout(1);
+      budget.timeout(1, cleanup);
       const file = path.join(source, entry.relative);
       const stat = fs.lstatSync(file);
       const data =
@@ -447,10 +447,11 @@ await runWithFailedTrailer("macos-mlx-settings", async () => {
       canRemove && JSON.parse(fs.readFileSync(consumerReceipt, "utf8")).complete === true,
       "Native settings resource retirement is unverified",
     );
-    verify(stable, stableTree);
-    verify(current, currentTree);
+    verify(stable, stableTree, true);
+    verify(current, currentTree, true);
     verifyOverlays(stable);
     verifyOverlays(current);
+    budget.timeout(1, true);
     result.complete = true;
   } catch (error) {
     result.failure = { phase, detail: String(error) };

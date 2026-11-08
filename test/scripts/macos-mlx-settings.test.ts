@@ -9,6 +9,7 @@ import {
   projectMlxSettingsManifest,
   verifyMlxSettingsPackageProjection,
 } from "../../scripts/lib/macos-mlx-settings-manifest.mts";
+import { execNodeEvalSync } from "../../src/test-utils/node-process.js";
 
 it("restricts the real settings test target through one manifest insertion", () => {
   const original = fs.readFileSync(
@@ -250,13 +251,122 @@ console.log(JSON.stringify({pid:process.pid,started:budget.started,work,cleanup}
       expect(second.pid).not.toBe(first.pid);
       const rejected = `import assert from 'node:assert/strict'; const {NativeCiBudget}=await import(${JSON.stringify(budgetURL)}); assert.throws(()=>new NativeCiBudget('NaN'),/Missing native job monotonic start/); assert.throws(()=>new NativeCiBudget('2180'),/Invalid or exhausted/);`;
       execFileSync(process.execPath, ["--input-type=module", "-e", rejected], options);
+      const sourceURL = new URL("../../scripts/test-macos-mlx-settings.mts", import.meta.url).href;
+      const terminalProgram = `
+import assert from 'node:assert/strict';
+import {createHash} from 'node:crypto';
+import fs from 'node:fs';
+import path from 'node:path';
+import {stripTypeScriptTypes} from 'node:module';
+import {performance} from 'node:perf_hooks';
+import {runInNewContext} from 'node:vm';
+assert.equal(process.versions.bun,undefined);
+const {NativeCiBudget}=await import(${JSON.stringify(budgetURL)});
+const source=fs.readFileSync(new URL(${JSON.stringify(sourceURL)}),'utf8');
+// Execute the owner's verifier and terminal admission, not a copied integrity loop.
+const verifier=source.match(/  const verify = [\\s\\S]*?\\n  };/)?.[0];
+const overlayVerifier=source.match(/    const verifyOverlays = [\\s\\S]*?\\n    };/)?.[0];
+const overlayDeclaration=source.match(/const overlays = \\[[\\s\\S]*?\\n\\];/)?.[0];
+const terminal=source.match(/    const consumerReceipt = [\\s\\S]*?    result.complete = true;/)?.[0];
+assert(verifier && overlayVerifier && overlayDeclaration && terminal);
+const root=${JSON.stringify(root)};
+const stable=path.join(root,'stable'),current=path.join(root,'current'),proofDir=path.join(root,'proof');
+const manifestPath='apps/macos/Package.swift';
+const original=Buffer.from('original manifest\\n'),effective=Buffer.from('projected manifest\\n');
+const blob=data=>createHash('sha1').update('blob '+data.length+'\\0').update(data).digest('hex');
+const sha256=file=>createHash('sha256').update(fs.readFileSync(file)).digest('hex');
+const overlays=runInNewContext(overlayDeclaration+'; overlays');
+const manifestProjections=new Map();
+const tree=[{relative:'source.txt',mode:'100644',blob:blob(Buffer.from('source\\n'))},
+  {relative:'linked.txt',mode:'120000',blob:blob(Buffer.from('source.txt'))},
+  {relative:manifestPath,mode:'100644',blob:blob(original)}];
+for(const dir of [stable,current]) {
+  fs.mkdirSync(path.join(dir,'apps/macos'),{recursive:true});
+  fs.writeFileSync(path.join(dir,'source.txt'),'source\\n',{mode:0o644});
+  fs.symlinkSync('source.txt',path.join(dir,'linked.txt'));
+  fs.writeFileSync(path.join(dir,manifestPath),effective,{mode:0o644});
+  manifestProjections.set(dir,{originalBlob:blob(original),effectiveBlob:blob(effective)});
+  for(const relative of overlays) {
+    fs.mkdirSync(path.dirname(path.join(dir,relative)),{recursive:true});
+    fs.writeFileSync(path.join(dir,relative),'overlay\\n');
+  }
+}
+fs.mkdirSync(proofDir);
+const receipt=path.join(proofDir,'settings-consumers.json');
+const writeReceipt=(complete=true,resourcesRemoved=true)=>fs.writeFileSync(receipt,JSON.stringify({complete,resourcesRemoved}));
+writeReceipt();
+const budget=new NativeCiBudget('2300');
+let now=budget.workEnd-1000,expireAfterOverlays=false;
+Object.defineProperty(performance,'now',{value:()=>now,configurable:true});
+const result={complete:false};
+const trackedFs={...fs,readFileSync(file,...args) {
+  const bytes=fs.readFileSync(file,...args);
+  if(expireAfterOverlays && file===path.join(current,overlays.at(-1))) now=budget.cleanupEnd+1;
+  return bytes;
+}};
+const actual=runInNewContext(stripTypeScriptTypes(verifier+'\\n'+overlayVerifier)+
+  '; ({verify, complete: (code) => {'+terminal+'}})', {
+  assert,Buffer,createHash,fs:trackedFs,path,budget,stable,current,proofDir,
+  stableTree:tree,currentTree:tree,manifestProjections,mlxSettingsManifestPath:manifestPath,
+  overlays,overlayHashes:Object.fromEntries(overlays.map(relative=>[relative,sha256(path.join(current,relative))])),
+  sha256:file=>createHash('sha256').update(trackedFs.readFileSync(file)).digest('hex'),result,canRemove:false,
+});
+actual.verify(current,tree);
+now=budget.workEnd+1;
+assert.throws(()=>actual.verify(current,tree),/Native work budget exhausted/);
+actual.complete(0);
+assert.equal(result.complete,true);
+const passed=['expired-work-retired-success','normal-verifier-work-bound'];
+const check=(name,mutate,restore,pattern,code=0)=>{
+  result.complete=false;
+  mutate();
+  assert.throws(()=>actual.complete(code),pattern,name);
+  assert.equal(result.complete,false,name);
+  restore();
+  passed.push(name);
+};
+const file=path.join(current,'source.txt'),link=path.join(current,'linked.txt'),manifest=path.join(current,manifestPath);
+check('changed-bytes',()=>fs.writeFileSync(file,'changed'),()=>fs.writeFileSync(file,'source\\n'),/Production input changed/);
+check('changed-mode',()=>fs.chmodSync(file,0o755),()=>fs.chmodSync(file,0o644),/Source executable mode changed/);
+check('escaping-link',()=>{fs.unlinkSync(link);fs.symlinkSync(path.join(root,'now'),link);},()=>{fs.unlinkSync(link);fs.symlinkSync('source.txt',link);},/Source link escapes/);
+check('projected-manifest',()=>fs.writeFileSync(manifest,original),()=>fs.writeFileSync(manifest,effective),/Production input changed/);
+const projection=manifestProjections.get(current);
+check('original-manifest-identity',()=>{projection.originalBlob='0'.repeat(40);},()=>{projection.originalBlob=blob(original);},/Original manifest identity changed/);
+for(const [name,dir] of [['stable-overlay',stable],['current-overlay',current]]) {
+  const overlay=path.join(dir,overlays[0]);
+  check(name,()=>fs.writeFileSync(overlay,'changed'),()=>fs.writeFileSync(overlay,'overlay\\n'),/Test overlay changed/);
+}
+check('failed-child',()=>{},()=>{},/Ordered settings proof failed/,7);
+check('incomplete-child',()=>writeReceipt(false),()=>writeReceipt(),/resource retirement is unverified/);
+check('unretired-child',()=>writeReceipt(true,false),()=>writeReceipt(),/resource retirement is unverified/);
+check('cleanup-expired',()=>{now=budget.cleanupEnd+1;},()=>{now=budget.workEnd+1;},/Native cleanup budget exhausted/);
+check('cleanup-expired-after-overlays',()=>{expireAfterOverlays=true;},()=>{expireAfterOverlays=false;now=budget.workEnd+1;},/Native cleanup budget exhausted/);
+console.log(JSON.stringify(passed));
+`;
+      // This Node CLI verifier stays on Node when the surrounding suite uses Bun.
+      expect(JSON.parse(execNodeEvalSync(terminalProgram, options))).toEqual([
+        "expired-work-retired-success",
+        "normal-verifier-work-bound",
+        "changed-bytes",
+        "changed-mode",
+        "escaping-link",
+        "projected-manifest",
+        "original-manifest-identity",
+        "stable-overlay",
+        "current-overlay",
+        "failed-child",
+        "incomplete-child",
+        "unretired-child",
+        "cleanup-expired",
+        "cleanup-expired-after-overlays",
+      ]);
       expect(
         fs
           .readFileSync(observed, "utf8")
           .trim()
           .split("\n")
           .map((line) => JSON.parse(line)),
-      ).toEqual([["2300"], ["2300"], ["2180"]]);
+      ).toEqual([["2300"], ["2300"], ["2180"], ["2300"]]);
     } finally {
       fs.rmSync(root, { recursive: true, force: true });
     }
