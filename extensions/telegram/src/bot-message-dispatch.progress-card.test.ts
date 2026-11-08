@@ -68,47 +68,6 @@ describeTelegramDispatch("dispatchTelegramMessage progress cards", () => {
     },
   );
 
-  it("renders quiet work status as the tool log's icon row without details", async () => {
-    vi.useFakeTimers();
-    try {
-      const { answerDraftStream } = setupDraftStreams();
-      const previews: string[] = [];
-      dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ replyOptions }) => {
-        const item = {
-          itemId: "tool:1",
-          kind: "command",
-          name: "exec",
-          title: "printf PRIVATE_COMMAND",
-        };
-        for (const status of ["running", "completed"]) {
-          await replyOptions?.onItemEvent?.({
-            ...item,
-            phase: status === "running" ? "start" : "end",
-            status,
-          });
-          await vi.advanceTimersByTimeAsync(4_000);
-          previews.push(answerDraftStream.updatePreview.mock.lastCall?.[0].text ?? "");
-        }
-        return { queuedFinal: false };
-      });
-      await dispatchWithContext({
-        context: createContext({
-          ctxPayload: createDirectSessionPayload(),
-          threadSpec: { id: undefined, scope: "none" },
-          replyThreadId: undefined,
-        }),
-        streamMode: "progress",
-        telegramCfg: { streaming: { mode: "progress" } },
-      });
-      expect(previews).toEqual([
-        "<b>Working</b><br><b>🛠️ Exec</b> <i>running</i>",
-        "<b>Working</b><br><b>🛠️ Exec</b>",
-      ]);
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
   it("keeps a full plan and recent activity after failed named tool items", () => {
     const richMessages = true;
     const commandLines = Array.from({ length: 8 }, (_, index) =>

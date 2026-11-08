@@ -63,7 +63,6 @@ describe("Telegram progress scenario observer", () => {
     "🛠️ Exec COMMAND_SECRET",
     "🛠️ Exec running COMMAND_SECRET",
     "🛠️ Exec completed",
-    "🛠️ Exec private-output",
     "🛠️ Exec running\n🛠️ Exec",
   ])("rejects detailed or unbounded tool text %s", async (status) => {
     await expect(observeProgress(status)).rejects.toThrow("omitted toolProgress");

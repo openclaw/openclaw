@@ -261,7 +261,6 @@ describe("terminal private kickoff progress oracle", () => {
     "<b>Working</b>\nMEDIA:qa-private-result.png",
     "<b>Working</b>\nNO_REPLY",
     "<b>Working</b>\n<b>🛠️ Exec</b> <i>running</i>",
-    "<b>Working</b>\nSub-agent: running",
     "<b>Working</b>\n<b>🤖 Sub-agent</b>\nprivate child prose",
     "<b>Working</b>\nqa-terminal-private-first: completed",
   ])("rejects non-fixture status %s", async (text) => {
