@@ -142,6 +142,13 @@
       "text": "openclaw-file-preview-modal {"
     },
     {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "title",
+      "path": "ui/src/components/lobster-pet-scene-view.tsx",
+      "text": "a message in a bottle"
+    },
+    {
       "count": 2,
       "kind": "html-text",
       "name": "text",

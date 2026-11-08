@@ -5,13 +5,12 @@ import type { getLobsterdexEntries } from "../../components/lobster-dex.ts";
 import { LobsterSvg } from "../../components/lobster-pet-artwork.tsx";
 import type { LobsterPetPaletteId } from "../../components/lobster-pet-contract.ts";
 import { canonicalLobsterLook, lobsterLookStyle } from "../../components/lobster-pet-identity.ts";
-import { lobsterPaletteName } from "../../components/lobster-pet-lore.ts";
+import { LOBSTER_PALETTE_LORE, lobsterPaletteName } from "../../components/lobster-pet-lore.ts";
 import { LOBSTER_PET_PALETTES } from "../../components/lobster-pet-palettes.ts";
 import { Icon } from "../../components/solid/icon.tsx";
 import { InlineAlert } from "../../components/solid/inline-alert.tsx";
 import { SettingsPage, SettingsPageHeader } from "../../components/solid/settings-ui.tsx";
 import { SettingsWorkspace } from "../../components/solid/settings-workspace.tsx";
-import { registerLobsterdexEnglish } from "../../i18n/locales/en-lobsterdex.ts";
 import { registerPreferencesEnglish } from "../../i18n/locales/en-preferences.ts";
 import { registerRouteSubtitlesEnglish } from "../../i18n/locales/en-route-subtitles.ts";
 import { copyToClipboard } from "../../lib/clipboard.ts";
@@ -27,7 +26,6 @@ import { projectOwner } from "../../lib/reactive/projection.ts";
 registerRouteSubtitlesEnglish();
 
 registerEnglishCatalog(registerPreferencesEnglish);
-registerEnglishCatalog(registerLobsterdexEnglish);
 
 type LobsterdexCopyFeedback = { paletteId: LobsterPetPaletteId; status: "copied" | "error" };
 
@@ -183,7 +181,9 @@ export function LobsterdexPage() {
                   </div>
                   <h3>{entry() ? (entry()?.name ?? lobsterPaletteName(palette.id)) : "?"}</h3>
                   <p class="lobsterdex-page__lore">
-                    {t(`lobsterdex.lore.${palette.id}.${entry() ? "flavor" : "hint"}`)}
+                    {entry()
+                      ? LOBSTER_PALETTE_LORE[palette.id].flavor
+                      : LOBSTER_PALETTE_LORE[palette.id].hint}
                   </p>
                   <div class="lobsterdex-page__dates">
                     {firstSeen() && (

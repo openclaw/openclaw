@@ -301,7 +301,7 @@ const OPEN_BOTTLE = staticSprite(`
 `);
 
 // While hovering, a closed bottle keeps its secret; opening swaps the title
-// to the fortune.
+// to the fortune — the pet-name tooltip channel, so no i18n surface.
 export function BottleSvg(props: { opened: boolean }) {
   return (
     <svg class="lobster-bottle__svg" viewBox="0 0 48 44" aria-hidden="true">
@@ -331,3 +331,11 @@ export const Balloon = staticSprite(`
   <ellipse cx="15" cy="10" rx="4" ry="6" fill="#ffffff" opacity="0.3"></ellipse>
 </svg>
 `);
+
+export const PASSER_TITLES: Record<"stranger" | keyof typeof PASSER_SPRITES, string> = {
+  stranger: "a stranger",
+  crab: "definitely a lobster",
+  snail: "in no particular hurry",
+  duck: "a duck. obviously",
+  jellyfish: "just drifting",
+};

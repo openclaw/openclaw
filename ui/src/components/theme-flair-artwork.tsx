@@ -73,6 +73,12 @@ export const AVATAR_HAT_ARTWORK: Record<ThemeAvatarHatId, () => JSX.Element> = {
   pumpkin: () => avatarLobsterHat("pumpkin", 12),
 };
 
+// Hover titles ride the pet-name tooltip channel, so no i18n surface.
+export const THEME_CRITTER_TITLES: Record<ThemeCritterId, string> = {
+  penguin: "on loan from the kernel",
+  fedora: "a hat. nobody underneath",
+};
+
 // Fixed sprite proportions, mirroring passerBaseStyle in lobster-pet-scene-view.ts.
 export function themeCritterBaseStyle(kind: ThemeCritterId, direction: 1 | -1): string {
   const fixed: Record<ThemeCritterId, string> = {

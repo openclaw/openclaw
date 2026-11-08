@@ -1,8 +1,6 @@
 import { dynamic, type JSX } from "@solidjs/web";
 import { createMemo, Show } from "solid-js";
 import { isThemeCritterId } from "../../../packages/gateway-protocol/src/theme.ts";
-import { registerLobsterPetEnglish } from "../i18n/locales/en-lobster-pet.ts";
-import { registerEnglishCatalog, t } from "../lib/reactive/i18n.ts";
 import { lobsterHonorific } from "./lobster-dex.ts";
 import { LobsterSvg } from "./lobster-pet-artwork.tsx";
 import type {
@@ -13,15 +11,21 @@ import type {
 import { createLobsterPetLook, lobsterLookStyle, lobsterPetName } from "./lobster-pet-identity.ts";
 import type { LobsterPetOwner } from "./lobster-pet-owner.ts";
 import { lobsterLanePoint, lobsterTravelDuration } from "./lobster-pet-scene.ts";
-import { Balloon, BottleSvg, PASSER_SPRITES } from "./lobster-pet-sprites.tsx";
+import { Balloon, BottleSvg, PASSER_SPRITES, PASSER_TITLES } from "./lobster-pet-sprites.tsx";
 import { PluginThemeArtwork } from "./plugin-theme-artwork.tsx";
-import { THEME_CRITTER_SPRITES, themeCritterBaseStyle } from "./theme-flair-artwork.tsx";
-
-registerEnglishCatalog(registerLobsterPetEnglish);
+import {
+  THEME_CRITTER_SPRITES,
+  THEME_CRITTER_TITLES,
+  themeCritterBaseStyle,
+} from "./theme-flair-artwork.tsx";
 
 const PASSER_SPRITES_BY_KIND: Partial<Record<string, () => JSX.Element>> = {
   ...PASSER_SPRITES,
   ...THEME_CRITTER_SPRITES,
+};
+const PASSER_LABELS: Partial<Record<string, string>> = {
+  ...PASSER_TITLES,
+  ...THEME_CRITTER_TITLES,
 };
 
 function strangerLookFor(seed: number, own: LobsterPetPaletteId): LobsterPetLook {
@@ -96,18 +100,16 @@ function Sprite(props: LobsterPetSceneProps & { twin: boolean }) {
     // a title never pops mid-visit; it is simply there next time.
     const honorific = lobsterHonorific(args.familiarityVisits);
     const baseName = args.nameOverride ?? lobsterPetName(args.look, args.seed);
-    const titled = honorific
-      ? t(`lobsterPet.honorific.${honorific}`, { name: baseName })
-      : baseName;
+    const titled = honorific ? `${honorific} ${baseName}` : baseName;
     const name = args.look.shiny ? `✦ ${titled}` : titled;
     // The twin travels light; only the resident pet hauls the moving bindle.
     const bindle = args.movingDay && !twin;
     const title = twin
-      ? t("lobsterPet.twin", { name })
+      ? `${name} Jr.`
       : bindle
-        ? t("lobsterPet.movedIn", { name })
+        ? `${name} · just moved in`
         : args.flavor
-          ? t(`lobsterPet.flavor.${args.flavor}`, { name })
+          ? `${name} · ${args.flavor}`
           : name;
     return { dressed, classes, style, travel, travelStyle, bindle, title };
   });
@@ -255,11 +257,9 @@ function Scene(args: LobsterPetSceneProps) {
       args.passer && Object.hasOwn(PASSER_SPRITES_BY_KIND, args.passer.kind)
         ? PASSER_SPRITES_BY_KIND[args.passer.kind]
         : undefined;
-    // Plugin critters without artwork titles fall back to their kind.
     const passerTitle =
-      args.passer &&
-      (args.passer.kind === "stranger" || Object.hasOwn(PASSER_SPRITES_BY_KIND, args.passer.kind))
-        ? t(`lobsterPet.passers.${args.passer.kind}`)
+      args.passer && Object.hasOwn(PASSER_LABELS, args.passer.kind)
+        ? PASSER_LABELS[args.passer.kind]
         : undefined;
     const bottlePoint = lobsterLanePoint(args.scene.top, args.bottle?.spotPct ?? 50);
     return {
@@ -299,11 +299,7 @@ function Scene(args: LobsterPetSceneProps) {
           <div
             class={["lobster-bottle", { "lobster-bottle--open": bottle().opened }]}
             style={`--lob-x:${view().bottlePoint.x}px`}
-            title={
-              bottle().opened
-                ? t(`lobsterPet.fortunes.${bottle().fortune}`)
-                : t("lobsterPet.bottle")
-            }
+            title={bottle().opened ? bottle().fortune : "a message in a bottle"}
             aria-hidden="true"
             onPointerDown={() => args.onBottleOpen()}
           >
