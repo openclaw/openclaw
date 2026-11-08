@@ -409,6 +409,7 @@ it.each([
   { outcome: "success", detail: false },
   { outcome: "failure", detail: false },
   { outcome: "failure", detail: true },
+  { outcome: "success", detail: "return" },
 ] as const)(
   "browses while inventory is pending and retains catalog on $outcome (detail=$detail)",
   async ({ outcome, detail }) => {
@@ -424,7 +425,8 @@ it.each([
     });
     let inventoryReads = 0;
     const { request, harness } = pageGateway({
-      "plugins.list": () => (++inventoryReads === 1 ? inventory.promise : createResult([])),
+      "plugins.list": () =>
+        ++inventoryReads <= (detail === "return" ? 2 : 1) ? inventory.promise : createResult([]),
       "plugins.catalog.browse": (params) => browseResult(params, [offered]),
       "plugins.catalog.categories": () => ({ categories: [] }),
       "plugins.catalog.get": () => offered,
@@ -442,15 +444,29 @@ it.each([
     }
     expect(inventoryReads).toBe(1);
     const { page } = await mountPage(context, routeData);
+    if (detail === "return") {
+      await waitForSolid(() => expect(page.querySelector("#plugin-catalog-detail")).not.toBeNull());
+      const hub = await loader(
+        context,
+        createRouteLoaderOptions(createPluginsRouteLocation("/plugins")),
+      );
+      if ("type" in hub) {
+        throw new Error("Expected the discovery hub to load");
+      }
+      page.routeData = hub;
+    }
+    const showingDetail = detail === true;
     const install = () =>
       page.querySelector<HTMLButtonElement>(
-        detail ? ".plugin-catalog-detail__install" : '[aria-label="Install Calendar"]',
+        showingDetail ? ".plugin-catalog-detail__install" : '[aria-label="Install Calendar"]',
       );
     await waitForSolid(() => expect(install()).not.toBeNull());
     expect(install()!.disabled).toBe(true);
-    const contentSelector = detail ? "#plugin-catalog-detail" : '[data-plugin-id="ch_Y2FsZW5kYXI"]';
+    const contentSelector = showingDetail
+      ? "#plugin-catalog-detail"
+      : '[data-plugin-id="ch_Y2FsZW5kYXI"]';
     const content = page.querySelector(contentSelector);
-    if (!detail) {
+    if (!showingDetail) {
       expect(page.querySelector<HTMLInputElement>('[type="search"]')!.disabled).toBe(false);
     }
     if (outcome === "success") {
@@ -466,7 +482,7 @@ it.each([
     expect(page.querySelector(contentSelector)).toBe(content);
     expect(
       request.mock.calls.filter(([method]) => method === "plugins.catalog.browse"),
-    ).toHaveLength(detail ? 0 : 1);
+    ).toHaveLength(showingDetail ? 0 : 1);
     expect(request.mock.calls.some(([method]) => method === "plugins.install")).toBe(false);
     if (outcome === "failure") {
       [...page.querySelectorAll<HTMLButtonElement>("button")]

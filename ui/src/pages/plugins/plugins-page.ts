@@ -559,7 +559,7 @@ export function createPluginsPage(options: {
     if (routeData && pluginSettingsNeedsSchema(surface, routeData.location, context.basePath)) {
       void context.runtimeConfig.ensureSchemaLoaded();
     }
-    if (!loading() && (prepared || (!state.result && !state.error))) {
+    if (prepared || (!loading() && !state.result && !state.error)) {
       void refreshCatalog(gateway.client, prepared);
     }
   }

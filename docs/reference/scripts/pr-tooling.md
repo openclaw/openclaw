@@ -60,13 +60,15 @@ held on FD 9; an inherited path or a descendant does not grant deletion authorit
 Before an operation child starts, authenticated creator cleanup may retire the
 anchor. After dispatch, the supervisor retires it only after the process group
 has exited and the notification pipe has closed. A creator crash, uncertain drain,
-or changed creation evidence never authorizes releasing dependency holds.
-A closed output reader, as in `scripts/pr --help | head`, is an ordinary exit: the
+or changed creation evidence never automatically releases dependency holds. A
+closed output reader, as in `scripts/pr --help | head`, is an ordinary exit: the
 creator still retires its anchor and releases its holds, then exits 141. A selected
 revision older than the lifetime owner cannot release the hold its parent took.
-There is no startup stale-anchor sweep: PID death, age, and path disappearance do
-not prove that inherited consumers finished. A retained PR operation lock requires
-its separate `lock-recover` procedure after verifying that no child tools remain.
+There is no startup stale-anchor sweep: PID death, age, and path disappearance on
+their own never authorize release or prove that inherited consumers finished. The
+only operator exception is [Release finished dependency holds](#release-finished-dependency-holds).
+A retained PR operation lock requires its separate `lock-recover` procedure after
+verifying that no child tools remain.
 
 `OPENCLAW_PR_TOOLING_ROOT` selects a full checkout of the same repository for
 materialized wrappers' third-party dependencies; otherwise `openclaw.pr.toolingRoot` in the
@@ -415,6 +417,74 @@ postimage returns `already-recovered` without changing rows. Any third state
 refuses and requires fresh inspection. A failure is not proof that no commit
 occurred. After verified recovery, use the original command's ordinary admission;
 its existing source, dependency, and workflow requirements still apply.
+
+## Release finished dependency holds
+
+A creator that exits before retiring its anchor can leave dependency holds behind.
+After reviewing the consumers and recovery obligations, an operator can release
+those holds with a sealed plan:
+
+```bash
+scripts/pr dependency-hold-release --dry-run [--anchor <path>]... > plan.json
+scripts/pr dependency-hold-release plan.json --plan-sha256 <SHA256> --confirmed-no-running-tools
+```
+
+The dry run writes only the plan JSON to stdout and a human review, summary, seal,
+and release command to stderr. It changes no ledger rows or anchors. Repeatable
+`--anchor` arguments select exact paths; an unknown path refuses. With no holds,
+the report is an empty plan. Blocked anchors remain in the report, and a completed
+dry run exits successfully even when none can release.
+
+The same official-main authentication as `dependency-cache-recover` applies before
+ledger access. Developer-wrapper opt-in cannot admit unlanded release code. This
+command uses Node built-ins, `ps`, and `lsof`, takes the shared metadata mutex only
+for ledger work, and never installs or materializes dependencies.
+
+The operator must attest that no detached PR tools still consume these resources,
+that retained PR operation locks have already been resolved through `lock-recover`,
+and that no retained `tooling-recover` obligation remains. Evidence alone grants
+no release authority. Preserve this exclusion until the outcome is reconciled.
+
+The dry run scans processes once; release rescans immediately before each anchor.
+Scans run outside the metadata mutex, which other wrappers wait on for at most one
+second. Each checks creator PIDs, process groups, command lines, and open files.
+A live same-user creator or process in its group blocks release;
+PID reuse by the same user intentionally delays it, while a foreign-user PID is
+recorded separately. Any process referencing an anchor basename or one of its
+entry keys blocks release, including every other anchor holding that entry.
+The command and its ancestors are excluded only from command-line matching,
+never open-file matching. A changed anchor identity or a missing or changed entry
+also blocks release. Scan errors, empty output, and unavailable tools stop the
+command; outcomes already printed stand. Missing anchors can release; their
+disappearance alone is never authority. A hold taken by a live wrapper during a
+batch is safe by accounting: its anchor is not in the sealed plan, and its row
+keeps the entry unsettled.
+
+The version-1 plan records the physical `cache` path, releasable `anchors`, and
+`blocked` anchors with their blockers. Every anchor has its path and decimal
+`dev`, `ino`, `uid`, and `mode` identities, plus `holds` with each 64-hex entry key
+and its identities. Evidence records anchor presence, birthtime when present,
+creator PID and state, and process references with PID, source, target, and a
+bounded command line. Birthtime is informational. The SHA-256 seals the exact
+stdout bytes; release validates the plan and gathers evidence again.
+
+Release acts only on `anchors`. Under the metadata mutex, the owner requires the
+exact reviewed holds and installation identities. It then retires a present
+anchor outside the mutex before releasing holds in a revalidated SQLite
+transaction, in the creator's original order. An absent anchor skips removal.
+An entry settles only when its last hold releases; co-held entries remain
+unsettled. Each planned anchor prints a JSON outcome: `released` with `settled`
+and `retained` entry keys, `already-released`, `blocked` with blockers, or `refused`
+with a reason. Failures do not stop other anchors; exit 0 requires every planned
+anchor to finish released or already released.
+
+Keep the plan and seal. Rerunning the same sealed plan after interruption or a
+lost reply is safe; `already-released` is expected and never removes a replacement
+path. The next materialization's existing collector handles eligible eviction
+and deletes evicted entries synchronously. After a large release, the next
+materializing wrapper run pays for those deletions before it continues.
+This command deletes no cache entry. Never edit `lifetime.sqlite` or delete cache
+entries by hand.
 
 ## Recover a retained dependency projection
 
