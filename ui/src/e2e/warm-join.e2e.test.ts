@@ -1,10 +1,7 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
-import {
-  persistColdLoadWarmState,
-  qualifyDetailsSubagentsWarmState,
-} from "../../../scripts/lib/control-ui-bench-warm-state.ts";
+import { persistColdLoadWarmState } from "../../../scripts/lib/control-ui-bench-warm-state.ts";
 import { installPaneChromeProbe } from "../../../scripts/lib/control-ui-pane-chrome-probe.ts";
 import { installWarmReloadBrowserProbe } from "../../../scripts/perf/warm-reload-browser-probe.ts";
 import type { ChatMessageCache } from "../pages/chat/session-message-cache.ts";
@@ -77,7 +74,6 @@ async function prepareWarmPage(page: Page) {
     transcriptMessages: 240,
     paneChromeFacts: true,
     detailsSessionFacts: true,
-    detailsSubagentActivity: 4,
   });
   await page.addInitScript(
     ({ key, settings, sidebarPrefs }) => {
@@ -110,6 +106,7 @@ async function prepareWarmPage(page: Page) {
   await pane.locator(".chat-virtual-row .chat-text").first().waitFor();
   await openChatDetails(page);
   await pane.locator('.chat-details [data-details-group="automations"]').waitFor();
+  await pane.locator(".chat-details-subagents__summary").waitFor();
   await page.waitForFunction(
     ({ sessionKey, width }) => {
       const host = document.querySelector(".chat-pane-cache__pane--active");
@@ -120,45 +117,34 @@ async function prepareWarmPage(page: Page) {
       return (
         details?.docking?.wide &&
         JSON.parse(details.docking.layout)[0] === width &&
-        details.automations
+        details.automations &&
+        details.subagents?.total === 18
       );
     },
     { sessionKey: fixture.selectedSessionKey, width: viewport.width },
   );
   await page.locator('aside.sidebar[data-snapshot-saved="true"]').waitFor();
   await page.evaluate(() => document.fonts.ready.then(() => undefined));
-  const children = fixture.scenario.sessions!.flatMap((row) =>
-    row.parentSessionKey === fixture.selectedSessionKey &&
-    typeof row.label === "string" &&
-    row.label.startsWith("Synthetic child review ")
-      ? [{ key: row.key, label: row.label }]
-      : [],
-  );
-  expect(children).toHaveLength(4);
-  const qualified = await page.waitForFunction(qualifyDetailsSubagentsWarmState, {
-    sessionKey: fixture.selectedSessionKey,
-    rows: children,
-  });
-  const detailsSubagentsWarmState = await qualified.jsonValue();
-  await qualified.dispose();
-  if (!detailsSubagentsWarmState) throw new Error("Expected persisted ordinary child receipts");
   const warm = await page.evaluate(persistColdLoadWarmState, {
     sessionKey: fixture.selectedSessionKey,
     sidebarView: "sessions",
-    detailsSubagentsWarmState,
   } satisfies Parameters<typeof persistColdLoadWarmState>[0]);
-  expect(
-    warm.storage.records.snapshots.find(
-      (record) => record.sessionKey === detailsSubagentsWarmState.snapshotKey,
-    ),
-  ).toMatchObject({
+  const saved = warm.storage.records.snapshots.find((record) =>
+    record.sessionKey.endsWith(`\u0000${fixture.selectedSessionKey}`),
+  );
+  expect(saved).toMatchObject({
     snapshot: {
       details: {
         docking: { wide: true, layout: expect.stringMatching(/^\[1720(?:,|\])/u) },
         automations: { rows: expect.any(Array) },
+        subagents: { total: 18 },
       },
     },
   });
+  expect(saved?.snapshot.details?.subagents?.rows).toHaveLength(4);
+  expect(
+    saved?.snapshot.details?.subagents?.counts.reduce((total, count) => total + count.count, 0),
+  ).toBe(18);
   expect(
     await page.evaluate(() =>
       Object.keys(localStorage).some((key) => key.startsWith("openclaw.control.bootRecord.v1:")),
