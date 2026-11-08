@@ -1,6 +1,9 @@
 import { agentVitestProjectOwners } from "../../test/vitest/vitest.agents-paths.mjs";
 import { databaseWorkerCoreTestFiles } from "../../test/vitest/vitest.database-worker-core-paths.mjs";
-import { matchesVitestCliSelection } from "../../test/vitest/vitest.pattern-file.ts";
+import {
+  loadPatternListFromEnv,
+  matchesVitestCliSelection,
+} from "../../test/vitest/vitest.pattern-file.ts";
 import {
   includesRuntimeConfig,
   resolveVitestRuntimeConfigScopes,
@@ -29,6 +32,9 @@ const runtimeOnlyUnitFiles = new Set([
   "src/auto-reply/reply/dispatch-from-config.test.ts",
   "src/auto-reply/reply/followup-runner.test.ts",
   "src/auto-reply/reply/groups.test.ts",
+  "src/gateway/client-callsites.guard.test.ts",
+  "test/plugins/chat-abort-codex.gateway.test.ts",
+  "test/plugins/codex-native-search.gateway.test.ts",
 ]);
 
 export function areRuntimeOnlyVitestUnitFiles(files: readonly string[]): boolean {
@@ -43,9 +49,11 @@ export function shouldUseRuntimeOnlyVitestWorkers(
   testNamePattern?: string | RegExp,
   includePatterns?: readonly string[],
 ): boolean {
-  const files = (includePatterns ?? collectVitestFileFilters(args)).map((file) =>
-    file.replaceAll("\\", "/").replace(/^\.\//u, ""),
-  );
+  const files = (
+    includePatterns ??
+    loadPatternListFromEnv("OPENCLAW_VITEST_INCLUDE_FILE", env) ??
+    collectVitestFileFilters(args)
+  ).map((file) => file.replaceAll("\\", "/").replace(/^\.\//u, ""));
   if (files.length === 0) {
     return false;
   }
@@ -55,7 +63,9 @@ export function shouldUseRuntimeOnlyVitestWorkers(
   if (
     (config === "test/vitest/vitest.auto-reply.config.ts" ||
       config === "test/vitest/vitest.auto-reply-reply.config.ts" ||
-      config === "test/vitest/vitest.infra.config.ts") &&
+      config === "test/vitest/vitest.infra.config.ts" ||
+      config === "test/vitest/vitest.gateway-client.config.ts" ||
+      config === "test/vitest/vitest.gateway-database-workers.config.ts") &&
     areRuntimeOnlyVitestUnitFiles(files)
   ) {
     return true;

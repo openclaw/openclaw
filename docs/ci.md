@@ -188,6 +188,14 @@ use the runtime-only compiled-worker registry. The local TUI file does the same
 when its existing built-CLI mode is enabled; source TUI and broad, mixed, or
 custom selections retain the full registry.
 
+Packed Node groups also share the runtime-only registry when every group has
+one known configuration and only explicitly qualified files. This includes
+the Gateway client callsite guard, Codex abort settlement, and native search
+authority proofs. Parent and child resolve the same include-file selection;
+broad or mixed selections, extra Vitest arguments, and groups requiring a build
+retain the full registry. Test inventory, process isolation, and artifact
+verification are unchanged.
+
 When the artifact producer selects both channels and core support checks with
 matching compiler heap options, they share one full compiled-worker generation.
 Both test commands still run concurrently with their original configurations,
