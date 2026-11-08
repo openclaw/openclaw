@@ -13896,6 +13896,8 @@ describe("shared test-source check execution", () => {
   };
 
   it.each([
+    ["test/scripts/ci-check-plan.test.ts", "config/test-lines-allocations/example.txt"],
+    ["test/example.test.ts", "config/test-lines-allocations/example.txt"],
     [
       "extensions/codex/src/session-catalog-index.test.ts",
       "extensions/codex/src/session-catalog-rollouts.test.ts",
@@ -13956,6 +13958,7 @@ describe("shared test-source check execution", () => {
 
   it.each([
     ["test/helpers/shared.ts"],
+    ["test/scripts/ci-check-plan.test.ts", "scripts/generate-kysely-types.mts"],
     ["src/shared.test-support.d.ts"],
     ["src/shared.test-support.ts", "src/runtime.ts"],
     [
