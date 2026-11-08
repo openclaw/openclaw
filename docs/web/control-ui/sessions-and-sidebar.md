@@ -140,7 +140,7 @@ persistent child's background work does not put a ring on its idle parent.
 
 The owner filter is the only control for this selection. Its saved value belongs
 to the current Gateway and your profile in this browser. A signed-in profile
-without a saved choice starts with **My sessions**, except guests: a role that can
+without a saved choice starts with **All owners**, except guests: a role that can
 only view other people's sessions and has no general read access (the role
 [Visitor Access](/start/multiplayer#invite-guests) requires) starts with **Involving me**.
 A saved choice wins unless a newly authenticated connection restricts access to
@@ -406,7 +406,7 @@ conversations without clearing the current owner or agent selection. The button
 also shows a dot when Status differs from Active. **Reset** appears at the right of the Filters header
 whenever any visible Filters or Display setting differs from its default. It restores
 all visible panel settings: Active status, automation and system sessions off,
-Custom groups, Created sort, When filtering for empty groups, and message previews off.
+Custom groups, Created sort, Never hide empty groups, and message previews off.
 Reset preserves the owner choice in the title. Display choices never add a filter dot. Tab moves between rows; Left and Right choose within a segmented
 status control. The title chip opens a picker with owner avatars and a search field;
 type to filter owners by name, and Escape clears the search before closing.
@@ -585,14 +585,14 @@ Session previews are hidden by default for compact, single-line rows. Enable **S
 
 **Hide empty groups** in the same menu shows your current choice and opens three options:
 
-- **When filtering** (default): hide native session sections with no matching sessions while **Active**, **Snoozed**, or **Archived** status, a specific owner, or **Involving me** is selected.
+- **When filtering**: hide native session sections with no matching sessions while **Active**, **Snoozed**, or **Archived** status, a specific owner, or **Involving me** is selected.
 - **Always**: also hide empty native sections in the unfiltered view.
-- **Never**: keep empty groups available while filtering. Sessions still obey the active filters.
+- **Never** (default): keep empty groups available while filtering. Sessions still obey the active filters.
 
 This is a personal display preference, stored in this browser separately for each signed-in user and Gateway. It does not change another person’s view, group membership, order, or session access, and it is not synced across devices. Connections without an identified user keep a separate browser-only choice. An existing on/off browser choice is adopted once by the first resolved viewer: on becomes **Always**, while off becomes **When filtering**. Later viewers do not inherit that migrated choice.
 
 Changing or clearing an owner or status filter never changes the saved preference.
-**Reset** in the popover restores **When filtering** when the empty-group control is visible. Groups awaiting their initial session list stay visible. Populated groups stay visible even when collapsed, and hidden custom groups remain available in **Move to group**. Choose **Never** to recover their headers as drag targets. Catalog sections and empty agent groups in team mode retain their existing behavior. On phone-width layouts, the choices open as a page inside the filter sheet, with **Back**. Escape returns focus to the setting without closing the filter panel.
+**Reset** in the popover restores **Never** when the empty-group control is visible. Groups awaiting their initial session list stay visible. Populated groups stay visible even when collapsed, and hidden custom groups remain available in **Move to group**. Choose **Never** to recover their headers as drag targets. Catalog sections and empty agent groups in team mode retain their existing behavior. On phone-width layouts, the choices open as a page inside the filter sheet, with **Back**. Escape returns focus to the setting without closing the filter panel.
 
 Native CLI catalogs appear when they contain sessions matching the current owner filter. Healthy empty catalogs stay hidden, including when the CLI can start new sessions. A genuine discovery failure can show an empty catalog with an error indicator; healthy pending discovery is not an error. Catalogs whose sessions are excluded by the owner filter stay hidden. Catalogs load on connection, then refresh every two minutes while the tab is visible. Returning to a hidden tab refreshes its catalog after a short coalescing delay; explicit refreshes and catalog actions do not wait for the periodic refresh. If more pages remain, discovery follows their cursors until a matching session appears, the catalog is exhausted, or a host reports an error, without repeating the first-page request. Discovery preserves its progress and pauses while the browser tab is hidden. A later refresh checks the first page for new sessions and restarts completed empty scans so older sessions that become visible are still discovered. Expanded catalogs preserve their loaded pages across refreshes. Populated catalogs remain visible when another host fails, with discovery details in their status indicator. Hidden catalogs do not keep the **Other** heading visible when it is the only remaining section. Native CLI starts remain available from **New session**.
 
