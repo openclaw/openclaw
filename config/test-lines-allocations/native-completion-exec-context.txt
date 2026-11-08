@@ -1,0 +1,2 @@
+# Preserve current session exec state during native completion, including authority and per-turn prompt boundaries.
+54
