@@ -12,6 +12,7 @@ import {
   setRuntimeConfigSnapshot,
   clearRuntimeConfigSnapshot,
 } from "openclaw/plugin-sdk/runtime-config-snapshot";
+import * as systemEvents from "openclaw/plugin-sdk/system-event-runtime";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, expect, it, vi } from "vitest";
 import { signalMessageActions } from "./message-actions.js";
@@ -164,6 +165,7 @@ it("records Signal transport receipts, dedupes reopened/concurrent sends and con
 
 it("dispatches authorized add/remove with original context once across concurrent replay and restart", async () => {
   const stateDir = dirs.make("openclaw-signal-reaction-conversation-");
+  const passiveNotifications = vi.spyOn(systemEvents, "enqueueSystemEvent");
   const oversizedGroupId = "x".repeat(257);
   const queue = createChannelIngressQueueForTests<Parameters<Queue["enqueue"]>[1]>({
     channelId: "signal",
@@ -333,6 +335,7 @@ it("dispatches authorized add/remove with original context once across concurren
     await monitor.waitForIdle();
     expect(resolveReply).toHaveBeenCalledTimes(3);
     expect(sends).not.toHaveBeenCalled();
+    expect(passiveNotifications).not.toHaveBeenCalled();
   } finally {
     await monitor.stop();
   }
