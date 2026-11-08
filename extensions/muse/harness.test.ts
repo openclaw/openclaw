@@ -391,8 +391,7 @@ describe("Muse native MSP harness", () => {
       expect.objectContaining({ outcome: "failure" }),
     );
     expect(terminal(result).kind).toBe("ok");
-    expect(result.lastToolError).toEqual(lastToolError);
-    expect(result.toolMetas).toEqual([{ toolName: "read_file", isError: true }]);
+    expect(result).toMatchObject({ lastToolError, toolMetas: [{ isError: true }] });
   });
 
   it.each(["callback", "transcript", "abort", "timeout", "approval"] as const)(

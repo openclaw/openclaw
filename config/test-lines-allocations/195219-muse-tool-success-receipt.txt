@@ -1,2 +1,0 @@
-1
-# Muse tool receipts: harness lifecycle and tool-failure toolMetas carry isError.
