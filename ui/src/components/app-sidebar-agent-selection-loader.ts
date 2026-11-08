@@ -1,8 +1,8 @@
 import type { ApplicationContext } from "../app/context.ts";
-import type { AppSidebarSessionNavigationElement } from "./app-sidebar-session-navigation.ts";
+import type { AgentSelectionHost } from "./app-sidebar-agent-selection.ts";
 
 export function loadSidebarAgentSelection(
-  host: AppSidebarSessionNavigationElement,
+  host: AgentSelectionHost,
   agentId: string,
   context: ApplicationContext,
   isIntentCurrent: () => boolean,
