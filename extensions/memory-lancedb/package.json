@@ -12,7 +12,7 @@
   ],
   "dependencies": {
     "apache-arrow": "21.2.0",
-    "openai": "7.45.1",
+    "openai": "7.47.0",
     "typebox": "1.4.3"
   },
   "devDependencies": {

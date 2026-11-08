@@ -12,7 +12,11 @@ export function encodeSystemOneQuestions(batch: DecisionBatchV2) {
 }
 
 /** Decode native estimates without normalizing distributions or recomputing scores. */
-export function decodeSystemOneResponse(batch: DecisionBatchV2, response: unknown): unknown {
+export function decodeSystemOneResponse(
+  batch: DecisionBatchV2,
+  response: unknown,
+  options?: { readonly confidence: "optional" },
+): unknown {
   const root = asOptionalRecord(response);
   const answers = asOptionalRecord(root?.answers);
   const usage = asOptionalRecord(root?.usage);
@@ -33,6 +37,9 @@ export function decodeSystemOneResponse(batch: DecisionBatchV2, response: unknow
       if (!answer) {
         return [id, undefined];
       }
+      if (answer.type === "refusal") {
+        return [id, { type: "error", code: "provider-error", providerCode: "refusal" }];
+      }
       if (answer.type === "noul") {
         return [id, { type: "boolean", probabilityTrue: answer.noul }];
       }
@@ -40,13 +47,18 @@ export function decodeSystemOneResponse(batch: DecisionBatchV2, response: unknow
         return [id, undefined];
       }
       if (
-        typeof answer.confidence !== "number" ||
-        !Number.isFinite(answer.confidence) ||
-        answer.confidence < 0 ||
-        answer.confidence > 1
+        (answer.type === "box" ||
+          options?.confidence !== "optional" ||
+          answer.confidence != null) &&
+        (typeof answer.confidence !== "number" ||
+          !Number.isFinite(answer.confidence) ||
+          answer.confidence < 0 ||
+          answer.confidence > 1)
       ) {
         return [id, undefined];
       }
+      // Some native Decisions routes return probabilities without a separate confidence.
+      const confidence = answer.confidence === undefined ? {} : { confidence: answer.confidence };
       if (answer.type === "box") {
         return [id, { type: "box", box: answer.box, confidence: answer.confidence }];
       }
@@ -57,7 +69,7 @@ export function decodeSystemOneResponse(batch: DecisionBatchV2, response: unknow
             type: "choice",
             choice: answer.choice,
             probabilities: answer.probabilities,
-            confidence: answer.confidence,
+            ...confidence,
           },
         ];
       }
@@ -77,7 +89,7 @@ export function decodeSystemOneResponse(batch: DecisionBatchV2, response: unknow
           type: "score",
           score: answer.score,
           probabilities: question.criteria.map((_, index) => probabilities[String(index)]),
-          confidence: answer.confidence,
+          ...confidence,
         },
       ];
     }),

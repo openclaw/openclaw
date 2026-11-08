@@ -1,11 +1,12 @@
-import "../lib/toast-host.tsx";
 import type { JSX as SolidJSX } from "@solidjs/web";
+import "../lib/toast-host.tsx";
 import { createMemo, createSignal, lazy, onSettled, Show } from "solid-js";
 import { registerModalSurface } from "../components/overlay-registry.ts";
 import {
   LazySettingsSaveStatus,
   LazySettingsSidebar,
 } from "../components/settings-sidebar-lazy.tsx";
+import { GatewayConnectionView } from "../components/solid/gateway-connection-view.tsx";
 import { GatewayStatus, gatewayStatusLabel } from "../components/solid/gateway-status.tsx";
 import { Icon } from "../components/solid/icon.tsx";
 import { InlineAlert } from "../components/solid/inline-alert.tsx";
@@ -16,6 +17,7 @@ import {
   renderNewSessionLink as NewSessionLink,
 } from "../components/solid/new-session-link.tsx";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../lib/external-link.ts";
+import { isGatewayConnectionAttemptPending } from "../lib/gateway-status.ts";
 import { KEYBOARD_SHORTCUT_COMBOS } from "../lib/keyboard-shortcut-contract.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import { projectOwner } from "../lib/reactive/projection.ts";
@@ -101,6 +103,9 @@ export function ApplicationShell(props: {
     props.host.shellRevision();
     return readShellView(props.host);
   });
+  // Single-attribute bindings lack an equality guard; resize-only updates keep inert unchanged.
+  const navBackdropInert = createMemo(() => !view().navDrawerOpen);
+  const settingsSaveStatusInert = createMemo(() => view().mobileNavLayout && view().navDrawerOpen);
   const sessionOwner = createMemo(() => view().context.sessions);
   const sessionRows = createMemo(() =>
     projectOwner(sessionOwner(), (sessions) => sessions.state.result?.sessions),
@@ -196,6 +201,7 @@ export function ApplicationShell(props: {
             prop:navDrawerOpen={view().navDrawerOpen}
             prop:gatewayStatus={view().mobileGatewayStatus}
             prop:floating={view().floatingHeader}
+            prop:navigationLocked={view().initialGatewayConnection}
             prop:onBack={view().floatingBack}
             prop:pageTitle={view().pageTitle}
             prop:registerPageActions={props.host.shellLayout.registerHeaderActions}
@@ -295,7 +301,7 @@ export function ApplicationShell(props: {
             class="shell-nav-backdrop"
             tabindex={-1}
             aria-hidden="true"
-            inert={!view().navDrawerOpen}
+            inert={navBackdropInert()}
             onClick={() => props.host.closeNavDrawer({ restoreFocus: true })}
           />
           <div
@@ -405,6 +411,7 @@ export function ApplicationShell(props: {
               "content--chat": view().chatLikeRoute,
               "content--workbench": view().workbenchRoute,
               "content--new-session": view().activeRoute === "new-session",
+              "content--connecting": view().initialGatewayConnection,
               "content--systems": view().activeRoute === "systems",
               "content--custodian": view().activeRoute === "custodian",
               "content--workboard": view().workboardLayout,
@@ -440,6 +447,16 @@ export function ApplicationShell(props: {
               },
             }}
           >
+            <Show when={view().initialGatewayConnection}>
+              <GatewayConnectionView
+                kind={view().connectionStatus ?? "connecting"}
+                onRetry={view().callbacks.retryGateway}
+                retryPending={isGatewayConnectionAttemptPending(view().gatewaySnapshot)}
+                hasFailedAttempt={view().gatewaySnapshot.offlineStable}
+                reconnectAt={view().gatewaySnapshot.reconnectAt}
+                onReload={props.host.refreshControlUi}
+              />
+            </Show>
             <RouterOutlet
               ref={(element) => (props.host.routeOutlet = element)}
               inert={view().reloadRequired}
@@ -454,7 +471,7 @@ export function ApplicationShell(props: {
           </ShellLayoutProvider>
         </main>
         <Show when={view().settingsTakeover}>
-          <div class="settings-save-status" inert={view().mobileNavLayout && view().navDrawerOpen}>
+          <div class="settings-save-status" inert={settingsSaveStatusInert()}>
             <LazySettingsSaveStatus host={props.host} />
           </div>
         </Show>
@@ -579,7 +596,10 @@ export function ApplicationShell(props: {
           return null;
         }}
       </Show>
-      <Show when={view().routeReady} fallback={<ConnectingSplash />}>
+      <Show
+        when={view().routeReady || view().initialGatewayConnection}
+        fallback={<ConnectingSplash />}
+      >
         <PluginSurface
           surface="workspace"
           enabled={view().workspacePluginsEnabled}

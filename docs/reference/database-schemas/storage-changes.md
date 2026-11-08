@@ -3193,6 +3193,54 @@ Other retained tables and planner statistics stay unchanged. Older binaries
 require the verified pre-upgrade backup and matching schema; manually lowering
 version markers cannot restore their revision-update contract.
 
+## Active transcript event facts
+
+Agent schema 41 adds `session_transcript_active_event_facts`, keyed by session
+and transcript sequence. The table starts empty. It stores the transcript
+writer's exact serialized byte count, including the separator, and its guarded
+dependency navigation projection. A missing row means unknown; `{}` means a
+known non-candidate. Readers use the existing payload expression only for
+missing facts and never populate the table.
+
+The transcript projection writer owns the facts in the same transaction as
+active-row insertion or replacement. Payload and eligibility changes replace
+or clear the facts. The foreign key to the active row cascades deletion through
+branch retirement, reset, compaction, and session deletion. SQLite uses
+`STRICT, WITHOUT ROWID`; PostgreSQL carries the same key and foreign key.
+Transcripts remain authoritative, with unchanged retention and admission limits.
+Engine porting omits these derived facts because payload encoding and stored
+predicate materialization can change. The destination starts with missing facts
+and uses its normal fallback; porting does not force a facts backfill.
+
+The version migration creates only this empty table and updates schema metadata.
+It does not alter, scan, backfill, index, or copy existing transcript or active
+rows. Its declared SQLite scoped backup retains `schema_meta`, the prior SQLite user
+version, and the new table's absence. The 40-to-41 crossing uses the established
+schema-only admission policy, then checks the new empty table and its foreign
+key at migration finalization. Existing foreign keys are unchanged and are not
+rescanned for this step. Crossings from schema 38 or 39 retain schema-only
+preflight and global foreign-key validation at finalization. Explicit full
+integrity checks retain their existing coverage.
+Whole-upgrade timing must
+distinguish this version phase from any separate maintenance or update backup.
+PostgreSQL keeps its existing exact-predecessor backup owner; this declaration
+does not narrow that engine's backup scope.
+
+Old rows retain their fallback cost until an ordinary write or rebuild covers
+them. A recent 512-event window can become covered after 512 ordinary, well-formed
+appends. Malformed rows retain their fallback, and old dependency candidates can
+remain uncovered indefinitely. A background backfill is a separate storage and
+lifecycle decision.
+
+Older binaries refuse agent41 stores: their writers cannot keep these facts
+current, so an additive-table reader exception is unsafe. With writers stopped,
+the candidate CLI restores the verified scoped migration backup using
+`openclaw database restore-migration-backup`, removing the companion table and
+restoring both version markers before the matching older build opens the store.
+This version phase does not rewrite transcripts; the scoped restore leaves
+those canonical rows and other undeclared tables intact. It is not a general
+rollback for other migrations or external effects.
+
 ## Review checkpoint for material changes
 
 An explicit maintainer repair-and-land request covers internal scheduling,

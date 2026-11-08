@@ -112,6 +112,38 @@ hardware proof. Validate those behaviors separately through a physical Watch's
 normal **Enable Standalone Voice → Talk on Watch → Start** flow; see
 [Watch setup and limits](https://docs.openclaw.ai/platforms/ios#standalone-voice).
 
+## Share extension UI qualification
+
+Use a dedicated, task-owned simulator with sample Photos and a deliberately
+selected isolated session. Never use an operator Gateway or daily-use simulator.
+`OPENCLAW_IOS_SHARE_PROOF` is test-only: unset skips the three integration tests,
+`wire` or `gateway` selects that mode, and an unrecognized value fails. The other
+recognized mode skips; the ordinary unpaired test skips while the flag is set.
+
+Prepare owned copies of the fixtures and Gateway recipe from the
+[qualification artifacts](https://github.com/openclaw/openclaw/pull/191514#issuecomment-6596234392),
+recording any checkout/hold-path adaptations and hashes. For `wire`, start
+`node share-wire-fixture.cjs` on `127.0.0.1:19876` and manually prepare the Share
+relay for that fixture. For `gateway`, start `node share-provider-fixture.cjs` and
+the isolated production Gateway, then manually prepare its Share relay/session.
+Manage any held-provider release separately; dismissal is not agent completion.
+
+The opt-in expresses intent only: tests neither provision services nor verify or
+retarget saved relay/session settings. Keep the chosen isolated session intact.
+Misconfigured manual setup can fail the tests; missing wire service retains the
+original request/HTTP failure assertions. Run the selected mode with:
+
+```bash
+export TEST_RUNNER_OPENCLAW_IOS_SHARE_PROOF=wire # or gateway
+xcodebuild -project apps/ios/OpenClaw.xcodeproj -scheme OpenClawUITests \
+  -destination "platform=iOS Simulator,id=${SHARE_PROOF_SIMULATOR:?}" \
+  -testLanguage en -testRegion US -parallel-testing-enabled NO \
+  -only-testing:OpenClawUITests/ShareExtensionUITests test
+```
+
+Without the flag, run the unpaired case only on an unpaired simulator. Stop only
+owned services and release only task-owned simulator resources afterward.
+
 ## App Store Release Flow
 
 Prereqs:

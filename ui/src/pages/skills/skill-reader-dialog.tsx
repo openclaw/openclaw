@@ -2,6 +2,7 @@ import "../../styles/skill-reader-dialog.css";
 import type { JSX } from "@solidjs/web";
 import { createMemo, Errored, Loading, Show } from "solid-js";
 import { toSanitizedMarkdownHtml } from "../../components/markdown.ts";
+import { IconButton } from "../../components/solid/icon-button.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import "../../components/modal-dialog.tsx";
 import { InlineAlert } from "../../components/solid/inline-alert.tsx";
@@ -49,14 +50,14 @@ export function SkillReaderDialog(props: {
       <div class="oc-dialog skill-reader-dialog">
         <div class="oc-dialog__header">
           <h2 class="oc-dialog__title">{props.title}</h2>
-          <button
-            type="button"
+          <IconButton
+            size={28}
             class="oc-dialog__close"
-            aria-label={t("skillsPage.close")}
+            icon="x"
+            label={t("skillsPage.close")}
+            tooltip={false}
             onClick={() => props.onClose()}
-          >
-            <Icon name="x" />
-          </button>
+          />
         </div>
         {props.children}
         {props.footer}
