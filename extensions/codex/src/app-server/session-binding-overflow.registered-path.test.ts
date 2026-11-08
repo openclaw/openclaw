@@ -2,6 +2,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { deserialize } from "node:v8";
+import { Worker } from "node:worker_threads";
 import type {
   OpenAsyncKeyedStoreOptions,
   PluginStateActionAuthority,
@@ -23,16 +25,9 @@ import {
 } from "openclaw/plugin-sdk/session-store-runtime";
 import { resolveOpenClawAgentSqlitePath } from "openclaw/plugin-sdk/sqlite-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
-// Integration proof for the Codex binding overflow recovery through the
-// registered plugin path (#125913): the extension entry builds the binding
-// store and its recovery adapter itself from api.runtime.state. The openers
-// delegate to the plugin-state test factories, which run the same
-// worker-backed SQLite stores with fixture module resolution (the production
-// wiring additionally requires the Gateway host broker, which no in-process
-// test has). The only behavioral knob is clamping the binding namespace's
-// maxEntries so the 50,000-row production cap becomes fillable; the lazy
-// adapter, the recovery sweep, and authority-bound deletes are the shipped
-// code paths.
+// The registered plugin assembles its recovery adapter and worker-backed stores.
+// Test SDK openers clamp capacity and resolve fixture operations, without a shipped
+// Gateway. A dispatch hook controls the real session-change interleaving.
 import codexPlugin from "../../index.js";
 import { CODEX_APP_SERVER_BINDING_NAMESPACE } from "./session-binding-meta.js";
 import {
@@ -62,6 +57,13 @@ vi.mock("../session-catalog.js", async (importOriginal) => {
 
 const TEST_CAPACITY = 3;
 
+type DeleteAttempts = {
+  count: number;
+  dispatched: number;
+  mutationsCompleted: number;
+  dispatchFailure?: unknown;
+};
+
 function clampBindingCapacity<T extends { namespace?: string; maxEntries?: number }>(
   options: T,
 ): T {
@@ -88,26 +90,46 @@ async function withRegisteredCodexBindingStore(
   run: (ctx: {
     bindingStore: CodexAppServerBindingStore;
     syncBindingStore: PluginStateSyncKeyedStore<StoredCodexAppServerBinding>;
-    revokedError?: Error;
-    deleteAttempts: { count: number };
+    deleteAttempts: DeleteAttempts;
   }) => Promise<void>,
   options?: {
-    revokeAtWorkerAdmission?: boolean;
-    mutateLineageAtDelete?: () => void | Promise<void>;
+    mutateLineageAfterAdmission?: () => void | Promise<void>;
   },
 ) {
   const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "codex-binding-entry-"));
-  // Revocation rig: the sweep is the only pager on this namespace, so a page
-  // followed by an observe marks the exact window between the failed capacity
-  // insert and the recovery delete. Revocation starts only after that
-  // observation completes and affects only caller-bound stores, so the
-  // unbound read cannot reject before the recovery writer is attempted.
-  let paged = false;
-  let revoked = false;
-  const deleteAttempts = { count: 0 };
-  const revokedError = options?.revokeAtWorkerAdmission
-    ? new Error("session authority revoked")
-    : undefined;
+  const deleteAttempts: DeleteAttempts = { count: 0, dispatched: 0, mutationsCompleted: 0 };
+  const dispatch = vi.spyOn(Worker.prototype, "postMessage");
+  Worker.prototype.postMessage = function (this: Worker, message, transferList) {
+    const mutate = options?.mutateLineageAfterAdmission;
+    if (mutate && message?.type === "execute" && message.input instanceof Uint8Array) {
+      const command: unknown = deserialize(message.input);
+      if (
+        command &&
+        typeof command === "object" &&
+        "type" in command &&
+        command.type === "pluginState.compareDelete"
+      ) {
+        // The broker admitted this command; change lineage before its worker receives it.
+        void Promise.resolve()
+          .then(mutate)
+          .then(() => {
+            deleteAttempts.mutationsCompleted += 1;
+          })
+          .catch((error: unknown) => {
+            deleteAttempts.dispatchFailure = error;
+          })
+          .then(() => {
+            dispatch.call(this, message, transferList);
+            deleteAttempts.dispatched += 1;
+          })
+          .catch((error: unknown) => {
+            deleteAttempts.dispatchFailure = error;
+          });
+        return;
+      }
+    }
+    dispatch.call(this, message, transferList);
+  };
   try {
     const withFixtureEnv = <T extends object>(fixture: T) => ({
       ...fixture,
@@ -121,29 +143,17 @@ async function withRegisteredCodexBindingStore(
           storeOptions: OpenAsyncKeyedStoreOptions,
           authority?: PluginStateActionAuthority,
         ) => {
-          // Per store instance: the factory runs assertCurrent once at open,
-          // every operation admission re-runs it. A revocation armed after
-          // open therefore fails only caller-bound admissions, never the open
-          // itself or the unbound observation store.
-          let opened = false;
           const store = createPluginStateKeyedStoreV2ForTests<T>(
             "codex",
             withFixtureEnv(clampBindingCapacity(storeOptions)),
             {
-              assertCurrent: () => {
-                if (!opened) {
-                  opened = true;
-                } else if (revoked && authority) {
-                  throw revokedError ?? new Error("session authority revoked");
-                }
-                authority?.assertCurrent();
-              },
+              assertCurrent: () => authority?.assertCurrent(),
               sessionEntryCurrent: authority?.sessionEntryCurrent,
             },
           );
           if (
             storeOptions?.namespace === CODEX_APP_SERVER_BINDING_NAMESPACE &&
-            (revokedError || options?.mutateLineageAtDelete)
+            options?.mutateLineageAfterAdmission
           ) {
             if (authority) {
               const compareAndApply = store.compareAndApply?.bind(store);
@@ -151,28 +161,10 @@ async function withRegisteredCodexBindingStore(
                 store.compareAndApply = async (key, comparison, intent, compareOptions) => {
                   if (intent.operation === "delete") {
                     deleteAttempts.count += 1;
-                    await options?.mutateLineageAtDelete?.();
                   }
                   return await compareAndApply(key, comparison, intent, compareOptions);
                 };
               }
-            }
-            const page = store.entriesInKeyRange?.bind(store);
-            if (page) {
-              store.entriesInKeyRange = (range) => {
-                paged = true;
-                return page(range);
-              };
-            }
-            const observe = store.observe?.bind(store);
-            if (observe) {
-              store.observe = async (key) => {
-                const observation = await observe(key);
-                if (paged && options?.revokeAtWorkerAdmission) {
-                  revoked = true;
-                }
-                return observation;
-              };
             }
           }
           return store;
@@ -214,10 +206,10 @@ async function withRegisteredCodexBindingStore(
     await run({
       bindingStore: bindingStore!,
       syncBindingStore,
-      revokedError,
       deleteAttempts,
     });
   } finally {
+    dispatch.mockRestore();
     // Close the worker and cached database handles before removing the
     // directory; removing first fails teardown with EBUSY on Windows.
     resetPluginStateStoreForTests();
@@ -306,74 +298,91 @@ describe("Codex binding overflow recovery through the registered plugin path", (
     });
   });
 
-  it("rejects a queued delete at final worker admission when the real session lineage changes", async () => {
-    await withAgentEnv(async (env) => {
-      const sessionKey = "agent:main:codex-overflow-lineage-fence";
-      const read = {
-        agentId: "main",
-        sessionKey,
-        env,
-        storePath: resolveOpenClawAgentSqlitePath({ agentId: "main", env }),
-      };
-      const seed = {
-        sessionId: "real-session",
-        previousSessionId: "predecessor",
-        updatedAt: 1,
-      };
-      await applySessionEntryPatch({ ...read, patch: seed, fallbackEntry: seed as SessionEntry });
+  it.each([
+    { change: "lineage", sessionId: "real-session", previousSessionId: "changed-predecessor" },
+    { change: "reset", sessionId: "replacement-session", previousSessionId: "real-session" },
+  ])(
+    "rejects a queued delete after a real session $change",
+    async ({ sessionId, previousSessionId }) => {
+      await withAgentEnv(async (env) => {
+        const sessionKey = "agent:main:codex-overflow-lineage-fence";
+        const read = {
+          agentId: "main",
+          sessionKey,
+          env,
+          storePath: resolveOpenClawAgentSqlitePath({ agentId: "main", env }),
+        };
+        const seed = {
+          sessionId: "real-session",
+          previousSessionId: "predecessor",
+          updatedAt: 1,
+        };
+        await applySessionEntryPatch({ ...read, patch: seed, fallbackEntry: seed as SessionEntry });
 
-      await withRegisteredCodexBindingStore(
-        async ({ bindingStore, syncBindingStore, deleteAttempts }) => {
-          fillToCapacity(syncBindingStore);
+        await withRegisteredCodexBindingStore(
+          async ({ bindingStore, syncBindingStore, deleteAttempts }) => {
+            fillToCapacity(syncBindingStore);
 
-          const resolved = await resolveCodexSessionBinding({
-            bindingStore,
-            identity: {
-              kind: "session",
-              agentId: "main",
-              sessionId: "real-session",
-              sessionKey,
-            },
-            storePath: read.storePath,
-            reclaimStale: false,
-          });
+            const resolved = await resolveCodexSessionBinding({
+              bindingStore,
+              identity: {
+                kind: "session",
+                agentId: "main",
+                sessionId: "real-session",
+                sessionKey,
+              },
+              storePath: read.storePath,
+              reclaimStale: false,
+            });
 
-          let runCalls = 0;
-          const prepared = await resolved.authority.prepareMutation();
-          expect(prepared.sessionEntryCurrent).toBeDefined();
-          try {
-            await expect(
-              bindingStore.withLease(
+            let runCalls = 0;
+            let failure: unknown;
+            const prepared = await resolved.authority.prepareMutation();
+            expect(prepared.sessionEntryCurrent).toBeDefined();
+            try {
+              await bindingStore.withLease(
                 { kind: "conversation", bindingId: "fresh" },
                 async () => {
                   runCalls += 1;
                 },
-                {
-                  authority: resolved.authority,
-                },
-              ),
-            ).rejects.toThrow("Codex session generation is no longer current");
-          } finally {
-            resolved.release();
-          }
+                { authority: resolved.authority },
+              );
+            } catch (error) {
+              failure = error;
+            } finally {
+              resolved.release();
+            }
 
-          expect(runCalls).toBe(0);
-          expect(deleteAttempts.count).toBe(1);
-          expect(syncBindingStore.lookup("session:main:abandoned")).toBeDefined();
-        },
-        {
-          mutateLineageAtDelete: async () => {
-            await applySessionEntryPatch({
-              ...read,
-              patch: {
-                sessionId: "real-session",
-                previousSessionId: "changed-predecessor",
-                updatedAt: 2,
-              },
+            expect(runCalls).toBe(0);
+            expect(syncBindingStore.lookup("session:main:abandoned")).toBeDefined();
+            expect(deleteAttempts).toMatchObject({
+              count: 1,
+              dispatched: 1,
+              mutationsCompleted: 1,
+            });
+            expect(deleteAttempts.dispatchFailure).toBeUndefined();
+            expect(failure).toMatchObject({
+              code: "PLUGIN_STATE_WRITE_FAILED",
+              operation: "delete",
+              cause: expect.objectContaining({
+                message: "Codex session generation is no longer current: real-session",
+              }),
             });
           },
-        },
-      );
-    });
-  });
+          {
+            mutateLineageAfterAdmission: async () => {
+              await applySessionEntryPatch({
+                ...read,
+                patch: {
+                  sessionId,
+                  previousSessionId,
+                  updatedAt: 2,
+                },
+              });
+            },
+          },
+        );
+      });
+    },
+  );
 });
