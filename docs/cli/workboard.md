@@ -15,10 +15,6 @@ Enable the plugin before using the command:
 openclaw plugins enable workboard
 ```
 
-Enablement applies to a running Gateway automatically; if it is offline, the change
-is saved for its next start. See
-[Apply changes and inspect](/plugins/manage-plugins#apply-changes-and-inspect).
-
 ## Usage
 
 ```bash
