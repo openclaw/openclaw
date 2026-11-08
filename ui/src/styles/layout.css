@@ -144,7 +144,6 @@
 }
 
 .shell--chat {
-  overflow: hidden;
   --shell-content-leading-inset: 12px;
 }
 
@@ -152,7 +151,6 @@
    Keep --shell-nav-width in sync for fixed-position consumers (e.g. the
    docked terminal panel). */
 .shell--nav-collapsed {
-  grid-template-columns: 0 minmax(0, 1fr);
   --shell-nav-width: 0px;
   /* The collapsed strip shows all three base controls, so unlike the expanded
      safe edge this keeps the complete collapsed width. */
@@ -243,10 +241,6 @@ html.openclaw-native-nav:not(.openclaw-native-web-chrome)
   .shell--nav-collapsed
   .shell-chrome-controls,
 html.openclaw-native-nav .topbar .topbar-nav-toggle {
-  display: none;
-}
-
-html.openclaw-native-web-chrome .shell--mobile-nav .sidebar-brand__desktop-control {
   display: none;
 }
 
@@ -341,7 +335,6 @@ html.openclaw-native-desktop .shell:not(.shell--mobile-nav) {
 }
 
 .shell--onboarding {
-  grid-template-columns: 0 minmax(0, 1fr);
   --shell-nav-width: 0px;
   /* The incoming page already fills the viewport; do not sweep it through the old sidebar. */
   transition: none;
@@ -3528,6 +3521,9 @@ openclaw-tooltip.sidebar-hover-tooltip {
 
 .content {
   grid-area: content;
+  /* Keep the focusable frame stable when setup hands off to a sidebar route. */
+  grid-column: 1 / -1;
+  border-inline-start: var(--shell-nav-width) solid transparent;
   --content-inline-padding: 20px;
   padding: 16px var(--content-inline-padding) 32px;
   display: block;
@@ -3566,14 +3562,12 @@ openclaw-tooltip.sidebar-hover-tooltip {
 
 .content--chat {
   gap: 2px;
-  padding-top: 0;
-  padding-bottom: 0;
+  padding-block: 0;
 }
 
 /* Session routes reserve the final frame before their lazy styles load. */
 .content--chat.content--workbench {
-  padding-left: 0;
-  padding-right: 0;
+  padding-inline: 0;
 }
 
 .content--chat > :where(:not(:first-child)),
@@ -4158,155 +4152,50 @@ html.openclaw-native-web-chrome
   font-weight: 500;
 }
 
-/* The mascot sits 24px above the title; its own animation is the busy indicator. */
+/* index.html owns shared mascot anatomy and animations before runtime CSS loads. */
 .gateway-mascot {
-  --gateway-mascot-size: 88px;
-  --gateway-mascot-ground: radial-gradient(
+  --mount-fallback-ground: radial-gradient(
     closest-side,
     rgb(0 0 0 / 0.42),
     rgb(0 0 0 / 0.16) 60%,
     transparent
   );
-  --gateway-mascot-gaze-x: 0px;
-  --gateway-mascot-gaze-y: 0px;
-  position: absolute;
-  top: calc(-24px - var(--gateway-mascot-size));
-  left: 50%;
-  width: var(--gateway-mascot-size);
-  height: var(--gateway-mascot-size);
-  transform: translateX(-50%);
-  pointer-events: none;
 }
 :root[data-theme-mode="light"] .gateway-mascot {
-  --gateway-mascot-ground: radial-gradient(
+  --mount-fallback-ground: radial-gradient(
     closest-side,
     rgb(32 32 32 / 0.16),
     rgb(32 32 32 / 0.06) 60%,
     transparent
   );
 }
-.gateway-mascot__ground {
-  position: absolute;
-  bottom: 0;
-  left: 50%;
-  width: 62px;
-  height: 9px;
-  margin-left: -31px;
-  border-radius: 50%;
-  background: var(--gateway-mascot-ground);
-}
-.gateway-mascot__figure {
-  position: absolute;
-  top: 0;
-  left: 0;
-  display: block;
-  width: 100%;
-  height: auto;
-  aspect-ratio: 124 / 112;
-  overflow: visible;
-}
-.gateway-mascot__eyes {
-  transform: translate(var(--gateway-mascot-gaze-x), var(--gateway-mascot-gaze-y));
-  transition: transform 0.5s cubic-bezier(0.3, 0, 0.2, 1);
-}
-.gateway-mascot__lids {
-  transform-origin: 60px 35px;
-}
-.gateway-mascot__claw--left {
-  transform-origin: 28px 52px;
-}
-.gateway-mascot__claw--right {
-  transform-origin: 92px 52px;
-}
 /* Settled, it looks down toward the button, or up at the update with one blink. */
 .gateway-mascot[data-pose="error"] {
-  --gateway-mascot-gaze-y: 2.8px;
+  --mascot-gy: 2.8px;
 }
 .gateway-mascot[data-pose="updated"] {
-  --gateway-mascot-gaze-y: -1px;
+  --mascot-gy: -1px;
 }
 .gateway-mascot[data-pose="updated"] .gateway-mascot__lids {
   animation: gateway-mascot-blink-once 0.9s 0.5s linear 1 both;
 }
-/* Busy, it bobs 5px while the ground shadow shrinks, the claws open and the eyes scan. */
 .gateway-mascot[data-pose="busy"] .gateway-mascot__figure {
-  animation: gateway-mascot-bob 2.6s cubic-bezier(0.45, 0, 0.55, 1) infinite alternate;
+  animation: mount-fallback-bob 2.6s cubic-bezier(0.45, 0, 0.55, 1) infinite alternate;
 }
 .gateway-mascot[data-pose="busy"] .gateway-mascot__ground {
-  animation: gateway-mascot-ground 2.6s cubic-bezier(0.45, 0, 0.55, 1) infinite alternate;
+  animation: mount-fallback-ground 2.6s cubic-bezier(0.45, 0, 0.55, 1) infinite alternate;
 }
 .gateway-mascot[data-pose="busy"] .gateway-mascot__claw--left {
-  animation: gateway-mascot-pinch-left 2.6s cubic-bezier(0.45, 0, 0.55, 1) infinite alternate;
+  animation: mount-fallback-pinch-left 2.6s cubic-bezier(0.45, 0, 0.55, 1) infinite alternate;
 }
 .gateway-mascot[data-pose="busy"] .gateway-mascot__claw--right {
-  animation: gateway-mascot-pinch-right 2.6s cubic-bezier(0.45, 0, 0.55, 1) infinite alternate;
+  animation: mount-fallback-pinch-right 2.6s cubic-bezier(0.45, 0, 0.55, 1) infinite alternate;
 }
 .gateway-mascot[data-pose="busy"] .gateway-mascot__eyes {
-  animation: gateway-mascot-gaze 4.8s cubic-bezier(0.45, 0, 0.2, 1) infinite;
+  animation: mount-fallback-gaze 4.8s cubic-bezier(0.45, 0, 0.2, 1) infinite;
 }
 .gateway-mascot[data-pose="busy"] .gateway-mascot__lids {
-  animation: gateway-mascot-blink 4.8s linear infinite;
-}
-@keyframes gateway-mascot-bob {
-  from {
-    transform: translateY(0);
-  }
-  to {
-    transform: translateY(-5px);
-  }
-}
-@keyframes gateway-mascot-ground {
-  from {
-    transform: scaleX(1);
-    opacity: 1;
-  }
-  to {
-    transform: scaleX(0.82);
-    opacity: 0.7;
-  }
-}
-@keyframes gateway-mascot-pinch-left {
-  from {
-    transform: rotate(0);
-  }
-  to {
-    transform: rotate(-7deg);
-  }
-}
-@keyframes gateway-mascot-pinch-right {
-  from {
-    transform: rotate(0);
-  }
-  to {
-    transform: rotate(7deg);
-  }
-}
-@keyframes gateway-mascot-gaze {
-  0%,
-  8%,
-  82%,
-  100% {
-    transform: translate(0, 0);
-  }
-  18%,
-  40% {
-    transform: translate(-3.2px, 0.6px);
-  }
-  50%,
-  72% {
-    transform: translate(3.2px, 0.6px);
-  }
-}
-@keyframes gateway-mascot-blink {
-  0%,
-  90%,
-  96%,
-  100% {
-    transform: scaleY(1);
-  }
-  93% {
-    transform: scaleY(0.12);
-  }
+  animation: mount-fallback-blink 4.8s linear infinite;
 }
 @keyframes gateway-mascot-blink-once {
   0%,
@@ -4349,9 +4238,6 @@ html.openclaw-native-web-chrome
   .gateway-connection-view h1 {
     font-size: 20px;
     line-height: 26px;
-  }
-  .gateway-mascot {
-    --gateway-mascot-size: 80px;
   }
 }
 

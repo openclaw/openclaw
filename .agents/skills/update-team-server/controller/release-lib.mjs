@@ -3028,7 +3028,7 @@ function retainedRepairTranscriptPreservationFailure(database, sessionKey, sessi
   return transcriptPreservationFailure(database, sessionKey, sessionId, windowKey, generation);
 }
 
-function retainedRepairWitness(record, saved, rewriteEvidence) {
+function retainedRepairWitness(record, saved, rewriteEvidence, scope = "captured-floor") {
   const schemas = record.candidate.schemaVersions, databasePath = record.protectedPaths[1].path;
   const accepted = rewriteEvidence?.accepted && new Set(rewriteEvidence.accepted);
   const pending = new Map();
@@ -3047,7 +3047,8 @@ function retainedRepairWitness(record, saved, rewriteEvidence) {
       const id = [agentId, realpathSync(pathname), entry.dev, entry.ino],
         key = JSON.stringify(id);
       for (const tuple of pending.get(key) ?? []) {
-        if (!retainedRepairTranscriptPreservationFailure(database, ...tuple.slice(4))) continue;
+        const failure = retainedRepairTranscriptPreservationFailure(database, ...tuple.slice(4));
+        if (!failure) continue;
         // Physical identity is already bound by pending's key. Only a selected
         // candidate, or its sealed accepted generation, can explain this rewrite.
         const live = rewriteEvidence && tuple[7] && database.prepare(`
@@ -3057,11 +3058,15 @@ function retainedRepairWitness(record, saved, rewriteEvidence) {
           JOIN transcript_rewrite_watermarks t ON t.session_id = w.session_id
           WHERE w.session_id = ? AND w.session_key = ?
         `).get(tuple[4], tuple[5], tuple[6]);
-        if (live?.generation && Number.isSafeInteger(live.updated_at) &&
-            live.updated_at > Date.parse(record.createdAt) && live.updated_at <= Date.now() &&
-            ((rewriteEvidence.selectedCandidate && live.current_session_id === tuple[5] && live.owner_session_id === tuple[5]) ||
-              accepted?.has(JSON.stringify([...tuple.slice(0, 7), live.generation])))) continue;
-        reject("retained preparation requires strict original and current transcript continuity");
+        const reason = !rewriteEvidence ? "no-rewrite-authority" : !live?.generation ? "rewrite-window-missing" :
+          !Number.isSafeInteger(live.updated_at) ? "rewrite-time-invalid" :
+          !(live.updated_at > Date.parse(record.createdAt)) ? "rewrite-not-after-incident" :
+          live.updated_at > Date.now() ? "rewrite-in-future" :
+          ((rewriteEvidence.selectedCandidate && live.current_session_id === tuple[5] && live.owner_session_id === tuple[5]) ||
+            accepted?.has(JSON.stringify([...tuple.slice(0, 7), live.generation]))) ? undefined :
+          rewriteEvidence.selectedCandidate ? "rewrite-owner-mismatch" : "rewrite-generation-not-accepted";
+        if (reason)
+          reject(`RETAINED_CONTINUITY_SAVED_TUPLE scope=${scope} reason=${reason} live=${failure.live} archive=${failure.archive}: retained preparation requires strict original and current transcript continuity`);
       }
       pending.delete(key);
       for (const row of database
@@ -3081,16 +3086,15 @@ function retainedRepairWitness(record, saved, rewriteEvidence) {
           )
         )
           continue;
-        if (
-          retainedRepairTranscriptPreservationFailure(
-            database,
-            row.session_key,
-            row.current_session_id,
-            row.window_key,
-            row.generation,
-          )
-        )
-          reject("retained preparation refuses an incomplete current transcript witness");
+        const failure = retainedRepairTranscriptPreservationFailure(
+          database,
+          row.session_key,
+          row.current_session_id,
+          row.window_key,
+          row.generation,
+        );
+        if (failure)
+          reject(`RETAINED_CONTINUITY_CURRENT_TUPLE scope=${scope} live=${failure.live} archive=${failure.archive}: retained preparation refuses an incomplete current transcript witness`);
         captured.push(
           JSON.stringify([
             ...id,
@@ -3128,7 +3132,7 @@ function retainedRepairWitness(record, saved, rewriteEvidence) {
       return retired;
     },
   );
-  if (pending.size) reject("retained preparation lost a witnessed physical database");
+  if (pending.size) reject(`RETAINED_CONTINUITY_DATABASE scope=${scope}: retained preparation lost a witnessed physical database`);
   if (Buffer.byteLength(JSON.stringify(captured) + "\n") > migrationJsonLimit)
     reject("retained transcript witness exceeds its bounded evidence budget");
   return captured.sort();
@@ -3249,10 +3253,10 @@ function retainedRepairSnapshot(root, rawRequest, expected, building = false, ar
   const { name, ...originalDescriptor } = record.originalWitness;
   const witnessPath = join(namespace.directory, name);
   const originalWitnessDescriptor = { path: witnessPath, ...originalDescriptor };
-  const currentWitness = retainedRepairWitness(record, migrationJson(original), { selectedCandidate: current });
+  const currentWitness = retainedRepairWitness(record, migrationJson(original), { selectedCandidate: current }, "original");
   // A retry verifies the captured floor, not equality with an empty/new baseline.
   if (expected)
-    retainedRepairWitness(record, expected.currentWitness);
+    retainedRepairWitness(record, expected.currentWitness, undefined, building ? "build-floor" : "preparation-floor");
   const configPath = record.protectedPaths[0].path,
     configOwner = lstatSync(configPath);
   const config = migrationFile(configPath, configOwner.uid, {
@@ -3873,7 +3877,7 @@ function retainedRepairStatic(root, snapshot, build, record) {
       snapshot.request.target.sha, snapshot.request.target.manifestSha256, owner), snapshot.target))
     reject("repair frozen target changed");
   retainedRepairWitness(legacy, migrationJson(retainedRepairBoundFile(snapshot.originalWitness).bytes),
-    { accepted: build.currentWitness });
+    { accepted: build.currentWitness }, "original");
   for (const floor of [build.currentWitness, snapshot.currentWitness])
     retainedRepairWitness(legacy, floor);
   if (record.lifecycle?.stopped) {
@@ -6822,60 +6826,81 @@ function retainedAdoptionRetireBuild(root, input, inspectOnly = false) {
   const previous = retainedAdoptionCompletion(root, { operation: gate.value.operation, intentSha256: gate.value.intent.sha256 });
   if (!isDeepStrictEqual(previous.value.closure, request.oldClosure) ||
       !isDeepStrictEqual(previous.intent.request.source, request.source))
-    reject("prebuild retirement incumbent or source changed");
+    reject("RETAINED_BUILD_INCUMBENT: prebuild retirement incumbent or source changed");
   retainedAdoptionLegacy(paths, request.source);
   for (let index = 0; index < 4; index++) {
     const approved = request.replacement[index];
     if (!isDeepStrictEqual(migrationFile(approved.path, paths.owner, { privateOnly: false, mode: index ? 0o644 : 0o755, limit: migrationJournalLimit }).descriptor, approved))
-      reject("prebuild retirement replacement changed");
+      reject("RETAINED_BUILD_REPLACEMENT: prebuild retirement replacement changed");
   }
   validMigrationDescriptor(input.buildIntent, "path", "prebuild retirement intent");
   const name = basename(input.buildIntent.path), operation = name.slice(7, 43);
   const build = retainedRepairPaths(root, operation);
-  if (input.buildIntent.path !== build.prefix + ".build-intent.json") reject("prebuild retirement intent path is not canonical");
+  if (input.buildIntent.path !== build.prefix + ".build-intent.json") reject("RETAINED_BUILD_NAMESPACE: prebuild retirement intent path is not canonical");
   const archive = join(paths.directory, "retired-build-" + operation), intentPath = join(archive, "intent.json");
   let intent;
   if (lstatSync(intentPath, { throwIfNoEntry: false })) {
     intent = migrationJson(retainedRepairRead(intentPath).bytes);
     if (intent.version !== 1 || intent.kind !== "retained-repair-build-retirement" ||
         !isDeepStrictEqual(intent.request, input) || !isDeepStrictEqual(intent.lock, lock))
-      reject("prebuild retirement retry changed request or lock");
+      reject("RETAINED_BUILD_REPLAY: prebuild retirement retry changed request or lock");
   } else {
-    // Only the installed incumbent can validate its complete captured snapshot.
-    const checked = spawnSync(repairNativeNode, [request.oldClosure[1].path,
-      "retained-repair-build", "check", root, "@stdin"], {
-      input: JSON.stringify({ operation }), encoding: "utf8", timeout: 60000,
-      stdio: ["pipe", "pipe", "pipe", "ignore", "ignore", "ignore", "ignore", "ignore", "ignore", 9],
-    });
-    if (checked.error || checked.signal || checked.status !== 0) reject("incumbent prebuild inspection failed");
-    const result = migrationJson(Buffer.from(checked.stdout));
-    if (result.phase !== "BUILD_PREPARED" || !isDeepStrictEqual(result.intent, input.buildIntent))
-      reject("prebuild retirement intent changed");
-    const snapshot = migrationJson(retainedRepairBoundFile(input.buildIntent).bytes);
-    if (!isDeepStrictEqual(snapshot.request.source, request.source) || !isDeepStrictEqual(snapshot.closure, request.oldClosure))
-      reject("prebuild retirement belongs to another incumbent or incident");
+    // Retirement archives immutable prebuild evidence, not a currently admissible
+    // build. Traffic and completed adoption may have invalidated its live floor.
+    const captured = retainedRepairRead(input.buildIntent.path);
+    if (!isDeepStrictEqual(captured.descriptor, input.buildIntent))
+      reject("RETAINED_BUILD_INTENT: prebuild retirement intent changed");
+    const snapshot = migrationJson(captured.bytes);
+    if (snapshot.version !== 2 || snapshot.kind !== "retained-repair-build" || snapshot.phase !== "BUILD_PREPARED" ||
+        snapshot.request?.operation !== operation || !isDeepStrictEqual(snapshot.request.source, request.source) ||
+        !isDeepStrictEqual(snapshot.lock, lock))
+      reject("RETAINED_BUILD_SNAPSHOT: prebuild retirement snapshot operation, source or lock differs");
+    retainedRepairInput(snapshot.request, true);
+    let ancestor = previous;
+    // A pre-gate capture belongs to the first adoption's archived old closure.
+    while (!(snapshot.adoption === undefined ? !ancestor.intent.predecessor :
+      isDeepStrictEqual(snapshot.adoption, { operation: ancestor.value.operation,
+        intent: ancestor.file.descriptor, complete: ancestor.complete.descriptor, closure: ancestor.value.closure }))) {
+      if (!ancestor.intent.predecessor || !isDeepStrictEqual(ancestor.intent.request.source, request.source))
+        reject("RETAINED_BUILD_ADOPTION: prebuild retirement lacks its completed incumbent ancestry");
+      ancestor = retainedAdoptionPredecessor(root, ancestor.paths, ancestor.intent.predecessor, ancestor.intent.request);
+    }
+    if (!isDeepStrictEqual(snapshot.closure, snapshot.adoption === undefined ? ancestor.intent.request.oldClosure : ancestor.value.closure) ||
+        !isDeepStrictEqual(ancestor.intent.request.source, request.source))
+      reject("RETAINED_BUILD_CLOSURE: prebuild retirement captured closure or incident differs");
+    const original = retainedRepairRead(build.prefix + ".build-original.json"),
+      witness = retainedRepairRead(build.prefix + ".build-witness.json");
+    if (original.descriptor.sha256 !== request.source.sha256 ||
+        !isDeepStrictEqual(snapshot.evidence?.record, migrationJson(original.bytes)))
+      reject("RETAINED_BUILD_ORIGINAL: prebuild retirement original source differs");
+    if (!isDeepStrictEqual(migrationJson(witness.bytes), snapshot.currentWitness))
+      reject("RETAINED_BUILD_WITNESS: prebuild retirement captured witness differs");
+    sessionWitnessTuples(snapshot.currentWitness);
+    const current = selectedConfigProcess(root, snapshot.evidence.record, snapshot.request.process);
     const owner = retainedRepairNative(root, { snapshot, record: {} }, "live-b");
-    const artifacts = ["build-intent", "build-original", "build-witness"].map(suffix =>
-      retainedRepairRead(build.prefix + "." + suffix + ".json").descriptor);
+    if (snapshot.process.pid !== current.pid || snapshot.process.generation !== current.generation ||
+        snapshot.process.boot !== owner.process.bootId)
+      reject("RETAINED_BUILD_PROCESS: prebuild retirement captured process changed");
+    const artifacts = [captured, original, witness].map(file => file.descriptor);
     intent = { version: 1, kind: "retained-repair-build-retirement", request: input, lock, owner, artifacts };
   }
   // No origin observation means this operation never reached off-path publication.
   if (readdirSync(paths.directory).some(name => name.startsWith(basename(build.prefix) + ".") &&
       !intent.artifacts.some(file => basename(file.path) === name)) ||
       lstatSync(repairNativeGuardPath(root, operation), { throwIfNoEntry: false }))
-    reject("prebuild retirement refuses origin, build or lifecycle effects");
+    reject("RETAINED_BUILD_EFFECTS: prebuild retirement refuses origin, build or lifecycle effects");
   const files = intent.artifacts.map(source => {
     const archived = { ...source, path: join(archive, basename(source.path)) };
     const moved = lstatSync(archived.path, { throwIfNoEntry: false });
-    if (moved && lstatSync(source.path, { throwIfNoEntry: false })) reject("prebuild retirement has duplicate active evidence");
+    if (moved && lstatSync(source.path, { throwIfNoEntry: false })) reject("RETAINED_BUILD_DUPLICATE: prebuild retirement has duplicate active evidence");
     retainedRepairBoundFile(moved ? archived : source);
     return { source, archived, moved: Boolean(moved) };
   });
   const { bootId, cgroup, ...binding } = intent.owner.process;
-  if (!isDeepStrictEqual(retainedRepairObserveLive(root, binding), intent.owner)) reject("prebuild retirement live owner changed");
+  if (!isDeepStrictEqual(retainedRepairObserveLive(root, binding), intent.owner)) reject("RETAINED_BUILD_LIVE_OWNER: prebuild retirement live owner changed");
   retainedAdoptionLegacy(paths, request.source);
   if (!isDeepStrictEqual(retainedAdoptionReadClosure(paths).map(file => file.descriptor), request.oldClosure) ||
-      !isDeepStrictEqual(retainedRepairLock(), lock)) reject("prebuild retirement authority changed");
+      !isDeepStrictEqual(retainedRepairLock(), lock)) reject("RETAINED_BUILD_AUTHORITY: prebuild retirement authority changed");
   if (inspectOnly) return { phase: "BUILD_PREPARED", buildIntent: input.buildIntent, owner: intent.owner, artifacts: intent.artifacts };
   if (!lstatSync(archive, { throwIfNoEntry: false })) { mkdirSync(archive, { mode: 0o700 }); syncPath(paths.directory); }
   exactDirectory(archive, paths.owner, "prebuild retirement archive", { privateOnly: true });

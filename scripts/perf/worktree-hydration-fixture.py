@@ -13,6 +13,11 @@ command inside the real worker; the direct-owner comparison loads baseline sourc
 The target has 62,000 files / 1.14 GB; 600,000 historical blobs amplify the
 repository-wide promisor scan without copying production data. Creation is excluded.
 --extra-packs 1237 adds fragmented promisor history, for 1,239 packs before hydration.
+--extra-refs 20000 adds distinct session tips in 256 packs; --advancing --shallow
+requires a changed-tip refresh from a valid shallow boundary. --negotiation-tip
+compares restricted hydration tips against the prior all-ref scan during --creation.
+Acceptance: identical commit/bytes and one batch fetch, fewer pack reads and lower
+hydration CPU/wall time; no >20% owner regression. Use five AB/BA and five A/A pairs.
 """
 
 import json
@@ -32,10 +37,16 @@ if "--measure" in sys.argv:
     baseline = Path(sys.argv[sys.argv.index("--base-file") + 1]).resolve()
     assert baseline.is_file()
     creation = "--creation" in sys.argv
+    negotiation = "--negotiation-tip" in sys.argv
     mode = "creation" if creation else "allocation" if "--allocation" in sys.argv else "timing"
     if creation:
-        assert baseline.read_text().replace('"--no-object-names"', '"--quiet"') == Path(
-            "src/agents/worktrees/object-hydration.ts").read_text()
+        candidate = Path("src/agents/worktrees/object-hydration.ts").read_text()
+        if negotiation:
+            assert candidate.replace(
+                "        // Even refetch's noop negotiator otherwise parses every local ref tip.\n"
+                "        `--negotiation-tip=${commit}`,\n", "") == baseline.read_text()
+        else:
+            assert baseline.read_text().replace('"--no-object-names"', '"--quiet"') == candidate
     control = "--aa" in sys.argv
     run_name = sys.argv[sys.argv.index("--run-name") + 1] if "--run-name" in sys.argv else (
         f"aa-{mode}" if control else f"ab-{mode}")
@@ -64,12 +75,15 @@ if "--measure" in sys.argv:
             metrics = arm_root / "git-metrics"
             metrics.mkdir()
             if creation:
-                rewrite = ('''if [[ " $* " == *" rev-list "* && " $* " == *" --missing=print "* ]]; then
+                rewrite = ('''for ((i=0; i<${#args[@]}; i++)); do
+  [[ "${args[i]}" != --negotiation-tip=* ]] || unset 'args[i]'
+done
+''' if negotiation else '''if [[ " $* " == *" rev-list "* && " $* " == *" --missing=print "* ]]; then
   for ((i=0; i<${#args[@]}; i++)); do
     [[ "${args[i]}" != --quiet ]] || args[i]=--no-object-names
   done
 fi
-''' if arm == "base" or control else "")
+''') if arm == "base" or control else ""
                 wrapper.write_text('#!/bin/bash\nargs=("$@")\n' + rewrite +
                                    f'metrics={shlex.quote(str(metrics))}\n' +
                                    'printf "%s\\n" "${args[*]}" > "$metrics/$$.argv"\n' +
@@ -84,6 +98,11 @@ fi
                 command = ["node", "--import", "./scripts/tsx.mjs",
                            "scripts/perf/worktree-creation-measure.ts", "--repo", str(clone),
                            "--output", str(arm_root / "creation"), "--samples", "1", "--default-base"]
+                if negotiation:
+                    target = subprocess.check_output(
+                        [actual_git, "-C", str(root / "origin.git"), "rev-parse", "HEAD"],
+                        text=True).strip()
+                    command.extend(["--expected-commit", target])
             elif arm == "base" or control:
                 command.extend(["--hydration-base-file", str(baseline)])
             if mode == "allocation":
@@ -103,14 +122,25 @@ fi
                 object_counts[name] = dict(line.split(": ") for line in output.splitlines())
             native_cpu = 0.0
             peak_rss = 0
+            native_phases = {}
             for receipt in metrics.glob("*.time"):
                 text = receipt.read_text()
                 cpu = re.search(r"([\d.]+) user\s+([\d.]+) sys", text)
                 assert cpu, text
                 native_cpu += float(cpu[1]) + float(cpu[2])
                 peak_rss = max(peak_rss, int(re.search(r"(\d+)\s+maximum resident set size", text)[1]))
+                argv = receipt.with_suffix(".argv").read_text()
+                phase = ("hydrationFetch" if "--refetch" in argv else "refreshFetch"
+                         if "fetch " in argv else "sizeScan" if "ls-tree " in argv
+                         else "census" if "--missing=print" in argv else "fastForward"
+                         if "merge --ff-only" in argv else "other")
+                measured = native_phases.setdefault(phase, dict(count=0, wallMs=0, cpuMs=0, peakRssBytes=0))
+                measured["count"] += 1
+                measured["wallMs"] += float(re.search(r"([\d.]+) real", text)[1]) * 1000
+                measured["cpuMs"] += (float(cpu[1]) + float(cpu[2])) * 1000
+                measured["peakRssBytes"] = max(measured["peakRssBytes"], int(re.search(r"(\d+)\s+maximum resident set size", text)[1]))
             commands = [entry.read_text() for entry in metrics.glob("*.argv")]
-            result.update(label=label, arm=arm, control=control, gitCpuMs=native_cpu * 1000,
+            result.update(label=label, arm=arm, control=control, nativePhases=native_phases, gitCpuMs=native_cpu * 1000,
                           gitPeakRssBytes=peak_rss, gitCommands=len(commands),
                           acquiredObjects=sum(int(object_counts["after"][key]) - int(object_counts["before"][key])
                                               for key in ("count", "in-pack")),
@@ -179,6 +209,7 @@ import_objects()
 bulk_packs = list((origin / "objects/pack").glob("*.pack"))
 import_objects(final=True)
 git(root, "clone", "--filter=blob:none", "--no-checkout", origin.as_uri(), str(seed))
+clone_packs = list((seed / ".git/objects/pack").glob("*.pack"))
 for pack in bulk_packs:
     for suffix in (".pack", ".idx"):
         shutil.copyfile(pack.with_suffix(suffix), seed / ".git/objects/pack" / pack.with_suffix(suffix).name)
@@ -197,9 +228,44 @@ if extra_packs:
         (seed / ".git/objects/pack" / f"pack-{packed}.promisor").touch()
 git(seed, "config", "gc.auto", "0")
 git(seed, "config", "maintenance.auto", "false")
+extra_refs = int(sys.argv[sys.argv.index("--extra-refs") + 1]) if "--extra-refs" in sys.argv else 0
+assert 0 <= extra_refs <= 100_000
+if extra_refs:
+    base = git(seed, "rev-parse", "HEAD~1")
+    packs_before = set((seed / ".git/objects/pack").glob("*.pack"))
+    commits = []
+    for index in range(extra_refs):
+        message = f"synthetic session {index}"
+        commits.append(f"commit refs/heads/synthetic-{index}\ncommitter Fixture <fixture@example.invalid> {1700000001 + index} +0000\ndata {len(message)}\n{message}\nfrom {base}\n\n")
+    subprocess.run(["git", "-C", str(seed), "fast-import", "--quiet"],
+                   input="".join(commits).encode(), env=env, check=True)
+    imported = set((seed / ".git/objects/pack").glob("*.pack")) - packs_before
+    tips = git(seed, "for-each-ref", "--format=%(objectname)", "refs/heads/synthetic-*").splitlines()
+    for index in range(min(256, extra_refs)):
+        packed = subprocess.check_output(
+            ["git", "-C", str(seed), "pack-objects", "--window=0", "--threads=1",
+             str(seed / ".git/objects/pack/pack")],
+            input=("\n".join(tips[index::256]) + "\n").encode(), env=env).decode().strip()
+        (seed / ".git/objects/pack" / f"pack-{packed}.promisor").touch()
+    for pack in imported:
+        for suffix in (".pack", ".idx", ".rev"):
+            pack.with_suffix(suffix).unlink(missing_ok=True)
+    git(seed, "pack-refs", "--all")
 missing = git(seed, "rev-list", "--objects", "--missing=print", "--no-object-names", "--max-count=1", "HEAD")
 assert sum(line.startswith("?") for line in missing.splitlines()) == 1
+if "--shallow" in sys.argv:
+    (seed / ".git/shallow").write_text(git(seed, "rev-parse", "HEAD~1") + "\n")
+if "--advancing" in sys.argv:
+    base = git(seed, "rev-parse", "HEAD~1")
+    git(seed, "update-ref", "refs/heads/main", base)
+    git(seed, "update-ref", "refs/remotes/origin/main", base)
+    # Bulk packs contain the old tree/history. Remove the clone's new-tip objects
+    # so refresh must actually acquire the advancing commit, not just update a ref.
+    for pack in clone_packs:
+        for suffix in (".pack", ".idx", ".rev", ".promisor"):
+            pack.with_suffix(suffix).unlink(missing_ok=True)
+    git(seed, "read-tree", "--reset", "-u", "HEAD")
 print(json.dumps({"root": str(root), "files": 62000, "targetBytes": 62000 * 18432,
                   "unrelatedHistoricalBlobs": 600000, "missingTargetObjects": 1,
-                  "packs": len(list((seed / ".git/objects/pack").glob("*.pack"))),
+                  "extraRefs": extra_refs, "packs": len(list((seed / ".git/objects/pack").glob("*.pack"))),
                   "commit": git(seed, "rev-parse", "HEAD")}))

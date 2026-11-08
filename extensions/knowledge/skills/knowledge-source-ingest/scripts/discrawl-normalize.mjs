@@ -44,7 +44,8 @@ async function run(argv) {
   const requestedChannel = need("channel");
   const since = timestamp(need("since"), "since");
   const before = timestamp(need("before"), "before");
-  if (Date.parse(since) >= Date.parse(before)) {
+  // Both bounds are fixed-width UTC timestamps; Date.parse would discard nanoseconds.
+  if (since >= before) {
     throw new Error("--since must precede --before");
   }
   const status = spawnSync("discrawl", ["--config", config, "--json", "status"], {

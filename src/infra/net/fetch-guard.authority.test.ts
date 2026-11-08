@@ -1,7 +1,7 @@
 import { setImmediate as nextTurn } from "node:timers/promises";
-import { queryObjects } from "node:v8";
 import { beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { forceFullGc } from "../../test-utils/retention.js";
 import { fetchWithSsrFGuard, type GuardedFetchOptions } from "./fetch-guard.js";
 import {
   captureGuardedFetchRequestAuthority,
@@ -96,7 +96,7 @@ it("releases closed callbacks without authorizing late requests", async () => {
       expect(() => captured!()).toThrow("no longer active");
       const control = new WeakRef({});
       await nextTurn();
-      queryObjects(WeakRef);
+      forceFullGc();
       expect(control.deref()).toBeUndefined();
       expect(reference.deref()).toBeUndefined();
     },

@@ -49,13 +49,13 @@ it.each([false, true])(
     const rows = [...sidebar.querySelectorAll<HTMLElement>("[data-session-key]")];
     const row = rows[0]!;
     const archivedKey = row.dataset.sessionKey!;
-    expect(row).not.toBeNull();
     const next = rows[1]!;
     expect(next.getBoundingClientRect().top).toBeGreaterThan(row.getBoundingClientRect().top);
     const beforeTop = next.getBoundingClientRect().top;
     const archive = row.querySelector<HTMLButtonElement>("[data-sidebar-session-archive]")!;
     expect(archive.disabled, archive.outerHTML).toBe(false);
     archive.click();
+    await vi.dynamicImportSettled();
     await waitForSolid(() =>
       expect(sessions.sessions.archiveVisibility(archivedKey)).toBe("pending"),
     );

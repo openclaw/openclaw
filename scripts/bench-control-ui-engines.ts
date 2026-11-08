@@ -98,6 +98,7 @@ import {
 import { createEnginePluginMemoryScenarios } from "./lib/control-ui-engine-plugin-memory-scenarios.ts";
 import { createEngineProfileReadinessScenarios } from "./lib/control-ui-engine-profile-readiness.ts";
 import { createEngineRapidNavigationScenarios } from "./lib/control-ui-engine-rapid-navigation-scenarios.ts";
+import { createEngineSettingsSearchScenarios } from "./lib/control-ui-engine-settings-search.ts";
 import { createEngineStreamingScenarios } from "./lib/control-ui-engine-streaming-scenarios.ts";
 import { createEngineStyleScenarios } from "./lib/control-ui-engine-style-scenarios.ts";
 import {
@@ -180,6 +181,7 @@ const { values } = parseArgs({
     allocations: { type: "boolean", default: false },
     "mutation-audit": { type: "boolean", default: false },
     "transcript-layout-audit": { type: "boolean", default: false },
+    "transcript-paint-marker": { type: "boolean", default: false },
     "live-region-audit": { type: "boolean", default: false },
     "remount-audit": { type: "boolean", default: false },
     "route-transitions": { type: "boolean", default: false },
@@ -302,6 +304,9 @@ if (values["control-bundle-dir"]?.length && !values["compare-bundle-dir"]) {
 }
 if (values.trace && values["cpu-only"]) {
   throw new Error("Choose --trace or --cpu-only; use separate untraced timing runs");
+}
+if (values["transcript-paint-marker"] && !values["transcript-layout-audit"]) {
+  throw new Error("--transcript-paint-marker requires --transcript-layout-audit");
 }
 if (
   values["transcript-layout-audit"] &&
@@ -595,6 +600,7 @@ try {
       values["event-load-interactions-only"],
     ),
     ...createEnginePageScenarios(0, pageOrigin, servers[0]!.server.baseUrl),
+    ...createEngineSettingsSearchScenarios(servers[0]!.server.baseUrl),
     ...createEngineRemountScenarios(),
     ...createEngineRouteTransitionScenarios(async (_page, _transition, run) => {
       await run();
@@ -779,6 +785,7 @@ try {
     allocations: values.allocations,
     mutationAudit: values["mutation-audit"],
     transcriptLayoutAudit: values["transcript-layout-audit"],
+    transcriptPaintMarker: values["transcript-paint-marker"],
     liveRegionAudit: values["live-region-audit"],
     remountAudit: values["remount-audit"],
     routeTransitions: values["route-transitions"],
@@ -789,7 +796,7 @@ try {
     cpuThrottle,
     memorySoakRounds,
     collection: values["transcript-layout-audit"]
-      ? "Transcript frame geometry, mutation ancestry and Chromium screencast; diagnostic overhead, not timing proof"
+      ? "Transcript frame geometry, mutation ancestry and all-engine screencast; diagnostic overhead, not timing proof"
       : values["live-region-audit"]
         ? "Live-region MutationObserver diagnostic; DOM update candidates, not screen-reader speech or timing proof"
         : values.allocations
@@ -862,6 +869,10 @@ try {
                 ({ id }) => id === item.id,
               ) ??
               createEngineProfileReadinessScenarios(
+                slot.server.baseUrl,
+                networkProfile.gatewayLatencyMs,
+              ).find(({ id }) => id === item.id) ??
+              createEngineSettingsSearchScenarios(
                 slot.server.baseUrl,
                 networkProfile.gatewayLatencyMs,
               ).find(({ id }) => id === item.id) ??
@@ -1398,6 +1409,7 @@ try {
                   artifactDir,
                   artifactPrefix,
                   engine,
+                  values["transcript-paint-marker"],
                 );
               }
               if (scenario.id.startsWith("gesture-")) {

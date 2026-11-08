@@ -21,7 +21,7 @@ def _extract_frontmatter(content: str) -> Optional[str]:
     if not lines or lines[0].strip() != "---":
         return None
     for i in range(1, len(lines)):
-        if lines[i].strip() == "---":
+        if lines[i].rstrip() == "---":
             return "\n".join(lines[1:i])
     return None
 
