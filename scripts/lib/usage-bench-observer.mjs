@@ -4,6 +4,7 @@ import { isMainThread, Worker } from "node:worker_threads";
 if (isMainThread && process.send) {
   const dispatches = [];
   // Install before application imports so even a worker's first task is observed.
+  // oxlint-disable-next-line typescript/unbound-method -- Every call below restores the sending Worker as its receiver.
   const postMessage = Worker.prototype.postMessage;
   Worker.prototype.postMessage = function (message, ...args) {
     const task = typeof message?.taskId === "number" ? message.input : undefined;
