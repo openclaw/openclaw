@@ -1,0 +1,3 @@
+180
+# Regression coverage for aborted background maintenance cleanup: re-entry stays ordered
+# before foreground admission without reopening publication authority.
