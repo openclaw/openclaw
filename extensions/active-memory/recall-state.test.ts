@@ -104,3 +104,20 @@ it("keeps circuit-breaker decisions scoped to the agent, provider, and model", (
     ).toBe(false);
   }
 });
+
+it("lets the breaker cool down after the cooldown elapses across a wall-clock rollback", () => {
+  // A backward wall-clock adjustment (e.g. NTP step) must not extend the cooldown
+  // past its real duration: the breaker's cooldown is an elapsed interval, not a
+  // wall-clock instant. The cooldown therefore uses the monotonic performance clock
+  // like the sibling recall cache in this file.
+  recordCircuitBreakerTimeout("rollback");
+  recordCircuitBreakerTimeout("rollback");
+  recordCircuitBreakerTimeout("rollback");
+  expect(isCircuitBreakerOpen("rollback", 3, cooldownMs)).toBe(true);
+
+  // Wall clock rolls back while the cooldown interval genuinely elapses.
+  vi.setSystemTime(new Date("2025-12-31T23:00:00.000Z"));
+  vi.advanceTimersByTime(cooldownMs + 1);
+
+  expect(isCircuitBreakerOpen("rollback", 3, cooldownMs)).toBe(false);
+});
