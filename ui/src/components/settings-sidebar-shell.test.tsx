@@ -88,7 +88,7 @@ it("keeps known search results with pending schema and retains its failure after
         "Unmatched schema field",
       ),
     );
-    expect(view.queryByText(t("common.loading"))).not.toBeNull();
+    await waitForSolid(() => expect(view.queryByText(t("common.loading"))).not.toBeNull());
     expect(view.queryByText(t("nav.settingsSearchNoResults"))).toBeNull();
     await search("Appearance");
     await waitForSolid(() => expect(view.queryByText("Appearance")).not.toBeNull());
