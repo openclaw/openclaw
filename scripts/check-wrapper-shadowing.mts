@@ -8,6 +8,8 @@ import {
   type ModuleExports,
   type SourceModule,
 } from "./check-export-name-collisions.mts";
+import { runWithFailedTrailer } from "./lib/failed-trailer.mts";
+import { createNativeTypeScriptParser } from "./lib/native-typescript.mts";
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
 import { collectSourceFileContents } from "./lib/source-file-scan-cache.mts";
 import { runAsScript } from "./lib/ts-guard-utils.mts";
@@ -18,8 +20,6 @@ export type WrapperShadowingViolation = {
   wrapper: string;
   via?: string;
 };
-
-const failurePrefix = "check-wrapper-shadowing";
 
 function normalizeRelativePath(filePath: string) {
   return filePath.replaceAll(path.sep, "/");
@@ -38,9 +38,7 @@ export function isExcludedWrapperShadowingSource(filePath: string) {
 }
 
 function compareViolations(left: WrapperShadowingViolation, right: WrapperShadowingViolation) {
-  return `${left.name}\0${left.wrapper}\0${left.wrapped}\0${left.via ?? ""}`.localeCompare(
-    `${right.name}\0${right.wrapper}\0${right.wrapped}\0${right.via ?? ""}`,
-  );
+  return violationKey(left).localeCompare(violationKey(right));
 }
 
 function violationKey(violation: WrapperShadowingViolation) {
@@ -77,40 +75,66 @@ function resolveWrappedDefinition(
   if (!importedPath) {
     return null;
   }
-  const importedModule = modulesByPath.get(importedPath);
-  if (!importedModule) {
-    return null;
-  }
-  if (importedModule.valueDefinitions.has(exportName)) {
-    return { wrapped: importedPath };
-  }
 
-  for (const reExport of importedModule.namedReExports) {
-    if (reExport.exportedName !== exportName || reExport.importedName !== exportName) {
+  const reachablePaths = new Set([importedPath]);
+  const wrappedPaths = new Set<string>();
+  // Set iteration visits newly discovered modules once, including cyclic barrels.
+  for (const modulePath of reachablePaths) {
+    const moduleExports = modulesByPath.get(modulePath);
+    if (!moduleExports) {
       continue;
     }
-    const wrapped = resolveSourceModulePath(importedPath, reExport.moduleSpecifier, modulesByPath);
-    if (wrapped && modulesByPath.get(wrapped)?.valueDefinitions.has(exportName)) {
-      return { via: importedPath, wrapped };
+    if (moduleExports.valueDefinitions.has(exportName)) {
+      wrappedPaths.add(modulePath);
+      if (wrappedPaths.size > 1) {
+        return null;
+      }
+      continue;
+    }
+
+    const namedExports = moduleExports.namedReExports.filter(
+      (reExport) => reExport.exportedName === exportName,
+    );
+    // An explicit binding shadows stars, even when its renamed target is outside
+    // this same-name guard. Falling through would attribute a different function.
+    const specifiers =
+      namedExports.length > 0
+        ? namedExports
+            .filter((reExport) => reExport.importedName === exportName)
+            .map((reExport) => reExport.moduleSpecifier)
+        : moduleExports.starExportSpecifiers;
+    for (const specifier of specifiers) {
+      const target = resolveSourceModulePath(modulePath, specifier, modulesByPath);
+      if (target) {
+        reachablePaths.add(target);
+      }
     }
   }
-  for (const reExportSpecifier of importedModule.starExportSpecifiers) {
-    const wrapped = resolveSourceModulePath(importedPath, reExportSpecifier, modulesByPath);
-    if (wrapped && modulesByPath.get(wrapped)?.valueDefinitions.has(exportName)) {
-      return { via: importedPath, wrapped };
-    }
-  }
-  return null;
+
+  const [wrapped] = wrappedPaths;
+  return wrapped ? { wrapped, ...(wrapped !== importedPath ? { via: importedPath } : {}) } : null;
 }
 
 /** Finds exported wrappers that shadow the same imported source symbol. */
 export function findWrapperShadowingViolations(modules: SourceModule[]) {
+  using parser = createNativeTypeScriptParser();
   const modulesByPath = new Map<string, ModuleExports>();
-  for (const sourceModule of modules.toSorted((left, right) =>
-    left.path.localeCompare(right.path),
-  )) {
-    const modulePath = normalizeRelativePath(sourceModule.path);
-    modulesByPath.set(modulePath, collectModuleExportNames(sourceModule.content, modulePath));
+  const sortedModules = modules.toSorted((left, right) => left.path.localeCompare(right.path));
+  // Reload native roots once per bounded batch, retaining only the export graph.
+  const batchSize = 32;
+  for (let offset = 0; offset < sortedModules.length; offset += batchSize) {
+    const batch = sortedModules.slice(offset, offset + batchSize);
+    const sourceFiles = parser.parseSourceFiles(
+      batch.map((sourceModule) => ({
+        fileName: normalizeRelativePath(sourceModule.path),
+        text: sourceModule.content,
+      })),
+    );
+    for (const [index, sourceFile] of sourceFiles.entries()) {
+      const sourceModule = batch[index]!;
+      const modulePath = normalizeRelativePath(sourceModule.path);
+      modulesByPath.set(modulePath, collectModuleExportNames(modulePath, sourceFile));
+    }
   }
 
   const violations = new Map<string, WrapperShadowingViolation>();
@@ -180,15 +204,8 @@ export async function main(
   return 1;
 }
 
-runAsScript(import.meta.url, async () => {
-  let exitCode = 1;
-  try {
-    exitCode = await main();
-  } catch (error) {
-    console.error(error);
-  }
-  if (exitCode !== 0) {
-    process.exitCode = exitCode;
-    console.error(`[${failurePrefix}] FAILED (exit ${exitCode})`);
-  }
-});
+runAsScript(import.meta.url, () =>
+  runWithFailedTrailer("check-wrapper-shadowing", async () => {
+    process.exitCode = await main();
+  }),
+);

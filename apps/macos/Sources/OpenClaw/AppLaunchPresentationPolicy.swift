@@ -149,8 +149,10 @@ struct AppLaunchRuntimePlan: Equatable {
 
     let mode: Mode
     let attachOnly: Bool
+    let allowsActivation: Bool
 
     init(arguments: [String]) {
+        self.allowsActivation = !arguments.contains("--no-activate")
         if arguments.contains("--elevation-host") {
             self.mode = .elevationHost
             self.attachOnly = true
@@ -160,9 +162,7 @@ struct AppLaunchRuntimePlan: Equatable {
         }
     }
 
-    static var current: Self {
-        Self(arguments: CommandLine.arguments)
-    }
+    static let current = Self(arguments: CommandLine.arguments)
 
     var isElevationHost: Bool {
         self.mode == .elevationHost
@@ -191,7 +191,7 @@ struct AppLaunchRuntimePlan: Equatable {
     }
 
     var allowsUpdater: Bool {
-        !self.isElevationHost
+        !self.isElevationHost && self.allowsActivation
     }
 
     var allowsDockIcon: Bool {

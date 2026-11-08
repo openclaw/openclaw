@@ -1,59 +1,44 @@
-// Builds memory flush prompts when conversation context exceeds model budget.
 import { resolveAnthropicServerCompactionPlan } from "@openclaw/ai/internal/anthropic";
 import { resolveOpenAIResponsesServerCompactionPlan } from "@openclaw/ai/internal/openai-responses-payload-policy";
-import { resolveContextTokensForModel } from "../../agents/context.js";
-import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
+import { asPositiveFiniteNumber } from "@openclaw/normalization-core/number-coercion";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { estimateMessagesTokens } from "../../agents/compaction.js";
 import { resolveModelExtraParamSources } from "../../agents/model-extra-params.js";
 import { normalizeStaticProviderModelId } from "../../agents/model-ref-shared.js";
 import { normalizeProviderId } from "../../agents/model-selection.js";
-import { parseNonNegativeByteSize } from "../../config/byte-size.js";
+import type { AgentMessage } from "../../agents/runtime/index.js";
 import {
+  findConfiguredProviderModel,
   resolveMergedModelProviderConfig,
-  resolveMergedModelProviderModels,
 } from "../../config/model-provider-config.js";
 import { resolveFreshSessionTotalTokens, type SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { TranscriptTokenEstimate } from "./agent-runner-memory-transcript-context.js";
 
-export function resolveMemoryFlushContextWindowTokens(params: {
-  modelId?: string;
-  cfg?: OpenClawConfig;
-  provider?: string;
-}): number {
-  return (
-    resolveContextTokensForModel({
-      cfg: params.cfg,
-      provider: params.provider,
-      model: params.modelId,
-      allowAsyncLoad: false,
-    }) ?? DEFAULT_CONTEXT_TOKENS
-  );
+export { resolveCompactionThreshold } from "../../../packages/agent-core/src/harness/compaction/compaction-threshold.js";
+
+export function resolveProjectedPromptTokens(
+  persistedPromptTokens: number | undefined,
+  promptTokenEstimate: number | undefined,
+  transcript: TranscriptTokenEstimate | undefined,
+): number {
+  const contextTokens = persistedPromptTokens ?? transcript?.contextTokens;
+  return contextTokens === undefined
+    ? 0
+    : Math.max(0, contextTokens) + Math.max(0, promptTokenEstimate ?? 0);
 }
 
-export function resolveMaxActiveTranscriptBytes(cfg?: OpenClawConfig): number | undefined {
-  const parsed = parseNonNegativeByteSize(
-    cfg?.agents?.defaults?.compaction?.maxActiveTranscriptBytes,
-  );
-  return typeof parsed === "number" && parsed > 0 ? parsed : undefined;
-}
-
-function resolvePositiveTokenCount(value: number | undefined): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) && value > 0
-    ? Math.floor(value)
-    : undefined;
-}
-
-/** Resolves the blocking threshold using the selected reserve and server floor. */
-export function resolveCompactionThreshold(params: {
-  contextWindowTokens: number;
-  reserveTokensFloor: number;
-  minimumThresholdTokens?: number;
-}): number {
-  const contextWindow = Math.max(1, Math.floor(params.contextWindowTokens));
-  const reserveTokens = Math.max(0, Math.floor(params.reserveTokensFloor));
-  return Math.max(0, contextWindow - reserveTokens, Math.floor(params.minimumThresholdTokens ?? 0));
+export function estimatePromptTokensForMemoryFlush(prompt?: string): number | undefined {
+  const trimmed = normalizeOptionalString(prompt);
+  if (!trimmed) {
+    return undefined;
+  }
+  const message: AgentMessage = { role: "user", content: trimmed, timestamp: Date.now() };
+  return Math.ceil(estimateMessagesTokens([message]));
 }
 
 export function resolveResponsesServerCompactionThreshold(params: {
+  contextWindowTokens: number;
   cfg?: OpenClawConfig;
   provider?: string;
   modelId?: string;
@@ -67,96 +52,48 @@ export function resolveResponsesServerCompactionThreshold(params: {
   const normalizeModelId = (value: string) =>
     normalizeStaticProviderModelId(normalizedProvider, value).trim().toLowerCase();
   const providerConfig = resolveMergedModelProviderConfig(params.cfg, provider);
-  const configuredModel = resolveMergedModelProviderModels({
-    models: providerConfig?.models,
+  const configuredModel = findConfiguredProviderModel(
+    providerConfig,
+    provider,
+    modelId,
     normalizeModelId,
-  }).get(normalizeModelId(modelId));
+  );
   const { defaultParams, modelParams } = resolveModelExtraParamSources({
     config: params.cfg,
     provider,
     modelId,
   });
   const extraParams = { ...defaultParams, ...modelParams };
+  const compactionModel = {
+    provider,
+    api: configuredModel?.api ?? providerConfig?.api,
+    baseUrl: configuredModel?.baseUrl ?? providerConfig?.baseUrl,
+    contextWindow: configuredModel?.contextWindow ?? params.contextWindowTokens,
+  };
   if (normalizedProvider === "anthropic") {
+    // The default Anthropic trigger sits below the local threshold, so only an explicit opt-in
+    // (which may target any Claude model or a raised trigger) needs local compaction held back.
+    if (extraParams.anthropicServerCompaction !== true) {
+      return undefined;
+    }
     return resolveAnthropicServerCompactionPlan(
-      {
-        provider,
-        api: configuredModel?.api ?? providerConfig?.api ?? "anthropic-messages",
-        baseUrl: configuredModel?.baseUrl ?? providerConfig?.baseUrl,
-        contextWindow:
-          configuredModel?.contextWindow ??
-          resolveMemoryFlushContextWindowTokens({ cfg: params.cfg, provider, modelId }),
-      },
+      { ...compactionModel, api: compactionModel.api ?? "anthropic-messages" },
       extraParams,
     ).threshold;
   }
-  const defaultOpenAIBaseUrl =
-    normalizedProvider === "openai" ? "https://api.openai.com/v1" : undefined;
-  const activeContextTokens = resolveMemoryFlushContextWindowTokens({
-    cfg: params.cfg,
-    provider,
-    modelId,
-  });
   return resolveOpenAIResponsesServerCompactionPlan(
     {
-      provider,
+      ...compactionModel,
       api:
-        configuredModel?.api ??
-        providerConfig?.api ??
-        (normalizedProvider === "openai" ? "openai-responses" : undefined),
-      baseUrl: configuredModel?.baseUrl ?? providerConfig?.baseUrl ?? defaultOpenAIBaseUrl,
+        compactionModel.api ?? (normalizedProvider === "openai" ? "openai-responses" : undefined),
+      baseUrl:
+        compactionModel.baseUrl ??
+        (normalizedProvider === "openai" ? "https://api.openai.com/v1" : undefined),
       compat: configuredModel?.compat,
-      contextTokens: configuredModel?.contextTokens ?? activeContextTokens,
-      contextWindow: configuredModel?.contextWindow ?? activeContextTokens,
+      contextTokens: configuredModel?.contextTokens ?? params.contextWindowTokens,
     },
     extraParams,
   ).threshold;
-}
-
-function resolveMaintenanceGateState<
-  TEntry extends Pick<SessionEntry, "totalTokens" | "totalTokensFresh" | "totalTokensVersion">,
->(params: {
-  entry?: TEntry;
-  tokenCount?: number;
-  threshold: number;
-}): { entry: TEntry; totalTokens: number; threshold: number } | null {
-  if (!params.entry) {
-    return null;
-  }
-
-  const totalTokens =
-    resolvePositiveTokenCount(params.tokenCount) ?? resolveFreshSessionTotalTokens(params.entry);
-  if (!totalTokens || totalTokens <= 0) {
-    return null;
-  }
-
-  const threshold = params.threshold;
-  return threshold > 0 ? { entry: params.entry, totalTokens, threshold } : null;
-}
-
-export function shouldRunMemoryFlush(params: {
-  entry?: Pick<
-    SessionEntry,
-    "totalTokens" | "totalTokensFresh" | "totalTokensVersion" | "compactionCount" | "memoryFlush"
-  >;
-  /**
-   * Optional token count override for flush gating. When provided, this value is
-   * treated as a fresh context snapshot and used instead of the cached
-   * SessionEntry.totalTokens (which may be stale/unknown).
-   */
-  tokenCount?: number;
-  threshold: number;
-}): boolean {
-  const state = resolveMaintenanceGateState(params);
-  if (!state || state.totalTokens < state.threshold) {
-    return false;
-  }
-
-  if (hasAlreadyFlushedForCurrentCompaction(state.entry)) {
-    return false;
-  }
-
-  return true;
 }
 
 export function shouldRunPreflightCompaction(params: {
@@ -169,19 +106,21 @@ export function shouldRunPreflightCompaction(params: {
   tokenCount?: number;
   threshold: number;
 }): boolean {
-  const state = resolveMaintenanceGateState(params);
-  return Boolean(state && state.totalTokens >= state.threshold);
+  if (!params.entry) {
+    return false;
+  }
+  const projectedTokens = asPositiveFiniteNumber(params.tokenCount);
+  const totalTokens =
+    projectedTokens === undefined
+      ? resolveFreshSessionTotalTokens(params.entry)
+      : Math.floor(projectedTokens);
+  return totalTokens !== undefined && params.threshold > 0 && totalTokens >= params.threshold;
 }
 
-/**
- * Returns true when a memory flush has already been performed for the current
- * compaction cycle. This prevents repeated flush runs within the same cycle —
- * important for both the token-based and transcript-size–based trigger paths.
- */
+/** One flush per compaction cycle, regardless of token or transcript-size trigger. */
 export function hasAlreadyFlushedForCurrentCompaction(
   entry: Pick<SessionEntry, "compactionCount" | "memoryFlush">,
 ): boolean {
   const compactionCount = entry.compactionCount ?? 0;
-  const lastFlushAt = entry.memoryFlush?.compactionCount;
-  return typeof lastFlushAt === "number" && lastFlushAt === compactionCount;
+  return entry.memoryFlush?.compactionCount === compactionCount;
 }

@@ -2,12 +2,15 @@
 import fs from "node:fs";
 import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { isEmbeddedStandaloneModule } from "../../cli-invocation.mjs";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type {
   ManualExecSecretProviderConfig,
   PluginIntegrationSecretProviderConfig,
 } from "../config/types.secrets.js";
+import { openRootFileSync } from "../infra/boundary-file-read.js";
 import { isPathInside } from "../infra/path-guards.js";
+import { resolveRuntimeArgs } from "../infra/runtime-worker-url.js";
 import { normalizePluginsConfig, type NormalizedPluginsConfig } from "../plugins/config-state.js";
 import { shouldRejectHardlinkedPluginFiles } from "../plugins/hardlink-policy.js";
 import { isActivatedManifestOwner } from "../plugins/manifest-owner-policy.js";
@@ -16,7 +19,7 @@ import type { PluginManifestSecretProviderIntegration } from "../plugins/manifes
 import { isValidSecretProviderAlias } from "./ref-contract.js";
 
 /** Secret provider preset exposed by an active trusted plugin integration. */
-export type SecretProviderIntegrationPreset = {
+type SecretProviderIntegrationPreset = {
   id: string;
   pluginId: string;
   providerAlias: string;
@@ -25,7 +28,6 @@ export type SecretProviderIntegrationPreset = {
   providerConfig: PluginIntegrationSecretProviderConfig;
 };
 
-/** Result of materializing a plugin integration into a manual exec provider config. */
 type SecretProviderIntegrationResolution =
   | {
       ok: true;
@@ -44,10 +46,6 @@ function resolvePluginRelativePath(value: string, pluginRoot: string): string | 
   return isPathInside(pluginRoot, resolved) ? resolved : undefined;
 }
 
-function isPluginRelativeEntrypoint(value: string): boolean {
-  return value.startsWith("./");
-}
-
 function resolveArg(arg: string, pluginRoot: string): string | undefined {
   if (!arg.startsWith("./") && !arg.startsWith("../")) {
     return arg;
@@ -55,19 +53,13 @@ function resolveArg(arg: string, pluginRoot: string): string | undefined {
   return resolvePluginRelativePath(arg, pluginRoot);
 }
 
-function withNodeCommandTrustedDir(command: string, pluginRoot: string): string[] {
-  // The ${node} placeholder executes the current Node binary with a plugin-owned entrypoint.
-  // Trust both the Node binary dir and plugin root so resolver path checks accept that shape.
-  return command === NODE_COMMAND_PLACEHOLDER
-    ? [...new Set([path.dirname(process.execPath), pluginRoot])]
-    : [pluginRoot];
-}
-
 function isSecurePosixPathStat(stat: fs.Stats): boolean {
   if (process.platform === "win32") {
     return true;
   }
-  if ((stat.mode & 0o022) !== 0) {
+  // Match plugin discovery, which already loads this plugin's code at the same modes:
+  // group write is the default under user-private-group umasks (002), world write is not.
+  if ((stat.mode & 0o002) !== 0) {
     return false;
   }
   if (typeof process.getuid !== "function" || typeof stat.uid !== "number") {
@@ -77,118 +69,53 @@ function isSecurePosixPathStat(stat: fs.Stats): boolean {
   return stat.uid === uid || stat.uid === 0;
 }
 
-function pathSegmentsBetween(rootDir: string, targetDir: string): string[] | undefined {
-  if (!isPathInside(rootDir, targetDir)) {
-    return undefined;
-  }
-  const relative = path.relative(rootDir, targetDir);
-  if (relative === "") {
-    return [];
-  }
-  return relative.split(path.sep).filter(Boolean);
-}
-
-function isSecurePluginEntrypointPath(params: {
-  pluginRoot: string;
-  pluginRootRealpath: string;
-  resolvedEntrypoint: string;
-  entrypointRealpath: string;
-}): boolean {
-  if (process.platform === "win32") {
-    return true;
-  }
-  const originalSegments = pathSegmentsBetween(
-    path.resolve(params.pluginRoot),
-    path.dirname(path.resolve(params.resolvedEntrypoint)),
-  );
-  const realpathSegments = pathSegmentsBetween(
-    params.pluginRootRealpath,
-    path.dirname(params.entrypointRealpath),
-  );
-  if (!originalSegments || !realpathSegments) {
-    return false;
-  }
-
-  // Validate both lexical and realpath parent chains. The lexical chain catches symlink tricks
-  // inside the plugin tree; the realpath chain catches world-writable resolved directories.
-  let originalDir = path.resolve(params.pluginRoot);
-  for (const [index, segment] of ["", ...originalSegments].entries()) {
-    if (segment) {
-      originalDir = path.join(originalDir, segment);
-    }
-    const stat = fs.lstatSync(originalDir);
-    if (index === 0 && stat.isSymbolicLink()) {
-      continue;
-    }
-    if (!stat.isDirectory() || stat.isSymbolicLink() || !isSecurePosixPathStat(stat)) {
-      return false;
-    }
-  }
-
-  let realpathDir = params.pluginRootRealpath;
-  for (const segment of ["", ...realpathSegments]) {
-    if (segment) {
-      realpathDir = path.join(realpathDir, segment);
-    }
-    const stat = fs.lstatSync(realpathDir);
-    if (!stat.isDirectory() || !isSecurePosixPathStat(stat)) {
-      return false;
-    }
-  }
-
-  return true;
-}
-
 function resolveNodeEntrypointArg(params: {
-  integration: PluginManifestSecretProviderIntegration;
+  args: readonly string[];
   pluginRoot: string;
   rejectHardlinks: boolean;
 }): string | undefined {
-  const entrypoint = params.integration.args?.[0];
-  if (!entrypoint || !isPluginRelativeEntrypoint(entrypoint)) {
-    return undefined;
-  }
-  let pluginRootRealpath: string;
-  try {
-    pluginRootRealpath = fs.realpathSync(params.pluginRoot);
-  } catch {
+  const entrypoint = params.args[0];
+  if (!entrypoint?.startsWith("./")) {
     return undefined;
   }
   const resolved = resolvePluginRelativePath(entrypoint, params.pluginRoot);
   if (!resolved) {
     return undefined;
   }
-  let stat: fs.Stats;
-  try {
-    stat = fs.lstatSync(resolved);
-  } catch {
-    return undefined;
-  }
-  if (!stat.isFile() || stat.isSymbolicLink()) {
-    return undefined;
-  }
-  if (params.rejectHardlinks && stat.nlink > 1) {
-    return undefined;
-  }
-  if (!isSecurePosixPathStat(stat)) {
-    return undefined;
+  if (isEmbeddedStandaloneModule(resolved)) {
+    return resolved;
   }
   try {
-    const realpath = fs.realpathSync(resolved);
-    if (!isPathInside(pluginRootRealpath, realpath)) {
+    const opened = openRootFileSync({
+      absolutePath: resolved,
+      rootPath: params.pluginRoot,
+      boundaryLabel: "plugin root",
+      rejectHardlinks: params.rejectHardlinks,
+      symlinks: process.platform === "win32" ? "follow-parents-within-root" : "reject",
+    });
+    if (!opened.ok) {
       return undefined;
     }
-    if (
-      !isSecurePluginEntrypointPath({
-        pluginRoot: params.pluginRoot,
-        pluginRootRealpath,
-        resolvedEntrypoint: resolved,
-        entrypointRealpath: realpath,
-      })
-    ) {
-      return undefined;
+    try {
+      if (!isSecurePosixPathStat(opened.stat)) {
+        return undefined;
+      }
+      // fs-safe owns alias admission; OpenClaw retains executable-parent trust policy.
+      if (process.platform !== "win32") {
+        for (let directory = path.dirname(opened.path); ; directory = path.dirname(directory)) {
+          const stat = fs.lstatSync(directory);
+          if (!stat.isDirectory() || !isSecurePosixPathStat(stat)) {
+            return undefined;
+          }
+          if (directory === opened.rootRealPath) {
+            break;
+          }
+        }
+      }
+      return opened.path;
+    } finally {
+      fs.closeSync(opened.fd);
     }
-    return realpath;
   } catch {
     return undefined;
   }
@@ -200,7 +127,7 @@ function materializeExecProviderConfig(
   env: NodeJS.ProcessEnv,
 ): ManualExecSecretProviderConfig | undefined {
   const pluginRoot = record.rootDir;
-  if (integration.command !== NODE_COMMAND_PLACEHOLDER) {
+  if (integration.command !== NODE_COMMAND_PLACEHOLDER || !integration.args) {
     return undefined;
   }
   const rejectHardlinks = shouldRejectHardlinkedPluginFiles({
@@ -209,26 +136,24 @@ function materializeExecProviderConfig(
     env,
   });
   const nodeEntrypoint = resolveNodeEntrypointArg({
-    integration,
+    args: integration.args,
     pluginRoot,
     rejectHardlinks,
   });
   if (!nodeEntrypoint) {
     return undefined;
   }
-  const args = integration.args
-    ?.map((arg, index) =>
-      nodeEntrypoint && index === 0 ? nodeEntrypoint : resolveArg(arg, pluginRoot),
-    )
+  const tailArgs = integration.args
+    .slice(1)
+    .map((arg) => resolveArg(arg, pluginRoot))
     .filter((arg): arg is string => arg !== undefined);
-  if (integration.args && args?.length !== integration.args.length) {
+  if (tailArgs.length !== integration.args.length - 1) {
     return undefined;
   }
-  const trustedDirs = withNodeCommandTrustedDir(integration.command, pluginRoot);
   return {
     source: "exec",
     command: process.execPath,
-    ...(args ? { args } : {}),
+    args: [...resolveRuntimeArgs(), nodeEntrypoint, ...tailArgs],
     ...(integration.timeoutMs !== undefined ? { timeoutMs: integration.timeoutMs } : {}),
     ...(integration.noOutputTimeoutMs !== undefined
       ? { noOutputTimeoutMs: integration.noOutputTimeoutMs }
@@ -239,7 +164,8 @@ function materializeExecProviderConfig(
     ...(integration.jsonOnly === false ? { jsonOnly: false } : {}),
     ...(integration.env ? { env: integration.env } : {}),
     ...(integration.passEnv ? { passEnv: integration.passEnv } : {}),
-    trustedDirs,
+    // The Node placeholder needs both the executable and plugin entrypoint roots.
+    trustedDirs: [...new Set([path.dirname(process.execPath), pluginRoot])],
   };
 }
 
@@ -270,24 +196,10 @@ function integrationDisplayName(
   );
 }
 
-function createPluginIntegrationProviderConfig(params: {
-  pluginId: string;
-  integrationId: string;
-}): PluginIntegrationSecretProviderConfig {
-  return {
-    source: "exec",
-    pluginIntegration: {
-      pluginId: params.pluginId,
-      integrationId: params.integrationId,
-    },
-  };
-}
-
 function isValidPluginIntegrationProviderId(value: string): boolean {
   return value.length > 0 && value.length <= PLUGIN_INTEGRATION_PROVIDER_ID_MAX_LENGTH;
 }
 
-/** Narrows a secret provider config to the plugin-integration exec shape. */
 export function isPluginIntegrationSecretProviderConfig(
   value: unknown,
 ): value is PluginIntegrationSecretProviderConfig {
@@ -309,7 +221,6 @@ export function isPluginIntegrationSecretProviderConfig(
 }
 
 /** Materializes an active trusted plugin secret-provider integration into an exec provider. */
-/** Resolves a trusted plugin secret-provider integration into executable provider config. */
 export function resolveSecretProviderIntegrationConfig(params: {
   manifestRegistry: Pick<PluginManifestRegistry, "plugins">;
   providerAlias: string;
@@ -395,10 +306,10 @@ export function listSecretProviderIntegrationPresets(params: {
         providerAlias,
         displayName: integrationDisplayName(record, integrationId, integration),
         ...(integration.description ? { description: integration.description } : {}),
-        providerConfig: createPluginIntegrationProviderConfig({
-          pluginId: record.id,
-          integrationId,
-        }),
+        providerConfig: {
+          source: "exec",
+          pluginIntegration: { pluginId: record.id, integrationId },
+        },
       });
     }
   }

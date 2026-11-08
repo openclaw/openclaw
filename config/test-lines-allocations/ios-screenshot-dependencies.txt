@@ -1,0 +1,2 @@
+# Package-only cleanup and trusted screenshot cache reuse/write boundaries.
+92

@@ -1,11 +1,11 @@
 import { retireSessionMcpRuntime } from "../../agents/agent-bundle-mcp-tools.js";
-import { SESSION_LIFECYCLE_CHANGED_ERROR_REASON } from "../../config/sessions/lifecycle.js";
+import { isSessionLifecycleChangedGatewayError } from "../../config/sessions/lifecycle.js";
 import { isCronSessionKey } from "../../routing/session-key.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import type { CronJob } from "../types.js";
 
 const gatewayCallRuntimeLoader = createLazyImportLoader(
-  () => import("../../gateway/call.runtime.js"),
+  () => import("../../agents/tools/in-process-gateway.js"),
 );
 
 export type CronRunSessionCleanupOutcome =
@@ -14,6 +14,31 @@ export type CronRunSessionCleanupOutcome =
   | "retired"
   | "survived"
   | "changed";
+
+export async function deleteCronSessionViaGateway(params: {
+  agentSessionKey: string;
+  sessionId: string;
+  lifecycleRevision?: string;
+  sessionUpdatedAt?: number;
+}): Promise<boolean> {
+  const { bindAgentToolGatewayRequest } = await gatewayCallRuntimeLoader.load();
+  const callGateway = bindAgentToolGatewayRequest({ hostedOnly: true });
+  const result = await callGateway<{ deleted?: boolean }>({
+    method: "sessions.delete",
+    params: {
+      key: params.agentSessionKey,
+      deleteTranscript: true,
+      emitLifecycleHooks: false,
+      expectedSessionId: params.sessionId,
+      expectedLifecycleRevision: params.lifecycleRevision,
+      expectedSessionUpdatedAt: params.sessionUpdatedAt,
+    },
+    // History archival can outlive a response deadline. Keep the guarded lifecycle
+    // request and its authority alive until deletion settles.
+    timeoutMs: null,
+  });
+  return result.deleted === true;
+}
 
 export async function cleanupCronRunSessionAfterRun(params: {
   job: Pick<CronJob, "deleteAfterRun" | "sessionTarget">;
@@ -29,22 +54,9 @@ export async function cleanupCronRunSessionAfterRun(params: {
   }
   params.beforeDelete?.();
   try {
-    const { callGateway } = await gatewayCallRuntimeLoader.load();
-    const result = await callGateway<{ deleted?: boolean }>({
-      method: "sessions.delete",
-      params: {
-        key: params.agentSessionKey,
-        deleteTranscript: true,
-        emitLifecycleHooks: false,
-        expectedSessionId: params.sessionId,
-        expectedLifecycleRevision: params.lifecycleRevision,
-        expectedSessionUpdatedAt: params.sessionUpdatedAt,
-      },
-      timeoutMs: 10_000,
-    });
-    return result.deleted === true ? "deleted" : "changed";
+    return (await deleteCronSessionViaGateway(params)) ? "deleted" : "changed";
   } catch (error) {
-    if (isSessionChangedGatewayError(error)) {
+    if (isSessionLifecycleChangedGatewayError(error)) {
       return "changed";
     }
     if (params.job.sessionTarget === "isolated") {
@@ -65,18 +77,4 @@ function shouldDeleteCronRunSessionAfterRun(params: {
   agentSessionKey: string;
 }): boolean {
   return params.job.deleteAfterRun === true && isCronSessionKey(params.agentSessionKey);
-}
-
-function isSessionChangedGatewayError(error: unknown): boolean {
-  if (!(error instanceof Error) || error.name !== "GatewayClientRequestError") {
-    return false;
-  }
-  const requestError = error as Error & { gatewayCode?: unknown; details?: unknown };
-  const details = requestError.details;
-  return (
-    requestError.gatewayCode === "INVALID_REQUEST" &&
-    typeof details === "object" &&
-    details !== null &&
-    (details as { reason?: unknown }).reason === SESSION_LIFECYCLE_CHANGED_ERROR_REASON
-  );
 }

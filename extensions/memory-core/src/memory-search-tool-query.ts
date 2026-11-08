@@ -1,16 +1,19 @@
-// Memory Core plugin module owns ranked search-window filtering and diagnostics.
-import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
-  formatMemoryIndexRebuildGuidance,
   resolveMemoryIndexIdentityDiagnostic,
+  readMemorySearchManagerStatus,
+  resolveMemoryIndexSearchDiagnostic,
+  MEMORY_SEARCH_DEADLINE_CONTROL,
   type MemoryIndexIdentityDiagnostic,
   type MemoryProviderStatus,
+  type MemorySearchDeadlineControl,
   type MemorySearchManager,
   type MemorySearchRuntimeDebug,
+  type MemorySearchResult,
   type MemorySource,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import type { OpenClawPluginToolContext } from "openclaw/plugin-sdk/plugin-entry";
+import { captureMemoryRebuildNotice } from "./memory-rebuild-notice.js";
 import { filterMemorySearchHitsBySessionVisibility } from "./session-search-visibility.js";
 import { buildMemorySearchUnavailableResult } from "./tools.shared.js";
 
@@ -20,19 +23,18 @@ export function buildPausedMemoryIndexUnavailableResult(
   diagnostic: MemoryIndexIdentityDiagnostic,
   params: {
     agentId: string;
-    status: Pick<MemoryProviderStatus, "provider" | "requestedProvider">;
+    status: Pick<
+      MemoryProviderStatus,
+      "provider" | "requestedProvider" | "lastSyncError" | "custom"
+    >;
   },
 ) {
-  const cause =
-    diagnostic.owner === "configuration"
-      ? `the current memory configuration no longer matches the index (${diagnostic.reason})`
-      : diagnostic.code === "metadata_missing"
-        ? `the memory index metadata is missing (${diagnostic.reason}); no configuration change is needed`
-        : `this OpenClaw version changed the memory index format (${diagnostic.reason}); no configuration change is needed`;
-  return buildMemorySearchUnavailableResult(diagnostic.reason, {
-    warning: `Tell the user: memory search is paused because ${cause}.`,
-    action: `Tell the user to run: ${formatMemoryIndexRebuildGuidance(params.status, params.agentId)}`,
-  });
+  const { error, warning, action } = resolveMemoryIndexSearchDiagnostic(
+    diagnostic,
+    params.status,
+    params.agentId,
+  );
+  return buildMemorySearchUnavailableResult(error, { warning, action });
 }
 
 type ManagerState = { manager: MemorySearchManager; managerMs?: number };
@@ -56,26 +58,20 @@ type MemorySearchToolVisibility = {
   sandboxed: boolean;
 };
 
-function isClosedMemoryStoreError(error: unknown): boolean {
-  const message = formatErrorMessage(error).toLowerCase();
-  return (
-    message.includes("database is not open") ||
-    message.includes("database connection is not open") ||
-    message.includes("database handle is closed") ||
-    message.includes("memory search manager is closed")
-  );
-}
-
 export async function executeMemorySearchToolQuery(params: {
   initialManager: ManagerState;
-  refreshManager: () => Promise<ManagerState | null>;
   query: MemorySearchToolQuery;
   visibility: MemorySearchToolVisibility;
   signal: AbortSignal;
+  deadlineControl?: MemorySearchDeadlineControl;
+  onRebuildNotice?: (readWarning: () => string | undefined) => void;
+  onPartialResults?: (
+    result: Awaited<ReturnType<typeof finalizeMemorySearchToolQuery>> | null,
+  ) => void;
 }) {
   const startedAt = Date.now();
   const runtimeDebug: MemorySearchRuntimeDebug[] = [];
-  let active = params.initialManager;
+  const active = params.initialManager;
   const { query, signal, visibility } = params;
   // Product recall may index transcripts without adding them to ordinary model search.
   // Explicit corpus selection is authorized by the tool owner before this point.
@@ -88,21 +84,26 @@ export async function executeMemorySearchToolQuery(params: {
           ? query.indexedSources
           : query.defaultSources
         : undefined);
+  const queryContext = {
+    query,
+    visibility,
+    searchSources,
+    startedAt,
+  };
 
   const searchOnce = async () => {
-    const allowedSources = searchSources ? new Set(searchSources) : undefined;
     const searchesSessions = searchSources?.includes("sessions") === true;
-    const indexedCandidateCount = searchesSessions
-      ? (active.manager.status().sourceCounts ?? [])
-          .filter((entry) => allowedSources?.has(entry.source))
-          .reduce((total, entry) => total + entry.chunks, 0)
-      : query.resultLimit;
-    // A zero-count index can populate during first-search bootstrap. Reserve the
-    // full bounded window so that bootstrap cannot recreate post-filter starvation.
-    const availableCandidates =
-      indexedCandidateCount > 0 ? indexedCandidateCount : MEMORY_SEARCH_POST_FILTER_MAX_CANDIDATES;
+    if (params.onRebuildNotice) {
+      params.onRebuildNotice(
+        captureMemoryRebuildNotice(
+          await readMemorySearchManagerStatus(active.manager, { includeCounts: false }),
+        ),
+      );
+    }
+    // Search already bounds available hits; no inventory scan is needed before
+    // reserving room for session visibility filtering or first-search bootstrap.
     const searchWindow = searchesSessions
-      ? Math.min(MEMORY_SEARCH_POST_FILTER_MAX_CANDIDATES, availableCandidates)
+      ? MEMORY_SEARCH_POST_FILTER_MAX_CANDIDATES
       : query.resultLimit;
     const candidates = await active.manager.search(query.text, {
       maxResults: searchWindow,
@@ -110,31 +111,86 @@ export async function executeMemorySearchToolQuery(params: {
       sessionKey: query.sessionKey,
       activeProjectKeys: query.activeProjectKeys ? [...query.activeProjectKeys] : undefined,
       signal,
+      ...(params.deadlineControl
+        ? { [MEMORY_SEARCH_DEADLINE_CONTROL]: params.deadlineControl }
+        : {}),
       onDebug: (debug) => runtimeDebug.push(debug),
+      onPartialResults: params.onPartialResults
+        ? (partialCandidates) => {
+            params.onPartialResults?.(null);
+            // Session visibility can change while semantic retrieval waits. A deadline
+            // cannot reuse earlier session authority, so retain only durable memory files.
+            const memoryCandidates = partialCandidates?.filter(
+              (entry) => entry.source === "memory",
+            );
+            if (!memoryCandidates?.length || signal.aborted) {
+              return;
+            }
+            void finalizeMemorySearchToolQuery({
+              active,
+              searched: { candidates: memoryCandidates, searchWindow },
+              ...queryContext,
+              runtimeDebug: [...runtimeDebug],
+              effectiveMode: "keyword-only",
+            }).then(
+              (result) => {
+                if (!signal.aborted) {
+                  params.onPartialResults?.(result.pausedIndexIdentity ? null : result);
+                }
+              },
+              () => {},
+            );
+          }
+        : undefined,
       ...(searchSources ? { sources: searchSources } : {}),
     });
-    return { candidates, searchWindow };
+    return {
+      searched: { candidates, searchWindow },
+      status: await readMemorySearchManagerStatus(active.manager, { includeCounts: false }),
+    };
   };
 
-  let searched: Awaited<ReturnType<typeof searchOnce>>;
-  try {
-    searched = await searchOnce();
-  } catch (error) {
-    if (!isClosedMemoryStoreError(error)) {
-      throw error;
-    }
-    const refreshed = await params.refreshManager();
-    if (!refreshed) {
-      throw error;
-    }
-    active = refreshed;
-    searched = await searchOnce();
-  }
+  const searched = await searchOnce();
 
-  const status = active.manager.status();
+  return await finalizeMemorySearchToolQuery({
+    active,
+    ...searched,
+    ...queryContext,
+    runtimeDebug,
+  });
+}
+
+async function finalizeMemorySearchToolQuery(params: {
+  active: ManagerState;
+  status?: MemoryProviderStatus;
+  searched: { candidates: MemorySearchResult[]; searchWindow: number };
+  query: MemorySearchToolQuery;
+  visibility: MemorySearchToolVisibility;
+  searchSources: MemorySource[] | undefined;
+  runtimeDebug: MemorySearchRuntimeDebug[];
+  startedAt: number;
+  effectiveMode?: string;
+}) {
+  const { active, searched, query, visibility, searchSources, runtimeDebug, startedAt } = params;
+  const status =
+    params.status ??
+    (await readMemorySearchManagerStatus(active.manager, { includeCounts: false }));
   const pausedIndexIdentity = resolveMemoryIndexIdentityDiagnostic(status);
-  if (pausedIndexIdentity) {
+  // A pending format upgrade on an otherwise matching corpus degrades to
+  // keyword-only results instead of pausing memory search; every other
+  // mismatch still withholds all candidates. Keyword results still need a
+  // usable FTS index — the manager's fallback requires the same, so without
+  // it there is no retrieval path and the tool must keep the paused
+  // diagnostic instead of reporting a successful empty search.
+  const formatUpgradeKeywordOnly =
+    pausedIndexIdentity?.status === "mismatched" &&
+    pausedIndexIdentity.owner === "openclaw" &&
+    (pausedIndexIdentity.chunkingVersionOnly === true ||
+      pausedIndexIdentity.lexicalCompatible === true) &&
+    Boolean(status.fts?.enabled && status.fts?.available);
+  if (pausedIndexIdentity && !formatUpgradeKeywordOnly) {
     return {
+      searchStartedAt: startedAt,
       status,
       rawResults: [],
       pausedIndexIdentity,
@@ -155,24 +211,22 @@ export async function executeMemorySearchToolQuery(params: {
     const allowedSources = new Set(searchSources);
     filtered = filtered.filter((hit) => allowedSources.has(hit.source));
   }
-  if (query.requestedCorpus === "sessions") {
-    filtered = filtered.filter((hit) => hit.source === "sessions");
-  } else if (query.requestedCorpus === "memory") {
-    filtered = filtered.filter((hit) => hit.source === "memory");
+  if (query.requestedCorpus === "sessions" || query.requestedCorpus === "memory") {
+    filtered = filtered.filter((hit) => hit.source === query.requestedCorpus);
   }
 
-  const postFilterHits = filtered.length;
   const rawResults = filtered.slice(0, query.resultLimit);
   const latestDebug = runtimeDebug.at(-1);
   return {
+    searchStartedAt: startedAt,
     status,
     rawResults,
     pausedIndexIdentity: undefined,
-    searchMode: latestDebug?.effectiveMode,
+    searchMode: params.effectiveMode ?? latestDebug?.effectiveMode,
     debug: {
       backend: status.backend,
       configuredMode: latestDebug?.configuredMode,
-      effectiveMode: "n/a",
+      effectiveMode: params.effectiveMode ?? "n/a",
       fallback: latestDebug?.fallback,
       managerMs: active.managerMs,
       searchMs: Math.max(0, Date.now() - startedAt),
@@ -180,7 +234,7 @@ export async function executeMemorySearchToolQuery(params: {
         ?.embeddingBootstrap,
       hits: rawResults.length,
       candidateHits: searched.candidates.length,
-      withheldHits: Math.max(0, searched.candidates.length - postFilterHits),
+      withheldHits: Math.max(0, searched.candidates.length - filtered.length),
       searchWindow: searched.searchWindow,
     },
   };

@@ -56,7 +56,6 @@ final class CuaDriverHostCoordinator {
             await MacNodeModeCoordinator.shared.prepareForCuaDaemonStop()
         })
 
-    private static let maximumRestartAttempts = 5
     private static let restartDelays: [Duration] = [
         .seconds(1),
         .seconds(2),
@@ -129,16 +128,10 @@ final class CuaDriverHostCoordinator {
         self.beforeDaemonStop = beforeDaemonStop
 
         guard observeNotifications else { return }
-        notificationCenter.addObserver(
-            self,
-            selector: #selector(self.permissionsMayHaveChanged),
-            name: .openclawPermissionsChanged,
-            object: nil)
-        notificationCenter.addObserver(
-            self,
-            selector: #selector(self.permissionsMayHaveChanged),
-            name: NSApplication.didBecomeActiveNotification,
-            object: nil)
+        for name in [Notification.Name.openclawPermissionsChanged, NSApplication.didBecomeActiveNotification] {
+            notificationCenter.addObserver(
+                self, selector: #selector(self.permissionsMayHaveChanged), name: name, object: nil)
+        }
     }
 
     deinit {
@@ -155,12 +148,11 @@ final class CuaDriverHostCoordinator {
         let effectiveEnabled = enabled && self.enablementAllowed()
         let wasEnabled = self.desiredEnabled
         self.desiredEnabled = effectiveEnabled
-        if effectiveEnabled, !wasEnabled {
-            self.restartAttempt = 0
-        }
         if !effectiveEnabled {
             self.restartTask?.cancel()
             self.restartTask = nil
+        }
+        if !effectiveEnabled || !wasEnabled {
             self.restartAttempt = 0
         }
         await self.enqueueReconciliation(restart: false).value
@@ -293,12 +285,8 @@ final class CuaDriverHostCoordinator {
         self.stoppingGenerations.insert(child.generation)
         child.process.closeLiveness()
         await Self.waitUntilStopped(child.process, timeout: .seconds(2))
-        if child.process.isRunning {
-            child.process.terminate()
-            await Self.waitUntilStopped(child.process, timeout: .seconds(1))
-        }
-        if child.process.isRunning {
-            child.process.forceKill()
+        for stop in [child.process.terminate, child.process.forceKill] where child.process.isRunning {
+            stop()
             await Self.waitUntilStopped(child.process, timeout: .seconds(1))
         }
         if self.runningChild?.generation == child.generation {
@@ -331,7 +319,7 @@ final class CuaDriverHostCoordinator {
     private func scheduleRestartIfNeeded() {
         guard self.desiredEnabled,
               self.restartTask == nil,
-              self.restartAttempt < Self.maximumRestartAttempts
+              self.restartAttempt < Self.restartDelays.count
         else { return }
         let delay = Self.restartDelays[self.restartAttempt]
         self.restartAttempt += 1
@@ -530,19 +518,14 @@ final class CuaDriverHostCoordinator {
               UInt64(status.st_ino) == directory.inode
         else { return }
 
-        var socketStatus = stat()
-        if lstat(directory.socketPath, &socketStatus) == 0,
-           socketStatus.st_mode & mode_t(S_IFMT) == mode_t(S_IFSOCK),
-           socketStatus.st_uid == geteuid()
-        {
-            _ = Darwin.unlink(directory.socketPath)
-        }
-        var pidStatus = stat()
-        if lstat(directory.pidFilePath, &pidStatus) == 0,
-           pidStatus.st_mode & mode_t(S_IFMT) == mode_t(S_IFREG),
-           pidStatus.st_uid == geteuid()
-        {
-            _ = Darwin.unlink(directory.pidFilePath)
+        for (path, kind) in [(directory.socketPath, S_IFSOCK), (directory.pidFilePath, S_IFREG)] {
+            var leaf = stat()
+            if lstat(path, &leaf) == 0,
+               leaf.st_mode & mode_t(S_IFMT) == mode_t(kind),
+               leaf.st_uid == geteuid()
+            {
+                _ = Darwin.unlink(path)
+            }
         }
         _ = Darwin.rmdir(directory.url.path)
     }

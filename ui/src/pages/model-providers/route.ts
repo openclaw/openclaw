@@ -1,9 +1,7 @@
-import { definePage, type RouteLoaderOptions } from "@openclaw/uirouter";
-import { html } from "lit";
-import { routePageSpec } from "../../app-route-paths.ts";
+import type { RouteLoaderOptions } from "@openclaw/uirouter";
+import { defineSolidPage } from "../../app-route-types.tsx";
 import type { ApplicationContext } from "../../app/context.ts";
-import { normalizeAgentId } from "../../lib/sessions/session-key.ts";
-import type { ModelProvidersData } from "./load.ts";
+import type { ModelProvidersData, ModelProvidersCatalogData } from "./load.ts";
 
 export type ModelProvidersRouteData = {
   /** Gateway source that owned the route preload. */
@@ -11,20 +9,32 @@ export type ModelProvidersRouteData = {
   /** Exact Gateway snapshot captured before the preload began. */
   gatewaySnapshot: ApplicationContext["gateway"]["snapshot"];
   data: ModelProvidersData;
+  /** Catalog discovery can settle after the authoritative credential rows. */
+  catalog?: { promise: Promise<ModelProvidersCatalogData>; controller: AbortController };
   /** Client the loader fetched from; null when it ran disconnected. */
   client: ApplicationContext["gateway"]["snapshot"]["client"];
   /** Concrete agent whose credential store populated the auth snapshot. */
   agentId: string | null;
+  selectionIntentRevision: number;
+  /** An explicit connection entry from a saved setup link. */
+  connect?: boolean;
+  provider?: string;
 };
 
 async function loadModelProvidersRouteData(
-  context: ApplicationContext,
+  context: Pick<ApplicationContext, "gateway" | "agents" | "settingsAgentSelection">,
   options: RouteLoaderOptions,
 ): Promise<ModelProvidersRouteData> {
+  const search = new URLSearchParams(options.location.search);
+  const connect = search.get("connect") === "1";
+  const provider = search.get("provider")?.trim() ?? "";
   const gateway = context.gateway;
   const gatewaySnapshot = gateway.snapshot;
-  let agentId = context.agentSelection.state.selectedId;
-  const { EMPTY_MODEL_PROVIDERS_DATA, loadModelProvidersData } = await import("./load.ts");
+  const selection = context.settingsAgentSelection;
+  const selectionIntentRevision = selection.intentRevision;
+  const owner = { gateway, gatewaySnapshot, selectionIntentRevision, connect, provider };
+  let agentId = selection.state.selectedId;
+  const { EMPTY_MODEL_PROVIDERS_DATA, startModelProvidersData } = await import("./load.ts");
   const client = gatewaySnapshot.phase === "connected" ? gatewaySnapshot.client : null;
   // Both awaits can outlive the route or its Gateway/agent owner. Metadata-only
   // snapshot publications preserve the client and hello, so remain valid.
@@ -35,39 +45,48 @@ async function loadModelProvidersRouteData(
       current.phase === "connected" &&
       current.client === gatewaySnapshot.client &&
       current.hello === gatewaySnapshot.hello &&
-      context.agentSelection.state.selectedId === agentId
+      selection.intentRevision === selectionIntentRevision &&
+      selection.state.selectedId === agentId
     );
   };
-  if (!client || !isCurrent()) {
-    return { gateway, gatewaySnapshot, data: EMPTY_MODEL_PROVIDERS_DATA, client: null, agentId };
-  }
-  if (!agentId) {
-    const roster = await context.agents.ensureList();
-    // The roster may initialize selection; never adopt an unrelated user switch.
-    agentId = roster ? normalizeAgentId(roster.defaultId) : null;
-  }
-  if (!agentId || !isCurrent()) {
-    return { gateway, gatewaySnapshot, data: EMPTY_MODEL_PROVIDERS_DATA, client: null, agentId };
+  if (client && isCurrent()) {
+    if (!agentId) {
+      await context.agents.ensureList();
+      // The selection owner validates pending cold-link intent against the roster.
+      agentId = selection.state.selectedId;
+    }
+    if (agentId && isCurrent()) {
+      const controller = new AbortController();
+      const read = startModelProvidersData(client, {
+        agentId,
+        signal: AbortSignal.any([options.signal, controller.signal]),
+      });
+      return {
+        ...owner,
+        data: { ...EMPTY_MODEL_PROVIDERS_DATA, ...(await read.auth) },
+        catalog: { promise: read.catalog, controller },
+        client,
+        agentId,
+      };
+    }
   }
   return {
-    gateway,
-    gatewaySnapshot,
-    data: await loadModelProvidersData(client, { agentId, signal: options.signal }),
-    client,
+    ...owner,
+    data: EMPTY_MODEL_PROVIDERS_DATA,
+    client: null,
     agentId,
   };
 }
 
-export const page = definePage({
-  ...routePageSpec("model-providers"),
-  loader: loadModelProvidersRouteData,
-  component: () =>
-    import("./model-providers-page.ts").then(() => ({
-      header: true,
-      render: (data: ModelProvidersRouteData | undefined, loaderPending = false) =>
-        html`<openclaw-model-providers-page
-          .routeData=${data}
-          .loaderPending=${loaderPending}
-        ></openclaw-model-providers-page>`,
-    })),
-});
+export const page = defineSolidPage<
+  "model-providers",
+  Parameters<typeof loadModelProvidersRouteData>[0],
+  ModelProvidersRouteData
+>(
+  "model-providers",
+  () => import("./model-providers-page.tsx").then((module) => module.ModelProvidersPage),
+  {
+    loaderDeps: (_context, location) => location.search,
+    loader: loadModelProvidersRouteData,
+  },
+);

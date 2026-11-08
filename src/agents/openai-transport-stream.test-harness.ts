@@ -1,8 +1,8 @@
 // Verifies OpenAI-compatible streaming payloads, failures, and transport wrapping.
 import type { MutableAssistantOutput } from "@openclaw/ai/transports";
 import type { Api, Model } from "openclaw/plugin-sdk/llm";
-import { expect } from "vitest";
 import { testing } from "./openai-transport-stream.test-support.js";
+import { createZeroUsageFixture } from "./test-helpers/usage-fixtures.js";
 
 export const buildOpenAIResponsesParams: typeof testing.buildOpenAIResponsesParams =
   testing.buildOpenAIResponsesParams;
@@ -15,14 +15,6 @@ type ResponsesApi = Extract<
   Api,
   "openai-responses" | "openai-chatgpt-responses" | "azure-openai-responses"
 >;
-
-export type CapturedStreamEvent = {
-  type?: string;
-  contentIndex?: number;
-  delta?: string;
-  content?: string;
-  partial?: unknown;
-};
 
 export function makeCompletionsModel(
   overrides: Partial<Model<"openai-completions">> = {},
@@ -69,14 +61,7 @@ export function createAssistantOutput(model: Model<"openai-completions">): Mutab
     api: model.api,
     provider: model.provider,
     model: model.id,
-    usage: {
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-      totalTokens: 0,
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-    },
+    usage: createZeroUsageFixture(),
     stopReason: "stop",
     timestamp: Date.now(),
   };
@@ -91,14 +76,7 @@ export function createResponsesAssistantOutput(
     api: model.api,
     provider: model.provider,
     model: model.id,
-    usage: {
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-      totalTokens: 0,
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-    },
+    usage: createZeroUsageFixture(),
     stopReason: "stop",
     timestamp: Date.now(),
   };
@@ -132,14 +110,4 @@ export async function* streamChunks(chunks: readonly unknown[]): AsyncGenerator<
   }
 }
 
-export function expectRecordFields(record: unknown, expected: Record<string, unknown>) {
-  // Shared assertion helper for parsed transport payload/event records.
-  if (!record || typeof record !== "object") {
-    throw new Error("Expected record");
-  }
-  const actual = record as Record<string, unknown>;
-  for (const [key, value] of Object.entries(expected)) {
-    expect(actual[key]).toEqual(value);
-  }
-  return actual;
-}
+export { expectObjectFields as expectRecordFields } from "../test-utils/mock-call-assertions.js";

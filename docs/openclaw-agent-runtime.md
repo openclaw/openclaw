@@ -67,11 +67,10 @@ Delete those paths for a full reset. Narrower resets:
 Legacy `auth-profiles.json` files are no longer read at runtime;
 `openclaw doctor --fix` imports them into the SQLite store.
 
-## References
-
-- [Testing](/help/testing)
-- [Getting Started](/start/getting-started)
+<a id="references" />
 
 ## Related
 
 - [OpenClaw agent runtime architecture](/agent-runtime-architecture)
+- [Testing](/help/testing)
+- [Getting Started](/start/getting-started)

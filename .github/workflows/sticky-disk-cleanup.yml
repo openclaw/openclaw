@@ -34,7 +34,7 @@ concurrency:
 jobs:
   delete:
     if: github.repository == 'openclaw/openclaw' && github.ref == 'refs/heads/main' && inputs.confirm
-    runs-on: ${{ inputs.architecture == 'arm64' && 'blacksmith-16vcpu-ubuntu-2404-arm' || 'blacksmith-4vcpu-ubuntu-2404' }}
+    runs-on: ${{ inputs.architecture == 'arm64' && 'blacksmith-16vcpu-ubuntu-2404-arm' || 'blacksmith-2vcpu-ubuntu-2404' }}
     timeout-minutes: 10
     steps:
       - name: Checkout protected manifest
@@ -43,6 +43,12 @@ jobs:
           # A rerun keeps its original workflow_dispatch SHA. Read the latest
           # protected manifest so removing an entry revokes deletion authority.
           ref: refs/heads/main
+
+      - name: Setup supported Node runtime
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "24.22.1"
+          package-manager-cache: false
 
       - name: Validate exact retired key
         env:

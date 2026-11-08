@@ -12,7 +12,7 @@ working chat session.
 
 ## What you need
 
-- **Node.js 22.22.3+, 24.15+, or 25.9+** (Node 26 is the recommended runtime)
+- **Node.js 24.16.0+ on 24.x, or 26.1.0+** (Node 26 is recommended; use 24.22.1+/26.12.1+ for the security fixes)
 - **An existing Claude Code or Codex CLI login, or a provider API key** — onboarding can reuse it
 
 <Tip>
@@ -34,12 +34,16 @@ usable AI access is already available: OpenClaw
 finds an existing Claude Code or Codex CLI login or API key, verifies it with a
 real completion, saves the config, and opens the web dashboard.
 
-The Gateway runs in this terminal until you press **Ctrl+C**; your config stays
+Quick start then asks **Keep OpenClaw running in the background?** Yes installs
+a copy of the same OpenClaw version under `~/.openclaw` and runs the Gateway as a
+background service from it, so clearing the npx cache does not stop it. No keeps
+the Gateway in this terminal until you press **Ctrl+C**; your config stays
 saved. If no detected route works, onboarding opens manual provider setup.
 Choose **Custom setup** to walk through all guided options instead.
 
 To keep the Gateway running in the background later, install the CLI below and
-run `openclaw gateway install`. Run `openclaw` for the TUI or
+run `openclaw gateway install`, then `openclaw gateway start` to wait until it
+is ready. Run `openclaw` for the TUI or
 `openclaw dashboard` to reopen the web UI.
 
 ## Quick setup
@@ -70,14 +74,36 @@ run `openclaw gateway install`. Run `openclaw` for the TUI or
 
   </Step>
   <Step title="Complete onboarding">
-    The installer starts the onboarding wizard automatically. Choose **Quick
-    start** to reuse detected AI access and open the dashboard, or **Custom
-    setup** for the full guided flow. Provider sign-in and optional setup can
-    take longer; return later with `openclaw configure` for additional settings.
-    Quick start keeps the Gateway in the foreground. For background operation,
-    stop it with **Ctrl+C**, then run `openclaw gateway install`.
+    The installer starts the guided onboarding wizard automatically. Choose
+    **Quick start** to reuse detected AI access and open the dashboard, or
+    **Custom setup** for the full guided flow. Provider sign-in and optional
+    setup can take longer. Return later with `openclaw configure` for
+    additional settings. `openclaw onboard --classic` opens the classic
+    step-by-step wizard instead.
 
     See [Onboarding (CLI)](/start/wizard) for the full reference.
+
+  </Step>
+  <Step title="Install the Gateway service">
+    Quick start asks **Keep OpenClaw running in the background?** and installs
+    the service when you accept, so skip this step in that case. Otherwise, press
+    **Ctrl+C** to stop the foreground Gateway, then install the service and wait
+    for it to be ready:
+
+    ```bash
+    openclaw gateway install
+    openclaw gateway start
+    ```
+
+    This installs a LaunchAgent on macOS, a systemd user unit on Linux and
+    WSL2, or a Scheduled Task on native Windows (with a per-user
+    Startup-folder login item as the fallback if task creation is denied).
+    Your config stays saved across the stop and the install.
+
+    `gateway install` returns once the service is registered, while the
+    Gateway may still be starting. `gateway start` waits until the Gateway
+    passes its health and readiness checks; it does not restart a Gateway that
+    is already running.
 
   </Step>
   <Step title="Verify the Gateway is running">
@@ -184,5 +210,7 @@ Full reference: [Environment variables](/help/environment).
 - [Install overview](/install)
 - [Channels overview](/channels)
 - [Setup](/start/setup)
+- [Personal assistant setup](/start/openclaw) - end-to-end guide to a dedicated number that behaves like an always-on assistant
 - [Triage](/cli/triage)
 - [Troubleshooting](/help/troubleshooting)
+- [Get support](/help/support) - official OpenClaw support and reporting routes

@@ -1,566 +1,433 @@
-import { EventEmitter } from "node:events";
-import type { ChannelGatewayContext } from "openclaw/plugin-sdk/channel-contract";
+import { ChildProcess } from "node:child_process";
+import { setImmediate, setTimeout } from "node:timers/promises";
+import type {
+  ChannelInboundEventRunnerParams,
+  InboundReplyDispatchResult,
+} from "openclaw/plugin-sdk/channel-inbound";
+import { createStartAccountContext } from "openclaw/plugin-sdk/channel-test-helpers";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import { createChannelReplayGuard } from "openclaw/plugin-sdk/persistent-dedupe";
+import * as replay from "openclaw/plugin-sdk/persistent-dedupe";
 import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import {
+  killProcessTree,
+  spawnOomScoreAdjusted as spawn,
+} from "openclaw/plugin-sdk/process-runtime";
 import {
   resolvePreferredOpenClawTmpDir,
   tempWorkspaceSync,
   type TempWorkspaceSync,
 } from "openclaw/plugin-sdk/temp-path";
-import { postRawWebhook } from "openclaw/plugin-sdk/test-env";
-import { withTimeout } from "openclaw/plugin-sdk/text-utility-runtime";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import type { ResolvedRaftAccount } from "./accounts.js";
+import { createFixtureLifetime, postRawWebhook } from "openclaw/plugin-sdk/test-env";
+import { awaitGateBeforeSettlement, withinTest } from "openclaw/plugin-sdk/test-fixtures";
+import { afterEach, expect, it, vi } from "vitest";
 import { startRaftGatewayAccount } from "./gateway.js";
 import { dispatchRaftWake } from "./inbound.js";
 
-const processRuntimeMocks = vi.hoisted(() => ({
-  killProcessTree: vi.fn(),
-}));
-
 vi.mock("openclaw/plugin-sdk/process-runtime", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/process-runtime")>()),
-  killProcessTree: processRuntimeMocks.killProcessTree,
+  killProcessTree: vi.fn(),
+  spawnOomScoreAdjusted: vi.fn(),
 }));
 
-class FakeBridge extends EventEmitter {
-  pid = 4242;
-  readonly started = createDeferred<{ endpoint: string; token: string }>();
+const tempWorkspaces: TempWorkspaceSync[] = [];
+type WakeEvent = { accountId: string; key: string };
+type Scenario = ReturnType<typeof createScenario>;
+const scenarios: Scenario[] = [];
 
-  spawn = (params: { endpoint: string; token: string }) => {
-    this.started.resolve(params);
-    return this;
+function createScenario() {
+  const lifetime = createFixtureLifetime();
+  const cancellation = new AbortController();
+  const retirement = new Error("Raft fixture retired");
+  const releases: (() => void)[] = [];
+  let retired = false;
+  const assertActive = () => {
+    if (retired) {
+      throw retirement;
+    }
+  };
+  return {
+    lifetime,
+    assertActive,
+    wait: <T>(pending: Promise<T>) => lifetime.track(withinTest(pending, cancellation.signal)),
+    onRetire: (release: () => void) => {
+      assertActive();
+      releases.push(release);
+    },
+    retire: async () => {
+      retired = true;
+      cancellation.abort(retirement);
+      const results = await Promise.allSettled(releases.map(async (release) => release()));
+      const failures = results.flatMap((result) =>
+        result.status === "rejected" ? [result.reason] : [],
+      );
+      if (failures.length) {
+        throw new AggregateError(failures, "Raft fixture retirement failed");
+      }
+    },
   };
 }
 
-const tempWorkspaces: TempWorkspaceSync[] = [];
+function runScenario(body: (scope: Scenario) => Promise<void>) {
+  const scope = createScenario();
+  scenarios.push(scope);
+  return scope.lifetime.run(() => {
+    scope.assertActive();
+    return body(scope);
+  });
+}
 
-function createContext(accountId = "default") {
-  const status = {
-    accountId,
-    running: false,
-    lastStartAt: null,
-    lastStopAt: null,
-    lastError: null,
-  };
-  const run = vi.fn(
-    async (params: {
-      raw: unknown;
-      adapter: {
-        ingest: (raw: unknown) => {
-          id: string;
-          timestamp: number;
-          rawText: string;
-          textForAgent: string;
-          textForCommands: string;
-        };
-        resolveTurn: (input: {
-          id: string;
-          timestamp: number;
-          rawText: string;
-          textForAgent: string;
-          textForCommands: string;
-        }) => Promise<{
-          delivery: {
-            deliver: () => Promise<{ visibleReplySent: false }>;
-          };
-        }>;
-      };
-    }) => {
-      const input = params.adapter.ingest(params.raw);
-      const turn = await params.adapter.resolveTurn(input);
-      await turn.delivery.deliver();
-    },
-  );
+function createContext(accountId = "default", stateDir?: string) {
+  const controller = new AbortController();
+  const run = vi
+    .fn<
+      (
+        params: ChannelInboundEventRunnerParams<unknown>,
+      ) => Promise<InboundReplyDispatchResult<unknown>>
+    >()
+    .mockResolvedValue({ admission: { kind: "handled", reason: "fixture" }, dispatched: false });
   const buildContext = vi.fn(() => ({}));
-  const ctx = {
-    cfg: {},
-    accountId,
-    account: {
-      accountId,
-      name: null,
-      enabled: true,
-      configured: true,
-      profile: "openclaw",
-    },
-    runtime: {},
-    abortSignal: new AbortController().signal,
-    log: {
-      info: vi.fn(),
-      warn: vi.fn(),
-      error: vi.fn(),
-    },
-    getStatus: () => status,
-    setStatus: (next: typeof status & Record<string, unknown>) => {
-      Object.assign(status, next);
-    },
+  const ctx = createStartAccountContext({
+    account: { accountId, enabled: true, profile: "openclaw", configured: true, name: undefined },
+    abortSignal: controller.signal,
+  });
+  const route = { agentId: "main", sessionKey: `agent:main:raft:${accountId}` };
+  const resolveAgentRoute = vi.fn(() => route);
+  Object.assign(ctx, {
     channelRuntime: {
-      routing: {
-        resolveAgentRoute: vi.fn(() => ({
-          agentId: "main",
-          sessionKey: `agent:main:raft:${accountId}`,
-        })),
-      },
-      inbound: {
-        run,
-        buildContext,
-      },
-      session: {
-        resolveStorePath: vi.fn(() => "/tmp/openclaw-agent.sqlite"),
-        recordInboundSession: vi.fn(),
-      },
-      reply: {
-        dispatchReplyWithBufferedBlockDispatcher: vi.fn(),
-      },
+      routing: { resolveAgentRoute },
+      inbound: { run, buildContext },
     },
-  };
+  });
   return {
-    ctx: ctx as unknown as ChannelGatewayContext<ResolvedRaftAccount>,
-    controller: new AbortController(),
+    ctx,
+    controller,
     run,
     buildContext,
-    wakeDedupe: createChannelReplayGuard<{ accountId: string; key: string }>({
-      dedupe: { ttlMs: 0, memoryMaxSize: 10_000 },
+    route,
+    resolveAgentRoute,
+    wakeDedupe: replay.createChannelReplayGuard<WakeEvent>({
+      dedupe: stateDir
+        ? {
+            ttlMs: 24 * 60 * 60 * 1000,
+            memoryMaxSize: 1_000,
+            pluginId: "raft",
+            namespacePrefix: "raft-wake-dedupe",
+            stateMaxEntries: 10_000,
+            env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
+          }
+        : { ttlMs: 0, memoryMaxSize: 10_000 },
       buildReplayKey: (event) => event.key,
       namespace: (event) => event.accountId,
     }),
   };
 }
 
-function createPersistentWakeDedupe(stateDir: string) {
-  return createChannelReplayGuard<{ accountId: string; key: string }>({
-    dedupe: {
-      ttlMs: 24 * 60 * 60 * 1000,
-      memoryMaxSize: 1_000,
-      pluginId: "raft",
-      namespacePrefix: "raft-wake-dedupe",
-      stateMaxEntries: 10_000,
-      env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
-    },
-    buildReplayKey: (event) => event.key,
-    namespace: (event) => event.accountId,
-  });
-}
-
-afterEach(() => {
-  processRuntimeMocks.killProcessTree.mockReset();
-  resetPluginStateStoreForTests();
-  for (const workspace of tempWorkspaces.splice(0)) {
-    workspace.cleanup();
-  }
-  vi.restoreAllMocks();
-});
-
-describe("Raft wake gateway", () => {
-  it("marks the internal wake path explicitly unsupported", async () => {
-    const { ctx, buildContext } = createContext();
-    await dispatchRaftWake({ ctx });
-    expect(buildContext).toHaveBeenCalledWith(
-      expect.objectContaining({ channelIngress: "unsupported" }),
-    );
-  });
-  it("keeps a disabled account quiescent until shutdown", async () => {
-    const { ctx, controller, wakeDedupe } = createContext();
-    Object.defineProperty(ctx, "abortSignal", { value: controller.signal });
-    Object.defineProperty(ctx, "account", {
-      value: {
-        ...ctx.account,
-        enabled: false,
-      },
-    });
-    const spawnBridge = vi.fn(() => new FakeBridge());
-    let settled = false;
-    const start = startRaftGatewayAccount(ctx, { spawnBridge, wakeDedupe }).then(() => {
-      settled = true;
-    });
-
-    try {
-      await new Promise<void>((resolve) => {
-        setTimeout(resolve, 0);
-      });
-      expect(settled).toBe(false);
-      expect(spawnBridge).not.toHaveBeenCalled();
-    } finally {
+function startAccount(scope: Scenario, { ctx, controller }: ReturnType<typeof createContext>) {
+  scope.assertActive();
+  const start = scope.lifetime.track(startRaftGatewayAccount(ctx));
+  let stopping: Promise<void> | undefined;
+  const stop = () =>
+    (stopping ??= scope.lifetime.verifyCleanup(async () => {
       controller.abort();
       await start;
-    }
+    }));
+  scope.onRetire(() => {
+    void stop();
   });
+  return { start, stop };
+}
 
-  // Raft already answered this case through its own close-after-response teardown; the
-  // wire behavior must survive replacing that teardown with the shared transport owner.
-  it("keeps delivering 413 for an over-limit wake payload and closing the connection", async () => {
-    const { ctx, controller, wakeDedupe } = createContext();
-    Object.defineProperty(ctx, "abortSignal", { value: controller.signal });
-    const bridge = new FakeBridge();
-    const start = startRaftGatewayAccount(ctx, {
-      spawnBridge: bridge.spawn,
-      wakeDedupe,
+async function startGateway(scope: Scenario, fixture = createContext()) {
+  scope.assertActive();
+  const bridge = Object.assign(new ChildProcess(), { pid: 4242 });
+  const started = createDeferred<{ endpoint: string; token: string }>();
+  scope.onRetire(() => started.reject(new Error("Raft fixture retired before startup")));
+  void started.promise.catch(() => {});
+  vi.mocked(spawn).mockImplementationOnce((_command, args, options) => {
+    scope.assertActive();
+    const endpoint = args?.at(-1);
+    const token = options?.env?.RAFT_CHANNEL_TOKEN;
+    if (!endpoint || !token) {
+      throw new Error("Raft bridge spawn omitted its endpoint or token");
+    }
+    started.resolve({ endpoint, token });
+    return bridge;
+  });
+  vi.spyOn(replay, "createChannelReplayGuard");
+  vi.mocked(replay.createChannelReplayGuard<WakeEvent>).mockReturnValueOnce(fixture.wakeDedupe);
+  const lifecycle = startAccount(scope, fixture);
+  void scope.lifetime.track(lifecycle.start.catch(started.reject));
+  const { endpoint, token } = await scope.wait(
+    awaitGateBeforeSettlement(
+      started.promise,
+      lifecycle.start,
+      "Raft bridge stopped before startup",
+    ),
+  );
+  const request = (path: string, status: number, init: RequestInit): Promise<unknown> =>
+    scope.lifetime.run(async () => {
+      scope.assertActive();
+      const response = await fetch(new URL(path, endpoint), {
+        ...init,
+        signal: fixture.controller.signal,
+      });
+      const body: unknown = await response.json();
+      expect(response.status).toBe(status);
+      return body;
     });
-    void start.catch(bridge.started.reject);
+  const headers = (authToken: string | null): HeadersInit =>
+    authToken === null ? {} : { "x-raft-bridge-token": authToken };
+  return {
+    ...fixture,
+    ...lifecycle,
+    bridge,
+    endpoint,
+    token,
+    get: (path: string, status = 200, authToken = token) =>
+      request(path, status, { headers: headers(authToken) }),
+    post: (body?: unknown, status = 202, authToken: string | null = token) =>
+      request("/wake", status, {
+        method: "POST",
+        headers: headers(authToken),
+        body: JSON.stringify(body),
+      }),
+  };
+}
 
-    try {
-      const { endpoint: wakeEndpoint, token: bridgeToken } = await withTimeout(
-        bridge.started.promise,
-        500,
-        "Raft bridge startup",
+afterEach(async () => {
+  const scopes = scenarios.splice(0);
+  // Retirement releases held gates; ordinary account abort must keep them held.
+  const retired = await Promise.allSettled(scopes.map((scope) => scope.retire()));
+  const drained = await Promise.allSettled(scopes.map((scope) => scope.lifetime.cleanup()));
+  const cleaned = await Promise.allSettled(
+    [
+      () => vi.mocked(killProcessTree).mockReset(),
+      () => vi.mocked(spawn).mockReset(),
+      () => resetPluginStateStoreForTests(),
+      () => vi.restoreAllMocks(),
+      ...tempWorkspaces.splice(0).map((workspace) => () => workspace.cleanup()),
+    ].map(async (cleanup) => cleanup()),
+  );
+  const failures = [...retired, ...drained, ...cleaned].flatMap((result) =>
+    result.status === "rejected" ? [result.reason] : [],
+  );
+  if (failures.length) {
+    throw new AggregateError(failures, "Raft fixture cleanup failed");
+  }
+});
+
+it.each(["claim", "commit"] as const)(
+  "joins an admitted wake during shutdown while %s is pending",
+  (phase) =>
+    runScenario(async (scope) => {
+      const fixture = createContext();
+      const { controller, run, wakeDedupe } = fixture;
+      const pending = createDeferred<void>();
+      const reached = createDeferred<void>();
+      // Release the barrier before account cleanup joins its blocked task.
+      scope.onRetire(() => pending.resolve());
+      const pause = async <T>(result: T) => {
+        reached.resolve();
+        await pending.promise;
+        return result;
+      };
+      const processGuarded = wakeDedupe.processGuarded.bind(wakeDedupe);
+      wakeDedupe.processGuarded = (event, process, options) =>
+        scope.lifetime.track(
+          processGuarded(
+            event,
+            phase === "claim" ? () => pause(undefined).then(process) : () => process().then(pause),
+            options,
+          ),
+        );
+      const { post, start } = await startGateway(scope, fixture);
+      const stopped = vi.fn();
+      const settled = scope.lifetime.track(start.finally(stopped));
+      const request = scope.lifetime.track(
+        post({ eventId: "wake-settlement" }).catch(() => undefined),
       );
+      await scope.wait(reached.promise);
+      controller.abort();
+      await request;
+      await setImmediate();
+      expect(stopped).not.toHaveBeenCalled();
+      pending.resolve();
+      await settled;
+      expect(run).toHaveBeenCalledTimes(phase === "commit" ? 1 : 0);
+    }),
+);
 
-      // Declared and sent in one write: the shape whose rejection used to race the flush.
-      const result = await postRawWebhook({
-        url: wakeEndpoint,
+it("keeps a disabled account quiescent until shutdown", () =>
+  runScenario(async (scope) => {
+    const fixture = createContext();
+    fixture.ctx.account.enabled = false;
+    const settled = vi.fn();
+    const { start } = startAccount(scope, fixture);
+    void scope.lifetime.track(start.then(settled));
+    await setTimeout(0);
+    expect(settled).not.toHaveBeenCalled();
+    expect(spawn).not.toHaveBeenCalled();
+  }));
+
+it("keeps delivering 413 for an over-limit wake payload and closing the connection", () =>
+  runScenario(async (scope) => {
+    const { endpoint, token, run } = await startGateway(scope);
+    // Declared and sent in one write: the shape whose rejection used to race the flush.
+    const result = await scope.lifetime.track(
+      postRawWebhook({
+        url: endpoint,
         body: JSON.stringify({ deliveryId: "x".repeat(16 * 1024) }),
         headers: {
           "content-type": "application/json",
-          "x-raft-bridge-token": bridgeToken,
+          "x-raft-bridge-token": token,
         },
-      });
+      }),
+    );
 
-      expect(result.statusLine).toBe("HTTP/1.1 413 Payload Too Large");
-      expect(JSON.parse(result.body)).toEqual({
-        error: "Wake payload exceeds the 16 KiB limit.",
-      });
-      expect(result.closedByServer).toBe(true);
-    } finally {
-      controller.abort();
-      await start;
-    }
-  });
-
-  it("accepts authenticated content-free wake hints and dedupes retry delivery ids", async () => {
-    const { ctx, controller, run, wakeDedupe } = createContext();
-    Object.defineProperty(ctx, "abortSignal", { value: controller.signal });
-    Object.defineProperty(ctx, "account", {
-      value: {
-        ...ctx.account,
-        profile: "main'; touch /tmp/pwn; echo '",
-      },
+    expect(result).toMatchObject({
+      statusLine: "HTTP/1.1 413 Payload Too Large",
+      closedByServer: true,
     });
-    const bridge = new FakeBridge();
-    const start = startRaftGatewayAccount(ctx, {
-      spawnBridge: bridge.spawn,
-      wakeDedupe,
+    expect(JSON.parse(result.body)).toEqual({ error: "Wake payload exceeds the 16 KiB limit." });
+    expect(run).not.toHaveBeenCalled();
+  }));
+
+it("accepts authenticated content-free wake hints and dedupes retry delivery ids", () =>
+  runScenario(async (scope) => {
+    const fixture = createContext();
+    const { ctx, run } = fixture;
+    ctx.account.profile = "main'; touch /tmp/pwn; echo '";
+    const { token, get, post, bridge, stop } = await startGateway(scope, fixture);
+    expect(ctx.getStatus()).toMatchObject({ running: true, connected: true, lifecycle: "ready" });
+    await get("/health");
+    await post(undefined, 401, null);
+    await post(undefined, 401, "x".repeat(token.length));
+    await post(undefined, 401, "short");
+    await post(undefined, 400);
+    expect(
+      await post({ eventId: "wake-content", metadata: { text: "not a wake hint" } }, 400),
+    ).toEqual({ error: "Wake payload must not include message content." });
+    const accepted = await post({ eventId: "wake-1", timestamp: 1 });
+    expect(accepted).toMatchObject({
+      accepted: true,
+      ok: true,
+      runtimeSession: expect.any(String),
     });
-    void start.catch(bridge.started.reject);
+    expect(run).toHaveBeenCalledTimes(1);
 
-    try {
-      const { endpoint: wakeEndpoint, token: bridgeToken } = await withTimeout(
-        bridge.started.promise,
-        500,
-        "Raft bridge startup",
-      );
-      expect(ctx.getStatus()).toMatchObject({
-        running: true,
-        connected: true,
-        lifecycle: "ready",
-        lastConnectedAt: expect.any(Number),
-        lastError: null,
-        terminalDisconnect: undefined,
-      });
-      await expect(fetch(wakeEndpoint.replace("/wake", "/health"))).resolves.toMatchObject({
-        status: 200,
-      });
-      await expect(fetch(wakeEndpoint, { method: "POST" })).resolves.toMatchObject({ status: 401 });
-      await expect(
-        fetch(wakeEndpoint, {
-          method: "POST",
-          headers: { "x-raft-bridge-token": "x".repeat(bridgeToken.length) },
-        }),
-      ).resolves.toMatchObject({ status: 401 });
-      await expect(
-        fetch(wakeEndpoint, {
-          method: "POST",
-          headers: { "x-raft-bridge-token": "short" },
-        }),
-      ).resolves.toMatchObject({ status: 401 });
-      await expect(
-        fetch(wakeEndpoint, {
-          method: "POST",
-          headers: {
-            "x-raft-bridge-token": bridgeToken,
-          },
-        }),
-      ).resolves.toMatchObject({ status: 400 });
-      await expect(
-        fetch(wakeEndpoint, {
-          method: "POST",
-          headers: {
-            "x-raft-bridge-token": bridgeToken,
-          },
-          body: JSON.stringify({ metadata: { text: "not a wake hint" } }),
-        }),
-      ).resolves.toMatchObject({ status: 400 });
-      await expect(
-        fetch(wakeEndpoint, {
-          method: "POST",
-          headers: {
-            "x-raft-bridge-token": bridgeToken,
-          },
-          body: JSON.stringify({ eventId: "wake-1", timestamp: 1 }),
-        }),
-      ).resolves.toMatchObject({ status: 202 });
-      await expect(
-        fetch(wakeEndpoint.replace("/wake", "/activity/drain?max=50")),
-      ).resolves.toMatchObject({ status: 401 });
-      await expect(
-        fetch(wakeEndpoint.replace("/wake", "/activity/drain?max=50"), {
-          headers: {
-            "x-raft-bridge-token": bridgeToken,
-          },
-        }),
-      ).resolves.toMatchObject({
-        status: 200,
-      });
-      await expect(
-        fetch(wakeEndpoint.replace("/wake", "/activity/drain?max=50"), {
-          headers: {
-            "x-raft-bridge-token": bridgeToken,
-          },
-        }).then((response) => response.json()),
-      ).resolves.toEqual({
-        dropped: 0,
-        events: [],
-        schema: "raft-activity-drain.v1",
-      });
-      await vi.waitFor(() => expect(run).toHaveBeenCalledTimes(1));
-      await expect(
-        fetch(wakeEndpoint, {
-          method: "POST",
-          headers: {
-            "x-raft-bridge-token": bridgeToken,
-          },
-          body: JSON.stringify({ eventId: "wake-1", timestamp: 2 }),
-        }),
-      ).resolves.toMatchObject({ status: 202 });
-      await new Promise<void>((resolve) => {
-        setTimeout(resolve, 0);
-      });
-      expect(run).toHaveBeenCalledTimes(1);
-      await expect(
-        fetch(wakeEndpoint, {
-          method: "POST",
-          headers: {
-            "x-raft-bridge-token": bridgeToken,
-          },
-          body: JSON.stringify({
-            metadata: {
-              sequence: 1,
-              source: "bridge",
-            },
-          }),
-        }),
-      ).resolves.toMatchObject({ status: 400 });
-      expect(run).toHaveBeenCalledTimes(1);
+    await get("/activity/drain?max=50", 401, "");
+    const drain = await get("/activity/drain?max=50");
+    expect(drain).toEqual({ dropped: 0, events: [], schema: "raft-activity-drain.v1" });
+    await post({ metadata: { sequence: 1, source: "bridge" } }, 400);
+    await post({ eventId: "wake-1", timestamp: 2 });
+    expect(run).toHaveBeenCalledTimes(1);
 
-      const input = run.mock.calls[0]?.[0].adapter.ingest({ kind: "wake" });
-      expect(input?.textForAgent).toContain(
-        `raft --profile 'main'"'"'; touch /tmp/pwn; echo '"'"'' message check`,
-      );
-      expect(input?.rawText).not.toContain("wake-1");
-    } finally {
-      controller.abort();
-      await start;
-    }
-    expect(processRuntimeMocks.killProcessTree).toHaveBeenCalledOnce();
-    expect(processRuntimeMocks.killProcessTree).toHaveBeenCalledWith(bridge.pid, {
+    const input = await run.mock.calls[0]?.[0].adapter.ingest({ kind: "wake" });
+    expect(input?.textForAgent).toContain(
+      `raft --profile 'main'"'"'; touch /tmp/pwn; echo '"'"'' message check`,
+    );
+    expect(input?.rawText).not.toContain("wake-1");
+    await stop();
+    expect(killProcessTree).toHaveBeenCalledOnce();
+    expect(killProcessTree).toHaveBeenCalledWith(bridge.pid, {
       graceMs: 5_000,
       detached: process.platform !== "win32",
     });
-  });
+  }));
 
-  it("returns the Raft bridge runtime session for accepted wakes", async () => {
-    const { ctx, controller, wakeDedupe } = createContext();
-    Object.defineProperty(ctx, "abortSignal", { value: controller.signal });
-    const bridge = new FakeBridge();
-    const start = startRaftGatewayAccount(ctx, {
-      spawnBridge: bridge.spawn,
-      wakeDedupe,
-    });
-    void start.catch(bridge.started.reject);
+it("keeps a failed delivery eligible for a bridge retry", () =>
+  runScenario(async (scope) => {
+    const { post, run } = await startGateway(scope);
+    run.mockRejectedValueOnce(new Error("inbound runtime unavailable"));
+    await post({ eventId: "wake-retry" }, 500);
+    await post({ eventId: "wake-retry" });
+    expect(run).toHaveBeenCalledTimes(2);
+  }));
 
-    try {
-      const { endpoint: wakeEndpoint, token: bridgeToken } = await withTimeout(
-        bridge.started.promise,
-        500,
-        "Raft bridge startup",
-      );
-      const response = await fetch(wakeEndpoint, {
-        method: "POST",
-        headers: {
-          "x-raft-bridge-token": bridgeToken,
-        },
-        body: JSON.stringify({ eventId: "wake-runtime-session" }),
-      });
-      expect(response).toMatchObject({ status: 202 });
-      await expect(response.json()).resolves.toMatchObject({
-        accepted: true,
-        ok: true,
-        runtimeSession: expect.any(String),
-      });
-    } finally {
-      controller.abort();
-      await start;
-    }
-  });
-
-  it("rejects oversized payloads before queueing a wake", async () => {
-    const { ctx, controller, run, wakeDedupe } = createContext();
-    Object.defineProperty(ctx, "abortSignal", { value: controller.signal });
-    const bridge = new FakeBridge();
-    const start = startRaftGatewayAccount(ctx, {
-      spawnBridge: bridge.spawn,
-      wakeDedupe,
-    });
-    void start.catch(bridge.started.reject);
-
-    try {
-      const { endpoint: wakeEndpoint, token: bridgeToken } = await withTimeout(
-        bridge.started.promise,
-        500,
-        "Raft bridge startup",
-      );
-      await expect(
-        fetch(wakeEndpoint, {
-          method: "POST",
-          headers: {
-            "content-type": "application/json",
-            "x-raft-bridge-token": bridgeToken,
-          },
-          body: JSON.stringify({ event: "wake", padding: "x".repeat(17 * 1024) }),
-        }),
-      ).resolves.toMatchObject({ status: 413 });
-      expect(run).not.toHaveBeenCalled();
-    } finally {
-      controller.abort();
-      await start;
-    }
-  });
-
-  it("keeps a failed delivery eligible for a bridge retry", async () => {
-    const { ctx, controller, run, wakeDedupe } = createContext();
-    Object.defineProperty(ctx, "abortSignal", { value: controller.signal });
-    const bridge = new FakeBridge();
-    const start = startRaftGatewayAccount(ctx, {
-      spawnBridge: bridge.spawn,
-      wakeDedupe,
-    });
-    void start.catch(bridge.started.reject);
-
-    try {
-      const { endpoint: wakeEndpoint, token: bridgeToken } = await withTimeout(
-        bridge.started.promise,
-        500,
-        "Raft bridge startup",
-      );
-      run.mockRejectedValueOnce(new Error("inbound runtime unavailable"));
-      const request = () => ({
-        method: "POST",
-        headers: {
-          "x-raft-bridge-token": bridgeToken,
-        },
-        body: JSON.stringify({ eventId: "wake-retry" }),
-      });
-      await expect(fetch(wakeEndpoint, request())).resolves.toMatchObject({ status: 500 });
-      await expect(fetch(wakeEndpoint, request())).resolves.toMatchObject({ status: 202 });
-      expect(run).toHaveBeenCalledTimes(2);
-    } finally {
-      controller.abort();
-      await start;
-    }
-  });
-
-  it("persists accepted wake dedupe across restarts without crossing accounts", async () => {
+it("persists accepted wake dedupe across restarts without crossing accounts", () =>
+  runScenario(async (scope) => {
     const workspace = tempWorkspaceSync({
       rootDir: resolvePreferredOpenClawTmpDir(),
       prefix: "openclaw-raft-wake-dedupe-",
     });
     tempWorkspaces.push(workspace);
     const stateDir = workspace.dir;
-    try {
-      const first = createContext();
-      Object.defineProperty(first.ctx, "abortSignal", { value: first.controller.signal });
-      const firstBridge = new FakeBridge();
-      const firstStart = startRaftGatewayAccount(first.ctx, {
-        wakeDedupe: createPersistentWakeDedupe(stateDir),
-        spawnBridge: firstBridge.spawn,
-      });
-      void firstStart.catch(firstBridge.started.reject);
-      try {
-        const { endpoint, token } = await withTimeout(
-          firstBridge.started.promise,
-          500,
-          "Raft bridge startup",
-        );
-        await expect(
-          fetch(endpoint, {
-            method: "POST",
-            headers: { "x-raft-bridge-token": token },
-            body: JSON.stringify({ eventId: "wake-persisted" }),
-          }),
-        ).resolves.toMatchObject({ status: 202 });
-        expect(first.run).toHaveBeenCalledTimes(1);
-      } finally {
-        first.controller.abort();
-        await firstStart;
-      }
-
-      const replay = createContext();
-      Object.defineProperty(replay.ctx, "abortSignal", { value: replay.controller.signal });
-      const replayBridge = new FakeBridge();
-      const replayStart = startRaftGatewayAccount(replay.ctx, {
-        wakeDedupe: createPersistentWakeDedupe(stateDir),
-        spawnBridge: replayBridge.spawn,
-      });
-      void replayStart.catch(replayBridge.started.reject);
-      try {
-        const { endpoint, token } = await withTimeout(
-          replayBridge.started.promise,
-          500,
-          "Raft bridge startup",
-        );
-        await expect(
-          fetch(endpoint, {
-            method: "POST",
-            headers: { "x-raft-bridge-token": token },
-            body: JSON.stringify({ eventId: "wake-persisted" }),
-          }),
-        ).resolves.toMatchObject({ status: 202 });
-        expect(replay.run).not.toHaveBeenCalled();
-      } finally {
-        replay.controller.abort();
-        await replayStart;
-      }
-
-      const otherAccount = createContext("other");
-      Object.defineProperty(otherAccount.ctx, "abortSignal", {
-        value: otherAccount.controller.signal,
-      });
-      const otherBridge = new FakeBridge();
-      const otherStart = startRaftGatewayAccount(otherAccount.ctx, {
-        wakeDedupe: createPersistentWakeDedupe(stateDir),
-        spawnBridge: otherBridge.spawn,
-      });
-      void otherStart.catch(otherBridge.started.reject);
-      try {
-        const { endpoint, token } = await withTimeout(
-          otherBridge.started.promise,
-          500,
-          "Raft bridge startup",
-        );
-        await expect(
-          fetch(endpoint, {
-            method: "POST",
-            headers: { "x-raft-bridge-token": token },
-            body: JSON.stringify({ eventId: "wake-persisted" }),
-          }),
-        ).resolves.toMatchObject({ status: 202 });
-        expect(otherAccount.run).toHaveBeenCalledTimes(1);
-      } finally {
-        otherAccount.controller.abort();
-        await otherStart;
-      }
-    } finally {
-      resetPluginStateStoreForTests();
+    for (const phase of ["first", "restart", "other"] as const) {
+      const accountId = phase === "other" ? "other" : "default";
+      const { post, run, stop } = await startGateway(scope, createContext(accountId, stateDir));
+      await post({ eventId: "wake-persisted" });
+      expect(run).toHaveBeenCalledTimes(phase === "restart" ? 0 : 1);
+      await stop();
     }
-  });
-});
+  }));
+
+it("maps a content-free wake through the real inbound adapter without channel delivery", () =>
+  runScenario(async () => {
+    const { ctx, run, buildContext, route, resolveAgentRoute } = createContext("support");
+    ctx.account.profile = "support-profile";
+    await dispatchRaftWake(ctx);
+    expect(resolveAgentRoute).toHaveBeenCalledExactlyOnceWith({
+      cfg: ctx.cfg,
+      channel: "raft",
+      accountId: "support",
+      peer: { kind: "direct", id: "support-profile" },
+    });
+    expect(run).toHaveBeenCalledOnce();
+    const dispatch = run.mock.calls[0]![0];
+    expect(dispatch).toMatchObject({
+      channel: "raft",
+      accountId: "support",
+      raw: { kind: "wake", profile: "support-profile" },
+    });
+    const input = await dispatch.adapter.ingest(dispatch.raw);
+    expect(input).toEqual({
+      id: expect.any(String),
+      timestamp: expect.any(Number),
+      rawText:
+        "Raft wake hint received. Check Raft for pending messages, then reply through the Raft CLI.",
+      textForAgent: expect.stringContaining("raft --profile 'support-profile' message check"),
+      textForCommands: "",
+    });
+    if (!input) {
+      throw new Error("Raft wake input missing");
+    }
+    const turn = await dispatch.adapter.resolveTurn(
+      input,
+      {
+        kind: "message",
+        canStartAgentTurn: true,
+      },
+      {},
+    );
+    expect(buildContext).toHaveBeenCalledExactlyOnceWith({
+      channelIngress: "unsupported",
+      channel: "raft",
+      accountId: "support",
+      messageId: input.id,
+      timestamp: input.timestamp,
+      from: "raft:support-profile",
+      sender: { id: "support-profile", name: "Raft" },
+      conversation: { kind: "direct", id: "support-profile", label: "Raft support-profile" },
+      route: {
+        agentId: route.agentId,
+        accountId: "support",
+        routeSessionKey: route.sessionKey,
+        dispatchSessionKey: route.sessionKey,
+      },
+      reply: { to: "raft:support-profile" },
+      message: {
+        rawBody: input.rawText,
+        commandBody: input.textForCommands,
+        bodyForAgent: input.textForAgent,
+      },
+    });
+    if (!("cfg" in turn) || !("delivery" in turn)) {
+      throw new Error("Raft delivery adapter missing");
+    }
+    expect(turn.cfg).toBe(ctx.cfg);
+    expect(turn).toMatchObject({ channel: "raft", accountId: "support", route });
+    expect(turn.ctxPayload).toBe(buildContext.mock.results[0]!.value);
+    await expect(turn.delivery.deliver({ text: "ignored" }, { kind: "final" })).resolves.toEqual({
+      visibleReplySent: false,
+    });
+  }));

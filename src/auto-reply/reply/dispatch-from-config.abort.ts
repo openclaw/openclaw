@@ -1,5 +1,4 @@
 import { isAbortError, racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
-import type { ReplyPayload } from "../reply-payload.js";
 import type { ReplyDispatcher } from "./reply-dispatcher.types.js";
 
 export class DispatchReplyOperationAbortedError extends Error {
@@ -38,14 +37,18 @@ export function createAbortAwareDispatcher(params: {
   isAborted: () => boolean;
 }): ReplyDispatcher {
   const sendIfActive =
-    (send: (payload: ReplyPayload) => boolean) =>
-    (payload: ReplyPayload): boolean =>
-      params.isAborted() ? false : send(payload);
-  const getCancelledCounts = params.dispatcher.getCancelledCounts;
-  const dispatcher: ReplyDispatcher = {
+    <Args extends unknown[]>(send: (...args: Args) => boolean) =>
+    (...args: Args): boolean =>
+      params.isAborted() ? false : send(...args);
+  const { getCancelledCounts, prepareReplyPayload, sendPreparedReply } = params.dispatcher;
+  return {
+    ...(prepareReplyPayload
+      ? { prepareReplyPayload: prepareReplyPayload.bind(params.dispatcher) }
+      : {}),
     sendToolResult: sendIfActive(params.dispatcher.sendToolResult),
     sendBlockReply: sendIfActive(params.dispatcher.sendBlockReply),
     sendFinalReply: sendIfActive(params.dispatcher.sendFinalReply),
+    ...(sendPreparedReply ? { sendPreparedReply: sendIfActive(sendPreparedReply) } : {}),
     ...(params.dispatcher.supportsSettledReceipt ? { supportsSettledReceipt: true } : {}),
     waitForIdle: () => params.dispatcher.waitForIdle(),
     getQueuedCounts: () => params.dispatcher.getQueuedCounts(),
@@ -57,5 +60,4 @@ export function createAbortAwareDispatcher(params: {
       }
     },
   };
-  return dispatcher;
 }

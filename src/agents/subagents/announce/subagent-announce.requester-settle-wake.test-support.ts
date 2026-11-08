@@ -1,0 +1,82 @@
+import { vi } from "vitest";
+import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
+import type { SubagentAnnounceDeliveryResult as Result } from "./subagent-announce-dispatch.js";
+import type { RequesterSettleWakeBatchState } from "./subagent-announce.requester-settle-state.js";
+
+export const REQUESTER = "agent:main:main";
+export const requesterSettleKey = (suffix: string) =>
+  `announce:requester-settle:main:${REQUESTER}:${suffix}`;
+
+type SettledChildOverrides = Omit<Partial<SubagentRunRecord>, "execution"> & {
+  startedAt?: number;
+  endedAt?: number;
+  outcome?: SubagentRunRecord["execution"]["outcome"];
+  execution?: SubagentRunRecord["execution"];
+};
+
+export function makeSettledChild(overrides: SettledChildOverrides): SubagentRunRecord {
+  const runId = overrides.runId ?? "run-child";
+  const { startedAt = 2_000, endedAt = 3_000, outcome, execution, ...recordOverrides } = overrides;
+  return {
+    runId,
+    childSessionKey: overrides.childSessionKey ?? `agent:main:subagent:${runId}`,
+    requesterSessionKey: REQUESTER,
+    requesterDisplayKey: "main",
+    task: "investigate",
+    cleanup: "keep",
+    createdAt: 1_000,
+    execution: execution ?? { status: "terminal", startedAt, endedAt, outcome },
+    expectsCompletionMessage: true,
+    delivery: { status: "pending" },
+    requesterSettleWake: { status: "pending", attemptCount: 0 },
+    ...recordOverrides,
+  };
+}
+
+export const completeBatchSpy = vi.fn();
+
+export async function completeBatch(
+  batch: readonly SubagentRunRecord[],
+  rearmGeneration?: number,
+  outcome?: Result,
+  onCommitted?: () => void | Promise<void>,
+): Promise<void> {
+  const runIds = batch.map((entry) => entry.runId).toSorted();
+  if (outcome) {
+    completeBatchSpy(runIds, rearmGeneration, outcome);
+  } else if (rearmGeneration === undefined) {
+    completeBatchSpy(runIds);
+  } else {
+    completeBatchSpy(runIds, rearmGeneration);
+  }
+  for (const entry of batch) {
+    if (entry.requesterSettleWake?.rearmGeneration === rearmGeneration) {
+      entry.requesterSettleWake = undefined;
+    }
+  }
+  await onCommitted?.();
+}
+
+export const deliverSpy = vi.fn(async (_params: Record<string, unknown>): Promise<Result> => ({
+  delivered: true,
+  path: "direct",
+}));
+
+export function deliveredCallArg(): Record<string, unknown> {
+  const call = deliverSpy.mock.calls[0]?.[0];
+  if (!call) {
+    throw new Error("expected deliverSubagentAnnouncement call");
+  }
+  return call;
+}
+
+export function publishWakeTransition(
+  batch: readonly SubagentRunRecord[],
+  state: RequesterSettleWakeBatchState,
+  onPublished?: (entries: readonly SubagentRunRecord[]) => void,
+): void {
+  for (const entry of batch) {
+    entry.requesterSettleWake = structuredClone(state);
+  }
+  onPublished?.(batch);
+}

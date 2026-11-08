@@ -9,7 +9,7 @@ import Testing
 @MainActor
 struct QuickChatControllerTests {
     @Test func `plain accepted send stays open and binds reply view model`() async throws {
-        var createdRoutes: [QuickChatRoutingTarget] = []
+        var createdRoutes: [OpenClawChatSessionTarget] = []
         let model = Self.makeModel()
         let controller = QuickChatController(
             enableUI: false,
@@ -28,19 +28,19 @@ struct QuickChatControllerTests {
         controller.handleSendAcceptedForTesting(openChat: false)
 
         #expect(controller.isVisible)
-        #expect(createdRoutes == [QuickChatRoutingTarget(sessionKey: "agent:main:main", agentID: nil)])
+        #expect(createdRoutes == [OpenClawChatSessionTarget(sessionKey: "agent:main:main", agentID: nil)])
         #expect(controller.replyBinding.route == createdRoutes.first)
         controller.stop()
     }
 
     @Test func `reply binding retains same target and rebuilds for a changed target`() throws {
-        var createdRoutes: [QuickChatRoutingTarget] = []
+        var createdRoutes: [OpenClawChatSessionTarget] = []
         let binding = QuickChatReplyBinding { route in
             createdRoutes.append(route)
             return OpenClawChatViewModel(sessionKey: route.sessionKey, transport: QuickChatTestTransport())
         }
-        let firstRoute = QuickChatRoutingTarget(sessionKey: "agent:main:main", agentID: nil)
-        let secondRoute = QuickChatRoutingTarget(sessionKey: "global", agentID: "work")
+        let firstRoute = OpenClawChatSessionTarget(sessionKey: "agent:main:main", agentID: nil)
+        let secondRoute = OpenClawChatSessionTarget(sessionKey: "global", agentID: "work")
 
         binding.show(route: firstRoute)
         let firstViewModel = try #require(binding.viewModel)
@@ -53,8 +53,14 @@ struct QuickChatControllerTests {
         #expect(createdRoutes == [firstRoute, secondRoute])
     }
 
-    @Test func `accepted global route opens chat with its agent`() async {
-        var openedRoute: QuickChatRoutingTarget?
+    @Test(arguments: [
+        ("global", "/chat/work"),
+        ("agent:work:global", "/chat/work/~key/global"),
+        ("AGENT:WORK:GlObAl", "/chat/work/~key/GlObAl"),
+    ])
+    func `accepted global route opens the exact Dashboard session`(sessionKey: String, expectedPath: String) async {
+        var openedRoute: OpenClawChatSessionTarget?
+        var openedPath: String?
         let model = QuickChatModel(
             sessionKeyProvider: { "main" },
             agentsProvider: {
@@ -73,23 +79,29 @@ struct QuickChatControllerTests {
             permissionGrantProvider: { _ in [:] },
             connectionGateProvider: { .available },
             modelControlsProvider: { _ in .testFixture },
-            modelPatchProvider: { _, _ in nil })
+            settingsPatchProvider: { _, _ in nil })
         let controller = QuickChatController(
             enableUI: false,
             model: model,
             monitoringEnabled: false,
             chatOpener: { sessionKey, agentID in
                 guard let sessionKey else { return }
-                openedRoute = QuickChatRoutingTarget(sessionKey: sessionKey, agentID: agentID)
+                openedRoute = OpenClawChatSessionTarget(sessionKey: sessionKey, agentID: agentID)
+                openedPath = WebChatRoute.dashboardPath(sessionKey: sessionKey, agentID: agentID)
             })
         let presentationID = model.beginPresentation()
         await model.refreshForPresentation(id: presentationID)
         model.selectAgent("work")
+        model.selectSessionOverride(QuickChatSessionTargetOverride(key: sessionKey, displayName: "Global"))
         model.text = "hello"
 
         #expect(await model.send())
+        model.selectAgent("main")
         controller.handleSendAcceptedForTesting(openChat: true)
-        #expect(openedRoute == QuickChatRoutingTarget(sessionKey: "global", agentID: "work"))
+        #expect(openedRoute == OpenClawChatSessionTarget(
+            sessionKey: sessionKey,
+            agentID: sessionKey == "global" ? "work" : nil))
+        #expect(openedPath == expectedPath)
         controller.stop()
     }
 
@@ -190,7 +202,7 @@ struct QuickChatControllerTests {
             },
             connectionGateProvider: { .available },
             modelControlsProvider: { _ in .testFixture },
-            modelPatchProvider: { _, _ in nil })
+            settingsPatchProvider: { _, _ in nil })
         let controller = QuickChatController(enableUI: false, model: model, monitoringEnabled: false)
         controller.present()
         guard let id = model.activePresentationID else {
@@ -237,7 +249,7 @@ struct QuickChatControllerTests {
             connectionGateProvider: { .available },
             textContextCaptureProvider: { await latch.wait() },
             modelControlsProvider: { _ in .testFixture },
-            modelPatchProvider: { _, _ in nil })
+            settingsPatchProvider: { _, _ in nil })
         let controller = QuickChatController(enableUI: false, model: model, monitoringEnabled: false)
         controller.present()
         guard let id = model.activePresentationID else {
@@ -292,7 +304,7 @@ struct QuickChatControllerTests {
             permissionGrantProvider: { _ in [:] },
             connectionGateProvider: { .available },
             modelControlsProvider: { _ in .testFixture },
-            modelPatchProvider: { _, _ in nil })
+            settingsPatchProvider: { _, _ in nil })
     }
 }
 

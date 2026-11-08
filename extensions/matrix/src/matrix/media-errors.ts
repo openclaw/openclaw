@@ -1,4 +1,3 @@
-// Matrix plugin module implements media errors behavior.
 const MATRIX_MEDIA_SIZE_LIMIT_ERROR_MESSAGE = "Matrix media exceeds configured size limit";
 
 export class MatrixMediaSizeLimitError extends Error {

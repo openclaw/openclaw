@@ -11,8 +11,9 @@ Deepgram is a speech-to-text API. OpenClaw uses it for inbound audio/voice-note
 transcription through `tools.media.audio` and for Voice Call streaming STT
 through `plugins.entries.voice-call.config.streaming`.
 
-Batch transcription uploads the complete audio file to Deepgram and injects
-the transcript into the reply pipeline (`{{Transcript}}` + `[Audio]` block).
+Batch transcription uploads the complete audio file to Deepgram. Flux models
+use Deepgram's one-shot WebSocket instead. Both paths inject the transcript
+into the reply pipeline (`{{Transcript}}` + `[Audio]` block).
 Voice Call streaming forwards live G.711 u-law frames over Deepgram's
 WebSocket `listen` endpoint and emits partial/final transcripts as Deepgram
 returns them.
@@ -28,7 +29,7 @@ returns them.
 <Steps>
   <Step title="Set your API key">
     ```bash
-    DEEPGRAM_API_KEY=dg_...
+    export DEEPGRAM_API_KEY=dg_...
     ```
   </Step>
   <Step title="Enable the audio provider">
@@ -60,7 +61,21 @@ returns them.
 
 `providerOptions.deepgram` merges extra query params directly into the
 Deepgram `/listen` request, so any Deepgram-supported param name works
-(for example `detect_language`, `punctuate`, `smart_format`):
+(for example `detect_language`, `punctuate`, `smart_format`).
+
+Array values are sent as repeated query parameters in both batch and Flux
+requests. For example, set `providerOptions` on the audio config or a model entry
+to send each `keyterm` separately instead of a comma-separated list:
+
+```json validate=false
+{
+  "providerOptions": {
+    "deepgram": {
+      "keyterm": ["OpenClaw", "Deepgram"]
+    }
+  }
+}
+```
 
 <Tabs>
   <Tab title="With language hint">
@@ -102,10 +117,35 @@ Deepgram `/listen` request, so any Deepgram-supported param name works
   </Tab>
 </Tabs>
 
+### Flux models
+
+Use `flux-general-en` or `flux-general-multi` for Deepgram Flux. OpenClaw
+converts the voice note to 16 kHz mono linear16 audio with `ffmpeg`, then sends
+it to Deepgram's `/v2/listen` WebSocket endpoint.
+Set `tools.media.models[].model` to either Flux model in the getting-started
+configuration above.
+
+Voice-note conversion processes the complete audio file, including notes longer
+than 20 minutes. Decoded audio uses a private temporary file, which is removed
+after the transcription attempt. The configured input-size and request-timeout
+limits still apply; failed conversion or upload does not return a partial transcript.
+
+Flux supports `eager_eot_threshold`, `eot_threshold`, `eot_timeout_ms`,
+`keyterm`, `language_hint`, `mip_opt_out`, `numerals`, `profanity_filter`,
+`redact`, and `tag` in `providerOptions.deepgram`. OpenClaw ignores batch-only
+options such as `detect_language`, `punctuate`, and `smart_format` on Flux.
+Language hints apply only to `flux-general-multi`: OpenClaw maps the model entry's
+`language` setting to `language_hint`, with an explicit provider option taking
+precedence. Both settings are ignored for the English-only `flux-general-en` model.
+
 ## Voice Call streaming STT
 
 The bundled `deepgram` plugin also registers a realtime transcription provider
 for the Voice Call plugin.
+
+Realtime transcription WebSockets honor the Gateway's `HTTPS_PROXY` / `https_proxy`
+and `NO_PROXY` / `no_proxy` settings, including CIDR bypasses. Configured debug
+capture proxies take precedence; TLS certificate verification remains enabled.
 
 | Setting         | Config path                                                             | Default                                      |
 | --------------- | ----------------------------------------------------------------------- | -------------------------------------------- |
@@ -117,6 +157,11 @@ for the Voice Call plugin.
 | Sample rate     | `...deepgram.sampleRate`                                                | `8000`                                       |
 | Endpointing     | `...deepgram.endpointingMs`                                             | `800`                                        |
 | Interim results | `...deepgram.interimResults`                                            | `true`                                       |
+
+With interim results enabled and endpointing at most 5000 ms, a provider-detected
+word gap also completes confirmed speech when background noise prevents endpointing.
+The gap is at least 1000 ms and follows `endpointingMs` above that minimum. A long
+pause can therefore split a thought into separate turns; provisional text is never committed.
 
 ```json5
 {
@@ -168,6 +213,10 @@ Twilio media frames can be forwarded directly.
   <Accordion title="Output behavior">
     Output follows the same audio rules as other providers (size caps, timeouts,
     transcript injection).
+  </Accordion>
+  <Accordion title="Flux requires ffmpeg">
+    Install `ffmpeg` with the gateway host's package manager before selecting a
+    Flux model.
   </Accordion>
 </AccordionGroup>
 

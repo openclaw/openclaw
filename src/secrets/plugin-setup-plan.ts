@@ -1,26 +1,25 @@
-/** Shared plan construction for plugin-owned SecretRef setup commands. */
 import { isValidAgentId } from "@openclaw/normalization-core/agent-id";
 import type { PluginIntegrationSecretProviderConfig, SecretRef } from "../config/types.secrets.js";
 import { formatConcreteConfigPath, parseConcreteConfigPathTokens } from "../shared/dot-path.js";
 import type { SecretsApplyPlan, SecretsPlanTarget } from "./plan.js";
+import { isValidSecretProviderAlias } from "./ref-contract.js";
 import { resolveSecretPlanTargetByPathCore } from "./target-registry-query.js";
 
-type PluginSecretRefProviderMapping = {
+export type PluginSecretRefProviderMapping = {
   providerId: string;
   secretId: string;
 };
 
-type PluginSecretRefConfigTargetMapping = {
+export type PluginSecretRefConfigTargetMapping = {
   path: string;
   agentId?: string;
   secretId: string;
 };
 
-const SECRET_PROVIDER_ALIAS_PATTERN = /^[a-z][a-z0-9_-]{0,63}$/;
 const MODEL_PROVIDER_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 
 export function assertValidPluginSecretProviderAlias(value: string): void {
-  if (!SECRET_PROVIDER_ALIAS_PATTERN.test(value)) {
+  if (!isValidSecretProviderAlias(value)) {
     throw new Error(
       `Invalid provider alias "${value}". Use lowercase letters, numbers, underscores, or hyphens.`,
     );
@@ -52,72 +51,6 @@ export function parsePluginSecretTargetSpecifier(
   return { agentId, path: targetPath };
 }
 
-function createPluginModelApiKeyTarget(params: {
-  providerAlias: string;
-  providerId: string;
-  secretId: string;
-}): SecretsPlanTarget {
-  assertValidPluginModelProviderId("target", params.providerId);
-  return {
-    type: "models.providers.apiKey",
-    path: `models.providers.${params.providerId}.apiKey`,
-    pathSegments: ["models", "providers", params.providerId, "apiKey"],
-    providerId: params.providerId,
-    ref: {
-      source: "exec",
-      provider: params.providerAlias,
-      id: params.secretId,
-    },
-  };
-}
-
-function createPluginConfigSecretTarget(params: {
-  productName: string;
-  providerAlias: string;
-  path: string;
-  agentId?: string;
-  secretId: string;
-}): SecretsPlanTarget {
-  if (params.agentId && !isValidAgentId(params.agentId)) {
-    throw new Error(`Invalid ${params.productName} setup agent id: ${params.agentId}`);
-  }
-  let parsedPath: Array<string | number>;
-  try {
-    parsedPath = parseConcreteConfigPathTokens(params.path);
-  } catch {
-    throw new Error(`Invalid --target config path: ${params.path}`);
-  }
-  const pathSegments = parsedPath.map(String);
-  const normalizedPath = formatConcreteConfigPath(parsedPath);
-  if (normalizedPath !== params.path) {
-    throw new Error(`Invalid --target config path: ${params.path}`);
-  }
-  const resolved = resolveSecretPlanTargetByPathCore({
-    configFile: params.agentId ? "auth-profile-store" : "openclaw.json",
-    pathSegments,
-    pathTokens: parsedPath,
-  });
-  if (!resolved) {
-    throw new Error(
-      `Unknown or unsupported ${params.productName} setup target path: ${params.path}`,
-    );
-  }
-  const ref: SecretRef = {
-    source: "exec",
-    provider: params.providerAlias,
-    id: params.secretId,
-  };
-  return {
-    type: resolved.entry.targetType,
-    path: normalizedPath,
-    pathSegments,
-    ...(params.agentId ? { agentId: params.agentId } : {}),
-    ...(resolved.providerId ? { providerId: resolved.providerId } : {}),
-    ...(resolved.accountId ? { accountId: resolved.accountId } : {}),
-    ref,
-  };
-}
-
 export function buildPluginSecretRefSetupPlan(params: {
   productName: string;
   providerAlias: string;
@@ -130,22 +63,65 @@ export function buildPluginSecretRefSetupPlan(params: {
 } {
   assertValidPluginSecretProviderAlias(params.providerAlias);
   const targets = [
-    ...params.providerSecrets.map((entry) =>
-      createPluginModelApiKeyTarget({
-        providerAlias: params.providerAlias,
-        providerId: entry.providerId,
-        secretId: entry.secretId,
-      }),
-    ),
-    ...(params.configTargetSecrets ?? []).map((entry) =>
-      createPluginConfigSecretTarget({
-        productName: params.productName,
-        providerAlias: params.providerAlias,
-        path: entry.path,
-        ...(entry.agentId ? { agentId: entry.agentId } : {}),
-        secretId: entry.secretId,
-      }),
-    ),
+    ...params.providerSecrets.map((entry): SecretsPlanTarget => {
+      const providerAlias = params.providerAlias;
+      const providerId = entry.providerId;
+      const secretId = entry.secretId;
+      assertValidPluginModelProviderId("target", providerId);
+      const pathSegments = ["models", "providers", providerId, "apiKey"];
+      return {
+        type: "models.providers.apiKey",
+        path: formatConcreteConfigPath(pathSegments),
+        pathSegments,
+        providerId,
+        ref: {
+          source: "exec",
+          provider: providerAlias,
+          id: secretId,
+        },
+      };
+    }),
+    ...(params.configTargetSecrets ?? []).map((entry): SecretsPlanTarget => {
+      const productName = params.productName;
+      const providerAlias = params.providerAlias;
+      const path = entry.path;
+      const agentId = entry.agentId || undefined;
+      const secretId = entry.secretId;
+      if (agentId && !isValidAgentId(agentId)) {
+        throw new Error(`Invalid ${productName} setup agent id: ${agentId}`);
+      }
+      let parsedPath: Array<string | number>;
+      try {
+        parsedPath = parseConcreteConfigPathTokens(path);
+      } catch {
+        throw new Error(`Invalid --target config path: ${path}`);
+      }
+      const pathSegments = parsedPath.map(String);
+      const normalizedPath = formatConcreteConfigPath(parsedPath);
+      if (normalizedPath !== path) {
+        throw new Error(`Invalid --target config path: ${path}`);
+      }
+      const resolved = resolveSecretPlanTargetByPathCore({
+        configFile: agentId ? "auth-profile-store" : "openclaw.json",
+        pathSegments,
+        pathTokens: parsedPath,
+      });
+      if (!resolved) {
+        throw new Error(`Unknown or unsupported ${productName} setup target path: ${path}`);
+      }
+      const ref: SecretRef = {
+        source: "exec",
+        provider: providerAlias,
+        id: secretId,
+      };
+      return Object.assign(
+        { type: resolved.entry.targetType, path: normalizedPath, pathSegments },
+        agentId ? { agentId } : {},
+        resolved.providerId ? { providerId: resolved.providerId } : {},
+        resolved.accountId ? { accountId: resolved.accountId } : {},
+        { ref },
+      );
+    }),
   ];
   const seen = new Set<string>();
   for (const target of targets) {

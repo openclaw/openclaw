@@ -1,5 +1,6 @@
 {
   "id": "sglang",
+  "categories": ["models"],
   "activation": {
     "onStartup": false
   },

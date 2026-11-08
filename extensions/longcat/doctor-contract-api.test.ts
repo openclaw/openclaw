@@ -1,4 +1,3 @@
-// LongCat tests cover the plugin-owned persisted catalog repair.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { describe, expect, it } from "vitest";
 import { legacyConfigRules, normalizeCompatibilityConfig } from "./doctor-contract-api.js";
@@ -38,14 +37,18 @@ function longcatConfig(models: unknown[]): OpenClawConfig {
 }
 
 describe("LongCat doctor contract", () => {
-  it("repairs only the exact historical stock row", () => {
-    const custom = {
-      ...LEGACY_STOCK_MODEL,
-      name: "My LongCat",
-      cost: { ...LEGACY_STOCK_MODEL.cost },
-    };
-    const other = { id: "custom-model", name: "Custom" };
-    const config = longcatConfig([structuredClone(LEGACY_STOCK_MODEL), custom, other]);
+  const { compat: _compat, ...normalizedStockModel } = LEGACY_STOCK_MODEL;
+  it.each([
+    ["historical compat", LEGACY_STOCK_MODEL],
+    ["core Doctor-normalized compat", normalizedStockModel],
+  ])("repairs only the stock row with %s", (_label, stockModel) => {
+    const customized = [
+      { ...stockModel, name: "My LongCat" },
+      { ...stockModel, cost: { ...stockModel.cost, cacheWrite: 0.5 } },
+      { ...stockModel, compat: { supportsStore: true } },
+      { id: "custom-model", name: "Custom" },
+    ];
+    const config = longcatConfig([structuredClone(stockModel), ...customized]);
 
     expect(legacyConfigRules[0]?.match?.(config.models?.providers?.longcat?.models)).toBe(true);
 
@@ -55,45 +58,15 @@ describe("LongCat doctor contract", () => {
     ]);
     expect(result.config.models?.providers?.longcat?.models).toEqual([
       {
-        ...LEGACY_STOCK_MODEL,
-        cost: { ...LEGACY_STOCK_MODEL.cost, cacheWrite: 0 },
+        ...stockModel,
+        cost: { ...stockModel.cost, cacheWrite: 0 },
       },
-      custom,
-      other,
+      ...customized,
     ]);
     expect(config.models?.providers?.longcat?.models?.[0]?.cost.cacheWrite).toBe(0.75);
     expect(normalizeCompatibilityConfig({ cfg: result.config })).toEqual({
       config: result.config,
       changes: [],
     });
-  });
-
-  it("repairs the historical row after core Doctor removes catalog-owned compat", () => {
-    const { compat: _compat, ...normalizedLegacyStockModel } = LEGACY_STOCK_MODEL;
-    const custom = {
-      ...normalizedLegacyStockModel,
-      compat: { supportsStore: true },
-    };
-    const config = longcatConfig([normalizedLegacyStockModel, custom]);
-
-    const result = normalizeCompatibilityConfig({ cfg: config });
-    expect(result.config.models?.providers?.longcat?.models).toEqual([
-      {
-        ...normalizedLegacyStockModel,
-        cost: { ...normalizedLegacyStockModel.cost, cacheWrite: 0 },
-      },
-      custom,
-    ]);
-  });
-
-  it("preserves customized prices and already-correct rows", () => {
-    for (const cacheWrite of [0, 0.5]) {
-      const model = {
-        ...LEGACY_STOCK_MODEL,
-        cost: { ...LEGACY_STOCK_MODEL.cost, cacheWrite },
-      };
-      const config = longcatConfig([model]);
-      expect(normalizeCompatibilityConfig({ cfg: config })).toEqual({ config, changes: [] });
-    }
   });
 });

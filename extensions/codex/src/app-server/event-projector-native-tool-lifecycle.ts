@@ -5,12 +5,13 @@ import type {
 import { emitTrustedDiagnosticEvent } from "openclaw/plugin-sdk/diagnostic-runtime";
 import { asDateTimestampMs } from "openclaw/plugin-sdk/number-runtime";
 import { readStringField as readString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { resolveCodexToolAbortTerminalReason } from "./dynamic-tool-execution.js";
 import {
   auditNativeToolName,
   auditNativeToolTerminalStatus,
   auditNativeToolUnfinishedStatus,
+  itemName,
   itemStatus,
+  shouldClearTerminalPresentationForNativeItem,
   type CodexNativeToolAuditStatus,
   type CodexNativeToolUnfinishedStatus,
 } from "./event-projector-items.js";
@@ -19,19 +20,18 @@ import {
   emitCodexNativePreToolUseFailureDiagnostic,
   type CodexNativePreToolUseFailure,
 } from "./native-hook-relay.js";
-import { isCodexNotificationForTurn } from "./notification-correlation.js";
-import { readCodexTurn } from "./protocol-validators.js";
 import {
   isJsonObject,
-  type CodexServerNotification,
+  type CodexPreparedServerNotification,
   type CodexThreadItem,
   type JsonObject,
   type JsonValue,
 } from "./protocol.js";
+import { resolveCodexToolAbortTerminalReason } from "./tool-abort-terminal-reason.js";
 
 type CodexNativeToolLifecycleContext = Pick<
   EmbeddedRunAttemptParams,
-  "agentId" | "runId" | "sessionId" | "sessionKey"
+  "agentId" | "runId" | "sessionId" | "sessionKey" | "allocateToolOutcomeOrdinal" | "onToolOutcome"
 >;
 
 type CodexNativeToolLifecycleProjectorOptions = {
@@ -58,15 +58,18 @@ function isMcpToolCallItemNotification(method: string, params: JsonObject): bool
   );
 }
 
-/** Owns native item lifetimes for diagnostics and MCP approval correlation. */
+/** Owns native item lifetimes, outcome order, presentation, and approval correlation. */
 export class CodexNativeToolLifecycleProjector {
-  private readonly startedAtByItem = new Map<string, number>();
+  private readonly terminalPresentationClearedItemIds = new Set<string>();
+  private readonly nativeToolOutcomeOrdinals = new Map<string, number>();
   private readonly activeItems = new Map<
     string,
     {
       toolName: string;
+      startedAt: number;
       unfinishedStatus: CodexNativeToolUnfinishedStatus;
       mcpToolCall?: CodexThreadItem;
+      commandProcessId?: string | null;
     }
   >();
   private readonly webSearchCompletionByItem = new Map<
@@ -89,6 +92,40 @@ export class CodexNativeToolLifecycleProjector {
     private readonly turnId: string,
     private readonly options: CodexNativeToolLifecycleProjectorOptions = {},
   ) {}
+
+  recordNativeToolOutcome(item: CodexThreadItem | undefined): void {
+    if (
+      !item ||
+      this.nativeToolOutcomeOrdinals.has(item.id) ||
+      !shouldClearTerminalPresentationForNativeItem(item)
+    ) {
+      return;
+    }
+    const ordinal = this.context.allocateToolOutcomeOrdinal?.(item.id);
+    if (ordinal !== undefined) {
+      this.nativeToolOutcomeOrdinals.set(item.id, ordinal);
+    }
+  }
+
+  clearTerminalPresentationForNativeItem(item: CodexThreadItem | undefined): void {
+    if (
+      !item ||
+      this.terminalPresentationClearedItemIds.has(item.id) ||
+      !shouldClearTerminalPresentationForNativeItem(item)
+    ) {
+      return;
+    }
+    const toolCallOrdinal = this.nativeToolOutcomeOrdinals.get(item.id);
+    this.terminalPresentationClearedItemIds.add(item.id);
+    this.context.onToolOutcome?.({
+      toolName: itemName(item) ?? item.type,
+      argsHash: "",
+      resultHash: "",
+      ...(toolCallOrdinal !== undefined ? { toolCallOrdinal } : {}),
+      terminalPresentation: undefined,
+      presentationOnly: true,
+    });
+  }
 
   getActiveMcpToolCall(serverName: string): CodexActiveMcpToolCall | undefined {
     if (
@@ -114,8 +151,7 @@ export class CodexNativeToolLifecycleProjector {
     if (
       !candidate ||
       candidate.status !== "inProgress" ||
-      typeof candidate.server !== "string" ||
-      !candidate.server.trim() ||
+      !serverName.trim() ||
       typeof candidate.tool !== "string" ||
       !candidate.tool.trim() ||
       candidate.arguments === undefined ||
@@ -126,15 +162,15 @@ export class CodexNativeToolLifecycleProjector {
     }
     return {
       id: candidate.id,
-      server: candidate.server,
+      server: serverName,
       tool: candidate.tool,
       arguments: candidate.arguments,
     };
   }
 
-  recordMcpToolCallReceipt(notification: CodexServerNotification): void {
+  recordMcpToolCallReceipt(notification: CodexPreparedServerNotification): void {
     const params = isJsonObject(notification.params) ? notification.params : undefined;
-    if (!params || !isCodexNotificationForTurn(params, this.threadId, this.turnId)) {
+    if (!params || notification.threadId !== this.threadId || notification.turnId !== this.turnId) {
       return;
     }
     // The route's receipt hook precedes its FIFO projection queue. Refuse stale
@@ -143,15 +179,15 @@ export class CodexNativeToolLifecycleProjector {
       this.pendingMcpNotifications += 1;
     } else if (
       notification.method === "turn/completed" &&
-      readCodexTurn(params.turn)?.id === this.turnId
+      notification.completedTurn?.id === this.turnId
     ) {
       this.turnCompleted = true;
     }
   }
 
-  handleNotification(notification: CodexServerNotification): void {
+  handleNotification(notification: CodexPreparedServerNotification): void {
     const params = isJsonObject(notification.params) ? notification.params : undefined;
-    if (!params || !isCodexNotificationForTurn(params, this.threadId, this.turnId)) {
+    if (!params || notification.threadId !== this.threadId || notification.turnId !== this.turnId) {
       return;
     }
     if (
@@ -161,12 +197,12 @@ export class CodexNativeToolLifecycleProjector {
       this.pendingMcpNotifications -= 1;
     }
     if (notification.method === "turn/completed") {
-      const turn = readCodexTurn(params.turn);
+      const turn = notification.completedTurn;
       if (!turn || turn.id !== this.turnId) {
         return;
       }
       this.turnCompleted = true;
-      for (const item of turn.items ?? []) {
+      for (const item of turn.items) {
         this.recordSnapshotItem(item);
       }
       return;
@@ -213,6 +249,9 @@ export class CodexNativeToolLifecycleProjector {
         auditNativeToolUnfinishedStatus(params.item),
         params.sourceTimestampMs,
         params.item.type === "mcpToolCall" ? params.item : undefined,
+        params.item.type === "commandExecution"
+          ? (readString(params.item, "processId") ?? null)
+          : undefined,
       );
       return;
     }
@@ -310,10 +349,9 @@ export class CodexNativeToolLifecycleProjector {
     const approvalFailureDisposition = this.approvalFailureDispositionByItem.get(toolCallId);
     this.approvalFailureDispositionByItem.delete(toolCallId);
     this.completedItemIds.add(toolCallId);
+    const startedAt = this.activeItems.get(toolCallId)?.startedAt;
     this.activeItems.delete(toolCallId);
     this.webSearchCompletionByItem.delete(toolCallId);
-    const startedAt = this.startedAtByItem.get(toolCallId);
-    this.startedAtByItem.delete(toolCallId);
     const endedAt = options.sourceTimestampMs ?? Date.now();
     const durationMs =
       options.itemDurationMs ?? (startedAt === undefined ? 0 : Math.max(0, endedAt - startedAt));
@@ -374,14 +412,32 @@ export class CodexNativeToolLifecycleProjector {
     });
   }
 
-  finalizeActive(runWasAborted = this.options.runAbortSignal?.aborted === true): void {
+  pendingCommands(): ReadonlyMap<string, string | null> {
+    const commands = new Map<string, string | null>();
+    for (const [id, item] of this.activeItems) {
+      if (item.commandProcessId !== undefined) {
+        commands.set(id, item.commandProcessId);
+      }
+    }
+    return commands;
+  }
+
+  finalizeActive(
+    runWasAborted = this.options.runAbortSignal?.aborted === true,
+    retainedCommands: ReadonlyMap<string, string> = new Map(),
+  ): void {
     this.finalized = true;
-    for (const [toolCallId, { toolName, unfinishedStatus }] of this.activeItems) {
+    for (const [toolCallId, { toolName, unfinishedStatus, commandProcessId }] of this.activeItems) {
       const webSearchCompletion = this.webSearchCompletionByItem.get(toolCallId);
       const itemRunWasAborted = webSearchCompletion
         ? webSearchCompletion.runWasAborted
         : runWasAborted;
-      this.recordTerminal(toolCallId, toolName, unfinishedStatus, {
+      const retained =
+        !itemRunWasAborted &&
+        commandProcessId !== undefined &&
+        retainedCommands.has(toolCallId) &&
+        (commandProcessId === null || retainedCommands.get(toolCallId) === commandProcessId);
+      this.recordTerminal(toolCallId, toolName, retained ? "unknown" : unfinishedStatus, {
         runWasAborted: itemRunWasAborted,
         sourceTimestampMs: webSearchCompletion?.sourceTimestampMs,
       });
@@ -417,15 +473,8 @@ export class CodexNativeToolLifecycleProjector {
   }
 
   private recordSnapshotItem(item: CodexThreadItem): void {
-    if (
-      !auditNativeToolName(item) ||
-      this.completedItemIds.has(item.id) ||
-      itemStatus(item) === "running"
-    ) {
-      return;
-    }
     const toolName = auditNativeToolName(item);
-    if (!toolName) {
+    if (!toolName || this.completedItemIds.has(item.id) || itemStatus(item) === "running") {
       return;
     }
     this.recordStarted(item.id, toolName, auditNativeToolUnfinishedStatus(item));
@@ -438,12 +487,18 @@ export class CodexNativeToolLifecycleProjector {
     unfinishedStatus: CodexNativeToolUnfinishedStatus,
     sourceTimestampMs?: number,
     mcpToolCall?: CodexThreadItem,
+    commandProcessId?: string | null,
   ): void {
     if (this.activeItems.has(toolCallId)) {
       return;
     }
-    this.startedAtByItem.set(toolCallId, sourceTimestampMs ?? Date.now());
-    this.activeItems.set(toolCallId, { toolName, unfinishedStatus, mcpToolCall });
+    this.activeItems.set(toolCallId, {
+      toolName,
+      startedAt: sourceTimestampMs ?? Date.now(),
+      unfinishedStatus,
+      mcpToolCall,
+      commandProcessId,
+    });
     emitTrustedDiagnosticEvent({
       type: "tool.execution.started",
       ...this.buildBase(toolCallId, toolName),

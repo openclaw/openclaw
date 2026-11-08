@@ -1,16 +1,16 @@
 #!/usr/bin/env node
-// Ensures Playwright Chromium is installed or a usable system browser is available.
 import { spawnSync as spawnSyncImpl } from "node:child_process";
 import { existsSync as existsSyncImpl, realpathSync } from "node:fs";
+import { createRequire } from "node:module";
 import { isAbsolute, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
 import { parsePermissiveBooleanToken } from "./lib/arg-utils.mts";
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
-import { resolvePnpmRunner, type PnpmRunnerParams } from "./pnpm-runner.mts";
+import { resolveNodePackageBin } from "./run-node-package-bin.mts";
 
 const repoRoot = resolveRepoRoot(import.meta.url);
-const playwrightInstallBaseArgs = ["--dir", "ui", "exec", "playwright", "install"];
+const requireFromUi = createRequire(resolve(repoRoot, "ui/package.json"));
 const executableOverrideEnvKey = "PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH";
 const chromiumPackageNames = ["chromium-browser", "chromium"];
 type SpawnSyncLike = (
@@ -18,22 +18,19 @@ type SpawnSyncLike = (
   args: string[],
   options?: Record<string, unknown>,
 ) => { status: number | null };
-type PnpmEnvironmentOptions = Pick<PnpmRunnerParams, "comSpec" | "env" | "platform">;
-type ChromiumInstallOptions = PnpmEnvironmentOptions & {
+type ChromiumInstallOptions = {
   cwd?: string;
+  env?: NodeJS.ProcessEnv;
   ensureFfmpeg?: boolean;
   executablePath?: string;
   existsSync?: (path: string) => boolean;
   getuid?: () => number;
   log?: (message: string) => void;
+  platform?: NodeJS.Platform;
   requirePlaywrightChromium?: boolean;
   spawnSync?: SpawnSyncLike;
   stdio?: "ignore" | "inherit" | "pipe";
   systemExecutablePath?: string;
-};
-type PlaywrightRunnerOptions = PnpmEnvironmentOptions & {
-  targets?: string[];
-  withDeps?: boolean;
 };
 /**
  * System Chromium executable paths used before downloading Playwright browsers.
@@ -46,9 +43,6 @@ export const systemChromiumExecutableCandidates = [
   "/usr/bin/google-chrome-stable",
 ];
 
-/**
- * Checks whether a Chromium executable can start enough to print its version.
- */
 export function canRunChromiumExecutable(
   executablePath: string,
   spawnSync: SpawnSyncLike = spawnSyncImpl,
@@ -59,9 +53,6 @@ export function canRunChromiumExecutable(
   return result.status === 0;
 }
 
-/**
- * Resolves the first runnable system Chromium executable path.
- */
 export function resolveSystemChromiumExecutablePath(
   existsSync: (path: string) => boolean = existsSyncImpl,
   spawnSync: SpawnSyncLike = spawnSyncImpl,
@@ -73,28 +64,6 @@ export function resolveSystemChromiumExecutablePath(
   );
 }
 
-/**
- * Builds the pnpm runner invocation for Playwright browser install.
- */
-export function resolvePlaywrightInstallRunner(options: PlaywrightRunnerOptions = {}) {
-  const env = options.env ?? process.env;
-  const targets = options.targets ?? ["chromium"];
-  return resolvePnpmRunner({
-    comSpec: options.comSpec,
-    env,
-    npmExecPath: env === process.env ? env.npm_execpath : (env.npm_execpath ?? ""),
-    platform: options.platform,
-    pnpmArgs: [
-      ...playwrightInstallBaseArgs,
-      ...(options.withDeps ? ["--with-deps"] : []),
-      ...targets,
-    ],
-  });
-}
-
-/**
- * Reports whether Linux system dependencies should be installed with Chromium.
- */
 export function shouldInstallPlaywrightSystemDependencies(
   options: Pick<ChromiumInstallOptions, "env" | "getuid" | "platform"> = {},
 ) {
@@ -178,9 +147,6 @@ export function installLinuxSystemChromiumPackage(options: ChromiumInstallOption
   return 1;
 }
 
-/**
- * Checks whether this module is the direct script entrypoint.
- */
 export function isDirectScriptExecution(
   argvEntry: string | undefined = process.argv[1],
   modulePath = fileURLToPath(import.meta.url),
@@ -196,13 +162,10 @@ export function isDirectScriptExecution(
   }
 }
 
-/**
- * Ensures a runnable Chromium exists for Playwright-based UI tests.
- */
 export function ensurePlaywrightChromium(options: ChromiumInstallOptions = {}) {
   const env = options.env ?? process.env;
   const browserPath = env.PLAYWRIGHT_BROWSERS_PATH;
-  // pnpm --dir ui changes the installer's cwd; keep its cache aligned with the caller.
+  // The installer runs in the UI package; keep its cache aligned with the caller.
   const installEnv =
     browserPath && browserPath !== "0" && !isAbsolute(browserPath)
       ? {
@@ -221,20 +184,21 @@ export function ensurePlaywrightChromium(options: ChromiumInstallOptions = {}) {
   const log = options.log ?? console.error;
   const spawnSync = options.spawnSync ?? spawnSyncImpl;
   const runPlaywrightInstall = (targets: string[] = ["chromium"], withDeps = false) => {
-    const runner = resolvePlaywrightInstallRunner({
-      comSpec: options.comSpec,
-      env: installEnv,
-      platform: options.platform,
-      targets,
-      withDeps,
-    });
-    const result = spawnSync(runner.command, runner.args, {
-      cwd: options.cwd ?? repoRoot,
-      env: installEnv,
-      shell: runner.shell,
-      stdio: options.stdio ?? "inherit",
-      windowsVerbatimArguments: runner.windowsVerbatimArguments,
-    });
+    const result = spawnSync(
+      process.execPath,
+      [
+        resolveNodePackageBin("playwright", requireFromUi),
+        "install",
+        ...(withDeps ? ["--with-deps"] : []),
+        ...targets,
+      ],
+      {
+        cwd: resolve(options.cwd ?? repoRoot, "ui"),
+        env: installEnv,
+        shell: false,
+        stdio: options.stdio ?? "inherit",
+      },
+    );
     return result.status ?? 1;
   };
   const useLinuxSystemChromiumPackage = () => {

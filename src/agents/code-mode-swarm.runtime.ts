@@ -1,18 +1,28 @@
-import { createHash } from "node:crypto";
 import { stableStringify } from "@openclaw/normalization-core";
+import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { composeSessionSourceAssertion } from "../config/sessions/session-source-authority.js";
 import { emitSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
+import {
+  captureAgentToolSourceExecutionGuard,
+  runAgentToolSourceExecutionGuard,
+  runWithAgentToolSourceExecutionScope,
+} from "./agent-tool-source-execution-guard.js";
 import type { PendingBridgeRequest } from "./code-mode-worker-types.js";
 import type { AgentToolUpdateCallback } from "./runtime/index.js";
-import {
-  getSwarmRunByLaunchReplayKey,
-  initSubagentRegistry,
-} from "./subagents/registry/subagent-registry.js";
+import { isSubagentRunQueued } from "./subagents/registry/subagent-registry-read.js";
+import { getSwarmRunByLaunchReplayKey } from "./subagents/registry/subagent-registry.js";
 import type { SubagentRunRecord } from "./subagents/registry/subagent-registry.types.js";
 import {
   SWARM_CODE_MODE_IDEMPOTENCY_KEY,
   SWARM_CODE_MODE_REQUEST_FINGERPRINT,
 } from "./subagents/swarm/swarm-code-mode.js";
+import {
+  isCollectorSpawnTool,
+  runWithJoinedCollectorSpawn,
+} from "./subagents/swarm/swarm-collector-capability.js";
+import { resolveSwarmConfig } from "./subagents/swarm/swarm-config.js";
+import { isToolExecutionAllowed } from "./tool-policy-shared.js";
 import type { ToolSearchRuntime } from "./tool-search-runtime.js";
 import type { ToolSearchToolContext } from "./tool-search-types.js";
 import {
@@ -27,8 +37,8 @@ function resolveCodeModeRequesterSessionKey(ctx: ToolSearchToolContext): string 
   if (!sessionKey) {
     throw new ToolInputError("code mode swarm globals require session and run identity.");
   }
-  const { mainKey, alias } = resolveMainSessionAlias(ctx.runtimeConfig ?? ctx.config ?? {});
-  return resolveInternalSessionKey({ key: sessionKey, alias, mainKey });
+  const { alias } = resolveMainSessionAlias(ctx.runtimeConfig ?? ctx.config ?? {});
+  return resolveInternalSessionKey({ key: sessionKey, alias });
 }
 
 function resolveCodeModeSwarmGroupId(ctx: ToolSearchToolContext): string {
@@ -78,8 +88,14 @@ async function runAgentSpawnBridge(params: {
     throw new ToolInputError("agents.run prompt must be a non-empty string.");
   }
   const fastMode = options.fastMode;
-  if (fastMode !== undefined && fastMode !== true && fastMode !== false && fastMode !== "auto") {
-    throw new ToolInputError('agents.run fastMode must be boolean or "auto".');
+  if (
+    fastMode !== undefined &&
+    fastMode !== true &&
+    fastMode !== false &&
+    fastMode !== "auto" &&
+    fastMode !== "ultrafast"
+  ) {
+    throw new ToolInputError('agents.run fastMode must be boolean, "auto", or "ultrafast".');
   }
   const schema = options.schema;
   if (schema !== undefined && !isRecord(schema)) {
@@ -89,12 +105,31 @@ async function runAgentSpawnBridge(params: {
   const model = readOptionalStringOption(options, "model");
   const thinking = readOptionalStringOption(options, "thinking");
   const agentId = readOptionalStringOption(options, "agentId");
-  const spawnEntry = params.runtime
-    .namespaceEntries()
-    .find((entry) => entry.source === "openclaw" && entry.name === "sessions_spawn");
-  if (!spawnEntry) {
-    throw new ToolInputError("agents.run requires the sessions_spawn tool.");
+  const catalog = params.ctx.catalogRef?.current;
+  const spawnEntry = catalog?.entries.find(
+    (entry) => entry.name === "sessions_spawn" && isCollectorSpawnTool(entry.tool),
+  );
+  if (!catalog || !spawnEntry || !isCollectorSpawnTool(spawnEntry.tool)) {
+    throw new ToolInputError("agents.run requires the native sessions_spawn tool.");
   }
+  const spawnTool = spawnEntry.tool;
+  const assertSourceActive = captureAgentToolSourceExecutionGuard(params.signal);
+  const assertCurrent = composeSessionSourceAssertion([assertSourceActive], (assertSource) => {
+    assertSource();
+    params.ctx.abortSignal?.throwIfAborted();
+    if (
+      params.ctx.catalogRef?.current !== catalog ||
+      !catalog.entries.includes(spawnEntry) ||
+      !resolveSwarmConfig(params.ctx.runtimeConfig ?? params.ctx.config, params.ctx.agentId)
+        .enabled ||
+      (params.ctx.toolExecutionAllow &&
+        !isToolExecutionAllowed(params.ctx.toolExecutionAllow, "sessions_spawn"))
+    ) {
+      throw new ToolInputError("Joined collector spawn catalog is no longer active.");
+    }
+    runAgentToolSourceExecutionGuard(spawnTool);
+  });
+  assertCurrent();
   const spawnInput: Record<PropertyKey, unknown> = {
     task: prompt.trim(),
     collect: true,
@@ -106,13 +141,11 @@ async function runAgentSpawnBridge(params: {
     ...(fastMode !== undefined ? { fastMode } : {}),
     ...(schema ? { outputSchema: schema } : {}),
   };
-  const requestFingerprint = `sha256:${createHash("sha256")
-    .update(stableStringify(spawnInput))
-    .digest("hex")}`;
+  const requestFingerprint = `sha256:${sha256Hex(stableStringify(spawnInput))}`;
   // The registry persists this exact tuple and payload hash before launch.
   const idempotencyKey = `${params.codeModeRunId}:${params.request.id}`;
   const requesterSessionKey = resolveCodeModeRequesterSessionKey(params.ctx);
-  let existing = getSwarmRunByLaunchReplayKey(
+  const existing = await getSwarmRunByLaunchReplayKey(
     idempotencyKey,
     requesterSessionKey,
     params.ctx.agentId,
@@ -121,20 +154,14 @@ async function runAgentSpawnBridge(params: {
     if (existing.swarmLaunchRequestFingerprint !== requestFingerprint) {
       throw new ToolInputError("agents.run replay request does not match the persisted collector.");
     }
-    if (existing.swarmLaunchPending === true) {
-      if (!existing.queuedLaunch) {
-        throw new ToolInputError("agents.run persisted launch reservation cannot be recovered.");
-      }
-      // Cold-start restore idempotently re-enqueues this durable launch before agentWait parks.
-      initSubagentRegistry();
-      existing =
-        getSwarmRunByLaunchReplayKey(idempotencyKey, requesterSessionKey, params.ctx.agentId) ??
-        existing;
-      if (existing.swarmLaunchPending === true && !existing.queuedLaunch) {
-        throw new ToolInputError("agents.run persisted launch reservation cannot be recovered.");
-      }
+    if (existing.swarmLaunchPending === true && !isSubagentRunQueued(existing)) {
+      throw new ToolInputError("agents.run launch is no longer active; start a new request.");
     }
-    return replayedSpawnResult(existing);
+    const replay = existing;
+    return await runWithAgentToolSourceExecutionScope(assertCurrent, async () => {
+      assertCurrent();
+      return replayedSpawnResult(replay);
+    });
   }
   Object.defineProperty(spawnInput, SWARM_CODE_MODE_IDEMPOTENCY_KEY, {
     value: idempotencyKey,
@@ -142,11 +169,13 @@ async function runAgentSpawnBridge(params: {
   Object.defineProperty(spawnInput, SWARM_CODE_MODE_REQUEST_FINGERPRINT, {
     value: requestFingerprint,
   });
-  const called = await params.runtime.callExactId(spawnEntry.id, spawnInput, {
-    parentToolCallId: params.parentToolCallId,
-    signal: params.signal,
-    onUpdate: params.onUpdate,
-  });
+  const called = await runWithJoinedCollectorSpawn(spawnEntry.tool, assertCurrent, () =>
+    params.runtime.callExactId(spawnEntry.id, spawnInput, {
+      parentToolCallId: params.parentToolCallId,
+      signal: params.signal,
+      onUpdate: params.onUpdate,
+    }),
+  );
   const value =
     isRecord(called.result) && "details" in called.result ? called.result.details : called.result;
   if (!isRecord(value) || value.status !== "accepted" || typeof value.runId !== "string") {
@@ -199,6 +228,7 @@ function runSwarmNoteBridge(params: {
   emitSessionLifecycleEvent({
     sessionKey,
     reason: "swarm-note",
+    scope: "runtime",
     swarmGroupId: resolveCodeModeSwarmGroupId(params.ctx),
     kind,
     text: text.trim(),

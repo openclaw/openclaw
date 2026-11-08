@@ -1,196 +1,77 @@
-// Authenticated HTTP avatar serving and Gravatar proxying for durable user profiles.
 import { createHash } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { GATEWAY_OWNER_PROFILE_ID } from "../../packages/gateway-protocol/src/schema/users.js";
 import { getRuntimeConfig } from "../config/io.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
+import { resolveHostAccountAvatar } from "../infra/host-account-avatar.js";
+import { readResponseWithLimit } from "../infra/http-response-body.js";
+import { LruCache } from "../infra/lru-cache.js";
+import { WorkerTaskError } from "../infra/worker-task-pool.js";
 import { getOrCreatePromise } from "../shared/lazy-promise.js";
-import {
-  formatUserProfileAvatarEtag,
-  getProfileAvatar,
-  getUserProfileListItem,
-  UserProfileNotFoundError,
-} from "../state/user-profiles.js";
-import type { AuthRateLimiter } from "./auth-rate-limit.js";
-import type { ResolvedGatewayAuth } from "./auth.js";
+import { createProfileAvatarReader } from "../state/user-profiles-avatar.js";
+import { formatUserProfileAvatarEtag, UserProfileNotFoundError } from "../state/user-profiles.js";
 import { parseControlUiUserAvatarPath } from "./control-ui-contract.js";
-import { sendJson, sendMethodNotAllowed } from "./http-common.js";
+import { setControlUiImageCorsHeaders } from "./control-ui-image-cors.js";
+import { authorizeControlUiReadRequestOrReply } from "./http-auth-utils.js";
+import { sendJson, sendMethodNotAllowed, watchClientDisconnect } from "./http-common.js";
 import { matchesHttpIfNoneMatch } from "./http-conditional.js";
-import {
-  authorizeScopedUserProfileAvatarHttpRequestOrReply,
-  resolveSharedSecretHttpOperatorScopes,
-} from "./http-utils.js";
+import type { GatewayHttpRequestAuthOptions } from "./http-request-authority.js";
 
 const GRAVATAR_BASE_URL = "https://www.gravatar.com/avatar";
-const GRAVATAR_FETCH_TIMEOUT_MS = 5_000;
-// Whole-request budget shared across a profile's linked emails. Lookups run
-// sequentially (see the resolution loop) so a secondary email's hash is only
-// disclosed to Gravatar after the earlier one is a definite miss; this deadline
-// bounds the total wait so an unreachable Gravatar cannot stall the held
-// connection by GRAVATAR_FETCH_TIMEOUT_MS × linked-email-count.
-const GRAVATAR_TOTAL_TIMEOUT_MS = 6_000;
-const GRAVATAR_CACHE_MAX_ENTRIES = 256;
-const GRAVATAR_CACHE_MAX_BYTES = 16 * 1024 * 1024;
-const GRAVATAR_HIT_TTL_MS = 24 * 60 * 60_000;
-const GRAVATAR_MISS_TTL_MS = 15 * 60_000;
-const MAX_GRAVATAR_BYTES = 1_000_000;
-// Bound the Gravatar fan-out per avatar request. Linked emails are primary-first
-// and resolved sequentially with short-circuit, so the cap only matters when
-// every earlier email misses; it stops a profile with many linked addresses from
-// probing an unbounded number of them against Gravatar.
+const REMOTE_AVATAR_FETCH_TIMEOUT_MS = 5_000;
+// Bound the total wait across GitHub and linked-email lookups, not each lookup alone.
+const REMOTE_AVATAR_TOTAL_TIMEOUT_MS = 6_000;
+const REMOTE_AVATAR_CACHE_MAX_ENTRIES = 256;
+const REMOTE_AVATAR_CACHE_MAX_BYTES = 16 * 1024 * 1024;
+const REMOTE_AVATAR_HIT_TTL_MS = 24 * 60 * 60_000;
+const REMOTE_AVATAR_MISS_TTL_MS = 15 * 60_000;
+const MAX_REMOTE_AVATAR_BYTES = 1_000_000;
+// Bound upstream disclosure when every earlier linked email misses.
 const MAX_GRAVATAR_EMAIL_LOOKUPS = 8;
-const GRAVATAR_MIME_TYPES = new Set(["image/gif", "image/jpeg", "image/png", "image/webp"]);
+const REMOTE_AVATAR_MIME_TYPES = new Set(["image/gif", "image/jpeg", "image/png", "image/webp"]);
 
-function resolveAvatarCorsOrigin(req: IncomingMessage, cfg: OpenClawConfig): string | undefined {
-  const rawOrigin = typeof req.headers.origin === "string" ? req.headers.origin.trim() : "";
-  if (!rawOrigin) {
-    return undefined;
-  }
-  let origin: string;
-  try {
-    const parsed = new URL(rawOrigin);
-    if (parsed.origin !== rawOrigin || parsed.username || parsed.password) {
-      return undefined;
-    }
-    origin = parsed.origin;
-  } catch {
-    return undefined;
-  }
-  const allowed = cfg.gateway?.controlUi?.allowedOrigins ?? [];
-  return allowed.some((candidate) => candidate.trim() === "*" || candidate.trim() === origin)
-    ? origin
-    : undefined;
-}
-
-function setAvatarCorsHeaders(
-  req: IncomingMessage,
-  res: ServerResponse,
-  cfg: OpenClawConfig,
-): boolean {
-  if (!req.headers.origin) {
-    return true;
-  }
-  const origin = resolveAvatarCorsOrigin(req, cfg);
-  if (!origin) {
-    return false;
-  }
-  res.setHeader("Access-Control-Allow-Origin", origin);
-  res.setHeader("Access-Control-Allow-Credentials", "true");
-  res.setHeader("Vary", "Origin");
-  return true;
-}
-
-type GravatarHit = {
+type RemoteAvatarHit = {
   kind: "hit";
   bytes: Uint8Array;
   mime: string;
   etag: string;
 };
 
-type GravatarResult = GravatarHit | { kind: "miss" } | { kind: "error" };
-type CachedGravatarResult = Exclude<GravatarResult, { kind: "error" }> & { expiresAtMs: number };
+type RemoteAvatarResult = RemoteAvatarHit | { kind: "miss" } | { kind: "error" };
+type CachedRemoteAvatarResult = Exclude<RemoteAvatarResult, { kind: "error" }> & {
+  expiresAtMs: number;
+};
 
-const gravatarCache = new Map<string, CachedGravatarResult>();
-const gravatarRequests = new Map<string, Promise<GravatarResult>>();
-let gravatarCacheBytes = 0;
+const remoteAvatarCache = new LruCache<CachedRemoteAvatarResult>(REMOTE_AVATAR_CACHE_MAX_ENTRIES, {
+  maxBytes: REMOTE_AVATAR_CACHE_MAX_BYTES,
+  sizeOf: (result) => (result.kind === "hit" ? result.bytes.byteLength : 0),
+});
+const remoteAvatarRequests = new Map<string, Promise<RemoteAvatarResult>>();
 
-function deleteCachedGravatar(hash: string): void {
-  const cached = gravatarCache.get(hash);
-  if (cached?.kind === "hit") {
-    gravatarCacheBytes -= cached.bytes.byteLength;
-  }
-  gravatarCache.delete(hash);
-}
-
-function hashEmail(email: string): string {
-  return createHash("sha256").update(email.trim().toLowerCase()).digest("hex");
-}
-
-function getCachedGravatar(hash: string, nowMs: number): GravatarResult | undefined {
-  const cached = gravatarCache.get(hash);
+function getCachedRemoteAvatar(url: string, nowMs: number): RemoteAvatarResult | undefined {
+  const cached = remoteAvatarCache.get(url);
   if (!cached) {
     return undefined;
   }
   if (cached.expiresAtMs <= nowMs) {
-    deleteCachedGravatar(hash);
+    remoteAvatarCache.delete(url);
     return undefined;
-  }
-  // Map insertion order is the LRU order. Promote on every hit.
-  deleteCachedGravatar(hash);
-  gravatarCache.set(hash, cached);
-  if (cached.kind === "hit") {
-    gravatarCacheBytes += cached.bytes.byteLength;
   }
   return cached.kind === "hit"
     ? { kind: "hit", bytes: cached.bytes, mime: cached.mime, etag: cached.etag }
     : { kind: "miss" };
 }
 
-function cacheGravatar(
-  hash: string,
-  result: Exclude<GravatarResult, { kind: "error" }>,
+function cacheRemoteAvatar(
+  url: string,
+  result: Exclude<RemoteAvatarResult, { kind: "error" }>,
   nowMs: number,
 ) {
-  const ttlMs = result.kind === "hit" ? GRAVATAR_HIT_TTL_MS : GRAVATAR_MISS_TTL_MS;
-  deleteCachedGravatar(hash);
-  const cached = { ...result, expiresAtMs: nowMs + ttlMs } satisfies CachedGravatarResult;
-  gravatarCache.set(hash, cached);
-  if (cached.kind === "hit") {
-    gravatarCacheBytes += cached.bytes.byteLength;
-  }
-  while (
-    gravatarCache.size > GRAVATAR_CACHE_MAX_ENTRIES ||
-    gravatarCacheBytes > GRAVATAR_CACHE_MAX_BYTES
-  ) {
-    const oldest = gravatarCache.keys().next().value;
-    if (oldest === undefined) {
-      break;
-    }
-    deleteCachedGravatar(oldest);
-  }
+  const ttlMs = result.kind === "hit" ? REMOTE_AVATAR_HIT_TTL_MS : REMOTE_AVATAR_MISS_TTL_MS;
+  remoteAvatarCache.set(url, { ...result, expiresAtMs: nowMs + ttlMs });
 }
 
-function normalizeContentType(value: string | null): string {
-  return value?.split(";", 1)[0]?.trim().toLowerCase() ?? "";
-}
-
-async function readBoundedGravatarBody(
-  body: ReadableStream<Uint8Array> | null,
-): Promise<Uint8Array | undefined> {
-  if (!body) {
-    return undefined;
-  }
-  const reader = body.getReader();
-  const chunks: Uint8Array[] = [];
-  let totalBytes = 0;
-  try {
-    while (true) {
-      const next = await reader.read();
-      if (next.done) {
-        break;
-      }
-      totalBytes += next.value.byteLength;
-      if (totalBytes > MAX_GRAVATAR_BYTES) {
-        await reader.cancel();
-        return undefined;
-      }
-      chunks.push(next.value);
-    }
-  } finally {
-    reader.releaseLock();
-  }
-  if (totalBytes === 0) {
-    return undefined;
-  }
-  const bytes = new Uint8Array(totalBytes);
-  let offset = 0;
-  for (const chunk of chunks) {
-    bytes.set(chunk, offset);
-    offset += chunk.byteLength;
-  }
-  return bytes;
-}
-
-async function cancelGravatarBody(body: ReadableStream<Uint8Array> | null): Promise<void> {
+async function cancelRemoteAvatarBody(body: ReadableStream<Uint8Array> | null): Promise<void> {
   try {
     await body?.cancel();
   } catch {
@@ -198,38 +79,35 @@ async function cancelGravatarBody(body: ReadableStream<Uint8Array> | null): Prom
   }
 }
 
-async function fetchGravatar(
-  hash: string,
-  fetchImpl: typeof globalThis.fetch,
-  deadline?: AbortSignal,
-): Promise<GravatarResult> {
+async function fetchRemoteAvatar(url: string): Promise<RemoteAvatarResult> {
   try {
-    const perCall = AbortSignal.timeout(GRAVATAR_FETCH_TIMEOUT_MS);
-    const response = await fetchImpl(`${GRAVATAR_BASE_URL}/${hash}?s=256&d=404`, {
+    const response = await fetch(url, {
       headers: { Accept: "image/webp,image/png,image/jpeg,image/gif" },
-      signal: deadline ? AbortSignal.any([deadline, perCall]) : perCall,
+      signal: AbortSignal.timeout(REMOTE_AVATAR_FETCH_TIMEOUT_MS),
+      redirect: url.startsWith(GRAVATAR_BASE_URL + "/") ? "follow" : "error",
     });
     if (response.status === 404) {
-      await cancelGravatarBody(response.body);
+      await cancelRemoteAvatarBody(response.body);
       return { kind: "miss" };
     }
     if (!response.ok) {
-      await cancelGravatarBody(response.body);
+      await cancelRemoteAvatarBody(response.body);
       return { kind: "error" };
     }
-    const mime = normalizeContentType(response.headers.get("content-type"));
+    const mime = response.headers.get("content-type")?.split(";", 1)[0]?.trim().toLowerCase() ?? "";
     const declaredLength = Number(response.headers.get("content-length"));
     if (
-      !GRAVATAR_MIME_TYPES.has(mime) ||
-      (Number.isFinite(declaredLength) && declaredLength > MAX_GRAVATAR_BYTES)
+      !REMOTE_AVATAR_MIME_TYPES.has(mime) ||
+      (Number.isFinite(declaredLength) && declaredLength > MAX_REMOTE_AVATAR_BYTES)
     ) {
-      await cancelGravatarBody(response.body);
+      await cancelRemoteAvatarBody(response.body);
       return { kind: "error" };
     }
-    const bytes = await readBoundedGravatarBody(response.body);
-    if (!bytes) {
+    const buffer = await readResponseWithLimit(response, MAX_REMOTE_AVATAR_BYTES);
+    if (buffer.byteLength === 0) {
       return { kind: "error" };
     }
+    const bytes = new Uint8Array(buffer.buffer, buffer.byteOffset, buffer.byteLength);
     const etag = `"gravatar-${createHash("sha256").update(bytes).digest("hex")}"`;
     return { kind: "hit", bytes, mime, etag };
   } catch {
@@ -237,21 +115,18 @@ async function fetchGravatar(
   }
 }
 
-async function resolveGravatar(
-  hash: string,
-  options: { fetchImpl: typeof globalThis.fetch; nowMs: () => number; deadline?: AbortSignal },
-): Promise<GravatarResult> {
-  const cached = getCachedGravatar(hash, options.nowMs());
+async function resolveRemoteAvatar(url: string): Promise<RemoteAvatarResult> {
+  const cached = getCachedRemoteAvatar(url, Date.now());
   if (cached) {
     return cached;
   }
   return await getOrCreatePromise(
-    gravatarRequests,
-    hash,
+    remoteAvatarRequests,
+    url,
     async () => {
-      const result = await fetchGravatar(hash, options.fetchImpl, options.deadline);
+      const result = await fetchRemoteAvatar(url);
       if (result.kind !== "error") {
-        cacheGravatar(hash, result, options.nowMs());
+        cacheRemoteAvatar(url, result, Date.now());
       }
       return result;
     },
@@ -262,9 +137,13 @@ async function resolveGravatar(
 function sendAvatar(
   req: IncomingMessage,
   res: ServerResponse,
-  avatar: { bytes: Uint8Array; mime: string; etag: string },
-  cacheControl: string,
+  avatar: { bytes?: Uint8Array; byteLength: number; mime: string; etag: string },
+  revision?: string,
 ): void {
+  const cacheControl =
+    revision && new URL(req.url ?? "/", "http://localhost").searchParams.get("v") === revision
+      ? "private, max-age=31536000, immutable"
+      : "private, max-age=0, must-revalidate";
   if (matchesHttpIfNoneMatch(req.headers["if-none-match"], avatar.etag)) {
     // Carry the success cache policy so a 304 does not inherit the miss-path
     // no-store and force the client to re-download an unchanged avatar.
@@ -274,26 +153,20 @@ function sendAvatar(
   }
   res.writeHead(200, {
     "Content-Type": avatar.mime,
-    "Content-Length": avatar.bytes.byteLength,
+    "Content-Length": avatar.byteLength,
     "Cache-Control": cacheControl,
     ETag: avatar.etag,
   });
   res.end(req.method === "HEAD" ? undefined : avatar.bytes);
 }
 
-/** Serves a profile avatar to authenticated HTTP or verified Tailscale UI sessions. */
+/** Serves a profile avatar to authenticated Control UI readers. */
 export async function handleUserProfileAvatarHttpRequest(
   req: IncomingMessage,
   res: ServerResponse,
   pathname: string,
-  opts: {
-    auth: ResolvedGatewayAuth;
+  opts: GatewayHttpRequestAuthOptions & {
     basePath?: string;
-    trustedProxies?: string[];
-    allowRealIpFallback?: boolean;
-    rateLimiter?: AuthRateLimiter;
-    fetchImpl?: typeof globalThis.fetch;
-    nowMs?: () => number;
   },
 ): Promise<boolean> {
   const parsed = parseControlUiUserAvatarPath(pathname, opts.basePath ?? "");
@@ -301,8 +174,8 @@ export async function handleUserProfileAvatarHttpRequest(
     return false;
   }
   const method = req.method;
-  const cfg = getRuntimeConfig();
-  const corsAllowed = setAvatarCorsHeaders(req, res, cfg);
+  const cfg = opts.cfg ?? getRuntimeConfig();
+  const corsAllowed = setControlUiImageCorsHeaders(req, res, cfg);
   if (method === "OPTIONS") {
     if (!corsAllowed) {
       sendJson(res, 403, { ok: false, error: { type: "origin_not_allowed" } });
@@ -319,61 +192,91 @@ export async function handleUserProfileAvatarHttpRequest(
     sendMethodNotAllowed(res, "GET, HEAD");
     return true;
   }
-  const authResult = await authorizeScopedUserProfileAvatarHttpRequestOrReply({
+  // Personal avatars share the Control UI read boundary: paired device tokens
+  // must retain their approved scopes rather than be treated as shared secrets.
+  const authResult = await authorizeControlUiReadRequestOrReply({
+    ...opts,
     req,
     res,
-    auth: opts.auth,
-    trustedProxies: opts.trustedProxies,
-    allowRealIpFallback: opts.allowRealIpFallback,
-    rateLimiter: opts.rateLimiter,
-    operatorMethod: "users.list",
-    resolveOperatorScopes: resolveSharedSecretHttpOperatorScopes,
+    cfg,
+    trustedProxies: opts.trustedProxies ?? cfg.gateway?.trustedProxies,
+    allowRealIpFallback: opts.allowRealIpFallback ?? cfg.gateway?.allowRealIpFallback,
+    requiredOperatorMethod: "users.self",
   });
   if (!authResult) {
     return true;
   }
-  // Avatars render as plain <img> against a stable, unversioned route, so a
-  // heuristically-cached 404 miss would otherwise hide a later uploaded image.
-  // Misses must never be cached; the 200 path overrides this with must-revalidate.
+  authResult.assertCurrent();
+  // Cached misses would hide a later uploaded image behind the unversioned route.
   res.setHeader("Cache-Control", "no-store");
   const profileId = parsed.value;
+  // Exact-ID avatar reads expose shared presentation, not the profile directory.
+  // Session readers can render known people without users.list access to private
+  // emails, roles or account metadata; this endpoint never enumerates profiles.
   if (!profileId) {
     sendJson(res, 404, { ok: false, error: { type: "not_found" } });
     return true;
   }
-  let uploadedAvatar: ReturnType<typeof getProfileAvatar>;
+  let emails: string[];
+  let githubAvatarUrl: string | undefined;
+  let revision: string;
   try {
-    uploadedAvatar = getProfileAvatar(profileId);
+    const reader = createProfileAvatarReader(profileId);
+    for (;;) {
+      const prepared = await reader.inspect();
+      authResult.assertCurrent();
+      const profile = prepared.profile;
+      if (!profile) {
+        throw new UserProfileNotFoundError(profileId);
+      }
+      const uploaded = prepared.avatar;
+      if (uploaded) {
+        const etag = formatUserProfileAvatarEtag(uploaded.sha256, uploaded.mime);
+        const needsBytes =
+          method !== "HEAD" && !matchesHttpIfNoneMatch(req.headers["if-none-match"], etag);
+        const bytes = needsBytes ? await prepared.loadBytes() : undefined;
+        // Device grants may be revoked while image preparation is pending.
+        await authResult.revalidate();
+        if (!prepared.isCurrent() || (needsBytes && !bytes)) {
+          continue;
+        }
+        sendAvatar(req, res, { ...uploaded, bytes: bytes?.bytes, etag }, etag.slice(1, -1));
+        return true;
+      }
+      // A legacy owner tombstone must never borrow the host photo after a merge.
+      const hostAvatar =
+        profileId === GATEWAY_OWNER_PROFILE_ID && profile.id === profileId && !profile.mergedInto
+          ? await resolveHostAccountAvatar()
+          : null;
+      await authResult.revalidate();
+      if (!prepared.isCurrent()) {
+        continue;
+      }
+      if (hostAvatar) {
+        sendAvatar(req, res, {
+          ...hostAvatar,
+          byteLength: hostAvatar.bytes.byteLength,
+          etag: formatUserProfileAvatarEtag(hostAvatar.sha256, hostAvatar.mime),
+        });
+        return true;
+      }
+      revision = String(profile.updatedAt);
+      emails = prepared.emails;
+      githubAvatarUrl = prepared.githubAvatarUrl;
+      break;
+    }
   } catch (error) {
+    authResult.assertCurrent();
     if (error instanceof UserProfileNotFoundError) {
       sendJson(res, 404, { ok: false, error: { type: "not_found" } });
       return true;
     }
-    sendJson(res, 500, { ok: false, error: { type: "profile_lookup_failed" } });
-    return true;
-  }
-  if (uploadedAvatar) {
-    sendAvatar(
-      req,
-      res,
-      {
-        bytes: uploadedAvatar.bytes,
-        mime: uploadedAvatar.mime,
-        etag: formatUserProfileAvatarEtag(uploadedAvatar.sha256, uploadedAvatar.mime),
-      },
-      "private, max-age=0, must-revalidate",
-    );
-    return true;
-  }
-
-  let hashes: string[];
-  try {
-    hashes = getUserProfileListItem(profileId)
-      .emails.slice(0, MAX_GRAVATAR_EMAIL_LOOKUPS)
-      .map(hashEmail);
-  } catch (error) {
-    if (error instanceof UserProfileNotFoundError) {
-      sendJson(res, 404, { ok: false, error: { type: "not_found" } });
+    if (
+      error instanceof WorkerTaskError &&
+      (error.code === "overloaded" || error.code === "timeout")
+    ) {
+      res.setHeader("Retry-After", "1");
+      sendJson(res, 503, { ok: false, error: { type: "avatar_temporarily_unavailable" } });
       return true;
     }
     sendJson(res, 500, { ok: false, error: { type: "profile_lookup_failed" } });
@@ -382,25 +285,54 @@ export async function handleUserProfileAvatarHttpRequest(
 
   // Resolve linked emails sequentially and stop at the first hit: the primary
   // email keeps precedence, and a secondary email's hash is disclosed to
-  // Gravatar only once the earlier one is a definite miss. A single shared
-  // deadline bounds the total wait, so an unreachable Gravatar cannot stall the
-  // held connection by one timeout per linked email.
-  const deadline = AbortSignal.timeout(GRAVATAR_TOTAL_TIMEOUT_MS);
+  // Gravatar only once the earlier one is a definite miss. Shared fetches own
+  // their upstream timeout; each HTTP waiter owns its deadline and disconnect.
+  const hashes = emails
+    .slice(0, MAX_GRAVATAR_EMAIL_LOOKUPS)
+    .map((email) => createHash("sha256").update(email.trim().toLowerCase()).digest("hex"));
+  const urls = [
+    ...(githubAvatarUrl ? [githubAvatarUrl] : []),
+    ...hashes.map((hash) => `${GRAVATAR_BASE_URL}/${hash}?s=256&d=404`),
+  ];
+  const clientAbort = new AbortController();
+  const stopWatchingDisconnect = watchClientDisconnect(req, res, clientAbort);
+  const waiterSignal = AbortSignal.any([
+    clientAbort.signal,
+    AbortSignal.timeout(REMOTE_AVATAR_TOTAL_TIMEOUT_MS),
+  ]);
   let transientFailure = false;
-  for (const hash of hashes) {
-    const result = await resolveGravatar(hash, {
-      fetchImpl: opts.fetchImpl ?? globalThis.fetch,
-      nowMs: opts.nowMs ?? Date.now,
-      deadline,
-    });
-    if (result.kind === "hit") {
-      sendAvatar(req, res, result, "private, max-age=0, must-revalidate");
-      return true;
+  try {
+    for (const url of urls) {
+      waiterSignal.throwIfAborted();
+      const result = await racePromiseWithAbortSignal(resolveRemoteAvatar(url), waiterSignal);
+      waiterSignal.throwIfAborted();
+      await authResult.revalidate();
+      if (result.kind === "hit") {
+        sendAvatar(req, res, { ...result, byteLength: result.bytes.byteLength });
+        return true;
+      }
+      if (result.kind === "error") {
+        transientFailure = true;
+        break;
+      }
     }
-    transientFailure ||= result.kind === "error";
-    if (deadline.aborted) {
-      break;
+  } catch (error) {
+    if (!waiterSignal.aborted) {
+      throw error;
     }
+    transientFailure = true;
+  } finally {
+    stopWatchingDisconnect();
+  }
+  if (clientAbort.signal.aborted) {
+    return true;
+  }
+  await authResult.revalidate();
+  if (
+    !transientFailure &&
+    new URL(req.url ?? "/", "http://localhost").searchParams.get("v") === revision
+  ) {
+    res.setHeader("Cache-Control", "private, max-age=60");
   }
   sendJson(res, transientFailure ? 502 : 404, {
     ok: false,

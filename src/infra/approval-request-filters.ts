@@ -1,4 +1,3 @@
-// Filters approval requests by agent and session patterns.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { compileSafeRegex, testRegexWithBoundedInput } from "../security/safe-regex.js";
@@ -10,10 +9,7 @@ export type ApprovalRequestFilterInput = {
 };
 
 /** Matches session filters as literal substrings first, then bounded safe regexes. */
-export function matchesApprovalRequestSessionFilter(
-  sessionKey: string,
-  patterns: string[],
-): boolean {
+function matchesApprovalRequestSessionFilter(sessionKey: string, patterns: string[]): boolean {
   return patterns.some((pattern) => {
     if (sessionKey.includes(pattern)) {
       return true;

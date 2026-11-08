@@ -3,6 +3,7 @@ import { chunkTextByBreakResolver, splitLongTextLine } from "../shared/text-chun
 
 /** Offset-preserving text ranges for transports with native style metadata. */
 export {
+  avoidTrailingHighSurrogateBreak,
   chunkTextRanges,
   type ChunkTextRangesOptions,
   type TextChunkRange,
@@ -33,6 +34,10 @@ export function chunkTextForOutbound(
 }
 
 /** Markdown IR parsing and slicing primitives for plugin-owned renderers. */
+export {
+  applyMarkdownTextEdits,
+  type MarkdownTextEdit,
+} from "../../packages/markdown-core/src/ir-spans.js";
 export {
   chunkMarkdownIR,
   markdownToIR,

@@ -1,8 +1,6 @@
-// Feishu plugin module implements pins behavior.
 import type { ClawdbotConfig } from "../runtime-api.js";
-import { resolveFeishuRuntimeAccount } from "./accounts.js";
 import { assertFeishuApiSuccess } from "./api-response.js";
-import { createFeishuClient } from "./client.js";
+import { createConfiguredFeishuClient } from "./configured-client.js";
 
 type FeishuPin = {
   messageId: string;
@@ -33,12 +31,7 @@ export async function createPinFeishu(params: {
   messageId: string;
   accountId?: string;
 }): Promise<FeishuPin | null> {
-  const account = resolveFeishuRuntimeAccount({ cfg: params.cfg, accountId: params.accountId });
-  if (!account.configured) {
-    throw new Error(`Feishu account "${account.accountId}" not configured`);
-  }
-
-  const client = createFeishuClient(account);
+  const client = createConfiguredFeishuClient(params);
   const response = await client.im.pin.create({
     data: {
       message_id: params.messageId,
@@ -53,12 +46,7 @@ export async function removePinFeishu(params: {
   messageId: string;
   accountId?: string;
 }): Promise<void> {
-  const account = resolveFeishuRuntimeAccount({ cfg: params.cfg, accountId: params.accountId });
-  if (!account.configured) {
-    throw new Error(`Feishu account "${account.accountId}" not configured`);
-  }
-
-  const client = createFeishuClient(account);
+  const client = createConfiguredFeishuClient(params);
   const response = await client.im.pin.delete({
     path: {
       message_id: params.messageId,
@@ -76,12 +64,7 @@ export async function listPinsFeishu(params: {
   pageToken?: string;
   accountId?: string;
 }): Promise<{ chatId: string; pins: FeishuPin[]; hasMore: boolean; pageToken?: string }> {
-  const account = resolveFeishuRuntimeAccount({ cfg: params.cfg, accountId: params.accountId });
-  if (!account.configured) {
-    throw new Error(`Feishu account "${account.accountId}" not configured`);
-  }
-
-  const client = createFeishuClient(account);
+  const client = createConfiguredFeishuClient(params);
   const response = await client.im.pin.list({
     params: {
       chat_id: params.chatId,

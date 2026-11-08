@@ -1,4 +1,3 @@
-// Slack plugin module implements timestamp behavior.
 import { asFiniteNumberInRange, parseStrictFiniteNumber } from "openclaw/plugin-sdk/number-runtime";
 
 const SLACK_TIMESTAMP_RE = /^\d+(?:\.\d+)?$/;

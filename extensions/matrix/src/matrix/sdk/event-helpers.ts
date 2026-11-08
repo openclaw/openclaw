@@ -1,18 +1,28 @@
-// Matrix helper module supports event helpers behavior.
 import type { MatrixEvent } from "matrix-js-sdk/lib/matrix.js";
-import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { safeParseJson, truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { MatrixRawEvent } from "./types.js";
 
 type MatrixEventContentMode = "current" | "original";
+const matrixEventProjections = new WeakMap<
+  object,
+  {
+    decryptionFailure: boolean;
+    originalContent: Record<string, unknown>;
+  }
+>();
+
+export function getMatrixEventProjection(event: object) {
+  return matrixEventProjections.get(event);
+}
 
 export function matrixEventToRaw(
   event: MatrixEvent,
   opts: { contentMode?: MatrixEventContentMode } = {},
 ): MatrixRawEvent {
   const originalContent = event.getOriginalContent<Record<string, unknown>>();
-  const content = (
-    opts.contentMode === "original" ? originalContent : event.getContent<Record<string, unknown>>()
-  ) as Record<string, unknown>;
+  const content =
+    opts.contentMode === "original" ? originalContent : event.getContent<Record<string, unknown>>();
   const relation = originalContent["m.relates_to"] || event.getWireContent()["m.relates_to"];
   const normalizedContent =
     relation && !Object.hasOwn(content, "m.relates_to")
@@ -30,6 +40,12 @@ export function matrixEventToRaw(
   if (typeof stateKey === "string") {
     raw.state_key = stateKey;
   }
+  // Keep native facts off wire-shaped objects. getContent may reflect a cached
+  // replacement, while mutation baselines need this event's original content.
+  matrixEventProjections.set(raw, {
+    decryptionFailure: event.isDecryptionFailure(),
+    originalContent,
+  });
   return raw;
 }
 
@@ -55,16 +71,8 @@ export function buildHttpError(
 ): Error & { statusCode: number } {
   let message = `Matrix HTTP ${statusCode}`;
   if (bodyText.trim()) {
-    try {
-      const parsed = JSON.parse(bodyText) as { error?: string };
-      if (typeof parsed.error === "string" && parsed.error.trim()) {
-        message = parsed.error.trim();
-      } else {
-        message = truncateUtf16Safe(bodyText, 500);
-      }
-    } catch {
-      message = truncateUtf16Safe(bodyText, 500);
-    }
+    const parsed = safeParseJson<{ error?: unknown }>(bodyText);
+    message = normalizeOptionalString(parsed?.error) ?? truncateUtf16Safe(bodyText, 500);
   }
   return Object.assign(new Error(message), { statusCode });
 }

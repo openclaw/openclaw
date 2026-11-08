@@ -7,9 +7,6 @@ import {
 import type { ResolvedGatewayAuth } from "../../auth.js";
 import { PROXY_ATTRIBUTION_REQUIRED_REASON } from "../../ingress-attribution.js";
 
-/**
- * Human-readable WebSocket auth failure messages for CLI, UI, and webchat clients.
- */
 export type AuthProvidedKind = "token" | "bootstrap-token" | "device-token" | "password" | "none";
 
 const SETUP_CODE_REJECTED_MESSAGE =
@@ -56,6 +53,9 @@ export function formatGatewayAuthFailureMessage(params: {
       return `unauthorized: gateway token mismatch (${tokenHint})`;
     case "token_missing_config":
       return "unauthorized: gateway token not configured on gateway (set gateway.auth.token)";
+    case "token_redacted_config":
+    case "password_redacted_config":
+      return "gateway credential is a redaction sentinel (run openclaw doctor --fix on the Gateway, then restart and re-pair)";
     case "password_missing":
       return `unauthorized: gateway password missing (${passwordHint})`;
     case "password_mismatch":
@@ -74,6 +74,8 @@ export function formatGatewayAuthFailureMessage(params: {
       return "unauthorized: tailscale identity mismatch (use Tailscale Serve auth or gateway token/password)";
     case "rate_limited":
       return "unauthorized: too many failed authentication attempts (retry later)";
+    case "openclaw_id_not_admitted":
+      return "unauthorized: this device no longer has access to this claw (ask the owner to invite you again)";
     case PROXY_ATTRIBUTION_REQUIRED_REASON:
       return "unauthorized: proxy client attribution is required (configure gateway.trustedProxies narrowly and make the proxy overwrite or safely rebuild forwarded client headers)";
     case "device_token_mismatch":

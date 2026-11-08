@@ -29,6 +29,8 @@ describe("persistCodexContextCompactionActivity", () => {
       });
     const params = {
       runId: "run-1",
+      provider: "openai",
+      model: "gpt-5.6-luna",
       cwd: "/workspace",
       sessionTarget: {
         agentId: "main",
@@ -66,4 +68,36 @@ describe("persistCodexContextCompactionActivity", () => {
       },
     });
   });
+
+  it.each([321, 0, undefined])(
+    "records post-compaction context %s without billing it again",
+    async (tokensAfter) => {
+      await persistCodexContextCompactionActivity({
+        provider: "openai",
+        model: "gpt-5.6-luna",
+        tokensAfter,
+        sessionTarget: {
+          agentId: "main",
+          sessionId: "session-1",
+          sessionKey: "agent:main:session-1",
+          storePath: "/state/openclaw-agent.sqlite",
+        },
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "compact-1",
+        timestamp: 123,
+      });
+
+      expect(appendMessage.mock.calls[0]?.[0].message).toMatchObject({
+        provider: "openai",
+        model: "gpt-5.6-luna",
+      });
+      expect(appendMessage.mock.calls[0]?.[0].message.usage).toEqual({
+        contextUsage:
+          tokensAfter === undefined
+            ? { state: "unavailable" }
+            : { state: "available", promptTokens: tokensAfter, totalTokens: tokensAfter },
+      });
+    },
+  );
 });

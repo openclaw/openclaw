@@ -1,10 +1,8 @@
 // Tlon monitor module owns bounded and snapshot-scoped identifier tracking.
 import { createDedupeCache } from "../../runtime-api.js";
 
-const TLON_PARTICIPATED_THREAD_LIMIT = 2_000;
-
-export function createParticipatedThreadTracker(limit = TLON_PARTICIPATED_THREAD_LIMIT) {
-  const cache = createDedupeCache({ ttlMs: 0, maxSize: limit });
+export function createParticipatedThreadTracker() {
+  const cache = createDedupeCache({ ttlMs: 0, maxSize: 2_000 });
 
   return {
     add: (parentId: string) => {
@@ -36,5 +34,6 @@ export function createActiveSnapshotTracker() {
     },
     has: (key: string) => processed.has(key),
     add: (key: string) => processed.add(key),
+    addIfAccepted: (key: string, accepted: boolean) => accepted && processed.add(key),
   };
 }

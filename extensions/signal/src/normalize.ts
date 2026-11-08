@@ -1,4 +1,3 @@
-// Signal helper module supports normalize behavior.
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeStringEntries,
@@ -13,35 +12,27 @@ export function normalizeSignalReactionRecipient(raw: string): string {
 }
 
 export function normalizeSignalMessagingTarget(raw: string): string | undefined {
-  const trimmed = raw.trim();
-  if (!trimmed) {
+  const normalized = raw
+    .trim()
+    .replace(/^signal:/i, "")
+    .trim();
+  const prefix = /^(group|username|u|uuid):/i.exec(normalized)?.[0];
+  if (!prefix) {
+    return normalizeLowercaseStringOrEmpty(normalized) || undefined;
+  }
+  const id = normalized.slice(prefix.length).trim();
+  if (!id) {
     return undefined;
   }
-  let normalized = trimmed;
-  if (normalizeLowercaseStringOrEmpty(normalized).startsWith("signal:")) {
-    normalized = normalized.slice("signal:".length).trim();
+  switch (prefix.toLowerCase()) {
+    case "group:":
+      return `group:${id}`;
+    case "username:":
+    case "u:":
+      return normalizeLowercaseStringOrEmpty(`username:${id}`);
+    default:
+      return normalizeLowercaseStringOrEmpty(id);
   }
-  if (!normalized) {
-    return undefined;
-  }
-  const lower = normalizeLowercaseStringOrEmpty(normalized);
-  if (lower.startsWith("group:")) {
-    const id = normalized.slice("group:".length).trim();
-    return id ? `group:${id}` : undefined;
-  }
-  if (lower.startsWith("username:")) {
-    const id = normalized.slice("username:".length).trim();
-    return id ? normalizeLowercaseStringOrEmpty(`username:${id}`) : undefined;
-  }
-  if (lower.startsWith("u:")) {
-    const id = normalized.slice("u:".length).trim();
-    return id ? normalizeLowercaseStringOrEmpty(`username:${id}`) : undefined;
-  }
-  if (lower.startsWith("uuid:")) {
-    const id = normalized.slice("uuid:".length).trim();
-    return id ? normalizeLowercaseStringOrEmpty(id) : undefined;
-  }
-  return normalizeLowercaseStringOrEmpty(normalized);
 }
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;

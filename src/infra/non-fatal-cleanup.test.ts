@@ -11,19 +11,26 @@ describe("runBestEffortCleanup", () => {
     ).resolves.toBe(7);
   });
 
-  it("swallows cleanup failures and reports them through onError", async () => {
-    const onError = vi.fn();
-    const error = new Error("cleanup failed");
+  it.each([false, true])(
+    "preserves the primary result when cleanup fails (reporter throws: %s)",
+    async (reporterThrows) => {
+      const onError = vi.fn(() => {
+        if (reporterThrows) {
+          throw new Error("cleanup warning failed");
+        }
+      });
+      const error = new Error("cleanup failed");
 
-    await expect(
-      runBestEffortCleanup({
-        cleanup: async () => {
-          throw error;
-        },
-        onError,
-      }),
-    ).resolves.toBeUndefined();
+      await expect(
+        runBestEffortCleanup({
+          cleanup: async () => {
+            throw error;
+          },
+          onError,
+        }),
+      ).resolves.toBeUndefined();
 
-    expect(onError).toHaveBeenCalledWith(error);
-  });
+      expect(onError).toHaveBeenCalledWith(error);
+    },
+  );
 });

@@ -8,6 +8,7 @@ export type SessionsPatchResult = {
     modelProvider?: string;
     model?: string;
     agentRuntime?: import("./schema/agents-models-skills.js").GatewayAgentRuntime;
+    runtimeSelectionLocked?: boolean;
     contextWindow?: string;
     contextWindows?: Array<{ id: string; label: string; contextWindow: number }>;
     thinkingLevel?: string;

@@ -34,7 +34,7 @@ scenario:
       prompt: "Empty response continuation QA check: read QA_KICKOFF_TASK.md, then answer with exactly EMPTY-RECOVERED-OK."
       expectedReply: EMPTY-RECOVERED-OK
       evidenceNonce: EMPTY-RECOVERY-EVIDENCE-7B2F
-      retryNeedle: The previous assistant turn completed its tool calls but did not produce a user-visible answer.
+      retryNeedle: "Do not repeat completed tool calls or restart from scratch. Do not call tools in this step."
 
 flow:
   steps:

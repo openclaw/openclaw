@@ -1,53 +1,8 @@
-import { type Static, Type } from "typebox";
-import {
-  ComputerActParamsSchema,
-  ComputerUseCapabilityDescriptorSchema,
-  ScreenSnapshotParamsSchema,
-  compileComputerUseValidator,
-} from "../plugins/computer-use-contract.js";
+import type { NodeWorkerComputerInput } from "./node-computer-schemas.js";
+import { isNodeWorkerComputerInput } from "./node-computer-validator.generated.js";
 
-const ExecutionOwnerSchema = Type.Required(Type.Pick(ScreenSnapshotParamsSchema, ["executionId"]));
-const ExecutionCloseFields = {
-  ...ExecutionOwnerSchema.properties,
-  reason: Type.String({ minLength: 1, maxLength: 64 }),
-};
-
-export const NodeWorkerComputerCloseParamsSchema = Type.Object(
-  { action: Type.Literal("__close_execution"), ...ExecutionCloseFields },
-  { additionalProperties: false },
-);
-const NodeWorkerComputerInputSchema = Type.Union([
-  Type.Object({ operation: Type.Literal("capabilities") }, { additionalProperties: false }),
-  Type.Object(
-    {
-      operation: Type.Literal("snapshot"),
-      providerGeneration:
-        ComputerUseCapabilityDescriptorSchema.properties.provider.properties.generation,
-      params: Type.Intersect([ScreenSnapshotParamsSchema, ExecutionOwnerSchema]),
-    },
-    { additionalProperties: false },
-  ),
-  Type.Object(
-    {
-      operation: Type.Literal("act"),
-      providerGeneration:
-        ComputerUseCapabilityDescriptorSchema.properties.provider.properties.generation,
-      params: Type.Intersect([ComputerActParamsSchema, ExecutionOwnerSchema]),
-    },
-    { additionalProperties: false },
-  ),
-  Type.Object(
-    {
-      operation: Type.Literal("close"),
-      ...ExecutionCloseFields,
-    },
-    { additionalProperties: false },
-  ),
-]);
-
-export type NodeWorkerComputerInput = Static<typeof NodeWorkerComputerInputSchema>;
-
-const validateInput = compileComputerUseValidator(NodeWorkerComputerInputSchema);
+export { NodeWorkerComputerCloseParamsSchema } from "./node-computer-schemas.js";
+export type { NodeWorkerComputerInput } from "./node-computer-schemas.js";
 
 /** Private carrier for the existing registered Computer Use provider, never arbitrary node commands. */
 export function parseNodeWorkerComputerInput(raw?: string | null): NodeWorkerComputerInput {
@@ -60,7 +15,7 @@ export function parseNodeWorkerComputerInput(raw?: string | null): NodeWorkerCom
   } catch {
     throw new Error("INVALID_REQUEST: malformed worker computer request");
   }
-  if (!validateInput(value)) {
+  if (!isNodeWorkerComputerInput(value)) {
     throw new Error("INVALID_REQUEST: invalid worker computer request");
   }
   return value;

@@ -27,6 +27,9 @@ const a2aChannelConfigSchema = z
   })
   .strict();
 
+export type A2aPeerConfig = z.input<typeof a2aPeerConfigSchema>;
+export type A2aChannelConfig = z.input<typeof a2aChannelConfigSchema>;
+
 export const a2aPluginConfigSchema = buildChannelConfigSchema(a2aChannelConfigSchema, {
   uiHints: {
     advertisedUrl: {

@@ -1,252 +1,238 @@
-import { gatewayOriginScope } from "@openclaw/gateway-client/browser";
-import {
-  parseControlUiFocusLocation,
-  type ControlUiFocusLocation,
-} from "@openclaw/session-url-contract";
+import "./boot-capabilities.ts";
+import { gatewayCredentialScope } from "@openclaw/gateway-client/browser";
 import type { RouteLocation } from "@openclaw/uirouter";
 import { ConnectErrorDetailCodes } from "../../../packages/gateway-protocol/src/connect-error-details.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
+import { isSettingsTakeover } from "../app-navigation.ts";
+import { sameRouteLocation } from "../app-route-paths.ts";
 import {
   createApplicationRouter,
   locationForRoute,
   routeIdFromPath,
-  sameRouteLocation,
   startApplicationRouter,
   warmApplicationRouteModule,
-  type ApplicationRouter,
   type RouteId,
 } from "../app-routes.ts";
-import {
-  SIDEBAR_SESSION_NAV_COLLAPSE_QUERY,
-  sessionRefFromPath,
-} from "../app-session-route-paths.ts";
+import { sessionRefFromPath } from "../app-session-route-paths.ts";
+import { i18n, isSupportedLocale } from "../i18n/index.ts";
 import { createAgentIdentityCapability } from "../lib/agents/identity.ts";
 import { createAgentCapability } from "../lib/agents/index.ts";
-import { createChannelCapability } from "../lib/channels/index.ts";
+import type { ChannelCapability, createChannelCapability } from "../lib/channels/index.ts";
 import { createRuntimeConfigCapability } from "../lib/config/runtime-config-capability.ts";
 import { createSessionCapability } from "../lib/sessions/index.ts";
+import { openPreferredApplicationSession } from "../lib/sessions/route-navigation.ts";
 import { parseAgentSessionKey } from "../lib/sessions/session-key.ts";
-import { createWorkboardCapability } from "../lib/workboard/capability.ts";
-import { loadChatObserverDisplayPreference } from "../pages/chat/chat-observer-display.ts";
 import { sendSessionObserverVisibility } from "../pages/chat/chat-observer.ts";
 import {
   isDefaultChatLanding,
   startModelSetupFirstRunRedirectAfterLocation,
 } from "../pages/model-setup/first-run.ts";
+import { ControlUiPluginRuntime } from "../plugins/control-ui-runtime.ts";
 import { createAgentSelectionCapability } from "./agent-selection.ts";
-import { resolveControlUiDocumentMode, type ControlUiDocumentMode } from "./approval-deep-link.ts";
-import { resolveInitialApplicationLocation } from "./bootstrap-location.ts";
+import { selectShellRouteState } from "./app-host-route-state.ts";
+import { AssistantDock } from "./assistant-dock.ts";
+import { prepareApplicationStartup } from "./bootstrap-connection.ts";
+import {
+  applicationRouteLocation,
+  createInitialApplicationLocationResolver,
+  isResolvedDefaultLanding,
+  normalizeInitialApplicationLocation,
+  resolveBootstrapModelCatalogTarget,
+  resolveInitialApplicationLocation,
+  subscribeForegroundChatBootstrap,
+} from "./bootstrap-location.ts";
+import { createApplicationNavigationPreferences } from "./bootstrap-navigation-preferences.ts";
 import { createApplicationTheme } from "./bootstrap-theme.ts";
-import { createBrowserHistory, resolveControlUiPaths } from "./browser.ts";
+import {
+  subscribeBootRecordPersistence,
+  subscribeWarmBootConnection,
+} from "./bootstrap-warm-boot.ts";
+import { startBrowserAuthRecovery } from "./browser-auth-recovery.tsx";
 import { createChatAttachmentHandoff } from "./chat-attachment-handoff.ts";
 import { createChatSubmissions } from "./chat-submissions.ts";
 import { createApplicationConfigCapability } from "./config.ts";
 import { createConnectionBootstrapCoordinator } from "./connection-bootstrap.ts";
-import type {
-  ApplicationNavigationOptions,
-  ApplicationContext,
-  ApplicationNavigationPreferences,
-  ApplicationNavigationPreferencesSnapshot,
-} from "./context.ts";
+import type { MountedApplicationShell } from "./context-types.ts";
+import type { ApplicationNavigationOptions, ApplicationContext } from "./context.ts";
 import { createScopeUpgradeCapability } from "./device-scope-upgrade.ts";
+import type { EarlyApplicationGateway } from "./early-gateway.ts";
 import { startGatewayPageActivation } from "./gateway-page-activation.ts";
+import { startGatewayPresenceActivity } from "./gateway-presence-activity.ts";
 import { createApplicationGateway } from "./gateway-store.ts";
+import { createGuestWelcome } from "./guest-welcome-handle.ts";
+import { startLinkReaderRouting } from "./link-reader-routing.ts";
+import { startMcpAppRouting } from "./mcp-app-link-routing.ts";
 import { createNativeChatDrafts } from "./native-bridge.ts";
-import { startNativeLinkRouting } from "./native-link-routing.ts";
-import { createNativeNotificationsCapability } from "./native-notifications.ts";
+import type { NativeConversationBridge } from "./native-conversation-types.ts";
+import { prepareNativeUpdateFallback, startNativeLinkRouting } from "./native-link-routing.ts";
 import { createApplicationOverlays } from "./overlays.ts";
 import { isBrowserPanelAvailable } from "./panel-availability.ts";
+import {
+  rememberProfileAppearanceIdentity,
+  seedProfileAppearancePrefs,
+} from "./server-prefs-profile.ts";
+import { applyServerUiPrefs } from "./server-prefs-reconcile.ts";
+import { extractProfileUiPrefs, PROFILE_UI_PREFERENCE_KEYS } from "./server-prefs-state.ts";
 import { createApplicationPlacementStartup } from "./session-placement-startup.ts";
 import {
   loadGatewaySessionSelection,
   loadSettings,
   patchSettings,
-  persistSessionToken,
   resolveGatewayCredentialsForUrlEdit,
-  resolvePageGatewaySettings,
-  saveSettings,
-  type UiSettings,
 } from "./settings.ts";
 import { createSidebarAttentionStore } from "./sidebar-attention-store.ts";
 import { createStartupLifecycle, type StartupStep } from "./startup-lifecycle.ts";
-import {
-  normalizeLegacyTerminalViewLocation,
-  resolveApplicationStartupSettings,
-} from "./startup-settings.ts";
+import { bindUpdateConfigWriteInterlock } from "./update-config-interlock.ts";
 import { openUpdateFailureTriage } from "./update-triage.ts";
+import { seedUserPreferences } from "./user-prefs-cache.ts";
 import { createWebPushCapability } from "./web-push.ts";
 
-function createApplicationNavigationPreferences(
-  initialSettings: UiSettings,
-  navCollapsed: boolean,
-): ApplicationNavigationPreferences {
-  let snapshot: ApplicationNavigationPreferencesSnapshot = {
-    navCollapsed,
-    navWidth: initialSettings.navWidth,
-    sidebarEntries: initialSettings.sidebarEntries,
-    pinnedAgentIds: initialSettings.pinnedAgentIds ?? [],
-  };
-  const listeners = new Set<(next: ApplicationNavigationPreferencesSnapshot) => void>();
-
-  return {
-    get snapshot() {
-      return snapshot;
-    },
-    update(patch) {
-      const nextSnapshot = { ...snapshot, ...patch };
-      const persistedChanged =
-        nextSnapshot.navWidth !== snapshot.navWidth ||
-        nextSnapshot.sidebarEntries !== snapshot.sidebarEntries ||
-        nextSnapshot.pinnedAgentIds !== snapshot.pinnedAgentIds;
-      if (!persistedChanged && nextSnapshot.navCollapsed === snapshot.navCollapsed) {
-        return;
-      }
-      if (persistedChanged) {
-        patchSettings({
-          navWidth: nextSnapshot.navWidth,
-          sidebarEntries: [...nextSnapshot.sidebarEntries],
-          pinnedAgentIds: [...nextSnapshot.pinnedAgentIds],
-        });
-      }
-      snapshot = nextSnapshot;
-      for (const listener of listeners) {
-        listener(snapshot);
-      }
-    },
-    subscribe(listener) {
-      listeners.add(listener);
-      return () => listeners.delete(listener);
-    },
-  };
-}
-
-export type ApplicationRuntime = {
-  readonly context: ApplicationContext<RouteId>;
-  readonly router: ApplicationRouter;
-  readonly documentMode: ControlUiDocumentMode | null;
-  readonly focusLocation: ControlUiFocusLocation | null;
-  readonly pendingGatewayConnection: {
-    readonly gatewayUrl: string;
-    readonly token: string | null;
-  } | null;
-  readonly confirmPendingGatewayConnection: () => void;
-  readonly cancelPendingGatewayConnection: () => void;
-  start: () => Promise<void>;
-  stop: () => void;
-};
+export type { ApplicationRuntime } from "./application-runtime.ts";
 
 type PendingRouterStartNavigation = {
-  routeId: RouteId;
   location: RouteLocation;
   mode: "push" | "replace";
 };
 
-export function bootstrapApplication(): ApplicationRuntime {
-  const history = createBrowserHistory();
-  const startupLocation = history.location();
-  const [basePath, resourceBasePath] = resolveControlUiPaths(
-    startupLocation.pathname || globalThis.location?.pathname || "/",
-  );
-  const documentMode = resolveControlUiDocumentMode(startupLocation.pathname, basePath);
-  const persistedSettings = loadSettings();
-  const initialSettings = documentMode
-    ? resolvePageGatewaySettings(persistedSettings)
-    : persistedSettings;
-  const startup = resolveApplicationStartupSettings(initialSettings, startupLocation);
-  const startupTargetSelection =
-    gatewayOriginScope(startup.settings.gatewayUrl) ===
-    gatewayOriginScope(initialSettings.gatewayUrl)
-      ? null
-      : loadGatewaySessionSelection(startup.settings.gatewayUrl);
-  const settings = startupTargetSelection
-    ? {
-        ...startup.settings,
-        ...startupTargetSelection,
-        selectedAgentId: startupTargetSelection.selectedAgentId,
-      }
-    : startup.settings;
-  if (
-    startup.location.pathname !== startupLocation.pathname ||
-    startup.location.search !== startupLocation.search ||
-    startup.location.hash !== startupLocation.hash
-  ) {
-    // Remove URL credentials before deferred routing or Gateway authentication can expose them.
-    history.replace(startup.location);
-  }
-  if (startup.changed) {
-    if (documentMode) {
-      persistSessionToken(settings.gatewayUrl, settings.token);
-    } else {
-      saveSettings(settings);
-    }
-  }
-  let applicationLocation = normalizeLegacyTerminalViewLocation(startup.location, basePath);
-  const startupSearchParams = new URLSearchParams(applicationLocation.search);
-  const hasSidebarCollapseIntent =
-    startupSearchParams.get(SIDEBAR_SESSION_NAV_COLLAPSE_QUERY.name) ===
-    SIDEBAR_SESSION_NAV_COLLAPSE_QUERY.value;
-  if (hasSidebarCollapseIntent) {
-    // Sidebar-row hrefs mark new-tab intent once; strip it so copied URLs and reloads stay canonical.
-    startupSearchParams.delete(SIDEBAR_SESSION_NAV_COLLAPSE_QUERY.name);
-    const search = startupSearchParams.toString();
-    applicationLocation = { ...applicationLocation, search: search ? `?${search}` : "" };
-  }
-  if (applicationLocation !== startup.location) {
-    history.replace(applicationLocation);
-  }
-  const focusLocation = parseControlUiFocusLocation(applicationLocation, basePath);
-  // Focus documents render before the shell; starting the application router
-  // would rewrite their reserved presentation route into an ordinary page.
-  const startsApplicationRouter = documentMode === null && focusLocation === null;
+export function bootstrapApplication(
+  initial = prepareApplicationStartup(),
+  earlyGateway?: EarlyApplicationGateway,
+): import("./application-runtime.ts").ApplicationRuntime {
+  const {
+    history,
+    basePath,
+    resourceBasePath,
+    documentMode,
+    startup,
+    settings,
+    applicationLocation,
+    focusLocation,
+    startsApplicationRouter,
+    ownsWarmBoot,
+    hasPendingGateway,
+  } = initial;
   const firstRunDefaultLanding =
     startsApplicationRouter && isDefaultChatLanding(applicationLocation, basePath, routeIdFromPath);
-  const hasPendingGateway = startup.pendingGatewayUrl !== null;
   const gateway = createApplicationGateway(
     settings,
     startup.password ?? "",
     hasPendingGateway ? "" : (startup.pendingBootstrapToken ?? ""),
-    undefined,
     {
+      earlyGateway,
       persistDefaultConnectionSettings: documentMode === null,
+      ownsWarmBoot,
       resourceBasePath,
+      getModelCatalogTarget: (gatewayUrl) =>
+        resolveBootstrapModelCatalogTarget(history.location(), basePath, gatewayUrl),
       ...(!hasPendingGateway && startup.pendingBootstrapProfile
         ? { bootstrapProfile: startup.pendingBootstrapProfile }
         : {}),
       ...(startup.nativeClient ? { clientOptions: startup.nativeClient } : {}),
     },
   );
+  const getGatewayAuth = () => ({
+    hello: gateway.snapshot.hello,
+    settings: { token: gateway.connection.token },
+    password: gateway.connection.password,
+  });
+  const documentGatewayScope = gatewayCredentialScope(
+    `${window.location.protocol === "https:" ? "wss:" : "ws:"}//${window.location.host}${resourceBasePath}`,
+  );
+  const isDocumentGateway = () =>
+    gatewayCredentialScope(gateway.connection.gatewayUrl) === documentGatewayScope;
+  const stopBrowserAuthRecovery = startBrowserAuthRecovery(resourceBasePath, () =>
+    isDocumentGateway() ? getGatewayAuth() : {},
+  );
   const connectionBootstrap = createConnectionBootstrapCoordinator();
+  const chatSubmissions = createChatSubmissions();
+  const router = createApplicationRouter();
+  const bootRecord = initial.bootRecord;
+  let warmBoot = bootRecord !== null;
+  const warmBootConnectionRevision = gateway.connectionRevision;
+  initial.prewarmChatSnapshot();
+  if (startsApplicationRouter && !firstRunDefaultLanding) {
+    // Explicit routes download alongside snapshot reads, before shell construction.
+    warmApplicationRouteModule(router, applicationLocation, basePath);
+  }
+  const stopWarmBootConnection = ownsWarmBoot
+    ? subscribeWarmBootConnection(gateway, bootRecord, () => {
+        warmBoot = false;
+      })
+    : undefined;
   const agents = createAgentCapability(gateway);
   const startupLifecycle = createStartupLifecycle();
-  const deferInitialLocationUntilGateway =
-    firstRunDefaultLanding && !parseAgentSessionKey(settings.sessionKey);
+  const parsedInitialSession = parseAgentSessionKey(settings.sessionKey);
+  const deferInitialLocationUntilGateway = firstRunDefaultLanding && !parsedInitialSession;
   let resolveInitialFirstRunDecision: (() => void) | null = null;
   const initialFirstRunDecision = deferInitialLocationUntilGateway
     ? new Promise<void>((resolve) => {
         resolveInitialFirstRunDecision = resolve;
       })
     : null;
-  const initialLocationReady = (
-    documentMode || focusLocation
-      ? Promise.resolve(applicationLocation)
-      : resolveInitialApplicationLocation({
-          location: applicationLocation,
-          basePath,
-          sessionKey: settings.sessionKey,
-          gateway,
-          agentsList: () => agents.state.agentsList,
-          selectedAgentId: settings.selectedAgentId,
-          signal: startupLifecycle.signal,
-        })
-  ).catch((error: unknown) => {
-    // stop() aborts eager session lookups even before start() reaches location
-    // resolution, so consume that teardown-only rejection here.
-    if (startupLifecycle.signal.aborted) {
-      return applicationLocation;
-    }
-    throw error;
+  const resolveInitialLocation = createInitialApplicationLocationResolver({
+    fallback: applicationLocation,
+    signal: startupLifecycle.signal,
+    resolve: () =>
+      documentMode || focusLocation
+        ? Promise.resolve(applicationLocation)
+        : resolveInitialApplicationLocation({
+            location: applicationLocation,
+            basePath,
+            sessionKey: settings.sessionKey,
+            gateway,
+            agentsList: () => agents.state.agentsList,
+            ensureAgentsList: () => agents.ensureList(),
+            selectedAgentId: settings.selectedAgentId,
+            signal: startupLifecycle.signal,
+          }),
   });
-  const agentIdentity = createAgentIdentityCapability(gateway);
+  const initialRoutingLocation =
+    firstRunDefaultLanding && parsedInitialSession
+      ? normalizeInitialApplicationLocation(
+          applicationLocation,
+          basePath,
+          settings.sessionKey,
+          parsedInitialSession.agentId,
+        )
+      : applicationLocation;
+  const initialRoutingLocationReady = firstRunDefaultLanding
+    ? Promise.resolve(initialRoutingLocation)
+    : resolveInitialLocation();
+  const config = createApplicationConfigCapability({
+    resourceBasePath,
+    getAuth: getGatewayAuth,
+  });
+  const documentPreferences = isDocumentGateway() ? config.preferences : undefined;
+  if (documentPreferences) {
+    const scope = gateway.connection.gatewayUrl;
+    const { profileId, entries } = documentPreferences;
+    rememberProfileAppearanceIdentity(scope, profileId ?? null);
+    if (profileId && entries) {
+      seedProfileAppearancePrefs(scope, profileId, extractProfileUiPrefs(entries));
+    }
+    applyServerUiPrefs(documentPreferences.config ?? {}, {
+      scope,
+      profileId,
+      navigationConfirmed: entries !== undefined,
+      onApplied: (patch) => Object.assign(settings, patch),
+    });
+    if (isSupportedLocale(settings.locale)) {
+      void i18n.setLocale(settings.locale);
+    }
+  }
+  let firstPreferencesConnection = true;
+  // Seed profile preferences before later connected observers start their reads.
+  const stopBootstrapPreferences = gateway.subscribe((snapshot) => {
+    if (snapshot.phase !== "connected" || !snapshot.client || !firstPreferencesConnection) {
+      return;
+    }
+    firstPreferencesConnection = false;
+    const { profileId, entries } = documentPreferences ?? {};
+    if (isDocumentGateway() && profileId === snapshot.selfUser?.id && profileId && entries) {
+      seedUserPreferences(snapshot.client, profileId, PROFILE_UI_PREFERENCE_KEYS, entries);
+    }
+  });
+  const theme = createApplicationTheme(settings, gateway);
   const agentSelection = createAgentSelectionCapability(
     gateway,
     agents,
@@ -260,19 +246,62 @@ export function bootstrapApplication(): ApplicationRuntime {
           },
         }
       : undefined,
-  );
-  const channels = createChannelCapability(gateway);
-  const scopeUpgrade = createScopeUpgradeCapability(gateway);
-  const config = createApplicationConfigCapability({
-    resourceBasePath,
-    auth: {
-      settings: { token: settings.token },
-      password: startup.password ?? "",
+    {
+      get settings() {
+        return theme.settings;
+      },
+      subscribe: theme.subscribe,
+      patch: patchSettings,
     },
+  );
+  const settingsAgentSelection = createAgentSelectionCapability(
+    gateway,
+    agents,
+    undefined,
+    undefined,
+    { requireConfiguredAgent: true },
+  );
+  let channels: ChannelCapability | undefined;
+  const acquireChannels = (create: typeof createChannelCapability): ChannelCapability => {
+    // A lazy route can finish importing after application teardown.
+    startupLifecycle.signal.throwIfAborted();
+    if (!channels) {
+      const owner = create(gateway);
+      channels = owner;
+      startupLifecycle.addDisposer(() => owner.dispose());
+    }
+    return channels;
+  };
+  const stopForegroundBootstrap = subscribeForegroundChatBootstrap({
+    router,
+    chatSubmissions,
+    gateway,
+    agents,
+    agentSelection,
+    connectionBootstrap,
+    initialChatRoute:
+      startsApplicationRouter &&
+      sessionRefFromPath(applicationLocation.pathname, basePath) !== null,
   });
-  const sessions = createSessionCapability(gateway);
-  const workboard = createWorkboardCapability();
-  const runtimeConfig = createRuntimeConfigCapability(gateway);
+  const scopeUpgrade = createScopeUpgradeCapability(gateway);
+  const sessions = createSessionCapability(gateway, agentSelection, {
+    bootRecord,
+    connectionBootstrap,
+  });
+  const bootRecordPersistence = ownsWarmBoot
+    ? subscribeBootRecordPersistence({ gateway, agents, sessions }, bootRecord)
+    : undefined;
+  const runtimeConfig = createRuntimeConfigCapability(gateway, {
+    current: () => {
+      const preferences = config.preferences;
+      return isDocumentGateway() &&
+        (gateway.snapshot.phase !== "connected" ||
+          preferences?.profileId === gateway.snapshot.selfUser?.id)
+        ? (preferences?.config ?? null)
+        : null;
+    },
+    subscribe: config.subscribe,
+  });
   const overlays = createApplicationOverlays(gateway, {
     connectionBootstrap,
     getActiveSessionKey: () => gateway.snapshot.sessionKey || undefined,
@@ -288,49 +317,41 @@ export function bootstrapApplication(): ApplicationRuntime {
     scopeUpgrade,
     connectionBootstrap,
   });
-  // App-updater interlock: writing config (or restarting the gateway) while
-  // the updater runs can corrupt the install; pause config writes until the
-  // update settles. Wired app-lifetime so page unmounts cannot strand it.
-  const syncConfigWriteSuspension = () => {
-    const update = overlays.snapshot;
-    runtimeConfig.setWritesSuspended(update.updateRunning || update.updateReconciliationPending);
-  };
-  const stopConfigWriteSuspension = overlays.subscribe(syncConfigWriteSuspension);
-  syncConfigWriteSuspension();
-  const navigation = createApplicationNavigationPreferences(
-    settings,
-    hasSidebarCollapseIntent &&
-      sessionRefFromPath(applicationLocation.pathname, basePath)?.namespace === "chat",
-  );
-  const theme = createApplicationTheme(settings, gateway);
+  const stopConfigWriteSuspension = bindUpdateConfigWriteInterlock(overlays, runtimeConfig);
+  const navigation = createApplicationNavigationPreferences(theme);
   const nativeChatDrafts = createNativeChatDrafts();
+  let shell: MountedApplicationShell | undefined;
+  const shouldOpenExternally = () => theme.settings.openLinksExternally === true;
+  const mcpAppRouting = startMcpAppRouting({
+    navigate: (route, options) => context.navigate(route, options),
+  });
+  const linkReaderRouting = startLinkReaderRouting(() => gateway.snapshot, {
+    shouldOpenExternally,
+  });
   const nativeLinkRouting = startNativeLinkRouting({
-    onNativeUpdateDeclined: () => {
-      const snapshot = overlays.snapshot;
-      const campaign = snapshot.updateSchedule?.campaign;
-      const busy =
-        snapshot.updateRunning ||
-        snapshot.updateReconciliationPending ||
-        campaign?.state === "applying";
-      if ((snapshot.updateAvailable || campaign) && !busy && !snapshot.controlUiRefreshRequired) {
-        void overlays.runUpdate();
-      }
+    shouldOpenExternally,
+    signal: startupLifecycle.signal,
+    canPresentBrowserPanel: () => {
+      return (
+        shell?.element.isConnected === true &&
+        !isSettingsTakeover(selectShellRouteState(router.getState()).routeId)
+      );
     },
+    prepareNativeUpdateFallback: () => prepareNativeUpdateFallback(overlays),
     shouldOpenInControlUiBrowser: () =>
       loadSettings().openLinksInControlUiBrowser === true &&
       isBrowserPanelAvailable(gateway.snapshot) &&
-      document.querySelector("openclaw-app-shell")?.isConnected === true,
+      shell?.element.isConnected === true,
   });
-  const nativeNotifications = createNativeNotificationsCapability();
+  let nativeDeviceSettings: ApplicationContext["nativeDeviceSettings"] = null;
+  let nativeNotifications: ApplicationContext["nativeNotifications"] = null;
   const webPush = createWebPushCapability(gateway, { connectionBootstrap });
-  const chatSubmissions = createChatSubmissions();
   const placementStartup = createApplicationPlacementStartup({
     gateway,
     sessions,
     chatSubmissions,
   });
-  const chatAttachmentHandoff = createChatAttachmentHandoff();
-  const router = createApplicationRouter();
+  const chatAttachmentHandoff = createChatAttachmentHandoff(gateway);
   let routerStarted = false;
   // Pre-start navigations are invisible to history; retain the latest request so
   // router.start() cannot resolve the stale browser URL over the user's route.
@@ -352,11 +373,9 @@ export function bootstrapApplication(): ApplicationRuntime {
     hasPendingGateway || startup.nativeClient || startup.pendingBootstrapToken,
   );
   const initialConnectionRevision = gateway.connectionRevision;
+  let firstConfigConnection = true;
+  // Start shared reads and connection recovery independently of mounted views.
   const stopPostConnect = gateway.subscribe((snapshot) => {
-    connectionBootstrap.synchronize({
-      client: snapshot.client,
-      connected: snapshot.phase === "connected",
-    });
     if (snapshot.phase === "connected") {
       browserBootstrapAttempted = true;
     }
@@ -387,17 +406,11 @@ export function bootstrapApplication(): ApplicationRuntime {
     const client = snapshot.client;
     if (lastPostConnectClient !== client) {
       lastPostConnectClient = client;
-      void connectionBootstrap.run("config", () =>
-        config.refresh({
-          auth: {
-            hello: snapshot.hello,
-            settings: { token: gateway.connection.token },
-            password: gateway.connection.password,
-          },
-        }),
-      );
+      const ifNeeded = firstConfigConnection;
+      firstConfigConnection = false;
+      void config.refresh({ ifNeeded, signal: startupLifecycle.signal });
       void connectionBootstrap.run("session-observer", () =>
-        sendSessionObserverVisibility(client, loadChatObserverDisplayPreference() !== "off"),
+        sendSessionObserverVisibility(gateway.snapshot),
       );
     }
     // Recovery scope resolves after hello, so dedupe its later publication independently.
@@ -407,27 +420,6 @@ export function bootstrapApplication(): ApplicationRuntime {
     lastRecoveryClient = client;
     placementStartup.resumeRecovery();
   });
-  const routeLocation = (routeId: RouteId, options?: ApplicationNavigationOptions) => {
-    const location = locationForRoute(routeId, basePath);
-    const activeMatch = router.getState().matches[0];
-    const activeDynamicPath =
-      activeMatch?.routeId === routeId && routeId === "workboard"
-        ? activeMatch.location.pathname
-        : null;
-    if (
-      options?.pathname !== undefined ||
-      options?.search !== undefined ||
-      options?.hash !== undefined
-    ) {
-      return {
-        ...location,
-        pathname: options?.pathname ?? activeDynamicPath ?? location.pathname,
-        search: options?.search ?? "",
-        hash: options?.hash ?? "",
-      };
-    }
-    return location;
-  };
   const confirmPendingGatewayConnection = () => {
     const pending = pendingGatewayConnection;
     if (!pending) {
@@ -455,10 +447,10 @@ export function bootstrapApplication(): ApplicationRuntime {
     options: ApplicationNavigationOptions | undefined,
     requested: "push" | "replace",
   ) => {
-    const location = routeLocation(routeId, options);
+    const location = applicationRouteLocation(router, basePath, routeId, options);
     // Preserve pre-start navigation exactly as the fire-and-forget entry point does.
     if (!routerStarted) {
-      pendingRouterStartNavigation = { routeId, location, mode: requested };
+      pendingRouterStartNavigation = { location, mode: requested };
     }
     // Re-clicking the active nav item must not stack identical history
     // entries: Back would appear dead until every duplicate is popped.
@@ -472,28 +464,61 @@ export function bootstrapApplication(): ApplicationRuntime {
   };
   const navigateAndWait = (routeId: RouteId, options?: ApplicationNavigationOptions) =>
     navigateWithMode(routeId, options, "push");
-  const context: ApplicationContext<RouteId> = {
+  const plugins = new ControlUiPluginRuntime(() => context);
+  const guestWelcome = startsApplicationRouter
+    ? createGuestWelcome({
+        gateway,
+        // Home is only the default landing the app resolved; explicit links are never replaced.
+        isHomeLanding: async () =>
+          firstRunDefaultLanding &&
+          isResolvedDefaultLanding(resolveInitialLocation(), history, basePath),
+        openSession: (sessionKey, agentId) =>
+          openPreferredApplicationSession(context, sessionKey, agentId),
+      })
+    : undefined;
+  let nativeConversation: NativeConversationBridge | null = null;
+  const context: ApplicationContext = {
     basePath,
     resourceBasePath,
     lifecycleAbortSignal: startupLifecycle.signal,
+    router,
+    get routeOutlet() {
+      return shell?.routeOutlet;
+    },
     gateway,
     connectionBootstrap,
     agents,
-    agentIdentity,
+    get offlineSessionDefaults() {
+      return warmBoot && gateway.connectionRevision === warmBootConnectionRevision
+        ? (bootRecordPersistence?.readSessionDefaults() ?? null)
+        : null;
+    },
+    agentIdentity: createAgentIdentityCapability(gateway, bootRecordPersistence?.readAgentIdentity),
     agentSelection,
-    channels,
+    settingsAgentSelection,
+    acquireChannels,
     config,
     scopeUpgrade,
     sidebarAttention,
     runtimeConfig,
     sessions,
     placementStartup,
-    workboard,
+    plugins,
+    guestWelcome,
+    assistantDock: new AssistantDock(),
     overlays,
     navigation,
     theme,
     nativeChatDrafts,
-    nativeNotifications,
+    get nativeConversation() {
+      return nativeConversation;
+    },
+    get nativeDeviceSettings() {
+      return nativeDeviceSettings;
+    },
+    get nativeNotifications() {
+      return nativeNotifications;
+    },
     webPush,
     chatSubmissions,
     chatAttachmentHandoff,
@@ -511,28 +536,60 @@ export function bootstrapApplication(): ApplicationRuntime {
     context,
     router,
     documentMode,
+    get readOnlyConfig() {
+      return isDocumentGateway() ? config.current.readOnlyConfig : undefined;
+    },
+    get warmBoot() {
+      return warmBoot && gateway.connectionRevision === warmBootConnectionRevision;
+    },
     focusLocation,
     get pendingGatewayConnection() {
       return pendingGatewayConnection;
     },
     confirmPendingGatewayConnection,
     cancelPendingGatewayConnection,
+    setShell: (owner) => {
+      shell = owner;
+    },
     start: () => {
+      if (!startupLifecycle.signal.aborted) {
+        void config.refresh({ ifNeeded: true, signal: startupLifecycle.signal });
+      }
       const stopRouter = () => router.stop();
+      const earlyNewConnection = earlyGateway !== undefined && !earlyGateway.credentials;
       if (startsApplicationRouter) {
         startupLifecycle.addDisposer(stopRouter);
       }
       const steps: StartupStep[] = [
         () => {
           gateway.start();
-          return () => gateway.stop();
+          return () => {
+            if (earlyNewConnection && !gateway.snapshot.client) {
+              earlyGateway.transport.client.stop();
+            }
+            gateway.stop();
+          };
         },
         () => startGatewayPageActivation(gateway, document, window),
+        () => startGatewayPresenceActivity(gateway, document),
+        () => guestWelcome?.start(),
+        () => {
+          plugins.start();
+          return () => plugins.dispose();
+        },
       ];
-      if (startsApplicationRouter && !firstRunDefaultLanding) {
-        // Download explicit-route chunks alongside startup. Default landing must
-        // wait for setup's decision before fetching the Chat workspace graph.
-        steps.unshift(() => warmApplicationRouteModule(router, applicationLocation, basePath));
+      // Native bridge parsers and listeners stay out of browser startup.
+      // SAFETY: WebKit supplies the optional handler map; the native initializer checks each callable.
+      const nativeWindow = window as Window & { webkit?: { messageHandlers?: unknown } };
+      if (nativeWindow.webkit?.messageHandlers) {
+        steps.unshift(async () => {
+          const { startNativeCapabilities } = await import("./native-startup.runtime.ts");
+          return startNativeCapabilities(context, startupLifecycle, (capabilities) => {
+            nativeConversation = capabilities.conversation;
+            nativeDeviceSettings = capabilities.deviceSettings;
+            nativeNotifications = capabilities.notifications;
+          });
+        });
       }
       // Resolve first-run setup before routing: the default Chat route owns the
       // workspace graph, which setup users would otherwise fetch and discard.
@@ -541,9 +598,7 @@ export function bootstrapApplication(): ApplicationRuntime {
           context,
           enabled: firstRunDefaultLanding,
           history,
-          initialLocationReady: deferInitialLocationUntilGateway
-            ? Promise.resolve(applicationLocation)
-            : initialLocationReady,
+          initialLocationReady: initialRoutingLocationReady,
           ...(deferInitialLocationUntilGateway
             ? {
                 redirect: () =>
@@ -556,9 +611,6 @@ export function bootstrapApplication(): ApplicationRuntime {
             : {}),
         }),
       );
-      steps.push(() => {
-        void config.refresh({ skipWithoutAuthCandidate: true });
-      });
       if (startsApplicationRouter) {
         if (initialFirstRunDecision) {
           steps.push(() => initialFirstRunDecision);
@@ -574,16 +626,16 @@ export function bootstrapApplication(): ApplicationRuntime {
           return stopRouter;
         });
       }
-      if (deferInitialLocationUntilGateway) {
+      if (firstRunDefaultLanding) {
         steps.push(() => {
-          // The router claims the connected Gateway session before persisted
-          // location normalization can install a competing retained Chat pane.
+          // Post-connect validation may replace only the provisional landing;
+          // navigation during startup remains authoritative.
           startupLifecycle.trackDisposer(
             startModelSetupFirstRunRedirectAfterLocation({
               context,
               enabled: false,
               history,
-              initialLocationReady,
+              initialLocationReady: resolveInitialLocation(),
               installLocation: async (location) => {
                 const routeId = routeIdFromPath(location.pathname, basePath);
                 if (routeId) {
@@ -593,7 +645,9 @@ export function bootstrapApplication(): ApplicationRuntime {
                 }
               },
               shouldInstallLocation: () =>
-                isDefaultChatLanding(history.location(), basePath, routeIdFromPath),
+                parsedInitialSession
+                  ? sameRouteLocation(history.location(), initialRoutingLocation)
+                  : isDefaultChatLanding(history.location(), basePath, routeIdFromPath),
             }),
             (error) => {
               console.error("[openclaw] initial session location failed", error);
@@ -604,23 +658,29 @@ export function bootstrapApplication(): ApplicationRuntime {
       return startupLifecycle.run(steps);
     },
     stop: () => {
+      stopBrowserAuthRecovery();
       startupLifecycle.stop();
+      stopWarmBootConnection?.();
+      bootRecordPersistence?.dispose();
       stopPostConnect();
+      stopForegroundBootstrap();
       connectionBootstrap.reset();
       agents.dispose();
-      channels.dispose();
+      agentSelection.dispose();
+      settingsAgentSelection.dispose();
       scopeUpgrade.dispose();
       sidebarAttention.dispose();
       placementStartup.dispose();
       sessions.dispose();
-      workboard.dispose();
       stopConfigWriteSuspension();
+      stopBootstrapPreferences();
       runtimeConfig.dispose();
       overlays.dispose();
       theme.dispose();
       nativeChatDrafts.dispose();
+      linkReaderRouting.dispose();
+      mcpAppRouting.dispose();
       nativeLinkRouting.dispose();
-      nativeNotifications?.dispose();
       webPush.dispose();
       chatSubmissions.clear();
       chatAttachmentHandoff.dispose();

@@ -1,17 +1,8 @@
-import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { afterEach, describe, expect, it } from "vitest";
-import {
-  createQaBusState,
-  createQaChannelTransport,
-  type MockOpenAiRequestSnapshot,
-  startQaBusServer,
-  createQaGatewayChild,
-  startQaMockOpenAiServer,
-} from "../../../../extensions/qa-lab/api.js";
-import { stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
+import { describe, expect, it } from "vitest";
+import type { MockOpenAiRequestSnapshot } from "../../../../extensions/qa-lab/api.js";
+import { readMockRequests, useMediaGateway } from "./media-gateway.test-support.js";
 
-const REPO_ROOT = path.resolve(import.meta.dirname, "../../../..");
 const ACTIVE_MODEL_ID = "gpt-5.6-luna";
 const ACTIVE_MODEL_REF = `mock-openai/${ACTIVE_MODEL_ID}`;
 const IMAGE_MODEL_ID = "gpt-5.6-luna-alt";
@@ -30,69 +21,15 @@ function configureVisionOffload(config: OpenClawConfig): OpenClawConfig {
   if (!provider) {
     throw new Error("mock-openai provider is missing from QA gateway config");
   }
-  let foundActiveModel = false;
-  const models = provider.models.map((model) => {
-    if (model.id !== ACTIVE_MODEL_ID) {
-      return model;
-    }
-    foundActiveModel = true;
-    return { ...model, input: ["text" as const] };
-  });
-  if (!foundActiveModel) {
+  const activeModel = provider.models.find((model) => model.id === ACTIVE_MODEL_ID);
+  if (!activeModel) {
     throw new Error(`active QA model is missing from provider catalog: ${ACTIVE_MODEL_ID}`);
   }
 
-  return {
-    ...config,
-    agents: {
-      ...config.agents,
-      defaults: {
-        ...config.agents?.defaults,
-        imageModel: { primary: IMAGE_MODEL_REF },
-      },
-    },
-    models: {
-      ...config.models,
-      providers: {
-        ...config.models?.providers,
-        "mock-openai": {
-          ...provider,
-          models,
-        },
-      },
-    },
-    tools: {
-      ...config.tools,
-      media: {
-        ...config.tools?.media,
-        image: {
-          ...config.tools?.media?.image,
-          prompt: IMAGE_PROMPT,
-        },
-      },
-    },
-  };
-}
-
-async function readMockRequests(baseUrl: string, after: number) {
-  const response = await fetch(`${baseUrl}/debug/requests?after=${after}`);
-  if (!response.ok) {
-    throw new Error(
-      `mock request log failed with HTTP ${response.status}: ${await response.text()}`,
-    );
-  }
-  return (await response.json()) as MockOpenAiRequestSnapshot[];
-}
-
-function compactRequestShapes(requests: MockOpenAiRequestSnapshot[]) {
-  return requests.map((request) => ({
-    cursor: request.cursor,
-    model: request.model,
-    imageInputCount: request.imageInputCount,
-    inputRoles: readInputRoles(request),
-    instructions: request.instructions?.slice(0, 240),
-    allInputTextTail: request.allInputText.slice(-400),
-  }));
+  ((config.agents ??= {}).defaults ??= {}).imageModel = { primary: IMAGE_MODEL_REF };
+  activeModel.input = ["text"];
+  (((config.tools ??= {}).media ??= {}).image ??= {}).prompt = IMAGE_PROMPT;
+  return config;
 }
 
 function readInputRoles(request: MockOpenAiRequestSnapshot) {
@@ -105,52 +42,14 @@ function readInputRoles(request: MockOpenAiRequestSnapshot) {
 }
 
 describe("QA-channel vision offload", () => {
-  const cleanups: Array<() => Promise<void>> = [];
-
-  afterEach(async () => {
-    const errors: unknown[] = [];
-    for (const cleanup of cleanups.splice(0).toReversed()) {
-      try {
-        await cleanup();
-      } catch (error) {
-        errors.push(error);
-      }
-    }
-    if (errors.length > 0) {
-      throw new AggregateError(errors, "vision channel offload cleanup failed");
-    }
-  });
+  const fixture = useMediaGateway();
 
   it("summarizes an image before the text-only active model replies once", async () => {
-    const state = createQaBusState();
-    const transport = createQaChannelTransport(state);
-    const bus = await startQaBusServer({ state });
-    cleanups.push(() => bus.stop());
-
-    const mock = await startQaMockOpenAiServer();
-    cleanups.push(() => mock.stop());
-
-    const gatewayOwner = createQaGatewayChild();
-    cleanups.push(() => stopQaGatewayFixture(gatewayOwner));
-    const gateway = await gatewayOwner.start({
-      repoRoot: REPO_ROOT,
-      useRepoCli: true,
-      providerBaseUrl: `${mock.baseUrl}/v1`,
-      providerMode: "mock-openai",
+    const { state, transport, mock } = await fixture.start({
       primaryModel: ACTIVE_MODEL_REF,
       alternateModel: IMAGE_MODEL_REF,
-      transport,
-      transportBaseUrl: bus.baseUrl,
-      controlUiEnabled: false,
       mutateConfig: configureVisionOffload,
     });
-    await transport.waitReady({ gateway });
-
-    const cursorResponse = await fetch(`${mock.baseUrl}/debug/request-cursor`);
-    const cursorBody = (await cursorResponse.json()) as { cursor?: unknown };
-    expect(cursorResponse.ok).toBe(true);
-    expect(typeof cursorBody.cursor).toBe("number");
-    const requestCursor = cursorBody.cursor as number;
 
     await transport.sendInbound({
       accountId: "default",
@@ -168,47 +67,34 @@ describe("QA-channel vision offload", () => {
       ],
     });
 
-    let finalOutbound;
-    try {
-      finalOutbound = await transport.waitForOutbound({
-        conversation: CONVERSATION,
-        textIncludes: FINAL_REPLY,
-        timeoutMs: 90_000,
-      });
-    } catch (error) {
-      throw new Error(
-        [
-          error instanceof Error ? error.message : String(error),
-          `bus=${JSON.stringify(state.getSnapshot())}`,
-          `gateway=${gateway.logs()}`,
-        ].join("\n"),
-        { cause: error },
-      );
-    }
+    const finalOutbound = await transport.waitForOutbound({
+      conversation: CONVERSATION,
+      textIncludes: FINAL_REPLY,
+      timeoutMs: 90_000,
+    });
 
-    const scenarioRequests = (await readMockRequests(mock.baseUrl, requestCursor)).filter(
-      (request) => request.allInputText.includes(SCENARIO_MARKER),
+    const scenarioRequests = (await readMockRequests(mock.baseUrl)).filter((request) =>
+      request.allInputText.includes(SCENARIO_MARKER),
     );
-    const requestDiagnostics = `requests=${JSON.stringify(compactRequestShapes(scenarioRequests))}`;
-    expect(scenarioRequests, requestDiagnostics).toHaveLength(2);
+    expect(
+      scenarioRequests.map((request) => ({
+        model: request.model,
+        imageInputCount: request.imageInputCount,
+        roles: readInputRoles(request),
+      })),
+    ).toEqual([
+      { model: IMAGE_MODEL_ID, imageInputCount: 1, roles: ["developer", "user"] },
+      { model: ACTIVE_MODEL_ID, imageInputCount: 0, roles: ["developer", "user", "user"] },
+    ]);
 
     const [imageRequest, activeModelRequest] = scenarioRequests;
     if (!imageRequest || !activeModelRequest) {
-      throw new Error(requestDiagnostics);
+      throw new Error("expected image and active model requests");
     }
-    expect(imageRequest.model, requestDiagnostics).toBe(IMAGE_MODEL_ID);
-    expect(imageRequest.imageInputCount, requestDiagnostics).toBe(1);
-    expect(readInputRoles(imageRequest), requestDiagnostics).toEqual(["developer", "user"]);
-    expect(activeModelRequest.model, requestDiagnostics).toBe(ACTIVE_MODEL_ID);
-    expect(activeModelRequest.imageInputCount, requestDiagnostics).toBe(0);
-    expect(readInputRoles(activeModelRequest), requestDiagnostics).toEqual([
-      "developer",
-      "user",
-      "user",
-    ]);
-    expect(imageRequest.cursor, requestDiagnostics).toBeLessThan(activeModelRequest.cursor);
-    expect(imageRequest.allInputText, requestDiagnostics).toContain(IMAGE_PROMPT);
-    expect(activeModelRequest.allInputText, requestDiagnostics).toContain(PROVIDER_SUMMARY);
+    expect(imageRequest.cursor).toBeLessThan(activeModelRequest.cursor);
+    expect(imageRequest.allInputText).toContain(IMAGE_PROMPT);
+    expect(activeModelRequest.allInputText).toContain(PROVIDER_SUMMARY);
+    expect(activeModelRequest.allInputText).toContain("OpenClaw runtime context:\n");
 
     const visibleOutbound = state
       .getSnapshot()
@@ -220,10 +106,8 @@ describe("QA-channel vision offload", () => {
           message.conversation.kind === CONVERSATION.kind &&
           !message.deleted,
       );
-    expect(visibleOutbound).toHaveLength(1);
-    expect(visibleOutbound[0]).toMatchObject({
-      id: finalOutbound.id,
-      text: FINAL_REPLY,
-    });
+    expect(visibleOutbound).toEqual([
+      expect.objectContaining({ id: finalOutbound.id, text: FINAL_REPLY }),
+    ]);
   }, 180_000);
 });

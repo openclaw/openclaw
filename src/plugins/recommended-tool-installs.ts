@@ -1,6 +1,6 @@
 // Loads the bundled, presentation-only onboarding install catalog.
 import recommendedToolInstalls from "../../scripts/lib/recommended-tool-installs.json" with { type: "json" };
-import { isRecord } from "../utils.js";
+import { normalizeSetupPresentationHttpsUrl } from "./setup-presentation-url.js";
 
 export type SetupRecommendedInstall = {
   id: string;
@@ -11,43 +11,16 @@ export type SetupRecommendedInstall = {
   icon: string;
 };
 
-function normalizeHttpsUrl(value: unknown): string | undefined {
-  if (typeof value !== "string" || !value.trim()) {
-    return undefined;
-  }
-  const normalized = value.trim();
-  try {
-    const url = new URL(normalized);
-    const canonical = url.toString();
-    return url.protocol === "https:" &&
-      url.hostname &&
-      !url.username &&
-      !url.password &&
-      canonical.length <= 2048
-      ? canonical
-      : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
 export function listRecommendedToolInstalls(): SetupRecommendedInstall[] {
-  const entries = (recommendedToolInstalls as { entries?: unknown }).entries;
-  if (!Array.isArray(entries)) {
-    return [];
-  }
   const seenIds = new Set<string>();
   const installs: SetupRecommendedInstall[] = [];
-  for (const entry of entries) {
-    if (!isRecord(entry)) {
-      continue;
-    }
-    const id = typeof entry.id === "string" ? entry.id.trim() : "";
-    const brandId = typeof entry.brandId === "string" ? entry.brandId.trim() : "";
-    const label = typeof entry.label === "string" ? entry.label.trim() : "";
-    const hint = typeof entry.hint === "string" ? entry.hint.trim() : "";
-    const website = normalizeHttpsUrl(entry.website);
-    const icon = normalizeHttpsUrl(entry.icon);
+  for (const entry of recommendedToolInstalls.entries) {
+    const id = entry.id.trim();
+    const brandId = entry.brandId?.trim();
+    const label = entry.label.trim();
+    const hint = entry.hint.trim();
+    const website = normalizeSetupPresentationHttpsUrl(entry.website);
+    const icon = normalizeSetupPresentationHttpsUrl(entry.icon);
     if (!id || seenIds.has(id) || !label || !hint || !website || !icon) {
       continue;
     }

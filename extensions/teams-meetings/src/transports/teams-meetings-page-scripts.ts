@@ -1,14 +1,22 @@
-import {
-  createMeetingLeaveSource,
-  createMeetingTranscriptSource,
-} from "openclaw/plugin-sdk/meeting-page-script-runtime";
+import { MeetingPlatformAdapter } from "openclaw/plugin-sdk/meeting-runtime";
 import { TEAMS_MEETING_SELECTORS } from "./teams-meetings-selectors.js";
-import { teamsMeetingStatusCallSource } from "./teams-meetings-status-call-source.js";
-import { teamsMeetingStatusPreludeSource } from "./teams-meetings-status-prejoin-source.js";
+import { teamsMeetingStatusPrelude } from "./teams-meetings-status-prejoin-source.js";
 import { normalizeTeamsMeetingUrlForReuse } from "./teams-meetings-urls.js";
 
-function pageIdentityFunctionSource(): string {
-  return `const meetingIdentity = (rawUrl) => {
+export const teamsMeetingPageScripts = MeetingPlatformAdapter.createPageScripts({
+  platform: {
+    audioOutputElementIdPrefix: "openclaw-teams-audio-output-",
+    manualActionReasonPrefix: "teams",
+    displayName: "Teams",
+    globals: {
+      audioOutputs: "__openclawTeamsAudioOutputs",
+      captionArchive: "__openclawTeamsCaptionArchive",
+      captions: "__openclawTeamsCaptions",
+      meeting: "__openclawTeamsMeeting",
+    },
+  },
+  normalizeUrl: normalizeTeamsMeetingUrlForReuse,
+  pageIdentitySource: () => `const meetingIdentity = (rawUrl) => {
     try {
       const parsed = new URL(rawUrl);
       const host = parsed.hostname.toLowerCase();
@@ -34,7 +42,7 @@ function pageIdentityFunctionSource(): string {
               ? JSON.parse(atob(coordinates))
               : undefined;
             if (decoded && typeof decoded === "object") lightMeeting = decoded;
-          } catch {}
+          } catch { /* Invalid external coordinates do not identify a meeting. */ }
         }
         const match = parsed.pathname.match(/^\\/meet\\/([^/]+)\\/?$/i) || launcherMatch ||
           (typeof lightMeeting?.meetingCode === "string"
@@ -51,13 +59,11 @@ function pageIdentityFunctionSource(): string {
           ? "teams-consumer:" + code.toLowerCase() + ":p:" + encodeURIComponent(passcode || "")
           : undefined;
       }
-    } catch {}
+    } catch { /* Invalid external URLs do not identify a meeting. */ }
     return undefined;
-  };`;
-}
-
-function teamsMeetingToggleStateFunctionSource(): string {
-  return `(input) => {
+  };`,
+  selectors: TEAMS_MEETING_SELECTORS,
+  toggleStateFunction: () => `(input) => {
     const pressed = String(input?.ariaPressed || "").toLowerCase();
     if (pressed === "true") return "on";
     if (pressed === "false") return "off";
@@ -78,62 +84,37 @@ function teamsMeetingToggleStateFunctionSource(): string {
     if (/\\b(?:microphone|mic) (?:is |currently )?(?:off|muted|disabled)\\b/.test(value)) return "off";
     if (/\\b(?:microphone|mic) (?:is |currently )?(?:on|unmuted|enabled)\\b/.test(value)) return "on";
     return undefined;
-  }`;
-}
-
-export function teamsMeetingStatusScript(params: {
-  allowMicrophone: boolean;
-  allowSessionAdoption: boolean;
-  autoJoin: boolean;
-  captureCaptions: boolean;
-  guestName: string;
-  meetingSessionId?: string;
-  meetingUrl: string;
-  readOnly?: boolean;
-  waitForInCallMs: number;
-}) {
-  const selectors = JSON.stringify(TEAMS_MEETING_SELECTORS);
-  const expectedIdentity = normalizeTeamsMeetingUrlForReuse(params.meetingUrl);
-  const toggleStateFunction = teamsMeetingToggleStateFunctionSource();
-  return (
-    teamsMeetingStatusPreludeSource({
-      ...params,
-      expectedIdentity,
-      pageIdentitySource: pageIdentityFunctionSource(),
-      selectors,
-      toggleStateFunction,
-    }) + teamsMeetingStatusCallSource()
-  );
-}
-
-export function teamsMeetingTranscriptScript(
-  meetingUrl: string,
-  meetingSessionId: string,
-  finalize: boolean,
-) {
-  const expectedIdentity = normalizeTeamsMeetingUrlForReuse(meetingUrl);
-  return createMeetingTranscriptSource({
-    expectedIdentity,
-    finalize,
-    globals: {
-      captionArchive: "__openclawTeamsCaptionArchive",
-      captions: "__openclawTeamsCaptions",
-      meeting: "__openclawTeamsMeeting",
-    },
-    meetingSessionId,
-    pageIdentitySource: pageIdentityFunctionSource(),
-    platformDisplayName: "Teams",
-  });
-}
-
-export function teamsMeetingLeaveScript(params: {
-  leaveInitiated: boolean;
-  meetingSessionId: string;
-  meetingUrl: string;
-}) {
-  const selectors = JSON.stringify(TEAMS_MEETING_SELECTORS);
-  const expectedIdentity = normalizeTeamsMeetingUrlForReuse(params.meetingUrl);
-  return createMeetingLeaveSource({
+  }`,
+  statusPrelude: teamsMeetingStatusPrelude,
+  statusCall: {
+    captionEnableSource: `if (!captionsFinalized && canMutateSession && inCall && !captionsEnabledNow) {
+      let captionButton = first(selectors.captions);
+      if (!captionButton) {
+        first(selectors.moreActions)?.click?.();
+        await waitForUi();
+        captionButton = first(selectors.captions);
+      }
+      if (captionButton) {
+        const captionLabel = label(captionButton);
+        const alreadyEnabled = captionButton.getAttribute?.("aria-checked") === "true" ||
+          /hide live captions|turn off captions/i.test(captionLabel) ||
+          Boolean(firstRaw(selectors.captionsOff));
+        if (!alreadyEnabled) {
+          captionButton.click();
+          await waitForUi();
+        }
+        const currentLabel = label(captionButton);
+        captionsEnabledNow = captionButton.getAttribute?.("aria-checked") === "true" ||
+          /hide live captions|turn off captions/i.test(currentLabel) ||
+          Boolean(firstRaw(selectors.captionRenderer)) ||
+          Boolean(firstRaw(selectors.captionsOff));
+        if (captionsEnabledNow && !alreadyEnabled) {
+          notes.push("Enabled Teams live captions for transcript capture.");
+        }
+      }
+    }`,
+  },
+  leave: {
     controlSource: `const first = (list) => {
     for (const selector of list) {
       const node = document.querySelector(selector);
@@ -147,19 +128,7 @@ export function teamsMeetingLeaveScript(params: {
   const postCall = first(selectors.postCall);
   const currentUrlMatches = Boolean(expectedIdentity && currentIdentity === expectedIdentity);`,
     departedMarkerSource: "postCall",
-    expectedIdentity,
-    leaveInitiated: params.leaveInitiated,
-    meetingSessionId: params.meetingSessionId,
-    pageIdentitySource: pageIdentityFunctionSource(),
-    platform: {
-      displayName: "Teams",
-      globals: {
-        audioOutputs: "__openclawTeamsAudioOutputs",
-        meeting: "__openclawTeamsMeeting",
-      },
-    },
-    selectors,
     sessionMatchSource:
       "const sessionMatched = !enforceSessionOwnership || state?.sessionId === expectedSessionId;",
-  });
-}
+  },
+});

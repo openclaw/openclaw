@@ -63,6 +63,30 @@ class AndroidAudioInputSessionTest {
   }
 
   @Test
+  fun aRecorderThatReturnsWithoutStartingCannotReportCaptureReadiness() {
+    AndroidAudioInputSession.open(context, 24_000, 4_800).use { input ->
+      val original = ReflectionHelpers.getField<AudioRecord>(input, "audioRecord")
+      original.release()
+      val refusingRecorder =
+        object : AudioRecord(
+          MediaRecorder.AudioSource.VOICE_RECOGNITION,
+          24_000,
+          android.media.AudioFormat.CHANNEL_IN_MONO,
+          android.media.AudioFormat.ENCODING_PCM_16BIT,
+          19_200,
+        ) {
+          override fun startRecording() = Unit
+        }
+      ReflectionHelpers.setField(input, "audioRecord", refusingRecorder)
+
+      val error = assertThrows(IllegalStateException::class.java) { input.startRecording() }
+
+      assertEquals("Microphone did not start recording", error.message)
+      assertEquals(AudioRecord.RECORDSTATE_STOPPED, refusingRecorder.recordingState)
+    }
+  }
+
+  @Test
   fun communicationCaptureKeepsLineAndHdmiOutputsInsteadOfForcingTheSpeaker() {
     val sinkTypes = listOf(AudioDeviceInfo.TYPE_LINE_ANALOG, AudioDeviceInfo.TYPE_AUX_LINE, AudioDeviceInfo.TYPE_HDMI)
     val selectedTypes =

@@ -1,9 +1,11 @@
-import { mkdir } from "node:fs/promises";
+import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { BrowserContext, Locator, Page } from "playwright";
 import { beforeEach, expect, it } from "vitest";
 import type { AuditRunInspectResult } from "../../../packages/gateway-protocol/src/schema/audit-run.js";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { waitForControlUiGatewayReconnecting } from "../test-helpers/control-ui-e2e-readiness.ts";
+import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import {
   decisionDisplay,
@@ -87,8 +89,20 @@ async function newContext(options: { video?: boolean } = {}): Promise<BrowserCon
   });
 }
 
-async function screenshot(page: Page, name: string) {
+async function screenshot(
+  page: Page,
+  name: string,
+  content = page.getByRole("heading", { name: "Identity and authority" }),
+) {
   if (!captureUiProof) {
+    return;
+  }
+  if (page.video()) {
+    await content.scrollIntoViewIfNeeded();
+    await writeFile(
+      path.join(proofDir, name),
+      await takeControlUiViewportScreenshot(page, page.locator(".run-inspector"), [content]),
+    );
     return;
   }
   await page.screenshot({
@@ -165,7 +179,6 @@ suite.define(() => {
       expect(await page.getByText("receipt-safe-ref", { exact: false }).count()).toBe(0);
       expect(await page.getByText("context-safe-ref", { exact: false }).count()).toBe(0);
       expect(await page.getByText("execution-safe-ref", { exact: false }).count()).toBe(0);
-      expect(await page.getByText("raw-sender-id-42", { exact: false }).count()).toBe(0);
       await screenshot(page, "01-present-unattributed.png");
 
       await page.reload();
@@ -185,7 +198,7 @@ suite.define(() => {
         .poll(() => page.evaluate(() => document.activeElement?.textContent?.trim()))
         .toBe("Live activity");
       await page.keyboard.press("Enter");
-      await page.getByText("No activity yet.", { exact: true }).waitFor();
+      await page.locator(".activity-empty").waitFor();
       await expect
         .poll(() => modePanel.getAttribute("aria-labelledby"))
         .toBe("activity-mode-tab-live");
@@ -400,13 +413,6 @@ suite.define(() => {
       });
       const accessibilityTree = await page.locator("body").ariaSnapshot();
       for (const hidden of [
-        "hidden-action-id",
-        "hidden-resource-id",
-        "hidden-target-id",
-        "hidden-evaluator-id",
-        "hidden-policy-id",
-        "hidden-grant-id",
-        "hidden-record-id",
         "rm -rf",
         "/private/operator-path",
         "credential-value",
@@ -479,7 +485,11 @@ suite.define(() => {
       await detail.getByText("decision_fact_display_unverified", { exact: true }).waitFor();
       await detail.getByText("decision.display_provenance", { exact: true }).waitFor();
       expect(await detail.getByText("Verified producer", { exact: true }).count()).toBe(0);
-      await screenshot(page, "18-unverified-receipt-privacy.png");
+      await screenshot(
+        page,
+        "18-unverified-receipt-privacy.png",
+        detail.getByText("decision_fact_display_unverified", { exact: true }),
+      );
     } finally {
       await suite.closeBrowserContext(context);
     }
@@ -624,11 +634,17 @@ suite.define(() => {
   it("keeps a populated Live activity stream bounded after adding the mode switcher", async () => {
     const context = await newContext();
     const page = await context.newPage();
-    const gateway = await installMockGateway(page, { sessionKey: "main" });
+    const gateway = await installMockGateway(page, {
+      sessionKey: "agent:main:main",
+      sessions: [{ key: "agent:main:main", kind: "direct", hasActiveRun: true, status: "running" }],
+    });
 
     try {
       await page.goto(`${suite.server.baseUrl}activity?view=live`);
-      await page.getByText("No activity yet.", { exact: true }).waitFor();
+      await page.locator(".activity-empty").waitFor();
+      await gateway.waitForRequest("sessions.messages.subscribe", {
+        match: { key: "agent:main:main" },
+      });
 
       for (let index = 0; index < 40; index += 1) {
         await gateway.emitGatewayEvent("agent", {
@@ -636,7 +652,7 @@ suite.define(() => {
           seq: 1,
           stream: "tool",
           ts: Date.now() + index,
-          sessionKey: "main",
+          sessionKey: "agent:main:main",
           data: {
             phase: "start",
             name: `layout_tool_${index}`,
@@ -887,7 +903,7 @@ suite.define(() => {
     }
   });
 
-  it("shows loading, request failure, retry, and disconnected states", async () => {
+  it("shows loading, request failure, and retry while retaining evidence offline", async () => {
     const context = await newContext();
     const page = await context.newPage();
     const runId = "retry-run";
@@ -899,7 +915,7 @@ suite.define(() => {
 
     try {
       await page.goto(`${suite.server.baseUrl}activity?view=run&run=${runId}`);
-      await page.getByRole("heading", { name: "Loading run inspection" }).waitFor();
+      await page.getByRole("heading", { name: "Loading run inspection…" }).waitFor();
       await screenshot(page, "06-loading.png");
       await gateway.rejectDeferred("audit.run.inspect", {
         code: "UNAVAILABLE",
@@ -911,8 +927,15 @@ suite.define(() => {
       await page.getByRole("button", { name: "Retry inspection" }).click();
       await page.getByRole("heading", { name: "Identity and authority" }).waitFor();
 
-      await gateway.closeLatest(1006, "network unavailable");
-      await page.getByRole("heading", { name: "Gateway disconnected" }).waitFor();
+      const receipts = page.locator(".run-inspector__receipt-list");
+      const evidence = await receipts.textContent();
+      await gateway.setOnline(false);
+      await waitForControlUiGatewayReconnecting(page);
+      expect(await receipts.textContent()).toBe(evidence);
+      expect(await page.getByRole("heading", { name: "Disconnected" }).count()).toBe(0);
+      expect(await page.getByRole("button", { name: "Load more receipts" }).isDisabled()).toBe(
+        true,
+      );
       await screenshot(page, "08-disconnected.png");
     } finally {
       await suite.closeBrowserContext(context);

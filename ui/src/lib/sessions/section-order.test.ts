@@ -1,7 +1,7 @@
 // @vitest-environment node
 import { describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient, GatewayHelloOk } from "../../api/gateway.ts";
-import { createSessionCapability } from "./index.ts";
+import { createTestSessionCapability } from "./session-capability.test-support.ts";
 
 describe("gateway-owned sidebar section order", () => {
   it("sends and publishes the order", async () => {
@@ -28,14 +28,10 @@ describe("gateway-owned sidebar section order", () => {
           sectionOrder,
         };
       }
-      if (method === "sessions.groups.defaults") {
-        expect(params).toEqual({});
-        return { defaults: [] };
-      }
       throw new Error(`Unexpected request: ${method}`);
     });
     const client = { request } as unknown as GatewayBrowserClient;
-    const sessions = createSessionCapability({
+    const sessions = createTestSessionCapability({
       snapshot: {
         client,
         phase: "connected",
@@ -43,7 +39,7 @@ describe("gateway-owned sidebar section order", () => {
         assistantAgentId: "main",
         hello: {
           features: {
-            methods: ["sessions.groups.put", "sessions.groups.list", "sessions.groups.defaults"],
+            methods: ["sessions.groups.put", "sessions.groups.list"],
           },
         } as GatewayHelloOk,
       },

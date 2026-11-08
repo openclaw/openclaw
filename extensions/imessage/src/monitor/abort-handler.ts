@@ -1,12 +1,9 @@
-// Imessage plugin module implements abort handler behavior.
-type IMessageMonitorClient = {
-  request: (method: string, params?: Record<string, unknown>) => Promise<unknown>;
-  stop: () => Promise<void>;
-};
-
 export function attachIMessageMonitorAbortHandler(params: {
   abortSignal?: AbortSignal;
-  client: IMessageMonitorClient;
+  client: {
+    request: (method: string, params?: Record<string, unknown>) => Promise<unknown>;
+    stop: () => Promise<void>;
+  };
   getSubscriptionId: () => number | null;
 }): () => void {
   const abort = params.abortSignal;

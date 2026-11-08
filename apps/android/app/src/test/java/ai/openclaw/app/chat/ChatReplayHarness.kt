@@ -1,5 +1,6 @@
 package ai.openclaw.app.chat
 
+import ai.openclaw.app.gateway.GatewayLoadedImage
 import ai.openclaw.app.gateway.GatewaySession
 import androidx.room3.Room
 import kotlinx.coroutines.CoroutineScope
@@ -37,8 +38,10 @@ internal fun CoroutineScope.createChatController(
   cacheScope: () -> ChatCacheScope? = { ChatCacheScope("gateway-test", 1L) },
   currentDefaultAgentId: () -> String? = { "main" },
   currentDefaultAgentRevision: () -> Long = { 0L },
+  loadGatewayImageArtifact: suspend (String?, String, String?, String) -> GatewayLoadedImage? = { _, _, _, _ -> null },
+  loadGatewayInboundImage: suspend (String?, String, String?, String) -> GatewayLoadedImage? = { _, _, _, _ -> null },
   gatewayAdvertisesMethod: (method: String) -> Boolean? = { null },
-  gatewayAdvertisesCapability: (capability: String) -> Boolean? = { null },
+  gatewayAdvertisesCapability: (capability: String) -> Boolean? = { it == "session-scoped-model-catalog" },
   recordModelRecent: (String) -> Unit = {},
   onSessionDeleted: (ChatSessionDeletion) -> Unit = {},
   onOfflineDefaultAgentRestored: (String) -> Unit = {},
@@ -69,6 +72,8 @@ internal fun CoroutineScope.createChatController(
     commandOutbox = createChatCommandOutbox(),
     currentDefaultAgentId = currentDefaultAgentId,
     currentDefaultAgentRevision = currentDefaultAgentRevision,
+    loadGatewayImageArtifact = loadGatewayImageArtifact,
+    loadGatewayInboundImage = loadGatewayInboundImage,
     gatewayAdvertisesMethod = gatewayAdvertisesMethod,
     gatewayAdvertisesCapability = gatewayAdvertisesCapability,
     recordModelRecent = recordModelRecent,
@@ -84,7 +89,7 @@ internal class ChatControllerTestSetup(
   val requests = mutableListOf<Pair<String, String?>>()
   var cacheScope: () -> ChatCacheScope? = { ChatCacheScope("gateway-test", 1L) }
   var gatewayAdvertisesMethod: (method: String) -> Boolean? = { null }
-  var gatewayAdvertisesCapability: (capability: String) -> Boolean? = { null }
+  var gatewayAdvertisesCapability: (capability: String) -> Boolean? = { it == "session-scoped-model-catalog" }
   var recordModelRecent: (String) -> Unit = {}
 
   private val handlers = mutableMapOf<String, suspend (String?) -> String>()
@@ -158,6 +163,7 @@ internal class ScriptedGateway(
     // Benign defaults so bootstrap/health/commands side requests never fail a scenario.
     respondWith("health", "{}")
     respondWith("chat.metadata", """{"commands":[],"models":[]}""")
+    respondWith("models.list", """{"models":[]}""")
     respondWith("sessions.list", """{"sessions":[]}""")
     respondWith("sessions.branches.list", """{"branches":[]}""")
     respondWith("progressCard.get", """{"card":null}""")

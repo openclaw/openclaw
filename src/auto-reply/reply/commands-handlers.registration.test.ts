@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import "../../test-utils/prepare-compiled-subprocesses.js";
 
 const observation = vi.hoisted(() => ({ imports: 0, loads: 0 }));
 
@@ -33,9 +34,17 @@ describe("command handler registration", () => {
         { SenderId: "registry-sender", CommandInterpretationSuppressed: suppressed },
       );
       params.skillCommands = [];
-      expect(params.command.isAuthorizedSender).toBe(true);
+      expect(params.command.isAuthorizedSender).toBe(!suppressed);
       expect(params.command.senderIsOwner).toBe(false);
-      return withPluginRuntimeRegistryScope(registry, () => handleCommands(params));
+      return withPluginRuntimeRegistryScope(registry, () =>
+        handleCommands({
+          ...params,
+          resolveModelLevels: async () => ({
+            resolvedThinkLevel: params.resolvedThinkLevel,
+            resolvedReasoningLevel: params.resolvedReasoningLevel,
+          }),
+        }),
+      );
     };
 
     expect(observation).toEqual({ imports: 0, loads: 0 });
@@ -66,7 +75,7 @@ describe("command handler registration", () => {
     expect(await dispatch("/login ignored")).toMatchObject({
       shouldContinue: false,
       reply: {
-        text: "Only a configured OpenClaw owner/admin can start Codex login from this channel.",
+        text: "No chat owner is configured. Ask the OpenClaw owner to add your chat account to `commands.ownerAllowFrom` in the OpenClaw configuration, then send `/login` again.",
       },
     });
     expect(plugin).toHaveBeenCalledTimes(1);

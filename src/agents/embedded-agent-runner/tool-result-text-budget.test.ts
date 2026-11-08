@@ -20,6 +20,22 @@ describe("tool-result text budgets", () => {
   });
 
   it.each([
+    ["abc", 1.5, 5],
+    ["éé", 1.5, 4],
+    ["aéa", 1.5, 6],
+    ["🌍", 1.5, 3],
+    ["\ud800a\udfff", 2, 6],
+    ["\u1100\uFF61\u{1D360}\u{20000}", 2, 48],
+    ["你好", -Infinity, 8],
+    ["", Infinity, 0],
+    ["a", Infinity, Infinity],
+    ["", Number.NaN, 0],
+    ["a", Number.NaN, Number.NaN],
+  ])("retains the raw-floor accounting of %j at %s", (text, minimumRawWeight, expected) => {
+    expect(estimateToolResultTextChars(text, { minimumRawWeight })).toBe(expected);
+  });
+
+  it.each([
     ["abc", 3, 6],
     ["漢a", 5, 6],
     ["𠀀a", 17, 18],
@@ -38,6 +54,22 @@ describe("tool-result text budgets", () => {
     expect(sliceToolResultTextTailToBudget(text, 7)).toBe("好B");
     expect(sliceToolResultTextToBudget("😀", 1)).toBe("");
     expect(sliceToolResultTextTailToBudget("😀", 1)).toBe("");
+  });
+
+  it.each([1, 2])("cuts supplementary text at raw floor %s", (minimumRawWeight) => {
+    const text = "a𠀀好😀b";
+    const options = { minimumRawWeight };
+    expect(sliceToolResultTextToBudget(text, 18, options)).toBe("a𠀀");
+    expect(sliceToolResultTextTailToBudget(text, 18, options)).toBe("好😀b");
+  });
+
+  it.each([
+    ["aéa", 4, 1.5, "aé", "éa"],
+    ["ab你cd😀ef", 13, 1.1, "ab你cd😀", "你cd😀ef"],
+  ])("keeps ASCII-run rounding for %s", (text, budget, minimumRawWeight, head, tail) => {
+    const options = { minimumRawWeight };
+    expect(sliceToolResultTextToBudget(text, budget, options)).toBe(head);
+    expect(sliceToolResultTextTailToBudget(text, budget, options)).toBe(tail);
   });
 
   it("honors the larger of CJK cost and a caller safety floor", () => {

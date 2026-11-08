@@ -1,4 +1,4 @@
-import { isIncognitoSessionKey } from "../incognito-session.js";
+import { isIncognitoSessionKey } from "openclaw/plugin-sdk/session-key-runtime";
 
 /** Limits fresh scheduled-authority capture to authenticated local durable operator turns. */
 export function canResolveScheduledConfiguredMcpCreatorAuthority(params: {

@@ -1,16 +1,5 @@
-// Whatsapp plugin module implements group members behavior.
-import { normalizeE164 } from "../../text-runtime.js";
-
-function appendNormalizedUnique(entries: Iterable<string>, seen: Set<string>, ordered: string[]) {
-  for (const entry of entries) {
-    const normalized = normalizeE164(entry) ?? entry;
-    if (!normalized || seen.has(normalized)) {
-      continue;
-    }
-    seen.add(normalized);
-    ordered.push(normalized);
-  }
-}
+import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { normalizeE164 } from "openclaw/plugin-sdk/text-utility-runtime";
 
 export function noteGroupMember(
   groupMemberNames: Map<string, Map<string, string>>,
@@ -21,8 +10,7 @@ export function noteGroupMember(
   if (!e164 || !name) {
     return;
   }
-  const normalized = normalizeE164(e164);
-  const key = normalized ?? e164;
+  const key = normalizeE164(e164);
   if (!key) {
     return;
   }
@@ -40,16 +28,11 @@ export function formatGroupMembers(params: {
   fallbackE164?: string;
 }) {
   const { participants, roster, fallbackE164 } = params;
-  const seen = new Set<string>();
-  const ordered: string[] = [];
-  if (participants?.length) {
-    appendNormalizedUnique(participants, seen, ordered);
-  }
-  if (roster) {
-    appendNormalizedUnique(roster.keys(), seen, ordered);
-  }
+  const ordered = uniqueStrings(
+    [...(participants ?? []), ...(roster?.keys() ?? [])].map(normalizeE164).filter(Boolean),
+  );
   if (ordered.length === 0 && fallbackE164) {
-    const normalized = normalizeE164(fallbackE164) ?? fallbackE164;
+    const normalized = normalizeE164(fallbackE164);
     if (normalized) {
       ordered.push(normalized);
     }

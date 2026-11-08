@@ -21,8 +21,8 @@ struct ExecApprovalsSocketAuthTests {
         #expect(!timingSafeHexStringEquals(String(repeating: "a", count: 64), "deadbeef"))
     }
 
-    @Test
-    func `minimum timestamp is rejected before authentication without overflow`() async throws {
+    @Test(arguments: [false, true])
+    func `minimum timestamp is rejected before authentication without overflow`(atRequestLimit: Bool) async throws {
         #expect(!execHostTimestampIsFresh(nowMs: 1_700_000_000_000, requestMs: Int.min))
         let root = try ExecApprovalsSocketTestSupport.makeRoot()
         defer { try? FileManager().removeItem(at: root) }
@@ -32,15 +32,21 @@ struct ExecApprovalsSocketAuthTests {
             try #require(await server.start())
             let payload = try JSONEncoder().encode(ExecHostRequest(command: ["/usr/bin/true"]))
             let requestJson = try #require(String(data: payload, encoding: .utf8))
+            var message = ExecHostSocketRequest(
+                type: "exec",
+                id: "timestamp-test",
+                nonce: "nonce",
+                ts: Int.min,
+                hmac: "unauthenticated",
+                requestJson: requestJson)
+            if atRequestLimit {
+                let overhead = try JSONEncoder().encode(message).count
+                message.requestJson += String(repeating: " ", count: 1_048_576 - overhead)
+                #expect(try JSONEncoder().encode(message).count == 1_048_576)
+            }
             let response = try await ExecApprovalsSocketTestSupport.roundTrip(
                 socketPath: socketPath,
-                message: ExecHostSocketRequest(
-                    type: "exec",
-                    id: "timestamp-test",
-                    nonce: "nonce",
-                    ts: Int.min,
-                    hmac: "unauthenticated",
-                    requestJson: requestJson),
+                message: message,
                 response: ExecHostResponse.self)
             #expect(response.type == "exec-res")
             #expect(response.id == "timestamp-test")
@@ -199,7 +205,17 @@ struct ExecApprovalsSocketAuthTests {
         ])
         switch ExecHostRequestEvaluator.validateRequest(decoded) {
         case let .success(validated):
-            #expect(validated.delayedPolicySnapshot?.portable == decoded.policySnapshot)
+            #expect(validated.delayedPolicySnapshot == ExecApprovalPolicySnapshot(
+                security: .allowlist,
+                ask: .onMiss,
+                askFallback: .deny,
+                autoAllowSkills: true,
+                allowlist: [
+                    ExecAllowlistEntry(pattern: "/"),
+                    ExecAllowlistEntry(pattern: "/A"),
+                    ExecAllowlistEntry(pattern: "/A", source: "allow-always"),
+                    ExecAllowlistEntry(pattern: "/ä"),
+                ]))
         case let .failure(error):
             Issue.record("unexpected invalid request: \(error.message)")
         }

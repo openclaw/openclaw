@@ -17,7 +17,6 @@ struct ChatMermaidBlockView: View {
     @State private var width = 0
     @State private var result: Result<ChatMermaidRenderedImage, ChatMermaidFailure>?
     @State private var token: UUID?
-    @State private var generation = UUID()
     @State private var showSource = false
     @State private var isHovered = false
     /// Keep the selected preview stable while rotation re-renders the inline diagram.
@@ -190,15 +189,12 @@ struct ChatMermaidBlockView: View {
         self.cancel()
         self.result = nil
         guard let request = self.request else { return }
-        let generation = self.generation
         self.token = ChatMermaidRenderer.shared.render(request) { result in
-            guard self.generation == generation else { return }
             self.result = result
         }
     }
 
     private func cancel() {
-        self.generation = UUID()
         if let token = self.token {
             self.token = nil
             ChatMermaidRenderer.shared.cancel(token)
@@ -271,7 +267,7 @@ private struct ChatMermaidSvgView {
         view.backgroundColor = .clear
         #endif
         let encoded = Data(self.svg.utf8).base64EncodedString()
-        // Sanitized SVG stays an image document. The preview needs no scripts or network.
+        // Script-free SVG stays an image; auto margins center short diagrams without clipping tall ones.
         view.loadHTMLString("""
         <!doctype html><html><head><meta charset="utf-8">
         <meta http-equiv="Content-Security-Policy" content="default-src 'none';
@@ -279,8 +275,8 @@ private struct ChatMermaidSvgView {
         <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=8, user-scalable=yes">
         <style>
         html,body{margin:0;height:100%;background:\(self.background)}
-        body{display:flex;align-items:center}
-        img{display:block;width:100%;height:auto}
+        body{display:flex}
+        img{display:block;width:100%;height:auto;margin:auto 0}
         </style>
         </head><body><img alt="" src="data:image/svg+xml;base64,\(encoded)"></body></html>
         """, baseURL: nil)

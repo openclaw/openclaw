@@ -14,6 +14,7 @@ import {
 } from "../../../../extensions/qa-lab/api.js";
 import type { OpenClawConfig } from "../../../../src/config/types.openclaw.js";
 import { loadOrCreateDeviceIdentity } from "../../../../src/infra/device-identity.js";
+import { closeOpenClawStateDatabaseByPath } from "../../../../src/state/openclaw-state-db-cache.js";
 import { runQaGatewayFixture, stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
 import { proveHotReloadBrowserSettings } from "./gateway-config-hot-reload-browser.js";
 import { proveHotReloadChannels } from "./gateway-config-hot-reload-channels.js";
@@ -25,9 +26,14 @@ import {
 } from "./gateway-config-hot-reload-fixtures.js";
 import { proveHotReloadBrowserLaunch } from "./gateway-config-hot-reload-launch.js";
 import { proveHotReloadNodePolicies } from "./gateway-config-hot-reload-nodes.js";
+import { proveHotReloadOtel } from "./gateway-config-hot-reload-otel.js";
 import { prepareGatewayPairingFixture } from "./gateway-config-hot-reload-pairing.js";
+import { proveHotReloadPluginPolicy } from "./gateway-config-hot-reload-plugin-policy.js";
+import { proveHotReloadPolicyAdmission } from "./gateway-config-hot-reload-policy-admission.js";
+import { proveHotReloadPolicy } from "./gateway-config-hot-reload-policy.js";
 import { proveHotReloadRequests } from "./gateway-config-hot-reload-requests.js";
 import { proveHotReloadSecurity } from "./gateway-config-hot-reload-security.js";
+import { proveHotReloadServicePolicy } from "./gateway-config-hot-reload-service-policy.js";
 import { proveHotReloadTerminalDeferredRestart } from "./gateway-config-hot-reload-terminal-deferred.js";
 import {
   proveHotReloadTerminalLifecycle,
@@ -74,6 +80,7 @@ async function runProof(repoRoot: string, outputDir: string, appendLog: (text: s
       preload.searchParams.set("fixture", fixture.baseUrl);
       gateway = await gatewayOwner.start({
         repoRoot,
+        initializeCurrentRuntimeState: true,
         useRepoCli: true,
         command: {
           executablePath: process.execPath,
@@ -84,14 +91,16 @@ async function runProof(repoRoot: string, outputDir: string, appendLog: (text: s
         },
         providerMode: "mock-openai",
         providerBaseUrl: `${fixture.baseUrl}/v1`,
+        mockSessionObserverUrl: mock.sessionObserverUrl,
         primaryModel: MODEL,
         alternateModel: "mock-openai/gpt-5.6-luna-alt",
         controlUiEnabled: true,
-        enabledPluginIds: ["browser"],
+        enabledPluginIds: ["browser", "canvas", "diffs", "openai"],
         transportBaseUrl: fixture.baseUrl,
         runtimeEnvPatch: {
           ...pairingFixture.runtimeEnvPatch,
           OPENCLAW_NO_RESPAWN: "1",
+          OPENCLAW_SKIP_CANVAS_HOST: undefined,
           OPENCLAW_APNS_RELAY_ALLOW_HTTP: "true",
           OPENCLAW_APNS_RELAY_BASE_URL: undefined,
           OPENCLAW_APNS_RELAY_TIMEOUT_MS: undefined,
@@ -109,7 +118,10 @@ async function runProof(repoRoot: string, outputDir: string, appendLog: (text: s
               ...cfg.agents?.entries,
               qa: {
                 ...cfg.agents?.entries?.qa,
-                tools: { ...cfg.agents?.entries?.qa?.tools, alsoAllow: ["agents_list"] },
+                tools: {
+                  ...cfg.agents?.entries?.qa?.tools,
+                  alsoAllow: ["agents_list", "browser", "diffs"],
+                },
               },
             },
           },
@@ -120,6 +132,8 @@ async function runProof(repoRoot: string, outputDir: string, appendLog: (text: s
             noSandbox: true,
             executablePath: browserExecutable,
             defaultProfile: "openclaw",
+            ssrfPolicy: { allowedHostnames: [new URL(fixture.baseUrl).hostname] },
+            tabCleanup: { enabled: false },
           },
           plugins: {
             ...cfg.plugins,
@@ -148,6 +162,11 @@ async function runProof(repoRoot: string, outputDir: string, appendLog: (text: s
         }),
       });
       const activeGateway = gateway;
+      assert.equal(
+        activeGateway.runtimeEnv.OPENCLAW_SKIP_CANVAS_HOST,
+        undefined,
+        "Canvas hot reload proof requires the Canvas host",
+      );
       const primary = await connectHotReloadClient(activeGateway);
       connections.push(primary);
       const pid = activeGateway.pid;
@@ -301,7 +320,7 @@ async function runProof(repoRoot: string, outputDir: string, appendLog: (text: s
 
       // Node identities and relay grants are generated for this isolated fixture only.
       const nodeIdentity = loadOrCreateDeviceIdentity({
-        path: path.join(temporaryRoot, "state/openclaw.sqlite"),
+        env: { ...process.env, OPENCLAW_STATE_DIR: temporaryRoot },
         identityKey: "browser-node",
       });
       let node: HotReloadConnection | undefined;
@@ -434,7 +453,7 @@ async function runProof(repoRoot: string, outputDir: string, appendLog: (text: s
           ["gateway.nodes.pairing.autoApproveCidrs", "gateway.nodes.pairing.sshVerify.cidrs"],
         );
         const pendingIdentity = loadOrCreateDeviceIdentity({
-          path: path.join(temporaryRoot, "state/openclaw.sqlite"),
+          env: { ...process.env, OPENCLAW_STATE_DIR: temporaryRoot },
           identityKey: "pending-node",
         });
         await assert.rejects(
@@ -446,7 +465,7 @@ async function runProof(repoRoot: string, outputDir: string, appendLog: (text: s
         assert.equal(node.closes, 0);
         await patch({ gateway: { nodes: { pairing: { autoApproveLocal: true } } } });
         const nextIdentity = loadOrCreateDeviceIdentity({
-          path: path.join(temporaryRoot, "state/openclaw.sqlite"),
+          env: { ...process.env, OPENCLAW_STATE_DIR: temporaryRoot },
           identityKey: "next-node",
         });
         const nextNode = await connectHotReloadClient(activeGateway, { identity: nextIdentity });
@@ -454,7 +473,6 @@ async function runProof(repoRoot: string, outputDir: string, appendLog: (text: s
         const pairingObservation = await pairingFixture.run({
           gateway: activeGateway,
           operator: primary.client,
-          patchConfig: patch,
           existingNode: node,
         });
         await verifyContinuity(
@@ -577,6 +595,38 @@ async function runProof(repoRoot: string, outputDir: string, appendLog: (text: s
       });
 
       await checkContinuity();
+      await proveHotReloadPolicy({
+        gateway: activeGateway,
+        temporaryRoot,
+        outputDir,
+        rpc,
+        patch,
+        http,
+        proveGroup,
+        verifyContinuity,
+      });
+      await proveHotReloadPolicyAdmission({
+        gateway: activeGateway,
+        temporaryRoot,
+        outputDir,
+        turn,
+        rpc,
+        patch,
+        proveGroup,
+        verifyContinuity,
+      });
+      await proveHotReloadPluginPolicy({
+        gateway: activeGateway,
+        unaffectedNode: node,
+        temporaryRoot,
+        outputDir,
+        fixtureBaseUrl: fixture.baseUrl,
+        rpc,
+        patch,
+        http,
+        proveGroup,
+        verifyContinuity,
+      });
       channels = await proveHotReloadChannels({ repoRoot, outputDir, appendLog });
       failures.push(...channels.failures);
       security = await proveHotReloadSecurity({ repoRoot, outputDir, appendLog });
@@ -587,19 +637,25 @@ async function runProof(repoRoot: string, outputDir: string, appendLog: (text: s
         appendLog,
       });
       failures.push(...terminalDeferred.failures);
+      const servicePolicy = await proveHotReloadServicePolicy({ repoRoot, outputDir, appendLog });
+      failures.push(...servicePolicy.failures);
+      const otel = await proveHotReloadOtel({ repoRoot, outputDir, appendLog });
+      failures.push(...otel.failures);
       await checkContinuity();
       passedChecks =
         evidence.length +
         channels.evidence.length +
         security.evidence.length +
-        terminalDeferred.evidence.length;
+        terminalDeferred.evidence.length +
+        servicePolicy.evidence.length +
+        otel.evidence.length;
       // Positive control: startup-owned Control UI routing must replace the boot.
       const beforeControl = await rpc<ConfigResult>("config.get");
       const control = await rpc<{ sentinel: { payload: { stats: { requiresRestart: boolean } } } }>(
         "config.patch",
         {
           baseHash: beforeControl.hash,
-          raw: JSON.stringify({ gateway: { controlUi: { enabled: false } } }),
+          raw: JSON.stringify({ gateway: { controlUi: { basePath: "/reload-proof" } } }),
         },
       );
       assert.equal(control.sentinel.payload.stats.requiresRestart, true);
@@ -610,6 +666,7 @@ async function runProof(repoRoot: string, outputDir: string, appendLog: (text: s
         primary.hellos > 1 && primary.bootId !== bootId ? true : undefined,
       );
       assert.equal((await http("/chat/qa")).status, 404);
+      assert.equal((await http("/reload-proof/chat/qa")).status, 200);
       summary = {
         passed: failures.length === 0,
         failures,
@@ -618,6 +675,8 @@ async function runProof(repoRoot: string, outputDir: string, appendLog: (text: s
         channels,
         security,
         terminalDeferred,
+        servicePolicy,
+        otel,
         counts: {
           passed: passedChecks,
           failed: failures.length,
@@ -625,20 +684,23 @@ async function runProof(repoRoot: string, outputDir: string, appendLog: (text: s
           channels: channels.evidence.length,
           security: security.evidence.length,
           terminalDeferred: terminalDeferred.evidence.length,
+          servicePolicy: servicePolicy.evidence.length,
+          otel: otel.evidence.length,
         },
         startupOnlyControl: {
-          prefix: "gateway.controlUi.enabled",
+          prefix: "gateway.controlUi.basePath",
           closedPersistentSocket: true,
           originalBootId: bootId,
           replacementBootId: primary.bootId,
         },
         simulatedUpstreams: [
           "OpenAI provider",
+          "OpenAI speech API (synthetic WAV)",
           "GitHub API transport",
           "favicon HTTPS transport",
           "APNs relay (no Apple delivery)",
           "CLI session catalog",
-          "browser node",
+          "browser and Canvas nodes",
           "SSH remote identity command with real isolated sshd",
         ],
       };
@@ -658,7 +720,11 @@ async function runProof(repoRoot: string, outputDir: string, appendLog: (text: s
     () => pairingFixture?.close(),
     () => fixture.close(),
     () => mock.stop(),
-    () => fs.rm(temporaryRoot, { recursive: true, force: true }),
+    async () => {
+      // Child cleanup does not own this parent identity store or its live WAL.
+      closeOpenClawStateDatabaseByPath(path.join(temporaryRoot, "state", "openclaw.sqlite"));
+      await fs.rm(temporaryRoot, { recursive: true, force: true });
+    },
   );
   return { summary, passedChecks, failures };
 }
@@ -699,10 +765,19 @@ async function main() {
     await writer.write({
       status: passed ? "pass" : "fail",
       durationMs: Date.now() - started,
-      details: `${passedChecks} settings checks passed across the primary, channel, security, and deferred-restart Gateway fixtures; startup-only positive controls restarted${passed ? "" : `; failures: ${failures.map(({ prefix }) => prefix).join(", ")}`}`,
+      details: `${passedChecks} operation and config-admission checks passed across the primary, channel, security, deferred-restart, service-policy, and OTel Gateway fixtures; startup-only positive controls restarted${passed ? "" : `; failures: ${failures.map(({ prefix }) => prefix).join(", ")}`}`,
       artifacts: [
         { kind: "summary", filePath: summaryPath },
-        ...["security", "channels", "terminal-deferred"].map((name) => ({
+        ...[
+          "security",
+          "channels",
+          "terminal-deferred",
+          "service-policy",
+          "otel",
+          "policy",
+          "policy-admission",
+          "plugin-policy",
+        ].map((name) => ({
           kind: "summary",
           filePath: path.join(outputDir, `gateway-config-hot-reload-${name}.json`),
         })),

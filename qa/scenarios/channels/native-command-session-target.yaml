@@ -34,7 +34,7 @@ scenario:
       requiredProviderMode: mock-openai
       requiredChannelDriver: crabline
       conversationId: native-stop-target
-      senderId: qa-native-operator
+      senderId: native-stop-target
       delayedPrompt: "Subagent recovery worker native command target proof. Wait until stopped."
       abortReplyNeedle: Agent was aborted
       recoveryMarker: QA-NATIVE-STOP-RECOVERY-OK
@@ -55,14 +55,14 @@ flow:
             - ref: env
             - 60000
         - resetTransport: true
-        # Telegram maps the logical QA conversation onto the leased physical group.
-        # The adapter delivery target is therefore the canonical routing peer.
+        # Telegram direct messages use the sender's identity as the conversation.
+        # The adapter delivery target is therefore the canonical direct routing peer.
         - set: delivery
           value:
             expr: "transport.buildAgentDelivery({ target: `dm:${config.conversationId}` })"
         - set: sessionKey
           value:
-            expr: "buildAgentSessionKey({ agentId: env.cfg.agents?.list?.find((agent) => agent.default)?.id ?? env.cfg.agents?.list?.[0]?.id ?? 'qa', channel: delivery.channel, accountId: transport.accountId, peer: { kind: 'group', id: delivery.replyTo } })"
+            expr: "resolveAgentRoute({ cfg: env.cfg, channel: delivery.channel, accountId: transport.accountId, peer: { kind: 'direct', id: delivery.replyTo } }).sessionKey"
         - sendInbound:
             conversation:
               id:

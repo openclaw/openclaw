@@ -1,13 +1,16 @@
 ---
-summary: "Adds media understanding provider support. Adds realtime transcription provider support."
+summary: "Deepgram audio transcription with Nova and Flux models, plus realtime speech recognition."
 read_when:
   - You are installing, configuring, or auditing the deepgram plugin
-title: "Deepgram plugin"
+title: "Deepgram plugin reference"
 ---
 
-# Deepgram plugin
+<!-- Generated file. Do not edit by hand.
+Run `pnpm plugins:inventory:gen` to rebuild it. Hand-written text survives only
+between the openclaw-plugin-reference:manual-start and
+openclaw-plugin-reference:manual-end comment markers. -->
 
-Adds media understanding provider support. Adds realtime transcription provider support.
+Deepgram audio transcription with Nova and Flux models, plus realtime speech recognition.
 
 ## Distribution
 
@@ -16,7 +19,7 @@ Adds media understanding provider support. Adds realtime transcription provider 
 
 ## Surface
 
-contracts: `mediaUnderstandingProviders`, `realtimeTranscriptionProviders`
+- Contracts: `mediaUnderstandingProviders`, `realtimeTranscriptionProviders`
 
 ## Related docs
 

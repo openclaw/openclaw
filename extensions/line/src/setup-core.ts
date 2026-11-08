@@ -1,5 +1,5 @@
+import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";
 import { defineChannelSetupContract } from "openclaw/plugin-sdk/channel-setup";
-// Line plugin module implements setup core behavior.
 import type {
   ChannelSetupAdapter,
   ChannelSetupInput,
@@ -9,13 +9,8 @@ import {
   createSetupInputPresenceValidator,
   patchScopedAccountConfig,
 } from "openclaw/plugin-sdk/setup";
-import { hasLineCredentials, parseLineAllowFromId } from "./account-helpers.js";
-import {
-  DEFAULT_ACCOUNT_ID,
-  listLineAccountIds,
-  normalizeAccountId,
-  resolveLineAccount,
-} from "./setup-runtime-api.js";
+import { hasLineCredentials } from "./account-helpers.js";
+import { resolveLineAccount } from "./accounts.js";
 
 type LineSetupInput = ChannelSetupInput & {
   channelAccessToken?: string;
@@ -49,9 +44,11 @@ export function isLineConfigured(cfg: OpenClawConfig, accountId: string): boolea
   return hasLineCredentials(resolveLineAccount({ cfg, accountId }));
 }
 
-export { parseLineAllowFromId };
+const accountCredentialKeys = ["channelAccessToken", "channelSecret", "tokenFile", "secretFile"];
 
 export const lineSetupAdapter: ChannelSetupAdapter = {
+  singleAccountKeysToMove: accountCredentialKeys,
+  namedAccountPromotionKeys: accountCredentialKeys,
   resolveAccountId: ({ accountId }) => normalizeAccountId(accountId),
   applyAccountName: ({ cfg, accountId, name }) =>
     patchLineAccountConfig({
@@ -159,5 +156,3 @@ export const lineSetupContract = defineChannelSetupContract({
   },
   legacyAdapter: lineSetupAdapter,
 });
-
-export { listLineAccountIds };

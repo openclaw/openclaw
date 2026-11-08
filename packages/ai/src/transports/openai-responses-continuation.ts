@@ -1,23 +1,55 @@
-import { stableStringify } from "@openclaw/normalization-core";
+import { createHash, type Hash } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
+import type { ModelRequestHeaders } from "@openclaw/llm-core";
+import { writeStableStringify } from "@openclaw/normalization-core";
+import { sha256StableValue } from "@openclaw/normalization-core/node-crypto";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { ResponseInput, ResponseOutputItem } from "openai/resources/responses/responses.js";
 import { getAiTransportHost, resolveAiTransportHeaderSentinels } from "../host.js";
-import { registerSessionResourceCleanup } from "../session-resources.js";
+import {
+  getSessionResourceOwnerId,
+  registerSessionResourceCleanup,
+  type SessionResourceOwner,
+} from "../session-resources.js";
 import { parseJsonObjectPreservingUnsafeIntegers } from "./json-unsafe-integers.js";
+import { getResponsesCompactionInputIdentity } from "./openai-responses-compaction-window.js";
+import type { OpenAIResponsesRequestParams } from "./openai-responses-contracts.js";
+import { projectJsonObject, projectJsonValue } from "./openai-responses-json-projection.js";
+import {
+  canReferenceResponsesReasoningHistory,
+  replayResponsesReasoningUpdates,
+  type ResponsesConfigurationUpdate,
+} from "./openai-responses-reasoning-update.js";
+import { retainedJsonBytes } from "./openai-responses-retained-bytes.js";
+import {
+  normalizeOpenAIResponsesFunctionCallId,
+  shouldNormalizeOpenAIResponsesToolCallId,
+  splitOpenAIFunctionCallPairing,
+} from "./openai-responses-tool-call-id-shape.js";
+import { isSanitizedFrozenResponsesInput } from "./responses-image-payload-sanitizer.js";
 import { sha256Hex } from "./transport-utils.js";
 
-const HTTP_CONTINUATION_IDLE_TTL_MS = 5 * 60 * 1000;
+// Keep completed baselines across ordinary conversation gaps; ready entries are
+// bounded by count and serialized content size so the longer idle window cannot
+// retain an unbounded backlog. Session cleanup discards them earlier.
+const HTTP_CONTINUATION_IDLE_TTL_MS = 90 * 60 * 1000;
+const MAX_HTTP_CONTINUATION_READY_ENTRIES = 1000;
+const MAX_HTTP_CONTINUATION_RETAINED_BYTES = 64 * 1024 * 1024;
 const TURN_HEADERS = new Set(["traceparent", "x-openclaw-turn-id", "x-openclaw-turn-attempt"]);
 
-export type ResponsesContinuationRequest = Record<string, unknown> & {
-  input?: ResponseInput;
-  previous_response_id?: string;
-};
+export type ResponsesContinuationRequest = Record<string, unknown> &
+  Pick<OpenAIResponsesRequestParams, "service_tier" | "max_output_tokens"> & {
+    input?: Array<ResponseInput[number] | ResponsesConfigurationUpdate>;
+    previous_response_id?: string;
+  };
+export type ResponsesSteeringContinuationMode = "automatic" | "required-input";
 export type ResponsesContinuationState = {
   lastRequest: ResponsesContinuationRequest;
   lastResponseId: string;
   lastResponseItems: ResponseOutputItem[];
+  pendingToolCalls?: Array<{ callId: string; itemId?: string }>;
 };
+type ContinuationResponse = { id: string; output: ResponseOutputItem[] };
 export type ResponsesContinuationStatus =
   | "continued"
   | "explicit_previous_response_id"
@@ -27,11 +59,8 @@ export type ResponsesContinuationStatus =
   | "request_changed";
 
 function jsonValuesEqual(left: object, right: object): boolean {
-  // Round-trip first so stable key ordering retains JSON's omitted/undefined wire semantics.
-  return (
-    stableStringify(JSON.parse(JSON.stringify(left) as string)) ===
-    stableStringify(JSON.parse(JSON.stringify(right) as string))
-  );
+  // Finish the left side before evaluating any right-side hook values.
+  return isDeepStrictEqual(projectJsonObject(left), projectJsonObject(right));
 }
 
 function requestWithoutInput(request: ResponsesContinuationRequest): ResponsesContinuationRequest {
@@ -54,7 +83,120 @@ function requestWithoutInput(request: ResponsesContinuationRequest): ResponsesCo
   return { ...rest, metadata };
 }
 
-function normalizeAssistantReplayInput(input: readonly unknown[], fromResponse = false): unknown[] {
+// Match replay's ID shaping while keeping unrelated ID edits visible to history checks.
+function canonicalizeToolCallId(callId: unknown, itemId: unknown): unknown {
+  if (typeof callId !== "string") {
+    return callId;
+  }
+  const paired = typeof itemId === "string" && itemId ? `${callId}|${itemId}` : callId;
+  // Replay leaves provider-shaped IDs untouched; match that short-circuit.
+  if (!shouldNormalizeOpenAIResponsesToolCallId(paired)) {
+    return callId;
+  }
+  return splitOpenAIFunctionCallPairing(normalizeOpenAIResponsesFunctionCallId(paired)).callId;
+}
+
+type ResponsesContinuationToolCall = { callId: string; itemId?: string };
+
+function responseToolCalls(items: readonly unknown[]): ResponsesContinuationToolCall[] {
+  return items.flatMap((item) => {
+    if (!isRecord(item) || item.type !== "function_call" || typeof item.call_id !== "string") {
+      return [];
+    }
+    return [{ callId: item.call_id, ...(typeof item.id === "string" ? { itemId: item.id } : {}) }];
+  });
+}
+
+function toolCallReplayShapes(call: ResponsesContinuationToolCall): string[] {
+  // Membership checks and same-owner map writes already tolerate duplicate spellings.
+  return [
+    call.callId,
+    canonicalizeToolCallId(call.callId, call.itemId),
+    canonicalizeToolCallId(call.callId, undefined),
+  ].filter((shape): shape is string => typeof shape === "string");
+}
+
+function toolCallOwnerByReplayShape(
+  calls: readonly ResponsesContinuationToolCall[],
+): Map<string, number | null> {
+  const ownerByReplayShape = new Map<string, number | null>();
+  for (const [index, call] of calls.entries()) {
+    for (const replayShape of toolCallReplayShapes(call)) {
+      const owner = ownerByReplayShape.get(replayShape);
+      ownerByReplayShape.set(replayShape, owner === undefined || owner === index ? index : null);
+    }
+  }
+  return ownerByReplayShape;
+}
+
+export function recordResponsesContinuationState(
+  previous: ResponsesContinuationState | undefined,
+  lastRequest: ResponsesContinuationRequest,
+  response: ContinuationResponse,
+  continued = false,
+): ResponsesContinuationState {
+  const calls =
+    previous && continued
+      ? [...(previous.pendingToolCalls ?? []), ...responseToolCalls(previous.lastResponseItems)]
+      : responseToolCalls(lastRequest.input ?? []);
+  const seenCalls = new Set<string>();
+  const uniqueCalls = calls.filter((call) => {
+    const key = JSON.stringify([call.callId, call.itemId]);
+    if (seenCalls.has(key)) {
+      return false;
+    }
+    seenCalls.add(key);
+    return true;
+  });
+  // A later response can supersede the one that introduced an unresolved async call.
+  // Keep its raw ID while the full transcript still has the call but no output.
+  const input: readonly unknown[] = lastRequest.input ?? [];
+  const ownerByReplayShape = toolCallOwnerByReplayShape(uniqueCalls);
+  const replayedCallIds = new Set<string>();
+  const lastCallPosition = new Map<number, number>();
+  const lastOutputPosition = new Map<number, number>();
+  for (const [inputIndex, item] of input.entries()) {
+    if (!isRecord(item) || typeof item.call_id !== "string") {
+      continue;
+    }
+    const owner = ownerByReplayShape.get(item.call_id);
+    if (item.type === "function_call") {
+      replayedCallIds.add(item.call_id);
+    }
+    const positions =
+      item.type === "function_call"
+        ? lastCallPosition
+        : item.type === "function_call_output"
+          ? lastOutputPosition
+          : undefined;
+    if (positions && owner !== undefined && owner !== null) {
+      positions.set(owner, inputIndex);
+    }
+  }
+  const pendingToolCalls = uniqueCalls.filter((_call, index) => {
+    const callPosition = lastCallPosition.get(index);
+    return (
+      toolCallReplayShapes(_call).some((shape) => replayedCallIds.has(shape)) &&
+      (callPosition === undefined || (lastOutputPosition.get(index) ?? -1) < callPosition)
+    );
+  });
+  return {
+    lastRequest,
+    lastResponseId: response.id,
+    // Hosted search runs on the server and has no transcript block, so replay never
+    // sends it back. The server keeps it under previous_response_id.
+    lastResponseItems: response.output.filter((item) => item.type !== "web_search_call"),
+    pendingToolCalls,
+  };
+}
+
+// Cached output keeps raw IDs; compare with and without the item ID because replay may omit it.
+// `fromResponse` also gates provider-output argument normalization below.
+function normalizeAssistantReplayInput(
+  input: readonly unknown[],
+  fromResponse = false,
+  ignoreCachedItemIds = false,
+): unknown[] {
   return input.map((item) => {
     if (!isRecord(item)) {
       return item;
@@ -62,10 +204,52 @@ function normalizeAssistantReplayInput(input: readonly unknown[], fromResponse =
     if (item.type === "reasoning") {
       return { type: "reasoning" };
     }
-    if (item.type !== "function_call" && !(item.type === "message" && item.role === "assistant")) {
+    if (
+      item.type !== "function_call" &&
+      item.type !== "function_call_output" &&
+      !(item.type === "message" && item.role === "assistant")
+    ) {
       return item;
     }
-    const { id: _id, status: _status, ...stableItem } = item;
+    // Unchanged frozen wire items can reuse their JSON projection. Mutable/opaque
+    // inputs still need rest-copy semantics (getters, prototypes and omitted fields).
+    if (
+      !fromResponse &&
+      getAiTransportHost().immutableData?.isDeeplyFrozenPlainData(item) &&
+      !("id" in item) &&
+      !("status" in item) &&
+      !("toJSON" in item) &&
+      (!("call_id" in item) ||
+        (Object.prototype.propertyIsEnumerable.call(item, "call_id") &&
+          canonicalizeToolCallId(item.call_id, undefined) === item.call_id)) &&
+      (item.type !== "message" ||
+        !Array.isArray(item.content) ||
+        (!("toJSON" in item.content) &&
+          item.content.every(
+            (part) =>
+              !isRecord(part) ||
+              part.type !== "output_text" ||
+              (!("annotations" in part) && !("logprobs" in part) && !("toJSON" in part)),
+          )))
+    ) {
+      return item;
+    }
+    const { id: rawId, status: _status, ...stableItem } = item;
+    if (item.type === "function_call_output") {
+      // Output ID and status affect replayed input; keep them in the prefix comparison.
+      if ("id" in item) {
+        stableItem.id = item.id;
+      }
+      if ("status" in item) {
+        stableItem.status = item.status;
+      }
+    }
+    if ("call_id" in stableItem) {
+      // Only function_call pairs IDs; function_call_output references the bare call ID.
+      const itemId =
+        item.type === "function_call" && !(fromResponse && ignoreCachedItemIds) ? rawId : undefined;
+      stableItem.call_id = canonicalizeToolCallId(stableItem.call_id, itemId);
+    }
     if (fromResponse && item.type === "function_call") {
       // Only provider output crosses terminal admission; sent arguments must retain real type edits.
       const args = parseJsonObjectPreservingUnsafeIntegers(stableItem.arguments);
@@ -84,45 +268,341 @@ function normalizeAssistantReplayInput(input: readonly unknown[], fromResponse =
   });
 }
 
+// Compare tool results by their uniquely identified call occurrence, not a lossy ID alias.
+type NormalizedContinuationHistory = {
+  items: unknown[];
+  callOwners: Map<number, object>;
+};
+
+function normalizeContinuationHistory(
+  input: readonly unknown[],
+): NormalizedContinuationHistory | undefined {
+  const normalized = normalizeAssistantReplayInput(input);
+  const callOwners = new Map<number, object>();
+  const calls = responseToolCalls(input);
+  const ownerByReplayShape = toolCallOwnerByReplayShape(calls);
+  let callIndex = 0;
+  for (const [index, item] of input.entries()) {
+    const normalizedItem = normalized[index];
+    if (!isRecord(item) || !isRecord(normalizedItem)) {
+      continue;
+    }
+    let callId: object;
+    if (item.type === "function_call") {
+      if (typeof normalizedItem.call_id !== "string") {
+        return undefined;
+      }
+      const callOwner = ownerByReplayShape.get(normalizedItem.call_id);
+      if (callOwner !== callIndex) {
+        return undefined;
+      }
+      callId = { callOwner };
+      callIndex += 1;
+    } else if (item.type === "function_call_output" && typeof item.call_id === "string") {
+      const owner = ownerByReplayShape.get(item.call_id);
+      if (owner === null) {
+        return undefined;
+      }
+      callId =
+        owner === undefined
+          ? { unknownCallId: canonicalizeToolCallId(item.call_id, undefined) }
+          : { callOwner: owner };
+    } else {
+      continue;
+    }
+    if (normalizedItem === item && !("toJSON" in normalized)) {
+      callOwners.set(index, callId);
+    } else {
+      const ownedItem = normalizedItem === item ? { ...normalizedItem } : normalizedItem;
+      ownedItem.call_id = callId;
+      normalized[index] = ownedItem;
+    }
+  }
+  return { items: normalized, callOwners };
+}
+
+function projectContinuationHistory(history: NormalizedContinuationHistory): unknown {
+  const projected = projectJsonObject(history.items);
+  // Immutable tool sources project before replacing their call IDs. Copy the cached
+  // projection so call ownership remains request-local and cannot poison later comparisons.
+  if (Array.isArray(projected)) {
+    for (const [index, callId] of history.callOwners) {
+      const item: unknown = projected[index];
+      if (isRecord(item)) {
+        projected[index] = { ...item, call_id: callId };
+      }
+    }
+  }
+  return projected;
+}
+
+export function responsesContinuationRequestFingerprint(
+  request: ResponsesContinuationRequest,
+): string {
+  return sha256StableValue(projectJsonObject(requestWithoutInput(request))).digest;
+}
+
+type ResponsesPrefixCheckpoint = { previous?: ResponsesPrefixCheckpoint; digest?: Hash };
+const emptyPrefix = { digest: createHash("sha256").update("[") };
+const prefixCheckpoints = new WeakMap<object, ResponsesPrefixCheckpoint>();
+
+function appendPrefixValues(digest: Hash, values: readonly unknown[], offset: number): void {
+  let text = "";
+  let index = offset;
+  const write = (chunk: string) => {
+    text += chunk;
+    if (text.length >= 16_384) {
+      digest.update(text);
+      text = "";
+    }
+  };
+  for (const value of values) {
+    if (index > 0) {
+      write(",");
+    }
+    writeStableStringify(projectJsonValue(value, String(index++), new Map()) ?? null, write);
+  }
+  digest.update(text);
+}
+
+export function responsesContinuationPrefixFingerprint(
+  input: readonly unknown[],
+  output: readonly unknown[] = [],
+): string {
+  // These hashes are persisted. Copy the SHA state, never substitute a hash of entry hashes.
+  // The complete immutable identity chain fences rewrites, branches and replay reordering.
+  const immutable = getAiTransportHost().immutableData;
+  let prefix: ResponsesPrefixCheckpoint = emptyPrefix;
+  let retainedDigest = emptyPrefix.digest;
+  let retainedLength = 0;
+  let length = 0;
+  for (const item of input) {
+    if (!item || typeof item !== "object") {
+      break;
+    }
+    const compactionIdentity = getResponsesCompactionInputIdentity(item);
+    const identity = compactionIdentity ?? item;
+    let next = prefixCheckpoints.get(identity);
+    if (
+      !next &&
+      !compactionIdentity &&
+      !isSanitizedFrozenResponsesInput(item) &&
+      !immutable?.isDeeplyFrozenPlainData(item)
+    ) {
+      break;
+    }
+    if (next?.previous !== prefix) {
+      next = { previous: prefix };
+      prefixCheckpoints.set(identity, next);
+    }
+    prefix = next;
+    length++;
+    if (next.digest) {
+      retainedDigest = next.digest;
+      retainedLength = length;
+    }
+  }
+  if (length > 0) {
+    const digest = retainedDigest.copy();
+    if (retainedLength < length) {
+      appendPrefixValues(
+        digest,
+        normalizeAssistantReplayInput(input.slice(retainedLength, length)),
+        retainedLength,
+      );
+      // One SHA checkpoint per requested boundary, not per historical entry.
+      prefix.digest = digest.copy();
+    }
+    if (length < input.length || output.length > 0) {
+      appendPrefixValues(
+        digest,
+        [
+          ...normalizeAssistantReplayInput(input.slice(length)),
+          ...normalizeAssistantReplayInput(output, true),
+        ],
+        length,
+      );
+    }
+    return digest.update("]").digest("hex");
+  }
+  return sha256StableValue(
+    projectJsonObject([
+      ...normalizeAssistantReplayInput(input),
+      ...normalizeAssistantReplayInput(output, true),
+    ]),
+  ).digest;
+}
+
 export function resolveResponsesContinuationRequest(
   continuation: ResponsesContinuationState | undefined,
   request: ResponsesContinuationRequest,
-): { request: ResponsesContinuationRequest; continuationStatus: ResponsesContinuationStatus } {
+  steering?: ResponsesSteeringContinuationMode,
+): {
+  request: ResponsesContinuationRequest;
+  fullRequest?: ResponsesContinuationRequest;
+  continuationStatus: ResponsesContinuationStatus;
+} {
   if (!continuation) {
     return { request, continuationStatus: "no_previous_response" };
   }
   if (request.previous_response_id) {
     return { request, continuationStatus: "explicit_previous_response_id" };
   }
+  // Referenced controls remain active even when omitted from the wire delta.
+  // Check compatibility whether the caller supplied them or needs rehydration.
+  if (!canReferenceResponsesReasoningHistory(continuation.lastRequest, request)) {
+    return { request, continuationStatus: "request_changed" };
+  }
+  const prepared = replayResponsesReasoningUpdates(
+    continuation.lastRequest,
+    request,
+    continuation.lastResponseItems.length,
+    steering,
+  );
+  // Required input creates a new response with current settings. The same
+  // history validation below still binds it to the accepted steering's parent.
   if (
-    !jsonValuesEqual(requestWithoutInput(request), requestWithoutInput(continuation.lastRequest))
+    steering !== "required-input" &&
+    !jsonValuesEqual(requestWithoutInput(prepared), requestWithoutInput(continuation.lastRequest))
   ) {
     return { request, continuationStatus: "request_changed" };
   }
-  const currentInput = request.input ?? [];
-  const previousInput = continuation.lastRequest.input ?? [];
+  const currentInput: readonly unknown[] = prepared.input ?? [];
+  const previousInput: readonly unknown[] = continuation.lastRequest.input ?? [];
   const baselineLength = previousInput.length + continuation.lastResponseItems.length;
   if (currentInput.length < baselineLength) {
     return { request, continuationStatus: "history_shorter" };
   }
-  if (
-    !jsonValuesEqual(
-      normalizeAssistantReplayInput(currentInput.slice(0, previousInput.length)),
-      normalizeAssistantReplayInput(previousInput),
-    ) ||
-    !jsonValuesEqual(
-      normalizeAssistantReplayInput(currentInput.slice(previousInput.length, baselineLength)),
-      normalizeAssistantReplayInput(continuation.lastResponseItems, true),
-    )
-  ) {
+  const replayedToolRoundInput = currentInput.slice(previousInput.length, baselineLength);
+  const replayedToolRound = normalizeAssistantReplayInput(replayedToolRoundInput);
+  // Replay may keep or omit function_call.id, so compare both cached forms.
+  const historyToolRoundUnchanged = [false, true].some((ignoreCachedItemIds) =>
+    jsonValuesEqual(
+      replayedToolRound,
+      normalizeAssistantReplayInput(continuation.lastResponseItems, true, ignoreCachedItemIds),
+    ),
+  );
+  if (!historyToolRoundUnchanged) {
     return { request, continuationStatus: "history_changed" };
   }
+  // Conversion already owns these immutable wire items. An identical sent prefix
+  // needs no replay-ID remapping; only the new response and delta need ownership checks.
+  const immutable = getAiTransportHost().immutableData;
+  let samePrefix = true;
+  for (let index = 0; index < previousInput.length; index++) {
+    const item = previousInput[index];
+    if (
+      item !== currentInput[index] ||
+      item === null ||
+      typeof item !== "object" ||
+      !(isSanitizedFrozenResponsesInput(item) || immutable?.isDeeplyFrozenPlainData(item))
+    ) {
+      samePrefix = false;
+      break;
+    }
+  }
+  if (!samePrefix) {
+    const historyCurrentInput = currentInput.slice(0, previousInput.length);
+    for (const [index, previousItem] of previousInput.entries()) {
+      const currentItem = historyCurrentInput[index];
+      if (!isRecord(previousItem) || !isRecord(currentItem)) {
+        continue;
+      }
+      if (previousItem.type === "function_call" && currentItem.type === "function_call") {
+        if (
+          typeof previousItem.call_id === "string" &&
+          typeof currentItem.call_id === "string" &&
+          !toolCallReplayShapes({
+            callId: previousItem.call_id,
+            ...(typeof previousItem.id === "string" ? { itemId: previousItem.id } : {}),
+          }).includes(currentItem.call_id)
+        ) {
+          return { request, continuationStatus: "history_changed" };
+        }
+      }
+      if (
+        previousItem.type === "function_call_output" &&
+        currentItem.type === "function_call_output" &&
+        typeof previousItem.call_id === "string" &&
+        typeof currentItem.call_id === "string" &&
+        currentItem.call_id !== previousItem.call_id &&
+        currentItem.call_id !== canonicalizeToolCallId(previousItem.call_id, undefined)
+      ) {
+        return { request, continuationStatus: "history_changed" };
+      }
+    }
+    const normalizedPrevious = normalizeContinuationHistory(previousInput);
+    const normalizedCurrent = normalizeContinuationHistory(historyCurrentInput);
+    if (
+      normalizedPrevious === undefined ||
+      normalizedCurrent === undefined ||
+      !isDeepStrictEqual(
+        projectContinuationHistory(normalizedCurrent),
+        projectContinuationHistory(normalizedPrevious),
+      )
+    ) {
+      return { request, continuationStatus: "history_changed" };
+    }
+  }
+  // Restore accepted replay IDs in the delta to match the provider's cached call.
+  const delta = currentInput.slice(baselineLength);
+  const cachedResponseItems = continuation.lastResponseItems;
+  const pendingToolCalls = continuation.pendingToolCalls ?? [];
+  const currentResponseCalls = responseToolCalls(cachedResponseItems);
+  const replayedCalls = replayedToolRoundInput.filter(
+    (item): item is Record<string, unknown> => isRecord(item) && item.type === "function_call",
+  );
+  if (currentResponseCalls.length !== replayedCalls.length) {
+    return { request, continuationStatus: "history_changed" };
+  }
+
+  const cachedCalls = [...pendingToolCalls, ...currentResponseCalls];
+  const currentCallOffset = pendingToolCalls.length;
+  const ownerByReplayShape = toolCallOwnerByReplayShape(cachedCalls);
+
+  // Lossy shaping is safe only when a replayed call or output has one cached owner.
+  for (const index of currentResponseCalls.keys()) {
+    const replayedCallId = replayedCalls[index]?.call_id;
+    if (
+      typeof replayedCallId !== "string" ||
+      ownerByReplayShape.get(replayedCallId) !== currentCallOffset + index
+    ) {
+      return { request, continuationStatus: "history_changed" };
+    }
+  }
+
+  const restoredInput: unknown[] = [];
+  for (const item of delta) {
+    if (
+      !isRecord(item) ||
+      item.type !== "function_call_output" ||
+      typeof item.call_id !== "string"
+    ) {
+      restoredInput.push(item);
+      continue;
+    }
+    const owner = ownerByReplayShape.get(item.call_id);
+    // Unknown or shared shapes cannot identify a cached call; resend full history to preserve pairing.
+    if (owner === undefined || owner === null) {
+      return { request, continuationStatus: "history_changed" };
+    }
+    const rawCallId = cachedCalls[owner]?.callId;
+    if (!rawCallId) {
+      return { request, continuationStatus: "history_changed" };
+    }
+    restoredInput.push(rawCallId === item.call_id ? item : { ...item, call_id: rawCallId });
+  }
+  // Restoration only changes output call IDs on items sliced from current input;
+  // unknown or ambiguous IDs reject continuation before this cast.
+  // SAFETY: restoration above preserves item shape as documented above.
+  const restoredResponseInput = restoredInput as ResponseInput;
   return {
     request: {
-      ...request,
+      ...prepared,
       previous_response_id: continuation.lastResponseId,
-      input: currentInput.slice(baselineLength),
+      input: restoredResponseInput,
     },
+    ...(prepared !== request ? { fullRequest: prepared } : {}),
     continuationStatus: "continued",
   };
 }
@@ -131,21 +611,72 @@ type HttpContinuationEntry =
   | {
       kind: "ready";
       sessionId: string;
-      generation: number;
+      owner: SessionResourceOwner;
       state: ResponsesContinuationState;
       idleTimer: ReturnType<typeof setTimeout>;
+      retainedBytes: number;
+      jsonBytes: ReadonlyMap<string | object, number>;
     }
-  | { kind: "claimed"; sessionId: string; generation: number };
+  | { kind: "claimed"; sessionId: string; owner: SessionResourceOwner };
 
 const httpContinuationEntries = new Map<string, HttpContinuationEntry>();
-let nextHttpContinuationGeneration = 1;
+// Commit order owns eviction order. Index only ready entries so eviction work
+// stays bounded even when many requests are still in flight.
+const readyHttpContinuationEntries = new Map<
+  string,
+  Extract<HttpContinuationEntry, { kind: "ready" }>
+>();
+// Updated with ready-entry insertion/removal; no full-cache scan on commit.
+let httpContinuationRetainedBytes = 0;
+
+// Keep timer closures outside the attempt scope, which retains prior baselines and callers.
+function createHttpContinuationTimer(key: string): ReturnType<typeof setTimeout> {
+  const timer = setTimeout(() => {
+    const entry = httpContinuationEntries.get(key);
+    if (entry?.kind === "ready" && entry.idleTimer === timer) {
+      deleteHttpContinuationIfOwned(key, entry);
+    }
+  }, HTTP_CONTINUATION_IDLE_TTL_MS);
+  timer.unref?.();
+  return timer;
+}
+
+// Timers and released handles must not remove a replacement claim.
+function deleteHttpContinuationIfOwned(key: string, entry: HttpContinuationEntry): void {
+  if (httpContinuationEntries.get(key) !== entry) {
+    return;
+  }
+  if (entry.kind === "ready") {
+    clearTimeout(entry.idleTimer);
+    httpContinuationRetainedBytes -= entry.retainedBytes;
+    readyHttpContinuationEntries.delete(key);
+  }
+  httpContinuationEntries.delete(key);
+}
+
+// Evict oldest committed baselines until the incoming entry fits both bounds.
+function evictReadyEntriesForCapacity(pendingBytes: number): void {
+  for (;;) {
+    const overCapacity = readyHttpContinuationEntries.size >= MAX_HTTP_CONTINUATION_READY_ENTRIES;
+    const overBudget =
+      httpContinuationRetainedBytes + pendingBytes > MAX_HTTP_CONTINUATION_RETAINED_BYTES;
+    if (!overCapacity && !overBudget) {
+      return;
+    }
+    const oldest = readyHttpContinuationEntries.entries().next();
+    if (oldest.done) {
+      return;
+    }
+    const [oldestKey, oldestEntry] = oldest.value;
+    deleteHttpContinuationIfOwned(oldestKey, oldestEntry);
+  }
+}
 
 type HttpContinuationIdentity = {
   apiKey: string;
   baseUrl: string;
-  headers: Record<string, string>;
+  headers: ModelRequestHeaders;
 };
-type ContinuationResponse = { id: string; output: ResponseOutputItem[] };
 
 function connectionIdentity(params: HttpContinuationIdentity): string {
   const headers = Object.entries(resolveAiTransportHeaderSentinels(params.headers) ?? {})
@@ -165,63 +696,71 @@ export function claimOpenAIResponsesHttpContinuation(
   params: HttpContinuationIdentity & {
     sessionId: string;
     request: ResponsesContinuationRequest;
+    restoreRequest?: () => ResponsesContinuationRequest;
   },
 ) {
-  const key = `${params.sessionId}\0${connectionIdentity(params)}`;
+  const owner = getAiTransportHost();
+  const key = `${getSessionResourceOwnerId(owner)}\0${params.sessionId}\0${connectionIdentity(params)}`;
   const previous = httpContinuationEntries.get(key);
   if (previous?.kind === "claimed") {
     return undefined;
   }
-  if (previous?.kind === "ready") {
-    clearTimeout(previous.idleTimer);
+  if (previous) {
+    deleteHttpContinuationIfOwned(key, previous);
   }
-  const generation = nextHttpContinuationGeneration++;
-  const claimed = { kind: "claimed", sessionId: params.sessionId, generation } as const;
+  const request = previous ? params.request : (params.restoreRequest?.() ?? params.request);
+  const resolved = resolveResponsesContinuationRequest(previous?.state, request);
+  const fullRequest = resolved.fullRequest ?? request;
+  const continuationRequest = params.request.store === false ? fullRequest : resolved.request;
+  const claimed = { kind: "claimed", sessionId: params.sessionId, owner } as const;
   httpContinuationEntries.set(key, claimed);
-  const wireRequest = resolveResponsesContinuationRequest(
-    previous?.kind === "ready" ? previous.state : undefined,
-    params.request,
-  ).request;
   return {
-    request: wireRequest,
-    commit: (effectiveRequest: ResponsesContinuationRequest, response: ContinuationResponse) => {
+    // Unstored HTTP responses cannot be referenced, but their prompt prefix can still be cached.
+    request: continuationRequest,
+    fullRequest,
+    commit: (
+      effectiveRequest: ResponsesContinuationRequest,
+      response: ContinuationResponse,
+      dispatchedPreviousResponseId?: string,
+    ) => {
       if (httpContinuationEntries.get(key) !== claimed) {
         return;
       }
-      const idleTimer = setTimeout(() => {
-        const current = httpContinuationEntries.get(key);
-        if (current?.kind === "ready" && current.generation === generation) {
-          httpContinuationEntries.delete(key);
-        }
-      }, HTTP_CONTINUATION_IDLE_TTL_MS);
-      idleTimer.unref?.();
+      const state = recordResponsesContinuationState(
+        previous?.state,
+        effectiveRequest,
+        response,
+        previous !== undefined && dispatchedPreviousResponseId === previous.state.lastResponseId,
+      );
+      // Serialized-content budget, not JavaScript heap overhead.
+      const { retainedBytes, jsonBytes } = retainedJsonBytes(state, previous?.jsonBytes);
+      if (retainedBytes > MAX_HTTP_CONTINUATION_RETAINED_BYTES) {
+        // Keep other sessions when this baseline cannot fit alone. Its next
+        // request sends full history; the completed response remains valid.
+        deleteHttpContinuationIfOwned(key, claimed);
+        return;
+      }
+      evictReadyEntriesForCapacity(retainedBytes);
       const ready = {
         ...claimed,
         kind: "ready",
-        state: {
-          lastRequest: effectiveRequest,
-          lastResponseId: response.id,
-          lastResponseItems: response.output,
-        },
-        idleTimer,
+        state,
+        idleTimer: owner.runInDetachedAsyncContext(() => createHttpContinuationTimer(key)),
+        retainedBytes,
+        jsonBytes,
       } satisfies Extract<HttpContinuationEntry, { kind: "ready" }>;
+      httpContinuationRetainedBytes += retainedBytes;
       httpContinuationEntries.set(key, ready);
+      readyHttpContinuationEntries.set(key, ready);
     },
-    release: () => {
-      if (httpContinuationEntries.get(key) === claimed) {
-        httpContinuationEntries.delete(key);
-      }
-    },
+    release: () => deleteHttpContinuationIfOwned(key, claimed),
   };
 }
 
-registerSessionResourceCleanup((sessionId) => {
+registerSessionResourceCleanup((sessionId, owner) => {
   for (const [key, entry] of httpContinuationEntries) {
-    if (!sessionId || entry.sessionId === sessionId) {
-      if (entry.kind === "ready") {
-        clearTimeout(entry.idleTimer);
-      }
-      httpContinuationEntries.delete(key);
+    if ((!owner || entry.owner === owner) && (!sessionId || entry.sessionId === sessionId)) {
+      deleteHttpContinuationIfOwned(key, entry);
     }
   }
 });

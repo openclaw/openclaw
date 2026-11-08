@@ -68,10 +68,7 @@ export function substituteArgs(content: string, args: string[]): string {
         }
         // Keep shell-style `${@:0:...}` compatibility: start 0 includes `$0` in shell, but
         // prompt templates have no command name, so it maps to the first provided argument.
-        let start = parsedStart - 1;
-        if (start < 0) {
-          start = 0;
-        }
+        const start = Math.max(0, parsedStart - 1);
         if (lengthStr) {
           const length = parseStrictNonNegativeInteger(lengthStr);
           if (length === undefined) {

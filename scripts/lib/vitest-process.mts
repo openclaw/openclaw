@@ -20,8 +20,10 @@ import {
   createVitestProcessCompletion,
   shouldUseDetachedVitestProcessGroup,
 } from "../vitest-process-group.mts";
-import { runWithFailedTrailer, writeFailedTrailer } from "./failed-trailer.mts";
+import { writeFailedTrailer } from "./failed-trailer.mts";
 import { signalExitCode } from "./managed-child-process.mts";
+import { resolveRepoRoot } from "./repo-root.mjs";
+import { vitestInfrastructureExitCode } from "./vitest-outcome.mts";
 import {
   createVitestResourceOwner,
   findVitestResourceOwner,
@@ -54,7 +56,8 @@ export function spawnOwnedVitestProcess(spec: {
   };
   let child;
   try {
-    const containingRoot = fs.realpathSync(env.TMPDIR || env.TMP || env.TEMP || tmpdir());
+    // Native realpath expands Windows short names before children create filesystem watchers.
+    const containingRoot = fs.realpathSync.native(env.TMPDIR || env.TMP || env.TEMP || tmpdir());
     // An intermediate runner can die before publishing its own cleanup result.
     // Its containing owner must already hold the obligation before allocation.
     const containingOwner = findVitestResourceOwner(containingRoot);
@@ -62,14 +65,28 @@ export function spawnOwnedVitestProcess(spec: {
       parent = { root: containingOwner.root, release: containingOwner.claim() };
     }
     tempRoot = tempDirs.make("oc-vt-", containingRoot);
+    // Stop ancestor package scopes without forcing CommonJS: fixtures may use
+    // either extensionless CommonJS or Node's syntax-detected JavaScript modules.
+    fs.writeFileSync(path.join(tempRoot, "package.json"), "{}\n");
     owner = createVitestResourceOwner(tempRoot);
     const childEnv: NodeJS.ProcessEnv = { ...env, TMPDIR: tempRoot, TMP: tempRoot, TEMP: tempRoot };
+    if (mode !== "tooling") {
+      // Source subprocesses share this owned cache until the invocation joins.
+      // Fixtures with descriptor-heavy source Workers can opt out locally.
+      delete childEnv.TSX_DISABLE_CACHE;
+    }
     if (mode !== "tooling" && !(policy.live && policy.allowRealHome)) {
       const nativeHome = path.join(tempRoot, "home");
       fs.mkdirSync(nativeHome);
       const callerHome = env.HOME ?? env.USERPROFILE ?? homedir();
       childEnv.COREPACK_HOME = resolveTestCorepackHome(env, callerHome);
       childEnv.PLAYWRIGHT_BROWSERS_PATH = resolveTestBrowserCache(env, callerHome);
+      // Bun's content-addressed compiler cache must survive test HOME cleanup.
+      childEnv.BUN_RUNTIME_TRANSPILER_CACHE_PATH ??= path.join(
+        resolveRepoRoot(import.meta.url),
+        ".cache",
+        "bun-transpiler",
+      );
       // Set the actual process environment before config imports and Worker creation.
       // Worker-local process.env and restored os.homedir mocks cannot retarget libuv.
       if (!policy.hermetic) {
@@ -103,7 +120,7 @@ export function spawnOwnedVitestProcess(spec: {
           `[vitest] retained temporary namespace ${tempRoot}; descendant completion is unverified on this non-group launch. Stop the remaining writers before removing this exact directory.`,
         );
       }
-      return result;
+      return { ...result, groupJoined: verifiedGroup };
     } catch (error) {
       // A failed parent receipt can follow successful child disposal. Report
       // the still-owned ancestor, not a child directory already removed.
@@ -134,14 +151,22 @@ export async function exitVitestBySignal(signal: NodeJS.Signals): Promise<void> 
 }
 
 /** Only public invocations report; internal children propagate their settled outcome. */
-export function runVitestCli(
-  tool: string,
+export async function runVitestCli(
+  tool: string | undefined,
   run: (exitBySignal: typeof exitVitestBySignal) => Promise<void>,
 ): Promise<void> {
-  return runWithFailedTrailer(tool, () =>
-    run(async (signal) => {
-      writeFailedTrailer(tool, signalExitCode(signal));
+  try {
+    await run(async (signal) => {
+      if (tool) {
+        writeFailedTrailer(tool, signalExitCode(signal));
+      }
       await exitVitestBySignal(signal);
-    }),
-  );
+    });
+  } catch (error) {
+    console.error(error);
+    process.exitCode = vitestInfrastructureExitCode(Number(process.exitCode));
+  }
+  if (tool) {
+    writeFailedTrailer(tool, process.exitCode);
+  }
 }

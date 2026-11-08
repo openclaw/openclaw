@@ -1,5 +1,5 @@
 // Consult question tests cover question extraction for agent consultation.
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   matchRealtimeVoiceConsultQuestions,
   readRealtimeVoiceConsultQuestion,
@@ -7,6 +7,20 @@ import {
 } from "./consult-question.js";
 
 describe("realtime voice consult question helpers", () => {
+  it("normalizes punctuation and Unicode whitespace in one replacement per question", () => {
+    const replace = vi.spyOn(String.prototype, "replace");
+    let matches: boolean;
+    let replacements: number;
+    try {
+      matches = matchRealtimeVoiceConsultQuestions("  STATUS\u00a0\t---\n東京?  ", "status 東京");
+      replacements = replace.mock.calls.length;
+    } finally {
+      replace.mockRestore();
+    }
+    expect(matches).toBe(true);
+    expect(replacements).toBeLessThanOrEqual(2);
+  });
+
   it("reads common provider question fields", () => {
     expect(readRealtimeVoiceConsultQuestion({ question: " check status " })).toBe("check status");
     expect(readRealtimeVoiceConsultQuestion({ prompt: "look up docs" })).toBe("look up docs");
@@ -48,6 +62,5 @@ describe("realtime voice consult question helpers", () => {
     );
 
     expect(result).toBe(`${"a".repeat(7)} [truncated]`);
-    expect(result).toContain("[truncated]");
   });
 });

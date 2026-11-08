@@ -9,10 +9,11 @@ import {
   readProviderJsonResponse,
 } from "openclaw/plugin-sdk/provider-http";
 import { fetchWithRuntimeDispatcherOrMockedGlobal } from "openclaw/plugin-sdk/runtime-fetch";
+import { asSafeIntegerInRange, isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { runChannelProbe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { resolveLineAccount } from "./accounts.js";
 import { resolveLineChannelAccessToken } from "./channel-access-token.js";
-import type { LineMessageQuota, LineProbeResult } from "./types.js";
+import type { LineMessageQuota, LineProbeResult, LineProbeWebhookState } from "./types.js";
 
 const LINE_QUOTA_TIMEOUT_MS = 2_000;
 const LINE_JSON_MAX_BYTES = 16 * 1024;
@@ -56,22 +57,48 @@ async function readLineMessageQuota(
     if (quota.type === "none") {
       return { kind: "unlimited" };
     }
-    if (
-      quota.type !== "limited" ||
-      typeof quota.value !== "number" ||
-      !Number.isSafeInteger(quota.value) ||
-      quota.value < 0
-    ) {
+    const limit = asSafeIntegerInRange(quota.value, { min: 0 });
+    if (quota.type !== "limited" || limit === undefined) {
       return undefined;
     }
     const { totalUsage } = await read<messagingApi.QuotaConsumptionResponse>(
       "message/quota/consumption",
     );
-    return typeof totalUsage === "number" && Number.isSafeInteger(totalUsage) && totalUsage >= 0
-      ? { kind: "limited", limit: quota.value, used: totalUsage }
-      : undefined;
+    const used = asSafeIntegerInRange(totalUsage, { min: 0 });
+    return used === undefined ? undefined : { kind: "limited", limit, used };
   } catch {
     return undefined;
+  }
+}
+
+// LINE delivers webhook events only while the channel's webhook is registered and
+// switched on in the Developers Console, and no API can set that switch. Reading it
+// is the only way anything downstream can tell dead inbound from healthy silence.
+async function readLineWebhookState(
+  channelAccessToken: string,
+  budgetMs: number,
+): Promise<LineProbeWebhookState | undefined> {
+  if (!Number.isFinite(budgetMs) || budgetMs <= 0) {
+    return undefined;
+  }
+  try {
+    const read = createLineApiReader(channelAccessToken, budgetMs);
+    const registered = await read<messagingApi.GetWebhookEndpointResponse>(
+      "channel/webhook/endpoint",
+    );
+    // Only the switch is reported. The registered URL is not needed to act on this
+    // — the operator flips Use webhook in the console — and carrying it would put a
+    // URL that can hold opaque path or query credentials into logs and status output.
+    return typeof registered.active === "boolean"
+      ? { status: registered.active ? "active" : "disabled" }
+      : undefined;
+  } catch (error) {
+    // A channel with no endpoint registered answers 404; the response type has no
+    // shape for "none", so the error is the only way that state arrives. Every other
+    // failure, this call's own expiry included, leaves the webhook unreported rather
+    // than claiming it is fine or broken.
+    // The shared provider HTTP error carries the response code as `status`.
+    return isRecord(error) && error.status === 404 ? { status: "unset" } : undefined;
   }
 }
 
@@ -108,11 +135,12 @@ export async function probeLineBot(
         token,
         timeoutMs,
       )<messagingApi.BotInfoResponse>("info");
-      // Reserve time to report the accepted identity even when optional quota reads stall.
-      const quota = await readLineMessageQuota(
-        token,
-        Math.floor(Math.max(timeoutMs - elapsedMs(), 0) / 2),
-      );
+      // Reserve time to report the accepted identity even when optional reads stall.
+      // Recomputed per read so a slow one shrinks the next read's budget instead of
+      // spending the deadline that reports the identity we already accepted.
+      const optionalBudgetMs = () => Math.floor(Math.max(timeoutMs - elapsedMs(), 0) / 2);
+      const quota = await readLineMessageQuota(token, optionalBudgetMs());
+      const webhook = await readLineWebhookState(token, optionalBudgetMs());
       return {
         ok: true,
         bot: {
@@ -121,6 +149,7 @@ export async function probeLineBot(
           basicId: profile.basicId,
           pictureUrl: profile.pictureUrl,
         },
+        ...(webhook ? { webhook } : {}),
         ...(quota ? { quota } : {}),
       };
     },

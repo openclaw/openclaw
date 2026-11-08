@@ -1,6 +1,4 @@
 /**
- * Browser action limits and timeout normalization.
- *
  * Shared by the tool schema and runtime action handlers so model-facing limits
  * and browser-control enforcement stay aligned.
  */
@@ -12,20 +10,16 @@ import {
   resolveTimerTimeoutMs,
 } from "openclaw/plugin-sdk/number-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { BROWSER_ACT_KIND_FACTS } from "./act-kinds.js";
 import type { BrowserActRequest } from "./client-actions.types.js";
 import { DEFAULT_BROWSER_ACTION_TIMEOUT_MS } from "./constants.js";
+import { normalizeBrowserTimerDelayMs } from "./timer-delay.js";
 
-/** Maximum number of actions accepted in a batched browser action request. */
 export const ACT_MAX_BATCH_ACTIONS = 100;
-/** Maximum nested action depth accepted by recursive browser actions. */
 export const ACT_MAX_BATCH_DEPTH = 5;
-/** Maximum click delay accepted from model/tool input. */
 export const ACT_MAX_CLICK_DELAY_MS = 5_000;
-/** Maximum explicit wait duration accepted from model/tool input. */
 export const ACT_MAX_WAIT_TIME_MS = 30_000;
-/** Maximum viewport side length accepted by resize actions. */
 export const ACT_MAX_VIEWPORT_DIMENSION = 8192;
-
 const ACT_MIN_TIMEOUT_MS = 500;
 const ACT_MAX_INTERACTION_TIMEOUT_MS = 60_000;
 const ACT_MAX_WAIT_TIMEOUT_MS = 120_000;
@@ -36,6 +30,11 @@ const ACT_DEFAULT_WAIT_TIMEOUT_MS = 20_000;
 export const BROWSER_ACTION_TRANSPORT_SLACK_MS = 5_000;
 /** Post-action window that keeps navigation policy interception active. */
 export const BROWSER_ACTION_NAVIGATION_GRACE_MS = 250;
+/** Existing-session verification keeps observing after the action settles. */
+export const EXISTING_SESSION_NAVIGATION_RECHECK_DELAYS_MS = [0, 250, 500] as const;
+const EXISTING_SESSION_NAVIGATION_GRACE_MS =
+  EXISTING_SESSION_NAVIGATION_RECHECK_DELAYS_MS.reduce<number>((total, delay) => total + delay, 0) +
+  (EXISTING_SESSION_NAVIGATION_RECHECK_DELAYS_MS.at(-1) ?? 0);
 
 /** Keep navigation timeouts consistent across transports and browser backends. */
 export function resolveBrowserNavigationTimeoutMs(timeoutMs?: number): number {
@@ -62,20 +61,18 @@ export function normalizeActBoundedNonNegativeMs(
 
 /** Clamp interaction actions to the supported browser-control timeout window. */
 export function resolveActInteractionTimeoutMs(timeoutMs?: number): number {
-  const normalized =
-    typeof timeoutMs === "number" && Number.isFinite(timeoutMs)
-      ? Math.floor(timeoutMs)
-      : ACT_DEFAULT_INTERACTION_TIMEOUT_MS;
-  return Math.max(ACT_MIN_TIMEOUT_MS, Math.min(ACT_MAX_INTERACTION_TIMEOUT_MS, normalized));
+  return Math.min(
+    ACT_MAX_INTERACTION_TIMEOUT_MS,
+    resolveTimerTimeoutMs(timeoutMs, ACT_DEFAULT_INTERACTION_TIMEOUT_MS, ACT_MIN_TIMEOUT_MS),
+  );
 }
 
 /** Clamp wait actions to their wider supported browser-control timeout window. */
 export function resolveActWaitTimeoutMs(timeoutMs?: number): number {
-  const normalized =
-    typeof timeoutMs === "number" && Number.isFinite(timeoutMs)
-      ? Math.floor(timeoutMs)
-      : ACT_DEFAULT_WAIT_TIMEOUT_MS;
-  return Math.max(ACT_MIN_TIMEOUT_MS, Math.min(ACT_MAX_WAIT_TIMEOUT_MS, normalized));
+  return Math.min(
+    ACT_MAX_WAIT_TIMEOUT_MS,
+    resolveTimerTimeoutMs(timeoutMs, ACT_DEFAULT_WAIT_TIMEOUT_MS, ACT_MIN_TIMEOUT_MS),
+  );
 }
 
 function parseTimerInteger(value: unknown): number | undefined {
@@ -110,10 +107,6 @@ function addNavigationGraceMs(durationMs: number, count = 1): number {
   );
 }
 
-function isActionObject(value: unknown): value is BrowserActRequest {
-  return isRecord(value);
-}
-
 function resolveLeafExecutionBudgetMs(
   request: Exclude<BrowserActRequest, { kind: "batch" | "wait" }>,
 ): number {
@@ -143,6 +136,8 @@ function resolveLeafExecutionBudgetMs(
     }
     case "press":
       return addNavigationGraceMs(resolveNonNegativeTimerMs(request.delayMs));
+    case "insertText":
+      return addNavigationGraceMs(0);
     case "fill": {
       const fields = Array.isArray(request.fields) ? request.fields : [];
       const fieldCount = fields.filter(
@@ -158,7 +153,6 @@ function resolveLeafExecutionBudgetMs(
       );
     }
     case "evaluate":
-      return addNavigationGraceMs(resolveActWaitTimeoutMs(parseTimerInteger(request.timeoutMs)));
     case "scrollIntoView":
       return addNavigationGraceMs(resolveActWaitTimeoutMs(parseTimerInteger(request.timeoutMs)));
     case "hover":
@@ -176,7 +170,7 @@ function resolveExecutionBudgetMs(request: BrowserActRequest): number {
   if (request.kind === "batch") {
     // Model-facing schemas keep child actions permissive for provider compatibility.
     // Budget valid entries only; the browser route remains the validation owner.
-    const actions = Array.isArray(request.actions) ? request.actions.filter(isActionObject) : [];
+    const actions = Array.isArray(request.actions) ? request.actions.filter(isRecord) : [];
     return actions.reduce(
       (totalMs, action) => addExecutionBudgetMs(totalMs, resolveExecutionBudgetMs(action)),
       0,
@@ -186,7 +180,7 @@ function resolveExecutionBudgetMs(request: BrowserActRequest): number {
     return resolveLeafExecutionBudgetMs(request);
   }
   // Text locators accept whitespace as content; selector, URL, and function
-  // waits normalize it away. Keep this in lockstep with waitForViaPlaywright.
+  // waits are trimmed by the /act boundary before execution.
   const conditionCount = [
     Boolean(request.text),
     Boolean(request.textGone),
@@ -200,6 +194,43 @@ function resolveExecutionBudgetMs(request: BrowserActRequest): number {
     resolveNonNegativeTimerMs(request.timeMs),
     multiplyExecutionBudgetMs(timeoutMs, conditionCount),
   );
+}
+
+/** Bound logical action and verification phases without renewing every MCP call's budget. */
+export function resolveExistingSessionActTimeouts(request: BrowserActRequest) {
+  const requestedTimeoutMs =
+    BROWSER_ACT_KIND_FACTS[request.kind]?.existingSessionTimeout && "timeoutMs" in request
+      ? parseTimerInteger(request.timeoutMs)
+      : undefined;
+  const timeoutMs = normalizeBrowserTimerDelayMs(
+    requestedTimeoutMs ?? DEFAULT_BROWSER_ACTION_TIMEOUT_MS,
+  );
+  let actionTimeoutMs = timeoutMs;
+  if (request.kind === "wait") {
+    const timeMs = resolveNonNegativeTimerMs(request.timeMs);
+    const hasCondition = [
+      request.text,
+      request.textGone,
+      request.selector,
+      request.url,
+      request.loadState,
+      request.fn,
+    ].some((value) => typeof value === "string" && Boolean(value.trim()));
+    actionTimeoutMs = hasCondition
+      ? addExecutionBudgetMs(timeMs, Math.max(250, timeoutMs))
+      : Math.max(timeMs, timeoutMs);
+  }
+  const verificationTimeoutMs =
+    request.kind === "resize" || request.kind === "close"
+      ? 0
+      : addExecutionBudgetMs(timeoutMs, EXISTING_SESSION_NAVIGATION_GRACE_MS);
+  return {
+    timeoutMs,
+    // Waits own their delay and condition deadlines; only the request bounds preparation.
+    bodyTimeoutMs: request.kind === "wait" ? undefined : actionTimeoutMs,
+    verificationTimeoutMs,
+    requestTimeoutMs: addExecutionBudgetMs(actionTimeoutMs, verificationTimeoutMs),
+  };
 }
 
 /**
@@ -224,9 +255,11 @@ function resolveBrowserActExecutionBudgetMs(request: BrowserActRequest): number 
 
 /** Add action transport slack once after the full sequential runtime budget is known. */
 export function resolveBrowserActRequestTimeoutMs(request: BrowserActRequest): number {
+  const existingSessionBudgetMs =
+    request.kind === "batch" ? 0 : resolveExistingSessionActTimeouts(request).requestTimeoutMs;
   return (
     addTimerTimeoutGraceMs(
-      resolveBrowserActExecutionBudgetMs(request),
+      Math.max(resolveBrowserActExecutionBudgetMs(request), existingSessionBudgetMs),
       BROWSER_ACTION_TRANSPORT_SLACK_MS,
     ) ?? 1
   );

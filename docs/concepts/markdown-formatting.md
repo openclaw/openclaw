@@ -26,6 +26,18 @@ splits formatting mid-span.
 3. **Render per channel** (`renderMarkdownWithMarkers`) - a style-marker map
    turns spans into the channel's native markup.
 
+Raw inline HTML lexemes retain their original bytes during parsing. Markdown
+markers and entities inside attribute values or recognized inline comments are
+not parsed as Markdown content. Non-serialized authored-tag ranges let
+HTML-aware renderers interpret those tags; other renderers keep them literal or
+escape them. HTML block parsing stays disabled so Markdown inside containers
+still works, and bare URLs in their bodies retain normal linkification.
+
+Generated inline code uses CommonMark padding to preserve meaningful edge spaces,
+including values containing tabs or non-breaking spaces. All-space values stay
+unpadded. Workspace filenames continue escaping carriage returns and line feeds
+instead of creating Markdown block boundaries.
+
 Examples of shared IR renderers:
 
 | Channel  | Renderer                                                                             | Notes                                                                                    |
@@ -35,6 +47,11 @@ Examples of shared IR renderers:
 | Slack    | mrkdwn tokens (`*bold*`, `_italic_`, `` `code` ``, code fences)                      | Links become `<url\|label>`; autolink disabled during parse to avoid double-linking      |
 | Telegram | HTML tags (`<b>`, `<i>`, `<s>`, `<code>`, `<pre><code>`, `<a href>`, `<tg-spoiler>`) | Also supports rich-message tables and headings (`<h1>`-`<h6>`) when `richMessages` is on |
 | WhatsApp | WhatsApp style markers                                                               | Uses shared IR; styled chunks are measured after rendering                               |
+
+Slack and WhatsApp emit `>` followed by a space on each nonempty blockquote line, including lines
+continued into later message chunks. Prefixes are added while rendering, so they
+count toward each channel's message limit without changing IR span offsets.
+Fenced code contents keep their literal lines rather than receiving quote markers.
 
 ## IR example
 
@@ -66,6 +83,9 @@ channel and optionally per account:
 | `block`   | Keep native tables where the transport supports them; falls back to `code` otherwise |
 | `off`     | Disable table parsing; raw table text passes through unchanged                       |
 
+Inline code in table cells keeps its parsed content, including leading and
+trailing spaces, in every enabled table mode.
+
 Per-channel plugin defaults: Matrix defaults to `block` (native tables);
 Mattermost defaults to `off`; Signal and WhatsApp default to `bullets`;
 Telegram defaults to `block` (which resolves to `code` unless the account
@@ -92,6 +112,8 @@ channels:
   channels render the closing fence correctly.
 - List and blockquote prefixes are part of the IR text, so chunking never
   splits mid-prefix.
+- Paragraphs, headings, and code blocks inside a list item stay separated in
+  the IR, including paragraphs nested inside a quoted list item.
 - Inline styles never split across chunks; the renderer reopens an open
   style at the start of the next chunk.
 
@@ -134,6 +156,13 @@ content is hidden or lost.
 5. **Test** with format tests plus an outbound delivery test if the channel
    chunks.
 
+For disjoint text replacements and insertions, `openclaw/plugin-sdk/text-chunking`
+exports `applyMarkdownTextEdits(text, edits)`. Edits use UTF-16 source coordinates;
+the result contains the edited `text` and `mapOffset` for boundaries outside
+replaced interiors. Each edit shifts offsets at and after its end. Insertions at
+the same position retain caller order and precede a replacement starting there.
+Renderers decide which styles include replacement text.
+
 ## Common gotchas
 
 - Slack angle-bracket tokens (`<@U123>`, `<#C123>`, `<https://...>`) must
@@ -142,6 +171,12 @@ content is hidden or lost.
 - Signal style ranges use UTF-16 offsets, not code-point offsets.
 - Preserve trailing newlines on fenced code blocks so the closing marker
   lands on its own line.
+- Code-span parsing preserves all-space content. It removes one surrounding
+  space from each end only when both are present and the content is not all spaces.
+- Assistant-reply cleanup removes valid `<final>` markers outside Markdown code,
+  including nested or stray markers, while keeping their enclosed answer text.
+  Put literal `<final>payload</final>` examples in inline code or fenced code
+  blocks so their tags are preserved.
 
 ## Related
 

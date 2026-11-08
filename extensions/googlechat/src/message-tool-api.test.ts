@@ -2,7 +2,7 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { inspectGoogleChatAccount, resolveGoogleChatAccount } from "./accounts.js";
-import { describeGoogleChatMessageTool } from "./message-tool-api.js";
+import { googlechatMessageActions } from "./message-tool-api.js";
 
 const unresolvedRef = {
   source: "env",
@@ -31,8 +31,8 @@ describe("Google Chat message-tool SecretRef inspection", () => {
 
   it("keeps healthy account actions when one account credential is unavailable", () => {
     const cfg = buildTwoAccountConfig();
-    expect(describeGoogleChatMessageTool({ cfg })).toEqual({ actions: ["send"] });
-    expect(describeGoogleChatMessageTool({ cfg, accountId: "broken" })).toBeNull();
+    expect(googlechatMessageActions.describeMessageTool({ cfg })).toEqual({ actions: ["send"] });
+    expect(googlechatMessageActions.describeMessageTool({ cfg, accountId: "broken" })).toBeNull();
   });
 
   it("keeps direct account resolution strict", () => {

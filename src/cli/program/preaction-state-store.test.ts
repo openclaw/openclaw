@@ -1,11 +1,13 @@
 import { Command } from "commander";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CliGatewayStateDirOutcome } from "../state-dir-gateway-check.js";
+import { registerPreActionHooks } from "./preaction.js";
 
 const mocks = vi.hoisted(() => ({
   action: vi.fn(),
   check: vi.fn<() => Promise<CliGatewayStateDirOutcome>>(async () => ({ kind: "allow" })),
   debug: vi.fn(),
+  log: vi.fn(),
   ensureBootstrap: vi.fn(async () => {}),
 }));
 
@@ -13,7 +15,7 @@ vi.mock("../state-dir-gateway-check.js", () => ({ checkCliGatewayStateDir: mocks
 vi.mock("../../logger.js", () => ({ logDebug: mocks.debug }));
 vi.mock("../../runtime.js", () => ({
   defaultRuntime: {
-    log: vi.fn(),
+    log: mocks.log,
     error: vi.fn(),
     writeStdout: vi.fn(),
     writeJson: vi.fn(),
@@ -23,17 +25,12 @@ vi.mock("../../runtime.js", () => ({
 vi.mock("../command-execution-startup.js", () => ({
   applyCliExecutionStartupPresentation: vi.fn(async () => {}),
   ensureCliExecutionBootstrap: mocks.ensureBootstrap,
-  resolveCliExecutionStartupContext: ({ commandPath }: { commandPath: string[] }) => ({
-    commandPath,
-    startupPolicy: { skipConfigGuard: true },
-  }),
 }));
 
 let program: Command;
 let originalArgv: string[];
 
-beforeAll(async () => {
-  const { registerPreActionHooks } = await import("./preaction.js");
+beforeAll(() => {
   program = new Command().name("openclaw");
   program.command("configure").action(mocks.action);
   registerPreActionHooks(program, "test");
@@ -66,6 +63,18 @@ describe("state-store preAction guard", () => {
     await expect(program.parseAsync(process.argv)).resolves.toBe(program);
 
     expect(mocks.debug).toHaveBeenCalledWith("state-store guard unavailable: inspection failed");
+    expect(mocks.action).toHaveBeenCalledOnce();
+  });
+
+  it("shows an unknown-path warning while allowing the action", async () => {
+    mocks.check.mockResolvedValueOnce({
+      kind: "warn",
+      message: "Service paths could not be verified.",
+    });
+
+    await expect(program.parseAsync(process.argv)).resolves.toBe(program);
+
+    expect(mocks.log).toHaveBeenCalledWith("Service paths could not be verified.");
     expect(mocks.action).toHaveBeenCalledOnce();
   });
 });

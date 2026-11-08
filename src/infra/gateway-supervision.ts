@@ -11,6 +11,18 @@ export function isGatewayExternallySupervised(env: NodeJS.ProcessEnv = process.e
   return env[GATEWAY_SUPERVISOR_MODE_ENV]?.trim().toLowerCase() === "external";
 }
 
+/** A declared external supervisor or Kubernetes owns stop and replacement decisions. */
+export function resolveGatewayPlatformSupervisor(
+  env: NodeJS.ProcessEnv = process.env,
+): "external" | "kubernetes" | undefined {
+  if (isGatewayExternallySupervised(env)) {
+    return "external";
+  }
+  return env.KUBERNETES_SERVICE_HOST?.trim() && env.KUBERNETES_SERVICE_PORT?.trim()
+    ? "kubernetes"
+    : undefined;
+}
+
 export function formatExternalSupervisorActionRequired(action: string): string {
   return [
     `OpenClaw gateway lifecycle is managed by an external supervisor (${GATEWAY_SUPERVISOR_MODE_ENV}=external).`,
@@ -54,7 +66,7 @@ export function assertGatewayServiceMutationAllowed(
   }
   if (!isDefaultInstallIdentity(env)) {
     throw new Error(
-      `${NON_DEFAULT_INSTALL_SERVICE_SKIP_REASON}. Rerun with HOME set to the OS account home, without OPENCLAW_HOME, and with OPENCLAW_STATE_DIR and OPENCLAW_CONFIG_PATH either unset or pointing at the canonical paths for that account home and profile to ${action}.`,
+      `${NON_DEFAULT_INSTALL_SERVICE_SKIP_REASON}. Rerun with HOME set to the OS account home, OPENCLAW_HOME either unset or pointing at that same home, and OPENCLAW_STATE_DIR and OPENCLAW_CONFIG_PATH either unset or pointing at the canonical paths for that account home and profile to ${action}.`,
     );
   }
 }

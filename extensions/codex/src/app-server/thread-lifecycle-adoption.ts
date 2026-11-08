@@ -1,17 +1,20 @@
 import path from "node:path";
-import { isIncognitoSessionKey } from "../incognito-session.js";
+import { isIncognitoSessionKey } from "openclaw/plugin-sdk/session-key-runtime";
 import { readCodexSessionMeta } from "../session-catalog-provenance.js";
 import {
   resolveCodexAppServerHomeDir,
   resolveCodexAppServerLocalHomeDir,
+  usesManagedCodexThreadUnloading,
 } from "./auth-start-options.js";
 import { assertCodexSessionRuntimeOwnership } from "./binding-connection.js";
 import { isCodexAppServerLiveThreadClaimed } from "./client-runtime.js";
-import { resolveCodexAppServerClientInstanceId } from "./client.js";
+import { getCodexInferenceThread } from "./inference-routing.js";
 import { assertCodexThreadAcceptsDirectInput } from "./protocol-validators.js";
 import { isJsonObject, type CodexThread } from "./protocol.js";
 import {
   sessionBindingIdentity,
+  resolveCodexSessionBinding,
+  type CodexBindingAuthority,
   type CodexAppServerBindingIdentity,
   type CodexAppServerThreadBinding,
 } from "./session-binding.js";
@@ -24,11 +27,13 @@ import {
   CodexThreadBindingConflictError,
 } from "./thread-lifecycle-errors.js";
 import { resumeExistingCodexThread } from "./thread-lifecycle-io.js";
-import { resolveCodexThreadAgentDir } from "./thread-lifecycle-preflight.js";
+import {
+  resolveCodexThreadAgentDir,
+  type CodexThreadRequestContext,
+} from "./thread-lifecycle-preflight.js";
 import type {
   CodexAppServerThreadLifecycleBinding,
   CodexStartOrResumeThreadParams,
-  CodexThreadRequestContext,
   CodexThreadResumePreparation,
 } from "./thread-lifecycle-types.js";
 import { releaseCodexConsumedLiveThread } from "./thread-lifecycle-warm.js";
@@ -36,31 +41,10 @@ import {
   withCodexAppServerThreadMutation,
   withExclusiveCodexAppServerThread,
 } from "./thread-ownership.js";
-import { assertCodexSupervisionThreadLineage } from "./thread-policy.js";
-
-/** Passive refusal must precede releasing or acquiring any native subscription. */
-async function assertAdoptedCodexThreadResumeAllowed(
-  params: CodexStartOrResumeThreadParams,
-  threadId: string,
-  context: Pick<CodexThreadRequestContext, "lifecycleTiming" | "throwIfAborted">,
-): Promise<CodexThread> {
-  const { thread } = await context.lifecycleTiming.measure("thread-read-adoption-status", () =>
-    params.client.request(
-      "thread/read",
-      { threadId, includeTurns: false },
-      { signal: params.signal },
-    ),
-  );
-  context.throwIfAborted();
-  assertCodexThreadAcceptsDirectInput(thread);
-  if (thread.status?.type === "active") {
-    throw new CodexAdoptedThreadActiveError();
-  }
-  if (thread.id !== threadId) {
-    throw new Error("Codex returned another thread during adoption status read");
-  }
-  return thread;
-}
+import {
+  assertAdoptedCodexThreadResumeAllowed,
+  assertCodexSupervisionThreadLineage,
+} from "./thread-policy.js";
 
 /** All bound preparation follows attach's native-queue-before-binding-lease order. */
 export async function withCodexThreadLifecycleBinding(
@@ -68,7 +52,9 @@ export async function withCodexThreadLifecycleBinding(
   run: (
     identity: CodexAppServerBindingIdentity,
     binding: CodexAppServerThreadBinding | undefined,
+    authority: CodexBindingAuthority,
   ) => Promise<CodexAppServerThreadLifecycleBinding>,
+  onFailure?: (error: unknown) => Promise<never>,
 ): Promise<CodexAppServerThreadLifecycleBinding> {
   const identity = sessionBindingIdentity({
     sessionId: params.params.sessionId,
@@ -76,39 +62,72 @@ export async function withCodexThreadLifecycleBinding(
     agentId: params.agentId ?? params.params.agentId,
     config: params.params.config,
   });
-  const snapshot = params.bindingStore.read(identity);
-  const runWithLease = () =>
-    params.bindingStore.withLease(identity, async () => {
-      const binding = params.bindingStore.read(identity);
-      assertCodexSessionRuntimeOwnership(binding, params.params.expectedSessionRuntimeOwnership);
-      // Never prepare a replacement under the queue selected for an obsolete snapshot.
-      if (binding?.threadId !== snapshot?.threadId || binding?.clientId !== snapshot?.clientId) {
-        throw new CodexThreadBindingConflictError(
-          binding?.threadId ?? snapshot?.threadId ?? params.params.sessionId,
-          "acquiring thread lifecycle ownership",
-        );
-      }
+  const {
+    binding: snapshot,
+    authority,
+    release,
+  } = await resolveCodexSessionBinding({
+    reclaimStale: true,
+    authority: params.authority,
+    bindingStore: params.bindingStore,
+    identity,
+    config: params.params.config,
+    storePath: params.params.sessionTarget?.storePath,
+    assertCurrent: () => {
       params.params.hostCapabilities.assertActive();
-      params.signal?.throwIfAborted();
-      return await run(identity, binding);
-    });
+      params.assertCurrent?.();
+    },
+    signal: params.signal,
+    assertBinding: params.params.expectedSessionRuntimeOwnership
+      ? (binding) =>
+          assertCodexSessionRuntimeOwnership(binding, params.params.expectedSessionRuntimeOwnership)
+      : undefined,
+  });
+  using _ = { [Symbol.dispose]: release };
+  const assertCurrent = authority.assertCurrent;
+  const runWithLease = () =>
+    params.bindingStore.withLease(
+      identity,
+      async () => {
+        const binding = await params.bindingStore.readAsync(identity);
+        assertCodexSessionRuntimeOwnership(binding, params.params.expectedSessionRuntimeOwnership);
+        // Never prepare a replacement under the queue selected for an obsolete snapshot.
+        if (binding?.threadId !== snapshot?.threadId || binding?.clientId !== snapshot?.clientId) {
+          throw new CodexThreadBindingConflictError(
+            binding?.threadId ?? snapshot?.threadId ?? params.params.sessionId,
+            "acquiring thread lifecycle ownership",
+          );
+        }
+        assertCurrent();
+        return await run(identity, binding, authority);
+      },
+      { assertCurrent, authority },
+    );
   // Ordinary resumes own their binding key even when a legacy row omits sessionId.
   // Foreign-owner rejection belongs to adoption, not an upgrade of that same binding.
-  return snapshot?.pendingResumeConfiguration
-    ? await withExclusiveCodexAppServerThread({
-        bindingStore: params.bindingStore,
-        identity,
-        threadId: snapshot.threadId,
-        run: runWithLease,
-      })
-    : snapshot
-      ? await withCodexAppServerThreadMutation(snapshot.threadId, runWithLease)
-      : await runWithLease();
+  try {
+    return snapshot?.pendingResumeConfiguration
+      ? await withExclusiveCodexAppServerThread({
+          bindingStore: params.bindingStore,
+          identity,
+          threadId: snapshot.threadId,
+          run: runWithLease,
+        })
+      : snapshot
+        ? await withCodexAppServerThreadMutation(snapshot.threadId, runWithLease)
+        : await runWithLease();
+  } catch (error) {
+    // Failed publication still owns cleanup, including failures settling the lease.
+    if (onFailure) {
+      return await onFailure(error);
+    }
+    throw error;
+  }
 }
 
 type PendingResumeContext = CodexThreadRequestContext & {
   binding: CodexAppServerThreadBinding;
-  clearCurrentBinding: (operation: string) => Promise<void>;
+  stageBindingReplacement: (operation: string) => void;
   releaseRetainedThread: (threadId: string, assertCurrent: () => void) => Promise<boolean>;
   transientRestriction: boolean;
 };
@@ -139,7 +158,7 @@ export async function resumePendingCodexThread(
   const prebuiltPluginThreadConfig = params.pluginThreadConfig?.enabled
     ? await lifecycleTiming.measure("plugin-config-build", () => params.pluginThreadConfig?.build())
     : undefined;
-  const clientId = resolveCodexAppServerClientInstanceId(params.client);
+  const clientId = params.client.getInstanceId();
   const resumed = await resumeExistingCodexThread(params, {
     ...context,
     prebuiltPluginThreadConfig,
@@ -155,6 +174,7 @@ export async function resumePendingCodexThread(
           lifecycleTiming,
           threadId: binding.threadId,
           assertCurrent,
+          withCurrent: params.authority?.withCurrent,
         });
       }
     },
@@ -187,32 +207,19 @@ async function preparePendingCodexThreadResume(
   ) {
     throw fail("configuration adoption requires an OpenClaw-owned local Codex home");
   }
-  if (isCodexAppServerLiveThreadClaimed(params.client, binding.threadId)) {
-    throw fail("the thread is claimed by active work; stop that run before resuming");
-  }
-  const assertClient = captureCodexAppServerClientLifetime(params.client, "native-process");
-  const assertCurrent = () => {
-    params.params.hostCapabilities.assertActive();
-    params.signal?.throwIfAborted();
-    assertClient();
-    if (isCodexAppServerLiveThreadClaimed(params.client, binding.threadId)) {
-      throw new CodexAdoptedThreadActiveError();
-    }
-  };
+  const assertCurrent = captureCodexThreadResumeAuthority(params, binding, "native-process");
   assertCurrent();
   const { thread } = await params.client.request(
     "thread/read",
     { threadId: binding.threadId, includeTurns: false },
-    { signal: params.signal },
+    { signal: params.signal, assertCurrent, withCurrent: params.authority?.withCurrent },
   );
   assertCurrent();
-  const statusType = thread.status?.type;
-  if (thread.id !== binding.threadId || (statusType !== "idle" && statusType !== "notLoaded")) {
+  if (thread.id !== binding.threadId || !isCodexThreadNonRunning(thread.status)) {
     throw fail("the native thread is not idle; wait for its current run to finish");
   }
   assertCodexThreadAcceptsDirectInput(thread);
   const observation = observeCodexThreadConfiguration(params, thread, assertCurrent);
-  const dispose = observation.dispose;
   try {
     const rolloutPath = thread.path ?? binding.rolloutPath;
     const metadata = rolloutPath
@@ -231,13 +238,9 @@ async function preparePendingCodexThreadResume(
       throw fail("its immutable native tool catalog does not match the current OpenClaw tools");
     }
     assertCurrent();
-    return {
-      assertConfigured: observation.assertConfigured,
-      assertCurrent,
-      dispose,
-    };
+    return { ...observation, assertCurrent };
   } catch (error) {
-    dispose();
+    observation.dispose();
     throw error;
   }
 }
@@ -248,25 +251,32 @@ export async function prepareCodexThreadResume(
   binding: CodexAppServerThreadBinding,
   context: Pick<CodexThreadRequestContext, "lifecycleTiming" | "throwIfAborted">,
 ): Promise<CodexThreadResumePreparation> {
-  const assertClient = captureCodexAppServerClientLifetime(
-    params.client,
-    binding.connectionScope === "supervision" ? "connection" : "native-process",
+  const assertCurrent = captureCodexThreadResumeAuthority(
+    params,
+    binding,
+    binding.connectionScope === "supervision" ? "connection" : "thread-configuration",
   );
-  const assertCurrent = () => {
-    params.params.hostCapabilities.assertActive();
-    params.signal?.throwIfAborted();
-    assertClient();
-    if (isCodexAppServerLiveThreadClaimed(params.client, binding.threadId)) {
-      throw new CodexAdoptedThreadActiveError();
-    }
-  };
   assertCurrent();
   let thread: CodexThread;
   try {
-    thread = await assertAdoptedCodexThreadResumeAllowed(params, binding.threadId, context);
+    thread = await assertAdoptedCodexThreadResumeAllowed(
+      params,
+      binding.threadId,
+      context,
+      assertCurrent,
+    );
   } finally {
     // A failed read cannot authorize recovery after its physical or host owner closes.
     assertCurrent();
+  }
+  // Reuse the lifecycle read so a missing unused thread reaches its recovery owner.
+  if (
+    params.inferenceRoute &&
+    binding.clientId === params.client.getInstanceId() &&
+    !getCodexInferenceThread(params.client, binding.threadId) &&
+    thread.status?.type !== "notLoaded"
+  ) {
+    throw new Error("Codex loaded thread has no owned inference route; reconnect before retrying");
   }
   // Known supervision keeps its native home; manual adoption's stricter home and catalog
   // checks remain in preparePendingCodexThreadResume, before this common handoff.
@@ -274,33 +284,109 @@ export async function prepareCodexThreadResume(
   return { ...observeCodexThreadConfiguration(params, thread, assertCurrent), assertCurrent };
 }
 
+function captureCodexThreadResumeAuthority(
+  params: CodexStartOrResumeThreadParams,
+  binding: CodexAppServerThreadBinding,
+  scope: Parameters<typeof captureCodexAppServerClientLifetime>[1],
+): () => void {
+  const assertClient = captureCodexAppServerClientLifetime(params.client, scope);
+  return () => {
+    params.params.hostCapabilities.assertActive();
+    params.assertCurrent?.();
+    params.signal?.throwIfAborted();
+    assertClient();
+    if (isCodexAppServerLiveThreadClaimed(params.client, binding.threadId)) {
+      throw new CodexAdoptedThreadActiveError();
+    }
+  };
+}
+
+function isCodexThreadNonRunning(
+  status: CodexThread["status"],
+): status is Exclude<NonNullable<CodexThread["status"]>, { type: "active" }> {
+  return status?.type === "idle" || status?.type === "notLoaded" || status?.type === "systemError";
+}
+
+/**
+ * Codex emits thread/closed only after the unloaded thread's shutdown_and_wait finishes,
+ * and treats shutdown as slow only after 10s (app-server thread_lifecycle.rs,
+ * unload_thread_without_subscribers). Live teardown with MCP servers takes about 2s.
+ */
+const CODEX_THREAD_UNLOAD_CONFIRMATION_TIMEOUT_MS = 10_000;
+
 function observeCodexThreadConfiguration(
   params: CodexStartOrResumeThreadParams,
   thread: CodexThread,
   assertCurrent: () => void,
 ) {
-  if (thread.status?.type !== "idle" && thread.status?.type !== "notLoaded") {
+  // Codex keeps systemError after a failed turn completes; it is loaded but not running.
+  // It still requires the same observed teardown before resume can change configuration.
+  if (!isCodexThreadNonRunning(thread.status)) {
     throw new CodexAdoptedThreadActiveError();
   }
+  const settledSystemError = thread.status.type === "systemError";
+  const managedThreadUnloading = usesManagedCodexThreadUnloading(params.appServer.start);
   let unloaded = thread.status.type === "notLoaded";
+  let closed = false;
+  let expired = false;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let onUnload: (() => void) | undefined;
   const dispose = params.client.addNotificationHandler((notification) => {
+    const isClosed = notification.method === "thread/closed";
     if (
-      notification.method === "thread/status/changed" &&
       isJsonObject(notification.params) &&
       notification.params.threadId === thread.id &&
-      isJsonObject(notification.params.status) &&
-      notification.params.status.type === "notLoaded"
+      (isClosed ||
+        // Native idle-override reload inside resume emits notLoaded, without closed.
+        (!managedThreadUnloading &&
+          notification.method === "thread/status/changed" &&
+          isJsonObject(notification.params.status) &&
+          notification.params.status.type === "notLoaded"))
     ) {
+      closed ||= isClosed;
       unloaded = true;
+      onUnload?.();
     }
   });
   return {
-    dispose,
+    model: thread.model,
+    modelProvider: thread.modelProvider,
+    dispose: () => {
+      clearTimeout(timer);
+      dispose();
+    },
+    settledSystemError,
+    // Unsubscribe only acknowledges removal of our subscription. Native teardown
+    // is asynchronous, including with a zero post-unsubscribe retention delay.
+    waitForUnload: async (requireClosed = false) => {
+      assertCurrent();
+      // One budget covers teardown and a closing rejection; a replay cannot renew it.
+      timer ??= setTimeout(() => {
+        expired = true;
+        onUnload?.();
+      }, CODEX_THREAD_UNLOAD_CONFIRMATION_TIMEOUT_MS);
+      if (!(requireClosed ? closed : unloaded) && !expired) {
+        await new Promise<void>((resolve) => {
+          const finish = () => {
+            params.signal?.removeEventListener("abort", finish);
+            onUnload = undefined;
+            resolve();
+          };
+          onUnload = finish;
+          params.signal?.addEventListener("abort", finish, { once: true });
+          if (params.signal?.aborted) {
+            finish();
+          }
+        });
+      }
+      assertCurrent();
+      return (requireClosed ? closed : unloaded) && !expired;
+    },
     assertConfigured: () => {
       assertCurrent();
       // Native resume can acknowledge ignored overrides when another subscriber
-      // or failed shutdown retains the session. notLoaded proves teardown, not a
-      // reservation against native-internal reloads outside OpenClaw's thread queue.
+      // or failed shutdown retains the session. An initially cold thread or its
+      // close receipt permits admission, without reserving against native reloads.
       if (!unloaded) {
         throw new Error(
           "Codex did not confirm unloading its previous configuration. The thread is preserved; stop competing native work and reconnect before retrying.",

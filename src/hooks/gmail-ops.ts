@@ -1,7 +1,9 @@
-// Gmail hook ops helpers run Gmail setup and watcher support commands.
+import { randomBytes } from "node:crypto";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { stylePromptMessage } from "../../packages/terminal-core/src/prompt-style.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import {
-  getRuntimeConfig,
+  captureRuntimeConfigAsyncReader,
   type OpenClawConfig,
   CONFIG_PATH,
   readConfigFileSnapshot,
@@ -9,10 +11,13 @@ import {
   resolveGatewayPort,
   validateConfigObjectWithPlugins,
 } from "../config/config.js";
+import { GatewayScheduler } from "../infra/gateway-scheduler.js";
 import { formatCommandResult } from "../process/command-error.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { defaultRuntime } from "../runtime.js";
+import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { displayPath } from "../utils.js";
+import { inspectGog, inspectGogUpgrade, upgradeGog, type GogInspection } from "./gmail-gog.js";
 import {
   ensureDependency,
   ensureGcloudAuth,
@@ -31,37 +36,26 @@ import {
   DEFAULT_GMAIL_MAX_BYTES,
   DEFAULT_GMAIL_RENEW_MINUTES,
   DEFAULT_GMAIL_SERVE_BIND,
-  DEFAULT_GMAIL_SERVE_PATH,
   DEFAULT_GMAIL_SERVE_PORT,
   DEFAULT_GMAIL_SUBSCRIPTION,
   DEFAULT_GMAIL_TOPIC,
+  GMAIL_INSECURE_TOKEN_ARGS_WARNING,
   type GmailHookOverrides,
-  type GmailHookRuntimeConfig,
-  generateHookToken,
   mergeHookPresets,
   normalizeHooksPath,
   normalizeServePath,
   parseTopicPath,
-  resolveGogExecutable,
   resolveGmailHookRuntimeConfig,
 } from "./gmail.js";
 
-type GmailCommonOptions = {
-  topic?: string;
-  subscription?: string;
-  label?: string;
-  hookToken?: string;
-  pushToken?: string;
-  hookUrl?: string;
+type GmailCommonOptions = Omit<
+  GmailHookOverrides,
+  "account" | "serveBind" | "servePort" | "servePath" | "tailscaleMode"
+> & {
   bind?: string;
   port?: number;
   path?: string;
-  includeBody?: boolean;
-  maxBytes?: number;
-  renewEveryMinutes?: number;
-  tailscale?: "off" | "serve" | "funnel";
-  tailscalePath?: string;
-  tailscaleTarget?: string;
+  tailscale?: GmailHookOverrides["tailscaleMode"];
 };
 
 export type GmailSetupOptions = GmailCommonOptions & {
@@ -77,9 +71,53 @@ export type GmailRunOptions = GmailCommonOptions & {
 
 const DEFAULT_GMAIL_TOPIC_IAM_MEMBER = "serviceAccount:gmail-api-push@system.gserviceaccount.com";
 
+async function offerGogUpgrade(
+  inspection: GogInspection,
+  signal?: AbortSignal,
+): Promise<GogInspection> {
+  if (inspection.support === "supported" || !process.stdin.isTTY || !process.stdout.isTTY) {
+    return inspection;
+  }
+  const upgrade = await inspectGogUpgrade(inspection, { signal });
+  signal?.throwIfAborted();
+  if (!upgrade.eligible) {
+    defaultRuntime.error(`Gog automatic upgrade unavailable: ${upgrade.reason}`);
+    return inspection;
+  }
+  const { confirm, isCancel } = await import("@clack/prompts");
+  const answer = await confirm({
+    message: stylePromptMessage(
+      "Upgrade Gog with Homebrew to keep Gmail watcher tokens out of process arguments?",
+    ),
+    initialValue: true,
+    signal,
+  });
+  signal?.throwIfAborted();
+  if (isCancel(answer)) {
+    throw new Error("Gmail setup cancelled");
+  }
+  if (!answer) {
+    return await inspectGog({ signal });
+  }
+  const result = await upgradeGog(upgrade, { signal });
+  defaultRuntime.error(result.message);
+  return result.inspection;
+}
+
 export async function runGmailSetup(opts: GmailSetupOptions) {
   await ensureDependency("gcloud", ["--cask", "gcloud-cli"]);
   await ensureDependency("gog", ["gogcli"]);
+  const signal = getAsyncWorkSignal();
+  const inspectedGog = await inspectGog({ signal });
+  const gog = opts.json ? inspectedGog : await offerGogUpgrade(inspectedGog, signal);
+  if (!gog.executable) {
+    throw new Error("gog binary not found; install Gog and retry Gmail setup");
+  }
+  if (gog.support !== "supported") {
+    defaultRuntime.error(
+      `${gog.support === "indeterminate" ? "Could not verify Gog token environment support. " : "Selected Gog lacks token environment support. "}${GMAIL_INSECURE_TOKEN_ARGS_WARNING}`,
+    );
+  }
   if (opts.tailscale !== "off" && !opts.pushEndpoint) {
     await ensureDependency("tailscale", ["tailscale"]);
   }
@@ -93,8 +131,9 @@ export async function runGmailSetup(opts: GmailSetupOptions) {
 
   const baseConfig = configSnapshot.config;
   const hooksPath = normalizeHooksPath(baseConfig.hooks?.path);
-  const hookToken = opts.hookToken ?? baseConfig.hooks?.token ?? generateHookToken();
-  const pushToken = opts.pushToken ?? baseConfig.hooks?.gmail?.pushToken ?? generateHookToken();
+  const hookToken = opts.hookToken ?? baseConfig.hooks?.token ?? randomBytes(24).toString("hex");
+  const pushToken =
+    opts.pushToken ?? baseConfig.hooks?.gmail?.pushToken ?? randomBytes(24).toString("hex");
 
   const topicInput = opts.topic ?? baseConfig.hooks?.gmail?.topic ?? DEFAULT_GMAIL_TOPIC;
   const parsedTopic = parseTopicPath(topicInput);
@@ -105,7 +144,7 @@ export async function runGmailSetup(opts: GmailSetupOptions) {
   // Gmail watch requires the Pub/Sub topic to live in the OAuth client project.
   if (!projectId) {
     throw new Error(
-      "GCP project id required (use --project or ensure gog credentials are available)",
+      "GCP project id required (use --project or check that gog credentials are available)",
     );
   }
 
@@ -120,17 +159,12 @@ export async function runGmailSetup(opts: GmailSetupOptions) {
 
   const serveBind = opts.bind ?? DEFAULT_GMAIL_SERVE_BIND;
   const servePort = opts.port ?? DEFAULT_GMAIL_SERVE_PORT;
-  const configuredServePath = opts.path ?? baseConfig.hooks?.gmail?.serve?.path;
-  const configuredTailscaleTarget =
-    opts.tailscaleTarget ?? baseConfig.hooks?.gmail?.tailscale?.target;
-  const normalizedServePath =
-    typeof configuredServePath === "string" && configuredServePath.trim().length > 0
-      ? normalizeServePath(configuredServePath)
-      : DEFAULT_GMAIL_SERVE_PATH;
-  const normalizedTailscaleTarget =
-    typeof configuredTailscaleTarget === "string" && configuredTailscaleTarget.trim().length > 0
-      ? configuredTailscaleTarget.trim()
-      : undefined;
+  const normalizedServePath = normalizeServePath(
+    normalizeOptionalString(opts.path ?? baseConfig.hooks?.gmail?.serve?.path),
+  );
+  const normalizedTailscaleTarget = normalizeOptionalString(
+    opts.tailscaleTarget ?? baseConfig.hooks?.gmail?.tailscale?.target,
+  );
 
   const includeBody = opts.includeBody ?? true;
   const maxBytes = opts.maxBytes ?? DEFAULT_GMAIL_MAX_BYTES;
@@ -190,7 +224,13 @@ export async function runGmailSetup(opts: GmailSetupOptions) {
 
   await ensureSubscription(projectId, subscription, topicName, pushEndpoint);
 
-  await startGmailWatch({ account: opts.account, label, topic: topicPath });
+  const watch = await runCommandWithTimeout(
+    [gog.executable, ...buildGogWatchStartArgs({ account: opts.account, label, topic: topicPath })],
+    { timeoutMs: 120_000 },
+  );
+  if (watch.code !== 0) {
+    throw new Error(formatCommandResult("gog gmail watch start", watch));
+  }
 
   const nextConfig: OpenClawConfig = {
     ...baseConfig,
@@ -268,7 +308,7 @@ export async function runGmailSetup(opts: GmailSetupOptions) {
 
 export async function runGmailService(opts: GmailRunOptions) {
   await ensureDependency("gog", ["gogcli"]);
-  const config = getRuntimeConfig();
+  const config = await captureRuntimeConfigAsyncReader()();
 
   const overrides: GmailHookOverrides = {
     account: opts.account,
@@ -295,6 +335,7 @@ export async function runGmailService(opts: GmailRunOptions) {
   }
 
   const runtimeConfig = resolved.value;
+  const scheduler = new GatewayScheduler();
   const controller = new AbortController();
   let shutdownTask: Promise<void> | undefined;
   const detachSignals = () => {
@@ -307,7 +348,14 @@ export async function runGmailService(opts: GmailRunOptions) {
       return;
     }
     controller.abort();
-    shutdownTask = stopGmailWatcher()
+    scheduler.beginClose();
+    shutdownTask = (async () => {
+      try {
+        await stopGmailWatcher();
+      } finally {
+        await scheduler.stop();
+      }
+    })()
       .catch((err: unknown) => {
         defaultRuntime.error(`gmail watcher shutdown failed: ${String(err)}`);
       })
@@ -323,7 +371,11 @@ export async function runGmailService(opts: GmailRunOptions) {
     if (runtimeConfig.tailscale.mode !== "off") {
       await ensureDependency("tailscale", ["tailscale"]);
     }
-    const result = await startGmailWatcherService(runtimeConfig, { signal: controller.signal });
+    const result = await startGmailWatcherService(runtimeConfig, {
+      scheduler,
+      signal: controller.signal,
+      prepareGog: offerGogUpgrade,
+    });
     if (!result.started && !controller.signal.aborted) {
       throw new Error(result.reason ?? "gmail watcher failed to start");
     }
@@ -334,13 +386,5 @@ export async function runGmailService(opts: GmailRunOptions) {
     if (controller.signal.aborted) {
       await shutdownTask;
     }
-  }
-}
-
-async function startGmailWatch(cfg: Pick<GmailHookRuntimeConfig, "account" | "label" | "topic">) {
-  const args = [resolveGogExecutable(), ...buildGogWatchStartArgs(cfg)];
-  const result = await runCommandWithTimeout(args, { timeoutMs: 120_000 });
-  if (result.code !== 0) {
-    throw new Error(formatCommandResult("gog gmail watch start", result));
   }
 }

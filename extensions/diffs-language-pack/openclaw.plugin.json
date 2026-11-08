@@ -1,5 +1,6 @@
 {
   "id": "diffs-language-pack",
+  "categories": ["developer-tools"],
   "requiresPlugins": ["diffs"],
   "activation": {
     "onStartup": true

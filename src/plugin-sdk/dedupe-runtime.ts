@@ -1,5 +1,3 @@
-// In-memory dedupe helpers for plugin runtime hot paths.
-
 import { resolveGlobalDedupeCache } from "../infra/dedupe.js";
 import type { OpenKeyedStoreOptions } from "./plugin-state-runtime.js";
 
@@ -119,7 +117,11 @@ export function createPersistentDedupeCache<TRecord>(params: {
         disablePersistentStore(error);
         return false;
       }
-      memory.check(key, params.persistent.readTimestamp?.(record));
+      const recordedAt = params.persistent.readTimestamp?.(record);
+      if (recordedAt !== undefined && params.ttlMs > 0 && Date.now() - recordedAt >= params.ttlMs) {
+        return false;
+      }
+      memory.check(key, recordedAt);
       return true;
     },
     register: async (key, record, opts) => {

@@ -12,12 +12,13 @@ const github = vi.hoisted(() => ({
   updateConfig: vi.fn(),
 }));
 const secrets = vi.hoisted(() => ({ consumeHandoff: vi.fn() }));
+const logging = vi.hoisted(() => ({ logWarn: vi.fn() }));
 const oauth = {
   startAuthorization: vi.fn(),
   pollAuthorization: vi.fn(),
-  cancelAuthorization: vi.fn(),
+  cancelAuthorizationAsync: vi.fn(),
   refreshEffectiveIdentity: vi.fn(),
-  retireProfile: vi.fn(),
+  retireProfileAsync: vi.fn(),
 };
 
 vi.mock("../../agents/github-tool-identity.js", () => ({
@@ -32,6 +33,10 @@ vi.mock("../github-tool-identity-config.js", () => ({
 }));
 vi.mock("../../secrets/store/secret-store.js", () => ({
   consumeGitHubSetupHandoff: secrets.consumeHandoff,
+}));
+vi.mock("../../logger.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../logger.js")>()),
+  logWarn: logging.logWarn,
 }));
 vi.mock("../../agents/agent-scope.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../agents/agent-scope.js")>()),
@@ -104,9 +109,9 @@ describe("tools.github handlers", () => {
     github.updateConfig.mockResolvedValue({ next: true });
     oauth.startAuthorization.mockReset();
     oauth.pollAuthorization.mockReset();
-    oauth.cancelAuthorization.mockReset();
+    oauth.cancelAuthorizationAsync.mockReset();
     oauth.refreshEffectiveIdentity.mockReset().mockResolvedValue(undefined);
-    oauth.retireProfile.mockReset();
+    oauth.retireProfileAsync.mockReset();
   });
 
   it("returns selected-scope plus effective status without refreshing credentials", async () => {
@@ -117,6 +122,7 @@ describe("tools.github handlers", () => {
     expect(oauth.refreshEffectiveIdentity).not.toHaveBeenCalled();
     expect(github.status).toHaveBeenCalledWith({
       config: {},
+      sourceConfig: {},
       agentId: "main",
       selectedScope: "system",
     });
@@ -265,7 +271,7 @@ describe("tools.github handlers", () => {
       agentId: "main",
       expectedIdentity: { profileId, kind: "oauth" },
     });
-    expect(oauth.retireProfile).toHaveBeenCalledWith(profileId);
+    expect(oauth.retireProfileAsync).toHaveBeenCalledWith(profileId);
   });
 
   it("delegates device start, poll, and cancel without exposing private authorization fields", async () => {
@@ -278,7 +284,7 @@ describe("tools.github handlers", () => {
       pollAfterMs: 5_000,
     });
     oauth.pollAuthorization.mockResolvedValue({ status: "pending", retryAfterMs: 10_000 });
-    oauth.cancelAuthorization.mockReturnValue(true);
+    oauth.cancelAuthorizationAsync.mockReturnValue(true);
 
     const start = await invoke("tools.github.authorize.start", {
       scope: "agent",
@@ -289,7 +295,7 @@ describe("tools.github handlers", () => {
 
     expect(oauth.startAuthorization).toHaveBeenCalledWith({ scope: "agent", agentId: "main" });
     expect(oauth.pollAuthorization).toHaveBeenCalledWith(requestId);
-    expect(oauth.cancelAuthorization).toHaveBeenCalledWith(requestId);
+    expect(oauth.cancelAuthorizationAsync).toHaveBeenCalledWith(requestId);
     expect(start.mock.calls[0]?.[1]).toEqual({
       requestId,
       userCode: "ABCD-EFGH",
@@ -343,6 +349,45 @@ describe("tools.github handlers", () => {
 
     expect(github.install).not.toHaveBeenCalled();
     expect(respond.mock.calls[0]?.[0]).toBe(false);
+    expect(logging.logWarn).toHaveBeenCalledWith(
+      "tools-github: GitHub identity setup failed: temporary GitHub credential is unavailable",
+    );
+    expect(respond).toHaveBeenCalledWith(false, undefined, {
+      code: "UNAVAILABLE",
+      message: "GitHub identity setup failed",
+    });
+  });
+
+  it.each([
+    ["classic PAT", "ghp_syntheticSecret1234567890abcdefgh"],
+    ["fine-grained PAT", "github_pat_syntheticSecret1234567890abcdefgh"],
+    [
+      "private key",
+      "-----BEGIN PRIVATE KEY-----\nU3ludGhldGljS2V5TWF0ZXJpYWw=\n-----END PRIVATE KEY-----",
+    ],
+  ])("redacts %s from setup diagnostics before logging", async (_kind, secret) => {
+    secrets.consumeHandoff.mockReturnValue("temporary-test-token");
+    github.install.mockRejectedValueOnce(
+      new Error("GitHub CLI rejected the credential", { cause: new Error(secret) }),
+    );
+
+    const respond = await invoke("tools.github.configure", {
+      scope: "system",
+      agentId: "main",
+      mode: "managed",
+      secretName: "github-setup-44444444444444444444444444444444",
+    });
+
+    expect(logging.logWarn).toHaveBeenCalledWith(
+      expect.stringContaining("GitHub CLI rejected the credential"),
+    );
+    const output = JSON.stringify([logging.logWarn.mock.calls, respond.mock.calls]);
+    expect(output).not.toContain(secret.split("\n")[1] ?? secret);
+    expect(output).not.toContain("temporary-test-token");
+    expect(respond).toHaveBeenCalledWith(false, undefined, {
+      code: "UNAVAILABLE",
+      message: "GitHub identity setup failed",
+    });
   });
 
   it("consumes the setup handoff before gh validation can fail", async () => {

@@ -1,0 +1,147 @@
+---
+summary: "Registering a context engine plugin that owns session ingest, assembly, and compaction"
+read_when:
+  - Adding a context engine plugin
+  - You are replacing or extending the default context pipeline
+  - You need to delegate compaction back to the runtime
+title: "Context engines"
+sidebarTitle: "Context engines"
+---
+
+How a plugin takes over session context orchestration through the
+`contextEngine` slot, and what it must still delegate. Part of the [Plugin
+architecture internals](/plugins/architecture-internals) guide.
+
+## Context engine plugins
+
+Context engine plugins own session context orchestration for ingest, assembly,
+and compaction. Register them from your plugin with
+`api.registerContextEngine(id, factory)`, then select the active engine with
+`plugins.slots.contextEngine`.
+
+Use this when your plugin needs to replace or extend the default context
+pipeline rather than just add memory search or hooks.
+
+```ts
+import { buildMemorySystemPromptAddition } from "openclaw/plugin-sdk/core";
+
+export default function (api) {
+  api.registerContextEngine("lossless-claw", (ctx) => ({
+    info: {
+      id: "lossless-claw",
+      name: "Lossless Claw",
+      ownsCompaction: true,
+      acceptedHostParams: ["sessionKey"],
+    },
+    async ingest() {
+      return { ingested: true };
+    },
+    async assemble({ messages, sessionKey, availableTools, citationsMode }) {
+      return {
+        messages,
+        estimatedTokens: 0,
+        systemPromptAddition: buildMemorySystemPromptAddition({
+          availableTools: availableTools ?? new Set(),
+          citationsMode,
+          agentSessionKey: sessionKey,
+        }),
+      };
+    },
+    async compact() {
+      return { ok: true, compacted: false };
+    },
+  }));
+}
+```
+
+The factory `ctx` exposes optional `config`, `agentDir`, and `workspaceDir`
+values for construction-time initialization.
+
+The host completes registered async memory prompt preparation before calling a
+non-legacy engine's `assemble()`. `buildMemorySystemPromptAddition(...)` stays
+synchronous and reads that immutable run snapshot while `assemble()` is active.
+Pass the supplied tool and citation context through unchanged so the snapshot
+cannot cross run boundaries.
+
+`assemble()` may return `contextProjection` when the active harness has a
+persistent backend thread. Omit it for legacy per-turn projection. Return
+`{ mode: "thread_bootstrap", epoch }` when the assembled context should be
+injected once into a backend thread and reused until the epoch changes. Change
+the epoch after the engine's semantic context changes, such as after an
+engine-owned compaction pass. Hosts may preserve tool-call metadata, input
+shape, and tool results in a thread-bootstrap projection so fresh backend
+threads retain tool continuity. Tool-result text is not secret-masked.
+
+Engines that keep their own message store follow the host transcript with
+`readSessionTranscriptVisibleMessageDelta(...)` from
+`openclaw/plugin-sdk/context-engine-transcript-runtime`. Persist the returned
+opaque cursor as the engine's watermark, so each `bootstrap` reads only new
+entries, and pass `start: "reset-window"` so a fresh drain begins at the latest
+same-session reset. See
+[Context engine transcript cursor](/plugins/sdk-runtime/agent#context-engine-transcript-cursor)
+for reset reasons and fence behavior.
+
+If your engine does **not** own the compaction algorithm, keep `compact()`
+implemented and delegate it explicitly:
+
+```ts
+import {
+  buildMemorySystemPromptAddition,
+  delegateCompactionToRuntime,
+} from "openclaw/plugin-sdk/core";
+
+export default function (api) {
+  api.registerContextEngine("my-memory-engine", (ctx) => ({
+    info: {
+      id: "my-memory-engine",
+      name: "My Memory Engine",
+      ownsCompaction: false,
+    },
+    async ingest() {
+      return { ingested: true };
+    },
+    async assemble({ messages, sessionKey, availableTools, citationsMode }) {
+      return {
+        messages,
+        estimatedTokens: 0,
+        systemPromptAddition: buildMemorySystemPromptAddition({
+          availableTools: availableTools ?? new Set(),
+          citationsMode,
+          agentSessionKey: sessionKey,
+        }),
+      };
+    },
+    async compact(params) {
+      return await delegateCompactionToRuntime(params);
+    },
+  }));
+}
+```
+
+### Compaction progress
+
+Plugin-owned `compact()` calls normally have one
+`agents.defaults.compaction.timeoutSeconds` window to finish. To report progress,
+explicitly include `"onProgress"` in `info.acceptedHostParams`:
+
+```ts
+const info = {
+  id: "my-context-engine",
+  name: "My Context Engine",
+  ownsCompaction: true,
+  acceptedHostParams: ["onProgress"],
+};
+```
+
+The host then supplies `compact({ onProgress, abortSignal, ... })`. Call
+`onProgress?.()` when useful work advances, such as after a streamed summary
+chunk. Each call refreshes the existing no-progress watchdog; it does not create
+a separate timer or extend the overall ceiling of 10 timeout windows. Do not
+report keepalives as progress. Honor `abortSignal` and stop promptly when it
+aborts, including at the ceiling. Compaction always receives this signal, even
+when the engine excludes `"abortSignal"` from `acceptedHostParams`.
+
+Engines that omit `acceptedHostParams`, or list fields without `"onProgress"`,
+do not receive the callback and keep the one-window contract for their own work.
+Delegating with `delegateCompactionToRuntime(params)` retains built-in model
+progress reporting through the same watchdog.

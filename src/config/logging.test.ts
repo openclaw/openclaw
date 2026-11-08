@@ -1,18 +1,8 @@
 // Verifies logging config parsing and file path handling.
 import fs from "node:fs";
 import path from "node:path";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { withTempDirSync } from "../test-helpers/temp-dir.js";
-
-const mocks = vi.hoisted(() => ({
-  createConfigIO: vi.fn().mockReturnValue({
-    configPath: "/tmp/openclaw-dev/openclaw.json",
-  }),
-}));
-
-vi.mock("./io.js", () => ({
-  createConfigIO: mocks.createConfigIO,
-}));
 
 let formatConfigFilePath: typeof import("./logging.js").formatConfigFilePath;
 let formatConfigUpdatedMessage: typeof import("./logging.js").formatConfigUpdatedMessage;
@@ -24,18 +14,29 @@ beforeAll(async () => {
 });
 
 beforeEach(() => {
-  mocks.createConfigIO.mockClear();
+  vi.stubEnv("OPENCLAW_CONFIG_PATH", "/tmp/openclaw-dev/openclaw.json");
+});
+
+afterEach(() => {
+  vi.unstubAllEnvs();
 });
 
 describe("config logging", () => {
   it("formats the live config path when no explicit path is provided", () => {
     expect(formatConfigFilePath()).toBe("/tmp/openclaw-dev/openclaw.json");
+    vi.stubEnv("OPENCLAW_CONFIG_PATH", "/tmp/openclaw-next/openclaw.json");
+    expect(formatConfigFilePath()).toBe("/tmp/openclaw-next/openclaw.json");
   });
 
   it("logs the live config path when no explicit path is provided", () => {
-    const runtime = { log: vi.fn() };
-    logConfigUpdated(runtime as never);
+    const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+    logConfigUpdated(runtime);
     expect(runtime.log).toHaveBeenCalledWith("Updated config: /tmp/openclaw-dev/openclaw.json");
+    vi.stubEnv("OPENCLAW_CONFIG_PATH", "/tmp/openclaw-next/openclaw.json");
+    logConfigUpdated(runtime);
+    expect(runtime.log).toHaveBeenLastCalledWith(
+      "Updated config: /tmp/openclaw-next/openclaw.json",
+    );
   });
 
   it("formats backup as an indented detail when present", () => {

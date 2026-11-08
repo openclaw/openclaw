@@ -12,12 +12,11 @@ export {
   isSameMemoryDreamingDay,
   resolveMemoryDeepDreamingConfig,
   resolveMemoryDreamingConfig,
+  resolveMemoryDreamingWorkspace,
   resolveMemoryDreamingWorkspaces,
   resolveMemoryLightDreamingConfig,
   resolveMemoryRemDreamingConfig,
-  DEFAULT_MEMORY_DEEP_DREAMING_LIMIT,
   DEFAULT_MEMORY_DEEP_DREAMING_MAX_PROMOTED_SNIPPET_TOKENS,
-  DEFAULT_MEMORY_DEEP_DREAMING_MAX_PRIOR_ENTRY_LOSS_FRACTION,
   DEFAULT_MEMORY_DEEP_DREAMING_MIN_RECALL_COUNT,
   DEFAULT_MEMORY_DEEP_DREAMING_MIN_SCORE,
   DEFAULT_MEMORY_DEEP_DREAMING_MIN_UNIQUE_QUERIES,
@@ -33,7 +32,15 @@ export {
   MANAGED_MEMORY_DREAMING_CRON_TAG,
   MEMORY_DREAMING_SYSTEM_EVENT_TEXT,
 } from "../memory-host-sdk/dreaming.js";
+export type { MemoryDreamingStorageConfig } from "../memory-host-sdk/dreaming.js";
 export type {
+  DreamingArtifactsAuditIssue,
+  DreamingArtifactsAuditSummary,
   MemoryDreamingPhaseName,
-  MemoryDreamingStorageConfig,
-} from "../memory-host-sdk/dreaming.js";
+  RepairDreamingArtifactsResult,
+  RepairShortTermPromotionArtifactsResult,
+  ShortTermAuditIssue,
+  ShortTermAuditSummary,
+  ShortTermDreamingStats,
+  ShortTermDreamingStatsEntry,
+} from "../memory-host-sdk/dreaming-report-types.js";

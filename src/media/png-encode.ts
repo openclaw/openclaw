@@ -1,15 +1,13 @@
-// PNG encode helpers build small PNG files without external image dependencies.
 import { crc32, deflateSync } from "node:zlib";
 
-/** Create a PNG chunk with type, data, and CRC. */
-function pngChunk(type: string, data: Buffer): Buffer {
-  const typeBuf = Buffer.from(type, "ascii");
-  const len = Buffer.alloc(4);
-  len.writeUInt32BE(data.length, 0);
-  const crc = crc32(data, crc32(typeBuf));
+/** Keep chunk parts separate so final assembly copies compressed data only once. */
+function pngChunkParts(type: string, data: Buffer): Buffer[] {
+  const header = Buffer.alloc(8);
+  header.writeUInt32BE(data.length, 0);
+  header.write(type, 4, "ascii");
   const crcBuf = Buffer.alloc(4);
-  crcBuf.writeUInt32BE(crc, 0);
-  return Buffer.concat([len, typeBuf, data, crcBuf]);
+  crcBuf.writeUInt32BE(crc32(data, crc32(header.subarray(4))), 0);
+  return [header, data, crcBuf];
 }
 
 /**
@@ -56,15 +54,12 @@ function encodePng(buffer: Buffer, width: number, height: number, channels: 3 | 
   ihdr.writeUInt32BE(height, 4);
   ihdr[8] = 8; // bit depth
   ihdr[9] = channels === 4 ? 6 : 2; // color type RGB/RGBA
-  ihdr[10] = 0; // compression
-  ihdr[11] = 0; // filter
-  ihdr[12] = 0; // interlace
 
   return Buffer.concat([
     signature,
-    pngChunk("IHDR", ihdr),
-    pngChunk("IDAT", compressed),
-    pngChunk("IEND", Buffer.alloc(0)),
+    ...pngChunkParts("IHDR", ihdr),
+    ...pngChunkParts("IDAT", compressed),
+    ...pngChunkParts("IEND", Buffer.alloc(0)),
   ]);
 }
 

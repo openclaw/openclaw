@@ -7,10 +7,13 @@ Run as a non-root user inside a private X11 and D-Bus session:
 """
 
 import argparse
+from fnmatch import fnmatchcase
 import hashlib
 import json
 import os
 from pathlib import Path
+import platform
+import re
 import shutil
 import signal
 import subprocess
@@ -55,6 +58,331 @@ REQUIRED_GSTREAMER_ELEMENTS = (
     "avdec_h264",
     "avdec_mp3",
 )
+
+FORBIDDEN_APPIMAGE_LIBRARY_PATTERNS = (
+    "libwayland-client.so*",
+    "libwayland-cursor.so*",
+    "libwayland-egl.so*",
+    "libwayland-server.so*",
+)
+
+ABI_LIMITS = {
+    "GLIBC": "2.35",
+    "GLIBCXX": "3.4.30",
+    # Keep the C++ and libgcc symbol ceilings paired to the GCC 12.1 runtime.
+    "CXXABI": "1.3.13",
+    "GCC": "12.0.0",
+}
+
+ABI_ALLOWED_VARIANTS = {
+    "x86_64": {
+        "CXXABI": frozenset(("FLOAT128", "TM_1")),
+    },
+    "aarch64": {},
+}
+
+ELF_MACHINE_ARCHITECTURES = {
+    "Advanced Micro Devices X86-64": "x86_64",
+    "AArch64": "aarch64",
+}
+
+GSTREAMER_TOOL_NAMES = (
+    "gst-inspect-1.0",
+    "gst-launch-1.0",
+)
+
+BUNDLED_RUNTIME_PATH = Path("usr/lib/OpenClaw/desktop-runtime")
+LINUX_RUNTIME_PREFIX = b"OPENCLAW-BUN-RUNTIME-V1\n"
+
+
+def version_key(version):
+    return tuple(int(part) for part in version.split("."))
+
+
+def is_numeric_version(version):
+    return re.fullmatch(r"\d+(?:\.\d+)*", version) is not None
+
+
+def requirement_sort_key(version):
+    if is_numeric_version(version):
+        return (0, version_key(version), "")
+    return (1, (), version)
+
+
+def compare_versions(left, right):
+    left_parts = version_key(left)
+    right_parts = version_key(right)
+    length = max(len(left_parts), len(right_parts))
+    return (
+        left_parts + (0,) * (length - len(left_parts))
+        > right_parts + (0,) * (length - len(right_parts))
+    )
+
+
+def normalize_architecture(machine, source):
+    normalized = machine.strip().lower()
+    if normalized in ("x86_64", "amd64"):
+        return "x86_64"
+    if normalized in ("aarch64", "arm64"):
+        return "aarch64"
+    raise RuntimeError(f"unsupported {source} architecture {machine}")
+
+
+def parse_version_needs(text, source, architecture):
+    requirements = {family: set() for family in ABI_LIMITS}
+    in_version_needs = False
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if line.startswith("Version needs section "):
+            in_version_needs = True
+            continue
+        if line.startswith("Version ") and " section " in line:
+            in_version_needs = False
+            continue
+        if not in_version_needs:
+            continue
+        match = re.search(r"\bName:\s*(\S+)", line)
+        if match is None:
+            continue
+        name = match.group(1)
+        family = None
+        for candidate in ABI_LIMITS:
+            prefix = f"{candidate}_"
+            if name.startswith(prefix):
+                family = candidate
+                version = name.removeprefix(prefix)
+                break
+        if family is None:
+            continue
+        if (
+            not is_numeric_version(version)
+            and version
+            not in ABI_ALLOWED_VARIANTS.get(architecture, {}).get(family, ())
+        ):
+            raise RuntimeError(f"{source} requires unknown {family} version {name}")
+        requirements[family].add(version)
+    return {
+        family: sorted(versions, key=requirement_sort_key)
+        for family, versions in requirements.items()
+    }
+
+
+def is_regular_elf(path):
+    if path.is_symlink() or not path.is_file():
+        return False
+    with path.open("rb") as source:
+        return source.read(4) == b"\x7fELF"
+
+
+def run_readelf(path, source, readelf, *arguments):
+    result = subprocess.run(
+        [readelf, *arguments, "--wide", str(path)],
+        env={**os.environ, "LC_ALL": "C"},
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        check=False,
+    )
+    if result.returncode:
+        detail = result.stdout.strip().replace(str(path), source)
+        suffix = f": {detail}" if detail else ""
+        raise RuntimeError(
+            f"readelf failed for {source} with exit {result.returncode}{suffix}"
+        )
+    return result.stdout
+
+
+def read_elf_architecture(path, source, readelf):
+    text = run_readelf(path, source, readelf, "--file-header")
+    match = re.search(r"^\s*Machine:\s*(.+?)\s*$", text, re.MULTILINE)
+    if match is None:
+        raise RuntimeError(f"readelf did not report an ELF machine for {source}")
+    machine = match.group(1)
+    try:
+        return ELF_MACHINE_ARCHITECTURES[machine]
+    except KeyError as error:
+        raise RuntimeError(
+            f"{source} uses unsupported ELF machine {machine}"
+        ) from error
+
+
+def read_abi_requirements(path, source, readelf, architecture):
+    return parse_version_needs(
+        run_readelf(path, source, readelf, "--version-info"),
+        source,
+        architecture,
+    )
+
+
+def collect_bundled_runtime_report(root, readelf, architecture):
+    manifest_path = root / "manifest.json"
+    try:
+        if root.is_symlink() or manifest_path.is_symlink():
+            raise ValueError("redirected runtime resource")
+        manifest = json.loads(manifest_path.read_text())
+        # Current release tooling also verifies tags staged before runtime flavors.
+        runtime = manifest["runtime"] if "runtime" in manifest else {
+            "flavor": "jit", "executable": "bin/bun"
+        }
+        files = manifest["files"]
+        if (manifest["platform"] != "linux" or runtime["flavor"] not in ("jit", "aot")
+                or not isinstance(files, dict) or runtime["executable"] not in files):
+            raise ValueError("invalid Linux runtime identity")
+    except (OSError, KeyError, TypeError, ValueError) as error:
+        raise RuntimeError("Bundled runtime has an invalid runtime manifest") from error
+
+    entries = []
+    non_target_resources = []
+    executable_is_elf = False
+    # linuxdeploy must not rewrite embedded ELF bytes. Inspect each decoded
+    # manifest resource, including native addons hidden by the same envelope.
+    with tempfile.TemporaryDirectory(prefix="openclaw-runtime-abi-") as temporary:
+        decoded = Path(temporary) / "resource"
+        for relative, expected in sorted(files.items()):
+            if (not isinstance(relative, str) or not relative
+                    or any(part in ("", ".", "..") for part in relative.split("/"))
+                    or relative.startswith("/") or "\\" in relative or ":" in relative
+                    or not isinstance(expected, str) or not re.fullmatch(r"[a-f0-9]{64}", expected)):
+                raise RuntimeError("Bundled runtime has an invalid resource identity")
+            resource = root / relative
+            source = (BUNDLED_RUNTIME_PATH / relative).as_posix()
+            if any(path.is_symlink() for path in (resource, *resource.parents)
+                   if path == root or root in path.parents):
+                raise RuntimeError(f"{source} has a redirected runtime resource")
+            if not resource.is_file():
+                raise RuntimeError(f"{source} runtime resource is missing")
+            digest = hashlib.sha256()
+            with resource.open("rb") as encoded:
+                if encoded.read(len(LINUX_RUNTIME_PREFIX)) != LINUX_RUNTIME_PREFIX:
+                    raise RuntimeError(f"{source} has an invalid runtime envelope")
+                header = encoded.read(4)
+                digest.update(header)
+                is_elf = header == b"\x7fELF"
+                output = decoded.open("wb") if is_elf else None
+                try:
+                    if output is not None:
+                        output.write(header)
+                    for block in iter(lambda: encoded.read(1024 * 1024), b""):
+                        digest.update(block)
+                        if output is not None:
+                            output.write(block)
+                finally:
+                    if output is not None:
+                        output.close()
+            if digest.hexdigest() != expected:
+                raise RuntimeError(f"{source} runtime checksum mismatch")
+            if not is_elf:
+                continue
+            resource_architecture = read_elf_architecture(decoded, source, readelf)
+            if resource_architecture != architecture:
+                if relative == runtime["executable"]:
+                    raise RuntimeError(f"{source} architecture does not match the AppImage")
+                # Some npm packages carry prebuilds for both Linux architectures.
+                # They cannot load in this process; retain their identity in proof.
+                non_target_resources.append({"path": source, "architecture": resource_architecture})
+                continue
+            executable_is_elf |= relative == runtime["executable"]
+            entries.append({"path": source, "source": "appdir",
+                            "requires": read_abi_requirements(decoded, source, readelf, architecture)})
+        if not executable_is_elf:
+            raise RuntimeError("Bundled runtime executable does not contain an ELF runtime")
+    identity = {"flavor": runtime["flavor"], "executable": runtime["executable"]}
+    if non_target_resources:
+        identity["nonTargetResources"] = non_target_resources
+    return entries, identity
+
+
+def collect_abi_report(appimage, appdir, readelf=None, *, allow_legacy_runtime=False):
+    readelf = readelf or shutil.which("readelf")
+    if readelf is None:
+        raise RuntimeError("readelf is required for AppImage ABI inspection")
+    if not is_regular_elf(appimage):
+        raise RuntimeError(f"{appimage.name} is not a regular ELF AppImage runtime")
+    architecture = read_elf_architecture(
+        appimage,
+        "appimage-runtime",
+        readelf,
+    )
+    host_architecture = normalize_architecture(platform.machine(), "host")
+    if architecture != host_architecture:
+        raise RuntimeError(
+            "AppImage architecture mismatch: "
+            f"artifact is {architecture}, host is {host_architecture}"
+        )
+
+    candidates = [
+        {
+            "path": appimage,
+            "reportPath": appimage.name,
+            "source": "appimage-runtime",
+        }
+    ]
+    runtime_root = appdir / BUNDLED_RUNTIME_PATH
+    candidates.extend(
+        {
+            "path": path,
+            "reportPath": path.relative_to(appdir).as_posix(),
+            "source": "appdir",
+        }
+        for path in appdir.rglob("*")
+        if runtime_root not in path.parents and is_regular_elf(path)
+    )
+    runtime = None
+    files = []
+    if runtime_root.exists() or runtime_root.is_symlink():
+        embedded, runtime = collect_bundled_runtime_report(runtime_root, readelf, architecture)
+        files.extend(embedded)
+    elif not allow_legacy_runtime:
+        raise RuntimeError(f"Missing required bundled runtime: {BUNDLED_RUNTIME_PATH.as_posix()}")
+    for candidate in candidates:
+        files.append({
+            "path": candidate["reportPath"],
+            "source": candidate["source"],
+            "requires": read_abi_requirements(candidate["path"], candidate["reportPath"],
+                                              readelf, architecture),
+        })
+    files.sort(key=lambda item: (item["path"], item["source"]))
+
+    maximum_required = {}
+    for family in ABI_LIMITS:
+        versions = [
+            version
+            for entry in files
+            for version in entry["requires"][family]
+            if is_numeric_version(version)
+        ]
+        maximum_required[family] = (
+            max(versions, key=version_key) if versions else None
+        )
+    return {
+        "architecture": architecture,
+        "runtime": runtime,
+        "files": files,
+        "limits": ABI_LIMITS,
+        "maximumRequired": maximum_required,
+    }
+
+
+def write_abi_report(output, report):
+    (output / "abi.json").write_text(
+        json.dumps(report, indent=2, sort_keys=True) + "\n"
+    )
+
+
+def enforce_abi_limits(report):
+    violations = []
+    for entry in report["files"]:
+        for family, limit in ABI_LIMITS.items():
+            for version in entry["requires"][family]:
+                if not is_numeric_version(version):
+                    continue
+                if compare_versions(version, limit):
+                    violations.append(
+                        f"{entry['path']} requires {family}_{version} (limit {family}_{limit})"
+                    )
+    if violations:
+        raise RuntimeError("AppImage ABI floor exceeded: " + "; ".join(violations))
 
 
 def write_command(output, name, command, *, cwd=None, env=None):
@@ -111,6 +439,29 @@ def isolated_environment(root):
         path.mkdir(mode=0o700, parents=True)
         env[variable] = str(path)
     return env
+
+
+def resolve_gstreamer_tools(directory=None, search_path="/usr/bin:/bin"):
+    resolved = []
+    for name in GSTREAMER_TOOL_NAMES:
+        if directory is None:
+            executable = shutil.which(name, path=search_path)
+            if executable is None:
+                raise RuntimeError(
+                    f"GStreamer tool {name} not found in {search_path}"
+                )
+            path = Path(executable).resolve()
+        else:
+            candidate = Path(directory) / name
+            if not candidate.is_file():
+                raise RuntimeError(f"GStreamer tool {name} is missing: {candidate}")
+            if not os.access(candidate, os.X_OK):
+                raise RuntimeError(
+                    f"GStreamer tool {name} is not executable: {candidate}"
+                )
+            path = candidate.resolve()
+        resolved.append(path)
+    return tuple(resolved)
 
 
 def process_ids(root_pid):
@@ -277,7 +628,15 @@ def generate_media_samples(root, output):
     return generated
 
 
-def bundled_gstreamer_probe(appdir, output, env, samples):
+def bundled_gstreamer_probe(
+    appdir,
+    output,
+    env,
+    samples,
+    *,
+    gst_inspect,
+    gst_launch,
+):
     hook = appdir / "apprun-hooks/linuxdeploy-plugin-gstreamer.sh"
     if not hook.is_file():
         raise RuntimeError("Missing packaged GStreamer AppRun hook")
@@ -295,14 +654,16 @@ export GST_PLUGIN_SYSTEM_PATH_1_0="$APPDIR/usr/lib/gstreamer-1.0"
         "-c",
         common
         + """
-shift
+gst_inspect=$2
+shift 2
 for element; do
-  gst-inspect-1.0 "$element" >/dev/null
+  "$gst_inspect" "$element" >/dev/null
   printf '%s\\tok\\n' "$element"
 done
 """,
         "bundled-gstreamer-probe",
         str(appdir),
+        str(gst_inspect),
         *REQUIRED_GSTREAMER_ELEMENTS,
     ]
     code, text = write_command(
@@ -327,13 +688,14 @@ done
                 common
                 + """
 export GST_REGISTRY_1_0=$2
-exec timeout 30s gst-launch-1.0 -q playbin "uri=file://$3" \
+exec timeout 30s "$4" -q playbin "uri=file://$3" \
   audio-sink=fakesink video-sink=fakesink
 """,
                 "bundled-gstreamer-playback",
                 str(appdir),
                 str(registry),
                 str(sample),
+                str(gst_launch),
             ],
             cwd=appdir,
             env=env,
@@ -355,9 +717,14 @@ def main():
     parser.add_argument("appimage", type=Path)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--expected-sha256")
+    parser.add_argument("--gstreamer-tools-dir", type=Path)
     parser.add_argument("--require-fuse", action="store_true")
     parser.add_argument("--shell-container")
     parser.add_argument("--skip-ui", action="store_true")
+    parser.add_argument(
+        "--allow-legacy-runtime", action="store_true",
+        help="Allow historical pre-Bun packages without a desktop-runtime directory",
+    )
     args = parser.parse_args()
 
     if sys.platform != "linux" or os.geteuid() == 0:
@@ -425,6 +792,28 @@ def main():
             if not required.is_file():
                 raise RuntimeError(f"Missing packaged runtime file: {required.relative_to(appdir)}")
 
+        abi_report = collect_abi_report(
+            appimage, appdir, allow_legacy_runtime=args.allow_legacy_runtime
+        )
+        write_abi_report(output, abi_report)
+        enforce_abi_limits(abi_report)
+
+        usr_lib = appdir / "usr/lib"
+        forbidden_libraries = sorted(
+            path.relative_to(appdir).as_posix()
+            for path in usr_lib.rglob("*")
+            if (path.is_file() or path.is_symlink())
+            and any(
+                fnmatchcase(path.name, pattern)
+                for pattern in FORBIDDEN_APPIMAGE_LIBRARY_PATTERNS
+            )
+        )
+        if forbidden_libraries:
+            raise RuntimeError(
+                "AppImage bundles host Wayland libraries: "
+                + ", ".join(forbidden_libraries)
+            )
+
         shutil.copyfile(apprun, output / "AppRun.txt")
         hooks = appdir / "apprun-hooks"
         if hooks.is_dir():
@@ -452,6 +841,20 @@ def main():
         shell_env["LD_LIBRARY_PATH"] = ":".join(
             str(path) for path in library_paths if path.is_dir()
         )
+        gst_inspect, gst_launch = resolve_gstreamer_tools(
+            args.gstreamer_tools_dir
+        )
+        selected_version_code, _ = write_command(
+            output,
+            "gstreamer-selected-tool.txt",
+            [str(gst_inspect), "--version"],
+            cwd=appdir,
+            env=shell_env,
+        )
+        if selected_version_code:
+            raise RuntimeError(
+                "Selected gst-inspect-1.0 failed under the packaged library path"
+            )
         shell_results = {}
         for shell in ("/bin/sh", "/bin/bash"):
             if not Path(shell).is_file():
@@ -481,6 +884,8 @@ def main():
             output,
             shell_env,
             samples,
+            gst_inspect=gst_inspect,
+            gst_launch=gst_launch,
         )
 
         extracted = launch_probe(
@@ -517,7 +922,9 @@ def main():
 
         summary = {
             "artifact": appimage.name,
+            "legacyRuntimeAllowed": args.allow_legacy_runtime,
             "sha256": artifact_sha,
+            "runtime": abi_report["runtime"],
             "fuse": fuse,
             "extracted": extracted,
             "shells": shell_results,

@@ -14,6 +14,8 @@ export type ReleaseToolingIdentityInput = {
 
 export function resolveReleaseToolingIdentity(
   input: {
+    qualificationAdmission?: unknown;
+    candidateSha?: string;
     requestedIdentityJson?: string;
     workflowContract: string;
   } & Pick<ReleaseToolingIdentityInput, "workflowFullRef" | "workflowRef" | "workflowSha">,
@@ -28,6 +30,19 @@ export function validateReleaseToolingIdentity(
 ): ReleaseToolingIdentity;
 
 export function runReleaseToolingGh(args: string[]): string;
+
+export function verifyReleaseWorkflowRun(input: {
+  repository: string;
+  workflowFullRef: string;
+  workflowRef: string;
+  workflowSha: string;
+  runId: string;
+  runAttempt: string;
+  workflowPath: string;
+  workflowEvent: string;
+  runStatePolicy: "active" | "success";
+  runGh?: (args: string[]) => string;
+}): Record<string, unknown>;
 
 export function verifyReleaseToolingIdentity(
   input: ReleaseToolingIdentityInput & {

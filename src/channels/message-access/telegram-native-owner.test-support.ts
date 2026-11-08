@@ -1,0 +1,137 @@
+import { beforeAll, vi } from "vitest";
+import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
+import type {
+  ModelsAuthLoginFlowOptions,
+  ModelsAuthLoginFlowResult,
+} from "../../commands/models/auth.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { createPluginRuntimeMock } from "../../plugin-sdk/test-helpers/plugin-runtime-mock.js";
+import { registerPluginCommand } from "../../plugins/commands.js";
+import type { PluginRuntime } from "../../plugins/runtime/types.js";
+import type { PluginCommandContext } from "../../plugins/types.js";
+import { linkUserChannelIdentity } from "../../state/user-channel-identities.js";
+import { setUserProfileRole } from "../../state/user-profile-writes.worker.js";
+import { ensureProfileForEmail } from "../../state/user-profiles.js";
+import { loadBundledPluginFacade } from "../../test-utils/bundled-plugin-public-surface.js";
+import {
+  withOpenClawTestState,
+  type OpenClawTestState,
+} from "../../test-utils/openclaw-test-state.js";
+import type { ChannelPlugin } from "../plugins/types.public.js";
+import { createHostIngressFixture, withTestChannelRegistry } from "./host-ingress.test-support.js";
+import { createCommandOwnerTestRoles } from "./operator-authority.test-support.js";
+
+type TelegramNativeCommandTestDriver = {
+  invoke: (input?: {
+    command?: string;
+    senderId?: number;
+    chatId?: number;
+    group?: boolean;
+    threadId?: number;
+    match?: string;
+  }) => Promise<void>;
+  pairingStoreReadCount: () => number;
+  deliveries: () => Array<{ replies: ReplyPayload[] }>;
+  sentMessages: () => Array<{ chatId: number | string; text: string }>;
+  configureLogin: (input: {
+    run: (options: ModelsAuthLoginFlowOptions) => Promise<ModelsAuthLoginFlowResult>;
+    onResult: () => void;
+  }) => void;
+  close: () => void;
+};
+const { createTelegramNativeCommandTestDriver } = await loadBundledPluginFacade<{
+  createTelegramNativeCommandTestDriver: (options: {
+    cfg: OpenClawConfig;
+    runtime: PluginRuntime;
+  }) => Promise<TelegramNativeCommandTestDriver>;
+}>({
+  pluginId: "telegram",
+  artifactBasename: "native-command.test-support.js",
+});
+let telegramPlugin: ChannelPlugin;
+
+beforeAll(async () => {
+  ({ telegramPlugin } = await loadBundledPluginFacade<{ telegramPlugin: ChannelPlugin }>({
+    pluginId: "telegram",
+    artifactBasename: "api.js",
+  }));
+});
+
+export async function withTelegramNativeOwners(
+  run: (fixture: Awaited<ReturnType<typeof createFixture>>) => Promise<void>,
+  asserted = false,
+) {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    await withTestChannelRegistry(telegramPlugin, async () => {
+      const fixture = await createFixture(asserted, state);
+      using _ = { [Symbol.dispose]: () => fixture.close() };
+      await run(fixture);
+    });
+  });
+}
+
+async function createFixture(asserted: boolean, state: OpenClawTestState) {
+  const cfg: OpenClawConfig = {
+    commands: { ownerAllowFrom: ["telegram:999999"] },
+    channels: { telegram: { dmPolicy: "pairing", allowFrom: [] } },
+    gateway: { roles: createCommandOwnerTestRoles() },
+  };
+  const admins = [100, 200].map((senderId) => {
+    const profile = ensureProfileForEmail(`admin-${senderId}@example.test`);
+    setUserProfileRole(profile.id, "admin");
+    const identity = { channelId: "telegram", accountId: "default", senderId: String(senderId) };
+    linkUserChannelIdentity(profile.id, identity);
+    return { profile, identity };
+  });
+  const { ingress, buildContext, retire } = createHostIngressFixture("telegram", cfg);
+  const handler = vi.fn(async (ctx: PluginCommandContext) => {
+    ctx.assertOwnerCurrent?.();
+    return { text: "TELEGRAM-OWNER-OK" };
+  });
+  registerPluginCommand("owner-probe", {
+    name: "qaowner",
+    description: "Owner authority probe",
+    requiredScopes: ["operator.admin"],
+    handler,
+  });
+  const runtime = createPluginRuntimeMock({
+    channel: {
+      inbound: {
+        ingress: asserted
+          ? {
+              ...ingress,
+              createResolver: (base) => {
+                const resolver = ingress.createResolver(base);
+                return {
+                  ...resolver,
+                  event: (input) =>
+                    resolver.event({
+                      ...input,
+                      subject: {
+                        ...input.subject,
+                        authentication: { "telegram-user-id": "asserted" },
+                      },
+                    }),
+                };
+              },
+            }
+          : ingress,
+        buildContext,
+      },
+    },
+  });
+  const driver = await createTelegramNativeCommandTestDriver({ cfg, runtime });
+  return {
+    state,
+    cfg,
+    admins,
+    handler,
+    driver,
+    invoke: (senderId = 100) => driver.invoke({ senderId }),
+    invokeTopic: () => driver.invoke({ group: true, chatId: -10012345, threadId: 42 }),
+    close: () => {
+      retire();
+      driver.close();
+    },
+  };
+}

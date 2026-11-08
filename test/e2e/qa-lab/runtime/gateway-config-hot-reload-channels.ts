@@ -19,6 +19,8 @@ import {
   waitForHotReloadFact,
   type HotReloadConnection,
 } from "./gateway-config-hot-reload-fixtures.js";
+import { proveHotReloadIrcAccounts } from "./gateway-config-hot-reload-irc.js";
+import { proveHotReloadChannelPolicy } from "./gateway-config-hot-reload-policy.js";
 
 const CHANNEL = "qa-channel";
 const MODELS = ["mock-openai/gpt-5.6-luna", "mock-openai/gpt-5.6-luna-alt"] as const;
@@ -49,6 +51,7 @@ export async function proveHotReloadChannels({
       const mock = provider;
       const active = await owner.start({
         repoRoot,
+        initializeCurrentRuntimeState: true,
         useRepoCli: true,
         command: {
           executablePath: process.execPath,
@@ -157,17 +160,19 @@ export async function proveHotReloadChannels({
         );
         return account;
       };
-      const patch = async (change: unknown) => {
+      const patch = async (change: unknown, replacePaths?: string[], refreshChannel = true) => {
         const previous = await ready("default");
         const snapshot = await rpc<{ hash: string; config: OpenClawConfig }>("config.get");
         const result = await rpc<{
           sentinel: { payload: { stats: { requiresRestart: boolean } } };
-        }>("config.patch", { baseHash: snapshot.hash, raw: JSON.stringify(change) });
+        }>("config.patch", { baseHash: snapshot.hash, raw: JSON.stringify(change), replacePaths });
         assert.equal(result.sentinel.payload.stats.requiresRestart, false);
-        await waitForHotReloadFact("channel snapshot replaced", async () => {
-          const account = await ready("default");
-          return (account.lastStartAt ?? 0) > (previous.lastStartAt ?? 0) ? account : undefined;
-        });
+        if (refreshChannel) {
+          await waitForHotReloadFact("channel snapshot replaced", async () => {
+            const account = await ready("default");
+            return (account.lastStartAt ?? 0) > (previous.lastStartAt ?? 0) ? account : undefined;
+          });
+        }
         await checkStopped();
       };
       const providerRequests = async () => {
@@ -209,15 +214,26 @@ export async function proveHotReloadChannels({
             senderId: "qa-operator",
             text: `Reply exactly \`${marker}\``,
           });
-          const cursor = state.getSnapshot().cursor;
+          const event = state
+            .getSnapshot()
+            .events.find(
+              (candidate) =>
+                candidate.kind === "inbound-message" &&
+                candidate.accountId === inbound.accountId &&
+                candidate.message.id === inbound.id &&
+                candidate.message.conversation.kind === inbound.conversation.kind &&
+                candidate.message.conversation.id === inbound.conversation.id,
+            );
+          assert(event);
           const reply = await transport.waitForOutbound({
             conversation: inbound.conversation,
             textIncludes: marker,
             timeoutMs: 40_000,
           });
           assert.equal(reply.isError, undefined);
-          await waitForHotReloadFact("channel turn acknowledged", () =>
-            state.getAcknowledgedPollCursor("default") >= cursor ? true : undefined,
+          await waitForHotReloadFact(
+            "channel turn completed",
+            () => state.hasCompletedInboundEvent(inbound.accountId, event.cursor) || undefined,
           );
           const requests = (await providerRequests()).filter(
             (request) => request.cursor > requestCursor && request.prompt.includes(marker),
@@ -298,6 +314,16 @@ export async function proveHotReloadChannels({
           "Real heartbeat model runs changed silent→delivered HEARTBEAT_OK→silent through the QA channel; the running account restarted and the manually stopped account stayed stopped",
         );
       });
+      await proveHotReloadChannelPolicy({
+        transport,
+        state,
+        providerRequests,
+        rpc,
+        patch: (change, replacePaths) => patch(change, replacePaths, false),
+        patchChannels: patch,
+        proveGroup: group,
+        verifyContinuity: record,
+      });
       if (failures.length === 0) {
         await rpc("channels.start", { channel: CHANNEL, accountId: "parked" });
         await ready("parked");
@@ -315,6 +341,10 @@ export async function proveHotReloadChannels({
         );
         observations.push({ manuallyResumed: { inboundId: parkedMessage.id, reply: resumed } });
       }
+      const irc = await proveHotReloadIrcAccounts({ repoRoot, outputDir, appendLog });
+      evidence.push(...irc.evidence);
+      failures.push(...irc.failures);
+      observations.push(...irc.observations);
     },
     () => connection?.client.stopAndWait(),
     () => stopQaGatewayFixture(owner, { preserveToDir: path.join(outputDir, "channels-gateway") }),

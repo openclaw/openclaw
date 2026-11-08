@@ -38,38 +38,26 @@ extension GatewayConnectionControlTests {
             let control = ControlChannel(gateway: connection, endpointRevision: { source.snapshot().revision! })
             let activity = WorkActivityStore.shared
             let previousKey = activity.mainSessionKey
-            let previousAccent = AppStateStore.shared.profileAccentHex
-            AppStateStore.shared.profileAccentHex = "#123456"
+            let previousAccent = AppStateStore.shared.profileAccent
+            AppStateStore.shared.profileAccent = .color("#123456")
             defer {
                 activity.reset()
                 activity.setMainSessionKey(previousKey)
-                AppStateStore.shared.profileAccentHex = previousAccent
+                AppStateStore.shared.profileAccent = previousAccent
             }
             _ = try await connection.request(method: "health", params: nil, retryTransportFailures: false)
-            #expect(await self.waitForMainSessionKey("a-main"))
-            let initialDeadline = ContinuousClock.now + .seconds(2)
-            while AppStateStore.shared.profileAccentHex != nil, ContinuousClock.now < initialDeadline {
-                try await Task.sleep(for: .milliseconds(10))
+            try await TestWait.observed("Gateway A main session") { activity.mainSessionKey == "a-main" }
+            #expect(activity.mainSessionKey == "a-main")
+            try await TestWait.observed("initial profile accent") {
+                AppStateStore.shared.profileAccent == .inherited
             }
-            #expect(AppStateStore.shared.profileAccentHex == nil)
+            #expect(AppStateStore.shared.profileAccent == .inherited)
 
             let acknowledgement = UUID().uuidString
-            let acknowledged = LockIsolated(false)
-            let observer = NotificationCenter.default.addObserver(
-                forName: .controlHeartbeat, object: nil, queue: .main)
-            { notification in
-                guard let data = notification.object as? Data,
-                      let heartbeat = try? JSONDecoder().decode(ControlHeartbeatEvent.self, from: data),
-                      heartbeat.status == acknowledgement
-                else { return }
-                acknowledged.withValue { $0 = true }
-            }
-            defer { NotificationCenter.default.removeObserver(observer) }
-
             let buffered = await connection.subscribe()
             // Leave this real subscription unread while its owner advances. The
             // live Control consumer stays free to process work on the MainActor.
-            let producer = Task.detached {
+            async let producer: Void = { @Sendable in
                 if replacement.contains("shutdown") {
                     await connection._test_handlePush(
                         .event(EventFrame(type: "event", event: "shutdown")), socketGeneration: 1)
@@ -85,9 +73,8 @@ extension GatewayConnectionControlTests {
                 }
                 if replacement == "reconnect" || replacement == "shutdown" {
                     session.latestTask()?.emitReceiveFailure()
-                    let deadline = ContinuousClock.now + .seconds(2)
-                    while await connection._test_activeSocketGeneration() != nil, ContinuousClock.now < deadline {
-                        try await Task.sleep(for: .milliseconds(10))
+                    try await TestWait.state("retired primary socket") {
+                        await connection.socketGenerationState.activeGeneration == nil
                     }
                 } else {
                     if replacement != "shutdown" {
@@ -112,20 +99,26 @@ extension GatewayConnectionControlTests {
                             payload: OpenClawProtocol.AnyCodable(["ts": 1, "status": acknowledgement]))),
                         socketGeneration: socket)
                 }
-            }
+            }()
             do {
-                try await producer.value
+                try await producer
                 try await Self.assertBufferedOwnership(buffered, replacement: replacement)
             } catch {
                 await control.disconnect()
                 throw error
             }
-            let deadline = ContinuousClock.now + .seconds(2)
-            while !acknowledged.value,
-                  !(["unavailable", "adopted"].contains(replacement) && activity.current?.sessionKey == "a-main"),
-                  ContinuousClock.now < deadline
-            {
-                try await Task.sleep(for: .milliseconds(10))
+            if ["unavailable", "adopted", "shutdown"].contains(replacement) {
+                let deadline = ContinuousClock.now + .seconds(2)
+                while control.lastHeartbeatEvent?.status != acknowledgement,
+                      !(["unavailable", "adopted"].contains(replacement) && activity.current?.sessionKey == "a-main"),
+                      ContinuousClock.now < deadline
+                {
+                    try await Task.sleep(for: .milliseconds(10))
+                }
+            } else {
+                try await TestWait.state("current primary heartbeat") {
+                    control.lastHeartbeatEvent?.status == acknowledgement
+                }
             }
             if replacement == "shutdown" {
                 guard case .degraded = control.state else {
@@ -137,7 +130,7 @@ extension GatewayConnectionControlTests {
                 #expect(activity.mainSessionKey == "a-main")
                 #expect(activity.current == nil)
             } else {
-                #expect(acknowledged.value)
+                #expect(control.lastHeartbeatEvent?.status == acknowledgement)
                 #expect(activity.mainSessionKey == "b-main")
                 #expect(activity.current?.sessionKey == "b-main")
                 #expect(activity.iconState == .workingMain(.job))
@@ -149,21 +142,24 @@ extension GatewayConnectionControlTests {
 
     private nonisolated static func assertBufferedOwnership(
         _ stream: AsyncStream<GatewayConnection.PushDelivery>,
-        replacement: String) async throws
+        replacement: String,
+        sourceLocation: SourceLocation = #_sourceLocation) async throws
     {
         let admitsReplacement = ["admitted", "reconnect", "replaced-shutdown"].contains(replacement)
         let terminalEvent = admitsReplacement ? "heartbeat" : (replacement == "shutdown" ? "shutdown" : "agent")
-        let deliveries = try await AsyncTimeout.withTimeout(
-            seconds: 2,
-            onTimeout: { CancellationError() },
-            operation: {
-                var queued: [GatewayConnection.PushDelivery] = []
-                for await delivery in stream {
-                    queued.append(delivery)
-                    if case let .event(event) = delivery.push, event.event == terminalEvent { break }
-                }
-                return queued
-            })
+        var deliveries: [GatewayConnection.PushDelivery] = []
+        var reachedTerminal = false
+        for await delivery in stream {
+            deliveries.append(delivery)
+            if case let .event(event) = delivery.push, event.event == terminalEvent {
+                reachedTerminal = true
+                break
+            }
+        }
+        guard reachedTerminal, !Task.isCancelled else {
+            Issue.record("Still waiting for buffered \(terminalEvent) push", sourceLocation: sourceLocation)
+            throw CancellationError()
+        }
         let oldDeliveries = deliveries.filter { $0.mainSessionKey == "a-main" }
         #expect(oldDeliveries.contains {
             if case .snapshot = $0.push {
@@ -198,6 +194,164 @@ extension GatewayConnectionControlTests {
             ])))
     }
 
+    @Test(arguments: ["profileless", "color", "theme"]) @MainActor
+    func `native chat inherits Gateway appearance after clearing a profile with Talk loaded`(
+        profile: String) async throws
+    {
+        try await TestIsolation.withIsolatedState {
+            let profileless = profile == "profileless"
+            let source = GatewayConnectionEndpointSource(endpoint: GatewayConnection.EndpointSnapshot(
+                config: (URL(string: "ws://127.0.0.1:49229")!, nil, nil), routeAuthority: nil, revision: 1))
+            let accent = LockIsolated<String?>("#aa0000")
+            let profileAccent = LockIsolated<String?>(profileless ? nil : profile == "theme" ? "theme" : "#123456")
+            let session = GatewayTestWebSocketSession(taskFactory: {
+                GatewayTestWebSocketTask(sendHook: { socket, message, sendIndex in
+                    guard sendIndex > 0, let id = GatewayWebSocketTestSupport.requestID(from: message),
+                          let data = Self.messageData(message),
+                          let frame = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+                    else { return }
+                    let response: Data
+                    switch frame["method"] as? String {
+                    case "config.get":
+                        let saved = accent.value.map { "\"\($0)\"" } ?? "null"
+                        response = Data("""
+                        {"type":"res","id":"\(id)","ok":true,
+                        "payload":{"config":{"ui":{"seamColor":"#0055dd","prefs":{"accent":\(saved)}}}}}
+                        """.utf8)
+                    case "users.prefs.get":
+                        if profileless {
+                            response = Data("""
+                            {"type":"res","id":"\(id)","ok":true,
+                            "payload":{"status":"no_durable_identity"}}
+                            """.utf8)
+                        } else {
+                            let selected = profileAccent.value.map { "\"\($0)\"" } ?? "null"
+                            response = Data("""
+                            {"type":"res","id":"\(id)","ok":true,
+                            "payload":{"status":"ok","entries":{"ui.accent":\(selected)}}}
+                            """.utf8)
+                        }
+                    case "talk.config":
+                        // The wire response already resolves the personal preference into ui.seamColor.
+                        let resolved = profileAccent.value ?? accent.value
+                        let ui = resolved.flatMap { $0 == "theme" ? nil : "\"ui\":{\"seamColor\":\"\($0)\"}" } ?? ""
+                        response = Data("""
+                        {"type":"res","id":"\(id)","ok":true,"payload":{"config":{\(ui)}}}
+                        """.utf8)
+                    default:
+                        response = GatewayWebSocketTestSupport.okResponseData(id: id)
+                    }
+                    socket.emitReceiveSuccess(.data(response))
+                })
+            })
+            let connection = GatewayConnection(
+                testEndpointProvider: { source.snapshot() },
+                currentEndpointRevision: { source.snapshot().revision! },
+                sessionBox: WebSocketSessionBox(session: session))
+            let control = ControlChannel(gateway: connection, endpointRevision: { source.snapshot().revision! })
+            let state = AppStateStore.shared
+            let previousSeam = state.seamColorHex
+            let previousProfile = state.profileAccent
+            defer {
+                state.seamColorHex = previousSeam
+                state.profileAccent = previousProfile
+            }
+            state.seamColorHex = nil
+            state.profileAccent = .inherited
+            _ = try await connection.request(method: "health", params: nil, retryTransportFailures: false)
+            try await TestWait.observed("initial saved Gateway accent") { state.seamColorHex == "#aa0000" }
+            try await TestWait.observed("profile accent") {
+                state.profileAccent == (profileless ? .inherited : profile == "theme" ? .theme : .color("#123456"))
+            }
+            #expect(state.effectiveAccentHex == (profileless ? "#aa0000" : profile == "theme" ? nil : "#123456"))
+
+            accent.withValue { $0 = "#00bb00" }
+            await connection._test_handlePush(
+                .event(EventFrame(type: "event", event: "config.changed")), socketGeneration: 1)
+            try await TestWait.observed("changed saved Gateway accent") { state.seamColorHex == "#00bb00" }
+            #expect(state.effectiveAccentHex == (profileless ? "#00bb00" : profile == "theme" ? nil : "#123456"))
+
+            accent.withValue { $0 = nil }
+            await connection._test_handlePush(
+                .event(EventFrame(type: "event", event: "config.changed")), socketGeneration: 1)
+            try await TestWait.observed("operator fallback") { state.seamColorHex == "#0055dd" }
+            #expect(state.effectiveAccentHex == (profileless ? "#0055dd" : profile == "theme" ? nil : "#123456"))
+
+            accent.withValue { $0 = "theme" }
+            await connection._test_handlePush(
+                .event(EventFrame(type: "event", event: "config.changed")), socketGeneration: 1)
+            try await TestWait.observed("theme default") { state.seamColorHex == nil }
+            #expect(state.effectiveAccentHex == (profile == "color" ? "#123456" : nil))
+
+            accent.withValue { $0 = "#aa0000" }
+            await connection._test_handlePush(
+                .event(EventFrame(type: "event", event: "config.changed")), socketGeneration: 1)
+            try await TestWait.observed("Gateway accent before Talk loads") { state.seamColorHex == "#aa0000" }
+            let talk = TalkModeRuntime(gateway: connection)
+            await talk.reloadConfig()
+            profileAccent.withValue { $0 = nil }
+            await connection._test_handlePush(
+                .event(EventFrame(type: "event", event: "users.prefs.changed")), socketGeneration: 1)
+            try await TestWait.observed("cleared personal preference") { state.profileAccent == .inherited }
+            // No config.changed follows a profile edit: the cached Gateway fallback must stay intact.
+            #expect(state.effectiveAccentHex == "#aa0000")
+            await control.disconnect()
+        }
+    }
+
+    @Test @MainActor
+    func `retired Gateway accent response cannot repaint the new route`() async throws {
+        try await TestIsolation.withIsolatedState {
+            let source = GatewayConnectionEndpointSource(endpoint: GatewayConnection.EndpointSnapshot(
+                config: (URL(string: "ws://127.0.0.1:49230")!, nil, nil), routeAuthority: nil, revision: 1))
+            let gate = GatewayConnectionSuspensionGate()
+            let deferConfig = LockIsolated(false)
+            let session = GatewayTestWebSocketSession(taskFactory: {
+                GatewayTestWebSocketTask(sendHook: { socket, message, sendIndex in
+                    guard sendIndex > 0, let id = GatewayWebSocketTestSupport.requestID(from: message),
+                          let data = Self.messageData(message),
+                          let frame = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+                    else { return }
+                    if frame["method"] as? String == "config.get" {
+                        let deferred = deferConfig.value
+                        if deferred { await gate.suspend() }
+                        socket.emitReceiveSuccess(.data(Data("""
+                        {"type":"res","id":"\(id)","ok":true,
+                        "payload":{"config":{"ui":{"seamColor":"#0055dd","prefs":{"accent":"#aa0000"}}}}}
+                        """.utf8)))
+                    } else {
+                        socket.emitReceiveSuccess(.data(GatewayWebSocketTestSupport.okResponseData(id: id)))
+                    }
+                })
+            })
+            let connection = GatewayConnection(
+                testEndpointProvider: { source.snapshot() },
+                currentEndpointRevision: { source.snapshot().revision! },
+                sessionBox: WebSocketSessionBox(session: session))
+            let control = ControlChannel(gateway: connection, endpointRevision: { source.snapshot().revision! })
+            let state = AppStateStore.shared
+            let previousSeam = state.seamColorHex
+            defer { state.seamColorHex = previousSeam }
+            state.seamColorHex = nil
+            _ = try await connection.request(method: "health", params: nil, retryTransportFailures: false)
+            try await TestWait.observed("initial Gateway accent") { state.seamColorHex == "#aa0000" }
+
+            deferConfig.withValue { $0 = true }
+            await connection._test_handlePush(
+                .event(EventFrame(type: "event", event: "config.changed")), socketGeneration: 1)
+            await gate.waitUntilStarted()
+            let refresh = try #require(control.gatewayAccentReadTask)
+            source.setEndpoint(GatewayConnection.EndpointSnapshot(
+                config: (URL(string: "ws://127.0.0.1:49231")!, nil, nil), routeAuthority: nil, revision: 2))
+            state.seamColorHex = "#0000bb"
+            await gate.open()
+            // Response emission precedes processing; join the refresh before checking non-publication.
+            try await TestWait.value(of: refresh, "retired Gateway accent refresh completion")
+            #expect(state.seamColorHex == "#0000bb")
+            await control.disconnect()
+        }
+    }
+
     @Test(arguments: [false, true]) @MainActor
     func `an admitted profile accent response cannot publish after Primary changes`(failResponse: Bool) async throws {
         try await TestIsolation.withIsolatedState {
@@ -206,6 +360,7 @@ extension GatewayConnectionControlTests {
             let gate = GatewayConnectionSuspensionGate()
             let deferAccent = LockIsolated(false)
             let replied = LockIsolated(false)
+            let replyRecorded = AsyncTestSignal()
             let session = GatewayTestWebSocketSession(taskFactory: {
                 GatewayTestWebSocketTask(sendHook: { socket, message, sendIndex in
                     guard sendIndex > 0, let id = GatewayWebSocketTestSupport.requestID(from: message),
@@ -214,7 +369,10 @@ extension GatewayConnectionControlTests {
                     else { return }
                     if frame["method"] as? String == "users.prefs.get", deferAccent.value {
                         await gate.suspend()
-                        defer { replied.withValue { $0 = true } }
+                        defer {
+                            replied.withValue { $0 = true }
+                            replyRecorded.notify()
+                        }
                         if failResponse { throw URLError(.networkConnectionLost) }
                         socket.emitReceiveSuccess(.data(Data("""
                         {"type":"res","id":"\(id)","ok":true,
@@ -231,15 +389,12 @@ extension GatewayConnectionControlTests {
                 sessionBox: WebSocketSessionBox(session: session))
             let control = ControlChannel(gateway: connection, endpointRevision: { source.snapshot().revision! })
             let state = AppStateStore.shared
-            let previousAccent = state.profileAccentHex
-            defer { state.profileAccentHex = previousAccent }
-            state.profileAccentHex = "#123456"
+            let previousAccent = state.profileAccent
+            defer { state.profileAccent = previousAccent }
+            state.profileAccent = .color("#123456")
             _ = try await connection.request(method: "health", params: nil, retryTransportFailures: false)
-            let initialDeadline = ContinuousClock.now + .seconds(2)
-            while state.profileAccentHex != nil, ContinuousClock.now < initialDeadline {
-                try await Task.sleep(for: .milliseconds(10))
-            }
-            #expect(state.profileAccentHex == nil)
+            try await TestWait.observed("initial profile accent") { state.profileAccent == .inherited }
+            #expect(state.profileAccent == .inherited)
 
             deferAccent.withValue { $0 = true }
             await connection._test_handlePush(
@@ -247,14 +402,15 @@ extension GatewayConnectionControlTests {
             await gate.waitUntilStarted()
             source.setEndpoint(GatewayConnection.EndpointSnapshot(
                 config: (URL(string: "ws://127.0.0.1:49228")!, nil, nil), routeAuthority: nil, revision: 2))
-            state.profileAccentHex = "#0000bb"
+            state.profileAccent = .color("#0000bb")
             await gate.open()
             let deadline = ContinuousClock.now + .seconds(2)
-            while state.profileAccentHex == "#0000bb", ContinuousClock.now < deadline {
+            while state.profileAccent == .color("#0000bb"), ContinuousClock.now < deadline {
                 try await Task.sleep(for: .milliseconds(10))
             }
+            try await replyRecorded.wait("retired profile accent response") { replied.value }
             #expect(replied.value)
-            #expect(state.profileAccentHex == "#0000bb")
+            #expect(state.profileAccent == .color("#0000bb"))
             await control.disconnect()
         }
     }

@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
-import type { Context, Model } from "../types.js";
+import type { Context } from "../types.js";
 import { isContextOverflow } from "../utils/overflow.js";
 import { streamAnthropic, streamSimpleAnthropic } from "./anthropic.js";
+import { makeProviderModel } from "./provider-model.test-support.js";
 
 const apiKey = process.env.ANTHROPIC_API_KEY?.trim() ?? "";
 const live = process.env.OPENCLAW_LIVE_TEST === "1" && apiKey.length > 0;
@@ -9,28 +10,37 @@ const describeLive = live ? describe : describe.skip;
 const timeoutMs = 120_000;
 
 const model = {
-  id: "claude-haiku-4-5",
-  name: "Claude Haiku 4.5",
-  api: "anthropic-messages",
-  provider: "anthropic",
-  baseUrl: "https://api.anthropic.com",
-  reasoning: true,
-  input: ["text"],
-  cost: { input: 1, output: 5, cacheRead: 0.1, cacheWrite: 1.25 },
+  ...makeProviderModel("anthropic-messages", "anthropic", "claude-haiku-4-5", {
+    name: "Claude Haiku 4.5",
+    baseUrl: "https://api.anthropic.com",
+    cost: { input: 1, output: 5, cacheRead: 0.1, cacheWrite: 1.25 },
+  }),
   contextWindow: 200_000,
-  maxTokens: 8_192,
-} satisfies Model<"anthropic-messages">;
+};
 
 describeLive("Anthropic provider live", () => {
-  it(
-    "streams a basic response with usage",
-    async () => {
+  it.each(["known", "unknown"])(
+    "streams a basic response with usage and %s model output limit",
+    async (modelOutputLimit) => {
+      const requestModel = { ...model };
+      if (modelOutputLimit === "unknown") {
+        Reflect.deleteProperty(requestModel, "maxTokens");
+      }
+      let sentMaxTokens: unknown;
       const result = await streamSimpleAnthropic(
-        model,
+        requestModel,
         { messages: [{ role: "user", content: "Reply with the single word ok.", timestamp: 0 }] },
-        { apiKey, maxTokens: 32, reasoning: "off" },
+        {
+          apiKey,
+          maxTokens: 360,
+          reasoning: "off",
+          onPayload: (payload) => {
+            sentMaxTokens = (payload as { max_tokens?: number }).max_tokens;
+          },
+        },
       ).result();
 
+      expect(sentMaxTokens).toBe(360);
       expect(result.stopReason).toBe("stop");
       expect(result.usage.output).toBeGreaterThan(0);
     },

@@ -1,60 +1,89 @@
 :root {
   --settings-control-height: 32px;
+  --segmented-surface: color-mix(in srgb, var(--bg) 80%, var(--bg-elevated) 20%);
+  --segmented-selected: var(--bg-elevated);
+  --segmented-border: color-mix(in srgb, var(--border) 50%, transparent);
+  --segmented-item-radius: calc(var(--radius-md) - 3px);
 }
 
 /* Settings controls also appear outside the settings workspace: the login
    gate, chat board controls, and the chat MCP form all use these primitives. */
 
-/* Segmented keeps its 2px track inset; the buttons fill the inner height.
-   min-height (not height) so many-option enums can still wrap to two lines. */
+/* One control height inside settings clusters. Buttons, inputs, selects, and
+   segmented controls share 32px so mixed rows never show ragged heights.
+   Multi-select list boxes and textareas keep their natural height. */
+.settings-row__control .btn,
+.settings-section__actions .btn,
+.settings-section__actions .agent-select__trigger,
+.settings-group .data-table-search input,
+input.settings-input,
+select.settings-select:not([multiple]) {
+  height: var(--settings-control-height);
+  padding-block: 0;
+}
+
+.settings-row__control .btn--icon,
+.settings-section__actions .btn--icon {
+  width: var(--settings-control-height);
+  min-width: var(--settings-control-height);
+  padding-inline: 0;
+}
+
+.settings-section__actions .btn--xs.btn--icon {
+  width: 28px;
+  min-width: 28px;
+  height: 28px;
+}
+
+.settings-section__actions .btn--xs.btn--icon svg {
+  width: 16px;
+  height: 16px;
+}
+
+/* A section with only actions keeps them on the trailing edge. */
+.settings-section__actions:only-child {
+  margin-inline-start: auto;
+}
+
+/* One segmented control. Its height is the surrounding control height, so it
+   always matches the inputs and buttons beside it; --compact is the only other
+   size, for dense menu rows. The surface keeps its 2px inset. Many-option enums
+   move whole segments to a new row, and labels only break between words. Segments
+   share any spare width, so a stretched or wrapped track never shows an empty run. */
 .settings-segmented {
   min-height: var(--settings-control-height);
-  box-sizing: border-box;
   align-items: stretch;
   display: inline-flex;
   flex-wrap: wrap;
   gap: 2px;
   max-width: 100%;
-  background: color-mix(in srgb, var(--bg) 80%, var(--bg-elevated) 20%);
-  border: 1px solid color-mix(in srgb, var(--border) 50%, transparent);
+  background: var(--segmented-surface);
+  border: 1px solid var(--segmented-border);
   border-radius: var(--radius-md);
   padding: 2px;
 }
 
+.settings-segmented--compact {
+  --settings-control-height: 24px;
+
+  flex-wrap: nowrap;
+}
+
+/* The parent selector also wins over the shared .btn hover/active chrome. */
 .settings-segmented > .settings-segmented__btn {
   display: inline-flex;
+  flex: 1 1 auto;
   align-items: center;
-  padding-block: 0;
-}
-
-.settings-control__sr-label {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  padding: 0;
-  margin: -1px;
-  overflow: hidden;
-  clip: rect(0, 0, 0, 0);
-  white-space: nowrap;
-  border: 0;
-}
-
-wa-radio-group.settings-segmented::part(form-control-label) {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  overflow: hidden;
-  clip: rect(0, 0, 0, 0);
-}
-
-.settings-segmented__btn {
+  justify-content: center;
+  min-height: calc(var(--settings-control-height) - 6px);
   font-size: var(--control-ui-text-sm);
   font-weight: 550;
-  padding: 4px 12px;
+  padding: 0 12px;
   border: none;
-  border-radius: calc(var(--radius-md) - 3px);
+  border-radius: var(--segmented-item-radius);
   background: transparent;
   color: var(--muted);
+  text-align: center;
   white-space: nowrap;
   cursor: var(--cursor-action);
   transition:
@@ -63,44 +92,96 @@ wa-radio-group.settings-segmented::part(form-control-label) {
     box-shadow var(--duration-normal) var(--ease-out);
 }
 
-.settings-segmented__btn:hover {
+.settings-segmented--compact > .settings-segmented__btn {
+  padding: 0 6px;
+  font-size: 10px;
+}
+
+.settings-segmented > .settings-segmented__btn--active,
+.settings-segmented > .settings-segmented__btn:has(> input:checked) {
+  background: var(--segmented-selected);
+  color: var(--text-strong);
+  box-shadow: var(--shadow-sm);
+}
+
+:where(.settings-segmented) > .settings-segmented__btn:hover {
   color: var(--text);
 }
 
-.settings-segmented__btn:focus-visible {
+:where(.settings-segmented) > .settings-segmented__btn:focus-visible,
+.settings-segmented > .settings-segmented__btn:has(> input:focus-visible) {
   outline: none;
   color: var(--text);
   box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 22%, transparent);
 }
 
-.settings-segmented__btn--active {
-  background: var(--bg-elevated);
-  color: var(--text-strong);
-  box-shadow: var(--shadow-sm);
-}
-
-.settings-segmented__btn:disabled {
+:where(.settings-segmented) > .settings-segmented__btn:is(:disabled, [aria-disabled="true"]),
+.settings-toggle:has(input:is(:disabled, [aria-disabled="true"])),
+.settings-segmented > .settings-segmented__btn:has(> input:is(:disabled, [aria-disabled="true"])) {
   opacity: 0.5;
   cursor: not-allowed;
 }
 
+/* Tab semantics, same control: the plugin settings tabs wear the segmented surface. */
+.hub-tabs.oc-segmented {
+  min-height: var(--settings-control-height);
+  align-items: stretch;
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid var(--segmented-border);
+  border-radius: var(--radius-md);
+  background: var(--segmented-surface);
+  box-shadow: none;
+}
+
+.hub-tabs.oc-segmented > .hub-tab.oc-segmented-item {
+  min-height: calc(var(--settings-control-height) - 6px);
+  padding: 0 12px;
+  border-radius: var(--segmented-item-radius);
+  color: var(--muted);
+  font-size: var(--control-ui-text-sm);
+  font-weight: 550;
+  box-shadow: none;
+}
+
+.hub-tabs.oc-segmented > .hub-tab.oc-segmented-item:hover {
+  color: var(--text);
+}
+
+.hub-tabs.oc-segmented > .hub-tab.oc-segmented-item[active] {
+  background: var(--segmented-selected);
+  color: var(--text-strong);
+  box-shadow: var(--shadow-sm);
+}
+
+.hub-tabs.oc-segmented > .hub-tab.oc-segmented-item:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 22%, transparent);
+}
+
 @media (forced-colors: active) {
-  .settings-segmented__btn--active {
+  :where(.settings-segmented) > .settings-segmented__btn--active,
+  .settings-segmented > .settings-segmented__btn:has(> input:checked) {
     text-decoration: underline 2px;
     text-underline-offset: 3px;
   }
 
-  .settings-segmented__btn:focus-visible {
+  :where(.settings-segmented) > .settings-segmented__btn:focus-visible,
+  .settings-segmented > .settings-segmented__btn:has(> input:focus-visible) {
     outline: 2px solid Highlight;
     outline-offset: 2px;
   }
 }
 
-input.settings-input,
-select.settings-select:not([multiple]) {
-  height: var(--settings-control-height);
-  padding-block: 0;
-  box-sizing: border-box;
+@media (max-width: 640px) {
+  .settings-segmented__btn[data-compact-label] {
+    font-size: 0;
+  }
+
+  .settings-segmented__btn[data-compact-label]::after {
+    content: attr(data-compact-label);
+    font-size: var(--control-ui-text-sm);
+  }
 }
 
 .settings-input,
@@ -113,51 +194,23 @@ select.settings-select:not([multiple]) {
 .settings-input {
   --control-ui-touch-input-size: var(--control-ui-input-text-size);
 
-  font-size: var(--control-ui-input-text-size);
+  font-size: var(--field-font-size);
 }
 
 .settings-select {
   --control-ui-touch-input-size: var(--control-ui-text-sm);
 
-  font-size: var(--control-ui-text-sm);
+  font-size: var(--field-font-size);
 }
 
-@media (pointer: coarse) {
-  wa-select.settings-select {
-    font-size: max(16px, var(--control-ui-touch-input-size));
-  }
-}
-
-/* Native controls own their box. Web Awesome selects are styled by their
-   component-owned stylesheet. */
+/* Native controls own their box. */
 .settings-input,
 select.settings-select {
-  border: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
-  border-radius: var(--radius-md);
-  background-color: color-mix(in srgb, var(--bg) 80%, var(--bg-elevated) 20%);
+  border: 1px solid var(--field-border);
+  border-radius: var(--field-radius);
+  background-color: var(--field-bg);
   color: var(--text);
-  padding: 7px 10px;
-  transition: border-color var(--duration-fast) var(--ease-out);
-}
-
-select.settings-select:not([multiple]) {
-  appearance: none;
-  -webkit-appearance: none;
-  padding-right: 36px;
-  background-image: var(--select-chevron);
-  background-repeat: no-repeat;
-  background-position: right 10px center;
-}
-
-.settings-input::placeholder {
-  color: var(--muted);
-}
-
-.settings-input:focus-visible,
-select.settings-select:focus-visible {
-  outline: none;
-  border-color: color-mix(in srgb, var(--accent) 55%, var(--border) 45%);
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 18%, transparent);
+  padding: 7px var(--field-padding-inline);
 }
 
 /* Secret inputs also appear in the startup login gate. Keep these selectors
@@ -179,16 +232,7 @@ select.settings-select:focus-visible {
 .settings-secret__toggle {
   position: absolute;
   right: 5px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 24px;
-  height: 24px;
-  padding: 0;
-  border: none;
-  border-radius: var(--radius-sm);
   background: transparent;
-  color: var(--muted);
   cursor: var(--cursor-action);
   transition: color var(--duration-fast) var(--ease-out);
 }
@@ -207,14 +251,18 @@ select.settings-select:focus-visible {
   box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 22%, transparent);
 }
 
+@media (forced-colors: active) {
+  /* Forced colors suppress the shadow that marks keyboard focus above. */
+  .settings-secret__toggle:focus-visible {
+    outline: 2px solid Highlight;
+    outline-offset: 2px;
+  }
+}
+
 .settings-secret__toggle svg {
-  width: 16px;
-  height: 16px;
-  fill: none;
-  stroke: currentColor;
-  stroke-width: 2px;
-  stroke-linecap: round;
-  stroke-linejoin: round;
+  width: var(--chrome-icon-size);
+  height: var(--chrome-icon-size);
+  stroke-width: var(--chrome-icon-stroke);
 }
 
 /* Quiet count badge used by settings pages and the Skill Workshop. */
@@ -228,4 +276,87 @@ select.settings-select:focus-visible {
   font-size: var(--control-ui-text-xs);
   font-weight: 600;
   font-variant-numeric: tabular-nums;
+}
+
+@media (pointer: coarse), (max-width: 640px) {
+  :root {
+    --settings-control-height: 38px;
+    --settings-touch-control-height: 38px;
+  }
+}
+
+/* One height per control at phone width. Search, filter, segmented, refresh, select and page
+   actions share the field height; a row's action is one step down, on the composer's 32px. */
+@media (max-width: 640px) {
+  :root {
+    --row-action-size: 32px;
+  }
+
+  :root .transcripts-filters__search,
+  :root .transcripts-filters__trigger,
+  :root .transcripts-page-menu__trigger {
+    --settings-control-height: var(--settings-touch-control-height);
+  }
+
+  :root select.data-table-pagination__size {
+    --settings-control-height: var(--settings-touch-control-height);
+
+    height: var(--settings-control-height);
+  }
+
+  .data-table-pagination__controls button {
+    min-height: var(--settings-control-height);
+  }
+
+  :root .settings-segmented > .settings-segmented__btn {
+    min-height: calc(var(--settings-control-height) - 6px);
+  }
+
+  :root .btn.agents-page-menu__trigger {
+    width: var(--settings-control-height);
+    height: var(--settings-control-height);
+  }
+
+  :root .plugin-catalog-search input {
+    height: var(--settings-control-height);
+    min-height: var(--settings-control-height);
+  }
+
+  :root .usage-creator-select,
+  :root .settings-table--stacked .btn {
+    min-height: var(--settings-control-height);
+  }
+
+  :root .agent-scope-control .agent-select__trigger {
+    min-height: var(--settings-control-height);
+  }
+
+  /* Holds the chooser's height before it arrives, so the page doesn't shift. */
+  :root openclaw-sessions-page .hub-page-header__actions {
+    min-block-size: var(--settings-control-height);
+  }
+
+  :root .oc-icon-button.refresh-button,
+  :root .settings-section__actions .sessions-toolbar__icon.oc-icon-button {
+    --oc-icon-button-size: var(--settings-control-height);
+  }
+
+  :root .settings-section .settings-section__actions .btn.btn--xs.btn--icon.channels-refresh,
+  :root .settings-section__actions .sessions-toolbar__new-session.btn--icon.btn--xs {
+    width: var(--settings-control-height);
+    min-width: var(--settings-control-height);
+    height: var(--settings-control-height);
+    min-height: var(--settings-control-height);
+  }
+
+  :root .cron-job-menu__trigger,
+  :root .btn.secrets-store__menu-trigger,
+  :root .plugin-editor__menu .oc-icon-button,
+  :root openclaw-sessions-page td .session-row-menu-trigger {
+    width: var(--row-action-size);
+    min-width: var(--row-action-size);
+    height: var(--row-action-size);
+    min-height: var(--row-action-size);
+    padding: 0;
+  }
 }

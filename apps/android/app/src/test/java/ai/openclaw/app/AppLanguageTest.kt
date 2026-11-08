@@ -11,7 +11,7 @@ import ai.openclaw.app.ui.chat.chatThinkingOptionLabel
 import ai.openclaw.app.ui.formatApprovalDuration
 import ai.openclaw.app.ui.formatCronWake
 import ai.openclaw.app.ui.formatUsageUpdated
-import ai.openclaw.app.ui.skillWorkshopStatusLabel
+import android.content.res.Configuration
 import android.os.Build
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.os.LocaleListCompat
@@ -26,41 +26,11 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
 import org.robolectric.annotation.Config
 import org.xmlpull.v1.XmlPullParser
+import java.util.Locale
 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
 class AppLanguageTest {
-  @Test
-  fun supportedLanguagesMatchPackagedTranslations() {
-    assertEquals(
-      setOf(
-        "ar",
-        "de",
-        "en",
-        "es",
-        "fa",
-        "fr",
-        "hi",
-        "id",
-        "it",
-        "ja",
-        "ko",
-        "nl",
-        "pl",
-        "pt-BR",
-        "ru",
-        "sv",
-        "th",
-        "tr",
-        "uk",
-        "vi",
-        "zh-CN",
-        "zh-TW",
-      ),
-      AppLanguage.entries.mapNotNull(AppLanguage::languageTag).toSet(),
-    )
-  }
-
   @Test
   fun everyLanguageRoundTripsThroughAndroidLocales() {
     AppLanguage.entries.forEach { language ->
@@ -141,18 +111,10 @@ class AppLanguageTest {
       setAppLanguage(AppLanguage.English)
       assertEquals("Mic off", retained.value)
       assertEquals("Mic off · raw", retainedComposite.value)
-      assertEquals("Pending", skillWorkshopStatusLabel("pending"))
 
       setAppLanguage(AppLanguage.French)
       assertEquals("Micro désactivé", retained.value)
       assertEquals("Micro désactivé · raw", retainedComposite.value)
-      assertEquals("En attente", skillWorkshopStatusLabel("pending"))
-      assertEquals("Retenu", skillWorkshopStatusLabel("quarantined"))
-      assertEquals("Retenu", skillWorkshopStatusLabel("stale"))
-      assertEquals("Appliqué", skillWorkshopStatusLabel("applied"))
-      assertEquals("Rejeté", skillWorkshopStatusLabel("rejected"))
-      assertEquals("Chargement", skillWorkshopStatusLabel("loading"))
-      assertEquals("future_status", skillWorkshopStatusLabel("future_status"))
       assertEquals("Élevé", chatThinkingOptionLabel(ChatThinkingLevelOption("high", "high")))
       assertEquals("Adaptatif", chatThinkingOptionLabel(ChatThinkingLevelOption("adaptive", "adaptive")))
       val androidRelease =
@@ -164,7 +126,14 @@ class AppLanguageTest {
         "Android $androidRelease (SDK ${Build.VERSION.SDK_INT})",
         NodePresenceAliveBeacon.androidPlatformMetadata(),
       )
-      assertEquals("Connexion…", gatewayConnectionStatusForDisplay("Connecting…"))
+      val frenchContext =
+        activity.get().createConfigurationContext(
+          Configuration(activity.get().resources.configuration).apply { setLocale(Locale.FRENCH) },
+        )
+      assertEquals(
+        frenchContext.getString(R.string.native_72021eb70e91b4d5),
+        gatewayConnectionStatusForDisplay("Connecting…"),
+      )
       assertEquals(
         "Impossible de charger les approbations.",
         gatewayExecApprovalTextForDisplay("Could not load approvals."),

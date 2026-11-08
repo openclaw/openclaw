@@ -11,10 +11,7 @@ export function normalizeFeishuChatType(value: unknown): ResolvedFeishuChatType 
 }
 
 function normalizeFeishuChatMode(value: unknown): ResolvedFeishuChatType | undefined {
-  if (value === "group" || value === "topic" || value === "topic_group") {
-    return "group";
-  }
-  return value === "p2p" ? "p2p" : undefined;
+  return value === "topic" ? "group" : normalizeFeishuChatType(value);
 }
 
 export function resolveFeishuChatType(chat: {

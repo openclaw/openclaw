@@ -1,11 +1,9 @@
-// Shared entrypoint for Codex runtime configuration.
 export { resolveCodexAppServerUserHomeDir } from "./auth-start-options.js";
 export {
   CODEX_PLUGINS_MARKETPLACE_NAME,
   CODEX_PLUGINS_WORKSPACE_MARKETPLACE_NAME,
 } from "./config-contracts.js";
 export type {
-  CodexAppServerHomeScope,
   CodexAppServerRuntimeOptions,
   CodexAppServerStartOptions,
   CodexComputerUseConfig,
@@ -14,12 +12,11 @@ export type {
   CodexPluginConfig,
   CodexPluginDestructiveApprovalMode,
   CodexPluginMarketplaceName,
-  CodexSupervisionEndpoint,
   ResolvedCodexComputerUseConfig,
   ResolvedCodexPluginPolicy,
   ResolvedCodexPluginsPolicy,
 } from "./config-contracts.js";
-export { resolveOpenClawExecPolicyForCodexAppServer } from "./config-exec-policy.js";
+export { resolveOpenClawExecPolicyForCodexAppServer } from "./config-exec-approvals.js";
 export {
   isCodexPairedNodeRemoteExecPlacementSandbox,
   isCodexRemoteExecPlacementSandbox,
@@ -33,7 +30,6 @@ export {
 } from "./config-reviewer.js";
 export { readCodexRequirementsToml } from "./config-requirements.js";
 export {
-  codexAppServerStartOptionsKey,
   codexSandboxPolicyForTurn,
   resolveCodexAppServerHomeScope,
   resolveCodexAppServerRuntimeOptions,
@@ -42,7 +38,6 @@ export {
   resolveCodexSupervisionAppServerRuntimeOptions,
 } from "./config-runtime.js";
 export {
-  assertCodexAppServerConnectionSecurity,
   hasCodexMcpToolApprovalOverrides,
   shouldAutoApproveCodexAppServerApprovals,
   withMcpElicitationsApprovalPolicy,

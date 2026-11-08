@@ -1,28 +1,21 @@
-// Imessage plugin module implements reaction system event behavior.
-import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
-import { enqueueSystemEvent } from "openclaw/plugin-sdk/system-event-runtime";
-
-type IMessageReactionSystemEventDecision = {
-  text: string;
-  contextKey: string;
-  route: {
-    sessionKey: string;
-  };
-  reaction: {
-    targetGuid?: string;
-    action: "added" | "removed";
-    emoji: string;
-  };
-};
+import { logVerbose, type RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
+import { enqueueRoutedSystemEvent } from "openclaw/plugin-sdk/system-event-runtime";
 
 export function enqueueIMessageReactionSystemEvent(params: {
-  decision: IMessageReactionSystemEventDecision;
+  decision: {
+    text: string;
+    contextKey: string;
+    route: Parameters<typeof enqueueRoutedSystemEvent>[1];
+    reaction: {
+      targetGuid?: string;
+      action: "added" | "removed";
+      emoji: string;
+    };
+  };
   runtime: RuntimeEnv;
-  logVerbose?: (message: string) => void;
 }): boolean {
   const { decision, runtime } = params;
-  const queued = enqueueSystemEvent(decision.text, {
-    sessionKey: decision.route.sessionKey,
+  const queued = enqueueRoutedSystemEvent(decision.text, decision.route, {
     contextKey: decision.contextKey,
   });
   runtime.log?.(
@@ -32,6 +25,6 @@ export function enqueueIMessageReactionSystemEvent(params: {
       decision.reaction.emoji
     }`,
   );
-  params.logVerbose?.(`imessage: reaction event enqueued: ${decision.text}`);
+  logVerbose("imessage: reaction event enqueued");
   return queued;
 }

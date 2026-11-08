@@ -3,6 +3,7 @@ import { clearCurrentPluginMetadataSnapshot } from "./current-plugin-metadata-st
 import type { InstalledPluginIndex } from "./installed-plugin-index.js";
 import type { PluginManifestRecord, PluginManifestRegistry } from "./manifest-registry.js";
 import type { PluginMetadataSnapshot } from "./plugin-metadata-snapshot.types.js";
+import { createIndexFixture } from "./test-helpers/installed-plugin-index-fixture.js";
 
 /** Replaces a test fixture through the operation lifecycle's clear and adopt boundaries. */
 export function setCurrentPluginMetadataSnapshot(
@@ -17,15 +18,7 @@ export function setCurrentPluginMetadataSnapshot(
 
 export function makePluginMetadataIndex(pluginId = "demo"): InstalledPluginIndex {
   const rootDir = `/plugins/${pluginId}`;
-  return {
-    version: 1,
-    hostContractVersion: "test",
-    compatRegistryVersion: "test",
-    migrationVersion: 1,
-    policyHash: "test",
-    generatedAtMs: 1,
-    installRecords: {},
-    diagnostics: [],
+  return createIndexFixture({
     plugins: [
       {
         pluginId,
@@ -42,7 +35,7 @@ export function makePluginMetadataIndex(pluginId = "demo"): InstalledPluginIndex
         compat: [],
       },
     ],
-  };
+  });
 }
 
 export function makePluginMetadataManifestRegistry(pluginId = "demo"): PluginManifestRegistry {

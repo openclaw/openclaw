@@ -6,3 +6,6 @@ export { convertMarkdownTables } from "../../packages/markdown-core/src/tables.j
 
 /** Public markdown table conversion mode accepted by config and channel helpers. */
 export type { MarkdownTableMode } from "../config/types.base.js";
+
+/** Source ranges retained by the canonical table parser for bundled renderers. */
+export { getMarkdownTableSource } from "../../packages/markdown-core/src/ir.js";

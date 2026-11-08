@@ -1,48 +1,37 @@
-// Format Generated Module tests cover format generated module script behavior.
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import os from "node:os";
+import { writeFileSync } from "node:fs";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import {
   formatGeneratedModule,
   GENERATED_MODULE_FORMAT_MAX_BUFFER_BYTES,
   GENERATED_MODULE_FORMAT_TIMEOUT_MS,
 } from "../../scripts/lib/format-generated-module.mts";
 
-const tempDirs: string[] = [];
-
-function makeRepoRoot() {
-  const repoRoot = mkdtempSync(path.join(os.tmpdir(), "openclaw-format-generated-module-"));
-  tempDirs.push(repoRoot);
-  return repoRoot;
-}
-
-afterEach(() => {
-  for (const dir of tempDirs.splice(0)) {
-    rmSync(dir, { force: true, recursive: true });
+const repoRoot = path.resolve("formatter-fixture");
+const format = (spawnSync: NonNullable<Parameters<typeof formatGeneratedModule>[2]>["spawnSync"]) =>
+  formatGeneratedModule(
+    "export const value=1;",
+    { errorLabel: "test module", outputPath: "generated.ts", repoRoot },
+    { spawnSync },
+  );
+function failureMessage(spawnSync: Parameters<typeof format>[0]) {
+  try {
+    format(spawnSync);
+  } catch (error) {
+    return error instanceof Error ? error.message : String(error);
   }
-});
+  throw new Error("Expected formatter failure");
+}
 
 describe("formatGeneratedModule", () => {
   it("runs generated module formatting with bounded child execution", () => {
-    const repoRoot = makeRepoRoot();
     const calls: unknown[] = [];
 
-    const formatted = formatGeneratedModule(
-      "export const value=1;",
-      {
-        errorLabel: "test module",
-        outputPath: "generated.ts",
-        repoRoot,
-      },
-      {
-        spawnSync: (command: string, args: string[], options: unknown) => {
-          calls.push({ args, command, options });
-          writeFileSync(args[2] ?? "", "export const value = 1;\n", "utf8");
-          return { status: 0, stderr: "", stdout: "" };
-        },
-      },
-    );
+    const formatted = format((command, args, options) => {
+      calls.push({ args, command, options });
+      writeFileSync(args[2] ?? "", "export const value = 1;\n", "utf8");
+      return { status: 0, stderr: "", stdout: "" };
+    });
 
     expect(formatted).toBe("export const value = 1;\n");
     expect(calls).toHaveLength(1);
@@ -64,33 +53,17 @@ describe("formatGeneratedModule", () => {
   });
 
   it("reports formatter timeouts with bounded output tails", () => {
-    const repoRoot = makeRepoRoot();
     const timeoutError = Object.assign(new Error("spawnSync oxfmt ETIMEDOUT"), {
       code: "ETIMEDOUT",
     });
 
-    let message = "";
-    try {
-      formatGeneratedModule(
-        "export const value=1;",
-        {
-          errorLabel: "test module",
-          outputPath: "generated.ts",
-          repoRoot,
-        },
-        {
-          spawnSync: () => ({
-            error: timeoutError,
-            signal: "SIGTERM",
-            status: null,
-            stderr: `DO_NOT_DUMP_OLD_STDERR${"x".repeat(20 * 1024)}\nrecent stderr tail`,
-            stdout: `DO_NOT_DUMP_OLD_STDOUT${"x".repeat(20 * 1024)}\nrecent stdout tail`,
-          }),
-        },
-      );
-    } catch (error) {
-      message = error instanceof Error ? error.message : String(error);
-    }
+    const message = failureMessage(() => ({
+      error: timeoutError,
+      signal: "SIGTERM",
+      status: null,
+      stderr: `DO_NOT_DUMP_OLD_STDERR${"x".repeat(20 * 1024)}\nrecent stderr tail`,
+      stdout: `DO_NOT_DUMP_OLD_STDOUT${"x".repeat(20 * 1024)}\nrecent stdout tail`,
+    }));
     expect(message).toMatch(
       /formatter timed out after 30000ms[\s\S]*recent stderr tail[\s\S]*recent stdout tail/u,
     );
@@ -99,29 +72,11 @@ describe("formatGeneratedModule", () => {
   });
 
   it("keeps truncated formatter diagnostics UTF-8 safe", () => {
-    const repoRoot = makeRepoRoot();
-    const splitBoundaryOutput = `你好${"x".repeat(16_380)}`;
-    let message = "";
-
-    try {
-      formatGeneratedModule(
-        "export const value=1;",
-        {
-          errorLabel: "test module",
-          outputPath: "generated.ts",
-          repoRoot,
-        },
-        {
-          spawnSync: () => ({
-            status: 1,
-            stderr: splitBoundaryOutput,
-            stdout: "",
-          }),
-        },
-      );
-    } catch (error) {
-      message = error instanceof Error ? error.message : String(error);
-    }
+    const message = failureMessage(() => ({
+      status: 1,
+      stderr: `你好${"x".repeat(16_380)}`,
+      stdout: "",
+    }));
     expect(message).toMatch(/stderr tail:\n好x/u);
     expect(message).not.toContain("�");
   });

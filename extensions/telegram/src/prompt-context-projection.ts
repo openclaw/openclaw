@@ -1,5 +1,6 @@
 import type { Message } from "grammy/types";
 import {
+  copyReplyPayloadMetadata,
   resolveSendableOutboundReplyParts,
   type ReplyPayload,
 } from "openclaw/plugin-sdk/reply-payload";
@@ -18,6 +19,25 @@ type TelegramPromptContextRecord = { messageId: number; message?: Message; text?
 function parseTranscriptMessageId(value: unknown): string | undefined {
   const id = isRecord(value) ? value.transcriptMessageId : undefined;
   return typeof id === "string" && id.trim() ? id : undefined;
+}
+
+export function isTelegramTextOnlyChannelData(
+  channelData: NonNullable<ReplyPayload["channelData"]>,
+): boolean {
+  if (Object.keys(channelData).length !== 1 || !isRecord(channelData.telegram)) {
+    return false;
+  }
+  const telegram = channelData.telegram;
+  if (Object.keys(telegram).length !== 1 || !isRecord(telegram.promptContextSource)) {
+    return false;
+  }
+  const source = telegram.promptContextSource;
+  // Preparation may stale the correlation signature; it still has no transport effects.
+  return (
+    Object.keys(source).length === 2 &&
+    typeof source.transcriptMessageId === "string" &&
+    typeof source.deliverySignature === "string"
+  );
 }
 
 export function resolveTelegramPromptContextDeliverySignature(payload: ReplyPayload): string {
@@ -63,7 +83,7 @@ export function withTelegramPromptContextSource(
     return payload;
   }
   const telegram = payload.channelData?.telegram;
-  return {
+  return copyReplyPayloadMetadata(payload, {
     ...payload,
     channelData: {
       ...payload.channelData,
@@ -75,7 +95,7 @@ export function withTelegramPromptContextSource(
         },
       },
     },
-  };
+  });
 }
 
 export function createTelegramPromptContextProjectionCursor(source: TelegramPromptContextSource) {
@@ -117,9 +137,7 @@ export function createTelegramPromptContextProjectionSequence(params: {
     const record = pending;
     pending = undefined;
     const projection = cursor?.take(finalPart);
-    const recorded = await params
-      .record({ ...record, ...(projection ? { projection } : {}) })
-      .catch(() => false);
+    const recorded = await params.record({ ...record, ...(projection ? { projection } : {}) });
     if (!recorded) {
       invalidate();
     }

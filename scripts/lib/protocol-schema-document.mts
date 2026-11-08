@@ -9,19 +9,7 @@ export type ProtocolMethodMetadata = {
   since?: string;
 };
 
-export type ProtocolSchemaDocument = {
-  $id: string;
-  $schema: string;
-  definitions: Record<string, unknown>;
-  description: string;
-  discriminator: {
-    mapping: Record<string, string>;
-    propertyName: string;
-  };
-  methods: Record<string, { scope: string; since?: string }>;
-  oneOf: { $ref: string }[];
-  title: string;
-};
+export type ProtocolSchemaDocument = ReturnType<typeof buildProtocolSchemaDocument>;
 
 /** Frame definitions every consumer of the published schema resolves by name. */
 export const REQUIRED_PROTOCOL_DEFINITIONS = [
@@ -53,7 +41,7 @@ const FRAME_DISCRIMINATOR_MAPPING = Object.fromEntries(
 export function buildProtocolSchemaDocument(params: {
   methods: readonly ProtocolMethodMetadata[];
   schemas: Record<string, unknown>;
-}): ProtocolSchemaDocument {
+}) {
   const document = {
     $schema: "http://json-schema.org/draft-07/schema#",
     $id: "https://openclaw.ai/protocol.schema.json",
@@ -64,7 +52,7 @@ export function buildProtocolSchemaDocument(params: {
       propertyName: "type",
       mapping: FRAME_DISCRIMINATOR_MAPPING,
     },
-    methods: Object.fromEntries(
+    methods: Object.fromEntries<Omit<ProtocolMethodMetadata, "name">>(
       // Omit an absent `since` instead of carrying undefined so the document
       // equals the JSON the artifact ships.
       params.methods.map(({ name, scope, since }) => [
@@ -76,7 +64,7 @@ export function buildProtocolSchemaDocument(params: {
   };
   // TypeBox schemas carry symbol keys that never reach JSON; cloning them away
   // lets the producer and the published-artifact verifier compare one document.
-  return structuredClone(document) as ProtocolSchemaDocument;
+  return structuredClone(document);
 }
 
 /** Rejects a published document that lost the frame contract clients decode by. */

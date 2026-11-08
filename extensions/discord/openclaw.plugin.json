@@ -1,8 +1,18 @@
 {
   "id": "discord",
+  "categories": [
+    "channels"
+  ],
   "doctorContract": {
     "configRepair": true,
-    "stateMigrations": true
+    "stateMigrations": [
+      {
+        "id": "discord-retired-state"
+      },
+      {
+        "id": "discord-legacy-state"
+      }
+    ]
   },
   "name": "Discord",
   "description": "OpenClaw Discord channel plugin for channels, DMs, commands, and app events.",
@@ -20,9 +30,24 @@
       "discord-voice"
     ]
   },
+  "transcriptSources": {
+    "discord-voice": {
+      "name": "Discord Voice",
+      "autoStart": {
+        "accountId": "optional",
+        "guildId": "required",
+        "channelId": "required"
+      }
+    }
+  },
   "configSchema": {
     "type": "object",
     "additionalProperties": false,
     "properties": {}
-  }
+  },
+  "recommendedPrompts": [
+    "Help me plan a Discord bot setup with access to only the channels I choose.",
+    "Summarize decisions and action items in a Discord thread without replying.",
+    "Help me plan a Discord voice transcript workflow with participant consent."
+  ]
 }

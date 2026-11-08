@@ -26,8 +26,10 @@ OpenAI-compatible API. OpenClaw supports both browser OAuth and API-key auth.
 
 ```bash
 openclaw plugins install @openclaw/chutes-provider
-openclaw gateway restart
 ```
+
+Installation applies to a running Gateway automatically; otherwise it takes effect
+on the next startup. See [Apply changes and inspect](/plugins/manage-plugins#apply-changes-and-inspect).
 
 ## Getting started
 
@@ -66,11 +68,10 @@ the Chutes catalog.
 
 When Chutes auth is available, OpenClaw queries `GET /v1/models` with that
 credential and uses the discovered models, cached for 5 minutes per
-credential. On an expired/unauthorized key (HTTP 401), OpenClaw retries once
-without credentials. If discovery still returns no rows, fails, or returns any
-other non-2xx status, it falls back to the bundled static catalog (both API-key
-and OAuth discovery use this same path). If discovery fails at startup, the
-static catalog is used automatically.
+credential. A rejected credential produces a catalog authentication failure;
+OpenClaw does not retry anonymously. Other request failures produce an
+unavailable catalog outcome, not a successful static list. A successful empty
+response stays empty. API-key and OAuth discovery use this same path.
 
 Token prices come from the native [Chutes model catalog](https://llm.chutes.ai/v1/models).
 Its numeric prompt, completion, and cached-input rates are already in USD per
@@ -95,8 +96,8 @@ OpenClaw registers two convenience aliases for the Chutes catalog:
 
 ## Built-in starter catalog
 
-The bundled fallback catalog contains these current starter models plus two
-compatible prior-generation refs that remain selectable but are hidden from
+The bundled fallback catalog contains these current starter models plus one
+compatible prior-generation ref that remains selectable but is hidden from
 pickers:
 
 | Model ref                              | Picker status |
@@ -104,9 +105,7 @@ pickers:
 | `chutes/zai-org/GLM-5.2-TEE`           | Visible       |
 | `chutes/deepseek-ai/DeepSeek-V3.2-TEE` | Visible       |
 | `chutes/moonshotai/Kimi-K2.6-TEE`      | Visible       |
-| `chutes/MiniMaxAI/MiniMax-M2.5-TEE`    | Visible       |
 | `chutes/Qwen/Qwen3.6-27B-TEE`          | Visible       |
-| `chutes/moonshotai/Kimi-K2.5-TEE`      | Hidden        |
 | `chutes/Qwen/Qwen3.5-397B-A17B-TEE`    | Hidden        |
 
 Run `openclaw models list --all --provider chutes` for the full list.

@@ -8,6 +8,10 @@ read_when:
 title: "OAuth"
 ---
 
+In **Settings → Models**, choose **Add account** to save a provider sign-in.
+**Accounts** are saved ways to use a provider; API keys supplied by config or the
+environment remain managed at their source. **Sign out** removes the saved sign-in.
+
 OpenClaw supports OAuth ("subscription auth") for providers that offer it,
 notably **OpenAI Codex (ChatGPT OAuth)** and **Anthropic Claude CLI reuse**.
 For Anthropic, the practical split is:
@@ -20,7 +24,7 @@ For Anthropic, the practical split is:
   the safer recommended path.
 
 OpenClaw stores both OpenAI API-key auth and ChatGPT/Codex OAuth under the
-canonical provider id `openai`. Older `openai-codex:*` profile ids and
+standard provider id `openai`. Older `openai-codex:*` profile ids and
 `auth.order.openai-codex` entries are legacy state repaired by
 `openclaw doctor --fix`; use `openai:*` profile ids and `auth.order.openai` for
 new config.
@@ -38,6 +42,14 @@ same entry point:
 openclaw models auth login --provider <id>
 ```
 
+In the Control UI, open **Settings → Models → Add account** to save a
+supported account without requesting a model reply. **Add account** in
+Model Setup opens the same picker and connection flow. Choose **Test & use** when
+you want to verify a model and select it. Plugins that only support full setup
+keep their separate setup action.
+
+OpenClaw's browser callback pages follow your system's light or dark appearance. If a page says **Authorization received**, return to the terminal while OpenClaw finishes the exchange and saves the account. The terminal or Control UI reports when sign-in is complete.
+
 ## The token sink (why it exists)
 
 OAuth providers commonly mint a new refresh token on every login/refresh.
@@ -48,16 +60,16 @@ via Claude Code / Codex CLI, and one of them randomly gets logged out later.
 To reduce that, OpenClaw treats the auth profile store as a **token sink**:
 
 - the runtime reads credentials from one place per agent
-- multiple profiles can coexist and route deterministically
+- multiple profiles can coexist and route by fixed rules
 - external CLI reuse is provider-specific: once OpenClaw owns a local OAuth
-  profile for a provider, the local refresh token is canonical. If that local
+  profile for a provider, the local refresh token is the source of truth. If that local
   refresh token is rejected, OpenClaw reports the profile for
   re-authentication instead of falling back to external CLI token material.
   Codex CLI bootstrap is narrower still: it can only seed an empty
   `openai:default`-style profile before OpenClaw owns OAuth for that
-  provider; after that, OpenClaw-owned refreshes stay canonical
+  provider; after that, OpenClaw-owned refreshes stay the source of truth
 - status/startup paths scope external CLI discovery to the provider set
-  already configured, so an unrelated CLI login store is not probed for a
+  already configured, so an unrelated CLI login store is not checked for a
   single-provider setup
 
 ## Storage (where tokens live)
@@ -81,25 +93,34 @@ writes back to that person's account record rather than a shared or agent-local
 credential.
 
 Older installations may still contain `auth-profiles.json`, `auth-state.json`,
-per-agent `auth.json`, or shared `credentials/oauth.json`. Run
+or per-agent `auth.json`. Run
 `openclaw doctor --fix` once after upgrading. Doctor imports verified values,
 records a migration receipt, and renames the original file to a timestamped
 archive.
 
-Runtime never reads these retired files. What happens when one is still present
-depends on whether the SQLite store can already serve credentials for that
-agent:
+The older shared `credentials/oauth.json` importer has retired. Doctor leaves
+that file untouched and reports the [upgrade through `2026.9.5`](/install/updating#upgrading-very-old-versions)
+needed to import it before installing the latest release.
+
+Runtime never uses credentials from these retired files. What happens when one
+of the supported import files is still present depends on whether SQLite can already serve credentials for
+that agent:
 
 - The store holds profiles: the retired file is leftover bytes. Runtime logs a
   one-time warning naming the file and keeps working; Doctor archives it on the
   next `--fix`. Doctor never overwrites a usable stored credential with imported
   values, so the file cannot resurrect a stale token.
-- The store is empty: the credentials still live only in that file, so runtime
-  fails closed for that agent with `AUTH_PROFILE_MIGRATION_REQUIRED` rather than
-  falling through to environment auth. Gateway startup degrades this owner to
-  configured-unavailable instead of refusing to start.
+- The store is empty: runtime reads only the provider metadata in
+  `auth-profiles.json` to scope `AUTH_PROFILE_MIGRATION_REQUIRED`. Providers named
+  there cannot fall through to environment or config auth; unrelated providers
+  keep resolving normally. The error and Doctor finding list affected providers
+  and the recovery command, `openclaw doctor --fix`.
+- If provider scope cannot be determined (including malformed JSON or other
+  retired credential formats), the refusal remains agent-wide. Gateway startup
+  degrades the credential owner instead of refusing to start. Credential writes
+  and snapshot publication remain fenced until the migration is cleared.
 
-The database and migration sources respect `$OPENCLAW_STATE_DIR`. Full reference: [/gateway/configuration-reference#auth-storage](/gateway/configuration-reference#auth-storage)
+The database and migration sources respect `$OPENCLAW_STATE_DIR`. Full reference: [/gateway/config-secrets-env#auth-storage](/gateway/config-secrets-env#auth-storage)
 
 For static secret refs and runtime snapshot activation behavior, see [Secrets Management](/gateway/secrets).
 
@@ -141,6 +162,19 @@ and [Z.AI / GLM Coding Plan](/providers/zai).
 
 OpenClaw's OAuth registry and adapters live in `src/llm/utils/oauth/`. Shared provider helpers live in `src/plugin-sdk/provider-oauth-runtime.ts` and `src/plugin-sdk/provider-auth-runtime.ts`. The auth commands in `src/commands/models/auth.ts` run the selected provider method and persist the returned profiles.
 
+<a id="restarting-sign-in-in-model-setup" />
+
+### Restarting sign-in in Models
+
+In **Models**, starting the same sign-in again replaces your unfinished
+attempt for the same agent and workspace. This includes **Sign in with ChatGPT**
+and other provider sign-in flows. Use the newest browser link; callbacks from
+the previous attempt are no longer accepted.
+
+Another user's sign-in, a different setup flow, or an attempt already saving
+credentials or configuration stays protected. Let that operation finish before
+retrying.
+
 ### Anthropic setup-token
 
 Flow shape:
@@ -154,7 +188,7 @@ Flow shape:
 
 OpenAI Codex OAuth is explicitly supported for use outside the Codex CLI, including OpenClaw workflows.
 
-The login command uses the canonical OpenAI provider id:
+The login command uses the standard OpenAI provider id:
 
 ```bash
 openclaw models auth login --provider openai
@@ -230,9 +264,8 @@ Example (session override):
 
 ### 3) Multi-user: personal accounts
 
-On a shared gateway, each verified person can save several accounts per provider
-in **Settings → Profile → Connected accounts** and choose one as their new-chat
-default. **Add account** and `openclaw models accounts login` use the same
+On a shared Gateway, each verified person can save several accounts per provider
+in **Settings → Profile → Saved accounts** and choose one as their **New session default**. **Add account** and `openclaw models accounts login` use the same
 Gateway-owned provider and sign-in method catalog. Anthropic personal setup
 accepts an API key, not a Claude subscription token; system/agent auth remains
 a separate flow.
@@ -241,8 +274,10 @@ scope before requesting provider credentials. Gateway identity and provider
 sign-in are separate; a shared Gateway token does not identify a person. See
 [personal-account CLI setup](/cli/models#personal-model-accounts).
 
-The model picker in New session or an existing chat can select an
-account for that chat without changing the default. Ordered shared accounts
+The model picker in **New session** or an existing session can select an
+account for that session without changing the default. **Use for new sessions**
+changes only the default for future sessions. **Use shared default** clears that
+personal default without removing saved accounts or changing existing sessions. Ordered shared accounts
 remain same-provider failover candidates; the selection is not a billing
 guarantee. Personal credentials stay outside the shared profile list. See
 [Per-person model accounts](/concepts/multi-user#per-person-model-accounts).
@@ -266,6 +301,8 @@ Related docs:
 
 ## Related
 
+- [OpenAI authentication](/providers/openai/authentication) - login methods, identity, and capabilities
 - [Authentication](/gateway/authentication) - model provider auth overview
 - [Secrets](/gateway/secrets) - credential storage and SecretRef
-- [Configuration Reference](/gateway/configuration-reference#auth-storage) - auth config keys
+- [Configuration Reference](/gateway/config-secrets-env#auth-storage) - auth config keys
+- [Auth credential semantics](/auth-credential-semantics) - the shared rules for auth profile ordering and runtime credential resolution

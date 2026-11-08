@@ -1,5 +1,8 @@
 import { randomUUID } from "node:crypto";
+import { mkdtempSync, rmSync } from "node:fs";
 import { createServer } from "node:http";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import {
   compareEvents,
   finalizeEvent,
@@ -10,7 +13,77 @@ import {
   type Event,
   type Filter,
 } from "nostr-tools";
-import { WebSocketServer, type WebSocket } from "ws";
+import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import { createTestPluginServiceScheduler } from "openclaw/plugin-sdk/plugin-test-api";
+import { rawDataToString } from "openclaw/plugin-sdk/webhook-ingress";
+import { afterEach, beforeEach, vi } from "vitest";
+import { WebSocketServer, WebSocket } from "ws";
+import { startBuzzBus, type BuzzBus } from "./buzz-bus.js";
+
+export function useBuzzRelayTestHarness(
+  setup: (
+    fixture: Awaited<ReturnType<typeof createBuzzRelayFixture>>,
+  ) => Partial<Parameters<typeof startBuzzBus>[0]>,
+  cleanup: { beforeClose?: () => Promise<void>; afterClose?: () => Promise<void> } = {},
+) {
+  let fixture: Awaited<ReturnType<typeof createBuzzRelayFixture>>;
+  let stateDir: string;
+  let bus: BuzzBus | undefined;
+  let defaults: ReturnType<typeof setup>;
+  const messages: string[] = [];
+  const fatal: Error[] = [];
+  beforeEach(async () => {
+    // openclaw-temp-dir: allow extension tests cannot import root test helpers.
+    stateDir = mkdtempSync(path.join(tmpdir(), "openclaw-buzz-socket-"));
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+    bus = undefined;
+    messages.length = fatal.length = 0;
+    fixture = await createBuzzRelayFixture();
+    defaults = setup(fixture);
+  });
+  afterEach(async () => {
+    try {
+      await cleanup.beforeClose?.();
+      await bus?.close();
+    } finally {
+      try {
+        await fixture.close();
+      } finally {
+        await cleanup.afterClose?.();
+        vi.useRealTimers();
+        resetPluginStateStoreForTests();
+        vi.restoreAllMocks();
+        vi.unstubAllEnvs();
+        rmSync(stateDir, { recursive: true, force: true });
+      }
+    }
+  });
+  return {
+    messages,
+    fatal,
+    closeBus: async () => {
+      await bus?.close();
+    },
+    startBus: async (options: Partial<Parameters<typeof startBuzzBus>[0]> = {}) => {
+      bus = await startBuzzBus({
+        scheduler: createTestPluginServiceScheduler(),
+        accountId: randomUUID(),
+        relayUrl: fixture.relayUrl,
+        privateKey: fixture.botPrivateKey,
+        channelIds: [fixture.roomId],
+        onMessage: async (message) => {
+          messages.push(message.text);
+        },
+        onFatalError: (error) => {
+          fatal.push(error);
+        },
+        ...defaults,
+        ...options,
+      });
+      return bus;
+    },
+  };
+}
 
 /** Signed protocol fixture, not an implementation of the upstream Buzz service. */
 export async function createBuzzRelayFixture() {
@@ -47,6 +120,7 @@ export async function createBuzzRelayFixture() {
     }),
   ];
   const received: Event[] = [];
+  const requests: Array<{ id: string; filters: Filter[] }> = [];
   const sessions = new Map<
     WebSocket,
     { challenge: string; publicKey?: string; subscriptions: Map<string, Filter[]> }
@@ -54,6 +128,9 @@ export async function createBuzzRelayFixture() {
   let presenceMode: "accept" | "reject" | "silent" = "accept";
   let authenticatedSessions = 0;
   let pauseMembershipQuery: ((respond: () => void) => void) | undefined;
+  let pauseRoomHistory:
+    | ((respond: () => void, close: (reason: string) => void) => void)
+    | undefined;
   const heldSnapshots = new Set<string>();
   const server = createServer((_request, response) => {
     response.setHeader("content-type", "application/nostr+json");
@@ -63,11 +140,18 @@ export async function createBuzzRelayFixture() {
   });
   const sockets = new WebSocketServer({ server });
   const send = (socket: WebSocket, frame: unknown[]) => socket.send(JSON.stringify(frame));
-  const storedRoom = (event: Event) =>
-    event.tags.find((tag) => tag[0] === "h")?.[1] ??
-    ([39000, 39002].includes(event.kind)
-      ? event.tags.find((tag) => tag[0] === "d")?.[1]
-      : undefined);
+  const storedRoom = (event: Event) => {
+    // Membership notifications carry a room tag but Buzz stores them globally.
+    if (event.kind === 44100 || event.kind === 44101) {
+      return undefined;
+    }
+    return (
+      event.tags.find((tag) => tag[0] === "h")?.[1] ??
+      ([39000, 39002].includes(event.kind)
+        ? event.tags.find((tag) => tag[0] === "d")?.[1]
+        : undefined)
+    );
+  };
   const matchesStored = (filter: Filter, event: Event) => {
     const { "#h": rooms, ...signedFilter } = filter;
     return rooms
@@ -104,11 +188,7 @@ export async function createBuzzRelayFixture() {
     send(socket, ["AUTH", session.challenge]);
     socket.on("close", () => sessions.delete(socket));
     socket.on("message", (data) => {
-      const text = Buffer.isBuffer(data)
-        ? data.toString("utf8")
-        : Array.isArray(data)
-          ? Buffer.concat(data).toString("utf8")
-          : Buffer.from(data).toString("utf8");
+      const text = rawDataToString(data, "utf8");
       const [type, value, ...filters] = JSON.parse(text) as [string, string | Event, ...Filter[]];
       if (type === "AUTH" && typeof value !== "string") {
         const valid =
@@ -128,8 +208,12 @@ export async function createBuzzRelayFixture() {
           return;
         }
         session.subscriptions.set(value, filters);
+        requests.push({ id: value, filters });
         const snapshot = [...events];
         const respond = () => {
+          if (socket.readyState !== WebSocket.OPEN) {
+            return;
+          }
           const sent = new Set<string>();
           for (const filter of filters) {
             const matching = snapshot
@@ -153,6 +237,25 @@ export async function createBuzzRelayFixture() {
             respond();
             heldSnapshots.delete(value);
           });
+        } else if (
+          pauseRoomHistory &&
+          filters.some((filter) => filter.kinds?.includes(39002)) &&
+          filters.some((filter) => filter.kinds?.includes(9))
+        ) {
+          const pause = pauseRoomHistory;
+          pauseRoomHistory = undefined;
+          heldSnapshots.add(value);
+          pause(
+            () => {
+              respond();
+              heldSnapshots.delete(value);
+            },
+            (reason) => {
+              send(socket, ["CLOSED", value, reason]);
+              session.subscriptions.delete(value);
+              heldSnapshots.delete(value);
+            },
+          );
         } else {
           respond();
         }
@@ -196,6 +299,7 @@ export async function createBuzzRelayFixture() {
     relayPublicKey,
     roomId,
     received,
+    requests,
     events,
     authenticatedSessions: () => authenticatedSessions,
     pauseNextMembershipQuery: () => {
@@ -214,6 +318,25 @@ export async function createBuzzRelayFixture() {
         },
       };
     },
+    pauseNextRoomHistory: () => {
+      let respond: (() => void) | undefined;
+      let close: ((reason: string) => void) | undefined;
+      const started = new Promise<void>((resolve) => {
+        pauseRoomHistory = (sendSnapshot, closeSubscription) => {
+          respond = sendSnapshot;
+          close = closeSubscription;
+          resolve();
+        };
+      });
+      return {
+        started,
+        release: () => {
+          respond?.();
+          respond = undefined;
+        },
+        close: (reason: string) => close?.(reason),
+      };
+    },
     setPresenceMode: (mode: typeof presenceMode) => {
       presenceMode = mode;
     },
@@ -228,9 +351,13 @@ export async function createBuzzRelayFixture() {
         }
       }
     },
-    sendMessage: (content: string, createdAt = Math.floor(Date.now() / 1000)) => {
+    sendMessage: (
+      content: string,
+      createdAt = Math.floor(Date.now() / 1000),
+      channelId = roomId,
+    ) => {
       const event = finalizeEvent(
-        { kind: 9, created_at: createdAt, content, tags: [["h", roomId]] },
+        { kind: 9, created_at: createdAt, content, tags: [["h", channelId]] },
         senderKey,
       );
       broadcast(event);
@@ -243,9 +370,7 @@ export async function createBuzzRelayFixture() {
       await new Promise<void>((resolve, reject) => {
         sockets.close((error) => (error ? reject(error) : resolve()));
       });
-      await new Promise<void>((resolve, reject) => {
-        server.close((error) => (error ? reject(error) : resolve()));
-      });
+      await server[Symbol.asyncDispose]();
     },
   };
 }

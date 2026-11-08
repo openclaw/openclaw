@@ -1,6 +1,8 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { statRegularFileSync } from "@openclaw/fs-safe/advanced";
+import { sha256FileSync } from "@openclaw/fs-safe/durability";
 import { createSqliteAuditRecordStore } from "./sqlite-audit-record-store.js";
 import type {
   LegacyAuditLogSource,
@@ -8,8 +10,9 @@ import type {
 } from "./state-migrations.audit-logs.types.js";
 
 export type LegacyAuditFileCheckpoint = {
-  dev: number;
-  ino: number;
+  // Numbers mark legacy, possibly rounded IDs; strings preserve every bit as decimal text.
+  dev: number | string;
+  ino: number | string;
   mtimeMs: number;
   size: number;
 };
@@ -26,10 +29,6 @@ export type LegacyAuditRawCheckpoint = LegacyAuditFileCheckpoint & {
 
 const LEGACY_AUDIT_RAW_CHECKPOINT_SCOPE = "migration.legacy-audit-raw";
 const LEGACY_AUDIT_RAW_CHECKPOINT_MAX_ENTRIES = 10_000;
-
-export function legacyAuditRawCheckpointKey(checkpoint: LegacyAuditRawCheckpoint): string {
-  return checkpoint.generationKey;
-}
 
 export function legacyAuditSourceGenerationKey(rawArchiveRelativePath: string): string {
   // The numbered raw archive path is the durable generation identity. Unlike
@@ -62,14 +61,47 @@ export function hasLegacyAuditRawCheckpointCapacity(
 
 function statLegacyAuditRawCheckpoint(sourcePath: string): LegacyAuditFileCheckpoint | undefined {
   try {
-    const stat = fs.lstatSync(sourcePath);
-    if (!stat.isFile() || stat.isSymbolicLink()) {
+    const observed = statRegularFileSync(sourcePath);
+    if (observed.missing) {
       return undefined;
     }
-    return { dev: stat.dev, ino: stat.ino, mtimeMs: stat.mtimeMs, size: stat.size };
+    return {
+      dev: String(observed.exactIdentity.dev),
+      ino: String(observed.exactIdentity.ino),
+      mtimeMs: observed.stat.mtimeMs,
+      size: observed.stat.size,
+    };
   } catch {
     return undefined;
   }
+}
+
+function auditIdentityMatches(left: number | string, right: number | string): boolean {
+  if (typeof left === "number" || typeof right === "number") {
+    // Released numeric receipts cannot distinguish IDs rounded to the same double.
+    // Their Stats IDs were unsigned; Node's BigInt Stats can expose signed int64 IDs.
+    const legacy = typeof left === "number" ? left : right;
+    const other = typeof left === "number" ? right : left;
+    if (!Number.isInteger(legacy)) {
+      return false;
+    }
+    if (typeof other === "number") {
+      return Number.isInteger(other) && legacy === other;
+    }
+    if (!/^(0|-?[1-9][0-9]*)$/u.test(other)) {
+      return false;
+    }
+    const observed = BigInt(other);
+    return legacy === Number(observed < 0n ? BigInt.asUintN(64, observed) : observed);
+  }
+  return /^(0|-?[1-9][0-9]*)$/u.test(left) && left === right;
+}
+
+export function legacyAuditFileIdentitiesMatch(
+  left: Pick<LegacyAuditFileCheckpoint, "dev" | "ino">,
+  right: Pick<LegacyAuditFileCheckpoint, "dev" | "ino">,
+): boolean {
+  return auditIdentityMatches(left.dev, right.dev) && auditIdentityMatches(left.ino, right.ino);
 }
 
 export function legacyAuditRawCheckpointsMatch(
@@ -79,8 +111,7 @@ export function legacyAuditRawCheckpointsMatch(
   return (
     left !== undefined &&
     right !== undefined &&
-    left.dev === right.dev &&
-    left.ino === right.ino &&
+    legacyAuditFileIdentitiesMatch(left, right) &&
     left.mtimeMs === right.mtimeMs &&
     left.size === right.size
   );
@@ -94,43 +125,29 @@ function legacyAuditRawCheckpointIsCurrent(
   try {
     fd = fs.openSync(sourcePath, "r");
     const beforeStat = fs.fstatSync(fd);
+    const beforeExact = fs.fstatSync(fd, { bigint: true });
     const before = {
-      dev: beforeStat.dev,
-      ino: beforeStat.ino,
+      dev: String(beforeExact.dev),
+      ino: String(beforeExact.ino),
       mtimeMs: beforeStat.mtimeMs,
       size: beforeStat.size,
     };
     if (!beforeStat.isFile() || !legacyAuditRawCheckpointsMatch(checkpoint, before)) {
       return false;
     }
-    const hash = createHash("sha256");
-    const chunk = Buffer.allocUnsafe(64 * 1024);
-    let offset = 0;
-    while (offset < checkpoint.size) {
-      const bytesRead = fs.readSync(
-        fd,
-        chunk,
-        0,
-        Math.min(chunk.byteLength, checkpoint.size - offset),
-        offset,
-      );
-      if (bytesRead === 0) {
-        return false;
-      }
-      hash.update(chunk.subarray(0, bytesRead));
-      offset += bytesRead;
-    }
+    const hash = sha256FileSync(fd, { maxBytes: checkpoint.size });
     const afterStat = fs.fstatSync(fd);
+    const afterExact = fs.fstatSync(fd, { bigint: true });
     const after = {
-      dev: afterStat.dev,
-      ino: afterStat.ino,
+      dev: String(afterExact.dev),
+      ino: String(afterExact.ino),
       mtimeMs: afterStat.mtimeMs,
       size: afterStat.size,
     };
     return (
       legacyAuditRawCheckpointsMatch(before, after) &&
-      offset === checkpoint.size &&
-      hash.digest("hex") === checkpoint.contentHash
+      hash.bytes === checkpoint.size &&
+      hash.digest === checkpoint.contentHash
     );
   } catch {
     return false;
@@ -198,17 +215,21 @@ export function detectLegacyAuditLogs(params: {
       `^\\.${baseName}\\.doctor-importing(?:\\.([2-9]|[1-9][0-9]+))?$`,
       "u",
     );
-    const rawArchives = directoryEntries
-      .flatMap((entry) => {
-        const match = rawArchivePattern.exec(entry);
-        return match ? [{ entry, generation: BigInt(match[1] ?? "1") }] : [];
-      })
-      .toSorted(
-        (left, right) =>
-          (left.generation < right.generation ? -1 : left.generation > right.generation ? 1 : 0) ||
-          left.entry.localeCompare(right.entry),
-      );
-    for (const { entry } of rawArchives) {
+    const generations = (pattern: RegExp) =>
+      directoryEntries
+        .flatMap((entry) => {
+          const match = pattern.exec(entry);
+          return match ? [{ entry, generation: BigInt(match[1] ?? "1") }] : [];
+        })
+        .toSorted(
+          (left, right) =>
+            (left.generation < right.generation
+              ? -1
+              : left.generation > right.generation
+                ? 1
+                : 0) || left.entry.localeCompare(right.entry),
+        );
+    for (const { entry } of generations(rawArchivePattern)) {
       const rawPath = path.join(path.dirname(logical.sourcePath), entry);
       const rawRelativePath = path.relative(path.resolve(params.stateDir), rawPath);
       const generationKey = legacyAuditSourceGenerationKey(rawRelativePath);
@@ -239,17 +260,7 @@ export function detectLegacyAuditLogs(params: {
     }
     // Claims reserve their archive generation across a crash. An older
     // sanitized-only generation cannot be reused by a later claim.
-    const claims = directoryEntries
-      .flatMap((entry) => {
-        const match = claimPattern.exec(entry);
-        return match ? [{ entry, generation: BigInt(match[1] ?? "1") }] : [];
-      })
-      .toSorted(
-        (left, right) =>
-          (left.generation < right.generation ? -1 : left.generation > right.generation ? 1 : 0) ||
-          left.entry.localeCompare(right.entry),
-      );
-    for (const { entry, generation } of claims) {
+    for (const { entry, generation } of generations(claimPattern)) {
       const generationSuffix = generation === 1n ? "" : `.${generation}`;
       const sanitizedArchivePath = `${logical.sourcePath}.migrated${generationSuffix}`;
       sources.push({

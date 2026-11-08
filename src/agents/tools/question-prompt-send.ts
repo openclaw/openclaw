@@ -1,29 +1,28 @@
-/**
- * Publishes a question tool's prompt into the conversation it will be answered from.
- *
- * A question tool blocks its turn until a person answers, so the prompt has to reach
- * that conversation whichever harness is running the agent. Harnesses that run tools
- * through the embedded tool lifecycle publish it from their tool-start handler;
- * harnesses that dispatch tools themselves hand the tool this sender instead. Both
- * arrive here, so the prompt is identical either way.
- */
+/** Shared prompt delivery for embedded tool-start handlers and self-publishing harnesses. */
 import type { QuestionRequestQuestion } from "../../../packages/gateway-protocol/src/index.js";
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import { resolveControlUiSessionLinkBase } from "../../config/control-ui-link-base.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { runWithQuestionChannelDeliveries } from "../../infra/question-channel-runtime.js";
 import { buildAgentHarnessQuestionPromptPayload } from "../harness/user-input-bridge.js";
 
 /** Tools whose call opens a question a person must answer before the turn continues. */
 export type QuestionPromptToolName = "ask_user" | "secrets";
 
 /** Publishes one prompt into the originating conversation. */
-export type QuestionPromptSend = (payload: ReplyPayload) => void | Promise<void>;
+export type QuestionPromptSend = (
+  payload: ReplyPayload,
+  options?: { signal?: AbortSignal },
+) => void | Promise<void>;
 
 /** A run's own way to show a question prompt, plus the channel it would appear in. */
 export type QuestionPromptDelivery = {
   send: QuestionPromptSend;
   messageChannel?: string;
 };
+
+/** Host-generated capability guidance that is safe to return to the model. */
+export class QuestionPromptUnavailableError extends Error {}
 
 /**
  * Publishes the prompt for an already-committed gateway question record.
@@ -37,8 +36,13 @@ export async function sendQuestionToolPrompt(params: {
   questions: readonly QuestionRequestQuestion[];
   config?: OpenClawConfig;
   send: QuestionPromptSend;
+  signal?: AbortSignal;
 }): Promise<void> {
-  const { questionId, questions, send } = params;
+  const { questionId, questions } = params;
+  const send: QuestionPromptSend = (payload) =>
+    runWithQuestionChannelDeliveries([questionId], () =>
+      params.signal ? params.send(payload, { signal: params.signal }) : params.send(payload),
+    );
   if (params.toolName === "secrets") {
     const binding = questions[0]?.secretStore;
     if (!binding) {
@@ -52,7 +56,7 @@ export async function sendQuestionToolPrompt(params: {
     await send({ text, channelData: { askUser: { questionId } } });
     if (!controlUiBase) {
       // A visible blocker is not a delivered entry form; cancel the pending wait.
-      throw new Error(text);
+      throw new QuestionPromptUnavailableError(text);
     }
     return;
   }

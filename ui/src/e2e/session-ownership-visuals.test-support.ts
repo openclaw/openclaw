@@ -1,14 +1,9 @@
-import path from "node:path";
-import type { Locator, Page } from "playwright";
+import type { Page } from "playwright";
 import { expect } from "vitest";
+import { waitForControlUiProofSurface } from "../test-helpers/control-ui-e2e-screenshot.ts";
+import { openSidebarMenu } from "./sidebar-session-menu.test-support.ts";
 
-export const captureUiProofEnabled = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
-
-type AvatarFixture = {
-  id: string;
-  background: string;
-  label: string;
-};
+type AvatarFixture = { id: string; background: string; label: string };
 
 export async function routeAvatarFixtures(page: Page, fixtures: readonly AvatarFixture[]) {
   await Promise.all(
@@ -25,70 +20,12 @@ export async function routeAvatarFixtures(page: Page, fixtures: readonly AvatarF
   );
 }
 
-export async function avatarLabelCenterDelta(row: Locator) {
-  return row.evaluate((element) => {
-    const avatar = element.querySelector<HTMLElement>("openclaw-session-owner-chip");
-    const label = element.querySelector<HTMLElement>(".session-menu__text");
-    if (!avatar || !label) {
-      throw new Error("expected a complete owner filter row");
-    }
-    const avatarBounds = avatar.getBoundingClientRect();
-    const labelBounds = label.getBoundingClientRect();
-    return Math.abs(
-      avatarBounds.top + avatarBounds.height / 2 - (labelBounds.top + labelBounds.height / 2),
-    );
-  });
-}
-
-export async function captureUiProof(
-  owner: { readonly artifactDir: string },
-  page: Page,
-  fileName: string,
-) {
-  if (!captureUiProofEnabled) {
-    return;
-  }
-  await page.screenshot({
-    animations: "disabled",
-    fullPage: true,
-    path: path.join(owner.artifactDir, "drafts-ux", fileName),
-  });
-}
-
-export async function captureSessionOwnerProof(
-  owner: { readonly artifactDir: string },
-  page: Page,
-  fileName: string,
-) {
-  if (!captureUiProofEnabled) {
-    return;
-  }
-  await page.locator(".sidebar-sessions").screenshot({
-    animations: "disabled",
-    path: path.join(owner.artifactDir, "session-owner-stack", fileName),
-  });
-}
-
-export async function captureSessionOwnerPageProof(
-  owner: { readonly artifactDir: string },
-  page: Page,
-  fileName: string,
-) {
-  if (!captureUiProofEnabled) {
-    return;
-  }
-  await page.screenshot({
-    animations: "disabled",
-    fullPage: true,
-    path: path.join(owner.artifactDir, "session-owner-stack", fileName),
-  });
-}
-
 export async function openSidebarSortMenu(page: Page) {
-  const filterAndSort = page.getByRole("button", { name: "Filter & sort" });
+  const filterAndSort = page.getByRole("button", { name: /^Filter & sort · /, exact: true });
   await expect.poll(() => filterAndSort.count(), { timeout: 2_000 }).toBe(1);
-  await filterAndSort.click();
-  const menu = page.locator(".sidebar-session-sort-menu");
-  await menu.waitFor();
+  const menu = await openSidebarMenu(page);
+  await waitForControlUiProofSurface(menu.locator(".sidebar-session-filter-panel"), [
+    menu.getByRole("radio").first(),
+  ]);
   return menu;
 }

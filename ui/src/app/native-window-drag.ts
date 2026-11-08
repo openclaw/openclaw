@@ -1,31 +1,16 @@
-type NativeWindowDragMessage = { type: "window-drag" };
-
-type WebKitMessageHandler = {
-  postMessage(message: NativeWindowDragMessage): void;
-};
-
-function getNativeWindowDragPoster(): WebKitMessageHandler["postMessage"] | undefined {
-  // Native macOS hosts install this handler before navigation; its absence
-  // (plain browsers, other hosts) keeps default mouse behavior.
-  const handler = (
-    window as unknown as {
-      webkit?: { messageHandlers?: { openclawWindowDrag?: WebKitMessageHandler } };
-    }
-  ).webkit?.messageHandlers?.openclawWindowDrag;
-  return handler?.postMessage.bind(handler);
-}
+import { webKitHostWindow } from "./native-webkit-bridge.ts";
 
 const INTERACTIVE_TARGET_SELECTOR =
-  "a, button, input, select, textarea, [role='button'], [contenteditable]";
+  "a, button, input, select, textarea, [role='button'], [role='tab'], [role='menu'], [role^='menuitem'], [contenteditable]";
 
 /**
  * mousedown handler for chrome-like rows (split pane headers): asks the native
- * macOS host to move the window, matching titlebar drag behavior. Presses on
+ * desktop host to move the window, matching titlebar drag behavior. Presses on
  * interactive children keep their normal click handling.
  */
 export function beginNativeWindowDrag(event: MouseEvent): void {
-  // Synthetic events cannot force a drag: the native handler only acts while
-  // an actual left-mouse press is the app's current event.
+  // Synthetic events cannot force a drag: the host accepts only an actual
+  // left-button gesture.
   if (event.button !== 0 || event.defaultPrevented) {
     return;
   }
@@ -34,7 +19,10 @@ export function beginNativeWindowDrag(event: MouseEvent): void {
       return;
     }
   }
-  const post = getNativeWindowDragPoster();
+  // Native desktop hosts install this handler before navigation; its absence
+  // (plain browsers, other hosts) keeps default mouse behavior.
+  const handler = webKitHostWindow()?.webkit?.messageHandlers?.openclawWindowDrag;
+  const post = handler?.postMessage.bind(handler);
   if (!post) {
     return;
   }

@@ -34,10 +34,24 @@ class ChatScreenTest {
   }
 
   @Test
-  fun assistantContentUsesTheFullRowWhileUserMessagesRemainBubbles() {
+  fun richAssistantContentKeepsRoomWhileUserBubblesReserveATrailingGutter() {
     assertEquals(1f, chatBubbleWidthFraction(isUser = false), 0.0001f)
     assertEquals(0.78f, chatBubbleWidthFraction(isUser = true), 0.0001f)
     assertEquals(24, CHAT_BUBBLE_CORNER_RADIUS_DP)
+  }
+
+  @Test
+  fun detachedAttachmentsPreserveAudioVideoPrecedenceAndAssistantRuns() {
+    val image = ChatMessageContent(type = "image")
+    val file = ChatMessageContent(type = "file")
+    val text = ChatMessageContent(text = "Between images")
+    assertTrue(image.isDetachedChatAttachment())
+    assertTrue(file.isDetachedChatAttachment())
+    for (part in listOf(image, file)) {
+      assertFalse(part.copy(mimeType = "audio/mpeg").isDetachedChatAttachment())
+      assertFalse(part.copy(mimeType = "video/mp4").isDetachedChatAttachment())
+    }
+    assertEquals(listOf(listOf(image, file), listOf(text), listOf(image)), chatMessageContentGroups(listOf(image, file, text, image)))
   }
 
   @Test
@@ -56,7 +70,7 @@ class ChatScreenTest {
   fun fastModeControlRequiresSupportAndAnIdleConnectedChat() {
     fun enabled(
       supported: Boolean = true,
-      adminAuthorized: Boolean = true,
+      writeAuthorized: Boolean = true,
       connected: Boolean = true,
       gatewayAvailable: Boolean = true,
       loading: Boolean = false,
@@ -64,11 +78,11 @@ class ChatScreenTest {
       activeRun: Boolean = false,
       streaming: Boolean = false,
       settingsMutationPending: Boolean = false,
-    ) = chatFastModeControlEnabled(supported, adminAuthorized, connected, gatewayAvailable, loading, sending, activeRun, streaming, settingsMutationPending)
+    ) = chatFastModeControlEnabled(supported, writeAuthorized, connected, gatewayAvailable, loading, sending, activeRun, streaming, settingsMutationPending)
 
     assertTrue(enabled())
     assertFalse(enabled(supported = false))
-    assertFalse(enabled(adminAuthorized = false))
+    assertFalse(enabled(writeAuthorized = false))
     assertFalse(enabled(connected = false))
     assertFalse(enabled(gatewayAvailable = false))
     assertFalse(enabled(loading = true))
@@ -132,7 +146,7 @@ class ChatScreenTest {
   }
 
   @Test
-  fun composerPrimaryActionKeepsRunStopSeparateFromLiveTalk() {
+  fun composerPrimaryActionSendsDraftsDuringRunsAndKeepsTalkStopIndependent() {
     assertEquals(
       ChatComposerPrimaryAction.Stop,
       resolveChatComposerPrimaryAction(talkActive = true, runActive = true, hasContent = true),
@@ -142,7 +156,7 @@ class ChatScreenTest {
       resolveChatComposerPrimaryAction(talkActive = true, runActive = false, hasContent = true),
     )
     assertEquals(
-      ChatComposerPrimaryAction.Stop,
+      ChatComposerPrimaryAction.Send,
       resolveChatComposerPrimaryAction(talkActive = false, runActive = true, hasContent = true),
     )
     assertEquals(
@@ -150,7 +164,11 @@ class ChatScreenTest {
       resolveChatComposerPrimaryAction(talkActive = false, runActive = false, hasContent = true),
     )
     assertEquals(
-      ChatComposerPrimaryAction.StartTalk,
+      ChatComposerPrimaryAction.Stop,
+      resolveChatComposerPrimaryAction(talkActive = false, runActive = true, hasContent = false),
+    )
+    assertEquals(
+      ChatComposerPrimaryAction.Talk,
       resolveChatComposerPrimaryAction(talkActive = false, runActive = false, hasContent = false),
     )
   }
@@ -253,10 +271,8 @@ class ChatScreenTest {
         hosts =
           listOf(
             SessionCatalogHost(
-              catalogId = "codex",
               hostId = "local",
               label = "Local",
-              kind = "local",
               connected = true,
               sessions = listOf(matching),
             ),

@@ -284,6 +284,13 @@ docker_e2e_cleanup_package_tgz() {
   fi
 }
 
+docker_e2e_cleanup_package_run() {
+  docker_e2e_cleanup_package_tgz "${1:-}"
+  if [ -n "${2:-}" ]; then
+    rm -f "$2"
+  fi
+}
+
 docker_e2e_cleanup_package_mount_args() {
   local expect_volume_path=0
   local arg
@@ -308,30 +315,64 @@ docker_e2e_cleanup_container_cidfile() {
     if [ -n "$container_id" ]; then
       docker_e2e_docker_cmd rm -f "$container_id" >/dev/null 2>&1 || true
     fi
-    rm -f "$cidfile"
+    # A surviving host owner needs the CID even if this wrapper's cleanup fails.
+    if [ "$cidfile" != "${DOCKER_E2E_CONTAINER_CIDFILE:-}" ]; then
+      rm -f "$cidfile"
+    fi
   fi
+}
+
+docker_e2e_print_failed_container_state() {
+  local cidfile="${1:-}"
+  [ -f "$cidfile" ] || return 0
+
+  local container_id
+  container_id="$(head -n 1 "$cidfile" 2>/dev/null || true)"
+  [ -n "$container_id" ] || return 0
+
+  local inspect_output=""
+  local inspect_status=0
+  inspect_output="$(
+    docker_e2e_docker_cmd inspect --format 'ExitCode={{.State.ExitCode}}
+OOMKilled={{.State.OOMKilled}}
+Init={{.HostConfig.Init}}
+Error={{printf "%.4096s" .State.Error}}' "$container_id" 2>&1
+  )" || inspect_status="$?"
+  if [ "$inspect_status" -ne 0 ]; then
+    printf 'Docker container state unavailable (inspect exit %s): %.4096s\n' \
+      "$inspect_status" "$inspect_output" >&2
+    return 0
+  fi
+
+  echo "Docker container state:" >&2
+  printf '%.4608s\n' "$inspect_output" >&2
 }
 
 docker_e2e_harness_mount_args() {
   local harness_root="${DOCKER_E2E_HARNESS_ROOT_DIR:-$ROOT_DIR}"
+  local windows_helpers="${DOCKER_E2E_WINDOWS_HELPERS_PATH:-$harness_root/scripts/windows-cmd-helpers.mjs}"
   DOCKER_E2E_HARNESS_ARGS=(
     -v "$harness_root/scripts/e2e:/app/scripts/e2e:ro"
+    -v "$harness_root/scripts/docker/verify-fs-safe-native.mjs:/app/scripts/docker/verify-fs-safe-native.mjs:ro"
     -v "$harness_root/scripts/lib:/app/scripts/lib:ro"
     -v "$harness_root/packages/gateway-client/src:/app/packages/gateway-client/src:ro"
+    -v "$harness_root/packages/llm-core/package.json:/app/packages/llm-core/package.json:ro"
+    -v "$harness_root/packages/llm-core/src/types.ts:/app/packages/llm-core/src/types.ts:ro"
     -v "$harness_root/packages/normalization-core/package.json:/app/packages/normalization-core/package.json:ro"
     -v "$harness_root/packages/normalization-core/src:/app/packages/normalization-core/src:ro"
     -v "$harness_root/tsconfig.json:/app/tsconfig.json:ro"
+    -v "$harness_root/standalone-runtime-profile.mjs:/app/standalone-runtime-profile.mjs:ro"
     -v "$harness_root/test/e2e/qa-lab:/app/test/e2e/qa-lab:ro"
     -v "$harness_root/test/helpers:/app/test/helpers:ro"
     -v "$harness_root/scripts/prepublish-plugin-registry-artifact.mjs:/app/scripts/prepublish-plugin-registry-artifact.mjs:ro"
-    -v "$harness_root/scripts/windows-cmd-helpers.mjs:/app/scripts/windows-cmd-helpers.mjs:ro"
+    -v "$windows_helpers:/app/scripts/windows-cmd-helpers.mjs:ro"
   )
 }
 
 docker_e2e_run_with_harness() {
   docker_e2e_harness_mount_args
   local run_status=0
-  local cid_dir
+  local cid_dir=""
   local cidfile
   local docker_run_pid=""
   local harness_stdin_fd=""
@@ -339,28 +380,14 @@ docker_e2e_run_with_harness() {
   local previous_int_trap
   local previous_term_trap
   local previous_hup_trap
-  cid_dir="$(mktemp -d "${TMPDIR:-/tmp}/openclaw-docker-e2e-container.XXXXXX")"
-  cidfile="$cid_dir/container.cid"
+  cidfile="${DOCKER_E2E_CONTAINER_CIDFILE:-}"
+  if [ -z "$cidfile" ]; then
+    cid_dir="$(mktemp -d "${TMPDIR:-/tmp}/openclaw-docker-e2e-container.XXXXXX")"
+    cidfile="$cid_dir/container.cid"
+  fi
   previous_int_trap="$(trap -p INT || true)"
   previous_term_trap="$(trap -p TERM || true)"
   previous_hup_trap="$(trap -p HUP || true)"
-  restore_harness_traps() {
-    if [ -n "$previous_int_trap" ]; then
-      eval "$previous_int_trap"
-    else
-      trap - INT
-    fi
-    if [ -n "$previous_term_trap" ]; then
-      eval "$previous_term_trap"
-    else
-      trap - TERM
-    fi
-    if [ -n "$previous_hup_trap" ]; then
-      eval "$previous_hup_trap"
-    else
-      trap - HUP
-    fi
-  }
   docker_e2e_harness_descendant_pids() {
     local parent_pid="$1"
     local child_pid
@@ -411,12 +438,14 @@ docker_e2e_run_with_harness() {
     terminate_harness_docker_run
     wait "$docker_run_pid" 2>/dev/null || true
     docker_e2e_cleanup_container_cidfile "$cidfile"
-    rmdir "$cid_dir" 2>/dev/null || true
+    if [ -n "$cid_dir" ]; then
+      rmdir "$cid_dir" 2>/dev/null || true
+    fi
     docker_e2e_cleanup_package_mount_args
     if [ -n "$harness_stdin_fd" ]; then
       eval "exec ${harness_stdin_fd}<&-"
     fi
-    restore_harness_traps
+    docker_e2e_restore_signal_traps "$previous_int_trap" "$previous_term_trap" "$previous_hup_trap"
     if [ "$exit_after_cleanup" = "1" ]; then
       exit "$cleanup_status"
     fi
@@ -438,7 +467,7 @@ docker_e2e_run_with_harness() {
     return 1
   fi
   eval "exec ${harness_stdin_fd}<&0"
-  docker_e2e_docker_run_cmd run --rm --cidfile "$cidfile" "${DOCKER_E2E_HARNESS_ARGS[@]}" "$@" <&$harness_stdin_fd &
+  docker_e2e_docker_run_cmd run --cidfile "$cidfile" "${DOCKER_E2E_HARNESS_ARGS[@]}" "$@" <&$harness_stdin_fd &
   docker_run_pid="$!"
   local had_errexit=0
   case "$-" in
@@ -451,6 +480,9 @@ docker_e2e_run_with_harness() {
   run_status="$?"
   if [ "$had_errexit" = "1" ]; then
     set -e
+  fi
+  if [ "$run_status" -ne 0 ]; then
+    docker_e2e_print_failed_container_state "$cidfile"
   fi
   cleanup_harness_run 0
   return "$run_status"

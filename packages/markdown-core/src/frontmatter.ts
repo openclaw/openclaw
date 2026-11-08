@@ -1,5 +1,5 @@
-// Markdown Core module implements frontmatter behavior.
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import JSON5 from "json5";
 import { isAlias, isMap, isNode, isScalar, parseDocument } from "yaml";
 
 type ParsedFrontmatter = Record<string, string>;
@@ -14,29 +14,21 @@ export type FrontmatterParseIssue = {
   message: string;
 };
 
-type ParsedYamlValue = {
-  value: string;
-  kind: "scalar" | "structured";
-};
-
 function stripQuotes(value: string): string {
   const quote = value.at(0);
   return (quote === '"' || quote === "'") && value.at(-1) === quote ? value.slice(1, -1) : value;
 }
 
-function coerceYamlFrontmatterValue(value: unknown): ParsedYamlValue | undefined {
+function coerceYamlFrontmatterValue(value: unknown): string | undefined {
   if (value === null || value === undefined) {
     return undefined;
   }
-  if (typeof value === "string") {
-    return { value: value.trim(), kind: "scalar" };
-  }
-  if (typeof value === "number" || typeof value === "boolean") {
-    return { value: String(value), kind: "scalar" };
+  if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
+    return String(value).trim();
   }
   if (typeof value === "object") {
     try {
-      return { value: JSON.stringify(value), kind: "structured" };
+      return JSON.stringify(value);
     } catch {
       return undefined;
     }
@@ -82,8 +74,11 @@ function parseLineFrontmatter(block: string): ParsedFrontmatter {
 
 const FREEFORM_TEXT_FIELDS = new Set(["description", "read_when", "summary"]);
 
-function normalizeFreeformFieldAtError(block: string): string {
-  const doc = parseDocument(block, { schema: "core", prettyErrors: false });
+function normalizeFreeformFieldAtError(
+  block: string,
+  document?: ReturnType<typeof parseDocument>,
+): string {
+  const doc = document ?? parseDocument(block, { schema: "core", prettyErrors: false });
   if (!isMap(doc.contents)) {
     return block;
   }
@@ -125,34 +120,39 @@ function normalizeFreeformFieldAtError(block: string): string {
   return `${block.slice(0, lineStart)}${replacement}${block.slice(end)}`;
 }
 
+type ParsedYamlFrontmatterAttempt = {
+  result: ParsedFrontmatterBlockResult;
+  document: ReturnType<typeof parseDocument> | undefined;
+};
+
 function parseYamlFrontmatterOnce(
   block: string,
   fallback: ParsedFrontmatter,
-): ParsedFrontmatterBlockResult {
+): ParsedYamlFrontmatterAttempt {
+  let doc: ReturnType<typeof parseDocument> | undefined;
+  const failed = (issues: FrontmatterParseIssue[]): ParsedYamlFrontmatterAttempt => ({
+    document: doc,
+    result: { frontmatter: fallback, issues },
+  });
   try {
-    const doc = parseDocument(block, { schema: "core", prettyErrors: false });
+    doc = parseDocument(block, { schema: "core", prettyErrors: false });
     if (doc.errors.length > 0 || !isMap(doc.contents)) {
-      return {
-        frontmatter: fallback,
-        issues:
-          doc.errors.length > 0
-            ? doc.errors.map((error) => ({
-                code: error.code ?? error.name,
-                message: error.message,
-              }))
-            : [{ code: "INVALID_ROOT", message: "frontmatter must be a YAML mapping" }],
-      };
+      return failed(
+        doc.errors.length > 0
+          ? doc.errors.map((error) => ({
+              code: error.code ?? error.name,
+              message: error.message,
+            }))
+          : [{ code: "INVALID_ROOT", message: "frontmatter must be a YAML mapping" }],
+      );
     }
 
     const parsed = doc.toJS() as unknown;
     if (!isRecord(parsed)) {
-      return {
-        frontmatter: fallback,
-        issues: [{ code: "INVALID_ROOT", message: "frontmatter must be a YAML mapping" }],
-      };
+      return failed([{ code: "INVALID_ROOT", message: "frontmatter must be a YAML mapping" }]);
     }
 
-    const inlineColonKeys = new Set<string>();
+    const inlineColonValues = new Map<string, string>();
     for (const pair of doc.contents.items) {
       if (!isNode(pair.key)) {
         continue;
@@ -164,61 +164,69 @@ function parseYamlFrontmatterOnce(
       const lineEnd = block.indexOf("\n", start);
       const line = block.slice(start, lineEnd === -1 ? block.length : lineEnd);
       const match = line.match(/^([\w-]+):\s*(.*)$/);
-      if (match?.[1] && match[2]?.includes(":")) {
-        inlineColonKeys.add(match[1]);
+      const valueEnd = isNode(pair.value) ? pair.value.range?.[1] : undefined;
+      // The raw line is the authored value only when that line holds all of it.
+      // A flow that continues past the line was being replaced by its first line.
+      if (
+        match?.[1] &&
+        match[2]?.includes(":") &&
+        valueEnd !== undefined &&
+        (lineEnd === -1 || valueEnd <= lineEnd)
+      ) {
+        // Keep authored JSON spacing, but exclude YAML comments after the value.
+        const valueStart = start + line.length - match[2].length;
+        const inlineValue = block.slice(valueStart, valueEnd).trim();
+        try {
+          JSON5.parse(inlineValue);
+          inlineColonValues.set(match[1], inlineValue);
+        } catch {
+          // Unquoted YAML strings need the normalized JSON for metadata readers.
+        }
       }
     }
 
     const result: ParsedFrontmatter = {};
-    for (const [rawKey, value] of Object.entries(parsed as Record<string, unknown>)) {
+    for (const [rawKey, value] of Object.entries(parsed)) {
       const key = rawKey.trim();
       const coerced = key ? coerceYamlFrontmatterValue(value) : undefined;
-      if (!coerced) {
+      if (coerced === undefined) {
         continue;
       }
-      const fallbackValue = Object.hasOwn(fallback, key) ? fallback[key] : undefined;
+      const inlineValue = inlineColonValues.get(key);
       result[key] =
-        coerced.kind === "structured" && inlineColonKeys.has(key) && fallbackValue !== undefined
-          ? fallbackValue
-          : coerced.value;
+        typeof value === "object" && inlineValue !== undefined && Object.hasOwn(fallback, key)
+          ? inlineValue
+          : coerced;
     }
 
     for (const [key, value] of Object.entries(fallback)) {
-      if (!Object.hasOwn(result, key)) {
+      // `key: # note` is a YAML comment; `key: #1 pick` is authored text the line parser rescues.
+      if (!Object.hasOwn(result, key) && !/^#(?:\s|$)/.test(value)) {
         result[key] = value;
       }
     }
-    return { frontmatter: result, issues: [] };
+    return { document: doc, result: { frontmatter: result, issues: [] } };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    return {
-      frontmatter: fallback,
-      issues: [{ code: "YAML_EXCEPTION", message }],
-    };
+    return failed([{ code: "YAML_EXCEPTION", message }]);
   }
 }
 
 function parseYamlFrontmatter(block: string): ParsedFrontmatterBlockResult {
   const fallback = parseLineFrontmatter(block);
-  const parsed = parseYamlFrontmatterOnce(block, fallback);
-  if (parsed.issues.length === 0) {
-    return parsed;
-  }
+  let parsed = parseYamlFrontmatterOnce(block, fallback);
   // Recover one error-located field per iteration, retrying parse each time,
   // so multiple colon-rich fields are fixed without rewriting valid siblings.
   let recoveredBlock = block;
-  for (let i = 0; i < FREEFORM_TEXT_FIELDS.size; i += 1) {
-    const next = normalizeFreeformFieldAtError(recoveredBlock);
+  for (let i = 0; i < FREEFORM_TEXT_FIELDS.size && parsed.result.issues.length > 0; i += 1) {
+    const next = normalizeFreeformFieldAtError(recoveredBlock, parsed.document);
     if (next === recoveredBlock) {
       break;
     }
     recoveredBlock = next;
-    const reparsed = parseYamlFrontmatterOnce(recoveredBlock, fallback);
-    if (reparsed.issues.length === 0) {
-      return reparsed;
-    }
+    parsed = parseYamlFrontmatterOnce(recoveredBlock, fallback);
   }
-  return recoveredBlock === block ? parsed : parseYamlFrontmatterOnce(recoveredBlock, fallback);
+  return parsed.result;
 }
 
 export type ExtractedFrontmatterBlock = {

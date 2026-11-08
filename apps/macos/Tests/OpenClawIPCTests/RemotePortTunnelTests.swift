@@ -7,7 +7,7 @@ import Foundation
 
 struct RemotePortTunnelTests {
     @Test func `tunnel owns its SSH process instead of multiplexing`() {
-        let options = RemotePortTunnel._testSSHOptions(localPort: 28789, remotePort: 18789)
+        let options = RemotePortTunnel.sshOptions(localPort: 28789, remotePort: 18789, hostKeyPolicy: .strict)
 
         #expect(options.contains("ControlMaster=no"))
         #expect(options.contains("ControlPath=none"))
@@ -18,8 +18,178 @@ struct RemotePortTunnelTests {
         #expect(options.contains("UpdateHostKeys=yes"))
     }
 
+    @Test func `widget sandbox forward runs in its own ssh process on the same loopback port`() throws {
+        let sandbox = try Self.bindPort(address: "127.0.0.1")
+        Darwin.close(sandbox.fd)
+        let remotePort = Int(sandbox.port) - 1
+
+        let forward = try #require(RemotePortTunnel.availableSandboxForwardPort(
+            localPort: 28789, remotePort: remotePort, reservedLocalPorts: []))
+        let gatewayOptions = RemotePortTunnel.sshOptions(
+            localPort: 28789,
+            remotePort: remotePort,
+            hostKeyPolicy: .strict)
+        let sandboxOptions = RemotePortTunnel.sandboxForwardOptions(port: forward, hostKeyPolicy: .strict)
+
+        #expect(forward == sandbox.port)
+        #expect(gatewayOptions.count(where: { $0 == "-L" }) == 1)
+        #expect(gatewayOptions.contains("28789:127.0.0.1:\(remotePort)"))
+        // GatewayPorts=no on the command line wins over ssh_config and keeps the listener on loopback.
+        #expect(sandboxOptions.count(where: { $0 == "-L" }) == 1)
+        #expect(sandboxOptions.contains("GatewayPorts=no"))
+        #expect(sandboxOptions.contains("ExitOnForwardFailure=no"))
+    }
+
+    @Test func `widget sandbox forward receipt survives the shipped PortGuardian sweep`() {
+        // v2026.11.1 shares the version 2 ledger. Its sweep matches only `-L P:127.0.0.1:R` and drops any
+        // other receipt before checking the live parent, so a running stable build would erase this one.
+        let args = CommandResolver.sshArguments(
+            target: CommandResolver.SSHParsedTarget(user: "user", host: "host", port: 22),
+            identity: "",
+            options: RemotePortTunnel.sandboxForwardOptions(port: 18790, hostKeyPolicy: .strict))
+        let command = (["/usr/bin/ssh"] + args).joined(separator: " ")
+        let forward = args.firstIndex(of: "-L").map { args[$0 + 1] }
+        let record = PortGuardian.Record(
+            port: 18790, pid: 4242, command: "/usr/bin/ssh", mode: "remote", timestamp: 100)
+
+        #expect(forward == "18790:127.0.0.1:18790")
+        #expect(PortGuardian.classifyTunnelRecord(
+            record,
+            process: .init(parentPid: 987, startedAt: 99, fullCommand: command)) == .keep)
+    }
+
+    @Test func `forwards inherited from the ssh alias cannot end the widget sandbox forward`() throws {
+        // Both processes read the alias. The Gateway process already holds its LocalForward, so the
+        // sandbox process's copy always fails to bind; only the sandbox's own -L may decide its fate.
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("openclaw-ssh-alias-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let config = directory.appendingPathComponent("config")
+        try """
+        Host review-fixture
+            HostName 192.0.2.1
+            User fixture
+            LocalForward 127.0.0.1:25432 127.0.0.1:5432
+            ExitOnForwardFailure yes
+        """.write(to: config, atomically: true, encoding: .utf8)
+        let target = CommandResolver.SSHParsedTarget(user: nil, host: "review-fixture", port: 0)
+
+        func effective(_ options: [String]) throws -> [String] {
+            let process = Process()
+            let output = Pipe()
+            process.executableURL = URL(fileURLWithPath: "/usr/bin/ssh")
+            process.arguments = ["-G", "-F", config.path]
+                + CommandResolver.sshArguments(target: target, identity: "", options: options)
+            process.standardOutput = output
+            process.standardError = FileHandle.nullDevice
+            try process.run()
+            let data = output.fileHandleForReading.readDataToEndOfFile()
+            process.waitUntilExit()
+            return String(decoding: data, as: UTF8.self).split(separator: "\n").map(String.init)
+                .filter { $0.hasPrefix("localforward ") || $0.hasPrefix("exitonforwardfailure ") }
+        }
+
+        let sandbox = try effective(RemotePortTunnel.sandboxForwardOptions(port: 18790, hostKeyPolicy: .strict))
+        let gateway = try effective(RemotePortTunnel.sshOptions(
+            localPort: 18789, remotePort: 18789, hostKeyPolicy: .strict))
+
+        #expect(sandbox.contains("localforward 18790 [127.0.0.1]:18790"))
+        #expect(sandbox.contains("exitonforwardfailure no"))
+        #expect(gateway.contains("localforward 18789 [127.0.0.1]:18789"))
+        #expect(gateway.contains("exitonforwardfailure yes"))
+    }
+
+    @Test func `occupied local sandbox port is unavailable until it is released`() throws {
+        let sandbox = try Self.bindPort(address: "127.0.0.1")
+        let remotePort = Int(sandbox.port) - 1
+
+        let busy = RemotePortTunnel.availableSandboxForwardPort(
+            localPort: 28789, remotePort: remotePort, reservedLocalPorts: [])
+        Darwin.close(sandbox.fd)
+        let released = RemotePortTunnel.availableSandboxForwardPort(
+            localPort: 28789, remotePort: remotePort, reservedLocalPorts: [])
+
+        #expect(busy == nil)
+        #expect(released == sandbox.port)
+    }
+
+    @Test func `wildcard listener keeps the sandbox port unavailable`() throws {
+        // ssh's SO_REUSEADDR loopback bind succeeds beside 0.0.0.0 and would take its loopback traffic;
+        // with GatewayPorts=yes ssh binds the wildcard itself and fails.
+        let service = try Self.bindPort(address: "0.0.0.0")
+        defer { Darwin.close(service.fd) }
+
+        #expect(RemotePortTunnel.availableSandboxForwardPort(
+            localPort: 28789, remotePort: Int(service.port) - 1, reservedLocalPorts: []) == nil)
+    }
+
+    @Test func `hosted local Gateway keeps its ports from the sandbox forward`() throws {
+        let sandbox = try Self.bindPort(address: "127.0.0.1")
+        Darwin.close(sandbox.fd)
+        let remotePort = Int(sandbox.port) - 1
+        // Hosting repair moves this Mac's Gateway next to the tunnel port; its listener may not be bound yet.
+        let reserved = RemotePortTunnel.reservedLocalPorts(
+            root: [:], hostsLocalGateway: true, localGatewayPort: Int(sandbox.port))
+
+        #expect(reserved == [Int(sandbox.port), Int(sandbox.port) + 1])
+        #expect(RemotePortTunnel.availableSandboxForwardPort(
+            localPort: UInt16(remotePort), remotePort: remotePort, reservedLocalPorts: reserved) == nil)
+    }
+
+    @MainActor
+    @Test(arguments: [(18790, 18789), (18789, 28789)])
+    func `hosting preference rather than a split port decides the reserved ports`(
+        ports: (gateway: Int, tunnel: Int)) async throws
+    {
+        let configPath = TestIsolation.tempConfigPath()
+        defer { try? FileManager().removeItem(atPath: configPath) }
+        try await TestIsolation.withIsolatedState(
+            env: ["OPENCLAW_CONFIG_PATH": configPath, "OPENCLAW_GATEWAY_PORT": nil],
+            defaults: ["gatewayPort": nil, hostsLocalGatewayWithRemotePrimaryKey: nil])
+        {
+            // Hosting repair separates gateway.port from the tunnel port; turning hosting off keeps it.
+            try #require(OpenClawConfigFile.saveDict(["gateway": [
+                "mode": "remote", "port": ports.gateway,
+                "remote": [
+                    "transport": "ssh", "sshTarget": "operator@gateway.example",
+                    "url": "ws://127.0.0.1:\(ports.tunnel)", "remotePort": 18789,
+                ],
+            ]]))
+            AppDefaults.standard.set(true, forKey: hostsLocalGatewayWithRemotePrimaryKey)
+            let hosting = try RemotePortTunnel.configuration()
+            #expect(hosting.reservedLocalPorts == [ports.gateway, ports.gateway + 1])
+
+            AppDefaults.standard.set(false, forKey: hostsLocalGatewayWithRemotePrimaryKey)
+            let notHosting = try RemotePortTunnel.configuration()
+            #expect(notHosting.reservedLocalPorts.isEmpty)
+            // The tunnel manager replaces a running tunnel whose configuration differs.
+            #expect(notHosting != hosting)
+        }
+    }
+
+    /// A listening socket, as a service holding the port would have.
+    private static func bindPort(address: String) throws -> (fd: Int32, port: UInt16) {
+        let fd = socket(AF_INET, SOCK_STREAM, 0)
+        var addr = sockaddr_in()
+        addr.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
+        addr.sin_family = sa_family_t(AF_INET)
+        addr.sin_addr = in_addr(s_addr: inet_addr(address))
+        var length = socklen_t(MemoryLayout<sockaddr_in>.size)
+        let bound = withUnsafeMutablePointer(to: &addr) { ptr in
+            ptr.withMemoryRebound(to: sockaddr.self, capacity: 1) { sa in
+                Darwin.bind(fd, sa, length) == 0 && Darwin.listen(fd, 1) == 0 && getsockname(fd, sa, &length) == 0
+            }
+        }
+        guard fd >= 0, bound, UInt16(bigEndian: addr.sin_port) > 1 else {
+            if fd >= 0 { Darwin.close(fd) }
+            throw POSIXError(.EADDRNOTAVAIL)
+        }
+        return (fd, UInt16(bigEndian: addr.sin_port))
+    }
+
     @Test func `tunnel requires explicit opt in to use SSH config host key policy`() {
-        let options = RemotePortTunnel._testSSHOptions(
+        let options = RemotePortTunnel.sshOptions(
             localPort: 28789,
             remotePort: 18789,
             hostKeyPolicy: .openssh)
@@ -28,6 +198,65 @@ struct RemotePortTunnelTests {
         #expect(!options.contains { $0.hasPrefix("UpdateHostKeys=") })
     }
 
+    @Test(arguments: ["ws://127.0.0.1:19089", "ws://localhost:19089", "ws://[::1]:19089"])
+    func `tunnel local port comes from the remote URL independently of the local gateway`(url: String) {
+        let root: [String: Any] = ["gateway": ["port": 18789, "remote": ["url": url]]]
+        #expect(RemotePortTunnel.localPort(root: root) == 19089)
+    }
+
+    @Test(arguments: [("", 19789), ("ws://localhost", 18789), ("wss://gateway.example:19089", 19789)])
+    func `legacy fallback preserves explicit loopback URL defaults`(scenario: (String, Int)) {
+        let (url, expectedPort) = scenario
+        let root: [String: Any] = ["gateway": ["port": 19789, "remote": ["url": url]]]
+        #expect(RemotePortTunnel.localPort(root: root, legacyPort: 19789, environment: [:]) == expectedPort)
+    }
+
+    @Test(arguments: [18789, 19789])
+    func `legacy SSH primary keeps both ports before hosting is enabled`(legacyPort: Int) {
+        var remote: [String: Any] = ["transport": "ssh", "sshTarget": "operator@gateway.example"]
+        let root: [String: Any] = ["gateway": ["mode": "remote", "port": legacyPort, "remote": remote]]
+        let ports = RemotePortTunnel.ports(
+            root: root, sshHost: "gateway.example", legacyPort: legacyPort, environment: [:])
+        #expect(ports.local == legacyPort)
+        #expect(ports.remote == legacyPort)
+        remote["remotePort"] = 18800
+        let explicit = RemotePortTunnel.ports(
+            root: ["gateway": ["remote": remote]], sshHost: "gateway.example", legacyPort: legacyPort, environment: [:])
+        #expect(explicit.local == legacyPort)
+        #expect(explicit.remote == 18800)
+    }
+
+    @Test(arguments: [(nil as String?, 19889), ("19989", 19989)])
+    func `legacy SSH keeps a live configured listener separate from the reserved default`(scenario: (String?, Int)) {
+        let (override, expectedLocalPort) = scenario
+        let root: [String: Any] = ["gateway": [
+            "mode": "remote", "port": 19889,
+            "remote": ["transport": "ssh", "sshTarget": "operator@gateway.example"],
+        ]]
+        let ports = RemotePortTunnel.ports(
+            root: root, sshHost: "gateway.example", legacyPort: 19789,
+            environment: override.map { ["OPENCLAW_GATEWAY_PORT": $0] } ?? [:])
+        #expect(ports.local == expectedLocalPort)
+        #expect(ports.remote == 19789)
+    }
+
+    @Test(arguments: [false, true])
+    func `remote port survives removal of the local bind port`(explicitRemotePort: Bool) {
+        var remote: [String: Any] = ["url": "ws://127.0.0.1:19089"]
+        if explicitRemotePort { remote["remotePort"] = 18789 }
+        var gateway: [String: Any] = ["port": 19089, "remote": remote]
+        for hasLocalPort in [true, false] {
+            if !hasLocalPort { gateway.removeValue(forKey: "port") }
+            let root: [String: Any] = ["gateway": gateway]
+            let resolved = RemotePortTunnel.resolveRemotePortOverride(
+                defaultRemotePort: 18789, for: "gateway.example", root: root) ?? 18789
+            #expect(resolved == (explicitRemotePort ? 18789 : 19089))
+            #expect(RemotePortTunnel.localPort(root: root) == 19089)
+        }
+    }
+}
+
+struct RemotePortTunnelSocketTests {
     @Test func `port is free detects I pv4 listener`() {
         var fd = socket(AF_INET, SOCK_STREAM, 0)
         #expect(fd >= 0)
@@ -65,7 +294,7 @@ struct RemotePortTunnelTests {
         guard got == 0 else { return }
 
         let port = UInt16(bigEndian: name.sin_port)
-        #expect(RemotePortTunnel._testPortIsFree(port) == false)
+        #expect(RemotePortTunnel.portIsFree(port) == false)
 
         _ = Darwin.close(fd)
         fd = -1
@@ -75,48 +304,13 @@ struct RemotePortTunnelTests {
         let deadline = Date().addingTimeInterval(0.5)
         var free = false
         while Date() < deadline {
-            if RemotePortTunnel._testPortIsFree(port) {
+            if RemotePortTunnel.portIsFree(port) {
                 free = true
                 break
             }
             usleep(10000) // 10ms
         }
         #expect(free == true)
-    }
-
-    @Test @MainActor func `remote port override prefers explicit remote port`() async {
-        let configPath = TestIsolation.tempConfigPath()
-        await TestIsolation.withIsolatedState(env: ["OPENCLAW_CONFIG_PATH": configPath]) {
-            OpenClawConfigFile.saveDict([
-                "gateway": [
-                    "remote": [
-                        "url": "ws://127.0.0.1:19089",
-                        "remotePort": 18789,
-                    ],
-                ],
-            ])
-
-            #expect(RemotePortTunnel._testResolveRemotePortOverride(
-                defaultRemotePort: 19089,
-                sshHost: "gateway.example") == 18789)
-        }
-    }
-
-    @Test @MainActor func `remote port override can read loopback url port`() async {
-        let configPath = TestIsolation.tempConfigPath()
-        await TestIsolation.withIsolatedState(env: ["OPENCLAW_CONFIG_PATH": configPath]) {
-            OpenClawConfigFile.saveDict([
-                "gateway": [
-                    "remote": [
-                        "url": "ws://127.0.0.1:18789",
-                    ],
-                ],
-            ])
-
-            #expect(RemotePortTunnel._testResolveRemotePortOverride(
-                defaultRemotePort: 19089,
-                sshHost: "gateway.example") == 18789)
-        }
     }
 }
 

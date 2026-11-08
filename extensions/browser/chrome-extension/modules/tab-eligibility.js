@@ -33,6 +33,11 @@ export function tabEligibility(tab, { fileAccessAllowed = true, controlledBlank 
   if (tab.incognito === true) {
     return { eligible: false, reason: "incognito" };
   }
+  // Chrome accepts a debugger attachment to a discarded tab but never answers
+  // its page commands, so it cannot be projected until Chrome reloads it.
+  if (tab.discarded === true) {
+    return { eligible: false, reason: "discarded" };
+  }
   return urls.every(
     (url) =>
       (controlledBlank && url === "about:blank") || ordinaryDocumentUrl(url, fileAccessAllowed),

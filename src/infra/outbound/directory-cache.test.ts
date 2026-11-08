@@ -10,20 +10,18 @@ describe("buildDirectoryCacheKey", () => {
       input: {
         channel: "workspace",
         kind: "channel",
-        source: "cache",
       },
-      expected: "workspace:default:channel:cache:default:query:",
+      expected: "workspace:default:channel:default:query:",
     },
     {
       input: {
         channel: "richchat",
         accountId: "work",
         kind: "user",
-        source: "live",
         signature: "v2",
         query: "alice",
       },
-      expected: "richchat:work:user:live:v2:query:alice",
+      expected: "richchat:work:user:v2:query:alice",
     },
   ] satisfies Array<{
     input: Parameters<typeof buildDirectoryCacheKey>[0];
@@ -34,12 +32,10 @@ describe("buildDirectoryCacheKey", () => {
 });
 
 describe("DirectoryCache", () => {
-  afterEach(() => {
-    vi.useRealTimers();
-  });
+  afterEach(() => vi.useRealTimers());
 
-  it("expires entries at ttl and partitions entries by config identity", () => {
-    vi.useFakeTimers();
+  it.each([-60_000, 60_000])("expires by elapsed ttl after a %i ms clock step", (clockStepMs) => {
+    vi.useFakeTimers({ toFake: ["Date", "performance"] });
     const cache = new DirectoryCache<string>(1_000);
     const cfgA = {} as OpenClawConfig;
     const cfgB = {} as OpenClawConfig;
@@ -47,6 +43,8 @@ describe("DirectoryCache", () => {
     cache.set("a", "first", cfgA);
     expect(cache.get("a", cfgA)).toBe("first");
 
+    vi.setSystemTime(Date.now() + clockStepMs);
+    expect(cache.get("a", cfgA)).toBe("first");
     vi.advanceTimersByTime(1_000);
     expect(cache.get("a", cfgA)).toBeUndefined();
 
@@ -74,8 +72,9 @@ describe("DirectoryCache", () => {
     expect(cache.get("c", cfg)).toBeUndefined();
     expect(cache.get("c", otherCfg)).toBe("other-C");
 
-    cache.clear(cfg);
+    cache.clear();
     expect(cache.get("a", cfg)).toBeUndefined();
+    expect(cache.get("c", otherCfg)).toBeUndefined();
   });
 
   it("uses the default max size when maxSize is non-finite", () => {

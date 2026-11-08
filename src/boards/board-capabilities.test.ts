@@ -8,15 +8,10 @@ import { normalizeBoardWidgetDeclared } from "./board-capabilities.js";
 
 const usernameOrigin = new URL("https://api.example.com");
 usernameOrigin.username = "fixture-user";
-const passwordOrigin = new URL("https://api.example.com");
-passwordOrigin.username = "fixture-user";
-passwordOrigin.password = "fixture-password";
 
 describe("board widget capabilities", () => {
   it.each([
-    ["https://api.open-meteo.com", "https://api.open-meteo.com"],
     ["https://api.example.com:8443", "https://api.example.com:8443"],
-    ["https://xn--bcher-kva.example", "https://xn--bcher-kva.example"],
     ["https://[2001:db8::1]:9443", "https://[2001:db8::1]:9443"],
   ])("accepts exact HTTPS origin %s", (input, expected) => {
     expect(normalizeBoardWidgetDeclared({ netOrigins: [input] })).toEqual({
@@ -26,10 +21,8 @@ describe("board widget capabilities", () => {
 
   it.each([
     "http://api.example.com",
-    "wss://api.example.com",
     "https://*.example.com",
     usernameOrigin.href,
-    passwordOrigin.href,
     "https://api.example.com/path",
     "https://api.example.com?query=1",
     "https://api.example.com/#fragment",

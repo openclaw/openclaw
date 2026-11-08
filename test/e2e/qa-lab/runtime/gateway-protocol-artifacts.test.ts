@@ -3,8 +3,6 @@ import { buildProtocolSchemaDocument } from "../../../../scripts/lib/protocol-sc
 import {
   assertPublishedProtocolSchema,
   buildInstalledProtocolInspectionScript,
-  buildPortableSwiftAnyCodableSource,
-  buildSwiftProtocolCompatibilityHarness,
   parseGatewayProtocolArtifactOptions,
 } from "./gateway-protocol-artifacts.js";
 
@@ -63,23 +61,5 @@ describe("Gateway protocol artifact producer", () => {
     expect(script).toContain('from "@openclaw/gateway-protocol/schema"');
     expect(script).not.toContain("dist/index.mjs");
     expect(script).not.toContain("dist/schema.mjs");
-  });
-
-  it("builds a standalone Swift compatibility harness for the generated model artifact", () => {
-    const harness = buildSwiftProtocolCompatibilityHarness();
-
-    expect(harness).toContain("@main");
-    expect(harness).toContain("GatewayFrame.self");
-    expect(harness).toContain("ConnectParams.self");
-    expect(harness).toContain('"futureField":true');
-  });
-
-  it("makes the AnyCodable dependency portable for standalone Linux compilation", () => {
-    expect(buildPortableSwiftAnyCodableSource("import Foundation\n")).toBe(
-      "import CoreFoundation\nimport Foundation\n",
-    );
-    expect(buildPortableSwiftAnyCodableSource("import CoreFoundation\n")).toBe(
-      "import CoreFoundation\n",
-    );
   });
 });

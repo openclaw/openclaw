@@ -1,65 +1,44 @@
-// Google provider module implements model/runtime integration.
-import type {
-  OpenClawPluginApi,
-  ProviderReasoningOutputModeContext,
-} from "openclaw/plugin-sdk/plugin-entry";
-import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-auth-api-key";
+import { createLazyRuntimeSurface } from "openclaw/plugin-sdk/lazy-runtime";
+import { runLiveProviderCatalog } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
+import { resolveMergedModelProviderConfig } from "openclaw/plugin-sdk/provider-catalog-shared";
+import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-entry";
 import type { ProviderPlugin } from "openclaw/plugin-sdk/provider-model-shared";
 import { normalizeGoogleModelId } from "./model-id.js";
 import { GOOGLE_GEMINI_DEFAULT_MODEL, applyGoogleGeminiModelDefault } from "./onboard.js";
-import {
-  buildGoogleLiveCatalogProvider,
-  buildGoogleStaticCatalogProvider,
-  buildGoogleVertexStaticCatalogProvider,
-} from "./provider-catalog.js";
+import { buildGoogleLiveCatalogProvider } from "./provider-catalog-runtime.js";
+import googleProviderDiscovery from "./provider-discovery.js";
 import { GOOGLE_GEMINI_PROVIDER_HOOKS } from "./provider-hooks.js";
 import {
-  isGoogleNativeVideoModelId,
+  isGoogleGeminiTextModelId,
   isModernGoogleModel,
   resolveGoogleGeminiForwardCompatModel,
+  resolveGoogleModelApi,
 } from "./provider-models.js";
 import {
   isOfficialGoogleAiStudioBaseUrl,
   isGoogleVertexBaseUrl,
   normalizeGoogleProviderConfig,
+  resolveGoogleFastModeSupport,
   resolveGoogleGenerativeAiTransport,
 } from "./provider-policy.js";
-import {
-  createGoogleGenerativeAiTransportStreamFn,
-  createGoogleVertexTransportStreamFn,
-} from "./transport-stream.js";
-import { resolveGoogleVertexConfigApiKey } from "./vertex-adc.js";
 
-function normalizeGoogleVideoInput(
-  ctx: Parameters<NonNullable<ProviderPlugin["normalizeResolvedModel"]>>[0],
-) {
-  const input = (ctx.model.input as string[]).filter((type) => type !== "video");
-  const supportsVideo =
-    ctx.provider === "google" &&
-    ctx.model.api === "google-generative-ai" &&
-    isOfficialGoogleAiStudioBaseUrl(ctx.model.baseUrl) &&
-    isGoogleNativeVideoModelId(ctx.modelId);
-  return { ...ctx.model, input: supportsVideo ? [...input, "video"] : input } as typeof ctx.model;
-}
-
-function resolveGoogleReasoningOutputMode(
-  ctx: ProviderReasoningOutputModeContext,
-): "native" | "tagged" {
-  if (ctx.provider === "google" || ctx.provider === "google-vertex") {
-    const api = ctx.model?.api ?? ctx.modelApi;
-    if (!api || api === "google-generative-ai" || api === "google-vertex") {
-      return "native";
-    }
-  }
-  return "tagged";
-}
+const loadGenerativeAiStream = createLazyRuntimeSurface(
+  () => import("./transport-stream.js"),
+  (runtime) => runtime.createGoogleGenerativeAiTransportStreamFn(),
+);
+const loadVertexStream = createLazyRuntimeSurface(
+  () => import("./transport-stream.js"),
+  (runtime) => runtime.createGoogleVertexTransportStreamFn(),
+);
+const loadInteractionsStream = createLazyRuntimeSurface(
+  () => import("./transport-stream.js"),
+  (runtime) => runtime.createGoogleInteractionsTransportStreamFn(),
+);
 
 export function buildGoogleProvider(): ProviderPlugin {
   return {
-    id: "google",
-    label: "Google AI Studio",
-    docsPath: "/providers/models",
-    hookAliases: ["google-antigravity", "google-vertex"],
+    ...googleProviderDiscovery,
+    hookAliases: ["google-antigravity", "google-vertex", "google-interactions"],
     envVars: ["GEMINI_API_KEY", "GOOGLE_API_KEY"],
     auth: [
       createProviderApiKeyAuthMethod({
@@ -87,17 +66,6 @@ export function buildGoogleProvider(): ProviderPlugin {
       resolveGoogleGenerativeAiTransport({ provider, api, baseUrl }),
     normalizeConfig: ({ provider, providerConfig }) =>
       normalizeGoogleProviderConfig(provider, providerConfig),
-    resolveConfigApiKey: ({ provider, env }) =>
-      provider === "google-vertex" ? resolveGoogleVertexConfigApiKey(env) : undefined,
-    staticCatalog: {
-      order: "simple",
-      run: async () => ({
-        providers: {
-          google: buildGoogleStaticCatalogProvider(),
-          "google-vertex": buildGoogleVertexStaticCatalogProvider(),
-        },
-      }),
-    },
     catalog: {
       order: "simple",
       run: async (ctx) => {
@@ -108,19 +76,41 @@ export function buildGoogleProvider(): ProviderPlugin {
         if (!auth.apiKey) {
           return null;
         }
-        return {
-          providers: {
-            google: await buildGoogleLiveCatalogProvider({
-              apiKey: auth.apiKey,
-              discoveryApiKey: auth.discoveryApiKey,
-            }),
-            "google-vertex": buildGoogleVertexStaticCatalogProvider(),
-          },
-        };
+        return await runLiveProviderCatalog({
+          providerId: "google",
+          profileId: auth.profileId,
+          run: async () => ({
+            providers: {
+              google: await buildGoogleLiveCatalogProvider({
+                discoveryMode: "strict",
+                apiKey: auth.apiKey,
+                discoveryApiKey: auth.discoveryApiKey,
+              }),
+            },
+          }),
+        });
       },
     },
     normalizeModelId: ({ modelId }) => normalizeGoogleModelId(modelId),
-    normalizeResolvedModel: normalizeGoogleVideoInput,
+    normalizeResolvedModel: (ctx) => {
+      const input = (ctx.model.input as string[]).filter((type) => type !== "video");
+      const supportsVideo =
+        ctx.provider === "google" &&
+        (ctx.model.api === "google-generative-ai" || ctx.model.api === "google-interactions") &&
+        isOfficialGoogleAiStudioBaseUrl(ctx.model.baseUrl) &&
+        isGoogleGeminiTextModelId(ctx.modelId);
+      return {
+        ...ctx.model,
+        api: resolveGoogleModelApi({
+          provider: ctx.provider,
+          modelId: ctx.modelId,
+          api: ctx.model.api,
+          baseUrl: ctx.model.baseUrl,
+          providerConfig: resolveMergedModelProviderConfig(ctx.config, ctx.provider),
+        }),
+        input: supportsVideo ? [...input, "video"] : input,
+      } as typeof ctx.model;
+    },
     resolveDynamicModel: (ctx) =>
       resolveGoogleGeminiForwardCompatModel({
         providerId: ctx.provider,
@@ -132,23 +122,40 @@ export function buildGoogleProvider(): ProviderPlugin {
         (model.api === "google-generative-ai" &&
           (model.provider === "google-vertex" || isGoogleVertexBaseUrl(model.baseUrl)))
       ) {
-        return createGoogleVertexTransportStreamFn();
+        return async (...args) => (await loadVertexStream())(...args);
       }
       if (model.api === "google-generative-ai") {
-        return createGoogleGenerativeAiTransportStreamFn();
+        return async (...args) => (await loadGenerativeAiStream())(...args);
+      }
+      if (model.api === "google-interactions") {
+        return async (...args) => (await loadInteractionsStream())(...args);
       }
       return undefined;
     },
     ...GOOGLE_GEMINI_PROVIDER_HOOKS,
+    resolveFastModeSupport: resolveGoogleFastModeSupport,
     // Gemini 2.5+ delivers reasoning via native thinkingParts (thinkingConfig.includeThoughts).
     // Tagged mode simultaneously injects <think>/<final> which the model opens before a tool
     // call, never closes, leaving the post-tool turn empty (payloads=0). The CLI backend keeps
     // tagged mode because it emits JSON text, not native thought parts.
-    resolveReasoningOutputMode: resolveGoogleReasoningOutputMode,
+    resolveReasoningOutputMode: (ctx): "native" | "tagged" => {
+      if (
+        ctx.provider === "google" ||
+        ctx.provider === "google-vertex" ||
+        ctx.provider === "google-interactions"
+      ) {
+        const api = ctx.model?.api ?? ctx.modelApi;
+        if (
+          !api ||
+          api === "google-generative-ai" ||
+          api === "google-vertex" ||
+          api === "google-interactions"
+        ) {
+          return "native";
+        }
+      }
+      return "tagged";
+    },
     isModernModelRef: ({ modelId }) => isModernGoogleModel(modelId),
   };
-}
-
-export function registerGoogleProvider(api: OpenClawPluginApi) {
-  api.registerProvider(buildGoogleProvider());
 }

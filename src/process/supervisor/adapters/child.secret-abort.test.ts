@@ -1,69 +1,44 @@
 import { Writable } from "node:stream";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createStubChild } from "./child.test-support.js";
+import { afterEach, expect, it, vi } from "vitest";
+import { createChildAdapter } from "./child.js";
+import { createStubChild, readyChildAdapter, setPlatform } from "./child.test-support.js";
 
-const spawnWithFallbackMock = vi.hoisted(() => vi.fn());
-
-vi.mock("../../spawn-utils.js", () => ({
-  spawnWithFallback: spawnWithFallbackMock,
+const { spawnMock, signalMock } = vi.hoisted(() => ({ spawnMock: vi.fn(), signalMock: vi.fn() }));
+vi.mock("../../spawn-utils.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../spawn-utils.js")>()),
+  spawnAndWait: spawnMock,
 }));
+vi.mock("../../kill-tree.js", () => ({ signalProcessTree: signalMock }));
+const platform = Object.getOwnPropertyDescriptor(process, "platform")!;
+const start = readyChildAdapter(createChildAdapter);
+afterEach(() => {
+  Object.defineProperty(process, "platform", platform);
+  vi.unstubAllEnvs();
+});
 
-vi.mock("../service-child-relay-host.js", () => ({
-  createServiceChildRelayAdapter: vi.fn(),
-}));
-
-describe("createChildAdapter secret-delivery abort", () => {
-  const originalPlatform = Object.getOwnPropertyDescriptor(process, "platform");
-  let createChildAdapter: typeof import("./child.js").createChildAdapter;
-
-  beforeEach(async () => {
-    vi.resetModules();
-    Object.defineProperty(process, "platform", {
-      configurable: true,
-      value: "win32",
-    });
-    delete process.env.OPENCLAW_SERVICE_MARKER;
-    ({ createChildAdapter } = await import("./child.js"));
-    spawnWithFallbackMock.mockReset();
+it("does not signal a retired child when secret delivery fails after close", async () => {
+  setPlatform("win32");
+  vi.stubEnv("OPENCLAW_SERVICE_MARKER", "");
+  const { child, killMock, emitClose } = createStubChild();
+  const deliveryError = new Error("secret delivery failed after child close");
+  const secretStream = new Writable({
+    write(_chunk, _encoding, callback) {
+      emitClose(0);
+      setImmediate(() => callback(deliveryError));
+    },
   });
-
-  afterEach(() => {
-    if (originalPlatform) {
-      Object.defineProperty(process, "platform", originalPlatform);
-    }
+  Object.defineProperty(child, "stdio", {
+    value: [child.stdin, child.stdout, child.stderr, secretStream],
+    configurable: true,
   });
+  spawnMock.mockResolvedValue(child);
 
-  it("kills the spawned child when construction abort fires during secret delivery", async () => {
-    const { child, killMock } = createStubChild();
-    const secretStream = new Writable({
-      write() {
-        // Leave the secret pipe unread so construction stays blocked.
-      },
-    });
-    Object.defineProperty(child, "stdio", {
-      value: [child.stdin, child.stdout, child.stderr, secretStream],
-      configurable: true,
-    });
-    spawnWithFallbackMock.mockResolvedValue({
-      child,
-      usedFallback: false,
-    });
-    const abort = new AbortController();
-    const starting = createChildAdapter({
-      argv: ["claude", "-p"],
-      stdinMode: "pipe-open",
-      secretInput: {
-        fd: 3,
-        createData: () => Buffer.from("selected-secret"),
-      },
-      abortSignal: abort.signal,
-    });
-    await new Promise<void>((resolve) => {
-      setImmediate(resolve);
-    });
-    abort.abort();
-    await expect(starting).rejects.toThrow("secret delivery aborted");
-    expect(killMock).toHaveBeenCalledWith("SIGKILL");
-    child.removeAllListeners();
-  });
+  await expect(
+    start({
+      argv: ["synthetic-command"],
+      secretInput: { fd: 3, createData: () => Buffer.from("synthetic-secret") },
+    }),
+  ).rejects.toBe(deliveryError);
+  expect(signalMock).not.toHaveBeenCalled();
+  expect(killMock).not.toHaveBeenCalled();
 });

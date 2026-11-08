@@ -6,6 +6,7 @@ import {
   createQaChildOutputCapture,
   createQaChildOutputTail,
   formatQaChildOutputTail,
+  QA_CHILD_STDOUT_MAX_BYTES,
   readQaChildOutput,
 } from "./child-output.js";
 
@@ -18,12 +19,13 @@ describe("qa child output", () => {
   });
 
   it("keeps capped stdout UTF-8 safe when the byte cap splits a code point", () => {
-    const text = "ok \u{1f600} done";
-    const capture = createQaChildOutputCapture(Buffer.byteLength("ok \u{1f600}", "utf8") - 1);
+    const prefix = "x".repeat(QA_CHILD_STDOUT_MAX_BYTES - 3);
+    const text = `${prefix}\u{1f600} done`;
+    const capture = createQaChildOutputCapture();
 
     appendQaChildOutput(capture, Buffer.from(text, "utf8"));
 
-    expect(readQaChildOutput(capture)).toBe("ok ");
+    expect(readQaChildOutput(capture)).toBe(prefix);
   });
 
   it("keeps stderr tails UTF-8 safe when the retained tail starts inside a code point", () => {
@@ -37,7 +39,7 @@ describe("qa child output", () => {
   });
 
   it("preserves malformed trailing stdout when no byte cap was hit", () => {
-    const capture = createQaChildOutputCapture(8);
+    const capture = createQaChildOutputCapture();
 
     appendQaChildOutput(capture, Buffer.from([0x6f, 0x6b, 0x20, 0xf0]));
 

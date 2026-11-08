@@ -4,14 +4,18 @@
  */
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import "./test-helpers/fast-coding-tools.js";
 import "./test-helpers/fast-openclaw-tools.js";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/config.js";
+import type { ExecAutoReviewer } from "../infra/exec-auto-review.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createSessionConversationTestRegistry } from "../test-utils/session-conversation-registry.js";
 import { createOpenClawCodingTools } from "./agent-tools.js";
+import { getFinishedSession } from "./bash-process-registry.js";
+import { resetProcessRegistryForTests } from "./bash-process-registry.test-support.js";
+import { pinExecToolTarget } from "./exec-tool-target-pinning.js";
 import { resolveExecToolConfig } from "./lazy-exec-tool.js";
 
 function createExecHostDefaultsConfig(
@@ -25,18 +29,20 @@ function createExecHostDefaultsConfig(
       },
     },
     agents: {
-      list: agents.map((agent) => ({
-        id: agent.id,
-        ...(agent.execHost
-          ? {
-              tools: {
-                exec: {
-                  host: agent.execHost,
+      entries: Object.fromEntries(
+        agents.map((agent) => [
+          agent.id,
+          agent.execHost
+            ? {
+                tools: {
+                  exec: {
+                    host: agent.execHost,
+                  },
                 },
-              },
-            }
-          : {}),
-      })),
+              }
+            : {},
+        ]),
+      ),
     },
   };
 }
@@ -71,7 +77,98 @@ describe("Agent-specific exec tool defaults", () => {
   });
 
   afterEach(() => {
+    resetProcessRegistryForTests();
+    vi.useRealTimers();
     tempDirs.cleanup();
+  });
+
+  it.each([
+    { agentId: "main", runtimeTimeoutSec: undefined, expectedMs: 130_000 },
+    { agentId: "helper", runtimeTimeoutSec: undefined, expectedMs: 55_000 },
+    { agentId: "main", runtimeTimeoutSec: 180, expectedMs: 190_000 },
+  ])(
+    "carries $agentId's effective exec timeout through assembled node projection",
+    ({ agentId, runtimeTimeoutSec, expectedMs }) => {
+      const config: OpenClawConfig = {
+        tools: { exec: { timeoutSeconds: 45 } },
+        agents: {
+          entries: { main: { tools: { exec: { timeoutSeconds: 120 } } }, helper: {} },
+        },
+      };
+      const tools = createOpenClawCodingTools({
+        config,
+        agentId,
+        exec: { timeoutSec: runtimeTimeoutSec },
+      });
+      const nodeTool = pinExecToolTarget(requireExecTool(tools), { host: "node" });
+      expect(nodeTool.getExecutionTimeoutMs?.({ command: "echo ready" })).toBe(expectedMs);
+      expect(nodeTool.getExecutionTimeoutMs?.({ command: "echo ready", timeoutSeconds: 0 })).toBe(
+        expectedMs,
+      );
+    },
+  );
+
+  it("keeps each actual exec result for its own agent retention after another process tool loads", async () => {
+    vi.useFakeTimers({
+      toFake: ["Date", "setTimeout", "clearTimeout", "setInterval", "clearInterval"],
+    });
+    const config: OpenClawConfig = {
+      tools: { exec: { host: "gateway", mode: "full", cleanupMs: 60_000 } },
+      agents: {
+        ownership: "explicit",
+        entries: { main: { tools: { exec: { cleanupMs: 180_000 } } }, helper: {} },
+      },
+    };
+    const toolsFor = (agentId: string) =>
+      createOpenClawCodingTools({
+        config,
+        sessionKey: `agent:${agentId}:main`,
+        exec: { backgroundMs: 0, notifyOnExit: false },
+        ...createTempAgentDirs(`retention-${agentId}`),
+      });
+    const longTools = toolsFor("main");
+    const shortTools = toolsFor("helper");
+    const start = async (tools: ReturnType<typeof toolsFor>, callId: string) => {
+      const result = await requireExecTool(tools).execute(callId, {
+        command: "echo retention-result",
+        background: true,
+      });
+      const sessionId = (result.details as { sessionId?: string }).sessionId;
+      if (!sessionId) {
+        throw new Error("Expected an actual background process session");
+      }
+      await vi.waitFor(() =>
+        expect(getFinishedSession(sessionId)).toMatchObject({
+          exitCode: 0,
+          terminalStatus: "completed",
+        }),
+      );
+      return sessionId;
+    };
+    // Neither lazy process tool has run when these processes are admitted.
+    const longId = await start(longTools, "long-retention");
+    const shortId = await start(shortTools, "short-retention");
+    const shortProcess = shortTools.find((tool) => tool.name === "process");
+    const longProcess = longTools.find((tool) => tool.name === "process");
+    if (!shortProcess || !longProcess) {
+      throw new Error("Expected process tools for both agents");
+    }
+    await shortProcess.execute("load-short-process", { action: "list" });
+    // The old 60s global TTL sweeps every 30s, so allow its next full sweep.
+    await vi.advanceTimersByTimeAsync(95_000);
+    const longResult = await longProcess.execute("long-retention-log", {
+      action: "log",
+      sessionId: longId,
+    });
+    const shortResult = await shortProcess.execute("short-retention-log", {
+      action: "log",
+      sessionId: shortId,
+    });
+    expect(shortResult.details).toMatchObject({ status: "failed" });
+    expect(longResult.details).toMatchObject({ status: "completed" });
+    expect(longResult.content[0]).toMatchObject({
+      text: expect.stringContaining("retention-result"),
+    });
   });
 
   it.each([0, 3_000])(
@@ -116,6 +213,62 @@ describe("Agent-specific exec tool defaults", () => {
         agentId: "main",
       }).approvalRunningNoticeMs,
     ).toBe(0);
+  });
+
+  describe("tools.byProvider exec ceiling", () => {
+    const ceilingConfig = (mode: "deny" | "auto"): OpenClawConfig => ({
+      tools: {
+        exec: { host: "gateway", mode: "full" },
+        byProvider: { "local-llm/small": { exec: { mode } } },
+      },
+    });
+    const reviewer = vi.fn<ExecAutoReviewer>(async () => ({
+      decision: "deny",
+      risk: "high",
+      rationale: "fixture denial",
+    }));
+    const toolsForModel = (config: OpenClawConfig, modelProvider: string, modelId: string) =>
+      createOpenClawCodingTools({
+        config,
+        sessionKey: "agent:main:main",
+        modelProvider,
+        modelId,
+        exec: { backgroundMs: 0, notifyOnExit: false, autoReviewer: reviewer },
+        ...createTempAgentDirs(`ceiling-${modelProvider}-${modelId}`),
+      });
+
+    it("denies exec only for the capped model", async () => {
+      const config = ceilingConfig("deny");
+      await expect(
+        requireExecTool(toolsForModel(config, "local-llm", "small")).execute("capped", {
+          command: "echo capped",
+        }),
+      ).rejects.toThrow("exec denied");
+      const other = await requireExecTool(toolsForModel(config, "anthropic", "big")).execute(
+        "uncapped",
+        { command: "echo uncapped" },
+      );
+      expect(other.details).toMatchObject({ status: "completed" });
+    });
+
+    it("sends only the capped model's exec misses to the reviewer before any process starts", async () => {
+      const config = ceilingConfig("auto");
+      const marker = (name: string) => path.join(tempDirs.make("ceiling-marker-"), name);
+      const capped = marker("capped");
+      const result = await requireExecTool(toolsForModel(config, "local-llm", "small")).execute(
+        "capped-review",
+        { command: `touch ${capped}` },
+      );
+      expect(reviewer).toHaveBeenCalledTimes(1);
+      expect(JSON.stringify(result)).toContain("fixture denial");
+      expect(fs.existsSync(capped)).toBe(false);
+      const uncapped = marker("uncapped");
+      await requireExecTool(toolsForModel(config, "anthropic", "big")).execute("uncapped-run", {
+        command: `touch ${uncapped}`,
+      });
+      expect(reviewer).toHaveBeenCalledTimes(1);
+      expect(fs.existsSync(uncapped)).toBe(true);
+    });
   });
 
   it("should run exec synchronously when process is denied", async () => {
@@ -256,16 +409,15 @@ describe("Agent-specific exec tool defaults", () => {
           },
         },
         agents: {
-          list: [
-            {
-              id: "main",
+          entries: {
+            main: {
               tools: {
                 exec: {
                   mode: "allowlist",
                 },
               },
             },
-          ],
+          },
         },
       },
       sessionKey: "agent:main:main",

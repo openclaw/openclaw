@@ -12,15 +12,35 @@ const SCRIPT_FAILURE_COPY = {
   snapshot_limit_exceeded: "exceeded its state limit",
   internal_error: "failed internally",
   tool_budget_exceeded: "exceeded its tool budget",
-} satisfies Record<CronTriggerFailureCode, string>;
+} satisfies Record<Exclude<CronTriggerFailureCode, "plugin_reload_failed">, string>;
 
 /** Renders only classified reasons or closed producer-authored failure facts. */
 export function cronFailureDetailLines(
   errorReason: FailoverReason | undefined,
   failureNotificationDetail?: CronFailureNotificationDetail,
 ): string[] {
+  if (errorReason === "billing" || errorReason === "server_error") {
+    return [
+      `Cause: ${errorReason}`,
+      errorReason === "billing"
+        ? "Ask the provider account owner to resolve the billing error, or choose another provider for this automation, then run it again."
+        : "The AI service is having trouble. Wait a moment and run the automation again, or choose another provider.",
+    ];
+  }
   if (errorReason) {
-    return [`Cause: ${errorReason}`];
+    if (errorReason === "route_unavailable") {
+      return [
+        `Cause: ${errorReason}`,
+        "The provider cannot serve this model right now. Choose another model for this automation or ask the provider operator to restore the route, then run it again.",
+      ];
+    }
+    return errorReason === "model_not_found"
+      ? [
+          `Cause: ${errorReason}`,
+          "Run `openclaw doctor --fix` to repair provider-declared retired model references.",
+          "Choose a supported model for this automation or remove its model override to use the agent default. If the agent default is unavailable, update it too.",
+        ]
+      : [`Cause: ${errorReason}`];
   }
   if (!failureNotificationDetail) {
     return [GENERIC_FAILURE_DETAIL];
@@ -37,5 +57,12 @@ export function cronFailureDetailLines(
   }
   const label =
     failureNotificationDetail.source === "payload" ? "automation script" : "trigger script";
+  if (failureNotificationDetail.code === "plugin_reload_failed") {
+    return [
+      "Cause: tools could not be refreshed after a plugin reload.",
+      `The ${label} did not run. Automatic setup recovery failed.`,
+      "Check automation history and plugin status, then retry the automation.",
+    ];
+  }
   return [`Cause: ${label} ${SCRIPT_FAILURE_COPY[failureNotificationDetail.code]}`];
 }

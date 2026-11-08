@@ -3,7 +3,7 @@ import type { RootFileOpenFailure } from "../infra/boundary-file-read.js";
 import type { PluginDiagnosticCode, PluginManifest } from "./manifest-types.js";
 
 export type CachedPluginManifestResult =
-  | { ok: true; manifest: PluginManifest; manifestPath: string }
+  | { ok: true; manifest: PluginManifest; manifestPath: string; warnings?: string[] }
   | { ok: false; error: string; manifestPath: string; diagnosticCode?: PluginDiagnosticCode };
 
 export type PluginJsonCacheResult = { ok: true; value: unknown } | { ok: false; error: unknown };
@@ -11,6 +11,25 @@ export type PluginJsonCacheResult = { ok: true; value: unknown } | { ok: false; 
 export type PluginEntryCheck =
   | { ok: true; path: string; rootRealPath: string; exists: boolean }
   | RootFileOpenFailure;
+
+export type PluginStatFacts = Pick<
+  fs.Stats,
+  | "mode"
+  | "uid"
+  | "nlink"
+  | "dev"
+  | "ino"
+  | "size"
+  | "mtimeMs"
+  | "isFile"
+  | "isDirectory"
+  | "isSymbolicLink"
+>;
+
+export type PluginDirectoryEntry = Pick<
+  fs.Dirent,
+  "name" | "isFile" | "isDirectory" | "isSymbolicLink"
+>;
 
 export type PluginFileCacheEntry = (
   | {
@@ -31,10 +50,11 @@ export type PluginPathCacheEntry = {
   exists?: boolean;
   realpath?: string | null;
   nativeRealpath?: string | null;
-  stat?: fs.Stats | null;
-  lstat?: fs.Stats | null;
+  stat?: PluginStatFacts | null;
+  statError?: unknown;
+  lstat?: PluginStatFacts | null;
 };
 
 export type PluginDirectoryCacheEntry =
-  | { ok: true; entries: fs.Dirent[] }
+  | { ok: true; entries: PluginDirectoryEntry[] }
   | { ok: false; error: unknown };

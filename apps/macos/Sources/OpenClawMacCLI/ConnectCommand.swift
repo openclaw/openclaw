@@ -16,7 +16,7 @@ struct ConnectOptions {
     var clientMode: String = "ui"
     var displayName: String?
     var role: String = "operator"
-    var scopes: [String] = defaultOperatorConnectScopes
+    var scopes: [String] = GatewayChannelActor.defaultOperatorConnectScopes
     var scopesAreExplicit: Bool = false
     var help: Bool = false
 
@@ -53,13 +53,8 @@ struct ConnectOptions {
             let arg = args[i]
             if let handler = flagHandlers[arg] {
                 handler(&opts)
-                i += 1
-                continue
-            }
-            if let handler = valueHandlers[arg], let value = CLIArgParsingSupport.nextValue(args, index: &i) {
+            } else if let handler = valueHandlers[arg], let value = CLIArgParsingSupport.nextValue(args, index: &i) {
                 handler(&opts, value)
-                i += 1
-                continue
             }
             i += 1
         }
@@ -82,18 +77,17 @@ struct ConnectOutput: Encodable {
 
 actor SnapshotStore {
     private var value: (snapshot: HelloOk, generation: UInt64)?
-    // The channel awaits retirement before reconnecting. Keep that socket epoch
-    // so a queued old callback cannot overwrite the replacement snapshot.
-    private var activeGeneration: UInt64?
-    private var lastRetiredGeneration: UInt64?
+    /// The channel awaits retirement before reconnecting. Keep that socket epoch
+    /// so a queued old callback cannot overwrite the replacement snapshot.
+    private var socketGeneration = GatewaySocketGenerationState()
 
     func set(_ snapshot: HelloOk, generation: UInt64) {
-        guard self.admitGeneration(generation) else { return }
+        guard self.socketGeneration.admit(generation) else { return }
         self.value = (snapshot, generation)
     }
 
     func retire(generation: UInt64) {
-        guard self.retireGeneration(generation) else { return }
+        guard self.socketGeneration.retire(generation) else { return }
         if self.value?.generation == generation {
             self.value = nil
         }
@@ -102,38 +96,9 @@ actor SnapshotStore {
     func get() -> HelloOk? {
         self.value?.snapshot
     }
-
-    private func admitGeneration(_ generation: UInt64) -> Bool {
-        if let lastRetiredGeneration,
-           generation <= lastRetiredGeneration
-        {
-            return false
-        }
-        if let activeGeneration {
-            return generation == activeGeneration
-        }
-        self.activeGeneration = generation
-        return true
-    }
-
-    private func retireGeneration(_ generation: UInt64) -> Bool {
-        if let lastRetiredGeneration,
-           generation <= lastRetiredGeneration
-        {
-            return false
-        }
-        if let activeGeneration,
-           generation != activeGeneration
-        {
-            return false
-        }
-        self.activeGeneration = nil
-        self.lastRetiredGeneration = generation
-        return true
-    }
 }
 
-func runConnect(_ args: [String]) async {
+func runConnect(_ args: [String], configURL: URL) async {
     let opts = ConnectOptions.parse(args)
     if opts.help {
         print("""
@@ -146,6 +111,7 @@ func runConnect(_ args: [String]) async {
                                [--role <role>] [--scopes <a,b,c>]
 
         Options:
+          --profile <name>  App profile; overrides OPENCLAW_PROFILE (default: default)
           --url <url>        Gateway WebSocket URL (overrides config)
           --token <token>    Gateway token (if required)
           --password <pw>    Gateway password (if required)
@@ -163,7 +129,15 @@ func runConnect(_ args: [String]) async {
         return
     }
 
-    let config = loadGatewayConfig()
+    let config = loadGatewayConfig(from: configURL)
+    var output = ConnectOutput(
+        status: "ok",
+        url: "unknown",
+        mode: (opts.mode ?? config.mode ?? "local").lowercased(),
+        role: opts.role,
+        clientId: opts.clientId,
+        clientMode: opts.clientMode,
+        scopes: opts.scopes)
     do {
         let endpoint = try resolveGatewayEndpoint(opts: opts, config: config)
         let displayName = opts.displayName ?? Host.current().localizedName ?? "OpenClaw macOS Debug CLI"
@@ -196,32 +170,17 @@ func runConnect(_ args: [String]) async {
         let snapshot = await snapshotStore.get()
         await channel.shutdown()
 
-        let output = ConnectOutput(
-            status: "ok",
-            url: endpoint.url.absoluteString,
-            mode: endpoint.mode,
-            role: opts.role,
-            clientId: opts.clientId,
-            clientMode: opts.clientMode,
-            scopes: opts.scopes,
-            snapshot: snapshot,
-            health: health,
-            error: nil)
+        output.url = endpoint.url.absoluteString
+        output.mode = endpoint.mode
+        output.snapshot = snapshot
+        output.health = health
         printConnectOutput(output, json: opts.json)
     } catch {
-        let endpoint = bestEffortEndpoint(opts: opts, config: config)
-        let fallbackMode = (opts.mode ?? config.mode ?? "local").lowercased()
-        let output = ConnectOutput(
-            status: "error",
-            url: endpoint?.url.absoluteString ?? "unknown",
-            mode: endpoint?.mode ?? fallbackMode,
-            role: opts.role,
-            clientId: opts.clientId,
-            clientMode: opts.clientMode,
-            scopes: opts.scopes,
-            snapshot: nil,
-            health: nil,
-            error: error.localizedDescription)
+        let endpoint = try? resolveGatewayEndpoint(opts: opts, config: config)
+        output.status = "error"
+        output.url = endpoint?.url.absoluteString ?? "unknown"
+        output.mode = endpoint?.mode ?? output.mode
+        output.error = error.localizedDescription
         printConnectOutput(output, json: opts.json)
         exit(1)
     }
@@ -229,15 +188,7 @@ func runConnect(_ args: [String]) async {
 
 private func printConnectOutput(_ output: ConnectOutput, json: Bool) {
     if json {
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        if let data = try? encoder.encode(output),
-           let text = String(data: data, encoding: .utf8)
-        {
-            print(text)
-        } else {
-            print("{\"error\":\"failed to encode JSON\"}")
-        }
+        printCLIJSON(output, fallback: "{\"error\":\"failed to encode JSON\"}")
         return
     }
 
@@ -268,97 +219,43 @@ private func printConnectOutput(_ output: ConnectOutput, json: Bool) {
 
 func resolveGatewayEndpoint(opts: ConnectOptions, config: GatewayConfig) throws -> GatewayEndpoint {
     let resolvedMode = (opts.mode ?? config.mode ?? "local").lowercased()
-    if let raw = opts.url, !raw.isEmpty {
-        return try gatewayEndpoint(
-            fromRawURL: raw,
-            opts: opts,
-            mode: resolvedMode,
-            config: config,
-            inheritConfigCredentials: false)
-    }
-
-    if resolvedMode == "remote" {
-        guard let raw = config.remoteUrl?.trimmingCharacters(in: .whitespacesAndNewlines),
-              !raw.isEmpty
+    let hasExplicitURL = opts.url?.isEmpty == false
+    let raw: String
+    if let explicitURL = opts.url, hasExplicitURL {
+        raw = explicitURL
+    } else if resolvedMode == "remote" {
+        guard let remoteURL = config.remoteUrl?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !remoteURL.isEmpty
         else {
             throw NSError(
                 domain: "Gateway",
                 code: 1,
                 userInfo: [NSLocalizedDescriptionKey: "gateway.remote.url is missing"])
         }
-        return try gatewayEndpoint(fromRawURL: raw, opts: opts, mode: resolvedMode, config: config)
+        raw = remoteURL
+    } else {
+        let port = config.port ?? 18789
+        let host = resolveLocalHost(bind: config.bind)
+        raw = "ws://\(host):\(port)"
     }
-
-    let port = config.port ?? 18789
-    let host = resolveLocalHost(bind: config.bind)
-    guard let url = URL(string: "ws://\(host):\(port)") else {
-        throw NSError(
-            domain: "Gateway",
-            code: 1,
-            userInfo: [NSLocalizedDescriptionKey: "invalid url: ws://\(host):\(port)"])
-    }
-    return GatewayEndpoint(
-        url: url,
-        token: resolvedToken(opts: opts, mode: resolvedMode, config: config),
-        password: resolvedPassword(opts: opts, mode: resolvedMode, config: config),
-        mode: resolvedMode)
-}
-
-private func bestEffortEndpoint(opts: ConnectOptions, config: GatewayConfig) -> GatewayEndpoint? {
-    try? resolveGatewayEndpoint(opts: opts, config: config)
-}
-
-private func gatewayEndpoint(
-    fromRawURL raw: String,
-    opts: ConnectOptions,
-    mode: String,
-    config: GatewayConfig,
-    inheritConfigCredentials: Bool = true) throws -> GatewayEndpoint
-{
     guard let url = URL(string: raw) else {
         throw NSError(domain: "Gateway", code: 1, userInfo: [NSLocalizedDescriptionKey: "invalid url: \(raw)"])
     }
     return GatewayEndpoint(
         url: url,
-        token: resolvedToken(
-            opts: opts,
-            mode: mode,
-            config: config,
-            inheritConfigCredentials: inheritConfigCredentials),
-        password: resolvedPassword(
-            opts: opts,
-            mode: mode,
-            config: config,
-            inheritConfigCredentials: inheritConfigCredentials),
-        mode: mode)
-}
-
-private func resolvedToken(
-    opts: ConnectOptions,
-    mode: String,
-    config: GatewayConfig,
-    inheritConfigCredentials: Bool = true) -> String?
-{
-    if let token = opts.token, !token.isEmpty { return token }
-    guard inheritConfigCredentials else { return nil }
-    if mode == "remote" {
-        return config.remoteToken
-    }
-    return config.token
-}
-
-private func resolvedPassword(
-    opts: ConnectOptions,
-    mode: String,
-    config: GatewayConfig,
-    inheritConfigCredentials: Bool = true) -> String?
-{
-    if let password = opts.password, !password.isEmpty { return password }
-    guard inheritConfigCredentials else { return nil }
-    if mode == "remote" {
-        return config.remotePassword
-    }
-    return config.password
+        token: resolvedCredential(
+            opts.token,
+            mode: resolvedMode,
+            local: config.token,
+            remote: config.remoteToken,
+            inheritConfigCredentials: !hasExplicitURL),
+        password: resolvedCredential(
+            opts.password,
+            mode: resolvedMode,
+            local: config.password,
+            remote: config.remotePassword,
+            inheritConfigCredentials: !hasExplicitURL),
+        mode: resolvedMode)
 }
 
 func makeGatewayConnectOptions(
@@ -393,7 +290,7 @@ func gatewayURLDeviceAuthOwner(_ url: URL, mode: String) -> String {
     components?.password = nil
     let queryItems = components?.queryItems
     components?.queryItems = queryItems?.filter { queryItem in
-        !isSensitiveGatewayQueryItem(queryItem.name)
+        !GatewayEndpointID.isSensitiveQueryItemName(queryItem.name)
     }
     if components?.queryItems?.isEmpty == true {
         components?.query = nil
@@ -404,19 +301,6 @@ func gatewayURLDeviceAuthOwner(_ url: URL, mode: String) -> String {
     let digest = SHA256.hash(data: Data(route.utf8))
     let fingerprint = digest.map { String(format: "%02x", $0) }.joined()
     return "openclaw-mac-cli:route:\(fingerprint)"
-}
-
-private func isSensitiveGatewayQueryItem(_ value: String) -> Bool {
-    let normalized = value
-        .trimmingCharacters(in: .whitespacesAndNewlines)
-        .lowercased()
-        .replacingOccurrences(of: "-", with: "_")
-    return [
-        "access_token", "api_key", "apikey", "app_secret", "auth", "auth_token",
-        "authorization", "client_secret", "code", "credential", "hook_token", "id_token",
-        "jwt", "key", "pass", "passwd", "password", "private_key", "refresh_token",
-        "secret", "session", "signature", "token", "x_amz_security_token", "x_amz_signature",
-    ].contains(normalized)
 }
 
 private func resolveLocalHost(bind: String?) -> String {

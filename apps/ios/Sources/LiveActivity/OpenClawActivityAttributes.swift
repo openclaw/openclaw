@@ -31,15 +31,6 @@ struct OpenClawActivityAttributes: ActivityAttributes {
         /// Live Activity updates carry the real audible signal across the app/widget boundary.
         var voiceSamples: [UInt8]?
 
-        private enum CodingKeys: String, CodingKey {
-            case status
-            case verbatimDetail
-            case startedAt
-            case agentBadge
-            case toolName
-            case voiceSamples
-        }
-
         private enum LegacyCodingKeys: String, CodingKey {
             case statusText
             case isIdle
@@ -92,16 +83,6 @@ struct OpenClawActivityAttributes: ActivityAttributes {
             self.voiceSamples = nil
         }
 
-        func encode(to encoder: Encoder) throws {
-            var container = encoder.container(keyedBy: CodingKeys.self)
-            try container.encode(self.status, forKey: .status)
-            try container.encodeIfPresent(self.verbatimDetail, forKey: .verbatimDetail)
-            try container.encode(self.startedAt, forKey: .startedAt)
-            try container.encodeIfPresent(self.agentBadge, forKey: .agentBadge)
-            try container.encodeIfPresent(self.toolName, forKey: .toolName)
-            try container.encodeIfPresent(self.voiceSamples, forKey: .voiceSamples)
-        }
-
         private static func legacyPresentation(
             statusText: String?,
             isIdle: Bool,
@@ -118,35 +99,21 @@ struct OpenClawActivityAttributes: ActivityAttributes {
             let trimmed = statusText?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             let detail = trimmed.isEmpty ? nil : trimmed
             if isConnecting {
-                if let detail, Self.matchesShippedTranslation(detail, key: "Reconnecting...") {
+                if detail == "Reconnecting..." {
                     return (.reconnecting, nil)
                 }
-                if let detail, Self.matchesShippedTranslation(detail, key: "Connecting...") {
+                if detail == "Connecting..." {
                     return (.connecting, nil)
                 }
                 return (.connecting, detail)
             }
-            if let detail, Self.matchesShippedTranslation(detail, key: "Approval needed") {
+            if detail == "Approval needed" {
                 return (.approvalNeeded, nil)
             }
-            if let detail, Self.matchesShippedTranslation(detail, key: "Action required") {
+            if detail == "Action required" {
                 return (.actionRequired, nil)
             }
             return (.attention, detail)
-        }
-
-        private static func matchesShippedTranslation(_ value: String, key: String) -> Bool {
-            if value == key {
-                return true
-            }
-            return Bundle.main.localizations.contains { localization in
-                guard let path = Bundle.main.path(forResource: localization, ofType: "lproj"),
-                      let bundle = Bundle(path: path)
-                else {
-                    return false
-                }
-                return bundle.localizedString(forKey: key, value: key, table: nil) == value
-            }
         }
     }
 }

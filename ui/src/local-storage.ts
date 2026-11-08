@@ -1,4 +1,3 @@
-// Control UI module implements local storage behavior.
 function isStorage(value: unknown): value is Storage {
   return (
     Boolean(value) &&
@@ -10,7 +9,7 @@ function isStorage(value: unknown): value is Storage {
 function getSafeStorage(name: "localStorage" | "sessionStorage"): Storage | null {
   const descriptor = Object.getOwnPropertyDescriptor(globalThis, name);
 
-  if (typeof process !== "undefined" && process.env?.VITEST) {
+  if (import.meta.env?.MODE === "test" && typeof process !== "undefined" && process.env?.VITEST) {
     return descriptor && !descriptor.get && isStorage(descriptor.value) ? descriptor.value : null;
   }
 

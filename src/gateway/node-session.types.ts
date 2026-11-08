@@ -1,0 +1,87 @@
+// Keep protocol imports narrow: NodeSession is reachable through the public SDK.
+import type { DesktopAvailability } from "../../packages/gateway-protocol/src/schema/environments.js";
+import type {
+  NodePluginToolDescriptor,
+  NodeSkillDescriptor,
+} from "../../packages/gateway-protocol/src/schema/nodes.js";
+import type { ComputerUseCapabilityDescriptor } from "../plugins/computer-use-contract.js";
+import type { NodeHostStats } from "../shared/node-host-stats.js";
+import type { SerializedEventPayload } from "./node-event-payload.js";
+import type { GatewayWsClient } from "./server/ws-types.js";
+
+/** Connected node session advertised over Gateway websocket. */
+export type NodeSession = {
+  nodeId: string;
+  connId: string;
+  /** Persistent device key and node-token identity authenticated for this connection. */
+  pairingIdentity?: string;
+  /** Persistent pairing generation authenticated before this session was registered. */
+  pairingGeneration?: string;
+  client: GatewayWsClient;
+  clientId?: string;
+  clientMode?: string;
+  displayName?: string;
+  platform?: string;
+  version?: string;
+  coreVersion?: string;
+  uiVersion?: string;
+  deviceFamily?: string;
+  modelIdentifier?: string;
+  remoteIp?: string;
+  declaredCaps: string[];
+  sessionCapsCeiling?: string[];
+  caps: string[];
+  declaredCommands: string[];
+  sessionCommandsCeiling?: string[];
+  commands: string[];
+  declaredComputerUse?: ComputerUseCapabilityDescriptor;
+  computerUse?: ComputerUseCapabilityDescriptor;
+  declaredNodePluginTools: NodePluginToolDescriptor[];
+  nodePluginTools: NodePluginToolDescriptor[];
+  nodeSkills: NodeSkillDescriptor[];
+  declaredPermissions?: Record<string, boolean>;
+  permissions?: Record<string, boolean>;
+  pathEnv?: string;
+  connectedAtMs: number;
+  lastActiveAtMs?: number;
+  presenceUpdatedAtMs?: number;
+  /** Source of the current connection's activity sample; reset with that sample. */
+  presenceActivitySource?: "app" | "system";
+  hostStats?: NodeHostStats;
+  desktopAvailability?: DesktopAvailability;
+};
+
+export type NodeSessionConnectParams = GatewayWsClient["connect"] &
+  Partial<
+    Pick<
+      NodeSession,
+      | "declaredCaps"
+      | "declaredCommands"
+      | "declaredComputerUse"
+      | "declaredPermissions"
+      | "sessionCapsCeiling"
+      | "sessionCommandsCeiling"
+      | "coreVersion"
+      | "uiVersion"
+    >
+  > & {
+    withheldCommands?: string[];
+  };
+
+export type NodeEventPayloadPreparation = (connId: string) =>
+  | {
+      payloadJSON: SerializedEventPayload | null;
+      onSent?: () => void;
+    }
+  | undefined;
+
+export type NodeConnectivityResult =
+  | { ok: true }
+  | { ok: false; error: { code: string; message: string } };
+
+/** Event transport for nodes that cannot keep a WebSocket open, such as watchOS. */
+export type NodeEventTransport = {
+  send: (event: string, payload: unknown) => boolean;
+  sendRaw: (event: string, payloadJSON?: SerializedEventPayload | null) => boolean;
+  checkConnectivity?: (timeoutMs: number) => Promise<NodeConnectivityResult>;
+};

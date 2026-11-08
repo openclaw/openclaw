@@ -1,20 +1,13 @@
-// Discord plugin module implements outbound components behavior.
 import type { ChannelOutboundAdapter } from "openclaw/plugin-sdk/channel-send-result";
-import {
-  createLazyRuntimeModule,
-  createLazyRuntimeNamedExport,
-} from "openclaw/plugin-sdk/lazy-runtime";
+import { createLazyRuntimeMethod, createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { resolveAskUserQuestionOptionIndices } from "openclaw/plugin-sdk/reply-payload";
 import { readDiscordComponentSpec, type DiscordComponentMessageSpec } from "./components.js";
 
-type DiscordComponentSendFn = typeof import("./send.components.js").sendDiscordComponentMessage;
 type OutboundPayload = Parameters<NonNullable<ChannelOutboundAdapter["sendPayload"]>>[0]["payload"];
 
 const DISCORD_MESSAGE_COMPONENT_LIMIT = 40;
 const DISCORD_TEXT_DISPLAY_LIMIT = 2000;
 const DISCORD_CONTEXT_PREFIX_LENGTH = Array.from("-# ").length;
-
-const DISCORD_PRESENTATION_TEXT_LIMIT = DISCORD_TEXT_DISPLAY_LIMIT - DISCORD_CONTEXT_PREFIX_LENGTH;
 
 export const DISCORD_PRESENTATION_CAPABILITIES = {
   supported: true,
@@ -37,25 +30,17 @@ export const DISCORD_PRESENTATION_CAPABILITIES = {
       maxValueBytes: 100,
     },
     text: {
-      maxLength: DISCORD_PRESENTATION_TEXT_LIMIT,
+      maxLength: DISCORD_TEXT_DISPLAY_LIMIT - DISCORD_CONTEXT_PREFIX_LENGTH,
       encoding: "characters",
       markdownDialect: "discord-markdown",
     },
   },
 } satisfies NonNullable<ChannelOutboundAdapter["presentationCapabilities"]>;
 
-const loadDiscordComponentSend = createLazyRuntimeNamedExport(
-  () => import("./send.components.js"),
-  "sendDiscordComponentMessage",
+export const sendDiscordComponentMessageLazy = createLazyRuntimeMethod(
+  createLazyRuntimeModule(() => import("./send.components.js")),
+  (runtime) => runtime.sendDiscordComponentMessage,
 );
-
-export async function sendDiscordComponentMessageLazy(
-  ...args: Parameters<DiscordComponentSendFn>
-): ReturnType<DiscordComponentSendFn> {
-  return await (
-    await loadDiscordComponentSend()
-  )(...args);
-}
 
 const loadDiscordSharedInteractive = createLazyRuntimeModule(
   () => import("./shared-interactive.js"),
@@ -73,30 +58,30 @@ function addPayloadTextFallback(
       };
 }
 
-function countDiscordComponentBlock(
-  block: NonNullable<DiscordComponentMessageSpec["blocks"]>[number],
-) {
-  if (block.type === "section") {
-    const textCount = block.texts?.length ? block.texts.length : block.text ? 1 : 0;
-    return 1 + textCount + (block.accessory ? 1 : 0);
-  }
-  if (block.type === "actions") {
-    return 1 + (block.buttons?.length ?? (block.select ? 1 : 0));
-  }
-  return 1;
-}
-
-function countDiscordMessageComponents(params: {
+export function isDiscordComponentSpecWithinMessageLimit(params: {
   spec: DiscordComponentMessageSpec;
-  includesMedia: boolean;
-}): number {
-  const blocks = params.spec.blocks ?? [];
-  let count = 1 + (params.spec.text ? 1 : 0);
+  fallbackText?: string;
+  includesMedia?: boolean;
+}): boolean {
+  const spec = addPayloadTextFallback(params.spec, { text: params.fallbackText });
+  if (spec.text && Array.from(spec.text).length > DISCORD_TEXT_DISPLAY_LIMIT) {
+    return false;
+  }
+  const includesMedia = params.includesMedia === true;
+  const blocks = spec.blocks ?? [];
+  let count = 1 + (spec.text ? 1 : 0);
   for (const block of blocks) {
-    count += countDiscordComponentBlock(block);
+    if (block.type === "section") {
+      const textCount = block.texts?.length ? block.texts.length : block.text ? 1 : 0;
+      count += 1 + textCount + (block.accessory ? 1 : 0);
+    } else if (block.type === "actions") {
+      count += 1 + (block.buttons?.length ?? (block.select ? 1 : 0));
+    } else {
+      count += 1;
+    }
   }
 
-  if (params.spec.modal) {
+  if (spec.modal) {
     const lastBlock = blocks.at(-1);
     const triggerFitsLastRow =
       lastBlock?.type === "actions" && !lastBlock.select && (lastBlock.buttons?.length ?? 0) < 5;
@@ -104,27 +89,10 @@ function countDiscordMessageComponents(params: {
   }
 
   const hasFileBlock = blocks.some((block) => block.type === "file");
-  if (params.includesMedia && !hasFileBlock) {
+  if (includesMedia && !hasFileBlock) {
     count += 1;
   }
-  return count;
-}
-
-export function isDiscordComponentSpecWithinMessageLimit(params: {
-  spec: DiscordComponentMessageSpec;
-  fallbackText?: string;
-  includesMedia?: boolean;
-}): boolean {
-  const countedSpec = addPayloadTextFallback(params.spec, { text: params.fallbackText });
-  if (countedSpec.text && Array.from(countedSpec.text).length > DISCORD_TEXT_DISPLAY_LIMIT) {
-    return false;
-  }
-  return (
-    countDiscordMessageComponents({
-      spec: countedSpec,
-      includesMedia: params.includesMedia === true,
-    }) <= DISCORD_MESSAGE_COMPONENT_LIMIT
-  );
+  return count <= DISCORD_MESSAGE_COMPONENT_LIMIT;
 }
 
 export async function buildDiscordPresentationPayload(params: {

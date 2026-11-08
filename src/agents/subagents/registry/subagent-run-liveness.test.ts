@@ -1,10 +1,15 @@
 // Subagent run liveness tests cover stale-unended detection and child-link
 // retention windows for registry list/read paths.
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import {
-  isLiveUnendedSubagentRun,
+  copySubagentRunRuntimeOwner,
+  isSameSubagentRun,
+  isSameSubagentRunOwner,
+  type SubagentRunIdentity,
+} from "./subagent-run-generation.js";
+import {
+  isRetainedUnendedSubagentRun,
   RECENT_ENDED_SUBAGENT_CHILD_SESSION_MS,
-  isStaleUnendedSubagentRun,
   shouldKeepSubagentRunChildLink,
 } from "./subagent-run-liveness.js";
 
@@ -13,118 +18,71 @@ const STALE_UNENDED_SUBAGENT_RUN_MS = 2 * 60 * 60 * 1_000;
 describe("subagent run liveness", () => {
   const now = Date.parse("2026-04-25T12:00:00Z");
 
-  it("keeps fresh unended runs live", () => {
-    const entry = {
-      createdAt: now - 60_000,
-      execution: {},
-    };
-    expect(isLiveUnendedSubagentRun(entry, now)).toBe(true);
-    expect(isStaleUnendedSubagentRun(entry, now)).toBe(false);
+  const identity: SubagentRunIdentity = {
+    runId: "identity-run",
+    taskRunId: "identity-task",
+    generation: 1,
+    createdAt: now,
+    childSessionKey: "agent:child:subagent:identity",
+    childAgentId: "child",
+    requesterSessionKey: "agent:parent:main",
+    requesterAgentId: "parent",
+    requesterStorePath: "/synthetic/parent/sessions",
+  };
+
+  it.each([
+    { runId: "replacement" },
+    { taskRunId: "replacement" },
+    { generation: 2 },
+    { createdAt: now + 1 },
+    { childSessionKey: "agent:child:subagent:replacement" },
+    { childAgentId: "replacement" },
+    { requesterSessionKey: "agent:parent:replacement" },
+    { requesterAgentId: "replacement" },
+    { requesterStorePath: "/synthetic/replacement/sessions" },
+  ])("rejects changed durable identity despite retained runtime custody: %j", (replacement) => {
+    const copied = copySubagentRunRuntimeOwner(identity, { ...identity });
+    expect(isSameSubagentRunOwner(identity, copied)).toBe(true);
+    Object.assign(copied, replacement);
+    expect(isSameSubagentRunOwner(identity, copied)).toBe(false);
   });
 
-  it("marks old unended runs stale when no explicit timeout extends the window", () => {
-    const entry = {
-      createdAt: now - STALE_UNENDED_SUBAGENT_RUN_MS - 1,
-      execution: {},
-    };
-    expect(isStaleUnendedSubagentRun(entry, now)).toBe(true);
-    expect(isLiveUnendedSubagentRun(entry, now)).toBe(false);
+  it("preserves default task/generation and nonfinite timestamp identity semantics", () => {
+    const legacy = { runId: "legacy", createdAt: Number.NaN };
+    expect(isSameSubagentRun(legacy, { ...legacy, taskRunId: "legacy", generation: 0 })).toBe(true);
+    expect(isSameSubagentRun(legacy, { ...legacy, createdAt: Number.POSITIVE_INFINITY })).toBe(
+      true,
+    );
+    expect(isSameSubagentRun(legacy, { ...legacy, createdAt: now })).toBe(false);
+    expect(isSameSubagentRun(legacy, undefined)).toBe(false);
   });
 
-  it("does not mark ended runs stale", () => {
-    const entry = {
-      createdAt: now - STALE_UNENDED_SUBAGENT_RUN_MS - 1,
-      execution: { endedAt: now - 1 },
-    };
-    expect(isStaleUnendedSubagentRun(entry, now)).toBe(false);
-    expect(isLiveUnendedSubagentRun(entry, now)).toBe(false);
+  const stale = now - STALE_UNENDED_SUBAGENT_RUN_MS - 1;
+  const recent = now - RECENT_ENDED_SUBAGENT_CHILD_SESSION_MS;
+  it.each([
+    ["ended", { createdAt: stale, execution: { endedAt: now - 1 } }, false],
+    ["long timeout", { createdAt: stale, runTimeoutSeconds: 6 * 60 * 60, execution: {} }, true],
+    ["unknown fixture timestamp", { createdAt: 100, execution: {} }, true],
+  ] as const)("checks unended retention for %s", (_case, fields, retained) => {
+    const entry = { runId: "unowned-retention-row", ...fields };
+    expect(isRetainedUnendedSubagentRun(entry, now)).toBe(retained);
   });
 
-  it("uses sessionStartedAt ahead of createdAt", () => {
-    const entry = {
-      createdAt: now - STALE_UNENDED_SUBAGENT_RUN_MS - 1,
-      sessionStartedAt: now - 60_000,
-      execution: {},
-    };
-    expect(isStaleUnendedSubagentRun(entry, now)).toBe(false);
-    expect(isLiveUnendedSubagentRun(entry, now)).toBe(true);
-  });
-
-  it("extends stale cutoff for explicit long run timeouts", () => {
-    const entry = {
-      createdAt: now - STALE_UNENDED_SUBAGENT_RUN_MS - 1,
-      runTimeoutSeconds: 6 * 60 * 60,
-      execution: {},
-    };
-    expect(isStaleUnendedSubagentRun(entry, now)).toBe(false);
-    expect(isLiveUnendedSubagentRun(entry, now)).toBe(true);
-  });
-
-  it("ignores non-real fixture timestamps as unknown instead of stale", () => {
-    // Small fixture timestamps appear in tests and old synthetic records; they
-    // should not be interpreted as Unix epoch production runs.
-    const entry = {
-      createdAt: 100,
-      execution: {},
-    };
-    expect(isStaleUnendedSubagentRun(entry, now)).toBe(false);
-    expect(isLiveUnendedSubagentRun(entry, now)).toBe(true);
-  });
-
-  it("defaults to current time when now is omitted", () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(now);
-    try {
-      expect(
-        isStaleUnendedSubagentRun({
-          createdAt: now - STALE_UNENDED_SUBAGENT_RUN_MS - 1,
-          execution: {},
-        }),
-      ).toBe(true);
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("keeps child links only while live, recently ended, or waiting on descendants", () => {
-    expect(
-      shouldKeepSubagentRunChildLink({ createdAt: now - 60_000, execution: {} }, { now }),
-    ).toBe(true);
-    expect(
-      shouldKeepSubagentRunChildLink(
-        {
-          createdAt: now - RECENT_ENDED_SUBAGENT_CHILD_SESSION_MS - 60_000,
-          execution: { endedAt: now - RECENT_ENDED_SUBAGENT_CHILD_SESSION_MS + 1 },
-        },
-        { now },
-      ),
-    ).toBe(true);
-    expect(
-      shouldKeepSubagentRunChildLink(
-        {
-          createdAt: now - RECENT_ENDED_SUBAGENT_CHILD_SESSION_MS - 60_000,
-          execution: { endedAt: now - RECENT_ENDED_SUBAGENT_CHILD_SESSION_MS - 1 },
-        },
-        { now },
-      ),
-    ).toBe(false);
-    expect(
-      shouldKeepSubagentRunChildLink(
-        {
-          createdAt: now - RECENT_ENDED_SUBAGENT_CHILD_SESSION_MS - 60_000,
-          execution: { endedAt: now - RECENT_ENDED_SUBAGENT_CHILD_SESSION_MS - 1 },
-        },
-        { activeDescendants: 1, now },
-      ),
-    ).toBe(true);
-    expect(
-      shouldKeepSubagentRunChildLink(
-        {
-          createdAt: now - STALE_UNENDED_SUBAGENT_RUN_MS - 1,
-          execution: {},
-        },
-        { now },
-      ),
-    ).toBe(false);
-  });
+  it.each([
+    ["registration grace", now - 60_000, undefined, undefined, true],
+    ["recent completion", recent - 60_000, recent + 1, undefined, true],
+    ["expired completion", recent - 60_000, recent - 1, undefined, false],
+    ["active descendant", recent - 60_000, recent - 1, 1, true],
+    ["stale unended", stale, undefined, undefined, false],
+  ] as const)(
+    "checks child-link retention for %s",
+    (_case, createdAt, endedAt, activeDescendants, retained) => {
+      const entry = {
+        runId: "unowned-retention-row",
+        createdAt,
+        execution: endedAt === undefined ? {} : { endedAt },
+      };
+      expect(shouldKeepSubagentRunChildLink(entry, { now, activeDescendants })).toBe(retained);
+    },
+  );
 });

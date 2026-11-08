@@ -4,14 +4,13 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
-  createWebPushVapidKeyPair,
   hashWebPushEndpoint,
   isValidWebPushEndpoint,
   isValidWebPushKey,
   DEFAULT_WEB_PUSH_VAPID_SUBJECT,
   type VapidKeyPair,
   type WebPushSubscription,
-} from "./push-web-store.js";
+} from "./push-web-store.records.js";
 import { assertAllowedJsonFields } from "./state-migrations.json-fields.js";
 
 const SUBSCRIPTION_STORE_KEYS = new Set(["subscriptionsByEndpointHash"]);
@@ -98,5 +97,5 @@ export function parseLegacyVapidKeys(raw: string, env: NodeJS.ProcessEnv): Vapid
   ) {
     throw new Error("legacy Web Push VAPID keys are invalid");
   }
-  return createWebPushVapidKeyPair(parsed.publicKey, parsed.privateKey, subject);
+  return { publicKey: parsed.publicKey, privateKey: parsed.privateKey, subject };
 }

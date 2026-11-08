@@ -2,10 +2,10 @@ import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import { createServer } from "node:net";
 import path from "node:path";
-import { chromium, type BrowserContext } from "playwright";
+import { chromium } from "playwright";
 import type { QaGatewayChild } from "../../../../extensions/qa-lab/api.js";
 import { runQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
-import { waitForHotReloadFact } from "./gateway-config-hot-reload-fixtures.js";
+import { createHotReloadExternalBrowser } from "./gateway-config-hot-reload-external-browser.js";
 
 type BrowserStatus = { profile: string; pid: number | null; cdpUrl: string; cdpPort: number };
 type Tabs = { running: boolean; tabs: Array<{ title: string }> };
@@ -28,16 +28,9 @@ async function unusedPort() {
   return address.port;
 }
 
-async function waitForExit(pid: number) {
-  await waitForHotReloadFact(`Chrome ${pid} exit`, () => {
-    try {
-      process.kill(pid, 0);
-      return undefined;
-    } catch (error) {
-      assert.equal((error as NodeJS.ErrnoException).code, "ESRCH");
-      return true;
-    }
-  });
+function assertExited(pid: number) {
+  // /start waits behind the profile transition, whose Chrome cleanup joins child exit.
+  assert.throws(() => process.kill(pid, 0), { code: "ESRCH" }, `Chrome ${pid} exit`);
 }
 
 export async function proveHotReloadBrowserLaunch({
@@ -64,7 +57,7 @@ export async function proveHotReloadBrowserLaunch({
     `#!/bin/sh\nprintf 'started' > ${shellQuote(launcherMarker)}\nexec ${shellQuote(executablePath)} "$@"\n`,
     { mode: 0o700 },
   );
-  let external: BrowserContext | undefined;
+  const externalOwner = createHotReloadExternalBrowser(root);
   const request = <T>(route: string, method = "GET", profile?: string) =>
     rpc<T>("browser.request", {
       target: "host",
@@ -78,46 +71,12 @@ export async function proveHotReloadBrowserLaunch({
   await runQaGatewayFixture(
     async () => {
       assert(
-        gateway.runtimeEnv.DISPLAY,
+        process.platform !== "linux" || gateway.runtimeEnv.DISPLAY,
         "Headed Chrome proof requires Gateway DISPLAY from xvfb-run",
       );
-      external = await chromium.launchPersistentContext(path.join(root, "external-profile"), {
-        executablePath,
-        headless: true,
-        args: ["--remote-debugging-port=0"],
-      });
-      const externalBrowser = external.browser();
-      assert(externalBrowser);
-      const externalPage = await external.newPage();
-      await externalPage.setContent(
-        "<title>Retained external Chrome</title><p>External browser stays alive</p>",
-      );
-      const externalCdp = await externalBrowser.newBrowserCDPSession();
-      const originalProcesses = await externalCdp.send("SystemInfo.getProcessInfo");
-      const externalPid = originalProcesses.processInfo.find(
-        (entry) => entry.type === "browser",
-      )?.id;
-      assert(externalPid);
-      const portFile = path.join(root, "external-profile", "DevToolsActivePort");
-      const portText = await waitForHotReloadFact("external Chrome CDP listener", async () => {
-        try {
-          return await fs.readFile(portFile, "utf8");
-        } catch (error) {
-          if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-            return undefined;
-          }
-          throw error;
-        }
-      });
-      const externalUrl = `http://127.0.0.1:${Number(portText.split("\n")[0])}`;
+      const external = await externalOwner.start();
       const checkExternal = async () => {
-        assert.equal(await externalPage.title(), "Retained external Chrome");
-        const processes = await externalCdp.send("SystemInfo.getProcessInfo");
-        assert(
-          processes.processInfo.some(
-            (entry) => entry.type === "browser" && entry.id === externalPid,
-          ),
-        );
+        await external.verifyAlive();
         const tabs = await request<Tabs>("/tabs", "GET", "retained");
         assert(tabs.running && tabs.tabs.some((tab) => tab.title === "Retained external Chrome"));
       };
@@ -130,7 +89,7 @@ export async function proveHotReloadBrowserLaunch({
           cdpUrl: null,
           noSandbox: true,
           extraArgs: ["--enable-automation"],
-          profiles: { openclaw: null, retained: { cdpUrl: externalUrl, attachOnly: true } },
+          profiles: { openclaw: null, retained: { cdpUrl: external.cdpUrl, attachOnly: true } },
         });
       };
       const inspect = async () => {
@@ -162,7 +121,7 @@ export async function proveHotReloadBrowserLaunch({
         await checkExternal();
         await verifyContinuity(
           prefix,
-          `${observation}; external Chrome PID ${externalPid} and its page/CDP session survived`,
+          `${observation}; external Chrome PID ${external.pid} and its page/CDP session survived`,
         );
       };
 
@@ -186,7 +145,7 @@ export async function proveHotReloadBrowserLaunch({
           await setBrowser({ headless });
           const current = await inspect();
           assert.notEqual(current.pid, previous.pid);
-          await waitForExit(previous.pid);
+          assertExited(previous.pid);
           assert.equal(
             current.args.some((arg) => arg.startsWith("--headless")),
             headless,
@@ -206,7 +165,7 @@ export async function proveHotReloadBrowserLaunch({
           await setBrowser({ executablePath: selectedPath });
           const current = await inspect();
           assert.notEqual(current.pid, previous.pid);
-          await waitForExit(previous.pid);
+          assertExited(previous.pid);
           assert.equal(current.args[0], executablePath);
           if (selectedPath === launcher) {
             assert.equal(await fs.readFile(launcherMarker, "utf8"), "started");
@@ -225,7 +184,7 @@ export async function proveHotReloadBrowserLaunch({
         const previous = await inspect();
         await setBrowser({ attachOnly: true });
         await assert.rejects(request("/start", "POST", "openclaw"), /attachOnly.*not running/);
-        await waitForExit(previous.pid);
+        assertExited(previous.pid);
         await setBrowser({ attachOnly: false });
         assert.notEqual((await inspect()).pid, previous.pid);
         await finish(
@@ -240,7 +199,7 @@ export async function proveHotReloadBrowserLaunch({
         await setBrowser({ cdpUrl: `http://127.0.0.1:${port}` });
         const current = await inspect();
         assert.notEqual(current.pid, previous.pid);
-        await waitForExit(previous.pid);
+        assertExited(previous.pid);
         assert.equal(current.cdpPort, port);
         assert(current.args.includes(`--remote-debugging-port=${port}`));
         await finish(
@@ -267,7 +226,7 @@ export async function proveHotReloadBrowserLaunch({
           assert.notEqual(current.pid, previous.pid);
           assert(!current.args.includes("--no-sandbox"));
         }
-        await waitForExit(previous.pid);
+        assertExited(previous.pid);
         await setBrowser({ noSandbox: true });
         assert((await inspect()).args.includes("--no-sandbox"));
         await finish(
@@ -284,7 +243,7 @@ export async function proveHotReloadBrowserLaunch({
           });
           const current = await inspect();
           assert.notEqual(current.pid, previous.pid);
-          await waitForExit(previous.pid);
+          assertExited(previous.pid);
           assert.equal(current.scale, scale);
           previous = current;
         }
@@ -296,7 +255,9 @@ export async function proveHotReloadBrowserLaunch({
       await reset();
     },
     () => request("/stop", "POST", "openclaw"),
-    () => external?.close(),
-    () => fs.rm(root, { recursive: true, force: true }),
+    async () => {
+      await externalOwner.close();
+      await fs.rm(root, { recursive: true, force: true });
+    },
   );
 }

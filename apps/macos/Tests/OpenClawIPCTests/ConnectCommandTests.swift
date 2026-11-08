@@ -25,6 +25,60 @@ private final class CLIConnectAuthRecorder: @unchecked Sendable {
 
 @Suite(.serialized)
 struct ConnectCommandTests {
+    @Test func `endpoint credentials preserve mode selection and explicit overrides`() throws {
+        typealias Credentials = (token: String?, password: String?)
+        let local: Credentials = ("local-token", "local-password")
+        let remote: Credentials = ("remote-token", "remote-password")
+        let whitespace: Credentials = (" \t ", "\n ")
+        let cases: [(
+            name: String,
+            opts: ConnectOptions,
+            configMode: String?,
+            local: Credentials,
+            remote: Credentials,
+            expected: Credentials)] = [
+            ("default local", .init(), nil, local, remote, local),
+            ("config remote", .init(), "remote", local, remote, remote),
+            (
+                "option local and empty explicit values",
+                .init(token: "", password: "", mode: "local"),
+                "remote", local, remote, local),
+            ("uppercase option remote", .init(mode: "REMOTE"), "local", local, remote, remote),
+            ("padded option is local", .init(mode: " remote "), "remote", local, remote, local),
+            (
+                "explicit token only", .init(token: " explicit-token "),
+                nil, local, remote, (" explicit-token ", local.password)),
+            (
+                "explicit whitespace password only", .init(password: " \t "),
+                "remote", local, remote, (remote.token, " \t ")),
+            ("local nil and empty", .init(), nil, (nil, ""), remote, (nil, "")),
+            ("remote empty and nil", .init(), "remote", local, ("", nil), ("", nil)),
+            ("local whitespace", .init(), nil, whitespace, remote, whitespace),
+            ("remote whitespace", .init(), "remote", local, whitespace, whitespace),
+            (
+                "explicit URL isolates empty token",
+                .init(url: "wss://gateway.example.test", token: "", password: " \t "),
+                "remote", local, remote, (nil, " \t ")),
+        ]
+
+        for testCase in cases {
+            var config = GatewayConfig()
+            config.mode = testCase.configMode
+            config.remoteUrl = "wss://remote.example.test"
+            config.token = testCase.local.token
+            config.password = testCase.local.password
+            config.remoteToken = testCase.remote.token
+            config.remotePassword = testCase.remote.password
+
+            let endpoint = try resolveGatewayEndpoint(
+                opts: testCase.opts,
+                config: config)
+
+            #expect(endpoint.token == testCase.expected.token, "\(testCase.name)")
+            #expect(endpoint.password == testCase.expected.password, "\(testCase.name)")
+        }
+    }
+
     @Test func `explicit URL never inherits config credentials`() throws {
         var config = GatewayConfig()
         config.mode = "remote"

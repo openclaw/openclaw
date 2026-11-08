@@ -6,7 +6,7 @@ import {
   QA_EVIDENCE_FILENAME,
   type QaEvidenceSummaryJson,
   validateQaEvidenceSummaryJson,
-} from "../../../../extensions/qa-lab/api.js";
+} from "../../../../extensions/qa-lab/test-api.js";
 import { coerceErrorMessage as formatErrorMessage } from "../../../../scripts/lib/error-format.mts";
 import { createQaScriptEvidenceWriter } from "./script-evidence.js";
 
@@ -184,7 +184,9 @@ function createEvidenceWriter(options: ProducerOptions) {
         "docs/cli/gateway.md",
         "docs/install/updating.md",
         "docs/gateway/troubleshooting.md",
-        "docs/reference/test.md",
+        // The testing reference is an index over docs/reference/test/*; point at
+        // the page that owns the commands this proof runs, not the index.
+        "docs/reference/test/local.md",
       ],
       id: SCENARIO_ID,
       sourcePath: SOURCE_PATH,

@@ -437,6 +437,11 @@ function withOtelEndpoint(config: OpenClawConfig, endpoint: string): OpenClawCon
 async function updateWatchedEndpoint(configPath: string, endpoint: string): Promise<void> {
   const parsed = JSON.parse(await fs.readFile(configPath, "utf8")) as OpenClawConfig;
   const next = withOtelEndpoint(parsed, endpoint);
+  // Endpoint changes hot-apply; keep this separate full-restart generation proof explicit.
+  next.gateway = {
+    ...next.gateway,
+    controlUi: { ...next.gateway?.controlUi, basePath: "/otel-restart-proof" },
+  };
   await fs.writeFile(configPath, `${JSON.stringify(next, null, 2)}\n`, "utf8");
 }
 
@@ -474,6 +479,7 @@ async function probeOtelGenerationConfigWatcher(
     mock = await startQaMockOpenAiServer();
     gateway = await gatewayOwner.start({
       repoRoot: options.repoRoot,
+      initializeCurrentRuntimeState: true,
       useRepoCli: true,
       providerBaseUrl: `${mock.baseUrl}/v1`,
       providerMode: "mock-openai",
@@ -501,7 +507,7 @@ async function probeOtelGenerationConfigWatcher(
     const restartLogOffset = gateway.logs().length;
     await updateWatchedEndpoint(gateway.configPath, receiverB.baseUrl);
     const restartLogObserved = await waitFor({
-      label: "in-process config watcher restart",
+      label: "in-process restart for mixed endpoint and startup-owned Control UI path edit",
       timeoutMs: RESTART_TIMEOUT_MS,
       read: () =>
         gateway!
@@ -591,7 +597,7 @@ function createWriter(options: RuntimeOptions) {
     repoRoot: options.repoRoot,
     target: {
       id: SCENARIO_ID,
-      title: "OTEL generation config watcher",
+      title: "OTEL generation across a mixed restart-required config edit",
       sourcePath: SOURCE_PATH,
       docsRefs: ["docs/gateway/opentelemetry.md", "docs/concepts/qa-e2e-automation.md"],
       codeRefs: [

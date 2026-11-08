@@ -1,19 +1,24 @@
 # Replace the placeholder with an immutable linux/amd64 digest from the official
 # Docker Hub repository. Cloudflare Containers cannot pull OpenClaw from GHCR.
 ARG OPENCLAW_IMAGE=openclaw/openclaw@sha256:<official-openclaw-image-digest>
-FROM ${OPENCLAW_IMAGE}
+FROM ${OPENCLAW_IMAGE} AS litestream
 
 USER root
 
-ARG LITESTREAM_VERSION=0.5.16
-ARG LITESTREAM_SHA256=9e29112380a942e4a62ee07773684396cb8b308dc4d67e130bef41f75e937f0a
+ARG LITESTREAM_VERSION=0.5.17
+ARG LITESTREAM_SHA256=cfb371176d164437ae869f8351cfde49bd1804ae71c61923f75c9cba9c9c006d
 
 ADD --checksum=sha256:${LITESTREAM_SHA256} \
   https://github.com/benbjohnson/litestream/releases/download/v${LITESTREAM_VERSION}/litestream-${LITESTREAM_VERSION}-linux-x86_64.tar.gz \
   /tmp/litestream.tar.gz
 RUN tar -xzf /tmp/litestream.tar.gz -C /usr/local/bin litestream \
-  && chmod 0755 /usr/local/bin/litestream \
-  && rm /tmp/litestream.tar.gz
+  && chmod 0755 /usr/local/bin/litestream
+
+FROM ${OPENCLAW_IMAGE}
+USER root
+
+# Copy only the binary so the download archive stays out of runtime layers.
+COPY --from=litestream /usr/local/bin/litestream /usr/local/bin/litestream
 
 COPY litestream.yml /etc/litestream.yml
 COPY entrypoint.sh /usr/local/bin/cloudflare-entrypoint.sh

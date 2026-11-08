@@ -1,22 +1,292 @@
+import { isDeepStrictEqual } from "node:util";
+import { isRuntimeToolAllowed } from "../../agents/tool-policy-match.js";
+import { tryResolveCronJobEffectiveAgentId } from "../agent-id.js";
+import { resolveCronJobConfigRevision } from "../config-revision.js";
 import { cloneCronRuntimeAuthority, type CronRuntimeAuthority } from "../runtime-authority.js";
 import {
   createTrustedCronScheduledToolPolicy,
+  normalizeCronScheduledToolCallerOrigin,
   resolveCronScheduledToolPolicy,
   type CronScheduledToolPolicy,
 } from "../scheduled-tool-policy.js";
-import { cronJobUsesToolRuntime } from "../tools-allow.js";
+import { isCronOperatorSourceParent } from "../session-target.js";
+import {
+  normalizeCronToolsAllowProvenance,
+  resolveCronAuthenticatedCallerOrigin,
+  resolveCronAuthenticatedChannelRequester,
+} from "../tools-allow-provenance.js";
+import { cronJobUsesToolRuntime, resolveCronRunToolsAllow } from "../tools-allow.js";
 import type {
   CronStoredJob,
   CronToolsAllowExecTarget,
   CronToolsAllowExecTargetRequirement,
   CronToolsAllowProvenance,
 } from "../types.js";
+import type { CronAddOptions, CronUpdateOptions } from "./state.js";
+
+function resolveCronJobScheduledMessagePolicy(job: CronStoredJob) {
+  const toolsAllow = resolveCronRunToolsAllow(job);
+  const policy = resolveCronScheduledToolPolicy({
+    toolsAllow,
+    scheduledToolPolicy: job.scheduledToolPolicy,
+    owner: job.owner,
+  });
+  return cronJobUsesToolRuntime(job) && policy && isRuntimeToolAllowed("message", toolsAllow)
+    ? policy
+    : undefined;
+}
+
+/** Snapshots the permissions used by all scheduled message actions. */
+export function resolveCronJobMessageToolAuthorityInputs(job: CronStoredJob) {
+  const policy = resolveCronJobScheduledMessagePolicy(job);
+  return policy ? { policy } : undefined;
+}
+
+/** Snapshots the normalized permissions used by scheduled message access. */
+export function resolveCronJobMessageActionAuthorityInputs(job: CronStoredJob) {
+  const policy = resolveCronJobScheduledMessagePolicy(job);
+  if (!policy) {
+    return undefined;
+  }
+  const channelRequester = resolveCronAuthenticatedChannelRequester(job);
+  const callerOrigin = normalizeCronScheduledToolCallerOrigin(
+    job.toolsAllowProvenance?.callerOrigin,
+  );
+  return {
+    policy,
+    ...(policy.mode === "account"
+      ? {
+          callerOrigin,
+          ...(channelRequester || callerOrigin.kind !== "unknown"
+            ? {
+                ...(channelRequester ? { channelRequester } : {}),
+                executableRevision: resolveCronRequesterExecutionRevision(job),
+              }
+            : {}),
+        }
+      : {}),
+  };
+}
+
+export function cronJobMessageToolAuthorityInputsEqual(
+  previous: CronStoredJob,
+  next: CronStoredJob,
+): boolean {
+  return isDeepStrictEqual(
+    resolveCronJobMessageToolAuthorityInputs(previous),
+    resolveCronJobMessageToolAuthorityInputs(next),
+  );
+}
+
+export function cronJobMessageActionAuthorityInputsEqual(
+  previous: CronStoredJob,
+  next: CronStoredJob,
+): boolean {
+  return isDeepStrictEqual(
+    resolveCronJobMessageActionAuthorityInputs(previous),
+    resolveCronJobMessageActionAuthorityInputs(next),
+  );
+}
+
+/** Binds native requester authority to executable inputs using the canonical storage projection. */
+export function resolveCronRequesterExecutionRevision(job: CronStoredJob): string {
+  const {
+    operatorSource: _operatorSource,
+    streamOperatorSource: _streamOperatorSource,
+    description: _description,
+    displayName: _displayName,
+    createdActor: _createdActor,
+    ownerProfileId: _ownerProfileId,
+    ownerTransferPending: _ownerTransferPending,
+    toolsAllowProvenance: _toolsAllowProvenance,
+    ...executableJob
+  } = job;
+  return resolveCronJobConfigRevision(executableJob);
+}
+
+/** Runtime auto-disable writes enabled into job_json without rebinding the owner's source. */
+export function resolveCronOperatorExecutionRevision(job: CronStoredJob): string {
+  return resolveCronRequesterExecutionRevision({ ...job, enabled: true });
+}
+
+/** Executable edits cannot borrow the previous creator's authenticated source. */
+export function reconcileCronOperatorSource(params: {
+  job: CronStoredJob;
+  previousJob?: CronStoredJob;
+  captured?: NonNullable<CronStoredJob["operatorSource"]>["source"];
+  capturedExecutionRevision?: string;
+  /** The patched definition before the store adds cadence anchors and other scheduling facts. */
+  requestedExecutionRevision?: string;
+  /** Agent-less jobs run as the configured default agent, so they match on that agent. */
+  defaultAgentId?: string;
+}): void {
+  const { job, previousJob } = params;
+  if (!params.captured && !previousJob?.operatorSource) {
+    delete job.operatorSource;
+    return;
+  }
+  const executionRevision = resolveCronOperatorExecutionRevision(job);
+  const captured =
+    params.capturedExecutionRevision === (params.requestedExecutionRevision ?? executionRevision)
+      ? params.captured
+      : undefined;
+  const previous = previousJob?.operatorSource;
+  const source = captured ?? previous?.source;
+  if (source?.kind === "gateway") {
+    if (!captured && previous?.executionRevision !== executionRevision) {
+      throw new TypeError(
+        "This automation needs current authenticated source authority for an executable edit.",
+      );
+    }
+    if (tryResolveCronJobEffectiveAgentId(job, params.defaultAgentId) !== source.agentId) {
+      throw new TypeError("The automation's authenticated source belongs to another agent.");
+    }
+    job.operatorSource = { source, executionRevision };
+    return;
+  }
+  if (
+    source &&
+    (captured || previous?.executionRevision === executionRevision) &&
+    (job.payload.kind === "agentTurn" ||
+      (source.snapshot.openclawIdPrincipal !== undefined &&
+        (job.payload.kind === "script" || job.schedule.kind === "stream"))) &&
+    job.owner?.sessionKey === source.sessionKey &&
+    ((job.scheduledToolPolicy?.mode === "account" &&
+      job.scheduledToolPolicy.ownerSessionKey === source.sessionKey) ||
+      (source.snapshot.openclawIdPrincipal !== undefined &&
+        job.schedule.kind === "stream" &&
+        job.payload.kind === "command")) &&
+    tryResolveCronJobEffectiveAgentId(job, params.defaultAgentId) === source.agentId &&
+    isCronOperatorSourceParent(job, source.sessionKey)
+  ) {
+    job.operatorSource = { source, executionRevision };
+  } else {
+    delete job.operatorSource;
+  }
+}
+
+/** Rebinds or clears authenticated requester facts after the complete mutation is known. */
+export function reconcileCronChannelRequesterAuthority(params: {
+  job: CronStoredJob;
+  previousJob?: CronStoredJob;
+  toolsAllowProvenance?: CronToolsAllowProvenance;
+  /** An explicit executable resave may refresh identity without changing the definition. */
+  reauthorize?: boolean;
+  /** Explicit cap replacement may refresh caller origin without changing the definition. */
+  reauthorizeCallerOrigin?: boolean;
+}): void {
+  const { job, previousJob } = params;
+  if (
+    !job.toolsAllowProvenance?.callerOrigin &&
+    !job.toolsAllowProvenance?.channelRequester &&
+    !previousJob?.toolsAllowProvenance?.callerOrigin &&
+    !previousJob?.toolsAllowProvenance?.channelRequester &&
+    !params.toolsAllowProvenance?.callerOrigin &&
+    !params.toolsAllowProvenance?.channelRequester
+  ) {
+    return;
+  }
+  const captured = normalizeCronToolsAllowProvenance(params.toolsAllowProvenance);
+  const current = normalizeCronToolsAllowProvenance(job.toolsAllowProvenance);
+  const previous = normalizeCronToolsAllowProvenance(previousJob?.toolsAllowProvenance);
+  const unchangedCap =
+    previousJob !== undefined &&
+    isDeepStrictEqual(previousJob.payload.toolsAllow, job.payload.toolsAllow) &&
+    (previousJob.payload.toolsAllowIsDefault === true) ===
+      (job.payload.toolsAllowIsDefault === true);
+  const fullSurface =
+    current?.source === "final-executable-surface"
+      ? current
+      : unchangedCap && previous?.source === "final-executable-surface"
+        ? previous
+        : undefined;
+
+  const executionUnchanged =
+    previousJob !== undefined &&
+    resolveCronRequesterExecutionRevision(previousJob) ===
+      resolveCronRequesterExecutionRevision(job) &&
+    isDeepStrictEqual(previousJob.state.triggerState, job.state.triggerState);
+  const acceptsCapture = !executionUnchanged || params.reauthorize === true;
+  const acceptsCallerOriginCapture = !executionUnchanged || params.reauthorizeCallerOrigin === true;
+  let callerOrigin =
+    cronJobUsesToolRuntime(job) && acceptsCallerOriginCapture
+      ? resolveCronAuthenticatedCallerOrigin({ ...job, toolsAllowProvenance: captured })
+      : undefined;
+  if (
+    !callerOrigin &&
+    (!acceptsCallerOriginCapture || params.toolsAllowProvenance?.callerOrigin === undefined) &&
+    previousJob &&
+    cronJobUsesToolRuntime(job) &&
+    executionUnchanged
+  ) {
+    callerOrigin = resolveCronAuthenticatedCallerOrigin({
+      ...job,
+      toolsAllowProvenance: previous,
+    });
+  }
+  let channelRequester =
+    cronJobUsesToolRuntime(job) && acceptsCapture
+      ? resolveCronAuthenticatedChannelRequester({ ...job, toolsAllowProvenance: captured })
+      : undefined;
+  if (
+    !channelRequester &&
+    (!acceptsCapture || params.toolsAllowProvenance?.channelRequester === undefined) &&
+    previousJob &&
+    cronJobUsesToolRuntime(job) &&
+    executionUnchanged
+  ) {
+    channelRequester = resolveCronAuthenticatedChannelRequester({
+      ...job,
+      toolsAllowProvenance: previous,
+    });
+  }
+
+  if (fullSurface) {
+    const {
+      callerOrigin: _previousOrigin,
+      channelRequester: _previousRequester,
+      ...provenance
+    } = fullSurface;
+    job.toolsAllowProvenance = {
+      ...provenance,
+      callerOrigin: callerOrigin ?? { kind: "unknown" },
+      ...(channelRequester ? { channelRequester } : {}),
+    };
+  } else if (callerOrigin) {
+    job.toolsAllowProvenance = {
+      version: 1,
+      source: "authenticated-requester",
+      callerOrigin,
+      ...(channelRequester ? { channelRequester } : {}),
+    };
+  } else if (channelRequester) {
+    job.toolsAllowProvenance = { version: 1, source: "authenticated-requester", channelRequester };
+  } else {
+    delete job.toolsAllowProvenance;
+  }
+}
+
+export function consumeRuntimeAuthorityMutationOptions(
+  opts: CronAddOptions | CronUpdateOptions | undefined,
+): Pick<Parameters<typeof reconcileRuntimeAuthority>[0], "captured" | "runtimeAuthority"> {
+  // Validation-only guards must not look like an empty fresh capture: that
+  // would erase an existing runtime ceiling during an otherwise routine edit.
+  opts?.commitGuard?.();
+  return {
+    captured: opts?.captureRuntimeAuthority !== undefined,
+    runtimeAuthority: opts?.captureRuntimeAuthority?.(),
+  };
+}
 
 function stampScheduledToolPolicy(
   job: CronStoredJob,
-  scheduledToolPolicy: CronScheduledToolPolicy | undefined,
+  scheduledToolPolicy: CronScheduledToolPolicy | null | undefined,
 ): void {
-  if (!cronJobUsesToolRuntime(job) || job.payload.toolsAllow === undefined) {
+  if (
+    !cronJobUsesToolRuntime(job) ||
+    job.payload.toolsAllow === undefined ||
+    scheduledToolPolicy === null
+  ) {
     delete job.scheduledToolPolicy;
     return;
   }
@@ -35,18 +305,40 @@ function reconcileScheduledToolPolicy(params: {
   job: CronStoredJob;
   previouslyUsedToolRuntime: boolean;
   explicitlyMutatesToolsAllow: boolean;
-  scheduledToolPolicy?: CronScheduledToolPolicy;
+  scheduledToolPolicy?: CronScheduledToolPolicy | null;
 }): void {
   const { job } = params;
-  if (!cronJobUsesToolRuntime(job) || job.payload.toolsAllow === undefined) {
-    delete job.scheduledToolPolicy;
-    return;
-  }
   const current = resolveCronScheduledToolPolicy({
-    toolsAllow: job.payload.toolsAllow,
+    toolsAllow: job.payload.toolsAllow ?? [],
     scheduledToolPolicy: job.scheduledToolPolicy,
     owner: job.owner,
   });
+  const callerPolicy = params.scheduledToolPolicy;
+  if (current?.mode === "trusted" && callerPolicy?.mode === "account") {
+    // An account-scoped owner edit narrows operator authority to that owner; it never inherits it.
+    // A dormant result keeps the account ceiling, so a later conversion cannot restore trusted authority.
+    if (cronJobUsesToolRuntime(job) && job.payload.toolsAllow !== undefined) {
+      stampScheduledToolPolicy(job, callerPolicy);
+    } else if (
+      job.owner?.sessionKey === callerPolicy.ownerSessionKey &&
+      job.owner?.accountId === callerPolicy.ownerAccountId
+    ) {
+      job.scheduledToolPolicy = structuredClone(callerPolicy);
+    } else {
+      throw new Error("scheduled account policy must match the persisted job owner");
+    }
+    return;
+  }
+  if (!cronJobUsesToolRuntime(job) || job.payload.toolsAllow === undefined) {
+    // A dormant account binding is still its ceiling. Dropping it would let
+    // a later operator payload conversion silently adopt trusted authority.
+    if (current?.mode === "account") {
+      job.scheduledToolPolicy = current;
+    } else {
+      delete job.scheduledToolPolicy;
+    }
+    return;
+  }
   if (current) {
     job.scheduledToolPolicy = current;
     return;
@@ -78,14 +370,16 @@ function reconcileToolsAllowExecTarget(params: {
   if (!params.explicitlyMutatesToolsAllow) {
     return;
   }
-  const grantsExec =
-    Array.isArray(job.payload.toolsAllow) && job.payload.toolsAllow.includes("exec");
-  if (params.toolsAllowExecTarget && grantsExec) {
+  const toolsAllow = job.payload.toolsAllow;
+  const execIndex = toolsAllow.indexOf("exec");
+  // A wildcard cap carries the creator's exec pin like an explicit exec grant.
+  const grantIndex = execIndex === -1 && toolsAllow.includes("*") ? 0 : execIndex;
+  if (params.toolsAllowExecTarget && grantIndex !== -1) {
     job.toolsAllowExecTarget = structuredClone(params.toolsAllowExecTarget);
     job.toolsAllowExecTargetRequirement = {
       version: 1,
       target: structuredClone(params.toolsAllowExecTarget),
-      grantIndex: job.payload.toolsAllow.indexOf("exec"),
+      grantIndex,
     } satisfies CronToolsAllowExecTargetRequirement;
   } else {
     delete job.toolsAllowExecTarget;
@@ -102,7 +396,8 @@ function reconcileToolsAllowProvenance(params: {
     return;
   }
   if (
-    params.job.payload.toolsAllowIsDefault === true &&
+    cronJobUsesToolRuntime(params.job) &&
+    params.job.payload.toolsAllow !== undefined &&
     params.toolsAllowProvenance?.version === 1 &&
     params.toolsAllowProvenance.source === "final-executable-surface"
   ) {
@@ -158,7 +453,7 @@ export function reconcileToolsAllowAuthority(params: {
   job: CronStoredJob;
   previouslyUsedToolRuntime: boolean;
   explicitlyMutatesToolsAllow: boolean;
-  scheduledToolPolicy?: CronScheduledToolPolicy;
+  scheduledToolPolicy?: CronScheduledToolPolicy | null;
   toolsAllowProvenance?: CronToolsAllowProvenance;
   toolsAllowExecTarget?: CronToolsAllowExecTarget;
 }): void {

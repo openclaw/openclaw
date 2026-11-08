@@ -1,59 +1,47 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { mutateConfigFileWithRetry } from "../config/config.js";
-import { resolveIsNixMode } from "../config/paths.js";
+import { resolveIsConfigReadOnly, resolveIsNixMode } from "../config/paths.js";
 import type { ModelSelectionScope } from "../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { runOutsidePluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
+import { runWithGatewayDetachedWorkContinuation } from "../process/gateway-work-admission.js";
 import { normalizeAgentId } from "../routing/session-key.js";
-import {
-  resolveAgentModelPrimaryWriteTarget,
-  setAgentEffectiveModelPrimary,
-  type AgentModelPrimaryWriteTarget,
-} from "./agent-scope.js";
+import { setAgentEffectiveModelPrimary, type AgentModelPrimaryWriteTarget } from "./agent-scope.js";
+import { runOutsidePreparedModelRuntimePluginGenerationScope } from "./prepared-model-runtime-generation-scope.js";
 
 const log = createSubsystemLogger("agents/sticky-model-selection");
 let warnedImmutableConfig = false;
 
 export type StickyModelSelectionDispatchOutcome = "requested" | "skipped-immutable";
-export type StickyModelSelectionTarget = ModelSelectionScope;
 export type StickyModelSelectionPolicy = {
-  scope: ModelSelectionScope | "effective";
-  target: StickyModelSelectionTarget;
+  scope: ModelSelectionScope;
+  target: ModelSelectionScope;
 };
 
 /** Resolve preference only; callers must separately authorize config writes. */
 export function resolveStickyModelSelectionScope(params: {
   cfg: OpenClawConfig;
   scope?: ModelSelectionScope;
-}): ModelSelectionScope | "effective" {
-  // Omission preserves the existing effective-config write target, not a new default.
-  return params.scope ?? params.cfg.agents?.defaults?.modelSelectionScope ?? "effective";
+}): ModelSelectionScope {
+  return params.scope ?? params.cfg.agents?.defaults?.modelSelectionScope ?? "session";
 }
 
 /** Resolve the exact layer a selection may update before presenting or applying it. */
 export function resolveStickyModelSelectionPolicy(params: {
-  agentId: string;
   canPersistConfig: boolean;
   cfg: OpenClawConfig;
-  scope?: ModelSelectionScope;
 }): StickyModelSelectionPolicy {
   const scope = resolveStickyModelSelectionScope(params);
-  if (!params.canPersistConfig || scope === "session") {
-    return { scope, target: "session" };
-  }
-  if (scope !== "effective") {
-    return { scope, target: scope };
-  }
-  const writeTarget = resolveAgentModelPrimaryWriteTarget(params.cfg, params.agentId);
-  return { scope, target: writeTarget === "agent" ? "agent" : "global" };
+  return { scope, target: params.canPersistConfig ? scope : "session" };
 }
 
-/** Persists a validated session model selection at the agent's effective config layer. */
+/** Persists a validated model selection at its explicitly requested config layer. */
 async function persistStickyModelSelection(params: {
   agentId: string;
   model: string;
-  target?: AgentModelPrimaryWriteTarget;
+  target: AgentModelPrimaryWriteTarget | "effective";
 }): Promise<AgentModelPrimaryWriteTarget> {
   const model = normalizeOptionalString(params.model);
   if (!model) {
@@ -67,7 +55,7 @@ async function persistStickyModelSelection(params: {
         draft,
         agentId,
         model,
-        params.target ? { target: params.target } : {},
+        params.target === "effective" ? {} : { target: params.target },
       ),
   });
   if (!committed.result) {
@@ -83,20 +71,33 @@ async function persistStickyModelSelection(params: {
 export function persistStickyModelSelectionBestEffort(params: {
   agentId: string;
   model: string;
-  target?: AgentModelPrimaryWriteTarget;
+  target: AgentModelPrimaryWriteTarget | "effective";
 }): StickyModelSelectionDispatchOutcome {
-  if (resolveIsNixMode()) {
-    // A Nix-managed gateway can switch models but can never persist this preference.
+  if (resolveIsConfigReadOnly()) {
+    // A gateway with immutable config can switch models but can never persist this preference.
     // Warn once per process so repeated switches do not flood the operator log.
     if (!warnedImmutableConfig) {
       warnedImmutableConfig = true;
+      const reason = resolveIsNixMode()
+        ? "config is immutable in OPENCLAW_NIX_MODE"
+        : "config is externally managed and immutable";
       log.warn(
-        `skipped sticky model persistence agentId=${params.agentId} model=${params.model} reason=config is immutable in OPENCLAW_NIX_MODE`,
+        `skipped sticky model persistence agentId=${params.agentId} model=${params.model} reason=${reason}`,
       );
     }
     return "skipped-immutable";
   }
-  void persistStickyModelSelection(params).catch((error: unknown) => {
+  // Config preparation outlives the selecting reply; re-admit on the current
+  // generation instead of retaining that reply's expiring plugin callbacks.
+  const write = runOutsidePreparedModelRuntimePluginGenerationScope(() =>
+    runOutsidePluginRuntimeGenerationScope(() =>
+      runWithGatewayDetachedWorkContinuation(
+        () => persistStickyModelSelection(params),
+        "model-default-write",
+      ),
+    ),
+  );
+  void write.catch((error: unknown) => {
     log.warn(
       `failed sticky model persistence agentId=${params.agentId} model=${params.model} reason=${formatErrorMessage(error)}`,
     );

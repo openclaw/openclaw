@@ -1,0 +1,167 @@
+import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
+import { page } from "vitest/browser";
+import { createDeferred } from "../../../../test/helpers/promise.js";
+import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import { createSolidApplicationContextProvider } from "../../test-helpers/solid-application-context.tsx";
+import { createSessionActivity } from "./session-activity-owner.ts";
+import "../../styles/base.css";
+import "../../styles/components.css";
+import "../../styles/settings.css";
+import "../../styles/settings-controls.css";
+import "../../styles/activity.css";
+import {
+  mountSolid,
+  props as createActivityProps,
+  type SessionActivityTestProps,
+} from "./session-activity-view.test-harness.ts";
+import { renderSessionActivityView } from "./session-activity-view.tsx";
+
+const renderSessionActivityViewSolid = mountSolid<SessionActivityTestProps>(
+  renderSessionActivityView,
+  (input) => createSolidApplicationContextProvider(input.context).wrapper,
+);
+
+let container: HTMLDivElement;
+
+beforeEach(() => {
+  // Own the root: other browser suites may replace the shared body children.
+  container = document.createElement("div");
+  document.body.append(container);
+});
+
+afterEach(() => {
+  container.remove();
+});
+
+function activityProps(personId: string | null): SessionActivityTestProps {
+  const fixture = createActivityProps({ filters: { personId, query: "", time: "7d" } });
+  fixture.result!.people = [
+    { identity: { type: "profile", id: "person" }, label: "Person", sessionCount: 0 },
+  ];
+  fixture.result!.activityPulse = {
+    since: new Date(2026, 8, 20).getTime(),
+    until: new Date(2026, 8, 28).getTime(),
+    buckets: Array.from({ length: 8 }, () => 0),
+    sessions: 0,
+    started: 0,
+    running: 0,
+  };
+  return fixture;
+}
+
+it.each([
+  { personId: null, width: 900 },
+  { personId: "person", width: 900 },
+  { personId: null, width: 390 },
+  { personId: "person", width: 390 },
+])(
+  "keeps content stable through passive refresh and explicit Retry ($personId, $width px)",
+  async ({ personId, width }) => {
+    await page.viewport(width, 700);
+    const props = activityProps(personId);
+    renderSessionActivityViewSolid(props, container);
+    const main = container.querySelector<HTMLElement>(".activity-feed__main")!;
+    const content = main.querySelector<HTMLElement>(
+      personId ? "[data-activity-identity]" : ".activity-pulse",
+    )!;
+    expect(getComputedStyle(container.querySelector(".activity-feed__feedback")!).minHeight).toBe(
+      width <= 640 ? "38px" : "32px",
+    );
+    const top = content.getBoundingClientRect().top;
+    expect(content.getBoundingClientRect().height).toBeGreaterThan(0);
+
+    for (const loading of [true, false, true, false]) {
+      renderSessionActivityViewSolid({ ...props, loading }, container);
+      expect(Math.abs(content.getBoundingClientRect().top - top)).toBeLessThan(1);
+      expect(main.textContent).not.toContain("Loading");
+    }
+
+    const request = vi.fn().mockResolvedValue(props.result);
+    const client = { request } as unknown as GatewayBrowserClient;
+    let retryCompletion = Promise.resolve();
+    const controller = createSessionActivity(() =>
+      renderSessionActivityViewSolid(
+        {
+          ...props,
+          result: controller.result,
+          error: controller.error,
+          loading: controller.loading,
+          retrying: controller.retrying,
+          onRetry: () => {
+            retryCompletion = controller.load(client, props.filters, "retry");
+          },
+        },
+        container,
+      ),
+    );
+    try {
+      await controller.load(client, props.filters);
+      expect(controller.loading).toBe(false);
+      const retained = container.querySelector<HTMLElement>(
+        personId ? "[data-activity-identity]" : ".activity-pulse",
+      )!;
+      const retainedTop = retained.getBoundingClientRect().top;
+      request.mockRejectedValueOnce(new Error("Refresh failed"));
+      await controller.load(client, props.filters, "refresh");
+      expect(controller.error).toBe("Refresh failed");
+      expect(Math.abs(retained.getBoundingClientRect().top - retainedTop)).toBeLessThan(1);
+      const retryButton = () =>
+        container.querySelector<HTMLButtonElement>(".activity-feed__feedback button");
+      expect(retryButton()?.textContent?.trim()).toBe("Retry");
+      const pending = createDeferred<NonNullable<typeof props.result>>();
+      request.mockReturnValueOnce(pending.promise);
+      retryButton()!.click();
+      expect(controller.loading).toBe(true);
+      expect(request).toHaveBeenCalledTimes(3);
+      expect(container.querySelector('[role="status"]')?.textContent).toContain("Refreshing");
+      expect(retryButton()?.disabled).toBe(true);
+      expect(Math.abs(retained.getBoundingClientRect().top - retainedTop)).toBeLessThan(1);
+      const report = vi.spyOn(console, "error").mockImplementation(() => {});
+      onTestFinished(() => report.mockRestore());
+      pending.reject(new TypeError("Cannot read properties of undefined (reading 'map')"));
+      await retryCompletion;
+      expect(controller.error).toBe("Request failed");
+      expect(retryButton()?.disabled).toBe(false);
+      expect(container.querySelector('[role="alert"]')?.textContent).toContain("Request failed");
+      expect(Math.abs(retained.getBoundingClientRect().top - retainedTop)).toBeLessThan(1);
+      const recovered = createDeferred<NonNullable<typeof props.result>>();
+      request.mockReturnValueOnce(recovered.promise);
+      retryButton()!.click();
+      expect(controller.retrying).toBe(true);
+      expect(request).toHaveBeenCalledTimes(4);
+      expect(retryButton()?.disabled).toBe(true);
+      recovered.resolve(props.result!);
+      await retryCompletion;
+      expect(controller.loading).toBe(false);
+      expect(retryButton()).toBeNull();
+      expect(container.textContent).not.toContain("Refreshing");
+      expect(container.querySelector('[role="alert"]')).toBeNull();
+      expect(Math.abs(retained.getBoundingClientRect().top - retainedTop)).toBeLessThan(1);
+    } finally {
+      controller.dispose();
+    }
+
+    renderSessionActivityViewSolid({ ...props, result: undefined, loading: true }, container);
+    expect(
+      container.querySelector('.activity-feed__loading [role="status"]')?.textContent,
+    ).toContain("Loading");
+  },
+);
+
+it("returns focus to the People trigger once a person is chosen", async () => {
+  await page.viewport(900, 700);
+  const props = activityProps(null);
+  renderSessionActivityViewSolid(props, container);
+  const trigger = container.querySelector<HTMLButtonElement>(".activity-feed__people-trigger")!;
+  trigger.click();
+  await expect.poll(() => trigger.getAttribute("aria-expanded")).toBe("true");
+  await expect
+    .poll(() => document.activeElement?.className)
+    .toContain("activity-feed__people-popover");
+  container.querySelector<HTMLButtonElement>('[data-activity-person="person"]')?.click();
+  await expect.poll(() => trigger.getAttribute("aria-expanded")).toBe("false");
+  expect(props.onFiltersChange).toHaveBeenCalledWith(
+    expect.objectContaining({ personId: "person" }),
+  );
+  await expect.poll(() => document.activeElement, { timeout: 1500 }).toBe(trigger);
+});

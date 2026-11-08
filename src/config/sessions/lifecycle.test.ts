@@ -1,17 +1,9 @@
-import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  closeOpenClawAgentDatabasesForTest,
-  resolveOpenClawAgentSqlitePath,
-} from "../../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
-import {
-  hasTerminalMainSessionTranscriptNewerThanRegistry,
-  hasTerminalMainSessionTranscriptNewerThanRegistrySync,
-  resolveSessionLifecycleTimestamps,
-} from "./lifecycle.js";
+import { expectDefined } from "@openclaw/normalization-core/expect";
+import { afterAll, beforeEach, expect, it, vi } from "vitest";
+import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
+import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
+import { hasTerminalMainSessionTranscriptNewerThanRegistryAsync } from "./lifecycle-read.js";
 import {
   appendTranscriptEvent,
   loadSessionEntry,
@@ -19,183 +11,89 @@ import {
 } from "./session-accessor.js";
 import type { SessionEntry } from "./types.js";
 
-describe("terminal main session transcript freshness", () => {
-  let stateDir: string;
-  let storePath: string;
+const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-session-lifecycle-");
 
-  beforeEach(() => {
-    stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-session-lifecycle-"));
-    storePath = path.join(stateDir, "agents", "main", "sessions", "sessions.json");
-  });
+let storePath: string;
 
-  afterEach(() => {
-    closeOpenClawAgentDatabasesForTest();
-    closeOpenClawStateDatabaseForTest();
-    fs.rmSync(stateDir, { recursive: true, force: true });
-  });
+beforeEach(() => {
+  storePath = path.join(sessionDirs.make(), "agents", "main", "sessions", "sessions.json");
+});
 
-  async function createEntry(params: {
-    endedAt?: number;
-    sessionFile?: string;
+const scopeFor = (sessionKey: string) => ({ agentId: "main", sessionKey, storePath });
+
+async function createEntry(
+  status?: SessionEntry["status"],
+  params: Partial<Pick<SessionEntry, "endedAt" | "updatedAt">> & {
     sessionKey?: string;
-    status?: SessionEntry["status"];
-    updatedAt: number;
-  }): Promise<{ entry: SessionEntry; sessionKey: string }> {
-    const sessionKey = params.sessionKey ?? "agent:main:main";
-    const sessionId = `session-${params.status ?? "ended"}-${sessionKey.replaceAll(":", "-")}`;
-    const sessionEntry = {
-      sessionFile:
-        params.sessionFile ??
-        `sqlite:main:${sessionId}:${resolveOpenClawAgentSqlitePath({
-          agentId: "main",
-          env: { OPENCLAW_STATE_DIR: stateDir },
-        })}`,
-      sessionId,
-      updatedAt: params.updatedAt,
-      ...(params.endedAt !== undefined ? { endedAt: params.endedAt } : {}),
-      ...(params.status !== undefined ? { status: params.status } : {}),
-    };
-    await upsertSessionEntryCore({ agentId: "main", sessionKey, storePath }, sessionEntry);
-    await appendTranscriptEvent(
-      { agentId: "main", sessionId, sessionKey, storePath },
-      {
-        type: "custom",
-        timestamp: "1970-01-01T00:00:00.001Z",
-      },
-    );
-    const storedEntry = loadSessionEntry({ agentId: "main", sessionKey, storePath });
-    if (!storedEntry) {
-      throw new Error("expected session entry");
-    }
-    return {
-      entry: {
-        ...storedEntry,
-        sessionFile: sessionEntry.sessionFile,
-        updatedAt: params.updatedAt,
-        ...(params.endedAt !== undefined ? { endedAt: params.endedAt } : {}),
-        ...(params.status !== undefined ? { status: params.status } : {}),
-      },
-      sessionKey,
-    };
-  }
+  } = {},
+) {
+  const { sessionKey = "agent:main:main", ...overrides } = params;
+  const metadata = {
+    updatedAt: Date.now() - 10_000,
+    ...overrides,
+    ...(status ? { status } : {}),
+  };
+  const sessionId = `session-${status ?? "ended"}-${sessionKey.replaceAll(":", "-")}`;
+  const sessionEntry = {
+    ...metadata,
+    sessionId,
+  };
+  await upsertSessionEntryCore(scopeFor(sessionKey), sessionEntry);
+  await appendTranscriptEvent(
+    { ...scopeFor(sessionKey), sessionId },
+    { type: "custom", timestamp: "1970-01-01T00:00:00.001Z" },
+  );
+  return {
+    entry: { ...loadEntry(sessionKey), ...metadata },
+    sessionKey,
+  };
+}
 
-  function check(entry: SessionEntry, sessionKey: string): boolean {
-    return hasTerminalMainSessionTranscriptNewerThanRegistrySync({
-      agentId: "main",
-      entry,
-      sessionKey,
-      storePath,
-    });
-  }
+function loadEntry(sessionKey: string): SessionEntry {
+  return expectDefined(loadSessionEntry(scopeFor(sessionKey)), "session entry");
+}
 
-  it("uses the physical SQLite mutation watermark instead of event timestamps", async () => {
-    const registryTimestampMs = Date.now() - 10_000;
-    const { entry, sessionKey } = await createEntry({
-      status: "killed",
-      updatedAt: registryTimestampMs,
-    });
+const check = (entry: SessionEntry, sessionKey: string) =>
+  hasTerminalMainSessionTranscriptNewerThanRegistryAsync({ ...scopeFor(sessionKey), entry });
 
-    expect(entry.updatedAt).toBe(registryTimestampMs);
-    expect(check(entry, sessionKey)).toBe(true);
-    await expect(
-      hasTerminalMainSessionTranscriptNewerThanRegistry({
-        agentId: "main",
-        entry,
-        sessionKey,
-        storePath,
-      }),
-    ).resolves.toBe(true);
-  });
+it("uses the physical SQLite mutation watermark instead of event timestamps", async () => {
+  const { entry, sessionKey } = await createEntry("killed");
+  const sql = observeHostDataSql();
+  using _ = { [Symbol.dispose]: () => sql.restore() };
+  expect(await check(entry, sessionKey)).toBe(true);
+  expect(sql.queries).toEqual([]);
+});
 
-  it.each(["done", "failed"] as const)("keeps %s terminal sessions reusable", async (status) => {
-    const { entry, sessionKey } = await createEntry({
-      status,
-      updatedAt: Date.now() - 10_000,
-    });
+it.each(["done", "failed"] as const)("uses the correct %s transcript freshness", async (kind) => {
+  const { entry, sessionKey } = await createEntry(kind);
+  expect(await check(entry, sessionKey)).toBe(false);
+});
 
-    expect(check(entry, sessionKey)).toBe(false);
-  });
+it("keeps a yielded main session reusable after a child transcript admission", async () => {
+  const { entry, sessionKey } = await createEntry(undefined, { endedAt: Date.now() - 20_000 });
 
-  it("rotates endedAt-only main sessions after a later transcript mutation", async () => {
-    const { entry, sessionKey } = await createEntry({
-      endedAt: Date.now() - 20_000,
-      updatedAt: Date.now() - 10_000,
-    });
+  expect(await check(entry, sessionKey)).toBe(false);
+});
 
-    expect(entry.status).toBeUndefined();
-    expect(check(entry, sessionKey)).toBe(true);
-  });
+it("does not rotate after a same-millisecond registry write observes the mutation", async () => {
+  const now = 1_700_000_000_000;
+  const dateNow = vi.spyOn(Date, "now").mockReturnValue(now);
+  const { entry, sessionKey } = await createEntry("killed", { updatedAt: now });
+  expect(await check(entry, sessionKey)).toBe(true);
 
-  it("uses SQLite freshness for entries that still contain legacy transcript paths", async () => {
-    const { entry, sessionKey } = await createEntry({
-      sessionFile: path.join(stateDir, "legacy-session.jsonl"),
-      status: "killed",
-      updatedAt: Date.now() - 10_000,
-    });
+  await upsertSessionEntryCore(scopeFor(sessionKey), entry);
+  const refreshed = loadEntry(sessionKey);
+  dateNow.mockRestore();
 
-    expect(check(entry, sessionKey)).toBe(true);
-  });
+  expect(await check(refreshed, sessionKey)).toBe(false);
+});
 
-  it("preserves Date.parse semantics for a numeric-looking transcript header", async () => {
-    const sessionId = "session-header-without-key";
-    const timestamp = "2026";
-    await appendTranscriptEvent(
-      { agentId: "main", sessionId, sessionKey: "agent:main:header", storePath },
-      { type: "session", version: 3, id: sessionId, timestamp, cwd: stateDir },
-    );
+it("does not rotate non-main sessions or rows newer than the transcript", async () => {
+  const nonMain = await createEntry("killed", { sessionKey: "agent:main:other" });
+  const newerRegistry = await createEntry("timeout", { updatedAt: Date.now() + 10_000 });
+  await upsertSessionEntryCore(scopeFor(newerRegistry.sessionKey), newerRegistry.entry);
+  const refreshedRegistry = loadEntry(newerRegistry.sessionKey);
 
-    expect(
-      resolveSessionLifecycleTimestamps({
-        agentId: "main",
-        entry: { sessionId, updatedAt: Date.now() },
-        storePath,
-      }).sessionStartedAt,
-    ).toBe(Date.parse(timestamp));
-  });
-
-  it("does not rotate after a same-millisecond registry write observes the mutation", async () => {
-    const now = 1_700_000_000_000;
-    const dateNow = vi.spyOn(Date, "now").mockReturnValue(now);
-    const { entry, sessionKey } = await createEntry({
-      status: "killed",
-      updatedAt: now,
-    });
-    expect(check(entry, sessionKey)).toBe(true);
-
-    await upsertSessionEntryCore({ agentId: "main", sessionKey, storePath }, entry);
-    const refreshed = loadSessionEntry({ agentId: "main", sessionKey, storePath });
-    dateNow.mockRestore();
-
-    if (!refreshed) {
-      throw new Error("expected refreshed session entry");
-    }
-    expect(check(refreshed, sessionKey)).toBe(false);
-  });
-
-  it("does not rotate non-main sessions or rows newer than the transcript", async () => {
-    const nonMain = await createEntry({
-      sessionKey: "agent:main:other",
-      status: "killed",
-      updatedAt: Date.now() - 10_000,
-    });
-    const newerRegistry = await createEntry({
-      status: "timeout",
-      updatedAt: Date.now() + 10_000,
-    });
-    await upsertSessionEntryCore(
-      { agentId: "main", sessionKey: newerRegistry.sessionKey, storePath },
-      newerRegistry.entry,
-    );
-    const refreshedRegistry = loadSessionEntry({
-      agentId: "main",
-      sessionKey: newerRegistry.sessionKey,
-      storePath,
-    });
-    if (!refreshedRegistry) {
-      throw new Error("expected refreshed registry entry");
-    }
-
-    expect(check(nonMain.entry, nonMain.sessionKey)).toBe(false);
-    expect(check(refreshedRegistry, newerRegistry.sessionKey)).toBe(false);
-  });
+  expect(await check(nonMain.entry, nonMain.sessionKey)).toBe(false);
+  expect(await check(refreshedRegistry, newerRegistry.sessionKey)).toBe(false);
 });

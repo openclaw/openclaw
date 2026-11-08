@@ -20,6 +20,13 @@ import android.webkit.WebResourceResponse
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.platform.LocalContext
 import androidx.core.graphics.createBitmap
 import androidx.webkit.JavaScriptReplyProxy
 import androidx.webkit.WebMessageCompat
@@ -47,6 +54,20 @@ internal data class ChatRichBlockImage(
   val bitmap: Bitmap,
   val svg: String?,
 )
+
+@Composable
+internal fun rememberChatRichBlockRender(
+  request: ChatRichBlockRequest,
+  retryGeneration: Int = 0,
+): ChatRichBlockResult<ChatRichBlockImage>? {
+  val context = LocalContext.current
+  var result by remember(request, retryGeneration) { mutableStateOf<ChatRichBlockResult<ChatRichBlockImage>?>(null) }
+  DisposableEffect(request, retryGeneration) {
+    val subscription = ChatRichBlockRenderer.render(context, request) { result = it }
+    onDispose { subscription.cancel() }
+  }
+  return result
+}
 
 private class ChatRichBlockBitmapCache(
   maxBytes: Int,
@@ -273,7 +294,7 @@ private class ChatRichBlockWebViewBackend(
 
   // Only bundled rendering scripts run here. Model input is a JSON value, network and
   // device-file access are denied, and the bridge exposes only render completions.
-  @SuppressLint("SetJavaScriptEnabled", "MissingOnRenderProcessGone")
+  @SuppressLint("SetJavaScriptEnabled")
   @Suppress("DEPRECATION")
   private fun createWebView(): WebView? {
     if (!WebViewFeature.isFeatureSupported(WebViewFeature.WEB_MESSAGE_LISTENER)) return null
@@ -450,7 +471,7 @@ private class ChatRichBlockWebViewBackend(
   )
 }
 
-private tailrec fun Context.findActivity(): Activity? =
+internal tailrec fun Context.findActivity(): Activity? =
   when (this) {
     is Activity -> this
     is ContextWrapper -> baseContext.findActivity()

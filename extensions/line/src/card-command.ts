@@ -1,4 +1,3 @@
-// Line plugin module implements card command behavior.
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -9,9 +8,8 @@ import {
   createListCard,
 } from "./flex-templates/basic-cards.js";
 import { createReceiptCard } from "./flex-templates/schedule-cards.js";
-import type { CardAction, ListItem } from "./flex-templates/types.js";
 import { createFlexMessage } from "./send.js";
-import type { LineChannelData } from "./types.js";
+import type { LineChannelData, LineTemplateActionPayload } from "./types.js";
 
 const CARD_USAGE = `Usage: /card <type> "title" "body" [options]
 
@@ -87,12 +85,12 @@ function splitCardPair(part: string): [string, string | undefined] {
  * Parse action string format: "Label|data,Label2|data2"
  * Data can be a URL (uri action) or plain text (message action) or key=value (postback)
  */
-function parseActions(actionsStr: string | undefined): CardAction[] {
+function parseActions(actionsStr: string | undefined): LineTemplateActionPayload[] {
   if (!actionsStr) {
     return [];
   }
 
-  const results: CardAction[] = [];
+  const results: LineTemplateActionPayload[] = [];
 
   for (const part of splitCardValue(actionsStr, ",")) {
     const [label, data] = splitCardPair(part);
@@ -102,68 +100,32 @@ function parseActions(actionsStr: string | undefined): CardAction[] {
 
     const actionData = data || label;
 
-    const action =
+    results.push(
       actionData.startsWith("http://") || actionData.startsWith("https://")
-        ? { type: "uri" as const, label, uri: actionData }
+        ? { type: "uri", label, uri: actionData }
         : actionData.includes("=")
-          ? { type: "postback" as const, label, data: actionData, displayText: label }
-          : { type: "message" as const, label, text: actionData };
-    results.push({ label, action });
+          ? { type: "postback", label, data: actionData }
+          : { type: "message", label, data: actionData },
+    );
   }
 
   return results;
 }
 
-/**
- * Parse list items format: "Item1|Subtitle1,Item2|Subtitle2"
- */
-function parseListItems(itemsStr: string): ListItem[] {
-  return splitCardValue(itemsStr, ",")
-    .map((part) => {
-      const [title, subtitle] = splitCardPair(part);
-      return { title, subtitle };
-    })
-    .filter((item) => item.title);
-}
+export async function handleLineCardCommand(argsInput?: string): Promise<ReplyPayload> {
+  let argsStr = argsInput?.trim() ?? "";
+  if (!argsStr) {
+    return { text: CARD_USAGE };
+  }
 
-/**
- * Parse receipt items format: "Item1:$10,Item2:$20"
- */
-function parseReceiptItems(itemsStr: string): Array<{ name: string; value: string }> {
-  return splitCardValue(itemsStr, ",")
-    .map((part) => {
-      // The last unescaped colon separates the entry value, so a name may still
-      // contain colons of its own.
-      const segments = splitCardValue(part, ":");
-      const value = segments.length > 1 ? segments.pop() : undefined;
-      return {
-        name: segments.join(":").trim(),
-        value: value?.trim() ?? "",
-      };
-    })
-    .filter((item) => item.name);
-}
+  // Parse /card type "arg1" "arg2" "arg3" --flag value.
+  let type = "";
+  const args: Array<string | undefined> = [];
+  const flags: Record<string, string> = {};
 
-/**
- * Parse quoted arguments from command string
- * Supports: /card type "arg1" "arg2" "arg3" --flag value
- */
-function parseCardArgs(argsStrInput: string): {
-  type: string;
-  args: Array<string | undefined>;
-  flags: Record<string, string>;
-} {
-  let argsStr = argsStrInput;
-  const result: { type: string; args: Array<string | undefined>; flags: Record<string, string> } = {
-    type: "",
-    args: [],
-    flags: {},
-  };
-
-  // Extract type (first word)
   const typeMatch = argsStr.match(/^(\w+)/);
   if (typeMatch) {
-    result.type = normalizeLowercaseStringOrEmpty(typeMatch[1]);
+    type = normalizeLowercaseStringOrEmpty(typeMatch[1]);
     argsStr = argsStr.slice(typeMatch[0].length).trim();
   }
 
@@ -173,27 +135,14 @@ function parseCardArgs(argsStrInput: string): {
   const quotedRegex = /"([^"]*?)"/g;
   let match;
   while ((match = quotedRegex.exec(argsStr)) !== null) {
-    result.args.push(expectDefined(match[1], "quoted card argument capture") || undefined);
+    args.push(expectDefined(match[1], "quoted card argument capture") || undefined);
   }
 
-  // Extract flags (--key value or --key "value")
   const flagRegex = /--(\w+)\s+(?:"([^"]*?)"|(\S+))/g;
   while ((match = flagRegex.exec(argsStr)) !== null) {
     const key = expectDefined(match[1], "card flag name capture");
-    result.flags[key] = expectDefined(match[2] ?? match[3], "card flag value capture");
+    flags[key] = expectDefined(match[2] ?? match[3], "card flag value capture");
   }
-
-  return result;
-}
-
-export async function handleLineCardCommand(argsInput?: string): Promise<ReplyPayload> {
-  const argsStr = argsInput?.trim() ?? "";
-  if (!argsStr) {
-    return { text: CARD_USAGE };
-  }
-
-  const parsed = parseCardArgs(argsStr);
-  const { type, args, flags } = parsed;
 
   if (!type) {
     return { text: CARD_USAGE };
@@ -223,15 +172,34 @@ export async function handleLineCardCommand(argsInput?: string): Promise<ReplyPa
         if (actions.length === 0) {
           return { text: 'Error: Action card requires --actions "Label1|data1,Label2|data2"' };
         }
-        const bubble = createActionCard(title, body, actions, {
-          imageUrl: flags.url || flags.image,
-        });
+        const bubble = createActionCard(
+          title,
+          body,
+          actions.map((action) =>
+            action.type === "uri"
+              ? { type: "uri", label: action.label, uri: action.uri }
+              : action.type === "postback"
+                ? {
+                    type: "postback",
+                    label: action.label,
+                    data: action.data,
+                    displayText: action.label,
+                  }
+                : { type: "message", label: action.label, text: action.data },
+          ),
+          { imageUrl: flags.url || flags.image },
+        );
         return buildLineFlexReply(body ? `${title}: ${body}` : title, bubble);
       }
 
       case "list": {
         const [title = "List", itemsStr = ""] = args;
-        const items = parseListItems(itemsStr || flags.items || "");
+        const items = splitCardValue(itemsStr || flags.items || "", ",")
+          .map((part) => {
+            const [itemTitle, subtitle] = splitCardPair(part);
+            return { title: itemTitle, subtitle };
+          })
+          .filter((item) => item.title);
         if (items.length === 0) {
           return {
             text: 'Error: List card requires items. Usage: /card list "Title" "Item1|Desc1,Item2|Desc2"',
@@ -246,7 +214,18 @@ export async function handleLineCardCommand(argsInput?: string): Promise<ReplyPa
 
       case "receipt": {
         const [title = "Receipt", itemsStr = ""] = args;
-        const items = parseReceiptItems(itemsStr || flags.items || "");
+        const items = splitCardValue(itemsStr || flags.items || "", ",")
+          .map((part) => {
+            // The last unescaped colon separates the entry value, so a name may still
+            // contain colons of its own.
+            const segments = splitCardValue(part, ":");
+            const value = segments.length > 1 ? segments.pop() : undefined;
+            return {
+              name: segments.join(":").trim(),
+              value: value?.trim() ?? "",
+            };
+          })
+          .filter((item) => item.name);
         const total = flags.total ? { label: "Total", value: flags.total } : undefined;
         const footer = flags.footer;
 
@@ -286,37 +265,10 @@ export async function handleLineCardCommand(argsInput?: string): Promise<ReplyPa
 
       case "buttons": {
         const [title = "Menu", text = "Choose an option"] = args;
-        const actionsStr = flags.actions || "";
-        const actionParts = parseActions(actionsStr);
-
-        if (actionParts.length === 0) {
+        const actions = parseActions(flags.actions);
+        if (actions.length === 0) {
           return { text: 'Error: Buttons card requires --actions "Label1|data1,Label2|data2"' };
         }
-
-        const templateActions: Array<{
-          type: "message" | "uri" | "postback";
-          label: string;
-          data?: string;
-          uri?: string;
-        }> = actionParts.map((a) => {
-          const action = a.action;
-          const label = action.label ?? a.label;
-          if (action.type === "uri") {
-            return { type: "uri" as const, label, uri: (action as { uri: string }).uri };
-          }
-          if (action.type === "postback") {
-            return {
-              type: "postback" as const,
-              label,
-              data: (action as { data: string }).data,
-            };
-          }
-          return {
-            type: "message" as const,
-            label,
-            data: (action as { text: string }).text,
-          };
-        });
 
         return buildLineReply({
           templateMessage: {
@@ -324,7 +276,7 @@ export async function handleLineCardCommand(argsInput?: string): Promise<ReplyPa
             title,
             text,
             thumbnailImageUrl: flags.url || flags.image,
-            actions: templateActions,
+            actions,
           },
         });
       }

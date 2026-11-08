@@ -1,231 +1,200 @@
-import { PassThrough, pipeline } from "node:stream";
 import {
   createRealtimeVoiceOutputActivityTracker,
-  type RealtimeVoiceOutputActivityDelta,
+  type RealtimeVoicePlaybackItem,
 } from "openclaw/plugin-sdk/realtime-voice";
-import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
-import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
-import { createDiscordOpusEncodeStream } from "./audio.js";
-import type { DiscordRealtimePlayer, DiscordRealtimePlayerRequest } from "./realtime-player.js";
-import { loadDiscordVoiceSdk } from "./sdk-runtime.js";
+import {
+  DISCORD_AUDIO_CLOCK_BYTES,
+  DISCORD_AUDIO_PLAYED_BYTES,
+  DISCORD_AUDIO_STARTED,
+  DiscordAudioOutputStatus,
+  getDiscordAudioOutputStatus,
+  setDiscordAudioOutputStatus,
+  restoreDiscordAudioError,
+  type DiscordAudioEvent,
+} from "./audio-worker-protocol.js";
+import { resolveDiscordOutputAudioDelta } from "./output-activity.js";
+import type { DiscordRealtimePlayer } from "./realtime-player.js";
 
-const logger = createSubsystemLogger("discord/voice");
-const DISCORD_RAW_PCM_FRAME_BYTES = 3_840;
-const DISCORD_REALTIME_OUTPUT_PREROLL_FRAMES = 25;
-// Leave room for the realtime player's two-second missed-frame tolerance.
-const DISCORD_REALTIME_OUTPUT_PLAYBACK_WATCHDOG_MARGIN_MS = 3_000;
-
-/** One output stream retains ownership through queued and audible playback. */
+/** Main retains provider item identity; physical output state belongs to the worker. */
 export class DiscordRealtimeOutput {
-  readonly activity = createRealtimeVoiceOutputActivityTracker();
-  private readonly stream = new PassThrough({ highWaterMark: DISCORD_RAW_PCM_FRAME_BYTES * 128 });
-  private request: DiscordRealtimePlayerRequest | undefined;
-  private buffers: Buffer[] = [];
-  private bufferedBytes = 0;
-  private drainHandler: (() => void) | undefined;
-  private watchdog: ReturnType<typeof setTimeout> | undefined;
+  private readonly activity = createRealtimeVoiceOutputActivityTracker();
+  private readonly clock = new BigInt64Array(new SharedArrayBuffer(DISCORD_AUDIO_CLOCK_BYTES));
+  private readonly id: number;
+  private readonly unregister: () => void;
+  private readonly marks = new Map<number, () => void>();
+  private nextMark = 0;
   private closed = false;
-  private failed = false;
+  private reportedPlaybackMs = 0;
+  private readonly spans: Array<{
+    item: RealtimeVoicePlaybackItem;
+    startMs: number;
+    endMs: number;
+  }> = [];
+  private readonly onEvent = (event: DiscordAudioEvent) => {
+    if (!("id" in event) || event.id !== this.id || this.closed) {
+      return;
+    }
+    switch (event.type) {
+      case "output-start":
+        this.activity.markPlaybackStarted();
+        this.params.onStart();
+        break;
+      case "output-close":
+        this.retire(event.reason);
+        break;
+      case "output-error":
+        this.params.onError(restoreDiscordAudioError(event.error));
+        break;
+      case "output-mark": {
+        const acknowledge = this.marks.get(event.markId);
+        this.marks.delete(event.markId);
+        try {
+          acknowledge?.();
+        } catch (error) {
+          this.params.onError(error);
+        }
+        break;
+      }
+      case "capture-end":
+      case "capture-error":
+      case "capture-finalized":
+      case "capture-frame":
+      case "continuous-error":
+      case "continuous-idle":
+      case "continuous-flushed":
+      case "continuous-start":
+      case "file-end":
+      case "stream-drain":
+        // These IDs belong to other transport consumers.
+        break;
+    }
+  };
+  private readonly onStopped = () => {
+    if (!this.closed) {
+      this.params.onError(new Error("Discord audio worker stopped during playback."));
+      this.retire("worker-stopped");
+    }
+  };
 
   constructor(
     private readonly params: {
       player: DiscordRealtimePlayer;
-      logContext: string;
+      continuous: boolean;
       onStart: () => void;
       onClose: (output: DiscordRealtimeOutput, reason: string) => void;
-      onBargeIn: (reason: string) => void;
+      onBargeIn: (reason: string) => boolean;
       onError: (error: unknown) => void;
     },
   ) {
-    this.stream.once("close", () => {
-      // Encoding can finish before the player consumes the resource. Idle owns
-      // completion after playback starts, even if the PCM stream has closed.
-      if (!this.activity.snapshot().playbackStarted) {
-        this.close("stream-close");
-      }
+    this.id = params.player.audio.allocateId();
+    this.unregister = params.player.registerOutput(this.id, params.onBargeIn);
+    params.player.audio.on("event", this.onEvent);
+    params.player.audio.on("stopped", this.onStopped);
+    params.player.audio.send({
+      type: "output-create",
+      id: this.id,
+      continuous: params.continuous,
+      clock: this.clock.buffer,
     });
   }
 
+  private playedBytes(): number {
+    return Number(Atomics.load(this.clock, DISCORD_AUDIO_PLAYED_BYTES));
+  }
+  hasStarted(): boolean {
+    return (
+      Atomics.load(this.clock, DISCORD_AUDIO_STARTED) !== 0n ||
+      this.activity.snapshot().playbackStarted
+    );
+  }
   pendingBytes(): number {
     return this.closed
       ? 0
-      : this.bufferedBytes + this.stream.writableLength + this.stream.readableLength;
+      : Math.max(0, this.activity.snapshot().sourceAudioBytes * 4 - this.playedBytes());
   }
-
-  append(pcm: Buffer, activity: RealtimeVoiceOutputActivityDelta): void {
+  isAcceptingAudio(): boolean {
+    return (
+      !this.closed &&
+      !this.activity.snapshot().streamEnding &&
+      getDiscordAudioOutputStatus(this.clock) < DiscordAudioOutputStatus.Retiring
+    );
+  }
+  playbackItems(): RealtimeVoicePlaybackItem[] {
+    const playedMs = Math.min(this.playedBytes() / 192, this.activity.snapshot().audioMs);
+    for (const span of this.spans) {
+      span.item.audioEndMs += Math.max(
+        0,
+        Math.min(playedMs, span.endMs) - Math.max(this.reportedPlaybackMs, span.startMs),
+      );
+    }
+    this.reportedPlaybackMs = playedMs;
+    return this.spans.filter(({ endMs }) => endMs > playedMs).map(({ item }) => item);
+  }
+  markPlayback(acknowledge: () => void): void {
     if (this.closed) {
       return;
     }
-    this.activity.markAudio(activity);
-    if (this.activity.snapshot().playbackStarted && !this.drainHandler) {
-      // A false write return accepts this chunk; only later chunks are queued.
-      if (!this.stream.write(pcm)) {
-        this.waitForDrain();
-      }
-      return;
-    }
-    this.buffers.push(pcm);
-    this.bufferedBytes += pcm.length;
-    if (
-      !this.drainHandler &&
-      this.bufferedBytes >= DISCORD_RAW_PCM_FRAME_BYTES * DISCORD_REALTIME_OUTPUT_PREROLL_FRAMES
-    ) {
-      this.startPlayback();
-    }
+    const markId = ++this.nextMark;
+    this.marks.set(markId, acknowledge);
+    this.params.player.audio.send({ type: "output-mark", id: this.id, markId });
   }
-
+  append(
+    audio: Buffer,
+    audible: boolean,
+    item: RealtimeVoicePlaybackItem | undefined,
+    onAccepted: () => void,
+  ): boolean {
+    if (!this.isAcceptingAudio()) {
+      return false;
+    }
+    onAccepted();
+    // A chunk racing natural worker retirement may be dropped; the next chunk opens a new output.
+    const previous = this.activity.snapshot();
+    const delta = resolveDiscordOutputAudioDelta(previous, audio.length);
+    const { audioMs } = delta;
+    if (item) {
+      const last = this.spans.at(-1);
+      if (last?.item === item && last.endMs === previous.audioMs) {
+        last.endMs += audioMs;
+      } else {
+        this.spans.push({ item, startMs: previous.audioMs, endMs: previous.audioMs + audioMs });
+      }
+    }
+    this.activity.markAudio(delta);
+    this.params.player.audio.send({ type: "output-audio", id: this.id, audio, audible });
+    return true;
+  }
   finish(reason: string, playBuffered: boolean): void {
     if (this.closed) {
       return;
     }
     this.activity.markStreamEnding();
-    const activity = this.activity.snapshot();
-    logger.info(
-      `discord voice: realtime audio playback finishing reason=${reason} ${this.params.logContext} audioMs=${Math.floor(activity.audioMs)} chunks=${activity.chunks}`,
-    );
     if (!playBuffered) {
-      this.close(reason);
-      return;
+      setDiscordAudioOutputStatus(this.clock, DiscordAudioOutputStatus.Closed);
     }
-    this.startPlayback();
-    if (this.activity.snapshot().playbackStarted) {
-      this.scheduleWatchdog(reason);
-      if (!this.drainHandler) {
-        this.stream.end();
-      }
+    this.params.player.audio.send({ type: "output-finish", id: this.id, reason, playBuffered });
+    if (!playBuffered) {
+      this.retire(reason);
     }
   }
-
   close(reason: string): void {
     if (this.closed) {
       return;
     }
+    setDiscordAudioOutputStatus(this.clock, DiscordAudioOutputStatus.Closed);
+    this.params.player.audio.send({ type: "output-close", id: this.id, reason });
+    this.retire(reason);
+  }
+  private retire(reason: string): void {
+    if (this.closed) {
+      return;
+    }
+    this.playbackItems();
     this.closed = true;
-    this.clearWatchdog();
-    const activity = this.activity.snapshot();
-    logger.info(
-      `discord voice: realtime audio playback stopped reason=${reason} ${this.params.logContext} audioMs=${Math.floor(activity.audioMs)} elapsedMs=${this.activity.elapsedPlaybackMs()} chunks=${activity.chunks} discordBytes=${activity.sinkAudioBytes} realtimeBytes=${activity.sourceAudioBytes}`,
-    );
-    this.buffers = [];
-    this.bufferedBytes = 0;
-    if (this.drainHandler) {
-      this.stream.off("drain", this.drainHandler);
-      this.drainHandler = undefined;
-    }
-    this.stream.end();
-    this.stream.destroy();
-    // Retire the exact output before stop can synchronously grant another one.
+    this.marks.clear();
+    this.params.player.audio.off("event", this.onEvent);
+    this.params.player.audio.off("stopped", this.onStopped);
+    this.unregister();
     this.params.onClose(this, reason);
-    if (this.request) {
-      this.params.player.cancel(this.request);
-      this.request = undefined;
-    }
-  }
-
-  private startPlayback(): void {
-    if (this.closed || this.request) {
-      return;
-    }
-    this.request = {
-      createResource: () => this.createResource(),
-      onStart: () => {
-        this.activity.markPlaybackStarted();
-        this.params.onStart();
-        if (this.activity.snapshot().streamEnding) {
-          this.scheduleWatchdog("player-start");
-          if (!this.drainHandler) {
-            this.stream.end();
-          }
-        }
-      },
-      onIdle: () => this.close(this.failed ? "output-pipeline-error" : "player-idle"),
-      onBargeIn: this.params.onBargeIn,
-      onError: this.params.onError,
-    };
-    this.params.player.enqueue(this.request);
-  }
-
-  private createResource() {
-    const voiceSdk = loadDiscordVoiceSdk();
-    const opusStream = createDiscordOpusEncodeStream();
-    // The SDK emits Idle on error before the pipeline completion callback runs.
-    opusStream.once("error", () => {
-      this.failed = true;
-    });
-    pipeline(this.stream, opusStream, (error) => {
-      if (!error || this.closed) {
-        return;
-      }
-      logger.warn(
-        `discord voice: realtime output pipeline failed ${this.params.logContext}: ${formatErrorMessage(error)}`,
-      );
-      this.close("output-pipeline-error");
-    });
-    const buffered = Buffer.concat(this.buffers, this.bufferedBytes);
-    this.buffers = [];
-    this.bufferedBytes = 0;
-    if (buffered.length > 0 && !this.stream.write(buffered)) {
-      this.waitForDrain();
-    }
-    return voiceSdk.createAudioResource(opusStream, { inputType: voiceSdk.StreamType.Opus });
-  }
-
-  private waitForDrain(): void {
-    if (this.drainHandler || this.closed) {
-      return;
-    }
-    logger.info(
-      `discord voice: realtime audio playback buffering ${this.params.logContext} bufferedBytes=${this.stream.writableLength + this.stream.readableLength}`,
-    );
-    this.drainHandler = () => {
-      this.drainHandler = undefined;
-      if (this.closed) {
-        return;
-      }
-      let refreshWatchdog = this.activity.snapshot().streamEnding;
-      while (this.buffers.length > 0) {
-        const buffered = this.buffers.shift();
-        if (!buffered) {
-          break;
-        }
-        this.bufferedBytes -= buffered.length;
-        const writable = this.stream.write(buffered);
-        if (refreshWatchdog) {
-          this.scheduleWatchdog("output-drain");
-          refreshWatchdog = false;
-        }
-        if (!writable) {
-          this.waitForDrain();
-          return;
-        }
-      }
-      if (this.activity.snapshot().streamEnding) {
-        this.stream.end();
-      }
-    };
-    this.stream.once("drain", this.drainHandler);
-  }
-
-  private scheduleWatchdog(reason: string): void {
-    this.clearWatchdog();
-    const timeoutMs = this.activity.playbackWatchdogDelayMs({
-      marginMs: DISCORD_REALTIME_OUTPUT_PLAYBACK_WATCHDOG_MARGIN_MS,
-      minMs: DISCORD_REALTIME_OUTPUT_PLAYBACK_WATCHDOG_MARGIN_MS,
-    });
-    if (timeoutMs === undefined) {
-      return;
-    }
-    this.watchdog = setTimeout(() => {
-      this.watchdog = undefined;
-      logger.warn(
-        `discord voice: realtime audio playback watchdog fired reason=${reason} ${this.params.logContext} audioMs=${Math.floor(this.activity.snapshot().audioMs)} elapsedMs=${this.activity.elapsedPlaybackMs()}`,
-      );
-      this.close("playback-watchdog");
-    }, timeoutMs);
-  }
-
-  private clearWatchdog(): void {
-    clearTimeout(this.watchdog);
-    this.watchdog = undefined;
   }
 }

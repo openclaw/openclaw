@@ -1,30 +1,32 @@
 /* @vitest-environment jsdom */
 
 import type { ProgressCard } from "@openclaw/gateway-protocol";
-import { render } from "lit";
+import { createComponent, createSignal } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ControlUiSessionPullRequestSnapshot } from "../../../src/gateway/control-ui-contract.js";
+import type {
+  ControlUiSessionPullRequest,
+  ControlUiSessionPullRequestSnapshot,
+} from "../../../src/gateway/control-ui-contract.js";
+import { mountSolid } from "../test-helpers/mount-solid.ts";
+import { flush } from "../test-helpers/solid-settle.ts";
 import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
-import { renderSessionHovercard } from "./session-hovercard.ts";
+import { SessionHovercard, type SessionHovercardInput } from "./session-hovercard-solid.tsx";
 
 function row(overrides: Partial<SidebarRecentSession> = {}): SidebarRecentSession {
   return {
     key: "agent:main:work",
-    label: "Ship the release",
-    createdAt: Date.now() - 2 * 60 * 60_000,
-    startedAt: Date.now() - 2 * 60 * 60_000,
-    updatedAt: Date.now() - 5 * 60_000,
+    hasActiveRun: true,
     createdActor: {
       type: "human",
       id: "alice",
       identity: { type: "profile", id: "alice" },
       label: "Alice Baker",
     },
-    subtitle: "openclaw ⎇ feature/session-hovercard",
     workContext: {
       kind: "project",
       name: "openclaw",
-      path: "/work/openclaw",
+      path: "/repo/openclaw",
+      cwd: "/work/openclaw",
       branch: "feature/session-hovercard",
     },
     children: [],
@@ -48,6 +50,48 @@ function progressCard(): ProgressCard {
   };
 }
 
+const updateCards = new WeakMap<HTMLElement, (input: SessionHovercardInput) => void>();
+
+function renderCard(input: SessionHovercardInput, container = document.createElement("div")) {
+  const update = updateCards.get(container);
+  if (update) {
+    update(input);
+  } else {
+    mountSolid(
+      () => {
+        const [current, setCurrent] = createSignal(input);
+        updateCards.set(container, (next) => setCurrent(next));
+        return createComponent(SessionHovercard, {
+          get connected() {
+            return current().connected;
+          },
+          get row() {
+            return current().row;
+          },
+          get selfUserId() {
+            return current().selfUserId;
+          },
+          get avatarAuth() {
+            return current().avatarAuth;
+          },
+          get personActivity() {
+            return current().personActivity;
+          },
+          get pullRequests() {
+            return current().pullRequests;
+          },
+          get progressCard() {
+            return current().progressCard;
+          },
+        });
+      },
+      { container },
+    );
+  }
+  flush();
+  return container;
+}
+
 function attributionSummary(container: ParentNode): string {
   return [
     container.querySelector(".session-hovercard__attribution-name")?.textContent,
@@ -59,21 +103,82 @@ function attributionSummary(container: ParentNode): string {
     .trim();
 }
 
-describe("renderSessionHovercard", () => {
-  it.each(["purple", undefined, "default"])(
-    "reflects the session color %s without unset chrome",
-    (color) => {
-      const container = document.createElement("div");
-      render(renderSessionHovercard({ row: row({ color }) }), container);
-      const dot = container.querySelector(".session-color-dot");
-      if (color === "purple") {
-        expect(dot?.getAttribute("aria-label")).toBe("Session color: Purple");
-        expect(dot?.getAttribute("style")).toContain("--session-color-purple");
+describe("session hovercard", () => {
+  it.each([
+    {
+      name: "group conversation with contributors",
+      facts: {
+        label: "Weekend plans",
+        channelPresentation: {
+          channel: "whatsapp",
+          channelLabel: "WhatsApp",
+          kind: "group",
+          conversation: "Weekend plans",
+          account: "personal",
+        },
+        createdActor: { type: "human", id: "cli", label: "CLI" },
+        participants: [{ identity: { type: "profile", id: "alice" }, label: "Alice" }],
+        participantCount: 1,
+      },
+    },
+    {
+      name: "direct contact without contributors",
+      facts: {
+        label: "Alex",
+        createdActor: undefined,
+        channelPresentation: {
+          channel: "imessage",
+          channelLabel: "iMessage",
+          kind: "direct",
+          address: "alex@example.com",
+        },
+      },
+    },
+  ] satisfies { name: string; facts: Partial<SidebarRecentSession> }[])(
+    "renders channel identity for $name",
+    ({ facts }) => {
+      const container = renderCard({ row: row({ workContext: undefined, ...facts }) });
+      const contributors = container.querySelector('[aria-label="In this session"]');
+      if (facts.channelPresentation.kind === "group") {
+        const header = container.querySelector(".session-hovercard__header");
+        expect(header?.textContent).toContain("Linked to WhatsApp");
+        expect(header?.textContent).toContain("Group chat");
+        expect(header?.textContent).toContain("Via personal");
+        expect(header?.textContent?.match(/Weekend plans/g)).toHaveLength(1);
+        expect(header?.textContent).not.toContain("CLI");
+        expect(contributors?.textContent).toContain("CLI");
+        expect(contributors?.textContent).toContain("1 other");
+        expect(container.textContent).not.toContain("members");
       } else {
-        expect(dot).toBeNull();
+        expect(container.querySelector(".session-hovercard__conversation")?.textContent).toContain(
+          "alex@example.com",
+        );
+        expect(container.querySelector(".session-hovercard__conversation a")).toBeNull();
+        expect(contributors).toBeNull();
+        expect(container.textContent).not.toContain("Via");
       }
     },
   );
+
+  it("keeps the card to the session's location, without machine, color, or surface facts", () => {
+    const container = renderCard({
+      row: row({
+        color: "purple",
+        boardFace: "dashboard",
+        hasAutomation: true,
+        placementProviderId: "machine0",
+        placementProfileId: "team",
+        placementMachine: { class: "medium", os: "linux", cpu: 4, memoryGb: 16 },
+      }),
+    });
+    expect(
+      container.querySelector('[aria-label="Runs on machine0 · team"]')?.textContent,
+    ).toContain("machine0 · team");
+    expect(container.querySelector(".session-color-dot")).toBeNull();
+    expect(container.textContent).not.toContain("16 GB");
+    expect(container.textContent).not.toContain("Opens as dashboard");
+    expect(container.textContent).not.toContain("Automation");
+  });
 
   beforeEach(() => {
     vi.useFakeTimers();
@@ -85,125 +190,156 @@ describe("renderSessionHovercard", () => {
     vi.useRealTimers();
   });
 
-  it("renders header and session metadata without inventing optional sections", () => {
-    const container = document.createElement("div");
-    render(renderSessionHovercard({ row: row() }), container);
-
-    expect(container.querySelector(".session-hovercard__title")?.textContent).toBe(
-      "Ship the release",
-    );
-    expect(container.querySelector(".session-hovercard__created-age")?.textContent).toBe("2h");
-    expect(container.querySelector(".session-hovercard__meta")).toBeNull();
-    expect(container.querySelector(".session-hovercard__attribution")?.textContent).toContain(
-      "Alice Baker",
-    );
-    expect(
-      [...container.querySelectorAll(".session-hovercard__context-text")].map((node) =>
-        node.textContent?.trim(),
-      ),
-    ).toEqual(["openclaw"]);
-    expect(
-      [...container.querySelectorAll(".session-hovercard__section")].map((section) =>
-        [...section.classList].find((name) => name.startsWith("session-hovercard__section--")),
-      ),
-    ).toEqual(["session-hovercard__section--header", "session-hovercard__section--metadata"]);
-    expect(container.querySelector(".session-progress-card")).toBeNull();
-    expect(container.querySelector(".session-hovercard__excerpt")).toBeNull();
-  });
-
   it.each([
-    { name: "dashboard", facts: { boardFace: "dashboard" }, labels: ["Opens as dashboard"] },
-    { name: "automation", facts: { hasAutomation: true }, labels: ["Automation attached"] },
-    {
-      name: "both",
-      facts: { boardFace: "dashboard", hasAutomation: true },
-      labels: ["Opens as dashboard", "Automation attached"],
-    },
-    { name: "absent", facts: {}, labels: [] },
-    { name: "disabled", facts: { boardFace: "chat", hasAutomation: false }, labels: [] },
-  ] satisfies { name: string; facts: Partial<SidebarRecentSession>; labels: string[] }[])(
-    "renders $name session facts without other metadata",
-    ({ facts, labels }) => {
+    { authReady: true, authTokens: ["device-token", "saved-token"], suffix: "agent%3Amain%3Awork" },
+    { authReady: false, authTokens: [], suffix: "pending" },
+  ])(
+    "renders channel avatars with auth ready: $authReady",
+    async ({ authReady, authTokens, suffix }) => {
       const container = document.createElement("div");
-      render(
-        renderSessionHovercard({
-          row: row({ createdActor: undefined, workContext: undefined, ...facts }),
-        }),
+      if (!authReady) {
+        document.body.appendChild(container);
+      }
+      const channelAvatarUrl = `/__openclaw__/channel-avatar/${suffix}`;
+      renderCard(
+        { row: row({ channelAvatarUrl }), avatarAuth: { authTokens, authReady } },
         container,
       );
 
-      const metadata = container.querySelector(".session-hovercard__section--metadata");
-      expect(Boolean(metadata)).toBe(labels.length > 0);
-      const contextRows = [...container.querySelectorAll(".session-hovercard__context-row")];
-      expect(contextRows.map((context) => context.textContent?.trim())).toEqual(labels);
-      expect(contextRows.map((context) => context.getAttribute("aria-label"))).toEqual(labels);
-      for (const context of contextRows) {
+      const avatar = container.querySelector<
+        HTMLElement & {
+          routeUrl: string;
+          authTokens: readonly string[];
+          authReady: boolean;
+          updateComplete: Promise<boolean>;
+        }
+      >("openclaw-channel-avatar.session-hovercard__creator-avatar");
+      expect(avatar).not.toBeNull();
+      expect(avatar?.routeUrl).toBe(channelAvatarUrl);
+      expect(avatar?.authTokens).toEqual(authTokens);
+      expect(avatar?.authReady).toBe(authReady);
+      expect(container.querySelector("openclaw-viewer-avatar")).toBeNull();
+      if (!authReady) {
+        await customElements.whenDefined("openclaw-channel-avatar");
+        await avatar?.updateComplete;
+        await vi.waitFor(() => {
+          expect(
+            avatar?.querySelector(".session-hovercard__creator-avatar-fallback")?.textContent,
+          ).toBe("AB");
+        });
+        expect(avatar?.querySelector("img.channel-avatar")).toBeNull();
+        renderCard(
+          {
+            row: row({
+              channelAvatarUrl,
+              createdActor: {
+                type: "human",
+                id: "charlie",
+                identity: { type: "profile", id: "charlie" },
+                label: "Charlie Delta",
+              },
+            }),
+            avatarAuth: { authTokens, authReady },
+          },
+          container,
+        );
+        await avatar?.updateComplete;
+        expect(container.querySelector("openclaw-channel-avatar")).toBe(avatar);
         expect(
-          context.querySelector('.session-hovercard__context-icon[aria-hidden="true"] svg'),
-        ).not.toBeNull();
+          avatar?.querySelector(".session-hovercard__creator-avatar-fallback")?.textContent,
+        ).toBe("CD");
       }
     },
   );
 
-  it("renders the channel avatar with gateway auth instead of an initials span", () => {
-    const container = document.createElement("div");
-    const channelAvatarUrl = "/__openclaw__/channel-avatar/agent%3Amain%3Awork";
-    render(
-      renderSessionHovercard({
-        row: row({ channelAvatarUrl }),
-        avatarAuth: {
-          authTokens: ["device-token", "saved-token"],
-          authReady: true,
-        },
-      }),
-      container,
-    );
-
-    const avatar = container.querySelector<
-      HTMLElement & {
-        routeUrl: string;
-        authTokens: readonly string[];
-        authReady: boolean;
-      }
-    >("openclaw-channel-avatar.session-hovercard__creator-avatar");
-    expect(avatar).not.toBeNull();
-    expect(avatar?.routeUrl).toBe(channelAvatarUrl);
-    expect(avatar?.authTokens).toEqual(["device-token", "saved-token"]);
-    expect(avatar?.authReady).toBe(true);
-    expect(container.querySelector("openclaw-viewer-avatar")).toBeNull();
-  });
-
-  it("keeps initials visible inside the channel avatar while auth is unavailable", async () => {
-    const container = document.body.appendChild(document.createElement("div"));
-    render(
-      renderSessionHovercard({
-        row: row({ channelAvatarUrl: "/__openclaw__/channel-avatar/pending" }),
-        avatarAuth: { authTokens: [], authReady: false },
-      }),
-      container,
-    );
-
-    await customElements.whenDefined("openclaw-channel-avatar");
-    const avatar = container.querySelector<HTMLElement & { updateComplete: Promise<boolean> }>(
-      "openclaw-channel-avatar",
-    );
-    await avatar?.updateComplete;
-
-    await vi.waitFor(() => {
-      expect(
-        avatar?.querySelector(".session-hovercard__creator-avatar-fallback")?.textContent,
-      ).toBe("AB");
+  it("shows task publications without claiming unknown GitHub state", () => {
+    const branch = {
+      owner: "example",
+      repo: "project",
+      branch: "coordination",
+      createUrl: "https://github.com/example/project/pull/new/coordination",
+    };
+    const task = {
+      owner: "example",
+      repo: "project",
+      branch: "fix/child",
+      url: "https://github.com/example/project/pull/417",
+      number: 417,
+      title: "Child publication",
+      sourceSessionKey: "agent:main:child",
+      sourceAgentId: "main",
+    };
+    const container = renderCard({
+      pullRequests: snapshot({ branch, taskPullRequests: [task], taskPullRequestCount: 1 }),
     });
-    expect(avatar?.querySelector("img.channel-avatar")).toBeNull();
-    expect(container.querySelector("openclaw-viewer-avatar")).toBeNull();
+    const link = container.querySelector<HTMLAnchorElement>(".session-hovercard__pr-row");
+    expect(link?.href).toBe(task.url);
+    expect(link?.dataset.state).toBeUndefined();
+    expect(link?.getAttribute("aria-label")).toContain("Status unavailable");
+    expect(link?.getAttribute("aria-label")).toContain("Task branch: fix/child");
+    renderCard(
+      {
+        pullRequests: snapshot({
+          taskPullRequests: [task],
+          taskPullRequestCount: 30,
+          pullRequestCount: 31,
+          pullRequests: [
+            {
+              ...task,
+              number: 418,
+              url: "https://github.com/example/project/pull/418",
+              state: "open",
+            },
+          ],
+        }),
+      },
+      container,
+    );
+    expect(container.querySelector(".session-hovercard__pr-count")?.textContent).toBe("31");
+    expect(container.querySelector(".session-hovercard__more")?.textContent).toContain("29 more");
+    // The branch PR can also belong to receipts outside the bounded task preview.
+    renderCard(
+      {
+        pullRequests: snapshot({
+          taskPullRequests: [task],
+          taskPullRequestCount: 30,
+          pullRequestCount: 30,
+          pullRequests: [
+            {
+              ...task,
+              number: 418,
+              url: "https://github.com/example/project/pull/418",
+              state: "open",
+            },
+          ],
+        }),
+      },
+      container,
+    );
+    expect(container.querySelector(".session-hovercard__pr-count")?.textContent).toBe("30");
+    expect(container.querySelectorAll(".session-hovercard__pr-row")).toHaveLength(2);
+    expect(container.querySelector(".session-hovercard__more")?.textContent).toContain("28 more");
+    const known = { ...task, state: "merged" as const };
+    renderCard(
+      {
+        pullRequests: snapshot({
+          pullRequests: [known],
+          taskPullRequests: [{ ...task, pullRequest: known }],
+        }),
+      },
+      container,
+    );
+    expect(container.querySelectorAll(".session-hovercard__pr-row")).toHaveLength(1);
+    expect(container.querySelector(".session-hovercard__pr-row")?.getAttribute("data-state")).toBe(
+      "merged",
+    );
   });
 
-  it("renders one titled PR row with compact diff facts and an overflow count", () => {
-    const container = document.createElement("div");
-    render(
-      renderSessionHovercard({
-        pullRequests: snapshot({
-          pullRequests: [
+  it("shows all supplied PRs with active work first, identities, and checks", () => {
+    const container = renderCard({
+      pullRequests: snapshot({
+        pullRequests: (
+          [
             {
               number: 101,
               owner: "openclaw",
@@ -235,14 +371,13 @@ describe("renderSessionHovercard", () => {
               url: "https://github.com/openclaw/openclaw/pull/103",
               state: "merged",
             },
-          ],
-        }),
+          ] satisfies ControlUiSessionPullRequest[]
+        ).toReversed(),
       }),
-      container,
-    );
+    });
 
     const links = [...container.querySelectorAll<HTMLAnchorElement>(".session-hovercard__pr-row")];
-    expect(links).toHaveLength(1);
+    expect(links).toHaveLength(3);
     expect(links[0]?.href).toBe("https://github.com/openclaw/openclaw/pull/101");
     expect(links[0]?.target).toBe("_blank");
     expect(links[0]?.rel).toContain("noopener");
@@ -250,219 +385,275 @@ describe("renderSessionHovercard", () => {
     expect(
       links[0]?.querySelector(".session-hovercard__pr-title")?.getAttribute("title"),
     ).toBeNull();
-    expect(links[0]?.querySelector(".session-hovercard__pr-number")).toBeNull();
+    expect(links[0]?.querySelector(".session-hovercard__pr-number")?.textContent).toBe("#101");
     expect(links[0]?.querySelector(".session-hovercard__pr-author")).toBeNull();
     expect(
       links[0]?.querySelector(".session-hovercard__pr-state-icon")?.getAttribute("title"),
     ).toBe("Open · CI checks passing");
     expect(links[0]?.querySelector(".session-hovercard__pr-state-icon svg")).not.toBeNull();
     expect(links[0]?.querySelector(".session-hovercard__files")).toBeNull();
-    expect(links[0]?.querySelector(".session-hovercard__additions")?.textContent).toBe("+7");
-    expect(links[0]?.querySelector(".session-hovercard__deletions")?.textContent).toBe("−3");
+    expect(links[0]?.querySelector(".session-hovercard__additions")).toBeNull();
     expect(links[0]?.getAttribute("aria-label")).toContain("First");
+    expect(links[0]?.getAttribute("aria-label")).toContain("openclaw/openclaw#101");
+    expect(links[0]?.getAttribute("aria-label")).toContain("CI checks passing");
+    expect(links[0]?.getAttribute("aria-label")).toContain("+7");
     expect(links[0]?.getAttribute("aria-label")).not.toContain("Opened by");
     expect(links[0]?.getAttribute("aria-label")).not.toContain("files");
-    expect(container.querySelector(".session-hovercard__more")?.textContent).toBe("+2 more");
+    expect(links.map((link) => link.dataset.state)).toEqual(["open", "draft", "merged"]);
+    expect(links[0]?.querySelector(".session-hovercard__pr-checks")).toBeNull();
+    expect(container.querySelector("details")).toBeNull();
     expect(container.querySelector(".session-hovercard__section--header")).toBeNull();
   });
 
-  it("does not present a node-only subtitle as project metadata", () => {
-    const container = document.createElement("div");
-    render(
-      renderSessionHovercard({ row: row({ subtitle: "macbook", workContext: undefined }) }),
-      container,
-    );
+  it("swaps the PR number for failing and pending check signals, up to ten rows", () => {
+    const request = (number: number, checks?: ControlUiSessionPullRequest["checks"]) =>
+      ({
+        number,
+        owner: "openclaw",
+        repo: "openclaw",
+        branch: "feature",
+        title: `Request ${number}`,
+        url: `https://github.com/openclaw/openclaw/pull/${number}`,
+        state: "open",
+        checks,
+      }) satisfies ControlUiSessionPullRequest;
+    const pullRequests = [
+      request(1, { state: "failing", passed: 1, failed: 5, skipped: 0, running: 0 }),
+      request(2, { state: "pending", passed: 0, failed: 0, skipped: 0, running: 2 }),
+      ...Array.from({ length: 10 }, (_, index) => request(index + 3)),
+    ];
+    const container = renderCard({ pullRequests: snapshot({ pullRequests }) });
+    const links = [...container.querySelectorAll(".session-hovercard__pr-row")];
+    expect(links).toHaveLength(10);
+    expect(links[0]?.querySelector(".session-hovercard__pr-checks")?.textContent).toBe("5 failing");
+    expect(links[0]?.querySelector(".session-hovercard__pr-number")).toBeNull();
+    expect(links[1]?.querySelector(".session-run-spinner")).not.toBeNull();
+    expect(links[1]?.querySelector(".session-hovercard__pr-number")).toBeNull();
+    expect(links[2]?.querySelector(".session-hovercard__pr-number")?.textContent).toBe("#3");
+    expect(container.querySelector(".session-hovercard__pr-count")?.textContent).toBe("12");
+    expect(container.querySelector(".session-hovercard__more")?.textContent).toBe("2 more");
 
-    expect(container.querySelector(".session-hovercard__section--metadata")).toBeNull();
-    expect(container.querySelector(".session-hovercard__context-text")).toBeNull();
+    renderCard({ pullRequests: snapshot({ pullRequests: pullRequests.slice(0, 10) }) }, container);
+    expect(container.querySelectorAll(".session-hovercard__pr-row")).toHaveLength(10);
+    expect(container.querySelector(".session-hovercard__more")).toBeNull();
   });
 
-  it("labels an authoritative non-repository cwd as a workspace", () => {
-    const container = document.createElement("div");
-    render(
-      renderSessionHovercard({
-        row: row({
-          workContext: {
-            kind: "workspace",
-            name: "release-notes",
-            path: "/workspaces/release-notes",
+  it.each(["rate-limited", "unavailable"] as const)(
+    "explains %s GitHub lookups with or without retained work and clears the warning after recovery",
+    (status) => {
+      const container = document.createElement("div");
+      const branch = { owner: "openclaw", repo: "openclaw", branch: "feature" };
+      const pullRequest = {
+        ...branch,
+        number: 101,
+        title: "Retained pull request",
+        url: "https://github.com/openclaw/openclaw/pull/101",
+        state: "open" as const,
+      };
+      for (const work of [{}, { branch }, { pullRequests: [pullRequest] }]) {
+        renderCard(
+          {
+            pullRequests: snapshot({ ...work, status, rateLimited: status === "rate-limited" }),
           },
-        }),
-      }),
-      container,
-    );
+          container,
+        );
+        const notice = container.querySelector('[role="status"]');
+        expect(notice?.textContent).toContain(
+          status === "rate-limited"
+            ? "GitHub API rate limit reached"
+            : "Couldn’t refresh GitHub status",
+        );
+        if (status === "unavailable") {
+          expect(notice?.textContent).not.toContain("rate limit");
+        }
+      }
+      expect(container.querySelector<HTMLAnchorElement>(".session-hovercard__pr-row")?.href).toBe(
+        pullRequest.url,
+      );
+      renderCard({ pullRequests: snapshot({ pullRequests: [pullRequest] }) }, container);
+      expect(container.querySelector('[role="status"]')).toBeNull();
+      expect(container.textContent).toContain(pullRequest.title);
+    },
+  );
 
-    const context = container.querySelector('[aria-label="Workspace: release-notes"]');
-    expect(context?.getAttribute("aria-label")).toBe("Workspace: release-notes");
-    expect(context?.getAttribute("title")).toBe("Workspace: /workspaces/release-notes");
-    expect(context?.textContent).toContain("release-notes");
+  it.each([
+    {
+      workContext: {
+        kind: "project",
+        name: "project",
+        path: "https://github.com/example/project",
+        branch: "feature/ui",
+      },
+      label: "Project: project, Branch: feature/ui",
+      title: "Project: https://github.com/example/project",
+    },
+    {
+      workContext: { kind: "workspace", name: "release-notes", path: "/workspaces/release-notes" },
+      label: "Workspace: release-notes",
+      title: "Workspace: /workspaces/release-notes",
+    },
+    { workContext: undefined, label: "node-only subtitle", title: "" },
+  ] satisfies { workContext: SidebarRecentSession["workContext"]; label: string; title: string }[])(
+    "renders only authoritative work context: $label",
+    ({ workContext, label, title }) => {
+      const container = renderCard({ row: row({ subtitle: "macbook", workContext }) });
+      if (!workContext) {
+        expect(container.querySelector(".session-hovercard__section--metadata")).toBeNull();
+        expect(container.querySelector(".session-hovercard__context-text")).toBeNull();
+        return;
+      }
+      const context = container.querySelector(`[aria-label="${label}"]`);
+      expect(context?.getAttribute("title")).toBe(title);
+      if (workContext.kind === "project") {
+        expect(context?.textContent).toContain("project / feature/ui");
+      } else {
+        expect(context?.getAttribute("aria-label")).toBe(label);
+        expect(context?.textContent).toContain("release-notes");
+      }
+    },
+  );
+
+  it.each([
+    {
+      branch: "feature",
+      changedFiles: 3,
+      additions: 12,
+      deletions: 4,
+      createUrl: "https://github.com/openclaw/openclaw/pull/new/feature",
+    },
+    { branch: "local-only", changedFiles: 2, additions: 18, deletions: 1, createUrl: undefined },
+  ])("keeps branch changes on the location row without a create action: $branch", (branch) => {
+    const container = renderCard({
+      row: branch.createUrl
+        ? row({ workSession: true, subtitle: "openclaw/openclaw · feature" })
+        : undefined,
+      pullRequests: snapshot({ branch: { owner: "openclaw", repo: "openclaw", ...branch } }),
+    });
+    expect(container.querySelector(".session-hovercard__additions")?.textContent).toBe(
+      `+${branch.additions}`,
+    );
+    expect(container.querySelector(".session-hovercard__deletions")?.textContent).toBe(
+      `−${branch.deletions}`,
+    );
+    expect(container.querySelector(".session-hovercard__section--prs")).toBeNull();
+    expect(container.textContent).not.toContain("Create PR");
+    expect(
+      container.querySelector(".session-hovercard__context-row .session-hovercard__diff"),
+    ).not.toBeNull();
   });
 
-  it("renders a compact create-PR row without exposing the branch name", () => {
-    const container = document.createElement("div");
-    render(
-      renderSessionHovercard({
-        row: row({ workSession: true, subtitle: "openclaw/openclaw · feature" }),
-        pullRequests: snapshot({
-          branch: {
-            owner: "openclaw",
-            repo: "openclaw",
-            branch: "feature",
-            changedFiles: 3,
-            additions: 12,
-            deletions: 4,
-            createUrl: "https://github.com/openclaw/openclaw/pull/new/feature",
-          },
-        }),
-      }),
-      container,
-    );
+  it("reserves the task area for progress reports, never the latest message", () => {
+    const latestMessage = "Land";
+    const container = renderCard({
+      row: row({ lastMessagePreview: latestMessage }),
+    });
 
-    expect(container.querySelector(".session-hovercard__branch-name")).toBeNull();
-    expect(container.querySelector(".session-hovercard__files")).toBeNull();
-    expect(container.querySelector(".session-hovercard__additions")?.textContent).toBe("+12");
-    expect(container.querySelector(".session-hovercard__deletions")?.textContent).toBe("−4");
-    const createLink = container.querySelector<HTMLAnchorElement>(
-      ".session-hovercard__branch-action",
-    );
-    expect(createLink?.textContent).toBe("Create PR");
-    expect(createLink?.href).toBe("https://github.com/openclaw/openclaw/pull/new/feature");
-    expect(createLink?.title).toBe("Create a pull request for feature");
+    expect(container.textContent).not.toContain(latestMessage);
+    expect(container.querySelector(".session-hovercard__task")).toBeNull();
   });
 
-  it("labels local diff facts without exposing an unpushable branch", () => {
-    const container = document.createElement("div");
-    render(
-      renderSessionHovercard({
-        pullRequests: snapshot({
-          branch: {
-            owner: "openclaw",
-            repo: "openclaw",
-            branch: "local-only",
-            changedFiles: 2,
-            additions: 18,
-            deletions: 1,
-          },
-        }),
-      }),
-      container,
-    );
+  it.each(["active", "markdown-only", "completed"])(
+    "keeps Task progress separate from %s plan metadata",
+    (mode) => {
+      const card = progressCard();
+      const container = renderCard({
+        row: row(mode === "completed" ? { status: "done" } : {}),
+        progressCard: {
+          ...card,
+          steps:
+            mode === "markdown-only"
+              ? undefined
+              : mode === "completed"
+                ? [{ step: "Verify", status: "completed" }]
+                : card.steps,
+        },
+      });
 
-    expect(container.querySelector(".session-hovercard__branch-name")).toBeNull();
-    expect(container.querySelector(".session-hovercard__branch-action")).toBeNull();
-    expect(container.querySelector(".session-hovercard__branch-label")?.textContent).toBe(
-      "Changes",
-    );
-    expect(container.querySelector(".session-hovercard__additions")?.textContent).toBe("+18");
-    expect(container.querySelector(".session-hovercard__deletions")?.textContent).toBe("−1");
-  });
+      const plan = container.querySelector(".session-hovercard__plan-row");
+      if (mode === "active") {
+        expect(plan?.querySelector(".session-hovercard__plan-step")?.textContent).toBe("Verify");
+        expect(plan?.querySelector(".session-hovercard__plan-count")?.textContent).toBe("0/1");
+        expect(plan?.querySelector(".session-run-spinner")).not.toBeNull();
+      } else {
+        expect(plan).toBeNull();
+      }
+      const notepad = container.querySelector(".session-hovercard__notepad");
+      expect(notepad).not.toBeNull();
+      expect(notepad?.querySelector(".session-hovercard__notepad-title")?.textContent).toBe(
+        "Task progress",
+      );
+      expect(container.querySelector(".session-progress-card")).toBeNull();
+      expect(container.querySelector("time")).toBeNull();
+    },
+  );
 
-  it("renders the latest turn as plain text when progress is absent", () => {
-    const container = document.createElement("div");
-    render(
-      renderSessionHovercard({
-        row: row({ lastMessagePreview: "  Finished <strong>without markup</strong>.  " }),
-      }),
-      container,
-    );
-
-    expect(container.querySelector(".session-hovercard__excerpt")?.textContent).toBe(
-      "Finished <strong>without markup</strong>.",
-    );
-    expect(container.querySelector(".session-hovercard__excerpt strong")).toBeNull();
-    expect(container.querySelector(".session-progress-card")).toBeNull();
-  });
-
-  it("places current work with session facts and keeps markdown in Agent Notepad", () => {
-    const container = document.createElement("div");
-    render(
-      renderSessionHovercard({
-        row: row({ lastMessagePreview: "This must not appear." }),
-        progressCard: progressCard(),
-      }),
-      container,
-    );
+  it.each([
+    { hasActiveRun: true, updateOffset: -1, status: "running" },
+    { hasActiveRun: false, updateOffset: 1, status: "running" },
+    { hasActiveRun: true, updateOffset: -1, status: "done" },
+  ] satisfies {
+    hasActiveRun: boolean;
+    updateOffset: number;
+    status: SidebarRecentSession["status"];
+  }[])("pauses unfinished progress with run state %j", ({ hasActiveRun, updateOffset, status }) => {
+    const startedAt = Date.now();
+    const container = renderCard({
+      row: row({ startedAt, status, hasActiveRun }),
+      progressCard: { ...progressCard(), updatedAt: startedAt + updateOffset },
+    });
 
     const plan = container.querySelector(".session-hovercard__plan-row");
-    expect(plan?.querySelector(".session-hovercard__plan-step")?.textContent).toBe("Verify");
-    expect(plan?.querySelector(".session-hovercard__plan-count")?.textContent).toBe("0/1");
-    expect(plan?.querySelector(".session-run-spinner")).not.toBeNull();
-    const notepad = container.querySelector(".session-hovercard__notepad");
-    expect(notepad?.querySelector(".session-hovercard__notepad-title")?.textContent).toBe(
-      "Agent Notepad",
-    );
-    expect(notepad?.querySelector("strong")?.textContent).toBe("Release");
-    expect(container.querySelector(".session-progress-card")).toBeNull();
-    expect(container.querySelector("time")).toBeNull();
-    expect(container.querySelector(".session-hovercard__excerpt")).toBeNull();
-    expect(container.textContent).not.toContain("This must not appear.");
+    expect(plan?.getAttribute("aria-label")).toBe("Verify, paused");
+    expect(plan?.querySelector(".session-run-spinner")).toBeNull();
+    expect(plan?.querySelector("polyline")).not.toBeNull();
   });
 
-  it("pins a labeled markdown progress bar above the Agent Notepad copy", () => {
-    const container = document.createElement("div");
-    render(
-      renderSessionHovercard({
-        row: row(),
-        progressCard: {
-          ...progressCard(),
-          markdown:
-            '**Build is healthy.**\n\n<progress aria-label="CI · 4/6" value="4" max="6"></progress>\n\nWaiting on Windows.',
-        },
-      }),
-      container,
-    );
-
-    const markdown = container.querySelector(".session-progress-card__markdown");
-    const promoted = markdown?.firstElementChild;
-    expect(promoted?.classList.contains("session-progress-card__progress")).toBe(true);
-    expect(promoted?.querySelector(".session-progress-card__progress-label")?.textContent).toBe(
-      "CI · 4/6",
-    );
-    expect(promoted?.querySelector("progress")?.getAttribute("value")).toBe("4");
-    expect(markdown?.textContent).toContain("Build is healthy.");
-    expect(markdown?.textContent).toContain("Waiting on Windows.");
-  });
-
-  it("renders a markdown-only Agent Notepad without inventing plan metadata", () => {
-    const container = document.createElement("div");
-    render(
-      renderSessionHovercard({
-        row: row(),
-        progressCard: { ...progressCard(), steps: undefined },
-      }),
-      container,
-    );
-
-    expect(container.querySelector(".session-hovercard__plan-row")).toBeNull();
-    expect(container.querySelector(".session-hovercard__notepad strong")?.textContent).toBe(
-      "Release",
-    );
+  it("keeps delegated activity in the plan without a separate runtime status line", () => {
+    const card = { ...progressCard(), updatedAt: 101 };
+    const session = row({
+      startedAt: 100,
+      endedAt: 110,
+      status: "done",
+      hasActiveRun: false,
+      hasActiveSubagentRun: true,
+    });
+    const container = renderCard({ row: session, progressCard: card, connected: true });
+    expect(container.querySelector(".session-progress-card__runtime")).toBeNull();
+    expect(
+      container.querySelector(".session-hovercard__plan-row")?.getAttribute("aria-label"),
+    ).toBe("Verify, in progress");
+    expect(container.querySelector(".session-run-spinner")).not.toBeNull();
+    renderCard({ row: session, progressCard: card, connected: false }, container);
+    expect(container.querySelector(".session-progress-card__runtime")).toBeNull();
+    expect(container.querySelector(".session-run-spinner")).toBeNull();
+    expect(
+      container.querySelector(".session-hovercard__plan-row")?.getAttribute("aria-label"),
+    ).toBe("Verify, paused");
   });
 
   it("shows the first active step, otherwise the first pending step, and never completed work", () => {
-    const container = document.createElement("div");
-    render(
-      renderSessionHovercard({
-        row: row(),
-        progressCard: {
-          ...progressCard(),
-          markdown: undefined,
-          steps: [
-            { step: "Done", status: "completed" },
-            { step: "Next", status: "pending" },
-            { step: "Working", status: "in_progress" },
-            { step: "Later", status: "pending" },
-          ],
-        },
-      }),
-      container,
-    );
+    const container = renderCard({
+      row: row(),
+      progressCard: {
+        ...progressCard(),
+        markdown: undefined,
+        steps: [
+          { step: "Done", status: "completed" },
+          { step: "Next", status: "pending" },
+          { step: "Working", status: "in_progress" },
+          { step: "Later", status: "pending" },
+        ],
+      },
+    });
     expect(container.querySelector(".session-hovercard__plan-step")?.textContent).toBe("Working");
     expect(container.querySelector(".session-hovercard__plan-count")?.textContent).toBe("1/4");
-    expect(container.querySelector(".session-hovercard__notepad")).toBeNull();
+    expect(container.querySelector(".session-hovercard__notepad-title")?.textContent).toBe(
+      "Task progress",
+    );
+    expect(container.querySelector(".session-hovercard__commentary")).toBeNull();
 
-    render(
-      renderSessionHovercard({
+    renderCard(
+      {
         row: row(),
         progressCard: {
           ...progressCard(),
@@ -473,229 +664,197 @@ describe("renderSessionHovercard", () => {
             { step: "Later", status: "pending" },
           ],
         },
-      }),
+      },
       container,
     );
     expect(container.querySelector(".session-hovercard__plan-step")?.textContent).toBe("Next");
     expect(container.querySelector(".session-hovercard__plan-count")?.textContent).toBe("1/3");
 
-    render(
-      renderSessionHovercard({
+    renderCard(
+      {
         row: row(),
         progressCard: {
           ...progressCard(),
           markdown: undefined,
           steps: [{ step: "Done", status: "completed" }],
         },
-      }),
+      },
       container,
     );
     expect(container.querySelector(".session-hovercard__plan-row")).toBeNull();
     expect(container.querySelector(".session-hovercard__notepad")).toBeNull();
   });
 
-  it.each(["done", "failed", "timeout", "killed"] as const)(
-    "hides stale plan work after the session is %s",
-    (status) => {
-      const container = document.createElement("div");
-      render(
-        renderSessionHovercard({
-          row: row({ status }),
-          progressCard: progressCard(),
+  it.each([
+    { hasCreator: true, participantCount: 7, summary: "Alice Baker & 5 others" },
+    { hasCreator: false, participantCount: 5, summary: "Mira & 3 others" },
+  ])(
+    "deduplicates attribution identities with creator: $hasCreator",
+    ({ hasCreator, participantCount, summary }) => {
+      const session = row();
+      const participants: NonNullable<SidebarRecentSession["participants"]> = [
+        { identity: { type: "profile", id: "self" }, label: "You" },
+        { identity: { type: "profile", id: "mira" }, label: "Mira" },
+        { identity: { type: "profile", id: "riley" }, label: "Riley" },
+      ];
+      if (hasCreator) {
+        participants.unshift({ identity: { type: "profile", id: "alice" }, label: "Alice Baker" });
+        participants.push({ identity: { type: "profile", id: "mira" }, label: "Mira duplicate" });
+      }
+      const container = renderCard({
+        selfUserId: "self",
+        row: row({
+          createdActor: hasCreator ? session.createdActor : undefined,
+          participants,
+          participantCount,
         }),
-        container,
-      );
-
-      expect(container.querySelector(".session-hovercard__plan-row")).toBeNull();
-      expect(container.querySelector(".session-hovercard__notepad")).not.toBeNull();
+      });
+      expect(attributionSummary(container)).toBe(summary);
+      if (hasCreator) {
+        expect(
+          container.querySelector(".session-hovercard__attribution")?.getAttribute("aria-label"),
+        ).toBe("Alice Baker, 5 more participants");
+      }
     },
   );
 
-  it("deduplicates creator and self from the compact attribution", () => {
-    const container = document.createElement("div");
-    render(
-      renderSessionHovercard({
-        selfUserId: "self",
-        row: row({
-          participants: [
-            { identity: { type: "profile", id: "alice" }, label: "Alice Baker" },
-            { identity: { type: "profile", id: "self" }, label: "You" },
-            { identity: { type: "profile", id: "mira" }, label: "Mira" },
-            { identity: { type: "profile", id: "riley" }, label: "Riley" },
-            { identity: { type: "profile", id: "mira" }, label: "Mira duplicate" },
-          ],
-          participantCount: 7,
-        }),
-      }),
-      container,
-    );
+  it.each([true, false])(
+    "renders authoritative participant projections (expanded: %s)",
+    async (expanded) => {
+      const container = document.body.appendChild(document.createElement("div"));
+      const navigate = vi.fn();
+      const participants: NonNullable<SidebarRecentSession["participants"]> = [
+        { identity: { type: "profile", id: "mira" }, label: "Mira" },
+        { identity: { type: "profile", id: "riley" }, label: "Riley" },
+        { identity: { type: "profile", id: "sam" }, label: "Sam" },
+        { identity: { type: "profile", id: "lee" }, label: "Lee" },
+      ];
+      const self: (typeof participants)[number] = {
+        identity: { type: "profile", id: "self" },
+        label: "You",
+      };
+      renderCard(
+        {
+          selfUserId: "self",
+          row: row({
+            participants: expanded ? [self, ...participants.slice(0, 3)] : participants,
+            expandedParticipants: expanded ? [self, ...participants] : undefined,
+            participantCount: 5,
+          }),
+          personActivity: expanded ? { basePath: "", navigate } : undefined,
+        },
+        container,
+      );
 
-    expect(attributionSummary(container)).toBe("Alice Baker & 5 others");
-    expect(
-      container.querySelector(".session-hovercard__attribution")?.getAttribute("aria-label"),
-    ).toBe("Alice Baker, 5 more participants");
-  });
+      const facepile = container.querySelector<HTMLElement & { updateComplete: Promise<boolean> }>(
+        "openclaw-viewer-facepile",
+      );
+      await facepile?.updateComplete;
+      if (!expanded) {
+        expect(
+          facepile?.querySelectorAll(".viewer-avatar:not(.viewer-avatar--overflow)"),
+        ).toHaveLength(4);
+        expect(facepile?.querySelector(".viewer-avatar--overflow")?.textContent).toBe("+1");
+        return;
+      }
+      expect(attributionSummary(container)).toBe("Alice Baker & 4 others");
+      const participantLinks = [
+        ...container.querySelectorAll<HTMLAnchorElement>("openclaw-viewer-facepile a"),
+      ];
+      expect(participantLinks.map((link) => link.getAttribute("href"))).toEqual([
+        "/activity/mira",
+        "/activity/riley",
+        "/activity/sam",
+        "/activity/lee",
+      ]);
 
-  it("opens the creator's activity feed from the attribution", () => {
-    const container = document.createElement("div");
-    const navigate = vi.fn();
-    render(
-      renderSessionHovercard({
-        row: row(),
-        personActivity: { basePath: "/ui", navigate },
-      }),
-      container,
-    );
+      const participantsTooltip = container.querySelector<
+        HTMLElement & { updateComplete: Promise<boolean> }
+      >("openclaw-tooltip.session-hovercard__participants-tooltip");
+      await participantsTooltip?.updateComplete;
+      expect(participantsTooltip?.hasAttribute("open-on-click")).toBe(true);
+      const participantTrigger = participantsTooltip?.querySelector<HTMLButtonElement>(
+        ".session-hovercard__attribution-others",
+      );
+      const touchDown = new MouseEvent("pointerdown", { bubbles: true });
+      Object.defineProperty(touchDown, "pointerType", { value: "touch" });
+      participantTrigger?.dispatchEvent(touchDown);
+      participantTrigger?.dispatchEvent(new MouseEvent("pointerup", { bubbles: true }));
+      participantTrigger?.click();
+      await participantsTooltip?.updateComplete;
+      expect(participantsTooltip?.hasAttribute("open")).toBe(true);
+      expect(participantTrigger?.textContent).toContain("4 others");
+      expect(
+        [
+          ...(participantsTooltip?.querySelectorAll<HTMLAnchorElement>(
+            ".session-hovercard__participant-link",
+          ) ?? []),
+        ].map((link) => link.getAttribute("href")),
+      ).toEqual(["/activity/mira", "/activity/riley", "/activity/sam", "/activity/lee"]);
 
-    const name = container.querySelector<HTMLAnchorElement>(".session-hovercard__attribution-name");
-    expect(name?.getAttribute("href")).toBe("/ui/activity/alice");
-    expect(
-      container.querySelector(".person-activity-avatar-link")?.getAttribute("aria-hidden"),
-    ).toBe("true");
+      participantLinks[1]?.dispatchEvent(
+        new MouseEvent("click", { bubbles: true, cancelable: true }),
+      );
+      expect(navigate).toHaveBeenCalledWith("riley", "Riley");
 
-    const click = new MouseEvent("click", { bubbles: true, cancelable: true });
-    name?.dispatchEvent(click);
-    expect(navigate).toHaveBeenCalledWith("alice", "Alice Baker");
-    expect(click.defaultPrevented).toBe(true);
-  });
+      participantsTooltip
+        ?.querySelector<HTMLAnchorElement>('.session-hovercard__participant-link[href$="lee"]')
+        ?.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+      expect(navigate).toHaveBeenLastCalledWith("lee", "Lee");
+    },
+  );
 
-  it("links participant avatars while keeping the creator first", async () => {
+  it("retains an open participant menu and focused attribution while progress and PR facts refresh", async () => {
     const container = document.body.appendChild(document.createElement("div"));
-    const navigate = vi.fn();
-    render(
-      renderSessionHovercard({
-        selfUserId: "self",
-        row: row({
-          participants: [
-            { identity: { type: "profile", id: "self" }, label: "You" },
-            { identity: { type: "profile", id: "mira" }, label: "Mira" },
-            { identity: { type: "profile", id: "riley" }, label: "Riley" },
-            { identity: { type: "profile", id: "sam" }, label: "Sam" },
-          ],
-          expandedParticipants: [
-            { identity: { type: "profile", id: "self" }, label: "You" },
-            { identity: { type: "profile", id: "mira" }, label: "Mira" },
-            { identity: { type: "profile", id: "riley" }, label: "Riley" },
-            { identity: { type: "profile", id: "sam" }, label: "Sam" },
-            { identity: { type: "profile", id: "lee" }, label: "Lee" },
-          ],
-          participantCount: 5,
-        }),
-        personActivity: { basePath: "", navigate },
+    const input: SessionHovercardInput = {
+      row: row({
+        participants: [{ identity: { type: "profile", id: "mira" }, label: "Mira" }],
+        participantCount: 1,
       }),
-      container,
-    );
-
-    expect(attributionSummary(container)).toBe("Alice Baker & 4 others");
-    const facepile = container.querySelector<HTMLElement & { updateComplete: Promise<boolean> }>(
-      "openclaw-viewer-facepile",
-    );
-    await facepile?.updateComplete;
-    const participantLinks = [
-      ...container.querySelectorAll<HTMLAnchorElement>("openclaw-viewer-facepile a"),
-    ];
-    expect(participantLinks.map((link) => link.getAttribute("href"))).toEqual([
-      "/activity/mira",
-      "/activity/riley",
-      "/activity/sam",
-      "/activity/lee",
-    ]);
-
-    const participantsTooltip = container.querySelector<
-      HTMLElement & { updateComplete: Promise<boolean> }
-    >("openclaw-tooltip.session-hovercard__participants-tooltip");
-    await participantsTooltip?.updateComplete;
-    expect(participantsTooltip?.hasAttribute("open-on-click")).toBe(true);
-    const participantTrigger = participantsTooltip?.querySelector<HTMLButtonElement>(
+      personActivity: { basePath: "", navigate: vi.fn() },
+      progressCard: progressCard(),
+    };
+    renderCard(input, container);
+    const tooltip = container.querySelector<HTMLElement & { updateComplete: Promise<boolean> }>(
+      "openclaw-tooltip.session-hovercard__participants-tooltip",
+    )!;
+    await tooltip.updateComplete;
+    const trigger = tooltip.querySelector<HTMLButtonElement>(
       ".session-hovercard__attribution-others",
-    );
-    const touchDown = new MouseEvent("pointerdown", { bubbles: true });
-    Object.defineProperty(touchDown, "pointerType", { value: "touch" });
-    participantTrigger?.dispatchEvent(touchDown);
-    participantTrigger?.dispatchEvent(new MouseEvent("pointerup", { bubbles: true }));
-    participantTrigger?.click();
-    expect(participantsTooltip?.hasAttribute("open")).toBe(true);
-    expect(participantTrigger?.textContent).toContain("4 others");
-    expect(
-      [
-        ...(participantsTooltip?.querySelectorAll<HTMLAnchorElement>(
-          ".session-hovercard__participant-link",
-        ) ?? []),
-      ].map((link) => link.getAttribute("href")),
-    ).toEqual(["/activity/mira", "/activity/riley", "/activity/sam", "/activity/lee"]);
+    )!;
+    const pointer = new MouseEvent("pointerdown", { bubbles: true });
+    Object.defineProperty(pointer, "pointerType", { value: "touch" });
+    trigger.dispatchEvent(pointer);
+    trigger.dispatchEvent(new MouseEvent("pointerup", { bubbles: true }));
+    trigger.click();
+    await tooltip.updateComplete;
+    expect(tooltip.hasAttribute("open")).toBe(true);
+    const name = container.querySelector<HTMLAnchorElement>(
+      ".session-hovercard__attribution-name",
+    )!;
+    const markdown = container.querySelector(".session-progress-card__markdown")!;
+    trigger.focus();
 
-    participantLinks[1]?.dispatchEvent(
-      new MouseEvent("click", { bubbles: true, cancelable: true }),
-    );
-    expect(navigate).toHaveBeenCalledWith("riley", "Riley");
-
-    participantsTooltip
-      ?.querySelector<HTMLAnchorElement>('.session-hovercard__participant-link[href$="lee"]')
-      ?.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
-    expect(navigate).toHaveBeenLastCalledWith("lee", "Lee");
-  });
-
-  it("uses the first participant as the attribution when the creator is unknown", () => {
-    const container = document.createElement("div");
-    render(
-      renderSessionHovercard({
-        selfUserId: "self",
-        row: row({
-          createdActor: undefined,
-          participants: [
-            { identity: { type: "profile", id: "self" }, label: "You" },
-            { identity: { type: "profile", id: "mira" }, label: "Mira" },
-            { identity: { type: "profile", id: "riley" }, label: "Riley" },
-          ],
-          participantCount: 5,
-        }),
-      }),
+    renderCard(
+      {
+        ...input,
+        row: { ...input.row!, label: "Refreshed session" },
+        progressCard: { ...progressCard(), markdown: "**Updated** release notes." },
+        pullRequests: snapshot({ status: "unavailable" }),
+      },
       container,
     );
-
-    expect(attributionSummary(container)).toBe("Mira & 3 others");
-  });
-
-  it("keeps the identity plain text when no activity route is available", () => {
-    const container = document.createElement("div");
-    render(renderSessionHovercard({ row: row() }), container);
-
-    expect(container.querySelector(".session-hovercard__attribution-name")?.tagName).toBe("SPAN");
-    expect(container.querySelector(".person-activity-avatar-link")).toBeNull();
-  });
-
-  it("keeps authoritative overflow when the participant projection is truncated", async () => {
-    const container = document.body.appendChild(document.createElement("div"));
-    render(
-      renderSessionHovercard({
-        selfUserId: "self",
-        row: row({
-          participants: [
-            { identity: { type: "profile", id: "mira" }, label: "Mira" },
-            { identity: { type: "profile", id: "riley" }, label: "Riley" },
-            { identity: { type: "profile", id: "sam" }, label: "Sam" },
-            { identity: { type: "profile", id: "lee" }, label: "Lee" },
-          ],
-          participantCount: 5,
-        }),
-      }),
-      container,
+    await tooltip.updateComplete;
+    expect(container.querySelector(".session-hovercard__participants-tooltip")).toBe(tooltip);
+    expect(tooltip.querySelector(".session-hovercard__attribution-others")).toBe(trigger);
+    expect(tooltip.hasAttribute("open")).toBe(true);
+    expect(container.querySelector(".session-hovercard__attribution-name")).toBe(name);
+    expect(document.activeElement).toBe(trigger);
+    expect(container.querySelector(".session-progress-card__markdown")).toBe(markdown);
+    expect(container.querySelector(".session-hovercard__title")?.textContent).toBe(
+      "Refreshed session",
     );
-
-    const facepile = container.querySelector<HTMLElement & { updateComplete: Promise<boolean> }>(
-      "openclaw-viewer-facepile",
-    );
-    await facepile?.updateComplete;
-    expect(facepile?.querySelectorAll(".viewer-avatar:not(.viewer-avatar--overflow)")).toHaveLength(
-      4,
-    );
-    expect(facepile?.querySelector(".viewer-avatar--overflow")?.textContent).toBe("+1");
-  });
-
-  it("renders nothing when no session facts are known", () => {
-    const container = document.createElement("div");
-    render(renderSessionHovercard({}), container);
-
+    renderCard({}, container);
     expect(container.childElementCount).toBe(0);
   });
 });

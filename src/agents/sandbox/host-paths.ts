@@ -25,12 +25,12 @@ function stripWindowsNamespacePrefix(input: string): string {
 }
 
 function isWindowsDriveAbsolutePath(raw: string): boolean {
-  return /^[A-Za-z]:[\\/]/.test(stripWindowsNamespacePrefix(raw.trim()));
+  return /^[A-Za-z]:[\\/]/.test(stripWindowsNamespacePrefix(raw));
 }
 
 export function isSandboxHostPathAbsolute(raw: string): boolean {
-  const trimmed = stripWindowsNamespacePrefix(raw.trim());
-  return trimmed.startsWith("/") || isWindowsDriveAbsolutePath(trimmed);
+  const input = stripWindowsNamespacePrefix(raw);
+  return input.startsWith("/") || isWindowsDriveAbsolutePath(input);
 }
 
 /**
@@ -38,15 +38,22 @@ export function isSandboxHostPathAbsolute(raw: string): boolean {
  * Windows drive-letter paths preserve the drive root and uppercase the drive letter.
  */
 export function normalizeSandboxHostPath(raw: string): string {
-  const trimmed = stripWindowsNamespacePrefix(raw.trim());
-  if (!trimmed) {
+  const input = stripWindowsNamespacePrefix(raw);
+  if (!input) {
     return "/";
   }
-  let normalTrimmed = trimmed.replaceAll("\\", "/");
-  if (isWindowsDriveAbsolutePath(normalTrimmed)) {
-    normalTrimmed = normalTrimmed.charAt(0).toUpperCase() + normalTrimmed.slice(1);
+  // POSIX backslashes are filename bytes. Only native or explicitly Windows
+  // paths use them as separators, including the existing namespace/UNC forms.
+  const windows =
+    process.platform === "win32" ||
+    isWindowsDriveAbsolutePath(input) ||
+    raw.startsWith("\\\\") ||
+    raw.startsWith("//?/");
+  let normalizedInput = windows ? input.replaceAll("\\", "/") : input;
+  if (isWindowsDriveAbsolutePath(normalizedInput)) {
+    normalizedInput = normalizedInput.charAt(0).toUpperCase() + normalizedInput.slice(1);
   }
-  const normalized = posix.normalize(normalTrimmed);
+  const normalized = posix.normalize(normalizedInput);
   const withoutTrailingSlash = normalized.replace(/\/+$/, "") || "/";
   if (/^[A-Z]:$/.test(withoutTrailingSlash)) {
     return `${withoutTrailingSlash}/`;

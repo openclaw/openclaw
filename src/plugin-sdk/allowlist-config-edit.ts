@@ -1,11 +1,12 @@
-// Allowlist config edit helpers build safe config mutations for channel allowlists.
 import { normalizeUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
 import type { ConfigWriteTarget } from "../channels/plugins/config-writes.js";
 import type { ChannelAllowlistAdapter } from "../channels/plugins/types.adapters.js";
 import type { ChannelId } from "../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
+import { resolveChannelAccountKey } from "../routing/account-lookup.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../routing/session-key.js";
+import { readObjectPath } from "../shared/dot-path.js";
 import { isRecord } from "../utils.js";
 
 type AllowlistConfigPaths = {
@@ -173,16 +174,11 @@ function resolveAccountScopedWriteTarget(
   const channels = (parsed.channels ??= {}) as Record<string, unknown>;
   const channel = (channels[channelId] ??= {}) as Record<string, unknown>;
   const normalizedAccountId = normalizeAccountId(accountId);
-  if (isBlockedObjectKey(normalizedAccountId)) {
-    return {
-      target: channel,
-      pathPrefix: `channels.${channelId}`,
-      writeTarget: { kind: "channel", scope: { channelId } } as const satisfies ConfigWriteTarget,
-    };
-  }
-  const hasAccounts = Boolean(channel.accounts && typeof channel.accounts === "object");
-  const useAccount = normalizedAccountId !== DEFAULT_ACCOUNT_ID || hasAccounts;
-  if (!useAccount) {
+  if (
+    isBlockedObjectKey(normalizedAccountId) ||
+    (normalizedAccountId === DEFAULT_ACCOUNT_ID &&
+      !(channel.accounts && typeof channel.accounts === "object"))
+  ) {
     return {
       target: channel,
       pathPrefix: `channels.${channelId}`,
@@ -192,16 +188,17 @@ function resolveAccountScopedWriteTarget(
   // Once an accounts map exists, even the default account writes through it so scoped
   // and unscoped config do not diverge inside the same channel stanza.
   const accounts = (channel.accounts ??= {}) as Record<string, unknown>;
-  const existingAccount = Object.hasOwn(accounts, normalizedAccountId)
-    ? accounts[normalizedAccountId]
-    : undefined;
+  const accountKey =
+    resolveChannelAccountKey(accounts, normalizedAccountId, channelId, (id) => id) ??
+    normalizedAccountId;
+  const existingAccount = accounts[accountKey];
   if (!existingAccount || typeof existingAccount !== "object") {
-    accounts[normalizedAccountId] = {};
+    accounts[accountKey] = {};
   }
-  const account = accounts[normalizedAccountId] as Record<string, unknown>;
+  const account = accounts[accountKey] as Record<string, unknown>;
   return {
     target: account,
-    pathPrefix: `channels.${channelId}.accounts.${normalizedAccountId}`,
+    pathPrefix: `channels.${channelId}.accounts.${accountKey}`,
     writeTarget: {
       kind: "account",
       scope: { channelId, accountId: normalizedAccountId },
@@ -209,42 +206,19 @@ function resolveAccountScopedWriteTarget(
   };
 }
 
-function getNestedValue(root: Record<string, unknown>, path: string[]): unknown {
-  let current: unknown = root;
-  for (const key of path) {
-    if (!current || typeof current !== "object") {
-      return undefined;
-    }
-    current = (current as Record<string, unknown>)[key];
-  }
-  return current;
-}
-
-function ensureNestedObject(
-  root: Record<string, unknown>,
-  path: string[],
-): Record<string, unknown> {
-  let current = root;
-  for (const key of path) {
-    const existing = current[key];
-    if (!existing || typeof existing !== "object") {
-      current[key] = {};
-    }
-    current = current[key] as Record<string, unknown>;
-  }
-  return current;
-}
-
 function setNestedValue(root: Record<string, unknown>, path: string[], value: unknown) {
   const leaf = path.at(-1);
   if (leaf === undefined) {
     return;
   }
-  if (path.length === 1) {
-    root[leaf] = value;
-    return;
+  let parent = root;
+  for (const key of path.slice(0, -1)) {
+    const existing = parent[key];
+    if (!existing || typeof existing !== "object") {
+      parent[key] = {};
+    }
+    parent = parent[key] as Record<string, unknown>;
   }
-  const parent = ensureNestedObject(root, path.slice(0, -1));
   parent[leaf] = value;
 }
 
@@ -257,7 +231,7 @@ function deleteNestedValue(root: Record<string, unknown>, path: string[]) {
     delete root[leaf];
     return;
   }
-  const parent = getNestedValue(root, path.slice(0, -1));
+  const parent = readObjectPath(root, path.slice(0, -1));
   if (!isRecord(parent)) {
     return;
   }
@@ -282,7 +256,7 @@ function applyAccountScopedAllowlistConfigEdit(params: {
   const storedEntries: unknown[] = [];
   let hasStoredList = false;
   for (const path of params.paths.readPaths) {
-    const existingRaw = getNestedValue(resolvedTarget.target, path);
+    const existingRaw = readObjectPath(resolvedTarget.target, path);
     if (!Array.isArray(existingRaw)) {
       continue;
     }
@@ -307,23 +281,18 @@ function applyAccountScopedAllowlistConfigEdit(params: {
 
   let changed = false;
   let next = existing;
-  const configHasEntry = existingNormalized.some((value) => shouldMatch(value));
+  const configHasEntry = existingNormalized.some(shouldMatch);
   if (params.action === "add") {
     if (!configHasEntry) {
       next = [...existing, params.entry.trim()];
       changed = true;
     }
   } else {
-    const keep: string[] = [];
-    for (const entry of existing) {
+    next = existing.filter((entry) => {
       const normalized = params.normalize([entry]);
-      if (normalized.some((value) => shouldMatch(value))) {
-        changed = true;
-        continue;
-      }
-      keep.push(entry);
-    }
-    next = keep;
+      return !normalized.some(shouldMatch);
+    });
+    changed = next.length !== existing.length;
   }
 
   if (changed) {

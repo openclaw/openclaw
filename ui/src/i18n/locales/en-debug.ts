@@ -1,11 +1,13 @@
 import type { TranslationMap } from "../lib/types.ts";
 import { en } from "./en.ts";
 
-// Debug copy loads with its page and overlay; the sidebar's overlay title stays eager.
+// Diagnostic data copy loads with its content; panel headings and labels stay eager.
 const enDebug = {
   debug: {
     snapshotsTitle: "Snapshots",
-    snapshotsSubtitle: "Status, health, and heartbeat data.",
+    snapshotsSubtitle:
+      "Refresh to update status and health snapshots. Heartbeat data updates live.",
+    offlineSnapshots: "Reconnect to refresh diagnostics.",
     status: "Status",
     health: "Health",
     lastHeartbeat: "Last heartbeat",
@@ -19,15 +21,15 @@ const enDebug = {
       runSuffix: "for details.",
     },
     manualRpcTitle: "Manual RPC",
-    manualRpcSubtitle: "Send a raw gateway method with JSON params.",
-    callFailed: "Call failed",
+    manualRpcSubtitle: "Send a raw Gateway method with JSON params.",
+    callFailed: "Couldn’t call this method. Check the parameters and try again.",
     method: "Method",
     selectMethod: "Select a method…",
     paramsJson: "Params (JSON)",
     modelsTitle: "Models",
-    modelsSubtitle: "Catalog from models.list.",
-    eventLogTitle: "Event Log",
-    eventLogSubtitle: "Latest gateway events.",
+    modelsSubtitle: "Model catalog captured by the latest diagnostic refresh.",
+    eventLogTitle: "Event log",
+    eventLogSubtitle: "Latest Gateway events.",
     noEvents: "No events yet.",
     lanes: {
       title: "Lanes",
@@ -35,13 +37,18 @@ const enDebug = {
       lane: "Lane",
       sessionLanes: "Session lanes · {count}",
       active: "Active",
+      activePerSession: "{active} · {limit}/session",
       queued: "Queued",
       group: "Group",
       blocked: "Blocked",
     },
     overlay: {
-      ...en.debug.overlay,
+      title: en.debug.overlay.title,
       eyebrow: "Live diagnostics",
+      move: "Move system busyness with arrow keys, or drag",
+      minimize: "Minimize system busyness",
+      expand: "Expand system busyness",
+      open: "Open overlay",
       openWithShortcut: "Open overlay · {shortcut}",
       unavailable: "Unavailable",
       lanes: "Lanes",
@@ -50,9 +57,26 @@ const enDebug = {
       events: "Events",
       cpu: "CPU",
       memory: "Memory",
+      ping: "Ping",
+      pingMs: "{value} ms",
+      pingDescription: "Round-trip time for the Gateway diagnostics request",
       disk: "Disk",
       memoryMb: "{value} MB",
-      loopShort: "loop {value}",
+      gatewayCpu: "Gateway CPU",
+      cpuCores: "{value} cores",
+      gatewayCpuScope: "Process only",
+      cpuScopeDescription:
+        "Build and tool subprocesses are excluded. Process and thread percentages use one core as 100%; host CPU uses all logical CPUs.",
+      gatewayCpuProcess: "Gateway process",
+      cpuBreakdown: "Show Gateway CPU breakdown",
+      cpuBreakdownCurrent: "CPU usage",
+      hostShort: "Host {value}",
+      hostCpu: "Host CPU",
+      hostCpuCount: "Host · {count} logical CPUs",
+      mainThreadCpu: "Main thread",
+      workerCpu: "Worker threads",
+      otherThreadCpu: "Other threads",
+      loopUtilization: "Event loop busy",
       heapShort: "heap {value}",
       maxShort: "max {value}",
       freeShort: "{value} free",
@@ -67,9 +91,10 @@ const enDebug = {
 
 export const registerDebugEnglish = Object.assign(
   () => {
-    const { overlay, ...sections } = enDebug.debug;
-    // Keep the eager title and existing namespace readers intact.
+    const { lanes, overlay, ...sections } = enDebug.debug;
+    // Preserve the eager namespaces and their existing readers.
     Object.assign(en.debug, sections);
+    Object.assign(en.debug.lanes, lanes);
     Object.assign(en.debug.overlay, overlay);
   },
   { catalog: enDebug },

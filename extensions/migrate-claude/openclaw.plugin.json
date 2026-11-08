@@ -1,5 +1,6 @@
 {
   "id": "migrate-claude",
+  "categories": ["integrations"],
   "activation": {
     "onStartup": false
   },
@@ -12,5 +13,9 @@
     "type": "object",
     "additionalProperties": false,
     "properties": {}
-  }
+  },
+  "recommendedPrompts": [
+    "Preview a migration from Claude Code or Claude Desktop without applying changes.",
+    "Plan a Claude migration that preserves my current OpenClaw setup."
+  ]
 }

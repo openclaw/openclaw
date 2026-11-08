@@ -1,4 +1,3 @@
-// Applies policy checks to installed plugin index records.
 import type { OpenClawConfig } from "../config/types.js";
 import { readBundledDiscoveryModeMemoized } from "./bundled-discovery-state.js";
 import { listPluginCompatRecords } from "./compat/registry.js";
@@ -26,6 +25,7 @@ export function resolveInstalledPluginIndexPolicyHash(
   // Callers scoped to an explicit env hash that env's state-root mode so
   // persisted indexes cannot leak activation decisions across roots.
   env?: NodeJS.ProcessEnv,
+  behavior: { artifactPreservingReadOnly?: boolean } = {},
 ): string {
   const normalized = normalizePluginsConfig(config?.plugins);
   const channelPolicy: Record<string, boolean> = {};
@@ -48,18 +48,20 @@ export function resolveInstalledPluginIndexPolicyHash(
       // Machine-state discovery mode changes activation for bundled plugins;
       // omitting it left persisted indexes stale across doctor's compat
       // migration (allow-listed installs stayed mass-disabled after --fix).
-      bundledDiscovery: readBundledDiscoveryModeMemoized(env) ?? null,
+      bundledDiscovery: readBundledDiscoveryModeMemoized(env, behavior) ?? null,
       slots: normalized.slots,
       entries: Object.fromEntries(
         Object.entries(normalized.entries)
           .flatMap(([pluginId, entry]) =>
             typeof entry.enabled === "boolean" ? [[pluginId, entry.enabled] as const] : [],
           )
-          .toSorted(([left], [right]) => left.localeCompare(right)),
+          // oxlint-disable-next-line unicorn/no-array-sort -- flatMap creates a private array.
+          .sort(([left], [right]) => left.localeCompare(right)),
       ),
     },
     channels: Object.fromEntries(
-      Object.entries(channelPolicy).toSorted(([left], [right]) => left.localeCompare(right)),
+      // oxlint-disable-next-line unicorn/no-array-sort -- Object.entries creates a private array.
+      Object.entries(channelPolicy).sort(([left], [right]) => left.localeCompare(right)),
     ),
   });
 }

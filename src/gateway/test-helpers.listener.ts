@@ -1,0 +1,129 @@
+import assert from "node:assert/strict";
+import { createServer } from "node:http";
+import type { Socket } from "node:net";
+import { collectNestedErrorCandidates } from "@openclaw/normalization-core/error-coercion";
+import { hasErrnoCode } from "../infra/errno.js";
+import {
+  acquireTestPortBlock,
+  reserveTestPortListener,
+  type TestPortClaim,
+} from "../test-utils/port-claims.js";
+import { getDeterministicFreePortBlock } from "../test-utils/ports.js";
+import { GatewayStartupCleanupError } from "./server-shutdown.js";
+import type { GatewayServer } from "./server.js";
+
+const offsets = [0, 1, 2, 3, 4];
+const isCleanupError = (cause: unknown) => cause instanceof GatewayStartupCleanupError;
+
+/** Claim a Gateway E2E port block; release it only after the Gateway bound to it has closed. */
+export const acquireGatewayE2ePortBlock = () => acquireTestPortBlock({ offsets });
+export const getGatewayTestPort = () => getDeterministicFreePortBlock({ offsets });
+
+export function canRetryPort(error: unknown): boolean {
+  const causes = collectNestedErrorCandidates(error);
+  return !causes.some(isCleanupError) && causes.some((cause) => hasErrnoCode(cause, "EADDRINUSE"));
+}
+
+export async function startClaimedGateway(
+  port: number | TestPortClaim,
+  start: () => Promise<GatewayServer>,
+) {
+  const claim = typeof port === "number" ? await acquireTestPortBlock({ port, offsets }) : port;
+  try {
+    const server = await start();
+    const close = server.close.bind(server);
+    let closePromise: Promise<void> | undefined;
+    server.close = (...args) =>
+      (closePromise ??= (async () => {
+        await close(...args);
+        await claim.release();
+      })());
+    return server;
+  } catch (error) {
+    if (!collectNestedErrorCandidates(error).some(isCleanupError)) {
+      await claim.release();
+    }
+    throw error;
+  }
+}
+
+type ListenerReservation = {
+  listener: ReturnType<typeof createServer>;
+  adopted: boolean;
+};
+
+async function createListenerDispatcher() {
+  const { vi } = await import("vitest");
+  const transport = await import("./server-runtime-state.js");
+  const createTransport = transport.createGatewayHttpTransport;
+  const listeners = new Map<number, ListenerReservation>();
+  const spy = vi
+    .spyOn(transport, "createGatewayHttpTransport")
+    .mockImplementation(async (params) => {
+      const reservation = listeners.get(params.port);
+      const runtime = await createTransport(
+        reservation ? { ...params, testListener: reservation.listener } : params,
+      );
+      if (reservation) {
+        reservation.adopted = true;
+      }
+      return runtime;
+    });
+  return { listeners, restore: () => spy.mockRestore() };
+}
+
+// Overlapping startups share the original constructor and its import. Recapturing
+// an installed spy would replace that same mock and make it call itself.
+let activeDispatcher:
+  | { ready: ReturnType<typeof createListenerDispatcher>; pending: number }
+  | undefined;
+
+/** Retain the exact loopback listener until the real Gateway transport adopts it. */
+export async function reserveGatewayTestListener(port: number | TestPortClaim = 0) {
+  const rejectEarlyConnection = (socket: Socket) => socket.destroy();
+  const { claim, listener, releaseListener } = await reserveTestPortListener({
+    offsets,
+    ...(port ? { port } : {}),
+    createListener: () => createServer().on("connection", rejectEarlyConnection),
+  });
+  const reservation = { listener, adopted: false };
+  const closeUnadopted = async () => {
+    if (!reservation.adopted && listener.listening) {
+      await releaseListener();
+    }
+    if (!listener.listening) {
+      await claim.release();
+    }
+  };
+  // The reservation owner returns only after binding this exact claimed port.
+  return {
+    port: claim.port,
+    listener,
+    closeUnadopted,
+    async start<T>(run: () => Promise<T>): Promise<T> {
+      const owner = (activeDispatcher ??= { ready: createListenerDispatcher(), pending: 0 });
+      owner.pending++;
+      let dispatcher: Awaited<typeof owner.ready> | undefined;
+      try {
+        dispatcher = await owner.ready;
+        assert(
+          !dispatcher.listeners.has(claim.port),
+          "Reserved Gateway listener is already starting",
+        );
+        dispatcher.listeners.set(claim.port, reservation);
+        try {
+          const result = await run();
+          listener.off("connection", rejectEarlyConnection);
+          return result;
+        } finally {
+          dispatcher.listeners.delete(claim.port);
+        }
+      } finally {
+        if (--owner.pending === 0) {
+          activeDispatcher = undefined;
+          dispatcher?.restore();
+        }
+      }
+    },
+  };
+}

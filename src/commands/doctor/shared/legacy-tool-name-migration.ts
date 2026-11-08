@@ -1,10 +1,13 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { compileGlobPatterns, matchesAnyGlobPattern } from "../../../agents/glob-pattern.js";
 import { normalizeToolPolicyName } from "../../../agents/tool-policy-shared.js";
+import { isToolPolicyPath } from "./legacy-tool-policy-scopes.js";
 
 type LegacyToolNameMigration = {
   legacyName: string;
   canonicalName: string;
+  /** The legacy tool still exists: add the canonical name beside it instead of renaming. */
+  keepLegacy?: boolean;
 };
 
 export const TASK_SUGGESTION_TOOL_NAME_MIGRATION = {
@@ -17,6 +20,13 @@ export const IMAGE_INSPECTION_TOOL_NAME_MIGRATION = {
   canonicalName: "view_image",
 } as const satisfies LegacyToolNameMigration;
 
+/** Personal-library authoring left `skill_workshop` for its own `skill_library` tool. */
+export const SKILL_LIBRARY_TOOL_SPLIT_MIGRATION = {
+  legacyName: "skill_workshop",
+  canonicalName: "skill_library",
+  keepLegacy: true,
+} as const satisfies LegacyToolNameMigration;
+
 function inspectLegacyToolNameList(value: unknown, migration: LegacyToolNameMigration) {
   if (!Array.isArray(value)) {
     return null;
@@ -24,7 +34,9 @@ function inspectLegacyToolNameList(value: unknown, migration: LegacyToolNameMigr
   const entries = value.filter((entry): entry is string => typeof entry === "string");
   const legacyName = normalizeToolPolicyName(migration.legacyName);
   const patterns = compileGlobPatterns({ raw: entries, normalize: normalizeToolPolicyName });
-  const exactLegacy = entries.some((entry) => normalizeToolPolicyName(entry) === legacyName);
+  const exactLegacy =
+    migration.keepLegacy !== true &&
+    entries.some((entry) => normalizeToolPolicyName(entry) === legacyName);
   return {
     exactLegacy,
     appendCanonical:
@@ -47,29 +59,18 @@ export function migrateLegacyToolNameList(
   if (!state || !Array.isArray(value)) {
     return false;
   }
-  let mutated = false;
   if (state.exactLegacy) {
     const legacyName = normalizeToolPolicyName(migration.legacyName);
     for (const [index, entry] of value.entries()) {
       if (typeof entry === "string" && normalizeToolPolicyName(entry) === legacyName) {
         value[index] = migration.canonicalName;
-        mutated = true;
       }
     }
   }
   if (state.appendCanonical) {
     value.push(migration.canonicalName);
-    mutated = true;
   }
-  return mutated;
-}
-
-function isToolPolicyPath(path: readonly string[]): boolean {
-  if (path.at(-1) === "tools" || path.includes("toolsBySender")) {
-    return true;
-  }
-  const byProviderIndex = path.lastIndexOf("byProvider");
-  return byProviderIndex >= 0 && path.slice(0, byProviderIndex).includes("tools");
+  return state.exactLegacy || state.appendCanonical;
 }
 
 function visitLegacyToolName(
@@ -78,10 +79,18 @@ function visitLegacyToolName(
   migration: LegacyToolNameMigration,
   migrate: boolean,
   matchedPaths: string[],
+  include: (listPath: string[]) => boolean,
 ): void {
   if (Array.isArray(value)) {
     for (const [index, entry] of value.entries()) {
-      visitLegacyToolName(entry, [...path, String(index)], migration, migrate, matchedPaths);
+      visitLegacyToolName(
+        entry,
+        [...path, String(index)],
+        migration,
+        migrate,
+        matchedPaths,
+        include,
+      );
     }
     return;
   }
@@ -95,17 +104,19 @@ function visitLegacyToolName(
   }
   for (const key of listKeys) {
     const list = value[key];
-    if (!hasLegacyToolNameList(list, migration)) {
+    if (
+      !include([...path, key]) ||
+      !(migrate
+        ? migrateLegacyToolNameList(list, migration)
+        : hasLegacyToolNameList(list, migration))
+    ) {
       continue;
     }
     matchedPaths.push([...path, key].join("."));
-    if (migrate) {
-      migrateLegacyToolNameList(list, migration);
-    }
   }
 
   for (const [key, entry] of Object.entries(value)) {
-    visitLegacyToolName(entry, [...path, key], migration, migrate, matchedPaths);
+    visitLegacyToolName(entry, [...path, key], migration, migrate, matchedPaths, include);
   }
 }
 
@@ -115,16 +126,18 @@ export function findLegacyToolNamePaths(
   path: string[] = [],
 ): string[] {
   const matchedPaths: string[] = [];
-  visitLegacyToolName(value, path, migration, false, matchedPaths);
+  visitLegacyToolName(value, path, migration, false, matchedPaths, () => true);
   return matchedPaths;
 }
 
+/** `include` limits repair to the policy lists it accepts, by config path. */
 export function migrateLegacyToolNamePolicies(
   value: unknown,
   migration: LegacyToolNameMigration,
   path: string[] = [],
+  include: (listPath: string[]) => boolean = () => true,
 ): string[] {
   const matchedPaths: string[] = [];
-  visitLegacyToolName(value, path, migration, true, matchedPaths);
+  visitLegacyToolName(value, path, migration, true, matchedPaths, include);
   return matchedPaths;
 }

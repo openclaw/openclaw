@@ -3,7 +3,7 @@ import { randomBytes, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, onTestFinished } from "vitest";
 import {
   resolveCliBackendConfig,
   resolveCliBackendLiveTest,
@@ -12,10 +12,9 @@ import {
 import { testing as cliBackendsTesting } from "../agents/cli-backends.test-support.js";
 import { getCliLiveSessionGeneration } from "../agents/cli-runner/cli-live-session-registry.js";
 import { loadCliSessionHistoryMessages } from "../agents/cli-runner/session-history.js";
-import { isLiveTestEnabled } from "../agents/live-test-helpers.js";
+import { isLiveTestEnabled, useLiveTestRuntimeConfig } from "../agents/live-test-helpers.js";
 import { shouldSkipLiveProviderDrift } from "../agents/live-test-provider-drift.js";
 import { parseModelRef } from "../agents/model-selection.js";
-import { listSubagentRunsForRequester } from "../agents/subagents/registry/subagent-registry.test-helpers.js";
 import { clearRuntimeConfigSnapshot, type OpenClawConfig } from "../config/config.js";
 import { resolveSessionTranscriptRuntimeTarget } from "../config/sessions/session-accessor.js";
 import { isTruthyEnvValue } from "../infra/env.js";
@@ -24,11 +23,14 @@ import { setTestEnvValue } from "../test-utils/env.js";
 import {
   CLI_CACHE_AUTH_PROFILE_ID,
   CLI_BACKEND_PROBE_PLUGIN_ID,
+  CLI_ANNOUNCE_BARRIER_TOOL_NAME,
+  createCliAnnounceBarrier,
   createCliBackendProbePlugin,
   initializeCacheProbeGitWorkspace,
   logCliCacheUsage,
   MCP_SCHEMA_PROBE_TOOL_NAME,
   prepareClaudeCacheProbeBackend,
+  verifyCliBackendAnnounceOrdering,
   type RuntimeBackendEntry,
 } from "./gateway-cli-backend.live-cache.test-helpers.js";
 import {
@@ -62,7 +64,7 @@ import {
   verifyCliCronMcpProbe,
 } from "./gateway-cli-backend.live-probe-helpers.js";
 import { startGatewayServer } from "./server.js";
-import { loadGatewaySessionEntryReadOnly } from "./session-utils.js";
+import { loadGatewaySessionEntryReadOnlyAsync } from "./session-utils.js";
 import { extractPayloadText } from "./test-helpers.agent-results.js";
 
 const LIVE = isLiveTestEnabled();
@@ -139,17 +141,6 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => {
     setTimeout(resolve, ms);
   });
-}
-
-async function waitFor<T>(resolve: () => T | undefined): Promise<T> {
-  for (let attempt = 0; attempt < 480; attempt += 1) {
-    const value = resolve();
-    if (value !== undefined) {
-      return value;
-    }
-    await sleep(1_000);
-  }
-  throw new Error("timed out waiting for live CLI announce proof");
 }
 
 type CliBackendAgentAttemptTimeouts = {
@@ -396,21 +387,21 @@ describeLive("gateway live (cli backend)", () => {
       const stateDir = path.join(tempDir, "state");
       await fs.mkdir(stateDir, { recursive: true });
       const enableMcpSchemaProbe = CLI_MCP_SCHEMA_PROBE || CLI_CACHE_PROBE;
+      const announceBarrier = await createCliAnnounceBarrier();
+      onTestFinished(() => announceBarrier.close());
       // Load the continuity hook before startup so admitted generations own the fixture.
-      const probePlugin =
-        enableMcpSchemaProbe || resumeContinuityProbe
-          ? await createCliBackendProbePlugin(tempDir, {
-              mcpSchema: enableMcpSchemaProbe,
-              continuity: resumeContinuityProbe
-                ? {
-                    sessionKey,
-                    firstTurnMarker: resumeContinuityProbe.firstTurnMarker,
-                    injectedContext: resumeContinuityProbe.injectedContext,
-                  }
-                : undefined,
-            })
-          : undefined;
-      const probePluginPath = probePlugin?.pluginPath;
+      const probePlugin = await createCliBackendProbePlugin(tempDir, {
+        mcpSchema: enableMcpSchemaProbe,
+        announceBarrierUrl: announceBarrier.url,
+        continuity: resumeContinuityProbe
+          ? {
+              sessionKey,
+              firstTurnMarker: resumeContinuityProbe.firstTurnMarker,
+              injectedContext: resumeContinuityProbe.injectedContext,
+            }
+          : undefined,
+      });
+      const probePluginPath = probePlugin.pluginPath;
       const useMinimalToolsProfile = providerId === "codex-cli" && !enableMcpSchemaProbe;
       setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
       const bundleMcp = backendResolved.bundleMcp;
@@ -527,7 +518,7 @@ describeLive("gateway live (cli backend)", () => {
             : cfg.models,
         tools: {
           ...cfg.tools,
-          alsoAllow: ["sessions_spawn", "bash"],
+          alsoAllow: ["sessions_spawn", CLI_ANNOUNCE_BARRIER_TOOL_NAME],
           ...(useMinimalToolsProfile ? { profile: "minimal" as const } : {}),
         },
         agents: {
@@ -558,6 +549,7 @@ describeLive("gateway live (cli backend)", () => {
       const tempConfigPath = path.join(tempDir, "openclaw.json");
       await fs.writeFile(tempConfigPath, `${JSON.stringify(nextCfg, null, 2)}\n`);
       setTestEnvValue("OPENCLAW_CONFIG_PATH", tempConfigPath);
+      using _ = useLiveTestRuntimeConfig(nextCfg);
       const cacheProbeBackend = CLI_CACHE_PROBE
         ? prepareClaudeCacheProbeBackend({ config: nextCfg, liveBackend, providerId })
         : undefined;
@@ -642,7 +634,6 @@ describeLive("gateway live (cli backend)", () => {
           cacheProbeOwner = {
             backendId: providerId,
             agentId: "dev",
-            authProfileId: CLI_CACHE_AUTH_PROFILE_ID,
             sessionId: history.sessionId,
             sessionKey,
           };
@@ -675,54 +666,6 @@ describeLive("gateway live (cli backend)", () => {
             }
           }
         }
-
-        const announceNonce = randomBytes(3).toString("hex").toUpperCase();
-        const announceSessionKey = `agent:dev:cli-announce-${announceNonce.toLowerCase()}`;
-        const announceChildToken = `CLI_ANNOUNCE_CHILD_${announceNonce}`;
-        const announceParentToken = `CLI_ANNOUNCE_PARENT_${announceNonce}`;
-        let announceParentObservedAt: number | undefined;
-        const announceRequest = activeClient.request(
-          "agent",
-          {
-            sessionKey: announceSessionKey,
-            idempotencyKey: `cli-announce-order-${randomUUID()}`,
-            deliver: false,
-            timeout: 240,
-            message: [
-              "Run this exact OpenClaw CLI-backed completion announcement scenario. Use tool calls, not prose.",
-              `Call sessions_spawn exactly once with taskName=cli_announce_${announceNonce.toLowerCase()} and task=${JSON.stringify(`Reply exactly ${announceChildToken} and nothing else.`)}.`,
-              `After sessions_spawn returns status=accepted, call bash with exactly: sleep 35; printf CLI_ANNOUNCE_PARENT_TOOL_DONE_${announceNonce}.`,
-              `After the bash call completes, reply exactly ${announceParentToken}.`,
-            ].join("\n"),
-          },
-          { expectFinal: true, timeoutMs: CLI_BACKEND_REQUEST_TIMEOUT_MS },
-        );
-        void announceRequest.then(() => (announceParentObservedAt = Date.now()));
-
-        const completedAnnounceChild = await waitFor(() => {
-          return listSubagentRunsForRequester(announceSessionKey).find(
-            (run) =>
-              run.taskName === `cli_announce_${announceNonce.toLowerCase()}` &&
-              run.completion?.resultText?.includes(announceChildToken) === true &&
-              run.execution.outcome?.status === "ok",
-          );
-        });
-        const announceParent = await announceRequest;
-        announceParentObservedAt ??= Date.now();
-        expect(extractPayloadText(announceParent.result)).toContain(announceParentToken);
-
-        const deliveredAnnounceChild = await waitFor(() =>
-          listSubagentRunsForRequester(announceSessionKey).find(
-            (run) =>
-              run.runId === completedAnnounceChild.runId &&
-              typeof run.delivery?.enqueuedAt === "number" &&
-              typeof run.delivery?.deliveredAt === "number" &&
-              typeof run.delivery?.announcedAt === "number",
-          ),
-        );
-        expect(deliveredAnnounceChild.delivery?.announcedAt).toBeGreaterThanOrEqual(
-          announceParentObservedAt,
-        );
 
         if (modelSwitchTarget) {
           const switchNonce = randomBytes(3).toString("hex").toUpperCase();
@@ -787,7 +730,8 @@ describeLive("gateway live (cli backend)", () => {
             }>("chat.history", { sessionKey });
             // Imported history can be fully deduplicated against local rows; the persisted
             // binding, not imported-message metadata, owns native session continuity.
-            const { entry: continuityEntry } = loadGatewaySessionEntryReadOnly(sessionKey);
+            const { entry: continuityEntry } =
+              await loadGatewaySessionEntryReadOnlyAsync(sessionKey);
             expectedCliSessionId = continuityEntry?.cliSessionBindings?.[providerId]?.sessionId;
             expect(expectedCliSessionId).toBeTruthy();
             // Native imports must keep private runtime context out of the visible transcript,
@@ -878,8 +822,9 @@ describeLive("gateway live (cli backend)", () => {
               expectedLiveSessionGeneration,
             );
             expect(
-              loadGatewaySessionEntryReadOnly(sessionKey).entry?.cliSessionBindings?.[providerId]
-                ?.sessionId,
+              (await loadGatewaySessionEntryReadOnlyAsync(sessionKey)).entry?.cliSessionBindings?.[
+                providerId
+              ]?.sessionId,
             ).toBe(expectedCliSessionId);
           } else {
             expect(
@@ -1029,14 +974,29 @@ describeLive("gateway live (cli backend)", () => {
             logCliBackendLiveStep("cron-mcp-probe:done");
           }
         }
+
+        // The announce probe spawns a separate CLI-backed session and can change the
+        // process-wide MCP/tool topology. Keep it after continuity and cache assertions
+        // so those probes measure consecutive turns in their owning native session.
+        await verifyCliBackendAnnounceOrdering({
+          client: activeClient,
+          announceBarrier,
+          requestTimeoutMs: CLI_BACKEND_REQUEST_TIMEOUT_MS,
+          logStep: logCliBackendLiveStep,
+          ...(CLI_CACHE_PROBE ? { minCacheHitRate: CLI_BACKEND_MIN_CACHE_HIT_RATE } : {}),
+        });
       } finally {
         try {
           logCliBackendLiveStep("cleanup:start");
-          clearRuntimeConfigSnapshot();
+          announceBarrier.release();
           try {
             await client?.stopAndWait();
           } finally {
-            await server?.close();
+            try {
+              await server?.close();
+            } finally {
+              clearRuntimeConfigSnapshot();
+            }
           }
         } finally {
           cliBackendsTesting.resetDepsForTest();

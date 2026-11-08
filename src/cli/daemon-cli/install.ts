@@ -1,105 +1,91 @@
-// Gateway service installer: writes config defaults, resolves credentials, and installs service definitions.
+import { constants as fsConstants } from "node:fs";
+import fs from "node:fs/promises";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { SUPPORTED_NODE_VERSIONS } from "../../../node-version.mjs";
 import { resolveNodeStartupTlsEnvironment } from "../../bootstrap/node-startup-env.js";
 import { buildGatewayInstallPlan } from "../../commands/daemon-install-helpers.js";
 import {
-  DEFAULT_GATEWAY_DAEMON_RUNTIME,
+  resolveGatewayDaemonRuntime,
   isGatewayDaemonRuntime,
-  type GatewayDaemonRuntime,
 } from "../../commands/daemon-runtime.js";
 import { resolveGatewayInstallToken } from "../../commands/gateway-install-token.js";
 import { resolveFutureConfigActionBlock } from "../../config/future-version-guard.js";
 import { readConfigFileSnapshotForWrite } from "../../config/io.js";
 import { replaceConfigFile } from "../../config/mutate.js";
 import { resolveGatewayPort } from "../../config/paths.js";
-import type { GatewayBindMode } from "../../config/types.gateway.js";
-import type { OpenClawConfig } from "../../config/types.js";
+import {
+  installDurableServiceCli,
+  isDisposableEntrypoint,
+} from "../../daemon/durable-service-entrypoint.js";
 import { OPENCLAW_WRAPPER_ENV_KEY, resolveOpenClawWrapperPath } from "../../daemon/program-args.js";
+import { isNodeRuntime } from "../../daemon/runtime-binary.js";
+import {
+  resolveRecordedDaemonRuntime,
+  resolvePreferredNodePath,
+  resolvePinnedDaemonRuntimePath,
+} from "../../daemon/runtime-paths.js";
+import {
+  withDaemonRuntimePinMigration,
+  readDaemonRuntimePinForInstall,
+} from "../../daemon/runtime-pin-state.js";
 import { readEmbeddedGatewayToken } from "../../daemon/service-audit.js";
 import { mergeGatewayServiceEnv } from "../../daemon/service-env-merge.js";
+import {
+  sanitizeServiceInspectionError,
+  ServiceStartRefusalError,
+} from "../../daemon/service-inspection-error.js";
+import { resolveServiceEntrypoint } from "../../daemon/service-layout.js";
+import { reconcileGatewayServiceDefinition } from "../../daemon/service-reconciliation.js";
+import type {
+  GatewayServiceDefinitionBackupReceipt,
+  GatewayServiceDefinitionTransactionHooks,
+} from "../../daemon/service-stage.js";
 import {
   assertServiceDefinitionWritable,
   resolveManagedGatewayServiceCommand,
 } from "../../daemon/service-types.js";
-import { resolveGatewayService, type GatewayServiceCommandConfig } from "../../daemon/service.js";
 import {
-  hasSudoToRootSystemdUserManagerMismatch,
-  isNonFatalSystemdInstallProbeError,
-} from "../../daemon/systemd.js";
+  assertGatewayServiceUpdateCurrent,
+  isUpdateOwnedGatewayServiceCommand,
+} from "../../daemon/service-update-authority.js";
+import { resolveGatewayService, type GatewayServiceCommandConfig } from "../../daemon/service.js";
+import { isNonFatalSystemdInstallProbeError } from "../../daemon/systemd-exec.js";
 import { resolveGatewayAuth } from "../../gateway/auth.js";
 import {
   defaultGatewayBindMode,
   isLoopbackHost,
   resolveGatewayBindHost,
 } from "../../gateway/net.js";
-import { assertGatewayServiceMutationAllowed } from "../../infra/gateway-supervision.js";
+import { isTruthyEnvValue } from "../../infra/env.js";
+import { hasErrnoCode, isMissingPathError } from "../../infra/errno.js";
 import {
   isDangerousHostEnvOverrideVarName,
   isDangerousHostEnvVarName,
   normalizeEnvVarKey,
 } from "../../infra/host-env-security.js";
+import { resolveOpenClawPackageRoot } from "../../infra/openclaw-root.js";
+import { parseTcpPort } from "../../infra/tcp-port.js";
 import { defaultRuntime } from "../../runtime.js";
+import { omitSecretEgressProxyEnvironment } from "../../secrets/egress-proxy/environment.js";
 import { createLazyPromise } from "../../shared/lazy-promise.js";
 import { formatCliCommand } from "../command-format.js";
 import { formatInvalidConfigPort, formatInvalidPortOption } from "../error-format.js";
+import { assertExpectedRuntimePin, resolveRestoreServiceCli } from "./install-restore-cli.js";
 import { buildDaemonServiceSnapshot, installDaemonServiceAndEmit } from "./response.js";
-import {
-  createDaemonInstallActionContext,
-  failIfNixDaemonInstallMode,
-  parsePort,
-} from "./shared.js";
+import { createDaemonInstallActionContext, resolveDaemonInstallBlockMessage } from "./shared.js";
 import type { DaemonInstallOptions } from "./types.js";
-
-function resolveGatewayInstallBindMode(cfg: OpenClawConfig): GatewayBindMode {
-  return cfg.gateway?.bind ?? defaultGatewayBindMode(cfg.gateway?.tailscale?.mode ?? "off");
-}
-
-function formatNoAuthNonLoopbackInstallBlock(params: {
-  bind: GatewayBindMode;
-  bindHost: string;
-  config: OpenClawConfig;
-  env: NodeJS.ProcessEnv;
-}): string | undefined {
-  const auth = resolveGatewayAuth({
-    authConfig: params.config.gateway?.auth,
-    env: params.env,
-    tailscaleMode: params.config.gateway?.tailscale?.mode ?? "off",
-  });
-  const bindCanExposeNetwork = params.bind === "tailnet" || !isLoopbackHost(params.bindHost);
-  if (auth.mode !== "none" || !bindCanExposeNetwork) {
-    return undefined;
-  }
-  const bindReason =
-    params.bind === "tailnet" && isLoopbackHost(params.bindHost)
-      ? `gateway.bind=tailnet currently resolves to ${params.bindHost} but can later resolve to a Tailnet interface`
-      : `gateway.bind=${params.bind} resolves to ${params.bindHost}`;
-  const hints: string[] = [`${bindReason}, but gateway.auth.mode=none disables Gateway auth.`];
-  if (normalizeOptionalString(auth.token)) {
-    hints.push(
-      `This config already has gateway.auth.token; run ${formatCliCommand("openclaw config set gateway.auth.mode token")} and then rerun ${formatCliCommand("openclaw gateway install --force")}.`,
-    );
-  } else if (normalizeOptionalString(auth.password)) {
-    hints.push(
-      `This config already has gateway.auth.password; run ${formatCliCommand("openclaw config set gateway.auth.mode password")} and then rerun ${formatCliCommand("openclaw gateway install --force")}.`,
-    );
-  } else {
-    hints.push(
-      `Configure token/password auth, use trusted-proxy auth, or set ${formatCliCommand("openclaw config set gateway.bind loopback")} before installing the managed service.`,
-    );
-  }
-  return hints.join(" ");
-}
 
 /** Merge safe existing service environment into the current install invocation environment. */
 export function mergeInstallInvocationEnv(params: {
   env: NodeJS.ProcessEnv;
   existingServiceEnv?: Record<string, string>;
-  platform?: NodeJS.Platform;
 }): NodeJS.ProcessEnv {
-  const platform = params.platform ?? process.platform;
+  const platform = process.platform;
   const normalizeInstallEnvKey = (key: string) => (platform === "win32" ? key.toUpperCase() : key);
   const currentEnv: NodeJS.ProcessEnv = {};
-  for (const [rawKey, rawValue] of Object.entries(params.env)) {
+  for (const [rawKey, rawValue] of Object.entries(
+    omitSecretEgressProxyEnvironment(params.env, platform),
+  )) {
     const key = normalizeEnvVarKey(rawKey, { portable: true });
     if (!key || isDangerousHostEnvVarName(key)) {
       continue;
@@ -119,7 +105,7 @@ export function mergeInstallInvocationEnv(params: {
     if (upper === OPENCLAW_WRAPPER_ENV_KEY) {
       const value = rawValue.trim();
       if (value) {
-        preservedServiceEnv[normalizeInstallEnvKey(OPENCLAW_WRAPPER_ENV_KEY)] = value;
+        preservedServiceEnv[normalizeInstallEnvKey(upper)] = value;
       }
       continue;
     }
@@ -127,12 +113,15 @@ export function mergeInstallInvocationEnv(params: {
       upper === "HOME" ||
       upper === "PATH" ||
       upper === "TMPDIR" ||
+      upper === "HOMEBREW_PREFIX" ||
       upper.startsWith("OPENCLAW_")
     ) {
       continue;
     }
     // An installed CA file is additive, operator-owned Node startup trust; retain it on reinstall.
     // Never replay service-owned TLS-disable, proxy, or loader overrides from the old environment.
+    // The stale legacy darwin bundle is the exception: resolveNodeStartupTlsEnvironment treats
+    // that exact value as unset and the drift check flags installs carrying it for refresh.
     if (
       isDangerousHostEnvVarName(key) ||
       (isDangerousHostEnvOverrideVarName(key) && upper !== "NODE_EXTRA_CA_CERTS")
@@ -153,36 +142,32 @@ export function mergeInstallInvocationEnv(params: {
 
 /** Install or refresh the managed Gateway service. */
 export async function runDaemonInstall(opts: DaemonInstallOptions) {
-  const { json, stdout, warnings, emit, fail } = createDaemonInstallActionContext(opts.json);
-  const warn = (message: string) => {
-    if (json) {
-      warnings.push(message);
-    } else {
-      defaultRuntime.log(message);
-    }
-  };
-  if (failIfNixDaemonInstallMode(fail)) {
-    return;
-  }
-  try {
-    assertGatewayServiceMutationAllowed("install or rewrite the gateway service");
-  } catch (error) {
-    fail(`Gateway install blocked: ${String(error)}`);
-    return;
-  }
-  if (process.platform === "linux" && hasSudoToRootSystemdUserManagerMismatch(process.env)) {
-    fail(
-      "Gateway install blocked: Refusing a sudo-to-root systemd user-service install because " +
-        "OpenClaw state and service files would belong to root while systemctl targets the " +
-        "invoking user's manager. Rerun the same command without sudo. If [unsafe-permissions] " +
-        "blocked the non-sudo command, repair the reported directory with `chmod go-w <path>` " +
-        "and retry; do not use sudo or --force to bypass it. " +
-        "See https://docs.openclaw.ai/cli/gateway#install-identity.",
-    );
+  let definitionBackup: GatewayServiceDefinitionBackupReceipt | undefined;
+  const { json, stdout, warnings, warn, emit, emitMessage, fail } =
+    createDaemonInstallActionContext(opts.json, () => definitionBackup);
+  const installBlock = resolveDaemonInstallBlockMessage("gateway");
+  if (installBlock) {
+    fail(installBlock);
     return;
   }
 
   const service = resolveGatewayService();
+  let existingServiceCommand: GatewayServiceCommandConfig | null;
+  try {
+    existingServiceCommand = await service.readCommand(process.env, {
+      requireEffective: true,
+      allowMissingDefinition: true,
+    });
+  } catch (error) {
+    const message = sanitizeServiceInspectionError(error).message;
+    // No installer writes precede this read; the updater can retain the unchanged definition.
+    fail(
+      error instanceof ServiceStartRefusalError
+        ? `SERVICE_DEFINITION_UNKNOWN: ${message}`
+        : message,
+    );
+    return;
+  }
   let loaded;
   try {
     loaded = await service.isLoaded({ env: process.env });
@@ -193,19 +178,54 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
     }
     loaded = false;
   }
-  let existingServiceCommand: GatewayServiceCommandConfig | null;
-  try {
-    existingServiceCommand = await service.readCommand(process.env, { requireEffective: true });
-  } catch {
-    fail("SERVICE_DEFINITION_UNKNOWN: Service definition cannot be safely inspected.");
-    return;
-  }
   const existingManagedCommand = resolveManagedGatewayServiceCommand(existingServiceCommand);
   const existingServiceEnv = existingManagedCommand?.environment;
   const installEnv = mergeInstallInvocationEnv({
     env: process.env,
     existingServiceEnv,
   });
+  let pinSnapshot;
+  try {
+    pinSnapshot = await withDaemonRuntimePinMigration(installEnv, () =>
+      readDaemonRuntimePinForInstall(
+        { kind: "gateway", env: installEnv },
+        existingServiceCommand,
+        opts.runtime !== undefined || opts.runtimePath !== undefined,
+      ),
+    );
+  } catch (error) {
+    fail(`Runtime pin inspection failed: ${String(error)}`);
+    return;
+  }
+  if (opts.expectedRuntimePin !== undefined) {
+    try {
+      assertExpectedRuntimePin(opts.expectedRuntimePin, pinSnapshot, "Gateway");
+    } catch (error) {
+      fail(error instanceof Error ? error.message : String(error));
+      return;
+    }
+  }
+  let restoreServiceCli: Parameters<typeof buildGatewayInstallPlan>[0]["serviceCli"];
+  let restoredRuntimePath: string | undefined;
+  if (opts.restoreServiceCli !== undefined) {
+    try {
+      ({ serviceCli: restoreServiceCli, runtimePath: restoredRuntimePath } =
+        await resolveRestoreServiceCli(opts.restoreServiceCli, opts, installEnv));
+    } catch (error) {
+      fail(error instanceof Error ? error.message : String(error));
+      return;
+    }
+  }
+  if (opts.expectedRuntimePin !== undefined) {
+    // This interop path defers startup preparation until custody and recovery inputs are valid.
+    const { ensureConfigReady } = await import("../program/config-guard.js");
+    await ensureConfigReady({
+      runtime: defaultRuntime,
+      commandPath: ["gateway", "install"],
+      suppressDoctorStdout: json,
+    });
+  }
+  let pinnedRuntimePath = opts.runtimePath ?? (opts.runtime ? undefined : pinSnapshot.pin?.path);
   const effectiveServiceEnv = mergeGatewayServiceEnv(process.env, existingServiceCommand);
   const assertWritable = async () => {
     try {
@@ -239,7 +259,7 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
     return;
   }
   let cfg = configSnapshot.valid ? configSnapshot.sourceConfig : configSnapshot.config;
-  const portOverride = parsePort(opts.port);
+  const portOverride = parseTcpPort(opts.port);
   if (opts.port !== undefined && portOverride === null) {
     fail(formatInvalidPortOption("--port"));
     return;
@@ -249,21 +269,25 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
     fail(formatInvalidConfigPort("gateway.port"));
     return;
   }
-  const runtimeRaw = opts.runtime ? opts.runtime : DEFAULT_GATEWAY_DAEMON_RUNTIME;
+  const runtimeRaw =
+    opts.runtime ||
+    pinSnapshot.pin?.runtime ||
+    resolveGatewayDaemonRuntime([pinnedRuntimePath ?? ""]);
   if (!isGatewayDaemonRuntime(runtimeRaw)) {
-    fail('Invalid --runtime (use "node" or "bun")');
+    fail('Invalid --runtime (use "node", "bun", or "standalone")');
     return;
   }
+  let runtime = runtimeRaw;
   let wrapperPath: string | undefined;
   if (opts.wrapper !== undefined) {
     try {
       wrapperPath = await resolveOpenClawWrapperPath(opts.wrapper);
-      if (!wrapperPath) {
-        fail("Invalid --wrapper");
-        return;
-      }
     } catch (err) {
       fail(`Invalid --wrapper: ${String(err)}`);
+      return;
+    }
+    if (!wrapperPath) {
+      fail("Invalid --wrapper");
       return;
     }
   }
@@ -275,47 +299,263 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
       return;
     }
   }
-  const installBind = resolveGatewayInstallBindMode(cfg);
+  let runtimePath: string | undefined;
+  try {
+    if (!wrapperPath || opts.runtimePath !== undefined) {
+      pinnedRuntimePath = await resolvePinnedDaemonRuntimePath(
+        pinnedRuntimePath,
+        runtime,
+        installEnv,
+      );
+    }
+    runtimePath = wrapperPath ? undefined : (pinnedRuntimePath ?? restoredRuntimePath);
+  } catch (error) {
+    fail(
+      `Invalid runtime pin: ${String(error)}; reinstall with an explicit --runtime or --runtime-path to replace the saved runtime pin.`,
+    );
+    return;
+  }
+  const installBind =
+    cfg.gateway?.bind ?? defaultGatewayBindMode(cfg.gateway?.tailscale?.mode ?? "off");
   const installBindHost = await resolveGatewayBindHost(installBind, cfg.gateway?.customBindHost);
-  const noAuthNonLoopbackBlock = formatNoAuthNonLoopbackInstallBlock({
-    bind: installBind,
-    bindHost: installBindHost,
-    config: cfg,
-    env: installEnv,
-  });
+  function formatNoAuthNonLoopbackInstallBlock(): string | undefined {
+    const auth = resolveGatewayAuth({
+      authConfig: cfg.gateway?.auth,
+      env: installEnv,
+      tailscaleMode: cfg.gateway?.tailscale?.mode ?? "off",
+    });
+    const bindCanExposeNetwork = installBind === "tailnet" || !isLoopbackHost(installBindHost);
+    if (auth.mode !== "none" || !bindCanExposeNetwork) {
+      return undefined;
+    }
+    const bindReason =
+      installBind === "tailnet" && isLoopbackHost(installBindHost)
+        ? `gateway.bind=tailnet currently resolves to ${installBindHost} but can later resolve to a Tailnet interface`
+        : `gateway.bind=${installBind} resolves to ${installBindHost}`;
+    const hints: string[] = [`${bindReason}, but gateway.auth.mode=none disables Gateway auth.`];
+    const configuredSecret = normalizeOptionalString(auth.token)
+      ? "token"
+      : normalizeOptionalString(auth.password)
+        ? "password"
+        : undefined;
+    if (configuredSecret) {
+      hints.push(
+        `This config already has gateway.auth.${configuredSecret}; run ${formatCliCommand(`openclaw config set gateway.auth.mode ${configuredSecret}`)} and then rerun ${formatCliCommand("openclaw gateway install --force")}.`,
+      );
+    } else {
+      hints.push(
+        `Configure token/password auth, use trusted-proxy auth, or set ${formatCliCommand("openclaw config set gateway.bind loopback")} before installing the managed service.`,
+      );
+    }
+    return hints.join(" ");
+  }
+  const noAuthNonLoopbackBlock = formatNoAuthNonLoopbackInstallBlock();
   if (noAuthNonLoopbackBlock) {
     fail(`Gateway install blocked: ${noAuthNonLoopbackBlock}`);
     return;
   }
   let autoRefreshMessage: string | undefined;
-  if (loaded && !opts.force) {
-    autoRefreshMessage = await getGatewayServiceAutoRefreshMessage({
-      currentCommand: existingServiceCommand,
-      env: process.env,
-      installEnv,
+  const recordedPath = existingManagedCommand?.programArguments[0];
+  const recordedRuntime =
+    runtime === "node" &&
+    !wrapperPath &&
+    !runtimePath &&
+    (opts.runtime === undefined || isNodeRuntime(recordedPath ?? ""))
+      ? await resolveRecordedDaemonRuntime(recordedPath, installEnv)
+      : undefined;
+  if (recordedRuntime?.status === "supported" && opts.runtime === undefined) {
+    runtime = recordedRuntime.runtime;
+    runtimePath = recordedRuntime.path;
+  }
+  if (recordedRuntime?.runtime === "node") {
+    if (recordedRuntime.status !== "probe-failed" && recordedRuntime.capabilityError) {
+      warn(recordedRuntime.capabilityError);
+    }
+    const missingRuntime =
+      recordedRuntime.status === "probe-failed" &&
+      (await fs.access(recordedRuntime.path, fsConstants.X_OK).then(
+        () => false,
+        (error: unknown) => isMissingPathError(error) || hasErrnoCode(error, "EACCES"),
+      ));
+    const replacement = missingRuntime
+      ? `missing Gateway service Node (${recordedRuntime.path})`
+      : recordedRuntime.status === "unsupported"
+        ? `unsupported Gateway service Node ${recordedRuntime.version} (${recordedRuntime.path})`
+        : undefined;
+    if (replacement) {
+      try {
+        runtimePath = await resolvePreferredNodePath({
+          env: installEnv,
+          runtime: "node",
+          preferCurrentExecPath: true,
+        });
+      } catch (error) {
+        fail(`Gateway runtime selection failed: ${String(error)}`);
+        return;
+      }
+      if (!runtimePath) {
+        fail(
+          `No supported Node runtime is available. Install Node ${SUPPORTED_NODE_VERSIONS}, then rerun openclaw gateway install.`,
+        );
+        return;
+      }
+      autoRefreshMessage = `Replacing ${replacement} with ${runtimePath}; refreshing the install.`;
+    } else if (recordedRuntime.status === "probe-failed" && !opts.force) {
+      fail(
+        `${recordedRuntime.error.message} Reinstall with: ${formatCliCommand("openclaw gateway install --force")}.`,
+      );
+      return;
+    }
+  }
+  const buildInstallPlan = (
+    options: Pick<
+      Parameters<typeof buildGatewayInstallPlan>[0],
+      "runtimeExplicit" | "warn" | "installDurableCli"
+    >,
+  ) =>
+    buildGatewayInstallPlan({
+      allowUnconfigured: opts.allowUnconfigured,
+      env: installEnv,
       port,
-      runtime: runtimeRaw,
+      runtime,
+      runtimePath,
+      pinnedRuntimePath,
       wrapperPath,
+      serviceCli: restoreServiceCli,
+      existingCommand: existingServiceCommand,
       existingEnvironment: existingServiceEnv,
       existingEnvironmentValueSources: existingManagedCommand?.environmentValueSources,
       config: cfg,
+      ...options,
     });
+  if (loaded && !opts.force) {
+    async function getGatewayServiceAutoRefreshMessage(): Promise<string | undefined> {
+      const allowUnconfigured = opts.allowUnconfigured;
+      const autoRefreshEnv = process.env;
+      const pinChanged = opts.runtime !== undefined || opts.runtimePath !== undefined;
+      try {
+        const currentCommand = resolveManagedGatewayServiceCommand(existingServiceCommand);
+        if (!currentCommand) {
+          return existingServiceCommand
+            ? undefined
+            : "Gateway service definition is missing; refreshing the install.";
+        }
+        if (pinChanged) {
+          return "Gateway runtime selection changed; refreshing the install.";
+        }
+        const currentEntrypoint = resolveServiceEntrypoint(currentCommand);
+        if (currentEntrypoint && (await isDisposableEntrypoint(currentEntrypoint))) {
+          return "Gateway service runs from a temporary npx or pnpm dlx copy that can be deleted; refreshing the install.";
+        }
+        const getPlannedInstall = createLazyPromise(() =>
+          buildInstallPlan({ warn: () => undefined }),
+        );
+        const currentAllowsUnconfigured =
+          currentCommand.programArguments.includes("--allow-unconfigured");
+        if (currentAllowsUnconfigured || allowUnconfigured) {
+          const plannedInstall = await getPlannedInstall();
+          if (
+            currentAllowsUnconfigured !==
+            plannedInstall.programArguments.includes("--allow-unconfigured")
+          ) {
+            return "Gateway service start-mode argument differs from the current install plan; refreshing the install.";
+          }
+        }
+        const currentEmbeddedToken = readEmbeddedGatewayToken(currentCommand);
+        if (currentEmbeddedToken) {
+          const plannedInstall = await getPlannedInstall();
+          const plannedEmbeddedToken = normalizeOptionalString(
+            plannedInstall.environment.OPENCLAW_GATEWAY_TOKEN,
+          );
+          if (currentEmbeddedToken !== plannedEmbeddedToken) {
+            return "Gateway service OPENCLAW_GATEWAY_TOKEN differs from the current install plan; refreshing the install.";
+          }
+        }
+        const wrapperRequested = Boolean(
+          wrapperPath || normalizeOptionalString(installEnv[OPENCLAW_WRAPPER_ENV_KEY]),
+        );
+        if (wrapperRequested || pinnedRuntimePath) {
+          const plannedInstall = await getPlannedInstall();
+          if (
+            plannedInstall.programArguments.join("\u0000") !==
+            currentCommand.programArguments.join("\u0000")
+          ) {
+            return "Gateway service command differs from the current runtime/wrapper install plan; refreshing the install.";
+          }
+          const plannedWrapperPath = normalizeOptionalString(
+            plannedInstall.environment[OPENCLAW_WRAPPER_ENV_KEY],
+          );
+          const currentWrapperPath = normalizeOptionalString(
+            currentCommand.environment?.[OPENCLAW_WRAPPER_ENV_KEY],
+          );
+          if (plannedWrapperPath !== currentWrapperPath) {
+            return `Gateway service ${OPENCLAW_WRAPPER_ENV_KEY} differs from the current wrapper install plan; refreshing the install.`;
+          }
+        }
+        const currentExecPath = currentCommand.programArguments[0]?.trim();
+        if (!currentExecPath) {
+          return undefined;
+        }
+        const currentEnvironment = currentCommand.environment ?? {};
+        const currentNodeExtraCaCerts = currentEnvironment.NODE_EXTRA_CA_CERTS?.trim();
+        if (
+          currentNodeExtraCaCerts &&
+          !resolveNodeStartupTlsEnvironment({
+            env: currentEnvironment,
+            execPath: currentExecPath,
+          }).NODE_EXTRA_CA_CERTS
+        ) {
+          // Only the exact legacy darwin bundle resolves to nothing; every operator-chosen
+          // custom CA path survives, so this cannot fire for a deliberate Linux bundle.
+          return "Gateway service trusts the outdated macOS CA bundle; refreshing the install.";
+        }
+        const expectedNodeExtraCaCerts = resolveNodeStartupTlsEnvironment({
+          env: {
+            ...autoRefreshEnv,
+            ...currentEnvironment,
+            NODE_EXTRA_CA_CERTS: undefined,
+          },
+          execPath: currentExecPath,
+          includeDarwinDefaults: false,
+        }).NODE_EXTRA_CA_CERTS;
+        if (!expectedNodeExtraCaCerts) {
+          return undefined;
+        }
+        if (currentNodeExtraCaCerts !== expectedNodeExtraCaCerts) {
+          return "Gateway service is missing the nvm TLS CA bundle; refreshing the install.";
+        }
+        return undefined;
+      } catch {
+        return undefined;
+      }
+    }
+    autoRefreshMessage ??= await getGatewayServiceAutoRefreshMessage();
     if (autoRefreshMessage) {
       if (!(await assertWritable())) {
         return;
       }
-      warn(autoRefreshMessage);
     }
+  }
+  if (autoRefreshMessage) {
+    warn(autoRefreshMessage);
   }
 
   if (configSnapshot.valid && cfg.gateway?.mode === undefined) {
     const baseConfig = configSnapshot.sourceConfig ?? configSnapshot.config;
     await replaceConfigFile({
-      nextConfig: { ...baseConfig, gateway: { ...baseConfig.gateway, mode: "local" } },
+      sourceConfig: { ...baseConfig, gateway: { ...baseConfig.gateway, mode: "local" } },
       snapshot: configSnapshot,
       writeOptions: {
         baseSnapshot: configSnapshot,
         ...configWriteOptions,
+        ...(isUpdateOwnedGatewayServiceCommand()
+          ? {
+              assertCurrent: () => {
+                configWriteOptions.assertCurrent?.();
+                assertGatewayServiceUpdateCurrent();
+              },
+            }
+          : {}),
         skipRuntimeSnapshotRefresh: true,
       },
       afterWrite: { mode: "auto" },
@@ -328,14 +568,13 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
   }
 
   if (loaded && !opts.force && !autoRefreshMessage) {
-    emit({
+    emitMessage({
       ok: true,
       result: "already-installed",
       message: `Gateway service already ${service.loadedText}.`,
       service: buildDaemonServiceSnapshot(service, loaded),
     });
     if (!json) {
-      defaultRuntime.log(`Gateway service already ${service.loadedText}.`);
       defaultRuntime.log(`Reinstall with: ${formatCliCommand("openclaw gateway install --force")}`);
     }
     return;
@@ -343,13 +582,9 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
 
   const tokenResolution = await resolveGatewayInstallToken({
     config: cfg,
-    configSnapshot,
-    configWriteOptions,
     env: installEnv,
     explicitToken: opts.token,
-    autoGenerateWhenMissing: true,
-    persistGeneratedToken: true,
-    persistence: { readConfigFileSnapshotForWrite, replaceConfigFile },
+    generateIfMissing: { snapshot: configSnapshot, writeOptions: configWriteOptions },
   });
   if (tokenResolution.unavailableReason) {
     fail(`Gateway install blocked: ${tokenResolution.unavailableReason}`);
@@ -359,26 +594,39 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
     warn(warning);
   }
 
-  const { programArguments, workingDirectory, environment, environmentValueSources } =
-    await buildGatewayInstallPlan({
-      env: installEnv,
-      port,
-      runtime: runtimeRaw,
-      wrapperPath,
-      existingCommand: existingServiceCommand,
-      existingEnvironment: existingServiceEnv,
-      existingEnvironmentValueSources: existingManagedCommand?.environmentValueSources,
-      warn,
-      config: cfg,
-    });
-  await installDaemonServiceAndEmit({
-    serviceNoun: "Gateway",
-    service,
-    warnings,
-    emit,
-    fail,
-    install: async () => {
+  // Planning validates the runtime and wrapper; the durable copy is checked and placed during install.
+  const {
+    programArguments,
+    workingDirectory,
+    environment,
+    environmentValueSources,
+    durableCliReplacement,
+  } = await buildInstallPlan({
+    runtimeExplicit: opts.runtime !== undefined || opts.runtimePath !== undefined,
+    installDurableCli: true,
+    warn,
+  });
+  // The hooks carry the durable-copy swap into the service's own mutation boundary and put
+  // the previous copy back before a failed install's native recovery restarts the old service.
+  const install =
+    (beforeMutation?: () => Promise<void>, beforeRecovery?: () => Promise<void>) =>
+    async (definitionTransaction?: GatewayServiceDefinitionTransactionHooks) => {
       await service.install({
+        beforeMutation,
+        beforeRecovery,
+        runtimePinUpdate: {
+          expected: pinSnapshot,
+          pin: pinnedRuntimePath ? { runtime, path: pinnedRuntimePath } : undefined,
+          ...(opts.expectedRuntimePin !== undefined
+            ? {
+                requireDefinitionMatch: true as const,
+                // Recovery replaces a failed service; definition and pin custody still fence changes.
+                ...(!restoreServiceCli && pinSnapshot.definition !== undefined
+                  ? { requireRunning: true as const }
+                  : {}),
+              }
+            : {}),
+        },
         env: installEnv,
         stdout,
         warn,
@@ -386,94 +634,50 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
         workingDirectory,
         environment,
         environmentValueSources,
+        definitionTransaction,
       });
+    };
+  const successMessage = `Gateway service installed. Runtime readiness has not been checked; startup may still be in progress. Run ${formatCliCommand("openclaw gateway start")} to wait until it is ready.`;
+  await installDaemonServiceAndEmit({
+    serviceNoun: "Gateway",
+    service,
+    successMessage,
+    onVerified: async () => {
+      if (!json) {
+        defaultRuntime.log(successMessage);
+      }
     },
-  });
-}
-
-async function getGatewayServiceAutoRefreshMessage(params: {
-  currentCommand: GatewayServiceCommandConfig | null;
-  env: Record<string, string | undefined>;
-  installEnv: NodeJS.ProcessEnv;
-  port: number;
-  runtime: GatewayDaemonRuntime;
-  wrapperPath?: string;
-  existingEnvironment?: Record<string, string | undefined>;
-  existingEnvironmentValueSources?: GatewayServiceCommandConfig["environmentValueSources"];
-  config: OpenClawConfig;
-}): Promise<string | undefined> {
-  try {
-    const currentCommand = resolveManagedGatewayServiceCommand(params.currentCommand);
-    if (!currentCommand) {
-      return undefined;
-    }
-    const getPlannedInstall = createLazyPromise(() =>
-      buildGatewayInstallPlan({
-        env: params.installEnv,
-        port: params.port,
-        runtime: params.runtime,
-        wrapperPath: params.wrapperPath,
-        existingCommand: params.currentCommand,
-        existingEnvironment: params.existingEnvironment,
-        existingEnvironmentValueSources: params.existingEnvironmentValueSources,
-        warn: () => undefined,
-        config: params.config,
+    warnings,
+    emit,
+    fail,
+    install: () =>
+      installDurableServiceCli({
+        env: installEnv,
+        replacement: durableCliReplacement,
+        verify: () => service.isLoaded({ env: process.env }),
+        warn,
+        install: async (beforeMutation, beforeRecovery) => {
+          if (
+            isUpdateOwnedGatewayServiceCommand() ||
+            isTruthyEnvValue(process.env.OPENCLAW_UPDATE_IN_PROGRESS)
+          ) {
+            definitionBackup = await reconcileGatewayServiceDefinition({
+              env: installEnv,
+              root: (await resolveOpenClawPackageRoot({ moduleUrl: import.meta.url })) ?? undefined,
+              command: existingServiceCommand,
+              expectedCommand: {
+                programArguments,
+                workingDirectory,
+                environment,
+                environmentValueSources,
+              },
+              install: install(beforeMutation, beforeRecovery),
+              warn,
+            });
+          } else {
+            await install(beforeMutation, beforeRecovery)();
+          }
+        },
       }),
-    );
-    const currentEmbeddedToken = readEmbeddedGatewayToken(currentCommand);
-    if (currentEmbeddedToken) {
-      const plannedInstall = await getPlannedInstall();
-      const plannedEmbeddedToken = normalizeOptionalString(
-        plannedInstall.environment.OPENCLAW_GATEWAY_TOKEN,
-      );
-      if (currentEmbeddedToken !== plannedEmbeddedToken) {
-        return "Gateway service OPENCLAW_GATEWAY_TOKEN differs from the current install plan; refreshing the install.";
-      }
-    }
-    const wrapperRequested = Boolean(
-      params.wrapperPath || normalizeOptionalString(params.installEnv[OPENCLAW_WRAPPER_ENV_KEY]),
-    );
-    if (wrapperRequested) {
-      const plannedInstall = await getPlannedInstall();
-      if (
-        plannedInstall.programArguments.join("\u0000") !==
-        currentCommand.programArguments.join("\u0000")
-      ) {
-        return "Gateway service command differs from the current wrapper install plan; refreshing the install.";
-      }
-      const plannedWrapperPath = normalizeOptionalString(
-        plannedInstall.environment[OPENCLAW_WRAPPER_ENV_KEY],
-      );
-      const currentWrapperPath = normalizeOptionalString(
-        currentCommand.environment?.[OPENCLAW_WRAPPER_ENV_KEY],
-      );
-      if (plannedWrapperPath !== currentWrapperPath) {
-        return `Gateway service ${OPENCLAW_WRAPPER_ENV_KEY} differs from the current wrapper install plan; refreshing the install.`;
-      }
-    }
-    const currentExecPath = currentCommand.programArguments[0]?.trim();
-    if (!currentExecPath) {
-      return undefined;
-    }
-    const currentEnvironment = currentCommand.environment ?? {};
-    const currentNodeExtraCaCerts = currentEnvironment.NODE_EXTRA_CA_CERTS?.trim();
-    const expectedNodeExtraCaCerts = resolveNodeStartupTlsEnvironment({
-      env: {
-        ...params.env,
-        ...currentEnvironment,
-        NODE_EXTRA_CA_CERTS: undefined,
-      },
-      execPath: currentExecPath,
-      includeDarwinDefaults: false,
-    }).NODE_EXTRA_CA_CERTS;
-    if (!expectedNodeExtraCaCerts) {
-      return undefined;
-    }
-    if (currentNodeExtraCaCerts !== expectedNodeExtraCaCerts) {
-      return "Gateway service is missing the nvm TLS CA bundle; refreshing the install.";
-    }
-    return undefined;
-  } catch {
-    return undefined;
-  }
+  });
 }

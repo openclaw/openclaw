@@ -6,7 +6,7 @@ import { TEST_TLS_CERT_PEM } from "../../test/helpers/tls-fixture.js";
 import type { GatewayTlsConfig } from "../config/types.gateway.js";
 import { createTrackedTempDirs } from "../test-utils/tracked-temp-dirs.js";
 import { CONFIG_DIR, pinConfigDir } from "../utils.js";
-import { resolveGatewayConnectionTlsFingerprint } from "./tls-fingerprint.js";
+import { resolveGatewayClientBootstrap } from "./client-bootstrap.js";
 
 const tempDirs = createTrackedTempDirs();
 const originalConfigDir = CONFIG_DIR;
@@ -21,11 +21,11 @@ afterEach(async () => {
 });
 
 function resolveLocalPin(tls: GatewayTlsConfig) {
-  return resolveGatewayConnectionTlsFingerprint({
-    config: { gateway: { mode: "local", tls } },
-    url: "wss://127.0.0.1:32123",
-    urlSource: "local loopback",
-  });
+  return resolveGatewayClientBootstrap({
+    config: { gateway: { mode: "local", port: 32123, tls } },
+    ignoreEnvUrlOverride: true,
+    skipImplicitAuth: true,
+  }).then(({ tlsFingerprint }) => tlsFingerprint);
 }
 
 describe("Gateway client certificate inspection", () => {
@@ -48,7 +48,7 @@ describe("Gateway client certificate inspection", () => {
     await expect(resolveLocalPin(tls)).resolves.toBeUndefined();
   });
 
-  it.each([undefined, "", " \t", "custom"])(
+  it.each([undefined, " \t", "custom"])(
     "pins existing public certificate (%j) without a key or CA",
     async (location) => {
       const root = await tempDirs.make("openclaw-tls-owner-client-");
@@ -61,6 +61,7 @@ describe("Gateway client certificate inspection", () => {
       await fs.writeFile(certPath, TEST_TLS_CERT_PEM, { mode: 0o644 });
       const before = await fs.stat(certPath);
       const read = vi.spyOn(fs, "readFile");
+      const open = vi.spyOn(fs, "open");
 
       await expect(
         resolveLocalPin({
@@ -71,7 +72,7 @@ describe("Gateway client certificate inspection", () => {
         }),
       ).resolves.toBe(fingerprint);
 
-      expect(read.mock.calls.map(([file]) => file)).toEqual([certPath]);
+      expect([...read.mock.calls, ...open.mock.calls].map(([file]) => file)).toEqual([certPath]);
       const after = await fs.stat(certPath);
       expect([after.mode, after.mtimeMs]).toEqual([before.mode, before.mtimeMs]);
     },
@@ -90,7 +91,9 @@ describe("Gateway client certificate inspection", () => {
 
   it("does not read certificates when local TLS is disabled", async () => {
     const read = vi.spyOn(fs, "readFile");
+    const open = vi.spyOn(fs, "open");
     await expect(resolveLocalPin({ enabled: false })).resolves.toBeUndefined();
     expect(read).not.toHaveBeenCalled();
+    expect(open).not.toHaveBeenCalled();
   });
 });

@@ -1,5 +1,5 @@
-// Line helper module supports config schema behavior.
 import {
+  ChannelDeliveryStreamingConfigSchema,
   DmPolicySchema,
   GroupPolicySchema,
   buildChannelConfigSchema,
@@ -20,6 +20,12 @@ const ThreadBindingsSchema = z
   })
   .strict();
 
+// "batched" separates a reply to a coalesced turn from a reply to an immediate one,
+// and nothing on the LINE path marks a turn as coalesced: no caller here reaches
+// resolveBatchedReplyThreadingPolicy. Reject it rather than accept a mode whose
+// defining behavior can never occur.
+const LineReplyToModeSchema = z.enum(["off", "first", "all"]);
+
 const LineCommonConfigSchemaBase = z.object({
   enabled: z.boolean().optional(),
   configWrites: z.boolean().optional(),
@@ -35,6 +41,10 @@ const LineCommonConfigSchemaBase = z.object({
   dmPolicy: DmPolicySchema.optional().default("pairing"),
   groupPolicy: GroupPolicySchema.optional().default("allowlist"),
   responsePrefix: z.string().optional(),
+  replyToMode: LineReplyToModeSchema.optional(),
+  // LINE cannot edit a sent message, so it has no preview streaming mode and takes
+  // the delivery-only shape this shared schema is written for.
+  streaming: ChannelDeliveryStreamingConfigSchema.optional(),
   mediaMaxMb: z.number().optional(),
   webhookPath: z.string().optional(),
   threadBindings: ThreadBindingsSchema.optional(),
@@ -45,7 +55,7 @@ const LineGroupConfigSchema = buildGroupEntrySchema().omit({
   toolsBySender: true,
 });
 
-const LineAccountConfigSchema = LineCommonConfigSchemaBase.extend({
+export const LineAccountConfigSchema = LineCommonConfigSchemaBase.extend({
   groups: z.record(z.string(), LineGroupConfigSchema.optional()).optional(),
 }).strict();
 
@@ -70,5 +80,3 @@ export const LineChannelConfigSchema = buildChannelConfigSchema(LineConfigSchema
     },
   },
 });
-
-export type LineConfigSchemaType = z.infer<typeof LineConfigSchema>;

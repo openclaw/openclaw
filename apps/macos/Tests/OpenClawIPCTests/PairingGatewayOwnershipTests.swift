@@ -46,8 +46,11 @@ private final class PairingGatewayFixture: @unchecked Sendable {
     let revision = LockIsolated<UInt64>(1)
     let decisions = LockIsolated<[Decision]>([])
     let pending = LockIsolated(true)
+    let requiresAdmin = LockIsolated(false)
+    let silent = LockIsolated(false)
     let additionalPendingRequestIds = LockIsolated<[String]>([])
     let listReads = LockIsolated(0)
+    private let listReadEvents = AsyncStream<Int>.makeStream(bufferingPolicy: .bufferingNewest(1))
     let nextListGate = LockIsolated<PairingListReplyGate?>(nil)
     let session: GatewayTestWebSocketSession
     let gateway: GatewayConnection
@@ -56,8 +59,11 @@ private final class PairingGatewayFixture: @unchecked Sendable {
         let revision = self.revision
         let decisions = self.decisions
         let pending = self.pending
+        let requiresAdmin = self.requiresAdmin
+        let silent = self.silent
         let additionalPendingRequestIds = self.additionalPendingRequestIds
         let listReads = self.listReads
+        let listReadEvents = self.listReadEvents.continuation
         let nextListGate = self.nextListGate
         let session = GatewayTestWebSocketSession {
             let server = revision.value
@@ -78,10 +84,14 @@ private final class PairingGatewayFixture: @unchecked Sendable {
                 }
                 let payload: String
                 if method.hasSuffix(".pair.list") {
-                    let requests = (pending.value ? [Self.pendingRequest(server: server)] : []) +
+                    let requests = (pending.value ? [Self.pendingRequest(
+                        server: server, requiresAdmin: requiresAdmin.value, silent: silent.value)] : []) +
                         additionalPendingRequestIds.value.map { Self.pendingRequest(server: server, requestId: $0) }
                     payload = #"{"pending":[\#(requests.joined(separator: ","))],"paired":[]}"#
-                    listReads.withValue { $0 += 1 }
+                    listReads.withValue {
+                        $0 += 1
+                        listReadEvents.yield($0)
+                    }
                     let gate = nextListGate.withValue { value in
                         defer { value = nil }
                         return value
@@ -107,24 +117,111 @@ private final class PairingGatewayFixture: @unchecked Sendable {
             sessionBox: WebSocketSessionBox(session: session))
     }
 
-    static func pendingRequest(server: UInt64 = 1, requestId: String = "same-request") -> String {
-        #"""
+    func waitForListReads(_ minimum: Int) async throws {
+        for await count in self.listReadEvents.stream where count >= minimum {
+            return
+        }
+        Issue.record("Still waiting for \(minimum) pairing list reads")
+        throw CancellationError()
+    }
+
+    func finishListObservation() {
+        self.listReadEvents.continuation.finish()
+    }
+
+    static func pendingRequest(
+        server: UInt64 = 1,
+        requestId: String = "same-request",
+        requiresAdmin: Bool = false,
+        silent: Bool = false) -> String
+    {
+        let approvalScopes = requiresAdmin
+            ? #", "requiredApproveScopes":["operator.pairing","operator.admin"]"# : ""
+        return #"""
         {"requestId":"\#(requestId)","nodeId":"\#(requestId)-node","deviceId":"\#(requestId)-device",
-         "publicKey":"synthetic","displayName":"Gateway \#(server)","silent":false,"ts":1800000000000}
+         "publicKey":"synthetic","displayName":"Gateway \#(server)","silent":\#(silent),"ts":1800000000000,
+         "commands":["browser.proxy"]\#(approvalScopes)}
         """#
     }
 }
 
-@Suite(.serialized)
+@Suite(.serialized, .testWaitLimit)
 @MainActor
 struct PairingGatewayOwnershipTests {
+    @Test func `direct silent pairing shows explicit approval without waiting for discovery`() async throws {
+        try await self.withPrompter(
+            kind: .node,
+            configuration: [
+                "gateway": [
+                    "mode": "remote",
+                    "remote": ["transport": "direct", "url": "ws://127.0.0.1:32001"],
+                ],
+            ],
+            prepare: { fixture in
+                _ = try #require(DeviceIdentityStore.loadOrCreatePersisted(
+                    profile: MacNodeModeCoordinator.nodeIdentityProfile))
+                fixture.silent.setValue(true)
+            },
+            operation: { fixture, center, _ in
+                try await TestWait.observed("explicit approval for direct silent request") { center.cards.count == 1 }
+                #expect(fixture.decisions.value.isEmpty)
+
+                let card = try #require(center.cards.first)
+                center.decide(card, .approve)
+                try await TestWait.state("explicit pairing decision") {
+                    !fixture.decisions.value.isEmpty && center.decisionsInFlight.isEmpty
+                }
+                #expect(fixture.decisions.value == [.init(server: 1, method: "node.pair.approve")])
+            })
+    }
+
+    @Test(arguments: ["list", "push", "refresh"])
+    func `gateway admin requirement survives delivery into the approval panel`(delivery: String) async throws {
+        try await self.withPrompter(
+            kind: .node,
+            prepare: { fixture in
+                fixture.pending.setValue(delivery != "push")
+                fixture.requiresAdmin.setValue(delivery == "list")
+            },
+            operation: { fixture, center, _ in
+                try await TestWait.state("initial pairing list") {
+                    fixture.listReads.value >= 1 && (delivery == "push" || center.cards.count == 1)
+                }
+                if delivery != "list" {
+                    let gate = PairingListReplyGate()
+                    defer { gate.resume() }
+                    fixture.pending.setValue(true)
+                    fixture.requiresAdmin.setValue(true)
+                    if delivery == "push" { fixture.nextListGate.setValue(gate) }
+                    let socket = try #require(fixture.session.latestTask())
+                    try await TestWait.state("receive handler") { socket.hasPendingReceiveHandler() }
+                    socket.emitReceiveSuccess(.string(
+                        #"""
+                        {"type":"event","event":"node.pair.requested",
+                         "payload":\#(PairingGatewayFixture.pendingRequest(requiresAdmin: delivery == "push")),"seq":1}
+                        """#))
+                    try await TestWait.observed("administrator approval warning") {
+                        center.cards.contains {
+                            PairingCardPresentation.accessRows(for: $0).contains {
+                                $0.isElevated && $0.text == "Requires administrator approval"
+                            }
+                        }
+                    }
+                }
+                let card = try #require(center.cards.first)
+                let rows = PairingCardPresentation.accessRows(for: card)
+                #expect(rows.contains { $0.isElevated && $0.text == "Requires administrator approval" })
+                #expect(rows.contains { $0.text == "Commands: browser.proxy" })
+            })
+    }
+
     @Test(arguments: PairingApprovalCenter.Kind.allCases, [PairingApprovalCenter.Decision.approve, .reject])
     func `a retained pairing card cannot decide on a replacement gateway`(
         kind: PairingApprovalCenter.Kind,
         decision: PairingApprovalCenter.Decision) async throws
     {
         try await self.withPrompter(kind: kind) { fixture, center, _ in
-            try await self.waitUntil("initial card") { center.cards.count == 1 }
+            try await TestWait.observed("initial card") { center.cards.count == 1 }
             let retained = try #require(center.cards.first)
             #expect(retained.displayName == "Gateway 1")
 
@@ -132,14 +229,14 @@ struct PairingGatewayOwnershipTests {
             // UI task catches up. Request ids are intentionally identical on B.
             fixture.revision.setValue(2)
             center.decide(retained, decision)
-            try await self.waitUntil("decision completion") { center.decisionsInFlight.isEmpty }
+            try await TestWait.observed("decision completion") { center.decisionsInFlight.isEmpty }
             #expect(fixture.decisions.value.isEmpty)
 
             _ = try await fixture.gateway.acquireServerLease()
-            try await self.waitUntil("replacement card") { center.cards.first?.displayName == "Gateway 2" }
+            try await TestWait.observed("replacement card") { center.cards.first?.displayName == "Gateway 2" }
             let replacement = try #require(center.cards.first)
             center.decide(replacement, decision)
-            try await self.waitUntil("decision completion") { center.decisionsInFlight.isEmpty }
+            try await TestWait.observed("decision completion") { center.decisionsInFlight.isEmpty }
             let suffix = decision == .approve ? "approve" : "reject"
             #expect(fixture.decisions.value == [.init(server: 2, method: "\(kind.rawValue).pair.\(suffix)")])
         }
@@ -149,25 +246,25 @@ struct PairingGatewayOwnershipTests {
         try await self.withPrompter(kind: .node) { fixture, center, node in
             let gate = PairingListReplyGate()
             defer { gate.resume() }
-            try await self
-                .waitUntil("initial card and periodic list") { center.cards.count == 1 && fixture.listReads.value >= 2 }
+            try await fixture.waitForListReads(2)
+            try #require(center.cards.count == 1)
             let socket = try #require(fixture.session.latestTask())
             fixture.nextListGate.setValue(gate)
-            try await self.waitUntil("receive handler") { socket.hasPendingReceiveHandler() }
-            socket.emitReceiveSuccessOnce(.string(
+            try await TestWait.state("receive handler") { socket.hasPendingReceiveHandler() }
+            socket.emitReceiveSuccess(.string(
                 #"""
                 {"type":"event","event":"node.pair.requested",
                  "payload":\#(PairingGatewayFixture.pendingRequest()),"seq":1}
                 """#))
-            try await self.waitUntil("held list reply") { gate.isWaiting.value }
+            try await TestWait.state("held list reply") { gate.isWaiting.value }
             fixture.pending.setValue(false)
-            try await self.waitUntil("receive handler") { socket.hasPendingReceiveHandler() }
-            socket.emitReceiveSuccessOnce(.string(
+            try await TestWait.state("receive handler") { socket.hasPendingReceiveHandler() }
+            socket.emitReceiveSuccess(.string(
                 #"""
                 {"type":"event","event":"node.pair.resolved",
                  "payload":{"requestId":"same-request","decision":"rejected","ts":1800000000001},"seq":2}
                 """#))
-            try await self.waitUntil("authoritative resolution") { center.cards.isEmpty }
+            try await TestWait.observed("authoritative resolution") { center.cards.isEmpty }
             let countChanged = LockIsolated(false)
             withObservationTracking { _ = node.pendingCount } onChange: { countChanged.setValue(true) }
             gate.resume()
@@ -194,21 +291,21 @@ struct PairingGatewayOwnershipTests {
                 fixture.nextListGate.setValue(gate)
             },
             operation: { fixture, center, _ in
-                try await self.waitUntil("held initial list") { gate.isWaiting.value }
+                try await TestWait.state("held initial list") { gate.isWaiting.value }
                 #expect(center.cards.isEmpty)
                 let socket = try #require(fixture.session.latestTask())
                 fixture.pending.setValue(false)
-                try await self.waitUntil("receive handler") { socket.hasPendingReceiveHandler() }
-                socket.emitReceiveSuccessOnce(.string(
+                try await TestWait.state("receive handler") { socket.hasPendingReceiveHandler() }
+                socket.emitReceiveSuccess(.string(
                     #"""
                     {"type":"event","event":"\#(kind.rawValue).pair.resolved",
                      "payload":{"requestId":"same-request","decision":"rejected","ts":1800000000001},"seq":1}
                     """#))
-                try await self.waitUntil("receive handler after resolution") { socket.hasPendingReceiveHandler() }
+                try await TestWait.state("receive handler after resolution") { socket.hasPendingReceiveHandler() }
                 _ = try await fixture.gateway.acquireServerLease()
                 try await Task.sleep(for: .milliseconds(100))
                 gate.resume()
-                try await self.waitUntil("unrelated pending request after concurrent resolution") {
+                try await TestWait.observed("unrelated pending request after concurrent resolution") {
                     center.cards.map(\.requestId) == ["untouched-request"]
                 }
                 #expect(center.cards.allSatisfy { $0.source?.isCurrent == true })
@@ -217,14 +314,21 @@ struct PairingGatewayOwnershipTests {
 
     private func withPrompter(
         kind: PairingApprovalCenter.Kind,
-        prepare: (PairingGatewayFixture) -> Void = { _ in },
+        configuration: [String: Any]? = nil,
+        prepare: (PairingGatewayFixture) throws -> Void = { _ in },
         operation: (PairingGatewayFixture, PairingApprovalCenter, NodePairingApprovalPrompter) async throws -> Void)
         async throws
     {
-        try await TestIsolation.withIsolatedState {
+        let configPath = TestIsolation.tempConfigPath()
+        defer { try? FileManager.default.removeItem(atPath: configPath) }
+        try await TestIsolation.withIsolatedState(env: ["OPENCLAW_CONFIG_PATH": configPath]) {
+            if let configuration {
+                try #require(OpenClawConfigFile.saveDict(configuration))
+            }
             _ = NSApplication.shared
             let fixture = PairingGatewayFixture()
-            prepare(fixture)
+            defer { fixture.finishListObservation() }
+            try prepare(fixture)
             let center = PairingApprovalCenter()
             let node = NodePairingApprovalPrompter(gateway: fixture.gateway, center: center)
             let device = DevicePairingApprovalPrompter(gateway: fixture.gateway, center: center)
@@ -244,13 +348,5 @@ struct PairingGatewayOwnershipTests {
             device.stop()
             await fixture.gateway.shutdown()
         }
-    }
-
-    private func waitUntil(_ phase: String, _ predicate: @MainActor () -> Bool) async throws {
-        let deadline = ContinuousClock.now + .seconds(3)
-        while !predicate(), ContinuousClock.now < deadline {
-            try await Task.sleep(for: .milliseconds(10))
-        }
-        try #require(predicate(), "Pairing phase: \(phase)")
     }
 }

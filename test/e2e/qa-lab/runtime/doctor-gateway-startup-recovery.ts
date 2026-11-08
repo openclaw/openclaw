@@ -10,7 +10,7 @@ import { pathToFileURL } from "node:url";
 import {
   QA_EVIDENCE_FILENAME,
   type QaEvidenceSummaryJson,
-} from "../../../../extensions/qa-lab/api.js";
+} from "../../../../extensions/qa-lab/test-api.js";
 import { createQaScriptEvidenceWriter } from "./script-evidence.js";
 
 const ALLOW_ENV = "OPENCLAW_QA_ALLOW_SYSTEMD_RECOVERY";

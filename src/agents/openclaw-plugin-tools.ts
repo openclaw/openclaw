@@ -1,57 +1,127 @@
-/**
- * OpenClaw plugin tool resolver.
- *
- * This module builds runtime plugin tools from config/options, delivery context,
- * auth profiles, and the current runtime config snapshot.
- */
+import { randomUUID } from "node:crypto";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { getAgentToolAssistantTurnId } from "../../packages/agent-core/src/tool-execution-context.js";
+import { getRuntimeConfigSnapshot, selectLiveRuntimeConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
+  resolveMessageActionTurnAuthorization,
   resolveMessageActionTurnCapability,
   selectMessageActionRequesterIdentity,
 } from "../gateway/message-action-turn-capability.js";
+import { listConnectedNodePluginTools } from "../gateway/node-plugin-tool-snapshot.js";
+import {
+  NODE_MCP_TOOL_CALL_GATEWAY_TIMEOUT_MS,
+  NODE_MCP_TOOL_CALL_TIMEOUT_MS,
+  NODE_MCP_TOOLS_CALL_COMMAND,
+  NODE_PLUGIN_TOOL_CALL_GATEWAY_TIMEOUT_MS,
+  NODE_PLUGIN_TOOL_CALL_TIMEOUT_MS,
+} from "../infra/node-commands.js";
 import { resolveAgentScopedOutboundMediaAccess } from "../media/read-capability.js";
+import { resolveProviderAuthScope } from "../plugins/provider-auth-scope.js";
 import { getActivePluginRegistry, getActivePluginRegistryVersion } from "../plugins/runtime.js";
 import {
+  getInProcessGatewayRequestContext,
   getPluginRuntimeGatewayRequestScope,
   withPluginRuntimeRegistryScope,
 } from "../plugins/runtime/gateway-request-scope.js";
 import { getPluginRuntimeLoadContext } from "../plugins/runtime/load-context.js";
-import type { OpenClawPluginToolDelivery } from "../plugins/tool-types.js";
-import { resolvePluginTools } from "../plugins/tools.js";
+import { createPluginToolAllowlist } from "../plugins/tool-grant-allowlist.js";
+import {
+  copyPluginToolMeta,
+  getPluginToolMeta,
+  setPluginToolMeta,
+} from "../plugins/tool-metadata.js";
+import type {
+  OpenClawPluginToolAuthQuery,
+  OpenClawPluginToolDelivery,
+} from "../plugins/tool-types.js";
+import { resolvePluginTools, resolvePluginToolsSteps } from "../plugins/tools.js";
 import type { OpenClawPluginToolContext } from "../plugins/types.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
+import { sanitizeNodeIdFragment, sanitizeServerName } from "./agent-bundle-mcp-names.js";
+import { bindAgentToolExecutionLocation } from "./agent-tool-metadata.js";
 import { resolveApiKeyForProfile, resolveAuthProfileOrder } from "./auth-profiles.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
+import { bindRequesterOwnerIdentity } from "./cron-creator-authority-context.js";
+import { compileGlobPatterns, matchesAnyGlobPattern } from "./glob-pattern.js";
+import {
+  createMcpClientElicitationHandler,
+  MCP_ELICITATION_TIMEOUT_MS,
+} from "./mcp-client-elicitation.js";
+import {
+  projectMcpCallToolResult,
+  setMcpCodeModeGuestResultFromAgentResult,
+} from "./mcp-content.js";
 import {
   createRuntimeProviderAuthLookup,
   hasRuntimeAvailableProviderAuth,
   resolveApiKeyForProviderCore as resolveProviderAuth,
 } from "./model-auth.js";
-import { createNodePluginTools } from "./node-plugin-tools.js";
 import {
   resolveOpenClawPluginToolInputs,
   type OpenClawPluginToolOptions,
 } from "./openclaw-tools.plugin-context.js";
+import { preparePluginToolExecutionCapabilities } from "./plugin-tool-execution.js";
 import type { PreparedModelRuntimeSnapshot } from "./prepared-model-runtime.types.js";
-import { resolveAgentRuntimeToolConfig } from "./tool-runtime-config.js";
-import type { AnyAgentTool } from "./tools/common.js";
+import type { AgentToolResult } from "./runtime/index.js";
+import { normalizeToolPolicyName } from "./tool-policy.js";
+import { jsonResult, type AnyAgentTool } from "./tools/common.js";
+import {
+  captureGatewayToolCallerAssertion,
+  getGatewayToolCallerIdentity,
+} from "./tools/gateway-caller-context.js";
+import { callGatewayTool } from "./tools/gateway.js";
 import { hasProviderAuthForTool } from "./tools/model-config.helpers.js";
+import { captureAgentWorkspaceReadiness } from "./workspace-readiness.js";
+
+const NODE_PLUGIN_TOOL_NAME_RE = /^[A-Za-z][A-Za-z0-9_-]{0,63}$/;
+const NODE_PLUGIN_TOOL_NAME_MAX_LENGTH = 64;
+const NODE_MCP_PLUGIN_ID = "node-mcp";
+
+type MaterializedNodeToolEntry = ReturnType<typeof listConnectedNodePluginTools>[number] & {
+  command: string;
+  normalizedName: string;
+};
+
+function registerNodeToolElicitation(
+  nodeId: string,
+  sessionKey: string | undefined,
+  signal?: AbortSignal,
+) {
+  const caller = getGatewayToolCallerIdentity();
+  const assertCurrent = captureGatewayToolCallerAssertion();
+  if (!caller || !assertCurrent || caller.sessionKey !== sessionKey) {
+    return undefined;
+  }
+  const registry = getInProcessGatewayRequestContext(caller.gatewayContextResolver)?.nodeRegistry;
+  const node = registry?.get(nodeId);
+  if (!registry || !node) {
+    return undefined;
+  }
+  assertCurrent();
+  const id = randomUUID();
+  const handle = createMcpClientElicitationHandler({
+    sessionKey,
+    agentId: caller.agentId,
+    assertCurrent,
+  });
+  const release = registry.mcpElicitation.register({
+    id,
+    node,
+    signal: AbortSignal.any([...(caller.approvalSignals ?? []), ...(signal ? [signal] : [])]),
+    handle,
+  });
+  return { id, [Symbol.dispose]: release };
+}
+
+function isAgentToolResult(value: unknown): value is AgentToolResult<unknown> {
+  return isRecord(value) && Array.isArray(value.content);
+}
 
 type ResolveOpenClawPluginToolsOptions = OpenClawPluginToolOptions & {
   preparedModelRuntime?: PreparedModelRuntimeSnapshot;
   pluginToolAllowlist?: string[];
   pluginToolDenylist?: string[];
-  currentThreadTs?: string;
-  currentMessageId?: string | number;
-  sandboxRoot?: string;
-  modelHasVision?: boolean;
-  modelProvider?: string;
-  modelId?: string;
-  allowMediaInvokeCommands?: boolean;
-  requesterAgentIdOverride?: string;
-  requireExplicitMessageTarget?: boolean;
-  disableMessageTool?: boolean;
-  disablePluginTools?: boolean;
   clientCaps?: string[];
   authProfileStore?: AuthProfileStore;
 };
@@ -73,6 +143,9 @@ function createPluginToolDelivery(params: {
   const senderIsOwner = params.context.senderIsOwner;
   const conversationReadOrigin = params.context.conversationReadOrigin;
   const runId = params.options?.runId;
+  const workspaceReadiness = captureAgentWorkspaceReadiness(
+    params.options?.runSessionKey ?? params.options?.agentSessionKey,
+  );
   const token = params.options?.messageActionTurnCapability;
   const activeRegistry = getActivePluginRegistry();
   const activeRegistryVersion = getActivePluginRegistryVersion();
@@ -90,6 +163,19 @@ function createPluginToolDelivery(params: {
   // Capabilities bind the source policy session, even when plugins execute in
   // a shared or durable session. Keep validation separate from execution identity.
   const policySessionKey = params.options?.agentSessionKey ?? sessionKey;
+  const turnIdentity = {
+    token,
+    agentId,
+    runId,
+    sessionKey: policySessionKey,
+    sessionId,
+  };
+  const messageActionAuthorization = resolveMessageActionTurnAuthorization(turnIdentity);
+  if (messageActionAuthorization?.scheduled || messageActionAuthorization?.deliveryAttempt) {
+    // Cron capabilities are consumed by individual message actions. They do not
+    // delegate the source conversation's plugin delivery capability.
+    return undefined;
+  }
   const channelPlugin = activeRegistry.channels.find(
     (entry) => entry.plugin.id === deliveryContext.channel,
   )?.plugin;
@@ -112,13 +198,7 @@ function createPluginToolDelivery(params: {
     ) {
       throw new Error("plugin delivery capability is no longer active");
     }
-    const authorization = resolveMessageActionTurnCapability({
-      token,
-      agentId,
-      runId,
-      sessionKey: policySessionKey,
-      sessionId,
-    });
+    const authorization = resolveMessageActionTurnCapability(turnIdentity);
     if (!authorization) {
       throw new Error("plugin delivery capability is no longer active");
     }
@@ -177,6 +257,7 @@ function createPluginToolDelivery(params: {
           runId,
           agentId,
           mediaAccess,
+          workspaceReadiness,
           onPlatformSendDispatch: async () => {
             resolveAuthorization();
           },
@@ -190,29 +271,99 @@ function createPluginToolDelivery(params: {
   };
 }
 
-/** Resolves plugin tools and their delivery context for an agent run. */
-export function resolveOpenClawPluginToolsForOptions(params: {
+/**
+ * A run's personal-library grant also governs the agent's own skills, which plugins author
+ * through their manifest `agentSkillsDir`. A personal-default requester (several profiles, or
+ * not an administrator) never gets those plugins' tools; a workspace-default requester keeps
+ * them, rechecked against the grant's current administrator authority before every call.
+ */
+function applySkillLibraryGrant(
+  tools: AnyAgentTool[],
+  options: ResolveOpenClawPluginToolsOptions | undefined,
+  registry: ReturnType<typeof getActivePluginRegistry> | undefined,
+): AnyAgentTool[] {
+  const grant = options?.skillLibraryAuthoring;
+  if (!grant) {
+    return tools;
+  }
+  const skillAuthors = new Set(
+    (registry?.plugins ?? []).flatMap((plugin) => (plugin.agentSkillsDir ? [plugin.id] : [])),
+  );
+  return tools.flatMap((tool) => {
+    const pluginId = getPluginToolMeta(tool)?.pluginId;
+    if (!pluginId || !skillAuthors.has(pluginId)) {
+      return [tool];
+    }
+    if (grant.defaultTarget === "personal") {
+      return [];
+    }
+    const guarded: AnyAgentTool = {
+      ...tool,
+      execute: (...args) => {
+        grant.assertWorkspaceCurrent?.({ sandboxed: options?.sandboxed });
+        return tool.execute(...args);
+      },
+    };
+    copyPluginToolMeta(tool, guarded);
+    return [guarded];
+  });
+}
+
+type PluginToolOptions = {
   options?: ResolveOpenClawPluginToolsOptions;
   resolvedConfig?: OpenClawConfig;
   existingToolNames?: Set<string>;
-}): AnyAgentTool[] {
-  if (params.options?.disablePluginTools) {
-    return [];
-  }
+};
 
-  const resolveCurrentRuntimeConfig = () => {
-    // Re-resolve on demand so auth/profile lookups see the active runtime config
-    // while tests can still inject a fixed resolvedConfig.
-    return resolveAgentRuntimeToolConfig(params.resolvedConfig ?? params.options?.config);
-  };
+export async function resolveOpenClawPluginToolsForOptionsAsync(
+  params: PluginToolOptions,
+): Promise<AnyAgentTool[]> {
+  const steps = resolveOpenClawPluginToolSteps(params);
+  let step = steps.next();
+  while (!step.done) {
+    await step.value;
+    step = steps.next();
+  }
+  return step.value;
+}
+
+export function resolveOpenClawPluginToolsForOptions(params: PluginToolOptions): AnyAgentTool[] {
+  const steps = resolveOpenClawPluginToolSteps(params);
+  const step = steps.next();
+  if (!step.done) {
+    void step.value.catch(() => {});
+    throw new Error("Workspace preparation is pending; use asynchronous tool construction.");
+  }
+  return step.value;
+}
+
+function* resolveOpenClawPluginToolSteps(
+  params: PluginToolOptions,
+): Generator<Promise<void>, AnyAgentTool[], void> {
+  const inputConfig = params.resolvedConfig ?? params.options?.config;
+  const availabilityConfig = selectLiveRuntimeConfig(inputConfig);
+  // Bind ownership before reload replaces the source snapshot. Explicit run
+  // overrides stay isolated; runtime-owned contexts follow later publications.
+  const followsRuntimeConfig =
+    inputConfig === undefined || availabilityConfig === getRuntimeConfigSnapshot();
+  const resolveCurrentRuntimeConfig = () =>
+    followsRuntimeConfig ? selectLiveRuntimeConfig() : availabilityConfig;
   const pluginToolInputs = resolveOpenClawPluginToolInputs({
     options: params.options,
     resolvedConfig: params.resolvedConfig,
-    runtimeConfig: resolveCurrentRuntimeConfig(),
+    runtimeConfig: availabilityConfig,
     getRuntimeConfig: resolveCurrentRuntimeConfig,
   });
   const authProfileStore = params.options?.authProfileStore;
-  const availabilityConfig = resolveCurrentRuntimeConfig();
+  const requesterOwner =
+    pluginToolInputs.context.senderIsOwner === true
+      ? undefined
+      : bindRequesterOwnerIdentity({
+          runId: params.options?.runId,
+          sessionKey: pluginToolInputs.context.sessionKey,
+          sessionId: pluginToolInputs.context.sessionId,
+          agentId: pluginToolInputs.context.agentId,
+        });
   const delivery = createPluginToolDelivery({
     options: params.options,
     context: pluginToolInputs.context,
@@ -226,24 +377,71 @@ export function resolveOpenClawPluginToolsForOptions(params: {
         includePluginSyntheticAuth: false,
       })
     : undefined;
-  const hasAuthForProvider = authProfileStore
-    ? (providerId: string) =>
-        hasProviderAuthForTool({
+  // A typed query sees only ordered stored profiles of that type, matching what
+  // resolveApiKeyForProvider would select for the same query.
+  const listTypedToolProfileIds = (
+    providerId: string,
+    cfg: OpenClawConfig | undefined,
+    credentialType: NonNullable<OpenClawPluginToolAuthQuery["credentialType"]>,
+  ): string[] =>
+    !authProfileStore ||
+    resolveProviderAuthScope({
+      provider: providerId,
+      config: cfg,
+      workspaceDir: pluginToolInputs.context.workspaceDir,
+    }) === "plugin"
+      ? []
+      : resolveAuthProfileOrder({
+          cfg,
+          store: authProfileStore,
           provider: providerId,
-          cfg: availabilityConfig,
-          workspaceDir: pluginToolInputs.context.workspaceDir,
-          agentDir: params.options?.agentDir,
-          authStore: authProfileStore,
-          runtimeLookup: availabilityRuntimeLookup,
-        })
+          includePendingOAuthRefresh: true,
+        }).filter((profileId) => authProfileStore.profiles[profileId]?.type === credentialType);
+  const hasAuthForProvider = authProfileStore
+    ? (providerId: string, query?: OpenClawPluginToolAuthQuery) =>
+        query?.credentialType
+          ? listTypedToolProfileIds(providerId, availabilityConfig, query.credentialType).length > 0
+          : hasProviderAuthForTool({
+              provider: providerId,
+              cfg: availabilityConfig,
+              workspaceDir: pluginToolInputs.context.workspaceDir,
+              agentDir: params.options?.agentDir,
+              authStore: authProfileStore,
+              runtimeLookup: availabilityRuntimeLookup,
+            })
     : undefined;
   const resolveApiKeyForProvider = authProfileStore
-    ? async (providerId: string): Promise<string | undefined> => {
+    ? async (
+        providerId: string,
+        query?: OpenClawPluginToolAuthQuery,
+      ): Promise<string | undefined> => {
         const cfg = resolveCurrentRuntimeConfig();
+        const workspaceDir = pluginToolInputs.context.workspaceDir;
+        if (query?.credentialType) {
+          for (const profileId of listTypedToolProfileIds(providerId, cfg, query.credentialType)) {
+            const resolved = await resolveApiKeyForProfile({
+              cfg,
+              store: authProfileStore,
+              profileId,
+              agentDir: params.options?.agentDir,
+            });
+            if (resolved?.apiKey) {
+              return resolved.apiKey;
+            }
+          }
+          return undefined;
+        }
+        // This preparation excludes plugin auth, including agent-profile substitutes.
+        if (
+          resolveProviderAuthScope({ provider: providerId, config: cfg, workspaceDir }) === "plugin"
+        ) {
+          return undefined;
+        }
         for (const profileId of resolveAuthProfileOrder({
           cfg,
           store: authProfileStore,
           provider: providerId,
+          includePendingOAuthRefresh: true,
         })) {
           const resolved = await resolveApiKeyForProfile({
             cfg,
@@ -255,7 +453,6 @@ export function resolveOpenClawPluginToolsForOptions(params: {
             return resolved.apiKey;
           }
         }
-        const workspaceDir = pluginToolInputs.context.workspaceDir;
         const runtimeLookup = createRuntimeProviderAuthLookup({
           cfg,
           workspaceDir,
@@ -299,8 +496,22 @@ export function resolveOpenClawPluginToolsForOptions(params: {
     : requestRegistry;
   const loadContext = getPluginRuntimeLoadContext(preparedRegistry);
   const metadataSnapshot = preparedModelRuntime?.metadataSnapshot ?? loadContext?.metadataSnapshot;
-  const pluginTools = resolvePluginTools({
+  const assertCallerCurrent = captureGatewayToolCallerAssertion();
+  const assertRequestCurrent = params.options?.assertInvocationCurrent;
+  const resolution = {
     ...pluginToolInputs,
+    bindExecutionCapabilities: preparePluginToolExecutionCapabilities({
+      sandbox: params.options?.sandbox?.enabled ? params.options.sandbox : undefined,
+      skillsSnapshot: params.options?.pluginExecutionSkillsSnapshot,
+      signal: params.options?.abortSignal,
+      authority: params.options?.pluginExecutionAuthority,
+      modelContextWindowTokens: params.options?.modelContextWindowTokens,
+      preparedModelRuntime,
+      config: availabilityConfig,
+      agentId: pluginToolInputs.context.agentId,
+      sessionKey: pluginToolInputs.context.sessionKey,
+      sessionId: pluginToolInputs.context.sessionId,
+    }),
     context: {
       ...pluginToolInputs.context,
       ...(delivery ? { delivery } : {}),
@@ -308,6 +519,13 @@ export function resolveOpenClawPluginToolsForOptions(params: {
       ...(resolveApiKeyForProvider ? { resolveApiKeyForProvider } : {}),
     },
     existingToolNames,
+    assertInvocationCurrent: assertRequestCurrent
+      ? () => {
+          assertCallerCurrent?.();
+          assertRequestCurrent();
+        }
+      : assertCallerCurrent,
+    ownerContinuation: requesterOwner,
     clientCaps: params.options?.clientCaps,
     toolAllowlist: params.options?.pluginToolAllowlist,
     toolDenylist: params.options?.pluginToolDenylist,
@@ -323,18 +541,180 @@ export function resolveOpenClawPluginToolsForOptions(params: {
           },
         }
       : {}),
-  });
+  };
+  const pluginTools = applySkillLibraryGrant(
+    captureAgentWorkspaceReadiness(pluginToolInputs.context.sessionKey)
+      ? yield* resolvePluginToolsSteps(resolution)
+      : resolvePluginTools(resolution),
+    params.options,
+    runtimeRegistry,
+  );
   for (const tool of pluginTools) {
     existingToolNames.add(tool.name);
   }
-  pluginTools.push(
-    ...createNodePluginTools({
-      existingToolNames,
-      toolAllowlist: params.options?.pluginToolAllowlist,
-      toolDenylist: params.options?.pluginToolDenylist,
-      agentSessionKey: pluginToolInputs.context.sessionKey,
-    }),
-  );
+  const nodeAgentSessionKey = pluginToolInputs.context.sessionKey;
+  const existingNormalized = new Set([...existingToolNames].map(normalizeToolPolicyName));
+  const allowlist = createPluginToolAllowlist(params.options?.pluginToolAllowlist);
+  const denylist = compileGlobPatterns({
+    raw: params.options?.pluginToolDenylist,
+    normalize: normalizeToolPolicyName,
+  });
+  const entries: MaterializedNodeToolEntry[] = [];
+  const nameCounts = new Map<string, number>();
+  for (const entry of listConnectedNodePluginTools()) {
+    const descriptor = entry.descriptor;
+    const command = descriptor.command?.trim();
+    const normalizedName = normalizeToolPolicyName(descriptor.name);
+    if (!command || !normalizedName) {
+      continue;
+    }
+    entries.push({ ...entry, command, normalizedName });
+    nameCounts.set(normalizedName, (nameCounts.get(normalizedName) ?? 0) + 1);
+  }
+
+  for (const entry of entries) {
+    const descriptor = entry.descriptor;
+    let toolName: string | undefined = descriptor.name;
+    if (
+      (nameCounts.get(entry.normalizedName) ?? 1) !== 1 ||
+      existingNormalized.has(entry.normalizedName)
+    ) {
+      toolName = undefined;
+      const prefix = `${sanitizeNodeIdFragment(entry.nodeId)}_`;
+      for (let index = 0; index < 100; index += 1) {
+        const suffix = index === 0 ? "" : `_${index + 1}`;
+        const maxBaseLength = Math.max(
+          1,
+          NODE_PLUGIN_TOOL_NAME_MAX_LENGTH - prefix.length - suffix.length,
+        );
+        const candidate = `${prefix}${descriptor.name.slice(0, maxBaseLength)}${suffix}`;
+        const normalized = normalizeToolPolicyName(candidate);
+        if (
+          NODE_PLUGIN_TOOL_NAME_RE.test(candidate) &&
+          normalized &&
+          !existingNormalized.has(normalized)
+        ) {
+          toolName = candidate;
+          break;
+        }
+      }
+    }
+    if (!toolName) {
+      continue;
+    }
+    const pluginId = normalizeToolPolicyName(descriptor.pluginId);
+    const exposedToolName = normalizeToolPolicyName(toolName);
+    if (
+      matchesAnyGlobPattern(pluginId, denylist) ||
+      matchesAnyGlobPattern(entry.normalizedName, denylist) ||
+      matchesAnyGlobPattern(exposedToolName, denylist) ||
+      matchesAnyGlobPattern("group:plugins", denylist)
+    ) {
+      continue;
+    }
+    // Unregistered nodes cannot grant themselves plugin-scoped access by
+    // claiming another plugin's ID. Only the reserved node-mcp ID is trusted.
+    const pluginIdTrusted = entry.registered || pluginId === NODE_MCP_PLUGIN_ID;
+    if (
+      !allowlist.includesDefaults &&
+      !(
+        (pluginIdTrusted && allowlist.allowsPlugin(pluginId)) ||
+        allowlist.allowsToolName(entry.normalizedName) ||
+        allowlist.allowsToolName(exposedToolName)
+      )
+    ) {
+      continue;
+    }
+    existingNormalized.add(exposedToolName);
+    const mcpTool = descriptor.command === NODE_MCP_TOOLS_CALL_COMMAND ? descriptor.mcp : undefined;
+    const tool: AnyAgentTool = {
+      name: toolName,
+      label: toolName,
+      description: `${descriptor.description} (node: ${entry.displayName?.trim() || entry.nodeId})`,
+      // SAFETY: normalized paired-node JSON schemas need no TypeBox-only metadata when forwarded.
+      parameters: descriptor.parameters as never,
+      ...(mcpTool
+        ? { executionMode: "sequential" as const, resultContentSource: "network" as const }
+        : {}),
+      execute: async (toolCallId, toolParams, signal) => {
+        const assistantTurnId = getAgentToolAssistantTurnId();
+        using elicitation =
+          mcpTool && resolveCurrentRuntimeConfig()?.mcp?.apps?.enabled === true
+            ? registerNodeToolElicitation(entry.nodeId, nodeAgentSessionKey, signal)
+            : undefined;
+        const inputAllowance = elicitation ? MCP_ELICITATION_TIMEOUT_MS : 0;
+        const raw = await callGatewayTool(
+          "node.invoke",
+          {
+            timeoutMs: mcpTool
+              ? NODE_MCP_TOOL_CALL_GATEWAY_TIMEOUT_MS + inputAllowance
+              : NODE_PLUGIN_TOOL_CALL_GATEWAY_TIMEOUT_MS,
+          },
+          {
+            nodeId: entry.nodeId,
+            command: entry.command,
+            params: mcpTool
+              ? {
+                  server: mcpTool.server,
+                  tool: mcpTool.tool,
+                  arguments: toolParams,
+                  ...(elicitation ? { elicitationId: elicitation.id } : {}),
+                }
+              : toolParams,
+            timeoutMs: mcpTool
+              ? NODE_MCP_TOOL_CALL_TIMEOUT_MS + inputAllowance
+              : NODE_PLUGIN_TOOL_CALL_TIMEOUT_MS,
+            idempotencyKey: assistantTurnId ? `${assistantTurnId}:${toolCallId}` : toolCallId,
+            ...(nodeAgentSessionKey ? { sessionKey: nodeAgentSessionKey } : {}),
+          },
+          { scopes: ["operator.write"], ...(signal ? { signal } : {}) },
+        );
+        const payload = isRecord(raw) && "payload" in raw ? raw.payload : raw;
+        if (mcpTool) {
+          return isRecord(payload)
+            ? projectMcpCallToolResult(payload, {
+                mcpServer: mcpTool.server,
+                mcpTool: mcpTool.tool,
+              })
+            : jsonResult(payload);
+        }
+        const result = isAgentToolResult(payload) ? payload : jsonResult(payload);
+        return descriptor.mcp ? setMcpCodeModeGuestResultFromAgentResult(result) : result;
+      },
+    };
+    if (mcpTool && availabilityConfig?.mcp?.apps?.enabled) {
+      // A dedicated worker using the Gateway route must wait through the same user question.
+      bindAgentToolExecutionLocation(tool, {
+        kind: "gateway",
+        timeout: { minimumMs: NODE_MCP_TOOL_CALL_GATEWAY_TIMEOUT_MS + MCP_ELICITATION_TIMEOUT_MS },
+      });
+    }
+    setPluginToolMeta(tool, {
+      pluginId: descriptor.pluginId,
+      optional: false,
+      ...(descriptor.mcp
+        ? {
+            mcp: {
+              serverName: descriptor.mcp.server,
+              safeServerName: sanitizeServerName(descriptor.mcp.server, new Set<string>()),
+              toolName: descriptor.mcp.tool,
+              operation: "tool",
+              ...(descriptor.pluginId === NODE_MCP_PLUGIN_ID && mcpTool
+                ? {
+                    node: {
+                      id: entry.nodeId,
+                      ...(entry.displayName?.trim()
+                        ? { displayName: entry.displayName.trim() }
+                        : {}),
+                    },
+                  }
+                : {}),
+            },
+          }
+        : {}),
+    });
+    pluginTools.push(tool);
+  }
 
   return pluginTools;
 }

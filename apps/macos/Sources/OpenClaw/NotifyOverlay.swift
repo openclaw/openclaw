@@ -20,6 +20,7 @@ final class NotifyOverlayController {
     private var window: NSPanel?
     private var hostingView: NSHostingView<NotifyOverlayView>?
     private var dismissTask: Task<Void, Never>?
+    @ObservationIgnored private var dismissalID: UUID?
 
     private let width: CGFloat = 360
     private let padding: CGFloat = 12
@@ -27,12 +28,12 @@ final class NotifyOverlayController {
     private let minHeight: CGFloat = 64
 
     func present(title: String, body: String, autoDismissAfter: TimeInterval = 6) {
+        let isFirst = !self.model.isVisible || self.dismissalID != nil
+        self.dismissalID = nil
         self.dismissTask?.cancel()
         self.model.title = title
         self.model.body = body
-        self.ensureWindow()
-        self.hostingView?.rootView = NotifyOverlayView(controller: self)
-        self.presentWindow()
+        self.presentWindow(isFirst: isFirst)
 
         if autoDismissAfter > 0 {
             self.dismissTask = Task { [weak self] in
@@ -52,28 +53,32 @@ final class NotifyOverlayController {
     func dismiss() {
         self.dismissTask?.cancel()
         self.dismissTask = nil
+        let dismissalID = UUID()
+        self.dismissalID = dismissalID
         guard let window else { return }
 
-        OverlayPanelFactory.animateDismissAndHide(window: window, offsetX: 8, offsetY: 6) {
+        OverlayPanelFactory.animateDismiss(window: window, offsetX: 8, offsetY: 6) { [weak self] in
+            guard let self, self.dismissalID == dismissalID else { return }
+            window.orderOut(nil)
             self.model.isVisible = false
+            self.dismissalID = nil
         }
     }
 
     // MARK: - Private
 
-    private func presentWindow() {
+    private func presentWindow(isFirst: Bool) {
         self.ensureWindow()
         self.hostingView?.rootView = NotifyOverlayView(controller: self)
         let target = self.targetFrame()
-        let isFirst = !self.model.isVisible
         if isFirst { self.model.isVisible = true }
         OverlayPanelFactory.present(
             window: self.window,
             isFirstPresent: isFirst,
             target: target)
         { window in
-            self.updateWindowFrame(animate: true)
-            window.orderFrontRegardless()
+            OverlayPanelFactory.applyFrame(window: self.window, target: self.targetFrame(), animate: true)
+            AppActivation.shared.orderFrontRegardless(window: window)
         }
     }
 
@@ -100,28 +105,21 @@ final class NotifyOverlayController {
         return NSRect(origin: origin, size: size)
     }
 
-    private func updateWindowFrame(animate: Bool = false) {
-        OverlayPanelFactory.applyFrame(window: self.window, target: self.targetFrame(), animate: animate)
-    }
-
     private func measuredHeight() -> CGFloat {
         let maxWidth = self.width - self.padding * 2
         let titleFont = NSFont.systemFont(ofSize: 13, weight: .semibold)
         let bodyFont = NSFont.systemFont(ofSize: 12, weight: .regular)
 
-        let titleRect = (self.model.title as NSString).boundingRect(
-            with: CGSize(width: maxWidth, height: .greatestFiniteMagnitude),
-            options: [.usesLineFragmentOrigin, .usesFontLeading],
-            attributes: [.font: titleFont],
-            context: nil)
-
-        let bodyRect = (self.model.body as NSString).boundingRect(
-            with: CGSize(width: maxWidth, height: .greatestFiniteMagnitude),
-            options: [.usesLineFragmentOrigin, .usesFontLeading],
-            attributes: [.font: bodyFont],
-            context: nil)
-
-        let contentHeight = ceil(titleRect.height + 6 + bodyRect.height)
+        func height(_ text: String, font: NSFont) -> CGFloat {
+            (text as NSString).boundingRect(
+                with: CGSize(width: maxWidth, height: .greatestFiniteMagnitude),
+                options: [.usesLineFragmentOrigin, .usesFontLeading],
+                attributes: [.font: font],
+                context: nil).height
+        }
+        let contentHeight = ceil(height(self.model.title, font: titleFont) + 6 + height(
+            self.model.body,
+            font: bodyFont))
         let total = contentHeight + self.padding * 2
         return max(self.minHeight, min(total, self.maxHeight))
     }

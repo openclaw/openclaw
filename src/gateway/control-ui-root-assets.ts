@@ -2,6 +2,23 @@ import { normalizeControlUiBasePath } from "./control-ui-shared.js";
 
 export const CONTROL_UI_BUILD_ID_ATTRIBUTE = "data-openclaw-control-ui-build-id";
 
+/** Bundled identities end in the public files' 64-character digest, independent of release ID. */
+export function controlUiPublicAssetVersion(buildId: string): string {
+  return buildId.slice(-64);
+}
+
+export function isImmutableControlUiPublicAsset(
+  asset: string,
+  version: string | null,
+  buildId: string,
+): boolean {
+  // Cached build artifacts can still emit the full current build identity.
+  return (
+    isControlUiVersionedPublicAsset(asset) &&
+    (version === buildId || version === controlUiPublicAssetVersion(buildId))
+  );
+}
+
 /** Root files emitted by the Control UI build and served under any configured mount. */
 export const CONTROL_UI_ROOT_PUBLIC_ASSETS = [
   "apple-touch-icon.png",
@@ -10,6 +27,7 @@ export const CONTROL_UI_ROOT_PUBLIC_ASSETS = [
   "favicon.svg",
   "manifest.webmanifest",
   "sw.js",
+  "pdf-preview-worker.js",
 ] as const;
 export type ControlUiRootPublicAsset = (typeof CONTROL_UI_ROOT_PUBLIC_ASSETS)[number];
 
@@ -21,7 +39,7 @@ export function isControlUiRootPublicAsset(value: string): value is ControlUiRoo
 export function isControlUiVersionedPublicAsset(value: string): boolean {
   return (
     (isControlUiRootPublicAsset(value) && value !== "sw.js") ||
-    /^(?:fonts\/[^/]+\.(?:css|woff2)|themes\/[^/]+\.css|(?:provider-icons|file-icons(?:\/[^/]+)*)\/[^/]+\.svg|(?:plugin-art|app-art|community-art)\/[^/]+\.webp)$/u.test(
+    /^(?:fonts\/[^/]+\.(?:css|woff2)|themes\/[^/]+\.css|(?:provider-icons|cloud-provider-icons|file-icons(?:\/[^/]+)*)\/[^/]+\.svg|(?:app-art|community-art)\/[^/]+\.webp)$/u.test(
       value,
     )
   );
