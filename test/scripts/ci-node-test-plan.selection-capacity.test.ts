@@ -66,17 +66,19 @@ it("shares selected serial setup within the shortest contributing timeout", () =
     }),
     "qualified serial selection",
   );
-  expect(
+  const serial = expectDefined(
     selected.find((job) =>
       serialTargets.every((target) =>
         job.groups.some((group) => group.includePatterns?.includes(target)),
       ),
     ),
-  ).toMatchObject({
+    "shared serial selection",
+  );
+  expect(serial).toMatchObject({
     runner: "blacksmith-32vcpu-ubuntu-2404",
     planConcurrency: 1,
-    timeoutMinutes: 60,
   });
+  expect(serial.timeoutMinutes ?? 60).toBe(60);
   expect(
     selected
       .flatMap((job) => job.groups.flatMap((group) => group.includePatterns ?? []))

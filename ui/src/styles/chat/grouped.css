@@ -701,8 +701,12 @@
   text-decoration: underline;
 }
 
-.chat-steer-now {
-  margin-block-start: 4px;
+/* Holds the same total space as a delivered message's action row, but sits right
+   under its bubble (like the final footer) so it reads as part of that message. */
+.chat-message-actions-row--steer {
+  align-items: start;
+  min-height: 24px;
+  margin-block: 0 4px;
 }
 
 /* Chat divider (e.g., compaction marker) */

@@ -13,7 +13,7 @@ import type {
   GatewayScopeUpgrade,
   ScopeUpgradeBinding,
 } from "@openclaw/gateway-client/scope-upgrade";
-import { asRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { trackForegroundActivity } from "../app/foreground-activity.ts";
 import { NativeGatewayAuthUnavailableError } from "../app/native-gateway-auth.ts";
 import { isRemoteControlUiIngress } from "../app/remote-ingress.ts";
@@ -226,14 +226,6 @@ export class GatewayBrowserClient {
         if (this.pendingPairing) {
           this.handlePairingResolution(event);
           return;
-        }
-        if (
-          this.connectionHello &&
-          event.event === "shutdown" &&
-          typeof asRecord(event.payload).restartExpectedMs === "number"
-        ) {
-          // A known restart starts slightly sooner; transport retains exponential backoff and jitter.
-          this.client.resetReconnectBackoff(700);
         }
         this.chatEvents.dispatch(event, this.opts.onEvent);
       },
