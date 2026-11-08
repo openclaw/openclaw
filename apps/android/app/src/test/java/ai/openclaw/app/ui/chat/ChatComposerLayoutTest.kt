@@ -295,6 +295,24 @@ class ChatComposerLayoutTest {
   }
 
   @Test
+  fun compactComposerRetainsSeparateMinimumTouchTargets() {
+    val height = mutableStateOf(720.dp)
+    showChat(viewportWidth = 320.dp, viewportHeight = { height.value })
+    composerEditor().performTextReplacement("Touch target draft")
+    composeRule.onNodeWithContentDescription(nativeString("Details")).assertDoesNotExist()
+    assertComposerControlsVisible(primaryAction = "Send")
+
+    composeRule.runOnIdle { height.value = 180.dp }
+    composeRule.onNodeWithContentDescription(nativeString("Details")).assertIsDisplayed()
+    assertComposerControlsVisible(primaryAction = "Send")
+    composerEditor().assertTextEquals("Touch target draft")
+
+    composeRule.runOnIdle { height.value = 720.dp }
+    composeRule.onNodeWithContentDescription(nativeString("Details")).assertDoesNotExist()
+    assertComposerControlsVisible(primaryAction = "Send")
+  }
+
+  @Test
   fun placeholderFollowsComposerOwnerWithoutChangingBoundDrafts() {
     val scale = mutableStateOf(1f)
     val model = showChat(viewportWidth = 320.dp, viewportHeight = { 640.dp }, fontScale = { scale.value })
@@ -6525,7 +6543,7 @@ class ChatComposerLayoutTest {
     controlBounds.forEach { bounds ->
       val retainsTouchTarget =
         with(composeRule.density) {
-          (bounds.right - bounds.left).roundToPx() >= (if (compact) 36.dp else 48.dp).roundToPx() &&
+          (bounds.right - bounds.left).roundToPx() >= 48.dp.roundToPx() &&
             (bounds.bottom - bounds.top).roundToPx() >= 48.dp.roundToPx()
         }
       assertTrue("Composer controls must retain their touch targets: $bounds inside $viewport", retainsTouchTarget)

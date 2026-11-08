@@ -3421,16 +3421,15 @@ private fun ChatComposer(
         )
         BoxWithConstraints(Modifier.fillMaxWidth()) {
           val toolbarInset = if (maxWidth >= 360.dp) 4.dp else 0.dp
-          val iconWidth = if (onOpenDetails != null) 36.dp else ClawTheme.spacing.touchTarget
           val showEffort = thinkingSupported || fastModeEnabled || fastMode
           val primaryAction = resolveChatComposerPrimaryAction(talkActive, pendingRunCount > 0, hasContent)
           Row(Modifier.fillMaxWidth().padding(horizontal = toolbarInset), verticalAlignment = Alignment.CenterVertically) {
             if (onOpenDetails != null) {
-              IconButton(onClick = onOpenDetails, modifier = Modifier.size(width = 36.dp, height = ClawTheme.spacing.touchTarget)) {
+              IconButton(onClick = onOpenDetails, modifier = Modifier.size(ClawTheme.spacing.touchTarget)) {
                 Icon(Icons.Default.MoreVert, contentDescription = nativeString("Details"))
               }
             }
-            IconButton(onClick = onOpenAttachments, enabled = inputEnabled, modifier = Modifier.size(width = iconWidth, height = ClawTheme.spacing.touchTarget)) {
+            IconButton(onClick = onOpenAttachments, enabled = inputEnabled, modifier = Modifier.size(ClawTheme.spacing.touchTarget)) {
               Icon(Icons.Default.Add, contentDescription = nativeString("Add attachment"), tint = ClawTheme.colors.textMuted, modifier = Modifier.size(24.dp))
             }
             Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
@@ -3458,7 +3457,6 @@ private fun ChatComposer(
               } else {
                 Box {
                   ChatComposerMicButton(
-                    modifier = Modifier.width(iconWidth),
                     dictationState = dictationState,
                     dictationEnabled = ownerReady && dictationEnabled,
                     voiceNoteEnabled = ownerReady && recordVoiceNoteEnabled,
