@@ -1,0 +1,2 @@
+57
+# DNS setup atomic Corefile publication: a failed rename retains the previous file, operator mode/group/directory mode survive the replacement inode, and dangling or symlinked publication targets resolve to their final file (#184888).

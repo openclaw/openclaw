@@ -154,6 +154,63 @@ describe("dns-cli probe bounds", () => {
     );
   });
 
+  it("keeps the previous Corefile when publication fails (#184888)", async () => {
+    const corefilePath = path.join(brewPrefix, "etc", "coredns", "Corefile");
+    fs.mkdirSync(path.dirname(corefilePath), { recursive: true });
+    fs.writeFileSync(corefilePath, "old");
+    // A crash or ENOSPC between staging and publication must not truncate it.
+    const renameSync = fs.renameSync;
+    vi.spyOn(fs, "renameSync").mockImplementation((from, to) => {
+      if (to === corefilePath) {
+        throw Object.assign(new Error("crash"), { code: "EIO" });
+      }
+      return renameSync(from, to);
+    });
+
+    await expect(runDnsSetup()).rejects.toThrow("crash");
+    expect(fs.readFileSync(corefilePath, "utf-8")).toBe("old");
+  });
+
+  it("keeps an existing Corefile mode, group, and directory mode (#184888)", async () => {
+    const etcDir = path.join(brewPrefix, "etc", "coredns");
+    const corefilePath = path.join(etcDir, "Corefile");
+    fs.mkdirSync(etcDir, { recursive: true });
+    fs.chmodSync(etcDir, 0o755);
+    fs.writeFileSync(corefilePath, "x", { mode: 0o640 });
+    const groups = process.getgroups?.() ?? [];
+    const gid = groups.find((group) => group !== fs.statSync(corefilePath).gid);
+    if (gid !== undefined) {
+      fs.chownSync(corefilePath, -1, gid);
+    }
+
+    await runDnsSetup();
+
+    const published = fs.statSync(corefilePath);
+    expect([published.mode & 0o7777, fs.statSync(etcDir).mode & 0o7777]).toEqual([0o640, 0o755]);
+    if (gid !== undefined) {
+      // A rename publishes a new inode; the operator's group must survive it.
+      expect(published.gid).toBe(gid);
+    }
+  });
+
+  it.each(["dangling chain", "linked import dir"])(
+    "publishes the Corefile through a %s (#184888)",
+    async (shape) => {
+      const etcDir = path.join(brewPrefix, "etc", "coredns");
+      fs.mkdirSync(etcDir, { recursive: true });
+      if (shape === "dangling chain") {
+        fs.symlinkSync("missing.conf", path.join(etcDir, "Corefile.link"));
+        fs.symlinkSync("Corefile.link", path.join(etcDir, "Corefile"));
+      } else {
+        fs.symlinkSync(".", path.join(etcDir, "conf.d"));
+      }
+
+      await runDnsSetup();
+
+      expect(fs.readFileSync(path.join(etcDir, "Corefile"), "utf-8")).toContain("import ");
+    },
+  );
+
   it("reports missing tailnet IP before starting setup", async () => {
     vi.spyOn(tailnet, "pickPrimaryTailnetIPv4").mockReturnValue(undefined);
     await expect(runDnsSetup()).rejects.toMatchObject({
