@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { createIdleImport } from "./idle-import.ts";
 
 const loadedModule = { ready: true };
@@ -28,6 +29,17 @@ afterEach(() => {
 });
 
 describe("createIdleImport", () => {
+  it("settles a shared successful import when one consumer retires", async () => {
+    const pending = createDeferred<typeof loadedModule>();
+    const shared = createIdleImport(() => pending.promise);
+    const first = shared.load();
+    const second = shared.load();
+    shared.dispose();
+    pending.resolve(loadedModule);
+    await expect(first).resolves.toBe(loadedModule);
+    await expect(second).resolves.toBe(loadedModule);
+  });
+
   it.each([false, true])(
     "waits out an import outage without retrying a disposed owner (%s)",
     async (dispose) => {

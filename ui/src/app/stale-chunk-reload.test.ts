@@ -3,8 +3,12 @@ import { CONTROL_UI_BASE_PATH_ATTRIBUTE } from "../../../src/gateway/control-ui-
 import { createDeferred as deferred } from "../../../test/helpers/promise.js";
 import { CONTROL_UI_BUILD_INFO } from "../build-info.ts";
 import { i18n } from "../i18n/index.ts";
-import * as storageAccess from "../local-storage.ts";
 import { registerControlUiReloadGuard } from "./document-reload-guard.ts";
+import {
+  dispatchPreloadError,
+  memoryStorage,
+  stubDocumentNavigation,
+} from "./stale-chunk-reload.test-support.ts";
 import {
   cancelStaleChunkRecovery,
   installMissingStylesheetRecovery,
@@ -49,42 +53,6 @@ function stubHangingDocumentFetch() {
   );
   vi.stubGlobal("fetch", fetchMock);
   return fetchMock;
-}
-
-function memoryStorage(initial: Record<string, string> = {}): Storage {
-  const store = new Map(Object.entries(initial));
-  return {
-    get length() {
-      return store.size;
-    },
-    clear: () => store.clear(),
-    key: (index: number) => [...store.keys()][index] ?? null,
-    removeItem: (key: string) => {
-      store.delete(key);
-    },
-    getItem: (key: string) => store.get(key) ?? null,
-    setItem: (key: string, value: string) => void store.set(key, value),
-  };
-}
-
-function stubDocumentNavigation() {
-  vi.useFakeTimers();
-  const target = window;
-  const replace = vi.fn();
-  vi.stubGlobal("window", {
-    location: { href: target.location.href, replace },
-    addEventListener: target.addEventListener.bind(target),
-    removeEventListener: target.removeEventListener.bind(target),
-    dispatchEvent: target.dispatchEvent.bind(target),
-  });
-  vi.spyOn(storageAccess, "getSafeSessionStorage").mockReturnValue(memoryStorage());
-  return replace;
-}
-
-function dispatchPreloadError(payload: unknown) {
-  const event = new Event("vite:preloadError", { cancelable: true });
-  Object.defineProperty(event, "payload", { value: payload });
-  window.dispatchEvent(event);
 }
 
 beforeEach(() => {
@@ -815,56 +783,6 @@ describe("retryStaleChunkReloadWhenReachable", () => {
     expect(reload).toHaveBeenCalledTimes(1);
     expect(storage.getItem(GUARD_KEY)).toBe(guard(CONTROL_UI_BUILD_INFO.buildId));
   });
-});
-
-describe("installStaleChunkReloadListener", () => {
-  it.each([
-    { changed: false, retry: false },
-    { changed: true, retry: false },
-    { changed: false, retry: true },
-    { changed: true, retry: true },
-  ])(
-    "recovers background imports by build identity (changed: $changed, retried: $retry)",
-    async ({ changed, retry }) => {
-      const replace = stubDocumentNavigation();
-      const fetchMock = vi
-        .fn<typeof fetch>()
-        .mockRejectedValueOnce(new TypeError("offline"))
-        .mockImplementation(
-          async (_input, init) =>
-            new Response(
-              init?.method === "HEAD"
-                ? null
-                : `<script>globalThis.OPENCLAW_CONTROL_UI_BUILD_INFO=${JSON.stringify({ buildId: changed ? "updated-build" : CONTROL_UI_BUILD_INFO.buildId })};</script>`,
-            ),
-        );
-      vi.stubGlobal("fetch", fetchMock);
-      const uninstall = installStaleChunkReloadListener();
-      try {
-        dispatchPreloadError(new Error("boom in module evaluation"));
-        expect(fetchMock).not.toHaveBeenCalled();
-        const error = new Error("Importing a module script failed.");
-        const load = vi.fn(async () => {
-          dispatchPreloadError(error);
-          throw error;
-        });
-        const completion = retry
-          ? retryControlUiImport(load).catch(() => undefined)
-          : load().catch(() => undefined);
-        await vi.advanceTimersByTimeAsync(0);
-        await vi.dynamicImportSettled();
-        expect(replace).not.toHaveBeenCalled();
-        await vi.advanceTimersByTimeAsync(1_000);
-        await completion;
-        await vi.advanceTimersByTimeAsync(1);
-        await vi.dynamicImportSettled();
-        expect(replace).toHaveBeenCalledTimes(changed ? 1 : 0);
-        expect(load).toHaveBeenCalledTimes(retry ? 2 : 1);
-      } finally {
-        uninstall();
-      }
-    },
-  );
 });
 
 describe("installMissingStylesheetRecovery", () => {

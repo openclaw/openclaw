@@ -22,7 +22,9 @@ export function createIdleImport<T>(importModule: () => Promise<T>, onLoaded?: (
         });
       })
       .then((value) => {
-        requireActive();
+        if (onLoaded) {
+          requireActive();
+        }
         stopOnline?.();
         onLoaded?.(value);
         return value;

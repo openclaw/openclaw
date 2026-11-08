@@ -37,6 +37,7 @@ type StaleChunkReloadDeps = {
   storage?: Pick<Storage, "getItem" | "setItem"> | null;
   reload?: () => void;
   canReload?: () => boolean;
+  checkServingBuild?: boolean;
 };
 
 type RecoveryState = {
@@ -44,6 +45,7 @@ type RecoveryState = {
   attemptedAt: number;
   pending?: Promise<boolean>;
   controller?: AbortController;
+  checkServingBuild?: boolean;
 };
 
 const recoveryByStorage = new WeakMap<object, RecoveryState>();
@@ -202,22 +204,30 @@ export async function scheduleStaleChunkReload(deps: StaleChunkReloadDeps = {}):
   if (deps.buildId === undefined && recovery?.pending && recovery.buildId !== buildId) {
     return false;
   }
+  const supersedesClassification = recovery?.checkServingBuild && !deps.checkServingBuild;
   if (
     recovery?.buildId === buildId &&
     !recovery.pending &&
+    !supersedesClassification &&
     now - recovery.attemptedAt < ATTEMPT_COOLDOWN_MS
   ) {
     return false;
   }
-  if (recovery?.buildId !== buildId || !recovery.pending) {
+  // A surface's explicit reload supersedes the global listener's build classification.
+  if (recovery?.buildId !== buildId || !recovery.pending || supersedesClassification) {
     recovery?.controller?.abort();
     const controller = new AbortController();
-    const target: RecoveryState = { buildId, attemptedAt: now, controller };
+    const target: RecoveryState = {
+      buildId,
+      attemptedAt: now,
+      controller,
+      checkServingBuild: deps.checkServingBuild,
+    };
     recoveryByStorage.set(storageIdentity, target);
     // Reachability is shared by build, not owned by the first caller's connection.
     // Each caller checks its current authority at the reload below.
-    const wait = () =>
-      waitForReachableControlUiDocument(
+    const wait = () => {
+      const reachable = waitForReachableControlUiDocument(
         { timeoutMs: deps.buildId === undefined ? Infinity : undefined },
         () =>
           recoveryByStorage.get(storageIdentity) === target &&
@@ -225,6 +235,34 @@ export async function scheduleStaleChunkReload(deps: StaleChunkReloadDeps = {}):
           canReloadControlUiDocument(),
         controller.signal,
       );
+      if (!target.checkServingBuild) {
+        return reachable;
+      }
+      return reachable.then(async (available) => {
+        if (!available) {
+          return false;
+        }
+        try {
+          const response = await fetch(controlUiDocumentUrl(), {
+            cache: "no-store",
+            headers: { "X-OpenClaw-Reachability-Probe": "1" },
+            signal: AbortSignal.timeout(DOCUMENT_PROBE_TIMEOUT_MS),
+          });
+          if (!response.ok) {
+            return false;
+          }
+          // Public-asset/cache stamps can survive updates; use the full build identity.
+          const encoded = /globalThis\.OPENCLAW_CONTROL_UI_BUILD_INFO=(.*?);<\/script>/u.exec(
+            await response.text(),
+          )?.[1];
+          const buildInfo: unknown = encoded ? JSON.parse(encoded) : null;
+          return !isRecord(buildInfo) || buildInfo.buildId !== CONTROL_UI_BUILD_INFO.buildId;
+        } catch {
+          // A second interruption cannot justify replacing a usable document.
+          return false;
+        }
+      });
+    };
     const delayMs = Math.max(
       guardDelayMs,
       deps.buildId === undefined ? 0 : Math.floor(Math.random() * BUILD_RELOAD_JITTER_MS),
@@ -422,43 +460,12 @@ export async function retryStaleChunkReloadWhenReachable(
 /** Classify caught failures by the serving build, including exhausted background retries. */
 export function installStaleChunkReloadListener(): () => void {
   let active = true;
-  const canReload = () => active;
-  let recovering = false;
-  const onPreloadError = async (event: Event & { payload?: unknown }) => {
-    if (!isStaleChunkImportError(event.payload) || recovering || !canReloadControlUiDocument()) {
-      return;
+  const stop = listen(window, "vite:preloadError", (event: Event & { payload?: unknown }) => {
+    if (isStaleChunkImportError(event.payload)) {
+      // The existing target owns classification too, so dismissals retire the whole recovery.
+      void scheduleStaleChunkReload({ checkServingBuild: true, canReload: () => active });
     }
-    // Concurrent import failures share one serving-build decision.
-    recovering = true;
-    try {
-      await waitForImportReachability();
-      if (!active) {
-        return;
-      }
-      const response = await fetch(controlUiDocumentUrl(), {
-        cache: "no-store",
-        headers: { "X-OpenClaw-Reachability-Probe": "1" },
-        signal: AbortSignal.timeout(DOCUMENT_PROBE_TIMEOUT_MS),
-      });
-      if (!response.ok) {
-        return;
-      }
-      // Public-asset/cache stamps can survive updates; use the full build identity.
-      const encoded = /globalThis\.OPENCLAW_CONTROL_UI_BUILD_INFO=(.*?);<\/script>/u.exec(
-        await response.text(),
-      )?.[1];
-      const buildInfo: unknown = encoded ? JSON.parse(encoded) : null;
-      if (isRecord(buildInfo) && buildInfo.buildId === CONTROL_UI_BUILD_INFO.buildId) {
-        return;
-      }
-      await scheduleStaleChunkReload({ canReload });
-    } catch {
-      // A second interruption cannot justify replacing a usable document.
-    } finally {
-      recovering = false;
-    }
-  };
-  const stop = listen(window, "vite:preloadError", (event) => void onPreloadError(event));
+  });
   return () => {
     active = false;
     stop();
