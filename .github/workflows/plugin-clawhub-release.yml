@@ -601,7 +601,12 @@ jobs:
     name: Pack ClawHub package (${{ matrix.plugin.packageName }})
     needs: [preview_plugins_clawhub, validate_release_publish_approval]
     if: github.event_name == 'workflow_dispatch' && needs.preview_plugins_clawhub.outputs.has_candidates == 'true'
-    runs-on: ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON('ubuntu-latest'))) || ('ubuntu-latest') }}
+    # Target scripts have bridged registry access, never host networking. Keep
+    # them off self-hosted runners with privileged unauthenticated internal or
+    # metadata endpoints, credentials, or persistent host state.
+    runs-on: ubuntu-latest
+    env:
+      PACK_CONTAINER_NAME: clawhub-pack-${{ github.run_id }}-${{ github.run_attempt }}-${{ strategy.job-index }}
     permissions:
       actions: read
       contents: read
@@ -620,35 +625,6 @@ jobs:
             exit 1
           fi
 
-      - name: Checkout
-        if: inputs.prepared_artifact == ''
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-          ref: ${{ needs.preview_plugins_clawhub.outputs.ref_revision }}
-          fetch-depth: 1
-
-      - name: Setup Node environment
-        if: inputs.prepared_artifact == ''
-        uses: ./.github/actions/setup-node-env
-        with:
-          cache-mode: restore
-          node-version: ${{ env.NODE_VERSION }}
-          install-bun: "true"
-          install-deps: "true"
-
-      - name: Install pinned ClawHub CLI wrapper
-        if: inputs.prepared_artifact == ''
-        run: |
-          set -euo pipefail
-          cat > "${RUNNER_TEMP}/clawhub" <<'EOF'
-          #!/usr/bin/env bash
-          set -euo pipefail
-          exec npm exec --yes --package "${CLAWHUB_CLI_PACKAGE}" -- clawhub "$@"
-          EOF
-          chmod +x "${RUNNER_TEMP}/clawhub"
-          echo "${RUNNER_TEMP}" >> "${GITHUB_PATH}"
-
       - name: Checkout trusted artifact tooling
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -657,6 +633,19 @@ jobs:
           path: .release-tooling
           fetch-depth: 1
 
+      - name: Setup trusted Node for artifact packing
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Setup trusted pnpm for artifact packing
+        if: inputs.prepared_artifact == ''
+        uses: ./.release-tooling/.github/actions/setup-pnpm-store-cache
+        with:
+          package-manager-file: .release-tooling/package.json
+          lockfile-path: .release-tooling/pnpm-lock.yaml
+          cache-mode: off
+
       - name: Install trusted plugin tooling dependencies
         if: inputs.prepared_artifact == ''
         working-directory: .release-tooling
@@ -664,6 +653,28 @@ jobs:
           CI: "true"
         # Corepack reads this checkout's packageManager before pnpm processes arguments.
         run: pnpm install --frozen-lockfile --prefer-offline --ignore-scripts
+
+      - name: Install pinned ClawHub CLI
+        if: inputs.prepared_artifact == ''
+        working-directory: .release-tooling
+        run: |
+          set -euo pipefail
+          npm install --prefix "$GITHUB_WORKSPACE/.release-tooling/.clawhub-cli" \
+            --ignore-scripts --no-audit --no-fund --package-lock=false "${CLAWHUB_CLI_PACKAGE}"
+          test -x "$GITHUB_WORKSPACE/.release-tooling/.clawhub-cli/node_modules/.bin/clawhub"
+
+      - name: Acquire pinned isolated pack image
+        if: inputs.prepared_artifact == ''
+        run: docker pull docker.io/library/node:24.22.1-bookworm@sha256:6449e19d8184d84062525b6a7524def03146c2cb04a7f08b076680d0e8e4240a
+
+      - name: Checkout
+        if: inputs.prepared_artifact == ''
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ needs.preview_plugins_clawhub.outputs.ref_revision }}
+          path: .release-source
+          fetch-depth: 1
 
       - name: Pack ClawHub package artifact
         if: inputs.prepared_artifact == ''
@@ -675,13 +686,27 @@ jobs:
           PACKAGE_TAG: ${{ matrix.plugin.publishTag }}
           PACKAGE_DIR: ${{ matrix.plugin.packageDir }}
           OPENCLAW_CLAWHUB_PACK_OUTPUT_DIR: ${{ runner.temp }}/clawhub-package-artifact
-        run: bash .release-tooling/scripts/plugin-clawhub-publish.sh --pack "${PACKAGE_DIR}" --metadata-root .release-tooling
+        run: |
+          node .release-tooling/scripts/plugin-clawhub-pack-isolated.mjs \
+            "$GITHUB_WORKSPACE/.release-source" "$GITHUB_WORKSPACE/.release-tooling" \
+            "$OPENCLAW_CLAWHUB_PACK_OUTPUT_DIR" "$PACKAGE_DIR"
 
-      - name: Setup Node for prepared promotion
-        if: inputs.prepared_artifact != ''
-        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
-        with:
-          node-version: ${{ env.NODE_VERSION }}
+      # The synchronous helper cannot trap runner cancellation while Docker runs.
+      # Independently remove only this matrix job's deterministic container.
+      - name: Remove isolated pack container
+        if: always() && inputs.prepared_artifact == ''
+        timeout-minutes: 1
+        run: |
+          set -euo pipefail
+          [[ "$PACK_CONTAINER_NAME" =~ ^clawhub-pack-[0-9]+-[0-9]+-[0-9]+$ ]]
+          config="$(mktemp -d)"
+          trap 'rm -rf "$config"' EXIT
+          if ! result="$(env -i PATH="$PATH" docker --config "$config" rm --force "$PACK_CONTAINER_NAME" 2>&1)"; then
+            if [[ "$result" != *"No such container"* ]]; then
+              printf '%s\n' "$result" >&2
+              exit 1
+            fi
+          fi
 
       - name: Restore exact prepared ClawHub tarball
         if: inputs.prepared_artifact != ''
