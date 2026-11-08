@@ -1,2 +1,2 @@
-80
+98
 # Saved-rollout preservation, image-heavy repeat turns and cold native reuse; retains token and safe-path guards.
