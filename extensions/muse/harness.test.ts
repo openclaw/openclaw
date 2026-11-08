@@ -594,6 +594,57 @@ describe("Muse native MSP harness", () => {
     expect(result.replayMetadata?.replaySafe).toBe(false);
   });
 
+  it.each(["cutoff", "cutoffsettled"])(
+    "labels %s partial replies without completing the attempt",
+    async (prompt) => {
+      const { run, events } = setup();
+      const result = await run({ prompt });
+      const text =
+        "Partial answer: the first two steps are\n\n[Response incomplete: the provider stream ended unexpectedly.]";
+      expectFailure(result, "provider stream ended mid-reply");
+      expect(result.assistantTexts).toEqual([text]);
+      expect(
+        events
+          .filter((event) => event.stream === "assistant")
+          .map((event) => event.data.delta)
+          .join(""),
+      ).toBe(text);
+      expect(result.messagesSnapshot).toEqual([
+        expect.objectContaining({ role: "assistant", content: [{ type: "text", text }] }),
+      ]);
+      expect(result.currentAttemptCompletedAssistant).toBeUndefined();
+      expect(result.replayMetadata).toEqual({ replaySafe: false, hadPotentialSideEffects: false });
+    },
+  );
+
+  it("does not repeat native effects after duplicate cutoff events and a fresh continuation", async () => {
+    const { run, log, params } = setup(true);
+    const effectPath = join(workspace, `${params.runId}-effect.txt`);
+    vi.stubEnv("MUSE_FIXTURE_EFFECT_PATH", effectPath);
+    const onAgentToolResult = vi.fn();
+    const result = await run({ prompt: "cutofftool", onAgentToolResult });
+    expectFailure(result, "provider stream ended mid-reply");
+    expect(result.assistantTexts).toEqual([
+      "Partial answer: the first two steps are\n\n[Response incomplete: the provider stream ended unexpectedly.]",
+    ]);
+    expect(result.messagesSnapshot.filter((message) => message.role === "toolResult")).toHaveLength(
+      1,
+    );
+    expect(onAgentToolResult).toHaveBeenCalledTimes(1);
+    expect(result.replayMetadata).toEqual({ replaySafe: false, hadPotentialSideEffects: true });
+    const continued = await run({
+      prompt: "hello",
+      initialReplayState: { replayInvalid: true, hadPotentialSideEffects: true },
+    });
+    expect(terminal(continued).kind).toBe("ok");
+    expect(continued.assistantTexts).toEqual(["started: hello"]);
+    expect(continued.replayMetadata).toEqual({ replaySafe: false, hadPotentialSideEffects: true });
+    expect(await readFile(effectPath, "utf8")).toBe("effect\n");
+    const requests = await readRequests(log);
+    expect(requests.filter((request) => request.method === "turn/start")).toHaveLength(2);
+    expect(requests.filter((request) => request.method === "session/resume")).toHaveLength(0);
+  });
+
   it.each(["missing-session", "refused-session", "busy-session"])(
     "handles a refused resume for %s without replacing a busy session",
     async (id) => {

@@ -44,7 +44,11 @@ const accept = (id, params, extra = {}) =>
   reply(id, { commandId: params.commandId, status: "accepted", ...extra });
 const event = (method, params) =>
   send({ method, params: { ...active, ...params, viewCursor: String(++cursor) } });
-const sourceRange = { start: 0, end: 1 };
+const sourceRange = {
+  first: { id: "fixture-event", sequence: 1 },
+  last: { id: "fixture-event", sequence: 1 },
+  stream: { id: "fixture-session", kind: "session" },
+};
 function item(kind, status, extra = {}) {
   const itemId = `${active.turnId}-${kind}`;
   const starting = status === "inProgress";
@@ -155,6 +159,33 @@ createInterface({ input: process.stdin }).on("line", (line) => {
           message: "fixture quota exhausted",
           retryable: false,
           quota: { limitKind: "tierLimit", resetsAtMs: Date.UTC(2030, 0, 2, 3, 4) },
+        });
+      } else if (["cutoff", "cutoffsettled", "cutofftool"].includes(prompt)) {
+        if (prompt === "cutofftool") {
+          appendFileSync(process.env.MUSE_FIXTURE_EFFECT_PATH, "effect\n");
+          // Re-delivery of a settled native tool must not repeat host observations.
+          for (let delivery = 0; delivery < 2; delivery++) {
+            item("toolCall", "completed", {
+              tool: "write_file",
+              callId: "cutoff-effect",
+              args: JSON.stringify({ path: process.env.MUSE_FIXTURE_EFFECT_PATH }),
+              visibleOutput: "wrote fixture effect",
+            });
+          }
+        }
+        const text = "Partial answer: the first two steps are";
+        if (prompt !== "cutoffsettled") {
+          const itemId = item("agentMessage", "inProgress", { text: "" });
+          event("item/delta", { itemId, delta: text });
+        }
+        item("agentMessage", "completed", { text, cutOff: true });
+        if (prompt === "cutofftool") {
+          item("agentMessage", "completed", { text, cutOff: true });
+        }
+        complete("failed", {
+          kind: "modelError",
+          message: "provider stream ended mid-reply",
+          retryable: true,
         });
       } else if (["approval", "approval-settle", "approval-deny-only"].includes(prompt)) {
         const denyOnly = prompt === "approval-deny-only";

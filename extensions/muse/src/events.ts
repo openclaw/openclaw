@@ -181,10 +181,12 @@ export async function consumeTurn(
           data: projectAgentToolActivity({ toolCallId: id, name: toolName, phase: "result" }),
         });
       } else if (item.kind === "agentMessage") {
-        await emitField(item, "text", item.text ?? "");
         // The completed item is authoritative; streamed deltas only drive live UI.
-        visibleText += item.text ?? "";
-        messages.push(assistantMessage(params, [{ type: "text", text: item.text ?? "" }]));
+        // Append the notice so an already-streamed partial reply also exposes the cutoff.
+        const text = `${item.text ?? ""}${item.cutOff ? "\n\n[Response incomplete: the provider stream ended unexpectedly.]" : ""}`;
+        await emitField(item, "text", text);
+        visibleText += text;
+        messages.push(assistantMessage(params, [{ type: "text", text }]));
       } else if (item.kind === "reasoning") {
         if (item.summary) {
           for (const [index, value] of item.summary.entries()) {
