@@ -1,8 +1,12 @@
 // Irc tests cover normalize plugin behavior.
 import { describe, expect, it } from "vitest";
 import { createIrcIngressSubject } from "./ingress-identity.js";
-import { normalizeIrcAllowEntry, resolveIrcOutboundSessionRoute } from "./normalize.js";
-import { isChannelTarget, normalizeIrcMessagingTarget } from "./normalize.js";
+import {
+  isChannelTarget,
+  normalizeIrcAllowEntry,
+  normalizeIrcMessagingTarget,
+  resolveIrcOutboundSessionRoute,
+} from "./normalize.js";
 
 describe("irc normalize", () => {
   it("treats RFC 2812 + and ! channel prefixes as group conversations", () => {
