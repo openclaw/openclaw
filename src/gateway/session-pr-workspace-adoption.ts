@@ -172,7 +172,12 @@ export async function adoptUnboundPullRequestWorkspace(params: {
           resolveRepositoryIdentity(source),
         ]);
         assertIdle();
-        if (!projectRoot || repository.repoRoot !== projectRoot) {
+        if (!projectRoot) {
+          throw new Error(
+            "This conversation's project is no longer available. Publish from a chat in the checkout's repository; its files were preserved.",
+          );
+        }
+        if (repository.repoRoot !== projectRoot) {
           throw new Error(
             "This checkout belongs to a different repository than the conversation's project. Publish it from a chat in that repository; its files were preserved.",
           );
