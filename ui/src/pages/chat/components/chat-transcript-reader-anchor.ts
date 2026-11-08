@@ -17,6 +17,8 @@ type ReaderAnchorHost = {
   readonly headerHeight: number;
   readonly scrollElement: HTMLDivElement | null;
   readonly contentElement: HTMLDivElement | null;
+  readonly endAnchor: { readonly active: boolean };
+  canAutoFollow(): boolean;
 };
 
 /** A row first measured while crossing the top edge was laid out above the reader. */
@@ -87,6 +89,7 @@ export class TranscriptReaderAnchor {
   private positionOwned(): boolean {
     const { offsetState } = this.host;
     return (
+      (this.host.endAnchor.active && this.host.canAutoFollow()) ||
       this.host.initialRange.pending ||
       offsetState.hasPendingCommand ||
       offsetState.pendingInteractionAnchor !== null ||

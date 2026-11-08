@@ -11,6 +11,10 @@ export class TranscriptEndAnchor {
 
   constructor(private readonly afterCommit: (effect: () => void) => void) {}
 
+  get active(): boolean {
+    return this.offset !== null;
+  }
+
   private readonly flushReconcile = () => {
     const reconcile = this.pendingReconcile;
     this.cancelReconcile();

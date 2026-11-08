@@ -4,7 +4,7 @@ import { TranscriptLayoutOwner } from "./chat-transcript-layout-owner.ts";
 import { TranscriptOffsetState } from "./chat-transcript-offset-observer.ts";
 import { TranscriptReaderAnchor } from "./chat-transcript-reader-anchor.ts";
 
-it.each(["settled", "scrolling", "start", "start-growth", "programmatic"] as const)(
+it.each(["settled", "scrolling", "start", "start-growth", "programmatic", "end-anchored"] as const)(
   "reconciles first predecessor measurements while %s",
   async (phase) => {
     const estimate = phase === "start-growth" ? 60 : 120;
@@ -41,7 +41,8 @@ it.each(["settled", "scrolling", "start", "start-growth", "programmatic"] as con
     virtualizer.targetWindow = window;
     virtualizer.elementsCache.set("2", retained);
     const offsetState = new TranscriptOffsetState();
-    offsetState.nativeInputActive = phase !== "settled" && phase !== "programmatic";
+    offsetState.nativeInputActive =
+      phase !== "settled" && phase !== "programmatic" && phase !== "end-anchored";
     const anchor = new TranscriptReaderAnchor(
       {
         virtualizer,
@@ -53,6 +54,8 @@ it.each(["settled", "scrolling", "start", "start-growth", "programmatic"] as con
         headerHeight: 0,
         scrollElement: viewport,
         contentElement: content,
+        endAnchor: { active: phase === "end-anchored" },
+        canAutoFollow: () => true,
       },
       () => {},
     );
@@ -95,6 +98,13 @@ it.each(["settled", "scrolling", "start", "start-growth", "programmatic"] as con
       expect(predecessors[0]!.getBoundingClientRect().top).toBe(
         viewport.getBoundingClientRect().top,
       );
+      return;
+    }
+    if (phase === "end-anchored") {
+      // End placement has its own owner; first measurements must not add reader compensation.
+      expect(viewport.scrollTop).toBe(500);
+      expect(column.style.marginTop).toBe("");
+      expect(measuredTop).toBe(top - 80);
       return;
     }
     expect(measuredTop).toBe(top);

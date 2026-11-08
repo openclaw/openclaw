@@ -75,7 +75,7 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
   headerHeight = 0;
   private appliedHeaderHeight = 0;
   readonly initialRange: TranscriptInitialRange;
-  private readonly endAnchor = new TranscriptEndAnchor(
+  readonly endAnchor = new TranscriptEndAnchor(
     (fn) => this.canAutoFollow() && this.renderer.queueAfterCommit(fn),
   );
   private readonly recordEndLayoutCorrection = (before: number, after: number) => {
@@ -611,7 +611,7 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
     return this.layout.ready && !this.initialRange.pending && !this.offsetState.pendingScrollOffset;
   }
 
-  private canAutoFollow(): boolean {
+  canAutoFollow(): boolean {
     const command = this.offsetState.scrollCommand;
     return (!command || command.target === "end") && (this.callbacks.canFollowEnd?.() ?? true);
   }

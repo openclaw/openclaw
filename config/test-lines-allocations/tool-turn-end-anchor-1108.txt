@@ -1,0 +1,2 @@
+# Regression: active end placement owns predecessor resize compensation.
+10
