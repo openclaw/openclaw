@@ -157,8 +157,8 @@ describe("release readiness contract", () => {
     );
     expect(writes).toHaveLength(2);
     for (const step of writes) {
-      expect(step.run).toContain("plugin-npm-prepared-release.mjs authorize");
-      expect(step.run.indexOf("plugin-npm-prepared-release.mjs authorize")).toBeLessThan(
+      expect(step.run).toContain("plugin-npm-authorize.mjs");
+      expect(step.run.indexOf("plugin-npm-authorize.mjs")).toBeLessThan(
         step.run.indexOf('300s npm publish "$TARBALL_PATH"'),
       );
     }
