@@ -42,6 +42,7 @@ it.each([
     key: "agent:main:dashboard:12345678-90ab-4def-8234-567890abcdef",
     url: "/dashboard/main/mission-control",
     expected: "agent:main:dashboard:12345678-90ab-4def-8234-567890abcdef",
+    speculative: true,
   },
   {
     key: "agent:main:dashboard:12345678-90ab-4def-8234-567890abcdef",
@@ -70,38 +71,59 @@ it.each([
     expected: null,
   },
   {
+    key: "agent:main:dashboard:12345678-90ab-4def-8234-567890abcdef",
+    url: "/chat/main/1234567890ab4def8234567890abcdef",
+    expected: "agent:main:dashboard:12345678-90ab-4def-8234-567890abcdef",
+  },
+  {
+    key: "agent:main:dashboard:12345678-90ab-4def-8234-567890abcdef",
+    url: "/chat/main/1234567890abcdef1234567890abcdef",
+    expected: "agent:main:dashboard:12345678-90ab-4def-8234-567890abcdef",
+    speculative: true,
+  },
+  {
+    key: "agent:main:dashboard:12345678-90ab-4def-8234-567890abcdef",
+    url: "/chat/main/12345678",
+    expected: "agent:main:dashboard:12345678-90ab-4def-8234-567890abcdef",
+    speculative: true,
+  },
+  {
     key: "agent:main:main",
     url: "/chat?gatewayUrl=ws%3A%2F%2Fanother.example",
     expected: null,
   },
-])("prewarms $key at $url only when warm boot permits it", async ({ key, url, expected }) => {
-  const settings = configure({ sessionKey: key, lastActiveSessionKey: key });
-  const record = bootRecord(gatewayCredentialScope(settings.gatewayUrl), {
-    recoveryScope: "account-a",
-    profileId: null,
-    agents: makeBootRoster({
-      mainKey: "custom-main",
-      agents: [{ id: "main" }, { id: "other" }],
-    }),
-  });
-  localStorage.setItem(BOOT_RECORD_PREFIX + record.scope, JSON.stringify(record));
-  window.history.replaceState({}, "", url);
-  const startRead = spyPrewarm();
-  const runtime = bootstrapApplication();
-  onTestFinished(() => runtime.stop());
-  try {
-    if (expected) {
-      expect(startRead).toHaveBeenCalledExactlyOnceWith(
-        `scope:${JSON.stringify([record.scope, "account-a"])}\u0000${expected}`,
-      );
-    } else {
-      expect(startRead).not.toHaveBeenCalled();
+])(
+  "prewarms $key at $url only when warm boot permits it",
+  async ({ key, url, expected, speculative }) => {
+    const settings = configure({ sessionKey: key, lastActiveSessionKey: key });
+    const record = bootRecord(gatewayCredentialScope(settings.gatewayUrl), {
+      recoveryScope: "account-a",
+      profileId: null,
+      agents: makeBootRoster({
+        mainKey: "custom-main",
+        agents: [{ id: "main" }, { id: "other" }],
+      }),
+    });
+    localStorage.setItem(BOOT_RECORD_PREFIX + record.scope, JSON.stringify(record));
+    window.history.replaceState({}, "", url);
+    const startRead = spyPrewarm();
+    const runtime = bootstrapApplication();
+    onTestFinished(() => runtime.stop());
+    try {
+      if (expected) {
+        expect(startRead).toHaveBeenCalledExactlyOnceWith(
+          `scope:${JSON.stringify([record.scope, "account-a"])}\u0000${expected}`,
+          !speculative,
+        );
+      } else {
+        expect(startRead).not.toHaveBeenCalled();
+      }
+      expect(runtime.context.gateway.snapshot.phase).not.toBe("connected");
+    } finally {
+      await readSidebarBootSnapshot(runtime.context.gateway);
     }
-    expect(runtime.context.gateway.snapshot.phase).not.toBe("connected");
-  } finally {
-    await readSidebarBootSnapshot(runtime.context.gateway);
-  }
-});
+  },
+);
 it.each([
   { authMethod: "token", token: "changed-token", warm: false, retained: true },
   { authMethod: "token", token: "", warm: false, retained: true },

@@ -49,6 +49,58 @@ afterEach(async () => {
 });
 
 describe("routed transcript prewarm", () => {
+  it.each([true, false])(
+    "warms code after paint only for an admitted route: %s",
+    async (knownRoute) => {
+      let deliverPaint = () => {};
+      const load = vi.fn().mockResolvedValue([]);
+      class Stylesheet extends EventTarget {
+        sheet = null;
+      }
+      const stylesheet = new Stylesheet();
+      vi.stubGlobal("HTMLLinkElement", Stylesheet);
+      vi.stubGlobal("document", {
+        getElementById: () => stylesheet,
+        fonts: { load },
+      });
+      vi.stubGlobal(
+        "PerformanceObserver",
+        class {
+          constructor(
+            receive: (
+              list: { getEntries: () => { name: string }[] },
+              observer: { disconnect: () => void },
+            ) => void,
+          ) {
+            deliverPaint = () =>
+              receive({ getEntries: () => [{ name: "first-contentful-paint" }] }, this);
+          }
+          observe() {}
+          disconnect() {}
+        },
+      );
+      const writer = new snapshots.SessionSnapshotStore();
+      const snapshot = {
+        ...stored,
+        messages: [{ role: "assistant", content: "Use `const answer = 42` here." }],
+      };
+      writeSnapshotFixture(writer, key, snapshot);
+      await writer.flush();
+      await prewarmChatSnapshot(key, knownRoute);
+      expect(load).not.toHaveBeenCalled();
+      deliverPaint();
+      expect(load).not.toHaveBeenCalled();
+      stylesheet.dispatchEvent(new Event("load"));
+      if (knownRoute) {
+        expect(load).toHaveBeenCalledWith('14px "JetBrains Mono"');
+      } else {
+        expect(load).not.toHaveBeenCalled();
+      }
+      // The pane has not consumed the prepared snapshot to render its first glyph yet.
+      expect(new snapshots.SessionSnapshotStore().readReady(key)).toEqual(snapshot);
+    },
+  );
+
   it.each([
     { viewport: 1000, wide: true, details: true, loads: 0 },
     { viewport: 2200, wide: true, details: true, loads: 1 },

@@ -1,4 +1,4 @@
-import { controlUiSessionSlug, SESSION_UUID_SUFFIX_RE } from "@openclaw/session-url-contract";
+import { controlUiSessionSlug } from "@openclaw/session-url-contract";
 import type { RouteLocation } from "@openclaw/uirouter";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import type { SessionPathTarget } from "../../app-session-route-paths.ts";
@@ -16,15 +16,11 @@ import {
   buildAgentMainSessionKey,
   normalizeAgentId,
   parseAgentSessionKey,
+  sessionKeyUuid,
 } from "../../lib/sessions/session-key.ts";
 import { peekPrewarmedChatSnapshot } from "./chat-snapshot-prewarm.ts";
 import type { SessionRouteContext as ApplicationContext } from "./route-loader-context.ts";
 import { resolveChatSnapshotKey } from "./session-snapshot-key.ts";
-
-export function sessionKeyUuid(sessionKey: string): string | null {
-  const uuid = parseAgentSessionKey(sessionKey)?.rest.match(SESSION_UUID_SUFFIX_RE)?.[1];
-  return uuid ? uuid.toLowerCase().replaceAll("-", "") : null;
-}
 
 export async function findSnapshotSessionReference(
   context: ApplicationContext,

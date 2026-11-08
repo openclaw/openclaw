@@ -10,6 +10,7 @@ import {
   DEFAULT_MAIN_KEY,
   normalizeMainKey,
   parseAgentSessionKeyParts,
+  SESSION_UUID_SUFFIX_RE,
   type ParsedAgentSessionKey,
 } from "@openclaw/session-url-contract";
 import type { GatewayHelloOk } from "../../api/gateway.ts";
@@ -54,6 +55,11 @@ export function parseAgentSessionKey(
       ? normalized.split(":").filter(Boolean).join(":")
       : normalized,
   );
+}
+
+export function sessionKeyUuid(sessionKey: string): string | null {
+  const uuid = parseAgentSessionKey(sessionKey)?.rest.match(SESSION_UUID_SUFFIX_RE)?.[1];
+  return uuid ? uuid.toLowerCase().replaceAll("-", "") : null;
 }
 
 export function parseSessionKeyParts(

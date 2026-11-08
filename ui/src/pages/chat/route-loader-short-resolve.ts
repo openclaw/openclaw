@@ -8,9 +8,12 @@ import type { GatewaySessionRow } from "../../api/types.ts";
 import type { SessionPathTarget } from "../../app-session-route-paths.ts";
 import { waitForGatewayClient } from "../../app/gateway-readiness.ts";
 import { listen } from "../../lib/reactive/listener.ts";
-import { normalizeAgentId, parseAgentSessionKey } from "../../lib/sessions/session-key.ts";
+import {
+  normalizeAgentId,
+  parseAgentSessionKey,
+  sessionKeyUuid,
+} from "../../lib/sessions/session-key.ts";
 import type { SessionRouteContext as ApplicationContext } from "./route-loader-context.ts";
-import { sessionKeyUuid } from "./route-loader-short-cache.ts";
 export type SessionRoutePresentation = Pick<
   GatewaySessionRow,
   "key" | "agentId" | "displayName" | "boardFace"

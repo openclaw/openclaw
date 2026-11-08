@@ -121,6 +121,27 @@ export function syncTypefaceStylesheets(faces: TypefacePair): void {
   loadTypefaceStylesheet("jetbrains-mono");
 }
 
+/** Admit code's face after the shell paints, before cached transcript layout. */
+export function warmCodeTypeface(): void {
+  if (typeof document === "undefined") {
+    return;
+  }
+  const paint = new PerformanceObserver((entries) => {
+    if (!entries.getEntries().some((entry) => entry.name === "first-contentful-paint")) {
+      return;
+    }
+    paint.disconnect();
+    const stylesheet = loadTypefaceStylesheet("jetbrains-mono");
+    const load = () => void document.fonts.load('14px "JetBrains Mono"').catch(() => {});
+    if (stylesheet?.sheet) {
+      load();
+    } else if (stylesheet) {
+      listen(stylesheet, "load", load, { once: true });
+    }
+  });
+  paint.observe({ type: "paint", buffered: true });
+}
+
 export function loadTypefaceSpecimens(): void {
   UI_APPEARANCE_TYPEFACE_VALUES.forEach(loadTypefaceStylesheet);
 }

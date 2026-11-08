@@ -24,6 +24,7 @@ import {
   parseAgentSessionKey,
   resolveAgentIdFromSessionKey,
   resolveUiConfiguredMainKey,
+  sessionKeyUuid,
 } from "../../lib/sessions/session-key.ts";
 import { PendingSessionCreate } from "./pending-session-create-lazy.ts";
 import { draftSearchFromLocation, sessionRouteHints } from "./route-draft.ts";
@@ -38,7 +39,6 @@ import {
   findCachedShortSession,
   findLocalSessionReference,
   findSnapshotSessionReference,
-  sessionKeyUuid,
 } from "./route-loader-short-cache.ts";
 import {
   resolveShortSessionReference,

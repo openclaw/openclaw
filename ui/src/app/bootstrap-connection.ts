@@ -7,6 +7,7 @@ import {
   buildAgentMainSessionKey,
   isDashboardSessionKey,
   parseAgentSessionKey,
+  sessionKeyUuid,
 } from "../lib/sessions/session-key.ts";
 import { prewarmChatSnapshot } from "../pages/chat/chat-snapshot-prewarm.ts";
 import { resolveChatSnapshotKey } from "../pages/chat/session-snapshot-key.ts";
@@ -67,6 +68,9 @@ function prewarmBootChat(
         },
         { sessionKey },
       ),
+      !savedDashboardCandidate &&
+        (target?.kind !== "short" ||
+          sessionKeyUuid(sessionKey) === target.shortId.toLowerCase().replaceAll("-", "")),
     );
   }
 }

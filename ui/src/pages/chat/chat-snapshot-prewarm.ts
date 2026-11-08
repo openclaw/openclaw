@@ -1,4 +1,5 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { warmCodeTypeface } from "../../app/typography.ts";
 import { loadChatDetailsDesktopComposition } from "./components/chat-details-desktop-loader.ts";
 import { readStoredChatSnapshotRecord } from "./session-snapshot-database.ts";
 import {
@@ -60,7 +61,7 @@ function matchesDockingViewport(layout: unknown): boolean {
   }
 }
 
-export function prewarmChatSnapshot(cacheKey: string): Promise<void> {
+export function prewarmChatSnapshot(cacheKey: string, knownRoute = true): Promise<void> {
   discardPrewarmedChatSnapshot();
   const generation = snapshotStoreGeneration;
   const entry: PrewarmedSnapshot = {
@@ -94,7 +95,9 @@ export function prewarmChatSnapshot(cacheKey: string): Promise<void> {
         loadChatHistoryStateValidator(),
       ]);
       if (pending === entry) {
-        await readPrewarmedChatSnapshot(cacheKey);
+        if ((await readPrewarmedChatSnapshot(cacheKey))?.messages.length && knownRoute) {
+          warmCodeTypeface();
+        }
       }
     } catch {}
   })();

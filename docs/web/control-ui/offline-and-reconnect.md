@@ -157,6 +157,8 @@ and queued input remain under their original storage owner; they are not
 reassigned or sent under the replacement identity. Live state replaces cached
 roster data on connect, and chat resumes from its saved transcript cursor. The
 cached transcript opens at its latest messages without an initial scroll animation.
+Saved conversations also warm the code font after the shell's first contentful
+paint, while their conversation pane is being prepared.
 It retains participant and completed-work timing information and the last task
 progress card for display while connecting; live Gateway results replace those
 cached facts in place. Cached progress does not authorize offline actions. The
