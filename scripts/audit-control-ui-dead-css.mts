@@ -6,11 +6,11 @@ import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 import postcss, { type Rule } from "postcss";
-import selectorParser, { type ClassName, type Selector } from "postcss-selector-parser";
-import * as ts from "typescript/unstable/ast";
+import selectorParser, { type ClassName, type Root as SelectorRoot } from "postcss-selector-parser";
+import * as ts from "typescript/ast";
 import { groupBy } from "./lib/group-by.mts";
 import { createNativeTypeScriptParser } from "./lib/native-typescript.mts";
-import { getPropertyNameText } from "./lib/ts-guard-utils.mts";
+import { getPropertyNameText, unwrapExpression } from "./lib/ts-guard-utils.mts";
 
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(SCRIPT_DIR, "..");
@@ -26,8 +26,6 @@ const EXTERNAL_CLASS_PREFIXES = [
   // CodeMirror owns cm-* editor DOM; its Lezer highlighter owns tok-* spans.
   "cm-",
   "tok-",
-  // Web Awesome owns wa-* classes inside its component implementation.
-  "wa-",
   // ProseMirror owns the editor-root and state classes it adds to its DOM.
   "ProseMirror",
 ];
@@ -124,7 +122,49 @@ export function collectControlUiClassReferences(sourceFile: ts.SourceFile): Sour
   const literalClasses = new Set<string>();
   const stems = new Set<string>();
 
+  function collectClassKeys(expression: ts.Expression): void {
+    const value = unwrapExpression(expression);
+    if (ts.isObjectLiteralExpression(value)) {
+      for (const property of value.properties) {
+        if (ts.isSpreadAssignment(property)) {
+          collectClassKeys(property.expression);
+          continue;
+        }
+        const name = classMapPropertyName(property);
+        if (name) {
+          addLiteralClassTokens(name, literalClasses);
+        }
+      }
+    } else if (ts.isArrayLiteralExpression(value)) {
+      for (const element of value.elements) {
+        collectClassKeys(ts.isSpreadElement(element) ? element.expression : element);
+      }
+    } else if (ts.isConditionalExpression(value)) {
+      collectClassKeys(value.whenTrue);
+      collectClassKeys(value.whenFalse);
+    } else if (ts.isBinaryExpression(value)) {
+      if (value.operatorToken.kind === ts.SyntaxKind.AmpersandAmpersandToken) {
+        collectClassKeys(value.right);
+      } else if (
+        value.operatorToken.kind === ts.SyntaxKind.BarBarToken ||
+        value.operatorToken.kind === ts.SyntaxKind.QuestionQuestionToken
+      ) {
+        collectClassKeys(value.left);
+        collectClassKeys(value.right);
+      }
+    }
+  }
+
   function visit(node: ts.Node): void {
+    if (
+      ts.isJsxAttribute(node) &&
+      node.name.getText(sourceFile) === "class" &&
+      node.initializer &&
+      ts.isJsxExpression(node.initializer) &&
+      node.initializer.expression
+    ) {
+      collectClassKeys(node.initializer.expression);
+    }
     if (ts.isStringLiteralLikeNode(node)) {
       addLiteralClassTokens(node.text, literalClasses);
     } else if (ts.isTemplateExpression(node)) {
@@ -324,7 +364,7 @@ function collectSourceReferenceFiles(): {
   production: SourceReferences;
   tests: SourceReferenceFile[];
 } {
-  const sourceFiles = walkFiles(UI_SOURCE_ROOT, (fileName) => fileName.endsWith(".ts")).map(
+  const sourceFiles = walkFiles(UI_SOURCE_ROOT, (fileName) => /\.tsx?$/u.test(fileName)).map(
     (fileName) => ({ fileName, text: fs.readFileSync(fileName, "utf8") }),
   );
   const productionFiles: SourceReferenceFile[] = [];
@@ -340,8 +380,7 @@ function collectSourceReferenceFiles(): {
         ...collectControlUiClassReferences(sourceFile),
       };
       const isTestSupport =
-        filePath.endsWith(".test.ts") ||
-        filePath.endsWith(".test-support.ts") ||
+        /\.(?:test|test-support)\.tsx?$/u.test(filePath) ||
         filePath.split(path.sep).includes("test-helpers");
       if (isTestSupport) {
         testFiles.push(entry);
@@ -386,7 +425,7 @@ function isExternallyProducedClass(className: string): boolean {
   );
 }
 
-function selectorClasses(selector: Selector): ClassName[] {
+function selectorClasses(selector: SelectorRoot): ClassName[] {
   const classes: ClassName[] = [];
   selector.walkClasses((classNode) => {
     classes.push(classNode);
@@ -394,7 +433,7 @@ function selectorClasses(selector: Selector): ClassName[] {
   return classes;
 }
 
-function selectorTargetsPart(selector: Selector): boolean {
+function selectorTargetsPart(selector: SelectorRoot): boolean {
   let targetsPart = false;
   selector.walkPseudos((pseudo) => {
     if (pseudo.value === "::part") {
@@ -426,8 +465,8 @@ function auditStylesheet(
   const root = postcss.parse(css, { from: filePath });
   const findings: DeadClassFinding[] = [];
   root.walkRules((rule) => {
-    const parsed = selectorParser().astSync(rule.selector);
-    for (const selector of parsed.nodes) {
+    for (const selectorText of rule.selectors) {
+      const selector = selectorParser().astSync(selectorText);
       const classes = selectorClasses(selector);
       // Element selectors (including html/body/:root) never become class
       // candidates. ::part selectors target component-owned shadow DOM.

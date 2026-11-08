@@ -42,7 +42,7 @@ struct SettingsProTab: View {
     @State var manualGatewayContextPath: String?
     @State var setupStatusText: String?
     @State var gatewayActionStatusText: String?
-    @State var setupAttemptID: UUID?
+    @State var setupAttemptID: GatewaySetupAttempt?
     @State var manualConnectGeneration: UInt64 = 0
     @State var stagedGatewaySetupLink: GatewayConnectDeepLink?
     @State var scannerResultHandoff = QRScannerResultHandoff()
@@ -114,8 +114,8 @@ struct SettingsProTab: View {
 
     private var settingsNavigationContent: some View {
         List {
-            self.gatewayDestination
             self.offlineDeviceSection
+            self.gatewayDestination
         }
         .accessibilityIdentifier("SettingsHub.Fallback")
         .font(OpenClawType.body)
@@ -153,6 +153,8 @@ struct SettingsProTab: View {
                     self.refreshNotificationSettings()
                 }
             }
+            .onReceive(NotificationCenter.default.publisher(for: GatewaySettingsStore.gatewayRegistryDidChange)
+                .receive(on: DispatchQueue.main)) { _ in self.refreshGatewayRegistry() }
             .onChange(of: self.appModel.isLocalGatewayFixtureEnabled) { _, _ in
                 // Leaving a fixture must reload the saved registry and credentials before they are editable.
                 self.syncSettingsState()

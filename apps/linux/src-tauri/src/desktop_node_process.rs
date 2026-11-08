@@ -61,6 +61,14 @@ impl DesktopNodeProcess {
                 let sender = sender.clone();
                 let overflow = Arc::clone(&overflow);
                 thread::spawn(move || {
+                    let send_line = |line: &[u8]| {
+                        if sender
+                            .try_send((stdout, String::from_utf8_lossy(line).into_owned()))
+                            .is_err()
+                        {
+                            overflow.store(true, Ordering::SeqCst);
+                        }
+                    };
                     let mut chunk = [0; 4096];
                     let mut line = Vec::new();
                     while let Ok(size) = pipe.read(&mut chunk) {
@@ -69,12 +77,7 @@ impl DesktopNodeProcess {
                         }
                         for byte in &chunk[..size] {
                             if *byte == b'\n' {
-                                if sender
-                                    .try_send((stdout, String::from_utf8_lossy(&line).into_owned()))
-                                    .is_err()
-                                {
-                                    overflow.store(true, Ordering::SeqCst);
-                                }
+                                send_line(&line);
                                 line.clear();
                             } else if line.len() < 16 * 1024 {
                                 line.push(*byte);
@@ -83,12 +86,8 @@ impl DesktopNodeProcess {
                             }
                         }
                     }
-                    if !line.is_empty()
-                        && sender
-                            .try_send((stdout, String::from_utf8_lossy(&line).into_owned()))
-                            .is_err()
-                    {
-                        overflow.store(true, Ordering::SeqCst);
+                    if !line.is_empty() {
+                        send_line(&line);
                     }
                 })
             })
@@ -117,7 +116,7 @@ impl DesktopNodeProcess {
     pub fn stop(&mut self) -> Result<(), String> {
         self.child.stdin.take();
         #[cfg(unix)]
-        signal_group(self.child.id(), "TERM")?;
+        signal_group(self.child.id(), libc::SIGTERM)?;
         #[cfg(windows)]
         self.job.stop()?;
         let force_at = Instant::now() + Duration::from_secs(30);
@@ -126,7 +125,7 @@ impl DesktopNodeProcess {
         loop {
             let leader_done = self.exited()?;
             #[cfg(unix)]
-            let tree_done = !signal_group(self.child.id(), "0")?;
+            let tree_done = !signal_group(self.child.id(), 0)?;
             #[cfg(windows)]
             let tree_done = self.job.is_empty()?;
             if leader_done && tree_done && self.readers.iter().all(JoinHandle::is_finished) {
@@ -142,7 +141,7 @@ impl DesktopNodeProcess {
             }
             if !forced && Instant::now() >= force_at {
                 #[cfg(unix)]
-                signal_group(self.child.id(), "KILL")?;
+                signal_group(self.child.id(), libc::SIGKILL)?;
                 #[cfg(windows)]
                 self.job.stop()?;
                 forced = true;
@@ -212,13 +211,7 @@ impl DesktopNodeProcess {
 }
 
 #[cfg(unix)]
-fn signal_group(pid: u32, signal: &str) -> Result<bool, String> {
-    let signal = match signal {
-        "TERM" => libc::SIGTERM,
-        "KILL" => libc::SIGKILL,
-        "0" => 0,
-        _ => unreachable!(),
-    };
+fn signal_group(pid: u32, signal: i32) -> Result<bool, String> {
     let pid = i32::try_from(pid).map_err(|_| "Invalid desktop sharing process identity.")?;
     if pid <= 1 {
         return Err("Invalid desktop sharing process identity.".into());
@@ -358,7 +351,7 @@ mod tests {
             .parse::<u32>()
             .unwrap();
         process.stop().unwrap();
-        assert!(!signal_group(process.child.id(), "0").unwrap());
+        assert!(!signal_group(process.child.id(), 0).unwrap());
         let probe = Command::new("/bin/kill")
             .args(["-0", &descendant.to_string()])
             .output()
@@ -380,7 +373,7 @@ mod tests {
         command
             .args([
                 "-c",
-                "echo $$ > \"$1\"; while :; do echo diagnostic; done",
+                "echo $$ > \"$1.tmp\"; mv \"$1.tmp\" \"$1\"; while :; do echo diagnostic; done",
                 "fixture",
             ])
             .arg(&marker);

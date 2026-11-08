@@ -10,6 +10,7 @@ import {
   inspectActionsArtifactZipWithPolicy,
 } from "./lib/actions-artifact-archive.mjs";
 import { isRecord } from "./lib/record-shared.mjs";
+import { retainedPublicationArtifactSource } from "./lib/release-evidence-identity.mjs";
 import { verifyNpmBundleProducer } from "./npm-prepared-bundle.mjs";
 import {
   runReleaseToolingGh,
@@ -187,9 +188,18 @@ export function validateFullReleaseNpmPreflight({
   const qualified = manifest?.publicationArtifacts?.npmPreflight;
   const producer = qualified?.producer;
   const producerRepository = repository ?? producer?.repository;
+  const retainedSource = retainedPublicationArtifactSource(manifest);
   const independentProducer =
     producer?.workflowRef ===
-    `${producerRepository}/${ARTIFACT_WORKFLOW}@${manifest?.workflowFullRef}`;
+      `${producerRepository}/${ARTIFACT_WORKFLOW}@${manifest?.workflowFullRef}` ||
+    (retainedSource !== null &&
+      producer?.workflowRef ===
+        `${producerRepository}/${ARTIFACT_WORKFLOW}@${retainedSource.workflow.ref}`);
+  const retainedParentProducer =
+    retainedSource !== null &&
+    producer?.runId === retainedSource.runId &&
+    producer?.workflowRef ===
+      `${producerRepository}/${FULL_RELEASE_WORKFLOW}@${retainedSource.workflow.ref}`;
   if (
     !/^[1-9][0-9]*$/u.test(String(runId ?? "")) ||
     !/^[1-9][0-9]*$/u.test(String(runAttempt ?? "")) ||
@@ -213,9 +223,12 @@ export function validateFullReleaseNpmPreflight({
     producer?.workflowSha !== toolingSha ||
     (independentProducer
       ? !/^refs\/(?:heads|tags)\/.+$/u.test(manifest.workflowFullRef ?? "")
-      : producer?.runId !== String(runId) ||
-        producer?.runAttempt !== String(runAttempt) ||
-        !producer?.workflowRef?.startsWith(`${producerRepository}/${FULL_RELEASE_WORKFLOW}@refs/`))
+      : !retainedParentProducer &&
+        (producer?.runId !== String(runId) ||
+          producer?.runAttempt !== String(runAttempt) ||
+          !producer?.workflowRef?.startsWith(
+            `${producerRepository}/${FULL_RELEASE_WORKFLOW}@refs/`,
+          )))
   ) {
     throw new Error(
       "Full Release Validation does not bind a qualified npm preflight for this exact release and attempt; supply its historical separate preflight run when recovering an older release.",

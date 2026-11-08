@@ -1,5 +1,6 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage as formatError } from "../../infra/errors.js";
+import type { MemoryHealth } from "../../plugins/memory-provider-types.js";
 import { getActiveMemoryProviderCore } from "../../plugins/memory-runtime.js";
 import { captureGatewayOperatorRunAuthority } from "../operator-run-authority.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
@@ -21,6 +22,12 @@ type ProviderStatusRequest = Pick<
 
 /** Reads provider-native memory health under the current operator request authority. */
 export async function respondProviderMemoryStatus(params: ProviderStatusRequest): Promise<void> {
+  const respondHealth = (health: MemoryHealth, provider = params.providerId) =>
+    params.respond(
+      true,
+      { agentId: params.agentId, provider, health, embedding: SKIPPED_MEMORY_EMBEDDING_PROBE },
+      undefined,
+    );
   let open = true;
   const assertRequestCurrent = () => {
     params.signal?.throwIfAborted();
@@ -67,27 +74,9 @@ export async function respondProviderMemoryStatus(params: ProviderStatusRequest)
     }
     const health = await provider.health();
     assertCurrent();
-    params.respond(
-      true,
-      {
-        agentId: params.agentId,
-        provider: acquired.providerId ?? params.providerId,
-        health,
-        embedding: SKIPPED_MEMORY_EMBEDDING_PROBE,
-      },
-      undefined,
-    );
+    respondHealth(health, acquired.providerId ?? params.providerId);
   } catch (err) {
-    params.respond(
-      true,
-      {
-        agentId: params.agentId,
-        provider: params.providerId,
-        health: { status: "unavailable", message: formatError(err) },
-        embedding: SKIPPED_MEMORY_EMBEDDING_PROBE,
-      },
-      undefined,
-    );
+    respondHealth({ status: "unavailable", message: formatError(err) });
   } finally {
     open = false;
     try {

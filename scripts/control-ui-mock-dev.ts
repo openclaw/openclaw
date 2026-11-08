@@ -4,9 +4,11 @@ import { mkdir, mkdtemp } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import qrcode from "qrcode";
-import { createServer, type Plugin, type ViteDevServer } from "vite";
+import { createServer, mergeConfig, type Plugin, type ViteDevServer } from "vite";
 import type {
+  ArtifactSummary,
   Question,
+  SessionsDiffResult,
   SystemAgentChatHistoryResult,
   SystemChangesListResult,
   UserProfile,
@@ -14,15 +16,14 @@ import type {
 import { expectDefined } from "../packages/normalization-core/src/expect.js";
 import { applySharedChannelFieldHelp } from "../src/config/schema.channel-field-help.js";
 import { buildBaseHints } from "../src/config/schema.hints.js";
+import { buildConfigSchemaCore } from "../src/config/schema.js";
 import { applyConfigTierHints, applyResolvedConfigTierHints } from "../src/config/schema.tiers.js";
 import { CONTROL_UI_BOOTSTRAP_CONFIG_PATH } from "../src/gateway/control-ui-contract.js";
 import {
   controlUiPluginAssetPrefix,
   controlUiPluginAssetRoot,
 } from "../src/gateway/control-ui-plugin-assets-contract.js";
-import { buildUpdateRestartSentinelPayload } from "../src/infra/update-restart-sentinel-payload.js";
 import type { UpdateRunResult } from "../src/infra/update-runner-types.js";
-import { buildPluginLoaderAliasMap } from "../src/plugins/sdk-alias.js";
 import { sessionActivityTimestamp } from "../src/shared/session-activity-timestamp.js";
 import { buildNewAgentWelcome } from "../src/system-agent/new-agent-welcome.js";
 import type {
@@ -32,23 +33,23 @@ import type {
 } from "../ui/src/api/types.ts";
 import { activityPulseBoundaries } from "../ui/src/pages/activity/activity-pulse-window.ts";
 import type { ActivityTimeFilter } from "../ui/src/pages/activity/session-activity.ts";
+import { createControlUiChatHistoryMessage as chatHistoryMessage } from "../ui/src/test-helpers/control-ui-chat-history-fixtures.ts";
 import {
   controlUiSessionPath,
   createControlUiMockBootstrapConfig,
   createControlUiMockGatewayInitScript,
   createControlUiMockSameOriginGatewayScript,
-  prepareControlUiMockGatewayScenario,
-  type ControlUiMockGatewayScenario,
 } from "../ui/src/test-helpers/control-ui-e2e.ts";
 import {
-  createControlUiChatHistoryMessage as chatHistoryMessage,
-  createControlUiMockSessionRow as sessionRow,
-} from "../ui/src/test-helpers/control-ui-session-fixtures.ts";
+  prepareNativePluginMockGatewayScenario,
+  type NativeControlUiMockGatewayScenario,
+} from "../ui/src/test-helpers/control-ui-plugin-e2e.ts";
+import { createControlUiMockSessionRow as sessionRow } from "../ui/src/test-helpers/control-ui-session-fixtures.ts";
 import { workboardUi } from "../ui/src/test-helpers/control-ui-workboard-fixture.ts";
 import { buildWorkboardMocks } from "../ui/src/test-helpers/control-ui-workboard-fixtures.ts";
 import { installWorkboardBoardMock } from "../ui/src/test-helpers/control-ui-workboard-mocks.ts";
 import { createOfflineDeviceNode } from "../ui/src/test-helpers/devices-fixtures.ts";
-import {
+import controlUiViteConfig, {
   resolveExternalPackageAliasesForVite,
   resolveSourcePackageAliasesForVite,
   resolveTsconfigPathAliasesForVite,
@@ -58,6 +59,7 @@ import {
   buildChatAttachmentHistory,
   createChatAttachmentFixturePlugin,
 } from "./control-ui-mock-attachments.ts";
+import { backgroundMockInitScript } from "./control-ui-mock-background.ts";
 import {
   buildChannelsPairingMock,
   buildChannelsStatusMock,
@@ -65,6 +67,9 @@ import {
 } from "./control-ui-mock-channels.ts";
 import { buildCronMocks } from "./control-ui-mock-cron.ts";
 import { createStandaloneMockIsolationPlugins } from "./control-ui-mock-isolation.ts";
+import { buildLogsTailMock } from "./control-ui-mock-logs.ts";
+import { buildMeetingsMocks } from "./control-ui-mock-meetings.ts";
+import { mentionMockInitScript } from "./control-ui-mock-mentions.ts";
 import {
   buildPluginCatalogMock,
   buildPluginDiscoveryCategoriesMock,
@@ -73,23 +78,37 @@ import {
   pluginLifecycleMockInitScript,
 } from "./control-ui-mock-plugins.ts";
 import { createControlUiPreviewInitScript } from "./control-ui-mock-preview.ts";
-import { skillLibraryMockInitScript } from "./control-ui-mock-skill-library.ts";
+import { buildSearchMocks } from "./control-ui-mock-search.ts";
 import {
-  buildSkillWorkshopMocks,
-  skillWorkshopMockInitScript,
-} from "./control-ui-mock-skill-workshop.js";
+  createSessionDesignPortalFixturePlugin,
+  createSessionDesignDesktopFixturePlugin,
+  createSessionDesignFileFixturePlugin,
+  createSessionDesignScenario,
+  sessionDesignInitScript,
+  startSessionDesignSandbox,
+  type SessionDesignSandbox,
+} from "./control-ui-mock-session-design.ts";
+import { skillLibraryMockInitScript } from "./control-ui-mock-skill-library.ts";
+import { skillWorkshopMockInitScript } from "./control-ui-mock-skill-workshop.js";
 import { buildProfileUsageMocks } from "./control-ui-mock-usage.ts";
 
 const FIXTURES = [
   "approval",
   "attachments",
   "avatars",
+  "backgrounds",
   "board",
   "code-fences",
+  "config-full",
   "dashboards",
   "goal",
+  "header-idle",
+  "header-waiting",
+  "inbox",
+  "meetings",
   "plugins-dense",
   "reactions",
+  "session-design",
   "sidebar-roster",
   "startup-pending",
   "swarm",
@@ -122,6 +141,12 @@ const MOCK_ACTOR_MIRA: SessionActorFixture = {
 };
 // Rows carry explicit owners the way the gateway projects createdActor fallbacks.
 const MOCK_SESSION_OWNERS: readonly SessionActorFixture[] = [MOCK_ACTOR_PETER, MOCK_ACTOR_MIRA];
+const MOCK_PROFILE_PARTICIPANTS = {
+  mira: { identity: { type: "profile", id: "profile-mira" }, label: "Mira" },
+  riley: { identity: { type: "profile", id: "profile-riley" }, label: "Riley" },
+  sam: { identity: { type: "profile", id: "profile-sam" }, label: "Sam" },
+  lee: { identity: { type: "profile", id: "profile-lee" }, label: "Lee" },
+} as const;
 const MOCK_AVATAR_PROFILES = [
   { id: "profile-avatar-normal", name: "Mira", fill: "#5d7fc5", label: "Normal profile image" },
   {
@@ -153,7 +178,10 @@ type UpdateFixture = {
   statusResponse: unknown;
 };
 
-function buildUpdateFixture(fixture: CliOptions["fixture"], nowMs: number): UpdateFixture | null {
+async function buildUpdateFixture(
+  fixture: CliOptions["fixture"],
+  nowMs: number,
+): Promise<UpdateFixture | null> {
   if (
     fixture !== "update-available" &&
     fixture !== "update-blocked" &&
@@ -291,6 +319,8 @@ function buildUpdateFixture(fixture: CliOptions["fixture"], nowMs: number): Upda
     ],
     durationMs: 11_640,
   };
+  const { buildUpdateRestartSentinelPayload } =
+    await import("../src/infra/update-restart-sentinel-payload.js");
   return {
     available,
     schedule,
@@ -321,8 +351,6 @@ const boardFixtureHtml = `<!doctype html>
         const mode = mediaQuery.matches ? "light" : "dark";
         document.documentElement.dataset.theme = mode;
         document.documentElement.dataset.themeMode = mode;
-        document.documentElement.classList.toggle("wa-light", mode === "light");
-        document.documentElement.classList.toggle("wa-dark", mode === "dark");
         document.documentElement.style.colorScheme = mode;
       };
       applyTheme();
@@ -347,7 +375,7 @@ const boardFixtureHtml = `<!doctype html>
   </head>
   <body>
     <div id="app"></div>
-    <script type="module" src="/src/test-helpers/board-fixture.ts"></script>
+    <script type="module" src="/src/test-helpers/board-fixture.tsx"></script>
   </body>
 </html>`;
 
@@ -544,12 +572,12 @@ function buildActivitySessionRows(baseTime: number) {
 
 // Model Providers settings fixtures: auth state plus live plan/quota/billing
 // snapshots so the /settings/model-providers page renders fully in the mock.
-function buildSessionDiffMock() {
+function buildSessionDiffMock(): SessionsDiffResult {
   const appPatch = [
-    "diff --git a/src/app.ts b/src/app.ts",
+    "diff --git a/ui/src/ui/views/chat.ts b/ui/src/ui/views/chat.ts",
     "index 1111111..2222222 100644",
-    "--- a/src/app.ts",
-    "+++ b/src/app.ts",
+    "--- a/ui/src/ui/views/chat.ts",
+    "+++ b/ui/src/ui/views/chat.ts",
     "@@ -12,4 +12,5 @@ export function bootstrap() {",
     "   const config = readSettings();",
     "-  const client = createClient(config);",
@@ -575,12 +603,12 @@ function buildSessionDiffMock() {
   ].join("\n");
   return {
     sessionKey: "main",
-    root: "/tmp/openclaw-mock-checkout",
+    root: "/mock/workspace",
     branch: "feature/session-diff-panel",
     baseRef: "main",
     files: [
       {
-        path: "src/app.ts",
+        path: "ui/src/ui/views/chat.ts",
         status: "modified",
         additions: 3,
         deletions: 2,
@@ -905,13 +933,106 @@ function buildModelProviderMocks(baseTime: number) {
   };
 }
 
+const MCP_RECORD_SCHEMA = {
+  type: "object",
+  propertyNames: { type: "string" },
+  additionalProperties: { type: ["string", "number", "boolean"] },
+};
+
+/** The Gateway's `mcp` schema shape, so one server's fields render as they really do. */
+const MCP_CONFIG_SCHEMA = {
+  type: "object",
+  title: "MCP",
+  additionalProperties: false,
+  properties: {
+    sessionIdleTtlMs: { type: "number", minimum: 0, title: "MCP Session Idle TTL (ms)" },
+    apps: {
+      type: "object",
+      title: "MCP Apps",
+      additionalProperties: false,
+      properties: {
+        enabled: { type: "boolean", title: "MCP Apps Enabled" },
+        sandboxOrigin: { type: "string", format: "uri", title: "MCP Apps Sandbox Origin" },
+        sandboxPort: { type: "integer", minimum: 1, title: "MCP Apps Sandbox Port" },
+      },
+    },
+    servers: {
+      type: "object",
+      title: "MCP Servers",
+      propertyNames: { type: "string" },
+      additionalProperties: {
+        type: "object",
+        additionalProperties: {},
+        properties: {
+          enabled: { type: "boolean", title: "MCP Server Enabled" },
+          command: { type: "string" },
+          args: { type: "array", items: { type: "string" } },
+          env: MCP_RECORD_SCHEMA,
+          cwd: { type: "string" },
+          url: { type: "string", format: "uri" },
+          transport: {
+            anyOf: [
+              { type: "string", const: "stdio" },
+              { type: "string", const: "sse" },
+              { type: "string", const: "streamable-http" },
+            ],
+          },
+          headers: MCP_RECORD_SCHEMA,
+          connectionTimeoutMs: { type: "number", title: "MCP Connect Timeout (ms)" },
+          requestTimeoutMs: { type: "number", title: "MCP Request Timeout (ms)" },
+          supportsParallelToolCalls: { type: "boolean", title: "MCP Parallel Tool Calls" },
+          auth: { type: "string", const: "oauth", title: "MCP Server Auth" },
+          sslVerify: { type: "boolean", title: "MCP TLS Verification" },
+          toolFilter: {
+            type: "object",
+            title: "MCP Tool Selection",
+            additionalProperties: false,
+            properties: {
+              include: { type: "array", items: { type: "string" }, title: "Included MCP Tools" },
+              exclude: { type: "array", items: { type: "string" }, title: "Excluded MCP Tools" },
+            },
+          },
+        },
+      },
+    },
+  },
+};
+
+/** What a warm session reports: one server listed its tools, one needs a look. */
+const MCP_EFFECTIVE_TOOLS = {
+  agentId: "main",
+  profile: "full",
+  groups: [
+    {
+      id: "mcp",
+      label: "MCP",
+      source: "mcp",
+      tools: [
+        ["resolve-library-id", "Resolve a package name to a library identifier."],
+        ["query-docs", "Query up-to-date documentation for a library."],
+      ].map(([name, description]) => ({
+        id: `context7__${name}`,
+        label: name,
+        description,
+        rawDescription: description,
+        source: "mcp",
+        pluginId: "bundle-mcp",
+        mcpServer: "context7",
+        mcpToolName: name,
+      })),
+    },
+  ],
+};
+
 /**
  * Small but coherent config fixture so the schema-driven settings pages are
  * demoable: `config.schema` covers a boolean, an enum, numbers, and strings
  * across a few real section keys, and `config.get` returns a matching
  * snapshot with the hash `config.set`/`config.apply` are guarded by.
  */
-function buildConfigMocks(options: { swarmEnabled?: boolean; workboardEnabled?: boolean } = {}) {
+function buildConfigMocks(
+  options: { fullSchema?: boolean; swarmEnabled?: boolean; workboardEnabled?: boolean } = {},
+) {
   const config = {
     logging: { level: "info", consoleTimestamps: true },
     messages: { queueLimit: 5, responsePrefix: "" },
@@ -939,7 +1060,12 @@ function buildConfigMocks(options: { swarmEnabled?: boolean; workboardEnabled?: 
           transport: "streamable-http",
           auth: "oauth",
         },
-        "local-tools": { command: "npx", args: ["some-mcp-server", "--stdio"], enabled: false },
+        "local-tools": {
+          command: "npx",
+          args: ["some-mcp-server", "--stdio"],
+          env: { API_TOKEN: "__OPENCLAW_REDACTED__" },
+          enabled: false,
+        },
       },
     },
   };
@@ -947,6 +1073,7 @@ function buildConfigMocks(options: { swarmEnabled?: boolean; workboardEnabled?: 
     type: "object",
     title: "OpenClaw config",
     properties: {
+      mcp: MCP_CONFIG_SCHEMA,
       logging: {
         type: "object",
         title: "Logging",
@@ -1123,6 +1250,19 @@ function buildConfigMocks(options: { swarmEnabled?: boolean; workboardEnabled?: 
       },
     },
   };
+  // The schema the Gateway generates, so every generated settings form shows its real labels,
+  // help and tiers. Channels keep the fixture's entry: plugins supply theirs at runtime.
+  const full = options.fullSchema ? buildConfigSchemaCore() : null;
+  if (full) {
+    Object.assign(config, {
+      gateway: { ...config.gateway, trustedProxies: ["10.0.0.1", "10.0.0.2"] },
+      browser: { enabled: true, defaultProfile: "work", profiles: { work: { cdpPort: 18800 } } },
+      agents: {
+        ...config.agents,
+        defaults: { ...config.agents.defaults, model: "openai/gpt-5.2" },
+      },
+    });
+  }
   const get = {
     path: "~/.openclaw/openclaw.json",
     exists: true,
@@ -1152,15 +1292,24 @@ function buildConfigMocks(options: { swarmEnabled?: boolean; workboardEnabled?: 
       },
     },
     schema: {
-      schema,
+      schema: full
+        ? {
+            ...full.schema,
+            properties: {
+              ...(full.schema as { properties?: object }).properties,
+              channels: schema.properties.channels,
+            },
+          }
+        : schema,
       // Resolve tiers and shared channel help the way the gateway does so the
       // mock reproduces the real split and subtext instead of bare labels.
       uiHints: applySharedChannelFieldHelp(
         applyResolvedConfigTierHints(
-          schema,
+          full ? (full.schema as typeof schema) : schema,
           // Seed with base hints so the mock carries the gateway's labels,
           // help, and docsUrl metadata instead of bare tier scaffolding.
-          applyConfigTierHints(buildBaseHints(), { includePluginOwnedChannels: true }),
+          full?.uiHints ??
+            applyConfigTierHints(buildBaseHints(), { includePluginOwnedChannels: true }),
         ),
       ),
       version: "mock-config-schema",
@@ -1402,8 +1551,9 @@ function syntheticAvatar(color: "coral" | "green"): string {
 
 async function createChatPickerScenario(
   fixture?: CliOptions["fixture"],
-): Promise<ControlUiMockGatewayScenario> {
-  const baseTime = Date.parse("2026-05-22T09:00:00.000Z");
+): Promise<NativeControlUiMockGatewayScenario> {
+  const baseTime =
+    fixture === "session-design" ? Date.now() : Date.parse("2026-05-22T09:00:00.000Z");
   const rosterTime = Date.now();
   const rosterAgents = [
     {
@@ -1563,8 +1713,8 @@ async function createChatPickerScenario(
   ];
   const sessionFiles = sessionFileFixtures.map(({ content: _content, ...file }) => file);
   const sessionWorkspaceRoot = "/mock/workspace";
-  const sessionFileCase = <T extends { path: string }>(file: T) => ({
-    match: { sessionKey: "agent:main:main", path: file.path },
+  const sessionFileCase = <T extends { path: string }>(file: T, requestPath = file.path) => ({
+    match: { sessionKey: "agent:main:main", path: requestPath },
     response: { file, root: sessionWorkspaceRoot, sessionKey: "agent:main:main" },
   });
   const sessionFileListCase = <T extends Record<string, unknown>>(
@@ -1614,13 +1764,21 @@ async function createChatPickerScenario(
       path: "",
     }),
   ];
-  const sessionFileGetCases = sessionFileFixtures.map((file) =>
-    sessionFileCase({
+  const sessionFileGetCases = sessionFileFixtures.flatMap((file) => {
+    const previewFile = {
       ...file,
+      workspacePath: file.path,
+      previewKind: "text",
+      contentEncoding: "utf8",
       // Fake CAS token so the file panel offers edit mode against the mock.
       hash: mockFileHash(file.content),
-    }),
-  );
+    };
+    // Session rows use relative paths; workspace browser rows request absolute paths.
+    return [
+      sessionFileCase(previewFile),
+      sessionFileCase(previewFile, `${sessionWorkspaceRoot}/${file.path}`),
+    ];
+  });
   const sessionFileSetCases = sessionFiles.map((file) =>
     sessionFileCase({
       ...file,
@@ -1642,7 +1800,7 @@ async function createChatPickerScenario(
   <path d="M232 246c-45 28-91 35-142 23M408 246c45 28 91 35 142 23" fill="none" stroke="#e14b47" stroke-width="16" stroke-linecap="round"/>
   <text x="320" y="326" text-anchor="middle" font-family="ui-sans-serif, system-ui" font-size="24" fill="#f6f7f9">openclaw session artifact</text>
 </svg>`;
-  const lobsterArtifact = {
+  const lobsterArtifact: ArtifactSummary = {
     id: "artifact-openclaw-lobster",
     type: "image",
     title: "openclaw-lobster-preview.svg",
@@ -1806,29 +1964,35 @@ async function createChatPickerScenario(
     tokenBudget: 300_000,
     continuationTurns: 3,
   };
-  const rosterSessions = rosterAgents.flatMap((agent, index) => [
-    sessionRow(`agent:${agent.id}:main`, agent.name, rosterTime - (index + 1) * 720_000, {
-      agentId: agent.id,
-      isMain: true,
-      lastMessagePreview: agent.preview,
-    }),
-    ...agent.sessionLabels.map((label, sessionIndex) => {
-      const working = agent.id === "forge" && sessionIndex === 0;
-      return sessionRow(
-        `agent:${agent.id}:sample-${sessionIndex + 1}`,
-        label,
-        rosterTime - (index + 1) * 60_000 - sessionIndex * 5_000,
-        {
-          agentId: agent.id,
-          pinned: sessionIndex === 0,
-          lastMessagePreview: agent.preview,
-          unread: agent.id === "scout" && sessionIndex === 1,
-          hasActiveRun: working,
-          ...(working ? { activeRunIds: ["mock-forge-dashboard"], status: "running" } : {}),
+  const rosterSessions: NonNullable<NativeControlUiMockGatewayScenario["sessions"]> =
+    rosterAgents.flatMap((agent, index) => [
+      sessionRow(`agent:${agent.id}:main`, agent.name, rosterTime - (index + 1) * 720_000, {
+        agentId: agent.id,
+        isMain: true,
+        lastMessagePreview: agent.preview,
+        // The agent roster subtitle reads the last assistant message, not the generic preview.
+        lastAssistantMessage: {
+          text: agent.preview,
+          timestamp: rosterTime - (index + 1) * 720_000,
         },
-      );
-    }),
-  ]);
+      }),
+      ...agent.sessionLabels.map((label, sessionIndex) => {
+        const working = agent.id === "forge" && sessionIndex === 0;
+        return sessionRow(
+          `agent:${agent.id}:sample-${sessionIndex + 1}`,
+          label,
+          rosterTime - (index + 1) * 60_000 - sessionIndex * 5_000,
+          {
+            agentId: agent.id,
+            pinned: sessionIndex === 0,
+            lastMessagePreview: agent.preview,
+            unread: agent.id === "scout" && sessionIndex === 1,
+            hasActiveRun: working,
+            ...(working ? { activeRunIds: ["mock-forge-dashboard"], status: "running" } : {}),
+          },
+        );
+      }),
+    ]);
   if (fixture === "sidebar-roster") {
     rosterSessions.push(
       sessionRow("agent:forge:subagent:layout", "Check sidebar layout", rosterTime - 20_000, {
@@ -1953,7 +2117,7 @@ async function createChatPickerScenario(
       hasActiveRun: true,
       owner: { actor: MOCK_ACTOR_PETER },
       participantCount: 1,
-      participants: [{ identity: { type: "profile", id: "profile-mira" }, label: "Mira" }],
+      participants: [MOCK_PROFILE_PARTICIPANTS.mira],
       status: "running",
     }),
     sessionRow("agent:main:release-notes", "Release notes review", baseTime - 83_000, {
@@ -1962,10 +2126,7 @@ async function createChatPickerScenario(
       hasActiveRun: true,
       owner: { actor: MOCK_ACTOR_MIRA },
       participantCount: 2,
-      participants: [
-        { identity: { type: "profile", id: "profile-riley" }, label: "Riley" },
-        { identity: { type: "profile", id: "profile-sam" }, label: "Sam" },
-      ],
+      participants: [MOCK_PROFILE_PARTICIPANTS.riley, MOCK_PROFILE_PARTICIPANTS.sam],
       status: "running",
     }),
     sessionRow("agent:main:work-openclaw", "OpenClaw work checkout", baseTime - 85_000, {
@@ -1975,10 +2136,10 @@ async function createChatPickerScenario(
       owner: { actor: MOCK_ACTOR_PETER },
       participantCount: 4,
       participants: [
-        { identity: { type: "profile", id: "profile-mira" }, label: "Mira" },
-        { identity: { type: "profile", id: "profile-riley" }, label: "Riley" },
-        { identity: { type: "profile", id: "profile-sam" }, label: "Sam" },
-        { identity: { type: "profile", id: "profile-lee" }, label: "Lee" },
+        MOCK_PROFILE_PARTICIPANTS.mira,
+        MOCK_PROFILE_PARTICIPANTS.riley,
+        MOCK_PROFILE_PARTICIPANTS.sam,
+        MOCK_PROFILE_PARTICIPANTS.lee,
       ],
       observerDigest: {
         headline: "Done: fixed the flaky retry-window test",
@@ -2069,14 +2230,16 @@ async function createChatPickerScenario(
   // heatmap stay filled no matter when the mock harness runs.
   const profileUsage = buildProfileUsageMocks(Date.now());
   const modelProviders = buildModelProviderMocks(Date.now());
-  const skillWorkshop = buildSkillWorkshopMocks(Date.now());
   const richAttention = fixture === "approval";
-  const cronMocks = buildCronMocks(Date.now(), {
+  const cronMocks = buildCronMocks(fixture === "session-design" ? baseTime : Date.now(), {
     richAttention,
+    // With the auth warning and the seeded failed and overdue jobs: 47 System rows.
+    ...(fixture === "inbox" ? { failedBacklog: 44 } : {}),
     ...(fixture === "sidebar-roster" ? { secondAgentId: "forge" } : {}),
+    ...(fixture === "session-design" ? { sessionKey: "agent:main:main" } : {}),
   });
   const updateFixtureNow = Date.now();
-  const updateFixture = buildUpdateFixture(fixture, updateFixtureNow);
+  const updateFixture = await buildUpdateFixture(fixture, updateFixtureNow);
   const updateSchedule = updateFixture?.schedule ?? null;
   const heldUpdateSchedule: UpdateScheduleState | null = updateSchedule?.campaign
     ? {
@@ -2116,6 +2279,7 @@ async function createChatPickerScenario(
     : modelProviders.authStatus;
   const channelWizard = buildChannelWizardMocks();
   const configMocks = buildConfigMocks({
+    fullSchema: fixture === "config-full",
     swarmEnabled: fixture === "swarm",
     workboardEnabled: fixture === "workboard" || fixture === "workboard-states",
   });
@@ -2240,7 +2404,7 @@ async function createChatPickerScenario(
       },
     ],
   } satisfies SystemChangesListResult;
-  const scenario: ControlUiMockGatewayScenario = {
+  const scenario: NativeControlUiMockGatewayScenario = {
     assistantAgentId: "main",
     assistantName: "Molty",
     defaultAgentId: "main",
@@ -2258,9 +2422,15 @@ async function createChatPickerScenario(
       "chat.abort",
       "chat.history",
       "chat.send",
+      // Only this fixture's forms are for editing; the others stay read-only as before.
+      ...(fixture === "config-full" ? ["config.apply", "config.set"] : []),
       "config.patch",
       "config.schema",
+      "config.set",
+      "mcp.authLogin",
+      "tools.effective",
       "cron.add",
+      "cron.get",
       "cron.list",
       "cron.remove",
       "cron.run",
@@ -2291,18 +2461,19 @@ async function createChatPickerScenario(
       "sessions.groups.rename",
       "sessions.patch",
       "sessions.patchMany",
+      "sessions.processes.list",
+      "sessions.processes.stop",
       "sessions.search",
       "session.reactions.list",
       "session.reactions.set",
+      ...(fixture === "reactions" ? ["users.mentionable"] : []),
+      "skills.workshop.applyDraft",
+      "skills.workshop.archive",
+      "skills.workshop.changes",
+      "skills.workshop.discardDraft",
+      "skills.workshop.list",
       "skills.workshop.read",
-      "skills.proposals.apply",
-      "skills.proposals.evaluate",
-      "skills.proposals.historyScan",
-      "skills.proposals.historyStatus",
-      "skills.proposals.inspect",
-      "skills.proposals.list",
-      "skills.proposals.reject",
-      "skills.proposals.requestRevision",
+      "skills.workshop.restore",
       "skills.library.activate",
       "skills.library.import",
       "skills.library.list",
@@ -2321,7 +2492,6 @@ async function createChatPickerScenario(
       ...(fixture === "workboard" || fixture === "workboard-states"
         ? [
             "board.get",
-            "cron.get",
             "workboard.boards.list",
             "workboard.boards.upsert",
             "workboard.cards.list",
@@ -2417,7 +2587,9 @@ async function createChatPickerScenario(
         id: selfProfile.id,
         // A resolved viewer identity switches direct threads to gutter avatars;
         // only the reactions fixture emulates an identity-resolving Gateway.
-        ...(fixture === "reactions" ? { identity: { type: "profile", id: selfProfile.id } } : {}),
+        ...(fixture === "reactions" || fixture === "inbox"
+          ? { identity: { type: "profile", id: selfProfile.id } }
+          : {}),
         name: selfProfile.displayName ?? undefined,
         email: selfProfile.emails[0],
         avatarUrl: `/api/users/${selfProfile.id}/avatar`,
@@ -2450,6 +2622,7 @@ async function createChatPickerScenario(
     ],
     methodResponses: {
       ...cronMocks,
+      "logs.tail": buildLogsTailMock(),
       "agents.list": {
         agents: rosterAgents.map(({ id, name, theme, emoji, avatar }) => ({
           id,
@@ -2575,6 +2748,8 @@ async function createChatPickerScenario(
           },
         })),
       },
+      // Systems requests backup status on open; an empty status keeps its panel renderable.
+      "backup.status": { targets: [], schedules: [], locations: [] },
       "environments.list": {
         environments: [
           {
@@ -2641,6 +2816,7 @@ async function createChatPickerScenario(
       "config.set": configMocks.set,
       "config.apply": configMocks.apply,
       "config.schema": configMocks.schema,
+      "tools.effective": MCP_EFFECTIVE_TOOLS,
       "openclaw.chat.history": custodianHistory,
       "openclaw.changes.list": custodianChanges,
       // The sidebar recovers pending questions through question.list after the
@@ -2753,10 +2929,10 @@ async function createChatPickerScenario(
         qrDataUrl: whatsappLoginQrDataUrl,
       },
       "web.login.wait": { message: "Linked.", connected: true },
+      ...buildSearchMocks(configMocks.get.hash),
       "wizard.start": channelWizard.start,
       "wizard.next": channelWizard.next,
       "wizard.cancel": { status: "cancelled" },
-      "skills.proposals.requestRevision": skillWorkshop.requestRevision,
       "usage.cost": profileUsage.cost,
       "sessions.usage": profileUsage.sessions,
       "models.authStatus": modelAuthStatus,
@@ -2857,8 +3033,11 @@ async function createChatPickerScenario(
         gatewayUrl: "wss://gateway.example.test",
         qrDataUrl: devicePairQrDataUrl,
         setupCode: devicePairSetupCode,
+        setupId: "mock-pair-setup",
+        expiresAtMs: Date.now() + 86_400_000,
         urlSource: "mock",
       },
+      "device.pair.setupStatus": {},
       "node.list": {
         nodes: [
           createOfflineDeviceNode(),
@@ -3317,7 +3496,157 @@ async function createChatPickerScenario(
     scenario.repeatingSessionEvents = { events: [] };
     scenario.sessionGroups = [];
   }
-  return scenario;
+  if (fixture === "inbox") {
+    const mentionSenders = [
+      { id: "mock-mira", label: "Mira" },
+      { id: "mock-jules", label: "Jules" },
+    ] as const;
+    scenario.featureMethods = [
+      ...(scenario.featureMethods ?? []),
+      "mentions.list",
+      "mentions.dismiss",
+      "users.self",
+    ];
+    scenario.methodResponses = {
+      ...scenario.methodResponses,
+      "mentions.list": {
+        gatewayInstanceId: "mock-gateway-boot-1",
+        revision: 1,
+        items: Array.from({ length: 10 }, (_, index) => {
+          const sender = mentionSenders[index % 2 === 0 ? 0 : 1];
+          return {
+            id: `mock-mention-${index}`,
+            senderProfileId: sender.id,
+            senderLabel: sender.label,
+            sessionKey: "agent:main:main",
+            agentId: "main",
+            sessionTitle: "Release readiness check",
+            messageId: `mock-mention-message-${index}`,
+            createdAt: Date.now() - (index + 1) * 11 * 60_000,
+            expiresAt: ATTENTION_FIXTURE_EXPIRES_AT,
+            excerpt: "Can you confirm the rollback plan before the deploy window?",
+          };
+        }),
+      },
+    };
+  }
+  if (fixture === "meetings") {
+    scenario.methodResponses = {
+      ...scenario.methodResponses,
+      ...buildMeetingsMocks(Date.now()),
+    };
+  }
+  if (fixture === "backgrounds") {
+    scenario.featureMethods = [
+      ...(scenario.featureMethods ?? []),
+      "users.prefs.get",
+      "users.prefs.set",
+      "users.background.get",
+      "users.background.upload",
+      "users.background.remove",
+    ];
+  }
+  if (fixture === "header-idle" || fixture === "header-waiting") {
+    const now = Date.UTC(2026, 9, 10, 12);
+    const waiting = fixture === "header-waiting";
+    const parent = sessionRow("agent:main:main", "Review the release checklist", now, {
+      sessionId: "header-parent",
+      status: "done",
+      hasActiveRun: false,
+      hasActiveSubagentRun: waiting,
+      activeRunIds: [],
+      startedAt: now - 180_000,
+      endedAt: now - 120_000,
+      sharingRole: "owner",
+      visibility: "shared",
+      childSessions: waiting ? ["agent:main:subagent:header-review"] : [],
+    });
+    const child = sessionRow("agent:main:subagent:header-review", "Review documentation", now, {
+      sessionId: "header-child",
+      classification: "subagent",
+      spawnedBy: parent.key,
+      parentSessionKey: parent.key,
+      status: "running",
+      hasActiveRun: true,
+      activeRunIds: ["header-child-run"],
+      startedAt: now - 120_000,
+      observerDigest: {
+        runId: "header-child-run",
+        headline: "Checking examples and migration notes",
+        health: "on-track",
+        revision: 1,
+        updatedAt: now,
+      },
+    });
+    const messages = [
+      {
+        role: "user",
+        content: "Review the release checklist and ask a subagent to check the documentation.",
+        timestamp: now - 180_000,
+      },
+      {
+        role: "assistant",
+        content: waiting
+          ? "The documentation review is underway. I will combine the findings when it finishes."
+          : "The release checklist is ready for review.",
+        timestamp: now - 150_000,
+        __openclaw: { id: "header-answer", seq: 2, runId: "header-parent-run" },
+      },
+      ...(waiting
+        ? [
+            {
+              role: "assistant",
+              content: [
+                { type: "toolCall", id: "header-yield", name: "sessions_yield", arguments: {} },
+              ],
+              timestamp: now - 120_000,
+              __openclaw: { id: "header-yield-call", seq: 3, runId: "header-parent-run" },
+            },
+            {
+              role: "toolResult",
+              toolCallId: "header-yield",
+              toolName: "sessions_yield",
+              content: [{ type: "text", text: '{"status":"yielded"}' }],
+              timestamp: now - 120_000,
+              __openclaw: { id: "header-yield-result", seq: 4, runId: "header-parent-run" },
+            },
+          ]
+        : []),
+    ];
+    scenario.featureMethods = [
+      ...(scenario.featureMethods ?? []),
+      "session.visibility.set",
+      "session.members.listEvidence",
+    ];
+    scenario.sessionKey = parent.key;
+    scenario.sessions = waiting ? [parent, child] : [parent];
+    scenario.historyMessages = messages;
+    scenario.sessionTranscripts = {
+      [parent.key]: { messages, inFlightRun: null },
+      [child.key]: {
+        messages: [
+          {
+            role: "assistant",
+            content: "Checking examples and migration notes",
+            timestamp: now - 1_000,
+          },
+        ],
+        inFlightRun: { runId: "header-child-run", startedAt: now - 120_000 },
+      },
+    };
+    scenario.repeatingSessionEvents = { events: [] };
+    scenario.sessionGroups = [];
+    delete scenario.methodResponses?.["sessions.list"];
+  }
+  return fixture === "session-design"
+    ? createSessionDesignScenario(
+        scenario,
+        baseTime,
+        sessionFileFixtures,
+        buildSessionDiffMock(),
+        lobsterArtifact,
+      )
+    : scenario;
 }
 
 function escapeScriptContent(script: string): string {
@@ -3325,11 +3654,22 @@ function escapeScriptContent(script: string): string {
 }
 
 async function createMockGatewayPlugin(
-  scenario: ControlUiMockGatewayScenario,
+  scenario: NativeControlUiMockGatewayScenario,
   fixture?: CliOptions["fixture"],
+  sandbox?: SessionDesignSandbox,
 ): Promise<Plugin> {
-  const prepared = await prepareControlUiMockGatewayScenario(
-    fixture === "workboard-states" ? { ...scenario, nativePlugins: [] } : scenario,
+  const mockScenario =
+    fixture === "session-design"
+      ? {
+          ...scenario,
+          webSocketPassthroughPrefixes: [
+            ...(scenario.webSocketPassthroughPrefixes ?? []),
+            "__SESSION_DESIGN_BROWSER_RFB_PREFIX__",
+          ],
+        }
+      : scenario;
+  const prepared = await prepareNativePluginMockGatewayScenario(
+    fixture === "workboard-states" ? { ...mockScenario, nativePlugins: [] } : mockScenario,
   );
   if (fixture === "workboard-states") {
     const { assets, catalog } = await buildWorkboardStatesAssets();
@@ -3352,17 +3692,44 @@ async function createMockGatewayPlugin(
       },
     };
   }
-  const initScript = escapeScriptContent(createControlUiMockGatewayInitScript(prepared.scenario));
+  let gatewayInit = createControlUiMockGatewayInitScript(prepared.scenario);
+  if (fixture === "session-design") {
+    // Bind this harness option in the browser, where a forwarded host/port and TLS are known.
+    // Replace a controlled JSON literal, not the harness implementation or a global socket owner.
+    gatewayInit = gatewayInit.replace(
+      JSON.stringify("__SESSION_DESIGN_BROWSER_RFB_PREFIX__"),
+      'new URL("/__fixtures/session-design/desktop?", window.location.origin).href.replace(/^http/, "ws")',
+    );
+  }
+  const initScript = escapeScriptContent(gatewayInit);
   const sameOriginGatewayScript = escapeScriptContent(createControlUiMockSameOriginGatewayScript());
   const newAgentWelcome = await buildNewAgentWelcome({
     engine: { noteAssistantMessage: () => {} },
   });
+  // The mock session owner resolves "main" to the scenario's normalized mainSessionKey.
+  const processSessionKey = prepared.scenario.sessionKey?.trim() || "main";
   const statefulInitScript = escapeScriptContent(
-    createControlUiPreviewInitScript(newAgentWelcome) +
+    createControlUiPreviewInitScript(newAgentWelcome, processSessionKey) +
+      mentionMockInitScript(
+        prepared.scenario,
+        fixture === "session-design"
+          ? [MOCK_PROFILE_PARTICIPANTS.mira, MOCK_PROFILE_PARTICIPANTS.riley]
+          : Object.values(MOCK_PROFILE_PARTICIPANTS),
+      ) +
       skillLibraryMockInitScript(prepared.scenario.models) +
       pluginLifecycleMockInitScript() +
       skillWorkshopMockInitScript(Date.now()) +
-      approvalMockInitScript(fixture === "approval") +
+      approvalMockInitScript(
+        fixture === "approval",
+        fixture === "session-design" ? { cwd: "/mock/workspace-export" } : {},
+      ) +
+      (fixture === "session-design"
+        ? sessionDesignInitScript(
+            prepared.scenario,
+            expectDefined(sandbox, "Session design sandbox"),
+          )
+        : "") +
+      (fixture === "backgrounds" ? backgroundMockInitScript() : "") +
       (fixture === "workboard" || fixture === "workboard-states"
         ? `(() => { const __name = (target) => target; (${installWorkboardBoardMock.toString()})(${JSON.stringify(buildWorkboardMocks(Date.now(), MOCK_ACTOR_PETER, fixture === "workboard-states"))}); })();`
         : ""),
@@ -3391,8 +3758,6 @@ async function createMockGatewayPlugin(
           root.dataset.theme = mode;
           root.dataset.themeMode = mode;
           root.dataset.themeResolved = mode;
-          root.classList.toggle("wa-light", mode === "light");
-          root.classList.toggle("wa-dark", mode === "dark");
           root.style.colorScheme = mode;
           syncControlUiSystemChrome();
           for (const button of control.querySelectorAll("button")) {
@@ -3498,10 +3863,29 @@ async function createMockGatewayPlugin(
 }
 
 async function buildWorkboardStatesAssets() {
-  const { build } = await import("esbuild");
+  const [{ build }, { createSolidControlUiBuildPlugin }, { buildPluginLoaderAliasMap }] =
+    await Promise.all([
+      import("esbuild"),
+      import("../src/cli/plugins-build-solid.js"),
+      import("../src/plugins/sdk-alias.js"),
+    ]);
   const rootDir = path.join(repoRoot, "extensions/workboard");
   const entry = path.join(rootDir, "browser/index.ts");
-  let transformed = false;
+  const cardRenderer = fs.realpathSync(path.join(rootDir, "browser/pages/workboard/view-card.tsx"));
+  const fixtureProjections = fileURLToPath(
+    new URL("./control-ui-workboard-state-projections.ts", import.meta.url),
+  );
+  const projections = new Map([
+    [
+      "../../lib/workboard/lifecycle.ts",
+      { source: "lifecycle.ts", name: "getWorkboardLifecycle", fixture: "getFixtureLifecycle" },
+    ],
+    [
+      "../../lib/workboard/card-alerts.ts",
+      { source: "card-alerts.ts", name: "getCardAlerts", fixture: "getFixtureAlerts" },
+    ],
+  ]);
+  const reached = new Set<string>();
   const result = await build({
     absWorkingDir: rootDir,
     entryPoints: { index: entry },
@@ -3519,32 +3903,37 @@ async function buildWorkboardStatesAssets() {
     },
     alias: buildPluginLoaderAliasMap(entry, process.argv[1], import.meta.url, "src"),
     plugins: [
+      createSolidControlUiBuildPlugin(rootDir),
       {
         name: "workboard-state-projections",
         setup(builder) {
-          builder.onLoad(
-            { filter: /[/\\]pages[/\\]workboard[/\\]view-card\.ts$/ },
-            async ({ path: sourcePath }) => {
-              const source = await fs.promises.readFile(sourcePath, "utf8");
-              const lifecycleImport =
-                /\bgetWorkboardLifecycle,(?=[\s\S]*?from "\.\.\/\.\.\/lib\/workboard\/index\.ts")/g;
-              const alertImport =
-                /\bgetCardAlerts,(?=[\s\S]*?from "\.\.\/\.\.\/lib\/workboard\/card-alerts\.ts")/g;
-              if (
-                [...source.matchAll(lifecycleImport)].length !== 1 ||
-                [...source.matchAll(alertImport)].length !== 1
-              ) {
-                throw new Error(
-                  "Workboard state fixture import seam changed; update its exact import transform.",
-                );
+          builder.onResolve(
+            {
+              filter: /^\.\.\/\.\.\/lib\/workboard\/(?:lifecycle|card-alerts)\.ts$/,
+              namespace: "file",
+            },
+            ({ path: specifier, importer }) => {
+              if (importer !== cardRenderer) {
+                return undefined;
               }
-              transformed = true;
+              reached.add(specifier);
+              return { path: specifier, namespace: "workboard-state-projections" };
+            },
+          );
+          builder.onLoad(
+            { filter: /.*/, namespace: "workboard-state-projections" },
+            ({ path: specifier }) => {
+              const projection = projections.get(specifier);
+              if (!projection) {
+                throw new Error(`Unknown Workboard fixture projection: ${specifier}`);
+              }
               return {
                 loader: "ts",
-                resolveDir: path.dirname(sourcePath),
-                contents:
-                  source.replace(lifecycleImport, "").replace(alertImport, "") +
-                  `\nimport { getFixtureLifecycle as getWorkboardLifecycle, getFixtureAlerts as getCardAlerts } from ${JSON.stringify(fileURLToPath(new URL("./control-ui-workboard-state-projections.ts", import.meta.url)))};\n`,
+                resolveDir: rootDir,
+                contents: [
+                  `export * from ${JSON.stringify(path.join(rootDir, "browser/lib/workboard", projection.source))};`,
+                  `export { ${projection.fixture} as ${projection.name} } from ${JSON.stringify(fixtureProjections)};`,
+                ].join("\n"),
               };
             },
           );
@@ -3552,8 +3941,8 @@ async function buildWorkboardStatesAssets() {
       },
     ],
   });
-  if (!transformed) {
-    throw new Error("Workboard state fixture did not reach the real card renderer.");
+  if (reached.size !== projections.size) {
+    throw new Error("Workboard state fixture did not reach both real card renderer projections.");
   }
   const revision = createHash("sha256");
   for (const file of result.outputFiles) {
@@ -3647,55 +4036,94 @@ const cacheDir = await mkdtemp(path.join(cacheRoot, "server-"));
 // The process owns this cache, so its exit hook is the single cleanup path.
 process.once("exit", () => rmSync(cacheDir, { recursive: true, force: true }));
 let server: ViteDevServer | undefined;
+let sessionDesignSandbox: Awaited<ReturnType<typeof startSessionDesignSandbox>> | undefined;
 try {
-  server = await createServer({
-    base: "/",
-    cacheDir,
-    clearScreen: false,
-    configFile: path.join(uiRoot, "vite.config.ts"),
-    define: {
-      "globalThis.OPENCLAW_CONTROL_UI_BUILD_INFO": JSON.stringify({
-        version: "2026.7.10",
-        commit: "0123456789abcdef0123456789abcdef01234567",
-        commitAt: "2026-07-10T11:22:33.000Z",
-        builtAt: "2026-07-10T12:34:56.000Z",
-        branch: null,
-        dirty: null,
-        release: false,
-        buildId: scenario.serverBuildId,
+  if (options.fixture === "session-design") {
+    sessionDesignSandbox = await startSessionDesignSandbox();
+  }
+  server = await createServer(
+    mergeConfig(
+      controlUiViteConfig({
+        command: "serve",
+        buildInfo: {
+          version: "2026.7.10",
+          commit: "0123456789abcdef0123456789abcdef01234567",
+          commitAt: "2026-07-10T11:22:33.000Z",
+          builtAt: "2026-07-10T12:34:56.000Z",
+          branch: null,
+          dirty: null,
+          release: false,
+          buildId: expectDefined(scenario.serverBuildId, "Control UI mock build ID"),
+        },
       }),
-    },
-    logLevel: "error",
-    optimizeDeps: {
-      ...(options.fixture === "board"
-        ? { entries: [path.join(uiRoot, "src", "test-helpers", "board-fixture.ts")] }
-        : {}),
-      include: ["diff", "lit/directives/repeat.js"],
-    },
-    plugins: [
-      ...createStandaloneMockIsolationPlugins(),
-      await createMockGatewayPlugin(scenario, options.fixture),
-      createBoardFixturePlugin(),
-      ...(options.fixture === "attachments" ? [createChatAttachmentFixturePlugin()] : []),
-    ],
-    publicDir: path.join(uiRoot, "public"),
-    resolve: {
-      alias: [
-        ...resolveExternalPackageAliasesForVite(),
-        ...resolveSourcePackageAliasesForVite(),
-        ...resolveTsconfigPathAliasesForVite(),
-      ],
-    },
-    root: uiRoot,
-    server: {
-      allowedHosts: options.allowedHosts,
-      host: options.host,
-      port: options.port,
-      strictPort: true,
-    },
-  });
+      {
+        base: "/",
+        cacheDir,
+        clearScreen: false,
+        configFile: false,
+        logLevel: "error",
+        optimizeDeps: {
+          ...(options.fixture === "board"
+            ? { entries: [path.join(uiRoot, "src", "test-helpers", "board-fixture.tsx")] }
+            : {}),
+          include: ["diff"],
+        },
+        plugins: [
+          ...createStandaloneMockIsolationPlugins(
+            sessionDesignSandbox
+              ? {
+                  sandboxUrl: new URL(
+                    sessionDesignSandbox.descriptor.sandboxUrl,
+                    sessionDesignSandbox.descriptor.sandboxOrigin,
+                  ).href,
+                  allowDesktopPopup: true,
+                }
+              : undefined,
+          ),
+          await createMockGatewayPlugin(
+            scenario,
+            options.fixture,
+            sessionDesignSandbox?.descriptor,
+          ),
+          createBoardFixturePlugin(),
+          ...(options.fixture === "session-design"
+            ? [
+                createSessionDesignPortalFixturePlugin(),
+                createSessionDesignDesktopFixturePlugin(),
+                createSessionDesignFileFixturePlugin(scenario),
+              ]
+            : []),
+          ...(options.fixture === "attachments" ? [createChatAttachmentFixturePlugin()] : []),
+        ],
+        publicDir: path.join(uiRoot, "public"),
+        resolve: {
+          alias: [
+            ...resolveExternalPackageAliasesForVite(),
+            ...resolveSourcePackageAliasesForVite(),
+            ...resolveTsconfigPathAliasesForVite(),
+          ],
+        },
+        root: uiRoot,
+        server: {
+          allowedHosts: options.allowedHosts,
+          host: options.host,
+          port: options.port,
+          strictPort: true,
+        },
+      },
+    ),
+  );
 
+  // Vite can exit from its signal handler; close the auxiliary listener with its HTTP owner too.
+  server.httpServer?.once("close", () => {
+    void sessionDesignSandbox?.close();
+  });
   await server.listen();
+  if (sessionDesignSandbox) {
+    console.log(
+      `[control-ui-mock] sandbox (forward this port unchanged): ${JSON.stringify(sessionDesignSandbox.descriptor)}`,
+    );
+  }
   console.log(
     `[control-ui-mock] ${resolveServerUrl(server, options.host, controlUiSessionPath(scenario.sessionKey ?? "agent:main:main"))}`,
   );
@@ -3705,4 +4133,5 @@ try {
   await waitForShutdown();
 } finally {
   await server?.close();
+  await sessionDesignSandbox?.close();
 }

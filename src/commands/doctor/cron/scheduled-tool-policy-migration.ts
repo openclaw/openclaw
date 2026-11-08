@@ -16,34 +16,8 @@ type ScheduledToolPolicyMigrationResult = {
   status: "current" | "migrated" | "legacy" | "invalid" | "not-applicable";
 };
 
-/** Collects operator-visible recovery outcomes while normalizing a cron store. */
-export function createScheduledToolPolicyMigrationCollector() {
-  const legacyJobs: string[] = [];
-  const invalidJobs: string[] = [];
-  return {
-    legacyJobs,
-    invalidJobs,
-    migrate(raw: Record<string, unknown>, onMigrated: (kind: "owner" | "policy") => void) {
-      const result = migrateScheduledToolPolicy(raw);
-      const jobName = normalizeOptionalString(raw.name) ?? normalizeOptionalString(raw.id);
-      if (result.status === "migrated") {
-        onMigrated("policy");
-      }
-      if (result.ownerReconciled) {
-        onMigrated("owner");
-      }
-      if (result.status === "legacy" && jobName) {
-        legacyJobs.push(jobName);
-      } else if (result.status === "invalid" && jobName) {
-        invalidJobs.push(jobName);
-      }
-      return result.mutated;
-    },
-  };
-}
-
 /** Recovers only account authority proven by immutable persisted owner identity. */
-function migrateScheduledToolPolicy(
+export function migrateScheduledToolPolicy(
   raw: Record<string, unknown>,
 ): ScheduledToolPolicyMigrationResult {
   const payload = readRecord(raw.payload);
@@ -79,11 +53,8 @@ function migrateScheduledToolPolicy(
     return { mutated, status: "current" };
   }
 
-  if (!ownerSessionKey) {
-    return { mutated: false, status: "legacy" };
-  }
-  const parsedSession = parseAgentSessionKey(ownerSessionKey);
-  if (!parsedSession) {
+  const parsedSession = ownerSessionKey ? parseAgentSessionKey(ownerSessionKey) : undefined;
+  if (!ownerSessionKey || !parsedSession) {
     return { mutated: false, status: "legacy" };
   }
   const ownerAgentId = normalizeOptionalString(owner?.agentId);

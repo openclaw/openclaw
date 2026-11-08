@@ -5,7 +5,12 @@ import {
   type SemVer,
   valid as validSemver,
 } from "semver";
-import { compareOpenClawSemver, isOpenClawCorrectionSemver } from "./semver.js";
+import {
+  compareOpenClawSemver,
+  compareValidSemver,
+  isOpenClawCorrectionSemver,
+  normalizeLegacyDotBetaVersion,
+} from "./semver.js";
 
 export { resolveNpmJsonEntries } from "../../scripts/lib/npm-json-output.mts";
 
@@ -63,37 +68,29 @@ export function parseRegistryNpmSpecResult(
       error: "unsupported npm spec: expected <name> or <name>@<version> from the npm registry",
     };
   }
-  if (!hasSelector) {
-    return {
-      ok: true,
-      parsed: {
-        name,
-        raw: spec,
-        selectorKind: "none",
-        selectorIsPrerelease: false,
-      },
-    };
-  }
-  if (!selector) {
-    return { ok: false, error: "unsupported npm spec: missing version/tag after @" };
-  }
-  if (/[\\/]/.test(selector)) {
-    return { ok: false, error: "unsupported npm spec: invalid version/tag" };
-  }
-  const exactVersion = validSemver(selector);
-  if (!exactVersion && !DIST_TAG_RE.test(selector)) {
-    return {
-      ok: false,
-      error: "unsupported npm spec: use an exact version or dist-tag (ranges are not allowed)",
-    };
+  let exactVersion: string | null = null;
+  if (hasSelector) {
+    if (!selector) {
+      return { ok: false, error: "unsupported npm spec: missing version/tag after @" };
+    }
+    if (/[\\/]/.test(selector)) {
+      return { ok: false, error: "unsupported npm spec: invalid version/tag" };
+    }
+    exactVersion = validSemver(selector);
+    if (!exactVersion && !DIST_TAG_RE.test(selector)) {
+      return {
+        ok: false,
+        error: "unsupported npm spec: use an exact version or dist-tag (ranges are not allowed)",
+      };
+    }
   }
   return {
     ok: true,
     parsed: {
       name,
       raw: spec,
-      selector,
-      selectorKind: exactVersion ? "exact-version" : "tag",
+      ...(hasSelector ? { selector } : {}),
+      selectorKind: !hasSelector ? "none" : exactVersion ? "exact-version" : "tag",
       selectorIsPrerelease:
         exactVersion !== null &&
         parseSemverPrerelease(exactVersion) !== null &&
@@ -166,6 +163,19 @@ export function compareOpenClawReleaseVersions(left: string, right: string): num
   return parsedLeft && parsedRight ? compareOpenClawSemver(parsedLeft, parsedRight) : null;
 }
 
+/** Compares update versions, preserving monthly corrections and legacy dot-beta tags. */
+export function compareSemverStrings(a: string | null, b: string | null): number | null {
+  if (a && b) {
+    const openClawReleaseCmp = compareOpenClawReleaseVersions(a, b);
+    if (openClawReleaseCmp != null) {
+      return openClawReleaseCmp;
+    }
+  }
+  const normalizedA = a ? normalizeLegacyDotBetaVersion(a) : null;
+  const normalizedB = b ? normalizeLegacyDotBetaVersion(b) : null;
+  return normalizedA && normalizedB ? compareValidSemver(normalizedA, normalizedB) : null;
+}
+
 /** Returns whether an exact semver value is a prerelease, excluding stable correction releases. */
 export function isPrereleaseSemverVersion(value: string): boolean {
   const trimmed = value.trim();
@@ -203,7 +213,7 @@ export function formatPrereleaseResolutionError(params: {
   const selectorHint =
     params.spec.selectorKind === "none" ||
     normalizeLowercaseStringOrEmpty(params.spec.selector) === "latest"
-      ? `Use "${params.spec.name}@beta" (or another prerelease tag) or an exact prerelease version to opt in explicitly.`
+      ? `Use "npm:${params.spec.name}@beta" (or another prerelease tag) or an exact prerelease version to opt in explicitly.`
       : `Use an explicit prerelease tag or exact prerelease version if you want prerelease installs.`;
   return `Resolved ${params.spec.raw} to prerelease version ${params.resolvedVersion}, but prereleases are only installed when explicitly requested. ${selectorHint}`;
 }

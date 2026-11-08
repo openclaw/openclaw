@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { isPathInside } from "openclaw/plugin-sdk/file-access-runtime";
+import { hasNodeErrorCode } from "openclaw/plugin-sdk/path-existence-runtime";
 import { resolveRequiredHomeDir, resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 import type { CodexAppServerClient } from "./client.js";
 import type { CodexSkillsListResponse } from "./protocol-control-plane.js";
@@ -36,10 +37,6 @@ const nativeSkillIsolationByClient = new WeakMap<
     };
   }
 >();
-
-function isMissingPathError(error: unknown): boolean {
-  return (error as NodeJS.ErrnoException).code === "ENOENT";
-}
 
 function isUnsupportedCodexVisualizeSkill(skill: {
   name: string;
@@ -115,6 +112,11 @@ async function collectPersonalSkillRealPaths(
     depth: 0,
   }));
   let entryCount = 0;
+  const recordScanError = (error: unknown) => {
+    if (!hasNodeErrorCode(error, "ENOENT")) {
+      complete = false;
+    }
+  };
   const recordSkillFile = async (filePath: string, onlyEscapedStateTargets: boolean) => {
     try {
       const skillRealPath = await fs.realpath(filePath);
@@ -122,9 +124,7 @@ async function collectPersonalSkillRealPaths(
         skillPaths.add(skillRealPath);
       }
     } catch (error) {
-      if (!isMissingPathError(error)) {
-        complete = false;
-      }
+      recordScanError(error);
     }
   };
   for (const current of queue) {
@@ -132,10 +132,7 @@ async function collectPersonalSkillRealPaths(
     try {
       realDir = await fs.realpath(current.dir);
     } catch (error) {
-      if (isMissingPathError(error)) {
-        continue;
-      }
-      complete = false;
+      recordScanError(error);
       continue;
     }
     if (seenDirectories.has(realDir)) {
@@ -150,9 +147,7 @@ async function collectPersonalSkillRealPaths(
     try {
       directory = await fs.opendir(current.dir);
     } catch (error) {
-      if (!isMissingPathError(error)) {
-        complete = false;
-      }
+      recordScanError(error);
       continue;
     }
     try {
@@ -175,9 +170,7 @@ async function collectPersonalSkillRealPaths(
             isFile = stat.isFile();
             isDirectory = stat.isDirectory();
           } catch (error) {
-            if (!isMissingPathError(error)) {
-              complete = false;
-            }
+            recordScanError(error);
             continue;
           }
         }
@@ -198,9 +191,7 @@ async function collectPersonalSkillRealPaths(
         }
       }
     } catch (error) {
-      if (!isMissingPathError(error)) {
-        complete = false;
-      }
+      recordScanError(error);
     }
   }
   return { complete, skillPaths };
@@ -301,46 +292,41 @@ async function resolveUncachedCodexNativeSkillIsolation(
     }
     return DEFAULT_STATE_SKILL_DISCOVERY_UNAVAILABLE;
   }
-  if (defaultStateDir) {
-    return skillPaths.size > 0
-      ? {
-          disabledUserSkillPaths: [...skillPaths].toSorted((left, right) =>
-            left.localeCompare(right),
-          ),
-          suppressNativeSkillInstructions: false,
-        }
-      : undefined;
+  if (defaultStateDir && skillPaths.size === 0) {
+    return undefined;
   }
-  const effectiveHome =
-    params.home?.trim() ||
-    process.env.HOME?.trim() ||
-    process.env.USERPROFILE?.trim() ||
-    os.homedir();
-  const homes = [effectiveHome];
-  if (process.platform === "win32") {
-    homes.push(params.userProfile?.trim() || os.homedir());
-  }
-  const personalSkills = await collectPersonalSkillRealPaths(
-    [...new Set(homes.map((home) => path.resolve(home)))],
-    params.codexHome,
-  );
-  for (const skillPath of personalSkills.skillPaths) {
-    skillPaths.add(skillPath);
-  }
-  // Codex also labels explicit plugin and extra roots as user scope. Preserve those on a
-  // complete provenance scan; fall back to all user paths only when personal-root proof failed.
-  if (!personalSkills.complete) {
-    for (const entry of response.data) {
-      for (const skill of entry.skills) {
-        if (skill.scope === "user") {
-          skillPaths.add(skill.path);
+  if (!defaultStateDir) {
+    const effectiveHome =
+      params.home?.trim() ||
+      process.env.HOME?.trim() ||
+      process.env.USERPROFILE?.trim() ||
+      os.homedir();
+    const homes = [effectiveHome];
+    if (process.platform === "win32") {
+      homes.push(params.userProfile?.trim() || os.homedir());
+    }
+    const personalSkills = await collectPersonalSkillRealPaths(
+      [...new Set(homes.map((home) => path.resolve(home)))],
+      params.codexHome,
+    );
+    for (const skillPath of personalSkills.skillPaths) {
+      skillPaths.add(skillPath);
+    }
+    // Codex also labels explicit plugin and extra roots as user scope. Preserve those on a
+    // complete provenance scan; fall back to all user paths only when personal-root proof failed.
+    if (!personalSkills.complete) {
+      for (const entry of response.data) {
+        for (const skill of entry.skills) {
+          if (skill.scope === "user") {
+            skillPaths.add(skill.path);
+          }
         }
       }
     }
   }
   return {
     disabledUserSkillPaths: [...skillPaths].toSorted((left, right) => left.localeCompare(right)),
-    suppressNativeSkillInstructions: true,
+    suppressNativeSkillInstructions: !defaultStateDir,
   };
 }
 

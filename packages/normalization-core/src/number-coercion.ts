@@ -9,6 +9,12 @@ export function asPositiveFiniteNumber(value: unknown): number | undefined {
   return number && number > 0 ? number : undefined;
 }
 
+/** Floors positive finite input; fractions below one become zero. */
+export function floorPositiveFiniteNumber(value: unknown): number | undefined {
+  const number = asPositiveFiniteNumber(value);
+  return number === undefined ? undefined : Math.floor(number);
+}
+
 export function asNonNegativeFiniteNumber(value: unknown): number | undefined {
   const number = asFiniteNumber(value);
   return number && number < 0 ? undefined : number;
@@ -93,6 +99,14 @@ export function parseStrictFiniteNumber(value: unknown): number | undefined {
 
 export function asPositiveSafeInteger(value: unknown): number | undefined {
   return typeof value === "number" && Number.isSafeInteger(value) && value > 0 ? value : undefined;
+}
+
+export function asPositiveInteger(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isInteger(value) && value > 0 ? value : undefined;
+}
+
+export function asNonNegativeInteger(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isInteger(value) && value >= 0 ? value : undefined;
 }
 
 /** Conservative upper bound for Node timer delays. */

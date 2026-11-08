@@ -7,10 +7,10 @@ import {
   resolveSqliteTranscriptScope,
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
-import { appendTranscriptMessageSync } from "./session-accessor.sqlite-transcript-write.js";
+import { appendTranscriptMessageSync } from "./session-accessor.sqlite-transcript-write.kernel.js";
 import { runSessionEntryWorkerOperation } from "./session-entry-patch.js";
 import { executeSessionMessageRewriteOperation } from "./session-message-rewrite-domain.js";
-import type { SessionTranscriptEventCommitted } from "./session-message-rewrite.worker.js";
+import type { SessionTranscriptEventCommitted } from "./session-transcript-mutation.types.js";
 
 it("acknowledges each independent commit in one retained worker operation", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {

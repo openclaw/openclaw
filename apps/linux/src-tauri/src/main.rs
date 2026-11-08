@@ -1,4 +1,3 @@
-#[cfg(target_os = "linux")]
 mod bundled_runtime;
 mod chrome_setup;
 mod cli;
@@ -7,6 +6,7 @@ mod desktop_bridge;
 mod desktop_node;
 mod desktop_node_process;
 mod discovery;
+mod first_run;
 mod gateway;
 mod gateway_control_auth;
 mod gateway_device_identity;
@@ -18,11 +18,15 @@ mod gateway_sleep;
 mod gateway_sleep_logind;
 #[cfg(target_os = "linux")]
 mod gateway_sleep_logind_listener;
+#[cfg(test)]
+mod gateway_sleep_tests;
 mod gateway_windows;
 mod gateway_ws;
 mod installer;
 mod keep_awake;
 mod keep_awake_platform;
+#[cfg(test)]
+mod keep_awake_tests;
 mod native_browser;
 mod native_browser_bridge;
 mod native_browser_platform;
@@ -32,8 +36,8 @@ mod pending_approvals;
 mod quickchat;
 mod quickchat_widgets;
 mod remote_gateway;
-#[cfg(target_os = "linux")]
 mod runtime_action;
+mod test_profile;
 mod tray;
 mod updater;
 mod window_chrome;
@@ -63,7 +67,7 @@ use tauri_plugin_opener::OpenerExt;
 
 const CONNECTED_WATCH_INTERVAL: Duration = Duration::from_secs(15);
 const RECONNECT_INTERVAL: Duration = Duration::from_secs(3);
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "windows", target_os = "macos"))]
 pub(crate) struct RuntimeAction {
     cli: OpenClawCli,
     observation: runtime_action::Observation,
@@ -171,6 +175,8 @@ struct BuildInfo {
     version: String,
     release_build: bool,
     platform: &'static str,
+    runtime_flavor: Option<runtime_action::RuntimeFlavor>,
+    test_profile: Option<&'static str>,
 }
 
 fn is_release_version(version: &str) -> bool {
@@ -189,7 +195,12 @@ enum DeepLinkRoute {
 }
 
 fn deep_link_route(url: &Url) -> DeepLinkRoute {
-    if url.scheme() == "openclaw" && url.host_str() == Some("dashboard") {
+    let scheme = if test_profile::enabled() {
+        "openclaw-aot"
+    } else {
+        "openclaw"
+    };
+    if url.scheme() == scheme && url.host_str() == Some("dashboard") {
         DeepLinkRoute::Dashboard
     } else {
         DeepLinkRoute::FocusOnly
@@ -402,6 +413,7 @@ struct NavigationState {
     watch_generation: u64,
     retired_preparation: Option<u64>,
     onboarding_pending: bool,
+    automatic_setup: bool,
     remote_snapshot: Option<GatewaySnapshot>,
     settings_return: Option<SettingsReturn>,
     #[cfg(target_os = "linux")]
@@ -409,6 +421,11 @@ struct NavigationState {
 }
 
 impl NavigationState {
+    #[cfg(target_os = "linux")]
+    fn remote_presentation_is_current(&self) -> bool {
+        self.remote_dashboard && self.remote_presentation_generation == Some(self.watch_generation)
+    }
+
     fn remote_page_is_current(&self, generation: u64) -> bool {
         self.remote_dashboard
             && self.watch_generation == generation
@@ -522,12 +539,9 @@ impl NavigationState {
             return false;
         }
         let mut current_base = current_url.clone();
-        let mut local_base = local_url.clone();
         current_base.set_query(None);
         current_base.set_fragment(None);
-        local_base.set_query(None);
-        local_base.set_fragment(None);
-        current_base == local_base
+        current_base == *local_url
             && current_url
                 .query_pairs()
                 .find(|(key, _)| key == "mode")
@@ -575,11 +589,7 @@ impl NavigationState {
             // A failed replacement is not health evidence for the committed page.
             // Once publication changes its generation, the old handle cannot mask errors.
             #[cfg(target_os = "linux")]
-            if self.remote_dashboard
-                && self
-                    .remote_presentation_generation
-                    .is_some_and(|generation| generation == self.watch_generation)
-            {
+            if self.remote_presentation_is_current() {
                 return false;
             }
         }
@@ -626,16 +636,34 @@ impl NavigationState {
         self.onboarding_pending = true;
     }
 
+    fn prepare_first_connection(&mut self, fresh: &Result<bool, String>, isolated_profile: bool) {
+        if isolated_profile && matches!(fresh, Ok(true)) {
+            // The isolated app already owns a runtime, so it connects directly
+            // instead of passing through the missing-CLI/setup fallback.
+            self.mark_onboarding_pending();
+            self.automatic_setup = true;
+        }
+    }
+
     fn prepare_dashboard_url(&mut self, target: &str) -> Result<Url, String> {
         let mut url =
             Url::parse(target).map_err(|_| "Dashboard returned an invalid URL.".to_string())?;
         if self.onboarding_pending {
             // Setup owns inference before chat; preserve Gateway base paths and fragment auth.
             // Saved first-run links may use either marker; new links use explicit.
+            let (path, key, value) = if self.automatic_setup {
+                (["custodian"].as_slice(), "onboarding", "1")
+            } else {
+                (
+                    ["settings", "model-setup"].as_slice(),
+                    "firstRun",
+                    "explicit",
+                )
+            };
             url.path_segments_mut()
                 .map_err(|_| "Dashboard returned an invalid URL.".to_string())?
                 .pop_if_empty()
-                .extend(["settings", "model-setup"]);
+                .extend(path);
             let existing_query = url
                 .query_pairs()
                 .filter(|(key, _)| key != "firstRun")
@@ -644,8 +672,9 @@ impl NavigationState {
             url.query_pairs_mut()
                 .clear()
                 .extend_pairs(existing_query)
-                .append_pair("firstRun", "explicit");
+                .append_pair(key, value);
             self.onboarding_pending = false;
+            self.automatic_setup = false;
         }
         Ok(url)
     }
@@ -743,13 +772,54 @@ impl DesktopState {
     }
 
     pub fn connect(&self, app: &AppHandle, selection: u64) -> Result<GatewaySnapshot, String> {
+        let fresh = if cfg!(any(
+            target_os = "linux",
+            target_os = "windows",
+            target_os = "macos"
+        )) {
+            first_run::eligible(remote_gateway::has_saved_config(), || {
+                app.state::<gateway_windows::GatewayWindows>()
+                    .has_saved_profiles()
+            })
+        } else {
+            Ok(false)
+        };
+        self.inner
+            .navigation
+            .lock()
+            .expect("navigation")
+            .prepare_first_connection(&fresh, test_profile::enabled());
         let result = self.connect_selected(app, false, selection);
         if let Err(error) = &result {
             if remote_gateway::saved_settings()?.is_some() {
                 return self.remote_failure(app, error.clone(), selection, None);
             }
         }
-        result
+        first_run::complete(result?, fresh, |missing_cli| {
+            {
+                let mut navigation = self.inner.navigation.lock().expect("navigation");
+                navigation.mark_onboarding_pending();
+                navigation.automatic_setup = true;
+            }
+            let result = if missing_cli {
+                self.install_cli(
+                    app,
+                    InstallChannel::for_build(
+                        is_release_version(&app.package_info().version.to_string()),
+                        bundled_runtime::flavor(),
+                    ),
+                    selection,
+                )
+            } else {
+                self.connect_explicit_local(app, selection)
+            };
+            if result.is_err() {
+                let mut navigation = self.inner.navigation.lock().expect("navigation");
+                navigation.onboarding_pending = false;
+                navigation.automatic_setup = false;
+            }
+            result
+        })
     }
 
     fn retry_remote(&self, app: &AppHandle, selection: u64) -> Result<GatewaySnapshot, String> {
@@ -803,7 +873,8 @@ impl DesktopState {
             })?;
         }
         let cli = self.resolve_cli();
-        if !explicit_local && !remote_gateway::has_configured_gateway()? {
+        if !explicit_local && !test_profile::enabled() && !remote_gateway::has_configured_gateway()?
+        {
             // First-run setup belongs to the pending bootstrap reply. Navigating
             // here replaces its WebView and loses the local/remote choice.
             let snapshot = match cli {
@@ -817,14 +888,17 @@ impl DesktopState {
         let cli = match cli {
             Ok(cli) => cli,
             Err(CliError::Missing) => {
-                return self.show_missing_cli(app, explicit_local, None);
+                return self.show_cli_recovery(app, CliError::Missing, explicit_local, None);
             }
             Err(error) => return Err(error.to_string()),
         };
         if explicit_local {
             self.inner.remote_tunnels.clear();
         }
-        #[cfg(target_os = "linux")]
+        if test_profile::enabled() {
+            test_profile::start(&cli)?;
+        }
+        #[cfg(any(target_os = "linux", target_os = "windows", target_os = "macos"))]
         let ready = {
             // Startup, app updates, and reconnects only observe the existing service.
             let snapshot = gateway::status(&cli)?;
@@ -844,9 +918,9 @@ impl DesktopState {
             }
             gateway::dashboard(&cli, snapshot)?
         };
-        #[cfg(not(target_os = "linux"))]
+        #[cfg(not(any(target_os = "linux", target_os = "windows", target_os = "macos")))]
         let ready = gateway::ensure_ready(&cli)?;
-        self.finish_local_connection(app, cli, ready)
+        self.finish_local_connection(app, cli, ready, false)
     }
 
     pub fn install_cli(
@@ -855,12 +929,16 @@ impl DesktopState {
         channel: InstallChannel,
         selection: u64,
     ) -> Result<GatewaySnapshot, String> {
+        if test_profile::enabled() {
+            return Err("The isolated AOT test app already includes its runtime. Use Start Gateway to run it.".into());
+        }
+        channel.require_available(bundled_runtime::flavor())?;
         let _operation = self
             .inner
             .operation
             .lock()
             .map_err(|_| "Installer lock is unavailable.".to_string())?;
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", target_os = "windows", target_os = "macos"))]
         let cli = {
             let runtime = bundled_runtime::seed(app)?;
             let cli = match OpenClawCli::discover() {
@@ -885,7 +963,7 @@ impl DesktopState {
             })?;
             cli
         };
-        #[cfg(not(target_os = "linux"))]
+        #[cfg(not(any(target_os = "linux", target_os = "windows", target_os = "macos")))]
         let cli = {
             installer::install(app, channel, false)?;
             let cli = OpenClawCli::discover().map_err(|error| {
@@ -925,15 +1003,15 @@ impl DesktopState {
                     .to_string()
             })?
             .mark_onboarding_pending();
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", target_os = "windows", target_os = "macos"))]
         let readiness =
             gateway::status(&cli).and_then(|snapshot| gateway::dashboard(&cli, snapshot));
-        #[cfg(not(target_os = "linux"))]
+        #[cfg(not(any(target_os = "linux", target_os = "windows", target_os = "macos")))]
         let readiness = gateway::ensure_ready(&cli);
         let ready = readiness.map_err(|error| {
             format!("OpenClaw is installed, but connecting to the Gateway failed: {error}")
         })?;
-        self.finish_local_connection(app, cli, ready)
+        self.finish_local_connection(app, cli, ready, false)
             .map_err(|error| {
                 format!("OpenClaw is installed, but opening the Gateway dashboard failed: {error}")
             })
@@ -962,10 +1040,10 @@ impl DesktopState {
             return Ok(snapshot);
         }
         let ready = gateway::dashboard(&cli, snapshot)?;
-        self.finish_local_connection(app, cli, ready)
+        self.finish_local_connection(app, cli, ready, false)
     }
 
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "windows", target_os = "macos"))]
     fn runtime_operation_is_current(&self, app: &AppHandle, selection: u64) -> bool {
         !self.is_quitting()
             && app
@@ -973,13 +1051,16 @@ impl DesktopState {
                 .selection_is_current(selection)
     }
 
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "windows", target_os = "macos"))]
     fn runtime_action(
         &self,
         app: &AppHandle,
         action: RuntimeAction,
         selection: u64,
     ) -> Result<GatewaySnapshot, String> {
+        if test_profile::enabled() {
+            return Err("The isolated AOT test app uses its own foreground Gateway; service runtime changes are disabled.".into());
+        }
         let _operation = self
             .inner
             .operation
@@ -992,9 +1073,11 @@ impl DesktopState {
         runtime_action::activate(&action.cli, &runtime, &action.observation, &|| {
             self.runtime_operation_is_current(app, selection)
         })?;
-        let snapshot = gateway::status(&action.cli)?;
-        let ready = gateway::dashboard(&action.cli, snapshot)?;
-        self.finish_local_connection(app, action.cli, ready)
+        let cli = runtime_action::select_cli(&action.cli, &runtime)?;
+        *self.inner.cli.lock().expect("CLI mutex poisoned") = Some(cli.clone());
+        let snapshot = gateway::status(&cli)?;
+        let ready = gateway::dashboard(&cli, snapshot)?;
+        self.finish_local_connection(app, cli, ready, true)
     }
 
     fn finish_local_connection(
@@ -1002,6 +1085,7 @@ impl DesktopState {
         app: &AppHandle,
         cli: OpenClawCli,
         ready: ReadyGateway,
+        replace_document: bool,
     ) -> Result<GatewaySnapshot, String> {
         let snapshot = ready.snapshot.clone();
         let generation = self.on_main(app, move |state, app| {
@@ -1016,6 +1100,7 @@ impl DesktopState {
                     &ready.dashboard_url,
                     true,
                     true,
+                    replace_document,
                 )?;
             }
             // Explicit completion publishes fresh credentials even while Settings owns the page.
@@ -1044,17 +1129,14 @@ impl DesktopState {
                 .permit_local(true, None);
             // Keep the first-run page that owns the pending bootstrap reply.
             if !state.main_window_has_local_content(&main_window(&app)?) {
-                let mut url = state.inner.local_url.clone();
-                url.query_pairs_mut()
-                    .clear()
-                    .append_pair("mode", "reconnecting");
+                let url = state.local_url("reconnecting");
                 app.state::<native_browser_bridge::NativeBrowserBridgeState>()
                     .clear(&app);
                 replace_main_webview(&app, url, None, None)?;
             }
             Ok(())
         })?;
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", target_os = "windows", target_os = "macos"))]
         if let Ok(cli) = self.resolve_cli() {
             let snapshot = gateway::status(&cli)?;
             if !snapshot.installed && !snapshot.reachable {
@@ -1372,11 +1454,8 @@ impl DesktopState {
         } else {
             #[cfg(target_os = "linux")]
             let remote_url = navigation
-                .remote_presentation_generation
-                .filter(|generation| {
-                    navigation.remote_dashboard && *generation == navigation.watch_generation
-                })
-                .map(|_| {
+                .remote_presentation_is_current()
+                .then(|| {
                     main_window(app)?.url().map_err(|_| {
                         "Could not retain the current dashboard. Try again.".to_string()
                     })
@@ -1408,10 +1487,7 @@ impl DesktopState {
                 SettingsReturnTarget::Local(target)
             }
         };
-        let mut url = self.inner.local_url.clone();
-        url.query_pairs_mut()
-            .clear()
-            .append_pair("mode", "connectionSettings");
+        let url = self.local_url("connectionSettings");
         operations
             .while_current(selection, || {
                 navigation.begin_settings(selection, target)?;
@@ -1442,29 +1518,21 @@ impl DesktopState {
             SettingsReturnTarget::SavedGateway => {
                 gateway_windows::restore_selected_main(app)?;
             }
-            SettingsReturnTarget::Local(url) => {
+            SettingsReturnTarget::Local(url) | SettingsReturnTarget::Remote(url) => {
+                if matches!(previous.target, SettingsReturnTarget::Remote(_)) {
+                    #[cfg(target_os = "linux")]
+                    if !navigation.remote_presentation_is_current() {
+                        return Err(
+                            "The previous dashboard is unavailable. Retry or edit the connection."
+                                .to_string(),
+                        );
+                    }
+                    #[cfg(not(target_os = "linux"))]
+                    return Err("The previous dashboard is unavailable.".to_string());
+                }
                 main_window(app)?
                     .navigate(url)
                     .map_err(|_| "Could not return to the dashboard. Try again.".to_string())?;
-            }
-            #[cfg(target_os = "linux")]
-            SettingsReturnTarget::Remote(url) => {
-                navigation
-                    .remote_presentation_generation
-                    .filter(|generation| {
-                        navigation.remote_dashboard && *generation == navigation.watch_generation
-                    })
-                    .ok_or_else(|| {
-                        "The previous dashboard is unavailable. Retry or edit the connection."
-                            .to_string()
-                    })?;
-                main_window(app)?
-                    .navigate(url)
-                    .map_err(|_| "Could not return to the dashboard. Try again.".to_string())?;
-            }
-            #[cfg(not(target_os = "linux"))]
-            SettingsReturnTarget::Remote(_) => {
-                return Err("The previous dashboard is unavailable.".to_string());
             }
         }
         let monitor = navigation.finish_settings_return();
@@ -1536,9 +1604,8 @@ impl DesktopState {
                                 "reconnecting".to_string()
                             }
                         };
-                        let mut recovery = self.inner.local_url.clone();
+                        let mut recovery = self.local_url(&mode);
                         recovery.set_fragment(None);
-                        recovery.query_pairs_mut().clear().append_pair("mode", &mode);
                         let bridge =
                             app.state::<native_browser_bridge::NativeBrowserBridgeState>();
                         // The bridge scopes the whole dashboard, not just this session.
@@ -1701,6 +1768,9 @@ impl DesktopState {
         let state = self.clone();
         let app = app.clone();
         thread::spawn(move || {
+            if let Err(error) = test_profile::stop() {
+                eprintln!("{error}");
+            }
             if let Some(node) = app.try_state::<desktop_node::DesktopNode>() {
                 node.wait_stopped();
             }
@@ -1739,12 +1809,9 @@ impl DesktopState {
 
     pub(crate) fn main_window_has_local_url(&self, url: &Url) -> bool {
         let mut current_url = url.clone();
-        let mut local_url = self.inner.local_url.clone();
         current_url.set_query(None);
         current_url.set_fragment(None);
-        local_url.set_query(None);
-        local_url.set_fragment(None);
-        current_url == local_url
+        current_url == self.inner.local_url
     }
 
     pub(crate) fn main_window_has_connection_settings_url(&self, url: &Url) -> bool {
@@ -1759,33 +1826,34 @@ impl DesktopState {
         self.with_tray(|tray| tray.update(snapshot));
     }
 
-    fn show_missing_cli(
+    fn local_url(&self, mode: &str) -> Url {
+        let mut url = self.inner.local_url.clone();
+        url.query_pairs_mut().clear().append_pair("mode", mode);
+        url
+    }
+
+    fn show_cli_recovery(
         &self,
         app: &AppHandle,
+        error: CliError,
         force: bool,
         expected_generation: Option<u64>,
     ) -> Result<GatewaySnapshot, String> {
-        let snapshot = GatewaySnapshot::missing_cli();
-        let navigation = self.show_local(app, "missingCli", force, expected_generation);
-        if !local_recovery_owns_gateway(&navigation) {
-            return Ok(snapshot);
-        }
-        app.state::<gateway_ws::GatewayClient>()
-            .clear_configuration(app);
-        self.update_tray(&snapshot);
-        navigation.map(|_| snapshot)
-    }
-
-    fn show_cli_recovery_error(&self, app: &AppHandle, generation: u64, error: CliError) {
         let mut snapshot = GatewaySnapshot::missing_cli();
-        snapshot.status = "CLI unavailable".to_string();
-        snapshot.detail = Some(error.to_string());
-        let navigation = self.show_local(app, "error", false, Some(generation));
+        let mode = if matches!(error, CliError::Missing) {
+            "missingCli"
+        } else {
+            snapshot.status = "CLI unavailable".to_string();
+            snapshot.detail = Some(error.to_string());
+            "error"
+        };
+        let navigation = self.show_local(app, mode, force, expected_generation);
         if local_recovery_owns_gateway(&navigation) {
             app.state::<gateway_ws::GatewayClient>()
                 .clear_configuration(app);
             self.update_tray(&snapshot);
         }
+        navigation.map(|_| snapshot)
     }
 
     fn poll_pending_approvals(&self, app: &AppHandle, cli: &OpenClawCli, generation: u64) {
@@ -1850,7 +1918,14 @@ impl DesktopState {
             if state.is_quitting() || !navigation.permit_local(force, expected_generation) {
                 return Ok(false);
             }
-            state.navigate_local_document(&app, &mut navigation, &target, false, dashboard)?;
+            state.navigate_local_document(
+                &app,
+                &mut navigation,
+                &target,
+                false,
+                dashboard,
+                false,
+            )?;
             Ok(true)
         })
     }
@@ -1863,6 +1938,7 @@ impl DesktopState {
         target: &str,
         reveal_window: bool,
         dashboard: bool,
+        replace_document: bool,
     ) -> Result<(), String> {
         let windows = app.state::<gateway_windows::GatewayWindows>();
         let base = Url::parse(target).map_err(|_| "Dashboard returned an invalid URL.")?;
@@ -1878,9 +1954,11 @@ impl DesktopState {
             return Ok(());
         }
         let onboarding_was_pending = dashboard && navigation.onboarding_pending;
+        let automatic_setup = navigation.automatic_setup;
         let bridge = app.state::<native_browser_bridge::NativeBrowserBridgeState>();
         let bridge_script = if dashboard {
-            bridge.select(app, &base, false)?
+            // A runtime update changes the dashboard bytes even when only its auth fragment changes.
+            bridge.select(app, &base, replace_document)?
         } else {
             bridge.clear(app);
             None
@@ -1902,6 +1980,7 @@ impl DesktopState {
             let _ = replace_main_webview(app, self.inner.local_url.clone(), None, None);
             if onboarding_was_pending {
                 navigation.mark_onboarding_pending();
+                navigation.automatic_setup = automatic_setup;
             }
             return Err(error);
         }
@@ -1925,8 +2004,7 @@ impl DesktopState {
         force: bool,
         expected_generation: Option<u64>,
     ) -> Result<bool, String> {
-        let mut url = self.inner.local_url.clone();
-        url.query_pairs_mut().clear().append_pair("mode", mode);
+        let url = self.local_url(mode);
         // Status/watchdog updates may change the hidden WebView, but must not reveal it.
         self.navigate_local(app, url.as_str(), force, expected_generation, false)
     }
@@ -1985,7 +2063,14 @@ impl DesktopState {
                 return Ok(());
             }
             // The transport is already owned; initialize only its dashboard document.
-            state.navigate_local_document(&app, &mut navigation, &ready.dashboard_url, false, true)
+            state.navigate_local_document(
+                &app,
+                &mut navigation,
+                &ready.dashboard_url,
+                false,
+                true,
+                false,
+            )
         })
     }
 
@@ -2008,10 +2093,7 @@ impl DesktopState {
             let Ok(_operation) = state.inner.operation.try_lock() else {
                 continue;
             };
-            let snapshot = match gateway::status(&cli) {
-                Ok(snapshot) => snapshot,
-                Err(error) => GatewaySnapshot::reconnecting(error),
-            };
+            let snapshot = gateway::status(&cli).unwrap_or_else(GatewaySnapshot::reconnecting);
             if snapshot.reachable {
                 state.update_tray(&snapshot);
                 if let Err(error) =
@@ -2051,19 +2133,14 @@ impl DesktopState {
                         match state.resolve_cli() {
                             Ok(discovered) => cli = discovered,
                             Err(error) => {
-                                if matches!(error, CliError::Missing) {
-                                    let _ = state.show_missing_cli(&app, false, Some(generation));
-                                } else {
-                                    state.show_cli_recovery_error(&app, generation, error);
-                                }
+                                let _ =
+                                    state.show_cli_recovery(&app, error, false, Some(generation));
                                 return;
                             }
                         }
                     }
-                    let snapshot = match gateway::status(&cli) {
-                        Ok(snapshot) => snapshot,
-                        Err(error) => GatewaySnapshot::reconnecting(error),
-                    };
+                    let snapshot =
+                        gateway::status(&cli).unwrap_or_else(GatewaySnapshot::reconnecting);
                     state.update_tray(&snapshot);
                     if snapshot.reachable {
                         if let Ok(ready) = gateway::dashboard(&cli, snapshot) {
@@ -2846,6 +2923,52 @@ mod navigation_tests {
     }
 
     #[test]
+    fn automatic_first_run_opens_custodian_once_preserving_dashboard_auth() {
+        let mut navigation = NavigationState::default();
+        navigation.mark_onboarding_pending();
+        navigation.automatic_setup = true;
+        let first = navigation
+            .prepare_dashboard_url("http://127.0.0.1:18789/control/?foo=bar#token=fixture")
+            .unwrap();
+        assert_eq!(first.path(), "/control/custodian");
+        assert_eq!(first.query(), Some("foo=bar&onboarding=1"));
+        assert_eq!(first.fragment(), Some("token=fixture"));
+        assert!(is_active_onboarding_url(&first));
+        let next = navigation
+            .prepare_dashboard_url("http://127.0.0.1:18789/control/")
+            .unwrap();
+        assert_eq!(next.path(), "/control/");
+        assert_eq!(next.query(), None);
+    }
+
+    #[test]
+    fn fresh_isolated_runtime_enters_shared_automatic_setup_on_first_navigation() {
+        for (fresh, isolated_profile, expected_path) in [
+            (Ok(true), true, "/control/custodian"),
+            (Ok(false), true, "/control/"),
+            (Err("Saved Gateways unavailable".into()), true, "/control/"),
+            (Ok(true), false, "/control/"),
+        ] {
+            let mut navigation = NavigationState::default();
+            navigation.prepare_first_connection(&fresh, isolated_profile);
+            let url = navigation
+                .prepare_dashboard_url("http://127.0.0.1:19876/control/#token=fixture")
+                .unwrap();
+            assert_eq!(url.path(), expected_path);
+            assert_eq!(url.fragment(), Some("token=fixture"));
+            assert_eq!(
+                url.query(),
+                (expected_path == "/control/custodian").then_some("onboarding=1")
+            );
+            let next = navigation
+                .prepare_dashboard_url("http://127.0.0.1:19876/control/")
+                .unwrap();
+            assert_eq!(next.path(), "/control/");
+            assert_eq!(next.query(), None);
+        }
+    }
+
+    #[test]
     fn first_run_url_preserves_gateway_base_path_query_and_auth_fragment() {
         let mut navigation = NavigationState::default();
         navigation.mark_onboarding_pending();
@@ -2946,11 +3069,7 @@ pub(crate) fn recover_primary_navigation(
     }
 
     let mut navigation = state.inner.navigation.lock().expect("navigation");
-    let mut recovery = state.inner.local_url.clone();
-    recovery
-        .query_pairs_mut()
-        .clear()
-        .append_pair("mode", "remoteError");
+    let recovery = state.local_url("remoteError");
     // Back must return to local recovery, never to the failed browser document.
     navigation.settings_return = None;
     navigation.begin_settings(
@@ -2959,11 +3078,7 @@ pub(crate) fn recover_primary_navigation(
     )?;
     navigation.record_remote_failure(snapshot.clone(), None);
     navigation.remote_snapshot = Some(snapshot.clone());
-    let mut settings = state.inner.local_url.clone();
-    settings
-        .query_pairs_mut()
-        .clear()
-        .append_pair("mode", "connectionSettings");
+    let settings = state.local_url("connectionSettings");
     app.state::<native_browser_bridge::NativeBrowserBridgeState>()
         .clear(app);
     replace_main_webview(app, settings, None, None)?;
@@ -3175,6 +3290,8 @@ fn build_info(app: AppHandle) -> BuildInfo {
         release_build: is_release_version(&version),
         version,
         platform: std::env::consts::OS,
+        runtime_flavor: bundled_runtime::flavor(),
+        test_profile: test_profile::profile(),
     }
 }
 
@@ -3279,6 +3396,11 @@ async fn gateway_action(
 }
 
 fn main() {
+    let context = tauri::generate_context!();
+    if let Err(error) = test_profile::initialize(&context.config().identifier) {
+        eprintln!("AOT test app isolation failed: {error}");
+        std::process::exit(1);
+    }
     // Xlib requires thread initialization before GTK opens a display. Older
     // libX11 versions do not initialize it automatically for WebKit's threads.
     #[cfg(target_os = "linux")]
@@ -3292,7 +3414,7 @@ fn main() {
     #[cfg(target_os = "linux")]
     gtk::glib::set_application_name("OpenClaw");
 
-    let global_shortcuts_supported = tray::global_shortcuts_supported();
+    let global_shortcuts_supported = !test_profile::enabled() && tray::global_shortcuts_supported();
     let quickchat_state = quickchat::QuickChatState::new(global_shortcuts_supported);
     let quickchat_shortcut_state = quickchat_state.clone();
     // Single-instance must run first so it can pass deep-link argv to the primary process.
@@ -3300,11 +3422,15 @@ fn main() {
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             tray::show_window(app);
         }))
-        .plugin(tauri_plugin_deep_link::init())
-        .plugin(tauri_plugin_autostart::init(
+        .plugin(tauri_plugin_deep_link::init());
+    let builder = if test_profile::enabled() {
+        builder
+    } else {
+        builder.plugin(tauri_plugin_autostart::init(
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
             None,
-        ));
+        ))
+    };
     // global-hotkey's Linux backend is X11-only; omit it on Wayland instead of using XWayland.
     // A GlobalShortcuts portal can follow later.
     let builder = if global_shortcuts_supported {
@@ -3339,10 +3465,22 @@ fn main() {
         );
 
     let builder = builder.setup(move |app| {
+        test_profile::prepare(app.handle())?;
         let namespace = remote_gateway::config_path()?
             .to_string_lossy()
             .into_owned();
         let profiles = Arc::new(gateway_profiles::GatewayProfiles::new(&namespace));
+        #[cfg(target_os = "linux")]
+        if let Ok(root) = gateway_windows::profile_browser_root(app.handle()) {
+            let profiles = Arc::clone(&profiles);
+            // WebKitGTK keeps a data directory in use until exit, so storage of
+            // Gateways removed in an earlier session is deleted at launch.
+            tauri::async_runtime::spawn_blocking(move || {
+                if let Err(error) = profiles.prune_browser_data(&root) {
+                    eprintln!("{error}");
+                }
+            });
+        }
         app.manage(gateway_windows::GatewayWindows::new(Arc::clone(&profiles)));
         app.manage(native_browser::NativeBrowserState::default());
         app.manage(native_browser_bridge::NativeBrowserBridgeState::default());
@@ -3427,7 +3565,7 @@ fn main() {
                 GatewayOperation::Install(channel) => {
                     operation_state.install_cli(&operation_app, channel, selection)
                 }
-                #[cfg(target_os = "linux")]
+                #[cfg(any(target_os = "linux", target_os = "windows", target_os = "macos"))]
                 GatewayOperation::Runtime(action) => {
                     operation_state.runtime_action(&operation_app, action, selection)
                 }
@@ -3440,7 +3578,7 @@ fn main() {
             },
             move |error| match error {
                 GatewayOperationError::Action(_) => error_state.show_error(&error_app),
-                #[cfg(target_os = "linux")]
+                #[cfg(any(target_os = "linux", target_os = "windows", target_os = "macos"))]
                 GatewayOperationError::Runtime(error) => {
                     tray::show_runtime_error(&error_app, &error)
                 }
@@ -3579,9 +3717,12 @@ fn main() {
                 }
             }
         })
-        .build(tauri::generate_context!())
+        .build(context)
         .expect("OpenClaw desktop app failed");
     app.run(|app, event| {
+        if let Err(error) = test_profile::handle_run_event(&event) {
+            eprintln!("{error}");
+        }
         if let tauri::RunEvent::ExitRequested { api, code, .. } = &event {
             if let Some(state) = app.try_state::<DesktopState>() {
                 if !state.inner.ssh_shutdown_complete.load(Ordering::SeqCst) {

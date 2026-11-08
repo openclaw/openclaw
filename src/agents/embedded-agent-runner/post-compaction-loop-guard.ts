@@ -22,11 +22,9 @@ type PostCompactionGuardObservation = {
 };
 
 type PostCompactionGuardVerdict =
-  | { shouldAbort: false; armed: boolean; remainingAttempts: number }
+  | { shouldAbort: false }
   | {
       shouldAbort: true;
-      armed: boolean;
-      remainingAttempts: number;
       detector: "compaction_loop_persisted";
       count: number;
       toolName: string;
@@ -39,11 +37,9 @@ const observationSignature = (call: PostCompactionGuardObservation): string =>
 export function createPostCompactionLoopGuard(options?: { enabled?: boolean }) {
   const enabled = options?.enabled ?? true;
   const recentCalls: PostCompactionGuardObservation[] = [];
-  let remainingAttempts = 0;
-  let history: PostCompactionGuardObservation[] = [];
+  let history: PostCompactionGuardObservation[] | undefined;
   let baselineSignatures: Set<string> | undefined;
-  let windowRepeats = 0;
-  let repeatTools = new Set<string>();
+  let repeatedToolNames: string[] = [];
 
   const armPostCompaction = (): void => {
     // Snapshot the pre-compaction call tail before the new window starts. A re-arm
@@ -53,10 +49,8 @@ export function createPostCompactionLoopGuard(options?: { enabled?: boolean }) {
       enabled && recentCalls.length > 0
         ? new Set(recentCalls.map(observationSignature))
         : undefined;
-    remainingAttempts = DEFAULT_WINDOW_SIZE;
     history = [];
-    windowRepeats = 0;
-    repeatTools = new Set<string>();
+    repeatedToolNames = [];
     if (enabled) {
       log.info(`post-compaction guard armed for ${DEFAULT_WINDOW_SIZE} attempts`);
     }
@@ -64,22 +58,20 @@ export function createPostCompactionLoopGuard(options?: { enabled?: boolean }) {
 
   const observe = (call: PostCompactionGuardObservation): PostCompactionGuardVerdict => {
     if (!enabled) {
-      return { shouldAbort: false, armed: false, remainingAttempts: 0 };
+      return { shouldAbort: false };
     }
     recentCalls.push(call);
     if (recentCalls.length > BASELINE_WINDOW_SIZE) {
       recentCalls.shift();
     }
-    if (remainingAttempts <= 0) {
-      return { shouldAbort: false, armed: false, remainingAttempts: 0 };
+    if (!history || history.length >= DEFAULT_WINDOW_SIZE) {
+      return { shouldAbort: false };
     }
-    remainingAttempts -= 1;
     if (baselineSignatures?.has(observationSignature(call))) {
-      windowRepeats += 1;
-      repeatTools.add(call.toolName);
+      repeatedToolNames.push(call.toolName);
     }
     history.push(call);
-    const armedAfter = remainingAttempts > 0;
+    const armedAfter = history.length < DEFAULT_WINDOW_SIZE;
 
     // Compare full tool name + args + result. Repeated args alone can be legitimate polling;
     // identical results after compaction prove the compression did not change the loop.
@@ -96,8 +88,6 @@ export function createPostCompactionLoopGuard(options?: { enabled?: boolean }) {
       );
       return {
         shouldAbort: true,
-        armed: armedAfter,
-        remainingAttempts,
         detector: "compaction_loop_persisted",
         count: matches.length,
         toolName: call.toolName,
@@ -106,45 +96,18 @@ export function createPostCompactionLoopGuard(options?: { enabled?: boolean }) {
     }
 
     if (!armedAfter) {
-      const tools = [...repeatTools].toSorted().join(",");
+      // oxlint-disable-next-line unicorn/no-array-sort -- The materialized set array is private.
+      const tools = [...new Set(repeatedToolNames)].sort().join(",");
       log.info(
         `post-compaction window closed: toolCalls=${history.length} ` +
-          `preCompactionRepeats=${windowRepeats}${tools ? ` tools=${tools}` : ""}`,
+          `preCompactionRepeats=${repeatedToolNames.length}${tools ? ` tools=${tools}` : ""}`,
       );
       baselineSignatures = undefined;
-      windowRepeats = 0;
-      repeatTools = new Set<string>();
+      repeatedToolNames = [];
     }
 
-    return { shouldAbort: false, armed: armedAfter, remainingAttempts };
+    return { shouldAbort: false };
   };
 
   return { armPostCompaction, observe };
-}
-
-export class PostCompactionLoopPersistedError extends Error {
-  readonly detector: "compaction_loop_persisted";
-  readonly count: number;
-  readonly toolName: string;
-
-  constructor(
-    message: string,
-    details: {
-      detector: "compaction_loop_persisted";
-      count: number;
-      toolName: string;
-    },
-  ) {
-    super(message);
-    this.name = "PostCompactionLoopPersistedError";
-    this.detector = details.detector;
-    this.count = details.count;
-    this.toolName = details.toolName;
-  }
-
-  static fromVerdict(
-    verdict: Extract<PostCompactionGuardVerdict, { shouldAbort: true }>,
-  ): PostCompactionLoopPersistedError {
-    return new PostCompactionLoopPersistedError(verdict.message, verdict);
-  }
 }

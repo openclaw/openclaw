@@ -29,86 +29,64 @@ type PreparedModels = Awaited<ReturnType<typeof prepareModelsListResult>>;
 export function createChatMetadataModelList(params: {
   facts: PreparedGenerationFacts;
   context: GatewayModelCatalogContext;
-  requested: Map<string, SharedModelsListRequest>;
   maxEntries: number;
 }) {
   const agents = new Map(params.facts.agents.map((agent) => [agent.agentId, agent]));
-  for (const [key, request] of params.requested) {
-    if (!agents.has(request.agentId)) {
-      params.requested.delete(key);
-    }
-  }
   const projections = new Map<string, Promise<PreparedModels>>();
-  const prepare = (
+  const prepare = async (
     request: SharedModelsListRequest,
     authority?: CurrentReadAuthority,
   ): Promise<PreparedModels> => {
     const key = JSON.stringify([
       request.agentId,
-      request.params,
+      { ...request.params, sessionKey: Boolean(request.params.sessionKey) },
       request.includeManualSelection,
       request.readScope?.sessionEntry,
     ]);
     const existing = projections.get(key);
     if (existing) {
-      return existing.then((projection) => {
-        if (projection.isCurrent()) {
-          return projection;
-        }
-        if (projections.get(key) === existing) {
-          projections.delete(key);
-        }
-        return prepare(request, authority);
-      });
+      const projection = await existing;
+      if (projection.isCurrent()) {
+        return projection;
+      }
+      projections.delete(key);
     }
     const facts = agents.get(request.agentId);
     if (!facts?.owner.catalogOwner || !facts.owner.isCurrent()) {
-      return Promise.reject(
-        new PreparedModelRuntimePublicationSupersededError(
-          "Model catalog changed while preparing this result. Retry the request.",
-        ),
+      throw new PreparedModelRuntimePublicationSupersededError(
+        "Model catalog changed while preparing this result. Retry the request.",
       );
     }
     const { owner, modelCatalog, authStore, authModes } = facts;
     const catalogOwner = facts.owner.catalogOwner;
-    const pending = import("./models-list-result.js")
-      .then(({ prepareModelsListResult }) =>
-        prepareModelsListResult({
-          ...request,
-          preparationAuthority: authority,
-          source: {
-            kind: "published",
-            getConfig: params.context.getRuntimeConfig,
-            owner: {
-              ...owner,
-              catalogOwner,
-              agentId: request.agentId,
-              workspaceDir: catalogOwner.workspaceDir,
-              modelCatalog,
-              authStore,
-              authModes,
-              authMaterializations: getPreparedModelRuntimeAuthMaterializations(owner),
-            },
+    const pending = import("./models-list-result.js").then(({ prepareModelsListResult }) =>
+      prepareModelsListResult({
+        ...request,
+        preparationAuthority: authority,
+        source: {
+          kind: "published",
+          owner: {
+            ...owner,
+            catalogOwner,
+            agentId: request.agentId,
+            workspaceDir: catalogOwner.workspaceDir,
+            modelCatalog,
+            authStore,
+            authModes,
+            authMaterializations: getPreparedModelRuntimeAuthMaterializations(owner),
           },
-          preloadedOnly: true,
-        }),
-      )
-      .then((projection) => {
-        params.requested.set(key, { ...request, params: { ...request.params } });
-        pruneMapToMaxSize(params.requested, params.maxEntries);
-        return projection;
-      });
+        },
+        preloadedOnly: true,
+      }),
+    );
     projections.set(key, pending);
     pruneMapToMaxSize(projections, params.maxEntries);
     void pending.catch(() => {
-      if (projections.get(key) === pending) {
-        projections.delete(key);
-      }
+      projections.delete(key);
     });
     return pending;
   };
   return {
-    prepare,
     async read(request: PreparedModelsListRequest): Promise<PreparedModels | undefined> {
       const { requesterProfileId, readScope, ...shared } = request;
       if (readScope) {
@@ -147,7 +125,7 @@ export function createChatMetadataModelList(params: {
           captureOpenClawStateReadContext().admission,
           requesterProfileId,
         );
-        // Foreign commits must become visible on the next unpinned read, too.
+        // Personal-account links are read under the requesting human's authority.
         const links = await listUserProfileAuthLinksAsync(requesterProfileId);
         if (!authority()) {
           return { isCurrent: () => false, read: () => ({ models: [] }) };

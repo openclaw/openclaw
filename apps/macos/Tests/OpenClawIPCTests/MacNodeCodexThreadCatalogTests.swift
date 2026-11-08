@@ -256,6 +256,34 @@ struct MacNodeCodexThreadCatalogTests {
             maxLineBytes: maxLineBytes).data
     }
 
+    private func withClient<T>(
+        _ operation: (CodexAppServerThreadClient) async throws -> T) async rethrows -> T
+    {
+        let client = CodexAppServerThreadClient()
+        do {
+            let result = try await operation(client)
+            await client.shutdown()
+            return result
+        } catch {
+            await client.shutdown()
+            throw error
+        }
+    }
+
+    private func listCatalog(
+        paramsJSON: String?,
+        executable: String,
+        arguments: [String]? = nil,
+        clearEnv: [String] = []) async throws -> String
+    {
+        var appServer: [String: Any] = ["command": executable, "clearEnv": clearEnv]
+        appServer["args"] = arguments ?? ["app-server", "--listen", "stdio://"]
+        let root = self.codexRoot(appServer: appServer)
+        return try await self.withClient { client in
+            try await MacNodeCodexThreadCatalog.list(paramsJSON: paramsJSON, loadRoot: { root }, client: client)
+        }
+    }
+
     @Test func `normalizes App Server metadata and drops sensitive thread fields`() throws {
         let raw: [String: Any] = [
             "data": [[
@@ -405,11 +433,10 @@ struct MacNodeCodexThreadCatalogTests {
         #expect(resolved.cwd == nil)
         #expect(resolved.clearEnv == [clearEnvSentinel])
 
-        let payload = try await MacNodeCodexThreadCatalog.list(
+        let payload = try await self.listCatalog(
             paramsJSON: nil,
             executable: resolved.executable,
             arguments: resolved.arguments,
-            cwd: resolved.cwd,
             clearEnv: resolved.clearEnv)
         let response = try #require(
             JSONSerialization.jsonObject(with: Data(payload.utf8)) as? [String: Any])
@@ -498,14 +525,23 @@ struct MacNodeCodexThreadCatalogTests {
         }
     }
 
-    @Test func `complete official plugin config remains eligible for the catalog`() throws {
+    @Test(arguments: [false, true])
+    func `complete official plugin config remains eligible for the catalog`(withNativeHookRelay: Bool) throws {
         var repository = URL(fileURLWithPath: #filePath)
         for _ in 0..<5 {
             repository.deleteLastPathComponent()
         }
         let fixture = repository.appendingPathComponent(
             "extensions/codex/src/app-server/fixtures/native-plugin-config.json")
-        let config = try #require(JSONSerialization.jsonObject(with: Data(contentsOf: fixture)) as? [String: Any])
+        var config = try #require(JSONSerialization.jsonObject(with: Data(contentsOf: fixture)) as? [String: Any])
+        if withNativeHookRelay {
+            var appServer = try #require(config["appServer"] as? [String: Any])
+            appServer["nativeHookRelay"] = [
+                "url": "https://hooks.example.test",
+                "credentialDirectory": "/tmp/native-hook-credentials",
+            ]
+            config["appServer"] = appServer
+        }
         let root = self.codexRoot(config: config)
 
         #expect(MacNodeCodexThreadCatalog.shouldAdvertise(root: root))
@@ -515,83 +551,23 @@ struct MacNodeCodexThreadCatalogTests {
         #expect(invocation.clearEnv == ["OPENAI_API_KEY"])
     }
 
-    @Test func `malformed or unknown official plugin config fails closed`() throws {
-        var malformedConfigs: [Any] = [
+    @Test func `malformed native catalog settings fail closed`() throws {
+        let malformedConfigs: [Any] = [
             "enabled",
-            ["supervision": ["enabled": true], "unknown": true] as [String: Any],
-            ["supervision": ["enabled": true], "codexDynamicToolsLoading": "lazy"] as [String: Any],
-            ["supervision": ["enabled": true], "codexDynamicToolsExclude": ["tool", 42]] as [String: Any],
-            ["supervision": ["enabled": true], "discovery": ["enabled": true, "unknown": true]] as [String: Any],
-            ["supervision": ["enabled": true], "computerUse": ["timeoutMs": 1000]] as [String: Any],
+            ["sessionCatalog": "enabled"],
             ["sessionCatalog": ["enabled": 1]],
-            ["sessionCatalog": ["unknown": true]],
-            ["sessionCatalog": ["homes": "path"]],
-            ["sessionCatalog": ["homes": ["  "]]],
-            ["sessionCatalog": ["homes": [["label": "Missing path"]]]],
-            ["sessionCatalog": ["homes": [["path": "/tmp/codex", "label": " "]]]],
-            ["sessionCatalog": ["homes": [["path": "/tmp/codex", "unknown": true]]]],
-            ["computerUse": ["liveTestTimeoutMs": 0]],
-            ["computerUse": ["toolCallTimeoutMs": true]],
-            ["computerUse": ["healthCheckEnabled": 1]],
-            ["computerUse": ["healthCheckIntervalMinutes": 30.5]],
-            ["computerUse": ["pluginCacheMode": "other"]],
-            ["computerUse": ["strictReadiness": "true"]],
-            ["computerUse": ["autoRepair": 1]],
-            ["supervision": "enabled"] as [String: Any],
-            ["supervision": ["enabled": true, "unknown": true]] as [String: Any],
-            ["supervision": ["enabled": true, "allowRawTranscripts": 1]] as [String: Any],
-            ["supervision": ["enabled": true, "endpoints": true]] as [String: Any],
-            [
-                "supervision": [
-                    "enabled": true,
-                    "endpoints": [["transport": "websocket", "url": "wss://example.test", "cwd": "/tmp"]],
-                ],
-            ] as [String: Any],
+            ["sessionCatalog": ["enabled": NSNull()]],
+            ["appServer": "stdio"],
+            ["appServer": ["command": 42]],
+            ["appServer": ["args": 42]],
+            ["appServer": ["args": ["app-server", 42]]],
+            ["appServer": ["clearEnv": true]],
+            ["appServer": ["clearEnv": ["OPENAI_API_KEY", false]]],
+            ["appServer": ["transport": true]],
+            ["appServer": ["transport": "other"]],
+            ["appServer": ["homeScope": 42]],
+            ["appServer": ["homeScope": "other"]],
         ]
-        let malformedAppServers: [Any] = [
-            "stdio",
-            ["unknown": true] as [String: Any],
-            ["mode": "automatic"] as [String: Any],
-            ["command": 42] as [String: Any],
-            ["args": 42] as [String: Any],
-            ["args": ["app-server", 42]] as [String: Any],
-            ["url": 42] as [String: Any],
-            ["authToken": ["source": "env", "provider": "default", "id": "lowercase"]] as [String: Any],
-            ["authToken": ["source": "store", "provider": "default", "id": "lowercase"]],
-            ["headers": ["authorization": ["source": "exec", "provider": "vault", "id": "../token"]]] as [String: Any],
-            ["clearEnv": true] as [String: Any],
-            ["clearEnv": ["OPENAI_API_KEY", false]] as [String: Any],
-            ["remoteWorkspaceRoot": "  "] as [String: Any],
-            ["codeModeOnly": "true"] as [String: Any],
-            ["requestTimeoutMs": 0] as [String: Any],
-            ["turnCompletionIdleTimeoutMs": 1000] as [String: Any],
-            ["postToolRawAssistantCompletionIdleTimeoutMs": 1000] as [String: Any],
-            ["approvalPolicy": "always"] as [String: Any],
-            ["approvalPolicy": "untrusted"],
-            ["loopDetectionPreToolUseRelay": 1],
-            ["enableUltrafast": "true"],
-            ["cyberFailover": ["mode": "other"]],
-            ["cyberFailover": ["model": "  "]],
-            ["cyberFailover": ["cooloffMs": 0]],
-            ["cyberFailover": ["unknown": true]],
-            ["sandbox": "full"] as [String: Any],
-            ["approvalsReviewer": "agent"] as [String: Any],
-            ["serviceTier": false] as [String: Any],
-            ["networkProxy": ["unknown": true]] as [String: Any],
-            ["networkProxy": ["domains": ["example.test": "prompt"]]] as [String: Any],
-            ["networkProxy": ["proxyUrl": "  "]] as [String: Any],
-            ["defaultWorkspaceDir": 42] as [String: Any],
-            ["experimental": ["unknown": true]] as [String: Any],
-            ["experimental": ["sandboxExecServer": "true"]] as [String: Any],
-            ["transport": true] as [String: Any],
-            ["homeScope": 42] as [String: Any],
-        ]
-        malformedConfigs.append(contentsOf: malformedAppServers.map { appServer in
-            [
-                "supervision": ["enabled": true],
-                "appServer": appServer,
-            ] as [String: Any]
-        })
 
         for config in malformedConfigs {
             let root = self.codexRoot(config: config)
@@ -622,9 +598,11 @@ struct MacNodeCodexThreadCatalogTests {
         let revoked = self.codexRoot(pluginPolicy: ["deny": ["codex"]])
         var loadCount = 0
 
-        let payload = try await MacNodeCodexThreadCatalog.list(paramsJSON: nil) {
-            loadCount += 1
-            return loadCount == 1 ? enabled : revoked
+        let payload = try await self.withClient { client in
+            try await MacNodeCodexThreadCatalog.list(paramsJSON: nil, loadRoot: {
+                loadCount += 1
+                return loadCount == 1 ? enabled : revoked
+            }, client: client)
         }
         let response = try #require(
             JSONSerialization.jsonObject(with: Data(payload.utf8)) as? [String: Any])
@@ -764,7 +742,7 @@ struct MacNodeCodexThreadCatalogTests {
             sleep 1
             """#)
 
-        let payload = try await MacNodeCodexThreadCatalog.list(
+        let payload = try await self.listCatalog(
             paramsJSON: #"{"agentId":"gateway-owner","cursor":" cursor ","limit":25,"searchTerm":" oNe ","cwd":" /work "}"#,
             executable: fake.executable.path)
         let response = try #require(
@@ -952,7 +930,7 @@ struct MacNodeCodexThreadCatalogTests {
         done
         """#)
 
-        let payload = try await MacNodeCodexThreadCatalog.list(
+        let payload = try await self.listCatalog(
             paramsJSON: #"{"limit":3,"searchTerm":"target"}"#,
             executable: fake.executable.path)
         let response = try #require(
@@ -1003,7 +981,7 @@ struct MacNodeCodexThreadCatalogTests {
         done
         """#)
 
-        let payload = try await MacNodeCodexThreadCatalog.list(
+        let payload = try await self.listCatalog(
             paramsJSON: #"{"limit":40,"searchTerm":"target"}"#,
             executable: fake.executable.path)
         let response = try #require(
@@ -1038,7 +1016,7 @@ struct MacNodeCodexThreadCatalogTests {
         done
         """#)
 
-        let payload = try await MacNodeCodexThreadCatalog.list(
+        let payload = try await self.listCatalog(
             paramsJSON: #"{"limit":40,"searchTerm":"target"}"#,
             executable: fake.executable.path)
         let response = try #require(
@@ -1476,10 +1454,13 @@ extension MacNodeCodexThreadCatalogTests {
         """#)
         defer { withExtendedLifetime(fake) {} }
 
-        let payload = try await MacNodeCodexThreadCatalog.list(
-            paramsJSON: #"{"limit":50}"#,
-            executable: fake.executable.path,
-            timeoutSeconds: 10)
+        let data = try await self.withClient { client in
+            try await self.requestEmptyList(
+                client: client, executable: fake.executable, timeoutSeconds: 10, maxLineBytes: 5 * 1024 * 1024)
+        }
+        let payload = try MacNodeCodexThreadCatalog.normalize(
+            listResultData: data,
+            sourceHomeId: Self.fixtureSourceHomeId)
         let decoded = try #require(
             JSONSerialization.jsonObject(with: Data(payload.utf8)) as? [String: Any])
         #expect((decoded["sessions"] as? [Any])?.count == 50)
@@ -1506,10 +1487,13 @@ extension MacNodeCodexThreadCatalogTests {
         """#)
         defer { withExtendedLifetime(fake) {} }
 
-        let payload = try await MacNodeCodexThreadCatalog.list(
-            paramsJSON: #"{"limit":100}"#,
-            executable: fake.executable.path,
-            timeoutSeconds: 10)
+        let data = try await self.withClient { client in
+            try await self.requestEmptyList(
+                client: client, executable: fake.executable, timeoutSeconds: 10, maxLineBytes: 5 * 1024 * 1024)
+        }
+        let payload = try MacNodeCodexThreadCatalog.normalize(
+            listResultData: data,
+            sourceHomeId: Self.fixtureSourceHomeId)
         let decoded = try #require(
             JSONSerialization.jsonObject(with: Data(payload.utf8)) as? [String: Any])
         #expect((decoded["sessions"] as? [Any])?.count == 100)
@@ -1627,7 +1611,7 @@ extension MacNodeCodexThreadCatalogTests {
         ]
         for (paramsJSON, expected) in cases {
             do {
-                _ = try await MacNodeCodexThreadCatalog.list(
+                _ = try await self.listCatalog(
                     paramsJSON: paramsJSON,
                     executable: "/path/that/must/not/launch")
                 Issue.record("expected invalid params for \(paramsJSON)")
@@ -1684,10 +1668,9 @@ extension MacNodeCodexThreadCatalogTests {
         """#)
         defer { withExtendedLifetime(oversized) {} }
         do {
-            _ = try await MacNodeCodexThreadCatalog.list(
-                paramsJSON: nil,
-                executable: oversized.executable.path,
-                maxLineBytes: 128)
+            _ = try await self.withClient { client in
+                try await self.requestEmptyList(client: client, executable: oversized.executable, maxLineBytes: 128)
+            }
             Issue.record("expected oversized App Server response to fail")
         } catch let error as MacNodeCodexThreadCatalog.CatalogError {
             #expect(error == .responseTooLarge)
@@ -1700,10 +1683,9 @@ extension MacNodeCodexThreadCatalogTests {
         """#)
         defer { withExtendedLifetime(stalled) {} }
         do {
-            _ = try await MacNodeCodexThreadCatalog.list(
-                paramsJSON: nil,
-                executable: stalled.executable.path,
-                timeoutSeconds: 0.05)
+            _ = try await self.withClient { client in
+                try await self.requestEmptyList(client: client, executable: stalled.executable, timeoutSeconds: 0.05)
+            }
             Issue.record("expected stalled App Server response to time out")
         } catch let error as MacNodeCodexThreadCatalog.CatalogError {
             #expect(error == .timedOut)
@@ -1721,7 +1703,7 @@ extension MacNodeCodexThreadCatalogTests {
         defer { withExtendedLifetime(fake) {} }
 
         do {
-            _ = try await MacNodeCodexThreadCatalog.list(
+            _ = try await self.listCatalog(
                 paramsJSON: nil,
                 executable: fake.executable.path)
             Issue.record("expected fake App Server error")
@@ -1835,7 +1817,7 @@ extension MacNodeCodexThreadCatalogTests {
         printf '%s\n' "$request" > "${0}.unexpected-request"
         """#)
         await #expect(throws: MacNodeCodexThreadCatalog.CatalogError.appServerUnavailable) {
-            try await MacNodeCodexThreadCatalog.list(paramsJSON: nil, executable: fake.executable.path)
+            try await self.listCatalog(paramsJSON: nil, executable: fake.executable.path)
         }
         #expect(!FileManager.default.fileExists(atPath: fake.executable.path + ".unexpected-request"))
     }

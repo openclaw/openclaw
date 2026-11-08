@@ -48,17 +48,14 @@ export async function prepareChatHistorySessionRead({
   requestedSessionId?: string;
   retainedSessionId?: string;
 }) {
+  const unavailable = (message: string) => respondChatHistoryUnavailable(method, respond, message);
   const rowProjection = getSessionRowProjection(context);
   if (!rowProjection) {
-    respondChatHistoryUnavailable(
-      method,
-      respond,
-      "session rows are initializing; reload the conversation",
-    );
+    unavailable("session rows are initializing; reload the conversation");
     return undefined;
   }
   const queries = (cfg: OpenClawConfig) => {
-    const requested = resolveRequestedSessionAgentId(cfg, sessionKey, agentIdOverride);
+    const requested = resolveRequestedSessionAgentId(cfg, sessionKey, agentIdOverride, "read");
     if (!requested.ok) {
       return [];
     }
@@ -71,7 +68,7 @@ export async function prepareChatHistorySessionRead({
   };
   const selectSession = (read: SessionRowReadView) => {
     const cfg = read.state.cfg;
-    const requested = resolveRequestedSessionAgentId(cfg, sessionKey, agentIdOverride);
+    const requested = resolveRequestedSessionAgentId(cfg, sessionKey, agentIdOverride, "read");
     if (!requested.ok) {
       respond(false, undefined, requested.error);
       return undefined;
@@ -88,26 +85,40 @@ export async function prepareChatHistorySessionRead({
     const identity = record
       ? { agentId: record.agentId, canonicalKey: record.key }
       : requestedIdentity;
+    const storePath =
+      record?.storeTarget.storePath ??
+      resolveSessionStorePathCore(cfg.session?.store, { agentId: identity.agentId });
     return {
       cfg,
       ...identity,
       record,
       entry: record?.storedEntry ?? record?.entry,
-      storePath:
-        record?.storeTarget.storePath ??
-        resolveSessionStorePathCore(cfg.session?.store, { agentId: identity.agentId }),
+      storePath,
+      // Retained publication compares physical owners; row lookup keeps the configured locator.
+      sourcePath:
+        retainedSessionId && record && !isIncognitoSessionKey(record.key)
+          ? read.readSource(record)?.path
+          : storePath,
       storeKeys: [identity.canonicalKey],
       store: {},
     };
   };
   const authorizeSharingFacts = (
-    current: Pick<NonNullable<ReturnType<typeof selectSession>>, "entry" | "canonicalKey">,
+    current: Pick<
+      NonNullable<ReturnType<typeof selectSession>>,
+      "entry" | "canonicalKey" | "agentId" | "storePath"
+    >,
     sharing: ReturnType<typeof prepareProjectedSessionSharing>,
   ) => {
     sessionMutationAuthorization?.assertCurrent();
     if (
       current.entry
-        ? sharing.entryFilter?.(current.canonicalKey, current.entry) === false
+        ? !sharing.canReadTarget({
+            ...current,
+            entry: current.entry,
+            storeKey: current.canonicalKey,
+            storeKeys: [current.canonicalKey],
+          })
         : requestedSessionId && !retainedSessionId && !isGatewayAdmin(client)
     ) {
       respond(false, undefined, hiddenSessionNotFound(current.canonicalKey));
@@ -132,9 +143,7 @@ export async function prepareChatHistorySessionRead({
   if (!selectedSession) {
     return undefined;
   }
-  const { agentId: sessionAgentId, storePath, canonicalKey } = selectedSession;
-  // Capture the selected physical session before transcript ownership crosses a worker boundary.
-  const entry = selectedSession.entry ? structuredClone(selectedSession.entry) : undefined;
+  const { agentId: sessionAgentId, storePath, canonicalKey, entry } = selectedSession;
   const readTranscriptOwner = async () => {
     if (!requestedSessionId) {
       return true;
@@ -161,7 +170,7 @@ export async function prepareChatHistorySessionRead({
   };
   if (requestedSessionId && !(await readTranscriptOwner())) {
     if (retainedSessionId) {
-      respondChatHistoryUnavailable(method, respond, "retained transcript is no longer available");
+      unavailable("retained transcript is no longer available");
     } else {
       respond(
         false,
@@ -200,7 +209,7 @@ export async function prepareChatHistorySessionRead({
           if (!(error instanceof SessionMutationFactsUnavailableError)) {
             throw error;
           }
-          respondChatHistoryUnavailable(method, respond, error.message);
+          unavailable(error.message);
           return undefined;
         }
         // Excluded metadata can refuse a read, never authorize transcript delivery.
@@ -208,11 +217,7 @@ export async function prepareChatHistorySessionRead({
           if (authorizeSharing({ ...current, entry: excludedEntry }, read)) {
             // Only a row the projection now serves changed mid-read; one it still omits stays unserved.
             if (current.entry) {
-              respondChatHistoryUnavailable(
-                method,
-                respond,
-                "session changed while reading history; reload the conversation",
-              );
+              unavailable("session changed while reading history; reload the conversation");
             } else {
               respond(false, undefined, hiddenSessionNotFound(current.canonicalKey));
             }
@@ -238,11 +243,7 @@ export async function prepareChatHistorySessionRead({
               (entry.sessionStartedAt !== undefined &&
                 currentEntry.sessionStartedAt !== entry.sessionStartedAt))))
       ) {
-        respondChatHistoryUnavailable(
-          method,
-          respond,
-          "session changed while reading history; reload the conversation",
-        );
+        unavailable("session changed while reading history; reload the conversation");
         return undefined;
       }
       const sharing = authorizeSharing(current, read);
@@ -286,11 +287,7 @@ export async function prepareChatHistorySessionRead({
         });
         try {
           if (!(await publication.verify())) {
-            respondChatHistoryUnavailable(
-              method,
-              respond,
-              "retained transcript changed while reading history",
-            );
+            unavailable("retained transcript changed while reading history");
             return;
           }
           signal?.throwIfAborted();
@@ -302,18 +299,14 @@ export async function prepareChatHistorySessionRead({
             (target &&
               (target.agentId !== sessionAgentId ||
                 target.canonicalKey !== canonicalKey ||
-                current.sourcePath !== storePath)) ||
+                current.sourcePath !== selectedSession.sourcePath)) ||
             (publication.requireCurrentSession && target?.entry.sessionId !== retainedSessionId)
           ) {
-            respondChatHistoryUnavailable(
-              method,
-              respond,
-              "retained session changed while reading history",
-            );
+            unavailable("retained session changed while reading history");
             return;
           }
           const sharing = authorizeSharingFacts(
-            { entry: target?.entry, canonicalKey },
+            { entry: target?.entry, canonicalKey, agentId: sessionAgentId, storePath },
             prepareProjectedSessionSharing({
               cfg: rowProjection.getPolicyConfig(),
               client: client ?? null,
@@ -336,11 +329,7 @@ export async function prepareChatHistorySessionRead({
             visibility !== publication.sharing.visibility ||
             sharingRole !== publication.sharing.sharingRole
           ) {
-            respondChatHistoryUnavailable(
-              method,
-              respond,
-              "session access changed while reading history",
-            );
+            unavailable("session access changed while reading history");
             return;
           }
           // Retained facts and current caller policy authorize the final synchronous publication.
@@ -358,7 +347,7 @@ export async function prepareChatHistorySessionRead({
   } catch (error) {
     excluded?.release();
     if (error instanceof SessionMutationFactsUnavailableError) {
-      respondChatHistoryUnavailable(method, respond, error.message);
+      unavailable(error.message);
       return undefined;
     }
     throw error;

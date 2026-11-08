@@ -1,4 +1,8 @@
-type NativeErrorValue = NativeWorkerError | { kind: "value"; value: unknown };
+import { stringifyNonErrorCause } from "@openclaw/normalization-core/error-coercion";
+
+type NativeErrorValue =
+  | NativeWorkerError
+  | { kind: "value"; value: string | number | boolean | bigint | null | undefined };
 
 type NativeWorkerError = {
   kind: "error";
@@ -28,7 +32,19 @@ export function encodeNativeWorkerFailure(value: unknown): NativeWorkerFailure {
   const seen = new Map<Error, NativeWorkerError>();
   const encode = (current: unknown): NativeErrorValue => {
     if (!(current instanceof Error)) {
-      return { kind: "value", value: current };
+      // Native host objects need not be cloneable; only their diagnostic text crosses the port.
+      return {
+        kind: "value",
+        value:
+          current === null ||
+          current === undefined ||
+          typeof current === "string" ||
+          typeof current === "number" ||
+          typeof current === "boolean" ||
+          typeof current === "bigint"
+            ? current
+            : stringifyNonErrorCause(current),
+      };
     }
     const prior = seen.get(current);
     if (prior) {
@@ -101,38 +117,29 @@ export function decodeNativeWorkerFailure(value: NativeWorkerFailure): unknown {
     seen.set(current, error);
     error.name = current.name;
     error.stack = current.stack;
+    const defineField = (key: string, fieldValue: unknown, enumerable = false) => {
+      Object.defineProperty(error, key, {
+        value: fieldValue,
+        writable: true,
+        configurable: true,
+        enumerable,
+      });
+    };
     for (const key of ["code", "errcode", "errno"] as const) {
       if (current[key] !== undefined) {
-        Object.defineProperty(error, key, {
-          value: current[key],
-          writable: true,
-          configurable: true,
-          enumerable: true,
-        });
+        defineField(key, current[key], true);
       }
     }
     if (current.cause) {
-      Object.defineProperty(error, "cause", {
-        value: decode(current.cause),
-        writable: true,
-        configurable: true,
-      });
+      defineField("cause", decode(current.cause));
     }
     if (current.errors) {
-      Object.defineProperty(error, "errors", {
-        value: current.errors.map(decode),
-        writable: true,
-        configurable: true,
-      });
+      defineField("errors", current.errors.map(decode));
     }
     for (const key of ["error", "suppressed"] as const) {
       const failure = current[key];
       if (failure) {
-        Object.defineProperty(error, key, {
-          value: decode(failure),
-          writable: true,
-          configurable: true,
-        });
+        defineField(key, decode(failure));
       }
     }
     return error;

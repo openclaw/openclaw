@@ -1,118 +1,118 @@
 import { expect, it, vi } from "vitest";
-import * as commandSession from "../../agents/command/session.js";
-import { backfillSessionKey } from "../../agents/embedded-agent-runner/run/session-bootstrap.js";
+import { prepareEmbeddedRunSession } from "../../agents/embedded-agent-runner/run/session-bootstrap.js";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "../../config/runtime-snapshot.js";
-import * as sessionAccessor from "../../config/sessions/session-accessor.js";
+import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../../config/sessions/session-sqlite-target.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import * as nodeSqlite from "../../infra/node-sqlite.js";
 import { unregisterOpenClawAgentDatabase } from "../../state/openclaw-agent-db-registry.js";
 import {
   closeOpenClawAgentDatabaseByPathAsync,
-  inspectOpenClawAgentDatabaseOwner,
   isOpenClawAgentDatabaseOpen,
 } from "../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { prepareAgentRequestRouting } from "./agent-request-routing.js";
 
+async function route(
+  cfg: OpenClawConfig,
+  request: Parameters<typeof prepareAgentRequestRouting>[0]["request"],
+) {
+  const respond = vi.fn();
+  const routing = await prepareAgentRequestRouting({
+    cfg,
+    request,
+    runId: request.idempotencyKey,
+    context: createDirectChatContext({ getRuntimeConfig: () => cfg }),
+    respond,
+    isRawModelRun: false,
+    agentDedupeKeys: [`agent:${request.idempotencyKey}`],
+    reserveDedupe: vi.fn(),
+    bindDedupeSessionTarget: vi.fn(),
+    clearDedupe: vi.fn(),
+  });
+  expect(respond).not.toHaveBeenCalled();
+  return routing;
+}
+
 it.each([
-  { caller: "Gateway", sessionKey: "global" },
-  { caller: "embedded", sessionKey: "unknown" },
+  { caller: "creation", createSessionIfMissing: false },
+  { caller: "creation", createSessionIfMissing: true },
+  { caller: "Gateway", createSessionIfMissing: false },
+  { caller: "Gateway", createSessionIfMissing: true },
+  { caller: "embedded", createSessionIfMissing: false },
 ])(
-  "does not repeat cold $sessionKey inspection outside the existing listing in $caller",
-  async ({ caller, sessionKey }) => {
-    await withOpenClawTestState({ label: "session-id-cold-inspection" }, async (state) => {
+  "routes $caller session IDs (createSessionIfMissing=$createSessionIfMissing)",
+  async ({ caller, createSessionIfMissing }) => {
+    await withOpenClawTestState({ label: "session-id-routing" }, async (state) => {
       const storePath = state.statePath("sessions.json");
       const cfg: OpenClawConfig = {
-        agents: { ownership: "explicit", entries: { main: {}, ops: {} } },
+        agents:
+          caller === "creation"
+            ? { entries: { main: {} } }
+            : { ownership: "explicit", entries: { main: {}, ops: {} } },
         session: { store: storePath },
       };
       await state.writeConfig(cfg);
       setRuntimeConfigSnapshot(cfg);
-      const databasePaths: string[] = [];
-      for (const agentId of ["main", "ops"]) {
-        await sessionAccessor.replaceSessionEntry(
-          { agentId, storePath, sessionKey },
-          { sessionId: `${agentId}-session`, updatedAt: 1 },
-        );
-        const target = resolveSqliteTargetFromSessionStorePath(storePath, { agentId });
-        databasePaths.push(target.path);
-        await closeOpenClawAgentDatabaseByPathAsync(target.path);
-        unregisterOpenClawAgentDatabase({ agentId, path: target.path });
-        expect(isOpenClawAgentDatabaseOpen(target.path)).toBe(false);
-      }
-
-      let lookupDepth = 0;
-      let listingDepth = 0;
-      const opens: Array<"listing" | "extra"> = [];
-      const inLookup = <T>(run: () => T): T => {
-        lookupDepth++;
-        try {
-          return run();
-        } finally {
-          lookupDepth--;
-        }
-      };
-      const openDatabase = nodeSqlite.openNodeSqliteDatabase;
-      const listEntries = sessionAccessor.listSessionEntriesReadOnly;
-      const resolveExisting = commandSession.resolveExistingSessionKeyForRequest;
-      const resolveCore = commandSession.resolveSessionKeyForRequestCore;
-      vi.spyOn(nodeSqlite, "openNodeSqliteDatabase").mockImplementation((...args) => {
-        if (lookupDepth > 0) {
-          opens.push(listingDepth > 0 ? "listing" : "extra");
-        }
-        return openDatabase(...args);
-      });
-      vi.spyOn(sessionAccessor, "listSessionEntriesReadOnly").mockImplementation((...args) => {
-        listingDepth++;
-        try {
-          return listEntries(...args);
-        } finally {
-          listingDepth--;
-        }
-      });
-      vi.spyOn(commandSession, "resolveExistingSessionKeyForRequest").mockImplementation((args) =>
-        inLookup(() => resolveExisting(args)),
-      );
-      vi.spyOn(commandSession, "resolveSessionKeyForRequestCore").mockImplementation((args) =>
-        inLookup(() => resolveCore(args)),
-      );
       try {
-        // Calibrate the observer on the same cold inspection added by the regression.
-        const coldPath = databasePaths[0];
-        if (!coldPath) {
-          throw new Error("Expected a cold database in the lookup fixture");
-        }
-        inLookup(() => inspectOpenClawAgentDatabaseOwner(coldPath));
-        expect(opens).toContain("extra");
-        opens.length = 0;
-
-        if (caller === "Gateway") {
-          const respond = vi.fn();
-          const routing = await prepareAgentRequestRouting({
-            cfg,
-            request: { message: "resume", sessionId: "ops-session", idempotencyKey: "lookup" },
-            runId: "lookup",
-            context: createDirectChatContext({ getRuntimeConfig: () => cfg }),
-            respond,
-            isRawModelRun: false,
-            agentDedupeKeys: ["agent:lookup"],
-            reserveDedupe: vi.fn(),
-            bindDedupeSessionTarget: vi.fn(),
-            clearDedupe: vi.fn(),
+        if (caller === "creation") {
+          await replaceSessionEntry(
+            { agentId: "main", storePath, sessionKey: "agent:main:existing" },
+            { sessionId: "existing-id", updatedAt: 1 },
+          );
+          expect(
+            await route(cfg, {
+              message: "start a named session",
+              agentId: "main",
+              sessionId: "new-id",
+              createSessionIfMissing,
+              idempotencyKey: "creation",
+            }),
+          ).toMatchObject({
+            agentId: "main",
+            requestedSessionId: "new-id",
+            requestedSessionKey: createSessionIfMissing ? "agent:main:explicit:new-id" : undefined,
           });
-          expect(respond).not.toHaveBeenCalled();
-          expect(routing).toMatchObject({ agentId: "ops", requestedSessionKey: sessionKey });
-        } else {
-          expect(backfillSessionKey({ config: cfg, sessionId: "ops-session" })).toBe(sessionKey);
+          return;
         }
-        // The legacy listing still reads on the host; only the added inspection is removed.
-        expect(opens).toContain("listing");
-        expect(opens.filter((phase) => phase === "extra")).toEqual([]);
+        const sessionKey = caller === "embedded" ? "unknown" : "global";
+        for (const agentId of ["main", "ops"]) {
+          await replaceSessionEntry(
+            { agentId, storePath, sessionKey },
+            { sessionId: `${agentId}-session`, updatedAt: 1 },
+          );
+          const target = resolveSqliteTargetFromSessionStorePath(storePath, { agentId });
+          await closeOpenClawAgentDatabaseByPathAsync(target.path);
+          unregisterOpenClawAgentDatabase({ agentId, path: target.path });
+          expect(isOpenClawAgentDatabaseOpen(target.path)).toBe(false);
+        }
+        const openDatabase = vi.spyOn(nodeSqlite, "openNodeSqliteDatabase");
+        if (caller === "Gateway") {
+          expect(
+            await route(cfg, {
+              message: "resume",
+              sessionId: "ops-session",
+              createSessionIfMissing,
+              idempotencyKey: "lookup",
+            }),
+          ).toMatchObject({ agentId: "ops", requestedSessionKey: sessionKey });
+        } else {
+          const prepared = await prepareEmbeddedRunSession({
+            config: cfg,
+            sessionId: "ops-session",
+            sessionFile: sessionKey,
+            workspaceDir: state.workspaceDir,
+            prompt: "resume",
+            runId: "lookup",
+            timeoutMs: 1000,
+          });
+          expect(prepared.params).toMatchObject({ sessionKey, agentId: "ops" });
+        }
+        expect(openDatabase).not.toHaveBeenCalled();
       } finally {
         vi.restoreAllMocks();
         clearRuntimeConfigSnapshot();

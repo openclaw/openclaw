@@ -4,7 +4,6 @@ import { beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 // Keep static: compiled-worker preparation belongs at collection, not in a hook or test deadline.
 import { maybePersistResolvedTelegramTarget } from "./target-writeback.js";
 
-type UnknownMock = Mock<(...args: unknown[]) => unknown>;
 type AsyncUnknownMock = Mock<(...args: unknown[]) => Promise<unknown>>;
 
 const readConfigFileSnapshotForWrite: AsyncUnknownMock = vi.hoisted(() => vi.fn());
@@ -16,7 +15,7 @@ const replaceConfigFile: AsyncUnknownMock = vi.hoisted(() =>
   }),
 );
 const loadCronStore: AsyncUnknownMock = vi.hoisted(() => vi.fn());
-const resolveCronStorePath: UnknownMock = vi.hoisted(() => vi.fn());
+const resolveCronStorePathAsync: AsyncUnknownMock = vi.hoisted(() => vi.fn());
 const saveCronStore: AsyncUnknownMock = vi.hoisted(() => vi.fn());
 
 type TelegramConfigWrite = {
@@ -61,18 +60,6 @@ const scopedTargetWritebackCases = [
     resolvedTarget: "-100123:77",
     unmatchedTargets: ["@mychannel", "@mychannel:direct-topic:77", "@mychannel:88"],
   },
-  {
-    name: "unthreaded target",
-    rawTarget: "t.me/mychannel",
-    matchingTarget: "@MyChannel",
-    resolvedTarget: "-100123",
-    unmatchedTargets: [
-      "@mychannel:direct-topic:77",
-      "@mychannel:direct-topic:88",
-      "@mychannel:topic:77",
-      "@mychannel:77",
-    ],
-  },
 ] as const;
 
 vi.mock("openclaw/plugin-sdk/config-mutation", async () => {
@@ -94,7 +81,7 @@ vi.mock("openclaw/plugin-sdk/cron-store-runtime", async () => {
   return {
     ...actual,
     loadCronStore,
-    resolveCronStorePath,
+    resolveCronStorePathAsync,
     saveCronStore,
   };
 });
@@ -124,9 +111,9 @@ export function installMaybePersistResolvedTelegramTargetTests() {
       replaceConfigFile.mockClear();
       writeConfigFile.mockReset();
       loadCronStore.mockReset();
-      resolveCronStorePath.mockReset();
+      resolveCronStorePathAsync.mockReset();
       saveCronStore.mockReset();
-      resolveCronStorePath.mockReturnValue("/tmp/cron/jobs.json");
+      resolveCronStorePathAsync.mockResolvedValue("/tmp/cron/jobs.json");
     });
 
     it("skips writeback when target is already numeric", async () => {

@@ -11,12 +11,6 @@ export type PluginSourceRoots = {
   workspace?: string;
 };
 
-type PluginCacheInputs = {
-  roots: PluginSourceRoots;
-  loadPaths: string[];
-  devSourceRoot: string | null;
-};
-
 export function resolvePluginSourceRoots(params: {
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
@@ -34,7 +28,11 @@ export function resolvePluginCacheInputs(params: {
   workspaceDir?: string;
   loadPaths?: readonly string[];
   env?: NodeJS.ProcessEnv;
-}): PluginCacheInputs {
+}): {
+  roots: PluginSourceRoots;
+  loadPaths: string[];
+  devSourceRoot: string | null;
+} {
   const env = params.env ?? process.env;
   const roots = resolvePluginSourceRoots({
     workspaceDir: params.workspaceDir,

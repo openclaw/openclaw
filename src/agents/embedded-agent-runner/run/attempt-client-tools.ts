@@ -1,10 +1,11 @@
 import { getAgentToolAssistantTurnId } from "../../../../packages/agent-core/src/tool-execution-context.js";
+import { emitTrustedDiagnosticEvent } from "../../../infra/diagnostic-events.js";
 import {
   getPluginToolMeta,
   getPluginToolSideEffectOwnerKey,
 } from "../../../plugins/tool-metadata.js";
 import {
-  createClientToolNameConflictError,
+  CLIENT_TOOL_NAME_CONFLICT_PREFIX,
   findClientToolNameConflicts,
   toClientToolDefinitions,
   toToolDefinitions,
@@ -26,7 +27,6 @@ import {
 } from "../../tool-replay-safety.js";
 import { addClientToolsToToolCatalog } from "../../tool-search-catalog.js";
 import { resolveToolSearchConfig, type ToolSearchCatalogRef } from "../../tool-search.js";
-import { log } from "../logger.js";
 import {
   AGENT_RESERVED_TOOL_NAMES,
   collectRegisteredToolNames,
@@ -35,11 +35,16 @@ import {
 import type { EmbeddedAttemptClientToolCallSlot, EmbeddedRunAttemptParams } from "./types.js";
 
 export function prepareEmbeddedAttemptClientTools(params: {
-  attempt: EmbeddedRunAttemptParams;
+  attempt: Pick<
+    EmbeddedRunAttemptParams,
+    "config" | "sessionId" | "runId" | "onToolOutcome" | "allocateToolOutcomeOrdinal"
+  >;
   catalogToolHookContext: Parameters<typeof toToolDefinitions>[1];
   codeModeControlsEnabledForRun: boolean;
   deferredDirectoryToolsCallable: boolean;
   effectiveTools: AgentTool[];
+  /** Applies the session tool pin each time the surface is built, including permission refreshes. */
+  pinTools?: (tools: AgentTool[]) => AgentTool[];
   replaySafetyOptions: Parameters<typeof isAgentToolReplaySafe>[1];
   sandboxSessionKey?: string;
   sessionAgentId: string;
@@ -101,6 +106,7 @@ export function prepareEmbeddedAttemptClientTools(params: {
       )
     : [];
   const buildSurface = () => {
+    const effectiveTools = params.pinTools?.(params.effectiveTools) ?? params.effectiveTools;
     // Raw names gate trusted local media passthrough; normalized aliases are insufficient.
     const builtinToolNames = new Set<string>();
     const trustedLocalMediaToolNames = new Set<string>();
@@ -132,7 +138,7 @@ export function prepareEmbeddedAttemptClientTools(params: {
     // the same name must never be mistaken for one at tool completion. The marked
     // controls exist only on the post-catalog `effectiveTools` surface.
     const codeModeExecToolNames = new Set(
-      params.effectiveTools.filter((tool) => isCodeModeExecTool(tool)).map((tool) => tool.name),
+      effectiveTools.filter((tool) => isCodeModeExecTool(tool)).map((tool) => tool.name),
     );
     // Only a tool author can opt a tool into delivering its result as the source reply.
     // Names are policy-normalized because completion and terminal hooks compare them so.
@@ -150,7 +156,7 @@ export function prepareEmbeddedAttemptClientTools(params: {
       existingToolNames: [...clientConflictToolNames, ...AGENT_RESERVED_TOOL_NAMES],
     });
     if (clientToolNameConflicts.length > 0) {
-      throw createClientToolNameConflictError(clientToolNameConflicts);
+      throw new Error(`${CLIENT_TOOL_NAME_CONFLICT_PREFIX} ${clientToolNameConflicts.join(", ")}`);
     }
 
     let clientToolDefs = sourceClientToolDefs.map((definition) =>
@@ -175,18 +181,20 @@ export function prepareEmbeddedAttemptClientTools(params: {
       enabled:
         params.codeModeControlsEnabledForRun || (search.enabled && search.mode !== "directory"),
       catalogRef: params.toolSearchCatalogRef,
+      selection: params.codeModeControlsEnabledForRun ? undefined : search,
     });
     clientToolDefs = clientToolSearch.tools;
     if (clientToolSearch.compacted) {
-      log.info(
-        params.codeModeControlsEnabledForRun
-          ? `code-mode: cataloged ${clientToolSearch.catalogToolCount} client tools behind exec/wait`
-          : `tool-search: cataloged ${clientToolSearch.catalogToolCount} client tools behind compact prompt surface`,
-      );
+      emitTrustedDiagnosticEvent({
+        type: "tool.catalog",
+        source: "client",
+        mode: params.codeModeControlsEnabledForRun ? "code-mode" : "tool-search",
+        toolCount: clientToolSearch.catalogToolCount,
+      });
     }
 
     const customTools = toToolDefinitions(
-      params.effectiveTools,
+      effectiveTools,
       params.catalogToolHookContext,
       params.getToolAbortSignal?.(),
     );
@@ -212,13 +220,17 @@ export function prepareEmbeddedAttemptClientTools(params: {
     ...current,
     refreshTools: () => {
       const next = buildSurface();
-      current.allCustomTools.splice(0, current.allCustomTools.length, ...next.allCustomTools);
-      current.clientToolDefs.splice(0, current.clientToolDefs.length, ...next.clientToolDefs);
-      current.sessionToolAllowlist.splice(
-        0,
-        current.sessionToolAllowlist.length,
-        ...next.sessionToolAllowlist,
-      );
+      const replaceItems = <T>(target: T[], source: T[]) =>
+        target.splice(0, target.length, ...source);
+      replaceItems(current.allCustomTools, next.allCustomTools);
+      replaceItems(current.clientToolDefs, next.clientToolDefs);
+      replaceItems(current.sessionToolAllowlist, next.sessionToolAllowlist);
+      const replaceSet = <T>(target: Set<T>, source: Set<T>) => {
+        target.clear();
+        for (const item of source) {
+          target.add(item);
+        }
+      };
       for (const key of [
         "builtinToolNames",
         "coreBuiltinToolNames",
@@ -227,15 +239,9 @@ export function prepareEmbeddedAttemptClientTools(params: {
         "sourceReplyCapableToolNames",
         "trustedLocalMediaToolNames",
       ] as const) {
-        current[key].clear();
-        for (const name of next[key]) {
-          current[key].add(name);
-        }
+        replaceSet(current[key], next[key]);
       }
-      current.replaySafeTools.clear();
-      for (const tool of next.replaySafeTools) {
-        current.replaySafeTools.add(tool);
-      }
+      replaceSet(current.replaySafeTools, next.replaySafeTools);
       current.sideEffectToolOwners.clear();
       for (const [name, owner] of next.sideEffectToolOwners) {
         current.sideEffectToolOwners.set(name, owner);

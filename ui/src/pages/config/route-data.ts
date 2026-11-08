@@ -1,5 +1,5 @@
 import type { RouteLocation } from "@openclaw/uirouter";
-import { INTERNAL_MEMORY_PATH_PARAM } from "../../app-route-paths.ts";
+import { INTERNAL_MEMORY_PATH_PARAM, pathForRoute } from "../../app-route-paths.ts";
 import type { AgentSelectionCapability } from "../../app/agent-selection.ts";
 
 export const MODEL_SETTINGS_TARGET_IDS = { behavior: "settings-model-behavior" } as const;
@@ -7,16 +7,18 @@ export const MODEL_SETTINGS_TARGET_IDS = { behavior: "settings-model-behavior" }
 export const APPEARANCE_SETTINGS_TARGET_IDS = {
   language: "settings-language",
   theme: "settings-appearance-theme",
+  background: "settings-appearance-background",
   accent: "settings-appearance-accent",
   typography: "settings-appearance-typography",
+  tabIcon: "settings-appearance-tab-icon",
   textSize: "settings-appearance-text-size",
   sidebar: "settings-appearance-sidebar",
   chat: "settings-appearance-chat",
+  devices: "settings-appearance-devices",
   sessionSources: "settings-session-sources",
-  connection: "settings-appearance-connection",
 } as const;
 
-const appearanceSettingsRouteTarget = (targetId: string) =>
+export const appearanceSettingsRouteTarget = (targetId: string) =>
   ({ routeId: "appearance", search: "?section=__appearance__", hash: `#${targetId}` }) as const;
 
 export const SETTINGS_ROUTE_TARGETS = {
@@ -34,6 +36,11 @@ export type ConfigRouteData = ReturnType<typeof configRouteData> & {
   agentSelectionIntent?: { owner: AgentSelectionCapability; revision: number };
 };
 
+export type ConfigRouteSource = {
+  read(): ConfigRouteData | null;
+  subscribe(listener: () => void): () => void;
+};
+
 export function configTargetIdFromHash(hash: string): string | null {
   if (!hash) {
     return null;
@@ -43,6 +50,18 @@ export function configTargetIdFromHash(hash: string): string | null {
   } catch {
     return null;
   }
+}
+
+export function canonicalGeneralSettingsLocation(location: RouteLocation, basePath: string) {
+  const target =
+    configTargetIdFromHash(location.hash) === "settings-general-model"
+      ? SETTINGS_ROUTE_TARGETS.modelBehavior
+      : SETTINGS_ROUTE_TARGETS.appearanceLanguage;
+  return {
+    pathname: pathForRoute(target.routeId, basePath),
+    search: "search" in target ? target.search : "",
+    hash: target.hash,
+  };
 }
 
 export function configRouteData(location: RouteLocation) {

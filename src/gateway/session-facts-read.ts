@@ -1,17 +1,10 @@
-import { randomUUID } from "node:crypto";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { readLoggingConfig } from "../logging/config.js";
-import {
-  captureModelVisibleRedactionPolicy,
-  matchesModelVisibleRedactionPolicy,
-} from "../logging/redact-internal-state.js";
-import { redactToolPayloadText } from "../logging/redact.js";
 import type {
   RuntimeSessionFacts,
   RuntimeSessionFactsSelectionResult,
 } from "../plugins/runtime/types-session-facts.js";
 import { isIncognitoSessionKey } from "../routing/session-key.js";
-import { freezeJsonSnapshot } from "../shared/immutable-data.js";
+import { freezeTrustedJsonSnapshot } from "../shared/immutable-data.js";
 import { stripMarkdown } from "../shared/text/strip-markdown.js";
 import type { ControlUiSessionPullRequestSnapshot } from "./control-ui-contract.js";
 import {
@@ -21,7 +14,10 @@ import {
 import { createVisibleActiveSessionRunProjector } from "./server-methods/session-active-runs.js";
 import type { ResolvedInProcessGatewayDispatch } from "./server-plugin-in-process-dispatch.types.js";
 import { tryResolveSessionCompatibilityOwnerAgentId } from "./session-request-agent.js";
-import type { SessionRowReadView } from "./session-row-prepared-read.js";
+import {
+  toProjectedSessionSharingTarget,
+  type SessionRowReadView,
+} from "./session-row-prepared-read.js";
 import type { MaterializedRow } from "./session-row-projection-record.js";
 import { prepareProjectedSessionSharing, resolveSessionVisibility } from "./session-sharing.js";
 import { projectGatewaySessionRunState } from "./session-utils-display.js";
@@ -32,14 +28,14 @@ const PR_RETRY_MS = 60_000;
 const PR_RETRY_MAX_MS = 15 * 60_000;
 export type SelectedFacts = RuntimeSessionFactsSelectionResult["sessions"][number];
 export type SelectedPrFacts = {
-  row: GatewaySessionRow;
-  redaction: ReturnType<typeof sessionFactsRedactionPolicy>;
+  generation: MaterializedRow["generation"];
+  databaseFactsRevision: number;
   owner: ResolvedInProcessGatewayDispatch["context"]["controlUiSessionPullRequests"];
   facts: RuntimeSessionFacts;
   selected: SelectedFacts;
   retry?: { at: number; delayMs: number };
 };
-let rowFacts = new WeakMap<
+const rowFacts = new WeakMap<
   GatewaySessionRow,
   {
     owner: ResolvedInProcessGatewayDispatch["context"]["controlUiSessionPullRequests"];
@@ -51,33 +47,18 @@ let rowFacts = new WeakMap<
   }
 >();
 
-let redactionPolicy:
-  | (ReturnType<typeof captureModelVisibleRedactionPolicy> & { revision: string })
-  | undefined;
-
-// Row identity survives redaction changes; cached text must follow the policy owner.
-export function sessionFactsRedactionPolicy() {
-  const logging = readLoggingConfig();
-  if (!redactionPolicy || !matchesModelVisibleRedactionPolicy(redactionPolicy, logging)) {
-    redactionPolicy = { ...captureModelVisibleRedactionPolicy(logging), revision: randomUUID() };
-    rowFacts = new WeakMap();
-  }
-  return redactionPolicy;
-}
-
 export function safeText(value: string | undefined, limit: number): string | undefined {
-  return value ? truncateUtf16Safe(redactToolPayloadText(value), limit) : undefined;
+  return value ? truncateUtf16Safe(value, limit) : undefined;
 }
 
 function projectPullRequests(
   pullRequests: ReadonlyArray<RuntimeSessionFacts["pullRequests"][number]>,
-  source: "snapshot" | "retained" = "snapshot",
 ) {
   return pullRequests.map(({ number, state, url, title }) => ({
     number,
     state,
     ...(url ? { url } : {}),
-    ...(source === "snapshot" && title ? { title: safeText(title, 120) } : {}),
+    ...(title ? { title: safeText(title, 120) } : {}),
   }));
 }
 
@@ -88,7 +69,6 @@ export function prepareFactsRead(
   authority?: { visibility: WeakMap<object, boolean> },
   prFacts?: Map<string, SelectedPrFacts>,
 ) {
-  const redaction = sessionFactsRedactionPolicy();
   const now = Date.now();
   const { cfg, policyConfig, rowContext } = read.state;
   const sharing = prepareProjectedSessionSharing({
@@ -104,8 +84,10 @@ export function prepareFactsRead(
         ?.has(identityId) ?? false,
   });
   const active = createVisibleActiveSessionRunProjector(
-    resolved.context,
     rowContext.projectedAgentRuns,
+    undefined,
+    resolved.context.resolveGatewayContext,
+    read.physicalPaths,
   );
   const currentRows = { ...rowContext, subagentRuns: rowContext.subagentRuns.atTime(now) };
   const prOwner = resolved.context.controlUiSessionPullRequests;
@@ -121,16 +103,18 @@ export function prepareFactsRead(
       ) {
         return undefined;
       }
-      let visible = authority?.visibility.get(record.entry);
+      const visibilityCache = sharing.sessionCap === "invited" ? undefined : authority?.visibility;
+      let visible = visibilityCache?.get(record.entry);
       if (visible === undefined) {
-        visible = sharing.entryFilter?.(record.key, record.entry) !== false;
-        authority?.visibility.set(record.entry, visible);
+        visible = sharing.canReadTarget(toProjectedSessionSharingTarget(record));
+        visibilityCache?.set(record.entry, visible);
       }
       if (!visible) {
         return undefined;
       }
       const row = record.materialized.row;
       const live = active({
+        storePath: record.storeTarget.storePath,
         requestedKey: record.key,
         canonicalKey: record.key,
         sessionId: record.entry.sessionId,
@@ -165,6 +149,7 @@ export function prepareFactsRead(
       const previous =
         retained &&
         retained.owner === prOwner &&
+        retained.generation === record.generation &&
         retained.facts.sessionId === record.entry.sessionId &&
         retained.facts.lifecycleRevision === record.entry.lifecycleRevision
           ? retained
@@ -172,7 +157,7 @@ export function prepareFactsRead(
       const retryDue =
         !previous?.retry ||
         previous.retry.at <= now ||
-        previous.row !== row ||
+        previous.databaseFactsRevision !== record.databaseFactsRevision ||
         previous.facts.run !== run;
       const admitSelectedLoad = () => retryDue && admitPrLoad();
       const prs =
@@ -186,64 +171,64 @@ export function prepareFactsRead(
       }
       const previousFacts = rowFacts.get(row);
       const cached =
-        previousFacts?.preview === row.lastMessagePreview && previousFacts?.run === run
+        previousFacts &&
+        previousFacts.preview === row.lastMessagePreview &&
+        previousFacts.run === run &&
+        previousFacts.owner === prOwner &&
+        previousFacts.prs === prs
           ? previousFacts
           : undefined;
-      if (cached && cached.owner === prOwner && cached.prs === prs && (!prFacts || !prEligible)) {
+      if (cached && (!prFacts || !prEligible)) {
         return cached;
       }
       const digest = row.observerDigest ? record.entry.observerDigest : undefined;
       const facts: RuntimeSessionFacts =
-        cached && cached.owner === prOwner && cached.prs === prs
-          ? cached.facts
-          : freezeJsonSnapshot({
-              key: record.key,
-              sessionId: record.entry.sessionId,
-              ...(record.entry.lifecycleRevision
-                ? { lifecycleRevision: record.entry.lifecycleRevision }
-                : {}),
-              agentId: record.agentId,
-              label: safeText(row.label ?? row.displayName, 240),
-              derivedTitle: safeText(row.derivedTitle, 240),
-              lastMessagePreview: safeText(
-                row.lastMessagePreview
-                  ? stripMarkdown(row.lastMessagePreview, { linkStyle: "label", stripHtml: true })
-                      .replace(/\s+/gu, " ")
-                      .trim()
-                  : undefined,
-                400,
-              ),
-              run,
-              ...(digest
-                ? {
-                    observerDigest: {
-                      health: digest.health,
-                      headline: safeText(digest.headline, 120) ?? "",
-                      assessment: safeText(digest.assessment, 320),
-                      revision: digest.revision,
-                    },
-                  }
-                : {}),
-              pullRequests: projectPullRequests(prs?.pullRequests ?? []),
-              ...(prUnavailable ? { pullRequestsUnavailable: true } : {}),
-              ...(prs?.rateLimited || prs?.status === "rate-limited"
-                ? { pullRequestsRateLimited: true }
-                : {}),
-              archived: row.archived === true,
-              lastActivityAt: row.lastActivityAt ?? row.updatedAt ?? 0,
-            });
-      const result =
-        cached && cached.owner === prOwner && cached.prs === prs
-          ? cached
-          : {
-              owner: prOwner,
-              prs,
-              facts,
-              selected: Object.freeze({ ...facts, isMain: row.isMain }),
-              preview: row.lastMessagePreview,
-              run,
-            };
-      if (result !== cached) {
+        cached?.facts ??
+        freezeTrustedJsonSnapshot({
+          key: record.key,
+          sessionId: record.entry.sessionId,
+          ...(record.entry.lifecycleRevision
+            ? { lifecycleRevision: record.entry.lifecycleRevision }
+            : {}),
+          agentId: record.agentId,
+          label: safeText(row.label ?? row.displayName, 240),
+          derivedTitle: safeText(row.derivedTitle, 240),
+          lastMessagePreview: safeText(
+            row.lastMessagePreview
+              ? stripMarkdown(row.lastMessagePreview, { linkStyle: "label", stripHtml: true })
+                  .replace(/\s+/gu, " ")
+                  .trim()
+              : undefined,
+            400,
+          ),
+          run,
+          ...(digest
+            ? {
+                observerDigest: {
+                  health: digest.health,
+                  headline: safeText(digest.headline, 120) ?? "",
+                  assessment: safeText(digest.assessment, 320),
+                  revision: digest.revision,
+                },
+              }
+            : {}),
+          pullRequests: projectPullRequests(prs?.pullRequests ?? []),
+          ...(prUnavailable ? { pullRequestsUnavailable: true } : {}),
+          ...(prs?.rateLimited || prs?.status === "rate-limited"
+            ? { pullRequestsRateLimited: true }
+            : {}),
+          archived: row.archived === true,
+          lastActivityAt: row.lastActivityAt ?? row.updatedAt ?? 0,
+        });
+      const result = cached ?? {
+        owner: prOwner,
+        prs,
+        facts,
+        selected: Object.freeze({ ...facts, isMain: row.isMain }),
+        preview: row.lastMessagePreview,
+        run,
+      };
+      if (!cached) {
         rowFacts.set(row, result);
       }
       if (prFacts && prEligible) {
@@ -260,7 +245,6 @@ export function prepareFactsRead(
             ? previous.retry
             : { at: now + delayMs, delayMs }
           : undefined;
-        // Truncated retained titles cannot be re-redacted under a different policy.
         const selected = !stale
           ? result.selected
           : previous.facts === facts && previous.selected.pullRequestsStale
@@ -268,15 +252,17 @@ export function prepareFactsRead(
             : Object.freeze({
                 ...facts,
                 isMain: row.isMain,
-                pullRequests:
-                  previous.redaction === redaction
-                    ? previous.selected.pullRequests
-                    : freezeJsonSnapshot(
-                        projectPullRequests(previous.selected.pullRequests, "retained"),
-                      ),
+                pullRequests: previous.selected.pullRequests,
                 pullRequestsStale: true as const,
               });
-        prFacts.set(record.key, { row, redaction, owner: prOwner, facts, selected, retry });
+        prFacts.set(record.key, {
+          generation: record.generation,
+          databaseFactsRevision: record.databaseFactsRevision,
+          owner: prOwner,
+          facts,
+          selected,
+          retry,
+        });
         return { ...result, selected };
       }
       return result;

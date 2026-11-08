@@ -3,6 +3,7 @@ import { resolveDefaultAgentWorkspaceDir } from "../agents/workspace-default.js"
 import type { AmbientEnvTriggerPolicy } from "../channels/config-presence.js";
 import { validateConfiguredBindings } from "../channels/plugins/configured-binding-registry.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { formatErrorMessageWithCode } from "../infra/errors.js";
 import {
   collectConfiguredMemoryEmbeddingStartupProviderOwners,
   collectRegisteredEmbeddingProviderIds,
@@ -12,7 +13,6 @@ import {
 import { getGatewayPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-state.js";
 import { getRegisteredEmbeddingProvider } from "../plugins/embedding-providers.js";
 import { extractPluginInstallRecordsFromInstalledPluginIndex } from "../plugins/installed-plugin-index-install-records.js";
-import { getPluginMetadataSnapshotCache } from "../plugins/plugin-cache.js";
 import { loadPluginLookUpTable } from "../plugins/plugin-lookup-table.js";
 import {
   completePluginMetadataSnapshot,
@@ -34,7 +34,6 @@ import {
 import { resolveGatewayStartupPluginActivationConfig } from "./plugin-activation-runtime-config.js";
 import { listGatewayMethods } from "./server-methods-list.js";
 import type { GatewayContextResolver } from "./server-methods/types.js";
-import type { GatewayPluginRuntimeClaim } from "./server-plugin-runtime-generation.js";
 import { measureStartup, type GatewayStartupTrace } from "./server-startup-trace.js";
 
 type GatewayPluginBootstrapLog = {
@@ -48,12 +47,40 @@ type GatewayPluginBootstrapLog = {
 export async function runGatewayPostReadyStartupMaintenance(params: {
   getConfig: () => OpenClawConfig;
   getPluginRegistry: () => PluginRegistry;
+  pluginMetadataSnapshot?: Pick<PluginMetadataSnapshot, "registrySource">;
   databases: readonly import("./server-startup-session-migration.js").PreparedStartupSessionDatabase[];
   signal: AbortSignal;
   log: Pick<GatewayPluginBootstrapLog, "info" | "warn">;
   startupTrace?: GatewayStartupTrace;
 }): Promise<void> {
   const tasks = [
+    [
+      "plugin-registry",
+      async () => {
+        if (params.pluginMetadataSnapshot?.registrySource !== "derived") {
+          return;
+        }
+        const [{ withPluginLifecycleLeaseAsync }, { refreshPluginRegistryAfterConfigMutation }] =
+          await Promise.all([
+            import("../plugins/plugin-lifecycle-lease.js"),
+            import("../plugins/registry-refresh.js"),
+          ]);
+        await withPluginLifecycleLeaseAsync(
+          {
+            signal: params.signal,
+            assertCurrent: () => params.signal.throwIfAborted(),
+            processBound: true,
+          },
+          (lease) =>
+            refreshPluginRegistryAfterConfigMutation({
+              reason: "source-changed",
+              lease,
+              invalidateRuntimeCache: false,
+              logger: params.log,
+            }),
+        );
+      },
+    ],
     [
       "channels",
       async () => {
@@ -99,7 +126,9 @@ export async function runGatewayPostReadyStartupMaintenance(params: {
         await measureStartup(params.startupTrace, `startup.maintenance.${name}`, run);
       } catch (error) {
         if (!params.signal.aborted) {
-          params.log.warn(`Gateway post-ready ${name} maintenance failed: ${String(error)}`);
+          params.log.warn(
+            `Gateway post-ready ${name} maintenance failed: ${formatErrorMessageWithCode(error)}`,
+          );
         }
       }
     }),
@@ -233,7 +262,7 @@ export function warnUnregisteredConfiguredMemoryEmbeddingProviders(params: {
   for (const provider of unregistered) {
     const path = `memory.search.${provider.source}`;
     params.log.warn(
-      `${path}="${provider.configuredId}" is configured, but no loaded plugin registered a memory embedding provider that can serve "${provider.configuredId}". Semantic memory recall will fall back to keyword/FTS-only search. Ensure the plugin that provides "${provider.configuredId}" is installed and enabled.`,
+      `${path}="${provider.configuredId}" is configured, but no loaded plugin registered a memory embedding provider that can serve "${provider.configuredId}". Semantic memory recall will fall back to keyword/FTS-only search. Check that the plugin that provides "${provider.configuredId}" is installed and enabled.`,
     );
   }
 }
@@ -307,24 +336,28 @@ export async function loadGatewayStartupPluginRuntime(params: {
   startupTrace?: Pick<GatewayStartupTrace, "detail">;
   ambientEnvTriggers?: AmbientEnvTriggerPolicy;
   resolveGatewayContext?: GatewayContextResolver;
-  pluginRuntimeClaim?: GatewayPluginRuntimeClaim;
-  getCurrentPluginRegistry?: () => PluginRegistry;
+  signal?: AbortSignal;
 }) {
+  const { confirmPluginStateMigrationReadiness } =
+    await import("../plugins/plugin-state-migration-readiness.js");
+  try {
+    await confirmPluginStateMigrationReadiness({
+      config: params.activationSourceConfig ?? params.cfg,
+      env: process.env,
+      signal: params.signal ?? new AbortController().signal,
+      warn: (message) => params.log.warn(message),
+    });
+  } catch (error) {
+    params.log.warn(`Plugin data/settings readiness could not be confirmed: ${String(error)}`);
+  }
   // Keep server-plugin-bootstrap behind one lazy boundary; startup config tests can exercise
   // planning without importing plugin package runtimes.
+  const beforeBootstrapImport = performance.now();
   const { prepareGatewayPluginLoad } = await import("./server-plugin-bootstrap.js");
-  await params.pluginRuntimeClaim?.waitForUnblocked();
-  if (params.pluginRuntimeClaim && !params.pluginRuntimeClaim.isCurrent()) {
-    const currentPluginRegistry = params.getCurrentPluginRegistry?.();
-    if (!currentPluginRegistry) {
-      throw new Error("superseded Gateway startup cannot resolve the current plugin runtime");
-    }
-    return {
-      pluginRegistry: currentPluginRegistry,
-      gatewayMethods: params.baseMethods,
-    };
-  }
-  const loaded = prepareGatewayPluginLoad({
+  params.startupTrace?.detail("plugins.gateway-bootstrap-import", [
+    ["durationMs", performance.now() - beforeBootstrapImport],
+  ]);
+  const loaded = await prepareGatewayPluginLoad({
     loadIntent: "startup",
     cfg: params.cfg,
     activationSourceConfig: params.activationSourceConfig,
@@ -366,12 +399,6 @@ export async function loadGatewayStartupPluginRuntime(params: {
     ).catch((error: unknown) => {
       params.log.warn(`Memory embedding setup checks failed: ${String(error)}`);
     });
-    const metadata = getPluginRuntimeLoadContext(loaded.pluginRegistry)?.metadataSnapshot;
-    const { settlePluginNativeAdmissions } =
-      await import("../plugins/plugin-native-admission-state.js");
-    await settlePluginNativeAdmissions(
-      metadata ? getPluginMetadataSnapshotCache(metadata) : undefined,
-    );
     return loaded;
   } catch (error) {
     loaded.retireGatewayRuntimeBindings();

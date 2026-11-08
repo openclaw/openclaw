@@ -1,8 +1,9 @@
-import type {
-  RealtimeTranscriptionProviderConfig,
-  RealtimeTranscriptionProviderPlugin,
-  RealtimeTranscriptionWebSocketTransport,
-} from "openclaw/plugin-sdk/realtime-transcription-session";
+import {
+  measureTranscriptDeltaBytes,
+  type RealtimeTranscriptionProviderConfig,
+  type RealtimeTranscriptionProviderPlugin,
+  type RealtimeTranscriptionWebSocketTransport,
+} from "openclaw/plugin-sdk/realtime-transcription-provider";
 import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
 import {
   asFiniteNumberInRange,
@@ -14,6 +15,7 @@ import {
   createOpenAIRealtimeClientSecret,
   readRealtimeErrorDetail,
   resolveOpenAIProviderConfigRecord,
+  resolveOpenAIRealtimeRequestHeaders,
 } from "./realtime-provider-shared.js";
 
 type RealtimeEvent = {
@@ -48,38 +50,23 @@ const OPENAI_REALTIME_TRANSCRIPTION_API_KEY_REQUIRED =
 const OPENAI_REALTIME_TRANSCRIPTION_API_KEY_REJECTED =
   "OpenAI Realtime transcription rejected the selected API key. Update or remove the active OpenAI API-key source";
 
-function appendedUtf8ByteLength(previous: string, appended: string): number {
-  const appendedBytes = Buffer.byteLength(appended, "utf8");
-  if (!previous || !appended) {
-    return appendedBytes;
-  }
-  const previousCodeUnit = previous.charCodeAt(previous.length - 1);
-  const appendedCodeUnit = appended.charCodeAt(0);
-  const joinsSurrogatePair =
-    previousCodeUnit >= 0xd800 &&
-    previousCodeUnit <= 0xdbff &&
-    appendedCodeUnit >= 0xdc00 &&
-    appendedCodeUnit <= 0xdfff;
-  return joinsSurrogatePair ? appendedBytes - 2 : appendedBytes;
-}
-
 function normalizeProviderConfig(config: RealtimeTranscriptionProviderConfig) {
   const raw = resolveOpenAIProviderConfigRecord(config);
   return {
     apiKey:
       normalizeResolvedSecretInputString({
-        value: raw?.apiKey,
+        value: raw.apiKey,
         path: "plugins.entries.voice-call.config.streaming.providers.openai.apiKey",
       }) ??
       normalizeResolvedSecretInputString({
-        value: raw?.openaiApiKey,
+        value: raw.openaiApiKey,
         path: "plugins.entries.voice-call.config.streaming.openaiApiKey",
       }),
-    language: normalizeOptionalString(raw?.language),
-    model: normalizeOptionalString(raw?.model) ?? normalizeOptionalString(raw?.sttModel),
-    prompt: normalizeOptionalString(raw?.prompt),
-    silenceDurationMs: asSafeIntegerInRange(raw?.silenceDurationMs, { min: 0 }),
-    vadThreshold: asFiniteNumberInRange(raw?.vadThreshold, { min: 0, max: 1 }),
+    language: normalizeOptionalString(raw.language),
+    model: normalizeOptionalString(raw.model) ?? normalizeOptionalString(raw.sttModel),
+    prompt: normalizeOptionalString(raw.prompt),
+    silenceDurationMs: asSafeIntegerInRange(raw.silenceDurationMs, { min: 0 }),
+    vadThreshold: asFiniteNumberInRange(raw.vadThreshold, { min: 0, max: 1 }),
   };
 }
 
@@ -93,6 +80,7 @@ export function buildOpenAIRealtimeTranscriptionProvider(
     defaultModel: OPENAI_REALTIME_TRANSCRIPTION_DEFAULT_MODEL,
     autoSelectOrder: 10,
     resolveConfig: ({ rawConfig }) => normalizeProviderConfig(rawConfig),
+    // Retained for synchronous SDK consumers through 2026-12-31.
     isConfigured: ({ cfg, providerConfig }) =>
       Boolean(
         normalizeProviderConfig(providerConfig).apiKey ||
@@ -102,6 +90,16 @@ export function buildOpenAIRealtimeTranscriptionProvider(
           cfg,
           profileTypes: ["api_key"],
         }),
+      ),
+    isConfiguredAsync: async ({ cfg, providerConfig }) =>
+      Boolean(
+        normalizeProviderConfig(providerConfig).apiKey ||
+        process.env.OPENAI_API_KEY?.trim() ||
+        (await runtime.isProviderAuthProfileConfiguredAsync({
+          provider: "openai",
+          cfg,
+          profileTypes: ["api_key"],
+        })),
       ),
     createSession: (req) => {
       const normalized = normalizeProviderConfig(req.providerConfig);
@@ -134,7 +132,6 @@ export function buildOpenAIRealtimeTranscriptionProvider(
         };
       };
       const pendingTranscripts = new Map<string, { bytes: number; text: string }>();
-      const committedItemIds: string[] = [];
       const committedItems = new Map<string, string | null | undefined>();
       const completedTranscripts = new Map<string, string | undefined>();
       const trackedItemIds = new Set<string>();
@@ -148,7 +145,6 @@ export function buildOpenAIRealtimeTranscriptionProvider(
 
       const resetTranscriptionState = () => {
         pendingTranscripts.clear();
-        committedItemIds.length = 0;
         committedItems.clear();
         completedTranscripts.clear();
         trackedItemIds.clear();
@@ -231,11 +227,7 @@ export function buildOpenAIRealtimeTranscriptionProvider(
         previousItemId: string | null | undefined,
         transport: RealtimeTranscriptionWebSocketTransport,
       ) => {
-        if (
-          settledItemIds.has(itemId) ||
-          committedItems.has(itemId) ||
-          !trackItem(itemId, transport)
-        ) {
+        if (committedItems.has(itemId) || !trackItem(itemId, transport)) {
           return;
         }
         if (
@@ -253,32 +245,27 @@ export function buildOpenAIRealtimeTranscriptionProvider(
           itemId,
           previousItemId && settledItemIds.has(previousItemId) ? null : previousItemId,
         );
-        committedItemIds.push(itemId);
-
-        const arrivalOrder = committedItemIds.splice(0);
+        const arrivalOrder = new Map(committedItems);
+        committedItems.clear();
         const successors = new Map<string, string>();
-        for (const candidateId of arrivalOrder) {
-          const previousId = committedItems.get(candidateId);
+        for (const [candidateId, previousId] of arrivalOrder) {
           if (previousId) {
             successors.set(previousId, candidateId);
           }
         }
-        const seen = new Set<string>();
         const appendChain = (startId: string) => {
           let candidateId: string | undefined = startId;
-          while (candidateId && !seen.has(candidateId)) {
-            seen.add(candidateId);
-            committedItemIds.push(candidateId);
+          while (candidateId && !committedItems.has(candidateId)) {
+            committedItems.set(candidateId, arrivalOrder.get(candidateId));
             candidateId = successors.get(candidateId);
           }
         };
-        for (const candidateId of arrivalOrder) {
-          const previousId = committedItems.get(candidateId);
+        for (const [candidateId, previousId] of arrivalOrder) {
           if (previousId == null || settledItemIds.has(previousId)) {
             appendChain(candidateId);
           }
         }
-        for (const candidateId of arrivalOrder) {
+        for (const candidateId of arrivalOrder.keys()) {
           appendChain(candidateId);
         }
       };
@@ -286,8 +273,8 @@ export function buildOpenAIRealtimeTranscriptionProvider(
       const flushCompletedTranscripts = (
         transport: RealtimeTranscriptionWebSocketTransport,
       ): boolean => {
-        while (committedItemIds.length > 0) {
-          const itemId = committedItemIds[0];
+        while (committedItems.size > 0) {
+          const itemId = committedItems.keys().next().value;
           if (!itemId || !completedTranscripts.has(itemId)) {
             return true;
           }
@@ -299,7 +286,6 @@ export function buildOpenAIRealtimeTranscriptionProvider(
           ) {
             return true;
           }
-          committedItemIds.shift();
           committedItems.delete(itemId);
           if (!settleItem(itemId, transport)) {
             return false;
@@ -383,18 +369,11 @@ export function buildOpenAIRealtimeTranscriptionProvider(
               }
             }
           }
-          return (
-            runtime.resolveProviderRequestHeaders({
-              provider: "openai",
-              baseUrl: OPENAI_REALTIME_TRANSCRIPTION_URL,
-              capability: "audio",
-              transport: "websocket",
-              defaultHeaders: {
-                Authorization: `Bearer ${bearer}`,
-              },
-            }) ?? {
-              Authorization: `Bearer ${bearer}`,
-            }
+          return resolveOpenAIRealtimeRequestHeaders(
+            runtime,
+            OPENAI_REALTIME_TRANSCRIPTION_URL,
+            { Authorization: `Bearer ${bearer}` },
+            "websocket",
           );
         },
         connectTimeoutMs: 10_000,
@@ -498,7 +477,7 @@ export function buildOpenAIRealtimeTranscriptionProvider(
                 }
                 const pendingTranscript = pendingTranscripts.get(key);
                 const previousPartial = pendingTranscript?.text ?? "";
-                const deltaBytes = appendedUtf8ByteLength(previousPartial, event.delta);
+                const deltaBytes = measureTranscriptDeltaBytes(previousPartial, event.delta);
                 if (
                   deltaBytes >
                   OPENAI_REALTIME_TRANSCRIPTION_MAX_RETAINED_TRANSCRIPT_BYTES -
@@ -525,12 +504,6 @@ export function buildOpenAIRealtimeTranscriptionProvider(
               return;
 
             case "conversation.item.input_audio_transcription.failed":
-              if (
-                event.item_id &&
-                (settledItemIds.has(event.item_id) || completedTranscripts.has(event.item_id))
-              ) {
-                return;
-              }
               if (completeItem(event.item_id, undefined, transport)) {
                 config.onError?.(new Error(readRealtimeErrorDetail(event.error)));
               }

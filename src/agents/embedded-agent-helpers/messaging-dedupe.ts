@@ -10,6 +10,17 @@ export function normalizeTextForComparison(text: string): string {
     .trim();
 }
 
+// Remove longer sends first so overlapping prior messages still count as repeats.
+function hasTextBeyondSentTexts(tail: string, normalizedSentTexts: string[]): boolean {
+  let remainder = tail;
+  for (const normalizedSent of normalizedSentTexts.toSorted((a, b) => b.length - a.length)) {
+    if (normalizedSent.length >= MIN_DUPLICATE_TEXT_LENGTH) {
+      remainder = remainder.replaceAll(normalizedSent, " ");
+    }
+  }
+  return /[\p{L}\p{N}]/u.test(remainder);
+}
+
 export function isMessagingToolDuplicateNormalized(
   normalized: string,
   normalizedSentTexts: string[],
@@ -25,6 +36,13 @@ export function isMessagingToolDuplicateNormalized(
       return false;
     }
     if (normalized.includes(normalizedSent)) {
+      // A sent prefix must not hide a correction; punctuation and repeated sends add no new text.
+      if (
+        normalized.startsWith(normalizedSent) &&
+        hasTextBeyondSentTexts(normalized.slice(normalizedSent.length), normalizedSentTexts)
+      ) {
+        return false;
+      }
       return normalizedSent.length >= normalized.length * MIN_SUBSTRING_DUPLICATE_RATIO;
     }
     return (
@@ -42,9 +60,7 @@ export function isMessagingToolDuplicate(text: string, sentTexts: string[]): boo
   if (!normalized || normalized.length < MIN_DUPLICATE_TEXT_LENGTH) {
     return false;
   }
-  return sentTexts.some((sentText) =>
-    isMessagingToolDuplicateNormalized(normalized, [normalizeTextForComparison(sentText)]),
-  );
+  return isMessagingToolDuplicateNormalized(normalized, sentTexts.map(normalizeTextForComparison));
 }
 
 export function resolveCurrentSourceMessagingToolPartial(
@@ -66,15 +82,13 @@ export function resolveCurrentSourceMessagingToolPartial(
   const normalized = state.currentSourceMessagingToolSentTextsNormalized.length
     ? normalizeTextForComparison(text)
     : "";
-  if (!normalized) {
-    state.currentSourceMessagingToolHeldPartial = undefined;
-    return { hold: false, text };
-  }
   // A confirmed current-source tool send already made this prefix visible.
   // Hold it until the assistant either repeats the sent text or diverges with new content.
-  const hold = state.currentSourceMessagingToolSentTextsNormalized.some(
-    (sentText) => sentText === normalized || sentText.startsWith(normalized),
-  );
+  const hold =
+    Boolean(normalized) &&
+    state.currentSourceMessagingToolSentTextsNormalized.some(
+      (sentText) => sentText === normalized || sentText.startsWith(normalized),
+    );
   state.currentSourceMessagingToolHeldPartial = hold ? text : undefined;
   return { hold, text };
 }

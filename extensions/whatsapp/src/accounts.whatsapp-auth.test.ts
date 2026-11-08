@@ -1,4 +1,3 @@
-// Whatsapp tests cover accounts.whatsapp auth plugin behavior.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -9,7 +8,7 @@ import { hasAnyWhatsAppAuth, listWhatsAppAuthDirs, resolveWhatsAppAuthDir } from
 
 describe("hasAnyWhatsAppAuth", () => {
   let envSnapshot: ReturnType<typeof captureEnv>;
-  let tempOauthDir: string | undefined;
+  let tempOauthDir: string;
 
   const writeCreds = (dir: string) => {
     fs.mkdirSync(dir, { recursive: true });
@@ -24,10 +23,7 @@ describe("hasAnyWhatsAppAuth", () => {
 
   afterEach(() => {
     envSnapshot.restore();
-    if (tempOauthDir) {
-      fs.rmSync(tempOauthDir, { recursive: true, force: true });
-      tempOauthDir = undefined;
-    }
+    fs.rmSync(tempOauthDir, { recursive: true, force: true });
   });
 
   it("returns false when no auth exists", () => {
@@ -35,7 +31,7 @@ describe("hasAnyWhatsAppAuth", () => {
   });
 
   it("leaves implicit shared-root credentials for Doctor", () => {
-    fs.writeFileSync(path.join(tempOauthDir ?? "", "creds.json"), JSON.stringify({ me: {} }));
+    writeCreds(tempOauthDir);
     expect(hasAnyWhatsAppAuth({})).toBe(false);
     expect(hasPackagedWhatsAppAuth({})).toBe(false);
   });
@@ -75,12 +71,12 @@ describe("hasAnyWhatsAppAuth", () => {
   });
 
   it("returns true when non-default auth exists", () => {
-    writeCreds(path.join(tempOauthDir ?? "", "whatsapp", "work"));
+    writeCreds(path.join(tempOauthDir, "whatsapp", "work"));
     expect(hasAnyWhatsAppAuth({})).toBe(true);
   });
 
   it("preserves an explicitly configured shared root", () => {
-    writeCreds(tempOauthDir!);
+    writeCreds(tempOauthDir);
     const cfg = { channels: { whatsapp: { accounts: { default: { authDir: tempOauthDir } } } } };
     expect(resolveWhatsAppAuthDir({ cfg, accountId: "default" }).authDir).toBe(tempOauthDir);
     expect(hasAnyWhatsAppAuth(cfg)).toBe(true);
@@ -88,17 +84,10 @@ describe("hasAnyWhatsAppAuth", () => {
   });
 
   it("includes authDir overrides", () => {
-    const customDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-wa-auth-"));
-    try {
-      writeCreds(customDir);
-      const cfg = {
-        channels: { whatsapp: { accounts: { work: { authDir: customDir } } } },
-      };
-
-      expect(listWhatsAppAuthDirs(cfg)).toContain(customDir);
-      expect(hasAnyWhatsAppAuth(cfg)).toBe(true);
-    } finally {
-      fs.rmSync(customDir, { recursive: true, force: true });
-    }
+    const customDir = path.join(tempOauthDir, "custom-auth");
+    writeCreds(customDir);
+    const cfg = { channels: { whatsapp: { accounts: { work: { authDir: customDir } } } } };
+    expect(listWhatsAppAuthDirs(cfg)).toContain(customDir);
+    expect(hasAnyWhatsAppAuth(cfg)).toBe(true);
   });
 });

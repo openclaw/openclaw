@@ -1,7 +1,10 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Selectable } from "kysely";
 import type { DB as OpenClawStateDatabase } from "../state/openclaw-state-db.generated.js";
-import type { NodeWorkerSupervisorReceipt } from "../worker/node-supervisor-protocol.js";
+import type {
+  NodeWorkerSupervisorIdentity,
+  NodeWorkerSupervisorReceipt,
+} from "../worker/node-supervisor-protocol.js";
 import type { NodeWorkerProcessIdentity } from "./node-worker-process-identity.js";
 
 export type NodeWorkerTerminalState = Exclude<
@@ -9,7 +12,11 @@ export type NodeWorkerTerminalState = Exclude<
   "pending" | "running"
 >;
 
-export type NodeWorkerCleanupMode = "process-group" | "owned-anchor" | "linux-subreaper";
+export type NodeWorkerCleanupMode =
+  | "process-group"
+  | "owned-anchor"
+  | "linux-subreaper"
+  | "windows-job";
 
 export type NodeWorkerCleanupBinding = {
   databasePath: string;
@@ -26,6 +33,7 @@ export type NodeWorkerContainerIdentity = {
 };
 
 export type NodeWorkerLaunchRow = Selectable<OpenClawStateDatabase["node_worker_launches"]> & {
+  boot_id?: string | null;
   container_json?: string | null;
   cleanup_mode?: string | null;
   lineage_settled?: number | null;
@@ -34,6 +42,27 @@ export type NodeWorkerLaunchRow = Selectable<OpenClawStateDatabase["node_worker_
 };
 
 export type NodeWorkerLaunchReceipt = ReturnType<typeof nodeWorkerLaunchReceiptFromRow>;
+
+export function validateIdentifier(value: string, label: string): void {
+  if (!value || value.trim() !== value || value.length > 256 || value.includes("\0")) {
+    throw new Error(`${label} must be a bounded non-empty identifier`);
+  }
+}
+
+export function rowMatchesImmutableIdentity(
+  row: NodeWorkerLaunchRow,
+  expected: NodeWorkerSupervisorIdentity,
+): boolean {
+  return (
+    row.launch_id === expected.launchId &&
+    row.plan_hash === expected.planHash &&
+    row.environment_id === expected.environmentId &&
+    row.session_id === expected.sessionId &&
+    row.owner_epoch === expected.ownerEpoch &&
+    row.placement_generation === expected.placementGeneration &&
+    row.run_id === expected.runId
+  );
+}
 
 export function isNodeWorkerTerminalState(value: string): value is NodeWorkerTerminalState {
   return (
@@ -129,12 +158,19 @@ export function nodeWorkerLaunchReceiptFromRow(row: NodeWorkerLaunchRow) {
     runId: row.run_id,
     state: row.state,
     supervisor: { pid: row.supervisor_pid, startTime: row.supervisor_start_time },
+    ...(row.boot_id ? { bootId: row.boot_id } : {}),
     worker:
       row.worker_pid === null || row.worker_start_time === null
         ? null
         : { pid: row.worker_pid, startTime: row.worker_start_time },
     workerCleanupMode:
-      row.scope_kind === "linux-subreaper" ? ("linux-subreaper" as const) : cleanupMode,
+      // Windows never used POSIX anchors. This combination records native Job custody
+      // without changing old Windows process-group or POSIX anchor receipts.
+      cleanupMode === "owned-anchor" && row.boot_id?.startsWith("win32:")
+        ? ("windows-job" as const)
+        : row.scope_kind === "linux-subreaper"
+          ? ("linux-subreaper" as const)
+          : cleanupMode,
     ...(row.scope_kind === "linux-subreaper"
       ? { workerDescendantsReaped: row.descendants_reaped === 1 }
       : {}),

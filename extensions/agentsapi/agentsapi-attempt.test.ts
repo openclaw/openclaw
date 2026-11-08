@@ -3,23 +3,32 @@ import {
   queueAgentHarnessMessage,
   type AgentHarnessAttemptParamsV2,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { AuthStorage, ModelRegistry, SessionManager } from "openclaw/plugin-sdk/agent-sessions";
+import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import { saveMediaBuffer } from "openclaw/plugin-sdk/media-store";
 import {
   createMockPluginRegistry,
   initializeGlobalHookRunner,
   loadUserTurnTranscriptRecorderFactoryForTest,
   resetGlobalHookRunner,
+  runInHarnessToolAuthorityForTest,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
+import * as transcriptRuntime from "openclaw/plugin-sdk/session-transcript-runtime";
 import { useSessionStoreTempDirs } from "openclaw/plugin-sdk/sqlite-runtime-testing";
-import { withOpenClawTestState } from "openclaw/plugin-sdk/test-state";
-import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement, withinTest } from "openclaw/plugin-sdk/test-fixtures";
+import { afterAll, afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
+import { makeUserMessage } from "../test-support/message-fixtures.test-support.js";
 import { runAgentsApiAttempt, type AgentsApiPromptHistories } from "./agentsapi-attempt.js";
+import { createAttemptParams } from "./agentsapi-attempt.test-helpers.js";
 import type { AgentsApiBinding } from "./agentsapi-bindings.js";
 import { AgentsApiClient, type AgentsApiItem } from "./agentsapi-client.js";
-import { createHostedSession, createModel, createTurn } from "./agentsapi.test-support.js";
+import { AgentsApiMessageProjection } from "./agentsapi-messages.js";
+import { recordAgentsApiNativeToolTranscript } from "./agentsapi-transcript.js";
+import { createHostedSession, createTurn } from "./agentsapi.test-support.js";
 
 const { createSession, registerRun } = vi.hoisted(() => ({
   createSession: vi.fn<typeof import("./agentsapi-session.js").createAgentsApiSession>(),
@@ -40,30 +49,105 @@ vi.mock("openclaw/plugin-sdk/agent-harness-runtime", async (importOriginal) => {
 });
 
 const tempDirs = useSessionStoreTempDirs(afterAll, "agentsapi-completed-reply-");
+const readItems = vi.fn<AgentsApiClient["items"]>();
+const readTurn = vi.fn<AgentsApiClient["turn"]>();
+const promptText = "Create an output file and summarize the result.";
+const steeringText = "Use the updated result.";
+const answerText = "The completed answer.";
+const replyKey = "agentsapi:session-fixture:turn-fixture";
+type SessionOptions = Parameters<typeof createSession>[0];
+type AttemptFixture = Awaited<ReturnType<typeof createAttempt>>;
+type History = Parameters<NonNullable<SessionOptions["onReconcileHistory"]>>[0];
 
-beforeEach(() => {
-  vi.spyOn(AgentsApiClient.prototype, "create").mockResolvedValue("session-fixture");
-  vi.spyOn(AgentsApiClient.prototype, "items").mockResolvedValue([completedItem]);
-  vi.spyOn(AgentsApiClient.prototype, "turn").mockResolvedValue(completedTurn);
-  vi.spyOn(AgentsApiClient.prototype, "session").mockResolvedValue(hostedSession);
-  createSession.mockImplementation((options) => ({
+function completedSession(
+  options: SessionOptions,
+  turn = completedTurn,
+  item = completedItem,
+  reconciliation?: {
+    items?: AgentsApiItem[];
+    history?: History;
+  },
+) {
+  return {
     isAvailable: () => false,
     isSettled: () => true,
     wasSubmitted: () => true,
     queueMessage: async () => {},
-    readUsageTurns: async () => [completedTurn],
+    readUsageTurns: async () => [turn],
     run: async () => {
       options.onSettled?.();
-      await options.onReconcile?.(completedTurn, [completedItem]);
-      return { turn: completedTurn, cancelled: false, terminatedByTool: false };
+      if (reconciliation?.history) {
+        await options.onReconcileHistory?.(reconciliation.history);
+      }
+      await options.onReconcile?.(turn, reconciliation?.items ?? [item]);
+      return { turn, cancelled: false, terminatedByTool: false };
     },
     close: async () => {},
     reconcileAfterClose: async () => {
-      await options.onReconcile?.(completedTurn, [completedItem]);
-      return completedTurn;
+      await options.onReconcile?.(turn, [item]);
+      return turn;
+    },
+  };
+}
+
+beforeEach(() => {
+  vi.spyOn(AgentsApiClient.prototype, "create").mockResolvedValue("session-fixture");
+  readItems.mockReset().mockResolvedValue([completedItem]);
+  readTurn.mockReset().mockResolvedValue(completedTurn);
+  vi.spyOn(AgentsApiClient.prototype, "items").mockImplementation(readItems);
+  vi.spyOn(AgentsApiClient.prototype, "turn").mockImplementation(readTurn);
+  vi.spyOn(AgentsApiClient.prototype, "session").mockResolvedValue(hostedSession);
+  createSession.mockImplementation(completedSession);
+});
+
+async function whileRunning(
+  fixture: AttemptFixture,
+  { failure, signal }: { failure?: Error; signal?: AbortSignal },
+  run: (
+    handle: Parameters<typeof registerRun>[1],
+    attempt: ReturnType<AttemptFixture["run"]>,
+  ) => Promise<void>,
+) {
+  const started = createDeferred<void>();
+  const finish = createDeferred<void>();
+  createSession.mockImplementationOnce((options) => ({
+    ...completedSession(options),
+    isAvailable: () => true,
+    isSettled: () => false,
+    queueMessage: async (_text, persistInput) => {
+      await persistInput?.();
+    },
+    readUsageTurns: async () => (failure ? [] : [completedTurn]),
+    reconcileAfterClose: async () => (failure ? undefined : completedTurn),
+    run: async (_text, persistInput, onSubmitted) => {
+      await persistInput();
+      onSubmitted();
+      started.resolve();
+      await finish.promise;
+      if (failure) {
+        throw failure;
+      }
+      options.onSettled?.();
+      return { turn: completedTurn, cancelled: false, terminatedByTool: false };
     },
   }));
-});
+  const attempt = fixture.run();
+  try {
+    const nativeStart = awaitGateBeforeSettlement(
+      started.promise,
+      attempt,
+      "Attempt settled before native start",
+    );
+    await (signal ? withinTest(nativeStart, signal) : nativeStart);
+    const handle = registerRun.mock.calls.at(-1)?.[1];
+    assert(handle, "Expected the registered Agents API run");
+    await run(handle, attempt);
+  } finally {
+    finish.resolve();
+    await attempt;
+  }
+  return attempt;
+}
 
 afterEach(() => {
   vi.useRealTimers();
@@ -71,46 +155,173 @@ afterEach(() => {
   createSession.mockReset();
   registerRun.mockReset();
   resetGlobalHookRunner();
+  clearRuntimeConfigSnapshot();
+});
+
+it("rejects unexpected remote functions before Gateway execution when forwarding is disabled", async () => {
+  const fixture = await createAttempt({ forwarding: { gatewayTools: false, mcpServers: false } });
+  fixture.params.disableTools = false;
+  const construct = vi.spyOn(fixture.params.hostCapabilities, "createToolSurfaceAsync");
+  const beforeTool = vi.spyOn(fixture.params.hostCapabilities, "runBeforeToolCall");
+  const close = vi.fn(async () => {});
+  createSession.mockImplementationOnce((options) => ({
+    ...completedSession(options),
+    close,
+    run: async () => {
+      await options.executeFunction!({
+        type: "function_call",
+        turn_id: completedTurn.id,
+        call_id: "unexpected-call",
+        name: "memory_search",
+        arguments: { query: "must not execute" },
+      });
+      throw new Error("A disabled Gateway callback must not return normally");
+    },
+  }));
+  const result = await fixture.run();
+  expect(result.terminal).toMatchObject({
+    kind: "failed",
+    error: expect.objectContaining({
+      message:
+        "Agents API Gateway tool forwarding is disabled; refusing remote function call: memory_search",
+    }),
+  });
+  expect(construct).not.toHaveBeenCalled();
+  expect(beforeTool).not.toHaveBeenCalled();
+  expect(close).toHaveBeenCalledOnce();
 });
 
 describe("Agents API completed reply settlement", () => {
-  it("retains and presents one durable completed reply when artifact listing fails", async () => {
+  it("preserves native tool ownership when another run reconciles prior turns", async () => {
     const fixture = await createAttempt();
-    const failure = new Error("fixture artifact listing failed");
-    vi.spyOn(AgentsApiClient.prototype, "artifacts").mockRejectedValue(failure);
-
+    allowFollowup();
+    const command: AgentsApiItem = {
+      id: "native-command",
+      type: "command_execution",
+      turn_id: completedTurn.id,
+      status: "completed",
+      command: "printf replay-proof",
+      cwd: "/workspace",
+      exit_code: 0,
+      output: "replay-proof",
+    };
+    createSession.mockImplementationOnce((options) =>
+      completedSession(options, completedTurn, completedItem, { items: [command, completedItem] }),
+    );
+    readItems.mockResolvedValue([command, completedItem]);
+    expect((await fixture.run()).terminal).toEqual({ kind: "ok" });
+    const nativeRows = (await fixture.messages()).filter(isNativeCommand);
+    expect(nativeRows).toHaveLength(2);
+    expect(nativeRows).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ role: "assistant", __openclaw: { runId: "run-fixture" } }),
+        expect.objectContaining({
+          role: "toolResult",
+          __openclaw: expect.objectContaining({ runId: "run-fixture" }),
+        }),
+      ]),
+    );
+    fixture.completeNext("next-openclaw-run", "Follow-up completed.", [
+      { turn: completedTurn, items: [command, completedItem] },
+    ]);
     const result = await fixture.run();
-
-    expect(result).toHaveProperty("terminal", { kind: "failed", source: "prompt", error: failure });
-    expect(result.assistantTexts).toEqual(["The completed answer."]);
-    expect(result.assistantTranscriptOwned).toBe(true);
-    expect(result.assistantTranscriptIdempotencyKey).toBe("agentsapi:session-fixture:turn-fixture");
-    expect(result.currentAttemptCompletedAssistant).toMatchObject({
-      role: "assistant",
-      content: [{ type: "text", text: "The completed answer." }],
-      stopReason: "stop",
-    });
-    expect(fixture.onPartialReply).toHaveBeenCalledExactlyOnceWith({
-      text: "The completed answer.",
-    });
-    const persisted = SessionManager.open(
-      fixture.target,
-      fixture.params.workspaceDir,
-    ).buildSessionContext().messages;
-    expect(persisted).toEqual([result.currentAttemptCompletedAssistant]);
-    expect(result.messagesSnapshot).toEqual(persisted);
-    expect(result.replayMetadata).toEqual({ hadPotentialSideEffects: true, replaySafe: false });
+    expect(result.terminal).toEqual({ kind: "ok" });
+    expect(result.assistantTexts).toEqual(["Follow-up completed."]);
+    const messages = await fixture.messages();
+    expect(messages.filter(isNativeCommand)).toEqual(nativeRows);
+    expect(messages.at(-1)).toMatchObject({ __openclaw: { runId: "next-openclaw-run" } });
+    await expect(
+      recordAgentsApiNativeToolTranscript(
+        fixture.params,
+        "session-fixture",
+        completedTurn.id,
+        { ...command, command: "different command" },
+        () => {},
+        Date.now,
+        { historical: true },
+      ),
+    ).rejects.toThrow("conflicts with the admitted message");
   });
 
-  it.each(["cancelled", "revoked"] as const)(
-    "does not publish the completed reply when artifact listing leaves the attempt %s",
+  it("publishes exact committed item identities without acquiring a newer preview", async () => {
+    const fixture = await createAttempt();
+    const events = vi.fn<NonNullable<AgentHarnessAttemptParamsV2["onAgentEvent"]>>();
+    const projection = new AgentsApiMessageProjection(
+      fixture.params,
+      "session-fixture",
+      events,
+      () => {},
+    );
+    const append = transcriptRuntime.appendSessionTranscriptMessageByIdentityStrict;
+    const appending = createDeferred<void>();
+    const release = createDeferred<void>();
+    vi.spyOn(
+      transcriptRuntime,
+      "appendSessionTranscriptMessageByIdentityStrict",
+    ).mockImplementation(async (params) => {
+      appending.resolve();
+      await release.promise;
+      return append(params);
+    });
+    const publish = vi.spyOn(transcriptRuntime, "publishSessionTranscriptUpdateByIdentity");
+    const completion = projection.commit(completedTurn, [completedItem]);
+    try {
+      await appending.promise;
+      await projection.observe({
+        type: "agent.session.turn.item.added",
+        item: {
+          ...completedItem,
+          id: "newer-preview",
+          status: "in_progress",
+          content: [{ type: "output_text", text: "Still working." }],
+        },
+      });
+      expect(events.mock.lastCall?.[0]).toMatchObject({
+        stream: "assistant",
+        data: {
+          itemId: `${replyKey}:newer-preview`,
+          text: "Still working.",
+        },
+      });
+      release.resolve();
+      await completion;
+
+      const manager = await SessionManager.openAsync(fixture.target, fixture.params.workspaceDir);
+      const saved = manager.getBranch().find((entry) => entry.type === "message");
+      assert(saved?.type === "message");
+      expect(saved.message).toMatchObject({ __openclaw: { runId: fixture.params.runId } });
+      expect(publish).toHaveBeenCalledExactlyOnceWith({
+        ...fixture.target,
+        update: {
+          message: saved.message,
+          messageId: saved.id,
+          messageSeq: 1,
+          runId: fixture.params.runId,
+          assistantItemIds: [`${replyKey}:answer-fixture`, `${replyKey}:reply`],
+        },
+      });
+      expect(events.mock.lastCall?.[0]).toMatchObject({
+        stream: "assistant",
+        data: {
+          itemId: `${replyKey}:reply`,
+          text: answerText,
+        },
+      });
+    } finally {
+      release.resolve();
+      await completion;
+    }
+  });
+
+  it.each(["current", "cancelled", "revoked"] as const)(
+    "settles the completed reply after artifact failure with %s custody",
     async (interruption) => {
       const fixture = await createAttempt();
       const failure = new Error(`fixture attempt ${interruption}`);
       vi.spyOn(AgentsApiClient.prototype, "artifacts").mockImplementation(async () => {
         if (interruption === "cancelled") {
           fixture.controller.abort(failure);
-        } else {
+        } else if (interruption === "revoked") {
           fixture.revoke(failure);
         }
         throw failure;
@@ -124,291 +335,166 @@ describe("Agents API completed reply settlement", () => {
           ? { kind: "aborted", source: "external" }
           : { kind: "failed", source: "prompt", error: failure },
       );
-      expect(result.assistantTexts).toEqual([]);
-      expect(fixture.onPartialReply).not.toHaveBeenCalled();
-      expect(
-        SessionManager.open(fixture.target, fixture.params.workspaceDir).buildSessionContext()
-          .messages,
-      ).toEqual([]);
-    },
-  );
-});
-
-it("leaves PDF steering uncommitted so its next turn transfers the original in the same session", async () => {
-  await withOpenClawTestState({ label: "agentsapi-pdf-steering" }, async () => {
-    const fixture = await createAttempt();
-    const bytes = Buffer.from("%PDF-1.4\nThe launch window is October.\n%%EOF\n");
-    const saved = await saveMediaBuffer(bytes, "application/pdf", "inbound");
-    const media = [
-      { url: `media://inbound/${saved.id}`, contentType: "application/pdf", fileName: "brief.pdf" },
-    ];
-    const prompt = "Read the attached brief.";
-    const createRecorder = await loadUserTurnTranscriptRecorderFactoryForTest();
-    const recorder = createRecorder({
-      target: fixture.target,
-      input: { text: prompt, media, idempotencyKey: "pdf-followup" },
-    });
-    vi.spyOn(AgentsApiClient.prototype, "setReasoningEffort").mockResolvedValue();
-    vi.spyOn(AgentsApiClient.prototype, "artifacts").mockResolvedValue([]);
-    const upload = vi
-      .spyOn(AgentsApiClient.prototype, "uploadFile")
-      .mockResolvedValue({ status: "uploaded" });
-    const started = createDeferred<void>();
-    const finish = createDeferred<void>();
-    const submitted: string[] = [];
-    let firstTurn = true;
-    createSession.mockImplementation((options) => {
-      const activeTurn = firstTurn;
-      firstTurn = false;
-      return {
-        isAvailable: () => true,
-        isSettled: () => false,
-        wasSubmitted: () => true,
-        queueMessage: async (_text, persistInput) => {
-          await persistInput?.();
-        },
-        readUsageTurns: async () => [completedTurn],
-        run: async (text, persistInput, onSubmitted) => {
-          await persistInput();
-          onSubmitted();
-          submitted.push(text);
-          if (activeTurn) {
-            started.resolve();
-            await finish.promise;
-          }
-          options.onSettled?.();
-          return { turn: completedTurn, cancelled: false, terminatedByTool: false };
-        },
-        close: async () => {},
-        reconcileAfterClose: async () => completedTurn,
-      };
-    });
-    const first = fixture.run();
-    try {
-      await Promise.race([
-        started.promise,
-        first.then((result) => {
-          throw new Error("Agents API attempt settled before native start", {
-            cause: result.terminal,
-          });
-        }),
-      ]);
-      const handle = registerRun.mock.calls.at(-1)?.[1];
-      if (!handle?.queueMessage) {
-        throw new Error("Expected the registered Agents API run");
-      }
-      await expect(
-        handle.queueMessage(prompt, { media, userTurnTranscriptRecorder: recorder }),
-      ).rejects.toThrow("Agents API attachments require a separate turn");
-      expect(recorder.hasPersisted()).toBe(false);
-    } finally {
-      finish.resolve();
-      await first;
-    }
-    expect((await first).terminal).toEqual({ kind: "ok" });
-
-    fixture.params.runId = "pdf-followup-run";
-    fixture.params.prompt = prompt;
-    fixture.params.media = media;
-    fixture.params.userTurnTranscriptRecorder = recorder;
-    expect((await fixture.run()).terminal).toEqual({ kind: "ok" });
-    expect(recorder.hasPersisted()).toBe(true);
-    expect(createSession.mock.calls.map(([options]) => options.sessionId)).toEqual([
-      "session-fixture",
-      "session-fixture",
-    ]);
-    expect(upload).toHaveBeenCalledTimes(1);
-    const file = upload.mock.calls[0]![1];
-    expect(Buffer.from(file.data, "base64")).toEqual(bytes);
-    expect(submitted[1]).toContain(prompt);
-    expect(submitted[1]).toContain(
-      JSON.stringify([{ attachment: 1, name: "brief.pdf", path: file.path }]),
-    );
-  });
-});
-
-describe("Agents API retry prompt history", () => {
-  it.each(["same run", "new run", "reset binding", "new budget", "cancelled", "revoked"] as const)(
-    "handles %s after steering without widening retry prompt history",
-    async (retryScope) => {
-      const fixture = await createAttempt();
-      await SessionManager.open(fixture.target, fixture.params.workspaceDir).appendMessageAsync({
-        role: "user",
-        content: "Earlier request.",
-        timestamp: 1,
-      });
-      const createRecorder = await loadUserTurnTranscriptRecorderFactoryForTest();
-      const foreground = createRecorder({
-        target: fixture.target,
-        input: { text: fixture.params.prompt, idempotencyKey: "foreground-user" },
-      });
-      await foreground.persistApproved();
-      fixture.params.userTurnTranscriptRecorder = foreground;
-      fixture.params.toolAuthorityFingerprint = "fixture-steering-authority";
-      const steering = createRecorder({
-        target: fixture.target,
-        input: { text: "Use the updated result.", idempotencyKey: "steering-user" },
-      });
-      const histories: unknown[][] = [];
-      const promptHook = vi
-        .fn()
-        .mockImplementation((event: { messages: Array<{ content: unknown }> }) => {
-          histories.push(structuredClone(event.messages));
-          if (histories.length === 1) {
-            event.messages[0]!.content = "Hook-only mutation.";
-          }
-          return { prependContext: `Attempt context ${histories.length}.` };
-        });
-      initializeGlobalHookRunner(
-        createMockPluginRegistry([{ hookName: "before_prompt_build", handler: promptHook }]),
-      );
-      vi.spyOn(AgentsApiClient.prototype, "setReasoningEffort").mockResolvedValue();
-      vi.spyOn(AgentsApiClient.prototype, "artifacts").mockResolvedValue([]);
-      const started = createDeferred<void>();
-      const finish = createDeferred<void>();
-      const failure = new Error("fixture provider failure after accepted steering");
-      createSession.mockImplementationOnce(() => ({
-        isAvailable: () => true,
-        isSettled: () => false,
-        wasSubmitted: () => true,
-        queueMessage: async (_text, persistInput) => {
-          await persistInput?.();
-        },
-        readUsageTurns: async () => [],
-        run: async (_prompt, persistInput, onSubmitted) => {
-          await persistInput();
-          onSubmitted();
-          started.resolve();
-          await finish.promise;
-          throw failure;
-        },
-        close: async () => {},
-        reconcileAfterClose: async () => undefined,
-      }));
-
-      const first = fixture.run();
-      try {
-        await Promise.race([
-          started.promise,
-          first.then((result) => {
-            throw new Error("Agents API attempt settled before native start", {
-              cause: result.terminal,
-            });
-          }),
-        ]);
-        const handle = registerRun.mock.calls.at(-1)?.[1];
-        if (!handle) {
-          throw new Error("Expected the registered Agents API run");
-        }
-        const queue = vi.spyOn(handle, "queueMessage");
-        expect(
-          queueAgentHarnessMessage(fixture.params.sessionId, "Use the updated result.", {
-            isInboundUserMessage: true,
-            toolAuthorityFingerprint: fixture.params.toolAuthorityFingerprint,
-            waitForTranscriptCommit: true,
-            userTurnTranscriptRecorder: steering,
-          }),
-        ).toBe(true);
-        await queue.mock.results[0]?.value;
-        await steering.confirmSteerTargetRunIdForPersistence?.(fixture.params.runId);
-      } finally {
-        finish.resolve();
-        await first;
-      }
-      expect((await first).terminal).toEqual({ kind: "failed", source: "prompt", error: failure });
-      expect(histories).toEqual([
-        [expect.objectContaining({ role: "user", content: "Earlier request." })],
-      ]);
-      expect(steering.getPersistedMessage?.()).toMatchObject({
-        __openclaw: { steerTargetRunId: fixture.params.runId },
-      });
-
-      fixture.params.prompt = "Continue the current task from the existing transcript.";
-      fixture.params.skipPreparedUserTurnMessage = true;
-      const interruption = new Error(`fixture ${retryScope}`);
-      if (retryScope === "new run") {
-        fixture.params.runId = "another-run";
-      } else if (retryScope === "reset binding") {
-        fixture.resetBinding();
-      } else if (retryScope === "new budget") {
-        fixture.params.contextTokenBudget = 32_000;
-      } else if (retryScope === "cancelled") {
-        fixture.controller.abort(interruption);
-      } else if (retryScope === "revoked") {
-        fixture.revoke(interruption);
-      }
-      const retried = await fixture.run();
-
-      if (retryScope !== "same run") {
-        expect(retried.terminal).toEqual(
-          retryScope === "cancelled"
-            ? { kind: "aborted", source: "external" }
-            : {
-                kind: "failed",
-                source: "prompt",
-                error:
-                  retryScope === "revoked"
-                    ? interruption
-                    : expect.objectContaining({
-                        message: expect.stringContaining(
-                          "Current-turn transcript admission identity changed:",
-                        ),
-                      }),
-              },
-        );
-        expect(createSession).toHaveBeenCalledTimes(1);
+      const persisted = await fixture.messages();
+      if (interruption !== "current") {
+        expect(result.assistantTexts).toEqual([]);
+        expect(fixture.onPartialReply).not.toHaveBeenCalled();
+        expect(persisted).toEqual([]);
         return;
       }
-
-      expect(retried.terminal).toEqual({ kind: "ok" });
-      expect(retried.assistantTexts).toEqual(["The completed answer."]);
-      expect(histories[1]).toEqual([
-        expect.objectContaining({ role: "user", content: "Earlier request." }),
-      ]);
-      expect(promptHook).toHaveBeenNthCalledWith(
-        2,
-        expect.objectContaining({
-          currentUserMessage: "Create an output file and summarize the result.",
-        }),
-        expect.anything(),
-      );
-      expect(retried.messagesSnapshot).toEqual([
-        expect.objectContaining({ role: "user", content: "Earlier request." }),
-        expect.objectContaining({
-          role: "user",
-          content: "Create an output file and summarize the result.",
-        }),
-        expect.objectContaining({ role: "user", content: "Use the updated result." }),
-        retried.currentAttemptCompletedAssistant,
-      ]);
-
-      fixture.params.runId = "next-user-run";
-      fixture.params.prompt = "Start the next request.";
-      fixture.params.skipPreparedUserTurnMessage = false;
-      const nextTurn = createRecorder({
-        target: fixture.target,
-        input: { text: fixture.params.prompt, idempotencyKey: "next-user" },
-      });
-      await nextTurn.persistApproved();
-      fixture.params.userTurnTranscriptRecorder = nextTurn;
-      expect((await fixture.run()).terminal).toEqual({ kind: "ok" });
-      expect(histories[2]).toEqual([
-        expect.objectContaining({ role: "user", content: "Earlier request." }),
-        expect.objectContaining({
-          role: "user",
-          content: "Create an output file and summarize the result.",
-        }),
-        expect.objectContaining({ role: "user", content: "Use the updated result." }),
-        expect.objectContaining({
+      expect(result).toMatchObject({
+        assistantTexts: [answerText],
+        assistantTranscriptOwned: true,
+        assistantTranscriptIdempotencyKey: replyKey,
+        currentAttemptCompletedAssistant: {
           role: "assistant",
-          content: [{ type: "text", text: "The completed answer." }],
-        }),
-      ]);
+          content: [{ type: "text", text: answerText }],
+          stopReason: "stop",
+        },
+      });
+      expect(fixture.onPartialReply).toHaveBeenCalledExactlyOnceWith({ text: answerText });
+      expect(persisted).toEqual([result.currentAttemptCompletedAssistant]);
+      expect(result.messagesSnapshot).toEqual(persisted);
+      expect(result.replayMetadata).toEqual({ hadPotentialSideEffects: true, replaySafe: false });
     },
   );
 });
 
-async function createAttempt() {
+it("rejects attachment steering without committing its recorder", async () => {
+  const fixture = await createAttempt({ forwarding: { gatewayTools: false, mcpServers: false } });
+  const media = [{ url: "media://inbound/brief.pdf", contentType: "application/pdf" }];
+  const prompt = "Read the attached brief.";
+  const recorder = await fixture.recorder(prompt, "pdf-followup", media);
+  allowFollowup();
+  const result = await whileRunning(fixture, {}, async (handle) => {
+    await expect(
+      handle.queueMessage(prompt, { media, userTurnTranscriptRecorder: recorder }),
+    ).rejects.toThrow("Agents API attachments require a separate turn");
+    expect(recorder.hasPersisted()).toBe(false);
+  });
+  expect(result.terminal).toEqual({ kind: "ok" });
+});
+
+it.for(["same run", "new run", "reset binding", "new budget", "cancelled", "revoked"] as const)(
+  "handles %s after steering without widening retry prompt history",
+  async (retryScope, { signal }) => {
+    const fixture = await createAttempt();
+    await SessionManager.open(fixture.target, fixture.params.workspaceDir).appendMessageAsync(
+      makeUserMessage("Earlier request.", 1),
+    );
+    const foreground = await fixture.recorder(fixture.params.prompt, "foreground-user");
+    await foreground.persistApproved();
+    fixture.params.userTurnTranscriptRecorder = foreground;
+    const steering = await fixture.recorder(steeringText, "steering-user");
+    const histories: unknown[][] = [];
+    const priorHistory = [userMessage("Earlier request.")];
+    const admittedHistory = [...priorHistory, userMessage(promptText), userMessage(steeringText)];
+    const promptHook = vi
+      .fn()
+      .mockImplementation((event: { messages: Array<{ content: unknown }> }) => {
+        histories.push(structuredClone(event.messages));
+        if (histories.length === 1) {
+          event.messages[0]!.content = "Hook-only mutation.";
+        }
+        return { prependContext: `Attempt context ${histories.length}.` };
+      });
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([{ hookName: "before_prompt_build", handler: promptHook }]),
+    );
+    allowFollowup();
+    const failure = new Error("fixture provider failure after accepted steering");
+    const first = await whileRunning(fixture, { failure, signal }, async (handle, attempt) => {
+      const confirmSteerTarget = steering.confirmSteerTargetRunIdForPersistence;
+      assert(confirmSteerTarget);
+      const confirmed = createDeferred<void>();
+      vi.spyOn(steering, "confirmSteerTargetRunIdForPersistence").mockImplementation(
+        (targetRunId) => {
+          const confirmation = confirmSteerTarget.call(steering, targetRunId);
+          confirmed.resolve(confirmation);
+          return confirmation;
+        },
+      );
+      expect(
+        queueAgentHarnessMessage(fixture.params.sessionId, steeringText, {
+          isInboundUserMessage: true,
+          toolAuthorityFingerprint: handle.toolAuthorityFingerprint,
+          waitForTranscriptCommit: true,
+          userTurnTranscriptRecorder: steering,
+        }),
+      ).toBe(true);
+      await withinTest(
+        awaitGateBeforeSettlement(
+          confirmed.promise,
+          attempt,
+          "Agents API attempt settled before steering confirmation",
+        ),
+        signal,
+      );
+    });
+    expect(first.terminal).toEqual({ kind: "failed", source: "prompt", error: failure });
+    expect(histories).toEqual([priorHistory]);
+    expect(steering.getPersistedMessage?.()).toMatchObject({
+      __openclaw: { steerTargetRunId: fixture.params.runId },
+    });
+
+    fixture.params.prompt = "Continue the current task from the existing transcript.";
+    fixture.params.skipPreparedUserTurnMessage = true;
+    const interruption = new Error(`fixture ${retryScope}`);
+    if (retryScope === "new run") {
+      fixture.params.runId = "another-run";
+    } else if (retryScope === "reset binding") {
+      fixture.resetBinding();
+    } else if (retryScope === "new budget") {
+      fixture.params.contextTokenBudget = 32_000;
+    } else if (retryScope === "cancelled") {
+      fixture.controller.abort(interruption);
+    } else if (retryScope === "revoked") {
+      fixture.revoke(interruption);
+    }
+    const historyReads = vi.spyOn(SessionManager, "openModelContextAsync");
+    if (retryScope === "cancelled" || retryScope === "revoked") {
+      await expect(fixture.run()).rejects.toBe(interruption);
+      expect(historyReads).not.toHaveBeenCalled();
+      expect(createSession).toHaveBeenCalledTimes(1);
+      return;
+    }
+    const retried = await fixture.run();
+
+    // Steering confirmation keeps the foreground admission, so a changed scope
+    // rereads the same fenced prefix instead of reusing the first attempt's history.
+    expect(historyReads).toHaveBeenCalledTimes(retryScope === "same run" ? 0 : 1);
+    expect(retried.terminal).toEqual({ kind: "ok" });
+    expect(retried.assistantTexts).toEqual([answerText]);
+    expect(histories[1]).toEqual(priorHistory);
+    expect(promptHook).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ currentUserMessage: promptText }),
+      expect.anything(),
+    );
+    expect(retried.messagesSnapshot).toEqual([
+      ...admittedHistory,
+      retried.currentAttemptCompletedAssistant,
+    ]);
+
+    fixture.completeNext("next-user-run");
+    fixture.params.prompt = "Start the next request.";
+    fixture.params.skipPreparedUserTurnMessage = false;
+    const nextTurn = await fixture.recorder(fixture.params.prompt, "next-user");
+    await nextTurn.persistApproved();
+    fixture.params.userTurnTranscriptRecorder = nextTurn;
+    expect((await fixture.run()).terminal).toEqual({ kind: "ok" });
+    expect(histories[2]).toEqual([
+      ...admittedHistory,
+      expect.objectContaining({
+        role: "assistant",
+        content: [{ type: "text", text: answerText }],
+      }),
+    ]);
+  },
+);
+async function createAttempt(pluginConfig: unknown = {}) {
+  const config = {};
+  setRuntimeConfigSnapshot(config);
   const workspaceDir = tempDirs.make();
   const target = {
     agentId: "main",
@@ -428,47 +514,56 @@ async function createAttempt() {
       throw revocation;
     }
   };
-  const authStorage = AuthStorage.inMemory();
   const onPartialReply = vi.fn<NonNullable<AgentHarnessAttemptParamsV2["onPartialReply"]>>();
   const promptHistories: AgentsApiPromptHistories = new WeakMap();
   let binding: AgentsApiBinding | undefined;
-  const params: AgentHarnessAttemptParamsV2 = {
+  const params = createAttemptParams({
     ...target,
     sessionTarget: target,
     sessionFile: path.join(workspaceDir, "session.jsonl"),
     workspaceDir,
     agentDir: workspaceDir,
-    config: {},
-    runId: "run-fixture",
-    prompt: "Create an output file and summarize the result.",
+    config,
+    prompt: promptText,
     timeoutMs: 5_000,
     abortSignal: controller.signal,
-    provider: "openai",
-    modelId: "fixture-model",
-    model: createModel(),
-    resolvedApiKey: "fixture-not-a-real-api-key",
-    authStorage,
-    modelRegistry: ModelRegistry.inMemory(authStorage),
-    authProfileStore: { version: 1, profiles: {} },
-    thinkLevel: "off",
     disableTools: true,
     hostCapabilities: {
-      kind: "agent-harness-host-capability",
-      version: 1,
       assertActive: assertCurrent,
       createToolSurfaceAsync: async () => [],
-      bindToolSurface: (tools) => tools,
-      runBeforeToolCall: async (request) => ({ blocked: false, params: request.params }),
-      requestApproval: async () => undefined,
-      waitForApproval: async () => undefined,
     },
     onPartialReply,
-  };
+  });
   return {
     target,
     params,
     controller,
     onPartialReply,
+    completeNext(runId: string, text = answerText, history?: History) {
+      const turn = createTurn({ id: `turn-${runId}` });
+      const item = {
+        ...completedItem,
+        id: `answer-${runId}`,
+        turn_id: turn.id,
+        content: [{ type: "output_text", text }],
+      };
+      params.runId = runId;
+      readTurn.mockResolvedValue(turn);
+      readItems.mockResolvedValue([item]);
+      createSession.mockImplementationOnce((options) =>
+        completedSession(options, turn, item, { history }),
+      );
+    },
+    async recorder(
+      text: string,
+      idempotencyKey: string,
+      media?: AgentHarnessAttemptParamsV2["media"],
+    ) {
+      const create = await loadUserTurnTranscriptRecorderFactoryForTest();
+      return create({ target, input: { text, idempotencyKey, media } });
+    },
+    messages: async () =>
+      (await SessionManager.openAsync(target, params.workspaceDir)).buildSessionContext().messages,
     resetBinding: () => {
       binding = undefined;
     },
@@ -478,17 +573,19 @@ async function createAttempt() {
     run: () => {
       // Cold workers must not consume this outcome fixture's execution budget.
       vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
-      return runAgentsApiAttempt(
-        params,
-        binding,
-        async (next) => {
-          binding = next;
-        },
-        assertCurrent,
-        () => {},
-        target,
-        () => ({}),
-        promptHistories,
+      return runInHarnessToolAuthorityForTest(params, "agentsapi", (admitted) =>
+        runAgentsApiAttempt(
+          admitted,
+          binding,
+          async (next) => {
+            binding = next;
+          },
+          assertCurrent,
+          () => {},
+          target,
+          () => pluginConfig,
+          promptHistories,
+        ),
       );
     },
   };
@@ -503,7 +600,20 @@ const completedItem: AgentsApiItem = {
   role: "assistant",
   phase: "final_answer",
   status: "completed",
-  content: [{ type: "output_text", text: "The completed answer." }],
+  content: [{ type: "output_text", text: answerText }],
 };
 
 const hostedSession = createHostedSession();
+
+function allowFollowup() {
+  vi.spyOn(AgentsApiClient.prototype, "setReasoningEffort").mockResolvedValue();
+  vi.spyOn(AgentsApiClient.prototype, "artifacts").mockResolvedValue([]);
+}
+
+function isNativeCommand(message: Awaited<ReturnType<AttemptFixture["messages"]>>[number]) {
+  return "idempotencyKey" in message && String(message.idempotencyKey).includes("native-command");
+}
+
+function userMessage(content: string) {
+  return expect.objectContaining({ role: "user", content });
+}

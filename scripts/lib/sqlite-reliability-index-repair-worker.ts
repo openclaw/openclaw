@@ -1,10 +1,8 @@
 import { pathToFileURL } from "node:url";
 import { openNodeSqliteDatabase } from "../../src/infra/node-sqlite.js";
 import { repairCanonicalSqliteIndexes } from "../../src/infra/sqlite-index-schema.js";
-import {
-  INDEX_REPAIR_SCHEMA_SQL,
-  type IndexRepairJournalMode,
-} from "./sqlite-reliability-contract.js";
+import type { IndexRepairJournalMode } from "./sqlite-reliability-contract.js";
+import { INDEX_REPAIR_SCHEMA_CATALOG } from "./sqlite-reliability-index-repair-schema.js";
 
 const SLEEP_BUFFER = new Int32Array(new SharedArrayBuffer(4));
 
@@ -48,7 +46,7 @@ async function main(argv: string[]): Promise<void> {
     `);
     process.send?.({ kind: "ready" });
     await waitForStart();
-    repairCanonicalSqliteIndexes(database, databasePath, INDEX_REPAIR_SCHEMA_SQL, {
+    repairCanonicalSqliteIndexes(database, databasePath, INDEX_REPAIR_SCHEMA_CATALOG, {
       validateAfterRepair: () => {
         // All repaired indexes remain inside the owner's unreleased savepoint.
         process.send?.({ kind: "crash-point" });

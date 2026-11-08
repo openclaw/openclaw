@@ -2,7 +2,6 @@ import { statSync } from "node:fs";
 import path from "node:path";
 import {
   ErrorCodes,
-  errorShape,
   validateSessionsCatalogArchiveParams,
   validateSessionsCatalogContinueParams,
   validateSessionsCatalogImportParams,
@@ -22,7 +21,11 @@ import { recordSessionStateEventAsync } from "../../sessions/session-state-event
 import { upsertSessionUpstreamLinkAsync } from "../../sessions/session-upstream-links.js";
 import { authorizeGatewaySessionCreation } from "../operator-role-policy.js";
 import { resolveAgentIdOrRespondError } from "./agent-id-shared.js";
-import { copySessionCatalogToGateway } from "./session-catalog-gateway-copy.js";
+import { respondError } from "./response.js";
+import {
+  copySessionCatalogToGateway,
+  resolveSessionCatalogGatewayConversation,
+} from "./session-catalog-gateway-copy.js";
 import { importAuthorizedSessionCatalog } from "./session-catalog-import.js";
 import { retireSessionCatalogLists } from "./session-catalog-list-operations.js";
 import { listSessionCatalogHandler } from "./session-catalog-list.js";
@@ -36,12 +39,7 @@ import {
 import { readAuthorizedSessionCatalog } from "./session-catalog-read.js";
 import { catalogError } from "./session-catalog-result.js";
 import { resolveSessionCatalogThreadVisibility } from "./session-catalog-visibility.js";
-import type {
-  GatewayClient,
-  GatewayRequestContext,
-  GatewayRequestHandlers,
-  RespondFn,
-} from "./types.js";
+import type { GatewayRequestHandlerOptions, GatewayRequestHandlers, RespondFn } from "./types.js";
 import { defineValidatedGatewayHandler } from "./validation.js";
 
 export function resolveSessionCatalogProvider(
@@ -81,58 +79,54 @@ function registrationOrRespond(catalogId: string, respond: RespondFn) {
     (candidate) => candidate.provider.id === catalogId,
   );
   if (!registration) {
-    respond(
-      false,
-      undefined,
-      errorShape(ErrorCodes.INVALID_REQUEST, `unknown session catalog: ${catalogId}`),
-    );
+    respondError(respond, ErrorCodes.INVALID_REQUEST, `unknown session catalog: ${catalogId}`);
   }
   return registration;
 }
 
 function respondCatalogError(error: unknown, respond: RespondFn): void {
   const details = catalogError(error);
-  respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, details.message, { details }));
+  respondError(respond, ErrorCodes.INVALID_REQUEST, details.message, { details });
 }
 
-async function authorizeSessionCatalogThread(params: {
-  access: "read" | "mutate";
-  client: GatewayClient | null;
-  context: GatewayRequestContext;
-  provider: SessionCatalogProvider;
-  request: SessionCatalogLocator & { agentId?: string };
-  respond: RespondFn;
-}) {
+async function authorizeSessionCatalogThread(
+  access: "read" | "mutate",
+  provider: SessionCatalogProvider,
+  options: Pick<GatewayRequestHandlerOptions, "client" | "context" | "respond"> & {
+    params: SessionCatalogLocator & { agentId?: string };
+  },
+) {
+  const { params: request, respond, context, client } = options;
   const resolvedAgent = resolveAgentIdOrRespondError({
-    rawAgentId: params.request.agentId,
-    respond: params.respond,
-    cfg: params.context.getRuntimeConfig(),
+    rawAgentId: request.agentId,
+    respond,
+    cfg: context.getRuntimeConfig(),
   });
   if (!resolvedAgent) {
     return null;
   }
   const { agentId } = resolvedAgent;
-  const allowHomeFallback = allowProcessHomeFallback(params.context.logGateway);
+  const allowHomeFallback = allowProcessHomeFallback(context.logGateway);
   const sourceVisibility = await resolveSessionCatalogThreadVisibility({
-    access: params.access,
+    access,
     allowProcessHomeFallback: allowHomeFallback,
-    audience: params.provider.audience,
-    client: params.client,
-    context: params.context,
+    audience: provider.audience,
+    client,
+    context,
     fallbackAgentId: agentId,
-    hostId: params.request.hostId,
-    list: (request) => listSessionCatalogProvider(params.provider, { ...request, agentId }),
+    hostId: request.hostId,
+    list: (listRequest) => listSessionCatalogProvider(provider, { ...listRequest, agentId }),
     listNodes: createSessionCatalogRequestNodeSnapshot(),
-    ...(params.request.sourceHomeId ? { sourceHomeId: params.request.sourceHomeId } : {}),
-    threadId: params.request.threadId,
+    ...(request.sourceHomeId ? { sourceHomeId: request.sourceHomeId } : {}),
+    threadId: request.threadId,
   });
   if (sourceVisibility) {
     return { agentId, allowProcessHomeFallback: allowHomeFallback, sourceVisibility };
   }
-  params.respond(
-    false,
-    undefined,
-    errorShape(ErrorCodes.FORBIDDEN, "session catalog thread is not visible to this caller"),
+  respondError(
+    respond,
+    ErrorCodes.FORBIDDEN,
+    "session catalog thread is not visible to this caller",
   );
   return null;
 }
@@ -140,23 +134,54 @@ async function authorizeSessionCatalogThread(params: {
 export const sessionCatalogHandlers: GatewayRequestHandlers = {
   "sessions.catalog.list": listSessionCatalogHandler,
 
+  "sessions.catalog.resolve": defineValidatedGatewayHandler(
+    "sessions.catalog.resolve",
+    validateSessionsCatalogContinueParams,
+    async (options) => {
+      const provider = registrationOrRespond(options.params.catalogId, options.respond)?.provider;
+      if (!provider) {
+        return;
+      }
+      try {
+        const authorization = await authorizeSessionCatalogThread("read", provider, options);
+        if (!authorization) {
+          return;
+        }
+        const result = await resolveSessionCatalogGatewayConversation({
+          request: options.params,
+          provider,
+          client: options.client,
+          context: options.context,
+          assertCurrent: () => {
+            options.sessionMutationCommitGuard?.();
+            options.signal?.throwIfAborted();
+            if (options.hasCurrentClientAuthority?.() === false) {
+              throw new Error("Catalog resolution authority expired");
+            }
+          },
+        });
+        if (result.ok) {
+          options.respond(true, result.sessionKey ? { sessionKey: result.sessionKey } : null);
+        } else {
+          options.respond(false, undefined, result.error);
+        }
+      } catch (error) {
+        respondCatalogError(error, options.respond);
+      }
+    },
+  ),
+
   "sessions.catalog.read": defineValidatedGatewayHandler(
     "sessions.catalog.read",
     validateSessionsCatalogReadParams,
-    async ({ params: request, respond, context, client }) => {
+    async (options) => {
+      const { params: request, respond, context, client } = options;
       const provider = registrationOrRespond(request.catalogId, respond)?.provider;
       if (!provider) {
         return;
       }
       try {
-        const authorization = await authorizeSessionCatalogThread({
-          access: "read",
-          request,
-          provider,
-          respond,
-          context,
-          client,
-        });
+        const authorization = await authorizeSessionCatalogThread("read", provider, options);
         if (!authorization) {
           return;
         }
@@ -181,35 +206,27 @@ export const sessionCatalogHandlers: GatewayRequestHandlers = {
   "sessions.catalog.continue": defineValidatedGatewayHandler(
     "sessions.catalog.continue",
     validateSessionsCatalogContinueParams,
-    async ({ params: request, respond, client, context, sessionMutationCommitGuard, signal }) => {
+    async (options) => {
+      const {
+        params: request,
+        respond,
+        client,
+        context,
+        sessionMutationCommitGuard,
+        signal,
+      } = options;
       const registration = registrationOrRespond(request.catalogId, respond);
       if (!registration) {
         return;
       }
       const provider = registration.provider;
       if (!provider.continueSession && !provider.copyToGatewaySession) {
-        respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "catalog is view-only"));
+        respondError(respond, ErrorCodes.INVALID_REQUEST, "catalog is view-only");
         return;
       }
       try {
-        const authorization = await authorizeSessionCatalogThread({
-          access: "mutate",
-          request,
-          provider,
-          respond,
-          context,
-          client,
-        });
+        const authorization = await authorizeSessionCatalogThread("mutate", provider, options);
         if (!authorization) {
-          return;
-        }
-        const creationError = authorizeGatewaySessionCreation({
-          cfg: context.getRuntimeConfig(),
-          client,
-          agentId: authorization.agentId,
-        });
-        if (creationError) {
-          respond(false, undefined, creationError);
           return;
         }
         const { catalogId: _catalogId, ...providerRequest } = request;
@@ -232,6 +249,7 @@ export const sessionCatalogHandlers: GatewayRequestHandlers = {
             client,
             context,
             commitGuard: sessionMutationCommitGuard,
+            hasCurrentClientAuthority: options.hasCurrentClientAuthority,
             signal,
           });
           if (!copied.ok) {
@@ -239,6 +257,15 @@ export const sessionCatalogHandlers: GatewayRequestHandlers = {
           } else {
             respond(true, { sessionKey: copied.sessionKey });
           }
+          return;
+        }
+        const creationError = authorizeGatewaySessionCreation({
+          cfg: context.getRuntimeConfig(),
+          client,
+          agentId: authorization.agentId,
+        });
+        if (creationError) {
+          respond(false, undefined, creationError);
           return;
         }
         const continueSession = provider.continueSession;
@@ -305,56 +332,32 @@ export const sessionCatalogHandlers: GatewayRequestHandlers = {
     async (opts) => {
       const { params: request, respond, context } = opts;
       const config = context.getRuntimeConfig();
-      if (config.gateway?.cliAgents?.enabled === false) {
-        respond(
-          false,
-          undefined,
-          errorShape(
-            ErrorCodes.UNAVAILABLE,
-            "CLI agent terminal start is disabled; enable gateway.cliAgents.enabled and retry",
-          ),
-        );
-        return;
-      }
-      if (!context.isTerminalEnabled()) {
-        respond(
-          false,
-          undefined,
-          errorShape(
-            ErrorCodes.UNAVAILABLE,
-            "terminal is disabled; enable gateway.terminal.enabled and retry",
-          ),
-        );
-        return;
-      }
-      if (!context.terminalSessions) {
-        respond(
-          false,
-          undefined,
-          errorShape(
-            ErrorCodes.UNAVAILABLE,
-            "terminal is not available; restart the Gateway with terminal support and retry",
-          ),
-        );
+      const unavailable =
+        config.gateway?.cliAgents?.enabled === false
+          ? "CLI agent terminal start is disabled; enable gateway.cliAgents.enabled and retry"
+          : !context.isTerminalEnabled()
+            ? "terminal is disabled; enable gateway.terminal.enabled and retry"
+            : !context.terminalSessions
+              ? "terminal is not available; restart the Gateway with terminal support and retry"
+              : undefined;
+      if (unavailable) {
+        respondError(respond, ErrorCodes.UNAVAILABLE, unavailable);
         return;
       }
       const provider = resolveSessionCatalogProvider(request.catalogId);
       if (!provider) {
-        respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.INVALID_REQUEST, `unknown session catalog: ${request.catalogId}`),
+        respondError(
+          respond,
+          ErrorCodes.INVALID_REQUEST,
+          `unknown session catalog: ${request.catalogId}`,
         );
         return;
       }
       if (!provider.startTerminalSession) {
-        respond(
-          false,
-          undefined,
-          errorShape(
-            ErrorCodes.INVALID_REQUEST,
-            "session catalog cannot start terminal sessions; choose a catalog that advertises startTerminal",
-          ),
+        respondError(
+          respond,
+          ErrorCodes.INVALID_REQUEST,
+          "session catalog cannot start terminal sessions; choose a catalog that advertises startTerminal",
         );
         return;
       }
@@ -373,13 +376,10 @@ export const sessionCatalogHandlers: GatewayRequestHandlers = {
           ? request.hostId.slice("node:".length).trim()
           : undefined;
         if (!nodeId || request.hostId !== `node:${nodeId}`) {
-          respond(
-            false,
-            undefined,
-            errorShape(
-              ErrorCodes.INVALID_REQUEST,
-              'invalid catalog host; choose "gateway:local" or a listed "node:<id>" host and retry',
-            ),
+          respondError(
+            respond,
+            ErrorCodes.INVALID_REQUEST,
+            'invalid catalog host; choose "gateway:local" or a listed "node:<id>" host and retry',
           );
           return;
         }
@@ -392,13 +392,10 @@ export const sessionCatalogHandlers: GatewayRequestHandlers = {
           // The caller owns worktree provisioning; missing/unreadable paths must not fall back home.
         }
         if (!cwdIsDirectory) {
-          respond(
-            false,
-            undefined,
-            errorShape(
-              ErrorCodes.INVALID_REQUEST,
-              "cwd must be an existing absolute directory; create or choose a worktree and retry",
-            ),
+          respondError(
+            respond,
+            ErrorCodes.INVALID_REQUEST,
+            "cwd must be an existing absolute directory; create or choose a worktree and retry",
           );
           return;
         }
@@ -409,6 +406,7 @@ export const sessionCatalogHandlers: GatewayRequestHandlers = {
         agentId: request.agentId,
         requireCliAgents: true,
         ...CATALOG_TERMINAL_INITIAL_SIZE,
+        ...(nodeId ? { catalogNodeId: nodeId } : {}),
         ...(!nodeId ? { requiredCwd: request.cwd } : {}),
         failureHint: "check the selected CLI, host, and terminal configuration, then retry",
         resolveCatalogPlan: async () => {
@@ -447,21 +445,14 @@ export const sessionCatalogHandlers: GatewayRequestHandlers = {
   "sessions.catalog.import": defineValidatedGatewayHandler(
     "sessions.catalog.import",
     validateSessionsCatalogImportParams,
-    async ({ params: request, respond, client, context, sessionMutationCommitGuard }) => {
+    async (options) => {
+      const { params: request, respond, client, context, sessionMutationCommitGuard } = options;
       const provider = registrationOrRespond(request.catalogId, respond)?.provider;
       if (!provider) {
         return;
       }
       try {
-        const authorize = () =>
-          authorizeSessionCatalogThread({
-            access: "read",
-            request,
-            provider,
-            respond,
-            context,
-            client,
-          });
+        const authorize = () => authorizeSessionCatalogThread("read", provider, options);
         const authorization = await authorize();
         if (!authorization) {
           return;
@@ -512,24 +503,18 @@ export const sessionCatalogHandlers: GatewayRequestHandlers = {
   "sessions.catalog.archive": defineValidatedGatewayHandler(
     "sessions.catalog.archive",
     validateSessionsCatalogArchiveParams,
-    async ({ params: request, respond, context, client }) => {
+    async (options) => {
+      const { params: request, respond, context } = options;
       const provider = registrationOrRespond(request.catalogId, respond)?.provider;
       if (!provider) {
         return;
       }
       if (!provider.archive) {
-        respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "catalog cannot archive"));
+        respondError(respond, ErrorCodes.INVALID_REQUEST, "catalog cannot archive");
         return;
       }
       try {
-        const authorization = await authorizeSessionCatalogThread({
-          access: "mutate",
-          request,
-          provider,
-          respond,
-          context,
-          client,
-        });
+        const authorization = await authorizeSessionCatalogThread("mutate", provider, options);
         if (!authorization) {
           return;
         }

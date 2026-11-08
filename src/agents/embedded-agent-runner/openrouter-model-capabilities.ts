@@ -14,7 +14,9 @@ import {
   prepareCorePluginStateReplacement,
 } from "../../plugin-state/plugin-state-store.js";
 import type { PluginStateEntry } from "../../plugin-state/plugin-state-store.types.js";
+import { warnPluginSdkDeprecation } from "../../plugins/sdk-deprecation.js";
 import { runOutsideAsyncWorkScope } from "../../shared/async-work-scope.js";
+import { resolveDefaultModelMaxTokens } from "../defaults.js";
 import { registerPreparedModelRuntimeClose } from "../prepared-model-runtime.lifecycle.js";
 import { readProviderJsonArrayFieldResponse } from "../provider-http-errors.js";
 
@@ -78,10 +80,6 @@ function isValidCapabilities(value: unknown): value is OpenRouterModelCapabiliti
   );
 }
 
-function openSqliteCacheStore() {
-  return createCorePluginStateSyncKeyedStore<OpenRouterModelCapabilities>(SQLITE_CACHE_OPTIONS);
-}
-
 type PreparedCacheStore = ReturnType<
   typeof prepareCorePluginStateReplacement<OpenRouterModelCapabilities>
 >;
@@ -109,7 +107,9 @@ async function writeSqliteCache(
 
 function readSqliteCache(): Map<string, OpenRouterModelCapabilities> | undefined {
   try {
-    return parseSqliteCache(openSqliteCacheStore().entries());
+    const store =
+      createCorePluginStateSyncKeyedStore<OpenRouterModelCapabilities>(SQLITE_CACHE_OPTIONS);
+    return parseSqliteCache(store.entries());
   } catch (err: unknown) {
     const message = formatErrorMessage(err);
     log.debug(`Failed to read OpenRouter SQLite cache: ${message}`);
@@ -149,6 +149,7 @@ function parseModel(model: OpenRouterApiModel): OpenRouterModelCapabilities {
   if (inputModalities.includes("image")) {
     input.push("image");
   }
+  const contextWindow = model.top_provider?.context_length ?? model.context_length ?? 128_000;
   const supportedParameters = Array.isArray(model.supported_parameters)
     ? model.supported_parameters
     : undefined;
@@ -159,12 +160,12 @@ function parseModel(model: OpenRouterApiModel): OpenRouterModelCapabilities {
     reasoning: supportedParameters?.includes("reasoning") ?? false,
     ...normalizeOpenRouterModelReasoning(model.reasoning),
     ...(supportedParameters ? { supportsTools: supportedParameters.includes("tools") } : {}),
-    contextWindow: model.top_provider?.context_length ?? model.context_length ?? 128_000,
+    contextWindow,
     maxTokens:
       model.top_provider?.max_completion_tokens ??
       model.max_completion_tokens ??
       model.max_output_tokens ??
-      8192,
+      resolveDefaultModelMaxTokens(contextWindow),
     cost: normalizeOpenRouterModelPricing(model.pricing) ?? {
       input: 0,
       output: 0,
@@ -210,7 +211,6 @@ async function doFetch(store: PreparedCacheStore | null): Promise<void> {
 
     cache = map;
     await writeSqliteCache(store, map);
-    log.debug(`Cached ${map.size} OpenRouter models from API`);
   } catch (err: unknown) {
     const message = formatErrorMessage(err);
     log.warn(`Failed to fetch OpenRouter models: ${message}`);
@@ -238,7 +238,6 @@ function ensureOpenRouterModelCache(): void {
   const stored = readSqliteCache();
   if (stored) {
     cache = stored;
-    log.debug(`Loaded ${stored.size} OpenRouter models from SQLite cache`);
     return;
   }
 
@@ -263,7 +262,6 @@ export async function loadOpenRouterModelCapabilities(modelId: string): Promise<
         const stored = prepared ? parseSqliteCache(await prepared.entries()) : undefined;
         if (stored && !cache) {
           cache = stored;
-          log.debug(`Loaded ${stored.size} OpenRouter models from SQLite cache`);
         }
       } catch (err: unknown) {
         log.debug(`Failed to read OpenRouter SQLite cache: ${formatErrorMessage(err)}`);
@@ -291,11 +289,20 @@ export async function loadOpenRouterModelCapabilities(modelId: string): Promise<
  * triggered in case it's a newly added model not yet in the cache.
  * The cold synchronous read is retained for the v2026.9.8 provider-stream SDK contract.
  *
- * @deprecated OpenRouter provider-owned catalog helper; do not use from third-party plugins.
+ * @deprecated Await loadOpenRouterModelCapabilities, then use getLoadedOpenRouterModelCapabilities.
+ * Supported through 2026-12-31; removal ships in the first January 2027 stable.
  */
 export function getOpenRouterModelCapabilities(
   modelId: string,
 ): OpenRouterModelCapabilities | undefined {
+  warnPluginSdkDeprecation({
+    family: "openrouter-model-capabilities",
+    method: "getOpenRouterModelCapabilities",
+    replacement:
+      "await loadOpenRouterModelCapabilities(), then getLoadedOpenRouterModelCapabilities()",
+    compatibility:
+      "The synchronous cache lookup retains its current return value and cold-load behavior.",
+  });
   // A failed awaited load, such as an oversized catalog body, already attempted
   // a refresh. Do not let the follow-up sync lookup immediately retry it.
   const skipMissRefresh = skipNextMissRefresh.delete(modelId);

@@ -123,7 +123,7 @@ private fun normalizedSwarmValue(value: String?): String? = value?.trim()?.takeI
 
 internal class ChatSwarmActivityTracker {
   private val currentPhaseByGroup = linkedMapOf<String, String>()
-  private val phaseRankByGroupPhase = linkedMapOf<String, Int>()
+  private val phaseRankByGroupPhase = linkedMapOf<Pair<String, String>, Int>()
   private var nextPhaseRank = 0
   private val latestLogByGroup = linkedMapOf<String, String>()
   private val phaseByChild = linkedMapOf<String, String>()
@@ -143,7 +143,7 @@ internal class ChatSwarmActivityTracker {
     val text = normalizedSwarmValue((if ("text" in payload) payload["text"] else source["text"]).asJsonStringOrNull())
     if ((kind == "phase" || kind == "log") && text != null) {
       if (kind == "phase") {
-        val rankKey = phaseRankKey(groupId, text)
+        val rankKey = groupId to text
         if (rankKey !in phaseRankByGroupPhase) {
           setBounded(phaseRankByGroupPhase, rankKey, nextPhaseRank++, MAX_TRACKED_SWARM_CHILDREN)
         }
@@ -174,19 +174,14 @@ internal class ChatSwarmActivityTracker {
       val phase = phaseByChild[row.key] ?: row.swarmPhase
       row.copy(
         swarmPhase = phase,
-        swarmPhaseRank = phase?.let { phaseRankByGroupPhase[phaseRankKey(groupId, it)] } ?: row.swarmPhaseRank,
+        swarmPhaseRank = phase?.let { phaseRankByGroupPhase[groupId to it] } ?: row.swarmPhaseRank,
         swarmLog = latestLogByGroup[groupId] ?: row.swarmLog,
       )
     }
 
-  private fun phaseRankKey(
-    groupId: String,
-    phase: String,
-  ): String = "${groupId.length}:$groupId$phase"
-
-  private fun <V> setBounded(
-    values: LinkedHashMap<String, V>,
-    key: String,
+  private fun <K, V> setBounded(
+    values: LinkedHashMap<K, V>,
+    key: K,
     value: V,
     limit: Int,
   ) {

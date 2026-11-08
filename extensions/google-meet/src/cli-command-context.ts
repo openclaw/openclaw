@@ -5,6 +5,7 @@ import {
   type ResolveSpaceOptions,
 } from "./cli-shared.js";
 import type { GoogleMeetConfig } from "./config.js";
+import type { GoogleMeetOAuthRuntime } from "./oauth-owner.js";
 import type { GoogleMeetRuntime } from "./runtime.js";
 
 export function addGoogleMeetOAuthOptions(command: Command): Command {
@@ -42,6 +43,7 @@ export type GoogleMeetCliCommandContext = {
   config: GoogleMeetConfig;
   ensureRuntime: () => Promise<GoogleMeetRuntime>;
   operationTimeoutMs: number;
+  oauthRuntime?: GoogleMeetOAuthRuntime;
 };
 
 export function resolveCliMeetingInput(config: GoogleMeetConfig, value?: string): string {

@@ -56,8 +56,6 @@ extension DashboardWindowController {
             "granted"
         case .denied:
             "denied"
-        case .notDetermined:
-            "notDetermined"
         default:
             // .ephemeral is unavailable by name on macOS and cannot occur here;
             // map it and future cases to notDetermined so the UI offers the

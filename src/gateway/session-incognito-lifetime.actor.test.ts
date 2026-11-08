@@ -1,296 +1,191 @@
-import "../test-utils/prepare-compiled-subprocesses.js";
-import assert from "node:assert/strict";
-import { expect, it, vi } from "vitest";
-import { withinTest } from "../../test/helpers/promise.js";
-import { patchSessionEntryCore } from "../config/sessions/session-accessor.sqlite-entry.js";
-import {
-  captureIncognitoSessionBinding,
-  withIncognitoSessionBinding,
-} from "../config/sessions/session-incognito-binding.js";
-import { deleteIncognitoSessionLifecycle } from "../config/sessions/session-incognito-lifecycle-operations.js";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import type { SessionActor } from "../config/sessions/session-actor-contract.js";
+import { memorySessionActorOwners } from "../config/sessions/session-actor-memory-owner.js";
+import { getSessionActorStorageBinding } from "../config/sessions/session-actor-storage-binding.js";
+import type { SessionActorStorageAuthority } from "../config/sessions/session-actor-storage-contract.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import type { IncognitoAgentDatabaseExecution } from "../state/openclaw-agent-execution-incognito.js";
-import { captureOpenClawAgentDatabaseExecution } from "../state/openclaw-agent-execution.js";
-import {
-  createGatewaySchedulerClock,
-  createTestGatewayScheduler,
-} from "../test-utils/gateway-scheduler-clock.js";
-import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
-import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { createDirectChatContext } from "./server-chat.agent-events.test-helpers.js";
+import { resolveIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
+import * as schedulerTest from "../test-utils/gateway-scheduler-clock.js";
+import { attachInitialGatewayLifetimeSidecars } from "./server-lifetime-sidecars.js";
 import * as deletion from "./server-methods/sessions-delete.js";
+import type { GatewayRequestContext } from "./server-methods/types.js";
 import { createGatewaySidecarStopOwner } from "./server-sidecar-owners.js";
-import {
-  startIncognitoActorsSessionLifetime,
-  startIncognitoActorSessionLifetime,
-} from "./session-incognito-lifetime.js";
+import { startIncognitoSessionLifetime } from "./session-incognito-lifetime.js";
 
-// The fixture retains two actors while the shared-state worker prepares lifecycle cleanup.
-vi.mock("node:os", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("node:os")>()),
-  availableParallelism: () => 24,
+// These adapters must not allocate persistence or consume database-worker capacity.
+vi.mock("node:sqlite", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("node:sqlite")>()),
+  DatabaseSync: vi.fn(function () {
+    throw new Error("Memory lifetime opened SQLite");
+  }),
+}));
+vi.mock("node:worker_threads", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("node:worker_threads")>()),
+  Worker: vi.fn(function () {
+    throw new Error("Memory lifetime allocated a worker");
+  }),
 }));
 
-it.for(["sidecar", "actor"] as const)(
-  "keeps the original actor deadline and joins accepted expiry before %s shutdown",
-  async (shutdown, { signal }) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-      const time = createGatewaySchedulerClock(Date.now());
-      const scheduler = createTestGatewayScheduler(time.clock);
-      const authority = { assertCurrent() {} };
-      const actor = await captureOpenClawAgentDatabaseExecution({
-        kind: "ephemeral",
-        agentId: "main",
-        env: state.env,
-        authority,
-      });
-      assert(actor);
-      const sessionKey = "agent:main:dashboard:incognito-expiry-actor";
-      const entry = {
-        sessionId: "expiry",
-        incognito: true as const,
-        createdAt: time.clock.now(),
-        updatedAt: time.clock.now(),
-      };
-      await actor.sessions.create(authority, { sessionKey, entry });
-      const deadlineSource = actor.sessions.deadlines()[0]?.source;
-      assert(deadlineSource);
-      const started = createDeferredCore();
-      const release = createDeferredCore();
-      const completed = createDeferredCore();
-      const order: string[] = [];
-      let assertExpiredWorkCurrent: (() => void) | undefined;
-      const logWarning = vi.fn();
-      const owner = startIncognitoActorSessionLifetime({
-        actor,
-        scheduler,
-        logWarning,
-        async deleteSession(deadline, assertCurrent) {
-          assertExpiredWorkCurrent = assertCurrent;
-          started.resolve();
-          await release.promise;
-          try {
-            assertCurrent();
-            expect(deadline.sessionId).toBe(entry.sessionId);
-            const current = await actor.sessions.read({ assertCurrent }, { sessionKey });
-            assert(current.entry);
-            const result = await deleteIncognitoSessionLifecycle({
-              actor,
-              authority: { assertCurrent },
-              env: state.env,
-              target: { sessionKey, entry: current.entry },
-              reason: "deleted",
-            });
-            expect(result.deleted).toBe(true);
-            order.push("deleted");
-            completed.resolve();
-          } catch (error) {
-            completed.reject(error);
-            throw error;
-          }
-        },
-      });
-      let stopping: Promise<void> | undefined;
-      let waking: Promise<void> | undefined;
-      let closing: Promise<void> | undefined;
-      try {
-        await time.advanceBy(23 * 60 * 60_000);
-        const updated = await withIncognitoSessionBinding({ actor }, () =>
-          patchSessionEntryCore(
-            { agentId: actor.agentId, sessionKey, storePath: actor.path, env: state.env },
-            () => ({ createdAt: time.clock.now(), updatedAt: time.clock.now() }),
-          ),
-        );
-        expect(updated?.createdAt).toBe(entry.createdAt);
-        expect(updated?.updatedAt).toBeGreaterThan(entry.updatedAt);
-        const sql = observeMainThreadSql();
-        try {
-          sessionChanges.emit({ agentId: actor.agentId, storePath: actor.path, sessionKey });
-          sql.expectIdle();
-        } finally {
-          sql.restore();
-        }
-        await time.advanceBy(60 * 60_000 - 1);
-        expect((await actor.sessions.read(authority, { sessionKey })).entry).toBeDefined();
-        waking = Promise.resolve(time.advanceBy(1));
-        await withinTest(started.promise, signal);
-        let stopped = false;
-        stopping = Promise.resolve(owner.stop()).then(() => {
-          stopped = true;
-          order.push("stopped");
-        });
-        await Promise.resolve();
-        expect(stopped).toBe(false);
-        if (shutdown === "actor") {
-          closing = actor.close().then(() => {
-            order.push("closed");
-          });
-          expect(() => actor.assertCurrent()).toThrow();
-          expect(() => deadlineSource.assertSettlingCurrent()).toThrow();
-          expect(order).toEqual([]);
-        }
-        release.resolve();
-        await withinTest(completed.promise, signal);
-        await stopping;
-        await closing;
-        expect(order[0]).toBe("deleted");
-        expect(order).toContain("stopped");
-        assert(assertExpiredWorkCurrent);
-        expect(assertExpiredWorkCurrent).toThrow("no longer owns this session");
-        if (shutdown === "actor") {
-          expect(order).toContain("closed");
-        } else {
-          expect((await actor.sessions.read(authority, { sessionKey })).entry).toBeUndefined();
-          deadlineSource.assertSettlingCurrent();
-          await actor.sessions.create(authority, {
-            sessionKey,
-            entry: { ...entry, sessionId: "successor", createdAt: time.clock.now() },
-          });
-          expect(() => deadlineSource.assertSettlingCurrent()).toThrow(
-            "no longer owns this session",
-          );
-        }
-        expect(logWarning).not.toHaveBeenCalled();
-      } finally {
-        release.resolve();
-        await waking;
-        await stopping;
-        await closing;
-        await owner.stop();
-        await scheduler.stop();
-        await actor.close();
-      }
-    });
-  },
-);
+// mock-isolation: Keep unrelated OAuth state outside the memory lifetime startup fixture.
+vi.mock("./github-oauth-lifecycle.js", () => ({
+  createGitHubOAuthLifecycle: () => ({ start() {}, async stop() {} }),
+  installActiveGitHubOAuthLifecycle: () => () => {},
+}));
 
-it("follows new actors and retires an old incarnation before expiring its successor", async ({
-  signal,
-}) => {
-  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    const authority = { assertCurrent() {} };
-    const time = createGatewaySchedulerClock(Date.now());
-    const scheduler = createTestGatewayScheduler(time.clock);
-    const opened: IncognitoAgentDatabaseExecution[] = [];
-    const expected = new Map<string, string>();
-    const createActor = async (agentId: string, sessionId: string) => {
-      const actor = await captureOpenClawAgentDatabaseExecution({
-        kind: "ephemeral",
-        agentId,
-        env: state.env,
-        authority,
-      });
-      assert(actor);
-      opened.push(actor);
-      expected.set(agentId, actor.identity.incarnation);
-      await actor.sessions.create(authority, {
-        sessionKey: `agent:${agentId}:dashboard:incognito-all-expiry`,
-        entry: {
-          sessionId,
-          incognito: true,
-          createdAt: time.clock.now(),
-          updatedAt: time.clock.now(),
-        },
-      });
-      return actor;
-    };
-    const empty = await captureOpenClawAgentDatabaseExecution({
-      kind: "ephemeral",
-      agentId: "empty",
-      env: state.env,
-      authority,
-    });
-    assert(empty);
-    opened.push(empty);
-    const first = await createActor("main", "main-original");
-    const gates = [createDeferredCore(), createDeferredCore(), createDeferredCore()];
-    const scheduled: AbortSignal[] = [];
-    const createScope = scheduler.scope.bind(scheduler);
-    const scheduling = vi.spyOn(scheduler, "scope").mockImplementation(() => {
-      const scope = createScope();
-      const schedule = scope.schedule;
-      scope.schedule = (params) => {
-        const job = schedule(params);
-        scheduled.push(scope.signal);
-        gates[scheduled.length - 1]?.resolve();
-        return job;
-      };
-      return scope;
-    });
-    const deleted: string[] = [];
-    const deleting = vi
-      .spyOn(deletion, "deleteGatewaySession")
-      .mockImplementation(async (params) => {
-        const binding = captureIncognitoSessionBinding({ sessionKey: params.params.key });
-        assert(binding);
-        expect(binding.actor.identity.incarnation).toBe(expected.get(binding.actor.agentId));
-        const current = await binding.actor.sessions.read(authority, {
-          sessionKey: params.params.key,
-        });
-        assert(current.entry);
-        expect(current.entry.sessionId).toBe(params.params.expectedSessionId);
-        const result = await deleteIncognitoSessionLifecycle({
-          actor: binding.actor,
-          authority: { assertCurrent: () => params.assertCurrent?.() },
-          env: state.env,
-          target: { sessionKey: params.params.key, entry: current.entry },
-          reason: "deleted",
-        });
-        deleted.push(current.entry.sessionId);
-        return {
-          ok: true,
-          result: { ok: true, key: params.params.key, deleted: result.deleted, archived: [] },
-        };
-      });
-    const context = createDirectChatContext();
-    const logWarning = vi.fn();
-    const owner = createGatewaySidecarStopOwner();
-    owner.publish(
-      startIncognitoActorsSessionLifetime({ context, scheduler, logWarning, env: state.env }),
-    );
-    const publish = (actor: typeof first) =>
-      sessionChanges.emit({
-        agentId: actor.agentId,
-        storePath: actor.path,
-        sessionKey: `agent:${actor.agentId}:dashboard:incognito-all-expiry`,
-      });
-    try {
-      // No session publication accompanies this empty actor's loss after topology capture.
-      await empty.close();
-      await withinTest(gates[0]!.promise, signal);
-      const added = await createActor("work", "work-added");
-      publish(added);
-      await withinTest(gates[1]!.promise, signal);
-      await time.advanceBy(60 * 60_000);
-      await first.close();
-      const successor = await createActor("main", "main-successor");
-      publish(successor);
-      await withinTest(gates[2]!.promise, signal);
-      expect(scheduled[0]?.aborted).toBe(true);
-      expect(() => first.assertCurrent()).toThrow();
-      const sql = observeMainThreadSql();
-      try {
-        await time.advanceBy(23 * 60 * 60_000);
-        expect(deleted).toEqual(["work-added"]);
-        await time.advanceBy(60 * 60_000);
-        owner.beginClose();
-        await owner.stop();
-        await owner.sealAndJoin();
-        expect(deleted).toEqual(["work-added", "main-successor"]);
-        expect(logWarning).toHaveBeenCalledExactlyOnceWith(
-          "Incognito expiry could not reconcile a captured actor.",
-        );
-        sql.expectIdle();
-      } finally {
-        sql.restore();
-      }
-    } finally {
-      await owner.stop();
-      await scheduler.stop();
-      scheduling.mockRestore();
-      deleting.mockRestore();
-      await Promise.all(opened.map((actor) => actor.close()));
-    }
+const env = { OPENCLAW_STATE_DIR: "/synthetic/incognito-lifetime" };
+const authority: SessionActorStorageAuthority = { assertCurrent() {}, authorize() {} };
+const context = {} as GatewayRequestContext;
+const actors: SessionActor[] = [];
+const sessionKey = "agent:main:dashboard:incognito-expiry";
+const day = 24 * 60 * 60_000;
+const memoryPath = (agentId = "main") => resolveIncognitoOpenClawAgentSqlitePath({ agentId, env });
+let time: ReturnType<typeof schedulerTest.createGatewaySchedulerClock>;
+let scheduler: ReturnType<typeof schedulerTest.createTestGatewayScheduler>;
+let sidecar: { stop(): Promise<void> | void } | undefined;
+let logWarning: ReturnType<typeof vi.fn<(message: string) => void>>;
+
+beforeEach(() => {
+  vi.stubEnv("OPENCLAW_STATE_DIR", env.OPENCLAW_STATE_DIR);
+  time = schedulerTest.createGatewaySchedulerClock(1_000);
+  scheduler = schedulerTest.createTestGatewayScheduler(time.clock);
+  logWarning = vi.fn();
+  sidecar = undefined;
+});
+
+afterEach(async () => {
+  await sidecar?.stop();
+  await scheduler.stop();
+  await Promise.all(actors.splice(0).map((actor) => actor.release()));
+  memorySessionActorOwners.reset();
+  vi.restoreAllMocks();
+  vi.unstubAllEnvs();
+});
+
+const start = () => (sidecar = startIncognitoSessionLifetime({ context, scheduler, logWarning }));
+
+async function createSession(createdAt: number, key = sessionKey, sessionId = "original") {
+  const agentId = key.split(":")[1]!;
+  const owner = memorySessionActorOwners.get({ agentId, path: memoryPath(agentId) });
+  const lifetime = { assertCurrent() {}, assertReadable() {} };
+  const actor = await owner.acquire({ sessionKey: key, database: owner.identity }, lifetime);
+  actors.push(actor);
+  const entry = { sessionId, updatedAt: createdAt, createdAt, incognito: true as const };
+  const created = await actor.storage!.mutate(
+    { type: "session.entry.create", input: { entry } },
+    authority,
+  );
+  expect(created.kind).toBe("committed");
+  sessionChanges.emit({ agentId, sessionKey: key, storePath: owner.path });
+  return { owner, actor };
+}
+
+async function deleteSession(params: Parameters<typeof deletion.deleteGatewaySession>[0]) {
+  const { key, expectedSessionId } = params.params;
+  const binding = getSessionActorStorageBinding({ sessionKey: key });
+  if (!binding) {
+    throw new Error("Missing memory binding");
+  }
+  params.assertCurrent?.();
+  const deleted = await binding.actor.storage!.mutate(
+    { type: "session.lifecycle.delete", input: { expectedSessionId } },
+    binding.authority,
+  );
+  expect(deleted).toMatchObject({ kind: "committed", value: { deleted: true } });
+  const result = { ok: true as const, key, deleted: true, archived: [] };
+  return { ok: true as const, result };
+}
+
+it("observes startup and publications without creating a memory owner", async () => {
+  const deleteGatewaySession = vi.spyOn(deletion, "deleteGatewaySession");
+  start();
+  sessionChanges.emit({ agentId: "main", sessionKey, storePath: memoryPath() });
+  await time.advanceBy(day);
+  expect(memorySessionActorOwners.list()).toEqual([]);
+  expect(deleteGatewaySession).not.toHaveBeenCalled();
+});
+
+it("keeps the creation deadline after activity and joins accepted expiry before shutdown", async () => {
+  const { owner, actor } = await createSession(time.clock.now());
+  const [started, release] = [createDeferredCore(), createDeferredCore()] as const;
+  const order: string[] = [];
+  vi.spyOn(deletion, "deleteGatewaySession").mockImplementation(async (params) => {
+    started.resolve();
+    await release.promise;
+    const result = await deleteSession(params);
+    order.push("deleted");
+    return result;
   });
+  const lifetime = start();
+  const pending: Promise<void>[] = [];
+  try {
+    await time.advanceBy(day - 1);
+    const patch = { createdAt: time.clock.now(), updatedAt: time.clock.now() };
+    const patched = await actor.storage!.mutate(
+      { type: "session.entry.patch", input: { operation: { kind: "fields", patch } } },
+      authority,
+    );
+    expect(patched.kind).toBe("committed");
+    sessionChanges.emit({ agentId: owner.agentId, storePath: owner.path, sessionKey });
+    expect(actor.snapshot(authority)?.entry?.createdAt).toBe(1_000);
+    pending.push(Promise.resolve(time.advanceBy(1)));
+    await started.promise;
+    pending.push(
+      Promise.resolve(lifetime.stop()).then(() => {
+        order.push("stopped");
+      }),
+    );
+    await Promise.resolve();
+    expect(order).toEqual([]);
+    release.resolve();
+    await Promise.all(pending);
+    expect(order).toEqual(["deleted", "stopped"]);
+    expect(owner.readSession(sessionKey, authority)).toBeUndefined();
+    expect(logWarning).not.toHaveBeenCalled();
+  } finally {
+    release.resolve();
+    await Promise.all(pending);
+  }
+});
+
+it("retries failed cleanup without extending the original lifetime", async () => {
+  const { owner } = await createSession(time.clock.now());
+  const cleanup = vi.spyOn(deletion, "deleteGatewaySession");
+  cleanup.mockRejectedValueOnce(new Error("Transient cleanup failure"));
+  cleanup.mockImplementation(deleteSession);
+  start();
+  await time.advanceBy(day);
+  expect(owner.readSession(sessionKey, authority)?.entry?.sessionId).toBe("original");
+  const warning = "Incognito session expiry could not finish cleanup; will retry.";
+  expect(logWarning).toHaveBeenCalledExactlyOnceWith(warning);
+  await time.advanceBy(60_000);
+  expect(owner.readSession(sessionKey, authority)).toBeUndefined();
+  expect(cleanup).toHaveBeenCalledTimes(2);
+});
+
+it("starts memory expiry with Gateway sidecars and preserves replacement deadlines", async () => {
+  const first = await createSession(time.clock.now());
+  const cleanup = vi.spyOn(deletion, "deleteGatewaySession").mockImplementation(deleteSession);
+  const stopOwner = (sidecar = createGatewaySidecarStopOwner());
+  await attachInitialGatewayLifetimeSidecars({
+    scheduler,
+    gatewayRequestContext: { getRuntimeConfig: () => ({}) } as GatewayRequestContext,
+    chatMetadataLifecycle: { attachContext: vi.fn(async () => {}) } as never,
+    minimalTestGateway: true,
+    flushPendingSessionsChangedEvents: async () => {},
+    logWarning,
+    publishSidecars: stopOwner.publish,
+  });
+  await time.advanceBy(60_000);
+  memorySessionActorOwners.closeDatabase(first.owner);
+  await createSession(time.clock.now(), sessionKey, "replacement");
+  await createSession(time.clock.now(), "agent:work:dashboard:incognito-expiry", "other-agent");
+  await time.advanceBy(day - 60_000);
+  expect(cleanup).not.toHaveBeenCalled();
+  await time.advanceBy(60_000);
+  const deletedIds = cleanup.mock.calls
+    .map(([call]) => call.params.expectedSessionId)
+    .toSorted((a, b) => String(a).localeCompare(String(b)));
+  expect(deletedIds).toEqual(["other-agent", "replacement"]);
+  expect(logWarning).not.toHaveBeenCalled();
 });

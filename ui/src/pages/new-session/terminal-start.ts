@@ -1,8 +1,7 @@
-import { html, nothing } from "lit";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { pathForTerminalSession } from "../../app-route-paths.ts";
-import { t } from "../../i18n/index.ts";
 import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
+import { formatUiError } from "../../lib/format-error.ts";
 import {
   readSessionMethodAccess,
   type SessionMethodAccess,
@@ -116,7 +115,7 @@ export async function submitDraftInTerminal(options: {
     }
   } catch (error) {
     if (submission.isCurrent()) {
-      flow.setError(error instanceof Error ? error.message : String(error));
+      flow.setError(formatUiError(error));
     }
   } finally {
     if (submission.isRequestCurrent()) {
@@ -125,48 +124,9 @@ export async function submitDraftInTerminal(options: {
   }
 }
 
-export function renderNewSessionTerminalHost(params: {
+export type NewSessionTerminalHostOptions = {
   hosts: Array<{ hostId: string; label: string }> | undefined;
   hostId: string;
   submitting: boolean;
   onSelect: (hostId: string) => void;
-}) {
-  if (!params.hosts) {
-    return nothing;
-  }
-  if (params.hosts.length === 0) {
-    return html`<span class="new-session-page__catalog-unavailable" role="status">
-      ${t("newSession.nativeHostsUnavailable")}
-    </span>`;
-  }
-  if (params.hosts.length === 1 && params.hosts[0]?.hostId === params.hostId) {
-    return nothing;
-  }
-  return html`<div class="new-session-page__select new-session-page__menu-field">
-    <span>${t("newSession.where")}</span>
-    <select
-      class="new-session-page__trigger"
-      aria-label=${t("newSession.where")}
-      .value=${params.hostId}
-      ?disabled=${params.submitting}
-      @change=${(event: Event) => {
-        if (event.currentTarget instanceof HTMLSelectElement) {
-          params.onSelect(event.currentTarget.value);
-        }
-      }}
-    >
-      ${
-        !params.hosts.some((host) => host.hostId === params.hostId)
-          ? html`<option value=${params.hostId} selected disabled>
-              ${t("newSession.chooseNativeHost")}
-            </option>`
-          : nothing
-      }
-      ${params.hosts.map(
-        (host) => html`<option value=${host.hostId} ?selected=${host.hostId === params.hostId}>
-          ${host.label}
-        </option>`,
-      )}
-    </select>
-  </div>`;
-}
+};

@@ -1,12 +1,37 @@
 import type { GatewayContextResolver } from "../../../gateway/server-methods/types.js";
 import { normalizeSubagentRunState } from "./subagent-delivery-state.js";
+import { SUBAGENT_ENDED_REASON_ERROR } from "./subagent-lifecycle-events.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
+
+export function createFailedQueuedRun(
+  current: SubagentRunRecord,
+  error: string,
+  endedAt?: number,
+  ownedSession = true,
+): SubagentRunRecord {
+  const finishedAt = endedAt ?? Date.now();
+  return {
+    ...current,
+    endedReason: SUBAGENT_ENDED_REASON_ERROR,
+    execution: {
+      ...current.execution,
+      status: "terminal",
+      endedAt: finishedAt,
+      outcome: { status: "error", error, endedAt: finishedAt },
+      ...(!ownedSession ? { suppressSessionEffects: true } : {}),
+    },
+    collectorLaunchCleanupPending: true,
+    completion: { required: false, resultText: error, capturedAt: finishedAt },
+  };
+}
 
 export type RegisterSubagentRunParams = {
   runId: string;
   requesterTurnRunId?: string;
+  nativePluginOwner?: SubagentRunRecord["nativePluginOwner"];
+  subagentProfile?: SubagentRunRecord["subagentProfile"];
   childSessionKey: string;
-  childAgentId?: string;
+  childAgentId: string;
   sessionEntry?: SubagentRunRecord["childSessionIdentity"];
   controllerSessionKey?: string;
   requesterSessionKey: string;
@@ -15,7 +40,6 @@ export type RegisterSubagentRunParams = {
   requesterDisplayKey: string;
   task: string;
   taskName?: string;
-  agentId?: string;
   requesterAgentId?: string;
   cleanup: "delete" | "keep";
   label?: string;
@@ -37,7 +61,6 @@ export type RegisterSubagentRunParams = {
   swarmLaunchRequestFingerprint?: string;
   groupId?: string;
   outputSchema?: Record<string, unknown>;
-  queuedLaunch?: SubagentRunRecord["queuedLaunch"];
   queued?: boolean;
   gatewayContextResolver?: GatewayContextResolver;
 };
@@ -48,6 +71,7 @@ export function createSubagentRegistrationRecord(
     now: number;
     generation: number;
     lifecycleGeneration: string;
+    childAgentId: string;
     requesterAgentId?: string;
     requesterOrigin?: SubagentRunRecord["requesterOrigin"];
     swarmWaitOwnerSessionKeys?: string[];
@@ -63,7 +87,14 @@ export function createSubagentRegistrationRecord(
     runId,
     taskRunId: runId,
     ...(requesterTurnRunId ? { requesterTurnRunId } : {}),
+    ...(registerParams.nativePluginOwner
+      ? { nativePluginOwner: { ...registerParams.nativePluginOwner } }
+      : {}),
+    ...(registerParams.subagentProfile
+      ? { subagentProfile: { ...registerParams.subagentProfile } }
+      : {}),
     childSessionKey: registerParams.childSessionKey.trim(),
+    childAgentId: prepared.childAgentId,
     childSessionIdentity: registerParams.sessionEntry
       ? {
           sessionId: registerParams.sessionEntry.sessionId,
@@ -100,7 +131,6 @@ export function createSubagentRegistrationRecord(
     swarmLaunchPending: registerParams.collect === true,
     groupId: registerParams.groupId,
     outputSchema: registerParams.outputSchema,
-    queuedLaunch: registerParams.queuedLaunch,
     generation,
     createdAt: now,
     execution: {

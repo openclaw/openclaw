@@ -63,7 +63,7 @@ Enable the existing top-level approval forwarding settings for each approval typ
 }
 ```
 
-`approvals.exec` and `approvals.plugin` are independent; enabling one does not enable the other. Native card delivery also requires a configured Teams bot and at least one approver resolved from `channels.msteams.allowFrom` or `channels.msteams.defaultTo`. Approvers must be stable AAD object IDs; display names, email addresses, group entries, and conversation IDs do not grant approval access. OpenClaw checks the clicking user's AAD object ID before resolving the request.
+`approvals.exec` and `approvals.plugin` are independent; enabling one does not enable the other. Native card delivery also requires a configured Teams bot and at least one approver resolved from the originating account's effective `allowFrom` or `defaultTo`. Approvers must be stable AAD object IDs; display names, email addresses, group entries, and conversation IDs do not grant approval access. OpenClaw checks both the originating account and the clicking user's AAD object ID before resolving the request, so a sibling bot cannot settle that account's approval.
 
 No Teams-specific approval configuration is required. The existing `/approve <id> <decision>` command remains available as a text fallback when native delivery is unavailable. For forwarding modes and supported decisions, see [Approval forwarding to chat channels](/tools/exec-approvals-advanced#approval-forwarding-to-chat-channels).
 
@@ -167,5 +167,6 @@ Without the `user:` prefix, names default to group or team resolution. Always us
 
 ## Proactive messaging
 
-- Proactive messages are only possible **after** a user has interacted, because OpenClaw stores conversation references at that point.
+- Channel and group chat sends need a stored conversation reference, which OpenClaw saves when the bot receives a message there.
+- A DM to `user:<aad-object-id>` works once the user has the app installed: OpenClaw opens the personal chat on first send and stores it. Installing the app in personal scope also stores the reference.
 - See [/gateway/configuration](/gateway/configuration) for `dmPolicy` and allowlist gating.

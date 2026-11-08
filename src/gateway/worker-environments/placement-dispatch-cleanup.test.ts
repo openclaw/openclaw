@@ -7,12 +7,48 @@ import * as support from "./service.test-support.js";
 describe("worker placement cleanup", () => {
   support.setupWorkerEnvironmentServiceSuite();
 
+  it("preserves the dispatch error when cleanup advances the placement generation", async () => {
+    const placementStore = createWorkerSessionPlacementStore({
+      database: support.testState.stateDb,
+      now: () => 1_000,
+    });
+    let newerPlacement: Awaited<ReturnType<typeof placementStore.fail>> | undefined;
+    const harness = await createHarness(support.testState.stateDb, placementStore, {
+      failAt: "sync",
+      afterDestroy: async () => {
+        const current = await placementStore.getAsync(REQUEST.sessionId);
+        if (!current) {
+          throw new Error("expected dispatch placement");
+        }
+        newerPlacement = await placementStore.fail({
+          sessionId: REQUEST.sessionId,
+          expectedGeneration: current.generation,
+          recoveryError: "newer cleanup failure",
+        });
+      },
+    });
+
+    const error = await harness.service.dispatch(REQUEST).catch((failure: unknown) => failure);
+    expect(error).toBeInstanceOf(AggregateError);
+    expect(error).toMatchObject({
+      message: expect.stringContaining("sync failed"),
+      errors: [
+        expect.objectContaining({ message: "sync failed" }),
+        expect.objectContaining({ message: expect.stringContaining("changed before failure") }),
+      ],
+      cause: expect.objectContaining({
+        message: expect.stringContaining("changed before failure"),
+      }),
+    });
+    expect(await placementStore.getAsync(REQUEST.sessionId)).toEqual(newerPlacement);
+  });
+
   it("retries pending failed-environment teardown before clearing the placement", async () => {
     const placementStore = createWorkerSessionPlacementStore({
       database: support.testState.stateDb,
       now: () => 1_000,
     });
-    const harness = createHarness(support.testState.stateDb, placementStore, {
+    const harness = await createHarness(support.testState.stateDb, placementStore, {
       failAt: "sync",
       destroyFails: true,
       destroyFailureState: "destroying",

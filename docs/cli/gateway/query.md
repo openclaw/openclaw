@@ -48,6 +48,10 @@ before retrying.
 When you set `--url`, the CLI does not fall back to config or environment credentials. Pass `--token` or `--password` explicitly. Missing explicit credentials is an error.
 </Note>
 
+Invalid client ports and combining `--port` with `--url` report their specific
+input error with exit code 1. JSON error envelopes remain unchanged, including
+the separate options-phase errors from `setup` and `onboard`.
+
 WebSocket opening-handshake timeouts report a Gateway transport error with
 `ETIMEDOUT`, including the target and a status-check hint. JSON error output uses
 `error.type: "gateway_transport_error"`, as for other connection failures.
@@ -162,6 +166,7 @@ openclaw gateway diagnostics export --json
 
 <ParamField path="--output <path>" type="string">
   Output zip path. Defaults to a support export under the state directory.
+  Existing directories receive an automatically named archive. Quoted non-home paths preserve surrounding whitespace; blank values use the default.
 </ParamField>
 <a id="param-log-lines"></a>
 
@@ -212,12 +217,26 @@ It is designed to be shared. It keeps operational details useful for debugging â
 
 Shows the Gateway service (launchd/systemd/schtasks) plus an optional connectivity/auth check.
 
+Installed-service config, runtime intent, and log diagnostics use the service's
+own state selectors. An inspecting CLI's `OPENCLAW_HOME`, `OPENCLAW_STATE_DIR`,
+`OPENCLAW_PROFILE`, and `OPENCLAW_CONFIG_PATH` do not fill in selectors omitted
+from the service definition.
+
+Plugin-version drift checks read committed install records without staging a copy
+of the shared state database. SQLite may update WAL/SHM coordination files; the
+check does not write plugin records or change the schema.
+
 ```bash
 openclaw gateway status
 openclaw gateway status --json
 openclaw gateway status --require-rpc
 openclaw gateway status --port 19001
 ```
+
+From a source checkout, `pnpm openclaw gateway status` reuses current prepared
+runtime artifacts when their recorded input bytes still match, even if Git marks
+those inputs dirty. Changed inputs or missing outputs still require a refresh;
+status does not bypass the live Gateway's artifact-publication safeguards.
 
 <a id="param-url-1"></a>
 
@@ -254,6 +273,11 @@ openclaw gateway status --port 19001
 <ParamField path="--deep" type="boolean">
   Scan system-level services too.
 </ParamField>
+<a id="param-runtime-intent-only"></a>
+
+<ParamField path="--runtime-intent-only" type="boolean">
+  Output only local CLI and service runtime intent as JSON. This inspection reads the daemon-owned local store and native service definition without shared-state diagnostics or RPC, including when the Gateway or PostgreSQL is unavailable. Cannot combine with `--require-rpc`.
+</ParamField>
 <a id="param-require-rpc"></a>
 
 <ParamField path="--require-rpc" type="boolean">
@@ -265,18 +289,20 @@ openclaw gateway status --port 19001
     - Stays available for diagnostics even when the local CLI config is missing or invalid. Config problems are warnings with `openclaw doctor --fix` guidance; valid connection settings and the recorded service identity remain usable.
     - If service discovery cannot inspect a required file, such as a systemd environment file readable only by root, status reports the native service as unknown and continues with the caller's Gateway target and credentials. Observed service ownership refusals remain errors; status does not change file permissions or relax lifecycle checks.
     - Default output proves service state, WebSocket connect, and the auth capability visible at handshake time â€” not read/write/admin operations.
+    - Local service checks use loopback, including `bind: "custom"` and `bind: "tailnet"`, so capability reflects the same local device credentials as ordinary CLI calls. Use `--url` with explicit credentials to check another address; its capability can differ.
     - Checks are non-mutating for first-time device auth: they reuse an existing cached device token when one exists, but never create a new CLI device identity or read-only pairing record just to check status.
     - Resolves configured auth SecretRefs for check auth when possible. If a required SecretRef is unresolved, `--json` reports `rpc.authWarning` when check connectivity/auth fails; pass `--token`/`--password` explicitly or fix the secret source. Unresolved-auth warnings are suppressed once the check succeeds.
     - JSON output includes `gateway.version` when the running Gateway reports it; `--require-rpc` can fall back to the `status.runtimeVersion` RPC payload if the handshake check cannot supply version metadata.
-    - Use `--require-rpc` in scripts/automation when a listening service is not enough and you need read-scope RPC to be healthy too.
-    - `--deep` scans for extra launchd/systemd/schtasks installs; when multiple gateway-like services are found, human output prints cleanup hints (usually run one gateway per machine) and reports a recent supervisor restart handoff when relevant.
+    - By default, exit 0 means diagnostics completed, not that the Gateway is healthy. A missing listener or failed auth/connectivity check can still exit 0; errors that prevent diagnostics from completing exit non-zero. `--json` changes the output format, not this exit behavior.
+    - Use `openclaw gateway status --deep --require-rpc` as a repair acceptance check or in scripts/automation that require working read-scope RPC. It exits non-zero if the read check fails, but does not certify plugin or channel readiness; inspect relevant diagnostics and reproduce the original symptom too. Status never starts or restarts the Gateway.
+    - `--deep` scans for extra launchd/systemd/schtasks installs; when multiple gateway-like services are found, human output prints cleanup hints (usually run one gateway per machine) and reports a recent supervisor restart handoff when relevant. With `OPENCLAW_SUPERVISOR_MODE=external`, detected services remain visible, but the single-gateway recommendation is omitted.
     - `--deep` confirms exact npm targets before suggesting repairs for official-plugin version drift. Unpublished versions or registry failures are reported without an update command; retry deep status after registry access or the release cohort is restored. Ordinary status and readiness checks do not query npm for drift repairs.
     - `--deep` also runs config validation in plugin-aware mode (`pluginValidation: "full"`) and surfaces plugin manifest warnings (e.g. missing channel config metadata). Default `gateway status` keeps the fast read-only path that skips plugin validation.
     - On Linux, status reports the effective service currently loaded by systemd, including loaded drop-ins. If the unit or a drop-in changed on disk, `Systemd reload: pending` means you must run `systemctl --user daemon-reload` (or `sudo systemctl daemon-reload` for a system service) before those changes take effect.
     - Human output includes the resolved file log path plus CLI-vs-service config paths/validity to help diagnose profile or state-dir drift.
     - If the Gateway reports no version, human output still shows the locally inspected service package version and path when readable. A version mismatch suggests reinstalling only when that service is the check target; installation restrictions appear as the existing refusal message.
     - A missing native service is informational when that service is diagnostic-only, such as a Gateway using a non-default state directory. The connectivity check still reports the selected Gateway's result.
-    - Install and reinstall guidance follows the invoking shell's installation rules, not the stored service environment or check target. Nix mode, external supervision, noncanonical installation identity, and Linux sudo/user-manager mismatches show the install refusal instead of an unusable command. A diagnostic-only target is not itself a refusal. Nix mode blocks installation, not starting an existing service.
+    - Install and reinstall guidance follows the invoking shell's installation rules, not the stored service environment or check target. Nix mode, external supervision, an unexpected installation identity, and Linux sudo/user-manager mismatches show the install refusal instead of an unusable command. A diagnostic-only target is not itself a refusal. Nix mode blocks installation, not starting an existing service.
     - Human output includes `Gateway heap:` with configured service heap controls and a separate install-time recommendation based on memory visible to the CLI. JSON output exposes the same report as `service.gatewayHeap`. Neither is a measurement of the running Gateway's V8 heap ceiling; use runtime memory diagnostics for that.
 
   </Accordion>
@@ -306,6 +332,13 @@ openclaw gateway probe
 openclaw gateway probe --json
 openclaw gateway probe --port 18789
 ```
+
+`--timeout <ms>` (default `3000`) is one shared budget for discovery, SSH setup,
+connections, and read checks. Known targets are checked while discovery runs.
+When the budget expires, unfinished checks report a timeout; connection and SSH
+process cleanup can briefly extend the elapsed command time.
+Accepted budgets above the native timer limit retain their full duration rather
+than timing out immediately.
 
 <a id="param-port-2"></a>
 
@@ -381,9 +414,19 @@ install the **OpenSSH Client** optional feature; Windows places it under
 
 Config defaults (optional): `gateway.remote.sshTarget`, `gateway.remote.sshIdentity`.
 
+When the selected SSH target and remote port match a configured `wss://` SSH
+route, the probe retains that endpoint's TLS identity and path through the tunnel.
+The saved certificate fingerprint is enforced; without a pin, normal certificate
+verification applies. A different SSH target or remote port, or configured
+`direct` transport does not inherit that endpoint's TLS settings.
+
 ### `gateway call <method>`
 
 Low-level RPC helper.
+
+This command loads only the configuration needed to select and authenticate the
+Gateway connection. It does not validate unrelated settings or preload plugin runtimes;
+use `openclaw config validate` to check the full configuration.
 
 Use `--expect-url <url>` to bind a call to a previously observed Gateway endpoint
 without changing URL selection or authentication. The CLI compares the exact
@@ -475,6 +518,9 @@ Prepare an idle Gateway for a cooperative host freeze or snapshot. Without
 ID. The value must be a non-negative number of seconds; an empty value is rejected.
 Use `--wait 0` for a single attempt without polling.
 
+Ctrl-C or SIGTERM stops further prepare attempts. An already dispatched prepare
+still settles and reports any acquired lease so you can resume it explicitly.
+
 ```bash
 openclaw gateway suspend
 openclaw gateway suspend --request-id snapshot-2026-08-11 --wait 30
@@ -482,7 +528,9 @@ openclaw gateway suspend --port 18999 --json
 ```
 
 The ready output includes the suspension ID, lease expiry, and the matching
-resume command. Common RPC options such as `--url`, `--token`, `--password`,
+resume guidance. For an explicit `--url`, reuse that URL and the authentication
+options from the suspend command; the guidance does not echo their values.
+Common RPC options such as `--url`, `--token`, `--password`,
 `--timeout`, `--json`, and `--port` are supported.
 
 Suspension blocker messages name active root requests and include run IDs and

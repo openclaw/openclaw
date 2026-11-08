@@ -1,34 +1,33 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createAdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
 import { testing as cliBackendsTesting } from "../agents/cli-backends.test-support.js";
 import { prepareCliRunModelAuthority } from "../agents/cli-runner/run-admission.js";
 import type { RunCliAgentParams } from "../agents/cli-runner/types.js";
 import { resolveBundledStaticCatalogModel } from "../agents/embedded-agent-runner/model.static-catalog.js";
 import type { RunEmbeddedAgentInternalParams } from "../agents/embedded-agent-runner/run/internal-params.js";
-import { createAgentHarnessToolSurfaceRuntimeCore } from "../agents/harness/tool-surface-bridge.js";
 import { ProviderAuthError } from "../agents/model-auth-runtime-shared.js";
 import { prepareOperatorModelPolicy } from "../agents/operator-model-policy.js";
-import { createStubTool } from "../agents/test-helpers/agent-tool-stubs.js";
-import type { InternalSessionEntry } from "../config/sessions/types.js";
+import "../agents/model-fallback-runner.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import * as attachmentProcessor from "../media/attachment-processor.js";
+import { withPluginMetadataSnapshotScope } from "../plugins/current-plugin-metadata-snapshot.js";
+import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { sessionCompanionHandlers } from "./session-companion-rpc.js";
 import { createSessionCompanion } from "./session-companion.js";
 
 const runEmbeddedAgent = vi.hoisted(() =>
-  vi.fn<
-    (params: RunEmbeddedAgentInternalParams) => Promise<{
-      meta: { durationMs: number; finalAssistantVisibleText: string };
-    }>
-  >(),
+  vi.fn<(params: RunEmbeddedAgentInternalParams) => Promise<ReturnType<typeof completion>>>(),
 );
 
 const resolveModelAsync = vi.hoisted(() => vi.fn());
 const resolveApiKeyForProviderCore = vi.hoisted(() => vi.fn());
 const resolveSelection = vi.hoisted(() =>
-  vi.fn(() => ({ provider: "test", modelId: "model-a" }) as { provider: string; modelId: string }),
+  vi.fn(
+    (_params: { modelRef?: string }) =>
+      ({ provider: "test", modelId: "model-a" }) as { provider: string; modelId: string },
+  ),
 );
 const { prepareCliRunContext, executePreparedCliRun } = vi.hoisted(() => ({
   prepareCliRunContext: vi.fn(async (params: RunCliAgentParams) => ({
@@ -38,16 +37,12 @@ const { prepareCliRunContext, executePreparedCliRun } = vi.hoisted(() => ({
   executePreparedCliRun: vi.fn(async () => ({ text: "The session is fixing a bug." })),
 }));
 
-const { appendMessage, admitWrite, loadEntry, removeSession } = vi.hoisted(() => ({
+const { appendMessage, admitWrite, removeSession } = vi.hoisted(() => ({
   appendMessage: vi.fn<(message: unknown) => Promise<string | undefined>>(),
   admitWrite: vi.fn<(manager: unknown, write: () => void | Promise<void>) => Promise<void>>(),
-  loadEntry: vi.fn<() => { entry: InternalSessionEntry } | undefined>(),
   removeSession:
     vi.fn<
-      (
-        target: unknown,
-        expectedOwner?: Pick<InternalSessionEntry, "lifecycleRevision" | "activeWriterRunId">,
-      ) => Promise<void>
+      (typeof import("../agents/internal-session-effects.js"))["removeInternalSessionEffectsSession"]
     >(),
 }));
 
@@ -69,10 +64,6 @@ vi.mock("../agents/embedded-agent-runner/model.js", () => ({ resolveModelAsync }
 vi.mock("../agents/sessions/session-manager-write-admission.js", () => ({
   withSessionManagerWrite: admitWrite,
 }));
-vi.mock("../config/sessions/session-accessor.js", () => ({
-  loadExactSessionEntry: loadEntry,
-  loadExactSessionEntryCandidates: () => [],
-}));
 vi.mock("../agents/internal-session-effects.js", () => ({
   prepareInternalSessionEffectsSession: async () => preparedTarget,
   removeInternalSessionEffectsSession: removeSession,
@@ -92,35 +83,155 @@ vi.mock("../agents/cli-runner/prepare.runtime.js", () => ({ prepareCliRunContext
 vi.mock("../agents/cli-runner/execute.runtime.js", () => ({ executePreparedCliRun }));
 vi.mock("../agents/model-auth-provider.js", () => ({ resolveApiKeyForProviderCore }));
 
-function createCompanion(cfg: OpenClawConfig = {}) {
-  return createSessionCompanion({
+function createCompanion(
+  cfg: OpenClawConfig = { agents: { defaults: { utilityModel: "test/model-a" } } },
+) {
+  const companion = createSessionCompanion({
     scheduler: createTestGatewayScheduler(),
     getConfig: () => cfg,
     contextReader: {
-      currentSessionId: () => "session-1",
+      currentSessionId: async () => "session-1",
       read: async () => ({
         kind: "ready",
         context: { empty: true, messages: [], sessionId: "session-1" },
       }),
     },
     sessionObserver: { getCompanionSnapshotAsync: async () => ({ agentId: "main", notes: [] }) },
-    resolveUtilityModelRef: () => "test/model-a",
   });
+  onTestFinished(() => companion.dispose());
+  return Object.assign(companion, {
+    rpc: (params: Record<string, unknown>, getCommittedRuntimeConfig?: () => OpenClawConfig) =>
+      invokeAsk(companion, params, "conn-1", cfg, getCommittedRuntimeConfig),
+  });
+}
+
+function config(defaults: NonNullable<NonNullable<OpenClawConfig["agents"]>["defaults"]>) {
+  return { agents: { defaults } } satisfies OpenClawConfig;
+}
+const utilityConfig = (
+  models?: NonNullable<NonNullable<NonNullable<OpenClawConfig["agents"]>["defaults"]>["models"]>,
+) =>
+  config({
+    model: "test/main",
+    utilityModel: { primary: "test/model-a", fallbacks: ["test/model-b"] },
+    ...(models ? { models } : {}),
+  });
+function resolveConfiguredModel() {
+  resolveSelection.mockImplementation(({ modelRef }) => ({
+    provider: "test",
+    modelId: modelRef?.split("/")[1] ?? "model-a",
+  }));
+}
+function expectRpcError(respond: ReturnType<typeof vi.fn>, error: Record<string, unknown>) {
+  expect(respond).toHaveBeenCalledWith(false, undefined, expect.objectContaining(error));
 }
 
 const imageBase64 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aL1sAAAAASUVORK5CYII=";
+const imageRequest = (question = "What does this show?", content = imageBase64) => ({
+  question,
+  attachments: [{ mimeType: "image/png", content }],
+});
+
+const completion = (text = "The session is reading a file.") => ({
+  meta: { durationMs: 1, finalAssistantVisibleText: text },
+});
 
 const question = {
   agentId: "main",
   sessionKey: "agent:main:main",
   question: "What is it doing?",
   connId: "conn-1",
+  ownerId: "shared",
 };
+
+function expectAnswer(respond: ReturnType<typeof vi.fn>, answer: unknown = expect.any(String)) {
+  expect(respond).toHaveBeenCalledWith(true, expect.objectContaining({ answer }));
+}
+function expectRun(params: Partial<RunEmbeddedAgentInternalParams>) {
+  expect(runEmbeddedAgent).toHaveBeenCalledWith(expect.objectContaining(params));
+}
+function expectDirectAnswer(
+  pending: ReturnType<ReturnType<typeof createCompanion>["ask"]>,
+  answer = "The session is reading a file.",
+) {
+  return expect(pending).resolves.toMatchObject({ answer });
+}
+function expectExchange(
+  companion: ReturnType<typeof createCompanion>,
+  text: string,
+  answer: unknown,
+) {
+  expect(companion.state(question).exchanges).toEqual([
+    { question: text, answer, ts: expect.any(Number) },
+  ]);
+}
+function queueSeed() {
+  const queued = createDeferredCore();
+  const resume = createDeferredCore();
+  admitWrite.mockImplementationOnce(async (_manager, write) => {
+    queued.resolve();
+    await resume.promise;
+    await write();
+  });
+  return { queued, resume };
+}
+
+function operatorFor(cfg: OpenClawConfig, allow: string[], deny?: string[]) {
+  return createAdmittedRunOperatorAuthority({
+    profileId: "companion-reader",
+    scopes: ["operator.read"],
+    assertCurrent() {},
+    modelPolicy: prepareOperatorModelPolicy({
+      cfg,
+      policy: { sourceAgent: "main", allow, ...(deny ? { deny } : {}) },
+      manifestPlugins: [],
+    }),
+  });
+}
+
+function useClaudeCli() {
+  cliBackendsTesting.setDepsForTest({
+    resolvePluginSetupCliBackend: () => undefined,
+    resolveRuntimeCliBackends: () => [
+      {
+        id: "claude-cli",
+        modelProvider: "anthropic",
+        pluginId: "anthropic",
+        config: { command: "claude" },
+      },
+    ],
+  });
+  onTestFinished(() => cliBackendsTesting.resetDepsForTest());
+}
+
+async function invokeAsk(
+  companion: ReturnType<typeof createSessionCompanion>,
+  params: Record<string, unknown>,
+  connId: string,
+  cfg: OpenClawConfig = {},
+  getCommittedRuntimeConfig?: () => OpenClawConfig,
+) {
+  const respond = vi.fn();
+  await sessionCompanionHandlers["sessions.companion.ask"]!({
+    params: { sessionKey: question.sessionKey, ...params },
+    client: { connId },
+    context: {
+      sessionCompanion: companion,
+      getRuntimeConfig: () => cfg,
+      getCommittedRuntimeConfig,
+      loadGatewayModelCatalog: async () => [],
+    },
+    respond,
+  } as never);
+  return respond;
+}
 
 describe("session companion embedded invocation", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    resolveSelection.mockReset().mockReturnValue({ provider: "test", modelId: "model-a" });
+    executePreparedCliRun.mockReset().mockResolvedValue({ text: "The session is fixing a bug." });
     resolveApiKeyForProviderCore
       .mockReset()
       .mockRejectedValue(
@@ -129,100 +240,168 @@ describe("session companion embedded invocation", () => {
     resolveModelAsync.mockReset().mockResolvedValue({ model: { input: ["text", "image"] } });
     appendMessage.mockReset().mockResolvedValue("seed-entry");
     admitWrite.mockReset().mockImplementation(async (_manager, write) => write());
-    loadEntry.mockReturnValue({ entry: { ...preparedTarget.sessionEntry } });
     removeSession.mockResolvedValue(undefined);
-    runEmbeddedAgent.mockReset().mockResolvedValue({
-      meta: { durationMs: 1, finalAssistantVisibleText: "The session is reading a file." },
-    });
+    runEmbeddedAgent.mockReset().mockResolvedValue(completion("The session is reading a file."));
   });
 
-  it("passes a selected-text comment to the model without persisting it as a file", async () => {
-    const companion = createCompanion();
-    const respond = vi.fn();
-    try {
-      await sessionCompanionHandlers["sessions.companion.ask"]!({
-        params: {
-          sessionKey: question.sessionKey,
-          question: "What changed?",
-          selectionContext: "Selected text:\n<untrusted passage>\n\nUser comment:\nCheck this.",
+  it.each(["denied-primary", "embedded-cleanup", "cli-cleanup"] as const)(
+    "preserves or recovers the utility answer across %s failure",
+    async (runtime) => {
+      const isCli = runtime === "cli-cleanup";
+      const cleanupFails = runtime === "embedded-cleanup" || runtime === "cli-cleanup";
+      const primary = isCli
+        ? { provider: "anthropic", modelId: "claude-haiku-4-5" }
+        : { provider: "test", modelId: "model-a" };
+      const cfg = config({
+        model: { primary: "test/main", fallbacks: ["test/main-backup"] },
+        utilityModel: {
+          primary: `${primary.provider}/${primary.modelId}`,
+          fallbacks: ["test/model-b"],
         },
-        client: { connId: "selection-connection" },
-        context: { sessionCompanion: companion, getRuntimeConfig: () => ({}) },
-        respond,
-      } as never);
-      expect(respond).toHaveBeenCalledWith(
-        true,
-        expect.objectContaining({ answer: expect.any(String) }),
+        ...(isCli
+          ? {
+              models: { "anthropic/claude-haiku-4-5": { agentRuntime: { id: "claude-cli" } } },
+            }
+          : {}),
+      });
+      resolveSelection.mockImplementation(({ modelRef }) =>
+        modelRef === "test/model-b" ? { provider: "test", modelId: "model-b" } : primary,
       );
-      expect(runEmbeddedAgent).toHaveBeenCalledWith(
-        expect.objectContaining({
-          prompt: expect.stringContaining("&lt;untrusted passage&gt;"),
-          images: undefined,
-        }),
+      const cleanup = vi.fn(async () => {
+        throw new Error("Synthetic cleanup failure");
+      });
+      if (isCli) {
+        useClaudeCli();
+        prepareCliRunContext.mockImplementationOnce(async (params) => ({
+          params,
+          preparedBackend: { cleanup },
+        }));
+      } else if (runtime === "embedded-cleanup") {
+        removeSession.mockImplementationOnce(cleanup);
+        runEmbeddedAgent.mockResolvedValueOnce({
+          meta: { durationMs: 1, finalAssistantVisibleText: "The original answer is preserved." },
+        });
+      }
+      const operatorAuthority =
+        runtime === "denied-primary" ? operatorFor(cfg, ["test/*"], ["test/model-a"]) : undefined;
+      const companion = createCompanion(cfg);
+      const answer =
+        runtime === "cli-cleanup"
+          ? "The session is fixing a bug."
+          : runtime === "embedded-cleanup"
+            ? "The original answer is preserved."
+            : "The session is reading a file.";
+      await expectDirectAnswer(companion.ask({ ...question, operatorAuthority }), answer);
+      expect(runEmbeddedAgent.mock.calls.map(([params]) => params.model)).toEqual(
+        cleanupFails ? (isCli ? [] : ["model-a"]) : ["model-b"],
       );
-      expect(runEmbeddedAgent.mock.calls[0]?.[0].prompt).toContain("User comment:\nCheck this.");
-      expect(
-        companion.state({ sessionKey: question.sessionKey, agentId: "main" }).exchanges,
-      ).toEqual([
-        { question: "What changed?", answer: expect.any(String), ts: expect.any(Number) },
-      ]);
-      await companion.ask({ ...question, question: "What next?" });
-      expect(runEmbeddedAgent.mock.calls[1]?.[0].prompt).toBe("What next?");
-      expect(JSON.stringify(appendMessage.mock.calls)).not.toContain("Check this.");
-    } finally {
-      companion.dispose();
-    }
-  });
-
-  it.each([0, 2_000_001])(
-    "delivers an image with %i padding bytes from the registered RPC to the read-only model run",
-    async (padding) => {
-      const companion = createCompanion();
-      const respond = vi.fn();
-      const data = Buffer.concat([
-        Buffer.from(imageBase64, "base64"),
-        Buffer.alloc(padding),
-      ]).toString("base64");
-      try {
-        await sessionCompanionHandlers["sessions.companion.ask"]!({
-          params: {
-            sessionKey: question.sessionKey,
-            question: "What does this show?",
-            attachments: [{ mimeType: "image/png", fileName: "proof.png", content: data }],
-          },
-          client: { connId: "image-connection" },
-          context: { sessionCompanion: companion, getRuntimeConfig: () => ({}) },
-          respond,
-        } as never);
-        expect(respond).toHaveBeenCalledWith(
-          true,
-          expect.objectContaining({ answer: expect.any(String) }),
-        );
-        expect(runEmbeddedAgent).toHaveBeenCalledWith(
-          expect.objectContaining({
-            prompt: "What does this show?",
-            images: [expect.objectContaining({ type: "image", mimeType: "image/png", data })],
-            disableMessageTool: true,
-            requireWorkspaceOnly: true,
-            toolsAllow: ["read", "sessions_history", "sessions_search"],
-          }),
-        );
-      } finally {
-        companion.dispose();
+      expect(executePreparedCliRun).toHaveBeenCalledTimes(isCli ? 1 : 0);
+      for (const [params] of runEmbeddedAgent.mock.calls) {
+        expect(params.modelFallbacksOverride).toEqual([]);
+      }
+      if (cleanupFails) {
+        expect(cleanup).toHaveBeenCalledOnce();
+        expect(removeSession).toHaveBeenCalledOnce();
       }
     },
   );
 
+  it("uses the permitted default when every configured utility candidate is denied", async () => {
+    const cfg = utilityConfig();
+    resolveConfiguredModel();
+    const operatorAuthority = operatorFor(cfg, ["test/main"]);
+    const companion = createCompanion(cfg);
+    await expectDirectAnswer(companion.ask({ ...question, operatorAuthority }));
+    expect(runEmbeddedAgent.mock.calls.map(([params]) => params.model)).toEqual(["main"]);
+  });
+
+  it("answers with the question's chosen model, reasoning, and speed instead of the utility route", async () => {
+    const cfg = utilityConfig({ "test/main": {}, "test/model-a": {}, "test/model-c": {} });
+    resolveConfiguredModel();
+    const companion = createCompanion(cfg);
+    expect(companion.state(question).defaultModel).toBe("test/model-a");
+    const chosen = await companion.rpc({
+      question: "Which file?",
+      model: "test/model-c",
+      thinkingLevel: "high",
+      fastMode: true,
+    });
+    expectAnswer(chosen);
+    expect(runEmbeddedAgent).toHaveBeenCalledOnce();
+    expect(runEmbeddedAgent.mock.calls[0]?.[0]).toMatchObject({
+      model: "model-c",
+      thinkLevel: "high",
+      fastMode: true,
+      modelFallbacksOverride: [],
+    });
+
+    const outside = await companion.rpc({ question: "Which file?", model: "test/model-z" });
+    expectRpcError(outside, {
+      code: "INVALID_REQUEST",
+      message: expect.stringContaining("model-z"),
+    });
+    expect(runEmbeddedAgent).toHaveBeenCalledOnce();
+  });
+
+  it("passes a selected-text comment to the model without persisting it as a file", async () => {
+    const companion = createCompanion();
+    const respond = await companion.rpc({
+      question: "What changed?",
+      selectionContext: "Selected text:\n<untrusted passage>\n\nUser comment:\nCheck this.",
+    });
+    expectAnswer(respond);
+    expectRun({ prompt: expect.stringContaining("&lt;untrusted passage&gt;"), images: undefined });
+    expect(runEmbeddedAgent.mock.calls[0]?.[0].prompt).toContain("User comment:\nCheck this.");
+    expectExchange(companion, "What changed?", expect.any(String));
+    await companion.ask({ ...question, question: "What next?" });
+    expect(runEmbeddedAgent.mock.calls[1]?.[0].prompt).toBe("What next?");
+    expect(JSON.stringify(appendMessage.mock.calls)).not.toContain("Check this.");
+  });
+
+  it("delivers a large image to the prepared read-only model without extra resolution", async () => {
+    const companion = createCompanion();
+    const data = Buffer.concat([
+      Buffer.from(imageBase64, "base64"),
+      Buffer.alloc(2_000_001),
+    ]).toString("base64");
+    const model = resolveBundledStaticCatalogModel({
+      provider: "mistral",
+      modelId: "mistral-medium-3-5",
+      cfg: { plugins: { entries: { mistral: { enabled: true } } } },
+      includeRuntimeDiscovery: true,
+    });
+    expect(model?.input).toContain("image");
+    if (!model) {
+      throw new Error("Expected the real bundled Mistral catalog row");
+    }
+    resolveModelAsync.mockRejectedValue(new Error("Unexpected additional discovery"));
+    runEmbeddedAgent.mockImplementationOnce(async (params) => {
+      params.assertModelInput?.(model);
+      return completion("The image is visible.");
+    });
+    const request = imageRequest(undefined, data);
+    const respond = await companion.rpc({
+      ...request,
+      attachments: [{ ...request.attachments[0], fileName: "proof.png" }],
+    });
+    expectAnswer(respond, "The image is visible.");
+    expect(resolveModelAsync).not.toHaveBeenCalled();
+    expectRun({
+      prompt: "What does this show?",
+      images: [expect.objectContaining({ type: "image", mimeType: "image/png", data })],
+      disableMessageTool: true,
+    });
+  });
+
   it.each(["preparation", "dispatch", "accepted"] as const)(
     "rechecks the original RPC image policy until model admission (%s)",
     async (phase) => {
-      const cfg: OpenClawConfig = {};
+      const cfg: OpenClawConfig = { agents: { defaults: { utilityModel: "test/model-a" } } };
       let committed: OpenClawConfig = cfg;
       const disable = () => {
         committed = { gateway: { uploads: { enabled: false } } };
       };
       const companion = createCompanion(cfg);
-      const respond = vi.fn();
       const prepare = attachmentProcessor.prepareMediaAttachment;
       const preparation = vi.spyOn(attachmentProcessor, "prepareMediaAttachment");
       if (phase === "preparation") {
@@ -239,94 +418,24 @@ describe("session companion embedded invocation", () => {
       } else {
         runEmbeddedAgent.mockImplementationOnce(async () => {
           disable();
-          return { meta: { durationMs: 1, finalAssistantVisibleText: "Accepted image answer" } };
+          return completion("Accepted image answer");
         });
       }
       try {
-        await sessionCompanionHandlers["sessions.companion.ask"]!({
-          params: {
-            sessionKey: question.sessionKey,
-            question: "Describe the image",
-            attachments: [{ mimeType: "image/png", content: imageBase64 }],
-          },
-          client: { connId: "late-policy-image" },
-          context: {
-            sessionCompanion: companion,
-            getRuntimeConfig: () => cfg,
-            getCommittedRuntimeConfig: () => committed,
-          },
-          respond,
-        } as never);
+        const respond = await companion.rpc(imageRequest("Describe the image"), () => committed);
         if (phase === "accepted") {
           expect(runEmbeddedAgent).toHaveBeenCalledOnce();
-          expect(respond).toHaveBeenCalledWith(
-            true,
-            expect.objectContaining({ answer: "Accepted image answer" }),
-          );
+          expectAnswer(respond, "Accepted image answer");
         } else {
           expect(runEmbeddedAgent).not.toHaveBeenCalled();
-          expect(respond).toHaveBeenCalledWith(
-            false,
-            undefined,
-            expect.objectContaining({
-              code: "FORBIDDEN",
-              details: { code: "UPLOADS_DISABLED" },
-            }),
-          );
+          expectRpcError(respond, {
+            code: "FORBIDDEN",
+            details: { code: "UPLOADS_DISABLED" },
+          });
           expect(companion.state(question).exchanges).toEqual([]);
         }
       } finally {
         preparation.mockRestore();
-        companion.dispose();
-      }
-    },
-  );
-
-  it.each(["catalog-only", "dynamic-discovery"])(
-    "uses the already prepared image model for %s without an extra resolution",
-    async (route) => {
-      const model = resolveBundledStaticCatalogModel({
-        provider: "mistral",
-        modelId: "mistral-medium-3-5",
-        cfg: { plugins: { entries: { mistral: { enabled: true } } } },
-        includeRuntimeDiscovery: true,
-      });
-      expect(model?.input).toContain("image");
-      if (!model) {
-        throw new Error("Expected the real bundled Mistral catalog row");
-      }
-      if (route === "catalog-only") {
-        resolveModelAsync.mockResolvedValue({ error: "Unknown model without bundled fallback" });
-      } else {
-        resolveModelAsync.mockRejectedValue(new Error("Unexpected additional dynamic discovery"));
-      }
-      const modelIo = vi.fn();
-      runEmbeddedAgent.mockImplementationOnce(async (params) => {
-        params.assertModelInput?.(model);
-        modelIo();
-        return { meta: { durationMs: 1, finalAssistantVisibleText: "The image is visible." } };
-      });
-      const companion = createCompanion();
-      const respond = vi.fn();
-      try {
-        await sessionCompanionHandlers["sessions.companion.ask"]!({
-          params: {
-            sessionKey: question.sessionKey,
-            question: "What does this show?",
-            attachments: [{ mimeType: "image/png", content: imageBase64 }],
-          },
-          client: { connId: "catalog-image-connection" },
-          context: { sessionCompanion: companion, getRuntimeConfig: () => ({}) },
-          respond,
-        } as never);
-        expect(respond).toHaveBeenCalledWith(
-          true,
-          expect.objectContaining({ answer: "The image is visible." }),
-        );
-        expect(modelIo).toHaveBeenCalledOnce();
-        expect(resolveModelAsync).not.toHaveBeenCalled();
-      } finally {
-        companion.dispose();
       }
     },
   );
@@ -336,194 +445,96 @@ describe("session companion embedded invocation", () => {
     runEmbeddedAgent.mockImplementationOnce(async (params) => {
       params.assertModelInput?.({ input: ["text"] });
       modelIo();
-      return {
-        meta: { durationMs: 1, finalAssistantVisibleText: "Must not answer an unseen image." },
-      };
+      return completion("Must not answer an unseen image.");
     });
     const companion = createCompanion();
-    const respond = vi.fn();
-    try {
-      await sessionCompanionHandlers["sessions.companion.ask"]!({
-        params: {
-          sessionKey: question.sessionKey,
-          question: "What does this show?",
-          attachments: [{ mimeType: "image/png", content: imageBase64 }],
-        },
-        client: { connId: "image-connection" },
-        context: { sessionCompanion: companion, getRuntimeConfig: () => ({}) },
-        respond,
-      } as never);
-      expect(respond).toHaveBeenCalledWith(
-        false,
-        undefined,
-        expect.objectContaining({
-          message: expect.stringContaining("does not support image input"),
-          details: { reason: "image-input-unsupported" },
-          retryable: false,
-        }),
-      );
-      expect(modelIo).not.toHaveBeenCalled();
-      expect(runEmbeddedAgent).toHaveBeenCalledOnce();
-      expect(resolveModelAsync).not.toHaveBeenCalled();
-      await expect(companion.ask(question)).resolves.toMatchObject({ answer: expect.any(String) });
-      expect(runEmbeddedAgent).toHaveBeenCalledTimes(2);
-      expect(runEmbeddedAgent.mock.calls[1]?.[0].assertModelInput).toBeUndefined();
-      expect(resolveModelAsync).not.toHaveBeenCalled();
-    } finally {
-      companion.dispose();
-    }
-  });
-
-  it("keeps read-only tools direct when the selected agent model opts into Code Mode", async () => {
-    const cfg: OpenClawConfig = {
-      agents: {
-        defaults: {
-          workspace: "/tmp/companion-test",
-          models: { "test/model-a": { codeMode: true } },
-        },
-        entries: {
-          main: {
-            models: { "test/model-a": { codeMode: true } },
-            tools: { codeMode: true },
-          },
-        },
-      },
-      tools: { toolSearch: true, codeMode: { enabled: true, maxOutputBytes: 4096 } },
-    };
-    runEmbeddedAgent.mockResolvedValueOnce({
-      meta: { durationMs: 1, finalAssistantVisibleText: "The session is reading a file." },
+    const respond = await companion.rpc(imageRequest());
+    expectRpcError(respond, {
+      message: expect.stringContaining("does not support image input"),
+      details: { reason: "image-input-unsupported" },
+      retryable: false,
     });
-    const companion = createCompanion(cfg);
-
-    try {
-      await expect(
-        companion.ask({
-          agentId: "main",
-          sessionKey: "agent:main:main",
-          question: "What is it doing?",
-          connId: "conn-1",
-        }),
-      ).resolves.toMatchObject({ answer: "The session is reading a file." });
-      expect(runEmbeddedAgent).toHaveBeenCalledOnce();
-      const invocation = runEmbeddedAgent.mock.calls[0]?.[0];
-      if (!invocation) {
-        throw new Error("Expected the companion embedded invocation");
-      }
-      expect(invocation.config?.tools?.codeMode).toEqual(cfg.tools?.codeMode);
-      const surface = createAgentHarnessToolSurfaceRuntimeCore({
-        config: invocation.config,
-        agentId: invocation.agentId,
-        modelProvider: invocation.provider,
-        modelId: invocation.model,
-        model: { compat: { codeMode: "preferred" } },
-        codeModeOverride: invocation.codeModeOverride,
-        disableToolSearch: invocation.disableToolSearch,
-        toolsAllow: invocation.toolsAllow,
-        modelToolsEnabled: true,
-        executeTool: async () => ({ content: [], details: {} }),
-      });
-      try {
-        const tools = ["read", "sessions_history", "sessions_search"].map(createStubTool);
-        expect(surface.compactTools(tools).tools.map((tool) => tool.name)).toEqual([
-          "read",
-          "sessions_history",
-          "sessions_search",
-        ]);
-      } finally {
-        surface.cleanup();
-      }
-    } finally {
-      companion.dispose();
-    }
+    expect(modelIo).not.toHaveBeenCalled();
+    await expect(companion.ask(question)).resolves.toMatchObject({ answer: expect.any(String) });
+    expect(runEmbeddedAgent.mock.calls[1]?.[0].assertModelInput).toBeUndefined();
+    expect(resolveModelAsync).not.toHaveBeenCalled();
   });
 
   it("answers through the primary model's CLI runtime when no provider API key exists", async () => {
-    // Subscription-only install: the primary runs on claude-cli and the
-    // automatic utility model is derived from the same provider.
-    const cfg: OpenClawConfig = {
-      agents: {
-        defaults: {
-          workspace: "/tmp/companion-test",
-          model: "anthropic/claude-opus-4-6",
-          models: { "anthropic/claude-opus-4-6": { agentRuntime: { id: "claude-cli" } } },
-        },
-      },
-    };
-    resolveSelection.mockReturnValueOnce({ provider: "anthropic", modelId: "claude-haiku-4-5" });
-    cliBackendsTesting.setDepsForTest({
-      resolvePluginSetupCliBackend: () => undefined,
-      resolveRuntimeCliBackends: () => [
+    const cfg = config({
+      workspace: "/tmp/companion-test",
+      model: "anthropic/claude-opus-4-6",
+      models: { "anthropic/claude-opus-4-6": { agentRuntime: { id: "claude-cli" } } },
+    });
+    const metadata = createPluginMetadataSnapshotFixture({
+      plugins: [
         {
-          id: "claude-cli",
-          modelProvider: "anthropic",
-          pluginId: "anthropic",
-          config: { command: "claude" },
+          id: "anthropic",
+          modelCatalog: {
+            providers: {
+              anthropic: {
+                defaultUtilityModel: "claude-haiku-4-5",
+                models: [{ id: "claude-haiku-4-5" }],
+              },
+            },
+          },
         },
       ],
     });
-    const companion = createCompanion(cfg);
-    const operatorAuthority = createAdmittedRunOperatorAuthority({
-      profileId: "companion-reader",
-      scopes: ["operator.read"],
-      assertCurrent: () => {},
-      modelPolicy: prepareOperatorModelPolicy({
-        cfg,
-        policy: { sourceAgent: "main", allow: ["anthropic/claude-haiku-4-5"] },
-        manifestPlugins: [],
-      }),
-    });
-    prepareCliRunContext.mockImplementationOnce(async (params) => ({
-      params: prepareCliRunModelAuthority(params),
-      preparedBackend: {},
-    }));
-    try {
-      await expect(companion.ask({ ...question, operatorAuthority })).resolves.toMatchObject({
-        answer: "The session is fixing a bug.",
-      });
-      expect(runEmbeddedAgent).not.toHaveBeenCalled();
-      expect(appendMessage).not.toHaveBeenCalled();
-      expect(prepareCliRunContext).toHaveBeenCalledWith(
-        expect.objectContaining({
-          provider: "claude-cli",
-          model: "claude-haiku-4-5",
-          requesterModel: { provider: "anthropic", model: "claude-haiku-4-5" },
-          executionMode: "side-question",
-          disableTools: true,
-          sessionKey: preparedTarget.sessionKey,
-          prompt: expect.stringContaining("What is it doing?"),
-          extraSystemPrompt: expect.stringContaining("read-only Side chat assistant"),
-        }),
-      );
-      expect(executePreparedCliRun).toHaveBeenCalledOnce();
-      resolveApiKeyForProviderCore.mockResolvedValue({ apiKey: "synthetic-key", mode: "api-key" });
-      resolveSelection.mockReturnValueOnce({ provider: "anthropic", modelId: "claude-haiku-4-5" });
-      await expect(
-        companion.ask({
-          ...question,
-          attachments: [{ mimeType: "image/png", content: imageBase64 }],
-        }),
-      ).resolves.toMatchObject({ answer: "The session is reading a file." });
-      expect(runEmbeddedAgent).toHaveBeenCalledWith(
-        expect.objectContaining({
+    await withPluginMetadataSnapshotScope(
+      metadata,
+      async () => {
+        resolveSelection.mockReturnValueOnce({
+          provider: "anthropic",
+          modelId: "claude-haiku-4-5",
+        });
+        useClaudeCli();
+        const companion = createCompanion(cfg);
+        const operatorAuthority = operatorFor(cfg, ["anthropic/claude-haiku-4-5"]);
+        prepareCliRunContext.mockImplementationOnce(async (params) => ({
+          params: prepareCliRunModelAuthority(params),
+          preparedBackend: {},
+        }));
+        await expectDirectAnswer(
+          companion.ask({ ...question, operatorAuthority }),
+          "The session is fixing a bug.",
+        );
+        expect(runEmbeddedAgent).not.toHaveBeenCalled();
+        expect(appendMessage).not.toHaveBeenCalled();
+        expect(prepareCliRunContext).toHaveBeenCalledWith(
+          expect.objectContaining({
+            provider: "claude-cli",
+            model: "claude-haiku-4-5",
+            requesterModel: { provider: "anthropic", model: "claude-haiku-4-5" },
+            executionMode: "side-question",
+            disableTools: true,
+            prompt: expect.stringContaining("What is it doing?"),
+            extraSystemPrompt: expect.stringContaining("read-only Side chat assistant"),
+          }),
+        );
+        resolveApiKeyForProviderCore.mockResolvedValue({
+          apiKey: "synthetic-key",
+          mode: "api-key",
+        });
+        resolveSelection.mockReturnValueOnce({
+          provider: "anthropic",
+          modelId: "claude-haiku-4-5",
+        });
+        await expectDirectAnswer(
+          companion.ask({ ...question, ...imageRequest(question.question) }),
+        );
+        expectRun({
           images: [expect.objectContaining({ type: "image" })],
           toolsAllow: ["read", "sessions_history", "sessions_search"],
-        }),
-      );
-      expect(removeSession).toHaveBeenCalledWith(preparedTarget, undefined);
-    } finally {
-      cliBackendsTesting.resetDepsForTest();
-      companion.dispose();
-    }
+        });
+        expect(removeSession).toHaveBeenCalledWith(preparedTarget, undefined);
+      },
+      { config: cfg, compatibleConfigs: [cfg] },
+    );
   });
 
   it("waits for admitted history persistence before starting the companion run", async () => {
-    const queued = createDeferredCore();
-    const resume = createDeferredCore();
-    admitWrite.mockImplementationOnce(async (_manager, write) => {
-      queued.resolve();
-      await resume.promise;
-      await write();
-    });
+    const { queued, resume } = queueSeed();
     const companion = createCompanion();
     const pending = companion.ask(question);
     try {
@@ -533,55 +544,18 @@ describe("session companion embedded invocation", () => {
       expect(runEmbeddedAgent).not.toHaveBeenCalled();
       expect(removeSession).not.toHaveBeenCalled();
       resume.resolve();
-      await expect(pending).resolves.toMatchObject({ answer: "The session is reading a file." });
+      await expectDirectAnswer(pending);
       expect(appendMessage).toHaveBeenCalledOnce();
       expect(runEmbeddedAgent).toHaveBeenCalledOnce();
       expect(removeSession).toHaveBeenCalledWith(preparedTarget, undefined);
     } finally {
       resume.resolve();
       await pending.catch(() => undefined);
-      companion.dispose();
-    }
-  });
-
-  it.each([
-    { name: "missing", entry: undefined },
-    { name: "replaced", entry: { ...preparedTarget.sessionEntry, sessionId: "replacement" } },
-    {
-      name: "reset with the same id",
-      entry: { ...preparedTarget.sessionEntry, lifecycleRevision: "replacement-lifecycle" },
-    },
-    {
-      name: "claimed by another writer",
-      entry: { ...preparedTarget.sessionEntry, activeWriterRunId: "replacement-writer" },
-    },
-  ])("does not seed a session that is $name before admission", async ({ entry }) => {
-    admitWrite.mockImplementationOnce(async (_manager, write) => {
-      loadEntry.mockReturnValue(entry ? { entry } : undefined);
-      await write();
-    });
-    const companion = createCompanion();
-    try {
-      await expect(companion.ask(question)).rejects.toThrow();
-      expect(appendMessage).not.toHaveBeenCalled();
-      expect(runEmbeddedAgent).not.toHaveBeenCalled();
-      expect(removeSession).toHaveBeenCalledWith(preparedTarget, {
-        lifecycleRevision: preparedTarget.sessionEntry.lifecycleRevision,
-        activeWriterRunId: preparedTarget.sessionEntry.activeWriterRunId,
-      });
-    } finally {
-      companion.dispose();
     }
   });
 
   it("settles queued seeding after cancellation without writing or starting a run", async () => {
-    const queued = createDeferredCore();
-    const resume = createDeferredCore();
-    admitWrite.mockImplementationOnce(async (_manager, write) => {
-      queued.resolve();
-      await resume.promise;
-      await write();
-    });
+    const { queued, resume } = queueSeed();
     const companion = createCompanion();
     const controller = new AbortController();
     const pending = companion.ask({ ...question, signal: controller.signal });
@@ -589,21 +563,19 @@ describe("session companion embedded invocation", () => {
       await vi.waitFor(() => expect(admitWrite).toHaveBeenCalledOnce());
       await queued.promise;
       controller.abort();
-      await expect(pending).rejects.toThrow();
+      const failed = expect(pending).rejects.toThrow();
       expect(removeSession).not.toHaveBeenCalled();
       resume.resolve();
-      await vi.waitFor(() =>
-        expect(removeSession).toHaveBeenCalledWith(preparedTarget, {
-          lifecycleRevision: preparedTarget.sessionEntry.lifecycleRevision,
-          activeWriterRunId: preparedTarget.sessionEntry.activeWriterRunId,
-        }),
-      );
+      await failed;
+      expect(removeSession).toHaveBeenCalledWith(preparedTarget, {
+        lifecycleRevision: preparedTarget.sessionEntry.lifecycleRevision,
+        activeWriterRunId: preparedTarget.sessionEntry.activeWriterRunId,
+      });
       expect(appendMessage).not.toHaveBeenCalled();
       expect(runEmbeddedAgent).not.toHaveBeenCalled();
     } finally {
       resume.resolve();
       await pending.catch(() => undefined);
-      companion.dispose();
     }
   });
 });

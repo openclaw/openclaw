@@ -18,6 +18,15 @@ export type TranscriptScrollRestoreHost = {
   onReaderScroll(): void;
 };
 
+export function cancelPendingScrollRetry(
+  owner: Pick<TranscriptScrollRestoreHost, "pendingScrollFrame">,
+): void {
+  if (owner.pendingScrollFrame !== null) {
+    cancelAnimationFrame(owner.pendingScrollFrame);
+    owner.pendingScrollFrame = null;
+  }
+}
+
 export function applyPendingScrollOffset(owner: TranscriptScrollRestoreHost): void {
   const pending = owner.offsetState.pendingScrollOffset;
   if (!pending || !owner.isConnected()) {
@@ -28,16 +37,12 @@ export function applyPendingScrollOffset(owner: TranscriptScrollRestoreHost): vo
     return;
   }
   const maxOffset = maxTranscriptScrollOffset(owner.getScrollElement());
-  if (maxOffset === null) {
+  if (maxOffset === null || (maxOffset === 0 && pending.offset > 0)) {
     pending.observedMaxOffset = undefined;
     pending.stableFrames = 0;
-    pending.zeroMaxFrames = 0;
-    return;
-  }
-  if (maxOffset === 0 && pending.offset > 0) {
-    pending.observedMaxOffset = undefined;
-    pending.stableFrames = 0;
-    if (owner.isContentReady()) {
+    if (maxOffset === null) {
+      pending.zeroMaxFrames = 0;
+    } else if (owner.isContentReady()) {
       if (pending.zeroMaxFrames >= CHAT_TRANSCRIPT_ZERO_MAX_SETTLE_FRAMES) {
         settlePendingScroll(owner, 0);
       } else {

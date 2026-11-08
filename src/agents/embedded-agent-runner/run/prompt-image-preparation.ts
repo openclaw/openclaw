@@ -41,6 +41,7 @@ export async function prepareEmbeddedAttemptPromptExecution(input: {
   }
 
   const { attempt } = input;
+  let localRoots: readonly string[] | undefined;
   const result = await detectAndLoadPromptImages({
     prompt: input.prompt,
     workspaceDir: input.effectiveWorkspace,
@@ -55,7 +56,11 @@ export async function prepareEmbeddedAttemptPromptExecution(input: {
     workspaceOnly: input.effectiveFsWorkspaceOnly,
     localRoots: input.effectiveFsWorkspaceOnly
       ? undefined
-      : getAgentScopedMediaLocalRoots(attempt.config ?? {}, input.mediaOwnerAgentId),
+      : () =>
+          (localRoots ??= getAgentScopedMediaLocalRoots(
+            attempt.config ?? {},
+            input.mediaOwnerAgentId,
+          )),
     sandbox:
       input.sandbox?.enabled && input.sandbox.fsBridge
         ? { root: input.sandbox.workspaceDir, bridge: input.sandbox.fsBridge }

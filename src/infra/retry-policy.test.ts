@@ -10,18 +10,11 @@ async function runRetryCase(params: {
   runnerOptions: RunnerOptions;
   error: unknown;
   expectedCalls: number;
-  expectedValue?: unknown;
-  expectedError?: string;
 }): Promise<void> {
   vi.useFakeTimers();
   const runner = createChannelApiRetryRunner(params.runnerOptions);
-  const fn = params.expectedError
-    ? vi.fn().mockRejectedValue(params.error)
-    : vi.fn().mockRejectedValueOnce(params.error).mockResolvedValueOnce(params.expectedValue);
-  const promise = runner(fn, "test");
-  const assertion = params.expectedError
-    ? expect(promise).rejects.toThrow(params.expectedError)
-    : expect(promise).resolves.toBe(params.expectedValue);
+  const fn = vi.fn().mockRejectedValue(params.error);
+  const assertion = expect(runner(fn, "test")).rejects.toBe(params.error);
   await vi.runAllTimersAsync();
   await assertion;
   expect(fn).toHaveBeenCalledTimes(params.expectedCalls);
@@ -46,74 +39,65 @@ describe("createChannelApiRetryRunner", () => {
   });
 
   it.each([
-    {
-      name: "falls back to regex matching when strictShouldRetry is disabled",
-      runnerOptions: { retry: { ...ZERO_DELAY_RETRY, attempts: 2 }, shouldRetry: () => false },
-      error: Object.assign(new Error("read ECONNRESET"), { code: "ECONNRESET" }),
-      expectedCalls: 2,
-      expectedError: "ECONNRESET",
-    },
-    {
-      name: "suppresses regex fallback when strictShouldRetry is enabled",
-      runnerOptions: {
-        retry: { ...ZERO_DELAY_RETRY, attempts: 2 },
-        shouldRetry: () => false,
-        strictShouldRetry: true,
-      },
-      error: Object.assign(new Error("read ECONNRESET"), { code: "ECONNRESET" }),
-      expectedCalls: 1,
-      expectedError: "ECONNRESET",
-    },
-    {
-      name: "still retries when the strict predicate returns true",
-      runnerOptions: {
-        retry: { ...ZERO_DELAY_RETRY, attempts: 2 },
-        shouldRetry: (err: unknown) => (err as { code?: string }).code === "ECONNREFUSED",
-        strictShouldRetry: true,
-      },
-      error: Object.assign(new Error("ECONNREFUSED"), { code: "ECONNREFUSED" }),
-      expectedCalls: 2,
-      expectedValue: "ok",
-    },
-    {
-      name: "does not retry unrelated errors when neither predicate nor regex match",
-      runnerOptions: { retry: { ...ZERO_DELAY_RETRY, attempts: 2 } },
-      error: Object.assign(new Error("permission denied"), { code: "EACCES" }),
-      expectedCalls: 1,
-      expectedError: "permission denied",
-    },
-    {
-      name: "retries grammY HttpError wrapping network error via .cause traversal",
-      runnerOptions: { retry: { ...ZERO_DELAY_RETRY, attempts: 2 } },
-      error: Object.assign(new Error("Network request for 'sendMessage' failed!"), {
-        cause: new Error("ECONNRESET"),
+    [false, false, 2],
+    [true, false, 1],
+    [true, true, 2],
+  ] as const)(
+    "custom retry predicate (strict=%s, decision=%s)",
+    (strictShouldRetry, decision, expectedCalls) =>
+      runRetryCase({
+        runnerOptions: {
+          retry: { ...ZERO_DELAY_RETRY, attempts: 2 },
+          shouldRetry: () => decision,
+          strictShouldRetry,
+        },
+        error: new Error("read ECONNRESET"),
+        expectedCalls,
       }),
-      expectedCalls: 2,
-      expectedError: "Network request",
-    },
-    {
-      name: "keeps retrying retriable errors until attempts are exhausted",
-      runnerOptions: { retry: ZERO_DELAY_RETRY },
-      error: Object.assign(new Error("connection timeout"), { code: "ETIMEDOUT" }),
-      expectedCalls: 3,
-      expectedError: "connection timeout",
-    },
-    {
-      name: "retries misdirected request errors from Telegram edge nodes",
-      runnerOptions: { retry: ZERO_DELAY_RETRY },
-      error: Object.assign(new Error("421 Misdirected Request"), { status: 421 }),
-      expectedCalls: 3,
-      expectedError: "421 Misdirected Request",
-    },
-  ])("$name", runRetryCase);
+  );
 
-  it("honors nested retry_after hints before retrying", async () => {
-    await expectRetryDelay(
-      { retry: { attempts: 2, minDelayMs: 0, maxDelayMs: 1_000, jitter: 0 } },
-      { message: "429 Too Many Requests", response: { parameters: { retry_after: 1 } } },
-      1_000,
-    );
-  });
+  it.each([
+    [new Error("permission denied"), 1],
+    [new Error("Network request failed!", { cause: new Error("ECONNRESET") }), 3],
+    [new Error("connection timeout"), 3],
+    [new Error("421 Misdirected Request"), 3],
+  ] as const)("classifies channel failure %s", (error, expectedCalls) =>
+    runRetryCase({
+      runnerOptions: { retry: ZERO_DELAY_RETRY },
+      error,
+      expectedCalls,
+    }),
+  );
+
+  it.each(["STATE_DATABASE_READ_ADMISSION_INVALIDATED", undefined])(
+    "keeps closed state admission terminal (%s)",
+    (code) =>
+      runRetryCase({
+        runnerOptions: { retry: ZERO_DELAY_RETRY, shouldRetry: () => true },
+        error: new Error("connection closed", {
+          cause: {
+            code,
+            message:
+              "Shared-state worker is retiring while its actor is in use; close its leases first",
+          },
+        }),
+        expectedCalls: 1,
+      }),
+  );
+
+  it.each([
+    [1, 1_000, undefined, 1_000],
+    [45, 30_000, undefined, 30_000],
+    [45, 30_000, 60_000, 45_000],
+  ] as const)(
+    "honors nested retry_after=%s with delay cap=%s/%s",
+    (seconds, maxDelayMs, retryAfterMaxDelayMs, delay) =>
+      expectRetryDelay(
+        { retry: { ...ZERO_DELAY_RETRY, maxDelayMs }, retryAfterMaxDelayMs },
+        { message: "429 Too Many Requests", response: { parameters: { retry_after: seconds } } },
+        delay,
+      ),
+  );
 
   it("uses an injected retry-after reader instead of the Telegram body default", async () => {
     const retryAfterMs = vi.fn(() => 250);
@@ -124,25 +108,6 @@ describe("createChannelApiRetryRunner", () => {
       250,
     );
     expect(retryAfterMs).toHaveBeenCalledWith(error);
-  });
-
-  it("keeps retry_after hints capped by maxDelayMs by default", async () => {
-    await expectRetryDelay(
-      { retry: { attempts: 2, minDelayMs: 0, maxDelayMs: 30_000, jitter: 0 } },
-      { message: "429 Too Many Requests", response: { parameters: { retry_after: 45 } } },
-      30_000,
-    );
-  });
-
-  it("honors retry_after above maxDelayMs when a separate retry-after cap is configured", async () => {
-    await expectRetryDelay(
-      {
-        retry: { attempts: 2, minDelayMs: 0, maxDelayMs: 30_000, jitter: 0 },
-        retryAfterMaxDelayMs: 60_000,
-      },
-      { message: "429 Too Many Requests", response: { parameters: { retry_after: 45 } } },
-      45_000,
-    );
   });
 });
 

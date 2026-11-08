@@ -55,40 +55,33 @@ internal data class PedometerRecord(
 
 /** Motion data seam for Android sensors and tests. */
 internal interface MotionDataSource {
-  fun isActivityAvailable(context: Context): Boolean
+  fun isActivityAvailable(): Boolean
 
-  fun isPedometerAvailable(context: Context): Boolean
+  fun isPedometerAvailable(): Boolean
 
-  fun hasPermission(context: Context): Boolean
+  fun hasPermission(): Boolean
 
-  suspend fun activity(
-    context: Context,
-    request: MotionRangeRequest,
-  ): MotionActivityRecord
+  suspend fun activity(request: MotionRangeRequest): MotionActivityRecord
 
-  suspend fun pedometer(
-    context: Context,
-    request: MotionRangeRequest,
-  ): PedometerRecord
+  suspend fun pedometer(request: MotionRangeRequest): PedometerRecord
 }
 
-private object SystemMotionDataSource : MotionDataSource {
-  override fun isActivityAvailable(context: Context): Boolean {
+private class SystemMotionDataSource(
+  private val context: Context,
+) : MotionDataSource {
+  override fun isActivityAvailable(): Boolean {
     val sensorManager = context.getSystemService(SensorManager::class.java)
     return sensorManager?.getDefaultSensor(Sensor.TYPE_ACCELEROMETER) != null
   }
 
-  override fun isPedometerAvailable(context: Context): Boolean {
+  override fun isPedometerAvailable(): Boolean {
     val sensorManager = context.getSystemService(SensorManager::class.java)
     return sensorManager?.getDefaultSensor(Sensor.TYPE_STEP_COUNTER) != null
   }
 
-  override fun hasPermission(context: Context): Boolean = context.hasPermission(Manifest.permission.ACTIVITY_RECOGNITION)
+  override fun hasPermission(): Boolean = context.hasPermission(Manifest.permission.ACTIVITY_RECOGNITION)
 
-  override suspend fun activity(
-    context: Context,
-    request: MotionRangeRequest,
-  ): MotionActivityRecord {
+  override suspend fun activity(request: MotionRangeRequest): MotionActivityRecord {
     if (!request.startISO.isNullOrBlank() || !request.endISO.isNullOrBlank()) {
       // Android does not expose historical activity samples here; fail with a
       // stable gateway code instead of pretending the range is empty.
@@ -120,10 +113,7 @@ private object SystemMotionDataSource : MotionDataSource {
     )
   }
 
-  override suspend fun pedometer(
-    context: Context,
-    request: MotionRangeRequest,
-  ): PedometerRecord {
+  override suspend fun pedometer(request: MotionRangeRequest): PedometerRecord {
     if (!request.startISO.isNullOrBlank() || !request.endISO.isNullOrBlank()) {
       // TYPE_STEP_COUNTER is cumulative since boot, not a historical query API.
       throw IllegalArgumentException("PEDOMETER_RANGE_UNAVAILABLE: historical pedometer range not supported on Android")
@@ -146,68 +136,59 @@ private object SystemMotionDataSource : MotionDataSource {
     )
   }
 
-  @OptIn(InternalCoroutinesApi::class)
   private suspend fun readStepCounter(
     sensorManager: SensorManager,
     sensor: Sensor,
-  ): Int? {
-    val sample =
-      withTimeoutOrNull(1200L) {
-        suspendCancellableCoroutine<Float?> { cont ->
-          val listener =
-            object : SensorEventListener {
-              override fun onSensorChanged(event: SensorEvent?) {
-                val value = event?.values?.firstOrNull()
-                val token = cont.tryResume(value) ?: return
-                cont.completeResume(token)
-                sensorManager.unregisterListener(this)
-              }
+  ): Int? =
+    readSensorSample<Float>(sensorManager, sensor, 1200L, unregisterOnRejection = true) { event, complete ->
+      complete(event?.values?.firstOrNull())
+    }?.toInt()?.takeIf { it >= 0 }
 
-              override fun onAccuracyChanged(
-                sensor: Sensor?,
-                accuracy: Int,
-              ) = Unit
-            }
-          val registered = sensorManager.registerListener(listener, sensor, SensorManager.SENSOR_DELAY_NORMAL)
-          if (!registered) {
-            sensorManager.unregisterListener(listener)
-            cont.resume(null) { _, _, _ -> }
-            return@suspendCancellableCoroutine
-          }
-          cont.invokeOnCancellation { sensorManager.unregisterListener(listener) }
-        }
-      }
-    return sample?.toInt()?.takeIf { it >= 0 }
-  }
-
-  @OptIn(InternalCoroutinesApi::class)
   private suspend fun readAccelerometerSample(
     sensorManager: SensorManager,
     sensor: Sensor,
-  ): Double? =
-    withTimeoutOrNull(ACCELEROMETER_SAMPLE_TIMEOUT_MS) {
-      suspendCancellableCoroutine<Double?> { cont ->
-        var count = 0
-        var sumDelta = 0.0
+  ): Double? {
+    var count = 0
+    var sumDelta = 0.0
+    return readSensorSample(sensorManager, sensor, ACCELEROMETER_SAMPLE_TIMEOUT_MS) { event, complete ->
+      val values = event?.values
+      if (values != null && values.size >= 3) {
+        val magnitude =
+          sqrt(
+            values[0] * values[0] +
+              values[1] * values[1] +
+              values[2] * values[2],
+          ).toDouble()
+        sumDelta += abs(magnitude - SensorManager.GRAVITY_EARTH.toDouble())
+        count += 1
+        if (count >= ACCELEROMETER_SAMPLE_TARGET) {
+          // Average gravity-adjusted magnitude across a short window so
+          // one noisy sensor event cannot decide the activity label.
+          complete(sumDelta / count)
+        }
+      }
+    }
+  }
+
+  @OptIn(InternalCoroutinesApi::class)
+  private suspend fun <T> readSensorSample(
+    sensorManager: SensorManager,
+    sensor: Sensor,
+    timeoutMs: Long,
+    unregisterOnRejection: Boolean = false,
+    sample: (event: SensorEvent?, complete: (T?) -> Unit) -> Unit,
+  ): T? =
+    withTimeoutOrNull(timeoutMs) {
+      suspendCancellableCoroutine<T?> { cont ->
         val listener =
           object : SensorEventListener {
             override fun onSensorChanged(event: SensorEvent?) {
-              val values = event?.values ?: return
-              if (values.size < 3) return
-              val magnitude =
-                sqrt(
-                  values[0] * values[0] +
-                    values[1] * values[1] +
-                    values[2] * values[2],
-                ).toDouble()
-              sumDelta += abs(magnitude - SensorManager.GRAVITY_EARTH.toDouble())
-              count += 1
-              if (count >= ACCELEROMETER_SAMPLE_TARGET) {
-                // Average gravity-adjusted magnitude across a short window so
-                // one noisy sensor event cannot decide the activity label.
-                val token = cont.tryResume(sumDelta / count) ?: return
-                cont.completeResume(token)
-                sensorManager.unregisterListener(this)
+              sample(event) { value ->
+                val token = cont.tryResume(value)
+                if (token != null) {
+                  cont.completeResume(token)
+                  sensorManager.unregisterListener(this)
+                }
               }
             }
 
@@ -218,6 +199,7 @@ private object SystemMotionDataSource : MotionDataSource {
           }
         val registered = sensorManager.registerListener(listener, sensor, SensorManager.SENSOR_DELAY_NORMAL)
         if (!registered) {
+          if (unregisterOnRejection) sensorManager.unregisterListener(listener)
           cont.resume(null) { _, _, _ -> }
           return@suspendCancellableCoroutine
         }
@@ -235,18 +217,18 @@ private object SystemMotionDataSource : MotionDataSource {
 
 /** Handles Android motion-related node.invoke commands backed by live sensors. */
 class MotionHandler internal constructor(
-  private val appContext: Context,
-  private val dataSource: MotionDataSource = SystemMotionDataSource,
+  appContext: Context,
+  private val dataSource: MotionDataSource = SystemMotionDataSource(appContext),
 ) {
   suspend fun handleMotionActivity(paramsJson: String?): GatewaySession.InvokeResult =
     invokeMotion(paramsJson, "motion activity failed") { request ->
-      val activity = dataSource.activity(appContext, request)
+      val activity = dataSource.activity(request)
       Json.encodeToString(mapOf("activities" to listOf(activity)))
     }
 
   suspend fun handleMotionPedometer(paramsJson: String?): GatewaySession.InvokeResult =
     invokeMotion(paramsJson, "pedometer query failed") { request ->
-      val payload = dataSource.pedometer(appContext, request)
+      val payload = dataSource.pedometer(request)
       buildJsonObject {
         put("startISO", JsonPrimitive(payload.startISO))
         put("endISO", JsonPrimitive(payload.endISO))
@@ -259,7 +241,7 @@ class MotionHandler internal constructor(
     fallbackMessage: String,
     query: (MotionRangeRequest) -> String,
   ): GatewaySession.InvokeResult {
-    if (!dataSource.hasPermission(appContext)) {
+    if (!dataSource.hasPermission()) {
       return nodeInvokeError("MOTION_PERMISSION_REQUIRED", "grant Motion permission")
     }
     val request =
@@ -277,10 +259,10 @@ class MotionHandler internal constructor(
   }
 
   /** Returns true when live accelerometer classification can be sampled. */
-  fun isActivityAvailable(): Boolean = dataSource.isActivityAvailable(appContext)
+  fun isActivityAvailable(): Boolean = dataSource.isActivityAvailable()
 
   /** Returns true when Android exposes a cumulative step-counter sensor. */
-  fun isPedometerAvailable(): Boolean = dataSource.isPedometerAvailable(appContext)
+  fun isPedometerAvailable(): Boolean = dataSource.isPedometerAvailable()
 
   private fun parseRangeRequest(paramsJson: String?): MotionRangeRequest? {
     if (paramsJson.isNullOrBlank()) {

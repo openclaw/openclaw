@@ -12,6 +12,7 @@ import { resolveConfigPath } from "../config/paths.js";
 import { describeConfigSnapshotInputChange } from "../config/snapshot-inputs.js";
 import type { ConfigFileSnapshot } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { validateConfigObjectRawWithPlugins } from "../config/validation.js";
 import { withConfigSourceLocks } from "../config/write-lock.js";
 import {
   DeferredPluginMigrationConflictError,
@@ -25,14 +26,15 @@ import {
 import type {
   LegacyStateMigrationStepReceipt,
   MigrationMessages,
-  MigrationLogger,
 } from "../infra/state-migrations.types.js";
 import { resolveUpdateRehearsalRoot } from "../infra/update-rehearsal-paths.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizePluginsConfig } from "../plugins/config-state.js";
 import type { PluginMetadataSnapshotScopeRunner } from "../plugins/current-plugin-metadata-snapshot.js";
 import { passesManifestOwnerBasePolicy } from "../plugins/manifest-owner-policy.js";
 import { withPluginLifecycleLease } from "../plugins/plugin-lifecycle-lease.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
+import { normalizePluginPolicyId } from "../plugins/plugin-policy-id.js";
 import {
   withArtifactPreservingStateReads,
   withOpenClawStateDatabaseReadSnapshot,
@@ -52,12 +54,18 @@ export function createDoctorPluginMigrationPreparation(params: {
   measure: ConfigSnapshotReadMeasure;
   runWithPluginMetadataSnapshot: PluginMetadataSnapshotScopeRunner;
   doctorOnlyStateMigrations: boolean;
-  log?: MigrationLogger;
+  integrityCheck?: "quick" | "full";
 }) {
   const shouldDeferInstallation = () =>
     Boolean(resolveUpdateRehearsalRoot(params.env())) ||
     shouldDeferConfiguredPluginInstallRepair(params.env());
   const previousById = new Map<string, DeferredPluginMigration>();
+  const matchesOwner = (left: string, right: string) =>
+    normalizePluginPolicyId(left) === normalizePluginPolicyId(right);
+  const hasOwner = (ids: ReadonlySet<string>, pluginId: string) =>
+    [...ids].some((id) => matchesOwner(id, pluginId));
+  const previousOwner = (pluginId: string) =>
+    [...previousById.values()].find((pending) => matchesOwner(pending.pluginId, pluginId));
   let deferred: readonly DeferredPluginMigration[] = [];
   let expectedPending: readonly DeferredPluginMigration[] = [];
   let refreshSnapshot = false;
@@ -71,48 +79,61 @@ export function createDoctorPluginMigrationPreparation(params: {
       return;
     }
     deferred = await withArtifactPreservingStateReads(() =>
-      withOpenClawStateDatabaseReadSnapshot(async () => readDeferredPluginMigrations({ env }), {
-        env,
-      }),
+      withOpenClawStateDatabaseReadSnapshot(
+        async () => {
+          expectedPending = structuredClone(readDeferredPluginMigrations({ env }));
+          return readDeferredPluginMigrations({ env, includeDeferred: true });
+        },
+        {
+          env,
+        },
+      ),
     );
-    expectedPending = structuredClone(deferred);
-    for (const entry of deferred) {
-      previousById.set(entry.pluginId, entry);
-    }
+    remember();
     previousLoaded = true;
   };
   let prepared = false;
   const completedIds = new Set<string>();
   const reported = new Map<string, LegacyStateMigrationStepReceipt>();
-  let statelessPluginIds = new Set<string>();
+  let statelessPlugins = new Map<string, string | undefined>();
   let runtimePluginAliases = new Set<string>();
   let unavailablePluginIds = new Set<string>();
+  let discoveryBlockedPluginIds = new Set<string>();
+  let inactivePluginIds = new Set<string>();
   let replacementPluginIds: Readonly<Record<string, string>> = {};
   let sourceSnapshot: ConfigFileSnapshot | undefined;
   const inspectedStatelessPluginIds = new Set<string>();
+  const requirePlugins = (
+    pluginIds: readonly string[],
+    requirement: "requiresStateMigration" | "requiresDoctorInspection",
+  ) => {
+    for (const pluginId of pluginIds) {
+      const pending = previousOwner(pluginId);
+      if (pending) {
+        previousById.set(pending.pluginId, { ...pending, [requirement]: true });
+      }
+    }
+  };
   const learn = (inspection: PluginMigrationInspection | undefined) => {
     if (!inspection) {
       return;
     }
-    statelessPluginIds = new Set(inspection.statelessPluginIds);
+    statelessPlugins = new Map(inspection.statelessPlugins.map(({ id, version }) => [id, version]));
     runtimePluginAliases = new Set(inspection.runtimePluginAliases);
     unavailablePluginIds = new Set(inspection.unavailablePluginIds);
+    discoveryBlockedPluginIds = new Set(inspection.discoveryBlockedPluginIds);
+    inactivePluginIds = new Set(inspection.inactivePluginIds);
     replacementPluginIds = inspection.replacementPluginIds ?? {};
-    for (const pluginId of inspection.requiredPluginIds) {
-      const pending = previousById.get(pluginId);
-      if (pending) {
-        previousById.set(pluginId, { ...pending, requiresStateMigration: true });
-      }
-    }
-    for (const pluginId of inspection.inspectionRequiredPluginIds) {
-      const pending = previousById.get(pluginId);
-      if (pending) {
-        previousById.set(pluginId, { ...pending, requiresDoctorInspection: true });
-      }
-    }
+    requirePlugins(inspection.requiredPluginIds, "requiresStateMigration");
+    requirePlugins(inspection.inspectionRequiredPluginIds, "requiresDoctorInspection");
   };
-  const retain = (pending: DeferredPluginMigration) =>
-    mergeDeferredPluginMigration(previousById.get(pending.pluginId), pending);
+  const retain = (pending: DeferredPluginMigration) => {
+    const previous = previousOwner(pending.pluginId);
+    return mergeDeferredPluginMigration(
+      previous,
+      previous ? { ...pending, pluginId: previous.pluginId } : pending,
+    );
+  };
   const remember = () => {
     for (const pending of deferred) {
       previousById.set(pending.pluginId, pending);
@@ -193,9 +214,11 @@ export function createDoctorPluginMigrationPreparation(params: {
       previousById.clear();
       deferred = error.pending;
       completedIds.clear();
-      statelessPluginIds.clear();
+      statelessPlugins.clear();
       runtimePluginAliases.clear();
       unavailablePluginIds.clear();
+      discoveryBlockedPluginIds.clear();
+      inactivePluginIds.clear();
       replacementPluginIds = {};
       inspectedStatelessPluginIds.clear();
       refreshSnapshot = true;
@@ -228,7 +251,7 @@ export function createDoctorPluginMigrationPreparation(params: {
             autoMigrateLegacyPluginDoctorState({
               config,
               env: params.env(),
-              log: params.log,
+              integrityCheck: params.integrityCheck,
               ...(params.doctorOnlyStateMigrations ? { doctorOnlyStateMigrations: true } : {}),
             }),
           ),
@@ -249,8 +272,8 @@ export function createDoctorPluginMigrationPreparation(params: {
             resolveDeferredPluginMigrationConfigPaths({
               config: snapshot.sourceConfigBeforeMigrations ?? snapshot.sourceConfig,
               pluginId: plugin.pluginId,
-              compatibilityMigrationPaths: metadata?.plugins.find(
-                (record) => record.id === plugin.pluginId,
+              compatibilityMigrationPaths: metadata?.plugins.find((record) =>
+                matchesOwner(record.id, plugin.pluginId),
               )?.configContracts?.compatibilityMigrationPaths,
             }),
             plugin,
@@ -266,12 +289,7 @@ export function createDoctorPluginMigrationPreparation(params: {
       }
     },
     observe(result: MigrationMessages) {
-      for (const pluginId of result.requiredPluginIds ?? []) {
-        const pending = previousById.get(pluginId);
-        if (pending) {
-          previousById.set(pluginId, { ...pending, requiresStateMigration: true });
-        }
-      }
+      requirePlugins(result.requiredPluginIds ?? [], "requiresStateMigration");
       for (const pluginId of result.statelessPluginIds ?? []) {
         inspectedStatelessPluginIds.add(pluginId);
       }
@@ -289,20 +307,68 @@ export function createDoctorPluginMigrationPreparation(params: {
         sourceSnapshot?.sourceConfigBeforeMigrations ?? sourceSnapshot?.sourceConfig;
       const settlements: NonNullable<DeferredPluginMigrationRecordInput["settlements"]>[number][] =
         [];
+      const warnings: string[] = [];
+      const inactiveReady = new Set<string>();
+      const inspectPluginIds = [...previousById.values()]
+        .filter(
+          (plugin) =>
+            hasOwner(inactivePluginIds, plugin.pluginId) &&
+            !hasOwner(discoveryBlockedPluginIds, plugin.pluginId) &&
+            (plugin.requiresStateMigration ||
+              hasDeferredPluginMigrationConfig(sourceConfig, plugin)),
+        )
+        .map((plugin) => plugin.pluginId);
+      if (
+        sourceSnapshot?.valid &&
+        sourceConfig &&
+        !installationDeferred &&
+        inspectPluginIds.length
+      ) {
+        const { runPostSessionPluginDoctorStateRepairs } =
+          await import("../infra/state-migrations.plugin-doctor.js");
+        const inspected = await params.runWithPluginMetadataSnapshot({ config: sourceConfig }, () =>
+          runPostSessionPluginDoctorStateRepairs({
+            config: sourceConfig,
+            env: params.env(),
+            inspectPluginIds,
+            inspectDisabled: true,
+          }),
+        );
+        for (const pluginId of inspected.completedPluginIds ?? []) {
+          // The source settings must validate without their exclusion before we release them.
+          const validation = validateConfigObjectRawWithPlugins(sourceConfig, {
+            env: params.env(),
+            deferredPluginMigrations: expectedPending.filter(
+              (plugin) => !matchesOwner(plugin.pluginId, pluginId),
+            ),
+          });
+          if (validation.ok) {
+            inactiveReady.add(pluginId);
+          }
+        }
+      }
       const resolvedPluginIds = [...previousById.values()]
         .filter((plugin) => {
-          if (completedIds.has(plugin.pluginId)) {
+          if (hasOwner(inactiveReady, plugin.pluginId)) {
+            const reason = `Plugin "${plugin.pluginId}" is inactive and its migration detectors found no remaining work. Retained settings have been validated and kept; no runtime or tools were registered.`;
+            settlements.push({ pluginId: plugin.pluginId, status: "completed", reason });
+            warnings.push(reason);
+            return true;
+          }
+          if (hasOwner(completedIds, plugin.pluginId)) {
             return true;
           }
           if (
-            unavailablePluginIds.has(plugin.pluginId) &&
+            hasOwner(unavailablePluginIds, plugin.pluginId) &&
             sourceSnapshot?.valid &&
             sourceConfig &&
             !installationDeferred &&
             !hasDeferredPluginMigrationConfig(sourceConfig, plugin)
           ) {
-            const successor = replacementPluginIds[plugin.pluginId];
-            if (successor && completedIds.has(successor)) {
+            const successor = Object.entries(replacementPluginIds).find(([id]) =>
+              matchesOwner(id, plugin.pluginId),
+            )?.[1];
+            if (successor && hasOwner(completedIds, successor)) {
               settlements.push({
                 pluginId: plugin.pluginId,
                 status: "superseded",
@@ -312,29 +378,39 @@ export function createDoctorPluginMigrationPreparation(params: {
             }
             // Empty settings do not fulfill an explicit request to install or repair a plugin.
             const explicitlyEnabled =
-              sourceConfig.plugins?.entries?.[plugin.pluginId]?.enabled === true &&
+              Object.entries(sourceConfig.plugins?.entries ?? {}).some(
+                ([id, entry]) => matchesOwner(id, plugin.pluginId) && entry.enabled === true,
+              ) &&
               passesManifestOwnerBasePolicy({
                 plugin: { id: plugin.pluginId },
                 normalizedConfig: normalizePluginsConfig(sourceConfig.plugins),
               });
             if (
               !explicitlyEnabled &&
-              !plugin.requiresStateMigration &&
-              !plugin.requiresDoctorInspection
+              ((!plugin.requiresStateMigration && !plugin.requiresDoctorInspection) ||
+                (!successor && hasOwner(inactivePluginIds, plugin.pluginId)))
             ) {
+              const deferredUntilActive =
+                plugin.requiresStateMigration || plugin.requiresDoctorInspection;
               settlements.push({
                 pluginId: plugin.pluginId,
-                status: "completed",
-                reason:
-                  "Not applicable: the plugin owner is unavailable and there is no protected config to migrate. Existing state has been kept.",
+                status: deferredUntilActive ? "deferred" : "completed",
+                reason: `${deferredUntilActive ? "Deferred until active" : "Not applicable"}: the plugin owner is unavailable and there is no protected config to migrate. Existing state has been kept.`,
               });
               return true;
             }
           }
-          if (plugin.requiresStateMigration || unavailableIds.has(plugin.pluginId)) {
+          if (plugin.requiresStateMigration || hasOwner(unavailableIds, plugin.pluginId)) {
             return false;
           }
-          if (inspectedStatelessPluginIds.has(plugin.pluginId)) {
+          if (hasOwner(inspectedStatelessPluginIds, plugin.pluginId)) {
+            return true;
+          }
+          const stateless = [...statelessPlugins].find(([id]) => matchesOwner(id, plugin.pluginId));
+          if (stateless) {
+            const reason = `Plugin "${plugin.pluginId}" version "${stateless[1] ?? "unknown"}": no plugin migration contract. No migration ran; existing data and settings have been kept.`;
+            settlements.push({ pluginId: plugin.pluginId, status: "completed", reason });
+            warnings.push(reason);
             return true;
           }
           if (plugin.requiresDoctorInspection) {
@@ -343,13 +419,12 @@ export function createDoctorPluginMigrationPreparation(params: {
           // A runtime name has no plugin-owned inputs; the old collector could retain the
           // shared session locator even when no plugin migration existed for that name.
           return (
-            statelessPluginIds.has(plugin.pluginId) ||
-            (runtimePluginAliases.has(plugin.pluginId) &&
-              !plugin.validationExcludedPaths?.length &&
-              (plugin.configPaths ?? []).every(
-                (segments) =>
-                  segments.length === 2 && segments[0] === "session" && segments[1] === "store",
-              ))
+            runtimePluginAliases.has(plugin.pluginId) &&
+            !plugin.validationExcludedPaths?.length &&
+            (plugin.configPaths ?? []).every(
+              (segments) =>
+                segments.length === 2 && segments[0] === "session" && segments[1] === "store",
+            )
           );
         })
         .map((plugin) => plugin.pluginId);
@@ -357,11 +432,13 @@ export function createDoctorPluginMigrationPreparation(params: {
       const pending = [...previousById.values()]
         .filter((plugin) => !resolvedIds.has(plugin.pluginId))
         .map((plugin) =>
-          unavailablePluginIds.has(plugin.pluginId) && !installationDeferred
+          hasOwner(unavailablePluginIds, plugin.pluginId) &&
+          !hasOwner(discoveryBlockedPluginIds, plugin.pluginId) &&
+          !installationDeferred
             ? Object.assign(plugin, {
                 reason: `The migration owner is unavailable. Install or enable plugin "${plugin.pluginId}" to migrate its retained data and settings. For a retired plugin, ask its maintainer for a supported migration or recovery path.`,
               })
-            : unavailableIds.has(plugin.pluginId)
+            : hasOwner(unavailableIds, plugin.pluginId)
               ? plugin
               : Object.assign(plugin, {
                   reason:
@@ -383,8 +460,9 @@ export function createDoctorPluginMigrationPreparation(params: {
           deferredPluginMigrations: expectedPending,
           shellEnvFallback: "defer",
         }).readConfigFileSnapshotForWrite();
+        // Legacy keys can remain invalid until the following Doctor config repair.
         if (
-          !snapshot.valid ||
+          snapshot.readError ||
           describeConfigSnapshotInputChange(sourceSnapshot, snapshot, {
             compareResolvedConfig: false,
           })
@@ -415,11 +493,18 @@ export function createDoctorPluginMigrationPreparation(params: {
       if (!committed) {
         return true;
       }
+      for (const warning of warnings) {
+        createSubsystemLogger("state-migrations").warn(warning);
+      }
       for (const pluginId of resolvedPluginIds) {
         previousById.delete(pluginId);
         const receipt = reported.get(pluginId);
         if (receipt) {
-          receipt.outcome = "completed";
+          receipt.outcome = settlements.some(
+            (entry) => entry.pluginId === pluginId && entry.status === "deferred",
+          )
+            ? "skipped"
+            : "completed";
           receipt.warnings = [];
         }
       }
@@ -427,8 +512,14 @@ export function createDoctorPluginMigrationPreparation(params: {
       if (settlements.length > 0) {
         params.report({
           changes: [],
-          warnings: [],
-          notices: settlements.map((entry) => `Plugin "${entry.pluginId}": ${entry.reason}`),
+          warnings,
+          warningDisposition: "recoverable",
+          notices: settlements
+            .filter(
+              (entry) =>
+                ![...statelessPlugins.keys()].some((id) => matchesOwner(id, entry.pluginId)),
+            )
+            .map((entry) => `Plugin "${entry.pluginId}": ${entry.reason}`),
         });
       }
       for (const plugin of pending) {

@@ -49,19 +49,14 @@ function appendLoopbackEntries(value: string | undefined): string {
 }
 
 let noProxyLeaseCount = 0;
-let noProxySnapshot: {
-  noProxy: string | undefined;
-  noProxyLower: string | undefined;
-  appliedNoProxy: string;
-  appliedNoProxyLower: string;
-} | null = null;
+type NoProxyName = "NO_PROXY" | "no_proxy";
+let noProxySnapshot: Record<NoProxyName, string | undefined> | null = null;
 
 /**
  * Scoped NO_PROXY bypass for loopback CDP URLs.
  *
- * This wrapper only mutates env vars for loopback destinations. On restore,
- * it avoids clobbering external NO_PROXY changes that happened while calls
- * were in-flight.
+ * Only loopback destinations mutate env vars. The final caller restores the
+ * initial values; third-party env edits during a CDP call are best effort.
  */
 export async function withNoProxyForCdpUrl<T>(url: string, fn: () => Promise<T>): Promise<T> {
   if (!isLoopbackHost(URL.parse(url)?.hostname ?? "") || !hasProxyEnvConfigured()) {
@@ -74,13 +69,12 @@ export async function withNoProxyForCdpUrl<T>(url: string, fn: () => Promise<T>)
       noProxyValueCoversLocalhost(process.env.no_proxy)
     )
   ) {
-    const noProxy = process.env.NO_PROXY;
-    const noProxyLower = process.env.no_proxy;
-    const appliedNoProxy = appendLoopbackEntries(noProxy || noProxyLower);
-    const appliedNoProxyLower = appendLoopbackEntries(noProxyLower || noProxy);
-    process.env.NO_PROXY = appliedNoProxy;
-    process.env.no_proxy = appliedNoProxyLower;
-    noProxySnapshot = { noProxy, noProxyLower, appliedNoProxy, appliedNoProxyLower };
+    const previous = { NO_PROXY: process.env.NO_PROXY, no_proxy: process.env.no_proxy };
+    Object.assign(process.env, {
+      NO_PROXY: appendLoopbackEntries(previous.NO_PROXY || previous.no_proxy),
+      no_proxy: appendLoopbackEntries(previous.no_proxy || previous.NO_PROXY),
+    });
+    noProxySnapshot = previous;
   }
   noProxyLeaseCount += 1;
   try {
@@ -88,21 +82,11 @@ export async function withNoProxyForCdpUrl<T>(url: string, fn: () => Promise<T>)
   } finally {
     noProxyLeaseCount -= 1;
     if (noProxyLeaseCount === 0 && noProxySnapshot) {
-      const { noProxy, noProxyLower, appliedNoProxy, appliedNoProxyLower } = noProxySnapshot;
-      const currentNoProxy = process.env.NO_PROXY;
-      const currentNoProxyLower = process.env.no_proxy;
-      if (currentNoProxy === appliedNoProxy) {
-        if (noProxy !== undefined) {
-          process.env.NO_PROXY = noProxy;
+      for (const name of ["NO_PROXY", "no_proxy"] as const) {
+        if (noProxySnapshot[name] !== undefined) {
+          process.env[name] = noProxySnapshot[name];
         } else {
-          delete process.env.NO_PROXY;
-        }
-      }
-      if (currentNoProxyLower === appliedNoProxyLower) {
-        if (noProxyLower !== undefined) {
-          process.env.no_proxy = noProxyLower;
-        } else {
-          delete process.env.no_proxy;
+          delete process.env[name];
         }
       }
       noProxySnapshot = null;

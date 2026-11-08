@@ -6,6 +6,9 @@ import {
 } from "../../../packages/markdown-core/src/assistant-transcript.js";
 import { escapeHtml } from "../../../src/shared/html-escape.js";
 import { t } from "../i18n/index.ts";
+import { registerChatMediaEnglish } from "../i18n/locales/en-chat-media.ts";
+
+registerChatMediaEnglish();
 
 function renderAssistantTranscriptRoleMarker(text: string): string {
   return `<code class="assistant-transcript-role">${escapeHtml(text)}</code>`;
@@ -40,9 +43,8 @@ function renderAssistantTranscriptRoleImageLabel(
 ): string {
   let rendered = "";
   let cursor = 0;
-  for (const span of spans) {
-    const start = Math.max(cursor, Math.min(span.start, text.length));
-    const end = Math.max(start, Math.min(span.end, text.length));
+  // The parser emits ordered spans already clipped to this image label.
+  for (const { start, end } of spans) {
     rendered += escapeHtml(text.slice(cursor, start));
     if (end > start) {
       rendered += renderAssistantTranscriptRoleMarker(text.slice(start, end));

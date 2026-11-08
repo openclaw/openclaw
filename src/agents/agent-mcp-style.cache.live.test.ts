@@ -4,6 +4,7 @@ import { Type } from "typebox";
 import { describe, expect, it } from "vitest";
 import { extractEmbeddedAssistantText } from "./embedded-agent-utils.js";
 import {
+  resolveLiveCacheModel,
   buildAssistantHistoryTurn,
   buildStableCachePrefix,
   completeSimpleWithLiveTimeout,
@@ -159,12 +160,7 @@ describeCacheLive("MCP-style prompt caching (live)", () => {
   it(
     "keeps an OpenAI cache plateau across MCP-style followup turns",
     async () => {
-      const fixture = await resolveLiveDirectModel({
-        provider: "openai",
-        api: "openai-responses",
-        envVar: "OPENCLAW_LIVE_OPENAI_CACHE_MODEL",
-        preferredModelIds: ["gpt-5.6-luna", "gpt-5.5", "gpt-5.4-mini", "gpt-5.4"],
-      });
+      const fixture = await resolveLiveCacheModel("openai");
       logLiveCache(`openai mcp-style model=${fixture.model.provider}/${fixture.model.id}`);
 
       const warmup = await runOpenAiMcpStyleCacheProbe({

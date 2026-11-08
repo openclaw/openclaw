@@ -14,8 +14,12 @@ import {
   collectNestedErrorCandidates,
   toErrorObject,
 } from "../../packages/normalization-core/src/error-coercion.ts";
+import { expectDefined } from "../../packages/normalization-core/src/expect.ts";
 import { MAX_TIMER_TIMEOUT_MS } from "../../packages/normalization-core/src/number-coercion.ts";
-import { normalizeOptionalString } from "../../packages/normalization-core/src/string-coerce.ts";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "../../packages/normalization-core/src/string-coerce.ts";
 import {
   sliceUtf16Safe,
   truncateUtf16Safe,
@@ -144,6 +148,8 @@ async function fixture({
   const values = {
     theme: new Proxy({}, { get: () => (value) => value }),
     normalizeOptionalString,
+    normalizeLowercaseStringOrEmpty,
+    expectDefined,
     resolveServiceRefreshEnv: (env) => env,
     resolveGatewayServiceManagementBlockMessageForUpdate: () => undefined,
     isPackageManagerUpdateMode: (mode) => ["npm", "pnpm", "bun"].includes(mode),
@@ -210,6 +216,7 @@ async function fixture({
       return verification;
     },
     withOwnedManagedUpdateEnv: async (_env, action) => action(),
+    acquireWithWait: ({ acquire }) => acquire(),
     readConfigFileSnapshot: async () => ({}),
     prepareUpdateRestart: async () => restartContext,
     convergeUpdatePlugins: async (params) => ({ resultWithPostUpdate: params.result }),
@@ -220,6 +227,17 @@ async function fixture({
     },
     resolveUpdateResultNextAction: () => "Retain recovery material until health is verified.",
     completeUpdateCommandRun: (value) => value,
+    // This VM has no durable recovery ledger. Recovery-artifact deletion has
+    // real owner/filesystem coverage in update-automatic-cleanup.test.ts; these
+    // cases prove the separate package transaction's retirement authorization.
+    automaticallyCleanUpdateRecovery: async () => undefined,
+    // Cohort settlement has native ledger coverage; this VM owns only package retirement.
+    commitVerifiedUpdatePluginCohort: async () => {},
+    assertUpdatePluginCohortReportingContinuation: () => {},
+    assertUpdatePluginCohortReportingAdmission: async () => {},
+    // Every case here fails after the swap, so none retires its own capture.
+    failedBeforeActivation: () => false,
+    prepareResult: async (value) => () => printed.push(value),
     printResult: (value) => printed.push(value),
     writeControlPlaneUpdateRestartSentinel: async () => {},
     markControlPlaneUpdateRestartSentinelFailure: async () => {},
@@ -237,13 +255,13 @@ async function fixture({
     sliceUtf16Safe,
     truncateUtf16Safe,
     withCommandProcessScope: async (action) => action(),
+    getCliPluginInvocationResources: () => undefined,
     readPackageVersion: async (packageRoot) => {
       assert.equal(packageRoot, installRoot);
       return "2026.9.4";
     },
     readBuiltGatewayBuildId: async () => undefined,
     readActiveGatewayLockPort: async () => 19305,
-    createUpdateFailureFact: (fact) => fact,
     resolveOpenClawStateSqlitePath: () => "/fixture/state.sqlite",
     assertUpdateRecoveryAdmission: async () => {},
     readGatewayOwnerLease: async () => undefined,
@@ -265,7 +283,9 @@ async function fixture({
     "update-command-mutable-signals",
     "update-command-execution-guards",
     "update-command-result",
+    "../../infra/acquire-with-wait",
     "../../infra/update-failure-result",
+    "../../infra/package-update-refusal",
     "../../infra/update-failure-public-codes",
     "../../infra/update-run-step-key",
     "../../infra/update-preflight-details",
@@ -275,11 +295,22 @@ async function fixture({
     "../../plugins/clawhub-error-codes",
     "../../plugins/install-types",
     "../../logging/diagnostic-support-redaction",
+    "../../logging/diagnostic-support-causes",
+    "../../infra/sqlite-snapshot-diagnostics",
+    "../../logging/diagnostic-support-key-check",
+    "../../logging/redact",
+    "../../logging/redact-linear-matchers",
+    "../../logging/redact-pem",
+    "../../security/config-regex",
+    "../../security/safe-regex",
+    "../../infra/map-size",
+    "../../../packages/acp-core/src/structured-auth-redaction",
     "../../logging/redact-patterns",
     "../../logging/redact-pattern-runtime",
     "../../infra/update-run-step",
     "update-command-verification",
     "update-command-terminal",
+    "update-command-admission-report",
     "update-command-terminal-publication",
     "../daemon-cli/restart-health-deadline",
     "../../../packages/retry/src/index",
@@ -287,17 +318,43 @@ async function fixture({
     "../../utils/absolute-deadline",
     "update-command-post-update-maintenance",
     "../../infra/update-candidate-predecessor-stop",
-    "update-command-legacy-service-stop",
     // Recovery and reporting stay real; only their I/O uses finite fixture facts.
     "update-command-failure-recovery",
     "update-command-service-recovery",
     "update-command-plugins-internals",
     "../../process/exec-result",
     "../../shared/null-writer",
+    "../../shared/state-lease-loss",
     "../../shared/update-outcome",
+    "../../state/openclaw-state-lease-error",
     "../../infra/update-run-report",
     "../../infra/update-run-record",
     "../../infra/update-run-limits",
+    // Post-update state reads and Doctor facts use their production owners,
+    // including schema validation and the failure-fact redaction closure.
+    "../../../packages/terminal-core/src/ansi",
+    "../../../packages/terminal-core/src/ansi-sequences",
+    "../../logging/redact-performance",
+    "../../logging/redact-prefilter",
+    "../../logging/redact-bounded",
+    "../../../packages/net-policy/src/redact-sensitive-url",
+    "../../logging/redact-mask",
+    "../../logging/redact-edit-composition",
+    "../../logging/redact-json",
+    "../../logging/redact-json-tokens",
+    "../../logging/secret-redaction-registry",
+    "../../shared/global-singleton",
+    "../../shared/regexp",
+    "../../infra/acquire-with-wait",
+    "../../infra/update-doctor-result",
+    "../../infra/update-doctor-scan-receipts",
+    "../../infra/update-doctor-config-schema",
+    "../../infra/update-doctor-lint-schema",
+    "../../infra/update-run-schema",
+    "../../infra/update-recovery-receipt-schema",
+    "../../infra/update-run-driver-schema",
+    "../../infra/update-snapshot-capacity-schema",
+    "../../infra/update-failure-facts",
     "../../infra/update-doctor-config",
     "../../infra/update-failure-facts-format",
     "../../../packages/gateway-protocol/src/update-run-vocabulary",
@@ -317,6 +374,7 @@ async function fixture({
     }).code;
     const mod = new vm.SourceTextModule(code, { context, identifier: filename });
     modules.set(path.basename(name) + ".js", mod);
+    modules.set(path.basename(name), mod);
     const imports = new Map();
     for (const match of code.matchAll(
       /(?:import|export)\s*\{([^}]+)\}\s*from\s*["']([^"']+)["']/gs,

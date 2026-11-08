@@ -118,9 +118,12 @@ export type ProfileUsageStats = {
   cooldownModel?: string;
   disabledUntil?: number;
   disabledReason?: AuthProfileFailureReason;
+  /** Counts only locally timed failures; provider timing alone bounds rate limits. */
   errorCount?: number;
-  failureCounts?: Partial<Record<AuthProfileFailureReason, number>>;
+  failureCounts?: Partial<Record<Exclude<AuthProfileFailureReason, "rate_limit">, number>>;
   lastFailureAt?: number;
+  /** Latest provider rate limit since this profile's last successful request. */
+  lastRateLimitAt?: number;
   /** Most recent quota probe or successful provider use. */
   lastProbeAt?: number;
 };
@@ -185,8 +188,6 @@ export type AuthProfileCredentialSource = {
 export type RuntimeAuthProfileStore = AuthProfileStore & {
   /** Physical sources of the selected rows; retained only in session read views. */
   runtimeCredentialSources?: Record<string, AuthProfileCredentialSource>;
-  /** Runtime-only built-in CLI winners; internal provenance, never exposed or persisted. */
-  runtimeExternalCliProfileIds?: string[];
   runtimeLocalProfileIds?: string[];
   /** Canonical local OAuth rows may be hidden by shared-store reconciliation. */
   runtimeHasLocalOAuthProfiles?: boolean;
@@ -199,6 +200,4 @@ export type AuthProfileIdRepairResult = {
   config: OpenClawConfig;
   changes: string[];
   migrated: boolean;
-  fromProfileId?: string;
-  toProfileId?: string;
 };

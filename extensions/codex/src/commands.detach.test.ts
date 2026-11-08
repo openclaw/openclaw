@@ -1,5 +1,5 @@
 import path from "node:path";
-import { getSessionBindingService } from "openclaw/plugin-sdk/conversation-binding-runtime";
+import * as conversationBindingInspection from "openclaw/plugin-sdk/conversation-binding-inspection-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { PluginCommandContext } from "openclaw/plugin-sdk/plugin-entry";
 import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
@@ -12,10 +12,14 @@ import {
   retainCodexAppServerLiveThread,
 } from "./app-server/client-runtime.js";
 import type { CodexAppServerThreadBinding } from "./app-server/session-binding.js";
-import { testCodexAppServerBindingStore } from "./app-server/session-binding.test-helpers.js";
+import {
+  createConversationInspection,
+  testCodexAppServerBindingStore,
+} from "./app-server/session-binding.test-helpers.js";
 import * as detachSharedClientRuntime from "./app-server/shared-client.js";
 import { createClientHarness } from "./app-server/test-support.js";
-import { handleCodexCommand } from "./command-dispatch.js";
+import { handleCodexDiagnosticsFeedback } from "./command-diagnostics.js";
+import { createCodexCommandHost } from "./command-host.test-support.js";
 import type { CodexControlRequestOptions } from "./command-rpc.js";
 import {
   createCodexRuntimeContextOverrides,
@@ -25,6 +29,7 @@ import {
   createThreadResumeResponse,
   createContext,
   createDeps,
+  dispatchCodexCommandForTest as handleCodexCommand,
   expectedDiagnosticsTargetBlock,
   readDiagnosticsConfirmationToken,
   supervisedTestBinding,
@@ -351,22 +356,15 @@ describe("codex detach command", () => {
     },
   );
 
-  it.each([
-    {
-      label: "an incognito source bound into an ordinary destination",
-      sourceSessionKey: "agent:main:dashboard:incognito-source",
-      destinationSessionKey: "agent:main:discord:ordinary-destination",
-      unsubscribes: true,
-    },
-    {
-      label: "an ordinary source bound into an incognito destination",
-      sourceSessionKey: "agent:main:discord:ordinary-source",
-      destinationSessionKey: "agent:main:dashboard:incognito-destination",
-      unsubscribes: false,
-    },
-  ])(
-    "retires untracked detach ownership from $label using its source session",
-    async ({ sourceSessionKey, destinationSessionKey, unsubscribes }) => {
+  it.each([true, false])(
+    "retires untracked detach ownership using its source session (incognito: %s)",
+    async (unsubscribes) => {
+      const sourceSessionKey = unsubscribes
+        ? "agent:main:dashboard:incognito-source"
+        : "agent:main:discord:ordinary-source";
+      const destinationSessionKey = unsubscribes
+        ? "agent:main:discord:ordinary-destination"
+        : "agent:main:dashboard:incognito-destination";
       const f = await nativeFixture({}, false);
       await expect(
         f.run({
@@ -475,8 +473,10 @@ describe("codex detach command", () => {
       .spyOn(detachSharedClientRuntime, "getLeasedSharedCodexAppServerClient")
       .mockResolvedValue(f.harness.client);
     const resolvePublic = vi
-      .spyOn(getSessionBindingService(), "resolveByConversation")
-      .mockReturnValue({ bindingId: f.conversation.bindingId } as never);
+      .spyOn(conversationBindingInspection, "inspectConversationBinding")
+      .mockImplementation((conversation) =>
+        createConversationInspection(conversation, f.conversation.bindingId),
+      );
     cleanup.push(() => {
       resolvePublic.mockRestore();
       acquireClient.mockRestore();
@@ -502,7 +502,7 @@ describe("codex detach command", () => {
           senderIsOwner: true,
         },
         { channelId: "test", pluginBinding: f.conversation },
-        { bindingStore, timeoutMs: 500 },
+        { bindingStore },
       ),
     ).resolves.toEqual({ handled: true, reply: { text: "Original context kept" } });
     expect(f.request.mock.calls.map(([method]) => method)).toEqual([
@@ -576,6 +576,117 @@ describe("Codex diagnostics confirmation", () => {
     return { identity, upload, deps, run };
   }
 
+  it.each(["unchanged", "replacement", "deletion", "request-error"] as const)(
+    "uses prepared binding authority through diagnostics dispatch: %s",
+    async (change) => {
+      const identity = { kind: "session" as const, agentId: "main", sessionId: "session-1" };
+      const binding = supervisedTestBinding("thread-prepared-diagnostics");
+      await writeTestBinding(identity, binding);
+      const entered = createDeferred<void>();
+      const resume = createDeferred<void>();
+      const releases: Array<ReturnType<typeof vi.fn>> = [];
+      const prepareRead = bindingStore.prepareRead.bind(bindingStore);
+      const prepared = vi.spyOn(bindingStore, "prepareRead").mockImplementation(async (target) => {
+        const current = await prepareRead(target);
+        if (!current) {
+          return current;
+        }
+        const release = vi.fn(() => current.release());
+        releases.push(release);
+        return { read: () => current.read(), release };
+      });
+      const nativeRead = vi.spyOn(bindingStore, "read");
+      const assertOwnerCurrent = vi.fn();
+      const harness = createClientHarness({
+        onWrite: (line, send) => {
+          const request = requireRecord(JSON.parse(line), "diagnostics request");
+          send(
+            change === "request-error"
+              ? { id: request.id, error: { code: -32000, message: "synthetic upload failure" } }
+              : { id: request.id, result: { threadId: binding.threadId } },
+          );
+        },
+      });
+      const acquire = vi
+        .spyOn(detachSharedClientRuntime, "getLeasedSharedCodexAppServerClient")
+        .mockImplementation(async () => {
+          entered.resolve();
+          await resume.promise;
+          return harness.client;
+        });
+      let pending: ReturnType<typeof handleCodexDiagnosticsFeedback> | undefined;
+      try {
+        pending = handleCodexDiagnosticsFeedback(
+          createCodexCommandHost(),
+          createContext("diagnostics prepared note", undefined, {
+            diagnosticsUploadApproved: true,
+            assertOwnerCurrent,
+          }),
+          { supervision: { enabled: true } },
+          "prepared note",
+        );
+        await Promise.race([
+          entered.promise,
+          pending.then((result) => {
+            throw new Error(`Diagnostics ended before dispatch: ${result.text}`);
+          }),
+        ]);
+        if (change === "replacement") {
+          await expect(bindingStore.resetSessionGeneration(identity)).resolves.toBe("applied");
+          await expect(
+            bindingStore.mutate(identity, {
+              kind: "set",
+              binding: supervisedTestBinding("replacement-thread"),
+            }),
+          ).resolves.toBe(true);
+        } else if (change === "deletion") {
+          await expect(bindingStore.retireSessionGeneration(identity)).resolves.toBe("applied");
+        }
+        resume.resolve();
+        const result = await pending;
+        const writes = harness.writes.map((line) =>
+          requireRecord(JSON.parse(line), "wire request"),
+        );
+        if (change === "replacement" || change === "deletion") {
+          expect(writes).toEqual([]);
+          expect(result.text).toContain(
+            "The Codex diagnostics session changed before upload; request it again.",
+          );
+        } else {
+          expect(writes).toEqual([
+            {
+              id: expect.any(Number),
+              method: "feedback/upload",
+              params: {
+                classification: "bug",
+                threadId: "thread-prepared-diagnostics",
+                includeLogs: true,
+                tags: { source: "openclaw-diagnostics", channel: "test" },
+                reason: "prepared note",
+              },
+            },
+          ]);
+          expect(result.text).toContain(
+            change === "request-error"
+              ? "synthetic upload failure"
+              : "Codex diagnostics sent to OpenAI servers:",
+          );
+        }
+        expect(assertOwnerCurrent).toHaveBeenCalledOnce();
+        expect(nativeRead).not.toHaveBeenCalled();
+        expect(releases).toHaveLength(1);
+        expect(releases[0]).toHaveBeenCalledOnce();
+      } finally {
+        resume.resolve();
+        await pending?.catch(() => undefined);
+        acquire.mockRestore();
+        nativeRead.mockRestore();
+        prepared.mockRestore();
+        harness.client.close();
+      }
+    },
+  );
+
   it("preserves an accepted upload and blocks the next target after owner revocation", async () => {
     let ownerCurrent = true;
     const f = await fixture(
@@ -598,6 +709,14 @@ describe("Codex diagnostics confirmation", () => {
       ownerCurrent = false;
       return { ok: true, value: { threadId: "thread-session-1" } };
     });
+    f.deps.safeCodexControlRequest = async (_pluginConfig, _method, _params, options) => {
+      try {
+        options?.assertCurrent?.();
+        return await f.upload();
+      } catch (error) {
+        return { ok: false, error: error instanceof Error ? error.message : String(error) };
+      }
+    };
     const result = await f.run("diagnostics");
     expect(f.upload).toHaveBeenCalledOnce();
     expect(result.text).toContain("Codex diagnostics sent to OpenAI servers:");
@@ -658,7 +777,12 @@ describe("Codex diagnostics confirmation", () => {
   ])("rejects diagnostics confirmation when the $change changes", async ({ replacement }) => {
     let binding: CodexAppServerThreadBinding = supervisedTestBinding("thread-scope-change");
     const f = await fixture(binding, {}, { supervision: { enabled: true } });
-    f.deps.bindingStore = { ...bindingStore, read: () => binding };
+    f.deps.bindingStore = {
+      ...bindingStore,
+      read: () => binding,
+      readAsync: async () => binding,
+      prepareRead: async () => ({ read: () => binding, release() {} }),
+    };
     const token = readDiagnosticsConfirmationToken(await f.run("diagnostics"));
     binding = replacement;
     await expect(f.run(`diagnostics confirm ${token}`)).resolves.toEqual({
@@ -718,40 +842,26 @@ describe("Codex diagnostics confirmation", () => {
   });
 
   it("uploads all Codex diagnostics sessions and reports their channel/thread breakdown", async () => {
-    const targets = [
-      {
-        agentId: "first",
-        sessionKey: "agent:first:whatsapp:one",
-        sessionId: "session-one",
-        channel: "whatsapp",
-        threadId: "thread-111",
-      },
-      {
-        agentId: "second",
-        sessionKey: "agent:second:discord:two",
-        sessionId: "session-two",
-        channel: "discord",
-        threadId: "thread-222",
-      },
-    ];
+    const makeTarget = (agentId: string, channel: string, id: string, threadId: string) => ({
+      agentId,
+      channel,
+      threadId,
+      sessionId: `session-${id}`,
+      sessionKey: `agent:${agentId}:${channel}:${id}`,
+    });
+    const first = makeTarget("first", "whatsapp", "one", "thread-111");
+    const second = makeTarget("second", "discord", "two", "thread-222");
+    const targets = [first, second];
     const f = await fixture(
-      { threadId: "thread-111", cwd: "/repo", authProfileId: "openai:first" },
+      { threadId: first.threadId, cwd: "/repo", authProfileId: "openai:first" },
       {
-        agentId: "first",
-        sessionId: "session-one",
-        sessionKey: "agent:first:whatsapp:one",
-        channel: "whatsapp",
+        ...first,
         diagnosticsSessions: targets,
       },
     );
     await writeTestBinding(
-      {
-        kind: "session",
-        agentId: "second",
-        sessionId: "session-two",
-        sessionKey: "agent:second:discord:two",
-      },
-      { threadId: "thread-222", cwd: "/repo", authProfileId: "openai:second" },
+      { kind: "session", ...second },
+      { threadId: second.threadId, cwd: "/repo", authProfileId: "openai:second" },
     );
     const upload = vi.fn(async (_config: unknown, _method: string, params: unknown) => {
       if (
@@ -816,7 +926,7 @@ describe("Codex diagnostics confirmation", () => {
     expect(upload).toHaveBeenCalledTimes(2);
     for (const target of targets) {
       expect(upload).toHaveBeenCalledWith(
-        undefined,
+        {},
         CODEX_CONTROL_METHODS.feedback,
         {
           classification: "bug",
@@ -829,6 +939,7 @@ describe("Codex diagnostics confirmation", () => {
           config: {},
           agentDir: path.join(diagnosticsStateDir, "agents", target.agentId, "agent"),
           assertCurrent: expect.any(Function),
+          assertDispatchCurrentAsync: expect.any(Function),
           authProfileId: `openai:${target.agentId}`,
           sessionId: target.sessionId,
           sessionKey: target.sessionKey,

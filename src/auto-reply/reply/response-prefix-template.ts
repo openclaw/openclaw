@@ -15,6 +15,15 @@ export type ResponsePrefixContext = {
 
 // Regex pattern for template variables: {variableName} or {variable.name}
 const TEMPLATE_VAR_PATTERN = /\{([a-zA-Z][a-zA-Z0-9.]*)\}/g;
+const TEMPLATE_FIELDS: Readonly<Record<string, keyof ResponsePrefixContext>> = {
+  model: "model",
+  modelfull: "modelFull",
+  provider: "provider",
+  thinkinglevel: "thinkingLevel",
+  think: "thinkingLevel",
+  "identity.name": "identityName",
+  identityname: "identityName",
+};
 
 /** Variable names are case-insensitive; unresolved placeholders remain literal. */
 export function resolveResponsePrefixTemplate(
@@ -27,23 +36,9 @@ export function resolveResponsePrefixTemplate(
 
   return template.replace(TEMPLATE_VAR_PATTERN, (match, varName: string) => {
     const normalizedVar = varName.toLowerCase();
-
-    switch (normalizedVar) {
-      case "model":
-        return context.model ?? match;
-      case "modelfull":
-        return context.modelFull ?? match;
-      case "provider":
-        return context.provider ?? match;
-      case "thinkinglevel":
-      case "think":
-        return context.thinkingLevel ?? match;
-      case "identity.name":
-      case "identityname":
-        return context.identityName ?? match;
-      default:
-        return match;
-    }
+    return Object.hasOwn(TEMPLATE_FIELDS, normalizedVar)
+      ? (context[TEMPLATE_FIELDS[normalizedVar]!] ?? match)
+      : match;
   });
 }
 

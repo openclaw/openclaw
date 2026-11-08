@@ -3,17 +3,13 @@ import type { ExecApprovalRequestPayload } from "../../infra/exec-approvals.js";
 import type { PluginApprovalRequestPayload } from "../../infra/plugin-approvals.js";
 import { runWithRetainedGatewayRootWork } from "../../process/gateway-work-admission.js";
 import { trackAsyncWork } from "../../shared/async-work-scope.js";
+import type { ApprovalPushTarget as ApprovalRequestDeliveryTarget } from "../exec-approval-ios-push.js";
 import {
   buildRequestedApprovalEvent,
   handlePendingApprovalRequest,
   isApprovalRecordVisibleToClient,
 } from "./approval-shared.js";
 import type { GatewayClient } from "./types.js";
-
-type ApprovalRequestDeliveryTarget = {
-  deviceId: string;
-  scopes: readonly string[];
-};
 
 type ApprovalPayloadByKind = {
   exec: ExecApprovalRequestPayload;
@@ -127,13 +123,9 @@ export function handlePendingApprovalRequestWithDelivery<TKind extends keyof App
         let remaining = deliveryTasks.length;
         for (const delivery of deliveryTasks) {
           void delivery.then((delivered) => {
-            if (delivered) {
-              resolve(true);
-              return;
-            }
             remaining -= 1;
-            if (remaining === 0) {
-              resolve(false);
+            if (delivered || remaining === 0) {
+              resolve(delivered);
             }
           });
         }

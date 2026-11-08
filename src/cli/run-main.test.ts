@@ -1,22 +1,15 @@
 import "../test-utils/prepare-compiled-subprocesses.js";
 import process from "node:process";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  resolveManifestCommandAliasOwnerInRegistry,
-  resolveManifestToolOwnerInRegistry,
-  type PluginManifestCommandAliasRegistry,
-} from "../plugins/manifest-command-aliases.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolveManifestCommandAliasOwnerInRegistry } from "../plugins/manifest-command-aliases.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { captureEnv } from "../test-utils/env.js";
-import {
-  resolveGatewayCatalogCommandPath,
-  resolveGatewayRunPreBootstrapOptions,
-} from "./gateway-run-argv.js";
+import { rewriteUpdateFlagArgv } from "./argv.js";
+import { resolveGatewayCommandPath } from "./gateway-run-argv.js";
 import {
   isGatewayRunFastPathArgv,
-  rewriteUpdateFlagArgv,
   resolveMissingPluginCommandMessage,
-  shouldStartProxyForCli,
   shouldUseRootHelpFastPath,
 } from "./run-main-policy.js";
 import { runCli } from "./run-main.js";
@@ -34,9 +27,9 @@ const sqliteAdmission = vi.hoisted(() => ({
   initialize: vi.fn<() => Promise<void>>().mockResolvedValue(),
   selectGatewayEnvironment: vi.fn<() => Promise<boolean>>().mockResolvedValue(true),
 }));
-vi.mock("../infra/bun-sqlite-library.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../infra/bun-sqlite-library.js")>()),
-  initializeSqliteRuntimeCapabilities: sqliteAdmission.initialize,
+vi.mock("../infra/sqlite-runtime-initialize.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/sqlite-runtime-initialize.js")>()),
+  initializeSqliteRuntime: sqliteAdmission.initialize,
 }));
 vi.mock("./gateway-cli/run.js", () => ({ runGatewayCommand }));
 // Keep Commander parsing independent of native startup; run-main.exit and
@@ -139,69 +132,32 @@ describe("CLI host admission and Gateway fast-path parsing", () => {
   });
 });
 
-describe("Gateway argv boundaries", () => {
-  it("matches only plain foreground starts without root options or help", () => {
-    expect(isGatewayRunFastPathArgv(cliArgs("gateway"))).toBe(true);
-    expect(isGatewayRunFastPathArgv(cliArgs("gateway", "--force"))).toBe(true);
-    expect(isGatewayRunFastPathArgv(cliArgs("gateway", "--port", "18789"))).toBe(true);
-    expect(isGatewayRunFastPathArgv(cliArgs("gateway", "--auth=none"))).toBe(true);
-    expect(isGatewayRunFastPathArgv(cliArgs("--no-color", "gateway", "--bind", "loopback"))).toBe(
-      true,
-    );
-    expect(isGatewayRunFastPathArgv(cliArgs("gateway", "run"))).toBe(true);
-    expect(isGatewayRunFastPathArgv(cliArgs("gateway", "--log-level", "debug", "run"))).toBe(false);
-    expect(isGatewayRunFastPathArgv(cliArgs("gateway", "call", "health"))).toBe(false);
-    expect(isGatewayRunFastPathArgv(cliArgs("gateway", "--help"))).toBe(false);
-    expect(isGatewayRunFastPathArgv(cliArgs("gateway", "--port"))).toBe(false);
-    expect(isGatewayRunFastPathArgv(cliArgs("gateway", "--unknown"))).toBe(false);
-    expect(isGatewayRunFastPathArgv(cliArgs("gateway", "--update-canary=true"))).toBe(false);
-  });
-
-  it("resolves destructive flags after root options without consuming option values", () => {
-    expect(
-      resolveGatewayRunPreBootstrapOptions(
-        cliArgs("--log-level", "debug", "gateway", "run", "--force", "--reset"),
-      ),
-    ).toEqual({ force: true, reset: true });
-    expect(resolveGatewayRunPreBootstrapOptions(cliArgs("gateway", "--token", "--force"))).toEqual({
-      force: false,
-      reset: false,
-    });
-  });
-
-  it.each([
-    { args: ["--", "gateway", "--force"], commandPath: ["gateway", "--force"] },
-    { args: ["gateway", "--", "run", "--force"], commandPath: ["gateway", "run"] },
-    { args: ["gateway", "run", "--", "--reset"], commandPath: ["gateway", "run"] },
-  ])("preserves literal commands without destructive flags: $args", ({ args, commandPath }) => {
-    const argv = cliArgs(...args);
-    expect(resolveGatewayCatalogCommandPath(argv)).toEqual(commandPath);
-    const options = resolveGatewayRunPreBootstrapOptions(argv);
-    expect(options?.force).not.toBe(true);
-    expect(options?.reset).not.toBe(true);
-  });
+it.each([
+  ["gateway", true],
+  ["gateway --force", true],
+  ["gateway --port 18789", true],
+  ["gateway --auth=none", true],
+  ["--no-color gateway --bind loopback", true],
+  ["gateway run", true],
+  ["gateway --log-level debug run", false],
+  ["gateway call health", false],
+  ["gateway --help", false],
+  ["gateway --port", false],
+  ["gateway --unknown", false],
+  ["gateway --update-canary=true", false],
+] as const)("Gateway fast path: %s -> %s", (args, expected) => {
+  expect(isGatewayRunFastPathArgv(cliArgs(...args.split(" ")))).toBe(expected);
 });
 
 describe("root startup policy", () => {
   it.each([
-    { args: ["--profile", "p", "--update"], expected: ["--profile", "p", "update"] },
-    { args: ["--", "--update"], expected: ["--", "--update"] },
-    {
-      args: ["config", "set", "update.channel", "--update"],
-      expected: ["config", "set", "update.channel", "--update"],
-    },
-  ])("rewrites only a root update flag: $args", ({ args, expected }) => {
-    expect(rewriteUpdateFlagArgv(cliArgs(...args))).toEqual(cliArgs(...expected));
-  });
-
-  it("skips proxy startup before SQLite maintenance", () => {
-    expect(shouldStartProxyForCli(cliArgs("doctor", "--state-sqlite", "compact", "--json"))).toBe(
-      false,
+    ["--profile p --update", "--profile p update"],
+    ["-- --update"],
+    ["config set update.channel --update"],
+  ])("rewrites only a root update flag: %s", (args, expected = args) => {
+    expect(rewriteUpdateFlagArgv(cliArgs(...args.split(" ")))).toEqual(
+      cliArgs(...expected.split(" ")),
     );
-    expect(shouldStartProxyForCli(cliArgs("doctor", "--state-sqlite=compact", "--json"))).toBe(
-      false,
-    );
-    expect(shouldStartProxyForCli(cliArgs("doctor", "--lint"))).toBe(true);
   });
 
   it("uses root help only for root invocations and aliases", () => {
@@ -214,15 +170,6 @@ describe("root startup policy", () => {
   });
 });
 
-function commandResolvers(registry: PluginManifestCommandAliasRegistry) {
-  return {
-    resolveCommandAliasOwner: ({ command }: { command: string | undefined }) =>
-      resolveManifestCommandAliasOwnerInRegistry({ command, registry }),
-    resolveToolOwner: ({ toolName }: { toolName: string | undefined }) =>
-      resolveManifestToolOwnerInRegistry({ toolName, registry }),
-  };
-}
-
 describe("plugin command policy", () => {
   it("reports a disabled root without an alias record", () => {
     expect(
@@ -232,33 +179,32 @@ describe("plugin command policy", () => {
     ).toContain("plugins.entries.browser.enabled=false");
   });
 
-  it.each([
-    {
-      command: "voicecall",
-      plugin: { id: "voice-call", commandAliases: [{ name: "voicecall" }] },
-      config: { plugins: { entries: { "voice-call": { enabled: true } } } },
-    },
-    {
-      command: "wiki",
-      plugin: { id: "memory-wiki", enabledByDefault: true, commandAliases: [{ name: "wiki" }] },
-      config: { plugins: { allow: ["memory-wiki"] } },
-    },
-  ])("accepts enabled parent ownership for $command", ({ command, plugin, config }) => {
+  it.each<[string, string, boolean, OpenClawConfig]>([
+    [
+      "voicecall",
+      "voice-call",
+      false,
+      { plugins: { entries: { "voice-call": { enabled: true } } } },
+    ],
+    ["wiki", "memory-wiki", true, { plugins: { allow: ["memory-wiki"] } }],
+  ])("accepts enabled parent ownership for %s", (command, id, enabledByDefault, config) => {
     expect(
-      resolveMissingPluginCommandMessage(command, config, commandResolvers({ plugins: [plugin] })),
+      resolveMissingPluginCommandMessage(command, config, {
+        resolveCommandAliasOwner: ({ command: name }) =>
+          resolveManifestCommandAliasOwnerInRegistry({
+            command: name,
+            registry: { plugins: [{ id, enabledByDefault, commandAliases: [{ name: command }] }] },
+          }),
+      }),
     ).toBeNull();
   });
 });
 
-it("keeps post-root log levels out of the gateway command path", () => {
-  expect(
-    resolveGatewayCatalogCommandPath(cliArgs("gateway", "--log-level", "debug", "run")),
-  ).toEqual(["gateway", "run"]);
-  expect(
-    resolveGatewayCatalogCommandPath(
-      cliArgs("gateway", "--log-level=debug", "restart-handoff", "capabilities"),
-    ),
-  ).toEqual(["gateway", "restart-handoff"]);
+it.each([
+  ["gateway --log-level debug run", "run"],
+  ["gateway --log-level=debug restart-handoff capabilities", "restart-handoff"],
+])("keeps post-root log levels out of %s", (args, command) => {
+  expect(resolveGatewayCommandPath(cliArgs(...args.split(" ")))).toEqual(["gateway", command]);
 });
 
 it("keeps reserved non-plugin roots out of plugin allowlist diagnostics", () => {

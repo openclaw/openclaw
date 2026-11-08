@@ -23,14 +23,6 @@ type ReplyToModeChannelConfig = {
   accounts?: Record<string, ReplyToModeChannelConfig | undefined>;
 };
 
-function normalizeReplyToModeChatType(
-  chatType?: string | null,
-): "direct" | "group" | "channel" | undefined {
-  return chatType === "direct" || chatType === "group" || chatType === "channel"
-    ? chatType
-    : undefined;
-}
-
 function resolveConfiguredReplyToMode(
   cfg: OpenClawConfig,
   provider?: string,
@@ -51,13 +43,12 @@ function resolveConfiguredReplyToMode(
         normalizeAccountId,
       )
     : undefined;
-  const normalizedChatType = normalizeReplyToModeChatType(chatType);
-  if (normalizedChatType) {
+  if (chatType === "direct" || chatType === "group" || chatType === "channel") {
     // Exhaust account policy before channel defaults so a routed account cannot silently inherit.
     return (
-      accountConfig?.replyToModeByChatType?.[normalizedChatType] ??
+      accountConfig?.replyToModeByChatType?.[chatType] ??
       accountConfig?.replyToMode ??
-      channelConfig?.replyToModeByChatType?.[normalizedChatType] ??
+      channelConfig?.replyToModeByChatType?.[chatType] ??
       channelConfig?.replyToMode ??
       "all"
     );
@@ -129,18 +120,6 @@ export function createReplyDeliveryContext(
   };
 }
 
-function suppressReplyTarget(payload: ReplyPayload): ReplyPayload {
-  return setReplyPayloadMetadata(
-    copyReplyPayloadMetadata(payload, {
-      ...payload,
-      replyToId: undefined,
-      replyToCurrent: false,
-      replyToTag: false,
-    }),
-    { replyTargetSuppressed: true },
-  );
-}
-
 export function createReplyToModeFilterForChannel(
   mode: ReplyToMode,
   channel?: OriginatingChannelType,
@@ -174,7 +153,15 @@ export function createReplyToModeFilterForChannel(
     // Status notices keep their target without consuming the first-reply slot.
     if (isSingleUseReplyToMode(mode) && !isStatusNotice) {
       if (hasThreaded) {
-        return suppressReplyTarget(payload);
+        return setReplyPayloadMetadata(
+          copyReplyPayloadMetadata(payload, {
+            ...payload,
+            replyToId: undefined,
+            replyToCurrent: false,
+            replyToTag: false,
+          }),
+          { replyTargetSuppressed: true },
+        );
       }
       if (!preview) {
         hasThreaded = true;

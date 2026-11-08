@@ -31,6 +31,8 @@ class NodeForegroundService : Service() {
   private val scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
   private var notificationJob: Job? = null
   private var voiceCaptureMode = VoiceCaptureMode.Off
+  private var observedRuntime: NodeRuntime? = null
+  private var wakeMicrophoneGranted = false
 
   override fun onCreate() {
     super.onCreate()
@@ -61,6 +63,7 @@ class NodeForegroundService : Service() {
             stopSelfResult(startId)
             return@launch
           } ?: return@launch
+        observedRuntime = runtime
         if (app.nodeServiceStartAllowed) collectNotificationState(runtime)
       }
   }
@@ -87,19 +90,14 @@ class NodeForegroundService : Service() {
           runtime.micIsListening,
           runtime.talkModeListening,
           runtime.talkModeSpeaking,
-        ) { micEnabled, micListening, talkListening, talkSpeaking ->
-          VoiceNotificationCapture(
-            micEnabled = micEnabled,
-            micListening = micListening,
-            talkListening = talkListening,
-            talkSpeaking = talkSpeaking,
-          )
-        },
+          ::VoiceNotificationCapture,
+        ),
       ) { base, capture ->
         base to capture
       }
     refreshNotificationOnLocaleChanges(
-      states = notificationStates,
+      // Visibility changes retry a microphone grant that Android refused while backgrounded.
+      states = combine(notificationStates, runtime.voiceWakeEnabled, runtime.isForeground) { state, _, _ -> state },
       localeChanges = nativeLocaleChanges,
     ).collect { update ->
       ensureChannelForLocaleRevision(update.localeRevision)
@@ -107,17 +105,9 @@ class NodeForegroundService : Service() {
       voiceCaptureMode = state.mode
       val title =
         when {
-          state.connection.isConnected && state.mode == VoiceCaptureMode.TalkMode -> {
-            nativeString("OpenClaw Node · Talk")
-          }
-
-          state.connection.isConnected -> {
-            nativeString("OpenClaw Node · Connected")
-          }
-
-          else -> {
-            nativeString("OpenClaw Node")
-          }
+          state.connection.isConnected && state.mode == VoiceCaptureMode.TalkMode -> nativeString("OpenClaw Node · Talk")
+          state.connection.isConnected -> nativeString("OpenClaw Node · Connected")
+          else -> nativeString("OpenClaw Node")
         }
       val displayStatus = gatewayConnectionStatusForDisplay(state.connection.statusText)
       val text =
@@ -187,6 +177,8 @@ class NodeForegroundService : Service() {
 
   override fun onDestroy() {
     scope.cancel()
+    observedRuntime?.setVoiceWakeBackgroundListeningAllowed(false)
+    observedRuntime = null
     super.onDestroy()
   }
 
@@ -236,12 +228,33 @@ class NodeForegroundService : Service() {
   }
 
   private fun startForegroundWithTypes(notification: Notification) {
-    val serviceTypes =
+    val wakeRequested =
+      observedRuntime?.let {
+        (application as NodeApp).nodeServiceStartAllowed &&
+          it.voiceWakeEnabled.value && it.voiceWakeAvailable.value && hasPermission(Manifest.permission.RECORD_AUDIO) &&
+          (it.isForeground.value || wakeMicrophoneGranted)
+      } == true
+    val baseTypes =
       foregroundServiceTypes(
         voiceMode = voiceCaptureMode,
         backgroundLocationActive = isBackgroundLocationActive(),
       )
-    ServiceCompat.startForeground(this, NOTIFICATION_ID, notification, serviceTypes)
+    val serviceTypes =
+      if (wakeRequested) baseTypes or ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE else baseTypes
+    var wakeGranted = wakeRequested
+    try {
+      // Refresh while-in-use eligibility even if a sticky service was created in the background.
+      if (wakeRequested && !wakeMicrophoneGranted) start(this)
+      ServiceCompat.startForeground(this, NOTIFICATION_ID, notification, serviceTypes)
+    } catch (err: RuntimeException) {
+      if (serviceTypes == baseTypes) throw err
+      // A sticky background restart cannot acquire while-in-use microphone permission.
+      Log.w("OpenClawNodeService", "Wake microphone service type unavailable", err)
+      ServiceCompat.startForeground(this, NOTIFICATION_ID, notification, baseTypes)
+      wakeGranted = false
+    }
+    wakeMicrophoneGranted = wakeGranted
+    observedRuntime?.setVoiceWakeBackgroundListeningAllowed(wakeGranted)
   }
 
   private fun isBackgroundLocationActive(): Boolean {
@@ -264,8 +277,7 @@ class NodeForegroundService : Service() {
 
     fun start(context: Context) {
       if (!(context.applicationContext as NodeApp).nodeServiceStartAllowed) return
-      val intent = Intent(context, NodeForegroundService::class.java)
-      context.startForegroundService(intent)
+      context.startForegroundService(Intent(context, NodeForegroundService::class.java))
     }
 
     fun stop(context: Context) {
@@ -280,8 +292,7 @@ class NodeForegroundService : Service() {
     ): () -> Boolean =
       (context.applicationContext as NodeApp).updateNodeServiceIntent(allowStart = true) {
         if (startNow) {
-          val intent = Intent(context, NodeForegroundService::class.java).setAction(ACTION_RESUME)
-          context.startForegroundService(intent)
+          context.startForegroundService(Intent(context, NodeForegroundService::class.java).setAction(ACTION_RESUME))
         }
       }
 
@@ -308,20 +319,10 @@ internal fun foregroundServiceTypes(
   voiceMode: VoiceCaptureMode,
   backgroundLocationActive: Boolean,
 ): Int {
-  val base = ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE
-  val voiceTypes =
-    when (voiceMode) {
-      VoiceCaptureMode.Off -> base
-
-      VoiceCaptureMode.ManualMic,
-      VoiceCaptureMode.TalkMode,
-      -> base or ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
-    }
-  return if (backgroundLocationActive) {
-    voiceTypes or ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION
-  } else {
-    voiceTypes
-  }
+  var types = ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE
+  if (voiceMode != VoiceCaptureMode.Off) types = types or ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
+  if (backgroundLocationActive) types = types or ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION
+  return types
 }
 
 internal fun backgroundLocationNotificationSuffix(active: Boolean): String =
@@ -348,14 +349,10 @@ internal fun voiceNotificationSuffix(
     }
 
     VoiceCaptureMode.ManualMic -> {
-      if (manualMicEnabled) {
-        if (manualMicListening) {
-          nativeString(" · Mic: Listening")
-        } else {
-          nativeString(" · Mic: Pending")
-        }
-      } else {
-        ""
+      when {
+        !manualMicEnabled -> ""
+        manualMicListening -> nativeString(" · Mic: Listening")
+        else -> nativeString(" · Mic: Pending")
       }
     }
 

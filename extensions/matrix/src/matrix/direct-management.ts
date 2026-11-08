@@ -1,4 +1,4 @@
-import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
+import { enqueueKeyedTask } from "openclaw/plugin-sdk/keyed-async-queue";
 import {
   normalizeOptionalString,
   normalizeUniqueTrimmedStringList,
@@ -16,43 +16,7 @@ export type MatrixDirectRoomCandidate = {
   source: "account-data" | "joined";
 };
 
-type MatrixDirectRoomInspection = {
-  selfUserId: string | null;
-  remoteUserId: string;
-  mappedRoomIds: string[];
-  mappedRooms: MatrixDirectRoomCandidate[];
-  discoveredStrictRoomIds: string[];
-  activeRoomId: string | null;
-};
-
-type MatrixDirectRoomRepairResult = MatrixDirectRoomInspection & {
-  createdRoomId: string | null;
-  changed: boolean;
-  directContentBefore: MatrixDirectAccountData;
-  directContentAfter: MatrixDirectAccountData;
-};
-
-type MatrixDirectRoomPromotionResult =
-  | {
-      classifyAsDirect: true;
-      repaired: boolean;
-      roomId: string;
-      reason: "promoted" | "already-mapped" | "repair-failed";
-    }
-  | {
-      classifyAsDirect: false;
-      repaired: false;
-      reason: "not-strict" | "local-explicit-false";
-    };
-
-type MatrixDirectRoomMappingWriteResult = {
-  changed: boolean;
-  directContentBefore: MatrixDirectAccountData;
-  directContentAfter: MatrixDirectAccountData;
-};
-
-const DIRECT_ACCOUNT_DATA_QUEUE_KEY = EventType.Direct;
-const directAccountDataWriteQueues = new WeakMap<MatrixClient, KeyedAsyncQueue>();
+const directAccountDataWriteQueues = new WeakMap<MatrixClient, Promise<void>>();
 
 async function readMatrixDirectAccountData(client: MatrixClient): Promise<MatrixDirectAccountData> {
   const direct = (await client.getAccountData(EventType.Direct)) as MatrixDirectAccountData;
@@ -67,24 +31,15 @@ function normalizeRemoteUserId(remoteUserId: string): string {
   return normalized;
 }
 
-function resolveDirectAccountDataWriteQueue(client: MatrixClient): KeyedAsyncQueue {
-  const existing = directAccountDataWriteQueues.get(client);
-  if (existing) {
-    return existing;
-  }
-  const created = new KeyedAsyncQueue();
-  directAccountDataWriteQueues.set(client, created);
-  return created;
-}
-
 async function writeMatrixDirectRoomMappings(params: {
   client: MatrixClient;
   remoteUserId: string;
   roomIds: readonly string[];
-}): Promise<MatrixDirectRoomMappingWriteResult> {
-  return await resolveDirectAccountDataWriteQueue(params.client).enqueue(
-    DIRECT_ACCOUNT_DATA_QUEUE_KEY,
-    async () => {
+}) {
+  return await enqueueKeyedTask({
+    tails: directAccountDataWriteQueues,
+    key: params.client,
+    task: async () => {
       const directContentBefore = await readMatrixDirectAccountData(params.client);
       const current = normalizeUniqueTrimmedStringList(directContentBefore[params.remoteUserId]);
       const next = normalizeUniqueTrimmedStringList([...params.roomIds, ...current]);
@@ -100,31 +55,7 @@ async function writeMatrixDirectRoomMappings(params: {
         directContentAfter,
       };
     },
-  );
-}
-
-async function classifyDirectRoomCandidate(params: {
-  client: MatrixClient;
-  roomId: string;
-  remoteUserId: string;
-  selfUserId: string | null;
-  source: "account-data" | "joined";
-}): Promise<MatrixDirectRoomCandidate> {
-  const evidence = await inspectMatrixDirectRoomEvidence({
-    client: params.client,
-    roomId: params.roomId,
-    remoteUserId: params.remoteUserId,
-    selfUserId: params.selfUserId,
   });
-  const strict =
-    evidence.strict && (params.source === "account-data" || evidence.memberStateFlag !== false);
-  return {
-    roomId: params.roomId,
-    joinedMembers: evidence.joinedMembers,
-    strict,
-    explicit: strict && (params.source === "account-data" || evidence.viaMemberState),
-    source: params.source,
-  };
 }
 
 export async function persistMatrixDirectRoomMapping(params: {
@@ -147,7 +78,7 @@ export async function promoteMatrixDirectRoomCandidate(params: {
   remoteUserId: string;
   roomId: string;
   selfUserId?: string | null;
-}): Promise<MatrixDirectRoomPromotionResult> {
+}) {
   const remoteUserId = normalizeRemoteUserId(params.remoteUserId);
   const evidence = await inspectMatrixDirectRoomEvidence({
     client: params.client,
@@ -155,19 +86,12 @@ export async function promoteMatrixDirectRoomCandidate(params: {
     remoteUserId,
     selfUserId: params.selfUserId,
   });
-  if (!evidence.strict) {
+  if (!evidence.strict || evidence.memberStateFlag === false) {
     return {
       classifyAsDirect: false,
       repaired: false,
-      reason: "not-strict",
-    };
-  }
-  if (evidence.memberStateFlag === false) {
-    return {
-      classifyAsDirect: false,
-      repaired: false,
-      reason: "local-explicit-false",
-    };
+      reason: evidence.strict ? "local-explicit-false" : "not-strict",
+    } as const;
   }
 
   try {
@@ -179,41 +103,50 @@ export async function promoteMatrixDirectRoomCandidate(params: {
     return {
       classifyAsDirect: true,
       repaired,
-      roomId: params.roomId,
       reason: repaired ? "promoted" : "already-mapped",
-    };
+    } as const;
   } catch {
     return {
       classifyAsDirect: true,
       repaired: false,
-      roomId: params.roomId,
       reason: "repair-failed",
-    };
+    } as const;
   }
 }
 
 export async function inspectMatrixDirectRooms(params: {
   client: MatrixClient;
   remoteUserId: string;
-}): Promise<MatrixDirectRoomInspection> {
+}) {
   const remoteUserId = normalizeRemoteUserId(params.remoteUserId);
   const selfUserId =
     normalizeOptionalString(await params.client.getUserId().catch(() => null)) ?? null;
+  const classifyRoom = async (
+    roomId: string,
+    source: MatrixDirectRoomCandidate["source"],
+  ): Promise<MatrixDirectRoomCandidate> => {
+    const evidence = await inspectMatrixDirectRoomEvidence({
+      client: params.client,
+      roomId,
+      remoteUserId,
+      selfUserId,
+    });
+    const strict =
+      evidence.strict && (source === "account-data" || evidence.memberStateFlag !== false);
+    return {
+      roomId,
+      joinedMembers: evidence.joinedMembers,
+      strict,
+      explicit: strict && (source === "account-data" || evidence.viaMemberState),
+      source,
+    };
+  };
   const directContent: MatrixDirectAccountData = await readMatrixDirectAccountData(
     params.client,
   ).catch(() => ({}));
   const mappedRoomIds = normalizeUniqueTrimmedStringList(directContent[remoteUserId]);
   const mappedRooms = await Promise.all(
-    mappedRoomIds.map(
-      async (roomId) =>
-        await classifyDirectRoomCandidate({
-          client: params.client,
-          roomId,
-          remoteUserId,
-          selfUserId,
-          source: "account-data",
-        }),
-    ),
+    mappedRoomIds.map(async (roomId) => await classifyRoom(roomId, "account-data")),
   );
   const mappedStrict = mappedRooms.find((room) => room.strict);
 
@@ -223,13 +156,7 @@ export async function inspectMatrixDirectRooms(params: {
     if (mappedRoomIds.includes(roomId)) {
       continue;
     }
-    const candidate = await classifyDirectRoomCandidate({
-      client: params.client,
-      roomId,
-      remoteUserId,
-      selfUserId,
-      source: "joined",
-    });
+    const candidate = await classifyRoom(roomId, "joined");
     if (candidate.strict) {
       discoveredStrictRooms.push(candidate);
     }
@@ -252,7 +179,7 @@ export async function repairMatrixDirectRooms(params: {
   client: MatrixClient;
   remoteUserId: string;
   encrypted?: boolean;
-}): Promise<MatrixDirectRoomRepairResult> {
+}) {
   const remoteUserId = normalizeRemoteUserId(params.remoteUserId);
   const inspected = await inspectMatrixDirectRooms({
     client: params.client,

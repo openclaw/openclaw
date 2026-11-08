@@ -58,7 +58,7 @@ openclaw models auth login --provider anthropic --method cli --set-default
 
 This is two steps: log Claude Code into Anthropic on the host, then tell OpenClaw to route Anthropic models through the local `claude-cli` backend.
 
-OpenClaw never reads, stores, refreshes, or forwards the native login tokens. The installed `claude` process reads and refreshes its own login. `CLAUDE_CONFIG_DIR` selects a separate Claude login when set on the Gateway process. OpenClaw-managed setup tokens and API keys remain separate credentials.
+The installed `claude` process reads and refreshes its own native login. By default, OpenClaw uses a non-secret route marker rather than copying its tokens. Set `CLAUDE_CONFIG_DIR` on the Gateway process and use the same directory for `claude auth login` to keep this login separate from your personal Claude CLI login. To share an existing file-backed login with separate settings instead, see [separate Claude configuration](/gateway/cli-backends#separate-claude-configuration). OpenClaw-managed setup tokens and API keys remain separate credentials.
 
 The gateway service must resolve `claude` on `PATH`. If a deployment needs a
 nonstandard executable path, register a wrapper through a
@@ -151,7 +151,7 @@ When you remove provider auth through the gateway control plane, OpenClaw delete
 
 ### OpenAI and legacy `openai-codex` ids
 
-OpenAI API-key profiles and ChatGPT/Codex OAuth profiles both use the canonical provider id `openai`. Use `openai:*` profile ids and `auth.order.openai` for new config.
+OpenAI API-key profiles and ChatGPT/Codex OAuth profiles both use the standard provider id `openai`. Use `openai:*` profile ids and `auth.order.openai` for new config.
 
 If you see `openai-codex` in older config, auth profile ids, or `auth.order.openai-codex`, treat it as legacy migration input — don't create new `openai-codex` profiles. Run:
 
@@ -160,7 +160,7 @@ openclaw doctor --fix
 openclaw models auth list --provider openai
 ```
 
-Doctor rewrites legacy `openai-codex:*` profile ids and `auth.order.openai-codex` entries to the canonical `openai` route. For OpenAI-specific model/runtime routing, see [OpenAI](/providers/openai).
+Doctor rewrites legacy `openai-codex:*` profile ids and `auth.order.openai-codex` entries to the current `openai` route. For OpenAI-specific model/runtime routing, see [OpenAI](/providers/openai).
 
 ### During login (CLI)
 

@@ -1,5 +1,5 @@
 import { note } from "../../packages/terminal-core/src/note.js";
-import { readResolvedDeferredPluginMigrationWarnings } from "../infra/deferred-plugin-migration-warnings.js";
+import { readRetiredDeferredUpdateWarnings } from "../infra/deferred-update-warnings.js";
 import type { UpdateRunRecord } from "../infra/update-run-record.js";
 import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import {
@@ -52,13 +52,15 @@ async function recordUpdateHistoryWarning(detail: string): Promise<void> {
     { executeSqliteQuerySync, executeSqliteQueryTakeFirstSync, getNodeSqliteKysely },
     { decodeRun },
     { encodeRun },
-    { updateRunLedgerSchema, upsertStep },
+    { updateRunLedgerSchema },
+    { upsertStep },
   ] = await Promise.all([
     import("../state/openclaw-state-db-existing-write.js"),
     import("../infra/kysely-sync.js"),
     import("../infra/update-run-read.kernel.js"),
     import("../infra/update-run-codec.js"),
     import("../infra/update-run-write.js"),
+    import("../infra/update-run-step-upsert.js"),
   ]);
   runExistingOpenClawStateWriteTransaction(
     ({ db }) => {
@@ -183,16 +185,11 @@ async function inspectStaleUpdateRuns(
     ) {
       note(`Update ${latest.runId}: ${renderUpdateRunReport(latest).markdown}`, "Update history");
     }
-    const resolvedWarnings = await readResolvedDeferredPluginMigrationWarnings(
+    const retiredWarnings = await readRetiredDeferredUpdateWarnings(
       latest.steps.map((step) => step.detail),
+      { readUpdateRun: () => latest },
     );
-    const warningSteps = latest.steps.filter((step) => {
-      const completedAtMs = step.detail ? resolvedWarnings.get(step.detail) : undefined;
-      return (
-        completedAtMs === undefined ||
-        completedAtMs < (step.endedAtMs ?? latest.finishedAtMs ?? latest.createdAtMs)
-      );
-    });
+    const warningSteps = latest.steps.filter((step) => !retiredWarnings.has(step.detail ?? ""));
     const warnings = updateRunWarningMessages(warningSteps);
     if (warnings.length) {
       note(

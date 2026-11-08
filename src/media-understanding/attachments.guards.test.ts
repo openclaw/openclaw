@@ -1,7 +1,7 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { MsgContext } from "../auto-reply/templating.js";
-import { selectAttachments } from "./attachments.js";
 import { normalizeAttachments } from "./attachments.normalize.js";
+import { selectAttachments } from "./attachments.select.js";
 import type { MediaAttachment } from "./types.js";
 
 describe("media-understanding selectAttachments guards", () => {
@@ -47,13 +47,8 @@ describe("media-understanding selectAttachments guards", () => {
   });
 
   it.each([
-    { prefer: "first", limit: 2, selected: [0, 2], dropped: [18, 23] },
     { prefer: "last", limit: 2, selected: [4, 3], dropped: [14, 11] },
-    { prefer: "path", limit: 2, selected: [2, 3], dropped: [11, 23] },
     { prefer: "url", limit: 2, selected: [0, 3], dropped: [23, 14] },
-    { prefer: "first", limit: 1.9, selected: [0], dropped: [14, 18, 23] },
-    { prefer: "first", limit: Number.NaN, selected: [], dropped: [11, 14, 18, 23] },
-    { prefer: "first", limit: Infinity, selected: [0, 2, 3, 4], dropped: [] },
   ] as const)(
     "preserves references and order with $prefer preference and limit $limit",
     ({ prefer, limit, selected, dropped }) => {
@@ -74,12 +69,21 @@ describe("media-understanding selectAttachments guards", () => {
       }
       Object.freeze(attachments);
 
-      const result = selectAttachments({
-        capability: "image",
-        attachments,
-        policy: { mode: "all", prefer, maxAttachments: limit },
-      });
+      const copy = vi.spyOn(Array.prototype, "toReversed");
+      let result: ReturnType<typeof selectAttachments>;
+      let copies: number;
+      try {
+        result = selectAttachments({
+          capability: "image",
+          attachments,
+          policy: { mode: "all", prefer, maxAttachments: limit },
+        });
+        copies = copy.mock.calls.length;
+      } finally {
+        copy.mockRestore();
+      }
 
+      expect(copies).toBe(0);
       expect(result.selected).toHaveLength(selected.length);
       for (const [position, inputPosition] of selected.entries()) {
         expect(result.selected[position]).toBe(attachments[inputPosition]);

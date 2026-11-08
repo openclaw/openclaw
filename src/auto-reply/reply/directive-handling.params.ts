@@ -1,7 +1,7 @@
 import type { FastMode } from "@openclaw/normalization-core/string-coerce";
 import type { AdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
 import type { AgentModelPrimaryWriteTarget } from "../../agents/agent-scope.js";
-import type { ModelCatalogEntry } from "../../agents/model-catalog.js";
+import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
 import type { ModelAliasIndex } from "../../agents/model-selection.js";
 import type { ModelVisibilityPolicy } from "../../agents/model-visibility-policy.js";
 import type { SessionEntry } from "../../config/sessions.js";
@@ -27,9 +27,7 @@ export type HandleDirectiveOnlyParams = {
   allowedModelKeys: Set<string>;
   modelPolicy?: ModelVisibilityPolicy;
   operatorAuthority?: AdmittedRunOperatorAuthority;
-  allowedModelCatalog: Awaited<
-    ReturnType<typeof import("../../agents/prepared-model-catalog.js").readPreparedModelCatalog>
-  >;
+  allowedModelCatalog: ModelCatalogEntry[];
   thinkingCatalog?: ModelCatalogEntry[];
   resetModelOverride: boolean;
   provider: string;

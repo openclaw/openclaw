@@ -6,6 +6,7 @@
  */
 import type { Server } from "node:http";
 import { isIPv6, type AddressInfo } from "node:net";
+import { promisify } from "node:util";
 import express from "express";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { isLoopbackHost } from "openclaw/plugin-sdk/ssrf-runtime";
@@ -35,15 +36,7 @@ async function closeBridgeHttpServer(server: Server): Promise<void> {
   if (!server.listening) {
     return;
   }
-  await new Promise<void>((resolve, reject) => {
-    server.close((error) => {
-      if (error) {
-        reject(error);
-        return;
-      }
-      resolve();
-    });
-  });
+  await promisify(server.close.bind(server))();
 }
 
 type ResolvedNoVncObserver = {
@@ -210,9 +203,7 @@ export function stopBrowserBridgeServer(server: Server): Promise<void> {
   void stopBrowserBridgeServerOnce(server).then(resolve, reject);
   void stopping
     .finally(() => {
-      if (bridgeStopPromises.get(server) === stopping) {
-        bridgeStopPromises.delete(server);
-      }
+      bridgeStopPromises.delete(server);
     })
     .catch(() => {});
   return stopping;

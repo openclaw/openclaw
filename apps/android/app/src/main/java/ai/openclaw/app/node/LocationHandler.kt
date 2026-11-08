@@ -14,57 +14,22 @@ import kotlinx.serialization.json.put
 import java.time.Instant
 import java.time.format.DateTimeFormatter
 
-/**
- * Injectable location facade for command tests and Android runtime access.
- */
-internal interface LocationDataSource {
-  fun hasFinePermission(context: Context): Boolean
-
-  fun hasCoarsePermission(context: Context): Boolean
-
-  fun hasBackgroundPermission(context: Context): Boolean
-
-  suspend fun fetchLocation(
-    desiredProviders: List<String>,
-    maxAgeMs: Long?,
-    timeoutMs: Long,
-  ): Location
-}
-
-private class DefaultLocationDataSource(
-  private val capture: LocationCaptureManager,
-) : LocationDataSource {
-  override fun hasFinePermission(context: Context): Boolean = context.hasPermission(Manifest.permission.ACCESS_FINE_LOCATION)
-
-  override fun hasCoarsePermission(context: Context): Boolean = context.hasPermission(Manifest.permission.ACCESS_COARSE_LOCATION)
-
-  override fun hasBackgroundPermission(context: Context): Boolean = context.hasPermission(Manifest.permission.ACCESS_BACKGROUND_LOCATION)
-
-  override suspend fun fetchLocation(
-    desiredProviders: List<String>,
-    maxAgeMs: Long?,
-    timeoutMs: Long,
-  ): Location =
-    capture.getLocation(
-      desiredProviders = desiredProviders,
-      maxAgeMs = maxAgeMs,
-      timeoutMs = timeoutMs,
-    )
-}
-
 class LocationHandler internal constructor(
-  private val appContext: Context,
-  private val dataSource: LocationDataSource,
+  appContext: Context,
+  capture: suspend (List<String>, Long?, Long) -> Location,
+  private val hasFinePermission: () -> Boolean = { appContext.hasPermission(Manifest.permission.ACCESS_FINE_LOCATION) },
+  private val hasCoarsePermission: () -> Boolean = { appContext.hasPermission(Manifest.permission.ACCESS_COARSE_LOCATION) },
+  private val hasBackgroundPermission: () -> Boolean = { appContext.hasPermission(Manifest.permission.ACCESS_BACKGROUND_LOCATION) },
   private val isForeground: () -> Boolean = { true },
   private val locationMode: () -> LocationMode = { LocationMode.WhileUsing },
   private val backgroundLocationEnabled: () -> Boolean = { false },
-  private val locationPreciseEnabled: () -> Boolean = { true },
+  locationPreciseEnabled: () -> Boolean = { true },
 ) {
   private val disclosure =
     LocationDisclosure(
       preciseEnabled = locationPreciseEnabled,
-      hasFinePermission = { dataSource.hasFinePermission(appContext) },
-      capture = dataSource::fetchLocation,
+      hasFinePermission = hasFinePermission,
+      capture = capture,
     )
 
   constructor(
@@ -76,7 +41,7 @@ class LocationHandler internal constructor(
     locationPreciseEnabled: () -> Boolean,
   ) : this(
     appContext = appContext,
-    dataSource = DefaultLocationDataSource(location),
+    capture = location::getLocation,
     isForeground = isForeground,
     locationMode = locationMode,
     backgroundLocationEnabled = backgroundLocationEnabled,
@@ -89,7 +54,7 @@ class LocationHandler internal constructor(
       // Android foreground restrictions and user expectation keep live location tied to the visible app.
       return nodeInvokeError("LOCATION_BACKGROUND_UNAVAILABLE", "choose Always and grant background location access")
     }
-    if (!dataSource.hasFinePermission(appContext) && !dataSource.hasCoarsePermission(appContext)) {
+    if (!hasFinePermission() && !hasCoarsePermission()) {
       return nodeInvokeError("LOCATION_PERMISSION_REQUIRED", "grant Location permission")
     }
     val (maxAgeMs, timeoutMs, desiredAccuracy) = parseLocationParams(paramsJson)
@@ -121,7 +86,7 @@ class LocationHandler internal constructor(
   private fun allowsBackgroundLocation(): Boolean =
     backgroundLocationEnabled() &&
       locationMode() == LocationMode.Always &&
-      dataSource.hasBackgroundPermission(appContext)
+      hasBackgroundPermission()
 
   private fun parseLocationParams(paramsJson: String?): Triple<Long?, Long, String?> {
     val root = parseJsonParamsObject(paramsJson)

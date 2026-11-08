@@ -2,14 +2,9 @@ import type { AnyAgentTool, OpenClawPluginToolContext } from "openclaw/plugin-sd
 import {
   asNonArrayRecord,
   asRecord,
-  isRecord,
   readStringField,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { jsonResult } from "openclaw/plugin-sdk/tool-results";
-import type {
-  PluginHookToolResultPersistEvent,
-  PluginHookToolResultPersistResult,
-} from "openclaw/plugin-sdk/types";
 import { parseToolInput, type OnePasswordBroker } from "./broker.js";
 import { AUTHORIZATION_NONCE_PARAM } from "./pending-authorization.js";
 
@@ -45,41 +40,6 @@ function errorResult(error: unknown) {
   const code = readStringField(asRecord(error), "code") ?? "OP_ERROR";
   const message = error instanceof Error ? error.message : "1Password request failed";
   return jsonResult({ ok: false, error: { code, message } });
-}
-
-export function redactPersistedOnePasswordResult(
-  event: PluginHookToolResultPersistEvent,
-): PluginHookToolResultPersistResult | undefined {
-  if (
-    event.message.role !== "toolResult" ||
-    (event.toolName ?? event.message.toolName) !== "onepassword"
-  ) {
-    return undefined;
-  }
-  const details = event.message.details;
-  const contentText = event.message.content
-    .filter((part) => part.type === "text")
-    .map((part) => part.text)
-    .join("\n");
-  const hasSecretValue =
-    (isRecord(details) && typeof details.value === "string") || /"value"\s*:/.test(contentText);
-  if (!hasSecretValue) {
-    return undefined;
-  }
-  const safeDetails = asNonArrayRecord(details);
-  const persisted = {
-    ok: true,
-    redacted: true,
-    ...(typeof safeDetails.slug === "string" ? { slug: safeDetails.slug } : {}),
-    ...(typeof safeDetails.itemTitle === "string" ? { itemTitle: safeDetails.itemTitle } : {}),
-    ...(typeof safeDetails.fieldLabel === "string" ? { fieldLabel: safeDetails.fieldLabel } : {}),
-  };
-  return {
-    message: {
-      ...event.message,
-      ...jsonResult(persisted),
-    },
-  };
 }
 
 export function createOnePasswordTool(

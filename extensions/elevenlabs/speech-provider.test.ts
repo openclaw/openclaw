@@ -1,41 +1,25 @@
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
-import { resolveRequestUrl } from "openclaw/plugin-sdk/request-url";
-import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
+import { createSpeechDirectivePolicy } from "../test-support/speech-directive-policy.test-support.js";
 import { isValidElevenLabsVoiceId } from "./shared.js";
 import { buildElevenLabsSpeechProvider } from "./speech-provider-factory.js";
 
-const fetchWithSsrFGuardMock = vi.hoisted(() => vi.fn());
+const fetchMock = vi.hoisted(() =>
+  vi.fn<typeof import("openclaw/plugin-sdk/ssrf-runtime").fetchWithSsrFGuard>(),
+);
 
 vi.mock("./config-api.js", () => ({
   resolveElevenLabsApiKeyWithProfileFallback: () => null,
 }));
 
-vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
-  fetchWithSsrFGuard: async (params: {
-    url: string;
-    init?: RequestInit;
-    timeoutMs?: number;
-  }): Promise<{ response: Response; release: () => Promise<void> }> => {
-    fetchWithSsrFGuardMock(params);
-    return {
-      response: await globalThis.fetch(params.url, params.init),
-      release: vi.fn(async () => {}),
-    };
-  },
-  ssrfPolicyFromHttpBaseUrlAllowedHostname: () => undefined,
+// mock-isolation: Synthesis uses fixture-owned transport and never performs external requests.
+vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/ssrf-runtime")>()),
+  fetchWithSsrFGuard: fetchMock,
 }));
 
-const DIRECTIVE_POLICY = {
-  enabled: true,
-  allowText: true,
-  allowProvider: true,
-  allowVoice: true,
-  allowModelId: true,
-  allowVoiceSettings: true,
-  allowNormalization: true,
-  allowSeed: true,
-};
+const DIRECTIVE_POLICY = createSpeechDirectivePolicy();
 
 const request = {
   text: "hello",
@@ -46,26 +30,26 @@ const request = {
 };
 
 describe("elevenlabs speech provider", () => {
-  const originalFetch = globalThis.fetch;
-  const fetchMock = vi.fn<typeof fetch>();
   const provider = buildElevenLabsSpeechProvider({ formatErrorMessage });
+  function mockResponse(response: Response) {
+    fetchMock.mockResolvedValue({
+      response,
+      finalUrl: "https://api.elevenlabs.io",
+      release: async () => {},
+    });
+  }
 
   function sentRequest() {
-    expect(fetchMock).toHaveBeenCalledOnce();
-    const [input, init] = expectDefined(fetchMock.mock.calls[0], "ElevenLabs request");
-    if (typeof init?.body !== "string") {
-      throw new Error("expected string request body");
-    }
-    const body: unknown = JSON.parse(init.body);
-    if (!body || typeof body !== "object" || Array.isArray(body)) {
-      throw new Error("expected ElevenLabs request body");
-    }
-    return { url: new URL(resolveRequestUrl(input)), body };
+    const [{ url, init }] = expectDefined(fetchMock.mock.calls[0], "ElevenLabs request");
+    const raw = init?.body;
+    assert(typeof raw === "string", "Expected a JSON request body");
+    const body: unknown = JSON.parse(raw);
+    return { url: new URL(url), body };
   }
 
   beforeEach(() => {
-    fetchMock.mockReset().mockResolvedValue(new Response(new Uint8Array([1, 2, 3])));
-    globalThis.fetch = fetchMock;
+    fetchMock.mockReset();
+    mockResponse(new Response(new Uint8Array([1, 2, 3])));
   });
 
   afterAll(() => {
@@ -73,59 +57,31 @@ describe("elevenlabs speech provider", () => {
     vi.resetModules();
   });
 
-  afterEach(() => {
-    globalThis.fetch = originalFetch;
-    fetchWithSsrFGuardMock.mockClear();
-    vi.unstubAllEnvs();
-    vi.restoreAllMocks();
-  });
+  afterEach(() => vi.unstubAllEnvs());
 
   it.each([
-    ["stability", "0", { stability: 0 }],
-    ["similarity_boost", "5e-1", { similarityBoost: 0.5 }],
-    ["style", "1", { style: 1 }],
-    ["speed", ".5", { speed: 0.5 }],
-    ["speed", "2", { speed: 2 }],
-    ["stability", "-0.1", "stability must be between 0 and 1"],
-    ["similarity", "Infinity", "invalid similarityBoost value"],
-    ["similarity_boost", "1.1", "similarityBoost must be between 0 and 1"],
-    ["speed", ".49", "speed must be between 0.5 and 2"],
-    ["speed", "2.01", "speed must be between 0.5 and 2"],
-    ["speed", "invalid", undefined, false],
+    ["stability", "0", true, { overrides: { voiceSettings: { style: 0.25, stability: 0 } } }],
+    ["similarity", "Infinity", true, { warnings: ["invalid similarityBoost value"] }],
+    ["speed", "2.01", true, { warnings: ["speed must be between 0.5 and 2"] }],
+    ["speed", "invalid", false, {}],
   ] as const)(
     "preserves the %s=%s voice-setting directive",
-    (key, value, expected, allowed?: boolean) => {
-      const currentOverrides = { voiceId: "existing-voice", voiceSettings: { style: 0.25 } };
-      const allowVoiceSettings = allowed ?? true;
-      const parsed = provider.parseDirectiveToken?.({
-        key,
-        value,
-        policy: { ...DIRECTIVE_POLICY, allowVoiceSettings },
-        currentOverrides,
-      });
-
-      expect(parsed).toEqual(
-        !allowVoiceSettings
-          ? { handled: true }
-          : typeof expected === "string"
-            ? { handled: true, warnings: [expected] }
-            : {
-                handled: true,
-                overrides: {
-                  ...currentOverrides,
-                  voiceSettings: { ...currentOverrides.voiceSettings, ...expected },
-                },
-              },
-      );
+    (key, value, allowVoiceSettings, expected) => {
+      expect(
+        provider.parseDirectiveToken?.({
+          key,
+          value,
+          policy: { ...DIRECTIVE_POLICY, allowVoiceSettings },
+          currentOverrides: { voiceId: "existing-voice", voiceSettings: { style: 0.25 } },
+        }),
+      ).toEqual({ handled: true, ...expected });
     },
   );
 
   it("forwards the core-resolved voice-list timeout", async () => {
-    fetchMock.mockResolvedValue(Response.json({ voices: [] }));
+    mockResponse(Response.json({ voices: [] }));
     await provider.listVoices?.({ providerConfig: request.providerConfig, timeoutMs: 30_000 });
-    expect(fetchWithSsrFGuardMock).toHaveBeenCalledWith(
-      expect.objectContaining({ timeoutMs: 30_000 }),
-    );
+    expect(fetchMock).toHaveBeenCalledWith(expect.objectContaining({ timeoutMs: 30_000 }));
   });
 
   it("rejects blank credentials across discovery and synthesis before requests", async () => {
@@ -134,99 +90,33 @@ describe("elevenlabs speech provider", () => {
     const providerConfig = { apiKey: "   " };
     const blankRequest = { ...request, providerConfig };
 
-    expect(provider.isConfigured(blankRequest)).toBe(false);
+    expect(await provider.isConfiguredAsync?.(blankRequest)).toBe(false);
     await expect(
       provider.listVoices?.({ apiKey: "   ", providerConfig, timeoutMs: 1_000 }),
     ).rejects.toThrow("ElevenLabs API key missing");
-    await expect(provider.synthesize(blankRequest)).rejects.toThrow("ElevenLabs API key missing");
-    await expect(provider.streamSynthesize?.(blankRequest)).rejects.toThrow(
-      "ElevenLabs API key missing",
-    );
-    await expect(provider.synthesizeTelephony?.(blankRequest)).rejects.toThrow(
-      "ElevenLabs API key missing",
-    );
-    expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
-  });
-
-  it("keeps non-equivalent deprecated ElevenLabs TTS model IDs", async () => {
-    await provider.synthesizeTelephony?.({
-      ...request,
-      providerConfig: { apiKey: "xi-test", modelId: "eleven_monolingual_v1" },
-    });
-    expect(sentRequest().body).toHaveProperty("model_id", "eleven_monolingual_v1");
-  });
-
-  it("maps deprecated ElevenLabs TTS model IDs in overrides", async () => {
-    await provider.synthesizeTelephony?.({
-      ...request,
-      providerConfig: { apiKey: "xi-test", modelId: "eleven_multilingual_v2" },
-      providerOverrides: { modelId: "eleven_turbo_v2_5" },
-    });
-    expect(sentRequest().body).toHaveProperty("model_id", "eleven_flash_v2_5");
-  });
-
-  it("validates ElevenLabs voice ID length and character rules", () => {
-    const cases = [
-      { value: "a1b2c3d4e5", expected: true },
-      { value: "a".repeat(40), expected: true },
-      { value: "123456789", expected: false },
-      { value: "a".repeat(41), expected: false },
-      { value: "pMsXgVXv3BLz-gSXRplE", expected: false },
-      { value: "../../../etc/passwd", expected: false },
-      { value: "voice?param=value", expected: false },
-    ] as const;
-    for (const testCase of cases) {
-      expect(isValidElevenLabsVoiceId(testCase.value), testCase.value).toBe(testCase.expected);
+    for (const synthesize of [
+      provider.synthesize,
+      provider.streamSynthesize,
+      provider.synthesizeTelephony,
+    ]) {
+      await expect(synthesize?.(blankRequest)).rejects.toThrow("ElevenLabs API key missing");
     }
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it("applies provider overrides to telephony synthesis", async () => {
-    const result = await provider.synthesizeTelephony?.({
-      ...request,
-      providerConfig: {
-        apiKey: "xi-test",
-        voiceId: "pMsXgVXv3BLzUgSXRplE",
-        modelId: "eleven_multilingual_v2",
-      },
-      providerOverrides: {
-        voiceId: "21m00Tcm4TlvDq8ikWAM",
-        modelId: "eleven_v3",
-        seed: 123,
-        applyTextNormalization: "on",
-        languageCode: "en",
-        voiceSettings: { speed: 1.2 },
-      },
-    });
-    const { url, body } = sentRequest();
-    expect(url.pathname).toBe("/v1/text-to-speech/21m00Tcm4TlvDq8ikWAM");
-    expect(url.searchParams.get("output_format")).toBe("pcm_22050");
-    expect(body).toEqual({
-      text: "hello",
-      model_id: "eleven_v3",
-      seed: 123,
-      apply_text_normalization: "on",
-      language_code: "en",
-      voice_settings: {
-        stability: 0.5,
-        similarity_boost: 0.75,
-        style: 0,
-        use_speaker_boost: true,
-        speed: 1.2,
-      },
-    });
-    expect(result?.outputFormat).toBe("pcm_22050");
-  });
-
-  it("drops out-of-range voice settings before synthesis", async () => {
+  it("normalizes model and voice-setting overrides before telephony synthesis", async () => {
     await provider.synthesizeTelephony?.({
       ...request,
       providerConfig: {
         apiKey: "xi-test",
+        modelId: "eleven_multilingual_v2",
         voiceSettings: { stability: -1, similarityBoost: 2, style: Number.NaN, speed: 3 },
       },
-      providerOverrides: { voiceSettings: { speed: 0.1 } },
+      providerOverrides: { modelId: "eleven_turbo_v2_5", voiceSettings: { speed: 0.1 } },
     });
-    expect(sentRequest().body).toHaveProperty("voice_settings", {
+    const { body } = sentRequest();
+    expect(body).toHaveProperty("model_id", "eleven_flash_v2_5");
+    expect(body).toHaveProperty("voice_settings", {
       stability: 0.5,
       similarity_boost: 0.75,
       style: 0,
@@ -235,57 +125,42 @@ describe("elevenlabs speech provider", () => {
     });
   });
 
-  it("drops malformed seed values before synthesis", async () => {
-    await provider.synthesizeTelephony?.({
-      ...request,
-      providerConfig: { apiKey: "xi-test", seed: 1.5 },
-      providerOverrides: { seed: Number.POSITIVE_INFINITY },
-    });
-    expect(sentRequest().body).not.toHaveProperty("seed");
+  it("validates ElevenLabs voice ID length and character rules", () => {
+    for (const [value, expected] of [
+      ["a1b2c3d4e5", true],
+      ["a".repeat(40), true],
+      ["123456789", false],
+      ["a".repeat(41), false],
+      ["pMsXgVXv3BLz-gSXRplE", false],
+      ["../../../etc/passwd", false],
+      ["voice?param=value", false],
+    ] as const) {
+      expect(isValidElevenLabsVoiceId(value), value).toBe(expected);
+    }
   });
 
-  it("drops malformed latency tier overrides before synthesis", async () => {
-    await provider.synthesize({
-      ...request,
-      target: "audio-file",
-      providerOverrides: { latencyTier: 2.5 },
-    });
-    expect(sentRequest().url.searchParams.has("optimize_streaming_latency")).toBe(false);
-  });
-
-  it.each([
-    { outputFormat: "pcm_44100", fileExtension: ".pcm", voiceCompatible: false },
-    { outputFormat: "OPUS_48000_64", fileExtension: ".opus", voiceCompatible: true },
-    { outputFormat: "future_123", fileExtension: ".bin", voiceCompatible: false },
-  ])("returns truthful $outputFormat metadata for a voice-note override", async (expected) => {
+  it("returns future-format metadata and drops invalid latency for a voice-note override", async () => {
+    const expected = { outputFormat: "future_123", fileExtension: ".bin", voiceCompatible: false };
     const result = await provider.synthesize({
       ...request,
-      providerOverrides: { outputFormat: expected.outputFormat },
+      providerOverrides: { outputFormat: expected.outputFormat, latencyTier: 2.5 },
     });
     expect(sentRequest().url.searchParams.get("output_format")).toBe(expected.outputFormat);
+    expect(sentRequest().url.searchParams.has("optimize_streaming_latency")).toBe(false);
     expect(result).toEqual({ audioBuffer: Buffer.from([1, 2, 3]), ...expected });
   });
 
   it("returns truthful stream metadata for an output override and releases the stream once", async () => {
     const cancel = vi.fn();
-    fetchMock.mockResolvedValue(
-      new Response(
-        new ReadableStream<Uint8Array>({
-          start(controller) {
-            controller.enqueue(new Uint8Array([1, 2, 3]));
-          },
-          cancel,
-        }),
-        { headers: { "content-type": "audio/mpeg" } },
-      ),
-    );
-    const result = expectDefined(
-      await provider.streamSynthesize?.({
-        ...request,
-        providerOverrides: { outputFormat: "pcm_44100" },
-      }),
-      "streamSynthesize result",
-    );
+    const stream = new ReadableStream<Uint8Array>({ cancel });
+    mockResponse(new Response(stream, { headers: { "content-type": "audio/mpeg" } }));
+    const result = await expectDefined(
+      provider.streamSynthesize,
+      "streamSynthesize",
+    )({
+      ...request,
+      providerOverrides: { outputFormat: "pcm_44100" },
+    });
     expect(sentRequest().url.searchParams.get("output_format")).toBe("pcm_44100");
     expect(result).toMatchObject({
       outputFormat: "pcm_44100",

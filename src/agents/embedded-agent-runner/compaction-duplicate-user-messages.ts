@@ -11,23 +11,21 @@ type MessageLike = {
   __openclaw?: unknown;
 };
 
-function normalizeUserMessageContent(content: unknown): string | undefined {
-  if (typeof content === "string") {
-    return content.replace(/\s+/g, " ").trim();
-  }
-  if (!Array.isArray(content)) {
-    return undefined;
-  }
-  const textParts: string[] = [];
-  for (const block of content) {
-    if (!isRecord(block) || block.type === "image") {
-      return undefined;
+function normalizeUserMessageContent(rawContent: unknown): string | undefined {
+  let content = rawContent;
+  if (Array.isArray(content)) {
+    const textParts: string[] = [];
+    for (const block of content) {
+      if (!isRecord(block) || block.type === "image") {
+        return undefined;
+      }
+      if (block.type === "text" && typeof block.text === "string") {
+        textParts.push(block.text);
+      }
     }
-    if (block.type === "text" && typeof block.text === "string") {
-      textParts.push(block.text);
-    }
+    content = textParts.join("\n");
   }
-  return textParts.join("\n").replace(/\s+/g, " ").trim();
+  return typeof content === "string" ? content.replace(/\s+/g, " ").trim() : undefined;
 }
 
 function duplicateSignature(message: unknown): { key: string; timestamp: number } | undefined {
@@ -55,7 +53,17 @@ export function dedupeDuplicateUserMessagesForCompaction<T extends MessageLike>(
 ): T[] {
   const lastSeenAtByKey = new Map<string, number>();
   const result: T[] = [];
-  for (const message of messages) {
+  for (let index = 0; index < messages.length; index++) {
+    const message = messages[index]!;
+    if (
+      message.role === "user" &&
+      lastSeenAtByKey.size === 0 &&
+      (index + 1 === messages.length || messages[index + 1]?.role === "assistant")
+    ) {
+      // No earlier retry to compare, and no later user can consume this signature.
+      result.push(message);
+      continue;
+    }
     const signature = duplicateSignature(message);
     if (!signature) {
       // A reply ends the retry batch; identical later asks are real user turns.

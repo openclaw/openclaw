@@ -30,18 +30,16 @@ data class GatewayModelSummary(
   val agentRuntime: JsonObject? = null,
 ) {
   val runtimeName: String?
-    get() =
-      if (agentRuntime?.get("source")?.jsonPrimitive?.content in setOf("model", "provider")) {
-        when (agentRuntime?.get("id")?.jsonPrimitive?.content) {
-          "codex", "codex-cli" -> "Codex"
-          "claude-cli" -> "Claude CLI"
-          "google-gemini-cli" -> "Gemini CLI"
-          "openclaw" -> "OpenClaw"
-          else -> null
-        }
-      } else {
-        null
+    get() {
+      if (agentRuntime?.get("source")?.jsonPrimitive?.content !in setOf("model", "provider")) return null
+      return when (agentRuntime?.get("id")?.jsonPrimitive?.content) {
+        "codex", "codex-cli" -> "Codex"
+        "claude-cli" -> "Claude CLI"
+        "google-gemini-cli" -> "Gemini CLI"
+        "openclaw" -> "OpenClaw"
+        else -> null
       }
+    }
 }
 
 enum class GatewayModelUnavailableReason {
@@ -53,12 +51,14 @@ enum class GatewayModelUnavailableReason {
 internal data class GatewayModelCatalogResult(
   val models: List<GatewayModelSummary>,
   val refreshFailed: Boolean,
+  val hasPendingProviders: Boolean,
 )
 
 internal fun parseGatewayModelCatalog(root: JsonObject?): GatewayModelCatalogResult =
   GatewayModelCatalogResult(
     models = parseGatewayModels(root?.get("models") as? JsonArray),
     refreshFailed = root?.get("refreshFailed")?.jsonPrimitive?.booleanOrNull == true,
+    hasPendingProviders = (root?.get("pendingProviders") as? JsonArray)?.isNotEmpty() == true,
   )
 
 internal fun parseGatewayModels(models: JsonArray?): List<GatewayModelSummary> =

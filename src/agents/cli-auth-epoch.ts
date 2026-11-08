@@ -6,8 +6,8 @@ import crypto from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
-  ensureAuthProfileStore,
-  loadAuthProfileStoreForRuntime,
+  ensureAuthProfileStoreAsync,
+  loadAuthProfileStoreForRuntimeAsync,
 } from "./auth-profiles/store-runtime.js";
 import type { AuthProfileCredential } from "./auth-profiles/types.js";
 import { resolveCliBackendConfig } from "./cli-backends.js";
@@ -156,7 +156,7 @@ export async function resolveCliAuthEpoch(params: {
   }
 
   if (authProfileId) {
-    const store = loadAuthProfileStoreForRuntime(params.agentDir, {
+    const store = await loadAuthProfileStoreForRuntimeAsync(params.agentDir, {
       readOnly: true,
       allowKeychainPrompt: false,
     });
@@ -177,7 +177,7 @@ export async function resolveCliAuthEpoch(params: {
  * reusable-session epoch, identity-less OAuth tokens intentionally invalidate
  * on rotation because accepting an unknown replacement could cross accounts.
  */
-export function resolveCliAuthBindingFingerprint(params: {
+export async function resolveCliAuthBindingFingerprint(params: {
   provider: string;
   config: OpenClawConfig;
   agentDir?: string;
@@ -185,9 +185,17 @@ export function resolveCliAuthBindingFingerprint(params: {
   /** Exact selected profile material actually forwarded to this execution. */
   resolvedAuth?: ResolvedProviderAuth;
   skipLocalCredential?: boolean;
-}): string | undefined {
+}): Promise<string | undefined> {
   const provider = params.provider.trim();
   const authProfileId = normalizeOptionalString(params.authProfileId);
+  const store = authProfileId
+    ? await ensureAuthProfileStoreAsync(params.agentDir, {
+        config: params.config,
+        readOnly: true,
+        allowKeychainPrompt: false,
+        externalCliProviderIds: [provider],
+      })
+    : undefined;
   const parts: string[] = [];
   const localCredential = params.skipLocalCredential ? undefined : getLocalCliCredential(provider);
   if (localCredential) {
@@ -201,13 +209,7 @@ export function resolveCliAuthBindingFingerprint(params: {
     parts.push(`local:${fingerprint}`);
   }
   if (authProfileId) {
-    const store = ensureAuthProfileStore(params.agentDir, {
-      config: params.config,
-      readOnly: true,
-      allowKeychainPrompt: false,
-      externalCliProviderIds: [provider],
-    });
-    const storedCredential = store.profiles[authProfileId];
+    const storedCredential = store?.profiles[authProfileId];
     if (!storedCredential) {
       return undefined;
     }
@@ -233,7 +235,6 @@ type CliRuntimeArtifactFingerprintParams = {
   runtimeArtifactId?: string;
   cwd?: string;
   env?: NodeJS.ProcessEnv;
-  executableIdentity?: CliExecutableIdentity;
 };
 
 /** Hash the exact executable plus backend-owned package implementation tree. */
@@ -268,17 +269,12 @@ export async function resolveCliRuntimeArtifactFingerprint(
   if (params.runtimeArtifactId && backend.id !== params.runtimeArtifactId) {
     return undefined;
   }
-  if (params.executableIdentity && params.executableIdentity.command !== backend.config.command) {
-    return undefined;
-  }
-  const executableIdentity =
-    params.executableIdentity ??
-    (await resolveCliExecutableIdentity({
-      command: backend.config.command,
-      ...(params.cwd ? { cwd: params.cwd } : {}),
-      ...(params.env ? { env: params.env } : {}),
-      ...(backend.runtimeArtifact ? { runtimeArtifact: backend.runtimeArtifact } : {}),
-    }));
+  const executableIdentity = await resolveCliExecutableIdentity({
+    command: backend.config.command,
+    ...(params.cwd ? { cwd: params.cwd } : {}),
+    ...(params.env ? { env: params.env } : {}),
+    ...(backend.runtimeArtifact ? { runtimeArtifact: backend.runtimeArtifact } : {}),
+  });
   if (!executableIdentity) {
     return undefined;
   }
@@ -304,7 +300,6 @@ export async function resolveCliRuntimeOwnerFingerprint(params: {
   skipLocalCredential?: boolean;
   cwd?: string;
   env?: NodeJS.ProcessEnv;
-  executableIdentity?: CliExecutableIdentity;
   runtimeArtifactFingerprint?: string;
 }): Promise<string | undefined> {
   const provider = params.provider.trim();
@@ -326,14 +321,13 @@ export async function resolveCliRuntimeOwnerFingerprint(params: {
       runtimeArtifactId: backend.id,
       ...(params.cwd ? { cwd: params.cwd } : {}),
       ...(params.env ? { env: params.env } : {}),
-      ...(params.executableIdentity ? { executableIdentity: params.executableIdentity } : {}),
     }));
   if (!runtimeArtifactFingerprint) {
     return undefined;
   }
   let authProfileOwnerFingerprint: string | undefined;
   if (authProfileId) {
-    const store = ensureAuthProfileStore(params.agentDir, {
+    const store = await ensureAuthProfileStoreAsync(params.agentDir, {
       config: params.config,
       readOnly: true,
       allowKeychainPrompt: false,

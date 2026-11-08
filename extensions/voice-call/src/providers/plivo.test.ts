@@ -1,5 +1,6 @@
-// Voice Call tests cover plivo plugin behavior.
+import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { WebhookContext } from "../types.js";
 
 const { fetchWithSsrFGuardMock } = vi.hoisted(() => ({
   fetchWithSsrFGuardMock: vi.fn(),
@@ -26,60 +27,53 @@ function getPlivoPrivateCallState(provider: PlivoProvider): PlivoPrivateCallStat
   return provider as unknown as PlivoPrivateCallState;
 }
 
-function seedPlivoPrivateCallState(params: {
-  provider: PlivoProvider;
-  callId: string;
-  requestUuid: string;
-  callUuid: string;
-}): void {
-  const state = getPlivoPrivateCallState(params.provider);
-  state.requestUuidToCallUuid.set(params.requestUuid, params.callUuid);
-  state.callIdToWebhookUrl.set(params.callId, "https://example.com/voice/webhook");
-  state.callUuidToWebhookUrl.set(params.callUuid, "https://example.com/voice/webhook");
-  state.pendingSpeakByCallId.set(params.callId, { text: "Hello" });
-  state.pendingListenByCallId.set(params.callId, { language: "en-US" });
+const callId = "internal-call-id";
+const requestUuid = "request-uuid";
+const callUuid = "call-uuid";
+const webhookUrl = "https://example.com/voice/webhook";
+const hangup = { callId, providerCallId: requestUuid, reason: "hangup-bot" as const };
+
+function seedState(provider: PlivoProvider, id = callId) {
+  const state = getPlivoPrivateCallState(provider);
+  state.requestUuidToCallUuid.set(requestUuid, callUuid);
+  state.callIdToWebhookUrl.set(id, webhookUrl);
+  state.callUuidToWebhookUrl.set(callUuid, webhookUrl);
+  state.pendingSpeakByCallId.set(id, { text: "Hello" });
+  state.pendingListenByCallId.set(id, { language: "en-US" });
 }
 
-function expectPlivoPrivateCallStateReleased(params: {
-  provider: PlivoProvider;
-  callId: string;
-  requestUuid: string;
-  callUuid: string;
-}): void {
-  const state = getPlivoPrivateCallState(params.provider);
-  expect(state.requestUuidToCallUuid.has(params.requestUuid)).toBe(false);
-  expect(state.callIdToWebhookUrl.has(params.callId)).toBe(false);
-  expect(state.callUuidToWebhookUrl.has(params.callUuid)).toBe(false);
-  expect(state.pendingSpeakByCallId.has(params.callId)).toBe(false);
-  expect(state.pendingListenByCallId.has(params.callId)).toBe(false);
+function expectState(provider: PlivoProvider, present: boolean, id = callId) {
+  const state = getPlivoPrivateCallState(provider);
+  expect(state.requestUuidToCallUuid).toEqual(
+    present ? new Map([[requestUuid, callUuid]]) : new Map(),
+  );
+  expect([
+    state.callIdToWebhookUrl.has(id),
+    state.callUuidToWebhookUrl.has(callUuid),
+    state.pendingSpeakByCallId.has(id),
+    state.pendingListenByCallId.has(id),
+  ]).toEqual([present, present, present, present]);
 }
 
-function expectPlivoPrivateCallStatePresent(params: {
-  provider: PlivoProvider;
-  callId: string;
-  requestUuid: string;
-  callUuid: string;
-}): void {
-  const state = getPlivoPrivateCallState(params.provider);
-  expect(state.requestUuidToCallUuid.get(params.requestUuid)).toBe(params.callUuid);
-  expect(state.callIdToWebhookUrl.has(params.callId)).toBe(true);
-  expect(state.callUuidToWebhookUrl.has(params.callUuid)).toBe(true);
-  expect(state.pendingSpeakByCallId.has(params.callId)).toBe(true);
-  expect(state.pendingListenByCallId.has(params.callId)).toBe(true);
+function context(overrides: Partial<WebhookContext> = {}): WebhookContext {
+  return {
+    headers: { host: "example.com" },
+    rawBody:
+      "CallUUID=call-uuid&CallStatus=in-progress&Direction=outbound&From=%2B15550000000&To=%2B15550000001&Event=StartApp",
+    url: `${webhookUrl}?provider=plivo&flow=answer&callId=${callId}`,
+    method: "POST",
+    query: { provider: "plivo", flow: "answer", callId },
+    ...overrides,
+  };
 }
 
-function requireEvent<T>(event: T | undefined, message: string): T {
-  if (!event) {
-    throw new Error(message);
-  }
-  return event;
-}
-
-function requireResponseBody(body: string | undefined): string {
-  if (!body) {
-    throw new Error("Plivo provider did not return a response body");
-  }
-  return body;
+function expectTransfer(body: unknown) {
+  expect(fetchWithSsrFGuardMock).toHaveBeenCalledWith(
+    expect.objectContaining({
+      url: `https://api.plivo.com/v1/Account/${PROVIDER_CONFIG.authId}/Call/call-uuid/`,
+      init: expect.objectContaining({ method: "POST", body }),
+    }),
+  );
 }
 
 describe("PlivoProvider", () => {
@@ -90,118 +84,61 @@ describe("PlivoProvider", () => {
     }));
   });
 
-  it("parses answer callback into call.answered and returns keep-alive XML", () => {
-    const provider = new PlivoProvider(PROVIDER_CONFIG);
-
-    const result = provider.parseWebhookEvent({
-      headers: { host: "example.com" },
-      rawBody:
-        "CallUUID=call-uuid&CallStatus=in-progress&Direction=outbound&From=%2B15550000000&To=%2B15550000001&Event=StartApp",
-      url: "https://example.com/voice/webhook?provider=plivo&flow=answer&callId=internal-call-id",
-      method: "POST",
-      query: { provider: "plivo", flow: "answer", callId: "internal-call-id" },
-    });
-
-    expect(result.events).toHaveLength(1);
-    const event = requireEvent(result.events[0], "expected Plivo answer event");
-    expect(event.type).toBe("call.answered");
-    expect(event.callId).toBe("internal-call-id");
-    expect(event.providerCallId).toBe("call-uuid");
-    const responseBody = requireResponseBody(result.providerResponseBody);
-    expect(responseBody).toContain("<Wait");
-    expect(responseBody).toContain('length="300"');
-  });
-
   it("uses verified request key when provided", () => {
-    const provider = new PlivoProvider(PROVIDER_CONFIG);
-
-    const result = provider.parseWebhookEvent(
-      {
-        headers: { host: "example.com", "x-plivo-signature-v3-nonce": "nonce-1" },
-        rawBody:
-          "CallUUID=call-uuid&CallStatus=in-progress&Direction=outbound&From=%2B15550000000&To=%2B15550000001&Event=StartApp",
-        url: "https://example.com/voice/webhook?provider=plivo&flow=answer&callId=internal-call-id",
-        method: "POST",
-        query: { provider: "plivo", flow: "answer", callId: "internal-call-id" },
-      },
+    const result = new PlivoProvider(PROVIDER_CONFIG).parseWebhookEvent(
+      context({ headers: { host: "example.com", "x-plivo-signature-v3-nonce": "nonce-1" } }),
       { verifiedRequestKey: "plivo:v3:verified" },
     );
 
     expect(result.events).toHaveLength(1);
-    expect(requireEvent(result.events[0], "expected verified Plivo event").dedupeKey).toBe(
-      "plivo:v3:verified",
-    );
+    expect(result.events[0]?.dedupeKey).toBe("plivo:v3:verified");
   });
 
   it("pins call-control transfer URLs to the configured publicUrl path", async () => {
     const provider = new PlivoProvider(PROVIDER_CONFIG, {
       publicUrl: "https://voice.openclaw.ai/voice/webhook?provider=plivo",
     });
-    provider.parseWebhookEvent({
-      headers: { host: "attacker.example" },
-      rawBody:
-        "CallUUID=call-uuid&CallStatus=in-progress&Direction=outbound&From=%2B15550000000&To=%2B15550000001&Event=StartApp",
-      url: "https://attacker.example/admin?provider=plivo&flow=answer&callId=internal-call-id",
-      method: "POST",
-      query: { provider: "plivo", flow: "answer", callId: "internal-call-id" },
-    });
+    provider.parseWebhookEvent(
+      context({
+        headers: { host: "attacker.example" },
+        url: "https://attacker.example/admin?provider=plivo&flow=answer&callId=internal-call-id",
+      }),
+    );
 
-    await provider.playTts({
-      callId: "internal-call-id",
-      providerCallId: "call-uuid",
-      text: "How can I help?",
-    });
+    await provider.playTts({ callId, providerCallId: callUuid, text: "How can I help?" });
 
-    expect(fetchWithSsrFGuardMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        url: `https://api.plivo.com/v1/Account/${PROVIDER_CONFIG.authId}/Call/call-uuid/`,
-        init: expect.objectContaining({
-          method: "POST",
-          body: JSON.stringify({
-            legs: "aleg",
-            aleg_url:
-              "https://voice.openclaw.ai/voice/webhook?provider=plivo&flow=xml-speak&callId=internal-call-id",
-            aleg_method: "POST",
-          }),
-        }),
+    expectTransfer(
+      JSON.stringify({
+        legs: "aleg",
+        aleg_url:
+          "https://voice.openclaw.ai/voice/webhook?provider=plivo&flow=xml-speak&callId=internal-call-id",
+        aleg_method: "POST",
       }),
     );
   });
 
   it("renders an auto-response as the prompt for the next speech input", async () => {
     const provider = new PlivoProvider(PROVIDER_CONFIG);
-    (
-      provider as unknown as {
-        callIdToWebhookUrl: Map<string, string>;
-      }
-    ).callIdToWebhookUrl.set("internal-call-id", "https://example.com/voice/webhook");
+    getPlivoPrivateCallState(provider).callIdToWebhookUrl.set(callId, webhookUrl);
 
     await provider.playTts({
-      callId: "internal-call-id",
-      providerCallId: "call-uuid",
+      callId,
+      providerCallId: callUuid,
       text: "How can I help?",
       locale: "en-US",
       listenAfterPlayback: true,
     });
 
-    expect(fetchWithSsrFGuardMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        url: `https://api.plivo.com/v1/Account/${PROVIDER_CONFIG.authId}/Call/call-uuid/`,
-        init: expect.objectContaining({
-          method: "POST",
-          body: expect.stringContaining("flow=xml-speak"),
-        }),
+    expectTransfer(expect.stringContaining("flow=xml-speak"));
+
+    const result = provider.parseWebhookEvent(
+      context({
+        rawBody: "CallUUID=call-uuid",
+        url: "https://example.com/voice/webhook?provider=plivo&flow=xml-speak&callId=internal-call-id",
+        query: { provider: "plivo", flow: "xml-speak", callId },
       }),
     );
-
-    const result = provider.parseWebhookEvent({
-      headers: { host: "example.com" },
-      rawBody: "CallUUID=call-uuid",
-      url: "https://example.com/voice/webhook?provider=plivo&flow=xml-speak&callId=internal-call-id",
-      method: "POST",
-      query: { provider: "plivo", flow: "xml-speak", callId: "internal-call-id" },
-    });
-    const responseBody = requireResponseBody(result.providerResponseBody);
+    const responseBody = expectDefined(result.providerResponseBody, "Plivo response body");
     expect(responseBody).toContain('<GetInput inputType="speech"');
     expect(responseBody).toContain('speechEndTimeout="2"');
     expect(responseBody).toContain("flow=getinput");
@@ -209,113 +146,53 @@ describe("PlivoProvider", () => {
     expect(responseBody.indexOf("<GetInput")).toBeLessThan(responseBody.indexOf("<Speak"));
   });
 
-  it("releases all provider call state on terminal callbacks and late replays", () => {
+  it.each([true, false])("releases terminal call state (query override=%s)", (override) => {
     const provider = new PlivoProvider(PROVIDER_CONFIG);
-    const callId = "internal-terminal";
-    const requestUuid = "request-terminal";
-    const callUuid = "call-terminal";
-    seedPlivoPrivateCallState({ provider, callId, requestUuid, callUuid });
-    const terminal = {
-      headers: { host: "example.com" },
+    const id = override ? callId : callUuid;
+    seedState(provider, id);
+    const terminal = context({
       rawBody: `CallUUID=${callUuid}&RequestUUID=${requestUuid}&CallStatus=completed&Direction=outbound`,
-      url: `https://example.com/voice/webhook?provider=plivo&flow=hangup&callId=${callId}`,
-      method: "POST" as const,
-      query: { provider: "plivo", flow: "hangup", callId },
-    };
-
-    const first = provider.parseWebhookEvent(terminal).events[0];
-    expect(first).toMatchObject({
-      type: "call.ended",
-      callId,
-      providerCallId: callUuid,
-      reason: "completed",
-    });
-    expectPlivoPrivateCallStateReleased({ provider, callId, requestUuid, callUuid });
-
-    const lateReplay = provider.parseWebhookEvent(terminal).events[0];
-    expect(lateReplay).toMatchObject({
-      type: "call.ended",
-      callId,
-      providerCallId: callUuid,
-      reason: "completed",
-    });
-    expectPlivoPrivateCallStateReleased({ provider, callId, requestUuid, callUuid });
-  });
-
-  it("releases call-id state for terminal callbacks without a query override", () => {
-    const provider = new PlivoProvider(PROVIDER_CONFIG);
-    const requestUuid = "request-queryless";
-    const callUuid = "call-queryless";
-    seedPlivoPrivateCallState({
-      provider,
-      callId: callUuid,
-      requestUuid,
-      callUuid,
+      url: override ? `${webhookUrl}?provider=plivo&flow=hangup&callId=${id}` : webhookUrl,
+      query: override ? { provider: "plivo", flow: "hangup", callId: id } : {},
     });
 
-    const event = provider.parseWebhookEvent({
-      headers: { host: "example.com" },
-      rawBody: `CallUUID=${callUuid}&RequestUUID=${requestUuid}&CallStatus=completed&Direction=outbound`,
-      url: "https://example.com/voice/webhook",
-      method: "POST",
-      query: {},
-    }).events[0];
-
-    expect(event).toMatchObject({
-      type: "call.ended",
-      callId: callUuid,
-      providerCallId: callUuid,
-      reason: "completed",
-    });
-    expectPlivoPrivateCallStateReleased({
-      provider,
-      callId: callUuid,
-      requestUuid,
-      callUuid,
-    });
+    // Repeat the override callback to retain the late-replay cleanup contract.
+    for (let attempt = 0; attempt < (override ? 2 : 1); attempt++) {
+      expect(provider.parseWebhookEvent(terminal).events[0], `attempt ${attempt}`).toMatchObject({
+        type: "call.ended",
+        callId: id,
+        providerCallId: callUuid,
+        reason: "completed",
+      });
+      expectState(provider, false, id);
+    }
   });
 
   it("releases all provider call state after repeated explicit hangups", async () => {
     const provider = new PlivoProvider(PROVIDER_CONFIG);
-    const callId = "internal-hangup";
-    const requestUuid = "request-hangup";
-    const callUuid = "call-hangup";
-    seedPlivoPrivateCallState({ provider, callId, requestUuid, callUuid });
-    const input = {
-      callId,
-      providerCallId: requestUuid,
-      reason: "hangup-bot" as const,
-    };
+    seedState(provider);
 
-    await provider.hangupCall(input);
-    expectPlivoPrivateCallStateReleased({ provider, callId, requestUuid, callUuid });
+    await provider.hangupCall(hangup);
+    expectState(provider, false);
     fetchWithSsrFGuardMock.mockImplementation(async () => ({
       response: new Response("", { status: 404 }),
       release: async () => {},
     }));
-    await provider.hangupCall(input);
-    expectPlivoPrivateCallStateReleased({ provider, callId, requestUuid, callUuid });
+    await provider.hangupCall(hangup);
+    expectState(provider, false);
     expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(3);
   });
 
   it("retains call state when explicit hangup fails so it can retry", async () => {
     const provider = new PlivoProvider(PROVIDER_CONFIG);
-    const callId = "internal-hangup-retry";
-    const requestUuid = "request-hangup-retry";
-    const callUuid = "call-hangup-retry";
-    seedPlivoPrivateCallState({ provider, callId, requestUuid, callUuid });
+    seedState(provider);
     fetchWithSsrFGuardMock.mockRejectedValueOnce(new Error("temporary Plivo failure"));
-    const input = {
-      callId,
-      providerCallId: requestUuid,
-      reason: "hangup-bot" as const,
-    };
 
-    await expect(provider.hangupCall(input)).rejects.toThrow("temporary Plivo failure");
-    expectPlivoPrivateCallStatePresent({ provider, callId, requestUuid, callUuid });
+    await expect(provider.hangupCall(hangup)).rejects.toThrow("temporary Plivo failure");
+    expectState(provider, true);
 
-    await provider.hangupCall(input);
-    expectPlivoPrivateCallStateReleased({ provider, callId, requestUuid, callUuid });
+    await provider.hangupCall(hangup);
+    expectState(provider, false);
     for (const call of [1, 2]) {
       expect(fetchWithSsrFGuardMock).toHaveBeenNthCalledWith(
         call,

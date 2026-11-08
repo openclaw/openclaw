@@ -3,11 +3,11 @@ import { constants } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
-import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { asOptionalRecord, isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { ensureCodexComputerUseSharedPluginCache } from "./computer-use-cache.js";
 import type { ResolvedCodexComputerUseConfig } from "./config.js";
 import type { MacOSDesktopCodexAppPathCandidate } from "./desktop-app-paths.js";
-import { readCodexDesktopArtifactTreeFingerprint } from "./desktop-generation-fingerprint.js";
+import { readMacOSDesktopGenerationFingerprint } from "./desktop-generation-fingerprint.js";
 
 export const UNIFIED_COMPUTER_USE_PLUGIN = "unified-computer-use";
 const UNIFIED_SERVER = "cua_repl";
@@ -26,6 +26,7 @@ export async function resolveCodexUnifiedComputerUseRuntime(
   codexHome: string,
   requestedPluginName?: string,
   requestedServerName?: string,
+  desktopFingerprint?: string,
 ): Promise<CodexUnifiedComputerUseRuntime | undefined> {
   const pluginName = requestedPluginName ?? "computer-use";
   const serverName = requestedServerName ?? pluginName;
@@ -96,7 +97,8 @@ export async function resolveCodexUnifiedComputerUseRuntime(
   }
   return {
     pluginRoot,
-    sourceFingerprint: await readCodexDesktopArtifactTreeFingerprint(pluginRoot),
+    sourceFingerprint:
+      desktopFingerprint ?? (await readMacOSDesktopGenerationFingerprint([candidate])),
     manifest,
     mcp: {
       ...template,
@@ -192,11 +194,7 @@ export async function resolveManagedCodexComputerUseConfig(
 
 /** A native plugin disable veto must survive an automatic identity replacement. */
 export function isLegacyCodexComputerUsePluginDisabled(config: unknown): boolean {
-  const plugin =
-    isRecord(config) && isRecord(config.plugins)
-      ? config.plugins["computer-use@openai-bundled"]
-      : undefined;
-  return isRecord(plugin) && plugin.enabled === false;
+  return readLegacyComputerUsePlugin(config)?.enabled === false;
 }
 
 /** Renaming a server must not discard an operator's legacy server or tool restrictions. */
@@ -207,12 +205,13 @@ export function hasLegacyCodexComputerUseMcpPolicy(config: unknown): boolean {
   if (isRecord(config.mcp_servers) && Object.hasOwn(config.mcp_servers, "computer-use")) {
     return true;
   }
-  const plugin = isRecord(config.plugins)
-    ? config.plugins["computer-use@openai-bundled"]
-    : undefined;
-  return (
-    isRecord(plugin) && isRecord(plugin.mcp_servers) && Object.keys(plugin.mcp_servers).length > 0
-  );
+  const servers = readLegacyComputerUsePlugin(config)?.mcp_servers;
+  return isRecord(servers) && Object.keys(servers).length > 0;
+}
+
+function readLegacyComputerUsePlugin(config: unknown): Record<string, unknown> | undefined {
+  const plugins = asOptionalRecord(asOptionalRecord(config)?.plugins);
+  return asOptionalRecord(plugins?.["computer-use@openai-bundled"]);
 }
 
 async function readObject(file: string): Promise<Record<string, unknown> | undefined> {

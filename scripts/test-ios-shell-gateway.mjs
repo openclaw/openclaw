@@ -18,6 +18,118 @@
 import { readFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { WebSocketServer, WebSocket } from "ws";
+// Opt-in slow connection proof: --connection-state --port=<owned-loopback-port>.
+// Forward OPENCLAW_IOS_CONNECTION_STATE_PROOF=1, OPENCLAW_IOS_LIVE_SETUP_CODE,
+// and OPENCLAW_IOS_CONNECTION_STATE_FIXTURE_URL via TEST_RUNNER_ to
+// OpenClawUITests/GatewayConnectionStateUITests/testIndependentConnectionAndDismissal.
+const connectionStateMode = process.argv.includes("--connection-state");
+// AgentWorkspacePaginationUITests uses --workspace-pagination and forwards
+// OPENCLAW_IOS_WORKSPACE_PAGINATION_URL plus OPENCLAW_IOS_LIVE_SETUP_CODE via TEST_RUNNER_.
+const workspacePaginationMode = process.argv.includes("--workspace-pagination");
+let workspacePageRejected = true;
+const workspacePageReads = [];
+const workspacePageWaiters = new Set();
+const workspaceEntries = Array.from({ length: 251 }, (_, i) => {
+  const name = i === 250 ? "Summary.md" : `File ${String(i + 1).padStart(3, "0")}.txt`;
+  return { name, path: name, kind: "file" };
+});
+function notifyWorkspacePageWaiters() {
+  for (const waiter of workspacePageWaiters) {
+    if (workspacePageReads.length >= waiter.count) {
+      waiter.res.end(JSON.stringify({ reads: workspacePageReads }));
+      workspacePageWaiters.delete(waiter);
+    }
+  }
+}
+// AgentWorkspaceFilesUITests uses --workspace-preview and forwards
+// OPENCLAW_IOS_WORKSPACE_FIXTURE_URL plus OPENCLAW_IOS_LIVE_SETUP_CODE via TEST_RUNNER_.
+const workspacePreviewMode = process.argv.includes("--workspace-preview");
+let workspacePreviewPhase = "missing";
+const workspacePreviewText = {
+  restored: "Restored project notes.",
+  updated: "Updated project notes.",
+};
+const port = Number(process.argv.find((arg) => arg.startsWith("--port="))?.slice(7) ?? 19876);
+if (!Number.isInteger(port) || port < 1024 || port > 65535) {
+  throw new Error("Fixture port must be an unprivileged TCP port");
+}
+let connectionPhase = "healthy";
+const connectionTimeouts = { node: 0, operator: 0 };
+const heldConnections = new Map();
+const connectionWaiters = new Set();
+const connectionMessages = [];
+let connectionChatSends = 0;
+function connectionState() {
+  return {
+    phase: connectionPhase,
+    timeouts: connectionTimeouts,
+    connectedRoles: [...wss.clients]
+      .filter((ws) => ws.readyState === WebSocket.OPEN && ws.proofConnected)
+      .map((ws) => ws.proofRole),
+    chatSends: connectionChatSends,
+    chatSendRoles: requests
+      .filter((request) => request.method === "chat.send")
+      .map((request) => request.socketRole),
+  };
+}
+function notifyConnectionWaiters() {
+  const state = connectionState();
+  for (const waiter of connectionWaiters) {
+    if (
+      state.timeouts.node >= waiter.node &&
+      state.timeouts.operator >= waiter.operator &&
+      (!waiter.ready ||
+        (state.connectedRoles.includes("node") && state.connectedRoles.includes("operator")))
+    ) {
+      waiter.res.end(JSON.stringify(state));
+      connectionWaiters.delete(waiter);
+    }
+  }
+}
+function handleConnectionControl(req, res) {
+  if (!connectionStateMode || !req.url?.startsWith("/connection-state")) {
+    return false;
+  }
+  const url = new URL(req.url, "http://127.0.0.1");
+  const action = url.pathname.slice("/connection-state/".length);
+  if (req.method === "GET" && action === "await") {
+    const waiter = {
+      res,
+      node: Number(url.searchParams.get("node") ?? 0),
+      operator: Number(url.searchParams.get("operator") ?? 0),
+      ready: url.searchParams.get("ready") === "1",
+    };
+    connectionWaiters.add(waiter);
+    res.once("close", () => connectionWaiters.delete(waiter));
+    notifyConnectionWaiters();
+  } else if (
+    req.method === "POST" &&
+    ["node-timeout", "both-timeout", "recover", "pairing"].includes(action)
+  ) {
+    connectionPhase = action === "recover" ? "healthy" : action;
+    if (action === "recover") {
+      for (const [ws, pending] of heldConnections) {
+        heldConnections.delete(ws);
+        if (ws.readyState === WebSocket.OPEN) {
+          pending.accept();
+        }
+      }
+    } else {
+      for (const ws of wss.clients) {
+        if (ws.proofConnected && (ws.proofRole === "node" || action === "both-timeout")) {
+          ws.close(1012, "Synthetic reconnect");
+        }
+      }
+    }
+    res.end(JSON.stringify(connectionState()));
+  } else if (req.method === "GET" && url.pathname === "/connection-state") {
+    res.end(JSON.stringify(connectionState()));
+  } else {
+    res.statusCode = 404;
+    res.end(JSON.stringify({ error: "Unknown connection control" }));
+  }
+  return true;
+}
 const attachmentMode = process.argv.includes("--attachments");
 const attachmentMessage = attachmentMode
   ? JSON.parse(
@@ -90,6 +202,10 @@ const methods = [
   "models.list",
   "sessions.preview",
   "chat.send",
+  ...(workspacePaginationMode ? ["agents.workspace.list", "agents.workspace.get"] : []),
+  ...(workspacePreviewMode && !workspacePaginationMode
+    ? ["agents.workspace.list", "agents.workspace.get"]
+    : []),
   ...(attachmentMode ? ["artifacts.download"] : []),
 ];
 
@@ -212,10 +328,38 @@ function handlePolicyControl(req, res) {
 
 const server = createServer((req, res) => {
   res.setHeader("content-type", "application/json");
-  if (handlePolicyControl(req, res)) {
+  if (handleConnectionControl(req, res) || handlePolicyControl(req, res)) {
     return;
   }
   const url = new URL(req.url, "http://127.0.0.1");
+  if (workspacePreviewMode && url.pathname === "/workspace-preview") {
+    const phase = url.searchParams.get("phase");
+    if (req.method === "POST") {
+      if (
+        !["missing", "too-large", "unsupported", "unavailable", "restored", "updated"].includes(
+          phase,
+        )
+      ) {
+        res.writeHead(400);
+        res.end(JSON.stringify({ error: "Unknown workspace preview phase" }));
+        return;
+      }
+      workspacePreviewPhase = phase;
+    }
+    res.end(JSON.stringify({ phase: workspacePreviewPhase, requests }));
+    return;
+  }
+
+  if (workspacePaginationMode && url.pathname === "/workspace-pagination") {
+    if (req.method === "POST") {
+      workspacePageRejected = url.searchParams.get("reject") !== "0";
+    }
+    const waiter = { res, count: Number(url.searchParams.get("reads") ?? 0) };
+    workspacePageWaiters.add(waiter);
+    res.once("close", () => workspacePageWaiters.delete(waiter));
+    notifyWorkspacePageWaiters();
+    return;
+  }
   if (attachmentMode && url.pathname === "/attachment-ready") {
     attachmentReadyWaiters.add(res);
     res.once("close", () => attachmentReadyWaiters.delete(res));
@@ -275,6 +419,14 @@ wss.on("connection", (ws) => {
       payload: { nonce: "synthetic-proof-nonce", ts: Date.now() },
     }),
   );
+  ws.once("close", () => {
+    // Only a client closing an unanswered connect counts. Server reconnects
+    // are a transport trigger, never a claimed timeout or app-state assertion.
+    if (heldConnections.delete(ws)) {
+      connectionTimeouts[ws.proofRole]++;
+    }
+    notifyConnectionWaiters();
+  });
   ws.on("message", (raw) => {
     const data = Array.isArray(raw) ? Buffer.concat(raw) : Buffer.from(raw);
     const req = JSON.parse(data.toString("utf8"));
@@ -287,20 +439,22 @@ wss.on("connection", (ws) => {
       offset: params.offset,
       limit: params.limit,
       role: params.role,
+      ...(connectionStateMode ? { socketRole: ws.proofRole } : {}),
       sessionKey: params.sessionKey,
       artifactId: params.artifactId,
       ...(guestModelPolicy ? { key: params.key } : {}),
+      ...(workspacePreviewMode ? { path: params.path, phase: workspacePreviewPhase } : {}),
     });
     notifyAttachmentReadyWaiters();
     const reply = (payload) =>
       ws.send(JSON.stringify({ type: "res", id: req.id, ok: true, payload }));
-    const fail = (message) =>
+    const fail = (message, details) =>
       ws.send(
         JSON.stringify({
           type: "res",
           id: req.id,
           ok: false,
-          error: { code: "INVALID_REQUEST", message },
+          error: { code: "INVALID_REQUEST", message, ...(details ? { details } : {}) },
         }),
       );
     console.log(JSON.stringify(requests.at(-1)));
@@ -318,6 +472,110 @@ wss.on("connection", (ws) => {
       return;
     }
     switch (req.method) {
+      case "agents.workspace.list": {
+        if (workspacePreviewMode) {
+          if (!workspacePreviewMode) {
+            fail(`Unsupported synthetic method: ${req.method}`);
+            break;
+          }
+          reply({
+            agentId: "main",
+            path: "",
+            totalEntries: 1,
+            offset: 0,
+            entries: [
+              { path: "Project notes.txt", name: "Project notes.txt", kind: "file", size: 24 },
+            ],
+          });
+          break;
+        }
+        if (!workspacePaginationMode) {
+          fail(`Unsupported synthetic method: ${req.method}`);
+          break;
+        }
+        const offset = params.offset ?? 0;
+        const rows = workspaceEntries.slice(offset, offset + (params.limit ?? 250));
+        const failed = offset > 0 && workspacePageRejected;
+        workspacePageReads.push({
+          offset,
+          limit: params.limit ?? null,
+          count: failed ? 0 : rows.length,
+          paths: failed ? [] : rows.map((entry) => entry.path),
+          failed,
+        });
+        if (failed) {
+          fail("Synthetic workspace page unavailable");
+        } else {
+          reply({
+            agentId: "main",
+            path: "",
+            offset,
+            entries: rows,
+            totalEntries: workspaceEntries.length,
+          });
+        }
+        notifyWorkspacePageWaiters();
+        break;
+      }
+      case "agents.workspace.get":
+        if (workspacePreviewMode) {
+          if (
+            !workspacePreviewMode ||
+            params.agentId !== "main" ||
+            params.path !== "Project notes.txt"
+          ) {
+            fail("Unexpected synthetic workspace read");
+            break;
+          }
+          const types = {
+            missing: "workspace_file_not_found",
+            "too-large": "workspace_file_too_large",
+            unsupported: "workspace_file_unsupported",
+          };
+          if (types[workspacePreviewPhase]) {
+            fail("Synthetic workspace diagnostic", {
+              type: types[workspacePreviewPhase],
+              path: params.path,
+            });
+          } else if (workspacePreviewPhase === "unavailable") {
+            fail("Private synthetic server diagnostic: /synthetic/internal/read-failure");
+          } else {
+            const content = workspacePreviewText[workspacePreviewPhase];
+            reply({
+              agentId: "main",
+              file: {
+                path: params.path,
+                name: params.path,
+                size: Buffer.byteLength(content),
+                updatedAtMs: created,
+                mimeType: "text/plain",
+                encoding: "utf8",
+                content,
+              },
+            });
+          }
+          break;
+        }
+        if (
+          !workspacePaginationMode ||
+          !workspaceEntries.some((entry) => entry.path === params.path)
+        ) {
+          fail(`Unsupported synthetic method: ${req.method}`);
+          break;
+        }
+        reply({
+          agentId: "main",
+          file: {
+            name: params.path,
+            path: params.path,
+            size: 26,
+            updatedAtMs: created,
+            mimeType: "text/plain",
+            encoding: "utf8",
+            content: "Synthetic directory file.",
+          },
+        });
+        break;
       case "connect": {
         ws.proofRole = params.role;
         ws.proofScopes = guestModelPolicy
@@ -325,36 +583,74 @@ wss.on("connection", (ws) => {
             ? guestScopes
             : []
           : (params.scopes ?? []);
-        reply({
-          type: "hello-ok",
-          protocol: 3,
-          server: { version: "navigation-proof", connId: "synthetic" },
-          features: guestModelPolicy
-            ? {
-                methods: [...methods, "sessions.patch"],
-                events: ["chat.metadata.changed", "tick"],
-                capabilities: ["published-model-catalog"],
-              }
-            : { methods, events: ["exec.approval.requested", "tick"] },
-          snapshot: {
-            presence: [],
-            health: { ok: true },
-            stateVersion: { presence: 1, health: 1 },
-            uptimeMs: 1000,
-            sessionDefaults: {
-              defaultAgentId: "main",
-              mainKey: "main",
-              mainSessionKey: "agent:main:main",
-              scope: "per-sender",
+        const accept = () => {
+          ws.proofConnected = true;
+          reply({
+            type: "hello-ok",
+            protocol: 3,
+            server: { version: "navigation-proof", connId: "synthetic" },
+            features: guestModelPolicy
+              ? {
+                  methods: [...methods, "sessions.patch"],
+                  events: ["chat.metadata.changed", "tick"],
+                  capabilities: ["published-model-catalog"],
+                }
+              : {
+                  methods,
+                  events: [
+                    "exec.approval.requested",
+                    "tick",
+                    ...(connectionStateMode ? ["chat"] : []),
+                  ],
+                  ...(connectionStateMode ? { capabilities: ["chat-send-routing-contract"] } : {}),
+                },
+            snapshot: {
+              presence: [],
+              health: { ok: true },
+              stateVersion: { presence: 1, health: 1 },
+              uptimeMs: 1000,
+              sessionDefaults: {
+                defaultAgentId: "main",
+                mainKey: "main",
+                mainSessionKey: "agent:main:main",
+                scope: "per-sender",
+              },
             },
-          },
-          auth: {
-            role: params.role,
-            scopes: ws.proofScopes,
-            deviceToken: `synthetic-${params.role}`,
-          },
-          policy: { maxPayload: 1048576, maxBufferedBytes: 1048576, tickIntervalMs: 30000 },
-        });
+            auth: {
+              role: params.role,
+              scopes: ws.proofScopes,
+              deviceToken: `synthetic-${params.role}`,
+            },
+            policy: { maxPayload: 1048576, maxBufferedBytes: 1048576, tickIntervalMs: 30000 },
+          });
+          notifyConnectionWaiters();
+        };
+        if (connectionStateMode && connectionPhase === "pairing" && params.role === "node") {
+          ws.send(
+            JSON.stringify({
+              type: "res",
+              id: req.id,
+              ok: false,
+              error: {
+                code: "NOT_PAIRED",
+                message: "pairing required",
+                details: {
+                  code: "PAIRING_REQUIRED",
+                  requestId: "synthetic-connection-approval",
+                },
+              },
+            }),
+          );
+        } else if (
+          connectionStateMode &&
+          (connectionPhase === "both-timeout" ||
+            (connectionPhase === "node-timeout" && params.role === "node"))
+        ) {
+          // Let the shipped client own its real handshake deadline.
+          heldConnections.set(ws, { accept });
+        } else {
+          accept();
+        }
         break;
       }
       case "health":
@@ -437,21 +733,62 @@ wss.on("connection", (ws) => {
         reply({
           sessionKey: params.sessionKey ?? "agent:main:main",
           sessionId: guestModelPolicy ? "synthetic-policy-session" : "synthetic-session",
-          messages: guestModelPolicy
-            ? [
-                {
-                  role: "assistant",
-                  content: [{ type: "text", text: policyHistoryText }],
-                  timestamp: created,
-                  model: "excluded",
-                  provider: "fixture",
-                },
-              ]
-            : attachmentMode
-              ? [attachmentMessage]
-              : [],
+          messages: connectionStateMode
+            ? connectionMessages
+            : guestModelPolicy
+              ? [
+                  {
+                    role: "assistant",
+                    content: [{ type: "text", text: policyHistoryText }],
+                    timestamp: created,
+                    model: "excluded",
+                    provider: "fixture",
+                  },
+                ]
+              : attachmentMode
+                ? [attachmentMessage]
+                : [],
         });
         break;
+      case "chat.send": {
+        if (!connectionStateMode) {
+          fail(`Unsupported synthetic method: ${req.method}`);
+          break;
+        }
+        if (ws.proofRole !== "operator" || !ws.proofConnected) {
+          fail("Connection proof chat requires the admitted operator socket");
+          break;
+        }
+        connectionChatSends++;
+        const runId = params.idempotencyKey;
+        const message = {
+          role: "assistant",
+          content: [{ type: "text", text: "Connection proof: operator chat completed." }],
+          timestamp: Date.now(),
+        };
+        connectionMessages.push(
+          {
+            role: "user",
+            content: [{ type: "text", text: params.message }],
+            timestamp: Date.now(),
+          },
+          message,
+        );
+        reply({ runId, status: "started" });
+        ws.send(
+          JSON.stringify({
+            type: "event",
+            event: "chat",
+            payload: {
+              runId,
+              sessionKey: params.sessionKey,
+              state: "final",
+              message,
+            },
+          }),
+        );
+        break;
+      }
       case "artifacts.download":
         if (
           !attachmentMode ||
@@ -548,11 +885,19 @@ const tick = setInterval(() => {
     }
   }
 }, 10_000);
-server.listen(19876, "127.0.0.1", () =>
-  console.log("Synthetic Gateway listening on loopback:19876"),
+server.listen(port, "127.0.0.1", () =>
+  console.log(`Synthetic Gateway listening on loopback:${port}`),
 );
 function stop() {
   clearInterval(tick);
+  for (const waiter of workspacePageWaiters) {
+    waiter.res.destroy();
+  }
+  workspacePageWaiters.clear();
+  for (const waiter of connectionWaiters) {
+    waiter.res.destroy();
+  }
+  connectionWaiters.clear();
   for (const res of policyWaiters) {
     res.destroy();
   }

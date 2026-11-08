@@ -3,12 +3,15 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { expect, onTestFinished, test, vi } from "vitest";
 import { testing as cliBackendsTesting } from "../agents/cli-backends.test-support.js";
-import { prepareDiscoveredContextTokenCache } from "../agents/context-cache-projection.js";
-import { replaceDiscoveredContextTokenCache } from "../agents/context-cache.js";
+import {
+  providerContextTokenCacheKey,
+  replaceDiscoveredContextTokenCache,
+} from "../agents/context-cache.js";
 import { resetContextWindowCacheForTest } from "../agents/context.test-support.js";
 import { getRuntimeConfig } from "../config/io.js";
 import type { SessionEntry } from "../config/sessions.js";
 import { loadSessionEntry, loadTranscriptEvents } from "../config/sessions/session-accessor.js";
+import { SESSION_TOTAL_TOKENS_VERSION } from "../config/sessions/types.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import type { SessionCatalogProvider } from "../plugins/session-catalog.js";
@@ -16,17 +19,15 @@ import {
   createColdPluginFixture,
   isColdPluginRuntimeLoaded,
 } from "../plugins/test-helpers/cold-plugin-fixtures.js";
+import { captureSessionTarget } from "../sessions/session-controller.lifecycle.js";
+import { createReplyOperation } from "../sessions/session-controller.operation.js";
 import {
   setupSessionCreateTestHarness,
   requireNonEmptyString,
 } from "./server.sessions.create.test-support.js";
 import type { GatewaySessionCommitResult } from "./session-create-service.types.js";
-import {
-  agentDiscoveryMock,
-  embeddedRunMock,
-  testState,
-  writeSessionStore,
-} from "./test-helpers.js";
+import { agentDiscoveryMock, testState, writeSessionStore } from "./test-helpers.js";
+import { createClaudeCliRegistrationFixture } from "./test-helpers.plugin-registry.js";
 import {
   createCompactedSessionFixture,
   sessionStoreEntry,
@@ -154,13 +155,14 @@ test("sessions.create forks the parent transcript into the new session", async (
   await writeSessionStore({
     entries: {
       main: sessionStoreEntry(parent.sessionId, {
+        visibility: "draft",
         sessionFile: parent.sessionFile,
         projectId: "qa-writer",
         spawnedCwd: projectRoot,
         sessionRoot: projectRoot,
         totalTokens: 123,
         totalTokensFresh: true,
-        totalTokensVersion: 1,
+        totalTokensVersion: SESSION_TOTAL_TOKENS_VERSION,
         cliSessionBindings: {
           "claude-cli": { sessionId: "native-parent", resumeCheckpointId: "parent-checkpoint" },
         },
@@ -240,6 +242,7 @@ test("sessions.create forks the parent transcript into the new session", async (
 
   const key = requireNonEmptyString(created.payload?.key, "forked session key");
   expect(loadSessionEntry({ sessionKey: key, storePath })).toMatchObject({
+    visibility: "draft",
     projectId: "qa-writer",
     spawnedCwd: projectRoot,
     sessionRoot: projectRoot,
@@ -274,14 +277,23 @@ async function seedSizedForkParent(dir: string, entry: Parameters<typeof session
       main: sessionStoreEntry(parent.sessionId, {
         sessionFile: parent.sessionFile,
         totalTokensFresh: true,
-        totalTokensVersion: 1,
+        totalTokensVersion: SESSION_TOTAL_TOKENS_VERSION,
         ...entry,
       }),
     },
   });
 }
 
-test.each([
+test.each<{
+  name: string;
+  model: string;
+  provider: string;
+  tokens: number;
+  window?: number;
+  limit?: string;
+  nativeCatalog?: "missing" | "unknown";
+  configuredTokens?: number;
+}>([
   {
     name: "provider-scoped fallback",
     model: "unresolved-model",
@@ -314,9 +326,36 @@ test.each([
     window: 200_000,
     limit: "300000/200000 tokens",
   },
+  {
+    name: "missing native capacity beside API inventory",
+    model: "gpt-native",
+    provider: "openai",
+    tokens: 150_000,
+    window: 1_000_000,
+    nativeCatalog: "missing",
+    limit: "150000/100000 tokens",
+  },
+  {
+    name: "unknown native capacity beside warm API capacity",
+    model: "gpt-native",
+    provider: "openai",
+    tokens: 150_000,
+    window: 1_000_000,
+    nativeCatalog: "unknown",
+    limit: "150000/100000 tokens",
+  },
+  {
+    name: "authored capacity for a native runtime",
+    model: "gpt-native",
+    provider: "openai",
+    tokens: 150_000,
+    window: 1_000_000,
+    nativeCatalog: "unknown",
+    configuredTokens: 200_000,
+  },
 ])(
   "sessions.create enforces fork capacity: $name",
-  async ({ model, provider, tokens, window, limit }) => {
+  async ({ model, provider, tokens, window, limit, nativeCatalog, configuredTokens }) => {
     const { dir } = await createSessionStoreDir();
     testState.sessionConfig = { scope: "per-sender" };
     resetContextWindowCacheForTest();
@@ -328,11 +367,10 @@ test.each([
     const selectable = model === "gpt-selectable";
     if (!window) {
       replaceDiscoveredContextTokenCache(
-        await prepareDiscoveredContextTokenCache({
-          modelCatalog: {
-            entries: [{ id: model, provider: "other-provider", contextTokens: 300_000 }],
-          },
-        }),
+        new Map([
+          [model, 300_000],
+          [providerContextTokenCacheKey("other-provider", model), 300_000],
+        ]),
       );
     } else {
       agentDiscoveryMock.models = [
@@ -352,16 +390,38 @@ test.each([
         },
       ];
     }
-    const inherited = !window || model === "gpt-large";
+    if (nativeCatalog) {
+      if (!window) {
+        throw new Error("native catalog fixture requires a context window");
+      }
+      replaceDiscoveredContextTokenCache(
+        new Map([
+          [model, window],
+          [providerContextTokenCacheKey(provider, model), window],
+        ]),
+      );
+      if (nativeCatalog === "unknown") {
+        agentDiscoveryMock.models.push({
+          id: model,
+          name: model,
+          provider,
+          nativeRuntime: "codex",
+        });
+      }
+    }
+    const inherited = !window || model === "gpt-large" || Boolean(nativeCatalog);
     await seedSizedForkParent(dir, {
       totalTokens: tokens,
       ...(inherited ? { providerOverride: provider, modelOverride: model } : {}),
+      ...(nativeCatalog ? { agentRuntimeOverride: "codex" } : {}),
       ...(!window ? { modelOverrideSource: "user" } : {}),
     });
     const cfg = {
       ...getRuntimeConfig(),
       models: {
-        providers: { openai: { models: [{ id: model, contextTokens: 1_000_000 }] } },
+        providers: {
+          openai: { models: [{ id: model, contextTokens: configuredTokens ?? 1_000_000 }] },
+        },
       },
     };
     const created = await directSessionReq(
@@ -373,7 +433,7 @@ test.each([
         ...(!inherited ? { model: `${provider}/${model}` } : {}),
         ...(selectable ? { contextWindow: "200k" } : {}),
       },
-      selectable ? { context: { getRuntimeConfig: () => cfg } } : undefined,
+      selectable || configuredTokens ? { context: { getRuntimeConfig: () => cfg } } : undefined,
     );
     expect(created.ok, JSON.stringify(created.error)).toBe(limit === undefined);
     if (limit) {
@@ -391,11 +451,12 @@ test.each([undefined, "last-completed"] as const)(
     await writeSessionStore({
       entries: {
         main: sessionStoreEntry(parentSessionId, {
+          visibility: "draft",
           // The in-flight tail can make the whole parent exceed the cap; only the
           // selected completed prefix should govern this fork.
           totalTokens: 200_000,
           totalTokensFresh: true,
-          totalTokensVersion: 1,
+          totalTokensVersion: SESSION_TOTAL_TOKENS_VERSION,
         }),
       },
     });
@@ -418,7 +479,19 @@ test.each([undefined, "last-completed"] as const)(
         },
       ],
     });
-    embeddedRunMock.activeIds.add(parentSessionId);
+    const parentOperation = createReplyOperation({
+      sessionKey: "agent:main:main",
+      sessionId: parentSessionId,
+      agentId: "main",
+      resetTriggered: false,
+      target: captureSessionTarget({
+        storeScope: storePath,
+        sessionKey: "agent:main:main",
+        incarnation: parentSessionId,
+        agentId: "main",
+      }),
+    });
+    parentOperation.setPhase("running");
     try {
       const created = await directSessionReq<{ key: string; sessionId: string }>(
         "sessions.create",
@@ -440,6 +513,9 @@ test.each([undefined, "last-completed"] as const)(
         return;
       }
       expect(created.ok, JSON.stringify(created.error)).toBe(true);
+      expect(
+        loadSessionEntry({ sessionKey: created.payload?.key ?? "", storePath })?.visibility,
+      ).toBe("draft");
       const messages = await loadTranscriptEvents({
         sessionId: created.payload?.sessionId ?? "",
         sessionKey: created.payload?.key ?? "",
@@ -460,7 +536,7 @@ test.each([undefined, "last-completed"] as const)(
         expect.objectContaining({ role: "assistant", stopReason: "stop" }),
       ]);
     } finally {
-      embeddedRunMock.activeIds.delete(parentSessionId);
+      parentOperation.complete();
       testState.sessionConfig = undefined;
     }
   },
@@ -477,16 +553,7 @@ function installSessionCatalog(
 ) {
   const registry = createEmptyPluginRegistry();
   if (cli) {
-    registry.cliBackends.push({
-      pluginId: "anthropic",
-      source: "test",
-      backend: {
-        id: "claude-cli",
-        modelProvider: "anthropic",
-        config: { command: "claude" },
-        bundleMcp: false,
-      },
-    });
+    registry.cliBackends.push(createClaudeCliRegistrationFixture());
   }
   registry.sessionCatalogs.push({
     pluginId: "anthropic",

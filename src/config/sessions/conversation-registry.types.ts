@@ -28,7 +28,9 @@ export type ConversationRecord = {
 
 export type ConversationReadQuery = {
   channel?: string;
+  deliveryAddress?: { accountId: string; target: string; threadId?: string };
   conversationRef?: string;
+  conversationRefs?: readonly string[];
   limit?: number;
   primarySession?: { sessionId: string; sessionKey: string };
   currentBindingOnly?: boolean;

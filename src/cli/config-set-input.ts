@@ -8,6 +8,7 @@ import JSON5 from "json5";
 import { rejectConfigNonFiniteNumbers } from "../config/value-tree.js";
 import { readFileDescriptorBoundedSync } from "../infra/boundary-file-read.js";
 import { hasErrnoCode } from "../infra/errors.js";
+import { decodeUtf8Input } from "../infra/utf8-input.js";
 
 export type ConfigSetOptions = {
   strictJson?: boolean;
@@ -78,7 +79,10 @@ export function readConfigMutationFileSync(
       );
     }
     try {
-      return readFileDescriptorBoundedSync(fd, CONFIG_MUTATION_FILE_MAX_BYTES).toString("utf8");
+      return decodeUtf8Input(
+        readFileDescriptorBoundedSync(fd, CONFIG_MUTATION_FILE_MAX_BYTES),
+        sourceLabel,
+      );
     } catch (error) {
       if (error instanceof RangeError) {
         throw new RangeError(
@@ -96,18 +100,19 @@ export function readConfigMutationFileSync(
 export function resolveConfigSetMode(
   opts: ConfigSetOptions,
 ): "value" | "json" | "ref_builder" | "provider_builder" | "batch" {
-  const hasRef = Boolean(opts.refProvider || opts.refSource || opts.refId);
+  const hasRef =
+    opts.refProvider !== undefined || opts.refSource !== undefined || opts.refId !== undefined;
   const hasProvider = Boolean(
-    opts.providerSource ||
+    opts.providerSource !== undefined ||
     opts.providerAllowlist?.length ||
-    opts.providerPath ||
-    opts.providerMode ||
-    opts.providerTimeoutMs ||
-    opts.providerMaxBytes ||
-    opts.providerCommand ||
+    opts.providerPath !== undefined ||
+    opts.providerMode !== undefined ||
+    opts.providerTimeoutMs !== undefined ||
+    opts.providerMaxBytes !== undefined ||
+    opts.providerCommand !== undefined ||
     opts.providerArg?.length ||
-    opts.providerNoOutputTimeoutMs ||
-    opts.providerMaxOutputBytes ||
+    opts.providerNoOutputTimeoutMs !== undefined ||
+    opts.providerMaxOutputBytes !== undefined ||
     opts.providerJsonOnly ||
     opts.providerEnv?.length ||
     opts.providerPassEnv?.length ||

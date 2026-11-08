@@ -14,14 +14,14 @@ export function createRequesterSettleReceiptAdmission(params: {
   storeSessionKey: string;
   storeAgentId?: string;
   storePaths(): readonly (string | null | undefined)[];
-  isRecoveryCurrent(): boolean;
+  isSourceCurrent(): boolean;
   readCurrent(): SessionEntryCurrentFacts | undefined;
   isStoreCurrent(): boolean;
 }) {
   const isEntryCurrent = (entry: SessionEntryCurrentFacts | undefined) =>
     entry?.sessionId === params.identity.sessionId &&
     entry.lifecycleRevision === params.identity.lifecycleRevision &&
-    params.isRecoveryCurrent();
+    params.isSourceCurrent();
   const admission: GatewayToolCallerReceiptAdmission = {
     async prepare() {
       const storeCurrent = captureSystemEventStoreCurrentCheck(
@@ -88,10 +88,15 @@ export function createRequesterSettleReceiptAdmission(params: {
     },
   };
   return Object.assign(admission, {
-    isRequesterCurrent: () =>
-      evaluateGatewayToolCallerReceiptAdmission(admission, () =>
-        isEntryCurrent(params.readCurrent()),
-      ),
+    isRequesterCurrent: () => {
+      try {
+        return evaluateGatewayToolCallerReceiptAdmission(admission, () =>
+          isEntryCurrent(params.readCurrent()),
+        );
+      } catch {
+        return false;
+      }
+    },
     isStoreCurrent: () =>
       evaluateGatewayToolCallerReceiptAdmission(admission, () => params.isStoreCurrent()),
   });

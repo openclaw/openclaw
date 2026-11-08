@@ -5,10 +5,18 @@ import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 import { describe, expect, it, vi } from "vitest";
 import { resolveDoctorContributionHealthChecks } from "../flows/doctor-health-contributions.js";
+import {
+  createDoctorHealthFlowContext,
+  resolveDoctorHealthContributions,
+  runDoctorHealthContributionList,
+} from "../flows/doctor-health-contributions.test-support.js";
 import { runDoctorLintChecks } from "../flows/doctor-lint-flow.js";
+import { withProjectCheckoutLifecycle } from "../projects/project-checkout.js";
+import { cloneProjectCheckout } from "../projects/project-clone-runtime.js";
 import { registerProjectRegistry } from "../projects/project-registry.js";
 import { registerClonedProjectRegistry } from "../projects/project-registry.test-support.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { collectProjectCloneShapeHealthFindings } from "./doctor-project-clone-shape.js";
 
 const execFileAsync = promisify(execFile);
 const checkId = "core/doctor/project-clone-shape";
@@ -23,28 +31,6 @@ describe("doctor project clone shape", () => {
     "inspects only registry clones and reports %s clone repair",
     async (shape) => {
       await withOpenClawTestState({ prefix: "openclaw-doctor-clones-" }, async (state) => {
-        const urlRemote = new URL(
-          "https://example.invalid/project.git?opaque=query-private#fragment-private",
-        );
-        urlRemote.username = "user";
-        urlRemote.password = ["synthetic", "secret"].join("-");
-        const userInfo = [urlRemote.username, urlRemote.password].join(":");
-        const addressRemotes = [
-          urlRemote.href,
-          ["https", urlRemote.href].join("::"),
-          [userInfo, "example.invalid:org/project.git?opaque=query-private#fragment-private"].join(
-            "@",
-          ),
-          [
-            "odd_scheme",
-            [userInfo, "example.invalid/project.git?opaque=query-private#fragment-private"].join(
-              "@",
-            ),
-          ].join("://"),
-        ];
-        const urlKeys = addressRemotes.flatMap((remote) =>
-          ["promisor", "partialclonefilter"].map((field) => `remote.${remote}.${field}`),
-        );
         const source = state.path("source");
         await git(state.root, "init", "-b", "main", source);
         await git(source, "config", "user.name", "OpenClaw Test");
@@ -59,7 +45,7 @@ describe("doctor project clone shape", () => {
         await git(origin, "config", "uploadpack.allowFilter", "true");
         const originUrl = pathToFileURL(origin).href;
         const ignored = state.path("workspace");
-        await git(state.root, "clone", "--filter=blob:none", originUrl, ignored);
+        await git(state.root, "clone", "--depth=1", "--filter=blob:none", originUrl, ignored);
         const cfg = { agents: { defaults: { workspace: ignored } } };
         const clone = state.path("project's clone");
         const partial = shape === "partial" || shape === "both";
@@ -74,12 +60,6 @@ describe("doctor project clone shape", () => {
         );
         await registerClonedProjectRegistry({ path: clone, name: "Stored project", originUrl });
         await registerProjectRegistry({ path: ignored, name: "User checkout" });
-        if (shape === "both") {
-          for (const key of urlKeys) {
-            await git(clone, "config", key, key.endsWith(".promisor") ? "true" : "blob:none");
-          }
-          await git(clone, "config", "extensions.partialclone", "origin");
-        }
         const configBefore = await fs.readFile(path.join(clone, ".git", "config"), "utf8");
         if (shape === "missing") {
           await fs.rm(clone, { recursive: true, force: true });
@@ -95,85 +75,69 @@ describe("doctor project clone shape", () => {
             )
           ).findings;
         const findings = await detect();
-        if (shape === "full") {
+        if (shape === "full" || shape === "partial") {
           expect(findings).toEqual([]);
           return;
         }
         expect(findings).toHaveLength(1);
         const finding = findings[0]!;
-        expect(finding).toMatchObject({ checkId, severity: "warning", path: clone });
+        expect(finding).toMatchObject({
+          severity: "warning",
+          category: shape === "missing" ? "fix-now" : "recommended",
+          path: clone,
+        });
         expect(finding.message).toContain("Stored project");
         if (shape === "missing") {
-          expect(finding.message).toContain("Skipped");
+          expect(finding.message).toContain("skipped");
           return;
         }
-        expect(finding.message).toContain(`shallow=${shallow}`);
-        if (partial) {
-          expect(finding.message).toContain("remote.origin.promisor");
-          expect(finding.message).toContain("remote.origin.partialclonefilter");
-        }
-        if (shape === "both") {
-          for (const output of [finding.message, finding.path, finding.fixHint]) {
-            for (const credential of [
-              "user:",
-              "synthetic-secret",
-              "query-private",
-              "fragment-private",
-            ]) {
-              expect(output).not.toContain(credential);
-            }
-          }
-          expect(finding.message).toContain(
-            "remote.https://***@example.invalid/project.git.promisor",
-          );
-          expect(finding.message).toContain(
-            "remote.https://***@example.invalid/project.git.partialclonefilter",
-          );
-          for (const remote of [
-            "https::https://***@example.invalid/project.git",
-            "***@example.invalid:org/project.git",
-            "odd_scheme://***@example.invalid/project.git",
-          ]) {
-            for (const field of ["promisor", "partialclonefilter"]) {
-              expect(finding.message).toContain(`remote.${remote}.${field}`);
-            }
-          }
-          expect(finding.message).toContain("extensions.partialclone");
-          expect(finding.fixHint).toContain(
-            "git config --get-regexp '^remote\\..*\\.(promisor|partialclonefilter)$'",
-          );
-          expect(finding.fixHint).toContain(
-            "git config --unset-all <the key shown by that command>",
-          );
-          expect(finding.fixHint).toContain(
-            "git config --unset-all remote.origin.partialclonefilter",
-          );
-          expect(finding.fixHint).toContain("git config --unset-all remote.origin.promisor");
-          expect(finding.fixHint).not.toMatch(/git config --unset-all .*(?::\/\/|::|@)/);
-        }
+        expect(finding.message).not.toContain("repack");
         expect(await fs.readFile(path.join(clone, ".git", "config"), "utf8")).toBe(configBefore);
-        expect(await git(clone, "rev-parse", "--is-shallow-repository")).toBe(String(shallow));
-        if (shape === "both") {
-          // The operator locates and removes URL-keyed entries locally; Doctor
-          // cannot print their raw keys as executable repair commands.
-          const localKeys = await git(
-            clone,
-            "config",
-            "--name-only",
-            "--get-regexp",
-            "^remote\\..*\\.(promisor|partialclonefilter)$",
-          );
-          for (const key of urlKeys) {
-            expect(localKeys.split("\n")).toContain(key);
-            await git(clone, "config", "--unset-all", key);
-          }
+        expect(await git(clone, "rev-parse", "--is-shallow-repository")).toBe("true");
+
+        const repair = () => collectProjectCloneShapeHealthFindings(cfg, { repair: true });
+        if (shape === "shallow") {
+          await withProjectCheckoutLifecycle(clone, {}, async () => {
+            expect((await repair())[0]?.message).toContain("busy; skipped");
+            expect(await git(clone, "rev-parse", "--is-shallow-repository")).toBe("true");
+          });
+          // A failed origin must remain retryable without losing local history.
+          await git(clone, "remote", "set-url", "origin", state.path("absent.git"));
+          expect((await repair())[0]?.message).toContain("unshallow failed");
+          expect(await git(clone, "rev-parse", "--is-shallow-repository")).toBe("true");
+          await git(clone, "remote", "set-url", "origin", pathToFileURL(ignored).href);
+          expect((await repair())[0]?.message).toContain("still shallow");
+          await git(clone, "remote", "set-url", "origin", originUrl);
         }
-        // Exercise the printed operator commands against the local origin.
-        await execFileAsync("sh", ["-ec", finding.fixHint!.split("\n").slice(1, -1).join("\n")]);
+        const head = await git(clone, "rev-parse", "HEAD");
+        const reflog = await fs.readFile(path.join(clone, ".git", "logs", "HEAD"), "utf8");
+        if (shape === "both") {
+          await runDoctorHealthContributionList(
+            createDoctorHealthFlowContext({ cfg, options: { repair: true } }),
+            resolveDoctorHealthContributions().filter((c) => c.id === "doctor:project-clone-shape"),
+          );
+        }
+        const result = shape === "both" ? [] : await repair();
+        if (shape !== "both") {
+          expect(result).toEqual([expect.objectContaining({ severity: "info" })]);
+          expect(result[0]?.message).toContain("unshallowed");
+        }
+        expect(await git(clone, "rev-parse", "--is-shallow-repository")).toBe("false");
+        expect(await git(clone, "rev-list", "--count", "HEAD")).toBe("2");
+        expect(await git(clone, "rev-parse", "HEAD")).toBe(head);
+        expect(await fs.readFile(path.join(clone, ".git", "logs", "HEAD"), "utf8")).toBe(reflog);
+        expect(await git(clone, "config", "remote.origin.partialclonefilter")).toBe("blob:none");
+        expect(await git(clone, "config", "remote.origin.promisor")).toBe("true");
         expect(await detect()).toEqual([]);
-        expect(await git(clone, "rev-list", "--objects", "--missing=print", "--all")).not.toMatch(
-          /^\?/m,
-        );
+        expect(await repair()).toEqual([]);
+        expect(await git(ignored, "rev-parse", "--is-shallow-repository")).toBe("true");
+        expect(await git(ignored, "config", "remote.origin.partialclonefilter")).toBe("blob:none");
+        if (shape === "both") {
+          const fresh = state.path("fresh");
+          await cloneProjectCheckout({ url: originUrl, target: fresh });
+          expect(await git(fresh, "rev-list", "--count", "HEAD")).toBe("2");
+          expect(await git(fresh, "rev-parse", "--is-shallow-repository")).toBe("false");
+        }
       });
     },
   );

@@ -1,5 +1,4 @@
 import { resolveAmbientOwnerAgentId } from "../agents/agent-scope-config.js";
-// OpenClaw overview gathers config, agent, tool, docs, source, and gateway status.
 import { listAgentEntries } from "../agents/agent-scope.js";
 import {
   OPENCLAW_DOCS_URL,
@@ -15,11 +14,11 @@ import {
   readConfigFileSnapshot,
   resolveConfigPath,
   resolveGatewayPort,
-  type ConfigFileSnapshot,
   type OpenClawConfig,
 } from "../config/config.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import { normalizeAgentId } from "../routing/session-key.js";
+import { indexFirstByKey } from "../shared/dedupe-by-key.js";
 import { createSetupTranslator, type SetupTranslator } from "../wizard/i18n/index.js";
 import { probeGatewayUrl, probeLocalCommand, type LocalCommandProbe } from "./probes.js";
 
@@ -69,13 +68,6 @@ export type SystemAgentOverview = {
   };
 };
 
-function issueMessages(snapshot: ConfigFileSnapshot): string[] {
-  return snapshot.issues.map((issue) => {
-    const path = issue.path ? `${issue.path}: ` : "";
-    return `${path}${issue.message}`;
-  });
-}
-
 function buildAgentSummaries(cfg: OpenClawConfig, defaultAgentId: string): SystemAgentSummary[] {
   const entries = listAgentEntries(cfg);
   if (entries.length === 0) {
@@ -89,15 +81,11 @@ function buildAgentSummaries(cfg: OpenClawConfig, defaultAgentId: string): Syste
       },
     ];
   }
-  const seen = new Set<string>();
   const summaries: SystemAgentSummary[] = [];
   // Agent ids are normalized and deduped so config aliases do not produce duplicate setup choices.
-  for (const entry of entries) {
-    const id = normalizeAgentId(entry.id);
-    if (seen.has(id)) {
-      continue;
-    }
-    seen.add(id);
+  for (const [id, entry] of indexFirstByKey(entries, (candidate) =>
+    normalizeAgentId(candidate.id),
+  )) {
     const summary: SystemAgentSummary = {
       id,
       isDefault: id === defaultAgentId,
@@ -163,7 +151,9 @@ export async function loadSystemAgentOverview(
       path: configPath,
       exists: snapshot.exists,
       valid: snapshot.valid,
-      issues: issueMessages(snapshot),
+      issues: snapshot.issues.map(
+        (issue) => `${issue.path ? `${issue.path}: ` : ""}${issue.message}`,
+      ),
       hash: snapshot.hash ?? null,
     },
     agents: buildAgentSummaries(cfg, defaultAgentId),
@@ -227,7 +217,7 @@ export function formatSystemAgentOverview(overview: SystemAgentOverview): string
       ? ["Config issues:", ...overview.config.issues.map((issue) => `  - ${issue}`)]
       : [];
   return [
-    "OpenClaw online. Little claws, typed tools.",
+    "OpenClaw online. Little templates, typed tools.",
     "",
     `Config: ${configStatus}`,
     `Path: ${overview.config.path}`,

@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { lstatSync } from "node:fs";
 import path from "node:path";
 import { resolveStateDir } from "../../config/paths.js";
+import { withContentGitSlot } from "../../infra/git-content-budget.js";
 import { runGitWorkerOperation } from "../../infra/git-worker.js";
 import {
   withWorktreeAllocationLease,
@@ -11,6 +12,7 @@ import {
 import type { WorktreeGitPolicy } from "./checkout-git-config.js";
 import { removeUnusedEmptyWorktreeSource } from "./empty-source.js";
 import { requireGit, worktreePathExists, commandError, listGitWorktrees, runGit } from "./git.js";
+import { hydrateCommitObjects, missingCommitObjects } from "./object-hydration.js";
 import { createProvisionedSnapshotWriter } from "./provisioned-snapshot-store.js";
 import {
   captureWorktreeRegistryReadGuard,
@@ -19,12 +21,12 @@ import {
 } from "./registry-read.js";
 import { deleteRegistryWorktree, createWorktreeRemovalClaimsGuard } from "./registry.js";
 import { assertExactStateSourceIdentity } from "./removal-git.js";
+import { resolveRepository } from "./repository-paths.js";
 import { captureWorktreeRunEndContext, withWorktreeRunEnd } from "./run-end-lifecycle.js";
 import { abortWorktreeRemoval, claimWorktreeRemoval } from "./run-lease.js";
-import { resolveRepository } from "./service-preparation.js";
 import type { ExactStateRetirement } from "./snapshot-exact-state-contract.js";
 import { readExactStateSnapshot } from "./snapshot-exact-state.js";
-import { clearExactRestoreReceipt, readExactRestoreReceipt } from "./snapshot-restore-exact.js";
+import { readExactRestoreReceipt } from "./snapshot-restore-exact.js";
 import type {
   ManagedWorktreeRecord,
   RetireManagedWorktreeSnapshotParams,
@@ -66,6 +68,46 @@ export async function captureManagedWorktreeSnapshot(params: {
     if (params.exactState && !exactState) {
       throw new Error("Exact-state capture lacks retirement custody");
     }
+    // Hydrate at the admitted mutation boundary. Snapshot commands stay offline,
+    // including status/index preparation that may need unchanged HEAD blobs.
+    await withContentGitSlot(async () => {
+      const options = {
+        signal: params.signal,
+        beforeRun: params.assertCurrent,
+        lowerPriority: true,
+        env: { GIT_NO_REPLACE_OBJECTS: "1" },
+      };
+      const missing = await missingCommitObjects(record.path, "HEAD", options);
+      if (missing.length > 0) {
+        try {
+          // Retirement must distinguish promised contents from lost local data.
+          // Git scans every promisor pack for this proof; creation does not need it.
+          await requireGit(
+            record.path,
+            [
+              "rev-list",
+              "--objects",
+              "--quiet",
+              "--missing=allow-promisor",
+              "--max-count=1",
+              "HEAD",
+            ],
+            { ...options, env: { ...options.env, GIT_NO_LAZY_FETCH: "1", GIT_ALLOW_PROTOCOL: "" } },
+          );
+          await hydrateCommitObjects(record.path, "HEAD", missing, options);
+        } catch (cause) {
+          params.signal?.throwIfAborted();
+          params.assertCurrent?.();
+          // Keep the cleanup owner's shared-repository backoff on failed hydration.
+          throw new Error(
+            `Worktree snapshot has missing blob ${missing[0]}; check the promisor remote or repair the repository before retrying cleanup. Checkout preserved.`,
+            { cause },
+          );
+        }
+      }
+    }, params.signal);
+    params.signal?.throwIfAborted();
+    params.assertCurrent?.();
     return await runGitWorkerOperation(
       {
         type: "worktree.snapshot",
@@ -74,7 +116,11 @@ export async function captureManagedWorktreeSnapshot(params: {
           checkoutPath: record.path,
           repoRoot: record.repoRoot,
           reason: params.reason,
-          provisionedPaths,
+          // Ordinary recovery preserves user state, not reinstallable dependencies.
+          // Explicit exact-state retirement keeps its complete provisioned capture.
+          provisionedPaths: exactState
+            ? provisionedPaths
+            : provisionedPaths.filter((entry) => !/(^|\/)node_modules\//u.test(entry)),
           ...(exactState ? { exactState } : {}),
         },
       },
@@ -104,12 +150,13 @@ export async function captureManagedWorktreeSnapshot(params: {
                 ],
                 effect.input.purpose,
                 true,
+                signal,
               );
               assertCurrent();
               return undefined;
             case "worktree.snapshot-provisioned-reset":
             case "worktree.snapshot-provisioned-chunk":
-              return await writeProvisioned(effect, () => signal.throwIfAborted());
+              return await writeProvisioned(effect, signal);
             case "worktree.eviction-fence":
             case "worktree.eviction-admit":
               throw new Error("Snapshot capture cannot authorize worktree eviction");
@@ -151,8 +198,8 @@ export async function verifyManagedWorktreeExactSnapshot(params: {
       signal: params.signal,
       assertCurrent: params.assertCurrent,
       git: params.git.worker,
-      onEffect: async () => {
-        params.signal?.throwIfAborted();
+      onEffect: async (_effect, { signal }) => {
+        signal.throwIfAborted();
         params.assertCurrent();
         return undefined;
       },
@@ -443,6 +490,8 @@ async function retireManagedWorktreeSnapshot(params: {
           assertProjectionCurrent();
         };
         if (await worktreePathExists(record.repoRoot)) {
+          const deletions = [`delete refs/openclaw/removals/${record.id}\0\0`];
+          let assertDeletionCurrent = beforeRun;
           if (record.snapshotRef) {
             const found = await runGit(
               record.repoRoot,
@@ -469,6 +518,7 @@ async function retireManagedWorktreeSnapshot(params: {
             };
             const registrations = exactRecord ? await listGitWorktrees(record.repoRoot) : [];
             if (exactRecord) {
+              assertDeletionCurrent = assertNoLiveSource;
               assertNoLiveSource();
               if (registrations.some((entry) => entry.path === record.path)) {
                 throw new Error(
@@ -510,34 +560,24 @@ async function retireManagedWorktreeSnapshot(params: {
             // Missing metadata can mean a prior expiry already deleted the ref.
             // Finalize the expired row idempotently, but never infer or delete an
             // unknown retained directory without its captured identity.
-            await requireGit(
-              record.repoRoot,
-              ["update-ref", "-d", record.snapshotRef, ...(snapshot ? [snapshot] : [])],
-              {
-                signal,
-                beforeRun: exactRecord ? assertNoLiveSource : beforeRun,
-              },
-            );
+            deletions.push(`delete ${record.snapshotRef}\0${snapshot ?? ""}\0`);
             if (exactRecord) {
               const receipt = await readExactRestoreReceipt(record, {
                 signal,
                 beforeRun: assertNoLiveSource,
               });
               if (receipt) {
-                await clearExactRestoreReceipt(record, receipt, {
-                  signal,
-                  beforeRun: assertNoLiveSource,
-                });
+                deletions.push(`delete ${receipt.ref}\0${receipt.commit}\0`);
               }
             }
           }
-          // Snapshot-loss removal can leave only a pending HEAD pin. Keep its
-          // registry owner until that pin has been cleared too.
-          await requireGit(
-            record.repoRoot,
-            ["update-ref", "-d", "refs/openclaw/removals/" + record.id],
-            { signal, beforeRun },
-          );
+          // One transaction retires all recovery refs with at most one packed-refs rewrite.
+          // Snapshot-loss removal may have only the pending HEAD pin remaining.
+          await requireGit(record.repoRoot, ["update-ref", "--stdin", "-z"], {
+            signal,
+            beforeRun: assertDeletionCurrent,
+            input: `start\0${deletions.join("")}prepare\0commit\0`,
+          });
         }
       },
     });

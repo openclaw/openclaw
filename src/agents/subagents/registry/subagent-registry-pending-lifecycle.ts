@@ -42,11 +42,6 @@ export function createPendingLifecycleScheduler(params: {
     pendingByRunId.delete(runId);
   }
 
-  function clearAll() {
-    pendingByRunId.forEach(({ timer }) => clearTimeout(timer));
-    pendingByRunId.clear();
-  }
-
   const canComplete = (
     kind: PendingLifecycleKind,
     entry: SubagentRunRecord,
@@ -121,7 +116,7 @@ export function createPendingLifecycleScheduler(params: {
         pending.cancellation ? "lifecycle-cancellation-grace" : `lifecycle-${kind}-grace`,
       );
     }, AGENT_RUN_TERMINAL_RETRY_GRACE_MS);
-    timer.unref?.();
+    timer.unref();
     pendingByRunId.set(scheduleParams.runId, { ...scheduleParams, kind, timer });
   }
 
@@ -140,7 +135,10 @@ export function createPendingLifecycleScheduler(params: {
     },
     clearError: (runId: string) => clearKind(runId, "error"),
     clearTimeout: (runId: string) => clearKind(runId, "timeout"),
-    clearAll,
+    clearAll() {
+      pendingByRunId.forEach(({ timer }) => clearTimeout(timer));
+      pendingByRunId.clear();
+    },
     scheduleCancellation: (scheduleParams: Parameters<typeof schedule>[1]) =>
       schedule("error", { ...scheduleParams, cancellation: true }),
     scheduleError: (scheduleParams: Parameters<typeof schedule>[1]) =>

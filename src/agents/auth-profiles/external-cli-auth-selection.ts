@@ -20,13 +20,84 @@ export function resolveExternalCliAuthOverlayScopeFromSelection(params: {
   providerIds?: readonly string[];
   ignoreAutoPreferredProfile: boolean;
 } {
-  const authScope = resolveExternalCliAuthScopeFromAuthSelection({
-    provider: params.provider,
-    cfg: params.cfg,
-    workspaceDir: params.workspaceDir,
-    store: params.store,
-    userPinnedAuthProfileId: params.userPinnedAuthProfileId,
+  const authProvider = params.provider;
+  const authConfig = params.cfg;
+  const authWorkspaceDir = params.workspaceDir;
+  const authStore = params.store;
+  const pinnedProfileId = params.userPinnedAuthProfileId;
+  const discoveredProviderIds: string[] = [];
+  const orderProviderAuthKey = resolveProviderIdForAuth(authProvider, {
+    config: authConfig,
+    workspaceDir: authWorkspaceDir,
   });
+  const requestedProfileIds =
+    resolveExplicitAuthOrderSelection({
+      storeOrder: authStore?.order,
+      configuredOrder: authConfig?.auth?.order,
+      providerKey: authProvider,
+      providerAuthKey: orderProviderAuthKey,
+    }).order ?? [];
+  const orderedProfileIds = [
+    ...new Set(
+      requestedProfileIds
+        .map((profileId) => profileId?.trim())
+        .filter((profileId): profileId is string => Boolean(profileId)),
+    ),
+  ];
+  const allProfileIds = [
+    ...new Set([
+      ...Object.keys(authConfig?.auth?.profiles ?? {}),
+      ...Object.keys(authStore?.profiles ?? {}),
+    ]),
+  ];
+  const discoveredProfileIds = orderedProfileIds.length > 0 ? orderedProfileIds : allProfileIds;
+  const profileIds = pinnedProfileId
+    ? [
+        pinnedProfileId,
+        ...discoveredProfileIds.filter((profileId) => profileId !== pinnedProfileId),
+      ]
+    : discoveredProfileIds;
+  let selectedProviderId: string | undefined;
+  let compatibleProfileCount = 0;
+  for (const profileId of profileIds) {
+    const profile = authConfig?.auth?.profiles?.[profileId];
+    const credential = authStore?.profiles?.[profileId];
+    const profileProvider =
+      profile?.provider ??
+      credential?.provider ??
+      (profileId === CLAUDE_CLI_PROFILE_ID ? CLAUDE_CLI_PROVIDER_ID : undefined);
+    if (!profileProvider) {
+      continue;
+    }
+    const authAliasParams = {
+      config: authConfig,
+      workspaceDir: authWorkspaceDir,
+    };
+    const providerAuthKey = resolveProviderIdForAuth(authProvider, authAliasParams);
+    const profileAuthKey = resolveProviderIdForAuth(profileProvider, {
+      ...authAliasParams,
+      storedCredential: true,
+    });
+    if (!providerAuthKey || profileAuthKey !== providerAuthKey) {
+      continue;
+    }
+    const externalCliProviderId =
+      normalizeProviderId(profileProvider) === CLAUDE_CLI_PROVIDER_ID
+        ? CLAUDE_CLI_PROVIDER_ID
+        : undefined;
+    compatibleProfileCount += 1;
+    if (compatibleProfileCount === 1) {
+      selectedProviderId = externalCliProviderId;
+    }
+    if (externalCliProviderId) {
+      discoveredProviderIds.push(externalCliProviderId);
+    }
+  }
+  const authScopeProviderIds = [...new Set(discoveredProviderIds)];
+  if (!pinnedProfileId && orderedProfileIds.length === 0) {
+    // Without explicit order, select only when compatibility is unambiguous.
+    selectedProviderId = compatibleProfileCount === 1 ? authScopeProviderIds[0] : undefined;
+  }
   const selectedRuntimeProvider =
     resolveCliRuntimeExecutionProvider({
       provider: params.provider,
@@ -36,11 +107,11 @@ export function resolveExternalCliAuthOverlayScopeFromSelection(params: {
       authProfileId: params.userPinnedAuthProfileId,
     }) || (params.provider === CLAUDE_CLI_PROVIDER_ID ? CLAUDE_CLI_PROVIDER_ID : undefined);
   const selectedProvider =
-    authScope.selectedProviderId ??
+    selectedProviderId ??
     (selectedRuntimeProvider === CLAUDE_CLI_PROVIDER_ID ? CLAUDE_CLI_PROVIDER_ID : undefined);
   const providerIds = [
     ...new Set([
-      ...authScope.providerIds,
+      ...authScopeProviderIds,
       ...(selectedRuntimeProvider === CLAUDE_CLI_PROVIDER_ID ? [CLAUDE_CLI_PROVIDER_ID] : []),
     ]),
   ];
@@ -50,130 +121,5 @@ export function resolveExternalCliAuthOverlayScopeFromSelection(params: {
       // Claude CLI should not auto-prefer a profile when runtime selection has
       // already chosen Claude CLI and the user did not pin a profile.
       !params.userPinnedAuthProfileId && selectedProvider === CLAUDE_CLI_PROVIDER_ID,
-  };
-}
-
-function resolveExternalCliAuthScopeFromAuthSelection(params: {
-  provider: string;
-  cfg?: OpenClawConfig;
-  workspaceDir?: string;
-  store?: AuthProfileStore;
-  userPinnedAuthProfileId?: string;
-}): {
-  providerIds: string[];
-  selectedProviderId?: string;
-} {
-  const providerIds: string[] = [];
-  const orderedProfileIds = resolveConfiguredAuthProfileOrder(params);
-  const allProfileIds = [
-    ...new Set([
-      ...Object.keys(params.cfg?.auth?.profiles ?? {}),
-      ...Object.keys(params.store?.profiles ?? {}),
-    ]),
-  ];
-  const discoveredProfileIds = orderedProfileIds.length > 0 ? orderedProfileIds : allProfileIds;
-  const profileIds = params.userPinnedAuthProfileId
-    ? [
-        params.userPinnedAuthProfileId,
-        ...discoveredProfileIds.filter((profileId) => profileId !== params.userPinnedAuthProfileId),
-      ]
-    : discoveredProfileIds;
-  let selectedProviderId: string | undefined;
-  let compatibleProfileCount = 0;
-  for (const profileId of profileIds) {
-    const resolved = resolveExternalCliProviderIdForCompatibleAuthProfile({
-      ...params,
-      profileId,
-    });
-    if (!resolved.compatible) {
-      continue;
-    }
-    compatibleProfileCount += 1;
-    if (compatibleProfileCount === 1) {
-      selectedProviderId = resolved.externalCliProviderId;
-    }
-    if (resolved.externalCliProviderId) {
-      providerIds.push(resolved.externalCliProviderId);
-    }
-  }
-  if (params.userPinnedAuthProfileId || orderedProfileIds.length > 0) {
-    return {
-      providerIds: [...new Set(providerIds)],
-      ...(selectedProviderId ? { selectedProviderId } : {}),
-    };
-  }
-
-  const uniqueProviderIds = [...new Set(providerIds)];
-  return {
-    providerIds: uniqueProviderIds,
-    ...(compatibleProfileCount === 1 && uniqueProviderIds[0]
-      ? // Without explicit order, select only when compatibility is unambiguous.
-        { selectedProviderId: uniqueProviderIds[0] }
-      : {}),
-  };
-}
-
-function resolveConfiguredAuthProfileOrder(params: {
-  provider: string;
-  cfg?: OpenClawConfig;
-  workspaceDir?: string;
-  store?: AuthProfileStore;
-}): string[] {
-  const providerAuthKey = resolveProviderIdForAuth(params.provider, {
-    config: params.cfg,
-    workspaceDir: params.workspaceDir,
-  });
-  const orderedProfileIds =
-    resolveExplicitAuthOrderSelection({
-      storeOrder: params.store?.order,
-      configuredOrder: params.cfg?.auth?.order,
-      providerKey: params.provider,
-      providerAuthKey,
-    }).order ?? [];
-  return [
-    ...new Set(
-      orderedProfileIds
-        .map((profileId) => profileId?.trim())
-        .filter((profileId): profileId is string => Boolean(profileId)),
-    ),
-  ];
-}
-
-function resolveExternalCliProviderIdForCompatibleAuthProfile(params: {
-  provider: string;
-  cfg?: OpenClawConfig;
-  workspaceDir?: string;
-  store?: AuthProfileStore;
-  profileId: string;
-}): {
-  compatible: boolean;
-  externalCliProviderId?: string;
-} {
-  const profile = params.cfg?.auth?.profiles?.[params.profileId];
-  const credential = params.store?.profiles?.[params.profileId];
-  const profileProvider =
-    profile?.provider ??
-    credential?.provider ??
-    (params.profileId === CLAUDE_CLI_PROFILE_ID ? CLAUDE_CLI_PROVIDER_ID : undefined);
-  if (!profileProvider) {
-    return { compatible: false };
-  }
-  const authAliasParams = {
-    config: params.cfg,
-    workspaceDir: params.workspaceDir,
-  };
-  const providerAuthKey = resolveProviderIdForAuth(params.provider, authAliasParams);
-  const profileAuthKey = resolveProviderIdForAuth(profileProvider, {
-    ...authAliasParams,
-    storedCredential: true,
-  });
-  if (!providerAuthKey || profileAuthKey !== providerAuthKey) {
-    return { compatible: false };
-  }
-  return {
-    compatible: true,
-    ...(normalizeProviderId(profileProvider) === CLAUDE_CLI_PROVIDER_ID
-      ? { externalCliProviderId: CLAUDE_CLI_PROVIDER_ID }
-      : {}),
   };
 }

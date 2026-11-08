@@ -68,6 +68,6 @@ type SlackAppMentionBase = Omit<
 export type SlackAppMentionEvent = SlackAppMentionBase & {
   text?: string;
   parent_user_id?: string;
-  channel_type?: "im" | "mpim" | "channel" | "group";
+  channel_type?: NonNullable<SlackMessageEvent["channel_type"]>;
   attachments?: SlackAttachment[];
 };

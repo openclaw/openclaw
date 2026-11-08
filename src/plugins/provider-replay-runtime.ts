@@ -29,6 +29,7 @@ export async function sanitizeProviderReplayHistoryWithPluginAsync(
     warnSessionPersistenceDeprecation(
       "ProviderPlugin.sanitizeReplayHistory",
       "sanitizeReplayHistoryAsync",
+      plugin.pluginId ? { pluginId: plugin.pluginId } : undefined,
     );
     return await plugin.sanitizeReplayHistory(params.context);
   }

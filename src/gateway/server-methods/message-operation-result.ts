@@ -57,12 +57,18 @@ export function createGatewayInflightSuccess(params: {
   return createGatewayInflightResult({ ...params, result: { ok: true, payload: params.payload } });
 }
 
-export function createGatewayInflightUnavailableFailure(params: {
-  context: GatewayRequestContext;
-  dedupeKey: string | undefined;
-  channel: string;
-  err: unknown;
-}): GatewayInflightResult {
+export function createGatewayInflightFailure(
+  params: {
+    context: GatewayRequestContext;
+    dedupeKey: string | undefined;
+    channel: string;
+    err: unknown;
+  },
+  isAuthorized: () => boolean,
+): GatewayInflightResult {
+  if (!isChannelPartialDeliveryError(params.err) && !isAuthorized()) {
+    return createGatewayInflightAuthorityFailure(params);
+  }
   // Preserve ingress-policy errors only when delivery has no accepted effect or queue custody.
   const unsentError =
     params.err instanceof OutboundDeliveryError &&
@@ -135,7 +141,7 @@ export function scheduleDeliveredSourceReplyTranscriptMirror(params: {
       const mirrored = await mirrorDeliveredSourceReplyToTranscript(params.mirror);
       if (!mirrored && params.mirror.sourceReplyFinal === true) {
         params.context.logGateway?.warn?.(
-          "Terminal source reply receipt was not mirrored; restart recovery is fail-closed.",
+          "Final source reply was delivered but could not be mirrored to the session transcript.",
           {
             channel: params.mirror.channel,
             sessionKey: params.mirror.sessionKey,

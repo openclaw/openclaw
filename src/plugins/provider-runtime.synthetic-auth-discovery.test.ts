@@ -1,6 +1,7 @@
 /** Verifies provider runtime discovery includes synthetic-auth provider hooks. */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { prepareSyntheticLocalProviderAuth } from "../agents/model-auth-runtime.js";
+import { configForProviders } from "../agents/model-auth.fixtures.test-support.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import type { ProviderPlugin } from "./provider-plugin.types.js";
 
@@ -80,6 +81,7 @@ import {
   resolveProviderSyntheticAuthWithPlugin,
 } from "./provider-runtime.js";
 import {
+  inheritPreparedSyntheticAuthScope,
   prepareSyntheticAuthWithProvider,
   resolveSyntheticAuthWithProvider,
   restorePreparedSyntheticAuthFacts,
@@ -178,6 +180,78 @@ describe("resolveProviderSyntheticAuthWithPlugin", () => {
         ),
     );
     expect(resolveSyntheticAuth).toHaveBeenCalledOnce();
+  });
+
+  it("limits direct auth lookup to non-secret synthetic markers", async () => {
+    const marker = {
+      apiKey: "custom-local",
+      source: "configured headers",
+      mode: "api-key" as const,
+    };
+    for (const result of [
+      marker,
+      { ...marker, apiKey: "fixture-real-key" },
+      { ...marker, apiKey: "secretref-env:FIXTURE_KEY" },
+      { ...marker, mode: "oauth" as const },
+      { ...marker, nativeAuth: { runtime: "fixture", mode: "api-key" as const } },
+    ]) {
+      const provider: ProviderPlugin = {
+        id: "config-auth",
+        label: "Config auth",
+        auth: [],
+        resolveSyntheticAuth: () => result,
+      };
+      await resolveProviderRuntimePlugin.withImplementation(
+        () => provider,
+        async () =>
+          await resolvePluginDiscoveryProvidersRuntime.withImplementation(
+            () => [],
+            async () => {
+              expect(
+                await prepareSyntheticLocalProviderAuth({
+                  cfg: {},
+                  provider: provider.id,
+                  allowPluginSyntheticAuth: false,
+                }),
+              ).toEqual(result === marker ? marker : null);
+              if (result === marker) {
+                expect(
+                  await prepareSyntheticLocalProviderAuth({
+                    cfg: configForProviders({
+                      [provider.id]: {
+                        apiKey: { source: "env", provider: "default", id: "MISSING_KEY" },
+                        baseUrl: "https://fixture.example/v1",
+                        models: [],
+                      },
+                    }),
+                    provider: provider.id,
+                    allowPluginSyntheticAuth: false,
+                  }),
+                ).toBeNull();
+              }
+            },
+          ),
+      );
+    }
+  });
+
+  it("reuses a prepared non-secret marker without starting external auth", async () => {
+    const params = nativeParams();
+    const marker = { apiKey: "custom-local", source: "prepared headers", mode: "api-key" as const };
+    nativeProvider.prepareSyntheticAuth.mockResolvedValue(marker);
+    const directParams = {
+      cfg: params.config,
+      provider: params.provider,
+      env: params.env,
+      workspaceDir: params.workspaceDir,
+      allowPluginSyntheticAuth: false,
+    };
+    expect(await prepareSyntheticLocalProviderAuth(directParams)).toBeNull();
+    expect(nativeProvider.prepareSyntheticAuth).not.toHaveBeenCalled();
+
+    await prepareProviderSyntheticAuthWithPlugin(params);
+    expect(await prepareSyntheticLocalProviderAuth(directParams)).toEqual(marker);
+    expect(nativeProvider.prepareSyntheticAuth).toHaveBeenCalledOnce();
   });
 
   it.each(["config", "env", "workspace", "provider generation"])(
@@ -279,7 +353,7 @@ describe("resolveProviderSyntheticAuthWithPlugin", () => {
     expect(nativeProvider.prepareSyntheticAuth).toHaveBeenCalledTimes(2);
 
     const worker = nativeParams();
-    restorePreparedSyntheticAuthFacts(worker.config, unavailable, worker);
+    restorePreparedSyntheticAuthFacts(unavailable, [worker]);
     expect(await prepareProviderSyntheticAuthWithPlugin(worker)).toBeUndefined();
     expect(resolveProviderSyntheticAuthWithPlugin(worker)).toBeUndefined();
     await expect(
@@ -292,6 +366,46 @@ describe("resolveProviderSyntheticAuthWithPlugin", () => {
     await expect(prepareProviderSyntheticAuthWithPlugin({ ...worker, env: {} })).rejects.toThrow(
       "environment or workspace does not match",
     );
+    expect(nativeProvider.prepareSyntheticAuth).toHaveBeenCalledTimes(2);
+  });
+
+  it("refreshes closed facts through retained policy and registration config views", async () => {
+    const owner = nativeParams();
+    const policy = {};
+    const captured = {};
+    restorePreparedSyntheticAuthFacts(
+      [{ providerRef: "native-auth", result: nativeAuth }],
+      [owner],
+    );
+    inheritPreparedSyntheticAuthScope(owner.config, policy);
+    inheritPreparedSyntheticAuthScope(policy, captured);
+    const lookup = nativeParams(captured, owner.env, owner.workspaceDir);
+    for (const result of [nativeAuth, { ...nativeAuth, apiKey: "changed" }, null]) {
+      restorePreparedSyntheticAuthFacts([{ providerRef: "native-auth", result }], [owner]);
+      expect(await prepareProviderSyntheticAuthWithPlugin(lookup)).toEqual(result ?? undefined);
+    }
+    restorePreparedSyntheticAuthFacts([], [owner]);
+    await expect(prepareProviderSyntheticAuthWithPlugin(lookup)).rejects.toThrow(
+      "Prepared synthetic auth is missing",
+    );
+    await expect(prepareProviderSyntheticAuthWithPlugin({ ...lookup, env: {} })).rejects.toThrow(
+      "environment or workspace does not match",
+    );
+    expect(nativeProvider.prepareSyntheticAuth).not.toHaveBeenCalled();
+  });
+
+  it("does not share ordinary external-auth preparation with a derived config", async () => {
+    const owner = nativeParams();
+    expect(await prepareProviderSyntheticAuthWithPlugin(owner)).toEqual(nativeAuth);
+    const derived = {};
+    inheritPreparedSyntheticAuthScope(owner.config, derived);
+    const replacement = { ...nativeAuth, apiKey: "derived" };
+    nativeProvider.prepareSyntheticAuth.mockResolvedValue(replacement);
+    expect(
+      await prepareProviderSyntheticAuthWithPlugin(
+        nativeParams(derived, owner.env, owner.workspaceDir),
+      ),
+    ).toEqual(replacement);
     expect(nativeProvider.prepareSyntheticAuth).toHaveBeenCalledTimes(2);
   });
 
@@ -310,7 +424,7 @@ describe("resolveProviderSyntheticAuthWithPlugin", () => {
         provider: "native-alias",
         context: { config: worker.config, provider: "native-alias" },
       };
-      restorePreparedSyntheticAuthFacts(worker.config, facts, worker);
+      restorePreparedSyntheticAuthFacts(facts, [worker]);
       const workerHook = vi.fn(() => ({ ...nativeAuth, apiKey: "unexpected-worker-probe" }));
       const workerProvider: ProviderPlugin = {
         ...nativeProvider,
@@ -334,13 +448,9 @@ describe("resolveProviderSyntheticAuthWithPlugin", () => {
   );
 
   it("captures the canonical pure result when it precedes an async alias fallback", async () => {
-    const config = {
-      models: {
-        providers: {
-          "custom-native": { api: "ollama" as const, baseUrl: "http://localhost", models: [] },
-        },
-      },
-    };
+    const config = configForProviders({
+      "custom-native": { api: "ollama" as const, baseUrl: "http://localhost", models: [] },
+    });
     const resolveSyntheticAuth = vi.fn(() => nativeAuth);
     resolveProviderRuntimePlugin
       .mockReturnValueOnce({

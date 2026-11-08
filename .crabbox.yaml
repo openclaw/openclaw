@@ -28,7 +28,7 @@ actions:
   ephemeral: true
 blacksmith:
   org: openclaw
-  # Routine remote proof uses 16-class; high-memory proof opts in by workflow.
+  # Routine remote proof uses 4 vCPUs; high-memory proof opts in by workflow.
   workflow: .github/workflows/ci-check-testbox.yml
   job: check
   ref: main
@@ -85,6 +85,7 @@ jobs:
     class: standard
     type: Standard_D4ads_v6
     market: on-demand
+    ttl: 4h
     idleTimeout: 90m
     hydrate:
       actions: true
@@ -103,6 +104,7 @@ jobs:
     class: standard
     type: Standard_D4ads_v6
     market: on-demand
+    ttl: 4h
     idleTimeout: 90m
     hydrate:
       actions: true

@@ -102,50 +102,37 @@ export function markFallbackCandidateSkipped(params: {
   });
 }
 
-export function isFallbackCandidateSkipped(params: {
+type SkipLookup = {
   sessionId: string | undefined;
   provider: string;
   model: string;
   authScope?: string;
   now?: number;
-}): boolean {
+};
+
+function getFallbackCandidateSkipEntry(params: SkipLookup): SkipEntry | undefined {
   if (!params.sessionId || !params.provider || !params.model) {
-    return false;
+    return undefined;
   }
   const now = params.now ?? Date.now();
   pruneAllExpired(now);
   const buckets = getState().buckets;
   const bucket = buckets.get(params.sessionId);
   if (!bucket) {
-    return false;
+    return undefined;
   }
   pruneExpired(bucket, now);
   if (bucket.size === 0) {
     buckets.delete(params.sessionId);
-    return false;
+    return undefined;
   }
-  const entry = bucket.get(candidateKey(params.provider, params.model, params.authScope));
-  return Boolean(entry && entry.expiresAtMs > now);
+  return bucket.get(candidateKey(params.provider, params.model, params.authScope));
 }
 
-export function getFallbackCandidateSkipReason(params: {
-  sessionId: string | undefined;
-  provider: string;
-  model: string;
-  authScope?: string;
-  now?: number;
-}): string | undefined {
-  if (!params.sessionId || !params.provider || !params.model) {
-    return undefined;
-  }
-  const bucket = getState().buckets.get(params.sessionId);
-  if (!bucket) {
-    return undefined;
-  }
-  const now = params.now ?? Date.now();
-  const entry = bucket.get(candidateKey(params.provider, params.model, params.authScope));
-  if (!entry || entry.expiresAtMs <= now) {
-    return undefined;
-  }
-  return entry.reason;
+export function isFallbackCandidateSkipped(params: SkipLookup): boolean {
+  return getFallbackCandidateSkipEntry(params) !== undefined;
+}
+
+export function getFallbackCandidateSkipReason(params: SkipLookup): string | undefined {
+  return getFallbackCandidateSkipEntry(params)?.reason;
 }

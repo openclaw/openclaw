@@ -69,6 +69,14 @@ plugin entry:
 openclaw plugins disable workboard
 ```
 
+## Storage recovery
+
+If a SQLite worker fails, Workboard reopens its store through the database worker
+owner on the next call, after native cleanup finishes. An operation already in
+flight can still report a failure or an unknown write outcome; Workboard does not
+replay that operation. A Gateway restart is not needed once the underlying storage
+problem is resolved. Updates require no configuration or data migration.
+
 ## Board appearance
 
 While Workboard is open, its sidebar entry expands to show both Cards and
@@ -93,7 +101,8 @@ Use **Edit board** to change a board's name, icon, and color. **Reset to default
 clears the icon and color when you save; canceling leaves the saved board unchanged.
 For Sessions boards, the same dialog also edits column labels, colors,
 descriptions, column order, and the fallback column. Ask the Board agent to edit
-column rules.
+column rules. Saving only the name, icon, or color leaves the saved columns unchanged,
+including column edits made by another operator while the dialog was open.
 
 For `workboard.boards.upsert`, omitting `icon` or `color`, passing `null`, or passing
 an empty string preserves the existing value, including for older clients. To clear
@@ -104,11 +113,27 @@ a replacement value for them. Other fields retain their ordinary update behavior
 array changes nothing. Clients using this argument need a Gateway version that
 supports explicit appearance clearing; older Gateways do not implement this reset.
 
-Card lists share one prepared, claim-token-redacted snapshot per board scope and
-card revision. `workboard.cards.list` returns `revision`; repeat the same query
-with `{ sinceRevision: revision }` for `{ unchanged: true, revision }` when current.
+`workboard.cards.list` returns up to 100 cards, with claim tokens redacted. When
+`nextCursor` is present, pass that `{ position, createdAt, id }` object as `after`
+with the same filters to request the next page. The final page omits `nextCursor`.
+The first page returns `revision`; repeat the same query with
+`{ sinceRevision: revision }` for `{ unchanged: true, revision }` when current.
+`sinceRevision` does not apply to continuation pages. CLI lists follow all pages
+automatically; full-population reads remain available to explicit tool and
+internal export workflows.
 The revision includes the store epoch and, for scoped queries, the normalized
-`boardId`. Reconnects request a full snapshot. `plugin.workboard.changed` includes
+`boardId` and requested `sessionKey`. The optional `sessionKey` filter takes a
+nonempty canonical session key and selects cards linked directly, through their
+execution, or through a recorded attempt or event. It can be combined with
+`boardId`; omitting it pages across all cards in the selected board scope. Selection happens in the
+database before card notes, comments, events, and other details are loaded.
+Ordinary keys and Matrix/Signal structural segments compare without case;
+opaque peer IDs and catalog source identifiers retain their exact identity. The
+Control UI and server filter share `normalizeSessionKeyForComparison` from
+`@openclaw/normalization-core`, exposed to the plugin through
+`openclaw/plugin-sdk/session-key-runtime`. Candidate matching reads only session-link
+fields before loading matching cards. Reconnects request a fresh snapshot of the
+same scope. `plugin.workboard.changed` includes
 an event `revision` and a separate `cardsRevision`: session-fact notifications
 advance the event sequence without invalidating unchanged cards.
 
@@ -127,8 +152,10 @@ activity. Message previews are plain text: Markdown formatting and HTML are remo
 link labels are retained, and whitespace is collapsed before the 400-character limit.
 Tiles link up to four pull requests, ordered by open, draft, merged,
 then closed state, with a count for any additional pull requests. The agent filter
-narrows the displayed sessions without changing the
-saved board scope.
+narrows the loaded sessions without changing the saved board scope. **Load more
+sessions** extends the view in pages of 100; the board displays the loaded and
+total matching session counts. People filters apply to the complete authorized
+session population before paging.
 
 Dock conversations stay excluded even when automation is included.
 
@@ -182,9 +209,14 @@ background previews, and time-dependent subagent state remain current; profile,
 configuration, topology, and access changes refresh authorization. Age-window and
 unavailable-PR retry deadlines still refresh the snapshot. Tool callers obtain
 their own caller-scoped roster; sharing never expands session visibility.
-`workboard.sessionsBoard.read` returns a `revision`; repeat the same query with
+`workboard.sessionsBoard.read` returns up to 100 sessions, a `total` matching count,
+and a `revision`. Pass the string `nextCursor` as `after` with the same board and
+view to continue; the final page omits `nextCursor`. Repeat a first-page query with
 `{ sinceRevision: revision }` for `{ unchanged: true, revision }` when current.
-Reconnects and view changes request a full snapshot. The Workboard change event's
+Continuation pages ignore `sinceRevision`. Pages reflect current session state;
+if a cursor's session is no longer present, the request returns an explicit
+refresh error. Refresh reconciles sessions reordered between page requests.
+Reconnects and view changes request a fresh first page. The Workboard change event's
 `sessionsRevision` advances for board edits, operator pins, and session fact
 invalidations independently of `cardsRevision`.
 
@@ -248,6 +280,8 @@ The Gateway methods are `workboard.sessionsBoard.read` (`operator.read`) and
 `workboard.sessionsBoard.update` and `.move` (`operator.write`). All require
 `boardId`. Update takes a `patch` object with the spec fields, including the
 dock's `agentSessionKey`; move additionally requires `sessionKey` and `columnId`.
+Move returns the first page of the updated board, with the same 100-session limit,
+`total`, and optional `nextCursor` as read.
 Create with `workboard.boards.upsert` and `kind: "sessions"`, or with
 `workboard_board_create`. Changing an existing board's kind is rejected.
 
@@ -263,14 +297,23 @@ sessions or its Board agent conversation.
 
 ## Card fields
 
-| Field       | Values                                                                                                        |
-| ----------- | ------------------------------------------------------------------------------------------------------------- |
-| `status`    | `triage`, `backlog`, `todo`, `scheduled`, `ready`, `running`, `review`, `blocked`, `done`                     |
-| `priority`  | `low`, `normal`, `high`, `urgent`                                                                             |
-| `labels`    | free-form strings                                                                                             |
-| `agentId`   | optional assigned agent                                                                                       |
-| linked refs | optional task, run, session, or source URL                                                                    |
-| `execution` | optional metadata for a Codex/Claude run started from the card (engine, mode, model, session, run id, status) |
+| Field       | Values                                                                                                                                 |
+| ----------- | -------------------------------------------------------------------------------------------------------------------------------------- |
+| `title`     | required, up to 180 characters                                                                                                         |
+| `notes`     | optional, up to 4000 characters                                                                                                        |
+| `status`    | `triage`, `backlog`, `todo`, `scheduled`, `ready`, `running`, `review`, `blocked`, `done`                                              |
+| `priority`  | `low`, `normal`, `high`, `urgent`                                                                                                      |
+| `labels`    | free-form strings, up to 40 characters each; duplicates are removed and only the first 12 distinct labels are kept, extras are dropped |
+| `agentId`   | optional assigned agent                                                                                                                |
+| linked refs | optional task, run, session, or source URL                                                                                             |
+| `execution` | optional metadata for a Codex/Claude run started from the card (engine, mode, model, session, run id, status)                          |
+
+Values over a length limit are rejected with an error such as `labels must be 40 characters or fewer.`
+Labels after the 12th distinct one are ignored without being checked, so an over-long label in that
+position does not cause an error.
+When creating cards (for example with `workboard_create`), `parents` (card ids, up to 120 characters
+each) and `skills` (up to 80 characters each) accept at most 20 distinct entries; more
+are rejected.
 
 Cards also carry compact metadata:
 
@@ -283,6 +326,13 @@ This metadata lets an operator see how a card moved through the board without
 opening the linked session. It is local operating context, not a replacement for session
 transcripts or GitHub issue history.
 
+Card create/update RPCs reject unsupported top-level `metadata` keys with an error
+naming the keys, rather than accepting data that will not be stored.
+
+New and edited comments are limited to 2000 characters. Unchanged stored comment
+bodies, including older oversized comments, retain their exact text during dispatch
+and other card updates. The existing per-card metadata budget still applies.
+
 The plugin and Control UI use one Workboard card contract. Control UI refreshes
 therefore preserve workspace provenance and authority, claim state, diagnostic
 actions, and notification sequence numbers instead of projecting a smaller
@@ -291,25 +341,35 @@ notification kinds are ignored until both surfaces support them. They are never
 rewritten into another valid state.
 
 The open Workboard tab updates from `plugin.workboard.changed` invalidations. Each
-event contains only a store epoch and revision. The UI then rereads canonical
+event contains only a store epoch and revision. The UI then rereads stored
 cards through the normal `operator.read` RPC. Multiple revisions coalesce into
 one follow-up read. Workboard defers that read while a card is being dragged,
 edited, or written, then resumes after the local interaction finishes. A
-reconnect always performs a canonical reload. There is no routine full-card
+reconnect always performs a reload from the store. There is no routine full-card
 poll, and **Refresh** remains available as manual recovery.
 
-The Gateway shares one immutable `workboard.cards.list` payload per normalized
-board filter at each store revision, including concurrent reads. Card and board
-writes invalidate it before the next read; the existing change service also
-invalidates it when it observes a commit from another SQLite connection.
-Each response still includes all board summaries, so a change to another board
-invalidates the payload too. Claim tokens remain redacted, and the RPC response
-shape is unchanged.
+The sidebar catalog reads names and summaries from `workboard.boards.list`.
+The session-header chip reads only cards linked to its session through the
+`workboard.cards.list` session filter; neither downloads unrelated card history.
+These narrower reads preserve the existing rendering.
+
+The Gateway shares the first `workboard.cards.list` page per board filter at each
+store revision, including concurrent reads. Board summaries are shared across
+`workboard.boards.list` and all card-list queries at that same revision.
+Session-filtered and continuation reads do not retain a card payload cache.
+Card and board writes invalidate cached pages and summaries before the next
+read. Each response includes all board summaries, so a change to another board
+invalidates the page too.
+
+The Control UI and dashboard widgets show when more cards are available and
+offer **Load more cards**. Card search, filters, and widget counts apply to loaded
+cards. Load all cards before reordering them. Refresh reconciles cards reordered
+between page requests.
 
 When more than one board exists, the toolbar includes a **Board** filter backed
 by persisted board metadata rather than only the currently visible cards. Empty
 and archived boards therefore remain selectable. Cards without an explicit
-board id belong to the canonical `default` board. Each board has a canonical
+board id belong to the primary `default` board. Each board has a primary
 `/workboard/<boardId>` page that can be bookmarked, shared, or pinned in the
 sidebar. The previously shipped `/workboard?board=<boardId>` form remains a
 compatibility alias and redirects to that page while preserving other query
@@ -320,8 +380,10 @@ owns its AI-categorization prompt, model, schedule, and run history. The board
 page shows an **Automation** link when that reference is present. Matching
 session events nudge the attached automation through the active Workboard service's
 scheduler authority, including after the worker's tool authority closes, with events
-for the same board coalesced for 60 seconds. The automation's schedule remains
-the backstop. Disabled and auto-disabled automations are never nudged. Deleting
+for the same board coalesced for 60 seconds. If an attempt ends while its run is
+still active, the lifecycle sweep nudges the automation when it records the terminal
+outcome. The automation's schedule remains the backstop. Disabled and auto-disabled
+automations are never nudged. Deleting
 the board does not delete or otherwise mutate the
 operator-owned automation job.
 
@@ -352,30 +414,58 @@ plugin using the linked run and session lifecycle (see
 
 ## Agent tools
 
-| Tool                                                                                                                                             | Purpose                                                                                                                                                                                   |
-| ------------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `workboard_list`                                                                                                                                 | List compact cards with claim/diagnostic state; optional board filter.                                                                                                                    |
-| `workboard_read`                                                                                                                                 | Return one card plus bounded worker context (notes, attempts, comments, links, proof, artifacts, parent results, recent assignee work, active diagnostics).                               |
-| `workboard_create`                                                                                                                               | Create a card with optional parents, tenant, skills, board, workspace metadata, idempotency key, runtime limit, retry budget.                                                             |
-| `workboard_link`                                                                                                                                 | Link a parent to a child card. Children stay `todo` until every parent reaches `done`, then dispatch promotion moves them to `ready`.                                                     |
-| `workboard_claim`                                                                                                                                | Claim a card for the calling agent; moves `backlog`/`todo`/`ready` into `running`.                                                                                                        |
-| `workboard_heartbeat`                                                                                                                            | Refresh the claim heartbeat during a longer run.                                                                                                                                          |
-| `workboard_release`                                                                                                                              | Release the claim after completion, pause, or handoff; can move the card to a next status.                                                                                                |
-| `workboard_complete` / `workboard_block`                                                                                                         | Structured lifecycle tools for final summaries, proof, artifacts, and created-card manifests (must reference cards linked back to the completed card) or blocker reasons.                 |
-| `workboard_attachment_add` / `workboard_attachment_read` / `workboard_attachment_delete`                                                         | Store small card attachments in plugin SQLite state, index on the card, expose in worker context.                                                                                         |
-| `workboard_worker_log` / `workboard_protocol_violation`                                                                                          | Record worker log lines and block a card when an automated worker stops without calling `workboard_complete`/`workboard_block`.                                                           |
-| `workboard_board_create` / `workboard_board_archive` / `workboard_board_delete`                                                                  | Manage persisted board metadata (display name, description, archive state, default workspace).                                                                                            |
-| `workboard_sessions_board_read` / `workboard_sessions_board_update` / `workboard_sessions_board_move`                                            | Read Sessions board placements, edit columns, rules, or scope, or pin a session in a column.                                                                                              |
-| `workboard_runs`                                                                                                                                 | Return the persisted run-attempt history for a card.                                                                                                                                      |
-| `workboard_specify`                                                                                                                              | Turn a rough triage/backlog card into a clarified `todo` card; records the spec summary on the card.                                                                                      |
-| `workboard_decompose`                                                                                                                            | Fan a parent orchestration card into linked children, inheriting board/tenant metadata; can complete the parent with a created-card manifest.                                             |
-| `workboard_notify_subscribe` / `workboard_notify_list` / `workboard_notify_events` / `workboard_notify_advance` / `workboard_notify_unsubscribe` | Manage notification subscriptions. Event reads are replay-safe; `advance` moves the durable cursor so callers resume without losing or double-reading completed/failed/stale card events. |
-| `workboard_boards` / `workboard_stats`                                                                                                           | Inspect board namespaces and queue stats.                                                                                                                                                 |
-| `workboard_promote` / `workboard_reassign` / `workboard_reclaim`                                                                                 | Recover or hand off stuck work.                                                                                                                                                           |
-| `workboard_comment` / `workboard_proof`                                                                                                          | Add handoff notes or attach proof/artifact references.                                                                                                                                    |
-| `workboard_unblock`                                                                                                                              | Move blocked work back to `todo`.                                                                                                                                                         |
-| `workboard_move`                                                                                                                                 | Move a card to another status; claimed cards require the caller's agent claim scope.                                                                                                      |
-| `workboard_dispatch`                                                                                                                             | Nudge dependency promotion or stale-claim cleanup without launching workers; worker launch uses Gateway or slash-command dispatch.                                                        |
+The card tools below are optional plugin tools. Enabling Workboard exposes only
+the three Sessions board tools to agents; an agent that should create, claim, or
+complete cards needs the card tools allowed for it. Add the plugin id to the
+agent's tool policy to allow every Workboard tool, or list individual tool names
+or a pattern such as `workboard_*`:
+
+```json5
+{
+  agents: {
+    entries: {
+      main: {
+        tools: { alsoAllow: ["workboard"] },
+      },
+    },
+  },
+}
+```
+
+Without that entry the agent sees only `workboard_sessions_board_*` and cannot
+manage cards. Workers that Workboard starts from a card (**Start** or dispatch)
+do not need it: each worker run is granted `workboard_heartbeat`,
+`workboard_complete`, and `workboard_block` for its card.
+
+| Tool                                                                                                                                             | Purpose                                                                                                                                                                                                                         |
+| ------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `workboard_list`                                                                                                                                 | List compact cards with claim/diagnostic state; optional board filter.                                                                                                                                                          |
+| `workboard_read`                                                                                                                                 | Return one card plus bounded worker context from the same card read (notes, attempts, comments, links, proof, artifacts, parent results, recent assignee work, active diagnostics).                                             |
+| `workboard_create`                                                                                                                               | Create a card with optional parents, tenant, skills, board, workspace metadata, idempotency key, runtime limit, retry budget.                                                                                                   |
+| `workboard_link`                                                                                                                                 | Link a parent to a child card. With open parents, `backlog`/`triage` children normalize to `todo`; when all parents are `done`, eligible children reach `ready` on dispatch. See Dependency promotion under Dispatch for holds. |
+| `workboard_claim`                                                                                                                                | Claim a card for the calling agent; moves `backlog`/`todo`/`ready` into `running`.                                                                                                                                              |
+| `workboard_heartbeat`                                                                                                                            | Refresh the claim heartbeat during a longer run.                                                                                                                                                                                |
+| `workboard_release`                                                                                                                              | Release the claim; omitting `status` preserves the current status, including `running`. Pass `status` to pause or hand off.                                                                                                     |
+| `workboard_complete` / `workboard_block`                                                                                                         | Structured lifecycle tools for final summaries, proof, artifacts, and created-card manifests (must reference cards linked back to the completed card) or blocker reasons.                                                       |
+| `workboard_attachment_add` / `workboard_attachment_read` / `workboard_attachment_delete`                                                         | Store small card attachments in plugin SQLite state, index on the card, expose in worker context.                                                                                                                               |
+| `workboard_worker_log` / `workboard_protocol_violation`                                                                                          | Record worker log lines and block a card when an automated worker stops without calling `workboard_complete`/`workboard_block`.                                                                                                 |
+| `workboard_board_create` / `workboard_board_archive` / `workboard_board_delete`                                                                  | Manage persisted board metadata (display name, description, archive state, default workspace).                                                                                                                                  |
+| `workboard_sessions_board_read` / `workboard_sessions_board_update` / `workboard_sessions_board_move`                                            | Read Sessions board placements, edit columns, rules, or scope, or pin a session in a column.                                                                                                                                    |
+| `workboard_runs`                                                                                                                                 | Return the persisted run-attempt history for a card.                                                                                                                                                                            |
+| `workboard_specify`                                                                                                                              | Turn a rough triage/backlog card into a clarified `todo` card; records the spec summary on the card.                                                                                                                            |
+| `workboard_decompose`                                                                                                                            | Fan a parent orchestration card into linked children, inheriting board/tenant metadata; can complete the parent with a created-card manifest.                                                                                   |
+| `workboard_notify_subscribe` / `workboard_notify_list` / `workboard_notify_events` / `workboard_notify_advance` / `workboard_notify_unsubscribe` | Manage notification subscriptions. Event reads are replay-safe; `advance` moves the durable cursor so callers resume without losing or double-reading completed/failed/stale card events.                                       |
+| `workboard_boards` / `workboard_stats`                                                                                                           | Inspect board namespaces and queue stats.                                                                                                                                                                                       |
+| `workboard_promote` / `workboard_reassign` / `workboard_reclaim`                                                                                 | Recover or hand off stuck work.                                                                                                                                                                                                 |
+| `workboard_comment` / `workboard_proof`                                                                                                          | Add handoff notes or attach proof/artifact references.                                                                                                                                                                          |
+| `workboard_unblock`                                                                                                                              | Move blocked work back to `todo`.                                                                                                                                                                                               |
+| `workboard_move`                                                                                                                                 | Move a card to another status; claimed cards require the caller's agent claim scope.                                                                                                                                            |
+| `workboard_dispatch`                                                                                                                             | Nudge dependency promotion or stale-claim cleanup without launching workers; worker launch uses Gateway or slash-command dispatch.                                                                                              |
+
+Creating linked cards, linking existing cards, and decomposition save one card at a
+time. If a later step fails, completed steps remain visible; Workboard reports the
+original error without rolling them back. Inspect the board before retrying, and
+repair missing links or remove unwanted partial cards as needed.
 
 Proof statuses are worker-reported outcomes, not independent verification. A `passed`
 entry means the worker reports that its command or check succeeded. Consumers that need
@@ -387,6 +477,15 @@ already has the same terminal status is reused unchanged. Completion proof witho
 `proofId` remains append-only, so a later retry cannot rewrite older history merely because
 its command or note is identical.
 
+Completion validates its proof, artifacts, and notification before saving the card.
+A validation failure leaves the card unchanged. Completion notifications preserve
+the full execution run ID, including IDs longer than 120 characters. Run IDs are limited
+to 512 characters across execution admission, launch metadata, worker logs, and
+notification subscriptions. Use a shorter ID if admission rejects it; IDs are never
+truncated. Metadata trimming preserves the completion's new notification and proof,
+discarding older history as needed. If those records cannot fit, completion fails
+without saving the card.
+
 Claimed cards reject agent-tool mutations from other agents unless the caller
 holds the claim token returned by `workboard_claim`. Every card returned by an
 agent tool or Gateway RPC call redacts `metadata.claim.token` to `[redacted]`
@@ -395,6 +494,17 @@ so Control UI operators and other agents can inspect claim state without ever
 seeing a usable token. Recovery goes through
 `workboard_promote`/`workboard_reassign`/`workboard_reclaim`, which do not
 require the token.
+
+Promotion only moves `todo` cards to `ready`; every other status returns an
+error without changing the card, including when `force` is set. To recover
+blocked work, use `workboard_unblock` first to move it to `todo`.
+`force` only bypasses dependency or schedule holds.
+
+Once a managed worker blocks its attempt, late lifecycle observations from that
+attempt cannot settle it again. Unblocking and promoting the card leaves it
+`ready` for a fresh dispatch and preserves the blocked attempt's failure. Ignored
+observations are logged with the card and attempt IDs. Explicitly linking a
+different session still allows that session's lifecycle to synchronize.
 
 ## Dispatch
 
@@ -413,6 +523,21 @@ attempt, and execution history.
 
 Workers get bounded card context plus the claim token needed to heartbeat,
 complete, or block the card through the Workboard tools.
+
+### Dependency promotion
+
+With open parents, child cards in `backlog` or `triage` are normalized to `todo`.
+After all parents reach `done`, dependency promotion moves eligible children to
+`ready`. A child in `blocked` is skipped until `workboard_unblock` moves it back
+to `todo`. A future `scheduledAt` holds an otherwise promotable dependent card
+in `scheduled` until the next dispatch at or after that time. A `scheduled` card
+without `scheduledAt` remains scheduled; opening it in the Control UI clears the
+schedule and moves it to `todo`.
+
+`workboard_dispatch` runs dependency promotion and cleanup without launching
+workers. Gateway or slash-command dispatch can start children that reach `ready`.
+Unassigned starts use the configured default agent, as described under Worker
+selection below.
 
 Workspace paths follow the caller's existing filesystem authority:
 
@@ -456,7 +581,7 @@ status are never selected for worker starts (they can still be affected by the
 data side of dispatch: stale-claim cleanup, dependency promotion, timeout
 cleanup).
 
-Session keys are deterministic per board/card, so repeated dispatches route
+Session keys are fixed per board/card, so repeated dispatches route
 back to the same worker lane instead of creating unrelated sessions:
 
 - Assigned cards: `agent:<agentId>:subagent:workboard-<boardId>-<cardId>`
@@ -503,9 +628,15 @@ openclaw workboard dispatch [--board <id>] [--json]
 `list` text output hides archived cards by default (`--include-archived`
 overrides). `--json` always includes archived cards, matching the full-card
 contract used by existing scripts. `show` and `move` accept an unambiguous id
-prefix. `list`, `create`, `show`, and `move` always read/write local plugin
-state directly. Only `dispatch` calls the running Gateway, with the fallback
-described above.
+prefix. `list`, `create`, `show`, and `move` access local plugin state directly.
+Stop the Gateway before local `create` or `move`; while it is running, use the
+Control UI or Gateway RPC for mutations. Only `dispatch` calls the running
+Gateway, with the fallback described above. Data-only dispatch also requires the
+Gateway to be stopped; a connection error alone does not establish that it stopped.
+Plugin loading can also initialize or upgrade the local database before choosing
+the subcommand. Do that preparation with the Gateway stopped, including when the
+requested command is `list` or `show`. Use the Control UI or Gateway RPC for online
+access when local state still needs preparation.
 
 See [Workboard CLI](/cli/workboard) for full flags, JSON output, Gateway
 fallback behavior, id-prefix handling, dispatch selection rules, and
@@ -557,11 +688,29 @@ If an active linked session stops reporting recent activity, Workboard marks the
 `stale` and stores that as metadata until the lifecycle clears it.
 
 Lifecycle writes are owned by the Gateway-side Workboard plugin, so they do
-not depend on an open browser tab. Agent and subagent completion hooks persist
-terminal outcomes immediately. A bounded session sweep runs once per minute to
-reconcile active, idle, missing, and stale session state. Each store mutation
-emits the normal `plugin.workboard.changed` invalidation, so an open Workboard tab
-reloads the canonical card instead of writing its own lifecycle projection.
+not depend on an open browser tab. Subagent completion hooks persist terminal
+outcomes immediately. For ordinary agent runs, Workboard consumes the execution
+owner's settled lifecycle event and final outcome, not the attempt-level
+`agent_end` hook or a timed session re-read. Intermediate fallback attempts and
+yielded turns leave the card running. Success moves the matching run to `review`;
+failure, cancellation, or timeout moves it to `blocked`. Events for an older
+linked run cannot settle a newer run, and retired services discard queued events.
+A recovery sweep runs once per minute and reads only the
+sessions linked to active cards, sharing each read across cards with the same link.
+Settled cards stop polling unless they retain pending lifecycle state. Provisional
+Workboard links share one configured-agent roster per sweep and check exact candidates; ambiguous
+or incomplete results leave the card unchanged. Legacy unqualified links use a bounded
+search tagged `workboard-lifecycle`. Each store mutation emits
+the normal `plugin.workboard.changed` invalidation, so an open Workboard tab reloads
+the stored card instead of writing its own lifecycle projection.
+
+Archiving a linked session does not hide its terminal outcome from this sweep.
+After a restart or missed completion hook, Workboard still reconciles active cards linked
+to archived sessions into `review` or `blocked`.
+
+Incognito sessions remain absent from session discovery. Explicitly linked
+Incognito cards use authorized exact-session metadata reads, without derived
+titles or message previews, to reconcile their terminal outcomes.
 
 While a card is in an active work state, Workboard follows the linked session:
 
@@ -680,6 +829,15 @@ conversation remain in the normal session store.
 SQLite opening, queries, and transactions run in a background database worker.
 Disabling or reloading the plugin drains admitted storage work before closing
 its connections.
+
+Workboard instances invalidate cached card lists and board revisions using the
+physical database's in-process writer receipts, including commits through sibling
+instances. Card-list reuse checks that receipt; an unsettled receipt leaves the
+read uncached. A read overlapping a mutation can return its older snapshot; the
+next request observes the writer receipt and reloads it. Change notifications use owner publications;
+there is no timer polling SQLite for writes from other processes. If a worker
+reply fails after a possible commit, the owner discards cached facts and rereads
+them on the next use without replaying the mutation.
 
 Installations with retained pre-July 2026 Workboard plugin-state KV data must
 upgrade through OpenClaw `2026.9.7` and run `openclaw doctor --fix` before upgrading

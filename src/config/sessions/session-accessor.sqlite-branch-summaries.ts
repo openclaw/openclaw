@@ -29,16 +29,7 @@ export function readSessionBranchSummaries(
   const db = getSessionKysely(database.db);
   const navigationQuery = db
     .selectFrom("transcript_events")
-    .select(["seq", transcriptEventNavigationSql().as("event_json")])
-    .select((eb) =>
-      eb
-        .selectFrom("transcript_event_identities")
-        .select("event_id")
-        .where("session_id", "=", sessionId)
-        .whereRef("seq", "=", "transcript_events.seq")
-        .limit(1)
-        .as("identity_id"),
-    )
+    .select(["seq", transcriptEventNavigationSql(database.db).as("event_json")])
     .where("session_id", "=", sessionId)
     .orderBy("seq", "asc");
   const readCandidate = prepareSqliteQuerySync<number, { event_json: string }>(
@@ -65,10 +56,21 @@ export function readSessionBranchSummaries(
   const active = previous?.branches.find((branch) => branch.active);
   if (previous?.appendSafe && previous.maxSeq !== null && active) {
     let tail = { ...active };
+    let candidate: HeadlineCandidate | undefined;
     let appendSafe = true;
     for (const row of iterateSqliteQuerySync(
       database.db,
-      navigationQuery.where("seq", ">", previous.maxSeq),
+      navigationQuery
+        .where("seq", ">", previous.maxSeq)
+        .select((eb) =>
+          eb
+            .selectFrom("transcript_event_identities")
+            .select("event_id")
+            .where("session_id", "=", sessionId)
+            .whereRef("seq", "=", "transcript_events.seq")
+            .limit(1)
+            .as("identity_id"),
+        ),
     )) {
       const entry = projectSessionBranchEntry(JSON.parse(row.event_json), row.seq);
       // Identity ownership rules out duplicate IDs in the certified prefix or suffix.
@@ -83,15 +85,19 @@ export function readSessionBranchSummaries(
         appendSafe = false;
         break;
       }
+      if (entry.headlineCandidate) {
+        candidate = { seq: row.seq, previous: candidate };
+      }
       tail = {
         leafEntryId: entry.id,
-        headline: (entry.headlineCandidate ? readHeadline(row.seq) : undefined) ?? tail.headline,
+        headline: tail.headline,
         messageCount: tail.messageCount + Number(entry.type === "message"),
         ...(typeof entry.timestamp === "string" ? { updatedAt: entry.timestamp } : {}),
         active: true,
       };
     }
     if (appendSafe) {
+      tail.headline = resolveBranchHeadline(candidate, new Map(), readHeadline) || tail.headline;
       return {
         branches: [tail, ...previous.branches.filter((branch) => !branch.active)],
         appendSafe,
@@ -99,20 +105,31 @@ export function readSessionBranchSummaries(
     }
   }
   let appendSafe = true;
+  let navigationCount = 0;
+  let identityCount: number | null = 0;
   function* navigationEntries() {
-    for (const row of iterateSqliteQuerySync(database.db, navigationQuery)) {
+    const query = navigationQuery.select((eb) =>
+      eb
+        .selectFrom("transcript_event_identities")
+        .select((identity) => identity.fn.countAll<number>().as("count"))
+        .where("session_id", "=", sessionId)
+        .as("identity_count"),
+    );
+    for (const row of iterateSqliteQuerySync(database.db, query)) {
+      navigationCount++;
+      identityCount = row.identity_count;
       const entry = projectSessionBranchEntry(JSON.parse(row.event_json), row.seq);
       appendSafe &&=
-        typeof entry?.id === "string" &&
-        entry.id === row.identity_id &&
-        entry.id.trim() === entry.id;
+        typeof entry?.id === "string" && entry.id.length > 0 && entry.id.trim() === entry.id;
       yield entry;
     }
   }
   // Finish parsing every row before accepting any headline, including malformed unused tails.
   const tree = scanSessionTranscriptTree(navigationEntries());
   // Missing/forward parents can change old paths when a later append supplies their ID.
+  // Writers preserve identity membership; counting once also excludes legacy unindexed rows.
   appendSafe &&=
+    identityCount === navigationCount &&
     !tree.hasInvalidLeafControl &&
     tree.nodes.length === tree.byId.size &&
     tree.nodes.every(

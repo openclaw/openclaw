@@ -9,7 +9,7 @@ import {
   msteamsConnectorEffectMiddleware,
   msteamsConnectorHandoffInterceptor,
 } from "./send-handoff.js";
-import type { MSTeamsCredentials } from "./token.js";
+import type { MSTeamsCredentials } from "./token-config.js";
 import { buildOpenClawUserAgentFragment } from "./user-agent.js";
 
 type MSTeamsHttpServerAdapter =
@@ -45,13 +45,22 @@ export type MSTeamsApp = {
   };
   api: {
     serviceUrl?: string;
+    fromServiceUrl(options: { serviceUrl: string }): MSTeamsApp["api"];
     teams: {
       getById(teamId: string): Promise<{ aadGroupId?: string }>;
     };
     conversations: {
+      create(params: {
+        isGroup: boolean;
+        members: Array<{ id: string }>;
+        tenantId: string;
+        channelData: { tenant: { id: string } };
+      }): Promise<{ id: string }>;
       activities(conversationId: string): {
         create(activity: unknown): Promise<{ id?: string }>;
+        createTargeted(activity: unknown): Promise<{ id?: string }>;
         update(activityId: string, activity: unknown): Promise<unknown>;
+        updateTargeted(activityId: string, activity: unknown): Promise<unknown>;
         delete(activityId: string): Promise<unknown>;
       };
     };
@@ -139,29 +148,28 @@ export async function loadMSTeamsSdkWithAuth(
       : {}),
   };
 
+  const createApp = (
+    auth: Pick<
+      NonNullable<ConstructorParameters<typeof App>[0]>,
+      "clientSecret" | "managedIdentityClientId" | "token"
+    >,
+  ) => ({
+    app: new App({
+      clientId: creds.appId,
+      tenantId: creds.tenantId,
+      ...auth,
+      ...appOptions,
+    } as ConstructorParameters<typeof App>[0]) as unknown as MSTeamsApp,
+  });
+
   if (creds.type !== "federated") {
-    return {
-      app: new App({
-        clientId: creds.appId,
-        clientSecret: creds.appPassword,
-        tenantId: creds.tenantId,
-        ...appOptions,
-      } as ConstructorParameters<typeof App>[0]) as unknown as MSTeamsApp,
-    };
+    return createApp({ clientSecret: creds.appPassword });
   }
   // Teams SDK otherwise lets ambient CLIENT_SECRET override both federated modes.
   appOptions.clientSecret = "";
   if (creds.useManagedIdentity) {
-    // The SDK handles managed identity natively — pass managedIdentityClientId
-    // and it selects the right credential flow (system MI, user MI, or FIC).
-    return {
-      app: new App({
-        clientId: creds.appId,
-        tenantId: creds.tenantId,
-        managedIdentityClientId: creds.managedIdentityClientId ?? "system",
-        ...appOptions,
-      } as unknown as ConstructorParameters<typeof App>[0]) as unknown as MSTeamsApp,
-    };
+    // The SDK handles system MI, user MI, and FIC through this option.
+    return createApp({ managedIdentityClientId: creds.managedIdentityClientId ?? "system" });
   }
 
   // Certificate-based auth — the SDK doesn't have built-in cert support,
@@ -195,14 +203,7 @@ export async function loadMSTeamsSdkWithAuth(
     return token.token;
   };
 
-  return {
-    app: new App({
-      clientId: creds.appId,
-      tenantId: creds.tenantId,
-      token: tokenProvider,
-      ...appOptions,
-    } as unknown as ConstructorParameters<typeof App>[0]) as unknown as MSTeamsApp,
-  };
+  return createApp({ token: tokenProvider });
 }
 
 export function createMSTeamsTokenProvider(

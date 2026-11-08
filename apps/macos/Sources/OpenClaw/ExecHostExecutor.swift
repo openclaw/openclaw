@@ -28,6 +28,15 @@ enum ExecHostExecutor {
             envOverrides: request.env,
             agentId: request.agentId)
         guard !Task.isCancelled else { return self.cancelledResponse() }
+        if let reason = context.unavailableReason {
+            return self.errorResponse(
+                code: "UNAVAILABLE",
+                message: "SYSTEM_RUN_DENIED: \(reason)",
+                reason: "approval-store-unavailable")
+        }
+        let executableSnapshots = ExecCommandResolution.captureApprovalExecutables(
+            context.allowlistResolutions + [ExecCommandResolution.resolve(
+                command: validatedRequest.command, cwd: effectiveCwd, env: context.env)].compactMap(\.self))
         let approvalSource = validatedRequest.approvalSource
         let security = ExecHostRequestEvaluator.effectiveSecurity(
             context: context,
@@ -109,12 +118,13 @@ enum ExecHostExecutor {
         }
 
         if request.needsScreenRecording == true,
-           await PermissionManager.grantedStatus([.screenRecording])[.screenRecording] != true
+           let error = await PermissionManager.missingPermissions([.screenRecording])
         {
-            return self.errorResponse(
-                code: "UNAVAILABLE",
-                message: "PERMISSION_MISSING: screenRecording",
-                reason: "permission:screenRecording")
+            return self.errorResponse(ExecHostError(
+                code: error.code.rawValue,
+                message: error.message,
+                reason: "permission:screenRecording",
+                details: error.details), type: "exec-res")
         }
 
         // Awaited policy, approval, and permission work cannot revive a closed caller.
@@ -128,22 +138,24 @@ enum ExecHostExecutor {
             delayedPolicySnapshot: validatedRequest.delayedPolicySnapshot)
         let timeoutSec = request.timeoutMs.flatMap { Double($0) / 1000.0 }
         let env = context.env
-        if case .failure = ExecApprovalsStore.commitExecution(executionCommit) {
+        if case let .failure(error) = await ExecApprovalsStore.commitExecution(executionCommit) {
             return self.errorResponse(
                 code: "UNAVAILABLE",
-                message: "SYSTEM_RUN_DENIED: exec approvals update unavailable",
+                message: "SYSTEM_RUN_DENIED: \(error.localizedDescription)",
                 reason: "approval-store-unavailable")
         }
 
-        // The store commit linearizes authorization. Enqueue before the next
-        // suspension so no unrelated MainActor work sits between those steps.
+        // The owner's commit linearizes policy authorization. A closed native
+        // request cannot use it; enqueue the bound command without another await.
+        guard !Task.isCancelled else { return self.cancelledResponse() }
         let execution = Task.detached { () -> ShellExecutor.ShellResult in
             await self.runApprovedCommand(
                 authorization: executionCommit.authorization,
                 command: executionCommand,
                 cwd: approvedCwdSnapshot,
                 env: env,
-                timeout: timeoutSec)
+                timeout: timeoutSec,
+                executableSnapshots: executableSnapshots)
         }
         return await self.commandResponse(execution: execution)
     }
@@ -153,7 +165,8 @@ enum ExecHostExecutor {
         command: [String],
         cwd: ExecApprovalCwdSnapshot,
         env: [String: String],
-        timeout: Double?) async -> ShellExecutor.ShellResult
+        timeout: Double?,
+        executableSnapshots: [ExecApprovalExecutableSnapshot] = []) async -> ShellExecutor.ShellResult
     {
         await ShellExecutor.runDetailed(
             command: command,
@@ -161,6 +174,12 @@ enum ExecHostExecutor {
             env: env,
             timeout: timeout,
             beforeSpawn: {
+                guard !Task.isCancelled else { return "SYSTEM_RUN_CANCELLED: execution cancelled" }
+                guard executableSnapshots.allSatisfy({
+                    ExecCommandResolution.revalidateApprovalExecutable($0, cwd: cwd.path, env: env)
+                }) else {
+                    return "SYSTEM_RUN_DENIED: approved executable changed before execution"
+                }
                 // Local policy is committed, but Gateway-derived trust can retire
                 // while the command waits for application launch admission.
                 switch authorization {

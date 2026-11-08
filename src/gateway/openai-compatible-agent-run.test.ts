@@ -1,26 +1,44 @@
 import assert from "node:assert/strict";
+import { ServerResponse } from "node:http";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import {
   createOperationalRunInstanceRef,
   prepareAgentRunAdmission,
   readAdmittedRunOperatorAuthority,
+  type AdmittedRunContext,
 } from "../agents/admitted-run-context.js";
+import { FailoverError } from "../agents/failover-error.js";
 import { agentCommandFromGatewayIngress } from "../commands/agent.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { createAbortError } from "../infra/abort-signal.js";
 import * as profileReader from "../state/user-profile-list.js";
+import { ensureCanonicalUserProfileForOpenClawIdIdentity } from "../state/user-profile-openclaw-id.js";
+import { ensureCanonicalGatewayOwnerProfile } from "../state/user-profile-writes.js";
 import { setUserProfileRole } from "../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { createGatewayRequest } from "./hooks-test-helpers.js";
+import { authorizeScopedGatewayHttpRequestOrReply } from "./http-auth-utils.js";
+import { authorizeOpenAiCompatibleHttpSession } from "./http-utils.js";
+import { markGatewayIngressTransport } from "./ingress-attribution.js";
 import {
   readOpenAiHttpRunTerminal,
+  resolveOpenAiCompatibleAgentError,
   runOpenAiCompatibleAgentCommand,
 } from "./openai-compatible-agent-run.js";
+import {
+  setOpenClawIdTunnelPrincipalLookup,
+  setOpenClawIdTunnelPrincipalResolver,
+  type OpenClawIdTunnelPrincipal,
+} from "./openclaw-id/tunnel-principal.js";
 import { invalidateOperatorRolePolicy } from "./operator-role-policy.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 import { createGatewayRequestContext } from "./server-request-context.js";
 import { makeContextParams } from "./server-request-context.test-support.js";
+import { gatewayProfile } from "./server/client-fixtures.test-support.js";
+import * as sessionSharing from "./session-sharing-read.js";
 
 vi.mock("../commands/agent.js", () => ({ agentCommandFromGatewayIngress: vi.fn() }));
 
@@ -61,12 +79,7 @@ function createOperatorRunFixture() {
     requestAuth: {
       authMethod: "trusted-proxy",
       trustDeclaredOperatorScopes: true,
-      authenticatedUserProfile: {
-        profileId: person.id,
-        displayName: person.displayName,
-        hasAvatar: false,
-        updatedAt: person.updatedAt,
-      },
+      authenticatedUserProfile: gatewayProfile(person.id, person.displayName, person.updatedAt),
       operatorAccessAuthority: {
         signal: source.signal,
         assertCurrent: () => source.signal.throwIfAborted(),
@@ -106,6 +119,125 @@ describe("OpenAI-compatible operator run authority", () => {
   beforeEach(() => {
     vi.mocked(agentCommandFromGatewayIngress).mockReset();
   });
+
+  it.each(["member", "owner"] as const)(
+    "retains the authenticated HTTP %s instead of the named-reader default",
+    async (kind) => {
+      await withOpenClawTestState({ label: "compat-http-membership" }, async () => {
+        const fixture = createOperatorRunFixture();
+        fixture.cfg.gateway!.roles = {
+          default: "reader",
+          definitions: {
+            reader: { sessions: { others: "view" }, agents: "*", scopes: ["operator.read"] },
+          },
+        };
+        const principal: OpenClawIdTunnelPrincipal = {
+          ...(kind === "member"
+            ? { kind, accountId: "acct_compat_operator", role: "operator" as const }
+            : { kind }),
+          peerKey: `iroh:${"21".repeat(32)}`,
+          authority: {
+            clawId: "http-claw",
+            rootPub: "http-root",
+            listedSeq: 1,
+            ...(kind === "owner" ? { ownerDevice: "http-owner" } : {}),
+          },
+        };
+        const membership = new Map([[principal.peerKey, principal]]);
+        setOpenClawIdTunnelPrincipalResolver(async (key) => membership.get(key));
+        setOpenClawIdTunnelPrincipalLookup((key) => membership.get(key));
+        const req = createGatewayRequest({ path: "/v1/chat/completions", method: "POST" });
+        markGatewayIngressTransport(req, {
+          kind: "openclaw-id-tunnel",
+          peerKey: principal.peerKey,
+          clientIp: "fd69:726f:6800::1",
+        });
+        const res = new ServerResponse(req);
+        let admission: ReturnType<typeof prepareAgentRunAdmission> | undefined;
+        let childContext: AdmittedRunContext | undefined;
+        try {
+          const person =
+            principal.kind === "owner"
+              ? await ensureCanonicalGatewayOwnerProfile("Synthetic owner")
+              : await ensureCanonicalUserProfileForOpenClawIdIdentity({
+                  accountId: principal.accountId,
+                });
+          const authenticated = await authorizeScopedGatewayHttpRequestOrReply({
+            req,
+            res,
+            auth: { mode: "token", token: "test-token", allowTailscale: false },
+            cfg: fixture.cfg,
+            getRuntimeConfig: () => fixture.cfg,
+            operatorMethod: "agent",
+          });
+          assert(authenticated, "Expected membership to admit the HTTP operator request");
+          expect(authenticated.requestAuth.openclawIdPrincipal).toBe(principal);
+          expect(authenticated.operatorScopes).toContain("operator.write");
+          using sharingProfiles = vi.spyOn(sessionSharing, "prepareSessionSharingProfiles");
+          await expect(
+            authorizeOpenAiCompatibleHttpSession({
+              agentId: "main",
+              sessionKey: fixture.params.sessionKey,
+              requestAuth: authenticated.requestAuth,
+              senderIsOwner: false,
+            }),
+          ).resolves.toEqual({ allowed: true });
+          expect(sharingProfiles.mock.calls[0]?.[0]?.internal?.openclawIdPrincipal).toBe(principal);
+          fixture.params.requestAuth = authenticated.requestAuth;
+          fixture.params.operatorScopes = authenticated.operatorScopes;
+          fixture.params.hasCurrentClientAuthority =
+            authenticated.requestAuth.hasCurrentClientAuthority;
+          vi.mocked(agentCommandFromGatewayIngress).mockImplementationOnce(async (options) => {
+            const authority = options.operatorAuthority;
+            assert(authority, "HTTP member did not retain its operator source");
+            expect(authority.profileId).toBe(person.id);
+            if (kind === "member") {
+              expect(authority.readCurrentRoleFacts?.().policy).toMatchObject({
+                sessions: { others: "write" },
+                scopes: expect.arrayContaining(["operator.write"]),
+              });
+            }
+            expect(authority.recoverySnapshot?.openclawIdPrincipal).toEqual(principal);
+            admission = prepareAgentRunAdmission({
+              cfg: fixture.cfg,
+              facts: {
+                runId: "compat-http-child",
+                agentId: "main",
+                ingress: { kind: "system", boundary: "compat-http-test", state: "present" },
+              },
+              operationalRunInstance: createOperationalRunInstanceRef("compat-http-child"),
+              operatorAuthority: authority,
+            });
+            childContext = await admission.admit("embedded");
+            await options.onAdmittedRunContext?.(childContext);
+            return completedResult;
+          });
+          await expect(runOpenAiCompatibleAgentCommand(fixture.params)).resolves.toBe(
+            completedResult,
+          );
+          assert(childContext, "Expected a retained child admission");
+          const authority = readAdmittedRunOperatorAuthority(childContext);
+          assert(authority, "Expected retained membership authority");
+          res.destroy();
+          req.destroy();
+          expect(() => authority.assertCurrent()).not.toThrow();
+          // Another device for the same account cannot replace this authenticated source.
+          membership.clear();
+          const replacement = { ...principal, peerKey: `iroh:${"22".repeat(32)}` };
+          membership.set(replacement.peerKey, replacement);
+          expect(() => authority.assertCurrent()).toThrow(
+            /OpenClaw ID membership authority changed/,
+          );
+        } finally {
+          admission?.close();
+          res.destroy();
+          req.destroy();
+          setOpenClawIdTunnelPrincipalResolver(undefined);
+          setOpenClawIdTunnelPrincipalLookup(undefined);
+        }
+      });
+    },
+  );
 
   it.each([false, true])(
     "retains the original source through command settlement and detached work (reject=%s)",
@@ -211,6 +343,7 @@ describe("OpenAI-compatible operator run authority", () => {
 
   it.each([
     { change: "missing host", message: /current Gateway context/ },
+    { change: "missing tunnel owner host", message: /current Gateway context/ },
     { change: "closed host", message: /current Gateway context/ },
     { change: "ended grant", message: /Visitor access ended/ },
     { change: "uploads disabled", message: /uploads are disabled/ },
@@ -233,8 +366,15 @@ describe("OpenAI-compatible operator run authority", () => {
               return identity;
             })
         : undefined;
-      if (change === "missing host") {
+      if (change === "missing host" || change === "missing tunnel owner host") {
         fixture.params.resolveGatewayContext = undefined;
+        if (change === "missing tunnel owner host") {
+          fixture.params.requestAuth.authenticatedUserProfile!.profileId = "gateway-owner";
+          fixture.params.requestAuth.openclawIdPrincipal = {
+            kind: "owner",
+            peerKey: `iroh:${"23".repeat(32)}`,
+          };
+        }
       } else if (change === "closed host") {
         fixture.host.current = undefined;
       } else if (change === "ended grant") {
@@ -348,7 +488,10 @@ describe("OpenAI-compatible command admission", () => {
           await opts.onAdmittedRunContext?.(context);
         }
         executed();
-        return { payloads: [{ text: "settled", mediaUrl: null }], meta: { durationMs: 0 } };
+        return {
+          payloads: [{ text: "settled", mediaUrl: null }],
+          meta: { durationMs: 0, terminalReply: { disposition: "visible", text: "settled" } },
+        };
       });
       const pending = runOpenAiCompatibleAgentCommand({
         message: "probe",
@@ -412,4 +555,51 @@ describe("OpenAI-compatible agent run terminal metadata", () => {
       });
     },
   );
+});
+
+describe("OpenAI-compatible agent error envelopes", () => {
+  it("gives certificate failure guidance while retaining the native diagnostic code", () => {
+    const error = new FailoverError("Connection error.", {
+      reason: "tls_certificate",
+      code: "CERT_REVOKED",
+    });
+    expect(resolveOpenAiCompatibleAgentError(error)).toEqual({
+      status: 502,
+      error: {
+        message:
+          "Couldn't connect securely to the AI service. For details, open Settings → Logs in the Control UI or run `openclaw logs --follow`.",
+        type: "api_error",
+        code: "CERT_REVOKED",
+      },
+    });
+  });
+
+  it.each([
+    {
+      name: "a Gateway-cancelled run",
+      error: () => AbortSignal.abort().reason,
+      status: 500,
+      message: "agent run was cancelled",
+    },
+    {
+      name: "a provider transport timeout",
+      error: () => new FailoverError("This operation was aborted", { reason: "timeout" }),
+      status: 504,
+      message: "upstream provider timeout",
+    },
+    {
+      name: "an abort caused by a timeout",
+      error: () =>
+        createAbortError("This operation was aborted", {
+          cause: new DOMException("The operation was aborted due to timeout", "TimeoutError"),
+        }),
+      status: 504,
+      message: "upstream provider timeout",
+    },
+  ])("reports $name as $status", ({ error, status, message }) => {
+    expect(resolveOpenAiCompatibleAgentError(error())).toEqual({
+      status,
+      error: { message, type: "api_error" },
+    });
+  });
 });

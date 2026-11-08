@@ -59,37 +59,6 @@
               "cacheRead": 0.39,
               "cacheWrite": 0
             }
-          },
-          {
-            "id": "accounts/fireworks/models/kimi-k2p6",
-            "name": "Kimi K2.6",
-            "reasoning": false,
-            "input": ["text", "image"],
-            "contextWindow": 262144,
-            "maxTokens": 262144,
-            "cost": {
-              "input": 0.95,
-              "output": 4,
-              "cacheRead": 0.16,
-              "cacheWrite": 0
-            }
-          },
-          {
-            "id": "accounts/fireworks/routers/kimi-k2p6-turbo",
-            "name": "Kimi K2.6 Fast",
-            "reasoning": false,
-            "input": ["text", "image"],
-            "contextWindow": 262144,
-            "maxTokens": 256000,
-            "compat": {
-              "unsupportedToolSchemaKeywords": ["not"]
-            },
-            "cost": {
-              "input": 2,
-              "output": 8,
-              "cacheRead": 0.3,
-              "cacheWrite": 0
-            }
           }
         ]
       }

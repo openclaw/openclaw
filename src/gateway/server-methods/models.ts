@@ -4,12 +4,14 @@ import {
 } from "../../../packages/gateway-protocol/src/client-info.js";
 import {
   ErrorCodes,
+  type ErrorShape,
   errorShape,
   validateModelsListParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { tryResolveAmbientOwnerAgentId } from "../../agents/agent-scope-config.js";
-import { refreshExpiredPreparedModelCatalog } from "../../agents/prepared-model-catalog.js";
-import { PreparedModelRuntimePublicationSupersededError } from "../../agents/prepared-model-runtime.errors.js";
+import { readSessionRuntimeOwnershipAsync } from "../../agents/harness/session-runtime-ownership.js";
+import { getPublishedPreparedModelCatalogOwnerSnapshot } from "../../agents/prepared-model-catalog.js";
+import { isPreparedModelRuntimeMissingOwnerError } from "../../agents/prepared-model-runtime.errors.js";
 import { applyRemoteModelCatalogUpdate } from "../../agents/prepared-model-runtime.js";
 import { roleScopesAllow } from "../../shared/operator-scope-compat.js";
 import { ModelAccountConnectAuthorityError } from "../model-account-connect-errors.js";
@@ -25,12 +27,13 @@ import { resolveChatMetadataReadParams } from "./chat-metadata-handler.js";
 import { projectSessionModelCatalog } from "./chat-metadata-session-projection.js";
 import { UnknownModelCatalogProviderError } from "./models-list-capabilities.js";
 import { buildModelsListResult } from "./models-list-result.js";
+import { projectModelsProviderPresentation } from "./models-provider-presentation.js";
 import { createPreparedReadHandler } from "./prepared-read.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { preparePersonalModelAccountSelection } from "./users-model-account-access.js";
 import { assertValidParams } from "./validation.js";
 
-// Ordinary reads return saved rows while expired provider inventory refreshes in the background.
+// Ordinary reads serve published rows while the catalog owner acquires native inventory.
 export const modelsHandlers: GatewayRequestHandlers = {
   "models.list": createPreparedReadHandler(
     async (options) => {
@@ -102,9 +105,20 @@ export const modelsHandlers: GatewayRequestHandlers = {
           preparedScope.draftAccountSelection?.assertCurrent();
           preparedScope.assertCurrent?.();
         };
+        const { ensureGatewayPreparedModelRuntimeReady } =
+          await import("../../agents/prepared-model-runtime.js");
+        assertCurrent();
+        await ensureGatewayPreparedModelRuntimeReady({ agentId: resolved.agentId });
         assertCurrent();
         if (params.refresh !== true) {
-          refreshExpiredPreparedModelCatalog({ agentId: resolved.agentId, config: cfg });
+          const owner = getPublishedPreparedModelCatalogOwnerSnapshot({
+            agentId: resolved.agentId,
+            config: cfg,
+          });
+          void owner?.recheckNativeLogin?.();
+          if (!params.preparedOnly && params.view !== "provider-config") {
+            void owner?.loadNativeModelCatalog?.().catch(() => undefined);
+          }
         }
         return {
           assertCurrent,
@@ -114,27 +128,32 @@ export const modelsHandlers: GatewayRequestHandlers = {
               client?.connect.caps,
               GATEWAY_CLIENT_CAPS.MODEL_SELECTION_POLICY,
             );
+            const listParams = () => ({
+              agentId: resolved.agentId,
+              params,
+              includeManualSelection,
+              requesterProfileId: preparedScope.requesterProfileId,
+              readScope: scope,
+            });
             const prepared =
               params.refresh !== true
-                ? await context.readPreparedModelsList?.({
-                    agentId: resolved.agentId,
-                    params,
-                    includeManualSelection,
-                    requesterProfileId: preparedScope.requesterProfileId,
-                    readScope: scope,
-                  })
+                ? await context.readPreparedModelsList?.(listParams())
                 : undefined;
             const result =
               prepared ??
               (await buildModelsListResult({
                 source: { kind: "gateway", context },
-                agentId: resolved.agentId,
-                params,
-                includeManualSelection,
-                requesterProfileId: preparedScope.requesterProfileId,
-                readScope: scope,
+                ...listParams(),
                 publicationScope: preparedScope,
               }));
+            const runtimeOwnership =
+              scope && params.view !== "provider-config"
+                ? await readSessionRuntimeOwnershipAsync({
+                    ...scope,
+                    config: context.getRuntimeConfig(),
+                    assertCurrent,
+                  })
+                : undefined;
             const publish = () => {
               assertCurrent();
               const currentConfig = context.getRuntimeConfig();
@@ -147,10 +166,16 @@ export const modelsHandlers: GatewayRequestHandlers = {
                             sessionModelRevision: sessionModelRevision(
                               scope.sessionEntry,
                               scope.workerInference,
+                              runtimeOwnership ?? null,
                             ),
                           }
                         : {}),
-                      models: projectSessionModelCatalog(scope, result.models, currentConfig),
+                      models: projectSessionModelCatalog(
+                        scope,
+                        result.models,
+                        currentConfig,
+                        runtimeOwnership,
+                      ),
                     }
                   : result;
               const policy = prepareOperatorModelPresentation({
@@ -160,7 +185,16 @@ export const modelsHandlers: GatewayRequestHandlers = {
               })?.forAgent(resolved.agentId, projected.models);
               respond(
                 true,
-                projectModelFastModeCatalog(policy ? policy.catalog(projected) : projected, client),
+                projectModelsProviderPresentation(
+                  projectModelFastModeCatalog(
+                    policy ? policy.catalog(projected) : projected,
+                    client,
+                  ),
+                  currentConfig,
+                  // Settings reads the configured catalog; only unrestricted whole-catalog
+                  // reads may also disclose configured providers with no model rows.
+                  params.view !== "all" && !params.provider && !scope && !policy,
+                ),
                 undefined,
               );
             };
@@ -186,26 +220,22 @@ export const modelsHandlers: GatewayRequestHandlers = {
       }
     },
     (error, { respond }) => {
+      let failure: ErrorShape;
       if (error instanceof UnknownModelCatalogProviderError) {
-        respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, error.message));
-        return;
-      }
-      if (error instanceof SessionMutationAuthorizationChangedError) {
-        respond(false, undefined, error.error);
-        return;
-      }
-      if (error instanceof PreparedModelRuntimePublicationSupersededError) {
-        respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.UNAVAILABLE, error.message, { retryable: true, retryAfterMs: 0 }),
-        );
-        return;
-      }
-      if (!(error instanceof ModelAccountConnectAuthorityError)) {
+        failure = errorShape(ErrorCodes.INVALID_REQUEST, error.message);
+      } else if (error instanceof SessionMutationAuthorizationChangedError) {
+        failure = error.error;
+      } else if (isPreparedModelRuntimeMissingOwnerError(error)) {
+        failure = errorShape(ErrorCodes.UNAVAILABLE, error.message, {
+          retryable: true,
+          retryAfterMs: 0,
+        });
+      } else if (error instanceof ModelAccountConnectAuthorityError) {
+        failure = errorShape(ErrorCodes.FORBIDDEN, error.message);
+      } else {
         throw error;
       }
-      respond(false, undefined, errorShape(ErrorCodes.FORBIDDEN, error.message));
+      respond(false, undefined, failure);
     },
   ),
 };

@@ -14,7 +14,11 @@ export function prepareDoctorConfigWriteStage(params: {
   installedPluginIdRecovery?: InstalledPluginIdRecovery;
   explicitSetPaths?: ConfigWriteOptions["explicitSetPaths"];
 }):
-  | { config: OpenClawConfig; remainingPaths: string[][]; persistCanonicalAgentRoster: boolean }
+  | {
+      config: OpenClawConfig;
+      remainingPaths: readonly (readonly string[])[];
+      persistCanonicalAgentRoster: boolean;
+    }
   | undefined {
   const webhook = projectWebhookMigrationIncludeWrite(
     params.snapshot.sourceConfig,

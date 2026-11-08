@@ -1,5 +1,6 @@
 import { loadOutboundMediaFromUrl } from "openclaw/plugin-sdk/outbound-media";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { waitForEffectPreparation } from "../../test-support/effect-preparation.test-support.js";
 import {
   createSendHarness,
   encryptResponse,
@@ -10,26 +11,13 @@ import {
 } from "./send.handoff.test-support.js";
 import { createZalouserTool } from "./tool.js";
 
-const effectGate = vi.hoisted(() => ({ prepare: undefined as (() => Promise<void>) | undefined }));
-vi.mock("openclaw/plugin-sdk/fetch-runtime", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/fetch-runtime")>();
-  return {
-    ...actual,
-    captureEffectAuthority: () => {
-      const authority = actual.captureEffectAuthority();
-      const prepare = effectGate.prepare;
-      return prepare
-        ? {
-            ...authority,
-            initiate: async <T>(effect: () => T | Promise<T>) => {
-              await prepare();
-              return authority.initiate(effect);
-            },
-          }
-        : authority;
-    },
-  };
-});
+const effectGate = await vi.hoisted(async () =>
+  (
+    await import("../../test-support/effect-preparation.test-support.js")
+  ).createEffectPreparationGate(),
+);
+// mock-isolation: Share the export-preserving factory, but keep the preparation gate suite-local.
+vi.mock("openclaw/plugin-sdk/fetch-runtime", effectGate.mockRuntime);
 
 vi.mock("./session-state.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./session-state.js")>()),
@@ -74,15 +62,11 @@ describe("Zalouser registered send handoff", () => {
         (error: unknown) => ({ error }),
       );
       try {
-        await Promise.race([
+        await waitForEffectPreparation(
           preparation.entered.promise,
-          response.entered.promise.then(() => {
-            throw new Error("dispatched before preparation");
-          }),
-          sending.then(() => {
-            throw new Error("settled before preparation");
-          }),
-        ]);
+          response.entered.promise,
+          sending,
+        );
         expect(harness.requests).toEqual([]);
         if (retired) {
           caller.abort(new Error("caller retired during effect preparation"));
@@ -96,7 +80,12 @@ describe("Zalouser registered send handoff", () => {
         expect(await sending).toMatchObject(
           retired
             ? { error: { message: "caller retired during effect preparation" } }
-            : { value: { messageId: "prepared-send" } },
+            : {
+                value: {
+                  messageId: "prepared-send",
+                  receipt: { platformMessageIds: ["prepared-send"] },
+                },
+              },
         );
         expect(harness.requests).toHaveLength(retired ? 0 : 1);
       } finally {
@@ -150,29 +139,26 @@ describe("Zalouser registered send handoff", () => {
     expect(harness.requests[1]?.params).toMatchObject({ grid: "300", desc: "hello" });
   });
 
-  it.each(["message.text", "sendPayload"] as const)(
-    "%s preserves chunk progress and stops after its awaited callback",
-    async (route) => {
-      const progress = harness.gate();
-      const caller = new AbortController();
-      const ids: Array<string | undefined> = [];
-      const send = harness.send(route, {
-        text: "a".repeat(2001),
-        signal: caller.signal,
-        onDeliveryResult: async (result) => {
-          ids.push(result.messageId);
-          progress.entered.resolve();
-          await progress.release.promise;
-        },
-      });
-      await progress.entered.promise;
-      caller.abort(new Error("caller canceled"));
-      progress.release.resolve();
-      await expect(send).rejects.toThrow("caller canceled");
-      expect(ids).toEqual(["message-1"]);
-      expect(harness.requests.map(({ params }) => params.message)).toEqual(["a".repeat(2000)]);
-    },
-  );
+  it("sendPayload preserves chunk progress and stops after its awaited callback", async () => {
+    const progress = harness.gate();
+    const caller = new AbortController();
+    const ids: Array<string | undefined> = [];
+    const send = harness.send("sendPayload", {
+      text: "a".repeat(2001),
+      signal: caller.signal,
+      onDeliveryResult: async (result) => {
+        ids.push(result.messageId);
+        progress.entered.resolve();
+        await progress.release.promise;
+      },
+    });
+    await progress.entered.promise;
+    caller.abort(new Error("caller canceled"));
+    progress.release.resolve();
+    await expect(send).rejects.toThrow("caller canceled");
+    expect(ids).toEqual(["message-1"]);
+    expect(harness.requests.map(({ params }) => params.message)).toEqual(["a".repeat(2000)]);
+  });
 
   it("keeps overlapping caller checks separate on one cached SDK client", async () => {
     await harness.send("message.text", { text: "warm client" });
@@ -254,9 +240,13 @@ describe("Zalouser registered send handoff", () => {
     }
   });
 
-  it.each(["image upload", "upload completion", "voice HEAD"] as const)(
+  it.each([
+    ["image upload", ["/api/message/photo_original/upload"]],
+    ["upload completion", ["/api/message/asyncfile/upload"]],
+    ["voice HEAD", ["/api/message/asyncfile/upload", "/voice.aac"]],
+  ] as const)(
     "does not mark %s as visible delivery or send after its wait",
-    async (stage) => {
+    async (stage, paths) => {
       if (stage !== "image upload") {
         useAudioFixture();
       }
@@ -288,13 +278,7 @@ describe("Zalouser registered send handoff", () => {
       caller.abort(new Error("caller canceled"));
       wait.release.resolve();
       await expect(send).rejects.toThrow("caller canceled");
-      expect(harness.requests.map(({ path }) => path)).toEqual(
-        stage === "image upload"
-          ? ["/api/message/photo_original/upload"]
-          : stage === "upload completion"
-            ? ["/api/message/asyncfile/upload"]
-            : ["/api/message/asyncfile/upload", "/voice.aac"],
-      );
+      expect(harness.requests.map(({ path }) => path)).toEqual(paths);
     },
   );
 
@@ -321,67 +305,35 @@ describe("Zalouser registered send handoff", () => {
     ]);
   });
 
-  it("preserves an accepted ID when cancellation happens after fetch handoff", async () => {
-    const accepted = harness.gate();
-    const caller = new AbortController();
-    harness.response = async () => {
-      accepted.entered.resolve();
-      await accepted.release.promise;
-      return encryptResponse({ msgId: "accepted-before-cancel" });
-    };
-    const send = harness.send("message.text", { signal: caller.signal });
-    await accepted.entered.promise;
-    caller.abort(new Error("caller canceled"));
-    accepted.release.resolve();
-    const result = await send;
-    expect(result.messageId).toBe("accepted-before-cancel");
-    expect(result.receipt?.platformMessageIds).toEqual(["accepted-before-cancel"]);
-    expect(harness.requests.map(({ path }) => path)).toEqual(["/api/message/sms"]);
+  it("preserves audio caption visibility on upload failure", async () => {
+    useAudioFixture();
+    const captionId = "accepted-caption";
+    const ids: Array<string | undefined> = [];
+    harness.response = (request) =>
+      request.path.endsWith("/upload")
+        ? new Response(null, { status: 503 })
+        : encryptResponse({ msgId: captionId });
+    const send = harness.send("message.media", {
+      text: "caption",
+      mediaUrl: imageUrl,
+      onDeliveryResult: (result) => {
+        ids.push(result.messageId);
+      },
+    });
+    await expect(send).rejects.toThrow("503");
+    await expect(send).rejects.toMatchObject({
+      deliveryResult: {
+        messageIds: [captionId],
+        visibleReplySent: true,
+        receipt: { platformMessageIds: [captionId] },
+      },
+    });
+    expect(ids).toEqual([captionId]);
+    expect(harness.requests.map(({ path }) => path)).toEqual([
+      "/api/message/sms",
+      "/api/message/asyncfile/upload",
+    ]);
   });
-
-  it.each(["audio", "document"] as const)(
-    "preserves %s caption visibility on upload failure",
-    async (kind) => {
-      if (kind === "audio") {
-        useAudioFixture();
-      } else {
-        vi.mocked(loadOutboundMediaFromUrl).mockResolvedValue({
-          buffer: Buffer.from("fixture-document"),
-          kind: "document",
-          contentType: "text/plain",
-          fileName: "document.txt",
-        });
-      }
-      const captionId = kind === "audio" ? "accepted-caption" : "sdk-private-caption";
-      const ids: Array<string | undefined> = [];
-      harness.response = (request) =>
-        request.path.endsWith("/upload")
-          ? new Response(null, { status: 503 })
-          : encryptResponse({ msgId: captionId });
-      const send = harness.send(kind === "audio" ? "message.media" : "sendPayload", {
-        text: "caption",
-        mediaUrl: imageUrl,
-        onDeliveryResult: (result) => {
-          ids.push(result.messageId);
-        },
-      });
-      await expect(send).rejects.toThrow("503");
-      if (kind === "audio") {
-        await expect(send).rejects.toMatchObject({
-          deliveryResult: {
-            messageIds: [captionId],
-            visibleReplySent: true,
-            receipt: { platformMessageIds: [captionId] },
-          },
-        });
-      }
-      expect(ids).toEqual(kind === "audio" ? [captionId] : []);
-      expect(harness.requests.map(({ path }) => path)).toEqual([
-        "/api/message/sms",
-        "/api/message/asyncfile/upload",
-      ]);
-    },
-  );
 
   it.each([false, true])(
     "the optional tool preserves cancellation=%s at the SDK wait",

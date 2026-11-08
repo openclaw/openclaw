@@ -1,6 +1,8 @@
+import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 // Gateway startup config loads, repairs, validates, and activates runtime config
 // plus secrets snapshots before the server exposes user-facing surfaces.
 import { hasLegacyAuthProfileSourcesForStartup } from "../agents/auth-profiles/legacy-source-diagnostic.js";
+import { prepareSharedAuthStoreOwnership } from "../agents/auth-profiles/path-resolve.js";
 import { getRuntimeAuthProfileStoreSnapshotsRevision } from "../agents/auth-profiles/runtime-snapshots.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { measureDiagnosticsTimelineSpan } from "../infra/diagnostics-timeline.js";
@@ -11,6 +13,7 @@ import {
   describeSecretResolutionOperatorRecovery,
   isSecretResolutionError,
 } from "../secrets/resolve-errors.js";
+import { listAuthProfileSecretOwnerIds } from "../secrets/runtime-auth-profile-owner.js";
 import {
   classifySecretResolutionErrorDegradations,
   isRetryableSecretDegradationReason,
@@ -20,12 +23,7 @@ import {
   collectCandidateAgentDirs,
   prepareSecretsRuntimeFastPathSnapshot,
 } from "../secrets/runtime-fast-path.js";
-import {
-  listProviderAuthDegradedOwners,
-  preparedDegradationSupportsSourceOnlyRecovery,
-  resolvePreparedSecretsStateScope,
-  type SecretsStateScope,
-} from "../secrets/runtime-provider-auth-scope.js";
+import { hasSameSecretReloadContract } from "../secrets/runtime-source-contract.js";
 import {
   activateSecretsRuntimeSnapshotState,
   clearSecretsRuntimeSnapshotState,
@@ -33,9 +31,9 @@ import {
   getActiveSecretsRuntimeSnapshotState,
   getActiveSecretsRuntimeSnapshotRevisionState,
   hasActiveSecretsRuntimeSnapshotLineage,
-  hasSameSecretReloadContract,
   hasCurrentAuthStoreCredentialsRevision,
   registerProviderAuthRuntimeSnapshotActivationOwner,
+  type PreparedSecretsRuntimeSnapshot,
 } from "../secrets/runtime-state.js";
 import { logRuntimeSecretWarnings } from "../secrets/runtime-warning-log.js";
 import {
@@ -53,6 +51,52 @@ import {
   logThrownSecretDegradations,
 } from "./server-startup-secret-diagnostics.js";
 import { resolveGatewayStartupSourceConfig } from "./server-startup-secret-surfaces.js";
+
+/** Classifies degradation state owned by provider and auth-profile refreshes. */
+type SecretsStateScope = "full" | "provider-auth";
+
+function listProviderAuthDegradedOwners(
+  snapshot: PreparedSecretsRuntimeSnapshot,
+): NonNullable<PreparedSecretsRuntimeSnapshot["degradedOwners"]> {
+  const modelProviderOwnerIds = new Set(
+    Object.keys(snapshot.sourceConfig.models?.providers ?? {}).map(
+      (providerId) => normalizeOptionalLowercaseString(providerId) ?? providerId,
+    ),
+  );
+  const authOwnerIds = listAuthProfileSecretOwnerIds(snapshot.authStores);
+  return (snapshot.degradedOwners ?? []).filter(
+    (owner) =>
+      (owner.ownerKind === "provider" && modelProviderOwnerIds.has(owner.ownerId)) ||
+      (owner.ownerKind === "account" && authOwnerIds.has(owner.ownerId)),
+  );
+}
+
+/** Whether a config-source repair may recover without replacing active auth-store state. */
+function preparedDegradationSupportsSourceOnlyRecovery(
+  snapshot: PreparedSecretsRuntimeSnapshot,
+): boolean {
+  const degradedOwners = snapshot.degradedOwners ?? [];
+  const authOwnerIds = listAuthProfileSecretOwnerIds(snapshot.authStores);
+  return (
+    degradedOwners.length > 0 &&
+    degradedOwners.every(
+      (owner) =>
+        owner.degradationState === "cold" &&
+        !(owner.ownerKind === "account" && authOwnerIds.has(owner.ownerId)),
+    )
+  );
+}
+
+function resolvePreparedSecretsStateScope(
+  snapshot: PreparedSecretsRuntimeSnapshot,
+): SecretsStateScope {
+  const degradedOwners = snapshot.degradedOwners ?? [];
+  return degradedOwners.length > 0 &&
+    listProviderAuthDegradedOwners(snapshot).length === degradedOwners.length
+    ? "provider-auth"
+    : "full";
+}
+
 export {
   applyGatewayAuthOverridesForStartupPreflight,
   loadGatewayStartupConfigSnapshot,
@@ -88,12 +132,15 @@ export function createRuntimeSecretsActivator(params: {
   manifestRegistry?: Pick<PluginManifestRegistry, "plugins">;
   pluginMetadataSnapshot?: Pick<PluginMetadataSnapshot, "plugins" | "manifestRegistry">;
 }): ActivateRuntimeSecrets {
-  let secretsDegraded = false;
   let degradationGeneration = 0;
-  let activeDegradationGeneration: number | null = null;
-  let activeDegradationConfig: OpenClawConfig | null = null;
-  let activeDegradationSupportsSourceOnlyRecovery = false;
-  let activeDegradationScope: SecretsStateScope | null = null;
+  let degradation:
+    | {
+        generation: number;
+        config: OpenClawConfig;
+        supportsSourceOnlyRecovery: boolean;
+        scope: SecretsStateScope;
+      }
+    | undefined;
   const deferredStateTransitions = new WeakMap<object, DeferredSecretsStateTransition>();
   let pendingDeferredLineageRevision: number | null = null;
   let secretsActivationTail: Promise<void> = Promise.resolve();
@@ -197,20 +244,30 @@ export function createRuntimeSecretsActivator(params: {
     scope: SecretsStateScope = "full",
   ) => {
     if (
-      !secretsDegraded ||
-      (expectedGeneration !== undefined && activeDegradationGeneration !== expectedGeneration) ||
-      (scope === "provider-auth" && activeDegradationScope !== "provider-auth")
+      !degradation ||
+      (expectedGeneration !== undefined && degradation.generation !== expectedGeneration) ||
+      (scope === "provider-auth" && degradation.scope !== "provider-auth")
     ) {
       return;
     }
     const recoveredMessage = "Secret resolution recovered.";
     params.logSecrets.info(`[SECRETS_RELOADER_RECOVERED] ${recoveredMessage}`);
     params.emitStateEvent("SECRETS_RELOADER_RECOVERED", recoveredMessage, config);
-    secretsDegraded = false;
-    activeDegradationGeneration = null;
-    activeDegradationConfig = null;
-    activeDegradationSupportsSourceOnlyRecovery = false;
-    activeDegradationScope = null;
+    degradation = undefined;
+  };
+
+  const recordDegradation = (
+    config: OpenClawConfig,
+    supportsSourceOnlyRecovery: boolean,
+    scope: SecretsStateScope,
+  ) => {
+    degradation = {
+      generation: ++degradationGeneration,
+      config: structuredClone(config),
+      supportsSourceOnlyRecovery:
+        (degradation?.supportsSourceOnlyRecovery ?? true) && supportsSourceOnlyRecovery,
+      scope,
+    };
   };
 
   const publishDegradation = (
@@ -225,25 +282,21 @@ export function createRuntimeSecretsActivator(params: {
     }
     // A provider-auth-only refresh cannot erase unrelated full-reload degradation.
     // A committed full reload may narrow full state to its remaining provider owners.
-    if (activationScope === "provider-auth" && activeDegradationScope === "full") {
+    if (activationScope === "provider-auth" && degradation?.scope === "full") {
       return;
     }
-    if (!secretsDegraded) {
+    if (!degradation) {
       params.emitStateEvent(
         "SECRETS_RELOADER_DEGRADED",
         "Secret resolution degraded one or more owners; healthy owners were refreshed.",
         prepared.config,
       );
     }
-    const currentSupportsSourceOnlyRecovery =
-      preparedDegradationSupportsSourceOnlyRecovery(prepared);
-    activeDegradationSupportsSourceOnlyRecovery = secretsDegraded
-      ? activeDegradationSupportsSourceOnlyRecovery && currentSupportsSourceOnlyRecovery
-      : currentSupportsSourceOnlyRecovery;
-    secretsDegraded = true;
-    activeDegradationGeneration = ++degradationGeneration;
-    activeDegradationConfig = structuredClone(prepared.sourceConfig);
-    activeDegradationScope = scope;
+    recordDegradation(
+      prepared.sourceConfig,
+      preparedDegradationSupportsSourceOnlyRecovery(prepared),
+      scope,
+    );
   };
 
   const finishPreparedSnapshot = async (
@@ -298,33 +351,25 @@ export function createRuntimeSecretsActivator(params: {
       : prepared;
     const stateScope = options?.stateScope ?? resolvePreparedSecretsStateScope(statePrepared);
     const activationScope = options?.stateScope ?? "full";
-    if (activationParams.activate && (statePrepared.degradedOwners?.length ?? 0) > 0) {
-      if (activationParams.deferStatePublication === true) {
+    if (activationParams.activate) {
+      const transition =
+        (statePrepared.degradedOwners?.length ?? 0) > 0
+          ? { kind: "degraded" as const }
+          : degradation
+            ? { kind: "recovered" as const, degradationGeneration: degradation.generation }
+            : undefined;
+      if (transition && activationParams.deferStatePublication === true) {
         const activationRevision = getActiveSecretsRuntimeSnapshotRevisionState();
         deferredStateTransitions.set(prepared, {
-          kind: "degraded",
+          ...transition,
           activationRevision,
           reason: activationParams.reason,
           activationScope,
         });
         pendingDeferredLineageRevision = activationRevision;
-      } else {
+      } else if (transition?.kind === "degraded") {
         publishDegradation(statePrepared, activationParams.reason, stateScope, activationScope);
-      }
-    } else if (activationParams.activate && secretsDegraded) {
-      if (activationParams.deferStatePublication === true) {
-        if (activeDegradationGeneration !== null) {
-          const activationRevision = getActiveSecretsRuntimeSnapshotRevisionState();
-          deferredStateTransitions.set(prepared, {
-            kind: "recovered",
-            activationRevision,
-            degradationGeneration: activeDegradationGeneration,
-            reason: activationParams.reason,
-            activationScope,
-          });
-          pendingDeferredLineageRevision = activationRevision;
-        }
-      } else {
+      } else if (transition) {
         publishRecovery(prepared.config, undefined, stateScope);
       }
     }
@@ -340,8 +385,8 @@ export function createRuntimeSecretsActivator(params: {
       (activationParams.activate || activationParams.publishFailureAsDegraded === true) &&
       (activationParams.canPublishFailureAsDegraded?.() ?? true);
     const degradations = classifySecretResolutionErrorDegradations(err);
-    const retryableDegradations = degradations.filter((degradation) =>
-      isRetryableSecretDegradationReason(degradation.reason),
+    const retryableDegradations = degradations.filter((entry) =>
+      isRetryableSecretDegradationReason(entry.reason),
     );
     if (
       retryableDegradations.length > 0 &&
@@ -349,7 +394,7 @@ export function createRuntimeSecretsActivator(params: {
     ) {
       logThrownSecretDegradations(params.logSecrets, err, retryableDegradations);
       if (activationParams.reason !== "startup") {
-        if (!secretsDegraded) {
+        if (!degradation) {
           params.emitStateEvent(
             "SECRETS_RELOADER_DEGRADED",
             "Secret resolution failed; runtime remains on the last-known-good snapshot.",
@@ -364,13 +409,7 @@ export function createRuntimeSecretsActivator(params: {
           failedOwners.every(
             (owner) => owner.source === "config" && owner.degradationState === "cold",
           );
-        activeDegradationSupportsSourceOnlyRecovery = secretsDegraded
-          ? activeDegradationSupportsSourceOnlyRecovery && currentFailureSupportsSourceOnlyRecovery
-          : currentFailureSupportsSourceOnlyRecovery;
-        secretsDegraded = true;
-        activeDegradationGeneration = ++degradationGeneration;
-        activeDegradationConfig = structuredClone(eventConfig);
-        activeDegradationScope = "full";
+        recordDegradation(eventConfig, currentFailureSupportsSourceOnlyRecovery, "full");
       }
     }
     if (activationParams.reason === "startup") {
@@ -402,6 +441,7 @@ export function createRuntimeSecretsActivator(params: {
           activationParams.env ?? process.env,
         );
         activationSourceConfig = sourceConfig;
+        await prepareSharedAuthStoreOwnership(activationParams.env);
         const startupPreflight =
           activationParams.reason === "startup" || activationParams.reason === "restart-check";
         if (
@@ -445,7 +485,8 @@ export function createRuntimeSecretsActivator(params: {
           }
         }
         const loadAuthStore = startupPreflight
-          ? (await import("../agents/auth-profiles.js")).loadAuthProfileStoreWithoutExternalProfiles
+          ? (await import("../agents/auth-profiles.js"))
+              .loadAuthProfileStoreWithoutExternalProfilesAsync
           : undefined;
         const secretsRuntime =
           params.prepareRuntimeSecretsSnapshot && params.activateRuntimeSecretsSnapshot
@@ -587,19 +628,17 @@ export function createRuntimeSecretsActivator(params: {
         options.expectedRevision !== undefined &&
         hasActiveSecretsRuntimeSnapshotLineage(options.expectedRevision);
       const activeSnapshot = sourceOnlyOwnsLineage ? getActiveSecretsRuntimeSnapshotState() : null;
-      const sourceOnlyDegradationGeneration = activeDegradationGeneration;
+      const currentDegradation = degradation;
       const sourceOnlyContractRecovered =
         activeSnapshot !== null &&
-        sourceOnlyDegradationGeneration !== null &&
-        activeDegradationSupportsSourceOnlyRecovery &&
-        activeDegradationConfig !== null &&
-        !hasSameSecretReloadContract(activeDegradationConfig, activeSnapshot.sourceConfig);
+        currentDegradation?.supportsSourceOnlyRecovery &&
+        !hasSameSecretReloadContract(currentDegradation.config, activeSnapshot.sourceConfig);
       if (sourceOnlyContractRecovered) {
         if ((activeSnapshot.degradedOwners?.length ?? 0) > 0) {
           const activeScope = resolvePreparedSecretsStateScope(activeSnapshot);
           publishDegradation(activeSnapshot, "reload", activeScope);
         } else {
-          publishRecovery(activeSnapshot.config, sourceOnlyDegradationGeneration);
+          publishRecovery(activeSnapshot.config, currentDegradation.generation);
         }
       }
       return;
@@ -624,9 +663,8 @@ export function createRuntimeSecretsActivator(params: {
     }
     if (
       options?.sourceOnly === true &&
-      (!activeDegradationSupportsSourceOnlyRecovery ||
-        activeDegradationConfig === null ||
-        hasSameSecretReloadContract(activeDegradationConfig, activeSnapshot.sourceConfig))
+      (!degradation?.supportsSourceOnlyRecovery ||
+        hasSameSecretReloadContract(degradation.config, activeSnapshot.sourceConfig))
     ) {
       return;
     }

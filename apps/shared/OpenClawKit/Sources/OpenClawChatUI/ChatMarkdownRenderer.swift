@@ -54,7 +54,7 @@ struct ChatMarkdownRenderer: View {
 
     struct InlineMathTypography: Equatable {
         static let body = Self(size: OpenClawChatTypography.bodySize, relativeTo: .body)
-        static let callout = Self(size: 16, relativeTo: .callout)
+        static let callout = Self(size: OpenClawChatTypography.scaled(16), relativeTo: .callout)
 
         let size: CGFloat
         let relativeTo: Font.TextStyle
@@ -144,7 +144,7 @@ struct ChatMarkdownRenderer: View {
         case let .math(math):
             ChatMathBlockView(block: math, textColor: self.textColor)
         case let .table(table):
-            ChatMarkdownTableView(table: table)
+            self.tableView(table)
         case let .list(list):
             self.listView(list)
         case let .disclosure(disclosure):
@@ -158,6 +158,10 @@ struct ChatMarkdownRenderer: View {
             Divider()
                 .accessibilityHidden(true)
         }
+    }
+
+    func tableView(_ table: ChatMarkdownTable) -> ChatMarkdownTableView {
+        ChatMarkdownTableView(table: table, typography: self.typography)
     }
 
     func listView(_ list: ChatMarkdownList) -> ChatMarkdownListView {
@@ -638,25 +642,14 @@ enum ChatMarkdownDisplayPreprocessor {
         guard lines.count > 1 else { return normalized }
         let codeLines = self.codeLineIndices(in: normalized)
 
-        var output = ""
-        for index in lines.indices {
-            output += lines[index]
-
-            guard index < lines.index(before: lines.endIndex) else {
-                continue
-            }
-
-            if !codeLines.contains(index),
-               !codeLines.contains(index + 1),
-               self.shouldPreserveSoftBreak(after: lines[index], before: lines[index + 1])
-            {
-                output += "  \n"
-            } else {
-                output += "\n"
-            }
-        }
-
-        return output
+        return lines.indices.map { index in
+            guard index < lines.index(before: lines.endIndex),
+                  !codeLines.contains(index),
+                  !codeLines.contains(index + 1),
+                  self.shouldPreserveSoftBreak(after: lines[index], before: lines[index + 1])
+            else { return lines[index] }
+            return lines[index] + "  "
+        }.joined(separator: "\n")
     }
 
     private static func codeLineIndices(in markdown: String) -> Set<Int> {

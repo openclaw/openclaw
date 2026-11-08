@@ -1,6 +1,20 @@
 import type { RouteId } from "../../app-route-paths.ts";
 import type { NativeDeviceSettingsSnapshot } from "../../app/native-device-settings.ts";
-import { APPEARANCE_SETTINGS_TARGET_IDS, SETTINGS_ROUTE_TARGETS } from "./route-data.ts";
+import { registerChatComposerEnglish } from "../../i18n/locales/en-chat-composer.ts";
+import { registerRouteSubtitlesEnglish } from "../../i18n/locales/en-route-subtitles.ts";
+import { registerSessionOrganizationSharedEnglish } from "../../i18n/locales/en-session-organization-shared.ts";
+import {
+  appearanceSettingsRouteTarget,
+  APPEARANCE_SETTINGS_TARGET_IDS,
+  SETTINGS_ROUTE_TARGETS,
+} from "./route-data.ts";
+import { sessionSourcePresentations } from "./session-source-presentation.ts";
+
+registerRouteSubtitlesEnglish();
+
+registerChatComposerEnglish();
+
+registerSessionOrganizationSharedEnglish();
 
 export const SESSION_STORAGE_SETTINGS_TARGET_ID = "settings-session-storage";
 
@@ -19,6 +33,7 @@ export const PROFILE_SETTINGS_TARGET_IDS = {
   identity: "settings-profile-identity",
   personalInstructions: "settings-profile-personal-instructions",
   githubConnections: "settings-profile-github-connections",
+  attribution: "settings-profile-attribution",
 } as const;
 
 export type SettingsSearchTarget = {
@@ -51,6 +66,18 @@ export const SETTINGS_SEARCH_TARGETS = {
     ],
     aliases:
       "web internet native hosted automatic provider brave parallel google gemini searxng codex openai api key endpoint",
+  },
+  appearanceBackground: {
+    routeId: "appearance",
+    labelKey: "configView.appearance.background.title",
+    hash: `#${APPEARANCE_SETTINGS_TARGET_IDS.background}`,
+    searchKeys: [
+      "configView.appearance.background.custom",
+      "configView.appearance.background.newSession",
+      "configView.appearance.background.sessions",
+      "configView.appearance.background.visibility",
+    ],
+    aliases: "wallpaper photo picture image backdrop hide disable opt out",
   },
   sessionStorage: {
     routeId: "ai-agents",
@@ -240,6 +267,18 @@ export const SETTINGS_SEARCH_TARGETS = {
     aliases:
       "github oauth account connection publication authentication auth status dashboard actions",
   },
+  attribution: {
+    routeId: "profile",
+    labelKey: "profilePage.identity.attribution",
+    hash: `#${PROFILE_SETTINGS_TARGET_IDS.attribution}`,
+    searchKeys: [
+      "profilePage.identity.gitCoauthor",
+      "profilePage.identity.prAttribution",
+      "profilePage.identity.prAttributionDescription",
+    ],
+    aliases: "co-author credit pull request",
+    requiresIdentity: true,
+  },
   modelBehavior: {
     ...SETTINGS_ROUTE_TARGETS.modelBehavior,
     labelKey: "quickSettings.model.title",
@@ -263,10 +302,8 @@ export const SETTINGS_SEARCH_TARGETS = {
     aliases: "locale translation",
   },
   appearanceTheme: {
-    routeId: "appearance",
+    ...appearanceSettingsRouteTarget(APPEARANCE_SETTINGS_TARGET_IDS.theme),
     labelKey: "configView.appearance.theme",
-    search: "?section=__appearance__",
-    hash: `#${APPEARANCE_SETTINGS_TARGET_IDS.theme}`,
     searchKeys: [
       "configView.appearance.chooseTheme",
       "configView.appearance.importedTheme",
@@ -277,12 +314,9 @@ export const SETTINGS_SEARCH_TARGETS = {
     aliases: "tweakcn light dark system",
   },
   appearanceAccent: {
-    routeId: "appearance",
+    ...appearanceSettingsRouteTarget(APPEARANCE_SETTINGS_TARGET_IDS.accent),
     labelKey: "configView.appearance.accent",
-    search: "?section=__appearance__",
-    hash: `#${APPEARANCE_SETTINGS_TARGET_IDS.accent}`,
     searchKeys: [
-      "configView.appearance.accentHint",
       "configView.appearance.customAccent",
       "configView.appearance.accents.default",
       "configView.appearance.accents.claw",
@@ -298,10 +332,8 @@ export const SETTINGS_SEARCH_TARGETS = {
     aliases: "colour swatch palette highlight green purple neutral",
   },
   appearanceTypography: {
-    routeId: "appearance",
-    labelKey: "configView.appearance.typography",
-    search: "?section=__appearance__",
-    hash: `#${APPEARANCE_SETTINGS_TARGET_IDS.typography}`,
+    ...appearanceSettingsRouteTarget(APPEARANCE_SETTINGS_TARGET_IDS.typography),
+    labelKey: "configView.appearance.languageAndText",
     searchKeys: [
       "configView.appearance.fonts.ui",
       "configView.appearance.fonts.chat",
@@ -309,13 +341,23 @@ export const SETTINGS_SEARCH_TARGETS = {
       "configView.appearance.fonts.terminalDefault",
       "configView.appearance.fonts.themeDefault",
     ],
-    aliases: "font fonts typeface",
+    aliases: "font fonts typeface typography",
+  },
+  appearanceTabIcon: {
+    ...appearanceSettingsRouteTarget(APPEARANCE_SETTINGS_TARGET_IDS.tabIcon),
+    labelKey: "configView.appearance.tabIcon.title",
+    searchKeys: [
+      "configView.appearance.tabIcon.agent",
+      "configView.appearance.tabIcon.square",
+      "configView.appearance.tabIcon.rounded",
+      "configView.appearance.tabIcon.circle",
+      "configView.appearance.tabIcon.lobsterdex",
+    ],
+    aliases: "favicon browser tab icon agent avatar image",
   },
   appearanceTextSize: {
-    routeId: "appearance",
+    ...appearanceSettingsRouteTarget(APPEARANCE_SETTINGS_TARGET_IDS.textSize),
     labelKey: "configView.appearance.textSize",
-    search: "?section=__appearance__",
-    hash: `#${APPEARANCE_SETTINGS_TARGET_IDS.textSize}`,
     searchKeys: [
       "configView.textSizes.small",
       "configView.textSizes.default",
@@ -329,12 +371,10 @@ export const SETTINGS_SEARCH_TARGETS = {
     ...SETTINGS_ROUTE_TARGETS.appearanceSidebar,
     labelKey: "configView.sidebarPrefs.title",
     searchKeys: [
-      "configView.sidebarPrefs.hint",
       "configView.sidebarPrefs.liveActivity",
       "configView.sidebarPrefs.liveActivityHint",
       "chat.sidebar.hiddenSessionSections",
       "configView.sessionObserver.title",
-      "configView.sessionObserver.hint",
       "configView.sessionObserver.toggle",
       "configView.sessionObserver.toggleHint",
       "configView.sessionObserver.resolvedModel",
@@ -347,19 +387,14 @@ export const SETTINGS_SEARCH_TARGETS = {
     labelKey: "configView.sessionSources.title",
     searchKeys: [
       "configView.sessionSources.hint",
-      "configView.sessionSources.claude",
-      "configView.sessionSources.codex",
-      "configView.sessionSources.opencode",
-      "configView.sessionSources.pi",
+      ...sessionSourcePresentations.map((source) => source.labelKey),
     ],
     aliases:
       "automatic auto discover discovery native external conversations show hide sidebar claude sessions",
   },
   appearanceChat: {
-    routeId: "appearance",
+    ...appearanceSettingsRouteTarget(APPEARANCE_SETTINGS_TARGET_IDS.chat),
     labelKey: "configView.chatPrefs.title",
-    search: "?section=__appearance__",
-    hash: `#${APPEARANCE_SETTINGS_TARGET_IDS.chat}`,
     searchKeys: [
       "configView.chatPrefs.openLinksExternally",
       "configView.chatPrefs.openLinksExternallyHint",
@@ -370,6 +405,7 @@ export const SETTINGS_SEARCH_TARGETS = {
       "configView.chatPrefs.collapseTaskProgress",
       "configView.chatPrefs.collapseTaskProgressHint",
       "chat.sendShortcut",
+      "chat.sendShortcutHint",
       "chat.sendShortcutEnter",
       "chat.sendShortcutModifierEnter",
       "chat.followUpMode",
@@ -382,6 +418,14 @@ export const SETTINGS_SEARCH_TARGETS = {
       "chat.catalogOpenTarget",
       "chat.catalogOpenTargetViewer",
       "chat.catalogOpenTargetTerminal",
+    ],
+    aliases:
+      "keyboard enter follow-up followup steer queue codex claude terminal viewer width task progress checklist collapse expand",
+  },
+  appearanceDevices: {
+    ...appearanceSettingsRouteTarget(APPEARANCE_SETTINGS_TARGET_IDS.devices),
+    labelKey: "configView.chatPrefs.devices",
+    searchKeys: [
       "chat.composer.cameraInput",
       "chat.composer.systemDefaultCamera",
       "chat.composer.microphoneInput",
@@ -389,19 +433,13 @@ export const SETTINGS_SEARCH_TARGETS = {
       "chat.composer.holdToRecordSetting",
       "chat.composer.holdToRecordSettingDescription",
     ],
-    aliases:
-      "keyboard enter follow-up followup steer queue microphone voice audio input codex claude terminal viewer camera dictation dictate width task progress checklist collapse expand",
+    aliases: "voice audio input dictation dictate",
   },
-  appearanceConnection: {
-    routeId: "appearance",
+  gatewayConnection: {
+    routeId: "connection",
     labelKey: "configView.connection.title",
-    search: "?section=__appearance__",
-    hash: `#${APPEARANCE_SETTINGS_TARGET_IDS.connection}`,
-    searchKeys: [
-      "configView.connection.gateway",
-      "configView.connection.status",
-      "configView.connection.assistant",
-    ],
+    hash: "",
+    searchKeys: ["configView.connection.gateway", "configView.connection.status"],
     aliases: "version",
   },
   notifications: {
@@ -414,6 +452,9 @@ export const SETTINGS_SEARCH_TARGETS = {
       "configView.notifications.status",
       "configView.notifications.subscribed",
       "configView.notifications.notSubscribed",
+      "configView.notifications.localSubscription",
+      "configView.notifications.blocked",
+      "configView.notifications.gatewayAccess",
       "configView.notifications.enable",
       "configView.notifications.nativeTitle",
       "configView.notifications.openSystemSettings",

@@ -1,13 +1,12 @@
 import { parseHostForAddressChecks } from "../../packages/gateway-client/src/client-address-utils.js";
-import { GatewayClient as BaseGatewayClient } from "../../packages/gateway-client/src/index.js";
+import { GatewayClient as BaseGatewayClient } from "../../packages/gateway-client/src/client.js";
 import type {
   GatewayClientConnectionMetadata,
   GatewayClientHostDeps,
   GatewayClientOptions as BaseGatewayClientOptions,
   GatewayClientRequestOptions,
-} from "../../packages/gateway-client/src/index.js";
-import { markGatewayConnectAssemblyError } from "../../packages/gateway-client/src/request-error.js";
-import { resolveGatewayWebSocketTransport } from "../../packages/gateway-client/src/websocket-transport.js";
+} from "../../packages/gateway-client/src/client.js";
+import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import {
   clearDeviceAuthToken,
   clearOriginDeviceToken,
@@ -15,16 +14,14 @@ import {
   loadDeviceAuthTokenReadOnly,
   loadOriginDeviceToken,
   loadOriginDeviceTokenReadOnly,
-  prepareDeviceAuthStore,
   storeDeviceAuthToken,
   storeOriginDeviceToken,
 } from "../infra/device-auth-store.js";
 import {
-  loadDeviceIdentityIfPresent,
-  loadOrCreateDeviceIdentity,
-  publicKeyRawBase64UrlFromPem,
-  signDevicePayload,
-} from "../infra/device-identity.js";
+  loadDeviceIdentityIfPresentAsync,
+  loadOrCreateDeviceIdentityAsync,
+} from "../infra/device-identity-async.js";
+import { publicKeyRawBase64UrlFromPem, signDevicePayload } from "../infra/device-identity.js";
 import {
   ensureInheritedManagedProxyRoutingActive,
   registerManagedProxyGatewayLoopbackBypass,
@@ -42,12 +39,12 @@ export {
   GatewayClientRequestError,
   isGatewayConnectAssemblyError,
   isGatewayProtocolResponseError,
-} from "../../packages/gateway-client/src/index.js";
+} from "../../packages/gateway-client/src/client.js";
 export type {
   GatewayClientCloseInfo,
   GatewayClientRequestOptions,
   GatewayReconnectPausedInfo,
-} from "../../packages/gateway-client/src/index.js";
+} from "../../packages/gateway-client/src/client.js";
 
 export type GatewayClientOptions = BaseGatewayClientOptions & {
   /** Exact normalized remote gateway scope for origin-bound device credentials. */
@@ -78,49 +75,6 @@ function shouldSuppressStoredDeviceAuth(opts: GatewayClientOptions): boolean {
   );
 }
 
-/** Prepare storage before the one-shot RPC budget; connection loads still observe current rows. */
-export async function prepareGatewayClientDeviceAuth(
-  opts: GatewayClientOptions & {
-    url: string;
-    deviceIdentity: NonNullable<GatewayClientOptions["deviceIdentity"]> | null;
-  },
-  signal?: AbortSignal,
-): Promise<void> {
-  signal?.throwIfAborted();
-  if (
-    opts.deviceIdentity === null ||
-    opts.preparedDeviceAuth ||
-    (opts.sharedStateMode === "read-only" && shouldSuppressStoredDeviceAuth(opts))
-  ) {
-    return;
-  }
-  // Leave transport rejection with the client, before it can open token storage.
-  try {
-    if (Object.keys(opts.edgeAuthHeaders ?? {}).length && new URL(opts.url).protocol !== "wss:") {
-      return;
-    }
-    resolveGatewayWebSocketTransport({
-      url: opts.url,
-      tlsFingerprint: opts.tlsFingerprint,
-      env: opts.env,
-      options: {},
-    });
-  } catch {
-    return;
-  }
-  try {
-    await prepareDeviceAuthStore({
-      env: opts.env,
-      signal,
-      readOnly: opts.sharedStateMode === "read-only",
-    });
-  } catch (error) {
-    throw markGatewayConnectAssemblyError(
-      error instanceof Error ? error : new Error(String(error)),
-    );
-  }
-}
-
 export class GatewayClient {
   #client?: BaseGatewayClient;
   #options: GatewayClientOptions;
@@ -138,9 +92,17 @@ export class GatewayClient {
     }
     this.#options = opts;
     this.#tunnel = opts.preparedSshTunnel;
-    if (!opts.sshTunnel) {
+    if (!opts.sshTunnel && !this.needsDeviceIdentity()) {
       this.#client = this.createClient(opts.url);
     }
+  }
+
+  private needsDeviceIdentity(): boolean {
+    return (
+      this.#options.deviceIdentity === undefined &&
+      (this.#options.sharedStateMode === "read-only" ||
+        !this.#options.hostDeps?.loadOrCreateDeviceIdentity)
+    );
   }
 
   private createClient(url: string | undefined, tlsServerName?: string): BaseGatewayClient {
@@ -200,9 +162,9 @@ export class GatewayClient {
     const deviceAuthDeps: Pick<
       GatewayClientHostDeps,
       "loadDeviceAuthToken" | "storeDeviceAuthToken" | "clearDeviceAuthToken"
-    > = deviceAuthScope
-      ? {
-          loadDeviceAuthToken: async (params) => {
+    > = {
+      loadDeviceAuthToken: deviceAuthScope
+        ? async (params) => {
             if (readOnly) {
               return suppressStoredAuth
                 ? null
@@ -214,45 +176,35 @@ export class GatewayClient {
               onSnapshot: observe(params),
             });
             return suppressStoredAuth ? null : load;
-          },
-          storeDeviceAuthToken: readOnly
-            ? () => {}
-            : (params) =>
-                storeOriginDeviceToken({
-                  ...params,
-                  gatewayScope: deviceAuthScope,
-                  ...writeFence(params),
-                }),
-          clearDeviceAuthToken: readOnly
-            ? () => {}
-            : (params) =>
-                clearOriginDeviceToken({
-                  ...params,
-                  gatewayScope: deviceAuthScope,
-                  ...clearFence(params),
-                }),
-        }
-      : readOnly
-        ? {
-            loadDeviceAuthToken: suppressStoredAuth ? () => null : loadDeviceAuthTokenReadOnly,
-            storeDeviceAuthToken: () => {},
-            clearDeviceAuthToken: () => {},
           }
-        : {
-            loadDeviceAuthToken: (params) =>
-              loadDeviceAuthToken({ ...params, onSnapshot: observe(params) }),
-            storeDeviceAuthToken: (params) =>
-              storeDeviceAuthToken({ ...params, ...writeFence(params) }),
-            clearDeviceAuthToken: (params) =>
-              clearDeviceAuthToken({ ...params, ...clearFence(params) }),
-          };
+        : readOnly
+          ? suppressStoredAuth
+            ? () => null
+            : loadDeviceAuthTokenReadOnly
+          : (params) => loadDeviceAuthToken({ ...params, onSnapshot: observe(params) }),
+      storeDeviceAuthToken: readOnly
+        ? () => {}
+        : (params) => {
+            const request = { ...params, ...writeFence(params) };
+            return deviceAuthScope
+              ? storeOriginDeviceToken({ ...request, gatewayScope: deviceAuthScope })
+              : storeDeviceAuthToken(request);
+          },
+      clearDeviceAuthToken: readOnly
+        ? () => {}
+        : (params) => {
+            const request = { ...params, ...clearFence(params) };
+            return deviceAuthScope
+              ? clearOriginDeviceToken({ ...request, gatewayScope: deviceAuthScope })
+              : clearDeviceAuthToken(request);
+          },
+    };
     const preparedDeviceAuthDeps = preparedDeviceAuth
       ? { ...deviceAuthDeps, loadDeviceAuthToken: () => preparedDeviceAuth }
       : deviceAuthDeps;
     const hostDeps: GatewayClientHostDeps = {
       // This wrapper is the only place the package reaches into OpenClaw runtime
       // state. Keep device identity, token storage, proxy, and redaction here.
-      loadOrCreateDeviceIdentity,
       signDevicePayload,
       publicKeyRawBase64UrlFromPem,
       ...preparedDeviceAuthDeps,
@@ -260,13 +212,14 @@ export class GatewayClient {
       registerGatewayLoopbackBypass: registerManagedProxyGatewayLoopbackBypass,
       logDebug,
       logError,
-      redactForLog: redactToolPayloadText,
+      redactForLog: (message) =>
+        redactToolPayloadText(sanitizeTerminalText(redactToolPayloadText(message))),
       ...baseOptions.hostDeps,
       ...(readOnly
         ? {
             // Read-only is an authoritative lifecycle policy: caller overrides
             // must not restore identity creation or token writes behind it.
-            loadOrCreateDeviceIdentity: () => loadDeviceIdentityIfPresent() ?? undefined,
+            loadOrCreateDeviceIdentity: () => undefined,
             ...preparedDeviceAuthDeps,
           }
         : {}),
@@ -294,21 +247,43 @@ export class GatewayClient {
   }
 
   start(): void {
-    if (!this.#options.sshTunnel) {
-      this.#client?.start();
-      return;
-    }
     if (this.#starting || this.#lifetime.signal.aborted) {
       return;
     }
-    this.#starting = this.startSsh().catch((error: unknown) => {
+    if (this.#client) {
+      this.#client.start();
+      return;
+    }
+    this.#starting = this.startPreparedClient().catch((error: unknown) => {
       if (this.#lifetime.signal.aborted) {
         return;
       }
       this.stop();
       const failure = error instanceof Error ? error : new Error(String(error));
-      this.notifySshClosed(failure);
+      this.notifyClosed(failure);
     });
+  }
+
+  private async startPreparedClient(): Promise<void> {
+    if (this.needsDeviceIdentity()) {
+      // The owner captures the physical store before yielding. Accepted identity
+      // creation settles even when this client's transport lifetime ends.
+      const options = { env: this.#options.env };
+      const deviceIdentity =
+        this.#options.sharedStateMode === "read-only"
+          ? await loadDeviceIdentityIfPresentAsync(options)
+          : await loadOrCreateDeviceIdentityAsync(options);
+      this.#options = { ...this.#options, deviceIdentity };
+    }
+    if (this.#lifetime.signal.aborted) {
+      return;
+    }
+    if (this.#options.sshTunnel) {
+      await this.startSsh();
+    } else {
+      this.#client = this.createClient(this.#options.url);
+      this.#client.start();
+    }
   }
 
   private async startSsh(): Promise<void> {
@@ -338,7 +313,7 @@ export class GatewayClient {
     void this.#tunnel.closed.then(() => {
       if (!this.#lifetime.signal.aborted) {
         this.stop();
-        this.notifySshClosed();
+        this.notifyClosed();
       }
     });
     const tlsServerName =
@@ -351,33 +326,26 @@ export class GatewayClient {
     this.#client.start();
   }
 
-  private notifySshClosed(error?: Error): void {
+  private notifyClosed(error?: Error): void {
     if (error) {
       try {
         this.#options.onConnectError?.(error);
       } catch {
-        logError("Gateway SSH connect-error callback failed");
+        logError("Gateway connect-error callback failed");
       }
     }
     try {
       this.#options.onClose?.(1006, error?.message ?? "Gateway SSH tunnel closed");
     } catch {
-      logError("Gateway SSH close callback failed");
+      logError("Gateway close callback failed");
     }
   }
 
   stop(): void {
-    if (!this.#options.sshTunnel) {
-      this.#client?.stop();
-      return;
-    }
     void this.stopAndWait().catch((error: unknown) => logError(String(error)));
   }
 
   stopAndWait(opts?: { timeoutMs?: number }): Promise<void> {
-    if (!this.#options.sshTunnel) {
-      return this.#client?.stopAndWait(opts) ?? Promise.resolve();
-    }
     this.#lifetime.abort();
     this.#client?.stop();
     return (this.#stopping ??= (async () => {
@@ -397,7 +365,7 @@ export class GatewayClient {
   ): Promise<T> {
     return this.#client
       ? this.#client.request<T>(method, params, opts)
-      : Promise.reject(new Error("Gateway SSH connection has not started"));
+      : Promise.reject(new Error("Gateway connection has not started"));
   }
 
   /** Current transport state, including CLOSING before the close callback fires.

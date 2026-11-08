@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import type { WorkerLiveEvent } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
 import {
   mergeAgentRunAttemptTerminal,
@@ -10,7 +11,14 @@ import { hasModelFallbackStop } from "../agents/failover-error.js";
 import type { AgentMessage } from "../agents/runtime/index.js";
 import type { AgentSessionEvent } from "../agents/sessions/agent-session.js";
 import { parseReplyDirectives } from "../auto-reply/reply/reply-directives.js";
+import { createStreamingDirectiveAccumulator } from "../auto-reply/reply/streaming-directives.js";
+import {
+  bindAgentAssistantSource,
+  readAgentAssistantSource,
+  type AgentAssistantSourceReceipt,
+} from "../infra/agent-events.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { jsonUtf8BytesOrInfinity } from "../infra/json-utf8-bytes.js";
 import {
   resolveAssistantMessagePhase,
   type AssistantPhase,
@@ -19,14 +27,7 @@ import { truncateUtf8Prefix } from "../utils/utf8-truncate.js";
 
 const MAX_LIVE_EVENT_BYTES = 32 * 1024;
 const MAX_LIVE_PREVIEW_BYTES = 4 * 1024;
-
-function liveEventBytes(event: WorkerLiveEvent): number {
-  try {
-    return Buffer.byteLength(JSON.stringify(event), "utf8");
-  } catch {
-    return Number.POSITIVE_INFINITY;
-  }
-}
+const LIVE_PREVIEW_INTERVAL_MS = 75;
 
 function truncateLiveText(value: string): string {
   if (
@@ -66,7 +67,7 @@ function boundLiveEvent(event: WorkerLiveEvent): WorkerLiveEvent {
   const textExceedsLimit =
     (event.kind === "assistant" || event.kind === "thinking") &&
     event.payload.text.length > MAX_LIVE_EVENT_BYTES;
-  if (!textExceedsLimit && liveEventBytes(event) <= MAX_LIVE_EVENT_BYTES) {
+  if (!textExceedsLimit && jsonUtf8BytesOrInfinity(event) <= MAX_LIVE_EVENT_BYTES) {
     return event;
   }
   let bounded: WorkerLiveEvent;
@@ -85,34 +86,27 @@ function boundLiveEvent(event: WorkerLiveEvent): WorkerLiveEvent {
     bounded = {
       kind: "thinking",
       payload: {
+        ...event.payload,
         text: truncateLiveText(event.payload.text),
         delta: truncateLiveText(event.payload.delta),
       },
     };
   } else if (event.kind === "tool") {
-    if (event.payload.phase === "start") {
-      bounded = {
-        kind: "tool",
-        payload: { ...event.payload, args: boundLiveValue(event.payload.args) },
-      };
-    } else if (event.payload.phase === "update") {
-      bounded = {
-        kind: "tool",
-        payload: {
-          ...event.payload,
-          partialResult: boundLiveValue(event.payload.partialResult),
-        },
-      };
-    } else {
-      bounded = {
-        kind: "tool",
-        payload: { ...event.payload, result: boundLiveValue(event.payload.result) },
-      };
-    }
+    bounded = {
+      kind: "tool",
+      payload: {
+        ...event.payload,
+        ...(event.payload.phase === "start"
+          ? { args: boundLiveValue(event.payload.args) }
+          : event.payload.phase === "update"
+            ? { partialResult: boundLiveValue(event.payload.partialResult) }
+            : { result: boundLiveValue(event.payload.result) }),
+      },
+    };
   } else {
     throw new Error(`worker live ${event.kind} event exceeds the protocol payload limit`);
   }
-  if (liveEventBytes(bounded) > MAX_LIVE_EVENT_BYTES) {
+  if (jsonUtf8BytesOrInfinity(bounded) > MAX_LIVE_EVENT_BYTES) {
     throw new Error(`worker live ${event.kind} event cannot fit the protocol payload limit`);
   }
   return bounded;
@@ -185,7 +179,7 @@ export function createWorkerLiveRuntime(client: WorkerLiveClient) {
         ...(stopReason ? { stopReason } : {}),
         ...(terminal.aborted ? { aborted: true } : {}),
         ...(replayInvalid ? { replayInvalid: true } : {}),
-        ...(!terminal.aborted && typeof terminal.promptError === "string"
+        ...(typeof terminal.promptError === "string"
           ? { error: redactLiveText(terminal.promptError) }
           : {}),
       },
@@ -193,10 +187,17 @@ export function createWorkerLiveRuntime(client: WorkerLiveClient) {
   };
   let streamedText = "";
   let streamedPhase: AssistantPhase | undefined;
-  let assistantMessageIndex = 0;
+  let assistantSource: AgentAssistantSourceReceipt | undefined;
   let streamedThinking = "";
   const emitAssistantSnapshot = (message: AgentMessage, complete = false) => {
-    const { text, phase } = readAssistantSnapshot(message);
+    const { text: rawText, phase } = readAssistantSnapshot(message);
+    // Cancellation can synthesize an empty final after checked text was streamed.
+    if (complete && !rawText && message.role === "assistant" && message.stopReason === "aborted") {
+      return;
+    }
+    const protocol = createStreamingDirectiveAccumulator();
+    protocol.consume(rawText, { final: complete });
+    const text = protocol.sourceText;
     const mediaUrls = complete ? parseReplyDirectives(text).mediaUrls : undefined;
     if (text === streamedText && phase === streamedPhase && !mediaUrls?.length) {
       return;
@@ -213,15 +214,61 @@ export function createWorkerLiveRuntime(client: WorkerLiveClient) {
         ...(mediaUrls?.length ? { mediaUrls } : {}),
         ...(replace ? { replace: true as const } : {}),
         ...(phase ? { phase } : {}),
-        // Provider signatures can arrive only at text_end. Message lifecycle,
-        // not those late ids, owns this cumulative snapshot's stable scope.
-        itemId: `assistant-${assistantMessageIndex}`,
+        itemId: readAgentAssistantSource(message)?.itemId,
       },
     });
     streamedText = text;
     streamedPhase = phase;
   };
+  const emitThinkingSnapshot = (message: AgentMessage, delta?: string) => {
+    const text = readAssistantThinking(message);
+    if (text === streamedThinking) {
+      return;
+    }
+    enqueueLive({
+      kind: "thinking",
+      payload: { text, delta: delta ?? text, itemId: readAgentAssistantSource(message)?.itemId },
+    });
+    streamedThinking = text;
+  };
+  let pendingMessage: AgentMessage | undefined;
+  let pendingThinkingDelta: string | undefined;
+  let nextPreviewAt = 0;
+  const flushPreview = () => {
+    const message = pendingMessage;
+    const thinkingDelta = pendingThinkingDelta;
+    pendingMessage = undefined;
+    pendingThinkingDelta = undefined;
+    if (!message || !previewEnabled) {
+      return;
+    }
+    nextPreviewAt = Date.now() + LIVE_PREVIEW_INTERVAL_MS;
+    if (thinkingDelta !== undefined) {
+      emitThinkingSnapshot(message, thinkingDelta);
+    } else {
+      emitAssistantSnapshot(message);
+    }
+  };
   const handleSessionEvent = (event: AgentSessionEvent) => {
+    const updateType =
+      event.type === "message_update" ? event.assistantMessageEvent.type : undefined;
+    const isDelta = updateType === "text_delta" || updateType === "thinking_delta";
+    if (!isDelta) {
+      // Materialize previews at semantic boundaries, before changing occurrence identity.
+      flushPreview();
+    }
+    if (
+      (event.type === "message_start" ||
+        event.type === "message_update" ||
+        event.type === "message_end") &&
+      event.message.role === "assistant"
+    ) {
+      if (event.type === "message_start" || !assistantSource) {
+        assistantSource = { itemId: randomUUID() };
+      }
+      // Persistence still needs occurrence identity after optional previews degrade.
+      bindAgentAssistantSource(event.message, assistantSource);
+    }
     // Disabled previews no longer need snapshots or diagnostics, but agent_end
     // still owns the terminal result deferred until the transcript is durable.
     if (!previewEnabled && event.type !== "agent_end") {
@@ -232,36 +279,36 @@ export function createWorkerLiveRuntime(client: WorkerLiveClient) {
       return;
     }
     if (event.type === "message_start" && event.message.role === "assistant") {
-      assistantMessageIndex += 1;
       streamedText = "";
       streamedPhase = undefined;
       streamedThinking = "";
+      nextPreviewAt = 0;
       return;
     }
     if (event.type === "message_update") {
-      if (
-        event.assistantMessageEvent.type === "text_delta" ||
-        event.assistantMessageEvent.type === "text_end"
-      ) {
+      const update = event.assistantMessageEvent;
+      if (update.type === "text_delta" || update.type === "thinking_delta") {
+        const thinking = update.type === "thinking_delta";
+        if (pendingMessage && (pendingThinkingDelta !== undefined) !== thinking) {
+          flushPreview();
+        }
+        // Keep the provider-owned message lazy; copying its cumulative text here
+        // makes each small delta pay for the whole answer before wire pacing.
+        pendingMessage = event.message;
+        if (thinking) {
+          pendingThinkingDelta = (pendingThinkingDelta ?? "") + update.delta;
+        }
+        if (Date.now() >= nextPreviewAt) {
+          flushPreview();
+        }
+      } else if (update.type === "text_end") {
         emitAssistantSnapshot(event.message);
-      } else if (event.assistantMessageEvent.type === "thinking_delta") {
-        streamedThinking = readAssistantThinking(event.message);
-        enqueueLive({
-          kind: "thinking",
-          payload: { text: streamedThinking, delta: event.assistantMessageEvent.delta },
-        });
       }
       return;
     }
     if (event.type === "message_end" && event.message.role === "assistant") {
       emitAssistantSnapshot(event.message, true);
-      const finalThinking = readAssistantThinking(event.message);
-      if (finalThinking !== streamedThinking) {
-        enqueueLive({
-          kind: "thinking",
-          payload: { text: finalThinking, delta: finalThinking },
-        });
-      }
+      emitThinkingSnapshot(event.message);
       return;
     }
     if (
@@ -304,6 +351,7 @@ export function createWorkerLiveRuntime(client: WorkerLiveClient) {
     }
   };
   const enqueueRunFailure = (failure: { aborted: boolean; error: Error }) => {
+    flushPreview();
     // Later terminal merges cannot reopen replay after an owned cleanup failure.
     replayInvalid ||= hasModelFallbackStop(failure.error);
     enqueueTerminal({ aborted: failure.aborted, error: formatErrorMessage(failure.error) });

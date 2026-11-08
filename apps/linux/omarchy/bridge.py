@@ -64,9 +64,7 @@ def session_id(agent_id, key):
 def session(row):
     if not isinstance(row, dict) or not isinstance(row.get("key"), str):
         return None
-    status = row.get("status", "idle")
-    if row.get("hasActiveRun") is True:
-        status = "running"
+    status = "running" if row.get("hasActiveRun") is True else row.get("status", "idle")
     if status not in ("queued", "running", "done", "failed", "killed", "timeout"):
         status = "idle"
     agent_id = text(row.get("agentId"), 128)

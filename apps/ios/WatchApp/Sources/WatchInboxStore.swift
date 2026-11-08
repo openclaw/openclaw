@@ -301,13 +301,7 @@ import WatchKit
     }
 
     func beginExecApprovalReviewLoading() {
-        guard self.execApprovals.isEmpty else {
-            self.markExecApprovalReviewLoaded()
-            return
-        }
-        self.isExecApprovalReviewLoading = true
-        self.execApprovalReviewStatusText = String(localized: "Loading approval from iPhone…")
-        self.execApprovalReviewStatusAt = Date()
+        self.showExecApprovalReviewStatus(String(localized: "Loading approval from iPhone…"), isLoading: true)
     }
 
     func markExecApprovalReviewLoaded() {
@@ -317,12 +311,16 @@ import WatchKit
     }
 
     func markExecApprovalReviewUnavailable(_ message: String) {
+        self.showExecApprovalReviewStatus(message, isLoading: false)
+    }
+
+    private func showExecApprovalReviewStatus(_ message: @autoclosure () -> String, isLoading: Bool) {
         guard self.execApprovals.isEmpty else {
             self.markExecApprovalReviewLoaded()
             return
         }
-        self.isExecApprovalReviewLoading = false
-        self.execApprovalReviewStatusText = message
+        self.isExecApprovalReviewLoading = isLoading
+        self.execApprovalReviewStatusText = message()
         self.execApprovalReviewStatusAt = Date()
     }
 

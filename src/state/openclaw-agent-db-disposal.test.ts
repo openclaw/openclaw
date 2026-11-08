@@ -1,42 +1,51 @@
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, expect, it } from "vitest";
+import { expect, it } from "vitest";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
-import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import { disposeOpenClawAgentDatabaseByPath } from "./openclaw-agent-db-disposal.js";
-import { closeOpenClawAgentDatabasesAsync } from "./openclaw-agent-db-lifecycle.js";
+import { useAgentDatabaseDirectories } from "./openclaw-agent-db-lifecycle.test-support.js";
 import {
   isOpenClawAgentDatabaseRegistryChange,
   listOpenClawRegisteredAgentDatabases,
 } from "./openclaw-agent-db-registry-listing.js";
 import { openOpenClawAgentDatabase } from "./openclaw-agent-db.js";
 import { resolveOpenClawAgentSqlitePath } from "./openclaw-agent-db.paths.js";
-import type { AgentDatabaseRequestExecutionSource } from "./openclaw-agent-execution-contract.js";
+import type { AgentDatabaseRequestExecutionSource } from "./openclaw-agent-execution-admission-contract.js";
 import { captureOpenClawAgentDatabaseExecution } from "./openclaw-agent-execution.js";
-import { closeOpenClawStateDatabaseAsync } from "./openclaw-state-db.js";
-
-const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
-  afterEach(async () => {
-    await closeOpenClawAgentDatabasesAsync();
-    await closeOpenClawStateDatabaseAsync();
-    cleanup();
-  }),
-);
+const tempDirs = useAgentDatabaseDirectories();
 
 function createTempStateDir(): string {
   return fs.realpathSync(tempDirs.make("agent-db-disposal-"));
 }
 
-function fixture() {
+function fixture(agentId = "main") {
   const env = { OPENCLAW_STATE_DIR: createTempStateDir() };
-  const options = { agentId: "main", env };
+  const options = { agentId, env };
   return { ...options, path: resolveOpenClawAgentSqlitePath(options) };
 }
 
-function aliasedFixture() {
-  const options = fixture();
+function dispose(options: ReturnType<typeof fixture>) {
+  return disposeOpenClawAgentDatabaseByPath(options.path, { env: options.env });
+}
+
+function registry(options: ReturnType<typeof fixture>) {
+  return listOpenClawRegisteredAgentDatabases({ env: options.env });
+}
+
+function expectRegistry(
+  options: ReturnType<typeof fixture>,
+  ...owners: { agentId: string; path: string }[]
+) {
+  expect(registry(options)).toEqual(
+    owners.map(({ agentId, path: pathname }) =>
+      expect.objectContaining({ agentId, path: pathname }),
+    ),
+  );
+}
+
+function aliasedFixture(options = fixture()) {
   const alias = path.join(options.env.OPENCLAW_STATE_DIR, "alias");
   const directory = path.dirname(options.path);
   fs.mkdirSync(directory, { recursive: true });
@@ -65,10 +74,8 @@ function source(): AgentDatabaseRequestExecutionSource {
 }
 
 it("fences an absent disposal before a successor can open", async () => {
-  const env = { OPENCLAW_STATE_DIR: createTempStateDir() };
-  const options = { agentId: "worker-1", env };
-  const pathname = resolveOpenClawAgentSqlitePath(options);
-  const disposal = disposeOpenClawAgentDatabaseByPath(pathname, { env });
+  const options = fixture("worker-1");
+  const disposal = dispose(options);
   try {
     expect(() => openOpenClawAgentDatabase(options)).toThrow("resources are closing");
   } finally {
@@ -79,29 +86,19 @@ it("fences an absent disposal before a successor can open", async () => {
 });
 
 it("disposes only its exact cached owner and unregisters that registry row", async () => {
-  const stateDir = createTempStateDir();
-  const env = { OPENCLAW_STATE_DIR: stateDir };
-  const first = openOpenClawAgentDatabase({ agentId: "worker-1", env });
-  const second = openOpenClawAgentDatabase({ agentId: "worker-2", env });
+  const options = fixture("worker-1");
+  const first = openOpenClawAgentDatabase(options);
+  const second = openOpenClawAgentDatabase({ agentId: "worker-2", env: options.env });
 
-  expect(await disposeOpenClawAgentDatabaseByPath(first.path, { env })).toBe(true);
+  expect(await dispose(options)).toBe(true);
   expect(first.db.isOpen).toBe(false);
   expect(second.db.isOpen).toBe(true);
-  expect(listOpenClawRegisteredAgentDatabases({ env })).toEqual([
-    expect.objectContaining({ agentId: "worker-2", path: second.path }),
-  ]);
-  expect(await disposeOpenClawAgentDatabaseByPath(first.path, { env })).toBe(false);
+  expectRegistry(options, second);
+  expect(await dispose(options)).toBe(false);
   expect(second.db.isOpen).toBe(true);
 
-  const reopened = openOpenClawAgentDatabase({
-    agentId: "worker-1",
-    env,
-    path: first.path,
-  });
-  expect(listOpenClawRegisteredAgentDatabases({ env })).toEqual([
-    expect.objectContaining({ agentId: "worker-1", path: reopened.path }),
-    expect.objectContaining({ agentId: "worker-2", path: second.path }),
-  ]);
+  const reopened = openOpenClawAgentDatabase(options);
+  expectRegistry(options, reopened, second);
 });
 
 it("rejects a file replacement during registry removal publication", async () => {
@@ -118,50 +115,25 @@ it("rejects a file replacement during registry removal publication", async () =>
     fs.copyFileSync(retiredPath, options.path, fs.constants.COPYFILE_EXCL);
     replacementInode = fs.statSync(options.path, { bigint: true }).ino;
   });
-  try {
-    await expect(
-      disposeOpenClawAgentDatabaseByPath(options.path, { env: options.env }),
-    ).rejects.toThrow("SQLite database file identity changed");
-    expect(native.db.isOpen).toBe(false);
-    expect(replacementInode).toBeDefined();
-    expect(replacementInode).not.toBe(originalInode);
-    expect(fs.statSync(options.path, { bigint: true }).ino).toBe(replacementInode);
-    expect(listOpenClawRegisteredAgentDatabases({ env: options.env })).toEqual([]);
-  } finally {
-    unsubscribe();
-  }
+  using _ = { [Symbol.dispose]: () => unsubscribe() };
+
+  await expect(dispose(options)).rejects.toThrow("SQLite database file identity changed");
+  expect(native.db.isOpen).toBe(false);
+  expect(replacementInode).toBeDefined();
+  expect(replacementInode).not.toBe(originalInode);
+  expect(fs.statSync(options.path, { bigint: true }).ino).toBe(replacementInode);
+  expect(registry(options)).toEqual([]);
 });
 
-it.runIf(process.platform !== "win32").each([false, true])(
-  "disposes a symlinked database only when its cached owner is unambiguous (duplicate=%s)",
-  async (duplicate) => {
-    const stateDir = fs.realpathSync(createTempStateDir());
-    const env = { OPENCLAW_STATE_DIR: stateDir };
-    const realDir = path.join(stateDir, "probe-real");
-    const aliasDir = path.join(stateDir, "probe-alias");
-    fs.mkdirSync(realDir, { recursive: true });
-    fs.symlinkSync(realDir, aliasDir, "dir");
-    const realPath = path.join(realDir, "openclaw-agent.sqlite");
-    const aliasPath = path.join(aliasDir, "openclaw-agent.sqlite");
-    const database = openOpenClawAgentDatabase({ agentId: "probe", env, path: realPath });
-    const alias = duplicate
-      ? openOpenClawAgentDatabase({ agentId: "probe", env, path: aliasPath })
-      : undefined;
-
-    const disposal = disposeOpenClawAgentDatabaseByPath(duplicate ? realPath : aliasPath, {
-      env,
-    });
-    if (duplicate) {
-      await expect(disposal).rejects.toThrow("multiple native owners");
-    } else {
-      await expect(disposal).resolves.toBe(true);
-    }
-    expect(database.db.isOpen).toBe(duplicate);
-    if (alias) {
-      expect(alias.db.isOpen).toBe(true);
-    } else {
-      expect(listOpenClawRegisteredAgentDatabases({ env })).toEqual([]);
-    }
+it.runIf(process.platform !== "win32")(
+  "refuses to dispose a symlinked database with duplicate native owners",
+  async () => {
+    const { options, aliased } = aliasedFixture();
+    const database = openOpenClawAgentDatabase(options);
+    const alias = openOpenClawAgentDatabase(aliased);
+    await expect(dispose(options)).rejects.toThrow("multiple native owners");
+    expect(database.db.isOpen).toBe(true);
+    expect(alias.db.isOpen).toBe(true);
   },
 );
 
@@ -178,68 +150,49 @@ it("disposes a worker-created database through its registry owner without host d
     await execution.prepare(source());
     await sibling.prepare(source());
     await execution.release();
-    expect(listOpenClawRegisteredAgentDatabases({ env: options.env })).toHaveLength(2);
+    expect(registry(options)).toHaveLength(2);
     const sql = observeHostDataSql();
-    try {
-      await expect(
-        disposeOpenClawAgentDatabaseByPath(options.path, { env: options.env }),
-      ).resolves.toBe(true);
+    {
+      using _ = { [Symbol.dispose]: () => sql.restore() };
+
+      await expect(dispose(options)).resolves.toBe(true);
       expect(sql.queries).toEqual([]);
-    } finally {
-      sql.restore();
     }
-    expect(listOpenClawRegisteredAgentDatabases({ env: options.env })).toEqual([
-      expect.objectContaining({ agentId: "sibling", path: siblingOptions.path }),
-    ]);
+    expectRegistry(options, siblingOptions);
     sibling.assertCurrent();
   } finally {
     await Promise.allSettled([execution.release(), sibling.release()]);
   }
 });
 
-it("disposes a registered native alias and its canonical worker together", async () => {
-  const { options, aliased } = aliasedFixture();
-  const native = openOpenClawAgentDatabase(aliased);
-  const execution = captureOpenClawAgentDatabaseExecution(options);
-  try {
-    await execution.prepare(source());
-    expect(listOpenClawRegisteredAgentDatabases({ env: options.env })).toEqual([
-      expect.objectContaining({ path: aliased.path }),
-    ]);
-    await expect(
-      disposeOpenClawAgentDatabaseByPath(aliased.path, { env: options.env }),
-    ).resolves.toBe(true);
-    expect(native.db.isOpen).toBe(false);
-    expect(() => execution.assertCurrent()).toThrow(/closed/);
-    expect(listOpenClawRegisteredAgentDatabases({ env: options.env })).toEqual([]);
-  } finally {
-    await execution.release();
-  }
-});
-
-it("drains an unregistered worker through an alias first seen during disposal", async () => {
-  const root = fixture();
-  const options = {
-    ...root,
-    path: path.join(root.env.OPENCLAW_STATE_DIR, "imports", "archive.sqlite"),
-  };
-  const execution = captureOpenClawAgentDatabaseExecution(options);
-  try {
-    await execution.prepare(source());
-    expect(listOpenClawRegisteredAgentDatabases({ env: options.env })).toEqual([]);
-    const aliasDir = path.join(root.env.OPENCLAW_STATE_DIR, "archive-alias");
-    fs.symlinkSync(
-      path.dirname(options.path),
-      aliasDir,
-      process.platform === "win32" ? "junction" : "dir",
-    );
-    await expect(
-      disposeOpenClawAgentDatabaseByPath(path.join(aliasDir, "archive.sqlite"), {
-        env: options.env,
-      }),
-    ).resolves.toBe(false);
-    expect(() => execution.assertCurrent()).toThrow(/closed/);
-  } finally {
-    await execution.release();
-  }
-});
+it.each(["registered", "unregistered"] as const)(
+  "drains a %s worker through its native or newly discovered alias",
+  async (kind) => {
+    const root = fixture();
+    const registered = kind === "registered";
+    const options = registered
+      ? root
+      : {
+          ...root,
+          path: path.join(root.env.OPENCLAW_STATE_DIR, "imports", "archive.sqlite"),
+        };
+    let aliased = registered ? aliasedFixture(options).aliased : undefined;
+    const native = aliased && openOpenClawAgentDatabase(aliased);
+    const execution = captureOpenClawAgentDatabaseExecution(options);
+    try {
+      await execution.prepare(source());
+      expect(registry(options)).toEqual(
+        registered ? [expect.objectContaining({ path: aliased?.path })] : [],
+      );
+      aliased ??= aliasedFixture(options).aliased;
+      await expect(dispose(aliased)).resolves.toBe(registered);
+      if (native) {
+        expect(native.db.isOpen).toBe(false);
+      }
+      expect(() => execution.assertCurrent()).toThrow(/closed/);
+      expect(registry(options)).toEqual([]);
+    } finally {
+      await execution.release();
+    }
+  },
+);

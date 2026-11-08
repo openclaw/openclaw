@@ -1,11 +1,15 @@
+import fs from "node:fs/promises";
+import path from "node:path";
+import type { MemorySearchManager } from "../../packages/memory-host-sdk/src/host/search-manager.types.js";
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
+import { observeDiagnosticsTimelinePhases } from "../infra/diagnostics-timeline.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import type { MemorySearchManager } from "../memory-host-sdk/host/types.js";
 import { normalizePluginsConfig } from "./config-state.js";
 import { withPluginHostCleanupTimeout } from "./host-hook-cleanup-timeout.js";
 import { loadPluginRegistryHandle } from "./loader.js";
+import { loadPluginManifestRegistryCore } from "./manifest-registry.js";
 import {
   assertMemoryCallerCurrent,
   isHostMemoryAudience,
@@ -26,14 +30,17 @@ import {
   setStandaloneMemoryManagerActive,
   setStandaloneMemoryOwner,
 } from "./memory-state.js";
+import { getPluginMetadataSnapshotCache } from "./plugin-cache.js";
 import { getPluginValueInstance, runPluginCleanup } from "./plugin-instance-scope.js";
 import { runPluginCleanupScope } from "./plugin-invocation-scope.js";
+import type { PluginMetadataSnapshot } from "./plugin-metadata-snapshot.types.js";
 import { normalizePluginPolicyId } from "./plugin-policy-id.js";
 import type {
   MemoryPluginRuntime,
   MemoryProviderRuntime,
   RegisteredMemorySearchManager,
 } from "./registry-contribution-types.js";
+import { listPluginCacheRetiringRegistries } from "./registry-lifecycle.js";
 import type { PluginRegistry } from "./registry-types.js";
 
 type MemorySearchAuthorization = Parameters<
@@ -115,19 +122,15 @@ function resolveMemoryRuntimePluginIds(config: OpenClawConfig): string[] {
 
 function listCurrentMemoryRuntimes(): AnyMemoryRuntime[] {
   const runtimes = new Set(standaloneMemoryRegistrySlot?.retiredRuntimes);
-  const current = getMemoryRuntime();
-  if (current) {
-    runtimes.add(current);
-  }
-  const providerRuntime = getMemoryProviderRuntime();
-  if (providerRuntime) {
-    runtimes.add(providerRuntime);
-  }
-  if (standaloneMemoryRegistrySlot?.providerRuntime) {
-    runtimes.add(standaloneMemoryRegistrySlot.providerRuntime);
-  }
-  if (standaloneMemoryRegistrySlot?.runtime) {
-    runtimes.add(standaloneMemoryRegistrySlot.runtime);
+  for (const runtime of [
+    getMemoryRuntime(),
+    getMemoryProviderRuntime(),
+    standaloneMemoryRegistrySlot?.providerRuntime,
+    standaloneMemoryRegistrySlot?.runtime,
+  ]) {
+    if (runtime) {
+      runtimes.add(runtime);
+    }
   }
   return [...runtimes];
 }
@@ -174,6 +177,8 @@ function ensureMemoryRuntime(params: {
   const workspaceDir = resolveAgentWorkspaceDir(params.cfg, params.agentId);
   const registry = loadPluginRegistryHandle({
     config: params.cfg,
+    registrationConfigOrigin: params.cfg,
+    manifestRegistry: loadPluginManifestRegistryCore({ config: params.cfg, workspaceDir }),
     onlyPluginIds,
     workspaceDir,
     activate: false,
@@ -209,11 +214,10 @@ function ensureMemoryRuntime(params: {
     return owner;
   }
   const retiredRuntimes = new Set(previousSlot?.retiredRuntimes);
-  if (previousSlot?.runtime) {
-    retiredRuntimes.add(previousSlot.runtime);
-  }
-  if (previousSlot?.providerRuntime) {
-    retiredRuntimes.add(previousSlot.providerRuntime);
+  for (const retiredRuntime of [previousSlot?.runtime, previousSlot?.providerRuntime]) {
+    if (retiredRuntime) {
+      retiredRuntimes.add(retiredRuntime);
+    }
   }
   standaloneMemoryRegistrySlot = {
     runtime,
@@ -269,6 +273,9 @@ export async function getActiveMemorySearchManagerCore(params: {
   return {
     ...result,
     manager: result.manager ? normalizeRegisteredMemoryManager(result.manager) : null,
+    ...(owner.runtime.searchForCli
+      ? { searchForCli: owner.runtime.searchForCli.bind(owner.runtime) }
+      : {}),
     searchRuntimeRegistered: true,
   };
 }
@@ -301,6 +308,7 @@ export function isActiveMemoryProviderNative(params: {
 export async function getActiveMemoryProviderCore(
   params: MemoryProviderOpenParams,
 ): Promise<ActiveMemoryProviderResult> {
+  using phases = observeDiagnosticsTimelinePhases("memory.provider-open.authority");
   if (typeof params.context.assertCurrent !== "function") {
     throw new Error("memory provider requires caller authority with assertCurrent");
   }
@@ -323,6 +331,7 @@ export async function getActiveMemoryProviderCore(
     await racePromiseWithAbortSignal(before, context.signal);
   }
   context.assertCurrent();
+  phases.mark("memory.provider-open.runtime");
   const owner = ensureMemoryRuntime(params);
   if (!owner?.runtime && !owner?.providerRuntime) {
     return { provider: null, error: owner?.error ?? "memory plugin unavailable" };
@@ -335,10 +344,12 @@ export async function getActiveMemoryProviderCore(
     return { provider: null, error: "memory provider identity unavailable" };
   }
   const adapter = owner.providerRuntime ? "native" : "legacy";
+  phases.mark("memory.provider-open.open");
   const result = owner.providerRuntime
     ? await owner.providerRuntime.open(openParams)
     : await adaptLegacyMemoryProvider(owner.runtime!, providerId, openParams);
   try {
+    phases.mark("memory.provider-open.revalidate");
     const after = prepareMemoryCallerRead(context);
     if (after) {
       await racePromiseWithAbortSignal(after, context.signal);
@@ -360,10 +371,12 @@ export async function getActiveMemoryProviderCore(
     }
   } catch (error) {
     if (result.provider && typeof result.provider.close === "function") {
+      phases.mark("memory.provider-open.close");
       await runPluginCleanup(result.provider, () => result.provider!.close());
     }
     throw error;
   }
+  phases.mark("memory.provider-open.bind");
   return {
     ...result,
     providerId,
@@ -398,7 +411,44 @@ export async function classifyActiveMemoryWorkspacePaths(
     !owner.runtime.classifyWorkspaceMemoryPaths ||
     (params.readSources !== undefined && !owner.runtime.supportsWorkspaceMemoryReadSources)
   ) {
-    return { status: "unsupported" };
+    // Workspace provenance belongs to the host even when the selected search
+    // plugin does not implement classification. Missing support must not hide USER.md.
+    const { normalizeMemoryArtifactRelativePath, readMemoryArtifactProvenance } =
+      await import("../memory/memory-artifact-provenance.js");
+    const workspaceRoot =
+      params.readSources === undefined
+        ? await fs.realpath(params.workspaceDir).catch(() => undefined)
+        : undefined;
+    const classifications = await Promise.all(
+      params.relativePaths.map(async (relativePath) => {
+        let sourcePath = params.readSources?.find(
+          (source) => source.relativePath === relativePath,
+        )?.canonicalRelativePath;
+        if (params.readSources === undefined && workspaceRoot) {
+          const filePath = await fs
+            .realpath(path.resolve(params.workspaceDir, relativePath))
+            .catch(() => undefined);
+          if (filePath) {
+            sourcePath = path.relative(workspaceRoot, filePath).replaceAll(path.sep, "/");
+          }
+        }
+        const memoryPath = sourcePath && normalizeMemoryArtifactRelativePath(sourcePath);
+        if (
+          !memoryPath ||
+          memoryPath.includes("\0") ||
+          memoryPath !== sourcePath ||
+          path.posix.normalize(memoryPath) !== memoryPath
+        ) {
+          return { relativePath, originClass: "untrusted" };
+        }
+        const provenance = await readMemoryArtifactProvenance({
+          workspaceDir: params.workspaceDir,
+          relativePath: memoryPath,
+        });
+        return { relativePath, originClass: provenance?.originClass ?? "agent" };
+      }),
+    );
+    return { status: "classified", classifications };
   }
   const classifications = await owner.runtime.classifyWorkspaceMemoryPaths(params);
   return { status: "classified", classifications };
@@ -454,11 +504,19 @@ if (process.env.VITEST || process.env.NODE_ENV === "test") {
 
 type MemoryRuntimeRegistry = Pick<PluginRegistry, "memoryCapabilities" | "embeddingProviders">;
 
-/** Prepare memory consumers before any changed plugin loses ordinary call admission. */
+/**
+ * Prepare memory consumers before any changed plugin loses ordinary call admission.
+ * `retiringMetadata` is the published metadata snapshot whose plugin cache this reload
+ * retires; its lazily loaded registries' adapters retire even when no plugin changes.
+ */
 export function prepareMemoryRuntimeReload(
   previousRegistry: MemoryRuntimeRegistry,
   nextRegistry: MemoryRuntimeRegistry,
+  retiringMetadata?: PluginMetadataSnapshot,
 ) {
+  const retiringCacheRegistries = retiringMetadata
+    ? listPluginCacheRetiringRegistries(getPluginMetadataSnapshotCache(retiringMetadata))
+    : [];
   const runtimes = (registry: MemoryRuntimeRegistry) =>
     new Set(
       registry.memoryCapabilities.flatMap(({ capability }) =>
@@ -469,9 +527,13 @@ export function prepareMemoryRuntimeReload(
     );
   const nextRuntimes = runtimes(nextRegistry);
   const nextAdapters = new Set(nextRegistry.embeddingProviders.map(({ provider }) => provider));
-  const retiringEmbeddingProviders = previousRegistry.embeddingProviders
-    .map(({ provider }) => provider)
-    .filter((provider) => !nextAdapters.has(provider));
+  const retiringEmbeddingProviders = [
+    ...new Set(
+      [previousRegistry, ...retiringCacheRegistries].flatMap((registry) =>
+        registry.embeddingProviders.map(({ provider }) => provider),
+      ),
+    ),
+  ].filter((provider) => !nextAdapters.has(provider));
   const prepared: Array<{
     runtime: AnyMemoryRuntime;
     handle: ReturnType<NonNullable<MemoryPluginRuntime["prepareReload"]>>;
@@ -561,10 +623,38 @@ export function prepareMemoryRuntimeReload(
     }
     return cleanup;
   };
+  // Carried-over managers may hold retiring adapters, including cached ones absent from this
+  // registry; their services restart to rebind. Without retiring adapters they keep running.
+  const restartPluginIds = new Set(
+    retiringEmbeddingProviders.length === 0
+      ? []
+      : previousRegistry.memoryCapabilities.flatMap(({ pluginId, capability }) =>
+          [capability.runtime, capability.providerRuntime].some(
+            (runtime) => runtime !== undefined && nextRuntimes.has(runtime),
+          )
+            ? [pluginId]
+            : [],
+        ),
+  );
   return {
+    restartPluginIds,
     drain: () => withPluginHostCleanupTimeout("memory managers", close),
     close,
     commit: (retained = nextRegistry) => resume(true, retained),
-    rollback: () => resume(false),
+    rollback: () => {
+      resume(false);
+      // Admission can be prepared without draining; only drained owners need service restart.
+      return new Set(
+        previousRegistry.memoryCapabilities.flatMap(({ pluginId, capability }) =>
+          cleanup &&
+          prepared.some(
+            ({ runtime }) =>
+              runtime === capability.runtime || runtime === capability.providerRuntime,
+          )
+            ? [pluginId]
+            : [],
+        ),
+      );
+    },
   };
 }

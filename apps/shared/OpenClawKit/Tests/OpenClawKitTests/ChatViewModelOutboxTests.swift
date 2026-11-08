@@ -48,35 +48,46 @@ private func userTexts(_ vm: OpenClawChatViewModel) async -> [String] {
     }
 }
 
+private func startupAdmissionRefusalFromWire() async throws -> GatewayResponseError {
+    let socketSession = FakeGatewayWebSocketSession()
+    let gateway = GatewayNodeSession()
+    try await gateway.connect(
+        url: #require(URL(string: "ws://startup-outbox-test.invalid")),
+        credentials: .init(),
+        connectOptions: GatewayConnectOptions(
+            role: "operator",
+            scopes: ["operator.read", "operator.write"],
+            caps: [],
+            commands: [],
+            permissions: [:],
+            clientId: "openclaw-ios-test",
+            clientMode: "ui",
+            clientDisplayName: "Outbox Test",
+            includeDeviceIdentity: false,
+            allowStoredDeviceAuth: false),
+        sessionBox: WebSocketSessionBox(session: socketSession),
+        onConnected: {},
+        onDisconnected: { _ in },
+        onInvoke: { BridgeInvokeResponse(id: $0.id, ok: true) })
+    let socket = try #require(socketSession.latestTask())
+    let request = Task { try await gateway.request(method: "chat.send", paramsJSON: "{}") }
+    await socket.waitForSentRequests(method: "chat.send", count: 1)
+    let frame = try #require(socket.sentRequests(method: "chat.send").first)
+    try socket.emitResponse(id: #require(frame["id"] as? String), payload: [:], error: [
+        "code": "UNAVAILABLE", "message": "Agent is preparing", "retryable": true,
+        "details": ["reason": "startup-sidecars", "method": "chat.send"],
+    ])
+    let result = await request.result
+    await gateway.disconnect()
+    let error: Error? = if case let .failure(error) = result {
+        error
+    } else { nil }
+    return try #require(error as? GatewayResponseError)
+}
+
 private struct OutboxSendError: Error, LocalizedError {
     var errorDescription: String? {
         "transport unreachable"
-    }
-}
-
-@MainActor
-func finishOutboxFlush(_ vm: OpenClawChatViewModel, at gate: OutboxTestGate) async throws {
-    await gate.waitUntilStarted()
-    let flush = vm.outboxFlushTask
-    await gate.release()
-    try await #require(flush).value
-}
-
-actor OutboxTestGate {
-    private let started = DeleteGate()
-    private let released = DeleteGate()
-
-    func wait() async {
-        await self.started.open()
-        await self.released.wait()
-    }
-
-    func waitUntilStarted() async {
-        await self.started.wait()
-    }
-
-    func release() async {
-        await self.released.open()
     }
 }
 
@@ -98,9 +109,13 @@ actor OutboxTransportState {
     var sendFailsAfterRecording = false
     var sendRejects = false
     var sendResponseErrors = false
+    var sendRestartRejections = false
+    var sendStartupRejections = false
+    var restartRejectedKeys: [String] = []
     var sendRoutingChanged = false
     var sendSettingsChanged = false
     var historyFails = false
+    var activeRun: OpenClawChatInFlightRun?
     var sessionListFails = false
     var historyRequestCount = 0
     var heldSendGate: DeleteGate?
@@ -157,6 +172,7 @@ actor OutboxTransportState {
     var historyRequestSessionKeys: [String] = []
     var historyRequestAgentIDs: [String?] = []
     var sentThinkingLevels: [String] = []
+    var sentQueueModes: [OpenClawChatQueueMode?] = []
     var sentSessionSettings: [OpenClawChatSessionSettingsExpectation?] = []
 
     init(healthy: Bool, sendFails: Bool) {
@@ -183,7 +199,8 @@ actor OutboxTransportState {
         message: String,
         idempotencyKey: String,
         thinking: String,
-        expectedSessionSettings: OpenClawChatSessionSettingsExpectation? = nil)
+        expectedSessionSettings: OpenClawChatSessionSettingsExpectation? = nil,
+        queueMode: OpenClawChatQueueMode? = nil)
     {
         self.sentSessionKeys.append(sessionKey)
         self.sentAgentIDs.append(agentID)
@@ -191,6 +208,7 @@ actor OutboxTransportState {
         self.sentIdempotencyKeys.append(idempotencyKey)
         self.sentThinkingLevels.append(thinking)
         self.sentSessionSettings.append(expectedSessionSettings)
+        self.sentQueueModes.append(queueMode)
         self.resumeStateWaiters()
     }
 }
@@ -356,11 +374,14 @@ final class OutboxTestTransport: @unchecked Sendable, OpenClawChatTransport {
                 "__openclaw": ["idempotencyKey": "\(key):user"],
             ] as [String: Any])
         }
+        let activeRun = await state.activeRun
         return OpenClawChatHistoryPayload(
             sessionKey: sessionKey,
             sessionId: "sess-live",
             messages: durableUserRows,
-            thinkingLevel: "off")
+            thinkingLevel: "off",
+            sessionInfo: activeRun.map { OpenClawChatSessionInfo(hasActiveRun: true, activeRunIds: [$0.runId]) },
+            inFlightRun: activeRun)
     }
 
     func sendMessage(
@@ -387,6 +408,7 @@ final class OutboxTestTransport: @unchecked Sendable, OpenClawChatTransport {
         thinking: String,
         idempotencyKey: String,
         expectedSessionSettings: OpenClawChatSessionSettingsExpectation?,
+        queueMode: OpenClawChatQueueMode? = nil,
         expectedRoute: Int?) async throws -> OpenClawChatSendResponse
     {
         if let expectedRoute, await state.routeGeneration != expectedRoute {
@@ -411,6 +433,18 @@ final class OutboxTestTransport: @unchecked Sendable, OpenClawChatTransport {
                 code: "INVALID_REQUEST",
                 message: "rejected",
                 details: nil)
+        }
+        if await self.state.sendStartupRejections {
+            await self.state.update { $0.restartRejectedKeys.append(idempotencyKey) }
+            throw try await startupAdmissionRefusalFromWire()
+        }
+        if await self.state.sendRestartRejections {
+            await self.state.update { $0.restartRejectedKeys.append(idempotencyKey) }
+            throw GatewayResponseError(
+                method: "chat.send",
+                code: "UNAVAILABLE",
+                message: "Gateway is restarting",
+                details: ["reason": AnyCodable("gateway-restarting"), "retryable": AnyCodable(true)])
         }
         if await self.state.sendRoutingChanged {
             throw GatewayResponseError(
@@ -438,7 +472,8 @@ final class OutboxTestTransport: @unchecked Sendable, OpenClawChatTransport {
             message: message,
             idempotencyKey: idempotencyKey,
             thinking: thinking,
-            expectedSessionSettings: expectedSessionSettings)
+            expectedSessionSettings: expectedSessionSettings,
+            queueMode: queueMode)
         if await self.state.sendFailsAfterRecording {
             throw OutboxSendError()
         }
@@ -453,15 +488,16 @@ final class OutboxTestTransport: @unchecked Sendable, OpenClawChatTransport {
         if !self.requiresRoutingContract {
             let transport = self
             return .available(OpenClawChatTransportRouteLease(
-                sendMessage: { sessionKey, message, thinking, idempotencyKey, attachments in
+                sendTargetedMessage: { sessionKey, target, message, thinking, idempotencyKey, attachments in
                     try await transport.sendMessage(
                         sessionKey: sessionKey,
+                        target: target,
                         message: message,
                         thinking: thinking,
                         idempotencyKey: idempotencyKey,
                         attachments: attachments)
                 },
-                requestHistory: { sessionKey in
+                requestTargetedHistory: { sessionKey, _ in
                     try await transport.requestHistory(sessionKey: sessionKey)
                 }))
         }
@@ -469,15 +505,16 @@ final class OutboxTestTransport: @unchecked Sendable, OpenClawChatTransport {
         let routingContract = await state.sessionRoutingContract
         let transport = self
         return .available(OpenClawChatTransportRouteLease(
-            sendTargetedMessageWithSettings: {
-                sessionKey, agentID, expectedSettings, message, thinking, idempotencyKey, _ in
+            sendTargetedMessage: {
+                sessionKey, target, message, thinking, idempotencyKey, _ in
                 try await transport.sendMessage(
                     sessionKey: sessionKey,
-                    agentID: agentID,
+                    agentID: target.agentID,
                     message: message,
                     thinking: thinking,
                     idempotencyKey: idempotencyKey,
-                    expectedSessionSettings: expectedSettings,
+                    expectedSessionSettings: target.expectedSessionSettings,
+                    queueMode: target.queueMode,
                     expectedRoute: expectedRoute)
             },
             requestTargetedHistory: { sessionKey, agentID in
@@ -597,7 +634,7 @@ private func sendWhileOffline(_ vm: OpenClawChatViewModel, text: String) async t
         vm.input = text
         vm.send()
     }
-    await waitForObservedState { !vm.isSubmittingDraft }
+    try await waitForOutboxState { !vm.isSubmittingDraft }
     #expect(await MainActor.run {
         vm.messages.contains { message in
             message.role == "user" && message.content.contains { $0.text == text }
@@ -909,6 +946,284 @@ actor ScriptedOutbox: OpenClawChatCommandOutbox {
     }
 }
 
+@Suite(.timeLimit(.minutes(1)))
+struct ChatViewModelBusySendTests {
+    @Test @MainActor
+    func `restored run without a chat snapshot accepts a durable text followup`() async throws {
+        let (store, _, databaseDirectory) = try makeOutboxStore()
+        defer { try? FileManager.default.removeItem(at: databaseDirectory) }
+        let transport = OutboxTestTransport(healthy: false)
+        let vm = await makeOutboxViewModel(transport: transport, outbox: store)
+        defer { vm.detachTransport() }
+        vm.load()
+        await vm.bootstrapTask?.value
+        await waitForObservedState { vm.hasRestoredOutboxMessages }
+        vm.updateActiveSessionRunWithoutChatSnapshot(true)
+        vm.input = "next task"
+        #expect(vm.canSend)
+        let send = try #require(vm.send())
+        await send.value
+        #expect(vm.input.isEmpty)
+        #expect(await store.loadCommands().map(\.text) == ["next task"])
+        #expect(vm.hasActiveSessionRunWithoutChatSnapshot)
+    }
+
+    @Test @MainActor
+    func `hold choices follow the current session effective default`() async throws {
+        let (store, _, databaseDirectory) = try makeOutboxStore()
+        defer { try? FileManager.default.removeItem(at: databaseDirectory) }
+        // The saved override differs from the effective value: only the Gateway
+        // projection knows which action a normal tap will actually use.
+        let queueSession = try JSONDecoder().decode(OpenClawChatSessionEntry.self, from: Data(
+            #"{"key":"agent:main:main","queueMode":"steer","effectiveQueueMode":"followup"}"#.utf8))
+        let transport = OutboxTestTransport(healthy: true, sessions: [queueSession])
+        let vm = await makeOutboxViewModel(transport: transport, outbox: store)
+        vm.load()
+        await vm.bootstrapTask?.value
+        vm.hasActiveSessionRunWithoutChatSnapshot = true
+        vm.input = "use the shorter approach"
+        #expect(vm.sendModeChoices == [.steer])
+
+        // A refreshed projection changes the menu without creating a local default.
+        vm.sessions[0].effectiveQueueMode = "steer"
+        #expect(vm.sendModeChoices == [.followup])
+        for mode in [nil, "collect", "steer-backlog", "future-mode"] as [String?] {
+            vm.sessions[0].effectiveQueueMode = mode
+            #expect(vm.sendModeChoices == [.steer, .followup])
+        }
+        vm.input = "/steer use the shorter approach"
+        #expect(vm.sendModeChoices.isEmpty)
+        vm.input = "use the shorter approach"
+        vm.hasActiveSessionRunWithoutChatSnapshot = false
+        #expect(vm.sendModeChoices.isEmpty)
+    }
+
+    @Test(arguments: ["next task", "/steer use the shorter approach"])
+    @MainActor
+    func `busy send accepts a visible followup without retiring the active reply`(text: String) async throws {
+        let (store, _, databaseDirectory) = try makeOutboxStore()
+        defer { try? FileManager.default.removeItem(at: databaseDirectory) }
+        let transport = OutboxTestTransport(healthy: true)
+        let vm = await makeOutboxViewModel(transport: transport, outbox: store)
+        vm.pendingRunRefreshDelaysMs = []
+        vm.load()
+        await vm.bootstrapTask?.value
+        await waitForObservedState { vm.hasRestoredOutboxMessages }
+
+        let tool = OpenClawAgentEventPayload(
+            runId: "run-active",
+            seq: 1,
+            stream: "tool",
+            ts: 1000,
+            data: ["phase": AnyCodable("start"), "name": AnyCodable("lookup"), "toolCallId": AnyCodable("tool-1")])
+        let activeRun = OpenClawChatInFlightRun(runId: "run-active", text: "Working", events: [tool])
+        await transport.state.update { $0.activeRun = activeRun }
+        vm.handleTransportEvent(.chat(OpenClawChatEventPayload(
+            runId: "run-active",
+            sessionKey: "main",
+            state: "delta",
+            message: AnyCodable([
+                "role": "assistant", "content": [["type": "text", "text": "Working"]], "timestamp": 1000.0,
+            ] as [String: Any]),
+            errorMessage: nil)))
+        vm.handleTransportEvent(.agent(tool))
+        #expect(vm.streamingAssistantText == "Working")
+        #expect(vm.pendingToolCalls.map(\.toolCallId) == ["tool-1"])
+
+        let sendGate = OutboxTestGate()
+        await transport.state.update { $0.sendGate = sendGate }
+        vm.input = text
+        #expect(vm.canSend)
+        #expect(vm.canChooseSendMode == !text.hasPrefix("/"))
+        // The public Send boundary rejected this draft before the fix.
+        let send = try #require(vm.send())
+        await send.value
+        await sendGate.waitUntilStarted()
+        let flush = try #require(vm.outboxFlushTask)
+        #expect(vm.input.isEmpty)
+        #expect(await userTexts(vm) == [text])
+        #expect(vm.messages.compactMap { vm.outboxState(for: $0.id) } == [.sending])
+        #expect(vm.streamingAssistantText == "Working")
+        #expect(vm.pendingToolCalls.map(\.toolCallId) == ["tool-1"])
+        #expect(vm.pendingRunCount == 1)
+
+        await sendGate.release()
+        await flush.value
+        #expect(await transport.state.sentMessages == [text])
+        #expect(await transport.state.sentQueueModes == [nil])
+        #expect(vm.streamingAssistantText == "Working")
+        #expect(vm.pendingToolCalls.map(\.toolCallId) == ["tool-1"])
+        #expect(vm.pendingRunCount == 1)
+        #expect(await userTexts(vm) == [text])
+
+        // A steering input can finish independently of the run consuming it.
+        // Its terminal event must leave that run's live presentation intact.
+        let followupID = try #require(await transport.state.sentIdempotencyKeys.first)
+        await vm.handleTransportEvent(.chat(OpenClawChatEventPayload(
+            runId: followupID,
+            sessionKey: "main",
+            state: "final",
+            message: nil,
+            errorMessage: nil)))?.value
+        #expect(vm.streamingAssistantText == "Working")
+        #expect(vm.pendingRunCount == 1)
+        #expect(vm.pendingToolCalls.map(\.toolCallId) == ["tool-1"])
+    }
+
+    @Test(arguments: [OpenClawChatQueueMode.steer, .followup])
+    @MainActor
+    func `per message send mode survives reopening and reaches the route lease`(
+        mode: OpenClawChatQueueMode) async throws
+    {
+        let (store, _, databaseDirectory) = try makeOutboxStore()
+        defer { try? FileManager.default.removeItem(at: databaseDirectory) }
+        let offline = OutboxTestTransport(healthy: false)
+        let vm = await makeOutboxViewModel(transport: offline, outbox: store)
+        vm.load()
+        await vm.bootstrapTask?.value
+        await waitForObservedState { vm.hasRestoredOutboxMessages }
+        vm.input = "use the shorter approach"
+        let send = try #require(vm.send(queueMode: mode))
+        #expect(vm.send(queueMode: mode) == nil)
+        await send.value
+        #expect(vm.input.isEmpty)
+        #expect(await offline.state.sentMessages.isEmpty)
+        #expect(await store.loadCommands().map(\.queueMode) == [mode])
+        let bubble = try #require(vm.messages.first { $0.role == "user" })
+        #expect(vm.outboxState(for: bubble.id) == .queued)
+        #expect(vm.outboxQueueMode(for: bubble.id) == mode)
+        vm.detachTransport()
+
+        // A fresh view model reconstructs presentation from the journal,
+        // then the leased transport consumes that same persisted choice.
+        let online = OutboxTestTransport(healthy: true)
+        let sendGate = OutboxTestGate()
+        await online.state.update { $0.sendGate = sendGate }
+        let reopened = await makeOutboxViewModel(transport: online, outbox: store)
+        reopened.load()
+        await reopened.bootstrapTask?.value
+        await sendGate.waitUntilStarted()
+        let flush = try #require(reopened.outboxFlushTask)
+        let restored = try #require(reopened.messages.first { $0.role == "user" })
+        #expect(reopened.outboxQueueMode(for: restored.id) == mode)
+        #expect(reopened.outboxState(for: restored.id) == .sending)
+        await sendGate.release()
+        await flush.value
+        #expect(await online.state.sentMessages == ["use the shorter approach"])
+        #expect(await online.state.sentQueueModes == [mode])
+        #expect(await userTexts(reopened) == ["use the shorter approach"])
+        #expect(await store.loadCommands().isEmpty)
+    }
+
+    @Test(arguments: [OpenClawChatQueueMode.steer, .followup])
+    @MainActor
+    func `unsupported transport parks explicit intent without sending it as default`(
+        mode: OpenClawChatQueueMode) async throws
+    {
+        let (store, _, databaseDirectory) = try makeOutboxStore()
+        defer { try? FileManager.default.removeItem(at: databaseDirectory) }
+        let transport = OutboxTestTransport(healthy: false, requiresRoutingContract: false)
+        let vm = await makeOutboxViewModel(
+            transport: transport,
+            outbox: store,
+            activeAgentID: nil,
+            sessionRoutingContract: nil)
+        vm.load()
+        await vm.bootstrapTask?.value
+        await waitForObservedState { vm.hasRestoredOutboxMessages }
+        vm.input = "preserve my explicit choice"
+        let send = try #require(vm.send(queueMode: mode))
+        await send.value
+        let bubble = try #require(vm.messages.first { $0.role == "user" })
+
+        await transport.goOnline()
+        await waitForObservedState { vm.outboxState(for: bubble.id)?.isFailed == true }
+        let command = try #require(await store.loadCommands().first)
+        #expect(command.status == .failed)
+        #expect(command.queueMode == mode)
+        #expect(command.lastError == OpenClawChatQueueModeUnsupportedError().localizedDescription)
+        #expect(await transport.state.sentMessages.isEmpty)
+    }
+
+    @Test(arguments: [
+        "/new", "/reset", "/clear", "/compact",
+        "/compact keep details", " /ReSeT@main keep settings ", "/new worktree:true",
+    ])
+    @MainActor
+    func `busy session mutations keep their draft and never enter the outbox`(text: String) async throws {
+        let (store, _, databaseDirectory) = try makeOutboxStore()
+        defer { try? FileManager.default.removeItem(at: databaseDirectory) }
+        let transport = OutboxTestTransport(healthy: true)
+        let vm = await makeOutboxViewModel(transport: transport, outbox: store)
+        vm.hasActiveSessionRunWithoutChatSnapshot = true
+        vm.input = text
+        #expect(!vm.canSend)
+        #expect(vm.send() == nil)
+        #expect(vm.input == text)
+        #expect(await store.loadCommands().isEmpty)
+        #expect(await transport.state.sentMessages.isEmpty)
+    }
+
+    @Test @MainActor
+    func `busy admission still rejects branch switches and attachments`() async throws {
+        let (store, _, databaseDirectory) = try makeOutboxStore()
+        defer { try? FileManager.default.removeItem(at: databaseDirectory) }
+        let transport = OutboxTestTransport(healthy: true)
+        let vm = await makeOutboxViewModel(transport: transport, outbox: store)
+        vm.hasActiveSessionRunWithoutChatSnapshot = true
+        vm.input = "next task"
+        #expect(vm.canSend)
+        #expect(vm.canChooseSendMode)
+        let branchSwitch = vm.beginSessionBranchSwitchActivity(for: vm.currentSessionSnapshot())
+        #expect(!vm.canSend)
+        #expect(vm.send() == nil)
+        vm.endSessionBranchSwitchActivity(branchSwitch)
+        vm.attachments = [OpenClawPendingAttachment(
+            url: nil,
+            data: Data([1]),
+            fileName: "note.txt",
+            mimeType: "text/plain",
+            preview: nil)]
+        #expect(!vm.canSend)
+        #expect(vm.send() == nil)
+        #expect(vm.send(queueMode: .steer) == nil)
+        #expect(vm.input == "next task")
+        #expect(await store.loadCommands().isEmpty)
+        #expect(await transport.state.sentMessages.isEmpty)
+    }
+
+    @Test @MainActor
+    func `busy followups retain FIFO while the first delivery is suspended`() async throws {
+        let (store, _, databaseDirectory) = try makeOutboxStore()
+        defer { try? FileManager.default.removeItem(at: databaseDirectory) }
+        let transport = OutboxTestTransport(healthy: true)
+        let vm = await makeOutboxViewModel(transport: transport, outbox: store)
+        vm.load()
+        await vm.bootstrapTask?.value
+        await waitForObservedState { vm.hasRestoredOutboxMessages }
+        vm.hasActiveSessionRunWithoutChatSnapshot = true
+        let sendGate = OutboxTestGate()
+        await transport.state.update { $0.sendGate = sendGate }
+        vm.input = "first followup"
+        let first = try #require(vm.send())
+        await first.value
+        await sendGate.waitUntilStarted()
+        let flush = try #require(vm.outboxFlushTask)
+        vm.input = "second followup"
+        let second = try #require(vm.send(queueMode: .followup))
+        #expect(vm.send() == nil)
+        await second.value
+        #expect(await userTexts(vm) == ["first followup", "second followup"])
+        await sendGate.release()
+        await flush.value
+        #expect(await transport.state.sentMessages == ["first followup", "second followup"])
+        #expect(await transport.state.sentQueueModes == [nil, .followup])
+        #expect(await Set(transport.state.sentIdempotencyKeys).count == 2)
+        #expect(await store.loadCommands().isEmpty)
+    }
+}
+
+@Suite(.timeLimit(.minutes(1)))
 struct ChatViewModelOutboxTests {
     @Test func `offline send queues durably and renders queued row`() async throws {
         let (store, _, databaseDirectory) = try makeOutboxStore()
@@ -943,7 +1258,7 @@ struct ChatViewModelOutboxTests {
         let vm2 = await makeOutboxViewModel(transport: transport, outbox: store)
         await MainActor.run { vm2.load() }
         await vm2.bootstrapTask?.value
-        await waitForObservedState { vm2.hasRestoredOutboxMessages }
+        try await waitForOutboxState { vm2.hasRestoredOutboxMessages }
         #expect(await MainActor.run { vm2.messages.contains { vm2.outboxState(for: $0.id) == .queued } })
         #expect(await userTexts(vm2) == ["hello offline"])
 
@@ -957,7 +1272,7 @@ struct ChatViewModelOutboxTests {
             sessionRoutingContract: nil)
         await MainActor.run { ownerlessColdOpen.load() }
         await ownerlessColdOpen.bootstrapTask?.value
-        await waitForObservedState { ownerlessColdOpen.hasRestoredOutboxMessages }
+        try await waitForOutboxState { ownerlessColdOpen.hasRestoredOutboxMessages }
         #expect(await MainActor.run {
             ownerlessColdOpen.messages.contains { ownerlessColdOpen.outboxState(for: $0.id) == .queued }
         })
@@ -1096,7 +1411,7 @@ struct ChatViewModelOutboxTests {
 
         await MainActor.run { vm.load() }
         await vm.bootstrapTask?.value
-        await waitForObservedState { vm.hasRestoredOutboxMessages }
+        try await waitForOutboxState { vm.hasRestoredOutboxMessages }
         #expect(await MainActor.run { !vm.isLoading })
         #expect(await MainActor.run { vm.healthOK })
         #expect(await MainActor.run { vm.errorText == nil })
@@ -1108,7 +1423,7 @@ struct ChatViewModelOutboxTests {
         let parkedVM = await makeOutboxViewModel(transport: transport, outbox: store)
         await MainActor.run { parkedVM.load() }
         await parkedVM.bootstrapTask?.value
-        await waitForObservedState { parkedVM.hasRestoredOutboxMessages }
+        try await waitForOutboxState { parkedVM.hasRestoredOutboxMessages }
         #expect(await MainActor.run { !parkedVM.isLoading })
         #expect(await MainActor.run { parkedVM.healthOK })
         #expect(await MainActor.run { parkedVM.errorText == nil })
@@ -1144,13 +1459,13 @@ struct ChatViewModelOutboxTests {
             sessionRoutingContract: nil)
         await MainActor.run { retryView.load() }
         await retryView.bootstrapTask?.value
-        await waitForObservedState { retryView.hasRestoredOutboxMessages }
+        try await waitForOutboxState { retryView.hasRestoredOutboxMessages }
         #expect(await MainActor.run {
             retryView.messages.contains { retryView.outboxState(for: $0.id)?.isFailed == true }
         })
         let failedMessageID = try #require(await MainActor.run { retryView.messages.last?.id })
         await MainActor.run { retryView.retryOutboxMessage(failedMessageID) }
-        await waitForObservedState { retryView.outboxState(for: failedMessageID) == .queued }
+        try await waitForOutboxState { retryView.outboxState(for: failedMessageID) == .queued }
         #expect(await store.loadCommands().first?.status == .queued)
 
         await transport.goOnline()
@@ -1209,7 +1524,7 @@ struct ChatViewModelOutboxTests {
             activeAgentID: "agent-b")
         await MainActor.run { agentBView.load() }
         await agentBView.bootstrapTask?.value
-        await waitForObservedState { agentBView.hasRestoredOutboxMessages }
+        try await waitForOutboxState { agentBView.hasRestoredOutboxMessages }
         #expect(await userTexts(agentBView).isEmpty)
 
         await reconnectTransport.goOnline()
@@ -1298,7 +1613,7 @@ struct ChatViewModelOutboxTests {
         await MainActor.run { vm.load() }
         await transport.goOnline()
         await transport.state.sessionListStarted.wait()
-        await waitForObservedState { !vm.healthOK }
+        try await waitForOutboxState { !vm.healthOK }
         #expect(await MainActor.run { !vm.healthOK })
         #expect(await store.loadCommands().map(\.status) == [.queued])
 
@@ -1427,11 +1742,11 @@ struct ChatViewModelOutboxTests {
 
         await MainActor.run { vm.load() }
         await vm.bootstrapTask?.value
-        await waitForObservedState { vm.hasRestoredOutboxMessages }
+        try await waitForOutboxState { vm.hasRestoredOutboxMessages }
         #expect(await MainActor.run { vm.messages.contains { vm.outboxState(for: $0.id)?.isFailed == true } })
         let messageID = try #require(await MainActor.run { vm.messages.last?.id })
         await MainActor.run { vm.deleteOutboxMessage(messageID) }
-        await waitForObservedState { !vm.messages.contains { $0.id == messageID } }
+        try await waitForOutboxState { !vm.messages.contains { $0.id == messageID } }
         #expect(await store.loadCommands().isEmpty)
     }
 
@@ -1456,7 +1771,7 @@ struct ChatViewModelOutboxTests {
             activeAgentID: nil)
         await MainActor.run { vm.load() }
         await vm.bootstrapTask?.value
-        await waitForObservedState { vm.hasRestoredOutboxMessages }
+        try await waitForOutboxState { vm.hasRestoredOutboxMessages }
         #expect(await MainActor.run { vm.messages.contains { vm.outboxState(for: $0.id)?.isFailed == true } })
         let messageID = try #require(await MainActor.run {
             vm.messages.first { vm.outboxState(for: $0.id)?.isFailed == true }?.id
@@ -1464,7 +1779,7 @@ struct ChatViewModelOutboxTests {
 
         let previousError = await MainActor.run { vm.errorText }
         await MainActor.run { vm.retryOutboxMessage(messageID) }
-        await waitForObservedState { vm.errorText != nil && vm.errorText != previousError }
+        try await waitForOutboxState { vm.errorText != nil && vm.errorText != previousError }
         #expect(await MainActor.run { vm.errorText == "Select an agent before retrying this message." })
         let command = await store.loadCommands().first
         #expect(command?.status == .failed)
@@ -1590,7 +1905,7 @@ struct ChatViewModelOutboxTests {
                     errorMessage: nil)))
 
         // Wake on any assistant reply, so a wrong one fails the expectation instead of hanging.
-        await waitForObservedState { vm.messages.contains { $0.role == "assistant" } }
+        try await waitForOutboxState { vm.messages.contains { $0.role == "assistant" } }
         #expect(await MainActor.run {
             vm.messages.contains { message in
                 message.role == "assistant" && message.content.contains { $0.text == "answer" }
@@ -1628,7 +1943,7 @@ struct ChatViewModelOutboxTests {
         await transport.state.update { $0.historyFails = false }
         await MainActor.run { vm.refresh() }
         await MainActor.run { vm.bootstrapTask }?.value
-        await waitForObservedState {
+        try await waitForOutboxState {
             vm.outboxStatesByMessageID.isEmpty
         }
         #expect(await store.loadCommands().isEmpty)
@@ -1677,7 +1992,7 @@ struct ChatViewModelOutboxTests {
             outbox: holdingOutbox,
             transcriptCache: store)
         await MainActor.run { vm.load() }
-        await waitForObservedState { vm.hasRestoredOutboxMessages }
+        try await waitForOutboxState { vm.hasRestoredOutboxMessages }
         #expect(await MainActor.run { vm.messages.contains { vm.outboxState(for: $0.id) == .queued } })
         let canonicalMessage = OpenClawChatMessage(
             role: "user",
@@ -1696,7 +2011,7 @@ struct ChatViewModelOutboxTests {
         // before its result can remove presentation state on the MainActor.
         await MainActor.run { vm.confirmOutboxCommands(in: [canonicalMessage]) }
         await holdingOutbox.releaseCancellation()
-        await waitForObservedState {
+        try await waitForOutboxState {
             vm.outboxState(for: messageID) == nil
         }
         #expect(await store.loadCommands().isEmpty)
@@ -1715,7 +2030,7 @@ struct ChatViewModelOutboxTests {
             vm.input = "/new"
             vm.send()
         }
-        await waitForObservedState { !vm.isSubmittingDraft }
+        try await waitForOutboxState { !vm.isSubmittingDraft }
         #expect(await MainActor.run { vm.errorText == "Connect to the gateway to run this command." })
         #expect(await MainActor.run { vm.input } == "/new")
         #expect(await store.loadCommands().isEmpty)
@@ -1763,6 +2078,9 @@ struct ChatViewModelOutboxTests {
         let vm = await makeOutboxViewModel(transport: transport, outbox: outbox)
 
         await MainActor.run { vm.load() }
+        // Finish offline setup so a late bootstrap cannot start a flush after the terminal drain.
+        await vm.bootstrapTask?.value
+        try await waitForOutboxState { vm.hasRestoredOutboxMessages }
         try await sendWhileOffline(vm, text: "doomed")
 
         // Gateway is reachable again but rejects the run on every attempt.
@@ -1770,8 +2088,11 @@ struct ChatViewModelOutboxTests {
         await transport.goOnline()
 
         try await finishOutboxFlush(vm, at: terminalGate)
-        // The held terminal write can coalesce a reconnect trigger into a successor pass.
-        await vm.outboxFlushTask?.value
+        // Reconnect triggers can coalesce into more than one successor pass.
+        while let flush = await vm.outboxFlushTask {
+            await flush.value
+            if await vm.outboxFlushTask == flush { break }
+        }
         #expect(await store.loadCommands().map(\.status) == [.failed])
         let failed = try #require(await store.loadCommands().first)
         #expect(failed.retryCount == OpenClawChatViewModel.maxOutboxSendAttempts)
@@ -1863,6 +2184,117 @@ struct ChatViewModelOutboxTests {
         #expect(await transport.state.sentIdempotencyKeys.isEmpty)
     }
 
+    @Test(arguments: [false, true], ["gateway-restarting", "startup-sidecars"])
+    func `admission rejection resumes the same send after reconnect`(liveSend: Bool, reason: String) async throws {
+        let (store, _, databaseDirectory) = try makeOutboxStore()
+        defer { try? FileManager.default.removeItem(at: databaseDirectory) }
+        let transport = OutboxTestTransport(healthy: liveSend)
+        await transport.state.update {
+            $0.sendRestartRejections = reason == "gateway-restarting"
+            $0.sendStartupRejections = reason == "startup-sidecars"
+        }
+        let vm = await makeOutboxViewModel(transport: transport, outbox: store)
+        await MainActor.run { vm.load() }
+        await vm.bootstrapTask?.value
+        try await waitForOutboxState { vm.hasRestoredOutboxMessages }
+        await MainActor.run {
+            vm.input = "survive the restart"
+            vm.send()
+        }
+        try await waitForOutboxState { !vm.isSubmittingDraft }
+        if !liveSend {
+            await transport.goOnline()
+        }
+        await transport.state.waitForState { !$0.restartRejectedKeys.isEmpty }
+        if liveSend { try #require(await store.loadCommands().count == 1) }
+        try await waitForOutboxState {
+            !vm.healthOK || vm.messages.contains { vm.outboxState(for: $0.id)?.isFailed == true }
+        }
+        try #require(await MainActor.run { !vm.healthOK })
+        // Task handles are not observable; join reconnect's coalesced flushes directly.
+        while let flush = await vm.outboxFlushTask {
+            await flush.value
+            if await vm.outboxFlushTask == flush { break }
+        }
+        #expect(await MainActor.run { !vm.healthOK && vm.outboxFlushTask == nil })
+
+        let queued = try #require(await store.loadCommands().first)
+        #expect(queued.status == .queued)
+        #expect(queued.retryCount == 0)
+        #expect(await transport.state.restartRejectedKeys == [queued.id])
+        #expect(await transport.state.sentIdempotencyKeys.isEmpty)
+
+        let sendGate = OutboxTestGate()
+        await transport.state.update {
+            $0.sendRestartRejections = false
+            $0.sendStartupRejections = false
+            $0.sendGate = sendGate
+        }
+        await transport.goOnline()
+        try await finishOutboxFlush(vm, at: sendGate)
+        #expect(await transport.state.sentIdempotencyKeys == [queued.id])
+        #expect(await userTexts(vm) == ["survive the restart"])
+        #expect(await store.loadCommands().isEmpty)
+    }
+
+    @Test(arguments: [false, true])
+    func `startup rejection retains the original send after typing or switching chats`(
+        switchSession: Bool) async throws
+    {
+        let (store, _, databaseDirectory) = try makeOutboxStore()
+        defer { try? FileManager.default.removeItem(at: databaseDirectory) }
+        let transport = OutboxTestTransport(healthy: true)
+        let sendGate = OutboxTestGate()
+        await transport.state.update {
+            $0.sendStartupRejections = true
+            $0.sendGate = sendGate
+        }
+        let vm = await makeOutboxViewModel(transport: transport, outbox: store)
+        await MainActor.run { vm.load() }
+        await vm.bootstrapTask?.value
+        try await waitForOutboxState { vm.hasRestoredOutboxMessages }
+        let send = await MainActor.run {
+            vm.input = "retain the first draft"
+            return vm.send()
+        }
+        await sendGate.waitUntilStarted()
+        await MainActor.run {
+            if switchSession { vm.switchSession(to: "other") }
+            vm.input = "keep the newer draft"
+        }
+        if switchSession {
+            await vm.bootstrapTask?.value
+            try await waitForOutboxState { vm.hasRestoredOutboxMessages }
+            try #require(await MainActor.run { vm.healthOK })
+        }
+        await sendGate.release()
+        await send?.value
+        #expect(await MainActor.run { vm.input } == "keep the newer draft")
+        try #require(await MainActor.run { !vm.healthOK })
+        let queued = try #require(await store.loadCommands().first)
+        #expect(queued.status == .queued)
+        #expect(queued.text == "retain the first draft")
+        #expect(queued.sessionKey == "main")
+        #expect(queued.retryCount == 0)
+        #expect(await transport.state.restartRejectedKeys == [queued.id])
+        #expect(await transport.state.sentIdempotencyKeys.isEmpty)
+
+        let retryGate = OutboxTestGate()
+        await transport.state.update {
+            $0.sendStartupRejections = false
+            $0.sendGate = retryGate
+        }
+        await transport.goOnline()
+        try await finishOutboxFlush(vm, at: retryGate)
+        #expect(await transport.state.sentIdempotencyKeys == [queued.id])
+        #expect(await transport.state.sentMessages == ["retain the first draft"])
+        #expect(await transport.state.sentThinkingLevels == [queued.thinking])
+        #expect(await userTexts(vm) == (switchSession ? [] : ["retain the first draft"]))
+        #expect(await store.loadCommands().isEmpty)
+        #expect(await MainActor.run { vm.sessionKey } == (switchSession ? "other" : "main"))
+        #expect(await MainActor.run { vm.input } == "keep the newer draft")
+    }
+
     @Test func `definitive live-send rejection restores draft without queueing`() async throws {
         let (store, _, databaseDirectory) = try makeOutboxStore()
         defer { try? FileManager.default.removeItem(at: databaseDirectory) }
@@ -1874,13 +2306,13 @@ struct ChatViewModelOutboxTests {
         // Wait for outbox restore too: until it completes, sends deliberately
         // route behind the outbox (FIFO gate), which is not the path under test.
         await MainActor.run { vm.bootstrapTask }?.value
-        await waitForObservedState { vm.hasRestoredOutboxMessages }
+        try await waitForOutboxState { vm.hasRestoredOutboxMessages }
         #expect(await MainActor.run { vm.healthOK && vm.hasRestoredOutboxMessages })
         await MainActor.run {
             vm.input = "keep this draft"
             vm.send()
         }
-        await waitForObservedState { !vm.isSubmittingDraft }
+        try await waitForOutboxState { !vm.isSubmittingDraft }
         #expect(await MainActor.run { vm.errorText != nil })
         #expect(await MainActor.run { vm.input } == "keep this draft")
         #expect(await userTexts(vm).isEmpty)
@@ -1900,7 +2332,7 @@ struct ChatViewModelOutboxTests {
         // Wait for outbox restore too: until it completes, sends deliberately
         // route behind the outbox (FIFO gate), which is not the path under test.
         await MainActor.run { vm.bootstrapTask }?.value
-        await waitForObservedState { vm.hasRestoredOutboxMessages }
+        try await waitForOutboxState { vm.hasRestoredOutboxMessages }
         #expect(await MainActor.run { vm.healthOK && vm.hasRestoredOutboxMessages })
         await MainActor.run {
             vm.input = "stale health send"
@@ -1909,7 +2341,7 @@ struct ChatViewModelOutboxTests {
 
         // The optimistic bubble survives, but delivery is ambiguous. It must
         // not return to the automatic queue after dedupe expiry or restart.
-        await waitForObservedState { !vm.isSubmittingDraft }
+        try await waitForOutboxState { !vm.isSubmittingDraft }
         #expect(await store.loadCommands().map(\.status) == [.failed])
         let preserved = try #require(await store.loadCommands().first)
         #expect(preserved.lastError == OpenClawChatSQLiteTranscriptCache.outboxUnconfirmedError)
@@ -1996,7 +2428,7 @@ struct ChatViewModelOutboxTests {
 
         await MainActor.run { vm.load() }
         // Restore surfaces the expired command as failed("expired").
-        await waitForObservedState { vm.hasRestoredOutboxMessages }
+        try await waitForOutboxState { vm.hasRestoredOutboxMessages }
         #expect(await MainActor.run {
             vm.messages.contains { vm.outboxState(for: $0.id)?.isFailed == true }
         })
@@ -2011,7 +2443,7 @@ struct ChatViewModelOutboxTests {
             vm.messages.first { vm.outboxState(for: $0.id)?.isFailed == true }?.id
         })
         await MainActor.run { vm.retryOutboxMessage(messageID) }
-        await waitForObservedState {
+        try await waitForOutboxState {
             vm.outboxState(for: messageID) == .queued
         }
         #expect(await store.loadCommands().map(\.status) == [.queued])
@@ -2193,7 +2625,7 @@ struct ChatViewModelOutboxTests {
             vm.input = "does not fit"
             vm.send()
         }
-        await waitForObservedState { !vm.isSubmittingDraft }
+        try await waitForOutboxState { !vm.isSubmittingDraft }
         #expect(await MainActor.run { vm.errorText != nil })
         // The draft survives so the text is not lost, and no row was added.
         #expect(await MainActor.run { vm.input } == "does not fit")
@@ -2209,7 +2641,7 @@ struct ChatViewModelOutboxTests {
         let vm = await makeOutboxViewModel(transport: transport, outbox: outbox)
         await MainActor.run { vm.load() }
         await vm.bootstrapTask?.value
-        await waitForObservedState { vm.hasRestoredOutboxMessages }
+        try await waitForOutboxState { vm.hasRestoredOutboxMessages }
         #expect(await MainActor.run { vm.hasRestoredOutboxMessages })
         await outbox.holdEnqueue()
 
@@ -2226,7 +2658,7 @@ struct ChatViewModelOutboxTests {
             vm.switchSession(to: "other")
         }
         await outbox.releaseEnqueue()
-        await waitForObservedState { !vm.isSubmittingDraft }
+        try await waitForOutboxState { !vm.isSubmittingDraft }
         #expect(await store.loadCommands().count == 1)
         #expect(await MainActor.run { vm.draftsBySession[vm.composerSessionKey(for: "main")] == "queued once" })
 
@@ -2246,7 +2678,7 @@ struct ChatViewModelOutboxTests {
         let vm = await makeOutboxViewModel(transport: transport, outbox: outbox)
         await MainActor.run { vm.load() }
         await vm.bootstrapTask?.value
-        await waitForObservedState { vm.hasRestoredOutboxMessages }
+        try await waitForOutboxState { vm.hasRestoredOutboxMessages }
         #expect(await MainActor.run { vm.hasRestoredOutboxMessages })
         await outbox.holdEnqueue()
 
@@ -2260,7 +2692,7 @@ struct ChatViewModelOutboxTests {
             vm.input = "queued once"
         }
         await outbox.releaseEnqueue()
-        await waitForObservedState { !vm.isSubmittingDraft }
+        try await waitForOutboxState { !vm.isSubmittingDraft }
         #expect(await store.loadCommands().count == 1)
         #expect(await MainActor.run { !vm.isSubmittingDraft })
 
@@ -2276,7 +2708,7 @@ struct ChatViewModelOutboxTests {
 
         await MainActor.run { vm.load() }
         await vm.bootstrapTask?.value
-        await waitForObservedState { vm.hasRestoredOutboxMessages }
+        try await waitForOutboxState { vm.hasRestoredOutboxMessages }
         #expect(await MainActor.run { !vm.isLoading && vm.hasRestoredOutboxMessages })
         // A failed history request cannot refresh the displayed retry version.
         await transport.state.update { $0.historyFails = retryBeforeReconnect }
@@ -2327,7 +2759,7 @@ struct ChatViewModelOutboxTests {
         await transport.state.update { $0.sendGate = retryGate }
         await MainActor.run { vm.retryOutboxMessage(messageID) }
         if retryBeforeReconnect {
-            await waitForObservedState { vm.outboxState(for: messageID) == .queued }
+            try await waitForOutboxState { vm.outboxState(for: messageID) == .queued }
             #expect(await store.loadCommands().map(\.status) == [.queued])
             await transport.state.update { $0.historyFails = false }
             await transport.goOnline()
@@ -2384,7 +2816,7 @@ struct ChatViewModelOutboxTests {
 
         // The bubble disappears only after the durable delete lands, so a
         // process kill can never orphan a hidden-but-persisted command.
-        await waitForObservedState { !vm.messages.contains { $0.role == "user" } }
+        try await waitForOutboxState { !vm.messages.contains { $0.role == "user" } }
         #expect(await userTexts(vm).isEmpty)
         #expect(await MainActor.run { vm.outboxStatesByMessageID.count } == 0)
         #expect(await store.loadCommands().isEmpty)
@@ -2396,30 +2828,6 @@ struct ChatViewModelOutboxTests {
         await MainActor.run { recreated.load() }
         try await Task.sleep(nanoseconds: 100_000_000)
         #expect(await userTexts(recreated).isEmpty)
-    }
-}
-
-actor DeleteGate {
-    private var isOpen = false
-    private var waiters: [CheckedContinuation<Void, Never>] = []
-
-    func open() {
-        self.isOpen = true
-        for waiter in self.waiters {
-            waiter.resume()
-        }
-        self.waiters.removeAll()
-    }
-
-    func wait() async {
-        if self.isOpen {
-            return
-        }
-        await withCheckedContinuation { self.waiters.append($0) }
-    }
-
-    func opened() -> Bool {
-        self.isOpen
     }
 }
 
@@ -2439,7 +2847,7 @@ extension ChatViewModelOutboxTests {
             vm.send()
             vm.send()
         }
-        await waitForObservedState { !vm.isSubmittingDraft }
+        try await waitForOutboxState { !vm.isSubmittingDraft }
         #expect(await MainActor.run {
             vm.messages.contains { message in
                 message.role == "user" && message.content.contains { $0.text == "tap tap" }
@@ -2471,7 +2879,7 @@ extension ChatViewModelOutboxTests {
         }
         await commandListGate.open()
 
-        await waitForObservedState { !vm.isSubmittingDraft }
+        try await waitForOutboxState { !vm.isSubmittingDraft }
         #expect(await store.loadCommands().count == 1)
         #expect(await store.loadCommands().map(\.text) == ["/remote-command"])
         #expect(await MainActor.run { vm.input } == "newer draft")
@@ -2525,7 +2933,7 @@ extension ChatViewModelOutboxTests {
         await transport.state.update { $0.staleHistoryRows = nil }
         await MainActor.run { vm.refresh() }
         await vm.bootstrapTask?.value
-        await waitForObservedState { vm.outboxStatesByMessageID.isEmpty }
+        try await waitForOutboxState { vm.outboxStatesByMessageID.isEmpty }
         #expect(await store.loadCommands().isEmpty)
     }
 
@@ -2560,7 +2968,7 @@ extension ChatViewModelOutboxTests {
 
         await sendGate.waitUntilStarted()
         let flush = try #require(await vm.outboxFlushTask)
-        await waitForObservedState { !vm.isSubmittingDraft }
+        try await waitForOutboxState { !vm.isSubmittingDraft }
         await sendGate.release()
         await flush.value
         #expect(await transport.state.sentMessages == [
@@ -2601,7 +3009,7 @@ extension ChatViewModelOutboxTests {
         await MainActor.run { vm.load() }
         // Let "main" finish restoring so the FIFO gate flag is set for it.
         await vm.bootstrapTask?.value
-        await waitForObservedState { vm.hasRestoredOutboxMessages }
+        try await waitForOutboxState { vm.hasRestoredOutboxMessages }
         #expect(await MainActor.run { vm.hasRestoredOutboxMessages })
 
         // Delay outbox reads from here on so, after the switch, neither the
@@ -2624,7 +3032,7 @@ extension ChatViewModelOutboxTests {
 
         await sendGate.waitUntilStarted()
         let flush = try #require(await vm.outboxFlushTask)
-        await waitForObservedState { !vm.isSubmittingDraft }
+        try await waitForOutboxState { !vm.isSubmittingDraft }
         await sendGate.release()
         await flush.value
         #expect(await transport.state.sentMessages == [
@@ -2682,7 +3090,7 @@ extension ChatViewModelOutboxTests {
         #expect(await store.loadCommands().isEmpty)
 
         transport.releaseModelPatch()
-        await waitForObservedState { !vm.isSubmittingDraft }
+        try await waitForOutboxState { !vm.isSubmittingDraft }
         #expect(await store.loadCommands().map(\.text) == ["enqueue after model patch"])
         #expect(await transport.state.sentMessages.isEmpty)
     }
@@ -2709,7 +3117,7 @@ extension ChatViewModelOutboxTests {
             vm.input = "second, right after reconnect"
             vm.send()
         }
-        await waitForObservedState { !vm.isSubmittingDraft }
+        try await waitForOutboxState { !vm.isSubmittingDraft }
         #expect(await store.loadCommands().map(\.text).contains("second, right after reconnect"))
         #expect(await transport.state.sentMessages.isEmpty)
 
@@ -2733,7 +3141,7 @@ extension ChatViewModelOutboxTests {
         let observer = await makeOutboxViewModel(transport: transport, outbox: store)
         await MainActor.run { observer.load() }
         await observer.bootstrapTask?.value
-        await waitForObservedState { observer.hasRestoredOutboxMessages }
+        try await waitForOutboxState { observer.hasRestoredOutboxMessages }
         #expect(await MainActor.run { observer.outboxStatesByMessageID.count } == 1)
 
         let messageID = try #require(await MainActor.run {
@@ -2748,7 +3156,7 @@ extension ChatViewModelOutboxTests {
         let flush = try #require(await sender.outboxFlushTask)
         #expect(await store.loadCommands().map(\.status) == [.sending])
         await MainActor.run { observer.deleteOutboxMessage(messageID) }
-        await waitForObservedState { observer.outboxState(for: messageID) == .sending }
+        try await waitForOutboxState { observer.outboxState(for: messageID) == .sending }
         #expect(await MainActor.run { observer.outboxState(for: messageID) == .sending })
         #expect(await store.loadCommands().map(\.status) == [.sending])
 
@@ -2770,7 +3178,7 @@ extension ChatViewModelOutboxTests {
         let second = await makeOutboxViewModel(transport: transport, outbox: store)
         await MainActor.run { second.load() }
         await second.bootstrapTask?.value
-        await waitForObservedState { second.hasRestoredOutboxMessages }
+        try await waitForOutboxState { second.hasRestoredOutboxMessages }
         #expect(await MainActor.run {
             first.outboxStatesByMessageID.count == 1 && second.outboxStatesByMessageID.count == 1
         })
@@ -2778,12 +3186,12 @@ extension ChatViewModelOutboxTests {
         let firstID = try #require(await MainActor.run { first.messages.last?.id })
         let secondID = try #require(await MainActor.run { second.messages.last?.id })
         await MainActor.run { first.deleteOutboxMessage(firstID) }
-        await waitForObservedState { !first.messages.contains { $0.role == "user" } }
+        try await waitForOutboxState { !first.messages.contains { $0.role == "user" } }
         #expect(await store.loadCommands().isEmpty)
         #expect(await userTexts(first).isEmpty)
 
         await MainActor.run { second.deleteOutboxMessage(secondID) }
-        await waitForObservedState { !second.messages.contains { $0.role == "user" } }
+        try await waitForOutboxState { !second.messages.contains { $0.role == "user" } }
         #expect(await userTexts(second).isEmpty)
         #expect(await transport.state.sentMessages.isEmpty)
     }
@@ -2815,12 +3223,12 @@ extension ChatViewModelOutboxTests {
 
         let messageID = try #require(await MainActor.run { cancelingView.messages.last?.id })
         await MainActor.run { cancelingView.deleteOutboxMessage(messageID) }
-        await waitForObservedState { !cancelingView.messages.contains { $0.id == messageID } }
+        try await waitForOutboxState { !cancelingView.messages.contains { $0.id == messageID } }
         #expect(await store.loadCommands().map(\.id) == ["c-survivor"])
         await staleOutbox.releaseSnapshot()
         try await Task.sleep(nanoseconds: 100_000_000)
 
-        await waitForObservedState {
+        try await waitForOutboxState {
             staleView.messages.contains { $0.role == "user" && $0.content.contains { $0.text == "survivor" } }
         }
         #expect(await userTexts(staleView) == ["survivor"])
@@ -2854,7 +3262,7 @@ extension ChatViewModelOutboxTests {
             id: command.id,
             attemptVersion: command.attemptVersion) == .updated)
         await outbox.releaseSnapshot()
-        await waitForObservedState { vm.outboxState(for: messageID) == nil }
+        try await waitForOutboxState { vm.outboxState(for: messageID) == nil }
         #expect(await MainActor.run { vm.outboxState(for: messageID) == nil })
         #expect(await userTexts(vm) == ["confirmed during delete"])
     }

@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import path from "node:path";
-import * as ts from "typescript/unstable/ast";
+import * as ts from "typescript/ast";
 import { runWithFailedTrailer } from "./lib/failed-trailer.mts";
 import { createNativeTypeScriptParser } from "./lib/native-typescript.mts";
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
@@ -56,7 +56,13 @@ export type ModuleExports = {
   valueDefinitions: Map<string, ExportedValueDefinition>;
 };
 
-const extraExcludedFileSuffixes = [".test-support.ts", ".test-helpers.ts", ".d.ts"];
+const extraExcludedFileSuffixes = [
+  ".test-support.ts",
+  ".test-helpers.ts",
+  ".d.ts",
+  ".d.mts",
+  ".d.cts",
+];
 
 function normalizeRelativePath(filePath: string) {
   return filePath.replaceAll(path.sep, "/");
@@ -685,9 +691,10 @@ function collectSdkExportNames(modulesByPath: ReadonlyMap<string, ModuleExports>
 // exports its own `testing`/`testApi` object and tests import it qualified from that
 // exact module. Flagging them would push burn-down work to "fix" a deliberate idiom.
 const intentionalSameNameFamilies = new Set(["testing", "testApi"]);
-// The handoff build substitutes this exact module pair, so both loaders must
-// implement the same export. A third implementation is still a collision.
-const managedHandoffNativeLoaderModules = [
+// Sealed recovery builds substitute these exact loaders for the shared one, so
+// all must implement the same export. Any other implementation is a collision.
+const sealedRecoveryNativeLoaderModules = [
+  "src/infra/package-update-activation-native-loader.ts",
   "src/infra/update-managed-service-handoff-native-loader.ts",
   "src/shared/freebsd-process-identity-native.ts",
 ];
@@ -710,7 +717,6 @@ const sqliteWorkerProtocolModules = new Map<string, ReadonlySet<string>>([
       "src/agents/plugin-model-catalog.worker.ts",
       "src/boards/sqlite-board-store.worker.ts",
       "src/agents/sessions/session-manager-metadata.worker.ts",
-      "src/agents/subagents/spawn/acp-parent-stream-store.worker.ts",
       "src/config/sessions/goals-operations.worker.ts",
       "src/config/sessions/session-accessor.sqlite-transcript-reports.worker.ts",
       "src/config/sessions/session-fork-domain.worker.ts",
@@ -718,10 +724,7 @@ const sqliteWorkerProtocolModules = new Map<string, ReadonlySet<string>>([
       "src/config/sessions/session-message-rewrite.worker.ts",
       "src/config/sessions/session-sharing-store.worker.ts",
       "src/config/sessions/session-transcript-projection-publication.worker.ts",
-      "src/config/sessions/session-transcript-stats.worker.ts",
       "src/gateway/worker-environments/transcript-commit.worker.ts",
-      "src/infra/heartbeat-outcome-store.worker.ts",
-      "src/infra/message-tool-run-outcome-store.worker.ts",
       "src/session-cards/progress-card-store.worker.ts",
     ]),
   ],
@@ -766,8 +769,8 @@ function analyzeExportNames(modules: SourceModule[]) {
       fileSet.size < 2 ||
       intentionalSameNameFamilies.has(name) ||
       (name === "loadFreeBsdProcessIdentityNative" &&
-        fileSet.size === managedHandoffNativeLoaderModules.length &&
-        managedHandoffNativeLoaderModules.every((file) => fileSet.has(file))) ||
+        fileSet.size === sealedRecoveryNativeLoaderModules.length &&
+        sealedRecoveryNativeLoaderModules.every((file) => fileSet.has(file))) ||
       (protocolModules !== undefined && [...fileSet].every((file) => protocolModules.has(file)))
     ) {
       continue;

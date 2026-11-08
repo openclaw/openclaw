@@ -12,6 +12,8 @@ export type RecordInboundSessionMetaParams = {
   sessionKey: string;
   /** Explicit store target for file-backed stores and SQLite migration adapters. */
   storePath: string;
+  /** Live caller authority checked by the existing write admission owner. */
+  assertCommitAllowed?: () => void;
 };
 
 export type UpdateSessionLastRouteParams = Omit<RecordInboundSessionMetaParams, "ctx"> & {
@@ -32,8 +34,4 @@ export type ReadSessionUpdatedAt = (params: {
 }) => number | undefined;
 export type RecordSessionMetaFromInbound = (
   params: RecordInboundSessionMetaParams,
-) => Promise<SessionEntry | null>;
-
-export type UpdateLastRoute = (
-  params: UpdateSessionLastRouteParams,
 ) => Promise<SessionEntry | null>;

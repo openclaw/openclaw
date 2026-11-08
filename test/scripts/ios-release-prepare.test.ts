@@ -21,7 +21,7 @@ describe("scripts/ios-release-prepare.sh", () => {
 
     expect(result.status).toBe(1);
     expect(result.stderr).toContain(
-      "iOS App Store release must use canonical OpenClaw Team ID FWJYW4S8P8",
+      "iOS App Store release must use official OpenClaw Team ID FWJYW4S8P8",
     );
     expect(result.stderr).toContain("got Y3YUZP442G");
   });

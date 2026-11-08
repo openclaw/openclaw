@@ -3,6 +3,7 @@ import { createDeferred } from "../../test/helpers/promise.js";
 import {
   registerReplyDispatcherSettledTask,
   settleReplyDispatcher as settleSourceDispatcher,
+  waitForReplyDispatcherSettlement,
 } from "./dispatch-dispatcher.js";
 import {
   attachReplyDispatchUndeliveredFallback,
@@ -10,33 +11,50 @@ import {
   createReplyDispatcher,
 } from "./reply/reply-dispatcher.js";
 
-it("settles source-owned resources once through a separately loaded SDK after delivery", async () => {
-  const entered = createDeferred();
+it("joins delivery and source-owned cleanup across SDK graphs without running it from the waiter", async () => {
+  const deliveryEntered = createDeferred();
   const delivered = createDeferred();
+  const entered = createDeferred();
+  const release = createDeferred();
+  const failure = new Error("recording failed");
   const dispatcher = createReplyDispatcher({
     deliver: async () => {
-      entered.resolve();
+      deliveryEntered.resolve();
       await delivered.promise;
     },
   });
-  let releases = 0;
+  const calls: string[] = [];
+  registerReplyDispatcherSettledTask(dispatcher, async () => {
+    calls.push("recording");
+    entered.resolve();
+    await release.promise;
+    throw failure;
+  });
   registerReplyDispatcherSettledTask(dispatcher, () => {
-    releases += 1;
+    calls.push("cleanup");
+  });
+  let ownerSettled = false;
+  const owner = waitForReplyDispatcherSettlement(dispatcher).then(() => {
+    ownerSettled = true;
   });
   try {
     expect(dispatcher.sendFinalReply({ text: "Public result" })).toBe(true);
-    await entered.promise;
+    await deliveryEntered.promise;
     vi.resetModules();
     const { settleReplyDispatcher } = await import("../plugin-sdk/reply-runtime.js");
-    const settled = settleReplyDispatcher({ dispatcher });
-    expect(releases).toBe(0);
+    const rejected = expect(settleSourceDispatcher({ dispatcher })).rejects.toBe(failure);
+    const concurrent = expect(settleReplyDispatcher({ dispatcher })).rejects.toBe(failure);
+    expect(calls).toEqual([]);
     delivered.resolve();
-    await settled;
-    expect(releases).toBe(1);
+    await entered.promise;
+    expect(ownerSettled).toBe(false);
+    release.resolve();
+    await Promise.all([rejected, concurrent, owner]);
     await settleReplyDispatcher({ dispatcher });
-    expect(releases).toBe(1);
+    expect(calls).toEqual(["recording", "cleanup"]);
   } finally {
     delivered.resolve();
+    release.resolve();
     await settleSourceDispatcher({ dispatcher });
   }
 });
@@ -59,10 +77,9 @@ it("observes the SDK enqueue and sends a source-owned alternative only after pro
   try {
     expect(dispatcher.sendFinalReply(payload)).toBe(true);
     expect(capture.isTracked()).toBe(true);
-    await sdk.settleReplyDispatcher({ dispatcher });
-    await expect(capture.promise).resolves.toBe("delivered");
-    expect(attempted).toEqual(["Primary reply", "Known-unsent alternative"]);
   } finally {
     await sdk.settleReplyDispatcher({ dispatcher });
   }
+  await expect(capture.promise).resolves.toBe("delivered");
+  expect(attempted).toEqual(["Primary reply", "Known-unsent alternative"]);
 });

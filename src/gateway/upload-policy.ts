@@ -83,10 +83,6 @@ export function isGatewayUploadRequest(method: string, params: unknown): boolean
       return params.source === "upload";
     case "skills.library.save":
       return Array.isArray(params.files) && params.files.length > 0;
-    case "skills.proposals.create":
-    case "skills.proposals.update":
-    case "skills.proposals.revise":
-      return Array.isArray(params.supportFiles) && params.supportFiles.length > 0;
     case "agents.create":
     case "agents.update":
       return isInlineMedia(params.avatar);

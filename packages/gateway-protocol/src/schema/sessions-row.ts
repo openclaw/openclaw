@@ -10,8 +10,25 @@ import {
   SessionParticipantIdentitySchema,
 } from "./session-participant.js";
 import { SessionActivitySummarySchema } from "./sessions-activity-summary.js";
+import {
+  SessionCommunicationPolicySchema,
+  EffectiveSessionCommunicationPolicySchema,
+} from "./sessions-communication.js";
 import { SessionProviderReviewProjectionSchema } from "./sessions-provider-review.js";
 import { SessionSharingRoleSchema, SessionVisibilitySchema } from "./sessions-sharing-values.js";
+
+/** Existing directory on a paired session host; never a Gateway-owned checkout. */
+export const SessionDeviceFolderSchema = closedObject({
+  deviceId: NonEmptyString,
+  path: Type.String({ minLength: 1, maxLength: 4096 }),
+});
+
+export const CyberAccessProgramSchema = Type.Union([
+  Type.Literal("standard"),
+  Type.Literal("daybreak_blue"),
+  Type.Literal("daybreak_red"),
+]);
+export type CyberAccessProgram = Static<typeof CyberAccessProgramSchema>;
 
 export const SessionPermissionModeSchema = Type.Union([
   Type.Literal("read-only"),
@@ -103,8 +120,12 @@ const SessionSwarmSummarySchema = closedObject({
 export const SessionRowSchema = Type.Object(
   {
     key: Type.String(),
-    /** Detail fields omitted in compact lists must not clear a client's full-row cache. */
-    rowMode: Type.Optional(Type.Literal("compact")),
+    /** Fields outside the requested projection must not clear a client's full-row cache. */
+    rowMode: Type.Optional(
+      Type.Union([Type.Literal("compact"), Type.Literal("dashboard"), Type.Literal("sidebar")]),
+    ),
+    /** Response-local indexes into the list's sharedFacts; expand before merging rows. */
+    sharedFacts: Type.Optional(Type.Array(Type.Integer({ minimum: 0 }))),
     sessionId: Type.Optional(Type.String()),
     /** Incarnation revision for invalidating session-scoped client caches after resets. */
     lifecycleRevision: Type.Optional(NonEmptyString),
@@ -129,8 +150,17 @@ export const SessionRowSchema = Type.Object(
     /** Shared dashboard default; absent means split. */
     boardPresentation: Type.Optional(Type.Union([Type.Literal("split"), Type.Literal("expanded")])),
     displayName: Type.Optional(Type.String()),
+    /** A title request is currently in flight; runtime-only, never persisted. */
+    titlePending: Type.Optional(Type.Boolean()),
     derivedTitle: Type.Optional(Type.String()),
     lastMessagePreview: Type.Optional(Type.String()),
+    /** Latest visible assistant text in the bounded transcript preview, with its message time. */
+    lastAssistantMessage: Type.Optional(
+      Type.Object(
+        { text: Type.String(), timestamp: Type.Number() },
+        { additionalProperties: false },
+      ),
+    ),
     channel: Type.Optional(Type.String()),
     /** Stable non-sensitive facts derived from the canonical session route. */
     classification: Type.Optional(SessionClassificationSchema),
@@ -157,6 +187,7 @@ export const SessionRowSchema = Type.Object(
     archivedBy: Type.Optional(SessionCreatedActorSchema),
     archiveReason: Type.Optional(SessionEntryArchiveReasonSchema),
     pinned: Type.Optional(Type.Boolean()),
+    sidebarRoot: Type.Optional(Type.Boolean()),
     pinnedAt: Type.Optional(Type.Number()),
     snoozedUntil: Type.Optional(Type.Number()),
     snoozedAt: Type.Optional(Type.Number()),
@@ -166,11 +197,13 @@ export const SessionRowSchema = Type.Object(
     lastActivityAt: Type.Optional(Type.Number()),
     lastInteractionAt: Type.Optional(Type.Number()),
     status: Type.Optional(SessionRunStatusSchema),
+    /** Running background exec processes; absent when none remain. */
+    backgroundProcessCount: Type.Optional(Type.Integer({ minimum: 1 })),
     lastRunError: Type.Optional(Type.String()),
+    suppressErrorNotice: Type.Optional(Type.Boolean()),
     providerReview: Type.Optional(SessionProviderReviewProjectionSchema),
     /** Exact run that produced the latest terminal lifecycle projection. */
     lastRunId: Type.Optional(NonEmptyString),
-    restartRecoveryStatus: Type.Optional(Type.Literal("tombstoned")),
     activeLeafEntryId: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
     spawnedBy: Type.Optional(Type.String()),
     parentSessionKey: Type.Optional(Type.String()),
@@ -188,6 +221,7 @@ export const SessionRowSchema = Type.Object(
     swarmGroupId: Type.Optional(Type.String()),
     /** Requester-owned execution counts; never child content or parent synthesis status. */
     swarm: Type.Optional(SessionSwarmSummarySchema),
+    deviceFolder: Type.Optional(SessionDeviceFolderSchema),
     worktree: Type.Optional(
       Type.Object({
         id: Type.String(),
@@ -210,7 +244,10 @@ export const SessionRowSchema = Type.Object(
     projectId: Type.Optional(Type.String()),
     /** Persisted task cwd or spawned workspace; no filesystem resolution is implied. */
     workspaceDir: Type.Optional(Type.String()),
+    cyberAccessProgram: Type.Optional(CyberAccessProgramSchema),
     permissionMode: Type.Optional(SessionPermissionModeSchema),
+    communication: Type.Optional(SessionCommunicationPolicySchema),
+    effectiveCommunication: Type.Optional(EffectiveSessionCommunicationPolicySchema),
     /** Authorized per-chat containment opt-out; omission follows configured sandbox policy. */
     sandboxMode: Type.Optional(Type.Literal("off")),
     /** Administrator consent to the exact external runtime's own permissions for this incarnation. */
@@ -244,6 +281,8 @@ export const SessionRowSchema = Type.Object(
     sharingRole: Type.Optional(SessionSharingRoleSchema),
     /** Recipient-local send admission; null explicitly clears a previous restriction. */
     sendDisabledReason: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
+    /** Recipient-local workspace admission; null clears a previous read restriction. */
+    workspaceReadDisabledReason: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
     createdAt: Type.Optional(Type.Number()),
     forkSource: Type.Optional(
       Type.Object({
@@ -255,6 +294,9 @@ export const SessionRowSchema = Type.Object(
     previousSessionId: Type.Optional(Type.String()),
     inputTokens: Type.Optional(Type.Number()),
     outputTokens: Type.Optional(Type.Number()),
+    usageReport: Type.Optional(
+      Type.Object({ state: Type.Union([Type.Literal("available"), Type.Literal("unavailable")]) }),
+    ),
     totalTokens: Type.Optional(Type.Number()),
     totalTokensFresh: Type.Optional(Type.Boolean()),
     contextTokens: Type.Optional(Type.Number()),

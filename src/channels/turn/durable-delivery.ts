@@ -7,6 +7,7 @@ import {
 } from "../../auto-reply/reply-payload.js";
 import type { FinalizedMsgContext } from "../../auto-reply/templating.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { isProvenDeliveryNotSentError } from "../../infra/delivery-recovery.shared.js";
 import { normalizeDeliverableOutboundChannel } from "../../infra/outbound/channel-resolution.js";
 import {
   type DurableFinalDeliveryRequirement,
@@ -14,26 +15,25 @@ import {
 } from "../../infra/outbound/deliver.js";
 import type { OutboundPayloadPlan } from "../../infra/outbound/reply-payload-parts.js";
 import { buildOutboundSessionContext } from "../../infra/outbound/session-context.js";
+import { getPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { deriveDurableFinalDeliveryRequirements } from "../message/capabilities.js";
 import {
+  durableMessageBatchMayHaveReachedRecipient,
   sendDurableMessageBatchCore,
   sendStructuredDurableMessageBatchCore,
 } from "../message/send.js";
+import { runAdmittingGatewayDelivery } from "./admitting-gateway-delivery.js";
 import {
   createChannelDeliveryResultFromReceipt,
   createChannelPartialDeliveryError,
 } from "./delivery-result.js";
-import { withDurableDeliveryRuntime } from "./durable-delivery-runtime.js";
 import type {
   ChannelDeliveryInfo,
   ChannelDeliveryResult,
   ChannelTurnDurableDeliveryOptions,
 } from "./types.js";
 
-export type DurableInboundReplyDeliveryOptions = ChannelTurnDurableDeliveryOptions & {
-  /** Optional: validate the admitted sender and pin its resolved credential before a registry handoff. */
-  prepareRuntimeHandoff?: (cfg: OpenClawConfig) => OpenClawConfig;
-};
+export type DurableInboundReplyDeliveryOptions = ChannelTurnDurableDeliveryOptions;
 
 export type DurableInboundReplyDeliveryParams = DurableInboundReplyDeliveryOptions & {
   cfg: OpenClawConfig;
@@ -65,7 +65,12 @@ type DurableInboundReplyDeliveryResult =
     }
   | { status: "handled_visible"; delivery: ChannelDeliveryResult }
   | { status: "handled_no_send"; reason: "no_visible_result"; delivery: ChannelDeliveryResult }
-  | { status: "failed"; error: unknown; sentBeforeError?: true };
+  | {
+      status: "failed";
+      error: unknown;
+      /** False requires affirmative no-dispatch proof; omission preserves ambiguity. */
+      sentBeforeError?: boolean;
+    };
 
 function resolveDurableInboundReplyToId(
   params: Pick<DurableInboundReplyDeliveryParams, "ctxPayload" | "payload" | "replyToId">,
@@ -142,8 +147,21 @@ async function deliverInboundReplyWithMessageSendContext(
   }
 
   try {
-    return await withDurableDeliveryRuntime(input, (cfg, assertCurrent) =>
-      deliverAdmittedInboundReply({ ...input, cfg }, sendBatch, assertCurrent),
+    // Final delivery is a new operation of the admitting Gateway, not of the completed model turn.
+    const deliver = (cfg: OpenClawConfig, assertCurrent?: () => void) =>
+      deliverAdmittedInboundReply({ ...input, cfg }, sendBatch, assertCurrent);
+    const registry = getPluginRuntimeGatewayRequestScope()?.pluginRegistry;
+    if (!registry) {
+      return await deliver(input.cfg);
+    }
+    return await runAdmittingGatewayDelivery(
+      {
+        registry,
+        cfg: input.cfg,
+        channel: input.channel,
+        prepareRuntimeHandoff: input.prepareRuntimeHandoff,
+      },
+      deliver,
     );
   } catch (error) {
     return { status: "failed", error };
@@ -224,6 +242,7 @@ async function deliverAdmittedInboundReply(
     to,
     accountId: params.accountId,
     payloads: [params.payload],
+    retryAmbiguousFinalText: params.retryAmbiguousFinalText,
     ...((params.runId ?? params.executionIdentityToken?.runId)
       ? { runId: params.runId ?? params.executionIdentityToken?.runId }
       : {}),
@@ -248,7 +267,14 @@ async function deliverAdmittedInboundReply(
     gatewayClientScopes: params.ctxPayload.GatewayClientScopes ?? [],
   });
   if (send.status === "failed") {
-    return { status: "failed" as const, error: send.error };
+    return {
+      status: "failed" as const,
+      error: send.error,
+      ...(!durableMessageBatchMayHaveReachedRecipient(send) &&
+      isProvenDeliveryNotSentError(send.error)
+        ? { sentBeforeError: false }
+        : {}),
+    };
   }
   const content =
     send.status === "partial_failed"

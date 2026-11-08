@@ -9,7 +9,8 @@ import {
   type GatewayRootWorkAdmissionContinuationScope,
 } from "../process/gateway-work-admission.js";
 import { scheduleAbsoluteDeadline } from "../utils/absolute-deadline.js";
-import type { NodeInvokeResult } from "./node-invoke.types.js";
+import type { DeliveryContext } from "../utils/delivery-context.types.js";
+import type { NodeInvokeResult, NodeSystemRunEventSource } from "./node-invoke.types.js";
 import { NODE_INVOKE_PAIRING_CHANGED_ABORT } from "./node-registry-private-token.js";
 
 /** A node may emit this only before invoking a handler or sending any progress. */
@@ -18,7 +19,9 @@ export const NODE_INVOKE_NOT_READY = "NODE_NOT_READY";
 export type PendingSystemRunEvent = {
   runId: string;
   sessionKey?: string;
+  invocationDeliveryContext?: DeliveryContext;
   timeoutMs?: number | null;
+  source?: NodeSystemRunEventSource;
 };
 
 export type PendingInvoke = {
@@ -56,6 +59,13 @@ export type NodeInvokeResultParams = NodeInvokeResult & {
 const MAX_PENDING_PROGRESS_CHUNKS = 128;
 const MAX_INVOKE_INPUT_BYTES = 16 * 1024;
 
+export class NodeInvokeNotPendingError extends Error {
+  constructor() {
+    super("node invoke is not pending");
+    this.name = "NodeInvokeNotPendingError";
+  }
+}
+
 export class NodeInvokeStreamController {
   constructor(
     private readonly options: {
@@ -69,7 +79,7 @@ export class NodeInvokeStreamController {
         seq: number,
         payloadJSON: string,
       ) => boolean;
-      onFailedResult: (pending: PendingInvoke) => void;
+      onSettledResult: (pending: PendingInvoke, delivered: boolean) => void;
       // Settles a pending invoke on transport loss. The registry's callback
       // preserves MCP's structured-failure contract (resolve, not reject) so
       // MCP callers can degrade instead of seeing an opaque invoke error.
@@ -80,7 +90,7 @@ export class NodeInvokeStreamController {
   sendInput(invokeId: string, payload: unknown): void {
     const pending = this.options.pendingInvokes.get(invokeId);
     if (!pending) {
-      throw new Error("node invoke is not pending");
+      throw new NodeInvokeNotPendingError();
     }
     const payloadJSON = JSON.stringify(payload);
     if (payloadJSON === undefined) {
@@ -90,7 +100,9 @@ export class NodeInvokeStreamController {
       throw new Error("node invoke input exceeds 16 KiB");
     }
     if (!this.getPending(invokeId, pending.nodeId, pending.connId)) {
-      throw new Error("node invoke is not pending");
+      throw this.options.pendingInvokes.has(invokeId)
+        ? new Error("node invoke is not pending")
+        : new NodeInvokeNotPendingError();
     }
     if (!this.options.sendInput(invokeId, pending, pending.nextInputSeq, payloadJSON)) {
       throw new Error("failed to send node invoke input");
@@ -126,9 +138,7 @@ export class NodeInvokeStreamController {
     if (!pending || !this.takePending(params.id, pending)) {
       return false;
     }
-    if (!params.ok) {
-      this.options.onFailedResult(pending);
-    }
+    this.options.onSettledResult(pending, params.ok);
     // Even an out-of-order frame proves execution. A contradictory readiness
     // rejection must not authorize another attempt of a non-idempotent command.
     const error =
@@ -314,9 +324,7 @@ export class NodeInvokeStreamController {
   clearTimers(pending: PendingInvoke): void {
     pending.cancelHardDeadline?.();
     pending.cancelHardDeadline = undefined;
-    if (pending.idleTimer) {
-      clearTimeout(pending.idleTimer);
-    }
+    clearTimeout(pending.idleTimer);
     pending.idleTraceContext = undefined;
     pending.removeAbortListener?.();
     pending.removeAbortListener = undefined;
@@ -381,7 +389,7 @@ export class NodeInvokeStreamController {
   ): void {
     if (this.takePending(requestId, pending)) {
       this.options.sendCancel(requestId, pending);
-      this.options.onFailedResult(pending);
+      this.options.onSettledResult(pending, false);
       pending.resolve({ ok: false, error });
     }
   }

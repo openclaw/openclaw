@@ -117,11 +117,7 @@ private suspend fun captureChatWidgetWithPixelCopy(webView: WebView): Bitmap? {
           sourceRect,
           bitmap,
           { status ->
-            if (continuation.isActive) {
-              continuation.resume(status) { bitmap.recycle() }
-            } else {
-              bitmap.recycle()
-            }
+            continuation.resume(status) { bitmap.recycle() }
           },
           Handler(Looper.getMainLooper()),
         )

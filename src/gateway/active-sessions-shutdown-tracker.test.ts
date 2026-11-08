@@ -11,7 +11,6 @@ import {
 
 // Keep deduplication and snapshot ownership pinned alongside the shutdown drain tests.
 const session = {
-  cfg: {},
   sessionKey: "agent:main:main",
   sessionId: "session-A",
   storePath: "/tmp/store.json",

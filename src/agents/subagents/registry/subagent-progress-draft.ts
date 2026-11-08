@@ -1,10 +1,11 @@
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { ProgressContinuationDraft } from "../../../channels/progress-continuation.js";
 import { onAgentEventForRun, type AgentEventPayload } from "../../../infra/agent-events.js";
 import type { AcceptedSessionSpawn } from "../../accepted-session-spawn.js";
 import { getSubagentRunsForChildSession } from "./subagent-registry-memory.js";
 import { subscribeSubagentRunChanges } from "./subagent-registry-publication.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
-import { compareSubagentRunGeneration } from "./subagent-run-generation.js";
+import { latestSubagentRun } from "./subagent-run-generation.js";
 
 type ProgressItem = Parameters<ProgressContinuationDraft["push"]>[0];
 
@@ -48,13 +49,10 @@ function currentRow(
   childSessionKey: string,
   childAgentId?: string,
 ): SubagentRunRecord | undefined {
-  let current: SubagentRunRecord | undefined;
-  for (const entry of getSubagentRunsForChildSession(childSessionKey, childAgentId)) {
-    if (taskId(entry) === id && (!current || compareSubagentRunGeneration(entry, current) > 0)) {
-      current = entry;
-    }
-  }
-  return current;
+  return latestSubagentRun(
+    getSubagentRunsForChildSession(childSessionKey, childAgentId),
+    (entry) => taskId(entry) === id,
+  );
 }
 
 /** Only prepared operation names and outcomes cross a private child's audience boundary. */
@@ -89,7 +87,7 @@ function projectChild(entry: SubagentRunRecord): ProgressItem {
   return {
     itemId: taskId(entry),
     kind: "subagent",
-    title: (entry.label ?? entry.taskName ?? "Delegated work").slice(0, 120),
+    title: truncateUtf16Safe(entry.label ?? entry.taskName ?? "Delegated work", 120),
     phase: ended ? "end" : "update",
     status:
       outcome === "ok"

@@ -3,7 +3,7 @@ import type { ChannelMessageActionAdapter } from "./types.public.js";
 
 export type ChannelMessageToolDiscoveryAdapter = Pick<
   ChannelMessageActionAdapter,
-  "describeMessageTool"
+  "describeMessageTool" | "describeMessageToolAsync"
 >;
 
 /**
@@ -21,5 +21,5 @@ export function resolveBundledChannelMessageToolDiscoveryAdapter(
   if (typeof describeMessageTool !== "function") {
     return undefined;
   }
-  return { describeMessageTool };
+  return { describeMessageTool, describeMessageToolAsync: api?.describeMessageToolAsync };
 }

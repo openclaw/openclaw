@@ -35,6 +35,10 @@ RUNTIME_PATHS
 #!/usr/bin/env bash
 exec node "$(dirname "$0")/systemd-fixture.mjs" busctl "$@"
 BUSCTL
+  cat >"$shim_dir/systemd-run" <<'SYSTEMD_RUN'
+#!/usr/bin/env bash
+exec node "$(dirname "$0")/systemd-fixture.mjs" handoff-launch "$@"
+SYSTEMD_RUN
   # Capture endpoint identity once; projected native clients cannot carry fixture-only env.
   {
     printf '#!/usr/bin/env bash\nset -euo pipefail\n'
@@ -94,12 +98,12 @@ is_running() {
   local pid stat_line stat_tail
   pid="$(cat "$pid_file" 2>/dev/null || true)"
   [ -n "$pid" ] || return 1
-  kill -0 "$pid" >/dev/null 2>&1 || return 1
+  # Read stat before probing: a zombie reaped between the reads must not look live.
   stat_line="$(cat "/proc/$pid/stat" 2>/dev/null || true)"
   stat_tail="${stat_line##*) }"
   [[ "$stat_line" == "$pid ("*") $stat_tail" &&
     "$stat_tail" =~ ^Z([[:space:]]+-?[0-9]+){49,}$ ]] && return 1
-  return 0
+  kill -0 "$pid" >/dev/null 2>&1
 }
 
 stop_gateway() {
@@ -153,6 +157,7 @@ start_gateway() {
   cat >"$supervisor_script" <<'SUPERVISOR'
 import fs from "node:fs";
 import { spawn, execFileSync } from "node:child_process";
+import { randomUUID } from "node:crypto";
 
 const managerScript = process.env.OPENCLAW_SYSTEMCTL_SHIM_MANAGER_SCRIPT;
 const command = process.env.OPENCLAW_SYSTEMCTL_SHIM_EXEC_START;
@@ -184,6 +189,7 @@ const restartWindowMs = 60_000;
 const restartBurst = 5;
 const starts = [];
 let totalStarts = 0;
+let invocationId = "";
 let firstExit;
 let child;
 let activeGroupPid;
@@ -195,7 +201,7 @@ const publishRuntime = (pid, supervisorPid = process.pid) => {
   const file = `${daemonLog}.runtime.json`;
   // Both manager adapters observe the ExecStart child, not this synthetic manager.
   fs.writeFileSync(`${file}.pending`, JSON.stringify({
-    pid, supervisorPid, groupPid: activeGroupPid ?? 0, stopFailed,
+    pid, supervisorPid, groupPid: activeGroupPid ?? 0, stopFailed, invocationId,
     restarts: totalStarts - 1, entered: Number(process.hrtime.bigint() / 1000n),
   }));
   fs.renameSync(`${file}.pending`, file);
@@ -363,6 +369,8 @@ const start = () => {
   }
   starts.push(now);
   totalStarts++;
+  invocationId = randomUUID().replaceAll("-", "");
+  childEnv.INVOCATION_ID = invocationId;
   child = spawn("bash", ["-c", command], {
     detached: true,
     env: childEnv,
@@ -496,6 +504,14 @@ case "$command" in
       exit 0
     fi
     [ "$unit_name" = openclaw-gateway.service ] || exit 1
+    if [ "$property" = Id,LoadState,ActiveState,MainPID,ExecMainStartTimestampMonotonic,InvocationID,FragmentPath ]; then
+      node "$manager_script" handoff-runtime
+      exit "$?"
+    fi
+    if [ "$property" = TimeoutStopUSec,InvocationID,LoadState ]; then
+      node "$manager_script" stop-policy --invocation-id
+      exit 0
+    fi
     if [ "$property" = LoadState,TimeoutStopUSec ]; then
       node "$manager_script" stop-policy
       exit 0
@@ -536,7 +552,7 @@ case "$command" in
 esac
 SHIM
   } >"$shim_dir/systemctl"
-  chmod +x "$shim_dir/systemctl" "$shim_dir/busctl"
+  chmod +x "$shim_dir/systemctl" "$shim_dir/busctl" "$shim_dir/systemd-run"
   export PATH="$shim_dir:$PATH"
 }
 

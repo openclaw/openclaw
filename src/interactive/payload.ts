@@ -224,15 +224,8 @@ export function resolveMessagePresentationOptionAction(
   | Extract<MessagePresentationAction, { type: "command" | "callback" | "model-picker" }>
   | undefined {
   if (option.action !== undefined) {
-    const action = normalizePresentationAction(option.action);
-    if (action?.type === "model-picker" && options?.modelPicker !== true) {
-      return undefined;
-    }
-    return action?.type === "command" ||
-      action?.type === "callback" ||
-      action?.type === "model-picker"
-      ? action
-      : undefined;
+    const action = normalizePresentationOptionAction(option.action);
+    return action?.type === "model-picker" && options?.modelPicker !== true ? undefined : action;
   }
   return option.value ? { type: "callback", value: option.value } : undefined;
 }
@@ -585,18 +578,20 @@ function normalizeOption(raw: unknown): InteractiveReplyOption | undefined {
   }
   const label = normalizeOptionalString(record.label) ?? normalizeOptionalString(record.text);
   const value = normalizeOptionalString(record.value);
-  const normalizedAction =
-    record.action !== undefined ? normalizePresentationAction(record.action) : undefined;
-  const action =
-    normalizedAction?.type === "command" ||
-    normalizedAction?.type === "callback" ||
-    normalizedAction?.type === "model-picker"
-      ? normalizedAction
-      : undefined;
+  const action = normalizePresentationOptionAction(record.action);
   if (!label || (record.action !== undefined && !action) || (!action && !value)) {
     return undefined;
   }
   return { label, ...(action ? { action } : {}), ...(value ? { value } : {}) };
+}
+
+function normalizePresentationOptionAction(raw: unknown): MessagePresentationOption["action"] {
+  const action = normalizePresentationAction(raw);
+  return action?.type === "command" ||
+    action?.type === "callback" ||
+    action?.type === "model-picker"
+    ? action
+    : undefined;
 }
 
 function normalizeList<T>(value: unknown, normalizeEntry: (entry: unknown) => T | undefined): T[] {

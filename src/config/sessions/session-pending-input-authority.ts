@@ -1,6 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import type { CapturedSessionEntryReadSource } from "./session-entry-read-source.types.js";
-import type { SessionMember } from "./session-sharing-store.kernel.js";
+import type { SessionMember } from "./session-membership-facts.types.js";
 import type { SessionEntry } from "./types.js";
 
 export type SessionPendingInputAuthorityFacts = {
@@ -15,6 +15,8 @@ export type SessionPendingInputAuthorityFacts = {
 /** Host custody checks consume fresh worker facts without extending a snapshot across awaits. */
 export type SessionPendingInputAuthority = {
   assertLifetimeCurrent: () => void;
+  /** Refresh policy facts for source preparation; this does not authorize disclosure or effects. */
+  prepareForSourceScope?: () => Promise<void>;
   withCurrent: <T>(
     consume: (facts: SessionPendingInputAuthorityFacts, assertSourceCurrent: () => void) => T,
   ) => Promise<T>;
@@ -67,7 +69,22 @@ export function withSessionPendingInputAuthorityGuard(
   assertCurrent: () => void,
   rejectPreparation?: (cause: unknown) => never,
 ): SessionPendingInputAuthority {
+  const prepareForSourceScope = authority.prepareForSourceScope;
   return {
+    ...(prepareForSourceScope
+      ? {
+          async prepareForSourceScope() {
+            try {
+              assertCurrent();
+              await prepareForSourceScope.call(authority);
+              assertCurrent();
+            } catch (cause) {
+              rejectPreparation?.(cause);
+              throw cause;
+            }
+          },
+        }
+      : {}),
     assertLifetimeCurrent() {
       try {
         authority.assertLifetimeCurrent();

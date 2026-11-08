@@ -11,6 +11,7 @@ import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity
 import { createSqliteWorkerWriteAdmission } from "../../infra/sqlite-worker-store.js";
 import { captureOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
 import { openOpenClawAgentSqliteWorkerStore } from "../../state/openclaw-agent-worker-store.js";
+import { runOpenClawAgentWriteAdmission } from "../../state/openclaw-agent-write-admission.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import {
   hydrateOpenClawStateWorkerError,
@@ -26,7 +27,7 @@ import {
   assertAuthProfileMigrationStateAtDatabasePath,
 } from "./legacy-source-diagnostic.js";
 import { resolveLegacyAuthProfileSourceCandidates } from "./legacy-source-files.js";
-import { getRuntimeAuthProfileStoreCredentialMutationToken } from "./mutation-lineage.js";
+import { withAuthProfileCleanup } from "./operation-cleanup.js";
 import { shouldUseMainOwnerForLocalOAuthCredential } from "./ownership.js";
 import {
   resolveSharedAuthStoreOwnership,
@@ -53,10 +54,7 @@ import {
   type AuthProfileUsageResult,
 } from "./store.worker-contract.js";
 import type { AuthProfileRowRead, AuthProfileStore } from "./types.js";
-import {
-  reserveAuthProfileUsagePreparation,
-  reserveAuthProfileUsageWrite,
-} from "./usage-lifecycle.js";
+import { reserveAuthProfileUsagePreparation } from "./usage-lifecycle.js";
 import type { PersonalAuthProfileUsageReduction } from "./usage-reduction.js";
 
 /** Capture every possible physical owner before choosing inherited ownership asynchronously. */
@@ -66,7 +64,6 @@ export async function withAuthProfileUsage<T>(
   agentDir: string | undefined,
   consume: (usage: {
     observed: AuthProfileStore;
-    inherited: boolean;
     record: (
       reduction: PersonalAuthProfileUsageReduction,
       providerKey?: string,
@@ -78,7 +75,6 @@ export async function withAuthProfileUsage<T>(
     const observed: AuthProfileStore = { version: AUTH_STORE_VERSION, profiles: {} };
     return consume({
       observed,
-      inherited: false,
       record: async () => createAuthProfileUsageReceipt(observed),
     });
   }
@@ -94,19 +90,6 @@ export async function withAuthProfileUsage<T>(
     string,
     Result<ReturnType<typeof captureOpenClawAgentDatabaseExecution>, unknown>
   >();
-  const writers = new Map<
-    string,
-    ReturnType<typeof reserveAuthProfileUsageWrite<AuthProfileUsageReceipt | null>>
-  >();
-  const credentialToken = (databasePath: string) =>
-    getRuntimeAuthProfileStoreCredentialMutationToken(undefined, profileId, {
-      owner: { kind: "resolved", databasePath, sharedDatabasePath: databasePath },
-    });
-  const credentialTokens = new Map(
-    [
-      ...new Set([context.admission.databasePath, legacyPath, ...(localPath ? [localPath] : [])]),
-    ].map((databasePath) => [databasePath, credentialToken(databasePath)]),
-  );
   let preparation: ReturnType<typeof reserveAuthProfileUsagePreparation> | undefined;
   let committed: AuthProfileUsageReceipt | undefined;
   const executeUsage = async (): Promise<T> => {
@@ -114,34 +97,27 @@ export async function withAuthProfileUsage<T>(
       ...(mode ? [] : [legacyPath]),
       ...(localPath ? [localPath] : []),
     ])) {
+      const target = {
+        path: databasePath,
+        agentId: resolveAuthProfileDatabaseOwnerId(path.dirname(databasePath)),
+        env,
+      };
       readers.set(
         databasePath,
         prepareAgentAuthProfileRowsRead({
           databasePath,
-          agentId: resolveAuthProfileDatabaseOwnerId(path.dirname(databasePath)),
+          agentId: target.agentId,
           env,
         }),
       );
       try {
         executions.set(databasePath, {
           ok: true,
-          value: captureOpenClawAgentDatabaseExecution({
-            path: databasePath,
-            agentId: resolveAuthProfileDatabaseOwnerId(path.dirname(databasePath)),
-            env,
-          }),
+          value: captureOpenClawAgentDatabaseExecution(target),
         });
       } catch (error) {
         executions.set(databasePath, { ok: false, error });
       }
-      writers.set(
-        databasePath,
-        reserveAuthProfileUsageWrite({
-          path: databasePath,
-          agentId: resolveAuthProfileDatabaseOwnerId(path.dirname(databasePath)),
-          env,
-        }),
-      );
     }
     preparation = reserveAuthProfileUsagePreparation(
       [
@@ -190,11 +166,6 @@ export async function withAuthProfileUsage<T>(
             })
           : Boolean(sharedProfile)));
     const databasePath = useShared ? sharedPath : localPath!;
-    for (const [candidate, writer] of writers) {
-      if (candidate !== databasePath) {
-        writer.release();
-      }
-    }
     const selected = (useShared ? shared : local) ?? { version: AUTH_STORE_VERSION, profiles: {} };
     const observed = scopedSharedStore
       ? mergeAuthProfileStores(scopedSharedStore, selected)
@@ -210,21 +181,11 @@ export async function withAuthProfileUsage<T>(
       agentDir: useShared ? undefined : selectedDir,
       env,
     });
-    const credentialOwnerChanged = () =>
-      [...new Set([...(mode ? [] : [sharedPath]), ...(localPath ? [localPath] : [])])].some(
-        (sourcePath) => {
-          const previous = credentialTokens.get(sourcePath)!;
-          const current = credentialToken(sourcePath);
-          return current.revision !== previous.revision || current.known !== previous.known;
-        },
-      );
-    const assertOwnerCurrent = () => {
+    const sourcePaths = new Set([...(mode ? [] : [sharedPath]), ...(localPath ? [localPath] : [])]);
+    const assertCurrent = () => {
       context.admission.assertCurrent();
       context.maintenanceScope?.assertAdmission();
-      for (const sourcePath of new Set([
-        ...(mode ? [] : [sharedPath]),
-        ...(localPath ? [localPath] : []),
-      ])) {
+      for (const sourcePath of sourcePaths) {
         readers.get(sourcePath)?.assertCurrent();
       }
       const execution = executions.get(databasePath);
@@ -244,41 +205,14 @@ export async function withAuthProfileUsage<T>(
         hasCredentials: () => Object.keys(selected.profiles).length > 0,
       });
     };
-    const assertCurrent = () => {
-      assertOwnerCurrent();
-      if (credentialOwnerChanged()) {
-        throw new Error("Auth profile credential owner changed during usage preparation");
-      }
-    };
-    assertOwnerCurrent();
+    assertCurrent();
     const providerAliases = resolveProviderAuthAliasMap({ env });
     let recordingStarted = false;
     const operation = consume({
       observed,
-      inherited,
       async record(reduction, providerKey) {
         recordingStarted = true;
-        const reconcileRemovedProfile = async (): Promise<AuthProfileUsageReceipt | undefined> => {
-          assertOwnerCurrent();
-          if (!credentialOwnerChanged()) {
-            return undefined;
-          }
-          const currentRows = await read(databasePath);
-          assertOwnerCurrent();
-          const current = loadPersistedAuthProfileStoreFromRows(currentRows, databasePath) ?? {
-            version: AUTH_STORE_VERSION,
-            profiles: {},
-          };
-          const fresh = scopedSharedStore
-            ? mergeAuthProfileStores(scopedSharedStore, current)
-            : current;
-          if (fresh.profiles[profileId]) {
-            throw new Error("Auth profile credential owner changed during usage preparation");
-          }
-          // A preceding removal settles without dispatching a write or publishing stale rows.
-          return createAuthProfileUsageReceipt(fresh);
-        };
-        const input: AuthProfileUsageInput = structuredClone({
+        const input: AuthProfileUsageInput = {
           profileId,
           reduction,
           inherited,
@@ -286,7 +220,7 @@ export async function withAuthProfileUsage<T>(
           providerAliases,
           scopedSharedStore,
           expectedCredential: selected.profiles[profileId],
-        });
+        };
         let receipt: AuthProfileUsageReceipt | undefined;
         const publish = async (
           result: AuthProfileUsageResult,
@@ -301,7 +235,7 @@ export async function withAuthProfileUsage<T>(
           committed = receipt;
           if (receipt.result) {
             await publishInlineAuthFailure(owner, receipt, readTarget, assertCurrent);
-            store.usageStats = { ...store.usageStats, [profileId]: receipt.result.next };
+            store.usageStats = { ...store.usageStats, [profileId]: receipt.result };
             if (reduction.kind === "success" && !inherited) {
               store.lastGood = {
                 ...Object.fromEntries(
@@ -318,10 +252,6 @@ export async function withAuthProfileUsage<T>(
         };
         try {
           if (databasePath === context.admission.databasePath) {
-            const removed = await reconcileRemovedProfile();
-            if (removed) {
-              return removed;
-            }
             return await runOpenClawStateWorkerOperation(
               context,
               async (scope) =>
@@ -344,52 +274,45 @@ export async function withAuthProfileUsage<T>(
             throw captured.error;
           }
           const execution = captured.value;
-          return await writers.get(databasePath)!.run(async () => {
-            const removed = await reconcileRemovedProfile();
-            if (removed) {
-              return removed;
-            }
-            const client = await openOpenClawAgentSqliteWorkerStore<InlineAuthFailureOperations>(
-              target,
-              { execution },
-              {
-                moduleUrl: resolveRuntimeWorkerUrl(
-                  runtimeProcessEntrypoints.authProfileInlineUsage,
-                ),
-                input: {},
-              },
-            );
-            let executionResult: Result<AuthProfileUsageReceipt, unknown>;
-            try {
-              executionResult = {
-                ok: true,
-                value: await client.run(
-                  async (scope) =>
-                    publish(await scope.execute({ type: "authProfiles.usage", input }), () =>
-                      scope.execute({ type: "authProfiles.inlineSnapshot", input: undefined }),
-                    ),
-                  assertCurrent,
-                ),
-              };
-            } catch (error) {
-              executionResult = { ok: false, error };
-            }
-            try {
-              await client.close();
-            } catch (error) {
-              throw !executionResult.ok
-                ? new AggregateError(
-                    [executionResult.error, error],
-                    "Auth usage and client cleanup failed",
-                    { cause: executionResult.error },
-                  )
-                : error;
-            }
-            if (!executionResult.ok) {
-              throw executionResult.error;
-            }
-            return executionResult.value;
-          });
+          return await runOpenClawAgentWriteAdmission(
+            target,
+            async () => {
+              const client = await openOpenClawAgentSqliteWorkerStore<InlineAuthFailureOperations>(
+                target,
+                { execution },
+                {
+                  moduleUrl: resolveRuntimeWorkerUrl(
+                    runtimeProcessEntrypoints.authProfileInlineUsage,
+                  ),
+                  input: {},
+                },
+              );
+              return withAuthProfileCleanup(
+                () =>
+                  client.run(
+                    async (scope) =>
+                      publish(await scope.execute({ type: "authProfiles.usage", input }), () =>
+                        scope.execute({ type: "authProfiles.inlineSnapshot", input: undefined }),
+                      ),
+                    assertCurrent,
+                  ),
+                async (outcome) => {
+                  try {
+                    await client.close();
+                  } catch (error) {
+                    throw !outcome.ok
+                      ? new AggregateError(
+                          [outcome.error, error],
+                          "Auth usage and client cleanup failed",
+                          { cause: outcome.error },
+                        )
+                      : error;
+                  }
+                },
+              );
+            },
+            true,
+          );
         } catch (error) {
           const outcomeUnknown = hasSqliteWorkerOutcomeUnknown(error);
           if (receipt || outcomeUnknown) {
@@ -433,51 +356,40 @@ export async function withAuthProfileUsage<T>(
         }
       },
     });
-    // Provider probes plan outside the preparation FIFO; ready writes retain their position.
+    // Preparation orders overlapping health updates; reserve the database only
+    // once routing and provider observations have produced a ready write.
     if (!recordingStarted) {
       preparation.release();
-      for (const writer of writers.values()) {
-        writer.release();
-      }
     }
     return await operation;
   };
-  let outcome: Result<T, unknown>;
-  try {
-    outcome = { ok: true, value: await executeUsage() };
-  } catch (error) {
-    outcome = { ok: false, error };
-  }
-  try {
-    const released = await Promise.allSettled([
-      ...[...writers.values()].map((writer) => writer.dispose()),
-      ...[...readers.values()].map((reader) => reader.dispose()),
-      ...[...executions.values()].flatMap((execution) =>
-        execution.ok ? [execution.value.release()] : [],
-      ),
-    ]);
-    const failures = released.flatMap((result) =>
-      result.status === "rejected" ? [result.reason] : [],
-    );
-    if (failures.length) {
-      if (committed) {
-        reportCommittedInlineAuthFailure(
-          "auth usage committed before owner cleanup failed",
-          failures,
-        );
-      } else {
-        throw new AggregateError(
-          [...(!outcome.ok ? [outcome.error] : []), ...failures],
-          "Auth usage read owner cleanup failed",
-          { cause: (!outcome.ok ? outcome.error : undefined) ?? failures[0] },
-        );
+  return withAuthProfileCleanup(executeUsage, async (outcome) => {
+    try {
+      const released = await Promise.allSettled([
+        ...[...readers.values()].map((reader) => reader.dispose()),
+        ...[...executions.values()].flatMap((execution) =>
+          execution.ok ? [execution.value.release()] : [],
+        ),
+      ]);
+      const failures = released.flatMap((result) =>
+        result.status === "rejected" ? [result.reason] : [],
+      );
+      if (failures.length) {
+        if (committed) {
+          reportCommittedInlineAuthFailure(
+            "auth usage committed before owner cleanup failed",
+            failures,
+          );
+        } else {
+          throw new AggregateError(
+            [...(!outcome.ok ? [outcome.error] : []), ...failures],
+            "Auth usage read owner cleanup failed",
+            { cause: (!outcome.ok ? outcome.error : undefined) ?? failures[0] },
+          );
+        }
       }
+    } finally {
+      preparation?.release();
     }
-  } finally {
-    preparation?.release();
-  }
-  if (!outcome.ok) {
-    throw outcome.error;
-  }
-  return outcome.value;
+  });
 }

@@ -52,8 +52,9 @@ sidebarTitle: "Voice and speech"
     Talk over a ChatGPT subscription when the account has access (see the
     Realtime accordion).
     OpenAI TTS and GA realtime Voice Call, Gateway relay, and Discord sessions
-    still require a Platform API key. Codex GPT-Live supports ChatGPT OAuth
-    through the shared Gateway-owned bridge, including Discord and Voice Call.
+    still require a Platform API key. Codex GPT-Live supports ChatGPT OAuth and
+    pasted ChatGPT access-token profiles through the shared Gateway-owned bridge,
+    including Discord and Voice Call.
     </Note>
 
   </Accordion>
@@ -347,8 +348,11 @@ sidebarTitle: "Voice and speech"
     greetings and `voicecall.speak` requests use native session context.
 
     Both GPT-Live routes produce continuous audio and own interruption.
-    Gateway WebSocket and WebRTC use the same sample clock to send microphone
-    input at its recorded rate and supply silence between captures.
+    Gateway WebSocket PCM and WebRTC use the same sample clock to send microphone
+    input at its recorded rate and supply silence between captures. Public
+    GPT-Live phone input uses the carrier's existing cadence instead: retained
+    mono G.711 capture at 8 kHz drains when the session is ready, and subsequent
+    frames are forwarded without a second clock or injected silence.
     Discord does not add speaker-start cancellation or wait for a response-done
     event to play short replies. Explicit Discord `requireWakeName: true` or
     `consultPolicy: "always"` is rejected because GPT-Live cannot enforce those
@@ -489,15 +493,48 @@ sidebarTitle: "Voice and speech"
     OPENCLAW_LIVE_TEST=1 OPENCLAW_LIVE_GPT_LIVE=1 node --import tsx scripts/test-live.mts -- extensions/openai/realtime-quicksilver-gateway-bridge.live.test.ts
     ```
 
-    <Note>
-    GA backend OpenAI realtime bridges use the Realtime WebSocket session
-    shape, which does not accept `session.temperature`; the public GPT-Live API
-    uses its own Live session shape, while the Codex and unlisted/private routes
-    retain their separate transport contracts. Azure OpenAI
-    deployments remain available via `azureEndpoint` and `azureDeployment` and
-    keep the deployment-compatible session shape (including `temperature`).
+    #### Azure OpenAI Realtime deployments
+
+    Configure Azure on the Voice Call realtime provider. The Realtime
+    conversation deployment and input-transcription deployment may be different:
+
+    ```json5
+    {
+      plugins: {
+        entries: {
+          "voice-call": {
+            config: {
+              realtime: {
+                providers: {
+                  openai: {
+                    azureEndpoint: "https://<resource>.openai.azure.com/openai",
+                    azureDeployment: "<realtime-deployment>",
+                    apiKey: "<azure-resource-key>",
+                    inputTranscriptionModel: "<transcription-deployment>",
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    }
+    ```
+
+    Azure Realtime uses the GA WebSocket route
+    `/openai/v1/realtime?model=<realtime-deployment>` and sends the GA
+    `session.update` payload. Authentication uses the Azure `api-key` header.
+    Microsoft deprecated the Preview Realtime API on April 30, 2026 and directs
+    applications to migrate to GA. If `azureApiVersion` is explicitly set, the
+    bridge preserves the preview WebSocket route and matching session payload;
+    remove that setting to use the GA route and session payload instead. The GA
+    session configuration does not send `temperature`; the preview session
+    continues to use `temperature` when configured.
+
+    `inputTranscriptionModel` selects the Azure deployment used only for input
+    transcription. If omitted, Azure defaults to `whisper-1`; the value must
+    identify a transcription deployment available on the Azure resource.
     Supports bidirectional tool calling and G.711 u-law audio.
-    </Note>
 
     <Note>
     Realtime voice is selected when the session is created. GA Realtime allows

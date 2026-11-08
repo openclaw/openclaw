@@ -1,20 +1,11 @@
 // Test helper for installing bundled channel plugins into the active plugin registry.
 import {
-  getBundledChannelPlugin,
-  listBundledChannelPluginIds,
+  listBundledChannelPlugins,
   setBundledChannelRuntime,
 } from "../channels/plugins/bundled.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import type { PluginRuntime } from "../plugins/runtime/index.js";
 import { createTestRegistry } from "../test-utils/channel-plugins.js";
-
-function resolveChannelPluginsForTests(onlyPluginIds?: readonly string[]) {
-  const ids = onlyPluginIds ?? listBundledChannelPluginIds();
-  return ids.flatMap((id) => {
-    const plugin = getBundledChannelPlugin(id);
-    return plugin ? [plugin] : [];
-  });
-}
 
 function createChannelTestRuntime(): PluginRuntime {
   return {
@@ -24,8 +15,9 @@ function createChannelTestRuntime(): PluginRuntime {
   } as PluginRuntime;
 }
 
-function setChannelPluginRegistryForTests(onlyPluginIds?: readonly string[]): void {
-  const plugins = resolveChannelPluginsForTests(onlyPluginIds);
+/** Reset the active plugin registry to bundled channel plugins for command tests. */
+export function setDefaultChannelPluginRegistryForTests(): void {
+  const plugins = listBundledChannelPlugins();
   const runtime = createChannelTestRuntime();
   for (const plugin of plugins) {
     try {
@@ -41,9 +33,4 @@ function setChannelPluginRegistryForTests(onlyPluginIds?: readonly string[]): vo
     source: "test" as const,
   })) as unknown as Parameters<typeof createTestRegistry>[0];
   setActivePluginRegistry(createTestRegistry(channels));
-}
-
-/** Reset the active plugin registry to bundled channel plugins for command tests. */
-export function setDefaultChannelPluginRegistryForTests(): void {
-  setChannelPluginRegistryForTests();
 }

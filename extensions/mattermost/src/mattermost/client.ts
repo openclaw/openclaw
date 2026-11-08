@@ -3,12 +3,9 @@ import { createChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-i
 import {
   collectErrorGraphCandidates,
   PlatformMessageNotDispatchedError,
-  readErrorName,
 } from "openclaw/plugin-sdk/error-runtime";
-import { buildTimeoutAbortSignal } from "openclaw/plugin-sdk/extension-shared";
 import {
   captureChannelReadAuthority,
-  captureEffectAuthority,
   responseWithRelease,
 } from "openclaw/plugin-sdk/fetch-runtime";
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
@@ -20,7 +17,7 @@ import {
   readResponseTextPrefix,
   readResponseWithLimit,
 } from "openclaw/plugin-sdk/response-limit-runtime";
-import { retryAsync } from "openclaw/plugin-sdk/retry-runtime";
+import { isTransientNetworkError, retryAsync } from "openclaw/plugin-sdk/retry-runtime";
 import {
   fetchWithSsrFGuard,
   ssrfPolicyFromPrivateNetworkOptIn,
@@ -44,7 +41,6 @@ const MATTERMOST_REQUEST_TIMEOUT_MS = 30_000;
 // generous text budget but still bound it instead of buffering the whole stream.
 const MATTERMOST_TEXT_RESPONSE_LIMIT_BYTES = 64 * 1024;
 
-export type MattermostFetch = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
 type MattermostRequestInit = RequestInit & {
   timeoutMs?: number;
   /**
@@ -165,7 +161,7 @@ export async function readMattermostError(
     chunkTimeoutMs: 10_000,
     onIdleTimeout: ({ chunkTimeoutMs }) =>
       new Error(`error body read stalled for ${chunkTimeoutMs}ms`),
-  });
+  }).catch(() => ({ text: "error response body unavailable", truncated: false }));
   let detail = text;
   if (contentType.includes("application/json")) {
     try {
@@ -189,9 +185,6 @@ export async function readMattermostError(
 export function createMattermostClient(params: {
   baseUrl: string;
   botToken: string;
-  fetchImpl?: MattermostFetch;
-  /** Timeout for REST requests in milliseconds (default: 30000). */
-  timeoutMs?: number;
   /** Allow requests to private/internal IPs (self-hosted/LAN deployments). */
   allowPrivateNetwork?: boolean;
   assertRequestCurrent?: () => void;
@@ -202,7 +195,6 @@ export function createMattermostClient(params: {
   }
   const apiBaseUrl = `${baseUrl}/api/v4`;
   const token = params.botToken.trim();
-  const requestTimeoutMs = resolveTimerTimeoutMs(params.timeoutMs, MATTERMOST_REQUEST_TIMEOUT_MS);
   const assertSenderCurrent = params.assertRequestCurrent;
   let postDispatchStarted = false;
   const assertRequestCurrent = assertSenderCurrent
@@ -224,12 +216,7 @@ export function createMattermostClient(params: {
         }
       }
     : undefined;
-  // When no custom fetchImpl is provided (production path), use an SSRF-guarded wrapper
-  // that validates the target URL before making the request (DNS rebinding protection etc.).
-  // A custom fetchImpl is accepted for testing and special cases.
-  const externalFetchImpl = params.fetchImpl;
-
-  const guardedFetchImpl = async (
+  const fetchImpl = async (
     input: RequestInfo | URL,
     init?: MattermostRequestInit,
   ): Promise<Response> => {
@@ -239,7 +226,7 @@ export function createMattermostClient(params: {
     const url =
       typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
     const { timeoutMs: initTimeoutMs, isMessagePost, ...requestInit } = init ?? {};
-    const timeoutMs = resolveTimerTimeoutMs(initTimeoutMs, requestTimeoutMs);
+    const timeoutMs = resolveTimerTimeoutMs(initTimeoutMs, MATTERMOST_REQUEST_TIMEOUT_MS);
     const { response, release } = await fetchWithSsrFGuard({
       url,
       init: requestInit,
@@ -257,47 +244,6 @@ export function createMattermostClient(params: {
     });
     return responseWithRelease(response, release);
   };
-
-  const timedExternalFetchImpl: typeof guardedFetchImpl | undefined = externalFetchImpl
-    ? async (input, init) => {
-        const effect = captureEffectAuthority();
-        const assertReadAuthority = captureChannelReadAuthority();
-        assertReadAuthority?.();
-        const url =
-          typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
-        const { timeoutMs: initTimeoutMs, isMessagePost, ...requestInit } = init ?? {};
-        const timeoutMs = resolveTimerTimeoutMs(initTimeoutMs, requestTimeoutMs);
-        const { signal: timeoutSignal, cleanup } = buildTimeoutAbortSignal({
-          timeoutMs,
-          operation: "mattermost-api",
-          url,
-        });
-        const callerSignal = requestInit.signal ?? undefined;
-        const signal =
-          callerSignal && timeoutSignal
-            ? AbortSignal.any([callerSignal, timeoutSignal])
-            : (callerSignal ?? timeoutSignal);
-        try {
-          const response = await effect.initiate(() => {
-            assertReadAuthority?.();
-            assertRequestCurrent?.();
-            signal?.throwIfAborted();
-            if (isMessagePost) {
-              postDispatchStarted = true;
-            }
-            return externalFetchImpl(input, { ...requestInit, signal });
-          });
-          // Match guarded production fetches: retain cancellation and the
-          // request deadline until the custom response body is consumed.
-          return responseWithRelease(response, async () => cleanup());
-        } catch (error) {
-          cleanup();
-          throw error;
-        }
-      }
-    : undefined;
-
-  const fetchImpl = timedExternalFetchImpl ?? guardedFetchImpl;
 
   const request = async <T>(path: string, init?: MattermostRequestInit): Promise<T> => {
     const url = buildMattermostApiUrl(baseUrl, path);
@@ -387,6 +333,7 @@ export async function fetchMattermostChannelPosts(
     limit?: number;
     before?: string;
     after?: string;
+    skipFetchThreads?: boolean;
   } = {},
 ): Promise<{ messages: MattermostPost[]; hasMore: boolean }> {
   const before = normalizeOptionalString(options.before);
@@ -405,6 +352,9 @@ export async function fetchMattermostChannelPosts(
   }
   if (after) {
     query.set("after", after);
+  }
+  if (options.skipFetchThreads) {
+    query.set("skipFetchThreads", "true");
   }
   const response = await client.request<unknown>(
     `/channels/${encodeURIComponent(channelId)}/posts?${query.toString()}`,
@@ -455,33 +405,6 @@ export type CreateDmChannelRetryOptions = NonNullable<MattermostAccountConfig["d
   onRetry?: (attempt: number, delayMs: number, error: Error) => void;
 };
 
-const RETRYABLE_NETWORK_ERROR_CODES = new Set([
-  "ECONNRESET",
-  "ECONNREFUSED",
-  "ETIMEDOUT",
-  "ESOCKETTIMEDOUT",
-  "ECONNABORTED",
-  "ENOTFOUND",
-  "EAI_AGAIN",
-  "EHOSTUNREACH",
-  "ENETUNREACH",
-  "EPIPE",
-  "UND_ERR_CONNECT_TIMEOUT",
-  "UND_ERR_DNS_RESOLVE_FAILED",
-  "UND_ERR_CONNECT",
-  "UND_ERR_SOCKET",
-  "UND_ERR_HEADERS_TIMEOUT",
-  "UND_ERR_BODY_TIMEOUT",
-]);
-
-const RETRYABLE_NETWORK_ERROR_NAMES = new Set([
-  "AbortError",
-  "TimeoutError",
-  "ConnectTimeoutError",
-  "HeadersTimeoutError",
-  "BodyTimeoutError",
-]);
-
 const RETRYABLE_NETWORK_MESSAGE_SNIPPETS = [
   "network error",
   "timeout",
@@ -516,23 +439,12 @@ export async function createMattermostDirectChannelWithRetry(
   const timeoutMs = resolveTimerTimeoutMs(rawTimeoutMs, 30000);
 
   return await retryAsync(
-    async () => {
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
-      try {
-        return await client.request<MattermostChannel>("/channels/direct", {
-          method: "POST",
-          body: JSON.stringify(userIds),
-          signal: controller.signal,
-          timeoutMs,
-        });
-      } catch (err) {
-        // Normalize before rethrowing so shouldRetry/onRetry below always see Errors.
-        throw err instanceof Error ? err : new Error(String(err));
-      } finally {
-        clearTimeout(timeoutId);
-      }
-    },
+    () =>
+      client.request<MattermostChannel>("/channels/direct", {
+        method: "POST",
+        body: JSON.stringify(userIds),
+        timeoutMs,
+      }),
     {
       attempts: maxRetries + 1,
       // Core retry raises maxDelayMs to the minDelayMs floor, but the schema
@@ -559,68 +471,28 @@ export function isRetryableError(error: Error): boolean {
     current.reason,
     ...(Array.isArray(current.errors) ? current.errors : []),
   ]);
-  const messages = candidates.map((candidate) =>
-    normalizeLowercaseStringOrEmpty(readStringField(asOptionalObjectRecord(candidate), "message")),
-  );
-
   // Provider status takes precedence over statuses mentioned in its details and network errors.
-  // Require the API prefix so port numbers and IP octets cannot become HTTP statuses.
-  if (messages.some((message) => /mattermost api 5\d{2}\b/.test(message))) {
+  // The first status in the outermost provider error is authoritative, including wrapped errors.
+  for (const candidate of candidates) {
+    const status = parseMattermostApiStatus(candidate);
+    if (status !== undefined) {
+      return status === 429 || (status >= 500 && status < 600);
+    }
+  }
+
+  if (isTransientNetworkError(error)) {
     return true;
   }
 
-  if (
-    messages.some(
-      (message) => /mattermost api 429\b/.test(message) || message.includes("too many requests"),
-    )
-  ) {
-    return true;
-  }
-
-  if (messages.some((message) => /mattermost api 4\d{2}\b/.test(message))) {
-    return false;
-  }
-
-  const hasMattermostApiStatusCode = messages.some((message) =>
-    /mattermost api \d{3}\b/.test(message),
-  );
-  if (hasMattermostApiStatusCode) {
-    return false;
-  }
-
-  if (
-    candidates.some((candidate) =>
-      RETRYABLE_NETWORK_ERROR_CODES.has(readErrorCode(candidate) ?? ""),
-    )
-  ) {
-    return true;
-  }
-
-  if (candidates.some((candidate) => RETRYABLE_NETWORK_ERROR_NAMES.has(readErrorName(candidate)))) {
-    return true;
-  }
-
-  return messages.some((message) =>
-    RETRYABLE_NETWORK_MESSAGE_SNIPPETS.some((pattern) => message.includes(pattern)),
-  );
-}
-
-function readErrorCode(error: unknown): string | undefined {
-  if (!error || typeof error !== "object") {
-    return undefined;
-  }
-  const { code, errno } = error as {
-    code?: unknown;
-    errno?: unknown;
-  };
-  const raw = typeof code === "string" && code.trim() ? code : errno;
-  if (typeof raw === "string" && raw.trim()) {
-    return raw.trim().toUpperCase();
-  }
-  if (typeof raw === "number" && Number.isFinite(raw)) {
-    return String(raw);
-  }
-  return undefined;
+  return candidates.some((candidate) => {
+    const message = normalizeLowercaseStringOrEmpty(
+      readStringField(asOptionalObjectRecord(candidate), "message"),
+    );
+    return (
+      message.includes("too many requests") ||
+      RETRYABLE_NETWORK_MESSAGE_SNIPPETS.some((pattern) => message.includes(pattern))
+    );
+  });
 }
 
 export async function createMattermostPost(

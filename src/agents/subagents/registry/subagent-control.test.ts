@@ -4,42 +4,51 @@ import { mockSessionReplacementForStore } from "./subagent-control.leaf-mocks.te
 // oxfmt-ignore
 import { runSubagentStateWorkerOperation, useSubagentControlFixture, useSubagentControlSessionStores } from "./subagent-control.test-support.js";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../../../test/helpers/promise.js";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+} from "../../../../test/helpers/promise.js";
 import { stopSubagentsForRequester } from "../../../auto-reply/reply/abort-operation.js";
-import { tryFastAbortFromMessage } from "../../../auto-reply/reply/abort.js";
-import { createReplyOperation } from "../../../auto-reply/reply/reply-run-registry.js";
-import { buildTestCtx } from "../../../auto-reply/reply/test-ctx.js";
 import { cleanupBrowserSessionsForLifecycleEnd } from "../../../browser-lifecycle-cleanup.js";
+import { captureRuntimeConfigAsyncReader } from "../../../config/config.js";
 import {
   loadSessionEntry,
   replaceSessionEntrySync,
 } from "../../../config/sessions/session-accessor.js";
 import { applySessionEntryExactReplacements } from "../../../config/sessions/session-accessor.sqlite-replacement-projection.js";
 import type { SessionEntry } from "../../../config/sessions/types.js";
-import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { ensureContextEnginesInitialized } from "../../../context-engine/init.js";
 import { resolveContextEngine } from "../../../context-engine/registry.js";
+import * as controllerLifecycle from "../../../sessions/session-controller.lifecycle.js";
 import {
-  beginSessionWorkAdmission,
-  consumeSessionWorkAdmissionHandoff,
-  getActiveSessionLifecycleMutationCount,
-} from "../../../sessions/session-lifecycle-admission.js";
+  consumeSessionEffectHandoff,
+  isSessionMutationActive,
+  SESSION_CONTROLLER_DRAIN_TIMEOUT_MS,
+} from "../../../sessions/session-controller.lifecycle.js";
 import { loadAgentRuntimePluginRegistryHandle } from "../../runtime-plugins.js";
 import {
   createSubagentRunRecord,
   type SubagentRunRecordOverrides,
 } from "../../subagent-test-fixtures.test-helpers.js";
-import { enqueueSwarmRun, releaseSwarmRun } from "../swarm/swarm-scheduler.js";
-import { testing as swarmSchedulerTesting } from "../swarm/swarm-scheduler.test-support.js";
+import { startControlProducer as startProducer } from "./subagent-control-native.test-support.js";
 import * as killSession from "./subagent-control-session.js";
-import { registerAdmissionDrainControlTests } from "./subagent-control.admission-drain.test-support.js";
 import {
-  buildControlledSubagentRunsReadContext,
-  killAllControlledSubagentRuns,
-  killSubagentRunAdmin,
-} from "./subagent-control.js";
-import { registerLateDescendantControlTests } from "./subagent-control.late-registration.test-support.js";
-import { registerQueuedReservationFailureTests } from "./subagent-control.queued-failure.test-support.js";
+  beginControlAdmission,
+  enqueueControlRun,
+} from "./subagent-control.fixtures.test-support.js";
+import { killAllControlledSubagentRuns, killSubagentRunAdmin } from "./subagent-control.js";
+import {
+  registerAdmissionDrainControlTests,
+  registerLateDescendantControlTests,
+  registerQueuedReservationFailureTests,
+} from "./subagent-control.late-registration.test-support.js";
+import { registerControlledSubagentReadTests } from "./subagent-control.reads.test-support.js";
+import {
+  registerQueuedStopControlTests,
+  registerRequestFrontierControlTests,
+} from "./subagent-control.stop-selection.test-support.js";
+import { registerSuccessorAdmissionControlTests } from "./subagent-control.successor-admission.test-support.js";
 import { SUBAGENT_KILL_TASK_ERROR } from "./subagent-control.types.js";
 import {
   SUBAGENT_ENDED_REASON_COMPLETE,
@@ -47,46 +56,55 @@ import {
 } from "./subagent-lifecycle-events.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
 import { mutateSubagentRuns } from "./subagent-registry-persistence.js";
-import { replaceSubagentRunAfterSteerCore, startQueuedSubagentRun } from "./subagent-registry.js";
+import { startQueuedSubagentRun } from "./subagent-registry.js";
 import {
   addSubagentRunForTests,
-  getSubagentRunByChildSessionKey,
+  getSubagentRunByChildSessionKey as latestRun,
 } from "./subagent-registry.test-helpers.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
-const fixture = useSubagentControlFixture();
-const { cfgWithSessionStore, writeSessionStoreFixture } = useSubagentControlSessionStores();
+const fixture = useSubagentControlFixture({ reuseStateDir: true });
+const { cfgWithSessionStore, writeSessionStoreFixture: writeSessionStore } =
+  useSubagentControlSessionStores();
+
+function withFixtureRevision<Entry extends { sessionId?: string; lifecycleRevision?: string }>(
+  entry: Entry,
+): Entry {
+  return entry.sessionId && !Object.hasOwn(entry, "lifecycleRevision")
+    ? { ...entry, lifecycleRevision: `${entry.sessionId}-revision` }
+    : entry;
+}
+
+function writeSessionStoreFixture(label: string, store: Record<string, unknown>) {
+  return writeSessionStore(
+    label,
+    Object.fromEntries(
+      Object.entries(store).map(([key, entry]) => [
+        key,
+        entry &&
+        typeof entry === "object" &&
+        "sessionId" in entry &&
+        typeof entry.sessionId === "string"
+          ? withFixtureRevision({ ...entry, sessionId: entry.sessionId })
+          : entry,
+      ]),
+    ),
+  );
+}
 
 type ControlRuntime = typeof import("./subagent-control.runtime.js");
 
 const controlRuntimeMocks = vi.hoisted(() => ({
-  abortEmbeddedAgentRun: vi.fn<ControlRuntime["abortEmbeddedAgentRun"]>(() => false),
-  isEmbeddedAgentRunActive: vi.fn<ControlRuntime["isEmbeddedAgentRunActive"]>(() => false),
-  clearSessionLifecycleQueues: vi.fn<ControlRuntime["clearSessionLifecycleQueues"]>(() => ({
-    followupCleared: 0,
-    laneCleared: 0,
-    keys: [],
-  })),
+  clearSessionQueues: vi.fn<ControlRuntime["clearSessionQueues"]>(() => []),
 }));
 
 vi.mock("./subagent-control.runtime.js", () => controlRuntimeMocks);
 
 function setSubagentControlDepsForTest(overrides: Partial<ControlRuntime> = {}) {
-  const { isEmbeddedAgentRunActive: isActive, clearSessionLifecycleQueues: clearQueues } =
-    overrides;
-  controlRuntimeMocks.abortEmbeddedAgentRun.mockReset();
-  controlRuntimeMocks.isEmbeddedAgentRunActive.mockReset();
-  controlRuntimeMocks.clearSessionLifecycleQueues.mockReset();
-  // Default to the canonical store; individual race tests replace only their fault boundary.
+  controlRuntimeMocks.clearSessionQueues.mockReset();
   vi.mocked(applySessionEntryExactReplacements).mockReset();
-  if (overrides.abortEmbeddedAgentRun) {
-    controlRuntimeMocks.abortEmbeddedAgentRun.mockImplementation(overrides.abortEmbeddedAgentRun);
-  }
-  if (isActive) {
-    controlRuntimeMocks.isEmbeddedAgentRunActive.mockImplementation(isActive);
-  }
-  if (clearQueues) {
-    controlRuntimeMocks.clearSessionLifecycleQueues.mockImplementation(clearQueues);
+  if (overrides.clearSessionQueues) {
+    controlRuntimeMocks.clearSessionQueues.mockImplementation(overrides.clearSessionQueues);
   }
 }
 
@@ -99,6 +117,42 @@ function controllerFor(controllerSessionKey = "agent:main:main") {
   };
 }
 
+function adminKill(
+  sessionKey: string,
+  storePath?: string,
+  expected: Partial<Parameters<typeof killSubagentRunAdmin>[0]> = {},
+) {
+  return killSubagentRunAdmin({ cfg: cfgWithSessionStore(storePath), sessionKey, ...expected });
+}
+
+function controlledKill(
+  runs: SubagentRunRecord[],
+  storePath?: string,
+  overrides: Partial<Parameters<typeof killAllControlledSubagentRuns>[0]> = {},
+) {
+  return killAllControlledSubagentRuns({
+    cfg: cfgWithSessionStore(storePath),
+    controller: controllerFor(),
+    runs,
+    ...overrides,
+  });
+}
+
+function runOwner(
+  controllerSessionKey: string,
+  requesterSessionKey = controllerSessionKey,
+  requesterDisplayKey = requesterSessionKey,
+) {
+  return { controllerSessionKey, requesterSessionKey, requesterDisplayKey };
+}
+
+const adminOwner = runOwner("agent:main:controller", "agent:main:requester", "requester");
+const otherOwner = runOwner(
+  "agent:main:other-controller",
+  "agent:main:other-requester",
+  "other-requester",
+);
+
 function resetRegistryLeafMocks() {
   vi.mocked(cleanupBrowserSessionsForLifecycleEnd).mockReset();
   vi.mocked(ensureContextEnginesInitialized).mockReset();
@@ -107,7 +161,8 @@ function resetRegistryLeafMocks() {
   vi.mocked(resolveContextEngine).mockReset();
 }
 
-beforeEach(() => {
+beforeEach(async () => {
+  await captureRuntimeConfigAsyncReader()();
   setSubagentControlDepsForTest();
   resetRegistryLeafMocks();
   vi.mocked(cleanupBrowserSessionsForLifecycleEnd).mockResolvedValue(undefined);
@@ -126,6 +181,9 @@ async function addRun(overrides: SubagentRunRecordOverrides) {
     createdAt: Date.now() - 5_000,
     startedAt: Date.now() - 4_000,
     ...overrides,
+    ...(overrides.childSessionIdentity
+      ? { childSessionIdentity: withFixtureRevision(overrides.childSessionIdentity) }
+      : {}),
   });
   return subagentRuns.get(overrides.runId)!;
 }
@@ -134,23 +192,12 @@ function writeSession(label: string, sessionKey: string, entry: Partial<SessionE
   return writeSessionStoreFixture(label, { [sessionKey]: entry });
 }
 
-function onPersistenceWrite(beforeWrite: () => void) {
-  fixture.worker.mockImplementation((context, operation, options) =>
-    runSubagentStateWorkerOperation(
-      context,
-      (scope) =>
-        operation({
-          ...scope,
-          execute: async (command) => {
-            if (command.type === "subagents.persistChanges") {
-              beforeWrite();
-            }
-            return scope.execute(command);
-          },
-        }),
-      options,
-    ),
-  );
+function onPersistenceWrite(onWrite: () => void, phase: "before" | "after" = "before") {
+  fixture.interceptWorkerCommand((command) => {
+    if (command.type === "subagents.persistChanges") {
+      onWrite();
+    }
+  }, phase);
 }
 
 function publishRun(runId: string, update: (current: SubagentRunRecord) => SubagentRunRecord) {
@@ -160,265 +207,168 @@ function publishRun(runId: string, update: (current: SubagentRunRecord) => Subag
   }));
 }
 
-describe("killSubagentRunAdmin", () => {
-  it.each([
-    {
-      name: "kills a subagent by session key without requester ownership checks",
-      suffix: "worker",
-      task: "do the work",
-      failure: "none",
-    },
-    {
-      name: "does not mark a finalizing run killed when its abort is rejected",
-      suffix: "worker-finalizing",
-      task: "finish the reply",
-      failure: "abort",
-    },
-    {
-      name: "does not mutate the run when the durable kill intent cannot persist",
-      suffix: "worker-store-fail",
-      task: "do the work",
-      failure: "intent",
-    },
-  ])("$name", async ({ suffix, task, failure }) => {
-    const childSessionKey = `agent:main:subagent:${suffix}`;
-    const runId = `run-${suffix}`;
-    const storePath = await writeSession(`admin-kill-${suffix}`, childSessionKey, {
-      sessionId: `sess-${suffix}`,
-      updatedAt: Date.now(),
-    });
-    await addRun({
-      runId,
-      childSessionKey,
-      controllerSessionKey: "agent:main:other-controller",
-      requesterSessionKey: "agent:main:other-requester",
-      requesterDisplayKey: "other-requester",
-      task,
-    });
-    if (failure === "abort") {
-      setSubagentControlDepsForTest({ isEmbeddedAgentRunActive: () => true });
-    } else if (failure === "intent") {
-      onPersistenceWrite(() => {
-        throw new Error("session store unavailable");
-      });
-    }
+async function expectRunning(sessionKey: string, expected: Partial<SubagentRunRecord>) {
+  const run = await latestRun(sessionKey);
+  expect(run).toMatchObject({ ...expected, execution: { status: "running" } });
+  expect(run?.execution.endedAt).toBeUndefined();
+}
 
-    const result = await killSubagentRunAdmin({
-      cfg: cfgWithSessionStore(storePath),
-      sessionKey: childSessionKey,
-    });
-    const run = await getSubagentRunByChildSessionKey(childSessionKey);
-    expect(result).toMatchObject({
-      found: true,
-      killed: failure === "none",
-      runId,
-      sessionKey: childSessionKey,
-    });
-    if (failure === "none") {
-      expect(loadSessionEntry({ storePath, sessionKey: childSessionKey })?.abortedLastRun).toBe(
-        true,
-      );
-      expect(run?.execution.endedAt).toBeTypeOf("number");
-    } else {
-      expect(run?.execution.endedAt).toBeUndefined();
-      if (failure === "abort") {
-        expect(
-          loadSessionEntry({ storePath, sessionKey: childSessionKey })?.abortedLastRun,
-        ).toBeUndefined();
-      } else {
-        expect(result).toMatchObject({
-          error: expect.stringContaining("Failed to persist subagent kill intent"),
-        });
-        expect(run).toMatchObject({ runId, execution: { status: "running" } });
-      }
-    }
+function runFixture(suffix: string, overrides: Partial<SubagentRunRecordOverrides> = {}) {
+  return createSubagentRunRecord({
+    runId: `run-${suffix}`,
+    childSessionKey: `agent:main:subagent:${suffix}`,
+    childSessionIdentity: { sessionId: `sess-${suffix}` },
+    controllerSessionKey: "agent:main:main",
+    createdAt: Date.now() - 5_000,
+    startedAt: Date.now() - 4_000,
+    ...overrides,
   });
+}
+
+async function storedRun(
+  suffix: string,
+  overrides: Partial<SubagentRunRecordOverrides> = {},
+  session: Partial<SessionEntry> = {},
+) {
+  const input = runFixture(suffix, overrides);
+  const storePath = await writeSession(suffix, input.childSessionKey, {
+    ...input.childSessionIdentity,
+    updatedAt: Date.now(),
+    ...session,
+  });
+  const run = await addRun(input);
+  return { run, storePath, childSessionKey: run.childSessionKey };
+}
+
+const controlTestDeps = {
+  addRun,
+  cfgWithSessionStore,
+  controllerFor,
+  setSubagentControlDepsForTest,
+  writeSessionStoreFixture,
+  resetRegistryLeafMocks,
+};
+
+describe("killSubagentRunAdmin", () => {
+  it.each(["verified", "legacy-unverified", "stale-predecessor"] as const)(
+    "does not kill a finalizing %s run",
+    async (authority) => {
+      const suffix = `worker-finalizing-${authority}`;
+      const sessionId = `sess-${suffix}`;
+      const {
+        run: { runId },
+        storePath,
+        childSessionKey,
+      } = await storedRun(
+        suffix,
+        {
+          ...otherOwner,
+          task: "finish the reply",
+          ...(authority === "legacy-unverified" ? { childSessionIdentity: undefined } : {}),
+          ...(authority === "stale-predecessor"
+            ? { endedAt: Date.now() - 1_000, outcome: { status: "ok" as const } }
+            : {}),
+        },
+        { sessionId },
+      );
+      if (authority === "stale-predecessor") {
+        await addRun({
+          runId: "stale-predecessor",
+          childSessionKey,
+          childSessionIdentity: { sessionId },
+          ...otherOwner,
+          createdAt: 1,
+          startedAt: 2,
+        });
+        expect(await adminKill(childSessionKey, storePath)).toMatchObject({
+          found: true,
+          killed: false,
+          runId,
+          sessionKey: childSessionKey,
+          targetState: { state: "finalizing" },
+        });
+        return;
+      }
+      const { operation, cancel } = startProducer(
+        childSessionKey,
+        sessionId,
+        storePath,
+        undefined,
+        runId,
+      );
+      operation.freezeAbort();
+      const result = await adminKill(childSessionKey, storePath);
+      expect(result).toMatchObject({
+        found: true,
+        killed: false,
+        runId,
+        sessionKey: childSessionKey,
+      });
+      expect(cancel).not.toHaveBeenCalled();
+      expect(operation).toMatchObject({ abortSignal: { aborted: false }, result: null });
+      expect((await latestRun(childSessionKey))?.execution.endedAt).toBeUndefined();
+      expect(
+        loadSessionEntry({ storePath, sessionKey: childSessionKey })?.abortedLastRun,
+      ).toBeUndefined();
+    },
+  );
 
   it("returns found=false when the session key is not tracked as a subagent run", async () => {
-    const result = await killSubagentRunAdmin({
-      cfg: cfgWithSessionStore(),
-      sessionKey: "agent:main:subagent:missing",
-    });
+    const result = await adminKill("agent:main:subagent:missing");
 
     expect(result).toEqual({ found: false, killed: false });
   });
 
   it.each([
+    { expectedRunId: "run-stale" },
+    { expectedRunId: "run-replacement", expectedGeneration: 1 },
     {
-      identity: "run ID",
-      runId: "run-current",
-      suffix: "replacement",
-      generation: undefined,
-      constraints: [{ expectedRunId: "run-stale" }],
+      expectedRunId: "run-replacement",
+      expectedGeneration: 2,
+      expectedOwnerKey: "agent:main:other",
     },
-    {
-      identity: "generation or owner",
-      runId: "run-reused",
-      suffix: "same-id-replacement",
-      generation: 2,
-      constraints: [
-        { expectedRunId: "run-reused", expectedGeneration: 1, expectedOwnerKey: "agent:main:main" },
-        {
-          expectedRunId: "run-reused",
-          expectedGeneration: 2,
-          expectedOwnerKey: "agent:main:other",
-        },
-      ],
-    },
-  ])(
-    "does not kill a replacement with a mismatched $identity",
-    async ({ runId, suffix, generation, constraints }) => {
-      const childSessionKey = `agent:main:subagent:${suffix}`;
-      await addRun({
-        runId,
-        childSessionKey,
-        task: "replacement work",
-        generation,
-        createdAt: Date.now() - 1_000,
-        startedAt: Date.now() - 900,
-      });
-      for (const expected of constraints) {
-        expect(
-          await killSubagentRunAdmin({
-            cfg: cfgWithSessionStore(),
-            sessionKey: childSessionKey,
-            ...expected,
-          }),
-        ).toEqual({ found: false, killed: false });
-      }
-      expect(
-        (await getSubagentRunByChildSessionKey(childSessionKey))?.execution.endedAt,
-      ).toBeUndefined();
-    },
-  );
-
-  it("does not adopt a restart-recovery successor when an exact run id is required", async () => {
-    const childSessionKey = "agent:main:subagent:fenced-recovery-successor";
-    const sessionId = "sess-fenced-recovery-successor";
-    const recoveryRunId = "run-fenced-recovery-successor";
-    const receipt = {
-      sessionId,
-      sessionMarker: `${sessionId}:1`,
-      idempotencyKey: recoveryRunId,
-      phase: "accepted" as const,
-    };
-    const source = await addRun({
-      runId: "run-fenced-recovery-source",
-      childSessionKey,
-      controllerSessionKey: "agent:main:controller",
-      requesterSessionKey: "agent:main:requester",
-      requesterDisplayKey: "requester",
-      task: "source recovery task",
-      completion: { required: false },
-      delivery: { status: "pending" },
-      generation: 1,
-      createdAt: Date.now() - 2_000,
-      execution: {
-        status: "interrupted",
-        startedAt: Date.now() - 1_000,
-        restartRecovery: receipt,
-      },
+  ])("rejects mismatched admin selection %j", async (expected) => {
+    const { childSessionKey } = await addRun(runFixture("replacement", { generation: 2 }));
+    expect(await adminKill(childSessionKey, undefined, expected)).toEqual({
+      found: false,
+      killed: false,
     });
-    const storePath = await writeSession("fenced-recovery-successor", childSessionKey, {
-      sessionId,
-      updatedAt: Date.now(),
-      abortedLastRun: true,
-    });
-    const interrupted = createDeferred();
-    const admission = await beginSessionWorkAdmission({
-      scope: storePath,
-      identities: [childSessionKey, sessionId],
-      assertAllowed: () => {},
-      onInterrupt: () => interrupted.resolve(),
-    });
-    const handoffId = admission.createHandoff();
-    const abort = vi.fn(() => true);
-    setSubagentControlDepsForTest({
-      isEmbeddedAgentRunActive: () => true,
-      abortEmbeddedAgentRun: abort,
-    });
-
-    const pendingKill = killSubagentRunAdmin({
-      cfg: cfgWithSessionStore(storePath),
-      sessionKey: childSessionKey,
-      expectedRunId: source.runId,
-    });
-    let adopted: ReturnType<typeof consumeSessionWorkAdmissionHandoff>;
-    try {
-      await interrupted.promise;
-      expect(getActiveSessionLifecycleMutationCount()).toBeGreaterThan(0);
-      adopted = consumeSessionWorkAdmissionHandoff({
-        handoffId,
-        scope: storePath,
-        identities: [childSessionKey, sessionId],
-        onInterrupt: () => undefined,
-      });
-      expect(
-        await replaceSubagentRunAfterSteerCore({
-          previousRunId: source.runId,
-          nextRunId: recoveryRunId,
-          expected: source,
-        }),
-      ).toBe(true);
-      expect(adopted).toBeDefined();
-      adopted?.release();
-
-      await expect(pendingKill).resolves.toMatchObject({
-        found: true,
-        killed: false,
-        runId: source.runId,
-      });
-      expect(await getSubagentRunByChildSessionKey(childSessionKey)).toMatchObject({
-        runId: recoveryRunId,
-        execution: { status: "running" },
-      });
-      expect(
-        (await getSubagentRunByChildSessionKey(childSessionKey))?.execution.endedAt,
-      ).toBeUndefined();
-      expect(abort).not.toHaveBeenCalled();
-    } finally {
-      adopted?.release();
-      admission.release();
-      await pendingKill;
-    }
+    await expectRunning(childSessionKey, { runId: "run-replacement", generation: 2 });
   });
 
-  it.each(["recovery", "ordinary"] as const)(
-    "does not retarget a same-id %s successor in the admin path",
-    async (kind) => {
-      const recovery = kind === "recovery";
+  it.each([false, true])(
+    "does not retarget a same-id admin successor (live producer=%s)",
+    async (liveProducer) => {
       const childSessionKey = "agent:main:subagent:admin-same-id-successor";
       const runId = "run-admin-same-id";
       const source = await addRun({
         runId,
         childSessionKey,
-        controllerSessionKey: "agent:main:controller",
-        requesterSessionKey: "agent:main:requester",
-        requesterDisplayKey: "requester",
+        ...(liveProducer
+          ? { childSessionIdentity: { sessionId: "sess-fenced-same-id-successor" } }
+          : {}),
+        ...adminOwner,
         task: "admin source",
         generation: 1,
-        execution: recovery
-          ? {
-              status: "interrupted",
-              startedAt: Date.now() - 1_000,
-              restartRecovery: {
-                sessionId: "sess-fenced-same-id-successor",
-                sessionMarker: "sess-fenced-same-id-successor:1",
-                idempotencyKey: runId,
-                phase: "accepted",
-              },
-            }
-          : { status: "running", startedAt: Date.now() - 4_000 },
       });
-      const abort = controlRuntimeMocks.abortEmbeddedAgentRun;
+      const cfg = cfgWithSessionStore();
+      const producer = liveProducer
+        ? startProducer(
+            childSessionKey,
+            "sess-fenced-same-id-successor",
+            cfg.session!.store!,
+            undefined,
+            runId,
+          )
+        : undefined;
 
       const replacementReady = createDeferred();
       let replacementPending = true;
       const pendingKill = killSubagentRunAdmin(
         {
-          cfg: cfgWithSessionStore(),
+          cfg,
           sessionKey: childSessionKey,
-          expectedRunId: recovery ? runId : undefined,
+          ...(liveProducer ? { expectedRunId: runId } : {}),
         },
         {
           assertCurrent: () => {},
@@ -440,36 +390,28 @@ describe("killSubagentRunAdmin", () => {
         killed: false,
         runId,
       });
-      expect(await getSubagentRunByChildSessionKey(childSessionKey)).toMatchObject({
-        runId,
-        generation: 2,
-        execution: { status: "running" },
-      });
-      expect(
-        (await getSubagentRunByChildSessionKey(childSessionKey))?.execution.endedAt,
-      ).toBeUndefined();
-      expect(abort).not.toHaveBeenCalled();
+      await expectRunning(childSessionKey, { runId, generation: 2 });
+      if (producer) {
+        expect(producer.cancel).not.toHaveBeenCalled();
+      }
     },
   );
 
   it("keeps a killed steer-restart run on its failed projection", async () => {
-    const childSessionKey = "agent:main:subagent:steer-restart";
     const endedAt = Date.now() - 1_000;
-    await addRun({
-      runId: "run-steer-restart",
-      childSessionKey,
-      controllerSessionKey: "agent:main:controller",
-      requesterSessionKey: "agent:main:requester",
-      requesterDisplayKey: "requester",
-      task: "replace active run",
-      createdAt: endedAt - 4_000,
-      startedAt: endedAt - 3_000,
-      endedAt,
-      endedReason: SUBAGENT_ENDED_REASON_KILLED,
-      suppressAnnounceReason: "steer-restart",
-      outcome: { status: "error", error: "agent run aborted" },
-      completion: { required: false, resultText: null, capturedAt: endedAt },
-    });
+    const { childSessionKey } = await addRun(
+      runFixture("steer-restart", {
+        ...adminOwner,
+        task: "replace active run",
+        createdAt: endedAt - 4_000,
+        startedAt: endedAt - 3_000,
+        endedAt,
+        endedReason: SUBAGENT_ENDED_REASON_KILLED,
+        suppressAnnounceReason: "steer-restart",
+        outcome: { status: "error", error: "agent run aborted" },
+        completion: { required: false, resultText: null, capturedAt: endedAt },
+      }),
+    );
 
     const result = await killSubagentRunAdmin({ cfg: {}, sessionKey: childSessionKey });
 
@@ -495,62 +437,53 @@ describe("killSubagentRunAdmin", () => {
       completed: false,
     },
     {
-      name: "reports when completion wins while the kill path awaits persistence",
+      name: "reports when completion wins while Stop prepares cancellation",
       suffix: "completion-race",
       task: "finish while cancellation starts",
       completed: true,
     },
   ])("$name", async ({ suffix, task, completed }) => {
     const childSessionKey = `agent:main:subagent:${suffix}`;
-    const current: SessionEntry = { sessionId: `sess-${suffix}`, updatedAt: Date.now() };
-    const storePath = await writeSession(`admin-kill-${suffix}`, childSessionKey, current);
-    const input = createSubagentRunRecord({
-      runId: `run-${suffix}`,
-      childSessionKey,
-      controllerSessionKey: "agent:main:controller",
-      requesterSessionKey: "agent:main:requester",
-      requesterDisplayKey: "requester",
-      task,
-      createdAt: Date.now() - 5_000,
-      startedAt: Date.now() - 4_000,
-    });
+    const { run, storePath } = await storedRun(suffix, { ...adminOwner, task });
+    const current = loadSessionEntry({ storePath, sessionKey: childSessionKey })!;
     if (completed) {
       await addRun({
-        ...input,
+        ...run,
         runId: "run-stale-completion-race",
         task: "stale older row",
         createdAt: Date.now() - 9_000,
         execution: { status: "running", startedAt: Date.now() - 8_000 },
       });
     }
-    const run = await addRun(input);
     const abortedLastRunWrites: boolean[] = [];
     let terminalPublication = Promise.resolve();
-    setSubagentControlDepsForTest({
-      isEmbeddedAgentRunActive: () => true,
-      abortEmbeddedAgentRun: () => {
-        const endedAt = Date.now();
-        terminalPublication = publishRun(run.runId, (row) => ({
-          ...row,
-          ...(completed
-            ? {
-                endedReason: SUBAGENT_ENDED_REASON_COMPLETE,
-                completion: { required: false, resultText: "done", capturedAt: endedAt },
-              }
-            : {
-                endedReason: SUBAGENT_ENDED_REASON_KILLED,
-                suppressAnnounceReason: "killed",
-                killReconciliation: { killedAt: endedAt },
-              }),
-          execution: {
-            ...row.execution,
-            status: "terminal",
-            endedAt,
-            outcome: completed ? { status: "ok" } : { status: "error", error: "agent run aborted" },
-          },
-        }));
-        return true;
-      },
+    const publishTerminal = async () => {
+      const endedAt = Date.now();
+      terminalPublication = publishRun(run.runId, (row) => ({
+        ...row,
+        ...(completed
+          ? {
+              endedReason: SUBAGENT_ENDED_REASON_COMPLETE,
+              completion: { required: false, resultText: "done", capturedAt: endedAt },
+            }
+          : {
+              endedReason: SUBAGENT_ENDED_REASON_KILLED,
+              suppressAnnounceReason: "killed",
+              killReconciliation: { killedAt: endedAt },
+            }),
+        execution: {
+          ...row.execution,
+          status: "terminal",
+          endedAt,
+          outcome: completed ? { status: "ok" } : { status: "error", error: "agent run aborted" },
+        },
+      }));
+      await terminalPublication;
+    };
+    const { cancel } = startProducer(childSessionKey, current.sessionId, storePath, async () => {
+      if (!completed) {
+        await publishTerminal();
+      }
     });
     mockSessionReplacementForStore(storePath, async (params) => {
       const operation = await params.update([{ sessionKey: childSessionKey, entry: current }]);
@@ -562,14 +495,26 @@ describe("killSubagentRunAdmin", () => {
       return operation.result;
     });
 
-    const result = await killSubagentRunAdmin({
-      cfg: cfgWithSessionStore(storePath),
-      sessionKey: childSessionKey,
-    });
+    const result = await killSubagentRunAdmin(
+      {
+        cfg: cfgWithSessionStore(storePath),
+        sessionKey: childSessionKey,
+      },
+      completed
+        ? {
+            assertCurrent: () => {},
+            beforeSessionKill: async () => {
+              await publishTerminal();
+              return true;
+            },
+          }
+        : undefined,
+    );
     await terminalPublication;
     expect(result).toMatchObject({ found: true, killed: !completed });
     expect(abortedLastRunWrites).toEqual(completed ? [] : [true]);
     if (completed) {
+      expect(cancel).not.toHaveBeenCalled();
       expect(result).toMatchObject({
         targetState: {
           state: "terminal",
@@ -600,27 +545,23 @@ describe("killSubagentRunAdmin", () => {
     const run = await addRun({
       runId: "run-cascade-completion-race",
       childSessionKey,
-      controllerSessionKey: "agent:main:controller",
-      requesterSessionKey: "agent:main:requester",
-      requesterDisplayKey: "requester",
+      childSessionIdentity: { sessionId: "sess-cascade-completion-race" },
+      ...adminOwner,
       task: "finish while descendant cancellation settles",
     });
     const abortedLastRunWrites: boolean[] = [];
     await addRun({
       runId: "run-cascade-completion-child",
       childSessionKey: descendantSessionKey,
-      controllerSessionKey: childSessionKey,
-      requesterSessionKey: childSessionKey,
-      requesterDisplayKey: "parent",
+      childSessionIdentity: { sessionId: "sess-cascade-completion-child" },
+      ...runOwner(childSessionKey, childSessionKey, "parent"),
       task: "descendant",
       createdAt: Date.now() - 3_000,
       startedAt: Date.now() - 2_000,
     });
     let terminalPublication = Promise.resolve();
-    setSubagentControlDepsForTest({
-      isEmbeddedAgentRunActive: () => true,
-      abortEmbeddedAgentRun: () => true,
-    });
+    startProducer(childSessionKey, "sess-cascade-completion-race", storePath);
+    startProducer(descendantSessionKey, "sess-cascade-completion-child", storePath);
     mockSessionReplacementForStore(storePath, async (params) => {
       const sessionKey = params.activeSessionKey!;
       const current = loadSessionEntry({ storePath: params.storePath, sessionKey, clone: false });
@@ -652,61 +593,51 @@ describe("killSubagentRunAdmin", () => {
       return operation.result;
     });
 
-    const result = await killSubagentRunAdmin({
-      cfg: cfgWithSessionStore(storePath),
-      sessionKey: childSessionKey,
-    });
+    const result = await adminKill(childSessionKey, storePath);
 
     await terminalPublication;
     expect(result).toMatchObject({
       found: true,
       killed: true,
-      targetState: {
-        state: "terminal",
-        task: {
-          status: "succeeded",
-        },
-      },
+      targetState: { state: "terminal", task: { status: "succeeded" } },
     });
     expect(abortedLastRunWrites).toEqual([true, false]);
   });
 
-  it("kills a run that yields while the kill path awaits persistence", async () => {
-    const childSessionKey = "agent:main:subagent:yield-race";
-    const storePath = await writeSession("admin-kill-yield-race", childSessionKey, {
-      sessionId: "sess-yield-race",
-      updatedAt: Date.now(),
-    });
-    const run = await addRun({
-      runId: "run-yield-race",
-      childSessionKey,
-      controllerSessionKey: "agent:main:controller",
-      requesterSessionKey: "agent:main:requester",
-      requesterDisplayKey: "requester",
+  it("kills a run that yields while Stop prepares cancellation", async () => {
+    const { run, storePath, childSessionKey } = await storedRun("yield-race", {
+      ...adminOwner,
       task: "yield while cancellation starts",
     });
     const yieldedAt = Date.now() - 1_000;
     let terminalPublication = Promise.resolve();
-    setSubagentControlDepsForTest({
-      isEmbeddedAgentRunActive: () => true,
-      abortEmbeddedAgentRun: () => {
-        terminalPublication = publishRun(run.runId, (current) => ({
-          ...current,
-          execution: {
-            ...current.execution,
-            status: "terminal",
-            endedAt: yieldedAt,
-          },
-          pauseReason: "sessions_yield",
-        }));
-        return true;
-      },
-    });
+    startProducer(childSessionKey, "sess-yield-race", storePath);
+    const publishYield = async () => {
+      terminalPublication = publishRun(run.runId, (current) => ({
+        ...current,
+        execution: {
+          ...current.execution,
+          status: "terminal",
+          endedAt: yieldedAt,
+        },
+        pauseReason: "sessions_yield",
+      }));
+      await terminalPublication;
+    };
 
-    const result = await killSubagentRunAdmin({
-      cfg: cfgWithSessionStore(storePath),
-      sessionKey: childSessionKey,
-    });
+    const result = await killSubagentRunAdmin(
+      {
+        cfg: cfgWithSessionStore(storePath),
+        sessionKey: childSessionKey,
+      },
+      {
+        assertCurrent: () => {},
+        beforeSessionKill: async () => {
+          await publishYield();
+          return true;
+        },
+      },
+    );
 
     await terminalPublication;
     expect(result).toMatchObject({
@@ -718,7 +649,7 @@ describe("killSubagentRunAdmin", () => {
         task: { status: "cancelled", error: SUBAGENT_KILL_TASK_ERROR },
       },
     });
-    expect(await getSubagentRunByChildSessionKey(childSessionKey)).toMatchObject({
+    expect(await latestRun(childSessionKey)).toMatchObject({
       endedReason: SUBAGENT_ENDED_REASON_KILLED,
       execution: {
         endedAt: yieldedAt,
@@ -729,17 +660,14 @@ describe("killSubagentRunAdmin", () => {
         },
       },
     });
-    expect((await getSubagentRunByChildSessionKey(childSessionKey))?.pauseReason).toBeUndefined();
+    expect((await latestRun(childSessionKey))?.pauseReason).toBeUndefined();
     const killedAt =
       result.found && result.targetState?.state === "terminal"
         ? result.targetState.task.endedAt
         : undefined;
     expect(killedAt).toBeGreaterThan(yieldedAt);
 
-    const repeated = await killSubagentRunAdmin({
-      cfg: cfgWithSessionStore(storePath),
-      sessionKey: childSessionKey,
-    });
+    const repeated = await adminKill(childSessionKey, storePath);
     expect(repeated).toMatchObject({
       found: true,
       killed: false,
@@ -749,104 +677,18 @@ describe("killSubagentRunAdmin", () => {
       },
     });
   });
-
-  it("does not kill a newest finalizing run when only a stale older row is still active", async () => {
-    const childSessionKey = "agent:main:subagent:worker-stale-admin";
-
-    await addRun({
-      runId: "run-stale-admin",
-      childSessionKey,
-      controllerSessionKey: "agent:main:other-controller",
-      requesterSessionKey: "agent:main:other-requester",
-      requesterDisplayKey: "other-requester",
-      task: "stale admin task",
-      createdAt: Date.now() - 9_000,
-      startedAt: Date.now() - 8_000,
-    });
-    await addRun({
-      runId: "run-current-admin",
-      childSessionKey,
-      controllerSessionKey: "agent:main:other-controller",
-      requesterSessionKey: "agent:main:other-requester",
-      requesterDisplayKey: "other-requester",
-      task: "current admin task",
-      endedAt: Date.now() - 1_000,
-      outcome: { status: "ok" },
-    });
-
-    const result = await killSubagentRunAdmin({
-      cfg: cfgWithSessionStore(),
-      sessionKey: childSessionKey,
-    });
-
-    expect(result).toMatchObject({
-      found: true,
-      killed: false,
-      runId: "run-current-admin",
-      sessionKey: childSessionKey,
-    });
-    expect(result.found && result.targetState).toEqual({ state: "finalizing" });
-  });
 });
 
 describe("controlled subagent cancellation races", () => {
-  it.each(["distinct run ID", "same-ID generation"] as const)(
-    "does not mutate the live session when a bulk kill selects a stale %s",
-    async (identity) => {
-      const sameId = identity === "same-ID generation";
-      const childSessionKey = "agent:main:subagent:stale-kill-worker";
-      const storePath = await writeSession("stale-kill", childSessionKey, {
-        updatedAt: Date.now(),
-      });
-      const staleRunId = "run-stale";
-      const currentRunId = sameId ? staleRunId : "run-current";
-      await addRun({
-        runId: staleRunId,
-        childSessionKey,
-        task: "stale task",
-        generation: sameId ? 1 : undefined,
-        createdAt: Date.now() - 9_000,
-        startedAt: Date.now() - 8_000,
-      });
-      const stale = subagentRuns.get(staleRunId)!;
-      await addRun({
-        runId: currentRunId,
-        childSessionKey,
-        task: "current task",
-        generation: sameId ? 2 : undefined,
-        createdAt: Date.now() - 4_000,
-        startedAt: Date.now() - 3_000,
-      });
-
-      const result = await killAllControlledSubagentRuns({
-        cfg: cfgWithSessionStore(storePath),
-        controller: controllerFor(),
-        runs: [stale],
-      });
-
-      expect(result).toEqual({ status: "ok", killed: 0, labels: [] });
-      const persisted = loadSessionEntry({ storePath, sessionKey: childSessionKey });
-      expect(persisted?.abortedLastRun).toBeUndefined();
-      expect(await getSubagentRunByChildSessionKey(childSessionKey)).toMatchObject({
-        runId: currentRunId,
-        ...(sameId ? { generation: 2 } : {}),
-      });
-    },
-  );
-
   it("does not let 24 in-flight kills cross into same-id successor generations", async () => {
     const count = 24;
     const controllerSessionKey = "agent:main:main";
     const oldRuns = Array.from({ length: count }, (_, index) =>
-      createSubagentRunRecord({
+      runFixture(`generation-race-${index}`, {
         runId: `run-old-${index}`,
-        childSessionKey: `agent:main:subagent:generation-race-${index}`,
-        controllerSessionKey,
         requesterSessionKey: controllerSessionKey,
         task: `old task ${index}`,
         generation: 1,
-        createdAt: Date.now() - 5_000,
-        startedAt: Date.now() - 4_000,
       }),
     );
     const storePath = await writeSessionStoreFixture(
@@ -862,19 +704,13 @@ describe("controlled subagent cancellation races", () => {
       oldRuns[index] = await addRun(entry);
     }
 
-    const {
-      isEmbeddedAgentRunActive: isActive,
-      abortEmbeddedAgentRun: abort,
-      clearSessionLifecycleQueues: clearQueues,
-    } = controlRuntimeMocks;
+    const { clearSessionQueues: clearQueues } = controlRuntimeMocks;
 
     const replacementsReady = createDeferred();
     const killsEntered = oldRuns.map(() => createDeferred());
     const pendingKills = oldRuns.map((entry, index) =>
-      killAllControlledSubagentRuns({
-        cfg: cfgWithSessionStore(storePath),
+      controlledKill([entry], storePath, {
         controller: controllerFor(controllerSessionKey),
-        runs: [entry],
         beforeKill: async () => {
           killsEntered[index]!.resolve();
           await replacementsReady.promise;
@@ -884,6 +720,7 @@ describe("controlled subagent cancellation races", () => {
     );
 
     await Promise.all(killsEntered.map((entered) => entered.promise));
+    const successorProducers: ReturnType<typeof startProducer>[] = [];
     const successorKeys: string[] = [];
     const descendantKeys: string[] = [];
     for (const [index, entry] of oldRuns.entries()) {
@@ -901,62 +738,51 @@ describe("controlled subagent cancellation races", () => {
         ...entry,
         runId: `run-successor-leaf-${index}`,
         childSessionKey: descendantKeys[index]!,
-        controllerSessionKey: entry.childSessionKey,
-        requesterSessionKey: entry.childSessionKey,
-        requesterDisplayKey: entry.childSessionKey,
+        childSessionIdentity: { sessionId: `generation-leaf-${index}` },
+        ...runOwner(entry.childSessionKey),
         task: `successor leaf ${index}`,
         generation: 1,
         createdAt: Date.now(),
         execution: { status: "running", startedAt: Date.now() },
       });
+      successorProducers.push(
+        startProducer(entry.childSessionKey, entry.childSessionIdentity!.sessionId, storePath),
+        startProducer(descendantKeys[index]!, "generation-leaf-" + index, storePath),
+      );
     }
 
     replacementsReady.resolve();
     const results = await Promise.all(pendingKills);
 
     expect(results.every((result) => result.status === "ok" && result.killed === 0)).toBe(true);
-    expect(isActive).not.toHaveBeenCalled();
-    expect(abort).not.toHaveBeenCalled();
+    expect(successorProducers.every(({ operation }) => !operation.abortSignal.aborted)).toBe(true);
     expect(clearQueues).not.toHaveBeenCalled();
     for (const [index, childSessionKey] of successorKeys.entries()) {
-      expect(await getSubagentRunByChildSessionKey(childSessionKey)).toMatchObject({
+      await expectRunning(childSessionKey, {
         runId: `run-old-${index}`,
         controllerSessionKey,
         generation: 2,
-        execution: { status: "running" },
       });
-      expect(
-        (await getSubagentRunByChildSessionKey(childSessionKey))?.execution.endedAt,
-      ).toBeUndefined();
-      expect(await getSubagentRunByChildSessionKey(descendantKeys[index]!)).toMatchObject({
+      await expectRunning(descendantKeys[index]!, {
         runId: `run-successor-leaf-${index}`,
-        execution: { status: "running" },
       });
-      expect(
-        (await getSubagentRunByChildSessionKey(descendantKeys[index]!))?.execution.endedAt,
-      ).toBeUndefined();
     }
   });
 
   it("fences a successor that appears while kill persistence is pending", async () => {
-    const childSessionKey = "agent:main:subagent:persist-generation-race";
-    const descendantSessionKey = `${childSessionKey}:subagent:leaf`;
     const controllerSessionKey = "agent:main:main";
-    const oldRunFixture = createSubagentRunRecord({
-      runId: "run-persist-old",
+    const {
+      run: oldRun,
+      storePath,
       childSessionKey,
-      controllerSessionKey,
+    } = await storedRun("persist-generation-race", {
+      runId: "run-persist-old",
       requesterSessionKey: controllerSessionKey,
       task: "old persisted task",
       generation: 1,
-      createdAt: Date.now() - 5_000,
-      startedAt: Date.now() - 4_000,
     });
-    const storePath = await writeSession("persist-generation-race", childSessionKey, {
-      sessionId: "sess-persist-generation-race",
-      updatedAt: Date.now(),
-    });
-    const oldRun = await addRun(oldRunFixture);
+    const descendantSessionKey = `${childSessionKey}:subagent:leaf`;
+    const { cancel } = startProducer(childSessionKey, "sess-persist-generation-race", storePath);
 
     const persistenceStarted = createDeferred();
     const persistenceRelease = createDeferred();
@@ -970,32 +796,27 @@ describe("controlled subagent cancellation races", () => {
       return persistMarker(params);
     });
 
-    const pendingKill = killAllControlledSubagentRuns({
-      cfg: cfgWithSessionStore(storePath),
+    const pendingKill = controlledKill([oldRun], storePath, {
       controller: controllerFor(controllerSessionKey),
-      runs: [oldRun],
     });
     try {
       await persistenceStarted.promise;
 
       await addRun({
-        ...oldRunFixture,
+        ...oldRun,
         runId: "run-persist-successor",
-        controllerSessionKey: "agent:foreign:controller",
-        requesterSessionKey: "agent:foreign:controller",
-        requesterDisplayKey: "agent:foreign:controller",
+        ...runOwner("agent:foreign:controller"),
         task: "successor persisted task",
         generation: 2,
         createdAt: Date.now(),
         execution: { status: "running", startedAt: Date.now() },
       });
       await addRun({
-        ...oldRunFixture,
+        ...oldRun,
         runId: "run-persist-successor-leaf",
         childSessionKey: descendantSessionKey,
-        controllerSessionKey: childSessionKey,
-        requesterSessionKey: childSessionKey,
-        requesterDisplayKey: childSessionKey,
+        childSessionIdentity: { sessionId: "persist-successor-leaf-session" },
+        ...runOwner(childSessionKey),
         task: "successor persisted leaf",
         createdAt: Date.now(),
         execution: { status: "running", startedAt: Date.now() },
@@ -1010,62 +831,49 @@ describe("controlled subagent cancellation races", () => {
       killed: 1,
       labels: ["old persisted task"],
     });
-    expect(controlRuntimeMocks.abortEmbeddedAgentRun).toHaveBeenCalledOnce();
-    expect(controlRuntimeMocks.clearSessionLifecycleQueues).toHaveBeenCalledOnce();
+    expect(cancel).toHaveBeenCalledOnce();
+    expect(controlRuntimeMocks.clearSessionQueues).toHaveBeenCalledOnce();
     for (const [sessionKey, runId] of [
       [childSessionKey, "run-persist-successor"],
       [descendantSessionKey, "run-persist-successor-leaf"],
     ] as const) {
-      const successor = await getSubagentRunByChildSessionKey(sessionKey);
-      expect(successor).toMatchObject({ runId, execution: { status: "running" } });
-      expect(successor?.execution.endedAt).toBeUndefined();
+      await expectRunning(sessionKey, { runId });
     }
   });
 
   it("does not abort or clear queues after the child session incarnation resets", async () => {
-    const childSessionKey = "agent:main:subagent:kill-session-reset";
-    const storePath = await writeSession("kill-session-reset", childSessionKey, {
-      sessionId: "sess-kill-session-reset",
-      lifecycleRevision: "revision-before-reset",
-      updatedAt: Date.now(),
-    });
-    const entry = await addRun({
-      runId: "run-kill-session-reset",
+    const {
+      run: entry,
+      storePath,
       childSessionKey,
+    } = await storedRun("kill-session-reset", {
+      childSessionIdentity: {
+        sessionId: "sess-kill-session-reset",
+        lifecycleRevision: "revision-before-reset",
+      },
       task: "old session work",
     });
-    const abort = vi.fn(() => true);
-    const clearQueues = vi.fn(() => ({ followupCleared: 0, laneCleared: 0, keys: [] }));
-    setSubagentControlDepsForTest({
-      isEmbeddedAgentRunActive: () => {
-        replaceSessionEntrySync(
-          { storePath, sessionKey: childSessionKey },
-          {
-            sessionId: "sess-kill-session-reset",
-            lifecycleRevision: "revision-after-reset",
-            updatedAt: Date.now(),
-          },
-        );
-        return true;
-      },
-      abortEmbeddedAgentRun: abort,
-      clearSessionLifecycleQueues: clearQueues,
-    });
+    const { cancel: abort } = startProducer(childSessionKey, "sess-kill-session-reset", storePath);
+    const clearQueues = controlRuntimeMocks.clearSessionQueues;
+    onPersistenceWrite(() => {
+      replaceSessionEntrySync(
+        { storePath, sessionKey: childSessionKey },
+        {
+          sessionId: "sess-kill-session-reset",
+          lifecycleRevision: "revision-after-reset",
+          updatedAt: Date.now(),
+        },
+      );
+    }, "after");
 
-    await expect(
-      killAllControlledSubagentRuns({
-        cfg: cfgWithSessionStore(storePath),
-        controller: controllerFor(),
-        runs: [entry],
-      }),
-    ).resolves.toMatchObject({
+    await expect(controlledKill([entry], storePath)).resolves.toMatchObject({
       status: "error",
       error: "old session work: Subagent session changed while the kill was pending; retry.",
     });
 
     expect(abort).not.toHaveBeenCalled();
     expect(clearQueues).not.toHaveBeenCalled();
-    expect(await getSubagentRunByChildSessionKey(childSessionKey)).toMatchObject({
+    expect(await latestRun(childSessionKey)).toMatchObject({
       runId: entry.runId,
       killIntent: undefined,
       execution: { status: "running" },
@@ -1073,15 +881,15 @@ describe("controlled subagent cancellation races", () => {
   });
 
   it("does not patch the replacement session after the killed row commits", async () => {
-    const childSessionKey = "agent:main:subagent:kill-session-patch-reset";
-    const storePath = await writeSession("kill-session-patch-reset", childSessionKey, {
-      sessionId: "sess-kill-session-patch-reset",
-      lifecycleRevision: "revision-before-reset",
-      updatedAt: Date.now(),
-    });
-    const entry = await addRun({
-      runId: "run-kill-session-patch-reset",
+    const {
+      run: entry,
+      storePath,
       childSessionKey,
+    } = await storedRun("kill-session-patch-reset", {
+      childSessionIdentity: {
+        sessionId: "sess-kill-session-patch-reset",
+        lifecycleRevision: "revision-before-reset",
+      },
       task: "do not patch successor",
     });
     const patches: Array<Partial<SessionEntry> | null> = [];
@@ -1097,457 +905,279 @@ describe("controlled subagent cancellation races", () => {
       return operation.result;
     });
 
-    await expect(
-      killAllControlledSubagentRuns({
-        cfg: cfgWithSessionStore(storePath),
-        controller: controllerFor(),
-        runs: [entry],
-      }),
-    ).resolves.toMatchObject({ status: "ok", killed: 1 });
+    await expect(controlledKill([entry], storePath)).resolves.toMatchObject({
+      status: "ok",
+      killed: 1,
+    });
 
     expect(patches).toEqual([null, null]);
-    expect(await getSubagentRunByChildSessionKey(childSessionKey)).toMatchObject({
+    expect(await latestRun(childSessionKey)).toMatchObject({
       endedReason: SUBAGENT_ENDED_REASON_KILLED,
       execution: { status: "terminal" },
     });
   });
 
-  it("kills a yielded descendant without reviving a stale child row", async () => {
-    const parentSessionKey = "agent:main:subagent:kill-parent";
-    const childSessionKey = `${parentSessionKey}:subagent:child`;
-    const leafSessionKey = `${childSessionKey}:subagent:leaf`;
-
-    const parentRun = await addRun({
-      runId: "run-parent-current",
-      childSessionKey: parentSessionKey,
-      task: "current parent task",
-      createdAt: Date.now() - 8_000,
-      startedAt: Date.now() - 7_000,
-      endedAt: Date.now() - 6_000,
-      outcome: { status: "ok" },
-    });
-    await addRun({
-      runId: "run-child-stale",
-      childSessionKey,
-      controllerSessionKey: parentSessionKey,
-      requesterSessionKey: parentSessionKey,
-      requesterDisplayKey: parentSessionKey,
-      task: "stale child task",
-    });
-    await addRun({
-      runId: "run-child-current",
-      childSessionKey,
-      controllerSessionKey: parentSessionKey,
-      requesterSessionKey: parentSessionKey,
-      requesterDisplayKey: parentSessionKey,
-      task: "current child task",
-      createdAt: Date.now() - 3_000,
-      startedAt: Date.now() - 2_000,
-      endedAt: Date.now() - 1_500,
-      outcome: { status: "ok" },
-    });
-    await addRun({
-      runId: "run-leaf-active",
-      childSessionKey: leafSessionKey,
-      controllerSessionKey: childSessionKey,
-      requesterSessionKey: childSessionKey,
-      requesterDisplayKey: childSessionKey,
-      task: "leaf task",
-      createdAt: Date.now() - 1_000,
-      startedAt: Date.now() - 900,
-      endedAt: Date.now() - 800,
-      pauseReason: "sessions_yield",
-    });
-
-    const result = await killAllControlledSubagentRuns({
-      cfg: cfgWithSessionStore(),
-      controller: controllerFor(),
-      runs: [parentRun],
-    });
-
-    expect(result).toEqual({
-      status: "ok",
-      killed: 1,
-      labels: ["leaf task"],
-    });
-    expect((await getSubagentRunByChildSessionKey(leafSessionKey))?.execution.endedAt).toBeTypeOf(
-      "number",
-    );
-  });
-
-  it("does not cascade through a child session that moved to a newer parent", async () => {
-    const oldParentSessionKey = "agent:main:subagent:old-parent";
-    const newParentSessionKey = "agent:main:subagent:new-parent";
-    const childSessionKey = "agent:main:subagent:shared-child";
-    const leafSessionKey = `${childSessionKey}:subagent:leaf`;
-
-    const oldParentRun = await addRun({
-      runId: "run-old-parent-current",
-      childSessionKey: oldParentSessionKey,
-      task: "old parent task",
-      createdAt: Date.now() - 8_000,
-      startedAt: Date.now() - 7_000,
-      endedAt: Date.now() - 6_000,
-      outcome: { status: "ok" },
-    });
-    await addRun({
-      runId: "run-new-parent-current",
-      childSessionKey: newParentSessionKey,
-      task: "new parent task",
-    });
-    await addRun({
-      runId: "run-child-stale-old-parent",
-      childSessionKey,
-      controllerSessionKey: oldParentSessionKey,
-      requesterSessionKey: oldParentSessionKey,
-      requesterDisplayKey: oldParentSessionKey,
-      task: "stale shared child task",
-      createdAt: Date.now() - 4_000,
-      startedAt: Date.now() - 3_500,
-      endedAt: Date.now() - 3_000,
-      outcome: { status: "ok" },
-    });
-    await addRun({
-      runId: "run-child-current-new-parent",
-      childSessionKey,
-      controllerSessionKey: newParentSessionKey,
-      requesterSessionKey: newParentSessionKey,
-      requesterDisplayKey: newParentSessionKey,
-      task: "current shared child task",
-      createdAt: Date.now() - 2_000,
-      startedAt: Date.now() - 1_500,
-    });
-    await addRun({
-      runId: "run-leaf-active",
-      childSessionKey: leafSessionKey,
-      controllerSessionKey: childSessionKey,
-      requesterSessionKey: childSessionKey,
-      requesterDisplayKey: childSessionKey,
-      task: "leaf task",
-      createdAt: Date.now() - 1_000,
-      startedAt: Date.now() - 900,
-    });
-
-    const result = await killAllControlledSubagentRuns({
-      cfg: cfgWithSessionStore(),
-      controller: controllerFor(),
-      runs: [oldParentRun],
-    });
-
-    expect(result).toEqual({
-      status: "ok",
-      killed: 0,
-      labels: [],
-    });
-    expect(
-      (await getSubagentRunByChildSessionKey(leafSessionKey))?.execution.endedAt,
-    ).toBeUndefined();
-  });
-
-  it("interrupts a pending recovery admission before deciding the kill target is inactive", async () => {
-    const controllerSessionKey = "agent:main:main";
-    const childSessionKey = "agent:main:subagent:kill-recovery-admission";
-    const sessionId = "sess-kill-recovery-admission";
-    const entry = await addRun({
-      runId: "run-kill-recovery-admission",
-      childSessionKey,
-      controllerSessionKey,
-      requesterSessionKey: controllerSessionKey,
-      task: "kill recovery admission",
-      createdAt: Date.now() - 2_000,
-      execution: { status: "running", startedAt: Date.now() - 1_000 },
-    });
-    const storePath = await writeSession("kill-recovery-admission", childSessionKey, {
-      sessionId,
-      updatedAt: Date.now(),
-      abortedLastRun: true,
-    });
-    const interrupted = createDeferred();
-    const admission = await beginSessionWorkAdmission({
-      scope: storePath,
-      identities: [childSessionKey, sessionId],
-      assertAllowed: () => {},
-      onInterrupt: () => interrupted.resolve(),
-    });
-    const handoffId = admission.createHandoff();
-    let recoveryActive = false;
-    const abort = vi.fn(() => recoveryActive);
-    setSubagentControlDepsForTest({
-      isEmbeddedAgentRunActive: () => recoveryActive,
-      abortEmbeddedAgentRun: abort,
-    });
-
-    const pendingKill = killAllControlledSubagentRuns({
-      cfg: cfgWithSessionStore(storePath),
-      controller: controllerFor(controllerSessionKey),
-      runs: [entry],
-    });
-    let adopted: ReturnType<typeof consumeSessionWorkAdmissionHandoff>;
-    try {
-      await interrupted.promise;
-      expect(getActiveSessionLifecycleMutationCount()).toBeGreaterThan(0);
-      adopted = consumeSessionWorkAdmissionHandoff({
-        handoffId,
-        scope: storePath,
-        identities: [childSessionKey, sessionId],
-        onInterrupt: () => {
-          recoveryActive = true;
-        },
-      });
-      expect(adopted).toBeDefined();
-      expect(recoveryActive).toBe(true);
-      adopted?.release();
-
-      await expect(pendingKill).resolves.toMatchObject({ status: "ok" });
-      expect(abort).toHaveBeenCalledWith(sessionId);
-      expect(await getSubagentRunByChildSessionKey(childSessionKey)).toMatchObject({
-        endedReason: SUBAGENT_ENDED_REASON_KILLED,
-        execution: { status: "terminal" },
-      });
-    } finally {
-      adopted?.release();
-      admission.release();
-      await pendingKill;
-    }
-  });
-
-  registerAdmissionDrainControlTests({
-    cfgWithSessionStore,
-    controllerFor,
-    setSubagentControlDepsForTest,
-    writeSessionStoreFixture,
-  });
-
-  it("leaves restart recovery disabled when the kill tombstone cannot persist", async () => {
-    const controllerSessionKey = "agent:main:main";
-    const childSessionKey = "agent:main:subagent:kill-tombstone-failure";
-    const sessionId = "sess-kill-tombstone-failure";
-    const entry = await addRun({
-      runId: "run-kill-tombstone-failure",
-      childSessionKey,
-      controllerSessionKey,
-      requesterSessionKey: controllerSessionKey,
-      task: "kill tombstone failure",
-      createdAt: Date.now() - 2_000,
-      execution: {
-        status: "interrupted",
-        startedAt: Date.now() - 1_000,
-        restartRecovery: {
-          sessionId,
-          sessionMarker: `${sessionId}:1`,
-          idempotencyKey: "recovery-kill-tombstone-failure",
-          phase: "reserved",
-        },
-      },
-    });
-    const storePath = await writeSession("kill-tombstone-failure", childSessionKey, {
-      sessionId,
-      updatedAt: 1,
-      abortedLastRun: true,
-    });
-    const abortedLastRunWrites: boolean[] = [];
-    let persistenceWrites = 0;
-    mockSessionReplacementForStore(storePath, async (params) => {
-      const current = { sessionId, updatedAt: 1, abortedLastRun: true };
-      const operation = await params.update([{ sessionKey: childSessionKey, entry: current }]);
-      for (const { entry: replacement } of operation.replacements ?? []) {
-        abortedLastRunWrites.push(replacement.abortedLastRun === true);
+  it.each([false, true])(
+    "cascades only through the current child owner (moved: %s)",
+    async (moved) => {
+      const now = Date.now();
+      const parent = await addRun(
+        runFixture("old-parent", {
+          createdAt: now - 8_000,
+          startedAt: now - 7_000,
+          endedAt: now - 6_000,
+          outcome: { status: "ok" },
+        }),
+      );
+      const newParent = runFixture("new-parent");
+      if (moved) {
+        await addRun(newParent);
       }
-      return operation.result;
-    });
-    resetRegistryLeafMocks();
-    onPersistenceWrite(() => {
-      if (++persistenceWrites === 2) {
-        throw new Error("sqlite busy");
-      }
-    });
-
-    await expect(
-      killAllControlledSubagentRuns({
-        cfg: cfgWithSessionStore(storePath),
-        controller: controllerFor(controllerSessionKey),
-        runs: [entry],
-      }),
-    ).resolves.toMatchObject({
-      status: "error",
-      error: expect.stringContaining("Failed to persist subagent kill tombstone"),
-    });
-
-    expect(abortedLastRunWrites).toEqual([]);
-    expect(await getSubagentRunByChildSessionKey(childSessionKey)).toMatchObject({
-      runId: entry.runId,
-      killIntent: { reason: "killed", sessionId },
-      execution: {
-        status: "interrupted",
-        restartRecovery: { phase: "reserved" },
-      },
-    });
-    expect(
-      (await getSubagentRunByChildSessionKey(childSessionKey))?.execution.endedAt,
-    ).toBeUndefined();
-  });
-});
-
-describe("killAllControlledSubagentRuns", () => {
-  registerLateDescendantControlTests({
-    cfgWithSessionStore,
-    setSubagentControlDepsForTest,
-    writeSessionStoreFixture,
-  });
-
-  it.each(["bulk", "first cancellation await", "controlled tree", "admin tree", "channel stop"])(
-    "does not dispatch selected queued work during %s cancellation",
-    async (kind) => {
-      const controllerSessionKey = "agent:main:main";
-      const runningFixture = createSubagentRunRecord({
-        runId: "running-collector",
-        childSessionKey: "agent:main:subagent:running-collector",
-        controllerSessionKey,
-        requesterSessionKey: controllerSessionKey,
-        task: "running collector",
-        collect: true,
-        createdAt: 1,
-        startedAt: 2,
+      const child = runFixture("child-stale", {
+        childSessionKey: moved
+          ? "agent:main:subagent:shared-child"
+          : `${parent.childSessionKey}:subagent:child`,
+        ...runOwner(parent.childSessionKey),
+        createdAt: now - (moved ? 4_000 : 5_000),
+        startedAt: now - (moved ? 3_500 : 4_000),
+        ...(moved ? { endedAt: now - 3_000, outcome: { status: "ok" as const } } : {}),
       });
-      const queuedFixture = createSubagentRunRecord({
-        ...runningFixture,
-        runId: "queued-collector",
-        childSessionKey: "agent:main:subagent:queued-collector",
-        controllerSessionKey: kind.endsWith("tree")
-          ? runningFixture.childSessionKey
-          : controllerSessionKey,
-        requesterSessionKey: kind.endsWith("tree")
-          ? runningFixture.childSessionKey
-          : controllerSessionKey,
-        execution: { status: "queued" },
-        swarmLaunchPending: true,
+      await addRun(child);
+      await addRun({
+        ...child,
+        runId: "run-child-current",
+        ...runOwner(moved ? newParent.childSessionKey : parent.childSessionKey),
+        createdAt: now - (moved ? 2_000 : 3_000),
+        execution: moved
+          ? { status: "running", startedAt: now - 1_500 }
+          : {
+              status: "terminal",
+              startedAt: now - 2_000,
+              endedAt: now - 1_500,
+              outcome: { status: "ok" },
+            },
       });
-      const running = await addRun(runningFixture);
-      const queued = await addRun(queuedFixture);
-      const storePath = await writeSessionStoreFixture("abort-dispatch", {
-        [running.childSessionKey]: { sessionId: "running-session", updatedAt: 1 },
+      const leaf = await addRun(
+        runFixture("leaf-active", {
+          childSessionKey: `${child.childSessionKey}:subagent:leaf`,
+          ...runOwner(child.childSessionKey),
+          task: "leaf task",
+          createdAt: now - 1_000,
+          startedAt: now - 900,
+          ...(!moved ? { endedAt: now - 800, pauseReason: "sessions_yield" as const } : {}),
+        }),
+      );
+      expect(await controlledKill([parent])).toEqual({
+        status: "ok",
+        killed: moved ? 0 : 1,
+        labels: moved ? [] : ["leaf task"],
       });
-      const started: string[] = [];
-      for (const runId of [queued.runId, "unselected"]) {
-        enqueueSwarmRun({
-          groupId: "cancelled-group",
-          runId,
-          maxConcurrent: 1,
-          activeRunIds: [running.runId],
-          start: async () => {
-            started.push(runId);
-          },
-          onStartFailure: () => true,
-        });
-      }
-      setSubagentControlDepsForTest({
-        isEmbeddedAgentRunActive: () => true,
-        abortEmbeddedAgentRun: (sessionId) => {
-          expect(sessionId).toBe("running-session");
-          if (kind !== "channel stop" && kind !== "first cancellation await") {
-            expect(releaseSwarmRun(running.runId)).toBe(true);
-          }
-          return true;
-        },
-      });
-      const controller = { ...controllerFor(controllerSessionKey), controllerAgentId: "main" };
-      const cfg = cfgWithSessionStore(storePath);
-      const parent =
-        kind === "channel stop"
-          ? createReplyOperation({
-              sessionKey: controllerSessionKey,
-              sessionId: "parent-session",
-              resetTriggered: false,
-            })
-          : undefined;
-      parent?.attachBackend({
-        kind: "embedded",
-        cancel: () => {
-          expect(releaseSwarmRun(running.runId)).toBe(true);
-        },
-        isStreaming: () => true,
-      });
-      try {
-        if (kind === "first cancellation await") {
-          const cancellation = killAllControlledSubagentRuns({
-            cfg,
-            controller,
-            runs: [running, queued],
-          });
-          // Natural terminal cleanup calls this same capacity owner while kill
-          // admission is pending; no synthetic execution outcome is needed.
-          expect(releaseSwarmRun(running.runId)).toBe(true);
-          expect(await cancellation).toMatchObject({ status: "ok", killed: 2 });
-        } else if (kind === "bulk") {
-          expect(
-            await killAllControlledSubagentRuns({ cfg, controller, runs: [running, queued] }),
-          ).toMatchObject({ status: "ok", killed: 2 });
-        } else if (kind === "controlled tree") {
-          expect(
-            await killAllControlledSubagentRuns({ cfg, controller, runs: [running] }),
-          ).toMatchObject({ status: "ok", killed: 2 });
-        } else if (kind === "admin tree") {
-          expect(
-            await killSubagentRunAdmin({
-              cfg,
-              sessionKey: running.childSessionKey,
-              expectedRunId: running.runId,
-              expectedGeneration: running.generation,
-              expectedOwnerKey: controllerSessionKey,
-            }),
-          ).toMatchObject({ found: true, killed: true, cascadeKilled: 1 });
-        } else {
-          expect(
-            await tryFastAbortFromMessage({
-              cfg,
-              ctx: buildTestCtx({
-                CommandBody: "/stop",
-                RawBody: "/stop",
-                CommandAuthorized: true,
-                Provider: "telegram",
-                Surface: "telegram",
-                SessionKey: controllerSessionKey,
-                From: "telegram:queue-owner",
-                To: "telegram:queue-owner",
-              }),
-            }),
-          ).toMatchObject({ handled: true, stoppedSubagents: 2, failedSubagents: 0 });
-          expect(parent?.abortSignal.aborted).toBe(true);
-        }
-        for (const entry of [running, queued]) {
-          expect(await getSubagentRunByChildSessionKey(entry.childSessionKey)).toMatchObject({
-            execution: { status: "terminal" },
-            endedReason: SUBAGENT_ENDED_REASON_KILLED,
-          });
-        }
-        expect(
-          started,
-          "selected queued child must never dispatch during cancellation",
-        ).not.toContain(queued.runId);
-        await vi.waitFor(() => expect(started).toEqual(["unselected"]));
-      } finally {
-        parent?.complete();
-        swarmSchedulerTesting.reset();
+      const currentLeaf = await latestRun(leaf.childSessionKey);
+      expect(currentLeaf).toBeDefined();
+      if (moved) {
+        expect(currentLeaf?.execution.endedAt).toBeUndefined();
+      } else {
+        expect(currentLeaf?.execution.endedAt).toEqual(expect.any(Number));
       }
     },
   );
 
-  registerQueuedReservationFailureTests({
-    cfgWithSessionStore,
-    setSubagentControlDepsForTest,
-    writeSessionStoreFixture,
-    resetRegistryLeafMocks,
+  registerSuccessorAdmissionControlTests({
+    addRun,
+    runFixture,
+    writeSession,
+    adminKill,
+    controlledKill,
+    expectRunning,
+    adminOwner,
   });
+
+  registerAdmissionDrainControlTests(controlTestDeps);
+
+  it.each(["intent", "tombstone"] as const)(
+    "preserves the original run when the kill %s cannot persist",
+    async (phase) => {
+      const sessionId = "sess-kill-write-failure";
+      const { run, storePath, childSessionKey } = await storedRun(
+        "kill-write-failure",
+        {
+          ...(phase === "intent" ? otherOwner : runOwner("agent:main:main")),
+        },
+        { abortedLastRun: true },
+      );
+      const abortedLastRunWrites: boolean[] = [];
+      let persistenceWrites = 0;
+      mockSessionReplacementForStore(storePath, async (params) => {
+        const current = { sessionId, updatedAt: 1, abortedLastRun: true };
+        const operation = await params.update([{ sessionKey: childSessionKey, entry: current }]);
+        for (const { entry: replacement } of operation.replacements ?? []) {
+          abortedLastRunWrites.push(replacement.abortedLastRun === true);
+        }
+        return operation.result;
+      });
+      resetRegistryLeafMocks();
+      onPersistenceWrite(() => {
+        if (++persistenceWrites === (phase === "intent" ? 1 : 2)) {
+          throw new Error("sqlite busy");
+        }
+      });
+
+      const result =
+        phase === "intent"
+          ? await adminKill(childSessionKey, storePath)
+          : await controlledKill([run], storePath);
+      expect(result).toMatchObject({
+        ...(phase === "intent"
+          ? { found: true, killed: false, runId: run.runId, sessionKey: childSessionKey }
+          : { status: "error" }),
+        error: expect.stringContaining(`Failed to persist subagent kill ${phase}`),
+      });
+
+      expect(abortedLastRunWrites).toEqual([]);
+      const persisted = await latestRun(childSessionKey);
+      expect(persisted).toMatchObject({
+        runId: run.runId,
+        execution: { status: "running" },
+      });
+      expect(persisted?.killIntent).toEqual(
+        phase === "intent" ? undefined : expect.objectContaining({ reason: "killed", sessionId }),
+      );
+      expect(persisted?.execution.endedAt).toBeUndefined();
+    },
+  );
+
+  it.for([
+    { mode: "admin", blockedDepth: 0 },
+    { mode: "controlled", blockedDepth: 1 },
+  ] as const)(
+    "cancels descendants while reporting pending ancestor cleanup ($mode)",
+    async ({ mode, blockedDepth }, ctx) => {
+      const runs: SubagentRunRecord[] = [];
+      for (const role of ["root", "child", "leaf"]) {
+        const parent = runs.at(-1);
+        runs.push(
+          await addRun(
+            runFixture(`unsettled-${role}`, {
+              ...runOwner(parent?.childSessionKey ?? "agent:main:main"),
+              task: role,
+            }),
+          ),
+        );
+      }
+      const storePath = await writeSessionStoreFixture(
+        "kill-unsettled-tree",
+        Object.fromEntries(
+          runs.map((run) => [
+            run.childSessionKey,
+            { ...run.childSessionIdentity, updatedAt: Date.now() },
+          ]),
+        ),
+      );
+      const cleanup = createDeferred();
+      const producers = runs.map((run, depth) =>
+        startProducer(
+          run.childSessionKey,
+          run.childSessionIdentity!.sessionId,
+          storePath,
+          () => (depth === blockedDepth ? cleanup.promise : undefined),
+          run.runId,
+        ),
+      );
+      const blockedRun = runs[blockedDepth]!;
+      const blockedProducer = producers[blockedDepth]!;
+      const mutationReleased = createDeferred();
+      const mutate = controllerLifecycle.runSessionMutation;
+      using mutationObserver = vi.spyOn(controllerLifecycle, "runSessionMutation");
+      mutationObserver.mockImplementation((params) => {
+        const mutation = mutate(params);
+        if (
+          "scope" in params &&
+          params.scope === storePath &&
+          [...params.identities].includes(blockedRun.childSessionKey)
+        ) {
+          void mutation.then(
+            () => mutationReleased.resolve(),
+            (error: unknown) => mutationReleased.reject(error),
+          );
+        }
+        return mutation;
+      });
+      let producerSettled = false;
+      void blockedProducer.operation.ownerSettlement.then(() => {
+        producerSettled = true;
+      });
+      vi.useFakeTimers();
+      const pendingKill =
+        mode === "admin"
+          ? adminKill(runs[0]!.childSessionKey, storePath)
+          : controlledKill([runs[0]!], storePath);
+      try {
+        // The deadline starts after durable kill publication releases its mutation.
+        await withinTest(
+          awaitGateBeforeSettlement(
+            mutationReleased.promise,
+            pendingKill,
+            "Stop returned before releasing its selected mutation",
+          ),
+          ctx.signal,
+        );
+        expect(blockedProducer.operation.abortSignal.aborted).toBe(true);
+        expect(
+          isSessionMutationActive(storePath, [
+            blockedRun.childSessionKey,
+            blockedRun.childSessionIdentity!.sessionId,
+          ]),
+        ).toBe(false);
+        await vi.advanceTimersByTimeAsync(SESSION_CONTROLLER_DRAIN_TIMEOUT_MS);
+
+        const result = await withinTest<Awaited<typeof pendingKill>>(pendingKill, ctx.signal);
+        expect(result).toMatchObject({
+          error: expect.stringContaining(
+            "Subagent execution settlement failed: Subagent execution cleanup remains pending after its drain deadline.",
+          ),
+          ...(mode === "admin"
+            ? { found: true, killed: true, cascadeKilled: 2, cascadeLabels: ["child", "leaf"] }
+            : { status: "error", killed: 3, failed: 1, labels: ["root", "child", "leaf"] }),
+        });
+        expect(producerSettled).toBe(false);
+        for (const [index, run] of runs.entries()) {
+          expect(producers[index]!.cancel).toHaveBeenCalledOnce();
+          expect(producers[index]!.operation.abortSignal.aborted).toBe(true);
+          expect(await latestRun(run.childSessionKey)).toMatchObject({
+            endedReason: SUBAGENT_ENDED_REASON_KILLED,
+            execution: { status: "terminal" },
+          });
+        }
+      } finally {
+        cleanup.resolve();
+        vi.useRealTimers();
+        await pendingKill;
+        await blockedProducer.operation.ownerSettlement;
+      }
+    },
+  );
+});
+
+describe("killAllControlledSubagentRuns", () => {
+  registerLateDescendantControlTests(controlTestDeps);
+
+  registerQueuedStopControlTests(controlTestDeps);
+
+  registerQueuedReservationFailureTests(controlTestDeps);
+
+  registerRequestFrontierControlTests(fixture);
 
   it.each([false, true])(
     "preserves exactRunId=%s authority when an in-flight launch remaps the same row",
     async (exactRunId) => {
       const runId = "launch-before-admission";
       const childSessionKey = "agent:main:subagent:launch-remap";
+      const sessionId = "launch-remap-session";
       const controllerSessionKey = "agent:main:main";
       const entry = await addRun({
         runId,
         childSessionKey,
+        childSessionIdentity: { sessionId },
         controllerSessionKey,
         requesterSessionKey: controllerSessionKey,
         task: "launch remap",
@@ -1557,45 +1187,38 @@ describe("killAllControlledSubagentRuns", () => {
         schedulerSlotId: runId,
         execution: { status: "queued" },
       });
-      const sessionId = "launch-remap-session";
       const storePath = await writeSession("launch-remap", childSessionKey, {
         sessionId,
         updatedAt: 1,
       });
-      const admission = await beginSessionWorkAdmission({
-        scope: storePath,
-        identities: [childSessionKey, sessionId],
-        assertAllowed: () => {},
-      });
+      const admission = await beginControlAdmission(
+        storePath,
+        childSessionKey,
+        sessionId,
+        undefined,
+        runId,
+      );
       const response = createDeferred();
       const started = createDeferred();
       const launchDone = createDeferred();
-      const lease = consumeSessionWorkAdmissionHandoff({
+      const lease = consumeSessionEffectHandoff({
         handoffId: admission.createHandoff(),
         scope: storePath,
         identities: [childSessionKey, sessionId],
-        onInterrupt: () => response.resolve(),
-      });
-      enqueueSwarmRun({
-        groupId: "remapping",
-        runId,
-        maxConcurrent: 1,
-        activeRunIds: [],
-        start: async () => {
-          started.resolve();
-          try {
-            await response.promise;
-            expect(await startQueuedSubagentRun(runId, "accepted-launch")).toBe(true);
-          } finally {
-            lease?.release();
-            launchDone.resolve();
-          }
+        onInterrupt: () => {
+          response.resolve();
+          return { runId };
         },
-        onStartFailure: () => true,
       });
-      setSubagentControlDepsForTest({
-        isEmbeddedAgentRunActive: () => true,
-        abortEmbeddedAgentRun: () => true,
+      enqueueControlRun("remapping", runId, [], async () => {
+        started.resolve();
+        try {
+          await response.promise;
+          expect(await startQueuedSubagentRun(runId, "accepted-launch")).toBe(true);
+        } finally {
+          lease?.release();
+          launchDone.resolve();
+        }
       });
       try {
         await started.promise;
@@ -1608,20 +1231,16 @@ describe("killAllControlledSubagentRuns", () => {
           expect(
             await killAllControlledSubagentRuns({
               cfg,
+              controller: controllerFor(controllerSessionKey),
               runs: [entry],
-              controller: { ...controllerFor(controllerSessionKey), controllerAgentId: "main" },
             }),
           ).toMatchObject({ killed: 1 });
         }
-        expect(controlRuntimeMocks.abortEmbeddedAgentRun).toHaveBeenCalledWith(sessionId);
-        expect((await getSubagentRunByChildSessionKey(childSessionKey))?.runId).toBe(
-          "accepted-launch",
-        );
+        expect((await latestRun(childSessionKey))?.runId).toBe("accepted-launch");
       } finally {
         response.resolve();
         await launchDone.promise;
         lease?.release();
-        swarmSchedulerTesting.reset();
       }
     },
   );
@@ -1631,6 +1250,7 @@ describe("killAllControlledSubagentRuns", () => {
       createSubagentRunRecord({
         runId: `agent-owned-${requesterAgentId}`,
         childSessionKey: `agent:${requesterAgentId}:subagent:worker`,
+        childSessionIdentity: { sessionId: `${requesterAgentId}-worker-session` },
         controllerSessionKey: "global",
         requesterSessionKey: "global",
         requesterAgentId,
@@ -1646,118 +1266,82 @@ describe("killAllControlledSubagentRuns", () => {
       entries[index] = await addRun(entry);
     }
     for (const entry of entries) {
-      enqueueSwarmRun({
-        groupId: entry.runId,
-        runId: entry.runId,
-        maxConcurrent: 1,
-        activeRunIds: [],
-        start: async () => {
-          started.push(entry.requesterAgentId!);
-        },
-        onStartFailure: () => true,
+      enqueueControlRun(entry.runId, entry.runId, [], async () => {
+        started.push(entry.requesterAgentId!);
       });
     }
-    try {
-      const result = await killAllControlledSubagentRuns({
-        cfg: cfgWithSessionStore(),
-        controller: {
-          controllerSessionKey: "global",
-          controllerAgentId: "main",
-          callerSessionKey: "global",
-          callerIsSubagent: false,
-          controlScope: "children",
-        },
-        runs: entries,
-        beforeKill: async () => {
-          await Promise.resolve();
-          expect(started).toEqual(["work"]);
-          return true;
-        },
-      });
-      expect(result).toMatchObject({ killed: 1, labels: ["main"] });
-      expect(started).toEqual(["work"]);
-    } finally {
-      swarmSchedulerTesting.reset();
-    }
+    const result = await killAllControlledSubagentRuns({
+      cfg: cfgWithSessionStore(),
+      controller: {
+        controllerSessionKey: "global",
+        controllerAgentId: "main",
+        callerSessionKey: "global",
+        callerIsSubagent: false,
+        controlScope: "children",
+      },
+      runs: entries,
+      beforeKill: async () => {
+        await Promise.resolve();
+        expect(started).toEqual(["work"]);
+        return true;
+      },
+    });
+    expect(result).toMatchObject({ killed: 1, labels: ["main"] });
+    expect(started).toEqual(["work"]);
   });
 
-  it.each(["bulk", "channel stop"])(
-    "continues %s cancellation after one registry persistence failure",
-    async (kind) => {
-      let failNextPersistence = true;
-      const firstFixture = createSubagentRunRecord({
-        runId: "run-bulk-persistence-failure-first",
-        childSessionKey: "agent:main:subagent:bulk-persistence-failure-first",
-        controllerSessionKey: "agent:main:main",
-        task: "first bulk task",
-        createdAt: Date.now() - 2_000,
-        startedAt: Date.now() - 1_900,
-      });
-      const secondFixture = createSubagentRunRecord({
-        ...firstFixture,
-        runId: "run-bulk-persistence-failure-second",
-        childSessionKey: "agent:main:subagent:bulk-persistence-failure-second",
-        task: "second bulk task",
-        createdAt: Date.now() - 1_000,
-        execution: { status: "running", startedAt: Date.now() - 900 },
-      });
-      const first = await addRun(firstFixture);
-      const second = await addRun(secondFixture);
-      onPersistenceWrite(() => {
-        if (failNextPersistence) {
-          failNextPersistence = false;
-          throw new Error("sqlite busy");
-        }
-      });
-
-      if (kind === "channel stop") {
-        expect(
-          await stopSubagentsForRequester({
-            cfg: cfgWithSessionStore(),
-            requesterSessionKey: "agent:main:main",
-          }),
-        ).toEqual({ stopped: 1, failed: 1 });
-      } else {
-        const result = await killAllControlledSubagentRuns({
-          cfg: cfgWithSessionStore(),
-          controller: controllerFor(),
-          runs: [first, second],
-        });
-
-        expect(result).toEqual({
-          status: "error",
-          error: "first bulk task: Failed to persist subagent kill intent: sqlite busy",
-          failed: 1,
-          killed: 1,
-          labels: ["second bulk task"],
-        });
+  it("continues channel stop cancellation after one registry persistence failure", async () => {
+    let failNextPersistence = true;
+    const firstFixture = runFixture("bulk-persistence-failure-first", {
+      childSessionIdentity: { sessionId: "bulk-persistence-first-session" },
+      task: "first bulk task",
+      createdAt: Date.now() - 2_000,
+      startedAt: Date.now() - 1_900,
+    });
+    const secondFixture = createSubagentRunRecord({
+      ...firstFixture,
+      runId: "run-bulk-persistence-failure-second",
+      childSessionKey: "agent:main:subagent:bulk-persistence-failure-second",
+      childSessionIdentity: { sessionId: "bulk-persistence-second-session" },
+      task: "second bulk task",
+      createdAt: Date.now() - 1_000,
+      execution: { status: "running", startedAt: Date.now() - 900 },
+    });
+    const first = await addRun(firstFixture);
+    const second = await addRun(secondFixture);
+    onPersistenceWrite(() => {
+      if (failNextPersistence) {
+        failNextPersistence = false;
+        throw new Error("sqlite busy");
       }
-      expect(
-        (await getSubagentRunByChildSessionKey(first.childSessionKey))?.execution.endedAt,
-      ).toBeUndefined();
-      expect(
-        (await getSubagentRunByChildSessionKey(second.childSessionKey))?.execution.endedAt,
-      ).toBeTypeOf("number");
-    },
-  );
-
-  it("does not let a stale bulk entry suppress the current yielded entry", async () => {
-    const childSessionKey = "agent:main:subagent:stale-kill-all-shadow-worker";
-    const storePath = await writeSession("stale-kill-all-shadow", childSessionKey, {
-      updatedAt: Date.now(),
     });
 
-    await addRun({
-      runId: "run-stale-shadow",
+    expect(
+      await stopSubagentsForRequester({
+        cfg: cfgWithSessionStore(),
+        requesterSessionKey: "agent:main:main",
+      }),
+    ).toEqual({ stopped: 1, failed: 1 });
+    expect((await latestRun(first.childSessionKey))?.execution.endedAt).toBeUndefined();
+    expect((await latestRun(second.childSessionKey))?.execution.endedAt).toBeTypeOf("number");
+  });
+
+  it("does not let a stale bulk entry suppress the current yielded entry", async () => {
+    const {
       childSessionKey,
+      storePath,
+      run: stale,
+    } = await storedRun("stale-kill-all-shadow-worker", {
+      runId: "run-stale-shadow",
+      childSessionIdentity: { sessionId: "shadow-session" },
       task: "stale shadow task",
       createdAt: Date.now() - 9_000,
       startedAt: Date.now() - 8_000,
     });
-    const stale = subagentRuns.get("run-stale-shadow")!;
     const currentShadowRun = await addRun({
       runId: "run-current-shadow",
       childSessionKey,
+      childSessionIdentity: { sessionId: "shadow-session" },
       task: "current shadow task",
       createdAt: Date.now() - 4_000,
       startedAt: Date.now() - 3_000,
@@ -1765,11 +1349,7 @@ describe("killAllControlledSubagentRuns", () => {
       pauseReason: "sessions_yield",
     });
 
-    const result = await killAllControlledSubagentRuns({
-      cfg: cfgWithSessionStore(storePath),
-      controller: controllerFor(),
-      runs: [stale, currentShadowRun],
-    });
+    const result = await controlledKill([stale, currentShadowRun], storePath);
 
     expect(result).toEqual({
       status: "ok",
@@ -1782,175 +1362,7 @@ describe("killAllControlledSubagentRuns", () => {
     });
     expect(subagentRuns.get(stale.runId)).toEqual(stale);
   });
-
-  it.each([false, true])(
-    "ignores stale active rows while cancelling a finished bulk root (descendant=%s)",
-    async (hasDescendant) => {
-      const suffix = hasDescendant ? "bulk-desc-parent" : "bulk-finished";
-      const parentSessionKey = `agent:main:subagent:stale-${suffix}${hasDescendant ? "" : "-worker"}`;
-      const task = hasDescendant ? "bulk parent task" : "bulk finished task";
-      await addRun({
-        runId: `run-stale-${suffix}`,
-        childSessionKey: parentSessionKey,
-        task: `stale ${task}`,
-        createdAt: Date.now() - 9_000,
-        startedAt: Date.now() - 8_000,
-      });
-      const current = await addRun({
-        runId: `run-current-${suffix}`,
-        childSessionKey: parentSessionKey,
-        task: `current ${task}`,
-        endedAt: Date.now() - 1_000,
-        outcome: { status: "ok" },
-      });
-      const childSessionKey = `${parentSessionKey}:subagent:leaf`;
-      if (hasDescendant) {
-        await addRun({
-          runId: "run-active-bulk-desc-child",
-          childSessionKey,
-          controllerSessionKey: parentSessionKey,
-          requesterSessionKey: parentSessionKey,
-          requesterDisplayKey: parentSessionKey,
-          task: "active bulk child task",
-          createdAt: Date.now() - 3_000,
-          startedAt: Date.now() - 2_000,
-        });
-      }
-      expect(
-        await killAllControlledSubagentRuns({
-          cfg: cfgWithSessionStore(),
-          controller: controllerFor(),
-          runs: [current],
-        }),
-      ).toEqual({
-        status: "ok",
-        killed: hasDescendant ? 1 : 0,
-        labels: hasDescendant ? ["active bulk child task"] : [],
-      });
-      if (hasDescendant) {
-        expect(
-          (await getSubagentRunByChildSessionKey(childSessionKey))?.execution.endedAt,
-        ).toBeTypeOf("number");
-      }
-    },
-  );
 });
 
-describe("controlled subagent reads", () => {
-  it.each([
-    {
-      name: "control owner",
-      controllerSessionKey: "agent:main:main",
-      requesterSessionKey: "agent:main:telegram:direct:abc123",
-      expectedCount: 1,
-    },
-    {
-      name: "completion owner",
-      controllerSessionKey: "agent:main:telegram:direct:abc123",
-      requesterSessionKey: "agent:main:main",
-      expectedCount: 1,
-    },
-    {
-      name: "unrelated session",
-      controllerSessionKey: "agent:other:discord:direct:xyz",
-      requesterSessionKey: "agent:other:main",
-      expectedCount: 0,
-    },
-  ])(
-    "applies read visibility for the $name",
-    async ({ controllerSessionKey, requesterSessionKey, expectedCount }) => {
-      const childSessionKey = "agent:main:subagent:list-visibility";
-      await addRun({
-        runId: "run-list-visibility",
-        childSessionKey,
-        controllerSessionKey,
-        requesterSessionKey,
-        requesterDisplayKey: requesterSessionKey,
-        task: "visibility test",
-        createdAt: Date.now(),
-        startedAt: Date.now(),
-      });
-
-      const { runs: results } = await buildControlledSubagentRunsReadContext("agent:main:main");
-      expect(results).toHaveLength(expectedCount);
-      if (expectedCount === 1) {
-        expect(results[0]?.childSessionKey).toBe(childSessionKey);
-      }
-    },
-  );
-
-  it("uses one stable snapshot for listing and descendant counts", async () => {
-    const now = Date.now();
-    const rootSessionKey = "agent:main:main";
-    const parentSessionKey = "agent:main:subagent:status-parent";
-    await addRun({
-      runId: "run-status-parent",
-      childSessionKey: parentSessionKey,
-      controllerSessionKey: rootSessionKey,
-      requesterSessionKey: rootSessionKey,
-      requesterDisplayKey: rootSessionKey,
-      task: "status parent",
-      createdAt: now - 4_000,
-      startedAt: now - 3_500,
-      endedAt: now - 3_000,
-    });
-    await addRun({
-      runId: "run-status-child-1",
-      childSessionKey: `${parentSessionKey}:subagent:child-1`,
-      controllerSessionKey: parentSessionKey,
-      requesterSessionKey: parentSessionKey,
-      requesterDisplayKey: parentSessionKey,
-      task: "status child 1",
-      createdAt: now - 2_000,
-      startedAt: now - 1_500,
-    });
-
-    const context = await buildControlledSubagentRunsReadContext(rootSessionKey);
-
-    await addRun({
-      runId: "run-status-child-2",
-      childSessionKey: `${parentSessionKey}:subagent:child-2`,
-      controllerSessionKey: parentSessionKey,
-      requesterSessionKey: parentSessionKey,
-      requesterDisplayKey: parentSessionKey,
-      task: "status child 2",
-      createdAt: now - 1_000,
-      startedAt: now - 500,
-    });
-
-    expect(context.runs.map((run) => run.runId)).toEqual(["run-status-parent"]);
-    expect(context.list.pendingDescendants.get(parentSessionKey)).toBe(1);
-    expect(
-      (await buildControlledSubagentRunsReadContext(rootSessionKey)).list.pendingDescendants.get(
-        parentSessionKey,
-      ),
-    ).toBe(2);
-  });
-
-  it("partitions duplicate bare controller keys by owning agent", async () => {
-    const now = Date.now();
-    for (const agentId of ["research", "ops"]) {
-      await addRun({
-        runId: `run-${agentId}`,
-        childSessionKey: `agent:${agentId}:subagent:child`,
-        controllerSessionKey: "global",
-        requesterSessionKey: "global",
-        requesterAgentId: agentId,
-        requesterDisplayKey: "global",
-        task: `${agentId} task`,
-        createdAt: now,
-        startedAt: now,
-      });
-    }
-
-    const cfg = {
-      agents: {
-        ownership: "explicit",
-        entries: { research: {}, ops: {} },
-      },
-    } as OpenClawConfig;
-    const context = await buildControlledSubagentRunsReadContext("global", "research", cfg);
-    expect(context.runs.map((run) => run.runId)).toEqual(["run-research"]);
-  });
-});
+registerControlledSubagentReadTests(addRun);
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

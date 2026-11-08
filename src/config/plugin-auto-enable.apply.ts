@@ -1,26 +1,21 @@
-import type { AmbientEnvTriggerPolicy } from "../channels/config-presence.js";
-import type { PluginDiscoveryResult } from "../plugins/discovery.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { registerPluginMetadataProcessMemoLifecycleClear } from "../plugins/plugin-metadata-lifecycle.js";
+import { withPluginSetupPreparation } from "../plugins/plugin-setup-module.js";
+import { freezeJsonSnapshot } from "../shared/immutable-data.js";
 import { detectPluginAutoEnableCandidates } from "./plugin-auto-enable.detect.js";
 import { materializePluginAutoEnableCandidatesInternal } from "./plugin-auto-enable.materialize.js";
-import { resolvePluginAutoEnableManifestRegistry } from "./plugin-auto-enable.shared.js";
+import {
+  preparePluginAutoEnableSetup,
+  resolvePluginAutoEnableManifestRegistry,
+} from "./plugin-auto-enable.shared.js";
 import type {
   PluginAutoEnableCandidate,
+  PluginAutoEnableConfigCache,
+  PluginAutoEnableDiscoveryCache,
   PluginAutoEnableResult,
+  PluginAutoEnableRuntimePreparation,
 } from "./plugin-auto-enable.types.js";
 import type { OpenClawConfig } from "./types.openclaw.js";
-
-type PluginAutoEnableCacheEntry = {
-  candidates: PluginDiscoveryResult["candidates"];
-  plugins: PluginManifestRegistry["plugins"];
-  ambientEnvTriggers: AmbientEnvTriggerPolicy;
-  result: PluginAutoEnableResult;
-};
-type PluginAutoEnableDiscoveryCache = WeakMap<object, PluginAutoEnableCacheEntry>;
-type PluginAutoEnableRegistryCache = WeakMap<object, PluginAutoEnableDiscoveryCache>;
-type PluginAutoEnableEnvCache = WeakMap<object, PluginAutoEnableRegistryCache>;
-type PluginAutoEnableConfigCache = WeakMap<object, PluginAutoEnableEnvCache>;
 
 let sameTurnApplyCache: PluginAutoEnableConfigCache | undefined;
 let sameTurnApplyCacheClearScheduled = false;
@@ -43,18 +38,16 @@ function scheduleSameTurnApplyCacheClear(): void {
   handle.unref?.();
 }
 
-function getOrCreateWeakMap<K extends object, V>(
-  parent: WeakMap<K, V>,
+function getOrCreateWeakMap<K extends object, ChildKey extends object, V>(
+  parent: WeakMap<K, WeakMap<ChildKey, V>>,
   key: K,
-  create: () => V,
-): V {
-  const existing = parent.get(key);
-  if (existing) {
-    return existing;
+): WeakMap<ChildKey, V> {
+  let child = parent.get(key);
+  if (!child) {
+    child = new WeakMap();
+    parent.set(key, child);
   }
-  const next = create();
-  parent.set(key, next);
-  return next;
+  return child;
 }
 
 /** Applies already detected plugin auto-enable candidates to config. */
@@ -89,32 +82,29 @@ export function materializePluginAutoEnableCandidates(params: {
 }
 
 export function applyPluginAutoEnable(
-  params: Parameters<typeof detectPluginAutoEnableCandidates>[0],
+  params: Parameters<typeof detectPluginAutoEnableCandidates>[0] & {
+    runtimePreparation?: PluginAutoEnableRuntimePreparation;
+  },
 ): PluginAutoEnableResult {
   const config = params.config;
   const ambientEnvTriggers = params.ambientEnvTriggers ?? "allow";
+  const env = params.env ?? process.env;
+  const runtime = params.runtimePreparation;
+  const capturedConfig = runtime?.capturedConfig;
+  const discoveryKey = runtime?.metadataKey ?? params.discovery;
   let discoveryCache: PluginAutoEnableDiscoveryCache | undefined;
-  if (config && typeof config === "object" && params.manifestRegistry && params.discovery) {
-    const env = params.env ?? process.env;
+  if (config && params.manifestRegistry && discoveryKey) {
     const envCache = getOrCreateWeakMap(
-      (sameTurnApplyCache ??= new WeakMap()),
+      runtime?.cache ?? (sameTurnApplyCache ??= new WeakMap()),
       config,
-      () => new WeakMap<object, PluginAutoEnableRegistryCache>(),
     );
-    const registryCache = getOrCreateWeakMap(
-      envCache,
-      env,
-      () => new WeakMap<object, PluginAutoEnableDiscoveryCache>(),
-    );
-    discoveryCache = getOrCreateWeakMap(
-      registryCache,
-      params.manifestRegistry,
-      () => new WeakMap<object, PluginAutoEnableCacheEntry>(),
-    );
-    const cached = discoveryCache.get(params.discovery);
+    const registryCache = getOrCreateWeakMap(envCache, runtime?.envKey ?? env);
+    discoveryCache = getOrCreateWeakMap(registryCache, params.manifestRegistry);
+    const cached = discoveryCache.get(discoveryKey);
     if (
       cached &&
-      cached.candidates === params.discovery.candidates &&
+      cached.capturedConfig === capturedConfig &&
+      cached.candidates === params.discovery?.candidates &&
       cached.plugins === params.manifestRegistry.plugins &&
       cached.ambientEnvTriggers === ambientEnvTriggers
     ) {
@@ -122,21 +112,45 @@ export function applyPluginAutoEnable(
     }
   }
 
-  const candidates = detectPluginAutoEnableCandidates(params);
+  const preparationConfig = capturedConfig ?? config;
+  const candidates = detectPluginAutoEnableCandidates({ ...params, config: preparationConfig });
   const result = materializePluginAutoEnableCandidates({
-    config,
+    config: preparationConfig,
     candidates,
     env: params.env,
     manifestRegistry: params.manifestRegistry,
   });
-  if (discoveryCache && params.discovery && params.manifestRegistry) {
-    discoveryCache.set(params.discovery, {
-      candidates: params.discovery.candidates,
+  if (runtime) {
+    // Preserve the no-rewrite identity without freezing the mutable publication.
+    // Rewritten captures reuse config-state's existing immutable policy projection.
+    if (result.config === capturedConfig) {
+      result.config = config!;
+    } else {
+      freezeJsonSnapshot(result.config);
+    }
+  }
+  if (discoveryCache && discoveryKey && params.manifestRegistry) {
+    discoveryCache.set(discoveryKey, {
+      capturedConfig,
+      candidates: params.discovery?.candidates,
       plugins: params.manifestRegistry.plugins,
       ambientEnvTriggers,
       result,
     });
-    scheduleSameTurnApplyCacheClear();
+    if (!runtime) {
+      scheduleSameTurnApplyCacheClear();
+    }
   }
   return result;
+}
+
+/** Prepare setup probes before applying the same synchronous activation policy. */
+export async function applyPluginAutoEnableAsync(
+  params: Parameters<typeof applyPluginAutoEnable>[0],
+): Promise<PluginAutoEnableResult> {
+  return withPluginSetupPreparation({}, async ({ assertCurrent }) => {
+    await preparePluginAutoEnableSetup({ ...params, config: params.config ?? {}, assertCurrent });
+    assertCurrent();
+    return applyPluginAutoEnable(params);
+  });
 }

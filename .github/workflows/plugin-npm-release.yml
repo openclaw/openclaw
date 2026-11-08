@@ -17,6 +17,8 @@ on:
       - "packages/plugin-package-contract/src/**"
       - "scripts/generate-npm-package-lock.mjs"
       - "scripts/generate-npm-package-lock.mts"
+      - "scripts/lib/npm-lock-package-selection.mjs"
+      - "scripts/plugin-npm-release-admission.py"
       - "scripts/lib/bounded-response.mjs"
       - "scripts/lib/npm-publish-plan.mjs"
       - "scripts/lib/npm-json-output.mts"
@@ -105,6 +107,16 @@ on:
         required: false
         default: ""
         type: string
+      full_release_validation_run_id:
+        description: Original FRV parent owning the prepared npm artifact
+        required: false
+        default: ""
+        type: string
+      full_release_validation_run_attempt:
+        description: Exact original FRV attempt owning the prepared npm artifact
+        required: false
+        default: ""
+        type: string
       trusted_publisher_preflight:
         description: During preflight_only, verify npm trusted-publisher OIDC exchange instead of packing artifacts
         required: true
@@ -125,18 +137,34 @@ concurrency:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
-  NODE_VERSION: "24.21.0"
+  NODE_VERSION: "24.22.1"
+  PREPARED_NPM_ARTIFACT: ${{ inputs.prepared_artifact }}
+  PREPARED_NPM_SOURCE_SHA: ${{ inputs.ref }}
+  PREPARED_NPM_FRV_RUN_ID: ${{ inputs.full_release_validation_run_id }}
+  PREPARED_NPM_FRV_RUN_ATTEMPT: ${{ inputs.full_release_validation_run_attempt }}
+  PREPARED_NPM_SELECTION_MODE: ${{ inputs.publish_scope }}
+  PREPARED_NPM_PLUGINS: ${{ inputs.plugins }}
+  PREPARED_NPM_DIST_TAG: ${{ inputs.npm_dist_tag }}
+  PREPARED_NPM_PARENT_RUN_ID: ${{ inputs.release_publish_run_id }}
+  PREPARED_NPM_PARENT_RUN_ATTEMPT: ${{ inputs.release_publish_run_attempt }}
 
 jobs:
   preview_plugins_npm:
     # Scheduled preview is nonpublishing and considers all unpublished packages.
     if: (github.event_name != 'schedule' || github.repository == 'openclaw/openclaw') && (github.event_name != 'push' || github.ref != 'refs/heads/main' || vars.OPENCLAW_CI_ON_PUSH == 'true')
-    runs-on: ${{ (github.event_name == 'workflow_dispatch' && inputs.release_publish_run_id != '' && vars.OPENCLAW_RELEASE_RUNNER_GROUP || '') != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON((github.event_name == 'workflow_dispatch' && inputs.release_publish_run_id != '' && vars.OPENCLAW_RELEASE_RUNNER_GROUP || '')), toJSON('ubuntu-latest'))) || ('ubuntu-latest') }}
+    runs-on: &linux_runner_release_ubuntu_latest >-
+      ${{ (github.event_name == 'workflow_dispatch' && inputs.release_publish_run_id != '' &&
+      vars.OPENCLAW_RELEASE_RUNNER_GROUP || '') != '' && fromJSON(format('{{"group":{0},"labels":{1}}}',
+      toJSON((github.event_name == 'workflow_dispatch' && inputs.release_publish_run_id != '' &&
+      vars.OPENCLAW_RELEASE_RUNNER_GROUP || '')), toJSON('ubuntu-latest'))) || ('ubuntu-latest') }}
     permissions:
       actions: read
       contents: read
     outputs:
       ref_revision: ${{ steps.ref.outputs.sha }}
+      evidence_id: ${{ steps.evidence_upload.outputs.artifact-id }}
+      evidence_digest: ${{ steps.evidence_upload.outputs.artifact-digest }}
+      evidence_attempt: ${{ steps.prepared_plan.outputs.evidence_attempt }}
       has_candidates: ${{ steps.prepared_plan.outputs.has_candidates || steps.plan.outputs.has_candidates }}
       candidate_count: ${{ steps.prepared_plan.outputs.candidate_count || steps.plan.outputs.candidate_count }}
       has_selection: ${{ steps.prepared_plan.outputs.has_selection || steps.plan.outputs.has_selection }}
@@ -145,7 +173,7 @@ jobs:
       all_matrix: ${{ steps.prepared_plan.outputs.all_matrix || steps.plan.outputs.all_matrix }}
     steps:
       - name: Prepare Git owner
-        uses: openclaw/openclaw/.github/actions/git-owner@dd4528b6393e7d00063067a080ca7241b48ce475
+        uses: openclaw/openclaw/.github/actions/git-owner@88095dc00eef288c3829909d4dc64a9e249fa7ef
 
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -178,7 +206,7 @@ jobs:
           PYTHON
 
       - name: Setup supported Node runtime
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: ${{ env.NODE_VERSION }}
           package-manager-cache: false
@@ -200,7 +228,9 @@ jobs:
             --allow-prevalidated-ref
 
       - name: Validate ref is on a trusted publish branch
-        env:
+        env: &plugin_npm_admission
+          GH_TOKEN: ${{ github.token }}
+          WORKFLOW_REF_NAME: ${{ github.ref_name }}
           REQUIRE_NPM_PUBLISH_ENVIRONMENT: ${{ github.event_name == 'workflow_dispatch' && (!inputs.preflight_only || inputs.trusted_publisher_preflight) }}
           NPM_DIST_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.npm_dist_tag || 'default' }}
           PREFLIGHT_ONLY: ${{ github.event_name == 'workflow_dispatch' && inputs.preflight_only || false }}
@@ -216,206 +246,11 @@ jobs:
           WORKFLOW_SHA: ${{ github.workflow_sha }}
         run: |
           set -euo pipefail
-          exec python3 -I -S "$CI_GIT_OWNER" --policy - <<'PYTHON'
-          import json
-          import os
-          import re
-          import sys
-
-          from ci_git_owner import GitFailure, git_output, run_git
-
-          workspace = os.environ["GITHUB_WORKSPACE"]
-
-          def fail(message):
-              print(message, file=sys.stderr)
-              raise SystemExit(1)
-
-          def exact_ref_match(left_ref, right_ref):
-              try:
-                  left = git_output(workspace, "rev-parse", left_ref).rstrip("\n")
-                  right = git_output(workspace, "rev-parse", right_ref).rstrip("\n")
-              except GitFailure:
-                  return False
-              return left == right
-
-          def is_ancestor(ref, source="HEAD"):
-              try:
-                  run_git(workspace, "merge-base", "--is-ancestor", source, ref)
-                  return True
-              except GitFailure as error:
-                  if error.code == 1:
-                      return False
-                  raise
-
-          preflight = os.environ["PREFLIGHT_ONLY"] == "true"
-          if os.environ["REQUIRE_NPM_PUBLISH_ENVIRONMENT"] == "true":
-              tooling_tag = re.fullmatch(
-                  r"refs/tags/release-publish/([a-f0-9]{12})-[1-9][0-9]*",
-                  os.environ["WORKFLOW_REF"],
-              )
-              if tooling_tag is None:
-                  fail(
-                      "Real npm publication and trusted-publisher preflight require a protected "
-                      "release-publish/<sha12>-<n> tooling tag. Mint one with pnpm "
-                      "release:publish-preflight / ensureReleasePublishToolingTag, then dispatch "
-                      "with --ref release-publish/...."
-                  )
-              if not os.environ["WORKFLOW_SHA"].startswith(tooling_tag.group(1)):
-                  fail("Protected release-publish tag does not match the plugin npm workflow SHA.")
-          if os.environ["PREPARED_ARTIFACT"] and preflight:
-              fail("Prepared npm artifacts are publication inputs, not preflight inputs.")
-          if os.environ["TRUSTED_PUBLISHER_PREFLIGHT"] == "true" and not preflight:
-              fail("trusted_publisher_preflight requires preflight_only=true.")
-          source_ref = os.environ["SOURCE_REF"]
-          if os.environ["PREPARED_ARTIFACT"] and not re.fullmatch(r"[0-9a-f]{40}", source_ref):
-              fail("Prepared npm publication requires the exact source SHA.")
-          run_id = os.environ["RELEASE_PUBLISH_RUN_ID"]
-          run_attempt = os.environ["RELEASE_PUBLISH_RUN_ATTEMPT"]
-          candidate_branch = os.environ["RELEASE_CANDIDATE_BRANCH"]
-          if preflight:
-              if not re.fullmatch(r"[0-9a-fA-F]{40}", source_ref) or not exact_ref_match(
-                  "HEAD",
-                  f"{source_ref}^{{commit}}",
-              ):
-                  fail("Plugin npm preflight requires ref to be the exact 40-character source SHA.")
-              if run_id.strip() or run_attempt.strip():
-                  fail("Plugin npm preflight must not include a release publish parent run tuple.")
-              if candidate_branch.strip():
-                  fail("Plugin npm preflight must not include release_candidate_branch.")
-          if run_id.strip() and not re.fullmatch(r"[1-9][0-9]*", run_attempt):
-              fail("release_publish_run_id requires the exact positive release_publish_run_attempt.")
-
-          if os.environ["NPM_DIST_TAG"] == "extended-stable":
-              if os.environ["PUBLISH_SCOPE"] != "all-publishable" or os.environ[
-                  "RELEASE_PLUGINS"
-              ].strip():
-                  fail(
-                      "Extended-stable plugin publication requires publish_scope=all-publishable "
-                      "without an explicit plugin list."
-                  )
-              if not re.fullmatch(r"[0-9a-f]{40}", source_ref) or not exact_ref_match(
-                  "HEAD",
-                  f"{source_ref}^{{commit}}",
-              ):
-                  fail(
-                      "Extended-stable plugin publication requires ref to be the exact "
-                      "40-character source SHA."
-                  )
-              with open(os.path.join(workspace, "package.json"), encoding="utf-8") as source:
-                  package_version = json.load(source).get("version")
-              version = (
-                  re.fullmatch(r"([0-9]{4})\.([1-9]|1[0-2])\.([1-9][0-9]*)", package_version)
-                  if isinstance(package_version, str)
-                  else None
-              )
-              if version is None or int(version.group(3)) < 33:
-                  fail(
-                      "Extended-stable plugin publication requires a final YYYY.M.PATCH version "
-                      "with PATCH >= 33."
-                  )
-              extended_branch = f"extended-stable/{version.group(1)}.{version.group(2)}.33"
-              run_git(
-                  workspace,
-                  "fetch",
-                  "--no-tags",
-                  "origin",
-                  f"+refs/heads/{extended_branch}:refs/remotes/origin/{extended_branch}",
-                  timeout=120,
-                  reclaim_locks=True,
-              )
-              if candidate_branch.strip():
-                  if candidate_branch != extended_branch or not re.fullmatch(
-                      r"refs/tags/release-publish/[a-f0-9]{12}-[1-9][0-9]*",
-                      os.environ["WORKFLOW_REF"],
-                  ):
-                      fail(
-                          f"release_candidate_branch must be {extended_branch} and requires "
-                          "protected release-publish workflow tooling."
-                      )
-                  # The preceding identity check binds the protected tag to WORKFLOW_SHA.
-                  # Source and tooling ancestry are separate release admission boundaries.
-                  run_git(
-                      workspace,
-                      "fetch",
-                      "--no-tags",
-                      "origin",
-                      "+refs/heads/main:refs/remotes/origin/main",
-                      timeout=120,
-                      reclaim_locks=True,
-                  )
-                  if not is_ancestor("origin/main", os.environ["WORKFLOW_SHA"]):
-                      fail("Extended-stable plugin workflow revision is not reachable from current main.")
-                  if is_ancestor(f"refs/remotes/origin/{extended_branch}"):
-                      raise SystemExit(0)
-                  fail(f"Extended-stable plugin target must be reachable from {extended_branch}.")
-              if not preflight:
-                  fail(f"Extended-stable plugin publication requires release_candidate_branch={extended_branch}.")
-              if not exact_ref_match(
-                  "HEAD",
-                  f"refs/remotes/origin/{extended_branch}",
-              ):
-                  fail(f"Extended-stable plugin source must equal the exact {extended_branch} branch tip.")
-              # Nonpublishing preflight accepts the canonical branch, main, or an
-              # immutable release-ci transport whose pinned tooling is on main.
-              workflow_ref = os.environ["WORKFLOW_REF"]
-              if workflow_ref in (f"refs/heads/{extended_branch}", "refs/heads/main"):
-                  raise SystemExit(0)
-              release_ci = re.fullmatch(
-                  r"refs/heads/release-ci/([a-f0-9]{12})-[0-9]+",
-                  workflow_ref,
-              )
-              if release_ci:
-                  workflow_sha = os.environ["WORKFLOW_SHA"]
-                  if not workflow_sha.startswith(release_ci.group(1)):
-                      fail("Extended-stable release-ci ref does not match the workflow SHA.")
-                  run_git(
-                      workspace,
-                      "fetch",
-                      "--no-tags",
-                      "origin",
-                      "+refs/heads/main:refs/remotes/origin/main",
-                      timeout=120,
-                      reclaim_locks=True,
-                  )
-                  if not is_ancestor("origin/main", workflow_sha):
-                      fail("Extended-stable release-ci workflow revision is not reachable from current main.")
-                  raise SystemExit(0)
-              fail(
-                  f"Extended-stable plugin npm preflights must run from {extended_branch} "
-                  "trusted main, or a main-pinned release-ci ref, targeting the exact canonical branch tip."
-              )
-
-          if candidate_branch.strip():
-              fail("release_candidate_branch is only valid for extended-stable publication.")
-
-          run_git(
-              workspace,
-              "fetch",
-              "--no-tags",
-              "origin",
-              "+refs/heads/main:refs/remotes/origin/main",
-              "+refs/heads/release/*:refs/remotes/origin/release/*",
-              timeout=120,
-              reclaim_locks=True,
-          )
-          if is_ancestor("origin/main"):
-              raise SystemExit(0)
-          release_refs = git_output(
-              workspace,
-              "for-each-ref",
-              "--format=%(refname)",
-              "refs/remotes/origin/release",
-          ).splitlines()
-          if any(is_ancestor(ref) for ref in release_refs):
-              raise SystemExit(0)
-          if preflight:
-              fail("Plugin npm preflight target must be reachable from main or release/*.")
-          fail("Plugin npm publishes must target a commit reachable from main or release/*.")
-          PYTHON
+          exec python3 -I -S "$CI_GIT_OWNER" --policy .release-tooling/scripts/plugin-npm-release-admission.py
 
       - name: Setup trusted Node for prepared publication
         if: inputs.prepared_artifact != ''
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: ${{ env.NODE_VERSION }}
 
@@ -432,6 +267,10 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p .local
+          EVIDENCE_ARGS=()
+          if [[ -n "$PREPARED_NPM_FRV_RUN_ID" && -n "$PREPARED_NPM_PARENT_RUN_ID" ]]; then
+            EVIDENCE_ARGS=(--evidence-output "$RUNNER_TEMP/plugin-npm-evidence.json")
+          fi
           node .release-tooling/scripts/plugin-npm-prepared-release.mjs load \
             --artifact "$PREPARED_ARTIFACT" \
             --source-sha "$SOURCE_SHA" \
@@ -440,8 +279,20 @@ jobs:
             --npm-dist-tag "$NPM_DIST_TAG" \
             --policy-file .release-tooling/.github/workflows/plugin-npm-release.yml \
             --archive-path "$RUNNER_TEMP/plugin-npm-prepared.zip" \
+            "${EVIDENCE_ARGS[@]}" \
             --output .local/plugin-npm-prepared.json \
             --github-output "$GITHUB_OUTPUT"
+          echo "evidence_attempt=$GITHUB_RUN_ATTEMPT" >> "$GITHUB_OUTPUT"
+
+      - name: Upload immutable publication evidence
+        id: evidence_upload
+        if: inputs.prepared_artifact != '' && inputs.full_release_validation_run_id != '' && inputs.release_publish_run_id != ''
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: plugin-npm-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/plugin-npm-evidence.json
+          if-no-files-found: error
+          retention-days: 7
 
       - name: Setup Node environment
         if: inputs.prepared_artifact == ''
@@ -565,7 +416,7 @@ jobs:
 
       - name: Upload resolved npm publication plan
         if: inputs.defer_registry_verification && inputs.release_publish_run_id != ''
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: plugin-npm-plan-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/npm-publication-plan.json
@@ -576,7 +427,7 @@ jobs:
     name: Validate release publish approval
     needs: preview_plugins_npm
     if: github.event_name == 'workflow_dispatch' && !inputs.preflight_only && needs.preview_plugins_npm.outputs.has_candidates == 'true'
-    runs-on: ${{ (github.event_name == 'workflow_dispatch' && inputs.release_publish_run_id != '' && vars.OPENCLAW_RELEASE_RUNNER_GROUP || '') != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON((github.event_name == 'workflow_dispatch' && inputs.release_publish_run_id != '' && vars.OPENCLAW_RELEASE_RUNNER_GROUP || '')), toJSON('ubuntu-latest'))) || ('ubuntu-latest') }}
+    runs-on: *linux_runner_release_ubuntu_latest
     permissions:
       actions: read
       attestations: read
@@ -592,7 +443,7 @@ jobs:
           persist-credentials: false
 
       - name: Setup supported Node runtime
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: ${{ env.NODE_VERSION }}
           package-manager-cache: false
@@ -656,7 +507,7 @@ jobs:
   preview_plugin_pack:
     needs: preview_plugins_npm
     if: inputs.prepared_artifact == '' && ((needs.preview_plugins_npm.outputs.has_candidates == 'true' && !(github.event_name == 'workflow_dispatch' && inputs.preflight_only)) || (github.event_name == 'workflow_dispatch' && inputs.preflight_only && !inputs.trusted_publisher_preflight && needs.preview_plugins_npm.outputs.has_selection == 'true'))
-    runs-on: ${{ (github.event_name == 'workflow_dispatch' && inputs.release_publish_run_id != '' && vars.OPENCLAW_RELEASE_RUNNER_GROUP || '') != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON((github.event_name == 'workflow_dispatch' && inputs.release_publish_run_id != '' && vars.OPENCLAW_RELEASE_RUNNER_GROUP || '')), toJSON('ubuntu-latest'))) || ('ubuntu-latest') }}
+    runs-on: *linux_runner_release_ubuntu_latest
     permissions:
       contents: read
     strategy:
@@ -696,6 +547,8 @@ jobs:
       - name: Prepare immutable npm preflight artifact
         id: preflight_artifact
         env:
+          # Resolve trusted tooling workspace packages from its tsconfig, not the candidate's.
+          TSX_TSCONFIG_PATH: ${{ github.workspace }}/.release-tooling/tsconfig.json
           ARTIFACT_NAME: plugin-npm-package-source-${{ needs.preview_plugins_npm.outputs.ref_revision }}-${{ matrix.plugin.extensionId }}
           EXTENSION_ID: ${{ matrix.plugin.extensionId }}
           INSTALL_NPM_SPEC: ${{ matrix.plugin.installNpmSpec }}
@@ -903,6 +756,7 @@ jobs:
       - name: Qualify packed plugin runtime
         env:
           ARTIFACT_DIR: ${{ steps.preflight_artifact.outputs.dir }}
+          TSX_TSCONFIG_PATH: ${{ github.workspace }}/.release-tooling/tsconfig.json
         run: |
           set -euo pipefail
           node --import tsx --input-type=module <<'NODE'
@@ -928,6 +782,7 @@ jobs:
       - name: Scan exact plugin npm artifact
         env:
           ARTIFACT_DIR: ${{ steps.preflight_artifact.outputs.dir }}
+          TSX_TSCONFIG_PATH: ${{ github.workspace }}/.release-tooling/tsconfig.json
           PACKAGE_NAME: ${{ matrix.plugin.packageName }}
           PACKAGE_VERSION: ${{ matrix.plugin.version }}
         run: |
@@ -940,7 +795,7 @@ jobs:
 
       - name: Upload immutable npm preflight artifact
         id: upload_preflight_artifact
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ${{ steps.preflight_artifact.outputs.name }}
           path: ${{ steps.preflight_artifact.outputs.dir }}
@@ -965,7 +820,7 @@ jobs:
     name: Preflight plugin npm package (${{ matrix.plugin.packageName }})
     needs: [preview_plugins_npm, preview_plugin_pack]
     if: ${{ inputs.prepared_artifact == '' && github.event_name == 'workflow_dispatch' && ((inputs.preflight_only && !inputs.trusted_publisher_preflight && needs.preview_plugins_npm.outputs.has_selection == 'true') || (!inputs.preflight_only && needs.preview_plugins_npm.outputs.has_candidates == 'true')) }}
-    runs-on: ${{ (github.event_name == 'workflow_dispatch' && inputs.release_publish_run_id != '' && vars.OPENCLAW_RELEASE_RUNNER_GROUP || '') != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON((github.event_name == 'workflow_dispatch' && inputs.release_publish_run_id != '' && vars.OPENCLAW_RELEASE_RUNNER_GROUP || '')), toJSON('ubuntu-latest'))) || ('ubuntu-latest') }}
+    runs-on: *linux_runner_release_ubuntu_latest
     permissions:
       actions: read
       contents: read
@@ -975,7 +830,7 @@ jobs:
         plugin: ${{ fromJson(inputs.preflight_only && !inputs.trusted_publisher_preflight && needs.preview_plugins_npm.outputs.all_matrix || needs.preview_plugins_npm.outputs.matrix) }}
     steps:
       - name: Prepare Git owner
-        uses: openclaw/openclaw/.github/actions/git-owner@dd4528b6393e7d00063067a080ca7241b48ce475
+        uses: openclaw/openclaw/.github/actions/git-owner@88095dc00eef288c3829909d4dc64a9e249fa7ef
 
       - name: Checkout trusted npm preflight tooling
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -989,7 +844,7 @@ jobs:
             src/plugins
 
       - name: Download immutable npm preflight artifact
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: plugin-npm-package-source-${{ needs.preview_plugins_npm.outputs.ref_revision }}-${{ matrix.plugin.extensionId }}
           path: ${{ runner.temp }}/plugin-npm-preflight-readback
@@ -1035,7 +890,7 @@ jobs:
           PYTHON
 
       - name: Setup supported Node runtime
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: ${{ env.NODE_VERSION }}
           package-manager-cache: false
@@ -1064,9 +919,21 @@ jobs:
           set -euo pipefail
           source_package_json="${RUNNER_TEMP}/${EXTENSION_ID}-source-package.json"
           artifacts_json="${RUNNER_TEMP}/${EXTENSION_ID}-artifacts.json"
-          gh api --paginate \
-            "repos/${GITHUB_REPOSITORY}/actions/runs/${RUN_ID}/artifacts?per_page=100" |
-            jq -s '{artifacts: [.[].artifacts[]] | unique_by(.id)}' > "${artifacts_json}"
+          node --input-type=module <<'NODE' | jq '{artifacts: (.artifacts | unique_by(.id))}' > "${artifacts_json}"
+          import { runReleaseCiGh } from "./scripts/release-ci-summary.mjs";
+          const query = new URLSearchParams({ name: process.env.ARTIFACT_NAME, per_page: "100" });
+          const endpoint = `repos/${process.env.GITHUB_REPOSITORY}/actions/runs/${process.env.RUN_ID}/artifacts?${query}`;
+          const response = JSON.parse(runReleaseCiGh(["api", endpoint]));
+          if (
+            !Number.isSafeInteger(response?.total_count) ||
+            response.total_count < 0 ||
+            !Array.isArray(response.artifacts) ||
+            response.artifacts.length !== response.total_count
+          ) {
+            throw new Error("Package artifact enumeration is incomplete or invalid.");
+          }
+          process.stdout.write(JSON.stringify(response));
+          NODE
           artifact_count="$(
             jq --arg name "${ARTIFACT_NAME}" \
               '[.artifacts[] | select(.name == $name and .expired == false)] | length' \
@@ -1403,7 +1270,7 @@ jobs:
           echo "artifact_path=$output_dir" >> "$GITHUB_OUTPUT"
 
       - name: Upload immutable plugin npm preflight evidence
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ${{ steps.preflight_evidence.outputs.artifact_name }}
           path: ${{ steps.preflight_evidence.outputs.artifact_path }}/*
@@ -1430,7 +1297,7 @@ jobs:
     name: Seal prepared plugin npm release
     needs: [preview_plugins_npm, verify_plugin_npm_preflight]
     if: ${{ github.event_name == 'workflow_dispatch' && inputs.preflight_only && !inputs.trusted_publisher_preflight }}
-    runs-on: ${{ (github.event_name == 'workflow_dispatch' && inputs.release_publish_run_id != '' && vars.OPENCLAW_RELEASE_RUNNER_GROUP || '') != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON((github.event_name == 'workflow_dispatch' && inputs.release_publish_run_id != '' && vars.OPENCLAW_RELEASE_RUNNER_GROUP || '')), toJSON('ubuntu-latest'))) || ('ubuntu-latest') }}
+    runs-on: *linux_runner_release_ubuntu_latest
     permissions:
       actions: read
       contents: read
@@ -1443,7 +1310,7 @@ jobs:
           fetch-depth: 1
 
       - name: Setup trusted Node
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: ${{ env.NODE_VERSION }}
 
@@ -1477,7 +1344,7 @@ jobs:
 
       - name: Upload qualified npm preparation manifest
         id: upload
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ${{ steps.seal.outputs.artifact_name }}
           path: ${{ runner.temp }}/plugin-npm-prepared/plugin-npm-prepared.json
@@ -1501,31 +1368,44 @@ jobs:
     name: Trusted publisher OIDC exchange
     needs: preview_plugins_npm
     if: ${{ github.event_name == 'workflow_dispatch' && inputs.preflight_only && inputs.trusted_publisher_preflight && needs.preview_plugins_npm.outputs.has_selection == 'true' }}
-    runs-on: ubuntu-latest
+    runs-on: &linux_runner_ubuntu_latest ubuntu-latest
     environment: npm-publish
+    env:
+      PLUGIN_MATRIX: ${{ needs.preview_plugins_npm.outputs.all_matrix }}
     permissions:
       contents: read
       id-token: write
     steps:
+      - name: Prepare Git owner
+        uses: openclaw/openclaw/.github/actions/git-owner@88095dc00eef288c3829909d4dc64a9e249fa7ef
+
+      - name: Checkout exact preflight source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ needs.preview_plugins_npm.outputs.ref_revision }}
+          fetch-depth: 0
+          filter: blob:none
+
       - name: Checkout trusted OIDC preflight tooling
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           ref: ${{ github.workflow_sha }}
+          path: .release-tooling
           fetch-depth: 1
 
       - name: Setup trusted Node
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: ${{ env.NODE_VERSION }}
 
       - name: Verify npm trusted-publisher exchange
-        env:
-          PLUGIN_MATRIX: ${{ needs.preview_plugins_npm.outputs.all_matrix }}
+        env: *plugin_npm_admission
         run: |
           set -euo pipefail
           node --input-type=module <<'NODE'
-          import { preflightNpmTrustedPublisher } from "./scripts/npm-trusted-publisher-preflight.mjs";
+          import { preflightNpmTrustedPublisher } from "./.release-tooling/scripts/npm-trusted-publisher-preflight.mjs";
 
           let selection;
           try {
@@ -1544,7 +1424,7 @@ jobs:
   approve_plugins_npm_release:
     needs: [preview_plugins_npm, validate_release_publish_approval]
     if: ${{ github.event_name == 'workflow_dispatch' && !inputs.preflight_only && needs.preview_plugins_npm.outputs.has_candidates == 'true' && needs.validate_release_publish_approval.result == 'success' && needs.validate_release_publish_approval.outputs.parent_approval != 'receipt' }}
-    runs-on: ubuntu-latest
+    runs-on: *linux_runner_ubuntu_latest
     environment: npm-release
     permissions:
       contents: read
@@ -1563,20 +1443,23 @@ jobs:
         approve_plugins_npm_release,
       ]
     if: ${{ always() && !cancelled() && github.event_name == 'workflow_dispatch' && !inputs.preflight_only && needs.preview_plugins_npm.result == 'success' && needs.validate_release_publish_approval.result == 'success' && (needs.approve_plugins_npm_release.result == 'success' || (needs.approve_plugins_npm_release.result == 'skipped' && needs.validate_release_publish_approval.outputs.parent_approval == 'receipt')) && needs.preview_plugins_npm.outputs.has_candidates == 'true' && (inputs.prepared_artifact != '' || (needs.preview_plugin_pack.result == 'success' && needs.verify_plugin_npm_preflight.result == 'success')) }}
-    runs-on: ubuntu-latest
+    runs-on: *linux_runner_ubuntu_latest
     environment: npm-publish
     permissions:
       actions: read
       attestations: read
       contents: read
       id-token: write
+    env:
+      PREPARED_NPM_EVIDENCE_ID: ${{ needs.preview_plugins_npm.outputs.evidence_attempt == github.run_attempt && needs.preview_plugins_npm.outputs.evidence_id || '' }}
+      PREPARED_NPM_EVIDENCE_DIGEST: ${{ needs.preview_plugins_npm.outputs.evidence_attempt == github.run_attempt && needs.preview_plugins_npm.outputs.evidence_digest || '' }}
     strategy:
       fail-fast: false
       matrix:
         plugin: ${{ fromJson(needs.preview_plugins_npm.outputs.matrix) }}
     steps:
       - name: Prepare Git owner
-        uses: openclaw/openclaw/.github/actions/git-owner@dd4528b6393e7d00063067a080ca7241b48ce475
+        uses: openclaw/openclaw/.github/actions/git-owner@88095dc00eef288c3829909d4dc64a9e249fa7ef
 
       - name: Checkout trusted publication tooling
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -1591,7 +1474,7 @@ jobs:
             scripts
 
       - name: Setup trusted Node
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: ${{ env.NODE_VERSION }}
 
@@ -1614,42 +1497,58 @@ jobs:
         run: |
           set -euo pipefail
           artifacts_json="${RUNNER_TEMP}/${EXTENSION_ID}-publication-artifacts.json"
-          gh api --paginate \
-            "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/artifacts?per_page=100" |
-            jq -s '{artifacts: [.[].artifacts[]]}' > "$artifacts_json"
-          jq \
-            --arg prefix "${ARTIFACT_NAME_PREFIX}-" \
-            --arg run_id "$GITHUB_RUN_ID" \
-            --argjson consumer_attempt "$GITHUB_RUN_ATTEMPT" \
-            '[
-              .artifacts[]
-              | select(.expired == false and (.name | startswith($prefix)))
-              | (
-                  try (
-                    .name
-                    | ltrimstr($prefix)
-                    | capture("^(?<route>npm-(?:oidc|token-bootstrap|mirror|tag-repair|readback))-(?<run_id>[1-9][0-9]*)-(?<attempt>[1-9][0-9]*)$")
-                  ) catch null
-                ) as $binding
-              | select(
-                  $binding != null and
-                  $binding.run_id == $run_id and
-                  ($binding.attempt | tonumber) <= $consumer_attempt
-                )
-              | . + {
-                  producer_attempt: ($binding.attempt | tonumber),
-                  publish_route: $binding.route
-                }
-            ]
-            | sort_by(.producer_attempt)
-            | if length == 0 then
-                []
-              else
-                (last.producer_attempt) as $latest_attempt
-                | map(select(.producer_attempt == $latest_attempt))
-              end' \
-            "$artifacts_json" > "${RUNNER_TEMP}/${EXTENSION_ID}-publication-matches.json"
-          artifact_count="$(jq 'length' "${RUNNER_TEMP}/${EXTENSION_ID}-publication-matches.json")"
+          # Sibling jobs upload while this list paginates, so a page can repeat or skip an
+          # artifact. Dedupe by id and re-list before treating a non-unique match as a failure.
+          list_publication_artifacts() {
+            gh api --paginate \
+              "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/artifacts?per_page=100" |
+              jq -s '{artifacts: ([.[].artifacts[]] | unique_by(.id))}' > "$artifacts_json"
+          }
+          match_publication_artifacts() {
+            jq \
+              --arg prefix "${ARTIFACT_NAME_PREFIX}-" \
+              --arg run_id "$GITHUB_RUN_ID" \
+              --argjson consumer_attempt "$GITHUB_RUN_ATTEMPT" \
+              '[
+                .artifacts[]
+                | select(.expired == false and (.name | startswith($prefix)))
+                | (
+                    try (
+                      .name
+                      | ltrimstr($prefix)
+                      | capture("^(?<route>npm-(?:oidc|token-bootstrap|mirror|tag-repair|readback))-(?<run_id>[1-9][0-9]*)-(?<attempt>[1-9][0-9]*)$")
+                    ) catch null
+                  ) as $binding
+                | select(
+                    $binding != null and
+                    $binding.run_id == $run_id and
+                    ($binding.attempt | tonumber) <= $consumer_attempt
+                  )
+                | . + {
+                    producer_attempt: ($binding.attempt | tonumber),
+                    publish_route: $binding.route
+                  }
+              ]
+              | sort_by(.producer_attempt)
+              | if length == 0 then
+                  []
+                else
+                  (last.producer_attempt) as $latest_attempt
+                  | map(select(.producer_attempt == $latest_attempt))
+                end' \
+              "$artifacts_json" > "${RUNNER_TEMP}/${EXTENSION_ID}-publication-matches.json"
+          }
+          for listing_attempt in 1 2 3 4 5; do
+            list_publication_artifacts
+            match_publication_artifacts
+            artifact_count="$(jq 'length' "${RUNNER_TEMP}/${EXTENSION_ID}-publication-matches.json")"
+            if [[ "$artifact_count" == "1" ]]; then
+              break
+            fi
+            if (( listing_attempt < 5 )); then
+              sleep 15
+            fi
+          done
           [[ "$artifact_count" == "1" ]] || {
             echo "Expected one current or prior immutable publication artifact for ${PACKAGE_NAME}@${PACKAGE_VERSION}; found ${artifact_count}." >&2
             exit 1
@@ -1841,7 +1740,7 @@ jobs:
 
       - name: Upload consumed npm qualification
         if: inputs.defer_registry_verification && inputs.release_publish_run_id != ''
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: plugin-npm-qualification-${{ matrix.plugin.extensionId }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/${{ matrix.plugin.extensionId }}-npm-qualification.json
@@ -1891,7 +1790,10 @@ jobs:
         id: oidc_publish
         if: steps.publication_evidence.outputs.publish_route == 'npm-oidc' && steps.npm_package_version.outputs.already_published != 'true'
         env:
+          DEFER_AUTH_FOR_CORE: ${{ inputs.defer_registry_verification && needs.validate_release_publish_approval.outputs.parent_approval == 'receipt' }}
+          EXTENSION_ID: ${{ matrix.plugin.extensionId }}
           GH_TOKEN: ${{ github.token }}
+          PACKAGE_NAME: ${{ steps.publication_evidence.outputs.package_name }}
           TARBALL_PATH: ${{ steps.publication_evidence.outputs.tarball_path }}
           PACKAGE_VERSION: ${{ steps.publication_evidence.outputs.package_version }}
           RELEASE_TARGET_SHA: ${{ needs.preview_plugins_npm.outputs.ref_revision }}
@@ -1910,8 +1812,12 @@ jobs:
           unset NODE_AUTH_TOKEN NPM_TOKEN NODE_OPTIONS
           # npm requires distinct user and global config sources, even when both are empty.
           npmrc="$(mktemp "${RUNNER_TEMP}/plugin-npm-oidc.XXXXXX")"
-          trap 'rm -f "$npmrc"' EXIT
+          publish_log="$(mktemp "${RUNNER_TEMP}/plugin-npm-publish.XXXXXX")"
+          trap 'rm -f "$npmrc" "$publish_log"' EXIT
           # Publish the attested bytes; rebuilding here loses the candidate's patched install.
+          if [[ -n "$PREPARED_NPM_ARTIFACT" ]]; then
+            node scripts/plugin-npm-prepared-release.mjs authorize --source-sha "$RELEASE_TARGET_SHA"
+          fi
           node scripts/release-tooling-identity.mjs verify \
             --repository "$OPENCLAW_RELEASE_TOOLING_REPOSITORY" \
             --workflow-ref "$OPENCLAW_RELEASE_TOOLING_REF" \
@@ -1934,18 +1840,91 @@ jobs:
               --allow-prevalidated-ref
             node scripts/openclaw-npm-extended-stable-release.mjs validate-active-line
           fi
+          set +e
           NPM_CONFIG_USERCONFIG="$npmrc" \
+            NPM_CONFIG_COLOR=false \
             NPM_CONFIG_GLOBALCONFIG=/dev/null \
             NPM_CONFIG_REGISTRY=https://registry.npmjs.org/ \
             timeout --signal=TERM --kill-after=10s 300s npm publish "$TARBALL_PATH" \
               --access public \
               --ignore-scripts \
               --provenance \
-              --tag "$PUBLISH_TAG"
+              --tag "$PUBLISH_TAG" 2>&1 | tee "$publish_log"
+          publish_status="${PIPESTATUS[0]}"
+          set -e
+          if [[ "$publish_status" == "0" ]]; then
+            echo "deferred_auth=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [[ "$DEFER_AUTH_FOR_CORE" == "true" && -n "$OPENCLAW_RELEASE_PUBLISH_RUN_ID" && "$PUBLISH_TAG" != "extended-stable" ]] &&
+            grep -Eq '^npm (error|ERR!) code ENEEDAUTH\r?$' "$publish_log"; then
+            checkpoint="${RUNNER_TEMP}/${EXTENSION_ID}-npm-oidc-deferred.json"
+            CHECKPOINT_PATH="$checkpoint" node --input-type=module <<'NODE'
+          import { writeFileSync } from "node:fs";
+
+          const env = process.env;
+          const checkpoint = {
+            schemaVersion: 1,
+            kind: "openclaw-plugin-npm-deferred-auth",
+            reason: "npm-oidc-eneedauth",
+            repository: env.GITHUB_REPOSITORY,
+            workflow: {
+              ref: env.OPENCLAW_RELEASE_TOOLING_FULL_REF,
+              sha: env.OPENCLAW_RELEASE_TOOLING_SHA,
+              runId: Number(env.GITHUB_RUN_ID),
+              runAttempt: Number(env.GITHUB_RUN_ATTEMPT),
+            },
+            parent: {
+              runId: Number(env.OPENCLAW_RELEASE_PUBLISH_RUN_ID),
+              runAttempt: Number(env.OPENCLAW_RELEASE_PUBLISH_RUN_ATTEMPT),
+            },
+            sourceSha: env.RELEASE_TARGET_SHA,
+            package: {
+              extensionId: env.EXTENSION_ID,
+              name: env.PACKAGE_NAME,
+              version: env.PACKAGE_VERSION,
+              publishTag: env.PUBLISH_TAG,
+            },
+            recovery: {
+              environment: "npm-publish",
+              publishScope: "selected",
+              requiresParentPublication: false,
+              requiresTrustedPublisherPreflight: true,
+            },
+          };
+          writeFileSync(env.CHECKPOINT_PATH, `${JSON.stringify(checkpoint, null, 2)}\n`, {
+            flag: "wx",
+            mode: 0o600,
+          });
+          NODE
+            {
+              echo "deferred_auth=true"
+              echo "deferred_auth_path=$checkpoint"
+            } >> "$GITHUB_OUTPUT"
+            {
+              echo "## Deferred plugin npm trusted-publisher recovery"
+              echo
+              echo "- Package: \`${PACKAGE_NAME}@${PACKAGE_VERSION}\`"
+              echo "- Reason: npm returned exact \`ENEEDAUTH\` before publication."
+              echo "- Core publication may continue; this package remains unpublished."
+              echo "- After repairing the npm trusted-publisher binding, run the selected-package preflight and publication recovery documented in \`publication-recovery.md\`."
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          exit "$publish_status"
+
+      - name: Upload deferred trusted-publisher checkpoint
+        if: steps.oidc_publish.outputs.deferred_auth == 'true'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: plugin-npm-deferred-auth-${{ matrix.plugin.extensionId }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ steps.oidc_publish.outputs.deferred_auth_path }}
+          if-no-files-found: error
+          retention-days: 30
 
       - name: Download stable npm bootstrap approval
         if: ${{ steps.publication_evidence.outputs.publish_route == 'npm-token-bootstrap' && steps.publication_evidence.outputs.publish_tag == 'latest' }}
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: npm-stable-bootstrap-approval-${{ inputs.release_publish_run_id }}-${{ inputs.release_publish_run_attempt }}
           path: ${{ runner.temp }}/npm-stable-bootstrap-approval
@@ -2033,6 +2012,9 @@ jobs:
           unset NODE_AUTH_TOKEN NPM_TOKEN NODE_OPTIONS
           # A timeout can race a committed publish. On rerun, the preceding check
           # accepts only this tarball's exact integrity and shasum before skipping.
+          if [[ -n "$PREPARED_NPM_ARTIFACT" ]]; then
+            node scripts/plugin-npm-prepared-release.mjs authorize --source-sha "$PREPARED_NPM_SOURCE_SHA"
+          fi
           node scripts/release-tooling-identity.mjs verify \
             --repository "$GITHUB_REPOSITORY" \
             --workflow-ref "$WORKFLOW_REF" \
@@ -2055,8 +2037,9 @@ jobs:
               --tag "$PUBLISH_TAG"
 
       - name: Verify immutable npm registry readback
+        if: steps.oidc_publish.outputs.deferred_auth != 'true'
         env:
-          DEFER_VISIBILITY: ${{ inputs.defer_registry_verification && inputs.release_publish_run_id != '' && (steps.oidc_publish.outcome == 'success' || steps.bootstrap_publish.outcome == 'success') }}
+          DEFER_VISIBILITY: ${{ inputs.defer_registry_verification && inputs.release_publish_run_id != '' && ((steps.oidc_publish.outcome == 'success' && steps.oidc_publish.outputs.deferred_auth != 'true') || steps.bootstrap_publish.outcome == 'success') }}
           PACKAGE_NAME: ${{ steps.publication_evidence.outputs.package_name }}
           PACKAGE_VERSION: ${{ steps.publication_evidence.outputs.package_version }}
           PUBLISH_ROUTE: ${{ steps.publication_evidence.outputs.publish_route }}
@@ -2092,7 +2075,7 @@ jobs:
   verify_plugins_npm:
     needs: [preview_plugins_npm, publish_plugins_npm]
     if: ${{ always() && github.event_name == 'workflow_dispatch' && !inputs.preflight_only && inputs.npm_dist_tag == 'extended-stable' && needs.preview_plugins_npm.result == 'success' && (needs.publish_plugins_npm.result == 'success' || (needs.preview_plugins_npm.outputs.has_candidates == 'false' && needs.publish_plugins_npm.result == 'skipped')) }}
-    runs-on: ${{ (github.event_name == 'workflow_dispatch' && inputs.release_publish_run_id != '' && vars.OPENCLAW_RELEASE_RUNNER_GROUP || '') != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON((github.event_name == 'workflow_dispatch' && inputs.release_publish_run_id != '' && vars.OPENCLAW_RELEASE_RUNNER_GROUP || '')), toJSON('ubuntu-latest'))) || ('ubuntu-latest') }}
+    runs-on: *linux_runner_release_ubuntu_latest
     permissions:
       contents: read
     strategy:
@@ -2101,7 +2084,7 @@ jobs:
         plugin: ${{ fromJson(needs.preview_plugins_npm.outputs.all_matrix) }}
     steps:
       - name: Setup trusted Node
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: ${{ env.NODE_VERSION }}
 

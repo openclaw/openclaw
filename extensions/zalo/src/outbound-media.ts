@@ -1,8 +1,5 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
-import {
-  asDateTimestampMs,
-  resolveExpiresAtMsFromDurationMs,
-} from "openclaw/plugin-sdk/number-runtime";
+import { resolveExpiresAtMsFromDurationMs } from "openclaw/plugin-sdk/number-runtime";
 import {
   createHostedOutboundMediaStore,
   type HostedOutboundMediaChunkRecord,
@@ -74,15 +71,6 @@ export async function prepareHostedZaloMediaUrl(params: {
   maxBytes: number;
   proxyUrl?: string;
 }): Promise<string> {
-  const now = asDateTimestampMs(Date.now());
-  const expiresAt =
-    now === undefined
-      ? undefined
-      : resolveExpiresAtMsFromDurationMs(ZALO_OUTBOUND_MEDIA_TTL_MS, { nowMs: now });
-  if (expiresAt === undefined) {
-    throw new Error("Zalo outbound media expiry could not be resolved");
-  }
-
   const routePath = `${resolveHostedZaloMediaRoutePrefix({
     webhookUrl: params.webhookUrl,
     webhookPath: params.webhookPath,
@@ -103,7 +91,6 @@ export async function tryHandleHostedZaloMediaRequest(
   res: ServerResponse,
 ): Promise<boolean> {
   const store = getHostedZaloMediaStore();
-  await store.cleanupExpired();
 
   const method = req.method ?? "GET";
   if (method !== "GET" && method !== "HEAD") {
@@ -131,26 +118,11 @@ export async function tryHandleHostedZaloMediaRequest(
     return true;
   }
 
-  const now = asDateTimestampMs(Date.now());
-  if (now === undefined) {
-    await store.delete(id);
-    res.statusCode = 410;
-    res.end("Expired");
-    return true;
-  }
-
+  const now = Date.now();
   const metadata = await store.readMetadata(id, now);
   if (!metadata || metadata.routePath !== routePath) {
     res.statusCode = 404;
     res.end("Not Found");
-    return true;
-  }
-
-  const expiresAt = asDateTimestampMs(metadata.expiresAt);
-  if (expiresAt === undefined || expiresAt <= now) {
-    await store.delete(id);
-    res.statusCode = 410;
-    res.end("Expired");
     return true;
   }
 

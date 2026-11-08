@@ -3,6 +3,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
 import { parseSecretRef } from "../../config/types.secrets.js";
 import { asBoolean } from "../../utils/boolean.js";
+import { copyAuthProfileAuthorizationIntent } from "./authorization-lifetime.js";
 import { oauthCredentialMetadataSchema } from "./credential-schema.js";
 import { isLegacyOAuthRef } from "./legacy-oauth-ref.js";
 import type { AuthProfileCredential, SavedSetupCredential } from "./types.js";
@@ -62,13 +63,11 @@ function normalizeCommonCredentialFields(entry: Record<string, unknown>): Record
   if (copyToAgents !== undefined) {
     normalized.copyToAgents = copyToAgents;
   }
-  const email = readNonBlankString(entry.email);
-  if (email !== undefined) {
-    normalized.email = email;
-  }
-  const displayName = readNonBlankString(entry.displayName);
-  if (displayName !== undefined) {
-    normalized.displayName = displayName;
+  for (const field of ["email", "displayName"] as const) {
+    const value = readNonBlankString(entry[field]);
+    if (value !== undefined) {
+      normalized[field] = value;
+    }
   }
   return normalized;
 }
@@ -129,4 +128,21 @@ export function normalizeRawCredentialEntry(
     }
   }
   return normalized;
+}
+
+/** Secret references persist without their resolved literals; native write intent follows the projection. */
+export function serializeAuthProfileCredential(
+  credential: AuthProfileCredential,
+): AuthProfileCredential {
+  if (credential.type === "api_key" && credential.keyRef && credential.key !== undefined) {
+    const { key: _key, ...sanitized } = credential;
+    copyAuthProfileAuthorizationIntent(credential, sanitized);
+    return sanitized;
+  }
+  if (credential.type === "token" && credential.tokenRef && credential.token !== undefined) {
+    const { token: _token, ...sanitized } = credential;
+    copyAuthProfileAuthorizationIntent(credential, sanitized);
+    return sanitized;
+  }
+  return credential;
 }

@@ -1,4 +1,3 @@
-/** A fresh conversation must not inherit the prior task's progress card. */
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { expect, it } from "vitest";
@@ -12,146 +11,107 @@ import {
 import { onSessionLifecycleEvent } from "../../sessions/session-lifecycle-events.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import {
-  applySessionEntryLifecycleMutation,
-  loadSessionEntry,
-  loadTranscriptEvents,
-  resetSessionEntryLifecycle,
-  upsertSessionEntryCore,
-} from "./session-accessor.js";
-import { appendTranscriptMessageSync } from "./session-accessor.sqlite-transcript-write.js";
+import * as sessions from "./session-accessor.js";
+import { appendTranscriptMessageSync } from "./session-accessor.sqlite-transcript-write.kernel.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
 
-it.each(
-  (["single", "batched"] as const).flatMap((writer) =>
-    (["clear", "preserve-tail"] as const).flatMap((context) =>
-      (context === "clear" ? [false, true] : [false]).map((rollback) => ({
-        writer,
-        context,
-        rollback,
-      })),
-    ),
-  ),
-)(
-  "$writer $context reset owns the card lifetime (rollback=$rollback)",
-  async ({ writer, context, rollback }) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-      const sessionKey = "agent:main:reset-progress";
-      const sessionId = "same-reset-session";
-      const storePath = path.join(state.sessionsDir(), "sessions.json");
-      const scope = { agentId: "main", sessionKey, sessionId, storePath };
-      const previous = { sessionId, lifecycleRevision: "before", updatedAt: 1 };
-      await upsertSessionEntryCore(scope, previous);
-      appendTranscriptMessageSync(scope, {
-        eventId: "retained-message",
-        message: { role: "user", content: "Retain this history" },
-      });
-      const database = openOpenClawAgentDatabase({
-        agentId: "main",
-        path: resolveSqliteTargetFromSessionStorePath(storePath, { agentId: "main" }).path,
-      });
-      const boards = new SqliteBoardStore({
-        resolveSession: () => ({ agentId: "main", path: database.path, sessionKey }),
-      });
-      await boards.putWidget({
-        sessionKey,
-        name: "retained-widget",
-        content: { kind: "html", html: "<p>Keep this dashboard</p>" },
-      });
-      const boardBefore = await boards.getSnapshot({ sessionKey });
-      const historyBefore = await loadTranscriptEvents(scope);
-      const entryBefore = loadSessionEntry(scope);
-      writeSessionProgressCard(database.db, sessionKey, {
-        markdown: "Previous task",
-        steps: [{ step: "Previous task", status: "in_progress" }],
-      });
-      const before = readSessionProgressCard(database.db, sessionKey);
-      const invalidations: Array<{ agentId?: string; sessionKey: string; inTransaction: boolean }> =
-        [];
-      const unsubscribe = onSessionLifecycleEvent((event) => {
-        if (event.reason === "progress-card-reset") {
-          invalidations.push({
-            agentId: event.agentId,
-            sessionKey: event.sessionKey,
-            inTransaction: database.db.isTransaction,
-          });
-        }
-      });
-      const entry = {
-        ...previous,
-        ...(rollback ? { parentSessionKey: "invalid-reset-parent" } : {}),
-        lifecycleRevision: "after",
-        updatedAt: 2,
-      };
-      const resetBoundary = { context, reason: "reset" as const, cwd: state.workspaceDir };
-      const reset = async () => {
-        if (writer === "single") {
-          await resetSessionEntryLifecycle({
+it.each([
+  ["single", "clear", false],
+  ["single", "clear", true],
+  ["batched", "clear", false],
+  ["batched", "clear", true],
+  ["batched", "preserve-tail", false],
+] as const)("%s %s reset owns the card lifetime (rollback=%s)", (writer, context, rollback) =>
+  withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const sessionKey = "agent:main:reset-progress";
+    const sessionId = "same-reset-session";
+    const storePath = path.join(state.sessionsDir(), "sessions.json");
+    const scope = { agentId: "main", sessionKey, sessionId, storePath };
+    const cleared = context === "clear" && !rollback;
+    const previous = { sessionId, lifecycleRevision: "before", updatedAt: 1 };
+    await sessions.upsertSessionEntryCore(scope, previous);
+    appendTranscriptMessageSync(scope, {
+      eventId: "retained-message",
+      message: { role: "user", content: "history" },
+    });
+    const database = openOpenClawAgentDatabase({
+      agentId: "main",
+      path: resolveSqliteTargetFromSessionStorePath(storePath, { agentId: "main" }).path,
+    });
+    const readCard = readSessionProgressCard.bind(null, database.db, sessionKey);
+    const writeCard = writeSessionProgressCard.bind(null, database.db, sessionKey);
+    const boards = new SqliteBoardStore({
+      resolveSession: () => ({ agentId: "main", path: database.path, sessionKey }),
+    });
+    await boards.putWidget({
+      sessionKey,
+      name: "widget",
+      content: { kind: "html", html: "<p>kept</p>" },
+    });
+    const boardBefore = await boards.getSnapshot({ sessionKey });
+    const historyBefore = await sessions.loadTranscriptEvents(scope);
+    const entryBefore = sessions.loadSessionEntry(scope);
+    writeCard({ markdown: "old", steps: [{ step: "old", status: "in_progress" }] });
+    const before = readCard();
+    const invalidations: Array<[string | undefined, string, boolean]> = [];
+    const unsubscribe = onSessionLifecycleEvent((event) => {
+      if (event.reason === "progress-card-reset") {
+        invalidations.push([event.agentId, event.sessionKey, database.db.isTransaction]);
+      }
+    });
+    const entry = {
+      ...previous,
+      ...(rollback ? { parentSessionKey: "invalid" } : {}),
+      lifecycleRevision: "after",
+      updatedAt: 2,
+    };
+    const resetBoundary = { context, reason: "reset" as const, cwd: state.workspaceDir };
+    const reset = () =>
+      writer === "single"
+        ? sessions.resetSessionEntryLifecycle({
             agentId: "main",
             storePath,
             target: { canonicalKey: sessionKey, storeKeys: [sessionKey] },
             resetBoundary,
             buildNextEntry: () => entry,
-          });
-        } else {
-          await applySessionEntryLifecycleMutation({
+          })
+        : sessions.applySessionEntryLifecycleMutation({
             agentId: "main",
             storePath,
             skipMaintenance: true,
             upserts: [{ sessionKey, entry, resetBoundary }],
           });
-        }
-      };
-      try {
-        if (rollback) {
-          await expect(reset()).rejects.toThrow(
-            "refusing non-canonical session key write invalid-reset-parent",
-          );
-          expect(loadSessionEntry(scope)).toEqual(entryBefore);
-          expect(await loadTranscriptEvents(scope)).toEqual(historyBefore);
-        } else {
-          const sql = writer === "batched" ? observeHostDataSql() : undefined;
-          try {
-            await reset();
-            if (sql) {
-              expect(sql.queries, "batched reset caller-thread SQL").toEqual([]);
-            }
-          } finally {
-            sql?.restore();
-          }
-        }
-      } finally {
-        unsubscribe();
-      }
-      // A fresh read-only connection proves this is durable state, not client/cache invalidation.
-      const reader = new DatabaseSync(database.path, { readOnly: true });
-      try {
-        expect(readSessionProgressCard(reader, sessionKey)).toEqual(
-          context === "clear" && !rollback ? null : before,
-        );
-      } finally {
-        reader.close();
-      }
-      expect(await boards.getSnapshot({ sessionKey })).toEqual(boardBefore);
-      expect((await readBoardHtml(boards, { sessionKey }, "retained-widget"))?.html).toBe(
-        "<p>Keep this dashboard</p>",
-      );
-      if (context === "clear" && !rollback) {
-        expect(readSessionProgressCard(database.db, sessionKey)).toBeNull();
-        expect(invalidations).toEqual([{ agentId: "main", sessionKey, inTransaction: false }]);
-        writeSessionProgressCard(database.db, sessionKey, {
-          steps: [{ step: "Fresh task", status: "completed" }],
-        });
-        expect(readSessionProgressCard(database.db, sessionKey)?.revision).toBe(3);
-        writeSessionProgressCard(database.db, sessionKey, { expectedRevision: before!.revision });
-        expect(readSessionProgressCard(database.db, sessionKey)?.revision).toBe(3);
+    try {
+      if (rollback) {
+        await expect(reset()).rejects.toThrow("refusing non-canonical session key write invalid");
+        expect(sessions.loadSessionEntry(scope)).toEqual(entryBefore);
+        expect(await sessions.loadTranscriptEvents(scope)).toEqual(historyBefore);
       } else {
-        expect(readSessionProgressCard(database.db, sessionKey)).toEqual(before);
-        expect(invalidations).toEqual([]);
+        const sql = observeHostDataSql();
+        using _ = { [Symbol.dispose]: sql.restore };
+        await reset();
+        expect(sql.queries, `${writer} reset caller-thread SQL`).toEqual([]);
       }
-      expect(await loadTranscriptEvents(scope)).toContainEqual(
-        expect.objectContaining({ id: "retained-message" }),
-      );
-    });
-  },
+    } finally {
+      unsubscribe();
+    }
+    // A fresh read-only connection proves this is durable state, not client/cache invalidation.
+    {
+      using reader = new DatabaseSync(database.path, { readOnly: true });
+      expect(readSessionProgressCard(reader, sessionKey)).toEqual(cleared ? null : before);
+    }
+    expect(await boards.getSnapshot({ sessionKey })).toEqual(boardBefore);
+    expect((await readBoardHtml(boards, { sessionKey }, "widget"))?.html).toBe("<p>kept</p>");
+    expect(readCard()).toEqual(cleared ? null : before);
+    expect(invalidations).toEqual(cleared ? [["main", sessionKey, false]] : []);
+    if (cleared) {
+      writeCard({ steps: [{ step: "Fresh task", status: "completed" }] });
+      expect(readCard()?.revision).toBe(3);
+      writeCard({ expectedRevision: before!.revision });
+      expect(readCard()?.revision).toBe(3);
+    }
+    expect(await sessions.loadTranscriptEvents(scope)).toContainEqual(
+      expect.objectContaining({ id: "retained-message" }),
+    );
+  }),
 );

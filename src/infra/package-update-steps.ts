@@ -1,9 +1,11 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { extractErrorCode } from "@openclaw/normalization-core/error-coercion";
 import { LEGACY_PACKAGE_INSTALL_GUARD_RELATIVE_PATH } from "../../scripts/lib/package-lifecycle-marker.mjs";
 import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import { UPDATE_GLOBAL_PERMISSION_REASON } from "../shared/update-outcome.js";
 import { resolveBunGlobalInstallOwner } from "./detect-package-manager.js";
+import { collectNestedErrorCandidates } from "./error-graph-internal.js";
 import { formatErrorMessage } from "./errors.js";
 import { resolveInstallWorkTimeoutMs } from "./install-mode-options.js";
 import { isRegistrySourceInstallSpec } from "./install-spec.js";
@@ -15,7 +17,6 @@ import { readPackageVersionIfPresent } from "./package-update-integrity.js";
 import type { PackageUpdateStepRunner } from "./package-update-lifecycle.js";
 import {
   prepareStagedPackageInstall,
-  discardPackageUpdateStage,
   runPackageUpdateLifecycle,
   verifyUnchangedPackageUpdateRecovery,
 } from "./package-update-lifecycle.js";
@@ -27,6 +28,8 @@ import {
   validatePnpmIsolatedUpdate,
 } from "./package-update-manager-preflight.js";
 import { prepareNpmGitSourceInstallSpec } from "./package-update-npm-pack.js";
+import { PACKAGE_REFUSAL_CODES, type PackageRefusalCode } from "./package-update-refusal.js";
+import { discardPackageUpdateStage } from "./package-update-stage-cleanup.js";
 import {
   PackageUpdateActivationError,
   type PackageActivationOptions,
@@ -39,10 +42,6 @@ import {
   type PackagePostInstallVerifier,
 } from "./package-update-verification-step.js";
 import { createUpdateFailureFact } from "./update-failure-facts.js";
-import {
-  createFreeBsdPkgOwnershipInspection,
-  FreeBsdPkgOwnershipError,
-} from "./update-freebsd-pkg-ownership.js";
 import { readBuiltGatewayBuildId, type GitRuntimeIdentity } from "./update-git-runtime.js";
 import type { CommandRunner } from "./update-global-command-runner.js";
 import {
@@ -61,10 +60,14 @@ import { readPackageManagerProbeValue } from "./update-npm-prefix.js";
 import type { UpdateRecovery } from "./update-recovery.js";
 import { isFailedUpdateStep } from "./update-run-step.js";
 import type { UpdateStepResult } from "./update-step-result.js";
+import {
+  createSystemPackageOwnershipInspection,
+  SystemPackageOwnershipError,
+} from "./update-system-package-ownership.js";
 
 type PackageUpdateStepsResult = {
   localOverrides?: LocalPackageOverridesResult;
-  reason?: "already-current" | typeof UPDATE_GLOBAL_PERMISSION_REASON;
+  reason?: "already-current" | typeof UPDATE_GLOBAL_PERMISSION_REASON | PackageRefusalCode;
   steps: UpdateStepResult[];
   activePackageRoot: string | null;
   afterVersion: string | null;
@@ -127,12 +130,12 @@ export async function runGlobalPackageUpdateSteps(params: {
       stage: stagedInstall,
       committed,
     });
-    if (cleanup.status === "failed") {
-      uncertainLifecycleStage = stagedInstall;
-      return cleanup.step;
-    }
-    if (cleanup.status === "advisory") {
-      steps.push(cleanup.step);
+    if (cleanup) {
+      if (!cleanup.advisory) {
+        uncertainLifecycleStage = stagedInstall;
+        return cleanup;
+      }
+      steps.push(cleanup);
     }
     stagedInstall = null;
     return null;
@@ -163,11 +166,9 @@ export async function runGlobalPackageUpdateSteps(params: {
       : await verifyUnchangedPackageUpdateRecovery(originalPackageRoot, initialRecovery);
     return {
       localOverrides,
-      ...(finalFailedStep.failureFacts?.some(
-        (fact) => fact.code === UPDATE_GLOBAL_PERMISSION_REASON,
-      )
-        ? { reason: UPDATE_GLOBAL_PERMISSION_REASON }
-        : {}),
+      reason: ([UPDATE_GLOBAL_PERMISSION_REASON, ...PACKAGE_REFUSAL_CODES] as const).find((code) =>
+        finalFailedStep.failureFacts?.some((fact) => fact.code === code),
+      ),
       steps: finalFailedSteps,
       activePackageRoot,
       afterVersion,
@@ -185,14 +186,9 @@ export async function runGlobalPackageUpdateSteps(params: {
     if (admission) {
       return await packageUpdateFailure(admission);
     }
-    if (process.platform === "freebsd") {
-      if (!params.installTarget.packageRoot) {
-        throw new FreeBsdPkgOwnershipError("pkg-ownership-unavailable", "paths");
-      }
-      const inspection = createFreeBsdPkgOwnershipInspection(params.timeoutMs);
-      await inspection.assertUnowned(params.packageRoot);
-      await inspection.assertUnowned(params.installTarget.packageRoot);
-    }
+    const inspection = createSystemPackageOwnershipInspection(params.timeoutMs);
+    await inspection.assertUnowned(params.packageRoot);
+    await inspection.assertUnowned(params.installTarget.packageRoot);
     const npmPreflight = resolveNpmLifecyclePolicyGate(params.installTarget);
     if (npmPreflight.error) {
       return await packageUpdateFailure({
@@ -289,6 +285,7 @@ export async function runGlobalPackageUpdateSteps(params: {
       params.installTarget,
       params.packageName,
       nativeOptions,
+      params.env,
     );
     if (preparedInstall.failedStep) {
       return await packageUpdateFailure(preparedInstall.failedStep);
@@ -337,11 +334,11 @@ export async function runGlobalPackageUpdateSteps(params: {
       installSpec: params.installSpec,
       packageName: params.packageName,
       runStep: params.runStep,
+      onPackDir: (packDir) => (packedInstallDir = packDir),
       timeoutMs: workTimeoutMs,
       env: params.env,
       installCwd: params.installCwd,
     });
-    packedInstallDir = preparedSpec.packDir;
     steps.push(...preparedSpec.steps);
     if (preparedSpec.failedStep) {
       return await packageUpdateFailure(preparedSpec.failedStep, steps);
@@ -359,35 +356,49 @@ export async function runGlobalPackageUpdateSteps(params: {
             installCommandTarget.manager,
           )
         : preparedSpec.installSpec;
-    const updateStep = await classifyPackageUpdatePermissionFailure(
-      await params.runStep({
-        name: "package-install",
-        argv: [
-          ...globalInstallArgs(
-            installCommandTarget,
-            updateInstallSpec,
-            undefined,
-            stagedInstall.prefix,
-            preparedSpec.installCwd,
-            npmPreflight.policy ?? undefined,
-          ),
-          ...(stagedInstall.native?.configArgs ?? []),
-        ],
-        ...(updateCwd ? { cwd: updateCwd } : {}),
-        ...installEnv,
-        timeoutMs: workTimeoutMs,
-        // Output is captured, so pnpm's build-approval prompt cannot use the terminal.
-        // EOF keeps the install noninteractive without approving additional scripts.
-        ...(installCommandTarget.manager === "pnpm" ? { input: "" } : {}),
-      }),
-      params.installTarget,
-      params.env,
-    );
+    const runInstallStep = async (
+      stage: StagedPackageInstall,
+      name: string,
+      options: Pick<Parameters<PackageUpdateStepRunner>[0], "cwd" | "env" | "input">,
+      extraArgs: string[] = [],
+    ) =>
+      classifyPackageUpdatePermissionFailure(
+        await params.runStep({
+          name,
+          argv: [
+            ...globalInstallArgs(
+              stage.installTarget,
+              updateInstallSpec,
+              undefined,
+              stage.prefix,
+              preparedSpec.installCwd,
+              npmPreflight.policy ?? undefined,
+            ),
+            ...(stage.native?.configArgs ?? []),
+            ...extraArgs,
+          ],
+          ...options,
+          timeoutMs: workTimeoutMs,
+        }),
+        params.installTarget,
+        params.env,
+      );
+    const updateStep = await runInstallStep(stagedInstall, "package-install", {
+      ...(updateCwd ? { cwd: updateCwd } : {}),
+      ...installEnv,
+      // Output is captured, so EOF keeps pnpm noninteractive without approving scripts.
+      ...(installCommandTarget.manager === "pnpm" ? { input: "" } : {}),
+    });
 
     steps.push(updateStep);
     let finalInstallStep = updateStep;
     if (updateStep.exitCode !== 0) {
-      if (updateStep.failureFacts?.some((fact) => fact.code === UPDATE_GLOBAL_PERMISSION_REASON)) {
+      if (
+        updateStep.failureFacts?.some((fact) => fact.code === UPDATE_GLOBAL_PERMISSION_REASON) ||
+        [updateStep.stdoutTail, updateStep.stderrTail].some((output) =>
+          output?.includes("[update-schema-bump-unfenced]"),
+        )
+      ) {
         return await packageUpdateFailure(updateStep, steps);
       }
       const cleanupFailure = await cleanupStage();
@@ -411,37 +422,25 @@ export async function runGlobalPackageUpdateSteps(params: {
         params.installTarget,
         params.packageName,
         nativeOptions,
+        params.env,
       );
       if (preparedFallbackInstall.failedStep) {
         steps.push(preparedFallbackInstall.failedStep);
         return await packageUpdateFailure(preparedFallbackInstall.failedStep, steps);
       }
       stagedInstall = preparedFallbackInstall.stagedInstall;
-      const fallbackStep = await classifyPackageUpdatePermissionFailure(
-        await params.runStep({
-          name: preferOnline ? "package-install-prefer-online" : "package-install-omit-optional",
-          argv: [
-            ...globalInstallArgs(
-              stagedInstall.installTarget,
-              updateInstallSpec,
-              undefined,
-              stagedInstall.prefix,
-              preparedSpec.installCwd,
-              npmPreflight.policy ?? undefined,
-            ),
-            ...(stagedInstall.native?.configArgs ?? []),
-            ...(preferOnline
-              ? installCommandTarget.manager === "bun"
-                ? ["--no-cache"]
-                : ["--prefer-online", "--prefer-offline=false", "--offline=false"]
-              : ["--omit=optional"]),
-          ],
+      const fallbackStep = await runInstallStep(
+        stagedInstall,
+        preferOnline ? "package-install-prefer-online" : "package-install-omit-optional",
+        {
           cwd: stagedInstall.native?.projectRoot ?? preparedSpec.installCwd ?? undefined,
           env: stagedInstall.native?.env ?? commandEnv,
-          timeoutMs: workTimeoutMs,
-        }),
-        params.installTarget,
-        params.env,
+        },
+        preferOnline
+          ? installCommandTarget.manager === "bun"
+            ? ["--no-cache"]
+            : ["--prefer-online", "--prefer-offline=false", "--offline=false"]
+          : ["--omit=optional"],
       );
       if (preferOnline && !isFailedUpdateStep(fallbackStep)) {
         updateStep.advisory = {
@@ -576,9 +575,13 @@ export async function runGlobalPackageUpdateSteps(params: {
         return await packageUpdateFailure(lifecycle.step, steps);
       }
     }
+    const verificationWarnings: string[] = [];
     if (!params.expectedGitCheckout && verificationErrors.length === 0) {
       verificationErrors.push(
-        ...(await collectPackageDistContentInventoryErrors(verificationPackageRoot)),
+        ...(await collectPackageDistContentInventoryErrors(
+          verificationPackageRoot,
+          verificationWarnings,
+        )),
       );
     }
     if (verificationErrors.length > 0) {
@@ -589,6 +592,15 @@ export async function runGlobalPackageUpdateSteps(params: {
           params.env,
         ),
       );
+    } else if (verificationWarnings.length) {
+      steps.push({
+        name: "package-verify",
+        command: `verify ${verificationPackageRoot}`,
+        cwd: verificationPackageRoot,
+        durationMs: 0,
+        exitCode: 0,
+        warnings: verificationWarnings,
+      });
     }
     let failedVerification = verificationErrors.length > 0;
     if (verificationErrors.length === 0) {
@@ -705,7 +717,13 @@ export async function runGlobalPackageUpdateSteps(params: {
     if (error instanceof PackageUpdateActivationError) {
       throw error.cause;
     }
-    if (error instanceof FreeBsdPkgOwnershipError) {
+    if (error instanceof SystemPackageOwnershipError) {
+      throw error;
+    }
+    // An operator's signal is not a package failure; the caller reports the interruption.
+    if (
+      collectNestedErrorCandidates(error).some((cause) => extractErrorCode(cause) === "interrupted")
+    ) {
       throw error;
     }
     const failedStep = await classifyPackageUpdatePermissionFailure(

@@ -1,3 +1,4 @@
+import { readAcpSessionMetaForEntries } from "../acp/runtime/session-meta-readonly.js";
 import { subagentRuns } from "../agents/subagents/registry/subagent-registry-memory.js";
 import {
   assertSubagentRegistryWriteSourceCurrent,
@@ -11,31 +12,67 @@ import {
   isSameSubagentRun,
   isSameSubagentRunOwner,
 } from "../agents/subagents/registry/subagent-run-generation.js";
+import type { SessionEntry } from "../config/sessions/types.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import type { GatewayContextResolver } from "./server-methods/types.js";
 
-/** Persist the dispatched follow-up prompt so restart recovery cannot reuse the original task. */
+/** Bind an explicitly requested follow-up to its current child task owner. */
 export async function reactivateCompletedSubagentSession(params: {
   sessionKey: string;
   runId?: string;
   task?: string;
   gatewayContextResolver?: GatewayContextResolver;
   assertCurrent?: () => void;
+  session?: {
+    cfg: OpenClawConfig;
+    activeSessionAgentId: string;
+    sessionEntry?: SessionEntry;
+  };
+  /** Continue only the task paused by this run; any other pause leaves the turn a follow-up. */
+  pausedRunId?: string;
 }): Promise<boolean> {
   const runId = params.runId?.trim();
   if (!runId) {
     return false;
   }
+  const admittedEntry = params.session?.sessionEntry;
+  const sessionEntry = admittedEntry
+    ? { sessionId: admittedEntry.sessionId, lifecycleRevision: admittedEntry.lifecycleRevision }
+    : undefined;
   const paused = getLatestLiveSubagentRunByChildSessionKey(
     params.sessionKey,
     (entry) => entry.pauseReason === "sessions_yield",
   );
+  if (
+    params.pausedRunId &&
+    // A stopped task stays stopped; its late handoff result runs as an ordinary follow-up.
+    (paused?.runId !== params.pausedRunId || paused.killIntent || paused.killReconciliation)
+  ) {
+    return false;
+  }
   const existing = paused ?? (await getLatestSubagentRunByChildSessionKey(params.sessionKey));
   if (!existing || typeof existing.execution.endedAt !== "number") {
     return false;
   }
   if (params.gatewayContextResolver && !params.gatewayContextResolver()) {
     return false;
+  }
+  if (params.session) {
+    const [acpMeta] = await readAcpSessionMetaForEntries({
+      cfg: params.session.cfg,
+      entries: [
+        {
+          agentId: params.session.activeSessionAgentId,
+          sessionKey: params.sessionKey,
+          entry: params.session.sessionEntry,
+        },
+      ],
+    });
+    params.assertCurrent?.();
+    if (acpMeta) {
+      return false;
+    }
   }
   const stateContext = captureOpenClawStateWorkerContext();
   const liveSource = () =>
@@ -94,6 +131,7 @@ export async function reactivateCompletedSubagentSession(params: {
           previousRunId: source.runId,
           nextRunId: runId,
           preserveCompletedRun: true,
+          sessionEntry,
           runTimeoutSeconds: source.runTimeoutSeconds ?? 0,
           ...(hasTask ? { task } : {}),
           assertCurrent: assertOriginalOwnerCurrent,

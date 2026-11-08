@@ -15,17 +15,21 @@ import { captureAgentToolSourceExecutionGuard } from "../../agents/agent-tool-so
 import { createAgentHarnessHostCapabilities } from "../../agents/harness/host-capability.js";
 import type { BoundAgentRunSessionTarget } from "../../agents/run-session-target.types.js";
 import { createStubTool } from "../../agents/test-helpers/agent-tool-stubs.js";
+import { getGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import {
   loadSessionEntry,
   patchSessionEntryCore,
   replaceSessionEntry,
   replaceSessionEntrySync,
 } from "../../config/sessions/session-accessor.sqlite-entry.js";
+import { captureSessionTranscriptTargetBinding } from "../../config/sessions/transcript-target-binding.js";
 import {
   claimAgentRunDelegatedAuthority,
   releaseAgentRunDelegatedAuthority,
   validateAgentRunDelegatedAuthority,
 } from "../../infra/agent-run-registry.js";
+import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { requireOpenClawStateDatabaseIdentity } from "../../state/openclaw-state-db-cache.js";
 import {
@@ -38,8 +42,8 @@ import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createAgentRuntimeApprovalAuthorityValidator } from "../agent-runtime-approval-authority.js";
 import { createAgentRuntimeIdentity } from "../agent-runtime-identity-token.js";
 import type { WorkerConnectionIdentity } from "./connection-identity.js";
+import { createWorkerConnectionIdentity } from "./connection-identity.test-support.js";
 import { placementTurnOwner, type WorkerSessionPlacementIdentity } from "./placement-record.js";
-import { updateTransition } from "./placement-row-codec.js";
 import {
   createWorkerSessionPlacementStore,
   type WorkerSessionPlacementStore,
@@ -59,9 +63,10 @@ import {
   getWorkerTurnExecutionIdentityCapability,
   readWorkerTurnPromptCacheContext,
 } from "./placement-turn-claim-events.js";
+import { createPlacementWorkspaceResultOps } from "./placement-workspace-result.js";
 import { createWorkerSessionToolSourceRunner } from "./worker-session-tool-source.js";
 import { prepareWorkerAgentRuntimeIdentity } from "./worker-turn-payload.js";
-import { captureWorkerTurnTranscriptSource } from "./worker-turn-transcript-target.js";
+import { prepareWorkerTurnTranscriptSource } from "./worker-turn-transcript-target.js";
 
 const SESSION: WorkerSessionPlacementIdentity = {
   sessionId: "session-placement-claim-close",
@@ -98,73 +103,49 @@ function workerClaimInput(name: string, active: Awaited<ReturnType<typeof advanc
   };
 }
 
-it.each(["native", "worker"] as const)(
-  "revokes the maintenance inventory when a %s writer returns a failed placement to local",
-  async (writer) => {
-    await store.startDispatch(SESSION);
-    const failed = await store.fail({
-      sessionId: SESSION.sessionId,
-      recoveryError: "dispatch failed",
-    });
-    const inventory = await store.prepareMaintenancePlacements();
-    try {
-      expect(inventory.placements).toEqual([failed]);
-      if (writer === "native") {
-        runOpenClawStateWriteTransaction(({ db }) => updateTransition(db, failed, "local", {}, 1), {
-          database,
-        });
-      } else {
-        await store.transition({
-          sessionId: SESSION.sessionId,
-          from: "failed",
-          to: "local",
-          expectedGeneration: failed.generation,
-        });
-      }
-      expect(() => inventory.assertCurrent()).toThrow("placement inventory changed");
-    } finally {
-      inventory.release();
-    }
-  },
-);
-
-it.each(["requested", "worker-turn", "remote-exec", "unknown"] as const)(
-  "fences maintenance across committed and uncertain %s to local publications",
-  async (prior) => {
-    const previous =
-      prior === "worker-turn" || prior === "remote-exec"
-        ? await advanceToActive(prior)
-        : await store.startDispatch(SESSION);
-    const identity = requireOpenClawStateDatabaseIdentity({ db: database.db });
-    for (const settlement of ["commit", "invalidate"] as const) {
-      const inventory = await store.prepareMaintenancePlacements();
-      const publication = stagePlacementTurnClaimWorkerPublication(
-        identity,
-        {
-          ...SESSION,
-          state: "local",
-          executionMode: "worker-turn",
-          environmentId: null,
-          activeOwnerEpoch: null,
-          turnClaim: null,
+it("publishes native pending-result postimages before observers and rolls back tentative changes", async () => {
+  const active = await advanceToActive();
+  const claim = await store.claimTurn(workerClaimInput("native-result", active));
+  await store.markWorkspaceResultPending(claim);
+  const pending = store.preparedWorkspaceResult(claim)!;
+  const results = createPlacementWorkspaceResultOps({
+    path: database.path,
+    instanceId: pending.gatewayInstanceId,
+    now: () => 9_000,
+    read: () => database.db,
+    write: (write) => runOpenClawStateWriteTransaction(({ db }) => write(db), { database }),
+  });
+  const observed: Array<number | null | undefined> = [];
+  const unsubscribe = sessionChanges.subscribe(() => {
+    observed.push(store.preparedWorkspaceResult(claim)?.recoveryRequestedAtMs);
+  });
+  try {
+    expect(() =>
+      runOpenClawStateWriteTransaction(
+        () => {
+          results.handoffWorkspaceResultRecovery(claim);
+          throw new Error("rollback native result");
         },
-        undefined,
-        prior === "unknown" ? undefined : previous.state,
-      );
-      try {
-        expect.soft(() => inventory.assertCurrent()).toThrow("placement inventory changed");
-        publication[settlement]();
-        expect.soft(() => inventory.assertCurrent()).toThrow("placement inventory changed");
-      } finally {
-        publication.rollback();
-        inventory.release();
-      }
-    }
-  },
-);
+        { database },
+      ),
+    ).toThrow("rollback native result");
+    expect(store.preparedWorkspaceResult(claim)).toBe(pending);
+    expect(observed).toEqual([]);
+    results.handoffWorkspaceResultRecovery(claim);
+    expect(store.preparedWorkspaceResult(claim)?.recoveryRequestedAtMs).toBe(9_000);
+    expect(observed).toEqual([9_000]);
+    expect(pending.recoveryRequestedAtMs).toBeNull();
+    results.abandonWorkspaceResult(store.preparedWorkspaceResult(claim)!);
+    expect(store.preparedWorkspaceResult(claim)).toBeUndefined();
+    expect(observed).toEqual([9_000, undefined]);
+  } finally {
+    unsubscribe();
+  }
+});
 
 it("retains worker-parent source predicates through tool execution and rejects a reset before child commit", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    setRuntimeConfigSnapshot({});
     const target: BoundAgentRunSessionTarget = {
       ...SESSION,
       storePath: state.statePath("agents", "main", "sessions", "sessions.json"),
@@ -181,7 +162,7 @@ it("retains worker-parent source predicates through tool execution and rejects a
     const active = await advanceToActive();
     const claim = await store.claimTurn(workerClaimInput("child-source", active));
     await store.authorizeWorkerTurnTools(claim, ["sessions_spawn"]);
-    const source = captureWorkerTurnTranscriptSource(target);
+    await using source = await prepareWorkerTurnTranscriptSource(target);
     const admission = prepareAgentRunAdmission({
       cfg: {},
       operationalRunInstance: createOperationalRunInstanceRef(claim.runId),
@@ -193,6 +174,11 @@ it("retains worker-parent source predicates through tool execution and rejects a
       },
     });
     let host: ReturnType<typeof createAgentHarnessHostCapabilities> | undefined;
+    const requesterOrigin = {
+      sessionKey: "agent:research:whatsapp:group:requesters",
+      messageProvider: "whatsapp",
+      senderId: "requester-bob",
+    };
     try {
       const prepared = await prepareWorkerAgentRuntimeIdentity({
         agentId: SESSION.agentId,
@@ -211,8 +197,10 @@ it("retains worker-parent source predicates through tool execution and rejects a
           timeoutMs: 5_000,
           runId: claim.runId,
           preparedRunAdmission: admission,
+          requesterOrigin,
         },
       });
+      requesterOrigin.senderId = "replacement-alice";
       const runner = createWorkerSessionToolSourceRunner({
         placements: store,
         resolveGatewayContext: () => undefined,
@@ -221,18 +209,13 @@ it("retains worker-parent source predicates through tool execution and rejects a
         runner({
           source: { ...SESSION, turnClaim: claim },
           request: {
-            identity: {
+            identity: createWorkerConnectionIdentity(claim, {
               environmentId: active.environmentId,
               ownerEpoch: active.activeOwnerEpoch,
-              sessionId: claim.sessionId,
-              runId: claim.runId,
-              turnClaim: claim,
               credentialHash: "synthetic-child-source",
               bundleHash: "synthetic-child-source",
-              rpcSetVersion: 1,
-              protocolFeatures: [],
               credentialExpiresAtMs: 1,
-            },
+            }),
             toolName: "sessions_spawn",
             request: { toolCallId: "child-source", arguments: {} },
             tool: () => {
@@ -248,6 +231,10 @@ it("retains worker-parent source predicates through tool execution and rejects a
                 {
                   ...createStubTool("sessions_spawn"),
                   execute: async () => {
+                    expect(getGatewayToolCallerIdentity()?.requesterOrigin).toMatchObject({
+                      sessionKey: "agent:research:whatsapp:group:requesters",
+                      senderId: "requester-bob",
+                    });
                     const guard = captureAgentToolSourceExecutionGuard();
                     const sql = reset ? undefined : observeHostDataSql();
                     const child = await patchSessionEntryCore(
@@ -614,11 +601,7 @@ it.each(["preparing", "bound", "final source check"] as const)(
           phase === "preparing" ? "worker turn authority changed" : "run closed during binding",
         );
       }
-      if (phase === "final source check") {
-        expect(getWorkerTurnExecutionIdentityCapability(store, claim)).toBeUndefined();
-      } else {
-        expect(assertSourceCurrent).not.toHaveBeenCalled();
-      }
+      expect(getWorkerTurnExecutionIdentityCapability(store, claim)).toBeUndefined();
     } finally {
       preparation?.mockRestore();
       releaseAgentRunDelegatedAuthority(delegated);
@@ -626,13 +609,13 @@ it.each(["preparing", "bound", "final source check"] as const)(
   },
 );
 
-it("retains the original transcript and prompt cache facts while claim authority is prepared", async () => {
+it("retains original requester, transcript, and prompt cache facts while claim authority is prepared", async () => {
   const active = await advanceToActive();
   const claim = await store.claimTurn(workerClaimInput("target-snapshot", active));
   const instance = createOperationalRunInstanceRef(claim.runId);
   const delegated = claimAgentRunDelegatedAuthority(instance);
   const expected = {
-    ...sessionTarget,
+    ...captureSessionTranscriptTargetBinding(sessionTarget),
     expectedLifecycleRevision: "original-lifecycle",
     expectedWriterRunId: claim.runId,
   };
@@ -643,6 +626,10 @@ it("retains the original transcript and prompt cache facts while claim authority
     fastMode: true,
     fastModeStartedAtMs: 123,
     fastModeAutoOnSeconds: 30,
+  };
+  const requesterOrigin = {
+    sessionKey: "agent:research:whatsapp:group:requesters",
+    senderId: "requester-bob",
   };
   const binding = bindWorkerTurnOwner(
     store,
@@ -655,33 +642,37 @@ it("retains the original transcript and prompt cache facts while claim authority
     undefined,
     undefined,
     promptCacheContext,
+    requesterOrigin,
   );
-  const connection: WorkerConnectionIdentity = {
+  const connection: WorkerConnectionIdentity = createWorkerConnectionIdentity(claim, {
     environmentId: active.environmentId,
     ownerEpoch: active.activeOwnerEpoch,
-    sessionId: claim.sessionId,
-    runId: claim.runId,
-    turnClaim: claim,
     credentialHash: "synthetic-credential-hash",
     bundleHash: "synthetic-bundle-hash",
-    rpcSetVersion: 1,
-    protocolFeatures: [],
     credentialExpiresAtMs: 1,
-  };
+  });
   promptCacheContext.boundaryCount = 99;
   promptCacheContext.promptCacheKey = "replacement-cache";
   promptCacheContext.fastMode = false;
   promptCacheContext.fastModeStartedAtMs = 456;
   promptCacheContext.fastModeAutoOnSeconds = 60;
+  requesterOrigin.senderId = "replacement-alice";
+  requesterOrigin.sessionKey = "agent:main:replacement";
   requested.sessionId = "replacement-session";
   requested.storePath = path.join(root, "replacement.json");
   requested.expectedLifecycleRevision = "replacement-lifecycle";
   requested.expectedWriterRunId = "replacement-run";
+  requested.env = { ...requested.env, OPENCLAW_STATE_DIR: path.join(root, "replacement-state") };
   try {
     const { capability } = await binding;
     expect(capability.sessionTarget).toEqual(expected);
     await capability.run((identity) => {
       expect(identity.sessionTarget).toEqual(expected);
+      expect(identity.requesterOrigin).toMatchObject({
+        sessionKey: "agent:research:whatsapp:group:requesters",
+        senderId: "requester-bob",
+      });
+      expect(Object.isFrozen(identity.requesterOrigin)).toBe(true);
     });
     expect(readWorkerTurnPromptCacheContext(connection)).toEqual({
       boundaryCount: 2,
@@ -814,7 +805,7 @@ it("keeps authority revoked when COMMIT succeeds but its outcome is lost", async
   }
 });
 
-it("shares claim revocation across facades while restart clearing leaves worker claims live", async () => {
+it("shares local and worker claim revocation across database aliases", async () => {
   const active = await advanceToActive();
   const worker = await store.claimTurn(workerClaimInput("shared-facade", active));
   const local = await store.claimTurn({
@@ -832,25 +823,22 @@ it("shares claim revocation across facades while restart clearing leaves worker 
   const facade = createWorkerSessionPlacementStore({
     database: openOpenClawStateDatabase({ path: alias }),
   });
-  const inventory = await store.prepareMaintenancePlacements();
   try {
-    expect(facade.clearLocalTurnClaimsAfterRestart()).toBe(1);
+    expect((await facade.getAsync(local.sessionId))?.turnClaim?.claimId).toBe(local.claimId);
+    expect(localAuthority.isCurrent()).toBe(true);
+    await facade.releaseTurn(local);
     expect(localAuthority.isCurrent()).toBe(false);
     expect(workerAuthority.isCurrent()).toBe(true);
-    inventory.assertCurrent();
-    facade.retireSessionPlacement({
+    await facade.retireSessionPlacementAsync({
       sessionId: local.sessionId,
       expectedState: "local",
       expectedGeneration: local.placementGeneration,
     });
-    inventory.assertCurrent();
     await facade.authorizeWorkerTurnTools(worker, ["sessions_send"]);
     expect(workerAuthority.isCurrent()).toBe(true);
     await facade.releaseTurn(worker);
     expect(workerAuthority.isCurrent()).toBe(false);
-    expect(() => inventory.assertCurrent()).toThrow("placement inventory changed");
   } finally {
-    inventory.release();
     workerAuthority.release();
     localAuthority.release();
   }

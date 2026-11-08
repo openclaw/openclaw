@@ -9,13 +9,13 @@ import {
   type PlainTextToolCallMessageNormalization,
   type PlainTextToolCallNameMatcher,
 } from "../../../../packages/tool-call-repair/src/index.js";
-import { findCodeRegions } from "../../../shared/text/code-regions.js";
+import { mapAssistantMessageStream } from "../../../llm/utils/stream-wrapper.js";
+import { createCodeRegionResolver } from "../../../shared/text/code-regions.js";
 import type { StreamFn } from "../../runtime/index.js";
 import { createStreamIteratorWrapper } from "../../stream-iterator-wrapper.js";
 import { isThinkingLikeBlock } from "../../thinking-block.js";
 import { couldNormalizeToolNamePrefixToAllowedTool } from "../../tool-policy.js";
 import { resolveToolCallName } from "./attempt-tool-call-name-resolution.js";
-import { mapAssistantMessageStream } from "./stream-wrapper.js";
 
 type AssistantStream = Awaited<ReturnType<StreamFn>>;
 
@@ -29,6 +29,7 @@ function wrapStreamPromoteStandaloneTextToolCalls(
     hasExactName: (name) => Boolean(resolveToolCallName(name, allowedToolNames, undefined, true)),
     hasNamePrefix: (prefix) => couldNormalizeToolNamePrefixToAllowedTool(prefix, allowedToolNames),
   };
+  const resolveProtectedRanges = createCodeRegionResolver();
   const promotedIdBySource = new Map<string, string>();
   const normalizeTerminalMessage = (params: {
     allowPromotion: boolean;
@@ -40,7 +41,7 @@ function wrapStreamPromoteStandaloneTextToolCalls(
       matcher,
       message: params.message,
       preserveEmptyTextBlocks: params.preserveEmptyTextBlocks,
-      resolveProtectedRanges: findCodeRegions,
+      resolveProtectedRanges,
       requireAssistantRole: true,
     });
     if (scrubbed) {
@@ -57,17 +58,14 @@ function wrapStreamPromoteStandaloneTextToolCalls(
     ): Record<string, unknown> => {
       const sourceKey = `${ordinal}:${block.start}:${block.end}`;
       ordinal += 1;
-      let id = promotedIdBySource.get(sourceKey);
-      if (!id) {
-        id = `call_${randomUUID().replace(/-/g, "").slice(0, 24)}`;
-        promotedIdBySource.set(sourceKey, id);
-      }
+      const id =
+        promotedIdBySource.get(sourceKey) || `call_${randomUUID().replace(/-/g, "").slice(0, 24)}`;
+      promotedIdBySource.set(sourceKey, id);
       return {
         type: "toolCall",
         id,
         name,
         arguments: block.arguments,
-        partialArgs: JSON.stringify(block.arguments),
       };
     };
     const promoted = projectPlainTextToolCallMessage({
@@ -77,7 +75,7 @@ function wrapStreamPromoteStandaloneTextToolCalls(
       isRetainableNonTextBlock: isThinkingLikeBlock,
       message: params.message,
       requireAssistantRole: true,
-      resolveProtectedRanges: findCodeRegions,
+      resolveProtectedRanges,
       resolveToolName: (name) => resolveToolCallName(name, allowedToolNames, undefined, true),
     });
     if (promoted) {
@@ -89,12 +87,8 @@ function wrapStreamPromoteStandaloneTextToolCalls(
   const originalResult = stream.result.bind(stream);
   stream.result = async () => {
     const message = await originalResult();
-    const reason =
-      message && typeof message === "object"
-        ? (message as { stopReason?: unknown }).stopReason
-        : undefined;
     return (normalizeTerminalMessage({
-      allowPromotion: STANDALONE_TEXT_TOOL_CALL_PROMOTION_STOP_REASONS.has(reason),
+      allowPromotion: STANDALONE_TEXT_TOOL_CALL_PROMOTION_STOP_REASONS.has(message.stopReason),
       message,
     })?.message ?? message) as Awaited<ReturnType<typeof originalResult>>;
   };
@@ -109,11 +103,11 @@ function wrapStreamPromoteStandaloneTextToolCalls(
       createPromotedToolCallEvents: createPromotedPlainTextToolCallEvents,
       matcher,
       normalizeTerminalMessage,
-      // findCodeRegions resolves exactly the CommonMark fenced/indented/inline code shapes
+      // The resolver preserves exactly the CommonMark fenced/indented/inline code shapes
       // the carried fence scan models (and yields to the full parse for the rest), so its
       // protection is safe to trust from the fast path.
       protectedRangesFenceCompatible: true,
-      resolveProtectedRanges: findCodeRegions,
+      resolveProtectedRanges,
     })[Symbol.asyncIterator]();
     let started = false;
     return createStreamIteratorWrapper({

@@ -55,22 +55,16 @@ export function requestsNonOperatorDeviceRole(input: { role?: string; roles?: st
   });
 }
 
-function hasNonOperatorDeviceTokenRole(
-  tokens: Record<string, DeviceAuthToken> | undefined,
-): boolean {
-  for (const token of Object.values(tokens ?? {})) {
-    const normalized = token.role.trim();
-    if (normalized && normalized !== "operator") {
-      return true;
-    }
-  }
-  return false;
-}
-
 export function pairedDeviceHasNonOperatorRole(device: {
   role?: string;
   roles?: string[];
   tokens?: Record<string, DeviceAuthToken>;
 }): boolean {
-  return requestsNonOperatorDeviceRole(device) || hasNonOperatorDeviceTokenRole(device.tokens);
+  return (
+    requestsNonOperatorDeviceRole(device) ||
+    Object.values(device.tokens ?? {}).some((token) => {
+      const normalized = token.role.trim();
+      return Boolean(normalized && normalized !== "operator");
+    })
+  );
 }

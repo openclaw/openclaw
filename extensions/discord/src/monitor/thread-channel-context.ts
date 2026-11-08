@@ -1,28 +1,10 @@
 import { isDiscordThreadChannelType } from "../channel-type.js";
 import type { ChannelType } from "../internal/discord.js";
 import { normalizeDiscordSlug } from "./allow-list.js";
-import {
-  resolveDiscordChannelIdSafe,
-  resolveDiscordChannelInfoSafe,
-  resolveDiscordChannelParentIdSafe,
-} from "./channel-access.js";
-import { resolveDiscordChannelInfo } from "./message-channel-info.js";
+import { resolveDiscordChannelInfoSafe } from "./channel-access.js";
+import { buildDiscordChannelInfo, resolveDiscordChannelInfo } from "./message-channel-info.js";
 import type { DiscordChannelInfo, DiscordChannelInfoClient } from "./message-channel-info.js";
-import { resolveDiscordThreadParentInfo } from "./threading.js";
-
-function buildFetchedChannelInfo(channel: unknown): DiscordChannelInfo | null {
-  const channelInfo = resolveDiscordChannelInfoSafe(channel);
-  if (channelInfo.type === undefined) {
-    return null;
-  }
-  return {
-    type: channelInfo.type as ChannelType,
-    name: channelInfo.name,
-    topic: channelInfo.topic,
-    parentId: channelInfo.parentId,
-    ownerId: channelInfo.ownerId,
-  };
-}
+import { resolveDiscordThreadParentInfo } from "./threading.starter.js";
 
 export async function resolveDiscordThreadLikeChannelContext(params: {
   client: DiscordChannelInfoClient;
@@ -31,7 +13,7 @@ export async function resolveDiscordThreadLikeChannelContext(params: {
   channelInfo?: DiscordChannelInfo | null;
 }) {
   const safeChannelInfo = resolveDiscordChannelInfoSafe(params.channel);
-  const channelId = resolveDiscordChannelIdSafe(params.channel) ?? params.channelIdFallback ?? "";
+  const channelId = safeChannelInfo.id ?? params.channelIdFallback ?? "";
   const channelInfo =
     params.channelInfo !== undefined
       ? params.channelInfo
@@ -41,7 +23,7 @@ export async function resolveDiscordThreadLikeChannelContext(params: {
   const channelType = (safeChannelInfo.type as ChannelType | undefined) ?? channelInfo?.type;
   const channelName = safeChannelInfo.name ?? channelInfo?.name;
   const channelSlug = channelName ? normalizeDiscordSlug(channelName) : "";
-  const parentId = resolveDiscordChannelParentIdSafe(params.channel) ?? channelInfo?.parentId;
+  const parentId = safeChannelInfo.parentId ?? channelInfo?.parentId;
   const isThreadChannel = isDiscordThreadChannelType(channelType);
 
   let threadParentId: string | undefined;
@@ -54,7 +36,6 @@ export async function resolveDiscordThreadLikeChannelContext(params: {
         id: channelId,
         name: channelName,
         parentId,
-        parent: undefined,
       },
       channelInfo,
     });
@@ -73,7 +54,6 @@ export async function resolveDiscordThreadLikeChannelContext(params: {
     threadParentId,
     threadParentName,
     threadParentSlug,
-    channelInfo,
   };
 }
 
@@ -84,6 +64,6 @@ export async function resolveFetchedDiscordThreadLikeChannelContext(params: {
 }) {
   return await resolveDiscordThreadLikeChannelContext({
     ...params,
-    channelInfo: buildFetchedChannelInfo(params.channel),
+    channelInfo: buildDiscordChannelInfo(params.channel),
   });
 }

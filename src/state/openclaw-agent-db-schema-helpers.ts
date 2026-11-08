@@ -1,30 +1,41 @@
 import type { DatabaseSync } from "node:sqlite";
-import { hasLegacyMemoryRecallMetadataColumns } from "../../packages/memory-host-sdk/src/host/memory-schema.js";
+import {
+  ensureMemoryChunkProvenance,
+  ensureMemoryRecallMetadataSchema,
+  hasLegacyMemoryRecallMetadataColumns,
+} from "../../packages/memory-host-sdk/src/host/memory-schema.js";
+import { parseSqliteSessionEntryRecord } from "../config/sessions/session-entry-json.js";
+import { matchesSqliteMemorySearchFragment } from "../infra/database-engine/sqlite-memory-search-fragments.js";
+import { getNodeSqliteKysely, iterateSqliteQuerySync } from "../infra/kysely-sync.js";
 import { repairCanonicalSqliteIndexes } from "../infra/sqlite-index-schema.js";
+import { assertSqliteTableIntegrity } from "../infra/sqlite-integrity.js";
+import { captureSqliteSchemaFacts } from "../infra/sqlite-schema-admission.js";
+import { createSqliteTableContractReader } from "../infra/sqlite-schema-catalog.js";
 import {
   assertSqliteSchemaContains,
   assertSqliteSchemaTablesPresent,
   collectSqliteSchemaIssues,
-  getCanonicalSqliteNamedIndexContracts,
+  getCanonicalSqliteNamedIndexNames,
   getCanonicalSqliteTableNames,
+  type SqliteTableContractReader,
 } from "../infra/sqlite-schema-contract.js";
+import { getAdmittedSqliteSchemaFacts } from "../infra/sqlite-schema-facts.js";
 import {
   legacySqliteSchemaIssueMessages,
   SqliteSchemaMismatchError,
   throwSqliteSchemaMismatches,
 } from "../infra/sqlite-schema-issues.js";
-import { extractSqliteTableSchema } from "../infra/sqlite-schema-sql.js";
-import { readSqliteUserVersion } from "../infra/sqlite-user-version.js";
+import { extractSqliteTableSchema, quoteSqliteIdentifier } from "../infra/sqlite-schema-sql.js";
+import { readMainTableList } from "../infra/sqlite-strict.js";
+import { readSqliteUserVersion, writeSqliteUserVersion } from "../infra/sqlite-user-version.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import {
   AGENT_V14_BOARD_SCHEMA_SQL,
   ensureOpenClawAgentBoardSchemaInTransaction,
 } from "./openclaw-agent-board-schema.js";
-import { withoutCanonicalSessionValidationSchema } from "./openclaw-agent-canonical-validation-schema.js";
-import {
-  CANONICAL_SESSION_VALIDATION_SCHEMA_VERSION,
-  AGENT_STORAGE_SCHEMA_VERSION,
-} from "./openclaw-agent-db-contract.js";
+import { ensureLegacySessionEntryValidityTriggers } from "./openclaw-agent-canonical-validation-migration.js";
+import { hasPendingAgentStartupColumns } from "./openclaw-agent-db-additive-columns.js";
+import { persistAgentSchemaMetadata } from "./openclaw-agent-db-metadata-write.js";
 import { AGENT_SCHEMA_COMPATIBILITY } from "./openclaw-agent-db-schema-compatibility.js";
 import {
   readExistingAgentSchemaMeta,
@@ -34,31 +45,21 @@ import {
 import {
   ensureSessionAdditiveColumns,
   readSqliteTableColumns,
-  hasPendingSessionConversationRouteContextColumn,
-  hasPendingSessionProjectColumn,
-  hasPendingSessionTranscriptContextEligibilityColumn,
   ensureSessionEntryValidityProjection,
 } from "./openclaw-agent-db-session-migrations.js";
-import {
-  LEGACY_PARTICIPANT_OPTIONAL_COLUMNS,
-  withLegacySessionParticipantsSchema,
-} from "./openclaw-agent-participants-migration.js";
-import { hasPendingInputConsumptionColumnMigration } from "./openclaw-agent-pending-inputs-schema.js";
+import type { DB } from "./openclaw-agent-db.generated.js";
+import { LEGACY_PARTICIPANT_OPTIONAL_COLUMNS } from "./openclaw-agent-participants-migration.js";
 import {
   ensureOpenClawAgentProgressCardSchemaInTransaction,
   AGENT_PROGRESS_CARD_SCHEMA_SQL,
 } from "./openclaw-agent-progress-card-schema.js";
+import { RETIRED_AGENT_STATE_LEASE_SCHEMA_SQL } from "./openclaw-agent-schema-history.js";
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "./openclaw-agent-schema.js";
 import {
   AGENT_V14_ADDITIVE_SCHEMA_SQL,
   AGENT_V14_CORE_SCHEMA_SQL,
   AGENT_V14_SESSION_SHARING_SCHEMA_SQL,
 } from "./openclaw-agent-session-sharing-schema.js";
-import {
-  SESSION_ENTRY_SNAPSHOTS_SCHEMA_VERSION,
-  withoutSessionEntrySnapshotsSchema,
-} from "./openclaw-agent-session-snapshots-schema.js";
-import { withLegacyAgentStorageSchema } from "./openclaw-agent-storage-schema.js";
 import { tableExists } from "./openclaw-state-db-schema-helpers.js";
 
 export {
@@ -69,21 +70,138 @@ export {
   assertExistingAgentSchemaOwner,
 } from "./openclaw-agent-db-schema-read.js";
 
-/** Compare historical migration targets against only the representation they support. */
-export function getOpenClawAgentMigrationSchema(targetVersion: number): string {
-  const sessionSchemaSql =
-    targetVersion < SESSION_ENTRY_SNAPSHOTS_SCHEMA_VERSION
-      ? withoutSessionEntrySnapshotsSchema(OPENCLAW_AGENT_SCHEMA_SQL)
-      : OPENCLAW_AGENT_SCHEMA_SQL;
-  const targetSchemaSql =
-    targetVersion < AGENT_STORAGE_SCHEMA_VERSION
-      ? withLegacyAgentStorageSchema(sessionSchemaSql, targetVersion)
-      : sessionSchemaSql;
-  return targetVersion < 18
-    ? withLegacySessionParticipantsSchema(targetSchemaSql)
-    : targetVersion < CANONICAL_SESSION_VALIDATION_SCHEMA_VERSION
-      ? withoutCanonicalSessionValidationSchema(targetSchemaSql)
-      : targetSchemaSql;
+export { getOpenClawAgentMigrationSchema } from "./openclaw-agent-schema-history.js";
+
+const PUBLISHED_MEMORY_FTS_TABLES = ["memory_index_chunks_fts", "memory_index_paths_fts"] as const;
+/** Exact FTS5 module tables. SQLite reports these as shadows; a same-named ordinary table is not one. */
+const FTS5_SHADOW_SUFFIXES = ["config", "content", "data", "docsize", "idx"] as const;
+
+function publishedMemoryFtsMatches(
+  db: DatabaseSync,
+  name: (typeof PUBLISHED_MEMORY_FTS_TABLES)[number],
+): boolean {
+  const catalog = createSqliteTableContractReader(db).readCatalog([], [name]);
+  return (["unicode61", "trigram"] as const).some((tokenizer) => {
+    try {
+      return matchesSqliteMemorySearchFragment(catalog, {
+        kind: name === "memory_index_paths_fts" ? "path-fts" : "body-fts",
+        tableName: name,
+        tokenizer,
+      });
+    } catch (error) {
+      if (
+        error instanceof Error &&
+        error.message.includes("Memory search schema has no generated fingerprint")
+      ) {
+        return false;
+      }
+      throw error;
+    }
+  });
+}
+
+function admitPublishedMemoryFtsTables(
+  db: DatabaseSync,
+  pathname: string,
+  present: ReadonlySet<string>,
+  allowed: Set<string>,
+): void {
+  const verified: string[] = [];
+  for (const name of PUBLISHED_MEMORY_FTS_TABLES) {
+    if (!present.has(name)) {
+      continue;
+    }
+    if (!publishedMemoryFtsMatches(db, name)) {
+      throw new SqliteSchemaMismatchError(
+        `Cannot repair v16 validity triggers for ${pathname}: drifted memory FTS table ${name}. Preserve the database and SQLite sidecars before repair.`,
+      );
+    }
+    allowed.add(name);
+    verified.push(name);
+  }
+  if (verified.length === 0) {
+    return;
+  }
+  const shadowNames = new Set(
+    verified.flatMap((name) => FTS5_SHADOW_SUFFIXES.map((suffix) => `${name}_${suffix}`)),
+  );
+  for (const table of readMainTableList(db, { includeInternal: true })) {
+    if (table.type === "shadow" && shadowNames.has(table.name)) {
+      allowed.add(table.name);
+    }
+  }
+}
+
+/** beta.6 wrote v16 before the derived validity column and triggers existed. */
+export function repairAndAssertOpenClawAgentV16Validity(
+  db: DatabaseSync,
+  pathname: string,
+  schemaSql: string,
+): void {
+  const schema = getAdmittedSqliteSchemaFacts(db) ?? captureSqliteSchemaFacts(db);
+  if (
+    [
+      "session_nodes_entry_valid_after_insert",
+      "session_nodes_entry_valid_after_entry_update",
+      "session_nodes_entry_valid_after_identity_update",
+    ].every((name) => schema.triggers.has(name))
+  ) {
+    return;
+  }
+  // Missing invalidation triggers cannot certify even rows already marked valid.
+  const rows = iterateSqliteQuerySync(
+    db,
+    getNodeSqliteKysely<DB>(db)
+      .selectFrom("session_nodes")
+      .select(["current_session_id", "entry_json", "updated_at"]),
+  );
+  for (const row of rows) {
+    if (!parseSqliteSessionEntryRecord(row)) {
+      throw new SqliteSchemaMismatchError(
+        `Cannot repair v16 validity triggers for ${pathname}: invalid session entry identity or JSON. Stop the Gateway and preserve the database and SQLite sidecars; restore a verified backup or contact OpenClaw support to repair the affected rows. No session rows were changed.`,
+      );
+    }
+  }
+  ensureLegacySessionEntryValidityTriggers(db);
+  assertSqliteSchemaContains(db, pathname, schemaSql, {
+    ...AGENT_SCHEMA_COMPATIBILITY,
+    allowCompatibleAdditiveColumns: false,
+    allowedMissingColumns: [
+      ...AGENT_SCHEMA_COMPATIBILITY.allowedMissingColumns,
+      ...LEGACY_PARTICIPANT_OPTIONAL_COLUMNS,
+    ],
+    allowedMissingTables: [
+      ...AGENT_SCHEMA_COMPATIBILITY.allowedMissingTables,
+      "session_transcript_cold_archives",
+    ],
+  });
+  // v17's owner validates and retires the published v16 lease table and indexes.
+  if (schema.tables.has("state_leases")) {
+    assertSqliteSchemaContains(db, pathname, RETIRED_AGENT_STATE_LEASE_SCHEMA_SQL);
+  }
+  const tables = new Set([...getCanonicalSqliteTableNames(schemaSql), "state_leases"]);
+  // Lazy memory FTS is owned outside the base agent DDL. Admit a published
+  // definition, then only the shadow tables SQLite attributes to that module.
+  admitPublishedMemoryFtsTables(db, pathname, schema.tables, tables);
+  const indexes = new Set([
+    ...getCanonicalSqliteNamedIndexNames(schemaSql),
+    "idx_agent_state_leases_expiry",
+    "idx_agent_state_leases_owner",
+    // The memory schema owner retires this published path-only index.
+    "idx_memory_index_chunks_path",
+  ]);
+  for (const [type, names, canonical] of [
+    ["table", schema.tables, tables],
+    ["index", schema.indexes, indexes],
+  ] as const) {
+    for (const name of names) {
+      if (!name.startsWith("sqlite_") && !canonical.has(name)) {
+        throw new SqliteSchemaMismatchError(
+          `Cannot repair v16 validity triggers for ${pathname}: unexpected ${type} ${name}. Preserve the database and SQLite sidecars and contact OpenClaw support; the unknown schema needs inspection before migration.`,
+        );
+      }
+    }
+  }
 }
 
 export function migratedSessionColumn(
@@ -106,9 +224,14 @@ export function assertOpenClawAgentSchemaContains(
   schemaSql: string,
   participantSchema: "current" | "legacy" = "current",
   allowStartupIndexRepair = false,
+  readTable?: SqliteTableContractReader,
+  requireCanonicalIndexes = false,
 ): boolean {
   const compatibility = {
     ...AGENT_SCHEMA_COMPATIBILITY,
+    allowedMissingIndexes: requireCanonicalIndexes
+      ? []
+      : AGENT_SCHEMA_COMPATIBILITY.allowedMissingIndexes,
     allowedMissingTables: [
       ...AGENT_SCHEMA_COMPATIBILITY.allowedMissingTables,
       // Legacy migration preflight precedes creation of the required v20 table.
@@ -120,15 +243,13 @@ export function assertOpenClawAgentSchemaContains(
     ],
   };
   if (!allowStartupIndexRepair) {
-    assertSqliteSchemaContains(database, pathname, schemaSql, compatibility);
+    assertSqliteSchemaContains(database, pathname, schemaSql, compatibility, readTable);
     return false;
   }
   // Admission is read-only; the writable schema owner rebuilds these projections
   // before session startup completes. Constraints and canonical data stay strict.
-  const repairableIndexes = new Set(
-    getCanonicalSqliteNamedIndexContracts(schemaSql).map((index) => index.name),
-  );
-  const issues = collectSqliteSchemaIssues(database, schemaSql, compatibility);
+  const repairableIndexes = new Set(getCanonicalSqliteNamedIndexNames(schemaSql));
+  const issues = collectSqliteSchemaIssues(database, schemaSql, compatibility, readTable);
   if (
     issues.some(
       (issue) =>
@@ -142,7 +263,8 @@ export function assertOpenClawAgentSchemaContains(
 
 export function assertOpenClawAgentCurrentRuntimeSchema(
   database: DatabaseSync,
-  options: { agentId: string; pathname: string },
+  options: { agentId: string; pathname: string; requireCanonicalIndexes?: boolean },
+  readTable?: SqliteTableContractReader,
 ): void {
   const agentId = normalizeAgentId(options.agentId);
   const metadata = readExistingAgentSchemaMeta(database);
@@ -152,7 +274,15 @@ export function assertOpenClawAgentCurrentRuntimeSchema(
       `OpenClaw agent database ${options.pathname} retains retired state_leases storage; run openclaw doctor --fix before using it.`,
     );
   }
-  assertOpenClawAgentSchemaContains(database, options.pathname, OPENCLAW_AGENT_SCHEMA_SQL);
+  assertOpenClawAgentSchemaContains(
+    database,
+    options.pathname,
+    OPENCLAW_AGENT_SCHEMA_SQL,
+    "current",
+    false,
+    readTable,
+    options.requireCanonicalIndexes,
+  );
 }
 
 function hasAnyCanonicalTable(database: DatabaseSync, schemaSql: string): boolean {
@@ -182,6 +312,12 @@ function repairAndAssertAgentSchemaGroup(
 
 /** Ensure the additive session-key contract table inside the caller's transaction. */
 export function ensureSessionKeyContractSchemaInTransaction(db: DatabaseSync): void {
+  if (
+    tableExists(db, "session_key_contract") &&
+    db.prepare("SELECT 1 FROM session_key_contract WHERE id = 1").get()
+  ) {
+    return;
+  }
   db.exec(
     extractSqliteTableSchema(OPENCLAW_AGENT_SCHEMA_SQL, "session_key_contract", {
       endMarker: "CREATE TABLE IF NOT EXISTS session_windows (",
@@ -192,6 +328,10 @@ export function ensureSessionKeyContractSchemaInTransaction(db: DatabaseSync): v
 }
 
 export function ensureSessionReactionsSchemaInTransaction(db: DatabaseSync): void {
+  const schema = getAdmittedSqliteSchemaFacts(db);
+  if (schema?.tables.has("session_reactions")) {
+    return;
+  }
   db.exec(
     extractSqliteTableSchema(OPENCLAW_AGENT_SCHEMA_SQL, "session_reactions", {
       endMarker: "CREATE TABLE IF NOT EXISTS board_tabs (",
@@ -227,6 +367,7 @@ export function repairAndAssertOpenClawAgentV14SchemaForMigration(
 
   ensureSessionAdditiveColumns(database);
   ensureSessionEntryValidityProjection(database);
+  ensureLegacySessionEntryValidityTriggers(database);
   ensureSessionKeyContractSchemaInTransaction(database);
 
   // v14 always owned the core schema. Board and collaboration groups were
@@ -255,20 +396,6 @@ export function repairAndAssertOpenClawAgentV14SchemaForMigration(
     repairAndAssertAgentSchemaGroup(database, options.pathname, AGENT_PROGRESS_CARD_SCHEMA_SQL);
   }
 }
-
-const RETIRED_AGENT_STATE_LEASE_SCHEMA_SQL = `
-CREATE TABLE state_leases (
-  scope TEXT NOT NULL,
-  lease_key TEXT NOT NULL,
-  owner TEXT NOT NULL,
-  expires_at INTEGER,
-  heartbeat_at INTEGER,
-  payload_json TEXT,
-  created_at INTEGER NOT NULL,
-  updated_at INTEGER NOT NULL,
-  PRIMARY KEY (scope, lease_key)
-) STRICT;
-`;
 
 export function migrateRetiredAgentStateLeaseSchema(
   db: DatabaseSync,
@@ -306,6 +433,37 @@ export function assertAgentSchemaVersion(
   );
 }
 
+export function finishAgentSchemaMigration(
+  db: DatabaseSync,
+  agentId: string,
+  pathname: string,
+  targetVersion: number,
+  schemaSql: string,
+  requiresMaintenance: boolean,
+  assertMigration: () => void,
+  integrity?: { tables: readonly string[]; foreignKeyTables?: readonly string[] },
+): void {
+  writeSqliteUserVersion(db, targetVersion);
+  persistAgentSchemaMetadata(db, agentId, targetVersion);
+  assertAgentSchemaVersion(db, { agentId, pathname, version: targetVersion }, schemaSql);
+  for (const table of integrity?.tables ?? []) {
+    if (tableExists(db, table)) {
+      assertSqliteTableIntegrity(db, pathname, table);
+    }
+  }
+  if (requiresMaintenance) {
+    const checks = integrity?.foreignKeyTables?.map(
+      (table) => `PRAGMA foreign_key_check(${quoteSqliteIdentifier(table)})`,
+    ) ?? ["PRAGMA foreign_key_check"];
+    for (const check of checks) {
+      if (db.prepare(check).all().length > 0) {
+        throw new Error(`Agent schema migration failed foreign key validation for ${pathname}.`);
+      }
+    }
+  }
+  assertMigration();
+}
+
 function hasLegacyMemoryChunkProvenanceTrigger(db: DatabaseSync): boolean {
   return Boolean(
     db
@@ -318,6 +476,11 @@ function hasLegacyMemoryChunkProvenanceTrigger(db: DatabaseSync): boolean {
 
 export function hasPendingMemoryChunkMetadataMigration(db: DatabaseSync): boolean {
   return hasLegacyMemoryRecallMetadataColumns(db) || hasLegacyMemoryChunkProvenanceTrigger(db);
+}
+
+export function migrateMemoryChunkMetadataSchema(db: DatabaseSync): void {
+  ensureMemoryRecallMetadataSchema(db);
+  ensureMemoryChunkProvenance(db);
 }
 
 function hasPendingSessionKeyContractSchemaMigration(db: DatabaseSync): boolean {
@@ -335,9 +498,8 @@ export function hasPendingCurrentVersionAgentDatabaseMigration(database: Databas
     hasPendingMemoryChunkMetadataMigration(database) ||
     hasPendingSessionKeyContractSchemaMigration(database) ||
     hasRetiredAgentStateLeaseSchema(database) ||
-    hasPendingSessionConversationRouteContextColumn(database) ||
-    hasPendingSessionTranscriptContextEligibilityColumn(database) ||
-    hasPendingInputConsumptionColumnMigration(database) ||
-    hasPendingSessionProjectColumn(database)
+    hasPendingAgentStartupColumns(
+      (getAdmittedSqliteSchemaFacts(database) ?? captureSqliteSchemaFacts(database)).tableSql,
+    )
   );
 }

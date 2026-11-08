@@ -1,0 +1,8 @@
+{
+  "pluginId": "anthropic",
+  "plugin": "Anthropic",
+  "icon": "claude",
+  "key": "sessionCatalog",
+  "labelKey": "configView.sessionSources.claude",
+  "order": 10
+}

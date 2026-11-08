@@ -1,11 +1,13 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { afterAll, describe, expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement, withinTest } from "../../../test/helpers/promise.js";
 import * as sessionFork from "../../auto-reply/reply/session-fork.js";
 import {
   createSessionEntryWithTranscript,
   loadSessionEntry,
+  loadTranscriptEvents,
   loadTranscriptEventsSync,
   persistSessionTranscriptTurn,
   upsertSessionEntryCore,
@@ -14,7 +16,6 @@ import {
   resolveSqliteScope,
   toDatabaseOptions,
 } from "../../config/sessions/session-accessor.sqlite-scope.js";
-import * as transcriptHeader from "../../config/sessions/session-accessor.sqlite-transcript-header.js";
 import {
   registerProjectRegistry,
   selectStoredProjectRegistry,
@@ -34,10 +35,11 @@ import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.
 import { captureGatewayOperatorRunAuthority } from "../operator-run-authority.js";
 import { initializeRepository } from "../server.sessions.create.projects.test-support.js";
 import { createGatewaySession } from "../session-create-service.js";
+import * as creationTarget from "../session-create-target.js";
 import { resolveSessionMutationAuthorization } from "../session-sharing.js";
-import { sessionCreateHandlers } from "./sessions-create.js";
-import { sessionMutationHandlers } from "./sessions-mutations.js";
-import type { GatewayClient, GatewayRequestContext, RespondFn } from "./types.js";
+import { startSessionMutationRequest } from "./sessions-mutations.native-consent.test-support.js";
+import * as patchDiscovery from "./sessions-patch-discovery.js";
+import type { GatewayClient, GatewayRequestContext } from "./types.js";
 
 export function registerSessionOperatorPreparationTests(fixture: {
   context: () => GatewayRequestContext;
@@ -45,19 +47,73 @@ export function registerSessionOperatorPreparationTests(fixture: {
   personClient: (profileId: string, scopes: string[]) => GatewayClient;
 }) {
   const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-creation-shared-store-");
-  const contextFor = (client: GatewayClient) => {
-    const context = fixture.context();
-    context.getClientConnIds = (filter) =>
-      new Set(
-        client.connId && !client.invalidated && (!filter || filter(client)) ? [client.connId] : [],
-      );
-    return context;
-  };
+  const scope = (sessionKey: string) => ({ agentId: "main", sessionKey });
+  const entry = (key: string) => loadSessionEntry(scope(key));
+  const transcript = (key: string, sessionId: string) =>
+    loadTranscriptEvents({ ...scope(key), sessionId });
+  const sessionHeader = expect.arrayContaining([expect.objectContaining({ type: "session" })]);
+  const incognitoResponse = [
+    true,
+    {
+      key: expect.stringContaining(":incognito-"),
+      entry: { incognito: true },
+    },
+  ];
   const cases = (["sessions.patch", "sessions.patchMany", "sessions.create"] as const).flatMap(
     (method) => (["params", "caller", "target"] as const).map((change) => ({ method, change })),
   );
+  function preparedOperator() {
+    const caller = fixture.personClient(fixture.profileId(), ["operator.admin"]);
+    const context = fixture.context();
+    context.getClientConnIds = (filter) =>
+      new Set(
+        caller.connId && !caller.invalidated && (!filter || filter(caller)) ? [caller.connId] : [],
+      );
+    return {
+      caller,
+      context,
+      options: () => ({
+        cfg: context.getRuntimeConfig(),
+        getCurrentConfig: context.getRuntimeConfig,
+        agentId: "main",
+        model: "openai/gpt-5.6-sol",
+        commandSource: "test",
+        requestingOperatorProfileId: fixture.profileId(),
+        requestingOperatorScopes: caller.connect.scopes,
+        loadGatewayModelCatalogSnapshot: () =>
+          context.loadGatewayModelCatalogSnapshot({ agentId: "main" }),
+      }),
+      start: (
+        method: "sessions.create" | "sessions.patch" | "sessions.patchMany",
+        params: Record<string, unknown>,
+        requestId: string,
+        authorize = true,
+      ) => {
+        const authorization = authorize
+          ? resolveSessionMutationAuthorization({
+              method,
+              client: caller,
+              context,
+              requestParams: params,
+            })
+          : undefined;
+        if (authorization) {
+          expect(authorization.error).toBeNull();
+        }
+        return startSessionMutationRequest(method, params, {
+          req: { type: "req", id: requestId, method, params },
+          client: caller,
+          context,
+          ...(authorization && {
+            hasCurrentClientAuthority: () => !caller.invalidated,
+            sessionMutationAuthorization: authorization.authorization,
+          }),
+        });
+      },
+    };
+  }
   describe("session mutation operator preparation", () => {
-    it.each([
+    it.for([
       ...cases,
       { method: "sessions.patchMany" as const, change: "duplicate" as const },
       { method: "sessions.create" as const, change: "incognito" as const },
@@ -65,7 +121,7 @@ export function registerSessionOperatorPreparationTests(fixture: {
       { method: "sessions.create" as const, change: "durable" as const },
     ])(
       "preserves the original $method request when $change changes during authority preparation",
-      async ({ method, change }) => {
+      async ({ method, change }, { signal }) => {
         const key = `agent:main:dashboard:prepare-${method}-${change}`;
         const otherKey = `${key}-other`;
         const originalId = `original-${method}-${change}`;
@@ -73,15 +129,11 @@ export function registerSessionOperatorPreparationTests(fixture: {
           [key, originalId],
           [otherKey, `${originalId}-other`],
         ] as const) {
-          await upsertSessionEntryCore(
-            { agentId: "main", sessionKey },
-            { sessionId, updatedAt: 1 },
-          );
+          await upsertSessionEntryCore(scope(sessionKey), { sessionId, updatedAt: 1 });
         }
-        const before = loadSessionEntry({ agentId: "main", sessionKey: key });
-        const otherBefore = loadSessionEntry({ agentId: "main", sessionKey: otherKey });
-        const caller = fixture.personClient(fixture.profileId(), ["operator.admin"]);
-        const context = contextFor(caller);
+        const before = entry(key);
+        const otherBefore = entry(otherKey);
+        const { caller, start } = preparedOperator();
         const patch = { model: "openai/gpt-5.6-sol", label: `capture-${method}-${change}` };
         const target = { key };
         const params: Record<string, unknown> =
@@ -98,13 +150,6 @@ export function registerSessionOperatorPreparationTests(fixture: {
                       incognito: true,
                     }
                   : { key, ...patch };
-        const authorized = resolveSessionMutationAuthorization({
-          method,
-          client: caller,
-          context,
-          requestParams: params,
-        });
-        expect(authorized.error).toBeNull();
         const entered = createDeferredCore();
         const resume = createDeferredCore();
         const releases: ReturnType<typeof vi.fn>[] = [];
@@ -120,52 +165,56 @@ export function registerSessionOperatorPreparationTests(fixture: {
             await resume.promise;
             return prepared;
           });
-        const responses: Parameters<RespondFn>[] = [];
-        const handler =
-          method === "sessions.create"
-            ? sessionCreateHandlers[method]!
-            : sessionMutationHandlers[method]!;
-        const running = Promise.resolve(
-          handler({
-            req: { type: "req", id: key, method, params },
-            params,
-            context,
-            client: caller,
-            isWebchatConnect: () => true,
-            hasCurrentClientAuthority: () => !caller.invalidated,
-            sessionMutationAuthorization: authorized.authorization,
-            respond: (...response) => {
-              responses.push(response);
-            },
-          }),
-        ).then(
+        const selectedTarget = createDeferredCore();
+        const recordTarget = async <T>(read: Promise<T>) => {
+          const selected = await read;
+          selectedTarget.resolve();
+          return selected;
+        };
+        const readTarget = creationTarget.readRequestedSessionCreateTarget;
+        const discoverTargets = patchDiscovery.discoverSessionPatchTargets;
+        const targetReadSpy =
+          change !== "target"
+            ? undefined
+            : method === "sessions.create"
+              ? vi
+                  .spyOn(creationTarget, "readRequestedSessionCreateTarget")
+                  .mockImplementation((...args) => recordTarget(readTarget(...args)))
+              : vi
+                  .spyOn(patchDiscovery, "discoverSessionPatchTargets")
+                  .mockImplementation((...args) => recordTarget(discoverTargets(...args)));
+        const request = start(method, params, key);
+        const { responses } = request;
+        const running = request.running.then(
           () => undefined,
           (error: unknown) => error,
         );
         let replacement: typeof before;
         try {
-          await Promise.race([
+          await awaitGateBeforeSettlement(
             entered.promise,
-            running.then((error) => {
-              if (error !== undefined) {
-                if (error instanceof Error) {
-                  throw error;
-                }
-                throw new Error("Handler failed before profile preparation", { cause: error });
-              }
-              throw new Error(
-                `Handler settled before profile preparation: ${JSON.stringify(responses)}`,
-              );
-            }),
-          ]);
+            request.running,
+            "Handler settled before profile preparation",
+          );
+          if (targetReadSpy) {
+            // Profile readiness does not mean the independent worker target read has completed.
+            await withinTest(
+              awaitGateBeforeSettlement(
+                selectedTarget.promise,
+                running,
+                "Handler settled before selecting the original target",
+              ),
+              signal,
+            );
+          }
           if (change === "caller") {
             caller.invalidated = true;
           } else if (change === "target") {
-            await upsertSessionEntryCore(
-              { agentId: "main", sessionKey: key },
-              { sessionId: `${originalId}-replacement`, updatedAt: 2 },
-            );
-            replacement = loadSessionEntry({ agentId: "main", sessionKey: key });
+            await upsertSessionEntryCore(scope(key), {
+              sessionId: `${originalId}-replacement`,
+              updatedAt: 2,
+            });
+            replacement = entry(key);
           } else if (change === "params") {
             target.key = otherKey;
             patch.model = "anthropic/claude-sonnet-4-6";
@@ -174,28 +223,22 @@ export function registerSessionOperatorPreparationTests(fixture: {
           }
           resume.resolve();
           const error = await running;
-          if (change === "durable") {
+          if (change === "durable" || change === "incognito" || change === "explicit-incognito") {
             expect(error).toBeUndefined();
-            expect(responses[0]?.[0]).toBe(true);
-            expect(responses[0]?.[1]).toMatchObject({
-              key: expect.stringMatching(/^agent:main:dashboard:(?!incognito-)/),
-            });
-            expect(responses[0]?.[1]).not.toHaveProperty("entry.incognito", true);
-            expect(loadSessionEntry({ agentId: "main", sessionKey: key })).toEqual(before);
-          } else if (change === "incognito" || change === "explicit-incognito") {
-            expect(error).toBeUndefined();
-            expect(responses[0]).toMatchObject([
-              true,
-              {
-                key: expect.stringContaining(":incognito-"),
-                entry: { incognito: true },
-              },
-            ]);
-            expect(loadSessionEntry({ agentId: "main", sessionKey: key })).toEqual(before);
+            expect(entry(key)).toEqual(before);
+            if (change === "durable") {
+              expect(responses[0]?.[0]).toBe(true);
+              expect(responses[0]?.[1]).toMatchObject({
+                key: expect.stringMatching(/^agent:main:dashboard:(?!incognito-)/),
+              });
+              expect(responses[0]?.[1]).not.toHaveProperty("entry.incognito", true);
+            } else {
+              expect(responses[0]).toMatchObject(incognitoResponse);
+            }
           } else if (change === "params") {
             expect(error).toBeUndefined();
             expect(responses[0]?.[0]).toBe(true);
-            expect(loadSessionEntry({ agentId: "main", sessionKey: key })).toMatchObject({
+            expect(entry(key)).toMatchObject({
               sessionId: originalId,
               providerOverride: "openai",
               modelOverride: "gpt-5.6-sol",
@@ -210,11 +253,9 @@ export function registerSessionOperatorPreparationTests(fixture: {
             } else {
               expect(responses[0]?.[0]).toBe(false);
             }
-            expect(loadSessionEntry({ agentId: "main", sessionKey: key })).toEqual(
-              replacement ?? before,
-            );
+            expect(entry(key)).toEqual(replacement ?? before);
           }
-          expect(loadSessionEntry({ agentId: "main", sessionKey: otherKey })).toEqual(otherBefore);
+          expect(entry(otherKey)).toEqual(otherBefore);
           expect(releases.length).toBeGreaterThan(0);
           for (const release of releases) {
             expect(release).toHaveBeenCalledOnce();
@@ -223,184 +264,126 @@ export function registerSessionOperatorPreparationTests(fixture: {
           resume.resolve();
           await running;
           spy.mockRestore();
+          targetReadSpy?.mockRestore();
         }
       },
     );
     it("creates a logical secondary agent session in the main agent's missing exact shared store", async () => {
-      const root = sessionDirs.make();
-      const storePath = path.join(root, "shared.sqlite");
+      const storePath = path.join(sessionDirs.make(), "shared.sqlite");
       try {
-        const caller = fixture.personClient(fixture.profileId(), ["operator.admin"]);
-        const context = contextFor(caller);
+        const { context, start } = preparedOperator();
         const cfg = context.getRuntimeConfig();
         cfg.session = { ...cfg.session, store: storePath };
         await expect(fs.stat(storePath)).rejects.toMatchObject({ code: "ENOENT" });
         const key = "agent:work:dashboard:shared-physical-main";
         const params = { agentId: "work", key, model: "openai/gpt-5.6-sol" };
-        const authorized = resolveSessionMutationAuthorization({
-          method: "sessions.create",
-          client: caller,
-          context,
-          requestParams: params,
-        });
-        expect(authorized.error).toBeNull();
-        const responses: Parameters<RespondFn>[] = [];
-        await sessionCreateHandlers["sessions.create"]!({
-          req: { type: "req", id: key, method: "sessions.create", params },
-          params,
-          client: caller,
-          context,
-          isWebchatConnect: () => true,
-          hasCurrentClientAuthority: () => !caller.invalidated,
-          sessionMutationAuthorization: authorized.authorization,
-          respond: (...response) => {
-            responses.push(response);
-          },
-        });
+        const { responses, running } = start("sessions.create", params, key);
+        await running;
         expect(responses).toHaveLength(1);
         expect(responses[0]?.[0], JSON.stringify(responses[0])).toBe(true);
         expect(responses[0]?.[1]).toMatchObject({
           key,
           entry: { providerOverride: "openai", modelOverride: "gpt-5.6-sol" },
         });
-        const entry = loadSessionEntry({ agentId: "work", sessionKey: key, storePath });
-        expect(entry).toMatchObject({ providerOverride: "openai", modelOverride: "gpt-5.6-sol" });
-        expect(
-          loadTranscriptEventsSync({
-            agentId: "work",
-            sessionKey: key,
-            sessionId: entry!.sessionId,
-            storePath,
-          }),
-        ).toEqual(expect.arrayContaining([expect.objectContaining({ type: "session" })]));
-        const currentDatabase = openOpenClawAgentDatabase({ agentId: "main", path: storePath });
-        expect(currentDatabase.agentId).toBe("main");
+        const stored = { agentId: "work", sessionKey: key, storePath };
+        const created = loadSessionEntry(stored);
+        expect(created).toMatchObject({ providerOverride: "openai", modelOverride: "gpt-5.6-sol" });
+        expect(loadTranscriptEventsSync({ ...stored, sessionId: created!.sessionId })).toEqual(
+          sessionHeader,
+        );
+        expect(openOpenClawAgentDatabase({ agentId: "main", path: storePath }).agentId).toBe(
+          "main",
+        );
       } finally {
         await disposeOpenClawAgentDatabaseByPath(storePath);
       }
     });
     it("preserves creation provenance when a stored project reenters its captured existing-schema scope", async () => {
-      const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-creation-schema-project-"));
-      try {
-        const repoRoot = await initializeRepository(root, "project");
-        const project = await registerProjectRegistry({ path: repoRoot });
-        const caller = fixture.personClient(fixture.profileId(), ["operator.admin"]);
-        const context = contextFor(caller);
-        const key = "agent:main:dashboard:captured-project-creation";
-        const stateDatabasePath = resolveOpenClawStateSqlitePath();
-        const agentDatabasePath = resolveOpenClawAgentSqlitePath({ agentId: "main" });
-        // Retire normal-scope actors before acquiring the existing-schema policy.
-        await closeOpenClawAgentDatabaseByPathAsync(agentDatabasePath, "main");
-        await closeOpenClawStateDatabaseByPathAsync(stateDatabasePath);
-        await withExistingOpenClawStateSchema({ path: stateDatabasePath }, async () => {
-          const preparation = captureGatewayOperatorRunAuthority({ client: caller, context });
-          void preparation.catch(() => {});
-          try {
-            const result = await createGatewaySession({
-              cfg: context.getRuntimeConfig(),
-              getCurrentConfig: context.getRuntimeConfig,
-              agentId: "main",
-              key,
-              model: "openai/gpt-5.6-sol",
-              commandSource: "test",
-              requestingOperatorProfileId: fixture.profileId(),
-              requestingOperatorScopes: caller.connect.scopes,
-              operatorAuthority: preparation,
-              loadGatewayModelCatalogSnapshot: () =>
-                context.loadGatewayModelCatalogSnapshot({ agentId: "main" }),
-              prepareLifecycle: async () => {
-                const selected = await selectStoredProjectRegistry(project.id);
-                if (!selected) {
-                  throw new Error("Prepared project disappeared");
-                }
-                return {
-                  ok: true,
-                  value: {
-                    sessionRoot: repoRoot,
-                    spawnedCwd: repoRoot,
-                    withCommit: (run) =>
-                      selected.withCurrent(({ assertCurrent }) => run(assertCurrent)),
-                  },
-                };
-              },
-            });
-            expect(result).toMatchObject({ ok: true, key });
-            const entry = loadSessionEntry({ agentId: "main", sessionKey: key });
-            expect(entry).toMatchObject({ sessionRoot: repoRoot, spawnedCwd: repoRoot });
-            expect(
-              loadTranscriptEventsSync({
-                agentId: "main",
-                sessionKey: key,
-                sessionId: entry!.sessionId,
-              }),
-            ).toEqual(expect.arrayContaining([expect.objectContaining({ type: "session" })]));
-          } finally {
-            try {
-              (await preparation.catch(() => undefined))?.release();
-            } finally {
-              // Captured worker contexts must drain before their schema scope retires.
-              try {
-                await closeOpenClawAgentDatabaseByPathAsync(agentDatabasePath, "main");
-              } finally {
-                await closeOpenClawStateDatabaseByPathAsync(stateDatabasePath);
+      const root = sessionDirs.make();
+      const repoRoot = await initializeRepository(root, "project");
+      const project = await registerProjectRegistry({ path: repoRoot });
+      const { caller, context, options } = preparedOperator();
+      const key = "agent:main:dashboard:captured-project-creation";
+      const statePath = resolveOpenClawStateSqlitePath();
+      const agentPath = resolveOpenClawAgentSqlitePath({ agentId: "main" });
+      const closeDatabases = async () => {
+        try {
+          await closeOpenClawAgentDatabaseByPathAsync(agentPath, "main");
+        } finally {
+          await closeOpenClawStateDatabaseByPathAsync(statePath);
+        }
+      };
+      // Retire normal-scope actors before acquiring the existing-schema policy.
+      await closeDatabases();
+      await withExistingOpenClawStateSchema({ path: statePath }, async () => {
+        const preparation = captureGatewayOperatorRunAuthority({ client: caller, context });
+        void preparation.catch(() => {});
+        try {
+          const result = await createGatewaySession({
+            ...options(),
+            key,
+            operatorAuthority: preparation,
+            prepareLifecycle: async () => {
+              const selected = await selectStoredProjectRegistry(project.id);
+              if (!selected) {
+                throw new Error("Prepared project disappeared");
               }
-            }
+              return {
+                ok: true,
+                value: {
+                  sessionRoot: repoRoot,
+                  spawnedCwd: repoRoot,
+                  withCommit: (run) =>
+                    selected.withCurrent(({ assertCurrent }) => run(assertCurrent)),
+                },
+              };
+            },
+          });
+          expect(result).toMatchObject({ ok: true, key });
+          const created = entry(key);
+          expect(created).toMatchObject({ sessionRoot: repoRoot, spawnedCwd: repoRoot });
+          expect(
+            loadTranscriptEventsSync({ ...scope(key), sessionId: created!.sessionId }),
+          ).toEqual(sessionHeader);
+        } finally {
+          try {
+            (await preparation.catch(() => undefined))?.release();
+          } finally {
+            // Captured worker contexts must drain before their schema scope retires.
+            await closeDatabases();
           }
-        });
-      } finally {
-        await fs.rm(root, { recursive: true, force: true });
-      }
+        }
+      });
     });
     it("preserves fresh System incognito creation", async () => {
-      const caller = fixture.personClient(fixture.profileId(), ["operator.admin"]);
+      const { caller, start } = preparedOperator();
       delete caller.authenticatedUserProfile;
       caller.internal = { operatorRoleActor: { kind: "system" } };
       const params = { agentId: "main", incognito: true, model: "openai/gpt-5.6-sol" };
-      const responses: Parameters<RespondFn>[] = [];
-      await sessionCreateHandlers["sessions.create"]!({
-        req: { type: "req", id: "system-incognito", method: "sessions.create", params },
-        params,
-        client: caller,
-        context: contextFor(caller),
-        isWebchatConnect: () => true,
-        respond: (...response) => {
-          responses.push(response);
-        },
-      });
-      expect(responses[0]).toMatchObject([
-        true,
-        {
-          key: expect.stringContaining(":incognito-"),
-          entry: { incognito: true },
-        },
-      ]);
+      const { responses, running } = start("sessions.create", params, "system-incognito", false);
+      await running;
+      expect(responses[0]).toMatchObject(incognitoResponse);
     });
     it.each(
       (["durable", "incognito"] as const).flatMap((storage) => [
-        {
-          storage,
-          fork: false,
-          ending:
-            storage === "durable"
-              ? ("source-after-commit" as const)
-              : ("source-and-retry" as const),
-        },
+        { storage, fork: false, ending: "source-after-commit" as const },
         { storage, fork: true, ending: "source-and-retry" as const },
         { storage, fork: true, ending: "parent-replaced" as const },
       ]),
     )(
       "retains $storage creation custody through transcript preparation and commit (fork=$fork, ending=$ending)",
       async ({ storage, fork, ending }) => {
-        const prefix = storage === "incognito" ? "incognito-" : "";
+        const incognito = storage === "incognito";
+        const prefix = incognito ? "incognito-" : "";
         const suffix = `${prefix}owned-header-${fork}-${ending}`;
         const parentKey = `agent:main:dashboard:${suffix}-parent`;
         let childKey = `agent:main:dashboard:${suffix}-child`;
         const parentId = `${suffix}-parent-id`;
-        const parentScope = { agentId: "main", sessionKey: parentKey, sessionId: parentId };
+        const parentScope = { ...scope(parentKey), sessionId: parentId };
         const parentEntry = {
           sessionId: parentId,
           updatedAt: 1,
-          ...(storage === "incognito" ? { incognito: true as const } : {}),
+          ...(incognito ? { incognito: true as const } : {}),
         };
         expect(
           await createSessionEntryWithTranscript(parentScope, () => ({
@@ -411,38 +394,32 @@ export function registerSessionOperatorPreparationTests(fixture: {
         await persistSessionTranscriptTurn(parentScope, {
           cwd: "/tmp",
           updateMode: "none",
-          messages: [
-            {
-              message: {
-                role: "user",
-                content: "Synthetic parent content for owned fork proof.",
-                timestamp: 1,
-              },
-              now: 1,
+          messages: (["user", "assistant"] as const).map((role, i) => ({
+            message: {
+              role,
+              content:
+                role === "user"
+                  ? "Synthetic prompt"
+                  : [{ type: "text" as const, text: "Synthetic reply" }],
+              timestamp: i + 1,
             },
-            {
-              message: {
-                role: "assistant",
-                content: [{ type: "text", text: "Synthetic completed parent reply." }],
-                timestamp: 2,
-              },
-              now: 2,
-            },
-          ],
+            now: i + 1,
+          })),
         });
-        const caller = fixture.personClient(fixture.profileId(), ["operator.admin"]);
-        const context = contextFor(caller);
-        const getCurrentConfig = context.getRuntimeConfig;
-        const header = vi.spyOn(transcriptHeader, "ensureTranscriptHeader");
+        const { caller, context, options } = preparedOperator();
         const prepareFork = sessionFork.prepareSessionForkFromParent;
         const revoked = new Error("original creation source ended before entry commit");
+        const runOutsideCreation = AsyncLocalStorage.snapshot();
         let childSessionId: string | undefined;
         let parentReplacement: ReturnType<typeof loadSessionEntry>;
-        const assertNoForkState = (sessionKey: string, sessionId: string) => {
-          expect(loadSessionEntry({ agentId: "main", sessionKey })).toBeUndefined();
-          expect(loadTranscriptEventsSync({ agentId: "main", sessionKey, sessionId })).toEqual([]);
+        const assertNoForkState = async (sessionKey: string, sessionId: string) => {
+          expect(entry(sessionKey)).toBeUndefined();
+          expect(await transcript(sessionKey, sessionId)).toEqual([]);
+          if (incognito) {
+            return;
+          }
           const database = openOpenClawAgentDatabase(
-            toDatabaseOptions(resolveSqliteScope({ agentId: "main", sessionKey })),
+            toDatabaseOptions(resolveSqliteScope(scope(sessionKey))),
           );
           expect(
             database.db
@@ -455,27 +432,26 @@ export function registerSessionOperatorPreparationTests(fixture: {
             .spyOn(sessionFork, "prepareSessionForkFromParent")
             .mockImplementation(async (params) => {
               const prepared = await prepareFork(params);
-              if (prepared.status === "prepared") {
-                assertNoForkState(params.sessionKey, prepared.transcript.sessionId);
-                if (!childSessionId) {
-                  childSessionId = prepared.transcript.sessionId;
-                  if (ending === "source-and-retry") {
-                    source.abort(revoked);
-                  } else if (ending === "parent-replaced") {
-                    await upsertSessionEntryCore(
-                      { agentId: "main", sessionKey: parentKey },
-                      {
-                        ...parentEntry,
-                        sessionId: `${parentId}-replacement`,
-                        updatedAt: 2,
-                      },
-                    );
-                    parentReplacement = loadSessionEntry({
-                      agentId: "main",
-                      sessionKey: parentKey,
-                    });
-                  }
-                }
+              if (prepared.status !== "prepared") {
+                return prepared;
+              }
+              await assertNoForkState(params.sessionKey, prepared.transcript.sessionId);
+              if (childSessionId) {
+                return prepared;
+              }
+              childSessionId = prepared.transcript.sessionId;
+              if (ending === "source-and-retry") {
+                source.abort(revoked);
+              } else if (ending === "parent-replaced") {
+                // The competing parent writer must not borrow the child's actor binding.
+                parentReplacement = await runOutsideCreation(async () => {
+                  await upsertSessionEntryCore(scope(parentKey), {
+                    ...parentEntry,
+                    sessionId: `${parentId}-replacement`,
+                    updatedAt: 2,
+                  });
+                  return entry(parentKey);
+                });
               }
               return prepared;
             });
@@ -490,20 +466,12 @@ export function registerSessionOperatorPreparationTests(fixture: {
           void preparation.catch(() => {});
           try {
             return await createGatewaySession({
-              cfg: getCurrentConfig(),
-              getCurrentConfig,
-              agentId: "main",
-              key: fork && storage === "incognito" ? undefined : childKey,
+              ...options(),
+              key: fork && incognito ? undefined : childKey,
               parentSessionKey: fork ? parentKey : undefined,
               fork,
-              incognito: storage === "incognito",
-              model: "openai/gpt-5.6-sol",
-              commandSource: "test",
-              requestingOperatorProfileId: fixture.profileId(),
-              requestingOperatorScopes: caller.connect.scopes,
+              incognito,
               operatorAuthority: preparation,
-              loadGatewayModelCatalogSnapshot: () =>
-                context.loadGatewayModelCatalogSnapshot({ agentId: "main" }),
               prepareLifecycle: async (target) => {
                 childKey = target.key;
                 return {
@@ -512,33 +480,11 @@ export function registerSessionOperatorPreparationTests(fixture: {
                     withCommit: async (run) => {
                       const result = await run(() => source.signal.throwIfAborted());
                       if (!fork && !childSessionId) {
-                        const committedEntry = loadSessionEntry({
-                          agentId: "main",
-                          sessionKey: childKey,
-                        });
-                        let childId = committedEntry?.sessionId;
-                        childId ??= header.mock.calls.find(
-                          ([, scope]) => scope.sessionKey === childKey,
-                        )?.[1].sessionId;
-                        if (childId) {
-                          const transcript = loadTranscriptEventsSync({
-                            agentId: "main",
-                            sessionKey: childKey,
-                            sessionId: childId,
-                          });
-                          expect(transcript).toEqual(
-                            expect.arrayContaining([expect.objectContaining({ type: "session" })]),
-                          );
-                          if (storage === "durable") {
-                            expect(committedEntry).toMatchObject({ sessionId: childId });
-                          } else {
-                            expect(committedEntry).toBeUndefined();
-                          }
-                          childSessionId = childId;
-                          if (ending === "source-and-retry" || ending === "source-after-commit") {
-                            source.abort(revoked);
-                          }
-                        }
+                        const committedEntry = entry(childKey);
+                        expect(committedEntry).toHaveProperty("sessionId");
+                        childSessionId = committedEntry!.sessionId;
+                        expect(await transcript(childKey, childSessionId)).toEqual(sessionHeader);
+                        source.abort(revoked);
                       }
                       return result;
                     },
@@ -551,66 +497,42 @@ export function registerSessionOperatorPreparationTests(fixture: {
             (await preparation.catch(() => undefined))?.release();
           }
         };
-        try {
-          const outcome = await createAttempt(new AbortController()).then(
-            (result) => ({ result }),
-            (error: unknown) => ({ error }),
-          );
-          expect(childSessionId).toBeDefined();
-          if (ending === "source-after-commit") {
-            expect(outcome).toMatchObject({ result: { ok: true } });
-            expect(loadSessionEntry({ agentId: "main", sessionKey: childKey })).toHaveProperty(
-              "sessionId",
-              childSessionId,
-            );
+        const outcome = await createAttempt(new AbortController()).then(
+          (result) => ({ result }),
+          (error: unknown) => ({ error }),
+        );
+        expect(
+          childSessionId,
+          "error" in outcome ? String(outcome.error) : JSON.stringify(outcome.result),
+        ).toBeDefined();
+        if (ending === "parent-replaced") {
+          expect(parentReplacement).toMatchObject({ sessionId: `${parentId}-replacement` });
+        }
+        if (ending === "source-after-commit") {
+          expect(outcome).toMatchObject({ result: { ok: true } });
+          expect(entry(childKey)).toHaveProperty("sessionId", childSessionId);
+        } else {
+          if ("error" in outcome) {
+            expect(outcome.error).toBeInstanceOf(Error);
+            if (ending === "source-and-retry") {
+              expect(outcome.error).toHaveProperty(
+                "message",
+                expect.stringMatching(/creation source ended|operator.*authority.*active/),
+              );
+            }
           } else {
-            if ("error" in outcome) {
-              expect(outcome.error).toBeInstanceOf(Error);
-              if (ending === "source-and-retry") {
-                expect(outcome.error).toHaveProperty(
-                  "message",
-                  expect.stringMatching(/creation source ended|operator.*authority.*active/),
-                );
-              }
-            } else {
-              expect(outcome.result.ok).toBe(false);
-            }
-            expect(loadSessionEntry({ agentId: "main", sessionKey: childKey })).toBeUndefined();
-            const rejectedKey = childKey;
-            if (fork) {
-              assertNoForkState(rejectedKey, childSessionId!);
-            } else {
-              expect(
-                loadTranscriptEventsSync({
-                  agentId: "main",
-                  sessionKey: rejectedKey,
-                  sessionId: childSessionId!,
-                }),
-              ).toEqual(expect.arrayContaining([expect.objectContaining({ type: "session" })]));
-            }
-            if (ending === "parent-replaced") {
-              expect(loadSessionEntry({ agentId: "main", sessionKey: parentKey })).toEqual(
-                parentReplacement,
-              );
-            } else {
-              const retry = await createAttempt(new AbortController());
-              expect(retry).toMatchObject({ ok: true });
-              expect(loadSessionEntry({ agentId: "main", sessionKey: childKey })).toHaveProperty(
-                "sessionId",
-              );
-              expect(
-                loadTranscriptEventsSync({
-                  agentId: "main",
-                  sessionKey: rejectedKey,
-                  sessionId: childSessionId!,
-                }),
-              ).toEqual(
-                fork ? [] : expect.arrayContaining([expect.objectContaining({ type: "session" })]),
-              );
-            }
+            expect(outcome.result.ok).toBe(false);
           }
-        } finally {
-          header.mockRestore();
+          const rejectedKey = childKey;
+          await assertNoForkState(rejectedKey, childSessionId!);
+          if (ending === "parent-replaced") {
+            expect(entry(parentKey)).toEqual(parentReplacement);
+          } else {
+            const retry = await createAttempt(new AbortController());
+            expect(retry).toMatchObject({ ok: true });
+            expect(entry(childKey)).toHaveProperty("sessionId");
+            expect(await transcript(rejectedKey, childSessionId!)).toEqual([]);
+          }
         }
       },
     );

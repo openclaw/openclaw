@@ -3,6 +3,8 @@ import {
   isRecord,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { safeParseQaJson } from "./json.js";
+import { readQaAssistantToolCalls } from "./runtime-transcript.js";
 
 function isCorrelationId(value: unknown): value is string {
   return typeof value === "string" && value.length > 0 && value.length <= 1024;
@@ -164,11 +166,7 @@ type QaToolActivity = {
 function activityInput(input: unknown) {
   let value = isRecord(input) && typeof input.arguments === "string" ? input.arguments : input;
   if (typeof value === "string") {
-    try {
-      value = JSON.parse(value);
-    } catch {
-      return undefined;
-    }
+    value = safeParseQaJson(value);
   }
   return isRecord(value) ? value : undefined;
 }
@@ -187,12 +185,7 @@ function nativeCodeModeCellId(result: Record<string, unknown>) {
   let text = content;
   if (text.startsWith("[")) {
     // The Codex transcript adapter preserves response arrays as JSON text.
-    let output: unknown;
-    try {
-      output = JSON.parse(text);
-    } catch {
-      return undefined;
-    }
+    const output = safeParseQaJson(text);
     const header = Array.isArray(output) ? output[0] : undefined;
     const headerText = isRecord(header) && header.type === "input_text" ? header.text : undefined;
     if (typeof headerText !== "string") {
@@ -326,21 +319,14 @@ export function projectQaToolActivity(messages: readonly unknown[]): QaToolActiv
       settle(message, index);
       return;
     }
-    if (message.role !== "assistant" || !Array.isArray(message.content)) {
+    if (message.role !== "assistant") {
       return;
     }
-    for (const block of message.content) {
-      if (!isRecord(block) || !["toolCall", "toolUse", "tool_use"].includes(String(block.type))) {
-        continue;
-      }
-      const toolName = normalizeOptionalString(block.name);
-      if (!toolName) {
-        continue;
-      }
-      const input = block.arguments ?? block.input;
+    for (const call of readQaAssistantToolCalls(message)) {
+      const { block, id: toolCallId, name: toolName, arguments: input } = call;
       const controlInput = activityInput(input);
       addCall({
-        toolCallId: normalizeOptionalString(block.id),
+        toolCallId,
         toolName,
         input,
         kind:

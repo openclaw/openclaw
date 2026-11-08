@@ -1,8 +1,10 @@
 /* @vitest-environment jsdom */
 
+import { flush } from "solid-js";
 import { describe, expect, it, vi } from "vitest";
 import type { SessionsCatalogImportResult } from "../../../packages/gateway-protocol/src/index.ts";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import "../lib/toast-host.tsx";
 import "../test-helpers/app-sidebar-suite.ts";
 import {
   catalogPage,
@@ -12,7 +14,15 @@ import {
 } from "../test-helpers/app-sidebar.ts";
 import { createTestGatewayClient } from "../test-helpers/gateway-client.ts";
 import { gatewayHelloForMethods } from "../test-helpers/gateway-methods.ts";
-import "./app-sidebar.ts";
+import "./app-sidebar.tsx";
+
+const importSelector = 'openclaw-catalog-session-menu [data-value="import"]';
+const visitorSelector = '[data-session-key="agent:main:visitor-notes"]';
+async function settle(sidebar: { updateComplete: Promise<unknown> }, ms = 0) {
+  await sidebar.updateComplete;
+  await vi.advanceTimersByTimeAsync(ms);
+  await sidebar.updateComplete;
+}
 
 const result: SessionsCatalogImportResult = {
   sessionKey: "agent:main:imported-transcript",
@@ -48,12 +58,11 @@ async function fixture(scopes = ["operator.read", "operator.write"]) {
     .querySelector('[data-catalog-session-key*="thread-1"]')!
     .dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
   await vi.advanceTimersByTimeAsync(0);
-  const selectImport = () => {
-    const item = sidebar.querySelector('wa-dropdown-item[value="import"]');
+  const selectImport = async () => {
+    const item = sidebar.querySelector<HTMLButtonElement>(importSelector);
     expect(item).not.toBeNull();
-    item!.dispatchEvent(
-      new CustomEvent("wa-select", { bubbles: true, detail: { item: { value: "import" } } }),
-    );
+    item!.click();
+    await vi.advanceTimersByTimeAsync(0);
   };
   return { sidebar, toast, gateway, request, imported, selectImport };
 }
@@ -66,7 +75,7 @@ describe("AppSidebar catalog import", () => {
     { outcome: "failure", stale: true },
   ])("publishes only a current import $outcome (stale=$stale)", async ({ outcome, stale }) => {
     const { sidebar, toast, gateway, request, imported, selectImport } = await fixture();
-    selectImport();
+    await selectImport();
     expect(request).toHaveBeenCalledWith("sessions.catalog.import", {
       catalogId: "codex",
       hostId: "gateway:local",
@@ -86,6 +95,8 @@ describe("AppSidebar catalog import", () => {
     }
     await vi.advanceTimersByTimeAsync(0);
     await toast.updateComplete;
+    await vi.dynamicImportSettled();
+    flush();
     expect(sidebar.onNavigate).not.toHaveBeenCalled();
     if (stale) {
       expect(toast.textContent?.trim()).toBe("");
@@ -109,13 +120,85 @@ describe("AppSidebar catalog import", () => {
       authority === "read-only" ? ["operator.read"] : ["operator.read", "operator.write"],
     );
     if (authority === "read-only") {
-      expect(sidebar.querySelector('wa-dropdown-item[value="import"]')).toBeNull();
+      expect(sidebar.querySelector(importSelector)).toBeNull();
     } else {
       gateway.publish({
         hello: gatewayHelloForMethods(["sessions.catalog.list"], ["operator.read"]),
       });
-      selectImport();
+      await selectImport();
     }
     expect(request).not.toHaveBeenCalledWith("sessions.catalog.import", expect.anything());
   });
+});
+
+describe("AppSidebar catalog authority", () => {
+  it.each(["reply", "error", "page"] as const)(
+    "retires cached and in-flight %s data on same-client scope loss",
+    async (pendingKind) => {
+      vi.useFakeTimers();
+      const pending = createDeferred<ReturnType<typeof catalogPage>>();
+      const request = vi
+        .fn()
+        .mockResolvedValue(
+          catalogPage([{ threadId: "retained", name: "Retained catalog session" }], "page-2"),
+        );
+      const gateway = createGatewayHarness(createTestGatewayClient(request));
+      const hello = gatewayHelloForMethods(["sessions.catalog.list"]);
+      gateway.publish({ hello });
+      const { sidebar, provider } = await mountSidebar(
+        gateway.gateway,
+        createSessions("main", ["agent:main:visitor-notes"]),
+      );
+      try {
+        sidebar.connected = true;
+        await settle(sidebar);
+        expect(sidebar.textContent).toContain("Retained catalog session");
+        expect(sidebar.querySelector(visitorSelector)).not.toBeNull();
+        request.mockReturnValueOnce(pending.promise);
+        const loading =
+          pendingKind === "page"
+            ? sidebar.sessionData.loadMoreSessionCatalog("codex")
+            : sidebar.sessionData.refreshSessionCatalogs();
+        const progressId = request.mock.calls.at(-1)?.[1]?.progressId;
+        expect(request).toHaveBeenCalledTimes(2);
+
+        gateway.publish({
+          hello: { ...hello, auth: { role: "operator", scopes: ["operator.sessions.write"] } },
+        });
+        // No Lit render or promise turn separates authority loss from these events.
+        const stalePage = catalogPage([{ threadId: "stale", name: "Late catalog session" }]);
+        gateway.publishEvent("sessions.catalog.host", {
+          progressId,
+          agentId: "main",
+          catalog: stalePage.catalogs[0],
+        });
+        document.dispatchEvent(new Event("visibilitychange"));
+        if (pendingKind === "error") {
+          pending.reject(new Error("Stale catalog failure"));
+        } else {
+          pending.resolve(stalePage);
+        }
+        await loading;
+        await settle(sidebar, 600_000);
+        expect(sidebar.textContent).not.toContain("Retained catalog session");
+        expect(sidebar.textContent).not.toContain("Late catalog session");
+        expect(sidebar.querySelector(".sidebar-session-catalog-error")).toBeNull();
+        expect(sidebar.sessionData.sessionCatalogs).toEqual([]);
+        expect(sidebar.sessionData.sessionCatalogPageDepths.size).toBe(0);
+        expect(sidebar.sessionData.loadingMoreSessionCatalogIds.size).toBe(0);
+        expect(sidebar.sessionData.sessionCatalogLive.timer).toBeNull();
+        expect(request).toHaveBeenCalledTimes(2);
+        expect(sidebar.querySelector(visitorSelector)).not.toBeNull();
+
+        gateway.publish({ hello });
+        await settle(sidebar);
+        expect(request).toHaveBeenCalledTimes(3);
+        expect(sidebar.textContent).toContain("Retained catalog session");
+      } finally {
+        pending.resolve(catalogPage([]));
+        provider.remove();
+        vi.useRealTimers();
+      }
+    },
+  );
 });

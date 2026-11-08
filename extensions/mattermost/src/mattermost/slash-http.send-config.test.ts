@@ -1,20 +1,25 @@
-// Mattermost tests cover slash http.send config plugin behavior.
-import { ServerResponse, type IncomingMessage } from "node:http";
+import type { IncomingMessage } from "node:http";
 import { createMessageReceiptFromOutboundResults } from "openclaw/plugin-sdk/channel-outbound";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/core";
+import type { OpenClawConfig, PluginRuntime } from "openclaw/plugin-sdk/core";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";
 import { upsertSessionEntry, type SessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
-import { createMockIncomingRequest } from "openclaw/plugin-sdk/test-env";
+import type * as SessionTranscriptRuntime from "openclaw/plugin-sdk/session-transcript-runtime";
+import { createMockIncomingRequest, createMockServerResponse } from "openclaw/plugin-sdk/test-env";
 import { createOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import type * as MattermostRuntime from "../runtime.js";
 import type { ResolvedMattermostAccount } from "./accounts.js";
+import type {
+  MattermostRegisteredCommand,
+  MattermostSlashCommandPayload,
+} from "./slash-commands.js";
 
 type BuildPreparedModelsProviderData =
   typeof import("./runtime-api.js").buildPreparedModelsProviderData;
+type SlashDispatchParams = Parameters<PluginRuntime["channel"]["inbound"]["dispatch"]>[0];
 
-const mockState = vi.hoisted(() => ({
-  readRequestBodyWithLimit: vi.fn(async () => "token=valid-token"),
-  parseSlashCommandPayload: vi.fn(() => ({
+const fixtures = vi.hoisted(() => ({
+  payload: {
     token: "valid-token",
     command: "/oc_models",
     text: "models",
@@ -22,46 +27,8 @@ const mockState = vi.hoisted(() => ({
     user_id: "user-1",
     user_name: "alice",
     team_id: "team-1",
-  })),
-  resolveCommandText: vi.fn((_trigger: string, text: string) => text),
-  buildPreparedModelsProviderData: vi.fn<BuildPreparedModelsProviderData>(async () => ({
-    byProvider: new Map(),
-    providers: [],
-    resolvedDefault: { provider: "openai", model: "gpt-5.5" },
-    modelCatalog: [],
-    modelNames: new Map(),
-  })),
-  resolveMattermostModelPickerEntry: vi.fn((): { kind: string } | null => ({ kind: "summary" })),
-  authorizeMattermostCommandInvocation: vi.fn(() => ({
-    ok: true,
-    commandAuthorized: true,
-    channelInfo: { id: "chan-1", type: "O", name: "town-square", display_name: "Town Square" },
-    kind: "channel",
-    chatType: "channel",
-    channelName: "town-square",
-    channelDisplay: "Town Square",
-    roomLabel: "#town-square",
-  })),
-  createMattermostClient: vi.fn(() => ({})),
-  fetchMattermostChannel: vi.fn(async () => ({
-    id: "chan-1",
-    type: "O",
-    name: "town-square",
-    display_name: "Town Square",
-  })),
-  sendMessageMattermost: vi.fn<typeof import("./send.js").sendMessageMattermost>(
-    async (_target, content) => ({
-      messageId: "post-1",
-      channelId: "chan-1",
-      content,
-      receipt: createMessageReceiptFromOutboundResults({
-        results: [{ channel: "mattermost", messageId: "post-1" }],
-        kind: "text",
-      }),
-    }),
-  ),
-  normalizeMattermostAllowList: vi.fn((value: unknown) => value),
-  getMattermostCommand: vi.fn(async () => ({
+  } satisfies MattermostSlashCommandPayload,
+  command: {
     id: "cmd-1",
     token: "valid-token",
     team_id: "team-1",
@@ -69,58 +36,76 @@ const mockState = vi.hoisted(() => ({
     method: "P",
     url: "https://gateway.example.com/slash",
     delete_at: 0,
+  },
+  channel: { id: "chan-1", type: "O", name: "town-square", display_name: "Town Square" },
+  catalog: () => ({
+    byProvider: new Map<string, Set<string>>(),
+    providers: new Array<string>(),
+    resolvedDefault: { provider: "openai", model: "gpt-5.5" },
+    modelCatalog: [],
+    modelNames: new Map<string, string>(),
+  }),
+}));
+const mockState = vi.hoisted(() => ({
+  readRequestBodyWithLimit: vi.fn(async () => "token=valid-token"),
+  parseSlashCommandPayload: vi.fn((): MattermostSlashCommandPayload => ({ ...fixtures.payload })),
+  resolveCommandText: vi.fn((_trigger: string, text: string) => text),
+  buildPreparedModelsProviderData: vi.fn<BuildPreparedModelsProviderData>(async () =>
+    fixtures.catalog(),
+  ),
+  resolveMattermostModelPickerEntry: vi.fn((): { kind: string } | null => ({ kind: "summary" })),
+  authorizeMattermostCommandInvocation: vi.fn(() => ({
+    ok: true,
+    commandAuthorized: true,
+    channelInfo: { ...fixtures.channel },
+    kind: "channel",
+    chatType: "channel",
+    channelName: "town-square",
+    channelDisplay: "Town Square",
+    roomLabel: "#town-square",
   })),
+  createMattermostClient: vi.fn(() => ({})),
+  fetchMattermostChannel: vi.fn(async () => ({ ...fixtures.channel })),
+  sendMessageMattermost: vi.fn<typeof import("./send.js").sendMessageMattermost>(
+    async (_target, content) => sentMessage(content),
+  ),
+  normalizeMattermostAllowList: vi.fn((value: unknown) => value),
+  getMattermostCommand: vi.fn(async () => ({ ...fixtures.command })),
   listMattermostCommands: vi.fn(async () => []),
-  dispatchInbound: vi.fn(async () => undefined),
-  renderMattermostModelSummaryView: vi.fn(),
-  renderMattermostModelsPickerView: vi.fn(),
-  renderMattermostProviderPickerView: vi.fn(),
+  dispatchInbound: vi.fn(async (_params: SlashDispatchParams) => undefined),
+  recordDeliveredCommandExchange: vi.fn(async () => ({ ok: true })),
 }));
 
-vi.mock("./runtime-api.js", () => {
-  return {
-    buildPreparedModelsProviderData: mockState.buildPreparedModelsProviderData,
-    createChannelMessageReplyPipeline: vi.fn(() => ({
-      onModelSelected: vi.fn(),
-      typingCallbacks: {},
-    })),
-    createDedupeCache: vi.fn(() => ({
-      check: () => false,
-    })),
-    createReplyPrefixOptions: vi.fn(() => ({})),
-    createTypingCallbacks: vi.fn(() => ({ onReplyStart: vi.fn() })),
-    isRequestBodyLimitError: vi.fn(() => false),
-    logTypingFailure: vi.fn(),
-    formatInboundFromLabel: vi.fn(() => ""),
-    rawDataToString: vi.fn((value: unknown) => (typeof value === "string" ? value : "")),
-    readRequestBodyWithLimit: mockState.readRequestBodyWithLimit,
-    sendHttpRequestRejection: vi.fn(async () => undefined),
-    resolveThreadSessionKeys: vi.fn((params: { baseSessionKey: string }) => ({
-      sessionKey: params.baseSessionKey,
-      parentSessionKey: undefined,
-    })),
-  };
-});
+vi.mock("openclaw/plugin-sdk/session-transcript-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof SessionTranscriptRuntime>()),
+  recordDeliveredCommandExchange: mockState.recordDeliveredCommandExchange,
+}));
 
-vi.mock("../runtime.js", () => ({
+// mock-isolation: Exercise HTTP command delivery without the plugin runtime or request transport.
+vi.mock("./runtime-api.js", () => ({
+  buildPreparedModelsProviderData: mockState.buildPreparedModelsProviderData,
+  isRequestBodyLimitError: vi.fn(() => false),
+  logTypingFailure: vi.fn(),
+  readRequestBodyWithLimit: mockState.readRequestBodyWithLimit,
+  sendHttpRequestRejection: vi.fn(async () => undefined),
+}));
+
+vi.mock("../runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof MattermostRuntime>()),
   getMattermostRuntime: () => ({
     channel: {
-      commands: {
-        shouldHandleTextCommands: () => true,
-      },
+      commands: { shouldHandleTextCommands: () => true },
       text: {
         hasControlCommand: () => false,
         resolveTextChunkLimit: () => 4000,
         resolveMarkdownTableMode: () => "off",
       },
       inbound: { dispatch: mockState.dispatchInbound },
-      pairing: {
-        readAllowFromStore: vi.fn(async () => []),
-      },
+      pairing: { readAllowFromStore: vi.fn(async () => []) },
       routing: {
         resolveAgentRoute: vi.fn(() => ({
           agentId: "agent-1",
-          sessionKey: "mattermost:session:1",
+          sessionKey: "agent:agent-1:mattermost:session:1",
           accountId: "default",
         })),
       },
@@ -139,10 +124,8 @@ vi.mock("./client.js", async () => {
   };
 });
 
-vi.mock("./model-picker.js", () => ({
-  renderMattermostModelSummaryView: mockState.renderMattermostModelSummaryView,
-  renderMattermostModelsPickerView: mockState.renderMattermostModelsPickerView,
-  renderMattermostProviderPickerView: mockState.renderMattermostProviderPickerView,
+vi.mock("./model-picker.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./model-picker.js")>()),
   resolveMattermostModelPickerCurrentModel: vi.fn(),
   resolveMattermostModelPickerEntry: mockState.resolveMattermostModelPickerEntry,
 }));
@@ -169,60 +152,29 @@ vi.mock("./slash-commands.js", () => ({
   resolveCommandText: mockState.resolveCommandText,
 }));
 
+let deliverMattermostReplyPayload: typeof import("./reply-delivery.js").deliverMattermostReplyPayload;
+let sendMattermostTyping: typeof import("./client.js").sendMattermostTyping;
+
 let createSlashCommandHttpHandler: typeof import("./slash-http.js").createSlashCommandHttpHandler;
 let clearMattermostSlashCommandValidationCacheForAccount: typeof import("./slash-http.js").clearMattermostSlashCommandValidationCacheForAccount;
-const callbackUrlFixture = "https://gateway.example.com/slash";
 
 function createRequest(body = "token=valid-token"): IncomingMessage {
   const req = createMockIncomingRequest([body]);
   req.method = "POST";
   req.url = "/slash";
-  req.headers = {
-    "content-type": "application/x-www-form-urlencoded",
-  };
+  req.headers = { "content-type": "application/x-www-form-urlencoded" };
   return req;
 }
 
-function createResponse(): {
-  res: ServerResponse;
-  getBody: () => string;
-} {
-  let body = "";
-  class TestServerResponse extends ServerResponse {
-    override setHeader() {
-      return this;
-    }
-
-    override end(): this;
-    override end(cb: () => void): this;
-    override end(chunk: string | Buffer | Uint8Array, cb?: () => void): this;
-    override end(
-      chunk: string | Buffer | Uint8Array,
-      encoding: BufferEncoding,
-      cb?: () => void,
-    ): this;
-    override end(
-      chunkOrCb?: string | Buffer | Uint8Array | (() => void),
-      encodingOrCb?: BufferEncoding | (() => void),
-      cb?: () => void,
-    ): this {
-      const chunk = typeof chunkOrCb === "function" ? undefined : chunkOrCb;
-      const callback =
-        typeof chunkOrCb === "function"
-          ? chunkOrCb
-          : typeof encodingOrCb === "function"
-            ? encodingOrCb
-            : cb;
-      body = chunk ? String(chunk) : "";
-      callback?.();
-      return this;
-    }
-  }
-
-  const res = new TestServerResponse(createRequest(""));
+function sentMessage(content: string) {
   return {
-    res,
-    getBody: () => body,
+    messageId: "post-1",
+    channelId: "chan-1",
+    content,
+    receipt: createMessageReceiptFromOutboundResults({
+      results: [{ channel: "mattermost", messageId: "post-1" }],
+      kind: "text",
+    }),
   };
 }
 
@@ -237,222 +189,177 @@ const accountFixture: ResolvedMattermostAccount = {
   config: {},
 };
 
+function createHandler(cfg: OpenClawConfig, overrides: Partial<MattermostRegisteredCommand> = {}) {
+  return createSlashCommandHttpHandler({
+    account: accountFixture,
+    cfg,
+    runtime: {} as RuntimeEnv,
+    registeredCommands: [
+      {
+        id: "cmd-1",
+        teamId: "team-1",
+        trigger: "oc_models",
+        token: "valid-token",
+        url: fixtures.command.url,
+        managed: false,
+        ...overrides,
+      },
+    ],
+  });
+}
+
+async function expectProcessing(handler: ReturnType<typeof createHandler>) {
+  const response = createMockServerResponse();
+  await handler(createRequest(), response);
+  expect(response.statusCode).toBe(200);
+  expect(response.body).toContain("Processing");
+}
+
+function expectSent(text: unknown, options: Record<string, unknown>) {
+  expect(mockState.sendMessageMattermost).toHaveBeenCalledWith(
+    "channel:chan-1",
+    text,
+    expect.objectContaining(options),
+  );
+}
+
+function expectRecorded(fields: Record<string, unknown>) {
+  expect(mockState.recordDeliveredCommandExchange).toHaveBeenCalledWith(
+    expect.objectContaining(fields),
+  );
+}
+
 describe("slash-http cfg threading", () => {
   beforeAll(async () => {
     vi.resetModules();
     ({ createSlashCommandHttpHandler, clearMattermostSlashCommandValidationCacheForAccount } =
       await import("./slash-http.js"));
+    ({ deliverMattermostReplyPayload } = await import("./reply-delivery.js"));
+    ({ sendMattermostTyping } = await import("./client.js"));
   });
 
   afterEach(() => {
     clearMattermostSlashCommandValidationCacheForAccount(accountFixture.accountId);
   });
 
-  beforeEach(() => {
-    // Rejected-before-lookup cases can leave one-shot responses unconsumed.
-    for (const mock of Object.values(mockState)) {
-      mock.mockReset();
-    }
+  beforeEach(() => Object.values(mockState).forEach((mock) => mock.mockReset()));
+
+  it("passes cfg and catalog status through the no-models slash reply", async () => {
+    const refreshWarning = "Some models could not be refreshed.";
+    const text = "Some models could not be refreshed.\n\nNo models available.";
+    mockState.buildPreparedModelsProviderData.mockResolvedValueOnce({
+      ...fixtures.catalog(),
+      resolvedDefault: { provider: "openai", model: "fixture-model" },
+      refreshWarning,
+    });
+    const cfg: OpenClawConfig = { channels: { mattermost: { botToken: "exec:secret-ref" } } };
+    const handler = createHandler(cfg);
+    const deliveredText = `${text}\nPlatform-rendered note.`;
+    mockState.sendMessageMattermost.mockResolvedValueOnce(sentMessage(deliveredText));
+    await expectProcessing(handler);
+    expectSent(text, { cfg, accountId: "default" });
+    expectRecorded({
+      commandText: "models",
+      replyText: deliveredText,
+      commandId: expect.stringMatching(/^mattermost:default:chan-1:/),
+    });
   });
 
   it.each([
-    {
-      refreshWarning: "Some models could not be refreshed.",
-      text: "Some models could not be refreshed.\n\nNo models available.",
-    },
-  ])(
-    "passes cfg and catalog status through the no-models slash reply: $text",
-    async ({ refreshWarning, text }) => {
-      mockState.buildPreparedModelsProviderData.mockResolvedValueOnce({
-        byProvider: new Map(),
-        providers: [],
-        modelNames: new Map(),
-        modelCatalog: [],
-        resolvedDefault: { provider: "openai", model: "fixture-model" },
-        refreshWarning,
+    ["/model", "summary", "providers", "/oc_model <provider/model> to switch"],
+    ["/models", "providers", "list", "Select a provider:"],
+    ["/models openai", "models", "select", "Select a model to switch immediately."],
+  ])("sends real %s menu with current catalog status", async (commandText, kind, action, text) => {
+    const failed = commandText !== "/model";
+    const state = await createOpenClawTestState({
+      label: "mattermost-menu-pin",
+      applyEnv: false,
+    });
+    onTestFinished(() => state.cleanup());
+    const storePath = state.path("sessions.json");
+    const cfg: OpenClawConfig = { session: { store: storePath } };
+    const sessionEntry: SessionEntry = {
+      sessionId: "session-1",
+      updatedAt: 1,
+      providerOverride: "openai",
+      authProfileOverride: "openai:previous",
+      authProfileOverrideSource: "user",
+      agentRuntimeOverride: "openclaw",
+    };
+    const saveSession = (entry: SessionEntry) =>
+      upsertSessionEntry({
+        agentId: "agent-1",
+        storePath,
+        sessionKey: "agent:agent-1:mattermost:session:1",
+        entry,
       });
-      const cfg = {
-        channels: {
-          mattermost: {
-            botToken: "exec:secret-ref",
-          },
-        },
-      } as OpenClawConfig;
-      const handler = createSlashCommandHttpHandler({
-        account: accountFixture,
-        cfg,
-        runtime: {} as RuntimeEnv,
-        registeredCommands: [
-          {
-            id: "cmd-1",
-            teamId: "team-1",
-            trigger: "oc_models",
-            token: "valid-token",
-            url: callbackUrlFixture,
-            managed: false,
-          },
-        ],
-      });
-      const response = createResponse();
+    await saveSession(sessionEntry);
+    mockState.resolveCommandText.mockReturnValueOnce(commandText);
+    const entry = kind === "models" ? { kind, provider: "openai" } : { kind };
+    mockState.resolveMattermostModelPickerEntry.mockReturnValueOnce(entry);
+    mockState.buildPreparedModelsProviderData.mockResolvedValueOnce({
+      ...fixtures.catalog(),
+      byProvider: new Map([["openai", new Set(["fixture-model"])]]),
+      providers: ["openai"],
+      resolvedDefault: { provider: "openai", model: "fixture-model" },
+      modelNames: new Map([["openai/fixture-model", "Fixture model"]]),
+      refreshWarning: failed ? "Some models could not be refreshed." : undefined,
+    });
+    const handler = createHandler(cfg);
 
-      await handler(createRequest(), response.res);
+    await saveSession({ ...sessionEntry, authProfileOverride: "openai:current", updatedAt: 2 });
 
-      expect(response.res.statusCode).toBe(200);
-      expect(response.getBody()).toContain("Processing");
-      expect(mockState.sendMessageMattermost).toHaveBeenCalledWith(
-        "channel:chan-1",
-        text,
-        expect.objectContaining({
-          cfg,
-          accountId: "default",
+    await expectProcessing(handler);
+    expect(mockState.buildPreparedModelsProviderData).toHaveBeenCalledExactlyOnceWith(
+      cfg,
+      "agent-1",
+      {
+        sessionEntry: expect.objectContaining({
+          providerOverride: "openai",
+          authProfileOverride: "openai:current",
+          authProfileOverrideSource: "user",
+          agentRuntimeOverride: "openclaw",
         }),
-      );
-    },
-  );
-
-  it.each(
-    [
-      {
-        commandText: "/model",
-        entry: { kind: "summary" },
-        action: "providers",
-        text: "/oc_model <provider/model> to switch",
       },
-      {
-        commandText: "/models",
-        entry: { kind: "providers" },
-        action: "list",
-        text: "Select a provider:",
-      },
-      {
-        commandText: "/models openai",
-        entry: { kind: "models", provider: "openai" },
-        action: "select",
-        text: "Select a model to switch immediately.",
-      },
-    ].map((entry) => ({ entry, failed: entry.commandText !== "/model" })),
-  )(
-    "sends real $entry.commandText menu with current catalog status (failed: $failed)",
-    async ({ entry: testCase, failed }) => {
-      const renderers =
-        await vi.importActual<typeof import("./model-picker.js")>("./model-picker.js");
-      mockState.renderMattermostModelSummaryView.mockImplementation(
-        renderers.renderMattermostModelSummaryView,
-      );
-      mockState.renderMattermostProviderPickerView.mockImplementation(
-        renderers.renderMattermostProviderPickerView,
-      );
-      mockState.renderMattermostModelsPickerView.mockImplementation(
-        renderers.renderMattermostModelsPickerView,
-      );
-      const state = await createOpenClawTestState({
-        label: "mattermost-menu-pin",
-        applyEnv: false,
-      });
-      onTestFinished(() => state.cleanup());
-      const storePath = state.path("sessions.json");
-      const cfg: OpenClawConfig = { session: { store: storePath } };
-      const sessionEntry: SessionEntry = {
-        sessionId: "session-1",
-        updatedAt: 1,
-        providerOverride: "openai",
-        authProfileOverride: "openai:previous",
-        authProfileOverrideSource: "user",
-        agentRuntimeOverride: "openclaw",
-      };
-      await upsertSessionEntry({
-        storePath,
-        sessionKey: "mattermost:session:1",
-        entry: sessionEntry,
-      });
-      mockState.resolveCommandText.mockReturnValueOnce(testCase.commandText);
-      mockState.resolveMattermostModelPickerEntry.mockReturnValueOnce(testCase.entry);
-      mockState.buildPreparedModelsProviderData.mockResolvedValueOnce({
-        byProvider: new Map([["openai", new Set(["fixture-model"])]]),
-        providers: ["openai"],
-        resolvedDefault: { provider: "openai", model: "fixture-model" },
-        modelCatalog: [],
-        modelNames: new Map([["openai/fixture-model", "Fixture model"]]),
-        refreshWarning: failed ? "Some models could not be refreshed." : undefined,
-      });
-      const handler = createSlashCommandHttpHandler({
-        account: accountFixture,
-        cfg,
-        runtime: {} as RuntimeEnv,
-        registeredCommands: [
-          {
-            id: "cmd-1",
-            teamId: "team-1",
-            trigger: "oc_models",
-            token: "valid-token",
-            url: callbackUrlFixture,
-            managed: false,
-          },
-        ],
-      });
-      const response = createResponse();
-
-      await upsertSessionEntry({
-        storePath,
-        sessionKey: "mattermost:session:1",
-        entry: { ...sessionEntry, authProfileOverride: "openai:current", updatedAt: 2 },
-      });
-
-      await handler(createRequest(), response.res);
-
-      expect(response.res.statusCode).toBe(200);
-      expect(response.getBody()).toContain("Processing");
-      expect(mockState.buildPreparedModelsProviderData).toHaveBeenCalledExactlyOnceWith(
-        cfg,
-        "agent-1",
-        {
-          sessionEntry: expect.objectContaining({
-            providerOverride: "openai",
-            authProfileOverride: "openai:current",
-            authProfileOverrideSource: "user",
-            agentRuntimeOverride: "openclaw",
-          }),
-        },
-      );
-      expect(mockState.sendMessageMattermost).toHaveBeenCalledExactlyOnceWith(
-        "channel:chan-1",
-        expect.stringContaining(testCase.text),
-        expect.objectContaining({
-          accountId: "default",
-          buttons: expect.arrayContaining([
-            expect.arrayContaining([
-              expect.objectContaining({
-                context: expect.objectContaining({ action: testCase.action }),
-              }),
-            ]),
+    );
+    expect(mockState.sendMessageMattermost).toHaveBeenCalledExactlyOnceWith(
+      "channel:chan-1",
+      expect.stringContaining(text),
+      expect.objectContaining({
+        accountId: "default",
+        buttons: expect.arrayContaining([
+          expect.arrayContaining([
+            expect.objectContaining({
+              context: expect.objectContaining({ action }),
+            }),
           ]),
-          cfg,
-        }),
-      );
-      const sentText = mockState.sendMessageMattermost.mock.calls[0]?.[1];
-      expect(sentText?.includes("Some models could not be refreshed.")).toBe(failed);
-    },
-  );
+        ]),
+        cfg,
+      }),
+    );
+    const sentText = mockState.sendMessageMattermost.mock.calls[0]?.[1];
+    expect(sentText?.includes("Some models could not be refreshed.")).toBe(failed);
+    expectRecorded({
+      agentId: "agent-1",
+      sessionKey: "agent:agent-1:mattermost:session:1",
+      expectedSessionId: sessionEntry.sessionId,
+      commandText,
+      replyText: expect.stringContaining(text),
+    });
+  });
 
   it("keeps the slash team scope on direct conversations", async () => {
     mockState.resolveMattermostModelPickerEntry.mockReturnValueOnce(null);
     mockState.parseSlashCommandPayload.mockReturnValueOnce({
-      token: "valid-token",
+      ...fixtures.payload,
       command: "/oc_status",
       text: "status",
       channel_id: "dm-1",
-      user_id: "user-1",
-      user_name: "alice",
-      team_id: "team-1",
     });
     mockState.getMattermostCommand.mockResolvedValueOnce({
+      ...fixtures.command,
       id: "cmd-status",
-      token: "valid-token",
-      team_id: "team-1",
       trigger: "oc_status",
-      method: "P",
-      url: callbackUrlFixture,
-      delete_at: 0,
     });
     mockState.authorizeMattermostCommandInvocation.mockReturnValueOnce({
       ok: true,
@@ -464,23 +371,9 @@ describe("slash-http cfg threading", () => {
       channelDisplay: "Alice",
       roomLabel: "Alice",
     });
-    const handler = createSlashCommandHttpHandler({
-      account: accountFixture,
-      cfg: {} as OpenClawConfig,
-      runtime: {} as RuntimeEnv,
-      registeredCommands: [
-        {
-          id: "cmd-status",
-          teamId: "team-1",
-          trigger: "oc_status",
-          token: "valid-token",
-          url: callbackUrlFixture,
-          managed: false,
-        },
-      ],
-    });
+    const handler = createHandler({}, { id: "cmd-status", trigger: "oc_status" });
 
-    await handler(createRequest(), createResponse().res);
+    await handler(createRequest(), createMockServerResponse());
 
     expect(mockState.dispatchInbound).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -492,5 +385,64 @@ describe("slash-http cfg threading", () => {
         }),
       }),
     );
+  });
+  describe("command typed in a thread", () => {
+    beforeEach(() => {
+      mockState.parseSlashCommandPayload.mockReturnValue({
+        ...fixtures.payload,
+        text: "status",
+        root_id: "root-1",
+      });
+    });
+
+    it("dispatches and delivers the command in its thread session", async () => {
+      mockState.resolveMattermostModelPickerEntry.mockReturnValueOnce(null);
+      mockState.dispatchInbound.mockImplementationOnce(async (params) => {
+        await params.replyPipeline?.typing?.start?.();
+        await params.delivery.deliver({ text: "Status: ok" }, { kind: "final" });
+      });
+      vi.mocked(deliverMattermostReplyPayload).mockResolvedValueOnce({
+        outcome: "text",
+        visibleReplySent: true,
+      });
+
+      await expectProcessing(createHandler({}));
+
+      expect(deliverMattermostReplyPayload).toHaveBeenCalledWith(
+        expect.objectContaining({ channelId: "chan-1", replyToId: "root-1" }),
+      );
+      expect(sendMattermostTyping).toHaveBeenCalledWith(expect.anything(), {
+        channelId: "chan-1",
+        parentId: "root-1",
+      });
+      expect(mockState.dispatchInbound).toHaveBeenCalledWith(
+        expect.objectContaining({
+          route: expect.objectContaining({
+            sessionKey: "agent:agent-1:mattermost:session:1:thread:root-1",
+          }),
+          ctxPayload: expect.objectContaining({
+            SessionKey: "agent:agent-1:mattermost:session:1:thread:root-1",
+            ParentSessionKey: "agent:agent-1:mattermost:session:1",
+            MessageThreadId: "root-1",
+          }),
+        }),
+      );
+    });
+
+    it("posts the model picker in the thread and records its session", async () => {
+      await expectProcessing(createHandler({}));
+
+      expectSent("No models available.", { replyToId: "root-1" });
+      expectRecorded({ sessionKey: "agent:agent-1:mattermost:session:1:thread:root-1" });
+    });
+
+    it("posts the error fallback in the thread", async () => {
+      mockState.resolveMattermostModelPickerEntry.mockReturnValueOnce(null);
+      mockState.dispatchInbound.mockRejectedValueOnce(new Error("boom"));
+
+      await expectProcessing(createHandler({}));
+
+      expectSent("Sorry, something went wrong processing that command.", { replyToId: "root-1" });
+    });
   });
 });

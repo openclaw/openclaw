@@ -1,4 +1,3 @@
-/** Builds compact prompt notes for inbound media attachments. */
 import path from "node:path";
 import { basenameFromAnyPath } from "@openclaw/media-core/file-name";
 import { isAudioFileName } from "@openclaw/media-core/mime";
@@ -42,25 +41,18 @@ function sanitizeInlineMediaNoteValue(value: string | undefined): string {
     .trim();
 }
 
-function formatMediaAttachedLine(params: {
-  fact: MediaFact;
-  index?: number;
-  total?: number;
-}): string {
-  const prefix =
-    typeof params.index === "number" && typeof params.total === "number"
-      ? `[media attached ${params.index}/${params.total}: `
-      : "[media attached: ";
-  const pathValue = sanitizeInlineMediaNoteValue(params.fact.path);
-  const typeRaw = sanitizeInlineMediaNoteValue(params.fact.contentType ?? params.fact.kind);
+function formatMediaAttachedLine(fact: MediaFact, index: number, total: number): string {
+  const prefix = total > 1 ? `[media attached ${index}/${total}: ` : "[media attached: ";
+  const pathValue = sanitizeInlineMediaNoteValue(fact.path);
+  const typeRaw = sanitizeInlineMediaNoteValue(fact.contentType ?? fact.kind);
   const typePart = typeRaw ? ` (${typeRaw})` : "";
-  const urlRaw = sanitizeInlineMediaNoteValue(params.fact.url);
+  const urlRaw = sanitizeInlineMediaNoteValue(fact.url);
   // When the channel mirrors the local path into the fact URL (Telegram album
   // media is the canonical case), rendering ` | ${url}` adds no information
   // and clutters the prompt with `path | path` duplication (issue #47587).
   const urlPart = urlRaw && urlRaw !== pathValue ? ` | ${urlRaw}` : "";
   const fileName = truncateUtf16Safe(
-    sanitizeInlineMediaNoteValue(basenameFromAnyPath(params.fact.fileName ?? "")),
+    sanitizeInlineMediaNoteValue(basenameFromAnyPath(fact.fileName ?? "")),
     256,
   );
   const fileNamePart = fileName ? ` ${JSON.stringify(fileName)}` : "";
@@ -93,28 +85,24 @@ function collectTranscribedAudioAttachmentIndices(
   // Image/video descriptions are lossy derived context, so the original attachment
   // must stay available to multimodal models and downstream tools.
   const transcribedAudioIndices = new Set<number>();
-  if (Array.isArray(ctx.MediaUnderstanding)) {
-    for (const output of ctx.MediaUnderstanding) {
-      if (
-        output.kind === "audio.transcription" &&
-        isValidAttachmentIndex(output.attachmentIndex, attachmentCount)
-      ) {
-        transcribedAudioIndices.add(output.attachmentIndex);
-      }
+  for (const output of ctx.MediaUnderstanding ?? []) {
+    if (
+      output.kind === "audio.transcription" &&
+      isValidAttachmentIndex(output.attachmentIndex, attachmentCount)
+    ) {
+      transcribedAudioIndices.add(output.attachmentIndex);
     }
   }
-  if (Array.isArray(ctx.MediaUnderstandingDecisions)) {
-    for (const decision of ctx.MediaUnderstandingDecisions) {
-      if (decision.capability !== "audio" || decision.outcome !== "success") {
-        continue;
-      }
-      for (const attachment of decision.attachments) {
-        if (
-          attachment.chosen?.outcome === "success" &&
-          isValidAttachmentIndex(attachment.attachmentIndex, attachmentCount)
-        ) {
-          transcribedAudioIndices.add(attachment.attachmentIndex);
-        }
+  for (const decision of ctx.MediaUnderstandingDecisions ?? []) {
+    if (decision.capability !== "audio" || decision.outcome !== "success") {
+      continue;
+    }
+    for (const attachment of decision.attachments) {
+      if (
+        attachment.chosen?.outcome === "success" &&
+        isValidAttachmentIndex(attachment.attachmentIndex, attachmentCount)
+      ) {
+        transcribedAudioIndices.add(attachment.attachmentIndex);
       }
     }
   }
@@ -168,17 +156,15 @@ export function buildInboundMediaNoteProjection(ctx: MsgContext): InboundMediaNo
       output.kind === "image.description" ? [output.attachmentIndex] : [],
     ) ?? [],
   );
-  const media = visibleEntries.map((entry) => ({
-    ...entry.fact,
-    ...(describedImageIndices.has(entry.index) ? { hydrationSuppressed: true } : {}),
-  }));
+  const media = visibleEntries.map((entry) =>
+    describedImageIndices.has(entry.index)
+      ? { ...entry.fact, hydrationSuppressed: true }
+      : entry.fact,
+  );
   const mediaIndexes = visibleEntries.map((entry) => entry.index);
   const count = visibleEntries.length;
   const lines = visibleEntries.map((entry, index) =>
-    formatMediaAttachedLine({
-      fact: entry.fact,
-      ...(count > 1 ? { index: index + 1, total: count } : {}),
-    }),
+    formatMediaAttachedLine(entry.fact, index + 1, count),
   );
   if (count > 1) {
     lines.unshift(`[media attached: ${count} files]`);

@@ -1,5 +1,11 @@
 {
+  "controlUi": {
+    "entry": "dist/control-ui/overview/index.js",
+    "activation": "settings-only",
+    "settingsViews": [{"section": "memory", "panel": "overview"}, {"section": "memory", "panel": "memories"}]
+  },
   "id": "memory-core",
+  "generationOverlap": true,
   "categories": ["memory"],
   "doctorContract": {
     "stateMigrations": [
@@ -279,5 +285,10 @@
         }
       }
     }
-  }
+  },
+  "recommendedPrompts": [
+    "Check whether this agent’s file-backed memory and search are ready.",
+    "Help me save a useful decision or preference in this agent’s memory.",
+    "Find a decision in this agent’s memory and cite the source without changing it."
+  ]
 }
