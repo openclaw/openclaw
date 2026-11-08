@@ -302,8 +302,9 @@ extension LocationServicing {
             _ = await finishedIterator.next()
 
             locationService.simulateAuthorizationChange(.authorizedWhenInUse)
-            // Hold the handoff beyond the registration deadline: a grant must not recover its stopped loops.
-            #expect(await Self.waitForLocationRegistration(true, appModel: appModel) == false)
+            // Sampling through the same permission path lets a refresh that ignored the held handoff apply first.
+            _ = await controller.makeConnectOptions(deviceAuthGatewayID: nil)
+            #expect(appModel.activeGatewayConnectConfig?.nodeOptions.permissions["location"] != true)
             #expect(!appModel._test_hasGatewayLoopTasks().node)
             #expect(!appModel._test_hasGatewayLoopTasks().operator)
 
@@ -313,7 +314,8 @@ extension LocationServicing {
                 resetRelease.continuation.finish()
                 _ = await finishedIterator.next()
                 // Completing the captured handoff must not bypass the replacement's reset ownership.
-                #expect(await Self.waitForLocationRegistration(true, appModel: appModel) == false)
+                _ = await controller.makeConnectOptions(deviceAuthGatewayID: nil)
+                #expect(appModel.activeGatewayConnectConfig?.nodeOptions.permissions["location"] != true)
                 #expect(!appModel._test_hasGatewayLoopTasks().node)
                 #expect(!appModel._test_hasGatewayLoopTasks().operator)
             }
