@@ -255,12 +255,12 @@ const enChatSession = {
       steerBlocked: "Waiting for {tools}; cannot interrupt safely.",
       steerUnavailable: "Waiting for the next model turn; this runtime cannot interrupt tools.",
       agentUpdate: {
-        cancelled: "This agent update was cancelled before delivery.",
+        cancelled: "This agent update was canceled before delivery.",
       },
       waitingForWorkspaceSync: "Received · waiting for workspace sync",
       waitingForWorkerSetup: "Received · setting up device",
       cancelled:
-        "Cancelled before the agent started it. It will not run automatically; copy it and send again.",
+        "Canceled before the agent started it. It will not run automatically; copy it and send again.",
       earlier: "Show earlier unsent messages",
       latest: "Show latest unsent messages",
       dismiss: "Dismiss",

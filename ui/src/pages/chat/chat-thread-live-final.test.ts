@@ -199,7 +199,7 @@ describe("live terminal continuity with pending collaborators", () => {
         sendRunId: "New follow-up",
         sendSubmittedAtMs: 40,
       });
-      const disposition = "This agent update was cancelled before delivery.";
+      const disposition = "This agent update was canceled before delivery.";
       const originalRows = ["earlier", "active", "Earlier scheduled maintenance", disposition];
       const check = (overrides: Partial<BuildChatItemsProps>, expected = originalRows) =>
         expect(
