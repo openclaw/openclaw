@@ -1,0 +1,5 @@
+# PR #172128: exact net regression-test growth against main.
+# Covers argument-fed stdin, UNKNOWN stdout, exact UTF-8 partial writes,
+# temporary backpressure, fatal write errors, and worker diagnostic integrity.
+# Does not cover inherited main debt or create additional test headroom.
+287

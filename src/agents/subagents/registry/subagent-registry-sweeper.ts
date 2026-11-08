@@ -296,7 +296,7 @@ export function createSubagentRegistrySweeper(params: {
         // A yielded run no continuation can reach settles instead of parking forever.
         const executionRetired = subagentRuns.isCompletionAuthorityRetired(entry);
         if (
-          !executionRetired &&
+          (!executionRetired || entry.waitForMessage) &&
           isYieldedSubagentRun(entry) &&
           (await settleUnreachableYieldedSubagentRun({
             runId,

@@ -13,6 +13,58 @@ OpenClaw runs one Gateway (the master) on a host and connects every client to it
 Remote clients can continue the same Gateway-owned conversation by URL or short
 reference. See [Session synchronization and attachment](/concepts/session-attachment).
 
+## OpenClaw ID nodes (Labs)
+
+With **OpenClaw ID** enabled in Labs, headless nodes can reach a claw through its
+relay and encrypted tunnel, without Tailscale, an OpenClaw ID account, or a shared
+Gateway token. Each node generates and keeps its own tunnel key. The owner
+registers a signed, single-use node invitation; the link defaults to 10 minutes
+and cannot last longer than one hour.
+
+From an approved owner browser, open **Access → Nodes → Add node**, enter a
+label, and choose **Create node command**. Copy the command into a POSIX shell on
+the computer you want to add. The default command uses the Gateway's OpenClaw
+version through `npx` and installs the node as a service after approval. Expand
+**Already have OpenClaw installed?** for the installed CLI command.
+
+The browser builds the secret-bearing link and both commands locally. Neither the
+link nor the secret is sent to the Gateway, stored by the UI, or logged. Closing
+the dialog discards the command; pending requests remain available under **Nodes**.
+If Discovery is unconfigured, no command is created: configure
+`gateway.openclawId.discoveryUrl` on the Gateway first. The relay must be running.
+
+Run the join command supplied by the owner, including the deployment's Discovery
+origin:
+
+```bash
+openclaw node join '<node-join-link>' --discovery-url https://discovery.example.test
+```
+
+Treat the join link as a secret. The node terminal and the owner's approval dialog
+show the same six-digit verification code. Compare all six digits, review the
+self-reported name, platform, commands, and capabilities, then explicitly approve.
+An open dialog never approves a node automatically. The Discovery service can
+relay a pending request but cannot admit the node. Select **Codes match — approve
+node** only after comparing the terminal code and reviewing the complete declared
+surface. Sensitive commands and capabilities are highlighted. **Deny node** grants
+no access; ask the node operator to stop the waiting command.
+
+The **Nodes** list shows each node's name, platform, last seen, and approving owner
+device. **Remove node** explains and confirms disconnection and deletion of the
+node pairing. Removing only a pairing in **Devices** leaves its OpenClaw ID key
+admitted but makes subsequent pairing manual. Members and viewers cannot manage
+nodes.
+
+An admitted node key grants only `role: "node"` with client mode `node`. It grants
+no owner or member identity, operator scopes, plugin cookies, or operator HTTP
+access. Session-hosting nodes continue to authenticate their worker WebSocket and
+HTTP transfers with those routes' separate credentials.
+
+See [node pairing](/gateway/pairing#openclaw-id-nodes-labs) for the one-time pairing
+approval and removal behavior. Creating or signing node invitations on the Gateway
+host's command line is not supported by this flow; an owner device or recovery
+root signs admission.
+
 ## The core idea
 
 The Gateway WebSocket binds to **loopback** by default, on port `18789` (`gateway.port`). For remote use, either expose it through Tailscale Serve / a trusted LAN-Tailnet bind, or forward the loopback port over SSH.

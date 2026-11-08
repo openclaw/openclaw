@@ -738,6 +738,7 @@ extension OpenClawChatViewModel {
             self.invalidateSessionMetadataReadiness()
         }
         if ok, !wasHealthy {
+            self.reloadUnsettledComposerCapabilities()
             guard self.outbox != nil else { return }
             if self.hasCurrentSessionMetadata {
                 self.reconcilePendingOutboxBranchScopes()

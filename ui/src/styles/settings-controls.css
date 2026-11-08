@@ -336,18 +336,23 @@ select.settings-select {
     min-block-size: var(--settings-control-height);
   }
 
-  :root .btn.refresh-button,
+  :root .oc-icon-button.refresh-button,
+  :root .settings-section__actions .sessions-toolbar__icon.oc-icon-button {
+    --oc-icon-button-size: var(--settings-control-height);
+  }
+
   :root .settings-section .settings-section__actions .btn.btn--xs.btn--icon.channels-refresh,
-  :root .settings-section__actions .sessions-toolbar__icon.btn--icon.btn--xs {
+  :root .settings-section__actions .sessions-toolbar__new-session.btn--icon.btn--xs {
     width: var(--settings-control-height);
     min-width: var(--settings-control-height);
     height: var(--settings-control-height);
     min-height: var(--settings-control-height);
   }
 
-  :root .btn:is(.cron-job-menu__trigger, .secrets-store__menu-trigger),
-  :root .plugin-editor__menu .btn.btn--icon,
-  :root openclaw-sessions-page td .icon-btn[aria-haspopup="menu"] {
+  :root .cron-job-menu__trigger,
+  :root .btn.secrets-store__menu-trigger,
+  :root .plugin-editor__menu .oc-icon-button,
+  :root openclaw-sessions-page td .session-row-menu-trigger {
     width: var(--row-action-size);
     min-width: var(--row-action-size);
     height: var(--row-action-size);

@@ -2371,7 +2371,9 @@ class ChatController internal constructor(
     val createGatewayScope = selection.gatewayScope
     val parentKey = selection.sessionKey
     val ownerAgentId = selection.ownerAgentId
-    if (_pendingRunCount.value > 0) {
+    // Ordinary New is a parallel chat. An in-progress response stays on the
+    // open conversation; only an explicit worktree start still waits for it.
+    if (worktree && _pendingRunCount.value > 0) {
       updateLocalizedErrorText(nativeText("Wait for the current response to finish before starting a new chat."))
       return false
     }
