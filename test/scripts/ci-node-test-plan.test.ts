@@ -4027,6 +4027,7 @@ function expectImpacts(
 describe("CI changed Node test plan", () => {
   it.each([
     ["ui/src/main.ts", true],
+    ["src/gateway/control-ui-route-preloads.ts", true],
     ["ui/src/pages/chat/chat-gateway.test.ts", false],
     // Erased TSX header imports do not bring Gateway server code into the UI runtime.
     ["packages/gateway-client/src/index.ts", false],
