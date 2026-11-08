@@ -1,6 +1,6 @@
 import { compareBuild, parse, type SemVer } from "semver";
 
-const OPENCLAW_RELEASE_PREFIX_RE = /^\d{4}\./;
+const RELEASE_PREFIX_RE = /^\d{4}\./;
 
 export function compareValidSemver(left: string, right: string): number | null {
   const parsedLeft = parse(left);
@@ -28,7 +28,7 @@ export function compareOpenClawSemver(left: SemVer, right: SemVer): number {
 /** Parses OpenClaw's monthly patch stable/alpha/beta/correction version format. */
 export function parseOpenClawReleaseVersion(value: string): SemVer | null {
   const trimmed = value.trim();
-  const parsed = OPENCLAW_RELEASE_PREFIX_RE.test(trimmed) ? parse(trimmed) : null;
+  const parsed = RELEASE_PREFIX_RE.test(trimmed) ? parse(trimmed) : null;
   if (!parsed || parsed.build.length > 0) {
     return null;
   }
