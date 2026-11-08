@@ -4,19 +4,40 @@ import path from "node:path";
 import { setImmediate } from "node:timers/promises";
 import { writeHeapSnapshot } from "node:v8";
 
+/** Force a full collection without depending on heap-inspection APIs. */
+export function forceFullGc(): void {
+  const bun = (globalThis as typeof globalThis & { Bun?: { gc(full: boolean): unknown } }).Bun;
+  if (typeof bun?.gc === "function") {
+    bun.gc(true);
+    return;
+  }
+  assert.ok(globalThis.gc, "The retention fixture requires --expose-gc");
+  globalThis.gc();
+}
+
+export async function expectLiveObjects(
+  refs: readonly WeakRef<object>[],
+  count: number,
+): Promise<void> {
+  await collectForRetentionCheck("live-objects", 1);
+  assert.equal(refs.filter((ref) => ref.deref() !== undefined).length, count);
+}
+
+export async function expectCollected(...refs: WeakRef<object>[]): Promise<void> {
+  await expectLiveObjects(refs, 0);
+}
+
 /** Collects between jobs while the fixture keeps its real resource alive. */
-export async function collectForRetentionCheck(label: string): Promise<void> {
-  const gc = globalThis.gc;
-  assert.ok(gc, "The retention fixture requires --expose-gc");
+export async function collectForRetentionCheck(label: string, passes = 8): Promise<void> {
   const control = new WeakRef({ unowned: true });
   const directory = process.env.OPENCLAW_RETENTION_SNAPSHOT_DIR;
   if (directory) {
     mkdirSync(directory, { recursive: true });
     writeHeapSnapshot(path.join(directory, `${label}-before.heapsnapshot`));
   }
-  for (let pass = 0; pass < 8; pass += 1) {
+  for (let pass = 0; pass < passes; pass += 1) {
     await setImmediate();
-    gc();
+    forceFullGc();
   }
   assert.equal(control.deref(), undefined, "Unowned control must collect");
   if (directory) {
