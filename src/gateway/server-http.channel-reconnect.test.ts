@@ -3,11 +3,17 @@ import { importBundledChannelContractSourceArtifact } from "../channels/plugins/
 import type { ChannelAccountSnapshot } from "../channels/plugins/types.public.js";
 import { readHttp } from "./control-ui-fixture.test-support.js";
 import { listenProvider } from "./gateway-provider-fixture.test-support.js";
+import {
+  createTestChannelManager,
+  createTestChannelRegistry,
+  createTestPlugin,
+} from "./server-channels.test-support.js";
 import { AUTH_NONE, withGatewayServer } from "./server-http.test-harness.js";
 import { createReadinessChecker } from "./server/readiness.js";
 
 type DiscordReadinessFixture = {
   snapshot: ChannelAccountSnapshot;
+  lifecycle: Promise<void>;
   currentSocket: () => {
     sent: Array<{ op: number; d: unknown }>;
     emit: (event: string, ...args: unknown[]) => boolean;
@@ -24,7 +30,10 @@ type XReadinessFixture = {
 };
 const { loadDiscordReadinessFixture } = await importBundledChannelContractSourceArtifact<{
   loadDiscordReadinessFixture: () => Promise<{
-    createDiscordReadinessFixture: () => Promise<DiscordReadinessFixture>;
+    createDiscordReadinessFixture: (options?: {
+      abortSignal?: AbortSignal;
+      statusSink?: (patch: Partial<ChannelAccountSnapshot>) => void;
+    }) => Promise<DiscordReadinessFixture>;
   }>;
 }>("discord", "test-api.js", {});
 const { loadXReadinessFixture } = await importBundledChannelContractSourceArtifact<{
@@ -159,5 +168,56 @@ it("keeps an X stream reconnect degraded-ready and fails a continuous outage aft
     });
   } finally {
     await x.stop();
+  }
+});
+
+it("restarts a malformed Discord payload through the channel manager without terminal readiness", async () => {
+  vi.useFakeTimers();
+  vi.setSystemTime(1_000_000);
+  const { createDiscordReadinessFixture } = await loadDiscordReadinessFixture();
+  const first = Promise.withResolvers<DiscordReadinessFixture>();
+  const starts: DiscordReadinessFixture[] = [];
+  const registry = createTestChannelRegistry(
+    createTestPlugin({
+      startAccount: async (ctx) => {
+        const discord = await createDiscordReadinessFixture({
+          abortSignal: ctx.abortSignal,
+          statusSink: (patch) => ctx.setStatus({ ...ctx.getStatus(), ...patch }),
+        });
+        starts.push(discord);
+        first.resolve(discord);
+        try {
+          await discord.lifecycle;
+        } finally {
+          await discord.stop();
+        }
+      },
+    }),
+  );
+  const manager = createTestChannelManager({ getPluginRegistry: () => registry });
+  const readiness = createReadinessChecker({ startedAt: Date.now(), channelManager: manager });
+  try {
+    await manager.startChannel("discord");
+    const discord = await first.promise;
+    await vi.advanceTimersByTimeAsync(0);
+    discord.currentSocket().emit("message", "{malformed");
+    await vi.advanceTimersByTimeAsync(0);
+    const failed = manager.getRuntimeSnapshot().channelAccounts.discord?.default;
+    expect(failed).toMatchObject({ running: false, restartPending: true });
+    expect(failed?.terminalDisconnect).not.toBe(true);
+    expect(failed?.lifecycle).not.toBe("blocked");
+    expect(failed?.lastError).toContain("Invalid gateway payload");
+    expect(readiness()).toMatchObject({ ready: true, failing: [] });
+    await vi.advanceTimersByTimeAsync(6_000);
+    expect(starts).toHaveLength(2);
+    expect(manager.getRuntimeSnapshot().channelAccounts.discord?.default).toMatchObject({
+      running: true,
+      connected: true,
+      lifecycle: "ready",
+      restartPending: false,
+    });
+    expect(readiness()).toMatchObject({ ready: true, failing: [] });
+  } finally {
+    await manager.stopChannel("discord");
   }
 });

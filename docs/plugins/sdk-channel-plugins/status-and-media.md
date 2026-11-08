@@ -30,6 +30,11 @@ The shared health policy allows two minutes of reconnect grace and projects
 the affected channel in `degraded` while keeping `ready: true` if its other checks
 pass. Active work does not extend an explicitly recovering transport's window.
 Log transport failures and recovery so a ready response cannot hide an outage.
+Transport reconnects belong to the transport owner; a lifecycle failure settles
+that run so the Gateway can apply its existing restart policy. Reserve
+`terminalDisconnect` and `lifecycle: "blocked"` for failures requiring operator
+repair, such as invalid credentials or disallowed intents, not restartable
+protocol errors or exhaustion of one transport's reconnect attempts.
 
 ## Typing indicators
 

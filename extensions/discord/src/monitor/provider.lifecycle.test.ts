@@ -381,7 +381,7 @@ describe("runDiscordGatewayLifecycle", () => {
   });
 
   it.each(["fatal", "reconnect-exhausted"] as const)(
-    "blocks on live %s and disconnects",
+    "settles live %s without disabling account recovery",
     async (type) => {
       const h = createHarness();
       const lifecycle = runDiscordGatewayLifecycle(h.params);
@@ -390,12 +390,11 @@ describe("runDiscordGatewayLifecycle", () => {
       h.emitGatewayEvent(gatewayEvent(type, "boom"));
       await outcome;
       expect(h.gateway.disconnect).toHaveBeenCalledOnce();
-      expect(h.statusSink).toHaveBeenLastCalledWith(
-        expect.objectContaining({
-          connected: false,
-          lifecycle: "blocked",
-          terminalDisconnect: true,
-        }),
+      expect(h.statusSink).not.toHaveBeenCalledWith(
+        expect.objectContaining({ terminalDisconnect: true }),
+      );
+      expect(h.statusSink).not.toHaveBeenCalledWith(
+        expect.objectContaining({ lifecycle: "blocked" }),
       );
       expectCleanup(h, 1);
     },

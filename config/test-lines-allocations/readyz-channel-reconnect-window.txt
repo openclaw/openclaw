@@ -1,3 +1,4 @@
-# Real Discord/X transport-to-HTTP readiness, terminal failure, and initial-connect regressions.
-# Exactly 386 net test/fixture lines after removing duplicate X reconnect coverage.
-386
+# Real Discord/X transport-to-readiness, terminal failure, and initial-connect regressions.
+# Includes malformed Discord payload through the real channel manager to automatic restart.
+# Exactly 453 net test/fixture lines; no inherited-debt credit.
+453

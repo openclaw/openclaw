@@ -29,7 +29,12 @@ class FixtureGateway extends GatewayPlugin {
 }
 
 /** Only Discord's external socket is substituted; protocol and status ownership stay real. */
-export async function createDiscordReadinessFixture() {
+export async function createDiscordReadinessFixture(
+  options: {
+    abortSignal?: AbortSignal;
+    statusSink?: (patch: Partial<ChannelAccountSnapshot>) => void;
+  } = {},
+) {
   const gateway = new FixtureGateway({ url: "wss://gateway.example.test" });
   const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
   const gatewaySupervisor = createDiscordGatewaySupervisor({
@@ -70,12 +75,15 @@ export async function createDiscordReadinessFixture() {
     gateway,
     runtime,
     gatewaySupervisor,
-    abortSignal: abort.signal,
+    abortSignal: options.abortSignal ?? abort.signal,
     isDisallowedIntentsError: () => false,
     voiceManager: null,
     voiceManagerRef: { current: null },
     threadBindings: { stop() {} },
-    statusSink: (patch) => Object.assign(snapshot, patch),
+    statusSink: (patch) => {
+      Object.assign(snapshot, patch);
+      options.statusSink?.(patch);
+    },
   });
   // Observe terminal settlement immediately, before the test yields to timers or HTTP.
   const settled = lifecycle
@@ -83,9 +91,9 @@ export async function createDiscordReadinessFixture() {
     .finally(() => {
       snapshot.running = false;
     });
-  await vi.advanceTimersByTimeAsync(0);
   return {
     snapshot,
+    lifecycle,
     currentSocket,
     runtime,
     async stop() {

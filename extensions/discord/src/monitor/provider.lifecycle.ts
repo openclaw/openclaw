@@ -323,16 +323,8 @@ export async function runDiscordGatewayLifecycle(params: {
       );
       return "continue";
     }
-    if (event.shouldStopLifecycle) {
-      lifecycleStopping = true;
-      pushStatus({
-        connected: false,
-        lifecycle: "blocked",
-        terminalDisconnect: true,
-        lastError: event.message,
-      });
-    }
     if (event.type === "disallowed-intents") {
+      lifecycleStopping = true;
       sawDisallowedIntents = true;
       params.runtime.error?.(
         danger(
@@ -340,6 +332,9 @@ export async function runDiscordGatewayLifecycle(params: {
         ),
       );
       return "stop";
+    }
+    if (event.shouldStopLifecycle) {
+      lifecycleStopping = true;
     }
     params.runtime.error?.(
       danger(
