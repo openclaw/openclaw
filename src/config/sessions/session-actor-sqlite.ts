@@ -51,7 +51,7 @@ export type SessionActorTransport = {
     authorize: (
       request: SqliteWorkerAdmissionRequest,
       native: NativeAdmission,
-      grant: () => boolean,
+      grant: (beforeRelease?: () => void) => boolean,
     ) => void,
   ): Promise<T>;
   /** Read-only committed evidence; follow-up work runs after releasing the command FIFO. */
@@ -110,16 +110,17 @@ export function createSqliteSessionActorExecutor(
       stage: "transaction" | "commit",
       snapshot: SessionActorAuthorityFacts,
       entryPublication: unknown,
-    ) => void,
+    ) => (() => void) | undefined,
   ) => {
     let actorAdmissionSeen = false;
     return (
       request: SqliteWorkerAdmissionRequest,
       native: NativeAdmission,
-      grant: () => boolean,
+      grant: (beforeRelease?: () => void) => boolean,
     ) => {
       params.assertAccepted();
       authority.assertCurrent();
+      let beforeRelease: (() => void) | undefined;
       const facts =
         isRecord(request.facts) &&
         request.facts.kind !== "session-actor-admission" &&
@@ -138,7 +139,13 @@ export function createSqliteSessionActorExecutor(
         // SAFETY: The private MessagePort already detached this snapshot from the paired kernel.
         const snapshot = facts.snapshot as SessionActorAuthorityFacts;
         const publication = facts.publication;
-        observe?.(native, publication, request.stage, snapshot, facts.entryPublication);
+        beforeRelease = observe?.(
+          native,
+          publication,
+          request.stage,
+          snapshot,
+          facts.entryPublication,
+        );
         authority.authorize(
           request.stage,
           snapshot,
@@ -154,7 +161,7 @@ export function createSqliteSessionActorExecutor(
       }
       authority.assertCurrent();
       params.assertAccepted();
-      if (!grant()) {
+      if (!grant(beforeRelease)) {
         throw new Error("Session actor authority expired");
       }
     };
@@ -444,29 +451,34 @@ export function createSqliteSessionActorExecutor(
               storePath: entryFacts.storePath,
               receipts,
             };
-            const owner = retainSessionEntryWorkerPublication({
-              ...facts,
-              databaseIdentity,
-            });
-            entryPublication = { facts, owner };
-            owner.beginChanges(
-              receipts.flatMap((receipt) => [...receipt.facts.keys()]),
-              new Map(),
-              receipts.flatMap((receipt) =>
-                [...receipt.facts].flatMap(([key, fact]) =>
-                  fact.kind === "postimage" && !fact.value.facts.lifecycleChanged ? [key] : [],
-                ),
-              ),
-              undefined,
-              new Map(
+            // Pending custody must not hide the facts used by this command
+            // to authorize its own commit. Start it under the final native grant.
+            return () => {
+              const owner = retainSessionEntryWorkerPublication({
+                ...facts,
+                databaseIdentity,
+              });
+              entryPublication = { facts, owner };
+              owner.beginChanges(
+                receipts.flatMap((receipt) => [...receipt.facts.keys()]),
+                new Map(),
                 receipts.flatMap((receipt) =>
                   [...receipt.facts].flatMap(([key, fact]) =>
-                    fact.kind === "postimage" ? [[key, fact.value.entry] as const] : [],
+                    fact.kind === "postimage" && !fact.value.facts.lifecycleChanged ? [key] : [],
                   ),
                 ),
-              ),
-            );
+                undefined,
+                new Map(
+                  receipts.flatMap((receipt) =>
+                    [...receipt.facts].flatMap(([key, fact]) =>
+                      fact.kind === "postimage" ? [[key, fact.value.entry] as const] : [],
+                    ),
+                  ),
+                ),
+              );
+            };
           }
+          return undefined;
         }),
       );
     } catch (error) {
