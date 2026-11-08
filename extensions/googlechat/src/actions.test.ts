@@ -1,3 +1,4 @@
+import { isChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const inspectGoogleChatAccount = vi.hoisted(() => vi.fn());
@@ -159,9 +160,7 @@ describe("googlechat message actions", () => {
           cfg: {},
           accountId: "default",
         } as never),
-      ).rejects.toThrow(
-        "Google Chat outbound attachments require user OAuth and are not supported by this service-account channel.",
-      );
+      ).rejects.toThrow("Google Chat outbound attachments require remote HTTP(S) URLs.");
 
       expect(resolveGoogleChatAccount).not.toHaveBeenCalled();
       expect(resolveGoogleChatOutboundSpace).not.toHaveBeenCalled();
@@ -183,5 +182,97 @@ describe("googlechat message actions", () => {
     ).rejects.toThrow(`Action ${action} is not supported for provider googlechat.`);
 
     expect(sendGoogleChatMessage).not.toHaveBeenCalled();
+  });
+
+  it.each([undefined, "caption"])("sends remote media with caption %s", async (message) => {
+    resolveGoogleChatAccount.mockReturnValue(buildAccount());
+    resolveGoogleChatOutboundSpace.mockResolvedValue("spaces/AAA");
+    await googlechatMessageActions.handleAction({
+      action: "send",
+      params: { to: "spaces/AAA", message, media: "https://example.invalid/image.png" },
+      cfg: {},
+    } as never);
+    expect(sendGoogleChatMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: `${message ? "caption\n\n" : ""}Attachment: https://example.invalid/image.png`,
+      }),
+    );
+  });
+  it.each([undefined, "spaces/AAA/threads/fallback"])(
+    "chunks remote captions through the registered action in returned thread %s",
+    async (returnedThread) => {
+      const account = { ...buildAccount(), config: { textChunkLimit: 64 } };
+      resolveGoogleChatAccount.mockReturnValue(account);
+      resolveGoogleChatOutboundSpace.mockResolvedValue("spaces/AAA");
+      sendGoogleChatMessage.mockResolvedValue({
+        messageName: "spaces/AAA/messages/chunk",
+        threadName: returnedThread,
+      });
+      await googlechatMessageActions.handleAction({
+        action: "send",
+        params: {
+          to: "spaces/AAA",
+          message: "a".repeat(55),
+          attachments: [{ url: "https://example.invalid/image.png" }],
+          threadId: "spaces/AAA/threads/root",
+        },
+        cfg: {},
+      } as never);
+      const texts = sendGoogleChatMessage.mock.calls.map(([request]) => request.text.trim());
+      expect(texts).toEqual(["a".repeat(55), "Attachment: https://example.invalid/image.png"]);
+      for (const [index, [request]] of sendGoogleChatMessage.mock.calls.entries()) {
+        expect(request.thread).toBe(
+          index === 0 ? "spaces/AAA/threads/root" : (returnedThread ?? "spaces/AAA/threads/root"),
+        );
+        expect(Buffer.byteLength(request.text)).toBeLessThanOrEqual(64);
+      }
+    },
+  );
+
+  it.each([false, true])(
+    "preserves accepted action chunks before failure: accepted=%s",
+    async (accepted) => {
+      const failure = new Error("provider rejected chunk");
+      resolveGoogleChatAccount.mockReturnValue({
+        ...buildAccount(),
+        config: { textChunkLimit: 64 },
+      });
+      resolveGoogleChatOutboundSpace.mockResolvedValue("spaces/AAA");
+      sendGoogleChatMessage.mockReset().mockRejectedValue(failure);
+      if (accepted) {
+        sendGoogleChatMessage.mockResolvedValueOnce({ messageName: "spaces/AAA/messages/caption" });
+      }
+      await expect(
+        googlechatMessageActions.handleAction({
+          action: "send",
+          params: {
+            to: "spaces/AAA",
+            message: "a".repeat(55),
+            mediaUrl: "https://example.invalid/image.png",
+          },
+          cfg: {},
+        } as never),
+      ).rejects.toSatisfy((error: unknown) =>
+        accepted
+          ? isChannelPartialDeliveryError(error) &&
+            error.cause === failure &&
+            error.deliveryResult.messageIds?.join(",") === "spaces/AAA/messages/caption" &&
+            error.deliveryResult.content?.trim() === "a".repeat(55) &&
+            error.deliveryResult.visibleReplySent
+          : error === failure,
+      );
+      expect(sendGoogleChatMessage).toHaveBeenCalledTimes(accepted ? 2 : 1);
+    },
+  );
+
+  it("still rejects native upload before resolving credentials", async () => {
+    await expect(
+      googlechatMessageActions.handleAction({
+        action: "upload-file",
+        params: { path: "/tmp/local.png" },
+        cfg: {},
+      } as never),
+    ).rejects.toThrow("require user OAuth");
+    expect(resolveGoogleChatAccount).not.toHaveBeenCalled();
   });
 });

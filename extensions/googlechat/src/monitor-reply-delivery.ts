@@ -1,6 +1,9 @@
 import { createChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-runtime";
+import {
+  formatErrorMessage,
+  PlatformMessageNotDispatchedError,
+} from "openclaw/plugin-sdk/error-runtime";
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import type { ResolvedGoogleChatAccount } from "./accounts.js";
@@ -10,7 +13,7 @@ import {
   sendGoogleChatMessage,
   updateGoogleChatMessage,
 } from "./api.js";
-import { formatGoogleChatTextChunks } from "./format.js";
+import { formatGoogleChatMediaText, formatGoogleChatTextChunks } from "./format.js";
 import type { GoogleChatCoreRuntime, GoogleChatRuntimeEnv } from "./monitor-types.js";
 
 export type GoogleChatTypingMessage = ReturnType<typeof createGoogleChatTypingMessage>;
@@ -84,23 +87,24 @@ export async function deliverGoogleChatReply(params: {
     deliveryThreadName = typingMessage.deliveredThreadName;
   }
 
-  if (reply.hasMedia) {
-    runtime.error?.(
-      "Google Chat outbound attachments require user OAuth and are not supported by this service-account channel; sending text fallback only.",
-    );
+  let text = reply.text;
+  let mediaError: unknown;
+  try {
+    text = formatGoogleChatMediaText(reply.text, reply.mediaUrls);
+  } catch (error) {
+    mediaError = error;
   }
 
   const chunkLimit = account.config.textChunkLimit ?? 4000;
   const chunkMode = core.channel.text.resolveChunkMode(config, "googlechat", account.accountId);
-  const chunks = formatGoogleChatTextChunks(reply.text, chunkLimit).flatMap((chunk) =>
+  const chunks = formatGoogleChatTextChunks(text, chunkLimit).flatMap((chunk) =>
     core.channel.text.chunkMarkdownTextWithMode(chunk, chunkLimit, chunkMode),
   );
-  const rejection =
-    reply.hasMedia && !reply.hasText
-      ? "Google Chat outbound attachments require user OAuth and no text fallback is available."
-      : reply.hasText && !chunks.some((chunk) => chunk)
-        ? "Google Chat reply has no visible text after formatting."
-        : undefined;
+  const rejection = mediaError
+    ? formatErrorMessage(mediaError)
+    : text && !chunks.some((chunk) => chunk)
+      ? "Google Chat reply has no visible text after formatting."
+      : undefined;
   if (rejection) {
     try {
       if (typingMessage) {
@@ -111,7 +115,7 @@ export async function deliverGoogleChatReply(params: {
     }
     // Permanent policy rejection before any recipient-visible send; the typed
     // contract keeps delivery custody from recording a false ambiguous attempt.
-    throw new PlatformMessageNotDispatchedError(rejection, { cause: undefined, retryable: false });
+    throw new PlatformMessageNotDispatchedError(rejection, { cause: mediaError, retryable: false });
   }
 
   const recordOutboundStatus = () => {

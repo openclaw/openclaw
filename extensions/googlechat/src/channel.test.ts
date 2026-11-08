@@ -123,6 +123,24 @@ describe("googlechatPlugin outbound", () => {
           expect(request.space).toBe("spaces/AAA");
           expect(request.thread).toBe("thread-1");
         },
+        media: async () => {
+          sendGoogleChatMessageMock.mockClear();
+          const payload = googlechatOutboundAdapter.base.normalizePayload({
+            payload: { mediaUrl: "https://example.invalid/image.png" },
+          });
+          expect(payload).toEqual({ text: "Attachment: https://example.invalid/image.png" });
+          const result = await googlechatMessageAdapter.send?.text?.({
+            cfg,
+            to: "spaces/AAA",
+            text: payload?.text ?? "",
+          });
+          expect(result?.receipt.platformMessageIds).toEqual(["spaces/AAA/messages/msg-1"]);
+          expect(sendGoogleChatMessageMock).toHaveBeenCalledWith(
+            expect.objectContaining({
+              text: "Attachment: https://example.invalid/image.png",
+            }),
+          );
+        },
         messageSendingHooks: () => {
           expect(googlechatMessageAdapter.send?.text).toBeTypeOf("function");
         },
@@ -130,7 +148,7 @@ describe("googlechatPlugin outbound", () => {
     });
     expect(proofs).toStrictEqual([
       { capability: "text", status: "verified" },
-      { capability: "media", status: "not_declared" },
+      { capability: "media", status: "verified" },
       { capability: "poll", status: "not_declared" },
       { capability: "payload", status: "not_declared" },
       { capability: "silent", status: "not_declared" },
@@ -405,5 +423,39 @@ describe("googlechatPlugin outbound sanitizeText", () => {
     expect(out).toBe("Visible answer.");
     expect(out).not.toContain("failed");
     expect(out).not.toContain("🛠️");
+  });
+});
+
+describe("googlechat remote media", () => {
+  it("keeps remote links and captions while rejecting local and non-web media", () => {
+    const normalize = googlechatOutboundAdapter.base.normalizePayload;
+    expect(
+      normalize({
+        payload: {
+          text: "caption",
+          mediaUrl: " https://example.invalid/image.png ",
+          mediaUrls: ["https://example.invalid/image.png", "  "],
+        },
+      }),
+    ).toEqual({ text: "caption\n\nAttachment: https://example.invalid/image.png" });
+    for (const mediaUrl of [
+      "/tmp/local.png",
+      "file:///tmp/local.png",
+      "data:image/png;base64,aA==",
+      "ftp://example.invalid/file.png",
+      "https://",
+      "https:example.invalid/file.png",
+    ]) {
+      expect(() => normalize({ payload: { text: "caption", mediaUrl } })).toThrow(
+        "require remote HTTP(S) URLs",
+      );
+    }
+    for (const code of [...Array.from({ length: 0x21 }, (_, index) => index), 0x7f]) {
+      expect(() =>
+        normalize({
+          payload: { mediaUrl: `https://example.invalid/a${String.fromCharCode(code)}forged` },
+        }),
+      ).toThrow("require remote HTTP(S) URLs");
+    }
   });
 });

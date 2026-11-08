@@ -4,31 +4,26 @@ import {
   readStringParam,
 } from "openclaw/plugin-sdk/channel-actions";
 import type { ChannelMessageActionContext } from "openclaw/plugin-sdk/channel-contract";
+import { createChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveGoogleChatAccount } from "./accounts.js";
 import { sendGoogleChatMessage } from "./api.js";
+import { formatGoogleChatMediaText, formatGoogleChatTextChunks } from "./format.js";
 import { resolveGoogleChatOutboundSpace } from "./targets.js";
 
 const OUTBOUND_MEDIA_KEYS = ["media", "mediaUrl", "path", "filePath", "fileUrl"] as const;
 const STRUCTURED_ATTACHMENT_MEDIA_KEYS = [...OUTBOUND_MEDIA_KEYS, "url"] as const;
 
-function hasGoogleChatOutboundAttachment(params: Record<string, unknown>): boolean {
-  if (OUTBOUND_MEDIA_KEYS.some((key) => readStringParam(params, key) !== undefined)) {
-    return true;
-  }
-  if (readStringArrayParam(params, "mediaUrls") !== undefined) {
-    return true;
-  }
-  if (!Array.isArray(params.attachments)) {
-    return false;
-  }
-  return params.attachments.some(
-    (attachment) =>
-      isRecord(attachment) &&
-      STRUCTURED_ATTACHMENT_MEDIA_KEYS.some(
-        (key) => readStringParam(attachment, key) !== undefined,
-      ),
-  );
+function readGoogleChatMediaUrls(params: Record<string, unknown>): string[] {
+  return [
+    ...OUTBOUND_MEDIA_KEYS.map((key) => readStringParam(params, key)),
+    ...(readStringArrayParam(params, "mediaUrls") ?? []),
+    ...(Array.isArray(params.attachments) ? params.attachments : []).flatMap((attachment) =>
+      isRecord(attachment)
+        ? STRUCTURED_ATTACHMENT_MEDIA_KEYS.map((key) => readStringParam(attachment, key))
+        : [],
+    ),
+  ].filter((value): value is string => value !== undefined);
 }
 
 export async function handleGoogleChatAction({
@@ -39,11 +34,23 @@ export async function handleGoogleChatAction({
   assertDirectAdapterHandoff,
   onPlatformSendDispatch,
 }: ChannelMessageActionContext) {
-  if (action === "upload-file" || (action === "send" && hasGoogleChatOutboundAttachment(params))) {
+  if (action === "upload-file") {
     throw new Error(
       "Google Chat outbound attachments require user OAuth and are not supported by this service-account channel.",
     );
   }
+
+  const mediaUrls = action === "send" ? readGoogleChatMediaUrls(params) : [];
+  const content =
+    action === "send"
+      ? formatGoogleChatMediaText(
+          readStringParam(params, "message", {
+            required: mediaUrls.length === 0,
+            allowEmpty: true,
+          }),
+          mediaUrls,
+        )
+      : "";
 
   const account = resolveGoogleChatAccount({
     cfg,
@@ -55,10 +62,6 @@ export async function handleGoogleChatAction({
 
   if (action === "send") {
     const to = readStringParam(params, "to", { required: true });
-    const content = readStringParam(params, "message", {
-      required: true,
-      allowEmpty: true,
-    });
     const threadId = readStringParam(params, "threadId") ?? readStringParam(params, "replyTo");
     const space = await resolveGoogleChatOutboundSpace({
       account,
@@ -66,14 +69,37 @@ export async function handleGoogleChatAction({
       assertDirectAdapterHandoff,
     });
 
-    const sent = await sendGoogleChatMessage({
-      account,
-      space,
-      text: content,
-      thread: threadId ?? undefined,
-      assertDirectAdapterHandoff,
-      onPlatformSendDispatch,
-    });
+    const chunks = mediaUrls.length
+      ? formatGoogleChatTextChunks(content, account.config.textChunkLimit)
+      : [content];
+    let sent: Awaited<ReturnType<typeof sendGoogleChatMessage>> = null;
+    let deliveryThreadName = threadId ?? undefined;
+    const acceptedText: Array<{ id?: string; text: string }> = [];
+    try {
+      for (const text of chunks) {
+        sent = await sendGoogleChatMessage({
+          account,
+          space,
+          text,
+          thread: deliveryThreadName,
+          assertDirectAdapterHandoff,
+          onPlatformSendDispatch,
+        });
+        if (sent) {
+          acceptedText.push({ id: sent.messageName?.trim() || undefined, text });
+          deliveryThreadName = sent.threadName?.trim() || deliveryThreadName;
+        }
+      }
+    } catch (error) {
+      if (acceptedText.length === 0) {
+        throw error;
+      }
+      throw createChannelPartialDeliveryError(error, {
+        messageIds: acceptedText.flatMap(({ id }) => (id ? [id] : [])),
+        content: acceptedText.map(({ text }) => text).join("\n"),
+        visibleReplySent: true,
+      });
+    }
     return jsonResult({ ok: true, to: space, ...sent });
   }
 
