@@ -31,6 +31,7 @@ import {
 } from "./commands.js";
 import { BrokerFileReads } from "./file-reads.js";
 import { BrokerIpcAdmissionError, createBrokerReceiver, createBrokerSender } from "./ipc.js";
+import { drainUntrackedPipe } from "./pipe.js";
 import {
   childCapacityError,
   type BrokerAdmission,
@@ -40,7 +41,6 @@ import {
   type BrokerRequest,
   type BrokerResponse,
 } from "./protocol.js";
-import { drainUntrackedPipe } from "./pipe.js";
 import { createNativeResourceAuthority } from "./resource-authority.js";
 import {
   BrokerResourceClaims,
