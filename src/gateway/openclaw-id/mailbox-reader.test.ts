@@ -78,6 +78,75 @@ describe("mailbox reader callbacks", () => {
     expect(client.ackMail).toHaveBeenCalledWith("c1", "2");
   });
 
+  it("settles unsupported node mail before acknowledging and saving its cursor", async () => {
+    const node = await generateEd25519Signer();
+    const message: MailboxMessage = {
+      ...rootMail,
+      from: {
+        ...rootMail.from,
+        account_id: null,
+        email: null,
+        display_name: null,
+        device_fp: await fingerprint(formatEd25519PublicKey(node.publicKey)),
+      },
+      payload: {
+        kind: "node_redemption",
+        redemption: await signStatement(
+          "NodeRedemption",
+          {
+            claw_id: "a".repeat(32),
+            invite_id: "b".repeat(32),
+            peer_key: formatIrohEndpointKey(node.publicKey),
+            requested_at: 0,
+            proof: "0".repeat(64),
+            description: { display_name: "node", platform: "linux", commands: [], caps: [] },
+          },
+          node,
+        ),
+      },
+    };
+    const order: string[] = [];
+    const { promise, resolve } = Promise.withResolvers<void>();
+    const submit = vi.fn();
+    const redeem = vi.fn();
+    const onRefused = vi.fn(async () => {
+      order.push("refused");
+    });
+    reader = startMailboxReader({
+      clawId: "c1",
+      cursor: null,
+      client: {
+        receiveMail: vi
+          .fn()
+          .mockResolvedValueOnce({ messages: [message], cursor: "2" })
+          .mockImplementation(() => new Promise(() => {})),
+        ackMail: async () => {
+          order.push("ack");
+        },
+      } as never,
+      sink: {
+        submit,
+        redeem,
+        saveCursor: async () => {
+          order.push("cursor");
+          resolve();
+        },
+      },
+      onEffects: vi.fn(),
+      onRefused,
+      log: { info: vi.fn(), warn: vi.fn() },
+    });
+    await promise;
+    expect(onRefused).toHaveBeenCalledExactlyOnceWith(message, {
+      ok: false,
+      code: "unsupported",
+      detail: "node enrollment is not enabled in this Gateway",
+    });
+    expect(order).toEqual(["refused", "ack", "cursor"]);
+    expect(submit).not.toHaveBeenCalled();
+    expect(redeem).not.toHaveBeenCalled();
+  });
+
   it("applies nothing from a batch that arrives after stop", async () => {
     let release: (batch: unknown) => void = () => {};
     const client = {
