@@ -1,2 +1,2 @@
-# Activity toolbar geometry and preserved search/person/period + live filtering interactions.
-59
+# Activity toolbar geometry and preserved filtering, actions, and lifecycle interactions.
+112

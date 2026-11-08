@@ -47,6 +47,7 @@ suite.define(() => {
             .map((request) => asNullableRecord(request.params))
             .filter((params) => params?.includePeople === true);
 
+        await page.locator(".activity-feed__search").getByRole("button").click();
         await page.locator("openclaw-activity-page").getByRole("searchbox").fill("Subagent");
         await expect
           .poll(async () =>

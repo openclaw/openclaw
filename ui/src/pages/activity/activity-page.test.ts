@@ -8,118 +8,28 @@ import { createDeferred } from "../../../../test/helpers/promise.js";
 import { GatewayRequestError } from "../../api/gateway.ts";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import { createAgentSelectionCapability } from "../../app/agent-selection.ts";
-import type { ApplicationContext } from "../../app/context.ts";
-import {
-  createGatewayEvent,
-  createGatewayStoreTestStore,
-} from "../../app/gateway-store.test-support.ts";
+import { createGatewayEvent } from "../../app/gateway-store.test-support.ts";
 import { presentResult } from "../../e2e/activity-run-inspector.test-fixtures.ts";
 import { i18n } from "../../i18n/index.ts";
-import { createAgentIdentityCapability } from "../../lib/agents/identity.ts";
-import { createAgentCapability } from "../../lib/agents/index.ts";
-import { setAvatarGatewayOrigin } from "../../lib/identity-avatar-context.ts";
-import { createTestSessionCapability } from "../../lib/sessions/session-capability.test-support.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
-import { cleanupSolid } from "../../test-helpers/mount-solid.ts";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import {
   activityHello,
   activityResponse,
   activityRoster,
-  activitySettings,
   createActivityGatewayStub,
   inspectorGateway,
   createActivityPage,
-  createActivityContext,
+  createActivityPageHarness,
   expandFirst,
   previews,
   toolEvent,
-  type TestActivityPage,
 } from "./activity-page.test-support.ts";
 
-const activeGateways = new Set<ApplicationContext["gateway"]>();
-const activeSessions = new Map<ApplicationContext["gateway"], ApplicationContext["sessions"]>();
-const activeAgents = new Map<ApplicationContext["gateway"], ApplicationContext["agents"]>();
-const activeIdentities = new Map<
-  ApplicationContext["gateway"],
-  ApplicationContext["agentIdentity"]
->();
+const { activityContext, activityGateway, bindActivity, syncActivityRoster, cleanup } =
+  createActivityPageHarness();
 
-function activityContext(source: ApplicationContext["gateway"], basePath = ""): ApplicationContext {
-  let sessions = activeSessions.get(source);
-  if (!sessions) {
-    sessions = createTestSessionCapability(source);
-    activeSessions.set(source, sessions);
-  }
-  let agents = activeAgents.get(source);
-  if (!agents) {
-    agents = createAgentCapability(source);
-    activeAgents.set(source, agents);
-  }
-  let agentIdentity = activeIdentities.get(source);
-  if (!agentIdentity) {
-    agentIdentity = createAgentIdentityCapability(source);
-    activeIdentities.set(source, agentIdentity);
-  }
-  return createActivityContext(source, { sessions, agents, agentIdentity }, basePath);
-}
-
-function activityGateway() {
-  const store = createGatewayStoreTestStore({
-    settings: activitySettings(),
-  });
-  activeGateways.add(store.gateway);
-  activityContext(store.gateway);
-  store.gateway.start();
-  store
-    .current()
-    .request.mockImplementation(async (method, params) => activityResponse(method, params));
-  store.current().testOptions.onHello?.(activityHello());
-  return store;
-}
-
-async function bindActivity(
-  source: ApplicationContext["gateway"],
-  basePath = "",
-): Promise<TestActivityPage> {
-  const page = createActivityPage(activityContext(source, basePath), {
-    pathname: `${basePath}/activity`,
-    search: "?view=live",
-    hash: "",
-  });
-  await syncActivityRoster(page);
-  return page;
-}
-
-async function syncActivityRoster(page: TestActivityPage) {
-  await waitForSolid(() =>
-    expect(page.container.querySelectorAll(".activity-current-work__row").length).toBeGreaterThan(
-      0,
-    ),
-  );
-}
-
-afterEach(async () => {
-  cleanupSolid();
-  for (const sessions of activeSessions.values()) {
-    sessions.dispose();
-  }
-  for (const agents of activeAgents.values()) {
-    agents.dispose();
-  }
-  for (const source of activeGateways) {
-    source.stop();
-  }
-  // Credential changes start lazy cache cleanup; finish it before clearing the environment.
-  await vi.dynamicImportSettled();
-  activeGateways.clear();
-  activeSessions.clear();
-  activeAgents.clear();
-  activeIdentities.clear();
-  setAvatarGatewayOrigin(null);
-  localStorage.clear();
-  sessionStorage.clear();
-});
+afterEach(cleanup);
 
 describe("ActivityPage gateway lifecycle", () => {
   it.each(["complete", "omitted"])(
@@ -275,138 +185,6 @@ describe("ActivityPage gateway lifecycle", () => {
     }
   });
 
-  it("keeps primary live filters visible and moves the tool picker into the filter disclosure", async () => {
-    await i18n.setLocale("en");
-    const { gateway: source, current } = activityGateway();
-    const { container } = await bindActivity(source, "/control");
-    current().testOptions.onEvent?.(toolEvent("Mu\u0308nchen", "main", "exec", "live run:a/b"));
-    current().testOptions.onEvent?.(toolEvent("Caf\u00e9"));
-    const toolbar = container.querySelector(".activity-live-toolbar");
-    expect(
-      toolbar?.querySelectorAll('.activity-status-filter input[type="checkbox"]'),
-    ).toHaveLength(3);
-    expect(
-      toolbar?.querySelector(".activity-live-autofollow input.settings-toggle__input"),
-    ).not.toBeNull();
-    const filterTrigger = toolbar?.querySelector<HTMLButtonElement>(
-      "#activity-live-filter-trigger",
-    );
-    expect(filterTrigger?.getAttribute("aria-haspopup")).toBe("dialog");
-    expect(filterTrigger?.getAttribute("aria-expanded")).toBe("false");
-    await waitForSolid(() =>
-      expect(container.querySelector(".activity-entry__run-link")?.getAttribute("href")).toBe(
-        "/control/activity?view=run&run=live%20run%3Aa%2Fb",
-      ),
-    );
-    filterTrigger?.click();
-    expect(document.activeElement).toBe(container.querySelector(".activity-live-filter-popover"));
-
-    const done = toolbar?.querySelectorAll<HTMLInputElement>(
-      '.activity-status-filter input[type="checkbox"]',
-    )[1];
-    done?.click();
-    flush();
-    expect(container.querySelectorAll(".activity-entry")).toHaveLength(0);
-    done?.click();
-    flush();
-    expect(container.querySelectorAll(".activity-entry")).toHaveLength(2);
-
-    const follow = toolbar?.querySelector<HTMLInputElement>(
-      ".activity-live-autofollow input.settings-toggle__input",
-    );
-    follow?.click();
-    flush();
-    expect(follow?.checked).toBe(false);
-    follow?.click();
-    flush();
-    expect(follow?.checked).toBe(true);
-
-    const [expand, collapse] = container.querySelectorAll<HTMLButtonElement>(
-      ".activity-page .settings-section__actions button",
-    );
-    const expansionState = () =>
-      Array.from(
-        container.querySelectorAll<HTMLDetailsElement>(".activity-entry"),
-        (row) => row.open,
-      );
-    expand?.click();
-    flush();
-    expect(expansionState()).toEqual([true, true]);
-    collapse?.click();
-    flush();
-    expect(expansionState()).toEqual([false, false]);
-
-    const search = toolbar?.querySelector<HTMLInputElement>('input[type="search"]');
-    if (!search) {
-      throw new Error("Expected the live activity search input");
-    }
-    search.value = "no matching activity";
-    search.dispatchEvent(new Event("input", { bubbles: true }));
-    flush();
-    expect(container.querySelectorAll(".activity-entry")).toHaveLength(0);
-    search.value = "m\u00fcnchen";
-    search.dispatchEvent(new Event("input", { bubbles: true }));
-    flush();
-    expect(container.querySelectorAll(".activity-entry")).toHaveLength(1);
-    expect(container.textContent).toContain("Mu\u0308nchen output");
-    search.value = "cafe\u0301";
-    search.dispatchEvent(new Event("input", { bubbles: true }));
-    flush();
-    expect(container.querySelectorAll(".activity-entry")).toHaveLength(1);
-
-    const tool = container.querySelector<HTMLSelectElement>(".activity-live-filter-popover select");
-    if (!tool) {
-      throw new Error("Expected the live activity tool filter");
-    }
-    tool.value = "read";
-    tool.dispatchEvent(new Event("change", { bubbles: true }));
-    flush();
-    expect(
-      Array.from(container.querySelectorAll(".activity-entry__tool"), (entry) =>
-        entry.textContent?.trim(),
-      ),
-    ).toEqual(["read"]);
-  });
-
-  it("retains the selected tool when Live entries change", async () => {
-    await i18n.setLocale("en");
-    const { gateway: source, current } = activityGateway();
-    const page = await bindActivity(source);
-    current().testOptions.onEvent?.(toolEvent("exec", "main", "exec"));
-    current().testOptions.onEvent?.(toolEvent("read"));
-    await waitForSolid(() => expect(previews(page)).toEqual(["exec output", "read output"]));
-    const container = page.container;
-    const tool = container.querySelector<HTMLSelectElement>(".activity-live-filter-popover select");
-    if (!tool) {
-      throw new Error("Expected the live activity tool filter");
-    }
-    tool.value = "read";
-    tool.dispatchEvent(new Event("change", { bubbles: true }));
-    flush();
-    expect(tool?.value).toBe("read");
-    expect(tool?.selectedOptions[0]?.textContent).toBe("read");
-    expect(
-      Array.from(container.querySelectorAll(".activity-entry__tool"), (entry) =>
-        entry.textContent?.trim(),
-      ),
-    ).toEqual(["read"]);
-
-    container.querySelector<HTMLButtonElement>(".activity-page button.danger")?.click();
-    current().testOptions.onEvent?.(toolEvent("read"));
-    await waitForSolid(() => expect(previews(page)).toEqual(["read output"]));
-    expect(tool?.value).toBe("read");
-    expect(tool?.selectedOptions[0]?.textContent).toBe("read");
-    expect(container.querySelectorAll(".activity-entry")).toHaveLength(1);
-
-    current().testOptions.onEvent?.(toolEvent("exec", "main", "exec"));
-    tool.value = "";
-    tool.dispatchEvent(new Event("change", { bubbles: true }));
-    await waitForSolid(() => expect(previews(page)).toEqual(["read output", "exec output"]));
-    expect(tool?.value).toBe("");
-    expect(tool?.selectedOptions[0]?.textContent).toBe("All tools");
-    expect(container.querySelectorAll(".activity-entry")).toHaveLength(2);
-  });
-
   it("renders selected answer candidates without tool-only facts", async () => {
     await i18n.setLocale("en");
     const { gateway: source, current } = activityGateway();
@@ -539,58 +317,6 @@ describe("ActivityPage gateway lifecycle", () => {
     await waitForSolid(() => expect(previews(page)).toEqual(["first output", "second output"]));
     expect(firstRow.open).toBe(true);
     expect(page.container.querySelector(".activity-entry")).toBe(firstRow);
-  });
-
-  it("retains Current Work and local filters while the same client reconnects", async () => {
-    const { gateway: source, current } = activityGateway();
-    const page = await bindActivity(source);
-    const filter = page.container.querySelector<HTMLInputElement>("input[type=search]")!;
-    filter.value = "my draft filter";
-    filter.dispatchEvent(new Event("input", { bubbles: true }));
-    flush();
-    const rows = () => page.container.querySelectorAll(".activity-current-work__row");
-    expect(rows()).toHaveLength(2);
-    const firstRow = rows()[0];
-    const currentWork = () => page.container.querySelector(".activity-current-work");
-
-    current().testOptions.onClose?.({ code: 1006, reason: "reconnecting", willRetry: true });
-    flush();
-    expect(rows()).toHaveLength(2);
-    expect(filter.value).toBe("my draft filter");
-
-    const failed = createDeferred<SessionsListResult>();
-    current().request.mockImplementation(async (method, params) =>
-      method === "sessions.list" ? failed.promise : activityResponse(method, params),
-    );
-    current().testOptions.onHello?.(activityHello());
-    flush();
-    expect(rows()).toHaveLength(2);
-    expect(rows()[0]).toBe(firstRow);
-    expect(currentWork()?.getAttribute("aria-busy")).toBe("true");
-    expect(filter.value).toBe("my draft filter");
-    failed.reject(new Error("Current Work refresh unavailable"));
-    const retry = () =>
-      page.container.querySelector<HTMLButtonElement>(".activity-current-work__feedback button");
-    await waitForSolid(() => expect(retry()?.textContent?.trim()).toBe("Retry"));
-    expect(page.container.querySelector(".activity-current-work__feedback")?.textContent).toContain(
-      "Couldn’t load active sessions. Try again.",
-    );
-    expect(rows()).toHaveLength(2);
-    expect(rows()[0]).toBe(firstRow);
-    expect(currentWork()?.getAttribute("aria-busy")).toBe("false");
-    const refreshed = createDeferred<SessionsListResult>();
-    current().request.mockImplementation(async (method, params) =>
-      method === "sessions.list" ? refreshed.promise : activityResponse(method, params),
-    );
-    retry()!.click();
-    flush();
-    expect(rows()).toHaveLength(2);
-    expect(rows()[0]).toBe(firstRow);
-    expect(currentWork()?.getAttribute("aria-busy")).toBe("true");
-    refreshed.resolve(activityRoster([]));
-    await waitForSolid(() => expect(rows()).toHaveLength(0));
-    expect(retry()).toBeNull();
-    expect(filter.value).toBe("my draft filter");
   });
 
   it("keeps reading Current Work across a session-scoped reconnect and clears it when read access is lost", async () => {
@@ -1134,29 +860,6 @@ describe("ActivityPage gateway lifecycle", () => {
 
     expect(container.querySelector('[role="alert"]')).toBeNull();
     await sessions.unsubscribeMessages(recovered);
-  });
-
-  it("preserves activity and Clear when the selected chat changes", async () => {
-    const { gateway: source, current } = activityGateway();
-    const page = await bindActivity(source);
-    current().testOptions.onEvent?.(toolEvent("original"));
-    const originalRow = await expandFirst(page);
-    source.setSessionKey("agent:other:work");
-
-    await waitForSolid(() => expect(previews(page)).toEqual(["original output"]));
-    expect(originalRow.open).toBe(true);
-    expect(page.container.querySelector(".activity-entry")).toBe(originalRow);
-    current().testOptions.onEvent?.(toolEvent("other", "agent:other:work"));
-    await waitForSolid(() => expect(previews(page)).toEqual(["original output", "other output"]));
-
-    const container = page.container;
-    const clear = container.querySelector<HTMLButtonElement>(".activity-page button.danger");
-    expect(clear?.textContent?.trim()).toBe("Clear");
-    clear?.click();
-    source.setSessionKey("main");
-    await waitForSolid(() => expect(previews(page)).toEqual([]));
-    current().testOptions.onEvent?.(toolEvent("after-clear", "agent:other:work"));
-    await waitForSolid(() => expect(previews(page)).toEqual(["after-clear output"]));
   });
 
   it("renders the safe-only inspection response through its route", async () => {

@@ -131,6 +131,7 @@ suite.define(() => {
         gateway = controls;
         const match = { includePeople: true };
         const initialRequests = (await controls.getRequests("sessions.list", match)).length;
+        await page.locator(".activity-feed__search").getByRole("button").click();
         const search = page.locator('.activity-feed__search input[type="search"]');
         originalInput = await search.elementHandle();
         for (const query of ["alpha", "beta", "alpha"]) {

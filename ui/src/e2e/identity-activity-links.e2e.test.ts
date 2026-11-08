@@ -172,6 +172,7 @@ suite.define(() => {
       await expectVisible(adaIdentity);
       await activityPage.getByRole("button", { name: "Last 30 days", exact: true }).click();
       await waitForActivity(page, adaPath, "?time=30d");
+      await activityPage.locator(".activity-feed__search").getByRole("button").click();
       await activityPage.getByRole("searchbox").fill("Ada");
       const filterSearch = "?time=30d&q=Ada";
       await waitForActivity(page, adaPath, filterSearch);

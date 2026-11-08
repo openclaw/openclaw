@@ -56,7 +56,8 @@ suite.define(() => {
         .toHaveLength(2);
       await emitTool("visible-again");
       await expectCount(page.locator(".activity-entry")).toBe(2);
-      await page.getByRole("button", { name: "Expand all", exact: true }).click();
+      await page.locator(".activity-live-actions__trigger").click();
+      await page.getByRole("menuitem", { name: "Expand all", exact: true }).click();
       await showText(page, "visible-again output");
       expect(await page.getByText("hidden output", { exact: true }).count()).toBe(0);
       await navigate("config");

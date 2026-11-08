@@ -87,7 +87,8 @@ suite.define(() => {
         },
       });
       await expectCount(entries).toBe(1);
-      await page.getByRole("button", { name: "Clear", exact: true }).click();
+      await page.locator(".activity-live-actions__trigger").click();
+      await page.getByRole("menuitem", { name: "Clear", exact: true }).click();
       await expectCount(entries).toBe(0);
       expect(await rows.count()).toBe(2);
 

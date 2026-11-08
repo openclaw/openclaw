@@ -4,11 +4,18 @@ import { expect, vi } from "vitest";
 import type { GatewayBrowserClient, GatewayHelloOk } from "../../api/gateway.ts";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
-import { createGatewayEvent } from "../../app/gateway-store.test-support.ts";
+import {
+  createGatewayEvent,
+  createGatewayStoreTestStore,
+} from "../../app/gateway-store.test-support.ts";
 import { loadSettings } from "../../app/settings.ts";
+import { createAgentIdentityCapability } from "../../lib/agents/identity.ts";
+import { createAgentCapability } from "../../lib/agents/index.ts";
+import { setAvatarGatewayOrigin } from "../../lib/identity-avatar-context.ts";
 import { ApplicationProvider } from "../../lib/reactive/context.ts";
+import { createTestSessionCapability } from "../../lib/sessions/session-capability.test-support.ts";
 import { createApplicationGateway } from "../../test-helpers/application-context-fixtures.ts";
-import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import { cleanupSolid, mountSolid } from "../../test-helpers/mount-solid.ts";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { createActivityPageState } from "./activity-page-state.ts";
 import { ActivityPageView } from "./activity-page-view.tsx";
@@ -164,3 +171,94 @@ export const activityResponse = (method: string, params: unknown) =>
       : method === "sessions.messages.subscribe"
         ? params
         : {};
+
+export function createActivityPageHarness() {
+  const activeGateways = new Set<ApplicationContext["gateway"]>();
+  const activeSessions = new Map<ApplicationContext["gateway"], ApplicationContext["sessions"]>();
+  const activeAgents = new Map<ApplicationContext["gateway"], ApplicationContext["agents"]>();
+  const activeIdentities = new Map<
+    ApplicationContext["gateway"],
+    ApplicationContext["agentIdentity"]
+  >();
+
+  function activityContext(
+    source: ApplicationContext["gateway"],
+    basePath = "",
+  ): ApplicationContext {
+    let sessions = activeSessions.get(source);
+    if (!sessions) {
+      sessions = createTestSessionCapability(source);
+      activeSessions.set(source, sessions);
+    }
+    let agents = activeAgents.get(source);
+    if (!agents) {
+      agents = createAgentCapability(source);
+      activeAgents.set(source, agents);
+    }
+    let agentIdentity = activeIdentities.get(source);
+    if (!agentIdentity) {
+      agentIdentity = createAgentIdentityCapability(source);
+      activeIdentities.set(source, agentIdentity);
+    }
+    return createActivityContext(source, { sessions, agents, agentIdentity }, basePath);
+  }
+
+  function activityGateway() {
+    const store = createGatewayStoreTestStore({
+      settings: activitySettings(),
+    });
+    activeGateways.add(store.gateway);
+    activityContext(store.gateway);
+    store.gateway.start();
+    store
+      .current()
+      .request.mockImplementation(async (method, params) => activityResponse(method, params));
+    store.current().testOptions.onHello?.(activityHello());
+    return store;
+  }
+
+  async function bindActivity(
+    source: ApplicationContext["gateway"],
+    basePath = "",
+  ): Promise<TestActivityPage> {
+    const page = createActivityPage(activityContext(source, basePath), {
+      pathname: `${basePath}/activity`,
+      search: "?view=live",
+      hash: "",
+    });
+    await syncActivityRoster(page);
+    return page;
+  }
+
+  async function syncActivityRoster(page: TestActivityPage) {
+    await waitForSolid(() =>
+      expect(page.container.querySelectorAll(".activity-current-work__row").length).toBeGreaterThan(
+        0,
+      ),
+    );
+  }
+
+  async function cleanup() {
+    cleanupSolid();
+    for (const sessions of activeSessions.values()) {
+      sessions.dispose();
+    }
+    for (const agents of activeAgents.values()) {
+      agents.dispose();
+    }
+    for (const source of activeGateways) {
+      source.stop();
+    }
+    // Credential changes start lazy cache cleanup; finish it before clearing the environment.
+    await vi.dynamicImportSettled();
+    activeGateways.clear();
+    activeSessions.clear();
+    activeAgents.clear();
+    activeIdentities.clear();
+    setAvatarGatewayOrigin(null);
+    localStorage.clear();
+    sessionStorage.clear();
+  }
+
+  return { activityContext, activityGateway, bindActivity, syncActivityRoster, cleanup };
+}
