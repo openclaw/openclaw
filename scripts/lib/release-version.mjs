@@ -191,20 +191,6 @@ export function compareReleaseVersions(left, right) {
 }
 
 /**
- * @param {string} runtimeVersion
- * @param {string} hostVersion
- * @param {string} minimum
- * @returns {boolean | null} Null leaves unknown-version handling to the caller.
- */
-export function isRuntimeAdmissibleForFloor(runtimeVersion, hostVersion, minimum) {
-  const comparison = compareReleaseVersions(runtimeVersion, minimum);
-  // Exact pairs are compatible by construction, even below a later SDK floor.
-  // Accepted dev-only mix: main still carrying the last stable version string
-  // with a separately installed published runtime of that version can fail at import.
-  return comparison === null ? null : runtimeVersion === hostVersion || comparison >= 0;
-}
-
-/**
  * @param {string} version
  * @param {string} minimum
  * @returns {boolean}

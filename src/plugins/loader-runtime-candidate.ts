@@ -1,10 +1,10 @@
 import fs from "node:fs";
 import path from "node:path";
-import { isRuntimeAdmissibleForFloor } from "../../scripts/lib/release-version.mjs";
 import { describeRootFileOpenFailure } from "../infra/boundary-file-read.js";
 import { resolveRealpathOrAbsolute } from "../infra/boundary-path.js";
 import type { DeferredPluginMigration } from "../infra/deferred-plugin-migrations.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { isRuntimeAdmissibleForFloor } from "../infra/semver.js";
 import { resolveCompatibilityHostVersion } from "../version.js";
 import { inspectBundleMcpRuntimeSupport } from "./bundle-mcp.js";
 import {

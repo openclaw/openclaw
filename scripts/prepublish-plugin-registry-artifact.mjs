@@ -2,9 +2,9 @@
 import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
+import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { isRuntimeAdmissibleForFloor } from "./lib/release-version.mjs";
 
 export const PREPUBLISH_PLUGIN_REGISTRY_MANIFEST = "prepublish-plugin-registry.json";
 const SCHEMA = "openclaw.prepublish-plugin-registry/v1";
@@ -283,7 +283,13 @@ function readPreparedRegistryPackages(preparedBundleDir, sourceSha, candidateVer
   return entries;
 }
 
-function assertCompatibleRuntimePlugins(repoRoot, sourceSha, candidateVersion, requiredPackages) {
+function assertCompatibleRuntimePlugins(
+  repoRoot,
+  sourceSha,
+  hostVersion,
+  requiredPackages,
+  packageVersions,
+) {
   const policyPath = "src/plugins/official-runtime-plugins.ts";
   const trackedPolicy = execFileSync("git", ["ls-tree", sourceSha, "--", policyPath], {
     cwd: repoRoot,
@@ -329,14 +335,18 @@ process.stdout.write(JSON.stringify(candidates));`,
     ) {
       continue;
     }
+    // Only creation needs the source owner; copied verifiers stay dependency-light.
+    const { isRuntimeAdmissibleForFloor } = createRequire(import.meta.url)(
+      "../src/infra/semver.ts",
+    );
     const floor = candidate.minimumCompatibleVersion;
-    // Source and prepared package identities already match the root host version.
+    const candidateVersion = packageVersions.get(candidate.npmSpec);
     const admissible =
       typeof floor === "string" &&
       floor === floor.trim() &&
       typeof candidateVersion === "string" &&
       candidateVersion === candidateVersion.trim()
-        ? isRuntimeAdmissibleForFloor(candidateVersion, candidateVersion, floor)
+        ? isRuntimeAdmissibleForFloor(candidateVersion, hostVersion, floor)
         : null;
     if (admissible !== true) {
       throw new Error(
@@ -383,17 +393,23 @@ export function createPrepublishPluginRegistryArtifact(params) {
       return [];
     }
     const { packageDir, packageJson } = findPublishablePlugin(repoRoot, packageName);
-    if (packageJson.version !== params.candidateVersion) {
-      throw new Error(`${packageName} version differs from the root package candidate`);
-    }
-    return [{ packageName, packageDir }];
+    return [{ packageName, packageDir, packageJson }];
   });
   assertCompatibleRuntimePlugins(
     repoRoot,
     params.sourceSha,
-    params.candidateVersion,
+    rootPackage.version,
     requiredPackages,
+    new Map([
+      ...packages.map(({ name, version }) => [name, version]),
+      ...pluginSources.map(({ packageName, packageJson }) => [packageName, packageJson.version]),
+    ]),
   );
+  for (const { packageName, packageJson } of pluginSources) {
+    if (packageJson.version !== params.candidateVersion) {
+      throw new Error(`${packageName} version differs from the root package candidate`);
+    }
+  }
   fs.mkdirSync(outputDir, { recursive: true });
   if (fs.readdirSync(outputDir).length !== 0) {
     throw new Error(`prepublish plugin registry output directory must be empty: ${outputDir}`);

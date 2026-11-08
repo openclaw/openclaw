@@ -126,20 +126,23 @@ describe("selected-source prepublish cohort admission", () => {
     },
   );
 
-  it("rejects a below-floor runtime older than the host before building any package", () => {
-    const source = fixture();
-    writePolicy(source.repoRoot, floorPolicy("2026.8.2"));
-    writeJson(path.join(source.repoRoot, "extensions/z-runtime/package.json"), {
-      name: RUNTIME,
-      version: "2026.7.5",
-      openclaw: { release: { publishToNpm: true } },
-    });
-    source.sourceSha = commitRegistrySource(source.repoRoot);
-    expect(() => createPrepublishPluginRegistryArtifact(source)).toThrow(
-      `${RUNTIME} version differs from the root package candidate`,
-    );
-    expectNoPublication(source);
-  });
+  it.each(["2026.7.5", "2026.8.1-alpha.1"])(
+    "rejects below-floor runtime %s older than the host at admission before building any package",
+    (runtimeVersion) => {
+      const source = fixture();
+      writePolicy(source.repoRoot, floorPolicy("2026.8.2"));
+      writeJson(path.join(source.repoRoot, "extensions/z-runtime/package.json"), {
+        name: RUNTIME,
+        version: runtimeVersion,
+        openclaw: { release: { publishToNpm: true } },
+      });
+      source.sourceSha = commitRegistrySource(source.repoRoot);
+      expect(() => createPrepublishPluginRegistryArtifact(source)).toThrow(
+        `${RUNTIME} candidate ${runtimeVersion} does not satisfy selected-source minimum 2026.8.2`,
+      );
+      expectNoPublication(source);
+    },
+  );
 
   it("does not apply an unrequested runtime floor to a different package", () => {
     const source = fixture();
