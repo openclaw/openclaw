@@ -36,11 +36,14 @@ export function encodeNativeWorkerFailure(value: unknown): NativeWorkerFailure {
       return {
         kind: "value",
         value:
-          typeof current === "function" ||
-          typeof current === "symbol" ||
-          (typeof current === "object" && current !== null)
-            ? stringifyNonErrorCause(current)
-            : current,
+          current === null ||
+          current === undefined ||
+          typeof current === "string" ||
+          typeof current === "number" ||
+          typeof current === "boolean" ||
+          typeof current === "bigint"
+            ? current
+            : stringifyNonErrorCause(current),
       };
     }
     const prior = seen.get(current);
