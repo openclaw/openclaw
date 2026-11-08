@@ -164,9 +164,7 @@ export function startStandingIntentMaintenance(params: {
   const targets = new Map(
     params.agentIds.map((agentId) => {
       const options = captureMemoryAgentDatabaseOptions(agentId);
-      // A known empty deadline keeps the match fast path without an extra sweep.
-      const facts = { empty: knownDueAt.get(options.path) === Infinity };
-      return [options.path, { agentId, options, facts }] as const;
+      return [options.path, { agentId, options, facts: { empty: false } }] as const;
     }),
   );
   const jobs = new Map<string, ReturnType<PluginServiceSchedulerV1["schedule"]>>();
