@@ -38,10 +38,11 @@ Authority tests cover the one-hour node invite ceiling, bounded signed descripti
 of tampering/replacement, and preserving the owner-reviewed description after admission.
 The existing statement-vector suite validates every new signed schema and signature.
 
-At this protocol-only stage, the Gateway explicitly settles `node_redemption` mail as
-`unsupported` before acknowledging it or saving the cursor. Advertising a mailbox kind does
-not enable its runtime handler. The Gateway consumer stack replaces this refusal with pending
-node enrollment; it must retain settlement-before-acknowledgment ordering.
+The Gateway consumer dispatches `node_redemption` to its node authority, which verifies the
+redemption and persists pending enrollment without admitting the node. It settles that result
+before acknowledging the mail or saving the cursor. Unhandled kinds still receive an explicit
+`unsupported` refusal through the same settlement path; advertising a mailbox kind alone does
+not enable a runtime handler.
 
 These are protocol proofs, not claims of deployed transport integration. Required integration
 proof belongs to the consuming stack:
