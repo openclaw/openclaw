@@ -180,6 +180,31 @@ afterEach(() => {
 describe("scripts/ci-run-node-test-shard.mts", () => {
   it.each([
     {
+      configs: ["test/vitest/vitest.unit-fast.config.ts"],
+      files: [
+        "test/codex-web-search-policy.integration.test.ts",
+        "test/decision-tool.codex.integration.test.ts",
+      ],
+      preset: "runtime",
+    },
+    {
+      configs: ["test/vitest/vitest.unit-fast-isolated.config.ts"],
+      files: ["test/scripts/type-suppression-inventory.test.ts"],
+      preset: "runtime",
+    },
+    {
+      configs: ["test/vitest/vitest.infra.config.ts"],
+      files: [
+        "src/agents/subagents/announce/subagent-announce.incognito.test.ts",
+        "src/plugins/loader.runtime-registry.test.ts",
+        "test/canonical-descendant.integration.test.ts",
+        "test/codex-web-search-native.integration.test.ts",
+        "test/cron-conversation-delivery.codex.integration.test.ts",
+        "test/skill-usage.codex.integration.test.ts",
+      ],
+      preset: "runtime",
+    },
+    {
       configs: [gatewayDatabaseConfig],
       files: [
         "test/plugins/chat-abort-codex.gateway.test.ts",
