@@ -307,6 +307,8 @@ The **Plugins** hub at `/plugins` browses the catalog. Its **Skills** and
 **Skill workshop** tabs open the per-agent skill manager at `/skills` and Skill
 Workshop at `/skills/workshop`. **Settings → Plugins** at `/settings/plugins`
 shows the searchable local inventory. Select a plugin to open its overview.
+Catalog browsing and search load independently of that inventory. Installation
+stays disabled until the Gateway confirms the current inventory and permissions.
 
 Opening a plugin shows its description, publisher when available, skills, tools,
 MCP servers, and full README on one overview. Select a tool to read its full

@@ -1965,6 +1965,7 @@ src/shared/freebsd-process-identity-native.ts
 src/shared/freebsd-process-identity.ts
 src/shared/gateway-edge-auth-headers.ts
 src/shared/gateway-tailscale-auth-policy.ts
+src/shared/environment-key.ts
 src/shared/global-singleton.ts
 src/shared/http-error-response.ts
 src/shared/immutable-data.ts
