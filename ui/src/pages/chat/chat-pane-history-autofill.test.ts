@@ -119,45 +119,46 @@ it.each(["failure", "exhaustion"] as const)("stops automatic fills after %s", as
   }
 });
 
-it.each([
-  ["bounded snapshot", 0, 400],
-  ["overflowing first page", 2, 501],
-] as const)("reserves %s refill for reader intent", async (_name, offset, height) => {
+it("reopens a trimmed cache boundary before its single automatic fill", async () => {
+  const { pane, state, request, intersect } = setup();
+  state.currentSessionId = "current";
+  state.chatMessages[0] = { ...nativeHistoryMessage(3), __openclaw: { id: "source-3", seq: 3 } };
+  state.chatHistoryPagination = { hasMore: true, needsBoundary: true, totalMessages: 4 };
+  request
+    .mockResolvedValueOnce({
+      messages: [state.chatMessages[0]],
+      sessionId: "current",
+      hasMore: true,
+      olderCursor: "older-2",
+    })
+    .mockResolvedValueOnce({ ...page(1, 3), sessionId: "current" });
+  await intersect();
+  await intersect();
+  expect(state.chatMessages.map(nativeHistorySeq)).toEqual([1, 3, 4]);
+  expect(request.mock.calls.map(([, params]) => params)).toMatchObject([
+    { messageId: "source-3", sessionId: "current", limit: 1 },
+    { cursor: "older-2", limit: 1000 },
+  ]);
+  expect(pane.stagedOlder).toMatchObject({ page: null, load: null });
+});
+
+it("reserves an overflowing first page for reader intent", async () => {
   vi.useFakeTimers();
   const { pane, state, thread, request, setHeight, intersect } = setup(true);
-  const pagination = {
-    hasMore: true,
-    ...(offset === 0 ? { needsBoundary: true as const } : { olderCursor: "older-2" }),
-    totalMessages: offset === 0 ? 1_100 : 4,
-  };
-  if (offset === 0) {
-    state.currentSessionId = "current";
-    state.chatMessages[0] = { ...nativeHistoryMessage(3), __openclaw: { id: "source-3", seq: 3 } };
-  }
+  const pagination = { hasMore: true as const, olderCursor: "older-2", totalMessages: 4 };
   state.chatHistoryPagination = { ...pagination };
-  request.mockResolvedValue(
-    offset === 0
-      ? { messages: [state.chatMessages[0]], sessionId: "current" }
-      : page(1, offset + 1, false),
-  );
-  setHeight(height);
+  request.mockResolvedValue(page(1, 3, false));
+  setHeight(501);
   try {
     await intersect();
-    if (offset === 0) {
-      await intersect();
-    }
     expect(request).not.toHaveBeenCalled();
     expect(state.chatHistoryPagination).toEqual(pagination);
     thread.addEventListener("wheel", (event) => pane.handleTranscriptHistoryIntent(event));
     thread.dispatchEvent(new WheelEvent("wheel", { deltaY: -100 }));
-    if (offset === 2) {
-      expect(request).toHaveBeenCalledOnce();
-    }
+    expect(request).toHaveBeenCalledOnce();
     await pane.loadOlderMessages();
     expect(request).toHaveBeenCalledOnce();
-    expect(request.mock.calls[0]?.[1]).toMatchObject(
-      offset === 0 ? { messageId: "source-3", limit: 1 } : { cursor: "older-2" },
-    );
+    expect(request.mock.calls[0]?.[1]).toMatchObject({ cursor: "older-2" });
   } finally {
     pane.resetOlderMessagesViewport();
     vi.useRealTimers();
