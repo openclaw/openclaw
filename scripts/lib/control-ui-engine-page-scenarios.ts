@@ -2263,7 +2263,7 @@ export function createEnginePageScenarios(
                     ".plugin-catalog-detail__install",
                   );
                   // DOM readiness intentionally does not depend on the router's loader state.
-                  const ready =
+                  const detailReady =
                     location.pathname === pathname &&
                     heading?.checkVisibility() &&
                     heading.textContent?.trim() === "Data plugin 0900" &&
@@ -2272,7 +2272,7 @@ export function createEnginePageScenarios(
                       "Synthetic README is ready independently of installed inventory.",
                     ) &&
                     install?.checkVisibility();
-                  readyFrames = ready ? readyFrames + 1 : 0;
+                  readyFrames = detailReady ? readyFrames + 1 : 0;
                   if (readyFrames >= 2 && install) {
                     const readyAt = performance.now();
                     resolve({
