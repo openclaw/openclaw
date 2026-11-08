@@ -40,6 +40,11 @@ async function browser(initial = true) {
   Object.assign(documentWindow, {
     location: { origin: "http://localhost:18790", href: "http://localhost:18790/", assign },
     history: { replaceState: vi.fn() },
+    screen: { availWidth: 1920, availHeight: 1080 },
+    screenX: 100,
+    screenY: 40,
+    outerWidth: 1280,
+    outerHeight: 900,
     open: () => popup,
     setTimeout,
     clearTimeout,
