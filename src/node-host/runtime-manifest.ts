@@ -5,6 +5,7 @@ import { NODE_CLAUDE_SKILLS_CAPABILITY } from "../infra/node-claude-skill-protoc
 import {
   NODE_AGENT_CLI_CLAUDE_RUN_COMMAND,
   NODE_CLAUDE_NATIVE_AUTH_CAPABILITY,
+  NODE_CLAUDE_THINKING_ENV_CAPABILITY,
   NODE_DEVICE_APPS_COMMAND,
   NODE_EXEC_APPROVALS_COMMANDS,
   NODE_FS_LIST_DIR_COMMAND,
@@ -59,6 +60,10 @@ export function buildNodeHostManifest(params: {
     ["device", params.installedAppsSharingEnabled ? [NODE_DEVICE_APPS_COMMAND] : []],
     [
       NODE_CLAUDE_NATIVE_AUTH_CAPABILITY,
+      params.claudeEnabled ? [NODE_AGENT_CLI_CLAUDE_RUN_COMMAND] : [],
+    ],
+    [
+      NODE_CLAUDE_THINKING_ENV_CAPABILITY,
       params.claudeEnabled ? [NODE_AGENT_CLI_CLAUDE_RUN_COMMAND] : [],
     ],
     [

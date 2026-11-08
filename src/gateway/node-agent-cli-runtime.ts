@@ -1,9 +1,11 @@
 /** In-process Gateway seam for streaming a Claude CLI turn from a paired node. */
 import { randomUUID } from "node:crypto";
+import { NODE_CLAUDE_THINKING_ENV_KEYS } from "../agents/cli-runner/execute-logging.js";
 import type { SystemRunApprovalPlan } from "../infra/exec-approvals.js";
 import {
   NODE_AGENT_CLI_CLAUDE_RUN_COMMAND,
   NODE_CLAUDE_NATIVE_AUTH_CAPABILITY,
+  NODE_CLAUDE_THINKING_ENV_CAPABILITY,
 } from "../infra/node-commands.js";
 import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import {
@@ -86,6 +88,19 @@ export async function invokeNodeClaudeCliRun(params: {
           return true;
         }
       : undefined;
+  // Released nodes reject thinking keys they never allowlisted. A newer node
+  // advertises the capability before the Gateway forwards those keys.
+  const thinkingEnvSupported = node.caps.includes(NODE_CLAUDE_THINKING_ENV_CAPABILITY);
+  const forwardedEnv = params.env
+    ? Object.fromEntries(
+        Object.entries(params.env).filter(
+          ([key]) => thinkingEnvSupported || !NODE_CLAUDE_THINKING_ENV_KEYS.has(key),
+        ),
+      )
+    : undefined;
+  const forwardedClearEnv = params.clearEnv?.filter(
+    (key) => thinkingEnvSupported || !NODE_CLAUDE_THINKING_ENV_KEYS.has(key),
+  );
   const invocation: Parameters<typeof context.nodeRegistry.invoke>[0] = {
     nodeId: params.nodeId,
     expectedConnId: node.connId,
@@ -95,8 +110,8 @@ export async function invokeNodeClaudeCliRun(params: {
       argv: params.argv,
       stdin: params.stdin,
       ...(params.cwd ? { cwd: params.cwd } : {}),
-      ...(params.env ? { env: params.env } : {}),
-      ...(params.clearEnv ? { clearEnv: params.clearEnv } : {}),
+      ...(forwardedEnv && Object.keys(forwardedEnv).length > 0 ? { env: forwardedEnv } : {}),
+      ...(forwardedClearEnv && forwardedClearEnv.length > 0 ? { clearEnv: forwardedClearEnv } : {}),
       // Older, independently updated nodes reject unknown invocation fields.
       ...(params.nativeAuthOnly && node.caps.includes(NODE_CLAUDE_NATIVE_AUTH_CAPABILITY)
         ? { nativeAuthOnly: true }
