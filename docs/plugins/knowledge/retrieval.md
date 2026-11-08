@@ -32,6 +32,9 @@ Queries accept 1–64 word tokens within 500 characters. Punctuation separates
 tokens; `OR`, `NOT`, column syntax, and quotes are not executed as FTS syntax.
 Matching is case- and diacritic-insensitive. There is no stemming, prefix search,
 or language-specific segmentation, so unsegmented CJK substrings may not match.
+Canonically equivalent Unicode spellings (composed NFC and decomposed NFD, e.g.
+Greek `άλφα`) retrieve the same records; stored text, hashes, revisions, and
+snippet offsets stay exact.
 
 Exact lookup accepts up to 200 characters. IDs are case-sensitive; names and
 aliases are normalized (NFKC, lowercase, trimmed, whitespace collapsed) but never

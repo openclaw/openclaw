@@ -382,6 +382,82 @@ it("FTS operators are literal words, malformed/oversized input is rejected, Unic
   }
 });
 
+it("keyword search matches canonically equivalent Unicode spellings without rewriting stored text", async () => {
+  const f = await fixture();
+  const composed = "\u03AC\u03BB\u03C6\u03B1"; // άλφα, NFC (U+03AC)
+  const decomposed = "\u03B1\u0301\u03BB\u03C6\u03B1"; // άλφα, NFD (U+03B1 U+0301)
+  const unaccented = "\u03B1\u03BB\u03C6\u03B1"; // αλφα
+  // Canonically equivalent queries produce one canonical expression; plain words do not change.
+  const canonical = `("${composed}") OR ("${decomposed}")`;
+  expect(keywordExpression({ query: composed })).toBe(canonical);
+  expect(keywordExpression({ query: decomposed })).toBe(canonical);
+  expect(keywordExpression({ query: "alpha OR beta" })).toBe('"alpha" AND "OR" AND "beta"');
+
+  const nfcPath = await f.put("nfc_note", "Greek", `The word ${composed} is saved composed.`);
+  const nfdPath = await f.put("nfd_note", "Greek", `The word ${decomposed} is decomposed.`);
+  await f.put("plain_note", "Greek", `The word ${unaccented} is unaccented.`);
+
+  // Capture full records (body, hash, revision) through the real service record API
+  // before searching; a query that rewrote stored text would change these fields.
+  const recordOf = async (id: string) => (await f.service.record({ id }, f.owner)).record!;
+  const fields = (record: any) => ({
+    body: record.body,
+    hash: record.hash,
+    revision: record.revision,
+  });
+  const canonicalWords: Record<string, { word: string; otherSpelling?: string }> = {
+    nfc_note: { word: composed, otherSpelling: decomposed },
+    nfd_note: { word: decomposed, otherSpelling: composed },
+    plain_note: { word: unaccented },
+  };
+  const before: Record<string, any> = {};
+  for (const id of Object.keys(canonicalWords)) {
+    before[id] = await recordOf(id);
+  }
+
+  // Run both regression searches with full detail so snippets/highlights are exposed.
+  const fullComposed = await f.service.grep({ query: composed, detail: "full" }, f.owner);
+  const fullDecomposed = await f.service.grep({ query: decomposed, detail: "full" }, f.owner);
+  const sorted = (result: any) => ids(result).sort();
+  const byComposed = sorted(fullComposed);
+  const byDecomposed = sorted(fullDecomposed);
+  // Red on the base: the composed query found only the composed note. Canonically
+  // equivalent spellings must retrieve the same records, in either direction.
+  expect(byComposed).toStrictEqual(byDecomposed);
+  expect(byComposed).toContain("nfc_note");
+  expect(byComposed).toContain("nfd_note");
+  // No broad accent folding: an unaccented query is a separate feature and must
+  // not reach the composed accented note.
+  expect(sorted(await f.service.grep({ query: unaccented }, f.owner))).not.toContain("nfc_note");
+
+  // Every full hit's snippet offsets slice the exact original record body (the
+  // bounded-snippet contract: snippet.text === body.slice(start, end)) and identify
+  // the canonical word each note authored, in its own verbatim normalization.
+  for (const result of [fullComposed, fullDecomposed]) {
+    for (const hit of result.hits.filter(isFullHit)) {
+      const { word, otherSpelling } = canonicalWords[hit.record.id]!;
+      const originalBody = before[hit.record.id]!.body as string;
+      expect(hit.snippet.text).toBe(originalBody.slice(hit.snippet.start, hit.snippet.end));
+      expect(hit.snippet.text).toContain(word);
+      if (otherSpelling) {
+        expect(hit.snippet.text).not.toContain(otherSpelling);
+      }
+    }
+  }
+
+  // Re-read the authored notes after searching: body, hash and revision of both the
+  // NFC- and NFD-authored records are unchanged by either canonical search.
+  expect(fields(await recordOf("nfc_note"))).toStrictEqual(fields(before.nfc_note));
+  expect(fields(await recordOf("nfd_note"))).toStrictEqual(fields(before.nfd_note));
+
+  // Stored text stays verbatim, in its authored normalization.
+  const nfcRaw = await readFile(nfcPath, "utf8"),
+    nfdRaw = await readFile(nfdPath, "utf8");
+  expect(nfcRaw).toContain(composed);
+  expect(nfdRaw).toContain(decomposed);
+  expect(nfdRaw).not.toContain(composed);
+});
+
 it("ranking preserves pagination and scope without rereading the filtered corpus", async () => {
   const f = await fixture();
   await f.put("title_record", "Needle", "text", { tags: ["chosen"] });

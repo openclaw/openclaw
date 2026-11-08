@@ -245,9 +245,21 @@ export function keywordExpression(input: SearchInput): string {
   if (!tokens.length || tokens.length > 64) {
     throw new Error("Keyword search requires 1–64 word tokens. Use exact lookup for a name or ID.");
   }
-  return input.mode === "phrase"
-    ? `"${tokens.join(" ")}"`
-    : tokens.map((t) => `"${t}"`).join(input.mode === "any" ? " OR " : " AND ");
+  const build = (words: readonly string[]) =>
+    input.mode === "phrase"
+      ? `"${words.join(" ")}"`
+      : words.map((t) => `"${t}"`).join(input.mode === "any" ? " OR " : " AND ");
+  // FTS5's unicode61 tokenizer does no canonical normalization, so composed (NFC)
+  // and decomposed (NFD) spellings of a word index as distinct terms. The index and
+  // snippet offsets keep stored text verbatim, so query both canonical spellings to
+  // reach either stored form. Words whose NFC/NFD forms coincide (ASCII, CJK,
+  // unaccented) keep one literal: an unaccented query still cannot reach a composed
+  // accented note, so no accent folding is added. One record whose words mix NFC and
+  // NFD within a single multi-word query is a rare accepted gap.
+  const nfc = tokens.map((t) => t.normalize("NFC")),
+    nfd = tokens.map((t) => t.normalize("NFD"));
+  const primary = build(nfc);
+  return nfc.every((t, i) => t === nfd[i]) ? primary : `(${primary}) OR (${build(nfd)})`;
 }
 
 const FTS_COLUMNS = "id UNINDEXED, title, aliases, body, tokenize='unicode61 remove_diacritics 2'";
