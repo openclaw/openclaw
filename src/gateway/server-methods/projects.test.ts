@@ -30,7 +30,6 @@ import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { bumpGatewayAccessRevision } from "../gateway-access-revision.js";
-import { resetProjectVisibilityCacheForTest } from "../project-access.js";
 import * as projectGitHubSearch from "../project-github-search.js";
 import {
   createSessionRowProjection,
@@ -151,7 +150,6 @@ function listProjects(cfg: OpenClawConfig = {}, options: ListOptions = {}) {
 
 beforeEach(() => {
   vi.unstubAllEnvs();
-  resetProjectVisibilityCacheForTest();
   listRegistryRecords.mockClear();
   resolveRepositoryIdentity.mockClear();
 });

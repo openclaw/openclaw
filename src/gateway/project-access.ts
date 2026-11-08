@@ -23,9 +23,9 @@ export type ProjectRequester =
   | { readonly kind: "internal" }
   | { readonly kind: "operator"; readonly scopes: readonly string[] };
 
-export const INTERNAL_PROJECT_REQUESTER: ProjectRequester = Object.freeze({ kind: "internal" });
+const INTERNAL_PROJECT_REQUESTER: ProjectRequester = Object.freeze({ kind: "internal" });
 
-export function operatorProjectRequester(scopes: readonly string[] | undefined): ProjectRequester {
+function operatorProjectRequester(scopes: readonly string[] | undefined): ProjectRequester {
   return { kind: "operator", scopes: scopes ?? [] };
 }
 
@@ -67,12 +67,10 @@ export function hasFullProjectAccess(requester: ProjectRequester): boolean {
 const VISIBILITY_TTL_MS = 10 * 60_000;
 const VISIBILITY_CACHE_LIMIT = 1_000;
 const visibilityCache = new Map<string, { isPublic: boolean; expiresAt: number }>();
-const visibilityLoads = new Map<string, Promise<boolean>>();
 
 export type ProjectAccessOptions = {
   /** Skip the cached answer; use where source is handed out. */
   fresh?: boolean;
-  fetchImpl?: typeof fetch;
 };
 
 function cacheVisibility(key: string, isPublic: boolean): void {
@@ -88,7 +86,6 @@ async function loadRepositoryIsPublic(params: {
   apiBaseUrl: string;
   fullName: string;
   key: string;
-  fetchImpl: typeof fetch;
 }): Promise<boolean> {
   let token: string | undefined;
   try {
@@ -100,7 +97,7 @@ async function loadRepositoryIsPublic(params: {
   try {
     const value = await gitHubPublicApi.fetchGitHubJson(
       new URL(`repos/${params.fullName}`, `${params.apiBaseUrl}/`).href,
-      params.fetchImpl,
+      fetch,
       token,
       undefined,
       params.apiBaseUrl,
@@ -124,6 +121,12 @@ async function isPublicGitHubOrigin(
   originUrl: string | undefined,
   options: ProjectAccessOptions,
 ): Promise<boolean> {
+  // The canonical clone parser drops HTTPS ports; a different endpoint cannot
+  // borrow the configured service's visibility answer. Default :443 normalizes away.
+  const origin = originUrl ? URL.parse(originUrl) : null;
+  if (origin?.protocol === "https:" && origin.port) {
+    return false;
+  }
   const repository = originUrl
     ? parseProjectGitUrl(originUrl, resolveConfiguredGitHubHost(cfg))
     : null;
@@ -138,26 +141,14 @@ async function isPublicGitHubOrigin(
   if (!options.fresh && cached && cached.expiresAt > Date.now()) {
     return cached.isPublic;
   }
-  const inFlight = visibilityLoads.get(key);
-  if (inFlight) {
-    return await inFlight;
-  }
-  const load = loadRepositoryIsPublic({
-    cfg,
-    apiBaseUrl,
-    fullName,
-    key,
-    fetchImpl: options.fetchImpl ?? fetch,
-  }).finally(() => visibilityLoads.delete(key));
-  visibilityLoads.set(key, load);
-  return await load;
+  return await loadRepositoryIsPublic({ cfg, apiBaseUrl, fullName, key });
 }
 
 /**
  * Restricted requesters may use agent-workspace pseudo-projects (governed by
  * roles.agents) and public GitHub repositories on the configured host.
  */
-export async function canRequesterUseProject(
+async function canRequesterUseProject(
   cfg: OpenClawConfig,
   project: Pick<ProjectRegistryIdentity, "source" | "originUrl">,
   requester: ProjectRequester,
@@ -207,9 +198,4 @@ export async function filterProjectsForRequester<
     projects.map((project) => canRequesterUseProject(cfg, project, requester, options)),
   );
   return projects.filter((_, index) => allowed[index]);
-}
-
-export function resetProjectVisibilityCacheForTest(): void {
-  visibilityCache.clear();
-  visibilityLoads.clear();
 }

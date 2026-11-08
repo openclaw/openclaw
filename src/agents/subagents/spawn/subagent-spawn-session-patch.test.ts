@@ -15,11 +15,6 @@ import {
   bindInProcessSessionRun,
   takeInProcessFreshChildSession,
 } from "../../../gateway/in-process-session-run.js";
-import {
-  INTERNAL_PROJECT_REQUESTER,
-  operatorProjectRequester,
-  resetProjectVisibilityCacheForTest,
-} from "../../../gateway/project-access.js";
 import { initializeRepository } from "../../../gateway/server-methods/projects.test-support.js";
 import * as sessionProjectSource from "../../../gateway/session-project-source.js";
 import { registerProjectRegistry } from "../../../projects/project-registry.js";
@@ -39,7 +34,7 @@ type SpawnInput = Parameters<typeof createInitialSubagentSession>[0];
 async function spawn(patch: Partial<SpawnInput> = {}) {
   const input = {
     cfg: {},
-    projectRequester: INTERNAL_PROJECT_REQUESTER,
+    projectRequester: { kind: "internal" as const },
     requesterAgentId: "main",
     targetAgentId: "main",
     childSessionKey,
@@ -92,7 +87,6 @@ it.each([
         throw new Error("inherited source preparation reached");
       },
     });
-    resetProjectVisibilityCacheForTest();
     const fetchImpl = vi.fn<typeof fetch>(
       async () =>
         new Response(JSON.stringify({ visibility: "private" }), {
@@ -103,7 +97,7 @@ it.each([
     vi.stubGlobal("fetch", fetchImpl);
     try {
       const result = await spawn({
-        projectRequester: operatorProjectRequester(["operator.sessions.write"]),
+        projectRequester: { kind: "operator", scopes: ["operator.sessions.write"] },
         worktree: {
           task: "Read README.md",
           ...(source.includes("explicit") ? { projectId: project.id } : {}),

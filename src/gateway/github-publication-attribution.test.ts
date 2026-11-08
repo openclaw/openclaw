@@ -35,7 +35,6 @@ import { readRepositoryGitHubPublicationFixture as readRepositoryGitHubPublicati
 import { readGitHubPublicationRequest } from "./github-publication-store.worker.js";
 import * as repositoryPublicationExecutor from "./github-repository-publication-executor.js";
 import { createRepositoryPublicationFixture } from "./github-repository-publication.test-support.js";
-import { INTERNAL_PROJECT_REQUESTER } from "./project-access.js";
 import { resolveGatewaySessionStoreTargetInWorker } from "./session-utils-store-worker.js";
 
 const mocks = githubPublicationTestMocks();
@@ -293,7 +292,7 @@ describe("Gateway GitHub publication attribution", () => {
     const childKey = "agent:main:subagent:delegated-publication";
     const child = await createInitialSubagentSession({
       cfg: config,
-      projectRequester: INTERNAL_PROJECT_REQUESTER,
+      projectRequester: { kind: "internal" },
       requesterAgentId: "main",
       targetAgentId: "main",
       childSessionKey: childKey,

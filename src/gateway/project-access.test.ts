@@ -8,39 +8,39 @@ import { prepareUserProfileCatalog } from "../state/user-profile-list.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
-  INTERNAL_PROJECT_REQUESTER,
-  canRequesterUseProject,
+  canRequesterUseRepositoryUrl,
   filterProjectsForRequester,
-  operatorProjectRequester,
-  resetProjectVisibilityCacheForTest,
+  type ProjectRequester,
   resolveRunProjectRequester,
 } from "./project-access.js";
 
 const cfg = {} as OpenClawConfig;
-const guest = operatorProjectRequester(["operator.sessions.write"]);
-const contributor = operatorProjectRequester(["operator.read", "operator.sessions.write"]);
-const maintainer = operatorProjectRequester(["operator.write"]);
+const guest: ProjectRequester = { kind: "operator", scopes: ["operator.sessions.write"] };
+const contributor: ProjectRequester = {
+  kind: "operator",
+  scopes: ["operator.read", "operator.sessions.write"],
+};
+const maintainer: ProjectRequester = { kind: "operator", scopes: ["operator.write"] };
 
 function project(name: string) {
-  return { source: "registered" as const, originUrl: `https://github.com/openclaw/${name}.git` };
+  return {
+    source: "registered" as const,
+    originUrl: `https://github.com/project-access-test/${name}.git`,
+  };
 }
 
 function visibilityFetch(visibility: Record<string, string | number>) {
-  return vi.fn<typeof fetch>(async (input) => {
+  const fetchImpl = vi.fn<typeof fetch>(async (input) => {
     const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
     const name = new URL(url).pathname.split("/").at(-1) ?? "";
     const answer = visibility[name];
     if (typeof answer === "number") {
-      return new Response(JSON.stringify({ message: "error" }), {
-        status: answer,
-        headers: { "content-type": "application/json" },
-      });
+      return Response.json({ message: "error" }, { status: answer });
     }
-    return new Response(JSON.stringify({ full_name: `openclaw/${name}`, visibility: answer }), {
-      status: 200,
-      headers: { "content-type": "application/json" },
-    });
+    return Response.json({ visibility: answer });
   });
+  vi.stubGlobal("fetch", fetchImpl);
+  return fetchImpl;
 }
 
 describe("project access", () => {
@@ -48,11 +48,11 @@ describe("project access", () => {
     vi.stubEnv("GH_TOKEN", "");
     vi.stubEnv("GITHUB_TOKEN", "");
     setRuntimeConfigSnapshot(cfg);
-    resetProjectVisibilityCacheForTest();
   });
 
   afterEach(() => {
     vi.unstubAllEnvs();
+    vi.unstubAllGlobals();
     clearRuntimeConfigSnapshot();
   });
 
@@ -68,30 +68,50 @@ describe("project access", () => {
       project("openclaworg"),
       project("handbook"),
       project("gone"),
+      {
+        source: "registered" as const,
+        originUrl: "https://github.com:8443/project-access-test/site.git",
+      },
       { source: "registered" as const, originUrl: "https://gitlab.com/openclaw/site.git" },
       { source: "registered" as const },
       { source: "workspace" as const },
     ];
 
-    await expect(filterProjectsForRequester(cfg, projects, guest, { fetchImpl })).resolves.toEqual([
-      project("site"),
-      { source: "workspace" },
-    ]);
-    await expect(
-      filterProjectsForRequester(cfg, projects, contributor, { fetchImpl }),
-    ).resolves.toEqual([project("site"), { source: "workspace" }]);
+    for (const requester of [guest, contributor]) {
+      await expect(filterProjectsForRequester(cfg, projects, requester)).resolves.toEqual([
+        project("site"),
+        { source: "workspace" },
+      ]);
+    }
     expect(fetchImpl).toHaveBeenCalledTimes(4);
 
     fetchImpl.mockClear();
+    await expect(filterProjectsForRequester(cfg, projects, maintainer)).resolves.toEqual(projects);
     await expect(
-      filterProjectsForRequester(cfg, projects, maintainer, { fetchImpl }),
-    ).resolves.toEqual(projects);
-    await expect(
-      canRequesterUseProject(cfg, project("openclaworg"), INTERNAL_PROJECT_REQUESTER, {
-        fetchImpl,
-      }),
+      canRequesterUseRepositoryUrl(cfg, project("openclaworg").originUrl, { kind: "internal" }),
     ).resolves.toBe(true);
     expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it("does not reuse an older discovery request for a fresh source handoff", async () => {
+    const started = Promise.withResolvers<void>();
+    const held = Promise.withResolvers<Response>();
+    const fetchImpl = vi
+      .fn<typeof fetch>()
+      .mockImplementationOnce(() => {
+        started.resolve();
+        return held.promise;
+      })
+      .mockResolvedValue(Response.json({ visibility: "private" }));
+    vi.stubGlobal("fetch", fetchImpl);
+    const discovery = canRequesterUseRepositoryUrl(cfg, project("race").originUrl, guest);
+    await started.promise;
+    const handoff = canRequesterUseRepositoryUrl(cfg, project("race").originUrl, guest, {
+      fresh: true,
+    });
+    held.resolve(Response.json({ visibility: "public" }));
+    await expect(handoff).resolves.toBe(false);
+    await expect(discovery).resolves.toBe(true);
   });
 
   it("binds background runs to the creator's live role", async () => {
@@ -118,42 +138,54 @@ describe("project access", () => {
           operatorScopes: ["operator.sessions.write"],
         }),
       ).toMatchObject(guest);
+      expect(
+        resolveRunProjectRequester(roleCfg, { profileId: profile.id, operatorScopes: [] }),
+      ).toEqual({ kind: "operator", scopes: [] });
       // Owner, cron and unlinked runs carry no role and stay Gateway-internal.
-      expect(resolveRunProjectRequester(roleCfg, {})).toBe(INTERNAL_PROJECT_REQUESTER);
-      expect(resolveRunProjectRequester(cfg, { profileId: profile.id })).toBe(
-        INTERNAL_PROJECT_REQUESTER,
-      );
+      expect(resolveRunProjectRequester(roleCfg, {})).toEqual({ kind: "internal" });
+      expect(resolveRunProjectRequester(cfg, { profileId: profile.id })).toEqual({
+        kind: "internal",
+      });
     });
   });
 
-  it("caches answers for discovery, rechecks fresh handoffs and never caches failures", async () => {
-    const visibility: Record<string, string | number> = { site: "public", flaky: 403 };
+  it("caches visibility by API and repository, expires answers and retries failures", async () => {
+    let now = Date.now();
+    using _ = vi.spyOn(Date, "now").mockImplementation(() => now);
+    const visibility: Record<string, string | number> = { cached: "public", flaky: 403 };
     const fetchImpl = visibilityFetch(visibility);
+    const check = (name = "cached", fresh = false) =>
+      canRequesterUseRepositoryUrl(cfg, project(name).originUrl, guest, { fresh });
 
-    await expect(canRequesterUseProject(cfg, project("site"), guest, { fetchImpl })).resolves.toBe(
-      true,
-    );
-    visibility.site = "private";
-    // Discovery may lag a public-to-private change by the TTL...
-    await expect(canRequesterUseProject(cfg, project("site"), guest, { fetchImpl })).resolves.toBe(
-      true,
-    );
-    // ...but handing out source asks GitHub again.
-    await expect(
-      canRequesterUseProject(cfg, project("site"), guest, { fetchImpl, fresh: true }),
-    ).resolves.toBe(false);
-    await expect(canRequesterUseProject(cfg, project("site"), guest, { fetchImpl })).resolves.toBe(
-      false,
-    );
-
-    // A rate-limited or failed lookup denies and is retried next time.
-    await expect(canRequesterUseProject(cfg, project("flaky"), guest, { fetchImpl })).resolves.toBe(
-      false,
-    );
+    await expect(check()).resolves.toBe(true);
+    visibility.cached = "private";
+    await expect(check()).resolves.toBe(true);
+    await expect(check("cached", true)).resolves.toBe(false);
+    visibility.cached = "public";
+    await expect(check()).resolves.toBe(false);
+    now += 10 * 60_000;
+    await expect(check()).resolves.toBe(true);
+    await expect(check("flaky")).resolves.toBe(false);
     visibility.flaky = "public";
-    await expect(canRequesterUseProject(cfg, project("flaky"), guest, { fetchImpl })).resolves.toBe(
-      true,
+    await expect(check("flaky")).resolves.toBe(true);
+    expect(fetchImpl).toHaveBeenCalledTimes(5);
+
+    const enterprise = {
+      gateway: {
+        github: { host: "ghe.example.test", apiBaseUrl: "https://ghe.example.test/api/v3" },
+      },
+    };
+    const enterpriseProject = {
+      source: "registered" as const,
+      originUrl: "https://ghe.example.test/project-access-test/cached.git",
+    };
+    visibility.cached = "internal";
+    await expect(
+      canRequesterUseRepositoryUrl(enterprise, enterpriseProject.originUrl, guest),
+    ).resolves.toBe(false);
+    expect(fetchImpl.mock.lastCall?.[0]).toBe(
+      "https://ghe.example.test/api/v3/repos/project-access-test/cached",
     );
-    expect(fetchImpl).toHaveBeenCalledTimes(4);
+    await expect(check()).resolves.toBe(true);
   });
 });

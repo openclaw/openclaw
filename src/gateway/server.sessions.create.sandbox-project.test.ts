@@ -11,7 +11,6 @@ import { loadSessionEntry } from "../config/sessions/session-accessor.js";
 import { runGitReadOperation } from "../infra/git-read-cache.js";
 import { registerProjectRegistry } from "../projects/project-registry.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
-import { resetProjectVisibilityCacheForTest } from "./project-access.js";
 import { createDirectChatContext } from "./server-chat.agent-events.test-helpers.js";
 import { handleGatewayRequest } from "./server-methods.js";
 import {
@@ -55,7 +54,6 @@ async function publishOrigin(repo: string, name: string) {
 
 /** Restricted roles see only repositories GitHub reports as public. */
 function stubRepositoryVisibility(visibility: Record<string, string>) {
-  resetProjectVisibilityCacheForTest();
   const fetchImpl = vi.fn<typeof fetch>(async (input) => {
     const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
     const value = visibility[new URL(url).pathname.replace(/^\/repos\//u, "")];
@@ -77,8 +75,10 @@ test.each(["all", "off"] as const)(
     const root = tempDirs.make("openclaw-session-sandbox-project-");
     const workspace = await initializeRepository(root, "workspace");
     const outside = await initializeRepository(root, "outside");
-    await publishOrigin(outside, "openclaw/site");
-    stubRepositoryVisibility({ "openclaw/site": "public" });
+    const repository = `openclaw/sandbox-project-${mode}`;
+    await publishOrigin(outside, repository);
+    const visibility = { [repository]: "public" };
+    stubRepositoryVisibility(visibility);
     testState.agentConfig = { workspace, sandbox: { mode } };
     const { storePath } = await createSessionStoreDir();
     const project = await registerProjectRegistry({ path: outside });
@@ -125,7 +125,10 @@ test.each(["all", "off"] as const)(
         type: "req" as const,
         id: method,
         method,
-        params: { agentId: "main", ...params },
+        params:
+          method === "sessions.create" || method === "projects.checkoutOptions"
+            ? { agentId: "main", ...params }
+            : params,
       };
       await handleGatewayRequest({ req, client, context, respond, isWebchatConnect: () => false });
       expect(respond).toHaveBeenCalledOnce();
@@ -198,123 +201,26 @@ test.each(["all", "off"] as const)(
         },
       });
     }
+    // A cached public picker answer cannot authorize source after visibility changes.
+    visibility[repository] = "private";
+    expect(await request("sessions.create", { projectId: project.id, worktree: true })).toEqual([
+      false,
+      undefined,
+      { code: "INVALID_REQUEST", message: `unknown project id: ${project.id}` },
+    ]);
+    await expectOptions(project.id, false, false);
+    const [, listed] = (await request("projects.list", {}))!;
+    expect(
+      (listed as { projects: { id: string }[] }).projects.map((entry) => entry.id),
+    ).not.toContain(project.id);
+    for (const [method, params] of [
+      ["sessions.create", { projectGitUrl: `https://github.com/${repository}.git` }],
+      ["projects.searchRemote", { query: repository }],
+      ["worktrees.list", {}],
+    ] as const) {
+      const denied = await request(method, params);
+      expect(denied?.[0], method).toBe(false);
+      expect(JSON.stringify(denied?.[2]), method).toContain("operator.write");
+    }
   },
 );
-
-test("restricted roles cannot discover, open, clone, search or list worktrees of a private repository", async () => {
-  const root = tempDirs.make("openclaw-session-private-project-");
-  const workspace = await initializeRepository(root, "workspace");
-  const repos = {
-    public: await initializeRepository(root, "public"),
-    private: await initializeRepository(root, "private"),
-  };
-  await publishOrigin(repos.public, "openclaw/site");
-  await publishOrigin(repos.private, "openclaw/openclaworg");
-  const fetchImpl = stubRepositoryVisibility({
-    "openclaw/site": "public",
-    "openclaw/openclaworg": "private",
-  });
-  testState.agentConfig = { workspace, sandbox: { mode: "all" } };
-  await createSessionStoreDir();
-  const publicProject = await registerProjectRegistry({ path: repos.public });
-  const privateProject = await registerProjectRegistry({ path: repos.private });
-  const contributorScopes = [
-    "operator.read",
-    "operator.sessions.write",
-    "operator.approvals",
-    "operator.questions",
-  ] as const;
-  const baseCfg = getRuntimeConfig();
-  const cfg = {
-    ...baseCfg,
-    agents: {
-      ...baseCfg.agents,
-      entries: {
-        ...baseCfg.agents?.entries,
-        main: { ...baseCfg.agents?.entries?.main, workspace, sandbox: { mode: "all" as const } },
-      },
-    },
-    gateway: {
-      ...baseCfg.gateway,
-      roles: {
-        default: "contributor",
-        definitions: {
-          contributor: {
-            scopes: [...contributorScopes],
-            agents: ["main"],
-            sessions: { others: "view" as const },
-            sandbox: "required" as const,
-          },
-        },
-      },
-    },
-  };
-  const context = createDirectChatContext({ getRuntimeConfig: () => cfg });
-  context.readPreparedGatewayModelCatalog = async () => {
-    const catalog = await context.loadGatewayModelCatalogSnapshot();
-    return { entries: catalog.entries, routeVariants: catalog.routeVariants };
-  };
-  await initializeSessionReadContext(context);
-  const operator = (email: string, scopes: readonly string[]) => {
-    const client = identifiedClient(ensureProfileForEmail(email).id);
-    client.connect.scopes = [...scopes];
-    return client;
-  };
-  // The live team Gateway's guest role holds only operator.sessions.write.
-  const guest = operator("private-guest@example.test", ["operator.sessions.write"]);
-  const contributor = operator("private-contributor@example.test", contributorScopes);
-  const request = async (
-    client: ReturnType<typeof operator>,
-    method: string,
-    params: Record<string, unknown>,
-  ) => {
-    const respond = vi.fn();
-    await handleGatewayRequest({
-      req: { type: "req" as const, id: method, method, params },
-      client,
-      context,
-      respond,
-      isWebchatConnect: () => false,
-    });
-    return respond.mock.calls[0];
-  };
-
-  const [, listed] = (await request(guest, "projects.list", {})) ?? [];
-  const listedIds = (listed as { projects: { id: string }[] }).projects.map(
-    (project) => project.id,
-  );
-  expect(listedIds).toContain(publicProject.id);
-  expect(listedIds).not.toContain(privateProject.id);
-  expect(
-    await request(guest, "projects.checkoutOptions", {
-      agentId: "main",
-      projectId: privateProject.id,
-    }),
-  ).toEqual([true, { current: false, worktree: false }, undefined]);
-  expect(
-    await request(guest, "sessions.create", {
-      agentId: "main",
-      projectId: privateProject.id,
-      worktree: true,
-    }),
-  ).toMatchObject([
-    false,
-    undefined,
-    { code: "INVALID_REQUEST", message: `unknown project id: ${privateProject.id}` },
-  ]);
-  // Pasting the URL would reuse the registered row with the Gateway's GitHub token.
-  for (const [client, method, params] of [
-    [
-      guest,
-      "sessions.create",
-      { agentId: "main", projectGitUrl: "https://github.com/openclaw/openclaworg.git" },
-    ],
-    [contributor, "projects.searchRemote", { query: "openclaw/openclaworg" }],
-    [contributor, "worktrees.list", {}],
-  ] as const) {
-    const denied = await request(client, method, params);
-    expect(denied?.[0], method).toBe(false);
-    expect(JSON.stringify(denied?.[2]), method).toContain("operator.write");
-  }
-  expect(fetchImpl).toHaveBeenCalled();
-});
