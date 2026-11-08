@@ -72,17 +72,21 @@ function answer() {
       visibleOutput: "file content",
     });
   }
-  if (active.prompt === "usage") {
-    for (const [promptTokens, outputTokens] of [
-      [1000, 20],
-      [1200, 34],
-    ]) {
+  if (active.prompt === "usage" || active.prompt === "usage-zero") {
+    const completions =
+      active.prompt === "usage"
+        ? [
+            [1000, 20],
+            [1200, 34],
+          ]
+        : [[0, 0]];
+    for (const [promptTokens, outputTokens] of completions) {
       const totalTokens = promptTokens + outputTokens;
       const usage = {
         inputTokens: promptTokens,
         outputTokens,
         cachedTokens: 0,
-        reasoningTokens: 5,
+        reasoningTokens: promptTokens ? 5 : 0,
       };
       event("session/tokenUsage", { promptTokens, totalTokens, usage, modelId: "muse-spark-1.3" });
     }

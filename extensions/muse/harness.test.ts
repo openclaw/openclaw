@@ -388,6 +388,12 @@ describe("Muse native MSP harness", () => {
       total: 2254,
       contextUsage: { state: "available", promptTokens: 1200, totalTokens: 1234 },
     });
+    // Measured zero is available usage; the host accumulator keeps it, unlike absent usage.
+    expect((await run({ prompt: "usage-zero" })).attemptUsage).toMatchObject({
+      usageReport: { state: "available" },
+      total: 0,
+      contextUsage: { state: "available", promptTokens: 0, totalTokens: 0 },
+    });
     expect((await run()).attemptUsage).toBeUndefined();
   });
 

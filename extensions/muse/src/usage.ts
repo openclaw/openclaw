@@ -38,7 +38,9 @@ export function museTurnUsage(
   }
   const sum = (key: keyof MuseCompletionUsage) =>
     completions.reduce((total, completion) => total + completion[key], 0);
+  // A validated notice is measured usage, including an explicit zero.
   const usage = normalizeUsage({
+    usageReport: { state: "available" },
     input: sum("prompt"),
     output: sum("total") - sum("prompt"),
     reasoningTokens: sum("reasoning"),
