@@ -1,8 +1,17 @@
-import { readFile, writeFile } from "node:fs/promises";
+import { writeFile } from "node:fs/promises";
 import { createOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { describe, expect, it, vi } from "vitest";
 import { signalPlugin } from "./channel.js";
 import * as client from "./client-adapter.js";
+
+function decodeInlineAttachment(attachment: string): Buffer {
+  const marker = ";base64,";
+  const markerAt = attachment.indexOf(marker);
+  if (!attachment.startsWith("data:") || markerAt === -1) {
+    throw new Error("Expected inline Signal attachment");
+  }
+  return Buffer.from(attachment.slice(markerAt + marker.length), "base64");
+}
 
 describe("Signal account media limits", () => {
   it.each(["work", undefined])("enforces the resolved account cap for %s", async (accountId) => {
@@ -13,9 +22,9 @@ describe("Signal account media limits", () => {
       .mockImplementation(async (_method, params) => {
         const attachment = Array.isArray(params?.attachments) ? params.attachments[0] : undefined;
         if (typeof attachment !== "string") {
-          throw new Error("Missing native attachment path");
+          throw new Error("Missing native attachment");
         }
-        delivered.push(await readFile(attachment));
+        delivered.push(decodeInlineAttachment(attachment));
         return { timestamp: 1234567890 };
       });
     try {
