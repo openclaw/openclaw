@@ -99,7 +99,7 @@ export function createApplicationGateway(
   };
   let client: GatewayBrowserClient | null = null;
   const updateAvatarContext = (hello?: GatewayHelloOk) =>
-    updateGatewayAvatarContext(client, connection, options.resourceBasePath, hello);
+    updateGatewayAvatarContext(client, connection, options.resourceBasePath, hello, isCurrentHello);
   const selfProfile = createGatewaySelfProfile({
     getSnapshot: () => snapshot,
     getConnection: () => connection,
@@ -461,7 +461,6 @@ export function createApplicationGateway(
           }
           return;
         }
-        updateAvatarContext(hello);
         if (persistConnectionSettings) {
           settings = loadSettings();
         }
@@ -495,6 +494,7 @@ export function createApplicationGateway(
               nextClient.instanceId,
             ) ?? undefined,
         });
+        updateAvatarContext(hello);
         void deferredIntents.flush();
         if (isCurrentClient(nextClient) && !snapshot.selfUser) {
           refreshSelfProfile();
@@ -593,6 +593,7 @@ export function createApplicationGateway(
           lastErrorCode: startupPending ? null : busy ? "GATEWAY_BUSY" : lastErrorCode,
           lastErrorAuthReason: startupPending ? null : readConnectionAuthReason(error?.details),
         });
+        updateAvatarContext();
       },
       onGap: ({ expected, received }) => {
         if (!isCurrentClient(nextClient)) {
@@ -677,10 +678,8 @@ export function createApplicationGateway(
     },
     start: () => connect(),
     stop: () => {
-      if (client?.offlineRecoveryRetired) {
-        updateAvatarContext(snapshot.hello ?? undefined);
-      }
       stopped = true;
+      updateAvatarContext();
       deferredIntents.discard();
       clearOfflineIndicatorTimer();
       setUnavailableDeadline("restartPending");

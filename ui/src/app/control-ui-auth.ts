@@ -2,6 +2,7 @@ import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeUniqueTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import { formatUiExternalText } from "../lib/format-error.ts";
 import { fetchControlUiResource } from "./browser-http.ts";
+import { isSameOriginGateway } from "./gateway-control-ui-reload.ts";
 
 /** Decode a Gateway JSON response once, preserving validation details and HTTP status. */
 export async function readControlUiJsonResponse(response: Response, signal: AbortSignal) {
@@ -30,7 +31,7 @@ export async function readControlUiJsonResponse(response: Response, signal: Abor
 }
 
 export type ControlUiAuthSource = {
-  hello?: { auth?: { deviceToken?: string | null } | null } | null;
+  hello?: { auth?: { deviceToken?: string | null; method?: string } | null } | null;
   settings?: { token?: string | null } | null;
   password?: string | null;
 };
@@ -43,6 +44,16 @@ export function resolveControlUiAuthCandidates(source: ControlUiAuthSource): str
     source.settings?.token,
     source.password,
   ]).filter((token) => !/[\r\n]/.test(token));
+}
+
+/** Preselect the confirmed connection identity for Gateway-owned HTTP reads, never after denial. */
+export function resolveControlUiReadAuthCandidates(
+  source: ControlUiAuthSource,
+  gatewayUrl: string,
+): string[] {
+  return source.hello?.auth?.method === "tailscale" && isSameOriginGateway(gatewayUrl)
+    ? []
+    : resolveControlUiAuthCandidates(source);
 }
 
 export function resolveControlUiAuthToken(source: ControlUiAuthSource): string | null {

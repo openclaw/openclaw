@@ -1,5 +1,9 @@
-import { describe, expect, it } from "vitest";
-import { resolveControlUiAuthCandidates, resolveControlUiAuthToken } from "./control-ui-auth.ts";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  resolveControlUiAuthCandidates,
+  resolveControlUiAuthToken,
+  resolveControlUiReadAuthCandidates,
+} from "./control-ui-auth.ts";
 
 describe("Control UI credentials", () => {
   it.each([
@@ -56,5 +60,28 @@ describe("Control UI credentials", () => {
   ])("$name", ({ source, expected }) => {
     expect(resolveControlUiAuthCandidates(source)).toEqual(expected);
     expect(resolveControlUiAuthToken(source)).toBe(expected[0] ?? null);
+  });
+});
+
+describe("Gateway read credential selection", () => {
+  afterEach(() => vi.unstubAllGlobals());
+  it.each([
+    ["tailscale", "wss://gateway.example/ws", []],
+    ["tailscale", "wss://other.example/ws", ["device", "saved"]],
+    ["token", "wss://gateway.example/ws", ["device", "saved"]],
+    ["device-token", "wss://gateway.example/ws", ["device", "saved"]],
+    ["trusted-proxy", "wss://gateway.example/ws", ["device", "saved"]],
+    [undefined, "wss://gateway.example/ws", ["device", "saved"]],
+  ])("preserves the intended identity for %s through %s", (method, gatewayUrl, expected) => {
+    vi.stubGlobal("location", { origin: "https://gateway.example" });
+    expect(
+      resolveControlUiReadAuthCandidates(
+        {
+          hello: { auth: { method, deviceToken: "device" } },
+          settings: { token: "saved" },
+        },
+        gatewayUrl,
+      ),
+    ).toEqual(expected);
   });
 });

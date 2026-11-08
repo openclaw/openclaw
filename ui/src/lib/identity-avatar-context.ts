@@ -9,6 +9,8 @@ let appGatewayResourceBasePath = "";
 let appGatewayAuthTokens: readonly string[] = [];
 let appGatewayStorageScope: string | undefined;
 let gatewayRequests = new AbortController();
+const unmanagedContextIsCurrent = () => true;
+let isGatewayCurrent = unmanagedContextIsCurrent;
 // More than one cache is keyed by the Gateway HTTP context (avatars,
 // geolocation), so every subscriber must be notified on a switch. A single slot
 // would silently drop whichever registered first.
@@ -40,12 +42,17 @@ export async function fetchGatewayContextResource(
     AbortSignal.timeout(timeoutMs),
     ...(signal ? [signal] : []),
   ]);
+  const isCurrent = isGatewayCurrent;
   const response = await fetchWithControlUiAuth(
     url,
     { credentials: "include", signal: requestSignal },
     appGatewayAuthTokens,
-    () => true,
+    isCurrent,
   );
+  if (!isCurrent()) {
+    void response.body?.cancel().catch(() => undefined);
+    throw new DOMException("Gateway request is no longer current", "AbortError");
+  }
   if (response.status === 401 || response.status === 403) {
     await response.body?.cancel();
     throw new Error("Gateway credentials rejected");
@@ -74,6 +81,7 @@ export function setAvatarGatewayOrigin(
   authTokens: readonly string[] = [],
   resourceBasePath = "",
   storageScope?: string,
+  isCurrent: () => boolean = unmanagedContextIsCurrent,
 ): void {
   const nextOrigin =
     gatewayUrl && isConfiguredUiDevGateway(gatewayUrl)
@@ -82,14 +90,15 @@ export function setAvatarGatewayOrigin(
   const documentOrigin = globalThis.location?.origin;
   const nextResourceBasePath =
     nextOrigin && documentOrigin === nextOrigin ? normalizeBasePath(resourceBasePath) : "";
-  if (
+  const contextChanged =
+    isGatewayCurrent !== isCurrent ||
     appGatewayOrigin !== nextOrigin ||
     appGatewayResourceBasePath !== nextResourceBasePath ||
     // Initial admission adopts pending reads; replacement or retirement invalidates them.
     (appGatewayStorageScope !== undefined && appGatewayStorageScope !== storageScope) ||
     appGatewayAuthTokens.length !== authTokens.length ||
-    appGatewayAuthTokens.some((token, index) => token !== authTokens[index])
-  ) {
+    appGatewayAuthTokens.some((token, index) => token !== authTokens[index]);
+  if (contextChanged) {
     // A replaced credential context must not finish an old fetch or advance
     // its rejected credential to another saved secret.
     gatewayRequests.abort();
@@ -100,4 +109,5 @@ export function setAvatarGatewayOrigin(
   appGatewayResourceBasePath = nextResourceBasePath;
   appGatewayAuthTokens = [...authTokens];
   appGatewayStorageScope = storageScope;
+  isGatewayCurrent = isCurrent;
 }

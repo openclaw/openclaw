@@ -507,3 +507,27 @@ it.each([
     }
   },
 );
+
+it("loads a background through the confirmed same-origin Tailscale identity", async () => {
+  const { context, state } = fixture();
+  state.hello = {
+    type: "hello-ok",
+    protocol: 1,
+    auth: {
+      role: "operator",
+      scopes: ["operator.read"],
+      method: "tailscale",
+      deviceToken: "synthetic-device",
+    },
+  };
+  const request = vi
+    .mocked(fetch)
+    .mockImplementation(async (_url, init) =>
+      new Headers(init?.headers).has("authorization")
+        ? new Response(null, { status: 401 })
+        : imageResponse(),
+    );
+  await expect(readImage(context)).resolves.toBe("blob:background-a");
+  expect(request).toHaveBeenCalledOnce();
+  expect(new Headers(request.mock.calls[0]?.[1]?.headers).has("authorization")).toBe(false);
+});

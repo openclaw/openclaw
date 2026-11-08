@@ -10,6 +10,7 @@ import type { GatewayHelloOk } from "../api/gateway.ts";
 import { i18n } from "../i18n/lib/translate.ts";
 import { goalOperationScopePrefix } from "../lib/chat/goal-operation-storage.ts";
 import {
+  fetchGatewayContextResource,
   readAvatarGatewayContext,
   setAvatarGatewayOrigin,
 } from "../lib/identity-avatar-context.ts";
@@ -67,6 +68,31 @@ describe("createApplicationGateway authentication diagnostics", () => {
   const payloads = () => gateway.eventLog.map((entry) => entry.payload);
   const disconnect = () =>
     current().testOptions.onClose?.({ code: 1006, reason: "lost", willRetry: true });
+
+  it("retires ambient image reads on disconnect even while hello metadata is retained", async () => {
+    gateway.start();
+    accept({
+      ...HELLO,
+      auth: {
+        role: "operator",
+        scopes: ["operator.read"],
+        method: "tailscale",
+        deviceToken: "synthetic-device",
+      },
+    });
+    const response = createDeferred<Response>();
+    const request = vi.fn(() => response.promise);
+    vi.stubGlobal("fetch", request);
+    const pending = fetchGatewayContextResource("/avatar/main", 1000);
+    const rejected = expect(pending).rejects.toMatchObject({ name: "AbortError" });
+    disconnect();
+    response.resolve(new Response(new Blob(["avatar"])));
+    await rejected;
+    await expect(fetchGatewayContextResource("/avatar/main", 1000)).rejects.toMatchObject({
+      name: "AbortError",
+    });
+    expect(request).toHaveBeenCalledOnce();
+  });
 
   beforeEach(() => {
     vi.spyOn(Math, "random").mockReturnValue(0);

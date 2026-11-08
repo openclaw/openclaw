@@ -4,7 +4,10 @@ import {
 } from "../../../packages/gateway-protocol/src/schema/background-preferences.ts";
 import { buildControlUiUserBackgroundPath } from "../../../src/gateway/control-ui-user-background-route.ts";
 import type { ApplicationContext } from "../app/context.ts";
-import { fetchWithControlUiAuth, resolveControlUiAuthCandidates } from "../app/control-ui-auth.ts";
+import {
+  fetchWithControlUiAuth,
+  resolveControlUiReadAuthCandidates,
+} from "../app/control-ui-auth.ts";
 import { gatewayWebSocketTransportUrl } from "../dev-gateway.ts";
 
 function readScope(context: ApplicationContext, assetId: string) {
@@ -19,11 +22,10 @@ function readScope(context: ApplicationContext, assetId: string) {
   ) {
     return null;
   }
-  const auth = resolveControlUiAuthCandidates({
-    hello: snapshot.hello,
-    settings: gateway.connection,
-    password: gateway.connection.password,
-  });
+  const auth = resolveControlUiReadAuthCandidates(
+    { hello: snapshot.hello, settings: gateway.connection, password: gateway.connection.password },
+    gateway.connection.gatewayUrl,
+  );
   const transport = new URL(gatewayWebSocketTransportUrl(gateway.connection.gatewayUrl));
   transport.protocol = transport.protocol.replace(/^ws/u, "http");
   // A remote WebSocket pathname is not an HTTP resource mount.
