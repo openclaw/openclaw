@@ -1,2 +1,2 @@
-793
-# Exact current-tree closeout regression budget: 620 lines of existing recovery, isolation, snapshot and launcher debt plus 162 new real-proof guard lines and 11 explicit trusted-bootstrap read-only mount assertions. No spare test-line headroom is granted.
+916
+# Exact main-integrated closeout budget: 824 net recovery, isolation, snapshot, launcher and real-proof guard lines plus 92 inherited main test-line debt. The prior 793 grant used 31 lines of old-base slack that current main no longer has. No spare headroom; shared scalar unchanged.

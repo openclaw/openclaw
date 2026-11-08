@@ -513,6 +513,7 @@ async function main() {
         stdio: ["ignore", logFd, logFd],
       });
       fs.closeSync(logFd);
+      const helperPid = child.pid;
       const done = new Promise((resolve, reject) => {
         child.once("error", reject);
         child.once("exit", (code, signal) => resolve({ code, signal }));
@@ -560,7 +561,8 @@ async function main() {
         // cleanup. Prove the container survives client termination, then remove.
         // SIGKILL models the runner hard-stop without Docker signal proxying
         // terminating the container on our behalf.
-        process.kill(-child.pid, "SIGKILL");
+        assert(helperPid !== undefined, "helper must have started before cancellation");
+        process.kill(-helperPid, "SIGKILL");
         exit = await done;
         assert.notEqual(exit.code, 0);
         assert.equal(
@@ -574,7 +576,9 @@ async function main() {
       } else {
         const timeout = setTimeout(() => {
           try {
-            process.kill(-child.pid, "SIGKILL");
+            if (helperPid !== undefined) {
+              process.kill(-helperPid, "SIGKILL");
+            }
           } catch {}
         }, 17 * 60_000);
         try {
