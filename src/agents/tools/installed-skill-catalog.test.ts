@@ -48,6 +48,38 @@ async function matchingNames(catalog: InstalledSkill[], query: string) {
 }
 
 describe("installed skill catalog", () => {
+  it.each([
+    { catalogs: 5, descriptionBytes: 1 },
+    { catalogs: 2, descriptionBytes: 9 * 1024 * 1024 },
+    { catalogs: 1, descriptionBytes: 18 * 1024 * 1024 },
+  ])(
+    "bounds idle catalog retention by count and aggregate bytes (%j)",
+    async ({ catalogs, descriptionBytes }) => {
+      // Whitespace grows retained metadata without creating millions of postings.
+      const description = `${" ".repeat(descriptionBytes)}quasar`;
+      const publications = Array.from({ length: catalogs }, (_, index) => ({
+        ...createCanonicalFixtureSkill({
+          name: `budget-${catalogs}-${index}`,
+          description,
+          filePath: `node://synthetic/budget-${index}/SKILL.md`,
+          baseDir: "node://synthetic",
+          source: "bundled",
+        }),
+        contentHash: `budget-${catalogs}-${index}`,
+      }));
+      const prepare = vi.spyOn(lexical, "getTextLexicalIndex");
+      for (const publication of [...publications, publications[0]!]) {
+        const current = installed([publication]);
+        expect((await searchInstalledSkills(current, "quasar")).skills[0]?.name).toBe(
+          publication.name,
+        );
+        // Eviction limits idle sharing, not the admitted run's own current view.
+        await searchInstalledSkills(current, "quasar");
+      }
+      expect(prepare).toHaveBeenCalledTimes(catalogs + 1);
+    },
+  );
+
   it("tokenizes large unchanged bodies once across fresh catalogs and visibility changes", async () => {
     const catalog = Array.from({ length: 135 }, (_, index) =>
       Object.freeze({

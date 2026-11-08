@@ -8,11 +8,7 @@ import { resolveSkillFileHost } from "../skills/skill-file-host.js";
 import type { SkillSnapshot } from "../skills/types.js";
 import { resolveSkillReadPath } from "../skills/workspace-skill-read-path.js";
 import { resolveCodeModeSkills, type CodeModeSkillReader } from "./code-mode-skills.js";
-import {
-  installedSkillSearchRevision,
-  MAX_SKILL_INSTRUCTION_BYTES,
-  type InstalledSkill,
-} from "./installed-skill-catalog.js";
+import { MAX_SKILL_INSTRUCTION_BYTES, type InstalledSkill } from "./installed-skill-catalog.js";
 import type { SandboxContext } from "./sandbox/types.js";
 import { resolveSessionSkillResourceCatalog } from "./session-placement-skill-resources.js";
 import { getAgentWorkspaceAccess, WorkspaceAccessUnavailableError } from "./workspace-access.js";
@@ -118,13 +114,17 @@ export function prepareInstalledSkillCatalog(params: {
       // A missing directory must not fail preparation or create an unhandled rejection.
       // The retained promise still reports the original error when a companion is requested.
       void resourceRoot?.catch(() => undefined);
+      const contentHash =
+        sandbox?.enabled && typeof deliveredContent === "string"
+          ? resource?.contentHash
+          : skill.contentHash;
       return {
-        catalogRevision: installedSkillSearchRevision(
-          skill,
-          sandbox?.enabled && typeof deliveredContent === "string"
-            ? resource?.contentHash
-            : skill.contentHash,
-        ),
+        catalogRevision: contentHash
+          ? {
+              key: JSON.stringify([contentHash, skill.name, skill.description, skill.locationNote]),
+              contentHash,
+            }
+          : undefined,
         name: skill.name,
         promptListed: promptListed.has(skill.name),
         description: [skill.description, skill.locationNote].filter(Boolean).join("\n"),

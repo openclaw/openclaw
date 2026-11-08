@@ -21,8 +21,14 @@
  * --counts uses precise coverage in a separate run; never compare its timings.
  * Acceptance: identical results, no unchanged warm index rebuilds, lower CPU/allocation,
  * and no >20% latency, CPU or allocation regression against interleaved A/A controls.
+ * --catalog-pattern 0,0,1,0,0,2,0,0,3,0 interleaves a main catalog with three
+ * suffix variants. --warmup 0 --iterations 0 isolates the cold build.
+ * --memory-report records V8 main/loader heaps before and after diagnostic-only
+ * last-resort collection; --settle-ms sets idle time before those observations.
+ * --native-memory adds footprint/smaps output, never complete diagnostic reports.
  */
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { readFileSync, readdirSync } from "node:fs";
 import inspector from "node:inspector/promises";
@@ -32,6 +38,7 @@ import { performance, PerformanceObserver } from "node:perf_hooks";
 import { setImmediate as yieldTurn } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
+import { getHeapSpaceStatistics } from "node:v8";
 import type { InstalledSkill } from "../../src/agents/installed-skill-catalog.js";
 import type { Skill } from "../../src/skills/loading/skill-contract.js";
 
@@ -48,12 +55,25 @@ const { values } = parseArgs({
     source: { type: "string", default: "inline" },
     synthetic: { type: "boolean", default: false },
     collect: { type: "boolean", default: false },
+    warmup: { type: "string", default: "20" },
+    "catalog-pattern": { type: "string", default: "0" },
+    "settle-ms": { type: "string", default: "0" },
+    "memory-report": { type: "boolean", default: false },
+    "native-memory": { type: "boolean", default: false },
+    "metadata-only": { type: "boolean", default: false },
   },
 });
 assert(global.gc, "Run with --expose-gc");
 assert(["files", "inline"].includes(values.source));
 const iterations = Number(values.iterations);
-assert(Number.isInteger(iterations) && iterations > 0);
+assert(Number.isInteger(iterations) && iterations >= 0);
+const warmup = Number(values.warmup);
+const settleMs = Number(values["settle-ms"]);
+const catalogPattern = values["catalog-pattern"].split(",").map(Number);
+assert(Number.isInteger(warmup) && warmup >= 0);
+assert(Number.isInteger(settleMs) && settleMs >= 0);
+assert(catalogPattern.every((variant) => Number.isInteger(variant) && variant >= 0));
+assert(values["runtime-owner"] || catalogPattern.every((variant) => variant === 0));
 const skillCount = Number(values.skills ?? (values.synthetic ? 135 : 64));
 const searchesPerRun = Number(values["searches-per-run"]);
 assert(Number.isInteger(skillCount) && skillCount > 0);
@@ -132,9 +152,11 @@ let authorityChecks = 0;
 let permissionChecks = 0;
 const queries = ["file search", "scheduled tasks", "message", "guide-3", "no_such_capability"];
 async function operation(iteration: number) {
+  const variant = catalogPattern[iteration % catalogPattern.length]!;
+  const selectedSkills = canonicalSkills.slice(variant);
   // Readers and result mappings remain run-owned; only text postings can be shared.
   const publishedSkills = values["fresh-publications"]
-    ? canonicalSkills.map((skill) => {
+    ? selectedSkills.map((skill) => {
         const filePath = `node://synthetic/run-${iteration}/${skill.name}/SKILL.md`;
         const baseDir = path.dirname(filePath);
         return {
@@ -144,7 +166,7 @@ async function operation(iteration: number) {
           sourceInfo: { ...skill.sourceInfo, path: filePath, baseDir },
         };
       })
-    : canonicalSkills;
+    : selectedSkills;
   const catalog = runtime
     ? runtime.prepareInstalledSkillCatalog({
         snapshot: {
@@ -168,7 +190,7 @@ async function operation(iteration: number) {
         undefined,
         () => {
           permissionChecks++;
-          return true;
+          return !values["metadata-only"];
         },
       ),
     );
@@ -215,7 +237,7 @@ const coldAt = performance.now();
 await operation(0);
 const coldMs = performance.now() - coldAt;
 const coldCounts = await takeCounts();
-for (let index = 0; index < 20; index++) {
+for (let index = 0; index < warmup; index++) {
   await operation(index);
 }
 const warmupCounts = await takeCounts();
@@ -287,6 +309,51 @@ if (profiler) {
 await yieldTurn();
 global.gc();
 const retained = process.memoryUsage();
+if (settleMs) {
+  await new Promise((resolve) => {
+    setTimeout(resolve, settleMs);
+  });
+  global.gc();
+  await yieldTurn();
+  global.gc();
+}
+// Select memory fields only: a complete diagnostic report contains environment secrets.
+function memorySnapshot() {
+  const diagnostic = process.report.getReport();
+  const native =
+    values["native-memory"] && process.platform === "darwin"
+      ? spawnSync("/usr/bin/footprint", ["-p", String(process.pid)], {
+          encoding: "utf8",
+          timeout: 5_000,
+        })
+      : undefined;
+  return {
+    usage: process.memoryUsage(),
+    spaces: getHeapSpaceStatistics(),
+    main: "javascriptHeap" in diagnostic ? diagnostic.javascriptHeap : undefined,
+    workers:
+      "workers" in diagnostic && Array.isArray(diagnostic.workers)
+        ? diagnostic.workers.map((worker: { javascriptHeap?: unknown }) => worker.javascriptHeap)
+        : undefined,
+    native: native
+      ? {
+          status: native.status,
+          output: native.stdout,
+          error: native.error?.message ?? native.stderr,
+        }
+      : values["native-memory"] && process.platform === "linux"
+        ? readFileSync("/proc/self/smaps_rollup", "utf8")
+        : undefined,
+  };
+}
+const memory = values["memory-report"] ? memorySnapshot() : undefined;
+let compacted: ReturnType<typeof memorySnapshot> | undefined;
+if (values["memory-report"]) {
+  // Attribution only, after timing: distinguish reachable indexes from V8 high-water pages.
+  await yieldTurn();
+  global.gc({ type: "major", execution: "sync", flavor: "last-resort" });
+  compacted = memorySnapshot();
+}
 timings.sort((a, b) => a - b);
 console.log(
   JSON.stringify({
@@ -299,6 +366,10 @@ console.log(
     iterations,
     searchesPerRun,
     searches: iterations * searchesPerRun,
+    catalogPattern,
+    warmup,
+    memory,
+    compacted,
     coldCounts,
     warmupCounts,
     warmCounts,

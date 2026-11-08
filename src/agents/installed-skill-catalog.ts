@@ -4,7 +4,6 @@ import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { openLocalFileSafely, readLocalFileSafely } from "../infra/fs-safe.js";
 import { LruCache } from "../infra/lru-cache.js";
-import type { Skill } from "../skills/loading/skill-contract.js";
 import { readCodeModeSkill, type CodeModeSkill } from "./code-mode-skills.js";
 import type { SkillInstructionResult } from "./skill-instruction-result.js";
 import { getTextLexicalIndex, prepareTextLexicalDocument } from "./tool-search-index.js";
@@ -34,24 +33,16 @@ const MAX_INDEX_BODY_BYTES = 4 * 1024 * 1024;
 const READ_CONCURRENCY = 4;
 
 type SearchView = {
+  key: string;
+  bytes: number;
   metadata?: ReturnType<typeof getTextLexicalIndex>;
   bodies: NonNullable<Parameters<typeof getTextLexicalIndex>[1]>;
 };
 const searchViews = new WeakMap<readonly InstalledSkill[], SearchView>();
-const catalogViews = new LruCache<SearchView>(8);
-
-/** Content generations survive host snapshot clones and per-run delivery paths. */
-export function installedSkillSearchRevision(
-  skill: Skill,
-  contentHash?: string,
-): InstalledSkill["catalogRevision"] {
-  return contentHash
-    ? {
-        key: JSON.stringify([contentHash, skill.name, skill.description, skill.locationNote]),
-        contentHash,
-      }
-    : undefined;
-}
+const catalogViews = new LruCache<SearchView>(4, {
+  maxBytes: 64 * 1024 * 1024,
+  sizeOf: (view) => view.bytes,
+});
 
 function getSearchView(skills: readonly InstalledSkill[]) {
   const cached = searchViews.get(skills);
@@ -64,7 +55,7 @@ function getSearchView(skills: readonly InstalledSkill[]) {
   const key = JSON.stringify(skills.map((skill) => skill.catalogRevision!.key));
   let view = catalogViews.get(key);
   if (!view) {
-    view = { bodies: {} };
+    view = { key, bytes: 128 + key.length * 2, bodies: {} };
     catalogViews.set(key, view);
   }
   searchViews.set(skills, view);
@@ -290,6 +281,14 @@ export async function searchInstalledSkills(
     getTextLexicalIndex(skills.map((skill) => `${skill.name} ${skill.description}`));
   if (view) {
     view.metadata = metadata;
+    // Remove the old charge before changing it; active runs may outlive idle eviction.
+    catalogViews.delete(view.key);
+    view.bytes =
+      128 +
+      (view.key.length + (view.bodies.revision?.length ?? 0)) * 2 +
+      metadata.bytes +
+      (view.bodies.index?.bytes ?? 0);
+    catalogViews.set(view.key, view);
   }
   for (const { value, score } of scoreLexical(metadata, terms)) {
     scores.set(skills[value]!, score * 2);
