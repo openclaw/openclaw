@@ -476,6 +476,10 @@ When the user asks to generate an image, use the `image_generate` tool...
   skill folder path.
 </Note>
 
+The bundled skill-creator Python validator also works without PyYAML. In that
+mode, trailing comments on plain indented description lines are ignored; hashes
+inside quoted or block-scalar content remain literal.
+
 ### Optional frontmatter keys
 
 <ParamField path="homepage" type="string">
