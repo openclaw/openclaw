@@ -1,3 +1,5 @@
+import fs from "node:fs/promises";
+import path from "node:path";
 import { StatementSync } from "node:sqlite";
 import { expectDefined } from "@openclaw/normalization-core";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
@@ -11,20 +13,26 @@ import {
   appendTranscriptMessage,
   appendTranscriptMessages,
   upsertSessionEntryCore,
+  replaceSessionEntry,
+  waitForSessionTranscriptProjection,
 } from "../../config/sessions/session-accessor.js";
 import * as projectionReads from "../../config/sessions/session-accessor.sqlite-projection-read.js";
 import * as projectionWriter from "../../config/sessions/session-transcript-projection-writer.js";
 import { searchSessionTranscripts } from "../../config/sessions/session-transcript-search.js";
 import { historyLane } from "../../config/sessions/session-transcript-worker-resources.js";
+import { resolveCronJobsStorePath, saveCronJobsStore } from "../../cron/store.js";
+import type { CronJob } from "../../cron/types.js";
 import { onDiagnosticEvent, type DiagnosticEventPayload } from "../../infra/diagnostic-events.js";
 import { runOpenClawAgentWorkerWrite } from "../../state/openclaw-agent-write-admission.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { withClaudeProjectsDir } from "../cli-session-history.test-support.js";
 import { SerializedJsonArray, serializeGatewayFrame } from "../serialized-json.js";
 import {
   createPreparedSessionHistorySubagentProjection,
   prepareSessionHistoryDelta,
 } from "../session-history-delta-visibility.js";
 import { chatHistoryHandlers } from "./chat-history-handler.js";
+import { readChatHistoryPage } from "./chat-history-pages.js";
 import { createHistoryReadContext } from "./chat-history.test-helpers.js";
 import type { RespondFn } from "./types.js";
 
@@ -413,5 +421,90 @@ it("forwards worker history as text JSON while preserving object callers and tin
     } finally {
       stop();
     }
+  });
+});
+
+it("labels canonical cron history from the current job without importing its native binding", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    setRuntimeConfigSnapshot({});
+    await withClaudeProjectsDir(async ({ sessionId: nativeId, filePath }) => {
+      const scope = {
+        agentId: "main",
+        sessionKey: "agent:main:cron-cli-label",
+        sessionId: "cron-cli-label",
+        storePath: path.join(state.sessionsDir(), "sessions.json"),
+      };
+      const entry = {
+        sessionId: scope.sessionId,
+        updatedAt: 1,
+        cliSessionBindings: { "claude-cli": { sessionId: nativeId } },
+      };
+      await replaceSessionEntry(scope, entry);
+      await appendTranscriptMessage(scope, {
+        eventId: "canonical-cron-result",
+        message: {
+          role: "user",
+          content: "Canonical cron result",
+          provenance: {
+            kind: "internal_system",
+            sourceTool: "cron",
+            jobId: "job-cli-label",
+            runId: "completed-run",
+            sourceSessionKey: "agent:main:cron:job-cli-label:run:completed-run",
+          },
+        },
+      });
+      await waitForSessionTranscriptProjection(scope);
+      await fs.writeFile(
+        filePath,
+        JSON.stringify({
+          type: "assistant",
+          uuid: "native-only",
+          message: { role: "assistant", content: "Native history must not be imported" },
+        }),
+      );
+      const job: CronJob = {
+        id: "job-cli-label",
+        name: "Original job name",
+        enabled: true,
+        createdAtMs: 1,
+        updatedAtMs: 1,
+        schedule: { kind: "every", everyMs: 60_000 },
+        sessionTarget: "isolated",
+        wakeMode: "next-heartbeat",
+        payload: { kind: "agentTurn", message: "Check the queue." },
+        state: {},
+      };
+      for (const name of ["Original job name", "Current renamed job"]) {
+        await saveCronJobsStore(resolveCronJobsStorePath(), {
+          version: 1,
+          jobs: [{ ...job, name }],
+        });
+        const page = await readChatHistoryPage({
+          entry,
+          provider: "openai",
+          sessionId: scope.sessionId,
+          storePath: scope.storePath,
+          sessionAgentId: scope.agentId,
+          canonicalKey: scope.sessionKey,
+          max: 10,
+          maxHistoryBytes: 64 * 1024,
+          effectiveMaxChars: 4096,
+          offset: undefined,
+          messageId: undefined,
+        });
+        expect(page.messages).toMatchObject([
+          {
+            role: "assistant",
+            content: "Canonical cron result",
+            senderSession: {
+              sessionKey: "agent:main:cron:job-cli-label:run:completed-run",
+              agentId: "main",
+              label: name,
+            },
+          },
+        ]);
+      }
+    });
   });
 });
