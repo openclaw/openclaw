@@ -56,7 +56,6 @@
 .agent-create-dialog .avatar-picker__tabs {
   justify-content: center;
   padding: 4px 0 8px;
-  border-bottom: 0;
 }
 
 .agent-create-dialog .avatar-picker__grid {

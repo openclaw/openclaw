@@ -152,11 +152,12 @@ describe("ChannelsPage save against a file changed elsewhere", () => {
 
   /** A real form edit, so the page records it through its own onConfigPatch. */
   async function choose(page: HTMLElement, group: string, label: string) {
-    const option = Array.from(
-      page.querySelectorAll<HTMLLabelElement>(`[aria-label="${group}"] label`),
-    ).find((entry) => entry.textContent?.trim() === label);
+    const select = page.querySelector<HTMLSelectElement>(`select[aria-label="${group}"]`);
+    expect(select, `Missing ${group} select`).not.toBeNull();
+    const option = Array.from(select!.options).find((entry) => entry.label === label);
     expect(option, `Missing ${group} option ${label}`).toBeDefined();
-    option!.querySelector("input")!.click();
+    select!.value = option!.value;
+    select!.dispatchEvent(new Event("change", { bubbles: true }));
     await settle();
   }
 
@@ -179,7 +180,7 @@ describe("ChannelsPage save against a file changed elsewhere", () => {
     const { page, source, patches, changeElsewhere } = await openTelegram();
     // Another page's failure never shows in this channel's dialog.
     source.runtimeConfig.state.lastError = "Another page failed";
-    await choose(page, "DM policy", "pairing");
+    await choose(page, "DM policy", "Pairing");
     edit(source, "allowFrom", ["111"]);
     edit(source, "groups", {
       "-1001": { requireMention: true },
@@ -202,7 +203,7 @@ describe("ChannelsPage save against a file changed elsewhere", () => {
     );
     expect(patches()).toHaveLength(0);
     expect(source.channels.state.configEdits.telegram).toHaveLength(3);
-    expect(text(page, ".channels-detail__status")).toBe("Unsaved changes");
+    expect(text(page, ".channels-detail__footer .channels-detail__status")).toBe("Unsaved changes");
 
     profileButton(page, "Reload").click();
     await waitForSolid(() => expect(source.channels.state.configEdits.telegram).toBeUndefined());
@@ -212,7 +213,7 @@ describe("ChannelsPage save against a file changed elsewhere", () => {
 
   it("writes the edits over the newer values only on Overwrite", async () => {
     const { page, source, patches, changeElsewhere } = await openTelegram();
-    await choose(page, "DM policy", "pairing");
+    await choose(page, "DM policy", "Pairing");
     edit(source, "allowFrom", ["111"]);
     await changeElsewhere(
       telegram({ ...before.channels.telegram, allowFrom: ["111", "222", "333"] }),
@@ -232,12 +233,14 @@ describe("ChannelsPage save against a file changed elsewhere", () => {
     expect(JSON.parse(params.raw)).toEqual({
       channels: { telegram: { dmPolicy: "pairing", allowFrom: ["111"] } },
     });
-    await waitForSolid(() => expect(text(page, ".channels-detail__status")).toBe("Saved"));
+    await waitForSolid(() =>
+      expect(text(page, ".channels-detail__footer .channels-detail__status")).toBe("Saved"),
+    );
   });
 
   it("still saves next to a change elsewhere that the edits don't touch", async () => {
     const { page, source, patches, changeElsewhere } = await openTelegram();
-    await choose(page, "DM policy", "pairing");
+    await choose(page, "DM policy", "Pairing");
     const elsewhere = telegram({
       allowFrom: ["111", "222", "333"],
       dmPolicy: "allowlist",
@@ -259,13 +262,15 @@ describe("ChannelsPage save against a file changed elsewhere", () => {
         telegram: { dmPolicy: "pairing", groups: { "-1001": { requireMention: false } } },
       },
     });
-    await waitForSolid(() => expect(text(page, ".channels-detail__status")).toBe("Saved"));
+    await waitForSolid(() =>
+      expect(text(page, ".channels-detail__footer .channels-detail__status")).toBe("Saved"),
+    );
     expect(alertText(page)).toBeNull();
   });
 
   it.each([
     ["landed", "Saved", null],
-    ["not landed", "Unsaved changes", "Connection lost during Save. Your changes weren't saved."],
+    ["not landed", "Unsaved changes", "Couldn’t save your changes. Save again."],
   ] as const)(
     "reports a Save cut short by a dropped connection once a re-read shows it %s",
     async (outcome, status, alert) => {
@@ -273,20 +278,22 @@ describe("ChannelsPage save against a file changed elsewhere", () => {
       const { page, gateway, patches, setFile } = await openTelegram({
         patch: () => held.promise,
       });
-      await choose(page, "DM policy", "pairing");
+      await choose(page, "DM policy", "Pairing");
       findButton(page, ".channels-detail .btn.primary").click();
       await waitForSolid(() => expect(patches()).toHaveLength(1));
 
       gateway.emit({ phase: "reconnecting" });
       held.reject(new Error("gateway closed"));
-      await waitForSolid(() => expect(alertText(page)).toBe("Connection lost during Save."));
+      await waitForSolid(() =>
+        expect(alertText(page)).toBe("Disconnected while saving. Reconnect to check your changes."),
+      );
 
       if (outcome === "landed") {
         await setFile(telegram({ ...before.channels.telegram, dmPolicy: "pairing" }), "h1");
       }
       gateway.emit({ phase: "connected" });
       await waitForSolid(() => {
-        expect(text(page, ".channels-detail__status")).toBe(status);
+        expect(text(page, ".channels-detail__footer .channels-detail__status")).toBe(status);
         expect(alertText(page)).toBe(alert);
       });
       expect(patches()).toHaveLength(1);

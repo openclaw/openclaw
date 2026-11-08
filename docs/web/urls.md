@@ -599,7 +599,7 @@ no route-specific URL parameters.
 | Labs                | `/settings/labs`                               | -                         | Shared settings parameters below                                                  |
 | About               | `/settings/about`                              | -                         | Shared settings parameters below                                                  |
 | AI and agents       | `/settings/ai-agents`                          | `/ai-agents`              | Shared settings parameters below                                                  |
-| Model setup         | `/settings/model-setup`                        | `/model-setup`            | `?firstRun=1`                                                                     |
+| Models              | `/settings/model-setup`                        | `/model-setup`            | `?firstRun=1`                                                                     |
 | Model providers     | `/settings/model-providers`                    | `/model-providers`        | Shared settings parameters below                                                  |
 | Import memory       | `/memory-import`                               | `/settings/memory-import` | -                                                                                 |
 | Workboard           | `/workboard`                                   | -                         | `/workboard/<boardId>`                                                            |

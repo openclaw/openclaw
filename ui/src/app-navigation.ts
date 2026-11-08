@@ -307,7 +307,7 @@ function navigationPresentation(icon: IconName, key: string): NavigationPresenta
 
 const NAVIGATION_PRESENTATION: Record<NavigationRouteId, NavigationPresentation> = {
   settings: ["settings", "nav.settings", "common.settingsSections"],
-  templates: navigationPresentation("bot", "templates"),
+  templates: navigationPresentation("blobster", "templates"),
   agents: navigationPresentation("bot", "agents"),
   activity: navigationPresentation("activity", "activity"),
   meetings: navigationPresentation("book", "meetings"),
@@ -379,6 +379,16 @@ export function navigationIconForRoute(routeId: NavigationRouteId): IconName {
 export function titleForRoute(routeId: NavigationRouteId, translate = t): string {
   const [, titleKey] = NAVIGATION_PRESENTATION[routeId];
   return translate(titleKey);
+}
+
+/** The title a route's own page shows, which names the actual device on the device route. */
+export function pageTitleForRoute(
+  routeId: NavigationRouteId,
+  deviceSnapshot?: NativeDeviceSettingsSnapshot | null,
+): string {
+  return routeId === "device"
+    ? t(deviceSettingsGroupLabelKey(deviceSnapshot))
+    : titleForRoute(routeId);
 }
 
 /** Window/tab title, attention leftmost because tabs truncate from the right.

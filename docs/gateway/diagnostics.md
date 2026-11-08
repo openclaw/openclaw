@@ -285,6 +285,17 @@ configuration. Workspace bootstrap reads and skill preparation belong to the
 separate `attempt.bootstrap` and `attempt.skills` stages; plugin tool factories
 run in `attempt.tool-base`.
 
+Dependency builder retirement appears under
+`detail.attempt.setup.sandbox.workspace_selection.prepare.reconcile.dependency.retire`.
+Its fixed sub-stages separate registry lookup, builder processing, lock acquisition,
+retirement claim, engine target validation, identity inspection, `kill`, `wait`,
+and terminal-state `verify`. Physical `remove` belongs to housekeeping.
+`verify.attempts` counts verification calls in that report window; it is a count,
+not milliseconds. Each call performs one inspect, with no OpenClaw polling or
+backoff. Engine-internal polling and cleanup waits remain inside their command's
+elapsed time. These fields use the existing slow-send line without enabling
+timeline logging; parent and child durations overlap.
+
 Managed worktree preparation emits one info-level `managed worktree preparation`
 record on return or failure. `kind=managed` covers checkout creation;
 `kind=sandbox` covers a managed guest projection through backend readiness,
@@ -471,6 +482,11 @@ are retained; their syntax does not prove that a computed name is public. Review
 the profile before sharing it. Full profiles retain graph edges, native signed script IDs, and sample order. V8 can
 emit samples out of timestamp order, so signed time deltas are preserved for profile
 viewers to reconstruct timestamps and order samples.
+
+`actualDurationMs` uses a monotonic clock from requesting profiler startup until
+profiler stop completes. It includes `startBlockedMs` and asynchronous startup and
+stop overhead. Native `profile.startTime` and `profile.endTime` remain unchanged
+and can describe a shorter sampling interval.
 
 Sampling can outlast the requested interval when the event loop is blocked. The
 response limit does not bound the runtime's internal allocation during that delay. Profile

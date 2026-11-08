@@ -16,7 +16,7 @@ import type {
 } from "./qa-transport-registry.js";
 import type { QaReportCheck } from "./report.js";
 import type { QaRuntimeSelection, RuntimeId } from "./runtime-id.js";
-import type { RuntimeParityCell, RuntimeParityResult } from "./runtime-parity.js";
+import type { RuntimeParityCell, RuntimeParityResult } from "./runtime-parity.types.js";
 import type { QaSeedScenarioWithSource } from "./scenario-catalog.js";
 import type { QaScorecardChannelDriver, QaScorecardEvidenceMode } from "./scorecard-taxonomy.js";
 import type { QaSuiteRoundTripProbe } from "./suite-round-trip.js";

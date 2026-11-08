@@ -40,21 +40,27 @@ function documentHidden(): boolean {
 // Without mcp.apps.sandboxOrigin the sandbox URL is the gateway origin with the
 // sandbox port substituted. On a non-loopback host that derived port often sits
 // behind a reverse proxy or tunnel that does not route it, and the browser
-// cannot distinguish that from a real authorization failure — so the terminal
-// message keeps the authorization fact but adds the deployment hint operators
-// otherwise never find.
+// cannot distinguish that from a real authorization failure or an unreachable
+// sandbox — so terminal messages keep their fact but add the deployment hint
+// operators otherwise never find.
+function derivedRemoteSandboxOrigin(
+  widget: Pick<BoardWidget, "sandboxOrigin">,
+  resolvedSandboxOrigin: string,
+): boolean {
+  return (
+    !widget.sandboxOrigin &&
+    Boolean(resolvedSandboxOrigin) &&
+    !isLoopbackHostname(new URL(resolvedSandboxOrigin).hostname)
+  );
+}
+
 function resolveBoardFrameFailureMessage(
   widget: Pick<BoardWidget, "sandboxOrigin">,
   resolvedSandboxOrigin: string,
 ): string {
-  if (
-    !widget.sandboxOrigin &&
-    resolvedSandboxOrigin &&
-    !isLoopbackHostname(new URL(resolvedSandboxOrigin).hostname)
-  ) {
-    return t("board.widget.sandboxOriginRequired");
-  }
-  return t("board.widget.frameAuthorizationFailed");
+  return derivedRemoteSandboxOrigin(widget, resolvedSandboxOrigin)
+    ? t("board.widget.sandboxOriginRequired")
+    : t("board.widget.frameAuthorizationFailed");
 }
 
 export type BoardWidgetFrameOwner = ReturnType<typeof createBoardWidgetFrame>;
@@ -74,9 +80,13 @@ export function createBoardWidgetFrame(host: {
   let initialTheme = document.documentElement.dataset.themeMode === "light" ? "light" : "dark";
   let sandboxRequestUrl = "";
   let frameError = "";
+  let linkFailed = false;
   let frameElement: HTMLIFrameElement | undefined;
   let releaseTheme: (() => void) | undefined;
   let waiting = false;
+  // The outer sandbox frame never announced readiness, as opposed to a slow or
+  // failed widget document read from the Gateway origin.
+  let sandboxUnreachable = false;
   let renderStalled = false;
   let frameFailureKey = "";
   let frameRefreshAttempts = 0;
@@ -222,7 +232,9 @@ export function createBoardWidgetFrame(host: {
 
   function resetFailures(notify = true): void {
     confirmation.cancel();
+    linkFailed = false;
     waiting = false;
+    sandboxUnreachable = false;
     renderStalled = false;
     contentVisible = false;
     initialPaint = false;
@@ -317,15 +329,28 @@ export function createBoardWidgetFrame(host: {
             );
           },
         }),
+      onLinkResult: (ok) => {
+        if (linkFailed !== !ok) {
+          linkFailed = !ok;
+          changes.emit();
+        }
+      },
       onFrameUrl: (url) => {
         lastFrameUrl = url;
       },
-      onLoadFailed: () => waitForConnection(),
+      onLoadFailed: () => {
+        sandboxUnreachable = false;
+        waitForConnection();
+      },
       onUnauthorized: (currentWidget) => api.refreshFailedFrame(currentWidget),
-      onReadyTimeout: () => waitForConnection(),
+      onReadyTimeout: () => {
+        sandboxUnreachable = true;
+        waitForConnection();
+      },
       onPending: () => waitForConnection(),
       onLoaded: () => {
         waiting = false;
+        sandboxUnreachable = false;
         contentVisible = false;
         frameFailureKey = "";
         frameRefreshAttempts = 0;
@@ -338,6 +363,7 @@ export function createBoardWidgetFrame(host: {
         // whose wrapper predates the private bridge-ready notification.
         api.postBoardHostState(frame);
         waiting = false;
+        sandboxUnreachable = false;
         renderStalled = false;
         setError("");
         initialPaint = false;
@@ -406,6 +432,7 @@ export function createBoardWidgetFrame(host: {
     retryContent(): void {
       renderStalled = false;
       waiting = false;
+      sandboxUnreachable = false;
       sandboxHost?.reset();
       changes.emit();
     },
@@ -595,8 +622,10 @@ export function createBoardWidgetFrame(host: {
         visible: contentVisible,
         painting: initialPaint && !waiting && !renderStalled,
         waiting,
+        sandboxUnreachable: sandboxUnreachable && derivedRemoteSandboxOrigin(value, sandboxOrigin),
         stalled: renderStalled,
         covered: host.loadingCovered?.(),
+        linkFailed,
       };
     },
     restoreFocus(event: Event) {
@@ -662,6 +691,11 @@ export function BoardWidgetFrame(props: {
     >
       <div class="board-widget__frame-pane">
         <McpAppConfirmation confirmation={props.state().confirmation} />
+        <Show when={view().linkFailed}>
+          <div class="board-widget__notice" role="status">
+            {t("board.widget.linkFailed")}
+          </div>
+        </Show>
         <Show when={!view().visible && !view().covered}>
           <Switch
             fallback={
@@ -682,8 +716,25 @@ export function BoardWidgetFrame(props: {
               </div>
             </Match>
             <Match when={view().waiting}>
-              <div class="board-widget__notice" role="status">
+              {/* Disclosed guidance must stay readable in narrow cards and reachable
+                  in short ones. Inline keeps this rarely shown state out of the
+                  shared Control UI stylesheet. */}
+              <div
+                class="board-widget__notice"
+                style={
+                  view().sandboxUnreachable
+                    ? { "max-width": "64ch", "white-space": "normal", "overflow-y": "auto" }
+                    : undefined
+                }
+                role="status"
+              >
                 {t("board.widget.waitingForConnection")}
+                <Show when={view().sandboxUnreachable}>
+                  <details>
+                    <summary>{t("board.widget.moreInfo")}</summary>
+                    <p style={{ margin: "4px 0 0" }}>{t("board.widget.sandboxUnreachableHint")}</p>
+                  </details>
+                </Show>
               </div>
             </Match>
           </Switch>

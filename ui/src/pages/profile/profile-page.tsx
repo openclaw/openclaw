@@ -15,10 +15,11 @@ import {
   Show,
 } from "solid-js";
 import { GATEWAY_OWNER_PROFILE_ID } from "../../../../packages/gateway-protocol/src/index.ts";
+import { userProfileDisplayName } from "../../../../src/shared/user-profile-display-name.js";
 import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
 import { ScopeUpgradeOwner } from "../../app/device-scope-upgrade-owner.runtime.ts";
-import { ShellLayoutBoundary } from "../../app/shell-layout-traits-solid.tsx";
 import { ScopeUpgradeActions, scopeUpgradeText } from "../../components/scope-upgrade-actions.tsx";
+import { InlineAlert } from "../../components/solid/inline-alert.tsx";
 import { RefreshButton } from "../../components/solid/refresh-button.tsx";
 import { SettingsDisclosure } from "../../components/solid/settings-disclosure.tsx";
 import { SettingsSectionHelp } from "../../components/solid/settings-section-help.tsx";
@@ -34,6 +35,7 @@ import {
   SettingsStatus,
   SettingsToggleRow,
   SettingsValue,
+  SettingsPageHeader,
 } from "../../components/solid/settings-ui.tsx";
 import { SettingsWorkspace } from "../../components/solid/settings-workspace.tsx";
 import { GitHubConnections } from "../../features/github-connections/github-connections.tsx";
@@ -41,14 +43,14 @@ import { registerModelAccountsEnglish } from "../../i18n/locales/en-model-accoun
 import { registerProfileEnglish } from "../../i18n/locales/en-profile.ts";
 import { registerRouteSubtitlesEnglish } from "../../i18n/locales/en-route-subtitles.ts";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../../lib/external-link.ts";
-import { formatUiError } from "../../lib/format-error.ts";
 import "../../components/solid/viewer-facepile.tsx";
+import { formatUiError } from "../../lib/format-error.ts";
 import { projectApplicationConfig } from "../../lib/reactive/application.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { projectOwner } from "../../lib/reactive/projection.ts";
-import { uploadsEnabled } from "../../lib/uploads.ts";
 import "../../styles/profile.css";
+import { uploadsEnabled } from "../../lib/uploads.ts";
 import { PROFILE_SETTINGS_TARGET_IDS } from "../config/settings-targets.ts";
 import { DiscordIdentity } from "./discord-identity.tsx";
 import { ModelAccounts } from "./model-accounts.tsx";
@@ -311,7 +313,11 @@ export function ProfilePage() {
                       <openclaw-viewer-avatar
                         prop:user={{
                           id: profile().id,
-                          name: profile().displayName ?? undefined,
+                          name: userProfileDisplayName(
+                            profile().id,
+                            profile().displayName,
+                            profile().githubIdentity?.login,
+                          ),
                           email: profile().emails[0],
                           avatarUrl: avatarUrl() ?? undefined,
                           watchedSessions: [],
@@ -527,14 +533,14 @@ export function ProfilePage() {
 
   return (
     <openclaw-profile-page>
-      <ShellLayoutBoundary traits={{ toolbarHeader: true }}>
-        <section class="content-header">
-          <div>
-            <h1 class="page-title">{titleForRoute("profile")}</h1>
-            <div class="page-subtitle">
-              {subtitleForRoute("profile")} <LearnMoreLink url={PROFILE_DOCS_URL} />
-            </div>
-          </div>
+      <SettingsPageHeader
+        title={titleForRoute("profile")}
+        subtitle={
+          <>
+            {subtitleForRoute("profile")} <LearnMoreLink url={PROFILE_DOCS_URL} />
+          </>
+        }
+        actions={
           <Show when={view().connected}>
             <RefreshButton
               class="profile-refresh"
@@ -544,8 +550,8 @@ export function ProfilePage() {
               onClick={() => state.refreshManually()}
             />
           </Show>
-        </section>
-      </ShellLayoutBoundary>
+        }
+      />
       <SettingsWorkspace>
         <SettingsPage>
           <Show
@@ -573,7 +579,7 @@ export function ProfilePage() {
               <Errored
                 fallback={(error, reset) => (
                   <>
-                    <div class="callout danger" role="alert">
+                    <InlineAlert tone="danger" role="alert">
                       {formatUiError(error())}{" "}
                       <button
                         class="btn btn--sm"
@@ -584,7 +590,7 @@ export function ProfilePage() {
                       >
                         {t("common.retry")}
                       </button>
-                    </div>
+                    </InlineAlert>
                     <IdentityContent pending={false} />
                   </>
                 )}
@@ -609,9 +615,11 @@ export function ProfilePage() {
               target={state.modelAccountsTarget}
               personLabel={
                 view().ownProfile
-                  ? view().ownProfile!.displayName?.trim() ||
-                    view().ownProfile!.emails[0] ||
-                    t("profilePage.modelAccounts.currentPerson")
+                  ? userProfileDisplayName(
+                      view().ownProfile!.id,
+                      view().ownProfile!.displayName,
+                      view().ownProfile!.githubIdentity?.login,
+                    ) || t("profilePage.modelAccounts.currentPerson")
                   : null
               }
             />

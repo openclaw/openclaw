@@ -182,15 +182,30 @@ it("leaves Agents through RouterOutlet while its admitted default write settles 
   try {
     await runtimeConfig.ensureLoaded();
     await router.navigate("agents", context);
-    const control = await waitForSolid(() =>
-      mounted.getByRole<HTMLButtonElement>("button", { name: /^Set Default$/ }),
-    );
+    const defaultItem = () =>
+      [...document.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')].find((item) =>
+        /^(Set default|Saving)/.test(item.textContent?.trim() ?? ""),
+      );
+    const trigger = await waitForSolid(() => {
+      const element = mounted.container.querySelector<HTMLButtonElement>(
+        ".agents-page-menu__trigger",
+      );
+      expect(element).not.toBeNull();
+      return element!;
+    });
+    trigger.click();
+    const control = await waitForSolid(() => {
+      expect(defaultItem()?.textContent).toContain("Set default");
+      return defaultItem()!;
+    });
     control.click();
     await waitForSolid(() =>
       expect(request.mock.calls.filter(([method]) => method === "config.set")).toHaveLength(1),
     );
-    await waitForSolid(() => expect(control.textContent).toContain("Saving"));
-    expect(control.disabled).toBe(true);
+    await waitForSolid(() => expect(defaultItem()?.textContent).toContain("Saving"));
+    expect(
+      defaultItem()?.getAttribute("aria-disabled") === "true" || defaultItem()?.disabled === true,
+    ).toBe(true);
     mounted.getByRole("button", { name: "Leave Agents" }).click();
     await waitForSolid(() => mounted.getByText("Default destination body", { exact: true }));
     expect(mounted.container.querySelector("openclaw-agents-page")).toBeNull();
@@ -341,7 +356,7 @@ it("leaves the avatar route before its admitted generation settles", async () =>
     );
     generateTab.click();
     const prompt = await waitForSolid(() =>
-      mounted.getByRole<HTMLTextAreaElement>("textbox", { name: "Describe your blobster..." }),
+      mounted.getByRole<HTMLTextAreaElement>("textbox", { name: "Describe your blobster…" }),
     );
     prompt.value = "A patient gardener";
     prompt.dispatchEvent(new Event("input", { bubbles: true }));

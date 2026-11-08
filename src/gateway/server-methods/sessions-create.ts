@@ -21,6 +21,7 @@ import { ADMIN_SCOPE, authorizeOperatorScopesForRequiredScope } from "../method-
 import { ModelAccountConnectAuthorityError } from "../model-account-connect-errors.js";
 import { getNodeWorkerSupervisorTransport } from "../node-registry-private.js";
 import { captureGatewayOperatorRunAuthority } from "../operator-run-authority.js";
+import { projectRequesterForClient } from "../project-access.js";
 import { repositoryDispatchCredentialReader } from "../repository-dispatch.js";
 import { startSessionCreateDiagnostics } from "../session-create-diagnostics.js";
 import { buildDashboardSessionKey } from "../session-create-key.js";
@@ -33,15 +34,13 @@ import {
   validateAgentToolSessionCreation,
 } from "../session-creation-provenance.js";
 import { prepareSessionDeviceFolder } from "../session-device-folder.js";
+import { prepareSessionRepositoryWorkspace } from "../session-repository-preparation.js";
 import {
   resolveRequestedSessionAgentId as resolveRequestedGlobalAgentId,
   resolveSessionCreateAgentId,
 } from "../session-request-agent.js";
 import { loadGatewaySessionEntryReadOnlyInWorker } from "../session-utils-store-worker.js";
-import {
-  prepareSessionWorktreeCreation,
-  resolveSessionProjectRoot,
-} from "../session-worktree-preparation.js";
+import { prepareSessionWorktreeCreation } from "../session-worktree-preparation.js";
 import { prepareSkillLibrarySessionCreation } from "../skill-library-session.js";
 import { gatewayClientUploadPolicyError } from "../upload-policy.js";
 import { createAgentRuntimeAuthorityGuard } from "./agent-runtime-authority.js";
@@ -60,7 +59,7 @@ import {
 } from "./session-create-initial-turn.js";
 import {
   normalizeSessionProjectGitUrl,
-  prepareSessionRepositoryWorkspace,
+  resolveRequestedSessionProjectRoot,
   resolveSessionRepositoryCreation,
   validateSessionProjectPreparation,
   validateSessionWorktreeSelection,
@@ -192,7 +191,9 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
     const deviceFolderAuthority: { assertCurrent?: () => void } = {};
     const commitGuard = () => {
       assertSessionCreateCurrent();
-      if (agentCreated) {
+      // Agent-created sessions fence the requesting tool at commit only; once committed,
+      // the session owns its opening input and run even if that tool stops.
+      if (agentCreated || spawnRequesterSessionKey) {
         toolRequester?.assertCurrent?.();
       }
       personalModelSelection?.assertCurrent();
@@ -337,10 +338,8 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
     }
     requestedCwd = preparedCwd.value;
     const worktreeBaseRef = normalizeOptionalString(p.worktreeBaseRef);
-    const requestedWorktreeName = normalizeOptionalString(p.worktreeName);
     const explicitSessionLabel = normalizeOptionalString(p.label);
     const preparedDisplayName = normalizeOptionalString(p.displayName);
-    const titleAgentId = explicitlyRequestedAgent.agentId;
     if (!authority.ensureActive()) {
       return;
     }
@@ -349,7 +348,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
           await loadGatewaySessionEntryReadOnlyInWorker({
             cfg,
             key: explicitlyRequestedKey,
-            agentId: titleAgentId,
+            agentId: explicitlyRequestedAgent.agentId,
           })
         ).entry
       : undefined;
@@ -360,15 +359,12 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
     }
     const deferWorktree =
       p.worktree === true && !emptyWorkspace && hasInitialTurn && !existingTargetEntry;
-    let projectRoot: string | undefined;
-    if (requestedProjectId) {
-      const project = await resolveSessionProjectRoot(cfg, requestedProjectId, p.worktree === true);
-      if (!project.ok) {
-        respond(false, undefined, project.error);
-        return;
-      }
-      projectRoot = project.value;
+    const requestedProject = await resolveRequestedSessionProjectRoot(cfg, p, client);
+    if (!requestedProject.ok) {
+      respond(false, undefined, requestedProject.error);
+      return;
     }
+    const projectRoot = requestedProject.value;
     let sessionAgentId = catalogAgentId ?? explicitlyRequestedAgent.agentId;
     if (repository) {
       // Mention validation and later creation must use the same real child target.
@@ -404,7 +400,6 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       });
     }
     if (p.worktree === true) {
-      // Raw cwd authorization and project-registry selection have already been checked.
       const agentId = explicitlyRequestedAgent.agentId;
       let targetKey = sessionKey;
       let preservesUnspecifiedKey = false;
@@ -453,10 +448,13 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
           target: lifecycleTarget,
           workspace: emptyWorkspace ? { kind: "empty" } : (projectRoot ?? requestedCwd),
           inheritParentKey: inheritParentWorktree ? spawnRequesterSessionKey : undefined,
+          projectRequester: projectRequesterForClient(client),
+          repositoryMutations: context.workerRepositoryWorkspaceMutationService,
           projectGitUrl: requestedProjectGitUrl,
-          name: requestedWorktreeName,
+          name: normalizeOptionalString(p.worktreeName),
           baseRef: worktreeBaseRef,
           deferWorktree,
+          hasInitialTurn,
           label: explicitSessionLabel ?? preparedDisplayName,
           titleSource: buildDashboardSessionTitleSource({ message: message ?? "", attachments }),
           currentUserMessage: message,

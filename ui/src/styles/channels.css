@@ -40,8 +40,7 @@
   background: var(--bg-elevated);
 }
 
-.channels-tile img,
-.channels-cover img {
+.channels-tile img {
   width: 100%;
   height: 100%;
   object-fit: cover;
@@ -57,87 +56,136 @@
   text-shadow: 0 1px 2px rgb(0 0 0 / 25%);
 }
 
-.channels-cover {
-  display: grid;
-  width: 100%;
-  aspect-ratio: 32 / 9;
-  place-items: center;
-  overflow: hidden;
-  background: var(--bg-elevated);
+/* A status line, a flat form and one footer. The top stays put, so opening a
+   disclosure or showing a failure grows the dialog downward and nothing moves
+   under the pointer; a full form still sits centered. */
+.oc-modal-dialog:has(> .oc-modal-dialog__body > .channels-detail) {
+  margin-block: max(24px, calc((100dvh - 680px) / 2)) auto;
 }
 
-.channels-cover--icon img {
-  width: 96px;
-  height: 96px;
-  border-radius: var(--radius-lg);
+.oc-dialog.channels-detail {
+  max-height: min(680px, var(--openclaw-modal-height-limit));
+  grid-template-rows: auto minmax(0, 1fr) auto auto;
 }
 
-.channels-cover--fallback {
-  background: linear-gradient(135deg, var(--channels-art-a), var(--channels-art-b));
-  color: rgb(255 255 255 / 92%);
-  font-family: var(--mono);
-  font-size: 22px;
-  font-weight: 700;
-  text-shadow: 0 1px 3px rgb(0 0 0 / 25%);
+@media (max-width: 640px) {
+  .oc-modal-dialog:has(> .oc-modal-dialog__body > .channels-detail) {
+    margin-block: 24px auto;
+  }
+
+  .oc-dialog.channels-detail {
+    max-height: var(--openclaw-modal-height-limit);
+  }
 }
 
-.channels-detail {
+/* A rows-only body scrolls right up to the status line without this breathing room. */
+.channels-detail .oc-dialog__header {
+  align-items: start;
+  padding-block-end: var(--space-2);
+}
+
+.channels-detail .oc-dialog__body {
+  padding-block-start: var(--space-1);
+}
+
+/* A long name wraps beside the icon and the close button, both on its first line. */
+.channels-detail .oc-dialog__title {
+  align-items: flex-start;
+  padding-block: calc((var(--overlay-modal-close-size) - 24px) / 2);
+  line-height: 24px;
+  overflow-wrap: anywhere;
+}
+
+.channels-detail .oc-dialog__title .channels-tile {
+  border-radius: var(--radius-sm);
+}
+
+.oc-dialog__description.channels-detail__status {
   display: flex;
-  flex-direction: column;
-  width: 100%;
-  overflow-y: auto;
-  max-height: min(85dvh, 860px, var(--openclaw-modal-height-limit));
-}
-
-.channels-detail__header {
-  position: relative;
-  flex: 0 0 auto;
-}
-
-.channels-detail__header-actions {
-  position: absolute;
-  top: var(--space-3);
-  right: var(--space-3);
-  z-index: 2;
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-}
-
-.channels-detail__header-actions .btn {
-  background: color-mix(in srgb, var(--bg) 55%, transparent);
-  backdrop-filter: blur(4px);
-}
-
-.channels-detail__close {
-  width: var(--overlay-modal-close-size);
-  height: var(--overlay-modal-close-size);
-  padding: 0;
-}
-
-.channels-detail__close svg {
-  stroke-width: 2;
-  width: 14px;
-  height: 14px;
-}
-
-.channels-detail__body {
-  display: grid;
-  min-height: 0;
-  overflow-y: auto;
-  gap: var(--space-3);
-  padding: var(--space-4) var(--space-4) var(--space-5);
-}
-
-.channels-detail__footer {
   flex-wrap: wrap;
-  padding: var(--space-4);
-  border-top: 1px solid var(--border);
+  align-items: center;
+  justify-content: space-between;
+  gap: 0 var(--space-3);
 }
 
-.channels-detail__status {
+.channels-detail__state {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0 var(--space-2);
+  min-width: 0;
+}
+
+/* The dialog is the surface: what sits in it is rows, not a card in a card. */
+.channels-detail__body {
+  align-content: start;
+}
+
+.channels-detail__issue + .channels-detail__issue {
+  margin-block-start: var(--space-2);
+}
+
+.channels-detail__form {
+  display: grid;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.channels-detail .settings-group {
+  overflow: visible;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+.channels-detail .settings-row {
+  padding-inline: 0;
+}
+
+.channels-detail .settings-kv {
+  padding: var(--space-2) 0;
+}
+
+/* The hover surface reaches past the text; the text and chevron stay on the form's edges. */
+.channels-detail .settings-disclosure__summary {
+  width: calc(100% + 2 * var(--space-2));
+  margin-inline: calc(-1 * var(--space-2));
+  padding-inline: var(--space-2);
+  border-radius: var(--menu-item-radius);
+}
+
+.channels-detail .channels-pairing-help {
+  margin: 0;
+  padding: 0 0 var(--space-1);
+}
+
+/* On demand, these read as one short list rather than separate blocks. */
+.channels-detail__form:has(.settings-disclosure) + .settings-disclosure,
+.channels-detail .settings-disclosure + .settings-disclosure {
+  margin-block-start: calc(-1 * var(--space-3));
+}
+
+.channels-detail .qr-wrap {
+  display: grid;
+  justify-items: center;
+}
+
+.channels-detail .settings-row--stacked:has(> .qr-wrap) > .settings-row__control {
+  justify-content: center;
+}
+
+.channels-detail .qr-wrap img {
+  width: min(260px, 100%);
+  aspect-ratio: 1;
+  padding: var(--space-2);
+  border-radius: var(--radius-md);
+  background: var(--qr-bg);
+}
+
+.channels-detail__footer .channels-detail__status {
+  flex: 1 1 0;
   color: var(--muted);
-  font-size: var(--control-ui-text-xs);
+  font-size: var(--control-ui-text-sm);
 }
 
 .channels-detail__decide {
@@ -151,7 +199,7 @@
   gap: var(--space-2);
   max-height: 30dvh;
   overflow-y: auto;
-  padding: var(--space-3) var(--space-4) 0;
+  padding: var(--space-2) var(--overlay-modal-padding) 0;
   overflow-wrap: anywhere;
 }
 

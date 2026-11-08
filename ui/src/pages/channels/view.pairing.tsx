@@ -5,7 +5,10 @@ import type { ChannelsPairingAccount, ChannelsPairingRequest } from "../../api/t
 import { Picker } from "../../components/select-picker.ts";
 import "../../components/modal-dialog.tsx";
 import { ChannelPicker } from "../../components/solid/channel-picker.tsx";
+import { Checkbox } from "../../components/solid/checkbox.tsx";
 import { DialogHeader } from "../../components/solid/dialog-header.tsx";
+import { InlineAlert } from "../../components/solid/inline-alert.tsx";
+import { SettingsDisclosure } from "../../components/solid/settings-disclosure.tsx";
 import {
   SettingsEmpty,
   SettingsLoadingSkeleton,
@@ -173,9 +176,9 @@ function PairingReadFeedback(props: { channels: ChannelsState; prompt?: boolean 
           fallback={(error) => (
             <>
               {props.prompt ? (
-                <div class="callout danger" role="alert">
+                <InlineAlert tone="danger" role="alert">
                   {formatUiError(error())}
-                </div>
+                </InlineAlert>
               ) : (
                 <div class="settings-row channels-pairing-feedback" role="alert">
                   <SettingsStatus kind="danger" label={formatUiError(error())} />
@@ -284,6 +287,7 @@ export function renderChannelPairingQueue(props: ChannelsProps) {
   );
 }
 
+/** Lives with the other on-demand rows, and opens itself when a request is waiting. */
 export function renderChannelPairingDetail(channelId: string, props: ChannelsProps) {
   const accounts = createMemo(() =>
     (props.channels.pairingSnapshot?.accounts ?? []).filter(
@@ -291,12 +295,13 @@ export function renderChannelPairingDetail(channelId: string, props: ChannelsPro
     ),
   );
   const requests = createMemo(() => props.channels.pairingSnapshot?.requests ?? []);
+  const waiting = createMemo(
+    () => requests().filter((request) => request.channel === channelId).length,
+  );
   return (
     <Show when={props.canManagePairing && accounts().length > 0}>
-      <SettingsSection
-        title={t("channels.pairing.detailTitle")}
-        description={t("channels.pairing.detailSubtitle")}
-      >
+      <SettingsDisclosure title={t("channels.pairing.detailTitle")} open={waiting() > 0}>
+        <p class="channels-pairing-help">{t("channels.pairing.detailSubtitle")}</p>
         <For each={accounts()} keyed={(account) => account.accountId}>
           {(account) => {
             const pending = createMemo(
@@ -310,7 +315,9 @@ export function renderChannelPairingDetail(channelId: string, props: ChannelsPro
             return (
               <SettingsRow
                 title={accountName(account())}
-                description={account().accountId}
+                description={
+                  accountName(account()) === account().accountId ? undefined : account().accountId
+                }
                 control={
                   <>
                     <SettingsStatus
@@ -336,7 +343,7 @@ export function renderChannelPairingDetail(channelId: string, props: ChannelsPro
             );
           }}
         </For>
-      </SettingsSection>
+      </SettingsDisclosure>
     </Show>
   );
 }
@@ -363,8 +370,7 @@ function PairingPromptContent(params: {
   const dialogTitle = () => t(`channels.pairing.${params.prompt.kind}DialogTitle`);
   const option = (field: "notify" | "bootstrapCommandOwner", label: string) => (
     <label class="channels-pairing-dialog__option">
-      <input
-        type="checkbox"
+      <Checkbox
         checked={params.prompt[field]}
         onChange={(event) =>
           params.props.onPairingPromptChange({ [field]: event.currentTarget.checked })
@@ -391,13 +397,13 @@ function PairingPromptContent(params: {
           onClose={() => params.props.onPairingPromptCancel()}
         />
         <div class="oc-dialog__body">
-          <div class={["callout", { info: approving(), warn: !approving() }]}>
+          <InlineAlert tone={approving() ? "info" : "warning"} role="none">
             {t(`channels.pairing.${params.prompt.kind}Explanation`)}
-          </div>
+          </InlineAlert>
           {params.props.channels.pairingError ? (
-            <div class="callout danger" role="alert">
+            <InlineAlert tone="danger" role="alert">
               {params.props.channels.pairingError}
-            </div>
+            </InlineAlert>
           ) : undefined}
           <PairingReadFeedback channels={params.props.channels} prompt />
           {approving() && request().notifySupported
@@ -410,7 +416,7 @@ function PairingPromptContent(params: {
             </>
           ) : undefined}
           {approving() && ownerMissing() && !params.props.canAdmin ? (
-            <div class="callout warn">{t("channels.pairing.commandOwnerNeedsAdmin")}</div>
+            <InlineAlert tone="warning">{t("channels.pairing.commandOwnerNeedsAdmin")}</InlineAlert>
           ) : undefined}
         </div>
         <openclaw-modal-actions class="oc-dialog__footer">
