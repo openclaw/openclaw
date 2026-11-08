@@ -425,7 +425,11 @@ async function loadWorkerOwner() {
     return undefined;
   }
   const { resolveSharedVitestCompilerEnv } = await import("./lib/vitest-process-env.mts");
-  const [worker, processOwner, { areRuntimeOnlyVitestUnitFiles }] = await Promise.all([
+  const [
+    worker,
+    processOwner,
+    { areRuntimeOnlyVitestUnitFiles, shouldUseRuntimeOnlyVitestWorkers },
+  ] = await Promise.all([
     import("./lib/vitest-worker-run.mts"),
     import("./lib/vitest-process.mts"),
     import("./lib/vitest-runtime-selection.mts"),
@@ -433,6 +437,7 @@ async function loadWorkerOwner() {
   return {
     createWorkerRun: worker.createVitestWorkerRun,
     areRuntimeOnlyFiles: areRuntimeOnlyVitestUnitFiles,
+    useRuntimeOnlyWorkers: shouldUseRuntimeOnlyVitestWorkers,
     resolveCompilerEnv: resolveSharedVitestCompilerEnv,
     spawn: processOwner.spawnOwnedVitestProcess,
     exitBySignal: processOwner.exitVitestBySignal,
@@ -449,9 +454,24 @@ function createWorkerContext(
   const compilerEnv = owner.resolveCompilerEnv(
     plans.length > 0 ? plans.map((plan) => prepareChildEnv(plan, env)) : [env],
   );
-  const targets = plans.flatMap((plan) => (plan.kind === "target" ? [plan.target] : []));
   const runtimeOnly =
-    !hasExtraArgs && targets.length === plans.length && owner.areRuntimeOnlyFiles(targets);
+    !hasExtraArgs &&
+    plans.length > 0 &&
+    plans.every((entry) =>
+      entry.kind === "target"
+        ? owner.areRuntimeOnlyFiles([entry.target])
+        : entry.plan.configs.length === 1 &&
+          Boolean(entry.plan.includePatterns?.length) &&
+          !entry.plan.requiresDist &&
+          entry.plan.pretestBuildMode === undefined &&
+          owner.useRuntimeOnlyWorkers(
+            entry.plan.configs[0]!,
+            [],
+            prepareChildEnv(entry, env),
+            undefined,
+            entry.plan.includePatterns ?? undefined,
+          ),
+    );
   return {
     workerRun: owner.createWorkerRun(compilerEnv, undefined, runtimeOnly ? "runtime" : "full"),
     normalCompletion: true,
