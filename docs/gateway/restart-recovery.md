@@ -14,6 +14,12 @@ ordinary system input asking the agent to inspect current state and continue.
 The transcript remains the agent's context; the Gateway does not reconstruct or
 replay the old execution.
 
+During graceful shutdown, interrupted embedded runs have a short abort-settle
+budget (normally two seconds) to deliver their terminal partial reply before their
+writers close. Already accepted transcript writes still drain. A provider that
+ignores cancellation stops blocking the stream consumer after this grace, but
+unsettled underlying work remains retained until it actually closes.
+
 The recovery input stays intact in the agent transcript but is hidden from the
 Control UI chat feed, including queued, live, and reloaded history. The continued
 answer remains visible as its own turn. This is not the separate update outcome
@@ -58,6 +64,38 @@ up and retires the legacy recovery fields when the session is terminal or archiv
 preserving its status, archive, current writer identities, and delivery notice
 without resuming it or replaying a pending final; startup reports an aggregate
 count per agent instead of repeating warnings for each such session.
+
+## Unexpected exits
+
+The Gateway records each run in its existing SQLite boot lifecycle. A graceful
+stop, drained `SIGTERM`, deployment handoff, or planned update restart closes the
+run. If the next startup finds that its predecessor did not close, it records
+one unexpected exit and logs `previous Gateway run ended unexpectedly`.
+
+The last ten crash records remain visible in `openclaw gateway status`, the
+`health` and `status` RPC results, and local or authenticated `/readyz` details.
+The Control UI's Debug health and status snapshots show these same records.
+Doctor shows a **Fix now** warning about any crash detected in the last 24 hours,
+or at least three detected in the last seven days, with a next step to inspect the
+recorded exits. This diagnostic does not trigger a repair or restart: a healthy
+successor remains ready. An unauthenticated remote readiness probe does not disclose it.
+
+Records include the previous PID, start time, and available version, build,
+runtime, and heartbeat facts. After startup, the Gateway performs bounded
+supervisor inspection for exit evidence. On systemd an indexed query reads structured
+exit records for the previous service run. A second query, limited to the final
+30 seconds and the previous PID and unit, checks for the exact self-recovery
+marker when a stalled main thread killed itself. Both queries share a one-second budget. On launchd it records the
+daemon's explicit last exit status and reason; an integer status is not treated
+as evidence of a signal. Missing evidence stays `cause unknown`;
+an ordinary fresh start is not evidence of a clean previous exit. The shared
+SQLite machine-state KV holds bounded diagnostic metadata alongside the existing
+boot receipt; there is no crash sidecar file or agent-database scan.
+
+Installed supervisors handle process restarts using their existing retry and
+crash-loop limits. Foreground `openclaw gateway` does not acquire an automatic
+restart loop. See [Gateway service and process troubleshooting](/gateway/troubleshooting/gateway-service-and-process#unexpected-gateway-exits)
+when crashes repeat.
 
 ## A wedged main thread
 
@@ -182,8 +220,11 @@ missing previews.
 After marker persistence and cancellation, process-owned shutdown logs a warning
 when required connection cleanup exceeds five seconds, then keeps joining its
 accepted finalizers before releasing the Gateway lock and state admission. The
-existing process shutdown deadline still bounds this join. Embedded hosts also
-join those resources before reusing the runtime.
+existing process shutdown deadline still bounds this join. Session admissions and
+cron finalizers that settle after their grace warning still proceed through database
+retirement; the warning does not permanently abandon the close operation. Resume
+markers do not replace pending transcript or cron outcome writes. Embedded hosts
+also join those resources before reusing the runtime.
 
 A plain stop (`SIGTERM` or `SIGINT`) arriving during an in-process restart makes
 the Gateway finish its bounded shutdown and exit instead of starting again.

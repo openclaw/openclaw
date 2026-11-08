@@ -1,10 +1,6 @@
 #!/usr/bin/env node
 import { execFileSync } from "node:child_process";
-import { readFileSync } from "node:fs";
-import { homedir } from "node:os";
-import { join } from "node:path";
 import { parseArgs } from "node:util";
-import { readBoundedResponseText } from "./lib/bounded-response.mjs";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
 import { resolveDockerReleasePolicy } from "./lib/docker-release-policy.mjs";
 import { sleep } from "./lib/sleep.mjs";
@@ -23,10 +19,9 @@ const IMAGE_MEDIA_TYPES = new Set([
   "application/vnd.docker.distribution.manifest.v2+json",
   "application/vnd.oci.image.manifest.v1+json",
 ]);
-const ACCEPT = [...INDEX_MEDIA_TYPES, ...IMAGE_MEDIA_TYPES].join(", ");
 const DIGEST = /^sha256:[a-f0-9]{64}$/u;
 const READ_TIMEOUT_MS = 20_000;
-const BODY_MAX_BYTES = 4 * 1024 * 1024;
+const BODY_MAX_BYTES = 8 * 1024 * 1024;
 const RETRY_DELAYS_MS = Object.freeze([1_000, 3_000, 10_000, 30_000]);
 
 function requireImage(value, label) {
@@ -39,16 +34,6 @@ function requireImage(value, label) {
     throw new Error(label + " must include its registry host.");
   }
   return image;
-}
-
-function splitImage(image) {
-  const slash = image.indexOf("/");
-  const host = image.slice(0, slash).toLowerCase();
-  return {
-    host,
-    requestHost: host === "docker.io" ? "registry-1.docker.io" : host,
-    repository: image.slice(slash + 1),
-  };
 }
 
 function parseJson(value, label) {
@@ -67,161 +52,28 @@ function requireDigest(value, label) {
   return digest;
 }
 
-function readDockerConfig(env) {
-  const configDir = env.DOCKER_CONFIG?.trim() || join(homedir(), ".docker");
-  try {
-    return parseJson(readFileSync(join(configDir, "config.json"), "utf8"), "Docker config");
-  } catch (error) {
-    if (error?.code === "ENOENT") {
-      return {};
-    }
-    throw error;
-  }
+function runImagetools(args, execFileSyncImpl) {
+  return String(
+    execFileSyncImpl("docker", ["buildx", "imagetools", ...args], {
+      encoding: "utf8",
+      killSignal: "SIGKILL",
+      maxBuffer: BODY_MAX_BYTES,
+      stdio: ["ignore", "pipe", "pipe"],
+      timeout: READ_TIMEOUT_MS,
+    }),
+  );
 }
 
-function credentialServers(host) {
-  return host === "docker.io"
-    ? ["https://index.docker.io/v1/", "docker.io", "registry-1.docker.io"]
-    : [host, "https://" + host];
-}
-
-function decodeInlineCredential(auth, server) {
-  if (typeof auth !== "string" || auth.length === 0) {
-    return null;
-  }
-  const decoded = Buffer.from(auth, "base64").toString("utf8");
-  const separator = decoded.indexOf(":");
-  if (separator < 1) {
-    throw new Error("Docker credential for " + server + " is invalid.");
-  }
-  return { username: decoded.slice(0, separator), secret: decoded.slice(separator + 1) };
-}
-
-function readCredentialHelper(helper, server, execFileSyncImpl) {
-  const raw = execFileSyncImpl("docker-credential-" + helper, ["get"], {
-    encoding: "utf8",
-    input: server,
-    killSignal: "SIGKILL",
-    maxBuffer: 1024 * 1024,
-    stdio: ["pipe", "pipe", "pipe"],
-    timeout: READ_TIMEOUT_MS,
-  });
-  const credential = parseJson(raw, "docker-credential-" + helper);
-  if (typeof credential.Username !== "string" || typeof credential.Secret !== "string") {
-    throw new Error("docker-credential-" + helper + " returned an invalid credential.");
-  }
-  return { username: credential.Username, secret: credential.Secret };
-}
-
-function resolveDockerCredential(host, options) {
-  const config = options.dockerConfig ?? readDockerConfig(options.env);
-  for (const server of credentialServers(host)) {
-    const inline = decodeInlineCredential(config.auths?.[server]?.auth, server);
-    if (inline) {
-      return inline;
-    }
-    const helper = config.credHelpers?.[server] ?? config.credsStore;
-    if (typeof helper === "string" && helper.length > 0) {
-      try {
-        return readCredentialHelper(helper, server, options.execFileSyncImpl);
-      } catch (error) {
-        if (config.credHelpers?.[server]) {
-          throw error;
-        }
-      }
-    }
-  }
-  return null;
-}
-
-function parseBearerChallenge(value) {
-  if (!value?.startsWith("Bearer ")) {
-    return null;
-  }
-  const parameters = {};
-  for (const match of value.slice("Bearer ".length).matchAll(/([a-z]+)="([^"]*)"/giu)) {
-    parameters[match[1].toLowerCase()] = match[2];
-  }
-  return parameters.realm ? parameters : null;
-}
-
-function basicAuthorization(credential) {
-  return "Basic " + Buffer.from(credential.username + ":" + credential.secret).toString("base64");
-}
-
-async function cancelResponse(response) {
-  await response.body?.cancel().catch(() => undefined);
-}
-
-function retryableStatus(status) {
-  return status === 404 || status === 429 || [500, 502, 503, 504].includes(status);
-}
-
-async function fetchWithRetry(url, init, options) {
-  for (let attempt = 0; attempt <= RETRY_DELAYS_MS.length; attempt += 1) {
-    try {
-      const response = await options.fetchImpl(url, {
-        ...init,
-        signal: AbortSignal.timeout(options.timeoutMs),
-      });
-      if (!retryableStatus(response.status) || attempt === RETRY_DELAYS_MS.length) {
-        return response;
-      }
-      await cancelResponse(response);
-    } catch (error) {
-      if (attempt === RETRY_DELAYS_MS.length) {
-        throw new Error(url + ": registry read failed. Retry readback, not publication.", {
-          cause: error,
-        });
-      }
-    }
-    await options.delay(RETRY_DELAYS_MS[attempt]);
-  }
-  throw new Error(url + ": registry read exhausted its retry budget.");
-}
-
-async function readResponseJson(response, label) {
-  return parseJson(await readBoundedResponseText(response, label, BODY_MAX_BYTES), label);
-}
-
-function authorizedTokenRealm(challenge, host) {
-  const url = new URL(challenge.realm);
-  const registryOrigin = new URL("https://" + host).origin;
-  const allowedOrigins =
-    host === "docker.io"
-      ? new Set([registryOrigin, "https://auth.docker.io"])
-      : new Set([registryOrigin]);
-  if (
-    url.protocol !== "https:" ||
-    url.username ||
-    url.password ||
-    !allowedOrigins.has(url.origin)
-  ) {
-    throw new Error(host + ": registry token realm is not an authorized HTTPS origin.");
-  }
-  return url;
-}
-
-async function resolveRegistryToken(challenge, host, repository, options) {
-  const url = authorizedTokenRealm(challenge, host);
-  url.searchParams.set("service", challenge.service ?? host);
-  url.searchParams.set("scope", challenge.scope ?? "repository:" + repository + ":pull");
-  const credential = resolveDockerCredential(host, options);
-  const headers = { accept: "application/json" };
-  if (credential) {
-    headers.authorization = basicAuthorization(credential);
-  }
-  const response = await fetchWithRetry(url, { headers, redirect: "error" }, options);
-  if (!response.ok) {
-    await cancelResponse(response);
-    throw new Error(url.origin + ": registry token request returned HTTP " + response.status + ".");
-  }
-  const token = await readResponseJson(response, url.origin + " registry token");
-  const value = token.token ?? token.access_token;
-  if (typeof value !== "string" || value.length === 0) {
-    throw new Error(url.origin + ": registry token response did not include a token.");
-  }
-  return value;
+function inspectContainerManifest(ref, execFileSyncImpl) {
+  const descriptor = parseJson(
+    runImagetools(["inspect", ref, "--format", "{{json .Manifest}}"], execFileSyncImpl),
+    ref + " manifest descriptor",
+  );
+  const manifest = parseJson(
+    runImagetools(["inspect", ref, "--raw"], execFileSyncImpl),
+    ref + " manifest",
+  );
+  return { digest: requireDigest(descriptor.digest, ref), manifest, ref };
 }
 
 export async function readContainerManifest(ref, options = {}) {
@@ -229,56 +81,26 @@ export async function readContainerManifest(ref, options = {}) {
   if (separator <= ref.indexOf("/")) {
     throw new Error("Container ref must include a tag: " + ref);
   }
-  const image = requireImage(ref.slice(0, separator), "Container image");
+  requireImage(ref.slice(0, separator), "Container image");
   const tag = ref.slice(separator + 1);
   if (!tag || tag.includes("/")) {
     throw new Error("Container ref has an invalid tag: " + ref);
   }
-  const { host, requestHost, repository } = splitImage(image);
-  const requestOptions = {
-    delay: options.delay ?? sleep,
-    dockerConfig: options.dockerConfig,
-    env: options.env ?? process.env,
-    execFileSyncImpl: options.execFileSyncImpl ?? execFileSync,
-    fetchImpl: options.fetchImpl ?? fetch,
-    timeoutMs: options.timeoutMs ?? READ_TIMEOUT_MS,
-  };
-  const url =
-    "https://" + requestHost + "/v2/" + repository + "/manifests/" + encodeURIComponent(tag);
-  const read = (authorization) =>
-    fetchWithRetry(
-      url,
-      {
-        headers: { accept: ACCEPT, ...(authorization ? { authorization } : {}) },
-        redirect: "error",
-      },
-      requestOptions,
-    );
-  let response = await read();
-  if (response.status === 401) {
-    const authentication = response.headers.get("www-authenticate");
-    const challenge = parseBearerChallenge(authentication);
-    await cancelResponse(response);
-    if (challenge) {
-      const token = await resolveRegistryToken(challenge, host, repository, requestOptions);
-      response = await read("Bearer " + token);
-    } else if (authentication?.startsWith("Basic ")) {
-      const credential = resolveDockerCredential(host, requestOptions);
-      if (!credential) {
-        throw new Error(ref + ": registry read requires a Docker credential.");
+  const execFileSyncImpl = options.execFileSyncImpl ?? execFileSync;
+  const delay = options.delay ?? sleep;
+  for (let attempt = 0; attempt <= RETRY_DELAYS_MS.length; attempt += 1) {
+    try {
+      return inspectContainerManifest(ref, execFileSyncImpl);
+    } catch (error) {
+      if (attempt === RETRY_DELAYS_MS.length) {
+        throw new Error(ref + ": registry read failed. Retry readback, not publication.", {
+          cause: error,
+        });
       }
-      response = await read(basicAuthorization(credential));
-    } else {
-      throw new Error(ref + ": registry authentication challenge is unsupported.");
+      await delay(RETRY_DELAYS_MS[attempt]);
     }
   }
-  if (!response.ok) {
-    await cancelResponse(response);
-    throw new Error(ref + ": registry manifest returned HTTP " + response.status + ".");
-  }
-  const digest = requireDigest(response.headers.get("docker-content-digest"), ref);
-  const manifest = await readResponseJson(response, ref);
-  return { digest, manifest, ref };
+  throw new Error(ref + ": registry read exhausted its retry budget.");
 }
 
 function selectedVariants(includeBrowser) {

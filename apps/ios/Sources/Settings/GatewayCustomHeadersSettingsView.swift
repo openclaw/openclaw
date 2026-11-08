@@ -39,7 +39,7 @@ struct GatewayCustomHeadersSettingsView: View {
                     Text(
                         String(
                             localized:
-                            "Sent with foreground app connections to this gateway. Changes apply on the next reconnect; Share extension delivery is not yet supported."))
+                            "Sent over trusted TLS connections to this gateway, including Share extension delivery. Reconnect OpenClaw after changes to update Share access."))
                         .font(OpenClawType.caption)
                     // swiftlint:enable line_length
                 }
@@ -98,8 +98,15 @@ struct GatewayCustomHeadersSettingsView: View {
         return self.entries.contains { $0.name.caseInsensitiveCompare(name) == .orderedSame }
     }
 
+    /// Storage drops a non-token name on save, which made the row look added until the next visit.
+    private var newNameIsInvalidToken: Bool {
+        let name = self.trimmedNewName
+        return !name.isEmpty && !GatewayCustomHeaders.isValidName(name)
+    }
+
     private var canAddEntry: Bool {
         !self.trimmedNewName.isEmpty && !self.newNameIsReserved && !self.newNameIsDuplicate
+            && !self.newNameIsInvalidToken
     }
 
     private var addFooterText: String {
@@ -108,6 +115,9 @@ struct GatewayCustomHeadersSettingsView: View {
         }
         if self.newNameIsDuplicate {
             return "A header with this name already exists."
+        }
+        if self.newNameIsInvalidToken {
+            return "Header names cannot include spaces or other characters outside a single HTTP token."
         }
         return "For secure gateways behind an authenticating proxy, for example Cloudflare Access "
             + "service token headers. Values are stored securely and sent only over TLS to this gateway."

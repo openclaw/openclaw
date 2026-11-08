@@ -19,13 +19,21 @@ export type XaiXSearchOptions = {
   enableVideoUnderstanding?: boolean;
 };
 
+// OpenClaw's to_date names the last included day; xAI applies to_date as an exclusive bound
+// (https://docs.x.ai/developers/tools/x-search), so send the following UTC day.
+function toXaiExclusiveToDate(toDate: string): string {
+  const next = new Date(`${toDate}T00:00:00Z`);
+  next.setUTCDate(next.getUTCDate() + 1);
+  return next.toISOString().slice(0, 10);
+}
+
 function buildXSearchTool(options: XaiXSearchOptions): Record<string, unknown> {
   return {
     type: "x_search",
     ...(options.allowedXHandles?.length ? { allowed_x_handles: options.allowedXHandles } : {}),
     ...(options.excludedXHandles?.length ? { excluded_x_handles: options.excludedXHandles } : {}),
     ...(options.fromDate ? { from_date: options.fromDate } : {}),
-    ...(options.toDate ? { to_date: options.toDate } : {}),
+    ...(options.toDate ? { to_date: toXaiExclusiveToDate(options.toDate) } : {}),
     ...(options.enableImageUnderstanding ? { enable_image_understanding: true } : {}),
     ...(options.enableVideoUnderstanding ? { enable_video_understanding: true } : {}),
   };

@@ -114,7 +114,17 @@ export function prepareInstalledSkillCatalog(params: {
       // A missing directory must not fail preparation or create an unhandled rejection.
       // The retained promise still reports the original error when a companion is requested.
       void resourceRoot?.catch(() => undefined);
+      const contentHash =
+        sandbox?.enabled && typeof deliveredContent === "string"
+          ? resource?.contentHash
+          : skill.contentHash;
       return {
+        catalogRevision: contentHash
+          ? {
+              key: JSON.stringify([contentHash, skill.name, skill.description, skill.locationNote]),
+              contentHash,
+            }
+          : undefined,
         name: skill.name,
         promptListed: promptListed.has(skill.name),
         description: [skill.description, skill.locationNote].filter(Boolean).join("\n"),
