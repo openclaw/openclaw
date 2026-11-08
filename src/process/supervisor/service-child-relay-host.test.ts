@@ -146,9 +146,7 @@ it.each([
           true,
         ),
       );
-      vi.spyOn(process, "kill").mockImplementation(() => {
-        throw Object.assign(new Error("process group is gone"), { code: "ESRCH" });
-      });
+      vi.spyOn(process, "kill").mockImplementation(failGroup("ESRCH"));
       emit({
         type: "startup-error",
         anchorPid: 1235,
@@ -187,10 +185,7 @@ it.each([
 
 it("reports a Linux startup failure ahead of its unconfirmed cleanup", async () => {
   const stub = mockWritableRelay("linux");
-  const outcome = startRelay().then(
-    () => undefined,
-    (error: unknown) => error,
-  );
+  const outcome = startRelay().catch((error: unknown) => error);
   const { emit } = relayPeer(stub);
   emit({ type: "startup-error", anchorPid: 1235, error: "spawn synthetic-command ENOENT" });
   // A closing receipt without native extinction cannot certify cleanup.
@@ -217,10 +212,7 @@ it("bounds a refused launch when the waiting anchor never answers its cancel", a
     initiateSpawn: () => {
       throw new Error("launch authority revoked");
     },
-  }).then(
-    () => undefined,
-    (error: unknown) => error,
-  );
+  }).catch((error: unknown) => error);
   await nextTurn();
   relayPeer(stub).emit({ type: "prepared" });
   await nextTurn();
@@ -254,10 +246,7 @@ it("checks input authority after readiness before writing private stdin", async 
     input: "private prompt",
     prepareInput,
   });
-  const outcome = starting.then(
-    () => undefined,
-    (error: unknown) => error,
-  );
+  const outcome = starting.catch((error: unknown) => error);
   try {
     expect(prepareInput).not.toHaveBeenCalled();
     const { emit } = relayPeer(stub);
@@ -426,9 +415,7 @@ it("publishes a confirmed cancellation exit and retains it for late subscribers"
 
 it("keeps cleanup authority when a root-exit consumer ends already-closed stdin", async () => {
   const stub = mockWritableRelay();
-  vi.spyOn(process, "kill").mockImplementation(() => {
-    throw Object.assign(new Error("synthetic missing process group"), { code: "ESRCH" });
-  });
+  vi.spyOn(process, "kill").mockImplementation(failGroup("ESRCH"));
   const write = stub.control.write.bind(stub.control);
   vi.spyOn(stub.control, "write").mockImplementation((chunk, encoding, callback) => {
     const message: unknown = JSON.parse(chunk.toString());

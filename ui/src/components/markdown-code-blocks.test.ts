@@ -555,6 +555,98 @@ it("shares one worker for long fences and preserves complete text through reveal
   }
 });
 
+it("reuses bounded syntax results across row owners without sharing mutable DOM or request failures", async () => {
+  vi.useFakeTimers();
+  const requests: CodeHighlightRequest[] = [];
+  const terminated = vi.fn();
+  vi.stubGlobal(
+    "Worker",
+    class extends EventTarget {
+      terminate = terminated;
+      postMessage(data: CodeHighlightRequest) {
+        requests.push(data);
+        const end = data.source.indexOf("\n") + 1;
+        const escape = (value: string) =>
+          value.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
+        queueMicrotask(() =>
+          this.dispatchEvent(
+            new MessageEvent("message", {
+              data: {
+                id: data.id,
+                highlighted: data.language !== "plain" && data.language !== "error",
+                previewEnd: end,
+                chunks:
+                  data.language === "error"
+                    ? null
+                    : data.language === "plain"
+                      ? []
+                      : [
+                          {
+                            html: `<span class="hljs-comment" onclick="alert(1)">${escape(data.source.slice(0, end))}</span>`,
+                            to: end,
+                          },
+                          { html: escape(data.source.slice(end)), to: data.source.length },
+                        ],
+              },
+            }),
+          ),
+        );
+      }
+    },
+  );
+  const visit = async (source: string, language = "ts") => {
+    const before = requests.length;
+    const root = document.body.appendChild(document.createElement("section"));
+    root.innerHTML =
+      '<div class="code-block-wrapper"><div class="code-block-viewport"><pre><code></code></pre></div></div>';
+    const code = root.querySelector("code")!;
+    code.textContent = source;
+    code.setAttribute("data-code-highlight", language);
+    const blocks = new MarkdownBlocks(root);
+    try {
+      blocks.update(true);
+      await vi.advanceTimersByTimeAsync(50);
+      expect(code.textContent).toBe(source);
+      expect(code.querySelector("[onclick]")).toBeNull();
+      expect(code.querySelector("span")?.textContent).toBe(
+        language === "plain" || language === "error"
+          ? undefined
+          : source.slice(0, source.indexOf("\n") + 1),
+      );
+    } finally {
+      blocks.dispose();
+      root.remove();
+    }
+    return requests.length - before;
+  };
+
+  const source = "syntax-return < & >\nremaining source\n";
+  expect(await visit(source)).toBe(1);
+  expect(await visit(source)).toBe(0);
+  expect(await visit(source, "js")).toBe(1);
+  expect(await visit(source + "changed\n")).toBe(1);
+  expect(await visit(source, "plain")).toBe(1);
+  expect(await visit(source, "plain")).toBe(0);
+  expect(await visit(source, "error")).toBe(1);
+  expect(await visit(source, "error")).toBe(1);
+
+  // Distinct tiny results exercise the count limit independently of retained bytes.
+  for (let index = 0; index < 33; index++) {
+    expect(await visit(`syntax-count-${index}\nremaining\n`)).toBe(1);
+  }
+  expect(await visit("syntax-count-32\nremaining\n")).toBe(0);
+  expect(await visit("syntax-count-0\nremaining\n")).toBe(1);
+
+  // Four individually admissible results exceed 2M source/markup characters together.
+  const large = (index: number) => `syntax-bytes-${index}\n${"x".repeat(260_000)}`;
+  for (let index = 0; index < 4; index++) {
+    expect(await visit(large(index))).toBe(1);
+  }
+  expect(await visit(large(3))).toBe(0);
+  expect(await visit(large(0))).toBe(1);
+  expect(terminated).toHaveBeenCalledTimes(requests.length);
+});
+
 function expectText(root: ParentNode, selector: string) {
   return expect(root.querySelector(selector)?.textContent);
 }

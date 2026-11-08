@@ -272,9 +272,12 @@ export async function prepareEmbeddedAttemptHistory(
     warn: (message) => log.warn(message),
   });
   input.setup.prepStages.mark("context-engine");
-  // Transcript admission already seals retained replies; restored or replaced replies still need it.
+  // Seal restored model history once; transcript admission already seals retained messages.
   for (const message of messages) {
-    if (message.role === "assistant" && !isOwnedTranscriptPayload(message)) {
+    if (
+      (message.role === "assistant" || message.role === "user" || message.role === "toolResult") &&
+      !isOwnedTranscriptPayload(message)
+    ) {
       freezeJsonSnapshot(message);
     }
   }
