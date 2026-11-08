@@ -99,6 +99,7 @@ final class NativeGatewayWebSocketFixture: @unchecked Sendable {
     private let queue: DispatchQueue
     private let issuedDeviceTokens: [String?]
     private let connectFailures: [Int: ConnectFailure]
+    private let requiredWebSocketHeaders: [String: String]
     private var clients: [Int: Client] = [:]
     private var connectAuth: [ConnectAuth] = []
     private var nextConnectionIndex = 0
@@ -112,7 +113,8 @@ final class NativeGatewayWebSocketFixture: @unchecked Sendable {
         port: UInt16,
         fingerprint: String?,
         issuedDeviceTokens: [String?],
-        connectFailures: [Int: ConnectFailure])
+        connectFailures: [Int: ConnectFailure],
+        requiredWebSocketHeaders: [String: String])
     {
         self.listener = listener
         self.queue = queue
@@ -120,6 +122,7 @@ final class NativeGatewayWebSocketFixture: @unchecked Sendable {
         self.fingerprint = fingerprint
         self.issuedDeviceTokens = issuedDeviceTokens
         self.connectFailures = connectFailures
+        self.requiredWebSocketHeaders = requiredWebSocketHeaders
         self.listener.newConnectionHandler = { [weak self] connection in
             guard let self else {
                 connection.cancel()
@@ -134,7 +137,8 @@ final class NativeGatewayWebSocketFixture: @unchecked Sendable {
     nonisolated static func start(
         issuedDeviceTokens: [String?],
         connectFailures: [Int: ConnectFailure] = [:],
-        tls: Bool = false) async throws -> NativeGatewayWebSocketFixture
+        tls: Bool = false,
+        requiredWebSocketHeaders: [String: String] = [:]) async throws -> NativeGatewayWebSocketFixture
     {
         let parameters: NWParameters
         let fingerprint: String?
@@ -177,7 +181,8 @@ final class NativeGatewayWebSocketFixture: @unchecked Sendable {
                         port: port.rawValue,
                         fingerprint: fingerprint,
                         issuedDeviceTokens: issuedDeviceTokens,
-                        connectFailures: connectFailures)
+                        connectFailures: connectFailures,
+                        requiredWebSocketHeaders: requiredWebSocketHeaders)
                     try Task.checkCancellation()
                     return fixture
                 case let .failed(error):
@@ -323,6 +328,10 @@ final class NativeGatewayWebSocketFixture: @unchecked Sendable {
             return
         }
         self.receivedRequests.append(request)
+        guard self.requiredWebSocketHeaders.allSatisfy({ headers[$0.key.lowercased()] == $0.value }) else {
+            self.sendHTTP(HTTPResponse(status: 403), request: request, index: index)
+            return
+        }
         guard let key = headers["sec-websocket-key"], !key.isEmpty else {
             self.close(index)
             return

@@ -53,6 +53,11 @@ JIT, bytecode, and AOT compilation pass the module inventory through a build
 driver, so large plugin selections do not hit the operating system's
 command-line argument limit.
 
+Native package exports are captured after bundling in a fresh process using the
+same compiler. This keeps export discovery independent of the bundler's resolver
+cache. Unexpected resolution failures stop the build before an incomplete
+export map or executable can be published.
+
 On macOS, the builder uses `scripts/build-mac-sqlite.sh` and the pin in
 `scripts/lib/sqlite-macos.json` to include `runtime/lib/libsqlite3.dylib` for the
 target architecture. It respects `OPENCLAW_MACOS_DEPLOYMENT_TARGET` (default

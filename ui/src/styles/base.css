@@ -61,7 +61,6 @@
     var(--text) 50%,
     var(--chat-composer-surface)
   );
-  --session-hovercard-surface: color-mix(in srgb, var(--card) 94%, black 6%);
 
   --panel: #0e1015;
   --panel-strong: #191c24;
@@ -247,7 +246,6 @@
    * --bg-muted, --panel-hover or --input: include the actual host in validation.
    */
   --ok: #22c55e;
-  --ok-muted: rgba(34, 197, 94, 0.75);
   --ok-subtle: rgba(34, 197, 94, 0.08);
   --destructive: #ef4444;
   --destructive-hover: var(--destructive);
@@ -675,7 +673,6 @@
   --card-highlight: rgba(60, 42, 24, 0.03);
   --popover: #ffffff;
   --popover-foreground: #211e1a;
-  --session-hovercard-surface: var(--card);
 
   --panel: #faf9f7;
   --panel-strong: #f4f1ec;
@@ -745,7 +742,6 @@
   /* Semantic status follows the base pairing rule. Validate label contrast on
      the actual host surface, including neutral interaction layers. */
   --ok: #166534;
-  --ok-muted: rgba(22, 101, 52, 0.75);
   --ok-subtle: rgba(22, 101, 52, 0.08);
   --destructive: #dc2626;
   --destructive-foreground: #fafafa;

@@ -8,6 +8,7 @@ import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { brotliCompress, constants as zlibConstants } from "node:zlib";
 import { gzip } from "libdeflate";
+import { parse, serialize, type DefaultTreeAdapterMap } from "parse5";
 import {
   runnerImport,
   type Plugin,
@@ -38,6 +39,7 @@ import { controlUiPluginDistributionsPlugin } from "./config/control-ui-plugin-d
 import { controlUiSocialCardPlugin } from "./config/control-ui-social-card.ts";
 import { controlUiSolidPlugin } from "./config/control-ui-solid.ts";
 import { extractControlUiStartupAssetPaths } from "./config/control-ui-startup-assets.ts";
+import { controlUiUpdateCachePlugins } from "./config/control-ui-update-cache.ts";
 import { normalizeControlUiBuildInfo } from "./src/build-info-normalizers.ts";
 import type { ControlUiBuildInfo } from "./src/build-info.ts";
 
@@ -669,9 +671,9 @@ function controlUiPrecompressedAssetsPlugin(): Plugin {
 function compactControlUiDocument(html: string): string {
   // Dev and preview share this config; only production builds need the minifier.
   const { transformSync }: typeof import("esbuild") = require("esbuild");
-  // Keep recovery self-contained when every external request fails. Compact only
-  // inline scripts: Vite already minifies CSS; DOM and fallback copy stay intact.
-  return html.replace(
+  // Keep recovery self-contained when every external request fails. Vite already
+  // minifies CSS; compact scripts and markup without changing visible spacing.
+  const scripts = html.replace(
     /<script\b([^>]*)>([\s\S]*?)<\/script>/gu,
     (element, attributes: string, source: string) => {
       if (!source.trim() || /\bsrc\s*=/u.test(attributes)) {
@@ -688,6 +690,20 @@ function compactControlUiDocument(html: string): string {
       return `<script${attributes}>${code.trim()}</script>`;
     },
   );
+  const document = parse(scripts);
+  const compactIndentation = (node: DefaultTreeAdapterMap["node"]) => {
+    if ("tagName" in node && /^(?:script|style|pre|textarea)$/u.test(node.tagName)) {
+      return;
+    }
+    if (node.nodeName === "#text" && "value" in node && /^\s+$/u.test(node.value)) {
+      node.value = " ";
+    }
+    if ("childNodes" in node) {
+      node.childNodes.forEach(compactIndentation);
+    }
+  };
+  compactIndentation(document);
+  return serialize(document);
 }
 
 function controlUiBuildOutputPlugin(
@@ -996,6 +1012,7 @@ export default function controlUiViteConfig(
       controlUiNavigationPreloadsPlugin(),
       controlUiPrecompressedAssetsPlugin(),
       controlUiBuildOutputPlugin(buildInfo, copiedInputs),
+      ...controlUiUpdateCachePlugins(),
       {
         name: "control-ui-dev-stubs",
         configureServer(server) {

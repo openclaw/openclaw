@@ -1,4 +1,5 @@
 import { expect, it } from "vitest";
+import { redactSensitiveText } from "../logging/redact.js";
 import {
   parseWorkerConnectionEndpoint as parseEndpoint,
   resolveWorkerConnectionTarget as resolveTarget,
@@ -88,5 +89,14 @@ it("rejects Access credentials on plaintext worker endpoints", () => {
   expect(parseEndpoint(endpoint)).toBeUndefined();
   expect(() => resolveTarget(endpoint as WorkerConnectionEndpoint)).toThrow(
     "Cloudflare Access credentials require a wss:// worker endpoint",
+  );
+});
+
+it("uses Unix transport without TCP fallback and masks its path in worker errors", () => {
+  const socketPath = "/tmp/oc-node-worker-private/gateway.sock";
+  const target = resolveTarget({ kind: "unix", socketPath, path: "/__openclaw__/worker" });
+  expect(target.url).toBe(`ws+unix:${socketPath}:/__openclaw__/worker`);
+  expect(redactSensitiveText(`connect ENOENT ${socketPath}`, { mode: "tools" })).not.toContain(
+    socketPath,
   );
 });

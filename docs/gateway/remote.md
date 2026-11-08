@@ -13,6 +13,37 @@ OpenClaw runs one Gateway (the master) on a host and connects every client to it
 Remote clients can continue the same Gateway-owned conversation by URL or short
 reference. See [Session synchronization and attachment](/concepts/session-attachment).
 
+## OpenClaw ID nodes (Labs)
+
+With **OpenClaw ID** enabled in Labs, headless nodes can reach a claw through its
+relay and encrypted tunnel, without Tailscale, an OpenClaw ID account, or a shared
+Gateway token. Each node generates and keeps its own tunnel key. The owner
+registers a signed, single-use node invitation; the link defaults to 10 minutes
+and cannot last longer than one hour.
+
+Run the join command supplied by the owner, including the deployment's Discovery
+origin:
+
+```bash
+openclaw node join '<node-join-link>' --discovery-url https://discovery.example.test
+```
+
+Treat the join link as a secret. The node terminal and the owner's approval dialog
+show the same six-digit verification code. Compare all six digits, review the
+self-reported name, platform, commands, and capabilities, then explicitly approve.
+An open dialog never approves a node automatically. The Discovery service can
+relay a pending request but cannot admit the node.
+
+An admitted node key grants only `role: "node"` with client mode `node`. It grants
+no owner or member identity, operator scopes, plugin cookies, or operator HTTP
+access. Session-hosting nodes continue to authenticate their worker WebSocket and
+HTTP transfers with those routes' separate credentials.
+
+See [node pairing](/gateway/pairing#openclaw-id-nodes-labs) for the one-time pairing
+approval and removal behavior. Creating or signing node invitations on the Gateway
+host's command line is not supported by this flow; an owner device or recovery
+root signs admission.
+
 ## The core idea
 
 The Gateway WebSocket binds to **loopback** by default, on port `18789` (`gateway.port`). For remote use, either expose it through Tailscale Serve / a trusted LAN-Tailnet bind, or forward the loopback port over SSH.

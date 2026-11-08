@@ -185,7 +185,9 @@ selected tool-progress policy; `/verbose` retains their diagnostic summaries.
 
 On Telegram, the quiet draft keeps one current-operation status and bounded
 delegated-task status rows. These use public operation names and
-task labels, never command text, arguments, child prose, or results. A late
+task labels, never command text, arguments, child prose, or results. The
+operation row is the tool log's own row without its detail, such as
+`🛠️ Exec running`, and drops its status once the operation finishes. A late
 completion for an older operation cannot replace the currently displayed one.
 Other progress channels retain their existing presentation. With the tool log
 enabled, lifecycle updates reuse a row for each worker. Messages to workers get
