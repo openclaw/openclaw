@@ -399,11 +399,32 @@ describe("GitHub detail public read boundary", () => {
 
   it("expires cached visibility failures", async () => {
     const input = target();
-    const now = vi.spyOn(Date, "now").mockReturnValue(1_000);
+    const now = vi.spyOn(performance, "now").mockReturnValue(1_000);
     const fetchMock = fetchResponses(json({}, 404), json(publicRepo), json(item()));
     await expectStatus(loadGitHubDetail(input, undefined, fetchMock), 404);
     now.mockReturnValue(32_000);
     expect((await loadGitHubDetail(input, undefined, fetchMock)).partial).toBe(false);
+  });
+
+  it("expires cached reads on elapsed time even when the wall clock steps back", async () => {
+    const input = target();
+    const wallClock = vi.spyOn(Date, "now").mockReturnValue(1_000_000);
+    const elapsed = vi.spyOn(performance, "now").mockReturnValue(0);
+    const first = item();
+    const refreshed = item({ body: "v2" });
+    const fetchMock = fetchResponses(
+      json(publicRepo),
+      json(first),
+      json(publicRepo),
+      json(refreshed),
+    );
+    expect((await loadGitHubDetail(input, undefined, fetchMock)).body).toBe(first.body);
+    // The cache window is 5 minutes; elapse 6 minutes while the wall clock
+    // steps backward, which would keep a Date.now-based cache alive forever.
+    elapsed.mockReturnValue(6 * 60_000);
+    wallClock.mockReturnValue(1_000_000 - 60 * 60_000);
+    expect((await loadGitHubDetail(input, undefined, fetchMock)).body).toBe("v2");
+    expect(fetchMock).toHaveBeenCalledTimes(4);
   });
 
   it("bounds UTF-16 content, pages and patch totals", async () => {
