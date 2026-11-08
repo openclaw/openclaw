@@ -1292,7 +1292,6 @@
 ["src/agents/code-mode-swarm.test.ts","./subagents/spawn/subagent-spawn.js","3a9a5926f454ac071d769c28cb3970e6ac5ee54e890f5ecda926b8575ad3298f",1]
 ["src/agents/code-mode.import-boundary.test.ts","./subagents/registry/subagent-registry.js","a9cb63aa92717f17b9621e0c467f064f27f454e227c451b88b2c57637389e201",1]
 ["src/agents/code-mode.import-boundary.test.ts","./tools/agents-wait-tool.js","06f05128b97ce315df365ea767e3ad665ae82cfe604b63668505c3dbe60b0850",1]
-["src/agents/codex-mcp-config.test.ts","../infra/exec-approvals-store.js","5494cc9404b43d73dfeef6d6b53ff76d6ddb9d0bc7d215347ef82418a2700f0b",1]
 ["src/agents/command/assistant-transcript-repair.test.ts","../harness/hook-helpers.js","fc6cde9f6ac5e4cccefd905319b9be6f26ac6da867cc0ac58466b2eb99e26a8e",1]
 ["src/agents/command/attempt-execution.cli.test.ts","../cli-runner.js","84388303116c92f68c9a88583b5e864e3b079dabf01aeae413d67da68d423cd3",1]
 ["src/agents/command/attempt-execution.cli.test.ts","../cli-runner/cli-live-session-registry.js","9ed6491b2033278ac099325a611dac3f14725967a4a9742fd475ded6b8f44ce3",1]
