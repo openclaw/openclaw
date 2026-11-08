@@ -110,18 +110,32 @@ function decodeIrcIngressPayload(
   };
 }
 
+function legacyDirectLaneKey(projection: ReturnType<typeof inspectRawPrivmsg>): string | undefined {
+  // Only + and ! targets were classified as direct before channel-prefix support.
+  const prefix = projection.message.rawTarget.charAt(0);
+  if (prefix !== "+" && prefix !== "!") {
+    return undefined;
+  }
+  return `direct:${normalizeLowercaseStringOrEmpty(projection.message.senderNick)}`;
+}
+
 function inspectIrcIngress(
   raw: IrcIngressRaw,
-  phase: "admission" | "claim",
+  context: { phase: "admission" | "claim"; claimedLaneKey?: string },
 ): { eventId: string; laneKey: string } {
   try {
     const projection = inspectRawPrivmsg(raw.body.rawLine);
-    if (phase === "claim") {
+    if (context.phase === "claim") {
       raw.claimedProjection = projection;
+      // A row queued before +/! channels were recognized stored the old direct lane key.
+      // Accept that admission identity so the message is still delivered, now as a group.
+      if (context.claimedLaneKey === legacyDirectLaneKey(projection)) {
+        return { eventId: raw.body.eventId, laneKey: context.claimedLaneKey };
+      }
     }
     return { eventId: raw.body.eventId, laneKey: projection.laneKey };
   } catch (error) {
-    if (phase === "admission" && error instanceof IrcIngressPayloadError) {
+    if (context.phase === "admission" && error instanceof IrcIngressPayloadError) {
       // IRC cannot replay a rejected socket line; persist it for claim-side dead-lettering.
       return { eventId: raw.body.eventId, laneKey: `invalid:${raw.body.eventId}` };
     }
@@ -147,7 +161,7 @@ export function createIrcIngressMonitor(options: {
       getIrcRuntime().state.openChannelIngressQueue<IrcIngressPayload>({
         accountId: options.accountId,
       }),
-    inspect: (raw, context) => inspectIrcIngress(raw, context.phase),
+    inspect: (raw, context) => inspectIrcIngress(raw, context),
     payload: {
       version: IRC_INGRESS_PAYLOAD_VERSION,
       serialize: (raw) => raw.body,

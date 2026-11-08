@@ -1,0 +1,2 @@
+75
+# IRC +/! channel classification: normalize/route, inbound ingress, and legacy direct-lane upgrade delivery; no cheaper layer covers the shared classifier or queue identity.
