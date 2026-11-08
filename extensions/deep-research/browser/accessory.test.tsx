@@ -4,8 +4,6 @@ import { render } from "@solidjs/web";
 import { describe, expect, it } from "vitest";
 import { ResearchAccessory } from "./index.js";
 
-type Snapshot = Parameters<Parameters<typeof ResearchAccessory>[0]["client"]["read"]>[0];
-
 function stubClient(snapshot: unknown) {
   return {
     read: () => snapshot,
@@ -43,5 +41,3 @@ describe("ResearchAccessory", () => {
     expect(offline.textContent).toBe("Research · offline");
   });
 });
-
-export type { Snapshot };
