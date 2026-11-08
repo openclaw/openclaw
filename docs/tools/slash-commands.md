@@ -406,7 +406,7 @@ list of requirements reaches the agent complete.
     | `/plugins list\|inspect\|show\|get\|install\|enable\|disable` | `commands.plugins: true` | Inspect or mutate plugin state. Owner-only for writes. Alias: `/plugin` |
     | `/debug show\|set\|unset\|reset` | `commands.debug: true` | Runtime-only config overrides. Owner-only |
     | `/restart` | `commands.restart: true` (default) | Restart OpenClaw |
-    | `/update` | `commands.restart: true` (default), owner | Update OpenClaw using its configured update channel; works with default tool profiles and sends a completion or failure notice in the same chat |
+    | `/update` | `commands.restart: true` (default), owner | Update OpenClaw using its configured update channel; works with default tool profiles and sends a completion or failure notice in the same chat when that chat is an owner destination |
     | `/send on\|off\|inherit` | owner | Set send policy |
 
     Natural-language update requests use the `gateway` tool's `update.run`
@@ -415,6 +415,11 @@ list of requirements reaches the agent complete.
     handler, also used by the Control UI. Chat access alone does not grant
     permission to update. See
     [Updating from chat](/install/updating#from-chat).
+
+    Notices reach only an owner destination: `commands.ownerAllowFrom` or a linked
+    administrator's direct conversation. Group and channel chats do not inherit a
+    person's owner authority, and a skipped notice leaves the outcome in the update
+    run record and Control UI instead of being redirected.
 
   </Accordion>
 
