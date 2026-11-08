@@ -8,8 +8,11 @@ import {
   anthropicEvents,
   createAnthropicResponse,
 } from "../../../../packages/ai/src/provider-transport-parity.test-support.js";
+import { resolveTestOpenAIProviderCapabilities } from "../../../../packages/ai/src/providers/openai-provider.test-support.js";
 import { createAnthropicMessagesTransportStreamFn } from "../../../../packages/ai/src/transports/anthropic-transport-stream.js";
 import { createAssistantOutput } from "../../../../packages/ai/src/transports/assistant-output.js";
+import { buildOpenAICompletionsParams } from "../../../../packages/ai/src/transports/openai-completions-params.js";
+import { makeCompletionsModel } from "../../../../packages/ai/src/transports/openai-completions.test-support.js";
 import { convertResponsesMessages } from "../../../../packages/ai/src/transports/openai-responses-replay-messages-internal.js";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../../test/helpers/promise.js";
 import type { SessionEntry } from "../../../config/sessions/types.js";
@@ -143,6 +146,99 @@ function createFixture() {
 
 beforeEach(() => {
   vi.resetAllMocks();
+});
+
+it("fits a long settled tool turn inside its final-answer request", async () => {
+  const fixture = createFixture();
+  const contextTokenBudget = 131_072;
+  const prompt = "Summarize the completed work without repeating tool actions.";
+  const history: AgentMessage[] = [
+    { role: "user", content: "source context ".repeat(19_000), timestamp: 1 },
+  ];
+  for (let index = 0; index < 44; index += 1) {
+    const assistant = createAssistantOutput(model);
+    assistant.content = [
+      { type: "toolCall", id: `call_${index}`, name: "read", arguments: { index } },
+    ];
+    assistant.stopReason = "toolUse";
+    history.push(assistant, {
+      role: "toolResult",
+      toolCallId: `call_${index}`,
+      toolName: "read",
+      content: [{ type: "text", text: "source line\n".repeat(700) + `result ${index}` }],
+      isError: false,
+      timestamp: index + 2,
+    });
+  }
+  const proxyModel = makeCompletionsModel({
+    provider: "vllm",
+    baseUrl: "http://localhost:8000/v1",
+    reasoning: false,
+    contextWindow: contextTokenBudget,
+    maxTokens: 8_192,
+  });
+  const request = (messages: AgentMessage[]) => {
+    const priorHost = getAiTransportHost();
+    configureAiTransportHost({
+      ...priorHost,
+      resolveProviderRequestCapabilities: resolveTestOpenAIProviderCapabilities,
+    });
+    try {
+      const providerMessages = [
+        ...messages.filter(
+          (message) =>
+            message.role === "user" ||
+            message.role === "assistant" ||
+            message.role === "toolResult",
+        ),
+        { role: "user", content: prompt, timestamp: 99 },
+      ] as Parameters<typeof buildOpenAICompletionsParams>[1]["messages"];
+      return buildOpenAICompletionsParams(
+        proxyModel,
+        {
+          systemPrompt: "",
+          messages: providerMessages,
+          tools: [
+            { name: "read", description: "Read a source file", parameters: { type: "object" } },
+          ],
+        },
+        { maxTokens: 8_192 },
+      );
+    } finally {
+      configureAiTransportHost(priorHost);
+    }
+  };
+  expect(() => request(history)).toThrow("Context window exceeded");
+
+  fixture.input.attempt.operation = "settled-tool-finalization";
+  fixture.input.attempt.contextTokenBudget = contextTokenBudget;
+  fixture.input.attempt.prompt = prompt;
+  fixture.input.attempt.settledTurnFinalizationMessages = history;
+  mocks.readEntry.mockResolvedValue(undefined);
+  await prepareEmbeddedAttemptHistory(fixture.input, fixture.assertActive);
+
+  const selected = fixture.agent.state.messages;
+  const finalizerRequest = request(selected);
+  expect(finalizerRequest.max_completion_tokens ?? finalizerRequest.max_tokens).toBe(8_192);
+  const selectedLastResult = selected.find(
+    (message) => message.role === "toolResult" && message.toolCallId === "call_43",
+  );
+  expect(selectedLastResult?.role).toBe("toolResult");
+  if (selectedLastResult?.role !== "toolResult") {
+    throw new Error("Expected the latest tool result in the final-answer context");
+  }
+  expect(selectedLastResult.content).toContainEqual({
+    type: "text",
+    text: "source line\n".repeat(700) + "result 43",
+  });
+  const lastResult = history.at(-1);
+  expect(lastResult?.role).toBe("toolResult");
+  if (lastResult?.role !== "toolResult") {
+    throw new Error("Expected the last tool result");
+  }
+  expect(lastResult.content).toEqual([
+    { type: "text", text: "source line\n".repeat(700) + "result 43" },
+  ]);
 });
 
 it("publishes restored assistant history without rehashing it on later model requests", async () => {
