@@ -69,6 +69,41 @@ describe("state-dir-gateway-check", () => {
     ).toEqual({ kind: "allow" });
   });
 
+  it.each([false, true])("uses native case identity with existing paths: %s", async (exists) => {
+    const stateDir = path.join(root, ".openclaw");
+    const configPath = path.join(stateDir, "openclaw.json");
+    if (exists) {
+      await fs.mkdir(stateDir);
+      await fs.writeFile(configPath, "{}");
+    }
+    for (const field of ["state", "config", "both"]) {
+      expect(
+        compareCliGatewayStateDirs({
+          cliStateDir: stateDir,
+          cliConfigPath: configPath,
+          gatewayStateDir: field === "config" ? stateDir : path.join(root, ".OPENCLAW"),
+          gatewayConfigPath: field === "state" ? configPath : path.join(stateDir, "OPENCLAW.JSON"),
+          source: "installed Gateway service",
+          mode: "refuse",
+        }).kind,
+      ).toBe(process.platform === "win32" ? "allow" : "refuse");
+    }
+  });
+
+  it.each(["state", "config"])("refuses genuinely different %s paths", (field) => {
+    expect(
+      compareCliGatewayStateDirs({
+        cliStateDir,
+        cliConfigPath,
+        gatewayStateDir: field === "state" ? path.join(root, "other") : cliStateDir,
+        gatewayConfigPath:
+          field === "config" ? path.join(cliStateDir, "other.json") : cliConfigPath,
+        source: "live Gateway",
+        mode: "refuse",
+      }).kind,
+    ).toBe("refuse");
+  });
+
   it("refuses an offline home mismatch using the recorded service environment", async () => {
     const canonicalRoot = await fs.realpath(root);
     const serviceHome = path.join(canonicalRoot, "service-home");
