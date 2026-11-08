@@ -66,19 +66,13 @@ jobs:
           } >> "$GITHUB_OUTPUT"
           echo "Testing main tooling at ${GITHUB_SHA} against openclaw@${SELECTOR} (${tag}, ${sha})." >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Checkout published source
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ steps.release.outputs.sha }}
-          path: shipped
-          fetch-depth: 1
-          persist-credentials: false
-
-      - name: Install published source dependencies
-        working-directory: shipped
+      - name: Materialize published source as data
         env:
-          CI: "true"
-        run: pnpm install --frozen-lockfile --prefer-offline
+          RELEASE_SHA: ${{ steps.release.outputs.sha }}
+        run: |
+          set -euo pipefail
+          mkdir shipped
+          git archive "$RELEASE_SHA" | tar -x -C shipped
 
       - name: Verify published npm bytes with main tooling
         working-directory: shipped

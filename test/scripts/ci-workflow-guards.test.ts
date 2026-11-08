@@ -997,6 +997,15 @@ AFTER_CD
     expect(workflow.on.schedule).toEqual([{ cron: "17 5 * * *" }]);
     expect(verify.strategy.matrix.selector).toEqual(["latest", "extended-stable"]);
     expect(verify["timeout-minutes"]).toBe(360);
+    const checkoutSteps = steps.filter((step) => step.uses?.startsWith("actions/checkout@"));
+    expect(checkoutSteps).toHaveLength(1);
+    expect(checkoutSteps[0]?.with?.ref).toBeUndefined();
+    const setup = requiredWorkflowStep(steps, "Setup main tooling");
+    expect(setup.with?.["cache-mode"]).toBe("restore");
+    const materialize = requiredWorkflowStep(steps, "Materialize published source as data");
+    expect(materialize.run).toContain('git archive "$RELEASE_SHA" | tar -x -C shipped');
+    expect(materialize.run).not.toContain("pnpm");
+    expect(steps.indexOf(setup)).toBeLessThan(steps.indexOf(materialize));
     const postpublish = requiredWorkflowStep(steps, "Verify published npm bytes with main tooling");
     expect(postpublish.run).toContain("../scripts/openclaw-npm-postpublish-verify.ts");
     expect(postpublish.env?.TSX_TSCONFIG_PATH).toBe("${{ github.workspace }}/tsconfig.json");
