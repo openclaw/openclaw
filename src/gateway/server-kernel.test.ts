@@ -13,7 +13,12 @@ import {
   stageActivePluginRegistry,
   waitForPluginRegistryRetirement,
 } from "../plugins/runtime.js";
-import { getActiveGatewayRootWorkCount } from "../process/gateway-work-admission.js";
+import {
+  beginGatewayRestartSignalAdmission,
+  getActiveGatewayRootWorkCount,
+  markGatewayRestartDraining,
+  resetGatewayWorkAdmission,
+} from "../process/gateway-work-admission.js";
 import { getActiveSecretsRuntimeConfigSnapshot } from "../secrets/runtime-state.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
@@ -75,9 +80,10 @@ function createRegisteredChannel(plugin: ChannelPlugin) {
 }
 
 describe("createGatewayKernel", () => {
-  it.each([false, true])(
-    "starts recovered channels only before close (closing=%s)",
-    async (closing) => {
+  it.each(["accepting", "closing", "draining", "restart-signal"] as const)(
+    "starts recovered channels only before close or committed drain (%s)",
+    async (phase) => {
+      const closing = phase === "closing" || phase === "draining";
       const fixture = await createKernelFixture("gateway-kernel-breaker-recovery-close", {
         env: {
           OPENCLAW_SKIP_CHANNELS: undefined,
@@ -130,7 +136,11 @@ describe("createGatewayKernel", () => {
         await expect(kernel.channelManager.recoverAutostartSuppression()).resolves.toBeUndefined();
         expect(startAccount).not.toHaveBeenCalled();
 
-        if (closing) {
+        if (phase === "draining") {
+          markGatewayRestartDraining("restart");
+        } else if (phase === "restart-signal") {
+          expect(beginGatewayRestartSignalAdmission()).not.toBeNull();
+        } else if (closing) {
           await kernel.prepareClose();
         }
         kernel.releaseStartupAccountStarts();
@@ -142,6 +152,7 @@ describe("createGatewayKernel", () => {
         await closeKernelFixture(kernel, state, () =>
           restoreActivePluginRegistrySnapshot(originalPluginRegistry),
         );
+        resetGatewayWorkAdmission();
       }
     },
   );

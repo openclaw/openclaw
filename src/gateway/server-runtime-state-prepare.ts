@@ -14,7 +14,10 @@ import type { createSubsystemLogger } from "../logging/subsystem.js";
 import { runtimeForLogger } from "../logging/subsystem.js";
 import type { createPluginRegistryOwner } from "../plugins/runtime.js";
 import { isGatewayDraining } from "../process/command-queue.js";
-import { getActiveGatewayRootWorkCount } from "../process/gateway-work-admission.js";
+import {
+  getActiveGatewayRootWorkCount,
+  getGatewayRestartDrainSignal,
+} from "../process/gateway-work-admission.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { getActiveSecretsRuntimeConfigSnapshot } from "../secrets/runtime-state.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -462,7 +465,8 @@ export async function prepareGatewayKernelState(params: {
     ...(opts.tryRecoverChannelAutostartSuppression
       ? { tryRecoverAutostartSuppression: opts.tryRecoverChannelAutostartSuppression }
       : {}),
-    isClosing: () => lifecycle.closePreludeStarted,
+    // Active-work drain precedes closePrelude; no channel may recreate its daemon then.
+    isClosing: () => lifecycle.closePreludeStarted || getGatewayRestartDrainSignal().aborted,
   });
   channelManager.setAutostartSuppression(opts.channelAutostartSuppression ?? null);
   const sidecarStartup = opts.sidecarStartup ?? "start";

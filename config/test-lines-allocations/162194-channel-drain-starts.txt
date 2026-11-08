@@ -1,0 +1,2 @@
+# Extend real Gateway kernel startup proof for committed drain and reversible restart fencing.
+11

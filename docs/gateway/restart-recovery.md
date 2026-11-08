@@ -13,6 +13,9 @@ aborts that work promptly. At the next startup, each marked session gets one
 ordinary system input asking the agent to inspect current state and continue.
 The transcript remains the agent's context; the Gateway does not reconstruct or
 replay the old execution.
+Channel starts and automatic channel restarts stop once this one-way drain begins,
+before resource close. Already running channels retain their normal cleanup and
+accepted-reply settlement.
 
 During graceful shutdown, interrupted embedded runs have a short abort-settle
 budget (normally two seconds) to deliver their terminal partial reply before their
