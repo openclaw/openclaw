@@ -129,13 +129,13 @@ describe("process supervisor", () => {
     const run = await spawn({ scopeKey: "scope" });
     adapter.settle(0);
     await run.wait();
-    const { failure, caller } = (() => {
+    const { failure, caller: callerRef } = (() => {
       const caller = new ExpiredCaller();
       return { failure: caller.fail(), caller: new WeakRef(caller) };
     })();
     extinction.reject(failure);
     await run.waitForExtinction!().catch(() => undefined);
-    await expectCollected(caller);
+    await expectCollected(callerRef);
     await expect(cleanup()).rejects.toBe(failure);
     await expect(supervisor.shutdown()).rejects.toBe(failure);
     expect(failure.code).toBe("ECLEANUP");

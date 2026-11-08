@@ -38,12 +38,12 @@ describe("worker environment service", () => {
         return workerService.reconcileDesktopPolicy();
       }
     }
-    const publisher = await (async () => {
+    const publisherRef = await (async () => {
       const publisher = new RetiredPublisher();
       await publisher.publish();
       return new WeakRef(publisher);
     })();
-    await expectCollected(publisher);
+    await expectCollected(publisherRef);
     expect(workerService.list()).toEqual([]);
   });
 

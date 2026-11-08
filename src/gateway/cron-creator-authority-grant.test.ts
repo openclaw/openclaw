@@ -100,11 +100,11 @@ describe("cron creator authority grants", () => {
         return scope.signal;
       }
     }
-    const { signal, caller } = (() => {
+    const { signal, caller: callerRef } = (() => {
       const caller = new RevokingCaller();
       return { signal: caller.revoke(), caller: new WeakRef(caller) };
     })();
-    await expectCollected(caller);
+    await expectCollected(callerRef);
     expect(signal.reason).toBeInstanceOf(TypeError);
     expect(signal.reason).toMatchObject({ name: "CronCreatorAuthorityExpiredError", status: 403 });
     expect(() => signal.throwIfAborted()).toThrow(signal.reason);
