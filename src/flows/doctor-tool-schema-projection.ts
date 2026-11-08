@@ -121,9 +121,9 @@ export async function collectAgentRuntimeToolSchemaFindings(
 ): Promise<readonly HealthFinding[]> {
   let tools: AnyAgentTool[];
   try {
-    const { createOpenClawCodingTools } = await import("../agents/agent-tools.js");
-    tools = withPluginRuntimeGenerationRegistryScope(params.toolRegistry, () =>
-      createOpenClawCodingTools({
+    const { createOpenClawCodingToolsInternalAsync } = await import("../agents/agent-tools.js");
+    tools = await withPluginRuntimeGenerationRegistryScope(params.toolRegistry, () =>
+      createOpenClawCodingToolsInternalAsync({
         agentId: params.agentId,
         agentDir: params.agentDir,
         conversationCapabilityProfile: params.capabilityProfile,

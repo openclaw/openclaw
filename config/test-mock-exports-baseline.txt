@@ -3528,7 +3528,6 @@
 ["src/commands/doctor-lint-process.test.ts","../process/exec.js","e8dbc42defa0a7b7f1aa7490ec52c9be442618434e6afba2a260d90fc20a15af",1]
 ["src/commands/doctor-lint-process.test.ts","../process/output-drain.js","3516e464c9defc659ad6f4776c71a06b0a238bb38e9a1f18551d1acffd1b2b35",1]
 ["src/commands/doctor-lint.native-admission.test.ts","../flows/doctor-health-contributions.js","ce2e395e5d791bfa117bff24182acd0ff5f6aae03d11fd83241f430bdf6acebf",1]
-["src/commands/doctor-lint.oauth.test.ts","../agents/agent-tools.js","3e4f81bf492de4ad7eb1ba9f9058bc62b9abec2316efbad5665a2dcc73303a05",1]
 ["src/commands/doctor-lint.oauth.test.ts","../agents/prepared-model-catalog.js","7372afe503553676b99b80f38ac2228b0b4760f2893ad1e00c83048875cc38ae",1]
 ["src/commands/doctor-lint.oauth.test.ts","../flows/doctor-health-contributions.js","aa16a9a0a32ea603cde9b65e9a8e041fa2420ec44ff4755a5542be71b26ecac9",1]
 ["src/commands/doctor-lint.oauth.test.ts","../plugins/provider-runtime.js","bffb35a9cda72cec66a5b0e1a5d17e348165bccb0b1a8e62a6bff440f64923a0",1]
