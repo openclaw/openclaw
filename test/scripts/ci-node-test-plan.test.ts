@@ -1,4 +1,4 @@
-import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, matchesGlob } from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, afterEach, beforeAll, describe, expect, it, onTestFinished, vi } from "vitest";
@@ -23,6 +23,7 @@ import {
   packCompactNodeTestJobsToCapacity,
   resolveCanonicalNodeTestConfig,
   resolveStartupCorpusTestFiles,
+  shouldPrepareSourceWorkerCache,
 } from "../../scripts/lib/ci-node-test-plan.mts";
 import {
   isPolicyTestOwnedPath,
@@ -49,6 +50,7 @@ import {
 import {
   buildVitestRunPlans,
   createVitestRunSpecs,
+  resolveAffectedTestsFromImportGraph,
 } from "../../scripts/test-projects.test-support.mts";
 import { expectNoNodeFsScans } from "../../src/test-utils/fs-scan-assertions.js";
 import { spawnNodeEvalSync } from "../../src/test-utils/node-process.js";
@@ -289,6 +291,80 @@ async function mockFastPaths(files: string[] = []) {
     getUnitFastTestFilesForIncludePatterns: () => [...files],
   }));
 }
+
+it("amortizes source worker preparation only across a large selected source workload", () => {
+  const cwd = tempDirs.make("source-worker-borrowers-");
+  mkdirSync(join(cwd, "src/infra"), { recursive: true });
+  writeFileSync(
+    join(cwd, "src/infra/runtime-process-entrypoints.ts"),
+    "export const worker = 1;\n",
+  );
+  writeFileSync(
+    join(cwd, "src/shared.ts"),
+    'export { worker } from "./infra/runtime-process-entrypoints.ts";\n',
+  );
+  const shards = Array.from({ length: 12 }, (_, index) => ({
+    checkName: `checks-node-changed-${index}`,
+    shardName: `changed-${index}`,
+    runner: "blacksmith-8vcpu-ubuntu-2404",
+    configs: ["test/vitest/vitest.infra.config.ts"],
+    requiresDist: false,
+    includePatterns: [`src/worker-${index}.test.ts`],
+  }));
+  for (let index = 0; index < 12; index++) {
+    writeFileSync(
+      join(cwd, `src/worker-${index}.test.ts`),
+      'import { worker } from "./shared.ts";\n',
+    );
+    writeFileSync(join(cwd, `src/pure-${index}.test.ts`), "export {};\n");
+    writeFileSync(
+      join(cwd, `src/mocked-${index}.test.ts`),
+      'import { vi } from "vitest";\nvi.mock("./infra/runtime-process-entrypoints.ts", () => ({}));\nimport "./shared.ts";\n',
+    );
+  }
+  const source = ["src/worker.ts"];
+  expect(shouldPrepareSourceWorkerCache(shards, source, cwd)).toBe(true);
+  expect(shouldPrepareSourceWorkerCache(shards.slice(1), source, cwd)).toBe(false);
+  expect(shouldPrepareSourceWorkerCache(shards, ["src/worker.test.ts"], cwd)).toBe(false);
+  expect(
+    shouldPrepareSourceWorkerCache(
+      shards.map((shard, index) => ({ ...shard, includePatterns: [`src/pure-${index}.test.ts`] })),
+      source,
+      cwd,
+    ),
+  ).toBe(false);
+  expect(
+    shouldPrepareSourceWorkerCache(
+      shards.map((shard, index) => ({
+        ...shard,
+        includePatterns: [`src/mocked-${index}.test.ts`],
+      })),
+      source,
+      cwd,
+    ),
+  ).toBe(false);
+  expect(
+    resolveAffectedTestsFromImportGraph("src/infra/runtime-process-entrypoints.ts", cwd, {
+      forceFull: true,
+      resolveAliases: true,
+      runtimeOnly: true,
+    }),
+  ).toContain("src/mocked-0.test.ts");
+  for (const excluded of [
+    { requiresDist: true },
+    { pretestBuildMode: "private-qa" as const },
+    { runner: "ubuntu-24.04" },
+    { includePatterns: ["test/scripts/worker.test.ts"] },
+  ]) {
+    expect(
+      shouldPrepareSourceWorkerCache(
+        [{ ...shards[0]!, ...excluded }, ...shards.slice(1)],
+        source,
+        cwd,
+      ),
+    ).toBe(false);
+  }
+});
 
 describe("Control UI release-only inventories", () => {
   const sidebar = "ui/src/components/app-sidebar.stress.browser.test.ts";

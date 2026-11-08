@@ -73,6 +73,62 @@ import {
 } from "./ci-workflow.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+it("keeps source-worker acceleration optional and scoped to eligible PRs", () => {
+  const nodeTestShards = Array.from({ length: 12 }, (_, index) => ({
+    checkName: `checks-node-changed-${index}`,
+    shardName: `changed-${index}`,
+    runner: "blacksmith-8vcpu-ubuntu-2404",
+    configs: ["test/vitest/vitest.infra.config.ts"],
+    requiresDist: false,
+    includePatterns: [`src/worker-${index}.test.ts`],
+  }));
+  const fixture = {
+    eventName: "pull_request" as const,
+    bundledPlanner: true,
+    sourceWorkerCachePlan: true,
+    nodeTestShards,
+    changedPaths: ["src/worker.ts"],
+  };
+  const eligible = runManifestFixture(fixture);
+  expect(eligible.status, eligible.output).toBe(0);
+  expect(eligible.outputs.run_source_worker_cache).toBe("true");
+  expect(
+    runManifestFixture({ ...fixture, sourceWorkerCachePlan: false }).outputs
+      .run_source_worker_cache,
+  ).toBe("false");
+  const workflow = readCiWorkflow();
+  const producer = workflow.jobs["prepare-source-worker-cache"];
+  const consumer = workflow.jobs["checks-node-core-test-nondist-shard"];
+  const context = {
+    eventName: "pull_request" as const,
+    repository: "openclaw/openclaw",
+    ref: "refs/pull/42/merge",
+    runAttempt: 1,
+    preflightOutputs: {
+      run_source_worker_cache: "true",
+      run_checks_node_core_nondist: "true",
+      cache_mode: "restore",
+      node_runner_backend: "blacksmith",
+      frozen_target: "false",
+    },
+  };
+  expect(evaluateWorkflowCondition(producer.if, context)).toBe(true);
+  expect(evaluateWorkflowCondition(producer.if, { ...context, runAttempt: 2 })).toBe(false);
+  expect(
+    evaluateWorkflowCondition(producer.if, { ...context, headRepository: "example/fork" }),
+  ).toBe(false);
+  expect(consumer.needs).toContain("prepare-source-worker-cache");
+  for (const result of ["failure", "skipped"]) {
+    expect(
+      evaluateWorkflowCondition(consumer.if, {
+        ...context,
+        jobResults: { "prepare-source-worker-cache": result },
+      }),
+    ).toBe(true);
+  }
+  expect(evaluateWorkflowCondition(consumer.if, { ...context, cancelled: true })).toBe(false);
+});
 // Reuse content-keyed compiler artifacts; each manifest still gets fresh files and processes.
 const compilerTempDir = useAutoCleanupTempDirTracker(afterAll).make(
   "openclaw-ci-manifest-compiler-",

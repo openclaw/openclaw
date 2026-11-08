@@ -1057,7 +1057,11 @@ rates still need CI measurement.
 Source-only Linux Node 24 shards can restore compiled Vitest workers from the
 protected cache warmer. The warmer prepares one generation before SDK or runtime
 builds change package resolution, joins the preparation owner, and publishes only
-the retained cache. PR jobs restore it without publishing. Consumers enable
+the retained cache. Large same-repository PRs with a source change and at least
+12 source rows that import worker declarations can prepare one run-specific generation before Node
+jobs start. That optional producer publishes only to the PR merge-ref cache on
+the first attempt; ordinary PR cache authority stays restore-only. Producer or
+publication failure falls back to normal compilation. Consumers enable
 reuse only when an archive exists; cold runners keep ordinary fresh compilation.
 The worker owner verifies source and dependency bytes, compiler identity,
 resolution topology, environment, output inventory, and the exact checkout and

@@ -2714,9 +2714,11 @@ export function hasImportGraphImpactOnTargets(
 
 function walkAffectedTestsFromImportGraph(
   changedPaths: string[],
-  { reverseImports, testFiles }: ImportGraph,
+  graph: ImportGraph,
   maxDepth = Infinity,
+  excludeMockedConsumers = false,
 ) {
+  const { reverseImports, testFiles } = graph;
   const queue = changedPaths.map((file) => ({ file, depth: 0 }));
   const seen = new Set(changedPaths);
   const targets: string[] = [];
@@ -2735,13 +2737,22 @@ function walkAffectedTestsFromImportGraph(
       queue.push({ file: importer, depth: depth + 1 });
     }
   }
+  if (excludeMockedConsumers) {
+    // Cache acceleration needs likely real borrowers. Even a partial mock is
+    // conservatively excluded; ordinary affected-test selection keeps all edges.
+    const mocked = new Set([...seen].flatMap((file) => graph.reverseMocks.get(file) ?? []));
+    for (const test of walkAffectedTestsFromImportGraph([...mocked], graph)) {
+      mocked.add(test);
+    }
+    return targets.filter((file) => !mocked.has(file)).toSorted();
+  }
   return targets.toSorted((left, right) => left.localeCompare(right));
 }
 
 export function resolveAffectedTestsFromImportGraph(
   changedPath: string | string[],
   cwd: string,
-  options: ImportGraphOptions & { forceFull?: boolean } = {},
+  options: ImportGraphOptions & { forceFull?: boolean; excludeMockedConsumers?: boolean } = {},
 ) {
   const paths = typeof changedPath === "string" ? [changedPath] : changedPath;
   const changedTests = options.direct
@@ -2761,6 +2772,7 @@ export function resolveAffectedTestsFromImportGraph(
   if (
     !options.resolveAliases &&
     !options.runtimeOnly &&
+    !options.excludeMockedConsumers &&
     options.forceFull !== true &&
     options.maxDepth === undefined &&
     typeof changedPath === "string"
@@ -2779,6 +2791,7 @@ export function resolveAffectedTestsFromImportGraph(
       paths,
       getImportGraph(cwd, options, paths),
       options.direct ? 1 : options.maxDepth,
+      options.excludeMockedConsumers,
     ),
   ]).toSorted((left, right) => left.localeCompare(right));
 }

@@ -105,6 +105,7 @@ type CiManifestFixtureOptions = {
   runNode?: boolean;
   historicalReader?: boolean;
   toolingOwnerSelection?: boolean;
+  sourceWorkerCachePlan?: boolean;
   runnerBackend?: "blacksmith" | "github" | "hybrid" | "runson";
   nodeRunnerBackend?: "blacksmith" | "github" | "hybrid" | "runson";
   runnerProfile?: "blacksmith" | "github" | "hybrid";
@@ -299,6 +300,7 @@ export function runCiManifestFixture(options: CiManifestFixtureOptions, compiler
     }
     for (const [enabled, name] of [
       [options.toolingOwnerSelection, "isToolingTestOwnerPath"],
+      [options.sourceWorkerCachePlan, "shouldPrepareSourceWorkerCache"],
       [options.startupCorpusCoverage, "hasCompleteStartupCorpusCoverage"],
       [
         options.startupCorpusSelection ?? options.startupCorpusCoverage,
@@ -307,6 +309,14 @@ export function runCiManifestFixture(options: CiManifestFixtureOptions, compiler
     ] as const) {
       if (enabled) {
         appendPlanner(`\n${reexport(name, "scripts/lib/ci-node-test-plan.mts")}`);
+      }
+    }
+    if (options.sourceWorkerCachePlan) {
+      writeFixture("src/infra/runtime-process-entrypoints.ts", "export const worker = 1;\n");
+      for (const row of options.nodeTestShards ?? []) {
+        for (const file of (row.includePatterns as string[] | undefined) ?? []) {
+          writeFixture(file, 'import { worker } from "./infra/runtime-process-entrypoints.ts";\n');
+        }
       }
     }
     if (options.startupCorpusSelection ?? options.startupCorpusCoverage) {

@@ -196,6 +196,15 @@ runner select both checks in the artifact producer on current targets, while the
 changed Node plan defers its boundary coverage to that producer. This opt-in does
 not enable unrelated proof-tier checks.
 
+Large same-repository PRs selecting at least 12 source rows that import worker
+declarations after a source change
+can prepare the source worker generation once before Node jobs start. This
+optional producer saves only the current run's compiled-worker key on the PR
+merge ref, on its first attempt. General PR caches remain restore-only; missing,
+failed, or incompatible generations retain normal per-job compilation. The
+producer adds checkout, setup, and publication time before the Node matrix, so
+its net cost and critical-path benefit must be measured across eligible runs.
+
 Full and runtime-only compiled workers reserve separate live/cache slots, so
 runtime checks cannot replace a retained full generation. The protected warmer
 keeps its prebuild full seed for source-only Node shards and publishes the full

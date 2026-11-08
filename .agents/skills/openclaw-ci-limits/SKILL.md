@@ -790,7 +790,11 @@ These are intentionally guarded by the `ci-workflow-guards`,
 - Vitest transform and Node compile caches are restore-only in CI and use
   immutable Actions caches; the main-push/daily/dispatch warmer is their sole
   writer. Build, QA and test orchestration consume its shared Node compile seed.
-  PRs create no runtime-cache archives.
+  PR test jobs create no runtime-cache archives. The optional source-worker
+  producer may save only its run/attempt-specific compiled-worker key on a
+  same-repository PR merge ref, first attempt, with at least 12 selected source
+  rows that import worker declarations and a source change. It never writes shared dependency or transform
+  seeds. Producer failure leaves the test jobs' normal compilation intact.
 - Full compiled-worker seeds retain separate prebuild and postbuild archives.
   The existing protected warmer publishes its already-prepared postbuild full
   generation; only selected artifact-producer source verifiers restore it.

@@ -3030,6 +3030,25 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
       /(?:^|\n)\s*(?:\.artifacts\/build-all-cache|dist\/|dist-runtime\/|packages\/\*\/dist\/|extensions\/\*\/dist\/|~\/\.cache\/ms-playwright|~\/\.local\/share\/pnpm|~\/\.cache\/pnpm|node_modules)(?:\n|$)/u;
     for (const { file, step, jobId, jobCondition } of directCaches) {
       if (step.uses?.startsWith("actions/cache/save@")) {
+        if (jobId === "prepare-source-worker-cache") {
+          expect(file).toBe(".github/workflows/ci.yml");
+          expectIncludes(jobCondition, [
+            "github.repository == 'openclaw/openclaw'",
+            "github.event_name == 'pull_request'",
+            "github.event.pull_request.head.repo.full_name == github.repository",
+            "startsWith(github.ref, 'refs/pull/')",
+            "endsWith(github.ref, '/merge')",
+            "github.run_attempt == 1",
+            "needs.preflight.outputs.run_source_worker_cache == 'true'",
+            "needs.preflight.outputs.cache_mode != 'off'",
+          ]);
+          expect(step.with).toEqual({
+            path: ".artifacts/vitest-worker-cache",
+            key: "${{ steps.worker_setup.outputs.vitest-worker-cache-key }}",
+          });
+          expectIncludes(String(step.if), ["success()", "github.run_attempt == 1"]);
+          continue;
+        }
         if (step.with?.path === ".cache/barnacle-lifecycle-scan.json") {
           expect(file).toBe(".github/workflows/stale.yml");
           expect(jobId).toBe("stale-lifecycle");

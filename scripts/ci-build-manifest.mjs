@@ -1547,6 +1547,14 @@ if (
   }
 }
 const nodeTestNonDistShards = nodeTestShards.filter((shard) => !shard.requires_dist);
+const runSourceWorkerCache =
+  ordinaryPullRequest &&
+  isCanonicalRepository &&
+  !frozenTarget &&
+  !compatibilityTarget &&
+  ["blacksmith", "hybrid"].includes(nodeRunnerBackend) &&
+  typeof nodeTestPlan.shouldPrepareSourceWorkerCache === "function" &&
+  nodeTestPlan.shouldPrepareSourceWorkerCache(targetNodeTestShards, changedPaths ?? []);
 // Bound the final matrix: precise plans and appended plugin rows can bypass compact caps.
 if (compactPlanMode && nodeTestNonDistShards.length > nodeMatrixLimit) {
   throw new Error(
@@ -1777,6 +1785,7 @@ const manifest = {
   run_checks: runNodeFull,
   source_channel_test_env_json: JSON.stringify(sourceChannelTestEnv),
   run_checks_node_core_nondist: nodeTestNonDistShards.length > 0,
+  run_source_worker_cache: runSourceWorkerCache,
   checks_node_core_nondist_matrix: createMatrix(nodeTestNonDistShards),
   node_test_group_pools_json: JSON.stringify(nodeTestGroupPools),
   run_checks_node_core_dist: runNodeCoreDist,

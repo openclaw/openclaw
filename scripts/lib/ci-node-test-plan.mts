@@ -123,6 +123,7 @@ import {
   estimateVitestToolingFileSeconds as toolingFileWeight,
   parseCompactSplitTimingKey,
 } from "./vitest-shard-metadata.mts";
+import { vitestWorkerDeclarationEntries } from "./vitest-worker-declarations.mts";
 
 export { isToolingTestOwnerPath } from "../test-projects.test-support.mts";
 
@@ -155,6 +156,54 @@ export type NodeTestShard = Omit<
   predictedSeconds?: number;
   predictedTestSeconds?: number;
 };
+
+/** Amortize a source-only generation only across a large selected source workload. */
+export function shouldPrepareSourceWorkerCache(
+  shards: readonly (NodeTestShard & { targets?: readonly string[] })[],
+  changedPaths: readonly string[],
+  cwd = process.cwd(),
+): boolean {
+  if (
+    !changedPaths.some(
+      (file) => /^src\/.+\.(?:[cm]?[jt]s|json|sql)$/u.test(file) && !isTestFileTarget(file),
+    )
+  ) {
+    return false;
+  }
+  // One cold source generation cost about 31s in a 13-consumer PR. Leave
+  // headroom for the producer's checkout/setup and consumers that cannot reuse it.
+  const candidates = shards.filter((shard) => {
+    const groups = shard.groups ?? [shard];
+    return (
+      /^blacksmith-\d+vcpu-ubuntu-2404$/u.test(shard.runner) &&
+      !shard.requiresDist &&
+      !shard.pretestBuildMode &&
+      groups.every((group) => !group.requiresDist && !group.pretestBuildMode) &&
+      [...(shard.targets ?? []), ...groups.flatMap((group) => group.includePatterns ?? [])].some(
+        (file) => file.startsWith("src/") && isTestFileTarget(file),
+      )
+    );
+  });
+  if (candidates.length < 12) {
+    return false;
+  }
+  const borrowers = new Set(
+    resolveAffectedTestsFromImportGraph(Object.values(vitestWorkerDeclarationEntries), cwd, {
+      forceFull: true,
+      resolveAliases: true,
+      runtimeOnly: true,
+      excludeMockedConsumers: true,
+    }),
+  );
+  return (
+    candidates.filter((shard) =>
+      [
+        ...(shard.targets ?? []),
+        ...(shard.groups ?? [shard]).flatMap((group) => group.includePatterns ?? []),
+      ].some((file) => borrowers.has(file)),
+    ).length >= 12
+  );
+}
 
 type NodeTestPlanOptions = {
   changedPaths?: readonly string[];
