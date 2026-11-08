@@ -11,9 +11,9 @@ import {
   MIN_CLIENT_PROTOCOL_VERSION,
   PROTOCOL_VERSION,
   type ConnectParams,
+  type GatewayConnectAuthSelection,
   type GatewayClientMode,
   type GatewayClientName,
-  type GatewayConnectAuthSelection,
   type GatewayProtocolRequestTiming,
   type EventFrame,
   type HelloOk,
@@ -30,6 +30,7 @@ import { roleScopesAllow } from "../../../src/shared/operator-scope-compat.js";
 import type {
   NativeGatewayAuthorization,
   NativeGatewayConnectAuth,
+  NativeGatewayHelloExpectation,
 } from "../app/native-gateway-auth.ts";
 import { isNativeMobileHost } from "../app/native-web-chrome.ts";
 import { i18n } from "../i18n/index.ts";
@@ -38,7 +39,11 @@ import {
   loadOrCreateDeviceIdentity,
   signDevicePayload,
 } from "../lib/nodes/index.ts";
-import { isTrustedRetryEndpoint, type GatewayBrowserCloseInfo } from "./gateway-connect-errors.ts";
+import {
+  GatewayRequestError,
+  isTrustedRetryEndpoint,
+  type GatewayBrowserCloseInfo,
+} from "./gateway-connect-errors.ts";
 
 export type GatewayControlUiPluginTab = NonNullable<HelloOk["controlUiTabs"]>[number];
 export type GatewayControlUiPluginWidgetKind = NonNullable<HelloOk["controlUiWidgetKinds"]>[number];
@@ -101,7 +106,59 @@ export type ConnectPlan = {
   explicitGatewayToken?: string;
   selectedAuth: GatewayConnectAuthSelection;
   deviceIdentity: Awaited<ReturnType<typeof loadOrCreateDeviceIdentity>> | null;
+  expectedHelloAuth?: NativeGatewayHelloExpectation;
+  expectedGatewayId?: string;
 };
+
+export class NativeGatewayHelloAdmission {
+  private required = false;
+
+  reset(nativeAuthConfigured: boolean): void {
+    this.required = nativeAuthConfigured;
+  }
+
+  expect(plan: ConnectPlan): void {
+    this.required = Boolean(plan.expectedHelloAuth || plan.expectedGatewayId);
+  }
+
+  validateHello(
+    hello: Pick<GatewayHelloOk, "auth" | "server">,
+    plan: ConnectPlan,
+  ): GatewayRequestError | null {
+    const expected = plan.expectedHelloAuth;
+    if (
+      (plan.expectedGatewayId && hello.server?.bootId !== plan.expectedGatewayId) ||
+      (expected &&
+        (hello.auth?.method !== expected.method ||
+          hello.auth?.recoveryScope !== expected.recoveryScope))
+    ) {
+      return new GatewayRequestError({
+        code: "UNAVAILABLE",
+        message: "The Gateway did not return the app-approved Tailscale identity.",
+        retryable: false,
+      });
+    }
+    return null;
+  }
+
+  complete(): void {
+    this.required = false;
+  }
+
+  dispatch<T>(action: () => T): T | undefined {
+    return this.required ? undefined : action();
+  }
+
+  rejectRequest<T>(): Promise<T> | undefined {
+    return this.required
+      ? Promise.reject(new Error("The native Gateway hello has not been admitted."))
+      : undefined;
+  }
+
+  guard<T>(handler: (value: T) => void): (value: T) => void {
+    return (value) => this.dispatch(() => handler(value));
+  }
+}
 
 function browserDeviceFamily(): string | undefined {
   if (navigator.platform !== "MacIntel") {
@@ -330,5 +387,7 @@ export async function buildBrowserGatewayConnectPlan({
     explicitGatewayToken: nativeAuth ? undefined : explicitGatewayToken,
     selectedAuth,
     deviceIdentity,
+    ...(nativeAuth?.expectedHelloAuth ? { expectedHelloAuth: nativeAuth.expectedHelloAuth } : {}),
+    ...(nativeAuth?.expectedGatewayId ? { expectedGatewayId: nativeAuth.expectedGatewayId } : {}),
   };
 }

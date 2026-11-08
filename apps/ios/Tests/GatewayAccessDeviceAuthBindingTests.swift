@@ -346,7 +346,8 @@ struct GatewayAccessDeviceAuthBindingTests {
                 .dropFirst(previousNodeCount).first)
             return try #require(server.capturedAuth(at: nodeIndex))
         }
-        let empty = NativeGatewayWebSocketFixture.ConnectAuth(token: nil, bootstrapToken: nil, deviceToken: nil)
+        let empty = NativeGatewayWebSocketFixture.ConnectAuth(
+            role: "node", token: nil, bootstrapToken: nil, deviceToken: nil)
         do {
             #expect(try await reconnect(as: ownerA, issuing: "gateway-node-A") == empty)
             // Connected state precedes post-handshake binding; observe it before resetting.
@@ -359,10 +360,10 @@ struct GatewayAccessDeviceAuthBindingTests {
             try await TestWait.state("issued B token bound") { allows(memberB) }
             #expect(!allows(ownerA))
             #expect(try await reconnect(as: memberB, issuing: nil) == .init(
-                token: "gateway-node-B", bootstrapToken: nil, deviceToken: nil))
+                role: "node", token: "gateway-node-B", bootstrapToken: nil, deviceToken: nil))
             #expect(try await reconnect(as: ownerA, issuing: nil) == empty)
             #expect(try await reconnect(as: nil, issuing: nil) == .init(
-                token: "gateway-node-B", bootstrapToken: nil, deviceToken: nil))
+                role: "node", token: "gateway-node-B", bootstrapToken: nil, deviceToken: nil))
         } catch {
             model.disconnectGateway()
             await model.waitForGatewaySessionResetIfNeeded()
