@@ -1,4 +1,4 @@
-147
+176
 # Browser tab-crash regressions (PR #194667): crashed-target refusal on page resolution, crash
 # carried to a replacement Page for the same target, crash identity across navigation, the
 # close exemption inside batches, and Playwright crash-message mapping (trailing browser log

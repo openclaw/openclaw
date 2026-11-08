@@ -2,6 +2,7 @@ import { EventEmitter } from "node:events";
 import { SsrFBlockedError } from "openclaw/plugin-sdk/security-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { BrowserActRequest } from "./client-actions.types.js";
+import { BrowserTabCrashedError } from "./errors.js";
 import {
   BrowserObservedDialogBlockedError,
   isBrowserObservedDialogBlockedError,
@@ -117,6 +118,23 @@ function batch(
   });
 }
 
+function useCrashedResolver() {
+  const resolvePage = session.getPageForTargetId;
+  const defaultResolve = resolvePage.getMockImplementation();
+  const crashAwareResolve = async (options: { allowCrashed?: boolean }) => {
+    if (!options.allowCrashed) {
+      throw new BrowserTabCrashedError();
+    }
+    return page;
+  };
+  resolvePage.mockImplementation(crashAwareResolve as unknown as typeof defaultResolve);
+  return () => {
+    if (defaultResolve) {
+      resolvePage.mockImplementation(defaultResolve);
+    }
+  };
+}
+
 describe("executeActViaPlaywright batches", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -186,15 +204,26 @@ describe("executeActViaPlaywright batches", () => {
   });
 
   it("resolves a crashed target so a close-only batch can clean it up", async () => {
-    // Batch admission belongs to each child: close keeps its crash exemption,
-    // while a click child still refuses the dead renderer through its own resolver.
-    const result = await batch([{ kind: "close" }]);
+    // Model the crashed-target resolver: without the close exemption it fails,
+    // so the batch only succeeds when the parent and the close child pass it.
+    const restoreResolver = useCrashedResolver();
+    try {
+      const result = await batch([{ kind: "close" }]);
+      expect(result).toEqual({ targetId: "tab-1", results: [{ ok: true }] });
+      expect(closePageViaPlaywright).toHaveBeenCalledWith(target);
+    } finally {
+      restoreResolver();
+    }
+  });
 
-    expect(result).toEqual({ targetId: "tab-1", results: [{ ok: true }] });
-    expect(session.getPageForTargetId).toHaveBeenCalledWith(
-      expect.objectContaining({ allowCrashed: true }),
-    );
-    expect(closePageViaPlaywright).toHaveBeenCalledWith(target);
+  it("refuses non-close children on a crashed target", async () => {
+    const restoreResolver = useCrashedResolver();
+    try {
+      await expect(batch([click])).rejects.toThrow(BrowserTabCrashedError);
+      expect(locator.click).not.toHaveBeenCalled();
+    } finally {
+      restoreResolver();
+    }
   });
 
   it.each([
