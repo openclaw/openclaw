@@ -181,6 +181,21 @@ afterEach(async () => {
   await i18n.setLocale("en");
 });
 
+it("offers the Control UI beneath an unavailable approval with the shared status identity", async () => {
+  const { page } = await createPage(async () => ({ approval: { id: "exec:approval-1" } }));
+  await waitForSolid(() => expect(text(page, "h1")).toBe("Couldn’t load approval"));
+  expectRedacted(page, "unavailable");
+  const status = page.querySelector('[role="alert"]')!;
+  const link = status.querySelector<HTMLAnchorElement>("a.btn.primary")!;
+  expect(link?.textContent).toBe("Open Control UI");
+  expect(link.getAttribute("href")).toBe("/chat");
+  expect(status.querySelector("p")!.compareDocumentPosition(link)).toBe(
+    Node.DOCUMENT_POSITION_FOLLOWING,
+  );
+  expect(page.querySelector('svg[role="img"]')?.getAttribute("aria-label")).toBe("OpenClaw");
+  expect(status.querySelector('[data-pose="error"]')?.getAttribute("aria-hidden")).toBe("true");
+});
+
 it.each(["success", "failure"] as const)(
   "shows a held decision once and settles its %s feedback",
   async (outcome) => {

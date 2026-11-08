@@ -24,6 +24,10 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { readGatewayOperatorAccess } from "../../app/operator-access.ts";
 import { controlUiPublicAssetPath } from "../../app/public-assets.ts";
+import {
+  GatewayMascot,
+  GatewayWordmarkText,
+} from "../../components/solid/gateway-connection-view.tsx";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { createDocumentTitle } from "../../lib/reactive/document-title.ts";
 import { t } from "../../lib/reactive/i18n.ts";
@@ -542,6 +546,11 @@ export const ApprovalPage = defineSolidBridge<ApprovalPageProps>(
       };
       const missingScope = () => read().connected && !read().approvalsAccess;
       const disconnected = () => read().requestError === "connection" && !read().approval;
+      const unavailable = () =>
+        !missingScope() &&
+        !props.loading &&
+        !disconnected() &&
+        (read().requestError === "unavailable" || !read().approval);
       const documentState = () =>
         missingScope()
           ? "missing-scope"
@@ -576,12 +585,14 @@ export const ApprovalPage = defineSolidBridge<ApprovalPageProps>(
         return (
           <div
             class={[
-              "approval-page__state",
+              kind === "unavailable" ? "gateway-connection-view__body" : "approval-page__state",
               `approval-page__state--${kind === "missing-scope" ? "unavailable" : kind}`,
             ]}
             role={kind === "loading" ? "status" : "alert"}
           >
-            {kind === "loading" ? (
+            {kind === "unavailable" ? (
+              <GatewayMascot pose="error" />
+            ) : kind === "loading" ? (
               <div class="approval-page__spinner" aria-hidden="true" />
             ) : (
               <div class="approval-page__state-mark" aria-hidden="true">
@@ -591,37 +602,60 @@ export const ApprovalPage = defineSolidBridge<ApprovalPageProps>(
             <h1 ref={page.setHeading} id="approval-page-title">
               {t(title)}
             </h1>
-            <p>
+            <p class={kind === "unavailable" ? "gateway-connection-view__description" : undefined}>
               {kind === "missing-scope" ? (
                 <code>{APPROVAL_REQUIRED_SCOPE}</code>
               ) : (
                 t(description[kind])
               )}
             </p>
+            {kind === "unavailable" ? (
+              <div class="gateway-connection-view__actions">
+                <a class="btn primary" href={`${context.basePath}/chat`}>
+                  {t("approvalPage.openControlUi")}
+                </a>
+              </div>
+            ) : null}
             {kind === "connection" ? retry("btn") : null}
           </div>
         );
       };
       return (
-        <main class="approval-page" data-state={documentState()}>
-          <div class="approval-page__backdrop" aria-hidden="true" />
+        <main
+          class={["approval-page", { "approval-page--unavailable": unavailable() }]}
+          data-state={documentState()}
+        >
+          {unavailable() ? null : <div class="approval-page__backdrop" aria-hidden="true" />}
           <section
-            class={["approval-page__card", `approval-page__card--severity-${severity()}`]}
+            class={[
+              unavailable() ? "gateway-connection-view" : "approval-page__card",
+              { [`approval-page__card--severity-${severity()}`]: !unavailable() },
+            ]}
             aria-labelledby="approval-page-title"
             aria-busy={props.loading || page.resolvingDecision() !== null ? "true" : "false"}
           >
-            <header class="approval-page__brand">
-              <img
-                class="approval-page__logo"
-                src={controlUiPublicAssetPath("apple-touch-icon.png", context.resourceBasePath)}
-                alt=""
-              />
-              <div>
-                <div class="approval-page__eyebrow">{t("approvalPage.eyebrow")}</div>
-                <div class="approval-page__brand-name">{t("approvalPage.brandName")}</div>
-              </div>
-            </header>
-            <div class="approval-page__content">
+            {unavailable() ? (
+              <header class="approval-page__status-brand">
+                <GatewayWordmarkText
+                  class="approval-page__status-wordmark"
+                  fill="currentColor"
+                  label={t("approvalPage.brandName")}
+                />
+              </header>
+            ) : (
+              <header class="approval-page__brand">
+                <img
+                  class="approval-page__logo"
+                  src={controlUiPublicAssetPath("apple-touch-icon.png", context.resourceBasePath)}
+                  alt=""
+                />
+                <div>
+                  <div class="approval-page__eyebrow">{t("approvalPage.eyebrow")}</div>
+                  <div class="approval-page__brand-name">{t("approvalPage.brandName")}</div>
+                </div>
+              </header>
+            )}
+            <div class={unavailable() ? undefined : "approval-page__content"}>
               {missingScope() ? (
                 renderState("missing-scope")
               ) : props.loading && !read().approval ? (
@@ -639,9 +673,11 @@ export const ApprovalPage = defineSolidBridge<ApprovalPageProps>(
               )}
             </div>
           </section>
-          <a class="approval-page__back-link" href={`${context.basePath}/chat`}>
-            {t("approvalPage.openControlUi")}
-          </a>
+          {unavailable() ? null : (
+            <a class="approval-page__back-link" href={`${context.basePath}/chat`}>
+              {t("approvalPage.openControlUi")}
+            </a>
+          )}
         </main>
       );
     }

@@ -1,6 +1,31 @@
 /* Full approval-page styles; loaded with the lazy page chunk. The shell boot
  * subset lives in approval-boot.css and must stay in the entry stylesheet. */
 
+/* Unavailable approvals share the Gateway's status anatomy and app theme. */
+.approval-page.approval-page--unavailable {
+  display: block;
+  padding: 0;
+}
+
+.approval-page--unavailable .gateway-connection-view {
+  width: 100%;
+  height: 100%;
+}
+
+.approval-page__status-brand {
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 14.5px 12px 0;
+  color: var(--text-strong);
+}
+
+.approval-page__status-wordmark {
+  display: block;
+  width: 105px;
+  height: 32px;
+}
+
 .approval-page__backdrop {
   position: fixed;
   z-index: 0;

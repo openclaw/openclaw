@@ -507,6 +507,12 @@ suite.define(() => {
     await surface.page.getByRole("heading", { name: "Couldn’t load approval" }).waitFor();
     await expectStandaloneApprovalPage(surface.page);
     await expectNoDecisionButtons(surface.page);
+    const status = surface.page.locator('.approval-page [role="alert"]');
+    const link = status.getByRole("link", { name: "Open Control UI" });
+    expect(await link.getAttribute("href")).toBe("/chat");
+    const heading = await layoutBox(status.locator("h1"));
+    expect(heading.width).toBeGreaterThanOrEqual(MOBILE_VIEWPORT.width - 48);
+    expect((await layoutBox(link)).y).toBeGreaterThan(heading.y + heading.height);
     expect(surface.pageErrors).toEqual([]);
   });
 
