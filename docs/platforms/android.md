@@ -405,6 +405,8 @@ On **Health**, **Chat: Not ready** means chat health is unconfirmed or its check
 
 After the authenticated node session connects, and when the app moves to the background while the foreground service is still connected, Android calls `node.event` with `event: "node.presence.alive"`. The Gateway records this as `lastSeenAtMs`/`lastSeenReason` on the paired node/device metadata only after the authenticated node device identity is known.
 
+The background beacon is skipped while the last recorded beacon is less than 10 minutes old, so moving the app to the background shortly after it connects leaves `lastSeenReason` at `connect`. The connect beacon is always sent.
+
 The app counts the beacon as successfully recorded only when the Gateway response includes `handled: true`. A Gateway that acknowledges `node.event` with `{ "ok": true }` and no `handled` field is compatible, but that response does not count as a durable last-seen update.
 
 ### 4. Approve pairing (CLI)
