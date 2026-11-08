@@ -266,8 +266,14 @@ describe("native completion settlement", () => {
 
 describe("native completion catalog execution authority", () => {
   setupRunAttemptTestHooks();
-  it.each(["unavailable executor", "session reassigned"] as const)(
-    "rejects a native exec call after recovering declarations: %s",
+  it.each([
+    "unavailable executor",
+    "wrong requester",
+    "session reassigned",
+    "policy revoked",
+    "allowed",
+  ] as const)(
+    "enforces authority through recovered completion declarations: %s",
     async (change) => {
       const f = await fixture();
       const client = createClient();
@@ -318,7 +324,8 @@ describe("native completion catalog execution authority", () => {
             }),
           },
           completion: {
-            requesterSessionKey: f.identity.sessionKey,
+            requesterSessionKey:
+              change === "wrong requester" ? "agent:main:unrelated" : f.identity.sessionKey,
             sourceSessionKey: request.childSessionKey,
             runId: `announce:${request.announceId}`,
           },
@@ -331,7 +338,16 @@ describe("native completion catalog execution authority", () => {
           releaseClient: () => {},
         });
         recoveredCatalog = recovered;
+        if (change === "wrong requester") {
+          expect(recovered).toBeUndefined();
+          expect(command.spawn).not.toHaveBeenCalled();
+          checked = true;
+          return { delivered: true, path: "direct" };
+        }
         expect(recovered).toEqual(declarations);
+        if (change === "allowed") {
+          command.finish();
+        }
         const entered = createDeferred<void>();
         const release = createDeferred<void>();
         const bridge = createCodexDynamicToolBridge({
@@ -355,20 +371,31 @@ describe("native completion catalog execution authority", () => {
           arguments: { command: "echo forbidden", workdir: tempDir, awaitResults: true },
         });
         try {
-          if (change === "session reassigned") {
+          if (change === "session reassigned" || change === "policy revoked") {
             await entered.promise;
             expect(command.spawn).not.toHaveBeenCalled();
             await patchSessionEntry({
               agentId: f.identity.agentId,
               sessionKey: f.identity.sessionKey,
               storePath: resolveStorePath(undefined, { agentId: f.identity.agentId }),
-              update: () => ({ sessionId: "replacement" }),
+              update: () =>
+                change === "session reassigned"
+                  ? { sessionId: "replacement" }
+                  : { execHost: "node" },
               skipMaintenance: true,
             });
-            expect(request.completionCustody?.isCurrent()).toBe(false);
+            if (change === "session reassigned") {
+              expect(request.completionCustody?.isCurrent()).toBe(false);
+            }
           }
         } finally {
           release.resolve();
+        }
+        if (change === "allowed") {
+          expect(await response).toMatchObject({ success: true });
+          expect(command.spawn).toHaveBeenCalledOnce();
+          checked = true;
+          return { delivered: true, path: "direct" };
         }
         expect(await response).toMatchObject({
           success: false,
@@ -394,7 +421,11 @@ describe("native completion catalog execution authority", () => {
         await parent.unregister();
         await client.notify(completedChild());
         expect(f.deliver).toHaveBeenCalledOnce();
-        expect(recoveredCatalog).toEqual(declarations);
+        if (change === "wrong requester") {
+          expect(recoveredCatalog).toBeUndefined();
+        } else {
+          expect(recoveredCatalog).toEqual(declarations);
+        }
         expect(checked).toBe(true);
       } finally {
         policy.release();
