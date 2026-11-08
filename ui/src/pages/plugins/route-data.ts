@@ -26,11 +26,10 @@ export function canonicalPluginsRouteLocation(
   const settingsPath = pathForRoute("plugin-settings", basePath);
   const legacyTab = searchParams.get("tab");
   const supportedAdvancedTab = location.pathname === settingsPath && legacyTab === "advanced";
-  const hadLegacyTab = searchParams.has("tab") && !supportedAdvancedTab;
+  const hadLegacyTab = legacyTab !== null && !supportedAdvancedTab;
   if (hadLegacyTab) {
     searchParams.delete("tab");
   }
-  const search = searchParams.toString();
   const isLegacyDiscoverPath = location.pathname === `${settingsPath}/discover`;
   const legacyDiscover = isLegacyDiscoverPath || legacyTab === "discover";
   const catalogId = pluginCatalogIdFromPath(location.pathname, basePath);
@@ -39,10 +38,13 @@ export function canonicalPluginsRouteLocation(
     : catalogId
       ? pathForPluginCatalogEntry(catalogId, basePath)
       : location.pathname;
-  const canonical: RouteLocation = {
+  if (!hadLegacyTab && pathname === location.pathname) {
+    return null;
+  }
+  const search = searchParams.toString();
+  return {
     pathname,
     search: search ? `?${search}` : "",
     hash: location.hash,
   };
-  return hadLegacyTab || pathname !== location.pathname ? canonical : null;
 }
