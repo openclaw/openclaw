@@ -70,8 +70,9 @@ export function createBlockReplyCoalescer(params: {
     await onFlush(payload);
   };
 
-  const canMergeBufferedTextWithMedia = (payload: ReplyPayload) =>
+  const canMergeBufferedTextWithMedia = (payload: ReplyPayload, text: string) =>
     Boolean(bufferText) &&
+    (!text || bufferText.length + joiner.length + text.length <= maxChars) &&
     bufferedPayload !== undefined &&
     [bufferedPayload, payload].every(
       (part) =>
@@ -127,7 +128,7 @@ export function createBlockReplyCoalescer(params: {
       blockSourceRange: getReplyPayloadMetadata(payload)?.blockSourceRange,
     };
     if (reply.hasMedia) {
-      if (canMergeBufferedTextWithMedia(payload)) {
+      if (canMergeBufferedTextWithMedia(payload, text)) {
         void onFlush(mergeBufferedTextWithMedia(payload, text));
         return;
       }
