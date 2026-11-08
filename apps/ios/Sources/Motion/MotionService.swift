@@ -25,10 +25,14 @@ final class MotionService: MotionServicing {
                     cont.resume(throwing: error)
                 } else {
                     let formatter = ISO8601DateFormatter()
-                    let entries = (activity ?? []).suffix(limit).map { entry in
+                    let recent = (activity ?? []).sorted { $0.startDate < $1.startDate }.suffix(limit)
+                    let endDates = Self.activityEndDates(
+                        startDates: recent.map(\.startDate),
+                        queryEnd: end)
+                    let entries = zip(recent, endDates).map { entry, entryEnd in
                         OpenClawMotionActivityEntry(
                             startISO: formatter.string(from: entry.startDate),
-                            endISO: formatter.string(from: end),
+                            endISO: formatter.string(from: entryEnd),
                             confidence: Self.confidenceString(entry.confidence),
                             isWalking: entry.walking,
                             isRunning: entry.running,
@@ -87,6 +91,15 @@ final class MotionService: MotionServicing {
             return false
         @unknown default:
             return false
+        }
+    }
+
+    /// CMMotionActivity has only a start date: each activity lasts until the next one starts.
+    /// Only the most recent activity runs to the end of the query range.
+    static func activityEndDates(startDates: [Date], queryEnd: Date) -> [Date] {
+        startDates.indices.map { index in
+            let next = startDates.index(after: index)
+            return next < startDates.endIndex ? startDates[next] : max(queryEnd, startDates[index])
         }
     }
 
