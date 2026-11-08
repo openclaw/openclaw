@@ -71,6 +71,58 @@ async function inkContrast(composer: Locator, targets: Record<string, Locator>) 
 }
 
 suite.define(() => {
+  it.each(["dark", "light"] as const)(
+    "keeps attachment cards distinct from the %s composer",
+    async (mode) => {
+      await suite.withPage(
+        { viewport: { width: 390, height: 844 }, colorScheme: mode },
+        async ({ page }) => {
+          await installMockGateway(page);
+          await page.goto(suite.server.baseUrl + "chat");
+          const composer = page.locator(".agent-chat__input");
+          await composer.locator(".agent-chat__file-input").setInputFiles({
+            name: "notes.txt",
+            mimeType: "text/plain",
+            buffer: Buffer.from("Review the deployment checklist."),
+          });
+          const card = composer.locator('.chat-attachment-thumb[aria-busy="false"]');
+          await card.waitFor();
+          const raw = await card.evaluate((element) => {
+            const probe = document.createElement("span");
+            probe.style.color = "var(--chat-composer-surface)";
+            element.append(probe);
+            const surface = getComputedStyle(probe).color;
+            probe.remove();
+            return {
+              surface,
+              card: getComputedStyle(element).backgroundColor,
+              label: getComputedStyle(element.querySelector(".chat-attachment-file__name")!).color,
+              metadata: getComputedStyle(element.querySelector(".chat-attachment-file__type")!)
+                .color,
+            };
+          });
+          const colors = await page.evaluate(resolveRenderedColors, raw);
+          const overlay = colors.card!;
+          const surface = colors.surface!;
+          const cardSurface = {
+            red: overlay.red * overlay.alpha + surface.red * (1 - overlay.alpha),
+            green: overlay.green * overlay.alpha + surface.green * (1 - overlay.alpha),
+            blue: overlay.blue * overlay.alpha + surface.blue * (1 - overlay.alpha),
+            alpha: 1,
+          };
+          // A light touch on the host surface, never a dark inset in dark mode.
+          const separation = contrast(cardSurface, surface);
+          expect(separation).toBeGreaterThanOrEqual(1.03);
+          expect(separation).toBeLessThan(1.2);
+          if (mode === "dark") {
+            expect(cardSurface.red).toBeGreaterThan(surface.red);
+          }
+          expect(contrast(colors.label!, cardSurface)).toBeGreaterThanOrEqual(4.5);
+          expect(contrast(colors.metadata!, cardSurface)).toBeGreaterThanOrEqual(4.5);
+        },
+      );
+    },
+  );
   it("keeps resting composer controls above their disabled step in every theme", async () => {
     await suite.withPage(
       { viewport: { width: 1440, height: 900 }, colorScheme: "dark" },
