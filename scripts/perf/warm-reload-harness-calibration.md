@@ -1,5 +1,112 @@
 # Warm-reload harness calibration (2026-11-07)
 
+## Full-coverage annotation correction
+
+The original comparisons below retained the same full text-annotation observer in every arm, including minimal, so they could not measure its shared cost. The observer now coalesces overlapping mutation roots and resolves row/Details context once per retained root while preserving full text-parent coverage. Full coverage matters: the native transcript is one large row scrolled past its leading text. The bottom-paragraph marker remains visual-proof-only; the default CLI and output shape are unchanged.
+
+This follow-up uses one application build from main `5e1a27a9bcc4ed52cecd2420409b8c0331ddf4be`, AWS lease `cbx_d4102ebc102e`, one `c7a.4xlarge` (16 observed CPUs, 32,131,684 kB RAM), and pinned Chromium 156.0.8078.4 at 1720 × 1180. Pre-run quiet probes recorded 96.4–99.6% CPU idle. Team uses real old-page `--paint-holding`, live-fast latency and the Team-scale fixture; native uses signed-in real `page.reload()` and `--rtt-ms 80`. Active/archived inputs and the existing admission/storage owners are preserved. A common postbuild `MountedPane` mark records pane start; compressed bundle sidecars were regenerated before every alias was made. No UI source changed.
+
+Timed runs have no geometry sampler, screencast, census, counters, dual reference or CPU profiler. Four unmeasured reloads precede every series; measured reloads start at ordinal 5. Full/cheap comparisons have eight alternating AB/BA pairs plus eight cheap/cheap A/A pairs on the same instance. Final baselines use the production entry points directly. The earlier calibration uses a different application build; differences between its absolute values and this section are not causal estimates of annotation cost.
+
+### Marker and parent-set equivalence
+
+The cheap observer runs before an independent full reference in the same document. The reference replays the original root/text walk and records eligible text parents independently; it gives any parent missed by cheap a separate ET identifier. Both collectors accept positive intersecting text paints. After the window, compare connected element identities: cheap's canonical parents against the reference's eligible parents. This checks final parent sets and first rows/Details ET; it does not claim equivalence of every transient detached subtree.
+
+| Workload        | Warm capture | Rows ET, both | Details ET, both | Cheap/full parents | Missing/extra |
+| --------------- | -----------: | ------------: | ---------------: | -----------------: | ------------: |
+| Native active   |            1 |           556 |              880 |            453/453 |           0/0 |
+| Native active   |            2 |           564 |              912 |            453/453 |           0/0 |
+| Native archived |            1 |           536 |              536 |            443/443 |           0/0 |
+| Team active     |            1 |           328 |              456 |              87/87 |           0/0 |
+
+These dual-observer captures qualify marker equivalence; their timings are not the tax estimates.
+
+### Annotation tax and corrected steady baselines
+
+Native rows improve in both adjusted orders: −46/−62 ms active and −38/−60 ms archived. Active arm IQRs also do not overlap. Native LoAF blocking falls by about 127/107 ms after adjustment. Team rows show no reproducible additional tax: cheap's +4 ms adjusted effect lies inside overlapping arm IQRs and the A/A order noise. The small Team pane/LoAF rises are also noise. Native archived pane's raw arm median rises 15.1 ms with almost identical arm IQRs, mixed pair signs and adjusted orders +7.1/−35.1 ms; this does not meet the campaign's same-strength regression rule. FCP has no consistent cross-order regression.
+
+LoAF is total native long-animation-frame blocking duration over the capture window. Root counts below are normalized added-node/character-data inputs and roots examined after coalescing, followed by text walkers; full examines every input. One separate counter-only pair per workload supplies counts before rows ET. Small input-count differences reflect the paint cutoff. Counter-capture wall times do not enter any timing estimate.
+
+| Workload        | Metric |                 Full |                Cheap | Adjusted full tax | AB effect | BA effect |
+| --------------- | ------ | -------------------: | -------------------: | ----------------: | --------: | --------: |
+| native-active   | rows   | 566.0 [540.0, 598.0] | 502.0 [490.0, 531.0] |              54.0 |     -46.0 |     -62.0 |
+| native-active   | fcp    |    50.0 [48.0, 57.0] |    48.0 [48.0, 56.0] |               0.0 |      -2.0 |       2.0 |
+| native-active   | pane   | 268.0 [264.4, 298.1] | 264.4 [261.7, 266.9] |              25.2 |     -25.6 |     -24.8 |
+| native-active   | loaf   | 347.3 [325.7, 376.1] | 213.4 [208.1, 242.6] |             127.2 |    -125.4 |    -128.9 |
+| native-archived | rows   | 534.0 [516.0, 559.0] | 492.0 [471.0, 523.0] |              49.0 |     -38.0 |     -60.0 |
+| native-archived | fcp    |    48.0 [44.0, 48.0] |    48.0 [44.0, 50.0] |               1.0 |     -12.0 |      10.0 |
+| native-archived | pane   | 286.3 [282.6, 331.2] | 301.4 [283.1, 330.5] |              14.0 |       7.1 |     -35.1 |
+| native-archived | loaf   | 302.2 [289.6, 310.0] | 189.6 [167.1, 219.2] |             107.0 |    -106.4 |    -107.6 |
+| team-active     | rows   | 348.0 [339.0, 350.0] | 336.0 [332.0, 343.0] |              -4.0 |       2.0 |       6.0 |
+| team-active     | fcp    | 150.0 [112.0, 185.0] | 110.0 [104.0, 188.0] |              17.0 |      42.0 |     -76.0 |
+| team-active     | pane   | 189.7 [188.1, 195.9] | 190.2 [187.5, 193.0] |              -2.6 |       2.0 |       3.2 |
+| team-active     | loaf   | 160.1 [154.1, 165.2] | 156.4 [148.1, 168.9] |              -4.3 |      -4.2 |      12.9 |
+
+Adjusted full tax is positive when full annotation is slower. AB/BA effects are cheap-minus-full after subtracting the same-order cheap/cheap A/A median. Each arm has eight samples; each order has four pairs. Brackets are IQR; times are milliseconds. Counts below come from separate counter-only captures, never the scored timing runs.
+
+| Workload               | Arm          | Input roots | Roots examined | Text walkers |
+| ---------------------- | ------------ | ----------: | -------------: | -----------: |
+| native-counts-active   | full-counts  |        4846 |           4846 |         4099 |
+| native-counts-active   | cheap-counts |        4867 |            212 |            6 |
+| native-counts-archived | full-counts  |        4864 |           4864 |         4098 |
+| native-counts-archived | cheap-counts |        4857 |            209 |            6 |
+| team-counts-active     | full-counts  |         596 |            596 |           22 |
+| team-counts-active     | cheap-counts |         596 |            139 |            3 |
+
+| Workload                 |              Rows ET |                  FCP |           Pane start |           Details ET | Under 480 ms |
+| ------------------------ | -------------------: | -------------------: | -------------------: | -------------------: | -----------: |
+| native-baseline-active   | 492.0 [480.0, 505.0] |    48.0 [48.0, 49.0] | 263.1 [255.1, 274.4] | 742.0 [715.0, 750.0] |         1/12 |
+| native-baseline-archived | 484.0 [464.0, 485.0] |    48.0 [48.0, 49.0] | 299.6 [282.3, 301.6] | 484.0 [464.0, 485.0] |         5/12 |
+| team-baseline-active     | 338.0 [332.0, 341.0] | 116.0 [100.0, 133.0] | 192.6 [190.4, 195.1] | 460.0 [456.0, 468.0] |        12/12 |
+| team-baseline-archived   | 320.0 [316.0, 333.0] | 162.0 [133.0, 198.0] | 199.0 [191.9, 204.0] | 420.0 [411.0, 436.0] |        12/12 |
+
+Baseline rows samples, in acquisition order:
+
+- native-baseline-active: [520.0, 508.0, 476.0, 484.0, 480.0, 504.0, 512.0, 504.0, 480.0, 480.0, 492.0, 492.0].
+- native-baseline-archived: [488.0, 496.0, 484.0, 448.0, 464.0, 464.0, 464.0, 484.0, 484.0, 484.0, 488.0, 456.0].
+- team-baseline-active: [332.0, 324.0, 336.0, 344.0, 340.0, 348.0, 376.0, 324.0, 340.0, 332.0, 336.0, 340.0].
+- team-baseline-archived: [320.0, 328.0, 316.0, 376.0, 308.0, 320.0, 320.0, 316.0, 332.0, 336.0, 308.0, 360.0].
+
+### Order controls and per-pair deltas
+
+All deltas below are cheap minus full; A/A uses the same role/order labels with cheap in both arms. Balanced is the mean of the AB-first and BA-first paired medians. Adjusted subtracts the corresponding A/A control within each order before averaging. Raw better-pair counts are diagnostic.
+
+| Workload        | Metric | Raw paired median | Raw better pairs | Balanced | A/A balanced | Adjusted |
+| --------------- | ------ | ----------------: | ---------------: | -------: | -----------: | -------: |
+| native-active   | rows   |             -60.0 |              6/8 |    -65.0 |        -11.0 |    -54.0 |
+| native-active   | fcp    |               0.0 |              2/8 |      1.0 |          1.0 |      0.0 |
+| native-active   | pane   |              -6.3 |              6/8 |    -25.3 |          0.0 |    -25.2 |
+| native-active   | loaf   |            -127.6 |              8/8 |   -127.6 |         -0.4 |   -127.2 |
+| native-archived | rows   |             -40.0 |              5/8 |    -40.0 |          9.0 |    -49.0 |
+| native-archived | fcp    |               2.0 |              3/8 |      0.0 |          1.0 |     -1.0 |
+| native-archived | pane   |              16.4 |              3/8 |      3.8 |         17.8 |    -14.0 |
+| native-archived | loaf   |            -119.7 |              8/8 |   -100.6 |          6.4 |   -107.0 |
+| team-active     | rows   |              -6.0 |              6/8 |     -6.0 |        -10.0 |      4.0 |
+| team-active     | fcp    |             -10.0 |              5/8 |     -6.0 |         11.0 |    -17.0 |
+| team-active     | pane   |              -0.7 |              5/8 |     -0.8 |         -3.4 |      2.6 |
+| team-active     | loaf   |               0.3 |              3/8 |      1.5 |         -2.8 |      4.3 |
+
+Within-order spread and complete vectors, in acquisition-pair order (AB, BA, AB, BA, AB, BA, AB, BA):
+
+- native-active rows: AB pairs -6.0 [-16.0, 1.0], A/A 40.0 [31.0, 53.0]; BA pairs -124.0 [-154.0, -101.0], A/A -62.0 [-65.0, -58.0]. Deltas: [4.0, -104.0, -28.0, -144.0, 0.0, -92.0, -12.0, -184.0]; A/A: [28.0, -64.0, 68.0, -60.0, 32.0, -68.0, 48.0, -52.0].
+- native-active fcp: AB pairs 2.0 [-3.0, 6.0], A/A 4.0 [-4.0, 12.0]; BA pairs 0.0 [-3.0, 1.0], A/A -2.0 [-6.0, 0.0]. Deltas: [0.0, 0.0, 12.0, 4.0, -12.0, -12.0, 4.0, 0.0]; A/A: [12.0, -4.0, 12.0, 0.0, -4.0, 0.0, -4.0, -12.0].
+- native-active pane: AB pairs 7.8 [-3.0, 22.3], A/A 33.4 [21.7, 38.9]; BA pairs -58.3 [-101.3, -22.1], A/A -33.5 [-50.6, -17.3]. Deltas: [-8.5, -28.1, 16.6, -88.5, -1.1, -4.2, 39.4, -139.7]; A/A: [-0.8, -66.0, 43.0, -21.5, 37.5, -45.4, 29.2, -4.8].
+- native-active loaf: AB pairs -79.5 [-87.3, -70.5], A/A 45.9 [28.5, 65.7]; BA pairs -175.6 [-209.6, -154.3], A/A -46.7 [-51.5, -40.0]. Deltas: [-49.3, -155.6, -104.7, -195.6, -77.5, -150.4, -81.5, -251.7]; A/A: [29.3, -25.7, 75.5, -44.7, 26.0, -60.1, 62.5, -48.6].
+- native-archived rows: AB pairs 12.0 [-2.0, 30.0], A/A 50.0 [43.0, 59.0]; BA pairs -92.0 [-101.0, -81.0], A/A -32.0 [-43.0, -28.0]. Deltas: [24.0, -100.0, 0.0, -104.0, -8.0, -84.0, 48.0, -72.0]; A/A: [44.0, -28.0, 68.0, -28.0, 40.0, -64.0, 56.0, -36.0].
+- native-archived fcp: AB pairs -4.0 [-7.0, -1.0], A/A 8.0 [5.0, 10.0]; BA pairs 4.0 [3.0, 6.0], A/A -6.0 [-13.0, 4.0]. Deltas: [-4.0, 0.0, -4.0, 12.0, 8.0, 4.0, -16.0, 4.0]; A/A: [8.0, 0.0, 16.0, 16.0, -4.0, -12.0, 8.0, -16.0].
+- native-archived pane: AB pairs 58.3 [38.5, 75.3], A/A 51.2 [47.4, 54.7]; BA pairs -50.8 [-64.4, -27.3], A/A -15.7 [-25.7, -8.6]. Deltas: [75.0, -63.9, 29.1, -65.9, 41.7, -37.7, 76.0, 3.7]; A/A: [36.7, 4.2, 51.0, -18.4, 51.4, -47.6, 64.7, -12.9].
+- native-archived loaf: AB pairs -57.2 [-72.5, -48.6], A/A 49.2 [45.9, 59.3]; BA pairs -144.0 [-147.3, -141.2], A/A -36.4 [-50.9, -23.4]. Deltas: [-53.0, -133.7, -61.5, -156.3, -105.6, -143.7, -35.4, -144.3]; A/A: [46.6, -1.9, 81.8, -42.2, 51.8, -77.0, 43.9, -30.5].
+- team-active rows: AB pairs -6.0 [-11.0, -4.0], A/A -8.0 [-14.0, -2.0]; BA pairs -6.0 [-13.0, 4.0], A/A -12.0 [-12.0, -9.0]. Deltas: [-8.0, -16.0, -20.0, 0.0, -4.0, -12.0, -4.0, 16.0]; A/A: [-20.0, -12.0, -12.0, -12.0, 4.0, -12.0, -4.0, 0.0].
+- team-active fcp: AB pairs 30.0 [-31.0, 79.0], A/A -12.0 [-31.0, -9.0]; BA pairs -42.0 [-81.0, -2.0], A/A 34.0 [-17.0, 65.0]. Deltas: [-16.0, -4.0, 76.0, -80.0, 88.0, -84.0, -76.0, 4.0]; A/A: [-12.0, 64.0, 0.0, -80.0, -88.0, 68.0, -12.0, 4.0].
+- team-active pane: AB pairs -2.5 [-4.7, 0.9], A/A -4.5 [-6.4, -3.6]; BA pairs 0.9 [-1.9, 2.9], A/A -2.3 [-3.9, 0.4]. Deltas: [-4.4, -0.9, -5.5, 3.4, 5.5, -4.8, -0.6, 2.7]; A/A: [-11.1, -1.1, -4.2, -4.8, -1.9, -3.6, -4.8, 4.8].
+- team-active loaf: AB pairs -2.4 [-10.4, 0.6], A/A 1.8 [-2.3, 6.3]; BA pairs 5.4 [-1.3, 12.1], A/A -7.5 [-19.0, -0.1]. Deltas: [0.7, -5.5, -25.5, 0.1, -5.4, 16.3, 0.5, 10.7]; A/A: [-1.1, -31.7, -6.0, 0.3, 4.7, -14.7, 11.2, -0.2].
+
+The corrected rows prerequisite uses navigation-start Element Timing, the timing-only probe with coalesced full annotation, and four unmeasured warm primes. Team active is 338 [332, 341] ms and archived 320 [316, 333], both 12/12 below 480 ms. Native active is 492 [480, 505] with 1/12 below 480; archived is 484 [464, 485] with 5/12 below. Equality at 480 is not counted as below. Native therefore does not reliably pass that prerequisite. Complete-frame qualification still requires the separate inspected visual proof; rows ET alone does not establish composer or section completeness.
+
+## Earlier geometry and code-cache calibration
+
+The remaining measurements use the original `636fc28d8bbd` application build and retain full annotation. Their sampler/cache conclusions remain historical evidence; the steady baseline above supersedes them for this follow-up's application build.
+
 The standard Team sampler has a measurable rows cost; the reduced collector does not show a consistent additional rows cost. A steady timing-only Team reload passes the 480 ms text-paint prerequisite. This does **not** establish complete-frame visual qualification or approve a visibility join.
 
 ## Fixed setup

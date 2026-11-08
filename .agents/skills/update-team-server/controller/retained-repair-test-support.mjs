@@ -210,7 +210,7 @@ function reconcileConfig(f) {
   replace(f.config, JSON.stringify(config));
   const next = readFileSync(f.config), after = descriptor(f.config), ts = new Date().toISOString();
   const audit = { ts, event: "config.write", source: "config-io", result: "rename", configPath: f.config,
-    existsBefore: true, pid: f.pid, previousHash: before.sha256, nextHash: after.sha256,
+    existsBefore: true, pid: f.pid, cwd: f.b, argv: [process.execPath, join(f.serving, "current/dist/index.js"), "gateway", "--port", "18789"], previousHash: before.sha256, nextHash: after.sha256,
     previousBytes: previous.length, nextBytes: next.length };
   for (const [prefix, entry] of [["previous", before], ["next", after]])
     Object.assign(audit, { [prefix + "Dev"]: String(entry.device), [prefix + "Ino"]: String(entry.inode),

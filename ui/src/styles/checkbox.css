@@ -18,7 +18,8 @@ input.oc-checkbox.oc-checkbox,
   block-size: 16px;
   padding: 0;
   border: 1px solid color-mix(in srgb, var(--text) 22%, var(--border-hover));
-  border-radius: var(--radius-sm);
+  /* Keep this 16px control box-shaped without rounding off square themes. */
+  border-radius: min(3px, var(--radius-sm));
   background: var(--field-bg);
   box-shadow: none;
   color: var(--accent-foreground);
@@ -34,13 +35,13 @@ input.oc-checkbox.oc-checkbox::before,
   inline-size: 12px;
   block-size: 12px;
   background: currentColor;
-  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='black' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m3 8 3 3 7-7'/%3E%3C/svg%3E")
+  mask: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='black' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'><path d='m3 8 3 3 7-7'/></svg>")
     center / contain no-repeat;
   visibility: hidden;
 }
 
 input.oc-checkbox.oc-checkbox:indeterminate::before {
-  mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='black' stroke-width='2.5' stroke-linecap='round'%3E%3Cpath d='M4 8h8'/%3E%3C/svg%3E");
+  mask-image: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='black' stroke-width='2.5' stroke-linecap='round'><path d='M4 8h8'/></svg>");
 }
 
 input.oc-checkbox.oc-checkbox:is(:checked, :indeterminate),
