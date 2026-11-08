@@ -4,7 +4,6 @@ import type {
   ChannelMessageSendCommitContext,
   ChannelMessageUnknownSendReconciliationResult,
 } from "../../channels/message/types.js";
-import { deliverPendingDeliveryNotice } from "../../channels/turn/pending-delivery-notice.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { sleep } from "../../utils/sleep.js";
 import {
@@ -55,6 +54,7 @@ import {
   settleDurableDelivery,
 } from "./delivery-completion.js";
 import { prepareOutboundDeliveryGeneration } from "./delivery-generation.js";
+import { settleFailedQueuedDeliveryCompletion } from "./delivery-queue-failure-completion.js";
 import { collectEntrySpoolPaths, releaseSpoolArtifacts } from "./delivery-queue-media-spool.js";
 import {
   cancelDeliveryQueueMediaRetention,
@@ -292,24 +292,12 @@ async function settleQueuedFailure(
     // Failed custody forbids sends even after a restart. Keep the completion
     // payload until its idempotent owner projection succeeds, then compact once.
     if (entry.deliveryCompletion) {
-      const completion = await settleDurableDelivery(
+      await settleFailedQueuedDeliveryCompletion(
         entry.deliveryCompletion,
-        settlement.outcome === "failed" && settlement.rejectionError !== undefined
-          ? { rejectionError: settlement.rejectionError }
-          : { platformSendStarted: true },
+        settlement,
         params.stateDir,
         stateContext,
       );
-      if (completion.state === "unknown" && entry.deliveryCompletion.kind === "pending-final") {
-        // Persisted failure custody prevents answer replay. Hand its existing notice
-        // debt to the lifecycle sender before compacting this recovery checkpoint.
-        await deliverPendingDeliveryNotice(
-          entry.deliveryCompletion.sessionKey,
-          entry.deliveryCompletion.storePath,
-          entry.deliveryCompletion.agentId,
-          entry.deliveryCompletion.intentId,
-        );
-      }
     }
     const spoolPaths = collectEntrySpoolPaths(
       preparedOutboundPayloads(entry.preparedBatch),
