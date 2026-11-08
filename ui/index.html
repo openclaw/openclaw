@@ -111,6 +111,20 @@
             }
           }
           var s = raw ? JSON.parse(raw) : null;
+          // A hint only: startup still admits the account and exact snapshot.
+          var bootScope =
+            (location.protocol === "https:" ? "wss:" : "ws:") + "//" + location.host + bootBase;
+          if (
+            bootRoute === "chat" &&
+            localStorage.getItem("openclaw.control.bootRecord.v1:" + bootScope)
+          ) {
+            document.documentElement.setAttribute("data-openclaw-warm-frame", "holding");
+            // Start before lifecycle updates, leaving margin inside Chromium's 500 ms hold.
+            setTimeout(function () {
+              if (document.documentElement.getAttribute("data-openclaw-warm-frame") === "holding")
+                document.documentElement.setAttribute("data-openclaw-warm-frame", "fallback");
+            }, 450);
+          }
           if (s && typeof s.navWidth === "number" && s.navWidth >= 240 && s.navWidth <= 400) {
             document.documentElement.style.setProperty(
               "--openclaw-boot-nav-width",
@@ -282,6 +296,17 @@
         min-height: 100%;
         background: inherit;
         color-scheme: inherit;
+      }
+
+      html[data-openclaw-warm-frame="holding"],
+      html[data-openclaw-warm-frame="holding"] body {
+        background: transparent !important;
+      }
+      /* Explicit descendant visibility must not expose a partial frame. */
+      html[data-openclaw-warm-frame="holding"] *,
+      html[data-openclaw-warm-frame="holding"] *::before,
+      html[data-openclaw-warm-frame="holding"] *::after {
+        visibility: hidden !important;
       }
 
       /* Critical loading layout lives here so HTML and the Solid fallback share

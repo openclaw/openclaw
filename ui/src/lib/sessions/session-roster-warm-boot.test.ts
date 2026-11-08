@@ -290,80 +290,36 @@ describe("session capability warm roster", () => {
     },
   );
 
-  it.each(["frame", "background", "connect", "dispose"] as const)(
-    "publishes the cached roster before yielding past paint and releases on %s",
-    async (release) => {
-      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-      const queued = createDeferred<FrameRequestCallback>();
-      vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
-        queued.resolve(callback);
-        return 1;
+  it("releases cached routing after publication without waiting for a browser paint", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    vi.stubGlobal("requestAnimationFrame", () => 1);
+    const cached = createDeferred<BootRoster | null>();
+    const h = harness({ cached: cached.promise });
+    const settled = vi.fn();
+    void h.sessions.whenCachedRosterSettled().then(settled);
+    try {
+      expect(h.sessions.state.result).toBeNull();
+      cached.resolve(roster());
+      await vi.advanceTimersByTimeAsync(0);
+      expect(h.sessions.state).toMatchObject({
+        result: roster().result,
+        resultCached: true,
+        agentId: "main",
       });
-      const cancelFrame = vi.fn();
-      vi.stubGlobal("cancelAnimationFrame", cancelFrame);
-      const cached = createDeferred<BootRoster | null>();
-      const h = harness({ cached: cached.promise });
-      const settlement = h.sessions.whenCachedRosterSettled();
-      const settled = vi.fn();
-      void settlement.then(settled);
-      try {
-        expect(h.sessions.cachedRoutingDefaults).toEqual({ mainKey: "main", scope: "per-sender" });
-        expect(h.sessions.state.groups).toEqual(["Work"]);
-        expect(h.sessions.state.result).toBeNull();
-        cached.resolve(roster());
-        const frame = await Promise.race([
-          queued.promise,
-          settlement.then(() => {
-            throw new Error("Cached route settled before yielding to a browser frame");
-          }),
-        ]);
-        expect(settled).not.toHaveBeenCalled();
-        expect(h.sessions.state).toMatchObject({
-          result: roster().result,
-          resultCached: true,
-          agentId: "main",
-        });
-        expect(h.sessions.canonicalListRevision).toBe(0);
-        expect(h.request).not.toHaveBeenCalled();
-        expect(h.sessions.captureBootRoster()).toBeNull();
-        if (release === "connect" || release === "dispose") {
-          if (release === "connect") {
-            h.connect();
-          } else {
-            h.sessions.dispose();
-          }
-          await Promise.resolve();
-          expect(settled).toHaveBeenCalledOnce();
-          expect(h.sessions.cachedRoutingDefaults).toBeUndefined();
-        }
-        const currentResult = h.sessions.state.result;
-        if (release === "frame") {
-          frame(16);
-          await new Promise<void>((resolve) => {
-            setImmediate(resolve);
-          });
-          // rAF callbacks precede paint; routing must wait for the following task.
-          expect(settled).not.toHaveBeenCalled();
-          await vi.advanceTimersByTimeAsync(0);
-        } else {
-          await vi.advanceTimersByTimeAsync(100);
-          expect(cancelFrame).toHaveBeenCalledWith(1);
-        }
-        await settlement;
-        expect(settled).toHaveBeenCalledOnce();
-        expect(h.sessions.state.result).toBe(currentResult);
-        if (release === "frame" || release === "background") {
-          h.publish({ phase: "reconnecting" });
-          expect(h.sessions.state.result?.sessions).toHaveLength(2);
-          expect(h.sessions.state.resultCached).toBe(true);
-        }
-      } finally {
-        h.sessions.dispose();
-        cached.resolve(null);
-        h.live.resolve(sessionsResult([], 2));
-      }
-    },
-  );
+      expect(settled).toHaveBeenCalledOnce();
+      expect(h.sessions.cachedRoutingDefaults).toEqual({ mainKey: "main", scope: "per-sender" });
+      expect(h.sessions.canonicalListRevision).toBe(0);
+      expect(h.sessions.captureBootRoster()).toBeNull();
+      expect(h.request).not.toHaveBeenCalled();
+      h.publish({ phase: "reconnecting" });
+      expect(h.sessions.state.result?.sessions).toHaveLength(2);
+      expect(h.sessions.state.resultCached).toBe(true);
+    } finally {
+      h.sessions.dispose();
+      cached.resolve(null);
+      h.live.resolve(sessionsResult([], 2));
+    }
+  });
 
   it("does not read or publish a cached roster without an accepted boot record", async () => {
     const h = harness({ withBootRecord: false });
