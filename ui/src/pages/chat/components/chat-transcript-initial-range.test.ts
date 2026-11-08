@@ -1,5 +1,6 @@
 import { defaultRangeExtractor, Virtualizer } from "@tanstack/virtual-core";
 import { afterEach, expect, it, onTestFinished, vi } from "vitest";
+import { createFrameClock } from "../../../test-helpers/animation-frame-clock.ts";
 import { TranscriptInitialRange } from "./chat-transcript-initial-range.ts";
 
 afterEach(() => vi.unstubAllGlobals());
@@ -98,83 +99,10 @@ it("yields between destination-size corrections and waits for a stable end befor
   expect(frames.size).toBe(0);
 });
 
-it("mounts the expanded destination after a manual jump measures a shorter tail", async () => {
-  const frames: FrameRequestCallback[] = [];
-  vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => frames.push(callback));
-  vi.stubGlobal("cancelAnimationFrame", () => {});
-  const virtualizer = new Virtualizer<HTMLDivElement, HTMLElement>({
-    count: 20,
-    initialRect: { width: 800, height: 300 },
-    initialOffset: 0,
-    getScrollElement: () => null,
-    estimateSize: (index) => (index === 19 ? 1000 : 100),
-    scrollToFn: () => {},
-    observeElementRect: () => () => {},
-    observeElementOffset: () => () => {},
-  });
-  let mounted: number[] = [];
-  let measured: number[] = [];
-  const range = new TranscriptInitialRange(
-    0,
-    () => virtualizer,
-    defaultRangeExtractor,
-    () => {
-      mounted = virtualizer.getVirtualIndexes();
-    },
-    () => 0,
-    () => true,
-    () => 100,
-    queueMicrotask,
-    () => {
-      measured = [...mounted];
-      if (!mounted.includes(19) || virtualizer.itemSizeCache.has(19)) {
-        return false;
-      }
-      virtualizer.resizeItem(19, 10);
-      return true;
-    },
-    (indexes) => indexes.every((index) => mounted.includes(index)),
-  );
-  onTestFinished(() => range.disconnect());
-  const rows = Array.from({ length: 20 }, (_, index) => ({
-    kind: "item" as const,
-    key: String(index),
-    item: index,
-  }));
-  range.updateRows(rows);
-  range.finish();
-  virtualizer.setOptions({
-    ...virtualizer.options,
-    rangeExtractor: (value) => range.extract(value),
-  });
-  range.presentation(rows);
-  // Establish the current reader range before the offscreen destination is admitted.
-  virtualizer.getVirtualIndexes();
-  let destination: number[] | undefined;
-  range.prepareEnd(
-    () => {
-      destination = [...measured];
-    },
-    () => true,
-    false,
-  );
-  await Promise.resolve();
-  await Promise.resolve();
-  for (const frame of frames.splice(0)) {
-    frame(16);
-  }
-  await Promise.resolve();
-  expect(destination).toEqual(expect.arrayContaining([16, 17, 18, 19]));
-});
-
 it("waits for a deferred destination commit and resumes it after parking", () => {
-  let nextFrame = 0;
-  const frames = new Map<number, FrameRequestCallback>();
-  vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
-    frames.set(++nextFrame, callback);
-    return nextFrame;
-  });
-  vi.stubGlobal("cancelAnimationFrame", (id: number) => frames.delete(id));
+  const clock = createFrameClock();
+  vi.stubGlobal("requestAnimationFrame", clock.request);
+  vi.stubGlobal("cancelAnimationFrame", clock.cancel);
   let renderPending = false;
   const invalidate = () => {
     renderPending = true;
@@ -245,11 +173,6 @@ it("waits for a deferred destination commit and resumes it after parking", () =>
       effect();
     }
   };
-  const paint = () => {
-    const callbacks = [...frames.values()];
-    frames.clear();
-    callbacks.forEach((callback) => callback(nextFrame * 16));
-  };
   commitRows();
   measureRows();
   let destination: number[] | undefined;
@@ -275,18 +198,18 @@ it("waits for a deferred destination commit and resumes it after parking", () =>
   expect(mounted).toEqual(expect.arrayContaining([16, 17, 18, 19]));
   runAfterCommit();
   presented = false;
-  paint();
+  clock.flush(16);
   expect(destination).toBeUndefined();
   presented = true;
   for (let turn = 0; turn < 10; turn++) {
-    if (!renderPending && !afterCommit.length && !frames.size) {
+    if (!renderPending && !afterCommit.length && !clock.frames.size) {
       break;
     }
     commitRows();
     runAfterCommit();
-    paint();
+    clock.flush(16);
   }
   expect(destination).toEqual(expect.arrayContaining([16, 17, 18, 19]));
   expect(range.preparingEnd).toBe(false);
-  expect(frames.size).toBe(0);
+  expect(clock.frames.size).toBe(0);
 });

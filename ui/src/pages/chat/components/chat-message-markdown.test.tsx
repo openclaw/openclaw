@@ -17,10 +17,7 @@ import { restorePropertyDescriptor } from "../../../test-helpers/property-descri
 import { mountSolid } from "../../../test-helpers/solid-render.tsx";
 import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { persistedMessageEntryId } from "../chat-thread-items.ts";
-import {
-  prepareGroupedMessage,
-  prepareGroupedMessageContent,
-} from "./chat-message-bubble-presentation.ts";
+import { prepareGroupedMessage } from "./chat-message-bubble-presentation.ts";
 import { GroupedMessage } from "./chat-message-bubble-view.tsx";
 import { resolveMessageActionDetails } from "./chat-message-markdown-view.tsx";
 import { MessageMarkdown } from "./chat-message-text-view.tsx";
@@ -72,11 +69,10 @@ describe("message action projections", () => {
     const preview = vi.spyOn(toolCards, "formatCollapsedToolPreviewText");
     onTestFinished(() => preview.mockRestore());
     const prepare = (role: string, content: string) =>
-      prepareGroupedMessage(
-        prepareGroupedMessageContent(prepareChatMessageRender({ role, content })),
-        "message",
-        { isStreaming: true, showReasoning: false },
-      );
+      prepareGroupedMessage(prepareChatMessageRender({ role, content }), "message", {
+        isStreaming: true,
+        showReasoning: false,
+      });
     prepare("assistant", "A streaming reply");
     expect(preview).not.toHaveBeenCalled();
     prepare("toolResult", "First line\nSecond line");

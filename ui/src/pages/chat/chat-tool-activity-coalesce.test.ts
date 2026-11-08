@@ -164,3 +164,55 @@ it.each(["text", "thinking"])("keeps %s apart from its calls and prepared activi
   expect(cards.map((list) => list.map((card) => card.callId))).toEqual([[], ["active"], [], ["b"]]);
   expect(rows.flatMap(readPreparedActivity)).toEqual([activity()]);
 });
+
+it("reuses sibling prose during interleaved live-tool updates and invalidates replaced content", () => {
+  const firstText = { type: "text", text: "Before the first tool" };
+  const image = { type: "image", source: { type: "url", url: "https://example.com/map.png" } };
+  const middleText = { type: "text", text: "Between tools" };
+  const lastText = { type: "text", text: "After both tools" };
+  const source = assistant(
+    [firstText, toolCall("first"), image, middleText, toolCall("second"), lastText],
+    { runId: "run-a", senderLabel: "Original sender" },
+  );
+  const live = (text: string, runId = "run-a") =>
+    item(
+      {
+        role: "toolResult",
+        runId,
+        __openclawToolStreamLive: true,
+        toolCallId: "first",
+        toolName: "custom",
+        content: [{ ...result("first"), text }],
+      },
+      "live-first",
+    );
+  const project = (output: string) => messages([item(source, "shared-key"), live(output)]);
+  const initial = project("first output");
+  expect(initial).toHaveLength(5);
+  expect(initial).toEqual([
+    expect.objectContaining({ content: [firstText] }),
+    expect.anything(),
+    expect.objectContaining({ content: [image, middleText] }),
+    expect.anything(),
+    expect.objectContaining({ content: [lastText] }),
+  ]);
+
+  // Another caller uses the same row and call keys, but a different source owner.
+  const peer = assistant([...source.content], { runId: "run-b", senderLabel: "Peer sender" });
+  const other = messages([item(peer, "shared-key"), live("peer output", "run-b")]);
+  expect(other[0]).not.toBe(initial[0]);
+  expect(other[0]).toMatchObject({ senderLabel: "Peer sender", content: [firstText] });
+
+  const updated = project("new first output");
+  expect(sameReferences(updated, initial)).toEqual([true, false, true, true, true]);
+  expect(extractToolCardsCached(updated[1])[0]?.outputText).toBe("new first output");
+  expect(updated[0]).toMatchObject({ senderLabel: "Original sender" });
+
+  // The card owner accepts in-place content replacement on an existing raw message.
+  source.content = [{ type: "text", text: "Replaced narration" }, ...source.content.slice(1)];
+  const replaced = project("new first output");
+  expect(replaced[0]).not.toBe(updated[0]);
+  expect(replaced[0]).toMatchObject({ content: [{ type: "text", text: "Replaced narration" }] });
+  expect(replaced[2]).toMatchObject({ content: [image, middleText] });
+  expect(replaced[4]).toMatchObject({ content: [lastText] });
+});

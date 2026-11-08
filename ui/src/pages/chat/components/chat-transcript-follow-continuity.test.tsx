@@ -97,11 +97,11 @@ it("finishes smooth end preparation after the destination moves beyond the old t
     frame();
     await settle();
   };
-  const measureMounted = () => {
+  const measureMounted = (destination?: HTMLElement) => {
     for (const row of container.querySelectorAll<HTMLElement>(
       ".chat-virtual-row:not([data-prepared-row])",
     )) {
-      emitTranscriptResize(row, 800, 120);
+      emitTranscriptResize(row, 800, row === destination ? 180 : 120);
     }
   };
   transcript.scrollToEnd({ behavior: "instant" });
@@ -138,11 +138,7 @@ it("finishes smooth end preparation after the destination moves beyond the old t
   destination.style.height = "180px";
   Object.defineProperty(destination, "offsetHeight", { configurable: true, value: 180 });
   // Deliver once: a skipped observer receipt must not need a later external resize.
-  for (const row of container.querySelectorAll<HTMLElement>(
-    ".chat-virtual-row:not([data-prepared-row])",
-  )) {
-    emitTranscriptResize(row, 800, row === destination ? 180 : 120);
-  }
+  measureMounted(destination);
   travelling = false;
   for (let turn = 0; turn < 6; turn++) {
     await paint();

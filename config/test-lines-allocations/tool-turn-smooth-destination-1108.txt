@@ -1,2 +1,2 @@
 # Regression: A smooth end request replays a destination resize skipped after row splitting.
-77
+73

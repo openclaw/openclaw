@@ -439,6 +439,7 @@ function coalesceTurn(items: ChatItem[]): ChatItem[] {
     row.push(item);
     rows.set(index, row);
   }
+  const projectedMessages = [...bundles.values()];
   const result = items.flatMap((item, index) => {
     const source = sources.get(index);
     if (!source || unchanged.has(source)) {
@@ -451,21 +452,30 @@ function coalesceTurn(items: ChatItem[]): ChatItem[] {
     // Prose and media keep their original position as their own rows, so
     // commentary never carries a tool call: every call joins the tool rows
     // that its activity group summarizes.
-    const prose = (content: unknown[], segment: number): ProjectedItem => ({
-      ...source.item,
-      key: segment === 0 ? source.item.key : `${source.item.key}:prose:${segment}`,
-      message: {
-        ...source.message,
-        content,
-        activity: undefined,
-        toolCallId: undefined,
-        tool_call_id: undefined,
-        toolUseId: undefined,
-        tool_use_id: undefined,
-        toolName: undefined,
-        tool_name: undefined,
-      },
-    });
+    const prose = (content: unknown[], segment: number): ProjectedItem => {
+      const projected: ProjectedItem = {
+        ...source.item,
+        key: segment === 0 ? source.item.key : `${source.item.key}:prose:${segment}`,
+        message: {
+          ...source.message,
+          content,
+          activity: undefined,
+          toolCallId: undefined,
+          tool_call_id: undefined,
+          toolUseId: undefined,
+          tool_use_id: undefined,
+          toolName: undefined,
+          tool_name: undefined,
+        },
+      };
+      projectedMessages.push({
+        item: projected,
+        index,
+        owner: source.originalMessage,
+        inputs: [source.originalMessage, source.originalMessage.content],
+      });
+      return projected;
+    };
     const ordered: ProjectedItem[] = [];
     let pendingProse: unknown[] = [];
     const flushProse = () => {
@@ -500,7 +510,7 @@ function coalesceTurn(items: ChatItem[]): ChatItem[] {
   // Assembly and prose/media interleaving are complete. Only messages are
   // reused: duplicate grouping can still mutate the returned item wrappers.
   const nextBySource = new Map<object, Map<string, CachedBundle>>();
-  for (const { item, owner, inputs } of bundles.values()) {
+  for (const { item, owner, inputs } of projectedMessages) {
     inputs.push(item.message.content.length);
     for (const block of item.message.content) {
       const raw = asRecord(block);

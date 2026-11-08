@@ -1,2 +1,2 @@
-# Regression: A geometric callback survives parking between visible commit and its microtask.
-22
+# Regression: Deferred geometry survives microtask and scheduler-yield parking, but not disposal.
+42

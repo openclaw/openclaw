@@ -5,10 +5,7 @@ import { toSanitizedMarkdownContent } from "../../../components/markdown.ts";
 import { prepareChatMessageRender } from "../../../lib/chat/message-display.ts";
 import { mountSolid } from "../../../test-helpers/solid-render.tsx";
 import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
-import {
-  prepareGroupedMessage,
-  prepareGroupedMessageContent,
-} from "./chat-message-bubble-presentation.ts";
+import { prepareGroupedMessage } from "./chat-message-bubble-presentation.ts";
 import { GroupedMessage } from "./chat-message-bubble-view.tsx";
 import { prepareMessageMarkdown } from "./chat-message-text-preparation.ts";
 import { ChatTimestamp } from "./chat-message-timestamp-view.tsx";
@@ -488,11 +485,10 @@ it("warms an embedded widget's caption without mounting the widget", () => {
     content:
       '**Prepared widget caption**\n\n[embed ref="prepared-caption-chart" title="Synthetic chart" height="220" /]',
   };
-  const state = prepareGroupedMessage(
-    prepareGroupedMessageContent(prepareChatMessageRender(message)),
-    "prepared-widget",
-    { isStreaming: false, showReasoning: false },
-  );
+  const state = prepareGroupedMessage(prepareChatMessageRender(message), "prepared-widget", {
+    isStreaming: false,
+    showReasoning: false,
+  });
   expect(state.assistantViewBlocks).toHaveLength(1);
   expect(state.bodyMarkdown).not.toContain("[embed");
   expect(prewarmGroupedMessage(message, {}, "fragment")).toBe(true);
