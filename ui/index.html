@@ -302,11 +302,9 @@
       html[data-openclaw-warm-frame="holding"] body {
         background: transparent !important;
       }
-      /* Explicit descendant visibility must not expose a partial frame. */
-      html[data-openclaw-warm-frame="holding"] *,
-      html[data-openclaw-warm-frame="holding"] *::before,
-      html[data-openclaw-warm-frame="holding"] *::after {
-        visibility: hidden !important;
+      html[data-openclaw-warm-frame="holding"] body {
+        opacity: 0;
+        pointer-events: none;
       }
 
       /* Critical loading layout lives here so HTML and the Solid fallback share
