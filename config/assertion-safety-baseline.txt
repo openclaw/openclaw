@@ -1689,7 +1689,7 @@ src/gateway/desktop/node-source-context.ts	1
 src/gateway/gateway-cli-backend.live-helpers.ts	2
 src/gateway/gateway-cli-backend.live-probe-helpers.ts	4
 src/gateway/health/collector.ts	1
-src/gateway/hooks-mapping.ts	2
+src/gateway/hooks-mapping.ts	1
 src/gateway/hooks.ts	1
 src/gateway/live-agent-probes.ts	1
 src/gateway/local-request-context.ts	2
