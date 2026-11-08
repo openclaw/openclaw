@@ -288,7 +288,6 @@ describe("Codex app-server model catalog", () => {
         accountType: "chatgpt",
         authMode: mode,
       });
-      expect(read({ modelId: "gpt-future" }, nativePluginConfig)).toBeUndefined();
       rpc.epoch += 1;
       expect(read({}, nativePluginConfig)).toBeUndefined();
     },

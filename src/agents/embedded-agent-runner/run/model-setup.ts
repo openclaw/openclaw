@@ -431,12 +431,13 @@ export async function resolveEmbeddedRunModelSetup(params: {
       });
     observedRoutes = routeVariants ? listModelCatalogObservedRoutes(routeVariants) : undefined;
   } else {
+    const agentId = runParams.agentId;
     const accountAuthMode =
-      runParams.authProfileId || !runParams.config
+      runParams.authProfileId || !runParams.config || !agentId
         ? undefined
         : readCodexAccountAuthMode(agentHarness, {
             config: runParams.config,
-            agentId: runParams.agentId,
+            agentId,
             agentDir: params.agentDir,
             workspaceDir: params.workspaceDir,
             provider,
