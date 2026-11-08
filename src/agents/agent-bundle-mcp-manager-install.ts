@@ -106,7 +106,7 @@ export function createSessionMcpRuntimeManagerInstall(
       existing.markUsed();
       return existing;
     }
-    const slot = lifecycle.reserveRuntimeSlot(existing, hasServers);
+    const slot = await lifecycle.reserveRuntimeSlot(runtimeKey, existing, hasServers);
     store.connectionMetaByRuntimeKey.delete(runtimeKey);
     let runtime: SessionMcpRuntime | undefined;
     let previousCleanup: Promise<void> | undefined;
@@ -124,7 +124,7 @@ export function createSessionMcpRuntimeManagerInstall(
         store.runtimesBySessionId.set(runtimeKey, runtime);
       }
       if (existing) {
-        previousCleanup = lifecycle.disposeRuntime(existing, false);
+        previousCleanup = lifecycle.disposeRuntime(runtimeKey, existing, false);
         await previousCleanup;
       }
       runtime ??= await store.createRuntime({
@@ -151,8 +151,8 @@ export function createSessionMcpRuntimeManagerInstall(
       store.runtimesBySessionId.delete(runtimeKey);
       // A transferred slot covers both owners until every cleanup is confirmed.
       const cleanup = await Promise.allSettled([
-        previousCleanup ?? (existing && lifecycle.disposeRuntime(existing, false)),
-        runtime && lifecycle.disposeRuntime(runtime, false),
+        previousCleanup ?? (existing && lifecycle.disposeRuntime(runtimeKey, existing, false)),
+        runtime && lifecycle.disposeRuntime(runtimeKey, runtime, false),
       ]);
       const failed = cleanup.find((result) => result.status === "rejected");
       if (failed) {

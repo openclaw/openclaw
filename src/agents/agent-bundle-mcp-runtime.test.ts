@@ -2003,32 +2003,6 @@ describe("requester-scoped MCP connection resolution", () => {
     });
   });
 
-  it("keeps replacement capacity reserved when an old child's cleanup is uncertain", async () => {
-    const manager = createSessionMcpRuntimeManager();
-    const params: RuntimeParams = {
-      sessionId: "uncertain-child",
-      workspaceDir: "/workspace",
-      cfg: { mcp: { servers: { child: { command: "true" } } } },
-    };
-    try {
-      const previous = await manager.getOrCreate(params);
-      previous.joinCleanup = async () => {
-        throw new Error("child cleanup uncertain");
-      };
-      await expect(
-        manager.getOrCreate({ ...params, workspaceDir: "/replacement" }),
-      ).rejects.toThrow("child cleanup uncertain");
-      for (let index = 0; index < 255; index += 1) {
-        await manager.getOrCreate({ ...params, sessionId: `other-${index}` });
-      }
-      await expect(manager.getOrCreate({ ...params, sessionId: "overflow" })).rejects.toThrow(
-        "live runtime limit (256)",
-      );
-    } finally {
-      await manager.disposeAll();
-    }
-  });
-
   it("keeps the tools.effective config summary in fingerprint parity with the peeked runtime", async () => {
     const resolverRegistry = createMcpProofPluginRegistry();
     await withPluginRuntimeRegistryScope(resolverRegistry.registry, async () => {

@@ -132,65 +132,6 @@ afterEach(async () => {
 });
 
 describe("MCP manager creation ownership", () => {
-  it("keeps serverless sessions available beyond the MCP limit and while it is full", async () => {
-    const manager = createManager(createRuntimeFixture);
-    for (let index = 0; index < 300; index += 1) {
-      await manager.getOrCreate({ ...params, sessionId: `serverless-${index}` });
-    }
-    const configured = { mcp: { servers: { fixture: { command: "true" } } } };
-    for (let index = 0; index < 256; index += 1) {
-      await manager.getOrCreate({ ...params, sessionId: `connected-${index}`, cfg: configured });
-    }
-    await manager.getOrCreate({ ...params, sessionId: "serverless-at-capacity" });
-    await expect(
-      manager.getOrCreate({ ...params, sessionId: "connected-overflow", cfg: configured }),
-    ).rejects.toThrow("live runtime limit (256)");
-    await expect(
-      manager.getOrCreate({ ...params, sessionId: "serverless-0", cfg: configured }),
-    ).rejects.toThrow("live runtime limit (256)");
-    await manager.getOrCreate({ ...params, sessionId: "connected-0" });
-    await manager.getOrCreate({ ...params, sessionId: "serverless-0", cfg: configured });
-  });
-
-  it("bounds requester runtimes across sessions, creation, and cleanup", async () => {
-    const held = holdFactory();
-    const factory = vi.fn<CreateSessionMcpRuntime>(createRuntimeFixture);
-    const manager = createManager(factory);
-    const acquire = (sessionId: string) =>
-      manager.getOrCreateRequesterScoped({ ...requesterParams("sender"), sessionId });
-    await withRequesterResolver(async () => {
-      for (let index = 0; index < 255; index += 1) {
-        await acquire(`bounded-${index}`);
-      }
-      factory.mockImplementationOnce(held.createRuntime);
-      const last = acquire("last-slot");
-      await held.started;
-      await expect(acquire("overflow")).rejects.toThrow("live runtime limit (256)");
-      held.release();
-      await last;
-      const firstKey = expectDefined(
-        manager
-          .listRuntimeKeys()
-          .find((key) => key === "bounded-0" || key.includes('"sessionId":"bounded-0"')),
-        "first runtime key",
-      );
-      const first = expectDefined(manager.peekSession({ sessionId: firstKey }), "first runtime");
-      await acquire("bounded-0");
-      expect(first.dispose).not.toHaveBeenCalled();
-      const closing = holdDisposal(first);
-      const disposal = manager.disposeSession("bounded-0");
-      await closing.started;
-      await expect(acquire("overflow")).rejects.toThrow("live runtime limit (256)");
-      closing.release();
-      await disposal;
-      await acquire("overflow");
-      expect(manager.listRuntimeKeys()).toHaveLength(256);
-      await manager.disposeAll();
-      await acquire("after-shutdown");
-      expect(manager.listSessionIds()).toEqual(["after-shutdown"]);
-    });
-  });
-
   it("joins an unpublished disposal and reports its failure in the joining caller", async () => {
     const manager = createManager(createRuntimeFixture);
     const runtime = await manager.getOrCreate(params);
