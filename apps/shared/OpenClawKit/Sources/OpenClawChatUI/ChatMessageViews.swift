@@ -337,8 +337,14 @@ struct ChatMessageBubble: View, @MainActor Equatable {
     static func == (lhs: Self, rhs: Self) -> Bool {
         // The iOS gate excludes media/widgets, so resolver closures cannot affect its subtree.
         // Comparing closure identity would defeat the gate because ChatView rebuilds them each pass.
+        // The favicon loader is covered by sourceContextRevision, which rotates on context changes.
         guard self.styleValue(lhs.style) == self.styleValue(rhs.style) else { return false }
         return lhs.message == rhs.message &&
+            lhs.liveToolCalls == rhs.liveToolCalls &&
+            lhs.metadata == rhs.metadata &&
+            lhs.sourcePreviews == rhs.sourcePreviews &&
+            lhs.sourceContextRevision == rhs.sourceContextRevision &&
+            lhs.sourceFaviconsEnabled == rhs.sourceFaviconsEnabled &&
             lhs.markdownVariant.rawValue == rhs.markdownVariant.rawValue &&
             lhs.userAccent == rhs.userAccent &&
             lhs.displayOptions.rawValue == rhs.displayOptions.rawValue &&
