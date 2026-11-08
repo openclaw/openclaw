@@ -23,6 +23,7 @@ import {
   type EmbeddingProviderRuntime,
 } from "./embeddings.js";
 import type { MemoryIndexDatabase } from "./manager-database-context.js";
+import type { MemoryEmbeddingCacheRetireFence } from "./manager-embedding-cache-retire.js";
 import type { MemoryIndexEntry } from "./manager-index-preparation.js";
 import {
   resolveMemoryPrimaryProviderRequest,
@@ -258,7 +259,9 @@ export abstract class MemoryManagerSyncBase {
   ): Promise<T>;
   protected abstract getIndexConcurrency(): number;
   protected abstract pruneEmbeddingCacheIfNeeded(recount?: boolean): Promise<void>;
-  protected abstract retirePublishedEmbeddingCacheRows(writtenSince: number): Promise<void>;
+  protected abstract retirePublishedEmbeddingCacheRows(
+    fence: MemoryEmbeddingCacheRetireFence,
+  ): Promise<void>;
   protected abstract resetProviderInitializationForRetry(): void;
   protected abstract assertRequiredProviderAvailable(operation: "search" | "sync"): void;
   protected abstract indexFile(entry: MemoryIndexEntry, source: MemorySource): Promise<void>;

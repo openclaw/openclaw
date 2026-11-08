@@ -9,6 +9,7 @@ import { createSubsystemLogger } from "openclaw/plugin-sdk/memory-core-host-engi
 import type { MemorySource } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { withMemoryWorkspaceLock } from "../memory-workspace-lock.js";
 import type { IndexedMemoryChunk } from "./manager-chunk-writer.js";
+import type { MemoryEmbeddingCacheRetireFence } from "./manager-embedding-cache-retire.js";
 import {
   collectMemoryCachedEmbeddings,
   isValidMemoryEmbedding,
@@ -71,11 +72,13 @@ export abstract class MemoryManagerEmbeddingCacheOps extends MemoryManagerSyncOp
   }
 
   /**
-   * After a successful publication, drop cache rows written since `writtenSince` whose
-   * exact vector the published memory index now serves. Optional cleanup: a failure is
-   * logged and never reaches publication or retry state.
+   * After a successful publication, drop fenced cache rows whose exact vector the
+   * published memory index now serves. Optional cleanup: a failure is logged and never
+   * reaches publication or retry state.
    */
-  protected async retirePublishedEmbeddingCacheRows(writtenSince: number): Promise<void> {
+  protected async retirePublishedEmbeddingCacheRows(
+    fence: MemoryEmbeddingCacheRetireFence,
+  ): Promise<void> {
     const identity = (this.syncProviderGeneration?.identities ??
       this.resolveProviderIndexIdentities())[0];
     if (!this.cache.enabled || !identity) {
@@ -91,7 +94,7 @@ export abstract class MemoryManagerEmbeddingCacheOps extends MemoryManagerSyncOp
       let after: Awaited<ReturnType<typeof database.retireEmbeddingCache>> = null;
       do {
         after = await database.retireEmbeddingCache(
-          { identity, writtenSince, ...(after ? { after } : {}) },
+          { ...fence, identity, ...(after ? { after } : {}) },
           assertCurrent,
         );
         await yieldToEventLoop();

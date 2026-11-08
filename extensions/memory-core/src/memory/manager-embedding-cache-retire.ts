@@ -16,10 +16,15 @@ const MEMORY_EMBEDDING_CACHE_RETIRE_PAGE = 256;
 
 export type MemoryEmbeddingCacheRetireCursor = { updatedAt: number; hash: string };
 
-export type MemoryEmbeddingCacheRetirement = {
-  identity: MemoryIndexProviderIdentity;
+/** Each pass is fenced to one side of a run's start. */
+export type MemoryEmbeddingCacheRetireFence =
   /** Only rows this run wrote: a failed or concurrent run's earlier rows stay reusable. */
-  writtenSince: number;
+  | { writtenSince: number; writtenBefore?: never }
+  /** Existing rows after a full rebuild: rows written while it ran stay with the first fence. */
+  | { writtenBefore: number; writtenSince?: never };
+
+export type MemoryEmbeddingCacheRetirement = MemoryEmbeddingCacheRetireFence & {
+  identity: MemoryIndexProviderIdentity;
   after?: MemoryEmbeddingCacheRetireCursor;
 };
 
@@ -70,7 +75,9 @@ export function retirePublishedMemoryEmbeddingCacheRows(
         eb(key("provider"), "=", identity.provider),
         eb(key("model"), "=", identity.model),
         eb(key("provider_key"), "=", identity.providerKey),
-        eb("updated_at", ">=", input.writtenSince),
+        input.writtenBefore === undefined
+          ? eb("updated_at", ">=", input.writtenSince)
+          : eb("updated_at", "<", input.writtenBefore),
         // The redundant lower bound keeps one updated_at range; a bare OR keyset makes
         // SQLite sort every remaining row on each page.
         ...(after

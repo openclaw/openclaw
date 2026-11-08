@@ -436,7 +436,7 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerReindexOps {
         // Deferred or failed memory work stays dirty; its rows stay for the retry.
         if (memoryPublished && !this.dirty && !this.memoryFullRetryDirty) {
           this.cacheRetireSince = undefined;
-          await this.retirePublishedEmbeddingCacheRows(cacheWrittenSince);
+          await this.retirePublishedEmbeddingCacheRows({ writtenSince: cacheWrittenSince });
         } else {
           this.cacheRetireSince = cacheWrittenSince;
         }

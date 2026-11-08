@@ -316,8 +316,9 @@ After a successful publication, the embedding cache also drops entries the
 published memory index already holds byte for byte. An ordinary sync that
 finishes its memory files without failing or deferring work removes the entries
 written since it started, or since the oldest earlier sync that did not finish
-cleanly. A full rebuild, once it publishes, removes the entries it wrote. An
-entry goes only when every published chunk with its text hash holds the same
+cleanly. A full rebuild, once it publishes, removes the entries it wrote and the
+older entries its new index now holds, since it rewrote every chunk. An entry
+goes only when every published chunk with its text hash holds the same
 vector and at least one of those chunks belongs to a memory file indexed with
 the active provider, model, provider settings, input format and dimensions.
 Entries whose vector differs from any published copy, entries for unpublished

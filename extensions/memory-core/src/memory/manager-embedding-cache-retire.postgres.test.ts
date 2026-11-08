@@ -208,6 +208,25 @@ describe.skipIf(!connection)("PostgreSQL memory embedding cache retirement", () 
     ]);
   });
 
+  it("retires existing rows only before the rebuild fence", () => {
+    publishMeta();
+    write(() => {
+      chunk("existing", vector(1));
+      cache("existing", vector(1), 10);
+      chunk("existing-different", vector(2));
+      cache("existing-different", vector(2.5), 10);
+      cache("existing-unpublished", vector(3), 10);
+      chunk("during", vector(4));
+      cache("during", vector(4), 50);
+    });
+    expect(retire({ identity, writtenBefore: 50 })).toEqual({ removed: 1 });
+    expect(cachedHashes()).toEqual([
+      "key:during",
+      "key:existing-different",
+      "key:existing-unpublished",
+    ]);
+  });
+
   it("retires nothing when the published index has another provider key", () => {
     publishMeta({ providerKey: "other" });
     write(() => {

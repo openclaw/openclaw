@@ -154,6 +154,39 @@ describe("memory embedding cache duplicate retirement", () => {
     expect(Reflect.get(manager, "memoryFullRetryDirty")).toBe(false);
   });
 
+  it("retires existing duplicates only after a full rebuild publishes", async () => {
+    const { manager, writer, cacheRows, chunkHashes } = await indexedManager();
+    // Rows an older build kept: duplicates of every published chunk, plus one unpublished.
+    writer.exec(`INSERT INTO memory_embedding_cache
+        (provider, model, provider_key, hash, embedding, dims, updated_at)
+      SELECT json_extract(meta.value, '$.provider'), chunk.model,
+        json_extract(meta.value, '$.providerKey'), chunk.hash, chunk.embedding,
+        length(chunk.embedding) / 8, 1
+      FROM memory_index_chunks AS chunk, memory_index_meta AS meta
+      WHERE meta.key = 'memory_index_meta_v1'`);
+    const existing = cacheRows();
+    expect(existing.length).toBeGreaterThan(3);
+    writer.exec(`INSERT INTO memory_embedding_cache
+        (provider, model, provider_key, hash, embedding, dims, updated_at)
+      SELECT provider, model, provider_key, 'unpublished', embedding, dims, 1
+      FROM memory_embedding_cache LIMIT 1`);
+
+    // Ordinary syncs leave rows they did not write.
+    await edit(manager, "Eta header on an ordinary sync.");
+    await manager.sync({ reason: "watch" });
+    expect(cacheRows()).toHaveLength(existing.length + 1);
+
+    fixture.provider.embeddedBatchTexts.length = 0;
+    await manager.sync({ reason: "cli", force: true });
+    expect(fixture.provider.embeddedBatchTexts).toEqual([]);
+    // The edit's replaced first chunk and the unpublished row stay; every duplicate goes.
+    const published = new Set(chunkHashes().map((row) => row.hash));
+    const remaining = cacheRows();
+    expect(remaining).toHaveLength(2);
+    expect(remaining).toContainEqual({ hash: "unpublished" });
+    expect(remaining.every((row) => !published.has(row.hash))).toBe(true);
+  });
+
   it("leaves a disabled cache alone", async () => {
     const spy = vi.spyOn(MemoryIndexDatabase.prototype, "retireEmbeddingCache");
     const { manager } = await indexedManager(false);

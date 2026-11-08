@@ -137,6 +137,26 @@ describe("published embedding cache retirement", () => {
     ]);
   });
 
+  it("retires existing rows only before the rebuild fence", () => {
+    using db = open();
+    chunk(db, "existing", vector(1));
+    cache(db, "existing", vector(1), 10);
+    chunk(db, "existing-different", vector(2));
+    cache(db, "existing-different", vector(2.5), 10);
+    cache(db, "existing-unpublished", vector(3), 10);
+    chunk(db, "during", vector(4));
+    cache(db, "during", vector(4), 50);
+
+    expect(retirePublishedMemoryEmbeddingCacheRows(db, { identity, writtenBefore: 50 })).toEqual({
+      removed: 1,
+    });
+    expect(cachedHashes(db)).toEqual([
+      "key:during",
+      "key:existing-different",
+      "key:existing-unpublished",
+    ]);
+  });
+
   it.each([
     ["another provider key", { providerKey: "other" }],
     ["no provider key", { providerKey: undefined }],
@@ -169,7 +189,10 @@ describe("published embedding cache retirement", () => {
     expect(cachedHashes(db)).toEqual(["key:same"]);
   });
 
-  it("bounds each call to one page and resumes after its cursor", () => {
+  it.each([
+    ["rows a run wrote", { writtenSince: 60 }],
+    ["existing rows", { writtenBefore: 100 }],
+  ] as const)("bounds each page of %s and resumes after its cursor", (_name, fence) => {
     using db = open();
     const total = RETIRE_PAGE + 3;
     for (let i = 0; i < total; i += 1) {
@@ -178,7 +201,7 @@ describe("published embedding cache retirement", () => {
       // Odd rows keep a different vector, so pages advance past retained rows.
       cache(db, hash, i % 2 === 0 ? vector(i) : vector(i + 0.25), 60 + (i % 7));
     }
-    const first = retirePublishedMemoryEmbeddingCacheRows(db, { identity, writtenSince: 60 });
+    const first = retirePublishedMemoryEmbeddingCacheRows(db, { identity, ...fence });
     expect(first.next).toBeDefined();
     expect(first.removed).toBeLessThanOrEqual(RETIRE_PAGE);
     // Every later page must walk one updated_at range instead of sorting what remains.
@@ -198,7 +221,7 @@ describe("published embedding cache retirement", () => {
     });
     const second = retirePublishedMemoryEmbeddingCacheRows(db, {
       identity,
-      writtenSince: 60,
+      ...fence,
       after: first.next,
     });
     spy.mockRestore();

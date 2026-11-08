@@ -163,8 +163,9 @@ describe("memory rebuild cache reuse", () => {
       expect(writer.prepare("SELECT count(*) AS n FROM memory_index_chunks").get()).toEqual({
         n: 12,
       });
+      // A published rebuild retires the rows it now serves; only superseded rows remain.
       expect(writer.prepare("SELECT count(*) AS n FROM memory_embedding_cache").get()).toEqual({
-        n: 12,
+        n: failPublication ? 12 : 4,
       });
       if (!emptyIndex && !failPublication) {
         await manager.close();
