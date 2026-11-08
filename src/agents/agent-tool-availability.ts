@@ -57,11 +57,10 @@ export function copyAgentToolAvailability<T extends Pick<AnyAgentTool, "paramete
   const executionSchema = executionSchemas.get(source);
   if (executionSchema !== undefined) {
     const sourceParameters = source.parameters;
+    const unchangedProjection = sourceParameters === executionSchema.projected;
     executionSchemas.set(target, {
-      canonical:
-        sourceParameters === executionSchema.projected
-          ? executionSchema.canonical
-          : sourceParameters,
+      canonical: unchangedProjection ? executionSchema.canonical : sourceParameters,
+      presentation: unchangedProjection ? executionSchema.presentation : sourceParameters,
       projected: target.parameters,
     });
   }
@@ -133,7 +132,10 @@ export function finalizeAgentToolAvailability<T extends ToolDefinition>(
 }
 
 /** Provider-neutral input contract behind a projected model-facing schema. */
-const executionSchemas = new WeakMap<object, { canonical: unknown; projected: unknown }>();
+const executionSchemas = new WeakMap<
+  object,
+  { canonical: unknown; presentation: unknown; projected: unknown }
+>();
 
 /**
  * Bind the canonical input contract for a tool whose advertised schema is a
@@ -143,9 +145,11 @@ const executionSchemas = new WeakMap<object, { canonical: unknown; projected: un
 export function bindAgentToolExecutionSchema<T extends Pick<AnyAgentTool, "parameters">>(
   tool: T,
   schema: unknown,
+  presentation: unknown,
 ): T {
   executionSchemas.set(tool, {
     canonical: schema,
+    presentation,
     projected: tool.parameters,
   });
   return tool;
@@ -159,5 +163,5 @@ export function resolveAgentToolExecutionSchema(tool: object, schema: unknown): 
 /** Recover provider-neutral input guidance without exposing execution-only overrides. */
 export function resolveAgentToolPresentationSchema(tool: object, schema: unknown): unknown {
   const bound = executionSchemas.get(tool);
-  return bound && schema === bound.projected ? bound.canonical : schema;
+  return bound && schema === bound.projected ? bound.presentation : schema;
 }

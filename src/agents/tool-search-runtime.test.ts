@@ -1,6 +1,11 @@
+import {
+  getPublishedRuntimeToolInputSchema,
+  MAX_TOOL_SCHEMA_DEPTH,
+} from "@openclaw/ai/internal/tool-schema";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { Agent, type AgentEvent, type AgentTool } from "openclaw/plugin-sdk/agent-core";
 import { Type } from "typebox";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, assert, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { registerSecretValueForRedaction } from "../logging/secret-redaction-registry.js";
 import { resetSecretRedactionRegistryForTest } from "../logging/secret-redaction-registry.test-support.js";
@@ -13,6 +18,7 @@ import {
   SecretSurfaceUnavailableError,
   setActiveDegradedSecretOwners,
 } from "../secrets/runtime-degraded-state.js";
+import { resolveAgentToolExecutionSchema } from "./agent-tool-availability.js";
 import { copyAgentToolMetadata } from "./agent-tool-metadata.js";
 import { wrapToolWithBeforeToolCallHook } from "./agent-tools.before-tool-call.js";
 import { finalizeAgentTools } from "./agent-tools.finalize.js";
@@ -254,6 +260,57 @@ describe("Tool Search terminal results", () => {
 });
 
 describe("Tool Search input schemas", () => {
+  it("serializes bounded canonical inputs through tool_describe", async () => {
+    let metadata: AnyAgentTool["parameters"] = { type: "string" };
+    for (let depth = 0; depth < 5_000; depth++) {
+      metadata = { type: "object", properties: { next: metadata } };
+    }
+    const parameters = {
+      type: "object",
+      properties: { optional: { type: "boolean", const: true }, metadata },
+    };
+    const target: AnyAgentTool = { ...fakeTool("deep_input"), parameters };
+    const [finalized] = finalizeAgentTools({
+      tools: [target],
+      modelProvider: "google",
+      hookContext: {},
+      wrapBeforeToolCallHook: false,
+    });
+    assert.ok(finalized);
+    const wrapped = copyAgentToolMetadata(finalized, { ...finalized });
+    const { catalogRef, config } = createRuntime([wrapped]);
+    const describeTool = createToolSearchTools({ catalogRef, config }).find(
+      (tool) => tool.name === TOOL_DESCRIBE_RAW_TOOL_NAME,
+    );
+    assert.ok(describeTool);
+    expect(wrapped.parameters).toHaveProperty("properties.optional.enum", ["true"]);
+
+    const result = await describeTool.execute("describe-deep", { id: target.name });
+
+    expect(result.details).toHaveProperty("parameters.properties.optional.const", true);
+    expect(result.content).toEqual([
+      expect.objectContaining({ type: "text", text: expect.any(String) }),
+    ]);
+    assert.ok(isRecord(result.details));
+    const describedSchema = result.details.parameters;
+    assert.ok(isRecord(describedSchema) && isRecord(describedSchema.properties));
+    let nested = describedSchema.properties.metadata;
+    let depth = 0;
+    while (isRecord(nested) && isRecord(nested.properties)) {
+      depth++;
+      nested = nested.properties.next;
+    }
+    expect(depth).toBeLessThanOrEqual(MAX_TOOL_SCHEMA_DEPTH);
+    const presentation = catalogRef.current?.entries[0]?.parameters;
+    expect(getPublishedRuntimeToolInputSchema(presentation)).toBeDefined();
+    registerHeadlessToolSearchCatalog({
+      catalogRef,
+      tools: [copyAgentToolMetadata(wrapped, { ...wrapped })],
+    });
+    expect(catalogRef.current?.entries[0]?.parameters).toBe(presentation);
+    expect(resolveAgentToolExecutionSchema(wrapped, wrapped.parameters)).toBe(parameters);
+  });
+
   it("advertises canonical Gemini inputs while keeping execution-only exec arguments hidden", async () => {
     const readTool = createReadTool(tempDirs.make("gemini-read"));
     const collectorFields = {

@@ -249,8 +249,12 @@ export function finalizeAgentTools(options: FinalizeAgentToolsOptions): AnyAgent
         : copyAgentToolMetadata(tool, { ...tool, parameters, outputSchema });
     // The advertised schema is a provider projection (for example Gemini stringifies
     // literal enums); keep the canonical contract for local validation.
-    return parameters === canonicalParameters
-      ? projected
-      : bindAgentToolExecutionSchema(projected, canonicalParameters);
+    if (parameters === canonicalParameters) {
+      return projected;
+    }
+    // Validation retains the raw contract; catalog guidance uses its bounded JSON publication.
+    const presentation =
+      publishParameters(memo, canonicalParameters, tool.name)?.parameters ?? parameters;
+    return bindAgentToolExecutionSchema(projected, canonicalParameters, presentation);
   });
 }
