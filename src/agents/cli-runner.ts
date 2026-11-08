@@ -139,12 +139,16 @@ async function runCliAgentInternal(
   // backend resources released only by runPreparedCliAgent's try…finally.
   await params.onExecutionStarted?.();
   assertAgentRunLifecycleGenerationCurrent(params.lifecycleGeneration!);
-  params.abortSignal?.throwIfAborted();
-  params.assertCurrent?.();
   let modelExecution: ReturnType<typeof bindOperatorModelExecution>;
-  const assertCallerCurrent = params.assertCurrent;
   const generationAbortController = new AbortController();
   let generation: Awaited<ReturnType<typeof prepareCronRootSessionGeneration>>;
+  const assertCurrent = () => {
+    params.abortSignal?.throwIfAborted();
+    params.assertCurrent?.();
+    modelExecution?.assertCurrent();
+    generation?.assertCurrent();
+  };
+  assertCurrent();
   try {
     const target = params.sessionTarget;
     generation =
@@ -160,7 +164,7 @@ async function runCliAgentInternal(
             (reason) => generationAbortController.abort(reason),
           )
         : undefined;
-    const hookResult = await runCliBeforeAgentReply(params, generation?.assertCurrent);
+    const hookResult = await runCliBeforeAgentReply(params, assertCurrent);
     if (hookResult) {
       return hookResult;
     }
@@ -179,11 +183,7 @@ async function runCliAgentInternal(
         ? {
             ...params,
             abortSignal: abortSignals.length > 1 ? AbortSignal.any(abortSignals) : abortSignals[0],
-            assertCurrent: () => {
-              assertCallerCurrent?.();
-              modelExecution?.assertCurrent();
-              generation?.assertCurrent();
-            },
+            assertCurrent,
           }
         : params;
     const { prepareCliRunContext } = await import("./cli-runner/prepare.runtime.js");
