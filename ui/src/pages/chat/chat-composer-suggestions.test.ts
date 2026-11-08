@@ -64,6 +64,24 @@ const activeId = (container: HTMLElement) =>
 const menu = (container: HTMLElement, suffix = "slash-menu-listbox") =>
   container.querySelector(`#chat-single-${suffix}`);
 describe("chat composer suggestion accessibility", () => {
+  it("hints free-form arguments only until the user starts typing", () => {
+    const { container } = createReactiveDraftHarness();
+    inputDraftAtEnd(container, "/steer");
+    keydownComposer(container, "Tab");
+    const textarea = getComposerTextarea(container);
+    const hint = container.querySelector<HTMLElement>(".agent-chat__composer-placeholder")!;
+    expect(textarea.value).toBe("/steer ");
+    expect(textarea.placeholder).toBe("<message>");
+    expect(hint.textContent).toBe("/steer <message>");
+    expect(hint.style.display).toBe("block");
+
+    for (const draft of ["/steer hello", "/steer  ", "/steer \n", "/steer", "/clear ", "/tools "]) {
+      inputDraftAtEnd(container, draft);
+      expect(hint.style.display, draft).toBe("");
+      expect(textarea.placeholder, draft).not.toBe("<message>");
+    }
+  });
+
   it("opens a skill picker for $ references anywhere in a normal prompt", async () => {
     replaceSkillCommands({
       key: "prose_writer",
