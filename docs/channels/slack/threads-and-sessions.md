@@ -32,7 +32,7 @@ Reply threading controls:
 - `channels.slack.channels.<id>.replyToMode`: per-channel override for Slack channel/private-channel messages
 - `channels.slack.replyToMode`: `off|first|all|batched` (default `off`)
 - `channels.slack.replyToModeByChatType`: per `direct|group|channel`
-- legacy fallback for direct chats: `channels.slack.dm.replyToMode`
+- Direct-chat overrides use `channels.slack.replyToModeByChatType.direct`. Run `openclaw doctor --fix` to migrate the retired `channels.slack.dm.replyToMode` key.
 
 Manual reply tags are supported:
 
