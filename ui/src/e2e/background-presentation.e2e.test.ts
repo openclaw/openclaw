@@ -163,7 +163,6 @@ suite.define(() => {
           await editor.fill("");
           await page.goto(suite.server.baseUrl + "settings/appearance");
           const section = page.locator("#settings-appearance-background");
-          await section.scrollIntoViewIfNeeded();
           const writes = (await gateway.getRequests("users.prefs.set")).length;
           await section.locator('[data-test-id="background-presentation-full-bleed"]').click();
           const change = await gateway.waitForRequest("users.prefs.set", { after: writes });
