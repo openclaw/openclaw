@@ -33,23 +33,21 @@ export function prepareTextLexicalDocument(text: string) {
 
 export function getTextLexicalIndex(
   documents: readonly string[] | readonly ReturnType<typeof prepareTextLexicalDocument>[],
+  current?: { revision?: string; index?: ReturnType<typeof buildLexicalIndex<number>> },
 ) {
   const prepared = typeof documents[0] === "object";
-  const revision = createHash("sha256")
-    .update(prepared ? "prepared:" : "")
-    .update(
-      JSON.stringify(
-        prepared
-          ? documents.map((document) =>
-              typeof document === "string" ? document : document.revision,
-            )
-          : documents,
-      ),
-    )
-    .digest("hex");
+  const revision = prepared
+    ? `prepared:${JSON.stringify(documents.map((document) => (typeof document === "string" ? document : document.revision)))}`
+    : createHash("sha256").update(JSON.stringify(documents)).digest("hex");
+  if (current?.revision === revision && current.index) {
+    return current.index;
+  }
   const retained = lexicalData.get(revision);
   const cached = retained?.kind === "index" ? retained.index : active.get(revision)?.deref();
   if (cached) {
+    if (current) {
+      Object.assign(current, { revision, index: cached });
+    }
     return cached;
   }
   let bytes = 0;
@@ -82,6 +80,9 @@ export function getTextLexicalIndex(
   lexicalData.set(revision, { kind: "index", index, bytes });
   active.set(revision, new WeakRef(index));
   retired.register(index, revision);
+  if (current) {
+    Object.assign(current, { revision, index });
+  }
   return index;
 }
 
