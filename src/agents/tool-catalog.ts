@@ -22,6 +22,7 @@ import { AUTOMATIONS_TOOL_NAME } from "./tools/automations-tool-name.js";
 export {
   TOOL_CALL_RAW_TOOL_NAME,
   type ToolProfileId,
+  type CustomToolProfiles,
   type CoreToolFactoryFamily,
   resolveCoreToolFacts,
   type OpenClawCodingToolConstructionPlan,

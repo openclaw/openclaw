@@ -173,12 +173,13 @@ export function resolveConversationCapabilityPolicy(params: ConversationCapabili
     inheritedToolPolicy,
     sessionInheritedToolPolicy,
   } = requesterPolicies;
+  const customProfiles = params.config?.tools?.profiles;
   const profilePolicy = mergeAlsoAllowPolicy(
-    resolveToolProfilePolicy(effective.profile),
+    resolveToolProfilePolicy(effective.profile, customProfiles),
     resolveManifestToolProfileNames(params.pluginMetadataSnapshot, effective.profile),
   );
   const providerProfilePolicy = mergeAlsoAllowPolicy(
-    resolveToolProfilePolicy(effective.providerProfile),
+    resolveToolProfilePolicy(effective.providerProfile, customProfiles),
     resolveManifestToolProfileNames(params.pluginMetadataSnapshot, effective.providerProfile),
   );
   const configuredOverridePolicies = [

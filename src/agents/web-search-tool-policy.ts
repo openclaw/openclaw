@@ -78,9 +78,13 @@ export function resolveWebSearchToolPolicy(
     modelProvider: params.modelProvider,
     modelId: params.modelId,
   });
-  const profilePolicy = mergeAlsoAllowPolicy(resolveToolProfilePolicy(profile), profileAlsoAllow);
+  const customProfiles = params.config?.tools?.profiles;
+  const profilePolicy = mergeAlsoAllowPolicy(
+    resolveToolProfilePolicy(profile, customProfiles),
+    profileAlsoAllow,
+  );
   const providerProfilePolicy = mergeAlsoAllowPolicy(
-    resolveToolProfilePolicy(providerProfile),
+    resolveToolProfilePolicy(providerProfile, customProfiles),
     providerProfileAlsoAllow,
   );
   const callerContext = resolveScheduledToolCallerContext({

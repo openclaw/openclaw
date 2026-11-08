@@ -21,6 +21,7 @@ export {
   readToolAllowlistIntersection,
   resolveToolProfilePolicy,
 } from "./tool-policy-shared.js";
+export type { CustomToolProfiles } from "./tool-policy-shared.js";
 
 /** Tool allow/deny policy shape accepted by agent and sandbox config. */
 export type ToolPolicyLike = {

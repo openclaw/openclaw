@@ -208,8 +208,61 @@ const ToolsWebSchema = z
   })
   .optional();
 
+const BUILTIN_TOOL_PROFILE_SCHEMA = z.union([
+  z.literal("minimal"),
+  z.literal("coding"),
+  z.literal("messaging"),
+  z.literal("full"),
+]);
+
+const BUILTIN_TOOL_PROFILE_ID_SET = new Set(["minimal", "coding", "messaging", "full"]);
+
+// Custom profile refs stay looser than the builtin ids: unknown names are caught by the
+// cross-reference validation against tools.profiles, not by the schema itself.
+const CustomToolProfileRefSchema = z.custom<string & { __profileRef?: true }>(
+  (value): value is string & { __profileRef?: true } => typeof value === "string",
+);
+
 const ToolProfileSchema = z
-  .union([z.literal("minimal"), z.literal("coding"), z.literal("messaging"), z.literal("full")])
+  .union([BUILTIN_TOOL_PROFILE_SCHEMA, CustomToolProfileRefSchema])
+  .optional();
+
+const ToolProfilesMapSchema = z
+  .record(
+    z
+      .string()
+      .trim()
+      .min(1)
+      .regex(/^[a-zA-Z0-9][a-zA-Z0-9_-]*$/, "Profile names may use letters, digits, -, and _ only"),
+    z
+      .strictObject({
+        /** Built-in profile id applied as the base allow/deny set before this profile's entries merge. */
+        base: BUILTIN_TOOL_PROFILE_SCHEMA.optional(),
+        /** Extra allowlist entries unioned over the base profile. */
+        allow: z.array(z.string()).optional(),
+        /** Exact tool names denied after allow expansion; deny wins. */
+        deny: z.array(z.string()).optional(),
+      })
+      .superRefine((value, ctx) => {
+        if (!value.base && !value.allow?.length && !value.deny?.length) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            message: "tool profile must set base, allow or deny",
+          });
+        }
+      }),
+  )
+  .superRefine((profiles, ctx) => {
+    for (const [name] of Object.entries(profiles)) {
+      if (BUILTIN_TOOL_PROFILE_ID_SET.has(name)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: [name],
+          message: `"${name}" is reserved for the built-in profile`,
+        });
+      }
+    }
+  })
   .optional();
 
 function createAllowAlsoAllowConflictValidator(message: string) {
@@ -627,6 +680,8 @@ const GatewayToolPolicySchema = z.strictObject({
 export const ToolsSchema = z
   .strictObject({
     ...CommonToolPolicyFields,
+    /** Operator-defined named tool profiles; agent-level `profile` refs resolve against this map. */
+    profiles: ToolProfilesMapSchema,
     gatewayPolicy: GatewayToolPolicySchema.optional(),
     web: ToolsWebSchema,
     /** Managed local GitHub CLI identity and Git author; never overrides Git transport. */

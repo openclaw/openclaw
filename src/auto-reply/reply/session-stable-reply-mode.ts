@@ -142,7 +142,7 @@ export function resolveReplyMessageToolAvailability(params: {
   });
   const profileAlsoAllowed = params.prefersMessageToolDelivery ? ["message"] : [];
   const resolveProfile = (profileId: string | undefined, alsoAllow?: string[]) =>
-    mergeAlsoAllowPolicy(resolveToolProfilePolicy(profileId), [
+    mergeAlsoAllowPolicy(resolveToolProfilePolicy(profileId, cfg.tools?.profiles), [
       ...(alsoAllow ?? []),
       ...profileAlsoAllowed,
     ]);
