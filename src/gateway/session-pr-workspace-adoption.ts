@@ -1,3 +1,4 @@
+import fs from "node:fs/promises";
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import { listExecSessionsForCancellation } from "../agents/bash-process-registry.js";
 import { assertLocalSandboxWorkspaceBackend } from "../agents/sandbox/local-workspace.js";
@@ -6,8 +7,10 @@ import { listSubagentRunsForRequester } from "../agents/subagents/registry/subag
 import { captureWorkspaceStateFilesystemGuard } from "../agents/workspace-state-guard.js";
 import { resolveCanonicalWorkspacePath } from "../agents/workspace-state-identity.js";
 import { requireGit } from "../agents/worktrees/git.js";
+import { resolveRepositoryIdentity } from "../agents/worktrees/repository-paths.js";
 import { readSessionTranscriptAnchorsAsync } from "../config/sessions/session-transcript-anchor-read.js";
 import type { InternalSessionEntry } from "../config/sessions/types.js";
+import { resolveProjectRegistry } from "../projects/project-registry.js";
 import { isCompetingSessionControllerWorkActive } from "../sessions/session-controller.context.js";
 import {
   captureSessionTarget,
@@ -51,7 +54,8 @@ export async function adoptUnboundPullRequestWorkspace(params: {
     !recovering &&
     (entry.worktree ||
       entry.repositoryWorkspaceId ||
-      entry.projectId ||
+      // Only a local project checkout can supply a project chat's worktree.
+      (entry.projectId && !params.localSource) ||
       entry.deviceFolder ||
       entry.execNode ||
       entry.pendingWorktree ||
@@ -160,6 +164,20 @@ export async function adoptUnboundPullRequestWorkspace(params: {
       if (source && (await requireGit(source, ["status", "--porcelain"], gitOptions))) {
         throw new Error("Commit the task changes before publishing this checkout.");
       }
+      if (source && entry.projectId) {
+        // A project chat's worktree must come from that project's repository.
+        const project = await resolveProjectRegistry(cfg, entry.projectId);
+        const [projectRoot, repository] = await Promise.all([
+          project ? fs.realpath(project.repoRoot).catch(() => undefined) : undefined,
+          resolveRepositoryIdentity(source),
+        ]);
+        assertIdle();
+        if (!projectRoot || repository.repoRoot !== projectRoot) {
+          throw new Error(
+            "This checkout belongs to a different repository than the conversation's project. Publish it from a chat in that repository; its files were preserved.",
+          );
+        }
+      }
       const checkoutCommit = source
         ? await requireGit(source, ["rev-parse", "HEAD"], gitOptions)
         : undefined;
@@ -205,7 +223,7 @@ export async function adoptUnboundPullRequestWorkspace(params: {
             current.lifecycleRevision !== entry.lifecycleRevision ||
             current.worktree ||
             current.repositoryWorkspaceId ||
-            current.projectId ||
+            current.projectId !== entry.projectId ||
             current.spawnedCwd !== entry.spawnedCwd ||
             current.spawnedWorkspaceDir !== entry.spawnedWorkspaceDir ||
             current.pendingWorktree ||
