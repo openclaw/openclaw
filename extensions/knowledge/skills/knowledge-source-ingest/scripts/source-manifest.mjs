@@ -67,9 +67,12 @@ const instant = (value, name) => {
 // Date handles offsets and whole milliseconds; the fractional key retains finer precision.
 const compareInstants = (left, right) => {
   const milliseconds = Date.parse(left) - Date.parse(right);
+  if (milliseconds) {
+    return milliseconds;
+  }
   const a = fraction(left),
     b = fraction(right);
-  return milliseconds || (a < b ? -1 : a > b ? 1 : 0);
+  return a < b ? -1 : a > b ? 1 : 0;
 };
 const later = (a, b) => (compareInstants(a, b) >= 0 ? a : b);
 const earlier = (a, b) => (compareInstants(a, b) <= 0 ? a : b);
