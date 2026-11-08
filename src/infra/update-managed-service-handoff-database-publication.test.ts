@@ -302,22 +302,18 @@ it.skipIf(process.platform !== "win32")(
           register({ tsconfig: ${JSON.stringify(path.resolve("tsconfig.json"))} });
           const { createManagedHandoffLeaseDatabase } = await import(${JSON.stringify(databaseModule)});
           const target = ${JSON.stringify(databasePath)};
-          const method = workerData.first ? "linkSync" : "openSync";
+          const method = workerData.first ? "linkSync" : "lstatSync";
           const original = fs[method];
           fs[method] = (file, ...args) => {
-            try {
-              const result = original(file, ...args);
-              if (workerData.first && args[0] === target) {
-                parentPort.postMessage("published");
-                Atomics.wait(new Int32Array(workerData.gate), 0, 0);
-              }
-              return result;
-            } catch (error) {
-              if (!workerData.first && file === target + ".lock" && error.code === "EEXIST") {
-                parentPort.postMessage("contended");
-              }
-              throw error;
+            const result = original(file, ...args);
+            if (workerData.first && args[0] === target) {
+              parentPort.postMessage("published");
+              Atomics.wait(new Int32Array(workerData.gate), 0, 0);
+            } else if (!workerData.first && file === target + ".lock" && result.isFile()) {
+              // Observe the holder independently of fs-safe's publication primitive.
+              parentPort.postMessage("contended");
             }
+            return result;
           };
           const owner = workerData.first ? "first" : "second";
           createManagedHandoffLeaseDatabase(target)(true, db =>
