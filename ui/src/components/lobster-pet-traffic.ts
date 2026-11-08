@@ -1,5 +1,6 @@
 // Passers and bottles have seeded clocks independent of the resident's visits.
 import { expectDefined } from "@openclaw/normalization-core";
+import type { LobsterBottleFortune } from "../i18n/locales/en-lobster-pet.ts";
 import {
   LOBSTER_BOTTLE_FORTUNES,
   resolveLobsterPasserCrossMs,
@@ -13,7 +14,7 @@ import { LobsterPetTimers } from "./lobster-pet-timers.ts";
 
 export class LobsterLedgeTraffic {
   passer: LobsterPasserPlan | null = null;
-  bottle: { spotPct: number; opened: boolean; fortune: string } | null = null;
+  bottle: { spotPct: number; opened: boolean; fortune: LobsterBottleFortune } | null = null;
   private connected = false;
   private readonly timers = new LobsterPetTimers<
     "passerTimer" | "passerEndTimer" | "passerWatchTimer" | "bottleTimer" | "bottleEndTimer"

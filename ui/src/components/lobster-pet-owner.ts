@@ -623,12 +623,8 @@ export class LobsterPetOwner {
       return null;
     }
     const identity = this.identity;
-    // Extra "· <flavor>" tooltip suffix (elder lore, old-friend returns).
-    const flavor = identity?.elder
-      ? "old as the tides"
-      : identity?.oldFriend
-        ? "an old friend"
-        : null;
+    // Tooltip flavor (elder lore, old-friend returns): a lobsterPet.flavor.* key.
+    const flavor = identity?.elder ? "elder" : identity?.oldFriend ? "oldFriend" : null;
     return {
       look,
       mode: this.inputs.mode,

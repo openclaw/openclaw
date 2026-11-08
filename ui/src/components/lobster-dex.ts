@@ -175,13 +175,14 @@ export function getLobsterFamiliarity() {
 
 // Milestone honorifics for the hover title, earned by lifetime visits across
 // all palettes. Highest earned title wins; below the first rung there is none.
-const HONORIFICS: Array<[number, string]> = [
-  [250, "Elder"],
-  [100, "Captain"],
-  [50, "Sir"],
+// Values name lobsterPet.honorific.* copy.
+const HONORIFICS: Array<[number, "elder" | "captain" | "sir"]> = [
+  [250, "elder"],
+  [100, "captain"],
+  [50, "sir"],
 ];
 
-export function lobsterHonorific(visits: number): string | null {
+export function lobsterHonorific(visits: number): "elder" | "captain" | "sir" | null {
   return HONORIFICS.find(([threshold]) => visits >= threshold)?.[1] ?? null;
 }
 

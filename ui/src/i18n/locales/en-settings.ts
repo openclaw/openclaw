@@ -1984,7 +1984,7 @@ const enSettings = {
         lobster: "Lobster",
         empty: "No lobsters unlocked in this browser yet.",
         localCollection: "Unlocked in this browser. Your collection is not synced.",
-        unavailable: "This lobster is not unlocked in this browser. Using Default until it is.",
+        unavailable: "This lobster isn’t unlocked in this browser. Using Default until it is.",
       },
       textSize: "Text size",
     },

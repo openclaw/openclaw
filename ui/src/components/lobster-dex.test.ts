@@ -68,7 +68,7 @@ describe("lobsterdex", () => {
     expect(dex.getLobsterFamiliarity().wary).toBe(true);
   });
   it("awards honorifics at visit milestones", () => {
-    const titles = [null, null, "Sir", "Sir", "Captain", "Elder", "Elder"];
+    const titles = [null, null, "sir", "sir", "captain", "elder", "elder"];
     expect([0, 49, 50, 99, 100, 250, 9001].map(dex.lobsterHonorific)).toEqual(titles);
   });
 

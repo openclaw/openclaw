@@ -671,7 +671,7 @@ describe("rare lobster loads", () => {
     await expectPresenceAfter(element, true, 300_000, ".lobster-bottle");
     expect(spritePresent(element)).toBe(false);
     expect(element.querySelector(".lobster-bottle")?.getAttribute("title")).toBe(
-      "a message in a bottle",
+      "A message in a bottle",
     );
 
     element
@@ -680,7 +680,7 @@ describe("rare lobster loads", () => {
     await element.updateComplete;
     const opened = element.querySelector(".lobster-bottle");
     expect(opened?.className).toContain("lobster-bottle--open");
-    expect(opened?.getAttribute("title")).toBe("a shell is just armor you outgrew");
+    expect(opened?.getAttribute("title")).toBe("A shell is just armor you outgrew.");
 
     await expectPresenceAfter(element, false, 150_000, ".lobster-bottle");
   });

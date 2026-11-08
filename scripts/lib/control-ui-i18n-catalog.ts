@@ -49,6 +49,8 @@ import { registerGitHubConnectionsEnglish } from "../../ui/src/i18n/locales/en-g
 import { registerGitHubEnglish } from "../../ui/src/i18n/locales/en-github.ts";
 import { registerLabsEnglish } from "../../ui/src/i18n/locales/en-labs.ts";
 import { registerLinkReaderEnglish } from "../../ui/src/i18n/locales/en-link-reader.ts";
+import { registerLobsterPetEnglish } from "../../ui/src/i18n/locales/en-lobster-pet.ts";
+import { registerLobsterdexEnglish } from "../../ui/src/i18n/locales/en-lobsterdex.ts";
 import { registerLocalErrorsEnglish } from "../../ui/src/i18n/locales/en-local-errors.ts";
 import { registerLogbookEnglish } from "../../ui/src/i18n/locales/en-logbook.ts";
 import { registerLoginEnglish } from "../../ui/src/i18n/locales/en-login.ts";
@@ -211,6 +213,8 @@ const sourceFiles = [
   "en-tool-diagnostics.ts",
   "en-transcripts.ts",
   "en-usage.ts",
+  "en-lobsterdex.ts",
+  "en-lobster-pet.ts",
 ];
 
 export function loadControlUiStartupCatalog(): TranslationMap {
@@ -670,6 +674,8 @@ export function loadControlUiSourceCatalog(): TranslationMap {
     registerTranscriptsEnglish.catalog,
     registerProviderUsageEnglish.catalog,
     registerUsageEnglish.catalog,
+    registerLobsterdexEnglish.catalog,
+    registerLobsterPetEnglish.catalog,
     { publicReader: PUBLIC_SESSION_COPY },
     loadControlUiCoreHintCatalog(),
   );

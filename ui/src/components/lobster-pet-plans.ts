@@ -1,4 +1,5 @@
 import type { ThemeArtwork } from "../../../packages/gateway-protocol/src/theme.ts";
+import type { LobsterBottleFortune } from "../i18n/locales/en-lobster-pet.ts";
 import { getSafeLocalStorage } from "../local-storage.ts";
 import { getLobsterdex, getLobsterdexEntries } from "./lobster-dex.ts";
 import type {
@@ -310,23 +311,23 @@ export function lobsterLoadDisplayName(identity: LobsterLoadIdentity, seed: numb
   return identity.friendName ?? lobsterPetName(identity.look, seed);
 }
 
-// Bottle titles share the pet-name channel, which is intentionally not translated.
-export const LOBSTER_BOTTLE_FORTUNES = [
-  "the tide returns every branch to shore",
-  "molt before you feel ready",
-  "a shell is just armor you outgrew",
-  "somewhere, a test is green because of you",
-  "swim sideways when forward fails",
-  "the reef remembers kind commits",
-  "even the deep keeps a night light",
-  "barnacles are only patient passengers",
-  "no current lasts forever",
-  "bury your treasure in version control",
-  "the crab was a lobster all along",
-  "small claws, firm grip",
-  "rest is also progress",
-  "what washes away was never pinned",
-] as const;
+// lobsterPet.fortunes.* keys; seeded plans pick by index, so keep the order.
+export const LOBSTER_BOTTLE_FORTUNES: readonly LobsterBottleFortune[] = [
+  "tide",
+  "molt",
+  "shell",
+  "greenTest",
+  "sideways",
+  "reef",
+  "nightLight",
+  "barnacles",
+  "current",
+  "treasure",
+  "crab",
+  "grip",
+  "rest",
+  "pinned",
+];
 
 export type LobsterBottlePlan = {
   atMs: number;
