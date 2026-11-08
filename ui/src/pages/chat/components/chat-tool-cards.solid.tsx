@@ -187,6 +187,8 @@ function ToolCardRowPlaceholder(props: ToolCardProps) {
 function ToolCardView(props: ToolCardProps) {
   let host: HTMLDivElement | undefined;
   const card = createMemo(() => resolveToolCardDisplay(props.card), { equals: false });
+  // Turn refreshes replace options without changing most disclosures.
+  const expanded = createMemo(() => props.options.expanded);
   const permission = () =>
     readNodePermissionRequest(asNullableRecord(card().details)?.permissionMissing);
   const outcome = () => resolveToolCardOutcome(card(), props.options.runActive);
@@ -201,7 +203,7 @@ function ToolCardView(props: ToolCardProps) {
               ref={(element) => (host = element)}
               class={[
                 "chat-tool-msg-collapse chat-tool-msg-collapse--manual",
-                { "is-open": props.options.expanded },
+                { "is-open": expanded() },
               ]}
             >
               <ChatImportBoundary
@@ -221,7 +223,7 @@ function ToolCardView(props: ToolCardProps) {
                   hasChildren={props.hasChildren}
                 />
               </ChatImportBoundary>
-              <Show when={props.options.expanded}>
+              <Show when={expanded()}>
                 <Show
                   when={props.hasChildren}
                   fallback={
