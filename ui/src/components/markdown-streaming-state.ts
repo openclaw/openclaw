@@ -28,7 +28,13 @@ type StreamingMarkdownState = {
     rawTail: boolean;
     result: StreamingMarkdownSplit;
   };
-  rendered?: { options: string; markdown: string; html: string; hasHtml: boolean };
+  rendered?: {
+    options: string;
+    markdown: string;
+    html: string;
+    hasHtml: boolean;
+    fileLinkPaths: ReadonlySet<string>;
+  };
 };
 const streamingCache = new Map<string, StreamingMarkdownState>();
 

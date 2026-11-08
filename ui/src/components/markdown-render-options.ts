@@ -23,6 +23,8 @@ export type MarkdownRenderOptions = {
 };
 
 export type MarkdownRenderEnv = Required<MarkdownRenderOptions> & {
+  /** Paths already shown in this message's completed streaming prefix. */
+  fileLinkPaths?: Set<string>;
   streamingOpenFence?: boolean;
   humanMentionTokens?: readonly MarkdownHumanMentionToken[];
 };

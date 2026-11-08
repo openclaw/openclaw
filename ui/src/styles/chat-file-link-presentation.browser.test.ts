@@ -16,6 +16,7 @@ const CHIP_PROPERTIES = [
   "fontFamily",
   "fontSize",
   "color",
+  "display",
 ] as const;
 
 // Match styles/chat.ts: sidebar-markdown must load after chat/text.
@@ -140,6 +141,7 @@ async function probeWrap(themeMode: "dark" | "light", container: WrapContainer) 
           const glyph = (selector: string) => {
             const css = getComputedStyle(resolve(selector), "::before");
             return {
+              backgroundColor: css.backgroundColor,
               fontSize: css.fontSize,
               height: css.height,
               maskImage: css.maskImage,
@@ -186,6 +188,7 @@ async function probeWrap(themeMode: "dark" | "light", container: WrapContainer) 
           };
           return {
             presentation: {
+              chatColor: getComputedStyle(resolve(".chat-text")).color,
               chatGlyph: glyph("#from-text"),
               fromCode: read("#from-code > code"),
               fromText: read("#from-text"),
@@ -236,11 +239,11 @@ fixture.describe("chat file link presentation", () => {
   );
 
   it.each(["light", "dark"] as const)(
-    "leaves the chip on code spans that are not file links in %s",
+    "tints code spans without a border while file links remain transparent in %s",
     (themeMode) => {
       const { fromText, plainCode } = observation(themeMode).presentation;
       expect(plainCode.backgroundColor).not.toBe(fromText.backgroundColor);
-      expect(plainCode.borderTopWidth).not.toBe("0px");
+      expect(plainCode.borderTopWidth).toBe("0px");
       expect(fromText).toMatchObject({
         borderTopWidth: "0px",
         backgroundColor: "rgba(0, 0, 0, 0)",
@@ -249,14 +252,20 @@ fixture.describe("chat file link presentation", () => {
   );
 
   it.each(["light", "dark"] as const)(
-    "gives the Chat Detail Panel the same file-link treatment in %s",
+    "keeps the panel's atomic accented file links while chat uses text ink and muted glyphs in %s",
     (themeMode) => {
       const probed = observation(themeMode).presentation;
-      expect([probed.panelFromText, probed.panelFromCode, probed.panelGlyph]).toEqual([
-        probed.fromText,
-        probed.fromCode,
-        probed.chatGlyph,
-      ]);
+      expect(probed.fromText).toMatchObject({ display: "inline", color: probed.chatColor });
+      expect(probed.panelFromText.display).toBe("inline-block");
+      expect(probed.panelFromText.color).not.toBe(probed.fromText.color);
+      expect(probed.panelFromCode).toEqual({
+        ...probed.panelFromText,
+        paddingLeft: "0px",
+        display: "inline",
+      });
+      expect(probed.chatGlyph.backgroundColor).not.toBe(probed.fromText.color);
+      expect(probed.panelGlyph.backgroundColor).toBe(probed.panelFromText.color);
+      expect(probed.chatGlyph.maskImage).toBe(probed.panelGlyph.maskImage);
       expect(probed.panelGlyph.maskImage).toContain("svg");
     },
   );
@@ -277,7 +286,7 @@ fixture.describe("chat file link presentation", () => {
   );
 
   it.each(WRAP_CASES)(
-    "wraps a file link as one unit at every column width in $container/$themeMode",
+    "keeps a short file reference on one line at every column width in $container/$themeMode",
     ({ container, themeMode }) => {
       const { samples } = observation(themeMode, container);
       // Prove the sweep actually changes lines.
@@ -293,7 +302,11 @@ fixture.describe("chat file link presentation", () => {
       const { long, separation } = observation(themeMode, container);
       const overflowing = long.filter((sample) => sample.width > sample.columnWidth + 0.5);
       expect(overflowing).toEqual([]);
-      expect(long.every((sample) => sample.fragments === 1)).toBe(true);
+      if (container === "chat-text") {
+        expect(long.some((sample) => sample.fragments > 1)).toBe(true);
+      } else {
+        expect(long.every((sample) => sample.fragments === 1)).toBe(true);
+      }
       const spilling = Object.values(separation)
         .flat()
         .filter((sample) => sample.labelOverflowPx > 0.5);

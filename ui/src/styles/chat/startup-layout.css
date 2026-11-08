@@ -198,10 +198,14 @@ div.chat-thread:where(.chat-thread--annotations) {
   user-select: text;
 }
 
+:root[data-theme^="absolutely"] {
+  --chat-text-size: calc(15px * var(--control-ui-text-scale));
+}
+
 .chat-text {
   font-family: var(--font-chat);
   font-size: var(--chat-text-size);
-  line-height: 1.5;
+  line-height: 1.6;
   color: var(--chat-text);
   overflow-wrap: anywhere;
   word-break: break-word;
