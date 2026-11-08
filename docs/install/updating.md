@@ -33,6 +33,11 @@ backup.
 
 ## Update implementation contract
 
+Before post-core plugin work, the updater releases its temporary Doctor database
+ownership before rechecking profile-backed requester authority. Service custody
+remains with the updater; the next Doctor acquires its own database ownership.
+This avoids refusing the updater's own policy reads during its maintenance window.
+
 Update inspection and snapshot workers bind plugin metadata discovery to the
 selected installation's state directory, including requests from older installed
 updaters. A different profile's database version must not block that inspection.
