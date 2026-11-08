@@ -20,8 +20,9 @@ const jsonl = (rows: unknown[]) => rows.map((row) => JSON.stringify(row)).join("
 it("keeps day/thread boundaries and replies while budgeting UTF-8 headers and part labels", async () => {
   const out = tempDirs.make("chat-transcript-");
   const at = "2026-10-02T00:30:00";
+  const previousAt = "2026-10-01T23:50:00.000000000Z";
   const rows = [
-    message("1", "2026-10-01T23:50:00.000000000Z", "11", "Ann", "a".repeat(79) + "😀"),
+    message("1", previousAt, "11", "Ann", "a".repeat(79) + "😀"),
     message("2", "2026-10-02T00:10:00.000000000Z", "12", "Bo", "yes <@11>", {
       reply_to_message_id: "1",
     }),
@@ -54,7 +55,7 @@ it("keeps day/thread boundaries and replies while budgeting UTF-8 headers and pa
     const label = `part ${chunk.part} of ${chunk.parts}`;
     expect(texts[i].includes(label)).toBe(chunk.parts > 1);
   }
-  rows[0] = message("1", rows[0].occurred_at, "11", "Ann", "retained deleted text", {
+  rows[0] = message("1", previousAt, "11", "Ann", "retained deleted text", {
     deleted_at: "2026-10-02T01:00:00Z",
   });
   await writeFile(path.join(out, "in.jsonl"), jsonl(rows));
