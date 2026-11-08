@@ -397,12 +397,16 @@ describe("message tool queued gateway delivery", () => {
 });
 
 describe("message tool partial delivery", () => {
-  it("keeps provider-accepted message ids when a later part fails", async () => {
-    const error = createChannelPartialDeliveryError(new Error("second attachment failed"), {
-      messageIds: ["100000000000000021"],
-      visibleReplySent: true,
-    });
-    const { tool } = createFailingMessageTool(error);
+  it.each([
+    ["provider-accepted ids", ["100000000000000021"]],
+    ["no confirmed ids", []],
+  ])("keeps %s on the failed send", async (_name, messageIds) => {
+    const { tool } = createFailingMessageTool(
+      createChannelPartialDeliveryError(new Error("second part failed"), {
+        messageIds,
+        visibleReplySent: true,
+      }),
+    );
 
     const result = await tool.execute("partial", { action: "send", message: "hello" });
 
@@ -411,30 +415,13 @@ describe("message tool partial delivery", () => {
       action: "send",
       deliveryStatus: "partial_failed",
       sentBeforeError: true,
-      acceptedMessageIds: ["100000000000000021"],
+      acceptedMessageIds: messageIds,
       remainderUnconfirmed: true,
     });
     expect(resolveToolResultFailureKind(result)).toBe("failed");
     expect(result.content).toEqual([
-      { type: "text", text: expect.stringContaining("100000000000000021") },
+      { type: "text", text: expect.stringContaining("unconfirmed") },
     ]);
-  });
-
-  it("still fails without inventing accepted ids when nothing was confirmed", async () => {
-    const error = createChannelPartialDeliveryError(new Error("first part failed"), {
-      messageIds: [],
-      visibleReplySent: true,
-    });
-    const { tool } = createFailingMessageTool(error);
-
-    const result = await tool.execute("partial-empty", { action: "send", message: "hello" });
-
-    expect(readToolResultDetails(result)).toMatchObject({
-      ok: false,
-      acceptedMessageIds: [],
-      remainderUnconfirmed: true,
-    });
-    expect(resolveToolResultFailureKind(result)).toBe("failed");
   });
 });
 
