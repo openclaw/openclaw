@@ -15,7 +15,7 @@ import { jsonError } from "./utils.js";
 
 type PreparedOperation = (
   pw: PwAiModule,
-  target: NavigationTargetOptions,
+  target: NavigationTargetOptions & { expectedUrl?: string },
   signal: AbortSignal,
 ) => Promise<void | object | null>;
 
@@ -85,6 +85,8 @@ export function createPlaywrightRouteRegistrar(
               ...(mode === "inspection"
                 ? browserNavigationPolicyForProfile(ctx, operationProfile)
                 : {}),
+              // Bind page text to the tab URL that passed the navigation policy check.
+              ...(path === "/text" ? { expectedUrl: tab.url } : {}),
             },
             signal,
           );
