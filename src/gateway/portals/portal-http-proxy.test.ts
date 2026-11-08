@@ -274,8 +274,14 @@ describe("portal HTTP proxy", () => {
       pending.reject(new Error("Aborted"));
       await vi.advanceTimersByTimeAsync(60_000);
       expect(fetch).toHaveBeenCalledTimes(8);
-      fetch.mockResolvedValueOnce(new Response("App error page", { status: 502 }));
+      const slowResponse = createDeferredCore<Response>();
+      fetch.mockImplementationOnce(() => slowResponse.promise);
       events.dispatchEvent(new Event("pageshow"));
+      await vi.advanceTimersByTimeAsync(8000);
+      expect(fetch).toHaveBeenCalledTimes(9);
+      expect(fetch.mock.calls.at(-1)?.[1]?.signal?.aborted).toBe(false);
+      expect(reload).not.toHaveBeenCalled();
+      slowResponse.resolve(new Response("App error page", { status: 502 }));
       await vi.advanceTimersByTimeAsync(0);
       expect(reload).toHaveBeenCalledOnce();
     } finally {

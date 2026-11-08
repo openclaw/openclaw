@@ -222,7 +222,6 @@ const PORTAL_RECOVERY_SCRIPT = `(() => {
     if (controller || stopped) return;
     clearTimeout(timer);
     controller = new AbortController();
-    const timeout = setTimeout(() => controller?.abort(), 6000);
     try {
       const response = await fetch(location.href, {
         cache: "no-store", credentials: "same-origin", redirect: "manual",
@@ -239,7 +238,6 @@ const PORTAL_RECOVERY_SCRIPT = `(() => {
     } catch {
       // A failed request does not establish whether the app or its worker is still starting.
     } finally {
-      clearTimeout(timeout);
       controller = undefined;
       if (!stopped) {
         if (++attempts === 6) status.textContent = "The app is still unavailable. Check that it’s running on port " + document.body.dataset.portalWaiting + ".";
