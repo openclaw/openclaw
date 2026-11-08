@@ -1,2 +1,2 @@
 # Prove selection skips unnecessary E2E discovery while preserving required and unknown paths.
-63
+73
