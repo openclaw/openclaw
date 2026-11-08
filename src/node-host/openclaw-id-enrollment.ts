@@ -144,6 +144,9 @@ export async function enrollNode(params: {
   try {
     // Membership names W, not the approved invitation or description: an already listed W would
     // look approved before the owner decides on this invitation. Refuse before spending it.
+    // Accepted gap until signed invitation outcomes (openclaw-607): a still-pending earlier
+    // invitation for this W, approved later, also completes this wait. The Gateway still pairs
+    // only the description the owner approved, so this cannot widen the node's commands.
     const listed = await call("getNodeDescriptor").then(
       () => true,
       (error: unknown) => {
