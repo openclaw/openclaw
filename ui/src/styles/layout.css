@@ -344,6 +344,8 @@ html.openclaw-native-desktop .shell:not(.shell--mobile-nav) {
   grid-template-columns: 0 minmax(0, 1fr);
   grid-template-rows: 0 auto minmax(0, 1fr);
   --shell-nav-width: 0px;
+  /* The incoming page already fills the viewport; do not sweep it through the old sidebar. */
+  transition: none;
 }
 
 .shell--onboarding .topbar,
