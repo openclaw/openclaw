@@ -105,6 +105,7 @@ it.each([
       "GIT_CONFIG_VALUE_0",
       "GIT_CONFIG_PARAMETERS",
       "GIT_DIR",
+      "GIT_WORK_TREE",
       "GIT_ASKPASS",
       "SSH_ASKPASS",
       "GITHUB_TOKEN",
@@ -114,9 +115,9 @@ it.each([
     // Observe the process boundary without executing Windows Git on a POSIX host.
     vi.spyOn(checkoutConfig, "withWorktreeGitConfig").mockResolvedValue("fixture.pack");
     const git = vi.spyOn(worktreeGit, "requireGit").mockResolvedValue("");
-    vi.spyOn(worktreeGit, "runGit").mockResolvedValue({
-      code: 1,
-      stdout: "",
+    const origin = vi.spyOn(worktreeGit, "runGit").mockResolvedValue({
+      code: 0,
+      stdout: "https://github.com/example/projection.git",
       stderr: "",
       termination: "exit",
       signal: null,
@@ -143,8 +144,10 @@ it.each([
       GIT_NO_REPLACE_OBJECTS: "1",
       GIT_TERMINAL_PROMPT: "0",
     };
-    expect(git.mock.calls.map(([, args]) => args[0])).toEqual(["init", "checkout"]);
-    for (const options of git.mock.calls.map((call) => call[2])) {
+    expect(git.mock.calls.map(([, args]) => args[0])).toEqual(
+      expect.arrayContaining(["init", "checkout", "config"]),
+    );
+    for (const options of [...git.mock.calls, ...origin.mock.calls].map((call) => call[2])) {
       expect(options?.baseEnv).toEqual(cleanEnv);
       expect(options?.env).toEqual(cleanEnv);
     }
@@ -193,8 +196,17 @@ it("filters URL and named-remote fetches without sharing host objects or credent
     "https://fixture:synthetic-password@github.com/example/projection.git",
   );
   await git(source, "config", "credential.helper", "!echo synthetic-host-helper");
+  const sourceConfig = await fs.readFile(path.join(source, ".git/config"), "utf8");
+  const poisoned = {
+    GIT_DIR: path.join(source, ".git"),
+    GIT_WORK_TREE: source,
+    GIT_CONFIG_PARAMETERS: "'remote.origin.url=https://github.com/ambient/poison.git'",
+  };
   for (const [index, remote] of [url, `${url}.git`, "origin"].entries()) {
     const destination = path.join(root, `projection-${index}`);
+    for (const [key, value] of Object.entries(poisoned)) {
+      vi.stubEnv(key, value);
+    }
     await prepareLocalWorkspaceCheckout({
       source,
       destination,
@@ -204,6 +216,11 @@ it("filters URL and named-remote fetches without sharing host objects or credent
       signal: new AbortController().signal,
       assertCurrent: () => {},
     });
+    for (const key of Object.keys(poisoned)) {
+      vi.stubEnv(key, undefined);
+    }
+    expect(await fs.readFile(path.join(source, ".git/config"), "utf8")).toBe(sourceConfig);
+    expect(await git(destination, "config", "--get", "remote.origin.url")).toBe(`${url}.git`);
     const config = await fs.readFile(path.join(destination, ".git/config"), "utf8");
     expect(config).not.toMatch(/synthetic-password|synthetic-host-helper/);
     await expect(fs.stat(path.join(destination, ".git/objects/info/alternates"))).rejects.toThrow();

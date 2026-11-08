@@ -17,16 +17,34 @@ import { runWorkspaceInventoryCommandToFile } from "./workspace-sync-inventory.j
 
 const RECONCILE_PHASE = "attempt.setup.sandbox.workspace_selection.prepare.reconcile";
 
-async function configureProjectionFetch(params: {
-  source: string;
-  destination: string;
-  signal: AbortSignal;
-  assertCurrent: () => void;
-}) {
-  const origin = await runGit(params.source, ["config", "--get", "remote.origin.url"], {
+function checkoutGitEnvironment(home: string) {
+  return {
+    PATH: process.env.PATH,
+    HOME: home,
+    GIT_CONFIG_NOSYSTEM: "1",
+    GIT_CONFIG_GLOBAL: gitNullConfigPath(),
+    GIT_CONFIG_SYSTEM: gitNullConfigPath(),
+    GIT_NO_REPLACE_OBJECTS: "1",
+    GIT_TERMINAL_PROMPT: "0",
+  };
+}
+
+async function configureProjectionFetch(
+  params: {
+    source: string;
+    destination: string;
+    signal: AbortSignal;
+    assertCurrent: () => void;
+  },
+  cleanEnv: NodeJS.ProcessEnv,
+) {
+  const options = {
+    baseEnv: cleanEnv,
+    env: cleanEnv,
     signal: params.signal,
     beforeRun: params.assertCurrent,
-  });
+  };
+  const origin = await runGit(params.source, ["config", "--get", "remote.origin.url"], options);
   if (origin.code !== 0 && origin.code !== 1) {
     throw commandError("git config remote.origin.url", origin);
   }
@@ -44,10 +62,11 @@ async function configureProjectionFetch(params: {
     config[`remote.${remote}.partialclonefilter`] = "blob:none";
   }
   for (const [key, value] of Object.entries(config)) {
-    await requireGit(params.destination, ["config", "--local", "--replace-all", key, value], {
-      signal: params.signal,
-      beforeRun: params.assertCurrent,
-    });
+    await requireGit(
+      params.destination,
+      ["config", "--local", "--replace-all", key, value],
+      options,
+    );
   }
 }
 
@@ -101,15 +120,7 @@ export async function prepareLocalWorkspaceCheckout(params: {
     current();
     phases.mark(`${RECONCILE_PHASE}.checkout.index`);
     await fs.mkdir(repo, { recursive: true, mode: 0o700 });
-    const cleanEnv = {
-      PATH: process.env.PATH,
-      HOME: temporary,
-      GIT_CONFIG_NOSYSTEM: "1",
-      GIT_CONFIG_GLOBAL: gitNullConfigPath(),
-      GIT_CONFIG_SYSTEM: gitNullConfigPath(),
-      GIT_NO_REPLACE_OBJECTS: "1",
-      GIT_TERMINAL_PROMPT: "0",
-    };
+    const cleanEnv = checkoutGitEnvironment(temporary);
     const git = (args: string[], input?: Uint8Array) =>
       requireGit(repo, args, {
         baseEnv: cleanEnv,
@@ -157,7 +168,7 @@ export async function prepareLocalWorkspaceCheckout(params: {
       current();
       await fs.writeFile(path.join(repo, ".git", "shallow"), params.baseCommit + "\n");
     }
-    await configureProjectionFetch(params);
+    await configureProjectionFetch(params, cleanEnv);
   } finally {
     phases.mark(`${RECONCILE_PHASE}.checkout.cleanup`);
     await fs.rm(temporary, { recursive: true, force: true });
@@ -233,7 +244,7 @@ export async function initializeLocalWorkspaceProjection(params: {
       await timeWorktreePreparationPhase("checkout", () => prepareLocalWorkspaceCheckout(checkout));
     } else {
       // A retained template may predate the fetch defaults; its key remains source-owned.
-      await configureProjectionFetch(checkout);
+      await configureProjectionFetch(checkout, checkoutGitEnvironment(temporary));
     }
     phases.mark(`${RECONCILE_PHASE}.manifest_scan`);
     const initial = await timeWorktreePreparationPhase("snapshot", async () =>

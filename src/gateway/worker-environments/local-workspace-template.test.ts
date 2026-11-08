@@ -265,6 +265,10 @@ it.for(["none", "same", "previous"])(
     }
     const seed = await clone("old-fetch-defaults");
     await git(source, "config", "remote.origin.url", url);
+    vi.stubEnv(
+      "GIT_CONFIG_PARAMETERS",
+      "'remote.origin.url=https://github.com/ambient/poison.git'",
+    );
     try {
       const projectionPath = path.join(path.dirname(seed), "templates", "fetch-proof", "workspace");
       await withWorktreeAllocationLease({ env, signal }, (allocation) =>
@@ -287,6 +291,7 @@ it.for(["none", "same", "previous"])(
         }),
       );
       expect(mocks.install).toHaveBeenCalledOnce();
+      vi.stubEnv("GIT_CONFIG_PARAMETERS", undefined);
       expect(await git(projectionPath, "config", "--get-all", "remote.origin.url")).toBe(url);
       // The same-origin template and its projection each apply the fetch defaults.
       const config = await read(projectionPath, ".git/config");
@@ -300,6 +305,7 @@ it.for(["none", "same", "previous"])(
         ).toBe("blob:none");
       }
     } finally {
+      vi.stubEnv("GIT_CONFIG_PARAMETERS", undefined);
       await git(source, "config", "remote.origin.url", priorUrl);
     }
   },
