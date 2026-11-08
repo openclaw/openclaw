@@ -40,6 +40,7 @@ import {
 } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { consumeTurn } from "./src/events.js";
 import { MusePool, openMuseSession } from "./src/runtime.js";
+import { projectMuseAttemptUsage } from "./src/usage.js";
 import { MuseCatalogReader } from "./src/verify-setup.js";
 
 type MuseInputPart = Parameters<Session["sendUserTurn"]>[0]["input"][number];
@@ -207,6 +208,7 @@ export function createMuseAgentHarness(options: MuseHarnessOptions): AgentHarnes
       ]);
       let session: Session | undefined;
       let turn: Turn | undefined;
+      let attemptUsage: ReturnType<typeof projectMuseAttemptUsage>;
       let forceCloseTimer: ReturnType<typeof setTimeout> | undefined;
       let timedOut = false;
       let aborted = false;
@@ -536,6 +538,9 @@ export function createMuseAgentHarness(options: MuseHarnessOptions): AgentHarnes
         if (result.outcome.params.terminal === "cancelled" && !failure) {
           aborted = true;
         }
+        // MSP states the turn's token totals once per turn and the session's occupancy
+        // once per change; the host merges the first and snapshots the second.
+        attemptUsage = projectMuseAttemptUsage(result.outcome.params.usage, session);
         lifecycle.emitLifecycleTerminal({ phase: "end" });
       } catch (error) {
         if (signal?.aborted && !failure) {
@@ -594,6 +599,7 @@ export function createMuseAgentHarness(options: MuseHarnessOptions): AgentHarnes
       const lastAssistant = messages.findLast((message) => message.role === "assistant");
       return {
         terminal,
+        ...(attemptUsage ? { attemptUsage } : {}),
         assistantTexts: text ? [text] : [],
         messagesSnapshot: messages,
         lastAssistant,
