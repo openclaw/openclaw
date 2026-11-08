@@ -228,12 +228,17 @@ export async function admitInstalledGatewayRecovery(
   }
   const settlement = result.steps.findLast((step) => step.name === "doctor process settlement");
   const databaseRollback = result.steps.findLast((step) => step.name === "database rollback");
-  // Current-core maintenance has no package rollback, but still owns its Doctor park.
+  // A normal Doctor exit needs no settlement receipt; current-core maintenance still
+  // owns its service park. Indeterminate writers and explicit risks remain refused.
   const currentCore =
     params.coreAlreadyCurrent === true &&
     !params.packageTransaction &&
     result.status === "error" &&
-    settlement !== undefined;
+    (settlement !== undefined ||
+      result.steps.some(
+        (step) =>
+          step.name === "post-plugin doctor" && step.exitCode !== null && step.exitCode !== 0,
+      ));
   if (
     (!currentCore && result.reason !== "state-migrated-no-rollback") ||
     (params.coreAlreadyCurrent && result.recovery?.serviceRestartSafe === false) ||
@@ -241,7 +246,7 @@ export async function admitInstalledGatewayRecovery(
     !params.shouldRestart ||
     !params.preManagedServiceStop?.stopped ||
     databaseRollback?.exitCode === 0 ||
-    (!settlement && !databaseRollback) ||
+    (!currentCore && !settlement && !databaseRollback) ||
     (result.recovery?.serviceRestartSafe === false &&
       result.recovery.reason === "source-rollback-failed")
   ) {
