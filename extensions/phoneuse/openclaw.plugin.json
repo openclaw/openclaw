@@ -1,0 +1,12 @@
+{
+  "id": "phoneuse",
+  "name": "Phoneuse",
+  "description": "Local iPhone control using an operator-installed Phoneuse MCP server (Linux/Hyprland).",
+  "categories": ["computer-use"],
+  "activation": { "onStartup": false },
+  "skills": ["./skills"],
+  "mcpServers": {
+    "phoneuse": { "transport": "stdio", "command": "phoneuse-mcp" }
+  },
+  "configSchema": { "type": "object", "additionalProperties": false, "properties": {} }
+}

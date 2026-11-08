@@ -1,0 +1,13 @@
+{
+  "name": "@openclaw/phoneuse",
+  "version": "2026.11.1",
+  "description": "OpenClaw integration for the local Phoneuse iPhone MCP server.",
+  "type": "module",
+  "repository": { "type": "git", "url": "https://github.com/openclaw/openclaw" },
+  "devDependencies": { "@openclaw/plugin-sdk": "workspace:*" },
+  "openclaw": {
+    "extensions": ["./index.ts"],
+    "compat": { "pluginApi": ">=2026.11.1" },
+    "build": { "openclawVersion": "2026.11.1" }
+  }
+}

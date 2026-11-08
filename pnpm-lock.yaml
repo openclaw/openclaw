@@ -2172,6 +2172,12 @@ importers:
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
 
+  extensions/phoneuse:
+    devDependencies:
+      '@openclaw/plugin-sdk':
+        specifier: workspace:*
+        version: link:../../packages/plugin-sdk
+
   extensions/pixverse:
     devDependencies:
       '@openclaw/plugin-sdk':
