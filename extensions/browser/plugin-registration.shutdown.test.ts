@@ -9,8 +9,8 @@ import {
   createTestPluginServiceScheduler,
 } from "openclaw/plugin-sdk/plugin-test-api";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { expectCollected } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
-import { expectCollected } from "../../src/test-utils/retention.js";
 import { registerBrowserPlugin } from "./plugin-registration.js";
 import { readSystemProfileImportState } from "./src/browser/system-profile-import-state.js";
 

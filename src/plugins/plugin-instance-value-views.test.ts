@@ -13,10 +13,10 @@ it.each(["ordinary", "consumer"] as const)(
   "retains an adopted registry through idle and pending %s iteration, then releases it",
   async (custody) => {
     const registries: WeakRef<object>[] = [];
-    class StreamRegistry {
-      constructor() {
-        registries.push(new WeakRef(this));
-      }
+    function createStreamRegistry() {
+      const registry = {};
+      registries.push(new WeakRef(registry));
+      return registry;
     }
     const instance = createOwnedTestInstance("direct-values", "bundled");
     const record = instance.owner!.record;
@@ -36,7 +36,7 @@ it.each(["ordinary", "consumer"] as const)(
         observe();
       }
     }
-    selectRegistry(record, "selected", new StreamRegistry());
+    selectRegistry(record, "selected", createStreamRegistry());
     const iterator = (consumer ?? instance).wrap(stream())[Symbol.asyncIterator]();
     selectRegistry(record, "successor");
     let pending: ReturnType<typeof iterator.next> | undefined;

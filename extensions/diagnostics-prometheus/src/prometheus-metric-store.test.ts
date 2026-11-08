@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { setImmediate as nextTurn } from "node:timers/promises";
+import { forceFullGc } from "openclaw/plugin-sdk/test-env";
 import { afterEach, expect, it, vi } from "vitest";
-import { forceFullGc } from "../../../src/test-utils/retention.js";
 import renderShape from "../benchmarks/render-shape.json" with { type: "json" };
 import {
   PROMETHEUS_FAMILY_RESERVES,

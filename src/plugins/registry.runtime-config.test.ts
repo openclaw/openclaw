@@ -370,10 +370,10 @@ describe("plugin registry runtime config scope", () => {
 
   it("keeps adopted media capabilities alive without retaining retired registries", async () => {
     const references: WeakRef<object>[] = [];
-    class RetiredRegistry {
-      constructor() {
-        references.push(new WeakRef(this));
-      }
+    function createRetiredRegistry() {
+      const registry = {};
+      references.push(new WeakRef(registry));
+      return registry;
     }
     const runtime = createPluginRuntime();
     const { builder, record, api, owner } = registered("hosted-media", {}, runtime);
@@ -382,7 +382,7 @@ describe("plugin registry runtime config scope", () => {
     expect(media.detectMime).toBe(runtime.media.detectMime);
     const current = { ...builder.registry };
     const resource = (() => {
-      const previous = Object.assign(new RetiredRegistry(), builder.registry);
+      const previous = Object.assign(createRetiredRegistry(), builder.registry);
       markPluginRegistryActive(previous);
       const captured = owner.run(() => new AsyncResource("hosted-media-retention"));
       markPluginRegistryActive(current);
@@ -416,10 +416,10 @@ describe("plugin registry runtime config scope", () => {
     "retains a pending %s runtime selection across adoption, then releases it",
     async (mode) => {
       const references: WeakRef<object>[] = [];
-      class PendingRegistry {
-        constructor() {
-          references.push(new WeakRef(this));
-        }
+      function createPendingRegistry() {
+        const registry = {};
+        references.push(new WeakRef(registry));
+        return registry;
       }
       const resume = createDeferredCore();
       const runtime = createPluginRuntime();
@@ -445,7 +445,7 @@ describe("plugin registry runtime config scope", () => {
       const successor = createEmptyPluginRegistry();
       successor.plugins.push(record);
       const pending = (() => {
-        const selected = Object.assign(new PendingRegistry(), createEmptyPluginRegistry());
+        const selected = Object.assign(createPendingRegistry(), createEmptyPluginRegistry());
         selected.plugins.push(record);
         selected.coreGatewayMethodNames.push("intermediate");
         markPluginRegistryActive(selected);

@@ -23,10 +23,10 @@ import { disposePluginRegistryInstances } from "./runtime.js";
 import { getPluginRuntimeGatewayRequestScope as getScope } from "./runtime/gateway-request-scope.js";
 
 const retainedRegistries: WeakRef<object>[] = [];
-class RetainedRegistry {
-  constructor() {
-    retainedRegistries.push(new WeakRef(this));
-  }
+function createRetainedRegistry() {
+  const registry = {};
+  retainedRegistries.push(new WeakRef(registry));
+  return registry;
 }
 
 it("releases completed reload preludes while disposed instance signals remain reachable", async () => {
@@ -36,14 +36,14 @@ it("releases completed reload preludes while disposed instance signals remain re
     Reflect.set(Error, "stackTraceLimit", stackTraceLimit);
   });
   const reloadRegistries: WeakRef<object>[] = [];
-  class ReloadRegistry {
-    constructor() {
-      reloadRegistries.push(new WeakRef(this));
-    }
+  function createReloadRegistry() {
+    const registry = {};
+    reloadRegistries.push(new WeakRef(registry));
+    return registry;
   }
   async function retire() {
     const { record, instance } = createOwnedInstance("retirement-stack");
-    const registry = selectRegistry(record, "retired", new ReloadRegistry());
+    const registry = selectRegistry(record, "retired", createReloadRegistry());
     expect(
       (await disposePluginRegistryInstances(registry, undefined, { cfg: {} })).failures,
     ).toEqual([]);
@@ -67,7 +67,7 @@ it("releases completed reload preludes while disposed instance signals remain re
 
 it("keeps owner work independent of its caller and follows adopted registry custody", async () => {
   const { record, instance } = createOwnedInstance("owner-work");
-  selectRegistry(record, "initial", new RetainedRegistry());
+  selectRegistry(record, "initial", createRetainedRegistry());
   const caller = instance.retainConsumer();
   const authority = caller.run(() => instance.retainOwnerWork());
   caller.release();
@@ -150,7 +150,7 @@ it("retains an adopted selection until a pending call rejects", async () => {
   const resume = createDeferredCore();
   const failure = new Error("callback failed");
   let observed: string | undefined;
-  selectRegistry(record, "intermediate", new RetainedRegistry());
+  selectRegistry(record, "intermediate", createRetainedRegistry());
   const pending = instance.run(async () => {
     await resume.promise;
     observed = readRegistryLabel();
@@ -180,13 +180,13 @@ it("keeps resolved value identity and independent registry custody for concurren
   const nestedValue = Object.freeze({ selection: "nested" });
   const concurrentValue = Object.freeze({ selection: "concurrent" });
   const startNested = () => {
-    selectRegistry(record, "nested", new RetainedRegistry());
+    selectRegistry(record, "nested", createRetainedRegistry());
     const nested = instance.run(async () => {
       await nestedResume.promise;
       expect(readRegistryLabel()).toBe("nested");
       return nestedValue;
     });
-    selectRegistry(record, "concurrent", new RetainedRegistry());
+    selectRegistry(record, "concurrent", createRetainedRegistry());
     return nested;
   };
   const first = consumer.run(async () => await startNested());
@@ -238,7 +238,7 @@ it.each(["sync", "promise", "thenable"] as const)(
       expect(instance.hasActiveCall).toBe(true);
       observed = readRegistryLabel();
     };
-    selectRegistry(record, "nested", new RetainedRegistry());
+    selectRegistry(record, "nested", createRetainedRegistry());
     const nested = resource.runInAsyncScope(() =>
       instance.run(() => {
         if (kind === "sync") {
@@ -301,7 +301,7 @@ it("gives a completed consumer context fresh finite custody when it re-enters", 
   const consumer = instance.retainConsumer();
   const resource = consumer.run(() => new AsyncResource("completed-consumer-scope"));
   const resume = createDeferredCore();
-  selectRegistry(record, "late", new RetainedRegistry());
+  selectRegistry(record, "late", createRetainedRegistry());
   const pending = resource.runInAsyncScope(() =>
     instance.run(async () => {
       await resume.promise;

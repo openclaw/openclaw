@@ -173,10 +173,10 @@ describe("plugin lifecycle lease", () => {
     "releases retired cache facts while %s resources retain the expired lease",
     async (kind) => {
       const references: WeakRef<object>[] = [];
-      class CacheFacts {
-        constructor() {
-          references.push(new WeakRef(this));
-        }
+      function createCacheFacts() {
+        const facts = {};
+        references.push(new WeakRef(facts));
+        return facts;
       }
       await withOpenClawTestState({ label: "plugin-lifecycle-cache-retention" }, async (state) => {
         const withLease =
@@ -186,7 +186,7 @@ describe("plugin lifecycle lease", () => {
           for (let index = 0; index < 4; index++) {
             retained.push(
               await withLease({ env: state.env }, async (lease) => {
-                Object.assign(getPluginCache(), { facts: new CacheFacts() });
+                Object.assign(getPluginCache(), { facts: createCacheFacts() });
                 // A service drops caller cache scope but still inherits the lifecycle lease.
                 const resource = runOutsidePluginCache(
                   () => new AsyncResource("retained-plugin-lease", { requireManualDestroy: true }),

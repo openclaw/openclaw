@@ -110,14 +110,14 @@ describe("provider policy generations", () => {
 
   it("does not retain published registries through surviving policy caches", async () => {
     const references: WeakRef<object>[] = [];
-    class RetiredRegistry {
-      constructor() {
-        references.push(new WeakRef(this));
-      }
+    function createRetiredRegistry() {
+      const registry = {};
+      references.push(new WeakRef(registry));
+      return registry;
     }
     policyArtifactSpy().mockReturnValue(null);
     const caches = Array.from({ length: 24 }, () => {
-      const registry = Object.assign(new RetiredRegistry(), createEmptyPluginRegistry());
+      const registry = Object.assign(createRetiredRegistry(), createEmptyPluginRegistry());
       stageActivePluginRegistry(registry, null, "default");
       const cache = createPluginCache();
       withCache(cache, () => expect(directPolicy("missing-policy")).toBeNull());

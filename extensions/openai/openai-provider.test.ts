@@ -6,8 +6,8 @@ import {
   type LiveModelCatalogFetchGuard,
 } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
+import { forceFullGc } from "openclaw/plugin-sdk/test-env";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { forceFullGc } from "../../src/test-utils/retention.js";
 import {
   OPENAI_API_BASE_URL,
   OPENAI_CODEX_RESPONSES_BASE_URL,
