@@ -287,23 +287,23 @@ it.each([
   if (hasInputs) {
     await v.count(2);
     expect(v.checked()).toEqual(["true", "false"]);
-    expect(v.part("warning")?.textContent?.trim()).toBe(copy(messageKey));
+    expect(v.part("alert")?.textContent?.trim()).toBe(copy(messageKey));
     expect(v.part("empty")).toBeNull();
     expect(v.part("hint")?.textContent).toContain(copy("microphoneAppliesNextSession"));
     await v.escape();
   } else {
     const empty = await waitForSolid(() => {
-      const node = v.part("empty");
+      const node = v.part(fault ? "alert" : "empty");
       expect(node?.textContent?.trim()).toBe(copy(messageKey));
       return node;
     });
     expect(v.items()).toHaveLength(0);
-    for (const name of ["note", "warning", "hint"]) {
+    for (const name of ["note", "hint"]) {
       expect(v.part(name)).toBeNull();
     }
-    expect(v.all(".chat-talk-input-picker__empty")).toHaveLength(1);
+    expect(v.all(`.chat-talk-input-picker__${fault ? "alert" : "empty"}`)).toHaveLength(1);
     expect(empty?.getAttribute("role")).toBe("status");
-    expect(empty?.classList.contains("chat-talk-input-picker__empty--fault")).toBe(fault);
+    expect(empty?.classList.contains("warn")).toBe(fault);
   }
 });
 

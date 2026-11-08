@@ -362,13 +362,19 @@ describe("OpenAI Responses continuation", () => {
       expect(resolve(state, request).continuationStatus).toBe("continued");
       const keys = vi.spyOn(Object, "keys");
       try {
-        expect(resolve(state, request)).toMatchObject({
+        const continued = resolve(state, request);
+        const projections = keys.mock.calls.filter(
+          ([value]) =>
+            retained.some((item) => item === value) ||
+            (typeof value === "object" &&
+              value !== null &&
+              Reflect.get(value, "type") === "function_call_output"),
+        ).length;
+        expect(continued).toMatchObject({
           continuationStatus: "continued",
           request: { previous_response_id: "resp_cached", input: [toolOutput(rawId)] },
         });
-        expect(
-          keys.mock.calls.filter(([value]) => retained.some((item) => item === value)),
-        ).toHaveLength(0);
+        expect(projections).toBe(0);
       } finally {
         keys.mockRestore();
       }
@@ -384,6 +390,30 @@ describe("OpenAI Responses continuation", () => {
         ],
       });
       expect(resolve(state, structuredClone(request)).continuationStatus).toBe("continued");
+    });
+  });
+
+  it.each([false, true])("copies opaque replay accessors once (frozen=%s)", (frozen) => {
+    const host = createAiTransportHost({
+      immutableData: { freezeJsonSnapshot, isDeeplyFrozenPlainData },
+    });
+    runWithAiTransportHost(host, () => {
+      const content = vi.fn(() => [{ type: "input_text" as const, text: "answer" }]);
+      const item = {
+        type: "message" as const,
+        role: "assistant" as const,
+        get content() {
+          return content();
+        },
+      };
+      const state = continuationState([], [frozen ? Object.freeze(item) : item]);
+      const request = {
+        ...state.lastRequest,
+        input: [{ ...item }, secondUser],
+      };
+      content.mockClear();
+      expect(resolve(state, request).continuationStatus).toBe("continued");
+      expect(content).toHaveBeenCalledTimes(1);
     });
   });
 

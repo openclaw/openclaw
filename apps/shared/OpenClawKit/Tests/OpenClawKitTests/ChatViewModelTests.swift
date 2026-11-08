@@ -7996,7 +7996,7 @@ struct ChatViewModelTests {
         let createdKeys = await transport.createdSessionKeys()
         #expect(createdKeys.count == 1)
         #expect(createdKeys.first?.hasPrefix("agent:aiden:ios-") == true)
-        #expect(await transport.createdParentSessionKeys() == [nil])
+        #expect(await transport.createdParentSessionKeys() == ["main"])
         #expect(await transport.resetSessionKeys().isEmpty)
         #expect(await transport.lastSentRunId() == nil)
 
@@ -8081,7 +8081,7 @@ struct ChatViewModelTests {
         await vm.bootstrapTask?.value
         #expect(await MainActor.run { vm.sessionKey.hasPrefix("agent:reviewer:ios-") })
         #expect(await transport.createdSessionKeys().first?.hasPrefix("agent:reviewer:ios-") == true)
-        #expect(await transport.createdParentSessionKeys() == [nil])
+        #expect(await transport.createdParentSessionKeys() == ["global"])
     }
 
     @Test func `new trigger prefers explicit session agent over ambient agent`() async throws {
@@ -8096,7 +8096,7 @@ struct ChatViewModelTests {
         await vm.bootstrapTask?.value
         #expect(await MainActor.run { vm.sessionKey.hasPrefix("agent:alice:ios-") })
         #expect(await transport.createdSessionKeys().first?.hasPrefix("agent:alice:ios-") == true)
-        #expect(await transport.createdParentSessionKeys() == [nil])
+        #expect(await transport.createdParentSessionKeys() == ["agent:alice:main"])
     }
 
     @Test func `send attempts request when cached health is stale false`() async {
@@ -8428,7 +8428,7 @@ struct ChatViewModelTests {
         #expect(await transport.sessionSettingsPatches().isEmpty)
     }
 
-    @Test func `write scope permits model but keeps effort settings admin only`() async throws {
+    @Test func `effort settings stay unchanged without effort access`() async throws {
         let writeCatalog = OpenClawChatComposerCapabilityCatalog(
             sessionSettingsAvailable: true,
             modelMutationAvailable: true,
@@ -8450,6 +8450,26 @@ struct ChatViewModelTests {
             vm.selectVerboseLevel("full")
         }
         try await Task.sleep(for: .milliseconds(20))
+        #expect(await transport.sessionSettingsPatches().isEmpty)
+    }
+
+    @Test func `write scope permits effort but keeps tool details admin only`() async throws {
+        let writeCatalog = OpenClawChatComposerCapabilityCatalog(
+            sessionSettingsAvailable: true,
+            modelMutationAvailable: true,
+            effortMutationAvailable: true)
+        let (transport, vm) = await makeViewModel(
+            historyResponses: [historyPayload(sessionId: "sess-main")],
+            sessionsResponses: [sessionsResponse([
+                sessionEntry(key: "main", updatedAt: 1, sessionId: "sess-main"),
+            ])],
+            composerCapabilityCatalog: writeCatalog)
+        try await loadAndWaitBootstrap(vm: vm, sessionId: "sess-main")
+        await vm.loadComposerCapabilities()
+
+        #expect(await MainActor.run { !vm.composerVerboseMutationAvailable })
+        await MainActor.run { vm.selectVerboseLevel("full") }
+        await vm.waitForPendingSessionSettings(for: vm.currentModelPatchTarget())
         #expect(await transport.sessionSettingsPatches().isEmpty)
     }
 

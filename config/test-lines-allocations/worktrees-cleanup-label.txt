@@ -1,0 +1,3 @@
+12
+# Existing lifecycle cases distinguish pending inventory loading from actual cleanup.
+# Preserve the cleanup button's label/disabled state through list retry and GC reconnect.

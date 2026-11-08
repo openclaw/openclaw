@@ -215,7 +215,6 @@
   padding: 6px 6px 14px;
   overscroll-behavior: contain;
   scroll-padding-block: 6px 18px;
-  scrollbar-width: thin;
   touch-action: pan-y;
 }
 
@@ -224,7 +223,8 @@
   box-shadow: inset 0 0 0 2px var(--accent);
 }
 
-.sidebar-issues-panel__empty {
+.sidebar-issues-panel__empty,
+.sidebar-issues-panel__loading {
   display: flex;
   min-height: 0;
   flex: 1 1 auto;

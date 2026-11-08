@@ -376,6 +376,32 @@ it("keeps a replaced git checkout when activation fails", async () => {
   expect(await hasRetiredGitPluginInstallCandidates(env)).toBe(true);
 });
 
+it.runIf(process.platform !== "win32")(
+  "keeps a reinstall recorded under another spelling of the same directory",
+  async () => {
+    mockEnabledPlugin("foo");
+    using directory = temporaryInstall("openclaw-plugin-alias-");
+    const realInstall = path.join(directory.root, "state", "extensions", "foo");
+    fs.mkdirSync(realInstall, { recursive: true });
+    const alias = path.join(directory.root, "state-alias");
+    fs.symlinkSync(path.join(directory.root, "state"), alias);
+    // Service wrote the real spelling; the shell reinstall records the alias spelling.
+    mockReplacedInstall("foo", {
+      source: "clawhub",
+      spec: "clawhub:foo",
+      installPath: realInstall,
+    });
+    await persistNpm("foo", {
+      install: {
+        source: "clawhub",
+        spec: "clawhub:foo",
+        installPath: path.join(alias, "extensions", "foo"),
+      },
+    });
+    expect(removeDirectory).not.toHaveBeenCalled();
+  },
+);
+
 it("preserves replaced npm install directories across generation updates", async () => {
   mockEnabledPlugin("codex");
   using directory = temporaryInstall("openclaw-plugin-persist-");

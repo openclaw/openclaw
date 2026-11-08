@@ -143,14 +143,19 @@ describe("worktree Git size estimates", () => {
       }
       const commandSpy = vi.spyOn(gitExec, "executeGitCommandBytes");
       const runBuffered = commandExec.runCommandBuffered;
+      const censusBytes: number[] = [];
       const bufferedSpy = vi
         .spyOn(commandExec, "runCommandBuffered")
-        .mockImplementation((argv, options) => {
+        .mockImplementation(async (argv, options) => {
           // Older Git ignores GIT_NO_LAZY_FETCH; transport denial must still prevent per-blob fetches.
           const executionOptions = argv.includes("ls-tree")
             ? { ...options, env: { ...options?.env, GIT_NO_LAZY_FETCH: "0" } }
             : options;
-          return runBuffered(argv, executionOptions);
+          const result = await runBuffered(argv, executionOptions);
+          if (argv.includes("--missing=print")) {
+            censusBytes.push(result.stdout.byteLength);
+          }
+          return result;
         });
       const packetTrace = path.join(clone, "hydrate-packets.log");
       vi.stubEnv("GIT_TRACE_PACKET", packetTrace);
@@ -195,9 +200,8 @@ describe("worktree Git size estimates", () => {
       );
       expect(sizes).toHaveLength(2);
       expect(sizes[0]?.[1]?.env?.GIT_NO_LAZY_FETCH).toBe("1");
-      expect(
-        bufferedSpy.mock.calls.filter(([argv]) => argv.includes("--missing=print")),
-      ).toHaveLength(1);
+      // The worker boundary carries only missing IDs, not the complete checkout inventory.
+      expect(censusBytes).toEqual([missing.reduce((bytes, oid) => bytes + oid.length + 2, 0)]);
       commandSpy.mockClear();
       await expect(estimateWorktreeGitBytes(clone, commit)).resolves.toBe(16_384);
       expect(commandSpy.mock.calls.filter(([, args]) => args[0] === "fetch").length).toBe(0);

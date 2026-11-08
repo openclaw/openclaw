@@ -810,6 +810,16 @@ export function ${first}() { return read(); }`,
       false,
     );
     expect(result.violations).toHaveLength(consumers.length);
+    const credentialResult = inspectSources({
+      "src/state/user-model-accounts.ts": "export function connectUserModelAccount() {}",
+      "src/credential-consumer.ts": `
+        const accounts = await import('./state/user-model-accounts.js');
+        accounts.connectUserModelAccount();
+      `,
+    });
+    expect(credentialResult.violations).toEqual([
+      expect.stringContaining("unreviewed personal credential writer reference"),
+    ]);
     expect(batches.every((nodes) => nodes.length <= 256)).toBe(true);
     expect(
       batches.some((nodes) => new Set(nodes.map((node) => node.getSourceFile().fileName)).size > 1),

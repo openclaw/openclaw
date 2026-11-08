@@ -35,19 +35,20 @@ function selectRange(node: Text, start: number, end: number) {
   selected?.addRange(range);
 }
 
-function pointerUp(
+async function pointerUp(
   thread: HTMLElement,
-  options: Omit<Parameters<typeof handleChatSelectionPointerUp>[1], "paneId"> = {
-    onAskSideChat: onAskSideChatSpy,
-  },
+  options: Partial<Parameters<typeof handleChatSelectionPointerUp>[1]> = {},
   settle = true,
 ) {
   handleChatSelectionPointerUp({ currentTarget: thread } as unknown as PointerEvent, {
     paneId: "pane-a",
+    onAskSideChat: onAskSideChatSpy,
+    onAskNewSession: onAskNewSessionSpy,
     ...options,
   });
   if (settle) {
     vi.runAllTimers();
+    await vi.dynamicImportSettled();
   }
 }
 
@@ -73,38 +74,48 @@ function key(
 }
 
 const onAskSideChatSpy = vi.fn();
+const onAskNewSessionSpy = vi.fn();
 
 afterEach(() => {
   removeChatSelectionPopup();
   window.getSelection()?.removeAllRanges();
   document.body.innerHTML = "";
   onAskSideChatSpy.mockReset();
+  onAskNewSessionSpy.mockReset();
   vi.useRealTimers();
 });
 
 describe("chat selection popup", () => {
   beforeEach(() => vi.useFakeTimers());
 
-  it("ignores selections outside chat bubbles and collapsed selections", () => {
+  it("ignores outside, cross-message, and collapsed selections", async () => {
     const thread = selection("bubble text");
     const outside = document.createElement("p");
     outside.textContent = "outside text";
     document.body.appendChild(outside);
     selectRange(outside.firstChild as Text, 0, 7);
-    pointerUp(thread);
+    await pointerUp(thread);
     expect(popup()).toBeNull();
     window.getSelection()?.removeAllRanges();
-    pointerUp(thread);
+    await pointerUp(thread);
+    expect(popup()).toBeNull();
+    const sibling = thread.appendChild(document.createElement("div"));
+    sibling.className = "chat-bubble";
+    sibling.textContent = "Second message";
+    selectRange(thread.querySelector(".chat-text")!.firstChild as Text, 0, 6);
+    window.getSelection()!.getRangeAt(0).setEnd(sibling.firstChild!, 6);
+    await pointerUp(thread);
     expect(popup()).toBeNull();
   });
 
-  it("keeps only the latest pending selection popup", () => {
+  it("keeps only the latest pending selection popup", async () => {
     const thread = selection("replacement selection", 11);
     const firstAskSideChat = vi.fn();
     const secondAskSideChat = vi.fn();
-    pointerUp(thread, { onAskSideChat: firstAskSideChat }, false);
-    pointerUp(thread, { onAskSideChat: secondAskSideChat }, false);
+    void pointerUp(thread, { onAskSideChat: firstAskSideChat }, false);
+    void pointerUp(thread, { onAskSideChat: secondAskSideChat }, false);
     vi.advanceTimersToNextTimer();
+    await vi.dynamicImportSettled();
     expect(popup()?.getAttribute("aria-label")).toBe("Selection actions");
     (document.body.querySelector(".chat-selection-popup button") as HTMLButtonElement).click();
     expect(firstAskSideChat).not.toHaveBeenCalled();
@@ -116,9 +127,31 @@ describe("chat selection popup", () => {
     expect(popup()).toBeNull();
   });
 
-  it.each(["scroll", "collapse"])("dismisses the toolbar on %s", (action) => {
+  it("routes New session to the new-session launcher", async () => {
+    const thread = selection("route this passage", 5);
+    await pointerUp(thread);
+    const buttons = [...popup()!.querySelectorAll("button")];
+    // This fixture has no composer, so Add to chat is not offered.
+    expect(buttons.map((button) => button.textContent)).toEqual([
+      "Ask in side chat",
+      "New session",
+    ]);
+    buttons[1]!.click();
+    expect(onAskNewSessionSpy).toHaveBeenCalledWith({
+      text: "route",
+      start: 0,
+      end: 5,
+      messageId: "assistant-1",
+      entryId: "entry-1",
+    });
+    expect(onAskSideChatSpy).not.toHaveBeenCalled();
+    expect(popup()).toBeNull();
+    expect(window.getSelection()?.isCollapsed).toBe(true);
+  });
+
+  it.each(["scroll", "collapse"])("dismisses the toolbar on %s", async (action) => {
     const thread = selection("dismiss me later", 7);
-    pointerUp(thread);
+    await pointerUp(thread);
     expect(popup()).not.toBeNull();
     if (action === "scroll") {
       scrollTranscript();
@@ -133,14 +166,16 @@ describe("chat selection popup", () => {
     ["pending", "pane-a", false],
     ["pending", "pane-b", true],
     ["mounted", "pane-b", true],
-  ] as const)("retiring %s selection owner %s leaves popup=%s", (phase, pane, retained) => {
+  ] as const)("retiring %s selection owner %s leaves popup=%s", async (phase, pane, retained) => {
     const thread = selection("Keep this selection", 4);
-    pointerUp(thread, { onAskSideChat: onAskSideChatSpy }, false);
+    void pointerUp(thread, { onAskSideChat: onAskSideChatSpy }, false);
     if (phase === "mounted") {
       vi.runAllTimers();
+      await vi.dynamicImportSettled();
     }
     removeChatSelectionPopup(pane);
     vi.runAllTimers();
+    await vi.dynamicImportSettled();
     expect(popup() !== null).toBe(retained);
     removeChatSelectionPopup("pane-a");
     expect(popup()).toBeNull();

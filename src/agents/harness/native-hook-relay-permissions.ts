@@ -24,6 +24,11 @@ import {
   normalizeNativeHookToolName,
   readCodexToolInput,
 } from "./native-hook-relay-codec.js";
+import type {
+  NativeHookRelayPendingPermissionApproval,
+  NativeHookRelayPreToolUseApproval,
+  NativeHookRelayRegistration,
+} from "./native-hook-relay-contexts.js";
 import { codexNativeHookRelayResponseCodec as codexResponses } from "./native-hook-relay-response-codec.js";
 import {
   MAX_NATIVE_HOOK_RELAY_INVOCATIONS,
@@ -35,10 +40,7 @@ import type {
   NativeHookRelayPermissionApprovalRequest,
   NativeHookRelayPermissionApprovalRequester,
   NativeHookRelayPermissionApprovalResult,
-  NativeHookRelayPendingPermissionApproval,
-  NativeHookRelayPreToolUseApproval,
   NativeHookRelayProcessResponse,
-  NativeHookRelayRegistration,
 } from "./native-hook-relay-types.js";
 import { readOptionalNonEmptyString } from "./native-hook-relay-utils.js";
 

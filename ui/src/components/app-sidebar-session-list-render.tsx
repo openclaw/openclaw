@@ -8,6 +8,8 @@ import {
 } from "../lib/presence-users.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import { createIntersectionObserver } from "../lib/reactive/observers.ts";
+import { readVisibleTime } from "../lib/reactive/visible-clock.ts";
+import { nextSessionSnoozeWakeAt } from "../lib/sessions/session-snooze.ts";
 import { sidebarPinnedSessionRows } from "./app-sidebar-personal-navigation.ts";
 import type { SessionCatalogGroupsRenderer } from "./app-sidebar-session-catalog-render.tsx";
 import {
@@ -185,7 +187,13 @@ function PinnedSessionSection(params: { host: SidebarSessionListHost }) {
     const host = params.host;
     const zone = host.reconciledSidebarZone();
     const sessions = host.sessionDataContext?.sessions;
-    const rows = sidebarPinnedSessionRows(zone, (key) => sessions?.archiveVisibility(key));
+    const now = Date.now();
+    const hasSnoozedPins = nextSessionSnoozeWakeAt(zone.sessionRows.values(), now) !== null;
+    const rows = sidebarPinnedSessionRows(
+      zone,
+      (key) => sessions?.archiveVisibility(key),
+      hasSnoozedPins ? readVisibleTime(1_000) : now,
+    );
     if (rows.length === 0) {
       return undefined;
     }

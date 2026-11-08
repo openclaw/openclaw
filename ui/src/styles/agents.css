@@ -47,6 +47,11 @@
   gap: var(--space-2);
 }
 
+.agent-file-tabs > .hub-tabs {
+  /* This row shares width with Add File rather than height with a panel. */
+  flex-shrink: 1;
+}
+
 .agent-tab-add {
   border: 1px dashed var(--border);
   border-radius: var(--radius-sm);
