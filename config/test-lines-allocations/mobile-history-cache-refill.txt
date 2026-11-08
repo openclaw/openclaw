@@ -1,0 +1,3 @@
+# Real-browser refresh regression through the 80-message persisted snapshot and
+# the bounded automatic source-boundary probe; replaces the old manual-only case.
+135
