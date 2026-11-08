@@ -1,5 +1,5 @@
 import type { JSX } from "@solidjs/web";
-import { Errored, Loading } from "solid-js";
+import { Errored, Loading, onSettled } from "solid-js";
 import {
   isStaleChunkImportError,
   retryStaleChunkReloadWhenReachable,
@@ -13,6 +13,10 @@ export function SkillDialogBoundary(props: {
   closeDisabled?: boolean;
   children: JSX.Element;
 }) {
+  let active = true;
+  onSettled(() => () => {
+    active = false;
+  });
   return (
     <Errored
       fallback={(error, reset) => (
@@ -24,7 +28,9 @@ export function SkillDialogBoundary(props: {
           <button
             class="btn"
             onClick={() =>
-              isStaleChunkImportError(error()) ? void retryStaleChunkReloadWhenReachable() : reset()
+              isStaleChunkImportError(error())
+                ? void retryStaleChunkReloadWhenReachable({ canReload: () => active })
+                : reset()
             }
           >
             {t("common.retry")}

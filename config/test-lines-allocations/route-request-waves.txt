@@ -1,2 +1,2 @@
-# Pin first-visit Skills assets and catalog chunks; cover lazy dialogs and populated Custodian benchmark setup.
-269
+# Pin first-visit assets, lazy-dialog recovery lifetime, and populated Custodian benchmark setup.
+310
