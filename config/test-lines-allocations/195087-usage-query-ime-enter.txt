@@ -1,0 +1,2 @@
+42
+# Usage query input: IME-composed Enter must not apply the filter (30 lines, one regression test in ui/src/pages/usage/view.test.ts) plus 12 lines of shared-scalar debt already present on the comparison base.

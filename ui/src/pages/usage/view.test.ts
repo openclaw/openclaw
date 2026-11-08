@@ -121,6 +121,36 @@ describe("renderUsage", () => {
     ]);
   });
 
+  it("keeps an IME-composed Enter from applying the usage query", () => {
+    const base = createUsageProps();
+    const onApplyQuery = vi.fn();
+    const container = mountUsage({
+      ...base,
+      callbacks: { ...base.callbacks, filters: { ...base.callbacks.filters, onApplyQuery } },
+    });
+    const input = container.querySelector<HTMLInputElement>(".usage-query-input")!;
+    const enter = (init: KeyboardEventInit = {}) =>
+      new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true, ...init });
+
+    const deliberate = enter();
+    input.dispatchEvent(deliberate);
+    expect(deliberate.defaultPrevented).toBe(true);
+    expect(onApplyQuery).toHaveBeenCalledOnce();
+    onApplyQuery.mockClear();
+
+    for (const composition of [{ isComposing: true }, { keyCode: 229 }]) {
+      const composed = enter(composition);
+      input.dispatchEvent(composed);
+      expect(composed.defaultPrevented).toBe(false);
+    }
+    const end = new CompositionEvent("compositionend", { bubbles: true });
+    input.dispatchEvent(end);
+    const commit = Object.defineProperty(enter(), "timeStamp", { value: end.timeStamp + 1 });
+    input.dispatchEvent(commit);
+    expect(commit.defaultPrevented).toBe(false);
+    expect(onApplyQuery).not.toHaveBeenCalled();
+  });
+
   it("parses each draft once for chips, suggestions, and every filter", () => {
     const base = createUsageProps();
     const [filters, setFilters] = createSignal({ ...base.filters, queryDraft: "provider:OpenAI" });
