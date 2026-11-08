@@ -451,7 +451,15 @@ async function read(command: (typeof commands)[number]) {
       transport && admission
         ? await transport.startRead(
             { context: { environment, admission }, location: filename, checkFreshAdmission: false },
-            { signal, assertCurrent: admission.assertCurrent },
+            {
+              signal,
+              assertCurrent: admission.assertCurrent,
+              acquire<T>(operation: () => T): T {
+                signal.throwIfAborted();
+                admission.assertCurrent();
+                return operation();
+              },
+            },
           )
         : {
             value: await withExistingOpenClawStateSchema({ path: filename }, () =>
