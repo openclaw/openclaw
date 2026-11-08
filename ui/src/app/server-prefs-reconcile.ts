@@ -31,7 +31,8 @@ import {
   readStorage,
   readRetainedLocalKeys,
 } from "./server-prefs-storage.ts";
-import { serverUiPrefsOutbox as sync } from "./server-prefs.ts";
+import type { ServerUiPrefsWriter } from "./server-prefs-sync-contract.ts";
+import { pushServerUiPrefs, serverUiPrefsOutbox as sync } from "./server-prefs.ts";
 import type { UiPreferences, UiSettings } from "./settings-contract.ts";
 import {
   loadSettings,
@@ -40,6 +41,28 @@ import {
   profileNavigation,
 } from "./settings.ts";
 import type { ThemeName } from "./theme.ts";
+
+/** Adopt only this profile's authored browser layout before a remote snapshot can replace it. */
+export function adoptLocalPersonalSessionGroups(
+  writer: ServerUiPrefsWriter,
+  hooks: Parameters<typeof pushServerUiPrefs>[2],
+): void {
+  if (
+    sync.pushWriter !== writer ||
+    !sync.canWriteProfilePref("personalSessionGroups") ||
+    sync.pendingPrefs?.personalSessionGroups
+  )
+    return;
+  const scope = writer.state.client?.gatewayUrl ?? "";
+  const local = loadLocalNavigationPreferences(scope, sync.pushProfileId)?.personalSessionGroups;
+  const previous = readConfirmedPrefs(sync, sync.pushScope)?.personalSessionGroups ?? null;
+  if (!local || prefValuesEqual(local, previous ?? [])) return;
+  pushServerUiPrefs(
+    writer,
+    { personalSessionGroups: local, personalSessionGroupsBase: previous },
+    hooks,
+  );
+}
 
 function applyChangedSettingsPatch(
   target: Partial<UiSettings>,

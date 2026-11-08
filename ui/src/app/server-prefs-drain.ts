@@ -3,7 +3,11 @@ import type { BackgroundPreference } from "../../../packages/gateway-protocol/sr
 import type { ConfigPatchAck } from "../lib/config/config-draft-model.ts";
 import { showToast } from "../lib/toast.ts";
 import { readConfirmedPrefs, publishConfirmedPrefs } from "./server-prefs-confirmation.ts";
-import { foldSidebarEntriesBase, hasSidebarOrderIntent } from "./server-prefs-intent.ts";
+import {
+  foldSidebarEntriesBase,
+  hasSidebarOrderIntent,
+  pendingUiPrefKeys,
+} from "./server-prefs-intent.ts";
 import {
   resolveProfileAppearancePrefs,
   resolveProfileAppearanceProfileId,
@@ -54,7 +58,7 @@ export async function drainPendingPrefs(
           (key === "theme" &&
             typeof sync.pendingPrefs.theme === "string" &&
             sync.pendingPrefs.theme.includes("/"))) &&
-        !(sync.pushProfileId && sync.pushCanWrite),
+        !sync.canWriteProfilePref(key),
     );
     if (localOnlyKeys.length) {
       if (!writer.state.connected) {
@@ -74,8 +78,7 @@ export async function drainPendingPrefs(
       sync.updateRetainedLocalKeys(sync.pendingScope, ["theme"], true);
       continue;
     }
-    const profileBatch =
-      sync.pushProfileId && sync.pushCanWrite ? selectProfileUiPrefs(sync.pendingPrefs) : {};
+    const profileBatch = selectProfileUiPrefs(sync.pendingPrefs, sync.canWriteProfilePref);
     const useProfile = Object.keys(profileBatch).length > 0;
     let batch = useProfile ? profileBatch : { ...sync.pendingPrefs };
     if (!useProfile) {
@@ -191,7 +194,10 @@ export async function drainPendingPrefs(
                   writer.state.client,
                   batch,
                   () => {
-                    if (!profileIsCurrent() || !sync.pushCanWrite) {
+                    if (
+                      !profileIsCurrent() ||
+                      !pendingUiPrefKeys(batch).every(sync.canWriteProfilePref)
+                    ) {
                       return false;
                     }
                     sync.reconcilePersistedPendingPrefs();
@@ -246,13 +252,20 @@ export async function drainPendingPrefs(
         sync.reconcilePersistedPendingPrefs();
         const dispatchedBatch = "batch" in result ? result.batch : batch;
         // RPC sub-batches omit browser metadata; acknowledge the complete original intent.
-        const acknowledgedBatch = Object.hasOwn(dispatchedBatch, "sidebarEntries")
-          ? {
-              ...dispatchedBatch,
-              sidebarEntriesBase: batch.sidebarEntriesBase,
-              sidebarEntriesOrder: batch.sidebarEntriesOrder,
-            }
-          : dispatchedBatch;
+        const acknowledgedBatch = {
+          ...dispatchedBatch,
+          ...(Object.hasOwn(dispatchedBatch, "sidebarEntries")
+            ? {
+                sidebarEntriesBase: batch.sidebarEntriesBase,
+                sidebarEntriesOrder: batch.sidebarEntriesOrder,
+              }
+            : {}),
+          ...(Object.hasOwn(dispatchedBatch, "personalSessionGroups")
+            ? {
+                personalSessionGroupsBase: batch.personalSessionGroupsBase,
+              }
+            : {}),
+        };
         if (result.ok) {
           if (useProfile) {
             invalidateProfileAppearanceReads();
@@ -305,7 +318,9 @@ export async function drainPendingPrefs(
           const publication = { ...committedBatch };
           let superseded = false;
           const confirmedNavigation: ServerUiPrefs = {};
-          const latestNavigation: Partial<Pick<UiSettings, "sidebarEntries">> = {};
+          const latestNavigation: Partial<
+            Pick<UiSettings, "sidebarEntries" | "personalSessionGroups">
+          > = {};
           if (navigationReceipt) {
             // Shared lastSeen is already-confirmed profile-only navigation. Keep the
             // local read cache aligned so a later reconcile cannot roll it backward.
@@ -347,6 +362,9 @@ export async function drainPendingPrefs(
             acknowledgedBatch,
             sync.pendingPersistedKeys,
           );
+          if (publication.personalSessionGroups && !sync.pendingPrefs?.personalSessionGroups) {
+            latestNavigation.personalSessionGroups = publication.personalSessionGroups;
+          }
           if (useProfile && profileId) {
             recordProfileAppearanceCommit(gatewayScope, profileId, publication);
           }
@@ -434,6 +452,13 @@ export async function drainPendingPrefs(
             return;
           }
           break;
+        }
+        if (result.reason === "conflict" && dispatchedBatch.personalSessionGroups) {
+          // A same-group conflict cannot be fixed by repeating the same authored layout.
+          sync.recordPreferenceWriteFailures(sync.pendingScope, dispatchedBatch, result.error);
+          sync.publishPreferenceWrites();
+          showToast({ placement: "top-right", severity: "error", message: result.error });
+          return;
         }
         if (result.reason === "conflict" && attempt === 0) {
           await sleepWithAbort(250);

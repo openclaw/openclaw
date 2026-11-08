@@ -1,3 +1,7 @@
+import {
+  normalizePersonalSessionGroups,
+  type PersonalSessionGroup,
+} from "../../../src/shared/personal-session-groups.js";
 import { prefIntentMatches, pendingUiPrefKeys } from "./server-prefs-intent.ts";
 // Write-only algorithms load with the existing async preference drain, not the boot mirror.
 import { extractServerUiPrefs } from "./server-prefs-reconcile.ts";
@@ -49,13 +53,44 @@ export function rebaseSidebarEntries(
   return result;
 }
 
-export function selectProfileUiPrefs(pending: ServerUiPrefs): ServerUiPrefs {
+/** Merge independent group edits; conflicting edits to the same group require review. */
+export function rebasePersonalSessionGroups(
+  base: readonly PersonalSessionGroup[],
+  desired: readonly PersonalSessionGroup[],
+  remote: readonly PersonalSessionGroup[],
+): PersonalSessionGroup[] | undefined {
+  const previous = new Map(base.map((group) => [group.id, group]));
+  const wanted = new Map(desired.map((group) => [group.id, group]));
+  const result = new Map(remote.map((group) => [group.id, group]));
+  for (const id of new Set([...previous.keys(), ...wanted.keys()])) {
+    const before = previous.get(id);
+    const next = wanted.get(id);
+    if (prefValuesEqual(before, next)) continue;
+    if (!prefValuesEqual(result.get(id), before) && !prefValuesEqual(result.get(id), next))
+      return undefined;
+    if (next) result.set(id, next);
+    else result.delete(id);
+  }
+  const merged = rebaseSidebarEntries(
+    base.map((group) => group.id),
+    desired.map((group) => group.id),
+    [...result.keys()],
+  ).map((id) => result.get(id)!);
+  return prefValuesEqual(normalizePersonalSessionGroups(merged), merged) ? merged : undefined;
+}
+
+export function selectProfileUiPrefs(
+  pending: ServerUiPrefs,
+  canWrite: (key: string) => boolean,
+): ServerUiPrefs {
   const batch: ServerUiPrefs = {};
   for (const key of SYNCED_PREF_KEYS) {
-    if (isProfilePref(key) && Object.hasOwn(pending, key)) {
+    if (isProfilePref(key) && canWrite(key) && Object.hasOwn(pending, key)) {
       Object.assign(batch, { [key]: pending[key] });
     }
   }
+  if (batch.personalSessionGroups)
+    batch.personalSessionGroupsBase = pending.personalSessionGroupsBase;
   if (batch.sidebarEntries && pending.sidebarEntriesBase) {
     batch.sidebarEntriesBase = pending.sidebarEntriesBase;
     batch.sidebarEntriesOrder = pending.sidebarEntriesOrder;
@@ -80,6 +115,7 @@ export function removePendingUiPrefsBatch(
   if (!pending.sidebarEntries) {
     clearSidebarEntriesMetadata(pending);
   }
+  if (!pending.personalSessionGroups) delete pending.personalSessionGroupsBase;
   return Object.keys(pending).length ? pending : null;
 }
 

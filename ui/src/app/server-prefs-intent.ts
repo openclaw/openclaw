@@ -62,6 +62,8 @@ export function changedServerUiPrefs(previous: UiSettings, next: UiSettings): Se
 export function prefIntentMatches(left: ServerUiPrefs, right: ServerUiPrefs, key: string): boolean {
   return (
     prefValuesEqual(left[key], right[key]) &&
+    (key !== "personalSessionGroups" ||
+      prefValuesEqual(left.personalSessionGroupsBase, right.personalSessionGroupsBase)) &&
     (key !== "sidebarEntries" ||
       (prefValuesEqual(left.sidebarEntriesBase, right.sidebarEntriesBase) &&
         left.sidebarEntriesOrder === right.sidebarEntriesOrder))
@@ -106,6 +108,9 @@ export function mergePendingUiPrefs(
   next: ServerUiPrefs,
 ): ServerUiPrefs {
   const merged = { ...pending, ...next };
+  if (pending?.personalSessionGroups && next.personalSessionGroups) {
+    merged.personalSessionGroupsBase = pending.personalSessionGroupsBase;
+  }
   if (next.sidebarEntries) {
     merged.sidebarEntriesOrder = next.sidebarEntriesOrder;
   }
@@ -135,6 +140,12 @@ export function mergePendingUiPrefs(
 /** Browser metadata belongs to its owning intent, never an independently dispatched/settled key. */
 export function pendingUiPrefKeys(prefs: ServerUiPrefs): string[] {
   return Object.keys(prefs).filter(
-    (key) => !["sidebarEntriesBase", "sidebarEntriesOrder", "navigationConfirmation"].includes(key),
+    (key) =>
+      ![
+        "sidebarEntriesBase",
+        "sidebarEntriesOrder",
+        "personalSessionGroupsBase",
+        "navigationConfirmation",
+      ].includes(key),
   );
 }

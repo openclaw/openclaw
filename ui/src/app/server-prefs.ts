@@ -4,7 +4,7 @@
 // intent shadows server snapshots until the hash-free LWW ack; failed pushes degrade device-local.
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { ApplicationGatewaySnapshot } from "./gateway.ts";
-import { hasOperatorWriteAccess } from "./operator-access.ts";
+import { hasOperatorSelfWriteAccess, hasOperatorWriteAccess } from "./operator-access.ts";
 import {
   mergePendingUiPrefs,
   resetServerUiPrefIntent,
@@ -15,6 +15,7 @@ import {
   rememberProfileAppearanceIdentity,
   resetProfileAppearancePrefs,
   resolveProfileAppearanceProfileId,
+  resolveProfileAppearancePrefs,
   resolveProfilePreferenceScope,
 } from "./server-prefs-profile.ts";
 import {
@@ -74,6 +75,12 @@ class ServerUiPrefsOutbox {
   pushClient: GatewayBrowserClient | null = null;
   pushProfileId: string | null = null;
   pushCanWrite = false;
+  pushCanWriteGroups = false;
+  canWriteProfilePref = (key: string) =>
+    Boolean(
+      this.pushProfileId &&
+      (this.pushCanWrite || (key === "personalSessionGroups" && this.pushCanWriteGroups)),
+    );
   pushAfterCommit: ((commit: ServerUiPrefsCommit) => void) | undefined;
   pushDraining = false;
   drainRequested = false;
@@ -146,6 +153,7 @@ function adoptPendingScope(scope: string): void {
   );
 }
 function writePendingStorage(prefs: ServerUiPrefs | null): void {
+  if (prefs && !prefs.personalSessionGroups) delete prefs.personalSessionGroupsBase;
   if (prefs && !prefs.sidebarEntries) {
     clearSidebarEntriesMetadata(prefs);
   }
@@ -180,6 +188,7 @@ function cancelPendingKeys(scope: string, keys: readonly SyncedPrefKey[]): void 
   if (!remaining.sidebarEntries) {
     clearSidebarEntriesMetadata(remaining);
   }
+  if (!remaining.personalSessionGroups) delete remaining.personalSessionGroupsBase;
   const next = Object.keys(remaining).length ? remaining : null;
   if (scope === sync.pendingScope) {
     sync.pendingPrefs = next;
@@ -237,10 +246,13 @@ function reconcilePersistedPendingPrefs(adoptKeys: readonly SyncedPrefKey[] = []
       pending.sidebarEntriesBase = current.sidebarEntriesBase;
       pending.sidebarEntriesOrder = current.sidebarEntriesOrder;
     }
+    if (key === "personalSessionGroups")
+      pending.personalSessionGroupsBase = current.personalSessionGroupsBase;
   }
   if (!pending.sidebarEntries) {
     clearSidebarEntriesMetadata(pending);
   }
+  if (!pending.personalSessionGroups) delete pending.personalSessionGroupsBase;
   sync.pendingPrefs = Object.keys(pending).length ? pending : null;
 }
 function batchIsCurrent(batch: ServerUiPrefs): boolean {
@@ -264,6 +276,7 @@ export function resetServerUiPrefsSync() {
   sync.pushClient = null;
   sync.pushProfileId = null;
   sync.pushCanWrite = false;
+  sync.pushCanWriteGroups = false;
   sync.confirmedPrefsFallback = null;
   sync.lastReconciledScope = null;
   sync.lastReconciledConfigObject = null;
@@ -291,6 +304,7 @@ function adoptPushWriter(writer: ServerUiPrefsWriter, hooks: ServerUiPrefsPushHo
   }
   const scope = resolveProfilePreferenceScope(gatewayScope, profileId);
   sync.pushCanWrite = hooks.canWrite ?? hasOperatorWriteAccess(hooks.profile?.hello?.auth ?? null);
+  sync.pushCanWriteGroups = hasOperatorSelfWriteAccess(hooks.profile?.hello?.auth ?? null);
   if (
     sync.pushWriter === writer &&
     sync.pushScope === scope &&
@@ -346,7 +360,9 @@ function startPendingDrain(writer: ServerUiPrefsWriter): void {
   }
   if (
     writer.canPatch === false &&
-    !(sync.pushProfileId && sync.pushCanWrite && Object.keys(sync.pendingPrefs).some(isProfilePref))
+    !Object.keys(sync.pendingPrefs).some(
+      (key) => isProfilePref(key) && sync.canWriteProfilePref(key),
+    )
   ) {
     return;
   }
@@ -390,7 +406,7 @@ export function pushServerUiPrefs(
         if (sync.pushProfileId && isProfilePref(key)) {
           // Imported custom palettes are browser-local by contract; a profile
           // must never carry a theme another browser cannot render.
-          return !sync.pushCanWrite || (key === "theme" && prefs.theme === "custom");
+          return !sync.canWriteProfilePref(key) || (key === "theme" && prefs.theme === "custom");
         }
         return writer.canPatch === false;
       })
@@ -417,7 +433,15 @@ export function pushServerUiPrefs(
           ([key]) => !blockedKeys.some((blockedKey) => blockedKey === key),
         ),
       )
-    : prefs;
+    : { ...prefs };
+  if (
+    Object.hasOwn(writablePrefs, "personalSessionGroups") &&
+    !Object.hasOwn(writablePrefs, "personalSessionGroupsBase")
+  ) {
+    writablePrefs.personalSessionGroupsBase =
+      resolveProfileAppearancePrefs(writer.state.client?.gatewayUrl ?? "", sync.pushProfileId)
+        ?.personalSessionGroups ?? null;
+  }
   reconcilePersistedPendingPrefs(keys);
   sync.composeSidebar?.(sync.pendingPrefs, writablePrefs);
   sync.pendingPrefs = mergePendingUiPrefs(sync.pendingPrefs, writablePrefs);

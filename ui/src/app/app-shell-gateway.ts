@@ -30,7 +30,6 @@ import type { ShellRouteState } from "./app-host-route-state.ts";
 import type { ShellNavigationCapability } from "./app-shell-navigation.ts";
 import type { ApplicationContext } from "./context.ts";
 import { isNativeMobileHost } from "./native-web-chrome.ts";
-import { hasOperatorWriteAccess } from "./operator-access.ts";
 import { profilePreferencesState } from "./server-prefs-profile.ts";
 import { flushServerUiPrefs, resetServerUiPrefsSync } from "./server-prefs.ts";
 import { capturePlacementStartupConnection } from "./session-placement-startup.ts";
@@ -524,8 +523,7 @@ export class ShellGatewayOwner {
     this.runtimeConfigSource = runtimeConfig;
     this.runtimeConfigProfileId = profileId;
     flushServerUiPrefs(runtimeConfig, {
-      profileId,
-      canWrite: hasOperatorWriteAccess(snapshot.hello?.auth ?? null),
+      profile: snapshot,
       afterCommit: ({ needsRefresh, retainedLocal }) => {
         void this.reconcileCommittedServerUiPrefs(runtimeConfig, needsRefresh, retainedLocal);
       },
@@ -641,6 +639,7 @@ export class ShellGatewayOwner {
         if (!remainsCurrent()) {
           return;
         }
+        runtime.adoptLocalPersonalSessionGroups(runtimeConfig, { profile: snapshot });
         const pending = runtime.loadProfileAppearancePrefs(client, profileId, scope, {
           isCurrent: remainsCurrent,
         });

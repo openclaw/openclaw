@@ -26,7 +26,7 @@ import {
   UI_NAVIGATION_PREFERENCE_KEYS,
   type ServerUiPrefs,
 } from "./server-prefs-state.ts";
-import { rebaseSidebarEntries } from "./server-prefs-write-batch.ts";
+import { rebasePersonalSessionGroups, rebaseSidebarEntries } from "./server-prefs-write-batch.ts";
 import { invalidateUserPreferences, saveUserPreferences } from "./user-prefs-cache.ts";
 import { loadUserPreferences } from "./user-prefs-request.ts";
 
@@ -108,6 +108,22 @@ export async function writeProfileAppearancePrefs(
         return failure("Navigation preferences are unavailable.");
       }
       const committedBatch = { ...batch };
+      if (batch.personalSessionGroups) {
+        const observed = preferences.personalSessionGroupsBase;
+        const remote = SYNCED_PREFS.personalSessionGroups.extract(
+          snapshot.entries[UI_NAVIGATION_PREFERENCE_KEYS.personalSessionGroups] ?? [],
+        );
+        const merged =
+          observed !== undefined && remote
+            ? rebasePersonalSessionGroups(observed ?? [], batch.personalSessionGroups, remote)
+            : undefined;
+        if (!merged)
+          return failure(
+            "Personal groups changed elsewhere or exceed their limit. Your local layout is retained; review the other layout before retrying.",
+            "conflict",
+          );
+        committedBatch.personalSessionGroups = merged;
+      }
       if (Array.isArray(batch.sidebarEntries)) {
         const observed = SYNCED_PREFS.sidebarEntries.extract(base);
         const remote = SYNCED_PREFS.sidebarEntries.extract(
