@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { createAgent } from "../agents/agent-create.js";
@@ -10,6 +11,7 @@ import { runDaemonRestart, runDaemonStart, runDaemonStop } from "../cli/daemon-c
 import { runPluginsListCommand } from "../cli/plugins-list-command.js";
 import { runPluginsSearchCommand } from "../cli/plugins-search-command.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import * as runtimeProcess from "../infra/runtime-process-url.js";
 import {
   createCorePluginStateSyncKeyedStore,
   resetPluginStateStoreForTests,
@@ -246,6 +248,42 @@ describe("OpenClaw rescue message", () => {
     );
     expect(runDaemonStop).not.toHaveBeenCalled();
     expect(runDaemonRestart).not.toHaveBeenCalled();
+  });
+
+  it("returns captured Doctor diagnostics when the completed process exits non-zero", async () => {
+    const fixture = path.join(stateDir, "doctor.mjs");
+    await fs.writeFile(
+      fixture,
+      'process.stdout.write("tailnet bind warning\\n"); process.exitCode = 1;\n',
+    );
+    const resolve = runtimeProcess.resolveRuntimeProcessEntrypointUrl;
+    const doctor = vi
+      .spyOn(runtimeProcess, "resolveRuntimeProcessEntrypointUrl")
+      .mockImplementation((name) => (name === "doctor" ? pathToFileURL(fixture) : resolve(name)));
+    try {
+      await expect(
+        runRescue(
+          "/openclaw doctor",
+          {},
+          commandContext({ surface: "telegram", channel: "telegram", channelId: "telegram" }),
+        ),
+      ).resolves.toContain("tailnet bind warning");
+    } finally {
+      doctor.mockRestore();
+    }
+  });
+
+  it("propagates Doctor runner failures that happen before an exit result", async () => {
+    const failure = new Error("Doctor runner setup failed");
+    const doctorModule = await import("../commands/doctor.js");
+    const runDoctorProcess = vi
+      .spyOn(doctorModule, "runDoctorProcess")
+      .mockRejectedValue(failure);
+    try {
+      await expect(runRescue("/openclaw doctor")).rejects.toBe(failure);
+    } finally {
+      runDoctorProcess.mockRestore();
+    }
   });
 
   it("refuses doctor repairs without creating a pending approval", async () => {

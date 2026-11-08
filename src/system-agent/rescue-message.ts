@@ -45,6 +45,13 @@ type SystemAgentRescueMessageInput = {
   assertCurrent?: () => void;
 };
 
+class CapturedSystemAgentExit extends Error {
+  constructor(readonly code: number) {
+    super(`OpenClaw operation exited with code ${code}`);
+    this.name = "CapturedSystemAgentExit";
+  }
+}
+
 const SYSTEM_AGENT_COMMAND = "/openclaw";
 const RESCUE_PENDING_NAMESPACE = "rescue-pending";
 const RESCUE_PENDING_MAX_ENTRIES = 1_024;
@@ -70,6 +77,7 @@ const RESCUE_OPERATION_FIELDS = new Map<
 
 function createCaptureRuntime(): { runtime: RuntimeEnv; read: () => string } {
   const lines: string[] = [];
+  let exitCode: number | undefined;
   const push = (...args: unknown[]) => {
     lines.push(args.map((arg) => (typeof arg === "string" ? arg : JSON.stringify(arg))).join(" "));
   };
@@ -78,11 +86,32 @@ function createCaptureRuntime(): { runtime: RuntimeEnv; read: () => string } {
       log: push,
       error: push,
       exit: (code) => {
-        throw new Error(`OpenClaw operation exited with code ${code}`);
+        exitCode = code;
+        throw new CapturedSystemAgentExit(code);
       },
     },
-    read: () => lines.join("\n").trim(),
+    read: () => {
+      const output = lines.join("\n").trim();
+      const fallback =
+        exitCode === undefined ? "" : `OpenClaw operation exited with code ${exitCode}`;
+      return output || fallback;
+    },
   };
+}
+
+async function executeCapturedSystemAgentOperation(
+  operation: SystemAgentOperation,
+  runtime: RuntimeEnv,
+  options?: Parameters<typeof executeSystemAgentOperation>[2],
+): Promise<void> {
+  try {
+    await executeSystemAgentOperation(operation, runtime, options);
+  } catch (error) {
+    if (error instanceof CapturedSystemAgentExit) {
+      return;
+    }
+    throw error;
+  }
 }
 
 /** Extract the command body after `/openclaw`, or null when the message is not for rescue. */
@@ -283,7 +312,7 @@ export async function runSystemAgentRescueMessage(
       return unsupported;
     }
     const capture = createCaptureRuntime();
-    await executeSystemAgentOperation(operation, capture.runtime, {
+    await executeCapturedSystemAgentOperation(operation, capture.runtime, {
       approved: true,
       auditDetails: buildAuditDetails(input),
       deps: input.deps,
@@ -344,7 +373,7 @@ export async function runSystemAgentRescueMessage(
   await pendingStore.delete(pendingKey);
   assertCurrent();
   const capture = createCaptureRuntime();
-  await executeSystemAgentOperation(operation, capture.runtime, {
+  await executeCapturedSystemAgentOperation(operation, capture.runtime, {
     approved: true,
     auditDetails: buildAuditDetails(input),
     deps: input.deps,
