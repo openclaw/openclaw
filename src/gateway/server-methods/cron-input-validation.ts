@@ -5,7 +5,7 @@ import {
   readStringField,
 } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { resolveAgentDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
+import { resolveAgentDir, tryResolveAmbientOwnerAgentId } from "../../agents/agent-scope.js";
 import type { AuthProfileAuthorization } from "../../agents/auth-profiles/authorization-contract.js";
 import { resolveCliRuntimeExecutionProvider } from "../../agents/model-runtime-aliases.js";
 import { captureScheduledOperatorSource } from "../../agents/operator-run-recovery-source.js";
@@ -13,7 +13,10 @@ import { resolveSimpleCompletionSelectionForAgent } from "../../agents/simple-co
 import { attributeDelegatedSessionCreator } from "../../config/sessions/session-entry-provenance.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { tryResolveCronJobEffectiveAgentId } from "../../cron/agent-id.js";
+import {
+  resolveCronJobEffectiveAgentId,
+  tryResolveCronJobEffectiveAgentId,
+} from "../../cron/agent-id.js";
 import {
   assertValidCronAnnounceDelivery,
   assertValidCronFailureAlert,
@@ -40,6 +43,7 @@ import {
   resolveCronSessionTargetSessionKey,
 } from "../../cron/session-target.js";
 import { cronJobUsesToolRuntime } from "../../cron/tools-allow.js";
+import type { CronAgentScope } from "../../cron/types-shared.js";
 import type { CronJob, CronJobCreate, CronJobPatch, CronStoredJob } from "../../cron/types.js";
 import { resolveTargetPrefixedChannel } from "../../infra/outbound/channel-target-prefix.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
@@ -373,7 +377,7 @@ export async function captureCronCreatorSession(
       ? await captureCronInferenceForCaller(
           {
             cfg,
-            agentId: agentId ?? resolveDefaultAgentId(cfg),
+            agentId: resolveCronInferenceOwnerAgentId(job, cfg, agentId),
             model: job.payload.model,
             isGmailHook:
               (job.payload.externalContentSource ??
@@ -438,7 +442,7 @@ export async function captureCronCreatorSession(
                   }
                   return selected;
                 })()
-              : (loaded?.agentId ?? agentId ?? resolveDefaultAgentId(cfg)),
+              : resolveCronInferenceOwnerAgentId(job, cfg, loaded?.agentId ?? agentId),
             sessionKey: loaded?.canonicalKey,
             sourceRunId:
               caller.client?.internal?.agentRuntimeIdentity?.operationalRunInstance.runId ??
@@ -472,6 +476,15 @@ export async function captureCronCreatorSession(
   }
 }
 
+/** Agent-less jobs run under the scheduler's ambient owner, so account capture selects that same agent. */
+function resolveCronInferenceOwnerAgentId(
+  job: CronAgentScope,
+  cfg: OpenClawConfig,
+  explicitAgentId?: string,
+): string {
+  return explicitAgentId ?? resolveCronJobEffectiveAgentId(job, tryResolveAmbientOwnerAgentId(cfg));
+}
+
 /** Only an explicitly selected account changes an existing job’s inference ownership. */
 export async function captureCronUpdatedInferenceBinding(
   nextJob: CronStoredJob,
@@ -483,7 +496,7 @@ export async function captureCronUpdatedInferenceBinding(
     return undefined;
   }
   const model = patch.payload && "model" in patch.payload ? patch.payload.model : undefined;
-  const agentId = nextJob.agentId ?? resolveDefaultAgentId(cfg);
+  const agentId = resolveCronInferenceOwnerAgentId(nextJob, cfg);
   const selection = model
     ? resolveSimpleCompletionSelectionForAgent({ cfg, agentId, modelRef: model })
     : null;
