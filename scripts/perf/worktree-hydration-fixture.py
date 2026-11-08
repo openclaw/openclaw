@@ -16,6 +16,8 @@ repository-wide promisor scan without copying production data. Creation is exclu
 --extra-refs 20000 adds distinct session tips in 256 packs; --advancing --shallow
 requires a changed-tip refresh from a valid shallow boundary. --negotiation-tip
 compares restricted hydration tips against the prior all-ref scan during --creation.
+--refresh-negotiation compares restricted default-branch refresh instead; both
+arms retain the current hydration command. Pass the saved baseline base-ref.ts.
 Acceptance: identical commit/bytes and one batch fetch, fewer pack reads and lower
 hydration CPU/wall time; no >20% owner regression. Use five AB/BA and five A/A pairs.
 """
@@ -38,10 +40,15 @@ if "--measure" in sys.argv:
     assert baseline.is_file()
     creation = "--creation" in sys.argv
     negotiation = "--negotiation-tip" in sys.argv
+    refresh = "--refresh-negotiation" in sys.argv
     mode = "creation" if creation else "allocation" if "--allocation" in sys.argv else "timing"
     if creation:
         candidate = Path("src/agents/worktrees/object-hydration.ts").read_text()
-        if negotiation:
+        if refresh:
+            assert not negotiation
+            assert "--negotiation-tip=${cachedCommit}" in Path("src/agents/worktrees/base-ref.ts").read_text()
+            assert "--negotiation-tip=" not in baseline.read_text()
+        elif negotiation:
             assert candidate.replace(
                 "        // Even refetch's noop negotiator otherwise parses every local ref tip.\n"
                 "        `--negotiation-tip=${commit}`,\n", "") == baseline.read_text()
@@ -75,7 +82,12 @@ if "--measure" in sys.argv:
             metrics = arm_root / "git-metrics"
             metrics.mkdir()
             if creation:
-                rewrite = ('''for ((i=0; i<${#args[@]}; i++)); do
+                rewrite = ('''if [[ " $* " != *" --refetch "* ]]; then
+  for ((i=0; i<${#args[@]}; i++)); do
+    [[ "${args[i]}" != --negotiation-tip=* ]] || unset 'args[i]'
+  done
+fi
+''' if refresh else '''for ((i=0; i<${#args[@]}; i++)); do
   [[ "${args[i]}" != --negotiation-tip=* ]] || unset 'args[i]'
 done
 ''' if negotiation else '''if [[ " $* " == *" rev-list "* && " $* " == *" --missing=print "* ]]; then
@@ -98,7 +110,7 @@ fi
                 command = ["node", "--import", "./scripts/tsx.mjs",
                            "scripts/perf/worktree-creation-measure.ts", "--repo", str(clone),
                            "--output", str(arm_root / "creation"), "--samples", "1", "--default-base"]
-                if negotiation:
+                if negotiation or refresh:
                     target = subprocess.check_output(
                         [actual_git, "-C", str(root / "origin.git"), "rev-parse", "HEAD"],
                         text=True).strip()
