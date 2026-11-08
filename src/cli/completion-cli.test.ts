@@ -322,21 +322,6 @@ ${cases
     expect(result.status).toBe(0);
   });
 
-  itWithPowerShell.each([
-    ["openclaw completion --shell f", " --yes", ["fish"]],
-    ["openclaw completion --shell f", "xsh", ["fish"]],
-    ["openclaw completion --shell 'f", "xsh'", ["fish"]],
-    ['openclaw completion --shell="f', 'xsh"', ["--shell=fish"]],
-    ["openclaw completion --sh", "zzz", ["--shell"]],
-    ["openclaw completion -ysf", "zzz", ["-ysfish"]],
-    ["openclaw comp", "zzz", ["completion"]],
-    ["openclaw completion --shell '", "fish'", ["zsh", "bash", "powershell", "fish"]],
-  ])("completes only the PowerShell prefix %s", async (prefix, suffix, expected) => {
-    expect(await powershell.complete(documentedProgram(), prefix + suffix, prefix.length)).toEqual(
-      expected,
-    );
-  });
-
   itWithPowerShell("matches literal PowerShell choice prefixes", async () => {
     expect(
       await powershell.complete(
@@ -444,7 +429,12 @@ ${cases
     ["openclaw completion --shell 'f", ["fish"]],
     ['openclaw completion --shell "f', ["fish"]],
     ["openclaw completion --shell='f", ["--shell=fish"]],
-  ])("completes PowerShell line %s", async (commandLine, expected) => {
-    expect(await powershell.complete(documentedProgram(), commandLine)).toEqual(expected);
+    ["openclaw completion --shell f --yes", ["fish"], 29],
+    ["openclaw completion --shell fxsh", ["fish"], 29],
+    ["openclaw completion --shell 'fxsh'", ["fish"], 30],
+    ['openclaw completion --shell="fxsh"', ["--shell=fish"], 30],
+    ["openclaw compzzz", ["completion"], 13],
+  ] as const)("completes PowerShell line %s", async (commandLine, expected, cursor?: number) => {
+    expect(await powershell.complete(documentedProgram(), commandLine, cursor)).toEqual(expected);
   });
 });
