@@ -28,7 +28,11 @@ Local source candidate (base `d59f00281eb02167a86b57c42f04b2b59ed203fe`): full b
 
 Four durable incoming/outgoing integration cases pass. Discord proof now uses the actual production message-handler composition and listener admission, not a test copy of its dispatcher registration. Gateway occurrence tests (22), existing message-tool completion/negative controls (68), prompt-prefix tests (14), and Discord ingress-recovery siblings pass. Cold compiler preparation adds command wall time. An earlier candidate shard failed because a fixture reopened the Signal receipt namespace with incompatible options; the fixture was corrected to match the production options without erasing state or weakening assertions. The affected receipt/restart test passes. Historical failure is retained in the coordinating proof trail.
 
-Exact committed source, final lint/format, CI and independent review results will be recorded at publication; none are implied by build or preflight success. CI seconds are not yet available.
+Published as openclaw/openclaw#195021, related issue #195017. Comprehensive Spark-2 review of base `d59f00281eb02167a86b57c42f04b2b59ed203fe` / source `ee89da0872a7c92a09324da593e2fd2c8cbbc7d2` completed clean (0 findings), exact-tuple qualified, comprehensive P3/native and applied P3. This is historical evidence, not clearance for later revisions.
+
+Initial ready-PR CI exposed two in-scope proof defects: the CLI integration fixture registered channel actions without initializing their plugin-instance runtime, and net regression-test growth lacked its dedicated allocation. The fixture now installs the real registry-owned runtime in the same plugin instance; the real MCP/provider-authority suite passes 43/43 with existing abort/revocation assertions unchanged. The dedicated 678-line allocation covers this change's justified ingress/receipt/replay/identity regressions, without editing the shared scalar. Ratchet, lint and format pass. Original failures and the failed outside-instance fixture repair are retained in the coordinating proof trail. Test time is under five seconds per new integration file; initial CI's affected authority file took about ten seconds. Broad CI job seconds include compilation/setup and are not a per-test cost.
+
+Final-head CI/native review and SDK API rendering remain pending; no overall completion or live delivery is claimed.
 
 ## Simplification and limits
 

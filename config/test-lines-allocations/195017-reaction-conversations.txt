@@ -1,0 +1,4 @@
+# Real Discord/Signal ingress+receipt/replay boundaries, gateway occurrence identity,
+# and the CLI provider-authority fixture's registry-owned runtime initialization.
+# No shared scalar change; distinct regressions with injected external I/O only.
+678
