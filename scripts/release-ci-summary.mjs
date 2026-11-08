@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { closeSync, mkdtempSync, openSync, readFileSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import process from "node:process";
@@ -64,7 +64,6 @@ import {
   resolveVerifierIdentity,
   validateTrustedProducerIdentity,
 } from "./lib/release-evidence-identity.mjs";
-import { createReleaseGhReadRetry } from "./lib/release-gh-read-retry.mjs";
 import { resolveReleasePublishInputs } from "./lib/release-publish-inputs.mjs";
 import {
   evaluateReleaseChildPolicy,
@@ -156,9 +155,16 @@ const HISTORICAL_MANIFEST_RERUN_GROUP_CHILD_KEYS = new Map([
   ["qa", ["releaseChecks"]],
 ]);
 
-function evidenceReadRetryDelay(error, attempt) {
+function evidenceReadRetryDelay(args, error, attempt) {
+  // Only these argument shapes are GETs; fields, input, methods, and GraphQL
+  // can mutate state and must never acquire retries through this read wrapper.
+  const isGet =
+    args[0] === "api" &&
+    /^(?:repos\/|rate_limit$)/u.test(args[1] ?? "") &&
+    (args.length === 2 || (args.length === 3 && args[2] === "--allow-escape-sequences"));
   const diagnostic = `${error?.message ?? ""}\n${error?.stderr ?? ""}`;
   if (
+    !isGet ||
     attempt >= 3 ||
     /HTTP [1-4][0-9]{2}\b/u.test(diagnostic) ||
     classifyReleaseGhTransportError(error) !== "transient"
@@ -172,49 +178,43 @@ export function runReleaseCiGh(args, params = {}) {
   const execFileSyncImpl = params.execFileSyncImpl ?? execFileSync;
   const timeoutMs = params.timeoutMs ?? GH_COMMAND_TIMEOUT_MS;
   const stdio = params.stdio ?? ["ignore", "pipe", "pipe"];
-  const retry = createReleaseGhReadRetry(args, params);
-  for (;;) {
+  for (let attempt = 0; ; attempt += 1) {
     try {
-      return retry.body(
-        execGhRead(
-          retry.args,
-          {
-            encoding: "utf8",
-            killSignal: "SIGKILL",
-            maxBuffer: 64 * 1024 * 1024,
-            stdio,
-            timeout: retry.timeout(timeoutMs),
-          },
-          { execFileSyncImpl },
-        ),
+      return execGhRead(
+        args,
+        {
+          encoding: "utf8",
+          killSignal: "SIGKILL",
+          maxBuffer: 64 * 1024 * 1024,
+          stdio,
+          timeout: timeoutMs,
+        },
+        { execFileSyncImpl },
       );
     } catch (error) {
       Atomics.wait(
         new Int32Array(new SharedArrayBuffer(4)),
         0,
         0,
-        retry.delay(error, (failure, count) => evidenceReadRetryDelay(failure, count)),
+        evidenceReadRetryDelay(args, error, attempt),
       );
     }
   }
 }
 
 async function ghAsync(args, { smallerPageFallback = false } = {}) {
-  const retry = createReleaseGhReadRetry(args);
-  for (;;) {
+  for (let attempt = 0; ; attempt += 1) {
     try {
-      return retry.body(
-        await execGhReadAsync(retry.args, {
-          killSignal: "SIGKILL",
-          maxBuffer: 64 * 1024 * 1024,
-          timeout: retry.timeout(GH_COMMAND_TIMEOUT_MS),
-        }),
-      );
+      return await execGhReadAsync(args, {
+        killSignal: "SIGKILL",
+        maxBuffer: 64 * 1024 * 1024,
+        timeout: GH_COMMAND_TIMEOUT_MS,
+      });
     } catch (error) {
       if (smallerPageFallback && isReleaseGhServerError(error)) {
         throw error;
       }
-      await sleep(retry.delay(error, (failure, count) => evidenceReadRetryDelay(failure, count)));
+      await sleep(evidenceReadRetryDelay(args, error, attempt));
     }
   }
 }
@@ -254,46 +254,28 @@ export function artifactDownloadTimeoutMs(sizeInBytes) {
   );
 }
 
-export function downloadArtifactZip(
-  artifactId,
-  destination,
-  sizeInBytes,
-  repository = DEFAULT_REPO,
-  params = {},
-) {
+function downloadArtifactZip(artifactId, destination, sizeInBytes, repository = DEFAULT_REPO) {
   const timeout = sizeInBytes ? artifactDownloadTimeoutMs(sizeInBytes) : GH_COMMAND_TIMEOUT_MS;
-  const args = artifactDownloadArgs(artifactId, repository);
-  const retry = createReleaseGhReadRetry(args, {
-    ...params,
-    budgetMs: Math.max(timeout, 10 * 60_000),
-  });
-  for (;;) {
+  for (let attempt = 1; attempt <= ARTIFACT_DOWNLOAD_ATTEMPTS; attempt += 1) {
+    const output = openSync(destination, "w");
     try {
-      // These are bounded manifest/plan archives (not package tarballs). Capture
-      // the headers separately from the exact ZIP bytes; never write headers to
-      // the archive, or reuse partial output from a failed attempt.
-      const output = (params.execFileSyncImpl ?? execFileSync)(resolvePlainGhBin(), retry.args, {
+      execFileSync(resolvePlainGhBin(), artifactDownloadArgs(artifactId, repository), {
         env: plainGhAuthenticatedEnv(),
         killSignal: "SIGKILL",
-        maxBuffer: MAX_MANIFEST_ARTIFACT_ZIP_BYTES + 64 * 1024,
-        stdio: ["ignore", "pipe", "pipe"],
-        timeout: retry.timeout(timeout),
+        maxBuffer: 64 * 1024 * 1024,
+        stdio: ["ignore", output, "pipe"],
+        timeout,
       });
-      writeFileSync(destination, retry.body(output));
       return;
     } catch (error) {
-      const delay = retry.delay(error, (failure, attempt) => {
-        if (
-          attempt >= ARTIFACT_DOWNLOAD_ATTEMPTS - 1 ||
-          classifyReleaseGhTransportError(failure) !== "transient"
-        ) {
-          throw failure;
-        }
-        return 0;
-      });
-      (params.sleep ?? ((ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms)))(
-        delay,
-      );
+      if (
+        attempt === ARTIFACT_DOWNLOAD_ATTEMPTS ||
+        classifyReleaseGhTransportError(error) !== "transient"
+      ) {
+        throw error;
+      }
+    } finally {
+      closeSync(output);
     }
   }
 }

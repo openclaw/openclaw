@@ -948,7 +948,7 @@ import fs from "node:fs";
 const args = process.argv.slice(2);
 fs.appendFileSync(${JSON.stringify(plainLog)}, JSON.stringify(args) + "\\n");
 if (process.env.GH_TOKEN !== "wrapper-only-token") throw new Error("missing wrapper authentication");
-if (JSON.stringify(args) !== ${JSON.stringify(JSON.stringify(["api", `repos/openclaw/openclaw/actions/artifacts/${artifactId}/zip`, "--include"]))}) throw new Error("plain gh used for evidence read");
+if (JSON.stringify(args) !== ${JSON.stringify(JSON.stringify(["api", `repos/openclaw/openclaw/actions/artifacts/${artifactId}/zip`]))}) throw new Error("plain gh used for evidence read");
 process.stdout.write(fs.readFileSync(${JSON.stringify(archivePath)}));
 `,
         { mode: 0o755 },
@@ -997,16 +997,11 @@ process.stdout.write(JSON.stringify(createReleaseEvidenceClient("openclaw/opencl
           "api",
           `repos/openclaw/openclaw/actions/jobs/${fixture.parentJob.id}/logs`,
           "--allow-escape-sequences",
-          "--include",
         ]),
       );
       expect(shimCalls).not.toContain(`/actions/artifacts/${artifactId}/zip`);
       expect(readFileSync(plainLog, "utf8").trim()).toBe(
-        JSON.stringify([
-          "api",
-          `repos/openclaw/openclaw/actions/artifacts/${artifactId}/zip`,
-          "--include",
-        ]),
+        JSON.stringify(["api", `repos/openclaw/openclaw/actions/artifacts/${artifactId}/zip`]),
       );
     },
   );
@@ -1115,7 +1110,7 @@ describe("runReleaseCiGh", () => {
     expect(execFileSyncImpl).toHaveBeenCalledOnce();
     expect(execFileSyncImpl).toHaveBeenCalledWith(
       expect.any(String),
-      ["api", "repos/openclaw/openclaw/actions/runs/1", "--include"],
+      ["api", "repos/openclaw/openclaw/actions/runs/1"],
       expect.objectContaining({
         encoding: "utf8",
         killSignal: "SIGKILL",
