@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { createPrepublishPluginRegistryArtifact } from "../../scripts/prepublish-plugin-registry-artifact.mjs";
@@ -47,7 +47,7 @@ function expectNoPublication(source: ReturnType<typeof fixture>) {
 }
 
 describe("selected-source prepublish cohort admission", () => {
-  it("rejects a later incompatible runtime through the real CLI before any build or output", () => {
+  it("admits an exact host/runtime pair below the floor through the real CLI", () => {
     const source = fixture();
     writePolicy(source.repoRoot, floorPolicy("2026.8.2"));
     source.sourceSha = commitRegistrySource(source.repoRoot);
@@ -69,11 +69,11 @@ describe("selected-source prepublish cohort admission", () => {
       ],
       { encoding: "utf8" },
     );
-    expect(result.status).toBe(1);
-    expect(result.stderr).toContain(`${RUNTIME} candidate ${VERSION}`);
-    expect(result.stderr).toContain(`minimum 2026.8.2 at ${source.sourceSha}`);
-    expect(result.stdout).toBe("");
-    expectNoPublication(source);
+    expect(result.status, result.stderr).toBe(0);
+    const manifest = JSON.parse(readFileSync(JSON.parse(result.stdout).manifestPath, "utf8"));
+    expect(manifest.packages).toEqual(
+      expect.arrayContaining([expect.objectContaining({ name: RUNTIME, version: VERSION })]),
+    );
   });
 
   it.each([VERSION, "2026.7.5"])("packages an exact or newer cohort against floor %s", (floor) => {
@@ -87,11 +87,14 @@ describe("selected-source prepublish cohort admission", () => {
     );
   });
 
-  it.each(["floor", "packed identity"])(
+  it.each(["invalid floor", "packed identity"])(
     "validates prepared %s before copying any package",
     (failure) => {
       const source = fixture();
-      writePolicy(source.repoRoot, floorPolicy(failure === "floor" ? "2026.8.2" : VERSION));
+      writePolicy(
+        source.repoRoot,
+        floorPolicy(failure === "invalid floor" ? "invalid" : "2026.8.2"),
+      );
       source.sourceSha = commitRegistrySource(source.repoRoot);
       const preparedBundleDir = tempDirs.make("prepublish-cohort-prepared-");
       const entries = ["openclaw", RUNTIME].map((packageName, index) => {
@@ -115,7 +118,7 @@ describe("selected-source prepublish cohort admission", () => {
       expect(() =>
         createPrepublishPluginRegistryArtifact({ ...source, preparedBundleDir }),
       ).toThrow(
-        failure === "floor"
+        failure === "invalid floor"
           ? `${RUNTIME} candidate ${VERSION}`
           : `tarball identity mismatch for ${RUNTIME}`,
       );
@@ -123,8 +126,9 @@ describe("selected-source prepublish cohort admission", () => {
     },
   );
 
-  it("checks every source identity before building an earlier package", () => {
+  it("rejects a below-floor runtime older than the host before building any package", () => {
     const source = fixture();
+    writePolicy(source.repoRoot, floorPolicy("2026.8.2"));
     writeJson(path.join(source.repoRoot, "extensions/z-runtime/package.json"), {
       name: RUNTIME,
       version: "2026.7.5",
@@ -210,10 +214,10 @@ describe("selected-source prepublish cohort admission", () => {
     writePolicy(source.repoRoot, floorPolicy(VERSION));
     source.sourceSha = commitRegistrySource(source.repoRoot);
     expect(createPrepublishPluginRegistryArtifact(source).manifest.packages).toHaveLength(2);
-    writePolicy(source.repoRoot, floorPolicy("2026.8.2"));
+    writePolicy(source.repoRoot, floorPolicy("invalid"));
     source.sourceSha = commitRegistrySource(source.repoRoot);
     source.outputDir = path.join(tempDirs.make("prepublish-cohort-next-"), "artifact");
-    expect(() => createPrepublishPluginRegistryArtifact(source)).toThrow("minimum 2026.8.2");
+    expect(() => createPrepublishPluginRegistryArtifact(source)).toThrow("minimum invalid");
     expect(existsSync(source.outputDir)).toBe(false);
   });
 });

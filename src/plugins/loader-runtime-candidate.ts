@@ -1,10 +1,10 @@
 import fs from "node:fs";
 import path from "node:path";
+import { isRuntimeAdmissibleForFloor } from "../../scripts/lib/release-version.mjs";
 import { describeRootFileOpenFailure } from "../infra/boundary-file-read.js";
 import { resolveRealpathOrAbsolute } from "../infra/boundary-path.js";
 import type { DeferredPluginMigration } from "../infra/deferred-plugin-migrations.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import { compareOpenClawReleaseVersions } from "../infra/npm-registry-spec.js";
 import { resolveCompatibilityHostVersion } from "../version.js";
 import { inspectBundleMcpRuntimeSupport } from "./bundle-mcp.js";
 import {
@@ -252,7 +252,7 @@ export function* loadRuntimePluginCandidate(params: {
     minimumCompatibleVersion &&
     manifestRecord.packageName === runtimePackage.npmSpec &&
     packageVersion &&
-    (compareOpenClawReleaseVersions(packageVersion, minimumCompatibleVersion) ?? 0) < 0
+    isRuntimeAdmissibleForFloor(packageVersion, hostVersion, minimumCompatibleVersion) === false
   ) {
     // A broad pluginApi range cannot prove lazy SDK imports from an older runtime still work.
     yield;

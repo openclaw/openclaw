@@ -28,4 +28,9 @@ export function collectReleaseVersionFloorErrors(
   version: string | ParsedReleaseVersion | null,
 ): string[];
 export function compareReleaseVersions(left: string, right: string): number | null;
+export function isRuntimeAdmissibleForFloor(
+  runtimeVersion: string,
+  hostVersion: string,
+  minimum: string,
+): boolean | null;
 export function isStableReleaseVersionAtLeast(version: string, minimum: string): boolean;

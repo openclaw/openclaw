@@ -4,7 +4,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { compareReleaseVersions } from "./lib/release-version.mjs";
+import { isRuntimeAdmissibleForFloor } from "./lib/release-version.mjs";
 
 export const PREPUBLISH_PLUGIN_REGISTRY_MANIFEST = "prepublish-plugin-registry.json";
 const SCHEMA = "openclaw.prepublish-plugin-registry/v1";
@@ -330,14 +330,15 @@ process.stdout.write(JSON.stringify(candidates));`,
       continue;
     }
     const floor = candidate.minimumCompatibleVersion;
-    const comparison =
+    // Source and prepared package identities already match the root host version.
+    const admissible =
       typeof floor === "string" &&
       floor === floor.trim() &&
       typeof candidateVersion === "string" &&
       candidateVersion === candidateVersion.trim()
-        ? compareReleaseVersions(candidateVersion, floor)
+        ? isRuntimeAdmissibleForFloor(candidateVersion, candidateVersion, floor)
         : null;
-    if (comparison === null || comparison < 0) {
+    if (admissible !== true) {
       throw new Error(
         `${candidate.npmSpec} candidate ${candidateVersion} does not satisfy selected-source minimum ${String(floor)} at ${sourceSha}; align the release cohort before packaging`,
       );
