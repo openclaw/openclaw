@@ -41,6 +41,15 @@ class TestPackageSkillSecurity(TestCase):
         with zipfile.ZipFile(result) as archive:
             return archive.namelist()
 
+    def test_returns_none_for_non_utf8_skill_md(self):
+        skill_dir = self.create_skill("non-utf8-skill")
+        (skill_dir / "SKILL.md").write_bytes(
+            b"---\nname: non-utf8-skill\ndescription: ok \xff\n---\n"
+        )
+        out_dir = self.temp_dir / "out"
+        self.assertIsNone(package_skill(str(skill_dir), str(out_dir)))
+        self.assertFalse((out_dir / "non-utf8-skill.skill").exists())
+
     def test_packages_regular_entry_and_rejects_linked_entry(self):
         skill_dir = self.create_skill("normal-skill")
         nested = skill_dir / "lib" / "helpers"
