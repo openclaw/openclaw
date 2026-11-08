@@ -1,4 +1,8 @@
 import type { NodeWorkerWorkspaceQuiescenceInput } from "../../worker/node-workspace-protocol.js";
+import {
+  REMOTE_WINDOWS_ACQUIRE_WORKSPACE_LEASE_JS,
+  windowsWorkspaceQuiescenceScript,
+} from "./workspace-quiescence-windows-scripts.js";
 
 const REMOTE_QUIESCENCE_CONTEXT_JS = String.raw`const childProcess = require("node:child_process");
 const crypto = require("node:crypto");
@@ -377,6 +381,7 @@ const sharedHost = isolationMode === "shared-host";
 if (ownedWatchdog && !sharedHost) throw new Error("native quiescence requires a shared host");
 let leasePath = path.join(leaseDirectory, workspaceKey + "." + nonce + ".json");
 ${REMOTE_QUIESCENCE_LEASE_JS}
+${REMOTE_WINDOWS_ACQUIRE_WORKSPACE_LEASE_JS}
 ${REMOTE_QUIESCENCE_PS_JS}
 ${REMOTE_QUIESCENCE_CONTROL_JS}
 const frozen = new Map();
@@ -393,28 +398,7 @@ function writeLease(processes = [...frozen].map(([pid, start]) => ({ pid, start 
 }
 function acquireWorkspaceLease() {
 if (process.platform === "win32" && sharedHost) {
-  withWindowsWorkspaceLease(windowsLeaseDatabasePath, workspaceKey, (raw) => {
-    if (raw !== null) {
-      const parsed = JSON.parse(raw);
-      if (!/^[a-f0-9]{32}$/.test(parsed?.nonce || "")) {
-        throw new Error("invalid Windows shared-host workspace quiescence lease");
-      }
-      const candidate = parseWindowsLease(raw, parsed.nonce);
-      if (candidate.expiresAtMs > Date.now()) {
-        throw new Error("workspace quiescence lease is already active");
-      }
-    }
-    const lease = {
-      version: 1,
-      nonce,
-      sharedHost: true,
-      processes: [],
-      watchdog: null,
-      expiresAtMs: Date.now() + watchdogTimeoutMs,
-    };
-    return JSON.stringify(lease);
-  });
-  process.stderr.write("workspace quiescence: Windows shared host declared; using manifest fences without process freezing\n");
+  acquireWindowsWorkspaceLease(nonce, watchdogTimeoutMs);
   return;
 }
 if (typeof process.getuid !== "function") throw new Error("workspace quiescence requires POSIX");
@@ -669,6 +653,11 @@ if (ownedWatchdog) {
 })();
 `;
 
+const REMOTE_WINDOWS_WORKSPACE_QUIESCE_JS = windowsWorkspaceQuiescenceScript(
+  REMOTE_QUIESCENCE_CONTEXT_JS,
+  REMOTE_QUIESCENCE_LEASE_JS,
+);
+
 const REMOTE_QUIESCENCE_CONTROL_CONTEXT_JS = String.raw`${REMOTE_QUIESCENCE_CONTEXT_JS}
 const nonce = process.argv[2];
 const leasePath = path.join(leaseDirectory, workspaceKey + "." + nonce + ".json");
@@ -705,4 +694,19 @@ export function workspaceQuiescenceArgv(
     args.push(watchdogLifetime, ...(operation.action === "acquire" ? [operation.nonce] : []));
   }
   return ["node", "-e", scripts[operation.action], root, ...args];
+}
+
+export function legacyWindowsWorkspaceQuiescenceAcquireArgv(
+  root: string,
+  operation: Extract<NodeWorkerWorkspaceQuiescenceInput, { action: "acquire" }>,
+  hostMode: "shared-host" | "dedicated",
+): string[] {
+  return [
+    "node",
+    "-e",
+    REMOTE_WINDOWS_WORKSPACE_QUIESCE_JS,
+    root,
+    String(operation.timeoutMs),
+    hostMode,
+  ];
 }

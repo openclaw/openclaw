@@ -7,12 +7,23 @@ import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
-import { workspaceQuiescenceArgv } from "./workspace-quiescence-scripts.js";
+import {
+  legacyWindowsWorkspaceQuiescenceAcquireArgv,
+  workspaceQuiescenceArgv,
+} from "./workspace-quiescence-scripts.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-function quiescenceCommand(...args: Parameters<typeof workspaceQuiescenceArgv>) {
-  return [process.execPath, ...workspaceQuiescenceArgv(...args).slice(1)];
+function quiescenceCommand(
+  root: string,
+  operation: Parameters<typeof workspaceQuiescenceArgv>[1],
+  hostMode: Parameters<typeof workspaceQuiescenceArgv>[2],
+) {
+  const argv =
+    operation.action === "acquire"
+      ? legacyWindowsWorkspaceQuiescenceAcquireArgv(root, operation, hostMode)
+      : workspaceQuiescenceArgv(root, operation, hostMode);
+  return [process.execPath, ...argv.slice(1)];
 }
 
 function leaseDatabase(home: string) {

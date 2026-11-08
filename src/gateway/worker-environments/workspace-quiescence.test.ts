@@ -4,6 +4,17 @@ import type { WorkerWorkspaceCommand } from "./tunnel-contract.js";
 import { createWorkerWorkspaceQuiescence } from "./workspace-quiescence.js";
 
 describe("worker workspace quiescence", () => {
+  it("refuses Windows dedicated hosts before dispatch", async () => {
+    const runWorkspaceCommand = vi.fn();
+    await expect(
+      createWorkerWorkspaceQuiescence({
+        ownerSignal: new AbortController().signal,
+        sharedHost: false,
+        runWorkspaceCommand,
+      })(String.raw`C:\workspace`),
+    ).rejects.toThrow("requires a shared host");
+    expect(runWorkspaceCommand).not.toHaveBeenCalled();
+  });
   it.each(["transport", "acknowledgement", "cleanup", "owner-closed", "legacy"] as const)(
     "recovers only an owned native nonce after failed acquisition (%s)",
     async (failure) => {
@@ -44,7 +55,7 @@ describe("worker workspace quiescence", () => {
         sharedHost: true,
         nativeWatchdog: async () => failure !== "legacy",
         runWorkspaceCommand,
-      })("/workspace");
+      })(String.raw`C:\workspace`);
       if (failure === "cleanup") {
         await expect(acquiring).rejects.toMatchObject({
           errors: [
