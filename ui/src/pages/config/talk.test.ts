@@ -417,7 +417,7 @@ describe("Talk device and voice wake settings", () => {
     )!;
     expect(section).toBeDefined();
     const rows = settingRows(section);
-    expect(rows.map(rowTitle)).toEqual(["Voice Wake"]);
+    expect(rows.map(rowTitle)).toEqual(["Voice wake"]);
     const next = !rows[0]!.querySelector<HTMLInputElement>(".settings-toggle__input")!.checked;
     rows[0]!.click();
     expect(nativeDeviceSettings.set).toHaveBeenCalledExactlyOnceWith(
@@ -702,11 +702,11 @@ describe("Talk device and voice wake settings", () => {
     const row = (title: string) => rows.find((element) => rowTitle(element) === title)!;
     const expectWakeDisabled = (disabled: boolean) =>
       expect(
-        row("Voice Wake").querySelector(".settings-toggle__input")?.hasAttribute("disabled"),
+        row("Voice wake").querySelector(".settings-toggle__input")?.hasAttribute("disabled"),
       ).toBe(disabled);
     expect(page.textContent).toContain("This Mac");
     expectWakeDisabled(true);
-    expect(row("Voice Wake").textContent).toContain("macOS 26");
+    expect(row("Voice wake").textContent).toContain("macOS 26");
     row("Hold Right Option to talk").click();
     expect(nativeDeviceSettings.set).toHaveBeenCalledWith(
       "voice.pushToTalkEnabled",
@@ -742,7 +742,7 @@ describe("Talk device and voice wake settings", () => {
     snapshot.voice.wakeEnabled = true;
     publishSnapshot();
     await waitForSolid(() => expectWakeDisabled(false));
-    row("Voice Wake").click();
+    row("Voice wake").click();
     expect(nativeDeviceSettings.set).toHaveBeenCalledWith(
       "voice.wakeEnabled",
       false,

@@ -74,17 +74,56 @@ struct TerminalHubScreenTests {
         #expect(script?.contains("\"gatewayUrl\":\"wss:\\/\\/gateway.example.com:8443\"") == true)
     }
 
+    @Test func `auth user script projects only the accepted Access credential`() throws {
+        let config = try Self.makeConfig(
+            url: #require(URL(string: "wss://gateway.example.com:8443")),
+            token: "secret-token",
+            password: "fallback-password")
+
+        let script = ControlUIHubPage.terminal.authUserScript(
+            config: config,
+            legacyCredentials: ["token": " accepted-token "])
+
+        #expect(script?.contains("\"nativeConnectAuth\":true") == true)
+        #expect(script?.contains("\"token\":\"accepted-token\"") == true)
+        #expect(script?.contains("secret-token") == false)
+        #expect(script?.contains("fallback-password") == false)
+    }
+
+    @Test func `Access auth user script withholds configured credentials without acceptance`() throws {
+        let config = try Self.makeConfig(
+            url: #require(URL(string: "wss://gateway.example.com:8443")),
+            token: "configured-token",
+            password: "configured-password")
+
+        let script = try #require(ControlUIHubPage.terminal.authUserScript(
+            config: config,
+            legacyCredentials: nil))
+
+        #expect(script.contains("\"nativeConnectAuth\":true"))
+        #expect(!script.contains("configured-token"))
+        #expect(!script.contains("configured-password"))
+        #expect(!script.contains("localStorage"))
+        #expect(!script.contains("privateKey"))
+        #expect(!script.contains("deviceAuthSeed"))
+    }
+
     @Test func `auth user script canonicalizes an explicit default port`() throws {
         let config = try Self.makeConfig(
             url: #require(URL(string: "wss://gateway.example.com:443")),
             token: "secret-token")
 
-        let script = ControlUIHubPage.terminal.authUserScript(
+        let genericScript = ControlUIHubPage.terminal.authUserScript(
             config: config,
-            storedOperatorToken: AuthenticatedControlUI.storedOperatorToken(config: config))
+            storedOperatorToken: nil)
+        let accessScript = ControlUIHubPage.terminal.authUserScript(
+            config: config,
+            legacyCredentials: nil)
 
-        #expect(script?.contains("\"https:\\/\\/gateway.example.com\"") == true)
-        #expect(script?.contains("\"https:\\/\\/gateway.example.com:443\"") == false)
+        #expect(genericScript?.contains("\"https:\\/\\/gateway.example.com\"") == true)
+        #expect(genericScript?.contains("\"https:\\/\\/gateway.example.com:443\"") == false)
+        #expect(accessScript?.contains("\"https:\\/\\/gateway.example.com\"") == true)
+        #expect(accessScript?.contains("\"https:\\/\\/gateway.example.com:443\"") == false)
     }
 
     @Test func `auth user script selects native signing and withholds the device grant`() throws {
@@ -122,32 +161,64 @@ struct TerminalHubScreenTests {
         #expect(script?.contains(identity.privateKey) == false)
     }
 
-    @Test func `embedded page signs only while its native operator is connected`() async throws {
-        let server = try await NativeGatewayWebSocketFixture.start(issuedDeviceTokens: ["synthetic-device-token"])
-        server.httpResponse = { _ in
-            .init(headers: ["Content-Type": "text/html"], body: Data("<!doctype html><main>Fixture</main>".utf8))
+    @Test func `retained Access page signs only for its current operator and admission`() async throws {
+        let server = try await NativeGatewayWebSocketFixture.start(issuedDeviceTokens: [], tls: true)
+        server.acceptedOperatorScopes = ["operator.read", "operator.admin"]
+        server.httpResponse = { request in
+            guard request.headers["cookie"]?.contains("CF_Authorization=") == true else {
+                return .init(status: 401)
+            }
+            if request.method == "POST", request.target == "/native-auth-effect" {
+                return .init(body: Data("effect-observed".utf8))
+            }
+            guard request.target == "/focus/terminal" else { return .init(status: 404) }
+            return .init(
+                headers: ["Content-Type": "text/html"], body: Data("<!doctype html><main>Fixture</main>".utf8))
         }
         defer { server.stop() }
         let gatewayID = "native-webview-\(UUID().uuidString)"
-        let identity = DeviceIdentityStore.loadOrCreate()
-        _ = DeviceAuthStore.storeToken(
-            deviceId: identity.deviceId,
-            role: "operator",
-            token: "synthetic-device-token",
-            scopes: ["operator.read"],
-            gatewayID: gatewayID)
-        defer { DeviceAuthStore.clearToken(deviceId: identity.deviceId, role: "operator", gatewayID: gatewayID) }
-        let config = Self.makeConfig(url: server.url(), deviceAuthGatewayID: gatewayID)
+        let tls = try GatewayTLSParams(
+            required: true,
+            expectedFingerprint: #require(server.fingerprint),
+            allowTOFU: false,
+            storeKey: nil)
+        let baseApplication = try CloudflareAccessTestTokens.application()
+        let application = try CloudflareAccessApplication(
+            origin: CloudflareAccessOrigin(server.url()),
+            issuer: baseApplication.issuer,
+            audience: baseApplication.audience)
+        let tokens = try CloudflareAccessTestTokens()
+        let sessionA = try tokens.session(subject: "retained-page-a", application: application)
+        let sessionB = try tokens.session(subject: "retained-page-b", application: application)
+        let admission = NativeGatewayAccessAdmissionFixture()
+        let registrationID = UUID()
+        func authorization(for session: CloudflareAccessSession) throws -> GatewayIngressAuthorization {
+            try GatewayIngressAuthorization(
+                origin: application.origin,
+                principal: CloudflareAccessPrincipal.verified(from: session),
+                revision: 1,
+                registrationID: registrationID,
+                headers: { _ in [:] },
+                isCurrent: { admission.isCurrent },
+                dashboardCookie: { session.dashboardCookie(for: $0) },
+                checkResponse: { _ in },
+                load: { request, operation in try await operation(request) })
+        }
+        var config = Self.makeConfig(url: server.url(), tls: tls, deviceAuthGatewayID: gatewayID)
+        config.ingressAuthorization = try authorization(for: sessionA)
+        var reassignedConfig = config
+        reassignedConfig.ingressAuthorization = try authorization(for: sessionB)
         let model = NodeAppModel(audioAdmissionInitiallyAllowed: false)
         model.activeGatewayConnectConfig = config
         var options = config.nodeOptions
         options.role = "operator"
-        options.scopes = ["operator.read"]
+        options.clientMode = "ui"
+        options.scopes = ["operator.read", "operator.admin"]
         try await model.operatorSession.connect(
             url: config.url,
             credentials: .init(token: nil, bootstrapToken: nil, password: nil),
             connectOptions: options,
-            sessionBox: nil,
+            sessionBox: config.webSocketSessionBox(),
             onConnected: {},
             onDisconnected: { _ in },
             onInvoke: { request in .init(id: request.id, ok: true) })
@@ -156,14 +227,16 @@ struct TerminalHubScreenTests {
             model.setOperatorConnected(false)
             Task { await model.operatorSession.disconnect() }
         }
-        let token = AuthenticatedControlUI.storedOperatorToken(config: config)
+        let currentRoute = await model.operatorSession.currentRoute()
+        let operatorRoute = try #require(currentRoute)
         let pageURL = try #require(ControlUIHubPage.terminal.url(config: config))
-        let content = AuthenticatedControlUIWebView(
+        let content = try AuthenticatedControlUIWebView(
             url: pageURL,
-            authScript: ControlUIHubPage.terminal.authUserScript(config: config, storedOperatorToken: token),
-            tls: nil,
-            nativeAuth: AuthenticatedControlUI.nativeAuthHandler(
-                config: config, storedOperatorToken: token, appModel: model))
+            authScript: ControlUIHubPage.terminal.authUserScript(config: config, legacyCredentials: nil),
+            tls: tls,
+            nativeGatewayAuthProvider: IOSDashboardNativeGatewayAuthProvider(appModel: model, config: config),
+            accessCookie: #require(sessionA.dashboardCookie(for: pageURL)),
+            accessAdmissionIsCurrent: { admission.isCurrent })
         let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 390, height: 844))
         window.rootViewController = UIHostingController(rootView: content)
         window.makeKeyAndVisible()
@@ -180,27 +253,52 @@ struct TerminalHubScreenTests {
             "localStorage.getItem('openclaw-device-identity-v1') === null && localStorage.length === 0") as? Bool ==
             true)
         let challenge = """
+        let reply;
         try {
-          const reply = await window.webkit.messageHandlers.OpenClawNativeGatewayAuth.postMessage({
+          reply = await window.webkit.messageHandlers.OpenClawNativeGatewayAuth.postMessage({
             id: 'fixture', nonce: 'fixture-nonce', signedAt: 1700000000000
           });
-          return Boolean(reply.result?.device?.signature);
-        } catch { return false; }
+        } catch { return 'denied'; }
+        if (!reply.result?.device?.signature) return 'denied';
+        const response = await fetch('/native-auth-effect', { method: 'POST' });
+        return response.ok ? await response.text() : 'effect-failed';
         """
         #expect(try await webView.callAsyncJavaScript(
-            challenge, arguments: [:], in: nil, contentWorld: .page) as? Bool == true)
+            challenge, arguments: [:], in: nil, contentWorld: .page) as? String == "effect-observed")
+        #expect(server.requests.filter { $0.target == "/native-auth-effect" }.count == 1)
+
+        // Keep the same page, route, admission revision and live socket. Only the current
+        // Access principal changes, so a connected=false shortcut cannot explain refusal.
+        model.activeGatewayConnectConfig = reassignedConfig
+        #expect(model.isOperatorGatewayConnected)
+        #expect(await model.operatorSession.currentOperatorScopes(ifCurrentRoute: operatorRoute) ==
+            Set(["operator.read", "operator.admin"]))
+        #expect(try await webView.callAsyncJavaScript(
+            challenge, arguments: [:], in: nil, contentWorld: .page) as? String == "denied")
+        #expect(server.requests.filter { $0.target == "/native-auth-effect" }.count == 1)
+        model.activeGatewayConnectConfig = config
+        #expect(try await webView.callAsyncJavaScript(
+            challenge, arguments: [:], in: nil, contentWorld: .page) as? String == "effect-observed")
+        #expect(server.requests.filter { $0.target == "/native-auth-effect" }.count == 2)
         model.setOperatorConnected(false)
         #expect(try await webView.callAsyncJavaScript(
-            challenge, arguments: [:], in: nil, contentWorld: .page) as? Bool == false)
+            challenge, arguments: [:], in: nil, contentWorld: .page) as? String == "denied")
         model.setOperatorConnected(true)
-        model.activeGatewayConnectConfig = try Self.makeConfig(
-            url: #require(URL(string: "ws://replacement.example:18789")), deviceAuthGatewayID: gatewayID)
         #expect(try await webView.callAsyncJavaScript(
-            challenge, arguments: [:], in: nil, contentWorld: .page) as? Bool == false)
-        model.activeGatewayConnectConfig = config
-        await model.operatorSession.disconnect()
+            challenge, arguments: [:], in: nil, contentWorld: .page) as? String == "effect-observed")
+        #expect(server.requests.filter { $0.target == "/native-auth-effect" }.count == 3)
+
+        // This endpoint records follow-up fixture I/O, not Gateway RPC authorization.
+        // Retiring A must prevent another signature and effect while its socket stays healthy.
+        admission.isCurrent = false
+        #expect(model.isOperatorGatewayConnected)
+        #expect(await model.operatorSession.currentOperatorScopes(ifCurrentRoute: operatorRoute) ==
+            Set(["operator.read", "operator.admin"]))
         #expect(try await webView.callAsyncJavaScript(
-            challenge, arguments: [:], in: nil, contentWorld: .page) as? Bool == false)
+            challenge, arguments: [:], in: nil, contentWorld: .page) as? String == "denied")
+        #expect(server.requests.filter { $0.target == "/native-auth-effect" }.count == 3)
+        #expect(await model.operatorSession.currentRoute() == operatorRoute)
+        #expect(server.roles == ["operator"])
     }
 
     @Test func `auth user script selects native signing for an empty-scope grant`() throws {
@@ -445,13 +543,16 @@ struct TerminalHubScreenTests {
         #expect(!coordinator.matchesExpectedAuthority(host: "replacement.example.com", port: 443))
     }
 
-    @Test func `auth user script is omitted without credentials`() throws {
+    @Test func `auth user script selects the matching native authentication path`() throws {
         let config = try Self.makeConfig(url: #require(URL(string: "wss://gateway.example.com")), token: "   ")
 
-        #expect(
-            ControlUIHubPage.terminal.authUserScript(config: config, storedOperatorToken: nil) == nil)
-        #expect(
-            ControlUIHubPage.terminal.authUserScript(config: nil, storedOperatorToken: nil) == nil)
+        let genericScript = ControlUIHubPage.terminal.authUserScript(config: config, storedOperatorToken: nil)
+        let accessScript = ControlUIHubPage.terminal.authUserScript(config: config, legacyCredentials: nil)
+
+        #expect(genericScript == nil)
+        #expect(accessScript?.contains("\"nativeConnectAuth\":true") == true)
+        #expect(accessScript?.contains("\"token\"") == false)
+        #expect(ControlUIHubPage.terminal.authUserScript(config: nil, storedOperatorToken: nil) == nil)
     }
 
     @Test func `authenticated Control UI follows the resolved app appearance`() async throws {
@@ -508,4 +609,9 @@ struct TerminalHubScreenTests {
 
 private enum ControlUIAppearanceTestError: Error {
     case webViewNotMounted
+}
+
+@MainActor
+private final class NativeGatewayAccessAdmissionFixture {
+    var isCurrent = true
 }

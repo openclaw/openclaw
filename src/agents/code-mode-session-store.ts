@@ -80,17 +80,22 @@ function replayAdmitted(
   ]);
   const cached = replaySnapshots.entries.get(key);
   // Custom-entry rewrites rotate generation; appends preserve earlier IDs and bytes.
-  if (
+  const prefix =
     cached?.generation === generation &&
-    cached.ids.length === entries.length &&
-    entries.every((entry, index) => isRecord(entry) && entry.id === cached.ids[index])
-  ) {
+    cached.ids.length <= entries.length &&
+    cached.ids.every((id, index) => {
+      const entry = entries[index];
+      return isRecord(entry) && entry.id === id;
+    })
+      ? cached
+      : undefined;
+  if (prefix && prefix.ids.length === entries.length) {
     replaySnapshots.entries.delete(key);
-    replaySnapshots.entries.set(key, cached);
-    return cached.projection;
+    replaySnapshots.entries.set(key, prefix);
+    return prefix.projection;
   }
   discardReplaySnapshot(key);
-  const projection = replay(entries);
+  const projection = replay(entries, prefix?.projection, prefix?.ids.length);
   // Bound metadata as well as JSON. Large histories keep the uncached replay path.
   if (entries.length > 4096 || projection.size > 1024) {
     return projection;
@@ -222,10 +227,10 @@ function applyWrites(projection: Projection, writes: ReadonlyMap<string, StoredV
   return next;
 }
 
-function replay(entries: readonly unknown[]): Projection {
-  const projection: Projection = new Map();
-  let bytes = 0;
-  for (const entry of entries) {
+function replay(entries: readonly unknown[], initial?: Projection, start = 0): Projection {
+  const writes = new Map<string, { value: unknown; networkContent: boolean } | null>();
+  for (let index = start; index < entries.length; index++) {
+    const entry = entries[index];
     if (!isRecord(entry) || entry.type !== "custom" || entry.customType !== CUSTOM_TYPE) {
       continue;
     }
@@ -247,25 +252,23 @@ function replay(entries: readonly unknown[]): Projection {
           "Code Mode session store contains invalid content provenance; repair the session before using store/load.",
         );
       }
-      const name = readKey(key);
-      const encoded = encode(value, networkContent);
-      bytes += encoded.bytes - (projection.get(name)?.bytes ?? 0);
-      projection.set(name, encoded);
+      writes.set(readKey(key), { value, networkContent });
     }
     for (const key of data.delete) {
-      const name = readKey(key);
-      bytes -= projection.get(name)?.bytes ?? 0;
-      projection.delete(name);
-    }
-    // Replay owns this map. Preserve historical budget errors, but check the
-    // total only after the entry's deletes, just like a committed cell's writes.
-    if (bytes > MAX_TOTAL_BYTES) {
-      throw new RangeError(
-        "Code Mode store exceeds 1 MiB of serialized JSON; delete keys or store less data.",
-      );
+      writes.set(readKey(key), null);
     }
   }
-  return projection;
+  // Commit admission checks historical budgets. Encode only surviving writes;
+  // applyWrites checks the final budget and leaves earlier readers' maps intact.
+  return applyWrites(
+    initial ?? new Map(),
+    new Map(
+      [...writes].map(([key, entry]) => [
+        key,
+        entry === null ? null : encode(entry.value, entry.networkContent),
+      ]),
+    ),
+  );
 }
 
 export type CodeModeSessionStoreAccess = ReturnType<typeof createCodeModeSessionStoreAccess>;

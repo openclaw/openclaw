@@ -304,6 +304,7 @@ export function renderChatAbortActionSolid(
             class="chat-send-btn chat-send-btn--stop"
             ref={primaryPointerDownRef(() => props.onPrimaryActionPointerDown)}
             onClick={() => props.onAbort?.()}
+            disabled={!props.onAbort}
             aria-label={t("chat.runControls.stop")}
           >
             <Icon name="stop" />

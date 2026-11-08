@@ -44,10 +44,10 @@ suite.define(() => {
       await expect.poll(() => rows.first().getAttribute("aria-setsize")).toBe(String(jobs.length));
       expect(await rows.count()).toBeLessThan(40);
       await page.locator(".cron-job-menu__trigger").first().click();
-      await page.getByRole("menuitem", { name: "Remove", exact: true }).waitFor();
+      await page.getByRole("menuitem", { name: "Delete", exact: true }).waitFor();
       await page.keyboard.press("Escape");
       await page
-        .getByRole("menuitem", { name: "Remove", exact: true })
+        .getByRole("menuitem", { name: "Delete", exact: true })
         .waitFor({ state: "hidden" });
       const search = page.getByRole("searchbox", { name: "Search automations" });
       await search.click();
@@ -202,7 +202,7 @@ suite.define(() => {
           .toBe(true);
         const trigger = next.locator(".cron-job-menu__trigger");
         await trigger.click();
-        await page.getByRole("menuitem", { name: "Remove", exact: true }).waitFor();
+        await page.getByRole("menuitem", { name: "Delete", exact: true }).waitFor();
         await page.keyboard.press("Escape");
         await expect
           .poll(() => trigger.evaluate((element) => element === document.activeElement))

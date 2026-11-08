@@ -400,8 +400,7 @@ extension MacNodeRuntime {
             let target: String?
             let placement: CanvasPlacement?
             if req.command == OpenClawCanvasCommand.present.rawValue {
-                let params = (try? Self.decodeParams(OpenClawCanvasPresentParams.self, from: req.paramsJSON)) ??
-                    OpenClawCanvasPresentParams()
+                let params = try Self.decodeOptionalParams(OpenClawCanvasPresentParams.self, from: req)
                 target = params.url
                 placement = params.placement.map {
                     CanvasPlacement(x: $0.x, y: $0.y, width: $0.width, height: $0.height)
@@ -455,23 +454,21 @@ private enum MacNodeCanvasTargetError: LocalizedError {
 // MARK: - Device command handling
 
 extension MacNodeRuntime {
-    private func handleCameraInvoke(_ req: BridgeInvokeRequest) async throws -> BridgeInvokeResponse {
+    /// Enumeration needs only OpenClaw consent; other camera commands also need OS authorization.
+    private func requireCameraAccess(_ osCapabilities: [Capability]) async throws {
         let services = await self.mainActorServices()
-        let includeAudio = req.command == OpenClawCameraCommand.clip.rawValue &&
-            ((try? Self.decodeParams(OpenClawCameraClipParams.self, from: req.paramsJSON).includeAudio) ?? true)
-        let cameraEnabled = Self.cameraEnabled()
-        // Enumeration needs only OpenClaw consent; other camera commands also need OS authorization.
-        let capabilities: [Capability] = req.command == OpenClawCameraCommand.list.rawValue
-            ? [.cameraEnabled] : includeAudio ? [.cameraEnabled, .camera, .microphone] : [.cameraEnabled, .camera]
         if let error = await services.missingPermissions(
-            capabilities, disabled: cameraEnabled ? [] : [.cameraEnabled])
+            [.cameraEnabled] + osCapabilities, disabled: Self.cameraEnabled() ? [] : [.cameraEnabled])
         {
             throw error
         }
+    }
+
+    private func handleCameraInvoke(_ req: BridgeInvokeRequest) async throws -> BridgeInvokeResponse {
         switch req.command {
         case OpenClawCameraCommand.snap.rawValue:
-            let params = (try? Self.decodeParams(OpenClawCameraSnapParams.self, from: req.paramsJSON)) ??
-                OpenClawCameraSnapParams()
+            let params = try Self.decodeOptionalParams(OpenClawCameraSnapParams.self, from: req)
+            try await self.requireCameraAccess([.camera])
             let delayMs = min(10000, max(0, params.delayMs ?? 2000))
             let res = try await cameraCapture.snap(
                 facing: params.facing ?? .front,
@@ -492,12 +489,13 @@ extension MacNodeRuntime {
                 height: Int(res.size.height)))
             return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: payload)
         case OpenClawCameraCommand.clip.rawValue:
-            let params = (try? Self.decodeParams(OpenClawCameraClipParams.self, from: req.paramsJSON)) ??
-                OpenClawCameraClipParams()
+            let params = try Self.decodeOptionalParams(OpenClawCameraClipParams.self, from: req)
+            let includeAudio = params.includeAudio ?? true
+            try await self.requireCameraAccess(includeAudio ? [.camera, .microphone] : [.camera])
             let res = try await cameraCapture.clip(
                 facing: params.facing ?? .front,
                 durationMs: params.durationMs,
-                includeAudio: params.includeAudio ?? true,
+                includeAudio: includeAudio,
                 deviceId: params.deviceId)
             defer { try? FileManager().removeItem(atPath: res.path) }
             guard let data = try Self.readInlineMedia(atPath: res.path) else {
@@ -519,10 +517,12 @@ extension MacNodeRuntime {
             }
             return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: payload)
         case OpenClawCameraCommand.list.rawValue:
+            try await self.requireCameraAccess([])
             let devices = await cameraCapture.listDevices()
             let payload = try Self.encodePayload(["devices": devices])
             return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: payload)
         case OpenClawCameraCommand.ptzStatus.rawValue:
+            try await self.requireCameraAccess([.camera])
             let params: OpenClawCameraPTZStatusParams
             do {
                 params = try Self.decodeParams(OpenClawCameraPTZStatusParams.self, from: req.paramsJSON)
@@ -532,6 +532,7 @@ extension MacNodeRuntime {
             let payload = try await Self.encodePayload(self.cameraPTZ.status(deviceId: params.deviceId))
             return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: payload)
         case OpenClawCameraCommand.ptzControl.rawValue:
+            try await self.requireCameraAccess([.camera])
             let params: OpenClawCameraPTZControlParams
             do {
                 params = try Self.decodeParams(OpenClawCameraPTZControlParams.self, from: req.paramsJSON)
@@ -547,8 +548,7 @@ extension MacNodeRuntime {
 
     private func handleLocationInvoke(_ req: BridgeInvokeRequest) async throws -> BridgeInvokeResponse {
         let mode = Self.locationMode()
-        let params = (try? Self.decodeParams(OpenClawLocationGetParams.self, from: req.paramsJSON)) ??
-            OpenClawLocationGetParams()
+        let params = try Self.decodeOptionalParams(OpenClawLocationGetParams.self, from: req)
         let desired = params.desiredAccuracy ??
             (Self.locationPreciseEnabled() ? .precise : .balanced)
         let services = await mainActorServices()
@@ -653,8 +653,7 @@ extension MacNodeRuntime {
     }
 
     private func handleScreenRecordInvoke(_ req: BridgeInvokeRequest) async throws -> BridgeInvokeResponse {
-        let params = (try? Self.decodeParams(OpenClawScreenRecordParams.self, from: req.paramsJSON)) ??
-            OpenClawScreenRecordParams()
+        let params = try Self.decodeOptionalParams(OpenClawScreenRecordParams.self, from: req)
         if let format = params.format?.lowercased(), !format.isEmpty, format != "mp4" {
             return Self.errorResponse(
                 req,
@@ -859,6 +858,15 @@ extension MacNodeRuntime {
             ])
         }
         return try JSONDecoder().decode(type, from: Data(json.utf8))
+    }
+
+    /// Omitted params select command defaults; supplied params that fail to decode never fall back to them.
+    private static func decodeOptionalParams<T: Decodable>(_ type: T.Type, from req: BridgeInvokeRequest) throws -> T {
+        do {
+            return try self.decodeParams(type, from: req.paramsJSON ?? "{}")
+        } catch {
+            throw OpenClawNodeError(code: .invalidRequest, message: "INVALID_REQUEST: invalid \(req.command) params")
+        }
     }
 
     private static func encodePayload(_ obj: some Encodable) throws -> String {

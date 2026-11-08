@@ -97,7 +97,7 @@ const settingsRowRoutes = [
   "debug",
 ] as const satisfies readonly RouteId[];
 
-const mobileSettingsRoutes = [...settingsRowRoutes, "logs"] as const satisfies readonly RouteId[];
+const mobileSettingsRoutes = ["profile", "plugins", "logs"] as const satisfies readonly RouteId[];
 
 const mobileStandaloneSettingsPageRoutes = ["memory-import"] as const satisfies readonly RouteId[];
 
@@ -120,7 +120,7 @@ const responsiveViewports = [
 ] as const;
 
 const standaloneHeaderCases = [
-  { route: "cron", subtitle: "Scheduled tasks and recurring agent runs." },
+  { route: "cron", subtitle: "Schedule recurring tasks for your agent." },
   { route: "usage", subtitle: "API usage and costs." },
   {
     route: "memory-import",
@@ -338,7 +338,7 @@ suite.define(() => {
     }
   });
 
-  it("aligns every mobile settings page with the topbar content", async () => {
+  it("aligns mobile settings shells and page-owned columns with the topbar", async () => {
     const context = await suite.browser.newContext({
       colorScheme: "dark",
       locale: "en-US",
@@ -368,7 +368,7 @@ suite.define(() => {
           };
         }, route);
 
-      // The desktop audit below owns cold CSS coverage; these rows check shell insets.
+      // Keep an ordinary settings route and both workspace overrides; page geometry stays below.
       for (const [index, route] of mobileSettingsRoutes.entries()) {
         const pathname = pathForRoute(route);
         if (index === 0) {
@@ -868,7 +868,7 @@ suite.define(() => {
           });
         }
         await page.locator(".agent-select__trigger").click();
-        const pickerTitle = page.locator(".agent-select__menu-title");
+        const pickerTitle = page.locator(".agent-select__menu .oc-menu-heading__label");
         await pickerTitle.waitFor();
         expect(await pickerTitle.textContent()).toBe("Agent");
         expect(

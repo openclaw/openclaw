@@ -45,13 +45,14 @@ suite.define(() => {
         });
         await page.goto(suite.server.baseUrl);
         const gate = page.locator(".login-gate");
-        // Request receipt precedes the queued response and lazy gate rendering.
+        const recovery = denied ? gate : page.locator(".gateway-connection-view");
+        // Request receipt precedes the queued response and recovery-surface rendering.
         await expect
           .poll(async () => {
             await page.clock.runFor(1);
             return {
               attempts: (await gateway.getRequests("connect")).length,
-              visible: await gate.isVisible(),
+              visible: await recovery.isVisible(),
             };
           })
           .toEqual({ attempts: 1, visible: true });

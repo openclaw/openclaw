@@ -167,10 +167,13 @@ in no PR job.
 
 Aggressive PR selection keeps changed tests and direct runtime import consumers,
 including package and SDK aliases. A changed module with fewer than 20 direct
-importers also selects tests at depth two; hubs stop at direct consumers. Changed
-packages also select direct package-specifier test consumers; that pass does not
-restart traversal through package readers and bypass the module hub cutoff. Erased type
-imports remain owned by typechecking.
+importers also selects tests at depth two; hubs stop at direct consumers.
+Ordinary `src/` module changes in packages and plugins retain direct package-specifier tests for
+resolved exports affected by the changed source, including re-export chains.
+Unrelated resolved subpaths stay unselected. Unresolved package bindings, package
+metadata and non-source changes retain the package-wide consumer fallback. That
+pass does not restart traversal through test readers and bypass the module hub
+cutoff. Erased type imports remain owned by typechecking.
 
 Same-directory tests are selected only when the directory contains at most 30
 test files. Larger flat directories use existing explicit owner mappings and

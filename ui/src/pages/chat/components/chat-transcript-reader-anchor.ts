@@ -1,8 +1,9 @@
 import type { Virtualizer, VirtualItem } from "@tanstack/virtual-core";
-import { isIosBrowserPlatform } from "../../../lib/browser-platform.ts";
 import { maxTranscriptScrollOffset } from "./chat-transcript-geometry.ts";
 import type { TranscriptLayoutOwner } from "./chat-transcript-layout-owner.ts";
+import type { ChatTranscriptRenderer } from "./chat-transcript-layout-solid.tsx";
 import type { TranscriptOffsetState } from "./chat-transcript-offset-observer.ts";
+import { focusedTranscriptRowKey } from "./chat-transcript-range.ts";
 
 type TranscriptVirtualizer = Virtualizer<HTMLDivElement, HTMLElement>;
 /** The owning virtualizer host's geometry and positioning facts. */
@@ -10,7 +11,7 @@ type ReaderAnchorHost = {
   readonly virtualizer: TranscriptVirtualizer;
   readonly layout: TranscriptLayoutOwner;
   readonly offsetState: TranscriptOffsetState;
-  readonly renderer: { readonly columnElement: HTMLElement | undefined };
+  readonly renderer: Pick<ChatTranscriptRenderer, "columnElement" | "queueAfterCommit">;
   readonly initialRange: { readonly pending: boolean };
   readonly prependAnchor: { readonly messageKey: string | null };
   readonly headerHeight: number;
@@ -32,12 +33,18 @@ function isAboveReader(top: number, height: number, first: boolean, readerTop: n
  * painted each correction as a jump. This owner compensates during resize delivery with native
  * geometry only, then reconciles virtual sizes when virtual-core lands them.
  *
- * iOS WebKit cancels touch and momentum scrolling on a scrollTop write, so while it scrolls
- * the correction moves the row column instead (a negative margin, mirrored in scrollMargin)
- * and folds into scrollTop once scrolling settles. Accepted edge: a reader who reaches the top
- * during that gesture sees the column's first rows clipped until the gesture settles.
+ * WebKit can cancel native wheel, touch and momentum scrolling on a scrollTop write, so during
+ * scrolling the correction moves the row column instead (a negative margin, mirrored in
+ * scrollMargin). It folds into scrollTop at the start boundary or once scrolling settles.
  */
 export class TranscriptReaderAnchor {
+  focusedRowKey: string | null = null;
+  readonly handleFocusIn = (event: FocusEvent): void => {
+    this.focusedRowKey = focusedTranscriptRowKey(this.host.scrollElement, event.target);
+  };
+  readonly handleFocusOut = (event: FocusEvent): void => {
+    this.focusedRowKey = focusedTranscriptRowKey(this.host.scrollElement, event.relatedTarget);
+  };
   // Last laid-out row heights. A new row starts from its virtual size: the flow placed the rows
   // below it as though it had that size.
   private readonly heights = new WeakMap<Element, number>();
@@ -51,7 +58,30 @@ export class TranscriptReaderAnchor {
   // delivery. Its restoration already accounts for that delivery's rows.
   private ownedSinceDelivery = false;
 
-  constructor(private readonly host: ReaderAnchorHost) {}
+  constructor(
+    private readonly host: ReaderAnchorHost,
+    private readonly onRowsMeasured: () => void,
+  ) {}
+
+  /** Native receipts and the active range must describe the same measurement batch. */
+  readonly rowsMeasured = (indexes?: readonly number[]): boolean => {
+    const { virtualizer } = this.host;
+    const rows = virtualizer.getVirtualItems();
+    const required = indexes?.map((index) => rows.find((row) => row.index === index)) ?? rows;
+    return required.every((item) => {
+      if (!item) {
+        return false;
+      }
+      const row = virtualizer.elementsCache.get(item.key);
+      if (row?.dataset.preparedRow === "true") {
+        return indexes === undefined;
+      }
+      const height = row && this.heights.get(row);
+      return (
+        row?.isConnected === true && height !== undefined && Math.abs(height - item.size) < 0.5
+      );
+    });
+  };
 
   /** Restoration, scroll commands, prepend and disclosure anchors place the reader themselves. */
   private positionOwned(): boolean {
@@ -73,11 +103,11 @@ export class TranscriptReaderAnchor {
     this.observer?.unobserve(row);
   }
 
-  /** Native writes would stop an iOS gesture; hold the correction in the column until it ends. */
+  /** Native writes can stop a gesture; hold the correction in the column until it ends. */
   private holdsNativeOffset(): boolean {
     return (
-      isIosBrowserPlatform() &&
-      (this.host.virtualizer.isScrolling || this.host.offsetState.touchActive)
+      (this.host.virtualizer.isScrolling && this.host.offsetState.nativeInputActive) ||
+      this.host.offsetState.touchActive
     );
   }
 
@@ -87,19 +117,43 @@ export class TranscriptReaderAnchor {
     if (!element?.clientHeight) {
       return;
     }
-    const readerTop = element.getBoundingClientRect().top;
     const { virtualizer } = this.host;
+    // A fast native jump can arrive before its scroll event. Retiring rows may
+    // still deliver sizes, but their old window must not move the new reader.
+    if (!this.host.initialRange.pending) {
+      this.host.offsetState.syncNativeOffset?.(true);
+    }
+    const range = virtualizer.calculateRange();
+    const overscan = virtualizer.options.overscan;
+    const readerTop = element.getBoundingClientRect().top;
     const compensating = !this.positionOwned() && !this.ownedSinceDelivery;
     this.ownedSinceDelivery = false;
     // Earlier rows in this delivery push later ones; recover each row's pre-change top.
     const rows = entries
       .flatMap((entry) => {
         const row = entry.target;
-        return row instanceof HTMLElement && row.isConnected && element.contains(row)
+        return row instanceof HTMLElement &&
+          row.isConnected &&
+          row.dataset.preparedRow !== "true" &&
+          element.contains(row)
           ? [{ entry, row, top: row.getBoundingClientRect().top }]
           : [];
       })
       .toSorted((left, right) => left.top - right.top);
+    // Newly revealed rows can enter inside the viewport ahead of retained content.
+    // Their first measurement preserves that content unless the reader reached native zero.
+    const retainedIndex =
+      compensating && element.scrollTop > 0
+        ? virtualizer.getVirtualItems().find((item) => {
+            const row = virtualizer.elementsCache.get(item.key);
+            return (
+              item.end > (virtualizer.scrollOffset ?? 0) &&
+              row?.dataset.preparedRow !== "true" &&
+              row !== undefined &&
+              this.heights.has(row)
+            );
+          })?.index
+        : undefined;
     let moved = 0;
     let correction = 0;
     for (const { entry, row, top } of rows) {
@@ -119,26 +173,38 @@ export class TranscriptReaderAnchor {
       const delta = height - previous;
       const previousTop = top - moved;
       moved += delta;
+      const index = virtualizer.indexFromElement(row);
       if (
         !compensating ||
+        !range ||
+        index < range.startIndex - overscan ||
+        index > range.endIndex + overscan ||
         Math.abs(delta) < 0.5 ||
-        !isAboveReader(previousTop, previous, first, readerTop)
+        !(
+          isAboveReader(previousTop, previous, first, readerTop) ||
+          (first && retainedIndex !== undefined && index < retainedIndex)
+        )
       ) {
         continue;
       }
       correction += delta;
       this.unlanded.set(key, (this.unlanded.get(key) ?? 0) + delta);
     }
+    if (this.host.prependAnchor.messageKey !== null) {
+      this.host.renderer.queueAfterCommit(this.onRowsMeasured);
+    }
     if (!correction) {
       return;
     }
-    if (this.holdsNativeOffset()) {
+    // At native zero a negative correction already clamps; don't paint a temporary shift.
+    if (this.holdsNativeOffset() && !(correction < 0 && element.scrollTop === 0)) {
       this.columnShift += correction;
       this.syncColumn();
     } else {
-      // Grow the native range before the write so the end cannot clamp it.
+      // Keep the pre-shrink offset: committing a smaller extent can clamp it first.
+      const offset = element.scrollTop;
       this.shiftVirtual(-correction);
-      this.scrollBy(correction);
+      this.scrollBy(correction, offset);
     }
   };
 
@@ -166,9 +232,9 @@ export class TranscriptReaderAnchor {
     );
     if (applied === undefined) {
       if (!above || owned || !this.holdsNativeOffset()) {
-        // Virtual-core grows the native range and writes (or retries) the correction itself;
-        // positioning owners restore their own anchors afterwards.
-        return above;
+        // Prepend restores the measured bubble absolutely; relative compensation
+        // can replay after its anchor retires during iOS's post-touch grace.
+        return above && this.host.prependAnchor.messageKey === null;
       }
       this.columnShift += delta;
       this.landedShift += delta;
@@ -219,11 +285,16 @@ export class TranscriptReaderAnchor {
   /** Fold a held column shift into scrollTop once native scrolling can be written again. */
   settle(force = false): void {
     const shift = this.columnShift;
-    if (!shift || (!force && this.holdsNativeOffset())) {
+    if (!shift) {
       return;
     }
     const element = this.host.scrollElement;
     const offset = element?.scrollTop ?? 0;
+    // A held negative shift cannot be reached by native scrolling past zero.
+    const reachesStart = shift < 0 && offset + shift <= 0;
+    if (!force && this.holdsNativeOffset() && !reachesStart) {
+      return;
+    }
     // A write during elastic overscroll snaps back and drops the correction; retry in range.
     if (!force && element && (offset < 0 || offset > (maxTranscriptScrollOffset(element) ?? 0))) {
       return;
@@ -275,14 +346,15 @@ export class TranscriptReaderAnchor {
     }
   }
 
-  private scrollBy(delta: number): void {
+  private scrollBy(delta: number, offset?: number): void {
     const element = this.host.scrollElement;
     if (!element) {
       return;
     }
     const before = element.scrollTop;
-    element.scrollTo({ top: before + delta, behavior: "instant" });
+    element.scrollTo({ top: (offset ?? before) + delta, behavior: "instant" });
     // Maintenance provenance keeps offset observers from reading the write as reader movement.
     this.host.offsetState.recordProgrammaticScroll?.(before, element.scrollTop, true);
+    this.host.offsetState.syncNativeOffset?.(true);
   }
 }
