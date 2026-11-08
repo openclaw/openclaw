@@ -1,2 +1,0 @@
-20
-# Real CLI regression: a cross-day reply quote cut inside an emoji must not write U+FFFD into the transcript.

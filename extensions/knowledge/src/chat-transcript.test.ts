@@ -20,7 +20,7 @@ it("keeps day/thread boundaries and replies while budgeting UTF-8 headers and pa
   const out = tempDirs.make("chat-transcript-");
   const at = "2026-10-02T00:30:00Z";
   const rows = [
-    message("1", "2026-10-01T23:50:00.000000000Z", "11", "Ann", "ship it?"),
+    message("1", "2026-10-01T23:50:00.000000000Z", "11", "Ann", "a".repeat(79) + "😀"),
     message("2", "2026-10-02T00:10:00.000000000Z", "12", "Bo", "yes <@11>", {
       reply_to_message_id: "1",
     }),
@@ -46,7 +46,7 @@ it("keeps day/thread boundaries and replies while budgeting UTF-8 headers and pa
   ]);
   const read = (chunk: { file: string }) => readFile(path.join(out, chunk.file));
   const texts = await Promise.all(chunks.map(read));
-  expect(texts[1].toString()).toMatch(/^00:10 Bo ↩ Ann 2026-10-01 23:50 "ship it\?": yes @Ann$/m);
+  expect(texts[1].toString()).toMatch(/^00:10 Bo ↩ Ann 2026-10-01 23:50 "a{79}": yes @Ann$/m);
   expect(texts[2].toString()).toMatch(/## Thread: release plan\n00:20 Ann: plan\n {6}step two\n/);
   for (const [i, chunk] of chunks.entries()) {
     expect(chunk.bytes).toBe(texts[i].length);
@@ -54,24 +54,4 @@ it("keeps day/thread boundaries and replies while budgeting UTF-8 headers and pa
     const label = `part ${chunk.part} of ${chunk.parts}`;
     expect(texts[i].includes(label)).toBe(chunk.parts > 1);
   }
-});
-
-it("caps a cross-day reply preview without cutting an emoji in half", async () => {
-  const out = tempDirs.make("chat-transcript-");
-  const rows = [
-    message("1", "2026-10-01T23:59:00Z", "11", "Ann", "a".repeat(79) + "😀"),
-    message("2", "2026-10-02T00:10:00Z", "12", "Bo", "ack", { reply_to_message_id: "1" }),
-  ];
-  const input = path.join(out, "in.jsonl");
-  await writeFile(input, rows.map((row) => JSON.stringify(row)).join("\n") + "\n");
-  execFileSync(process.execPath, [
-    script,
-    "--input",
-    input,
-    "--output-dir",
-    out,
-    "--channel",
-    "#dev",
-  ]);
-  expect(await readFile(path.join(out, "2026-10-02.txt"), "utf8")).toMatch(/"a{79}"/);
 });

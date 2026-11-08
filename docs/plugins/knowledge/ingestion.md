@@ -84,8 +84,8 @@ within their range; partial snapshots cannot.
 
 The bundled chat-transcript exporter includes UTF-8 file headers in its
 `--max-bytes` limit. A single indivisible message can still exceed that limit.
-A cross-day reply quote is shortened to 80 characters, and a shortened quote
-never ends halfway through an emoji.
+Cross-day reply quotes keep the existing 80 UTF-16 code-unit limit without
+splitting surrogate pairs.
 
 ## Batch publication
 
