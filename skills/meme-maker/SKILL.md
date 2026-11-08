@@ -29,6 +29,8 @@ Commands
 - `render <template> --text TEXT ... [--out PATH] [--service local|imgflip]`: generate a meme.
 - `refresh [--limit N] [--json]`: fetch current Imgflip top templates for research; do not overwrite the curated registry automatically.
 
+`--limit` accepts a non-negative safe integer; zero returns no templates.
+
 Template registry
 
 - Read `{baseDir}/references/templates.json` for the curated 20-template registry.

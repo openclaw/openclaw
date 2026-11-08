@@ -48,6 +48,36 @@ globalThis.fetch = () => { throw new Error("Unexpected network access"); };
 }
 
 describe("meme-maker local rendering", () => {
+  it("rejects invalid result limits instead of reporting misleading matches", async () => {
+    for (const command of ["search", "suggest", "refresh"]) {
+      for (const limit of ["-1", "0.5", "NaN", "Infinity", ""]) {
+        await expect(
+          execFileAsync(testNodeExecPath, [
+            scriptPath,
+            command,
+            "choice",
+            `--limit=${limit}`,
+            "--json",
+          ]),
+        ).rejects.toMatchObject({
+          code: 1,
+          stderr: "error: --limit must be a non-negative safe integer\n",
+        });
+      }
+    }
+    for (const limit of [0, 1, 2]) {
+      const { stdout } = await execFileAsync(testNodeExecPath, [
+        scriptPath,
+        "suggest",
+        "choice",
+        "--limit",
+        String(limit),
+        "--json",
+      ]);
+      expect(JSON.parse(stdout)).toHaveLength(limit);
+    }
+  });
+
   it("writes a self-contained SVG with escaped, box-centered text without optional rendering dependencies", async () => {
     const { image, out, result } = renderFixture("svg", true);
     const { stdout } = await result;
