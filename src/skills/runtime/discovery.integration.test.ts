@@ -5,6 +5,8 @@ import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { getTrackedWorkerPoolSnapshot } from "../../infra/worker-cpu.js";
 import { WorkerTaskPool } from "../../infra/worker-task-pool.js";
+import type { PluginManifestRecord } from "../../plugins/manifest-registry.types.js";
+import { createEmptyPluginMetadataSnapshot } from "../../plugins/plugin-metadata-empty.test-support.js";
 import { resolveSkillDiscoveryLimits } from "../loading/skill-root-discovery.js";
 import type { WorkspaceSkillSourceRequest } from "../loading/workspace-skill-sources.types.js";
 import { writeSkill } from "../test-support/e2e-test-helpers.js";
@@ -171,6 +173,50 @@ it("applies config refresh on the healthy worker and drops departed sources", as
   expect(await descriptions(request(nextWorkspace))).toEqual(["Current change"]);
   await closeSkillsWatchers();
   expect(discoveryPool()).toBeUndefined();
+});
+
+it("refreshes plugin skills from the supplied metadata generation without rediscovery", async () => {
+  const stateDir = temporary.make("skills-prepared-state-");
+  vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+  vi.stubEnv("OPENCLAW_BUNDLED_SKILLS_DIR", temporary.make("skills-prepared-bundled-"));
+  vi.stubEnv("OPENCLAW_DISABLE_BUNDLED_PLUGINS", "1");
+  const config = {
+    agents: { entries: { main: { workspace } } },
+    plugins: { entries: { fixture: { enabled: true } } },
+    skills: { load: { watch: false } },
+  };
+  // Only the metadata owner knows this plugin; its files deliberately have no manifest.
+  // Rediscovering the workspace cannot produce these published roots.
+  for (const name of ["original", "successor"]) {
+    const rootDir = temporary.make("skills-prepared-plugin-");
+    const skillDir = path.join(rootDir, name);
+    await writeSkill({ dir: skillDir, name, description: name });
+    const plugin: PluginManifestRecord = {
+      id: "fixture",
+      origin: "config",
+      rootDir,
+      source: rootDir,
+      manifestPath: path.join(rootDir, "openclaw.plugin.json"),
+      channels: [],
+      providers: [],
+      cliBackends: [],
+      skills: [name],
+      hooks: [],
+    };
+    const pluginMetadataSnapshot = createEmptyPluginMetadataSnapshot(workspace);
+    pluginMetadataSnapshot.manifestRegistry = { plugins: [plugin], diagnostics: [] };
+    pluginMetadataSnapshot.plugins = [plugin];
+    const input = { config, pluginMetadataSnapshot, reason: "config-change" as const };
+    await refreshSkillsDiscovery(input);
+    expect(await fs.realpath(path.join(stateDir, "plugin-skills", name))).toBe(skillDir);
+    if (name === "successor") {
+      await expect(
+        fs.lstat(path.join(stateDir, "plugin-skills", "original")),
+      ).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+    }
+  }
 });
 
 it("batches fresh agent discovery without separate root-planning passes", async () => {

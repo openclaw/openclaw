@@ -5,6 +5,7 @@ import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoin
 import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
 import { WorkerTaskPool } from "../../infra/worker-task-pool.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import type { readWorkspaceSkillStatusFacts } from "../discovery/status-files.js";
 import { resolveSkillDiscoveryLimits } from "../loading/skill-root-discovery.js";
@@ -412,6 +413,7 @@ export async function refreshSkillsDiscovery(
     workspaceDir?: string;
     config?: OpenClawConfig;
     reason?: "manual" | "workshop" | "config-change";
+    pluginMetadataSnapshot?: PluginMetadataSnapshot;
   } = {},
 ): Promise<void> {
   if (params.reason === "config-change") {
@@ -432,6 +434,7 @@ export async function refreshSkillsDiscovery(
             workspaceDir: resolveAgentWorkspaceDir(params.config!, agentId),
             config: params.config,
             agentId,
+            pluginMetadataSnapshot: params.pluginMetadataSnapshot,
           }),
         ),
       );
@@ -440,7 +443,10 @@ export async function refreshSkillsDiscovery(
     }
   } else {
     if (!state.sources.size && params.workspaceDir) {
-      await registerSkillsWatcher({ workspaceDir: params.workspaceDir });
+      await registerSkillsWatcher({
+        workspaceDir: params.workspaceDir,
+        pluginMetadataSnapshot: params.pluginMetadataSnapshot,
+      });
     }
     await scanDirtySources();
   }
