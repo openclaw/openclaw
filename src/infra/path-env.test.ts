@@ -584,3 +584,87 @@ describe("ensureOpenClawCliOnPath", () => {
     expect(updated).toContain(globalLinuxbrewBin);
   });
 });
+
+// Real directories exercise candidate validation, not mocked filesystem decisions.
+describe("PATH root filesystem boundary", () => {
+  it.each(["MISE_DATA_DIR", "XDG_DATA_HOME", "LOCALAPPDATA", "XDG_BIN_HOME"])(
+    "rejects relative, workspace-contained and symlinked %s roots while preserving trusted PATH",
+    (key) => {
+      const scratch = path.join(import.meta.dirname, "../../.openclaw/tmp");
+      fs.mkdirSync(scratch, { recursive: true });
+      const base = fs.mkdtempSync(path.join(scratch, "path-root-"));
+      const homeDir = path.join(base, "home");
+      const cwd = path.join(homeDir, "workspace");
+      const savedEnv = { ...process.env };
+      const candidate = (root: string) =>
+        key === "XDG_BIN_HOME"
+          ? root
+          : path.join(root, ...(key === "MISE_DATA_DIR" ? [] : ["mise"]), "shims");
+      const bootstrap = (root: string, inherited = "/usr/bin:/bin", optIn = false) => {
+        for (const name of [
+          "MISE_DATA_DIR",
+          "XDG_DATA_HOME",
+          "LOCALAPPDATA",
+          "XDG_BIN_HOME",
+          "PNPM_HOME",
+          "NPM_CONFIG_PREFIX",
+          "OPENCLAW_PATH_BOOTSTRAPPED",
+          "OPENCLAW_ALLOW_PROJECT_LOCAL_BIN",
+        ]) {
+          delete process.env[name];
+        }
+        process.env[key] = root;
+        if (optIn) {
+          process.env.OPENCLAW_ALLOW_PROJECT_LOCAL_BIN = "1";
+        }
+        ensureOpenClawCliOnPath({
+          cwd,
+          homeDir,
+          platform: key === "LOCALAPPDATA" ? "win32" : "linux",
+          execPath: process.execPath,
+          pathEnv: inherited,
+        });
+        return process.env.PATH!.split(path.delimiter);
+      };
+      try {
+        fs.mkdirSync(cwd, { recursive: true });
+        const local = path.join(cwd, "tools");
+        fs.mkdirSync(candidate(local), { recursive: true });
+        const alias = path.join(homeDir, "workspace-link");
+        fs.symlinkSync(local, alias, process.platform === "win32" ? "junction" : "dir");
+        for (const root of [path.relative(process.cwd(), local), local, alias]) {
+          expect(bootstrap(root)).not.toContain(candidate(root));
+        }
+        const trusted = path.join(homeDir, key === "XDG_BIN_HOME" ? "tool bin" : "tool data ");
+        fs.mkdirSync(candidate(trusted), { recursive: true });
+        const updated = bootstrap(trusted);
+        expect(updated).toContain(candidate(trusted));
+        expect(updated.indexOf(candidate(trusted))).toBeGreaterThan(updated.indexOf("/usr/bin"));
+        if (key !== "XDG_BIN_HOME") {
+          expect(updated).not.toContain(candidate(trusted.trim()));
+        }
+        const inherited = candidate(local);
+        expect(bootstrap(local, inherited + path.delimiter + "/usr/bin")).toContain(inherited);
+        const projectBin = path.join(cwd, "node_modules", ".bin");
+        fs.mkdirSync(projectBin, { recursive: true });
+        fs.writeFileSync(
+          path.join(projectBin, "openclaw"),
+          `#!/bin/sh
+exit 0
+`,
+          { mode: 0o755 },
+        );
+        expect(bootstrap(local)).not.toContain(projectBin);
+        expect(bootstrap(local, "/usr/bin:/bin", true)).toContain(projectBin);
+      } finally {
+        for (const name of Object.keys(process.env)) {
+          if (!(name in savedEnv)) {
+            delete process.env[name];
+          }
+        }
+        Object.assign(process.env, savedEnv);
+        fs.rmSync(base, { recursive: true, force: true });
+      }
+    },
+  );
+});

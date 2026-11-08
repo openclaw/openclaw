@@ -97,7 +97,7 @@ function createManifestBackedProviderSnapshot(
 
 describe("workspace .env blocklist completeness", () => {
   it.each(["sync", "async"])(
-    "keeps OCM launch context trusted with the %s loader",
+    "keeps OCM launch context and PATH roots trusted with the %s loader",
     async (mode) => {
       await withIsolatedEnvAndCwd(async () => {
         await withDotEnvFixture(async ({ base, cwdDir, stateDir }) => {
@@ -106,6 +106,8 @@ describe("workspace .env blocklist completeness", () => {
               path.join(cwdDir, ".env"),
               [
                 "OCM_SELF=workspace-executable",
+                "MISE_DATA_DIR=workspace-mise",
+                "XDG_BIN_HOME=workspace-bin",
                 "OCM_HOME=workspace-home",
                 "OCM_ACTIVE_ENV=workspace-environment",
                 "OCM_ACTIVE_ENV_ROOT=workspace-root",
@@ -130,6 +132,8 @@ describe("workspace .env blocklist completeness", () => {
               loadDotEnv({ env, quiet: true });
             }
 
+            expect(env.MISE_DATA_DIR).toBeUndefined();
+            expect(env.XDG_BIN_HOME).toBeUndefined();
             expect(env.OCM_SELF).toBe("global-executable");
             expect(env.OCM_HOME).toBe("global-home");
             expect(env.OCM_ACTIVE_ENV).toBe("inherited-environment");
@@ -254,6 +258,8 @@ describe("workspace .env blocklist completeness", () => {
           "LOCALAPPDATA",
           "DISCORD_API_URL",
           "MATTERMOST_URL",
+          "MISE_DATA_DIR",
+          "XDG_BIN_HOME",
           "MATRIX_HOMESERVER",
           "MINIMAX_API_HOST",
           "BUZZ_RELAY_URL",
