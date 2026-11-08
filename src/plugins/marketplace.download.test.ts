@@ -4,7 +4,9 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { configureFsSafeNative, getFsSafeNativeConfig } from "@openclaw/fs-safe/config";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { withinTest } from "../../test/helpers/promise.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { withTempDir } from "../test-utils/temp-dir.js";
 import { installPluginFromMarketplace } from "./marketplace.js";
 import {
@@ -99,6 +101,54 @@ describe("marketplace archive downloads", () => {
     installPluginFromPathMock.mockReset();
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
+  });
+
+  it("reports HTTP failures without waiting for a capture tee but awaits release", async ({
+    signal,
+  }) => {
+    await withArchiveMarketplace(async (install) => {
+      const response = new Response(new ReadableStream<Uint8Array>(), { status: 503 });
+      const capture = response.clone();
+      const cancellationEntered = createDeferredCore();
+      const releaseEntered = createDeferredCore();
+      const releaseAllowed = createDeferredCore();
+      const body = response.body!;
+      const cancelBody = body.cancel.bind(body);
+      vi.spyOn(body, "cancel").mockImplementation((reason) => {
+        cancellationEntered.resolve();
+        return cancelBody(reason);
+      });
+      const release = vi.fn(async () => {
+        releaseEntered.resolve();
+        await releaseAllowed.promise;
+        await capture.body!.cancel();
+      });
+      fetchWithSsrFGuardMock.mockResolvedValueOnce({ response, finalUrl: archiveUrl, release });
+      let settled = false;
+      const pending = install();
+      void pending.then(() => {
+        settled = true;
+      });
+      try {
+        await withinTest(cancellationEntered.promise, signal);
+        await withinTest(releaseEntered.promise, signal);
+        await new Promise<void>((resolve) => {
+          setImmediate(resolve);
+        });
+        expect(settled).toBe(false);
+        releaseAllowed.resolve();
+        await expect(withinTest(pending, signal)).resolves.toEqual({
+          ok: false,
+          error: "failed to download " + archiveUrl + ": HTTP 503",
+        });
+        expect(release).toHaveBeenCalledOnce();
+        expect(installPluginFromPathMock).not.toHaveBeenCalled();
+      } finally {
+        releaseAllowed.resolve();
+        await capture.body!.cancel();
+        await pending;
+      }
+    });
   });
 
   it.each([
