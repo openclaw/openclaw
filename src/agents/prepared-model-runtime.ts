@@ -1,6 +1,7 @@
 /** Lifecycle-owned auth/model discovery snapshots for agent runs. */
 import { toStringifiedError } from "@openclaw/normalization-core/error-coercion";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { readOnlyWorkerScope } from "../infra/sqlite-readonly-worker-context.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getPreparedSharedAuthStoreOwnership } from "./auth-profiles/path-resolve.js";
 import { registerRuntimeAuthProfileStoreMutationListener } from "./auth-profiles/runtime-snapshots.js";
@@ -689,10 +690,7 @@ async function drainPendingAuthMutations(
 }
 
 function invalidateForAuthMutation(event: PreparedModelRuntimeAuthMutation): void {
-  const normalizedEvent = {
-    ...event,
-    agentDir: normalizeOptionalDir(event.agentDir),
-  };
+  const normalizedEvent = { ...event, agentDir: normalizeOptionalDir(event.agentDir) };
   const { invalidatedOwners, invalidatedConfiguredAgentIds } =
     invalidatePreparedModelRuntimeOwnersForAuthMutation(owners, normalizedEvent);
   if (invalidatedOwners.length === 0) {
@@ -737,9 +735,11 @@ function invalidateForAuthMutation(event: PreparedModelRuntimeAuthMutation): voi
       }
     });
   };
-  // Auth revocation fences its affected owners immediately; publication must wait for the
-  // plugin reservation to settle without occupying the queue needed by replacement recovery.
-  const publication = modelRuntimeDrain.runAfter(publicationQueue, publish);
+  // Wait for plugin replacement without occupying its queue. Publication owns its reads
+  // and must outlive the auth emitter's temporary SQLite reader scope.
+  const publication = readOnlyWorkerScope.exit(() =>
+    modelRuntimeDrain.runAfter(publicationQueue, publish),
+  );
   notifyPreparedModelRuntimePublication({ phase: "invalidated" });
   void publication.catch((error: unknown) => {
     if (!authPublication.isCurrent(transaction)) {

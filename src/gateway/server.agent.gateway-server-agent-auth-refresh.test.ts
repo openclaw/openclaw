@@ -1,16 +1,26 @@
+import { channel } from "node:diagnostics_channel";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import type { WebSocket } from "ws";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { resolveAgentDir } from "../agents/agent-scope.js";
+import { runtimeAuthProfileRowsCache } from "../agents/auth-profiles/runtime-persisted-rows.js";
 import { setRuntimeAuthProfileStoreSnapshot } from "../agents/auth-profiles/runtime-snapshots.js";
+import { resolveAuthProfileDatabasePath } from "../agents/auth-profiles/sqlite.js";
+import {
+  saveAuthProfileStore,
+  updateAuthProfileStoreWithLock,
+} from "../agents/auth-profiles/store-runtime.js";
 import {
   getPreparedModelRuntimeBorrowedSnapshot,
   getPreparedModelRuntimePluginGeneration,
 } from "../agents/prepared-model-runtime-generation-scope.js";
 import {
+  beginPreparedModelRuntimePluginDrain,
   loadPublishedGatewayReplyDispatchRuntime,
   registerPreparedModelRuntimePublicationListener,
 } from "../agents/prepared-model-runtime.js";
+import { readOnlyWorkerScope } from "../infra/sqlite-readonly-worker-context.js";
+import { createSqliteReadOnlyWorkerScope } from "../infra/sqlite-readonly-worker.js";
 import {
   getActiveGatewayRootWorkCount,
   getActiveGatewayRootWorkHolders,
@@ -126,6 +136,86 @@ describe("gateway agent auth refresh dispatch", () => {
       expect(outcomes.flat().every((outcome) => outcome.status === "fulfilled")).toBe(true);
     } finally {
       testState.agentsConfig = undefined;
+    }
+  });
+
+  test("keeps queued auth publication readable after startup readers close", async () => {
+    const agentId = "auth-startup";
+    const before = await prepareAuthDispatchAgents(agentId);
+    saveAuthProfileStore({ version: 1, profiles: {} }, before.agentDir);
+    await prepareGatewayReplyRuntimeForTest({ force: true });
+    const readers = createSqliteReadOnlyWorkerScope();
+    const drain = beginPreparedModelRuntimePluginDrain();
+    const settled = createDeferred<{ phase: string; error?: unknown }>();
+    const reservations: unknown[] = [];
+    const diagnostics = channel("openclaw.agent-database.reservation");
+    const observeReservation = (event: unknown) => {
+      reservations.push({ event, scope: readOnlyWorkerScope.getStore() });
+    };
+    let publicationScope: ReturnType<typeof readOnlyWorkerScope.getStore>;
+    const unregister = registerPreparedModelRuntimePublicationListener((event) => {
+      if (event.phase === "published" || event.phase === "failed") {
+        publicationScope = readOnlyWorkerScope.getStore();
+        settled.resolve(event);
+      }
+    });
+    try {
+      readers.run(() => {
+        const callerScope = readOnlyWorkerScope.getStore();
+        setRuntimeAuthProfileStoreSnapshot(
+          {
+            version: 1,
+            profiles: {
+              "anthropic:default": {
+                type: "api_key",
+                provider: "anthropic",
+                key: "synthetic-startup-key",
+              },
+            },
+          },
+          before.agentDir,
+        );
+        expect(readOnlyWorkerScope.getStore()).toBe(callerScope);
+        expect(callerScope?.active).toBe(true);
+      });
+      // Force publication through the real SQLite reader, not resident rows.
+      runtimeAuthProfileRowsCache.invalidateRows(resolveAuthProfileDatabasePath(before.agentDir));
+      await readers.close();
+      diagnostics.subscribe(observeReservation);
+      drain.release();
+      expect(await settled.promise).toEqual({ phase: "published" });
+      expect(publicationScope).toBeUndefined();
+      // Gateway requests establish fresh reader scopes. Exercise direct admission
+      // outside those scopes without introducing another auth mutation.
+      await expect(
+        updateAuthProfileStoreWithLock({ agentDir: before.agentDir, updater: () => false }),
+      ).resolves.not.toBeNull();
+      expect(await rpcReq(gatewaySuite.ws, "models.list", { agentId })).toMatchObject({ ok: true });
+      expect(await rpcReq(gatewaySuite.ws, "sessions.list", {})).toMatchObject({ ok: true });
+      const runId = "idem-agent-auth-startup";
+      const run = sendAgentRpc(gatewaySuite.ws, { agentId, runId });
+      await expect(run.final).resolves.toMatchObject({ ok: true, payload: { status: "ok" } });
+      expect(agentCommandCallsFor(runId)).toHaveLength(1);
+      expect(reservations).toEqual(
+        expect.arrayContaining([
+          {
+            event: expect.objectContaining({
+              outcome: "ok",
+              operation: "direct",
+            }),
+            scope: undefined,
+          },
+          {
+            event: expect.objectContaining({ outcome: "ok", operation: "worker" }),
+            scope: undefined,
+          },
+        ]),
+      );
+    } finally {
+      diagnostics.unsubscribe(observeReservation);
+      unregister();
+      drain.release();
+      await readers.close();
     }
   });
 
