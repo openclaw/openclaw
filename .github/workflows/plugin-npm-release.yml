@@ -1431,6 +1431,7 @@ jobs:
       id-token: write
     strategy:
       fail-fast: false
+      max-parallel: 4
       matrix:
         plugin: ${{ fromJson(needs.preview_plugins_npm.outputs.matrix) }}
     steps:
@@ -1790,6 +1791,10 @@ jobs:
           npmrc="$(mktemp "${RUNNER_TEMP}/plugin-npm-oidc.XXXXXX")"
           publish_log="$(mktemp "${RUNNER_TEMP}/plugin-npm-publish.XXXXXX")"
           trap 'rm -f "$npmrc" "$publish_log"' EXIT
+          # Finish any quota wait before the final live publisher guards.
+          if [[ -n "$PREPARED_NPM_ARTIFACT" ]]; then
+            node scripts/plugin-npm-authorize.mjs --source-sha "$RELEASE_TARGET_SHA"
+          fi
           # Publish the attested bytes; rebuilding here loses the candidate's patched install.
           node scripts/release-tooling-identity.mjs verify \
             --repository "$OPENCLAW_RELEASE_TOOLING_REPOSITORY" \
@@ -1812,9 +1817,6 @@ jobs:
               --workflow-sha "$RELEASE_TARGET_SHA" \
               --allow-prevalidated-ref
             node scripts/openclaw-npm-extended-stable-release.mjs validate-active-line
-          fi
-          if [[ -n "$PREPARED_NPM_ARTIFACT" ]]; then
-            node scripts/plugin-npm-prepared-release.mjs authorize --source-sha "$RELEASE_TARGET_SHA"
           fi
           set +e
           NPM_CONFIG_USERCONFIG="$npmrc" \
@@ -1986,6 +1988,10 @@ jobs:
           } > "$npmrc"
           chmod 0600 "$npmrc"
           unset NODE_AUTH_TOKEN NPM_TOKEN NODE_OPTIONS
+          # Finish any quota wait before the final live publisher guards.
+          if [[ -n "$PREPARED_NPM_ARTIFACT" ]]; then
+            node scripts/plugin-npm-authorize.mjs --source-sha "$PREPARED_NPM_SOURCE_SHA"
+          fi
           # A timeout can race a committed publish. On rerun, the preceding check
           # accepts only this tarball's exact integrity and shasum before skipping.
           node scripts/release-tooling-identity.mjs verify \
@@ -1998,9 +2004,6 @@ jobs:
             --release-publish-ref "$RELEASE_PUBLISH_REF" \
             --release-publish-full-ref "$RELEASE_PUBLISH_FULL_REF" \
             --release-publish-parent-state-policy "$RELEASE_PUBLISH_PARENT_STATE_POLICY"
-          if [[ -n "$PREPARED_NPM_ARTIFACT" ]]; then
-            node scripts/plugin-npm-prepared-release.mjs authorize --source-sha "$PREPARED_NPM_SOURCE_SHA"
-          fi
           HOME="$publish_home" \
             NPM_CONFIG_GLOBALCONFIG=/dev/null \
             NPM_CONFIG_IGNORE_SCRIPTS=true \
