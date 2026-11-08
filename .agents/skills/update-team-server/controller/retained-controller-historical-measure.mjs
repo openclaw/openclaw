@@ -2,7 +2,7 @@
 // Run on disposable Linux: node --import ./test-environment.mjs ./retained-controller-historical-measure.mjs before|after historical|same-incident OUTPUT [--scale]
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
-import { constants, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statfsSync, statSync, writeFileSync } from "node:fs";
+import { constants, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, statfsSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -19,6 +19,7 @@ const shape = join(shapeRoot, "shape.db"), workspace = join(shapeRoot, "workspac
 try {
 for (let sample = 1; sample <= 5; sample++) {
   const cleanup = [], f = historicalShellFixture({ after: fn => cleanup.push(fn), diagnostic: console.log }, { historical });
+  const activeWorkspace = join(f.runtime, "workspace-shape");
   try {
   if (scale && !existsSync(shape)) {
     assert.equal(Number(statfsSync(f.root).type), 0x9123683e, "scale fixture requires btrfs");
@@ -41,6 +42,7 @@ for (let sample = 1; sample <= 5; sample++) {
       workspaceBytes: bytes.length * 62000, filesystem: "btrfs" }, null, 2));
     copyFileSync(f.agentDatabasePath, shape, constants.COPYFILE_FICLONE_FORCE);
   } else if (scale) copyFileSync(shape, f.agentDatabasePath, constants.COPYFILE_FICLONE_FORCE);
+  if (scale) renameSync(workspace, activeWorkspace);
   const preload = join(f.root, "measurement.mjs");
   writeFileSync(preload, `import inspector from "node:inspector"; import fs from "node:fs";
 const session = new inspector.Session(); session.connect();
@@ -79,7 +81,10 @@ process.once("exit", () => session.post("HeapProfiler.stopSampling", (error, res
     else { assert.equal(prepared.status, 0, prepared.stderr); assert.match(prepared.stdout, /PREPARED .*restart=0 activation=0 original-journal=retained/); }
     assert.deepEqual(preserved(f), before);
     console.log(JSON.stringify(results.slice(-2)));
-  } finally { for (const fn of cleanup.reverse()) fn(); }
+  } finally {
+    if (scale && existsSync(activeWorkspace)) renameSync(activeWorkspace, workspace);
+    for (const fn of cleanup.reverse()) fn();
+  }
 }
   writeFileSync(join(directory, "metrics.json"), JSON.stringify({ mode, scenario, allocationSamplingInterval: 65536, includesCollectedObjects: true, results }, null, 2));
 } finally { rmSync(shapeRoot, { recursive: true, force: true }); }
