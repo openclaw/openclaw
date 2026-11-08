@@ -67,6 +67,7 @@ test("ordinary deployment waits for the real lock, then validates closure before
 
 for (const args of [
   ["--prepare-release", "b".repeat(40)],
+  ["--retire-retained-repair", "11111111-1111-4111-8111-111111111111", "a".repeat(64)],
   ["--prepare-retained-repair", "11111111-1111-4111-8111-111111111111", "c".repeat(40), "b".repeat(40), "111", "1110", "a".repeat(64), "d".repeat(64)],
 ]) test(`${args[0]} refuses contention without waiting or entering proofs`, { skip: linuxSkip, timeout: 10000 }, t => {
   const f = entryFixture(t);
