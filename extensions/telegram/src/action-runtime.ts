@@ -104,26 +104,6 @@ function normalizeTelegramActionName(action: string): TelegramActionName {
   return normalized;
 }
 
-function formatTelegramDeliveryTarget(to: string, messageThreadId?: number | null): string {
-  const parsed = parseTelegramTarget(to);
-  const directTopicId = parsed.directMessagesTopicId;
-  if (directTopicId != null) {
-    return `${parsed.chatId}:direct-topic:${directTopicId}`;
-  }
-  const topicId = messageThreadId ?? parsed.messageThreadId;
-  if (topicId == null) {
-    return to;
-  }
-  return `${parsed.chatId}:topic:${topicId}`;
-}
-
-function resolveActionTopicNameCacheScope(cfg: OpenClawConfig, accountId?: string | null): string {
-  const resolvedAccountId = accountId ?? resolveDefaultTelegramAccountId(cfg);
-  return resolveStorePath(cfg.session?.store, {
-    agentId: resolveTelegramAccountOwnerAgentId({ cfg, accountId: resolvedAccountId }),
-  });
-}
-
 function normalizeTelegramDeliveryPin(params: Record<string, unknown>) {
   const delivery = asOptionalRecord(params.delivery);
   const pin = delivery ? delivery.pin : params.pin === true ? true : undefined;
