@@ -206,7 +206,7 @@ describe("managed Chrome early child exit", () => {
       "FATAL:content/browser/gpu/gpu_data_manager_impl_private.cc:417] GPU process isn't usable. Goodbye.";
     readVersionMock.mockResolvedValue(readyVersion);
     diagnoseMock.mockImplementation(async () => {
-      proc.stderr.emit("data", fatal);
+      proc.stderr.emit("data", `${fatal}\n${"#0 synthetic stack frame\n".repeat(200)}`);
       proc.signalCode = "SIGABRT";
       proc.emit("exit", null, "SIGABRT");
       return { ok: true, cdpUrl: profile.cdpUrl, elapsedMs: 0 };

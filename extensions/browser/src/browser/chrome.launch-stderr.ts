@@ -34,9 +34,12 @@ export function createChromeLaunchStderrDiagnostics() {
     },
     hint() {
       const output = redactToolPayloadText(tail.text().trim());
-      return output
-        ? `\nChrome stderr:\n${sliceUtf16Safe(output, -CHROME_STDERR_HINT_MAX_CHARS)}`
-        : "";
+      // Chromium stack dumps can push the actual failure out of a short tail.
+      const fatal = output.match(/^.*\bFATAL:.*$/gmu)?.join("\n");
+      const excerpt = fatal
+        ? sliceUtf16Safe(fatal, 0, CHROME_STDERR_HINT_MAX_CHARS)
+        : sliceUtf16Safe(output, -CHROME_STDERR_HINT_MAX_CHARS);
+      return excerpt ? `\nChrome stderr:\n${excerpt}` : "";
     },
     signals(): ChromeLaunchStderrSignals {
       return { ...signals };

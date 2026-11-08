@@ -8,9 +8,8 @@ import { createSubsystemLogger, redactToolPayloadText } from "openclaw/plugin-sd
 import { isPidAlive, prepareOomScoreAdjustedSpawn } from "openclaw/plugin-sdk/process-runtime";
 import { ensurePortAvailable, type SsrFPolicy } from "openclaw/plugin-sdk/security-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { CONFIG_DIR } from "openclaw/plugin-sdk/text-utility-runtime";
-import { hasChromeProxyControlArg, omitChromeProxyEnv } from "./browser-proxy-mode.js";
+import { hasChromeProxyControlArg } from "./browser-proxy-mode.js";
 import { assertManagedProxyAllowsCdpUrl } from "./cdp-proxy-bypass.js";
 import {
   CHROME_BOOTSTRAP_EXIT_POLL_MS,
@@ -49,6 +48,7 @@ import {
   processCommandUsesHeadlessChrome,
   resolveBrowserExecutableForPlatform,
 } from "./chrome.executables.js";
+import { buildChromeLaunchEnv } from "./chrome.launch-env.js";
 import { createChromeLaunchStderrDiagnostics } from "./chrome.launch-stderr.js";
 import {
   headlessShellProfileInUseReason,
@@ -735,20 +735,10 @@ async function launchOpenClawChromeLocked(
     if (resolved.extraArgs.length > 0) {
       args.push(...resolved.extraArgs);
     }
-    const env: NodeJS.ProcessEnv = {
-      ...omitChromeProxyEnv(process.env),
-      // Reduce accidental sharing with the user's env.
-      HOME: os.homedir(),
-    };
-    if (process.platform === "linux") {
-      const chromiumStateDir = path.join(resolvePreferredOpenClawTmpDir(), ".chromium");
-      env.XDG_CONFIG_HOME ??= chromiumStateDir;
-      env.XDG_CACHE_HOME ??= chromiumStateDir;
-    }
     // stdio tuple: discard stdout to prevent buffer saturation in constrained
     // environments (e.g. Docker), while keeping stderr piped for diagnostics.
     const preparedSpawn = prepareOomScoreAdjustedSpawn(exe.path, args, {
-      env,
+      env: buildChromeLaunchEnv(),
     });
     const proc = spawn(preparedSpawn.command, preparedSpawn.args, {
       stdio: ["ignore", "ignore", "pipe"],

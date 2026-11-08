@@ -27,6 +27,12 @@ Other common Linux launch failures:
 
 - `GPU process isn't usable. Goodbye.`: Chromium exhausted its GPU fallback
   options. Check the preceding Chrome stderr for the first GPU-process failure.
+  Inherited jemalloc `LD_PRELOAD` with `MALLOC_CONF=background_thread:true`
+  can make the zygote multi-threaded before fork, causing GPU subprocess launch
+  failures (`error_code=1002`). Managed Chrome launches strip `MALLOC_CONF` and
+  jemalloc entries from `LD_PRELOAD`, preserving other preload libraries and the
+  Gateway's own allocator settings. Wrappers that re-add these variables must
+  remove them before executing Chrome.
   Managed headless launches already use `--headless=new --disable-gpu`; try
   removing custom GPU flags from `browser.extraArgs` and verify the configured
   browser executable works on the host. Adding `--enable-unsafe-swiftshader`
