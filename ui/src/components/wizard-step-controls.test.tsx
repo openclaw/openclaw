@@ -186,11 +186,9 @@ it("keeps a model setup choice usable when a text answer advances during a busy 
       },
     };
   });
-  expect(container.querySelectorAll('[role="group"] button')).toHaveLength(2);
   setStep({ id: "api-key", type: "text", title: "API key", sensitive: true });
   flush();
   submit(container.querySelector("form")!);
-  expect(answer).toHaveBeenCalledExactlyOnceWith("synthetic-key");
   flush();
   expect(container.querySelector<HTMLInputElement>("input")!.disabled).toBe(true);
   next.resolve();

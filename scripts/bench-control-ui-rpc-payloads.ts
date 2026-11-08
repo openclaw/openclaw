@@ -1125,7 +1125,7 @@ try {
               .evaluate(() => ({
                 path: location.pathname,
                 title: window.document.title,
-                text: window.document.body?.innerText.slice(0, 1000),
+                text: window.document.body?.textContent?.slice(0, 1000),
                 timeOrigin: performance.timeOrigin,
               }))
               .catch(() => null);
