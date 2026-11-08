@@ -1,4 +1,3 @@
-// Real registry, SQLite and sweeper proof that a yielded run no continuation can reach settles.
 import { Value } from "typebox/value";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 // Preserve module setup before modules that consume it.
@@ -212,11 +211,12 @@ describe("yielded run settlement", () => {
   };
 
   it.each(
-    (["done", "missing", "live", "live-notice", "descendants-lost"] as const).flatMap((requesterState) =>
-      [false, true].map((expectsCompletionMessage) => ({
-        requesterState,
-        expectsCompletionMessage,
-      })),
+    (["done", "missing", "live", "live-notice", "descendants-lost"] as const).flatMap(
+      (requesterState) =>
+        [false, true].map((expectsCompletionMessage) => ({
+          requesterState,
+          expectsCompletionMessage,
+        })),
     ),
   )(
     "settles a restored yield only when its continuation is gone ($requesterState, completion=$expectsCompletionMessage)",
@@ -278,8 +278,7 @@ describe("yielded run settlement", () => {
         markSubagentRunPausedAfterYield({ entry: paused, endedAt: T0 });
         return { value: undefined, postimages: new Map([[runId, paused]]) };
       });
-      // Hydrate from SQLite under the replacement registry; no old execution or
-      // completion authority can be revived to settle this retained wait.
+      // Restore rows without reviving old execution or completion authority.
       await resetSubagentRegistryForTests({ persist: false });
       if (live) {
         const events = await vi.importActual<typeof import("../../../infra/agent-events.js")>(
@@ -288,10 +287,8 @@ describe("yielded run settlement", () => {
         vi.mocked(onAgentEvent).mockImplementation(events.onAgentEvent);
       }
       await fixture.activateGatewayRuntime();
-      // Give cleanup a successful transport, so an attempted deletion cannot be
-      // hidden by this fixture's deliberately minimal hosted Gateway context.
-      const context = getGatewayContextResolver(fixture.gatewayRuntime)!()!;
-      context.localEmbedded = true;
+      // Let cleanup succeed so an unintended deletion stays visible.
+      getGatewayContextResolver(fixture.gatewayRuntime)!()!.localEmbedded = true;
       const gatewayRequest = vi.spyOn(gatewayCall, "callGateway").mockResolvedValue({ ok: true });
       const restored = subagentRuns.get(runId)!;
       expect(restored.waitForMessage).toBe(
