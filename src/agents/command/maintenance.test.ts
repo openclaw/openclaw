@@ -352,3 +352,44 @@ describe("agent command foreground completion", () => {
     },
   );
 });
+
+describe("agent command maintenance context budget", () => {
+  it.each(["preflight", "after-turn"] as const)(
+    "budgets %s maintenance against a window only the model catalog declares",
+    async (stage) => {
+      const { sessionId, sessionKey, storePath } = sessionTarget(`catalog-window-${stage}`);
+      // The selected model's window comes only from its catalog row, as for a plugin model.
+      expectDefined(state.cfg?.agents?.defaults, "agent defaults").model = {
+        primary: "openai/gpt-5.5",
+      };
+      state.loadManifestModelCatalogMock.mockReturnValue([
+        { provider: "openai", id: "gpt-5.5", name: "gpt-5.5", contextWindow: 1_048_576 },
+      ]);
+      if (stage === "preflight") {
+        await replaceSessionEntry(
+          { sessionKey, storePath },
+          { sessionId, updatedAt: Date.now(), totalTokens: 190_000, totalTokensFresh: true },
+        );
+      }
+      attempt.mockImplementationOnce(async (params) => {
+        params.onSuccessfulAuthProfile?.({});
+        return answer(sessionId, "Large-window answer.");
+      });
+
+      await agentCommandFromGatewayIngress(
+        { message: "continue", sessionId, sessionKey, allowModelOverride: false },
+        ...GATEWAY_INGRESS_ARGS,
+      );
+      await waitForSessionMaintenance(sessionKey);
+
+      const request = expectDefined(
+        (stage === "preflight" ? preflight : compact).mock.calls[0]?.[0],
+        `${stage} maintenance request`,
+      );
+      // Loaded after the compaction test support registers its module mocks.
+      const { resolveFollowupContextTokens } =
+        await import("../../auto-reply/reply/agent-runner-memory-runtime.js");
+      expect(resolveFollowupContextTokens(request, "openclaw")).toBe(1_048_576);
+    },
+  );
+});

@@ -45,7 +45,9 @@ const compactionTestState = vi.hoisted(() => ({
   workspaceDir: undefined as string | undefined,
   agentDir: undefined as string | undefined,
   runAgentAttemptMock: vi.fn<RunAgentAttempt>(),
-  loadManifestModelCatalogMock: vi.fn((_params: LoadManifestModelCatalogParams) => []),
+  loadManifestModelCatalogMock: vi.fn(
+    (_params: LoadManifestModelCatalogParams): ReturnType<typeof loadManifestModelCatalog> => [],
+  ),
   normalizeProviderModelIdWithRuntimeMock: vi.fn(
     (_params: ProviderModelNormalizationParams) => undefined,
   ),
