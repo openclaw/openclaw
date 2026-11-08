@@ -151,30 +151,17 @@ describe("Signal durable ingress", () => {
   });
 
   it("appends a burst of received events in a few transactions, not one each", async () => {
-    const appends = vi.fn();
-    const counted: SignalIngressQueue = {
-      ...queue,
-      enqueue: (...args) => {
-        appends();
-        return queue.enqueue(...args);
-      },
-      enqueueAndClaim: (...args) => {
-        appends();
-        return queue.enqueueAndClaim!(...args);
-      },
-      enqueueBatch: (...args) => {
-        appends();
-        return queue.enqueueBatch!(...args);
-      },
-    };
-    const monitor = await start(defer, counted);
+    const appends = (["enqueue", "enqueueAndClaim", "enqueueBatch"] as const).map((method) =>
+      vi.spyOn(queue, method),
+    );
+    const monitor = await start(defer);
     const burst = Array.from({ length: 50 }, (_, index) =>
       signalEvent({ timestamp: 1_700_000_000_001 + index }),
     );
     await Promise.all(burst.map((event) => monitor.receive(event)));
     const rows = [...(await queue.listPending({ limit: "all" })), ...(await queue.listClaims())];
     expect(rows).toHaveLength(50);
-    expect(appends.mock.calls.length).toBeLessThanOrEqual(2);
+    expect(appends.reduce((sum, spy) => sum + spy.mock.calls.length, 0)).toBeLessThanOrEqual(2);
   });
 
   it("persists independent conversation lanes and recovers each raw event exactly once", async () => {
