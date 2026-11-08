@@ -8,6 +8,24 @@ import { showToast, type ToastOptions } from "./toast.ts";
 import "./toast-host.tsx";
 
 const rect = (element: Element) => element.getBoundingClientRect();
+function touchGesture(target: HTMLElement, x: number, y: number, cancel = false) {
+  const touch = (clientX: number, clientY: number) =>
+    new Touch({ identifier: 1, target, clientX, clientY });
+  const dispatch = (type: string, point: Touch, ended = false) => {
+    const event = new TouchEvent(type, {
+      bubbles: true,
+      cancelable: true,
+      touches: ended ? [] : [point],
+      changedTouches: [point],
+    });
+    target.dispatchEvent(event);
+    return event;
+  };
+  dispatch("touchstart", touch(100, 200));
+  const move = dispatch("touchmove", touch(100 + x, 200 + y));
+  dispatch(cancel ? "touchcancel" : "touchend", touch(100 + x, 200 + y), true);
+  return move;
+}
 async function useViewport(width: number, height = 844) {
   const { page } = await import("vitest/browser");
   await page.viewport(width, height);
@@ -335,6 +353,9 @@ describe.skipIf(navigator.userAgent.toLowerCase().includes("jsdom"))("toast brow
     );
     for (const { toast, action, dismiss } of [center, arrival]) {
       expect(dismiss.offsetHeight).toBe(22);
+      if (width === 390) {
+        expect(getComputedStyle(dismiss).opacity).toBe("1");
+      }
       expect(rect(action).height).toBe(28);
       expect(rect(toast).left).toBeGreaterThanOrEqual(12);
       expect(rect(toast).right).toBeLessThanOrEqual(width - 12);
@@ -358,6 +379,30 @@ describe.skipIf(navigator.userAgent.toLowerCase().includes("jsdom"))("toast brow
     }
   });
 
+  it("dismisses only deliberate upward swipes and preserves taps and controls", async () => {
+    await useViewport(390);
+    const onDismiss = vi.fn();
+    const onAction = vi.fn();
+    const { toast, message, action } = await renderToast({ onDismiss, onAction });
+    for (const [x, y, cancel] of [
+      [0, 0, false],
+      [0, -20, false],
+      [0, 80, false],
+      [80, -50, false],
+      [0, -80, true],
+    ] as const) {
+      touchGesture(message, x, y, cancel);
+      await waitForSolid(() => expect(toast.dataset.active).toBe("true"));
+    }
+    touchGesture(action, 0, -80);
+    expect(toast.dataset.active).toBe("true");
+    expect(onAction).not.toHaveBeenCalled();
+    expect(touchGesture(message, 4, -80).defaultPrevented).toBe(true);
+    await waitForSolid(() => expect(toast.dataset.active).toBe("false"));
+    await settleAnimations(toast.parentElement!);
+    await waitForSolid(() => expect(onDismiss).toHaveBeenCalledExactlyOnceWith("dismiss"));
+  });
+
   it("keeps anchored notices on their panel", async () => {
     const { toast } = await renderToast({ anchor: makeAnchor(350, 20) });
     expect(toast.classList.contains("app-toast--anchored")).toBe(true);
@@ -373,6 +418,8 @@ describe.skipIf(navigator.userAgent.toLowerCase().includes("jsdom"))("toast brow
         message: "Lost. ".repeat(1000),
       });
       expect(body.scrollHeight).toBeGreaterThan(body.clientHeight);
+      expect(touchGesture(body, 0, -80).defaultPrevented).toBe(false);
+      expect(toast.dataset.active).toBe("true");
       body.scrollTop = body.scrollHeight;
       expect(body.scrollTop).toBeGreaterThan(0);
       for (const element of [toast, ...toast.querySelectorAll("button")]) {

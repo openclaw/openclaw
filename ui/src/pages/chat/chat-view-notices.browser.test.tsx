@@ -33,7 +33,9 @@ it("renders a self-contained worktree warning as a dismissible shared toast", as
 });
 
 it("keeps redacted diagnostics readable, stable across refreshes, and reset for a new failure", async () => {
-  const [detail, setDetail] = createSignal("Restore failed\npassword=synthetic-secret");
+  const [detail, setDetail] = createSignal(
+    "Restore failed\npassword=synthetic-secret\n" + "Diagnostic line\n".repeat(80),
+  );
   const [onDismiss, setOnDismiss] = createSignal<(() => void) | undefined>();
   const view = mountSolid(() => (
     <ChatTopbarNoticesContent
@@ -51,11 +53,30 @@ it("keeps redacted diagnostics readable, stable across refreshes, and reset for 
   const copy = box(details, ".lazy-view-error__action");
   expect(copy.left).toBeGreaterThanOrEqual(diagnostic.getBoundingClientRect().right);
   expect(copy.right).toBeLessThanOrEqual(box(details, ".lazy-view-error__well").right);
-  setOnDismiss(() => vi.fn());
+  const dismiss = vi.fn();
+  setOnDismiss(() => dismiss);
   await waitForSolid(() =>
     expect(view.container.querySelector(".app-toast__dismiss")).not.toBeNull(),
   );
   expect(view.container.querySelector("details")).toBe(details);
+  expect(details.open).toBe(true);
+  expect(diagnostic.scrollHeight).toBeGreaterThan(diagnostic.clientHeight);
+  for (const [type, clientY] of [
+    ["touchstart", 200],
+    ["touchmove", 120],
+    ["touchend", 120],
+  ] as const) {
+    const touch = new Touch({ identifier: 1, target: diagnostic, clientX: 100, clientY });
+    const event = new TouchEvent(type, {
+      bubbles: true,
+      cancelable: true,
+      touches: type === "touchend" ? [] : [touch],
+      changedTouches: [touch],
+    });
+    diagnostic.dispatchEvent(event);
+    expect(event.defaultPrevented).toBe(false);
+  }
+  expect(dismiss).not.toHaveBeenCalled();
   expect(details.open).toBe(true);
   setDetail("A different restore failure");
   await waitForSolid(() => expect(view.container.querySelector("details")?.open).toBe(false));
