@@ -71,6 +71,7 @@ const { values } = parseArgs({
     profile: { type: "string", default: "local" },
     "idle-ms": { type: "string", default: "5000" },
     trace: { type: "boolean", default: false },
+    "server-profile": { type: "boolean", default: false },
     "no-rpc-observer": { type: "boolean", default: false },
     "observe-ms": { type: "string", default: "0" },
     "prepare-ms": { type: "string", default: "0" },
@@ -102,6 +103,7 @@ assert(["1", "4"].includes(values["cpu-throttle"]));
 if (values["first-run"]) {
   values["restart-gateway-per-sample"] = true;
 }
+assert(!values["server-profile"] || values["first-run"], "Server profiles require --first-run");
 assert(
   !values["empty-plugin-installation"] || values["first-run"],
   "Empty plugins require --first-run",
@@ -181,7 +183,10 @@ config.gateway = {
   trustedProxies: ["127.0.0.1"],
   controlUi: { enabled: true, root: path.resolve(values["bundle-dir"]), allowedOrigins: [url] },
 };
-config.diagnostics = { enabled: true };
+config.diagnostics = {
+  enabled: true,
+  ...(values["server-profile"] ? { flags: ["timeline", "profiler"] } : {}),
+};
 if (values["empty-plugin-installation"]) {
   values["first-run-plugins"] = true;
   // Activate the on-demand X UI without credentials or a configured account.
@@ -261,6 +266,15 @@ const env = createGatewayBenchEnv(path.join(root, "home"), configPath, {
     OPENCLAW_BENCH_RPC_PARENT: String(process.pid),
     OPENCLAW_BENCH_RPC_ENTRY: entry,
     OPENCLAW_GATEWAY_TOKEN: token,
+    // Fresh homes must not discover the checkout containing the proof directory.
+    ...(values["first-run"] ? { GIT_CEILING_DIRECTORIES: output } : {}),
+    ...(values["server-profile"]
+      ? {
+          OPENCLAW_DIAGNOSTICS_TIMELINE_PATH: path.join(output, "gateway-timeline.jsonl"),
+          OPENCLAW_DIAGNOSTICS: "timeline,profiler",
+          OPENCLAW_BENCH_SERVER_PROFILE: "1",
+        }
+      : {}),
   },
 });
 const seed = createHash("sha256").update("synthetic-rpc-payloads-device").digest();
@@ -444,7 +458,11 @@ const proxy = createServer((socket) => {
   up.connect(socket, target, () => {});
   down.connect(target, socket, () => {});
 });
-async function control(action: "begin" | "end") {
+async function control(
+  action: "begin" | "end" | "profile-start" | "profile-stop",
+  profilePath?: string,
+  captureProcesses = false,
+) {
   assert(child, "Gateway is not running");
   const activeChild = child;
   const id = randomUUID();
@@ -467,7 +485,14 @@ async function control(action: "begin" | "end") {
       }
     }
     activeChild.on("message", receive);
-    activeChild.send({ channel: "gateway-ui-rpc-measure", action, id, countOps: false });
+    activeChild.send({
+      channel: "gateway-ui-rpc-measure",
+      action,
+      id,
+      countOps: false,
+      ...(captureProcesses ? { captureProcesses: true } : {}),
+      ...(profilePath ? { path: profilePath } : {}),
+    });
   });
 }
 const selectors: Partial<Record<RouteId, string>> = {
@@ -724,6 +749,7 @@ const report: {
   profile: string;
   entry: string;
   rpcObserver: boolean;
+  serverProfile: boolean;
   restartGatewayPerSample: boolean;
   fixtureNow: number;
   observations: unknown[];
@@ -743,6 +769,7 @@ const report: {
   profile: values.profile,
   entry,
   rpcObserver: !values["no-rpc-observer"],
+  serverProfile: values["server-profile"],
   restartGatewayPerSample: values["restart-gateway-per-sample"],
   fixtureNow,
   observations: [],
@@ -929,7 +956,7 @@ try {
           selector: string,
         ) {
           activePhase = name;
-          await control("begin");
+          await control("begin", undefined, values["server-profile"] && name === "first-load");
           const documentBefore = await page.evaluate(() => performance.timeOrigin);
           await resetControlUiPageObserver(page);
           const providerStart = providerRequests.length;
@@ -941,6 +968,14 @@ try {
           }, selector);
           const startedAt = performance.now();
           let error: string | undefined;
+          const serverProfilePath =
+            values["server-profile"] &&
+            ["first-load", "first-message-reply", "second-message-reply"].includes(name)
+              ? path.join(output, `${engine}-${sample}-${name}.cpuprofile`)
+              : undefined;
+          if (serverProfilePath) {
+            await control("profile-start");
+          }
           try {
             await action();
             await page.waitForFunction(
@@ -955,6 +990,10 @@ try {
             );
           } catch (cause) {
             error = String(cause);
+          } finally {
+            if (serverProfilePath) {
+              await control("profile-stop", serverProfilePath);
+            }
           }
           await finishControlUiPageObserver(page);
           const readiness = await page.evaluate(() => {
@@ -1000,6 +1039,7 @@ try {
             cpuThrottle: Number(values["cpu-throttle"]),
             sample,
             name,
+            ...(serverProfilePath ? { serverProfilePath } : {}),
             readyMs: readiness.readyAt === null ? null : readiness.readyAt - readiness.startedAt,
             applicationMs:
               readiness.readyAt === null || readiness.inputAt === null
@@ -1358,6 +1398,7 @@ async function compare() {
         ...(values["empty-plugin-installation"] ? ["--empty-plugin-installation"] : []),
         ...(values.screenshots ? ["--screenshots"] : []),
         ...(values.trace ? ["--trace"] : []),
+        ...(values["server-profile"] ? ["--server-profile"] : []),
         ...(values.stream ? ["--stream"] : []),
         ...(values["routes-only"] ? ["--routes-only"] : []),
         ...(values["cold-only"] ? ["--cold-only"] : []),

@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
   canonicalizeForContainment,
-  canonicalizeForContainmentSync,
+  realpathViaExistingPrefixSync,
   respellUnderRoot,
 } from "./path-containment.js";
 
@@ -60,7 +60,9 @@ describe.runIf(process.platform !== "win32")("canonicalizeForContainment", () =>
           )
         : expect.objectContaining(expected);
     expect(await canonicalizeForContainment(candidate)).toEqual(want);
-    expect(canonicalizeForContainmentSync(candidate)).toEqual(want);
+    expect(realpathViaExistingPrefixSync(candidate)).toBe(
+      expected.kind === "resolved" ? absolute(expected.path) : undefined,
+    );
   });
 
   it("re-spells a canonical candidate under the caller's root spelling", async () => {

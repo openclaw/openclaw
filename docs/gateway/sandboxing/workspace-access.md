@@ -259,7 +259,11 @@ this checkout while capturing or applying changes. An existing session first
 checks both workspaces against their accepted baseline without pausing. If both
 are unchanged and no recovery is pending, its runtimes keep running. Changed or
 interrupted checks return to paused reconciliation; file edits are never applied
-from the live check. Concurrent preparations of the same workspace and session
+from the live check. Checkpoints after commands and file mutations use the same
+check for the guest workspace: commands that leave accepted files unchanged do
+not pause the sandbox. Changed checkpoints still pause through capture and
+publication, including writes from background processes and termination handlers.
+Concurrent preparations of the same workspace and session
 generation share queued reconciliation. Once filesystem observation begins,
 later preparations require a fresh check so intervening edits remain visible.
 Completed preparation results are not cached. Each caller retains its own
@@ -277,6 +281,10 @@ the canonical file, and import the saved change into the private checkout under 
 same custody before resuming its runtimes. Capture,
 publication, and lifecycle operations retain their reconciliation lease and pause
 requirements.
+Each successful container pause records a `sandbox/quiescence` info log with a
+bounded reason (`checkpoint`, `preparation`, `publication`, `retirement`, `restore`,
+or `reconcile`) and that reason's process-lifetime counter. Already-paused runtimes
+and stopped containers do not increment it; counters restart with the Gateway.
 Captured workspace authority is checked again after
 filesystem and engine preparation, immediately before filesystem commands,
 container creation/start/setup, and late browser restarts. Closing the owner
