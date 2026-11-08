@@ -413,6 +413,8 @@ it.each(["resolve", "reject"])(
     } else {
       pending.reject(new Error("Inventory unavailable"));
       await waitForSolid(() => expect(mounted.text()).toContain("Inventory unavailable"));
+      expect(mounted.find(".skills-toolbar__status option")?.textContent).toBe("All");
+      expect(mounted.text()).not.toContain("No skills");
     }
     expect(mounted.find('input[name="skills-filter"]')).toBe(input);
     expect(input.value).toBe("prepared");
