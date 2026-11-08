@@ -18,7 +18,8 @@ input.oc-checkbox.oc-checkbox,
   block-size: 16px;
   padding: 0;
   border: 1px solid color-mix(in srgb, var(--text) 22%, var(--border-hover));
-  border-radius: var(--radius-sm);
+  /* Keep this 16px control box-shaped without rounding off square themes. */
+  border-radius: min(3px, var(--radius-sm));
   background: var(--field-bg);
   box-shadow: none;
   color: var(--accent-foreground);
