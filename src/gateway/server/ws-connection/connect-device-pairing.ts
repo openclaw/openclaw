@@ -658,9 +658,11 @@ export async function authorizeGatewayConnectDevice(
     }
     if (role === "operator" && !deviceToken && state.isControlUi) {
       // Lanes that issue no token still mark the browser as managed on the Access page.
-      // Never bind a device that holds a token from another lane: the binding is authority.
+      // Approval may have persisted a token this lane never delivers; binding it keeps that
+      // token on the membership lifecycle. Browser device keys are per origin, so a token
+      // issued to this key on ordinary ingress needs the same origin there too (accepted).
       const current = await getPairedDevice(state.device.id);
-      if (current?.clientId === GATEWAY_CLIENT_IDS.CONTROL_UI && !current.tokens?.operator) {
+      if (current?.clientId === GATEWAY_CLIENT_IDS.CONTROL_UI) {
         await recordTokenlessOpenClawIdOperator(state.device.id, issuedPeerKey);
       }
     }
