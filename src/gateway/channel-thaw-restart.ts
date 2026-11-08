@@ -5,25 +5,37 @@ import type { ChannelManager } from "./server-channels.js";
 
 type ThawRestartManager = Pick<
   ChannelManager,
-  "getRuntimeSnapshot" | "isManuallyStopped" | "isAccountListed" | "stopChannel" | "startChannel"
+  "getRuntimeSnapshot" | "isAccountListed" | "captureAccountRestart"
 >;
 
-export type ThawRestartTarget = { channelId: ChannelId; accountId: string };
+export type ThawRestartTarget = {
+  channelId: ChannelId;
+  accountId: string;
+  restart: NonNullable<ReturnType<ChannelManager["captureAccountRestart"]>>;
+};
 
 export type ThawRestartSelection =
   | { kind: "new-thaw"; pendingTargets?: readonly ThawRestartTarget[] }
   | { kind: "deferred-retry"; targets: readonly ThawRestartTarget[] };
 
-function snapshotRunningTargets(manager: ThawRestartManager): ThawRestartTarget[] {
-  return Object.entries(
+export function captureThawRestartTargets(
+  manager: ThawRestartManager,
+  pending: readonly ThawRestartTarget[] = [],
+): ThawRestartTarget[] {
+  const current = Object.entries(
     manager.getRuntimeSnapshot({ inspectAccounts: false }).channelAccounts,
   ).flatMap(([channelId, accounts]) =>
-    Object.entries(accounts ?? {})
-      .filter(
-        ([accountId, status]) =>
-          status?.running === true && manager.isAccountListed(channelId, accountId),
-      )
-      .map(([accountId]) => ({ channelId, accountId })),
+    Object.entries(accounts ?? {}).flatMap(([accountId, status]) => {
+      if (status?.running !== true || !manager.isAccountListed(channelId, accountId)) {
+        return [];
+      }
+      const restart = manager.captureAccountRestart(channelId, accountId, "host-thaw");
+      return restart ? [{ channelId, accountId, restart }] : [];
+    }),
+  );
+  return dedupeByKey(
+    [...current, ...pending],
+    ({ channelId, accountId }) => `${channelId}:${accountId}`,
   );
 }
 
@@ -38,67 +50,19 @@ export async function restartRunningChannelAccounts(
 ): Promise<ThawRestartTarget[]> {
   const targets =
     selection.kind === "new-thaw"
-      ? dedupeByKey(
-          [...(selection.pendingTargets ?? []), ...snapshotRunningTargets(manager)],
-          (target) => `${target.channelId}:${target.accountId}`,
-        )
+      ? captureThawRestartTargets(manager, selection.pendingTargets)
       : [...selection.targets];
   const failedTargets: ThawRestartTarget[] = [];
   for (const [index, target] of targets.entries()) {
     const { channelId, accountId } = target;
-    if (manager.isManuallyStopped(channelId, accountId)) {
-      continue;
-    }
     // A suspension can commit while an account stop is awaited; retain only
     // unfinished targets so successful siblings are not disrupted again.
     if (!opts.shouldContinue()) {
       return [...failedTargets, ...targets.slice(index)];
     }
     try {
-      const snapshotOptions = { channelId, inspectAccounts: false };
-      let current =
-        manager.getRuntimeSnapshot(snapshotOptions).channelAccounts[channelId]?.[accountId];
-      if (!current || !manager.isAccountListed(channelId, accountId)) {
-        continue;
-      }
-      await manager.stopChannel(channelId, accountId, { manual: false });
-      if (!opts.shouldContinue()) {
-        return [...failedTargets, target, ...targets.slice(index + 1)];
-      }
-      current = manager.getRuntimeSnapshot(snapshotOptions).channelAccounts[channelId]?.[accountId];
-      if (!current || !manager.isAccountListed(channelId, accountId)) {
-        continue;
-      }
-      let startOutcomes = await manager.startChannel(channelId, accountId, {
-        reason: "host-thaw",
-        preserveManualStop: true,
-      });
-      let startOutcome = startOutcomes.get(accountId);
-      let restarted =
-        manager.getRuntimeSnapshot(snapshotOptions).channelAccounts[channelId]?.[accountId];
-      if (
-        startOutcome?.status === "retry" &&
-        restarted?.restartPending === true &&
-        manager.isAccountListed(channelId, accountId)
-      ) {
-        // A timed-out stop uses a two-call recovery contract: the first call
-        // requests replacement and the second discards the stale task.
-        startOutcomes = await manager.startChannel(channelId, accountId, {
-          reason: "host-thaw",
-          preserveManualStop: true,
-        });
-        startOutcome = startOutcomes.get(accountId);
-        restarted =
-          manager.getRuntimeSnapshot(snapshotOptions).channelAccounts[channelId]?.[accountId];
-      }
-      // The channel manager owns all failures after handoff through its restart
-      // supervisor. Intentional configuration skips are complete; only a
-      // transient owner conflict remains this thaw's retry.
-      if (startOutcome?.status === "retry") {
+      if (!(await target.restart(opts.shouldContinue))) {
         failedTargets.push(target);
-        opts.onError(
-          `[${channelId}:${accountId}] host-thaw restart failed: replacement was not handed off (${startOutcome.reason})${restarted?.lastError ? `: ${restarted.lastError}` : ""}`,
-        );
       }
     } catch (error) {
       failedTargets.push(target);

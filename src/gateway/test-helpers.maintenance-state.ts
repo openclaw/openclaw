@@ -24,6 +24,7 @@ export function createGatewayMaintenanceStateForTest(params?: {
     refreshGatewayHealthSnapshot: async () =>
       params?.healthSummary ?? ({ ok: true } as HealthSummary),
     logHealth: { info: () => {}, error: () => {} },
+    captureRunningChannels: () => {},
     restartRunningChannels: async () => true,
     activeWorkInspectors: {},
     refreshPresence: () => {},

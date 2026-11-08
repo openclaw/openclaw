@@ -1,8 +1,10 @@
 import { resolveChannelAccount } from "../channels/account-resolution.js";
 import type { ChannelGatewayContextV2 } from "../channels/plugins/types.adapters.js";
 import type { AnyChannelPlugin as ChannelPlugin } from "../channels/plugins/types.plugin.js";
+import type { ChannelAccountSnapshot, ChannelId } from "../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
+import type { SubsystemLogger } from "../logging/subsystem.js";
 import {
   createPluginRuntimeCapabilityLease,
   type PluginRuntimeCapabilityLease,
@@ -14,6 +16,8 @@ import { withPluginServiceScheduler } from "../plugins/service-scheduler-binding
 import { createPluginServiceSchedulerRunner } from "../plugins/service-scheduler-context.js";
 import { createPluginServiceScheduler } from "../plugins/service-scheduler.js";
 import type { PluginServiceSchedulerV1 } from "../plugins/service-scheduler.types.js";
+import type { StartChannelOptions } from "./server-channel-runtime.types.js";
+import type { ChannelManager } from "./server-channels.js";
 
 export type ChannelAccountLifetime = {
   plugin: ChannelPlugin;
@@ -29,6 +33,78 @@ export type ChannelAccountLifetime = {
 export type ChannelAccountStopOutcome =
   | { status: "fulfilled" }
   | { status: "rejected"; error: unknown };
+
+export function captureChannelAccountRestart(params: {
+  store:
+    | {
+        lifetimes: ReadonlyMap<string, ChannelAccountLifetime>;
+        runtimes: ReadonlyMap<string, ChannelAccountSnapshot>;
+      }
+    | undefined;
+  channelId: ChannelId;
+  accountId: string;
+  reason: StartChannelOptions["reason"];
+  manager: Pick<
+    ChannelManager,
+    "stopChannel" | "startChannel" | "isAccountListed" | "isManuallyStopped"
+  >;
+  log: SubsystemLogger;
+}): ReturnType<ChannelManager["captureAccountRestart"]> {
+  const { store, channelId, accountId, reason, manager, log } = params;
+  let expectedLifetime = store?.lifetimes.get(accountId);
+  if (!store || !expectedLifetime) {
+    return undefined;
+  }
+  let stopRequested = false;
+  return async (shouldContinue) => {
+    const lifetimeBeforeStop = store.lifetimes.get(accountId);
+    if (
+      (lifetimeBeforeStop !== expectedLifetime && (lifetimeBeforeStop || !stopRequested)) ||
+      manager.isManuallyStopped(channelId, accountId) ||
+      !manager.isAccountListed(channelId, accountId)
+    ) {
+      return true;
+    }
+    if (!shouldContinue()) {
+      return false;
+    }
+    // Stop installs its gate synchronously. A deferred recovery may only stop
+    // its captured lifetime, never a replacement installed by another owner.
+    if (lifetimeBeforeStop) {
+      stopRequested = true;
+      await manager.stopChannel(channelId, accountId, { manual: false });
+    }
+    const currentLifetime = store.lifetimes.get(accountId);
+    if (currentLifetime && currentLifetime !== expectedLifetime) {
+      return true;
+    }
+    // Our stop may remove the lifetime now or after timed-out work finally exits.
+    // Either absence remains ours to retry; only a replacement ends ownership.
+    expectedLifetime = currentLifetime;
+    if (!shouldContinue()) {
+      return false;
+    }
+    if (
+      manager.isManuallyStopped(channelId, accountId) ||
+      !manager.isAccountListed(channelId, accountId)
+    ) {
+      return true;
+    }
+    const outcomes = await manager.startChannel(channelId, accountId, {
+      reason,
+      preserveManualStop: true,
+    });
+    const outcome = outcomes.get(accountId);
+    if (outcome?.status === "retry") {
+      const lastError = store.runtimes.get(accountId)?.lastError;
+      log.warn?.(
+        `[${accountId}] ${reason} restart failed: replacement was not handed off (${outcome.reason})${lastError ? `: ${lastError}` : ""}`,
+      );
+      return false;
+    }
+    return true;
+  };
+}
 
 export function createChannelAccountLifetime(
   plugin: ChannelPlugin,

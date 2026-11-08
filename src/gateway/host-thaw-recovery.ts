@@ -15,6 +15,7 @@ export type HostThawChannelRestartOutcome =
 
 type HostThawDeps = {
   nowMs: () => number;
+  captureChannels: () => void;
   restartChannelsIfIdle: (
     mode: "new-thaw" | "deferred-retry",
   ) => Promise<HostThawChannelRestartOutcome>;
@@ -128,6 +129,8 @@ export function createHostThawRecovery(deps: HostThawDeps): { tick: () => Promis
             `host timing gap attributed to event-loop load: gap ${Math.round(gapMs)}ms, CPU ratio ${cpuCoreRatio.toFixed(2)}; skipping thaw recovery`,
           );
         } else {
+          // Bind recovery before admission checks and awaited refresh work.
+          deps.captureChannels();
           pendingFrozenMs = Math.max(pendingFrozenMs ?? 0, gapMs - TICK_INTERVAL_MS);
           pendingChannelRestart = {
             deadlineAtMs: nowMs + HOST_THAW_RESTART_WINDOW_MS,

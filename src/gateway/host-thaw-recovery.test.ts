@@ -13,6 +13,7 @@ function createHarness() {
   let restartReason: "active-work" | "admission-closed" | "channel-restart-incomplete" | undefined;
   const deps = {
     nowMs: () => nowMs,
+    captureChannels: vi.fn(),
     restartChannelsIfIdle: vi.fn(async () =>
       restartReason === undefined
         ? ({ status: "completed" } as const)
@@ -117,6 +118,7 @@ describe("host thaw recovery", () => {
     harness.setRestartIdle(true);
     await harness.advance(TICK_INTERVAL_MS);
 
+    expect(harness.deps.captureChannels).toHaveBeenCalledOnce();
     expect(harness.deps.restartChannelsIfIdle).toHaveBeenCalledTimes(3);
     expect(harness.deps.restartChannelsIfIdle.mock.calls).toEqual([
       ["new-thaw"],
@@ -200,12 +202,14 @@ describe("host thaw recovery", () => {
 
     await harness.advance(TICK_INTERVAL_MS + HOST_THAW_MIN_FROZEN_MS);
     expectRecoveryCount(harness, 0);
+    expect(harness.deps.captureChannels).toHaveBeenCalledOnce();
 
     harness.setAdmissionClosed(false);
     await harness.advance(TICK_INTERVAL_MS);
     await harness.advance(TICK_INTERVAL_MS);
 
     expectRecoveryCount(harness, 1);
+    expect(harness.deps.captureChannels).toHaveBeenCalledOnce();
   });
 
   it("re-pends the full recovery when admission closes between steps", async () => {

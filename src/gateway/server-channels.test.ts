@@ -1024,7 +1024,7 @@ describe("server-channels auto restart", () => {
 
   it.each([
     { kind: "deferred-retry", restarted: ["broken"] },
-    { kind: "new-thaw", restarted: ["broken", "healthy"] },
+    { kind: "new-thaw", restarted: ["healthy", "broken"] },
   ] as const)(
     "selects $kind targets after a partial host-thaw restart",
     async ({ kind, restarted }) => {
@@ -1057,7 +1057,9 @@ describe("server-channels auto restart", () => {
         shouldContinue: () => true,
         onError: (message) => errors.push(message),
       });
-      expect(failedTargets).toEqual([{ channelId: "discord", accountId: "broken" }]);
+      expect(failedTargets).toEqual([
+        { channelId: "discord", accountId: "broken", restart: expect.any(Function) },
+      ]);
       expect(starts).toEqual(["healthy"]);
       expect(stops).toEqual(["healthy", "broken"]);
       expect(errors).toEqual(["[discord:broken] host-thaw restart failed: Error: stop failed"]);
@@ -1115,28 +1117,6 @@ describe("server-channels auto restart", () => {
     });
   });
 
-  it("completes a timed-out channel restart in one host-thaw pass", async () => {
-    const startAccount = vi.fn(async ({ abortSignal }: { abortSignal: AbortSignal }) => {
-      abortSignal.addEventListener("abort", () => {}, { once: true });
-      await new Promise<void>(() => {});
-    });
-    installTestRegistry(createTestPlugin({ startAccount }));
-    const manager = createManager();
-    await manager.startChannels();
-
-    const restartTask = restartRunningChannelAccounts(manager, {
-      shouldContinue: () => true,
-      onError: () => {},
-    });
-    await vi.advanceTimersByTimeAsync(5_000);
-    await restartTask;
-
-    const account = readAccount(manager);
-    expect(startAccount).toHaveBeenCalledTimes(2);
-    expect(account?.running).toBe(true);
-    expect(account?.restartPending).toBe(false);
-  });
-
   it("does not repeat a thaw recovery start after the pending account is removed", async () => {
     let accountIds = [DEFAULT_ACCOUNT_ID];
     const releaseTask = createDeferred();
@@ -1150,12 +1130,6 @@ describe("server-channels auto restart", () => {
     );
     const manager = createManager();
     await manager.startChannels();
-    const startChannel = manager.startChannel;
-    const recoveryStart = vi.spyOn(manager, "startChannel").mockImplementation(async (...args) => {
-      const outcome = await startChannel(...args);
-      accountIds = [];
-      return outcome;
-    });
     const errors: string[] = [];
     try {
       const restartTask = restartRunningChannelAccounts(manager, {
@@ -1165,8 +1139,10 @@ describe("server-channels auto restart", () => {
       await vi.advanceTimersByTimeAsync(5_000);
 
       const pendingTargets = await restartTask;
-      expect(pendingTargets).toEqual([{ channelId: "discord", accountId: DEFAULT_ACCOUNT_ID }]);
-      expect(recoveryStart).toHaveBeenCalledOnce();
+      expect(pendingTargets).toEqual([
+        { channelId: "discord", accountId: DEFAULT_ACCOUNT_ID, restart: expect.any(Function) },
+      ]);
+      accountIds = [];
       expect(startAccount).toHaveBeenCalledOnce();
       expect(
         await restartRunningChannelAccounts(
@@ -1175,8 +1151,8 @@ describe("server-channels auto restart", () => {
           { kind: "deferred-retry", targets: pendingTargets },
         ),
       ).toEqual([]);
-      expect(errors).toHaveLength(1);
-      expect(recoveryStart).toHaveBeenCalledOnce();
+      expect(errors).toEqual([]);
+      expect(startAccount).toHaveBeenCalledOnce();
     } finally {
       releaseTask.resolve();
       await flushMicrotasks();

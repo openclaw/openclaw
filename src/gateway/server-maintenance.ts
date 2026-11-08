@@ -97,6 +97,7 @@ export function startGatewayMaintenanceTimers(params: {
     includeSensitive?: boolean;
   }) => Promise<HealthSummary>;
   logHealth: { info: (msg: string) => void; error: (msg: string) => void };
+  captureRunningChannels: () => void;
   restartRunningChannels: (
     mode: "new-thaw" | "deferred-retry",
     shouldContinue?: () => boolean,
@@ -187,6 +188,7 @@ export function startGatewayMaintenanceTimers(params: {
 
   const hostThawRecovery = createHostThawRecovery({
     nowMs: () => scheduler.now(),
+    captureChannels: params.captureRunningChannels,
     restartChannelsIfIdle,
     refreshHealth: async () => {
       await params.refreshGatewayHealthSnapshot({ probe: true });

@@ -5,6 +5,7 @@ import type { ChannelManager } from "./server-channels.js";
 
 export function createMockChannelManager(overrides?: Partial<ChannelManager>): ChannelManager {
   return {
+    captureAccountRestart: vi.fn(() => undefined),
     getRuntimeSnapshot: vi.fn(() => ({ channels: {}, channelAccounts: {} })),
     pauseChannelStarts: vi.fn(() => () => {}),
     startChannels: vi.fn(async () => {}),

@@ -1,7 +1,9 @@
+import { EventEmitter } from "node:events";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import type { ChannelGatewayContextV2 } from "../channels/plugins/types.adapters.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import * as backoff from "../infra/backoff.js";
 import { registerPluginHttpRoute } from "../plugins/http-registry.js";
 import { resetGatewayWorkAdmission } from "../process/gateway-work-admission.js";
 import { DEFAULT_ACCOUNT_ID } from "../routing/session-key.js";
@@ -9,6 +11,8 @@ import {
   createGatewaySchedulerClock,
   createTestGatewayScheduler,
 } from "../test-utils/gateway-scheduler-clock.js";
+import { restartRunningChannelAccounts } from "./channel-thaw-restart.js";
+import * as accountLifetime from "./server-channel-account-lifetime.js";
 import {
   createTestPlugin,
   createTestChannelRegistry,
@@ -276,6 +280,168 @@ describe("channel account scheduling lifetime", () => {
       await firstStop;
       await secondStop;
       await manager.stopChannel("discord");
+    }
+  });
+  it.each(["own-stop", "manual-stop", "replacement"] as const)(
+    "binds a deferred thaw to its captured lifetime after %s",
+    async (change) => {
+      let open = change === "own-stop";
+      const transport = new EventEmitter();
+      let maxListeners = 0;
+      const startAccount = vi.fn(async ({ abortSignal }: ChannelGatewayContextV2<TestAccount>) => {
+        const listener = () => {};
+        transport.on("message", listener);
+        maxListeners = Math.max(maxListeners, transport.listenerCount("message"));
+        try {
+          await waitForAbort(abortSignal);
+        } finally {
+          transport.off("message", listener);
+        }
+      });
+      const registry = createTestChannelRegistry(
+        createTestPlugin({
+          startAccount,
+          stopAccount: async () => {
+            if (change === "own-stop") {
+              open = false;
+            }
+          },
+        }),
+      );
+      const manager = createTestChannelManager({ getPluginRegistry: () => registry });
+      try {
+        await manager.startChannels();
+        const opts = { shouldContinue: () => open, onError: () => {} };
+        const targets = await restartRunningChannelAccounts(manager, opts);
+        expect(startAccount).toHaveBeenCalledOnce();
+        if (change !== "own-stop") {
+          await manager.stopChannel("discord", DEFAULT_ACCOUNT_ID);
+          if (change === "replacement") {
+            await manager.startChannel("discord", DEFAULT_ACCOUNT_ID);
+          }
+        }
+        open = true;
+        expect(
+          await restartRunningChannelAccounts(manager, opts, { kind: "deferred-retry", targets }),
+        ).toEqual([]);
+        expect(startAccount).toHaveBeenCalledTimes(change === "manual-stop" ? 1 : 2);
+        expect(maxListeners).toBe(1);
+        expect(transport.listenerCount("message")).toBe(change === "manual-stop" ? 0 : 1);
+      } finally {
+        await manager.stopChannel("discord");
+      }
+    },
+  );
+
+  it("joins a timed-out predecessor before completing deferred thaw recovery", async () => {
+    const releaseTask = createDeferred();
+    let active = 0;
+    let peak = 0;
+    const startAccount = vi.fn(async ({ abortSignal }: { abortSignal: AbortSignal }) => {
+      active += 1;
+      peak = Math.max(peak, active);
+      try {
+        if (startAccount.mock.calls.length === 1) {
+          await releaseTask.promise;
+        } else {
+          await waitForAbort(abortSignal);
+        }
+      } finally {
+        active -= 1;
+      }
+    });
+    const registry = createTestChannelRegistry(createTestPlugin({ startAccount }));
+    const manager = createTestChannelManager({ getPluginRegistry: () => registry });
+    try {
+      await manager.startChannels();
+      const opts = { shouldContinue: () => true, onError: () => {} };
+      const restartTask = restartRunningChannelAccounts(manager, opts);
+      await vi.advanceTimersByTimeAsync(5_000);
+      const targets = await restartTask;
+      expect(targets).toHaveLength(1);
+      expect(startAccount).toHaveBeenCalledOnce();
+      releaseTask.resolve();
+      await flushMicrotasks();
+      expect(
+        await restartRunningChannelAccounts(manager, opts, { kind: "deferred-retry", targets }),
+      ).toEqual([]);
+      expect(startAccount).toHaveBeenCalledTimes(2);
+      expect(peak).toBe(1);
+      expect(
+        manager.getRuntimeSnapshot().channelAccounts.discord?.[DEFAULT_ACCOUNT_ID],
+      ).toMatchObject({ running: true, restartPending: false });
+    } finally {
+      releaseTask.resolve();
+      await manager.stopChannel("discord");
+    }
+  });
+
+  it.each(["exited-run abort", "manual stop", "recovery stop"] as const)(
+    "settles restart backoff after %s",
+    async (cause) => {
+      const createLifetime = accountLifetime.createChannelAccountLifetime;
+      const controllers: AbortController[] = [];
+      const capture = vi
+        .spyOn(accountLifetime, "createChannelAccountLifetime")
+        .mockImplementation((...args) => {
+          const lifetime = createLifetime(...args);
+          controllers.push(lifetime.abort);
+          return lifetime;
+        });
+      const startAccount = vi.fn(async ({ abortSignal }: ChannelGatewayContextV2<TestAccount>) => {
+        if (controllers.length > 1) {
+          await waitForAbort(abortSignal);
+        }
+      });
+      const registry = createTestChannelRegistry(createTestPlugin({ startAccount }));
+      const manager = createTestChannelManager({ getPluginRegistry: () => registry });
+      try {
+        await manager.startChannels();
+        await vi.advanceTimersByTimeAsync(0);
+        expect(manager.isAutoRestartScheduled("discord", DEFAULT_ACCOUNT_ID)).toBe(true);
+        if (cause === "exited-run abort") {
+          controllers[0]?.abort();
+        } else {
+          await manager.stopChannel("discord", DEFAULT_ACCOUNT_ID, {
+            manual: cause === "manual stop",
+          });
+        }
+        await vi.advanceTimersByTimeAsync(6_000);
+        const restarted = cause === "exited-run abort";
+        expect(startAccount).toHaveBeenCalledTimes(restarted ? 2 : 1);
+        expect(controllers[0]?.signal.aborted).toBe(true);
+        expect(manager.isAutoRestartScheduled("discord", DEFAULT_ACCOUNT_ID)).toBe(false);
+        expect(
+          manager.getRuntimeSnapshot().channelAccounts.discord?.[DEFAULT_ACCOUNT_ID],
+        ).toMatchObject({ running: restarted, restartPending: false });
+      } finally {
+        await manager.stopChannel("discord");
+        capture.mockRestore();
+      }
+    },
+  );
+  it("records a rejected restart wait and clears pending state", async () => {
+    const startAccount = vi.fn(async () => {});
+    const registry = createTestChannelRegistry(createTestPlugin({ startAccount }));
+    const manager = createTestChannelManager({ getPluginRegistry: () => registry });
+    const wait = vi
+      .spyOn(backoff, "sleepWithAbort")
+      .mockRejectedValueOnce(new Error("restart wait failed"));
+    try {
+      await manager.startChannels();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(startAccount).toHaveBeenCalledOnce();
+      expect(
+        manager.getRuntimeSnapshot().channelAccounts.discord?.[DEFAULT_ACCOUNT_ID],
+      ).toMatchObject({
+        running: false,
+        restartPending: false,
+        lastError: "restart wait failed",
+      });
+      expect(manager.isAutoRestartScheduled("discord", DEFAULT_ACCOUNT_ID)).toBe(false);
+    } finally {
+      await manager.stopChannel("discord");
+      wait.mockRestore();
     }
   });
 });
