@@ -68,7 +68,7 @@ import type {
 } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
-const OPENCLAW_ID_MANAGED_MESSAGE =
+const MANAGED_BY_ACCESS_MESSAGE =
   "This browser connects through OpenClaw ID. Manage access on the Access page.";
 
 /**
@@ -127,7 +127,7 @@ function refuseOpenClawIdManaged(params: {
   params.respond(
     false,
     undefined,
-    errorShape(ErrorCodes.INVALID_REQUEST, OPENCLAW_ID_MANAGED_MESSAGE),
+    errorShape(ErrorCodes.INVALID_REQUEST, MANAGED_BY_ACCESS_MESSAGE),
   );
 }
 
