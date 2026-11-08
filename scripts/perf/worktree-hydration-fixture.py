@@ -6,14 +6,20 @@ Then copy seed per arm and run worktree-size-measure.ts --repo <copy> --allocati
 Or run the serial macOS comparison (five counterbalanced pairs):
 python3 scripts/perf/worktree-hydration-fixture.py <fixture> --measure --base-file <saved-object-hydration.ts>
 Repeat with --allocation for sampled heap, or --aa for two identical-source pairs.
+--pairs <count> --run-name <name> selects a separate bounded replay directory.
+--creation measures the managed service's default-base phases and full checkout.
+For that one-argument comparison, its Git wrapper reconstructs the baseline census
+command inside the real worker; the direct-owner comparison loads baseline source.
 The target has 62,000 files / 1.14 GB; 600,000 historical blobs amplify the
 repository-wide promisor scan without copying production data. Creation is excluded.
+--extra-packs 1237 adds fragmented promisor history, for 1,239 packs before hydration.
 """
 
 import json
 import os
 from pathlib import Path
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -25,9 +31,16 @@ if "--measure" in sys.argv:
     assert sys.platform == "darwin", "native CPU wrapper currently uses macOS time -l"
     baseline = Path(sys.argv[sys.argv.index("--base-file") + 1]).resolve()
     assert baseline.is_file()
-    mode = "allocation" if "--allocation" in sys.argv else "timing"
+    creation = "--creation" in sys.argv
+    mode = "creation" if creation else "allocation" if "--allocation" in sys.argv else "timing"
+    if creation:
+        assert baseline.read_text().replace('"--no-object-names"', '"--quiet"') == Path(
+            "src/agents/worktrees/object-hydration.ts").read_text()
     control = "--aa" in sys.argv
-    run_root = root / (f"aa-{mode}" if control else f"ab-{mode}")
+    run_name = sys.argv[sys.argv.index("--run-name") + 1] if "--run-name" in sys.argv else (
+        f"aa-{mode}" if control else f"ab-{mode}")
+    assert Path(run_name).name == run_name and run_name not in (".", "..")
+    run_root = root / run_name
     run_root.mkdir()
     bin_dir = run_root / "bin"
     bin_dir.mkdir()
@@ -35,9 +48,10 @@ if "--measure" in sys.argv:
     assert actual_git
     wrapper = bin_dir / "git"
     wrapper.write_text('#!/bin/sh\nprintf "%s\\n" "$*" > "$GIT_METRICS_DIR/$$.argv"\n'
-                       f'exec /usr/bin/time -l -o "$GIT_METRICS_DIR/$$.time" "{actual_git}" "$@"\n')
+                       f'exec /usr/bin/time -l -o "$GIT_METRICS_DIR/$$.time" {shlex.quote(actual_git)} "$@"\n')
     wrapper.chmod(0o755)
-    samples = 2 if control else 5
+    samples = int(sys.argv[sys.argv.index("--pairs") + 1]) if "--pairs" in sys.argv else 2 if control else 5
+    assert samples > 0
     results = []
     for pair in range(samples):
         # ABAB followed by BABA avoids always favoring the second filesystem read.
@@ -49,13 +63,28 @@ if "--measure" in sys.argv:
             shutil.copytree(root / "seed", clone)
             metrics = arm_root / "git-metrics"
             metrics.mkdir()
+            if creation:
+                rewrite = ('''if [[ " $* " == *" rev-list "* && " $* " == *" --missing=print "* ]]; then
+  for ((i=0; i<${#args[@]}; i++)); do
+    [[ "${args[i]}" != --quiet ]] || args[i]=--no-object-names
+  done
+fi
+''' if arm == "base" or control else "")
+                wrapper.write_text('#!/bin/bash\nargs=("$@")\n' + rewrite +
+                                   f'metrics={shlex.quote(str(metrics))}\n' +
+                                   'printf "%s\\n" "${args[*]}" > "$metrics/$$.argv"\n' +
+                                   f'exec /usr/bin/time -l -o "$metrics/$$.time" {shlex.quote(actual_git)} "${{args[@]}}"\n')
             environment = dict(os.environ, PATH=f"{bin_dir}:{os.environ['PATH']}",
                                GIT_METRICS_DIR=str(metrics),
                                GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM="1",
                                OPENCLAW_STATE_DIR=str(arm_root / "state"))
             command = ["node", "--import", "./scripts/tsx.mjs",
                        "scripts/perf/worktree-size-measure.ts", "--repo", str(clone)]
-            if arm == "base" or control:
+            if creation:
+                command = ["node", "--import", "./scripts/tsx.mjs",
+                           "scripts/perf/worktree-creation-measure.ts", "--repo", str(clone),
+                           "--output", str(arm_root / "creation"), "--samples", "1", "--default-base"]
+            elif arm == "base" or control:
                 command.extend(["--hydration-base-file", str(baseline)])
             if mode == "allocation":
                 command.append("--allocation")
@@ -63,7 +92,11 @@ if "--measure" in sys.argv:
             (arm_root / "stdout.txt").write_text(completed.stdout)
             (arm_root / "stderr.txt").write_text(completed.stderr)
             assert completed.returncode == 0, completed.stderr
-            result = json.loads(completed.stdout.splitlines()[-1])
+            result = (json.loads((arm_root / "creation/results.json").read_text())[0] if creation
+                      else json.loads(completed.stdout.splitlines()[-1]))
+            if creation:
+                result["phases"] = json.loads(re.search(
+                    r"phaseDurationsMs=(\{[^\n]*\})", completed.stdout)[1])
             object_counts = {}
             for name, directory in (("before", root / "seed"), ("after", clone)):
                 output = subprocess.check_output([actual_git, "-C", str(directory), "count-objects", "-v"], text=True)
@@ -150,10 +183,23 @@ for pack in bulk_packs:
     for suffix in (".pack", ".idx"):
         shutil.copyfile(pack.with_suffix(suffix), seed / ".git/objects/pack" / pack.with_suffix(suffix).name)
     (seed / ".git/objects/pack" / pack.with_suffix(".promisor").name).touch()
+extra_packs = int(sys.argv[sys.argv.index("--extra-packs") + 1]) if "--extra-packs" in sys.argv else 0
+assert 0 <= extra_packs <= 600_000
+if extra_packs:
+    history = git(origin, "ls-tree", "-r", "--format=%(objectname)", "history").splitlines()
+    for index in range(extra_packs):
+        # Duplicate historical objects model fragmented fetches without repacking the seed.
+        objects = history[index::extra_packs]
+        packed = subprocess.check_output(
+            ["git", "-C", str(origin), "pack-objects", "--window=0", "--threads=1",
+             str(seed / ".git/objects/pack/pack")],
+            input=("\n".join(objects) + "\n").encode(), env=env).decode().strip()
+        (seed / ".git/objects/pack" / f"pack-{packed}.promisor").touch()
 git(seed, "config", "gc.auto", "0")
 git(seed, "config", "maintenance.auto", "false")
 missing = git(seed, "rev-list", "--objects", "--missing=print", "--no-object-names", "--max-count=1", "HEAD")
 assert sum(line.startswith("?") for line in missing.splitlines()) == 1
 print(json.dumps({"root": str(root), "files": 62000, "targetBytes": 62000 * 18432,
                   "unrelatedHistoricalBlobs": 600000, "missingTargetObjects": 1,
+                  "packs": len(list((seed / ".git/objects/pack").glob("*.pack"))),
                   "commit": git(seed, "rev-parse", "HEAD")}))

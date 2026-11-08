@@ -3597,6 +3597,7 @@ openclaw-tooltip.sidebar-hover-tooltip {
   margin-top: 14px;
 }
 
+.content--chat > openclaw-router-outlet,
 .content--workboard > openclaw-router-outlet,
 .content--custodian > openclaw-router-outlet,
 .content.content--systems > openclaw-router-outlet {
@@ -3622,7 +3623,6 @@ openclaw-tooltip.sidebar-hover-tooltip {
   margin-top: 0;
 }
 
-.content--chat > openclaw-router-outlet,
 .content.content--plugin-embed > openclaw-router-outlet {
   display: flex;
   flex: 1 1 0;
