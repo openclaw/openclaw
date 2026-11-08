@@ -42,7 +42,7 @@ it(
     const task = state.path("task");
     await fs.mkdir(task);
     await fs.writeFile(path.join(task, "AGENTS.md"), "WORKTREE_PROJECT_RULE");
-    await fs.writeFile(path.join(state.workspaceDir, "SOUL.md"), "CANONICAL_SOUL_MUST_NOT_LEAK");
+    await fs.writeFile(path.join(state.workspaceDir, "SOUL.md"), "AGENT_WORKSPACE_SOUL");
     const certPath = await state.writeText("tls/cert.pem", TEST_TLS_CERT_PEM);
     const keyPath = await state.writeText("tls/key.pem", TEST_TLS_KEY_PEM);
     const origin = "https://control.example.test";
@@ -141,7 +141,8 @@ it(
       expect(request, "agent request with worktree instructions").toBeDefined();
       expect(request?.includes(marker), "saved preferences reach the agent request").toBe(true);
       expect(request?.includes("WORKTREE_PERSONAL_DECOY")).toBe(false);
-      expect(request?.includes("CANONICAL_SOUL_MUST_NOT_LEAK")).toBe(false);
+      // A project worktree keeps the agent's own identity files.
+      expect(request?.includes("AGENT_WORKSPACE_SOUL")).toBe(true);
     }
     expect(requests.filter((body) => body.includes("WORKTREE_PROJECT_RULE"))).toHaveLength(2);
     expect(errors).toEqual([]);

@@ -261,8 +261,9 @@ export async function resolveBootstrapFilesForRun(
   if (executionWorkspaceDir && executionWorkspaceDir !== resolveUserPath(params.workspaceDir)) {
     const executionAgentsPath = path.join(executionWorkspaceDir, DEFAULT_AGENTS_FILENAME);
     // Execution projects contribute instructions, never agent identity or memory.
+    // This pass keeps only the project's AGENTS.md, so it skips the personal file read.
     for (const file of await resolveBootstrapFiles(
-      { ...params, workspaceDir: executionWorkspaceDir },
+      { ...params, workspaceDir: executionWorkspaceDir, bootstrapUserProfileId: undefined },
       "registered",
     )) {
       if (
