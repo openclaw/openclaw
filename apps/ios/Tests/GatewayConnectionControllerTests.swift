@@ -2179,9 +2179,15 @@ private func pendingHandoffDiagnostic(
     }
 
     @Test @MainActor func `cancel without pending task preserves reconnect pause`() async {
-        let appModel = NodeAppModel()
+        let appModel = NodeAppModel(locationService: MockLocationService(authorizationStatus: .denied))
         defer { appModel.disconnectGateway() }
-        let currentConfig = Self.makeGatewayConnectConfig()
+        let controller = GatewayConnectionController(
+            appModel: appModel,
+            startDiscovery: false,
+            ingress: makeOrdinaryIngress())
+        // Use the current registration so lifecycle refresh does not replace a synthetic capability fixture.
+        let currentConfig = await Self.makeGatewayConnectConfig(
+            nodeOptions: controller.makeConnectOptions(deviceAuthGatewayID: nil))
         appModel.applyGatewayConnectConfig(currentConfig)
         await appModel.resetGatewaySessionsForForcedReconnect()
         let problem = GatewayConnectionProblem(
@@ -2192,10 +2198,6 @@ private func pendingHandoffDiagnostic(
             retryable: false,
             pauseReconnect: true)
         appModel.applyOperatorGatewayConnectionProblem(problem)
-        let controller = GatewayConnectionController(
-            appModel: appModel,
-            startDiscovery: false,
-            ingress: makeOrdinaryIngress())
 
         controller.cancelPendingConnectionAttempts()
         for _ in 0..<10 {

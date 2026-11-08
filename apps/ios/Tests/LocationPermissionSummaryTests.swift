@@ -283,7 +283,7 @@ extension LocationServicing {
                     for await _ in release {
                         return
                     }
-                })
+                }, ingress: makeOrdinaryIngress())
             let currentID = "manual|127.0.0.1|1"
             let options = await controller.makeConnectOptions(
                 deviceAuthGatewayID: currentID,
