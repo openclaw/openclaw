@@ -1,10 +1,10 @@
 import "./personal-session-group-dialog.css";
 import { createMemo, createSignal, For, onSettled, Show } from "solid-js";
+import type { PersonalSessionGroup } from "../../../src/shared/personal-session-groups.js";
 import { registerSessionOrganizationSharedEnglish } from "../i18n/locales/en-session-organization-shared.ts";
 import { registerSessionOrganizationEnglish } from "../i18n/locales/en-session-organization.ts";
 import { registerEnglishCatalog, t } from "../lib/reactive/i18n.ts";
 import type {
-  PersonalSessionGroup,
   PersonalSessionGroupCandidate,
   PersonalSessionGroupPage,
   PersonalSessionGroupScope,

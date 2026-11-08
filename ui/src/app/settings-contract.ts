@@ -3,8 +3,8 @@ import {
   normalizeUiAppearancePreference,
   type TabIconPreference,
 } from "../../../packages/gateway-protocol/src/schema/ui-appearance-preferences.ts";
+import type { PersonalSessionGroup } from "../../../src/shared/personal-session-groups.js";
 import type { BoardSessionViews } from "../lib/board/settings.ts";
-import type { PersonalSessionGroup } from "../lib/sessions/personal-groups.ts";
 import type {
   SidebarSessionActivePanels,
   SidebarSessionLayouts,

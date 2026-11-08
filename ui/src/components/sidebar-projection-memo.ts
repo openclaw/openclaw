@@ -1,4 +1,5 @@
 import type { SessionObserverDigest } from "../../../packages/gateway-protocol/src/schema/sessions.js";
+import type { PersonalSessionGroup } from "../../../src/shared/personal-session-groups.js";
 import type { GatewaySessionRow, SessionsListResult } from "../api/types.ts";
 import { personalSessionPinKeys } from "../app-navigation.ts";
 import { isSessionRouteId, type RouteId } from "../app-route-paths.ts";
@@ -6,7 +7,6 @@ import type { ApplicationContext } from "../app/context.ts";
 import { i18n } from "../i18n/index.ts";
 import type { SidebarOutboxSummary } from "../lib/chat/outbox-store-projection.ts";
 import type { SidebarSessionsGrouping } from "../lib/sessions/grouping.ts";
-import type { PersonalSessionGroup } from "../lib/sessions/personal-groups.ts";
 import {
   projectSidebarHomeSession,
   type SidebarHomeSession,

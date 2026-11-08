@@ -1,3 +1,7 @@
+import {
+  normalizePersonalSessionGroups,
+  type PersonalSessionGroup,
+} from "../../../src/shared/personal-session-groups.js";
 import type { GatewaySessionRow, SessionsListResult } from "../api/types.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import { gatewayPresentationScope } from "../app/gateway-presentation-scope.ts";
@@ -5,12 +9,10 @@ import { prefValuesEqual } from "../app/server-prefs-state.ts";
 import { t } from "../i18n/index.ts";
 import { projectsForGateway } from "../lib/projects.ts";
 import { resolveSessionDisplayName } from "../lib/session-display.ts";
-import {
-  normalizePersonalSessionGroups,
-  type PersonalSessionGroup,
-  type PersonalSessionGroupCandidate,
-  type PersonalSessionGroupPage,
-  type PersonalSessionGroupScope,
+import type {
+  PersonalSessionGroupCandidate,
+  PersonalSessionGroupPage,
+  PersonalSessionGroupScope,
 } from "../lib/sessions/personal-groups.ts";
 import { isPinnableUiSessionRow, parseAgentSessionKey } from "../lib/sessions/session-key.ts";
 import { buildSessionListParams, SESSION_SEARCH_SCOPE } from "../lib/sessions/session-requests.ts";

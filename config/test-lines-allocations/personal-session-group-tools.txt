@@ -1,0 +1,3 @@
+# One production-dispatch regression proves guest personal collection CRUD/order, CAS, profile isolation and unchanged shared controls.
+# Includes the existing preference fixture's narrow-scope and real caller bindings. Exact net LF growth.
+77

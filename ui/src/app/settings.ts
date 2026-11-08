@@ -6,14 +6,14 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { normalizeUniqueTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import { normalizeTabIconPreference } from "../../../packages/gateway-protocol/src/schema/ui-appearance-preferences.ts";
 import { CONTROL_UI_TOKEN_SESSION_KEY_PREFIX } from "../../../src/shared/control-ui-storage.js";
+import {
+  normalizePersonalSessionGroups,
+  type PersonalSessionGroup,
+} from "../../../src/shared/personal-session-groups.js";
 import { DEFAULT_SIDEBAR_ENTRIES, normalizeSidebarEntries } from "../app-navigation.ts";
 import { configuredUiDevGateway } from "../dev-gateway.ts";
 import { isSupportedLocale } from "../i18n/index.ts";
 import { normalizeBoardSessionViews } from "../lib/board/settings.ts";
-import {
-  normalizePersonalSessionGroups,
-  type PersonalSessionGroup,
-} from "../lib/sessions/personal-groups.ts";
 import { getSafeLocalStorage, getSafeSessionStorage } from "../local-storage.ts";
 import { normalizeChatBubbleSessionKeys } from "../pages/chat/chat-bubble-mode.ts";
 import {

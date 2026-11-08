@@ -1,6 +1,7 @@
 import type { RouteLocation, Router } from "@openclaw/uirouter";
 import type { HumanMention } from "../../../packages/gateway-protocol/src/index.js";
 import type { ThemeBranding } from "../../../packages/gateway-protocol/src/theme.ts";
+import type { PersonalSessionGroup } from "../../../src/shared/personal-session-groups.js";
 import type { AgentsListResult } from "../api/types.ts";
 import type { RouteId } from "../app-route-paths.ts";
 import type { AgentIdentityCapability } from "../lib/agents/identity.ts";
@@ -14,7 +15,6 @@ import type {
 } from "../lib/chat/chat-types.ts";
 import type { RuntimeConfigCapability } from "../lib/config/runtime-config-capability.ts";
 import type { SessionCapability } from "../lib/sessions/index.ts";
-import type { PersonalSessionGroup } from "../lib/sessions/personal-groups.ts";
 import type { reviewPrivateComposerDraft } from "../pages/chat/components/private-composer-recovery-dialog.tsx";
 import type { NewSessionDraftHandoff } from "../pages/new-session/draft-persistence.ts";
 import type { ControlUiPluginCapability } from "../plugins/control-ui-capability.ts";
