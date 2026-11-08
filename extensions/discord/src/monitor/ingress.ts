@@ -56,8 +56,7 @@ function inspectDiscordMessage(rawMessage: unknown): { eventId: string; laneKey:
     throw new DiscordIngressPayloadError("Discord MESSAGE_CREATE payload must be an object");
   }
   if ("kind" in rawMessage && rawMessage.kind === "reaction") {
-    // SAFETY: This tentative shape is used only by the identifier/action checks
-    // below; invalid payloads throw before a reaction can be admitted.
+    // SAFETY: Identifier/action validation below reads this tentative shape before admission.
     const reaction = rawMessage as DiscordReactionIngressEvent;
     if (
       !/^[a-f0-9]{64}$/.test(reaction.occurrenceId) ||
