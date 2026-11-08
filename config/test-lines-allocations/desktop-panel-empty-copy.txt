@@ -1,6 +1,0 @@
-38
-# Exact grant sized to the CI comparison base: 26 net new regression lines
-# (four rendered empty-state cases folded into the existing
-# desktop-panel-view suite; no new test file or lane) plus 12 lines of ceiling
-# debt inherited from that base. The grant leaves slack at exactly zero and
-# raises no reusable headroom for unrelated changes.
