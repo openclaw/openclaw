@@ -106,6 +106,31 @@ _CORE_FLOAT = re.compile(
 )
 
 
+def _core_int(value):
+    """Resolve a YAML core integer, including leading-zero decimals."""
+
+    if _CORE_INT.fullmatch(value):
+        return ("int", int(value, 10))
+    if _CORE_INT_OCT.fullmatch(value):
+        return ("int", int(value[2:], 8))
+    if _CORE_INT_HEX.fullmatch(value):
+        return ("int", int(value[2:], 16))
+    return None
+
+
+def _core_float(value):
+    """Resolve a YAML core float, including the dotted inf/nan spellings."""
+
+    if not _CORE_FLOAT.fullmatch(value):
+        return None
+    lowered = value.lower()
+    if lowered.endswith("nan"):
+        return ("float", "nan")
+    if lowered.endswith("inf"):
+        return ("float", -1 if value.startswith("-") else 1, "inf")
+    return ("float", float(value))
+
+
 def _explicit_core_key(tag, value):
     """Resolve a key whose source carries an explicit YAML tag."""
 
@@ -114,15 +139,9 @@ def _explicit_core_key(tag, value):
     if tag == "tag:yaml.org,2002:bool":
         return ("bool", value.strip().lower() in {"true", "yes", "on", "y"})
     if tag == "tag:yaml.org,2002:int":
-        try:
-            return ("int", int(value.replace("_", ""), 0))
-        except ValueError:
-            return ("str", value)
+        return _core_int(value) or ("str", value)
     if tag == "tag:yaml.org,2002:float":
-        try:
-            return ("float", float(value.replace("_", "")))
-        except ValueError:
-            return ("str", value)
+        return _core_float(value) or ("str", value)
     return ("str", value)
 
 
@@ -136,26 +155,17 @@ def _core_scalar_key(node, source):
 
     value = node.value
     authored = source[node.start_mark.index : node.end_mark.index].lstrip()
-    if authored.startswith("!"):
+    # An anchor may precede the tag, so look past any `&name` prefixes.
+    if re.match(r"^(?:&[^\s]+\s+)*!", authored):
         return _explicit_core_key(node.tag, value)
     if node.style is None:
         if _CORE_NULL.fullmatch(value):
             return ("null", None)
         if _CORE_BOOL.fullmatch(value):
             return ("bool", value[0] in "tT")
-        if _CORE_INT.fullmatch(value):
-            return ("int", int(value, 10))
-        if _CORE_INT_OCT.fullmatch(value):
-            return ("int", int(value[2:], 8))
-        if _CORE_INT_HEX.fullmatch(value):
-            return ("int", int(value[2:], 16))
-        if _CORE_FLOAT.fullmatch(value):
-            lowered = value.lower()
-            if lowered.endswith("nan"):
-                return ("float", "nan")
-            if lowered.endswith("inf"):
-                return ("float", -1 if value.startswith("-") else 1, "inf")
-            return ("float", float(value))
+        resolved_number = _core_int(value) or _core_float(value)
+        if resolved_number is not None:
+            return resolved_number
     return ("str", value)
 
 

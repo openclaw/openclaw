@@ -229,6 +229,9 @@ metadata: |
             '{true: enabled, "true": active}',
             '{1: a, "1": b}',
             '{!!str true: enabled, TRUE: active}',
+            '{!!int 012: enabled, "012": active}',
+            '{!!float .inf: enabled, ".inf": active}',
+            '{&key !!str true: enabled, TRUE: active}',
         ):
             with self.subTest(metadata=metadata):
                 content = (
