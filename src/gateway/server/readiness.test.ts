@@ -34,6 +34,7 @@ function snapshotWith(
 
 function createManager(snapshot: ChannelRuntimeSnapshot): ChannelManager {
   return {
+    captureAccountRestart: vi.fn(() => undefined),
     getRuntimeSnapshot: vi.fn(() => snapshot),
     pauseChannelStarts: vi.fn(() => () => {}),
     startChannels: vi.fn(),
