@@ -171,6 +171,15 @@ html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-
   display: flex;
 }
 
+/* Onboarding owns its controls; do not restore a header row when its page arrives. */
+.shell--mobile-nav.shell--onboarding {
+  grid-template-rows: 0 auto minmax(0, 1fr);
+
+  & .topbar {
+    display: none;
+  }
+}
+
 .shell--mobile-nav .topnav-shell {
   display: grid;
   grid-template-columns: minmax(40px, 1fr) auto minmax(40px, 1fr);
