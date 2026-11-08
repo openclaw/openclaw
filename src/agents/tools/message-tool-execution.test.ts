@@ -423,6 +423,29 @@ describe("message tool partial delivery", () => {
       { type: "text", text: expect.stringContaining("unconfirmed") },
     ]);
   });
+
+  it("reads accepted ids from the receipt when the transport omits messageIds", async () => {
+    const { tool } = createFailingMessageTool(
+      createChannelPartialDeliveryError(new Error("second post failed"), {
+        receipt: {
+          platformMessageIds: ["100000000000000021"],
+          parts: [{ platformMessageId: "100000000000000021", kind: "text", index: 0 }],
+          sentAt: 1,
+        },
+        visibleReplySent: true,
+      }),
+    );
+
+    const result = await tool.execute("partial-receipt", { action: "send", message: "hello" });
+
+    expect(readToolResultDetails(result)).toMatchObject({
+      ok: false,
+      deliveryStatus: "partial_failed",
+      acceptedMessageIds: ["100000000000000021"],
+      remainderUnconfirmed: true,
+    });
+    expect(resolveToolResultFailureKind(result)).toBe("failed");
+  });
 });
 
 it.each(["read", "edit", "delete", "pin", "unpin"] as const)(

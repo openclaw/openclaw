@@ -1,4 +1,6 @@
+import { listMessageReceiptPlatformIds } from "../../channels/message/receipt.js";
 import type { ChannelMessageActionName } from "../../channels/plugins/types.public.js";
+import type { ChannelDeliveryOutcome } from "../../channels/turn/delivery-outcome.js";
 import type { MessageActionResult } from "../../infra/outbound/message-action-contracts.js";
 import { projectMessageActionPartialDelivery } from "../../infra/outbound/message-action-execution.js";
 import { normalizeMessageChannel } from "../../utils/message-channel.js";
@@ -43,6 +45,17 @@ export function projectScheduledMessageActionPartialResult(params: {
   };
 }
 
+function acceptedDeliveryIds(result: ChannelDeliveryOutcome): string[] {
+  // Channel transports report accepted ids either directly or only through the receipt.
+  const ids =
+    result.messageIds && result.messageIds.length > 0
+      ? result.messageIds
+      : result.receipt
+        ? listMessageReceiptPlatformIds(result.receipt)
+        : [];
+  return ids.filter((id): id is string => typeof id === "string" && id.length > 0);
+}
+
 /**
  * Failure projection for callers without scheduled authority. The operation stays a
  * failure, but the accepted message ids must survive it: native and MCP error responses
@@ -57,11 +70,7 @@ export function projectMessageActionPartialFailureResult(params: {
   if (!partialDelivery) {
     return undefined;
   }
-  const messageIds = Array.isArray(partialDelivery.result.messageIds)
-    ? partialDelivery.result.messageIds.filter(
-        (id): id is string => typeof id === "string" && id.length > 0,
-      )
-    : [];
+  const messageIds = acceptedDeliveryIds(partialDelivery.result);
   return {
     ok: false,
     action: params.action,
