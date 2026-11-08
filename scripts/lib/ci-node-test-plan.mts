@@ -4329,17 +4329,18 @@ export function createSelectedNodeTestShardBundles(
       if (!files?.length) {
         return [];
       }
-      // Artifact descriptors and opaque paired configs retain their complete owner.
-      if (group.requiresDist || isWholeToolingPair(group)) {
+      const selectedConfigs = group.configs.filter((config) =>
+        files.some((file) => configs.get(file) === config),
+      );
+      // A shared include file would cross config boundaries for mixed pairs.
+      // Single-config selections retain that config's isolation and process policy.
+      if (group.requiresDist || (isWholeToolingPair(group) && selectedConfigs.length !== 1)) {
         retainedSeconds += seconds;
         canonicalFamilies.set(group, compactStripeFamily(group));
         return [group];
       }
       const includePatterns =
         group.includePatterns?.filter((file) => files.includes(file)) ?? files;
-      const selectedConfigs = group.configs.filter((config) =>
-        files.some((file) => configs.get(file) === config),
-      );
       const inventory =
         group.includePatterns ??
         listWholeConfigFiles(group.shard_name) ??
