@@ -174,16 +174,17 @@ export function registerControlUiMobileBootstrapSuite(): void {
       deviceFamily: entry.deviceFamily,
       displayName: "OpenClaw Share",
     };
+    const connectNode = async (opts: NonNullable<Parameters<typeof connectReq>[1]>) => {
+      const ws = await openWs(port, REMOTE_BOOTSTRAP_HEADERS);
+      try {
+        const base = { skipDefaultAuth: true, role: "node", scopes: [], client };
+        return await connectReq(ws, { ...base, deviceIdentityPath: identityPath, ...opts });
+      } finally {
+        ws.close();
+      }
+    };
     const { owner, bootstrap } = await issueNodeSetup();
-    const node = await openWs(port, REMOTE_BOOTSTRAP_HEADERS);
-    const initial = await connectReq(node, {
-      skipDefaultAuth: true,
-      bootstrapToken: bootstrap.bootstrapToken,
-      role: "node",
-      scopes: [],
-      client,
-      deviceIdentityPath: identityPath,
-    });
+    const initial = await connectNode({ bootstrapToken: bootstrap.bootstrapToken });
     expect(initial.ok).toBe(entry.allowed);
     if (!entry.allowed) {
       expect(initial.error?.details).toMatchObject({
@@ -205,30 +206,21 @@ export function registerControlUiMobileBootstrapSuite(): void {
     expect(paired?.roles).toEqual(["node"]);
     expect(paired?.tokens?.operator).toBeUndefined();
     expect((await listDevicePairing()).pending).toEqual([]);
-    node.close();
 
-    const reconnect = await openWs(port, REMOTE_BOOTSTRAP_HEADERS);
-    expect(
-      (
-        await connectReq(reconnect, {
-          skipDefaultAuth: true,
-          deviceToken: auth.deviceToken,
-          role: "node",
-          scopes: [],
-          client,
-          deviceIdentityPath: identityPath,
-        })
-      ).ok,
-    ).toBe(true);
-    reconnect.close();
-    const escalation = await openWs(port, REMOTE_BOOTSTRAP_HEADERS);
-    const denied = await connectReq(escalation, {
-      skipDefaultAuth: true,
+    // The consumed setup credential cannot enroll another identity.
+    const intruder = await createOperatorIdentityFixture("openclaw-share-replay-");
+    const replayed = await connectNode({
+      bootstrapToken: bootstrap.bootstrapToken,
+      deviceIdentityPath: intruder.identityPath,
+    });
+    expect(replayed.ok).toBe(false);
+    expect(await getPairedDevice(intruder.identity.deviceId)).toBeNull();
+
+    expect((await connectNode({ deviceToken: auth.deviceToken })).ok).toBe(true);
+    const denied = await connectNode({
       deviceToken: auth.deviceToken,
       role: "operator",
       scopes: ["operator.admin"],
-      client,
-      deviceIdentityPath: identityPath,
     });
     expect(denied.ok).toBe(false);
     expect(denied.error?.details).toMatchObject({
@@ -241,18 +233,19 @@ export function registerControlUiMobileBootstrapSuite(): void {
     ).toBe(true);
     const revoked = await getPairedDevice(identity.deviceId);
     expect(revoked?.tokens?.node?.revokedAtMs).toEqual(expect.any(Number));
-    const revokedReconnect = await openWs(port, REMOTE_BOOTSTRAP_HEADERS);
-    const rejected = await connectReq(revokedReconnect, {
-      skipDefaultAuth: true,
-      deviceToken: auth.deviceToken,
-      role: "node",
-      scopes: [],
-      client,
-      deviceIdentityPath: identityPath,
-    });
+    const rejected = await connectNode({ deviceToken: auth.deviceToken });
     expect(rejected.ok).toBe(false);
     expect(rejected.error?.details).toMatchObject({
       code: ConnectErrorDetailCodes.AUTH_DEVICE_TOKEN_MISMATCH,
+    });
+    expect((await getPairedDevice(identity.deviceId))?.tokens).toEqual(revoked?.tokens);
+
+    // Even a fresh owner-minted node setup cannot silently restore a revoked identity.
+    const { bootstrap: retry } = await issueNodeSetup();
+    const reenrolled = await connectNode({ bootstrapToken: retry.bootstrapToken });
+    expect(reenrolled.ok).toBe(false);
+    expect(reenrolled.error?.details).toMatchObject({
+      code: ConnectErrorDetailCodes.PAIRING_REQUIRED,
     });
     expect((await getPairedDevice(identity.deviceId))?.tokens).toEqual(revoked?.tokens);
   });
