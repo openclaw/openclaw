@@ -15,7 +15,9 @@ Create `/scale/tmp` with mode 1777, export `TMPDIR=/scale/tmp`, and create writa
 `/lane/scale-results`. Set umask 022. Do not use a live state directory or service.
 
 The fixture materializes a 35.04 GiB SQLite database with compressible zero blobs,
-6,000 current sessions, and 62,000 workspace files totaling 1.1 GB. It creates one
+6,000 initial live sessions, and 62,000 workspace files totaling 1.1 GB. The
+`post-journal` incident scenario adds 40 live sessions plus 411 original sessions
+in a second agent database: 6,451 original witnesses and 6,040 current sessions. It creates one
 synthetic database seed under `/scale`; each subsequent sample reflinks that seed
 into its own protected inode and creates its own workspace. The native
 `session-preservation-witness` owner captures all 6,000 original tuples before any
@@ -26,7 +28,7 @@ witness capture, request formation, and cleanup are outside the timed owner comm
 From `/proof`, run serially with five interleaved samples for each scenario:
 
 ```sh
-for scenario in rotation unchanged; do
+for scenario in post-journal unchanged; do
   for sample in 1 2 3 4 5; do
     for arm in base candidate; do
       node --import ./test-environment.mjs \
@@ -44,14 +46,22 @@ for scenario in rotation unchanged; do
 done
 ```
 
-`rotation` retains the original window and exact generation across two session
-rotations, after its ID disappears from the current entry's direct previous-ID
-reference. The baseline must refuse at strict transcript continuity; the candidate
-must publish `BUILD_PREPARED` with all 6,000 current witnesses. Original journal
-and witness bytes must remain unchanged. These differing outcomes are a
-correctness comparison, not a speedup. `unchanged` must succeed on both arms and
-serves as the common-path performance control. Investigate any unexplained
-increase over 20% in its median wall time, CPU, or sampled allocation.
+`post-journal` captures its original witness through the production owner, then
+changes exactly 36 opaque rewrite generations in place with timestamps strictly
+after journal creation, rotates five other sessions while retaining their original
+windows (four retain an exact generation; one remains empty without a watermark),
+and purges 411 sessions under a completed native deletion receipt while
+retaining that agent database. The selected pointer and live process cwd still
+name the journal candidate. Use merged #195015 as baseline: it must refuse at
+strict transcript continuity; the candidate must publish `BUILD_PREPARED` with
+6,040 current witnesses. Original journal and witness bytes remain unchanged.
+These differing outcomes are a correctness comparison, not a speedup.
+
+`unchanged` must succeed on both arms and serves as the common-path performance
+control. Investigate any unexplained increase over 20% in its median wall time,
+CPU, or sampled allocation. The optional `rotation` scenario retains the original
+window and exact generation across two rotations and must succeed on both arms
+when the baseline includes #195015.
 
 The driver measures the actual lock-bearing `retained-repair-build begin` child.
 GNU time records user/system CPU and peak RSS. Allocation samples use the Node

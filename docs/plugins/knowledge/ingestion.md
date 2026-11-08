@@ -86,6 +86,8 @@ The bundled chat-transcript exporter includes UTF-8 file headers in its
 `--max-bytes` limit. A single indivisible message can still exceed that limit.
 It orders UTC timestamps chronologically across fractional-second precisions,
 preserving the original timestamp strings and using message IDs to break ties.
+Cross-day reply quotes keep the existing 80 UTF-16 code-unit limit without
+splitting surrogate pairs.
 
 ## Batch publication
 
