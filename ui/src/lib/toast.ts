@@ -293,7 +293,9 @@ class ToastOwner {
       }
     }
     const id = nextToastId++;
-    options.signal?.addEventListener("abort", () => this.dismiss(id, "dismiss"), { once: true });
+    if (options.signal) {
+      listen(options.signal, "abort", () => this.dismiss(id, "dismiss"), { once: true });
+    }
     this.live.unshift({
       id,
       options,

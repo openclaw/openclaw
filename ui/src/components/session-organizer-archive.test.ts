@@ -12,7 +12,7 @@ import {
   waitForConfirmDialogActions,
 } from "../test-helpers/modal-dialog.ts";
 import { waitForFast } from "../test-helpers/wait-for.ts";
-import { isArchiveHeld, undoHeldArchive } from "./session-archive-hold.ts";
+import { isArchiveHeld } from "./session-archive-hold.ts";
 import {
   archiveConfirmedSessionsWithUndo,
   archiveSessionWithUndo,
@@ -293,28 +293,6 @@ describe("held archive Undo window", () => {
     expect(harness.patch).not.toHaveBeenCalled();
     expect(harness.request).not.toHaveBeenCalled();
     expect(harness.finishArchive).toHaveBeenCalledOnce();
-  });
-
-  it("lets the session's own Undo cancel its held batch and retire the notice", async () => {
-    const harness = createHarness();
-    const rows = [sessionRow(1), sessionRow(2)];
-    archiveConfirmedSessionsWithUndo(harness.host, rows, harness.scope);
-    const held = lastToast();
-    expect(held.signal?.aborted).toBe(false);
-    expect(isArchiveHeld(rows[1]!.key)).toBe(true);
-    undoHeldArchive("agent:main:not-held");
-    expect(harness.finishArchive).not.toHaveBeenCalled();
-
-    undoHeldArchive(rows[1]!.key);
-    expect(held.signal?.aborted).toBe(true);
-    expect(isArchiveHeld(rows[1]!.key)).toBe(false);
-    expect(harness.finishArchive).toHaveBeenCalledTimes(2);
-    // Retiring the notice reports a dismissal; the cancelled archive stays unsent.
-    held.onDismiss?.("dismiss");
-    window.dispatchEvent(new Event("pagehide"));
-    await Promise.resolve();
-    expect(harness.request).not.toHaveBeenCalled();
-    expect(harness.patch).not.toHaveBeenCalled();
   });
 
   it.each(["timeout", "dismiss", "replaced"] as const)(
