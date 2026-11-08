@@ -768,7 +768,9 @@ function createChangedTargetShards(
       predictedSeconds: Math.ceil(chunk.reduce((sum, { target }) => sum + costOf(target), 0)),
     };
     const inheritedPolicy = inheritedPolicies.get(chunk[0]!.target);
-    const pretestBuildMode = inheritedPolicy ? inheritedPolicy.mode : buildModeOf(chunk);
+    // Packing can move every runtime consumer out of an originally prepared
+    // row. Charge the build only to its final readers; retain serial admission.
+    const pretestBuildMode = buildModeOf(chunk);
     if (pretestBuildMode) {
       shard.pretestBuildMode = pretestBuildMode;
     }
