@@ -10,6 +10,22 @@ Authorized Discord reaction add/remove enters ordinary conversation dispatch wit
 
 The original Discord production code is preserved, with a safety explanation added for validation's tentative payload type assertion. The b0fb registry-owned runtime initialization in the CLI message-authority fixture is retained. Receipt tests also cover pre-transport refusal/retry and interrupted claims so the shared primitive is independently covered in this sibling.
 
-## Validation status
+## Validation
 
-The initial local Discord snapshot `64bdf71b76ce14f999004a0492712e95dd8e4b0c` passed both durable ingress/receipt tests in 110.26 seconds wall; test body time was under five seconds, with most wall time in cold compilation. Its full build exited zero and verified all 162 SDK subpaths. Initial changed-scope checks first encountered a missing executable shim and then a missing assertion safety explanation; both are corrected, and their failed/partial logs retained. These are historical results; final sibling checks and exact-head reviews remain pending. No live phone/channel delivery, configuration, deployment, or merge occurred.
+Code snapshot: `b5030a15416a9bda030add922fbc9ac9ad53221c`. Node 24.22.1, repository-pinned pnpm 12.15.0, frozen lockfile. Later proof-only commits do not change tested behavior.
+
+- `pnpm exec node scripts/test-projects.mts extensions/discord/src/monitor/reaction-conversation.test.ts extensions/discord/src/internal/gateway.test.ts extensions/discord/src/monitor/ingress.test.ts extensions/discord/src/monitor/message-handler.ingress-recovery.test.ts test/cli-message-authority.integration.test.ts --maxWorkers=1`: 94 tests passed across three shards, 150.60 seconds wall.
+- `pnpm build`: exit 0; all 162 packaged SDK subpaths verified. The Control UI build reported size warnings, including document/CSS/boot-JS budgets, with no UI changes in this diff.
+- `pnpm check:test-lines-ratchet --base 9a5df3d60f12b6c303225c50abeaa4d17bd27108`: allocation check passes; scalar baseline unchanged.
+- `pnpm check:changed --base 9a5df3d60f12b6c303225c50abeaa4d17bd27108`: completed with exit 1. Core/extension/root-test type checks, all lint lanes, dead-export scans, format/line-cap checks and later runtime/security guards passed. The only failing steps were the old SAFETY marker (corrected with a passing targeted rerun), changelog attribution and SDK surface budget. Discord's initially misplaced SAFETY explanation was corrected and its targeted assertion check passes.
+- `pnpm plugin-sdk:api:diff --base 9a5df3d60f12b6c303225c50abeaa4d17bd27108 --head b5030a15416a9bda030add922fbc9ac9ad53221c`: paired API render running on the unchanged shared SDK source at Discord snapshot `b5030a15416a9bda030add922fbc9ac9ad53221c`; final result pending. Both siblings have identical generic SDK source.
+
+## Nonpassing guards and review gates
+
+The broad check is not green. The unchanged changelog attribution checker fails on exact-base changelog inputs. The unchanged SDK surface checker also fails on the exact base: 3,876 public exports versus 3,865 allowed, 2,237 callable exports versus 2,235 allowed, and one wildcard versus zero allowed. This feature adds four named exports and one callable, so the candidate reports 3,880 / 2,238 / one wildcard. No shipped removals were reported. The wildcard is preexisting; no caps, baseline, or unrelated public APIs were changed. This remains a visible nonpassing guard requiring maintainer disposition.
+
+Local read-only split review found no remaining required source fixes. It does not substitute for CI or the required exact-head comprehensive OpenClaw and native ClawSweeper reviews. Those remain pending; draft PRs are not review-ready. JevSweeper is ineligible until a native published verdict exists. No live channel/phone delivery, deployment, merge, original-PR close, or original-branch mutation occurred.
+
+## Simplification and scope
+
+Read-only `pr-simplify` and independent source review found no further required simplification. Production delta versus the base: +477/-46 (net +431); test delta: +382/-7 (net +375). The smallest complete stage is one Discord channel: gateway occurrence identity, existing durable ingress, binding-aware conversation dispatch and receipts using the existing SQLite owner. No new schema, manager or daemon is introduced. Independent tests cover ingress replay/restart, denied actors, explicit/no-op dispatch and receipt settlement/refusal/interrupted claims.
