@@ -189,15 +189,22 @@ it.each([true, undefined] as const)(
   },
 );
 
-it.each([true, undefined] as const)(
-  "admits authenticated native-app admin chat management with locality %s",
-  (isLocalClient) => {
+it.each(
+  ([true, undefined] as const).flatMap((isLocalClient) =>
+    (["openclaw-macos", "gateway-client"] as const).map((clientId) => ({
+      isLocalClient,
+      clientId,
+    })),
+  ),
+)(
+  "admits authenticated native-app admin chat management for $clientId with locality $isLocalClient",
+  ({ isLocalClient, clientId }) => {
     const client = createClient({ isLocalClient, authenticatedOperator: true });
     client.connect.client = {
-      id: "openclaw-macos",
+      id: clientId,
       mode: "ui",
       version: "test",
-      platform: "macOS",
+      platform: clientId === "gateway-client" ? "win32" : "macOS",
     };
     expect(admitChat({ client })?.managementEntitlement).toEqual({ source: "native-app-admin" });
     client.connect.scopes = ["operator.write"];
