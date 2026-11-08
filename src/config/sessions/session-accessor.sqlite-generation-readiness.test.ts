@@ -11,11 +11,13 @@ import {
   prepareMemoryAudienceRead,
 } from "../../plugins/memory-audience.js";
 import { bindMemoryProvider } from "../../plugins/memory-provider-adapter.js";
+import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { runOpenClawAgentWriteAdmission } from "../../state/openclaw-agent-write-admission.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { replaceSessionEntrySync } from "./session-accessor.sqlite-entry.js";
 import { applySessionEntryExactReplacements } from "./session-accessor.sqlite-replacement-projection.js";
+import { createDurableSessionActorFactory } from "./session-actor-durable.js";
 import { prepareSessionGenerationFacts } from "./session-delivery-generation.js";
 
 const { getReplacementPublicationDelivery } =
@@ -88,7 +90,7 @@ it.for(["permissionMode", "toolOverrides"] as const)(
   },
 );
 
-it.for(["metadata", "replacement"] as const)(
+it.for(["metadata", "actor metadata", "replacement"] as const)(
   "joins admitted %s publication before checking the retained session generation",
   async (kind, { signal }) => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
@@ -102,9 +104,33 @@ it.for(["metadata", "replacement"] as const)(
         sessionId: "a1234567-1234-1234-1234-123456789abc",
         chatType: "direct" as const,
         lifecycleRevision: "original-lifecycle",
+        permissionMode: "full" as const,
+        toolOverrides: { webSearch: true },
         updatedAt: 1,
       };
       replaceSessionEntrySync(scope, original);
+      const identity = readOpenClawAgentDatabaseIdentity(database);
+      if (typeof identity.identity !== "string") {
+        throw new Error("Generation readiness requires durable storage");
+      }
+      const actor =
+        kind === "actor metadata"
+          ? await createDurableSessionActorFactory({
+              agentId: "main",
+              path: database.path,
+            }).acquire(
+              {
+                sessionKey: scope.sessionKey,
+                database: {
+                  kind: "file",
+                  physicalIdentity: identity.identity,
+                  birthtime: identity.birthtime,
+                  nativeLocation: database.path,
+                },
+              },
+              { assertCurrent() {}, assertReadable() {} },
+            )
+          : undefined;
       const generation = await prepareSessionGenerationFacts({ ...scope, ...original });
       const releasedGeneration = await prepareSessionGenerationFacts({ ...scope, ...original });
       const grant = await resolveMemoryAudienceFromEntry(
@@ -144,28 +170,43 @@ it.for(["metadata", "replacement"] as const)(
       let releaseReply = () => {};
       const onAbort = () => releaseReply();
       signal.addEventListener("abort", onAbort, { once: true });
-      const replace = (label: string) =>
-        applySessionEntryExactReplacements({
-          ...scope,
-          sessionKeys: [scope.sessionKey],
-          requireWriteSuccess: true,
-          update: () => ({
-            result: undefined,
-            replacements: [
-              {
-                sessionKey: scope.sessionKey,
-                entry: {
-                  ...original,
-                  label,
-                  lifecycleRevision:
-                    kind === "replacement" ? "replacement-lifecycle" : original.lifecycleRevision,
+      const replace = (label: string, updatedAt = 4) =>
+        actor
+          ? actor
+              .patch(
+                {
+                  commandId: label,
+                  phaseId: "bookkeeping",
+                  reducers: [{ kind: "activity", updatedAt }],
                 },
-              },
-            ],
-          }),
-        });
+                { assertCurrent() {}, authorize() {} },
+              )
+              .then((outcome) => {
+                expect(outcome).toMatchObject({ kind: "committed" });
+              })
+          : applySessionEntryExactReplacements({
+              ...scope,
+              sessionKeys: [scope.sessionKey],
+              requireWriteSuccess: true,
+              update: () => ({
+                result: undefined,
+                replacements: [
+                  {
+                    sessionKey: scope.sessionKey,
+                    entry: {
+                      ...original,
+                      label,
+                      lifecycleRevision:
+                        kind === "replacement"
+                          ? "replacement-lifecycle"
+                          : original.lifecycleRevision,
+                    },
+                  },
+                ],
+              }),
+            });
       try {
-        for (const round of kind === "metadata" ? [0, 1] : [0]) {
+        for (const round of kind !== "replacement" ? [0, 1] : [0]) {
           const committed = createDeferred();
           const release = createDeferred();
           releaseReply = () => release.resolve();
@@ -173,7 +214,7 @@ it.for(["metadata", "replacement"] as const)(
             committed.resolve();
             await release.promise;
           };
-          const write = replace(`metadata-${round}`);
+          const write = replace(`metadata-${round}`, round + 2);
           writes.push(write);
           await withinTest(
             awaitGateBeforeSettlement(
@@ -185,8 +226,12 @@ it.for(["metadata", "replacement"] as const)(
           );
           // Synchronous reads stay available for an identity-preserving publication; a
           // replacement fences them. Prepared reads still join either publication.
-          if (kind === "metadata") {
+          if (kind !== "replacement") {
             generation.assertCurrent();
+            expect(generation.readSessionSettings()).toEqual({
+              permissionMode: "full",
+              toolOverrides: { webSearch: true },
+            });
             assertMemoryAudienceCurrent(grant.audience);
           } else {
             expect(generation.assertCurrent).toThrow(
@@ -246,7 +291,7 @@ it.for(["metadata", "replacement"] as const)(
           }
         }
         delivery.afterResult = undefined;
-        if (kind === "metadata") {
+        if (kind !== "replacement") {
           // A queued successor has not published an admission and cannot make its owner wait.
           let successor: Promise<unknown> | undefined;
           await runOpenClawAgentWriteAdmission(
@@ -273,6 +318,7 @@ it.for(["metadata", "replacement"] as const)(
         generation.release();
         grant.release();
         await provider.close();
+        await actor?.release();
       }
     });
   },

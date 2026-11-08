@@ -459,9 +459,20 @@ export function createSqliteSessionActorExecutor(
                 databaseIdentity,
               });
               entryPublication = { facts, owner };
-              owner.beginChanges(
+              owner.begin(
                 receipts.flatMap((receipt) => [...receipt.facts.keys()]),
-                new Map(),
+                receipts.flatMap((receipt) =>
+                  [...receipt.facts].flatMap(([key, fact]) =>
+                    fact.kind === "postimage" && fact.value.facts.clearMembers ? [key] : [],
+                  ),
+                ),
+                receipts.flatMap((receipt) =>
+                  [...receipt.facts].flatMap(([key, fact]) =>
+                    fact.kind === "postimage" && fact.value.sharingChange === "unchanged"
+                      ? [key]
+                      : [],
+                  ),
+                ),
                 receipts.flatMap((receipt) =>
                   [...receipt.facts].flatMap(([key, fact]) =>
                     fact.kind === "postimage" && !fact.value.facts.lifecycleChanged ? [key] : [],

@@ -28,7 +28,10 @@ vi.mock("../../state/openclaw-agent-execution.js", async (importOriginal) => {
             operation({
               execute: async (command, commandOptions) => {
                 const result = await scope.execute(command, commandOptions);
-                if (command.type === "session.entries.replace") {
+                if (
+                  command.type === "session.entries.replace" ||
+                  command.type === "session.actor.patch"
+                ) {
                   await delivery.afterResult?.(result);
                 }
                 return result;
