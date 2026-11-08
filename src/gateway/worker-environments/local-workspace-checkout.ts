@@ -13,7 +13,7 @@ import { prepareWorkerWorkspaceGitPack } from "./workspace-git-base.js";
 import { captureWorkspaceManifestDocument } from "./workspace-manifest-worker.js";
 import { runWorkspaceInventoryCommandToFile } from "./workspace-sync-inventory.js";
 
-export function localWorkspaceProjectionPath(owner: LocalWorkspaceOwner) {
+export function localWorkspaceProjectionPath(owner: Pick<LocalWorkspaceOwner, "worktree" | "env">) {
   if (!/^[a-f0-9-]{36}$/u.test(owner.worktree.id)) {
     throw new Error("Invalid managed worktree identity");
   }

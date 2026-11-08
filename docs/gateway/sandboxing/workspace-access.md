@@ -215,13 +215,20 @@ this checkout while capturing or applying changes, records pending results and
 rollback journals in SQLite, and resumes
 only after settlement. New shell calls and command preparation wait for an active
 checkpoint to release the workspace before proceeding; background commands do not
-hold that preparation lease for their entire lifetime. Concurrent Files requests
-and command checkpoints share equivalent captures while waiting for workspace
-custody. Requests arriving after capture starts trigger a fresh checkpoint so
-later guest writes remain visible. Each caller retains its own authority checks.
-Files requests skip checkpoint custody when a live read confirms that the managed
-worktree has no sandbox projection. A later request observes a newly created
-projection and checkpoints it normally; lifecycle custody still owns absent rows.
+hold that preparation lease for their entire lifetime. Concurrent command checkpoints
+share equivalent captures while waiting for workspace custody. Requests arriving
+after capture starts trigger a fresh checkpoint so later guest writes remain visible.
+Each caller retains its own authority checks.
+
+Files and assistant-media reads select the current backing without acquiring
+checkpoint custody or pausing runtimes. For local sandbox sessions, the retained
+private checkout is the live preview; host-only sessions read the canonical worktree.
+Reads retain session and workspace authority and verify sandbox runtime mounts.
+File saves checkpoint guest changes, compare the editor's hash, update the canonical
+file, and synchronize the saved change into the private checkout under the same
+custody before resuming the guest. Direct host edits enter the private checkout at
+the next workspace preparation.
+
 Captured workspace authority is checked again after
 filesystem and engine preparation, immediately before filesystem commands,
 container creation/start/setup, and late browser restarts. Closing the owner
