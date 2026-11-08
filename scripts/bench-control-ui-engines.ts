@@ -66,6 +66,10 @@ import {
   resolveEngineConfigurations,
   type EngineConfiguration,
 } from "./lib/control-ui-engine-configurations.ts";
+import {
+  createEngineEventLoadScenarios,
+  verifyEngineEventLoad,
+} from "./lib/control-ui-engine-event-load-scenarios.ts";
 import { createEngineGestureScenarios } from "./lib/control-ui-engine-gesture-scenarios.ts";
 import {
   createEngineIdleControls,
@@ -183,10 +187,24 @@ const { values } = parseArgs({
     "cpu-throttle": { type: "string", default: "1" },
     "idle-warmup-ms": { type: "string" },
     "idle-duration-ms": { type: "string", default: "30000" },
+    "event-load-duration-ms": { type: "string", default: "240000" },
+    "event-load-tools": { type: "string", default: "200" },
     "memory-soak-rounds": { type: "string", default: "10" },
   },
 });
 const pairs = Number(values.pairs);
+const eventLoadDurationMs = Number(values["event-load-duration-ms"]);
+const eventLoadTools = Number(values["event-load-tools"]);
+if (
+  !Number.isInteger(eventLoadDurationMs) ||
+  eventLoadDurationMs < 1000 ||
+  !Number.isInteger(eventLoadTools) ||
+  eventLoadTools < 1
+) {
+  throw new Error(
+    "event-load-duration-ms must be >=1000 and event-load-tools must be positive integers",
+  );
+}
 const rpcDelayMs = Number(values["rpc-delay-ms"]);
 if (
   !Number.isFinite(rpcDelayMs) ||
@@ -565,6 +583,7 @@ try {
     ...createEngineProfileReadinessScenarios(servers[0]!.server.baseUrl),
     ...createEngineRapidNavigationScenarios(),
     ...createEngineStreamingScenarios(),
+    ...createEngineEventLoadScenarios(eventLoadDurationMs, eventLoadTools),
     ...createEnginePageScenarios(0, pageOrigin, servers[0]!.server.baseUrl),
     ...createEngineRemountScenarios(),
     ...createEngineRouteTransitionScenarios(async (_page, _transition, run) => {
@@ -680,6 +699,7 @@ try {
           "./lib/control-ui-interaction-scenarios.ts",
           "./lib/control-ui-interaction-navigation.ts",
           "./lib/control-ui-engine-streaming-scenarios.ts",
+          "./lib/control-ui-engine-event-load-scenarios.ts",
           "./lib/control-ui-streaming-reply.ts",
           "./lib/control-ui-streaming-fixture.ts",
           "./lib/control-ui-streaming-statistics.ts",
@@ -1452,6 +1472,18 @@ try {
               measurement = undefined;
               const captured = await activeMeasurement.stop();
               observation.metrics = captured.metrics;
+              if (scenario.id.startsWith("event-load-")) {
+                observation.evidence = {
+                  ...observation.evidence,
+                  ...(await verifyEngineEventLoad(
+                    page,
+                    scenario.id === "event-load-unloaded"
+                      ? -1
+                      : Number(scenario.id.slice("event-load-".length)),
+                    eventLoadTools,
+                  )),
+                };
+              }
               if (observation.gesture && captured.timeline) {
                 const inputs = observation.gesture.totals.inputs;
                 observation.gestureNative = summarizeGestureTrace(
@@ -1663,11 +1695,22 @@ try {
                   );
                   await writeJson(`${artifactPrefix}.resize-errors.json`, resizeErrors);
                 }
-                if (measurement) {
-                  await writeJson(
-                    `${artifactPrefix}.interrupted-inspector.json`,
-                    await measurement.stop(),
+                if (scenario.id.startsWith("event-load-")) {
+                  const partial = await page.evaluate(() =>
+                    Reflect.get(window, "__eventLoadEvidence"),
                   );
+                  if (partial) {
+                    observation.evidence = { ...partial, ...observation.evidence };
+                  }
+                }
+                if (measurement) {
+                  const interruptedMeasurement = measurement;
+                  measurement = undefined;
+                  const interrupted = await interruptedMeasurement.stop();
+                  if (scenario.id.startsWith("event-load-")) {
+                    observation.metrics = interrupted.metrics;
+                  }
+                  await writeJson(`${artifactPrefix}.interrupted-inspector.json`, interrupted);
                 }
                 if (scenario.id.startsWith("streaming-")) {
                   const streaming = await page.evaluate(() =>
