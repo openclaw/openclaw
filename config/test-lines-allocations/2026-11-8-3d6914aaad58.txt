@@ -1,0 +1,5 @@
+3
+# LOCAL 2026.11.8 row 9; source 3d6914aaad58c3f02ad23c6e4677801a6f100f4c.
+# Both maintenance callers retain the selected fallback catalog and context window.
+# Keeps distinct regression invariants; exact net LF measured at integration.
+# Scalar baseline unchanged; focused private proof retained.

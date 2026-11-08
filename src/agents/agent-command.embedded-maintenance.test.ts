@@ -518,9 +518,12 @@ describe("agentCommand embedded maintenance", () => {
           senderIsOwner: false,
           authProfileId: "openai:completed",
           authProfileIdSource: "user",
+          thinkingCatalog: [expect.objectContaining({ id: model, contextWindow: 1_050_000 })],
         },
       },
     });
+    const preflightRun = state.runSessionPreflightCompactionMock.mock.calls[0]?.[0].followupRun.run;
+    expect(preflightRun?.thinkingCatalog).toBe(maintenanceParams?.followupRun.run.thinkingCatalog);
     expect(maintenanceAuthorized).toBe(true);
     expect(state.runSessionCompactionIfNeededMock).toHaveBeenCalledOnce();
     expect(state.runCliTurnCompactionLifecycleMock).not.toHaveBeenCalled();
