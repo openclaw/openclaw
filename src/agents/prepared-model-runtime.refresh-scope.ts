@@ -34,11 +34,21 @@ import type {
 const CATALOG_RECOVERY_DEMAND_COOLDOWN_MS = 5_000;
 const log = createSubsystemLogger("agents/prepared-model-runtime");
 
+/**
+ * A scoped publication rebuilt only its agents; every other owner kept its snapshot and has
+ * nothing new to refresh. Walking the whole roster opened every agent database (#194911).
+ */
 export function refreshCommittedProviderCatalogs(
   owners: Iterable<PreparedModelRuntimeOwner>,
+  agentIds?: ReadonlySet<string>,
 ): void {
   for (const owner of owners) {
-    if (owner.provenance !== "configured" || owner.pending || owner.needsRefresh) {
+    if (
+      owner.provenance !== "configured" ||
+      owner.pending ||
+      owner.needsRefresh ||
+      !isPreparedModelRuntimeOwnerInRefreshScope(owner, agentIds)
+    ) {
       continue;
     }
     owner.catalogRecovery = undefined;
