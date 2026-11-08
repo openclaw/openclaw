@@ -24,7 +24,10 @@ import {
   updateOpenClawStateLeasePayloadInTransaction,
 } from "../state/openclaw-state-lease-store.js";
 import { captureOpenClawStateReadSource } from "../state/openclaw-state-read-worker.js";
-import type { OpenClawStateReadOutcome } from "../state/openclaw-state-read.types.js";
+import type {
+  OpenClawStateReadAuthority,
+  OpenClawStateReadOutcome,
+} from "../state/openclaw-state-read.types.js";
 import { captureOpenClawStateReadWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { readProcessMachineIdentity } from "./current-machine-identity.js";
 import {
@@ -105,13 +108,18 @@ export async function assertGatewayOwnerLeaseStopped(
   const signal = callerSignal
     ? AbortSignal.any([callerSignal, controller.signal])
     : controller.signal;
-  const authority = {
+  const authority: OpenClawStateReadAuthority = {
     signal,
     assertCurrent() {
       signal.throwIfAborted();
       context.maintenanceScope?.assertReadAdmission();
       context.admission.assertCurrent();
       owner.assertDatabaseAccess(pathname);
+    },
+    acquire<T>(operation: () => T): T {
+      // Offline custody already owns admission; recheck it without ordinary-read retries.
+      authority.assertCurrent();
+      return operation();
     },
   };
   let prepared: PreparedSqliteReadOnlyLocation | undefined;
