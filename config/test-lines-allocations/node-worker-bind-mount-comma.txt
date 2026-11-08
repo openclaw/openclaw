@@ -1,0 +1,2 @@
+# Pin --mount quoting for workspace paths that carry the field separator (node worker bind mounts).
+20
