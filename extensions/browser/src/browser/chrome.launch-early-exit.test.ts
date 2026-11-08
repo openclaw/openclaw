@@ -9,10 +9,19 @@ import type * as ChromeDiagnostics from "./chrome.diagnostics.js";
 import type { ResolvedBrowserProfile } from "./config.js";
 import { resolveBrowserConfig } from "./config.js";
 
-const { spawnMock, readVersionMock, diagnoseMock } = vi.hoisted(() => ({
+const { spawnMock, readVersionMock, diagnoseMock, logInfo, logError } = vi.hoisted(() => ({
   spawnMock: vi.fn(),
   readVersionMock: vi.fn(),
   diagnoseMock: vi.fn(),
+  logInfo: vi.fn(),
+  logError: vi.fn(),
+}));
+
+vi.mock("openclaw/plugin-sdk/logging-core", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/logging-core")>()),
+  createSubsystemLogger: () => ({
+    child: () => ({ info: logInfo, error: logError, warn: vi.fn(), debug: vi.fn() }),
+  }),
 }));
 
 vi.mock("node:child_process", async (importOriginal) => ({
@@ -153,6 +162,65 @@ afterEach(() => {
 });
 
 describe("managed Chrome early child exit", () => {
+  it.each([null, "SIGABRT"] as const)(
+    "retains stderr until close and reports only abnormal exit (%s)",
+    async (exitSignal) => {
+      readVersionMock.mockResolvedValue(readyVersion);
+      diagnoseMock.mockResolvedValue({ ok: true, cdpUrl: profile.cdpUrl, elapsedMs: 0 });
+      expect(await settleLaunch()).toMatchObject({ proc });
+      expect(logInfo).toHaveBeenCalledOnce();
+      proc.emit("exit", exitSignal ? null : 0, exitSignal);
+      proc.stderr.emit("data", "FATAL: synthetic GPU failure after readiness");
+      proc.emit("close", exitSignal ? null : 0, exitSignal);
+      if (exitSignal) {
+        expect(logError).toHaveBeenCalledWith(
+          expect.stringMatching(/SIGABRT[\s\S]*synthetic GPU failure/),
+        );
+      } else {
+        expect(logError).not.toHaveBeenCalled();
+      }
+      expectDetached(proc);
+    },
+  );
+
+  it("waits for a slow CDP command before logging success", async () => {
+    readVersionMock.mockResolvedValue(readyVersion);
+    diagnoseMock.mockImplementation(async (_url, _httpTimeoutMs, wsTimeoutMs: number) => {
+      await new Promise((resolve) => {
+        setTimeout(resolve, Math.min(750, wsTimeoutMs));
+      });
+      return { ok: wsTimeoutMs >= 750, cdpUrl: profile.cdpUrl, elapsedMs: 750 };
+    });
+    const outcome = launchFailure();
+    await vi.waitFor(() => expect(diagnoseMock).toHaveBeenCalledOnce());
+    expect(logInfo).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(750);
+    expect(await outcome).toMatchObject({ proc });
+    expect(logInfo).toHaveBeenCalledOnce();
+    proc.emit("close", 0, null);
+    expectDetached(proc);
+  });
+
+  it("reports a GPU abort after HTTP discovery instead of announcing a started browser", async () => {
+    const fatal =
+      "FATAL:content/browser/gpu/gpu_data_manager_impl_private.cc:417] GPU process isn't usable. Goodbye.";
+    readVersionMock.mockResolvedValue(readyVersion);
+    diagnoseMock.mockImplementation(async () => {
+      proc.stderr.emit("data", fatal);
+      proc.signalCode = "SIGABRT";
+      proc.emit("exit", null, "SIGABRT");
+      return { ok: true, cdpUrl: profile.cdpUrl, elapsedMs: 0 };
+    });
+    const error = await settleLaunch();
+    expect(error).toBeInstanceOf(Error);
+    expect(String(error)).toContain("SIGABRT");
+    expect(String(error)).toContain(fatal);
+    expect(String(error)).toContain("retry");
+    expect(logInfo).not.toHaveBeenCalled();
+    expect(logError).toHaveBeenCalledWith(expect.stringContaining(fatal));
+    expectDetached(proc);
+  });
+
   it("does not spawn after cancellation while preparing the profile", async () => {
     const preparation = Promise.withResolvers<void>();
     vi.mocked(prepareOpenClawProfile).mockReturnValueOnce(preparation.promise);

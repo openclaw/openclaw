@@ -25,6 +25,10 @@ vi.mock("openclaw/plugin-sdk/security-runtime", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/security-runtime")>()),
   ensurePortAvailable: async () => {},
 }));
+vi.mock("./chrome.diagnostics.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./chrome.diagnostics.js")>()),
+  diagnoseChromeCdp: async () => ({ ok: true }),
+}));
 vi.mock("node:child_process", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:child_process")>();
   return {
@@ -99,6 +103,10 @@ it.each([
     });
     fixture.spawn.mockImplementation((_command, args: string[]) => {
       expect(args).toContain("--headless=new");
+      expect(args).toContain("--disable-gpu");
+      expect(args).not.toEqual(expect.arrayContaining(["--use-angle=swiftshader"]));
+      expect(args).not.toContain("--enable-unsafe-swiftshader");
+      expect(args).not.toContain("--in-process-gpu");
       expect(args).not.toContain("--no-sandbox");
       expect(readPrefs()).toMatchObject({
         download: {

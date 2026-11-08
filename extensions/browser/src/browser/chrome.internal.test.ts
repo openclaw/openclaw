@@ -739,7 +739,7 @@ describe("chrome.ts internal", () => {
       });
     });
 
-    it("keeps the launched process when fallback diagnostic sees HTTP before WS readiness", async () => {
+    it("rejects HTTP discovery without a working CDP command channel", async () => {
       stubBrowserExecutableAndPrefs("present");
       const fakeProc = makeFakeProc();
       spawnMock.mockImplementation(() => fakeProc);
@@ -770,14 +770,11 @@ describe("chrome.ts internal", () => {
         run: async (baseUrl) => {
           const port = new URL(baseUrl).port;
           const profile = makeProfile(Number(port));
-          const running = await launchOpenClawChrome(
-            makeResolved({ localLaunchTimeoutMs: 1 }),
-            profile,
-          );
-          expect(running.pid).toBe(4242);
+          await expect(
+            launchOpenClawChrome(makeResolved({ localLaunchTimeoutMs: 1 }), profile),
+          ).rejects.toThrow("websocket_health_command_timeout");
           expect(discoveryCalls).toBeGreaterThan(1);
-          expect(fakeProc.kill).not.toHaveBeenCalledWith("SIGKILL");
-          running.proc.kill?.("SIGTERM");
+          expect(fakeProc.kill).toHaveBeenCalledWith("SIGKILL");
         },
       });
     });
@@ -960,7 +957,7 @@ describe("chrome.ts internal", () => {
       vi.spyOn(process, "platform", "get").mockReturnValue("linux");
       await withMockChromeCdpServer({
         wsPath: "/devtools/browser/STALE_OWNER",
-        onCommand: () => undefined,
+        onCommand: () => (spawnMock.mock.calls.length > 0 ? { product: "Chrome/Mock" } : undefined),
         run: async (baseUrl) => {
           const port = Number(new URL(baseUrl).port);
           const profile = makeProfile(port, { cdpUrl: baseUrl, executablePath });
