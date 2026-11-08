@@ -4386,13 +4386,30 @@ ${step.run}`,
     });
 
     for (const [jobName, job] of Object.entries(workflow.jobs)) {
-      for (const step of (job as { steps?: WorkflowStep[] }).steps ?? []) {
+      const typedJob = job as { if?: string; steps?: WorkflowStep[] };
+      for (const step of typedJob.steps ?? []) {
         if (step.uses?.startsWith("actions/cache/restore@")) {
           expect(String(step.if), `${jobName}: ${step.name}`).toContain(
             "preflight.outputs.cache_mode != 'off'",
           );
         }
         if (step.uses?.startsWith("actions/cache/save@")) {
+          if (jobName === "prepare-source-worker-cache") {
+            expect(
+              evaluateWorkflowCondition(expectDefined(typedJob.if, "source worker guard"), {
+                eventName: "workflow_dispatch",
+                runAttempt: 1,
+                repository: "openclaw/openclaw",
+                ref: "refs/heads/main",
+                preflightOutputs: {
+                  run_source_worker_cache: "true",
+                  cache_mode: "restore",
+                  node_runner_backend: "blacksmith",
+                },
+              }),
+            ).toBe(false);
+            continue;
+          }
           expect(String(step.if), `${jobName}: ${step.name}`).toContain(
             "preflight.outputs.cache_write_allowed == 'true'",
           );

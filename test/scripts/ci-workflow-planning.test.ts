@@ -8724,10 +8724,10 @@ describe("ci workflow guards", () => {
     );
   });
 
-  it("starts Node fanout after preflight while ratchets remain required by the final gate", () => {
+  it("starts Node fanout after preflight and optional preparation while ratchets remain required", () => {
     const workflow = readCiWorkflow();
     const nodeJob = workflow.jobs["checks-node-core-test-nondist-shard"];
-    expect(nodeJob.needs).toEqual(["preflight"]);
+    expect(nodeJob.needs).toEqual(["preflight", "prepare-source-worker-cache"]);
     expect(workflow.jobs["checks-fast-core"].needs).toEqual(["preflight"]);
     const ratchet = workflow.jobs["checks-baseline-ratchets"];
     expect(ratchet.steps.some((step: WorkflowStep) => step.name === "Check startup corpus")).toBe(
@@ -12944,10 +12944,15 @@ describe("ci workflow guards", () => {
     expect(workflow.on.pull_request).not.toHaveProperty("paths-ignore");
     expect(gate.name).toBe("openclaw/ci-gate");
     expect(gate.needs).toEqual([...requiredJobs, ...selectedJobs]);
-    // Every workload is gated; the release-only receipt sealer runs after this gate.
+    // Test workloads remain gated; cache acceleration is optional and the release sealer runs later.
     expect(gate.needs.toSorted()).toEqual(
       Object.keys(workflow.jobs)
-        .filter((job) => job !== "ci-gate" && job !== "seal_release_child_evidence")
+        .filter(
+          (job) =>
+            !["ci-gate", "seal_release_child_evidence", "prepare-source-worker-cache"].includes(
+              job,
+            ),
+        )
         .toSorted(),
     );
     expect(gate.permissions).toEqual({ contents: "read" });

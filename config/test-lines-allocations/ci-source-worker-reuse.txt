@@ -1,2 +1,2 @@
-# Source-worker borrower/mock admission, PR cache publication scope, and failed/skipped producer test continuity: 161 lines; reconcile 12 lines of inherited base debt.
-173
+# Source-worker borrower/mock admission, PR cache publication scope, and failed/skipped producer test continuity: 183 lines; reconcile 12 lines of inherited base debt.
+195
