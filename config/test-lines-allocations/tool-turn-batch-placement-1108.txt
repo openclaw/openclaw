@@ -1,0 +1,2 @@
+# Regression: preserve bounded batch ordering and prevent quadratic sibling timestamp scans.
+87

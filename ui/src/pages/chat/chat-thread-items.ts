@@ -619,6 +619,50 @@ export function insertChatItemsByTimestamp(items: ChatItem[], inserts: ChatProje
       return a.index - b.index;
     });
 
+  const first = sortedInserts[0];
+  if (!first) {
+    return;
+  }
+  const sharedBounds = placementsByKey.get(first.item.key)?.bounds;
+  // Sorted inserts cannot precede an earlier insertion. Merge fixed shared
+  // bounds once; mixed bounds retain their per-item placement below.
+  if (
+    sortedInserts.length > 1 &&
+    sortedInserts.every(({ item }) => {
+      const bounds = placementsByKey.get(item.key)?.bounds;
+      return (
+        bounds?.afterKey === sharedBounds?.afterKey &&
+        bounds?.beforeKey === sharedBounds?.beforeKey &&
+        item.key !== sharedBounds?.afterKey &&
+        item.key !== sharedBounds?.beforeKey
+      );
+    })
+  ) {
+    const { minimum, maximum } = insertionIndexesForBounds(items, sharedBounds);
+    // Inverted intervals use the existing ceiling fallback for every insert.
+    let cursor = Math.min(minimum, maximum);
+    const merged = items.slice(0, cursor);
+    for (const { item, effectiveTimestamp } of sortedInserts) {
+      while (cursor < maximum) {
+        const existing = items[cursor]!;
+        const timestamp = chatItemTimestamp(existing);
+        if (effectiveTimestamp != null && (timestamp == null || timestamp > effectiveTimestamp)) {
+          break;
+        }
+        merged.push(existing);
+        cursor += 1;
+      }
+      merged.push(item);
+    }
+    for (; cursor < items.length; cursor += 1) {
+      merged.push(items[cursor]!);
+    }
+    for (let index = 0; index < merged.length; index += 1) {
+      items[index] = merged[index]!;
+    }
+    return;
+  }
+
   for (const { item, effectiveTimestamp } of sortedInserts) {
     const { minimum, maximum } = insertionIndexesForBounds(
       items,
