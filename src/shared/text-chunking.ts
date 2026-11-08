@@ -8,9 +8,6 @@ import { resolveIntegerOption } from "@openclaw/normalization-core/number-coerci
 const CJK_PUNCTUATION_BREAK_AFTER_RE = /[、。，．！？；：）］｝〉》」』】〕〗〙]/u;
 
 export function normalizeChunkLimit(limit: number): number {
-  // NaN cannot bound anything; keep the text whole like other non-positive
-  // limits instead of producing empty or shattered chunks. Infinity stays a
-  // valid unbounded limit: chunkByNewline still splits on newlines for it.
   if (Number.isNaN(limit)) {
     return 0;
   }
