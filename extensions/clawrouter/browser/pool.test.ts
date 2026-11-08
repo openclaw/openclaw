@@ -137,7 +137,10 @@ it("retains accepted pool content through refresh failure and clears the alert d
   expect(f.summary()).toBe(content);
   expect(f.button.disabled).toBe(true);
   failed.reject(new Error("fixture-private is unavailable"));
-  await vi.waitFor(() => expect(f.alert()?.textContent).toBe("[redacted] is unavailable"));
+  await vi.waitFor(() =>
+    expect(f.alert()?.textContent).toBe("Couldn’t load the ClawRouter pool. Try Refresh."),
+  );
+  expect(f.container.textContent).toContain("[redacted] is unavailable");
   expect(f.summary()).toBe(content);
   const retry = createDeferred<ClawRouterPoolResult>();
   f.request.mockReturnValueOnce(retry.promise);
@@ -163,7 +166,7 @@ it("retires reads when hidden or access changes without publishing their late re
   expect(f.alert()).toBeNull();
   f.connection.canRead = false;
   f.notify();
-  expect(f.container.textContent).toContain("Read access is required");
+  expect(f.container.textContent).toContain("You need read access");
   expect(f.summary()).toBeNull();
   expect(f.button.disabled).toBe(true);
 });
