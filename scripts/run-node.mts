@@ -1390,6 +1390,17 @@ export const acquireRunNodeBuildLock = async (
       };
     } catch (error) {
       if (!hasErrorCode(error, "EEXIST")) {
+        const code = ["EACCES", "EROFS"].find((candidate) => hasErrorCode(error, candidate));
+        if (code) {
+          throw Object.assign(
+            new Error(
+              `Cannot prepare source-runner artifacts (${code}). The CLI command has not run. ` +
+                "Source development needs a writable checkout. For an installed release, use its installed `openclaw` command or run `node openclaw.mjs ...` from that built release.",
+              { cause: error },
+            ),
+            { code },
+          );
+        }
         throw error;
       }
       if (removeStaleBuildLock(deps, lockDir, staleMs)) {
