@@ -258,6 +258,7 @@ it.each([0, 7])("propagates shared central lint exit %s", (exitCode) => {
   );
   const context = prContext({
     failed: true,
+    steps: { bun_setup: { outcome: "success", outputs: {} } },
     matrix: { shared_central_lint_selection_json: '{"central":true,"fullGroups":["scripts"]}' },
     preflightOutputs: { narrow_check_paths_json: '["src/example.ts"]', runner_profile: "hybrid" },
   });
