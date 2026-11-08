@@ -197,6 +197,7 @@ type BenchmarkRun = {
   };
   heapProfile?: GatewayHeapProfile & MainProfileArtifacts;
   loadCpuProfile?: GatewayCpuProfile & MainProfileArtifacts;
+  diagnosticsTimelinePath?: string;
   loadDiagnostics?: Awaited<ReturnType<Awaited<ReturnType<typeof startGatewayDiagnostics>>>>;
   controlPlane: Array<TimedProbe & { method: string }>;
   controlUi: ControlUiProbe[];
@@ -2186,12 +2187,10 @@ async function runGatewaySample(
       if (options.controlUiLoad) {
         gatewayArgs[gatewayArgs.indexOf("--auth") + 1] = "token";
       }
-      if (options.controlUiLoad || options.durationMs) {
-        const stopPreload = new URL("./lib/gateway-bench-stop-preload.mjs", import.meta.url);
-        stopPreload.searchParams.set("parentPid", String(process.pid));
-        stopPreload.searchParams.set("entry", path.resolve(options.entry));
-        gatewayArgs.unshift("--import", stopPreload.href);
-      }
+      const stopPreload = new URL("./lib/gateway-bench-stop-preload.mjs", import.meta.url);
+      stopPreload.searchParams.set("parentPid", String(process.pid));
+      stopPreload.searchParams.set("entry", path.resolve(options.entry));
+      gatewayArgs.unshift("--import", stopPreload.href);
       if (heapProfilePath || loadCpuProfilePath) {
         for (const profilePath of [heapProfilePath, loadCpuProfilePath]) {
           if (profilePath) {
@@ -3127,26 +3126,12 @@ async function runGatewaySample(
         await captureFailure("cleanup", () => auxiliaryClient.close());
       }
       await captureFailure("cleanup", async () => {
-        if (
-          gateway &&
-          options.cpuProfDir &&
-          !options.controlUiLoad &&
-          !options.durationMs &&
-          gateway.exitCode === null &&
-          gateway.signalCode === null
-        ) {
-          // V8 flushes the main-isolate CPU profile on its normal interrupt path.
-          const profileFlushed = new Promise<void>((resolve) => {
-            gateway!.once("exit", () => resolve());
-          });
-          gateway.kill("SIGINT");
-          await Promise.race([profileFlushed, delay(2_000)]);
-        }
-      });
-      await captureFailure("cleanup", async () => {
         if (gateway) {
+          const exitedBeforeShutdown = gateway.exitCode !== null || gateway.signalCode !== null;
           try {
-            if (options.controlUiLoad || options.durationMs) {
+            // Every mode joins Gateway-owned drain before bounded process-tree cleanup.
+            // This also flushes startup CPU profiles without a competing signal path.
+            if (!exitedBeforeShutdown) {
               shutdown = await stopGatewayGracefully(gateway, GATEWAY_SERVICE_STOP_TIMEOUT_MS);
             }
           } finally {
@@ -3155,7 +3140,7 @@ async function runGatewaySample(
                 forcedCleanup = true;
               },
             });
-            if (shutdown) {
+            if (!exitedBeforeShutdown) {
               gatewayExit.exitedBeforeTeardown = false;
             }
           }
@@ -3211,6 +3196,17 @@ async function runGatewaySample(
         }
         if (result) {
           result.pluginMetadataScans = scans;
+        }
+        // Keep owner spans with explicit profiles before fixture cleanup.
+        // Copy only after shutdown so artifact retention adds no measured load work.
+        const profilePath = loadCpuProfilePath ?? heapProfilePath;
+        if (profilePath) {
+          const diagnosticsTimelinePath = `${profilePath}.timeline.jsonl`;
+          copyFileSync(timelinePath, diagnosticsTimelinePath);
+          partialRun.diagnosticsTimelinePath = diagnosticsTimelinePath;
+          if (result) {
+            result.diagnosticsTimelinePath = diagnosticsTimelinePath;
+          }
         }
       }
       if (!result) {

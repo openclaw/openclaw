@@ -56,7 +56,7 @@ jobs:
       (github.event_name == 'workflow_dispatch' && inputs.operation == 'release'))))
     permissions:
       contents: write
-    runs-on: ubuntu-24.04
+    runs-on: blacksmith-8vcpu-ubuntu-2404
     timeout-minutes: 120
     environment: ${{ ((github.event_name == 'schedule' && github.event.schedule == '0 7 * * *') || inputs.operation == 'internal') && 'android-internal' || 'android-store-release' }}
     steps:
@@ -72,14 +72,6 @@ jobs:
         run: |
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
-
-      - name: Fetch release source history
-        shell: bash
-        run: |
-          set -euo pipefail
-          # Fetch ancestry now; release-note reads hydrate historical file contents on demand.
-          # Retain this main commit as a negotiation tip for the release owner's later main fetch.
-          git fetch --no-tags --filter=blob:none --unshallow origin "+$GITHUB_SHA:refs/remotes/origin/main"
 
       - name: Prepare trusted Linux Android tooling
         if: >-
@@ -122,13 +114,18 @@ jobs:
         with:
           cache-mode: off
           install-bun: "true"
+          install-deps: "false"
           node-version: ${{ env.NODE_VERSION }}
 
       - name: Setup Android toolchain
         uses: ./.github/actions/setup-android-toolchain
         with:
           cache-mode: off
+          gradle-cache-mode: restore
           install-screenshot-emulators: ${{ ((github.event_name == 'schedule' && github.event.schedule == '0 11 * * 1') || (github.event_name == 'workflow_dispatch' && inputs.operation == 'release')) && 'true' || 'false' }}
+
+      - name: Install mobile release dependencies
+        run: node scripts/install-mobile-release-dependencies.mjs
 
       - name: Setup Ruby
         uses: ruby/setup-ruby@824c0e29fdfc7d689c191c27acc969d2d04b7dd8 # v1.331.0
@@ -144,7 +141,7 @@ jobs:
           set -euo pipefail
           bundle _4.0.23_ install --jobs 4 --retry 3
           bundle _4.0.23_ check
-          test "$(bundle _4.0.23_ exec ruby -e 'require "fastlane"; print Fastlane::VERSION')" = "2.241.1"
+          test "$(bundle _4.0.23_ exec ruby -e 'require "fastlane"; print Fastlane::VERSION')" = "2.241.2"
 
       - name: Create apps-signing read token
         id: apps-signing-token

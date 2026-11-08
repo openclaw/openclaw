@@ -80,16 +80,7 @@ function fixture() {
     outcome: Extract<PendingInputMutation, { kind: "complete" }>["outcome"],
     runId = owner.runId,
   ) => pending.mutate({ ...owner, runId, kind: "complete", outcome }).outcome;
-  const interrupt = (ids: string[], protectedId?: string) =>
-    pending.interruptHistory(
-      { ...scope, ids },
-      {
-        isProtected: (candidate, currentSessionId) =>
-          currentSessionId === scope.sessionId && candidate.input_id === protectedId,
-        admit() {},
-      },
-    );
-  return { state, pending, grants, stageInput, stageMany, source, finish, complete, interrupt };
+  return { state, pending, grants, stageInput, stageMany, source, finish, complete };
 }
 
 describe("memory actor pending input custody", () => {
@@ -159,6 +150,33 @@ describe("memory actor pending input custody", () => {
     expect(finish()).toBeUndefined();
   });
 
+  it("rebinds a reopened cancelled input to the run that restaged it", () => {
+    const { pending, stageInput, source, finish } = fixture();
+    pending.mutate(stageInput());
+    expect(finish()).toBe("input-1");
+    const reopened = pending.mutate(stageInput({ runId: "run-2", inputId: "input-1" }));
+    expect(reopened.stagedInput).toMatchObject({
+      input_id: "input-1",
+      run_id: "run-2",
+      state: "queued",
+    });
+    expect(source()).toMatchObject({ pending: { run_id: "run-2", state: "queued" } });
+    expect(pending.receipts({ ...scope, runIds: ["run-1", "run-2"] })).toEqual([
+      { runId: "run-2", state: "pending" },
+    ]);
+  });
+
+  it("lets only one of two concurrent reopens rebind the cancelled input", () => {
+    const { pending, stageInput, source, finish } = fixture();
+    pending.mutate(stageInput());
+    finish();
+    const winner = stageInput({ runId: "run-2", inputId: "input-1" });
+    const loser = stageInput({ runId: "run-3", inputId: "input-1" });
+    pending.mutate(winner);
+    expect(() => pending.mutate(loser)).toThrow("Pending input changed before staging committed");
+    expect(source()).toMatchObject({ pending: { run_id: "run-2", state: "queued" } });
+  });
+
   it("finds committed input when pending custody is absent and excludes other sessions", () => {
     const { state, pending, source } = fixture();
     const event = { type: "message", id: "event-1", message };
@@ -181,12 +199,17 @@ describe("memory actor pending input custody", () => {
     stageMany(3);
     const consumed = state.pendingInputs.get("key-2")!;
     state.pendingInputs.set("key-2", { ...consumed, consumed_event_id: "event-2" });
-    const page = pending.history({ ...scope, limit: 1 });
+    const page = pending.history({ ...scope, liveInputIds: ["input-1", "input-3"], limit: 1 });
     expect(page.rows.map((row) => row.input_id)).toEqual(["input-3"]);
     expect(page.total).toBe(2);
     expect(
       pending
-        .history({ ...scope, limit: 1, before: page.nextBefore })
+        .history({
+          ...scope,
+          liveInputIds: ["input-1", "input-3"],
+          limit: 1,
+          before: page.nextBefore,
+        })
         .rows.map((row) => row.input_id),
     ).toEqual(["input-1"]);
     expect(pending.history({ ...scope, id: "input-2" }).rows).toEqual([]);
@@ -199,20 +222,6 @@ describe("memory actor pending input custody", () => {
     );
     expect(() => pending.receipts({ ...scope, runIds: ["run-1"] })).toThrow(
       "ambiguous source run IDs",
-    );
-  });
-
-  it("interrupts only unconsumed inputs without live custody", () => {
-    const { pending, stageMany, interrupt } = fixture();
-    stageMany(2);
-    const receipt = interrupt(["input-1", "input-2"], "input-1");
-    expect(receipt).toEqual({ kind: "pending-input-history-interrupted", ids: ["input-2"] });
-    expect(interrupt(["input-2"])).toEqual(receipt);
-    expect(pending.history(scope).rows.map(({ input_id, state }) => ({ input_id, state }))).toEqual(
-      [
-        { input_id: "input-2", state: "interrupted" },
-        { input_id: "input-1", state: "queued" },
-      ],
     );
   });
 });

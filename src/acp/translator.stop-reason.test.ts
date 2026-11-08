@@ -371,7 +371,7 @@ it.each([
       error,
     });
     if (deliveryRejects) {
-      h.connection.sessionUpdate = vi.fn().mockRejectedValue(new Error("client gone"));
+      h.connection.notify = vi.fn().mockRejectedValue(new Error("client gone"));
     }
     h.reconnect();
     if (error && !stopReason) {

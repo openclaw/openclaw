@@ -17,6 +17,20 @@ describe("ChatLog run state", () => {
       chatLog.addSystem(`Retained notice ${index}.`);
     }
   }
+  it.each([0, 39])("anchors a delayed prompt before surviving finals after %i notices", (count) => {
+    chatLog.finalizeAssistant("First reply.", "peer-run");
+    addNotices(count);
+    chatLog.finalizeAssistant("Second reply.", "peer-run");
+    chatLog.addLiveUser("Late peer prompt.", { messageId: "peer-user", runId: "peer-run" });
+
+    expect(render().match(/(?:Late peer prompt|First reply|Second reply)\./gu)).toEqual(
+      count === 0
+        ? ["Late peer prompt.", "First reply.", "Second reply."]
+        : ["Late peer prompt.", "Second reply."],
+    );
+    expect(chatLog.children.length).toBeLessThanOrEqual(40);
+  });
+
   it("keeps revised snapshots scoped to their own concurrent assistant run", () => {
     chatLog.updateAssistant("Obsolete first", "run-first");
     chatLog.updateAssistant("Preserved second", "run-second");

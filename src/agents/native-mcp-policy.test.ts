@@ -1,9 +1,10 @@
 import { Type } from "typebox";
 import { describe, expect, it } from "vitest";
 import { getPluginToolMeta } from "../plugins/tool-metadata.js";
+import type { McpToolCatalog } from "./agent-bundle-mcp-catalog.types.js";
 import { buildBundleMcpToolsFromCatalog } from "./agent-bundle-mcp-materialize.js";
 import { assignSafeServerNames } from "./agent-bundle-mcp-names.js";
-import type { McpToolCatalog, SessionMcpRuntime } from "./agent-bundle-mcp-types.js";
+import type { SessionMcpRuntime } from "./agent-bundle-mcp-types.js";
 import { resolveConversationCapabilityProfile } from "./conversation-capability-profile.js";
 import { prepareNativeMcpPolicy } from "./native-mcp-policy.js";
 

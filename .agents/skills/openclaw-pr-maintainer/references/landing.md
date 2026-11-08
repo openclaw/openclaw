@@ -13,7 +13,7 @@
 ## Open or update the PR
 
 - Current template + real body file; preserve human credit, maintainer-editable branches when safe. Fork edits: heed Actions/secrets warning.
-- Build + focused local tests pass → open ready PR promptly; PR CI runs broad suites. Create draft first, wait for non-null `mergeable`, mark ready, verify CI attached to pushed head. Requested landing of own draft includes marking ready.
+- Follow the [proof policy](../../openclaw-testing/SKILL.md#proof-policy), including its draft/CI route when build capacity is unavailable. Create draft first; after required build and focused proof pass, wait for non-null `mergeable`, mark ready, and verify CI attached to pushed head. Requested landing of own draft includes marking ready once those requirements pass.
 - Merge-ref startup failure cannot rerun; hourly PR CI sweeper re-fires, or authorized close/reopen after verifying missing attachment.
 - No rebase just for advancing main. Refresh for conflict, failing guard, explicit request, material stale-base risk only.
 - Conflict repair: record last passing run/tested head, resolved delta, affected contracts in existing preparation evidence. Reuse unchanged-input proof; run affected checks, not every completed suite. Older run ≠ current-head CI or gate waiver. Admission succeeds → merge before optional polish/cleanup.
@@ -37,6 +37,24 @@
 - Attributed inherited-only reds use the [authorized pre-existing-failure route](#authorized-pre-existing-failures); name failures in PR. Matching-signature evidence or a maintainer's concrete scoped attribution can establish unrelatedness as described there; the table is not the only attribution source. New/unknown failures require investigation, not silent relabeling; PR-caused failure does not select inherited-failure exception.
 - PR-caused CI failure → `pnpm test:ci-failed <pr>` → fix new failures/investigate unknown → `pnpm test:ci-failed <pr> --run` until selected affected tests pass locally → push once. This repair loop does not apply to already-attributed unrelated failures. Never `gh run rerun` to chase green; never local full suite for CI repair.
 - The inherited-failure exception never covers PR-caused failures, including tiny lint, type, or stale-expectation failures. Repair them before landing; promising a later main fix does not establish unrelatedness.
+
+### Delegated CodeQL dismissal requests
+
+- A CodeQL failure is a security gate, not an inherited-CI exception. Inspect the exact alert, query, data flow, trusted checkout identity, dependency lock, script policy, cache restore/save behavior, and workflow permissions before classifying it. Prefer a source fix when the flow is not proven safe.
+- When a repository security administrator agrees that the alert is a false positive but the caller lacks direct dismissal authority, request delegated dismissal with GitHub's code-scanning API. `create_request` must be a JSON boolean, so use `-F`; keep the dismissal comment at **280 characters or fewer**:
+
+```bash
+comment='Trusted release tooling is pinned to github.workflow_sha, uses a frozen lockfile with scripts disabled, restores but never saves its dependency cache, and has contents:read only.'
+(( ${#comment} <= 280 )) || { echo 'CodeQL dismissal comment exceeds 280 characters' >&2; exit 1; }
+gh api --method PATCH \
+  repos/openclaw/openclaw/code-scanning/alerts/<alert-number> \
+  -f state=dismissed \
+  -f dismissed_reason='false positive' \
+  -f dismissed_comment="$comment" \
+  -F create_request=true
+```
+
+- HTTP 400 commonly means `create_request=true` was omitted or encoded as a string; HTTP 422 commonly means the comment is too long or a field is invalid. HTTP 409 means GitHub reports that a request already exists: do not submit another. Read the alert again to distinguish open from dismissed; if the pending request is not visible to the caller, record that visibility limit and ask a repository security administrator to inspect it. If an urgent release-tooling repair is otherwise proven and an authorized administrator explicitly lands it while the request is pending, record the exact alert, reviewed head, classification, request state, and reason; never describe the alert as dismissed until GitHub reports it dismissed.
 
 ## Review, prepare, merge
 

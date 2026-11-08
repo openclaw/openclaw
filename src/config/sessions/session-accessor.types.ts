@@ -11,9 +11,9 @@ import type {
   SessionTranscriptTurnMutation,
   SessionTranscriptTurnMutationResult,
 } from "./goals-operations.types.js";
-import type { RecoveryNoticePredicate } from "./recovery-notice.js";
 import type { SessionLifecycleStoreTarget } from "./session-accessor.lifecycle-types.js";
 import type { SessionEntryCreationOperation } from "./session-accessor.sqlite-entry-cache.types.js";
+import type { SessionCreationOperation } from "./session-creation-operation.js";
 import type { SessionEntryCommitContext } from "./session-entry-commit-context.js";
 import type { SessionOwnerAssignment } from "./session-entry-provenance.js";
 import type { CapturedSessionEntryReadSource } from "./session-entry-read-source.types.js";
@@ -425,8 +425,7 @@ export type SessionTranscriptTurnMessageAppend = TranscriptMessageAppendOptions<
   };
   predicate?:
     | { kind: "latest-assistant-differs"; runId: string; text: string }
-    | { kind: "active-entry"; entryId: string; errorMessage: string }
-    | RecoveryNoticePredicate;
+    | { kind: "active-entry"; entryId: string; errorMessage: string };
   /**
    * Runs inside the session writer queue before the SQLite transaction begins.
    * The commit phase revalidates session ownership and database idempotency
@@ -772,7 +771,7 @@ export type SessionBranchListResult =
 export type SessionBranchListParams = Pick<
   SessionMessageCutMutationParams,
   "agentId" | "env" | "sessionKey" | "sessionStoreKey" | "storePath"
->;
+> & { signal?: AbortSignal };
 
 export type SessionBranchSwitchMutationResult =
   | {
@@ -823,6 +822,9 @@ export type SessionEntryCreationPhase =
   | "publication";
 
 export type SessionEntryCreateWithTranscriptOptions = {
+  /** Opt in to storage-certified rejection outcomes for an external creation claim. */
+  certifyNotCommitted?: true;
+  creationOperation?: SessionCreationOperation;
   /** Explicit label claim, checked again inside the final write transaction. */
   label?: string;
   onPhase?: (phase: SessionEntryCreationPhase) => void;

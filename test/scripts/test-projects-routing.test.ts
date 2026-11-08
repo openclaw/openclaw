@@ -1,18 +1,17 @@
-import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { globSync } from "tinyglobby";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { resolveCanonicalNodeTestConfig } from "../../scripts/lib/ci-node-test-plan.mts";
-import { collectModuleReferencesFromSource } from "../../scripts/lib/guard-inventory-utils.mjs";
-import { createNativeTypeScriptParser } from "../../scripts/lib/native-typescript.mts";
 import {
   listVitestRuntimeConsumerFiles,
   resolveVitestCliEntry,
   resolveVitestPretestBuildMode,
 } from "../../scripts/lib/vitest-build-prerequisites.mts";
-import { resolveVitestNodeArgs } from "../../scripts/lib/vitest-process-env.mts";
+import { resolveLocalVitestScheduling } from "../../scripts/lib/vitest-local-scheduling.mts";
+import { resolveVitestNodeArgs } from "../../scripts/lib/vitest-node-args.mts";
+import { execNodeEvalSync } from "../../src/test-utils/node-process.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { createGatewayDatabaseWorkersVitestConfig } from "../vitest/vitest.gateway-database-workers.config.ts";
 import { createGatewayServerIsolatedVitestConfig } from "../vitest/vitest.gateway-server-isolated.config.ts";
@@ -72,6 +71,7 @@ function changedPlans(paths: string[]) {
 
 describe("test-projects args", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+  afterEach(() => vi.unstubAllEnvs());
 
   const gatewayWorkerFile = "src/gateway/server-methods/cron.runs.test.ts";
   const catalogFile = "test/plugins/codex-model-catalog.gateway.test.ts";
@@ -165,15 +165,29 @@ describe("test-projects args", () => {
     });
   });
 
-  it.each([false, true])(
-    "sets native run/watch mode without leaking the sentinel (watch=%s)",
-    (watch) => {
+  it.each([
+    { watch: false, maglev: "0" },
+    { watch: true, maglev: "0" },
+    { watch: false, maglev: "1" },
+    { watch: true, maglev: "1" },
+  ])(
+    "sets native run/watch mode from the invocation environment (watch=$watch, maglev=$maglev)",
+    ({ watch, maglev }) => {
+      vi.stubEnv("OPENCLAW_VITEST_ENABLE_MAGLEV", maglev === "0" ? "1" : "0");
       const spec = expectDefined(
-        runSpecs(watch ? ["--watch", "--", "src/foo.test.ts"] : ["src/foo.test.ts"])[0],
+        runSpecs(watch ? ["--watch", "--", "src/foo.test.ts"] : ["src/foo.test.ts"], {
+          baseEnv: { ...process.env, OPENCLAW_VITEST_ENABLE_MAGLEV: maglev },
+        })[0],
         "run spec",
       );
       expect(spec.pnpmArgs).toEqual([
-        ...VITEST_NODE_PREFIX,
+        "exec",
+        "node",
+        ...(maglev === "0" ? ["--no-maglev"] : []),
+        "--no-concurrent-sparkplug",
+        "--js-base-64",
+        "--expose-gc",
+        resolveVitestCliEntry(),
         ...(watch ? [] : ["run"]),
         "--config",
         "test/vitest/vitest.unit.config.ts",
@@ -181,6 +195,17 @@ describe("test-projects args", () => {
       ]);
     },
   );
+
+  it("retains the focused UI E2E config loader", () => {
+    expect(runSpecs(["test/vitest/vitest.ui-e2e.config.ts"])[0]?.pnpmArgs).toEqual([
+      ...VITEST_NODE_PREFIX,
+      "run",
+      "--config",
+      "test/vitest/vitest.ui-e2e.config.ts",
+      "--configLoader",
+      "runner",
+    ]);
+  });
 
   it.each([["--watch", "false"], ["--no-watch"]])(
     "preserves native watch controls after the wrapper separator: %j",
@@ -228,10 +253,11 @@ describe("test-projects args", () => {
     ["test/scripts/mac-elevation-artifact.test.ts", "tooling"],
     ["src/utils.test.ts", "unit-fast-fake-timers"],
     ["extensions/google/embedding-provider.test.ts", "extension-database-workers"],
+    ["test/decision-baseten-admission.integration.test.ts", "infra"],
     ["src/acp/translator.stop-reason.test.ts", "infra"],
     ["src/acp/control-plane/manager.test.ts", "infra"],
     ["src/agents/tools/message-tool.scheduled-lifetime.test.ts", "infra"],
-    ["test/telegram-recovery-notice-send.test.ts", "infra"],
+    ["test/telegram-lifecycle-notice-send.test.ts", "infra"],
     ["src/acp/control-plane/manager.cancel-session.producer-custody.worker.test.ts", "infra"],
     ["src/process/exec.test.ts", "process"],
     ["src/infra/sqlite-readonly-worker.compile-cache.process.test.ts", "cli-process"],
@@ -294,6 +320,39 @@ describe("test-projects args", () => {
     "caps project-level parallelism for conservative %s",
     (key) => expect(resolveParallelFullSuiteConcurrency(58, { [key]: "1" })).toBe(1),
   );
+
+  it.each([
+    [undefined, 8],
+    ["", 8],
+    ["  ", 8],
+    ["001", 1],
+    ["02", 2],
+    ["0", null],
+    ["-1", null],
+    ["1.5", null],
+    ["1e0", null],
+    ["8x", null],
+    ["9007199254740992", null],
+  ] as const)("keeps worker and project override policy aligned for %j", (value, expected) => {
+    const host = {
+      cpuCount: 16,
+      totalMemoryBytes: 128 * 1024 ** 3,
+      freeMemoryBytes: 32 * 1024 ** 3,
+    };
+    for (const key of ["OPENCLAW_VITEST_MAX_WORKERS", "OPENCLAW_TEST_WORKERS"]) {
+      const env = { [key]: value };
+      const worker = () => resolveLocalVitestScheduling(env, host).maxWorkers;
+      const projects = () => resolveParallelFullSuiteConcurrency(58, env, host);
+      if (expected === null) {
+        const error = `${key} must be a positive integer; got: ${value}`;
+        expect(worker).toThrow(error);
+        expect(projects).toThrow(error);
+      } else {
+        expect(worker()).toBe(expected);
+        expect(projects()).toBe(expected);
+      }
+    }
+  });
 
   it("keeps explicit project-level parallelism authoritative", () => {
     expect(
@@ -397,38 +456,38 @@ describe("test-projects args", () => {
     expect(expandedFiles).not.toContain("test/helpers/temp-dir.ts");
     expect(expandedFiles.filter((file) => !file.endsWith(".test.ts"))).toEqual([]);
 
-    // Independent AST parsing excludes import text inside source fixtures.
-    const scanRoots = ["src", "test", "ui", "extensions", "packages"];
-    const grep = spawnSync(
-      "git",
-      ["grep", "-l", "--fixed-strings", "helpers/temp-dir", "--", ...scanRoots],
-      { encoding: "utf8" },
+    // The independent AST oracle uses TypeScript's Node-only synchronous API.
+    const directImporterTests: string[] = JSON.parse(
+      execNodeEvalSync(
+        String.raw`import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
+import fs from "node:fs";
+import path from "node:path";
+import { collectModuleReferencesFromSource } from ${JSON.stringify(new URL("../../scripts/lib/guard-inventory-utils.mjs", import.meta.url).href)};
+import { createNativeTypeScriptParser } from ${JSON.stringify(new URL("../../scripts/lib/native-typescript.mts", import.meta.url).href)};
+const scanRoots = ["src", "test", "ui", "extensions", "packages"];
+const grep = spawnSync("git", ["grep", "-l", "--fixed-strings", "helpers/temp-dir", "--", ...scanRoots], { encoding: "utf8" });
+assert.equal(grep.status, 0);
+using parser = createNativeTypeScriptParser();
+const candidates = grep.stdout.split("\n").map((line) => line.trim())
+  .filter((file) => file.endsWith(".test.ts") && !file.endsWith(".live.test.ts"));
+const directImporterTests = parser.parseSourceFiles(
+  candidates.map((fileName) => ({ fileName, text: fs.readFileSync(fileName, "utf8") })),
+).flatMap((sourceFile) => {
+  const file = path.relative(process.cwd(), sourceFile.fileName).replaceAll("\\", "/");
+  const references = collectModuleReferencesFromSource(sourceFile, {
+    acceptSpecifier: (specifier) => {
+      if (!specifier.startsWith(".")) return false;
+      const resolved = path.posix.normalize(path.posix.join(path.posix.dirname(file), specifier));
+      return resolved.replace(/\.(?:js|ts)$/u, "") === "test/helpers/temp-dir";
+    },
+  });
+  return references.some(({ kind }) => kind === "import" || kind === "export") ? [file] : [];
+});
+console.log(JSON.stringify(directImporterTests));`,
+        { imports: ["./scripts/tsx.mjs"] },
+      ),
     );
-    expect(grep.status).toBe(0);
-    using parser = createNativeTypeScriptParser();
-    const candidates = grep.stdout
-      .split("\n")
-      .map((line) => line.trim())
-      .filter((file) => file.endsWith(".test.ts") && !file.endsWith(".live.test.ts"));
-    const directImporterTests = parser
-      .parseSourceFiles(
-        candidates.map((fileName) => ({ fileName, text: fs.readFileSync(fileName, "utf8") })),
-      )
-      .flatMap((sourceFile) => {
-        const file = path.relative(process.cwd(), sourceFile.fileName).replaceAll("\\", "/");
-        const references = collectModuleReferencesFromSource(sourceFile, {
-          acceptSpecifier: (specifier) => {
-            if (!specifier.startsWith(".")) {
-              return false;
-            }
-            const resolved = path.posix.normalize(
-              path.posix.join(path.posix.dirname(file), specifier),
-            );
-            return resolved.replace(/\.(?:js|ts)$/u, "") === "test/helpers/temp-dir";
-          },
-        });
-        return references.some(({ kind }) => kind === "import" || kind === "export") ? [file] : [];
-      });
     expect(directImporterTests.length).toBeGreaterThan(0);
     expect(directImporterTests.filter((file) => !expandedFiles.includes(file))).toEqual([]);
 

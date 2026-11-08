@@ -38,6 +38,8 @@ export type SessionFactsRequest = {
   sessionKey: string;
   agentId: string;
   followLifecycle?: boolean;
+  followTranscript?: boolean;
+  sessionAccessOnly?: boolean;
   preserveQualifiedAddress?: boolean;
   storageReady?: Promise<void>;
 };

@@ -74,7 +74,6 @@ export function restoreQueuedDeliveryCustody(
     ...custody,
     payloads,
     sessionGeneration: entry.sessionGeneration,
-    transcriptGeneration: entry.sessionGeneration,
   };
 }
 

@@ -92,11 +92,11 @@ function currentFact(
 }
 
 /** Cleanup also accepts an already-removing allocation, but never a different generation. */
-export async function assertSandboxRegistryRetirementCurrent(
+export function assertSandboxRegistryRetirementCurrent(
   kind: Kind,
   entry: Entry,
   options: { path?: string; env?: NodeJS.ProcessEnv } = {},
-): Promise<void> {
+): void {
   const current = currentFact(entry, kind, options);
   if (!current || !sameSandboxRegistryGeneration(current, entry)) {
     throw new Error("Sandbox runtime generation changed during retirement");

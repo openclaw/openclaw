@@ -1,6 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { matchesGlob, resolve } from "node:path";
+import { vitestDeclaredInputs } from "../../test/vitest/vitest.declared-inputs.ts";
 import { isPlainRepoRelativePath } from "../../test/vitest/vitest.include-patterns.ts";
 import { resolveUiTypeScriptPath } from "../../test/vitest/vitest.ui-paths.mjs";
 import { isTestFileTarget } from "./changed-path-facts.mjs";
@@ -25,6 +26,27 @@ type PolicyTestWatch = {
 // this inventory covers the remaining tests that changed targeting cannot
 // discover from imports alone.
 const policyTestWatches: readonly PolicyTestWatch[] = [
+  ...vitestDeclaredInputs.map(([testFile, input]): PolicyTestWatch => ({
+    testFile,
+    watchGlobs: [input],
+  })),
+  // Copied release fixtures need the complete helper closure beyond the hub cutoff.
+  ...[
+    "test/scripts/ocm-npm-workspace-deps.test.ts",
+    "test/scripts/control-ui-performance.test.ts",
+  ].map((testFile): PolicyTestWatch => ({
+    testFile,
+    watchGlobs: [
+      "scripts/lib/check-limits.mts",
+      "scripts/lib/release-context.mjs",
+      "scripts/lib/release-version.mjs",
+    ],
+  })),
+  {
+    // The node-host integration proves the official-plugin version floor through a facade.
+    testFile: "src/node-host/codex-node-plugin.integration.test.ts",
+    watchGlobs: ["src/plugins/official-runtime-plugins.ts"],
+  },
   {
     // YAML code/docs references are not import edges. A removed path can be
     // either side of a rename; one catalog scan checks every remaining reference.
@@ -43,6 +65,15 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
     testFile,
     watchGlobs: NODE_WORKER_E2E_OWNER_GLOBS,
     sourceOnly: true,
+  })),
+  // Busy fixture hubs stop the aggressive import walk at one hop. These
+  // consumers enter through the manifest fixture, so retain their second hop.
+  ...[
+    "test/scripts/ci-workflow-native-generated.test.ts",
+    "test/scripts/ci-workflow-ui-full.test.ts",
+  ].map((testFile): PolicyTestWatch => ({
+    testFile,
+    watchGlobs: ["test/scripts/ci-workflow.test-support.ts"],
   })),
   {
     testFile: "test/scripts/ios-lifecycle-workflow.test.ts",
@@ -63,11 +94,10 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
   })),
   // New or removed modules and new import edges can escape a static inventory.
   // Watch source edits conservatively: the absent inventory entry cannot own its guard.
+  // Provisioning uses the explicit copied-input watch below; these guards detect new edges.
   ...[
     "test/scripts/pr-wrapper-source-closure.test.ts",
-    "test/scripts/pr-worktree-provision.test.ts",
     "test/scripts/eager-import-closure.test.ts",
-    "test/scripts/update-restart-module-outcome.test.ts",
     "test/scripts/type-suppression-inventory.test.ts",
     "test/scripts/plugin-sdk-surface-report.test.ts",
   ].map((testFile): PolicyTestWatch => ({
@@ -75,6 +105,22 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
     sourceOnly: true,
     watchGlobs: ["{src,extensions,packages,scripts,ui/src}/**/*.{ts,tsx,mts,cts,js,jsx,mjs,cjs}"],
   })),
+  {
+    // This fixture evaluates named update modules, not arbitrary repository sources.
+    // Include the native integrity worker and its runtime/bootstrap dependencies.
+    testFile: "test/scripts/update-restart-module-outcome.test.ts",
+    sourceOnly: true,
+    watchGlobs: [
+      "{scripts,packages}/**",
+      "src/{cli,daemon,infra,logging,plugins,process,security,shared,state,utils}/**",
+      "src/test-utils/node-process.ts",
+      "test/scripts/ci-workflow.test-support.ts",
+      "test/vitest/**",
+      "test/{setup*,non-isolated-runner}.ts",
+      "*.{mjs,json}",
+      "pnpm-*.yaml",
+    ],
+  },
   {
     includeDotPaths: true,
     testFile: "test/scripts/lint-suppressions.test.ts",
@@ -126,10 +172,11 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
   // import graph reaches only the test-instance helper. Without owner watches
   // they ran on PRs only when that helper changed and drifted for days.
   {
-    testFile: "test/gateway-background-process-restart.e2e.test.ts",
+    testFile: "test/gateway-restart-resume.e2e.test.ts",
     watchGlobs: [
       "src/gateway/server-startup-observers.ts",
-      "src/agents/bash-tools.exec-notify.ts",
+      "src/gateway/session-restart-resume.ts",
+      "src/gateway/server-run-shutdown.ts",
       "src/infra/restart-intent{,-payload}.ts",
       "src/sessions/session-controller*.ts",
     ],
@@ -654,12 +701,12 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
     watchGlobs: ["src/agents/mcp-oauth-store.worker.ts"],
   },
   {
+    testFile: "src/commands/doctor-db-bloat.worker.test.ts",
+    watchGlobs: ["src/commands/doctor-db-bloat.worker.ts"],
+  },
+  {
     testFile: "src/commands/doctor-maintenance.worker.test.ts",
-    watchGlobs: [
-      "src/commands/doctor-state.worker.ts",
-      "src/infra/sqlite-store.worker.ts",
-      "src/state/openclaw-state.worker.ts",
-    ],
+    watchGlobs: ["src/infra/sqlite-store.worker.ts", "src/state/openclaw-state.worker.ts"],
   },
   {
     testFile: "src/commands/models/auth.minimax-chat.test.ts",
@@ -1377,6 +1424,8 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
     "test/scripts/pr-merge-completion.test.ts",
     "test/scripts/pr-merge-hosted.test.ts",
     "test/scripts/pr-merge-legacy-recovery.test.ts",
+    "test/scripts/pr-merge-prior-ci-artifact-build.test.ts",
+    "test/scripts/pr-merge-prior-ci.test.ts",
     "test/scripts/pr-merge-qualified-refusal.test.ts",
     "test/scripts/pr-publication.test.ts",
     "test/scripts/pr-wrappers.test.ts",
@@ -1749,14 +1798,6 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
     watchGlobs: ["src/config/sessions/session-cold-storage-worker.ts"],
   },
   {
-    testFile: "src/gateway/session-delivery-clock-jump.integration.test.ts",
-    watchGlobs: [
-      "src/infra/session-delivery-queue.worker.ts",
-      "src/state/openclaw-state.worker.ts",
-      "src/state/openclaw-state-worker-registry.ts",
-    ],
-  },
-  {
     testFile: "src/gateway/session-transcript-title-reader.test.ts",
     watchGlobs: [
       "src/config/sessions/session-cold-storage-worker.ts",
@@ -2062,10 +2103,16 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
   ...[
     "test/scripts/pr-worktree-provision.test.ts",
     "test/scripts/eager-import-closure.test.ts",
+    "test/scripts/pr-wrapper-source-closure.test.ts",
+    "test/scripts/ci-workflow-cost.test.ts",
   ].map((testFile): PolicyTestWatch => ({
     testFile,
     ownerGlobs: ["scripts/pr-lib/wrapper-components.txt"],
     watchGlobs: [
+      ".github/workflows/pr-tooling-darwin.yml",
+      "test/vitest/**",
+      "test/non-isolated-runner.ts",
+      "test/setup*.ts",
       "scripts/pr",
       "scripts/pr-lib/**",
       ...readFileSync(new URL("../pr-lib/wrapper-components.txt", import.meta.url), "utf8")

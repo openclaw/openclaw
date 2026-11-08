@@ -86,3 +86,31 @@ it("accepts nullable optional wire fields without losing completed image bytes",
   ]);
   expect(result.metadata).toMatchObject({ usage: { total_tokens: 1 } });
 });
+
+it.each(["completed", "streamed"])(
+  "preserves returned image settings from %s output",
+  async (source) => {
+    const buffer = Buffer.from("89504e470d0a1a0a", "hex");
+    const item = {
+      type: "image_generation_call",
+      result: buffer.toString("base64"),
+      quality: "low",
+    };
+    const events = [
+      { type: "response.output_item.done", item: { ...item, quality: "medium" } },
+      { type: "response.completed", response: { output: source === "completed" ? [item] : [] } },
+    ];
+    const result = await readCodexImageGenerationResponse(
+      new Response(events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join("")),
+      { model: "gpt-image-2", mimeType: "image/jpeg" },
+    );
+    expect(result.images).toEqual([
+      {
+        buffer,
+        mimeType: "image/png",
+        fileName: "image-1.png",
+        metadata: { quality: source === "completed" ? "low" : "medium" },
+      },
+    ]);
+  },
+);

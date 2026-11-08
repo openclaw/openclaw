@@ -21,7 +21,8 @@ export async function installedPackagePath(
   name: string,
 ): Promise<string | undefined> {
   validateBundledPackageName(name);
-  const search = createRequire(path.join(owner, "package.json")).resolve.paths(name) ?? [];
+  // Manifest dependencies name npm packages even when Node has a builtin with that name.
+  const search = createRequire(path.join(owner, "package.json")).resolve.paths(`${name}/`) ?? [];
   for (const modules of search) {
     const candidate = path.join(modules, name);
     try {
@@ -67,7 +68,8 @@ export function hasInstalledPackageAncestor(
   ancestors: ReadonlyMap<string, string>,
 ): boolean {
   const search =
-    createRequire(path.join(destination, "package.json")).resolve.paths(dependency.name) ?? [];
+    createRequire(path.join(destination, "package.json")).resolve.paths(`${dependency.name}/`) ??
+    [];
   for (const modules of search) {
     const root = ancestors.get(path.join(modules, dependency.name));
     if (root !== undefined) {

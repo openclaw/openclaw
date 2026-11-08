@@ -6,6 +6,7 @@ import { openUrlPrivately } from "../infra/browser-handoff.js";
 import { copyToClipboard } from "../infra/clipboard.js";
 import { isRemoteEnvironment } from "../infra/remote-env.js";
 import { defaultRuntime, ExitError, type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
+import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { sleep } from "../utils/sleep.js";
 import {
   hasVerifiedControlUiLoopbackAlias,
@@ -223,11 +224,16 @@ export async function dashboardCommand(
         return;
       }
 
+      const documentSignal = getAsyncWorkSignal();
       const document = await waitForControlUiDocument({
         url: target.documentUrl,
         tlsConfig: target.tlsConfig,
         waitForPending: false,
+        ...(documentSignal ? { signal: documentSignal } : {}),
       });
+      if (documentSignal?.aborted) {
+        return;
+      }
       if (!document.ready) {
         dashboardJsonFailure(runtime, document.reason);
         return;
@@ -305,11 +311,16 @@ export async function dashboardCommand(
     runtime.exit(1);
     return;
   }
+  const documentSignal = getAsyncWorkSignal();
   const document = await waitForControlUiDocument({
     url: target.documentUrl,
     tlsConfig: target.tlsConfig,
     onPending: () => runtime.log("Control UI assets are preparing; waiting for the dashboard…"),
+    ...(documentSignal ? { signal: documentSignal } : {}),
   });
+  if (documentSignal?.aborted) {
+    return;
+  }
   if (!document.ready) {
     runtime.error(document.reason);
     runtime.log("Run `openclaw gateway status --deep` for details.");

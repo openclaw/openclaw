@@ -83,6 +83,52 @@ const schedule = (kind: "at" | "every" | "cron", at: number): CronJobCreate["sch
       : { kind, expr: "* * * * *", tz: "UTC", staggerMs: 0 };
 
 describe("ordinary session agent turns", () => {
+  it.each(["isolated", "main", "session:agent:main:project:inbox"] as const)(
+    "requires fresh authority after a human transfer on %s, including a transfer back",
+    async (sessionTarget) => {
+      const { cron, storePath, run } = await service();
+      await cron.start();
+      const job = await cron.add(jobInput({ enabled: false, sessionTarget }), {
+        createdActor: { type: "human", source: "profile", id: "alice" },
+      });
+      for (const ownerProfileId of ["bob", "alice"]) {
+        await cron.update(job.id, { ownerProfileId });
+        await cron.run(job.id, "force");
+        expect(run).not.toHaveBeenCalled();
+        expect(cron.getJob(job.id)?.state.lastError).toContain("fresh execution authority");
+        expect(
+          (await loadCronStore(storePath)).jobs.find((entry) => entry.id === job.id),
+        ).toMatchObject({
+          ownerProfileId,
+          ownerTransferPending: true,
+          enabled: false,
+        });
+      }
+      await cron.update(job.id, { name: "Still awaiting reauthorization" });
+      await cron.run(job.id, "force");
+      expect(run).not.toHaveBeenCalled();
+      await cron.update(
+        job.id,
+        {},
+        {
+          inferenceBinding: {
+            version: 1,
+            provider: "openai",
+            profileId: "synthetic-owner-account",
+            authorizationId: "a".repeat(64),
+            authRequirement: "api-key",
+            source: "user",
+          },
+        },
+      );
+      await cron.run(job.id, "force");
+      expect(run).toHaveBeenCalledOnce();
+      expect(
+        (await loadCronStore(storePath)).jobs.find((entry) => entry.id === job.id),
+      ).not.toHaveProperty("ownerTransferPending");
+    },
+  );
+
   it.each(
     (["ok", "error"] as const).flatMap((status) =>
       (["main", "session:agent:main:project:inbox"] as const).map((sessionTarget) => ({
@@ -281,14 +327,26 @@ describe("unstarted scheduled admission", () => {
       expect(events.filter((event) => event.action === "finished")).toEqual([]);
       expect(sendWebhook).not.toHaveBeenCalled();
       expect(run).toHaveBeenCalledTimes(boundary === "preflight" ? 0 : 1);
+      expect(retained.state.admissionDeferred).toMatchObject({
+        sinceMs: dueAt,
+        attempts: 1,
+        retryAtMs: dueAt + 30_000,
+      });
+      expect(retained.state.admissionDeferred?.reason).toBeTruthy();
+      expect(
+        events.findLast((event) => event.action === "scheduled")?.job?.state.admissionDeferred,
+      ).toEqual(retained.state.admissionDeferred);
+      expect((await cron.status()).nextWakeAtMs).toBe(dueAt + 30_000);
+      await tick(dueAt + 2_000);
+      expect(run).toHaveBeenCalledTimes(boundary === "preflight" ? 0 : 1);
       busy = false;
-      expect((await cron.status()).nextWakeAtMs).toBe(dueAt);
-      await tick(scheduler.now() + MIN_REFIRE_GAP_MS);
+      await tick(dueAt + 30_000);
       expect(run).toHaveBeenCalledTimes(boundary === "preflight" ? 1 : 2);
       expect(sendWebhook).toHaveBeenCalledOnce();
       expect(readCronRunRecordsForTests(job.id)).toHaveLength(1);
       const completed = cron.getJob(job.id)!;
       expect(completed.state.lastRunStatus).toBe("ok");
+      expect(completed.state.admissionDeferred).toBeUndefined();
       if (scheduleKind === "at") {
         expect(completed.enabled).toBe(false);
         expect(completed.state.nextRunAtMs).toBeUndefined();

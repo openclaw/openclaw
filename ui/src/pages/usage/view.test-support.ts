@@ -71,6 +71,7 @@ export function createUsageProps(overrides: Partial<UsageProps> = {}): UsageProp
       totals: null,
       aggregates: null,
       costDaily: [],
+      readChartSnapshot: () => null,
       cacheRefresh: "complete",
       providerUsage: [],
       providerUsageStalled: false,
@@ -171,7 +172,6 @@ export function createUsageOverview(
 ): NonNullable<UsageProps["data"]["overview"]> {
   const overview = projectUsageData([]).overview!;
   delete overview.selectedUsageComplete;
-  delete overview.usageReport;
   return Object.assign(overview, overrides);
 }
 

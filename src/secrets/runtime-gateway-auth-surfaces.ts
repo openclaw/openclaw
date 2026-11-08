@@ -51,10 +51,10 @@ export function evaluateGatewayAuthSurfaceStates(params: {
       return "gateway.auth is not configured.";
     }
     const password = kind === "password";
-    if (password && plan.passwordCanWin) {
+    if (password && plan.localPasswordCanWin) {
       return plan.authMode === "password"
         ? 'gateway.auth.mode is "password".'
-        : "no token source can win, so password auth can win.";
+        : "no local token source can win, so local password auth can win.";
     }
     if (
       plan.authMode === "token" ||
@@ -70,9 +70,6 @@ export function evaluateGatewayAuthSurfaceStates(params: {
     if (password) {
       if (plan.localToken.configured) {
         return "gateway.auth.token is configured.";
-      }
-      if (plan.remoteToken.configured) {
-        return "gateway.remote.token is configured.";
       }
       return "token auth can win.";
     }
@@ -136,7 +133,7 @@ export function evaluateGatewayAuthSurfaceStates(params: {
       hasSecretRef: plan.localToken.hasSecretRef,
     },
     "gateway.auth.password": {
-      active: plan.passwordCanWin,
+      active: plan.localPasswordCanWin,
       reason: authPasswordReason,
       hasSecretRef: plan.localPassword.hasSecretRef,
     },

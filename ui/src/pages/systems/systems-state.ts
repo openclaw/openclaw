@@ -4,7 +4,7 @@ import { createChangeListeners } from "../../../../src/shared/listeners.js";
 import type { NodeListNode } from "../../../../src/shared/node-list-types.js";
 import type { ApplicationContext } from "../../app/context.ts";
 import { gatewayPresentationScope } from "../../app/gateway-presentation-scope.ts";
-import { hasOperatorReadAccess } from "../../app/operator-access.ts";
+import { hasOperatorAdminAccess, hasOperatorReadAccess } from "../../app/operator-access.ts";
 import { isDesktopPanelAvailable } from "../../app/panel-availability.ts";
 import { enableHostDesktop as enableHostDesktopConfig } from "../../components/desktop/host-desktop-setup.ts";
 import { t } from "../../i18n/index.ts";
@@ -12,10 +12,12 @@ import { resolveEditableSnapshotConfig } from "../../lib/config/config-state-mod
 import { formatUiError } from "../../lib/format-error.ts";
 import { createGatewayConnectionLifecycle } from "../../lib/gateway-connection-lifecycle.ts";
 import { createPageRequest } from "../../lib/page-request.ts";
+import { listen } from "../../lib/reactive/listener.ts";
 import { readSystemInfo } from "../../lib/system-info.ts";
 import {
   loadSystemsInventory,
   projectSystemsInventory,
+  projectSystemsTelemetry,
   type SystemsInventory,
   type SystemsInventoryRow,
 } from "./systems-data.ts";
@@ -29,6 +31,8 @@ import {
 const TELEMETRY_SAMPLE_LIMIT = 120;
 
 const UNPLACED = JSON.stringify([null, null]);
+
+const PHONE_WIDTH_QUERY = "(max-width: 640px)";
 
 // Worker lifecycle is only reported by environments.list; a placement change signals it moved.
 function placementFact(payload: unknown): [sessionKey: string, fact: string] | undefined {
@@ -52,7 +56,8 @@ type SystemsState = {
   query: string;
   sortMode: SystemsSortMode;
   statusFilter: SystemsStatusFilter;
-  showStats: boolean;
+  /** The operator's toggle choice; null until they make one. */
+  showStats: boolean | null;
   showDetails: boolean;
   desktopSetupError: string | null;
   backups: BackupStatusResult | null;
@@ -70,12 +75,15 @@ export function createSystems(context: ApplicationContext) {
     query: "",
     sortMode: "online-first",
     statusFilter: "all",
-    showStats: true,
+    showStats: null,
     showDetails: false,
     desktopSetupError: null,
     backups: null,
     backupsError: null,
   };
+  const phoneWidth = globalThis.matchMedia?.(PHONE_WIDTH_QUERY);
+  // A phone opens on the remote desktop; an explicit toggle wins at every width.
+  const statsVisible = () => state.showStats ?? !phoneWidth?.matches;
   const storageProbes = new Map<string, StorageLocationsProbeResult>();
   const presentationScope = gatewayPresentationScope(context.gateway);
   const lifecycle = createGatewayConnectionLifecycle(context.gateway.snapshot);
@@ -91,7 +99,11 @@ export function createSystems(context: ApplicationContext) {
   let desktopSetupRequest: ReturnType<typeof Promise.withResolvers<void>> | undefined;
   let subscriptions: Array<() => void> = [];
 
-  let telemetryRequest: AbortController | undefined;
+  type TelemetrySource = "systemInfo" | "nodes";
+  const telemetryRequests = new Map<
+    TelemetrySource,
+    { controller: AbortController; selection: string | null | undefined }
+  >();
   let active = false;
   let refreshQueued: "automatic" | "manual" | undefined;
   const current = () => presentationScope === gatewayPresentationScope(context.gateway);
@@ -288,8 +300,10 @@ export function createSystems(context: ApplicationContext) {
 
   function cancelRefresh(): void {
     inventoryRequest.cancel();
-    telemetryRequest?.abort();
-    telemetryRequest = undefined;
+    for (const request of telemetryRequests.values()) {
+      request.controller.abort();
+    }
+    telemetryRequests.clear();
     refreshQueued = undefined;
   }
 
@@ -311,7 +325,6 @@ export function createSystems(context: ApplicationContext) {
     task: async (intent, { signal }) => ({
       inventory: await loadSystemsInventory(context.gateway, {
         signal,
-        fresh: intent === "manual",
       }),
       intent,
     }),
@@ -321,7 +334,9 @@ export function createSystems(context: ApplicationContext) {
         return;
       }
       const initial = state.inventory === null;
-      state.inventory = inventory;
+      state.inventory = state.inventory
+        ? { ...state.inventory, environments: inventory.environments }
+        : inventory;
       projectRows();
       recordTelemetry(true);
       // Only initial entry picks a default. Later updates preserve explicit or missing selection.
@@ -358,14 +373,17 @@ export function createSystems(context: ApplicationContext) {
     void readBackupState();
     const pending = inventoryRequest.run(refreshIntent);
     const receipt = inventoryRequest.read;
+    void refreshTelemetry({ inventory: true, fresh: refreshIntent === "manual" });
     await pending;
     if (inventoryRequest.read === receipt && refreshQueued) {
       void refresh();
     }
   }
 
-  /** Refresh selected-host measurements without reloading profiles or changing the desktop source. */
-  async function refreshTelemetry(): Promise<void> {
+  /** Inventory refreshes sample both sources; periodic reads sample only the selected host. */
+  async function refreshTelemetry(
+    options: { inventory?: boolean; fresh?: boolean } = {},
+  ): Promise<void> {
     const selectedRow = selected();
     const inventory = state.inventory;
     const scope = lifecycle.capture();
@@ -373,67 +391,87 @@ export function createSystems(context: ApplicationContext) {
       !active ||
       !current() ||
       !scope ||
-      !selectedRow ||
-      !inventory ||
-      loading() ||
-      telemetryRequest
+      (!options.inventory && (!selectedRow || !inventory || loading()))
     ) {
       return;
     }
-    const gatewayHost = selectedRow.environment.id === "gateway";
-    if (!gatewayHost && selectedRow.environment.type !== "node") {
+    const gatewayHost = selectedRow?.environment.id === "gateway";
+    if (!options.inventory && !gatewayHost && selectedRow?.environment.type !== "node") {
       return;
     }
-    const request = new AbortController();
-    telemetryRequest = request;
-    const isCurrent = () =>
-      active && current() && lifecycle.isCurrent(scope) && telemetryRequest === request;
-    try {
-      if (gatewayHost) {
-        const sample = await readSystemInfo(context.gateway, request.signal);
-        if (!isCurrent() || !state.inventory) {
-          return;
-        }
-        const { systemInfo: _previousError, ...errors } = state.inventory.errors;
-        state.inventory = {
-          ...state.inventory,
-          gatewaySystemInfo: sample.value,
-          gatewaySampledAtMs: sample.at,
-          errors,
-        };
-      } else {
-        const result = await scope.client.request<{ nodes: NodeListNode[] }>(
-          "node.list",
-          {},
-          { signal: request.signal },
-        );
-        if (!isCurrent() || !state.inventory) {
-          return;
-        }
-        const { nodes: _previousError, ...errors } = state.inventory.errors;
-        state.inventory = { ...state.inventory, nodes: result.nodes, errors };
-      }
-      projectRows();
-      recordTelemetry(gatewayHost);
-    } catch (error) {
-      if (error instanceof DOMException && error.name === "AbortError") {
+    const sources: readonly TelemetrySource[] = options.inventory
+      ? ["systemInfo", "nodes"]
+      : gatewayHost
+        ? ["systemInfo"]
+        : ["nodes"];
+    // Samples enrich accepted membership, never an inventory request that failed or was retired.
+    const inventoryReady = options.inventory ? inventoryRequest.read : null;
+    const sample = async (source: TelemetrySource) => {
+      if (telemetryRequests.has(source)) {
         return;
       }
-      if (isCurrent() && state.inventory) {
+      const request = {
+        controller: new AbortController(),
+        selection: options.inventory ? undefined : state.selectedId,
+      };
+      telemetryRequests.set(source, request);
+      const isCurrent = () =>
+        active &&
+        current() &&
+        lifecycle.isCurrent(scope) &&
+        telemetryRequests.get(source) === request;
+      try {
+        const patch = await (source === "systemInfo"
+          ? readSystemInfo(context.gateway, request.controller.signal, {
+              fresh: options.fresh,
+            }).then((result) => ({
+              gatewaySystemInfo: result.value,
+              gatewaySampledAtMs: result.at,
+            }))
+          : scope.client.request<{ nodes: NodeListNode[] }>(
+              "node.list",
+              {},
+              { signal: request.controller.signal },
+            ));
+        const inventoryFailure = await inventoryReady;
+        if (inventoryFailure || !isCurrent() || !state.inventory) {
+          return;
+        }
+        const errors = { ...state.inventory.errors };
+        delete errors[source];
+        state.inventory = { ...state.inventory, ...patch, errors };
+        state.rows = projectSystemsTelemetry(state.rows, patch);
+        recordTelemetry(source === "systemInfo");
+      } catch (error) {
+        const inventoryFailure = await inventoryReady;
+        if (
+          (error instanceof DOMException && error.name === "AbortError") ||
+          inventoryFailure ||
+          !isCurrent() ||
+          !state.inventory
+        ) {
+          return;
+        }
+        if (options.inventory) {
+          const patch =
+            source === "systemInfo"
+              ? { gatewaySystemInfo: null, gatewaySampledAtMs: null }
+              : { nodes: [] };
+          state.inventory = { ...state.inventory, ...patch };
+          state.rows = projectSystemsTelemetry(state.rows, patch);
+        }
         state.inventory = {
           ...state.inventory,
-          errors: {
-            ...state.inventory.errors,
-            [gatewayHost ? "systemInfo" : "nodes"]: formatUiError(error),
-          },
+          errors: { ...state.inventory.errors, [source]: formatUiError(error) },
         };
+      } finally {
+        if (isCurrent()) {
+          telemetryRequests.delete(source);
+          notify();
+        }
       }
-    } finally {
-      if (isCurrent()) {
-        telemetryRequest = undefined;
-        notify();
-      }
-    }
+    };
+    await Promise.all(sources.map(sample));
   }
   return {
     context,
@@ -444,6 +482,10 @@ export function createSystems(context: ApplicationContext) {
     connected,
     needsInventoryRefresh,
     loading,
+    telemetryLoading: (row: SystemsInventoryRow) =>
+      row.environment.id === "gateway"
+        ? telemetryRequests.has("systemInfo")
+        : row.environment.type === "node" && telemetryRequests.has("nodes"),
     get inventoryRead() {
       return inventoryRequest.read;
     },
@@ -452,17 +494,25 @@ export function createSystems(context: ApplicationContext) {
     },
     storageProbeRead: (name: string) => storageProbeRequests.get(name)?.read ?? null,
     desktopAvailable,
+    desktopAccessDenied: () =>
+      !hasOperatorAdminAccess(context.gateway.snapshot.hello?.auth ?? null),
     selected,
     hostDesktopEnabled,
     desktopSetupBusy,
     canEnableHostDesktop,
     telemetryHistory,
+    statsVisible,
     select(id: string): void {
       if (!current() || !id.trim()) {
         return;
       }
-      telemetryRequest?.abort();
-      telemetryRequest = undefined;
+      // Inventory samples still enrich the new selection; selected-host polls can retire.
+      for (const [source, request] of telemetryRequests) {
+        if (request.selection !== undefined) {
+          request.controller.abort();
+          telemetryRequests.delete(source);
+        }
+      }
       if (id !== state.selectedId) {
         resetDesktopSetup();
       }
@@ -494,6 +544,16 @@ export function createSystems(context: ApplicationContext) {
       // Keyed by session from events, so sessions outside the loaded list still refresh workers.
       const placements = new Map<string, string>();
       subscriptions = [
+        ...(phoneWidth
+          ? [
+              listen(phoneWidth, "change", () => {
+                notify();
+                if (state.showStats === null && !phoneWidth.matches) {
+                  void refreshTelemetry();
+                }
+              }),
+            ]
+          : []),
         context.router.subscribe((next) => {
           if (next.location !== location) {
             location = next.location;

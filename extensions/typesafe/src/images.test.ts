@@ -1,14 +1,21 @@
 import type { DecisionBatchV2, DecisionProviderContextV2 } from "openclaw/plugin-sdk/decisions";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/plugin-entry";
 import type { LookupFn } from "openclaw/plugin-sdk/ssrf-runtime";
 import { afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
-import type { RuntimeConfig } from "./config.js";
 import {
   mixedFixture,
   mockJsonResponse,
   registeredPreparedDecisionProvider,
 } from "./transport.test-support.js";
 
-const { lookup } = vi.hoisted(() => ({ lookup: vi.fn<LookupFn>() }));
+const { lookup, randomUUID } = vi.hoisted(() => ({
+  lookup: vi.fn<LookupFn>(),
+  randomUUID: vi.fn<typeof import("node:crypto").randomUUID>(),
+}));
+vi.mock("node:crypto", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("node:crypto")>()),
+  randomUUID,
+}));
 vi.mock("node:dns/promises", async (importOriginal) => ({
   ...(await importOriginal<typeof import("node:dns/promises")>()),
   lookup,
@@ -28,7 +35,9 @@ const context = (baseUrl = hostedUrl): DecisionProviderContextV2 => ({
   deadlineMonotonicMs: performance.now() + 2000,
   isAdmissible: () => true,
 });
-function provider(overrides: Partial<NonNullable<RuntimeConfig["providerConfig"]>> = {}) {
+type ModelProviderConfig = NonNullable<NonNullable<OpenClawConfig["models"]>["providers"]>[string];
+
+function provider(overrides: Partial<ModelProviderConfig> = {}) {
   const config = {
     models: {
       providers: {
@@ -49,6 +58,7 @@ beforeAll(async () => {
   await import("./client.js");
 });
 beforeEach(() => {
+  randomUUID.mockReset().mockReturnValue("00000000-0000-4000-8000-000000000001");
   lookup.mockReset().mockResolvedValue([{ address: "104.18.0.1", family: 4 }]);
 });
 afterEach(() => {
@@ -57,6 +67,7 @@ afterEach(() => {
 
 it.each([
   ["png", "data:image/png;base64,AA==", "Synthetic caption"],
+  ["png", "data:image/png;base64,AA==", ""],
   ["jpg", "data:image/jpeg;base64,/9j/", undefined],
 ])(
   "sends a referenced %s image through the registered prepared executor",
@@ -89,11 +100,30 @@ it.each([
   },
 );
 
+it("keeps a caller's UUID text separate from its image reference", async () => {
+  const caption = "00000000-0000-4000-8000-000000000000";
+  randomUUID.mockReturnValueOnce(caption);
+  const fetch = mockJsonResponse(mixedFixture.response);
+  await expect(provider().evaluate(image(undefined, caption), context())).resolves.toEqual(
+    mixedFixture.result,
+  );
+  const { body } = sent(fetch);
+  expect(body.state).toEqual([caption, "00000000-0000-4000-8000-000000000001"]);
+  expect(body.assets).toEqual({
+    "00000000-0000-4000-8000-000000000001": {
+      type: "image",
+      format: "png",
+      data_base64: "AA==",
+    },
+  });
+  expect(randomUUID).toHaveBeenCalledTimes(2);
+});
+
 it("keeps text wire behavior and removes the image opt-in from text requests", async () => {
   const fetch = mockJsonResponse(mixedFixture.response);
   const outcome = await provider({ request: { headers: { [imageHeader]: "true" } } }).evaluate(
     {
-      state: { type: "json", value: mixedFixture.batch.state },
+      state: mixedFixture.batch.state,
       questions: mixedFixture.batch.questions,
     },
     context(),
@@ -126,8 +156,18 @@ it.each([
   { ...image(), state: { type: "image", dataUri: "data:image/webp;base64,AA==" } },
   { ...image(), questions: { q: { type: "box", instructions: "Locate the object" } } },
   { ...image(), questions: { q: { type: "tags", criteria: { red: "Red" } } } },
+  ...["explicit JSON string", 5, true].map((value) => ({
+    state: { type: "json" as const, value },
+    questions: mixedFixture.batch.questions,
+  })),
+  {
+    state: { type: "text", text: "synthetic" },
+    questions: Object.fromEntries(
+      Array.from({ length: 257 }, (_, index) => [String(index), { type: "boolean" as const }]),
+    ),
+  },
 ] satisfies DecisionBatchV2[])(
-  "rejects unsupported image contracts before dispatch",
+  "rejects unsupported prepared contracts before dispatch",
   async (batch) => {
     const fetch = mockJsonResponse(mixedFixture.response);
     await expect(provider().evaluate(batch, context())).resolves.toEqual({

@@ -131,7 +131,7 @@ function publicAccount(account: PairingAccount) {
     channelLabel: account.plugin.meta.label,
     accountId: account.accountId,
     ...(account.accountLabel ? { accountLabel: account.accountLabel } : {}),
-    notifySupported: Boolean(account.pairing.notifyApproval),
+    notifySupported: Boolean(account.pairing.notifyApproval || account.plugin.outbound?.sendText),
   };
 }
 
@@ -313,27 +313,23 @@ export const channelPairingHandlers: GatewayRequestHandlers = {
           }
         }
 
-        let notification: "not-requested" | "sent" | "unsupported" | "failed" = "not-requested";
+        let notification: ChannelsPairingApproveResult["notification"] = "not-requested";
         if (params.notify === true) {
-          if (!account.pairing.notifyApproval) {
-            notification = "unsupported";
-          } else {
-            try {
-              await notifyPairingApproved({
-                channelId: account.plugin.id,
-                accountId: account.accountId,
-                id: approved.id,
-                cfg,
-                pairingAdapter: account.pairing,
-                ...(approved.entry.meta ? { meta: approved.entry.meta } : {}),
-              });
-              notification = "sent";
-            } catch (error) {
-              context.logGateway.warn(
-                `DM pairing approval notification failed channel=${account.plugin.id} account=${account.accountId}: ${formatForLog(error)}`,
-              );
-              notification = "failed";
-            }
+          try {
+            notification = await notifyPairingApproved({
+              channelId: account.plugin.id,
+              accountId: account.accountId,
+              id: approved.id,
+              cfg,
+              pairingAdapter: account.pairing,
+              gatewayOwnedDelivery: true,
+              ...(approved.entry.meta ? { meta: approved.entry.meta } : {}),
+            });
+          } catch (error) {
+            context.logGateway.warn(
+              `DM pairing approval notification failed channel=${account.plugin.id} account=${account.accountId}: ${formatForLog(error)}`,
+            );
+            notification = "failed";
           }
         }
 

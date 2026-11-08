@@ -21,6 +21,7 @@ import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { normalizeWindowsPathPreservingCase } from "./path-guards.js";
 import { resolvePrivateSqliteSnapshotStagingRoot } from "./sqlite-private-directory.js";
+import { tryInspectSqliteReadOnlyInProcess } from "./sqlite-readonly-inspection.js";
 import {
   retainSnapshotWork,
   withPreparedSqliteSnapshot,
@@ -118,10 +119,15 @@ async function withStateDatabaseSnapshot<T>(
         undefined,
         progress.onProgress,
       );
-  return withPreparedSqliteSnapshot(snapshot, async (location) => {
-    progress.complete((await fs.stat(location)).size);
-    return read(location);
-  });
+  // A leftover private copy must not fail an update; the Gateway sweep reclaims it.
+  return withPreparedSqliteSnapshot(
+    snapshot,
+    async (location) => {
+      progress.complete((await fs.stat(location)).size);
+      return read(location);
+    },
+    { bestEffortCleanup: true },
+  );
 }
 
 export async function collectStateDatabasePaths(
@@ -184,7 +190,7 @@ export async function collectStateDatabasePaths(
   );
 }
 
-/** Read registrations and plugin ownership from one private shared copy before budgeting. */
+/** Read registrations and plugin ownership from one shared generation before budgeting. */
 export async function readUpdateCandidateStateInventoryInProcess(
   input: StateInput & {
     targetStateDir: string;
@@ -204,7 +210,8 @@ export async function readUpdateCandidateStateInventoryInProcess(
     progressAt = now;
     await fs.utimes(planPath, new Date(now), new Date(now));
   };
-  const { prepareUpdateCandidatePlugins } = await import("./update-candidate-plugins.js");
+  const { prepareUpdateCandidatePlugins, readUpdateCandidatePluginIndex } =
+    await import("./update-candidate-plugins.js");
   const files = await collectSupplementalStateDatabasePaths(
     input,
     await collectStateDatabasePaths(input),
@@ -238,6 +245,16 @@ export async function readUpdateCandidateStateInventoryInProcess(
         files.set(identity, discovery);
       }
       return measure(undefined, result.pluginIndex);
+    }
+    // This isolated child only needs metadata here, not another whole-store image.
+    // Capture registrations and plugin records together; close before filesystem work.
+    input.onProgress?.({ phase: "shared database inspection", path: shared });
+    const metadata = tryInspectSqliteReadOnlyInProcess(shared, (db) => {
+      collectRegisteredPaths(db, shared, files);
+      return readUpdateCandidatePluginIndex(db);
+    });
+    if (metadata) {
+      return measure(undefined, metadata.value);
     }
     return withStateDatabaseSnapshot(
       shared,
@@ -588,7 +605,11 @@ export async function snapshotUpdateCandidateState(
     const snapshot = await createVerifiedSqliteSnapshot({
       sourcePath: snapshotSource,
       targetPath: target,
-      sourceAcquisition: { mode: "isolated-process", stagingRoot: input.targetStateDir },
+      sourceAcquisition: {
+        mode: "isolated-process",
+        stagingRoot: input.targetStateDir,
+        bestEffortCleanup: true,
+      },
       integrity:
         snapshotSource === file
           ? {

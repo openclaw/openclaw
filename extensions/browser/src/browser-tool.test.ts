@@ -1182,10 +1182,9 @@ it.each(["open"])("rejects credentialed %s URLs before dispatch", async (action)
   const tool = createBrowserTool();
   for (const target of ["host", "node"] as const) {
     for (const url of ["https://user:secret@example.com/path", "https://user:secret@"]) {
-      const error = await tool.execute("call-1", { action, target, url, targetId: "tab-1" }).then(
-        () => new Error("credentialed URL was accepted"),
-        (cause: unknown) => cause,
-      );
+      const error = await tool
+        .execute("call-1", { action, target, url, targetId: "tab-1" })
+        .catch((cause: unknown) => cause);
       expect(error).toBeInstanceOf(Error);
       expect(String(error)).not.toContain("secret");
     }

@@ -11,13 +11,12 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import { Session } from "node:inspector/promises";
-import { registerHooks } from "node:module";
 import { loadavg } from "node:os";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 import type { PreparedModelRuntimePluginGeneration } from "../../src/agents/prepared-model-runtime.types.js";
 import type { ActiveRemoteModelCatalog } from "../../src/model-catalog/remote-overlay.js";
+import { registerPerfOwnerReplacement } from "../lib/perf-owner-replacement.ts";
 
 const { values } = parseArgs({
   options: {
@@ -34,23 +33,13 @@ const ownerUrl = new URL(
   "../../src/agents/prepared-model-catalog-retained-data.ts",
   import.meta.url,
 );
-let ownerLoaded = false;
-if (values["owner-file"]) {
-  const replacementUrl = pathToFileURL(path.resolve(values["owner-file"]));
-  registerHooks({
-    load(url, context, nextLoad) {
-      if (url === ownerUrl.href) {
-        ownerLoaded = true;
-        const loaded = nextLoad(replacementUrl.href, context);
-        return { format: loaded.format, source: loaded.source, shortCircuit: true };
-      }
-      return nextLoad(url, context);
-    },
-  });
-}
+const wasOwnerReplaced = registerPerfOwnerReplacement(ownerUrl.href, values["owner-file"]);
 const { measurePreparedCatalogRetainedData } =
   await import("../../src/agents/prepared-model-catalog-retained-data.js");
-assert(!values["owner-file"] || ownerLoaded, "Requested census owner replacement was not loaded");
+assert(
+  !values["owner-file"] || wasOwnerReplaced(),
+  "Requested census owner replacement was not loaded",
+);
 const { createPluginMetadataSnapshotFixture } =
   await import("../../src/plugins/plugin-metadata.test-support.js");
 const { freezeJsonSnapshot } = await import("../../src/shared/immutable-data.js");

@@ -287,7 +287,7 @@ describe("worker placement dispatch", () => {
     await harness.service.reconcile();
 
     expect(harness.placements.current()).toMatchObject({
-      state: "failed",
+      state: "reclaimed",
       turnClaim: null,
       workspaceBaseManifestRef: harness.reconciledManifestRef,
     });
@@ -890,8 +890,14 @@ describe("worker placement dispatch", () => {
   });
 
   it("limits requested runtime reconciliation to one environment", async () => {
+    const reads = vi.spyOn(placementStore, "readProjection");
     const harness = await createTestHarness();
     await harness.placements.seedActive(harness.attached.ownerEpoch);
+    harness.markEnvironmentNodeDeviceId("healthy-worker-node");
+    await harness.service.reconcileActive();
+    await harness.service.reconcileActive();
+    expect(reads).not.toHaveBeenCalled();
+    expect(harness.placements.current()).toMatchObject({ state: "active" });
     harness.markEnvironmentFailed();
     harness.log.length = 0;
 

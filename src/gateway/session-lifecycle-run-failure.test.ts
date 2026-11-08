@@ -17,6 +17,8 @@ import {
 import { resolveEmbeddedRunTerminal } from "../agents/embedded-agent-runner/run/terminal-resolution.js";
 import { makeTerminalInput } from "../agents/embedded-agent-runner/run/terminal-resolution.test-support.js";
 import type { EmbeddedAgentRunResult } from "../agents/embedded-agent-runner/types.js";
+import { FailoverError } from "../agents/failover-error.js";
+import { renderAssistantRequestFailureCopy } from "../agents/failover/assistant-request-failure-copy.js";
 import { SessionManager } from "../agents/sessions/session-manager.js";
 import { buildEmbeddedRunnerAssistant } from "../agents/test-helpers/embedded-agent-runner-e2e-fixtures.js";
 import {
@@ -41,7 +43,6 @@ import {
   SessionTranscriptWriterClaimReboundError,
   withOwnedSessionTranscriptWrites,
 } from "../config/sessions/transcript-write-context.js";
-import { CURRENT_SESSION_VERSION } from "../config/sessions/version.js";
 import {
   getAgentEventLifecycleGeneration,
   onAgentEvent,
@@ -61,95 +62,20 @@ import { createChatRunState } from "./server-chat-state.js";
 import { createAgentEventTestHarness } from "./server-chat.agent-events.test-harness.js";
 import { captureRpcTargetForTest } from "./server-methods/rpc-source-fixtures.test-support.js";
 import { buildGatewaySessionSnapshot } from "./session-event-payload.js";
-import { createSessionGoalFixture } from "./session-goal.test-support.js";
 import { createSessionLifecyclePersistenceOwner } from "./session-lifecycle-persistence-owner.js";
+import {
+  error,
+  event,
+  reports,
+  runId,
+  seed,
+  target,
+} from "./session-lifecycle-run-failure.test-support.js";
 import { persistGatewaySessionLifecycleEvent } from "./session-lifecycle-state.js";
 import { readSessionMessagesAsync } from "./session-transcript-readers.js";
 import { claimRpcSourceForTest } from "./test-helpers.rpc-source.js";
 
 afterEach(() => clearRuntimeConfigSnapshot());
-
-const target = {
-  agentId: "main",
-  sessionId: "failed-turn-session",
-  sessionKey: "agent:main:main",
-};
-const runId = "failed-turn-run";
-const error = "Worker turn rejected: cloud worker unavailable";
-const event = {
-  sessionId: target.sessionId,
-  runId,
-  ts: 2_000,
-  data: { phase: "error", startedAt: 1_000, endedAt: 2_000, error },
-};
-
-async function seed(
-  assistantBranch?: "active" | "inactive" | "other-run" | "commentary" | "success",
-) {
-  const hasPriorOutput = assistantBranch === "commentary" || assistantBranch === "success";
-  await upsertSessionEntryCore(target, {
-    sessionId: target.sessionId,
-    updatedAt: 1_000,
-    startedAt: 1_000,
-    lifecycleRunId: runId,
-    activeWriterRunId: runId,
-    goal: createSessionGoalFixture("failure-goal", "Finish the requested work", {
-      createdAt: 1_000,
-      updatedAt: 1_000,
-    }),
-  });
-  await replaceTranscriptEvents(target, [
-    { type: "session", id: target.sessionId, version: CURRENT_SESSION_VERSION },
-    {
-      type: "message",
-      id: "user-turn",
-      parentId: null,
-      message: { role: "user", content: "Please continue." },
-    },
-    ...(assistantBranch
-      ? [
-          {
-            type: "message",
-            id: "assistant-error",
-            parentId: "user-turn",
-            message: {
-              role: "assistant",
-              content: hasPriorOutput
-                ? [
-                    {
-                      type: "text",
-                      text: "Running it now.",
-                      ...(assistantBranch === "commentary"
-                        ? {
-                            textSignature: JSON.stringify({
-                              v: 1,
-                              id: "commentary",
-                              phase: "commentary",
-                            }),
-                          }
-                        : {}),
-                    },
-                  ]
-                : [],
-              stopReason: hasPriorOutput ? "stop" : "error",
-              errorMessage: hasPriorOutput ? undefined : "Provider failed",
-              __openclaw: { runId: assistantBranch === "other-run" ? "previous-run" : runId },
-            },
-          },
-        ]
-      : []),
-    ...(assistantBranch === "inactive"
-      ? [
-          {
-            type: "leaf",
-            id: "selected-branch",
-            parentId: "assistant-error",
-            targetId: "user-turn",
-          },
-        ]
-      : []),
-  ]);
-}
 
 function emitCommandResult(
   result: EmbeddedAgentRunResult,
@@ -186,12 +112,6 @@ function emitCommandResult(
   } finally {
     unsubscribe();
   }
-}
-
-async function reports() {
-  return (await loadTranscriptEvents(target)).filter(
-    (entry) => isRecord(entry) && entry.customType === "run-failed-before-reply",
-  );
 }
 
 describe("durable pre-reply run failure", () => {
@@ -401,11 +321,15 @@ describe("durable pre-reply run failure", () => {
       expect(h.chat()[0]?.[1]).not.toHaveProperty("suppressErrorNotice");
       expect(await reports()).toMatchObject([
         {
-          content: `Your request couldn't be completed: ${notice}`,
+          content: notice,
           display: true,
           details: { runId, error: notice },
         },
       ]);
+      const visible = projectChatDisplayMessages(
+        await readSessionMessagesAsync(target, { mode: "full", reason: "missing reply notice" }),
+      );
+      expect(visible.at(-1)).toMatchObject({ openclawRunError: { runId, summary: notice } });
       expect(loadSessionEntry(target)).toMatchObject({
         status: "failed",
         abortedLastRun: false,
@@ -557,7 +481,7 @@ describe("durable pre-reply run failure", () => {
         {
           type: "custom_message",
           customType: "run-failed-before-reply",
-          content: `Your request couldn't be completed: ${error}`,
+          content: "Your request couldn't be completed.",
           display: true,
           details: { runId, error },
         },
@@ -577,24 +501,97 @@ describe("durable pre-reply run failure", () => {
     });
   });
 
-  it("records provider authentication failures as operator copy, not raw provider text", async () => {
+  it.each(["raw", "auth", "auth_permanent", "route_unavailable"] as const)(
+    "keeps %s provider guidance through terminal persistence and history",
+    async (kind) => {
+      await withOpenClawTestState({ scenario: "minimal" }, async () => {
+        setRuntimeConfigSnapshot({});
+        await seed();
+        const secret = "synthetic-provider-diagnostic-secret";
+        const providerError =
+          kind === "route_unavailable"
+            ? `400 Your credit balance is too low. Authorization: Bearer ${secret}`
+            : `unexpected status 401 Unauthorized: Missing bearer or basic authentication in header, url: https://api.openai.com/v1/responses, request id: req_401, Authorization: Bearer ${secret}`;
+        const failureCopy =
+          kind === "route_unavailable"
+            ? "⚠️ The provider cannot serve this model right now. Choose another model."
+            : kind === "auth_permanent"
+              ? "⚠️ The AI service isn't accepting your login. Sign in again under Models in the Control UI or run `openclaw configure`."
+              : "⚠️ Couldn't sign in to the AI service. Sign in again under Models in the Control UI or run `openclaw configure`.";
+        const canonicalCopy = renderAssistantRequestFailureCopy({
+          reason: kind === "raw" ? "auth" : kind,
+        });
+        assert(canonicalCopy);
+        const terminalError =
+          kind === "raw"
+            ? new Error(providerError)
+            : new FailoverError(canonicalCopy, {
+                reason: kind,
+                status: kind === "route_unavailable" ? 400 : kind === "auth" ? 401 : 403,
+                rawError: providerError,
+              });
+        let persistence: Promise<void> | undefined;
+        const terminal = createAgentLifecycleTerminalBackstop({
+          runId,
+          sessionKey: target.sessionKey,
+          getLifecycleGeneration: getAgentEventLifecycleGeneration,
+          resolveTerminationFields: () => ({}),
+          onTerminalEvent: (terminalEvent) => {
+            persistence = persistGatewaySessionLifecycleEvent({
+              ...target,
+              event: { ...terminalEvent, ts: Date.now() },
+            });
+          },
+        });
+        terminal.emit("error", terminalError);
+        await persistence;
+        const [report] = await reports();
+        expect(report).toMatchObject({ content: failureCopy, details: { runId } });
+        if (kind === "raw") {
+          expect(report).toMatchObject({
+            details: { error: expect.stringContaining("Missing bearer or basic authentication") },
+          });
+        }
+        const visible = projectChatDisplayMessages(
+          await readSessionMessagesAsync(target, { mode: "full", reason: "failure presentation" }),
+        );
+        expect(visible.at(-1)).toMatchObject({
+          openclawRunError: { runId, summary: failureCopy },
+        });
+        expect(JSON.stringify(report)).not.toContain(secret);
+        expect(JSON.stringify(visible)).not.toContain(secret);
+      });
+    },
+  );
+
+  it("keeps verbose provider format diagnostics out of normal notices", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       setRuntimeConfigSnapshot({});
       await seed();
-      const providerError =
-        "unexpected status 401 Unauthorized: Missing bearer or basic authentication in header, url: https://api.openai.com/v1/responses, request id: req_401";
+      const providerError = `400 ${JSON.stringify({
+        error: {
+          type: "invalid_request_error",
+          message: `${"PRIVATEPROVIDERDETAIL ".repeat(40)}Unsupported parameter`,
+        },
+      })}`;
       await persistGatewaySessionLifecycleEvent({
         ...target,
         event: { ...event, data: { ...event.data, error: providerError } },
       });
-      const [report] = await reports();
-      const failureCopy =
-        "⚠️ Couldn't sign in to the AI service. Sign in again under Models in the Control UI or run `openclaw configure`.";
-      expect(report).toMatchObject({
-        content: `Your request couldn't be completed: ${failureCopy}`,
-        details: { runId, error: failureCopy },
+      expect(await reports()).toMatchObject([
+        { details: { error: expect.stringContaining("Unsupported parameter") } },
+      ]);
+      const visible = projectChatDisplayMessages(
+        await readSessionMessagesAsync(target, { mode: "full", reason: "failure presentation" }),
+      );
+      expect(visible.at(-1)).toMatchObject({
+        openclawRunError: {
+          runId,
+          summary:
+            "⚠️ The AI service couldn't accept this request. Try a new conversation with /new, or choose another model in the Control UI.",
+        },
       });
-      expect(JSON.stringify(report)).not.toContain("Missing bearer");
+      expect(JSON.stringify(visible)).not.toContain("PRIVATEPROVIDERDETAIL");
     });
   });
 
@@ -645,7 +642,8 @@ describe("durable pre-reply run failure", () => {
           {
             type: "custom_message",
             customType: "run-failed-before-reply",
-            content: `Your request couldn't be completed: ${reason}`,
+            content:
+              "⚠️ The request took too long. Check the conversation for any completed work before trying again.",
             details: { runId, error: reason },
           },
         ]);
@@ -695,6 +693,7 @@ describe("durable pre-reply run failure", () => {
       const report = entries[0] as { details: { error: string } };
       expect(report.details.error.length).toBeLessThanOrEqual(512);
       expect(report.details.error).not.toContain("\n");
+      expect(report.details.error).toMatch(/upload failed$/);
       const lastRunError = loadSessionEntry(target)?.lastRunError;
       expect(lastRunError).not.toContain(secret);
       expect(lastRunError).not.toContain("abcdefghijklmnopqrstuvwxyz");
@@ -714,17 +713,24 @@ describe("durable pre-reply run failure", () => {
       prefix:
         "Cloud worker finished, but its workspace result could not be reconciled: workspace-transfer-failed: operation=upload stage=capture: ",
       context: "Cloud worker finished",
+      cause: "Cloud workspace reconciliation exceeds the 25000 entry limit.",
+    },
+    {
+      name: "warning-prefixed stderr",
+      prefix: `codex app-server exited: code=1 signal=null stderr="${"warning: ".repeat(50)}`,
+      context: "codex app-server exited:",
+      cause: 'fatal: startup owner unavailable"',
     },
     {
       name: "Unicode diagnostic context",
       prefix: `Worker: ${"🦞".repeat(200)}: `,
       context: "Worker:",
+      cause: "Cloud workspace reconciliation exceeds the 25000 entry limit.",
     },
-  ])("retains the terminal cause of a bounded $name", async ({ prefix, context }) => {
+  ])("retains the terminal cause of a bounded $name", async ({ prefix, context, cause }) => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       setRuntimeConfigSnapshot({});
       await seed();
-      const cause = "Cloud workspace reconciliation exceeds the 25000 entry limit.";
       await persistGatewaySessionLifecycleEvent({
         ...target,
         event: { ...event, data: { ...event.data, error: `${prefix}${cause}` } },
@@ -735,6 +741,19 @@ describe("durable pre-reply run failure", () => {
       expect(failed?.lastRunError).toContain(cause);
       expect(failed?.lastRunError?.length).toBeLessThanOrEqual(160);
       expect(failed?.lastRunError).not.toMatch(/[\uD800-\uDFFF]/u);
+      const [report] = (await reports()) as Array<{ content: string; details: { error: string } }>;
+      expect(report?.details.error).toContain(context);
+      expect(report?.details.error).toContain(cause);
+      expect(report?.details.error.length).toBeLessThanOrEqual(512);
+      expect(report?.details.error).not.toMatch(/[\uD800-\uDFFF]/u);
+      const visible = projectChatDisplayMessages(
+        await readSessionMessagesAsync(target, { mode: "full", reason: "failure diagnostic" }),
+      );
+      expect(visible.at(-1)).toMatchObject({
+        openclawRunError: { runId, summary: "Your request couldn't be completed." },
+      });
+      expect(visible.at(-1)).not.toHaveProperty("details.error");
+      expect(report?.content).toBe("Your request couldn't be completed.");
     });
   });
 
@@ -919,7 +938,8 @@ describe("CLI history through Gateway terminal persistence", () => {
         ).toEqual([
           expect.objectContaining({
             customType: "run-failed-before-reply",
-            content: "Your request couldn't be completed: Run timed out",
+            content:
+              "⚠️ The request took too long. Check the conversation for any completed work before trying again.",
             display: true,
             excludeFromContext: true,
             details: { runId: "cli-timeout-run", error: "Run timed out" },
@@ -952,7 +972,8 @@ describe("CLI history through Gateway terminal persistence", () => {
         expect.objectContaining({
           type: "custom_message",
           customType: "run-failed-before-reply",
-          content: "Your request couldn't be completed: Run timed out",
+          content:
+            "⚠️ The request took too long. Check the conversation for any completed work before trying again.",
           display: true,
           excludeFromContext: true,
           details: { runId: "cli-timeout-run", error: "Run timed out" },

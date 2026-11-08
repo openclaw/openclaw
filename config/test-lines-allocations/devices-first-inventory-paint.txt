@@ -1,0 +1,2 @@
+# Devices must not paint policy sections before adopting the first inventory snapshot.
+13

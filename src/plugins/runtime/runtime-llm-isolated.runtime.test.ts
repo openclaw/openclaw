@@ -14,7 +14,7 @@ import { markTrustedOtelDiagnosticListener } from "../../infra/diagnostic-otel-l
 import type { Model } from "../../llm/types.js";
 import { withPluginRuntimePluginScope } from "./gateway-request-scope.js";
 import { createRuntimeLlm } from "./runtime-llm.runtime.js";
-import type { LlmIsolatedAgentRuntimeCompleteParams } from "./types-core.js";
+import type { LlmIsolatedAgentRuntimeCompleteParams } from "./runtime-llm.types.js";
 
 const hoisted = vi.hoisted(() => ({
   acquireSimpleCompletionModelForAgent:
@@ -421,6 +421,22 @@ describe("runtime.llm.complete isolated agent runtime", () => {
     ).rejects.toMatchObject({ code: "LLM_COMPLETION_NOT_AUTHORIZED" });
     expect(hoisted.runIsolatedCompletion).not.toHaveBeenCalled();
   });
+
+  it.each([
+    ["deepseek", "deepseek-v4-pro"],
+    ["moonshot", "kimi-k3"],
+  ])(
+    "admits max reasoning for %s/%s from its bundled row without configured models",
+    async (provider, modelId) => {
+      hoisted.resolveSimpleCompletionSelectionForAgent.mockReturnValue({
+        provider,
+        modelId,
+        agentDir: "/tmp/main",
+      });
+      await authorizedLlm().complete(isolatedRequest({ reasoning: "max" }));
+      expectSingleCallFirstArg(hoisted.runIsolatedCompletion, { provider, model: modelId });
+    },
+  );
 
   it.each([
     {
