@@ -970,6 +970,42 @@ extension OpenClawSnapshotUITests {
         XCTAssertEqual(refreshedArtifacts.last?["sessionKey"] as? String, artifacts.first?["sessionKey"] as? String)
     }
 
+    func testLiveGatewayPairAndSharePhoto() throws {
+        let app = try self.launchPairedLiveGatewayApp(initialTab: "chat", initialDestination: "chat")
+        try self.sharePhotoFromPhotos(returningTo: app)
+    }
+
+    func testExistingGatewaySharesPhoto() throws {
+        try XCTSkipUnless(ProcessInfo.processInfo.environment["OPENCLAW_IOS_LIVE_GATEWAY"] == "1")
+        // Do not reset onboarding or credentials: this also drives an installed upgrade.
+        let app = self.relaunchConnectedLiveGatewayApp(initialTab: "chat", initialDestination: "chat")
+        try self.sharePhotoFromPhotos(returningTo: app)
+    }
+
+    private func sharePhotoFromPhotos(returningTo app: XCUIApplication) throws {
+        self.attachScreenshot(named: "share-app-paired")
+        let photos = try self.openOpenClawPhotoShareSheet()
+        let draft = photos.textViews["share-compose.draft"]
+        XCTAssertTrue(draft.waitForExistence(timeout: 15), "Share compose card missing")
+        XCTAssertTrue(photos.staticTexts["Preparing share…"].waitForNonExistence(timeout: 30))
+        let marker = ProcessInfo.processInfo.environment["OPENCLAW_IOS_SHARE_MARKER"] ?? "OPENCLAW_E2E_SHARE"
+        draft.tap()
+        draft.typeText("Describe this image. \(marker)")
+        let send = photos.buttons["share-compose.send"]
+        self.waitForEnabled(send)
+        let compose = XCTAttachment(screenshot: photos.screenshot())
+        compose.name = "share-photo-ready"
+        compose.lifetime = .keepAlways
+        self.add(compose)
+        send.tap()
+        XCTAssertTrue(draft.waitForNonExistence(timeout: 30), "Successful share must dismiss the compose card")
+        app.activate()
+        let delivered = app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", marker)).firstMatch
+        XCTAssertTrue(delivered.waitForExistence(timeout: 30), "Shared message did not reach the app's chat")
+        self.attachScreenshot(named: "share-photo-delivered")
+        print("IOS_SHARE_CHECKPOINT delivered-without-companion-approval")
+    }
+
     func testLiveGatewayPairChatAndRelaunch() throws {
         try XCTSkipIf(UIDevice.current.userInterfaceIdiom != .phone, "Phone lifecycle proof only")
         let app = try self.launchPairedLiveGatewayApp(initialTab: "chat", initialDestination: "chat")

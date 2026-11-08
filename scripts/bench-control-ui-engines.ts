@@ -98,6 +98,7 @@ import {
 import { createEnginePluginMemoryScenarios } from "./lib/control-ui-engine-plugin-memory-scenarios.ts";
 import { createEngineProfileReadinessScenarios } from "./lib/control-ui-engine-profile-readiness.ts";
 import { createEngineRapidNavigationScenarios } from "./lib/control-ui-engine-rapid-navigation-scenarios.ts";
+import { createEngineSettingsSearchScenarios } from "./lib/control-ui-engine-settings-search.ts";
 import { createEngineStreamingScenarios } from "./lib/control-ui-engine-streaming-scenarios.ts";
 import { createEngineStyleScenarios } from "./lib/control-ui-engine-style-scenarios.ts";
 import {
@@ -189,20 +190,25 @@ const { values } = parseArgs({
     "idle-duration-ms": { type: "string", default: "30000" },
     "event-load-duration-ms": { type: "string", default: "240000" },
     "event-load-tools": { type: "string", default: "200" },
+    "event-load-inventory": { type: "string", default: "1000" },
+    "event-load-interactions-only": { type: "boolean", default: false },
     "memory-soak-rounds": { type: "string", default: "10" },
   },
 });
 const pairs = Number(values.pairs);
 const eventLoadDurationMs = Number(values["event-load-duration-ms"]);
 const eventLoadTools = Number(values["event-load-tools"]);
+const eventLoadInventory = Number(values["event-load-inventory"]);
 if (
   !Number.isInteger(eventLoadDurationMs) ||
   eventLoadDurationMs < 1000 ||
   !Number.isInteger(eventLoadTools) ||
-  eventLoadTools < 1
+  eventLoadTools < 1 ||
+  !Number.isInteger(eventLoadInventory) ||
+  eventLoadInventory < 101
 ) {
   throw new Error(
-    "event-load-duration-ms must be >=1000 and event-load-tools must be positive integers",
+    "event-load-duration-ms must be >=1000 and event-load-tools must be positive integers; event-load-inventory must be >=101",
   );
 }
 const rpcDelayMs = Number(values["rpc-delay-ms"]);
@@ -583,8 +589,14 @@ try {
     ...createEngineProfileReadinessScenarios(servers[0]!.server.baseUrl),
     ...createEngineRapidNavigationScenarios(),
     ...createEngineStreamingScenarios(),
-    ...createEngineEventLoadScenarios(eventLoadDurationMs, eventLoadTools),
+    ...createEngineEventLoadScenarios(
+      eventLoadDurationMs,
+      eventLoadTools,
+      eventLoadInventory,
+      values["event-load-interactions-only"],
+    ),
     ...createEnginePageScenarios(0, pageOrigin, servers[0]!.server.baseUrl),
+    ...createEngineSettingsSearchScenarios(servers[0]!.server.baseUrl),
     ...createEngineRemountScenarios(),
     ...createEngineRouteTransitionScenarios(async (_page, _transition, run) => {
       await run();
@@ -701,6 +713,8 @@ try {
           "./lib/control-ui-interaction-navigation.ts",
           "./lib/control-ui-engine-streaming-scenarios.ts",
           "./lib/control-ui-engine-event-load-scenarios.ts",
+          "./lib/control-ui-event-load-producer.ts",
+          "./lib/control-ui-event-load-wire.ts",
           "./lib/control-ui-streaming-reply.ts",
           "./lib/control-ui-streaming-fixture.ts",
           "./lib/control-ui-streaming-statistics.ts",
@@ -850,6 +864,10 @@ try {
                 ({ id }) => id === item.id,
               ) ??
               createEngineProfileReadinessScenarios(
+                slot.server.baseUrl,
+                networkProfile.gatewayLatencyMs,
+              ).find(({ id }) => id === item.id) ??
+              createEngineSettingsSearchScenarios(
                 slot.server.baseUrl,
                 networkProfile.gatewayLatencyMs,
               ).find(({ id }) => id === item.id) ??
