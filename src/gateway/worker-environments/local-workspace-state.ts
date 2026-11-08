@@ -21,6 +21,10 @@ import {
 } from "./local-workspace-checkpoint.js";
 import { LocalWorkspaceConflictError } from "./local-workspace-conflict-error.js";
 import {
+  commitLocalWorkspaceReconciliation,
+  type LocalWorkspaceCheckpointRecord,
+} from "./local-workspace-conflict-resolution.js";
+import {
   admitLocalWorkspaceSourcePaths,
   captureLocalWorkspaceArchiveBaseline,
   parseLocalWorkspaceSourcePaths,
@@ -35,7 +39,6 @@ import type {
 import { assertLocalWorkspaceProjectionOwner } from "./local-workspace-owner-identity.js";
 import type { LocalWorkspaceStore, LocalWorkspaceProjection } from "./local-workspace-store.js";
 import type { LocalWorkspaceOwner } from "./local-workspace-types.js";
-import { AcceptedWorkspacePublicationIndeterminateError } from "./workspace-accepted-publication.js";
 import {
   loadStagedWorkspaceManifest,
   captureWorkspaceManifestDocument,
@@ -46,6 +49,7 @@ import {
   serializeWorkerWorkspaceManifest,
   parseWorkerWorkspaceReconciliationPlan,
   serializeWorkerWorkspaceReconciliationPlan,
+  type WorkerWorkspaceManifest,
 } from "./workspace-manifest.js";
 import { buildCacheInputPaths } from "./workspace-path-exclusions.js";
 import {
@@ -368,13 +372,15 @@ export function projectionOperations(
       current();
     }
     const checkpoint = current().checkpoint_json
-      ? (JSON.parse(current().checkpoint_json!) as LocalWorkspaceManifestCheckpoint) // SAFETY: Owner-written checkpoint.
+      ? (JSON.parse(current().checkpoint_json!) as LocalWorkspaceCheckpointRecord) // SAFETY: Owner-written checkpoint.
       : undefined;
     if (checkpoint && checkpoint.previousRoot !== selected.baseline_ref) {
       throw new Error("Local workspace checkpoint no longer matches its baseline");
     }
     const refreshBaseline = refresh ? await baselineDocument() : undefined;
-    let conflictPaths: string[] | undefined;
+    let conflictPaths: string[] | undefined, resolvedCanonicalPaths: string[] | undefined;
+    let resolvedManifest: WorkerWorkspaceManifest | undefined,
+      resolvedManifestRef: string | undefined;
     await withStagedWorkerWorkspaceManifest(
       {
         root: owner.worktree.path,
@@ -390,10 +396,12 @@ export function projectionOperations(
         ) {
           throw new Error("Local workspace result no longer matches its accepted baseline");
         }
+        const baseRef = checkpoint?.baseManifestRef;
+        const curRef = checkpoint?.currentManifestRef;
         if (
           checkpoint &&
-          (snapshot.baseManifestRef !== checkpoint.baseManifestRef ||
-            snapshot.currentManifestRef !== checkpoint.currentManifestRef)
+          ((baseRef && snapshot.baseManifestRef !== baseRef) ||
+            (curRef && snapshot.currentManifestRef !== curRef))
         ) {
           throw new Error("Local workspace checkpoint payload changed");
         }
@@ -405,52 +413,38 @@ export function projectionOperations(
           reconciliation: snapshot.reconciliation,
           current: snapshot.current,
           assertCurrent,
+          priorConflicts: checkpoint?.conflicts,
+          acknowledgedPaths: checkpoint?.acknowledgedPaths && new Set(checkpoint.acknowledgedPaths),
+          resolvedPaths: checkpoint?.resolvedPaths && new Set(checkpoint.resolvedPaths),
           journal: {
             load: async () => undefined,
-            begin: async (journal) => {
-              await update({
+            begin: async (journal) =>
+              update({
                 journal_json: serializeWorkerWorkspaceReconciliationPlan(journal),
                 journal_pack: journal.basePack,
-              });
-            },
-            abort: async () => {
-              await update({ journal_json: null, journal_pack: null });
-            },
+              }),
+            abort: async () => update({ journal_json: null, journal_pack: null }),
             commit: async () => {
               if (!conflictPaths) {
                 throw new Error("Local workspace acceptance is missing");
               }
-              // A conflicting result remains a durable pending receipt. No guest
-              // bytes are discarded or silently replaced by the canonical side.
-              try {
-                if (conflictPaths.length) {
-                  await update({ journal_json: null, journal_pack: null });
-                } else if (refresh && target === "canonical") {
-                  await update({
-                    pending_target: "projection",
-                    journal_json: null,
-                    journal_pack: null,
-                  });
-                } else {
-                  const patch = {
-                    ...(refresh ? { base_commit: snapshot.current.baseCommit! } : {}),
-                    pending_target: null,
-                    journal_json: null,
-                    journal_pack: null,
-                  };
-                  if (checkpoint) {
-                    await update(patch, checkpoint);
-                  } else {
-                    await replaceBaseline(
-                      snapshot.currentManifestRaw,
-                      snapshot.currentManifestRef,
-                      patch,
-                    );
-                  }
-                }
-              } catch (error) {
-                throw new AcceptedWorkspacePublicationIndeterminateError("commit", error);
-              }
+              await commitLocalWorkspaceReconciliation({
+                conflictPaths,
+                resolvedCanonicalPaths,
+                resolvedManifest,
+                resolvedManifestRef,
+                checkpoint,
+                snapshot,
+                refresh,
+                target,
+                assertCurrent,
+                update,
+                replaceBaseline,
+                baselineDocument,
+                worktreePath: owner.worktree.path,
+                projectionPath: current().projection_path,
+                baselineRef: selected.baseline_ref,
+              });
             },
           },
           acceptance: {
@@ -458,6 +452,9 @@ export function projectionOperations(
             publish: async (value) => {
               current();
               conflictPaths = value.conflictPaths;
+              resolvedCanonicalPaths = value.resolvedCanonicalPaths;
+              resolvedManifest = value.manifest;
+              resolvedManifestRef = value.manifestRef;
             },
           },
         });

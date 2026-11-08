@@ -196,13 +196,27 @@ export async function preflightWorkspaceApplyImpl(
         applyPaths.add(entryPath);
       }
     } else if (!sameEntry(local, currentNodes.get(entryPath))) {
-      conflicts.add(entryPath);
-      const current = currentNodes.get(entryPath);
-      if (
-        (current?.type === "directory" && local !== undefined && local.type !== "directory") ||
-        (current !== undefined && current.type !== "directory" && local?.type === "directory")
-      ) {
-        blockingConflicts.add(entryPath);
+      const isPriorConflict =
+        params.priorConflicts !== undefined
+          ? params.priorConflicts[entryPath] !== undefined ||
+            params.resolvedPaths?.includes(entryPath)
+          : true;
+      const isExplicitlyAccepted =
+        Boolean(isPriorConflict) &&
+        Boolean(
+          params.acknowledgedPaths?.includes(entryPath) ||
+          params.resolvedPaths?.includes(entryPath),
+        );
+      const isResolved = isExplicitlyAccepted;
+      if (!isResolved) {
+        conflicts.add(entryPath);
+        const current = currentNodes.get(entryPath);
+        if (
+          (current?.type === "directory" && local !== undefined && local.type !== "directory") ||
+          (current !== undefined && current.type !== "directory" && local?.type === "directory")
+        ) {
+          blockingConflicts.add(entryPath);
+        }
       }
     }
   }

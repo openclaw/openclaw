@@ -81,6 +81,12 @@ export type WorkspaceManifestValueInputs = {
   "workspace.reconcile.preflight": WorkspacePreflightInput & {
     root: string;
     hashes?: WorkspaceComputationHashes;
+    priorConflicts?: Record<
+      string,
+      { sha256?: string; size?: number; type?: string; target?: string }
+    >;
+    acknowledgedPaths?: string[];
+    resolvedPaths?: string[];
   };
 };
 

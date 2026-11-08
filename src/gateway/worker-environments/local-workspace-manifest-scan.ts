@@ -222,31 +222,32 @@ export async function executeLocalWorkspaceManifestRead(
           ? (JSON.parse(receipt.checkpoint) as LocalWorkspaceManifestCheckpoint) // SAFETY: Preserved owner-written checkpoint.
           : undefined
         : receipt;
-    const documents = checkpoint
-      ? [
-          parseWorkerWorkspaceManifest(
-            checkpoint.baseManifestRaw,
-            checkpoint.baseManifestRef,
-            [...retained],
-            "stored",
-          ),
-          parseWorkerWorkspaceManifest(
-            checkpoint.currentManifestRaw,
-            checkpoint.currentManifestRef,
-            [...retained],
-            "stored",
-          ),
-        ].map(
-          (manifest) =>
-            new Map<string, LocalWorkspaceManifestNode>([
-              ...manifest.entries.map((node) => [node.path, node] as const),
-              ...(manifest.directories ?? []).map(
-                (entryPath) =>
-                  [entryPath, { path: entryPath, type: "directory" as const }] as const,
-              ),
-            ]),
-        )
-      : [];
+    const documents =
+      checkpoint?.baseManifestRaw && checkpoint?.currentManifestRaw
+        ? [
+            parseWorkerWorkspaceManifest(
+              checkpoint.baseManifestRaw,
+              checkpoint.baseManifestRef,
+              [...retained],
+              "stored",
+            ),
+            parseWorkerWorkspaceManifest(
+              checkpoint.currentManifestRaw,
+              checkpoint.currentManifestRef,
+              [...retained],
+              "stored",
+            ),
+          ].map(
+            (manifest) =>
+              new Map<string, LocalWorkspaceManifestNode>([
+                ...manifest.entries.map((node) => [node.path, node] as const),
+                ...(manifest.directories ?? []).map(
+                  (entryPath) =>
+                    [entryPath, { path: entryPath, type: "directory" as const }] as const,
+                ),
+              ]),
+          )
+        : [];
     // Surviving saved-root records supply membership, not reconstructed content.
     // Every candidate is scanned afresh and authenticated by the exact saved root.
     const baselinePaths = new Set(baselineRecords.keys());
