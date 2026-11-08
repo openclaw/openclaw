@@ -12,6 +12,7 @@ import { i18nRevision, t } from "../../lib/reactive/i18n.ts";
 import { createMediaQuery } from "../../lib/reactive/platform.ts";
 import { createCronPage } from "./cron-page-state.ts";
 import { CronRunTranscriptView } from "./run-transcript.tsx";
+import { HistoryButton } from "./view-controls.tsx";
 import { buildCronViewProps } from "./view-props.ts";
 import { CronView } from "./view.tsx";
 
@@ -80,31 +81,39 @@ export function CronPageContent(props: { page: ReturnType<typeof createCronPage>
       selectedId={pageHeader().selectedAgentId}
     />
   );
-  // The phone list seats the scope beside its create action; detail views keep it here.
   const phoneList = () => phoneLayout() && !viewProps().editingJob && !viewProps().createOpen;
+  const historyOverview = () =>
+    viewProps().listTab === "activity" && !viewProps().editingJob && !viewProps().createOpen;
   return (
     <>
       <HubPageHeader
         active="cron"
+        class={historyOverview() ? "cron-header cron-header--history" : "cron-header"}
+        title={historyOverview() ? t("cron.list.activityTab") : undefined}
         subtitle={pageHeader().filtered ? t("cron.list.sessionFilter") : undefined}
         docsUrl="https://docs.openclaw.ai/automation/cron-jobs"
         actions={
-          pageHeader().filtered ? (
-            <a
-              class="btn"
-              href={pathForRoute("cron", props.page.context().basePath)}
-              onClick={(event: MouseEvent) => {
-                if (shouldHandleNavigationClick(event)) {
-                  event.preventDefault();
-                  props.page.context().navigate("cron", { search: "" });
-                }
-              }}
-            >
-              {t("cron.list.showAll")}
-            </a>
-          ) : phoneList() ? undefined : (
-            scopeControl()
-          )
+          <div class="cron-header__actions">
+            {!phoneList() && !viewProps().editingJob && !viewProps().createOpen ? (
+              <HistoryButton {...viewProps()} />
+            ) : undefined}
+            {pageHeader().filtered ? (
+              <a
+                class="btn"
+                href={pathForRoute("cron", props.page.context().basePath)}
+                onClick={(event: MouseEvent) => {
+                  if (shouldHandleNavigationClick(event)) {
+                    event.preventDefault();
+                    props.page.context().navigate("cron", { search: "" });
+                  }
+                }}
+              >
+                {t("cron.list.showAll")}
+              </a>
+            ) : (
+              scopeControl()
+            )}
+          </div>
         }
       />
       <CronRunTranscriptView transcript={props.page.runTranscript} revision={revision} />
@@ -114,7 +123,6 @@ export function CronPageContent(props: { page: ReturnType<typeof createCronPage>
           canManageJob={canPresentJob}
           canCreate={canPresentCreate()}
           phoneLayout={phoneList()}
-          toolbarScope={phoneList() && !pageHeader().filtered ? scopeControl() : undefined}
           busy={props.page.saving() || viewProps().busy}
           toggleSavingJobId={props.page.toggleSavingJobId()}
         />

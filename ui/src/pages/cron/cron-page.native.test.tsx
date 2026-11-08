@@ -104,20 +104,30 @@ it("loads history and delivery accounts only for their visible automation surfac
   });
   const gateway = createGateway(createTestGatewayClient(request), true);
   const channels = createChannelCapability(gateway);
-  const page = createPage(
-    { ...createContext(gateway), acquireChannels: () => channels },
-    { render: true },
-  );
+  const context = createContext(gateway);
+  context.agents.state.agentsList!.agents.push({ id: "garden" });
+  const page = createPage({ ...context, acquireChannels: () => channels }, { render: true });
   const clickTab = (id: string) => page.querySelector<HTMLButtonElement>(testId(id))!.click();
   try {
     await waitForSolid(() => expect(row(page, job.id)).not.toBeNull());
+    expect(page.querySelector("h1")?.textContent).toBe("Automations");
+    expect(page.querySelector(".page-subtitle")?.textContent).toContain(
+      "Schedule recurring tasks for your agents.",
+    );
+    expect(page.querySelector(".page-subtitle a")?.textContent).toContain("Learn more");
+    expect(page.querySelector(".hub-page-header__actions .agent-select__trigger")).not.toBeNull();
+    const history = getButtonByText(page, "Run history");
+    expect(history.getAttribute("role")).not.toBe("tab");
+    expect(history.closest('[role="tablist"]')).toBeNull();
     expectCalls(request, ["cron.runs", "channels.status"], 0);
-    clickTab("cron-list-tab-activity");
+    history.click();
     await waitForSolid(() =>
       expect(page.querySelector(".cron-run-entry")?.textContent).toContain(
         "Garden review complete",
       ),
     );
+    expect(page.querySelector("h1")?.textContent).toBe("Run history");
+    expect(page.querySelector('[role="region"][aria-label="Run history"]')).not.toBeNull();
     expectCalls(request, ["cron.runs"], 1);
 
     holding = true;
@@ -128,6 +138,7 @@ it("loads history and delivery accounts only for their visible automation surfac
     await page.settle();
     clickTab("cron-tab-all");
     await page.settle();
+    expect(page.querySelector("h1")?.textContent).toBe("Automations");
     held.resolve(result);
     await held.promise;
     await page.settle();

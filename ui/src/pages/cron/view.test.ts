@@ -56,17 +56,13 @@ describe("cron view list pane", () => {
     expect(onJobsFiltersChange).toHaveBeenCalledWith({ cronJobsEnabledFilter: "disabled" });
   });
 
-  it("keeps the phone scope and create action available", async () => {
-    const scope = document.createElement("span");
-    scope.dataset.testId = "phone-scope";
+  it("keeps the phone create action available", async () => {
     const onOpenCreate = vi.fn();
     const phone = await renderView({
       phoneLayout: true,
-      toolbarScope: scope,
       canCreate: true,
       onOpenCreate,
     });
-    expect(phone.querySelector(testId("phone-scope"))).not.toBeNull();
     expect(phone.querySelectorAll(testId("cron-new-task"))).toHaveLength(1);
     getElement(phone, testId("cron-new-task"), HTMLElement).click();
     expect(onOpenCreate).toHaveBeenCalledOnce();
@@ -105,11 +101,11 @@ describe("cron view list pane", () => {
     expect(rows).toHaveLength(3);
     expect(rows[0]?.getAttribute("role")).toBe("listitem");
     expect(attribute(rows[0]!, ".cron-table__state--error", "aria-label")).toBe("Error");
-    expect(rows[0]?.querySelector(".cron-last-glyph--error")).not.toBeNull();
-    expect(attribute(rows[0]!, ".cron-table__last-run", "aria-label")).toBe("Error");
+    expect(rows[0]?.querySelector(".cron-table__name")?.textContent).toContain("Last run failed");
+    expect(rows[0]?.querySelector(".cron-table__last")).toBeNull();
     expect(rows[1]?.textContent).toContain("Cron 0 9 * * *");
     expect(rows[1]?.querySelector(".cron-last-glyph--ok")).toBeNull();
-    expect(rows[1]?.textContent).toContain("n/a");
+    expect(rows[1]?.querySelector(".cron-table__next")?.textContent).toContain("Next ");
     expect(attribute(rows[1]!, ".cron-trigger-icon", "aria-label")).toBe("Trigger configured");
     expect(rows[2]?.classList.contains("cron-table__row--paused")).toBe(true);
     expect(rows[2]?.textContent).toContain("Paused");
@@ -143,7 +139,7 @@ describe("cron view list pane", () => {
       [{ loading: true }, "No automations yet"],
       [{ jobsQuery: "zzz" }, "No automations match the current filters."],
       [{ loading: true, jobs: [createJob("refresh-me")], jobsTotal: 1 }, "Daily ping"],
-      [{ error: "Activity history unavailable." }, "No automations yet"],
+      [{ error: "Run history unavailable." }, "No automations yet"],
     ];
     for (const [props, message] of states) {
       const container = await renderView(props);

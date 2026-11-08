@@ -311,7 +311,7 @@ suite.define(() => {
       });
 
       await page.goto(`${suite.server.baseUrl}cron`);
-      await page.getByRole("tab", { name: "Activity history", exact: true }).click();
+      await page.getByRole("button", { name: "Run history", exact: true }).click();
 
       const statusFilter = page.locator('[data-filter="status"]');
       const deliveryFilter = page.locator('[data-filter="delivery"]');
@@ -379,7 +379,7 @@ suite.define(() => {
 
       await page.goto(`${suite.server.baseUrl}cron`);
       await expect.poll(() => page.evaluate(() => document.documentElement.lang)).toBe("de");
-      await page.getByRole("tab", { name: "Aktivitätsverlauf", exact: true }).click();
+      await page.getByRole("button", { name: "Run history", exact: true }).click();
 
       const statusFilter = page.locator('[data-filter="status"]');
       const deliveryFilter = page.locator('[data-filter="delivery"]');
@@ -433,7 +433,7 @@ suite.define(() => {
       });
 
       await page.goto(`${suite.server.baseUrl}cron`);
-      await page.getByRole("tab", { name: "Activity history", exact: true }).click();
+      await page.getByRole("button", { name: "Run history", exact: true }).click();
       await expectRunCount(page, "Initial history", 1);
 
       await gateway.deferNext("cron.runs");
@@ -484,7 +484,7 @@ suite.define(() => {
       await page.goto(`${suite.server.baseUrl}cron`);
       await jobTitle(page, selectedJob.name).waitFor({ timeout: 10_000 });
 
-      await page.getByRole("tab", { name: "Activity history", exact: true }).click();
+      await page.getByRole("button", { name: "Run history", exact: true }).click();
       await expectRunCount(page, "Overview history", 1);
       const previousHistoryRequestCount = (await gateway.getRequests("cron.runs")).length;
       await gateway.deferNext("cron.runs");
@@ -588,16 +588,22 @@ suite.define(() => {
         .toBe("control-ui-main");
 
       const tasksTab = page.getByRole("tab", { name: "All", exact: true });
-      const activityTab = page.getByRole("tab", { name: "Activity history", exact: true });
+      const pausedTab = page.getByRole("tab", { name: "Paused", exact: true });
+      const history = page.getByRole("button", { name: "Run history", exact: true });
       await tasksTab.focus();
-      await pressKeys(page, "ArrowRight", "ArrowRight", "ArrowRight");
+      await pressKeys(page, "ArrowRight", "ArrowRight");
       await expect
-        .poll(() => activityTab.evaluate((element) => element === document.activeElement))
+        .poll(() => pausedTab.evaluate((element) => element === document.activeElement))
         .toBe(true);
       await page.keyboard.press("Enter");
-      await expect.poll(() => activityTab.getAttribute("aria-selected")).toBe("true");
+      await expect.poll(() => pausedTab.getAttribute("aria-selected")).toBe("true");
+      await page.keyboard.press("ArrowRight");
       await expect
-        .poll(() => page.getByRole("tabpanel", { name: "Activity history" }).isVisible())
+        .poll(() => tasksTab.evaluate((element) => element === document.activeElement))
+        .toBe(true);
+      await history.press("Enter");
+      await expect
+        .poll(() => page.getByRole("region", { name: "Run history" }).isVisible())
         .toBe(true);
     });
   });

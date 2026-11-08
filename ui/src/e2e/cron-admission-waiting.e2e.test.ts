@@ -14,7 +14,7 @@ const suite = createControlUiE2eSuite({
   startServerBeforeBrowser: true,
 });
 suite.define(() => {
-  it("shows the waiting reason and warning without replacing the last run, then clears on recovery", async () => {
+  it("shows the next-run waiting reason and warning, then clears on recovery", async () => {
     const artifacts = createControlUiE2eArtifactDir("cron-admission-waiting");
     await suite.withPage(
       { ...createControlUiE2eContextOptions(), timezoneId: "UTC", locale: "en-US" },
@@ -55,8 +55,8 @@ suite.define(() => {
         expect(await row.locator(".cron-table__state").getAttribute("aria-label")).toContain(
           "Warning",
         );
-        expect(await row.locator(".cron-table__last-run").getAttribute("aria-label")).toBe(
-          "Completed",
+        expect(await row.locator(".cron-table__next").textContent()).toContain(
+          "Waiting: Agent is busy",
         );
         job.state = { nextRunAtMs: now + 60_000, lastRunAtMs: now, lastRunStatus: "ok" };
         await gateway.setMethodResponse("cron.list", cronList([job], "recovered"));

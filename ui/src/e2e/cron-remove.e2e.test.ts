@@ -27,7 +27,7 @@ async function chooseRemove(page: Page) {
   await page.keyboard.press("Enter");
 }
 suite.define(() => {
-  it("confirms removal and rejects a decision captured before reconnect", async () => {
+  it("confirms filtered removal, restores search focus, and rejects stale reconnect decisions", async () => {
     await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
       const gateway = await installMockGateway(page, {
         methodResponses: {
@@ -40,8 +40,14 @@ suite.define(() => {
       expect(response?.status()).toBe(200);
       const row = page.locator(`[data-test-id="cron-row-${job.id}"]`);
       await row.waitFor({ state: "visible", timeout: 10_000 });
-      expect(await page.locator(".cron-table__head").getAttribute("role")).toBeNull();
+      expect(await page.locator(".cron-table__head").count()).toBe(0);
       expect(await row.getAttribute("role")).toBe("listitem");
+      await page.locator(".cron-search-toggle").click();
+      const search = page.getByRole("searchbox");
+      await search.fill("Nightly");
+      await gateway.waitForRequest("cron.list", {
+        match: { query: "Nightly" },
+      });
       const openTask = row.locator("button.cron-table__name");
       await openTask.focus();
       await page.keyboard.press("Enter");
@@ -88,9 +94,9 @@ suite.define(() => {
       expect((await gateway.getRequests("cron.remove"))[0]?.params).toEqual({ id: job.id });
       await detail.waitFor({ state: "detached" });
       await expect.poll(() => row.count()).toBe(0);
-      const search = page.locator('.cron-search-box input[type="search"]');
+      expect(await search.inputValue()).toBe("Nightly");
       expect(await search.evaluate((el) => el === document.activeElement)).toBe(true);
-      await page.getByRole("tab", { name: "Activity history", exact: true }).press("Enter");
+      await page.getByRole("button", { name: "Run history", exact: true }).press("Enter");
       const create = page.locator(".cron-new-task");
       await create.press("Enter");
       await back.press("Enter");

@@ -50,7 +50,10 @@ suite.define(() => {
         .getByRole("menuitem", { name: "Delete", exact: true })
         .waitFor({ state: "hidden" });
       const search = page.getByRole("searchbox", { name: "Search automations" });
-      await search.click();
+      await page.locator(".cron-search-toggle").click();
+      await expect
+        .poll(() => search.evaluate((element) => element === document.activeElement))
+        .toBe(true);
       const query = "inventory";
       const deferredMatch = { query: query.slice(0, 1), offset: 0 };
       const requestsBefore = (await gateway.getRequests("cron.list")).length;

@@ -1,4 +1,3 @@
-import type { JSX } from "@solidjs/web";
 import type { CronJob } from "../../api/types.ts";
 import type { buildCronViewProps } from "./view-props.ts";
 
@@ -18,14 +17,13 @@ export type CronProps = Omit<CronViewProps, OptionalViewProp | "gateway"> &
     gateway: CronViewProps["gateway"] | null;
     canCreate?: boolean;
     canManageJob?: (job: CronJob) => boolean;
-    /** Phone list layout: the toolbar opens with the agent scope and create action. */
+    /** Phone list layout places the history button beside the status tabs. */
     phoneLayout?: boolean;
-    toolbarScope?: JSX.Element;
     toggleSavingJobId?: string | null;
     focus?: {
       readonly target: string | undefined;
       remember: (id: string, order: string[]) => void;
-      ref: (id: string) => (element: HTMLElement) => void;
+      ref: (id: string, eligible?: () => boolean) => (element: HTMLElement) => void;
     };
   };
 
