@@ -1,6 +1,7 @@
 import { setTimeout as delay } from "node:timers/promises";
 import type { Page } from "playwright";
 import { createSkill } from "../../ui/src/pages/skills/view.test-support.ts";
+import { waitForControlUiRoute } from "../../ui/src/test-helpers/control-ui-e2e.ts";
 import { frames } from "./control-ui-interaction-navigation.ts";
 import type { InteractionScenario } from "./control-ui-interaction-scenarios.ts";
 import { readRendererProcessSnapshot } from "./control-ui-renderer-metrics.ts";
@@ -71,11 +72,7 @@ export const skillsReadinessScenarios: InteractionScenario[] = [false, true].fla
         await page.evaluate(() => window.openclawControlUi!.navigate("skills"));
         await page.locator(statusSelector).waitFor({ state: "visible" });
         await page.evaluate(() => window.openclawControlUi!.navigate("new-session"));
-        await page.waitForFunction(
-          "window.openclawControlUi?.snapshot().route?.matches[0]?.routeId === 'new-session'",
-        );
-      }
-      if (warm) {
+        await waitForControlUiRoute(page, { routeId: "new-session" });
         await gateway.setMethodResponse("skills.status", {
           workspaceDir: "/synthetic",
           managedSkillsDir: "/synthetic/skills",
@@ -125,9 +122,7 @@ export const skillsReadinessScenarios: InteractionScenario[] = [false, true].fla
         await page.evaluate(() => window.openclawControlUi!.navigate("skills"));
         await page.locator(librarySelector).waitFor({ state: "visible" });
         const firstContentMs = await page.evaluate((start) => performance.now() - start, started);
-        await page.waitForFunction(
-          "window.openclawControlUi?.snapshot().routeReady === true && window.openclawControlUi?.snapshot().route?.matches[0]?.routeId === 'skills'",
-        );
+        await waitForControlUiRoute(page, { routeId: "skills" });
         const admittedStatusRequests = (await gateway.getRequests("skills.status")).length - before;
         // A warm cached route can issue no read; an admitted read must publish its new marker.
         if (admittedStatusRequests > 0) {
