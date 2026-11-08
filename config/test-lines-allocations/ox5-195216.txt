@@ -1,2 +1,2 @@
-# 170 regression lines for retained completion/PDF refusal; 2 verified inherited CI-base lines.
-172
+# Agent-bound lower-level completion, held PDF, and native HTTP refusal with sibling controls.
+162

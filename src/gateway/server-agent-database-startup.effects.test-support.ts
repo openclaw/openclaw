@@ -8,10 +8,6 @@ import { runHostPreparedIsolatedCompletion } from "../agents/host-prepared-isola
 import { acquireAgentRunPreparedModelRuntime } from "../agents/prepared-model-runtime.js";
 import { SessionManager } from "../agents/sessions/session-manager.js";
 import { completeWithPreparedSimpleCompletionModel } from "../agents/simple-completion-execution.js";
-import {
-  acquireSimpleCompletionModelForAgent,
-  prepareSimpleCompletionModel,
-} from "../agents/simple-completion-runtime.js";
 import * as simpleCompletion from "../agents/simple-completion-runtime.js";
 import { assertPrepared, completionContext } from "../agents/simple-completion.test-support.js";
 import { makeAgentAssistantMessage } from "../agents/test-helpers/agent-message-fixtures.js";
@@ -148,7 +144,7 @@ DatabaseSync.prototype.prepare = function(sql) {
       );
       const capture = async (agentId: string) => {
         const cfg = getRuntimeConfig();
-        const acquired = await acquireSimpleCompletionModelForAgent({
+        const acquired = await simpleCompletion.acquireSimpleCompletionModelForAgent({
           cfg,
           agentId,
           modelRef: "anthropic/claude-opus-4-6@anthropic:fleet",
@@ -191,7 +187,7 @@ DatabaseSync.prototype.prepare = function(sql) {
             workspaceDir: resolveAgentWorkspaceDir(cfg, agentId),
           }),
         );
-        const prepared = await prepareSimpleCompletionModel({
+        const prepared = await simpleCompletion.prepareSimpleCompletionModel({
           cfg,
           agentId,
           provider: "anthropic",
@@ -201,11 +197,7 @@ DatabaseSync.prototype.prepare = function(sql) {
           preparedModelRuntime: lease.snapshot,
         });
         assertPrepared(prepared);
-        const lowerModel = bindModelLlmRuntime(
-          prepared.model,
-          runtime,
-          getModelCompletionTransport(prepared.model),
-        );
+        const lowerModel = prepared.model;
         const held = { ready: createDeferred(), resume: createDeferred() };
         pdfWaits.set(agentId, held);
         const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
