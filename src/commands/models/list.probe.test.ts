@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterAll, afterEach, assert, beforeEach, expect, it, vi } from "vitest";
+import { formatCliFailureLines, formatCliJsonFailure } from "../../cli/failure-output.js";
 import type { ModelProviderConfig } from "../../config/types.models.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import * as embeddedStateLock from "../../infra/embedded-state-lock.js";
@@ -131,11 +132,22 @@ it("refuses CLI probes while a live Gateway owns canonical state", async () => {
   const lock = await acquireGatewayLock({ ...lockOptions, port: 28789 });
   assert(lock, "Expected live Gateway fixture lock");
   try {
-    await expect(
-      probe.withAuthProbeStateOwnership({ mode: "exclusive" }, async () => undefined),
-    ).rejects.toThrow(
-      `A Gateway is running for this state directory (pid ${process.pid}, port 28789). Stop the Gateway first (openclaw gateway stop), then rerun models status --probe.`,
-    );
+    const error = await probe
+      .withAuthProbeStateOwnership({ mode: "exclusive" }, async () => undefined)
+      .catch((cause: unknown) => cause);
+    const message = `A Gateway is running for this state directory (pid ${process.pid}, port 28789). Stop the Gateway first (openclaw gateway stop), then rerun models status --probe.`;
+    const output = formatCliFailureLines({
+      title: "The CLI command failed.",
+      error,
+      argv: ["node", "openclaw", "models", "status", "--probe"],
+      env: {},
+    }).join("\n");
+    expect(output).toContain(message);
+    expect(output).toContain("openclaw gateway call models.probe");
+    expect(formatCliJsonFailure(error, { env: {} })).toEqual({
+      ok: false,
+      error: { type: "cli_error", message },
+    });
   } finally {
     await lock.release();
   }

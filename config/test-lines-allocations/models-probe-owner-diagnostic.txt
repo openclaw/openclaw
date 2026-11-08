@@ -1,0 +1,2 @@
+12
+# Extend the live-owner probe regression through human failure formatting and unchanged JSON output.
