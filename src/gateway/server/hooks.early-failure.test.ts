@@ -203,7 +203,7 @@ describe("gateway hook early-failure recovery", () => {
     mocks.getRuntimeConfig.mockReturnValue(createConfig(false));
     let currentRegistry = createEmptyPluginRegistry();
     const firstRegistry = currentRegistry;
-    const releaseFirst = createDeferred<void>();
+    const releaseFirst = createDeferred();
     const seen: unknown[] = [];
     mocks.runCronIsolatedAgentTurn.mockImplementation(async (params) => {
       seen.push(getPluginRuntimeGatewayRequestScope()?.pluginRegistry);
