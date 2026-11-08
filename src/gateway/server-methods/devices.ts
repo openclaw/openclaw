@@ -24,6 +24,7 @@ import {
 import {
   getPairedDevice,
   getPendingDevicePairing,
+  listApprovedPairedDeviceRoles,
   listDevicePairing,
   removePairedDevice,
   type PairedDevice,
@@ -39,6 +40,7 @@ import { reconcileRevokedDeviceWorker } from "../device-worker-revocation.js";
 import { GATEWAY_EVENT_DEVICE_PAIR_CHANGED } from "../events.js";
 import { clearRemovedNodeRuntimeState } from "../node-runtime-state.js";
 import { invalidateNodeWakeState } from "../node-wake-state.js";
+import { hasOpenClawIdTokenBinding } from "../openclaw-id/device-token-binding.js";
 import { broadcastRejectedDevicePairing } from "../pairing-events.js";
 import { holdGatewayPolicyResponse } from "../server/ws-policy-close.js";
 import {
@@ -62,15 +64,64 @@ import type {
 } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
-function redactPairedDevice(device: PairedDevice, connected?: boolean): RedactedPairedDevice {
+const OPENCLAW_ID_MANAGED_MESSAGE =
+  "This browser connects through OpenClaw ID. Manage access on the Access page.";
+
+/**
+ * A browser holding a tunnel-issued token is managed by OpenClaw ID membership while
+ * the feature is on: removing it as a device would be undone by its next sign-in.
+ * With OpenClaw ID off there is no Access page, so it is an ordinary device again.
+ */
+function isManagedByOpenClawId(
+  context: Pick<GatewayRequestContext, "getRuntimeConfig">,
+  device: PairedDevice | null | undefined,
+): boolean {
+  return (
+    device != null &&
+    hasOpenClawIdTokenBinding(device.deviceId.trim(), listApprovedPairedDeviceRoles(device)) &&
+    context.getRuntimeConfig().gateway?.openclawId?.enabled === true
+  );
+}
+
+function redactPairedDevice(
+  device: PairedDevice,
+  connected?: boolean,
+  managedByOpenClawId = false,
+): RedactedPairedDevice {
   // Pairing lists are visible to operators; expose token lifecycle metadata
   // without returning raw token material or the internal approved-scope set.
   const { tokens, approvedScopes: _approvedScopes, ...rest } = device;
   return {
     ...rest,
     ...(connected !== undefined ? { connected } : {}),
+    ...(managedByOpenClawId ? { managedBy: "openclaw-id" as const } : {}),
     tokens: summarizeDeviceTokens(tokens),
   };
+}
+
+/** Refuses a device mutation of an OpenClaw ID browser; access is managed on the Access page. */
+function refuseOpenClawIdManaged(params: {
+  authz: DeviceSessionAuthz;
+  deviceId: string;
+  controlId: string;
+  context: Pick<GatewayRequestContext, "logGateway">;
+  respond: RespondFn;
+}) {
+  params.context.logGateway.warn(
+    `${params.controlId} denied device=${params.deviceId} reason=openclaw-id-managed`,
+  );
+  emitDevicePairingDeniedSecurityEvent({
+    authz: params.authz,
+    targetDeviceId: params.deviceId,
+    controlId: params.controlId,
+    reason: "openclaw-id-managed",
+    severity: "low",
+  });
+  params.respond(
+    false,
+    undefined,
+    errorShape(ErrorCodes.INVALID_REQUEST, OPENCLAW_ID_MANAGED_MESSAGE),
+  );
 }
 
 function createDeviceTokenHandler(operation: "rotate" | "revoke"): GatewayRequestHandler {
@@ -118,6 +169,19 @@ function createDeviceTokenHandler(operation: "rotate" | "revoke"): GatewayReques
         : undefined;
     if (denial) {
       deny(denial);
+      return;
+    }
+    if (
+      operation === "revoke" &&
+      isManagedByOpenClawId(context, await getPairedDevice(deviceId.trim()))
+    ) {
+      refuseOpenClawIdManaged({
+        authz,
+        deviceId,
+        controlId: "device.token.revoke",
+        context,
+        respond,
+      });
       return;
     }
     // Other roles passed the admin guard; only operator tokens inherit the caller's scope cap.
@@ -373,6 +437,7 @@ export const deviceHandlers: GatewayRequestHandlers = {
           redactPairedDevice(
             device,
             context.hasConnectedClientsForDevice?.(device.deviceId.trim()) ?? false,
+            isManagedByOpenClawId(context, device),
           ),
         ),
       } satisfies DevicePairingList,
@@ -499,6 +564,16 @@ export const deviceHandlers: GatewayRequestHandlers = {
       respond,
       deviceId,
       run: async (authz) => {
+        if (isManagedByOpenClawId(context, await getPairedDevice(deviceId.trim()))) {
+          refuseOpenClawIdManaged({
+            authz,
+            deviceId,
+            controlId: "device.pair.remove",
+            context,
+            respond,
+          });
+          return;
+        }
         const removed = await removePairedDevice(deviceId);
         if (!removed) {
           respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "unknown deviceId"));

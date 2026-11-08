@@ -343,6 +343,10 @@ Labs only switches the feature on or off. Everything else lives outside Labs:
   Signing back in on the same browser reconnects with the access it was
   approved for, without a new device approval. Asking for more access than
   that still needs approval.
+- **Settings → Devices** and `openclaw devices list` mark browsers that connect
+  through OpenClaw ID and link to **Access**. They can't be removed or have
+  their tokens revoked as devices: remove the person, or the owner browser
+  under **Your devices**, instead.
 - There is no owner reset in this version: a claw keeps the recovery kit it was
   linked with, so store the kit safely.
 

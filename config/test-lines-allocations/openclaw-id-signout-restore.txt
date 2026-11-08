@@ -1,2 +1,2 @@
-140
-# OCF-495 regressions: OpenClaw ID sign-out restore (owner, member, fewer scopes), refusal of added scopes and merged roles, trusted-proxy flag-off guard, and prompt titles.
+234
+# OCF-495 regressions: OpenClaw ID sign-out restore (owner, member, fewer scopes), refusal of added scopes and merged roles, trusted-proxy flag-off guard, prompt titles, and OpenClaw ID browsers managed on the Access page (Gateway refusal, sign-out binding, Devices page, CLI list/clear).

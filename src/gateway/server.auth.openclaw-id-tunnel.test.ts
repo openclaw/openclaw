@@ -398,6 +398,58 @@ describe("OpenClaw ID tunnel devices on a token-mode Gateway", () => {
     }
   });
 
+  // Josh (2026-11-08): OpenClaw ID browsers are managed on the Access page, not as devices.
+  test("an OpenClaw ID browser is listed as managed by Access and refuses device removal", async () => {
+    const gateway = {
+      auth: { mode: "token" as const, token: TOKEN },
+      controlUi: { allowedOrigins: [BROWSER_ORIGIN] },
+    };
+    const tunnel = await connectTunnel(OWNER_KEY);
+    tunnel.ws.close();
+    const other = await connectTunnel(undefined, { token: TOKEN });
+    other.ws.close();
+    const before = new Set((await listDevicePairing()).paired.map((d) => d.deviceId));
+    const admin = await connectTunnel(undefined, { token: TOKEN });
+    try {
+      await writeConfigFile({ gateway: { ...gateway, openclawId: { enabled: true } } });
+      const list = await rpcReq<{ paired: Array<{ deviceId: string; managedBy?: string }> }>(
+        admin.ws,
+        "device.pair.list",
+        {},
+      );
+      const managed = list.payload?.paired.filter((d) => d.managedBy === "openclaw-id") ?? [];
+      expect(managed).toHaveLength(1);
+      expect(list.payload?.paired).toHaveLength(3);
+      const deviceId = managed[0]!.deviceId;
+      for (const [method, params] of [
+        ["device.pair.remove", { deviceId }],
+        ["device.token.revoke", { deviceId, role: "operator" }],
+      ] as const) {
+        const refused = await rpcReq(admin.ws, method, params);
+        expect(refused.ok).toBe(false);
+        expect(refused.error?.message).toBe(
+          "This browser connects through OpenClaw ID. Manage access on the Access page.",
+        );
+      }
+      expect((await getPairedDevice(deviceId))?.tokens?.operator?.revokedAtMs).toBeUndefined();
+      // Sign-out revokes the token and keeps its binding: still an OpenClaw ID browser.
+      await revokeDeviceToken({ deviceId, role: "operator" });
+      const signedOut = await rpcReq(admin.ws, "device.pair.remove", { deviceId });
+      expect(signedOut.error?.message).toMatch(/^This browser connects through OpenClaw ID/);
+      // Any other device keeps main's behavior.
+      const otherId = list.payload!.paired.find(
+        (d) => !d.managedBy && before.has(d.deviceId),
+      )!.deviceId;
+      expect((await rpcReq(admin.ws, "device.pair.remove", { deviceId: otherId })).ok).toBe(true);
+      // With OpenClaw ID off there is no Access page, so the browser is an ordinary device again.
+      await writeConfigFile({ gateway });
+      expect((await rpcReq(admin.ws, "device.pair.remove", { deviceId })).ok).toBe(true);
+    } finally {
+      admin.ws.close();
+      await writeConfigFile({ gateway });
+    }
+  });
+
   // The synthetic tunnel address is in fd00::/8 and in SSH verification's private default scope.
   test.each([
     { path: "trusted CIDR", pairing: { autoApproveCidrs: ["fd00::/8"], sshVerify: false } },

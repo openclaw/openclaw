@@ -99,6 +99,23 @@ export async function checkDeviceTokenPeer(params: {
   return { ok: false, reason: "device-token-peer-mismatch" };
 }
 
+/**
+ * Whether one of these device roles holds a token issued over the tunnel. Such a
+ * browser is managed by OpenClaw ID membership (the Access page), not as a device.
+ * Unknown or unreadable bindings answer false, keeping ordinary device management.
+ */
+export function hasOpenClawIdTokenBinding(deviceId: string, roles: readonly string[]): boolean {
+  if (!owner || owner === "unreadable") {
+    return false;
+  }
+  const current = owner;
+  try {
+    return roles.some((role) => current.lookup(deviceId, role) !== undefined);
+  } catch {
+    return false;
+  }
+}
+
 /** Records the binding of a token just issued to a relayed connection; no binding, no token. */
 export async function recordDeviceTokenPeer(params: {
   deviceId: string;

@@ -846,6 +846,32 @@ describe("devices inventory rendering", () => {
     expect(revocations).toEqual([{ deviceId: "device-1", role: "operator" }]);
   });
 
+  it("points an OpenClaw ID browser to the Access page instead of offering removal", () => {
+    const container = renderDevicesContainer({
+      devicesList: {
+        pending: [],
+        paired: [
+          {
+            deviceId: "ocid-browser",
+            displayName: "Remote browser",
+            roles: ["operator"],
+            managedBy: "openclaw-id",
+            tokens: [{ role: "operator", scopes: ["operator.read"], createdAtMs: Date.now() }],
+          },
+        ],
+      },
+    });
+    const section = getInventorySection(container);
+    const buttons = Array.from(section.querySelectorAll("button"), (b) => b.textContent?.trim());
+    expect(buttons).not.toContain("Revoke");
+    expect(buttons).not.toContain("Remove…");
+    expect(buttons).toContain("Rotate");
+    expect(section.textContent).toContain("Manage it on the Access page.");
+    expect(section.querySelector("a")?.getAttribute("href")).toBe(
+      "/plugin?plugin=openclaw-id-access&id=access",
+    );
+  });
+
   it("keeps roles and scopes no token carries", () => {
     const container = renderDevicesContainer({
       devicesList: {
