@@ -51,7 +51,7 @@ function mountSearchSidebar(
   return {
     runtime,
     view,
-    async search(query: string) {
+    async search(this: void, query: string) {
       await waitForSolid(() => expect(view.queryByRole("searchbox")).not.toBeNull());
       const input = view.getByRole<HTMLInputElement>("searchbox");
       input.value = query;
@@ -95,14 +95,18 @@ it("keeps known search results with pending schema and retains its failure after
     publish(true);
     await waitForSolid(() => expect(request).toHaveBeenCalledWith("config.schema", {}));
     schema.reject(new Error("Synthetic schema unavailable"));
-    await waitForSolid(() => expect(view.queryByRole("alert")).not.toBeNull());
+    await waitForSolid(() =>
+      expect(view.queryByRole("alert"), "initial schema failure").not.toBeNull(),
+    );
     config.resolve(configSnapshot({ count: 1 }, "initial", '{"count":1}'));
     await runtimeConfig.ensureLoaded();
     flush();
     expect(view.getByRole("alert").textContent).toContain(t("nav.settingsLoadFailed"));
     expect(view.queryByText("Appearance")).not.toBeNull();
     view.getByText(t("common.retry")).click();
-    await waitForSolid(() => expect(view.queryByText(t("common.loading"))).not.toBeNull());
+    await waitForSolid(() =>
+      expect(view.queryByText(t("common.loading")), "schema retry loading").not.toBeNull(),
+    );
     expect(view.queryByRole("alert")).toBeNull();
     retrySchema.resolve({ schema: { type: "object" }, uiHints: {}, version: "ready" });
     await waitForSolid(() => expect(view.queryByRole("alert")).toBeNull());
@@ -112,7 +116,9 @@ it("keeps known search results with pending schema and retains its failure after
     const refreshing = runtimeConfig.refreshSchema();
     refreshSchema.reject(new Error("Synthetic refresh failure"));
     await refreshing;
-    await waitForSolid(() => expect(view.queryByRole("alert")).not.toBeNull());
+    await waitForSolid(() =>
+      expect(view.queryByRole("alert"), "schema refresh failure").not.toBeNull(),
+    );
     expect(view.queryByText("Appearance")).not.toBeNull();
     view.getByText(t("common.retry")).click();
     await waitForSolid(() => expect(view.queryByRole("alert")).toBeNull());
@@ -150,6 +156,91 @@ it("completes static search when schema read access is intentionally unavailable
     expect(view.queryByText(t("common.loading"))).toBeNull();
     expect(request).not.toHaveBeenCalled();
   } finally {
+    view.unmount();
+    runtimeConfig.dispose();
+    runtime.stop();
+  }
+});
+
+it("retires prior schema links while replacement connection search is incomplete", async () => {
+  const nextConfig = createDeferred<unknown>();
+  const nextSchema = createDeferred<unknown>();
+  const initialClient = createTestGatewayClient(async (method) =>
+    method === "config.get"
+      ? configSnapshot({}, "initial", "{}")
+      : {
+          schema: {
+            type: "object",
+            properties: {
+              gateway: {
+                type: "object",
+                properties: { port: { type: "number", title: "Census needle" } },
+              },
+            },
+          },
+          uiHints: {},
+          version: "initial",
+        },
+  );
+  const replacementRequest = vi.fn<GatewayRequestHandler>((method) =>
+    method === "config.get" ? nextConfig.promise : nextSchema.promise,
+  );
+  const replacementClient = createTestGatewayClient(replacementRequest);
+  const { gateway, publish } = createGatewayHarness(initialClient);
+  const runtimeConfig = createRuntimeConfigCapability(gateway);
+  const { runtime, view, search } = mountSearchSidebar(gateway, runtimeConfig);
+  const oldLink = () => view.container.querySelector('a[href*="section=gateway"]');
+  try {
+    await search("Census needle");
+    await waitForSolid(() => expect(oldLink(), "initial schema link").not.toBeNull());
+    publish(false);
+    await waitForSolid(() => expect(oldLink(), "retired schema link").toBeNull());
+    expect(view.queryByText(t("nav.settingsSearchNoResults"))).toBeNull();
+    expect(view.queryByText(t("common.loading"))).not.toBeNull();
+    publish(true, replacementClient);
+    await waitForSolid(() => expect(replacementRequest).toHaveBeenCalledWith("config.schema", {}));
+    await search("Appearance");
+    await waitForSolid(() =>
+      expect(view.queryByText("Appearance"), "static search during reconnect").not.toBeNull(),
+    );
+    await search("Census needle");
+    await waitForSolid(() =>
+      expect(view.queryByText(t("common.loading")), "replacement schema loading").not.toBeNull(),
+    );
+    expect(oldLink()).toBeNull();
+    expect(view.getByRole<HTMLInputElement>("searchbox").value).toBe("Census needle");
+    expect(oldLink()).toBeNull();
+    expect(view.queryByText(t("nav.settingsSearchNoResults"))).toBeNull();
+    nextSchema.resolve({
+      schema: {
+        type: "object",
+        properties: {
+          logging: {
+            type: "object",
+            properties: { level: { type: "string", title: "Census needle" } },
+          },
+        },
+      },
+      uiHints: {},
+      version: "replacement",
+    });
+    await waitForSolid(() =>
+      expect(
+        view.container.querySelector('a[href*="section=logging"]'),
+        "replacement schema link before config",
+      ).not.toBeNull(),
+    );
+    expect(oldLink()).toBeNull();
+    await waitForSolid(() => expect(view.queryByText(t("common.loading"))).toBeNull());
+    nextConfig.resolve(configSnapshot({}, "replacement", "{}"));
+    await runtimeConfig.ensureLoaded();
+    expect(
+      replacementRequest.mock.calls.filter(([method]) => method === "config.schema"),
+    ).toHaveLength(1);
+  } finally {
+    nextConfig.resolve(configSnapshot({}, "cleanup", "{}"));
+    nextSchema.resolve({ schema: {}, uiHints: {}, version: "cleanup" });
+    await runtimeConfig.ensureLoaded();
     view.unmount();
     runtimeConfig.dispose();
     runtime.stop();

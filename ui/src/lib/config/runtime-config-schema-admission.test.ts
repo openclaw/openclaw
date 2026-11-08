@@ -64,6 +64,47 @@ describe("runtime config schema admission", () => {
 });
 
 describe("runtime config schema access", () => {
+  it("retires admitted schema demand when replacement read access is denied", async () => {
+    const initialSchema = deferred<unknown>();
+    const initialRequest = vi.fn(() => initialSchema.promise);
+    const { gateway, publish } = createGatewayHarness({
+      request: initialRequest,
+    } as unknown as GatewayBrowserClient);
+    const runtimeConfig = createRuntimeConfigCapability(gateway);
+    const admission = runtimeConfig.ensureSchemaLoaded();
+    const replacementRequest = vi.fn(async () => ({
+      schema: { type: "object" },
+      uiHints: {},
+      version: "replacement",
+    }));
+    const replacement = { request: replacementRequest } as unknown as GatewayBrowserClient;
+    try {
+      await vi.waitFor(() => expect(initialRequest).toHaveBeenCalledWith("config.schema", {}));
+      publish(false);
+      await runtimeConfig.ensureSchemaLoaded();
+      publish(true, replacement, {
+        type: "hello-ok",
+        protocol: 1,
+        auth: { role: "operator", scopes: ["operator.pairing"] },
+      } as GatewayHelloOk);
+      await Promise.resolve();
+      expect(replacementRequest).not.toHaveBeenCalled();
+      publish(true, replacement);
+      await Promise.resolve();
+      expect(replacementRequest).not.toHaveBeenCalled();
+      await runtimeConfig.ensureSchemaLoaded();
+      await vi.waitFor(() => expect(runtimeConfig.state.configSchemaVersion).toBe("replacement"));
+      expect(replacementRequest.mock.calls).toEqual([["config.schema", {}]]);
+      initialSchema.resolve({ schema: {}, uiHints: {}, version: "retired" });
+      await admission;
+      expect(runtimeConfig.state.configSchemaVersion).toBe("replacement");
+    } finally {
+      initialSchema.resolve({ schema: {}, uiHints: {}, version: "cleanup" });
+      await admission;
+      runtimeConfig.dispose();
+    }
+  });
+
   it("loads the schema for a legacy hello without scopes or an advertised method list", async () => {
     const schema = {
       schema: { type: "object" },
