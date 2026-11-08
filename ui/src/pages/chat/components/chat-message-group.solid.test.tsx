@@ -4,7 +4,6 @@ import { createSignal } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ControlUiReplacement } from "../../../../../src/plugin-sdk/control-ui.js";
 import type { ApplicationContext } from "../../../app/context.ts";
-import type { MessageGroup as MessageGroupData } from "../../../lib/chat/chat-types.ts";
 import { prepareChatMessageRender } from "../../../lib/chat/message-display.ts";
 import { ContentPresentation } from "../../../lib/solid/presentation.ts";
 import type { ControlUiPluginCapability } from "../../../plugins/control-ui-capability.ts";
@@ -295,24 +294,17 @@ it("does not give provider speech unframed answer actions", () => {
 });
 
 it("paints every right-side user turn with the viewer accent and only peers with identity hues", () => {
-  const message = { role: "user", content: "Hello", timestamp: 1000 };
-  const frame = (sender: MessageGroupData["sender"], userId?: string) =>
-    prepareMessageGroupFrame(createMessageGroup(message, "user", { sender }), {
-      showReasoning: false,
-      userId,
-    });
   const profile = (id: string) => ({ id, name: id, identity: { type: "profile" as const, id } });
-  const cases = [
-    { sender: profile("viewer"), userId: "viewer", peer: false },
-    { sender: profile("peer"), userId: "viewer", peer: true },
-    // Without a viewer profile every user turn is the viewer's, whatever the sender stamp.
-    { sender: { id: "pat@example.com" }, userId: undefined, peer: false },
-    { sender: profile("viewer"), userId: undefined, peer: false },
-  ];
-  for (const { sender, userId, peer } of cases) {
-    const prepared = frame(sender, userId);
-    expect(prepared.isPeerGroup).toBe(peer);
-    expect(prepared.senderHue === null).toBe(!peer);
+  // [sender, viewer profile, peer]; without a viewer profile every user turn is the viewer's.
+  for (const [sender, userId, peer] of [
+    [profile("viewer"), "viewer", false],
+    [profile("peer"), "viewer", true],
+    [{ id: "pat@example.com" }, undefined, false],
+    [profile("viewer"), undefined, false],
+  ] as const) {
+    const group = createMessageGroup({ role: "user", content: "Hi" }, "user", { sender });
+    const frame = prepareMessageGroupFrame(group, { showReasoning: false, userId });
+    expect([frame.isPeerGroup, frame.senderHue !== null]).toEqual([peer, peer]);
   }
 });
 
