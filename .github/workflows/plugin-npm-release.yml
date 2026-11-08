@@ -1431,6 +1431,9 @@ jobs:
       id-token: write
     strategy:
       fail-fast: false
+      # Bound simultaneous full FRV reauthentication; quota-aware reads still
+      # fail closed when the shared hourly budget cannot recover in time.
+      max-parallel: 4
       matrix:
         plugin: ${{ fromJson(needs.preview_plugins_npm.outputs.matrix) }}
     steps:

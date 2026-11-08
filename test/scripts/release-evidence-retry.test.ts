@@ -76,10 +76,12 @@ describe("release evidence API reads", () => {
       [
         "api",
         "repos/openclaw/openclaw/actions/runs/42/artifacts?name=plugin-npm-package-source-fixture-demo%2Bencoded&per_page=100",
+        "--include",
       ],
       [
         "api",
         "repos/openclaw/openclaw/actions/runs/42/artifacts?name=plugin-npm-package-source-fixture-demo%2Bencoded&per_page=100",
+        "--include",
       ],
     ]);
   });
@@ -150,7 +152,7 @@ describe("release evidence API reads", () => {
         /^repos\/openclaw\/openclaw\/actions\/runs\/(\d+)\/attempts\/\d+\/jobs\?page=1&per_page=(\d+)$/u.exec(
           args[1] ?? "",
         );
-      if (args[0] !== "api" || args.length !== 2 || !match) {
+      if (args[0] !== "api" || args.length !== 3 || args[2] !== "--include" || !match) {
         throw new Error(`unplanned evidence read: ${args.join(" ")}`);
       }
       if (match[2] === "100") {
@@ -221,7 +223,6 @@ describe("release evidence API reads", () => {
     ["implicit POST", ["api", "repos/openclaw/openclaw/issues", "-f", "title=test"], "HTTP 502"],
     ["GraphQL", ["api", "graphql"], "HTTP 502"],
     ["forbidden", ["api", "repos/openclaw/openclaw/actions/runs/42"], "HTTP 403"],
-    ["rate limited", ["api", "repos/openclaw/openclaw/actions/runs/42"], "HTTP 429"],
   ])("does not retry %s", (_label, args, stderr) => {
     const wait = vi.spyOn(Atomics, "wait").mockReturnValue("timed-out");
     const failure = Object.assign(new Error("gh failed"), { stderr });
@@ -230,6 +231,38 @@ describe("release evidence API reads", () => {
     });
     expect(() => runReleaseCiGh(args)).toThrow(failure);
     expect(transport.read).toHaveBeenCalledOnce();
+    expect(wait).not.toHaveBeenCalled();
+  });
+
+  it("retries async quota without falling back to smaller job pages", async () => {
+    const wait = vi.spyOn(Atomics, "wait").mockReturnValue("timed-out");
+    transport.read
+      .mockImplementationOnce(() => {
+        throw Object.assign(new Error("quota"), {
+          stdout:
+            'HTTP/2.0 403 Forbidden\r\nRetry-After: 90\r\n\r\n{"message":"secondary rate limit"}',
+          stderr: "gh: secondary rate limit (HTTP 403)",
+        });
+      })
+      .mockReturnValue('{"total_count":1,"jobs":[{"id":7}]}');
+    await expect(
+      createReleaseEvidenceClient("openclaw/openclaw").getRunAttemptJobs("42", 1),
+    ).resolves.toEqual([{ id: 7 }]);
+    expect(transport.read).toHaveBeenCalledTimes(2);
+    expect(transport.read.mock.calls.map((call) => call[1])).toEqual([
+      [
+        "api",
+        "repos/openclaw/openclaw/actions/runs/42/attempts/1/jobs?page=1&per_page=100",
+        "--include",
+      ],
+      [
+        "api",
+        "repos/openclaw/openclaw/actions/runs/42/attempts/1/jobs?page=1&per_page=100",
+        "--include",
+      ],
+    ]);
+    expect(transport.sleep.mock.calls[0]?.[0]).toBeGreaterThanOrEqual(90_000);
+    expect(transport.sleep.mock.calls[0]?.[0]).toBeLessThan(91_000);
     expect(wait).not.toHaveBeenCalled();
   });
 

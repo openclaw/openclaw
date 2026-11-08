@@ -21,6 +21,12 @@ import {
 } from "./lib/qualification-admission-baselines.mjs";
 import { isRecord } from "./lib/record-shared.mjs";
 import {
+  createReleaseGhReadRetry,
+  isReleaseGhRestRead,
+  RELEASE_GH_READ_HEADER_BYTES,
+  withReleaseGhFreshReadPass,
+} from "./lib/release-gh-read-retry.mjs";
+import {
   releaseQualificationExemptions,
   validateQualificationExemptions,
 } from "./lib/release-validation-waivers.mjs";
@@ -79,7 +85,7 @@ function json(raw, label) {
 }
 
 // Same synchronous args adapter as release-tooling-identity; ZIP calls preserve bytes.
-export function runQualificationAdmissionGh(inputArgs) {
+export function runQualificationAdmissionGh(inputArgs, params = {}) {
   const args = [...inputArgs];
   if (args[0] === "api") {
     if (!args.includes("--hostname")) {
@@ -90,28 +96,51 @@ export function runQualificationAdmissionGh(inputArgs) {
     }
   }
   const binary = args.some((arg) => /\/actions\/artifacts\/[1-9][0-9]*\/zip$/u.test(arg));
+  const bodyLimit = binary ? MAX_ARCHIVE_BYTES : MAX_BYTES * 4;
   const options = {
     encoding: binary ? null : "utf8",
     timeout: 60_000,
     killSignal: "SIGKILL",
-    maxBuffer: binary ? MAX_ARCHIVE_BYTES : MAX_BYTES * 4,
+    maxBuffer: bodyLimit + (isReleaseGhRestRead(args) ? RELEASE_GH_READ_HEADER_BYTES : 0),
     stdio: ["ignore", "pipe", "pipe"],
   };
-  if (!binary) {
-    return execPlainGh(args, options);
-  }
-  try {
-    return execPlainGh([...args, "--allow-escape-sequences"], options);
-  } catch (error) {
-    // Older GitHub CLIs predate terminal-output sanitization and this option.
-    if (
-      !String(error?.stderr)
-        .split(/\r?\n/u)
-        .some((line) => line.trim() === "unknown flag: --allow-escape-sequences")
-    ) {
-      throw error;
+  const retry = createReleaseGhReadRetry(args, params);
+  const execute = params.execPlainGhImpl ?? execPlainGh;
+  let allowEscapeSequences = binary;
+  for (;;) {
+    try {
+      const body = retry.body(
+        execute(allowEscapeSequences ? [...retry.args, "--allow-escape-sequences"] : retry.args, {
+          ...options,
+          timeout: retry.timeout(options.timeout),
+        }),
+      );
+      requireValue(
+        Buffer.byteLength(body) <= bodyLimit,
+        "Oversized qualification admission response",
+      );
+      return body;
+    } catch (error) {
+      // Older CLIs predate terminal-output sanitization. This compatibility
+      // fallback is only for a proven read and never for an HTTP failure.
+      if (
+        allowEscapeSequences &&
+        isReleaseGhRestRead(args) &&
+        String(error?.stderr)
+          .split(/\r?\n/u)
+          .some((line) => line.trim() === "unknown flag: --allow-escape-sequences")
+      ) {
+        allowEscapeSequences = false;
+        continue;
+      }
+      const delay = retry.delay(error, (failure) => {
+        throw failure;
+      });
+      (params.sleep ?? ((ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms)))(
+        delay,
+      );
+      retry.afterWait();
     }
-    return execPlainGh(args, options);
   }
 }
 
@@ -806,22 +835,24 @@ export function revalidateQualificationAdmissionAuthority({
     isDeepStrictEqual(receipt.producer, producer),
     "Admission authority differs from the authenticated producer",
   );
-  const metadata = api(producer.repository, "actions/artifacts/" + descriptor.artifactId, runGh);
-  const jobs = api(
-    producer.repository,
-    "actions/runs/" + producer.runId + "/attempts/" + producer.runAttempt + "/jobs?per_page=100",
-    runGh,
-  );
-  // Finish with the exact P route, original attempt, and current operator grants;
-  // no immutable source or archive is reacquired between this check and the write.
-  const current = verifyProducer(producer, runGh, true);
-  validateArtifact(descriptor, metadata, current.run, jobs);
-  requireValue(
-    current.run.display_title === "Qualification Admission " + receipt.request.requestId &&
-      isDeepStrictEqual(receipt.operator, current.operator) &&
-      isDeepStrictEqual(receipt.triggeringOperator, current.triggeringOperator),
-    "Admission authority differs from the authenticated operators",
-  );
+  return withReleaseGhFreshReadPass(() => {
+    const metadata = api(producer.repository, "actions/artifacts/" + descriptor.artifactId, runGh);
+    const jobs = api(
+      producer.repository,
+      "actions/runs/" + producer.runId + "/attempts/" + producer.runAttempt + "/jobs?per_page=100",
+      runGh,
+    );
+    // Finish with the exact P route, original attempt, and current operator grants;
+    // no immutable source or archive is reacquired between this check and the write.
+    const current = verifyProducer(producer, runGh, true);
+    validateArtifact(descriptor, metadata, current.run, jobs);
+    requireValue(
+      current.run.display_title === "Qualification Admission " + receipt.request.requestId &&
+        isDeepStrictEqual(receipt.operator, current.operator) &&
+        isDeepStrictEqual(receipt.triggeringOperator, current.triggeringOperator),
+      "Admission authority differs from the authenticated operators",
+    );
+  });
 }
 
 function readQualificationAdmission(
