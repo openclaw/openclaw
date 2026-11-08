@@ -230,6 +230,43 @@ describe("runSetupModelAuthStep", () => {
     );
   });
 
+  it("asks for the agent's provider after a utility-only choice and keeps both credentials", async () => {
+    const utilityProfile = {
+      profileId: "levanto:default",
+      credential: { type: "api_key" as const, provider: "levanto", key: "test-levanto-key" },
+    };
+    const agentProfile = {
+      profileId: "anthropic:default",
+      credential: { type: "api_key" as const, provider: "anthropic", key: "test-anthropic-key" },
+    };
+    const utility = { ...candidate({}, [utilityProfile]), utilityModelOverride: "levanto/sage" };
+    const agent = candidate({}, [agentProfile]);
+    promptAuthChoiceGrouped
+      .mockResolvedValueOnce("levanto-api-key")
+      .mockResolvedValueOnce("anthropic-cli");
+    applyAuthChoice
+      .mockResolvedValueOnce(utility)
+      .mockImplementationOnce(async ({ config }) => ({ ...agent, config }));
+    promptDefaultModel.mockResolvedValueOnce({ model: "anthropic/claude-test" });
+
+    const result = await runStep();
+    await result.persistAuthProfiles();
+
+    expect(promptAuthChoiceGrouped).toHaveBeenCalledTimes(2);
+    expect(result.config.agents?.defaults?.utilityModel).toBe("levanto/sage");
+    expect(result.config.agents?.defaults?.model).toMatchObject({
+      primary: "anthropic/claude-test",
+    });
+    expect(result.authProfiles).toEqual([utilityProfile, agentProfile]);
+    expect(utility.persistAuthProfiles).toHaveBeenCalledOnce();
+    expect(agent.persistAuthProfiles).toHaveBeenCalledOnce();
+
+    // Live verification renames the selected credential before saving it.
+    const verificationProfile = { ...agentProfile, profileId: "anthropic:setup-test" };
+    await result.persistAuthProfiles([verificationProfile]);
+    expect(agent.persistAuthProfiles).toHaveBeenLastCalledWith([verificationProfile]);
+  });
+
   it("still fails loudly when the auth choice came from a flag", async () => {
     applyAuthChoice.mockRejectedValueOnce(
       new Error("Claude CLI is not authenticated on this host."),
