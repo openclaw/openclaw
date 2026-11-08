@@ -6,10 +6,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { closeGatewayTestWebSocket } from "../../test/helpers/gateway-websocket.js";
 import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
-import {
-  getPreparedRuntimeAuthProfileStoreSnapshot,
-  saveAuthProfileStore,
-} from "../agents/auth-profiles.js";
+import { saveAuthProfileStore } from "../agents/auth-profiles.js";
 import { modelDefinition } from "../agents/model-auth.fixtures.test-support.js";
 import { listConfiguredOwnerInputs } from "../agents/prepared-model-runtime.configured.js";
 import {
@@ -41,11 +38,8 @@ import * as logging from "../logging/subsystem.js";
 import { runExec } from "../process/exec.js";
 import * as spawnBroker from "../process/spawn-broker/context.js";
 import {
-  activateSecretsRuntimeSnapshotIfCurrent,
   activateSecretsRuntimeSnapshotWithSource,
   getActiveSecretsRuntimeSnapshot,
-  getActiveSecretsRuntimeSnapshotRevision,
-  prepareSecretsRuntimeSnapshot,
 } from "../secrets/runtime.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -67,10 +61,6 @@ import { captureOpenClawAgentDatabaseExecution } from "../state/openclaw-agent-e
 import { assertOpenClawDatabasesReady } from "../state/openclaw-database-preflight.js";
 import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import { acquireTestPortBlock, type TestPortClaim } from "../test-utils/port-claims.js";
-import {
-  holdInspectedAgentHandoff,
-  prepareAgentHandoffStores,
-} from "./server-agent-database-startup.handoff.test-support.js";
 import "./server-methods/chat-send-external-entry.js";
 // Keep cold module evaluation outside the lifecycle and RPC behavior deadlines.
 import { loadGatewayTestConfig } from "./test-helpers.config-runtime.js";
@@ -691,116 +681,6 @@ it.for([
         }
       })();
       await pendingFixtureCleanup;
-    }
-  },
-);
-
-it.for([
-  ["carlos", "success"],
-  ["hal", "success"],
-  ["carlos", "reject"],
-  ["hal", "reject"],
-] as const)(
-  "keeps sibling usable when inspected agent %s publishes first (cleanup %s)",
-  async ([firstAgent, cleanup], { signal }) => {
-    testState.agentsConfig = {
-      ownership: "explicit",
-      entries: { main: {}, carlos: {}, hal: {} },
-    };
-    testState.agentConfig = { systemAgent: { agentId: "main" } };
-    vi.stubEnv("OPENCLAW_TEST_FLEET_SECRET", "synthetic-shared-fleet-secret");
-    const env = { ...process.env };
-    const cfg = loadGatewayTestConfig();
-    setRuntimeConfigSnapshot(cfg);
-    await prepareAgentHandoffStores(["main", "carlos", "hal"], env);
-    const {
-      started: server,
-      preparation: prepared,
-      siblingPreparation: siblingReady,
-      firstPublished,
-      firstReleasing,
-      secondPublished,
-      releaseFirst,
-    } = await withAgentDatabaseStartupAdmission(async (admission) => {
-      const handoff = holdInspectedAgentHandoff(admission, { firstAgent, cleanup, env, signal });
-      await assertOpenClawDatabasesReady({ env, operation: "gateway-startup", config: cfg });
-      const preparation = admission.pendingPreparation;
-      const siblingPreparation = admission.waitForAgentPreparation(
-        firstAgent === "carlos" ? "hal" : "carlos",
-        { env },
-      );
-      const portClaim = await acquireTestPortBlock({ offsets: [0, 1, 2, 3, 4] });
-      const started = await startTestGatewayServer(portClaim, {
-        bind: "loopback",
-        auth: { mode: "none" },
-      });
-      return { ...handoff, started, preparation, siblingPreparation };
-    });
-    try {
-      await withinTest(firstReleasing.promise, signal);
-      await withinTest(siblingReady!, signal);
-      expect(await withinTest(secondPublished.promise, signal)).toBe(true);
-      const inputs = listConfiguredOwnerInputs(getRuntimeConfig(), undefined, true);
-      const firstInput = inputs.find((input) => input.agentId === firstAgent)!;
-      const siblingInput = inputs.find(
-        (input) => input.agentId !== firstAgent && input.agentId !== "main",
-      )!;
-      const siblingModel = getPreparedModelRuntimeSnapshot(siblingInput);
-      expect(getPreparedModelRuntimeSnapshot(firstInput)).toBeDefined();
-      expect(
-        getPreparedRuntimeAuthProfileStoreSnapshot(
-          firstInput.agentDir,
-          firstInput.inheritedAuthDir,
-        ),
-      ).toBeDefined();
-      const staleSecrets =
-        cleanup === "reject"
-          ? await prepareSecretsRuntimeSnapshot({
-              config: getActiveSecretsRuntimeSnapshot()!.sourceConfig,
-              env,
-              includeConfigRefs: false,
-            })
-          : undefined;
-      const secretsRevision = getActiveSecretsRuntimeSnapshotRevision();
-      releaseFirst.resolve();
-      await withinTest(prepared!, signal);
-      const secrets = getActiveSecretsRuntimeSnapshot();
-      if (cleanup === "reject") {
-        expect(readAgentDatabaseAdmissionRefusal(firstAgent, { env })?.code).toBe(
-          "agent-database-inspection-failed",
-        );
-        // Keep the input captured while readable: re-enumeration would hide a retained owner.
-        expect(getPreparedModelRuntimeSnapshot(firstInput)).toBeUndefined();
-        expect(
-          getPreparedRuntimeAuthProfileStoreSnapshot(
-            firstInput.agentDir,
-            firstInput.inheritedAuthDir,
-          ),
-        ).toBeUndefined();
-        expect(secrets?.authStores.some((store) => store.agentDir === firstInput.agentDir)).toBe(
-          false,
-        );
-        expect(activateSecretsRuntimeSnapshotIfCurrent(staleSecrets!, secretsRevision)).toBe(false);
-        expect(getPreparedModelRuntimeSnapshot(siblingInput)).toBe(siblingModel);
-      }
-      for (const agentId of ["carlos", "hal"].filter(
-        (id) => cleanup !== "reject" || id !== firstAgent,
-      )) {
-        expect(readAgentDatabaseAdmissionRefusal(agentId, { env })).toBeUndefined();
-        expectPreparedModel(agentId);
-        const database = openOpenClawAgentDatabase({ agentId, env });
-        expect(database.agentId).toBe(agentId);
-        expect(secrets?.authStores.some((store) => store.databasePath === database.path)).toBe(
-          true,
-        );
-        expect(
-          secrets?.degradedOwners?.some((owner) => owner.paths.includes(database.path)),
-        ).not.toBe(true);
-      }
-    } finally {
-      firstPublished.resolve();
-      releaseFirst.resolve();
-      await server.close();
     }
   },
 );

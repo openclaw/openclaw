@@ -356,10 +356,21 @@ export function readAgentDatabaseReadAdmissionRefusal(
   agentId: string,
   options: AdmissionOptions = {},
 ): AgentDatabaseAdmissionRefusal | undefined {
-  const key = stateKey(options);
+  return readSelectedAgentDatabaseReadAdmissionRefusal(
+    stateKey(options),
+    normalizeAgentId(agentId),
+    agentId,
+  );
+}
+
+function readSelectedAgentDatabaseReadAdmissionRefusal(
+  key: string,
+  normalizedAgentId: string,
+  agentId: string,
+): AgentDatabaseAdmissionRefusal | undefined {
   const refusal = readSelectedAgentDatabaseAdmissionRefusal(
     key,
-    normalizeAgentId(agentId),
+    normalizedAgentId,
     agentId,
     "read",
   );
@@ -605,12 +616,15 @@ export function assertAgentDatabaseAdmitted(agentId: string, options: AdmissionO
 /** Capture only the selector; refusal decisions and the caller's preparation remain live. */
 export function captureAgentDatabaseAdmission(
   agentId: string,
-  options: AdmissionOptions = {},
+  options: AdmissionOptions & { access?: "read" | "write" } = {},
 ): () => void {
   const key = stateKey(options);
   const normalizedAgentId = normalizeAgentId(agentId);
+  const readOnly = options.access === "read";
   return () => {
-    const refusal = readSelectedAgentDatabaseAdmissionRefusal(key, normalizedAgentId, agentId);
+    const refusal = readOnly
+      ? readSelectedAgentDatabaseReadAdmissionRefusal(key, normalizedAgentId, agentId)
+      : readSelectedAgentDatabaseAdmissionRefusal(key, normalizedAgentId, agentId);
     if (refusal) {
       throw new AgentDatabaseAdmissionError(refusal);
     }

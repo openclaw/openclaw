@@ -22,6 +22,7 @@ import {
 } from "../plugins/runtime/generation-scope.js";
 import { runWithAsyncWorkResources } from "../shared/async-work-resources.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { captureAgentDatabaseAdmission } from "../state/agent-database-admission.js";
 import { resolveAgentDir, resolveAgentWorkspaceDir, resolveDefaultAgentId } from "./agent-scope.js";
 import { ensureAuthProfileStoreAsync } from "./auth-profiles/store-runtime.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
@@ -530,6 +531,7 @@ async function acquireCommittedSimpleCompletionModel(
     return blocked;
   }
   const agentId = params.agentId ?? resolveDefaultAgentId(params.cfg);
+  const assertAgentAdmitted = captureAgentDatabaseAdmission(agentId, { access: "read" });
   const agentDir = params.agentDir?.trim() || resolveAgentDir(params.cfg, agentId);
   const tentativeRequest = resolveRequest();
   if (!tentativeRequest) {
@@ -629,6 +631,7 @@ async function acquireCommittedSimpleCompletionModel(
           if (callerReleased) {
             throw new Error("Prepared completion model has been released");
           }
+          assertAgentAdmitted();
         },
       });
     const context = createPreparedSimpleCompletionResolverContext({
