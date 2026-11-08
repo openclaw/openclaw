@@ -5728,6 +5728,21 @@ include source reads and bytes per turn, retained payload characters, JSON bytes
 and post-GC retained heap. The transfer readback is performed by the verifier,
 not a model.
 
+For aggregate overflow, prepare with `--large-catalog --background-files 61700`
+in a separate directory. This creates 150 synthetic skills (300 files, about
+12 MB) beside 61,700 unrelated project files (about 1.1 GB). Repeat those flags
+with `--existing --operations 5 --concurrency 1`. A frozen sibling source module
+can be selected with `--source-module <path>` to compare the baseline resource
+owner with identical dependencies. Baseline delivery-limit failures are counted;
+other failures remain fatal. Use four baseline A/A controls, five interleaved
+baseline/candidate pairs, and separate allocation runs. Acceptance is successful
+bounded delivery on overflow, unchanged reads/payloads for the ordinary fixture,
+and explicit reporting of the cost of processing the remaining skills. These are
+preparation measurements, not full turn latency: baseline failed work and
+candidate successful work have different outcomes. This owner does not read a
+session database or traverse unrelated project files; no database-size or btrfs
+performance claim follows from this fixture.
+
 Measure promotion in a separate pass with `--trace-gc-nvp --gc-log /path/to/run.log`
 and redirect stdout to that log. The existing warmup collection identifies the
 main isolate; capture markers exclude warmup and post-capture collections. The
@@ -6173,3 +6188,21 @@ generated-path tests cover nearby reports, nested fixtures, and staged inputs.
 Reports distinguish logical payload and emitted fast-import bytes; physical
 device writes are unavailable. These measurements do not qualify btrfs, Podman,
 full Gateway preparation, or the unrelated agent database.
+
+## Command lane wait attribution
+
+`command-lane-wait-measure.ts` queues 4,096 synthetic session identities in 32
+waves, each with 32 admitted holders and 96 waiting turns. It verifies settlement
+and records attributed wait counts, owner wall time, CPU, and optional collected
+allocation/CPU profiles. The owner is entirely in memory; database and workspace
+size are outside this measurement. It does not qualify whole-Gateway latency.
+
+```sh
+node --expose-gc --import ./scripts/tsx.mjs scripts/perf/command-lane-wait-measure.ts \
+  --output .local/queue-measure.json
+```
+
+Run A/A controls and five interleaved baseline/candidate processes; add
+`--allocations` for separate profile runs. All 4,096 tasks must settle and the
+candidate must attribute all 3,072 waits. Report the cost of recording holder
+facts explicitly; this instrumentation is not a throughput optimization.

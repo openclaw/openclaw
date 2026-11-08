@@ -107,6 +107,52 @@ describe("cloud worker milestone 2 fault injection", () => {
     }
   };
 
+  it("completes a worker turn when the automatic skill catalog exceeds its delivery budget", async () => {
+    for (const name of ["alpha", "beta"]) {
+      const directory = path.join(harness.root, "skills", name);
+      await fs.mkdir(directory, { recursive: true });
+      await fs.writeFile(
+        path.join(directory, "SKILL.md"),
+        `---\nname: ${name}\ndescription: Synthetic overflow fixture\n---\n# Complete instructions\n`,
+      );
+      for (let index = 0; index < 4; index++) {
+        await fs.writeFile(
+          path.join(directory, `reference-${index}.txt`),
+          Buffer.alloc(1024 * 1024, "x"),
+        );
+      }
+    }
+    const snapshot = await buildSkillSnapshot(harness.root, {
+      entries: loadWorkspaceSkills(harness.root, { workspaceOnly: true }),
+    });
+    const descriptor = await harness.createDescriptor();
+    descriptor.assignment.systemPrompt = snapshot.prompt;
+    descriptor.assignment.skillResources = await prepareSkillResourceDelivery(snapshot, () => {});
+    const { release, started } = harness.planPending();
+    const run = runWorkerDescriptor(descriptor);
+    try {
+      await waitForWorkerEvent(started.promise, run, "provider start");
+      const request = harness.requestParams(
+        "worker.inference.start",
+      )[0] as WorkerInferenceStartParams;
+      const locations = [
+        ...(request.context.systemPrompt ?? "").matchAll(/<location>(.*?)<\/location>/g),
+      ];
+      const instructions = await Promise.all(
+        locations.map((match) => fs.readFile(match[1]!, "utf8")),
+      );
+      expect(instructions.some((text) => text.includes("Supporting files were omitted"))).toBe(
+        true,
+      );
+      release.resolve(doneOutcome("Completed with the available resources."));
+      await expect(run).resolves.toMatchObject({ status: "completed" });
+      expect(harness.providerCalls).toBe(1);
+    } finally {
+      release.resolve(doneOutcome("fixture cleanup"));
+      await run;
+    }
+  });
+
   it.skipIf(process.platform === "win32" || process.getuid?.() === 0).each([
     ["success", "standalone", "skill", "completed", "stop"],
     ["success", "managed", "skill", "completed", "stop"],

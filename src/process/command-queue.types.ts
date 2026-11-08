@@ -47,7 +47,7 @@ export type CommandQueueAdmissionOptions = {
   /** Cancels queued admission; the task owns cancellation after it starts. */
   abortSignal?: AbortSignal;
   /** Called only when this entry remains queued after immediate lane admission. */
-  onQueued?: () => void;
+  onQueued?: (wait?: { queuedAhead: number; details: string }) => void;
   warnAfterMs?: number;
   onWait?: (waitMs: number, queuedAhead: number) => void;
   priority?: "foreground" | "normal" | "background";

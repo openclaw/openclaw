@@ -205,8 +205,13 @@ another. Enablement does not bypass agent allowlists, required binaries,
 operating-system restrictions, or other prerequisites.
 
 A managed bundle is limited to 256 files, 1 MiB per file, and 8 MiB total.
-Worker resource delivery also has an 8 MiB aggregate limit; narrow the session
-selection if its complete bundles exceed that limit. Published revisions are
+Worker resource delivery also has an 8 MiB aggregate limit. If the selected
+bundles exceed it, delivery omits supporting files and adds a notice to the
+delivered instructions. Complete instructions are retained when they fit;
+otherwise that skill receives an explicit unavailability notice, never partial
+instructions. The turn can continue with available tools. The notice explains
+how to request a missing resource or narrow the selection. Gateway logs identify
+each reduced skill, its size, and its largest file. Published revisions are
 retained, including revisions still selected by older sessions.
 
 ZIP imports allow up to 16 unfinished uploads per Gateway profile and 32

@@ -151,9 +151,13 @@ export function withDiagnosticsTimelineObserver<T>(observer: SpanObserver, run: 
 }
 
 /** Forward an owner's measured duration without timing the same operation again. */
-export function recordDiagnosticsTimelineDuration(name: string, durationMs: number) {
+export function recordDiagnosticsTimelineDuration(
+  name: string,
+  durationMs: number,
+  attributes?: DiagnosticsTimelineAttributes,
+) {
   try {
-    spanObserver.getStore()?.(name, undefined, durationMs)?.();
+    spanObserver.getStore()?.(name, attributes, durationMs)?.();
   } catch {
     // Diagnostic observers cannot change the measured operation.
   }

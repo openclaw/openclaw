@@ -33,6 +33,7 @@ export type QueueEntry = {
   taskIdentity?: CommandQueueAdmissionOptions["taskIdentity"];
   sessionTarget?: CommandQueueAdmissionOptions["sessionTarget"];
   onWait?: (waitMs: number, queuedAhead: number) => void;
+  waitDetails?: string;
   releaseQueuedAbort?: () => void;
 };
 
@@ -51,7 +52,16 @@ type LaneQueue = {
 export type LaneState = {
   lane: string;
   queue: LaneQueue;
-  activeTasks: Map<number, CommandQueueAdmissionOptions["sessionTarget"]>;
+  activeTasks: Map<
+    number,
+    {
+      lane: string;
+      taskId: number;
+      sessionTarget: CommandQueueAdmissionOptions["sessionTarget"];
+      taskIdentity: CommandQueueAdmissionOptions["taskIdentity"];
+      startedAt: number;
+    }
+  >;
   maxConcurrent: number;
   draining: boolean;
   generation: number;

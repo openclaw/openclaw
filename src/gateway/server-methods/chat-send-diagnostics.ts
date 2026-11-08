@@ -50,6 +50,7 @@ export function startChatSendDiagnostics(log: { info(message: string): void }) {
   let startedAt = performance.now();
   let acknowledgedMs: number | undefined;
   let dependencyRetireVerifyAttempts = 0;
+  let laneWait: string | undefined;
   let finished = false;
   let identity: { sessionId: string; runId: string } | undefined;
 
@@ -61,6 +62,7 @@ export function startChatSendDiagnostics(log: { info(message: string): void }) {
     if (!slow && !emit) {
       totals.clear();
       dependencyRetireVerifyAttempts = 0;
+      laneWait = undefined;
       startedAt = now;
       return elapsedMs;
     }
@@ -96,6 +98,9 @@ export function startChatSendDiagnostics(log: { info(message: string): void }) {
         if (dependencyRetireVerifyAttempts) {
           message += ` detail.${DEPENDENCY_RETIRE_VERIFY}.attempts=${dependencyRetireVerifyAttempts}`;
         }
+        if (laneWait) {
+          message += ` laneWait=${laneWait}`;
+        }
         log.info(message);
       }
     } catch {
@@ -103,6 +108,7 @@ export function startChatSendDiagnostics(log: { info(message: string): void }) {
     }
     totals.clear();
     dependencyRetireVerifyAttempts = 0;
+    laneWait = undefined;
     startedAt = now;
     return elapsedMs;
   };
@@ -137,6 +143,9 @@ export function startChatSendDiagnostics(log: { info(message: string): void }) {
       const spanName = name === "agent.prepare" ? attributes?.stage : name;
       if (typeof spanName !== "string" || finished) {
         return undefined;
+      }
+      if (spanName === "command_lane.wait" && typeof attributes?.wait === "string") {
+        laneWait = attributes.wait;
       }
       const phase = `detail.${spanName}` as const;
       if (durationMs !== undefined) {

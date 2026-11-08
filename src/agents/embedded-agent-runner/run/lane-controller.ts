@@ -14,11 +14,14 @@ import {
   getAgentRunContext,
   retainQueuedAgentRunContext,
 } from "../../../infra/agent-run-registry.js";
+import {
+  measureDiagnosticsTimelineSpan,
+  recordDiagnosticsTimelineDuration,
+} from "../../../infra/diagnostics-timeline.js";
 import { isBackgroundWorkLane } from "../../../process/background-work.js";
 import {
   CommandLaneTaskTimeoutError,
   enqueueCommandInLane,
-  getCommandLaneSnapshot,
   isCommandLaneTaskTimeoutError,
 } from "../../../process/command-queue.js";
 import type {
@@ -53,7 +56,6 @@ import {
   EMBEDDED_RUN_LANE_TIMEOUT_GRACE_MS,
   resolveEmbeddedRunLaneTimeoutMs,
   resolveEmbeddedRunSessionLanePolicy,
-  shouldNoteLaneWait,
 } from "./lane-runtime.js";
 import type { RunEmbeddedAgentParams } from "./params.js";
 import { claimAgentSessionWriter } from "./session-bootstrap.js";
@@ -303,25 +305,21 @@ export function createEmbeddedRunLaneController<TParams extends LaneParams>(opti
     options.getParams().preparedRunAdmission?.assertSourceCurrent();
   };
 
-  const noteLaneWaitIfBusy = (lane: string) => {
-    const params = options.getParams();
-    if (!params.onLaneWait) {
-      return;
-    }
-    const snapshot = getCommandLaneSnapshot(lane);
-    if (shouldNoteLaneWait(snapshot)) {
-      params.onLaneWait({
-        waitMs: 0,
-        queuedAhead: snapshot.queuedCount + snapshot.activeCount,
-        waiting: true,
-      });
-    }
-  };
   const enqueueGlobal = async (
     task: () => Promise<EmbeddedAgentRunResult>,
     opts?: CommandQueueEnqueueOptions,
   ) => {
     let capacityHeld = false;
+    let placementStartedAt: number | undefined;
+    const finishPlacementWait = () => {
+      if (placementStartedAt !== undefined) {
+        recordDiagnosticsTimelineDuration(
+          "agent.placement.admission",
+          performance.now() - placementStartedAt,
+        );
+        placementStartedAt = undefined;
+      }
+    };
     // Global-lane admission is healthy waiting, not run execution. Keep reply
     // staleness and stuck recovery fenced until this queue grants capacity.
     let waitingForGlobalLaneAdmission = true;
@@ -379,7 +377,11 @@ export function createEmbeddedRunLaneController<TParams extends LaneParams>(opti
       }
       // Queue waits can outlive durable harness and placement bindings.
       // Recheck and claim only after lifecycle admission, before context or hooks execute.
-      const writerClaim = await claimAgentSessionWriter(params);
+      waitingWatchdog?.progress("transport", "session_writer:admission");
+      const writerClaim = await measureDiagnosticsTimelineSpan(
+        "agent.session_writer.admission",
+        () => claimAgentSessionWriter(params),
+      );
       if (writerClaim) {
         params = {
           ...params,
@@ -392,6 +394,8 @@ export function createEmbeddedRunLaneController<TParams extends LaneParams>(opti
         options.setParams(params);
         options.onSessionWriterClaimed?.(writerClaim.entry);
       }
+      waitingWatchdog?.progress("transport", "session_placement:admission");
+      placementStartedAt = performance.now();
       const laneExecution = withAgentRunLifecycleGeneration(lifecycleGeneration, () =>
         withSessionPlacementTurnAdmission(
           {
@@ -444,6 +448,7 @@ export function createEmbeddedRunLaneController<TParams extends LaneParams>(opti
               lifecycleGeneration,
               lastActiveAt: Date.now(),
             });
+            finishPlacementWait();
             // Queue dequeue can still block on writer or placement admission.
             finishGlobalLaneAdmission();
             waitingWatchdog?.progress("semantic", "global_capacity:admitted");
@@ -461,9 +466,6 @@ export function createEmbeddedRunLaneController<TParams extends LaneParams>(opti
     };
     try {
       const { enqueue } = options.getParams();
-      if (!enqueue) {
-        noteLaneWaitIfBusy(options.globalLane);
-      }
       // Only explicit preparation waits release capacity; timeouts retain raw-task custody.
       const queueOptions: CommandQueueAdmissionOptions = {
         taskIdentity,
@@ -472,10 +474,17 @@ export function createEmbeddedRunLaneController<TParams extends LaneParams>(opti
         priority: isBackgroundWorkLane(options.globalLane)
           ? "background"
           : sessionLanePolicy.priority,
-        onQueued: () => {
+        onQueued: (wait) => {
           beginCapacityWait();
           noteCapacityWait();
-          opts?.onQueued?.();
+          options
+            .getParams()
+            .onLaneWait?.({ waitMs: 0, queuedAhead: wait?.queuedAhead ?? 0, waiting: true });
+          waitingWatchdog?.progress(
+            "transport",
+            `global_lane:waiting${wait ? ` ${wait.details}` : ""}`,
+          );
+          opts?.onQueued?.(wait);
         },
         onWait: (waitMs, queuedAhead) => {
           opts?.onWait?.(waitMs, queuedAhead);
@@ -523,6 +532,7 @@ export function createEmbeddedRunLaneController<TParams extends LaneParams>(opti
     } catch (error) {
       throw (abortSignal.aborted && resolveLaneTimeoutError()) || error;
     } finally {
+      finishPlacementWait();
       finishGlobalLaneAdmission();
     }
   };
