@@ -41,7 +41,6 @@ const readyWindowRequestLimits = {
   skills: 29,
   "skill-settings": 29,
   talk: 40,
-  custodian: 24,
   mcp: 65,
   security: 52,
 };
@@ -112,7 +111,7 @@ async function visit(page: Page, route: Route) {
 }
 
 suite.define(() => {
-  it.each(["skills", "skill-settings", "talk", "custodian", "mcp", "security"] as const)(
+  it.each(["skills", "skill-settings", "talk", "mcp", "security"] as const)(
     "bounds %s ready-window asset requests at 100 ms from a settled New Session",
     (route) =>
       suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {

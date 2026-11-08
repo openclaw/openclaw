@@ -34,16 +34,12 @@ type Page = Awaited<ReturnType<typeof mountPage>>["page"];
 function button(page: HTMLElement, selector: string) {
   return page.querySelector<HTMLButtonElement>(selector)!;
 }
-async function element<T extends HTMLElement>(
-  page: HTMLElement,
-  selector: string,
-  options?: Parameters<typeof waitForFast>[1],
-): Promise<T> {
+async function element<T extends HTMLElement>(page: HTMLElement, selector: string): Promise<T> {
   return waitForFast(() => {
     const found = page.querySelector<T>(selector);
-    expect(found, `Missing element: ${selector}`).not.toBeNull();
+    expect(found).not.toBeNull();
     return found!;
-  }, options);
+  });
 }
 async function mount(request: Parameters<typeof createContext>[0]) {
   const harness = createContext(request);
@@ -123,11 +119,9 @@ describe("custodian page", () => {
 
     expect(page.querySelector(".chat-read-aloud-btn")).toBeNull();
 
-    // The first transcript mount also waits for the cold lazy-module transform.
     const trigger = await element<HTMLButtonElement>(
       page,
       ".custodian__wizard-step .picker-select__trigger",
-      { timeout: 5_000 },
     );
     expect(page.querySelector("openclaw-option-card")).toBeNull();
     expect(page.querySelector(".agent-chat__composer-shell")).toBeNull();
@@ -278,6 +272,31 @@ describe("custodian page", () => {
     await page.updateComplete;
     expect(page.textContent).not.toContain("Stale old-client reply.");
     expect(page.textContent).toContain("System check completed");
+  });
+
+  it("keeps loaded transcript rows while retrying the welcome without reloading history", async () => {
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce({
+        turns: [{ role: "assistant", text: "Loaded transcript row", at: 1 }],
+      })
+      .mockRejectedValueOnce(new Error("temporary welcome failure"))
+      .mockResolvedValueOnce(
+        chatReply("Recovered welcome.", { sessionId: "engine-session-after-retry" }),
+      );
+    const { context } = createContext(request, ["openclaw.chat", "openclaw.chat.history"]);
+    const { page } = await mountPage(context);
+    await waitForFast(() => expect(page.querySelector('[role="alert"] button')).not.toBeNull());
+
+    button(page, '[role="alert"] button').click();
+    await waitForFast(() => expect(page.textContent).toContain("Recovered welcome."));
+
+    expect(request.mock.calls.map(([method]) => method)).toEqual([
+      "openclaw.chat.history",
+      "openclaw.chat",
+      "openclaw.chat",
+    ]);
+    expect(page.textContent).toContain("Loaded transcript row");
   });
 
   it("keeps a sent sensitive reply masked when its response fails", async () => {

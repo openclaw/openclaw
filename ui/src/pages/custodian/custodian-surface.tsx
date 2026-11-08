@@ -1,27 +1,29 @@
 import type { JSX } from "@solidjs/web";
-import {
-  createEffect,
-  createMemo,
-  Errored,
-  For,
-  latest,
-  lazy,
-  Loading,
-  onSettled,
-  Show,
-} from "solid-js";
+import { createEffect, createMemo, Errored, For, latest, Loading, onSettled, Show } from "solid-js";
+import { SYSTEM_AGENT_ID } from "../../../../src/system-agent/agent-id.js";
+import { MarkdownBlocks } from "../../components/markdown-blocks-owner.ts";
+import { handleMarkdownCodeBlockClick } from "../../components/markdown-code-blocks.ts";
+import { handleMarkdownTableInteraction } from "../../components/markdown-tables.ts";
+import { OptionCard } from "../../components/option-card.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import { PanelRefreshStatus } from "../../components/solid/panel-refresh-status.tsx";
+import { WizardStepControls } from "../../components/wizard-step-controls.tsx";
 import "../../components/openclaw-mascot.tsx";
 import { registerPluginManagementEnglish } from "../../i18n/locales/en-plugin-management.ts";
+import type { MessageGroup as MessageGroupData } from "../../lib/chat/chat-types.ts";
+import { resolveMessageDisplayMarkdown } from "../../lib/chat/message-display.ts";
+import { normalizeMessage } from "../../lib/chat/message-normalizer.ts";
+import { resolveMessageVisibleContent } from "../../lib/chat/message-visibility.ts";
+import { formatUiExternalText } from "../../lib/format-error.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { createPendingFocus } from "../../lib/reactive/pending-focus.ts";
 import { projectOwner } from "../../lib/reactive/projection.ts";
+import { createScrollPosition } from "../../lib/reactive/scroll-state.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../lib/solid-bridge.ts";
 import "../../styles/chat/startup-layout.css";
 import "../../styles/chat/grouped.css";
-import "../../styles/option-card.css";
+import "../../styles/chat/layout.css";
 import "../../styles/chat/message-layout.css";
 import "../../styles/chat/composer.css";
 import "../../styles/chat/composer-surface.css";
@@ -34,7 +36,8 @@ import {
   disconnectTextareaOverflowObserver,
   observeTextareaOverflow,
 } from "../chat/components/chat-composer-dom.ts";
-import { ChatLazyBoundary } from "../chat/components/chat-lazy-boundary.tsx";
+import { ChatDivider } from "../chat/components/chat-divider.tsx";
+import { MessageGroup } from "../chat/components/chat-message-group-view.tsx";
 import { createCustodianActions, type CustodianActions } from "./custodian-actions.ts";
 import { CustodianAlertCard } from "./custodian-alert-card.tsx";
 import { custodianAlertStore } from "./custodian-alert-store.ts";
@@ -47,12 +50,124 @@ import {
   pluginHelpFocusRequest,
 } from "./plugin-help.ts";
 import { sessionVariant } from "./session-lifecycle.ts";
+import type { CustodianMessage } from "./transcript.ts";
 
 registerPluginManagementEnglish();
 
-const CustodianTranscript = lazy(() => import("./custodian-transcript.tsx"), {
-  export: "CustodianTranscript",
-});
+function toCustodianMessageGroup(message: CustodianMessage): MessageGroupData {
+  const key = `msg-${message.id}`;
+  const rawMessage = { role: message.role, content: message.text };
+  const normalized = normalizeMessage(rawMessage);
+  const visibleContent = resolveMessageVisibleContent(rawMessage, normalized);
+  return {
+    kind: "group",
+    key,
+    role: message.role,
+    messages: [
+      {
+        message: rawMessage,
+        key,
+        hasVisibleContent:
+          visibleContent === "non-text" ||
+          Boolean(resolveMessageDisplayMarkdown(rawMessage, normalized).trim()),
+      },
+    ],
+    visibleContent,
+    timestamp: message.at,
+    isStreaming: false,
+  };
+}
+
+function TranscriptEntry(props: {
+  store: () => CustodianSessionStore;
+  actions: CustodianActions["session"];
+  message: CustodianMessage;
+  activeWizardMessage: CustodianMessage | undefined;
+}) {
+  const question = () => props.message.question;
+  const questionKey = () => `${props.message.id}:${question()?.id}`;
+  return (
+    <>
+      <Show when={props.message.text}>
+        <MessageGroup
+          group={toCustodianMessageGroup(props.message)}
+          options={{
+            showReasoning: false,
+            showToolCalls: false,
+            assistantName: t("custodian.title"),
+            agentId: SYSTEM_AGENT_ID,
+          }}
+        />
+      </Show>
+      <Show when={props.message.id === props.store().earlierBoundaryAfterId}>
+        <ChatDivider
+          item={{
+            kind: "divider",
+            key: "custodian-earlier",
+            label: t("custodian.earlier"),
+            timestamp: props.message.at,
+          }}
+        />
+      </Show>
+      <Show when={question() && !props.store().dismissedQuestions.has(questionKey())}>
+        <div class="custodian__option-card">
+          <OptionCard
+            props={{
+              header: question()!.header,
+              question: question()!.question,
+              options: question()!.options.map((option) => ({
+                value: option.label,
+                label: option.label,
+                description: option.description,
+                recommended: option.recommended,
+              })),
+              disabled:
+                props.actions.sending ||
+                !props.store().canSend ||
+                props.store().answeredQuestions.has(questionKey()),
+              onSelect: (label: string) => props.actions.answerQuestion(props.message, label),
+              onSkip: () => props.actions.dismissQuestion(props.message),
+            }}
+          />
+        </div>
+      </Show>
+      <Show when={props.message === props.activeWizardMessage ? props.message.step : null}>
+        {(step) => (
+          <section
+            class="custodian__wizard-step"
+            aria-label={formatUiExternalText(step().title ?? step().message, "Setup")}
+          >
+            <Show when={step().title}>
+              <strong class="custodian__wizard-title">{formatUiExternalText(step().title!)}</strong>
+            </Show>
+            <WizardStepControls
+              step={step()}
+              value={props.store().wizardValue}
+              busy={props.actions.sending || !props.store().canSend}
+              inputId={`custodian-wizard-input-${props.message.id}`}
+              sensitiveRevealed={props.store().wizardSecretVisible}
+              onValueChange={(value) => props.store().setWizardValue(value)}
+              onAnswer={(value) => props.actions.answerWizardStep(props.message, value)}
+              onToggleSensitiveVisibility={() => props.store().toggleWizardSecretVisibility()}
+              leadingAction={
+                props.store().wizardCancelAvailable ? (
+                  <button
+                    class="btn btn--ghost custodian__wizard-cancel"
+                    type="button"
+                    disabled={props.actions.sending || !props.store().canSend}
+                    onClick={() => props.actions.cancelWizardStep(props.message)}
+                  >
+                    {t("custodian.cancel")}
+                  </button>
+                ) : undefined
+              }
+            />
+          </section>
+        )}
+      </Show>
+    </>
+  );
+}
 
 export type CustodianSurfaceProps = {
   store: CustodianSessionStore;
@@ -114,8 +229,6 @@ function CustodianSurfaceView(props: CustodianSurfaceProps, host: CustodianSurfa
         });
       }
     });
-    // Fetch the renderer while the owner reads history and prepares the greeting.
-    void CustodianTranscript.preload().catch(() => undefined);
     connectSession();
     return () => {
       inputChanges.delete(host);
@@ -123,6 +236,7 @@ function CustodianSurfaceView(props: CustodianSurfaceProps, host: CustodianSurfa
       if (textarea) {
         disconnectTextareaOverflowObserver(textarea);
       }
+      markdown?.dispose();
     };
   });
   const plugin = () => {
@@ -149,10 +263,12 @@ function CustodianSurfaceView(props: CustodianSurfaceProps, host: CustodianSurfa
     store().messages.filter((message) => !pluginWelcome() || !message.optionalWelcome),
   );
   let textarea: HTMLTextAreaElement | null = null;
+  let transcript: HTMLElement | null = null;
   let textareaNode: HTMLTextAreaElement | null = null;
   let transcriptNode: HTMLDivElement | null = null;
+  let markdown: MarkdownBlocks | undefined;
   let lastPluginHelpFocus = 0;
-  // The composer requires committed nodes; alerts retain send admission.
+  // The composer and Markdown owners require committed nodes; alerts retain send admission.
   createEffect(
     () => ({
       source: store(),
@@ -168,6 +284,13 @@ function CustodianSurfaceView(props: CustodianSurfaceProps, host: CustodianSurfa
         observeTextareaOverflow(textarea);
         adjustTextareaHeight(textarea);
       }
+      const nextTranscript = host.contains(transcriptNode) ? transcriptNode : null;
+      if (transcript !== nextTranscript) {
+        markdown?.dispose();
+        transcript = nextTranscript;
+        markdown = transcript ? new MarkdownBlocks(transcript) : undefined;
+      }
+      markdown?.update(true);
       if (source.canSend && !source.sensitive && !source.hasUnresolvedQuestion()) {
         custodianAlertStore.askIfReady(
           (question, admission, display) => void source.send(question, display, false, admission),
@@ -184,6 +307,26 @@ function CustodianSurfaceView(props: CustodianSurfaceProps, host: CustodianSurfa
         textareaNode?.focus();
       }
     },
+  });
+  let revealedMessages = false;
+  createScrollPosition(() => {
+    const initialMessageId = store().messages.at(-1)?.id ?? null;
+    return {
+      reveal: {
+        identity: [initialMessageId],
+        target: () => {
+          // Initial empty chrome does not reveal; clearing an existing transcript still does.
+          if (initialMessageId === null && !revealedMessages) {
+            return undefined;
+          }
+          revealedMessages = true;
+          const lastMessage = host.contains(transcriptNode)
+            ? transcriptNode?.lastElementChild
+            : undefined;
+          return lastMessage instanceof HTMLElement ? lastMessage : undefined;
+        },
+      },
+    };
   });
   const handleKeydown = (event: KeyboardEvent) => {
     if (event.key !== "Enter" || event.shiftKey || event.isComposing) {
@@ -256,7 +399,15 @@ function CustodianSurfaceView(props: CustodianSurfaceProps, host: CustodianSurfa
           },
         ]}
       >
-        <div ref={(node) => (transcriptNode = node)} class="custodian__messages" aria-live="polite">
+        <div
+          ref={(node) => (transcriptNode = node)}
+          class="custodian__messages"
+          aria-live="polite"
+          onClick={(event) => {
+            handleMarkdownCodeBlockClick(event);
+            handleMarkdownTableInteraction(event);
+          }}
+        >
           {setupCard()}
           {alertCard()}
           {props.channelOnboardingContent}
@@ -307,15 +458,16 @@ function CustodianSurfaceView(props: CustodianSurfaceProps, host: CustodianSurfa
               </div>
             </div>
           </Show>
-          <ChatLazyBoundary>
-            <CustodianTranscript
-              store={store}
-              actions={actions().session}
-              messages={messages()}
-              activeWizardMessage={activeWizardMessage()}
-              region={() => (host.contains(transcriptNode) ? transcriptNode : null)}
-            />
-          </ChatLazyBoundary>
+          <For each={messages()} keyed={(message) => message.id}>
+            {(message) => (
+              <TranscriptEntry
+                store={store}
+                actions={actions().session}
+                message={message()}
+                activeWizardMessage={activeWizardMessage()}
+              />
+            )}
+          </For>
           {/* Mount the canvas from owner admission, outside the pending action. */}
           <Show when={ownerSending()}>
             <div class="chat-group assistant custodian__thinking-row" role="status">

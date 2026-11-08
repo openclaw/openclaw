@@ -1,2 +1,2 @@
-# Pin first-visit assets and shared chunks; cover lazy Skills dialogs and Custodian greeting retention.
-331
+# Pin first-visit assets and shared chunks; cover lazy Skills dialogs and populated Custodian benchmark setup.
+262
