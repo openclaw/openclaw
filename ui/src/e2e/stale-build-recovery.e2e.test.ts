@@ -138,23 +138,27 @@ suite.define(() => {
     }
   });
 
-  it("stops retired recovery imports when a new private draft blocks document replacement", async () => {
+  it("preserves a new private draft while classifying a retired import", async () => {
     const context = await suite.browser.newContext({ serviceWorkers: "block" });
     const page = await context.newPage();
     const refreshModule = controlUiE2eBuiltModuleRequest("ui/src/app/sw-refresh.runtime.ts");
-    const recoveryModule = controlUiE2eBuiltModuleRequest(
-      "ui/src/app/stale-import-recovery.runtime.ts",
-    );
     let retired = false;
     let recoveries = 0;
     const releaseRecovery = Promise.withResolvers<void>();
     await page.route(refreshModule, (route) =>
       retired ? route.fulfill({ status: 404, body: "retired" }) : route.fallback(),
     );
-    await page.route(recoveryModule, async (route) => {
+    await page.route("**/index.html", async (route) => {
+      if (route.request().headers()["x-openclaw-reachability-probe"] !== "1") {
+        await route.fallback();
+        return;
+      }
       recoveries++;
       await releaseRecovery.promise;
-      return route.fulfill({ status: 404, body: "retired" });
+      await route.fulfill({
+        contentType: "text/html",
+        body: '<script>globalThis.OPENCLAW_CONTROL_UI_BUILD_INFO={"buildId":"replacement-test-build"};</script>',
+      });
     });
     await installMockGateway(page);
     try {
@@ -167,9 +171,9 @@ suite.define(() => {
       await page.getByRole("switch", { name: "Incognito", exact: true }).click();
       await composer.fill("Keep this draft until I choose to reload");
       releaseRecovery.resolve();
-      // A recursive preload error would otherwise repeatedly request the retired chunk.
+      // The response now identifies a new build, but the draft owns reload admission.
       await page.waitForTimeout(100);
-      // The original failure and its retry may each finish one recovery attempt.
+      // The original failure and its retry may each start one classification.
       expect(recoveries).toBeLessThanOrEqual(2);
       expect(await page.evaluate(() => performance.timeOrigin)).toBe(timeOrigin);
       expect(await composer.inputValue()).toBe("Keep this draft until I choose to reload");

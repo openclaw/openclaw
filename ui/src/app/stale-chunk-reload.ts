@@ -1,3 +1,4 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 // Stale hashed-chunk recovery for lazy routes and the entry stylesheet.
 //
 // A gateway update replaces `dist/control-ui` in place, so a document loaded before the
@@ -70,25 +71,31 @@ function waitForImportReachability(): Promise<boolean> {
 export async function retryControlUiImport<T>(
   load: () => T | Promise<T>,
   signal?: AbortSignal,
-  initialAttempt?: Promise<T>,
 ): Promise<T> {
   try {
-    return await trackForegroundActivity(initialAttempt ?? Promise.resolve(load()));
-  } catch (error) {
-    if (!isStaleChunkImportError(error)) {
-      throw error;
-    }
-    await waitForImportReachability();
-    signal?.throwIfAborted();
-    // Vite marks CSS preloads seen before they finish; retrying that import can
-    // mount an unstyled page. Its error surface must use guarded document recovery.
-    if (/unable to preload css/i.test(error.message)) {
-      throw error;
-    }
-    // Chromium can retain the first failed import in its module map. A persistent
-    // failure now reaches the route error surface and its guarded reload owner.
     return await trackForegroundActivity(Promise.resolve(load()));
+  } catch (error) {
+    return retryFailedControlUiImport(error, load, signal);
   }
+}
+
+/** Reuse a failed attempt when the import started before the retry owner was loaded. */
+export async function retryFailedControlUiImport<T>(
+  error: unknown,
+  load: () => T | Promise<T>,
+  signal?: AbortSignal,
+): Promise<T> {
+  if (!isStaleChunkImportError(error)) {
+    throw error;
+  }
+  await waitForImportReachability();
+  signal?.throwIfAborted();
+  // Vite marks CSS preloads seen before they finish; retrying can mount an unstyled page.
+  if (/unable to preload css/i.test(error.message)) {
+    throw error;
+  }
+  // Persistent module-map failures still reach the caller's guarded error surface.
+  return trackForegroundActivity(Promise.resolve(load()));
 }
 
 export function reloadControlUiDocument(url = new URL(window.location.href)): void {
@@ -421,19 +428,32 @@ export function installStaleChunkReloadListener(): () => void {
     if (!isStaleChunkImportError(event.payload) || recovering || !canReloadControlUiDocument()) {
       return;
     }
-    // Share one decision, including errors from loading the recovery chunk itself.
+    // Concurrent import failures share one serving-build decision.
     recovering = true;
     try {
       await waitForImportReachability();
       if (!active) {
         return;
       }
-      const { recoverUnclaimedImport } = await import("./stale-import-recovery.runtime.ts");
-      if (active) {
-        await recoverUnclaimedImport(controlUiDocumentUrl(), canReload);
+      const response = await fetch(controlUiDocumentUrl(), {
+        cache: "no-store",
+        headers: { "X-OpenClaw-Reachability-Probe": "1" },
+        signal: AbortSignal.timeout(DOCUMENT_PROBE_TIMEOUT_MS),
+      });
+      if (!response.ok) {
+        return;
       }
-    } catch {
+      // Public-asset/cache stamps can survive updates; use the full build identity.
+      const encoded = /globalThis\.OPENCLAW_CONTROL_UI_BUILD_INFO=(.*?);<\/script>/u.exec(
+        await response.text(),
+      )?.[1];
+      const buildInfo: unknown = encoded ? JSON.parse(encoded) : null;
+      if (isRecord(buildInfo) && buildInfo.buildId === CONTROL_UI_BUILD_INFO.buildId) {
+        return;
+      }
       await scheduleStaleChunkReload({ canReload });
+    } catch {
+      // A second interruption cannot justify replacing a usable document.
     } finally {
       recovering = false;
     }

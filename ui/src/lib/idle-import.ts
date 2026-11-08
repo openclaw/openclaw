@@ -13,22 +13,13 @@ export function createIdleImport<T>(importModule: () => Promise<T>, onLoaded?: (
   };
 
   const run = (): Promise<T> => {
-    if (moduleLoad) {
-      return moduleLoad;
-    }
-    const attempt = importModule();
-    moduleLoad = attempt
-      .catch(async () => {
-        const { retryControlUiImport } = await import("../app/stale-chunk-reload.ts");
-        // Adopt the failed attempt without requesting the chunk again while offline.
-        return retryControlUiImport(
-          () => {
-            requireActive();
-            return importModule();
-          },
-          undefined,
-          attempt,
-        );
+    moduleLoad ??= importModule()
+      .catch(async (error: unknown) => {
+        const { retryFailedControlUiImport } = await import("../app/stale-chunk-reload.ts");
+        return retryFailedControlUiImport(error, () => {
+          requireActive();
+          return importModule();
+        });
       })
       .then((value) => {
         requireActive();
