@@ -382,4 +382,76 @@ suite.define(() => {
       );
     },
   );
+
+  it("keeps a boundary emoji whole in the recorded failure cause", async () => {
+    const artifactDir = captureUiProof
+      ? createControlUiE2eArtifactDir("update-triage-emoji-boundary")
+      : undefined;
+    await suite.withPage(
+      {
+        colorScheme: "dark",
+        locale: "en-US",
+        serviceWorkers: "block",
+        viewport: { height: 1_000, width: 1_400 },
+        recordVideo: artifactDir
+          ? { dir: artifactDir, size: { height: 1_000, width: 1_400 } }
+          : undefined,
+      },
+      async ({ page }) => {
+        const errors: string[] = [];
+        page.on("pageerror", (error) => errors.push(String(error)));
+        // One stderr line whose trailing emoji straddles the 180-code-unit
+        // cause cap (MAX_UPDATE_FAILURE_CAUSE_CHARS): the 181st unit splits
+        // the lobster pair, so a raw slice leaves a dangling high surrogate
+        // while the surrogate-safe clip keeps the whole emoji.
+        const prefix = "npm ERR! code ELIFECYCLE ";
+        const causeCap = 180;
+        const tail = `${prefix}${"x".repeat(causeCap - prefix.length - 3)}🦞😀`;
+        expect(tail.length).toBeGreaterThan(causeCap);
+        expect(tail.slice(0, causeCap).isWellFormed()).toBe(false);
+        const gateway = await installMockGateway(page, {
+          featureMethods: [...defaultControlUiFeatureMethods, "openclaw.chat"],
+          methodResponses: {
+            "update.status": {
+              sentinel: {
+                kind: "update",
+                status: "error",
+                ts: 1_700_000_000_001,
+                stats: {
+                  handoffId: "update-triage-emoji-boundary",
+                  mode: "npm",
+                  reason: "global-install-failed",
+                  before: { version: "1.0.0" },
+                  after: { version: "1.0.0" },
+                  steps: [{ name: "install", log: { exitCode: 1, stderrTail: tail } }],
+                },
+              },
+              schedule: SCHEDULE,
+            },
+          },
+        });
+        await page.goto(`${suite.server.baseUrl}settings/updates`);
+        await gateway.waitForRequest("update.status");
+        const status = page.locator("#config-section-update .settings-status");
+        await status.getByText("openclaw triage", { exact: false }).waitFor();
+        const text = (await status.textContent()) ?? "";
+        // Capture the rendered state before asserting so both the red (base)
+        // and green (fix) runs produce a before/after screenshot pair.
+        if (artifactDir) {
+          await page.screenshot({
+            animations: "disabled",
+            path: path.join(artifactDir, "01-emoji-boundary-status.png"),
+          });
+        }
+        // The cause clip keeps the emoji whole: the banner text stays
+        // well-formed and the period of "failed at {step}: {cause}." follows
+        // the lobster directly, with no dangling surrogate or replacement
+        // glyph in between.
+        expect(text.isWellFormed()).toBe(true);
+        expect(text).toContain("🦞.");
+        expect(text).not.toContain("\uFFFD");
+        expect(errors).toEqual([]);
+      },
+    );
+  });
 });
