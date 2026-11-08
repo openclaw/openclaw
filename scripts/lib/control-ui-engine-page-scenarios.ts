@@ -2185,8 +2185,8 @@ export function createEnginePageScenarios(
           });
           void timingRead.catch(() => undefined);
           const readyAt = await page.waitForFunction(
-            (selector) => {
-              const input = document.querySelector<HTMLInputElement>(selector);
+            (inputSelector) => {
+              const input = document.querySelector<HTMLInputElement>(inputSelector);
               return input?.checkVisibility() && !input.disabled ? performance.now() : false;
             },
             selector,
