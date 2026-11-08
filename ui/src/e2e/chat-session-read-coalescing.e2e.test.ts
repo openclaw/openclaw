@@ -156,6 +156,11 @@ suite.define(() => {
         })
         .toBeGreaterThan(0);
       await settle();
+      // Startup invalidations may supersede pending descriptors. Observe overlaps
+      // from the same settled boundary as the controlled burst's request counts.
+      await page.evaluate(() => {
+        window.readCoalescingWire.duplicates.length = 0;
+      });
       expect(await count("board.get")).toBeGreaterThan(0);
       expect(await count("sessions.describe", { key: "agent:main:main" })).toBeGreaterThan(0);
       const describes = () => count("sessions.describe", { key });
