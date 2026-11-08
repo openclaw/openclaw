@@ -39,7 +39,8 @@ function modelsText(card: ModelProviderCard): string | null {
   if (card.modelCount === 0) {
     return null;
   }
-  if (card.availableModelCount < card.modelCount) {
+  // Unknown readiness (for example native Ollama rows) is not unavailability (#195247).
+  if (card.unavailableModelCount > 0) {
     return card.modelCount === 1
       ? t("modelProviders.modelsAvailableOne", { available: String(card.availableModelCount) })
       : t("modelProviders.modelsAvailable", {

@@ -87,6 +87,8 @@ export type ModelProviderCard = ProviderPresentation & {
   configApiKeys: Array<{ key: string; reference: boolean }>;
   modelCount: number;
   availableModelCount: number;
+  /** Models the catalog reports definitively unavailable; unknown readiness is not counted. */
+  unavailableModelCount: number;
   catalogStatus?: ModelCatalogProviderOutcome["status"];
   checkingModels?: boolean;
   /** Live provider-reported usage (quota windows, billing, cost history). */
@@ -147,6 +149,7 @@ function ensureDraft(drafts: CardDraft[], id: string, displayName: string): Card
       configApiKeys: [],
       modelCount: 0,
       availableModelCount: 0,
+      unavailableModelCount: 0,
     },
     hasModelAuth: false,
   };
@@ -266,6 +269,8 @@ export function buildModelProviderCards(input: ModelProviderCardsInput): ModelPr
     draft.card.modelCount += 1;
     if (entry.available === true) {
       draft.card.availableModelCount += 1;
+    } else if (entry.available === false) {
+      draft.card.unavailableModelCount += 1;
     }
   }
 

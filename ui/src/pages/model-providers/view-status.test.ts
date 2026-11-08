@@ -195,15 +195,19 @@ it("keeps one signal per state: the row speaks for an only account, not beside o
 });
 
 it("counts a provider's only unavailable model in the singular", () => {
+  const unavailable = { availableModelCount: 0, unavailableModelCount: 1 };
   const container = mount(
-    props({ cards: [card({ modelCount: 1, availableModelCount: 0 })], configuredModels: [] }),
+    props({ cards: [card({ modelCount: 1, ...unavailable })], configuredModels: [] }),
   );
   expect(text(container.querySelector(".provider-row__meta"))).toContain("0 of 1 model available");
-  mount(
-    props({ cards: [card({ modelCount: 3, availableModelCount: 2 })], configuredModels: [] }),
-    container,
-  );
+  const partly = { modelCount: 3, availableModelCount: 2, unavailableModelCount: 1 };
+  mount(props({ cards: [card(partly)], configuredModels: [] }), container);
   expect(text(container.querySelector(".provider-row__meta"))).toContain("2 of 3 models available");
+  // Unknown readiness is not reported as unavailability (#195247).
+  const unknown = { modelCount: 4, availableModelCount: 0, unavailableModelCount: 0 };
+  mount(props({ cards: [card(unknown)], configuredModels: [] }), container);
+  expect(text(container.querySelector(".provider-row__meta"))).toContain("4 models");
+  expect(text(container.querySelector(".provider-row__meta"))).not.toContain("available");
 });
 
 it("hands the accent to an open API key form", () => {
