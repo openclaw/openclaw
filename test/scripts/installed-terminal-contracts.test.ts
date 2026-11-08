@@ -147,7 +147,7 @@ it("rejects a freshly self-certified application closure", () => {
       {
         roles: {
           "sqlite-session": {
-            sha256: "73e725f0ee31c0835be61bd11e358ef1a6d3412b6198e6b162792c21d3d9c5a6",
+            sha256: "01c50197c9841106d1b831f82e6ece528830218986de457aebb1fc86a9d2380e",
             files: [],
           },
         },
