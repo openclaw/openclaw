@@ -91,16 +91,24 @@ createInterface({ input: process.stdin }).on("line", (line) => {
     }
     reply(id, result);
   } else if (method === "model/list") {
-    if (process.env.MUSE_FIXTURE_CATALOG_PATH) {
-      reply(id, JSON.parse(readFileSync(process.env.MUSE_FIXTURE_CATALOG_PATH, "utf8")));
+    const result = process.env.MUSE_FIXTURE_CATALOG_PATH
+      ? JSON.parse(readFileSync(process.env.MUSE_FIXTURE_CATALOG_PATH, "utf8"))
+      : {
+          providerId: "meta",
+          profileId: "fixture",
+          source: process.env.MUSE_FIXTURE_CATALOG_SOURCE ?? "providerCatalog",
+          models: [{ providerId: "meta", modelId: "muse-spark-1.3" }],
+        };
+    if (process.env.MUSE_FIXTURE_CATALOG_GATE) {
+      const gate = createConnection(process.env.MUSE_FIXTURE_CATALOG_GATE);
+      gate.on("connect", () => gate.write(String(process.pid)));
+      gate.once("data", () => {
+        reply(id, result);
+        gate.end();
+      });
       return;
     }
-    reply(id, {
-      providerId: "meta",
-      profileId: "fixture",
-      source: process.env.MUSE_FIXTURE_CATALOG_SOURCE ?? "providerCatalog",
-      models: [{ providerId: "meta", modelId: "muse-spark-1.3" }],
-    });
+    reply(id, result);
   } else if (method === "session/start" || method === "session/resume") {
     const resumed = method === "session/resume";
     // Muse 1.3 uses `internal` for retained sessions it can no longer compose.

@@ -4,6 +4,7 @@ import { createServer, type Socket } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { awaitGateBeforeSettlement, withinTest } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import original from "../../../test/fixtures/model-catalog/muse-meta-account.json" with { type: "json" };
 import expected from "../../../test/fixtures/model-catalog/muse-meta-expected.json" with { type: "json" };
@@ -95,3 +96,81 @@ it.runIf(process.platform !== "win32")("closes a catalog host cancelled at start
     await reader.dispose();
   }
 });
+
+it.runIf(process.platform !== "win32").for(["none", "first", "both"])(
+  "isolates shared catalog cancellation and drains the last reader (%s)",
+  async (cancelMode, { signal }) => {
+    const sockets: Socket[] = [];
+    const firstRequest = Promise.withResolvers<number>();
+    const secondRequest = Promise.withResolvers<number>();
+    const pending: Promise<unknown>[] = [];
+    await using server = createServer((socket) => {
+      sockets.push(socket);
+      const ready = sockets.length === 1 ? firstRequest : secondRequest;
+      socket.once("data", (pid) => ready.resolve(Number(pid)));
+    });
+    const gatePath = join(workspace, "catalog.sock");
+    await once(server.listen(gatePath), "listening");
+    vi.stubEnv("MUSE_FIXTURE_CATALOG_GATE", gatePath);
+    const firstController = new AbortController();
+    const secondController = new AbortController();
+    const cancelled = new Error("catalog reader cancelled");
+    const first = reader.read(context(firstController.signal));
+    const firstOutcome = first.then(
+      (models) => ({ models }),
+      (error: unknown) => ({ error }),
+    );
+    pending.push(firstOutcome);
+    try {
+      const pid = await withinTest(
+        awaitGateBeforeSettlement(
+          firstRequest.promise,
+          first,
+          "First catalog request did not arrive",
+        ),
+        signal,
+      );
+      const second = reader.read(context(secondController.signal));
+      const secondOutcome = second.then(
+        (models) => ({ models }),
+        (error: unknown) => ({ error }),
+      );
+      pending.push(secondOutcome);
+      expect(
+        await withinTest(
+          awaitGateBeforeSettlement(
+            secondRequest.promise,
+            second,
+            "Second catalog request did not arrive",
+          ),
+          signal,
+        ),
+      ).toBe(pid);
+      if (cancelMode === "none") {
+        sockets[0]!.write("resume");
+        expect(await withinTest(firstOutcome, signal)).toEqual({ models: expected });
+      } else {
+        firstController.abort(cancelled);
+        expect(await withinTest(firstOutcome, signal)).toEqual({ error: cancelled });
+        expect(() => process.kill(pid, 0)).not.toThrow();
+      }
+      if (cancelMode === "both") {
+        secondController.abort(cancelled);
+        expect(await withinTest(secondOutcome, signal)).toEqual({ error: cancelled });
+      } else {
+        sockets[1]!.write("resume");
+        expect(await withinTest(secondOutcome, signal)).toEqual({ models: expected });
+      }
+      if (cancelMode !== "none") {
+        expect(() => process.kill(pid, 0)).toThrow();
+      }
+    } finally {
+      // Drain the deliberately broken base without relying on a successful reply.
+      for (const socket of sockets) {
+        socket.destroy();
+      }
+      await reader.dispose();
+      await Promise.allSettled(pending);
+    }
+  },
+);
