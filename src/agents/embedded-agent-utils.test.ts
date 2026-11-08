@@ -3,7 +3,10 @@
  * Verifies visible text extraction, reasoning formatting, and thinking-tag promotion.
  */
 import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
-import { describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it, vi } from "vitest";
+import { MESSAGE_TOOL_DELIVERY_HINTS } from "../auto-reply/reply/delivery-hints.js";
+import * as inboundMetadata from "../auto-reply/reply/strip-inbound-meta.js";
+import { trimTextPreservingCode } from "../shared/text/text-projection.js";
 import {
   createAssistantVisibleStreamText,
   extractEmbeddedAssistantText,
@@ -19,6 +22,9 @@ import {
   stripDowngradedToolCallText,
 } from "./embedded-agent-utils.js";
 import { createZeroUsageFixture } from "./test-helpers/usage-fixtures.js";
+
+const inbound = vi.spyOn(inboundMetadata, "stripInboundMetadata");
+afterAll(() => inbound.mockRestore());
 
 const REFERENCE_THINKING_TAG_NAME_PATTERN = String.raw`(?:(?:antml:|mm:)?(?:think(?:ing)?|thought)|antthinking)`;
 const REFERENCE_THINKING_TAG_OPEN_RE = new RegExp(
@@ -86,6 +92,87 @@ function makeAssistantMessage(
 }
 
 describe("createAssistantVisibleStreamText", () => {
+  it.each(["[docs](https://example.com) ", "Context: "])(
+    "bounds metadata work after ordinary %s and resets on replacement",
+    (prefix) => {
+      const body = "Read [docs](https://example.com) and [notes]. ".repeat(128) + "Done.";
+      const source = prefix + body;
+      const stream = createAssistantVisibleStreamText();
+      for (const replace of [false, true]) {
+        stream.replace("");
+        inbound.mockClear();
+        if (replace) {
+          stream.replace(prefix);
+        } else {
+          for (const char of prefix) {
+            stream.append(char);
+          }
+        }
+        for (let offset = 0; offset < body.length; offset += 4) {
+          stream.append(body.slice(offset, offset + 4));
+        }
+        const work = inbound.mock.calls.reduce((total, [text]) => total + text.length, 0);
+        expect(stream.text).toBe(source);
+        expect(work).toBeLessThan(source.length * 2);
+      }
+    },
+  );
+
+  it.each([
+    ["timestamp", "[Mon 2026-10-24 12:34 UTC] Visible answer", "Visible answer"],
+    [
+      "long timestamp",
+      "[Mon 2026-10-24 12:34 " + "zone ".repeat(16) + "] Visible answer",
+      "Visible answer",
+    ],
+    ...MESSAGE_TOOL_DELIVERY_HINTS.map((hint) => [
+      "delivery hint",
+      hint + "\nVisible answer",
+      "Visible answer",
+    ]),
+    [
+      "ordinary brackets",
+      "[docs](https://example.com)\nContext: ordinary prose",
+      "[docs](https://example.com)\nContext: ordinary prose",
+    ],
+    [
+      "active memory",
+      "\n\tContext: \t\r\n<active_memory_plugin>\nPrivate context\n</active_memory_plugin>\n\nVisible answer",
+      "Visible answer",
+    ],
+    [
+      "metadata",
+      'Conversation info: ⟦openclaw:ctx⟧\n```json\n{"id":"synthetic"}\n```\n\nVisible answer',
+      "Visible answer",
+    ],
+    ...["\u2028", "\u2029"].map((boundary) => [
+      "Unicode line boundary",
+      "Before.\nContext:" +
+        boundary +
+        "\n<active_memory_plugin>\nPrivate context\n</active_memory_plugin>\n\nVisible answer",
+      "Before.\nVisible answer",
+    ]),
+  ])("preserves metadata semantics at every split: %s", (_name, source, expected) => {
+    const stream = createAssistantVisibleStreamText("final_answer");
+    for (let split = 0; split <= source.length; split++) {
+      stream.replace("");
+      let prefix = "";
+      let delivered = "";
+      for (const chunk of [source.slice(0, split), source.slice(split)]) {
+        prefix += chunk;
+        const result = stream.append(chunk);
+        delivered = result.delta === null ? result.text : delivered + result.delta;
+        expect(result.text).toBe(
+          trimTextPreservingCode(sanitizeAssistantVisibleStreamText(prefix, "final_answer")),
+        );
+        expect(delivered).toBe(result.text);
+      }
+      expect(stream.text).toBe(expected);
+    }
+    stream.replace("[ordinary] Context: literal");
+    expect(stream.append(" answer").text).toBe("[ordinary] Context: literal answer");
+  });
+
   it("withholds a split runtime-context header until ordinary text diverges", () => {
     const privateStream = createAssistantVisibleStreamText();
 
