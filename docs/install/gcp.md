@@ -175,11 +175,14 @@ Check that your account has Compute OS Login or Compute OS Admin Login permissio
 
 ### Resize after an out-of-memory build
 
+Choose a machine with more memory than the current VM. For the recommended
+`e2-standard-2` (8 GB), upgrade to `e2-standard-4` (16 GB):
+
 ```bash
 gcloud compute instances stop openclaw-gateway --zone=us-central1-a
 gcloud compute instances set-machine-type openclaw-gateway \
   --zone=us-central1-a \
-  --machine-type=e2-medium
+  --machine-type=e2-standard-4
 gcloud compute instances start openclaw-gateway --zone=us-central1-a
 ```
 
