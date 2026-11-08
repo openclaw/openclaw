@@ -15,7 +15,6 @@ import { classifyActiveMemoryWorkspacePaths } from "../plugins/memory-runtime.js
 import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 import { settleCurrentReadPreparations } from "../shared/current-read-authority.js";
 import { resolveUserPath } from "../utils.js";
-import { hasAgentRosterProperty } from "./agent-scope-config.js";
 import {
   resolveAgentConfig,
   resolveAgentWorkspaceDir,
@@ -287,7 +286,7 @@ async function resolveBootstrapFiles(
   // Personal instructions belong to the editor's configured agent workspace,
   // independently of the worktree that owns project bootstrap files.
   const personalWorkspaceDir = resolveUserPath(
-    params.bootstrapUserProfileId && params.config && hasAgentRosterProperty(params.config)
+    params.bootstrapUserProfileId && params.config
       ? resolveAgentWorkspaceDir(params.config, resolveSessionAgentId(params))
       : params.workspaceDir,
   );

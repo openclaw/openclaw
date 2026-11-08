@@ -37,7 +37,7 @@ const noSearchRuntime = (): MemoryPluginRuntime => ({
 
 type MemoryPath = [path: string, origin: "agent" | "untrusted", source?: string | null];
 
-it.each(["agent", "worktree"] as const)(
+it.each(["agent", "worktree", "roster-less worktree"] as const)(
   "loads configured personal instructions in %s sessions and quarantines untrusted writes",
   (mode) =>
     withOpenClawTestState({ scenario: "minimal" }, async (state) => {
@@ -51,8 +51,9 @@ it.each(["agent", "worktree"] as const)(
       await fs.mkdir(path.dirname(personalFile), { recursive: true });
       await fs.writeFile(path.join(workspaceDir, "USER.md"), "Shared preferences");
       await fs.writeFile(personalFile, "Personal preferences");
-      const bootstrapDir = mode === "worktree" ? state.statePath("task") : workspaceDir;
-      if (mode === "worktree") {
+      const worktree = mode !== "agent";
+      const bootstrapDir = worktree ? state.statePath("task") : workspaceDir;
+      if (worktree) {
         const decoy = path.join(bootstrapDir, "users", profile.id, "USER.md");
         await fs.mkdir(path.dirname(decoy), { recursive: true });
         await fs.writeFile(decoy, "Worktree profile must not override saved preferences");
@@ -64,13 +65,17 @@ it.each(["agent", "worktree"] as const)(
       const load = async () => {
         const { contextFiles } = await resolveBootstrapContextForRun({
           workspaceDir: bootstrapDir,
-          config: { agents: { entries: { main: { workspace: workspaceDir } } } },
+          // CLI runs may carry only agents.defaults.workspace.
+          config:
+            mode === "roster-less worktree"
+              ? { agents: { defaults: { workspace: workspaceDir } } }
+              : { agents: { entries: { main: { workspace: workspaceDir } } } },
           agentId: "main",
           sessionKey: "agent:main:person",
           bootstrapUserProfileId: profile.id,
           warn: (message) => warnings.push(message),
         });
-        if (mode === "worktree") {
+        if (worktree) {
           expect(contextFiles.some((file) => file.content === "Task project instructions")).toBe(
             true,
           );
