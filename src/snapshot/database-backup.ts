@@ -8,7 +8,6 @@ import {
   isConfigReadFailure,
 } from "../config/io.invalid-config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { SecretRef } from "../config/types.secrets.js";
 import { resolveDatabaseEngineSelection } from "../infra/database-engine/config.js";
 import {
   getScopedDatabaseEngineSelection,
@@ -27,6 +26,7 @@ import { runtimeProcessEntrypoints } from "../infra/runtime-process-entrypoints.
 import { captureRuntimeWorkerSource } from "../infra/runtime-worker-generation.js";
 import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import type { SqliteSnapshotValidator } from "../infra/sqlite-snapshot.types.js";
+import { resolveDefaultSecretProviderAlias } from "../secrets/ref-contract.js";
 import type { BackupTask, Capture, Restore } from "./database-backup.operations.js";
 import type { PostgresExportEnvelope } from "./export-envelope.js";
 import type { GitBackupIdentity, GitBackupManifest } from "./git-backup-codec.js";
@@ -50,8 +50,8 @@ export async function runOfflineDatabaseBackup<T>(
         configSourcePath?: string;
         mapIncludePath?: (absolutePath: string) => string;
         env?: NodeJS.ProcessEnv;
-        /** Replaces only the captured `database.postgres.connection` for this run. */
-        postgresConnection?: SecretRef;
+        /** Replaces only the captured `database.postgres.connection` with this env var for this run. */
+        postgresConnectionEnv?: string;
       },
   /** Archive capture reads a running owner's stores through per-store snapshots. */
   options?: { online?: true },
@@ -113,14 +113,19 @@ export async function runOfflineDatabaseBackup<T>(
             : createInvalidConfigError(snapshot.path, details);
         }
         config = snapshot.config;
-        if (capturedPaths?.postgresConnection) {
+        if (capturedPaths?.postgresConnectionEnv) {
           config = {
             ...config,
             database: {
               ...config.database,
               postgres: {
                 ...config.database?.postgres,
-                connection: capturedPaths.postgresConnection,
+                // The captured config owns its env provider alias and allowlist.
+                connection: {
+                  source: "env",
+                  provider: resolveDefaultSecretProviderAlias(config, "env"),
+                  id: capturedPaths.postgresConnectionEnv,
+                },
               },
             },
           };

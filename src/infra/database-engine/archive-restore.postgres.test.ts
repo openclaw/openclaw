@@ -66,10 +66,17 @@ describe.skipIf(!connection)("whole-archive PostgreSQL restore", () => {
       scenario: "override",
       name: "imports into the --postgres-connection-env server while the archived connection resolves elsewhere",
     },
+    {
+      scenario: "override-alias",
+      name: "imports into the --postgres-connection-env server through the captured env provider alias",
+    },
   ])(
     "$name",
     async ({ scenario }) => {
       const sqliteAgent = scenario === "mixed";
+      const override = scenario === "override" || scenario === "override-alias";
+      // A custom env default with no provider named "default"; its allowlist must still apply.
+      const envProvider = scenario === "override-alias" ? "primary" : "default";
       const clientIdentity =
         scenario === "credentials" ? generateStoredDeviceIdentity(23) : undefined;
       assert(connection);
@@ -101,11 +108,27 @@ describe.skipIf(!connection)("whole-archive PostgreSQL restore", () => {
                   postgres: {
                     connection: {
                       source: "env",
-                      provider: "default",
+                      provider: envProvider,
                       id: "OPENCLAW_ARCHIVE_TEST_PG",
                     },
                   },
                 },
+                ...(envProvider === "primary"
+                  ? {
+                      secrets: {
+                        defaults: { env: "primary" },
+                        providers: {
+                          primary: {
+                            source: "env" as const,
+                            allowlist: [
+                              "OPENCLAW_ARCHIVE_TEST_PG",
+                              "OPENCLAW_ARCHIVE_TEST_RECOVERY_PG",
+                            ],
+                          },
+                        },
+                      },
+                    }
+                  : {}),
                 agents: {
                   ...(sqliteAgent ? { defaults: { workspace: state.path("workspace") } } : {}),
                   entries: { main: {} },
@@ -363,7 +386,7 @@ describe.skipIf(!connection)("whole-archive PostgreSQL restore", () => {
                   await fs.unlink(store.file);
                 }
                 // The override scenario keeps the archived connection on the source server.
-                if (scenario === "override") {
+                if (override) {
                   process.env.OPENCLAW_ARCHIVE_TEST_RECOVERY_PG = recoveryConnection.href;
                 } else {
                   process.env.OPENCLAW_ARCHIVE_TEST_PG = recoveryConnection.href;
@@ -421,7 +444,7 @@ describe.skipIf(!connection)("whole-archive PostgreSQL restore", () => {
                     restored = await backupRestoreCommand(createTestRuntime(), {
                       archive: backup.archivePath,
                       target: targetPath,
-                      ...(scenario === "override"
+                      ...(override
                         ? { postgresConnectionEnv: "OPENCLAW_ARCHIVE_TEST_RECOVERY_PG" }
                         : {}),
                     });
@@ -503,7 +526,7 @@ describe.skipIf(!connection)("whole-archive PostgreSQL restore", () => {
                   ).toEqual([]);
 
                   expect(await fs.readFile(restoredConfig)).toEqual(configBytes);
-                  if (scenario === "override") {
+                  if (override) {
                     expect(restored).toMatchObject({
                       postgresConnectionEnv: "OPENCLAW_ARCHIVE_TEST_RECOVERY_PG",
                     });

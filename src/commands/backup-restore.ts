@@ -4,11 +4,7 @@ import { isPathInside } from "@openclaw/fs-safe/path";
 import * as tar from "tar";
 import { terminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { readConfigFileSnapshot, resolveStateDir } from "../config/config.js";
-import {
-  DEFAULT_SECRET_PROVIDER_ALIAS,
-  isValidEnvSecretRefId,
-  type SecretRef,
-} from "../config/types.secrets.js";
+import { isValidEnvSecretRefId } from "../config/types.secrets.js";
 import { buildBackupArchivePath } from "../infra/backup-archive-path-policy.js";
 import { prepareRestoredClientCredentials } from "../infra/client-credential-restore.js";
 import { formatDiskSpaceBytes, tryReadDiskSpace } from "../infra/disk-space.js";
@@ -151,7 +147,7 @@ async function restorePostgresExports(
   recoveryConfigContextPath: string | undefined,
   archiveRoot: string,
   publishCompanions?: () => void,
-  postgresConnection?: SecretRef,
+  postgresConnectionEnv?: string,
 ): Promise<void> {
   if (candidates.length === 0) {
     publishCompanions?.();
@@ -254,7 +250,7 @@ async function restorePostgresExports(
     {
       configPath: path.join(targetPath, recoveryConfigContextPath ?? recoveryConfigPath),
       configSourcePath: configPath,
-      ...(postgresConnection ? { postgresConnection } : {}),
+      ...(postgresConnectionEnv ? { postgresConnectionEnv } : {}),
       env: {
         ...process.env,
         OPENCLAW_INCLUDE_ROOTS: path.join(targetPath, archiveRoot, "payload"),
@@ -367,9 +363,7 @@ export async function backupRestoreCommand(
       recoveryConfigContextPath,
       verified.archiveRoot,
       restoreClientCredentials,
-      postgresConnectionEnv === undefined
-        ? undefined
-        : { source: "env", provider: DEFAULT_SECRET_PROVIDER_ALIAS, id: postgresConnectionEnv },
+      postgresConnectionEnv,
     );
   } catch (extractionError) {
     try {

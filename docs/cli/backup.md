@@ -330,6 +330,8 @@ To import into a different server without changing that secret, for example a
 staging database for a restore drill, pass
 `--postgres-connection-env <name>`: every PostgreSQL import, and the cleanup
 after a failed import, uses the DSN in that environment variable instead. The
+variable is read through the archived config's default env secret provider
+(`secrets.defaults.env`, or `default`), including its allowlist. The
 captured family selections still apply, and the restored config keeps the
 archived connection unchanged, so point that connection at the same server
 before activating the restore.
