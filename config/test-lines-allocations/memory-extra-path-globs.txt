@@ -1,2 +1,0 @@
-# Explicit glob expectations and hidden-file read authorization regressions.
-35

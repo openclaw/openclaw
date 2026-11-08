@@ -4,7 +4,7 @@ import { homedir } from "node:os";
 import path from "node:path";
 import { detectMime } from "@openclaw/media-core/mime";
 import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
-import { Minimatch } from "minimatch";
+import { Minimatch, type MinimatchOptions } from "minimatch";
 import { runWithConcurrency } from "./concurrency.js";
 import { MEMORY_HOST_ROOT_FILENAME, normalizeConfiguredMemoryExtraPaths } from "./config-utils.js";
 import { estimateStructuredEmbeddingInputBytes } from "./embedding-input-limits.js";
@@ -99,7 +99,10 @@ function expandHomePath(value: string): string {
 type NormalizedExtraMemoryPath = { path: string; pattern?: string; evergreen?: true };
 
 // Parsed patterns live only as long as their configured scan/read entry.
-const extraMemoryPathMatchers = new WeakMap<NormalizedExtraMemoryPath, Minimatch>();
+const extraMemoryPathMatchers = new WeakMap<
+  NormalizedExtraMemoryPath,
+  { file: Minimatch; directories?: Minimatch[] }
+>();
 
 export function normalizeExtraMemoryPathEntries(
   workspaceDir: string,
@@ -146,9 +149,9 @@ export function matchesExtraMemoryPathEntry(
       return false;
     }
     const normalizedRelativePath = relativePath.replaceAll(path.sep, "/");
-    let matcher = extraMemoryPathMatchers.get(entry);
-    if (!matcher || matcher.pattern !== entry.pattern) {
-      matcher = new Minimatch(entry.pattern, {
+    let matchers = extraMemoryPathMatchers.get(entry);
+    if (!matchers || matchers.file.pattern !== entry.pattern) {
+      const matcherOptions: MinimatchOptions = {
         dot: false,
         nonegate: true,
         nocomment: true,
@@ -158,10 +161,28 @@ export function matchesExtraMemoryPathEntry(
         platform: "linux",
         nocase: process.platform === "win32" || process.platform === "darwin",
         nocaseMagicOnly: true,
-      });
-      extraMemoryPathMatchers.set(entry, matcher);
+      };
+      const segments = entry.pattern.split("/");
+      const conservative =
+        /[{[(]/.test(entry.pattern) ||
+        segments.some((segment) => segment === "." || segment === "..");
+      const parentCount = segments.at(-1) === "**" ? segments.length : segments.length - 1;
+      matchers = {
+        file: new Minimatch(entry.pattern, matcherOptions),
+        // Prefix matches preserve dot rules; partial matches can enter hidden directories.
+        directories: conservative
+          ? undefined
+          : Array.from(
+              { length: parentCount },
+              (_, index) => new Minimatch(segments.slice(0, index + 1).join("/"), matcherOptions),
+            ),
+      };
+      extraMemoryPathMatchers.set(entry, matchers);
     }
-    return matcher.match(normalizedRelativePath, options?.directory);
+    return options?.directory
+      ? !matchers.directories ||
+          matchers.directories.some((matcher) => matcher.match(normalizedRelativePath))
+      : matchers.file.match(normalizedRelativePath);
   } catch {
     return false;
   }
