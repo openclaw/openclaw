@@ -1,0 +1,2 @@
+# GitHub detail cache elapsed-time regression (backward wall-clock step must not keep expired entries alive).
+24
