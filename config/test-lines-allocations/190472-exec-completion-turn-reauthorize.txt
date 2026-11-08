@@ -1,2 +1,0 @@
-# Exec completion reauthorization regression: exact measured net test-line growth at the rebased head.
-25
