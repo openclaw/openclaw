@@ -98,6 +98,12 @@ metadata: |
             ("comment-skill", "'Summarize user''s # <reports>' # notes", False),
             ("comment-skill", "Summarize#<reports>", False),
             ("comment-skill", "|\n  Summarize # <reports>", False),
+            ("comment-skill", "Summarize\n  reports # <notes>", True),
+            ("comment-skill", "\n  Summarize reports # <notes>", True),
+            ("comment-skill", "Summarize\n  reports # " + "x" * 1024, True),
+            ("comment-skill", 'Summarize\n  "reports # <notes>', True),
+            ("comment-skill", '"Summarize\n  reports # <content>"', False),
+            ("comment-skill", '\n  "Summarize # <content>"', False),
         ]
         with patch.object(quick_validate, "yaml", None):
             for name, description, expected in cases:
