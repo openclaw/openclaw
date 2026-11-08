@@ -361,7 +361,9 @@ creation has a token or password auth path.
    credentials are not automatically replaced, including after revocation.
    After upgrading, reconnecting an already full-access app also prepares Share
    if it has no credential yet. Existing identities and credentials are reused;
-   reconnecting does not restore revoked Share access.
+   reconnecting does not restore revoked or removed Share access. To restore it,
+   set up the app again with a new full-access code; a revoked Share identity
+   then needs `openclaw devices approve`.
    Limited connections still require separate Share approval. Cloudflare Access
    Gateways continue to require sending from the foreground app.
 

@@ -135,8 +135,10 @@ struct ShareGatewayRelayPairingTests {
         await owner.disconnect()
     }
 
-    @Test(.stateDirectoryIsolated)
-    func `rejected Share credentials remain stored and cannot trigger automatic reenrollment`() async throws {
+    @Test(.stateDirectoryIsolated, arguments: ["AUTH_DEVICE_TOKEN_MISMATCH", "AUTH_TOKEN_MISMATCH"])
+    func `rejected Share credentials remain stored and cannot trigger automatic reenrollment`(
+        code: String) async throws
+    {
         let url = try #require(URL(string: "wss://gateway.example.invalid"))
         let gatewayID = "revoked-share-gateway"
         let identity = try #require(DeviceIdentityStore.loadOrCreatePersisted(profile: .shareExtension))
@@ -148,8 +150,8 @@ struct ShareGatewayRelayPairingTests {
             profile: .shareExtension))
         let before = DeviceAuthStore.loadToken(deviceId: identity.deviceId, role: "node", gatewayID: gatewayID)
         let rejectedSocket = FakeGatewayWebSocketSession(connectError: [
-            "code": "UNAVAILABLE", "message": "device token mismatch",
-            "details": ["code": "AUTH_DEVICE_TOKEN_MISMATCH"],
+            "code": "UNAVAILABLE", "message": "token mismatch",
+            "details": ["code": code],
         ])
         let share = GatewayNodeSession()
         do {
@@ -163,7 +165,7 @@ struct ShareGatewayRelayPairingTests {
                 onInvoke: { req in BridgeInvokeResponse(id: req.id, ok: false) })
             Issue.record("Revoked Share access should be rejected")
         } catch {
-            #expect((error as? GatewayConnectAuthError)?.detail == .authDeviceTokenMismatch)
+            #expect((error as? GatewayConnectAuthError)?.detailCode == code)
         }
         await share.disconnect()
         #expect(DeviceAuthStore.loadToken(
