@@ -986,34 +986,7 @@ it("renders global plugin settings when the Gateway connects after the page moun
   expect(methodCalls(harness.request, "config.schema")).toHaveLength(1);
 });
 
-it("reloads the missing schema after a failed schema read", async () => {
-  const firstSchema = deferred<(typeof configMocks)["config.schema"]>();
-  let attempts = 0;
-  const harness = await mountSettings({
-    connected: true,
-    schema: () =>
-      ++attempts === 1 ? firstSchema.promise : Promise.resolve(configMocks["config.schema"]),
-  });
-  await harness.runtimeConfig.ensureLoaded();
-  firstSchema.reject(new Error("Schema temporarily unavailable"));
-  await harness.settle();
-  expect(harness.page.querySelector('[role="alert"]')?.textContent).toContain(
-    "Schema temporarily unavailable",
-  );
-
-  const reload = harness.page.querySelector<HTMLButtonElement>('[aria-label="Reload"]');
-  expect(reload).not.toBeNull();
-  const reloads = vi.spyOn(harness.runtimeConfig, "discardDraft");
-  reload?.click();
-  await Promise.all(reloads.mock.results.map((result) => result.value));
-  await harness.settle();
-
-  await expectAdvancedFields(harness.page);
-  expect(attempts).toBe(2);
-  expect(harness.request.mock.calls.some(([method]) => method === "config.set")).toBe(false);
-});
-
-it("keeps settings navigation available during a held schema retry", async () => {
+it.each(["Reload", "Retry"])("recovers a failed schema read through %s", async (action) => {
   const first = deferred<(typeof configMocks)["config.schema"]>();
   const retry = deferred<(typeof configMocks)["config.schema"]>();
   let attempts = 0;
@@ -1026,16 +999,23 @@ it("keeps settings navigation available during a held schema retry", async () =>
   await harness.settle();
   const alert = () => harness.page.querySelector('[role="alert"]');
   expect(alert()?.textContent).toContain("Schema temporarily unavailable");
-  alert()?.querySelector<HTMLButtonElement>("button")?.click();
+  const reload = harness.page.querySelector<HTMLButtonElement>('[aria-label="Reload"]');
+  const reloads = vi.spyOn(harness.runtimeConfig, "discardDraft");
+  const trigger =
+    action === "Reload" ? reload : alert()?.querySelector<HTMLButtonElement>("button");
+  expect(trigger).not.toBeNull();
+  trigger?.click();
   await waitForSolid(() => {
     expect(attempts).toBe(2);
-    expect(alert()).toBeNull();
-    expect(harness.page.querySelector<HTMLButtonElement>('[aria-label="Reload"]')?.disabled).toBe(
-      true,
-    );
+    if (action === "Retry") {
+      expect(alert()).toBeNull();
+      expect(reload?.disabled).toBe(true);
+    }
   });
   retry.resolve(configMocks["config.schema"]);
+  await Promise.all(reloads.mock.results.map((result) => result.value));
   await harness.settle();
   await expectAdvancedFields(harness.page);
+  expect(attempts).toBe(2);
   expect(harness.request.mock.calls.some(([method]) => method === "config.set")).toBe(false);
 });
