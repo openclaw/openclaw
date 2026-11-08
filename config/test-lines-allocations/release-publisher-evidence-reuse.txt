@@ -1,3 +1,3 @@
-613
+940
 # Exact net new regression lines; inherited comparison-base debt is allocated upstream.
 # Raw FRV replay and authenticated carrier regressions: real validators, 98-consumer work counts, live authority/attempt/expiry rejection, same-SHA policy and reused-child transport parity.

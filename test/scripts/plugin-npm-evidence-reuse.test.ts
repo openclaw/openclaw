@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { writeSync, readFileSync } from "node:fs";
+import { existsSync, writeSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { inspectActionsArtifactZipWithPolicy } from "../../scripts/lib/actions-artifact-archive.mjs";
@@ -11,11 +11,17 @@ import {
 } from "../../scripts/plugin-npm-evidence-reuse.mjs";
 import {
   authenticatePreparedNpmArtifact,
+  main,
+  PREPARED_NPM_MANIFEST,
   preparedNpmArtifactName,
 } from "../../scripts/plugin-npm-prepared-release.mjs";
+import { createPluginPublicationArtifact } from "../../scripts/plugin-publication-artifact.mjs";
+import { createReleaseEvidenceClient } from "../../scripts/release-ci-summary.mjs";
+import { writePublishablePluginFixture } from "../helpers/publishable-plugin-fixture.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { makeStoredZip } from "./actions-artifact-zip.test-support.js";
 import { candidatePublicationFixture } from "./candidate-publication.test-support.js";
+import { packNpmFixture } from "./plugin-npm-publication-readback.test-support.js";
 
 const transport = vi.hoisted(() => ({
   read: (_args: readonly string[]): unknown => {
@@ -66,7 +72,10 @@ vi.mock("node:child_process", async (original) => {
     },
   };
 });
-afterEach(() => vi.unstubAllEnvs());
+afterEach(() => {
+  vi.unstubAllEnvs();
+  vi.unstubAllGlobals();
+});
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const digest = (bytes: string | Uint8Array) => createHash("sha256").update(bytes).digest("hex");
 
@@ -331,8 +340,20 @@ it.each(["permission", "tag", "frv", "artifact"])(
   },
 );
 
-async function carrierFixture() {
-  const { params, f } = fixture();
+async function carrierFixture(prepare?: (source: ReturnType<typeof fixture>) => Promise<void>) {
+  const source = fixture();
+  await prepare?.(source);
+  const { params, f } = source;
+  if (prepare) {
+    const archive = makeStoredZip({
+      "full-release-validation-manifest.json": JSON.stringify(f.manifest),
+    });
+    source.archives.set(91, archive);
+    Object.assign(source.artifacts.get(91)!, {
+      digest: "sha256:" + digest(archive),
+      size_in_bytes: archive.length,
+    });
+  }
   const binding = npmEvidenceBinding(params, {
     PREPARED_NPM_PARENT_RUN_ID: "700",
     PREPARED_NPM_PARENT_RUN_ATTEMPT: "1",
@@ -406,9 +427,11 @@ async function carrierFixture() {
   transport.read = (args) => {
     const route = args[1]?.replace("repos/" + f.repository + "/", "");
     if (route === "actions/runs/800") {
+      source.calls.push(route);
       return JSON.stringify(run);
     }
     if (route === "actions/artifacts/900") {
+      source.calls.push(route);
       return JSON.stringify(metadata);
     }
     return originalRead(args);
@@ -422,7 +445,7 @@ async function carrierFixture() {
     client,
     fetchImpl,
   };
-  return { payload, params, paramsForLoad, run, metadata, jobs, calls };
+  return { payload, params, paramsForLoad, run, metadata, jobs, calls, source };
 }
 
 it("authenticates the trusted handoff through the full 101-job inventory, then replays strict validators", async () => {
@@ -516,4 +539,308 @@ it("captures the policy source needed by later same-SHA authorizers without a lo
     immutableReads: createReleaseEvidenceReplay(params, JSON.parse(writer.serialize())),
   });
   expect(adopted.publisherPolicySha256).toBe(preview.publisherPolicySha256);
+});
+
+function cliEnvironment(f: Awaited<ReturnType<typeof carrierFixture>>, root: string) {
+  const values = {
+    GITHUB_REPOSITORY: f.params.repository,
+    GITHUB_WORKFLOW_SHA: f.params.workflowSha,
+    GITHUB_REF: f.params.workflowFullRef,
+    GITHUB_RUN_ID: "800",
+    GITHUB_RUN_ATTEMPT: "2",
+    GH_TOKEN: "synthetic-token",
+    RUNNER_TEMP: root,
+    PREPARED_NPM_PARENT_RUN_ID: "700",
+    PREPARED_NPM_PARENT_RUN_ATTEMPT: "1",
+    PREPARED_NPM_ARTIFACT: JSON.stringify(f.params.artifact),
+    PREPARED_NPM_FRV_RUN_ID: f.params.fullReleaseValidationRunId,
+    PREPARED_NPM_FRV_RUN_ATTEMPT: "1",
+    PREPARED_NPM_SELECTION_MODE: f.params.selectionMode,
+    PREPARED_NPM_PLUGINS: "",
+    PREPARED_NPM_DIST_TAG: "default",
+    PREPARED_NPM_EVIDENCE_ID: "900",
+    PREPARED_NPM_EVIDENCE_DIGEST: f.paramsForLoad.artifactDigest,
+  };
+  for (const [key, value] of Object.entries(values)) {
+    vi.stubEnv(key, value);
+  }
+  vi.stubGlobal("fetch", f.paramsForLoad.fetchImpl);
+}
+
+it("preserves the public return-time gate but removes exactly one CLI combined gate", async () => {
+  const f = await carrierFixture();
+  const root = tempDirs.make("npm-cli-authorize-");
+  cliEnvironment(f, root);
+  const client = createReleaseEvidenceClient(f.params.repository);
+  f.source.calls.length = 0;
+  f.calls.length = 0;
+  const replay = await loadNpmEvidenceReplay({ ...f.paramsForLoad, client });
+  const revalidate = vi.spyOn(replay, "revalidate");
+  const adopted = await authenticatePreparedNpmArtifact({ ...f.params, immutableReads: replay });
+  expect(revalidate).toHaveBeenCalledOnce();
+  const beforeFinal = f.source.calls.length;
+  await adopted.revalidateAuthority?.();
+  const finalGateCalls = f.source.calls.slice(beforeFinal);
+  expect(revalidate).toHaveBeenCalledTimes(2);
+  const publicCalls = [...f.source.calls];
+  const publicFetchCalls = f.calls.length;
+  f.source.calls.length = 0;
+  f.calls.length = 0;
+  await main(["authorize", "--source-sha", f.params.sourceSha]);
+  const removed = publicCalls.length - f.source.calls.length;
+  // Compare the real final callback with the eliminated identical boundary.
+  // The raw fixture graph is smaller than the saved production trace.
+  expect(removed).toBe(finalGateCalls.length);
+  expect(removed).toBe(18);
+  expect(f.calls.length).toBe(publicFetchCalls);
+  expect(f.source.calls.filter((route) => route === "actions/runs/800")).toHaveLength(2);
+  console.log(
+    JSON.stringify({
+      publicCalls: publicCalls.length + publicFetchCalls,
+      cliCalls: f.source.calls.length + f.calls.length,
+      removedCombinedGate: removed,
+      finalGateCalls,
+    }),
+  );
+});
+
+async function cliPackageFixture() {
+  const root = tempDirs.make("npm-cli-package-");
+  let entry: { artifact: ReturnType<typeof fixture>["params"]["artifact"]; [key: string]: unknown };
+  let packageJson = "";
+  const packageArchives = new Map<number, Buffer>();
+  const f = await carrierFixture(async (source) => {
+    const producer = { ...source.params.artifact };
+    const version = "2026.9.2-beta.1";
+    const { packageDir } = writePublishablePluginFixture(root, {
+      extensionId: "demo",
+      version,
+      publishTo: "npm",
+    });
+    packageJson = join(packageDir, "package.json");
+    const sourceBytes = readFileSync(packageJson);
+    const artifactDir = join(root, "artifact");
+    const tarball = join(artifactDir, "demo.tgz");
+    await packNpmFixture(join(root, "packed"), tarball, {
+      "package.json": sourceBytes,
+      "openclaw.plugin.json": JSON.stringify({ id: "demo" }),
+      "dist/index.js": "export default {};",
+    });
+    const artifactName = "plugin-npm-package-demo-" + version + "-npm-oidc-101-1";
+    const created = createPluginPublicationArtifact({
+      artifactDir,
+      artifactName,
+      packageDir: "extensions/demo",
+      packageName: "@openclaw/demo",
+      version,
+      publishTag: "beta",
+      route: "npm-oidc",
+      targetSha: source.params.sourceSha,
+      sourcePackageJsonSha256: digest(sourceBytes),
+      publicationReason: "Stable npm registry preflight selected npm-oidc.",
+      publisherPolicy: {
+        policyId: "plugin-npm-release-workflow",
+        schema: "openclaw.plugin-npm-publisher-policy/v1",
+        sha256: digest("name: immutable npm policy\n"),
+      },
+    });
+    const packageZip = makeStoredZip({
+      "demo.tgz": readFileSync(tarball),
+      "plugin-publication-manifest.json": readFileSync(created.manifestPath),
+    });
+    entry = {
+      extensionId: "demo",
+      packageDir: "extensions/demo",
+      packageName: "@openclaw/demo",
+      version,
+      channel: "beta",
+      publishTag: "beta",
+      installNpmSpec: "@openclaw/demo",
+      route: "npm-oidc",
+      artifact: {
+        ...producer,
+        artifactId: 9002,
+        artifactName,
+        artifactDigest: "sha256:" + digest(packageZip),
+        artifactSizeBytes: packageZip.length,
+      },
+    };
+    const manifestZip = makeStoredZip({
+      [PREPARED_NPM_MANIFEST]: JSON.stringify({
+        schema: "openclaw.plugin-npm-prepared/v1",
+        runtimeQualification: "packed-runtime-v1",
+        sourceSha: source.params.sourceSha,
+        npmDistTag: "default",
+        selectionMode: "all-publishable",
+        publisherPolicySha256: digest("name: immutable npm policy\n"),
+        producer,
+        packages: [entry],
+      }),
+    });
+    Object.assign(source.params.artifact, {
+      artifactDigest: "sha256:" + digest(manifestZip),
+      artifactSizeBytes: manifestZip.length,
+    });
+    packageArchives.set(9001, manifestZip);
+    packageArchives.set(9002, packageZip);
+  });
+  cliEnvironment(f, root);
+  const fetch = f.paramsForLoad.fetchImpl;
+  let afterDownload = () => {};
+  vi.stubGlobal("fetch", async (input: string | URL | Request) => {
+    const url = new URL(input instanceof Request ? input.url : input.toString());
+    const match = /actions\/artifacts\/(9001|9002)(\/zip)?$/u.exec(url.pathname);
+    if (match) {
+      const id = Number(match[1]);
+      const bytes = packageArchives.get(id)!;
+      if (match[2]) {
+        afterDownload();
+        return new Response(Uint8Array.from(bytes));
+      }
+      const artifact = id === 9001 ? f.params.artifact : entry.artifact;
+      return Response.json({
+        id,
+        name: artifact.artifactName,
+        digest: artifact.artifactDigest,
+        size_in_bytes: bytes.length,
+        expired: false,
+        workflow_run: { id: 101, head_sha: f.params.sourceSha },
+      });
+    }
+    if (url.pathname.endsWith("/runs/101/attempts/1")) {
+      return Response.json({
+        id: 101,
+        run_attempt: 1,
+        head_sha: f.params.sourceSha,
+        head_branch: f.source.f.branch,
+        path: ".github/workflows/plugin-npm-release.yml",
+        event: "workflow_dispatch",
+        status: "completed",
+        conclusion: "success",
+        repository: { full_name: f.params.repository },
+        head_repository: { full_name: f.params.repository },
+      });
+    }
+    return fetch(input);
+  });
+  const output = join(root, "outputs");
+  const manifestOutput = join(root, "manifest.json");
+  const evidenceOutput = join(root, "evidence.json");
+  return {
+    f,
+    output,
+    manifestOutput,
+    evidenceOutput,
+    setAfterDownload(callback: () => void) {
+      afterDownload = callback;
+    },
+    args(command: string) {
+      return [
+        command,
+        "--source-sha",
+        f.params.sourceSha,
+        "--selection-mode",
+        "all-publishable",
+        "--github-output",
+        output,
+        ...(command === "load"
+          ? ["--source-root", root, "--output", manifestOutput, "--evidence-output", evidenceOutput]
+          : [
+              "--package",
+              JSON.stringify(entry),
+              "--source-package-json",
+              packageJson,
+              "--cache-dir",
+              join(root, "cache"),
+              "--output-dir",
+              join(root, "consumed"),
+            ]),
+      ];
+    },
+  };
+}
+
+it.each(["load", "consume"])("keeps %s output behind the final fresh check", async (command) => {
+  const f = await cliPackageFixture();
+  await main(f.args(command));
+  expect(readFileSync(f.output, "utf8")).toContain(
+    command === "load" ? "has_candidates=true" : "tarball_sha256=",
+  );
+});
+
+it.each(["permission", "tag", "frv-attempt", "carrier-attempt", "expiry"])(
+  "refuses final authorize %s changes before granting authorization",
+  async (fault) => {
+    const f = await carrierFixture();
+    cliEnvironment(f, tempDirs.make("npm-cli-revoke-"));
+    const originalRead = transport.read;
+    let childReads = 0;
+    transport.read = (args) => {
+      if (args[1]?.endsWith("/actions/runs/800") && ++childReads === 2) {
+        if (fault === "permission") {
+          f.source.f.admission.authority.permission = "read";
+        }
+        if (fault === "tag") {
+          f.source.f.admission.authority.tagSha = "f".repeat(40);
+        }
+        if (fault === "frv-attempt") {
+          f.source.f.parent.run_attempt += 1;
+        }
+        if (fault === "carrier-attempt") {
+          f.run.run_attempt += 1;
+        }
+        if (fault === "expiry") {
+          f.metadata.expired = true;
+        }
+      }
+      return originalRead(args);
+    };
+    const authorized = vi.fn();
+    await expect(
+      main(["authorize", "--source-sha", f.params.sourceSha]).then(authorized),
+    ).rejects.toThrow();
+    expect(childReads).toBe(2);
+    expect(authorized).not.toHaveBeenCalled();
+  },
+);
+
+it.each(
+  ["load", "consume"].flatMap((command) =>
+    ["permission", "tag", "frv-attempt", "expiry"].map((fault) => [command, fault]),
+  ),
+)("rejects %s download-time %s changes before publishing outputs", async (command, fault) => {
+  const f = await cliPackageFixture();
+  const changed = vi.fn(() => {
+    if (fault === "permission") {
+      f.f.source.f.admission.authority.permission = "read";
+    }
+    if (fault === "tag") {
+      f.f.source.f.admission.authority.tagSha = "f".repeat(40);
+    }
+    if (fault === "frv-attempt") {
+      f.f.source.f.parent.run_attempt += 1;
+    }
+    if (fault === "expiry") {
+      f.f.source.artifacts.get(91)!.expired = true;
+    }
+  });
+  f.setAfterDownload(changed);
+  await expect(main(f.args(command!))).rejects.toThrow();
+  expect(changed).toHaveBeenCalledOnce();
+  expect(existsSync(f.output)).toBe(false);
+  expect(existsSync(f.manifestOutput)).toBe(false);
+  expect(existsSync(f.evidenceOutput)).toBe(false);
+});
+
+it("still rejects a public call when authority changes after raw authentication", async () => {
+  const f = await carrierFixture();
+  const replay = await loadNpmEvidenceReplay(f.paramsForLoad);
+  const revalidate = replay.revalidate.bind(replay);
+  vi.spyOn(replay, "revalidate").mockImplementation(async (client) => {
+    f.source.f.admission.authority.permission = "read";
+    await revalidate(client);
+  });
+  await expect(
+    authenticatePreparedNpmArtifact({ ...f.params, immutableReads: replay }),
+  ).rejects.toThrow();
 });

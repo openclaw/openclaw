@@ -164,6 +164,13 @@ export function validatePreparedNpmArtifactDescriptor(value, expected) {
 // P consumes Q's bytes as data. Neither a caller-supplied Q SHA nor a matching
 // artifact name grants authority: the original successful FRV attempt owns it.
 export async function authenticatePreparedNpmArtifact(params) {
+  return authenticatePreparedNpmArtifactEvidence(params, true);
+}
+
+// Only the CLI owns the deferred boundary: every successful load, consume or
+// authorize below revalidates after its last acquisition and before its output.
+// Public callers retain the return-time authority check.
+async function authenticatePreparedNpmArtifactEvidence(params, revalidateOnReturn) {
   const { repository, sourceSha, workflowSha, artifact } = params;
   if (!params.fullReleaseValidationRunId && !params.fullReleaseValidationRunAttempt) {
     return {
@@ -276,7 +283,9 @@ export async function authenticatePreparedNpmArtifact(params) {
         await authenticated.revalidateAuthority?.();
       }
     : authenticated.revalidateAuthority;
-  await revalidateAuthority?.();
+  if (revalidateOnReturn) {
+    await revalidateAuthority?.();
+  }
   return {
     artifact: descriptor,
     workflowSha: producerSha,
@@ -705,7 +714,7 @@ function outputValues(file, values) {
   );
 }
 
-async function main(argv) {
+export async function main(argv) {
   const [command, ...args] = argv;
   const options = {};
   for (let index = 0; index < args.length; index += 2) {
@@ -729,6 +738,7 @@ async function main(argv) {
     token: process.env.GH_TOKEN,
   };
   let adoption;
+  let writeEvidenceOutput;
   if (["load", "consume", "authorize"].includes(command)) {
     const adoptionParams = {
       ...common,
@@ -753,12 +763,13 @@ async function main(argv) {
             client: createReleaseEvidenceClient(common.repository),
           });
     }
-    adoption = await authenticatePreparedNpmArtifact(adoptionParams);
+    adoption = await authenticatePreparedNpmArtifactEvidence(adoptionParams, false);
     if (options["--evidence-output"]) {
       requireValue(command === "load", "Only trusted preview load can write an evidence handoff");
-      writeFileSync(options["--evidence-output"], adoptionParams.immutableReads.serialize(), {
-        flag: "wx",
-      });
+      writeEvidenceOutput = () =>
+        writeFileSync(options["--evidence-output"], adoptionParams.immutableReads.serialize(), {
+          flag: "wx",
+        });
     }
     Object.assign(common, {
       workflowSha: adoption.workflowSha,
@@ -801,6 +812,7 @@ async function main(argv) {
       archivePath: options["--archive-path"],
     });
     await adoption.revalidateAuthority?.();
+    writeEvidenceOutput?.();
     writeFileSync(options["--output"], JSON.stringify(manifest));
     outputValues(options["--github-output"], {
       has_candidates: true,
