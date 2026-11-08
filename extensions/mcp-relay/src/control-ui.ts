@@ -5,6 +5,8 @@ import {
   type ControlUiView,
 } from "openclaw/plugin-sdk/control-ui";
 import type { RelayCaller } from "./caller.js";
+import { createTranslator } from "./i18n/index.ts";
+import { loadMessages } from "./i18n/locales.ts";
 import type { RelayGrant } from "./state.js";
 import "./control-ui.css";
 
@@ -31,16 +33,6 @@ function element<K extends keyof HTMLElementTagNameMap>(tag: K, text?: string, c
   return node;
 }
 
-function accessLabel(scopes: readonly string[]) {
-  if (scopes.includes("operator.admin")) {
-    return "Full access, including administration";
-  }
-  if (scopes.some((scope) => !READ_WRITE.has(scope))) {
-    return "Full role access";
-  }
-  return scopes.includes("operator.write") ? "Read and write" : "Read only";
-}
-
 const mountConnectedApps: ControlUiView = (container, initialContext) => {
   const host = initialContext.host;
   let context = initialContext;
@@ -50,16 +42,21 @@ const mountConnectedApps: ControlUiView = (container, initialContext) => {
   let fullAccess = false;
   let busy = false;
   let error = "";
+  let errorDetail = "";
   let notice = "";
   let generation = 0;
   let available = false;
   let renderedConnection = "";
+  let renderedLocale = "";
   let disposed = false;
   let dialog: ControlUiComponentHandle<ControlUiDialogProps> | undefined;
   const page = element("section", undefined, "mcp-connected-apps");
   const overlay = element("div");
   container.append(page, overlay);
-  const dates = new Intl.DateTimeFormat(host.locale, { dateStyle: "medium", timeStyle: "short" });
+  const t = createTranslator(() => host.locale);
+  const dateFormat = (locale: string) =>
+    new Intl.DateTimeFormat(locale, { dateStyle: "medium", timeStyle: "short" });
+  let dates = dateFormat(host.locale);
   const canUse = () => host.connection.connected && host.connection.canRead;
   const current = (id: number) =>
     !disposed && !context.signal.aborted && context.presented && canUse() && generation === id;
@@ -72,6 +69,34 @@ const mountConnectedApps: ControlUiView = (container, initialContext) => {
     dialog?.dispose();
     dialog = undefined;
   };
+
+  function accessLabel(scopes: readonly string[]) {
+    if (scopes.includes("operator.admin")) {
+      return t("mcpRelay.access.admin");
+    }
+    if (scopes.some((scope) => !READ_WRITE.has(scope))) {
+      return t("mcpRelay.access.fullRole");
+    }
+    return t(
+      scopes.includes("operator.write") ? "mcpRelay.access.readWrite" : "mcpRelay.access.readOnly",
+    );
+  }
+
+  // No host disclosure exists for plugin pages, so raw details use a native collapsed one.
+  function errorAlert(summary: string, detail: string) {
+    const node = element("div", summary, "mcp-connected-apps__error");
+    node.setAttribute("role", "alert");
+    if (detail) {
+      const details = element("details");
+      details.append(element("summary", t("mcpRelay.errors.showDetails")), element("p", detail));
+      node.append(details);
+    }
+    return node;
+  }
+
+  function errorDetailOf(cause: unknown) {
+    return cause instanceof Error ? host.redact(cause.message) : "";
+  }
 
   function button(label: string, action: () => void, primary = false) {
     const node = element("button", label, primary ? "btn primary" : "btn");
@@ -88,24 +113,28 @@ const mountConnectedApps: ControlUiView = (container, initialContext) => {
   ) {
     const scopes = caller()?.ceiling ?? [];
     const group = element("fieldset", undefined, "mcp-connected-apps__access");
-    group.append(element("legend", "App access"));
+    group.append(element("legend", t("mcpRelay.access.legend")));
     const basic = scopes.filter((scope) => READ_WRITE.has(scope));
     const choices = [
       {
         full: false,
         label: accessLabel(basic),
-        detail: basic.includes("operator.write")
-          ? "Read conversations and send messages within your access."
-          : "Read conversations within your access.",
+        detail: t(
+          basic.includes("operator.write")
+            ? "mcpRelay.access.readWriteDetail"
+            : "mcpRelay.access.readOnlyDetail",
+        ),
       },
     ];
     if (scopes.some((scope) => !READ_WRITE.has(scope))) {
       choices.push({
         full: true,
-        label: "Full role access",
-        detail: scopes.includes("operator.admin")
-          ? "Includes Gateway administration and approvals. Only allow an app you trust with these actions."
-          : "Includes all permissions currently allowed by your role.",
+        label: t("mcpRelay.access.fullRole"),
+        detail: t(
+          scopes.includes("operator.admin")
+            ? "mcpRelay.access.adminDetail"
+            : "mcpRelay.access.fullRoleDetail",
+        ),
       });
     }
     for (const choice of choices) {
@@ -127,18 +156,21 @@ const mountConnectedApps: ControlUiView = (container, initialContext) => {
     return group;
   }
 
-  async function run(action: (id: number) => Promise<void>) {
+  async function run(failure: string, action: (id: number) => Promise<void>) {
     if (busy || !current(generation)) {
       return;
     }
     const id = ++generation;
     busy = true;
     error = "";
+    errorDetail = "";
     notice = "";
     if (snapshot) {
       // The existing rows stay valid while the authoritative reply is pending.
       page.querySelector(".mcp-connected-apps__error")?.remove();
-      page.querySelector(".mcp-connected-apps__feedback")!.textContent = "Loading connected apps…";
+      page.querySelector(".mcp-connected-apps__feedback")!.textContent = t(
+        "mcpRelay.connectedApps.loading",
+      );
       for (const control of page.querySelectorAll<HTMLButtonElement | HTMLInputElement>(
         "button, input",
       )) {
@@ -151,9 +183,8 @@ const mountConnectedApps: ControlUiView = (container, initialContext) => {
       await action(id);
     } catch (cause) {
       if (current(id)) {
-        error = host.redact(
-          cause instanceof Error ? cause.message : "The request failed. Try again.",
-        );
+        error = failure;
+        errorDetail = errorDetailOf(cause);
       }
     } finally {
       if (current(id)) {
@@ -165,7 +196,7 @@ const mountConnectedApps: ControlUiView = (container, initialContext) => {
 
   function refresh() {
     closeDialog();
-    return run(async (id) => {
+    return run(t("mcpRelay.errors.load"), async (id) => {
       const grants = await host.request<Grants>("mcp-relay.grants", {});
       if (!current(id)) {
         return;
@@ -192,6 +223,7 @@ const mountConnectedApps: ControlUiView = (container, initialContext) => {
     let pairing: Pairing | undefined;
     let pairingBusy = false;
     let pairingError = "";
+    let pairingErrorDetail = "";
     const createPairing = async () => {
       if (pairingBusy || !pairingCaller.canPair || !current(generation)) {
         return;
@@ -199,35 +231,41 @@ const mountConnectedApps: ControlUiView = (container, initialContext) => {
       const id = generation;
       pairingBusy = true;
       pairingError = "";
+      pairingErrorDetail = "";
       draw();
       try {
         pairing = await host.request<Pairing>("mcp-relay.pair", {
           ceiling: chosenCeiling(pairingFull),
         });
       } catch (cause) {
-        pairingError = host.redact(
-          cause instanceof Error ? cause.message : "Pairing failed. Try again.",
-        );
+        pairingError = t("mcpRelay.errors.pair");
+        pairingErrorDetail = errorDetailOf(cause);
       }
       if (current(id) && dialog) {
         pairingBusy = false;
         draw();
       }
     };
+    const pairingDescription = () =>
+      t("mcpRelay.pairing.description", { principal: pairingCaller.principalLabel });
     const draw = () => {
       content.replaceChildren();
       content.append(
-        element("h2", "Pair with code"),
-        element("p", `Connect an app as ${pairingCaller.principalLabel}.`),
+        element("h2", t("mcpRelay.pairing.title")),
+        element("p", pairingDescription()),
       );
       if (pairing) {
-        content.append(element("p", "Enter this single-use code on the app’s connection page."));
+        content.append(element("p", t("mcpRelay.pairing.enterCode")));
         content.append(element("code", pairing.code, "mcp-connected-apps__code"));
         content.append(
-          element("p", `Expires ${dates.format(pairing.expiresAt)}. Keep this code private.`),
+          element("p", t("mcpRelay.pairing.expires", { time: dates.format(pairing.expiresAt) })),
         );
         const url = element("p");
-        url.append(element("strong", "MCP URL: "), element("code", pairing.mcpUrl));
+        url.append(
+          element("strong", t("mcpRelay.pairing.mcpUrl")),
+          " ",
+          element("code", pairing.mcpUrl),
+        );
         content.append(url);
       } else {
         content.append(
@@ -241,7 +279,7 @@ const mountConnectedApps: ControlUiView = (container, initialContext) => {
           ),
         );
         const create = button(
-          pairingBusy ? "Creating code…" : "Create pairing code",
+          t(pairingBusy ? "mcpRelay.pairing.creating" : "mcpRelay.pairing.create"),
           () => void createPairing(),
           true,
         );
@@ -251,21 +289,22 @@ const mountConnectedApps: ControlUiView = (container, initialContext) => {
           input.disabled = pairingBusy;
         }
       }
-      const dismiss = button(pairing ? "Done" : "Cancel", closeDialog);
+      const dismiss = button(
+        t(pairing ? "mcpRelay.pairing.done" : "mcpRelay.pairing.cancel"),
+        closeDialog,
+      );
       dismiss.disabled = pairingBusy;
       const actions = element("div", undefined, "mcp-connected-apps__actions");
       actions.append(dismiss);
       content.append(actions);
       if (pairingError) {
-        const message = element("p", pairingError, "mcp-connected-apps__error");
-        message.setAttribute("role", "alert");
-        content.append(message);
+        content.append(errorAlert(pairingError, pairingErrorDetail));
       }
     };
     draw();
     dialog = host.components.mountDialog(overlay, {
-      label: "Pair with code",
-      description: `Connect an app as ${pairingCaller.principalLabel}.`,
+      label: t("mcpRelay.pairing.title"),
+      description: pairingDescription(),
       content,
       returnFocusTarget,
       onCancel: () => {
@@ -285,7 +324,8 @@ const mountConnectedApps: ControlUiView = (container, initialContext) => {
       return;
     }
     const ceiling = chosenCeiling();
-    void run(async (id) => {
+    const app = { app: consent.clientName };
+    void run(t(allow ? "mcpRelay.errors.approve" : "mcpRelay.errors.deny", app), async (id) => {
       const result = await host.request<{ continueUrl: string }>(
         allow ? "mcp-relay.authorize.approve" : "mcp-relay.authorize.deny",
         { requestId: approvedRequest, ...(allow ? { ceiling } : {}) },
@@ -302,39 +342,43 @@ const mountConnectedApps: ControlUiView = (container, initialContext) => {
         url.hash ||
         url.searchParams.get("request") !== approvedRequest
       ) {
-        throw new Error(
-          "The relay returned an invalid return address. Reopen the app’s connection page.",
-        );
+        throw new Error(t("mcpRelay.errors.invalidReturn"));
       }
       window.location.assign(url.href);
     });
   }
 
   function render() {
-    page.innerHTML = `
-      <header class="mcp-connected-apps__header">
-        <div><h1>Connected apps</h1><p>Manage apps connected to your Gateway through the MCP relay.</p></div>
-      </header>`;
-    page.querySelector("header")!.append(button("Refresh", () => void refresh()));
+    const header = element("header", undefined, "mcp-connected-apps__header");
+    const heading = element("div");
+    heading.append(
+      element("h1", t("mcpRelay.connectedApps.title")),
+      element("p", t("mcpRelay.connectedApps.subtitle")),
+    );
+    header.append(
+      heading,
+      button(t("mcpRelay.connectedApps.refresh"), () => void refresh()),
+    );
+    page.replaceChildren(header);
     if (!canUse()) {
       page.append(
         element(
           "p",
-          host.connection.connected
-            ? "Read access is required to view connected apps."
-            : "Connect to the Gateway to manage connected apps.",
+          t(
+            host.connection.connected
+              ? "mcpRelay.connectedApps.readRequired"
+              : "mcpRelay.connectedApps.connectGateway",
+          ),
         ),
       );
       return;
     }
     if (error) {
-      const message = element("p", error, "mcp-connected-apps__error");
-      message.setAttribute("role", "alert");
-      page.append(message);
+      page.append(errorAlert(error, errorDetail));
     }
     const feedback = element(
       "p",
-      busy ? "Loading connected apps…" : notice,
+      busy ? t("mcpRelay.connectedApps.loading") : notice,
       "mcp-connected-apps__feedback",
     );
     feedback.setAttribute("role", "status");
@@ -345,67 +389,79 @@ const mountConnectedApps: ControlUiView = (container, initialContext) => {
     const connectedCaller = snapshot.caller;
     if (requestId && consent) {
       const panel = element("section", undefined, "mcp-connected-apps__consent");
-      panel.innerHTML = `
-        <span class="mcp-connected-apps__eyebrow"></span><h2></h2>
-        <dl class="mcp-connected-apps__details">
-          <div><dt>Approving as</dt><dd data-principal></dd></div>
-          <div><dt>Returns to</dt><dd data-redirect></dd></div>
-          <div><dt>Request expires</dt><dd data-expires></dd></div>
-        </dl>
-        <p class="mcp-connected-apps__hint">The app can act only within the access you allow and your current Gateway permissions. The relay can see content in transit.</p>`;
-      panel.querySelector("span")!.textContent =
-        consent.kind === "link" ? "CONNECT ANOTHER GATEWAY" : "CONNECTION REQUEST";
-      panel.querySelector("h2")!.textContent = `Connect ${consent.clientName}?`;
-      panel.querySelector("[data-principal]")!.textContent = consent.caller.principalLabel;
-      panel.querySelector("[data-redirect]")!.textContent = consent.redirectHost;
-      panel.querySelector("[data-expires]")!.textContent = dates.format(consent.expiresAt);
-      panel.querySelector("p")!.before(
+      const details = element("dl", undefined, "mcp-connected-apps__details");
+      for (const [term, value] of [
+        ["mcpRelay.consent.approvingAs", consent.caller.principalLabel],
+        ["mcpRelay.consent.returnsTo", consent.redirectHost],
+        ["mcpRelay.consent.expires", dates.format(consent.expiresAt)],
+      ] as const) {
+        const item = element("div");
+        item.append(element("dt", t(term)), element("dd", value));
+        details.append(item);
+      }
+      panel.append(
+        element(
+          "span",
+          t(
+            consent.kind === "link"
+              ? "mcpRelay.consent.connectGateway"
+              : "mcpRelay.consent.connectionRequest",
+          ),
+          "mcp-connected-apps__eyebrow",
+        ),
+        element("h2", t("mcpRelay.consent.title", { app: consent.clientName })),
+        details,
         accessPicker(fullAccess, (full) => {
           fullAccess = full;
         }),
+        element("p", t("mcpRelay.consent.hint"), "mcp-connected-apps__hint"),
       );
       const actions = element("div", undefined, "mcp-connected-apps__actions");
-      const allow = button("Allow", () => decide(true), true);
+      const allow = button(t("mcpRelay.consent.allow"), () => decide(true), true);
       allow.disabled = busy || !consent.caller.canPair || !chosenCeiling().length;
       actions.append(
-        button("Deny", () => decide(false)),
+        button(t("mcpRelay.consent.deny"), () => decide(false)),
         allow,
       );
       panel.append(actions);
       if (!consent.caller.canPair) {
-        panel.append(
-          element(
-            "p",
-            "Your current Gateway permissions do not allow connecting an app.",
-            "mcp-connected-apps__hint",
-          ),
-        );
+        panel.append(element("p", t("mcpRelay.consent.notAllowed"), "mcp-connected-apps__hint"));
       }
       page.append(panel);
     }
-    page.insertAdjacentHTML(
-      "beforeend",
-      `
-      <div class="mcp-connected-apps__toolbar"><p></p></div>
-      <div class="mcp-connected-apps__list"></div>
-      <p class="mcp-connected-apps__hint">Revoking an app ends its MCP access and embedded browser sessions. Reconnect the app to grant access again.</p>`,
+    const toolbar = element("div", undefined, "mcp-connected-apps__toolbar");
+    toolbar.append(
+      element(
+        "p",
+        connectedCaller.canAdmin
+          ? t("mcpRelay.connectedApps.allApps")
+          : t("mcpRelay.connectedApps.appsConnectedAs", {
+              principal: connectedCaller.principalLabel,
+            }),
+      ),
     );
-    const toolbar = page.querySelector(".mcp-connected-apps__toolbar")!;
-    toolbar.querySelector("p")!.textContent = connectedCaller.canAdmin
-      ? "All connected apps"
-      : `Apps connected as ${connectedCaller.principalLabel}`;
     if (connectedCaller.canPair) {
-      const pair = button("Pair with code", () => showPairing(pair, connectedCaller), true);
+      const pair = button(
+        t("mcpRelay.pairing.title"),
+        () => showPairing(pair, connectedCaller),
+        true,
+      );
       toolbar.append(pair);
     }
-    const list = page.querySelector(".mcp-connected-apps__list")!;
+    const list = element("div", undefined, "mcp-connected-apps__list");
+    page.append(
+      toolbar,
+      list,
+      element("p", t("mcpRelay.connectedApps.revokeHint"), "mcp-connected-apps__hint"),
+    );
     if (!snapshot.grants.length) {
-      list.innerHTML = `<h2>No connected apps yet</h2><p>Sign in with your Gateway from an app, or pair with a single-use code.</p>`;
+      list.append(
+        element("h2", t("mcpRelay.connectedApps.emptyTitle")),
+        element("p", t("mcpRelay.connectedApps.emptyBody")),
+      );
     }
     for (const grant of snapshot.grants) {
       const row = element("article", undefined, "mcp-connected-apps__grant");
-      row.innerHTML = `<div><h2></h2><p class="mcp-connected-apps__hint"></p><small></small></div>`;
-      row.querySelector("h2")!.textContent = grant.clientName;
       const own =
         grant.principal.kind === connectedCaller.principal.kind &&
         (grant.principal.kind === "owner" ||
@@ -413,22 +469,38 @@ const mountConnectedApps: ControlUiView = (container, initialContext) => {
             grant.principal.profileId === connectedCaller.principal.profileId));
       const principalLabel =
         grant.principal.kind === "owner"
-          ? "Gateway owner"
-          : (grant.principalLabel ?? (own ? connectedCaller.principalLabel : "Another person"));
-      row.querySelector("p")!.textContent = `${principalLabel} · ${accessLabel(grant.ceiling)}`;
-      row.querySelector("small")!.textContent =
-        grant.lastUsedAt !== undefined
-          ? `Last used ${dates.format(grant.lastUsedAt)}`
-          : `Connected ${dates.format(grant.createdAt)} · Not used yet`;
+          ? t("mcpRelay.connectedApps.gatewayOwner")
+          : (grant.principalLabel ??
+            (own ? connectedCaller.principalLabel : t("mcpRelay.connectedApps.anotherPerson")));
+      const summary = element("div");
+      summary.append(
+        element("h2", grant.clientName),
+        element(
+          "p",
+          t("mcpRelay.connectedApps.grantSummary", {
+            principal: principalLabel,
+            access: accessLabel(grant.ceiling),
+          }),
+          "mcp-connected-apps__hint",
+        ),
+        element(
+          "small",
+          grant.lastUsedAt !== undefined
+            ? t("mcpRelay.connectedApps.lastUsed", { time: dates.format(grant.lastUsedAt) })
+            : t("mcpRelay.connectedApps.notUsedYet", { time: dates.format(grant.createdAt) }),
+        ),
+      );
+      row.append(summary);
       if ((own || connectedCaller.canAdmin) && host.connection.canWrite) {
+        const app = { app: grant.clientName };
         row.append(
-          button("Revoke", () => {
-            void run(async (id) => {
+          button(t("mcpRelay.connectedApps.revoke"), () => {
+            void run(t("mcpRelay.errors.revoke", app), async (id) => {
               await host.request("mcp-relay.revoke", { grantId: grant.grantId });
               const result = await host.request<Grants>("mcp-relay.grants", {});
               if (current(id)) {
                 snapshot = result;
-                notice = `${grant.clientName} revoked. Its MCP and embedded UI access has ended.`;
+                notice = t("mcpRelay.connectedApps.revoked", app);
               }
             });
           }),
@@ -444,6 +516,18 @@ const mountConnectedApps: ControlUiView = (container, initialContext) => {
     // Session and agent publications do not change this page or its focused controls.
     let needsRender = connectionKey !== renderedConnection;
     renderedConnection = connectionKey;
+    const locale = host.locale;
+    if (locale !== renderedLocale) {
+      needsRender = true;
+      renderedLocale = locale;
+      dates = dateFormat(locale);
+      // English renders now; the translated catalog re-renders the page when it settles.
+      void loadMessages(locale)?.then(() => {
+        if (!disposed && host.locale === locale) {
+          render();
+        }
+      });
+    }
     const nextRequest = context.props.request ?? "";
     const next = canUse() && context.presented && !context.signal.aborted;
     if (next !== available || nextRequest !== requestId) {
@@ -493,9 +577,10 @@ const mountConnectedApps: ControlUiView = (container, initialContext) => {
 export default defineControlUiPlugin({
   id: "mcp-relay",
   activate(host) {
+    const t = createTranslator(() => host.locale);
     return host.ui.registerPage({
       id: "connected-apps",
-      label: "Connected apps",
+      label: t("mcpRelay.connectedApps.title"),
       mount: mountConnectedApps,
     });
   },

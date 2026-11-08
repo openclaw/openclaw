@@ -95,7 +95,7 @@ it("retains focused grant controls on unrelated host updates and applies permiss
   connection.connected = true;
   connection.canRead = false;
   publish();
-  expect(body()).toContain("Read access is required to view connected apps.");
+  expect(body()).toContain("You need read access to view connected apps.");
 });
 
 it("pairs within the caller's ceiling without a browser-supplied principal", async () => {
@@ -151,8 +151,13 @@ it("retains rows while refreshing and renders the authoritative reply on settlem
   expect(document.querySelectorAll("button:enabled, input:enabled")).toHaveLength(0);
   click("Revoke");
   expect(request).toHaveBeenCalledTimes(2);
-  pending.reject(new Error("Try again"));
-  await shows("Try again");
+  pending.reject(new Error("socket closed"));
+  await shows("Couldn’t load connected apps. Try again.");
+  const details = document.querySelector('[role="alert"] details')!;
+  expect([details.hasAttribute("open"), details.textContent]).toEqual([
+    false,
+    "Show detailssocket closed",
+  ]);
   click("Refresh");
   expect(document.querySelector('[role="alert"]')).toBeNull();
   await shows("No connected apps yet");
