@@ -120,19 +120,21 @@ jobs:
           set -euo pipefail
           bun_bin=$(node --import ./scripts/tsx.mjs --input-type=module -e 'import {execFileSync} from "node:child_process";import {requirePinnedBun} from "./scripts/lib/pinned-bun.mts";process.stdout.write(execFileSync(requirePinnedBun(), ["-e", "console.log(require(\"node:fs\").realpathSync(process.execPath))"], {encoding:"utf8"}))')
           mkdir -p .artifacts/closeout-upgrade-proof/bun
-          printf '#!/bin/sh\nexit 127\n' > .artifacts/closeout-upgrade-proof/node-unavailable
-          chmod 755 .artifacts/closeout-upgrade-proof/node-unavailable
           docker pull docker.io/library/node:24.22.1-bookworm@sha256:6449e19d8184d84062525b6a7524def03146c2cb04a7f08b076680d0e8e4240a
-          docker run --rm --name "closeout-bun-${{ github.run_id }}-${{ github.run_attempt }}" --user "$(id -u):$(id -g)" --network bridge --cap-drop ALL --security-opt no-new-privileges --pids-limit 512 --memory 6g \
+          # Real absence lets Bun select its generated Node shim; executable failure
+          # sentinels are discoverable and make lifecycle scripts exit 127.
+          image="closeout-bun-no-node:${{ github.run_id }}-${{ github.run_attempt }}"
+          docker build --network=none --pull=false --tag "$image" - <<'DOCKERFILE'
+          FROM docker.io/library/node:24.22.1-bookworm@sha256:6449e19d8184d84062525b6a7524def03146c2cb04a7f08b076680d0e8e4240a
+          RUN rm -f /usr/local/bin/node /usr/local/bin/nodejs
+          DOCKERFILE
+          docker run --rm --init --name "closeout-bun-${{ github.run_id }}-${{ github.run_attempt }}" --user "$(id -u):$(id -g)" --network bridge --cap-drop ALL --security-opt no-new-privileges --pids-limit 512 --memory 6g \
             --mount "type=bind,src=$PWD,dst=$PWD,readonly" \
             --mount "type=bind,src=$PWD/.artifacts/closeout-upgrade-proof/bun,dst=$PWD/.artifacts/closeout-upgrade-proof/bun" \
             --mount "type=bind,src=$bun_bin,dst=/proof-bun,readonly" \
-            --mount "type=bind,src=$PWD/.artifacts/closeout-upgrade-proof/node-unavailable,dst=/usr/local/bin/node,readonly" \
-            --mount "type=bind,src=$PWD/.artifacts/closeout-upgrade-proof/node-unavailable,dst=/usr/bin/node,readonly" \
-            --mount "type=bind,src=$PWD/.artifacts/closeout-upgrade-proof/node-unavailable,dst=/usr/bin/nodejs,readonly" \
             --workdir "$PWD" --entrypoint /bin/bash \
-            docker.io/library/node:24.22.1-bookworm@sha256:6449e19d8184d84062525b6a7524def03146c2cb04a7f08b076680d0e8e4240a -euc '
-              # Node is unavailable via readonly failure sentinels, never emulated.
+            "$image" -euc '
+              # Node is absent from this disposable image, never emulated.
               # Keep the bind-owner uid for real private-snapshot ownership checks.
               export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
               exec /proof-bun scripts/release-closeout-upgrade-proof.mjs --lane bun --candidate "$PWD/.artifacts/closeout-upgrade-candidate/candidate.tgz" --sha256 "$1" --head "$2" --out "$PWD/.artifacts/closeout-upgrade-proof/bun"

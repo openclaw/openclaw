@@ -37,6 +37,15 @@ function proof(lane: "node" | "bun") {
     },
   };
 }
+test("Bun proof uses an init and actual Node absence without weakening isolation", () => {
+  const workflow = fs.readFileSync(".github/workflows/release-closeout-proof.yml", "utf8");
+  assert(workflow.includes("docker run --rm --init"));
+  assert(workflow.includes("RUN rm -f /usr/local/bin/node /usr/local/bin/nodejs"));
+  assert(!workflow.includes("node-unavailable"));
+  assert(workflow.includes("--cap-drop ALL --security-opt no-new-privileges"));
+  assert(workflow.includes('--user "$(id -u):$(id -g)"'));
+  assert(workflow.includes("src=$bun_bin,dst=/proof-bun,readonly"));
+});
 test("settings fixture uses supported disabled scheduling and explicit plugin policy", () => {
   const config = settingsFixture({ workspace: "/proof/workspace", plugin: "/proof/plugin" });
   assert.deepEqual(config.agents, { defaults: { workspace: "/proof/workspace" } });
@@ -60,9 +69,14 @@ test("every existing setting survives while new bookkeeping is allowed", () => {
       for (const replacement of [undefined, null, "changed", [], {}]) {
         const changed = structuredClone(after);
         let target: Record<string, unknown> = changed;
-        for (const part of keys) target = target[part] as Record<string, unknown>;
-        if (replacement === undefined) delete target[key];
-        else target[key] = replacement;
+        for (const part of keys) {
+          target = target[part] as Record<string, unknown>;
+        }
+        if (replacement === undefined) {
+          delete target[key];
+        } else {
+          target[key] = replacement;
+        }
         assert.throws(() => assertSettingsPreserved(before, changed), parts.join("."));
       }
       if (setting && typeof setting === "object" && !Array.isArray(setting)) {

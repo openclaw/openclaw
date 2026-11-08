@@ -1,2 +1,2 @@
-40
-# Guard supported disabled-scheduler/plugin fixture policy and strict existing-setting preservation.
+54
+# Guard scheduler/plugin preservation and real Node-absent reaping harness; explicit lint-required blocks.

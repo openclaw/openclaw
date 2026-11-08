@@ -293,6 +293,8 @@ async function runLane(options) {
     XDG_RUNTIME_DIR: path.join(work, "xdg-runtime"),
     OPENCLAW_STATE_DIR: state,
     OPENCLAW_CONFIG_PATH: path.join(state, "openclaw.json"),
+    // Preserve the original cause when a synthetic proof fails closed.
+    OPENCLAW_DEBUG: "1",
     OPENCLAW_NO_ONBOARD: "1",
     OPENCLAW_NO_PROMPT: "1",
     OPENCLAW_DISABLE_BONJOUR: "1",
