@@ -1,2 +1,2 @@
-49
-# Saved-rollout preservation through startup and native history reuse; retains token and safe-path guards.
+80
+# Saved-rollout preservation, image-heavy repeat turns and cold native reuse; retains token and safe-path guards.
