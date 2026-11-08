@@ -244,6 +244,7 @@ export function setSessionsGrouping(
   organizer: SessionOrganizer,
   grouping: SidebarSessionsGrouping,
 ) {
+  organizer.clearRevealedCreatedGroup();
   if (organizer.deps.sessionsGrouping !== grouping) {
     organizer.deps.releaseSidebarSnapshot();
   }

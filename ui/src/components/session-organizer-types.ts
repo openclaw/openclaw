@@ -1,7 +1,6 @@
 import type { SidebarSessionsGrouping } from "../lib/sessions/grouping.ts";
 import type {
   SidebarRecentSession,
-  SidebarEmptyGroupsMode,
   SidebarSessionStatusFilter,
 } from "./app-sidebar-session-types.ts";
 import type { SessionDataOwner } from "./session-data.ts";
@@ -20,7 +19,7 @@ export interface SessionOrganizerDependencies {
   readonly sidebarEntries: readonly string[];
   readonly onUpdateSidebarEntries?: (entries: string[]) => void;
   sessionsGrouping: SidebarSessionsGrouping;
-  setSessionsEmptyGroupsMode(mode: SidebarEmptyGroupsMode): void;
+  selectedAgentIdForSessions(): string;
   releaseSidebarSnapshot(): void;
   effectiveSessionsGrouping(): SidebarSessionsGrouping;
   sessionsShowCron: boolean;

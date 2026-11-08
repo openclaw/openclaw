@@ -14,7 +14,6 @@ import {
 } from "../lib/sessions/worktree-preservation.ts";
 import { showToast } from "../lib/toast.ts";
 import {
-  storeSidebarSessionsGrouping,
   type SidebarRecentSession,
   type SidebarSessionMutationResult,
   type SidebarSessionMutationScope,
@@ -429,11 +428,6 @@ export async function createSessionGroup(
   if (!deps.sessionData.isSessionMutationScopeCurrent(scope)) {
     return "stale";
   }
-  // An explicitly created folder must be visible even in a flat or filtered list.
-  deps.releaseSidebarSnapshot();
-  deps.sessionsGrouping = "category";
-  storeSidebarSessionsGrouping("category");
-  deps.setSessionsEmptyGroupsMode("never");
   return "completed";
 }
 

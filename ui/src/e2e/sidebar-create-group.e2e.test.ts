@@ -31,7 +31,7 @@ suite.define(() => {
               initialGrouping: grouping,
             },
           );
-          const gateway = await installMockGateway(page);
+          const gateway = await installMockGateway(page, { sessionGroups: ["Other Group"] });
           await page.goto(`${suite.server.baseUrl}chat`);
           await page.locator(".agent-chat__composer-combobox textarea").waitFor();
           const sidebar = page.locator("openclaw-app-sidebar:visible");
@@ -55,9 +55,23 @@ suite.define(() => {
           await dialog.waitFor({ state: "detached" });
           const group = sidebar.locator('[data-session-section="category:Project Alpha"]');
           await group.waitFor();
+          expect(
+            await sidebar.locator('[data-session-section="category:Other Group"]').count(),
+          ).toBe(0);
+          expect(
+            await page.evaluate(
+              () =>
+                Object.entries(localStorage).find(([key]) =>
+                  key.startsWith("openclaw.control.sidebarEmptyGroups.v1:"),
+                )?.[1],
+            ),
+          ).toBe("always");
+          expect(
+            await page.evaluate(() => localStorage.getItem("openclaw:sidebar:sessions:grouping")),
+          ).toBe(grouping);
           const requests = await gateway.getRequests("sessions.groups.put");
           expect(requests).toHaveLength(1);
-          expect(requests[0]?.params).toMatchObject({ names: ["Project Alpha"] });
+          expect(requests[0]?.params).toMatchObject({ names: ["Other Group", "Project Alpha"] });
           const created = await takeControlUiScreenshotFrame(page, surface, [toolbar, group], {
             animations: "disabled",
             elements: [surface],

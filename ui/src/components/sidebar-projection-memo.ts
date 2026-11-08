@@ -50,6 +50,7 @@ export type SidebarProjectionHost = {
   readonly sessionSortMode: SidebarSessionSortMode;
   readonly sessionsStatusFilter: SidebarSessionStatusFilter;
   readonly sessionsEmptyGroupsMode: SidebarEmptyGroupsMode;
+  readonly sessionOrganizer: { readonly revealedCreatedGroup: string | null };
   readonly sessionsShowCron: boolean;
   readonly sessionsShowSystem: boolean;
   readonly sessionsShowPreview: boolean;
@@ -145,6 +146,7 @@ export function memoizedSidebarSections(
       host.collapsedSessionSections,
       host.effectiveSessionsGrouping(),
       host.sessionsEmptyGroupsMode,
+      host.sessionOrganizer.revealedCreatedGroup,
       rosterLimits,
       host.sessionData.visibleSessionLimits,
       host.sidebarEntries,
@@ -186,6 +188,7 @@ export function memoizedSidebarSections(
         catalogIds: catalogs.map((catalog) => catalog.id),
         collapsedSections,
         emptyGroupsMode: host.sessionsEmptyGroupsMode,
+        revealedCreatedGroup: host.sessionOrganizer.revealedCreatedGroup,
         ownerFilter: host.sessionOwnerFilterActive
           ? "owner"
           : host.sessionInvolvingMeFilterActive

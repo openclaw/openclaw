@@ -228,7 +228,7 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarBase 
   effectiveSessionsGrouping(): SidebarSessionsGrouping {
     // Refreshes can temporarily invalidate the owner facet; retain the Person
     // preference so it returns with the authoritative multi-owner list.
-    const grouping = this.sessionsGrouping;
+    const grouping = this.sessionOrganizer.effectiveGrouping;
     return grouping === "person" && !this.sessionPeopleSortAvailable() ? "category" : grouping;
   }
 
@@ -276,7 +276,7 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarBase 
   }
 
   setSessionsEmptyGroupsMode(mode: SidebarEmptyGroupsMode): void {
-    this.emptyGroups.set(mode);
+    this.emptyGroups.set(this.sessionOrganizer.acceptEmptyGroupsMode(mode));
     this.invalidate();
   }
   sessionsStatusFilter: SidebarSessionStatusFilter = loadStoredSidebarSessionStatusFilter();
