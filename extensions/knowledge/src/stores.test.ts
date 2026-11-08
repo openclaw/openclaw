@@ -8,6 +8,7 @@ import { expect, it, vi } from "vitest";
 import type { Principal } from "./access.js";
 import { contract } from "./contract.js";
 import { createKnowledgeService } from "./service.js";
+import { StorageClient } from "./storage-client.js";
 import { StoreRegistry } from "./store-registry.js";
 import { parsePolicy, storesRevision, type StoresSection } from "./stores-config.js";
 import { Stores } from "./stores.js";
@@ -314,6 +315,15 @@ it("store counts follow the operator's live agent role and shared-Gateway policy
   const f = await fixture();
   await f.save("main", "Main note");
   await f.save("research", "Research note");
+  const calls = vi.spyOn(StorageClient.prototype, "call");
+  try {
+    const inventory = await f.service.stores_snapshot({ includeRecordCounts: false }, f.admin);
+    expect(inventory.stores.filter((s) => s.state === "ready")).toHaveLength(2);
+    expect(inventory.stores.every((s) => s.records === null)).toBe(true);
+    expect(calls).not.toHaveBeenCalled();
+  } finally {
+    calls.mockRestore();
+  }
   const counts = async (client: Record<string, unknown>) => {
     const context = operatorContext(f.api, ["operator.read"]);
     Object.assign(context.action.client, client);

@@ -141,6 +141,7 @@ it.each([
   element.scrollTop = 20;
   element.dispatchEvent(new Event("scroll"));
   expect(order).toEqual(["composer", "virtualizer", "pane"]);
+  expect(state.nativeInputActive).toBe(false);
   expect(deliver).toHaveBeenCalledWith(20, true);
   expect(onOffset).toHaveBeenCalledOnce();
   expect(recordedEnd).toEqual([true]);
@@ -169,6 +170,7 @@ it.each([
   // Actual input retires the command before its native movement reaches the observer.
   virtualizer.scrollOffset = 19;
   element.dispatchEvent(new WheelEvent("wheel", { deltaY: 1, bubbles: true, cancelable: true }));
+  expect(state.nativeInputActive).toBe(true);
   expect(cancelScroll).toHaveBeenCalledOnce();
   expect(state.scrollCommand).toBeNull();
   onOffset.mockClear();
@@ -185,6 +187,15 @@ it.each([
     state.syncNativeOffset?.();
     expect(deliver).toHaveBeenCalledExactlyOnceWith(20, false);
   }
+  state.recordProgrammaticScroll?.(20, 20, true);
+  expect(state.nativeInputActive).toBe(true);
+  element.scrollTop = 21;
+  state.recordProgrammaticScroll?.(20, 21, true);
+  expect(state.nativeInputActive).toBe(false);
+  element.dispatchEvent(new WheelEvent("wheel", { deltaY: -1, bubbles: true, cancelable: true }));
+  expect(state.nativeInputActive).toBe(true);
+  element.dispatchEvent(new Event("scrollend"));
+  expect(state.nativeInputActive).toBe(false);
 });
 
 it.each([

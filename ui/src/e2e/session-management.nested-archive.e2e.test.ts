@@ -133,8 +133,12 @@ suite.define(() =>
         const parentOnly = action === "Archive only this session";
         await ui.button(modal, action).click();
         if (parentOnly) {
-          await expect.poll(() => archivedKeys(gateway)).toEqual(keys);
           await page.getByText("Session archived", { exact: true }).waitFor();
+        }
+        expect(await archivedKeys(gateway)).toEqual([]);
+        await ui.closeArchiveUndoToast(page);
+        if (parentOnly) {
+          await expect.poll(() => archivedKeys(gateway)).toEqual(keys);
         } else {
           await expect.poll(() => ui.requestCount(gateway, "sessions.patchMany")).toBe(1);
           expect(await archivedKeys(gateway, ["sessions.patchMany"])).toEqual(keys);

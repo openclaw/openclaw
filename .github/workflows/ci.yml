@@ -4846,6 +4846,12 @@ jobs:
         with:
           image: pgvector/pgvector:pg17@sha256:ac08538c6f8b9904c33c8224c5e5706dbe760aca29db1d096972b4052c22a75d
           shard: ${{ matrix.shard }}
+      - name: Run PostgreSQL 16 Gateway cron smoke
+        if: ${{ !cancelled() && github.event_name == 'pull_request' && matrix.shard == '1/3' && steps.node_setup.outcome == 'success' }}
+        uses: ./.ci-harness/.github/actions/postgres-conformance
+        with:
+          image: pgvector/pgvector:pg16@sha256:7b822b0aac60967beb1ea5e576b8602c94c300a157d187f385ae3e0da199b90a
+          target: src/gateway/server-database-engine.postgres.test.ts
 
   check-docs:
     permissions:
@@ -6024,6 +6030,7 @@ jobs:
             -only-testing:OpenClawTests/TalkRealtimeConsultCancellationTests \
             -only-testing:OpenClawTests/TalkRealtimeTranscriptWriteQueueTests \
             -only-testing:OpenClawTests/TalkModeManagerTests \
+            -only-testing:OpenClawTests/TalkTranscriptCompletionTests \
             -only-testing:OpenClawTests/ManagedDocumentEnvelopeTests \
             -only-testing:OpenClawTests/IOSMediaArtifactLoaderTests \
             -only-testing:OpenClawTests/OpenClawTypographyTests \
@@ -6149,6 +6156,7 @@ jobs:
             -only-testing:OpenClawWatchTests/WatchSpeechPlaybackTests
             -only-testing:OpenClawWatchTests/WatchRealtimeMediaTests
             -only-testing:OpenClawWatchTests/WatchGatewayConfigurationTests
+            -only-testing:OpenClawWatchTests/WatchTypographyTests
           )
           run_apple_command_logged apps/ios/build/LifecycleTestResults/OpenClawWatchBuild.log xcodebuild \
             "${xcodebuild_args[@]}" "${test_args[@]}" build-for-testing

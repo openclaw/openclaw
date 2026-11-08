@@ -91,6 +91,13 @@ it("imports inspected pixel observations using the original capture clock and lo
     },
   });
   expect(Object.keys(run).filter((key) => key.endsWith("CapturedPaintMs"))).toEqual([]);
+  await writeFile(
+    input.reportPath,
+    JSON.stringify({ ...JSON.parse(input.original), captureMode: "timing" }),
+  );
+  await expect(applyWarmReloadPaintAudit(input.reportPath, input.auditPath)).rejects.toThrow(
+    "Timing captures have no pixel evidence; rerun with --visual-proofs",
+  );
 });
 
 it("requires exactly one attested observation per captured reload and actual captured local frames", async () => {

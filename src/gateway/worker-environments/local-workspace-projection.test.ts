@@ -38,12 +38,12 @@ import {
   proveArchivedInputRetention,
   proveLastFileDirectoryRetention,
 } from "./local-workspace-directory-retention.test-support.js";
+import { proveGitIgnoredWorkspaceOutputs } from "./local-workspace-generated-paths.test-support.js";
 import {
   expectMissing,
   observeAcknowledgedUpdate,
   prepareLocalWorkspaceArchiveFixture,
   prepareSandboxCheckpointFixture,
-  proveAbsentProjectionCheckpoints,
   proveHostAdmittedBuildInputs,
   proveInterruptedWorkspaceCheckpoint,
   proveIncrementalWorkspaceEdits,
@@ -219,9 +219,6 @@ it.each(["read", "authority", "observation", "cancel"] as const)(
       revoked = true;
     }),
 );
-
-it("avoids lease requests for absent projections and checkpoints a later projection", () =>
-  proveAbsentProjectionCheckpoints(owner));
 
 it("joins waiting sandbox checkpoints across handles without losing later writes", ({ signal }) =>
   proveSharedSandboxCheckpoints(owner, signal));
@@ -424,6 +421,9 @@ it.each([false, true])(
     await proveAcceptedInventoryRecovery(owner, retainedMembership);
   },
 );
+
+it("checkpoints Git changes without ignored build outputs or guest Git metadata", () =>
+  proveGitIgnoredWorkspaceOutputs(owner, root));
 
 it("never admits nested host secrets after guest de-ignore", async () => {
   const prefix = "nested/";

@@ -434,18 +434,7 @@ suite.define(() => {
         "agents.list": mainAgentList(),
         "fs.listDir": FOLDER_LISTINGS,
         "projects.list": { projects: [], recents: [] },
-        "users.prefs.get": {
-          sequence: [
-            { status: "ok", entries: {} },
-            {
-              status: "ok",
-              entries: {
-                "new-session.migration.v1": true,
-                "new-session.v1:main": REMEMBERED_PROJECT,
-              },
-            },
-          ],
-        },
+        "users.prefs.get": { status: "ok", entries: {} },
         "users.prefs.set": { status: "ok" },
         "worktrees.branches": GIT_BRANCHES,
       },
@@ -455,13 +444,20 @@ suite.define(() => {
     expect(migrated.params).toMatchObject({
       entries: { "new-session.v1:main": REMEMBERED_PROJECT },
     });
+    await gateway.setMethodResponse("users.prefs.get", {
+      status: "ok",
+      entries: {
+        "new-session.migration.v1": true,
+        "new-session.v1:main": REMEMBERED_PROJECT,
+      },
+    });
     const trigger = page.locator("#new-session-project-trigger");
     const checkoutTrigger = page.locator("#new-session-checkout-trigger");
     await expectLabel(trigger, "packages");
     await expectAttribute(checkoutTrigger, "data-worktree", "true");
     await captureProjectUiProof(suite, page, "identity-preferences-migrated.png");
     await returnToDraft(page);
-    await waitForRequestCount(gateway, 2, "users.prefs.get");
+    await waitForRequestCount(gateway, 2, "users.prefs.get", {}, { exactParams: true });
     await waitForRequestCount(gateway, 1, "users.prefs.set");
     await gateway.deferNext("users.prefs.set");
     const newSession = page.locator("openclaw-new-session-page");

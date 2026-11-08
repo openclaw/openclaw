@@ -18,6 +18,7 @@ import { registerChatComposerEnglish } from "../../i18n/locales/en-chat-composer
 import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
+import { liveValue } from "../../lib/reactive/live-value.ts";
 import { LocalToggleRow } from "./local-toggle-row.tsx";
 import { APPEARANCE_SETTINGS_TARGET_IDS } from "./route-data.ts";
 import { SessionObserverSettings } from "./session-observer-settings-view.tsx";
@@ -231,8 +232,7 @@ export function ChatPreferencesSection(props: ConfigProps) {
           mode: serverQueueMode(),
         })
       : undefined;
-  // The value binding rewrites the DOM whenever it reruns. Track only the stored
-  // width so unrelated settings refreshes keep an uncommitted draft.
+  // Isolate committed values from unrelated settings and translation refreshes.
   const messageWidth = createMemo(() => props.chatMessageMaxWidth ?? "");
   const sendShortcutProvenance = () => serverUiPrefProvenanceHint(props.chatSendShortcutProvenance);
   const followUpProvenance = () => serverUiPrefProvenanceHint(props.chatFollowUpModeProvenance);
@@ -329,7 +329,7 @@ export function ChatPreferencesSection(props: ConfigProps) {
               type="text"
               spellcheck="false"
               placeholder="48rem"
-              value={messageWidth()}
+              ref={liveValue(messageWidth)}
               onChange={(event) => {
                 const input = event.currentTarget;
                 const normalized = normalizeChatMessageMaxWidth(input.value);

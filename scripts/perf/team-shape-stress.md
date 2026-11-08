@@ -10,6 +10,12 @@ disabled through the external-supervisor policy. Use a tooling checkout whose
 fixture schema both builds can read or migrate forward; newer fixture schemas
 cannot be downgraded. Doctor failures or subsequent schema admission failures
 are setup failures; the harness never downstamps databases or bypasses admission.
+The first synthetic `sessions.create` retries only the Gateway's retryable
+`UNAVAILABLE` / `startup-sidecars` response, honoring `retryAfterMs` within a
+120-second total request-and-wait budget. Every retry is logged. This happens
+before warmup and measurement; transport errors, other refusals, and measured RPC
+failures are not retried.
+
 The Gateway's instrumentation loader uses native Node type stripping and resolves
 source-only `.js` imports to TypeScript without applying tsconfig aliases.
 Already-built JavaScript stays byte-for-byte native: a transforming loader can

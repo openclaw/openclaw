@@ -23,6 +23,7 @@ import {
 } from "./agent-database-admission-error.js";
 import {
   AgentDatabaseAdmissionError,
+  createAgentDatabaseDeletionRefusal,
   createAgentDatabaseInspectionRefusal,
   failPendingAgentDatabase,
   isAgentDatabasePreparationRetryable,
@@ -403,7 +404,7 @@ class AgentDatabaseStartupAdmission {
             }, capacityRetry);
             assertCurrent();
             if (deletion !== "absent") {
-              throw new Error(`Agent ${agentId} was deleted during startup inspection`);
+              throw new AgentDatabaseAdmissionError(createAgentDatabaseDeletionRefusal(refusal));
             }
           };
           assertCurrent();
