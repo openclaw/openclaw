@@ -11,6 +11,7 @@ import {
   captureAgentDatabaseAdmission,
   runWithAgentDatabaseReadAdmissionTurn,
 } from "../../state/agent-database-admission.js";
+import { getAgentDeletionDatabaseCleanup } from "../../state/agent-deletion-cleanup.js";
 import { isArtifactPreservingStateRead } from "../../state/artifact-preserving-state-reads.js";
 import type { OpenClawAgentDatabaseOptions } from "../../state/openclaw-agent-db-contract.js";
 import { captureOpenClawAgentDatabaseReadValidation } from "../../state/openclaw-agent-db-validation-cache.js";
@@ -146,9 +147,6 @@ export function retainSessionHistoryWorkerDatabase(
   });
   let knownSource = false;
   const assertCurrent = () => {
-    if (!isArtifactPreservingStateRead("agent", database.path)) {
-      assertAgentAdmitted();
-    }
     if (owned.revoked) {
       throw new WorkerTaskError("Session history database read was revoked", "unavailable");
     }
@@ -273,6 +271,12 @@ export function retainSessionHistoryWorkerDatabase(
                 return requestLane.pool.run(
                   () => {
                     assertCurrent();
+                    const cleanup = getAgentDeletionDatabaseCleanup(readOptions);
+                    if (cleanup) {
+                      cleanup.assertCurrentHost();
+                    } else if (!preserveSourceArtifacts) {
+                      assertAgentAdmitted();
+                    }
                     options.prepareRead?.();
                     const input = prepare();
                     if (preserveSourceArtifacts && input.kind === "session-exact-entries") {
@@ -361,7 +365,6 @@ export function retainSessionHistoryWorkerDatabase(
             );
           });
           await retirement;
-          assertCurrent();
           const received =
             unwrapSessionTranscriptWorkerReply<SessionHistoryWorkerInput["kind"]>(reply);
           if (
