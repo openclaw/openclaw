@@ -6,7 +6,10 @@ import fs from "node:fs";
 import path from "node:path";
 import { expect, it, vi } from "vitest";
 import * as processRole from "../infra/database-engine/admission-scope.js";
-import { readGatewayLockProcessNamespace } from "../infra/gateway-lock-payload.js";
+import {
+  readGatewayLockProcessNamespace,
+  type LockPayload,
+} from "../infra/gateway-lock-payload.js";
 import {
   StateDatabaseAdmissionPendingError,
   StateDatabaseOfflineMaintenanceError,
@@ -100,10 +103,11 @@ it.each(["release", "offline", "exhausted", "cancelled"] as const)(
         JSON.stringify({
           pid: process.ppid,
           createdAt: new Date().toISOString(),
+          configPath: path.join(path.dirname(pathname), "openclaw.json"),
           processNamespace: readGatewayLockProcessNamespace(),
           role: "sqlite-maintenance",
-          stateOwnerKind: outcome === "offline" ? "process" : "schema",
-        }),
+          ...(outcome === "offline" ? {} : { stateOwnerKind: "schema" }),
+        } satisfies LockPayload),
       );
       dispatch.resolve();
       await vi.advanceTimersByTimeAsync(0);
