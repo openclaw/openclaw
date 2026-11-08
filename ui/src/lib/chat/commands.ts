@@ -156,6 +156,14 @@ const UI_ONLY_COMMANDS: SlashCommandDef[] = [
 const COMMAND_OVERRIDES: Partial<
   Record<string, Pick<SlashCommandDef, "description" | "descriptionKey" | "args">>
 > = {
+  agents: {
+    description: registerChatCommandsEnglish.catalog.chat.commands.agentsDescription,
+    descriptionKey: "chat.commands.agentsDescription",
+  },
+  usage: {
+    description: registerChatCommandsEnglish.catalog.chat.commands.usageDescription,
+    descriptionKey: "chat.commands.usageDescription",
+  },
   steer: {
     description: registerChatCommandsEnglish.catalog.chat.commands.steerDescription,
     descriptionKey: "chat.commands.steerDescription",

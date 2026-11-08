@@ -38,6 +38,7 @@ import { controlUiPluginDistributionsPlugin } from "./config/control-ui-plugin-d
 import { controlUiSocialCardPlugin } from "./config/control-ui-social-card.ts";
 import { controlUiSolidPlugin } from "./config/control-ui-solid.ts";
 import { extractControlUiStartupAssetPaths } from "./config/control-ui-startup-assets.ts";
+import { controlUiUpdateCachePlugins } from "./config/control-ui-update-cache.ts";
 import { normalizeControlUiBuildInfo } from "./src/build-info-normalizers.ts";
 import type { ControlUiBuildInfo } from "./src/build-info.ts";
 
@@ -443,6 +444,7 @@ export async function refreshControlUiBuildOutput(
   const publicContent = publicDir ? collectControlUiPublicAssets(publicDir) : undefined;
   const publicAssets = publicContent?.paths ?? [];
   const cacheId = publicContent ? `${buildInfo.buildId}-${publicContent.hash}` : undefined;
+  const publicAssetVersion = publicContent?.hash;
   let selectedBootAssets = bootAssets;
   if (!selectedBootAssets) {
     // Reuse the build-owned graph already serialized by this producer, never a fetched document.
@@ -473,13 +475,13 @@ export async function refreshControlUiBuildOutput(
         // Relative CSS URLs do not inherit their parent stylesheet's query.
         const versioned = assetSource.replace(
           /url\("([^"/?#]+\.woff2)"\)/gu,
-          `url("$1?v=${cacheId}")`,
+          `url("$1?v=${publicAssetVersion}")`,
         );
         fs.writeFileSync(filePath, versioned);
       } else {
         const manifest = JSON.parse(assetSource) as { icons: Array<{ src: string }> };
         for (const icon of manifest.icons) {
-          icon.src += `?v=${cacheId}`;
+          icon.src += `?v=${publicAssetVersion}`;
         }
         fs.writeFileSync(filePath, `${JSON.stringify(manifest, null, 2)}\n`);
       }
@@ -515,7 +517,9 @@ export async function refreshControlUiBuildOutput(
     ]
       .toSorted()
       .map((file) => ({
-        path: file.startsWith("assets/") ? file : `${file}?v=${encodeURIComponent(cacheId ?? "")}`,
+        path: file.startsWith("assets/")
+          ? file
+          : `${file}?v=${encodeURIComponent(publicAssetVersion ?? "")}`,
         integrity:
           "sha256-" +
           createHash("sha256")
@@ -560,7 +564,7 @@ export async function refreshControlUiBuildOutput(
     csp: csp.buildControlUiCspHeader({
       inlineScriptHashes: csp.computeInlineScriptHashes(offlineShell.html),
     }),
-    publicAssetVersion: cacheId,
+    publicAssetVersion,
     publicAssets: publicAssets.filter(isControlUiVersionedPublicAsset),
     id: createHash("sha256")
       .update(JSON.stringify({ ...offlineShell, deferredAssets }))
@@ -993,6 +997,7 @@ export default function controlUiViteConfig(
       controlUiNavigationPreloadsPlugin(),
       controlUiPrecompressedAssetsPlugin(),
       controlUiBuildOutputPlugin(buildInfo, copiedInputs),
+      ...controlUiUpdateCachePlugins(),
       {
         name: "control-ui-dev-stubs",
         configureServer(server) {

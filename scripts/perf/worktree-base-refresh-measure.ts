@@ -1,0 +1,268 @@
+/**
+ * Real default-base owner, local synthetic origin; no operator state or network.
+ * node --import ./scripts/tsx.mjs scripts/perf/worktree-base-refresh-measure.ts \
+ *   --seed <disposable-seed> --base-file <saved-base-ref.ts> --output <new-directory>
+ * Five serial AB/BA pairs, then five A/A pairs; fresh clone/process per sample.
+ * Add --profile for a separate phase-scoped candidate CPU profile.
+ * Acceptance: unchanged origin selects the same commit with fetches 1 -> 0,
+ * lower baseRefresh wall/CPU/allocation, no >20% regression in owner metrics.
+ * JS allocation is exact V8 allocation; native Git CPU/RSS uses macOS time -l.
+ * File copying, startup and hydration are outside baseRefresh. This is neither
+ * a Gateway send benchmark nor a reproduction of production queue contention.
+ */
+import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
+import fs from "node:fs/promises";
+import { Session } from "node:inspector/promises";
+import { registerHooks } from "node:module";
+import { loadavg } from "node:os";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { parseArgs } from "node:util";
+import { getHeapStatistics } from "node:v8";
+
+const { values } = parseArgs({
+  options: {
+    seed: { type: "string" },
+    "base-file": { type: "string" },
+    output: { type: "string" },
+    pairs: { type: "string", default: "5" },
+    arm: { type: "string" },
+    profile: { type: "boolean" },
+  },
+});
+assert(values.seed && values.output, "--seed and --output are required");
+assert(process.platform === "darwin", "Native CPU receipts require macOS time -l");
+const seed = await fs.realpath(values.seed);
+const output = path.resolve(values.output);
+const baseline = values["base-file"] ? path.resolve(values["base-file"]) : undefined;
+const actualGit = execFileSync("which", ["git"], { encoding: "utf8" }).trim();
+const shellQuote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
+const gitEnv = {
+  ...process.env,
+  GIT_CONFIG_GLOBAL: "/dev/null",
+  GIT_CONFIG_SYSTEM: "/dev/null",
+  GIT_CONFIG_NOSYSTEM: "1",
+};
+const origin = execFileSync(actualGit, ["-C", seed, "remote", "get-url", "origin"], {
+  env: gitEnv,
+  encoding: "utf8",
+}).trim();
+assert(origin.startsWith("file://"), "The fixture must use a local file:// origin");
+const ownerSha256 = createHash("sha256")
+  .update(
+    readFileSync(baseline ?? new URL("../../src/agents/worktrees/base-ref.ts", import.meta.url)),
+  )
+  .digest("hex");
+await fs.mkdir(output);
+
+if (!values.arm) {
+  assert(baseline, "--base-file is required for paired comparison");
+  const pairs = Number(values.pairs);
+  assert(Number.isSafeInteger(pairs) && pairs >= 5);
+  const rows: unknown[] = [];
+  for (const control of [false, true]) {
+    for (let pair = 0; pair < pairs; pair++) {
+      for (const arm of pair % 2 === 0 ? ["base", "candidate"] : ["candidate", "base"]) {
+        const label = `${control ? "aa" : "ab"}-${pair}-${arm}`;
+        const sampleOutput = path.join(output, label);
+        const args = [
+          "--import",
+          "./scripts/tsx.mjs",
+          fileURLToPath(import.meta.url),
+          "--seed",
+          seed,
+          "--output",
+          sampleOutput,
+          "--arm",
+          arm,
+        ];
+        if (arm === "base" || control) {
+          args.push("--base-file", baseline);
+        }
+        const stdout = execFileSync(process.execPath, args, {
+          env: gitEnv,
+          encoding: "utf8",
+          maxBuffer: 8 * 1024 * 1024,
+        });
+        await fs.writeFile(path.join(sampleOutput, "stdout.log"), stdout);
+        const row = JSON.parse(await fs.readFile(path.join(sampleOutput, "result.json"), "utf8"));
+        rows.push({ label, control, ...row });
+        console.log(JSON.stringify(rows.at(-1)));
+        await fs.writeFile(path.join(output, "results.json"), JSON.stringify(rows, null, 2));
+        await fs.rm(path.join(sampleOutput, "clone"), { recursive: true });
+      }
+    }
+  }
+} else {
+  const clone = path.join(output, "clone");
+  await fs.cp(seed, clone, { recursive: true });
+  const expected = execFileSync(actualGit, ["-C", clone, "rev-parse", "refs/remotes/origin/main"], {
+    env: gitEnv,
+    encoding: "utf8",
+  }).trim();
+  const metrics = path.join(output, "git-metrics");
+  const bin = path.join(output, "bin");
+  await fs.mkdir(metrics);
+  await fs.mkdir(bin);
+  await fs.writeFile(
+    path.join(bin, "git"),
+    `#!/bin/sh\nreceipt=${shellQuote(metrics)}/\${OPENCLAW_PERF_GIT_PHASE:-outside}-$$\n` +
+      `printf '%s\\n' "$*" > "$receipt.argv"\n` +
+      `exec /usr/bin/time -l -o "$receipt.time" ${shellQuote(actualGit)} "$@"\n`,
+    { mode: 0o755 },
+  );
+  // Keep Git's transport configuration isolated while retaining the timing shim.
+  for (const key of Object.keys(process.env)) {
+    if (key.startsWith("GIT_")) {
+      delete process.env[key];
+    }
+  }
+  Object.assign(process.env, {
+    GIT_CONFIG_GLOBAL: "/dev/null",
+    GIT_CONFIG_SYSTEM: "/dev/null",
+    GIT_CONFIG_NOSYSTEM: "1",
+    OPENCLAW_STATE_DIR: path.join(output, "state"),
+    OPENCLAW_HOME: output,
+    PATH: `${bin}:${process.env.PATH}`,
+  });
+  const phases: Record<string, { wallMs: number; cpuMs: number; allocatedBytes: number }> = {};
+  let phase = "outside";
+  let commandCount = 0;
+  let fetches = 0;
+  let advertisements = 0;
+  const profiler = values.profile ? new Session() : undefined;
+  profiler?.connect();
+  if (profiler) {
+    await profiler.post("Profiler.enable");
+  }
+  const key = Symbol.for("openclaw.perf.base-refresh");
+  Object.defineProperty(globalThis, key, {
+    configurable: true,
+    value: {
+      async measure<T>(name: string, run: () => Promise<T>): Promise<T> {
+        if (name !== "baseRefresh") {
+          return await run();
+        }
+        phase = name;
+        if (profiler) {
+          await profiler.post("Profiler.start");
+        }
+        const cpu = process.threadCpuUsage();
+        const allocated = getHeapStatistics().total_allocated_bytes;
+        assert(Number.isFinite(allocated), "Runtime must expose V8 allocation counters");
+        const start = performance.now();
+        try {
+          return await run();
+        } finally {
+          const wallMs = performance.now() - start;
+          const used = process.threadCpuUsage(cpu);
+          phases[name] = {
+            wallMs,
+            cpuMs: (used.user + used.system) / 1000,
+            allocatedBytes: getHeapStatistics().total_allocated_bytes - allocated,
+          };
+          phase = "outside";
+          if (profiler) {
+            const { profile } = await profiler.post("Profiler.stop");
+            await fs.writeFile(
+              path.join(output, "baseRefresh.cpuprofile"),
+              JSON.stringify(profile),
+            );
+          }
+        }
+      },
+      command(args: string[]) {
+        if (phase === "baseRefresh") {
+          commandCount++;
+          fetches += Number(args[0] === "fetch");
+          advertisements += Number(args[0] === "ls-remote");
+        }
+        return phase;
+      },
+    },
+  });
+  const hook = registerHooks({
+    load(url, context, next) {
+      if (url.endsWith("/src/agents/worktrees/base-ref.ts") && baseline) {
+        return {
+          format: "module-typescript",
+          shortCircuit: true,
+          source: readFileSync(baseline, "utf8"),
+        };
+      }
+      if (url.endsWith("/src/agents/worktrees/preparation-timing.ts")) {
+        let source = readFileSync(new URL(url), "utf8");
+        source = source.replace(
+          "export async function timeWorktreePreparationPhase<T>(",
+          "async function timeWorktreePreparationPhaseOriginal<T>(",
+        );
+        source += `\nexport async function timeWorktreePreparationPhase<T>(phase: PreparationPhase, run: () => Promise<T>): Promise<T> {
+          return globalThis[Symbol.for("openclaw.perf.base-refresh")].measure(phase, () => timeWorktreePreparationPhaseOriginal(phase, run));
+        }\n`;
+        return { format: "module-typescript", shortCircuit: true, source };
+      }
+      if (url.endsWith("/src/infra/git-exec.ts")) {
+        let source = readFileSync(new URL(url), "utf8");
+        source = source.replace(
+          "export async function executeGitCommand(",
+          "async function executeGitCommandOriginal(",
+        );
+        source += `\nexport async function executeGitCommand(...args: Parameters<typeof executeGitCommandOriginal>) {
+          const phase = globalThis[Symbol.for("openclaw.perf.base-refresh")].command(args[1]);
+          args[2] = { ...args[2], env: { ...args[2]?.env, OPENCLAW_PERF_GIT_PHASE: phase } };
+          return await executeGitCommandOriginal(...args);
+        }\n`;
+        return { format: "module-typescript", shortCircuit: true, source };
+      }
+      return next(url, context);
+    },
+  });
+  const { resolveWorktreeBase } = await import("../../src/agents/worktrees/base-ref.js");
+  const { drainGlobalSingletonLifecycleState } =
+    await import("../../src/shared/global-singleton.js");
+  const loadBefore = loadavg();
+  try {
+    const result = await resolveWorktreeBase(clone);
+    assert.equal(result.commit, expected);
+    assert.equal(result.fetchSucceeded, true);
+    assert.equal(fetches, baseline ? 1 : 0);
+    assert.equal(advertisements, 1);
+    let gitCpuMs = 0;
+    let gitPeakRssBytes = 0;
+    for (const filename of await fs.readdir(metrics)) {
+      if (!filename.startsWith("baseRefresh-") || !filename.endsWith(".time")) {
+        continue;
+      }
+      const receipt = await fs.readFile(path.join(metrics, filename), "utf8");
+      const cpu = /([\d.]+) user\s+([\d.]+) sys/u.exec(receipt);
+      const rss = /(\d+)\s+maximum resident set size/u.exec(receipt);
+      assert(cpu && rss, receipt);
+      gitCpuMs += (Number(cpu[1]) + Number(cpu[2])) * 1000;
+      gitPeakRssBytes = Math.max(gitPeakRssBytes, Number(rss[1]));
+    }
+    const row = {
+      arm: values.arm,
+      baseline: Boolean(baseline),
+      ownerSha256,
+      ...phases.baseRefresh,
+      commandCount,
+      fetches,
+      advertisements,
+      gitCpuMs,
+      gitPeakRssBytes,
+      commit: result.commit,
+      loadBefore,
+      loadAfter: loadavg(),
+    };
+    await fs.writeFile(path.join(output, "result.json"), JSON.stringify(row, null, 2));
+    console.log(JSON.stringify(row));
+  } finally {
+    await drainGlobalSingletonLifecycleState();
+    profiler?.disconnect();
+    hook.deregister();
+    Reflect.deleteProperty(globalThis, key);
+  }
+}

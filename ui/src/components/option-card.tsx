@@ -3,7 +3,7 @@ import { elementRef } from "../lib/reactive/element-ref.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import { createPendingFocus } from "../lib/reactive/pending-focus.ts";
 import "../styles/option-card.css";
-import { nextRadio } from "./solid/radio.tsx";
+import { nextRadio } from "./solid/radio-navigation.ts";
 
 type OptionCardOption = {
   value: string;

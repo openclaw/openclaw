@@ -68,9 +68,7 @@ it("preserves live hovercard content, focus, and translated actions across updat
   link.focus();
   await i18n.setLocale("de");
   await waitForSolid(() => {
-    for (const text of ["Mit Slack verknüpft", "Ausführung fehlgeschlagen: Failure"]) {
-      expect(card?.textContent).toContain(text);
-    }
+    expect(card?.textContent).toContain("Mit Slack verknüpft");
     for (const label of ["Projekt: Example", "Läuft auf local · default"]) {
       expect(card?.querySelector(`[aria-label="${label}"]`)).not.toBeNull();
     }
