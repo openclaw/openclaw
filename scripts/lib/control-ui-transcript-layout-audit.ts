@@ -25,7 +25,28 @@ function observeTranscriptLayout() {
   let stopped = false;
   let frame = 0;
   const scrollToDescriptor = Object.getOwnPropertyDescriptor(thread, "scrollTo");
+  const scrollTopDescriptor = Object.getOwnPropertyDescriptor(thread, "scrollTop");
+  const nativeScrollTop = Object.getOwnPropertyDescriptor(Element.prototype, "scrollTop")!;
   const nativeScrollTo = thread.scrollTo.bind(thread);
+  Object.defineProperty(thread, "scrollTop", {
+    configurable: true,
+    get() {
+      return nativeScrollTop.get!.call(thread);
+    },
+    set(value: number) {
+      const before = thread.scrollTop;
+      nativeScrollTop.set!.call(thread, value);
+      if (scrollWrites.length < 6_000) {
+        scrollWrites.push({
+          at: performance.now(),
+          api: "scrollTop",
+          before,
+          requested: value,
+          after: thread.scrollTop,
+        });
+      }
+    },
+  });
   thread.scrollTo = (options: ScrollToOptions | number = {}, y?: number) => {
     const before = thread.scrollTop;
     if (typeof options === "number") {
@@ -36,6 +57,7 @@ function observeTranscriptLayout() {
     if (scrollWrites.length < 6_000) {
       scrollWrites.push({
         at: performance.now(),
+        api: "scrollTo",
         before,
         requested: typeof options === "number" ? y : options.top,
         after: thread.scrollTop,
@@ -195,6 +217,11 @@ function observeTranscriptLayout() {
       observer.disconnect();
       scope.removeEventListener("wheel", onInput, true);
       scope.removeEventListener("input", onInput, true);
+      if (scrollTopDescriptor) {
+        Object.defineProperty(thread, "scrollTop", scrollTopDescriptor);
+      } else {
+        Reflect.deleteProperty(thread, "scrollTop");
+      }
       if (scrollToDescriptor) {
         Object.defineProperty(thread, "scrollTo", scrollToDescriptor);
       } else {
