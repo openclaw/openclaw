@@ -1,7 +1,7 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { t } from "../../i18n/index.ts";
 import { registerChatMessageMetadataEnglish } from "../../i18n/locales/en-chat-message-metadata.ts";
-import { normalizeMessage } from "../../lib/chat/message-normalizer.ts";
+import { normalizeMessageFacts } from "../../lib/chat/message-normalizer.ts";
 import { parseCatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
 import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
 import { ChatPaneSession } from "./chat-pane-session.ts";
@@ -29,7 +29,7 @@ export abstract class ChatPaneReplyNavigation extends ChatPaneSession {
       this.replyMessageSource = messages;
       this.replyMessages.clear();
       for (const message of messages ?? []) {
-        const target = normalizeMessage(message).replyTarget;
+        const target = normalizeMessageFacts(message).replyTarget;
         const meta = asOptionalRecord(asOptionalRecord(message)?.["__openclaw"]);
         const result = asOptionalRecord(meta?.replyToMessage);
         if (target?.kind !== "id" || !result) {

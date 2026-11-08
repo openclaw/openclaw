@@ -84,7 +84,7 @@ import {
   optionalRunIdentity,
   resolveRunInsertionBounds,
 } from "./chat-thread-run-identity.ts";
-import { safeNormalizeMessage } from "./chat-turn-boundary.ts";
+import { safeNormalizeMessageFacts } from "./chat-turn-boundary.ts";
 import type { CompactionStatus } from "./tool-stream-contract.ts";
 
 export type BuildChatItemsProps = ChatInputPlacementProps &
@@ -189,7 +189,7 @@ export function buildChatItems(
     }
   };
   const canvasIdentities = new Set<string>();
-  const normalizedHistory = history.map(safeNormalizeMessage);
+  const normalizedHistory = history.map(safeNormalizeMessageFacts);
   const permissionInMessage = (message: unknown) =>
     extractToolCardsCached(message).some((card) =>
       readNodePermissionRequest(asRecord(card.details)?.permissionMissing),

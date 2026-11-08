@@ -2,7 +2,9 @@ import { expectDefined } from "@openclaw/normalization-core";
 /* @vitest-environment jsdom */
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { GatewaySessionRow } from "../../../api/types.ts";
+import { normalizeMessage } from "../../../lib/chat/message-normalizer.ts";
 import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
+import { buildChatItems } from "../chat-thread-build.ts";
 import {
   createTestTranscript as createTranscript,
   stubAnimationFrames,
@@ -13,7 +15,10 @@ import {
   renderChatThread,
   renderTranscriptSearch,
 } from "../test-helpers/chat-transcript-native.tsx";
+import { createMessageGroupHarness } from "./chat-message-native.test-support.tsx";
 import { toggleTranscriptSearch, type ChatThreadProps } from "./chat-thread-interactions.ts";
+import { projectThreadMediaMessages } from "./chat-thread-media-gallery.ts";
+import { projectTranscriptChain, projectTranscriptIndex } from "./chat-transcript-message-index.ts";
 import {
   flushDeferredRowPrune,
   installTranscriptDomMocks,
@@ -309,6 +314,73 @@ const linkedAnswer = answer({ runId: "run-a" });
 const olderPrompt = turn("p3", "user", "Unrelated", alice);
 const duplicatePrompt = turn("p1", "user", "Earlier", { ...alice, idempotencyKey: "run-a:user" });
 const mirroredAnswer = answer({ mirrorOrigin: "discord", idempotencyKey: "run-a" });
+
+it("keeps distant ambiguous reply ownership and complete Markdown with compact history", async () => {
+  const history = [
+    { ...duplicatePrompt, timestamp: 1 },
+    ...Array.from({ length: 1996 }, (_, index) =>
+      turn(
+        `f${index}`,
+        index % 2 === 0 ? "user" : "assistant",
+        `Earlier turn ${index}`,
+        {},
+        index + 2,
+      ),
+    ),
+    { ...prompt, timestamp: 1998 },
+    { ...unrelated, timestamp: 1999 },
+    {
+      ...linkedAnswer,
+      content: "**Visible answer**\n\n- Complete list\n\n```ts\nconst done = true;\n```",
+      timestamp: 2000,
+    },
+  ];
+  const props = replyProps(history);
+  const container = document.body.appendChild(document.createElement("div"));
+  const harness = createMessageGroupHarness(container);
+  try {
+    const project = (messages = history) => {
+      const items = buildChatItems({ ...props, messages });
+      const chain = projectTranscriptChain(items, {
+        sessionKey: props.sessionKey,
+        runWorking: false,
+        searchActive: false,
+      });
+      const index = projectTranscriptIndex(chain, new Map(), { assistantName: "Molty" });
+      const gallery = projectThreadMediaMessages(items);
+      const group = items.find(
+        (item) =>
+          item.kind === "group" &&
+          item.messages.some((source) => source.message === messages.at(-1)),
+      );
+      if (!group || group.kind !== "group") {
+        throw new Error("Answer is missing from the complete history projection");
+      }
+      return { group, items, index, gallery };
+    };
+    const compact = project();
+    harness.render(compact.group, {
+      showToolCalls: false,
+      showReasoning: false,
+      assistantName: "Molty",
+    });
+    await waitForSolid(() =>
+      expect(container.querySelector('[data-entry-id="a4"]')).not.toBeNull(),
+    );
+    const bubble = requireElement(container, '[data-entry-id="a4"]');
+    expect(bubble.querySelector("strong")?.textContent).toBe("Visible answer");
+    expect(bubble.querySelector("li")?.textContent).toBe("Complete list");
+    expect(bubble.querySelector("pre code")?.textContent).toContain("const done = true;");
+    expect(container.querySelector(".chat-reply-attribution--reply")).toBeNull();
+    // Preparing the remaining content must not change grouping or attribution.
+    const fullHistory = structuredClone(history);
+    fullHistory.forEach(normalizeMessage);
+    expect(project(fullHistory)).toEqual(compact);
+  } finally {
+    harness.unmount();
+  }
+});
+
 const systemReply = [
   turn("p1", "user", "Report?", { ...alice, idempotencyKey: "run-a:user" }),
   {

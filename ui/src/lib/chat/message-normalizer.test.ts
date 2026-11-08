@@ -1,9 +1,15 @@
 // @vitest-environment node
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  isToolCallContentType,
+  isToolResultContentType,
+} from "../../../../src/chat/tool-content.js";
+import { resolveMessageDisplayMarkdown } from "./message-display.ts";
+import {
   isStandaloneToolMessageForDisplay,
   isToolResultMessage,
   normalizeMessage,
+  normalizeMessageFacts,
 } from "./message-normalizer.ts";
 
 const canvasPreview = { kind: "canvas", surface: "assistant_message", render: "url" };
@@ -203,15 +209,121 @@ describe("message-normalizer", () => {
     expect(initial.content).toEqual([text("answer")]);
   });
 
+  it.each([
+    {
+      name: "Alice attribution and an explicit reply",
+      message: {
+        role: "user",
+        content: "Hello",
+        __openclaw: {
+          senderIdentity: { type: "profile", id: "alice" },
+          senderName: "Alice",
+          replyToId: "earlier-message",
+          replyToPreview: { text: "Earlier question", senderLabel: "Bob" },
+        },
+      },
+      estimatedContentSize: 22,
+    },
+    {
+      name: "current reply with ordered media and a canvas",
+      message: {
+        role: "assistant",
+        content: [
+          text("Before\nMEDIA:/media/plot.png\nAfter"),
+          { type: "image", url: "/media/image.png" },
+          canvas(canvasFields),
+          { type: "thinking", thinking: "Internal reasoning" },
+        ],
+        openclawDelivery: { replyToCurrent: true },
+      },
+      estimatedContentSize: 224,
+    },
+    {
+      name: "internal text spanning block boundaries",
+      message: { role: "assistant", content: [text("<think>hidden"), text("</think>")] },
+      estimatedContentSize: 44,
+    },
+    {
+      name: "tool aliases without visible content",
+      message: {
+        role: "assistant",
+        content: [
+          { type: "tool_use", name: "exec", input: { command: "pwd" } },
+          { type: "toolResult", text: "done" },
+        ],
+      },
+      estimatedContentSize: 0,
+    },
+    {
+      name: "oversized placeholder without text",
+      message: {
+        role: "assistant",
+        content: "",
+        __openclaw: { truncated: true, reason: "oversized" },
+      },
+      estimatedContentSize: 0,
+    },
+    {
+      name: "empty current reply",
+      message: { role: "assistant", content: "", openclawDelivery: { replyToCurrent: true } },
+      estimatedContentSize: 0,
+    },
+    {
+      name: "catalog text keeps literal directives",
+      message: {
+        role: "assistant",
+        content: "MEDIA:/not-an-attachment.png",
+        __openclaw: { catalogSource: true },
+      },
+      estimatedContentSize: 22,
+    },
+    {
+      name: "heading, blank line and fenced code height",
+      message: { role: "assistant", content: "## Heading\n\n```ts\nconst n = 1;\n```\n" },
+      estimatedContentSize: 102,
+    },
+  ])(
+    "keeps compact facts equal to full normalization: $name",
+    ({ message, estimatedContentSize }) => {
+      const source = { ...message, timestamp: 42 };
+      const facts = normalizeMessageFacts(source);
+      const { content, ...metadata } = normalizeMessage(source);
+      expect(facts).toEqual({
+        ...metadata,
+        hasContent: content.length > 0,
+        hasText: content.some((item) => item.type === "text"),
+        hasDisplayText: Boolean(
+          resolveMessageDisplayMarkdown(source, { ...metadata, content }).trim(),
+        ),
+        hasNonTextContent: content.some(
+          (item) =>
+            item.type !== "text" &&
+            item.type !== "thinking" &&
+            !isToolCallContentType(item.type) &&
+            !isToolResultContentType(item.type),
+        ),
+        canvasPreviews: content.flatMap((item) => (item.type === "canvas" ? [item.preview] : [])),
+        estimatedContentSize,
+      });
+      const alreadyNormalized = structuredClone(source);
+      normalizeMessage(alreadyNormalized);
+      expect(normalizeMessageFacts(alreadyNormalized)).toEqual(facts);
+    },
+  );
+
   it("does not cache a missing timestamp's clock fallback", () => {
     vi.useFakeTimers();
     const message = { role: "assistant", content: "answer" };
     vi.setSystemTime(100);
     const first = normalizeMessage(message);
+    const firstFacts = normalizeMessageFacts(message);
     vi.setSystemTime(200);
     const second = normalizeMessage(message);
+    const secondFacts = normalizeMessageFacts(message);
     expect([first.timestamp, second.timestamp]).toEqual([100, 200]);
+    expect([firstFacts.timestamp, secondFacts.timestamp]).toEqual([100, 200]);
     expect(second).not.toBe(first);
+    expect(secondFacts).not.toBe(firstFacts);
   });
 
   it("keeps user directives literal", () => {

@@ -1,7 +1,7 @@
 import "./chat-attribution.css";
 import { resolveLocalUserName } from "../../../app/user-identity.ts";
 import type { MessageGroup, NormalizedMessage } from "../../../lib/chat/chat-types.ts";
-import { normalizeMessage } from "../../../lib/chat/message-normalizer.ts";
+import { normalizeMessageFacts } from "../../../lib/chat/message-normalizer.ts";
 import { formatSenderLabel, type SenderIdentity } from "../../../lib/chat/sender-label.ts";
 import { persistedMessageEntryId } from "../chat-thread-items.ts";
 import type { ReplyPreview, ReplyPreviewLookup } from "./chat-reply-preview.types.ts";
@@ -171,11 +171,11 @@ export function resolveGroupReplyLine(
   if (group.role !== "assistant") {
     return NO_REPLY_LINE;
   }
-  const targets = group.messages.map(({ message }) => normalizeMessage(message).replyTarget);
+  const targets = group.messages.map(({ message }) => normalizeMessageFacts(message).replyTarget);
   const explicit = targets.find((target) => target?.kind === "id");
   if (explicit?.kind === "id") {
     const previews = replyMessages
-      .map(({ message }) => normalizeMessage(message))
+      .map(({ message }) => normalizeMessageFacts(message))
       .filter(({ replyTarget }) => replyTarget?.kind === "id" && replyTarget.id === explicit.id)
       .map(({ replyPreview }) => replyPreview);
     // Prefer a snapshot that names its sender: the name alone paints the line.
@@ -189,7 +189,7 @@ export function resolveGroupReplyLine(
     // reply_to_current resolves only through the prompt that started this run,
     // never the latest prompt; in 1:1 its own turn's prompt adds nothing.
     const source = group.replyCurrentSource;
-    const sender = source && normalizeMessage(source.message).sender;
+    const sender = source && normalizeMessageFacts(source.message).sender;
     return source &&
       (sender || !group.replyShared) &&
       (group.replyShared || source.key !== group.replyTurnSource?.key)

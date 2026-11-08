@@ -9,7 +9,7 @@ import { userTurnRunId } from "../../lib/chat/history-message-identity.ts";
 import { extractTextCached } from "../../lib/chat/message-extract.ts";
 import { normalizeRoleForGrouping } from "../../lib/chat/message-normalizer.ts";
 import { optionalBoundaryIdentity } from "./chat-thread-run-identity.ts";
-import { safeNormalizeMessage } from "./chat-turn-boundary.ts";
+import { safeNormalizeMessageFacts } from "./chat-turn-boundary.ts";
 import {
   resolveSystemNoticeKind,
   projectSystemNoticeSummary,
@@ -78,7 +78,7 @@ export function createSubmittedModelNoticeProjector() {
     return {
       kind: "notice",
       key: `model-selection:${item.key}`,
-      timestamp: safeNormalizeMessage(item.message)?.timestamp ?? 0,
+      timestamp: safeNormalizeMessageFacts(item.message)?.timestamp ?? 0,
       icon: "brain",
       label: t("chat.systemNotice.modelChanged", modelChange),
       modelChange,
@@ -93,7 +93,7 @@ export function createSubmittedModelNoticeProjector() {
 /** Pending custody and persisted history share the same system-turn presentation. */
 export function projectChatSystemNotice(
   item: Extract<ChatItem, { kind: "message" }>,
-  normalized?: NormalizedMessage | null,
+  normalized?: Pick<NormalizedMessage, "role" | "timestamp"> | null,
   pending?: {
     status: PendingInputStatus;
     key: string;
@@ -110,7 +110,7 @@ export function projectChatSystemNotice(
         {
           kind: "notice",
           key: item.key,
-          timestamp: (normalized ?? safeNormalizeMessage(item.message))?.timestamp ?? 0,
+          timestamp: (normalized ?? safeNormalizeMessageFacts(item.message))?.timestamp ?? 0,
           icon: "brain",
           label: t("chat.systemNotice.modelChanged", { from: details.from, to: details.to }),
           modelChange: { from: details.from, to: details.to },
@@ -144,7 +144,7 @@ export function projectChatSystemNotice(
   const skillChanges = readSkillWorkshopChangeNotice(item.message);
   const runError = readRunFailureNotice(item.message, { audience: "desktop" });
   if (runError) {
-    const message = normalized ?? safeNormalizeMessage(item.message);
+    const message = normalized ?? safeNormalizeMessageFacts(item.message);
     return [
       {
         kind: "notice",
@@ -166,7 +166,7 @@ export function projectChatSystemNotice(
     noticeKey.startsWith("skill-workshop-notice:") &&
     noticeKey.length > "skill-workshop-notice:".length;
   const skillNoticeMessage =
-    (skillChanges || legacySkillNotice) && (normalized ?? safeNormalizeMessage(item.message));
+    (skillChanges || legacySkillNotice) && (normalized ?? safeNormalizeMessageFacts(item.message));
   if (skillNoticeMessage) {
     const { timestamp } = skillNoticeMessage;
     return [
@@ -183,7 +183,7 @@ export function projectChatSystemNotice(
   if (provenance?.kind !== "internal_system") {
     return [item, ...pendingItems];
   }
-  const message = normalized ?? safeNormalizeMessage(item.message);
+  const message = normalized ?? safeNormalizeMessageFacts(item.message);
   if (!message || normalizeRoleForGrouping(message.role) !== "user") {
     return [item, ...pendingItems];
   }

@@ -1,8 +1,10 @@
 import type { NormalizedMessage, ToolCard } from "./chat-types.ts";
+import type { NormalizedMessageFacts } from "./message-normalizer.ts";
 
 type MessageDerivations = {
   revision: string | undefined;
   normalized: NormalizedMessage | undefined;
+  normalizedFacts: NormalizedMessageFacts | undefined;
   toolCards: ToolCard[] | undefined;
 };
 
@@ -20,6 +22,7 @@ export function getMessageDerivations(message: object): MessageDerivations {
     facts = {
       revision: undefined,
       normalized: undefined,
+      normalizedFacts: undefined,
       toolCards: undefined,
     };
     messageDerivations.set(message, facts);

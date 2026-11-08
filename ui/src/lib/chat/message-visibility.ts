@@ -15,6 +15,7 @@ import {
   isEmptyUserTextOnlyMessage,
   readTranscriptMediaEntries,
 } from "./message-extract.ts";
+import type { NormalizedMessageFacts } from "./message-normalizer.ts";
 
 const SYNTHETIC_TRANSCRIPT_REPAIR_RESULT =
   "[openclaw] missing tool result in session history; inserted synthetic error result for transcript repair.";
@@ -25,10 +26,8 @@ export function resolveMessageVisibleContent(
   message: unknown,
   normalized: NormalizedMessage,
 ): MessageGroup["visibleContent"] {
-  if (readTranscriptMediaEntries(message).length > 0) {
-    return "non-text";
-  }
   let hasText = false;
+  let hasNonTextContent = false;
   for (const block of normalized.content) {
     if (block.type === "text") {
       hasText ||= Boolean(block.text?.trim());
@@ -37,10 +36,21 @@ export function resolveMessageVisibleContent(
       !isToolCallContentType(block.type) &&
       !isToolResultContentType(block.type)
     ) {
-      return "non-text";
+      hasNonTextContent = true;
+      break;
     }
   }
-  return hasText || extractTextCached(message)?.trim() ? "text" : "none";
+  return resolveMessageFactsVisibleContent(message, { hasText, hasNonTextContent });
+}
+
+export function resolveMessageFactsVisibleContent(
+  message: unknown,
+  facts: Pick<NormalizedMessageFacts, "hasText" | "hasNonTextContent">,
+): MessageGroup["visibleContent"] {
+  if (facts.hasNonTextContent || readTranscriptMediaEntries(message).length > 0) {
+    return "non-text";
+  }
+  return facts.hasText || extractTextCached(message)?.trim() ? "text" : "none";
 }
 
 function isSyntheticTranscriptRepairToolResult(message: unknown): boolean {

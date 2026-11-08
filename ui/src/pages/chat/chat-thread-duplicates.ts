@@ -2,7 +2,12 @@ import { messageClientSourcesKey } from "../../../../src/chat/message-client-sou
 import { escapeRegExp } from "../../../../src/shared/regexp.js";
 import type { ChatItem, NormalizedMessage } from "../../lib/chat/chat-types.ts";
 import { readChatThreadMessageIdentity } from "../../lib/chat/history-message-identity.ts";
-import { normalizeMessage, normalizeRoleForGrouping } from "../../lib/chat/message-normalizer.ts";
+import {
+  normalizeMessage,
+  normalizeMessageFacts,
+  normalizeRoleForGrouping,
+  type NormalizedMessageFacts,
+} from "../../lib/chat/message-normalizer.ts";
 import { senderIdentityKey } from "../../lib/chat/sender-label.ts";
 import { isPendingSendMessage } from "./chat-thread-items.ts";
 
@@ -11,7 +16,7 @@ type PreparedChatItem =
   | {
       kind: "message";
       item: Extract<ChatItem, { kind: "message" }>;
-      normalized: NormalizedMessage;
+      normalized: NormalizedMessageFacts;
     };
 
 function collapseDuplicateSourceKey(
@@ -99,53 +104,49 @@ function collapseDuplicateDisplaySignature(parts: TextOnlyMessageParts): string 
 
 export function prepareMessagesForGrouping(items: ChatItem[]): PreparedChatItem[] {
   const collapsed: PreparedChatItem[] = [];
-  let previousParts: TextOnlyMessageParts = null;
   let previousSourceKey: string | null = null;
 
   for (const item of items) {
     if (item.kind !== "message") {
       collapsed.push(item);
-      previousParts = null;
       previousSourceKey = null;
       continue;
     }
     // These facts belong to this grouping pass, after canvas/tool projections
     // finish changing content. A later build must see fresh message metadata.
-    const normalized = normalizeMessage(item.message);
+    const normalized = normalizeMessageFacts(item.message);
     const prepared = { kind: "message" as const, item, normalized };
     const role = normalizeRoleForGrouping(normalized.role).toLowerCase();
     const pending = isPendingSendMessage(item.message);
-    const parts = pending ? null : textOnlyMessageParts(normalized, role);
     const identity = readChatThreadMessageIdentity(item.message);
     const sourceKey = pending ? null : collapseDuplicateSourceKey(identity, role);
     const previous = collapsed[collapsed.length - 1];
-    if (
-      sourceKey &&
-      previousSourceKey === sourceKey &&
-      previous?.kind === "message" &&
-      isSameSourceRelayNativeDuplicate(previousParts, parts)
-    ) {
-      if (!parts?.senderLabel) {
-        collapsed[collapsed.length - 1] = prepared;
-        previousParts = parts;
-      }
-      continue;
-    }
     // Equal text is not message identity. Suppress only a replay of the same
     // proven source, preserving distinct messages and unidentified transcript rows.
-    if (
-      sourceKey &&
-      previous?.kind === "message" &&
-      sourceKey === previousSourceKey &&
-      parts?.role === previousParts?.role
-    ) {
+    if (sourceKey && previous?.kind === "message" && sourceKey === previousSourceKey) {
+      // Content equivalence matters only after source identity matches. Ordinary
+      // rows keep their compact facts without preparing offscreen text blocks.
+      const parts = textOnlyMessageParts(normalizeMessage(item.message), role);
+      const previousParts = textOnlyMessageParts(
+        normalizeMessage(previous.item.message),
+        normalizeRoleForGrouping(previous.normalized.role).toLowerCase(),
+      );
+      if (isSameSourceRelayNativeDuplicate(previousParts, parts)) {
+        if (!parts?.senderLabel) {
+          collapsed[collapsed.length - 1] = prepared;
+        }
+        continue;
+      }
       const signature = collapseDuplicateDisplaySignature(parts);
-      if (signature && signature === collapseDuplicateDisplaySignature(previousParts)) {
+      if (
+        parts?.role === previousParts?.role &&
+        signature &&
+        signature === collapseDuplicateDisplaySignature(previousParts)
+      ) {
         continue;
       }
     }
     collapsed.push(prepared);
-    previousParts = parts;
     previousSourceKey = sourceKey;
   }
 

@@ -14,7 +14,7 @@ import {
   canvasPreviewsMatch,
   readCanvasContentPreview,
   normalizeRoleForGrouping,
-  normalizeMessage,
+  normalizeMessageFacts,
 } from "../../lib/chat/message-normalizer.ts";
 import { hasVisiblePreparedActivity } from "../../lib/chat/tool-call-grouping.ts";
 import {
@@ -29,7 +29,7 @@ import {
   resolveFullMessageRecovery,
   type ChatMessageRecovery,
 } from "./chat-message-recovery.ts";
-import { chatItemStartsUserTurn, safeNormalizeMessage } from "./chat-turn-boundary.ts";
+import { chatItemStartsUserTurn, safeNormalizeMessageFacts } from "./chat-turn-boundary.ts";
 import { copyLiveTerminalIdentity } from "./terminal-message-identity.ts";
 import { buildLocalUserMessage } from "./user-message-content.ts";
 
@@ -83,7 +83,7 @@ export function createChatSearchMatcher(
   const sourceMatches = (markdown: string | null) =>
     normalizeLowercaseStringOrEmpty(markdown).normalize("NFC").includes(normalizedQuery);
   return (message) => {
-    const role = recovery ? normalizeRoleForGrouping(normalizeMessage(message).role) : "";
+    const role = recovery ? normalizeRoleForGrouping(normalizeMessageFacts(message).role) : "";
     const expansion = recovery
       ? resolveFullMessageRecovery(message, role, {
           displayFacts: recovery.displayFacts,
@@ -147,7 +147,7 @@ function readChatMessagePreview(toolMessage: Record<string, unknown>) {
   if (asRecord(toolMessage["__openclaw"])?.catalogSource === true) {
     return null;
   }
-  if (!safeNormalizeMessage(toolMessage)) {
+  if (!safeNormalizeMessageFacts(toolMessage)) {
     return null;
   }
   const cards = extractToolCardsCached(toolMessage);
@@ -247,7 +247,7 @@ export function findNearestAssistantMessage(
       item.kind === "notice"
         ? item.timestamp
         : item.kind === "message"
-          ? (safeNormalizeMessage(item.message)?.timestamp ?? null)
+          ? (safeNormalizeMessageFacts(item.message)?.timestamp ?? null)
           : null;
     if (toolTimestamp != null && boundaryTimestamp != null && boundaryTimestamp > toolTimestamp) {
       currentTurnEnd = index;
@@ -270,7 +270,7 @@ export function findNearestAssistantMessage(
       continue;
     }
     last = { index, item };
-    const timestamp = safeNormalizeMessage(item.message)?.timestamp;
+    const timestamp = safeNormalizeMessageFacts(item.message)?.timestamp;
     if (toolTimestamp == null || timestamp == null) {
       continue;
     }
@@ -299,7 +299,7 @@ export function findCanvasInsertionIndex(
     if (item?.kind !== "message") {
       continue;
     }
-    const normalized = safeNormalizeMessage(item.message);
+    const normalized = safeNormalizeMessageFacts(item.message);
     if (
       normalized &&
       normalizeRoleForGrouping(normalized.role).toLowerCase() === "user" &&
@@ -445,7 +445,7 @@ export function buildMessageItems<Message>(
 
 export function hasRenderableNormalizedMessage(
   message: unknown,
-  normalized = safeNormalizeMessage(message),
+  normalized = safeNormalizeMessageFacts(message),
 ): boolean {
   if (!normalized) {
     return false;
@@ -454,7 +454,7 @@ export function hasRenderableNormalizedMessage(
   const label = role === "assistant" && normalized.senderLabel?.trim();
   return Boolean(
     role === "tool" ||
-    normalized.content.length ||
+    normalized.hasContent ||
     normalized.replyTarget ||
     label ||
     hasVisiblePreparedActivity(message) ||

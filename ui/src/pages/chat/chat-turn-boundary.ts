@@ -1,17 +1,18 @@
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
-import type { ChatItem, MessageGroup, NormalizedMessage } from "../../lib/chat/chat-types.ts";
+import type { ChatItem, MessageGroup } from "../../lib/chat/chat-types.ts";
 import {
-  normalizeMessage,
+  normalizeMessageFacts,
+  type NormalizedMessageFacts,
   normalizeRoleForGrouping,
   resolveMessageRole,
 } from "../../lib/chat/message-normalizer.ts";
 
-export function safeNormalizeMessage(message: unknown): NormalizedMessage | null {
+export function safeNormalizeMessageFacts(message: unknown): NormalizedMessageFacts | null {
   if (!asRecord(message)) {
     return null;
   }
   try {
-    return normalizeMessage(message);
+    return normalizeMessageFacts(message);
   } catch {
     return null;
   }
@@ -127,7 +128,7 @@ export function chatItemStartsDisplayTurn(item: ChatItem | MessageGroup): boolea
   if (item.kind === "group") {
     return normalizeRoleForGrouping(item.role) === "assistant" && hasForwardedSource(item);
   }
-  const message = item.kind === "message" ? safeNormalizeMessage(item.message) : null;
+  const message = item.kind === "message" ? safeNormalizeMessageFacts(item.message) : null;
   return Boolean(
     message && normalizeRoleForGrouping(message.role) === "assistant" && message.senderSession,
   );

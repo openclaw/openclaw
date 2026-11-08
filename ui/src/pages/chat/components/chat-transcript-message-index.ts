@@ -3,7 +3,7 @@ import type { GatewaySessionRow } from "../../../api/types.ts";
 import type { MessageGroup } from "../../../lib/chat/chat-types.ts";
 import { nativeHistoryMessageIdentity } from "../../../lib/chat/history-message-identity.ts";
 import { getMessageDerivations } from "../../../lib/chat/message-derivations.ts";
-import { normalizeMessage } from "../../../lib/chat/message-normalizer.ts";
+import { normalizeMessageFacts } from "../../../lib/chat/message-normalizer.ts";
 import { extractToolCardsCached } from "../../../lib/chat/tool-cards.ts";
 import {
   agentRunFrameActiveStatusParts,
@@ -126,7 +126,7 @@ function coalesceInterSessionUpdates(items: ChatRenderItem[]): ChatRenderItem[] 
       !isInterSessionMessage(item.messages[0]?.message) ||
       !item.senderSession?.sessionKey ||
       // Reply targets retain the original group's run and prompt attribution.
-      item.messages.some(({ message }) => normalizeMessage(message).replyTarget)
+      item.messages.some(({ message }) => normalizeMessageFacts(message).replyTarget)
     ) {
       flush();
       result.push(item);
@@ -269,33 +269,7 @@ function estimateMessageGroupSize(group: MessageGroup): number | undefined {
   }
   let size = 72;
   for (const source of group.messages) {
-    for (const part of normalizeMessage(source.message).content) {
-      if (part.type === "image") {
-        size += 180;
-      } else if (part.type === "text" && part.text) {
-        let fenced = false;
-        let blank = false;
-        for (const line of part.text.split("\n")) {
-          if (/^\s*(```|~~~)/u.test(line)) {
-            fenced = !fenced;
-            size += 18;
-          } else if (!line.trim()) {
-            if (!blank) {
-              size += 16;
-            }
-            blank = true;
-            continue;
-          } else {
-            size += fenced
-              ? 18
-              : /^\s*(#{1,6} |\|)/u.test(line)
-                ? 32
-                : Math.max(1, Math.ceil(line.length / 85)) * 22;
-          }
-          blank = false;
-        }
-      }
-    }
+    size += normalizeMessageFacts(source.message).estimatedContentSize;
   }
   return Math.max(CHAT_TRANSCRIPT_ESTIMATED_ROW_PX, size);
 }
@@ -519,7 +493,7 @@ function completedFrameRows(
     groups.some((group) =>
       group.messages.some(
         ({ message }) =>
-          normalizeMessage(message).content.some((part) => part.type === "canvas") ||
+          normalizeMessageFacts(message).canvasPreviews.length > 0 ||
           extractToolCardsCached(message).some((card) => card.preview?.kind === "canvas"),
       ),
     )

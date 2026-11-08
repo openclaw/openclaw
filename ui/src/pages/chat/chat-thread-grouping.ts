@@ -5,10 +5,12 @@ import {
   readChatThreadMessageIdentity,
   userTurnRunId,
 } from "../../lib/chat/history-message-identity.ts";
-import { resolveMessageDisplayMarkdown } from "../../lib/chat/message-display.ts";
 import { extractThinkingCached } from "../../lib/chat/message-extract.ts";
-import { normalizeMessage, normalizeRoleForGrouping } from "../../lib/chat/message-normalizer.ts";
-import { resolveMessageVisibleContent } from "../../lib/chat/message-visibility.ts";
+import {
+  normalizeMessageFacts,
+  normalizeRoleForGrouping,
+} from "../../lib/chat/message-normalizer.ts";
+import { resolveMessageFactsVisibleContent } from "../../lib/chat/message-visibility.ts";
 import {
   senderIdentityKey,
   sessionParticipantIdentityKey,
@@ -101,7 +103,7 @@ function groupChatItems(
       inputs.push(
         item.key,
         item.message,
-        normalizeMessage(item.message),
+        normalizeMessageFacts(item.message),
         item.startsTurn,
         rowsAfterHiddenTurn?.has(item.key) === true,
       );
@@ -143,17 +145,17 @@ function groupChatItems(
     const previous = items[index - 1];
     if (
       previous?.kind === "message" &&
-      normalizeRoleForGrouping(normalizeMessage(item.message).role) === "user"
+      normalizeRoleForGrouping(normalizeMessageFacts(item.message).role) === "user"
     ) {
-      const normalized = normalizeMessage(previous.message);
+      const normalized = normalizeMessageFacts(previous.message);
       const role = normalizeRoleForGrouping(normalized.role);
       // A visible non-user row guarantees a grouping and duplicate boundary.
       // Keep hidden rows and consecutive inputs together for the canonical grouper.
       if (
         role !== "user" &&
         (role !== "assistant" ||
-          resolveMessageVisibleContent(previous.message, normalized) === "non-text" ||
-          resolveMessageDisplayMarkdown(previous.message, normalized).trim())
+          resolveMessageFactsVisibleContent(previous.message, normalized) === "non-text" ||
+          normalized.hasDisplayText)
       ) {
         flush();
       }
@@ -367,12 +369,12 @@ function groupChatItemSegment(
       record?.role === "assistant" &&
       (record.stopReason === "toolUse" ||
         assistantMessageCanOwnTurnActions(item.message, Boolean(normalized.senderSession))) &&
-      Boolean(resolveMessageDisplayMarkdown(item.message, normalized).trim());
+      normalized.hasDisplayText;
     // Saved reasoning stays visible until its live owner retires the receipts.
     // Mixed answers retain assistant ownership; forwarded narration needs an
     // explicit answer before gaining its own display-turn boundary.
     // Classify after content projection; prepared outcomes may outlive their blocks.
-    const visibleContent = resolveMessageVisibleContent(item.message, normalized);
+    const visibleContent = resolveMessageFactsVisibleContent(item.message, normalized);
     const hasPreparedActivity =
       normalizedRole === "assistant" &&
       visibleContent === "none" &&
@@ -391,7 +393,7 @@ function groupChatItemSegment(
         hasVisibleReasoning ||
         (showReasoning && role === "assistant" && Boolean(extractThinkingCached(item.message))) ||
         visibleContent === "non-text" ||
-        Boolean(resolveMessageDisplayMarkdown(item.message, normalized).trim()),
+        normalized.hasDisplayText,
     };
     // Projection can remove the last tool block, leaving only hidden thinking.
     // Keep recorded interruptions/errors, which have their own visible outcome.

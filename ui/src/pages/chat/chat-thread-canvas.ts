@@ -1,15 +1,16 @@
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { extractCanvasShortcodes } from "../../../../src/chat/canvas-render.js";
-import type { ChatItem, MessageGroup, NormalizedMessage } from "../../lib/chat/chat-types.ts";
+import type { ChatItem, MessageGroup } from "../../lib/chat/chat-types.ts";
 import {
   canvasPreviewsMatch,
   readCanvasContentPreview,
   normalizeRoleForGrouping,
+  type NormalizedMessageFacts,
 } from "../../lib/chat/message-normalizer.ts";
 import type { CanvasToolPreview } from "../../lib/chat/tool-cards.ts";
 import { canvasPreviewBaseIdentity, hasRenderableNormalizedMessage } from "./chat-thread-items.ts";
 import { transcriptRunId } from "./chat-thread-run-identity.ts";
-import { safeNormalizeMessage } from "./chat-turn-boundary.ts";
+import { safeNormalizeMessageFacts } from "./chat-turn-boundary.ts";
 import { copyLiveTerminalIdentity, readLiveTerminalRunId } from "./terminal-message-identity.ts";
 
 export function canvasAssistantItemKey(
@@ -23,7 +24,7 @@ export function canvasAssistantItemKey(
 
 export function collectCanvasTurns(
   historyItems: Array<Extract<ChatItem, { kind: "message" }>>,
-  normalizedHistory: Array<NormalizedMessage | null>,
+  normalizedHistory: Array<NormalizedMessageFacts | null>,
   matchesSearch: (message: unknown) => boolean,
 ) {
   let canvasTurn: {
@@ -43,11 +44,7 @@ export function collectCanvasTurns(
     }
     if (role === "assistant" && message && matchesSearch(item.message)) {
       canvasTurn.lastMatchingAssistantIndex = index;
-      canvasTurn.previews.push(
-        ...message.content.flatMap((block) =>
-          block.type === "canvas" ? [{ preview: block.preview, item }] : [],
-        ),
-      );
+      canvasTurn.previews.push(...message.canvasPreviews.map((preview) => ({ preview, item })));
     }
     return canvasTurn;
   });
@@ -59,7 +56,7 @@ function collectMessageCanvasPreviews(messages: readonly unknown[]) {
       return [];
     }
     const runId = transcriptRunId(source);
-    const message = runId ? safeNormalizeMessage(source) : null;
+    const message = runId ? safeNormalizeMessageFacts(source) : null;
     // Assistant rows can carry tools; normalization classifies those as tool results.
     // Canvas rendering still follows their source role.
     const sourceRole = asRecord(source)?.role;
@@ -70,9 +67,7 @@ function collectMessageCanvasPreviews(messages: readonly unknown[]) {
     ) {
       return [];
     }
-    return message.content.flatMap((block) =>
-      block.type === "canvas" ? [{ runId, preview: block.preview }] : [],
-    );
+    return message.canvasPreviews.map((preview) => ({ runId, preview }));
   });
 }
 
