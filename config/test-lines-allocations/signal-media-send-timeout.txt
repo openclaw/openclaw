@@ -1,2 +1,0 @@
-# Signal media sends: the existing attachment-send case now pins the media-send RPC deadline (timeoutMs) so slow uploads are not reported as failed.
-4
