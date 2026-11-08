@@ -136,6 +136,7 @@ async function measureCapability(inventory: number, instrumented: boolean) {
       snapshotAt: 200_000 + index,
       label: `Synthetic session ${identity} revision ${index}`,
       unread: true,
+      permissionMode: null,
       ...(index >= events
         ? { hasActiveRun: false, activeRunIds: [], status: "done" as const }
         : {}),
@@ -150,6 +151,7 @@ async function measureCapability(inventory: number, instrumented: boolean) {
       hasActiveRun: row.hasActiveRun,
       activeRunIds: row.activeRunIds,
       status: row.status,
+      permissionMode: null,
     };
     return JSON.stringify({
       type: "event",
@@ -415,7 +417,7 @@ for (const inventory of [1000, 5000]) {
 const report = {
   scope:
     values.mode === "capability"
-      ? "JSON parse, production GatewaySessionRowEvents delta reconstruction and complete synchronous createSessionCapability gateway event subscribers measured separately, with primary and held all-archive query. First100 full rows establish decoder baselines; measured events are versioned patches. Includes normalization, receipts, reconciliation, sorting, permission/mutation/deletion overlays and listener notification; excludes socket, Solid rendering, sidebar and Sessions-page projections, filter/search indexes and timer-driven refresh. Instrumented pass separately counts retained-row reference changes; it does not count sorts or comparisons. Profile samples are diagnostic, not browser acceptance."
+      ? "JSON parse, production GatewaySessionRowEvents delta reconstruction and complete synchronous createSessionCapability gateway event subscribers measured separately, with primary and held all-archive query. List rows are canonical; every full and patch receipt includes permissionMode:null, matching browser load. First100 full rows establish decoder baselines; measured events are versioned patches. Includes normalization, receipts, reconciliation, sorting, permission/mutation/deletion overlays and listener notification; excludes socket, Solid rendering, sidebar and Sessions-page projections, filter/search indexes and timer-driven refresh. Instrumented pass separately counts retained-row reference changes; it does not count sorts or comparisons. Profile samples are diagnostic, not browser acceptance."
       : "resolveSessionNavigation with selected row at tail of held inventory; includes matching, visibility filtering and sorting, but excludes Solid and DOM work. Separate instrumented pass counts hello reads; Node timing is diagnostic, not browser acceptance.",
   mode: values.mode,
   sourceRoot,
