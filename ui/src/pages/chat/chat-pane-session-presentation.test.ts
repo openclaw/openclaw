@@ -6,15 +6,20 @@ import type { GatewaySessionRow } from "../../api/types.ts";
 import { sessionsResult } from "../../lib/sessions/session-capability.test-support.ts";
 import type { SessionState } from "../../lib/sessions/session-capability.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import { preserveDocumentStyle } from "../../test-helpers/preserve-document-style.ts";
 import { createGatewayBrowserClientFixture } from "./chat-application-context.test-support.ts";
 import { chatSessionPresentationTitle } from "./chat-pane-session-presentation.ts";
 import { createTestChatPane, nativeHistoryMessage } from "./chat-pane.test-support.ts";
+import { chatRunPresentation } from "./chat-run-presentation.ts";
 import { createSessionCapabilityFixture } from "./chat-session-capability.test-support.ts";
 import { observeChatCache } from "./session-message-cache.ts";
 import { subscribeSnapshotInvalidation } from "./session-snapshot-invalidation-events.ts";
 import { SessionSnapshotStore } from "./session-snapshot-store.ts";
 
-afterEach(() => vi.unstubAllGlobals());
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.unstubAllGlobals();
+});
 
 function fixture() {
   const listeners = new Set<(state: SessionState) => void>();
@@ -48,18 +53,24 @@ function fixture() {
     ...current,
     result: sessionsResult([selected, parent, foreign], 1),
   };
+  const paint = () => {
+    for (const callback of frames.splice(0)) {
+      callback(0);
+    }
+    flush();
+  };
   const publish = (
     next: SessionState,
     presentation: Pick<SessionState, "result" | "agentId"> = next,
+    frame = true,
   ) => {
     current = next;
     Object.assign(sessions.presentation, presentation);
     pane.pane.applySessionsState(next);
     listeners.forEach((listener) => listener(next));
-    for (const callback of frames.splice(0)) {
-      callback(0);
+    if (frame) {
+      paint();
     }
-    flush();
   };
   publish(publication);
   const rendered = vi.fn();
@@ -69,7 +80,18 @@ function fixture() {
   });
   flush();
   rendered.mockClear();
-  return { ...pane, publication, selected, parent, foreign, rendered, publish, view, listeners };
+  return {
+    ...pane,
+    publication,
+    selected,
+    parent,
+    foreign,
+    rendered,
+    publish,
+    paint,
+    view,
+    listeners,
+  };
 }
 
 const presentationChanges: Record<
@@ -94,6 +116,32 @@ const presentationChanges: Record<
 };
 
 describe("chat pane session presentation", () => {
+  it("coalesces live roster changes while keeping synchronous rows and canceling disposed work", async () => {
+    preserveDocumentStyle();
+    const f = fixture();
+    f.state.chatRunId = "live";
+    flush();
+    f.rendered.mockClear();
+    for (let revision = 2; revision <= 4; revision++) {
+      await Promise.resolve();
+      f.selected.label = `Live title ${revision}`;
+      f.publish(f.publication, f.publication, false);
+      expect(f.state.sessionsResult?.sessions[0]?.label).toBe(`Live title ${revision}`);
+      flush();
+      expect(f.rendered).not.toHaveBeenCalled();
+    }
+    f.paint();
+    expect(f.rendered).toHaveBeenCalledOnce();
+    f.selected.label = "Final queued title";
+    f.publish(f.publication, f.publication, false);
+    f.view.unmount();
+    expect(f.listeners.size).toBe(0);
+    f.rendered.mockClear();
+    chatRunPresentation(f.state).flushPendingPresentation();
+    f.paint();
+    expect(f.rendered).not.toHaveBeenCalled();
+  });
+
   it("leaves deletion retirement to the shell across repeated roster publications", () => {
     const f = fixture();
     const store = new SessionSnapshotStore(f.state.chatMessagesBySession);

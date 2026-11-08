@@ -334,7 +334,7 @@ export function createChatState<TState extends ChatPageHost>(
     publishPendingRunState() {
       const state = stateValue;
       if (state?.chatStreamRenderFrame != null) {
-        chatRunPresentation(state).publish("immediate", false);
+        chatRunPresentation(state).flushPendingPresentation();
       }
     },
 

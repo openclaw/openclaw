@@ -55,17 +55,22 @@ function sameStartupPresentation(
   return true;
 }
 
-/** Synchronous run state with one publication boundary for each accepted event. */
+/** Synchronous run state and frame-coalesced rendering notifications. */
 class ChatRunPresentation<T extends object> {
-  readonly values: ChatRunFields<T> & { chatRunStartup?: ChatRunStartupState | null } = {};
+  readonly values: ChatRunFields<T> & {
+    chatRunStartup?: ChatRunStartupState | null;
+    chatRunId?: string | null;
+  } = {};
   readonly fields = RUN_FIELDS;
   frame: number | null = null;
   private readonly listeners = createChangeListeners();
   private readonly nonTextListeners = createChangeListeners();
+  private readonly pendingPresentations = new Set<() => void>();
   private nonTextChanged = false;
   private publishedStartup: ChatRunStartupState | null | undefined;
   private depth = 0;
   private changed = false;
+  private pendingRunPublication = false;
   private cadence: ChatRunPublication | false = false;
 
   constructor(host: T) {
@@ -125,10 +130,12 @@ class ChatRunPresentation<T extends object> {
       return operation();
     } finally {
       this.depth -= 1;
-      if (this.depth === 0 && this.changed) {
+      if (this.depth === 0 && (this.changed || this.pendingPresentations.size > 0)) {
+        const changed = this.changed;
         this.changed = false;
         if (this.cadence) {
-          this.publish(this.cadence, false);
+          this.pendingRunPublication ||= changed;
+          this.schedule(this.cadence);
         }
       }
     }
@@ -144,6 +151,27 @@ class ChatRunPresentation<T extends object> {
       }
       return;
     }
+    this.pendingRunPublication = true;
+    this.schedule(mode);
+  }
+
+  queuePresentation(notify: () => void): void {
+    this.pendingPresentations.add(notify);
+    if (this.depth === 0) {
+      this.schedule(this.values.chatRunId || this.frame !== null ? "animation-frame" : "immediate");
+    }
+  }
+
+  cancelPresentation(notify: () => void): void {
+    this.pendingPresentations.delete(notify);
+  }
+
+  flushPendingPresentation(): void {
+    this.cancelScheduledFrame();
+    this.notify();
+  }
+
+  private schedule(mode: ChatRunPublication): void {
     if (
       mode === "animation-frame" &&
       globalThis.document?.visibilityState !== "hidden" &&
@@ -161,11 +189,16 @@ class ChatRunPresentation<T extends object> {
       }
       return;
     }
-    this.cancelFrame();
-    this.notify();
+    this.flushPendingPresentation();
   }
 
   cancelFrame(): void {
+    this.cancelScheduledFrame();
+    this.pendingPresentations.clear();
+    this.pendingRunPublication = false;
+  }
+
+  private cancelScheduledFrame(): void {
     if (this.frame !== null) {
       globalThis.cancelAnimationFrame?.(this.frame);
       this.frame = null;
@@ -173,15 +206,25 @@ class ChatRunPresentation<T extends object> {
   }
 
   private readonly notify = () => {
-    // Preserve every sequence update, but compare the final displayed status of the frame.
-    const startup = this.values.chatRunStartup;
-    const nonTextChanged =
-      this.nonTextChanged || !sameStartupPresentation(this.publishedStartup, startup);
-    this.publishedStartup = startup;
-    this.nonTextChanged = false;
-    this.listeners.publish();
-    if (nonTextChanged) {
-      this.nonTextListeners.publish();
+    const changed = this.pendingRunPublication;
+    this.pendingRunPublication = false;
+    const pending = Array.from(this.pendingPresentations);
+    if (changed) {
+      // Preserve every sequence update, but compare the final displayed status of the frame.
+      const startup = this.values.chatRunStartup;
+      const nonTextChanged =
+        this.nonTextChanged || !sameStartupPresentation(this.publishedStartup, startup);
+      this.publishedStartup = startup;
+      this.nonTextChanged = false;
+      this.listeners.publish();
+      if (nonTextChanged) {
+        this.nonTextListeners.publish();
+      }
+    }
+    for (const notify of pending) {
+      if (this.pendingPresentations.delete(notify)) {
+        notify();
+      }
     }
   };
 }

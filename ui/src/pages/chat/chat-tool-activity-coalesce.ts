@@ -45,6 +45,19 @@ type Invocation = {
   attachments: unknown[];
   projections: Projection[];
 };
+type PreparedSource = {
+  message: Record<string, unknown>;
+  remaining: readonly unknown[];
+  standalone: boolean;
+  projections: ReadonlyArray<Readonly<Omit<Projection, "source">>>;
+};
+type CachedSource = {
+  content: unknown;
+  blocks: unknown[];
+  source: PreparedSource | null;
+  refs: ReturnType<typeof extractToolMessageRefs>;
+};
+const sourcesByMessage = new WeakMap<object, CachedSource>();
 
 type CachedBundle = { inputs: unknown[]; message: ProjectedItem["message"] };
 const messagesBySource = new WeakMap<object, Map<string, CachedBundle>>();
@@ -70,12 +83,8 @@ function resultBlock(card: ToolCard): Record<string, unknown> {
   };
 }
 
-function readProjections(item: MessageItem, index: number): Projection[] {
-  let message = asRecord(item.message);
-  if (!message) {
-    return [];
-  }
-  const originalMessage = message;
+function prepareSource(originalMessage: Record<string, unknown>): PreparedSource | null {
+  let message = originalMessage;
   let content = Array.isArray(message.content) ? message.content : [];
   const isToolBlock = (block: unknown) => {
     const type = asRecord(block)?.type;
@@ -85,14 +94,14 @@ function readProjections(item: MessageItem, index: number): Projection[] {
   const prepared = new Map<unknown, ToolCard>();
   // Resolve no-id fallback once through the card owner. Keep anonymous pairs
   // in the source while identified siblings still join the invocation registry.
-  if (blocks.some((block) => !resolveToolBlockId(asRecord(block)!, message!))) {
+  if (blocks.some((block) => !resolveToolBlockId(asRecord(block)!, message))) {
     const pending = [...extractToolCardsCached(message)];
     content = content.flatMap((block) => {
       if (!isToolBlock(block)) {
         return [block];
       }
       const raw = asRecord(block)!;
-      const id = resolveToolBlockId(raw, message!);
+      const id = resolveToolBlockId(raw, message);
       const call = isToolCallContentType(raw.type);
       const cardIndex = pending.findIndex(
         (card) => call === Object.hasOwn(card, "args") && (!id || card.callId === id),
@@ -111,82 +120,102 @@ function readProjections(item: MessageItem, index: number): Projection[] {
     });
     message = { ...message, content };
     blocks = content.filter(
-      (block) => isToolBlock(block) && resolveToolBlockId(asRecord(block)!, message!),
+      (block) => isToolBlock(block) && resolveToolBlockId(asRecord(block)!, message),
     );
     if (blocks.length === 0) {
-      return [];
+      return null;
     }
   }
   const standalone = blocks.length === 0;
   if (standalone) {
     const [card] = extractToolCardsCached(message);
     if (!card?.callId) {
-      return [];
+      return null;
     }
     blocks = [resultBlock(card)];
     prepared.set(blocks[0], card);
   }
-  const source: Source = {
-    item,
-    originalMessage,
+  return {
     message,
-    index,
     standalone,
     remaining: content.filter(
       (block) => !blocks.includes(block) && (!standalone || asRecord(block)?.type !== "text"),
     ),
-  };
-  return blocks.map((block) => {
-    const raw = asRecord(block)!;
-    const id = resolveToolBlockId(raw, message)!;
-    const call = isToolCallContentType(raw.type);
-    const live = message["__openclawToolStreamLive"] === true;
-    const card = prepared.get(raw) ?? extractToolBlockCardsCached(originalMessage, raw)[0];
-    return {
-      source,
-      id,
-      call,
-      runId:
-        normalizeOptionalString(raw.runId) ??
-        readSessionMessageIdentity(message)?.runId ??
-        normalizeOptionalString(message.runId),
-      name:
-        normalizeOptionalString(raw.name) ??
-        normalizeOptionalString(message.toolName) ??
-        normalizeOptionalString(message.tool_name) ??
-        "tool",
-      // Durable results outrank live terminal snapshots, which outrank partial
-      // updates. A late partial replay must not resurrect a completed call.
-      rank: call
-        ? live
-          ? 1
-          : 2
-        : !live
-          ? 3
-          : message["__openclawToolStreamResultReceived"] === true
-            ? 2
-            : 1,
-      block: {
-        ...raw,
+    projections: blocks.map((block) => {
+      const raw = asRecord(block)!;
+      const id = resolveToolBlockId(raw, message)!;
+      const call = isToolCallContentType(raw.type);
+      const live = message["__openclawToolStreamLive"] === true;
+      const card = prepared.get(raw) ?? extractToolBlockCardsCached(originalMessage, raw)[0];
+      return {
         id,
-        ...(call
-          ? { arguments: card?.args }
-          : {
-              text: card?.outputText,
-              // Preserve the result owner when the call becomes the grouped row.
-              __openclaw: {
-                id: card?.resultMessageId,
-                toolOutput: card?.toolOutput,
-                truncated: card?.outputTruncated,
-                ...(card?.catalogTruncated ? { catalogTruncated: true } : {}),
-              },
-            }),
-        ...(card?.details !== undefined ? { details: card.details } : {}),
-        ...(!call && card?.isError !== undefined ? { isError: card.isError } : {}),
-        ...(!call && card?.exitCode !== undefined ? { exitCode: card.exitCode } : {}),
-      },
-    };
-  });
+        call,
+        runId:
+          normalizeOptionalString(raw.runId) ??
+          readSessionMessageIdentity(message)?.runId ??
+          normalizeOptionalString(message.runId),
+        name:
+          normalizeOptionalString(raw.name) ??
+          normalizeOptionalString(message.toolName) ??
+          normalizeOptionalString(message.tool_name) ??
+          "tool",
+        // Durable results outrank live terminal snapshots, which outrank partial
+        // updates. A late partial replay must not resurrect a completed call.
+        rank: call
+          ? live
+            ? 1
+            : 2
+          : !live
+            ? 3
+            : message["__openclawToolStreamResultReceived"] === true
+              ? 2
+              : 1,
+        block: {
+          ...raw,
+          id,
+          ...(call
+            ? { arguments: card?.args }
+            : {
+                text: card?.outputText,
+                // Preserve the result owner when the call becomes the grouped row.
+                __openclaw: {
+                  id: card?.resultMessageId,
+                  toolOutput: card?.toolOutput,
+                  truncated: card?.outputTruncated,
+                  ...(card?.catalogTruncated ? { catalogTruncated: true } : {}),
+                },
+              }),
+          ...(card?.details !== undefined ? { details: card.details } : {}),
+          ...(!call && card?.isError !== undefined ? { isError: card.isError } : {}),
+          ...(!call && card?.exitCode !== undefined ? { exitCode: card.exitCode } : {}),
+        },
+      };
+    }),
+  };
+}
+
+function readSource(message: Record<string, unknown>): CachedSource {
+  const content = message.content;
+  const cached = sourcesByMessage.get(message);
+  // Source snapshots are immutable, but content and block replacement are
+  // supported by the coalescer even when the envelope identity is retained.
+  if (
+    cached &&
+    cached.content === content &&
+    (!Array.isArray(content) ||
+      (cached.blocks.length === content.length &&
+        content.every((block, index) => block === cached.blocks[index])))
+  ) {
+    return cached;
+  }
+  const entry = {
+    content,
+    blocks: Array.isArray(content) ? [...content] : [],
+    source: prepareSource(message),
+    refs: extractToolMessageRefs(message),
+  };
+  sourcesByMessage.set(message, entry);
+  return entry;
 }
 
 function preferProjection(previous: Projection | undefined, next: Projection): Projection {
@@ -216,26 +245,40 @@ function preferProjection(previous: Projection | undefined, next: Projection): P
 }
 
 function coalesceTurn(items: ChatItem[]): ChatItem[] {
-  const projections = items.flatMap((item, index) =>
-    item.kind === "message" ? readProjections(item, index) : [],
-  );
-  if (projections.length === 0) {
-    return items;
-  }
+  const projections: Projection[] = [];
   const runs = new Map<string, Set<string>>();
   // Resolve missing-run ownership from the entire turn, not the prefix seen
   // so far: a later sibling with a reused id makes unscoped history ambiguous.
-  for (const item of items) {
-    if (item.kind !== "message") {
+  for (const [index, item] of items.entries()) {
+    const message = item.kind === "message" ? asRecord(item.message) : null;
+    if (item.kind !== "message" || !message) {
       continue;
     }
-    for (const ref of extractToolMessageRefs(item.message)) {
+    const prepared = readSource(message);
+    if (prepared.source) {
+      // Run inference and attachment consumption belong to this pass only.
+      const source: Source = {
+        item,
+        originalMessage: message,
+        message: prepared.source.message,
+        index,
+        remaining: [...prepared.source.remaining],
+        standalone: prepared.source.standalone,
+      };
+      projections.push(
+        ...prepared.source.projections.map((projection) => ({ ...projection, source })),
+      );
+    }
+    for (const ref of prepared.refs) {
       if (ref.runId) {
         const owners = runs.get(ref.id) ?? new Set<string>();
         owners.add(ref.runId);
         runs.set(ref.id, owners);
       }
     }
+  }
+  if (projections.length === 0) {
+    return items;
   }
   const identity = (projection: Projection) => {
     const owners = runs.get(projection.id);
