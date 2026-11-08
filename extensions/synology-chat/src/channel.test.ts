@@ -60,7 +60,7 @@ function mockStringMessages(mock: { mock: { calls: unknown[][] } }): string[] {
 
 const clientModule = await import("./client.js");
 const gatewayRuntimeModule = await import("./gateway-runtime.js");
-const mockSendMessage = vi.spyOn(clientModule, "sendMessage").mockResolvedValue(true);
+const mockSendMessage = vi.spyOn(clientModule, "sendMessage").mockResolvedValue({ messageIds: [] });
 const mockSendHostedFileUrl = vi
   .spyOn(clientModule, "sendHostedFileUrl")
   .mockResolvedValue({ status: "accepted" });
@@ -109,7 +109,7 @@ describe("createSynologyChatPlugin", () => {
     mockSendHostedFileUrl.mockClear();
     prepareSynologyHostedMediaMock.mockReset();
     registerSynologyWebhookRouteMock.mockClear();
-    mockSendMessage.mockResolvedValue(true);
+    mockSendMessage.mockResolvedValue({ messageIds: [] });
     mockSendHostedFileUrl.mockResolvedValue({ status: "accepted" });
     prepareSynologyHostedMediaMock.mockImplementation(async ({ account }) => {
       if (!account.webhookUrl) {
@@ -405,6 +405,21 @@ describe("createSynologyChatPlugin", () => {
   }
 
   describe("outbound", () => {
+    it("projects hosted media post IDs into delivery receipts", async () => {
+      mockSendHostedFileUrl.mockResolvedValueOnce({ status: "accepted", messageId: "25769804017" });
+      const result = await synologyChatPlugin.message.send.media({
+        cfg: makeOutboundConfig(),
+        text: "image",
+        mediaUrl: "https://example.com/img.png",
+        to: "42",
+      });
+      expect(result.messageId).toBe("25769804017");
+      expect(result.receipt.platformMessageIds).toEqual(["25769804017"]);
+      expect(result.receipt.parts).toMatchObject([
+        { platformMessageId: "25769804017", kind: "media" },
+      ]);
+    });
+
     it("sendMedia returns an honest empty-id receipt on success", async () => {
       const result = await synologyChatPlugin.message.send.media({
         cfg: makeOutboundConfig({ allowInsecureSsl: true }),

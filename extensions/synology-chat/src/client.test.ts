@@ -208,7 +208,9 @@ describe("Synology Chat TLS verification defaults", () => {
         if (refused) {
           await expect(sending).rejects.toBe(refusal);
         } else {
-          expect(await sending).toEqual(name === "sendMessage" ? true : { status: "accepted" });
+          expect(await sending).toEqual(
+            name === "sendMessage" ? { messageIds: [] } : { status: "accepted" },
+          );
         }
         expect(https.request).toHaveBeenCalledTimes(refused ? 0 : 1);
         if (!refused) {
@@ -226,6 +228,94 @@ describe("Synology Chat TLS verification defaults", () => {
 
 describe("sendMessage", () => {
   installFakeTimerHarness();
+
+  it.each([
+    { recipient: "123456", postId: 25769804017, ids: ["25769804017"] },
+    { recipient: "123456", postId: "18446744073709551615", ids: ["18446744073709551615"] },
+    { recipient: "999999", postId: 25769804017, ids: [] },
+    { recipient: "123456", postId: 9007199254740992, ids: [] },
+    { recipient: "123456", postId: 0, ids: [] },
+    { recipient: "123456", postId: "invalid", ids: [] },
+    { recipient: "123456", postId: -1, ids: [] },
+    { recipient: "123456", postId: 1.5, ids: [] },
+    { recipient: "123456", postId: "0", ids: [] },
+    { recipient: "123456", postId: "01", ids: [] },
+    { recipient: "123456", postId: "-1", ids: [] },
+    { recipient: "123456", postId: " 12", ids: [] },
+  ])(
+    "keeps only usable post IDs for the requested recipient: $recipient/$postId",
+    async ({ recipient, postId, ids }) => {
+      mockResponse(
+        200,
+        JSON.stringify({
+          success: true,
+          data: { succ: { user_id_post_map: { [recipient]: postId } } },
+        }),
+      );
+
+      await expect(
+        settleTimers(sendMessage("https://nas.example.com/incoming", "Hello", "123456")),
+      ).resolves.toEqual({ messageIds: ids });
+      expect(https.request).toHaveBeenCalledOnce();
+    },
+  );
+
+  it("preserves explicit rejection when identity metadata is malformed", async () => {
+    mockResponse(200, JSON.stringify({ success: false, data: { succ: null } }));
+
+    await expect(
+      settleTimers(sendMessage("https://nas.example.com/incoming", "Hello", "123456")),
+    ).resolves.toBe(false);
+  });
+
+  it.each([
+    { missingChunk: -1, ids: ["25769804017", "25769804018", "25769804019"] },
+    { missingChunk: 1, ids: [] },
+  ])(
+    "projects only complete text receipts through the channel (missing=$missingChunk)",
+    async ({ missingChunk, ids }) => {
+      let requests = 0;
+      vi.mocked(https.request).mockImplementation(((_url, _options, callback) => {
+        const index = requests++;
+        process.nextTick(() => {
+          const res = createMockResponseEmitter(200);
+          callback?.(res);
+          res.end(
+            JSON.stringify({
+              success: true,
+              data: {
+                succ: {
+                  user_id_post_map: {
+                    "42": index === missingChunk ? undefined : 25769804017 + index,
+                  },
+                },
+              },
+            }),
+          );
+        });
+        return createMockRequestEmitter();
+      }) as MockRequestHandler);
+      const { synologyChatPlugin } = await import("./channel.js");
+      const result = await settleTimers(
+        synologyChatPlugin.outbound.sendText({
+          cfg: {
+            channels: {
+              "synology-chat": {
+                token: "synthetic-token",
+                incomingUrl: "https://nas.example.com/incoming",
+              },
+            },
+          },
+          text: "x".repeat(4001),
+          to: "42",
+        }),
+      );
+      expect(requests).toBe(3);
+      expect(result.messageId).toBe(ids[0] ?? "");
+      expect(result.receipt.platformMessageIds).toEqual(ids);
+      expect(result.receipt.parts.map((part) => part.platformMessageId)).toEqual(ids);
+    },
+  );
 
   it("preserves acknowledged chunks when a later chunk is rejected", async () => {
     let requests = 0;
@@ -285,7 +375,7 @@ describe("sendMessage", () => {
 
     const result = await settleTimers(sendMessage("https://nas.example.com/incoming", "Hello"));
 
-    expect(result).toBe(true);
+    expect(result).toEqual({ messageIds: [] });
     expect(vi.mocked(https.request)).toHaveBeenCalledTimes(2);
   });
 
@@ -299,7 +389,7 @@ describe("sendMessage", () => {
 
     const result = await settleTimers(sendMessage("https://nas.example.com/incoming", "Hello"));
 
-    expect(result).toBe(true);
+    expect(result).toEqual({ messageIds: [] });
     expect(vi.mocked(https.request)).toHaveBeenCalledTimes(1);
   });
 
@@ -414,7 +504,9 @@ describe("sendHostedFileUrl", () => {
 
     await vi.advanceTimersByTimeAsync(500);
     expect(requestedUrls()).toEqual([accountA, accountB, accountA, accountA]);
-    await expect(Promise.all(sends)).resolves.toEqual([true, true, true, true]);
+    await expect(Promise.all(sends)).resolves.toEqual(
+      Array.from({ length: 4 }, () => ({ messageIds: [] })),
+    );
   });
 
   it("rejects malformed file URLs before making a request", async () => {

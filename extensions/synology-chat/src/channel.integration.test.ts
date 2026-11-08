@@ -289,6 +289,27 @@ describe("Synology channel wiring integration", () => {
         turnAdoptionLifecycle: expect.objectContaining({ admission: "exclusive" }),
       }),
     );
+    const [dispatch] = requireMockCall(
+      dispatchReplyWithBufferedBlockDispatcher,
+      0,
+      "reply dispatcher",
+    );
+    const options = requireRecord(
+      requireRecord(dispatch, "dispatch").dispatcherOptions,
+      "dispatcher options",
+    );
+    const deliver = options.deliver;
+    if (typeof deliver !== "function") {
+      throw new Error("expected inbound reply delivery");
+    }
+    const { sendMessage } = await import("./client.js");
+    vi.mocked(sendMessage).mockResolvedValueOnce({ messageIds: [] });
+    await expect(deliver({ text: "accepted without metadata" })).resolves.toEqual({
+      visibleReplySent: true,
+    });
+    vi.mocked(sendMessage).mockResolvedValueOnce(false);
+    await expect(deliver({ text: "rejected" })).resolves.toEqual({ visibleReplySent: false });
+    await expect(deliver({ text: "" })).resolves.toEqual({ visibleReplySent: false });
     abortController.abort();
     await started;
   });

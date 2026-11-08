@@ -115,7 +115,7 @@ describe("Synology Chat client loopback", () => {
     }
     releaseRetry();
 
-    await expect(send).resolves.toBe(true);
+    await expect(send).resolves.toEqual({ messageIds: [] });
     expect(receivedRequests).toBe(1);
     expect(timeoutSpy.mock.calls.filter(([, delay]) => delay === 300)).toHaveLength(1);
     console.log(

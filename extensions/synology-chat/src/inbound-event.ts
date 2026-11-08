@@ -124,7 +124,7 @@ export async function dispatchSynologyChatInboundEvent(params: {
                     params.account.allowInsecureSsl,
                   )
                 : false;
-              return { visibleReplySent };
+              return { visibleReplySent: Boolean(visibleReplySent) };
             },
           },
           dispatcherOptions: {
