@@ -1297,7 +1297,7 @@ describe("sendMessageIMessage receipts", () => {
     const client = createClient({ guid: "p:0/plain-guid" });
     const runCliJson = mockCliSend().mockResolvedValueOnce({ messageId: "p:0/plain-guid" });
     mockAttachment({ path: "/tmp/image.png", contentType: "image/png" });
-    const result = await sendMessageIMessage("chat_guid:chat-1", "", {
+    const result = await sendMessageIMessage("chat_guid:any;+;g", "", {
       config: createSendConfig({ actions: { reply: false }, accounts: { default: {} } }),
       client,
       replyToId: "p:0/reply-guid",
@@ -1307,7 +1307,7 @@ describe("sendMessageIMessage receipts", () => {
     expect(result.receipt.replyToId).toBeUndefined();
     expect(result.receipt.parts[0]?.replyToId).toBeUndefined();
     expect(runCliJson.mock.calls).toEqual([
-      [["send-attachment", "--chat", "chat-1", "--file", "/tmp/image.png", "--transport", "auto"]],
+      [["send-attachment", "--chat", "any;+;g", "--file", "/tmp/image.png", "--transport", "auto"]],
     ]);
     expect(getClientMocks(client).request).not.toHaveBeenCalled();
   });
@@ -1449,9 +1449,7 @@ describe("sendMessageIMessage receipts", () => {
     const result = await sendMessageIMessage("imessage:+15550004567", "", {
       config: createSendConfig({
         accounts: {
-          default: {
-            remoteHost: "work@messages-b",
-          },
+          default: { remoteHost: "work@messages-b" },
         },
       }),
       mediaUrl: "/gateway/photo.png",
@@ -1551,7 +1549,7 @@ describe("sendMessageIMessage receipts", () => {
     const runCliJson = mockCliSend().mockResolvedValueOnce({ messageGuid: "p:0/voice-guid" });
     mockAttachment({ path: "/tmp/voice.caf", contentType: "audio/x-caf" });
 
-    const result = await sendMessageIMessage("chat_guid:chat-1", "", {
+    const result = await sendMessageIMessage("chat_guid:any;-;+15550004567", "", {
       config: IMESSAGE_TEST_CFG,
       client,
       mediaUrl: "/tmp/voice.caf",
@@ -1563,21 +1561,17 @@ describe("sendMessageIMessage receipts", () => {
     expect(result.messageId).toBe("p:0/voice-guid");
     expect(result.guid).toBe("p:0/voice-guid");
     expect(result.receipt.replyToId).toBe(replyToId);
-    expect(runCliJson.mock.calls).toEqual([
-      [
-        [
-          "send-attachment",
-          "--chat",
-          "chat-1",
-          "--file",
-          "/tmp/voice.caf",
-          "--audio",
-          "--reply-to",
-          replyToId,
-          "--transport",
-          "auto",
-        ],
-      ],
+    expect(runCliJson).toHaveBeenCalledExactlyOnceWith([
+      "send-attachment",
+      "--chat",
+      "any;-;+15550004567",
+      "--file",
+      "/tmp/voice.caf",
+      "--audio",
+      "--reply-to",
+      replyToId,
+      "--transport",
+      "auto",
     ]);
     expect(result.receipt.platformMessageIds).toEqual(["p:0/voice-guid"]);
     expect(result.receipt.parts.map((part) => part.kind)).toEqual(["voice"]);
@@ -1626,11 +1620,21 @@ describe("sendMessageIMessage receipts", () => {
       command: ["group", "--chat-id", "42"],
       rpcTarget: { chat_id: 42 },
     },
+    // One-to-one chats use imsg send, which recovers a chat Messages no longer lists (#194182).
+    {
+      target: "chat_id:42",
+      guid: "any;-;u@example.com",
+      command: ["group", "--chat-id", "42"],
+      rpcTarget: { chat_id: 42 },
+    },
+    { target: "chat_guid:any;-;u@example.com", rpcTarget: { chat_guid: "any;-;u@example.com" } },
   ])(
-    "falls back to RPC when native attachment preparation fails for $target",
-    async ({ target, error, command, rpcTarget }) => {
+    "sends media over RPC when native attachment cannot serve $target",
+    async ({ target, error, guid, command, rpcTarget }) => {
       const client = createClient({ message_id: 12345 });
-      const runCliJson = mockCliSend().mockRejectedValueOnce(new Error(error));
+      const runCliJson = mockCliSend();
+      if (guid) runCliJson.mockResolvedValueOnce({ guid });
+      else runCliJson.mockRejectedValueOnce(new Error(error));
       mockAttachment({ path: "/tmp/image.png", contentType: "image/png" });
 
       const result = await sendMessageIMessage(target, "", {
@@ -1640,7 +1644,7 @@ describe("sendMessageIMessage receipts", () => {
       });
 
       expect(result.messageId).toBe("12345");
-      expect(runCliJson.mock.calls).toEqual([[command]]);
+      expect(runCliJson.mock.calls).toEqual(command ? [[command]] : []);
       expect(client["request"]).toHaveBeenCalledWith(
         "send",
         expect.objectContaining({
@@ -1759,9 +1763,7 @@ describe("sendMessageIMessage receipts", () => {
         messageId: "p:0/dm-media-guid",
         messageIds: ["p:0/dm-media-guid"],
         visibleReplySent: true,
-        receipt: expect.objectContaining({
-          platformMessageIds: ["p:0/dm-media-guid"],
-        }),
+        receipt: expect.objectContaining({ platformMessageIds: ["p:0/dm-media-guid"] }),
       }),
     );
     const scope = "default:imessage:+15550004567";
@@ -1798,9 +1800,7 @@ describe("sendMessageIMessage receipts", () => {
         content: "",
         messageId: "p:0/dm-media-guid",
         messageIds: ["p:0/dm-media-guid"],
-        receipt: expect.objectContaining({
-          platformMessageIds: ["p:0/dm-media-guid"],
-        }),
+        receipt: expect.objectContaining({ platformMessageIds: ["p:0/dm-media-guid"] }),
         visibleReplySent: true,
       }),
     );
