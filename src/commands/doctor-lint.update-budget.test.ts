@@ -150,6 +150,13 @@ async function runLintFixture(
     try {
       const budget = await resolveDoctorUpdateBudget({ cfg, env: process.env });
       const budgetResolvedAt = observed.now;
+      const inheritedBudget = snapshotReceipt
+        ? await resolveDoctorUpdateBudget({
+            cfg,
+            env: process.env,
+            commandStartedAtMs: observed.now - 5_000,
+          })
+        : undefined;
       const exitCode = await runDoctorLintCli(createTestRuntime(), {
         json: true,
         severityMin: "error",
@@ -161,6 +168,7 @@ async function runLintFixture(
         elapsedMs: observed.now - startedAt,
         budget,
         budgetResolvedAt,
+        inheritedBudget,
       };
     } finally {
       stdout.mockRestore();
@@ -218,6 +226,8 @@ it.each([
       expect(result.budget?.commandStartedAtMs).toBe(result.budgetResolvedAt - 1_000);
       // Disposal keeps nearly the full fresh command budget, not a ms-scale clamp.
       expect(result.budget!.disposalDeadlineMs! - result.budgetResolvedAt).toBe(287_000);
+      expect(result.inheritedBudget?.commandStartedAtMs).toBe(result.budgetResolvedAt - 5_000);
+      expect(result.inheritedBudget?.disposalDeadlineMs).toBe(result.budgetResolvedAt + 283_000);
       expect(deferred).toEqual([]);
       expect(report.checksRun).toBe(2);
     } else {
