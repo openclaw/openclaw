@@ -46,7 +46,12 @@ final class RootSidebarScrollAnchor {
         self.passScheduled = false
         if let anchor, let y = self.minY[anchor.id], let scrollView, !self.isScrolling {
             let delta = y - anchor.y
-            if delta != 0 { scrollView.contentOffset.y = max(0, scrollView.contentOffset.y + delta) }
+            if delta != 0 {
+                // The recent list is capped: rows arriving above push rows out below, so stop at the end.
+                let contentBottom = scrollView.contentSize.height + scrollView.adjustedContentInset.bottom
+                let maxY = max(0, contentBottom - scrollView.bounds.height)
+                scrollView.contentOffset.y = min(maxY, max(0, scrollView.contentOffset.y + delta))
+            }
         }
     }
 }

@@ -11,11 +11,12 @@ struct RootSidebarStabilityTests {
         let appModel = NodeAppModel()
         let gatewayController = GatewayConnectionController(appModel: appModel, startDiscovery: false)
         let model = RootSidebarModel()
-        var sessions = (0..<40).map { index in
+        // 40 pinned rows, then 23 recent rows of which the sidebar shows the newest 20.
+        var sessions = (0..<63).map { index in
             var row = OpenClawChatSessionEntry(
                 key: "agent:main:work-\(index)", kind: "direct", updatedAt: Double(index),
                 sessionId: "work-\(index)", label: "Work \(index)")
-            row.pinned = true
+            row.pinned = index < 40
             return row
         }
         model.testRosterLoad = { ChatSessionRosterSnapshot(sessions: sessions, isCached: false) }
@@ -38,7 +39,7 @@ struct RootSidebarStabilityTests {
         scroll.setContentOffset(CGPoint(x: 0, y: 400), animated: false)
         await Self.settle(host.view)
         let oldOffset = scroll.contentOffset.y
-        for index in 40..<43 {
+        for index in 63..<66 {
             var row = OpenClawChatSessionEntry(
                 key: "agent:main:work-\(index)", kind: "direct", updatedAt: Double(index),
                 sessionId: "work-\(index)", label: "Work \(index)")
@@ -53,6 +54,22 @@ struct RootSidebarStabilityTests {
         #expect(
             abs(scroll.contentOffset.y - oldOffset - insertedRowHeight) < 2,
             "The scroll offset must compensate for the three inserted rows")
+
+        // The recent list is capped, so rows arriving above push rows out below; compensation must stop at the end.
+        scroll.setContentOffset(CGPoint(x: 0, y: Self.maxOffset(scroll)), animated: false)
+        await Self.settle(host.view)
+        for index in 66..<69 {
+            sessions.append(OpenClawChatSessionEntry(
+                key: "agent:main:work-\(index)", kind: "direct", updatedAt: Double(index),
+                sessionId: "work-\(index)", label: "Work \(index)"))
+        }
+        await model.refreshSessions(appModel: appModel)
+        await Self.settle(host.view)
+        #expect(scroll.contentOffset.y <= Self.maxOffset(scroll) + 1, "Compensation must stop at the end of the list")
+    }
+
+    private static func maxOffset(_ scroll: UIScrollView) -> CGFloat {
+        max(0, scroll.contentSize.height + scroll.adjustedContentInset.bottom - scroll.bounds.height)
     }
 
     private static func settle(_ view: UIView) async {
