@@ -28,7 +28,7 @@ const messages = [
   { role: "user", content: "Recovered question" },
   { role: "assistant", content: "Recovered answer" },
 ];
-it("restores previews after cold storage without mutating metadata", ({
+it("serves cold previews without restoring history or mutating metadata", ({
   signal,
   onTestFinished,
 }) => {
@@ -56,6 +56,8 @@ it("restores previews after cold storage without mutating metadata", ({
       ).resolves.toEqual({ archivedTranscripts: 1, externalizedTranscripts: 0 });
     }
     const database = agentDb.openOpenClawAgentDatabase(scope);
+    const archive = readSessionColdTranscript(database.db, scope.sessionId);
+    expect(archive).toBeDefined();
     const originalEntry = sessions.loadSessionEntry(scope);
     const context = reads.requestContext(cfg),
       client = reads.identifiedClient("viewer@example.com");
@@ -63,26 +65,24 @@ it("restores previews after cold storage without mutating metadata", ({
     const list = () => reads.listSessions({ context, client, request: options });
     using cleanup = new DisposableStack();
     cleanup.defer(() => getSessionRowProjection(context)?.dispose());
-    const omitted = backfill.observeSessionRowBackfill([scope.sessionKey]);
+    const populated = backfill.observeSessionRowBackfill([scope.sessionKey]);
     await list();
-    await withinTest(omitted, signal);
+    await withinTest(populated, signal);
     const initial = await list();
     expect(initial.sessions).toEqual([
       expect.objectContaining({ key: scope.sessionKey, sharingRole: "viewer" }),
     ]);
-    expect(readSessionColdTranscript(database.db, scope.sessionId)).toBeDefined();
-    expect(initial.sessions[0]?.lastMessagePreview).toBeUndefined();
+    expect(readSessionColdTranscript(database.db, scope.sessionId)).toEqual(archive);
+    expect(initial.sessions[0]?.lastMessagePreview).toBe("Recovered answer");
     const projection = getSessionRowProjection(context)!;
     const sharingEntry = projection.capture(query)?.sharingEntry;
-    const refreshed = backfill.observeSessionRowBackfill([scope.sessionKey], projection);
     const history = await readSessionMessagesPageWithStatsAsync(scope, {
       maxMessages: 100,
       offset: 0,
     });
     expect(history.messages).toEqual(messages.map((message) => expect.objectContaining(message)));
-    expect(readSessionColdTranscript(database.db, scope.sessionId)).toBeUndefined();
+    expect(readSessionColdTranscript(database.db, scope.sessionId)).toEqual(archive);
     expect(projection.capture(query)?.sharingEntry).toEqual(sharingEntry);
-    await withinTest(refreshed, signal);
     const expected = { key: scope.sessionKey, lastMessagePreview: "Recovered answer" };
     expect(sessions.loadSessionEntry(scope)).toEqual(originalEntry);
     const nativeCalls = observeMainThreadSql();

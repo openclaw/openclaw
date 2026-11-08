@@ -74,6 +74,7 @@ function fixture(
         },
       },
       {
+        signal: controller.signal,
         runNativeSection: async (operation) => operation(),
         throwIfCancelled: () => controller.signal.throwIfAborted(),
       },

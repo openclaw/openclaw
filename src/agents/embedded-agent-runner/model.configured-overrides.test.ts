@@ -39,6 +39,40 @@ function resolveRoute(baseUrl: string) {
 }
 
 describe("configured model proxy routing", () => {
+  it.each([
+    ["https://api.anthropic.com", "preferred"],
+    ["https://proxy.example.com", undefined],
+  ])(
+    "resolves catalog capabilities independently of configured output limits at %s",
+    (baseUrl, expectedCodeMode) => {
+      const staticCatalogModel: ProviderRuntimeModel = {
+        ...catalogModel,
+        contextWindow: 32_000,
+        maxTokens: 2048,
+        compat: { codeMode: "preferred", supportsTemperature: false },
+      };
+      const resolved = applyConfiguredProviderOverrides({
+        provider: "anthropic",
+        modelId: catalogModel.id,
+        discoveredModel: {
+          ...staticCatalogModel,
+          maxTokens: 512,
+          maxTokensSource: "configured",
+          compat: { codeMode: "capable" },
+        },
+        providerConfig: { api: "anthropic-messages", baseUrl, models: [] },
+        manifestAlias: { provider: "anthropic" },
+        providerMetadataOwners,
+        getStaticCatalogModel: () => staticCatalogModel,
+        runtimeHooks: createProviderRuntimeTestMock({ handledDynamicProviders: [] }),
+      });
+      expect(resolved?.maxTokens).toBe(512);
+      expect(resolved?.maxTokensSource).toBe("configured");
+      expect(resolved?.compat?.codeMode).toBe(expectedCodeMode);
+      expect(resolved?.compat?.supportsTemperature).toBe(expectedCodeMode ? false : undefined);
+    },
+  );
+
   it("keeps catalog models routed through Vercel AI Gateway as operator proxy routes", () => {
     expect(resolveRoute("https://ai-gateway.vercel.sh")?.baseUrl).toBe(
       "https://ai-gateway.vercel.sh",
@@ -46,3 +80,49 @@ describe("configured model proxy routing", () => {
     expect(resolveRoute("https://proxy.example.com")?.baseUrl).toBe("https://proxy.example.com");
   });
 });
+
+it.each(["provider", "model"] as const)(
+  "honors an explicit %s GenerateContent override over Flash's catalog route",
+  (scope) => {
+    const model: ProviderRuntimeModel = {
+      ...catalogModel,
+      provider: "google",
+      id: "gemini-3.8-flash",
+      name: "Gemini Flash",
+      api: "google-interactions",
+      baseUrl: "https://generativelanguage.googleapis.com/v1beta",
+    };
+    const resolved = applyConfiguredProviderOverrides({
+      provider: "google",
+      modelId: model.id,
+      discoveredModel: model,
+      providerConfig: {
+        baseUrl: model.baseUrl,
+        ...(scope === "provider" ? { api: "google-generative-ai" as const } : {}),
+        models:
+          scope === "model"
+            ? [
+                {
+                  id: model.id,
+                  name: model.name,
+                  api: "google-generative-ai" as const,
+                  reasoning: false,
+                  input: ["text" as const],
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                  contextWindow: 1,
+                  maxTokens: 1,
+                },
+              ]
+            : [],
+      },
+      manifestAlias: { provider: "google" },
+      providerMetadataOwners,
+      runtimeHooks: createProviderRuntimeTestMock({ handledDynamicProviders: [] }),
+    });
+    expect(resolved).toMatchObject({
+      id: model.id,
+      api: "google-generative-ai",
+      baseUrl: model.baseUrl,
+    });
+  },
+);

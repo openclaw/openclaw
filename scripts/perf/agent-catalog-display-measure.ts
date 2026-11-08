@@ -8,11 +8,12 @@
  * CPU/allocation per view with host load. Real Gateway RPC proof covers transport/latency.
  */
 import assert from "node:assert/strict";
-import { Session, type HeapProfiler } from "node:inspector/promises";
+import { Session } from "node:inspector/promises";
 import { loadavg } from "node:os";
 import { parseArgs } from "node:util";
 import { createPluginMetadataSnapshotFixture } from "../../src/plugins/plugin-metadata.test-support.js";
 import { createEmptyPluginRegistry } from "../../src/plugins/registry-empty.js";
+import { startCollectedHeapSampling, sumSampledHeapBytes } from "../lib/heap-sampling.ts";
 import { registerPerfOwnerReplacement } from "../lib/perf-owner-replacement.ts";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.js";
 
@@ -61,20 +62,12 @@ function run(count: number) {
     assert.equal(readPreparedGatewayModelCatalogMetadata(view), metadataSnapshot);
   }
 }
-function sampledBytes(node: HeapProfiler.SamplingHeapProfileNode): number {
-  return node.selfSize + node.children.reduce((sum, child) => sum + sampledBytes(child), 0);
-}
 run(1000);
 globalThis.gc?.();
 const inspector = new Session();
 try {
   if (values.allocations) {
-    inspector.connect();
-    await inspector.post("HeapProfiler.startSampling", {
-      samplingInterval: 1024,
-      includeObjectsCollectedByMajorGC: true,
-      includeObjectsCollectedByMinorGC: true,
-    });
+    await startCollectedHeapSampling(inspector, 1024);
   }
   const hostLoadBefore = loadavg();
   const memoryBefore = process.memoryUsage();
@@ -85,7 +78,7 @@ try {
   const used = process.threadCpuUsage(cpu);
   const memoryAfter = process.memoryUsage();
   const allocatedBytes = values.allocations
-    ? sampledBytes((await inspector.post("HeapProfiler.stopSampling")).profile.head)
+    ? sumSampledHeapBytes((await inspector.post("HeapProfiler.stopSampling")).profile.head)
     : undefined;
   console.log(
     JSON.stringify({

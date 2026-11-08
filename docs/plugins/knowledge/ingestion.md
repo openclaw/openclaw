@@ -45,7 +45,12 @@ Remembering and extraction are best effort; read back what was saved.
   claims. Useful decisions, commitments, beliefs, and timeline events become
   claim records.
 - **One event, many entities.** A meeting event is one dated claim that lists
-  every relevant entity, plus dated profile prose, not duplicate event records.
+  every relevant entity, not duplicate event records.
+- **Source notes, not Timeline prose.** What a source says about an entity is
+  the body of one relationship between them: `attended` (participant to meeting)
+  or `discusses` (source to entity). Entity Timelines are derived from these
+  notes and the source's claims; pages have no Timeline section, and agents
+  retire older written ones when they edit the page.
 - **Typed edges need support.** Co-mention is not evidence of employment,
   ownership, or attendance. `attended` runs from participant to meeting.
 - **Reconcile across sources.** Reuse duplicate imports, add evidence, link
@@ -76,6 +81,13 @@ manifest hash, item count, completeness, and watermark. A bundled script compare
 stable item IDs and hashes against the previous manifest. A read-only Discrawl
 adapter is included. Complete snapshots can support deletion observations
 within their range; partial snapshots cannot.
+
+The bundled chat-transcript exporter includes UTF-8 file headers in its
+`--max-bytes` limit. A single indivisible message can still exceed that limit.
+It orders UTC timestamps chronologically across fractional-second precisions,
+preserving the original timestamp strings and using message IDs to break ties.
+Cross-day reply quotes keep the existing 80 UTF-16 code-unit limit without
+splitting surrogate pairs.
 
 ## Batch publication
 

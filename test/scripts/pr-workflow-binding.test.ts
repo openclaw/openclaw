@@ -1,10 +1,13 @@
 import { spawnSync } from "node:child_process";
-import { readFileSync, realpathSync } from "node:fs";
+import { constants as fsConstants, cpSync, readFileSync, realpathSync } from "node:fs";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const temps = useAutoCleanupTempDirTracker(afterEach);
+const templates = useAutoCleanupTempDirTracker(afterAll);
+const copyOptions = { recursive: true, mode: fsConstants.COPYFILE_FICLONE };
+let seed: { root: string; source: string } | undefined;
 const ref = "refs/openclaw/pr-workflow-bindings/123";
 const inline = readFileSync("scripts/pr", "utf8")
   .split("<<'EOF_WRAPPER_GIT'\n")[1]
@@ -19,6 +22,8 @@ function fixture() {
     PATH: process.env.PATH,
     GIT_CONFIG_GLOBAL: "/dev/null",
     GIT_CONFIG_NOSYSTEM: "1",
+    // Automatic maintenance must not race copying the completed seed.
+    GIT_CONFIG_PARAMETERS: "'maintenance.auto=false' 'gc.auto=0'",
     GIT_AUTHOR_NAME: "Workflow Fixture",
     GIT_AUTHOR_EMAIL: "fixture@example.invalid",
     GIT_COMMITTER_NAME: "Workflow Fixture",
@@ -29,13 +34,24 @@ function fixture() {
     expect(result.status, result.stderr).toBe(0);
     return result.stdout.trim();
   };
-  git(["init", "-q", "-b", "main"]);
-  git(["config", "commit.gpgsign", "false"]);
-  git(["config", "core.hooksPath", "/dev/null"]);
-  git(["remote", "add", "origin", "https://github.com/fixture/repo.git"]);
-  git(["commit", "--allow-empty", "-qm", "fixture workflow"]);
-  const source = git(["rev-parse", "HEAD"]);
-  git(["update-ref", "refs/remotes/origin/main", source]);
+  let source: string;
+  if (seed) {
+    cpSync(seed.root, root, copyOptions);
+    source = seed.source;
+  } else {
+    git(["init", "-q", "-b", "main"]);
+    git(["config", "commit.gpgsign", "false"]);
+    git(["config", "core.hooksPath", "/dev/null"]);
+    git(["remote", "add", "origin", "https://github.com/fixture/repo.git"]);
+    git(["commit", "--allow-empty", "-qm", "fixture workflow"]);
+    source = git(["rev-parse", "HEAD"]);
+    git(["update-ref", "refs/remotes/origin/main", source]);
+
+    const templateRoot = realpathSync(templates.make("pr-workflow-binding-template-"));
+    // Capture before any binding writes; every copy owns its mutable Git files.
+    cpSync(root, templateRoot, copyOptions);
+    seed = { root: templateRoot, source };
+  }
   const record = {
     version: 1,
     repository: "https://github.com/fixture/repo.git",

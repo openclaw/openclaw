@@ -38,7 +38,10 @@ account. Enable the plugin in the source-built Gateway configuration:
 }
 ```
 
-Enabling the plugin or changing its configuration applies through plugin hot reload;
+Changes to `maxVisitors` and `defaultTtlDays` apply to the running service without
+replacing the plugin or waiting for active turns. Existing grants keep their expiry;
+lowering the limit prevents new invitations and bounds list output, without revoking grants.
+Enabling the plugin or changing its Cloudflare settings uses plugin hot replacement;
 no Gateway restart is required.
 Do not retarget `accountId`, `appId`, `policyName`, or the OIDC account-ID mapping while grants exist: the
 durable records belong to that policy, and changing targets could leave the old
@@ -115,6 +118,9 @@ Each tool also returns structured `details`, visible to Code Mode, with the same
 information as its text: invite returns `outcome`, either `email` or `githubAccountId`, `grantId`, optional `githubLogin`,
 `expiresAt`, `gatewayAccess`, optional `signInUrl`, `noteStored`, and `invitationText`; revoke returns `outcome`, `emails`,
 and optional `githubAccountIds` and `githubLogin`; list returns `counts`, `grants`, `unmanaged`, and `omitted`.
+Invite and list also return `accountSeats`: the fresh account-wide `capacity`,
+`occupied`, and `remaining` counts, `status` (`available`, `full`, or `unknown`),
+and `diagnostics`. Unavailable numbers are `null`, not zero.
 Recorded list rows include `grantId` when the invitation has a qualified lifetime,
 `profileId` when its target belongs to a current profile, and `welcome`
 (`state` of `pending`, `ready`, or `failed`, plus the reserved `sessionKey`) when
@@ -207,6 +213,39 @@ the configured provider and claim. A known profile retains its current
 role; an unknown account reports first sign-in as pending. The stored login is a
 display label, not an identity binding or GitHub authorship credit.
 
+## Cloudflare account capacity
+
+The invitation cap and account seats are separate limits. `maxVisitors` counts recorded
+grant targets and targets in this app's visitor policy. Cloudflare account seats
+are shared across applications, staff, other users, and Gateway devices; one seat
+can belong to both Access and Gateway. Sixty invitations under a cap of seventy
+do not imply room in a shared account whose seventy-five seats are occupied.
+
+Invite, renewal, and list read the current account's `teams.users_allowed`
+allocation (`max_count`) and complete paginated `access/users` roster.
+The plugin counts distinct occupied `seat_uid` values using the Access/Gateway
+seat-membership flags, not user-record count, login dates, profiles, or visible
+invitation rows. The observation is not a seat reservation, a billing invoice,
+or a guarantee that a future login succeeds. No roster or seat IDs are exposed.
+
+When full, the operator receives a warning that new login identities cannot
+obtain a seat. Saving an invitation still succeeds: renewing a grant or inviting
+an already-seated identity must not be blocked by an account-wide diagnostic.
+The plugin does not infer whether a particular GitHub login will reuse an
+existing Cloudflare identity, remove any seats, change expiry, or purchase capacity.
+An account operator must review consumers and capacity in **Cloudflare One overview**.
+Revoking an invitation alone does not free a seat. Cloudflare seat removal can
+also delete device registrations, so it is not a safe automatic visitor cleanup.
+
+Reads use the configured plugin token and account only. Entitlements require
+**Account Read**; users require **Access: Audit Logs Read**. These read permissions
+are not required to keep existing grant management working. A denied request,
+invalid/incomplete response, or ten-second observation deadline reports the
+unavailable number as unknown with a diagnostic; independently readable counts
+remain available. An authorized account operator can grant those scoped read
+permissions to the existing token, or inspect **Cloudflare One overview** directly.
+The plugin neither changes permissions nor falls back to another credential.
+
 ## Invitation note and text
 
 Pass an optional `note` to `visitor_invite`: free text of at most 1000 characters
@@ -290,8 +329,11 @@ The first call reserves a session key in the grant's onboarding record, then
 creates the session as the guest, so the guest owns it and the guest role's
 agent, sandbox, and session limits apply. The session uses the configured
 default agent when the guest role permits it, otherwise the role's first
-permitted agent, and is titled "Welcome, <display name>" ("Welcome" without a
-display name). The plugin then adds one agent-written message without running
+permitted agent, and is titled "Welcome <display name>". Without a display
+name it uses the guest's canonical GitHub username, when available, or just
+"Welcome"; email addresses and internal IDs are never title fallbacks. Existing
+welcome sessions, including user-renamed titles, are left unchanged. The plugin
+then adds one agent-written message without running
 the model and records the onboarding as `ready`. Any number of calls, tabs,
 retries, reloads, or Gateway restarts yield at most one welcome session per
 grant: a retry after a failure or crash reuses the reserved key, an existing
@@ -412,9 +454,13 @@ assign, or demote roles.
 The plugin only manages the policy whose name exactly matches `policyName`. It
 does not modify or reorder any other policy, including the maintainer organization
 policy. A matching policy whose decision is not `allow` causes a clear refusal.
-Cloudflare requests use app-scoped policy endpoints only: no identity-provider
-calls and no application mutations. Tokens are never logged or echoed, and fetch
+Cloudflare mutations use app-scoped policy endpoints only: no identity-provider
+calls, account-seat writes, or application mutations. Invite and list also read
+account entitlements and users for aggregate seat diagnostics. Tokens are never logged or echoed, and fetch
 failures use generic diagnostics.
+Cloudflare JSON responses are limited to 16 MiB, including policy discovery and
+mutation confirmations. Larger responses fail with an inspection instruction;
+provider cleanup remains best effort and retries while its durable record remains.
 Non-email include rules, nonempty require/exclude rules, or duplicate matching
 policy names also require operator inspection before the plugin will write.
 

@@ -289,9 +289,9 @@ recover_review_transition() {
       pr_git update-ref --no-deref "refs/heads/$branch" "$target" "$source" || return 1
     fi
   elif [ "$mode" = "branch" ]; then
-    pr_git checkout -B "$branch" "$target" || return 1
+    GIT_NO_LAZY_FETCH=1 pr_git checkout -B "$branch" "$target" || return 1
   else
-    pr_git checkout --detach "$target" || return 1
+    GIT_NO_LAZY_FETCH=1 pr_git checkout --detach "$target" || return 1
   fi
 
   local actual_branch
@@ -308,6 +308,16 @@ recover_review_transition() {
   rm -f "$journal"
 }
 
+review_transition_recover() {
+  local pr="$1" plan="$2" seal="$3"
+  # Containment-only entry must not replay the transition we are repairing.
+  enter_worktree "$pr" false true || return 1
+  mark_pr_operation_side_effects_started || return 1
+  node "$(dirname "${BASH_SOURCE[0]}")/review-transition-recovery.mjs" \
+    "$pr" "$plan" "$seal" "$(repo_root)" "$PR_OPERATION_LOCK_REF" "$PR_OPERATION_LOCK_OWNER_OID" \
+    "$PR_WORKFLOW_SOURCE_REVISION" "$PR_WORKFLOW_BINDING_OID"
+}
+
 checkout_pr_worktree_target() {
   local pr="$1"
   local target_ref="$2"
@@ -322,7 +332,12 @@ checkout_pr_worktree_target() {
 
   local source target mode=detached
   source=$(pr_git rev-parse HEAD) || return 1
-  target=$(pr_git rev-parse "$target_ref^{commit}") || return 1
+  # A lazy commit fetch sends no haves and can download all reachable history.
+  # Acquire missing commits through the filtered, negotiating source owner first.
+  target=$(GIT_NO_LAZY_FETCH=1 pr_git rev-parse --verify "$target_ref^{commit}" 2>/dev/null) || {
+    fetch_canonical_ref "$target_ref" --no-write-fetch-head || return 1
+    target=$(GIT_NO_LAZY_FETCH=1 pr_git rev-parse --verify "$target_ref^{commit}") || return 1
+  }
   require_no_ignored_transition_paths "$pr" "$source" "$target" || return 1
   [ -z "$branch" ] || mode=branch
   write_review_transition_journal "$pr" "$source" "$target" "$mode" "$branch" || return 1
@@ -698,6 +713,74 @@ list_pr_worktrees() {
   fi
 }
 
+# Explicit task closeout uses the same repository/operation and removal owners
+# as PR GC. It never adopts a branch or manufactures an external merge receipt.
+gc_finalized_task() (
+  local dry_run="$1" pr="$2" selected="$3" head="$4" task="$5" socket="$6" thread_count="$7"
+  shift 7
+  local root helper state plan observation lock_ref="" lock_oid="" status=0
+  root=$(repo_root) || return 1
+  helper="${BASH_SOURCE[0]%/*}/finalized-task.mjs"
+  cd "$root" || return 1
+
+  if [ "$dry_run" = true ]; then
+    # A dry-run does not acquire, retire, or recover a native operation lock.
+    local existing
+    existing=$(pr_git for-each-ref --format='%(refname)' -- "refs/openclaw/pr-operation-locks/$pr" 2>&1) || return 1
+    [ -z "$existing" ] || { echo "Preserving task resources: native PR operation requires recovery or release." >&2; return 1; }
+  else
+    try_acquire_pr_operation_lock "$pr" || return 1
+    lock_ref="$PR_OPERATION_LOCK_REF"
+    lock_oid="$PR_OPERATION_LOCK_OWNER_OID"
+    trap release_pr_operation_lock EXIT
+  fi
+
+  require_finalized_pr() {
+    observation=$(read_pr_view_json "$pr" "number,url,state,headRefOid,baseRepository") || return 1
+    use_pr_observation "$pr" "$observation" || return 1
+    node "$helper" merged-pr "$root" "$pr" "$head" "$observation" || return 1
+    merge_outcome_load_local "$pr" || return 1
+    if [ -n "$MERGE_OUTCOME_OID" ]; then
+      printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -e '.phase == "complete"' >/dev/null || {
+        echo "Preserving task resources: unresolved native merge/completion; use merge recovery." >&2
+        return 1
+      }
+    fi
+  }
+  require_finalized_pr || return 1
+  if [ -n "$selected" ]; then
+    state=$(pr_worktree_state "$selected" "" task-cleanup) || return 1
+  else
+    state='{}'
+  fi
+  plan=$(node "$helper" inspect "$root" "$state" "$pr" "$head" "$task" "$socket" "$thread_count" "$@") || return 1
+  if [ "$dry_run" = true ]; then
+    printf '%s\n' "$plan" | jq -r '.artifacts[] | if .identity == "" then "already absent artifact \(.path)" else "would remove artifact \(.path) (recursive; symlink targets preserved)" end'
+    printf '%s\n' "$plan" | jq -r 'select(.worktree != "") | if .worktreeIdentity == "" then "already absent worktree \(.worktree)" else "would remove worktree \(.worktree) (HEAD \(.head); branches preserved)" end'
+    return 0
+  fi
+
+  # Session reads are awaited by the inspector. Refresh PR/native operation
+  # facts before destructive work, and again before native worktree removal.
+  require_finalized_pr || return 1
+  node "$helper" remove-artifacts "$plan" "$lock_ref" "$lock_oid" || return 1
+  if [ -n "$selected" ]; then
+    require_finalized_pr || return 1
+    node "$helper" verify "$plan" "$lock_ref" "$lock_oid" || return 1
+    selected=$(printf '%s\n' "$plan" | jq -r '.worktree') || return 1
+    remove_worktree_if_present "$selected" false "$head" "$pr" || status=$?
+    if [ "$status" -ne 0 ]; then
+      echo "Task closeout incomplete: selected artifacts above were removed; worktree retained at $selected." >&2
+      return "$status"
+    fi
+    if printf '%s\n' "$plan" | jq -e '.worktreeIdentity == ""' >/dev/null; then
+      echo "already absent worktree $selected; branches preserved"
+    else
+      echo "removed worktree $selected; branches preserved"
+    fi
+  fi
+)
+
 gc_pr_worktrees() {
   local dry_run="${1:-false}" selected_pr="${2:-}"
   [ -z "$selected_pr" ] || is_canonical_pr_number "$selected_pr" || return 2
@@ -706,12 +789,13 @@ gc_pr_worktrees() {
   cd "$root"
 
   local dir
-  local removed=0
+  local removed=0 selected_status=0
   # Select before locks or remote reads: scoped cleanup must not observe sibling PRs.
   local directories=(".worktrees/pr-$selected_pr")
   [ -n "$selected_pr" ] || directories=(.worktrees/pr-*)
   for dir in "${directories[@]}"; do
     [ -d "$dir" ] || continue
+    [ -z "$selected_pr" ] || selected_status=1
     local pr
     if ! pr=$(pr_number_from_worktree_dir "$dir"); then
       echo "skipping $dir (could not parse PR number)"
@@ -742,6 +826,7 @@ gc_pr_worktrees() {
           echo "removed $dir (failed template clone)"
         fi
         removed=$((removed + 1))
+        selected_status=0
       fi
       release_pr_operation_lock
       continue
@@ -759,12 +844,14 @@ gc_pr_worktrees() {
           if remove_worktree_if_present "$dir" true; then
             echo "would remove $dir (PR #$pr state=$state)"
             removed=$((removed + 1))
+            selected_status=0
           else
             echo "skipping $dir (cleanup incomplete)"
           fi
         elif cleanup_pr_worktree "$dir"; then
           echo "removed $dir (PR #$pr state=$state)"
           removed=$((removed + 1))
+          selected_status=0
         else
           echo "skipping $dir (cleanup incomplete)"
         fi
@@ -780,6 +867,7 @@ gc_pr_worktrees() {
       echo "No merged/closed PR worktrees removed."
     fi
   fi
+  return "$selected_status"
 }
 
 pr_number_from_worktree_dir() {

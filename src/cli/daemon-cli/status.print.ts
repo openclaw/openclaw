@@ -16,6 +16,7 @@ import {
 } from "../../daemon/restart-logs.js";
 import { buildGatewayRuntimeRecoveryHints } from "../../daemon/runtime-hints.js";
 import { SERVICE_RUNTIME_AUDIT_CODES } from "../../daemon/service-audit-runtime.js";
+import { mergeGatewayServiceEnv } from "../../daemon/service-env-merge.js";
 import { formatServiceInspectionReason } from "../../daemon/service-inspection-error.js";
 import { isSystemdStartLimitHit } from "../../daemon/service-runtime.js";
 import {
@@ -24,6 +25,7 @@ import {
 } from "../../daemon/systemd-hints.js";
 import { classifySystemdUnavailableDetail } from "../../daemon/systemd-unavailable.js";
 import { resolveControlUiLinks } from "../../gateway/control-ui-links.js";
+import { isGatewayExternallySupervised } from "../../infra/gateway-supervision.js";
 import { formatGatewayRestartHandoffDiagnostic } from "../../infra/restart-handoff.js";
 import { isWSLEnv } from "../../infra/wsl.js";
 import {
@@ -36,6 +38,7 @@ import { formatCliCommand } from "../command-format.js";
 import { quoteCliArg } from "../quote-cli-arg.js";
 import {
   createCliStatusTextStyles,
+  formatGatewayCrashHistory,
   formatRuntimeStatus,
   projectDaemonServiceForJson,
   resolveDaemonInstallBlockMessage,
@@ -311,6 +314,9 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
       `${label("Last shutdown:")} ${infoText(terminalText`${reason ?? "unknown"}`)} at ${new Date(completedAtMs).toISOString()}`,
     );
   }
+  for (const line of formatGatewayCrashHistory(status.gateway)) {
+    printWarning(line);
+  }
   if (status.gateway?.duelingScopesWarning) {
     printWarning(terminalText`${status.gateway.duelingScopesWarning}`);
   }
@@ -426,9 +432,8 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
 
   const serviceInspectionDetail = service.inspectionReason
     ? formatServiceInspectionReason(service.inspectionReason)
-    : service.loadState.status === "unknown"
-      ? service.loadState.detail
-      : undefined;
+    : (service.runtime?.inspectionFailure?.detail ??
+      (service.loadState.status === "unknown" ? service.loadState.detail : undefined));
   if (serviceInspectionDetail) {
     defaultRuntime.error(
       managerUnavailable
@@ -595,7 +600,7 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
     status.port.status === "free"
   ) {
     printError(`Gateway port ${status.port.port} is not listening (service appears running).`);
-    const serviceEnv = { ...process.env, ...service.command?.environment };
+    const serviceEnv = mergeGatewayServiceEnv(process.env, service.command ?? null);
     if (process.platform === "linux") {
       const unit =
         service.runtime?.systemd?.unit ??
@@ -710,7 +715,7 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
     spacer();
   }
 
-  if (extraServices.length > 0) {
+  if (extraServices.length > 0 && !isGatewayExternallySupervised(process.env)) {
     defaultRuntime.log(
       infoText(
         "Recommendation: run a single gateway per machine for most setups. One gateway supports multiple agents (see docs: /gateway#multiple-gateways-same-host).",

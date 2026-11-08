@@ -1,0 +1,2 @@
+# Real-Gateway regression: Test & use reports provider 5xx after one attempt instead of the ~90 s chat retry ladder.
+    124

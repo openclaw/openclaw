@@ -582,7 +582,7 @@ jobs:
             local json="$1"
             local source="$2"
             [[ -n "${json// }" ]] || return 0
-            jq -cer \
+            jq -crs \
               --arg source "$source" \
               '
                 def digits: test("^[1-9][0-9]*$");
@@ -598,7 +598,8 @@ jobs:
                   | .prepublishPluginRegistryArtifactId |= tostring
                   | .prepublishPluginRegistryArtifactRunId |= tostring
                   | .prepublishPluginRegistryArtifactRunAttempt |= tostring;
-                if type != "object" then error("not an object") else . end
+                if length != 1 then error("expected one JSON document") else .[0] end
+                | if type != "object" then error("not an object") else . end
                 | . as $input
                 | [fields[] as $field | select($input | has($field))] as $present
                 | if ($present | length) == 0 and $source == "candidate" then empty
@@ -608,7 +609,7 @@ jobs:
                   else tuple
                   end
                 | . as $tuple
-                | select(
+                | if (
                     (
                       .prepublishPluginRegistryArtifactName ==
                         ("docker-e2e-prepublish-plugin-registry-" +
@@ -628,7 +629,7 @@ jobs:
                       .prepublishPluginRegistryArtifactDigest,
                       .prepublishPluginRegistryManifestSha256
                     ] | all(.[]; hex64))
-                  )
+                  ) then . else error("invalid tuple") end
               ' <<< "$json" 2>/dev/null || {
                 echo "Prerelease plugin registry JSON must contain one complete immutable tuple." >&2
                 exit 1
@@ -1085,6 +1086,7 @@ jobs:
         id: upload_package
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
+          compression-level: 0
           name: ${{ env.PACKAGE_ARTIFACT_NAME }}
           path: |
             .artifacts/docker-e2e-package/openclaw-current.tgz
@@ -1097,6 +1099,7 @@ jobs:
         if: steps.resolve.outputs.plugin_registry_manifest_sha256 != ''
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
+          compression-level: 0
           name: ${{ env.TELEGRAM_PLUGIN_REGISTRY_ARTIFACT_NAME }}
           path: .artifacts/package-acceptance-telegram-plugin-registry/
           retention-days: 14

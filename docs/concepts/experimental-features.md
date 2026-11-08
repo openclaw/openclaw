@@ -22,16 +22,17 @@ available for user-installed browser code.
 
 ## Currently documented flags
 
-| Surface        | Key                                                                     | Use it when                                                                                                                       | More                                                                                   |
-| -------------- | ----------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------- |
-| Codex harness  | `plugins.entries.codex.config.appServer.experimental.sandboxExecServer` | You want native Codex app-server 0.143.0 or newer to target an OpenClaw sandbox-backed exec-server instead of disabling Code Mode | [Codex harness reference](/plugins/codex-harness-reference#sandboxed-native-execution) |
-| Code Mode      | `tools.codeMode.enabled`                                                | You want compact code-orchestrated access to a hidden OpenClaw tool catalog                                                       | [Code Mode](/tools/code-mode)                                                          |
-| Cloud workers  | `cloudWorkers.desktop`                                                  | You want to watch or control desktop-capable cloud worker environments from the Control UI                                        | [Cloud Worker Desktop](/gateway/cloud-workers#desktop-interactive)                     |
-| Templates      | `gateway.controlUi.experimental.templates`                              | You want to explore and add official ClawHub agents from the Control UI                                                           | [Templates](/cli/templates)                                                            |
-| Host Desktop   | `desktop.host.enabled`                                                  | You want to watch or control the Gateway host through its VNC or Screen Sharing server                                            | [Desktop](/gateway/configuration-reference#desktop)                                    |
-| Advisor        | `plugins.entries.advisor.enabled`                                       | You want an advisor model to periodically check a conversation's agent work and give the agent one short correction               | [Advisor](#advisor)                                                                    |
-| Speech bubbles | `gateway.controlUi.experimental.chatBubbles`                            | You want to try conversation bubbles and compact activity; Home defaults on while the lab is enabled                              | [Chat](/web/control-ui/chat)                                                           |
-| Tool Search    | `tools.toolSearch.enabled`                                              | You want to control the global Tool Search default, which is enabled                                                              | [Tool Search](/tools/tool-search)                                                      |
+| Surface                 | Key                                                                     | Use it when                                                                                                                       | More                                                                                   |
+| ----------------------- | ----------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------- |
+| Codex harness           | `plugins.entries.codex.config.appServer.experimental.sandboxExecServer` | You want native Codex app-server 0.143.0 or newer to target an OpenClaw sandbox-backed exec-server instead of disabling Code Mode | [Codex harness reference](/plugins/codex-harness-reference#sandboxed-native-execution) |
+| Code Mode               | `tools.codeMode.enabled`                                                | You want compact code-orchestrated access to a hidden OpenClaw tool catalog                                                       | [Code Mode](/tools/code-mode)                                                          |
+| Cloud workers           | `cloudWorkers.desktop`                                                  | You want to watch or control desktop-capable cloud worker environments from the Control UI                                        | [Cloud device desktop](/gateway/cloud-workers#desktop-interactive)                     |
+| Templates               | `gateway.controlUi.experimental.templates`                              | You want to explore and add official ClawHub agents from the Control UI                                                           | [Templates](/cli/templates)                                                            |
+| This computer’s desktop | `desktop.host.enabled`                                                  | You want to watch or control the Gateway host through its VNC or Screen Sharing server                                            | [Desktop](/gateway/configuration-reference#desktop)                                    |
+| Advisor                 | `plugins.entries.advisor.enabled`                                       | You want an advisor model to periodically check a conversation's agent work and give the agent one short correction               | [Advisor](#advisor)                                                                    |
+| OpenClaw ID             | `gateway.openclawId.enabled`                                            | You want to open this claw from your other devices through OpenClaw ID, without opening a port                                    | [OpenClaw ID remote access](#openclaw-id-remote-access)                                |
+| Speech bubbles          | `gateway.controlUi.experimental.chatBubbles`                            | You want to try conversation bubbles and compact activity; Home defaults on while the lab is enabled                              | [Chat](/web/control-ui/chat)                                                           |
+| Tool Search             | `tools.toolSearch.enabled`                                              | You want to control the global Tool Search default, which is enabled                                                              | [Tool Search](/tools/tool-search)                                                      |
 
 ## Control UI Labs
 
@@ -40,9 +41,9 @@ Control UI switch. Enabling or disabling a lab patches the saved Gateway
 config immediately without restarting the Gateway.
 
 Labs includes Speech bubbles, Decision assistance, Advisor, Code Mode, Tool Search for all models,
-Templates, Host Desktop, and Cloud Worker Desktop. Under the default reload mode,
+Templates, This computer’s desktop, OpenClaw ID remote access, and Cloud device desktop. Under the default reload mode,
 desktop availability updates in connected Control UI pages. Code Mode and Tool
-Search changes take effect for future agent runs. The Cloud Worker Desktop lab
+Search changes take effect for future agent runs. The Cloud device desktop lab
 controls access to existing desktop-capable workers; changing a profile’s
 `settings.desktop` affects only newly provisioned workers.
 
@@ -291,6 +292,123 @@ Behavior and limits:
   `plugins.entries.advisor.hooks`, which trusted plugins have by default.
 - Gateway info logs record review token usage and whether a correction steered
   the run.
+
+## OpenClaw ID remote access
+
+OpenClaw ID remote access is off by default (`gateway.openclawId.enabled`).
+While it is off the Gateway starts no tunnel child, opens no tunnel sockets and
+makes no calls to OpenClaw ID, Discovery or relays, and the `openclawId.*`
+methods refuse every request. Turning it off also stops any Discovery request
+that was still being prepared. Turn it on in **Settings → Labs → OpenClaw ID
+remote access**, or in config:
+
+```json5
+{
+  gateway: {
+    openclawId: {
+      enabled: true,
+      relayUrl: "https://relay.example.com/",
+      // Needed to turn on remote access for a claw from the account menu
+      // (you sign in with OpenClaw ID first, which needs clientId):
+      issuerUrl: "https://id.example.com/api/auth",
+      clientId: "<public PKCE client id>",
+      discoveryUrl: "https://discovery.example.com",
+      loaderDomain: "claws.example.com",
+    },
+  },
+}
+```
+
+No service URL has a production default yet; the Gateway reports
+`unconfigured` until `relayUrl` is set. Changes apply without a restart. See the
+[`openclawId` configuration keys](/gateway/config-gateway) for the full list.
+
+Labs only switches the feature on or off. Everything else lives outside Labs:
+
+- **Account menu** (your avatar, bottom left of the sidebar): **Sign in with
+  OpenClaw ID**, **Turn on remote access**, **Your devices**, **Copy claw link**
+  and **Sign out of OpenClaw ID**, depending on your connection and setup state.
+- **Access**, under **Pages**: the **Remote access** page from the bundled
+  `openclaw-id-access` plugin (enabled by default). It shows who may reach this
+  claw through OpenClaw ID; its **People** section lets you invite someone,
+  approve or deny their request, and remove members. Use an approved owner
+  browser to change access. Devices paired with this Gateway are in
+  **Settings → Devices**.
+- **Your devices**, in the account menu: view approved owner browsers and choose
+  **Remove access** for a browser. The confirmation lists any other devices that
+  will also lose access. They disconnect immediately; use another approved owner
+  browser or your recovery kit to restore access.
+- There is no owner reset in this version: a claw keeps the recovery kit it was
+  linked with, so store the kit safely.
+
+### Sign in with OpenClaw ID
+
+Sign-in uses an OpenID Connect authorization code flow with PKCE for the public
+client `clientId`, in a popup. It works only in a Control UI opened on the
+Gateway machine (direct loopback). The Gateway builds the authorization URL and
+redeems the code, because the issuer does not serve CORS; it keeps nothing but
+the short-lived pending sign-in. The popup returns to
+`<Control UI origin>/openclaw-id/callback`, so register that redirect for the
+client (`http://127.0.0.1/openclaw-id/callback` matches any loopback port). The
+browser keeps the account and its ID token until the token expires or you sign
+out. While signed in, **Turn on remote access** gets its link code from your account
+instead of asking you to paste one.
+
+### How the tunnel reaches the Gateway
+
+- The Gateway supervises one **tunnel child** process. The child owns the iroh
+  endpoint key (`<state dir>/openclaw-id/endpoint.key`, mode 0600, created on
+  first start and never regenerated; a new key re-links every device). It runs
+  at a lower CPU priority, restarts with a 1 to 30 second backoff, is restarted
+  gracefully above 512 MB RSS, and stops with SIGTERM then SIGKILL after 2
+  seconds. If the iroh binding cannot load on this platform, the Gateway reports
+  remote access unavailable and keeps running.
+- The child admits a device only if the Gateway's membership lists the
+  device's endpoint key, and checks that before accepting any stream. Until a
+  claw is linked, nobody is admitted.
+- The child proxies each stream to a private Gateway ingress: a Unix socket
+  only the Gateway's user can open, plus a per-boot proxy token it receives over
+  the supervisor's IPC channel. It strips client forwarding and identity headers
+  and passes the device key it authenticated in the QUIC handshake.
+- Requests that come through this ingress are always treated as relayed, never
+  as direct loopback, even though they arrive on the local host. Linking a claw
+  and other root ceremonies are allowed only on direct loopback.
+
+<a id="make-a-claw-reachable" />
+
+### Turn on remote access
+
+With the lab on, sign in with OpenClaw ID from the account menu, then choose
+**Turn on remote access**. It works only in OpenClaw on the computer that runs
+this claw (direct loopback). If setup asks for a **Link code**, get one from the
+**Add a claw** page at `https://claws.<loaderDomain>/link` and paste it into setup:
+
+1. The Gateway creates the claw id and its signing key, and reports the tunnel's
+   endpoint key.
+2. The browser creates a recovery kit (`OCK1-…`) and derives the owner root key
+   from it. You must confirm that you saved the kit before you can continue.
+3. The browser creates an owner device key for this origin, and the owner root
+   signs that device's certificate and the server binding (claw id, hostname
+   `<name>-<account tag>.<loaderDomain>` as Discovery assigned it, endpoint key,
+   Gateway key).
+4. The Gateway pins the owner root's fingerprint and admits the owner device.
+   The kit secret and root key never leave the browser and are dropped as soon
+   as the statements are signed.
+5. With a link code, the Gateway registers the claw with
+   Discovery and publishes its descriptor and membership snapshot. Without one,
+   the claw is linked locally and can be published later.
+
+### Membership
+
+The Gateway is the membership authority. It stores the pinned owner root, the allowlist
+of owner devices and members, invites and a sequence number in its state
+database. Owner devices send membership changes directly to the Gateway
+(over the tunnel or loopback); Discovery only mirrors signed snapshots and
+carries invite redemption requests, root-signed statements and revocations.
+When a member or device is removed, the tunnel child closes its connections,
+the Gateway closes its sessions and invalidates device tokens bound to its key,
+cancels its active runs (transcripts are kept up to the cut), and publishes a
+new snapshot.
 
 ## Local model lean mode
 

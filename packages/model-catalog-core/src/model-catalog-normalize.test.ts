@@ -481,29 +481,11 @@ it("strips v2 transport metadata while preserving transport-like provider identi
   expect(() => parseV2(bundle)).not.toThrow();
 });
 
-it("negotiates task metadata only on v3 and rejects malformed declarations per row", () => {
+it("rejects task metadata and unknown schema versions on the v2 wire", () => {
   const inference = { chat: false, decision: { protocol: "fixture", input: ["text"] } };
-  const native = { ...firstModel, inference, compat: { nested: transport } };
-  const candidate = {
-    ...validBundleV2,
-    schemaVersion: 3,
-    providers: { first: { recommendedModels: [native.id] } },
-    models: [native],
-  };
+  const candidate = { ...validBundleV2, models: [{ ...firstModel, inference }] };
   expect(() => parseV2(candidate)).toThrow();
-  expect(() => parseV2({ ...candidate, schemaVersion: 2 })).toThrow();
-  expect(parseV3(candidate).models[0]?.inference).toEqual(inference);
-  const warn = vi.fn();
-  const invalid = {
-    ...native,
-    id: "invalid",
-    inference: { ...inference, decision: { ...inference.decision, protocol: "invalid protocol" } },
-  };
-  const admitted = sanitizeV3({ ...candidate, models: [native, invalid] }, warn);
-  expect(admitted.models).toHaveLength(1);
-  expect(admitted.models[0]).toMatchObject({ inference, compat: { nested: {} } });
-  expect(admitted.providers.first?.recommendedModels).toEqual([]);
-  expect(warn).toHaveBeenCalledOnce();
+  expect(() => parseV2({ ...candidate, schemaVersion: 3 })).toThrow();
 });
 
 it("limits configured-origin discovery to owned runtime catalogs", () => {
@@ -519,4 +501,77 @@ it("limits configured-origin discovery to owned runtime catalogs", () => {
     discovery: { live: "runtime", cached: "refreshable", fixed: "static" },
     configuredEndpointDiscovery: ["live"],
   });
+});
+
+it("preserves canonical task facts on v3 and keeps chat references chat-only", () => {
+  const inference = {
+    chat: false,
+    decision: {
+      protocol: "fixture.decisions",
+      input: ["text"],
+      questions: { boolean: { probabilities: "boolean", abstention: true } },
+      limits: { maxQuestions: 32 },
+      billing: { unit: "requests", source: "provider-catalog" },
+    },
+  };
+  const native = { ...modelV2("native"), inference };
+  const dual = { ...modelV2("dual"), inference: { ...inference, chat: true } };
+  const bundle = {
+    ...validBundleV2,
+    schemaVersion: 3,
+    providers: { first: { defaultModel: "dual", recommendedModels: ["dual"] } },
+    models: [native, dual],
+  };
+  expect(parseV3(bundle).models).toEqual([native, dual]);
+  for (const provider of [
+    { defaultModel: "native" },
+    { defaultUtilityModel: "missing" },
+    { recommendedModels: ["native"] },
+  ]) {
+    const candidate = { ...bundle, providers: { first: provider } };
+    expect(() => parseV3(candidate)).toThrow();
+    expect(sanitizeV3(candidate).providers.first).toEqual(
+      provider.recommendedModels ? { recommendedModels: [] } : {},
+    );
+  }
+  const warn = vi.fn();
+  const invalid = {
+    ...native,
+    id: "invalid",
+    inference: { chat: false, decision: { protocol: "bad" } },
+  };
+  const salvaged = sanitizeV3({ ...bundle, models: [native, invalid, dual] }, warn);
+  expect(salvaged.models).toEqual([native, dual]);
+  expect(warn).toHaveBeenCalledTimes(1);
+  expect(() => parseV3({ ...bundle, models: [invalid] })).toThrow();
+  expect(() => parseV3({ ...bundle, schemaVersion: 4 })).toThrow();
+});
+
+it("reads v3 fields added by newer publishers without dropping rows", () => {
+  const known = { ...modelV2("future"), inference: { chat: true } };
+  const newer = {
+    ...validBundleV2,
+    schemaVersion: 3,
+    futureEnvelope: 1,
+    providers: { first: { futureProvider: true } },
+    models: [
+      {
+        ...known,
+        futureRow: { unit: "image" },
+        pricing: { status: "unknown", futureRate: 1 },
+        inference: { chat: true, music: { input: ["text"] } },
+      },
+    ],
+  };
+  // The publisher still rejects them, so a typo cannot reach the hosted feed.
+  expect(() => parseV3(newer)).toThrow();
+  const warn = vi.fn();
+  expect(sanitizeV3(newer, warn)).toEqual({
+    ...validBundleV2,
+    schemaVersion: 3,
+    providers: { first: {} },
+    models: [known],
+  });
+  expect(warn).not.toHaveBeenCalled();
+  expect(newer.models[0]).toHaveProperty("futureRow");
 });

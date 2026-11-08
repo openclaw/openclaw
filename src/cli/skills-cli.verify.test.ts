@@ -84,7 +84,7 @@ describe("skills verify CLI", () => {
 
   async function runCommand(...argv: string[]) {
     const program = new Command().exitOverride();
-    registerSkillsCli(program);
+    await registerSkillsCli(program);
     await program.parseAsync(["skills", "verify", ...argv], { from: "user" });
   }
 

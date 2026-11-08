@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { resolveStateDir } from "../../config/paths.js";
+import { resolveDatabaseFamilyEngines } from "../../infra/database-engine/registry.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { acquireGatewayLock } from "../../infra/gateway-lock.js";
 import { hasActiveGatewayStateOwner } from "../../infra/gateway-state-owner.js";
@@ -12,6 +13,8 @@ import {
   type UpdateDatabaseBackup,
 } from "../../infra/update-database-backup.js";
 import { restoreUpdateDatabaseBackup } from "../../infra/update-database-restore.js";
+import { UpdatePreMutationError } from "../../infra/update-pre-mutation-error.js";
+import { loadPluginCohortRecovery } from "../../infra/update-run-recovery-store.js";
 import { reportUpdateStepCompletion } from "../../infra/update-runner-command.js";
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import type { UpdateStepResult } from "../../infra/update-step-result.js";
@@ -30,19 +33,8 @@ import { UpdateCommandRecoveryPendingError } from "./update-command-recovery-err
 
 type Progress = MutableUpdateExecutionParams["progress"];
 
-export async function captureUpdateDatabases(params: {
-  transaction: PackageUpdateTransaction;
-  execution: MutableUpdateExecutionParams;
-  context: OwnedManagedUpdateContext | undefined;
-  assertCurrent: () => void;
-}) {
-  const assertCurrent = params.assertCurrent;
-  const startedAt = Date.now();
-  const { execution, context, transaction } = params;
-  const env = context?.env ?? execution.opts.run!.env;
-  params.assertCurrent();
-  const source = await readUpdateCandidateSource(env, execution.legacyConfigPlan);
-  params.assertCurrent();
+/** Exclusive state ownership for capture; `unavailable` names why it was not acquired. */
+async function acquireUpdateCaptureOwnership(env: NodeJS.ProcessEnv | undefined) {
   let maintenance: Awaited<ReturnType<typeof acquireGatewayLock>> = null;
   let unavailable: string | undefined;
   try {
@@ -61,6 +53,47 @@ export async function captureUpdateDatabases(params: {
   } catch (error) {
     unavailable = formatErrorMessage(error);
   }
+  return { maintenance, unavailable };
+}
+
+/**
+ * PostgreSQL capture refuses without exclusive state ownership, and capture runs after
+ * activation replaces the install. Refuse here, before activation, so a Gateway the
+ * updater did not stop keeps serving an unchanged install.
+ */
+export async function assertUpdatePostgresCaptureOwnership(params: {
+  config: Parameters<typeof resolveDatabaseFamilyEngines>[0];
+  env: NodeJS.ProcessEnv;
+}): Promise<void> {
+  if (!Object.values(resolveDatabaseFamilyEngines(params.config)).includes("postgres")) {
+    return;
+  }
+  const { maintenance, unavailable } = await acquireUpdateCaptureOwnership(params.env);
+  await maintenance?.release();
+  if (unavailable !== undefined) {
+    throw new UpdatePreMutationError(
+      "database-engine-preflight",
+      `Update refused before changing the install: PostgreSQL database backup requires exclusive state ownership (${unavailable}). Stop the Gateway through its service owner, then rerun openclaw update.`,
+    );
+  }
+}
+
+export async function captureUpdateDatabases(params: {
+  transaction: PackageUpdateTransaction;
+  execution: MutableUpdateExecutionParams;
+  context: OwnedManagedUpdateContext | undefined;
+  assertCurrent: () => void;
+}) {
+  const assertCurrent = params.assertCurrent;
+  const startedAt = Date.now();
+  const { execution, context, transaction } = params;
+  const env = context?.env ?? execution.opts.run!.env;
+  params.assertCurrent();
+  const source = await readUpdateCandidateSource(env, execution.legacyConfigPlan);
+  params.assertCurrent();
+  const ownership = await acquireUpdateCaptureOwnership(env);
+  const maintenance = ownership.maintenance;
+  let unavailable = ownership.unavailable;
   let outcome: { value: UpdateDatabaseBackup } | { error: unknown };
   try {
     const capture = async () => {
@@ -122,6 +155,10 @@ export async function captureUpdateDatabases(params: {
         nodeRunner: execution.packageUpdateNodeRunner,
         postgresOffline: maintenance !== null && unavailable === undefined,
       });
+      if (execution.updateInstallKind === "git") {
+        // Git runtime transactions have no package journal; retire these snapshots with them.
+        transaction.databaseBackupRoot = backupRoot;
+      }
       params.assertCurrent();
       maintenance?.assertCurrent();
       return captured;
@@ -235,10 +272,23 @@ export async function restoreFailedUpdateDatabases(params: {
   if (params.backup.migration && params.backup.migration.backup !== params.backup.directory) {
     return await refuse("Migration receipt belongs to a different database backup");
   }
+  let liveMutationStarted = false;
   try {
+    // Every restore path, including a settled Doctor failure before finalization,
+    // must retain this run's matching recovery pair in the restored database.
+    // Preserve the source artifacts until the restore owner checks their generation.
+    const pair = loadPluginCohortRecovery(params.runId, {
+      env: params.env,
+    });
     const migratedPaths = await restoreUpdateDatabaseBackup({
       ...params,
+      pluginCohortRecovery: pair
+        ? { runId: pair.cohort.runId, transactionId: pair.cohort.transactionId }
+        : undefined,
       expectedGenerations: params.backup.migration?.to ?? params.backup.sourceGenerations,
+      onLiveMutation: () => {
+        liveMutationStarted = true;
+      },
     });
     if (migratedPaths === null) {
       return await refuse(
@@ -264,15 +314,19 @@ export async function restoreFailedUpdateDatabases(params: {
     assertCurrent();
     return true;
   } catch (cause) {
+    // Lock contention or a changed snapshot left the live databases as they were.
+    const untouched = !liveMutationStarted && !hasCommandProcessCleanupError(cause);
     // A partly restored shared ledger must never be reopened by candidate
     // finalization: that would migrate the recovery image again.
     params.result.recovery = {
       serviceRestartSafe: false,
       reason: "state-migration-started",
-      dataAtRisk: "rollback-state-unverified",
+      dataAtRisk: untouched ? "state-migrated-no-rollback" : "rollback-state-unverified",
     };
     throw new UpdateCommandRecoveryPendingError(
-      `Database rollback could not finish (data at risk: rollback-state-unverified); keep the Gateway stopped. Preserve ${params.backup.directory} and <database>.migrated-${params.runId}. Run the compatible candidate's Doctor to inspect recovery before restarting.`,
+      untouched
+        ? `Database rollback could not start and left the current databases unchanged: ${formatErrorMessage(cause)}. Keep the Gateway stopped and preserve ${params.backup.directory}. Run the compatible candidate's Doctor to inspect recovery before restarting.`
+        : `Database rollback could not finish (data at risk: rollback-state-unverified); keep the Gateway stopped. Preserve ${params.backup.directory} and <database>.migrated-${params.runId}. Run the compatible candidate's Doctor to inspect recovery before restarting.`,
       { cause },
     );
   }

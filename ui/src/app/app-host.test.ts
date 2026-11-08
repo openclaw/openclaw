@@ -171,6 +171,8 @@ describe("OpenClaw shell context lifecycle", () => {
     }));
     const restoreDialog = installDialogPolyfill();
     const runtime = bootstrapApplication();
+    // Hold route readiness after connection so this still exercises a late-mounted shell.
+    runtime.context.gateway.snapshot.phase = "connected";
     const shell = createShellOwner();
     shell.runtime = runtime;
     document.body.append(shell.element);
@@ -192,7 +194,9 @@ describe("OpenClaw shell context lifecycle", () => {
       await settleShell(shell);
       const toast = shell.toastElement as HTMLElementTagNameMap["openclaw-toast-host"];
       expect(toast.parentElement).toBe(shell.navDrawerElement);
-      expect(showToast({ message: "Drawer result", durationMs: 60_000 })).toBe(true);
+      expect(showToast({ severity: undefined, message: "Drawer result", durationMs: 60_000 })).toBe(
+        true,
+      );
       await toast.updateComplete;
       await vi.dynamicImportSettled();
       flush();
@@ -200,7 +204,9 @@ describe("OpenClaw shell context lifecycle", () => {
       modal = document.createElement("openclaw-modal-dialog");
       document.body.append(modal);
       await modal.updateComplete;
-      expect(showToast({ message: "Modal result", durationMs: 60_000 })).toBe(true);
+      expect(showToast({ severity: undefined, message: "Modal result", durationMs: 60_000 })).toBe(
+        true,
+      );
       await toast.updateComplete;
       expect(toast.parentElement).toBe(modal.getOverlayContainer());
 
@@ -725,6 +731,7 @@ describe("OpenClaw shell keyboard shortcuts", () => {
     const shell = testShell({
       navigation: { snapshot: { navCollapsed: false }, update: vi.fn() },
     });
+    shell.routeState = { routeId: "chat" };
     Object.defineProperty(shell.elements, "commandPalette", {
       configurable: true,
       value: { isConnected: true, isOpen: false, openPalette, togglePalette: vi.fn() },
@@ -791,6 +798,44 @@ describe("OpenClaw shell keyboard shortcuts", () => {
       expect(openPalette).toHaveBeenCalledOnce();
       expect(readLazyShellAction()).toEqual({ eventType: SHELL_APPROVALS_OPEN_EVENT });
     });
+  });
+
+  it("ignores agent UI commands before native mobile navigation or panel delivery", () => {
+    Object.assign(window, {
+      __OPENCLAW_NATIVE_EMBED__: { platform: "android", formFactor: "phone" },
+    });
+    onTestFinished(() => {
+      Reflect.deleteProperty(window, "__OPENCLAW_NATIVE_EMBED__");
+    });
+    const update = vi.fn();
+    const setSessionKey = vi.fn();
+    const navigate = vi.fn();
+    const panelEvent = vi.fn();
+    window.addEventListener(TERMINAL_PANEL_TOGGLE_EVENT, panelEvent);
+    onTestFinished(() => window.removeEventListener(TERMINAL_PANEL_TOGGLE_EVENT, panelEvent));
+    const shell = testShell({
+      navigation: { update },
+      gateway: { setSessionKey, snapshot: { hello: null } },
+      navigate,
+    });
+    for (const command of [
+      { kind: "sidebar", visible: true },
+      ...["browser", "desktop", "terminal", "portal", "plugin"].map((panel) => ({
+        kind: "panel",
+        panel,
+        open: true,
+      })),
+      { kind: "split", direction: "right", sessionKey: "agent:main:other" },
+    ]) {
+      shell.handleGatewayEvent({
+        event: "ui.command",
+        payload: { command, sessionKey: "agent:main:other" },
+      });
+    }
+    expect(update).not.toHaveBeenCalled();
+    expect(setSessionKey).not.toHaveBeenCalled();
+    expect(navigate).not.toHaveBeenCalled();
+    expect(panelEvent).not.toHaveBeenCalled();
   });
 
   it("routes UI commands to navigation, panels, and chat fallback", () => {

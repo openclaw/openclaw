@@ -61,6 +61,7 @@ import {
 } from "./gateway-state-owner.js";
 
 export type GatewayLockHandle = {
+  previousOwner?: GatewayOwnerLease["previousOwner"];
   lockPath: string;
   stateLockPath: string;
   stateDir: string;
@@ -558,7 +559,7 @@ export async function acquireGatewayLock(
     const message = `failed to acquire gateway state ownership${waited ? `; waited ${Math.round(now() - startedAt)}ms for Gateway state ownership` : ""}`;
     const detail =
       error instanceof GatewayStateOwnerContentionError
-        ? `${message}: ${error.message}. ${captureStalledGatewayStartup(env)?.description ?? "Stop the Gateway or wait for the current OpenClaw operation to finish"}. Run \`openclaw gateway stop\`, then retry.`
+        ? `${message}: ${error.message}. ${(await captureStalledGatewayStartup(env))?.description ?? "Stop the Gateway or wait for the current OpenClaw operation to finish"}. Run \`openclaw gateway stop\`, then retry.`
         : error instanceof GatewayLockNamespaceError
           ? error.message
           : error instanceof DatabasePortRecoveryError
@@ -655,6 +656,7 @@ export async function acquireGatewayLock(
   }
   let released: Promise<void> | undefined;
   return {
+    previousOwner: ownerLease?.previousOwner,
     lockPath: stateOwner.path,
     stateLockPath: paths.stateLockPath,
     stateDir: paths.stateDir,

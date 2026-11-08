@@ -36,7 +36,6 @@ export function resolveNodeService(): GatewayService {
   ) => ({
     ...args,
     beforeMutation: async () => {
-      await args.beforeMutation?.();
       const command = await base.readCommand(args.env);
       const kind = command?.environment?.OPENCLAW_SERVICE_KIND?.trim();
       // A profile's node name can also name another profile's legacy Gateway.
@@ -50,6 +49,8 @@ export function resolveNodeService(): GatewayService {
           `${command.sourcePath ?? "The selected service"} is not an OpenClaw node service. Node commands left it unchanged; move the conflicting service before managing this node.`,
         );
       }
+      // The caller's hook may replace files the service runs, so it follows this admission.
+      await args.beforeMutation?.();
     },
   });
   return {

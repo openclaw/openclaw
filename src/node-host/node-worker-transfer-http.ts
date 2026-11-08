@@ -53,18 +53,9 @@ function transferUrl(gatewayUrl: string, routePath: string): URL {
   return url;
 }
 
-function waitForTlsPin(request: ClientRequest, expectedRaw?: string): Promise<void> {
-  if (!expectedRaw?.trim()) {
-    return Promise.resolve();
-  }
-  const expected = normalizeTlsFingerprint(expectedRaw);
+function waitForTlsPin(request: ClientRequest, expected: string): Promise<void> {
   if (!expected) {
-    return Promise.reject(
-      new NodeWorkerTransferHttpError(
-        "invalid-tls-fingerprint",
-        "worker transfer gateway TLS fingerprint is invalid",
-      ),
-    );
+    return Promise.resolve();
   }
   return new Promise<void>((resolve, reject) => {
     let settled = false;
@@ -141,6 +132,13 @@ export async function withNodeWorkerTransferHttpRequest<T>(
       "Cloudflare Access credentials require HTTPS worker transfer",
     );
   }
+  const tlsFingerprint = normalizeTlsFingerprint(params.tlsFingerprint);
+  if (url.protocol === "https:" && params.tlsFingerprint?.trim() && !tlsFingerprint) {
+    throw new NodeWorkerTransferHttpError(
+      "invalid-tls-fingerprint",
+      "worker transfer gateway TLS fingerprint is invalid",
+    );
+  }
   const transport = url.protocol === "https:" ? https : http;
   const request = transport.request(url, {
     method: params.method,
@@ -150,7 +148,7 @@ export async function withNodeWorkerTransferHttpRequest<T>(
       ...(params.cloudflareAccess ? buildCloudflareAccessHeaders(params.cloudflareAccess) : {}),
     },
     signal: params.signal,
-    ...(url.protocol === "https:" && params.tlsFingerprint
+    ...(url.protocol === "https:" && tlsFingerprint
       ? { rejectUnauthorized: false, session: Buffer.alloc(0) }
       : {}),
   });
@@ -196,7 +194,7 @@ export async function withNodeWorkerTransferHttpRequest<T>(
   });
   const send = async () => {
     if (url.protocol === "https:") {
-      await waitForTlsPin(request, params.tlsFingerprint);
+      await waitForTlsPin(request, tlsFingerprint);
     }
     writerSignal.throwIfAborted();
     await params.writeBody?.(async (chunk) => {

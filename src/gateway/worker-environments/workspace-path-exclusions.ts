@@ -18,12 +18,18 @@ const BUILD_CACHE_ROOT_PATHS = [
   ".artifacts/build-all-cache",
   ".artifacts/build-cache-inputs",
 ] as const;
+const PNPM_FALLBACK_STORE_ROOT_PATH = ".openclaw/.pnpm-store";
 const DERIVED_WORKSPACE_ROOT_PATHS = [
   ".cache/vitest",
   ".cache/bun-transpiler",
   ".cache/openclaw/bun",
   ".cache/ms-playwright",
   ".local/share/pnpm/store",
+  "artifacts/task-environment/local/share/pnpm/store",
+  // pnpm falls back here for projects beneath the protected .openclaw self-bind.
+  PNPM_FALLBACK_STORE_ROOT_PATH,
+  // Managed binary installers keep re-downloadable tools beneath the state directory.
+  ".openclaw/tools",
   ".artifacts/vitest-workers",
   ".artifacts/vitest-worker-cache",
   ".artifacts/vitest-shard-timings.json",
@@ -55,12 +61,32 @@ const DERIVED_WORKSPACE_SEGMENT_PATTERN = `(?:^|/)(?:${[
   WORKER_ATTACHMENT_DIRECTORY_PATTERN,
 ].join("|")})(?![^/])`;
 
+// Git ignores make only known build roots disposable, never arbitrary authored
+// reports. The Bun staging owner downloads its runtime under .cache/openclaw-bun.
+export function isIgnoredWorkspaceBuildOutput(relative: string, ignored: ReadonlySet<string>) {
+  const buildOutput = ["dist", ".cache/openclaw-bun"].some(
+    (root) => relative === root || relative.startsWith(root + "/"),
+  );
+  if (!buildOutput) {
+    return false;
+  }
+  let candidate = relative;
+  while (candidate) {
+    if (ignored.has(candidate) || ignored.has(candidate + "/")) {
+      return true;
+    }
+    candidate = candidate.slice(0, Math.max(0, candidate.lastIndexOf("/")));
+  }
+  return false;
+}
+
 // Derived caches and runtime attachment copies are not workspace edits. Keep
 // sync, manifest, divergence, apply, and recovery on this single predicate.
 export const WORKSPACE_PATH_EXCLUSIONS_JS = `
 ${STAGED_INPUT_PATHS_JS}
 ${MANAGED_SANDBOX_SKILLS_PATH_JS}
 const DERIVED_WORKSPACE_ROOT_PATHS = ${JSON.stringify(DERIVED_WORKSPACE_ROOT_PATHS)};
+const PNPM_FALLBACK_STORE_ROOT_PATH = ${JSON.stringify(PNPM_FALLBACK_STORE_ROOT_PATH)};
 const BUILD_CACHE_ROOT_PATHS = ${JSON.stringify(BUILD_CACHE_ROOT_PATHS)};
 function isBuildCacheWorkspacePath(relativePath) {
   return BUILD_CACHE_ROOT_PATHS.some((root) => relativePath === root || relativePath.startsWith(root + "/"));
@@ -83,7 +109,7 @@ function isRuntimeOwnedWorkspacePath(relativePath) {
     (root) => relativePath === root || relativePath.startsWith(root + "/"),
   );
 }
-function isDerivedWorkspacePath(relativePath, retainedInput = false, excludeBuildCaches = false) {
+function isDerivedWorkspacePath(relativePath, retainedInput = false, excludeBuildCaches = false, includeLegacyPnpmStore = false) {
   if (isRuntimeOwnedWorkspacePath(relativePath)) {
     return true;
   }
@@ -92,7 +118,8 @@ function isDerivedWorkspacePath(relativePath, retainedInput = false, excludeBuil
   }
   if (excludeBuildCaches && isBuildCacheWorkspacePath(relativePath)) return true;
   if (DERIVED_WORKSPACE_ROOT_PATHS.some(
-    (root) => relativePath === root || relativePath.startsWith(root + "/"),
+    (root) => (!includeLegacyPnpmStore || root !== PNPM_FALLBACK_STORE_ROOT_PATH) &&
+      (relativePath === root || relativePath.startsWith(root + "/")),
   )) {
     return true;
   }
@@ -128,6 +155,7 @@ export const {
     relativePath: string,
     retainedInput?: boolean,
     excludeBuildCaches?: boolean,
+    includeLegacyPnpmStore?: boolean,
   ) => boolean;
   isRuntimeOwnedWorkspacePath: (relativePath: string) => boolean;
   buildCacheInputPaths: (paths?: Iterable<string>) => Set<string>;

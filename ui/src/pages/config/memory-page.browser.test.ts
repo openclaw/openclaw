@@ -20,11 +20,11 @@ function mountMemory(settings = false) {
   host = document.createElement("div");
   host.className = "shell shell--settings";
   host.innerHTML = `
-    <main class="content content--memory-page ${settings ? "content--settings-page" : ""}"
+    <main class="content content--memory-page ${settings ? "content--settings-page content--settings-workspace" : ""}"
       style="box-sizing: border-box; width: 1152px; ${settings ? "" : "height: 600px; overflow-y: auto"}">
       <section class="memory-page">
-        <section class="content-header content-header--page hub-page-header"
-          ${settings ? 'style="width: 100%; max-width: 1120px; margin-inline: auto"' : ""}>
+        <section class="content-header content-header--page hub-page-header hub-page-header--stacked"
+          style="transition: none">
           <div class="hub-page-header__title">Memory</div>
           <div class="hub-page-header__tabs">Overview Memories Dreams Settings</div>
           <div class="hub-page-header__actions">Agent</div>
@@ -42,26 +42,22 @@ const expectFixed = (before: number, after: number) =>
   expect(Math.abs(after - before)).toBeLessThanOrEqual(layoutTolerancePx);
 
 describe.skipIf(!hasBrowserLayout)("Memory page browser layout", () => {
-  it("keeps header children fixed when Dreams drops the settings-page marker", async () => {
+  it("keeps the header and every tab panel on one column", () => {
     const find = mountMemory(true);
-    const header = find(".hub-page-header");
-    const title = find(".hub-page-header__title");
-    const actions = find(".hub-page-header__actions");
-    const measure = () => ({
-      paddingInlineStart: getComputedStyle(header).paddingInlineStart,
-      title: title.getBoundingClientRect(),
-      actions: actions.getBoundingClientRect(),
-    });
-    const before = measure();
+    const edges = (element: HTMLElement) => {
+      const box = element.getBoundingClientRect();
+      const style = getComputedStyle(element);
+      return {
+        left: box.left + Number.parseFloat(style.paddingLeft),
+        right: box.right - Number.parseFloat(style.paddingRight),
+      };
+    };
+    const header = edges(find(".hub-page-header"));
+    const panel = edges(find(".settings-page"));
 
-    find(".settings-page").remove();
-    find(".content").classList.remove("content--settings-page");
-    await nextFrame();
-
-    const after = measure();
-    expect(after.paddingInlineStart).toBe(before.paddingInlineStart);
-    expectFixed(before.title.left, after.title.left);
-    expectFixed(before.actions.right, after.actions.right);
+    expectFixed(header.left, panel.left);
+    expectFixed(header.right, panel.right);
+    expect(find(".settings-page").getBoundingClientRect().width).toBeLessThanOrEqual(760);
   });
 
   it("keeps horizontal hero geometry fixed when a subview changes scrollbar state", async () => {

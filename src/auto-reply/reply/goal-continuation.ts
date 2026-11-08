@@ -102,7 +102,9 @@ export async function isGoalContinuationPlacementCurrent(params: {
   if (!continuation.workerGoal && !continuation.localCodexGoal) {
     return true;
   }
-  if (!params.hasOperatorAuthority) {
+  // Local continuations reuse the admitted source, just like built-in turns.
+  // Only remote execution needs a Gateway operator capability for placement.
+  if (continuation.workerGoal && !params.hasOperatorAuthority) {
     return false;
   }
   if (continuation.localCodexGoal && params.requiresWorker) {
@@ -182,7 +184,7 @@ export async function enqueueGoalContinuation(params: GoalContinuationParams): P
     return false;
   }
   const codexPlacement =
-    entry.agentHarnessId === "codex" && params.base.operatorAuthority
+    entry.agentHarnessId === "codex"
       ? await resolveCodexGoalPlacement({
           agentId: params.base.run.agentId,
           sessionKey: params.sessionKey,
@@ -190,7 +192,10 @@ export async function enqueueGoalContinuation(params: GoalContinuationParams): P
           requiresWorker: Boolean(params.base.run.config?.cloudWorkers?.requiredProfile),
         })
       : undefined;
-  if (entry.agentHarnessId === "codex" && !codexPlacement) {
+  if (
+    entry.agentHarnessId === "codex" &&
+    (!codexPlacement || (codexPlacement === "worker" && !params.base.operatorAuthority))
+  ) {
     return false;
   }
   params.base.operatorAuthority?.assertCurrent();
@@ -281,24 +286,24 @@ export async function enqueueGoalContinuation(params: GoalContinuationParams): P
 export function createGoalContinuationReturn(
   params: Omit<GoalContinuationParams, "result" | "sourceRunId"> | undefined,
 ): <T>(run: () => T) => T {
-  if (!params?.initialGoalId) {
+  if (!params) {
     return (run) => run();
   }
-  const continuation: GoalContinuation = {
-    sessionId: params.expectedSession.sessionId,
-    lifecycleRevision: params.expectedSession.lifecycleRevision,
-    goalId: params.initialGoalId,
-  };
   return createGoalContinuationReturnScope({
     base: params.base,
     sessionKey: params.sessionKey,
-    continuation,
+    storePath: params.storePath,
+    expectedSession: {
+      sessionId: params.expectedSession.sessionId,
+      lifecycleRevision: params.expectedSession.lifecycleRevision,
+    },
+    initialGoalId: params.initialGoalId,
     operation: params.operation,
-    context: (entry, existing) =>
+    context: (continuation, entry, existing) =>
       isGoalContinuationCurrent(continuation, entry)
         ? refreshActiveGoalContext(existing, entry)
         : undefined,
-    async resume({ base, runId, result, isCurrent }) {
+    async resume({ continuation, base, runId, result, isCurrent }) {
       // The controller sees this pending input before admission reads yield to Stop.
       const input = reserveSessionControllerSource(params.queueKey, {
         policy: params.settings,

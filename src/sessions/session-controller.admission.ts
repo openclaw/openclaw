@@ -37,6 +37,8 @@ export type SessionTurnAdmission = {
   replyOperation?: ReplyOperation;
   controllerInput?: SessionControllerInput;
   abortSignal?: AbortSignal;
+  /** False for background work that must leave the session idle in operator views. */
+  projectSessionActive?: false;
   /** Cancellation notification for a source reserved by this admission, before it settles. */
   onCancelled?: (reason?: unknown) => void;
   /** Source-specific terminal publication after a queued admission is cancelled. */
@@ -209,6 +211,7 @@ export async function withSessionTurn<T>(
       : await submitSessionControllerTask(sessionKey, {
           target,
           signal: params.abortSignal,
+          projectSessionActive: params.projectSessionActive,
           onCancelled: params.onCancelled,
           onSettled: params.onSettled,
           start: materialize,

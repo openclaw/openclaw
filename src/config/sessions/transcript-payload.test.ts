@@ -10,6 +10,7 @@ import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
 import * as nodeSqlite from "../../infra/node-sqlite.js";
 import { admitSqliteSchema } from "../../infra/sqlite-schema-facts.js";
 import { resolveZstdCodec } from "../../infra/zstd-codec.js";
+import { AGENT_ACTIVE_EVENT_FACTS_SCHEMA_VERSION } from "../../state/openclaw-schema-versions.js";
 import {
   getMessageRangeReaders,
   parseActiveTranscriptMessageRow,
@@ -55,7 +56,11 @@ function createTable(database: DatabaseSync): void {
     navigation_type TEXT, navigation_custom_type TEXT, navigation_display INTEGER NOT NULL DEFAULT 0,
     message_role TEXT, navigation_last_type TEXT, navigation_last_custom_type TEXT,
     navigation_valid INTEGER NOT NULL DEFAULT 1
-  ) STRICT`);
+  ) STRICT;
+  CREATE TABLE session_transcript_active_event_facts (
+    session_id TEXT NOT NULL, seq INTEGER NOT NULL, serialized_bytes INTEGER NOT NULL,
+    dependency_navigation_json TEXT NOT NULL, PRIMARY KEY(session_id, seq)
+  ) STRICT, WITHOUT ROWID`);
   admitSqliteSchema(database);
 }
 
@@ -105,13 +110,9 @@ function readBody(database: DatabaseSync, seq: number, mode: "sql" | "row" = "sq
 }
 
 function compressedRecord(bytes: Uint8Array, rawBytes = bytes.byteLength): PayloadFixture {
-  const codec = resolveZstdCodec();
-  if (!codec) {
-    throw new Error("Transcript compression boundary tests require native zstd support");
-  }
   return {
     event_json: null,
-    event_zstd: codec.compress(bytes, 1, true),
+    event_zstd: resolveZstdCodec().compress(bytes, 1, true),
     event_utf8_bytes: rawBytes,
     navigation_json: '{"type":"custom"}',
   };
@@ -135,6 +136,19 @@ describe("transcript payload storage boundary", () => {
     }
     expect(prepared.event_zstd).not.toBeNull();
     expect(readTranscriptPayload(prepared)).toBe(original);
+    for (const role of ["user", "assistant"]) {
+      const event = { type: "message", id: "x".repeat(1100), message: { role, content: "" } };
+      const json = JSON.stringify(event);
+      const observation = observeSqliteReadSql(
+        nodeSqlite.requireNodeSqlite().StatementSync.prototype,
+      );
+      try {
+        expect(prepareTranscriptPayload(database, json, event).event_json).toBe(json);
+        expect(observation.queries).toEqual([]);
+      } finally {
+        observation.restore();
+      }
+    }
     for (const surrogate of ["\ud800", "\udfff"]) {
       const malformed = `{"type":"custom","data":"${"x".repeat(2048)}${surrogate}"}`;
       const identity = prepareTranscriptPayload(database, malformed);
@@ -190,59 +204,90 @@ describe("transcript payload storage boundary", () => {
   });
 
   it("publishes predicate columns with inserts and rewrites and rolls both back together", () => {
-    const database = openNodeSqliteDatabase(":memory:");
-    try {
+    using database = openNodeSqliteDatabase(":memory:");
+    createTable(database);
+    database.exec(`ALTER TABLE transcript_events ADD COLUMN session_id TEXT;
+      ALTER TABLE transcript_events ADD COLUMN created_at INTEGER`);
+    const write = createTranscriptEventInserter(database, "session");
+    write({
+      seq: 1,
+      createdAt: 1,
+      eventJson: '{"type":"message","message":{"role":"user","role":"assistant"}}',
+    });
+    const read = () =>
+      database
+        .prepare(`SELECT navigation_type, navigation_last_type,
+      navigation_display, message_role, navigation_valid FROM transcript_events WHERE seq = 1`)
+        .get();
+    const original = {
+      navigation_type: "message",
+      navigation_last_type: "message",
+      navigation_display: 0,
+      message_role: "user",
+      navigation_valid: 1,
+    };
+    expect(read()).toEqual(original);
+    database.exec(
+      "INSERT INTO session_transcript_active_event_facts VALUES ('session', 1, 79, '{}')",
+    );
+    const facts = () =>
+      database.prepare("SELECT * FROM session_transcript_active_event_facts").all();
+    const beforeFacts = facts();
+    database.exec("BEGIN");
+    createTranscriptPayloadUpdater(
+      database,
+      "session",
+    )({
+      seq: 1,
+      ...prepareTranscriptPayload(
+        database,
+        '{"type":"custom_message","type":"reset","display":true}',
+      ),
+    });
+    expect(read()).toEqual({
+      navigation_type: "custom_message",
+      navigation_last_type: "reset",
+      navigation_display: 1,
+      message_role: null,
+      navigation_valid: 1,
+    });
+    expect(facts()).toEqual([]);
+    database.exec("ROLLBACK");
+    expect(read()).toEqual(original);
+    expect(facts()).toEqual(beforeFacts);
+  });
+
+  it.each([true, false])(
+    "requires facts except in an admitted predecessor repair (legacy: %s)",
+    (legacy) => {
+      using database = openNodeSqliteDatabase(":memory:");
       createTable(database);
       database.exec(`ALTER TABLE transcript_events ADD COLUMN session_id TEXT;
-        ALTER TABLE transcript_events ADD COLUMN created_at INTEGER`);
-      const write = createTranscriptEventInserter(database, "session");
-      write({
-        seq: 1,
-        createdAt: 1,
-        eventJson: '{"type":"message","message":{"role":"user","role":"assistant"}}',
-      });
-      const read = () =>
-        database
-          .prepare(`SELECT navigation_type, navigation_last_type,
-        navigation_display, message_role, navigation_valid FROM transcript_events WHERE seq = 1`)
-          .get();
-      expect(read()).toEqual({
-        navigation_type: "message",
-        navigation_last_type: "message",
-        navigation_display: 0,
-        message_role: "user",
-        navigation_valid: 1,
-      });
+      ALTER TABLE transcript_events ADD COLUMN created_at INTEGER;
+      DROP TABLE session_transcript_active_event_facts;
+      PRAGMA user_version = ${AGENT_ACTIVE_EVENT_FACTS_SCHEMA_VERSION - (legacy ? 1 : 0)};
+      INSERT INTO transcript_events (seq, session_id, event_json, created_at) VALUES (1, 'repair', '{}', 1)`);
+      admitSqliteSchema(database);
       database.exec("BEGIN");
-      createTranscriptPayloadUpdater(
-        database,
-        "session",
-      )({
-        seq: 1,
-        ...prepareTranscriptPayload(
+      const rewrite = () =>
+        createTranscriptPayloadUpdater(
           database,
-          '{"type":"custom_message","type":"reset","display":true}',
-        ),
-      });
-      expect(read()).toEqual({
-        navigation_type: "custom_message",
-        navigation_last_type: "reset",
-        navigation_display: 1,
-        message_role: null,
-        navigation_valid: 1,
-      });
+          "repair",
+        )({ seq: 1, ...prepareTranscriptPayload(database, '{"type":"custom","id":"repaired"}') });
+      if (legacy) {
+        expect(rewrite).not.toThrow();
+        expect(database.prepare("SELECT event_json FROM transcript_events").get()?.event_json).toBe(
+          '{"type":"custom","id":"repaired"}',
+        );
+      } else {
+        expect(rewrite).toThrow(/session_transcript_active_event_facts/);
+      }
       database.exec("ROLLBACK");
-      expect(read()).toEqual({
-        navigation_type: "message",
-        navigation_last_type: "message",
-        navigation_display: 0,
-        message_role: "user",
-        navigation_valid: 1,
-      });
-    } finally {
-      database.close();
-    }
-  });
+      expect(database.prepare("SELECT event_json FROM transcript_events").get()?.event_json).toBe(
+        "{}",
+      );
+    },
+  );
 
   it.each([
     ["UTF-16le", "UTF-8"],
@@ -624,14 +669,14 @@ describe("transcript payload storage boundary", () => {
         INSERT INTO session_transcript_active_events VALUES ('selected', 0, 0), ('selected', 1, 1), ('selected', 2, 2)`);
       const readers = getMessageRangeReaders({ db: database, agentId: "main", path: ":memory:" });
       const range = { sessionId: "selected", start: 1, endExclusive: 3 };
-      const events = Array.from(readers.messages(range), parseActiveTranscriptMessageRow);
+      const parseMessage = (row: Parameters<typeof parseActiveTranscriptMessageRow>[0]) =>
+        parseActiveTranscriptMessageRow(row, {});
+      const events = Array.from(readers.messages(range), parseMessage);
       expect(events).toEqual(
         messages.map((event, index) => ({ event, eventSeq: index + 1, seq: index + 2 })),
       );
-      expect(parseActiveTranscriptMessageRow(readers.latest(range)!)).toEqual(events[1]);
-      expect(() =>
-        Array.from(readers.messages({ ...range, start: 0 }), parseActiveTranscriptMessageRow),
-      ).toThrow();
+      expect(parseMessage(readers.latest(range)!)).toEqual(events[1]);
+      expect(() => Array.from(readers.messages({ ...range, start: 0 }), parseMessage)).toThrow();
     } finally {
       database.close();
     }

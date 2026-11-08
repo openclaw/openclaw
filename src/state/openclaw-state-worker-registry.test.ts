@@ -61,7 +61,7 @@ it("loads only the requested domain and routes exact operation names after prepa
   expect(read).toHaveBeenCalledExactlyOnceWith(command.input, context);
 });
 
-it("prepares exact operations without loading another kernel under the same namespace", async () => {
+it("prepares exact operations before their namespace fallback", async () => {
   type Operations = {
     "session.read": { input: string; output: string };
     "session.write": { input: string; output: void };
@@ -70,12 +70,14 @@ it("prepares exact operations without loading another kernel under the same name
     "session.read": (input: string, context: { agentId: string }) => `${context.agentId}:${input}`,
   }));
   const loadWrite = vi.fn(async () => ({ "session.write": (_input: string) => {} }));
-  const registry = createWorkerOperationRegistry<Operations, { agentId: string }, keyof Operations>(
-    {
-      "session.read": loadRead,
-      "session.write": loadWrite,
-    },
-  );
+  const registry = createWorkerOperationRegistry<
+    Operations,
+    { agentId: string },
+    "session.read" | "session"
+  >({
+    "session.read": loadRead,
+    session: loadWrite,
+  });
   const command = { type: "session.read", input: "entry" } as const;
   expect(() => registry.execute(command, { agentId: "agent" })).toThrow("not prepared");
   const preparation = registry.prepare(command.type);

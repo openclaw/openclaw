@@ -59,6 +59,17 @@ Registry propagation may briefly return E404 after a successful npm child.
 Use bounded `--prefer-online` reads and preserve the verified tarball/integrity
 metadata. For an already-published version, run:
 
+If `npm publish` returns E409 with `Cannot publish over previously staged
+version`, treat that exact package and version as staged or completed, not
+absent. The publish wrapper reads the publish target's package metadata,
+performs a read-only exact-package `npm view`, and preserves the failed exit.
+For `openclaw`, it prints the verifier command below. For a companion tarball,
+wait for that exact companion version to become publicly readable, then resume
+the original release workflow so its exact-version check reuses it; the root
+postpublish verifier does not recover a companion publication. Do not rerun
+`npm publish`, even when the registry read is still 404; wait for propagation
+and reconcile the original publisher before following the printed guidance.
+
 ```bash
 OPENCLAW_NPM_EXPECTED_WORKFLOW_REF=refs/tags/release-publish/<tooling-sha12>-<epoch> \
 OPENCLAW_NPM_EXPECTED_WORKFLOW_SHA=<tooling-sha> \
@@ -83,7 +94,11 @@ Repair a stale beta floor through the dist-tag owner and inspect the failed
 parent's exact children before rejecting stale gates or canceling them. Resume
 through the selected route with the same qualified bytes and inputs; direct
 publication uses the successful original core run, while prepared publication
-uses a new button run with the same readiness artifact. Keep the original run
+uses a new button run with the same readiness artifact. For a published core
+version, `pnpm release:candidate` and `pnpm release:publish-preflight` read the
+live registry, identify the original publisher from npm provenance, and print the
+direct command with `-f openclaw_npm_resume_run_id=<run>`; sealed FRV npm
+decisions predate publication and do not decide resume. Keep the original run
 attempts and required approvals. Do not substitute a manual child approval for
 the parent's authorization. See `$release-openclaw-ci` Publish children for
 stale-child cleanup.
@@ -114,9 +129,83 @@ artifacts also require reconciliation; they do not authorize another dispatch.
 If reconciliation proves that a preparation child never existed, dispatch only
 that missing owner from the original protected tooling tag, with the exact source
 SHA as `ref` and `publish_scope=all-publishable`. For Plugin NPM Release, use
-`preflight_only=true`, `trusted_publisher_preflight=false`, and `npm_dist_tag=default`
-(`extended-stable` for that track). For Plugin ClawHub Release, use `dry_run=true`.
+`preflight_only=true` and `npm_dist_tag=default` (`extended-stable` for that
+track); leave `trusted_publisher_preflight` omitted so this artifact-qualification
+run keeps its default and produces the artifacts preparation must adopt. For
+Plugin ClawHub Release, use `dry_run=true`.
 Then supply both verified positive child IDs; adoption dispatches no new workflow.
+
+Before resuming regular plugin npm publication, verify the trusted-publisher
+exchange read-only from that same protected tooling tag for only the packages
+whose recovered immutable publication plan records `npm-oidc`. This check does
+not pack or publish:
+
+```bash
+gh workflow run plugin-npm-release.yml --repo openclaw/openclaw \
+  --ref release-publish/<tooling-sha12>-<epoch> \
+  -f preflight_only=true \
+  -f trusted_publisher_preflight=true \
+  -f publish_scope=selected \
+  -f plugins=<comma-separated-npm-oidc-package-names> \
+  -f ref=<exact-40-character-release-sha> \
+  -f npm_dist_tag=default
+```
+
+Do not pass parent publication run IDs. Require the `Trusted publisher OIDC
+exchange` job to succeed before recovery continues for those selected `npm-oidc`
+packages; its success confirms authentication only, not publication. Keep
+packages recorded as `npm-token-bootstrap` on the approved
+[first-package route](first-package.md); their recovery does not wait on this
+exchange. If no recovered package uses `npm-oidc`, skip this check.
+
+A regular release parent with core npm publication enabled may continue when one or more
+`npm-oidc` matrix entries return the exact npm `ENEEDAUTH` code. Each deferred
+entry uploads a `plugin-npm-deferred-auth-*` checkpoint. Treat every checkpoint
+as an unpublished package, not a successful plugin publication. After the npm
+trusted-publisher binding is repaired, run the read-only exchange above for all
+deferred package names, then publish only that selected set:
+
+```bash
+gh workflow run plugin-npm-release.yml --repo openclaw/openclaw \
+  --ref release-publish/<tooling-sha12>-<epoch> \
+  -f preflight_only=false \
+  -f publish_scope=selected \
+  -f plugins=<comma-separated-deferred-package-names> \
+  -f ref=<exact-40-character-release-sha> \
+  -f npm_dist_tag=default
+```
+
+Use the checkpoint's exact protected workflow ref, source SHA, package identity,
+and version. Omit parent publication inputs: this direct recovery has its own
+`npm-release` approval and remains valid after core publication completes.
+Reconcile every checkpoint independently when several packages were deferred.
+An error other than exact `ENEEDAUTH`, a direct recovery failure, or any
+extended-stable failure remains blocking and must not use this route.
+
+For extended-stable recovery, use the same read-only exchange from protected
+tooling, but preserve that track's full-roster and frozen-source boundaries:
+
+```bash
+gh workflow run plugin-npm-release.yml --repo openclaw/openclaw \
+  --ref release-publish/<trusted-current-main-tooling-sha12>-<epoch> \
+  -f preflight_only=true \
+  -f trusted_publisher_preflight=true \
+  -f publish_scope=all-publishable \
+  -f ref=<exact-canonical-extended-stable-branch-tip-sha> \
+  -f npm_dist_tag=extended-stable
+```
+
+Leave `plugins`, parent publication run IDs, and `release_candidate_branch`
+empty. The source must equal the canonical `extended-stable/YYYY.M.33` branch
+tip and retain its final `YYYY.M.PATCH` version with `PATCH >= 33`. The protected
+tooling tag must resolve to a workflow revision reachable from current `main`.
+The exchange revalidates the current source and protected tooling after acquiring
+the GitHub token and before requesting package-scoped npm credentials. A moved
+source or revoked tooling requires a fresh approved preflight, not a retry of
+the stale exchange.
+
+Require the `Trusted publisher OIDC exchange` job to succeed before following
+[trusted-main npm recovery](extended-stable-publish.md#trusted-main-npm-recovery).
 
 Publication records distinguish `unknown` (no confirmed publisher), `unverified`
 (a returned ID without an observed attempt), and `acknowledged` (verified original
@@ -204,6 +293,34 @@ parent's tooling, inputs, run ID, and attempt. Do not reuse an approval from ano
 child. Docker-only recovery does not recover canceled ClawHub publication;
 verify and recover that surface separately. Recover a failed Plugin ClawHub New
 bootstrap child through its [direct route](first-package.md), not a rerun.
+
+## Reviewed security-scan mismatch
+
+Plugin NPM Release repacks plugins with the publisher tooling P and scans each
+tarball against P's reviewed inventory in `scripts/plugin-npm-security-scan.mts`.
+An `unreviewed critical findings in exact npm artifact` failure is deterministic
+for that P; a redispatch from the same tooling fails again. Full Release
+Validation runs the same scan for packages with reviewed findings in `Prepare
+exact plugin npm artifacts`, so a publish-time mismatch usually means P advanced
+after validation or the package had no reviewed finding.
+
+Reproduce under P before any redispatch. In a clean checkout of the source SHA
+with frozen dependencies:
+
+```bash
+git worktree add .release-tooling <P-workflow-sha>
+(cd .release-tooling && CI=true pnpm install --frozen-lockfile --ignore-scripts)
+export TSX_TSCONFIG_PATH="$PWD/.release-tooling/tsconfig.json"
+OPENCLAW_PLUGIN_NPM_PACK_OUTPUT_DIR=/tmp/plugin-scan \
+  bash .release-tooling/scripts/plugin-npm-publish.sh --repo-root "$PWD" --pack extensions/<id>
+node --import tsx .release-tooling/scripts/plugin-npm-security-scan.mts \
+  --package-name <package-name> --package-version <version> --tarball /tmp/plugin-scan/<tarball>.tgz
+```
+
+If it fails the same way, review the flagged file. Record the new hash on `main`
+only after review confirms the flagged logic is unchanged (see #192489), then
+publish from protected tooling that contains the update. If it passes, diagnose
+the runner before you dispatch again.
 
 ## Docker mirror
 

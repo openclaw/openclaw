@@ -45,6 +45,7 @@ const SESSION_ENTRY_RESERVED_SLOT_KEY_LIST = [
   "sessionDiffBaseline",
   "sessionDiffBaselineCapture",
   "worktree",
+  "localWorkspaceHandoff",
   "deviceFolder",
   "projectId",
   "repositoryWorkspaceId",
@@ -83,6 +84,8 @@ const SESSION_ENTRY_RESERVED_SLOT_KEY_LIST = [
   "lastRunId",
   "activeWriterRunId",
   "resumeAfterRestart",
+  "operatorSources",
+  "mainRestartRecovery",
   "pluginOwnerId",
   "systemSent",
   "abortedLastRun",
@@ -212,7 +215,6 @@ const SESSION_ENTRY_RESERVED_SLOT_KEYS = new Set<SessionEntryReservedSlotSetValu
 );
 const RETIRED_SESSION_SLOT_KEYS = new Set<string>([
   // Retired fields remain reserved so plugins cannot reinterpret historical core state.
-  "mainRestartRecovery",
   "pendingExecNotifications",
   "restartRecoveryOperatorSource",
   "restartRecoveryRequesterSource",

@@ -47,6 +47,7 @@ export async function readCheckoutGitRevision(
     branch,
     defaultBranch,
     summaryOnly = false,
+    refreshIndex = false,
     paths: diffPaths,
   }: GitReadOperations["checkout.revision"]["input"],
   timing?: DiffReadTiming,
@@ -56,7 +57,7 @@ export async function readCheckoutGitRevision(
   }
   try {
     if (scope === "diff") {
-      return await readCheckoutDiffRevision(root, diffPaths, summaryOnly, timing);
+      return await readCheckoutDiffRevision(root, diffPaths, summaryOnly, timing, refreshIndex);
     }
     const head = readGitHead(root, { maxDepth: 1 });
     const checkout = readCheckoutHead(root, head);
@@ -258,7 +259,9 @@ export async function readCheckoutGitContext(
   const branch =
     head?.branch === null
       ? "HEAD"
-      : (head?.branch ?? (await gitOutput(root, ["rev-parse", "--abbrev-ref", "HEAD"])));
+      : (head?.branch ??
+        (await gitOutput(root, ["branch", "--show-current"])) ??
+        (await gitOutput(root, ["rev-parse", "--abbrev-ref", "HEAD"])));
   if (!branch) {
     return null;
   }
@@ -272,7 +275,10 @@ export async function readCheckoutGitContext(
   const preparedDefaultRef = readDefaultRef(head);
   const defaultRef =
     preparedDefaultRef === undefined
-      ? await gitOutput(root, ["symbolic-ref", "--short", "refs/remotes/origin/HEAD"])
+      ? (await gitOutput(root, ["symbolic-ref", "refs/remotes/origin/HEAD"]))?.replace(
+          /^refs\/remotes\//,
+          "",
+        )
       : preparedDefaultRef;
   const defaultBranch = defaultRef?.replace(/^origin\//, "");
   const forkHeadCandidates = canDiscoverAlternateForkHeads(branch, defaultBranch)
