@@ -726,6 +726,42 @@ it("does not bind a full/off script to approval-time contents", async () => {
   expect(result.details).toMatchObject({ status: "completed", aggregated: "after" });
 });
 
+it.each([false, true])(
+  "binds a literal Mac script through normal approval (rewritten: %s)",
+  async (rewrite) => {
+    savePolicy({ security: "allowlist", ask: "on-miss", askFallback: "deny" });
+    const script = path.join(request.workdir, "approved.cjs");
+    await fs.writeFile(script, 'process.stdout.write("approved-script")');
+    const execution = executeWithApproval({ command: `${process.execPath} ${script}` });
+    const drained = execution.catch(() => undefined);
+    try {
+      await waitForDecision(execution);
+      expect(invokeCount).toBe(0);
+      if (rewrite) {
+        await fs.writeFile(script, 'process.stdout.write("changed-script")');
+      }
+      resolveDecision({ decision: "allow-once" });
+      const result = await execution;
+      if (rewrite) {
+        expect(result.details).toMatchObject({ status: "failed", failureKind: "policy-denied" });
+        expect(result.content).toEqual([
+          expect.objectContaining({
+            text: expect.stringContaining("approval script operand changed before execution"),
+          }),
+        ]);
+      } else {
+        expect(result.details).toMatchObject({
+          status: "completed",
+          aggregated: "approved-script",
+        });
+      }
+    } finally {
+      resolveDecision({ decision: "deny" });
+      await drained;
+    }
+  },
+);
+
 it("prepares direct inline Node only without approval binding", async () => {
   const command = [process.execPath, "-e", 'process.stdout.write("inline")'];
   const params = { command, cwd: request.workdir, security: "full", ask: "off" };

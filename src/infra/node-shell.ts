@@ -3,14 +3,20 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 
 // Node shell command construction keeps platform shell flags centralized for
 // system.run and related command execution paths.
-/** Build argv for running a command through the platform default shell. */
+/** Build node transport argv, retaining the platform shell for shell syntax. */
 export function buildNodeShellCommand(command: string, platform?: string | null) {
   const normalized = normalizeLowercaseStringOrEmpty((platform ?? "").trim());
   if (normalized.startsWith("win")) {
     return ["cmd.exe", "/d", "/s", "/c", command];
   }
   if (normalized === "darwin" || normalized.startsWith("macos")) {
-    // The Mac node binds static allowlisted commands through non-login sh.
+    // Keep literal commands direct so preparation can bind a script operand.
+    // Canonical spacing preserves rawCommand equality; a final newline is not literal.
+    const literal = command.match(/^\/[A-Za-z0-9_./-]+(?: [A-Za-z0-9_./:=,@%+-]+)*$/u)?.[0];
+    if (literal === command) {
+      return command.split(" ");
+    }
+    // Mac commands requiring a shell use non-login sh.
     // A login shell can execute unapproved startup files before the payload.
     return ["/bin/sh", "-c", command];
   }
