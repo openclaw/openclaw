@@ -160,17 +160,19 @@ describe("controller-owned execution guard", () => {
         sessionId: "incarnation",
       });
       const fields = formatSessionActivityLogFields(activity);
-      expect(fields).toContain(
-        `global_lane:waiting lane=${globalLane} blockedBy=lane active=32/32 queueAheadAtEnqueue=0`,
-      );
+      expect(fields).toContain("lastProgress=global_lane:waiting");
+      expect(fields).toContain('"blockedBy":"lane"');
+      expect(fields).toContain('"activeCount":32');
+      expect(fields).toContain('"queueAheadAtEnqueue":0');
       expect(fields).toContain('"runId":"holder-0"');
       expect(fields).toContain('"runId":"holder-31"');
       gate.resolve();
       await run;
       diagnostics.finish();
       const line = info.mock.calls[0]?.[0];
-      expect(line).toContain("detail.command_lane.wait=780000ms");
-      expect(line).toContain('"runId":"holder-31"');
+      expect(line).toContain('"laneMs":780000');
+      expect(line).toContain(`"lane":"${globalLane}"`);
+      expect(line).not.toContain("holdersNow");
       expect(getCommandLaneSnapshot(globalLane)).toMatchObject({ activeCount: 0, queuedCount: 0 });
     } finally {
       gate.resolve();
@@ -198,21 +200,32 @@ describe("controller-owned execution guard", () => {
         return runLocal();
       },
     });
+    let clock = 0;
+    vi.spyOn(performance, "now").mockImplementation(() => clock);
+    vi.spyOn(nodePerformance, "now").mockImplementation(() => clock);
     const state = create("admitted-wait");
-    const run = state.controller.enqueueSession(() => state.controller.enqueueGlobal(result));
+    const info = vi.fn();
+    const diagnostics = startChatSendDiagnostics({ info });
+    const run = withDiagnosticsTimelineObserver(diagnostics.observeSpan, () =>
+      state.controller.enqueueSession(() => state.controller.enqueueGlobal(result)),
+    );
     try {
       await writerEntered.promise;
       expect(getCommandLaneSnapshot(globalLane)).toMatchObject({ activeCount: 1, queuedCount: 0 });
       expect(getDiagnosticSessionActivitySnapshot({ sessionKey: key }).lastProgressReason).toBe(
         "session_writer:admission",
       );
+      clock = 120_000;
       writer.resolve();
       await placementEntered.promise;
       expect(getDiagnosticSessionActivitySnapshot({ sessionKey: key }).lastProgressReason).toBe(
         "session_placement:admission",
       );
+      clock = 180_000;
       placement.resolve();
       await run;
+      diagnostics.finish();
+      expect(info.mock.calls[0]?.[0]).toContain('"writerMs":120000,"placementMs":60000');
     } finally {
       writer.resolve();
       placement.resolve();
@@ -262,10 +275,9 @@ describe("controller-owned execution guard", () => {
       await sibling.entered;
       recovered.resolve();
       await readmissionQueued.promise;
-      expect(first.getParams().replyOperation!.watchdog.snapshot().waits).toContainEqual({
-        kind: "global_capacity",
-        deadlineAtMs: undefined,
-      });
+      expect(first.getParams().replyOperation!.watchdog.snapshot().waits).toContainEqual(
+        expect.objectContaining({ kind: "global_capacity", deadlineAtMs: undefined }),
+      );
       await tickAt(7_200_000, first);
       expect(first.controller.abortSignal.aborted).toBe(false);
       sibling.raw.resolve();

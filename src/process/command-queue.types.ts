@@ -1,3 +1,5 @@
+import type { QueueEntry } from "./command-queue.state.js";
+
 /** Why a lane cannot admit, from the narrowest cause outward. */
 export type CommandLaneBlockReason = "lane" | "group-budget" | "sibling-reservation" | null;
 
@@ -47,7 +49,7 @@ export type CommandQueueAdmissionOptions = {
   /** Cancels queued admission; the task owns cancellation after it starts. */
   abortSignal?: AbortSignal;
   /** Called only when this entry remains queued after immediate lane admission. */
-  onQueued?: (wait?: { queuedAhead: number; details: string }) => void;
+  onQueued?: (wait?: Readonly<QueueEntry>) => void;
   warnAfterMs?: number;
   onWait?: (waitMs: number, queuedAhead: number) => void;
   priority?: "foreground" | "normal" | "background";

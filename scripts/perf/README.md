@@ -6193,7 +6193,7 @@ full Gateway preparation, or the unrelated agent database.
 
 `command-lane-wait-measure.ts` queues 4,096 synthetic session identities in 32
 waves, each with 32 admitted holders and 96 waiting turns. It verifies settlement
-and records attributed wait counts, owner wall time, CPU, and optional collected
+and records queue entries available for deferred attribution, owner wall time, CPU, and optional collected
 allocation/CPU profiles. The owner is entirely in memory; database and workspace
 size are outside this measurement. It does not qualify whole-Gateway latency.
 
@@ -6202,7 +6202,25 @@ node --expose-gc --import ./scripts/tsx.mjs scripts/perf/command-lane-wait-measu
   --output .local/queue-measure.json
 ```
 
-Run A/A controls and five interleaved baseline/candidate processes; add
-`--allocations` for separate profile runs. All 4,096 tasks must settle and the
-candidate must attribute all 3,072 waits. Report the cost of recording holder
-facts explicitly; this instrumentation is not a throughput optimization.
+Run five A/A pairs and five AB/BA blocks (ten samples per arm); add
+`--allocations` for separate profile runs. All 4,096 tasks must settle and all
+3,072 candidate waits must expose their existing queue record. Admission must
+build no holder arrays, serialized diagnostics, or extra task closures. Target
+median wall, CPU, and allocation within 5% of the base and within A/A noise.
+The controller regression separately checks live-holder and completed-wait
+reporting, including writer and placement transitions.
+
+For an immutable original-source comparison, put the base queue files in a
+sparse repository-relative overlay and use the existing loader:
+
+```sh
+OPENCLAW_BENCH_BASELINE_DIR=/absolute/original-source-overlay \
+  node --expose-gc --import ./scripts/tsx.mjs \
+  --import ./scripts/perf/worker-retained-heap-preload.ts \
+  scripts/perf/command-lane-wait-measure.ts --output .local/queue-base.json
+```
+
+Use the same A/A and AB/BA order for ordinary `skill-resource-delivery-measure.ts`
+preparation, with `--operations 50 --concurrency 1 --existing` against one prepared
+32-file fixture. Time and profile separately; retain the baseline SHA and raw
+results. These owner measurements do not qualify storage or whole-Gateway latency.

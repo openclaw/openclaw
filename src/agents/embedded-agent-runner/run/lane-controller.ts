@@ -15,8 +15,8 @@ import {
   retainQueuedAgentRunContext,
 } from "../../../infra/agent-run-registry.js";
 import {
-  measureDiagnosticsTimelineSpan,
-  recordDiagnosticsTimelineDuration,
+  transitionAdmissionPhase,
+  type AdmissionDiagnostics,
 } from "../../../infra/diagnostics-timeline.js";
 import { isBackgroundWorkLane } from "../../../process/background-work.js";
 import {
@@ -310,16 +310,6 @@ export function createEmbeddedRunLaneController<TParams extends LaneParams>(opti
     opts?: CommandQueueEnqueueOptions,
   ) => {
     let capacityHeld = false;
-    let placementStartedAt: number | undefined;
-    const finishPlacementWait = () => {
-      if (placementStartedAt !== undefined) {
-        recordDiagnosticsTimelineDuration(
-          "agent.placement.admission",
-          performance.now() - placementStartedAt,
-        );
-        placementStartedAt = undefined;
-      }
-    };
     // Global-lane admission is healthy waiting, not run execution. Keep reply
     // staleness and stuck recovery fenced until this queue grants capacity.
     let waitingForGlobalLaneAdmission = true;
@@ -335,6 +325,7 @@ export function createEmbeddedRunLaneController<TParams extends LaneParams>(opti
       options.getParams().replyOperation?.markWaitingForGlobalLane();
       capacityWait = waitingWatchdog?.beginWait({
         kind: "global_capacity",
+        admission: queueOptions,
         isCurrent: () => waitingForGlobalLaneAdmission && !abortSignal.aborted,
       });
     };
@@ -343,6 +334,7 @@ export function createEmbeddedRunLaneController<TParams extends LaneParams>(opti
         return;
       }
       waitingForGlobalLaneAdmission = false;
+      transitionAdmissionPhase(queueOptions);
       capacityWait?.close();
       if (ownsCapacityWait) {
         ownsCapacityWait = false;
@@ -378,10 +370,8 @@ export function createEmbeddedRunLaneController<TParams extends LaneParams>(opti
       // Queue waits can outlive durable harness and placement bindings.
       // Recheck and claim only after lifecycle admission, before context or hooks execute.
       waitingWatchdog?.progress("transport", "session_writer:admission");
-      const writerClaim = await measureDiagnosticsTimelineSpan(
-        "agent.session_writer.admission",
-        () => claimAgentSessionWriter(params),
-      );
+      transitionAdmissionPhase(queueOptions, "writerMs");
+      const writerClaim = await claimAgentSessionWriter(params);
       if (writerClaim) {
         params = {
           ...params,
@@ -395,7 +385,7 @@ export function createEmbeddedRunLaneController<TParams extends LaneParams>(opti
         options.onSessionWriterClaimed?.(writerClaim.entry);
       }
       waitingWatchdog?.progress("transport", "session_placement:admission");
-      placementStartedAt = performance.now();
+      transitionAdmissionPhase(queueOptions, "placementMs");
       const laneExecution = withAgentRunLifecycleGeneration(lifecycleGeneration, () =>
         withSessionPlacementTurnAdmission(
           {
@@ -448,7 +438,6 @@ export function createEmbeddedRunLaneController<TParams extends LaneParams>(opti
               lifecycleGeneration,
               lastActiveAt: Date.now(),
             });
-            finishPlacementWait();
             // Queue dequeue can still block on writer or placement admission.
             finishGlobalLaneAdmission();
             waitingWatchdog?.progress("semantic", "global_capacity:admitted");
@@ -464,34 +453,33 @@ export function createEmbeddedRunLaneController<TParams extends LaneParams>(opti
         );
       return await laneExecution.finally(() => releaseTerminalProducerFence?.());
     };
+    // Only explicit preparation waits release capacity; timeouts retain raw-task custody.
+    const queueOptions: CommandQueueAdmissionOptions & AdmissionDiagnostics = {
+      taskIdentity,
+      abortSignal,
+      maxConcurrent: options.getParams().swarmExecutionLane?.maxConcurrent,
+      priority: isBackgroundWorkLane(options.globalLane)
+        ? "background"
+        : sessionLanePolicy.priority,
+      onQueued: (wait) => {
+        beginCapacityWait();
+        noteCapacityWait();
+        options
+          .getParams()
+          .onLaneWait?.({ waitMs: 0, queuedAhead: wait?.queuedAheadAtEnqueue ?? 0, waiting: true });
+        queueOptions.queueWait = wait;
+        transitionAdmissionPhase(queueOptions, "laneMs");
+        waitingWatchdog?.progress("transport", "global_lane:waiting");
+        opts?.onQueued?.(wait);
+      },
+      onWait: (waitMs, queuedAhead) => {
+        opts?.onWait?.(waitMs, queuedAhead);
+        options.getParams().onLaneWait?.({ waitMs, queuedAhead, waiting: true });
+      },
+      warnAfterMs: opts?.warnAfterMs,
+    };
     try {
       const { enqueue } = options.getParams();
-      // Only explicit preparation waits release capacity; timeouts retain raw-task custody.
-      const queueOptions: CommandQueueAdmissionOptions = {
-        taskIdentity,
-        abortSignal,
-        maxConcurrent: options.getParams().swarmExecutionLane?.maxConcurrent,
-        priority: isBackgroundWorkLane(options.globalLane)
-          ? "background"
-          : sessionLanePolicy.priority,
-        onQueued: (wait) => {
-          beginCapacityWait();
-          noteCapacityWait();
-          options
-            .getParams()
-            .onLaneWait?.({ waitMs: 0, queuedAhead: wait?.queuedAhead ?? 0, waiting: true });
-          waitingWatchdog?.progress(
-            "transport",
-            `global_lane:waiting${wait ? ` ${wait.details}` : ""}`,
-          );
-          opts?.onQueued?.(wait);
-        },
-        onWait: (waitMs, queuedAhead) => {
-          opts?.onWait?.(waitMs, queuedAhead);
-          options.getParams().onLaneWait?.({ waitMs, queuedAhead, waiting: true });
-        },
-        warnAfterMs: opts?.warnAfterMs,
-      };
       let started = false;
       const queuedRun = withReleasableExecutionCapacity(
         (ticket) => {
@@ -532,7 +520,6 @@ export function createEmbeddedRunLaneController<TParams extends LaneParams>(opti
     } catch (error) {
       throw (abortSignal.aborted && resolveLaneTimeoutError()) || error;
     } finally {
-      finishPlacementWait();
       finishGlobalLaneAdmission();
     }
   };

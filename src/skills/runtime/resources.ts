@@ -324,24 +324,22 @@ export async function prepareSkillResourceDelivery(
     } catch (error) {
       throw contextualizeSkillResourceError(skill, error);
     }
-    const bundleBytes = bundle.files.reduce((sum, file) => sum + file.sizeBytes, 0);
+    let bundleBytes = bundle.files.reduce((sum, file) => sum + file.sizeBytes, 0);
     // Reserve a bounded omission notice for every remaining skill, even if its instructions cannot fit.
     const remaining =
       SKILL_LIBRARY_MAX_BUNDLE_BYTES -
       total -
       Math.min(deliveredCandidates.length - index - 1, deliverySlots - skills.length - 1) * 1024;
     if (bundleBytes > remaining) {
-      const instructions = bundle.files
-        .find((file) => file.path === "SKILL.md")!
-        .bytes.toString("utf8");
+      const instructions = bundle.files.find((file) => file.path === "SKILL.md")!;
       const note =
         "\n\n## Worker resource delivery\n\nSupporting files were omitted to keep this turn within the 8 MiB worker delivery limit. " +
         "Do not run commands that depend on missing files. Continue with available tools; if a missing resource is needed, explain which one and ask for that resource or a narrower skill selection.\n";
       const keepInstructions =
-        Buffer.byteLength(instructions) + Buffer.byteLength(note) <=
+        instructions.sizeBytes + Buffer.byteLength(note) <=
         Math.min(remaining, SKILL_LIBRARY_MAX_FILE_BYTES);
       const content = keepInstructions
-        ? instructions + note
+        ? instructions.bytes.toString("utf8") + note
         : "# Skill unavailable in this worker turn\n\nThe complete instructions could not fit and were not delivered." +
           note;
       const largest = bundle.files.reduce((a, b) => (a.sizeBytes >= b.sizeBytes ? a : b));
@@ -356,8 +354,9 @@ export async function prepareSkillResourceDelivery(
       });
       files = [{ path: "SKILL.md", content, encoding: "utf8" }];
       bundle = prepareSkillBundle(files);
+      bundleBytes = bundle.files[0]!.sizeBytes;
     }
-    total += bundle.files.reduce((sum, file) => sum + file.sizeBytes, 0);
+    total += bundleBytes;
     const sourcePath =
       resolveSkillFileHost(skill) === "workspace" &&
       candidates.some(

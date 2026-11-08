@@ -1,5 +1,4 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import { recordDiagnosticsTimelineDuration } from "../infra/diagnostics-timeline.js";
 import { formatErrorMessage, readErrorName, toErrorObject } from "../infra/errors.js";
 import {
   diagnosticLogger as diag,
@@ -168,13 +167,8 @@ function drainLane(
       // synchronously re-enter the queue, and the shared budget must already
       // account for this task when that nested admission is evaluated.
       const startTime = Date.now();
-      state.activeTasks.set(taskId, {
-        lane,
-        taskId,
-        sessionTarget: entry.sessionTarget,
-        taskIdentity: entry.taskIdentity,
-        startedAt: startTime,
-      });
+      entry.startedAt = startTime;
+      state.activeTasks.set(taskId, entry);
       started += 1;
       void (async () => {
         try {
@@ -186,8 +180,7 @@ function drainLane(
             }
             diag.warn(
               `lane wait exceeded: lane=${lane} waitedMs=${waitedMs} queueAhead=${entry.queuedAheadAtEnqueue} ` +
-                `activeAhead=${entry.activeAheadAtEnqueue} activeNow=${activeBeforeStart} queueBehind=${state.queue.length}` +
-                (entry.waitDetails ? ` ${entry.waitDetails}` : ""),
+                `activeAhead=${entry.activeAheadAtEnqueue} activeNow=${activeBeforeStart} queueBehind=${state.queue.length}`,
               entry.taskIdentity,
             );
           }
@@ -362,21 +355,9 @@ export function enqueueCommandInLane<T>(
     state.maxConcurrent = Math.max(0, Math.floor(opts.maxConcurrent));
   }
   return new Promise<T>((resolve, reject) => {
-    const recordWait = () => {
-      if (entry.waitDetails) {
-        recordDiagnosticsTimelineDuration(
-          "command_lane.wait",
-          performance.now() - entry.enqueuedAt,
-          { wait: entry.waitDetails },
-        );
-      }
-    };
     const entry: QueueEntry = {
-      task: () =>
-        runInAsyncContext(runWithGatewayRootWorkReadmission, () => {
-          recordWait();
-          return task();
-        }),
+      lane: cleaned,
+      task: () => runInAsyncContext(runWithGatewayRootWorkReadmission, task),
       resolve: (value) => resolve(value as T),
       reject,
       enqueuedAt: Math.floor(performance.now()),
@@ -398,7 +379,6 @@ export function enqueueCommandInLane<T>(
         // the remaining listeners when many entries share one abort signal.
         entry.releaseQueuedAbort = undefined;
         if (removeLaneQueueEntry(state.queue, entry)) {
-          runInAsyncContext(recordWait);
           entry.reject(toErrorObject(signal.reason, "Queued command aborted"));
           retireIdleScopedCommandLane(state);
         }
@@ -410,27 +390,7 @@ export function enqueueCommandInLane<T>(
     drainReadyCommandLane(cleaned);
     if (entry.queued) {
       try {
-        const snapshot = getCommandLaneSnapshot(cleaned);
-        const members =
-          snapshot.blockedBy === "lane" ? [cleaned] : (getLaneGroup(cleaned)?.members ?? [cleaned]);
-        const holders = [];
-        let holderCount = 0;
-        for (const member of members) {
-          const active = queueState.lanes.get(member)?.activeTasks;
-          holderCount += active?.size ?? 0;
-          for (const holder of active?.values() ?? []) {
-            if (holders.length === 64) {
-              break;
-            }
-            holders.push(holder);
-          }
-        }
-        entry.waitDetails =
-          `lane=${cleaned} blockedBy=${snapshot.blockedBy ?? "queue"} active=${snapshot.activeCount}/${snapshot.maxConcurrent} queueAheadAtEnqueue=${entry.queuedAheadAtEnqueue} holdersAtEnqueue=${JSON.stringify(holders)} holdersOmitted=${holderCount - holders.length}` +
-          (snapshot.group
-            ? ` group=${snapshot.group} groupActive=${snapshot.groupActive} groupBudget=${snapshot.groupBudget} reservedForLane=${snapshot.reservedForLane}`
-            : "");
-        opts?.onQueued?.({ queuedAhead: entry.queuedAheadAtEnqueue, details: entry.waitDetails });
+        opts?.onQueued?.(entry);
       } catch (err) {
         diag.error(`lane onQueued callback failed: lane=${cleaned} error="${String(err)}"`);
       }

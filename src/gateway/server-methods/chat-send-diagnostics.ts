@@ -1,5 +1,7 @@
 import { performance } from "node:perf_hooks";
 import { createQueuedDiagnosticPhaseEmitter } from "../../infra/diagnostic-events.js";
+import type { AdmissionDiagnostics } from "../../infra/diagnostics-timeline.js";
+import { formatAdmissionDiagnostics } from "../../process/command-lane-diagnostics.js";
 import { createPhaseTimings } from "./phase-timings.js";
 
 const PHASES = [
@@ -50,7 +52,10 @@ export function startChatSendDiagnostics(log: { info(message: string): void }) {
   let startedAt = performance.now();
   let acknowledgedMs: number | undefined;
   let dependencyRetireVerifyAttempts = 0;
-  let laneWait: string | undefined;
+  let admissionState: AdmissionDiagnostics | undefined;
+  let laneMs = 0,
+    writerMs = 0,
+    placementMs = 0;
   let finished = false;
   let identity: { sessionId: string; runId: string } | undefined;
 
@@ -62,7 +67,8 @@ export function startChatSendDiagnostics(log: { info(message: string): void }) {
     if (!slow && !emit) {
       totals.clear();
       dependencyRetireVerifyAttempts = 0;
-      laneWait = undefined;
+      admissionState = undefined;
+      laneMs = writerMs = placementMs = 0;
       startedAt = now;
       return elapsedMs;
     }
@@ -98,8 +104,8 @@ export function startChatSendDiagnostics(log: { info(message: string): void }) {
         if (dependencyRetireVerifyAttempts) {
           message += ` detail.${DEPENDENCY_RETIRE_VERIFY}.attempts=${dependencyRetireVerifyAttempts}`;
         }
-        if (laneWait) {
-          message += ` laneWait=${laneWait}`;
+        if (admissionState) {
+          message += ` ${formatAdmissionDiagnostics({ ...admissionState, laneMs, writerMs, placementMs })}`;
         }
         log.info(message);
       }
@@ -108,7 +114,8 @@ export function startChatSendDiagnostics(log: { info(message: string): void }) {
     }
     totals.clear();
     dependencyRetireVerifyAttempts = 0;
-    laneWait = undefined;
+    admissionState = undefined;
+    laneMs = writerMs = placementMs = 0;
     startedAt = now;
     return elapsedMs;
   };
@@ -139,13 +146,27 @@ export function startChatSendDiagnostics(log: { info(message: string): void }) {
       name: string,
       attributes: Record<string, unknown> | undefined,
       durationMs?: number,
+      admission?: AdmissionDiagnostics,
     ) => {
-      const spanName = name === "agent.prepare" ? attributes?.stage : name;
-      if (typeof spanName !== "string" || finished) {
+      if (finished) {
         return undefined;
       }
-      if (spanName === "command_lane.wait" && typeof attributes?.wait === "string") {
-        laneWait = attributes.wait;
+      if (admission) {
+        if (name === "laneMs") {
+          laneMs += durationMs!;
+        }
+        if (name === "writerMs") {
+          writerMs += durationMs!;
+        }
+        if (name === "placementMs") {
+          placementMs += durationMs!;
+        }
+        admissionState = admission;
+        return undefined;
+      }
+      const spanName = name === "agent.prepare" ? attributes?.stage : name;
+      if (typeof spanName !== "string") {
+        return undefined;
       }
       const phase = `detail.${spanName}` as const;
       if (durationMs !== undefined) {

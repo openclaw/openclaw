@@ -17,6 +17,8 @@ export type QueuePriority = -1 | 0 | 1;
 const PRIORITY_HEAD_START_MS = 15_000;
 
 export type QueueEntry = {
+  lane: string;
+  startedAt?: number;
   queued?: true;
   previous?: QueueEntry;
   next?: QueueEntry;
@@ -33,7 +35,6 @@ export type QueueEntry = {
   taskIdentity?: CommandQueueAdmissionOptions["taskIdentity"];
   sessionTarget?: CommandQueueAdmissionOptions["sessionTarget"];
   onWait?: (waitMs: number, queuedAhead: number) => void;
-  waitDetails?: string;
   releaseQueuedAbort?: () => void;
 };
 
@@ -52,16 +53,7 @@ type LaneQueue = {
 export type LaneState = {
   lane: string;
   queue: LaneQueue;
-  activeTasks: Map<
-    number,
-    {
-      lane: string;
-      taskId: number;
-      sessionTarget: CommandQueueAdmissionOptions["sessionTarget"];
-      taskIdentity: CommandQueueAdmissionOptions["taskIdentity"];
-      startedAt: number;
-    }
-  >;
+  activeTasks: Map<number, QueueEntry>;
   maxConcurrent: number;
   draining: boolean;
   generation: number;

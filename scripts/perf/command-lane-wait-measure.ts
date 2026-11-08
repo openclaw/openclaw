@@ -5,7 +5,6 @@ import { writeFile } from "node:fs/promises";
 import { Session } from "node:inspector/promises";
 import { loadavg } from "node:os";
 import { parseArgs } from "node:util";
-import { withDiagnosticsTimelineObserver } from "../../src/infra/diagnostics-timeline.js";
 import {
   enqueueCommandInLane,
   getCommandLaneSnapshot,
@@ -31,12 +30,6 @@ let attributedWaits = 0;
 let completed = 0;
 const samples: number[] = [];
 const hostLoad = loadavg();
-const observed = (name: string, attrs: Record<string, unknown> | undefined) => {
-  if (name === "command_lane.wait" && typeof attrs?.wait === "string") {
-    attributedWaits++;
-  }
-  return undefined;
-};
 async function wave(index: number) {
   const gate = Promise.withResolvers<void>();
   const started = performance.now();
@@ -54,7 +47,11 @@ async function wave(index: number) {
           runId: `run-${index * 128 + slot}`,
         },
         warnAfterMs: Number.POSITIVE_INFINITY,
-        onQueued() {},
+        onQueued(wait) {
+          if (wait) {
+            attributedWaits++;
+          }
+        },
       },
     ),
   );
@@ -67,6 +64,7 @@ async function wave(index: number) {
 }
 await wave(-1);
 completed = 0;
+attributedWaits = 0;
 globalThis.gc();
 if (values.allocations) {
   await startCollectedHeapSampling(inspector, 4096);
@@ -75,11 +73,9 @@ if (values.allocations) {
 }
 const cpu = process.cpuUsage();
 const started = performance.now();
-await withDiagnosticsTimelineObserver(observed, async () => {
-  for (let index = 0; index < waves; index++) {
-    samples.push(await wave(index));
-  }
-});
+for (let index = 0; index < waves; index++) {
+  samples.push(await wave(index));
+}
 const elapsedMs = performance.now() - started;
 const usedCpu = process.cpuUsage(cpu);
 const heap = values.allocations

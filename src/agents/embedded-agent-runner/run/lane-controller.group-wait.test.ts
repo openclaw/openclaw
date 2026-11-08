@@ -1,6 +1,7 @@
 // Group-blocked lanes look idle locally but must suspend the cron setup watchdog.
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
+import { formatAdmissionDiagnostics } from "../../../process/command-lane-diagnostics.js";
 import {
   enqueueCommandInLane,
   getCommandLaneSnapshot,
@@ -56,11 +57,8 @@ describe("group-blocked lane waits are reported", () => {
 
     const onQueued = vi.fn();
     const queued = enqueueCommandInLane(CRON, async () => {}, { onQueued });
-    expect(onQueued).toHaveBeenCalledWith(
-      expect.objectContaining({
-        queuedAhead: 0,
-        details: expect.stringContaining("blockedBy=sibling-reservation"),
-      }),
+    expect(formatAdmissionDiagnostics({ queueWait: onQueued.mock.calls[0]?.[0] })).toContain(
+      '"blockedBy":"sibling-reservation"',
     );
 
     for (const g of gates) {
