@@ -38,22 +38,24 @@ if (typeof customElements !== "undefined") {
                       role="alert"
                     >
                       <div class="app-toast__content">
-                        <div class="app-toast__body app-toast__message">
-                          {formatUiExternalText(
-                            props.toasts
-                              .flatMap(({ active, options: { message, description } }) =>
-                                active
-                                  ? [
-                                      typeof message === "string" ? message : message.textContent,
-                                      description,
-                                    ]
-                                  : [],
-                              )
-                              .join("\n"),
-                            t("lazyView.errorTitle"),
-                          )}
+                        <div class="app-toast__body">
+                          <span class="app-toast__message">
+                            {formatUiExternalText(
+                              props.toasts
+                                .flatMap(({ active, options: { message, description } }) =>
+                                  active
+                                    ? [
+                                        typeof message === "string" ? message : message.textContent,
+                                        description,
+                                      ]
+                                    : [],
+                                )
+                                .join("\n"),
+                              t("lazyView.errorTitle"),
+                            )}
+                          </span>
                         </div>
-                        <button class="app-toast__action" type="button" onClick={reset}>
+                        <button class="app-toast__action" type="button" onClick={() => reset()}>
                           {t("common.retry")}
                         </button>
                       </div>
