@@ -166,21 +166,23 @@ describe("dns-cli probe bounds", () => {
               const parentListing = actualSpawnSync("/bin/ls", ["-lde", path.dirname(cur)], {
                 encoding: "utf-8",
               });
-              inheritedParent = String(parentListing.stdout ?? "")
-                .split("\n")
-                .map((line) => line.trim())
-                .filter((line) => /^\d+:\s/.test(line) && line.includes("file_inherit"))
-                .map((line) =>
-                  line
-                    .replace(/^\d+:\s*/, "")
-                    .replace(/file_inherit/g, "")
-                    .replace(/directory_inherit/g, "")
-                    .replace(/limit_inherit/g, "")
-                    .replace(/only_inherit/g, "")
-                    .replace(/\s+/g, " ")
-                    .trim(),
-                )
-                .filter((entry) => entry.length > 0);
+              inheritedParent =
+                parentListing.stdout ??
+                ""
+                  .split("\n")
+                  .map((line) => line.trim())
+                  .filter((line) => /^\d+:\s/.test(line) && line.includes("file_inherit"))
+                  .map((line) =>
+                    line
+                      .replace(/^\d+:\s*/, "")
+                      .replace(/file_inherit/g, "")
+                      .replace(/directory_inherit/g, "")
+                      .replace(/limit_inherit/g, "")
+                      .replace(/only_inherit/g, "")
+                      .replace(/\s+/g, " ")
+                      .trim(),
+                  )
+                  .filter((entry) => entry.length > 0);
             }
             return spawnOk(
               JSON.stringify({
@@ -212,7 +214,7 @@ describe("dns-cli probe bounds", () => {
       if (cmd === "chmod" || cmd === "/bin/chmod") {
         // The ACL forms (+a#/-N) delegate to the real chmod so the policy
         // survives; numeric modes apply directly.
-        if (args[0] !== undefined && ["+a#", "+a", "-N"].includes(String(args[0]))) {
+        if (args[0] !== undefined && ["+a#", "+a", "-N"].includes(args[0])) {
           return actualSpawnSync("chmod", args, { encoding: "utf-8" });
         }
         if (cmd === "/bin/chmod") {

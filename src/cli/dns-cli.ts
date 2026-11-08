@@ -381,8 +381,8 @@ export function privilegedInspectionScript(): string {
 function inspectPrivilegedDestination(filePath: string): {
   target: string;
   existing: { uid: number; gid: number; mode: number } | undefined;
-  aclEntries: string[];
-  inheritedParentEntries: string[];
+  aclEntries: MacOsAclEntry[];
+  inheritedParentEntries: MacOsAclEntry[];
 } {
   const script = privilegedInspectionScript();
   const inspected = spawnSync("sudo", [process.execPath, "-e", script, filePath], {
@@ -393,8 +393,8 @@ function inspectPrivilegedDestination(filePath: string): {
   const parsed = JSON.parse(inspected.stdout) as {
     target: string;
     existing: { uid: number; gid: number; mode: number } | undefined;
-    acl: string[];
-    inheritedParent: string[];
+    acl: MacOsAclEntry[];
+    inheritedParent: MacOsAclEntry[];
   };
   return {
     target: parsed.target,
