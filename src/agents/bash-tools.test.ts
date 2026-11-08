@@ -282,6 +282,14 @@ it("reads the unbounded offset log window", async () => {
   expect(text(log)).not.toContain("showing last 200");
 });
 
+it("serves the log tail for a non-positive limit instead of claiming no output", async () => {
+  const sessionId = await startAndFinish(createTool(), echoSequence("line-1", "line-2"));
+  const log = await processAction({ action: "log", sessionId, limit: -5 });
+  expect(log.details).toMatchObject({ totalLines: 2 });
+  expect(text(log)).toContain("line-2");
+  expect(text(log)).not.toContain("(no output recorded)");
+});
+
 describe("background completion notifications", () => {
   let state: OpenClawTestState;
   let continuation: MockInstance<typeof gatewayWork.runWithGatewayDetachedWorkContinuation>;
