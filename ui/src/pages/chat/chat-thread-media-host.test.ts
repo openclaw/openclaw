@@ -30,6 +30,7 @@ describe("transcript rows for media hosts that wait on the IP guard", () => {
 
   it("reports a failed guard load to the owner of unsaved work that blocks reload", async () => {
     onTestFinished(() => vi.doUnmock("@openclaw/net-policy/ip"));
+    // mock-isolation: the guard chunk must fail to load, so no real export may be served.
     vi.doMock("@openclaw/net-policy/ip", () => {
       throw new TypeError("Failed to fetch dynamically imported module");
     });
