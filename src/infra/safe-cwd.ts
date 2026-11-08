@@ -15,5 +15,16 @@ export function formatCwdRelativePathOrAbsolute(
   samePathFallback: string,
 ): string {
   const cwd = tryProcessCwd();
-  return cwd ? path.relative(cwd, targetPath) || samePathFallback : targetPath;
+  if (!cwd) {
+    return targetPath;
+  }
+  const relative = path.relative(cwd, targetPath);
+  // A path outside the launch directory reads better absolute than as a chain of "..".
+  if (relative === "..") {
+    return targetPath;
+  }
+  if (relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
+    return targetPath;
+  }
+  return relative || samePathFallback;
 }
