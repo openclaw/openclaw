@@ -287,6 +287,27 @@ it.each(["inbound", "route"] as const)(
   },
 );
 
+it("round-trips the recorded task-suggestion surface and loads entries without it", async () => {
+  await withFixture(async (f) => {
+    expect(f.read()).not.toHaveProperty("taskSuggestionDeliveryMode");
+    const ctx = { Provider: "webchat", Surface: "webchat", OriginatingChannel: "webchat" };
+    await recordInboundSessionMeta({
+      ...f.scope,
+      ctx: {
+        ...ctx,
+        GatewayClientCaps: ["task-suggestions"],
+        GatewayTaskSuggestionDeliveryMode: "gateway",
+      },
+    });
+    expect(f.read()).toMatchObject({ taskSuggestionDeliveryMode: "gateway" });
+    replaceSessionEntrySync(
+      f.scope,
+      Object.assign(f.read()!, { taskSuggestionDeliveryMode: "bogus" }),
+    );
+    expect(f.read()).not.toHaveProperty("taskSuggestionDeliveryMode");
+  });
+});
+
 it("reduces a fixed patch against the current row in one worker request without losing foreign metadata", async () => {
   await withFixture(async (f) => {
     const original = f.read()!;

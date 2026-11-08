@@ -17,6 +17,7 @@ import type { SessionObserverDigest } from "../../../packages/gateway-protocol/s
 import type { SessionAgentStatus } from "../../../packages/gateway-protocol/src/session-agent-status.js";
 import type { SessionCommunicationPolicy } from "../../../packages/gateway-protocol/src/session-communication.js";
 import type { PreemptiveCompactionRoute as SessionContextBudgetStatusRoute } from "../../agents/embedded-agent-runner/run/preemptive-compaction.types.js";
+import type { TaskSuggestionDeliveryMode } from "../../auto-reply/get-reply-options.types.js";
 import type { ChatType } from "../../channels/chat-type.js";
 import type {
   CronScheduledToolCallerOrigin,
@@ -317,6 +318,8 @@ type SessionEntryCore = SessionEntryProvenance &
     sessionId: string;
     /** Latest operator client declaration; retained across internal turns and restart. */
     clientCapabilities?: string[];
+    /** Task-suggestion surface of that operator client; internal turns list, never call, its tools. */
+    taskSuggestionDeliveryMode?: TaskSuggestionDeliveryMode;
     updatedAt: number;
     /** Process-lifetime session whose entry and transcript stay in the in-memory agent database. */
     incognito?: true;

@@ -126,6 +126,8 @@ export function prepareSessionMetaPatch(params: {
             ]),
           ].toSorted()
         : undefined,
+    taskSuggestionDeliveryMode:
+      params.ctx.GatewayTaskSuggestionDeliveryMode === "gateway" ? "gateway" : undefined,
     group: prepareGroupSessionPatch(params),
     privateTelegramTopicName:
       params.ctx.ChatType === "direct" &&

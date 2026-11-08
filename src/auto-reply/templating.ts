@@ -13,6 +13,7 @@ import type { PluginHookChannelContext } from "../plugins/hook-channel-context.t
 import type { InputProvenance } from "../sessions/input-provenance.js";
 import type { CommandTurnContext } from "./command-turn-context.js";
 import type { CommandArgs } from "./commands-args.types.js";
+import type { TaskSuggestionDeliveryMode } from "./get-reply-options.types.js";
 import type { GroupThreadMentionFacts } from "./group-thread.types.js";
 import type { HistoryEntry } from "./reply/history.types.js";
 import type { ReplyThreadingPolicy } from "./types.js";
@@ -386,6 +387,8 @@ export type MsgContext = Partial<CanonicalInboundText> & {
   TurnGrant?: TurnGrant;
   /** Gateway client capabilities when the message originates from the gateway. */
   GatewayClientCaps?: string[];
+  /** Live task-suggestion surface of the requesting Gateway client; recorded for tool listing. */
+  GatewayTaskSuggestionDeliveryMode?: TaskSuggestionDeliveryMode;
   /** Server-bound requesting browser; never sourced from message text or rendered into prompts. */
   GatewayUiCommandTarget?: GatewayUiCommandTarget;
   /** Run-scoped plugin tool bindings; never rendered into prompt text. */

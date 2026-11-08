@@ -38,6 +38,7 @@ export function prepareTurn({
         suppressCommandInterpretation: false,
         systemInputProvenance: undefined,
         systemProvenanceReceipt: undefined,
+        supportsTaskSuggestions: false,
         ...request,
       },
       session: { agentId: "main", clientRunId: "run-1", sessionKey: "agent:main:main", ...session },

@@ -26,7 +26,10 @@ import {
   resolveOpenClawPluginToolsForOptions,
   resolveOpenClawPluginToolsForOptionsAsync,
 } from "./openclaw-plugin-tools.js";
-import { resolveSessionToolListingClientCaps } from "./openclaw-tools.client-caps.js";
+import {
+  captureSessionToolListing,
+  createListedTaskSuggestionTools,
+} from "./openclaw-tools.client-caps.js";
 import { finalizeOpenClawTools } from "./openclaw-tools.finalize.js";
 import { resolveCapturedOpenClawToolsFsPolicy } from "./openclaw-tools.fs-policy.js";
 import { createHostedGatewayTools } from "./openclaw-tools.gateway.js";
@@ -46,7 +49,6 @@ import { createRequesterYieldCallback } from "./openclaw-tools.requester-yield.j
 import { createOpenClawSwarmToolGroups } from "./openclaw-tools.swarm.js";
 import { resolveTranscriptsTool } from "./openclaw-tools.transcripts.js";
 import type { OpenClawToolsOptions } from "./openclaw-tools.types.js";
-import { withLegacySessionCapabilityRead } from "./subagents/spawn/subagent-session-store-legacy.js";
 import {
   withPreparedToolConstruction,
   type PreparedToolConstruction,
@@ -93,7 +95,6 @@ import { createSessionsTool } from "./tools/sessions-tool.js";
 import { createSessionsYieldTool } from "./tools/sessions-yield-tool.js";
 import { createSkillLibraryTool } from "./tools/skill-library-tool.js";
 import { createSubagentsTool } from "./tools/subagents-tool.js";
-import { createTaskSuggestionTools } from "./tools/task-suggestion-tools.js";
 import { createTerminalTool } from "./tools/terminal-tool.js";
 import { createThemeTool } from "./tools/theme-tool.js";
 import { createTtsTool } from "./tools/tts-tool.js";
@@ -157,9 +158,7 @@ export async function createOpenClawToolsWithPreparation(
 /** @deprecated Use createOpenClawToolsAsync for runtime construction. */
 export function createOpenClawTools(options?: OpenClawToolsOptions): AnyAgentTool[] {
   const captured = { ...options };
-  captured.listingClientCaps ??= withLegacySessionCapabilityRead(() =>
-    resolveSessionToolListingClientCaps(captured),
-  );
+  captureSessionToolListing(captured);
   const { sessionAgentId } = resolveSessionAgentIds({
     sessionKey: captured.runSessionKey ?? captured.agentSessionKey,
     config: captured.config,
@@ -552,12 +551,8 @@ function* createOpenClawToolsSteps(
                 ...createAvailablePortalTools(options),
               ]),
         ]),
-    ...(!embedded && sessionKey && options?.taskSuggestionDeliveryMode === "gateway"
-      ? createTaskSuggestionTools({
-          sessionKey,
-          agentId: sessionAgentId,
-          cwd: resolveWorkspaceRoot(options?.cwd ?? options?.workspaceDir ?? inferredWorkspaceDir),
-        })
+    ...(!embedded && sessionKey
+      ? createListedTaskSuggestionTools(options, sessionKey, sessionAgentId, inferredWorkspaceDir)
       : []),
     includeMessageTool && (messageToolAvailable || options?.retainUnavailableMessageTool)
       ? messageTool

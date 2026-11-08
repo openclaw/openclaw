@@ -5,6 +5,7 @@ import type { SessionEntry } from "./types.js";
 export type SessionEntryCurrentFacts = {
   sessionId: string;
   clientCapabilities?: string[];
+  taskSuggestionDeliveryMode?: SessionEntry["taskSuggestionDeliveryMode"];
   createdVia?: unknown;
   createdActor?: SessionEntry["createdActor"];
   incognito?: SessionEntry["incognito"];
