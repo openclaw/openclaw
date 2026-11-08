@@ -360,6 +360,13 @@ class AgentDatabaseStartupAdmission {
           recoverInputs?: () => Promise<void>;
         } = {};
         let revokeReadAdmission: (() => void) | undefined;
+        const publicationComplete = createDeferredCore();
+        const releasePublication = () => {
+          if (this.publishingAgentId === agentId) {
+            this.publishingAgentId = undefined;
+          }
+          publicationComplete.resolve();
+        };
         let integrity: ReturnType<typeof prepareAgentDatabaseStartupVerification>;
         let preparedSuccessfully = false;
         try {
@@ -459,48 +466,38 @@ class AgentDatabaseStartupAdmission {
                   phase,
                 };
                 const publish = async () => {
-                  const publicationComplete = createDeferredCore();
                   phase("publication-wait");
                   const previous = this.publication;
                   this.publication = publicationComplete.promise;
-                  try {
-                    await previous;
-                    assertCurrent();
-                    this.publishingAgentId = agentId;
-                    for (let attempt = 1; ; attempt++) {
-                      try {
-                        await activation.publishAgent(input);
-                        break;
-                      } catch (error) {
-                        const superseded =
-                          error instanceof AgentDatabaseStartupSupersededError ||
-                          error instanceof AgentDatabaseSchemaAdmissionChangedError;
-                        if (
-                          (!superseded && !capacityRetry.shouldRetry(error)) ||
-                          attempt >= capacityRetry.attempts
-                        ) {
-                          // Runtime churn needs its own restart guidance, not database repair.
-                          throw superseded
-                            ? new AgentDatabaseStartupPublicationError(error)
-                            : error;
-                        }
-                        log.warn("agent database startup publication interrupted; retrying", {
-                          agentId,
-                          attempt,
-                        });
-                        // A reload may still be replacing the plugins this publication borrows.
-                        await capacityRetry.sleep(capacityRetry.minDelayMs * 2 ** (attempt - 1));
-                        await assertNotDeleted();
+                  await previous;
+                  assertCurrent();
+                  this.publishingAgentId = agentId;
+                  for (let attempt = 1; ; attempt++) {
+                    try {
+                      await activation.publishAgent(input);
+                      break;
+                    } catch (error) {
+                      const superseded =
+                        error instanceof AgentDatabaseStartupSupersededError ||
+                        error instanceof AgentDatabaseSchemaAdmissionChangedError;
+                      if (
+                        (!superseded && !capacityRetry.shouldRetry(error)) ||
+                        attempt >= capacityRetry.attempts
+                      ) {
+                        // Runtime churn needs its own restart guidance, not database repair.
+                        throw superseded ? new AgentDatabaseStartupPublicationError(error) : error;
                       }
+                      log.warn("agent database startup publication interrupted; retrying", {
+                        agentId,
+                        attempt,
+                      });
+                      // A reload may still be replacing the plugins this publication borrows.
+                      await capacityRetry.sleep(capacityRetry.minDelayMs * 2 ** (attempt - 1));
+                      await assertNotDeleted();
                     }
-                    phase("publication");
-                    await assertNotDeleted();
-                  } finally {
-                    if (this.publishingAgentId === agentId) {
-                      this.publishingAgentId = undefined;
-                    }
-                    publicationComplete.resolve();
                   }
+                  phase("publication");
+                  await assertNotDeleted();
                 };
                 if (canReadBeforeOpen && activation.captureReadAdmission) {
                   // Exact existing schemas can serve committed snapshots while full integrity
@@ -520,6 +517,8 @@ class AgentDatabaseStartupAdmission {
                     ),
                     assertCurrent: assertReadCurrent,
                   });
+                  // Sibling secrets/model publications must see this prepared agent as readable.
+                  releasePublication();
                   recovery.readReady = undefined;
                   readReady.resolve();
                   log.info("agent database reads ready while writable inspection continues", {
@@ -616,9 +615,8 @@ class AgentDatabaseStartupAdmission {
             integrity?.revoke();
           }
           revokeReadAdmission?.();
-          if (this.publishingAgentId === agentId) {
-            this.publishingAgentId = undefined;
-          }
+          // Writable admission becomes public only after its borrowed workers and handles close.
+          releasePublication();
           readReady.resolve();
           completion.resolve();
           if (

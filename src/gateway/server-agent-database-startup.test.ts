@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { setImmediate as nextTurn } from "node:timers/promises";
 import type { Worker } from "node:worker_threads";
 import { afterEach, expect, it, vi } from "vitest";
 import { closeGatewayTestWebSocket } from "../../test/helpers/gateway-websocket.js";
@@ -47,6 +48,7 @@ import {
   AgentDatabaseAdmissionError,
   listAgentDatabaseAdmissionRefusals,
   readAgentDatabaseAdmissionRefusal,
+  readAgentDatabaseReadAdmissionRefusal,
 } from "../state/agent-database-admission.js";
 import { withAgentDatabaseStartupAdmission } from "../state/agent-database-startup.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-readonly.js";
@@ -681,6 +683,126 @@ it.for([
         }
       })();
       await pendingFixtureCleanup;
+    }
+  },
+);
+
+it.for(["carlos", "hal"] as const)(
+  "keeps both inspected agents usable when %s publishes first",
+  async (firstAgent, { signal }) => {
+    testState.agentsConfig = {
+      ownership: "explicit",
+      entries: { main: {}, carlos: {}, hal: {} },
+    };
+    testState.agentConfig = { systemAgent: { agentId: "main" } };
+    vi.stubEnv("OPENCLAW_TEST_FLEET_SECRET", "synthetic-shared-fleet-secret");
+    const env = { ...process.env };
+    const cfg = loadGatewayTestConfig();
+    setRuntimeConfigSnapshot(cfg);
+    saveAuthProfileStore({
+      version: 1,
+      profiles: {
+        "anthropic:fleet": {
+          type: "api_key",
+          provider: "anthropic",
+          keyRef: { source: "env", provider: "default", id: "OPENCLAW_TEST_FLEET_SECRET" },
+        },
+      },
+    });
+    const paths = ["main", "carlos", "hal"].map(
+      (agentId) => openOpenClawAgentDatabase({ agentId, env }).path,
+    );
+    await closeDatabases();
+    for (const pathname of paths) {
+      retireSqliteDatabaseAdmissionForPath(pathname);
+    }
+    for (const pathname of paths.slice(1)) {
+      revokeSqliteDatabaseAdmissionsForPath(pathname);
+      const database = new DatabaseSync(pathname);
+      database.exec("PRAGMA journal_mode=DELETE; DROP INDEX idx_agent_session_nodes_active");
+      database.close();
+    }
+    let preparation: Promise<unknown> | undefined;
+    const firstPublished = createDeferredCore();
+    const firstReleasing = createDeferredCore();
+    const secondMigrated = createDeferredCore();
+    const releaseFirst = createDeferredCore();
+    let firstVisibleToSibling: boolean | undefined;
+    const started = await withAgentDatabaseStartupAdmission(async (admission) => {
+      const activate = admission.activate.bind(admission);
+      vi.spyOn(admission, "activate").mockImplementation((activation) =>
+        activate({
+          ...activation,
+          // Minimal Gateways omit the normal post-listener configured model publication.
+          preparationReady: activation.preparationReady.then(() =>
+            refreshPreparedModelRuntimeSnapshots(getRuntimeConfig(), {
+              gatewayLifecycle: true,
+              catalogMode: "static",
+              allowGatewaySubagentBinding: true,
+            }),
+          ),
+          openAgent: async (input) => {
+            if (input.agentId !== firstAgent) {
+              await withinTest(firstPublished.promise, signal);
+            }
+            const opened = await activation.openAgent(input);
+            return {
+              [Symbol.asyncDispose]: async () => {
+                await opened?.[Symbol.asyncDispose]();
+                if (input.agentId === firstAgent) {
+                  firstReleasing.resolve();
+                  await withinTest(releaseFirst.promise, signal);
+                }
+              },
+            };
+          },
+          migrateAgent: async (input) => {
+            const migrated = await activation.migrateAgent(input);
+            if (input.agentId !== firstAgent) {
+              secondMigrated.resolve();
+            }
+            return migrated;
+          },
+          publishAgent: async (input) => {
+            if (input.agentId !== firstAgent) {
+              firstVisibleToSibling = !readAgentDatabaseReadAdmissionRefusal(firstAgent, { env });
+            }
+            await activation.publishAgent(input);
+            if (input.agentId === firstAgent) {
+              firstPublished.resolve();
+            }
+          },
+        }),
+      );
+      await assertOpenClawDatabasesReady({ env, operation: "gateway-startup", config: cfg });
+      preparation = admission.pendingPreparation;
+      const portClaim = await acquireTestPortBlock({ offsets: [0, 1, 2, 3, 4] });
+      return startTestGatewayServer(portClaim, { bind: "loopback", auth: { mode: "none" } });
+    });
+    try {
+      await withinTest(Promise.all([firstReleasing.promise, secondMigrated.promise]), signal);
+      // Let the sibling reach its publication wait while the first handoff is still held.
+      await nextTurn();
+      releaseFirst.resolve();
+      await withinTest(preparation!, signal);
+      expect(firstVisibleToSibling).toBe(true);
+      const secrets = getActiveSecretsRuntimeSnapshot();
+      for (const agentId of ["carlos", "hal"]) {
+        expect(readAgentDatabaseAdmissionRefusal(agentId, { env })).toBeUndefined();
+        expectPreparedModel(agentId);
+        const database = openOpenClawAgentDatabase({ agentId, env });
+        expect(database.agentId).toBe(agentId);
+        expect(secrets?.authStores.some((store) => store.databasePath === database.path)).toBe(
+          true,
+        );
+        expect(
+          secrets?.degradedOwners?.some((owner) => owner.paths.includes(database.path)),
+        ).not.toBe(true);
+      }
+    } finally {
+      firstPublished.resolve();
+      releaseFirst.resolve();
+      await started.close();
     }
   },
 );
