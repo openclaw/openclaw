@@ -660,10 +660,6 @@
   opacity: 1;
 }
 
-.chat-text input.task-list-item-checkbox {
-  border-radius: var(--radius-sm);
-}
-
 :is(.chat-text, .chat-thinking) :where(details[open] > summary) {
   margin-bottom: var(--space-2);
 }
@@ -1524,7 +1520,7 @@
   margin-block-start: var(--chat-block-gap);
 }
 
-.chat-text > :where(h1, h2, h3, h4):where(:not(:first-child)) {
+.chat-text > :where(h1, h2, h3, h4, h5, h6):where(:not(:first-child)) {
   margin-block-start: calc(var(--chat-block-gap) * 1.5);
 }
 
@@ -1544,14 +1540,18 @@
 }
 
 .chat-text :where(h1) {
-  font-size: 1.25em;
+  font-size: 1.6em;
 }
 
 .chat-text :where(h2) {
+  font-size: 1.3em;
+}
+
+.chat-text :where(h3) {
   font-size: 1.125em;
 }
 
-.chat-text :where(h3, h4, h5, h6) {
+.chat-text :where(h4, h5, h6) {
   font-size: 1em;
 }
 
