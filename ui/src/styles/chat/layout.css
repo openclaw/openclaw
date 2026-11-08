@@ -1537,12 +1537,15 @@ openclaw-chat-video-player {
 .chat-selection-popup {
   display: flex;
   gap: 2px;
+  padding: 3px;
   animation: fade-in 0.12s var(--ease-out);
 }
 
+/* A compact strip on every pointer type: it floats over the transcript. */
 .chat-selection-popup button {
   gap: 6px;
-  padding: 6px 10px;
+  min-height: 24px;
+  padding: 3px 8px;
   font-size: 12px;
   white-space: nowrap;
 }

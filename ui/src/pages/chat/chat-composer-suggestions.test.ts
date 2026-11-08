@@ -64,6 +64,24 @@ const activeId = (container: HTMLElement) =>
 const menu = (container: HTMLElement, suffix = "slash-menu-listbox") =>
   container.querySelector(`#chat-single-${suffix}`);
 describe("chat composer suggestion accessibility", () => {
+  it("hints free-form arguments only until the user starts typing", () => {
+    const { container } = createReactiveDraftHarness();
+    inputDraftAtEnd(container, "/steer");
+    keydownComposer(container, "Tab");
+    const textarea = getComposerTextarea(container);
+    const hint = container.querySelector<HTMLElement>(".agent-chat__composer-placeholder")!;
+    expect(textarea.value).toBe("/steer ");
+    expect(textarea.placeholder).toBe("<message>");
+    expect(hint.textContent).toBe("/steer <message>");
+    expect(hint.style.display).toBe("block");
+
+    for (const draft of ["/steer hello", "/steer  ", "/steer \n", "/steer", "/clear ", "/tools "]) {
+      inputDraftAtEnd(container, draft);
+      expect(hint.style.display, draft).toBe("");
+      expect(textarea.placeholder, draft).not.toBe("<message>");
+    }
+  });
+
   it("opens a skill picker for $ references anywhere in a normal prompt", async () => {
     replaceSkillCommands({
       key: "prose_writer",
@@ -96,9 +114,11 @@ describe("chat composer suggestion accessibility", () => {
 
       const wrapper = container.querySelector<HTMLElement>(".agent-chat__composer-combobox");
       const textarea = getComposerTextarea(container);
-      const listbox = await waitForSolid(() =>
-        expectDefined(menu(container), "slash command listbox"),
-      );
+      const listbox = await waitForSolid(() => {
+        const rendered = expectDefined(menu(container), "slash command listbox");
+        expect(rendered.querySelector('[aria-busy="true"]')).toBeNull();
+        return rendered;
+      });
       const initialActiveId = activeId(container);
 
       expectAbsent(wrapper, "role", "aria-expanded", "aria-haspopup", "aria-controls");
@@ -137,7 +157,9 @@ describe("chat composer suggestion accessibility", () => {
               .map((selector) => text(activeOption, selector))
               .filter(Boolean)
               .join(" ");
-      expect(announcementText).toBe(expectedAnnouncement);
+      expect(announcementText).toBe(
+        draft === "/" ? `${expectedAnnouncement}.` : expectedAnnouncement,
+      );
 
       inputDraft(container, "plain message");
 
