@@ -10,6 +10,7 @@ import {
   createApplicationContextProvider,
   createApplicationGateway,
 } from "../../test-helpers/application-context.ts";
+import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import {
   expectText,
   mountWidget,
@@ -616,13 +617,18 @@ describe("openclaw-board-view", () => {
     expect(toastHost.querySelector(".app-toast")).toBeNull();
 
     reject?.click();
-    await vi.waitFor(() => {
-      expectText(testId(view, "board-widget-action-error"), "approval service unavailable");
+    await vi.waitFor(() =>
+      expectText(testId(view, "board-widget-action-error"), "approval service unavailable"),
+    );
+    // Action settlement does not wait for the toast view's first lazy import.
+    await toastHost.updateComplete;
+    await vi.dynamicImportSettled();
+    await waitForSolid(() =>
       expectText(
         toastHost.querySelector(".app-toast__body"),
         "Couldn’t reject widget access. Try again.",
-      );
-    });
+      ),
+    );
     expect([allow?.disabled, reject?.disabled]).toEqual([false, false]);
 
     view.snapshot = structuredClone({ ...source, revision: source.revision + 1 });

@@ -25,6 +25,7 @@ import { sessionMenuReasons } from "./session-menu-access.ts";
 import type { SessionMenuAction } from "./session-menu-solid.tsx";
 import {
   createHarness as createBaseHarness,
+  endArchiveUndoWindow,
   sessionRow,
   sessionTarget,
 } from "./session-organizer-batch-mutations.test-support.ts";
@@ -515,6 +516,7 @@ describe("session organizer destructive confirmations", () => {
     response.resolve({ deleted: true, worktreePreserved: preservedWorktree("busy", "wt-busy") });
     await pending;
     expect(showToast).toHaveBeenCalledWith({
+      severity: undefined,
       message: "Managed worktrees:\nfeature — live run or cleanup active",
     });
   });
@@ -599,6 +601,7 @@ describe("session organizer destructive confirmations", () => {
 
     expectNoCalls(h.request, h.replaceCurrentSession);
     expect(showToast).toHaveBeenCalledWith({
+      severity: undefined,
       message: "Managed worktrees:\nfeature — cleanup failed",
     });
   });
@@ -760,6 +763,7 @@ describe("session organizer batch archive confirmation", () => {
         }
         await pending;
         if (decision === "confirm") {
+          await endArchiveUndoWindow(h);
           expectArchive(h, rows, true);
           expect(h.finishArchive).toHaveBeenCalledTimes(rows.length);
         } else {
@@ -773,7 +777,7 @@ describe("session organizer batch archive confirmation", () => {
   );
 
   it.each([false, true])(
-    "keeps idle archive and archived=%s restore immediate",
+    "skips confirmation for idle archive and archived=%s restore",
     async (archived) => {
       const h = createHarness();
       const rows = [sessionRow(0), sessionRow(1)].map((row) =>
@@ -781,6 +785,9 @@ describe("session organizer batch archive confirmation", () => {
       );
       await h.action({ kind: "toggle-archived" }, rows, false);
       expect(document.querySelector("openclaw-modal-dialog")).toBeNull();
+      if (!archived) {
+        await endArchiveUndoWindow(h);
+      }
       expectArchive(h, rows, !archived);
     },
   );

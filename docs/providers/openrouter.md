@@ -3,7 +3,7 @@ summary: "Use OpenRouter's unified API to access many models in OpenClaw"
 read_when:
   - You want a single API key for many LLMs
   - You want to run models via OpenRouter in OpenClaw
-  - You want to use Jev for typed decisions through OpenRouter
+  - You want to use Jev or Parallel for typed decisions through OpenRouter
   - You want to use OpenRouter for image generation
   - You want to use OpenRouter for music generation
   - You want to use OpenRouter for video generation
@@ -11,7 +11,7 @@ title: "OpenRouter"
 ---
 
 OpenRouter routes requests to many models behind one API and one key. Chat uses
-the OpenAI-compatible `openai-completions` transport. Typed Jev decisions use the
+the OpenAI-compatible `openai-completions` transport. Typed decisions use the
 separate System One API.
 
 ## Getting started
@@ -129,7 +129,42 @@ fields, so optional inputs stay optional. Custom proxy endpoints keep their
 existing compatibility policy. An explicit `compat.supportsStrictMode: false`
 omits the strict field.
 
-## Typed decisions with Jev
+## Typed decisions
+
+### Parallel Decisions Fast
+
+Parallel Decisions Fast answers typed questions using live web evidence; it is
+not a chat or tool-calling model. Select it as your [decision model](/concepts/decision-models)
+with your existing OpenRouter API key, without a separate Parallel account:
+
+```json5
+{
+  agents: {
+    defaults: { decisionModel: "openrouter/parallel/decisions-fast" },
+  },
+}
+```
+
+The plugin also supports `openrouter/parallel/decisions-fast:free` when that
+route is available on your OpenRouter account. Availability and trial pricing
+are controlled by OpenRouter; OpenClaw does not assume a permanent free tier.
+
+Both routes use OpenRouter's typed Decisions API, not chat completions. They accept
+text or JSON state, up to 100 related Boolean, choice, or score questions, and
+up to 32,000 input tokens per question including the shared state. Choice
+questions support 2–255 options; score questions support 2–10 ordered levels.
+Images, bounding boxes, sorting, and tagging are not supported. Responses
+preserve probabilities and per-question refusals; request-level web sources
+are returned in `result.metadata.annotations` as OpenRouter URL citations.
+Native web research happens on every request, so use this route only for
+decisions whose context may be sent to Parallel for web-grounded evaluation.
+
+See [Parallel on OpenRouter](https://parallel.ai/blog/decisions-openrouter),
+[Parallel question types](https://docs.parallel.ai/decisions/question-types), and
+[OpenRouter Decisions adapters](https://openrouter.ai/docs/guides/community/multimodal-decisions#what-each-endpoint-accepts)
+for the upstream contracts.
+
+### Jev
 
 Select Jev as the [decision model](/concepts/decision-models), using your existing
 OpenRouter connection and auth profiles. No separate TypeSafe login is needed:

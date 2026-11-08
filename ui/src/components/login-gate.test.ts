@@ -43,7 +43,7 @@ describe("login gate failure recovery", () => {
       url: "wss://gateway.example",
       bootstrapToken: "synthetic-bootstrap-token",
     }),
-  ).replace(/=+$/g, "");
+  ).replace(/[=]+$/g, "");
 
   it("pauses the busy countdown while hidden and catches up on return and reconnect", async () => {
     vi.useFakeTimers();
@@ -299,6 +299,7 @@ describe("login gate failure recovery", () => {
       () => false,
       () => {
         showToast({
+          severity: "error",
           message: "Recovery needs a reload. Unsaved starts will be lost.",
           actionLabel: "Discard unsaved starts and reload",
           onAction: discard,

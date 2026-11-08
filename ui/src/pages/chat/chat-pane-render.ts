@@ -29,7 +29,7 @@ import { createChatPaneResourceProps } from "./chat-pane-resource-presentation.t
 import {
   createChatPaneQueuedEditProps,
   createChatPaneSessionActionCallbacks,
-  canDismissChatPendingInputs,
+  createChatPanePendingInputControls,
   readChatPaneMutationAccess,
   renderChatPaneComposerControls,
 } from "./chat-pane-session-controls.ts";
@@ -84,7 +84,8 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
     const providerPaused = Boolean(selectedSession?.providerReview);
     const childRoster = this.projectChildRoster(this.resolveChatReadTarget());
     const progressPresentation = this.progressCardPresentation;
-    const cachedSession = this.cachedSessionStatePending() ? this.cachedSessionState() : undefined;
+    const cachedSessionStatePending = Boolean(this.cachedSessionStatePending());
+    const cachedSession = cachedSessionStatePending ? this.cachedSessionState() : undefined;
     const selectedSessionArchived = cachedSession?.archived ?? this.isCurrentSessionArchived(state);
     const mutationAccess = readChatPaneMutationAccess(
       this.context.gateway.snapshot,
@@ -230,8 +231,8 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
       : renderChatPaneComposerControls({
           state,
           selectedSession,
+          cachedSessionStatePending,
           agentDefaultModel,
-          agentDefaultPermissionMode: selectedAgent?.defaultPermissionMode,
           modelAccess: mutationAccess.model,
           effortAccess: mutationAccess.effort,
           contextWindowAccess: mutationAccess.contextWindow,
@@ -278,10 +279,7 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
       cached: cachedSession?.unarchiveAllowed === true,
     });
     const initialHistoryUnavailable = !catalogKey && isInitialChatHistoryUnavailable(state);
-    const presence = this.presence.snapshot;
-    const composerSessionKey = state.sessionKey;
     const catalogCanContinue = this.history.catalogSession?.canContinue === true;
-    const composerPendingReason = state.connected ? null : pendingReason;
     const auth = gatewaySnapshot.hello?.auth ?? null;
     const hasWriteScope = hasOperatorWriteAccess(auth);
     const composerAccess = catalogKey
@@ -316,14 +314,14 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
     const canWriteProgressCard = state.connected && !sessionParticipationBlocked && hasWriteScope;
     const typingEnabled =
       multiIdentity &&
-      hasWriteScope &&
+      composerAccess &&
       !catalog &&
       isGatewayMethodAdvertised(gatewaySnapshot, "session.typing") === true &&
       hasSessionPresenceViewers(
-        presence,
+        this.presence.snapshot,
         gatewaySnapshot.selfUser,
         gatewaySnapshot.client?.instanceId,
-        composerSessionKey,
+        state.sessionKey,
       );
     const composerAvailability = {
       canCompose: composerAccess && available,
@@ -338,7 +336,7 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
           ? placementComposer.failedUnavailableMessage
           : null) ??
         // Offline sending stays available for the outbox; this band explains pending recovery.
-        composerPendingReason,
+        (state.connected ? null : pendingReason),
       disabledReasonTone:
         !composerAccess ||
         disabledReason ||
@@ -365,7 +363,7 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
         ? this.captureProgressCardRefreshAction()
         : undefined;
     const props: ChatProps = {
-      canDismissPendingInputs: canDismissChatPendingInputs(mutationAccess, selectedSession, {
+      ...createChatPanePendingInputControls(mutationAccess, selectedSession, {
         nativeConversation,
         participationBlocked: sessionParticipationBlocked,
       }),
@@ -403,7 +401,9 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
       onDiscardSessionPlacementStartup: placementStartup?.initialTurn
         ? this.discardSessionPlacementStartup
         : undefined,
-      canAbort: sessionParticipationBlocked ? false : hasAbortableSessionRun(state),
+      canAbort: sessionParticipationBlocked
+        ? false
+        : Boolean(state.chatRunId) || (cachedSession?.runActive ?? hasAbortableSessionRun(state)),
       runActive,
       runStatus: state.chatRunStatus,
       startupStatus: activeChatRunStartupStatus(state.chatRunStartup),
@@ -579,7 +579,6 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
       onOpenSessionLink: (target) => navigateMarkdownSession(this.context, target),
       onNavigate: (routeId, options) => this.context.navigate(routeId, options),
       onRefresh: this.refreshHistory,
-      onChatScroll: (event) => this.handleTranscriptScroll(event),
       onHistoryIntent: (event) => this.handleTranscriptHistoryIntent(event),
       // Lazy SVG sizing can resize a committed row; re-enter the scroll owner
       // so an active follow lock stays pinned to the latest message.

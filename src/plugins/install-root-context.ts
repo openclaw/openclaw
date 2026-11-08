@@ -1,9 +1,9 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import os from "node:os";
 import path from "node:path";
-import { resolveStateDir } from "../config/paths.js";
+import { resolveStateDir } from "../config/state-dir.js";
+import { resolveConfigDir } from "../infra/config-dir.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
-import { resolveConfigDir } from "../utils.js";
 
 const PLUGIN_INSTALL_ROOT_CONTEXT_KEY = Symbol.for("openclaw.pluginInstallRootContext");
 

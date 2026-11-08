@@ -68,6 +68,7 @@ it.each([
   pending.resolve(copied);
   await waitForSolid(() => {
     expect(host.querySelector(".app-toast")?.textContent).toContain(message);
+    expect(host.querySelector(".app-toast")?.classList.contains("app-toast--error")).toBe(!copied);
   });
 });
 

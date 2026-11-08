@@ -50,7 +50,7 @@ struct SidebarGatewayPicker: View {
     let presentation: SidebarGatewayPresentation
     let fallbackName: String
     let isSwitching: Bool
-    let selectGateway: (String) -> Void
+    let selectGateway: @MainActor (String) -> Void
     let openSettings: () -> Void
 
     var body: some View {

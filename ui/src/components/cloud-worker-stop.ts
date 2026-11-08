@@ -3,7 +3,7 @@ import type { GatewaySessionRow } from "../api/types.ts";
 
 // A non-local placement also includes paired devices. Only active ownership
 // without a device runner identifies a cloud device; otherwise use neutral copy.
-export function sessionStopCopyKey(placement: GatewaySessionRow["placement"]) {
+function sessionStopCopyKey(placement: GatewaySessionRow["placement"]) {
   return placement?.state === "active" && placement.runner?.kind !== "device"
     ? "sessionsView.stopCloudWorker"
     : "sessionsView.stopWorker";

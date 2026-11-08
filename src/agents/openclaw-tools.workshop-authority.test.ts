@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, beforeEach, expect, it } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { closeSkillsWatchers } from "../skills/runtime/refresh.js";
@@ -42,8 +42,7 @@ afterEach(async () => {
 /**
  * Creates one skill through the loaded plugin's `skill_workshop`, built by the real OpenClaw
  * tool set and invoked under a Gateway caller whose receipt the test can revoke. The receipt is
- * revoked at the first authority check after the call has yielded to I/O (awaited preparation),
- * so only the pre-write recheck can stop the write.
+ * revoked after the skill directory is prepared, so only the pre-write recheck can stop the write.
  */
 async function createUnderCaller(name: string, revokeDuringPreparation: boolean) {
   const runId = randomUUID();
@@ -58,27 +57,26 @@ async function createUnderCaller(name: string, revokeDuringPreparation: boolean)
   }).find((entry) => entry.name === "skill_workshop");
   expect(tool).toBeDefined();
   const trace: string[] = [];
-  let phase: "entry" | "prepare" | "awaited" = "entry";
   let live = true;
   const receiptAuthority = () => {
-    trace.push(`${phase}:check:${live ? "ok" : "revoked"}`);
-    if (phase === "awaited" && live && revokeDuringPreparation) {
-      live = false;
-      trace.push("caller:revoked");
-      return true;
-    }
+    trace.push(`check:${live ? "ok" : "revoked"}`);
     return live;
   };
+  const skillDir = path.join(state.agentDir(), "workshop-skills", name);
+  const realMkdir = fs.mkdir.bind(fs);
+  using _ = vi.spyOn(fs, "mkdir").mockImplementation(async (target, options) => {
+    const made = await realMkdir(target, options);
+    if (String(target) === skillDir && live && revokeDuringPreparation) {
+      live = false;
+      trace.push("caller:revoked");
+    }
+    return made;
+  });
   const pending = withGatewayToolCallerIdentity(
     { agentId: "main", sessionKey: "agent:main:authority", receiptAuthority },
     () => {
       const call = tool!.execute("authority", { action: "create", name, content: skill(name) });
       trace.push("authority:captured");
-      phase = "prepare";
-      // Runs once the call has suspended on I/O, after its synchronous entry checks.
-      setImmediate(() => {
-        phase = "awaited";
-      });
       return call;
     },
   );
@@ -86,7 +84,7 @@ async function createUnderCaller(name: string, revokeDuringPreparation: boolean)
     () => "written",
     (error: unknown) => `refused (${error instanceof Error ? error.message : String(error)})`,
   );
-  const skillFile = path.join(state.agentDir(), "workshop-skills", name, "SKILL.md");
+  const skillFile = path.join(skillDir, "SKILL.md");
   const exists = await fs.stat(skillFile).then(
     () => true,
     () => false,

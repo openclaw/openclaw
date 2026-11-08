@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
+import { AsyncLocalStorage } from "node:async_hooks";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { performance } from "node:perf_hooks";
 import { after, it } from "node:test";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { isMainThread } from "node:worker_threads";
@@ -21,6 +23,7 @@ import {
   publishSecretEgressProxy,
 } from "../secrets/egress-proxy/registry.js";
 import { writeSecretStoreEntry } from "../secrets/store/secret-store.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
@@ -29,11 +32,16 @@ import {
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
 import { createDurableProcessStore } from "./bash-durable-process-store.js";
-import { disposeDurableProcesses, initializeDurableProcesses } from "./bash-process-durable.js";
+import {
+  disposeDurableProcesses,
+  initializeDurableProcesses,
+  startDurableExecProcess,
+} from "./bash-process-durable.js";
 import {
   getSession,
   getFinishedSession,
   getActiveBackgroundExecSessionCount,
+  createProcessSession,
   waitForExecSession,
 } from "./bash-process-registry.js";
 import { resetProcessRegistryForTests } from "./bash-process-registry.test-support.js";
@@ -190,6 +198,36 @@ async function launch(state: OpenClawTestState, notifyOnExit: boolean) {
   return { id: result.details.sessionId, content: result.content };
 }
 
+void it("observes durable completion outside the initiating request context", async (t) => {
+  await scenario(async (state, managerFile) => {
+    const request = new AsyncLocalStorage<string>();
+    let launching = true;
+    const observation = createDeferredCore<string | undefined>();
+    let now = Math.floor(performance.now());
+    t.mock.method(performance, "now", () => now);
+    t.mock.timers.enable({ apis: ["setTimeout"] });
+    await initializeDurableProcesses({
+      assertCurrent: () => {
+        if (!launching) {
+          observation.resolve(request.getStore());
+        }
+      },
+    });
+    const { id } = await request.run("expired-request", () => launch(state, false));
+    const session = getSession(id)!;
+    const manager: ManagerRecord = JSON.parse(await fs.readFile(managerFile, "utf8"));
+    await fs.writeFile(managerFile, JSON.stringify({ ...manager, state: "exited" }));
+    launching = false;
+    now += 1000;
+    t.mock.timers.tick(1000);
+    const context = await observation.promise;
+    await waitForExecSession(session);
+    assert.equal(context, undefined);
+    t.mock.timers.reset();
+    t.mock.restoreAll();
+  });
+});
+
 void it("re-adopts persisted work with scoped list/log/poll/kill and restart admission", async () => {
   await scenario(async (state, managerFile) => {
     await writeSecretStoreEntry({
@@ -296,6 +334,58 @@ void it("records a downtime exit and queues one unattributed session completion"
       await waitForExecSession(reAdopted);
       assert.equal(peekSystemEventEntries(sessionKey).length, 1);
       // Retire the queued occurrence before reopening admission; no inference is needed for queue proof.
+      const { consumeSelectedSystemEventEntries } = await import("../infra/system-events.js");
+      consumeSelectedSystemEventEntries(sessionKey, events);
+    } finally {
+      suspended!.release("fixture complete");
+    }
+  });
+});
+
+void it("recovers a memory-limit completion before its notification settles", async () => {
+  await scenario(async (state) => {
+    await initializeDurableProcesses();
+    const session = createProcessSession({
+      id: "memory-limit-recovery",
+      command: "printf worker",
+      agentId: "main",
+      sessionKey,
+      scopeKey: sessionKey,
+      cwd: state.workspaceDir,
+      startedAt: Date.now(),
+      cleanupMs: 60_000,
+      maxOutputChars: 8_000,
+      totalOutputChars: 0,
+      pendingStdoutChars: 0,
+      pendingStderrChars: 0,
+      pendingOutputDropped: false,
+      exited: false,
+      truncated: false,
+      backgrounded: true,
+      cursorKeyMode: "normal",
+      notifyOnExit: true,
+    });
+    const run = await startDurableExecProcess(session, sessionId, {
+      mode: "child",
+      argv: ["/bin/sh", "-c", session.command],
+      cwd: state.workspaceDir,
+      env: process.env,
+    });
+    run.cancel("memory-limit");
+    assert.equal((await run.wait()).reason, "memory-limit");
+    // Reconstruct after the native result is durable but before caller settlement.
+    await disposeDurableProcesses();
+    resetProcessRegistryForTests();
+    const suspended = tryBeginGatewaySuspendAdmission(() => {});
+    assert.ok(suspended?.commit());
+    try {
+      await initializeDurableProcesses();
+      const adopted = getSession(session.id)!;
+      await adopted.durable!.observe();
+      await waitForExecSession(adopted);
+      assert.equal(getFinishedSession(session.id)?.exitReason, "memory-limit");
+      const events = peekSystemEventEntries(sessionKey);
+      assert.equal(events.length, 1);
       const { consumeSelectedSystemEventEntries } = await import("../infra/system-events.js");
       consumeSelectedSystemEventEntries(sessionKey, events);
     } finally {

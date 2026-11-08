@@ -41,6 +41,7 @@ import {
   type SessionEntryPair,
 } from "./session-list-order.js";
 import { bindSessionListRowRead } from "./session-list-read-result.js";
+import { retainCurrentSessionListPartitions } from "./session-list-view-cache.js";
 import { resolveProfileActivityViewerId } from "./session-profile-activity-policy.js";
 import type { SessionRowGeneration } from "./session-row-identity.js";
 import { withReadySessionRows } from "./session-row-prepared-read.js";
@@ -58,7 +59,6 @@ import type { SessionRowProjection } from "./session-row-projection.js";
 import { createSessionRowSelection } from "./session-row-selection.js";
 import { createSessionRuntimeResolution } from "./session-runtime-resolution.js";
 import type { SessionListRowContext } from "./session-utils-contracts.js";
-import { matchesSessionArchiveFilter } from "./session-utils-core.js";
 import { getSessionDefaults } from "./session-utils-model.js";
 import type { GatewaySessionRow, SessionsListResult } from "./session-utils.types.js";
 
@@ -66,7 +66,7 @@ export function selectSessionEntries(
   params: SessionListFilterParams & {
     defaultLimit?: number;
     partitions?: ReturnType<ReturnType<typeof createSessionRowSelection>["read"]>["partitions"];
-    retained?: WeakMap<object, SessionListFilteredEntries>;
+    retained?: Map<object, SessionListFilteredEntries>;
   },
 ): SessionEntrySelection {
   const limit = resolveOptionalIntegerOption(params.opts.limit, { min: 1 }) ?? params.defaultLimit;
@@ -75,6 +75,8 @@ export function selectSessionEntries(
     params.ownerFirstActorId && offset === 0
       ? Math.min(limit ?? SESSIONS_LIST_OWNER_LIMIT, SESSIONS_LIST_OWNER_LIMIT)
       : 0;
+  const pageEnd =
+    limit === undefined ? undefined : Math.min(offset + limit, Number.MAX_SAFE_INTEGER);
   // Person-reference resolution and people truncation require the whole visible roster.
   // Temporal queries are not retained by the presentation owner.
   const incremental =
@@ -85,6 +87,7 @@ export function selectSessionEntries(
     !params.opts.includeOwnerSessionCounts;
   let filteredResult: SessionListFilteredEntries;
   if (incremental) {
+    retainCurrentSessionListPartitions(params.retained!, params.partitions!);
     const pages: SessionEntryPair[][] = [];
     const ownerPages: SessionEntryPair[][] = [];
     const owners = new Map<string, SessionListFilteredEntries["ownerFacet"][number]>();
@@ -92,10 +95,9 @@ export function selectSessionEntries(
     let hits = 0;
     let misses = 0;
     let activityExpiresAt = Infinity;
-    const pageEnd =
-      limit === undefined ? undefined : Math.min(offset + limit, Number.MAX_SAFE_INTEGER);
+    const archived = params.opts.archived ?? false;
     for (const partition of params.partitions!) {
-      if (!partition.entries.size) {
+      if (!partition.entries.size || (archived !== "all" && partition.archived !== archived)) {
         continue;
       }
       let part = params.retained!.get(partition.revision);
@@ -103,10 +105,7 @@ export function selectSessionEntries(
         misses++;
         part = filterSessionEntries({
           ...params,
-          entries: (archived) =>
-            Array.from(partition.entries.values()).filter(([, entry]) =>
-              matchesSessionArchiveFilter(entry, archived),
-            ),
+          entries: () => Array.from(partition.entries.values()),
         });
         part.entries = sortAndLimitSessionEntries(part.entries, pageEnd, params.opts.sortBy);
         part.ownerEntries = sortAndLimitSessionEntries(
@@ -145,11 +144,7 @@ export function selectSessionEntries(
     ? filtered.slice(offset)
     : params.entriesSorted
       ? filtered
-      : sortAndLimitSessionEntries(
-          filtered,
-          limit === undefined ? undefined : Math.min(offset + limit, Number.MAX_SAFE_INTEGER),
-          params.opts.sortBy,
-        ).slice(offset);
+      : sortAndLimitSessionEntries(filtered, pageEnd, params.opts.sortBy).slice(offset);
   let entries = sharedEntries;
   let ownerCount = 0;
   if (ownerLimit > 0) {
@@ -464,6 +459,8 @@ export function prepareProjectedSessionList(params: {
   const { getTarget } = prepared;
   const { active } = presentation;
   const identity = gatewayClientSessionCreator(client ?? null)?.id;
+  // Invitations can change without replacing the entry retained across yields.
+  const visibility = presentation.sharing.sessionCap === "invited" ? undefined : params.visibility;
   const filters: SessionListFilterParams = {
     ...prepared,
     identityNames: params.searchIdentities?.names,
@@ -484,21 +481,18 @@ export function prepareProjectedSessionList(params: {
         ? undefined
         : (key, entry, row) => {
             const storeKey = row.storeKey ?? key;
-            // Invitations can change without replacing the entry retained across yields.
-            const visibility =
-              presentation.sharing.sessionCap === "invited" ? undefined : params.visibility;
             let visible = visibility?.get(entry);
             if (visible === undefined) {
-              const selected = getTarget(key)!;
               visible =
                 client === undefined ||
                 (presentation.sharing.entryFilter?.(
                   storeKey,
                   entry,
                   Boolean(
+                    presentation.sharing.sessionCap === "invited" &&
                     presentation.sharing.identity &&
                     projection.hasMembership(
-                      selected.storeTarget.storePath,
+                      getTarget(key)!.storeTarget.storePath,
                       storeKey,
                       presentation.sharing.identity.id,
                     ),
@@ -580,7 +574,7 @@ export async function listProjectedSessions(params: {
             metadataPrepared: true,
           });
         diagnostics?.mark("filterSetup");
-        const select = (retained?: WeakMap<object, SessionListFilteredEntries>) =>
+        const select = (retained?: Map<object, SessionListFilteredEntries>) =>
           withAgentRosterFactsBatch(prepared.cfg, () =>
             selectSessionEntries({
               ...filters,

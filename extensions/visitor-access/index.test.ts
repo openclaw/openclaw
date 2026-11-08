@@ -233,6 +233,9 @@ describe("visitor-access plugin lifecycle", () => {
     };
     plugin.register(api);
     const service = services[0];
+    if (!service || service.apiVersion === 2 || service.apiVersion === 3) {
+      throw new Error("Expected service API version 1");
+    }
     assert(service, "Plugin did not register its expiry service");
     const accessPolicy = accessPolicies[0];
     assert(accessPolicy, "Plugin did not register its Gateway access policy");

@@ -943,12 +943,9 @@ async function createGatewaySessionInScope(
           validateModelSelection:
             validateAccountModel ?? patched.validateModelSelection ?? modelSelection.validate,
         });
-        const accessError = validateSelection();
-        if (accessError) {
-          return { ok: false, error: accessError };
-        }
         const runtimeSelection = await prepareSessionCreateRuntimeSelection({
           request: params,
+          operatorAuthority,
           agentId: target.agentId,
           sessionKey: target.canonicalKey,
           storePath: target.storePath,

@@ -4,7 +4,7 @@
  * Builds no-op tool inventory entries when tests only need schema and naming shape.
  */
 import { Type } from "typebox";
-import type { ClientToolDefinition } from "../embedded-agent-runner/run/params.js";
+import type { ClientToolDefinition } from "../command/shared-types.js";
 import type { AgentTool, AgentToolResult } from "../runtime/index.js";
 
 /** Creates a no-op tool with an empty object schema. */

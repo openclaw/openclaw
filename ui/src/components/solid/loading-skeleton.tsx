@@ -1,5 +1,5 @@
 import type { JSX as SolidJSX } from "@solidjs/web";
-import { onSettled, Repeat, Show } from "solid-js";
+import { onSettled } from "solid-js";
 import {
   bootComposerElement,
   settleBootComposer,
@@ -36,14 +36,21 @@ export function LoadingSkeleton(
     renderContent?: () => SolidJSX.Element;
   } = {},
 ) {
+  let skeleton: HTMLDivElement;
+  onSettled(() => () => {
+    // Retire CSS-owned effects before detachment. Script cancel() leaves their
+    // native records retained in WebKit; keep the boot composer's geometry intact.
+    skeleton.style.setProperty("--skeleton-animation", "none");
+    skeleton.getAnimations({ subtree: true });
+  });
   return (
-    <div class="loading-skeleton">
-      <Show when={!props.messagesOnly && props.header !== false}>
+    <div ref={(element) => (skeleton = element)} class="loading-skeleton">
+      {!props.messagesOnly && props.header !== false ? (
         <div class="loading-skeleton__header" aria-hidden="true">
           <div class="skeleton loading-skeleton__avatar" />
           <div class="skeleton skeleton-line loading-skeleton__title" />
         </div>
-      </Show>
+      ) : null}
       <div
         class={[
           "loading-skeleton__messages",
@@ -73,14 +80,13 @@ export function LoadingSkeleton(
           </>
         )}
       </div>
-      <Show when={!props.messagesOnly}>
-        <Show
-          when={props.composer}
-          fallback={<div class="skeleton loading-skeleton__composer" aria-hidden="true" />}
-        >
+      {!props.messagesOnly ? (
+        props.composer ? (
           <BootComposer />
-        </Show>
-      </Show>
+        ) : (
+          <div class="skeleton loading-skeleton__composer" aria-hidden="true" />
+        )
+      ) : null}
     </div>
   );
 }
@@ -116,19 +122,24 @@ export function ConnectingSplash(props: {
         <aside class="connect-splash__sidebar" aria-hidden="true">
           <div class="skeleton loading-skeleton__avatar" />
           <div class="skeleton connect-splash__new-session" />
-          <Repeat count={6}>{() => <div class="skeleton skeleton-line" />}</Repeat>
+          <div class="skeleton skeleton-line" />
+          <div class="skeleton skeleton-line" />
+          <div class="skeleton skeleton-line" />
+          <div class="skeleton skeleton-line" />
+          <div class="skeleton skeleton-line" />
+          <div class="skeleton skeleton-line" />
         </aside>
         <div class="connect-splash__main">
           <LoadingSkeleton composer={route === "chat"} renderContent={props.renderContent} />
-          <Show when={!props.renderContent}>
+          {props.status && !props.renderContent ? (
             <span
               class="connect-splash__status"
               aria-hidden="true"
               onMouseDown={(event) => event.stopPropagation()}
             >
-              {props.status ?? t("common.loading")}
+              {props.status}
             </span>
-          </Show>
+          ) : null}
         </div>
       </div>
     </main>

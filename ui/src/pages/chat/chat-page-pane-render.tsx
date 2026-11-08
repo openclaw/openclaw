@@ -197,7 +197,7 @@ function ChatPageSession(props: { options: ChatPagePaneRenderOptions; sessionKey
           props.options.splitMode ? parseAgentSessionKey(props.sessionKey)?.agentId : undefined
         }
         routeLoadingSkeleton={routeLoadingSkeleton()}
-        routeResolutionPending={retainedRoute()?.sessionResolutionFromCache === "snapshot"}
+        routeResolutionPending={Boolean(retainedRoute()?.sessionResolutionFromCache)}
         presented={presented()}
         visuallyPresented={presented()}
         active={active()}
