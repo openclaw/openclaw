@@ -1,6 +1,6 @@
 import { mkdir, realpath, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { buildTemplateAddPlan } from "./lifecycle.js";
 import { emptyPluginCapabilityEvidence } from "./packages.test-support.js";
@@ -103,6 +103,21 @@ describe("Template application schema v1", () => {
 });
 
 describe("Template application planning v1", () => {
+  it("defaults a new agent's workspace to the state directory", async () => {
+    const { source } = await createPlanSource();
+    const stateDir = await realpath(tempDirs.make("openclaw-template-state-"));
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+    try {
+      const plan = await buildTemplateAddPlan({
+        manifest: requireManifest({ schemaVersion: 1, agent: { id: "analyst" } }),
+        source,
+      });
+      expect(plan.agent.workspace).toBe(join(stateDir, "workspace-analyst"));
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
   it("allows ordinary sessions_spawn tool authority without model or named delegates", async () => {
     const { source, workspace } = await createPlanSource();
     const plan = await buildTemplateAddPlan({
