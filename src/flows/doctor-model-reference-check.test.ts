@@ -55,15 +55,33 @@ it("uses only prepared Gateway warnings in Doctor", async () => {
     models: [],
     providerOutcomes: [
       { provider: "ollama", status: "ready", unlistedConfiguredModelIds: ["qwen3:8bb"] },
+      { provider: "xai", profileId: "xai:work", status: "auth-rejected" },
+      { provider: "offline", status: "unavailable" },
     ],
   });
   const findings = await detect({});
-  expect(findings.filter((finding) => finding.target === "ollama/qwen3:8bb")).toEqual([
-    expect.objectContaining({
-      severity: "warning",
-      fixHint: expect.stringContaining("Pull or download it on that server"),
-    }),
-  ]);
+  expect(findings).toHaveLength(3);
+  expect(findings[0]).toMatchObject({
+    target: "ollama/qwen3:8bb",
+    severity: "warning",
+    fixHint: expect.stringContaining("Pull or download it on that server"),
+  });
+  expect(findings[1]).toMatchObject({
+    checkId: "core/doctor/model-references",
+    severity: "warning",
+    target: "xai",
+    message: "Model discovery authentication was rejected for xai (profile xai:work).",
+    fixHint:
+      "Open Models in the Control UI to check sign-in and catalog access, then run openclaw models list --refresh.",
+  });
+  expect(findings[2]).toMatchObject({
+    checkId: "core/doctor/model-references",
+    severity: "info",
+    target: "offline",
+    message: "Model discovery is unavailable for offline.",
+    fixHint:
+      "Run openclaw models list --refresh; if it still fails, check the provider in Models in the Control UI.",
+  });
   expect(call).toHaveBeenCalledExactlyOnceWith(
     expect.objectContaining({
       method: "models.list",

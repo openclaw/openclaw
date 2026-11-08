@@ -9,6 +9,8 @@ import { model as createModel, row } from "../../agents/model-catalog-fixtures.t
 import * as openAIModelRoutes from "../../agents/openai-model-routes.js";
 import type { AgentModelConfig } from "../../config/types.agents-shared.js";
 import type { ModelDefinitionConfig, OpenClawConfig } from "../../config/types.js";
+import * as gateway from "../../gateway/call.js";
+import * as gatewayLock from "../../infra/gateway-lock.js";
 import { getCurrentPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata-snapshot.js";
 import { setCurrentPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata.test-support.js";
 import { clearPluginMetadataLifecycleCaches } from "../../plugins/plugin-metadata-lifecycle.js";
@@ -811,6 +813,31 @@ describe("modelsStatusCommand auth overview", () => {
     });
     expectText(output, "Default (defaults)", `Fallbacks (${fallbacks.length}) (defaults)`);
     expect(mocks.ensureAuthProfileStore).toHaveBeenLastCalledWith("/tmp/openclaw-agent");
+  });
+
+  it("reports rejected and unavailable provider catalog outcomes", async () => {
+    vi.spyOn(gateway, "isImplicitLocalGatewayTarget").mockResolvedValue(true);
+    vi.spyOn(gatewayLock, "readActiveGatewayLockIdentity").mockResolvedValue({
+      pid: 123,
+      port: 19568,
+      createdAt: "fixture",
+    });
+    vi.spyOn(gateway, "callGateway").mockResolvedValue({
+      models: [],
+      providerOutcomes: [
+        { provider: "xai", profileId: "xai:work", status: "auth-rejected" },
+        { provider: "offline", status: "unavailable" },
+      ],
+    });
+
+    const { runtime: localRuntime, payload } = await jsonStatus();
+    expect(localRuntime.error.mock.calls.flat()).toEqual([
+      "Model discovery authentication was rejected for xai (profile xai:work). Open Models in the Control UI to check sign-in and catalog access, then run openclaw models list --refresh.",
+      "Model discovery is unavailable for offline. Run openclaw models list --refresh; if it still fails, check the provider in Models in the Control UI.",
+    ]);
+    expect(localRuntime.log).toHaveBeenCalledOnce();
+    expect(payload).not.toHaveProperty("providerOutcomes");
+    expect(String(localRuntime.log.mock.calls[0]?.[0])).not.toContain("Model discovery");
   });
 
   it("exits non-zero when auth is missing", async () => {

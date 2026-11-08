@@ -40,11 +40,26 @@ export function getModelCatalogWarnings(result: ModelsListResult | undefined) {
       outcome.status === "ready"
         ? (outcome.unlistedConfiguredModelIds ?? []).map((modelId) => ({
             ref: `${outcome.provider}/${modelId}`,
+            status: outcome.status,
             message: `Configured model "${sanitizeTerminalText(`${outcome.provider}/${modelId}`)}" is not present in the provider's last successful server catalog${outcome.profileId ? ` (profile ${sanitizeTerminalText(outcome.profileId)})` : ""}.`,
             fixHint:
               "Pull or download it on that server, or fix the configured model name; then run openclaw models list --refresh. The model remains selectable.",
           }))
-        : [],
+        : [
+            {
+              ref: outcome.provider,
+              status: outcome.status,
+              message: `${
+                outcome.status === "auth-rejected"
+                  ? "Model discovery authentication was rejected"
+                  : "Model discovery is unavailable"
+              } for ${sanitizeTerminalText(outcome.provider)}${outcome.profileId ? ` (profile ${sanitizeTerminalText(outcome.profileId)})` : ""}.`,
+              fixHint:
+                outcome.status === "auth-rejected"
+                  ? "Open Models in the Control UI to check sign-in and catalog access, then run openclaw models list --refresh."
+                  : "Run openclaw models list --refresh; if it still fails, check the provider in Models in the Control UI.",
+            },
+          ],
     ) ?? []
   );
 }

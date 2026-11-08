@@ -166,6 +166,8 @@ prepared catalog. Models it publishes do not receive an offline-catalog advisory
 server-reported missing models and legacy-reference migrations still do. If the
 Gateway is unavailable, Doctor keeps its offline checks without discovering or
 probing providers.
+The check also reports provider catalog discovery that the Gateway recorded as rejected
+(warning) or unavailable (info), with `openclaw models list --refresh` as the retry step.
 
 `doctor --fix` does not use the lint default profile and does not accept
 `--all`. It runs Doctor's ordered repair path: modern health checks may provide
