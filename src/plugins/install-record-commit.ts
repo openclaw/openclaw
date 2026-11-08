@@ -24,6 +24,7 @@ import { copyRuntimeConfigWriteApplication } from "../config/runtime-write-appli
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { composeConfigWriteAssertions } from "../config/write-authority.js";
+import { realpathViaExistingPrefixSync } from "../infra/path-containment.js";
 import { isPathInside } from "../infra/path-guards.js";
 import { resolveDefaultPluginNpmDir, resolvePluginNpmProjectsDir } from "./install-paths.js";
 import { resolveInstalledPluginIndexInstallOwner } from "./installed-plugin-index-install-owner.js";
@@ -125,21 +126,13 @@ function isMissingInstallPathError(error: unknown): boolean {
   return code === "ENOENT" || code === "ENOTDIR";
 }
 
-function resolveExistingInstallPath(installPath: string): string {
-  const resolvedPath = path.resolve(installPath);
-  try {
-    return fs.realpathSync(resolvedPath);
-  } catch (error) {
-    if (isMissingInstallPathError(error)) {
-      return resolvedPath;
-    }
-    throw error;
-  }
-}
-
 function installPathsOverlap(left: string, right: string): boolean {
-  const resolvedLeft = resolveExistingInstallPath(left);
-  const resolvedRight = resolveExistingInstallPath(right);
+  const resolvedLeft = realpathViaExistingPrefixSync(path.resolve(left));
+  const resolvedRight = realpathViaExistingPrefixSync(path.resolve(right));
+  if (!resolvedLeft || !resolvedRight) {
+    // Unknowable spelling: treat as overlapping so the active install is never retired.
+    return true;
+  }
   return (
     resolvedLeft === resolvedRight ||
     isPathInside(resolvedLeft, resolvedRight) ||

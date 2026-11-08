@@ -513,6 +513,23 @@ describe("cleanup path removals", () => {
     await expect(fs.stat(cacheFile)).rejects.toThrow();
   });
 
+  it.runIf(process.platform !== "win32")(
+    "preserves a workspace spelled through a state-dir alias",
+    async () => {
+      // Config names ~/.openclaw/workspace while OPENCLAW_STATE_DIR is the real directory.
+      const { tmpRoot, stateDir, remove } = await cleanupFixture();
+      const alias = path.join(tmpRoot, "state-alias");
+      await fs.symlink(stateDir, alias);
+      const workspaceFile = path.join(stateDir, "workspace", "project.txt");
+      await fs.mkdir(path.dirname(workspaceFile));
+      await fs.writeFile(workspaceFile, "keep me");
+      await fs.writeFile(path.join(stateDir, "cache.json"), "remove me");
+      await remove({}, { preservePaths: [path.join(alias, "workspace")] });
+      await expect(fs.readFile(workspaceFile, "utf8")).resolves.toBe("keep me");
+      await expect(fs.stat(path.join(stateDir, "cache.json"))).rejects.toThrow();
+    },
+  );
+
   it.each(["remove", "preview", "failure"] as const)(
     "settles workspace rows after filesystem %s",
     async (operation) => {
