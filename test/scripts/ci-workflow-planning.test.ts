@@ -13929,7 +13929,11 @@ describe("shared test-source check execution", () => {
     expect(manifest.status, manifest.output).toBe(0);
     const input = readJsonOutput(manifest.outputs, "check_plan_input_json");
     expect(input.preserveFullChecks).toBe(false);
-    expect(input.typeGraphBoundaryOwner).toBe("additional-checks");
+    expect(input.typeGraphBoundaryOwner).toBe(
+      changedPaths.every((file) => file.startsWith("extensions/"))
+        ? "additional-checks"
+        : "check-plan",
+    );
     const rows = readJsonOutput(manifest.checkPlanOutputs, "check_matrix").include;
     expect(
       rows.flatMap((row: { type_graph_names_json?: string }) =>
