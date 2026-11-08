@@ -463,6 +463,7 @@ export function createPdfTool(options?: {
                   : undefined;
             if (analyzePdf) {
               const text = await analyzePdf({
+                model,
                 apiKey,
                 modelId,
                 prompt: promptRaw,

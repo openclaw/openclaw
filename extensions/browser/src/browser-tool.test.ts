@@ -2009,17 +2009,22 @@ describe("browser observation actions and tab previews", () => {
   it.each<{
     format: "ai" | "aria";
     query: string;
+    name?: string;
     maxChars?: number;
     outcome: "matching" | "empty" | "capped";
   }>([
     { format: "aria", query: "  IN\tSIGN ", outcome: "matching" },
+    { format: "ai", query: "CAFÉ", name: "Cafe\u0301", outcome: "matching" },
+    { format: "aria", query: "CAFE\u0301", name: "Café", outcome: "matching" },
+    { format: "ai", query: "ǰ", name: "J\u030c", outcome: "matching" },
+    { format: "aria", query: "cafe", name: "Cafe\u0301", outcome: "empty" },
     { format: "ai", query: "not found", outcome: "empty" },
-    { format: "ai", query: "sign", maxChars: 5, outcome: "capped" },
+    { format: "ai", query: "sign in", maxChars: 5, outcome: "capped" },
   ])(
     "filters $format snapshot queries with $outcome results and current stats",
-    async ({ format, query, maxChars, outcome }) => {
+    async ({ format, query, name = "Sign in", maxChars, outcome }) => {
       const snapshotNodes = [
-        { ref: "e1", role: "button", name: "Sign in" },
+        { ref: "e1", role: "button", name },
         { ref: "e2", role: "button", name: "Sign out" },
       ];
       client.browserSnapshot.mockResolvedValueOnce({
@@ -2030,37 +2035,22 @@ describe("browser observation actions and tab previews", () => {
         ...(format === "aria"
           ? { nodes: snapshotNodes }
           : {
-              snapshot:
-                outcome === "matching"
-                  ? '- button "Sign in" [ref=e1]\n- button "Sign out" [ref=e2]'
-                  : '- button "Sign in" [ref=e1]',
-              ...(outcome === "empty"
-                ? {
-                    stats: { lines: 1, chars: 25, refs: 1, interactive: 1 },
-                  }
-                : outcome === "capped"
-                  ? {
-                      refs: { e1: { role: "button" } },
-                    }
-                  : {
-                      refs: Object.fromEntries(snapshotNodes.map((node) => [node.ref, node])),
-                      stats: { lines: 2, chars: 100, refs: 2, interactive: 2 },
-                    }),
+              snapshot: `- button ${JSON.stringify(name)} [ref=e1]\n- button "Sign out" [ref=e2]`,
+              refs: Object.fromEntries(snapshotNodes.map((node) => [node.ref, node])),
+              stats: { lines: 2, chars: 100, refs: 2, interactive: 2 },
             }),
       });
       const result = await execute({
         action: "snapshot",
         query,
-        ...(outcome === "matching" ? { snapshotFormat: format } : {}),
+        snapshotFormat: format,
         ...(maxChars !== undefined ? { maxChars } : {}),
       });
       if (outcome === "matching") {
-        const text = result.content
-          .filter((item) => item.type === "text")
-          .map((item) => item.text)
-          .join("\n");
+        const text = firstResultText(result);
         expect(text).toContain("1 matching line");
         expect(text).toContain("[ref=e1]");
+        expect(text).toContain(name);
         expect(text).not.toContain("[ref=e2]");
         expect(result.details).toMatchObject({
           matchCount: 1,

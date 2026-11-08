@@ -19,6 +19,7 @@ import {
 import { nativeGatewaysCapability } from "../../app/native-gateways.runtime.ts";
 import { InlineAlert } from "../../components/solid/inline-alert.tsx";
 import { LoadingState } from "../../components/solid/loading-state.tsx";
+import { i18n } from "../../i18n/lib/translate.ts";
 import { isChatControlCommand } from "../../lib/chat/commands.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { cancelLayout, yieldAfterLayout } from "../../lib/layout-frame.ts";
@@ -193,8 +194,9 @@ export function createChatPaneView(runtime: ChatPaneRuntime) {
         sessionKey: initialState.sessionKey,
       }),
     );
-    // Only document boot has a retained composer frame; route handoffs must stay continuous.
-    if (!initialCachedSession && bootComposerElement()) {
+    // Split localized cached panes too, after their catalogs are ready. Only
+    // document boot has a retained composer; route handoffs stay immediate.
+    if ((!initialCachedSession || i18n.getLocale() !== "en") && bootComposerElement()) {
       pendingLayout = yieldAfterLayout(runtime);
     }
     if (!pendingLayout) {
