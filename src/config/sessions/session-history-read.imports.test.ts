@@ -75,6 +75,13 @@ it.each([
     sessions("accessor.transcript-target entry-read-result.worker"),
     sessions("accessor.entry accessor.sqlite-entry"),
   ],
+  [
+    "entry patch publication",
+    sessions("entry-patch.worker"),
+    sessions(
+      "accessor.sqlite-maintenance-store accessor.sqlite-archive-store-kernel accessor.sqlite-transcript-store",
+    ),
+  ],
 ] as const)("keeps the %s import boundary", (_name, roots, forbidden) => {
   expect(findSourceImportBackedges(roots, forbidden)).toEqual([]);
 });
