@@ -87,9 +87,6 @@ function currentPollScope(): object | undefined {
 
 function resolveLogSliceWindow(offset?: number, limit?: number) {
   const usingDefaultTail = offset === undefined && limit === undefined;
-  // Match the read tool's native-reader contract: non-positive limits clamp to one
-  // line. A negative limit must not silently page past every line and report the
-  // session as having no output.
   const effectiveLimit =
     typeof limit === "number" && Number.isFinite(limit)
       ? Math.max(1, Math.floor(limit))
