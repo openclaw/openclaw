@@ -163,3 +163,27 @@ it("keeps an explicit incompatible OAuth binding terminal despite another API ke
   });
   expect(resolveProfile).not.toHaveBeenCalled();
 });
+
+it("skips a Free ChatGPT plan for image generation so an API key can serve it", async () => {
+  await prepareSharedAuthStoreOwnership();
+  const store = authStore({
+    "openai:chatgpt": createOAuthRefreshCredential({
+      chatgptPlanType: "free",
+      expires: Date.now() + 3_600_000,
+    }),
+  });
+  await withEnvAsync({ OPENAI_API_KEY: "platform-env-key" }, async () => {
+    await expect(
+      resolveApiKeyForProviderCore({ provider: "openai", capability: "image-generation", store }),
+    ).resolves.toMatchObject({ apiKey: "platform-env-key", mode: "api-key" });
+  });
+  await expect(
+    resolveApiKeyForProviderCore({
+      provider: "openai",
+      capability: "image-generation",
+      profileId: "openai:chatgpt",
+      lockedProfile: true,
+      store,
+    }),
+  ).rejects.toThrow(/not included in the Free ChatGPT plan/);
+});
