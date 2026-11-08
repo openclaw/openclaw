@@ -1,3 +1,5 @@
+import { PassThrough } from "node:stream";
+import { multiselect } from "@clack/prompts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -242,6 +244,47 @@ describe("setupSkills", () => {
       });
     },
   );
+
+  it("finishes on Enter without installing, like the other optional setup steps", async () => {
+    mockMissingBrewStatus([createNodeSkill()]);
+    const input = new PassThrough();
+    const output = new PassThrough();
+    output.resume();
+    let promptOpen = false;
+    const prompter = makePrompter({
+      // The real Clack prompt rejects an empty selection, so Enter must find a ticked option.
+      multiselect: async (params) => {
+        promptOpen = true;
+        const answer = multiselect({
+          message: params.message,
+          options: params.options.map((option) => ({
+            value: option,
+            label: option.label,
+            hint: option.hint,
+          })),
+          initialValues: params.options.filter((option) =>
+            params.initialValues?.includes(option.value),
+          ),
+          input,
+          output,
+        });
+        setImmediate(() => input.write("\r"));
+        const selected = await answer;
+        if (typeof selected === "symbol") {
+          throw new Error("Skills prompt was cancelled");
+        }
+        return selected.map((option) => option.value);
+      },
+    });
+
+    const done = setupSkills({}, "/tmp/ws", runtime, prompter);
+    const stillOpen = new Promise<"open">((resolve) => {
+      setTimeout(() => resolve("open"), 1_000);
+    });
+    await expect(Promise.race([done.then(() => "done"), stillOpen])).resolves.toBe("done");
+    expect(promptOpen).toBe(true);
+    expect(mocks.installSkill).not.toHaveBeenCalled();
+  });
 
   it("installs only the bundled dependencies selected by the user", async () => {
     mockMissingBrewStatus([

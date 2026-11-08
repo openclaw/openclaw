@@ -155,6 +155,8 @@ export async function setupSkills(
           hint: formatSkillHint(skill),
         })),
       ],
+      // The prompt rejects an empty selection; start on Skip so Enter skips, as in other steps.
+      initialValues: ["__skip__"],
     });
     const selectedNames = selected.filter((name) => name !== "__skip__");
     const selectedSkills = selectedNames
