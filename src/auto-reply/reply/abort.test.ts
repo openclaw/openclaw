@@ -234,6 +234,10 @@ describe("abort detection", () => {
   });
 
   it("isAbortRequestText aligns abort command semantics", () => {
+    const started = performance.now();
+    expect(isAbortRequestText(`stop${"!".repeat(40_000)}`)).toBe(true);
+    expect(isAbortRequestText(`${"!".repeat(40_000)}a`)).toBe(false);
+    expect(performance.now() - started).toBeLessThan(500);
     expect(isAbortRequestText("/stop")).toBe(true);
     expect(isAbortRequestText("/STOP")).toBe(true);
     expect(isAbortRequestText("/stop!!!")).toBe(true);
