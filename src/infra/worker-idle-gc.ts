@@ -3,8 +3,9 @@ import { isMainThread } from "node:worker_threads";
 
 const IDLE_GC_DELAY_MS = 1_000;
 const IDLE_GC_GROWTH_BYTES = 32 * 1024 * 1024;
+const bun = (globalThis as typeof globalThis & { Bun?: { gc(full: boolean): unknown } }).Bun;
 let collectedMemory = { heapUsed: 0, external: 0 };
-let session: Session | null | undefined;
+let session: Session | undefined;
 let pending: NodeJS.Timeout | undefined;
 let collecting = false;
 
@@ -24,22 +25,22 @@ async function collectWorkerIdleGarbage(): Promise<void> {
   }
   collecting = true;
   try {
-    if (!session) {
-      const connection = new Session();
-      connection.connect();
-      // Keep the local session until worker teardown. Disconnecting during GC
-      // completion deadlocks V8 and tears down other profiler state.
-      session = connection;
+    if (bun) {
+      bun.gc(true);
+    } else {
+      if (!session) {
+        const connection = new Session();
+        connection.connect();
+        // Keep the local session until worker teardown. Disconnecting during GC
+        // completion deadlocks V8 and tears down other profiler state.
+        session = connection;
+      }
+      await session.post("HeapProfiler.collectGarbage");
     }
-    await session.post("HeapProfiler.collectGarbage");
     // A task overlapping collection can leave garbage until the next idle growth sample.
     collectedMemory = process.memoryUsage();
   } catch (error) {
-    if (error instanceof Error && error.message.startsWith("Inspector error -32601:")) {
-      session = null;
-    } else {
-      process.emitWarning(error instanceof Error ? error : String(error));
-    }
+    process.emitWarning(error instanceof Error ? error : String(error));
   } finally {
     collecting = false;
   }
@@ -47,10 +48,7 @@ async function collectWorkerIdleGarbage(): Promise<void> {
 
 /** Only native worker owners call this after releasing their operation's payloads. */
 export function scheduleWorkerIdleGc(): void {
-  if (isMainThread || session === null) {
-    return;
-  }
-  if (pending || collecting) {
+  if (isMainThread || pending || collecting) {
     return;
   }
   if (!hasIdleGarbageGrowth()) {
