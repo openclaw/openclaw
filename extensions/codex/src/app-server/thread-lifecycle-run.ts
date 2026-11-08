@@ -487,11 +487,15 @@ export async function startOrResumeThread(
     // carries the uninformed plan (support silence), not an operator policy
     // choice. When the probe later resolves with a definitive verdict, adopt
     // the informed fingerprint on the existing thread instead of replacing it:
-    // a replacement re-sends the full selected history. Genuine policy edits
-    // move the plan away from the uninformed shape and still rotate below.
+    // a replacement re-sends the full selected history. The stored fingerprint
+    // alone cannot prove that: an explicit search denial produces the same
+    // disabled shape, so settlement also requires the recorded request fact.
+    // Legacy bindings without it, and genuine policy edits (requested=false
+    // then re-enabled), still rotate below.
     const coldWebSearchSupportSettled =
       Boolean(binding?.threadId) &&
       Boolean(webSearchBindingChanged) &&
+      binding?.webSearchRequested === true &&
       binding?.webSearchThreadConfigFingerprint === webSearchUninformedThreadConfigFingerprint &&
       webSearchThreadConfigFingerprint !== webSearchUninformedThreadConfigFingerprint;
     if (

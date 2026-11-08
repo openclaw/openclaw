@@ -319,6 +319,9 @@ export async function resumeExistingCodexThread(
       ),
       ...buildCodexThreadBindingPolicy(params, context),
       webSearchThreadConfigFingerprint,
+      // Record why the plan can be disabled: explicit operator denial is a
+      // durable policy edit, not a cold capability verdict.
+      webSearchRequested: params.webSearchAllowed === true,
       mcpServersFingerprint:
         params.mcpServersFingerprintEvaluated === true
           ? params.mcpServersFingerprint
@@ -644,6 +647,7 @@ export async function startFreshCodexThread(
     const nextBinding: CodexAppServerThreadBinding = {
       ...startedBinding,
       webSearchThreadConfigFingerprint,
+      webSearchRequested: params.webSearchAllowed === true,
       nativeToolPolicyRestricted: restrictedToolSurface ? true : undefined,
     };
     const managedSourceHomeId = codexCatalogHomeId(
