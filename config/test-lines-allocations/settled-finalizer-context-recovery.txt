@@ -1,4 +1,4 @@
 # PR #195365: distinct regressions for mid-turn overflow, final-answer context,
 # and preservation of fresh tool results when the final request fits.
 # Retire this allocation with the coverage; keep the shared baseline unchanged.
-248
+251

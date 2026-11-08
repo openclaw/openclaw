@@ -271,11 +271,14 @@ it("keeps fresh tool results when the final-answer request fits", async () => {
   const selected = fixture.agent.state.messages;
   expect(selected).toHaveLength(history.length);
   expect(
-    selected.every((message, index) =>
-      message.role === "toolResult"
-        ? JSON.stringify(message.content) === JSON.stringify(history[index]?.content)
-        : true,
-    ),
+    selected.every((message, index) => {
+      const expected = history[index];
+      return (
+        message.role !== "toolResult" ||
+        (expected?.role === "toolResult" &&
+          JSON.stringify(message.content) === JSON.stringify(expected.content))
+      );
+    }),
   ).toBe(true);
   expect(
     Math.ceil(
