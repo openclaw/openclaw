@@ -595,10 +595,16 @@ function createTalkSettings(context: ApplicationContext, props: TalkSettingsPage
       ).model ?? option?.defaultModel;
     const family = resolveTalkModelFamilySettings(option, targetModel ?? null);
     const unsupportedTransports = family?.unsupportedTransports ?? [];
+    const relayUnavailable =
+      configuredTransport === "gateway-relay" &&
+      option?.configured === false &&
+      option.supportsBrowserSession === true &&
+      Boolean(option.transports?.some((transport) => transport === "webrtc"));
     const rejectsTransport =
       configuredTransport !== null &&
       (family?.unsupportedTransports.some((candidate) => candidate === configuredTransport) ||
-        talkProviderRejectsTransport(option?.transports, configuredTransport));
+        talkProviderRejectsTransport(option?.transports, configuredTransport) ||
+        relayUnavailable);
     const supportedTransports = option?.transports?.filter(
       (transport) => !unsupportedTransports.some((candidate) => candidate === transport),
     );

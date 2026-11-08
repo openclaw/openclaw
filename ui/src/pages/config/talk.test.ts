@@ -936,7 +936,18 @@ describe("TalkSettingsPage realtime transport mutation", () => {
       ["transport"],
       null,
     ],
-    ["positive rejection", { transports: ["webrtc"] }, null, [], null],
+    ["positive rejection", { transports: ["webrtc"] }, null, [], "webrtc"],
+    [
+      "relay not configured for target provider",
+      {
+        transport: "gateway-relay",
+        transports: ["webrtc", "gateway-relay"],
+        providerOption: { configured: false, supportsBrowserSession: true },
+      },
+      null,
+      [],
+      "webrtc",
+    ],
     [
       "compatible family fallback",
       { transport: "gateway-relay", transports: ["provider-websocket", "webrtc"] },
