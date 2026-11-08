@@ -1,3 +1,0 @@
-# Entry patch publication excludes transcript-write and maintenance startup imports.
-# Seven regression lines minus two lines removed by publication-owner import consolidation.
-5
