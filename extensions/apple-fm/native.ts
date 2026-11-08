@@ -166,8 +166,6 @@ export function createAppleFmNative(pluginRoot: string) {
         "swiftc",
         "-parse-as-library",
         optimization,
-        // Passive discovery needs only model facts, not the inference/tool bridge.
-        ...(optimization === "-Onone" ? ["-D", "OPENCLAW_INFO_ONLY"] : []),
         "-target",
         "arm64-apple-macos27.0",
         SOURCE,
