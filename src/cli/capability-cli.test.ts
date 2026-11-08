@@ -988,7 +988,7 @@ describe("capability cli", () => {
         }
         if (kind.startsWith("tts")) {
           const command = kind === "tts" ? ["convert", "--text", "hello"] : [kind.slice(4)];
-          return runCapability("tts", ...command, "--gateway", "--json");
+          return runCap("capability", "tts", ...command, "--gateway", "--json");
         }
         return runModelProbe(...(kind === "gateway" ? ["--gateway"] : []));
       });
