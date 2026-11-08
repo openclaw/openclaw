@@ -1065,6 +1065,23 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
     },
   );
 
+  it("carries the prepared script binding into the authenticated native request", async () => {
+    const tmp = fixtureDir("openclaw-native-script-binding-");
+    const fixture = createMutableScriptOperandFixture(tmp);
+    fs.writeFileSync(fixture.scriptPath, fixture.initialBody);
+    const prepared = prepareCwd(fixture.command, tmp);
+    requireApprovalPlan(prepared, "script must have a prepared binding");
+    const invoke = await runMac({
+      preparedPlan: prepared.plan,
+      approved: true,
+      runViaResponse: macSuccess(),
+    });
+    expect(readMacCall(invoke.requestExecHost).request.mutableFileOperand).toEqual(
+      prepared.plan.mutableFileOperand,
+    );
+    expect(prepared.plan.mutableFileOperand).toBeDefined();
+  });
+
   it("revalidates approved script operands after authorization commit", async () => {
     const tmp = fixtureDir("openclaw-approval-script-post-commit-drift-");
     const fixture = createMutableScriptOperandFixture(tmp);

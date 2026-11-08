@@ -908,7 +908,8 @@ it.each(["exact-command", "patterns"] as const)(
   async (kind) => {
     rawPolicyReadable = false;
     resolveDecision({ decision: "deny" });
-    const commandText = formatExecCommand(buildNodeShellCommand(request.command, "darwin"));
+    // Seed the shipped shell transport, not this candidate's command builder.
+    const commandText = formatExecCommand(["/bin/sh", "-c", request.command]);
     const file = applyAllowAlwaysDecision({
       file: { version: 1, defaults: { security: "allowlist", ask: "on-miss" } },
       agentId: "main",

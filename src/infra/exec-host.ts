@@ -2,6 +2,7 @@
 import crypto from "node:crypto";
 import { addTimerTimeoutGraceMs } from "@openclaw/normalization-core/number-coercion";
 import type { NodePermissionDetails } from "../../packages/gateway-protocol/src/node-permissions.js";
+import type { SystemRunApprovalFileOperand } from "./exec-approvals-core.js";
 import type { ExecApprovalPolicySnapshot } from "./exec-approvals.js";
 import { requestJsonlSocket } from "./jsonl-socket.js";
 
@@ -25,6 +26,7 @@ export type ExecHostRequest = {
   approvalDecision?: "allow-once" | "allow-always" | null;
   approvalSource?: "ask-fallback" | "auto-review" | null;
   policySnapshot?: ExecApprovalPolicySnapshot | null;
+  mutableFileOperand?: SystemRunApprovalFileOperand;
 };
 
 export type ExecHostRunResult = {

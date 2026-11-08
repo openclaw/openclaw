@@ -750,6 +750,7 @@ async function executeSystemRunPhase(
       sessionKey: phase.sessionKey ?? null,
       approvalDecision: macApprovalDecision,
       approvalSource: macApprovalSource,
+      mutableFileOperand: phase.approvalPlan?.mutableFileOperand ?? undefined,
       ...(phase.approvalGrantSource ? { policySnapshot: phase.evaluationPolicySnapshot } : {}),
     };
     const response = await requestExecHostViaSocket({

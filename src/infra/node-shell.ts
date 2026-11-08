@@ -10,9 +10,11 @@ export function buildNodeShellCommand(command: string, platform?: string | null)
     return ["cmd.exe", "/d", "/s", "/c", command];
   }
   if (normalized === "darwin" || normalized.startsWith("macos")) {
-    // Keep literal commands direct so preparation can bind a script operand.
-    // Canonical spacing preserves rawCommand equality; a final newline is not literal.
-    const literal = command.match(/^\/[A-Za-z0-9_./-]+(?: [A-Za-z0-9_./:=,@%+-]+)*$/u)?.[0];
+    // Only unwrap the direct interpreter/file shape that protected shell preparation
+    // cannot admit. Keep working native commands on their shipped approval identity.
+    const literal = command.match(
+      /^\/(?:[A-Za-z0-9_.-]+\/)*(?:node|nodejs|python(?:\d+(?:\.\d+)*)?|perl|php|ruby) \/[A-Za-z0-9_./-]+(?: [A-Za-z0-9_./:=,@%+-]+)*$/u,
+    )?.[0];
     if (literal === command) {
       return command.split(" ");
     }

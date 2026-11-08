@@ -17,18 +17,18 @@ it.each([
 });
 
 it.each([
-  "/bin/echo $HOME",
-  "/bin/echo $(id)",
-  "/bin/echo *.txt",
-  '/bin/echo "two words"',
-  "/bin/echo x; /usr/bin/id",
-  "/bin/echo x | /bin/cat",
-  "/bin/echo x > output.txt",
-  "/bin/echo x # comment",
-  "/bin/echo  x",
-  "/bin/echo\tx",
-  "/bin/echo x\n",
-  "/bin/echo x\r\n",
+  "/usr/bin/node /tmp/script.cjs $HOME",
+  "/usr/bin/node /tmp/script.cjs $(id)",
+  "/usr/bin/node /tmp/script.cjs *.txt",
+  '/usr/bin/node /tmp/script.cjs "two words"',
+  "/usr/bin/node /tmp/script.cjs x; /usr/bin/id",
+  "/usr/bin/node /tmp/script.cjs x | /bin/cat",
+  "/usr/bin/node /tmp/script.cjs x > output.txt",
+  "/usr/bin/node /tmp/script.cjs x # comment",
+  "/usr/bin/node /tmp/script.cjs  x",
+  "/usr/bin/node /tmp/script.cjs\tx",
+  "/usr/bin/node /tmp/script.cjs x\n",
+  "/usr/bin/node /tmp/script.cjs x\r\n",
 ])("preserves Mac shell semantics for %j", (command) => {
   expect(buildNodeShellCommand(command, "darwin")).toEqual(["/bin/sh", "-c", command]);
 });
@@ -47,4 +47,9 @@ it("keeps Windows transport for literal absolute commands", () => {
     "/c",
     command,
   ]);
+});
+
+it("keeps native commands on the persisted shell approval identity", () => {
+  const command = "/usr/bin/printf node-policy-proof";
+  expect(buildNodeShellCommand(command, "darwin")).toEqual(["/bin/sh", "-c", command]);
 });
