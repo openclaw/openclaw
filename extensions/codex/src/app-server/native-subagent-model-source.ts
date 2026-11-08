@@ -130,6 +130,7 @@ export function retainNativeModelExecution(
     configurationQualification: owner.configurationQualification,
     unqualifiedModelExecution: owner.unqualifiedModelExecution,
     interruptModelExecution: owner.interruptModelExecution,
+    claimDirectChild: owner.claimDirectChild,
   };
   try {
     nativeOwner.completionCustody = completionCustody?.retain();

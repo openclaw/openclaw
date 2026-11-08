@@ -180,6 +180,9 @@ export class CodexNativeSubagentAdmissionCustody {
       },
     ) => ChildState | undefined,
   ): ChildState | undefined {
+    if (owner?.modelExecutionCancelled) {
+      return undefined;
+    }
     const childState = registerChild({
       ...(evidence.agentPath === undefined ? {} : { agentPath: evidence.agentPath }),
       nativeParentThreadId: evidence.nativeParentThreadId,
