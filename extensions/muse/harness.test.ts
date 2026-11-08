@@ -645,6 +645,24 @@ describe("Muse native MSP harness", () => {
     );
   });
 
+  it("keeps a typed Muse quota stop classified as rate_limit regardless of wording", async () => {
+    const { run } = setup();
+    const result = await run({ prompt: "quota" });
+    expectFailure(result, "Request stopped for this account.");
+    expect(terminal(result)).toMatchObject({
+      kind: "failed",
+      error: expect.objectContaining({ status: 429, code: "muse_code_quota" }),
+    });
+  });
+
+  it("does not invent a failover status for untyped Muse failures", async () => {
+    const { run } = setup();
+    const result = await run({ prompt: "fail" });
+    expectFailure(result, "fixture provider rejected authentication");
+    expect(terminal(result).kind).toBe("failed");
+    expect(terminal(result)).not.toMatchObject({ error: { status: 429 } });
+  });
+
   it("treats an unlimited Gateway budget as no deadline and bounds the approval wait", async () => {
     const { params, run } = setup();
     const result = await run({ prompt: "approval", timeoutMs: 2 ** 31 });
