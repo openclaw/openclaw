@@ -104,7 +104,7 @@ export function createModelProviders(
     },
   });
   const refreshPolicy = new UsageRefreshPolicy({
-    isLoading: () => loaderPending || !routeDataObserved || core.loading || supplemental.loading,
+    isLoading: () => loaderPending || !routeDataObserved || supplemental.loading,
     reload: () => supplemental.loadUsage(),
     onIncompleteUsageExhausted: notify,
   });

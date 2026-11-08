@@ -9,14 +9,77 @@ import {
   createAuthStatus,
   createHarness,
   drainPageUpdates,
+  focusDocument,
   requestCount,
   waitForProviders,
 } from "./model-providers-page.test-support.tsx";
 
 afterEach(() => {
   document.body.replaceChildren();
+  vi.useRealTimers();
   vi.restoreAllMocks();
 });
+
+it.each(["refreshing", "error"] as const)(
+  "recovers %s usage while the refreshed catalog remains pending",
+  async (incomplete) => {
+    vi.useFakeTimers();
+    focusDocument();
+    const h = createHarness("main");
+    const original = h.request.getMockImplementation()!;
+    const pending = createDeferred<ModelCatalogResult>();
+    let refreshing = false;
+    let usageReads = 0;
+    h.request.mockImplementation(async (method: string) => {
+      if (method === "models.authStatus") {
+        return createAuthStatus();
+      }
+      if (method === "models.list") {
+        return refreshing ? pending.promise : catalog;
+      }
+      if (method === "usage.status" && refreshing) {
+        if (++usageReads === 1) {
+          if (incomplete === "error") {
+            throw new Error("Usage temporarily unavailable");
+          }
+          return { updatedAt: 2, providers: [], refreshing: true };
+        }
+        return {
+          updatedAt: 3,
+          providers: [
+            { provider: "openai", displayName: "OpenAI", plan: "Recovered", windows: [] },
+          ],
+        };
+      }
+      return original(method);
+    });
+    const page = appendPage(h.context);
+    await waitForProviders(page);
+    await waitForSolid(() => expect(page.view.props.refreshing).toBe(false));
+    await drainPageUpdates(page);
+    const initialReads = requestCount(h.request, "usage.status");
+    refreshing = true;
+    try {
+      page.view.props.onRefresh();
+      await drainPageUpdates(page);
+      expect(usageReads).toBe(1);
+      await vi.advanceTimersByTimeAsync(5_000);
+      await waitForSolid(() => {
+        expect(requestCount(h.request, "usage.status")).toBe(initialReads + 2);
+        expect(page.querySelector(".provider-row__plan")?.textContent).toBe("Recovered");
+        expect(page.view.props.providerUsageFailed).toBe(false);
+        expect(page.view.props.catalogDiscovering).toBe(true);
+        expect(page.view.props.refreshing).toBe(true);
+        expect(
+          page.querySelector<HTMLButtonElement>(".model-providers__refresh-button")?.disabled,
+        ).toBe(true);
+      });
+    } finally {
+      pending.resolve(catalog);
+    }
+    await waitForSolid(() => expect(page.view.props.refreshing).toBe(false));
+  },
+);
 
 const catalog: ModelCatalogResult = {
   models: [{ id: "fixture", name: "Fixture", provider: "openai", available: true }],
