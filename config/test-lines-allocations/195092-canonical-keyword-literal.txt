@@ -2,6 +2,8 @@
 # proving NFC/NFD queries reach either stored spelling, a partially normalized Hangul literal
 # still matches the unchanged index, a multi-token query mixing NFC and NFD across its words
 # (the reported Greek case) matches the record storing that exact mixed spelling in all and
-# phrase modes, records and snippet offsets stay verbatim, and unaccented queries do not fold
-# accents. All directions fail on base; no cheaper layer proves it.
-105
+# phrase modes, a uniformly spelled all/any query still reaches a record mixing NFC and NFD
+# across its words (per-word spelling alternatives), records and snippet offsets stay
+# verbatim, and unaccented queries do not fold accents. All directions fail on base; no
+# cheaper layer proves it.
+119

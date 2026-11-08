@@ -33,12 +33,13 @@ tokens; `OR`, `NOT`, column syntax, and quotes are not executed as FTS syntax.
 Matching is case- and diacritic-insensitive. There is no stemming, prefix search,
 or language-specific segmentation, so unsegmented CJK substrings may not match.
 Canonically equivalent Unicode spellings (composed NFC and decomposed NFD, e.g.
-Greek `άλφα`) retrieve the same records: the query searches its original
-spelling plus both canonical forms, so a partially normalized token still
-matches verbatim. Each alternative spells the whole query one way, though, so
-in `all` and `phrase` modes a uniformly spelled query can miss a record that
-mixes NFC and NFD spellings across different words. Stored text, hashes,
-revisions, and snippet offsets stay exact.
+Greek `άλφα`) retrieve the same records: in `all` and `any` modes each word
+matches its original spelling plus both canonical forms, so a partially
+normalized token still matches verbatim and any word may be stored in a
+different canonical form. Phrase mode matches whole phrases, so each
+alternative spells the phrase one way: a uniformly spelled phrase query can
+miss a record that mixes NFC and NFD spellings across different words. Stored
+text, hashes, revisions, and snippet offsets stay exact.
 
 Exact lookup accepts up to 200 characters. IDs are case-sensitive; names and
 aliases are normalized (NFKC, lowercase, trimmed, whitespace collapsed) but never

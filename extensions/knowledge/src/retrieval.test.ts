@@ -485,6 +485,20 @@ it("keyword search matches canonically equivalent Unicode spellings without rewr
   expect(
     sorted(await f.service.grep({ query: mixedGreekQuery, mode: "phrase" }, f.owner)),
   ).toStrictEqual(["mixed_greek_note"]);
+
+  // A uniformly spelled query must reach the mixed record word by word: per-word
+  // spelling alternatives in all/any modes match each word in any canonical form,
+  // so the same row is found from every spelling of the query. Phrase mode stays
+  // whole-phrase (documented accepted gap): a uniformly spelled phrase cannot
+  // match a record mixing NFC and NFD across its words.
+  const uniformGreekQuery = `${composed} ${betaDecomposed.normalize("NFC")}`;
+  expect(sorted(await f.service.grep({ query: uniformGreekQuery }, f.owner))).toStrictEqual([
+    "mixed_greek_note",
+  ]);
+  expect(
+    sorted(await f.service.grep({ query: uniformGreekQuery, mode: "any" }, f.owner)),
+  ).toContain("mixed_greek_note");
+  expect(await f.total({ query: uniformGreekQuery, mode: "phrase" })).toBe(0);
 });
 
 it("ranking preserves pagination and scope without rereading the filtered corpus", async () => {

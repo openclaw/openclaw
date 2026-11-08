@@ -251,18 +251,33 @@ export function keywordExpression(input: SearchInput): string {
       : words.map((t) => `"${t}"`).join(input.mode === "any" ? " OR " : " AND ");
   // FTS5's unicode61 tokenizer does no canonical normalization, so composed (NFC)
   // and decomposed (NFD) spellings of a word index as distinct terms. The index and
-  // snippet offsets keep stored text verbatim, so search the original spelling plus
-  // both canonical spellings — a partially normalized token (e.g. Hangul 가나,
+  // snippet offsets keep stored text verbatim, so in all/any modes each word matches
+  // its original spelling plus both canonical spellings — a partially normalized
+  // token (e.g. Hangul 가나,
   // U+AC00 U+1102 U+1161) is neither fully NFC nor fully NFD, and only its literal
   // form is indexed. Spellings that coincide (ASCII, CJK, unaccented) collapse to
   // one literal: an unaccented query still cannot reach a composed accented note,
-  // so no accent folding is added. Each alternative spells the whole query one way,
-  // so a uniformly spelled all/phrase query still misses a record that mixes NFC
-  // and NFD across its words — a rare accepted gap.
-  const nfc = tokens.map((t) => t.normalize("NFC")),
-    nfd = tokens.map((t) => t.normalize("NFD"));
-  const spellings = [...new Set([tokens, nfc, nfd].map(build))];
-  return spellings.length === 1 ? spellings[0]! : `(${spellings.join(") OR (")})`;
+  // so no accent folding is added. Phrase mode keeps whole-phrase alternatives (each
+  // spells the whole phrase one way), since matching a mixed-spelling phrase would
+  // need the cross product of per-word spellings; a uniformly spelled phrase query
+  // can miss a record that mixes NFC and NFD across its words — a rare accepted gap.
+  const spellingsOf = (t: string) => [...new Set([t, t.normalize("NFC"), t.normalize("NFD")])];
+  if (input.mode === "phrase") {
+    const alternatives = [
+      ...new Set(
+        [tokens, tokens.map((t) => t.normalize("NFC")), tokens.map((t) => t.normalize("NFD"))].map(
+          build,
+        ),
+      ),
+    ];
+    return alternatives.length === 1 ? alternatives[0]! : `(${alternatives.join(") OR (")})`;
+  }
+  return tokens
+    .map((t) => {
+      const forms = spellingsOf(t);
+      return forms.length === 1 ? `"${forms[0]!}"` : `(${forms.map((f) => `"${f}"`).join(" OR ")})`;
+    })
+    .join(input.mode === "any" ? " OR " : " AND ");
 }
 
 const FTS_COLUMNS = "id UNINDEXED, title, aliases, body, tokenize='unicode61 remove_diacritics 2'";
