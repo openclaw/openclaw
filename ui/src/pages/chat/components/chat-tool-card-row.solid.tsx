@@ -221,8 +221,7 @@ export function ToolCardRow(props: ToolCardProps) {
   let disclosureContent: HTMLSpanElement | undefined;
   const syncOverflow = (event: Event) => syncToolDisclosureOverflow(event, disclosureContent);
   const card = () => props.card;
-  const outcome = createMemo(() => resolveToolCardOutcome(card(), props.options.runActive));
-  const expanded = createMemo(() => props.options.expanded);
+  const outcome = () => resolveToolCardOutcome(card(), props.options.runActive);
   const view = createMemo(() =>
     resolveToolCallView({ name: card().name, args: card().args, details: card().details }),
   );
@@ -230,11 +229,10 @@ export function ToolCardRow(props: ToolCardProps) {
     resolveToolDisplayIdentity(unwrapToolCallForDisplay(card()).name),
   );
   const activityCards = () => props.options.activityCards ?? [card()];
-  const running = createMemo(() =>
+  const running = () =>
     activityCards().some(
       (item) => resolveToolCardOutcome(item, props.options.runActive) === "running",
-    ),
-  );
+    );
   const workspaceFilePath = () => toolWorkspacePath(card(), view());
   const subagent = createMemo(() =>
     resolveSpawnedSubagent(card(), props.options.subagents?.subagentSessions),
@@ -249,9 +247,7 @@ export function ToolCardRow(props: ToolCardProps) {
       onOpenSubagent()?.(session.key);
     }
   };
-  const linkedRow = createMemo(() =>
-    workspaceFilePath() ? "file" : canOpenSubagent() ? "subagent" : null,
-  );
+  const linkedRow = () => (workspaceFilePath() ? "file" : canOpenSubagent() ? "subagent" : null);
   const Row = dynamic(() => (linkedRow() ? "div" : "button"));
   const toggle = () => props.options.onToggleExpanded(card().id);
   const rowContent = () => (
@@ -290,7 +286,7 @@ export function ToolCardRow(props: ToolCardProps) {
           )}
         </Show>
       </span>
-      <Show when={!expanded()}>
+      <Show when={!props.options.expanded}>
         <ToolOutcomeSummary card={card()} />
       </Show>
       <span class="chat-tool-row__chevron" aria-hidden="true">
@@ -308,7 +304,7 @@ export function ToolCardRow(props: ToolCardProps) {
         },
       ]}
       type={linkedRow() ? undefined : "button"}
-      aria-expanded={linkedRow() ? undefined : expanded() ? "true" : "false"}
+      aria-expanded={linkedRow() ? undefined : props.options.expanded ? "true" : "false"}
       onPointerEnter={syncOverflow}
       onFocus={linkedRow() ? undefined : syncOverflow}
       onFocusIn={linkedRow() ? syncOverflow : undefined}
@@ -318,7 +314,7 @@ export function ToolCardRow(props: ToolCardProps) {
         <button
           class="chat-tool-row__toggle"
           type="button"
-          aria-expanded={expanded() ? "true" : "false"}
+          aria-expanded={props.options.expanded ? "true" : "false"}
           aria-label={
             subagent()
               ? `${display().label} ${subagent()!.label}`
