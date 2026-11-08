@@ -1,3 +1,8 @@
+---
+name: lobster
+description: "Run repeatable multi-step workflows with typed pipelines and approval checkpoints."
+---
+
 # Lobster
 
 Lobster executes multi-step workflows with approval checkpoints. Use it when:
