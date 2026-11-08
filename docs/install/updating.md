@@ -33,6 +33,13 @@ backup.
 
 ## Update implementation contract
 
+Plugin updates preserve authored environment references when a replacement
+plugin moves their settings, including single-file includes. Reference replay
+uses the selected replacement plugin even when a core repair changes plugin
+policy. Previously flattened literals stay literals; the updater does not guess
+their original references. Config publication, backup, rollback, and deferred
+data-migration guidance keep their existing owners.
+
 If the retained verifier cannot authenticate to the restarted Gateway, it stops
 retrying that rejection. Local HTTP readiness and runtime version/build identity
 can verify activation instead, with an RPC authentication warning recorded in

@@ -2,6 +2,7 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import "../../../test-utils/prepare-compiled-subprocesses.js";
 import type { OpenClawConfig } from "../../../config/types.js";
+import type { PluginManifestRegistry } from "../../../plugins/manifest-registry.types.js";
 
 const { applyPluginDoctorCompatibilityMigrations, collectRelevantDoctorPluginIds } = vi.hoisted(
   () => ({
@@ -55,6 +56,33 @@ function firstMigrationCall() {
 }
 
 describe("bundled channel legacy config migrations", () => {
+  it.each([{ pluginIds: ["candidate-plugin"] }, { pluginIds: [] }])(
+    "retains explicit candidate selection $pluginIds",
+    ({ pluginIds }) => {
+      const config = { plugins: { entries: { unrelated: { enabled: true } } } };
+      const manifestRegistry: PluginManifestRegistry = { plugins: [], diagnostics: [] };
+      collectRelevantDoctorPluginIds.mockReturnValue(["unrelated"]);
+      applyPluginDoctorCompatibilityMigrations.mockReturnValue({ config, changes: [] });
+
+      const result = applyChannelDoctorCompatibilityMigrations(config, {
+        pluginCompatibility: { pluginIds, manifestRegistry },
+      });
+
+      expect(collectRelevantDoctorPluginIds).not.toHaveBeenCalled();
+      if (pluginIds.length) {
+        expect(applyPluginDoctorCompatibilityMigrations).toHaveBeenCalledExactlyOnceWith(config, {
+          config,
+          pluginIds,
+          historicalWebhookListeners: undefined,
+          manifestRegistry,
+        });
+      } else {
+        expect(applyPluginDoctorCompatibilityMigrations).not.toHaveBeenCalled();
+      }
+      expect(result).toEqual({ next: config, changes: [] });
+    },
+  );
+
   it("does not treat channel metadata or blank ids as channel plugins", () => {
     collectRelevantDoctorPluginIds.mockReturnValue([]);
     applyPluginDoctorCompatibilityMigrations.mockReturnValue({ config: {}, changes: [] });

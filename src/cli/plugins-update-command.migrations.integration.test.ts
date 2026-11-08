@@ -62,6 +62,7 @@ describe("installed plugin update config migration", () => {
     "accepted-update-superseded",
     "accepted-install-superseded",
     "env-reference",
+    "env-reference-policy",
     "install-replacement",
     "disabled-update",
     "disabled-install",
@@ -84,17 +85,25 @@ describe("installed plugin update config migration", () => {
     await withOpenClawTestState(
       {
         label: "plugin-update-migration",
-        env: { LISTENER_HOST: "127.0.0.1", OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" },
+        env: {
+          LISTENER_HOST: "127.0.0.1",
+          UNSELECTED_SECRET: "synthetic-unselected-secret",
+          OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+        },
       },
       async (state) => {
         const pluginId = "listener-fixture";
         const pendingState =
           scenario === "state-migration" || scenario === "state-migration-install";
         const packageName = "@acme/listener-fixture";
+        const policyReplay = scenario === "env-reference-policy";
+        const envReference = scenario === "env-reference" || scenario === "include" || policyReplay;
+        const inspectUnselected = scenario === "partial-update" || policyReplay;
         const retainsOther =
           scenario === "unrelated-pending" ||
           scenario === "partial-update" ||
-          scenario === "unrelated-core-legacy";
+          scenario === "unrelated-core-legacy" ||
+          policyReplay;
         const inactive = scenario === "disabled-update" || scenario === "disabled-install";
         const included =
           scenario === "include" ||
@@ -147,12 +156,14 @@ describe("installed plugin update config migration", () => {
             : {}),
           plugins: {
             allow: [pluginId, ...(scenario === "partial-update" ? ["unavailable-owner"] : [])],
+            // Core replay removes this retired denial, changing the candidate policy hash.
+            ...(policyReplay ? { deny: ["codex-supervisor"] } : {}),
             entries: {
               ...(retainsOther
                 ? {
                     "unavailable-owner": {
                       enabled: scenario === "partial-update",
-                      config: { retainedInput: "keep-me" },
+                      config: { retainedInput: policyReplay ? "${UNSELECTED_SECRET}" : "keep-me" },
                     },
                   }
                 : {}),
@@ -163,7 +174,7 @@ describe("installed plugin update config migration", () => {
                     ? { listener: { port: 57597, host: "${LISTENER_HOST}" } }
                     : { oldPort: 57597 }),
                   label: "kept",
-                  ...(scenario === "env-reference" ? { oldHost: "${LISTENER_HOST}" } : {}),
+                  ...(envReference ? { oldHost: "${LISTENER_HOST}" } : {}),
                 },
               },
             },
@@ -257,7 +268,7 @@ describe("installed plugin update config migration", () => {
           await state.writeConfig(config);
         }
         const otherRecords: Record<string, PluginInstallRecord> = {};
-        if (scenario === "partial-update") {
+        if (inspectUnselected) {
           const installPath = writeManagedNpmPlugin({
             stateDir: state.stateDir,
             packageName: "@acme/unavailable-owner",
@@ -705,14 +716,14 @@ describe("installed plugin update config migration", () => {
           ...(inactive || pendingState ? { oldPort: 57597 } : {}),
           listener: {
             port: 57597,
-            ...(scenario === "env-reference" || ready ? { host: "${LISTENER_HOST}" } : {}),
+            ...(envReference || ready ? { host: "${LISTENER_HOST}" } : {}),
           },
           label: "kept",
         });
         if (retainsOther) {
           expect(plugins.entries["unavailable-owner"]).toEqual({
             enabled: scenario === "partial-update",
-            config: { retainedInput: "keep-me" },
+            config: { retainedInput: policyReplay ? "${UNSELECTED_SECRET}" : "keep-me" },
           });
         }
         expect(readDeferredPluginMigrations({ env: state.env })).toEqual(
@@ -724,8 +735,13 @@ describe("installed plugin update config migration", () => {
         if (inactive) {
           expect(plugins.entries[pluginId].enabled).toBe(false);
         }
-        if (scenario === "partial-update") {
+        if (inspectUnselected) {
           expect(fs.existsSync(unselectedMarker)).toBe(false);
+        }
+        if (policyReplay) {
+          expect(fs.readFileSync(state.configPath, "utf8")).not.toContain(
+            "synthetic-unselected-secret",
+          );
         }
         if (pendingState) {
           expect(applyRuntime).not.toHaveBeenCalled();
