@@ -7,10 +7,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { inspectLocalAudioSelection } from "../media-understanding/local-audio.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
-import {
-  interruptCapability,
-  registerEmbeddingCapabilityCliTests,
-} from "./capability-cli.embedding.test-support.js";
+import { registerCapabilityCancellationTests } from "./capability-cli.cancellation.test-support.js";
+import { registerEmbeddingCapabilityCliTests } from "./capability-cli.embedding.test-support.js";
 import { registerCapabilityCli } from "./capability-cli.js";
 import {
   invalidModelRunOptionCases,
@@ -961,47 +959,10 @@ describe("capability cli", () => {
     },
   );
 
-  it.each(["local", "gateway", "audio", "tts", "image", "image-model"])(
-    "cancels pending %s execution",
-    async (kind) => {
-      await interruptCapability((waitForAbort) => {
-        if (kind === "gateway") {
-          mocks.callGateway.mockImplementationOnce(({ signal }) => waitForAbort(signal));
-        } else if (kind === "local") {
-          mocks.completeWithPreparedSimpleCompletionModel.mockImplementationOnce(({ options }) =>
-            waitForAbort(options?.signal),
-          );
-        } else if (kind === "audio") {
-          mocks.transcribeAudioFile.mockImplementationOnce((_params, execution) =>
-            waitForAbort(execution?.signal),
-          );
-          return runCap("infer", "audio", "transcribe", "--file", "memo.m4a", "--json");
-        } else if (kind === "image" || kind === "image-model") {
-          const describeImage =
-            kind === "image" ? mocks.describeImageFile : mocks.describePreparedImageWithModel;
-          describeImage.mockImplementationOnce((_params, execution) =>
-            waitForAbort(execution?.signal),
-          );
-          return runCapability(
-            "image",
-            "describe",
-            "--file",
-            "photo.jpg",
-            ...(kind === "image-model" ? ["--model", "ollama/vision"] : []),
-            "--json",
-          );
-        } else {
-          mocks.callGateway.mockImplementationOnce(({ signal }) => waitForAbort(signal));
-          return runCapability("tts", "convert", "--text", "hello", "--gateway", "--json");
-        }
-        return runModelProbe(...(kind === "gateway" ? ["--gateway"] : []));
-      });
-      expect(mocks.runtime.writeJson).not.toHaveBeenCalled();
-      expect(mocks.runtime.log).not.toHaveBeenCalled();
-      expect(mocks.runtime.error).not.toHaveBeenCalled();
-      expect(mocks.releaseSimpleCompletion).toHaveBeenCalledTimes(kind === "local" ? 1 : 0);
-    },
-  );
+  registerCapabilityCancellationTests({
+    mocks,
+    runModelProbe,
+  });
 
   it("defaults tts status to gateway transport", async () => {
     await runCapability("tts", "status", "--json");
