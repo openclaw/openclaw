@@ -7,6 +7,7 @@ import {
   createDeferred,
   withinTest,
 } from "../../../test/helpers/promise.js";
+import type { SandboxBackendHandle } from "../../agents/sandbox/backend-handle.types.js";
 import { requireGit } from "../../agents/worktrees/git.js";
 import { withWorktreePreparationTiming } from "../../agents/worktrees/preparation-timing.js";
 import * as diagnostics from "../../infra/diagnostic-events.js";
@@ -540,5 +541,113 @@ export async function proveColdPreparationCapacityIsolation(
     if (secondId) {
       await deleteRegistryWorktree(process.env, secondId);
     }
+  }
+}
+
+export async function proveUnchangedSandboxCommandCheckpoints(owner: LocalWorkspaceOwner) {
+  const { bindLocalSandboxWorkspace } = await import("../../agents/sandbox/local-workspace.js");
+  const { createSandboxTestContext } = await import("../../agents/sandbox/test-fixtures.js");
+  const { createHostSandboxFsBridge } =
+    await import("../../agents/test-helpers/host-sandbox-fs-bridge.js");
+  const stores = await import("./local-workspace-store.js");
+  const registry = await import("../../agents/sandbox/registry.js");
+  const engine = await import("../../agents/sandbox/container-engine.js");
+  using projection = await prepareSandboxCheckpointFixture(owner);
+  const containerName = "unchanged-command-fixture";
+  const backend: SandboxBackendHandle = {
+    id: "docker",
+    runtimeId: containerName,
+    runtimeLabel: containerName,
+    workdir: "/workspace",
+    buildExecSpec: async () => ({ argv: ["true"], env: {}, stdinMode: "pipe-closed" }),
+    runShellCommand: async () => ({ code: 0, stdout: Buffer.alloc(0), stderr: Buffer.alloc(0) }),
+  };
+  bindLocalSandboxWorkspace(
+    createSandboxTestContext({
+      overrides: {
+        workspaceDir: projection.workspaceDir,
+        backend,
+        fsBridge: createHostSandboxFsBridge(projection.workspaceDir),
+      },
+    }),
+    projection,
+  );
+  vi.stubEnv("DOCKER_HOST", "unix:///synthetic/checkpoint-docker.sock");
+  vi.stubEnv("DOCKER_CONTEXT", undefined);
+  let paused = false;
+  let pauses = 0;
+  vi.spyOn(engine, "execContainer").mockImplementation(async (_engine, args) => {
+    let stdout = "";
+    if (args[0] === "info") {
+      stdout = "checkpoint-daemon";
+    } else if (args[0] === "inspect") {
+      stdout = args.includes("{{.State.Paused}}")
+        ? String(paused)
+        : `${"a".repeat(64)} true ${paused}`;
+    } else if (args[0] === "pause") {
+      paused = true;
+      pauses++;
+    } else if (args[0] === "unpause") {
+      paused = false;
+    }
+    return { code: 0, stdout, stderr: "" };
+  });
+  const withStore = stores.withLocalWorkspaceStore;
+  vi.spyOn(stores, "withLocalWorkspaceStore").mockImplementation((params, run) =>
+    withStore(params, (store) =>
+      run({
+        ...store,
+        manifest: (row, action) => {
+          if (action.kind === "scan") {
+            expect(paused).toBe(true);
+          }
+          return store.manifest(row, action);
+        },
+      }),
+    ),
+  );
+  await registry.updateRegistry({
+    containerName,
+    backendId: "docker",
+    sessionKey: owner.sessionKey,
+    workspaceDir: projection.workspaceDir,
+    createdAtMs: 1,
+    lastUsedAtMs: 1,
+    image: "fixture",
+  });
+  try {
+    await writeText(owner.worktree.path, "host.txt", "independent host edit\n");
+    for (let command = 0; command < 10; command++) {
+      const spec = await backend.buildExecSpec({ command: "true", env: {}, usePty: false });
+      if (command === 3) {
+        const source = path.join(projection.workspaceDir, "source.txt");
+        const before = await fs.stat(source);
+        await fs.writeFile(source, "modified\n");
+        await fs.utimes(source, before.atime, before.mtime);
+      } else if (command === 7) {
+        await fs.unlink(path.join(projection.workspaceDir, "source.txt"));
+      }
+      await backend.finalizeExec!({
+        status: "completed",
+        exitCode: 0,
+        timedOut: false,
+        token: spec.finalizeToken,
+      });
+      expect(paused).toBe(false);
+      await expectText(owner.worktree.path, "host.txt", "independent host edit\n");
+      await expectMissing(projection.workspaceDir, "host.txt");
+      if (command < 7) {
+        await expectText(
+          owner.worktree.path,
+          "source.txt",
+          command < 3 ? "original\n" : "modified\n",
+        );
+      } else {
+        await expectMissing(owner.worktree.path, "source.txt");
+      }
+    }
+    expect(pauses).toBe(2);
+  } finally {
+    await registry.removeRegistryEntry(containerName);
   }
 }
