@@ -49,6 +49,30 @@ The original journal bytes remain archived unchanged as the existing typed
 repair transaction takes over the canonical journal slot. Changed config or
 incident evidence refuses continuation.
 
+### Transcript continuity after serving traffic
+
+Retained preparation accepts historical session windows after repeated resets or
+rotations when the original physical database, window owner, and exact rewrite
+generation remain. The current session entry need not still directly reference
+every historical window. An exact immutable archive with a verified encoded hash
+also preserves its saved generation.
+
+A completed native `agent_deletion_journal` row can explain intentional loss for
+its exact agent and database path. The deletion must have started no earlier than
+the original activation journal, have a retiring or legacy-null phase and a
+completed purge, and retain its operation identity. An existing database must
+still have the witnessed physical identity; an absent file also requires
+`delete_files = 1`. Pending deletion, missing or unrelated records, replaced
+databases, and an unexplained disappearance remain refusals. Preparation and
+later repair checks consume the same native evidence; they never manufacture it.
+
+Rewrite generations are random tokens, not ordered counters. The current
+watermark records no predecessor or rewrite-owner receipt. A different token,
+even with a later timestamp, does not prove preservation of the saved content.
+Without the exact generation or its verified archive, repair still refuses.
+Do not edit watermarks, deletion records, or the original witness to satisfy this
+guard. The operator must diagnose missing evidence before proceeding.
+
 ### Native config audit evidence
 
 The Gateway's `agents.delete` path uses the normal atomic config writer. That
