@@ -181,6 +181,8 @@ Runs outside the agent's resolved workspace reuse the agent's prepared plugin ge
 
 Tool resolution treats plugins that the prepared generation recorded as disabled or failed (for example, a memory plugin outside the selected memory slot) as settled outcomes and does not load them again for each turn.
 
+Prepared tool generations and synthetic-auth facts keep one process-environment scope even if the runtime replaces `process.env`. Explicit custom environment objects retain separate scopes, so they cannot borrow another environment's prepared facts.
+
 Completed plugin generations reuse their registration grouping and manifest-owner lookup across turns. These facts belong to the registry publication and metadata snapshot; registration in progress stays uncached. Tool factories still receive fresh turn contexts, and returned tools retain that turn's authority, delivery, memory, and sandbox bindings rather than borrowing a later turn's permissions.
 
 Plugin reload reconciles config watcher events after asynchronous metadata preparation. An unchanged source event does not cancel the operation; newer writes or changed config, install records, or source ownership still supersede it.
