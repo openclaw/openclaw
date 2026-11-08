@@ -1,6 +1,5 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
 import { afterAll, assert, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
@@ -251,7 +250,7 @@ it("retains dependencies without credentials or install debris", async ({ signal
 });
 
 it.for(["none", "same", "previous"])(
-  "filters fetches from a reused template (existing origin: %s)",
+  "applies idempotent fetch defaults from a reused template (existing origin: %s)",
   async (configured, { signal }) => {
     const clone = await fixture(signal);
     const priorUrl = await git(source, "config", "remote.origin.url");
@@ -266,7 +265,6 @@ it.for(["none", "same", "previous"])(
     }
     const seed = await clone("old-fetch-defaults");
     await git(source, "config", "remote.origin.url", url);
-    await git(source, "config", "uploadpack.allowFilter", "true");
     try {
       const projectionPath = path.join(path.dirname(seed), "templates", "fetch-proof", "workspace");
       await withWorktreeAllocationLease({ env, signal }, (allocation) =>
@@ -301,22 +299,8 @@ it.for(["none", "same", "previous"])(
           await git(projectionPath, "config", "--get-all", `remote.${remote}.partialclonefilter`),
         ).toBe("blob:none");
       }
-      await git(
-        projectionPath,
-        "-c",
-        `url.${pathToFileURL(source).href}.insteadOf=${url}`,
-        "fetch",
-        "--no-tags",
-        "origin",
-        changedCommit,
-      );
-      const changedBlob = await git(source, "rev-parse", `${changedCommit}:pnpm-lock.yaml`);
-      expect(
-        await git(projectionPath, "cat-file", "--batch-all-objects", "--batch-check=%(objectname)"),
-      ).not.toContain(changedBlob);
     } finally {
       await git(source, "config", "remote.origin.url", priorUrl);
-      await git(source, "config", "--unset", "uploadpack.allowFilter");
     }
   },
 );

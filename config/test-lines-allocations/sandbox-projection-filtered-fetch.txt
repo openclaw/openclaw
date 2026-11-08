@@ -1,3 +1,3 @@
 # Real Git fetch/checkout regression and idempotent template-origin initialization, with credential/object-store isolation.
-# 160 regression lines plus the exact 92-line debt at base 465c110e; no spare headroom.
-252
+# Exactly the 144 test lines added by this PR; no inherited debt or spare headroom.
+144
