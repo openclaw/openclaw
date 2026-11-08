@@ -13663,6 +13663,11 @@ describe("ci workflow guards", () => {
       ["GitHub push", { runnerBackend: "github" }, 6],
       ["hybrid push", { runnerBackend: "hybrid" }, 4],
       ["hybrid PR", { runnerBackend: "hybrid", eventName: "pull_request" }, 4],
+      [
+        "full hybrid PR",
+        { runnerBackend: "hybrid", eventName: "pull_request", scopeEnv: { OPENCLAW_CI_FULL: "1" } },
+        4,
+      ],
       ["hybrid retry", { runnerBackend: "hybrid", scopeEnv: { GITHUB_RUN_ATTEMPT: "2" } }, 6],
       ["missing attempt", { runnerBackend: "hybrid", scopeEnv: { GITHUB_RUN_ATTEMPT: "" } }, 6],
       ["other repository", { runnerBackend: "hybrid", repository: "example/openclaw" }, 6],
@@ -13699,6 +13704,19 @@ describe("ci workflow guards", () => {
       });
       expect(manifest.status, `${label}: ${manifest.output}`).toBe(0);
       const matrix = readJsonOutput(manifest.outputs, "qa_smoke_ci_matrix");
+      if (label === "hybrid PR") {
+        expect(matrix.include).toEqual([
+          {
+            name: "profiles 1+3/4",
+            lane: "profile-1 profile-3",
+            slug: "profiles-1-and-3-of-4",
+            part_count: 4,
+          },
+          { name: "profile 2/4", lane: "profile-2", slug: "profile-2-of-4", part_count: 4 },
+          { name: "profile 4/4", lane: "profile-4", slug: "profile-4-of-4", part_count: 4 },
+        ]);
+        continue;
+      }
       expect(matrix.include, label).toEqual(
         Array.from({ length: partCount }, (_, index) => ({
           name: `profile ${index + 1}/${partCount}`,
@@ -13774,7 +13792,7 @@ describe("ci workflow guards", () => {
     ).toEqual({ group: "test-group", labels: "blacksmith-4vcpu-ubuntu-2404" });
     expect(smokeDockerCacheStep).toBeUndefined();
     expect(smokeRunStep.run).toContain("createQaSmokeCiPart");
-    expect(smokeRunStep.run).toContain("createQaSmokeCiPart(partId, partCount)");
+    expect(smokeRunStep.run).toContain("createQaSmokeCiPart(id, partCount)");
     expect(smokeRunStep.env.PROFILE_PART_COUNT).toBe("${{ matrix.part_count }}");
     expect(smokeRunStep.run).toContain("createQaSmokeCiMatrix");
     expect(smokeRunStep.run).toContain("readQaScenarioPack");
@@ -13840,6 +13858,73 @@ describe("ci workflow guards", () => {
       expect(runStep.run.split(file)).toHaveLength(3);
     }
   });
+});
+
+describe("QA smoke shared setup execution", () => {
+  it.each(["", "profile-1", "profile-3", "legacy"])(
+    "preserves paired processes and fails closed for unavailable part %j",
+    (unavailablePart) => {
+      const root = tempDirs.make("openclaw-qa-shared-setup-");
+      const source = path.join(root, "extensions/qa-lab/src");
+      mkdirSync(source, { recursive: true });
+      writeFileSync(path.join(root, "package.json"), '{"type":"module"}');
+      writeFileSync(
+        path.join(source, "ci-smoke-plan.ts"),
+        `
+      export const ${unavailablePart === "legacy" ? "createQaSmokeCiMatrix" : "createQaSmokeCiPart"} = (id, count) => {
+        if (count !== 4) throw new Error("wrong partition count");
+        if (id === ${JSON.stringify(unavailablePart)}) throw new Error("unknown QA smoke CI profile part");
+        return { runs: [{ slug: "primary", scenario_ids: [id] }] };
+      };
+    `,
+      );
+      writeFileSync(
+        path.join(source, "scenario-catalog.ts"),
+        `
+      export const readQaScenarioPack = () => ({ scenarios: ["profile-1", "profile-3"]
+        .map(id => ({ id, execution: { path: "flow" } })) });
+    `,
+      );
+      writeFileSync(
+        path.join(root, "openclaw.mjs"),
+        `
+      import { appendFileSync } from "node:fs";
+      appendFileSync("calls.jsonl", JSON.stringify({ pid: process.pid, args: process.argv.slice(2) }) + "\\n");
+      process.exit(process.argv.includes("profile-1") ? 7 : 0);
+    `,
+      );
+      const step = requiredWorkflowStep(
+        readCiWorkflow().jobs["qa-smoke-ci-profile"].steps,
+        "Run smoke profile part",
+      );
+      const result = runWorkflowShellScript(step.run, {
+        cwd: root,
+        linuxWorkflow: true,
+        env: {
+          ...process.env,
+          PROFILE_PART: "profile-1 profile-3",
+          PROFILE_PART_COUNT: "4",
+          PROFILE_PART_SLUG: "paired",
+          GITHUB_STEP_SUMMARY: path.join(root, "summary.md"),
+        },
+      });
+      expect(result.status, result.stdout + result.stderr).toBe(unavailablePart ? 1 : 7);
+      if (unavailablePart) {
+        expect(existsSync(path.join(root, "calls.jsonl"))).toBe(false);
+        return;
+      }
+      const calls = readFileSync(path.join(root, "calls.jsonl"), "utf8")
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line) as { pid: number; args: string[] });
+      expect(calls.map((call) => call.args.at(-1))).toEqual(["profile-1", "profile-3"]);
+      expect(new Set(calls.map((call) => call.pid)).size).toBe(2);
+      expect(calls.map((call) => call.args[call.args.indexOf("--output-dir") + 1])).toEqual([
+        ".artifacts/qa-e2e/smoke-ci-profile-paired/profile-1-primary",
+        ".artifacts/qa-e2e/smoke-ci-profile-paired/profile-3-primary",
+      ]);
+    },
+  );
 });
 
 describe("shared test-source check execution", () => {

@@ -488,6 +488,13 @@ const compactHybridQaSmoke =
   (eventName === "push" || eventName === "pull_request" || mainValidation) &&
   process.env.GITHUB_RUN_ATTEMPT === "1";
 const qaSmokeCiPartCount = usesHostedRunnerProfile && !compactHybridQaSmoke ? 6 : 4;
+// These short PR parts share one build; each profile still runs in its own process.
+const shareQaSmokeCiSetup =
+  ordinaryPullRequest &&
+  compactHybridQaSmoke &&
+  !frozenTarget &&
+  !compatibilityTarget &&
+  !fullUiPullRequest;
 const supportsNativeI18n =
   hasPackageScript("native:i18n:check") &&
   hasPackageScript("android:i18n:check") &&
@@ -1758,13 +1765,19 @@ const manifest = {
   qa_smoke_ci_matrix: createMatrix(
     Array.from({ length: qaSmokeCiPartCount }, (_, index) => {
       const part = index + 1;
-      return {
-        name: `profile ${part}/${qaSmokeCiPartCount}`,
-        lane: `profile-${part}`,
-        slug: `profile-${part}-of-${qaSmokeCiPartCount}`,
-        part_count: qaSmokeCiPartCount,
-      };
-    }),
+      if (shareQaSmokeCiSetup && part === 3) {
+        return [];
+      }
+      const paired = shareQaSmokeCiSetup && part === 1;
+      return [
+        {
+          name: paired ? "profiles 1+3/4" : `profile ${part}/${qaSmokeCiPartCount}`,
+          lane: paired ? "profile-1 profile-3" : `profile-${part}`,
+          slug: paired ? "profiles-1-and-3-of-4" : `profile-${part}-of-${qaSmokeCiPartCount}`,
+          part_count: qaSmokeCiPartCount,
+        },
+      ];
+    }).flat(),
   ),
   run_prompt_snapshots: runNodeFull && !releaseFastLane && changedScopeHasPromptSnapshotImpact,
   run_sqlite_session_lifecycle: runSqliteSessionLifecycle,

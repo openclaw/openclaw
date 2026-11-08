@@ -3465,15 +3465,21 @@ jobs:
             node --import tsx --input-type=module <<'EOF'
           const smokePlan = await import("./extensions/qa-lab/src/ci-smoke-plan.ts");
           const partId = process.env.PROFILE_PART ?? "";
+          const partIds = partId.split(" ");
           const partCount = Number(process.env.PROFILE_PART_COUNT ?? "4");
           let runs;
           if (typeof smokePlan.createQaSmokeCiPart === "function") {
             try {
-              runs = smokePlan.createQaSmokeCiPart(partId, partCount).runs;
+              runs = partIds.flatMap((id) =>
+                smokePlan.createQaSmokeCiPart(id, partCount).runs.map((run) => ({
+                  ...run,
+                  slug: partIds.length === 1 ? run.slug : `${id}-${run.slug}`,
+                })),
+              );
             } catch (error) {
               // Frozen/compat targets ship older planners that declare fewer
               // profile parts; the declared parts still cover every scenario.
-              if (/unknown QA smoke CI profile part/.test(String(error)) && partId !== "profile-1") {
+              if (/unknown QA smoke CI profile part/.test(String(error)) && !partIds.includes("profile-1")) {
                 // stdout is the TSV contract consumed below. Keep diagnostics on stderr
                 // so an empty compatibility shard remains empty instead of becoming a run.
                 console.error(`[skip] ${partId} is not declared by this checkout's smoke plan`);
@@ -3482,6 +3488,9 @@ jobs:
               throw error;
             }
           } else if (typeof smokePlan.createQaSmokeCiMatrix === "function") {
+            if (partIds.length !== 1) {
+              throw new Error("Legacy QA smoke planner cannot execute paired profile parts.");
+            }
             // Legacy planners select the entire profile and can mix long-lived
             // execution kinds. Reuse the current bounded smoke contract and
             // isolate each scenario so one invocation cannot pin a profile part.
