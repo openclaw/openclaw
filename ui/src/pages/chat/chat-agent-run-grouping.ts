@@ -39,6 +39,7 @@ export type AgentRunFrameRenderItem = {
     | { kind: "interrupted" }
     | { kind: "failed" };
   parts: AgentRunFramePart[];
+  groups: MessageGroup[];
   /** Completed runs share one identity/footer across independently virtualized rows. */
   fragment?: {
     source: AgentRunFrameRenderItem;
@@ -59,7 +60,7 @@ export function chatItemGroups(
   item: AgentRunFrameInput | AgentRunFrameRenderItem | SystemEventGroup,
 ): MessageGroup[] {
   if (item.kind === "agent-run-frame") {
-    return item.parts.flatMap(chatItemGroups);
+    return item.groups;
   }
   if (item.kind === "group") {
     return [item];
@@ -114,10 +115,9 @@ function frameKey(runId: string, boundaryId: string, segmentId: string | undefin
 
 function completedFrameActionOwner(
   parts: AgentRunFramePart[],
+  groups: MessageGroup[],
 ): MessageGroup["messages"][number] | null {
-  const messages = parts
-    .flatMap(chatItemGroups)
-    .flatMap((group) => (group.role === "assistant" ? group.messages : []));
+  const messages = groups.flatMap((group) => (group.role === "assistant" ? group.messages : []));
   const explicit = messages.findLast(({ message }) =>
     assistantMessageCanOwnTurnActions(message, true),
   );
@@ -223,7 +223,8 @@ export function coalesceAgentRunFrames(
       !terminalRuns.has(runId) &&
       frameRunId !== opts.activeRunId &&
       asRecord(lastAssistantByRun.get(runId))?.stopReason === "toolUse";
-    const actionOwner = active || failed ? null : completedFrameActionOwner(parts);
+    const groups = parts.flatMap(chatItemGroups);
+    const actionOwner = active || failed ? null : completedFrameActionOwner(parts, groups);
     if (!openedBoundaryId && !active && !actionOwner && !interrupted) {
       result.push(...parts);
       parts = [];
@@ -263,6 +264,7 @@ export function coalesceAgentRunFrames(
             ? { kind: "interrupted" }
             : { kind: "completed", actionOwner },
       parts,
+      groups,
       ...(detachedGroups.length > 0 ? { detachedGroups } : {}),
     });
     parts = [];

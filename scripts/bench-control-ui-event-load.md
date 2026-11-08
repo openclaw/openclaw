@@ -92,7 +92,7 @@ mix; it is not a real-provider performance result.
 
 Read per-phase application timing alongside action wall time. Native input
 delivery, browser-local settlement and driver round trips are different costs.
-Scroll frame gaps describe scripted scrollport movement after a trusted ArrowUp
+Scroll frame gaps describe scripted scrollport movement after a trusted PageUp
 establishes reader intent, not touch or wheel delivery. The idle interval has no deliberate user action, while Gateway events
 continue; it has a separate measurement through the existing engine collector.
 Chromium's existing `threadTicks` collector measures main-thread CPU;
@@ -125,6 +125,21 @@ client-event benchmark, not a Gateway capacity benchmark. A separate small
 progress frame per producer tick updates observation counters and never reaches
 the application. The browser still owns timing/DOM probes and sends foreground
 wave admission commands; it does not schedule background events.
+
+`--event-load-event-interval-ms` changes the producer's delivery pump interval
+(20 ms by default). It preserves the nominal tool-start and 40 ms stage deadlines;
+each tick drains the due events in order. Use 50, 133 and 250 ms in separate runs
+to distinguish delivery-batch cadence from renderer work. The manifest records
+the chosen interval. This option changes delivery bursts, not the tool count or
+the correctness checks.
+
+The scroll phase uses native PageUp and waits for the reader position to settle
+away from the end before admitting the second tool wave. Its 90-frame sweep
+starts at that position. It must not return to the exact end first: that re-enables
+automatic following, so later raw scroll offsets compete with a smooth end
+command instead of measuring a reader scrolling through history. Older runs
+used that conflicting driver and can contain repeated tail-row mounts; compare
+base and candidate again with the corrected driver.
 
 `offeredBackgroundHz` is producer durable receipts per elapsed second;
 `achievedBackgroundHz` counts those receipts observed at the client's event

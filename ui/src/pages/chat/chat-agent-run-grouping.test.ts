@@ -187,6 +187,7 @@ describe("coalesceAgentRunFrames", () => {
 
     expect(live.parts).toEqual([first, second]);
     expect(history.parts).toEqual([historyActivity]);
+    expect(history.groups).toEqual([first, second]);
     expect(live.boundaryId).toBe(boundaryId);
     expect(history.key).toBe(live.key);
   });

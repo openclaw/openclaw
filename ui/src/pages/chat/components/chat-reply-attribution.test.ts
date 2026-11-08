@@ -184,6 +184,11 @@ function draw(
     onOpenReply,
     resolveReplyPreview,
   };
+  const frameParts = group.messages.map((entry, index) => ({
+    ...group,
+    key: `frame-part-${index}`,
+    messages: [entry],
+  }));
   mountSolid(
     () =>
       presentation === "frame"
@@ -194,11 +199,8 @@ function draw(
               runId: "run",
               boundaryId: "prompt",
               outcome: { kind: "completed", actionOwner: group.messages.at(-1) ?? null },
-              parts: group.messages.map((entry, index) => ({
-                ...group,
-                key: `frame-part-${index}`,
-                messages: [entry],
-              })),
+              parts: frameParts,
+              groups: frameParts,
             },
             options: {
               streamOptions: {},

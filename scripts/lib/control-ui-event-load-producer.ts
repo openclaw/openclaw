@@ -11,6 +11,7 @@ export type EventLoadOptions = {
   count: number;
   duration: number;
   toolCount: number;
+  eventIntervalMs?: number;
   foreground: string;
   background: string;
   receiptDefaults: Record<string, unknown>;
@@ -565,7 +566,7 @@ export function createEventLoadProducer(
     // Server-side elapsed work; browser application work runs in another process.
     producerElapsedMs += performance.now() - producerStarted;
     gateway.progress(ready());
-  }, 20);
+  }, options.eventIntervalMs ?? 20);
   return {
     ready,
     startBackground() {

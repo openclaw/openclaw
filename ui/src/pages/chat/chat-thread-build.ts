@@ -365,6 +365,7 @@ export function buildChatItems(
   );
   const executionItems = () => items.filter((item) => !historicalKeys.has(item.key));
   const canvasRunBounds = createRunTurnLookup(executionItems());
+  let canvasChangedItems = false;
   const currentTurnBounds =
     (currentRunId ? canvasRunBounds(currentRunId) : null) ??
     (activeInputKey ? { afterKey: activeInputKey } : historyTurnBounds);
@@ -417,6 +418,7 @@ export function buildChatItems(
       canvasMaximumIndex,
     );
     if (assistant) {
+      canvasChangedItems = true;
       items[assistant.index] = {
         ...assistant.item,
         message: appendCanvasBlockToAssistantMessage(
@@ -443,6 +445,7 @@ export function buildChatItems(
       preview.timestamp != null && nextTimestamp != null
         ? Math.min(preview.timestamp, nextTimestamp)
         : preview.timestamp;
+    canvasChangedItems = true;
     items.splice(insertionIndex, 0, {
       kind: "message",
       key: canvasAssistantItemKey(projection.item.message, preview, projection.item.key),
@@ -470,9 +473,8 @@ export function buildChatItems(
   for (const tool of toolItems) {
     toolLookup.add(tool.runId, tool.callId, tool.projection);
   }
-  // Empty user rows may have disappeared since canvas placement. Preserve the
-  // earlier current-turn fallback, but resolve exact bounds over rendered rows.
-  let projectionRunBounds: ReturnType<typeof createRunTurnLookup> | undefined;
+  // Canvas insertion can change causal ownership; ordinary tools reuse the same snapshot.
+  let projectionRunBounds = canvasChangedItems ? undefined : canvasRunBounds;
   const resolveProjectionBounds = (
     runId: unknown,
     afterUserSendId?: string,

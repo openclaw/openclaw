@@ -597,6 +597,7 @@ function completedFrameRows(
           ? frame.key
           : `${frame.key}:part:${parts[0]!.kind}:${parts[0]!.key}`,
       parts,
+      groups: parts.flatMap(chatItemGroups),
       fragment: {
         source: frame,
         first: index === 0,

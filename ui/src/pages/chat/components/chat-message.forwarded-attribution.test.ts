@@ -86,7 +86,8 @@ function renderFrame(
   return mountSolid(
     () =>
       createComponent(AgentRunFrame, {
-        frame: input.kind === "group" ? { ...completedFrame, parts: [input] } : input,
+        frame:
+          input.kind === "group" ? { ...completedFrame, parts: [input], groups: [input] } : input,
         options: {
           streamOptions: {},
           workPreviews: new Map(),

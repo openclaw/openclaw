@@ -37,6 +37,7 @@ it("commits a cached run's message body with its row shell", async () => {
         boundaryId: "boundary",
         outcome: { kind: "completed", actionOwner: answer.messages[0]! },
         parts: [answer],
+        groups: [answer],
       },
       options: {
         streamOptions: {},
@@ -131,6 +132,7 @@ it("loads stream and run rows without losing the adjacent message or the latest 
         boundaryId: "boundary",
         outcome: { kind: "completed", actionOwner: answer.messages[0]! },
         parts: [answer],
+        groups: [answer],
       },
       options: {
         streamOptions: {},

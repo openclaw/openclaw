@@ -468,6 +468,7 @@ export function createEngineEventLoadScenarios(
   toolCount = 200,
   inventory = 1_000,
   interactionsOnly = false,
+  eventIntervalMs = 20,
 ): EngineScenario[] {
   return [-1, 0, 5, 20, 100].map((count) => {
     let wire: Awaited<ReturnType<typeof createEventLoadWire>>;
@@ -599,6 +600,7 @@ export function createEngineEventLoadScenarios(
             count: Math.max(0, count),
             duration,
             toolCount: count === -1 ? 0 : toolCount,
+            eventIntervalMs,
             foreground,
             background,
             receiptDefaults: eventLoadReceiptDefaults,
@@ -688,10 +690,34 @@ export function createEngineEventLoadScenarios(
             throw new Error("Event load lost native input");
           }
           const scrolling = await phase(page, "scroll", async () => {
-            // Reader input retires queued follow/reveal work before the synthetic sweep.
-            await page.locator(`${pane} .chat-thread`).press("ArrowUp");
+            // Establish reader ownership before admitting the second tool wave.
+            await page.locator(`${pane} .chat-thread`).press("PageUp");
             const scroll = await page.locator(`${pane} .chat-thread`).evaluate(
               async (thread) => {
+                const settlingAt = performance.now();
+                let stableAt = settlingAt;
+                let readerTop = thread.scrollTop;
+                while (true) {
+                  await new Promise<void>((resolve) => {
+                    requestAnimationFrame(() => resolve());
+                  });
+                  const now = performance.now();
+                  if (thread.scrollTop !== readerTop) {
+                    readerTop = thread.scrollTop;
+                    stableAt = now;
+                  }
+                  if (
+                    thread.scrollHeight - readerTop - thread.clientHeight > 8 &&
+                    now - stableAt >= 200
+                  ) {
+                    break;
+                  }
+                  if (now - settlingAt > 5_000) {
+                    throw new Error(
+                      "Event-load PageUp did not settle away from the transcript end",
+                    );
+                  }
+                }
                 const started = performance.now();
                 Reflect.get(window, "__eventLoad").beginScroll();
                 const atStart = Reflect.get(window, "__eventLoad").ready();
@@ -705,7 +731,9 @@ export function createEngineEventLoadScenarios(
                 let firstBlankFrame: string | undefined;
                 let firstFrameMs = 0;
                 for (let step = 0; step < 90; step++) {
-                  thread.scrollTop = (thread.scrollHeight - thread.clientHeight) * (1 - step / 89);
+                  // Returning to the end here would re-enable automatic following,
+                  // making raw offsets compete with its native smooth-scroll command.
+                  thread.scrollTop = readerTop * (1 - step / 89);
                   await new Promise<void>((resolve) => {
                     requestAnimationFrame((at) => {
                       if (frameTimes.length === 0) {

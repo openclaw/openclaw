@@ -80,8 +80,8 @@ export function knownStreamCausalInterval(
       : part.runId
         ? messages.findIndex(
             (message) =>
-              userTurnRunId(message) === part.runId ||
-              (readSessionMessageIdentity(message)?.role === "user" &&
+              normalizeLowercaseStringOrEmpty(asNullableRecord(message)?.role) === "user" &&
+              (userTurnRunId(message) === part.runId ||
                 persistedSteerTargetRunId(message) === part.runId),
           )
         : -1;

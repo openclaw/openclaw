@@ -171,6 +171,7 @@ async function transcriptFixture(
               boundaryId: group.key,
               outcome: { kind: "completed", actionOwner: group.messages.at(-1)! },
               parts: [group],
+              groups: [group],
             },
             options: {
               streamOptions: {},
@@ -430,6 +431,7 @@ it.each(["group", "frame"] as const)(
                   boundaryId: group.key,
                   outcome: { kind: "completed", actionOwner: group.messages.at(-1)! },
                   parts: [group],
+                  groups: [group],
                 },
                 options: {
                   streamOptions: {},
@@ -1021,6 +1023,7 @@ it.each(["group", "frame"] as const)(
                   boundaryId: group.key,
                   outcome: { kind: "completed", actionOwner: group.messages.at(-1)! },
                   parts: [group],
+                  groups: [group],
                 },
                 options: {
                   streamOptions: {},

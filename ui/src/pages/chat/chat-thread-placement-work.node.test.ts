@@ -35,7 +35,8 @@ it("does not repeat history placement scans for sibling live tools", () => {
     return scans.mock.calls.length;
   };
   const single = measure(1);
-  expect(single).toBeGreaterThan(0);
+  // Canvas and live placement share the unchanged history snapshot.
+  expect(single).toBe(1);
   expect(measure(50)).toBe(single);
 });
 

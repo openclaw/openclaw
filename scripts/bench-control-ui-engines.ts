@@ -192,6 +192,7 @@ const { values } = parseArgs({
     "idle-duration-ms": { type: "string", default: "30000" },
     "event-load-duration-ms": { type: "string", default: "240000" },
     "event-load-tools": { type: "string", default: "200" },
+    "event-load-event-interval-ms": { type: "string", default: "20" },
     "event-load-inventory": { type: "string", default: "1000" },
     "event-load-interactions-only": { type: "boolean", default: false },
     "memory-soak-rounds": { type: "string", default: "10" },
@@ -200,17 +201,20 @@ const { values } = parseArgs({
 const pairs = Number(values.pairs);
 const eventLoadDurationMs = Number(values["event-load-duration-ms"]);
 const eventLoadTools = Number(values["event-load-tools"]);
+const eventLoadEventIntervalMs = Number(values["event-load-event-interval-ms"]);
 const eventLoadInventory = Number(values["event-load-inventory"]);
 if (
   !Number.isInteger(eventLoadDurationMs) ||
   eventLoadDurationMs < 1000 ||
   !Number.isInteger(eventLoadTools) ||
   eventLoadTools < 1 ||
+  !Number.isInteger(eventLoadEventIntervalMs) ||
+  eventLoadEventIntervalMs < 1 ||
   !Number.isInteger(eventLoadInventory) ||
   eventLoadInventory < 101
 ) {
   throw new Error(
-    "event-load-duration-ms must be >=1000 and event-load-tools must be positive integers; event-load-inventory must be >=101",
+    "event-load-duration-ms must be >=1000; event-load-tools and event-load-event-interval-ms must be positive integers; event-load-inventory must be >=101",
   );
 }
 const rpcDelayMs = Number(values["rpc-delay-ms"]);
@@ -614,6 +618,7 @@ try {
       eventLoadTools,
       eventLoadInventory,
       values["event-load-interactions-only"],
+      eventLoadEventIntervalMs,
     ),
     ...createEnginePageScenarios(0, pageOrigin, servers[0]!.server.baseUrl),
     ...createEngineSettingsSearchScenarios(servers[0]!.server.baseUrl),
@@ -702,6 +707,7 @@ try {
     configurations.length *
     networkProfiles.length;
   await writeJson("manifest.json", {
+    eventLoadEventIntervalMs,
     revision: execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim(),
     harnessSources: Object.fromEntries(
       await Promise.all(
