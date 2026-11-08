@@ -1,5 +1,5 @@
-import fs from "node:fs/promises";
 import { statSync } from "node:fs";
+import fs from "node:fs/promises";
 import {
   acquireFileLock as acquireFsSafeFileLock,
   drainFileLockManagerForTest,
@@ -73,6 +73,11 @@ function lockFileMtimeMs(filePath: string): number | undefined {
   } catch {
     return undefined;
   }
+}
+
+/** The crash-truncated artifact is the `.lock` sidecar; only its mtime ages it. */
+function sidecarLockMtimeMs(targetPath: string): number | undefined {
+  return lockFileMtimeMs(`${targetPath}.lock`);
 }
 
 const FILE_LOCK_MANAGER_KEY = "openclaw.plugin-sdk.file-lock";
@@ -195,7 +200,7 @@ export async function acquireFileLock(
           payload: asNullableRecord(params.payload),
           staleMs: params.staleMs,
           nowMs: params.nowMs,
-          mtimeMs: lockFileMtimeMs(filePath),
+          mtimeMs: sidecarLockMtimeMs(filePath),
         });
       },
       ...(staleRecovery === "remove-if-unchanged" || staleRecovery === "remove-if-definitely-stale"
@@ -211,6 +216,7 @@ export async function acquireFileLock(
               return shouldRemoveDeadOwnerOrExpiredLock({
                 payload: asNullableRecord(snapshot.payload),
                 staleMs: options.stale,
+                mtimeMs: sidecarLockMtimeMs(snapshot.normalizedTargetPath),
               });
             },
           }
