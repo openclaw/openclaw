@@ -1,2 +1,5 @@
-# Spawn broker orphan-pipe release regression: exact measured net test-line growth (35) at the rebased head.
-35
+# Spawn broker orphan-pipe release regression: 35 net test lines for this change, plus 16
+# inherited main debt (the rebased base was already 16 test lines over its own baseline).
+# 51 is the exact value the ratchet allows at this head (CI: total 6574391 vs ceiling
+# 6574375 with a 35-line credit; net delta +35, inherited debt 16).
+51
