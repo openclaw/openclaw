@@ -290,15 +290,6 @@ it("respects a close veto before synchronously activating the retained input", a
           menu={makeMenu({
             open: true,
             inputHandle: handle,
-            rootToggles: [
-              {
-                value: "test-tool",
-                label: "Tool",
-                checked: false,
-                disabled: false,
-                onChange: vi.fn(),
-              },
-            ],
           })}
         />
       </>
