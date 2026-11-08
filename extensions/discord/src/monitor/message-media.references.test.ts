@@ -106,7 +106,7 @@ describe("resolveReferencedReplyMediaList", () => {
 });
 
 describe("Discord media SSRF policy", () => {
-  it("merges provided ssrfPolicy with Discord CDN defaults", async () => {
+  it("merges caller hostname exceptions with Discord CDN defaults", async () => {
     readRemoteMediaBuffer.mockResolvedValueOnce({
       buffer: Buffer.from("img"),
       contentType: "image/png",
@@ -131,9 +131,9 @@ describe("Discord media SSRF policy", () => {
       | { ssrfPolicy?: Record<string, unknown> }
       | undefined;
     expect(call?.ssrfPolicy).toMatchObject({
-      allowPrivateNetwork: true,
       allowRfc2544BenchmarkRange: true,
     });
+    expect(call?.ssrfPolicy?.allowPrivateNetwork).toBeUndefined();
     expect(call?.ssrfPolicy?.hostnameAllowlist).toEqual(
       expect.arrayContaining(["assets.example.com", "cdn.discordapp.com"]),
     );
