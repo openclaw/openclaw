@@ -10,6 +10,7 @@ import {
   type OutboundMediaAccess,
   resolveOutboundAttachmentFromUrl,
 } from "openclaw/plugin-sdk/media-runtime";
+import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import { requireRuntimeConfig } from "openclaw/plugin-sdk/plugin-config-runtime";
 import {
   asPositiveSafeInteger,
@@ -57,6 +58,30 @@ export type SignalRpcOpts = Pick<
 >;
 
 export type SignalReceiptType = "read" | "viewed";
+
+// signal-cli answers `send` only after the attachment upload finishes, so the
+// default 10s RPC deadline measures upload time too. Attachment sends get a
+// base budget plus a slow-uplink transfer allowance for the account's cap.
+const SIGNAL_ATTACHMENT_SEND_BASE_TIMEOUT_MS = 30_000;
+const SIGNAL_ATTACHMENT_SEND_MIN_BYTES_PER_SECOND = 256 * 1024;
+
+/** Deadline for one `send` RPC: explicit override, else upload-aware for attachments. */
+export function resolveSignalSendTimeoutMs(params: {
+  timeoutMs?: number;
+  hasAttachments: boolean;
+  maxAttachmentBytes: number;
+}): number | undefined {
+  if (params.timeoutMs !== undefined) {
+    return params.timeoutMs;
+  }
+  if (!params.hasAttachments) {
+    return undefined;
+  }
+  const transferBudgetMs = Math.ceil(
+    (params.maxAttachmentBytes / SIGNAL_ATTACHMENT_SEND_MIN_BYTES_PER_SECOND) * 1000,
+  );
+  return resolveTimerTimeoutMs(SIGNAL_ATTACHMENT_SEND_BASE_TIMEOUT_MS + transferBudgetMs, 1);
+}
 
 type SignalTarget =
   | { type: "recipient"; recipient: string }
@@ -230,7 +255,11 @@ export async function sendMessageSignal(
       : undefined;
   const sendOpts = {
     baseUrl,
-    timeoutMs: opts.timeoutMs,
+    timeoutMs: resolveSignalSendTimeoutMs({
+      timeoutMs: opts.timeoutMs,
+      hasAttachments: attachments !== undefined,
+      maxAttachmentBytes: maxBytes,
+    }),
     transportKind: opts.transportKind ?? accountInfo.transport.kind,
     maxAttachmentBytes: maxBytes,
     assertDirectAdapterHandoff: opts.assertDirectAdapterHandoff,
