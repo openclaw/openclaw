@@ -273,6 +273,9 @@ const config = {
   // This fixture deliberately mixes used, aliased, and unused exports so the
   // topology analyzer can prove each classification.
   ignoreIssues: {
+    // Generated subprocess fixtures also consume these shared test helpers;
+    // their imports are not all statically visible to Knip.
+    "src/test-utils/**": ["exports", "nsExports"],
     // The memory-state compatibility facade must retain its pre-registry-bundle type export.
     "src/plugins/memory-state.ts": ["types"],
     "test/fixtures/ts-topology/basic/**": [
