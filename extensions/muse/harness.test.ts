@@ -1,4 +1,6 @@
+import { once } from "node:events";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { createServer, type Socket } from "node:net";
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -16,6 +18,8 @@ import {
 import type * as ProviderAuthRuntime from "openclaw/plugin-sdk/provider-auth-runtime";
 import type * as TranscriptRuntime from "openclaw/plugin-sdk/session-transcript-runtime";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import catalogOriginal from "../../test/fixtures/model-catalog/muse-meta-account.json" with { type: "json" };
+import catalogExpected from "../../test/fixtures/model-catalog/muse-meta-expected.json" with { type: "json" };
 import { registerMuseLifecycleTests } from "./harness-lifecycle.test-support.js";
 import {
   createMuseAgentHarness as createMuseAgentHarnessImpl,
@@ -688,6 +692,11 @@ describe("Muse native MSP harness", () => {
       vi.stubEnv("PATH", `${workspace}${delimiter}${process.env.PATH ?? ""}`);
 
       vi.stubEnv("MUSE_FIXTURE_CATALOG_SOURCE", "providerCatalog");
+      const catalogPath = join(workspace, "catalog.json");
+      const writeCatalog = (models: unknown) =>
+        writeFile(catalogPath, JSON.stringify({ ...catalogOriginal, models }));
+      await writeCatalog(catalogOriginal.models);
+      vi.stubEnv("MUSE_FIXTURE_CATALOG_PATH", catalogPath);
       const scope = {
         config: { plugins: { entries: { muse: { config: { binaryPath: "muse" } } } } },
         agentId: "main",
@@ -706,11 +715,28 @@ describe("Muse native MSP harness", () => {
       }
       await harness.verifySetup(verification);
       await harness.verifySetup(verification);
-      await harness.loadModelCatalog(scope);
+      expect(await harness.loadModelCatalog(scope)).toEqual(catalogExpected);
       expect(harness.readModelCatalogReadiness(verification)).toEqual({ accountType: "native" });
       const initialRequests = await readRequests(log);
       expect(initialRequests.filter((request) => request.event === "spawn")).toHaveLength(1);
       expect(initialRequests.filter((request) => request.method === "model/list")).toHaveLength(3);
+      const full = "muse-wonder-full-1.0-contributor";
+      await writeCatalog(catalogOriginal.models.filter((row) => row.modelId !== full));
+      await expect(harness.verifySetup({ ...verification, modelId: full })).rejects.toThrow(
+        `cannot access meta/${full}`,
+      );
+      // Keep meaningful provider labels and unknown future IDs without guessing an offering.
+      const rows = Object.entries({
+        [full]: "Official Full Subscriber Label",
+        "muse-wonder-2.0-contributor": "muse-wonder-2.0-contributor",
+        "future-opaque-id": "Provider's New Model",
+      });
+      await writeCatalog(
+        rows.map(([modelId, displayLabel]) => ({ modelId, displayLabel, providerId: "meta" })),
+      );
+      const models = await harness.loadModelCatalog(scope);
+      expect(models).toMatchObject(rows.map(([id, name]) => ({ id, name })));
+      vi.stubEnv("MUSE_FIXTURE_CATALOG_PATH", undefined);
       vi.stubEnv("MUSE_FIXTURE_CATALOG_SOURCE", "bundledCatalog");
       await writeFile(join(stateDir, "muse", "muse", "auth.json"), '{"changed":true}');
       await expect(harness.verifySetup(verification)).rejects.toThrow("authenticate");
@@ -724,6 +750,71 @@ describe("Muse native MSP harness", () => {
       });
       expect(requests.map((request) => request.method)).not.toContain("turn/start");
       expect(requests.map((request) => request.method)).not.toContain("session/start");
+    },
+  );
+
+  it.runIf(process.platform !== "win32").for(["startup", "none", "first", "both"])(
+    "cancels only its own catalog check on a shared host (%s)",
+    async (mode, { signal }) => {
+      const { harness, params } = setup();
+      const config = { plugins: { entries: { muse: { config: { binaryPath: fixture } } } } };
+      const scope = { config, agentId: "main", agentDir: workspace, workspaceDir: workspace };
+      const context = { ...params, ...scope, assertCurrent: () => {} };
+      const sockets: Socket[] = [];
+      await using server = createServer((socket) => sockets.push(socket));
+      const gatePath = join(workspace, "catalog-gate.sock");
+      await once(server.listen(gatePath), "listening");
+      vi.stubEnv(`MUSE_FIXTURE_${mode === "startup" ? "INITIALIZE" : "CATALOG"}_GATE`, gatePath);
+      const catalogPath = join(workspace, "shared-catalog.json");
+      await writeFile(catalogPath, JSON.stringify(catalogOriginal));
+      vi.stubEnv("MUSE_FIXTURE_CATALOG_PATH", catalogPath);
+      const controllers = [new AbortController(), new AbortController()];
+      const cancelled = new Error("catalog check cancelled");
+      const outcomes: Promise<unknown>[] = [];
+      const start = async (check: (signal: AbortSignal) => Promise<unknown>) => {
+        const connected = once(server, "connection", { signal });
+        const index = outcomes.length;
+        outcomes.push(
+          check(controllers[index]!.signal).then(
+            (value) => ({ value }),
+            (error: unknown) => ({ error }),
+          ),
+        );
+        const [socket] = (await connected) as [Socket];
+        return Number((await once(socket, "data", { signal }))[0]);
+      };
+      const verify = (abort: AbortSignal) => harness.verifySetup!({ ...context, signal: abort });
+      const release = (index: number) => sockets[index]!.write("resume");
+      const cancel = (index: number) => controllers[index]!.abort(cancelled);
+      try {
+        const pid = await start(verify);
+        if (mode === "startup") {
+          cancel(0);
+          release(0);
+          expect(await outcomes[0]).toHaveProperty("error");
+          expect(() => process.kill(pid, 0)).toThrow();
+          return;
+        }
+        expect(
+          await start(mode === "both" ? verify : () => harness.loadModelCatalog!(context)),
+        ).toBe(pid);
+        (mode === "none" ? release : cancel)(0);
+        expect(await outcomes[0]).toEqual(
+          mode === "none" ? { value: undefined } : { error: cancelled },
+        );
+        expect(process.kill(pid, 0)).toBe(true);
+        (mode === "both" ? cancel : release)(1);
+        expect(await outcomes[1]).toEqual(
+          mode === "both" ? { error: cancelled } : { value: catalogExpected },
+        );
+        if (mode !== "none") {
+          expect(() => process.kill(pid, 0)).toThrow();
+        }
+      } finally {
+        for (const socket of sockets) {
+          socket.destroy();
+        }
+      }
     },
   );
 

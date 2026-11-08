@@ -86,7 +86,10 @@ function SubagentRow(props: ChatDetailsSubagentsProps & { row: Subagent }) {
         onClick={() => props.onOpenSubagent(props.row.key)}
       >
         <SubagentAvatar row={props.row} />
-        <span class="chat-details-subagents__name" ref={nameOverflow}>
+        <span
+          class={["chat-details-subagents__name", { "text-shimmer": isWorking(props.row) }]}
+          ref={nameOverflow}
+        >
           {props.row.label}
         </span>
         <span

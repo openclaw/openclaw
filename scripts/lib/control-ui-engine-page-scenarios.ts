@@ -17,6 +17,7 @@ import type { ModelAuthStatusResult } from "../../ui/src/api/types.ts";
 import {
   APP_ROUTE_IDS,
   pathForRoute,
+  pathForPluginCatalogEntry,
   pathForTerminalSession,
   type RouteId,
 } from "../../ui/src/app-route-paths.ts";
@@ -2159,6 +2160,175 @@ export function createEnginePageScenarios(
         return evidence;
       },
     };
+    if (id === "plugins") {
+      const browseSource = requiredScenario(
+        dataCatalogScenarios,
+        "data-catalog-inventory-readiness",
+      );
+      const browseFixture = createPageFixture({ ...definition, source: browseSource }, id);
+      const browse: EngineScenario = {
+        ...common,
+        id: "page-plugins-browse-visit",
+        expected: "Catalog is browsable and searchable before inventory grants installation.",
+        fixtureOverrides: (sandbox, base) => {
+          const fixture = browseFixture(sandbox, base);
+          return pageOrigin === "chat"
+            ? {
+                ...fixture,
+                sessionTranscripts: {
+                  ...fixture.sessionTranscripts,
+                  [originSessionKey]: base.sessionTranscripts![originSessionKey]!,
+                },
+              }
+            : fixture;
+        },
+        prepare: boot,
+        run: async (page, gateway) => {
+          const timing = await measureVisit(page, id, definition);
+          const evidence = await browseSource.run(page, gateway);
+          assert(evidence && typeof evidence.inventoryReadyAtMs === "number");
+          assert(typeof evidence.inputReadyAtMs === "number");
+          return {
+            ...evidence,
+            visitStartedAtMs: timing.startedAtMs,
+            visitReadyMs: timing.readyMs,
+            visitReadyAtMs: timing.readyAtMs,
+            inputReadyMs: evidence.inputReadyAtMs - timing.startedAtMs,
+            contentReadyMs: evidence.inventoryReadyAtMs - timing.startedAtMs,
+          };
+        },
+      };
+      const detailPath = pathForPluginCatalogEntry("data-catalog-0900");
+      const detail: EngineScenario = {
+        ...browse,
+        id: "page-plugins-detail-visit",
+        expected:
+          "Direct catalog detail shows its selected heading and README independently of inventory; installation waits for current inventory.",
+        fixtureOverrides: (sandbox, base) => {
+          // SAFETY: The sibling browse scenario defines this fixture above.
+          const fixture = browse.fixtureOverrides!(sandbox, base);
+          return {
+            ...fixture,
+            methodResponses: {
+              ...fixture.methodResponses,
+              "plugins.catalog.get": {
+                plugin: {
+                  id: "data-catalog-0900",
+                  catalog: {
+                    name: "Data plugin 0900",
+                    summary: "Synthetic direct catalog detail",
+                    official: false,
+                    categories: ["tools"],
+                    latestVersion: "1.0.0",
+                  },
+                  local: {
+                    present: false,
+                    installed: false,
+                    enabled: false,
+                    state: "not-installed",
+                    action: "install",
+                  },
+                },
+                detail: {
+                  origin: "clawhub",
+                  packageName: "@synthetic/data-plugin-0900",
+                  topics: [],
+                  configuration: [],
+                  mcpServers: [],
+                  skills: [],
+                  versions: [],
+                  readme:
+                    "# Direct catalog evidence\n\nSynthetic README is ready independently of installed inventory.",
+                },
+              },
+            },
+          };
+        },
+        run: async (page, gateway) => {
+          const timing = await page.evaluate(
+            (pathname) =>
+              new Promise<{
+                visitStartedAtMs: number;
+                visitReadyAtMs: number;
+                visitReadyMs: number;
+                installDisabledAtDetail: boolean;
+                inventoryLoadingVisible: boolean;
+              }>((resolve, reject) => {
+                const started = performance.now();
+                let readyFrames = 0;
+                const probe = () => {
+                  const heading = document.querySelector(".plugin-catalog-detail h1");
+                  const readme = document.querySelector(".plugin-catalog-detail__readme");
+                  const install = document.querySelector<HTMLButtonElement>(
+                    ".plugin-catalog-detail__install",
+                  );
+                  // DOM readiness intentionally does not depend on the router's loader state.
+                  const detailReady =
+                    location.pathname === pathname &&
+                    heading?.checkVisibility() &&
+                    heading.textContent?.trim() === "Data plugin 0900" &&
+                    readme?.checkVisibility() &&
+                    readme.textContent?.includes(
+                      "Synthetic README is ready independently of installed inventory.",
+                    ) &&
+                    install?.checkVisibility();
+                  readyFrames = detailReady ? readyFrames + 1 : 0;
+                  if (readyFrames >= 2 && install) {
+                    const readyAt = performance.now();
+                    resolve({
+                      visitStartedAtMs: started,
+                      visitReadyAtMs: readyAt,
+                      visitReadyMs: readyAt - started,
+                      installDisabledAtDetail: install.disabled,
+                      inventoryLoadingVisible: [
+                        ...document.querySelectorAll('#plugins-hub-panel > [role="status"]'),
+                      ].some(
+                        (element) =>
+                          element.checkVisibility() &&
+                          element.textContent?.includes("Loading plugins"),
+                      ),
+                    });
+                  } else if (performance.now() - started > 60_000) {
+                    reject(new Error("Selected catalog heading and README did not become visible"));
+                  } else {
+                    requestAnimationFrame(probe);
+                  }
+                };
+                window.openclawControlUi!.navigate("plugins", { pathname });
+                requestAnimationFrame(probe);
+              }),
+            detailPath,
+          );
+          await page.waitForFunction(() => {
+            const install = document.querySelector<HTMLButtonElement>(
+              ".plugin-catalog-detail__install",
+            );
+            return install?.checkVisibility() && !install.disabled;
+          });
+          assert.equal(
+            await page.locator(".plugin-catalog-detail h1").textContent(),
+            "Data plugin 0900",
+          );
+          assert.equal(new URL(page.url()).pathname, detailPath);
+          assert(
+            (await page.locator(".plugin-catalog-detail__readme").textContent())?.includes(
+              "Synthetic README is ready independently of installed inventory.",
+            ),
+          );
+          return {
+            ...timing,
+            contentReadyMs: timing.visitReadyMs,
+            selectedDetailVisible: true,
+            installEnabledAfterInventory: true,
+            inventoryReadyMs:
+              (await page.evaluate(() => performance.now())) - timing.visitStartedAtMs,
+            catalogDetailRequests: (await gateway.getRequests("plugins.catalog.get")).length,
+            inventoryRequests: (await gateway.getRequests("plugins.list")).length,
+          };
+        },
+      };
+      return [visit, revisit, action, leave, browse, detail].concat(noChanges);
+    }
     if (id === "custodian") {
       const greetingDefinition: PageDefinition = {
         ...definition,
