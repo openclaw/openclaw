@@ -4,6 +4,7 @@ import { readActiveTranscriptEntryAnchor } from "../../config/sessions/session-a
 import { isIndexedSessionEntry } from "../../config/sessions/session-entry-codec.js";
 import { walkSessionCurrentTurn } from "../../config/sessions/session-entry-navigation.js";
 import type { TranscriptEntryAnchor } from "../../config/sessions/transcript-entry-anchor.js";
+import { isInFlightTurnTransparentMessage } from "../../config/sessions/transcript-message-identity.js";
 import { captureOwnedTranscriptWriteAssertion } from "../../config/sessions/transcript-write-context.js";
 import {
   OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE,
@@ -62,6 +63,10 @@ function traversalEntry(
       (entry.type === "custom_message" &&
         (entry.customType === OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE ||
           entry.customType === SYSTEM_UPDATE_MESSAGE_CUSTOM_TYPE)) ||
+      // Context-free commands and fast-abort mirrors stay in history. They do not
+      // take the current turn from a user message that was already persisted.
+      // Ordinary commands and newer user messages remain barriers.
+      (entry.type === "message" && isInFlightTurnTransparentMessage(entry.message)) ||
       (isInterruptedTail?.(entry) ?? false),
   };
 }

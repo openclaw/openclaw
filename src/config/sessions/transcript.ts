@@ -284,9 +284,40 @@ type SessionTranscriptAssistantAppendOptions = {
   assertCurrent?: () => void;
   onMessageCommitted?: SessionTranscriptTurnPersistOptions["onMessageCommitted"];
   contextFreeCommand?: true;
+  /**
+   * Fast-abort exchanges remain transcript history, but they must not replace a user
+   * turn that was already persisted while the abort reply was still being delivered.
+   */
+  preservesInFlightTurn?: true;
   /** Delivered command exchanges are replayable conversation, not delivery bookkeeping. */
   command?: { text: string; idempotencyKey: string };
 };
+
+function inFlightCommandMetadata(params: {
+  contextFreeCommand?: true;
+  preservesInFlightTurn?: true;
+  existing?: unknown;
+}):
+  | {
+      excludeFromContext?: true;
+      __openclaw: {
+        contextFreeCommand?: true;
+        preservesInFlightTurn?: true;
+      };
+    }
+  | undefined {
+  if (!params.contextFreeCommand && !params.preservesInFlightTurn) {
+    return undefined;
+  }
+  return {
+    ...(params.contextFreeCommand ? { excludeFromContext: true as const } : {}),
+    __openclaw: {
+      ...asOptionalRecord(params.existing),
+      ...(params.contextFreeCommand ? { contextFreeCommand: true as const } : {}),
+      ...(params.preservesInFlightTurn ? { preservesInFlightTurn: true as const } : {}),
+    },
+  };
+}
 
 export async function appendAssistantMessageToSessionTranscript(
   params: SessionTranscriptAssistantAppendOptions & {
@@ -454,17 +485,11 @@ async function appendExactAssistantMessageWithSource(
     ((params.message as { idempotencyKey?: unknown }).idempotencyKey as string | undefined);
   const message = {
     ...params.message,
-    ...(params.contextFreeCommand
-      ? {
-          excludeFromContext: true,
-          __openclaw: {
-            ...asOptionalRecord(
-              "__openclaw" in params.message ? params.message["__openclaw"] : undefined,
-            ),
-            contextFreeCommand: true,
-          },
-        }
-      : {}),
+    ...inFlightCommandMetadata({
+      contextFreeCommand: params.contextFreeCommand,
+      preservesInFlightTurn: params.preservesInFlightTurn,
+      existing: "__openclaw" in params.message ? params.message["__openclaw"] : undefined,
+    }),
     ...(explicitIdempotencyKey ? { idempotencyKey: explicitIdempotencyKey } : {}),
   } as Parameters<SessionManager["appendMessage"]>[0];
   const preparedUnkeyedMessage =
@@ -525,9 +550,10 @@ async function appendExactAssistantMessageWithSource(
                 content: [{ type: "text" as const, text: params.command.text }],
                 timestamp: Date.now(),
                 idempotencyKey: params.command.idempotencyKey,
-                ...(params.contextFreeCommand
-                  ? { excludeFromContext: true, __openclaw: { contextFreeCommand: true } }
-                  : {}),
+                ...inFlightCommandMetadata({
+                  contextFreeCommand: params.contextFreeCommand,
+                  preservesInFlightTurn: params.preservesInFlightTurn,
+                }),
               },
               idempotencyLookup: "scan" as const,
             },

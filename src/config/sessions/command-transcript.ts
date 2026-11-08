@@ -1,4 +1,5 @@
 import { normalizeCommandBody } from "../../auto-reply/commands-registry-normalize.js";
+import { isAbortRequestText } from "../../auto-reply/reply/abort-primitives.js";
 import { parseSlashCommandOrNull } from "../../auto-reply/reply/commands-slash-parse.js";
 import { parseConfigCommand } from "../../auto-reply/reply/config-commands.js";
 import { parseDebugCommand } from "../../auto-reply/reply/debug-commands.js";
@@ -103,6 +104,7 @@ type CommandExchangeParams = Pick<
   | "assertCurrent"
   | "beforeMessageWrite"
   | "contextFreeCommand"
+  | "preservesInFlightTurn"
 > & {
   commandText: string;
   replyText: string;
@@ -135,6 +137,9 @@ async function recordCommandExchange(params: CommandExchangeParams) {
   }
   return appendAssistantMessageToSessionTranscript({
     ...params,
+    // A stop is dispatcher bookkeeping for work that already ended. Mark it so a
+    // user turn persisted while the reply is delivered stays the current turn.
+    ...(isAbortRequestText(commandText) ? { preservesInFlightTurn: true as const } : {}),
     text: redactCommandTranscriptText(commandText, params.replyText),
     ...(params.commandInputCommitted
       ? {}
