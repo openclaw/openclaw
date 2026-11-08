@@ -248,6 +248,18 @@ it("retains cached Subagents until the roster observes its parent, then adopts n
         },
       ],
     },
+    {
+      subagentSessionsPending: true,
+      subagentSessions: [
+        { key: view.initial.sessionKey, kind: "direct" },
+        {
+          key: "agent:main:subagent:partial",
+          kind: "direct",
+          derivedTitle: "Partial child",
+          parentSessionKey: view.initial.sessionKey,
+        },
+      ],
+    },
   ];
   for (const facts of pending) {
     view.update(facts);
@@ -260,7 +272,10 @@ it("retains cached Subagents until the roster observes its parent, then adopts n
     expect(open).not.toHaveBeenCalled();
     expect(remember).not.toHaveBeenCalled();
   }
-  view.update({ subagentSessions: [{ key: view.initial.sessionKey, kind: "direct" }] });
+  view.update({
+    subagentSessionsPending: false,
+    subagentSessions: [{ key: view.initial.sessionKey, kind: "direct" }],
+  });
   await advance();
   expect(view.group("subagents")).toBeNull();
   expect(remember).toHaveBeenCalledWith(

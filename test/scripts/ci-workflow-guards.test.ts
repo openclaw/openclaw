@@ -3799,6 +3799,59 @@ server.listen(0, "127.0.0.1", () => {
     });
   });
 
+  it("keeps pinned Bun cache publication with the protected warmer", () => {
+    const action = readWorkflow(".github/actions/setup-test-bun/action.yml");
+    const restore = requiredWorkflowStep(action.runs.steps, "Restore pinned Bun release assets");
+    const save = requiredWorkflowStep(action.runs.steps, "Save pinned Bun release assets");
+    const identity = requiredWorkflowStep(action.runs.steps, "Resolve pinned Bun cache identity");
+    expect(identity.run).toContain("$GITHUB_ACTION_PATH/../../..");
+    expect(identity.run).toContain('sha256sum "$pin"');
+    expect(identity.run).toContain("path=~/.cache/openclaw-bun/$tag");
+    const install = requiredWorkflowStep(action.runs.steps, "Install pinned Bun test runtime");
+    expect(install.run).toContain('echo "OPENCLAW_BUN_PATH=$bun_dir/bin/bun" >> "$GITHUB_ENV"');
+    expect(restore.uses).toBe(CACHE_V5);
+    expect(restore.with).not.toHaveProperty("restore-keys");
+    expect(save.uses).toBe(CACHE_SAVE_V5);
+    expect(save.with).toEqual(restore.with);
+    const publisher = {
+      eventName: "schedule" as const,
+      repository: "openclaw/openclaw",
+      ref: "refs/heads/main",
+      workflow: "Vitest Cache Warm",
+      inputs: { "cache-mode": "read-write" },
+      steps: { cache: { outputs: { "cache-hit": "false" } } },
+      runAttempt: 1,
+    };
+    expect(evaluateWorkflowCondition(save.if, publisher)).toBe(true);
+    for (const rejected of [
+      { repository: "contributor/openclaw" },
+      { ref: "refs/pull/123/merge" },
+      { workflow: "CI" },
+      { inputs: { "cache-mode": "restore" } },
+      { steps: { cache: { outputs: { "cache-hit": "true" } } } },
+      { failed: true },
+    ]) {
+      expect(evaluateWorkflowCondition(save.if, { ...publisher, ...rejected })).toBe(false);
+    }
+    const warmer = readWorkflow(".github/workflows/vitest-cache-warm.yml");
+    const publish = requiredWorkflowStep(
+      warmer.jobs.dependencies.steps,
+      "Warm pinned Bun release assets",
+    );
+    expect(publish).toMatchObject({
+      if: "runner.os == 'Linux'",
+      uses: "./.github/actions/setup-test-bun",
+      with: { "cache-mode": "read-write" },
+    });
+    for (const name of ["checks-node-core-test-nondist-shard", "checks-ui"]) {
+      const reader = requiredWorkflowStep(
+        readCiWorkflow().jobs[name].steps,
+        "Setup pinned Bun test runtime",
+      );
+      expect(reader.with?.["cache-mode"]).toBe("${{ needs.preflight.outputs.cache_mode }}");
+    }
+  });
+
   it("persists isolated transform and compile caches through immutable protected archives", () => {
     const action = readWorkflow(".github/actions/setup-node-env/action.yml");
     const step = (name: string) => requiredWorkflowStep(action.runs.steps, name);

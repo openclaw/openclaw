@@ -314,6 +314,7 @@ it.each(
     ["ui/src/test-helpers/control-ui-e2e.test.ts"],
     ["ui/src/app/gateway-store.test-support.ts"],
     ["ui/src/styles/cursor-policy.browser.test.ts"],
+    ["ui/src/pages/channels/view.detail.browser.test.tsx"],
     ["ui/src/pages/activity/../activity/activity-page.test.ts"],
   ].map((paths) => ({ paths })),
 )("retains UI E2E for protected or unresolved inputs $paths", ({ paths }) => {
@@ -1075,6 +1076,111 @@ describe("CI changed Node test plan", () => {
     } finally {
       selected.mockRestore();
       metadata.mockRestore();
+    }
+  });
+
+  it("shares private QA preparation without extending an already selected slow target", () => {
+    const targets = Array.from({ length: 4 }, (_, i) => `src/infra/prepared-pack-${i}.e2e.test.ts`);
+    const routing = vi.spyOn(testProjects, "buildVitestRunPlans").mockImplementation((files) => [
+      {
+        config: "test/vitest/vitest.e2e.config.ts",
+        includePatterns: null,
+        forwardedArgs: [...files],
+        watchMode: false,
+      },
+    ]);
+    const timings = vi
+      .spyOn(testTimings, "readRepoE2eFileTimings")
+      .mockReturnValue(
+        Object.fromEntries(targets.map((target, index) => [target, index === 0 ? 210 : 80])),
+      );
+    const tooling = vi.spyOn(testTimings, "readToolingFileTimings").mockReturnValue({});
+    try {
+      const shards = expectDefined(
+        createChangedNodeTestShardsWithSmoke(targets, { selectedTestTargets: targets }),
+        "prepared changed-target plan",
+      );
+      const prepared = shards.filter((shard) => shard.targets);
+      expect(prepared).toHaveLength(3);
+      expect(selectedFiles(prepared).toSorted()).toEqual(targets.toSorted());
+      expect(Math.max(...prepared.map((shard) => shard.predictedSeconds!))).toBe(210);
+      expect(prepared.every((shard) => shard.pretestBuildMode === "private-qa")).toBe(true);
+      expect(prepared.find((shard) => shard.targets?.includes(targets[0]!))?.targets).toEqual([
+        targets[0],
+      ]);
+
+      // Without a slower selected target, keep the original 150-second envelope.
+      const small = expectDefined(
+        createChangedNodeTestShardsWithSmoke(targets.slice(1), {
+          selectedTestTargets: targets.slice(1),
+        }),
+        "small prepared changed-target plan",
+      );
+      expect(small.filter((shard) => shard.targets)).toHaveLength(3);
+
+      // A wider first-fit bin can need more jobs; retain the cheaper original plan.
+      const nonMonotoneCosts = [152.5, 110, 60, 60, 55, 52.5, 42.5, 20, 20, 15, 15];
+      const nonMonotoneTargets = nonMonotoneCosts.map(
+        (_, i) => `src/infra/prepared-non-monotone-${i}.e2e.test.ts`,
+      );
+      timings.mockReturnValue(
+        Object.fromEntries(nonMonotoneTargets.map((target, i) => [target, nonMonotoneCosts[i]!])),
+      );
+      const retained = expectDefined(
+        createChangedNodeTestShardsWithSmoke(nonMonotoneTargets, {
+          selectedTestTargets: nonMonotoneTargets,
+        }),
+        "non-monotone prepared plan",
+      ).filter((shard) => shard.targets);
+      expect(retained).toHaveLength(4);
+      expect(selectedFiles(retained).toSorted()).toEqual(nonMonotoneTargets.toSorted());
+    } finally {
+      routing.mockRestore();
+      timings.mockRestore();
+      tooling.mockRestore();
+    }
+  });
+
+  it("builds only final target rows that still contain a runtime consumer", () => {
+    const targets = [
+      "src/infra/prepared-a.e2e.test.ts",
+      "src/infra/source-a.test.ts",
+      "src/infra/source-b.test.ts",
+      "src/infra/prepared-b.e2e.test.ts",
+    ];
+    const routing = vi.spyOn(testProjects, "buildVitestRunPlans").mockImplementation((files) => [
+      {
+        config: files.some((file) => file.endsWith(".e2e.test.ts"))
+          ? "test/vitest/vitest.e2e.config.ts"
+          : "test/vitest/vitest.unit.config.ts",
+        includePatterns: null,
+        forwardedArgs: [...files],
+        watchMode: false,
+      },
+    ]);
+    const timings = vi
+      .spyOn(testTimings, "readRepoE2eFileTimings")
+      .mockReturnValue(
+        Object.fromEntries(targets.map((file) => [file, file.endsWith(".e2e.test.ts") ? 20 : 80])),
+      );
+    const tooling = vi.spyOn(testTimings, "readToolingFileTimings").mockReturnValue({});
+    try {
+      const rows = expectDefined(
+        createChangedNodeTestShardsWithSmoke(targets, { selectedTestTargets: targets }),
+        "mixed source and runtime plan",
+      ).filter((shard) => shard.targets);
+      expect(rows).toHaveLength(2);
+      expect(selectedFiles(rows).toSorted()).toEqual(targets.toSorted());
+      expect(rows.filter((row) => row.pretestBuildMode)).toHaveLength(1);
+      for (const row of rows) {
+        expect(row.pretestBuildMode).toBe(
+          row.targets!.some((file) => file.endsWith(".e2e.test.ts")) ? "private-qa" : undefined,
+        );
+      }
+    } finally {
+      routing.mockRestore();
+      timings.mockRestore();
+      tooling.mockRestore();
     }
   });
 

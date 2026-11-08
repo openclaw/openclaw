@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { Transform } from "node:stream";
-import { finished } from "node:stream/promises";
+import { pipeline } from "node:stream/promises";
 import { createGunzip, createGzip } from "node:zlib";
 
 const HASH = /^[a-f0-9]{64}$/;
@@ -40,9 +40,9 @@ const canonical = (value) => {
   if (value && typeof value === "object") {
     return (
       "{" +
-      Object.entries(value)
-        .toSorted(([a], [b]) => a.localeCompare(b))
-        .map(([key, child]) => JSON.stringify(key) + ":" + canonical(child))
+      Object.keys(value)
+        .toSorted()
+        .map((key) => JSON.stringify(key) + ":" + canonical(value[key]))
         .join(",") +
       "}"
     );
@@ -62,7 +62,7 @@ const instant = (value, name) => {
 };
 const inputStream = (filename) => {
   const raw = filename === "-" ? process.stdin : createReadStream(filename);
-  return filename.endsWith(".gz") ? raw.pipe(createGunzip()) : raw;
+  return filename.endsWith(".gz") ? raw.compose(createGunzip()) : raw;
 };
 // Yields JSONL lines split on \n only; readline would also split on U+2028 inside JSON strings.
 async function* lines(filename) {
@@ -101,36 +101,24 @@ async function writeManifest(filename, header, database) {
       callback(null, chunk);
     },
   });
-  if (gzip) {
-    gzip.pipe(meter).pipe(destination);
-  } else {
-    meter.pipe(destination);
-  }
-  const sink = gzip ?? meter;
-  const write = (text) =>
-    new Promise((resolve, reject) => {
-      sink.write(text, (/** @type {Error | null | undefined} */ error) =>
-        error ? reject(error) : resolve(),
+  function* rows() {
+    yield JSON.stringify(header) + "\n";
+    for (const row of database
+      .prepare("SELECT id,sha256,occurred_at FROM items ORDER BY id")
+      .iterate()) {
+      yield (
+        JSON.stringify({
+          kind: "item",
+          id: row.id,
+          sha256: row.sha256,
+          ...(row.occurred_at ? { occurred_at: row.occurred_at } : {}),
+        }) + "\n"
       );
-    });
-  await write(JSON.stringify(header) + "\n");
-  for (const row of database
-    .prepare("SELECT id,sha256,occurred_at FROM items ORDER BY id")
-    .iterate()) {
-    await write(
-      JSON.stringify({
-        kind: "item",
-        id: row.id,
-        sha256: row.sha256,
-        ...(row.occurred_at ? { occurred_at: row.occurred_at } : {}),
-      }) + "\n",
-    );
+    }
   }
-  sink.end();
-  await finished(meter);
-  if (destination !== process.stdout) {
-    await finished(destination);
-  }
+  await pipeline(rows(), ...(gzip ? [gzip] : []), meter, destination, {
+    end: destination !== process.stdout,
+  });
   return hash.digest("hex");
 }
 async function snapshot() {

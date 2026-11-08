@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import { serialize } from "node:v8";
 import { deflateRawSync } from "node:zlib";
 import {
@@ -24,8 +23,10 @@ import {
 import { prepareLocalWorkspaceFingerprints } from "./local-workspace-fingerprints.js";
 import {
   prepareLocalWorkspaceArchive,
+  localWorkspaceManifestDocument as manifestDocument,
   parseLocalWorkspaceSourcePaths,
   selectLocalWorkspaceCanonicalPaths,
+  readLocalWorkspaceGitExclusions,
 } from "./local-workspace-inventory.js";
 import {
   createLocalWorkspaceManifestTree,
@@ -45,12 +46,7 @@ import type {
 } from "./local-workspace-store.types.js";
 import { scanActualWorkspaceManifest } from "./workspace-actual-manifest.js";
 import { sameEntry } from "./workspace-manifest-comparison.js";
-import {
-  parseWorkerWorkspaceManifest,
-  serializeWorkerWorkspaceManifest,
-  type WorkerWorkspaceManifest,
-  type WorkspaceManifestPathPolicy,
-} from "./workspace-manifest.js";
+import { parseWorkerWorkspaceManifest } from "./workspace-manifest.js";
 import { workspacePathAncestors } from "./workspace-path-ancestors.js";
 import { buildCacheInputPaths } from "./workspace-path-exclusions.js";
 
@@ -98,6 +94,12 @@ export function readLocalWorkspaceManifestRows(
 
 function readManifestRowsInSnapshot(db: EngineConnection, input: LocalWorkspaceManifestInput) {
   const query = getNodeSqliteKysely<DB>(db);
+  const target =
+    input.action.kind === "scan" || input.action.kind === "probe"
+      ? input.action.target
+      : input.action.kind === "archive"
+        ? "canonical"
+        : undefined;
   const row = executeSqliteQueryTakeFirstSync(
     db,
     query
@@ -111,9 +113,16 @@ function readManifestRowsInSnapshot(db: EngineConnection, input: LocalWorkspaceM
         "baseline_ref",
         "tree_root_digest",
         "source_paths_digest",
-        "canonical_fingerprints",
-        "projection_fingerprints",
         "pending_ref",
+      ])
+      // Keep the snapshot shape without materializing fingerprints this action never consumes.
+      .select((eb) => [
+        (target === "projection" ? eb.ref("canonical_fingerprints") : eb.val(null)).as(
+          "canonical_fingerprints",
+        ),
+        (target === "canonical" ? eb.ref("projection_fingerprints") : eb.val(null)).as(
+          "projection_fingerprints",
+        ),
       ])
       .$if(input.action.kind === "repair", (builder) => builder.select("checkpoint_json"))
       .where("worktree_id", "=", input.id),
@@ -152,33 +161,6 @@ function readManifestRowsInSnapshot(db: EngineConnection, input: LocalWorkspaceM
     }
   }
   return { row, records };
-}
-
-function manifestDocument(
-  nodes: Iterable<LocalWorkspaceManifestNode>,
-  baseCommit: string,
-  retained?: string[],
-  pathPolicy: WorkspaceManifestPathPolicy = "current",
-) {
-  const manifest: WorkerWorkspaceManifest = {
-    version: 1,
-    baseCommit,
-    entries: [],
-    directories: [],
-    ...(retained ? { buildCacheInputs: retained } : {}),
-  };
-  for (const node of nodes) {
-    if (node.type === "directory") {
-      manifest.directories!.push(node.path);
-    } else {
-      manifest.entries.push(node);
-    }
-  }
-  const rawManifest = serializeWorkerWorkspaceManifest(manifest, pathPolicy);
-  return {
-    rawManifest,
-    manifestRef: `sha256:${createHash("sha256").update(rawManifest).digest("hex")}`,
-  };
 }
 
 function prepareUpdate(
@@ -557,9 +539,7 @@ export async function executeLocalWorkspaceManifestRead(
     if (node.type === "directory") {
       preserveDirectories.add(entryPath);
     }
-    if (target === "projection") {
-      canonicalPaths.add(entryPath);
-    }
+    canonicalPaths.add(entryPath);
   }
   const fingerprintTarget = target === "canonical" ? "projection" : "canonical";
   const previousFingerprints =
@@ -582,6 +562,14 @@ export async function executeLocalWorkspaceManifestRead(
       root: target === "canonical" ? row.projection_path : action.canonicalRoot,
       baseCommit: row.base_commit,
       includePaths: target === "projection" ? canonicalPaths : undefined,
+      gitIgnore:
+        target === "canonical"
+          ? await readLocalWorkspaceGitExclusions(
+              action.canonicalRoot,
+              row.projection_path,
+              canonicalPaths,
+            )
+          : undefined,
       preserveDirectories,
       buildCacheInputs: new Set(retained),
       reuseFile: fingerprintScan.reuseFile,

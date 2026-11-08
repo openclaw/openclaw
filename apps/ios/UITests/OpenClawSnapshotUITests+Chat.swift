@@ -490,10 +490,10 @@ extension OpenClawSnapshotUITests {
         let work = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Worked")).firstMatch
         XCTAssertTrue(work.waitForExistence(timeout: 5))
         work.tap()
-        for (command, expectedStatus, showsUnknown) in [
-            ("printf ready", "No result", true),
-            ("printf missing", "No result", true),
-            ("printf complete", "Finished", false),
+        for (command, expectedStatus) in [
+            ("printf ready", "Outcome unknown"),
+            ("printf missing", "No result"),
+            ("printf complete", "Finished"),
         ] {
             let row = app.descendants(matching: .any).matching(NSPredicate(
                 format: "label CONTAINS %@ AND value CONTAINS %@", "Exec", command)).firstMatch
@@ -501,7 +501,7 @@ extension OpenClawSnapshotUITests {
             XCTAssertTrue(
                 (row.value as? String)?.hasPrefix(expectedStatus) == true,
                 "The row must retain the prepared outcome for \(command)")
-            // Accessibility already announced unknown outcomes; pixels must preserve that cue too.
+            // Preserve visible uncertainty even when the row has no disclosure.
             let image = try XCTUnwrap(row.screenshot().image.cgImage)
             let recognition = VNRecognizeTextRequest()
             recognition.recognitionLevel = .accurate
@@ -510,11 +510,22 @@ extension OpenClawSnapshotUITests {
             let text = (recognition.results ?? []).compactMap { $0.topCandidates(1).first?.string }
                 .joined(separator: " ").lowercased()
             XCTAssertTrue(text.contains("exec"), "Rendered tool title was not recognized: \(text)")
-            XCTAssertFalse(text.contains("outcome unknown"), "Step still uses the fallback title: \(text)")
+            XCTAssertEqual(
+                text.contains("outcome unknown"),
+                command == "printf ready",
+                "Wrong visible outcome cue: \(text)")
             XCTAssertEqual(
                 text.contains("no result"),
-                showsUnknown,
-                "Visible unknown-outcome cue is wrong for \(command): \(text)")
+                command == "printf missing",
+                "Wrong missing-output cue: \(text)")
+            XCTAssertFalse(text.contains("finished"), "Collapsed row has a status badge: \(text)")
+            if command == "printf ready" {
+                row.tap()
+                XCTAssertTrue(app.staticTexts["ready"].waitForExistence(timeout: 5))
+                XCTAssertTrue(app.staticTexts["Outcome unknown"].waitForExistence(timeout: 5))
+                self.attachScreenshot(named: "step-output-and-outcome")
+                row.tap()
+            }
         }
         self.attachScreenshot(named: "step-labels-expanded")
         XCTAssertTrue(app.staticTexts["Local readiness checked."].exists)
@@ -957,6 +968,42 @@ extension OpenClawSnapshotUITests {
         XCTAssertEqual(refreshedArtifacts.count, 2, "Relaunch must obtain fresh artifact access, not reuse a ticket")
         XCTAssertEqual(refreshedArtifacts.last?["artifactId"] as? String, artifacts.first?["artifactId"] as? String)
         XCTAssertEqual(refreshedArtifacts.last?["sessionKey"] as? String, artifacts.first?["sessionKey"] as? String)
+    }
+
+    func testLiveGatewayPairAndSharePhoto() throws {
+        let app = try self.launchPairedLiveGatewayApp(initialTab: "chat", initialDestination: "chat")
+        try self.sharePhotoFromPhotos(returningTo: app)
+    }
+
+    func testExistingGatewaySharesPhoto() throws {
+        try XCTSkipUnless(ProcessInfo.processInfo.environment["OPENCLAW_IOS_LIVE_GATEWAY"] == "1")
+        // Do not reset onboarding or credentials: this also drives an installed upgrade.
+        let app = self.relaunchConnectedLiveGatewayApp(initialTab: "chat", initialDestination: "chat")
+        try self.sharePhotoFromPhotos(returningTo: app)
+    }
+
+    private func sharePhotoFromPhotos(returningTo app: XCUIApplication) throws {
+        self.attachScreenshot(named: "share-app-paired")
+        let photos = try self.openOpenClawPhotoShareSheet()
+        let draft = photos.textViews["share-compose.draft"]
+        XCTAssertTrue(draft.waitForExistence(timeout: 15), "Share compose card missing")
+        XCTAssertTrue(photos.staticTexts["Preparing share…"].waitForNonExistence(timeout: 30))
+        let marker = ProcessInfo.processInfo.environment["OPENCLAW_IOS_SHARE_MARKER"] ?? "OPENCLAW_E2E_SHARE"
+        draft.tap()
+        draft.typeText("Describe this image. \(marker)")
+        let send = photos.buttons["share-compose.send"]
+        self.waitForEnabled(send)
+        let compose = XCTAttachment(screenshot: photos.screenshot())
+        compose.name = "share-photo-ready"
+        compose.lifetime = .keepAlways
+        self.add(compose)
+        send.tap()
+        XCTAssertTrue(draft.waitForNonExistence(timeout: 30), "Successful share must dismiss the compose card")
+        app.activate()
+        let delivered = app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", marker)).firstMatch
+        XCTAssertTrue(delivered.waitForExistence(timeout: 30), "Shared message did not reach the app's chat")
+        self.attachScreenshot(named: "share-photo-delivered")
+        print("IOS_SHARE_CHECKPOINT delivered-without-companion-approval")
     }
 
     func testLiveGatewayPairChatAndRelaunch() throws {

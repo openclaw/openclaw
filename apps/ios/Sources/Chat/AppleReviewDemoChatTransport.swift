@@ -1219,6 +1219,11 @@ private actor LocalFixtureChatStore {
                         name: "exec",
                         arguments: AnyCodable(["command": "printf ready"])),
                     OpenClawChatMessageContent(
+                        type: "tool_result",
+                        content: AnyCodable([["type": "text", "text": "ready"]]),
+                        id: "fixture-exec",
+                        name: "exec"),
+                    OpenClawChatMessageContent(
                         type: "toolCall",
                         id: "fixture-no-result",
                         name: "exec",
@@ -1232,13 +1237,6 @@ private actor LocalFixtureChatStore {
                 timestamp: now + 1,
                 transcriptMessageID: "fixture-step-call",
                 stopReason: "toolUse"),
-            OpenClawChatMessage(
-                role: "toolResult",
-                content: [OpenClawChatMessageContent(type: "text", text: "ready")],
-                timestamp: now + 2,
-                transcriptMessageID: "fixture-step-result",
-                toolCallId: "fixture-exec",
-                toolName: "exec"),
             OpenClawChatMessage(
                 role: "toolResult",
                 content: [OpenClawChatMessageContent(type: "text", text: "complete")],

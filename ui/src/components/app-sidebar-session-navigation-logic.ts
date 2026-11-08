@@ -25,6 +25,7 @@ import {
 import { resolveSessionRenameValue } from "../lib/session-rename.ts";
 import { isSessionRunStateActive } from "../lib/session-run-state.ts";
 import {
+  compareSessionRowsByActivity,
   compareSessionRowsByUpdatedAt,
   filterVisibleSessionRows,
   resolveSessionNavigation,
@@ -77,7 +78,7 @@ export function createSidebarSessionRowsComparator(
     const input = (options ??= readOptions());
     if (input.sortMode !== "people") {
       return input.sortMode === "updated"
-        ? compareSessionRowsByUpdatedAt(a, b)
+        ? compareSessionRowsByActivity(a, b)
         : compareSidebarSessionRowsByCreatedAt(a, b, input.createdOrder);
     }
     const ownerA = a.owner?.actor;

@@ -584,6 +584,7 @@ describe("full-suite timing metadata", () => {
           ["exec", "node"].concat(maglev === "0" ? ["--no-maglev"] : [], [
             "--no-concurrent-sparkplug",
             "--js-base-64",
+            "--expose-gc",
             resolveVitestCliEntry(),
             "run",
             "--config",
