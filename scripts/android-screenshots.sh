@@ -771,7 +771,7 @@ if [[ "$SKIP_BUILD" != "1" ]]; then
   diagnostic_phase before-build
   (
     cd "$ANDROID_DIR"
-    ./gradlew "$GRADLE_ASSEMBLE_TASK"
+    ./gradlew --build-cache "$GRADLE_ASSEMBLE_TASK"
   )
   diagnostic_phase after-build
 fi

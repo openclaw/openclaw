@@ -200,7 +200,7 @@ type GatewayKernelContext = {
   getRuntimeConfig: () => OpenClawConfig;
   /** Instance-owned startup observation; never lends preparation or write authority. */
   agentDatabaseStartup?: import("../../state/agent-database-preparation-context.js").AgentDatabasePreparation;
-  restartResumeWindow?: import("../../infra/gateway-boot-lifecycle.js").GatewayRestartResumeWindow;
+  restartResumeWindows?: import("../../infra/gateway-boot-lifecycle.js").GatewayRestartResumeWindows;
   channelAdmissionAudit?: import("../../channels/message-access/admission-evidence.js").ChannelAdmissionAudit;
   /** Last serving policy committed by this Gateway, excluding tentative secret activation. */
   getCommittedRuntimeConfig?: () => OpenClawConfig;
@@ -588,6 +588,8 @@ export type GatewayRequestHandlerOptions = Omit<
   "methodRegistry" | "expectedProfileBinding" | "prepareDispatchCurrent"
 > & {
   params: Record<string, unknown>;
+  /** Plugin registrations receive a live owner fence; recheck after awaits and before effects. */
+  assertHandlerCurrent?: () => void;
   sessionMutationAuthorization?: SessionMutationAuthorization;
   /** Source-authorized plugin adoption; bound to this request's caller and lifetime. */
   copySessionCatalogToGateway?: (source: {

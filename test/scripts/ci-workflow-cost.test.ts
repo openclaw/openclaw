@@ -20,6 +20,7 @@ const action = readWorkflow(".github/actions/detect-scheduled-changes/action.yml
 const script = action.runs.steps[0].with.script;
 
 describe("Darwin tooling event scope", () => {
+  const workflow = readWorkflow(".github/workflows/pr-tooling-darwin.yml");
   it.each([
     [["scripts/lib/ci-node-test-plan.mts"], false],
     [["scripts/lib/ci-extension-test-shards.mts"], false],
@@ -66,18 +67,15 @@ describe("Darwin tooling event scope", () => {
     [["scripts/lib/ci-node-test-plan.mts", "scripts/pr"], true],
     [[".github/workflows/pr-tooling-darwin.yml"], true],
   ] as const)("routes %j", (files, expected) => {
-    const workflow = readWorkflow(".github/workflows/pr-tooling-darwin.yml");
     expect(acceptsWorkflowPaths(workflow.on.pull_request.paths, files)).toBe(expected);
   });
 
-  it("executes the complete macOS distribution owner without another admission condition", () => {
-    const workflow = readWorkflow(".github/workflows/pr-tooling-darwin.yml");
-    const steps = workflow.jobs.darwin.steps.filter(
-      (step: { run?: string }) =>
-        step.run ===
-        "node scripts/run-vitest.mjs test/scripts/package-mac-dist.test.ts --maxWorkers=1",
+  it("executes native tooling once with unconditional macOS distribution coverage", () => {
+    const steps = workflow.jobs.darwin.steps.filter((step: { run?: string }) =>
+      step.run?.startsWith("node scripts/run-vitest.mjs "),
     );
     expect(steps).toHaveLength(1);
+    expect(steps[0].run.split(/\s+/u)).toContain("test/scripts/package-mac-dist.test.ts");
     expect(steps[0].if).toBeUndefined();
   });
 });
@@ -634,6 +632,28 @@ describe("pull request node contract owners", () => {
       files: [{ filename: "scripts/lib/ci-node-test-plan.mts", status: "modified" }],
       expected: [true, false],
     },
+    {
+      files: [
+        { filename: "test/vitest/vitest.ui-paths.mjs", status: "modified" },
+        { filename: "ui/src/pages/model-providers/view.tsx", status: "modified" },
+        { filename: "config/test-lines-allocations/ui-coverage.txt", status: "added" },
+      ],
+      expected: [true, false],
+    },
+    {
+      files: [
+        { filename: "ui/src/retired.ts", status: "removed" },
+        { filename: "scripts/new.mjs", status: "modified" },
+      ],
+      expected: [true, true],
+    },
+    {
+      files: [
+        { filename: ".cargo/config.toml", status: "modified" },
+        { filename: "ui/config/control-ui-solid.ts", status: "modified" },
+      ],
+      expected: [true, true],
+    },
     { files: [{ filename: ".cargo/config.toml", status: "modified" }], expected: [false, true] },
     {
       files: [{ filename: "crates/openclaw-node-host/src/main.rs", status: "modified" }],
@@ -773,6 +793,7 @@ describe("node runtime event scope", () => {
     ],
     [["crates/openclaw-node-host/Cargo.toml"], true],
     [[".cargo/config.toml"], true],
+    [["ui/config/control-ui-solid.ts"], true],
     [["rust-toolchain.toml"], true],
     [["test/fixtures/node-sidecar-handshake-v1.json"], true],
     [["crates/openclaw-node-host/tests/fixtures/README.md"], true],

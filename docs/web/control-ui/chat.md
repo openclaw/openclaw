@@ -412,10 +412,16 @@ Double-click selections stay inside the message where they started, including
 when you drag on the second click. Ordinary drag selection and Select All can
 still span multiple messages.
 
-Highlight text and choose **Add to message** to attach a comment to the main
+Highlight text and choose **Add to chat** to attach a comment to the main
 composer. The optional comment field starts on one line, grows to five lines,
 then scrolls internally. Confirm or press Enter to save; Shift+Enter adds a line.
 Saving keeps your existing draft and does not send a message.
+
+**Ask in side chat** asks about the passage in Side chat. **New session**
+opens the new-session launcher with the passage attached as a
+comment; starting the session sends it as a quote ahead of your prompt. The
+launcher's comment preview can delete the passage but not edit it, and your
+current chat draft is left unchanged.
 
 Saving leaves a small, filled comment marker beside the selected passage. Click
 that marker, or the pencil in the comment count's hover preview, to reopen the
@@ -458,7 +464,10 @@ file links also support spaces, emoji, and punctuation in filenames; for example
 `[Read notes](notes/caf%C3%A9%20note.md)` opens the workspace file. Bare CSV
 filenames in authored links, such as `[Read inventory](inventory.csv)`, and code
 spans also open the file preview. Plain-text and inline-code file detection stays
-conservative to avoid turning prose into links.
+conservative to avoid turning prose into links. Unprefixed paths such as
+`src/index.ts` require a recognized file extension, so repository names such as
+`openclaw/openclaw.ai` remain text. For uncommon file extensions, use an explicit
+path such as `./assets/logo.ai` or an authored Markdown link.
 
 In a workspace Markdown file's **Preview**, authored relative file links resolve
 from the document's folder. For example, a report in `reports/review.md` can open
@@ -930,7 +939,7 @@ Run-error banners offer **Refresh** to reload the conversation without resending
 
 <AccordionGroup>
   <Accordion title="Send and history semantics">
-    - With the composer caret at the start, ArrowUp recalls earlier prompts and ArrowDown returns to your draft. Each new traversal includes newly loaded history; an active traversal keeps its order.
+    - With the composer caret at the start, ArrowUp recalls earlier prompts and ArrowDown returns to your draft. Each new traversal includes newly loaded history; an active traversal keeps its order. Recall keeps the latest 100 loaded user inputs; assistant replies and tool activity do not count toward that limit.
     - `chat.send` is **non-blocking**: it acknowledges admission with `{ runId, status: "started" }` and the response streams via `chat` events. An optional `messageSeq` identifies an already committed transcript position; it is omitted when input remains only in accepted custody. Trusted Control UI clients may also receive optional ACK timing metadata for local diagnostics.
     - A submitted message stays pending until the Gateway acknowledges it or returns a duplicate response. While disconnected, it shows **Waiting for reconnect**, not a delivery-review state. After reconnecting with the same identity and recovery scope, attempted pending messages resend in queue order with their original submission keys, including the first message of a new session. A rejection shows **Not sent** with **Retry** and **Discard**. Discarding a pending copy does not undo or cancel accepted Gateway work. See [Offline and reconnect](/web/control-ui/offline-and-reconnect).
     - Chat uploads accept images, videos, and other files. Images keep the native image path; other files are stored as managed media and shown in history as attachment links. Files appear in their final composer slots as soon as preparation starts, with a per-file progress fill and an in-place error icon if reading fails. Before sending, use **Remove attachment** at the corner of a staged attachment, including one still being prepared; the control supports touch and keyboard input in both Chat and New session.

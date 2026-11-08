@@ -11,6 +11,7 @@ const preparedWorkspaceChildScript = `
             if (action === 'capture') {
               const { manifest } = await readWorkspaceManifest(input.homeDir, input.preparedManifestRef);
               console.log(await captureManifest({
+                mode: "eligible",
                 workspaceDir: input.workspaceDir, manifestHome: input.homeDir,
                 baseCommit: manifest.baseCommit, referenceManifestRef: input.preparedManifestRef,
                 baseManifestRef: input.sourceManifestRef, hashMemo: new Map(),

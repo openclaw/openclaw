@@ -108,6 +108,7 @@ function serviceFor(authority: Awaited<ReturnType<typeof linkedClaw>>["authority
   const service = createOpenClawIdService({
     getConfig: () => ({ enabled: true }),
     getStateDir: () => "/nonexistent/openclaw-id-test",
+    getGatewayServer: () => undefined,
     log: { info: vi.fn(), warn: vi.fn() },
     createAuthority: async () => authority,
   });

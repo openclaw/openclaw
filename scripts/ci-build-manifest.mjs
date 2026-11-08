@@ -3,6 +3,7 @@ import path, { matchesGlob } from "node:path";
 import { pathToFileURL } from "node:url";
 import { resolveTestGitCommits } from "../.github/actions/git-owner/test-prerequisites.mjs";
 import { isTestFileTarget } from "./lib/changed-path-facts.mjs";
+import { blacksmithRunnerLabel } from "./lib/ci-blacksmith-capacity.mjs";
 import {
   formatIosSimulatorSelectionSummary,
   resolveIosSimulatorTestSelection,
@@ -143,7 +144,12 @@ const createPluginContractTestShards =
           task: "contracts-plugins",
         },
       ];
-const createMatrix = (include) => ({ include });
+const createMatrix = (include) => ({
+  include: include.map((row) => {
+    const label = row.runner_label ?? blacksmithRunnerLabel(row.runner);
+    return label ? { ...row, runner_label: label } : row;
+  }),
+});
 // Share setup without combining the target planner's process envelopes.
 const createContractMatrix = (shards, task) =>
   createMatrix(
@@ -921,17 +927,25 @@ if (runCheckPlan && proposedCheckScope?.types) {
     const { getChangedPathFacts, isTestLineAllocationPath } = await import(
       fromTarget("./scripts/lib/changed-path-facts.mjs")
     );
+    const { resolveCiCheckFamilyScope } = await import(
+      fromTarget("./scripts/lib/ci-check-family-scope.mts")
+    );
+    const budgetCompanions = changedPaths.filter((file) => !isTestLineAllocationPath(file));
+    const budgetOnlyFallback =
+      budgetCompanions.length < changedPaths.length &&
+      resolveCiCheckFamilyScope(budgetCompanions).mode === "scoped";
     // Shared tests and numeric allocations retain every guard family, including
-    // allocation validation. Compiler/lint owners still discover all consumers.
+    // allocation validation. A budget record does not widen otherwise scoped
+    // source companions; compiler/lint owners still discover all consumers.
     preserveFullChecks = !changedPaths.every((file) => {
       const facts = getChangedPathFacts(file);
       return (
         path.posix.normalize(file) === file &&
         !file.includes("\\") &&
         (isTestLineAllocationPath(file) ||
+          (budgetOnlyFallback && facts.surface === "docs") ||
           (["source", "package", "ui", "extension"].includes(facts.surface) &&
-            facts.isTestOnly &&
-            facts.isChangedLaneTest))
+            (budgetOnlyFallback || (facts.isTestOnly && facts.isChangedLaneTest))))
       );
     });
   }
@@ -1057,6 +1071,9 @@ const postgresConformancePaths = [
   "src/config/sessions/**",
   "src/agents/harness/context-engine-turn-outbox*",
   "src/gateway/server*.ts",
+  "src/gateway/server-methods/cron.ts",
+  "src/gateway/server-methods/cron-add.ts",
+  "src/gateway/server-methods/cron-run.ts",
   "src/cli/gateway-cli/run.ts",
   "src/commands/*preflight*.ts",
   "src/commands/doctor-database-*.ts",
@@ -1092,6 +1109,11 @@ const postgresConformancePaths = [
   "src/state/openclaw-state-db-contract.ts",
   "src/state/postgres-schema.generated/**",
   "src/cron/store/runtime-authority-store.ts",
+  "src/cron/store/row-codec.ts",
+  "src/cron/store/runtime-rows.kernel.ts",
+  "src/cron/store/run-finalization.worker.ts",
+  "src/cron/service.ts",
+  "src/cron/service/ops-run.ts",
   "src/infra/database-engine/**",
   "src/infra/postgres-sync/**",
   "src/infra/sql-connection.ts",
@@ -1403,6 +1425,10 @@ const nodeTestShards = targetNodeTestShards
       git_commits: resolveTestGitCommits(shard),
       requires_dist: shard.requiresDist,
       runner: shard.runner,
+      runner_label: blacksmithRunnerLabel(
+        shard.runner,
+        Math.max(0, ...(shard.groups ?? []).map((group) => group.minTotalMemoryBytes ?? 0)),
+      ),
       timeout_minutes:
         !shard.requiresDist && testRuntimeMode === "dual-all"
           ? 2 * (shard.timeoutMinutes ?? 60)
@@ -1611,10 +1637,14 @@ const additionalChecks = [
         : narrowCheckScope.additionalGroups.includes(group))),
 );
 // Move an already-selected boundary row; sharing must never add another CI job.
+// Older target planners cannot mark the combined GitHub lint rows as SDK consumers.
+const supportsCombinedLintSdk =
+  existsSync("scripts/ci-check-plan.mts") &&
+  readFileSync("scripts/ci-check-plan.mts", "utf8").includes("requires_sdk_declarations");
 const sharedSdkDeclarations =
   workflowEventName === "pull_request" &&
   isCanonicalRepository &&
-  runnerProfile === "hybrid" &&
+  (runnerProfile === "hybrid" || (runnerProfile === "github" && supportsCombinedLintSdk)) &&
   runCheckPlan &&
   runNodeFull &&
   !releaseFastLane &&

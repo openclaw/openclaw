@@ -217,10 +217,28 @@ Its failed CI remains failed; no current-head CI success is claimed. PR189510 re
 
 ## Current qualification
 
-Batches113–118, pinned main `a07facd84480`, use one native checkout and
+Batch115, pinned main `230f05c7ca37`, repairs the read-coalescing recorder
+on the actual socket returned by the mock constructor. The unchanged browser
+case passed; adding a positive assertion for its already-held `models.list`
+request failed on the original observer. The repaired observer records that same
+request and clears its exact ID on response. One final untraced full-file run
+passed (1/1, 16.88s Vitest; 61.647s routed), preserving all existing request
+counts, metadata/branch-read oracles and the global duplicate negative. A prior
+in-memory diagnostic correlated 11 unique sends and 11 responses with the actual
+Gateway fixture requests; no current overlap occurred. The historical overlapping
+`sessions.describe` signature remains an unattributed lead, not a production
+verdict or a repaired coalescing defect. The case inventory and source census are
+unchanged. The +20-line allocation covers actual-instance hooks and the paired
+held-request/response observer checks; production and shared fixtures are unchanged.
+Targeted typecheck and typed lint passed. Formatting, ledger MDX, whitespace and
+the exact growth allocation are checked separately; fresh review and exact-head
+hosted admission remain pending.
+
+Batches113–118, pinned main `a07facd84480`, used one native checkout and
 separate scoped proofs. Unchanged baselines passed: destinations6, History1,
 read coalescing1, fallback8, dictation33 and annotation lifetime11.
-Completed source classifications and durable census counts remain unchanged.
+Their execution added no source-classification credit; the completed frozen UI
+source census is reconciled separately below.
 
 - Batch116: collapsed two clone-only fallback-divider axes, preserving all five
   declarations, the distinct embedded/separate-answer vectors, cloned inputs,
@@ -249,7 +267,7 @@ Completed source classifications and durable census counts remain unchanged.
   and an empty result. Restored1/1 passed through filtering, transcript navigation
   and archive/Undo feedback. This proves browser request/render behavior against a
   fixture response, not backend search correctness.
-- Batch115 is excluded from this PR. A positive exact-request canary failed
+- Batch115 was excluded from the five-fix PR. A positive exact-request canary failed
   with the old recorder and passed after observing the actual returned socket.
   The final candidate run then exposed an overlapping `sessions.describe`
   request at the existing duplicate-negative assertion. The recorder candidate
@@ -264,13 +282,40 @@ Scoped UI types, typed lint, formatting, ledger MDX, whitespace and the test-lin
 ratchet passed. All three required removal scans passed with zero unused
 dependencies, files or exports. The simplification pass preserved CSS visibility
 in the settled History assertion; its final full browser flow passed again.
-Independent review and hosted admission remain pending.
+Independent review passed. [193906](https://github.com/openclaw/openclaw/pull/193906)
+merged as `36e52993c9f8` after exact-head CI42155732506/attempt1 and matching
+Security Review42156442602 succeeded; the57-case result above is actual scoped proof.
 
-Prior qualified batches remain unlanded: [192672](https://github.com/openclaw/openclaw/pull/192672)
-has two HTTP502 landing responses and retained checkouts; [192719](https://github.com/openclaw/openclaw/pull/192719)
-has failed CI run41819244430/attempt1 with31 successful and28 skipped visible jobs,
-no aggregate job, and an unestablished cause. Its checkouts and proof are retained.
-Neither blocked route is retried by this batch.
+[192672](https://github.com/openclaw/openclaw/pull/192672) merged as
+`285829cbf027` after corrected head `d80ab31b2a31` passed fresh review,
+CI42158728018/attempt1 and matching Security Review42159692871. Its two HTTP502
+landing responses and later ledger-conflict refusal remain historical recovery
+evidence. The original five-case baseline, repaired suite and published-head proof
+passed; the identical early-failure probe observed the original client retained
+after hooks and the repaired client released, preserving all four siblings and
+shutdown assertions. The correction preserved those test/allocation bytes and
+baseline ledger history. Its local install inputs were unqualified, so no current
+five-case execution or inventory is inferred from hosted aggregate success. Native
+checkout removal was verified; the managed carrier was retained on shared-lock
+contention, separately from completion.
+
+[192719](https://github.com/openclaw/openclaw/pull/192719) qualification snapshot:
+the original two-case baseline and repaired candidate passed. Identical temporary
+config/admin guard omissions stayed green with the original fixtures and failed
+only the intended repaired row; a separate enabled/admin/advertised browser probe
+recorded one actual `terminal.open`. All production mutations were restored.
+This is browser proof against an owned mock Gateway, not live terminal execution.
+Original CI41819244430/attempt1 failed at workflow level with31 successful and28
+skipped jobs and no aggregate; its Internal server error was subsequently
+identified. The single whole-run recovery, attempt2, and matching Security
+Review42157590390 succeeded on original head `6c2e2c648d77`.
+The correction integrates baseline `285829cbf027`, resolves only the ledger
+conflict, and retains the baseline's current terminal-unavailable wording while
+carrying forward the capability fixture and its unchanged four-line allocation.
+Old-head runtime and CI proof remain historical. Fresh corrected-head review,
+hosted CI and matching security evidence are required by native admission; the
+linked PR and native receipts record that qualification and landing disposition.
+No corrected-head runtime pass or landing is claimed by this snapshot.
 
 ## Completed source review
 
@@ -290,7 +335,7 @@ permission to delete without root qualification.
 - Agent internals: all 2,347 suites under `src/agents`/15,973 physical sites: R15743/F224/C2/D4. Zero unread in this scope; other `src` directories remain separate. All83 registry and 58 sandbox suites are source-closed; tool display/schema and process custody retain their contracts. Separate reply/upstream scopes below. Preserve transport, requester isolation, authority, cancellation, durability and work-count contracts.
 - Auto-reply: All429 suites plus43 separate upstream suites and invoked local registrars/support classified. Latest54/498: R495/F2/C1; qualified two duplicates landed above. Keep channel persistence, group/native routing, progress suppression and abort cases.
 - CLI: Config/setup24/209; plugin lifecycle25/176; validation22/106; channel/root/message/device/skills/session98/542; execution/reply presentation overlaps the reply aggregate. Only qualified fixture reduction landed above.
-- Control UI: 2,633 of3,046 unique suites/14,239 physical sites: R10976/F3255/C1/D7;413 suites remain unread (accepted through UI837). Agents Memory, Memory Import, Workshop, Systems, About and Worktrees retain their contracts; shared `page-request.node.test.ts` counted once. Preserve native geometry, owner replacement, GC retention and conflict/authority contracts. The shared runner owns clocks and normal file mock restoration; six local cleanup nominations were withdrawn after owner inspection. Held-reply custody remains independent. Proof/custody repairs remain pending; other UI remains open.
+- Control UI: all3,046 unique suites are source-closed through UI1250, with zero unread;16,257 physical sites: R12988/F3261/C1/D7. This reconciles the completed frozen `7c99ae1dd417` census, not new runtime or removal credit. Shared `page-request.node.test.ts` is counted once. Preserve native geometry, owner replacement, GC retention and conflict/authority contracts. The shared runner owns clocks and normal file mock restoration; six local cleanup nominations were withdrawn after owner inspection. Held-reply custody remains independent. Unqualified proof/custody repairs remain follow-ups; source closure does not imply runtime completion.
 - Shared native: OpenClawKit209 files/2,528 sites: R2523/F3/C2. NativeState/MLX protocol5/46: R45/F1. Swabble6/12 R; MLX helper1/5 with one pending PCM consolidation.
 - macOS: 304 Swift files/2,653 sites: R2635/F8/C9/D1. Native runtime qualification pending.
 - iOS: 135 files/1,416 sites: R1370/F39/C6/D1; obsolete typography metadata scanner and a migration helper remain candidates. Native qualification pending.
@@ -302,7 +347,7 @@ permission to delete without root qualification.
 - Later plugin closures: LanceDB22/109 R; Logbook13/55 R; IRC15/99 R97/F2; Diffs14/58 R56/F1/C1; policy15/301 physical R298/F3; SMS16/158 R; team-reports21/138 R; Twitch15/86 R; TypeSafe10/50 R; X24/149 R148/C1; Zalo25/89 local R87/F2 plus9 inherited R and one duplicate row. Assertion-only candidates below do not remove their declarations.
 - Plugin lane progress: the frozen aggregate checkpoint is Leaf4,305/combined4,379; no aggregate is inferred from the updated scoped closures below. Memory Core201/201 is source-closed:1,282 normalized physical sites R1159/F123 and1,900 expanded cases R1738/F160/C2, including inherited registrations once; all9 PostgreSQL suites are source-only, with no runtime claim. Matrix156/156 is source-closed:1,063 physical sites R945/F117/C1 and1,578 expanded cases R1427/F150/C1; all30 local support surfaces remain live. PostgreSQL proof remains source-only. 15 support-custody findings and support-removal nominations are separate. QA Lab329/329 is source-closed:1938 physical sites R1813/F125/C0/D0 and2989 expanded cases R2812/F177, including one inherited registration counted once; all52 local support files remain live; 40 support proof/custody findings are separate; no runtime claim. Telegram167/167 is source-closed:1,265 normalized physical sites R1117/F148 and2,112 expanded cases R1903/F209, including15 inherited sites/20 registrations counted once; all48 auxiliaries (45 local supports and three root facades/drivers) remain live and31 support proof/custody findings are separate. Discord257/257 is source-closed:1789 physical sites R1596/F193 and2648 expanded cases R2363/F285; its80 auxiliaries remain live and 24 support findings are separate. Codex448/448 is source-closed:157,630 entry LOC,3260 physical sites R3083/F177 and5397 expanded cases R5166/F231, including invoked registrars counted once; 7 support-custody findings are separate; native/worker execution remains unqualified. Two earlier source credits were duplicates after incorrect app-server path prefixes; unique counts above remove those credits and retain the later closures. No Codex suites remain unread; runtime qualification remains separate. Browser280/280 is source-closed:2,006 physical sites R1764/F242 and3,243 expanded cases R2909/F334; actual runtime qualification remains separate. Slack155/155 is source-closed:1,268 direct sites R1258/F10 and1,828 static invocations R1813/F15; all21 auxiliaries and seven live traces remain. MS Teams107/107 is source-closed. WhatsApp103/103 and Feishu104/104 are source-closed; their authority, timing and custody proof repairs remain follow-ups. OpenAI99/99 is closed:744 direct/support sites R737/F5/C2,1,238 static invocations R1228/F8/C2. Its18 supports and packaged icons remain live. Knowledge59, iMessage60, Workboard65, LINE61, Mattermost56, Signal44, memory-wiki50 and Crabbox53 are closed. Keep identity, transport, cache, compiler, storage, interaction and mutation contracts. Source-only; no runtime verdict.
 
-- Exact root/scripts records cover117 accepted paths, including: the seven earlier retention/APNs/appcast/architecture/Buzz/descendant/channel-read records, the ClawRouter managed-Gateway fixture, all ten `cli-json-stdout` entry suites, CLI message authority, SQLite maintenance, provider-stall cancellation and Codex account usage, managed proxy and node cancellation. The latter four retain1/1,1/2,1/3 and1/1 physical/expanded cases respectively. All are source-only records and add no aggregate credit: overlap with older root/docs/scripts summaries is unresolved. The gross test/scripts inventory remains1,606 candidate paths, not certified unread paths.
+- Exact root/scripts records cover129 accepted paths (reconciled from the earlier117), including: the seven earlier retention/APNs/appcast/architecture/Buzz/descendant/channel-read records, the ClawRouter managed-Gateway fixture, all ten `cli-json-stdout` entry suites, CLI message authority, SQLite maintenance, provider-stall cancellation and Codex account usage, managed proxy and node cancellation. The latter four retain1/1,1/2,1/3 and1/1 physical/expanded cases respectively. All are source-only records and add no aggregate credit: overlap with older root/docs/scripts summaries is unresolved. The gross test/scripts inventory remains1,606 candidate paths, not certified unread paths.
 
 ## Pending qualification and proof repairs
 
@@ -315,6 +360,6 @@ permission to delete without root qualification.
 - Retain duplicate Swift TLS fixtures in separate packages, renderer-discovered Blobster JSON (also production prompt inputs), process-entry helpers referenced extensionlessly, stable borrowed-reference assertions, and independent release/architecture/platform guards.
 - CI merge-preparation source/comment candidates remain pending Linux keeper proof; the independent Git-owner admission guard stays. Do not treat a stopped Testbox allocation as a product result.
 
-Remaining: classify unread core/plugin/UI/native/script declarations and shared
+Remaining: classify unread core/plugin/native/script declarations and shared
 fixtures; qualify candidates at their actual boundaries; validate and land owner
 batches. Source review alone does not close the repository-wide audit.

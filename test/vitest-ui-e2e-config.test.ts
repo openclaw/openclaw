@@ -34,7 +34,7 @@ const qaLabFiles = [
   "extensions/qa-lab/src/control-ui-openclaw-delegation.real-gateway.e2e.test.ts",
 ] as const;
 const serialGatewayFiles =
-  `chat-steer-deferred-custody chat-steer-send-now deepseek-search desktop-resize plugin-inline-view session-management.new-nested`
+  `chat-provider-failure-cause chat-steer-deferred-custody chat-steer-send-now deepseek-search desktop-resize gateway-fresh-visit plugin-inline-view session-management.new-nested`
     .split(/\s+/u)
     .map((name) => `ui/src/e2e/${name}.real-gateway.e2e.test.ts`)
     .concat("ui/src/e2e/mcp-app-conformance.e2e.test.ts");

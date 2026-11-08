@@ -61,6 +61,25 @@ const DERIVED_WORKSPACE_SEGMENT_PATTERN = `(?:^|/)(?:${[
   WORKER_ATTACHMENT_DIRECTORY_PATTERN,
 ].join("|")})(?![^/])`;
 
+// Git ignores make only known build roots disposable, never arbitrary authored
+// reports. The Bun staging owner downloads its runtime under .cache/openclaw-bun.
+export function isIgnoredWorkspaceBuildOutput(relative: string, ignored: ReadonlySet<string>) {
+  const buildOutput = ["dist", ".cache/openclaw-bun"].some(
+    (root) => relative === root || relative.startsWith(root + "/"),
+  );
+  if (!buildOutput) {
+    return false;
+  }
+  let candidate = relative;
+  while (candidate) {
+    if (ignored.has(candidate) || ignored.has(candidate + "/")) {
+      return true;
+    }
+    candidate = candidate.slice(0, Math.max(0, candidate.lastIndexOf("/")));
+  }
+  return false;
+}
+
 // Derived caches and runtime attachment copies are not workspace edits. Keep
 // sync, manifest, divergence, apply, and recovery on this single predicate.
 export const WORKSPACE_PATH_EXCLUSIONS_JS = `

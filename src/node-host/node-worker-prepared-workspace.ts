@@ -128,6 +128,7 @@ export class NodeWorkerPreparedWorkspaceRuntime {
         baseCommit = await readPreparedBase(workspace);
         const hashMemo: WorkspaceHashMemo = hashMemos.get(ownerRoot) ?? new Map();
         const captured = await captureManifest({
+          mode: "eligible",
           workspaceDir: workspace.workspaceDir,
           manifestHome: workspace.homeDir,
           baseCommit,

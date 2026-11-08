@@ -91,6 +91,7 @@ export const uiNodeDrivenBrowserTestFiles = [
   "ui/src/styles/cursor-policy.browser.test.ts",
   "ui/src/styles/chat-file-link-presentation.browser.test.ts",
   "ui/src/styles/shimmer.browser.test.ts",
+  "ui/src/styles/reduced-motion.browser.test.ts",
   "ui/src/styles/incognito-shade.browser.test.ts",
   "ui/src/styles/forced-colors-indicators.browser.test.ts",
   "ui/src/styles/sr-only.browser.test.ts",
@@ -140,6 +141,7 @@ export function isUiTestTarget(relative) {
 
 export const uiE2eRealGatewayTestFiles = [
   "ui/src/e2e/slack-inline-identity.e2e.test.ts",
+  "ui/src/e2e/gateway-fresh-visit.real-gateway.e2e.test.ts",
   "ui/src/e2e/guest-personal-groups.real-gateway.e2e.test.ts",
   "ui/src/e2e/chat-daybreak.real-gateway.e2e.test.ts",
   "ui/src/e2e/plugin-inline-view.real-gateway.e2e.test.ts",
@@ -173,6 +175,7 @@ export const uiE2eRealGatewayTestFiles = [
   "ui/src/e2e/chat-html-csp.real-gateway.e2e.test.ts",
   "ui/src/e2e/chat-html-publication.real-gateway.e2e.test.ts",
   "ui/src/e2e/chat-project-media.real-gateway.e2e.test.ts",
+  "ui/src/e2e/chat-provider-failure-cause.real-gateway.e2e.test.ts",
   "ui/src/e2e/chat-reconnect-continuity.real-gateway.e2e.test.ts",
   "ui/src/e2e/chat-stop-finished-run.real-gateway.e2e.test.ts",
   "ui/src/e2e/chat-stop-long-turn.real-gateway.e2e.test.ts",

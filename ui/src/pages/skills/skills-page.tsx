@@ -462,6 +462,8 @@ export function SkillsPage(props: SkillsPageProps) {
     data.skillsError = route.error;
     if (route.report) {
       acceptSkillsReport(data, route.report);
+    } else if (route.reportRead) {
+      void loadSkills(data, { reportRead: route.reportRead });
     } else {
       data.skillsReport = null;
     }
@@ -613,6 +615,8 @@ export function SkillsPage(props: SkillsPageProps) {
       />
       <SettingsWorkspace>
         <div
+          // Bound layout work for the large installed inventory without containing discovery.
+          style={{ contain: surface() === "settings" ? "layout" : undefined }}
           id={surface() === "discovery" ? PLUGINS_HUB_PANEL_ID : undefined}
           role={surface() === "discovery" ? "tabpanel" : undefined}
           aria-labelledby={surface() === "discovery" ? "plugins-tab-skills" : undefined}
