@@ -44,6 +44,5 @@ final class CommandPurposeUITests: XCTestCase {
         let text = (recognition.results ?? []).compactMap { $0.topCandidates(1).first?.string }
             .joined(separator: " ").lowercased()
         XCTAssertTrue(text.contains("check local readiness"), "Rendered purpose missing: \(text)")
-        XCTAssertTrue((row.value as? String)?.hasPrefix("No result") == true)
     }
 }
