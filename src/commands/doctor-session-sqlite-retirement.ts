@@ -6,7 +6,6 @@ import {
   type MigrationArtifact,
   type MigrationArtifactVerification,
 } from "../infra/session-sqlite-migration-artifact.js";
-import type { DoctorSessionSqliteIssue } from "../infra/session-sqlite-migration-issues.js";
 import {
   hasSymbolicLinkInDirectoryPath,
   type SessionSqliteMigrationTargetInput,
@@ -19,7 +18,7 @@ import {
 } from "./doctor-session-sqlite-disposal.js";
 import { coalesceSessionSqliteArchiveReferences } from "./doctor-session-sqlite-migration-coalesce.js";
 import {
-  collectUpdateCleanupInventory,
+  collectUpdateCleanupInventoryAsync,
   protectRecoveryDependencies,
   resolveRecoveryArtifact,
   summarizeRecoveryCleanup,
@@ -57,10 +56,7 @@ export async function settleDuplicateSessionSqliteArchives(params: {
     claims,
     inventory: { artifacts, references },
   } = collectHistoricalArchiveSources(params);
-  const failures: Array<{
-    target: SessionSqliteMigrationTargetInput;
-    issues: DoctorSessionSqliteIssue[];
-  }> = [];
+  const failures: ReturnType<typeof coalesceSessionSqliteArchiveReferences> = [];
   const recordFailure = (target: SessionSqliteMigrationTargetInput, message: string) => {
     failures.push({
       target,
@@ -69,7 +65,6 @@ export async function settleDuplicateSessionSqliteArchives(params: {
       ],
     });
   };
-  const survivors = new Map<string, RecoveryArtifactReference[]>();
   const selected: RecoveryCleanupReport["artifacts"] = [];
   const artifactsByPath = new Map<string, (typeof artifacts)[number]>();
   for (const item of artifacts) {
@@ -79,7 +74,7 @@ export async function settleDuplicateSessionSqliteArchives(params: {
   }
   const replacements = new Map<string, RecoveryArtifactReference["move"]>();
   const assertSurvivor = (refs: RecoveryArtifactReference[]) => {
-    const move = survivors.get(refs[0]!.move.archivePath)![0]!.move;
+    const move = replacements.get(refs[0]!.move.archivePath)!;
     if (hasSymbolicLinkInDirectoryPath(path.dirname(move.archivePath))) {
       throw new Error("Retained duplicate archive directory changed.");
     }
@@ -97,15 +92,17 @@ export async function settleDuplicateSessionSqliteArchives(params: {
     ) {
       continue;
     }
-    const survivor = group.find((refs) =>
-      refs.every((ref) => ref.move.artifact!.disposal.state === "retained"),
+    const survivor = group.find(
+      (refs) =>
+        refs.every((ref) => ref.move.artifact!.disposal.state === "retained") &&
+        statMigrationPath(refs[0]!.move.archivePath),
     );
     if (!survivor) {
       continue;
     }
     for (const refs of group.filter((candidate) => candidate !== survivor)) {
       const item = artifactsByPath.get(refs[0]!.move.archivePath)!;
-      survivors.set(item.path, survivor);
+      replacements.set(item.path, survivor[0]!.move);
       try {
         assertSurvivor(refs);
         const artifact = resolveRecoveryArtifact(refs)!;
@@ -115,13 +112,17 @@ export async function settleDuplicateSessionSqliteArchives(params: {
         ) {
           throw new Error("Archive was recreated after disposal.");
         }
-        if (artifact.disposal.state !== "disposed") {
+        // Missing retained originals need reference redirection only; pending claims still retire.
+        if (
+          artifact.disposal.state === "pending-disposal" ||
+          (artifact.disposal.state === "retained" && statMigrationPath(item.path))
+        ) {
           assertRecoveryOriginal(item.path, artifact);
           item.outcome = "candidate";
           selected.push(item);
         }
-        replacements.set(item.path, survivor[0]!.move);
       } catch (error) {
+        replacements.delete(item.path);
         recordFailure(target, `${item.path}: ${String(error)}`);
       }
     }
@@ -129,7 +130,11 @@ export async function settleDuplicateSessionSqliteArchives(params: {
   await disposeRecoveryArtifacts({ selected, references, assertDestinations: assertSurvivor });
   for (const [archivePath] of replacements) {
     const refs = references.get(archivePath)!;
-    if (refs.every((ref) => ref.move.artifact!.disposal.state === "disposed")) {
+    if (
+      refs.every((ref) => ref.move.artifact!.disposal.state === "disposed") ||
+      (refs.every((ref) => ref.move.artifact!.disposal.state === "retained") &&
+        !statMigrationPath(archivePath))
+    ) {
       assertSurvivor(refs);
     } else {
       replacements.delete(archivePath);
@@ -174,7 +179,12 @@ export async function retireOwnedSessionSqliteRecovery(
 ): Promise<RecoveryCleanupReport> {
   authority.assertCurrent();
   const cfg = await params.readConfig();
-  const inventory = collectUpdateCleanupInventory({ cfg, env: params.env });
+  const inventory = await collectUpdateCleanupInventoryAsync({
+    cfg,
+    env: params.env,
+    current: true,
+  });
+  authority.assertCurrent();
   if (params.retireSessionArchive?.length) {
     return retireExplicitSessionArchives(params, authority, cfg, inventory);
   }
@@ -195,8 +205,10 @@ export async function retireOwnedSessionSqliteRecovery(
   await assertRecoveryStateWriteAllowed(report.stateDir, params.env);
   const adoptions = new Map<RecoveryArtifactReference, MigrationArtifact>();
   const verification: MigrationArtifactVerification = new Map();
-  const assertDestinations = createRecoveryDestinationVerifier(report.stateDir, () =>
-    authority.assertCurrent(),
+  const assertDestinations = createRecoveryDestinationVerifier(
+    report.stateDir,
+    () => authority.assertCurrent(),
+    { allowOwnedMutation: params.allowOwnedDestinationMutation },
   );
   const originals = report.artifacts.filter(
     (item) =>
@@ -303,13 +315,19 @@ export async function retireOwnedSessionSqliteRecovery(
   }
   authority.assertCurrent();
   const currentConfig = await params.readConfig();
-  const rechecked = collectUpdateCleanupInventory({ cfg: currentConfig, env: params.env });
+  const rechecked = await collectUpdateCleanupInventoryAsync({
+    cfg: currentConfig,
+    env: params.env,
+    current: true,
+  });
+  authority.assertCurrent();
   const currentUnmanifested = selectUnmanifestedRecovery({
     inventory: rechecked,
     cfg: currentConfig,
     env: params.env,
     paths: params.includeUnmanifested,
   });
+  authority.assertCurrent();
   assertUnmanifestedSelectionCurrent(unmanifested, currentUnmanifested);
   // Existing artifacts can become protected during confirmation, not only newly added manifests.
   // Revalidate the whole selection before retiring any dependent originals.
@@ -392,13 +410,19 @@ export async function retireOwnedSessionSqliteRecovery(
     assertReferences: async (item) => {
       const effectConfig = await params.readConfig();
       authority.assertCurrent();
-      const fresh = collectUpdateCleanupInventory({ cfg: effectConfig, env: params.env });
+      const fresh = await collectUpdateCleanupInventoryAsync({
+        cfg: effectConfig,
+        env: params.env,
+        current: true,
+      });
+      authority.assertCurrent();
       const selection = selectUnmanifestedRecovery({
         inventory: fresh,
         cfg: effectConfig,
         env: params.env,
         paths: [item.path],
       });
+      authority.assertCurrent();
       assertUnmanifestedSelectionCurrent(
         new Map([[item.path, unmanifested.get(item.path)!]]),
         selection,
@@ -427,7 +451,7 @@ async function retireExplicitSessionArchives(
   params: RecoveryRetirementParams,
   authority: { assertCurrent(): void },
   cfg: OpenClawConfig,
-  inventory: ReturnType<typeof collectUpdateCleanupInventory>,
+  inventory: Awaited<ReturnType<typeof collectUpdateCleanupInventoryAsync>>,
 ): Promise<RecoveryCleanupReport> {
   assertSessionArchiveRetirementOptions(params);
   const select = (current: typeof inventory, config: OpenClawConfig) =>
@@ -453,7 +477,12 @@ async function retireExplicitSessionArchives(
   }
   authority.assertCurrent();
   const currentConfig = await params.readConfig();
-  const current = collectUpdateCleanupInventory({ cfg: currentConfig, env: params.env });
+  const current = await collectUpdateCleanupInventoryAsync({
+    cfg: currentConfig,
+    env: params.env,
+    current: true,
+  });
+  authority.assertCurrent();
   const selection = select(current, currentConfig);
   assertSessionArchiveSelectionCurrent(
     { inventory, selection: initial },

@@ -1,5 +1,6 @@
 import { For, Show } from "solid-js";
 import type { UpdateStatusResult } from "../../../../packages/gateway-protocol/src/index.js";
+import { InlineAlert } from "../../components/solid/inline-alert.tsx";
 import {
   DocsLink,
   SettingsRow,
@@ -45,11 +46,11 @@ export function RecoveryStorage(props: { usage: RecoveryUsage }) {
       description={t("updates.recovery.description")}
       notice={
         <Show when={props.usage.incomplete}>
-          <div class="callout warning" role="note">
+          <InlineAlert tone="warning" role="note">
             <strong>{t("updates.recovery.incomplete")}</strong>
             <div>{t("updates.recovery.incompleteDescription")}</div>
             <code>{props.usage.incompleteReasons.join(", ")}</code>
-          </div>
+          </InlineAlert>
         </Show>
       }
     >

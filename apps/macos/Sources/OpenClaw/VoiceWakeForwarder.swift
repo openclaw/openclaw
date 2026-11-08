@@ -46,10 +46,9 @@ enum VoiceWakeForwarder {
         let to: String?
     }
 
-    @discardableResult
-    static func forwardToSelectedSession(
+    static func selectedSessionInvocation(
         transcript: String,
-        voiceWakeTrigger: String? = nil) async -> Result<Void, VoiceWakeForwardError>
+        voiceWakeTrigger: String? = nil) async -> GatewayAgentInvocation
     {
         let activeSessionKey = await MainActor.run { WebChatManager.shared.activeSessionKey }
         let sessionKey: String = if let activeSessionKey = activeSessionKey?.nonEmpty {
@@ -59,11 +58,11 @@ enum VoiceWakeForwarder {
         }
 
         let routeEntries = await self.loadSessionRouteEntries()
-        return await self.forward(invocation: self.makeInvocation(
+        return self.makeInvocation(
             transcript: transcript,
             sessionKey: sessionKey,
             routeEntries: routeEntries,
-            voiceWakeTrigger: voiceWakeTrigger))
+            voiceWakeTrigger: voiceWakeTrigger)
     }
 
     static func makeInvocation(
@@ -106,7 +105,7 @@ enum VoiceWakeForwarder {
         await self.forward(invocation: self.makeInvocation(transcript: transcript))
     }
 
-    private static func forward(invocation: GatewayAgentInvocation) async -> Result<Void, VoiceWakeForwardError> {
+    static func forward(invocation: GatewayAgentInvocation) async -> Result<Void, VoiceWakeForwardError> {
         let result = await GatewayConnection.shared.sendAgent(invocation)
 
         if result.ok {

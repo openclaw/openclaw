@@ -12,6 +12,8 @@ import {
 import { createCopilotAgentHarness, type CopilotSessionBinding } from "./harness.js";
 import { createCopilotClientPool, type CopilotClientPool } from "./src/runtime.js";
 
+export { makeUserTurnRecorder } from "./src/attempt.test-support.js";
+
 export type CopilotSessionBindingForTest = CopilotSessionBinding;
 
 type CopilotSessionConfigProbe = {

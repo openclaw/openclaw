@@ -219,19 +219,24 @@ function selectionWorkspace() {
     git(["add", "--", file]);
   };
   git(["init", "--quiet"]);
-  write("scripts/lib/plugin-sdk-entrypoints.json", '["api", "public"]');
-  write("scripts/lib/plugin-sdk-private-local-only-subpaths.json", "[]");
-  for (const id of ["alpha", "beta", "unrelated", "telegram", "codex", "slack"]) {
-    write(`extensions/${id}/package.json`, '{"private":true}');
+  const files = {
+    "scripts/lib/plugin-sdk-entrypoints.json": '["api", "public"]',
+    "scripts/lib/plugin-sdk-private-local-only-subpaths.json": "[]",
+    ...Object.fromEntries(
+      ["alpha", "beta", "unrelated", "telegram", "codex", "slack"].map((id) => [
+        `extensions/${id}/package.json`,
+        '{"private":true}',
+      ]),
+    ),
+    "extensions/alpha/index.ts":
+      'import type { Result } from "openclaw/plugin-sdk/public"; export type Response = Result;\n',
+    "extensions/beta/index.ts":
+      'import type { Response } from "../alpha/index.js"; export type Reply = Response;\n',
+  };
+  for (const [file, content] of Object.entries(files)) {
+    writeFile(file, content);
   }
-  write(
-    "extensions/alpha/index.ts",
-    'import type { Result } from "openclaw/plugin-sdk/public"; export type Response = Result;\n',
-  );
-  write(
-    "extensions/beta/index.ts",
-    'import type { Response } from "../alpha/index.js"; export type Reply = Response;\n',
-  );
+  git(["add", "--", ...Object.keys(files)]);
   git(["commit", "--quiet", "--allow-empty", "-m", "fixture base"]);
   return { cwd, write, baseRef: git(["rev-parse", "HEAD"]).trim() };
 }

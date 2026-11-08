@@ -11,22 +11,20 @@ import {
 } from "../plugins/hook-runner-global.js";
 import { createMockPluginRegistry } from "../plugins/hooks.test-fixtures.js";
 import { setPluginToolMeta } from "../plugins/tool-metadata.js";
+import type { McpToolCatalog } from "./agent-bundle-mcp-catalog.types.js";
 import { catalogTool, staticRuntime } from "./agent-bundle-mcp-fixture.test-support.js";
 import { materializeBundleMcpToolsForRun } from "./agent-bundle-mcp-materialize.js";
-import type { McpToolCatalog, SessionMcpRuntime } from "./agent-bundle-mcp-types.js";
 import { toToolDefinitions } from "./agent-tool-definition-adapter.js";
 import { raceWithAbortSignal } from "./agent-tools.abort.js";
-import {
-  finalizeToolTerminalPresentation,
-  type ToolOutcomeObservation,
-} from "./agent-tools.before-tool-call.js";
+import { finalizeToolTerminalPresentation } from "./agent-tools.before-tool-call.js";
 import { resetAdjustedParamsByToolCallIdForTests } from "./agent-tools.before-tool-call.state.js";
 import { finalizeAgentTools } from "./agent-tools.finalize.js";
 import { createPromptBuildToolPolicy } from "./embedded-agent-runner/run/attempt-prompt-support.js";
 import { normalizeAgentRuntimeTools } from "./runtime-plan/tools.js";
 import { fakeTool } from "./test-helpers/fake-tool.js";
+import { formatToolExecutionErrorMessage } from "./tool-execution-error.js";
+import type { ToolOutcomeObservation } from "./tool-outcome-observation.js";
 import { filterToolsByPolicy } from "./tool-policy-match.js";
-import { formatToolExecutionErrorMessage } from "./tool-result-error.js";
 import { addClientToolsToToolCatalog } from "./tool-search-catalog.js";
 import { ToolSearchRuntime } from "./tool-search-runtime.js";
 import {
@@ -1385,7 +1383,7 @@ describe("Tool Search", () => {
       getCatalog: async () => retainedCatalog,
       peekCatalog: () => retainedCatalog,
       callTool: vi.fn(async () => ({ content: [{ type: "text" as const, text: "echo" }] })),
-    }) satisfies SessionMcpRuntime;
+    });
 
     const firstMaterialized = await materializeBundleMcpToolsForRun({ runtime: mcpRuntime });
     const secondMaterialized = await materializeBundleMcpToolsForRun({ runtime: mcpRuntime });

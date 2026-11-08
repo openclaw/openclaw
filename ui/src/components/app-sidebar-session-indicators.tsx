@@ -1,7 +1,7 @@
 import type { JSX } from "@solidjs/web";
-import { createMemo } from "solid-js";
+import { createMemo, createSignal } from "solid-js";
 import { resolveControlUiAvatarAuth } from "../app/control-ui-auth.ts";
-import { formatDurationCompact } from "../lib/format-duration.ts";
+import { gatewayPresentationScope } from "../app/gateway-presentation-scope.ts";
 import { presenceMatchesProfile, projectPresencePayload } from "../lib/presence-users.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import { formatSessionSnoozeWakeTime, isSessionSnoozed } from "../lib/sessions/session-snooze.ts";
@@ -74,7 +74,10 @@ export function renderSidebarSessionIndicators(
   );
   // A self filter already identifies solo ownership. Keep shared rows and
   // archive attribution visible; the participant count includes unshown faces.
-  const selfUser = createMemo(() => host().sessionDataContext?.gateway.snapshot.selfUser);
+  const selfUser = createMemo(() => {
+    const gateway = host().sessionDataContext?.gateway;
+    return gateway ? gatewayPresentationScope(gateway).displayUser : null;
+  });
   const selfProfileId = createMemo(() => selfUser()?.identity?.id ?? selfUser()?.id);
   const ownerRepeatedByFilter = createMemo(() => {
     const actor = ownerActor();
@@ -180,10 +183,12 @@ export function renderSidebarSessionIndicators(
       ) : undefined}
     </>
   );
+  const [clockOffscreen, setClockOffscreen] = createSignal(false);
   const trail = createMemo(() => {
     const currentSession = readSession();
     return hasTrail() ? (
       <span
+        ref={[sessionRunVisibility(setClockOffscreen)]}
         class={["session-row-trail", { "session-row-trail--snooze": snoozed() }]}
         id={metaId()}
         title={
@@ -200,13 +205,16 @@ export function renderSidebarSessionIndicators(
             {formatSessionSnoozeWakeTime(readSession().snoozedUntil!, new Date(), true)}
           </>
         ) : currentSession.runtimeMs != null ? (
-          currentSession.hasActiveRun ? (
-            <ElapsedTime startMs={currentSession.runtimeSampledAt! - currentSession.runtimeMs} />
-          ) : (
-            (formatDurationCompact(currentSession.runtimeMs) ?? "0ms")
-          )
+          <ElapsedTime
+            startMs={currentSession.runtimeSampledAt! - currentSession.runtimeMs}
+            paused={clockOffscreen()}
+          />
         ) : (
-          <ElapsedTime startMs={readSession().startedAt!} endMs={readSession().endedAt ?? null} />
+          <ElapsedTime
+            startMs={readSession().startedAt!}
+            endMs={readSession().endedAt ?? null}
+            paused={clockOffscreen()}
+          />
         )}
       </span>
     ) : undefined;
@@ -225,7 +233,7 @@ export function renderSidebarSessionIndicators(
         <span class="sidebar-recent-session__details-endcap">
           <openclaw-viewer-facepile
             prop:presencePayload={host().sessionData.presencePayload}
-            prop:selfUser={host().sessionDataContext?.gateway.snapshot.selfUser}
+            prop:selfUser={selfUser()}
             prop:selfInstanceId={host().sessionData.presenceInstanceId}
             prop:sessionKey={readSession().key}
             prop:excludeIdentities={renderedIdentities() ?? EMPTY_VIEWER_IDENTITIES}

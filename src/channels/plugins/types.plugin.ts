@@ -1,3 +1,4 @@
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { OperatorScope } from "../../gateway/operator-scopes.js";
 import type { ChannelMessageAdapterShape } from "../message/types.js";
 import type { ChannelSetupPlugin } from "./setup-wizard-types.js";
@@ -42,6 +43,26 @@ type ChannelGatewayMethodDescriptor = {
   description?: string;
 };
 
+/** Provider-owned proof of account control. Tokens never leave the provider adapter. */
+type ChannelIdentityLinkAdapter = {
+  prepare: (
+    cfg: OpenClawConfig,
+    accountId: string,
+  ) => Promise<
+    | {
+        isCurrent: (cfg: OpenClawConfig) => boolean;
+        authorizationUrl: (params: { state: string; redirectUri: string }) => string;
+        exchange: (params: {
+          code: string;
+          redirectUri: string;
+          signal: AbortSignal;
+          assertCurrent: () => void;
+        }) => Promise<{ senderId: string }>;
+      }
+    | undefined
+  >;
+};
+
 /** Full capability contract for a native channel plugin. */
 // Omitted generic means "plugin with some account shape"; using unknown makes
 // callback parameters contravariant and rejects concrete plugin implementations.
@@ -84,6 +105,7 @@ export type ChannelPlugin<
     : ChannelGatewayAdapter<ResolvedAccount>;
   // Login/logout and channel-auth only. Approval auth lives on approvalCapability.
   auth?: ChannelAuthAdapter;
+  identityLink?: ChannelIdentityLinkAdapter;
   approvalCapability?: ChannelApprovalCapability;
   elevated?: ChannelElevatedAdapter;
   commands?: ChannelCommandAdapter;

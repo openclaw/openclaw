@@ -62,6 +62,7 @@ function toSlackOutboundResult<T extends { channelId?: string }>(result: T) {
 
 type SlackOutboundChannelData = Record<string, unknown> & {
   authoredPresentationText?: string;
+  literalText?: boolean;
   authoredTextPlacement?: SlackAuthoredTextPlacement;
   blocks?: unknown;
   renderedPresentationProvenance?: unknown;
@@ -171,7 +172,11 @@ function withSlackRenderedPresentation(
 type SlackOutboundSendParams = ChannelOutboundContext &
   Pick<
     Parameters<SlackSendFn>[2],
-    "blocks" | "authoredTextPlacement" | "nativeDataFallbackBaseText" | "textIsSlackPlainText"
+    | "blocks"
+    | "authoredTextPlacement"
+    | "nativeDataFallbackBaseText"
+    | "textIsSlackPlainText"
+    | "literalText"
   >;
 
 async function prepareSlackOutboundSend(ctx: ChannelOutboundContext) {
@@ -211,6 +216,7 @@ async function prepareSlackOutboundSend(ctx: ChannelOutboundContext) {
         ? { nativeDataFallbackBaseText: params.nativeDataFallbackBaseText }
         : {}),
       ...(params.textIsSlackPlainText ? { textIsSlackPlainText: true } : {}),
+      ...(params.literalText ? { literalText: true } : {}),
       ...(slackIdentity ? { identity: slackIdentity } : {}),
       ...(params.deliveryQueueId ? { deliveryQueueId: params.deliveryQueueId } : {}),
       ...(params.onPlatformSendDispatch
@@ -278,7 +284,9 @@ export const slackOutbound: ChannelOutboundAdapter = {
       resolveSlackOutboundBlockResolution(payload, resolveSlackMarkdownOptions(ctx));
     if (resolution.segments.length === 0) {
       const sendPart = async (part: ChannelOutboundContext) =>
-        toSlackOutboundResult(await send(part));
+        toSlackOutboundResult(
+          await send({ ...part, literalText: slackData?.literalText === true }),
+        );
       return await sendTextMediaPayload({
         channel: "slack",
         ctx: { ...preparedCtx, payload },

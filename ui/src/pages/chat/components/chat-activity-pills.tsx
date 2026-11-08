@@ -4,13 +4,13 @@ import type {
   ControlUiSessionPullRequest,
   ControlUiSessionPullRequestSnapshot,
 } from "../../../../../src/gateway/control-ui-contract.js";
+import { fnv1aUtf16 } from "../../../../../src/shared/fnv1a.js";
 import { observeScrollState } from "../../../components/scroll-state-observer.ts";
 import { progressCardPresentation } from "../../../components/session-progress-card.ts";
 import { BrandIcon, Icon, type IconName } from "../../../components/solid/icon.tsx";
 import { registerChatGoalsEnglish } from "../../../i18n/locales/en-chat-goals.ts";
 import { registerChatSessionOptionalEnglish } from "../../../i18n/locales/en-chat-session-optional.ts";
 import { registerGitHubEnglish } from "../../../i18n/locales/en-github.ts";
-import { fnv1aUtf16 } from "../../../lib/fnv1a.ts";
 import { elementRef } from "../../../lib/reactive/element-ref.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { listen } from "../../../lib/reactive/listener.ts";
@@ -443,16 +443,8 @@ function ActivityPill(props: {
       >
         {leading()}
       </Show>
-      <span
-        ref={labelRef}
-        class={["activity-pill__label", { "activity-pill__label--shine": props.view.shine }]}
-      >
+      <span ref={labelRef} class={["activity-pill__label", { "text-shimmer": props.view.shine }]}>
         {props.view.label}
-        <Show when={props.view.shine}>
-          <span class="activity-pill__shimmer" aria-hidden="true">
-            {props.view.label}
-          </span>
-        </Show>
       </span>
       <Show when={props.view.count}>
         {(count) => <span class="activity-pill__count">{count()}</span>}

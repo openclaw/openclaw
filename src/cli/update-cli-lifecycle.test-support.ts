@@ -30,6 +30,7 @@ import { createCommandResult as commandResult } from "../test-utils/npm-spec-ins
 import { getFreePort } from "../test-utils/ports.js";
 import type { TempHomeEnv } from "../test-utils/temp-home.js";
 import { setupConfigMutationWithRetryMock } from "./update-cli-assertions.test-support.js";
+import { createGitUpdateAfterMutationFixture } from "./update-cli-invocation.test-support.js";
 import * as mocks from "./update-cli-mocks.test-support.js";
 import * as update from "./update-cli-modules.test-support.js";
 import {
@@ -74,7 +75,6 @@ type UpdateCliLifecycleFixture = {
   baseSnapshot: ConfigFileSnapshot;
   fixtureRoot: string;
   globalNpmConfig: string;
-  initializeExistingUpdateProfile: () => void;
   mockGatewayHealth: (version: string, connId: string) => void;
   primeNpmChannelTag: (tag: string, version: string | null) => void;
   reportCandidateSteps: <T extends { steps: UpdateRunResult["steps"] }>(
@@ -352,10 +352,11 @@ export function registerUpdateCliLifecycle(fixture: UpdateCliLifecycleFixture): 
     mocks.launchdUpdateCleanupMocks.disableCurrentOpenClawUpdateLaunchdJob.mockResolvedValue(false);
     mocks.confirm.mockResolvedValue(false);
     mocks.select.mockResolvedValue("stable");
-    vi.mocked(update.updateGitCheckout).mockResolvedValue(update.makeOkUpdateResult());
+    vi.mocked(update.updateGitCheckout).mockImplementation(
+      createGitUpdateAfterMutationFixture().run,
+    );
     fixture.setTty(false);
     fixture.setStdoutTty(false);
-    fixture.initializeExistingUpdateProfile();
     // Keep guard reads on the fixture connection instead of booting snapshots per read.
     openOpenClawStateDatabase();
   });

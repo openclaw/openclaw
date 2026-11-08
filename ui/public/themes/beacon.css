@@ -16,13 +16,18 @@
      disappear on a poor panel, which is exactly this theme's audience. */
   --focus-ring: 0 0 0 2px var(--bg), 0 0 0 5px var(--ring);
   --focus-glow: 0 0 0 2px var(--bg), 0 0 0 5px var(--ring);
+  --field-focus-border: var(--accent);
   --github-item-bg: color-mix(in srgb, var(--text) 4%, var(--bg));
   --github-item-hover-bg: color-mix(in srgb, var(--text) 7%, var(--bg));
   --overlay-border: var(--border-strong);
+  /* A full hairline: half-pixel edges vanish on the panels this theme targets. */
+  --menu-shadow: 0 0 0 1px var(--overlay-border), 0 8px 16px -4px rgb(0 0 0 / 12.16%);
   /* Auxiliary controls retain this palette's deliberately stronger ink. */
   --text-tertiary: var(--muted);
   --icon-interactive: var(--muted);
   --rail-header-action-color: var(--muted);
+  --chat-composer-control-text: var(--muted);
+  --chat-composer-control-icon: var(--muted);
   --navigation-selected-border: var(--border-strong);
 
   /* Atkinson Hyperlegible Next everywhere, prose included: the face is part of
@@ -74,7 +79,6 @@
 
   /* Neutral status tints — see the block comment above. */
   --ok: #5ee88a;
-  --ok-muted: rgba(94, 232, 138, 0.85);
   --ok-subtle: rgba(255, 255, 255, 0.1);
   --destructive: #ffabab;
   --destructive-hover: #ffc4c4;
@@ -85,6 +89,7 @@
   --danger-muted: rgba(255, 171, 171, 0.85);
   --danger-subtle: rgba(255, 255, 255, 0.1);
   --info: #8ecdff;
+  --status-running: var(--info);
   --info-subtle: rgba(255, 255, 255, 0.1);
 
   /* Diff ink is a status pair too: it sits on the same neutral tints. */
@@ -123,7 +128,6 @@
   --card-foreground: #000000;
   --card-highlight: rgba(0, 0, 0, 0.04);
   --popover-foreground: #000000;
-  --session-hovercard-surface: var(--card);
 
   --text: #000000;
   --text-strong: #000000;
@@ -143,7 +147,6 @@
 
   /* Neutral status tints — see the block comment above. */
   --ok: #0c5024;
-  --ok-muted: rgba(12, 80, 36, 0.85);
   --ok-subtle: rgba(0, 0, 0, 0.07);
   --destructive: #8c0f0f;
   --destructive-foreground: #ffffff;
@@ -153,6 +156,7 @@
   --danger-muted: rgba(140, 15, 15, 0.85);
   --danger-subtle: rgba(0, 0, 0, 0.07);
   --info: #09428d;
+  --status-running: var(--info);
   --info-subtle: rgba(0, 0, 0, 0.07);
 
   /* Diff ink is a status pair too: it sits on the same neutral tints. */

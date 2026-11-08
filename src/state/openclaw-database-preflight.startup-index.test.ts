@@ -367,8 +367,16 @@ function expectRefusal(env: NodeJS.ProcessEnv) {
   return refused;
 }
 
-async function createFtsFixture(failure?: "mixed" | "backup" | "rebuild" | "writer") {
-  const fixture = await createFixture(["main"], undefined, () => "retained");
+async function createFtsFixture(
+  failure?: "mixed" | "backup" | "rebuild" | "writer" | "background",
+) {
+  // A missing canonical index keeps the real pre-admission repair path; exact
+  // schemas instead admit before their background integrity verdict.
+  const fixture = await createFixture(
+    ["main"],
+    failure === "background" ? undefined : "missing",
+    () => "retained",
+  );
   const { env, config, logPath } = fixture;
   const stateDir = env.OPENCLAW_STATE_DIR;
   const { session, entry, path: pathname } = fixture.agents[0]!;
@@ -423,7 +431,9 @@ async function createFtsFixture(failure?: "mixed" | "backup" | "rebuild" | "writ
       const owner = admission.adopt();
       try {
         activateStartup(admission, config);
-        await admission.pendingPreparation;
+        while (admission.pendingPreparation) {
+          await admission.pendingPreparation;
+        }
       } finally {
         await owner.stop();
       }
@@ -431,7 +441,7 @@ async function createFtsFixture(failure?: "mixed" | "backup" | "rebuild" | "writ
   return { env, session, entry, pathname, rows, logPath, start, foreignLease };
 }
 
-it("admits a tokenizer-mismatched agent at Gateway startup with preserved content and backup", async () => {
+it("repairs tokenizer mismatch during required startup index repair with preserved content and backup", async () => {
   const fixture = await createFtsFixture();
   const { session, entry, pathname, rows, logPath, env } = fixture;
   await fixture.start();
@@ -453,12 +463,41 @@ it("admits a tokenizer-mismatched agent at Gateway startup with preserved conten
   await closeStateDatabaseForTest();
   closeOpenClawAgentDatabasesForTest();
   installSqliteFtsTokenizerMismatch(pathname, "session_transcript_fts");
+  {
+    using db = openRawDatabase(pathname);
+    db.exec("DROP INDEX idx_agent_session_nodes_active");
+  }
   retireSqliteDatabaseAdmissionForPath(pathname);
   await fixture.start();
   const refused = expectRefusal(env);
   expect(refused?.reason).toContain("Startup FTS repair failed");
   expectContents(pathname, rows, malformedFts);
   expect(backupPaths(pathname)).toHaveLength(1);
+});
+
+it("admits an exact schema before background FTS quarantine without changing content", async () => {
+  const fixture = await createFtsFixture("background");
+  let admitted = false;
+  const unsubscribe = sessionChanges.subscribe((change) => {
+    if (
+      "all" in change &&
+      typeof change.scope === "object" &&
+      change.scope.agentId === "main" &&
+      !readAgentDatabaseAdmissionRefusal("main", { env: fixture.env })
+    ) {
+      admitted = true;
+    }
+  });
+  try {
+    await fixture.start();
+    expect(admitted).toBe(true);
+    expectRefusal(fixture.env);
+    expect(() => loadSessionEntry(fixture.session)).toThrow(/integrity_check|quarantined/);
+    expectContents(fixture.pathname, fixture.rows, malformedFts);
+    expect(backupPaths(fixture.pathname)).toEqual([]);
+  } finally {
+    unsubscribe();
+  }
 });
 
 it.each(["mixed", "backup", "rebuild", "writer"] as const)(

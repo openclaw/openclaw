@@ -102,6 +102,47 @@
             }
           },
           {
+            "id": "decision-models/baseten-joey-2b-latest",
+            "name": "joey-1 (2B)",
+            "inference": {
+              "chat": false,
+              "decision": {
+                "protocol": "baseten-systemone",
+                "input": [
+                  "text"
+                ],
+                "reasoning": {
+                  "modes": [
+                    "auto"
+                  ]
+                },
+                "questions": {
+                  "boolean": {
+                    "probabilities": "boolean",
+                    "abstention": false
+                  },
+                  "choice": {
+                    "probabilities": "categorical",
+                    "abstention": false,
+                    "minOptions": 2,
+                    "maxOptions": 255
+                  },
+                  "score": {
+                    "probabilities": "categorical",
+                    "abstention": false,
+                    "minOptions": 2,
+                    "maxOptions": 10
+                  }
+                },
+                "confidence": "provider-specific",
+                "limits": {
+                  "maxInputTokens": 16384,
+                  "inputTokenScope": "encoded-question"
+                }
+              }
+            }
+          },
+          {
             "id": "deepseek-ai/DeepSeek-V4.1-Flash",
             "name": "DeepSeek V4.1 Flash",
             "reasoning": true,

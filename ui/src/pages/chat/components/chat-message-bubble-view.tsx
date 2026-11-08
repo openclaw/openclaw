@@ -19,7 +19,10 @@ import { registerChatComposerEnglish } from "../../../i18n/locales/en-chat-compo
 import { registerChatMessageMetadataEnglish } from "../../../i18n/locales/en-chat-message-metadata.ts";
 import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
 import { registerChatToolLabelsEnglish } from "../../../i18n/locales/en-chat-tool-labels.ts";
-import { resolveMessageDisplayMarkdown } from "../../../lib/chat/message-display.ts";
+import {
+  resolveMessageDisplayMarkdown,
+  type ChatMessageRenderPreparation,
+} from "../../../lib/chat/message-display.ts";
 import { elementRef } from "../../../lib/reactive/element-ref.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { ContentPresentation } from "../../../lib/solid/presentation.ts";
@@ -49,7 +52,6 @@ import {
   MessageAttachment,
 } from "./chat-message-deferred.tsx";
 import { MessageImages } from "./chat-message-images-solid.tsx";
-import type { ChatMessageRenderPreparation } from "./chat-message-markdown-view.tsx";
 import type { MarkdownMedia, PositionedMedia } from "./chat-message-media-markdown.ts";
 import { prepareMarkdownMedia } from "./chat-message-media-markdown.ts";
 import {
@@ -64,6 +66,7 @@ import { ChatRowDisplayContext } from "./chat-row-display-context.ts";
 import type { SidebarContent } from "./chat-sidebar-content-types.ts";
 import { TranscriptMessageElementsContext } from "./chat-transcript-message-elements.ts";
 import { WorkspaceConflictTranscriptMessage } from "./chat-workspace-conflict.tsx";
+import { SubmittedAppContext } from "./submitted-app-context.tsx";
 
 registerEnglishCatalog(registerChatToolLabelsEnglish);
 
@@ -271,6 +274,9 @@ function MessageText(props: ContentProps) {
       </Match>
       <Match when={prepared().text}>
         <MessageMarkdown
+          onOpenImage={(item, index) =>
+            props.state().imageRenderOptions.openInlineImage(index, item.src)
+          }
           markdown={prepared().text ?? ""}
           messageKey={props.messageKey}
           options={prepared().options}
@@ -333,6 +339,8 @@ function MessageReasoning(props: Pick<ContentProps, "state" | "options">) {
 }
 
 function BubbleContents(props: ContentProps) {
+  const images = () =>
+    props.state().renderInOrder ? props.state().supplementalImages : props.state().images;
   const previewCount = createMemo(() => props.state().videoPreviews.length);
   const previews = createMemo(() =>
     Array.from({ length: previewCount() }, (_, index) => (
@@ -349,13 +357,13 @@ function BubbleContents(props: ContentProps) {
         </For>
       </Show>
       <PairingQrNotices count={props.state().expiredPairingQrCount} />
-      <MessageImages
-        images={
-          props.state().renderInOrder ? props.state().supplementalImages : props.state().images
-        }
-        options={props.state().imageRenderOptions}
-        previews={previews()}
-      />
+      <Show when={images().length > 0 || previewCount() > 0}>
+        <MessageImages
+          images={images()}
+          options={props.state().imageRenderOptions}
+          previews={previews()}
+        />
+      </Show>
       <OmittedMedia items={props.state().omittedMedia} />
       <AssistantAttachments
         attachments={
@@ -386,6 +394,7 @@ function BubbleContents(props: ContentProps) {
       </Show>
       <Show when={props.state().normalizedRole === "user"} fallback={<MessageText {...props} />}>
         <Show when={hasText() || props.options.avatar}>
+          <SubmittedAppContext message={props.state().message} />
           <div class="chat-message-avatar-anchor">
             <MessageText {...props} />
             <MessageAvatar render={props.options.avatar} />

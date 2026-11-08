@@ -1,7 +1,10 @@
+import { once } from "node:events";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { createServer, type Socket } from "node:net";
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { Session } from "@muse-code/sdk";
 import type {
   AgentHarnessAttemptParamsV2,
   AgentHarnessAttemptResult,
@@ -15,6 +18,8 @@ import {
 import type * as ProviderAuthRuntime from "openclaw/plugin-sdk/provider-auth-runtime";
 import type * as TranscriptRuntime from "openclaw/plugin-sdk/session-transcript-runtime";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import catalogOriginal from "../../test/fixtures/model-catalog/muse-meta-account.json" with { type: "json" };
+import catalogExpected from "../../test/fixtures/model-catalog/muse-meta-expected.json" with { type: "json" };
 import { registerMuseLifecycleTests } from "./harness-lifecycle.test-support.js";
 import {
   createMuseAgentHarness as createMuseAgentHarnessImpl,
@@ -54,18 +59,13 @@ const fixture = fileURLToPath(new URL("./src/test-support/fake-muse.mjs", import
 beforeAll(async () => {
   workspace = await mkdtemp(join(tmpdir(), "muse-harness-test-"));
 });
-afterAll(async () => {
-  await rm(workspace, { recursive: true, force: true });
-});
+afterAll(() => rm(workspace, { recursive: true, force: true }));
 
 const harnesses = new Set<ReturnType<typeof createMuseAgentHarnessImpl>>();
 afterEach(async () => {
+  vi.useRealTimers();
   try {
-    await Promise.all(
-      [...harnesses].map(async (harness) => {
-        await harness.dispose?.();
-      }),
-    );
+    await Promise.all([...harnesses].map(async (harness) => harness.dispose?.()));
   } finally {
     harnesses.clear();
     vi.unstubAllEnvs();
@@ -395,7 +395,7 @@ describe("Muse native MSP harness", () => {
       expect.objectContaining({ outcome: "failure" }),
     );
     expect(terminal(result).kind).toBe("ok");
-    expect(result.lastToolError).toEqual(lastToolError);
+    expect(result).toMatchObject({ lastToolError, toolMetas: [{ isError: true }] });
   });
 
   it.each(["callback", "transcript", "abort", "timeout", "approval"] as const)(
@@ -403,6 +403,9 @@ describe("Muse native MSP harness", () => {
     async (failure) => {
       const { params, run, log } = setup(true);
       const controller = new AbortController();
+      if (failure === "timeout") {
+        vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      }
       if (failure === "transcript") {
         writes.append.mockRejectedValueOnce(new Error("transcript unavailable"));
       }
@@ -419,6 +422,9 @@ describe("Muse native MSP harness", () => {
         timeoutMs: failure === "timeout" ? 150 : params.timeoutMs,
         abortSignal: controller.signal,
         onExecutionStarted: () => {
+          if (failure === "timeout") {
+            vi.advanceTimersByTime(150);
+          }
           if (failure === "callback") {
             throw new Error("callback failed");
           }
@@ -522,6 +528,42 @@ describe("Muse native MSP harness", () => {
     expect(result.assistantTexts).toEqual(["started: hello"]);
   });
 
+  it("reports SDK-rejected approval feedback and settles without granting the command", async () => {
+    const { harness, run, log } = setup(true);
+    // Inject an invalid decision at the SDK boundary to exercise its real rejection;
+    // the harness itself never attaches feedback to an approval choice.
+    const registration = vi.spyOn(Session.prototype, "onApproval").mockImplementation(function (
+      this: Session,
+      handler,
+    ) {
+      registration.mockRestore();
+      this.onApproval(async (request) => ({
+        ...(await handler(request)),
+        feedback: "Do not run this command",
+      }));
+    });
+    try {
+      const result = await run({ prompt: "approval-settle" });
+      expectFailure(
+        result,
+        "Muse approval failed (feedbackNotAccepted): choice server-allow-id does not accept feedback",
+      );
+      expect(result.assistantTexts).toEqual([]);
+      expect(result.replayMetadata?.replaySafe).toBe(false);
+      const requests = await readRequests(log);
+      expect(
+        requests
+          .filter((request) => request.method === "approval/decide")
+          .map((request) => request.params.choiceId),
+      ).toEqual(["server-deny-id"]);
+      expect(requests).toContainEqual(expect.objectContaining({ method: "turn/interrupt" }));
+      expect(requests).toContainEqual({ event: "terminal", terminal: "failed" });
+    } finally {
+      registration.mockRestore();
+      await harness.dispose?.();
+    }
+  });
+
   it("interrupts the real MSP transport when the caller aborts", async () => {
     const { run } = setup();
     const controller = new AbortController();
@@ -534,13 +576,21 @@ describe("Muse native MSP harness", () => {
     expect(terminal(result).kind).toBe("aborted");
   });
 
-  it.each([
-    ["fail", "fixture provider rejected authentication"],
-    ["crash", "fixture: provider process crashed"],
-  ])("surfaces %s failures without hanging", async (prompt, expected) => {
-    const { run } = setup();
-    const result = await run({ prompt });
-    expectFailure(result, expected);
+  it.each<[string, string, number]>([
+    ["fail", "fixture provider rejected authentication", 0],
+    ["crash", "fixture: provider process crashed", 0],
+    ["loggedout", "Muse Code is not signed in on the Gateway host", 401],
+    ["quota", "resets at 2030-01-02T03:04:00.000Z", 429],
+  ])("surfaces %s failures without hanging", async (prompt, expected, status) => {
+    const { params, sessionStore } = setup();
+    const warn = vi.fn();
+    const harness = createMuseAgentHarness({ binaryPath: fixture, sessionStore, logger: { warn } });
+    const result = await harness.runAttempt({ ...params, prompt });
+    expectFailure(result, prompt === "loggedout" ? "muse login" : expected);
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining(expected));
+    if (status) {
+      expect(terminal(result)).toMatchObject({ error: { cause: { status } } });
+    }
     expect(result.replayMetadata?.replaySafe).toBe(false);
   });
 
@@ -590,16 +640,6 @@ describe("Muse native MSP harness", () => {
       }
     },
   );
-
-  it("explains a missing Muse sign-in and logs it for operators", async () => {
-    const { params, sessionStore } = setup();
-    const warn = vi.fn();
-    const harness = createMuseAgentHarness({ binaryPath: fixture, sessionStore, logger: { warn } });
-    expectFailure(await harness.runAttempt({ ...params, prompt: "loggedout" }), "muse login");
-    expect(warn).toHaveBeenCalledWith(
-      expect.stringContaining("Muse Code is not signed in on the Gateway host"),
-    );
-  });
 
   it("treats an unlimited Gateway budget as no deadline and bounds the approval wait", async () => {
     const { params, run } = setup();
@@ -652,6 +692,11 @@ describe("Muse native MSP harness", () => {
       vi.stubEnv("PATH", `${workspace}${delimiter}${process.env.PATH ?? ""}`);
 
       vi.stubEnv("MUSE_FIXTURE_CATALOG_SOURCE", "providerCatalog");
+      const catalogPath = join(workspace, "catalog.json");
+      const writeCatalog = (models: unknown) =>
+        writeFile(catalogPath, JSON.stringify({ ...catalogOriginal, models }));
+      await writeCatalog(catalogOriginal.models);
+      vi.stubEnv("MUSE_FIXTURE_CATALOG_PATH", catalogPath);
       const scope = {
         config: { plugins: { entries: { muse: { config: { binaryPath: "muse" } } } } },
         agentId: "main",
@@ -670,11 +715,28 @@ describe("Muse native MSP harness", () => {
       }
       await harness.verifySetup(verification);
       await harness.verifySetup(verification);
-      await harness.loadModelCatalog(scope);
+      expect(await harness.loadModelCatalog(scope)).toEqual(catalogExpected);
       expect(harness.readModelCatalogReadiness(verification)).toEqual({ accountType: "native" });
       const initialRequests = await readRequests(log);
       expect(initialRequests.filter((request) => request.event === "spawn")).toHaveLength(1);
       expect(initialRequests.filter((request) => request.method === "model/list")).toHaveLength(3);
+      const full = "muse-wonder-full-1.0-contributor";
+      await writeCatalog(catalogOriginal.models.filter((row) => row.modelId !== full));
+      await expect(harness.verifySetup({ ...verification, modelId: full })).rejects.toThrow(
+        `cannot access meta/${full}`,
+      );
+      // Keep meaningful provider labels and unknown future IDs without guessing an offering.
+      const rows = Object.entries({
+        [full]: "Official Full Subscriber Label",
+        "muse-wonder-2.0-contributor": "muse-wonder-2.0-contributor",
+        "future-opaque-id": "Provider's New Model",
+      });
+      await writeCatalog(
+        rows.map(([modelId, displayLabel]) => ({ modelId, displayLabel, providerId: "meta" })),
+      );
+      const models = await harness.loadModelCatalog(scope);
+      expect(models).toMatchObject(rows.map(([id, name]) => ({ id, name })));
+      vi.stubEnv("MUSE_FIXTURE_CATALOG_PATH", undefined);
       vi.stubEnv("MUSE_FIXTURE_CATALOG_SOURCE", "bundledCatalog");
       await writeFile(join(stateDir, "muse", "muse", "auth.json"), '{"changed":true}');
       await expect(harness.verifySetup(verification)).rejects.toThrow("authenticate");
@@ -688,6 +750,71 @@ describe("Muse native MSP harness", () => {
       });
       expect(requests.map((request) => request.method)).not.toContain("turn/start");
       expect(requests.map((request) => request.method)).not.toContain("session/start");
+    },
+  );
+
+  it.runIf(process.platform !== "win32").for(["startup", "none", "first", "both"])(
+    "cancels only its own catalog check on a shared host (%s)",
+    async (mode, { signal }) => {
+      const { harness, params } = setup();
+      const config = { plugins: { entries: { muse: { config: { binaryPath: fixture } } } } };
+      const scope = { config, agentId: "main", agentDir: workspace, workspaceDir: workspace };
+      const context = { ...params, ...scope, assertCurrent: () => {} };
+      const sockets: Socket[] = [];
+      await using server = createServer((socket) => sockets.push(socket));
+      const gatePath = join(workspace, "catalog-gate.sock");
+      await once(server.listen(gatePath), "listening");
+      vi.stubEnv(`MUSE_FIXTURE_${mode === "startup" ? "INITIALIZE" : "CATALOG"}_GATE`, gatePath);
+      const catalogPath = join(workspace, "shared-catalog.json");
+      await writeFile(catalogPath, JSON.stringify(catalogOriginal));
+      vi.stubEnv("MUSE_FIXTURE_CATALOG_PATH", catalogPath);
+      const controllers = [new AbortController(), new AbortController()];
+      const cancelled = new Error("catalog check cancelled");
+      const outcomes: Promise<unknown>[] = [];
+      const start = async (check: (signal: AbortSignal) => Promise<unknown>) => {
+        const connected = once(server, "connection", { signal });
+        const index = outcomes.length;
+        outcomes.push(
+          check(controllers[index]!.signal).then(
+            (value) => ({ value }),
+            (error: unknown) => ({ error }),
+          ),
+        );
+        const [socket] = (await connected) as [Socket];
+        return Number((await once(socket, "data", { signal }))[0]);
+      };
+      const verify = (abort: AbortSignal) => harness.verifySetup!({ ...context, signal: abort });
+      const release = (index: number) => sockets[index]!.write("resume");
+      const cancel = (index: number) => controllers[index]!.abort(cancelled);
+      try {
+        const pid = await start(verify);
+        if (mode === "startup") {
+          cancel(0);
+          release(0);
+          expect(await outcomes[0]).toHaveProperty("error");
+          expect(() => process.kill(pid, 0)).toThrow();
+          return;
+        }
+        expect(
+          await start(mode === "both" ? verify : () => harness.loadModelCatalog!(context)),
+        ).toBe(pid);
+        (mode === "none" ? release : cancel)(0);
+        expect(await outcomes[0]).toEqual(
+          mode === "none" ? { value: undefined } : { error: cancelled },
+        );
+        expect(process.kill(pid, 0)).toBe(true);
+        (mode === "both" ? cancel : release)(1);
+        expect(await outcomes[1]).toEqual(
+          mode === "both" ? { error: cancelled } : { value: catalogExpected },
+        );
+        if (mode !== "none") {
+          expect(() => process.kill(pid, 0)).toThrow();
+        }
+      } finally {
+        for (const socket of sockets) {
+          socket.destroy();
+        }
+      }
     },
   );
 

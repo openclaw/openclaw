@@ -1,4 +1,5 @@
 import path from "node:path";
+import { streamOpenAIResponses } from "@openclaw/ai/internal/openai";
 import { Type } from "typebox";
 import { afterEach, expect, it, vi } from "vitest";
 import { transformMessages } from "../../packages/ai/src/transcript-transform.js";
@@ -9,6 +10,7 @@ import {
   createAssistant,
   createAssistantResultStream,
   createTestSession,
+  holdAssistantResponse,
   registerAgentSessionLoopTestLifecycle,
   streamMocks,
   testModel,
@@ -150,17 +152,22 @@ it("deduplicates background output without breaking live or replayed tool result
     finishTool.resolve();
     await withinTest(turn, signal);
     expect(requests).toHaveLength(2);
-    expect(requests[1]).toMatchObject([{ role: "user" }, lookupCall, lookupResult]);
+    expect(requests[1]).toMatchObject([
+      { role: "user" },
+      lookupCall,
+      lookupResult,
+      automationResult,
+    ]);
     const reopened = await SessionManager.openAsync(target.scope);
     const stored = reopened.buildSessionContext().messages;
     expect(stored).toMatchObject([
       { role: "user" },
       lookupCall,
-      automationResult,
       lookupResult,
+      automationResult,
       { role: "assistant" },
     ]);
-    expect(stored[2]).toEqual(
+    expect(stored[3]).toEqual(
       expect.objectContaining({
         api: "openclaw-transcript",
         idempotencyKey: "cron-current-completion:cron:job-1:1000",
@@ -216,6 +223,220 @@ it("deduplicates background output without breaking live or replayed tool result
     await turn;
   }
 });
+
+it.each(["tool", "stream"])(
+  "keeps a live background result append-only during %s",
+  async (arrival) => {
+    const target = await createTarget();
+    const manager = await SessionManager.openAsync(target.scope);
+    const requests: Message[][] = [];
+    let acceptedEvents: unknown[] = [];
+    const streaming = createDeferred();
+    const held = holdAssistantResponse(() =>
+      createAssistant(
+        testModel,
+        [
+          {
+            type: "thinking",
+            thinking: "",
+            thinkingSignature: JSON.stringify({
+              type: "reasoning",
+              id: "rs_synthetic",
+              summary: [],
+              encrypted_content: "synthetic-signed-output",
+            }),
+          },
+          { type: "toolCall", id: "call_lookup_1", name: "lookup", arguments: {} },
+        ],
+        "toolUse",
+      ),
+    );
+    streamMocks.streamSimple.mockImplementation((model, context) => {
+      requests.push(structuredClone(context.messages));
+      if (arrival === "stream" && requests.length === 1) {
+        streaming.resolve();
+        return held.response;
+      }
+      return createAssistantResultStream(
+        requests.length <= 2
+          ? createAssistant(
+              model,
+              [
+                {
+                  type: "toolCall",
+                  id: `call_lookup_${requests.length}`,
+                  name: "lookup",
+                  arguments: {},
+                },
+              ],
+              "toolUse",
+            )
+          : createAssistant(model, "Lookup completed"),
+      );
+    });
+    let lookups = 0;
+    const customTools = [
+      {
+        name: "lookup",
+        label: "Lookup",
+        description: "Synthetic lookup",
+        parameters: Type.Object({}),
+        execute: async () => {
+          if (++lookups === 1 && arrival === "tool") {
+            expect(await target.commit()).toEqual({ ok: true });
+            acceptedEvents = await loadTranscriptEvents(target.scope);
+          }
+          return {
+            content: [{ type: "text" as const, text: "Actual lookup result" }],
+            details: {},
+          };
+        },
+      },
+    ];
+    const { session } = await createTestSession({ sessionManager: manager, customTools });
+    const turn = withSessionTurn(target, () => session.prompt("Run two lookups"));
+    if (arrival === "stream") {
+      try {
+        await streaming.promise;
+        expect(await target.commit()).toEqual({ ok: true });
+        acceptedEvents = await loadTranscriptEvents(target.scope);
+      } finally {
+        held.release();
+      }
+    }
+    await turn;
+    expect(requests).toHaveLength(3);
+    const completedEvents = await loadTranscriptEvents(target.scope);
+    expect(JSON.stringify(completedEvents.slice(0, acceptedEvents.length))).toBe(
+      JSON.stringify(acceptedEvents),
+    );
+
+    const reopened = await SessionManager.openAsync(target.scope);
+    const { session: next } = await createTestSession({ sessionManager: reopened, customTools });
+    next.agent.state.messages = await sanitizeSessionHistory({
+      messages: next.messages,
+      sessionManager: reopened,
+      sessionId: target.sessionId,
+      provider: testModel.provider,
+      modelId: testModel.id,
+      modelApi: testModel.api,
+      config: { plugins: { enabled: false } },
+    });
+    await withSessionTurn(target, () => next.prompt("Continue after the background result"));
+    expect(requests).toHaveLength(4);
+
+    const captureInput = async (messages: Message[]) => {
+      let input: unknown[] | undefined;
+      const stream = streamOpenAIResponses(
+        { ...testModel, api: "openai-responses" },
+        { systemPrompt: "Stable synthetic prompt", messages },
+        {
+          apiKey: "synthetic-unused-key",
+          onPayload(payload) {
+            input = (payload as { input: unknown[] }).input;
+            throw new Error("stop after request capture");
+          },
+        },
+      );
+      expect((await stream.result()).stopReason).toBe("error");
+      expect(input).toBeDefined();
+      return input!;
+    };
+    const previous = await captureInput(requests[2]!);
+    const current = await captureInput(requests[3]!);
+    const callOffset = arrival === "stream" ? 3 : 2;
+    expect(previous.slice(callOffset, callOffset + 2)).toMatchObject([
+      { type: "function_call", call_id: "call_lookup_1", name: "lookup" },
+      { type: "function_call_output", call_id: "call_lookup_1" },
+    ]);
+    expect(current.slice(0, 4)).toEqual(previous.slice(0, 4));
+    expect(JSON.stringify(current.slice(0, previous.length))).toBe(JSON.stringify(previous));
+    expect(
+      JSON.stringify(
+        await captureInput(
+          reopened
+            .buildSessionContext()
+            .messages.filter(
+              (message): message is Message =>
+                message.role === "user" ||
+                message.role === "assistant" ||
+                message.role === "toolResult",
+            )
+            .slice(0, requests[3]!.length),
+        ),
+      ),
+    ).toBe(JSON.stringify(current));
+  },
+);
+
+it.each(["live", "full", "bounded", "model", "bounded-model"] as const)(
+  "places an interrupted result before the next request (reopen: %s)",
+  async (reopen) => {
+    const target = await createTarget();
+    let manager = await SessionManager.openAsync(target.scope);
+    const requests: Message[][] = [];
+    streamMocks.streamSimple.mockImplementation((model, context) => {
+      requests.push(structuredClone(context.messages));
+      return createAssistantResultStream(createAssistant(model, "Interrupted output", "aborted"));
+    });
+    let { session } = await createTestSession({ sessionManager: manager });
+    const stop = session.agent.subscribe(async (event) => {
+      if (event.type === "turn_end") {
+        expect(await target.commit()).toEqual({ ok: true });
+      }
+    });
+    await withSessionTurn(target, () => session.prompt("Start"));
+    stop();
+    const accepted = await loadTranscriptEvents(target.scope);
+    expect(accepted).not.toContainEqual(
+      expect.objectContaining({ customType: "openclaw.background-result-placement" }),
+    );
+    if (reopen !== "live") {
+      session.dispose();
+      if (reopen === "bounded") {
+        await manager.appendMessageAsync({ role: "user", content: "Older input", timestamp: 1 });
+        await manager.appendMessageAsync({ role: "user", content: "Newest input", timestamp: 2 });
+      }
+      manager =
+        reopen === "full"
+          ? await SessionManager.openAsync(target.scope)
+          : reopen === "bounded"
+            ? await SessionManager.openBoundedAsync(target.scope, {
+                maxBytes: 16384,
+                maxEvents: 1,
+              })
+            : await SessionManager.openModelContextAsync(
+                target.scope,
+                reopen === "bounded-model"
+                  ? { limits: { maxBytes: 16384, maxEvents: 100 } }
+                  : undefined,
+              );
+      if (reopen === "bounded") {
+        expect(manager.getEntries().filter((entry) => entry.type === "message")).toHaveLength(2);
+        expect(manager.buildSessionContext().messages).toEqual([
+          { role: "user", content: "Newest input", timestamp: 2 },
+        ]);
+      }
+      ({ session } = await createTestSession({ sessionManager: manager }));
+    }
+    streamMocks.streamSimple.mockImplementation((model, context) => {
+      requests.push(structuredClone(context.messages));
+      return createAssistantResultStream(createAssistant(model, "Recovered"));
+    });
+    await withSessionTurn(target, () => session.agent.continue());
+    expect(requests).toHaveLength(2);
+    expect(requests[1]?.at(-1)).toMatchObject(automationResult);
+    expect(
+      requests[1]?.filter(
+        (message) => message.role === "assistant" && message.model === "automation-result",
+      ),
+    ).toHaveLength(1);
+    const completed = await loadTranscriptEvents(target.scope);
+    expect(JSON.stringify(completed.slice(0, accepted.length))).toBe(JSON.stringify(accepted));
+    expect(manager.buildSessionContext().messages).toEqual(session.messages);
+    session.dispose();
+  },
+);
 
 it("cancels a background result queued behind a mutation without retaining custody", async () => {
   const target = await createTarget();

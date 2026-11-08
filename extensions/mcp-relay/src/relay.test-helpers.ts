@@ -102,6 +102,7 @@ export function createStateFixture(now = () => 0) {
   };
   return {
     effects,
+    runtime,
     open: (url = "https://mcp.openclaw.ai") => new RelayState(runtime, url, () => {}),
     seed: (value: unknown, key = "identity") => {
       rows.set(key, JSON.stringify(value));
@@ -129,6 +130,7 @@ export function grantFixture(overrides: Partial<RelayGrant> = {}): RelayGrant {
     clientId: CLIENT.id,
     clientName: CLIENT.name,
     createdAt: 0,
+    issuanceId: "fixture-issuance",
     principal: { kind: "owner" },
     ceiling: ["operator.read", "operator.write"],
     ...overrides,
@@ -260,7 +262,7 @@ export async function createTransportFixture(
       return socket;
     },
   });
-  service.start();
+  await service.start();
   await clock.advanceBy(0);
   const socket = sockets[0];
   if (!socket) {

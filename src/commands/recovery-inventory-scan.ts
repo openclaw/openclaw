@@ -8,9 +8,19 @@ export class RecoveryInventoryScan {
   readonly reasons = new Set<string>();
   private entries = 0;
   private metadataBytes = 0;
-  private readonly startedAt = performance.now();
+  private startedAt = performance.now();
 
   private readonly limits = { entries: 2_000, metadataBytes: 2 * 1024 * 1024, timeMs: 150 };
+
+  /** Awaited snapshot setup is not synchronous inventory work; entry and byte caps stay active. */
+  async waitForPreparation(prepare: () => Promise<unknown>): Promise<void> {
+    const startedAt = performance.now();
+    try {
+      await prepare();
+    } finally {
+      this.startedAt += performance.now() - startedAt;
+    }
+  }
 
   get incomplete() {
     return this.reasons.size > 0;

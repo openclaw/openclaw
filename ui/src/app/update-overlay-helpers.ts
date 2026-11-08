@@ -364,7 +364,9 @@ export function resolveUpdateStatusBanner(params: {
     // which step owned it.
     text: cause
       ? `${t("updates.failedAtStep", { step: cause.step, cause: cause.detail })} ${guidance}`
-      : t("updates.status", { status, reason, guidance }),
+      : status === "error"
+        ? t("updates.error", { error: `${reason}. ${guidance}` })
+        : t("updates.status", { status, reason, guidance }),
   };
 }
 

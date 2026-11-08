@@ -7,8 +7,10 @@ import { defaultRuntime, ExitError } from "../runtime.js";
 import { inheritOptionFromParent } from "./command-options.js";
 import { formatHelpExamples } from "./help-format.js";
 import { isJsonOutputModeActive } from "./json-output-mode.js";
+import { requestOneShotSettledExitWatchdog } from "./one-shot-exit.js";
 import { setCommandJsonMode } from "./program/json-mode.js";
 import { getProgramContext } from "./program/program-context.js";
+import { hasCliProcessScope } from "./runtime-cleanup-scope.js";
 import type { UpdateCommandOptions } from "./update-cli/shared.js";
 import { UPDATE_OPTION_SPECS } from "./update-option-specs.js";
 export type {
@@ -117,6 +119,9 @@ function registerUpdateFinalizationCommand(update: Command, name: string, hidden
     )
     .action(
       createUpdateLeafAction(async (opts, actionCommand) => {
+        if (hasCliProcessScope()) {
+          requestOneShotSettledExitWatchdog();
+        }
         const repair = hidden
           ? (await import("./update-cli/update-command-finalize.js")).updateFinalizeCommand
           : (await import("./update-cli/update-repair-command.js")).updateRepairCommand;
@@ -328,6 +333,21 @@ ${theme.muted("Docs:")} ${formatDocsLink("/cli/update", "docs.openclaw.ai/cli/up
       const { updateAdmitCommand } = await import("./update-cli/update-command-admit.js");
       await updateAdmitCommand(opts.context);
     });
+
+  setCommandJsonMode(update.command("preflight", { hidden: true }), "output", () => true)
+    .description("Internal isolated candidate readiness protocol")
+    .option("--json", "Output the readiness receipt as JSON", true)
+    .option("--source-root <path>", "Absolute serving package root")
+    .option("--timeout <seconds>", "Override candidate check deadlines in seconds")
+    .action(
+      createUpdateLeafAction(async (opts, command) => {
+        const { updatePreflightCommand } = await import("./update-cli/update-command-preflight.js");
+        await updatePreflightCommand({
+          sourceRoot: typeof opts.sourceRoot === "string" ? opts.sourceRoot : undefined,
+          timeout: inheritedUpdateTimeout(opts, command),
+        });
+      }),
+    );
 
   for (const action of ["migrate", "restore", "finish"] as const) {
     setCommandJsonMode(update.command(action, { hidden: true }), "output", () => true)

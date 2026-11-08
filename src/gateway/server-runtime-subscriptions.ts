@@ -391,13 +391,13 @@ export function startGatewayEventSubscriptions(params: GatewayEventSubscriptionP
           }
         }
       }
-      if (terminal) {
+      {
         const trackedEntry = candidateRunIds
           .map((candidateRunId) => getScopedRpcSource(candidateRunId))
           .find((entry) => entry !== undefined);
         const runContext = getAgentRunContext(evt.runId);
         const trackedIdentity = trackedEntry ? getRpcSourceIdentity(trackedEntry) : undefined;
-        // Match the chat projection owner before preparing the shared terminal write.
+        // Match the chat projection owner before preparing the shared lifecycle write.
         // A bound ACP runtime emits its target key, but the chat link owns the source run.
         const sessionAgentId =
           chatLink?.agentId ?? evt.agentId ?? trackedIdentity?.agentId ?? runContext?.agentId;
@@ -424,14 +424,15 @@ export function startGatewayEventSubscriptions(params: GatewayEventSubscriptionP
           !trackedLifecycleGeneration ||
           trackedLifecycleGeneration === eventLifecycleGeneration;
         const claimIsComplete = !evt.contextClaimId || terminalAuthority !== undefined;
-        const canPersistTerminal =
-          definitiveTerminal &&
+        const canPersistLifecycle =
+          (!terminal || definitiveTerminal) &&
           evt.projectSessionLifecycle !== false &&
           trackedOwnerIsCurrent &&
           claimIsComplete;
-        const { writeContext, track } =
-          evt.terminalPersistence ?? captureAgentRunTerminalPersistence(evt.runId);
-        const prepareTerminalPersistence = (sessionKey: string, agentId = sessionAgentId) => {
+        const { writeContext, track } = terminal
+          ? (evt.terminalPersistence ?? captureAgentRunTerminalPersistence(evt.runId))
+          : {};
+        const prepareLifecyclePersistence = (sessionKey: string, agentId = sessionAgentId) => {
           const persistence = sessionLifecyclePersistence.observe({
             sessionKey,
             ...(agentId ? { agentId } : {}),
@@ -440,6 +441,14 @@ export function startGatewayEventSubscriptions(params: GatewayEventSubscriptionP
             ...(writeContext ? { writeContext } : {}),
             ...(clientRunId !== evt.runId ? { clientRunId } : {}),
           });
+          if (!terminal) {
+            // Queued execution registers its chat mapping after emitting start.
+            // Persist before that mapping change retires the lazy presentation event.
+            void persistence.catch((error: unknown) => {
+              params.log.warn("Start session persistence failed", { runId: evt.runId, error });
+            });
+            return persistence;
+          }
           if (terminalAuthority) {
             // A failed lazy handler cannot consume the prepared write and release
             // its claim. Persistence settlement becomes that cleanup boundary.
@@ -466,11 +475,11 @@ export function startGatewayEventSubscriptions(params: GatewayEventSubscriptionP
           }
           return persistence;
         };
-        if (canPersistTerminal) {
+        if (canPersistLifecycle) {
           if (knownSessionKey) {
-            const persistence = prepareTerminalPersistence(knownSessionKey);
+            const persistence = prepareLifecyclePersistence(knownSessionKey);
             track?.(persistence);
-          } else {
+          } else if (terminal) {
             // Context cleanup can precede a terminal event. Resolve its persisted
             // run mapping before the lazy chat handler consumes the same event.
             terminalPreparation = getSessionKeyModule().then(async ({ resolveSessionForRun }) => {
@@ -479,7 +488,7 @@ export function startGatewayEventSubscriptions(params: GatewayEventSubscriptionP
                 projection: params.getSessionRowProjection?.(),
               });
               if (selected && isDeliveryCurrent()) {
-                await prepareTerminalPersistence(selected.sessionKey, selected.agentId);
+                await prepareLifecyclePersistence(selected.sessionKey, selected.agentId);
               }
             });
             track?.(terminalPreparation);
@@ -541,11 +550,12 @@ export function startGatewayEventSubscriptions(params: GatewayEventSubscriptionP
         entry: getScopedRpcSource(candidateRunId),
       })),
     );
-    return () =>
-      evt.runId === runId &&
-      (!params.chatRunState.registry.peek(runId) ||
-        params.chatRunState.registry.peek(runId) === chatLink) &&
-      isRegistrationCurrent();
+    return () => {
+      const link = params.chatRunState.registry.peek(runId);
+      // A queued run links its client from its own start notification; that start is still its own.
+      const linkCurrent = !link || link === chatLink || (!chatLink && evt.data.phase === "start");
+      return evt.runId === runId && linkCurrent && isRegistrationCurrent();
+    };
   });
   const agentUnsub = async () => {
     auditPolicyClosed = true;
@@ -683,6 +693,15 @@ export function startGatewayEventSubscriptions(params: GatewayEventSubscriptionP
         agentId: target.agentId,
         dropIfSlow: true,
       });
+      const dispatch = dispatchEventHandler({
+        loadHandler: getLifecycleEventHandler,
+        event: { ...target, reason: "background-processes", scope: "runtime" },
+        log: params.log,
+        failureMessage: "Background process row dispatch failed",
+        context: { sessionKey: target.sessionKey },
+      });
+      agentEventDispatches.add(dispatch);
+      void dispatch.then(() => agentEventDispatches.delete(dispatch));
     }
   });
 

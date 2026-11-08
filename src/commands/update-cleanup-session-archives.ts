@@ -20,13 +20,13 @@ import {
 } from "../infra/session-sqlite-migration-manifest.js";
 import {
   summarizeRecoveryCleanup,
-  type collectUpdateCleanupInventory,
+  type collectUpdateCleanupInventoryAsync,
   type RecoveryArtifactReference,
 } from "./doctor-session-sqlite-recovery-inventory.js";
 import type { RecoveryCleanupArtifact, RecoveryRetirementParams } from "./update-cleanup-types.js";
 import { assertExplicitRecoveryPathsInactive } from "./update-cleanup-unmanifested.js";
 
-type Inventory = ReturnType<typeof collectUpdateCleanupInventory>;
+type Inventory = Awaited<ReturnType<typeof collectUpdateCleanupInventoryAsync>>;
 type Original = {
   item: RecoveryCleanupArtifact;
   refs: RecoveryArtifactReference[];

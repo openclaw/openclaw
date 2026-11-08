@@ -20,6 +20,7 @@ import {
   composeSessionSourceAssertion,
   type SessionSourceAssertion,
 } from "../../config/sessions/session-source-authority.js";
+import { withSessionTranscriptHydrationCaller } from "../../config/sessions/session-transcript-hydration-caller.js";
 import { withoutSessionTranscriptReadFence } from "../../config/sessions/session-transcript-read-fence.js";
 import { withSessionTranscriptWriteAssertion } from "../../config/sessions/transcript-write-context.js";
 import { buildAgentHookContextChannelFields } from "../../plugins/hook-agent-context.js";
@@ -266,11 +267,8 @@ export async function gateWorkerTurnInput(
         turn.onUserMessagePersisted?.(persisted.message);
       }
     } else {
-      const manager = await SessionManager.openAsync(
-        transcriptTarget,
-        undefined,
-        undefined,
-        turn.abortSignal,
+      const manager = await withSessionTranscriptHydrationCaller("worker-input", () =>
+        SessionManager.openAsync(transcriptTarget, undefined, undefined, turn.abortSignal),
       );
       assertCurrent();
       await withSessionManagerWrite(manager, () => manager.appendMessageAsync(message));
@@ -317,7 +315,9 @@ export async function readWorkerTurnInputContext(
         admission,
         signal: turn.abortSignal,
       })
-    : await SessionManager.openAsync(transcriptTarget, undefined, undefined, turn.abortSignal);
+    : await withSessionTranscriptHydrationCaller("worker-input", () =>
+        SessionManager.openAsync(transcriptTarget, undefined, undefined, turn.abortSignal),
+      );
   assertCurrent();
   let baseLeafId = admission?.entryId ?? manager.getLeafId();
   // Reuse the fenced read's source watermark. Later writes still face the commit fence.

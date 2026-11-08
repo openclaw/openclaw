@@ -119,3 +119,18 @@ it("pins from a recovered turn that keeps the session's inline widget catalog", 
     "no connected client can show inline widgets this turn; set pin=true",
   );
 });
+
+it.each([undefined, []] as Array<string[] | undefined>)(
+  "pins scheduled widgets without borrowing remembered inline capability (current: %j)",
+  (clientCaps) => {
+    expectPinnedOnlySchema(
+      createOpenClawTools({
+        agentSessionKey: "agent:main:dashboard:scheduled",
+        gatewayCallerScheduled: true,
+        runtimeToolAllowlist: ["*"],
+        listingClientCaps: ["inline-widgets"],
+        clientCaps,
+      }),
+    );
+  },
+);

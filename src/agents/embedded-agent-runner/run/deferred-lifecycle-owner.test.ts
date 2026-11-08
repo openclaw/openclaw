@@ -1,5 +1,3 @@
-import { setImmediate as nextTurn } from "node:timers/promises";
-import { queryObjects } from "node:v8";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { resolveReplyOperationAbortReason } from "../../../auto-reply/reply/reply-operation-abort.js";
 import {
@@ -19,6 +17,7 @@ import { createReplyOperation } from "../../../sessions/session-controller.js";
 import { isSessionRunActive } from "../../../sessions/session-controller.queries.js";
 import { assertSessionControllerOperation } from "../../../sessions/session-controller.state.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
+import { expectCollected, expectLiveObjects } from "../../../test-utils/retention.js";
 import { attachCliReplyBackend } from "../../cli-runner/execution-target.js";
 import { runWithCliTurn } from "../../cli-runner/turn-admission.js";
 import {
@@ -114,8 +113,10 @@ describe("deferred logical-turn lifecycle", () => {
       class SessionPayload {
         active = true;
       }
+      const payloads: WeakRef<SessionPayload>[] = [];
       const createOwner = () => {
         const payload = new SessionPayload();
+        payloads.push(new WeakRef(payload));
         const owner = ownerFor("retained-owner", {
           isCurrent: () => payload.active,
           onRetryWaitCompleted: () => {
@@ -135,12 +136,9 @@ describe("deferred logical-turn lifecycle", () => {
         await owner[settle]();
         completed.push(owner);
       }
-      // Count after the last awaited cleanup frame leaves the current job.
-      await nextTurn();
-      expect(queryObjects(SessionPayload)).toBe(1);
+      await expectLiveObjects(payloads, 1);
       await active[settle]();
-      await nextTurn();
-      expect(queryObjects(SessionPayload)).toBe(0);
+      await expectCollected(...payloads);
       for (const owner of completed) {
         await owner[settle]();
       }

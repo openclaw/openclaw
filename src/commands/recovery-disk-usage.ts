@@ -1,8 +1,9 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { hasSymbolicLinkInDirectoryPath } from "../infra/session-sqlite-migration-manifest.js";
+import { resolveSqliteInspectionSignal } from "../infra/sqlite-readonly-worker.js";
 import { isStatePostgres } from "../state/openclaw-state-db-engine.js";
 import { resolveDatabasePath } from "../state/openclaw-state-db.paths.js";
-import { collectUpdateCleanupInventory } from "./doctor-session-sqlite-recovery-inventory.js";
+import { collectUpdateCleanupInventoryAsync } from "./doctor-session-sqlite-recovery-inventory.js";
 import { RecoveryInventoryScan } from "./recovery-inventory-scan.js";
 import type { RecoveryCleanupArtifact } from "./update-cleanup-types.js";
 
@@ -23,7 +24,10 @@ function group(): UsageGroup {
 }
 
 /** A bounded, read-only projection of cleanup's inventory, never a deletion policy. */
-export function collectRecoveryDiskUsage(params: { cfg: OpenClawConfig; env: NodeJS.ProcessEnv }) {
+export async function collectRecoveryDiskUsage(params: {
+  cfg: OpenClawConfig;
+  env: NodeJS.ProcessEnv;
+}) {
   const scan = new RecoveryInventoryScan();
   const byKind = { updateCaptures: group(), doctorCaptures: group(), migrationOriginals: group() };
   const total = group();
@@ -46,8 +50,10 @@ export function collectRecoveryDiskUsage(params: { cfg: OpenClawConfig; env: Nod
     if (!readHistory) {
       scan.reasons.add("eligibility-not-verified");
     }
-    artifacts = collectUpdateCleanupInventory({ ...params, scan, readHistory }).report.artifacts;
+    artifacts = (await collectUpdateCleanupInventoryAsync({ ...params, scan, readHistory })).report
+      .artifacts;
   } catch {
+    resolveSqliteInspectionSignal()?.throwIfAborted();
     scan.reasons.add("inventory-unavailable");
   }
   for (const item of artifacts) {
@@ -102,7 +108,7 @@ export function collectRecoveryDiskUsage(params: { cfg: OpenClawConfig; env: Nod
   };
 }
 
-export type RecoveryDiskUsage = ReturnType<typeof collectRecoveryDiskUsage>;
+export type RecoveryDiskUsage = Awaited<ReturnType<typeof collectRecoveryDiskUsage>>;
 
 export function formatRecoveryDiskUsage(usage: RecoveryDiskUsage): string {
   const counts = (value: UsageGroup) =>

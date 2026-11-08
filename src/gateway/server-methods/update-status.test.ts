@@ -3,50 +3,95 @@ import fs from "node:fs";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { acquireGatewayLock } from "../../infra/gateway-lock.js";
-import * as snapshots from "../../infra/sqlite-readonly-location.js";
-import { UpdateCampaignController } from "../../infra/update-campaign.js";
-import { resolveUpdateCaptureRoot } from "../../infra/update-capture-paths.js";
-import { UPDATE_CAPTURE_PRIVACY_MARKER } from "../../infra/update-capture-privacy-marker.js";
+import type { UpdateCheckLifecycle } from "../../infra/update-check-lifecycle.js";
 import {
-  createGatewayUpdateLifecycle,
-  type UpdateCheckLifecycle,
-} from "../../infra/update-check-lifecycle.js";
-import { readUpdateRunDriver } from "../../infra/update-run-driver.js";
-import * as ledger from "../../infra/update-run-ledger.js";
-import { createUpdateRun, finishUpdateRun, getUpdateRun } from "../../infra/update-run-ledger.js";
-import { readUpdateRunStatus } from "../../infra/update-run-status.js";
-import {
-  getUpdateSchedule,
-  resetUpdateStatusState,
-  setUpdateScheduleCache,
-} from "../../infra/update-status-state.js";
-import { createSubsystemLogger } from "../../logging/subsystem.js";
-import {
+  closeUpdateFixtureDatabases,
+  resetUpdateFixtureModules,
+} from "../../infra/update-fixture.test-support.js";
+import type { TempHomeEnv } from "../../test-utils/temp-home.js";
+import type { GatewayRequestContext, RespondFn } from "./types.js";
+
+let { acquireGatewayLock } = await import("../../infra/gateway-lock.js");
+let { resolveUpdateCaptureRoot } = await import("../../infra/update-capture-paths.js");
+let { UPDATE_CAPTURE_PRIVACY_MARKER } =
+  await import("../../infra/update-capture-privacy-marker.js");
+let snapshots = await import("../../infra/sqlite-readonly-location.js");
+let { UpdateCampaignController } = await import("../../infra/update-campaign.js");
+let { createGatewayUpdateLifecycle } = await import("../../infra/update-check-lifecycle.js");
+let { readUpdateRunDriver } = await import("../../infra/update-run-driver.js");
+let ledger = await import("../../infra/update-run-ledger.js");
+let { createUpdateRun, finishUpdateRun, getUpdateRun } =
+  await import("../../infra/update-run-ledger.js");
+let { readUpdateRunStatus } = await import("../../infra/update-run-status.js");
+let { getUpdateSchedule, setUpdateScheduleCache } =
+  await import("../../infra/update-status-state.js");
+let { createSubsystemLogger } = await import("../../logging/subsystem.js");
+let {
   beginGatewayRestartSignalAdmission,
   getActiveGatewayRootWorkCount,
   markGatewayRestartDraining,
   resetGatewayWorkAdmission,
   tryBeginGatewaySuspendAdmission,
-} from "../../process/gateway-work-admission.js";
-import { createDeferredCore } from "../../shared/deferred.js";
-import {
-  closeOpenClawStateDatabaseAsync,
-  openOpenClawStateDatabase,
-} from "../../state/openclaw-state-db.js";
-import { claimOpenClawStateOwnership } from "../../state/openclaw-state-ownership-operations.js";
-import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
-import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
-import { createTempHomeEnv, type TempHomeEnv } from "../../test-utils/temp-home.js";
-import { createCoreGatewayMethodDescriptors } from "../methods/core-method-policy.js";
-import { createGatewayMethodRegistry } from "../methods/registry.js";
-import { gatewayRequest } from "../request-frame.test-support.js";
-import { handleGatewayRequest } from "../server-methods.js";
-import { gatewayConnect } from "../server/client-fixtures.test-support.js";
-import { startUpdateRunWatcher } from "../update-run-watcher.js";
-import { createLazyCoreHandlers } from "./lazy-core-handlers.js";
-import type { GatewayRequestContext, RespondFn } from "./types.js";
-import { updateStatusHandlers } from "./update-status.js";
+} = await import("../../process/gateway-work-admission.js");
+let { createDeferredCore } = await import("../../shared/deferred.js");
+let { closeOpenClawStateDatabaseAsync, openOpenClawStateDatabase } =
+  await import("../../state/openclaw-state-db.js");
+let { claimOpenClawStateOwnership } =
+  await import("../../state/openclaw-state-ownership-operations.js");
+let { createTestGatewayScheduler } = await import("../../test-utils/gateway-scheduler-clock.js");
+let { observeMainThreadSql } =
+  await import("../../test-utils/main-thread-sql-spies.test-support.js");
+let { createTempHomeEnv } = await import("../../test-utils/temp-home.js");
+let { createCoreGatewayMethodDescriptors } = await import("../methods/core-method-policy.js");
+let { createGatewayMethodRegistry } = await import("../methods/registry.js");
+let { gatewayRequest } = await import("../request-frame.test-support.js");
+let { handleGatewayRequest } = await import("../server-methods.js");
+let { gatewayConnect } = await import("../server/client-fixtures.test-support.js");
+let { startUpdateRunWatcher } = await import("../update-run-watcher.js");
+let { createLazyCoreHandlers } = await import("./lazy-core-handlers.js");
+let { updateStatusHandlers } = await import("./update-status.js");
+
+async function importUpdateFixtureModules() {
+  ({ acquireGatewayLock } = await import("../../infra/gateway-lock.js"));
+  ({ resolveUpdateCaptureRoot } = await import("../../infra/update-capture-paths.js"));
+  ({ UPDATE_CAPTURE_PRIVACY_MARKER } =
+    await import("../../infra/update-capture-privacy-marker.js"));
+  snapshots = await import("../../infra/sqlite-readonly-location.js");
+  ({ UpdateCampaignController } = await import("../../infra/update-campaign.js"));
+  ({ createGatewayUpdateLifecycle } = await import("../../infra/update-check-lifecycle.js"));
+  ({ readUpdateRunDriver } = await import("../../infra/update-run-driver.js"));
+  ledger = await import("../../infra/update-run-ledger.js");
+  ({ createUpdateRun, finishUpdateRun, getUpdateRun } =
+    await import("../../infra/update-run-ledger.js"));
+  ({ readUpdateRunStatus } = await import("../../infra/update-run-status.js"));
+  ({ getUpdateSchedule, setUpdateScheduleCache } =
+    await import("../../infra/update-status-state.js"));
+  ({ createSubsystemLogger } = await import("../../logging/subsystem.js"));
+  ({
+    beginGatewayRestartSignalAdmission,
+    getActiveGatewayRootWorkCount,
+    markGatewayRestartDraining,
+    resetGatewayWorkAdmission,
+    tryBeginGatewaySuspendAdmission,
+  } = await import("../../process/gateway-work-admission.js"));
+  ({ createDeferredCore } = await import("../../shared/deferred.js"));
+  ({ closeOpenClawStateDatabaseAsync, openOpenClawStateDatabase } =
+    await import("../../state/openclaw-state-db.js"));
+  ({ claimOpenClawStateOwnership } =
+    await import("../../state/openclaw-state-ownership-operations.js"));
+  ({ createTestGatewayScheduler } = await import("../../test-utils/gateway-scheduler-clock.js"));
+  ({ observeMainThreadSql } =
+    await import("../../test-utils/main-thread-sql-spies.test-support.js"));
+  ({ createTempHomeEnv } = await import("../../test-utils/temp-home.js"));
+  ({ createCoreGatewayMethodDescriptors } = await import("../methods/core-method-policy.js"));
+  ({ createGatewayMethodRegistry } = await import("../methods/registry.js"));
+  ({ gatewayRequest } = await import("../request-frame.test-support.js"));
+  ({ handleGatewayRequest } = await import("../server-methods.js"));
+  ({ gatewayConnect } = await import("../server/client-fixtures.test-support.js"));
+  ({ startUpdateRunWatcher } = await import("../update-run-watcher.js"));
+  ({ createLazyCoreHandlers } = await import("./lazy-core-handlers.js"));
+  ({ updateStatusHandlers } = await import("./update-status.js"));
+}
 
 vi.mock("../../infra/update-startup.js", () => ({
   getUpdateEffectiveChannel: async () => "stable",
@@ -138,7 +183,7 @@ async function read(method: UpdateReadMethod, params: Record<string, unknown> = 
 
 let home: TempHomeEnv;
 let lifecycle: UpdateCheckLifecycle;
-let owner: UpdateCampaignController;
+let owner: InstanceType<typeof UpdateCampaignController>;
 
 function announceCampaign(version = "2026.9.6") {
   owner.announce({
@@ -154,6 +199,8 @@ function announceCampaign(version = "2026.9.6") {
 }
 
 beforeEach(async () => {
+  await resetUpdateFixtureModules();
+  await importUpdateFixtureModules();
   home = await createTempHomeEnv("openclaw-update-status-");
   lifecycle = createGatewayUpdateLifecycle(createTestGatewayScheduler());
   owner = new UpdateCampaignController(lifecycle.scheduler);
@@ -162,11 +209,11 @@ beforeEach(async () => {
 afterEach(async () => {
   await lifecycle.stop();
   await lifecycle.scheduler.stop();
+  await closeUpdateFixtureDatabases();
   resetGatewayWorkAdmission();
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
   warn.mockClear();
-  resetUpdateStatusState();
   await home.restore();
 });
 

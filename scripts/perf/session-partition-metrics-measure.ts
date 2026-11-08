@@ -66,7 +66,7 @@ const rows = Array.from({ length: 10_800 }, (_, index) => {
   selection.add(row);
   return row;
 });
-const views = Array.from({ length: 30 }, () => new WeakMap<object, SessionListFilteredEntries>());
+const views = Array.from({ length: 30 }, () => new Map<object, SessionListFilteredEntries>());
 let checksum = 0;
 const pass = (index: number) => {
   if (index % views.length === 0) {

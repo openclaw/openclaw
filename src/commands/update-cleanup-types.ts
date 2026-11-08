@@ -54,6 +54,8 @@ export type RecoveryRetirementParams = {
   onProgress?: (progress: RecoveryCleanupProgress) => void;
   /** Automatic retirement leaves historical originals for explicit verified cleanup. */
   verifyHistorical?: boolean;
+  /** A serving Gateway may mutate its owned destination while cleanup runs. */
+  allowOwnedDestinationMutation?: boolean;
   /** Manual per-path consent only; automatic callers must leave this absent. */
   includeUnmanifested?: readonly string[];
   /** Manual exact selection; never inferred from ordinary cleanup consent. */

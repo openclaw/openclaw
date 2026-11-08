@@ -162,6 +162,10 @@ it.each([true, false])("resets routing and runtime handles (forced=$0)", (forceN
   const preferences = {
     pinnedAt: NOW_MS - 500,
     sidebarRoot: true,
+    label: "Scheduled check",
+    displayName: "My scheduled check",
+    category: "Automations",
+    icon: "🤖",
     modelOverride: "claude-sonnet-4-6",
     providerOverride: "anthropic",
     modelOverrideSource: "user" as const,
@@ -207,11 +211,8 @@ it.each([true, false])("resets routing and runtime handles (forced=$0)", (forceN
           }),
     },
   });
-  expect(result).toMatchObject({
-    isNewSession: true,
-    systemSent: false,
-    previousSessionId: forceNew ? "old-session" : undefined,
-  });
+  expect(result).toMatchObject({ isNewSession: true, systemSent: false });
+  expect(result.previousSessionId).toBe(forceNew ? "old-session" : undefined);
   expect(result.lifecycleRevision).not.toBe("old-revision");
   expectObjectFields(result.sessionEntry, { agentHarnessId: undefined, delivery: undefined });
   expect(result.sessionEntry).not.toHaveProperty("channel");
@@ -247,10 +248,8 @@ it("keeps a provider-owned CLI session with the default reset policy", () => {
       cliSessionBindings: { "claude-cli": { sessionId: "cli-conversation-xyz" } },
     },
   });
-  expect(result).toMatchObject({
-    isNewSession: false,
-    sessionEntry: { sessionId: "old-session-id" },
-  });
+  expect(result.isNewSession).toBe(false);
+  expect(result.sessionEntry.sessionId).toBe("old-session-id");
   expect(getCliSessionBinding(result.sessionEntry, "claude-cli")).toEqual({
     sessionId: "cli-conversation-xyz",
   });

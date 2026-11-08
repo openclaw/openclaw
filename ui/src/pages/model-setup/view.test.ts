@@ -358,7 +358,7 @@ describe("renderModelSetup", () => {
         actionsDisabled: true,
       }),
     );
-    expect(text(container)).toContain("Checking — asking openai/gpt-5 for a quick reply…");
+    expect(text(container)).toContain("Asking openai/gpt-5 for a quick reply…");
     expect(
       container.querySelector<HTMLButtonElement>(".model-setup__current button")?.disabled,
     ).toBe(true);
@@ -429,7 +429,7 @@ describe("renderModelSetup", () => {
     const copy = container.querySelector<HTMLButtonElement>(".wizard-sign-in__code button");
     copy?.click();
 
-    const feedback = copied ? "Copied!" : "Copy failed";
+    const feedback = copied ? "Copied" : "Couldn’t copy. Try again.";
     await vi.waitFor(() => expect(copy?.textContent?.trim()).toBe(feedback));
     expect(copy?.getAttribute("aria-label")).toBeNull();
     expect(execCommand).toHaveBeenCalledWith("copy");
@@ -517,7 +517,7 @@ describe("renderModelSetup", () => {
       });
       const container = mount(viewProps);
       expect(container.querySelectorAll('[role="status"]')).toHaveLength(1);
-      expect(text(container.querySelector('[role="status"]')!)).toContain("Testing");
+      expect(text(container.querySelector('[role="status"]')!)).toContain("Asking");
       expect(text(container)).not.toContain("test-only-secret");
       const button = container.querySelector<HTMLButtonElement>(
         entry === "discovered"
@@ -539,7 +539,7 @@ describe("renderModelSetup", () => {
       expect(container.querySelectorAll('[role="alert"]')).toHaveLength(1);
       expect(text(container.querySelector('[role="alert"]')!)).toContain("No reply received");
       expect(text(container.querySelector('[role="alert"]')!)).toContain(
-        "Warm it or choose a faster model, then retry.",
+        "Try again or choose a faster model.",
       );
       expect(button.disabled).toBe(false);
       if (entry === "discovered") {
@@ -610,7 +610,7 @@ describe("renderModelSetup", () => {
       expect(container.querySelector(".content-header")).toBeNull();
       expect(container.querySelector(".model-setup__current")).toBeNull();
       expect(text(container)).toContain("for Writer");
-      expect(text(container)).toContain("not the global defaults");
+      expect(text(container)).toContain("not the defaults for other agents");
       expect(container.querySelector('[data-auth-choice="openai-oauth"]')).toBeNull();
       expect(container.querySelector('[data-prepare-choice="ollama"]')).not.toBeNull();
       for (const option of [install, custom]) {
@@ -689,12 +689,12 @@ describe("renderModelSetup", () => {
         if (mode === "utility") {
           expect(text(success)).toContain("Setup & utility model ready");
           expect(text(success)).not.toContain("Active model");
-          expect(text(success)).not.toContain("Return to Models");
+          expect(text(success)).not.toContain("Back to Models");
           done.click();
           expect(onOpenSetupAssistant).toHaveBeenCalledOnce();
           expect(onOpenChat).not.toHaveBeenCalled();
         } else {
-          expect(done.textContent).toContain("Return to Models");
+          expect(done.textContent).toContain("Back to Models");
           done.click();
           expect(onOpenChat).toHaveBeenCalledOnce();
         }

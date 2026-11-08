@@ -384,6 +384,35 @@ class LockTests(unittest.TestCase):
     def test_group_status_indeterminate_never_dead(self):
         r=self.shell('pr_operation_lock_process_group_status 2147483648')
         self.assertEqual(r.stdout,'indeterminate\n')
+        preload = self.root/'group-probe.cjs'
+        # Fault only the supervisor's read-only group probes; child/helper behavior stays real.
+        preload.write_text('''if (process.argv[1]?.endsWith('/process-group-runner.mjs')) {
+  const kill = process.kill.bind(process);
+  let probes = 0;
+  process.kill = (pid, signal) => {
+    if (pid < 0 && signal === 0) {
+      probes++;
+      throw Object.assign(new Error('fixture probe denied'), { code: 'EACCES' });
+    }
+    return kill(pid, signal);
+  };
+  process.once('exit', () => require('node:fs').writeSync(2, 'group-probes=' + probes + '\\n'));
+}
+''')
+        self.env['NODE_OPTIONS'] = '--require '+str(preload)
+        p = self.supervise('acquire_pr_operation_lock 42\nprintf "%s\\n" "$PR_OPERATION_LOCK_OWNER_OID"')
+        out, err = p.communicate(timeout=15)
+        self.assertEqual(p.returncode, 1, out+err)
+        owner = out.strip()
+        self.assertEqual(self.git('rev-parse', self.ref), owner)
+        data = dict(line.split('=', 1) for line in self.git('cat-file', '-p', owner).splitlines())
+        prefix = 'scripts/pr process-group observation: '
+        observations = [json.loads(line[len(prefix):]) for line in err.splitlines() if line.startswith(prefix)]
+        self.assertEqual(observations, [{'pid': int(data['pgid']), 'error': 'EACCES'}])
+        self.assertIn('group-probes=2\n', err)
+        self.assertIn('process-group state became indeterminate', err)
+        self.assertIn('Retaining the operation lock', err)
+        self.assertIn('scripts/pr lock-recover 42 '+owner+' --confirmed-no-running-tools', err)
 
     def test_lingering_group_retains_lock_after_drain(self):
         # The supervisor performs the real unchanged five-second grace/drain.

@@ -448,7 +448,7 @@ export function createApplicationOverlays(
           feature = await import("./overlays-pairing.ts");
         } catch (error) {
           if (canOpen()) {
-            showToast({ message: formatUiError(error) });
+            showToast({ severity: "error", message: formatUiError(error) });
           }
           return false;
         }

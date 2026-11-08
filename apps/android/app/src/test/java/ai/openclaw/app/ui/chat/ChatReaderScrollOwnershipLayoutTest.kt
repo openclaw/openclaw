@@ -3,6 +3,7 @@ package ai.openclaw.app.ui.chat
 import ai.openclaw.app.chat.ChatMessage
 import ai.openclaw.app.chat.ChatMessageContent
 import ai.openclaw.app.chat.ChatPendingToolCall
+import ai.openclaw.app.i18n.NativeStringResources
 import ai.openclaw.app.ui.design.ClawDesignTheme
 import ai.openclaw.app.ui.design.ClawTheme
 import android.app.Application
@@ -65,6 +66,7 @@ import kotlinx.coroutines.test.TestCoroutineScheduler
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
+import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -91,6 +93,11 @@ class ChatReaderScrollOwnershipLayoutTest {
   private lateinit var reader: ChatReaderScrollController
   private var observedScale: Float? = null
   private var olderReadingDisposals = 0
+
+  @Before
+  fun setUp() {
+    NativeStringResources.install(RuntimeEnvironment.getApplication())
+  }
 
   @Test
   fun manualNavigationStopsAnAlreadyMovingAutomaticScroll() {
