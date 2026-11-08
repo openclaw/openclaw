@@ -462,6 +462,9 @@ it.each([
       );
     await waitForSolid(() => expect(install()).not.toBeNull());
     expect(install()!.disabled).toBe(true);
+    expect(page.querySelector('#plugins-hub-panel > [role="status"]')?.textContent).toBe(
+      "Loading plugins…",
+    );
     const contentSelector = showingDetail
       ? "#plugin-catalog-detail"
       : '[data-plugin-id="ch_Y2FsZW5kYXI"]';
@@ -479,6 +482,7 @@ it.each([
       );
       expect(install()!.disabled).toBe(true);
     }
+    expect(page.querySelector('#plugins-hub-panel > [role="status"]')).toBeNull();
     expect(page.querySelector(contentSelector)).toBe(content);
     expect(
       request.mock.calls.filter(([method]) => method === "plugins.catalog.browse"),

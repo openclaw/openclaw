@@ -2158,6 +2158,46 @@ export function createEnginePageScenarios(
         return evidence;
       },
     };
+    if (id === "plugins") {
+      const browseSource = requiredScenario(
+        dataCatalogScenarios,
+        "data-catalog-inventory-readiness",
+      );
+      const browseFixture = createPageFixture({ ...definition, source: browseSource }, id);
+      const browse: EngineScenario = {
+        ...common,
+        id: "page-plugins-browse-visit",
+        expected: "Catalog is browsable and searchable before inventory grants installation.",
+        fixtureOverrides: (sandbox, base) => {
+          const fixture = browseFixture(sandbox, base);
+          return pageOrigin === "chat"
+            ? {
+                ...fixture,
+                sessionTranscripts: {
+                  ...fixture.sessionTranscripts,
+                  [originSessionKey]: base.sessionTranscripts![originSessionKey]!,
+                },
+              }
+            : fixture;
+        },
+        prepare: boot,
+        run: async (page, gateway) => {
+          const timing = await measureVisit(page, id, definition);
+          const evidence = await browseSource.run(page, gateway);
+          assert(evidence && typeof evidence.inventoryReadyAtMs === "number");
+          assert(typeof evidence.inputReadyAtMs === "number");
+          return {
+            ...evidence,
+            visitStartedAtMs: timing.startedAtMs,
+            visitReadyMs: timing.readyMs,
+            visitReadyAtMs: timing.readyAtMs,
+            inputReadyMs: evidence.inputReadyAtMs - timing.startedAtMs,
+            contentReadyMs: evidence.inventoryReadyAtMs - timing.startedAtMs,
+          };
+        },
+      };
+      return [visit, revisit, action, leave, browse].concat(noChanges);
+    }
     if (id === "search") {
       const firstAdvancedOpen: EngineScenario = {
         ...common,
