@@ -255,11 +255,7 @@ describe("local checkout publication", () => {
     }
     const before = await worktreeState(source);
     let projectId: string | undefined;
-    if (
-      outcome === "project" ||
-      outcome === "foreign project" ||
-      outcome === "linked project worktree"
-    ) {
+    if (outcome.includes("project")) {
       // Project chats publish only checkouts from their own project's repository.
       let projectRoot = source.cwd;
       if (outcome === "foreign project") {
