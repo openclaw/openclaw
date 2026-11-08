@@ -23,6 +23,11 @@ import {
   resolveSessionAgentIds,
 } from "../agent-scope.js";
 import { resolveCliBackendConfig } from "../cli-backends.js";
+import {
+  CliExecutionAuthProfileError,
+  cliBackendAcceptsAuthProfileForwarding,
+  resolveCliExecutionAuthProfileId,
+} from "../cli-execution-auth.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../defaults.js";
 import { coerceToFailoverError } from "../failover-error.js";
 import { ensureSelectedAgentHarnessPlugin } from "../harness/runtime-plugin.js";
@@ -90,6 +95,43 @@ export async function compactNativeCliSession(params: {
     config: params.compactParams.config,
     agentId: params.compactParams.agentId,
   }).sessionAgentId;
+  // The session pin names the model provider's credential (for example the auto-selected
+  // "anthropic:default" API key). Reply turns convert it for the CLI child; compaction must too,
+  // or the native session is compacted on the metered key instead of the backend's own login.
+  let forwardedAuthProfileId = cliSessionBinding?.authProfileId;
+  if (!forwardedAuthProfileId && params.compactParams.authProfileId) {
+    const config = params.compactParams.config ?? {};
+    if (
+      cliBackendAcceptsAuthProfileForwarding({
+        provider: runtime,
+        config,
+        agentId: params.compactParams.agentId,
+      })
+    ) {
+      try {
+        forwardedAuthProfileId = await resolveCliExecutionAuthProfileId({
+          cliExecutionProvider: runtime,
+          authProfileProvider: params.compactParams.provider ?? DEFAULT_PROVIDER,
+          config,
+          agentDir: params.compactParams.agentDir ?? resolveAgentDir(config, sessionAgentId),
+          selected: {
+            authProfileId: params.compactParams.authProfileId,
+            authProfileIdSource: params.compactParams.authProfileIdSource,
+          },
+          sessionBinding: cliSessionBinding,
+        });
+      } catch (err) {
+        if (err instanceof CliExecutionAuthProfileError) {
+          return buildCompactionFailureResult(
+            `CLI backend "${runtime}" cannot compact with the selected account: ${err.message}`,
+          );
+        }
+        throw err;
+      }
+    } else {
+      forwardedAuthProfileId = params.compactParams.authProfileId;
+    }
+  }
   const preparedRunAdmission = prepareSystemAgentRunAdmission(
     params.compactParams.config ?? {},
     runId,
@@ -118,11 +160,7 @@ export async function compactNativeCliSession(params: {
         runId,
         cliSessionId,
         ...(cliSessionBinding ? { cliSessionBinding } : {}),
-        ...(cliSessionBinding?.authProfileId
-          ? { authProfileId: cliSessionBinding.authProfileId }
-          : params.compactParams.authProfileId
-            ? { authProfileId: params.compactParams.authProfileId }
-            : {}),
+        ...(forwardedAuthProfileId ? { authProfileId: forwardedAuthProfileId } : {}),
         ...(params.compactParams.sessionEntry
           ? { sessionEntry: params.compactParams.sessionEntry }
           : {}),
