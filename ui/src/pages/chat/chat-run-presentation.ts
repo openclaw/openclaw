@@ -168,44 +168,6 @@ class ChatRunPresentation<T extends object> {
 
   flushPendingPresentation(): void {
     this.cancelScheduledFrame();
-    this.notify();
-  }
-
-  private schedule(mode: ChatRunPublication): void {
-    if (
-      mode === "animation-frame" &&
-      globalThis.document?.visibilityState !== "hidden" &&
-      typeof globalThis.requestAnimationFrame === "function"
-    ) {
-      if (this.frame === null) {
-        const frame = globalThis.requestAnimationFrame(() => {
-          if (this.frame !== frame) {
-            return;
-          }
-          this.frame = null;
-          this.notify();
-        });
-        this.frame = frame;
-      }
-      return;
-    }
-    this.flushPendingPresentation();
-  }
-
-  cancelFrame(): void {
-    this.cancelScheduledFrame();
-    this.pendingPresentations.clear();
-    this.pendingRunPublication = false;
-  }
-
-  private cancelScheduledFrame(): void {
-    if (this.frame !== null) {
-      globalThis.cancelAnimationFrame?.(this.frame);
-      this.frame = null;
-    }
-  }
-
-  private readonly notify = () => {
     const changed = this.pendingRunPublication;
     this.pendingRunPublication = false;
     const pending = Array.from(this.pendingPresentations);
@@ -226,7 +188,41 @@ class ChatRunPresentation<T extends object> {
         notify();
       }
     }
-  };
+  }
+
+  private schedule(mode: ChatRunPublication): void {
+    if (
+      mode === "animation-frame" &&
+      globalThis.document?.visibilityState !== "hidden" &&
+      typeof globalThis.requestAnimationFrame === "function"
+    ) {
+      if (this.frame === null) {
+        const frame = globalThis.requestAnimationFrame(() => {
+          if (this.frame !== frame) {
+            return;
+          }
+          this.frame = null;
+          this.flushPendingPresentation();
+        });
+        this.frame = frame;
+      }
+      return;
+    }
+    this.flushPendingPresentation();
+  }
+
+  cancelFrame(): void {
+    this.cancelScheduledFrame();
+    this.pendingPresentations.clear();
+    this.pendingRunPublication = false;
+  }
+
+  private cancelScheduledFrame(): void {
+    if (this.frame !== null) {
+      globalThis.cancelAnimationFrame?.(this.frame);
+      this.frame = null;
+    }
+  }
 }
 
 export function chatRunPresentation<T extends object>(host: T): ChatRunPresentation<T> {

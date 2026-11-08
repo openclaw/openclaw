@@ -327,8 +327,10 @@ function coalesceTurn(items: ChatItem[]): ChatItem[] {
     invocations.set(invocationKey, invocation);
   }
   const rows = new Map<number, ProjectedItem[]>();
-  const bundles = new Map<string, { item: ProjectedItem; index: number; inputs: unknown[] }>();
-  const memoInputs = new Map<ProjectedItem, { owner: object; inputs: unknown[] }>();
+  const bundles = new Map<
+    string,
+    { item: ProjectedItem; index: number; owner: object; inputs: unknown[] }
+  >();
   // Commentary beside a call always splits into its own row, even when the
   // call needs no merging, so no tool row renders outside its activity group.
   const unchanged = new Set(
@@ -470,8 +472,7 @@ function coalesceTurn(items: ChatItem[]): ChatItem[] {
           : {}),
       },
     };
-    bundles.set(bundleKey, { item, index, inputs });
-    memoInputs.set(item, { owner: owner.source.originalMessage, inputs });
+    bundles.set(bundleKey, { item, index, owner: owner.source.originalMessage, inputs });
   }
   for (const { item, index } of bundles.values()) {
     const row = rows.get(index) ?? [];
@@ -539,7 +540,7 @@ function coalesceTurn(items: ChatItem[]): ChatItem[] {
   // Assembly and prose/media interleaving are complete. Only messages are
   // reused: duplicate grouping can still mutate the returned item wrappers.
   const nextBySource = new Map<object, Map<string, CachedBundle>>();
-  for (const [item, { owner, inputs }] of memoInputs) {
+  for (const { item, owner, inputs } of bundles.values()) {
     inputs.push(item.message.content.length);
     for (const block of item.message.content) {
       const raw = asRecord(block);
