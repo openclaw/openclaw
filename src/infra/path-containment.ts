@@ -3,7 +3,7 @@
 import fs from "node:fs";
 import fsPromises from "node:fs/promises";
 import path from "node:path";
-import { isMissingPathError } from "./errno.js";
+import { hasErrnoCode, isMissingPathError } from "./errno.js";
 import { isPathInside } from "./path-guards.js";
 
 /** Why a path has no canonical spelling; callers treat all of these as outside. */
@@ -48,8 +48,8 @@ function* walkForContainment(
       return { kind: "resolved", path: path.join(real.value, ...missing) };
     }
     if (!isMissingPathError(real.error)) {
-      const looping = (real.error as NodeJS.ErrnoException | undefined)?.code === "ELOOP";
-      return { kind: "unresolved", reason: looping ? "link-loop" : "unreadable", prefix };
+      const reason = hasErrnoCode(real.error, "ELOOP") ? "link-loop" : "unreadable";
+      return { kind: "unresolved", reason, prefix };
     }
     const link = yield { op: "readlink", path: prefix };
     if (link.ok) {
