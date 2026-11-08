@@ -16,6 +16,7 @@ import { resolveMainSessionDelegationMode } from "./delegation-guidance.js";
 import type { PreparedModelRuntimeSnapshot } from "./prepared-model-runtime.types.js";
 import { buildAgentSystemPrompt } from "./system-prompt.js";
 import { resolveEffectiveToolFsWorkspaceOnly } from "./tool-fs-policy.js";
+import { resolveCanonicalWorkspacePath } from "./workspace-state-identity.js";
 
 type ConfiguredAgentSystemPromptParams = Parameters<typeof buildAgentSystemPrompt>[0] & {
   config?: OpenClawConfig;
@@ -44,6 +45,9 @@ export async function buildConfiguredAgentSystemPrompt(params: ConfiguredAgentSy
     preparedTtsPreferences,
     ...renderParams
   } = params;
+  if (!renderParams.canonicalWorkspaceDir && params.workspaceDir) {
+    renderParams.canonicalWorkspaceDir = resolveCanonicalWorkspacePath(params.workspaceDir);
+  }
   const agentId = explicitAgentId ?? (tools ? params.runtimeInfo?.agentId : undefined);
   if (tools) {
     renderParams.toolNames = tools.map((tool) => tool.name);

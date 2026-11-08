@@ -1,5 +1,8 @@
+import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { EmbeddedContextFile } from "./embedded-agent-helpers/context-file.js";
+import { filterProjectScopedCuratedContextFiles } from "./project-memory-bootstrap.js";
+import { sanitizeForPromptLiteral } from "./sanitize-for-prompt.js";
 
 export const PERSONAL_USER_CONTEXT_INSTRUCTIONS =
   "The personal users/<profile-id>/USER.md belongs to this session's selected person (assigned human owner, otherwise human creator). It supplements shared USER.md and overrides conflicting shared preferences, not higher-priority rules. Other participants do not change this personal context.";
@@ -35,8 +38,23 @@ export function prepareContextFilesForPrompt<T extends EmbeddedContextFile>(
     order?: ReadonlyMap<string, number>;
     caseInsensitivePathOrder?: boolean;
     trimBasename?: boolean;
+    workspaceDir?: string;
+    canonicalWorkspaceDir?: string;
   } = {},
 ) {
+  const workspaceDir = options.workspaceDir
+    ? normalizeContextFilePath(options.workspaceDir)
+    : undefined;
+  const canonicalDir = options.canonicalWorkspaceDir
+    ? normalizeContextFilePath(options.canonicalWorkspaceDir)
+    : undefined;
+  const roots = [...new Set([workspaceDir, canonicalDir])]
+    .filter((root) => root !== undefined)
+    // Strip trailing separators so `/ws/` and `C:/` compare against `/ws` and `C:`; the
+    // filesystem root keeps its empty-string identity for the root containment check below.
+    .map((root) => root.replace(/\/+$/u, ""))
+    .map((root, index, all) => (root === "" && all[index] === "/" ? "/" : root))
+    .filter((root, _index, all) => root !== "" || !all.some((other) => other === "/"));
   return contextFiles
     .map((file) => {
       const path = normalizeContextFilePath(file.path);
@@ -45,10 +63,33 @@ export function prepareContextFilesForPrompt<T extends EmbeddedContextFile>(
         options.trimBasename === false
           ? rawBasename.toLowerCase()
           : normalizeLowercaseStringOrEmpty(rawBasename);
+      let headingPath = path;
+      for (const root of roots) {
+        if (path === root) {
+          headingPath = ".";
+          break;
+        }
+        if (root === "" ? path.startsWith("/") : path.startsWith(`${root}/`)) {
+          headingPath = root === "" ? path.slice(1) : path.slice(root.length + 1);
+          break;
+        }
+      }
+      let content = file.content;
+      if (file.missing && roots.length > 0) {
+        const fullMarker = `[MISSING] Expected at: ${headingPath}`;
+        content =
+          fullMarker.length <= content.length
+            ? fullMarker
+            : content.length <= 3
+              ? fullMarker.slice(0, content.length)
+              : `${fullMarker.slice(0, content.length - 1)}…`;
+      }
+      const effectiveFile = content === file.content ? file : { ...file, content };
       return {
-        file,
+        file: effectiveFile,
         path,
         basename,
+        headingPath,
         order: (options.order ?? CONTEXT_FILE_ORDER).get(basename) ?? Number.MAX_SAFE_INTEGER,
       };
     })
@@ -90,8 +131,34 @@ export function buildProjectContextSection(files: ReturnType<typeof prepareConte
     lines.push(PERSONAL_USER_CONTEXT_INSTRUCTIONS);
   }
   lines.push("");
-  for (const { file } of files) {
-    lines.push(`## ${file.path}`, "", sanitizeContextFileContentForPrompt(file.content), "");
+  for (const { file, headingPath } of files) {
+    lines.push(`## ${headingPath}`, "", sanitizeContextFileContentForPrompt(file.content), "");
   }
   return lines;
+}
+
+export function projectStableContextFiles(files: ReturnType<typeof prepareContextFilesForPrompt>) {
+  return files.map(({ headingPath, file }) => ({
+    headingPath,
+    personalUser: file.personalUser,
+    contentHash: sha256Hex(file.content),
+  }));
+}
+
+export function prepareSystemPromptContextFiles(params: {
+  contextFiles?: EmbeddedContextFile[];
+  activeProjectKeys?: readonly string[];
+  workspaceDir?: string;
+  canonicalWorkspaceDir?: string;
+}) {
+  const filtered = filterProjectScopedCuratedContextFiles({
+    contextFiles: params.contextFiles,
+    activeProjectKeys: params.activeProjectKeys,
+  }).filter((file) => file.path.trim().length > 0);
+  return prepareContextFilesForPrompt(filtered, {
+    workspaceDir: params.workspaceDir,
+    canonicalWorkspaceDir: params.canonicalWorkspaceDir
+      ? sanitizeForPromptLiteral(params.canonicalWorkspaceDir)
+      : undefined,
+  });
 }
