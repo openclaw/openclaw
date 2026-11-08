@@ -11,6 +11,7 @@ import { signalProcessTree } from "../process/kill-tree.js";
 import { resolveRuntimeArgs, resolveRuntimeWorkerArgv } from "./runtime-worker-url.js";
 import type { UpdateCanaryTarget } from "./update-candidate-canary-commands.js";
 import { UPDATE_CANARY_PROGRESS_PREFIX } from "./update-candidate-canary-progress.js";
+import { createUpdateDiagnosticLines } from "./update-diagnostic-lines.js";
 import { createUpdateFailureFact, type UpdateFailureFact } from "./update-failure-facts.js";
 import { warnOnUpdateCleanupFailure } from "./update-maintenance.js";
 import { UPDATE_CANDIDATE_STARTUP_FAILURES } from "./update-preflight-details.js";
@@ -110,8 +111,7 @@ export function launchCanary(params: {
   const flushers = [child.stdout, child.stderr].map((stream) => {
     // Node entrypoints emit UTF-8; pipe chunks need not end at code-point boundaries.
     stream.setEncoding("utf8");
-    let pending = "";
-    let droppingLine = false;
+    const lines = createUpdateDiagnosticLines(64 * 1024);
     const captureLine = (line: string) => {
       if (!params.hidesLine?.(line)) {
         if (stream === child.stderr) {
@@ -122,37 +122,15 @@ export function launchCanary(params: {
       params.onLine?.(line);
     };
     stream.on("data", (chunk: string) => {
-      let text = chunk;
-      if (droppingLine) {
-        const newline = text.indexOf("\n");
-        if (newline < 0) {
-          return;
-        }
-        text = text.slice(newline + 1);
-        droppingLine = false;
-      }
-      pending += text;
-      const lines = pending.split(/\r?\n/u);
-      pending = lines.pop() ?? "";
-      for (const line of lines) {
-        captureLine(line);
-      }
-      if (pending.length > 64 * 1024) {
+      if (lines.push(chunk, (line) => captureLine(line.replace(/\r$/u, "")))) {
         // Discard an oversized unterminated line whole, never through a secret.
-        pending = "";
-        droppingLine = true;
         if (stream === child.stderr) {
           lastStderrLine ??= "[oversized log line omitted]";
         }
         capture("[oversized log line omitted]");
       }
     });
-    return () => {
-      if (pending) {
-        captureLine(pending);
-        pending = "";
-      }
-    };
+    return () => lines.flush(captureLine);
   });
   child.stdout.on("data", (chunk: string) => {
     stdoutBytes += Buffer.byteLength(chunk);

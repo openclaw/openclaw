@@ -49,6 +49,7 @@ import { writeFileSync } from "node:fs";
 const mode = ${JSON.stringify(mode)};
 const args = process.argv.slice(2);
 if (args.includes("--fix")) {
+  console.error("[gateway] startup trace: doctor.state-schema 1250ms total=1250ms");
   if (mode === "doctor-signal") {
     console.log("Doctor complete.");
     writeFileSync(process.env.OPENCLAW_UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH, JSON.stringify({
@@ -105,6 +106,9 @@ if (args.includes("--fix")) {
           }
         : undefined,
     });
+    expect(result.steps.find((step) => step.name === "candidate-doctor")?.diagnostics).toEqual([
+      "Doctor sections: state-schema 1.3 s",
+    ]);
     if (run) {
       for (let index = 0; index < 24; index++) {
         ledger.recordUpdateRunStep(

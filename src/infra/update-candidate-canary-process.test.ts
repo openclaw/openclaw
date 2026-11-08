@@ -69,3 +69,43 @@ it("routes a CLI target through the standalone command entry", async () => {
     expect.objectContaining({ cwd: root }),
   );
 });
+
+it("keeps each pipe's pending-character bound, omission order, and final fragment", async () => {
+  const boundary = "🦊".repeat(32_768);
+  const completed = "w".repeat(65_537);
+  mocks.spawn.mockImplementationOnce(() => {
+    const child = new ChildProcess();
+    child.stdout = new PassThrough();
+    child.stderr = new PassThrough();
+    const streams = [child.stdout, child.stderr];
+    queueMicrotask(() => {
+      for (const stream of streams) {
+        stream.write(boundary);
+        stream.write("\r\n");
+        stream.write(`${completed}\n`);
+        stream.write("x".repeat(65_537));
+        stream.write("synthetic-sensitive-suffix");
+        stream.write("\nsafe\r\nprivate-receipt\nfinal\r");
+      }
+      child.emit("close", 0, null);
+    });
+    return child;
+  });
+  const captured: string[] = [];
+  const observed: string[] = [];
+  const running = launchCanary({
+    target: { kind: "cli", entryPath: path.join(root, "dist/index.js") },
+    args: [],
+    root,
+    env: {},
+    stateDir: root,
+    capture: (line) => captured.push(line),
+    hidesLine: (line) => line === "private-receipt",
+    onLine: (line) => observed.push(line),
+  });
+  await running.closed;
+  const capturedPipe = [boundary, completed, "[oversized log line omitted]", "safe"];
+  const observedPipe = [boundary, completed, "safe", "private-receipt"];
+  expect(captured).toEqual([...capturedPipe, ...capturedPipe, "final\r", "final\r"]);
+  expect(observed).toEqual([...observedPipe, ...observedPipe, "final\r", "final\r"]);
+});

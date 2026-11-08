@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { CommandOptions } from "../process/exec.js";
+import { runUtf8CommandWithTimeout } from "../process/exec.js";
 import { createUpdateDoctorSectionTiming } from "./update-doctor-section-timing.js";
 
 describe("delegated Doctor phase output", () => {
@@ -15,6 +16,7 @@ describe("delegated Doctor phase output", () => {
       "Doctor: private plugin label\n",
       "Doctor: state schema /private/fixture-secret\n",
       "Doctor: state schema\rprivate\n",
+      "Doctor: state schema\r\n",
       "Doctor: state schema\x1b[2J\n",
       "Doctor: state schema (12345678901s elapsed)\n",
       `${"x".repeat(32_768)}Doctor: state schema\n`,
@@ -54,6 +56,30 @@ describe("delegated Doctor phase output", () => {
       "Doctor: database migrations (10s elapsed)",
       "Doctor: maintenance release",
     ]);
+  });
+
+  it("collects real Doctor stderr while preserving the original output observer", async () => {
+    const display = vi.fn();
+    const observer = vi.fn();
+    const timing = createUpdateDoctorSectionTiming({}, display);
+    const stderr =
+      "Doctor: state schema\n" +
+      "[gateway] startup trace: doctor.state-schema 1250ms total=1250ms\n" +
+      "[gateway] startup trace: doctor.contributions 250ms total=1500ms";
+    const result = await timing.wrap(runUtf8CommandWithTimeout)(
+      [process.execPath, "-e", `process.stderr.write(${JSON.stringify(stderr)})`],
+      { timeoutMs: 10_000, onOutputChunk: observer },
+    );
+    expect(result.stderr).toBe("Doctor: state schema");
+    expect(
+      Buffer.concat(
+        observer.mock.calls.filter(([, stream]) => stream === "stderr").map(([chunk]) => chunk),
+      ).toString(),
+    ).toBe(stderr);
+    expect(timing.annotate({ diagnostics: [] })).toEqual({
+      diagnostics: ["Doctor sections: state-schema 1.3 s, contributions 0.3 s"],
+    });
+    expect(display.mock.calls.flat()).toEqual(["Doctor: state schema"]);
   });
 
   it.each(["stop", "throw"] as const)(
