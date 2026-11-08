@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from "node:util";
 import {
   isMap,
   isScalar,
@@ -109,12 +110,30 @@ export function insertYamlOcPath(
   throw new OcPathEditError("unresolved");
 }
 
+function hasSameDocumentValue(a: string, b: string): boolean {
+  try {
+    const left = parseDocument(a, { prettyErrors: false });
+    const right = parseDocument(b, { prettyErrors: false });
+    if (left.errors.length > 0 || right.errors.length > 0) {
+      return false;
+    }
+    return isDeepStrictEqual(left.toJS(), right.toJS());
+  } catch {
+    return false;
+  }
+}
+
 function stringifyDoc(doc: Document.Parsed, raw: string): string {
   const bom = raw.startsWith("\uFEFF") ? "\uFEFF" : "";
   const lineEnding = sourceLineEnding(raw);
   const text = doc.toString().replace(/\n/g, lineEnding);
-  // The YAML serializer terminates the document even when the source did not end a line.
-  return bom + (raw.endsWith("\n") ? text : text.slice(0, -lineEnding.length));
+  if (raw.endsWith("\n")) {
+    return bom + text;
+  }
+  const withoutTerminator = text.slice(0, -lineEnding.length);
+  // A final block scalar can make the serializer's last newline part of its value;
+  // drop the terminator only when reparsing proves the document content is unchanged.
+  return bom + (hasSameDocumentValue(text, withoutTerminator) ? withoutTerminator : text);
 }
 
 function formatInsertionMarker(

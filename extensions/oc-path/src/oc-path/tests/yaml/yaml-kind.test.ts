@@ -46,6 +46,11 @@ describe("YAML", () => {
     expect(set("name: old", "name", "new").raw).toBe("name: new");
   });
 
+  it("preserves significant newlines in a final block scalar value", () => {
+    const result = set("name: old", "name", "new\n\n");
+    expect(parseYaml(result.raw).doc.get("name")).toBe("new\n\n");
+  });
+
   it.each([
     [LOBSTER, "missing", "unresolved"],
     [MALFORMED, "key", "parse-error"],
