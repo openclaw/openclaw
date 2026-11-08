@@ -3,7 +3,7 @@ import path from "node:path";
 import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import type { ClawHubSkillVerificationResponse } from "../infra/clawhub-skills.js";
+import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { registerSkillsCli } from "./skills-cli.js";
 import { verification } from "./skills-cli.test-support.js";
 
@@ -29,24 +29,15 @@ vi.mock("./one-shot-exit.js", () => ({
   exitCliAfterOutput: (runtime: typeof mocks.runtime, exitCode: number) => runtime.exit(exitCode),
 }));
 
-vi.mock("../utils.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../utils.js")>()),
-  CONFIG_DIR: "/tmp/openclaw-config",
-}));
-
-// mock-isolation: Skill verification uses an empty fixture config and isolated workspace.
-vi.mock("../config/config.js", () => ({
-  getRuntimeConfig: () => ({}),
-  loadConfig: () => ({}),
-  captureRuntimeConfigAsyncReader: () => async () => ({}),
-}));
-
-vi.mock("../agents/agent-scope.js", () => ({
-  resolveConfiguredAgentId: (_config: unknown, agentId: string) => agentId,
-  resolveAgentIdByWorkspacePath: () => undefined,
-  resolveDefaultAgentId: () => "main",
-  resolveAgentWorkspaceDir: () => mocks.workspaceDir,
-}));
+// mock-isolation: Resolve the real workspace owner from an isolated fixture roster.
+vi.mock("../config/config.js", () => {
+  const config = () => ({ agents: { entries: { main: { workspace: mocks.workspaceDir } } } });
+  return {
+    getRuntimeConfig: config,
+    loadConfig: config,
+    captureRuntimeConfigAsyncReader: () => async () => config(),
+  };
+});
 
 vi.mock("../infra/clawhub-skills.js", () => ({
   CLAWHUB_SKILLS_SH_REF_PREFIX: "skills-sh:",
@@ -77,9 +68,7 @@ describe("skills verify CLI", () => {
     mocks.workspaceDir = tempDirs.make("openclaw-skill-verify-cli-");
     mocks.verify.mockReset();
     mocks.card.mockReset();
-    for (const mock of Object.values(mocks.runtime)) {
-      mock.mockClear();
-    }
+    vi.clearAllMocks();
   });
 
   async function runCommand(...argv: string[]) {
@@ -108,10 +97,6 @@ describe("skills verify CLI", () => {
     });
   }
 
-  function mockVerification(overrides: Partial<ClawHubSkillVerificationResponse> = {}) {
-    mocks.verify.mockResolvedValueOnce(verification(overrides));
-  }
-
   async function writeInstalledSkill(slug: string, requestedReference?: string) {
     const skillDir = path.join(mocks.workspaceDir, "skills", slug);
     const metadata = {
@@ -136,7 +121,7 @@ describe("skills verify CLI", () => {
   it("verifies an installed skills.sh skill by its exact reference without a version selector", async () => {
     const requestedReference = "skills-sh:patrick-erichsen/skills/html";
     await writeInstalledSkill("html", requestedReference);
-    mockVerification({ decision: "unscanned" });
+    mocks.verify.mockResolvedValueOnce(verification({ decision: "unscanned" }));
     await expect(runCommand(requestedReference)).rejects.toThrow("__exit__:1");
     expectVerification({ slug: "html", requestedReference });
     expect(payload().openclaw?.trust).toEqual({
@@ -181,19 +166,21 @@ describe("skills verify CLI", () => {
   it("does not reject an installed bundle just because ClawHub generated skill-card.md", async () => {
     const skillDir = await writeInstalledSkill("agentreceipt");
     await fs.writeFile(path.join(skillDir, "skill-card.md"), "# Generated Skill Card\n");
-    mockVerification({
-      provenance: {
-        source: "server-resolved-github-import",
-        repo: "openclaw/skills",
-        commit: "0123456789abcdef0123456789abcdef01234567",
-        path: "agentreceipt",
-      },
-      version: { version: "1.2.3" },
-      artifact: {
-        sourceFingerprint: "source-without-card",
-        bundleFingerprints: ["bundle-with-card"],
-      },
-    });
+    mocks.verify.mockResolvedValueOnce(
+      verification({
+        provenance: {
+          source: "server-resolved-github-import",
+          repo: "openclaw/skills",
+          commit: "0123456789abcdef0123456789abcdef01234567",
+          path: "agentreceipt",
+        },
+        version: { version: "1.2.3" },
+        artifact: {
+          sourceFingerprint: "source-without-card",
+          bundleFingerprints: ["bundle-with-card"],
+        },
+      }),
+    );
 
     await runCommand("agentreceipt", "--json");
     expectVerification({ slug: "agentreceipt", version: "1.2.3" });
@@ -210,33 +197,46 @@ describe("skills verify CLI", () => {
     expectSuccess();
   });
 
-  it("prints cards for owner-qualified tag verification", async () => {
-    mockVerification({
-      card: {
-        available: true,
-        url: "https://cards.example.test/generated/weather.md",
-      },
+  it.each([false, true])("prints owner-qualified cards unless cancelled (%s)", async (cancel) => {
+    const scope = new AsyncWorkScope();
+    mocks.verify.mockResolvedValueOnce(
+      verification({
+        card: { available: true, url: "https://cards.example.test/generated/weather.md" },
+      }),
+    );
+    mocks.card.mockImplementationOnce(async () => {
+      if (cancel) {
+        scope.beginClose();
+      }
+      return "# Weather\n";
     });
-    mocks.card.mockResolvedValueOnce("# Weather\n");
-    await runCommand("@demo-owner/weather", "--tag", "latest", "--card");
+    await scope.run(() => runCommand("@demo-owner/weather", "--tag", "latest", "--card"));
     expectVerification({
       slug: "weather",
       ownerHandle: "demo-owner",
       tag: "latest",
       baseUrl: "https://clawhub.ai",
+      signal: scope.signal,
     });
     expect(mocks.card).toHaveBeenCalledWith({
       url: "https://cards.example.test/generated/weather.md",
       baseUrl: "https://clawhub.ai",
+      signal: scope.signal,
     });
-    expect(mocks.stdout.at(-1)).toBe("# Weather");
+    if (cancel) {
+      expect(mocks.stdout).toStrictEqual([]);
+    } else {
+      expect(mocks.stdout.at(-1)).toBe("# Weather");
+    }
     expectSuccess();
   });
 
   it("does not promote unavailable provenance URLs in verify JSON", async () => {
-    mockVerification({
-      provenance: { source: "unavailable", url: "https://github.com/o/r/tree/unverified/s" },
-    });
+    mocks.verify.mockResolvedValueOnce(
+      verification({
+        provenance: { source: "unavailable", url: "https://github.com/o/r/tree/unverified/s" },
+      }),
+    );
 
     await runCommand("agentreceipt");
 
