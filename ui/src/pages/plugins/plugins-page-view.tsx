@@ -217,7 +217,7 @@ export function PluginsPageView(props: { page: PluginsPageModel }) {
   }));
 
   function CatalogInventory() {
-    // The route owns first-load readiness; retain accepted inventory during refresh.
+    // Observe the page owner's read while retaining accepted inventory during refresh.
     const catalogRead = createMemo(() => props.page.catalogRead());
     const loading = () => {
       latest(catalogRead);

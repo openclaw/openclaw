@@ -33,6 +33,7 @@ import {
 import {
   pluginIdForRoute,
   pluginSettingsNeedsSchema,
+  type PluginsCatalogRead,
   type PluginsRouteData,
 } from "./route-data.ts";
 import type { PluginSettingsEditorProps } from "./settings-editor.tsx";
@@ -234,8 +235,22 @@ export function createPluginsPage(options: {
     onConsentDismiss: promptLaunch.reset,
   });
   const catalogTask = createPageRequest(publish, {
-    task: ([client]: readonly [NonNullable<GatewayPageBinding["client"]>], { signal }) =>
-      client.request<PluginListResult>("plugins.list", {}, { signal }),
+    task: async (
+      [client, prepared]: readonly [
+        NonNullable<GatewayPageBinding["client"]>,
+        PluginsCatalogRead["result"]?,
+      ],
+      { signal },
+    ) => {
+      if (!prepared) {
+        return client.request<PluginListResult>("plugins.list", {}, { signal });
+      }
+      const result = await prepared;
+      if (!result.ok) {
+        throw result.error;
+      }
+      return result.value;
+    },
     onComplete: (result) => {
       replaceResult(result);
       if (surface === "settings") {
@@ -447,7 +462,10 @@ export function createPluginsPage(options: {
     if (catalogId !== state.catalogDetail?.id) {
       void showCatalogDetail(catalogId);
     }
-    ensureInitialData();
+    const prepared = data.catalogRead;
+    ensureInitialData(
+      prepared && gateway.isRouteDataCurrent(prepared) ? prepared.result : undefined,
+    );
   }
 
   function invalidateRequests(invalidateCatalog: boolean, retirePresentation = true) {
@@ -512,7 +530,7 @@ export function createPluginsPage(options: {
     );
   }
 
-  function ensureInitialData() {
+  function ensureInitialData(prepared?: PluginsCatalogRead["result"]) {
     if (readAccess === false) {
       return;
     }
@@ -537,12 +555,15 @@ export function createPluginsPage(options: {
     if (routeData && pluginSettingsNeedsSchema(surface, routeData.location, context.basePath)) {
       void context.runtimeConfig.ensureSchemaLoaded();
     }
-    if (!loading() && !state.result && !state.error) {
-      void refreshCatalog();
+    if (!loading() && (prepared || (!state.result && !state.error))) {
+      void refreshCatalog(gateway.client, prepared);
     }
   }
 
-  async function refreshCatalog(client = gateway.connected ? gateway.client : null) {
+  async function refreshCatalog(
+    client = gateway.connected ? gateway.client : null,
+    prepared?: PluginsCatalogRead["result"],
+  ) {
     if (!client || readAccess === false) {
       return;
     }
@@ -551,7 +572,7 @@ export function createPluginsPage(options: {
     if (surface === "discovery" && !activeRoutePluginId()) {
       void discovery.refresh();
     }
-    const promise = catalogTask.run([client]);
+    const promise = catalogTask.run([client, prepared]);
     void setCatalog(promise);
     await promise;
   }

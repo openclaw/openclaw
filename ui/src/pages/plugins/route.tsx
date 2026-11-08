@@ -7,6 +7,8 @@ import {
 import { routePageSpec } from "../../app-route-paths.ts";
 import type { SolidRouteProps } from "../../app-route-types.tsx";
 import type { ApplicationContext } from "../../app/context.ts";
+import { hasOperatorReadAccess } from "../../app/operator-access.ts";
+import { loadPluginCatalog } from "../../lib/plugins/index.ts";
 import {
   canonicalPluginsRouteLocation,
   pluginSettingsNeedsSchema,
@@ -39,8 +41,27 @@ function definePluginsPage(routeId: "plugins" | "plugin-settings", surface: Plug
           )
           .catch(() => undefined);
       }
+      const gateway = context.gateway;
+      const gatewaySnapshot = gateway.snapshot;
+      const client = gatewaySnapshot.client;
+      // Keep inventory concurrent with lazy delivery without holding page adoption.
+      const catalogRead =
+        options.shouldRun() &&
+        gatewaySnapshot.phase === "connected" &&
+        client &&
+        hasOperatorReadAccess(gatewaySnapshot.hello?.auth ?? null)
+          ? {
+              gateway,
+              gatewaySnapshot,
+              result: loadPluginCatalog(client).then(
+                (value) => ({ ok: true as const, value }),
+                (error: unknown) => ({ ok: false as const, error }),
+              ),
+            }
+          : undefined;
       return {
         location,
+        catalogRead,
       } satisfies PluginsRouteData;
     },
     component: async () => {

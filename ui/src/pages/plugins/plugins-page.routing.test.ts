@@ -440,6 +440,7 @@ it.each([
     if ("type" in routeData) {
       throw new Error("Expected the discovery route to load");
     }
+    expect(inventoryReads).toBe(1);
     const { page } = await mountPage(context, routeData);
     const install = () =>
       page.querySelector<HTMLButtonElement>(
@@ -477,6 +478,72 @@ it.each([
     }
   },
 );
+
+it.each(["success", "failure", "metadata", "replacement", "reconnect"])(
+  "adopts prepared installed inventory with %s",
+  async (outcome) => {
+    const inventory = deferred<PluginListResult>();
+    let reads = 0;
+    const { client, request, harness } = pageGateway({
+      "plugins.list": () =>
+        ++reads === 1 ? inventory.promise : createResult(createPlugin({ name: "Fresh plugin" })),
+    });
+    const context = createContext(harness.gateway);
+    const route = await pages[1].loader!(
+      context,
+      createRouteLoaderOptions(createPluginsRouteLocation()),
+    );
+    expect(request).toHaveBeenCalledWith("plugins.list", {});
+    if ("type" in route) {
+      throw new Error("Expected the installed Plugins route to load");
+    }
+    if (outcome === "metadata") {
+      harness.emit(client, true, { hello: harness.gateway.snapshot.hello });
+    }
+    if (outcome === "replacement") {
+      const fresh = createClient(async () => createResult(createPlugin({ name: "Fresh plugin" })));
+      harness.emit(fresh.client, true);
+    }
+    if (outcome === "reconnect") {
+      harness.emit(client, true, { hello: gatewayHelloForMethods(["plugins.list"]) });
+    }
+    const { page } = await mountPage(context, route);
+    if (outcome === "replacement" || outcome === "reconnect") {
+      await waitForSolid(() => expect(page.textContent).toContain("Fresh plugin"));
+      inventory.resolve(createResult(createPlugin({ name: "Retired plugin" })));
+      await inventory.promise;
+      await settlePage(page);
+      expect(page.textContent).not.toContain("Retired plugin");
+    } else {
+      expect(page.querySelector('.settings-group[aria-busy="true"]')).not.toBeNull();
+      if (outcome === "failure") {
+        inventory.reject(new Error("Prepared inventory unavailable"));
+        await waitForSolid(() =>
+          expect(page.textContent).toContain("Prepared inventory unavailable"),
+        );
+      } else {
+        inventory.resolve(createResult());
+        await waitForSolid(() => expect(page.textContent).toContain("Workboard"));
+      }
+    }
+    expect(request.mock.calls.filter(([method]) => method === "plugins.list")).toHaveLength(
+      outcome === "reconnect" ? 2 : 1,
+    );
+  },
+);
+
+it.each(["denied", "cancelled"])("does not prepare Plugins inventory when %s", async (reason) => {
+  const { client, request, harness } = pageGateway({ "plugins.list": () => createResult() });
+  if (reason === "denied") {
+    harness.emit(client, true, { hello: gatewayHelloForMethods([], ["operator.sessions.read"]) });
+  }
+  const context = createContext(harness.gateway);
+  await pages[1].loader!(context, {
+    ...createRouteLoaderOptions(createPluginsRouteLocation()),
+    shouldRun: () => reason !== "cancelled",
+  });
+  expect(request).not.toHaveBeenCalled();
+});
 
 it("keeps the latest Install request while an older catalog detail is pending", async () => {
   const details = ["Alpha", "Beta"].map((name) =>
