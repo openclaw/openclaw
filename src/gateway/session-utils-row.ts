@@ -52,6 +52,7 @@ import { sessionClassificationForRow } from "./session-classification.js";
 import { projectSessionRowProfiles } from "./session-identity-projection.js";
 import { sessionModelRevision } from "./session-model-revision.js";
 import { isSessionPermissionChangePending } from "./session-permission-change.js";
+import { reuseSessionRowFields } from "./session-row-identity.js";
 import { readSessionRowModelFacts } from "./session-row-model-facts.js";
 import { projectSessionRowProviderReview } from "./session-row-provider-review.js";
 import type { SessionRuntimeResolution } from "./session-runtime-resolution.js";
@@ -365,7 +366,7 @@ export function refreshSessionRowProfiles(materialized: ReturnType<typeof materi
 
 export function materializeSessionRow(
   input: ReturnType<typeof readSessionRowInputs>["inputs"],
-  publicationIdentity = {},
+  previous?: { publicationIdentity: object; row: Readonly<GatewaySessionRow> },
 ) {
   const { cfg, key, entry } = input;
   const observerDigest =
@@ -539,8 +540,10 @@ export function materializeSessionRow(
     pluginExtensions: input.pluginExtensions.length > 0 ? input.pluginExtensions : undefined,
   });
   return Object.freeze({
-    publicationIdentity,
-    row: freezeTrustedJsonSnapshot<Readonly<GatewaySessionRow>>(row),
+    publicationIdentity: previous?.publicationIdentity ?? {},
+    row: freezeTrustedJsonSnapshot<Readonly<GatewaySessionRow>>(
+      reuseSessionRowFields(row, previous?.row),
+    ),
     source: Object.freeze({
       parsedKey: parseAgentSessionKey(key),
       backgroundProcessScope: prepareGatewaySessionBackgroundProcessScope(input),
@@ -586,7 +589,12 @@ export function replaceSessionRowFacts(
   return Object.freeze({
     publicationIdentity: materialized.publicationIdentity,
     row: row
-      ? freezeTrustedJsonSnapshot(omitUndefinedFields({ ...materialized.row, ...row }))
+      ? freezeTrustedJsonSnapshot(
+          reuseSessionRowFields(
+            omitUndefinedFields({ ...materialized.row, ...row }),
+            materialized.row,
+          ),
+        )
       : materialized.row,
     source: Object.freeze(nextSource),
   });

@@ -13,6 +13,7 @@ import {
   prepareSessionRowDeltaFields,
 } from "./session-row-delta-fields.js";
 import { createSessionRowEventPeer } from "./session-row-event.test-support.js";
+import { reuseSessionRowFields } from "./session-row-identity.js";
 import {
   prepareProjectedSessionPresentation,
   prepareSessionRowPublication,
@@ -23,6 +24,7 @@ import {
 } from "./session-row-projection.read-fixture.test-support.js";
 import { rolePolicyConfig } from "./session-sharing.test-utils.js";
 import { replaceSessionRowFacts } from "./session-utils-row.js";
+import type { GatewaySessionRow } from "./session-utils.types.js";
 
 vi.mock("node:crypto", async (importOriginal) => {
   const crypto = await importOriginal<typeof import("node:crypto")>();
@@ -68,10 +70,12 @@ it("retains nested publication facts across real transcript writes without hidin
       });
     await append();
     using projection = await createTestProjection({ cfg, modelCatalog: [] });
-    const read = async () => {
+    const read = async (unchanged = false) => {
       await projection.ensureMaterialized();
       const publication = prepareSessionRowPublication(projection, Date.now());
-      return clients.map((client) => {
+      const common = projection.describe(query)!.materialized.row;
+      using keys = vi.spyOn(Object, "keys");
+      const rows = clients.map((client) => {
         const row = publication(client).getPresentation().snapshot(query).row!;
         // The ordinary presenter is the byte contract, including nested property order.
         const fresh = prepareProjectedSessionPresentation(projection, client, Date.now()).snapshot(
@@ -80,9 +84,15 @@ it("retains nested publication facts across real transcript writes without hidin
         expect(JSON.stringify(row)).toBe(JSON.stringify(fresh));
         return {
           row,
-          fields: prepareSessionRowDeltaFields(row, projection.describe(query)!.materialized.row),
+          fields: prepareSessionRowDeltaFields(row, common),
         };
       });
+      // Common nested facts are prepared once, never traversed again per audience.
+      if (unchanged) {
+        expect(keys.mock.calls.filter(([value]) => value === common.toolOverrides)).toHaveLength(0);
+      }
+      expect(rows.every(({ row }) => row.toolOverrides === common.toolOverrides)).toBe(true);
+      return rows;
     };
     let previous = await read();
     expect(previous.map(({ row }) => row.activitySummary?.canEnsure)).toEqual([true, true, false]);
@@ -90,7 +100,7 @@ it("retains nested publication facts across real transcript writes without hidin
       clock.mockReturnValue(Date.now() + 1);
       await append();
       vi.mocked(hash).mockClear();
-      const current = await read();
+      const current = await read(true);
       const nestedHashes = vi
         .mocked(hash)
         .mock.calls.filter(([, encoded]) => typeof encoded === "string" && /^[{[]/.test(encoded));
@@ -136,4 +146,22 @@ it("retains nested publication facts across real transcript writes without hidin
       );
     }
   });
+});
+
+it.each([
+  [[], Array<string>(1)],
+  [Array<string>(1), []],
+  [["before"], ["after"]],
+  [["same"], ["same"]],
+])("preserves array JSON when sharing row fields (%j → %j)", (before, after) => {
+  const row = (value: string[]): GatewaySessionRow => ({
+    key: "agent:main:array-bytes",
+    kind: "direct",
+    updatedAt: 0,
+    pluginExtensions: [{ pluginId: "fixture", namespace: "values", value }],
+  });
+  const previous = row(before);
+  const next = row(after);
+  const expected = JSON.stringify(next);
+  expect(JSON.stringify(reuseSessionRowFields(next, previous))).toBe(expected);
 });

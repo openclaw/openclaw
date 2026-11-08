@@ -28,6 +28,7 @@ import {
   tryResolveSessionCompatibilityOwnerAgentId,
 } from "./session-request-agent.js";
 import {
+  reuseSessionRowFields,
   sessionRowId,
   sessionRowsRevision,
   type SessionRowGeneration,
@@ -89,34 +90,6 @@ function sameFacts(previous: readonly unknown[] | undefined, current: readonly u
     }
   }
   return true;
-}
-
-/** Owned row JSON must retain property order as well as values, including on full replies. */
-function sameRowField(left: unknown, right: unknown): boolean {
-  if (Object.is(left, right)) {
-    return true;
-  }
-  if (
-    !left ||
-    !right ||
-    typeof left !== "object" ||
-    typeof right !== "object" ||
-    Array.isArray(left) !== Array.isArray(right)
-  ) {
-    return false;
-  }
-  if (Array.isArray(left) && Array.isArray(right) && left.length !== right.length) {
-    return false;
-  }
-  const keys = Object.keys(left);
-  const previous = Object.keys(right);
-  return (
-    keys.length === previous.length &&
-    keys.every(
-      (key, index) =>
-        key === previous[index] && sameRowField(Reflect.get(left, key), Reflect.get(right, key)),
-    )
-  );
 }
 
 const sharedLists = new WeakMap<
@@ -590,16 +563,7 @@ export function prepareProjectedSessionPresentation(
     }
     if (signature !== undefined) {
       // Shared-fact replies never send this raw row; encode only at the wire boundary.
-      if (previous) {
-        for (const field of Object.keys(row)) {
-          const current = Reflect.get(row, field);
-          const retained = Reflect.get(previous.row, field);
-          if (current && typeof current === "object" && sameRowField(current, retained)) {
-            Reflect.set(row, field, retained);
-          }
-        }
-      }
-      const snapshot = freezeTrustedJsonSnapshot(row);
+      const snapshot = freezeTrustedJsonSnapshot(reuseSessionRowFields(row, previous?.row));
       const view = { facts: recipientFacts, revision: published!.facts, row: snapshot };
       if (previous && variants) {
         variants[variants.indexOf(previous)] = view;

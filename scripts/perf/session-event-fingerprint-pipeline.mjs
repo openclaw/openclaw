@@ -157,6 +157,8 @@ Reflect.set(globalThis, "rowHashCall", (encoded) => {
 const { isDeeplyFrozenPlainData } = await import("../../src/shared/immutable-data.js");
 const deeplyFrozen = isDeeplyFrozenPlainData;
 const { runOpenClawAgentWriteTransaction } = await import("../../src/state/openclaw-agent-db.js");
+const { writeSessionEntry } =
+  await import("../../src/config/sessions/session-accessor.sqlite-entry-store.js");
 const { withOpenClawTestState } = await import("../../src/test-utils/openclaw-test-state.js");
 const { recordSessionParticipant } =
   await import("../../src/config/sessions/session-accessor.sqlite-participants.native.js");
@@ -257,24 +259,23 @@ try {
         promptedAt: Date.now(),
       });
     }
-    // Batch only the cold fixture seed; measured actor publications remain individual commits.
+    const seedStarted = performance.now();
+    // Seed before readers subscribe; measured actor publications remain individual commits.
     runOpenClawAgentWriteTransaction(
-      () => {
+      (database) => {
         for (let i = 0; i < sessions; i++) {
-          replaceSessionEntrySync(
-            { agentId: "main", sessionKey: `agent:main:hash-row-${i}` },
-            {
-              sessionId: `hash-row-${i}`,
-              updatedAt: Date.now(),
-              visibility: "shared",
-              label: `Synthetic row ${i}`,
-              ...(i < children ? { parentSessionKey: root } : {}),
-            },
-          );
+          writeSessionEntry(database, `agent:main:hash-row-${i}`, {
+            sessionId: `hash-row-${i}`,
+            updatedAt: Date.now(),
+            visibility: "shared",
+            label: `Synthetic row ${i}`,
+            ...(i < children ? { parentSessionKey: root } : {}),
+          });
         }
       },
       { agentId: "main" },
     );
+    const seedWallMs = performance.now() - seedStarted;
     const release = retainSessionListForegroundWork();
     const projection = await createSessionRowProjection({ cfg, modelCatalog: [] });
     const connection = createGatewayConnectionState({
@@ -519,6 +520,7 @@ try {
             allocatedBytes,
             iterations,
             sessions,
+            seedWallMs,
             children,
             clients: 20,
             audiences: 3,
