@@ -888,7 +888,11 @@ describe("firecrawl tools", () => {
         if (operation === "search") {
           await runActualFirecrawlSearch({ query: "partial scope", cfg });
         } else {
-          await runActualFirecrawlScrape({ url: "https://example.com", cfg });
+          await runActualFirecrawlScrape({
+            url: "https://example.com",
+            cfg,
+            extractMode: "markdown",
+          });
         }
         expect(global.fetch).toHaveBeenCalledExactlyOnceWith(
           `http://127.0.0.1:${expectedPort}/v2/${operation}`,
@@ -917,7 +921,7 @@ describe("firecrawl tools", () => {
       const result =
         operation === "search"
           ? runActualFirecrawlSearch({ cfg, query: "blocked" })
-          : runActualFirecrawlScrape({ cfg, url: "https://example.com" });
+          : runActualFirecrawlScrape({ cfg, url: "https://example.com", extractMode: "markdown" });
       await expect(result).rejects.toThrow("needs a Firecrawl API key");
       expect(global.fetch).not.toHaveBeenCalled();
     },

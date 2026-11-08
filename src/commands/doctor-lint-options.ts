@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-export const DoctorLintCliOptionsSchema = z.strictObject({
+const DoctorLintCliOptionsSchema = z.strictObject({
   json: z.boolean().optional(),
   severityMin: z.string().optional(),
   skipIds: z.array(z.string()).readonly().optional(),
