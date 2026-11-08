@@ -44,6 +44,39 @@ import { MuseCatalogReader } from "./src/verify-setup.js";
 
 type MuseInputPart = Parameters<Session["sendUserTurn"]>[0]["input"][number];
 
+/** MSP types a quota stop structurally; hosts must not parse its wording to see it. */
+const MUSE_QUOTA_FAILURE_CODE = "muse_code_quota";
+
+type MuseTurnFailure = Error & { code?: string; status?: number };
+
+function findQuotaDetail(error: unknown, depth = 0): { limitKind?: string } | undefined {
+  if (!error || typeof error !== "object" || depth > 4) {
+    return undefined;
+  }
+  const record = error as { quota?: unknown; cause?: unknown };
+  if (record.quota && typeof record.quota === "object") {
+    const limitKind = (record.quota as { limitKind?: unknown }).limitKind;
+    return { limitKind: typeof limitKind === "string" ? limitKind : undefined };
+  }
+  return findQuotaDetail(record.cause, depth + 1);
+}
+
+/**
+ * Preserve MSP's typed terminal failure across the harness' own error wrapping.
+ * A quota stop keeps its structural quota detail and gains the status the host
+ * already classifies as rate_limit, so model fallback never depends on wording.
+ * Other failures keep their identity without inventing a retry class.
+ */
+function museTurnFailure(error: MuseTurnFailure): MuseTurnFailure {
+  if (!findQuotaDetail(error)) {
+    return error;
+  }
+  const failure: MuseTurnFailure = new Error(error.message, { cause: error });
+  failure.code = MUSE_QUOTA_FAILURE_CODE;
+  failure.status = 429;
+  return failure;
+}
+
 export type MuseSessionBinding = { sessionId: string; compatibility: string };
 export type MuseHarnessOptions = {
   binaryPath?: string;
@@ -515,12 +548,15 @@ export function createMuseAgentHarness(options: MuseHarnessOptions): AgentHarnes
         }
         if (result.outcome.params.terminal === "failed") {
           const turnError = result.outcome.params.error;
-          throw new Error(
-            turnError?.kind === "authRequired"
-              ? `Muse Code is not signed in on the Gateway host (${turnError.message}). Run \`muse login\` there, or set META_API_KEY for the Gateway.`
-              : (turnError?.message ??
-                  result.outcome.params.reason ??
-                  "Muse model request failed. Run muse to check login and model access."),
+          throw museTurnFailure(
+            new Error(
+              turnError?.kind === "authRequired"
+                ? `Muse Code is not signed in on the Gateway host (${turnError.message}). Run \`muse login\` there, or set META_API_KEY for the Gateway.`
+                : (turnError?.message ??
+                    result.outcome.params.reason ??
+                    "Muse model request failed. Run muse to check login and model access."),
+              { cause: turnError },
+            ),
           );
         }
         // A cancellation the harness started for a failure (such as an approval
@@ -580,7 +616,7 @@ export function createMuseAgentHarness(options: MuseHarnessOptions): AgentHarnes
       const terminal = failureMessage
         ? agentHarnessAttemptTerminal.setFailure(interruption, {
             source: "prompt",
-            error: new Error(failureMessage),
+            error: failure instanceof FailoverError ? failure : new Error(failureMessage),
           })
         : interruption;
       const lastAssistant = messages.findLast((message) => message.role === "assistant");

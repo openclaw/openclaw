@@ -140,6 +140,14 @@ createInterface({ input: process.stdin }).on("line", (line) => {
         process.exit(7);
       } else if (prompt === "fail") {
         fail("providerError", "fixture provider rejected authentication");
+      } else if (prompt === "quota") {
+        // MSP types a quota stop structurally; the wording deliberately carries no retry hint.
+        complete("failed", {
+          kind: "providerError",
+          message: "Request stopped for this account.",
+          retryable: true,
+          quota: { limitKind: "tierLimit", resetsAtMs: 1_800_000_000_000 },
+        });
       } else if (prompt === "loggedout") {
         // Muse 1.3 reports a missing credential this way.
         fail("authRequired", "not logged in: run /login to add an API key");
