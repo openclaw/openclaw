@@ -63,7 +63,9 @@ fi
 
 if [[ "$out" == "" ]]; then
   base="$in"
-  if [[ "${in##*/}" == *.* ]]; then
+  name="${in##*/}"
+  # Strip a suffix only when the basename has an extension after any leading dotfile dot.
+  if [[ "$name" == *.* && "${name#.}" == *.* ]]; then
     base="${in%.*}"
   fi
   if [[ "$json_output" == "1" ]]; then
