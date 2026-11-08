@@ -1,0 +1,2 @@
+75
+# Gateway regression: a queued run that links its chat client from its own start notification still delivers lifecycle start, with no false seq-gap error.
