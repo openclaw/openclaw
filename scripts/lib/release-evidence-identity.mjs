@@ -54,13 +54,21 @@ export function normalizeWorkflowPathRef(ref) {
 // verifier authenticates both admissions and the unchanged artifact descriptors.
 export function retainedPublicationArtifactSource(manifest) {
   const recovery = manifest?.receiptRecovery;
-  if (recovery?.schema === "openclaw.full-release-receipt-recovery/v1" &&
-      recovery.candidateBinding?.request?.targetSha === manifest.targetSha &&
-      recovery.candidateBinding?.request?.toolingSha === manifest.targetSha &&
-      manifest.sourceAdmission?.candidateSha === manifest.targetSha &&
-      String(manifest.sourceAdmission?.runId) === String(manifest.runId)) {
-    return { runId: recovery.originalParent.runId, candidateSha: manifest.targetSha,
-      workflow: { ref: `refs/heads/${recovery.children.normalCi.workflowRef}`, sha: manifest.targetSha } };
+  if (
+    recovery?.schema === "openclaw.full-release-receipt-recovery/v1" &&
+    recovery.candidateBinding?.request?.targetSha === manifest.targetSha &&
+    recovery.candidateBinding?.request?.toolingSha === manifest.targetSha &&
+    manifest.sourceAdmission?.candidateSha === manifest.targetSha &&
+    String(manifest.sourceAdmission?.runId) === String(manifest.runId)
+  ) {
+    return {
+      runId: recovery.originalParent.runId,
+      candidateSha: manifest.targetSha,
+      workflow: {
+        ref: `refs/heads/${recovery.children.normalCi.workflowRef}`,
+        sha: manifest.targetSha,
+      },
+    };
   }
   const reuse = manifest?.evidenceReuse;
   const current = manifest?.sourceAdmission;

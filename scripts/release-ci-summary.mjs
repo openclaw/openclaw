@@ -2285,7 +2285,7 @@ async function loadValidatedParentEvidence({
   runId,
 }) {
   const parentView = client.getRunView(runId);
-  const parentRun = preloadedRun ?? await client.getRun(runId);
+  const parentRun = preloadedRun ?? (await client.getRun(runId));
   const parentRunAttempt = normalizePositiveInteger(
     parentRun.run_attempt,
     `full release parent ${runId} run attempt`,
@@ -2692,25 +2692,58 @@ export async function validateReleaseRunEvidence(
   const verifier = resolveVerifierIdentity(verifierSourceSha, verifierSourceContent);
   const selectedRun = await evidenceClient.getRun(normalizedRunId);
   if (workflowPath(selectedRun) === ".github/workflows/full-release-receipt-recovery.yml") {
-    if (qualificationReuse || reuseRequest || hasRequestedEvidenceReuse({ expectedChangedPaths, expectedEvidencePolicy, expectedEvidenceSha, expectedRootRunId, expectedSelectedRunId })) {
+    if (
+      qualificationReuse ||
+      reuseRequest ||
+      hasRequestedEvidenceReuse({
+        expectedChangedPaths,
+        expectedEvidencePolicy,
+        expectedEvidenceSha,
+        expectedRootRunId,
+        expectedSelectedRunId,
+      })
+    ) {
       throw new Error("Receipt recovery is an explicit aggregate, not historical parent reuse");
     }
-    const retained = evidenceClient.loadManifest(normalizedRunId, selectedRun.run_attempt, manifestPath);
-    if (!retained) throw new Error("Receipt recovery aggregate artifact is missing");
-    validateManifestArtifactBinding(retained.artifact, retained.manifest, selectedRun, normalizedRunId);
+    const retained = evidenceClient.loadManifest(
+      normalizedRunId,
+      selectedRun.run_attempt,
+      manifestPath,
+    );
+    if (!retained) {
+      throw new Error("Receipt recovery aggregate artifact is missing");
+    }
+    validateManifestArtifactBinding(
+      retained.artifact,
+      retained.manifest,
+      selectedRun,
+      normalizedRunId,
+    );
     if (expectedTargetSha !== undefined && retained.manifest.targetSha !== expectedTargetSha) {
       throw new Error("Receipt recovery target differs from the consumer");
     }
     const lineage = evidenceClient.compareCommitLineage(selectedRun.head_sha, verifier.sourceSha);
-    if (!["ahead", "identical"].includes(lineage.status) || lineage.merge_base_commit?.sha !== selectedRun.head_sha) {
+    if (
+      !["ahead", "identical"].includes(lineage.status) ||
+      lineage.merge_base_commit?.sha !== selectedRun.head_sha
+    ) {
       throw new Error("Receipt recovery producer is not on the selected verifier lineage");
     }
-    if (trustedIdentity.type === "tag" && evidenceClient.getRef(trustedIdentity.fullRef)?.object?.sha !== trustedIdentity.sha) {
+    if (
+      trustedIdentity.type === "tag" &&
+      evidenceClient.getRef(trustedIdentity.fullRef)?.object?.sha !== trustedIdentity.sha
+    ) {
       throw new Error("Protected publication tooling tag changed");
     }
     const { authenticateReceiptRecovery } = await import("./full-release-receipt-recovery.mjs");
-    return authenticateReceiptRecovery({ manifest: retained.manifest, artifact: retained.artifact, run: selectedRun,
-      client: evidenceClient, verifier, expectedRunAttempts: remainingExpectedRunAttempts });
+    return authenticateReceiptRecovery({
+      manifest: retained.manifest,
+      artifact: retained.artifact,
+      run: selectedRun,
+      client: evidenceClient,
+      verifier,
+      expectedRunAttempts: remainingExpectedRunAttempts,
+    });
   }
   const currentEvidence = await loadValidatedParentEvidence({
     client: evidenceClient,

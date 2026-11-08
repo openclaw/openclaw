@@ -371,7 +371,9 @@ function publicationReuseFixture(
     test.qualified.artifact.name,
     {
       "preflight-manifest.json": qualifiedManifest,
-      [test.raw.package.fileName]: wrongQualifiedPackage ? Buffer.from("changed package") : packageBytes,
+      [test.raw.package.fileName]: wrongQualifiedPackage
+        ? Buffer.from("changed package")
+        : packageBytes,
     },
     false,
     81,
@@ -579,16 +581,23 @@ process.stdout.write(${JSON.stringify(JSON.stringify(evidence))});
     ],
     verifyRetained: (options: Record<string, unknown>, root = evidence.manifest) => {
       const entrypoint = join(test.root, "verify-retained.mjs");
-      writeFileSync(entrypoint, `
+      writeFileSync(
+        entrypoint,
+        `
 import { verifyRetainedPublicationArtifacts } from ${JSON.stringify(pathToFileURL(SCRIPT).href)};
 const result = await verifyRetainedPublicationArtifacts(${JSON.stringify(root)}, process.env, ${JSON.stringify(options)});
 console.log(JSON.stringify(result));
-`);
-      return test.run("verify", {
-        // Recovery tooling can differ; original identities come only from root.
-        PARENT_WORKFLOW_SHA: "f".repeat(40),
-        PLUGIN_NPM_REQUIRED: withPayloads ? "true" : "false",
-      }, entrypoint);
+`,
+      );
+      return test.run(
+        "verify",
+        {
+          // Recovery tooling can differ; original identities come only from root.
+          PARENT_WORKFLOW_SHA: "f".repeat(40),
+          PLUGIN_NPM_REQUIRED: withPayloads ? "true" : "false",
+        },
+        entrypoint,
+      );
     },
     expectedPackage: { fileName: test.raw.package.fileName, sha256: test.raw.package.sha256 },
     env: {
@@ -635,7 +644,7 @@ describe.skipIf(process.platform === "win32")("immutable release artifact CLI", 
       npm_run_id: "81",
       prepared_run_id: "91",
     });
-    expect(verified.payloads.map((entry: { kind: string }) => entry.kind)).toEqual([
+    const kinds = [
       "raw-npm",
       "qualified-npm",
       "sdk",
@@ -643,20 +652,17 @@ describe.skipIf(process.platform === "win32")("immutable release artifact CLI", 
       "docker-amd64",
       "docker-arm64",
       "plugin-npm",
-    ]);
-    expect(
-      verified.payloads.map((entry: { artifact: { id: string }; sha256: string }) => [
-        entry.artifact.id, entry.sha256,
-      ]),
-    ).toEqual(test.archives.map(({ metadata, bytes }) => [String(metadata.id), sha256(bytes)]));
-    expect(
-      verified.payloads.every(
-        (entry: { producer: { workflowSha: string } }) => entry.producer.workflowSha === TOOLING_SHA,
-      ),
-    ).toBe(true);
-    expect(verified.payloads.slice(0, 2).map((entry: { package: unknown }) => entry.package)).toEqual([
-      test.expectedPackage, test.expectedPackage,
-    ]);
+    ];
+    expect(verified.payloads).toHaveLength(test.archives.length);
+    for (const [index, { metadata, bytes }] of test.archives.entries()) {
+      expect(verified.payloads[index]).toMatchObject({
+        kind: kinds[index],
+        artifact: { id: String(metadata.id) },
+        sha256: sha256(bytes),
+        producer: { workflowSha: TOOLING_SHA },
+        ...(index < 2 ? { package: test.expectedPackage } : {}),
+      });
+    }
     expect(result.outputs).toEqual({});
   });
 
@@ -676,7 +682,10 @@ describe.skipIf(process.platform === "win32")("immutable release artifact CLI", 
       const changed = Buffer.from(archive.bytes);
       changed[changed.length - 1] = changed[changed.length - 1]! ^ 1;
       writeFileSync(archive.archivePath, changed);
-      const result = test.verifyRetained({ verifyPayloads: true, expectedPackage: test.expectedPackage });
+      const result = test.verifyRetained({
+        verifyPayloads: true,
+        expectedPackage: test.expectedPackage,
+      });
       expectRejected(result, "digest");
       expect(result.stdout).toBe("");
     },

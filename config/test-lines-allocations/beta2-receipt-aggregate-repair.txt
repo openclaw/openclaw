@@ -1,2 +1,5 @@
-405
-# Receipt-backed aggregate recovery: original producer payload verification, P/Q separation, explicit fresh admission, authenticated parent/coverage rejection, exact current attempts, plugin adoption, and streaming binary integrity boundaries.
+572
+# Own net regression-test lines only: retained producer payload authentication,
+# separate P/Q admission, original parent/coverage rejection, current attempts,
+# plugin Q-policy adoption, and bounded streaming integrity. Includes formatting.
+# No allocation for the 177 inherited lines reported by CI job 128869352052.

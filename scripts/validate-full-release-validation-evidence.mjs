@@ -15,6 +15,10 @@ import {
   validatePublicationSourceBinding,
 } from "./full-release-publication-contract.mjs";
 import {
+  RECEIPT_RECOVERY_WORKFLOW,
+  verifyReceiptRecoveryAuthority,
+} from "./full-release-receipt-recovery.mjs";
+import {
   normalizeReleaseCoveragePolicy,
   isSplitChangelogEvidenceDelta,
   SPLIT_CHANGELOG_EVIDENCE_REUSE_POLICY,
@@ -25,7 +29,6 @@ import { sortJsonValueKeys } from "./lib/canonical-json.mjs";
 import { resolveReleaseContextIdentity } from "./lib/release-context.mjs";
 import { resolveReleasePublishInputs } from "./lib/release-publish-inputs.mjs";
 import { createReleaseEvidenceClient, validateReleaseRunEvidence } from "./release-ci-summary.mjs";
-import { RECEIPT_RECOVERY_WORKFLOW, verifyReceiptRecoveryAuthority } from "./full-release-receipt-recovery.mjs";
 import { qualificationAdmissionContract } from "./release-qualification-coverage.mjs";
 
 const FULL_RELEASE_WORKFLOW = "Full Release Validation";
@@ -269,7 +272,10 @@ export function validateFullReleaseValidationEvidence({
   }
   const workflowSource = getWorkflowSource
     ? getWorkflowSource(run.headSha)
-    : createReleaseEvidenceClient(expectedRepository).getWorkflowSource(run.headSha, receiptRecovery ? RECEIPT_RECOVERY_WORKFLOW : FULL_RELEASE_WORKFLOW_PATH);
+    : createReleaseEvidenceClient(expectedRepository).getWorkflowSource(
+        run.headSha,
+        receiptRecovery ? RECEIPT_RECOVERY_WORKFLOW : FULL_RELEASE_WORKFLOW_PATH,
+      );
   const contract = publicationSourceContract(workflowSource);
   const registryContract = publicationAdmissionContract(workflowSource);
   if (manifest.sourceAdmissionContract !== contract) {
@@ -453,7 +459,11 @@ export function validateFullReleaseValidationEvidence({
           `Direct main validation workflow ${run.headSha} is not reachable from current main.`,
         );
       }
-      return { run, source: receiptRecovery ? "receipt-backed-recovery-v1" : "direct", coveragePolicy };
+      return {
+        run,
+        source: receiptRecovery ? "receipt-backed-recovery-v1" : "direct",
+        coveragePolicy,
+      };
     }
     throw new Error(
       `Referenced full release validation run ${expectedRunId} has untrusted head branch ${run.headBranch ?? "<missing>"}.`,
@@ -608,8 +618,12 @@ export async function authenticateFullReleaseValidationEvidence(options, client)
 }
 
 function candidateArtifactAuthority(manifest, evidence, evidenceClient) {
-  const descriptor = manifest?.sourceAdmission?.qualificationAdmission ?? manifest?.receiptRecovery?.qualificationAdmission;
-  if (!descriptor) return undefined;
+  const descriptor =
+    manifest?.sourceAdmission?.qualificationAdmission ??
+    manifest?.receiptRecovery?.qualificationAdmission;
+  if (!descriptor) {
+    return undefined;
+  }
   if (!evidence.qualificationAdmission) {
     throw new Error("Authenticated candidate admission authority is missing");
   }
@@ -617,7 +631,14 @@ function candidateArtifactAuthority(manifest, evidence, evidenceClient) {
   const authority = structuredClone({
     descriptor,
     admission: evidence.qualificationAdmission,
-    recoveryProducer: manifest.receiptRecovery ? { runId: String(manifest.runId), runAttempt: Number(manifest.runAttempt), fullRef: manifest.workflowFullRef, sha: manifest.workflowSha } : null,
+    recoveryProducer: manifest.receiptRecovery
+      ? {
+          runId: String(manifest.runId),
+          runAttempt: Number(manifest.runAttempt),
+          fullRef: manifest.workflowFullRef,
+          sha: manifest.workflowSha,
+        }
+      : null,
   });
   const revalidateAuthority = () => {
     evidenceClient.revalidateQualificationAdmissionAuthority(authority);
@@ -641,11 +662,15 @@ export async function authenticateCandidateOwnedArtifact({
   client,
 }) {
   const recovery = manifest?.receiptRecovery;
-  if (!manifest?.sourceAdmission?.qualificationAdmission && !recovery) return null;
+  if (!manifest?.sourceAdmission?.qualificationAdmission && !recovery) {
+    return null;
+  }
   if (
     candidateSha !== qualificationSha ||
     manifest.targetSha !== candidateSha ||
-    (recovery ? recovery.candidateBinding?.request?.toolingSha !== qualificationSha : manifest.workflowSha !== qualificationSha)
+    (recovery
+      ? recovery.candidateBinding?.request?.toolingSha !== qualificationSha
+      : manifest.workflowSha !== qualificationSha)
   ) {
     throw new Error("Candidate-owned artifact source and qualification SHA differ");
   }
@@ -672,7 +697,8 @@ export async function authenticateCandidateOwnedArtifact({
   if (
     evidence.current.targetSha !== candidateSha ||
     evidence.current.runAttempt !== Number(manifest.runAttempt) ||
-    evidence.current.workflowRefProof !== (recovery ? "receipt-backed-recovery-v1" : "candidate-owned-admission-v1") ||
+    evidence.current.workflowRefProof !==
+      (recovery ? "receipt-backed-recovery-v1" : "candidate-owned-admission-v1") ||
     evidence.current.conclusion !== "success" ||
     !isDeepStrictEqual(evidence.current.manifest, sortJsonValueKeys(manifest))
   ) {

@@ -1115,11 +1115,13 @@ function createArtifactTransfer(params, expected, digestOnly = false) {
       : boundedLimit(params.retryDelayMs, 5_000, "GitHub retry delay");
   // Digest-only verification never retains or expands a payload. Its exact
   // authenticated byte count is the transfer bound, including large OCI images.
-  const maxArchiveBytes = digestOnly ? expected.artifactSizeBytes : boundedLimit(
-    params.maxArchiveBytes,
-    DEFAULT_MAX_ACTIONS_ARTIFACT_BYTES,
-    "Actions artifact ZIP byte limit",
-  );
+  const maxArchiveBytes = digestOnly
+    ? expected.artifactSizeBytes
+    : boundedLimit(
+        params.maxArchiveBytes,
+        DEFAULT_MAX_ACTIONS_ARTIFACT_BYTES,
+        "Actions artifact ZIP byte limit",
+      );
   if (expected.artifactSizeBytes > maxArchiveBytes) {
     throw new Error("Actions artifact size exceeds the configured archive limit.");
   }
@@ -1178,13 +1180,19 @@ function createArtifactTransfer(params, expected, digestOnly = false) {
               signal: AbortSignal.timeout(Math.min(timeoutMs, remainingMs)),
             },
           );
-          const bodyPolicy = { expectedBytes: expected.artifactSizeBytes, label, maxBytes: maxArchiveBytes };
+          const bodyPolicy = {
+            expectedBytes: expected.artifactSizeBytes,
+            label,
+            maxBytes: maxArchiveBytes,
+          };
           if (digestOnly) {
             const hash = createHash("sha256");
             await consumeBoundedResponseBody(response, bodyPolicy, (chunk) => hash.update(chunk));
             const digest = `sha256:${hash.digest("hex")}`;
             if (digest !== expected.artifactDigest) {
-              throw new Error(`${label} digest ${digest} does not match ${expected.artifactDigest}.`);
+              throw new Error(
+                `${label} digest ${digest} does not match ${expected.artifactDigest}.`,
+              );
             }
             return digest;
           }
@@ -1210,11 +1218,15 @@ export async function verifyExactActionsArtifactDigest(params) {
   }
   const expected = {
     ...requireArtifactIdentity(params.expected),
-    artifactExpiresAt: assertTrimmedString(params.expected.artifactExpiresAt, "Actions artifact expiry"),
+    artifactExpiresAt: assertTrimmedString(
+      params.expected.artifactExpiresAt,
+      "Actions artifact expiry",
+    ),
   };
   const transfer = createArtifactTransfer(params, expected, true);
   const artifactMetadata = await transfer.json(
-    `actions/artifacts/${expected.artifactId}`, "GitHub Actions artifact metadata",
+    `actions/artifacts/${expected.artifactId}`,
+    "GitHub Actions artifact metadata",
   );
   validateArtifactMetadata(artifactMetadata, expected);
   const digest = await transfer.archive();

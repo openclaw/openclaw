@@ -845,10 +845,18 @@ export function createPublicationObservations(source, observations) {
 }
 
 export function createPublicationAdmission(
-  source, observations, artifact, admittedAt,
+  source,
+  observations,
+  artifact,
+  admittedAt,
   { workflowPath = ".github/workflows/full-release-validation.yml" } = {},
 ) {
-  if (![".github/workflows/full-release-validation.yml", ".github/workflows/full-release-receipt-recovery.yml"].includes(workflowPath)) {
+  if (
+    ![
+      ".github/workflows/full-release-validation.yml",
+      ".github/workflows/full-release-receipt-recovery.yml",
+    ].includes(workflowPath)
+  ) {
     throw new Error("unsupported publication admission workflow");
   }
   const admission = {
@@ -871,12 +879,15 @@ export function createPublicationAdmission(
       status: "admitted-for-validation",
     },
   };
-  return validatePublicationAdmissionBinding({
-    sourceAdmissionContract: FULL_RELEASE_SOURCE_ADMISSION_CONTRACT,
-    sourceAdmission: source,
-    publicationAdmissionContract: FULL_RELEASE_PUBLICATION_ADMISSION_CONTRACT,
-    publicationAdmission: admission,
-  }, { workflowPath });
+  return validatePublicationAdmissionBinding(
+    {
+      sourceAdmissionContract: FULL_RELEASE_SOURCE_ADMISSION_CONTRACT,
+      sourceAdmission: source,
+      publicationAdmissionContract: FULL_RELEASE_PUBLICATION_ADMISSION_CONTRACT,
+      publicationAdmission: admission,
+    },
+    { workflowPath },
+  );
 }
 
 export function validatePublicationAdmissionBinding(record, expected = {}) {
@@ -937,7 +948,8 @@ export function validatePublicationAdmissionBinding(record, expected = {}) {
     binding.repository !== source.repository ||
     binding.parentRunId !== source.runId ||
     binding.parentRunAttempt !== source.runAttempt ||
-    binding.workflow.path !== (expected.workflowPath ?? ".github/workflows/full-release-validation.yml") ||
+    binding.workflow.path !==
+      (expected.workflowPath ?? ".github/workflows/full-release-validation.yml") ||
     binding.workflow.event !== "workflow_dispatch" ||
     binding.workflow.ref !== source.workflow.ref ||
     binding.workflow.sha !== source.workflow.sha ||

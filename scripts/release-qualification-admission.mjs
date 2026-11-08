@@ -387,7 +387,11 @@ function verifyProducer(producer, runGh, completed) {
   return {
     run,
     operator: verifyReleaseQualificationOperator(producer.repository, run.actor, runGh),
-    triggeringOperator: verifyReleaseQualificationOperator(producer.repository, run.triggering_actor, runGh),
+    triggeringOperator: verifyReleaseQualificationOperator(
+      producer.repository,
+      run.triggering_actor,
+      runGh,
+    ),
   };
 }
 
