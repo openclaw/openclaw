@@ -1,4 +1,5 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { Value } from "typebox/value";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { setRuntimeConfigSnapshot } from "../../config/config.js";
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
@@ -16,12 +17,14 @@ import {
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
 import { createSessionConversationTestRegistry } from "../../test-utils/session-conversation-registry.js";
+import { truncateToolResultMessage } from "../embedded-agent-runner/tool-result-truncation.js";
 import type { AgentToolGatewayRequestCaller } from "./in-process-gateway.js";
 import { createSessionStatusTool } from "./session-status-tool.js";
 import { createSessionsHistoryTool } from "./sessions-history-tool.js";
 import { createSessionsListTool } from "./sessions-list-tool.js";
 import { createSessionsSearchTool } from "./sessions-search-tool.js";
 import { createSessionsSendTool } from "./sessions-send-tool.js";
+import { SessionsSendOutputSchema } from "./sessions-send-tool.schema.js";
 
 const requesterKey = "agent:main:dashboard:requester";
 const subagentRequesterKey = "agent:main:subagent:requester";
@@ -225,7 +228,6 @@ describe("sessions_send directed policy at the tool boundary", () => {
 
   afterEach(() => {
     vi.restoreAllMocks();
-    expect(gatewayMethods()).not.toContain("chat.history");
   });
 
   afterAll(async () => {
@@ -244,6 +246,7 @@ describe("sessions_send directed policy at the tool boundary", () => {
       runId,
       reply: replyText,
     });
+    expect(gatewayMethods()).not.toContain("chat.history");
     const dispatches = callGateway.mock.calls.filter(([request]) => request.method === "agent");
     expect(dispatches).toHaveLength(1);
     expect(dispatches[0]?.[0].params).toMatchObject({
@@ -253,6 +256,150 @@ describe("sessions_send directed policy at the tool boundary", () => {
     });
     expect(gatewayMethods().filter((method) => method === "agent.wait")).toHaveLength(1);
   });
+
+  it.each([
+    { name: "long reply", full: `${"a".repeat(5_000)}TAIL`, preview: `${"a".repeat(4_095)}…` },
+    {
+      name: "whitespace-shortened preview",
+      full: `${"a".repeat(4_000)}${" ".repeat(100)}TAIL`,
+      preview: `${"a".repeat(4_000)}…`,
+    },
+    { name: "literal ellipsis", full: "Still thinking…", preview: "Still thinking…" },
+    {
+      name: "display-capped history row",
+      full: "a".repeat(5_000) + "TAIL",
+      preview: "a".repeat(4_095) + "…",
+      capped: true,
+    },
+    {
+      name: "tool-budget overflow",
+      full: `${"a".repeat(20_000)}TAIL`,
+      preview: `${"a".repeat(4_095)}…`,
+    },
+  ])(
+    "returns the accepted run's full $name with explicit tool-budget truncation",
+    async ({ full, preview, capped }) => {
+      const transport = callGateway.getMockImplementation()!;
+      callGateway.mockImplementation(
+        async (request: Parameters<AgentToolGatewayRequestCaller>[0]) => {
+          if (request.method === "agent.wait") {
+            return {
+              runId,
+              status: "ok",
+              terminalReply: { disposition: "visible", text: preview },
+            };
+          }
+          if (request.method === "chat.message.get") {
+            expect(request.params).toMatchObject({ sessionKey: workerKey, messageId: "reply-id" });
+            return { ok: true, message: { role: "assistant", content: full } };
+          }
+          if (request.method === "chat.history") {
+            expect(request.params).toMatchObject({ sessionKey: workerKey, agentId: "worker" });
+            return {
+              messages: [
+                {
+                  role: "assistant",
+                  __openclaw: { runId, ...(capped ? { truncated: true, id: "reply-id" } : {}) },
+                  content: [{ type: "text", text: capped ? "[display capped]" : full }],
+                },
+                {
+                  role: "assistant",
+                  __openclaw: { runId: "later-run" },
+                  content: [{ type: "text", text: full + "LATER_RUN" }],
+                },
+              ],
+            };
+          }
+          return await transport(request);
+        },
+      );
+
+      const result = await send(configFor({ send: ["worker"] }), { agentId: "worker" });
+      expect(result.details).toMatchObject({ status: "ok", reply: full });
+      expect(result.details).not.toHaveProperty("replyTruncated");
+      expect(Value.Check(SessionsSendOutputSchema, result.details)).toBe(true);
+
+      const projected = truncateToolResultMessage(
+        {
+          ...result,
+          role: "toolResult",
+          toolName: "sessions_send",
+          toolCallId: "send-policy",
+          isError: false,
+          timestamp: 1,
+        },
+        16_000,
+      );
+      const text = projected.content.find((block) => block.type === "text")?.text;
+      if (full.length > 16_000) {
+        expect(text).toMatch(/\d+ more characters truncated/);
+        expect(text).toContain("ask the target session for the missing section or a file");
+        expect(text).toContain("do not repeat the original task");
+      } else {
+        expect(projected.content).toEqual(result.content);
+      }
+    },
+  );
+
+  it.each(["missing", "mismatch", "denied"] as const)(
+    "reports explicit truncation for a %s stored reply",
+    async (failure) => {
+      const preview = `${"a".repeat(4_095)}…`;
+      const transport = callGateway.getMockImplementation()!;
+      callGateway.mockImplementation(
+        async (request: Parameters<AgentToolGatewayRequestCaller>[0]) => {
+          if (request.method === "agent.wait") {
+            return {
+              runId,
+              status: "ok",
+              terminalReply: { disposition: "visible", text: preview },
+            };
+          }
+          if (request.method === "chat.history") {
+            if (failure === "denied") {
+              throw new Error("history access denied");
+            }
+            return {
+              messages: [
+                {
+                  role: "assistant",
+                  __openclaw: { runId: failure === "mismatch" ? runId : "other-run" },
+                  content: [{ type: "text", text: "Unrelated answer" }],
+                },
+              ],
+            };
+          }
+          return await transport(request);
+        },
+      );
+      const result = await send(configFor({ send: ["worker"] }), { agentId: "worker" });
+      expect(result.details).toMatchObject({
+        status: "ok",
+        reply: preview,
+        replyTruncated: true,
+        note: expect.stringContaining("missing section or a file"),
+      });
+      expect(Value.Check(SessionsSendOutputSchema, result.details)).toBe(true);
+    },
+  );
+
+  it.each(["silent", "empty"] as const)(
+    "preserves a %s terminal result without history",
+    async (disposition) => {
+      const transport = callGateway.getMockImplementation()!;
+      callGateway.mockImplementation(
+        async (request: Parameters<AgentToolGatewayRequestCaller>[0]) =>
+          request.method === "agent.wait"
+            ? { runId, status: "ok", terminalReply: { disposition } }
+            : await transport(request),
+      );
+      const result = await send(configFor({ send: ["worker"] }), { agentId: "worker" });
+      expect(result.details).toMatchObject({ status: "no_reply" });
+      expect(result.details).not.toHaveProperty("replyTruncated");
+      expect(gatewayMethods()).not.toContain("chat.history");
+      expect(Value.Check(SessionsSendOutputSchema, result.details)).toBe(true);
+    },
+  );
 
   it("denies an unlisted key even with all visibility before dispatch", async () => {
     const result = await send(configFor({ send: ["worker"], visibility: "all" }), {
