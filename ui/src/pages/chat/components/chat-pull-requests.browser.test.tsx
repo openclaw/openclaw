@@ -237,18 +237,12 @@ it.each([
     expect(row.getBoundingClientRect().right).toBeLessThanOrEqual(viewport);
     expect(branchLabel.textContent).toBe(branch.branch);
     expect(row.querySelector(".chat-pr__repo")).toBeNull();
-    expect(
-      Math.abs(branchLabel.getBoundingClientRect().left - diff.getBoundingClientRect().left),
-    ).toBeLessThanOrEqual(1);
-    expect(diff.getBoundingClientRect().top).toBeGreaterThanOrEqual(
-      branchLabel.getBoundingClientRect().bottom,
-    );
-    expect(
-      diff.getBoundingClientRect().top - branchLabel.getBoundingClientRect().bottom,
-    ).toBeLessThanOrEqual(12);
-    expect(diff.getBoundingClientRect().right).toBeLessThanOrEqual(
-      publishButton.getBoundingClientRect().left,
-    );
+    const labelBounds = branchLabel.getBoundingClientRect();
+    const diffBounds = diff.getBoundingClientRect();
+    expect(Math.abs(labelBounds.left - diffBounds.left)).toBeLessThanOrEqual(1);
+    expect(diffBounds.top).toBeGreaterThanOrEqual(labelBounds.bottom);
+    expect(diffBounds.top - labelBounds.bottom).toBeLessThanOrEqual(12);
+    expect(diffBounds.right).toBeLessThanOrEqual(publishButton.getBoundingClientRect().left);
     expect(publishButton.getBoundingClientRect().right).toBeLessThanOrEqual(
       trigger.getBoundingClientRect().left,
     );
@@ -256,8 +250,8 @@ it.each([
     expect(diff.textContent).toContain("−205");
     expect(getComputedStyle(diff).fontWeight).toBe("500");
     expect(getComputedStyle(diff).fontVariantNumeric).toBe("tabular-nums");
-    expect(branchLabel.getBoundingClientRect().width).toBeGreaterThan(40);
-    expect(branchLabel.getBoundingClientRect().height).toBeLessThanOrEqual(
+    expect(labelBounds.width).toBeGreaterThan(40);
+    expect(labelBounds.height).toBeLessThanOrEqual(
       Number.parseFloat(getComputedStyle(branchLabel).lineHeight) + 1,
     );
     expect(getComputedStyle(branchLabel).textOverflow).toBe("clip");
