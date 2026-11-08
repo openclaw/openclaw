@@ -24,6 +24,7 @@ import { registerOpenClawAgentDatabaseAsyncResource } from "../../state/openclaw
 import { executeExistingOpenClawStateRead } from "../../state/openclaw-state-db-readonly.js";
 import { OpenClawStateLeaseError } from "../../state/openclaw-state-lease-error.js";
 import { localWorkspaceProjectionPath } from "./local-workspace-checkout.js";
+import { acknowledgeConflictInStore } from "./local-workspace-conflict-acknowledgement.js";
 import { LocalWorkspaceConflictError } from "./local-workspace-conflict-error.js";
 import { finishLocalWorkspaceHandoff } from "./local-workspace-handoff.js";
 import { assertLocalWorkspaceProjectionOwner } from "./local-workspace-owner-identity.js";
@@ -40,6 +41,10 @@ type LocalWorkspaceCustody = {
   prepareArchive?: (snapshot: string) => Promise<void>;
   canonicalPaths?: () => Promise<Set<string>>;
   synchronizeProjection?: () => Promise<void>;
+  acknowledgeConflict?: (
+    path: string,
+    reviewedGuestVersion?: { sha256?: string; mode?: number },
+  ) => Promise<void>;
   assertCurrent: () => void;
   workerAuthority: WorktreeWorkerAuthority;
   conflicts?: Record<string, unknown>;
@@ -237,6 +242,13 @@ async function settleLocalWorkspace<T>(
       if (!row) {
         return await operation({
           worktreeId: params.worktree.id,
+          acknowledgeConflict: (conflictPath, reviewedGuestVersion) =>
+            acknowledgeConflictInStore(
+              store,
+              conflictPath,
+              reviewedGuestVersion,
+              store.assertCurrent,
+            ),
           assertCurrent: store.assertCurrent,
           workerAuthority: store.workerAuthority,
         });
@@ -308,6 +320,13 @@ async function settleLocalWorkspace<T>(
           worktreeId: worktree.id,
           projectionRevision: current.revision,
           conflicts: checkpoint?.conflicts,
+          acknowledgeConflict: (conflictPath, reviewedGuestVersion) =>
+            acknowledgeConflictInStore(
+              store,
+              conflictPath,
+              reviewedGuestVersion,
+              owner.assertCurrent,
+            ),
           ...(current.baseline_ref
             ? {
                 projectionPath: current.projection_path,

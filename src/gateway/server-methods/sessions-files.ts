@@ -511,6 +511,7 @@ export const sessionsFilesHandlers: GatewayRequestHandlers = {
               const { effectiveExpectedHash, reviewedGuestVersion } =
                 await resolveReconciledExpectedHash({
                   cwd: loaded.root,
+                  fileRoot: loaded.fileRoot,
                   worktreeId,
                   path: params.path,
                   expectedHash: params.expectedHash,
@@ -521,13 +522,20 @@ export const sessionsFilesHandlers: GatewayRequestHandlers = {
               const update = await write(currentAuth, effectiveExpectedHash);
               if (update.status === "updated") {
                 if (update.file.workspacePath) {
-                  await acknowledgeLocalWorkspaceConflict({
-                    cwd: loaded.root,
-                    worktreeId,
-                    path: update.file.workspacePath,
-                    reviewedGuestVersion,
-                    assertCurrent: currentAuth,
-                  });
+                  if (custody?.acknowledgeConflict) {
+                    await custody.acknowledgeConflict(
+                      update.file.workspacePath,
+                      reviewedGuestVersion,
+                    );
+                  } else {
+                    await acknowledgeLocalWorkspaceConflict({
+                      cwd: loaded.root,
+                      worktreeId,
+                      path: update.file.workspacePath,
+                      reviewedGuestVersion,
+                      assertCurrent: currentAuth,
+                    });
+                  }
                   acknowledgedInCustody = true;
                 }
                 await custody?.synchronizeProjection?.();

@@ -442,20 +442,45 @@ it("rejects unreviewed newer guest version written after administrator review", 
   await expectText(projection, "source.txt", "guest v3 unreviewed\n");
 });
 
-it("preserves guest file mode changes without byte changes as conflict divergence (Revision 5 Finding 3)", async () => {
+it("preserves guest file mode changes without byte changes as conflict divergence", async () => {
   const projection = await prepare();
   await writeText(projection, "source.txt", "guest text\n");
   await writeText(canonical, "source.txt", "canonical text\n");
-  await fs.chmod(path.join(projection, "source.txt"), 0o755);
   await expect(synchronize()).rejects.toThrow("conflict");
 
-  const row = await readProjection();
-  expect(row?.checkpoint_json).toBeTruthy();
-  const checkpoint = JSON.parse(row!.checkpoint_json!);
-  expect(checkpoint.conflicts?.["source.txt"]?.mode).toBe(0o755);
+  // Mode-only change made after conflict capture
+  await fs.chmod(path.join(projection, "source.txt"), 0o755);
 
-  const statBefore = await fs.lstat(path.join(projection, "source.txt"));
-  expect(statBefore.mode & 0o777).toBe(0o755);
+  // Attempt resolution that reviewed old mode (0o644)
+  const guestSha = createHash("sha256").update("guest text\n").digest("hex");
+  await writeText(canonical, "source.txt", "merged text\n");
+  await acknowledgeLocalWorkspaceConflict({
+    cwd: canonical,
+    worktreeId: owner.worktree.id,
+    path: "source.txt",
+    reviewedGuestVersion: { sha256: guestSha, mode: 0o644 },
+  });
+
+  // Attempted resolution must be rejected because guest diverged on mode
+  await expect(settleProjection()).rejects.toThrow("conflict");
+
+  // Live guest file mode change and content are strictly preserved
+  const statAfter = await fs.lstat(path.join(projection, "source.txt"));
+  expect(statAfter.mode & 0o777).toBe(0o755);
+  await expectText(projection, "source.txt", "guest text\n");
+
+  // Now, review the actual new mode (0o755) and acknowledge
+  await acknowledgeLocalWorkspaceConflict({
+    cwd: canonical,
+    worktreeId: owner.worktree.id,
+    path: "source.txt",
+    reviewedGuestVersion: { sha256: guestSha, mode: 0o755 },
+  });
+
+  // Settle must now accept the reviewed mode and synchronize merged text into projection
+  await settleProjection();
+  expect((await readProjection())?.pending_ref).toBeNull();
+  await expectText(projection, "source.txt", "merged text\n");
 });
 
 it("refuses acknowledgment after worktree reassignment (Security Finding)", async () => {
