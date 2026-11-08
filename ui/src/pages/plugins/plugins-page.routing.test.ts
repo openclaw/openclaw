@@ -377,10 +377,14 @@ it("keeps the autosaved inspection when an older optional catalog completes", as
   configState.configAutoSaveStatus = "saved";
   runtimeConfig.notify();
   await waitForSolid(() => expect(catalogs).toBe(2));
-  page.routeData = await pages[1].loader(
+  const routeData = await pages[1].loader!(
     context,
     createRouteLoaderOptions(createPluginsRouteLocation("/settings/plugins/workboard")),
   );
+  if ("type" in routeData) {
+    throw new Error("Expected the Plugin Settings route to load");
+  }
+  page.routeData = routeData;
   await page.updateComplete;
   const rows = () =>
     [...page.querySelectorAll(".plugin-capabilities .settings-row__title")].map(
