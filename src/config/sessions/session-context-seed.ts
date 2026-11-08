@@ -1,11 +1,11 @@
 import type { AgentMessage, SessionTreeEntry } from "@openclaw/agent-core";
-import { estimateTokens } from "../../../packages/agent-core/src/harness/compaction/compaction.js";
+import { estimateTokens } from "../../../packages/agent-core/src/harness/compaction/compaction-cut-point.js";
 import {
   iterateSessionContextEntries,
   projectSessionContextMessage,
 } from "../../../packages/agent-core/src/harness/session/session.js";
-import { estimateCompactionHistoryTokens } from "../../agents/sessions/compaction/request-budget.js";
-import { selectBoundedContextStart } from "../../context-engine/bounded-context.js";
+import { estimateCompactionHistoryTokens } from "../../agents/sessions/context-token-pressure.js";
+import { selectBoundedContextStart } from "./session-bounded-context-selection.js";
 import type {
   SessionContextSeedRequest,
   SessionTranscriptContextSnapshot,

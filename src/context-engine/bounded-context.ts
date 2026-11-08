@@ -1,55 +1,8 @@
 import { createHash } from "node:crypto";
-import { estimateTokens } from "../../packages/agent-core/src/harness/compaction/compaction.js";
-import { classifyToolUseResultPairing } from "../../packages/agent-core/src/harness/session/tool-result-pairing.js";
+import { estimateTokens } from "../../packages/agent-core/src/harness/compaction/compaction-cut-point.js";
+import { selectBoundedContextStart } from "../config/sessions/session-bounded-context-selection.js";
 import { resolveExpiredRuntimeContextContentBytes } from "./transcript-byte-limit.js";
 import type { AssembleResult } from "./types.js";
-
-/** Shared cut policy; cold readers measure payloads lazily from newest to oldest. */
-export function selectBoundedContextStart(
-  messages: readonly AssembleResult["messages"][number][],
-  maxBytes: number,
-  tokenBudget: number | undefined,
-  measure: (index: number) => { bytes: number; tokens: number },
-): number {
-  let bytes = 2;
-  let tokens = 0;
-  let cut = messages.length;
-  let exceedsByteBudget = false;
-  for (let index = messages.length - 1; index >= 0; index--) {
-    const size = measure(index);
-    bytes += size.bytes + 1;
-    tokens += size.tokens;
-    if (bytes > maxBytes) {
-      exceedsByteBudget = true;
-      break;
-    }
-    if (tokenBudget !== undefined && tokens > tokenBudget) {
-      continue;
-    }
-    if (index === 0 || messages[index]!.role === "user") {
-      cut = index;
-    }
-  }
-  // Ordinary token pressure still belongs to semantic compaction.
-  if (!exceedsByteBudget) {
-    return 0;
-  }
-  // Pairing uses the complete navigation, including calls outside the measured suffix.
-  for (const frame of classifyToolUseResultPairing(messages)) {
-    if (frame.startIndex >= cut) {
-      break;
-    }
-    for (const occurrence of frame.occurrences) {
-      if (occurrence.sourceResultIndex !== undefined && occurrence.sourceResultIndex >= cut) {
-        cut = occurrence.sourceResultIndex + 1;
-        while (cut < messages.length && messages[cut]?.role !== "user") {
-          cut++;
-        }
-      }
-    }
-  }
-  return cut;
-}
 
 /** Bounds only the model view; required instructions and the pending input stay with their owners. */
 export function boundContextEngineAssembly(

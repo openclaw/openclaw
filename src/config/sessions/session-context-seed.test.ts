@@ -1,6 +1,6 @@
 import { expect, it, vi } from "vitest";
 import { makeUserMessage } from "../../../test/helpers/user-message.js";
-import { estimateCompactionHistoryTokens } from "../../agents/sessions/compaction/request-budget.js";
+import { estimateCompactionHistoryTokens } from "../../agents/sessions/context-token-pressure.js";
 import { withSessionState } from "../../agents/sessions/session-manager-fixtures.test-support.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
 import { toolResult } from "../../agents/sessions/session-message-fixtures.test-support.js";

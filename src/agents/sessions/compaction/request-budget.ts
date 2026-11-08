@@ -3,6 +3,8 @@ import type { AgentMessage } from "../../runtime/index.js";
 import type { PromptOptions } from "../agent-session-types.js";
 import {
   createFreshLlmBoundaryTokenEstimator,
+  estimateCompactionHistoryTokens,
+  estimateVariableRequestTokens,
   type FixedRequestTokenPressure,
 } from "../context-token-pressure.js";
 
@@ -28,11 +30,6 @@ export type CompactionRequestConstraints = Readonly<{
 }>;
 
 const promptRequestBudgets = new WeakMap<PromptOptions, CompactionRequestBudget>();
-
-function estimateVariableRequestTokens(messages: AgentMessage[], prompt: string): number {
-  const estimateTokens = createFreshLlmBoundaryTokenEstimator({});
-  return estimateTokens({ messages, prompt }) - estimateTokens({ messages: [], prompt: "" });
-}
 
 /** Bind prepared foreground facts to the exact owned prompt invocation, outside public options. */
 export function attachPromptCompactionRequestBudget(
@@ -121,30 +118,6 @@ export function withCompactionQueuedContext(
     // Newly queued context is never overlap credit for a recorded user.
     pendingUserTokens: budget.pendingUserTokens ?? budget.pendingTokens - previousQueuedTokens,
   };
-}
-
-export function estimateCompactionHistoryTokens(
-  messages: AgentMessage[],
-  budget?: CompactionRequestBudget,
-): number {
-  // A key identifies overlapping input, not proof that its content is replaced.
-  // A retained carrier can reuse a larger canonical user, so charge the larger representation.
-  const pending =
-    budget?.pendingTokens && budget.pendingUserIdempotencyKey
-      ? messages.findLast(
-          (message) =>
-            message.role === "user" &&
-            "idempotencyKey" in message &&
-            message.idempotencyKey === budget.pendingUserIdempotencyKey,
-        )
-      : undefined;
-  const overlap = pending
-    ? Math.min(
-        estimateCompactionHistoryTokens([pending]),
-        budget?.pendingUserTokens ?? budget?.pendingTokens ?? 0,
-      )
-    : 0;
-  return estimateVariableRequestTokens(messages, "") - overlap;
 }
 
 export function estimateCompactedRequestTokens(
