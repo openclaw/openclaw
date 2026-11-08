@@ -1,5 +1,9 @@
+import { lazyModule } from "solid-js";
 import type { ApplicationContext } from "../app/context.ts";
 import type { AgentSelectionHost } from "./app-sidebar-agent-selection.ts";
+
+const loadSelection = lazyModule(() => import("./app-sidebar-agent-selection.ts"));
+const loadToast = lazyModule(() => import("../lib/toast.ts"));
 
 export function loadSidebarAgentSelection(
   host: AgentSelectionHost,
@@ -24,17 +28,32 @@ export function loadSidebarAgentSelection(
     host.activeRouteId === route &&
     host.getRouteSessionKey() === session &&
     JSON.stringify(host.sessionData.sessionListQuery(agentId)) === query;
-  void import("./app-sidebar-agent-selection.ts")
-    .then(({ switchSidebarChipAgent }) => {
+  const load = async () => {
+    try {
+      const { switchSidebarChipAgent } = await loadSelection();
       if (isCurrent()) {
-        void switchSidebarChipAgent(host, agentId, context, isCurrent, expandAgent, sessionMainKey);
+        await switchSidebarChipAgent(
+          host,
+          agentId,
+          context,
+          isCurrent,
+          expandAgent,
+          sessionMainKey,
+        );
       }
-    })
-    .catch((error: unknown) => {
+    } catch (error) {
       if (isCurrent()) {
-        void import("../lib/toast.ts").then(({ showToast }) => {
+        try {
+          const { showToast } = await loadToast();
+          if (!isCurrent()) {
+            return;
+          }
           showToast({ severity: "error", message: String(error) });
-        });
+        } catch (toastError) {
+          console.error("Unable to report agent selection failure", toastError, error);
+        }
       }
-    });
+    }
+  };
+  void load();
 }
