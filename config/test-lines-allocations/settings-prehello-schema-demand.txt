@@ -1,2 +1,3 @@
 # Preserve pre-hello schema admission and honest pending/error/retry search, including replacement-connection stale-link retirement.
-294
+# 294 added lines plus 12 inherited lines above the b595ee78e01 base ceiling; no spare credit.
+306

@@ -3,7 +3,6 @@ import { render } from "@solidjs/testing-library";
 import { spread } from "@solidjs/web";
 import { createComponent, createRoot, createSignal, flush } from "solid-js";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { AgentsListResult, GatewayAgentRow } from "../api/types.ts";
 import {

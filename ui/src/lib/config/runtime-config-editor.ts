@@ -155,7 +155,7 @@ export function createRuntimeConfigEditor(
       "config",
     );
     if ((state.configSchemaVersion !== null || pendingSchema) && canLoadConfigSchema()) {
-      // Config success clears lastError; load the schema afterward to preserve its failures.
+      // Refresh schema after this config replacement unless an independent read supersedes it.
       void config.then(async () => {
         // A plugin change during a schema read needs one catch-up after that read.
         await pendingSchema;

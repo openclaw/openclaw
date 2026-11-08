@@ -249,12 +249,13 @@ describe("runtime config capability", () => {
         await vi.waitFor(() => expect(state.configLoading).toBe(true));
         configRefresh.resolve();
       }
-      await vi.waitFor(() => {
-        expect(state.configSnapshot?.hash).toBe("hash-current");
-        if (!advertised) {
-          expect(state.lastError).toContain("unknown method: config.schema");
-        }
-      });
+      await vi.waitFor(() => expect(state.configSnapshot?.hash).toBe("hash-current"));
+      if (!advertised) {
+        await expect(runtimeConfig.schemaRead).resolves.toEqual({
+          ok: false,
+          error: "unknown method: config.schema",
+        });
+      }
       expect(state.configForm).toEqual({ endpoint: "current" });
       expect(state.configSchemaVersion).toBe(advertised ? "schema-current" : "schema-initial");
       expect(requestB).not.toHaveBeenCalledWith("config.set", expect.anything());
