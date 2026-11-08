@@ -265,10 +265,8 @@ export class TranscriptInitialRange {
       if (!this.preparingEnd || !this.canPrepare() || !isCurrent()) {
         return;
       }
-      // Native sizes can expand the destination window without moving the current range.
-      if (native) {
-        this.refresh();
-      }
+      // Measuring a shorter tail expands the destination without moving the reader range.
+      this.refresh();
       if (native ? !this.rowsMeasured(this.endIndexes()) : this.measureRows()) {
         this.invalidate();
         // A measurement can mount another row. Let the browser present before

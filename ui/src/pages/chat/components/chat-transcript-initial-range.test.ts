@@ -97,3 +97,72 @@ it("yields between destination-size corrections and waits for a stable end befor
   expect(range.preparingEnd).toBe(false);
   expect(frames.size).toBe(0);
 });
+
+it("mounts the expanded destination after a manual jump measures a shorter tail", async () => {
+  const frames: FrameRequestCallback[] = [];
+  vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => frames.push(callback));
+  vi.stubGlobal("cancelAnimationFrame", () => {});
+  const virtualizer = new Virtualizer<HTMLDivElement, HTMLElement>({
+    count: 20,
+    initialRect: { width: 800, height: 300 },
+    initialOffset: 0,
+    getScrollElement: () => null,
+    estimateSize: (index) => (index === 19 ? 1000 : 100),
+    scrollToFn: () => {},
+    observeElementRect: () => () => {},
+    observeElementOffset: () => () => {},
+  });
+  let mounted: number[] = [];
+  let measured: number[] = [];
+  const range = new TranscriptInitialRange(
+    0,
+    () => virtualizer,
+    defaultRangeExtractor,
+    () => {
+      mounted = virtualizer.getVirtualIndexes();
+    },
+    () => 0,
+    () => true,
+    () => 100,
+    queueMicrotask,
+    () => {
+      measured = [...mounted];
+      if (!mounted.includes(19) || virtualizer.itemSizeCache.has(19)) {
+        return false;
+      }
+      virtualizer.resizeItem(19, 10);
+      return true;
+    },
+    () => false,
+  );
+  onTestFinished(() => range.disconnect());
+  const rows = Array.from({ length: 20 }, (_, index) => ({
+    kind: "item" as const,
+    key: String(index),
+    item: index,
+  }));
+  range.updateRows(rows);
+  range.finish();
+  virtualizer.setOptions({
+    ...virtualizer.options,
+    rangeExtractor: (value) => range.extract(value),
+  });
+  range.presentation(rows);
+  // Establish the current reader range before the offscreen destination is admitted.
+  virtualizer.getVirtualIndexes();
+  let destination: number[] | undefined;
+  range.prepareEnd(
+    () => {
+      destination = [...measured];
+    },
+    () => true,
+    false,
+  );
+  await Promise.resolve();
+  await Promise.resolve();
+  for (const frame of frames.splice(0)) {
+    frame(16);
+  }
+  await Promise.resolve();
+  expect(destination).toEqual(expect.arrayContaining([16, 17, 18, 19]));
+});

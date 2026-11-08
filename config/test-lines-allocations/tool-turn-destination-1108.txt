@@ -1,0 +1,2 @@
+# Regression: manual end preparation admits the expanded window after tail shrink.
+69
