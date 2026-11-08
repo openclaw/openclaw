@@ -29,11 +29,12 @@ export async function settleUnreachableYieldedSubagentRun(params: {
   entry: SubagentRunRecord;
   readScope?: Pick<SweepReadScope, "completionCurrent">;
   complete: CompleteRun;
-  requesterEnded?: boolean;
 }): Promise<boolean> {
   const { runId, entry, readScope, complete } = params;
-  let requesterEnded = params.requesterEnded;
-  if (isYieldedSubagentRun(entry) && entry.waitForMessage && requesterEnded === undefined) {
+  let requesterEnded = false;
+  if (isYieldedSubagentRun(entry) && entry.waitForMessage) {
+    // A pause notice or tool handoff can end a turn while its requester still
+    // owns the task. Only the session owner's committed state ends that wait.
     const requester = await loadSessionEntryByKey(
       entry.requesterSessionKey,
       entry.requesterAgentId,

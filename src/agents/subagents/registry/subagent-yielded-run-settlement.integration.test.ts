@@ -212,7 +212,7 @@ describe("yielded run settlement", () => {
   };
 
   it.each(
-    (["done", "missing", "live", "descendants-lost"] as const).flatMap((requesterState) =>
+    (["done", "missing", "live", "live-notice", "descendants-lost"] as const).flatMap((requesterState) =>
       [false, true].map((expectsCompletionMessage) => ({
         requesterState,
         expectsCompletionMessage,
@@ -221,6 +221,7 @@ describe("yielded run settlement", () => {
   )(
     "settles a restored yield only when its continuation is gone ($requesterState, completion=$expectsCompletionMessage)",
     async ({ requesterState, expectsCompletionMessage }) => {
+      const live = requesterState === "live" || requesterState === "live-notice";
       const runId = "restored-message-wait";
       const childSessionKey = `agent:main:subagent:${runId}`;
       const requesterSessionKey = "agent:main:message-wait-requester";
@@ -256,7 +257,7 @@ describe("yielded run settlement", () => {
         requesterAgentId: "main",
         requesterDisplayKey: "message-wait-requester",
         task: "Wait for a continuation from the requester",
-        cleanup: requesterState === "live" ? "delete" : "keep",
+        cleanup: live ? "delete" : "keep",
         expectsCompletionMessage,
         gatewayContextResolver,
       });
@@ -270,8 +271,7 @@ describe("yielded run settlement", () => {
         hasPendingWork: () => false,
       });
       await mutateSubagentRuns([runId], (rows) => {
-        const current = rows.get(runId)!;
-        const paused = { ...current };
+        const paused = { ...rows.get(runId)! };
         if (requesterState === "descendants-lost") {
           delete paused.waitForMessage;
         }
@@ -281,7 +281,7 @@ describe("yielded run settlement", () => {
       // Hydrate from SQLite under the replacement registry; no old execution or
       // completion authority can be revived to settle this retained wait.
       await resetSubagentRegistryForTests({ persist: false });
-      if (requesterState === "live") {
+      if (live) {
         const events = await vi.importActual<typeof import("../../../infra/agent-events.js")>(
           "../../../infra/agent-events.js",
         );
@@ -298,13 +298,16 @@ describe("yielded run settlement", () => {
         requesterState === "descendants-lost" ? undefined : true,
       );
       expect(subagentRuns.isCompletionAuthorityRetired(restored)).toBe(true);
-      if (requesterState === "live") {
+      if (live) {
         expect(
           emitAgentEventIfCurrent({
-            runId: "rejected-queued-input",
+            runId: "unrelated-requester-turn",
             sessionKey: requesterSessionKey,
             stream: "lifecycle",
-            data: { phase: "error", executionStarted: false, error: "Queued input rejected" },
+            data:
+              requesterState === "live-notice"
+                ? { phase: "end", stopReason: "end_turn" }
+                : { phase: "error", executionStarted: false, error: "Queued input rejected" },
           }),
         ).toBe(true);
         await fixture.settle();
@@ -313,7 +316,7 @@ describe("yielded run settlement", () => {
       const result = persisted(runId);
       const session = loadSessionEntry(child);
       expect(session?.activeWriterRunId).toBe(runId);
-      if (requesterState === "live") {
+      if (live) {
         expect(gatewayRequest).not.toHaveBeenCalled();
         expect(result?.archiveAtMs).toBeUndefined();
         expect(result?.pauseReason).toBe("sessions_yield");

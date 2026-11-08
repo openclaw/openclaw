@@ -12,6 +12,7 @@ import {
   testing,
 } from "../agents/subagents/registry/subagent-registry.test-helpers.js";
 import { readSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
+import { onSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { writeToolCall } from "./gateway-provider-fixture.test-support.js";
 import {
@@ -72,10 +73,6 @@ function toolOutput(body: unknown, name: string): string | undefined {
   return output === undefined ? undefined : promptStrings(output).join("");
 }
 
-/**
- * A root session spawns a middle runner, which spawns its own leaf child and then
- * yields for it with waitFor "message", as pstack route runners did.
- */
 async function startModelServer(requesterCompletes = false) {
   const rootSettlements: string[] = [];
   const middleDone = createDeferred<string>();
@@ -286,11 +283,14 @@ it.each(["before", "after"] as const)(
       if (row?.pauseReason === "sessions_yield") {
         parked.resolve();
       }
-      if (row?.execution.outcome && !row.pauseReason) {
-        closed.resolve();
-      }
     };
     const stop = subscribeSubagentRunChanges("persistence", observeChild);
+    // Terminal session effects publish after the registry row; join their own receipt.
+    const stopClosed = onSessionLifecycleEvent((event) => {
+      if (event.sessionKey === child?.childSessionKey && event.reason === "subagent-status") {
+        closed.resolve();
+      }
+    });
     try {
       await gateway.server.startupSettled;
       const requester = await gateway.client.request<{ runId: string }>("chat.send", {
@@ -342,8 +342,7 @@ it.each(["before", "after"] as const)(
       });
       expect(entry).toBeDefined();
       expect(entry?.lifecycleRunId).toBeUndefined();
-      // The durable writer fence stays until new admission replaces it; prove the
-      // completed wait does not prevent another ordinary turn in this session.
+      // The writer fence remains, but the completed wait must allow a new turn.
       const followup = await gateway.client.request<{ runId: string; status: string }>(
         "sessions.send",
         {
@@ -358,6 +357,7 @@ it.each(["before", "after"] as const)(
       ).resolves.toMatchObject({ status: "ok" });
     } finally {
       stop();
+      stopClosed();
       model.finishRequester();
       model.allowMessageWait();
       await disconnectGatewayClient(gateway.client);
