@@ -4184,6 +4184,20 @@ extension NodeAppModel {
         await self.startVoiceWakeSync(shouldContinue: shouldContinue)
         guard shouldContinue() else { return }
         self.startGatewayHealthMonitor()
+        guard let config = self.activeGatewayConnectConfig,
+              config.ingressAuthorization == nil
+        else { return }
+        do {
+            try await ShareGatewayRelaySettings.prepareDeviceAuth(
+                operatorGateway: self.operatorGateway,
+                url: config.url,
+                gatewayStableID: config.nodeOptions.deviceAuthGatewayID ?? stableID,
+                sessionBox: config.webSocketSessionBox())
+        } catch {
+            guard shouldContinue() else { return }
+            ShareGatewayRelaySettings.saveLastEvent(
+                "Sharing setup incomplete: open OpenClaw to reconnect, then try sharing again.")
+        }
     }
 
     private func admitTalkAfterSessionHydration() {

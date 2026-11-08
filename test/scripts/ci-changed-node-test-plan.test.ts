@@ -314,6 +314,7 @@ it.each(
     ["ui/src/test-helpers/control-ui-e2e.test.ts"],
     ["ui/src/app/gateway-store.test-support.ts"],
     ["ui/src/styles/cursor-policy.browser.test.ts"],
+    ["ui/src/pages/channels/view.detail.browser.test.tsx"],
     ["ui/src/pages/activity/../activity/activity-page.test.ts"],
   ].map((paths) => ({ paths })),
 )("retains UI E2E for protected or unresolved inputs $paths", ({ paths }) => {
@@ -1133,6 +1134,49 @@ describe("CI changed Node test plan", () => {
       ).filter((shard) => shard.targets);
       expect(retained).toHaveLength(4);
       expect(selectedFiles(retained).toSorted()).toEqual(nonMonotoneTargets.toSorted());
+    } finally {
+      routing.mockRestore();
+      timings.mockRestore();
+      tooling.mockRestore();
+    }
+  });
+
+  it("builds only final target rows that still contain a runtime consumer", () => {
+    const targets = [
+      "src/infra/prepared-a.e2e.test.ts",
+      "src/infra/source-a.test.ts",
+      "src/infra/source-b.test.ts",
+      "src/infra/prepared-b.e2e.test.ts",
+    ];
+    const routing = vi.spyOn(testProjects, "buildVitestRunPlans").mockImplementation((files) => [
+      {
+        config: files.some((file) => file.endsWith(".e2e.test.ts"))
+          ? "test/vitest/vitest.e2e.config.ts"
+          : "test/vitest/vitest.unit.config.ts",
+        includePatterns: null,
+        forwardedArgs: [...files],
+        watchMode: false,
+      },
+    ]);
+    const timings = vi
+      .spyOn(testTimings, "readRepoE2eFileTimings")
+      .mockReturnValue(
+        Object.fromEntries(targets.map((file) => [file, file.endsWith(".e2e.test.ts") ? 20 : 80])),
+      );
+    const tooling = vi.spyOn(testTimings, "readToolingFileTimings").mockReturnValue({});
+    try {
+      const rows = expectDefined(
+        createChangedNodeTestShardsWithSmoke(targets, { selectedTestTargets: targets }),
+        "mixed source and runtime plan",
+      ).filter((shard) => shard.targets);
+      expect(rows).toHaveLength(2);
+      expect(selectedFiles(rows).toSorted()).toEqual(targets.toSorted());
+      expect(rows.filter((row) => row.pretestBuildMode)).toHaveLength(1);
+      for (const row of rows) {
+        expect(row.pretestBuildMode).toBe(
+          row.targets!.some((file) => file.endsWith(".e2e.test.ts")) ? "private-qa" : undefined,
+        );
+      }
     } finally {
       routing.mockRestore();
       timings.mockRestore();

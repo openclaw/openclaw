@@ -41,17 +41,17 @@ metadata: |
   }
 ---
 # Skill
-"""
+""".replace("\n---\n", "\n--- \t\n")
         with patch.object(quick_validate, "yaml", None):
             cases = [
                 ("Works without pyyaml\n  Use for notes.", True),
                 *[
-                    (f"{header}\n  Summarize meetings.\n  Use for notes.", True)
+                    (f"{header}\n  ---\n  Summarize meetings.\n  Use for notes.", True)
                     for header in (">", ">-", ">+", ">2-", ">-2", "> # notes", "|-", "|2+")
                 ],
                 ("'>'", False),
                 ('">-"', False),
-                (">-\n  Summarize <meetings>.", False),
+                (">-\n  Summarize\n  ---\n  <meetings>.", False),
                 (">-\n  Summarize meetings.\n  # <notes>", False),
                 (">-", False),
                 ("|-", False),
@@ -92,7 +92,7 @@ metadata: |
             ("comment-skill", r'"Summarize \" # <reports>" # notes', False),
             ("comment-skill", "'Summarize user''s # <reports>' # notes", False),
             ("comment-skill", "Summarize#<reports>", False),
-            ("comment-skill", "|\n  Summarize # <reports>", False),
+            ("comment-skill", "|\n  Summarize\n  ---\n  reports # <reports>", False),
             ("comment-skill", "Summarize\n  reports # <notes>", True),
             ("comment-skill", "\n  Summarize reports # <notes>", True),
             ("comment-skill", "Summarize\n  reports # " + "x" * 1024, True),
