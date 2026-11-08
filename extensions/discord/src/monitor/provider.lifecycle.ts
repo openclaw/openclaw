@@ -90,8 +90,25 @@ export async function runDiscordGatewayLifecycle(params: {
   const gatewayEmitter = params.gatewaySupervisor.emitter;
   const loggingRuntime = params.runtime;
   let lifecycleStopping = false;
+  let hasConnected = gatewayReadyAtLifecycleStart;
+  let reconnectStartedAt: number | undefined;
 
   const pushStatus = (patch: Parameters<DiscordMonitorStatusSink>[0]) => {
+    if (patch.connected === true) {
+      if (reconnectStartedAt !== undefined) {
+        loggingRuntime.log?.("discord gateway: connection recovered");
+      }
+      hasConnected = true;
+      reconnectStartedAt = undefined;
+    } else if (patch.connected === false && patch.lifecycle === "recovering") {
+      // One outage owns one deadline; socket replacement and retries cannot renew it.
+      patch.lastDisconnect = hasConnected
+        ? {
+            ...(typeof patch.lastDisconnect === "object" ? patch.lastDisconnect : {}),
+            at: (reconnectStartedAt ??= Date.now()),
+          }
+        : null;
+    }
     params.statusSink?.(patch);
   };
   const gatewayReadyTimeoutMs =
@@ -306,8 +323,16 @@ export async function runDiscordGatewayLifecycle(params: {
       );
       return "continue";
     }
-    if (event.type === "disallowed-intents") {
+    if (event.shouldStopLifecycle) {
       lifecycleStopping = true;
+      pushStatus({
+        connected: false,
+        lifecycle: "blocked",
+        terminalDisconnect: true,
+        lastError: event.message,
+      });
+    }
+    if (event.type === "disallowed-intents") {
       sawDisallowedIntents = true;
       params.runtime.error?.(
         danger(
@@ -315,9 +340,6 @@ export async function runDiscordGatewayLifecycle(params: {
         ),
       );
       return "stop";
-    }
-    if (event.shouldStopLifecycle) {
-      lifecycleStopping = true;
     }
     params.runtime.error?.(
       danger(
