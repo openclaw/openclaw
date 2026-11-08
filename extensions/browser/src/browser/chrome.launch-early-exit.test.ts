@@ -207,7 +207,9 @@ describe("managed Chrome early child exit", () => {
   it("retries command readiness after late HTTP discovery", async () => {
     const startedAt = performance.now();
     diagnoseMock.mockImplementation(async () => {
-      await new Promise((resolve) => setTimeout(resolve, 800));
+      await new Promise((resolve) => {
+        setTimeout(resolve, 800);
+      });
       return performance.now() - startedAt >= resolved.localLaunchTimeoutMs + 1_000
         ? { ok: true, cdpUrl: profile.cdpUrl, ...readyVersion, elapsedMs: 800 }
         : {

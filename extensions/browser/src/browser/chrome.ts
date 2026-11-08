@@ -898,7 +898,7 @@ async function launchOpenClawChromeLocked(
       }
       signal?.throwIfAborted();
       launchHttpReachable ||=
-        !!finalDiagnostic &&
+        finalDiagnostic !== null &&
         (finalDiagnostic.ok ||
           !["ssrf_blocked", "http_unreachable", "http_status_failed", "invalid_json"].includes(
             finalDiagnostic.code,
