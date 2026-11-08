@@ -180,7 +180,7 @@ it("waits for a deferred destination commit and resumes it after parking", () =>
     renderPending = true;
   };
   const afterCommit: Array<() => void> = [];
-  const heights = Array.from({ length: 20 }, (_, index) => (index === 19 ? 1000 : 100));
+  const heights: number[] = Array.from({ length: 20 }, (_, index) => (index === 19 ? 1000 : 100));
   const virtualizer = new Virtualizer<HTMLDivElement, HTMLElement>({
     count: heights.length,
     initialRect: { width: 800, height: 300 },
