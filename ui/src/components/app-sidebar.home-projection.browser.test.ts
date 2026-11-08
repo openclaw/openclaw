@@ -1,4 +1,4 @@
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import { patchSettings } from "../app/settings.ts";
 import {
   mountRoster,
@@ -67,6 +67,9 @@ for (const mode of ["chip", "roster"] as const) {
       .click();
     await settleRoster(sidebar);
     sidebar.querySelector<HTMLElement>('.sidebar-agent-menu [data-value="agent:recent"]')!.click();
+    await vi.waitFor(() =>
+      expect(context.agentSelection.state).toEqual({ selectedId: "recent", scopeId: "recent" }),
+    );
     await settleRoster(sidebar);
     expect(context.agentSelection.state).toEqual({ selectedId: "recent", scopeId: "recent" });
     expect(sidebar.querySelector(".sidebar-agent-card__main")?.textContent).toContain("Scout");
@@ -79,6 +82,9 @@ it("keeps agent switching available without a Home session", async () => {
   sidebar.querySelector<HTMLButtonElement>(".sidebar-agent-card__main")!.click();
   await settleRoster(sidebar);
   sidebar.querySelector<HTMLElement>('.sidebar-agent-menu [data-value="agent:recent"]')!.click();
+  await vi.waitFor(() =>
+    expect(context.agentSelection.state).toEqual({ selectedId: "recent", scopeId: "recent" }),
+  );
   await settleRoster(sidebar);
   expect(context.agentSelection.state).toEqual({ selectedId: "recent", scopeId: "recent" });
   expect(sidebar.querySelector(".sidebar-agent-card__main")?.textContent).toContain("Scout");

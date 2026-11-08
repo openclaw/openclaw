@@ -1,3 +1,2 @@
-# Integrated sidebar group creation and selected-agent regressions: retained folder
-# preferences, bounded authorized navigation, stale responses and owner switching.
-263
+# Integrated sidebar group creation, owner visibility and retained folder preferences.
+42

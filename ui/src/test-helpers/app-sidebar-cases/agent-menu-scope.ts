@@ -120,6 +120,10 @@ describe("AppSidebar agent menu scope", () => {
         "scope:all",
       );
       await dom.click(menu.query<HTMLElement>(`[data-value="agent:${agentId}"]`)!);
+      await vi.waitFor(() =>
+        expect(context.agentSelection.state).toEqual({ selectedId: agentId, scopeId: agentId }),
+      );
+      await sidebar.updateComplete;
       expect(sidebar.sidebarAgentsMode).toBe("chip");
       expect(sidebar.activeRouteId).toBe("skills");
       expect(context.agentSelection.state).toEqual({ selectedId: agentId, scopeId: agentId });
