@@ -2176,15 +2176,28 @@ export function createEnginePageScenarios(
         prepare: boot,
         run: async (page) => {
           const selector = 'input[name="skills-filter"]:enabled';
-          const timing = await measureVisit(page, id, {
+          assert(definition.rows, "Skills settings must define full inventory readiness");
+          const timingRead = measureVisit(page, id, {
             ...definition,
             ready: selector,
             rows: undefined,
-            completion: undefined,
+            completion: [definition.rows, ...(definition.completion ?? [])],
           });
+          void timingRead.catch(() => undefined);
+          const readyAt = await page.waitForFunction(
+            (selector) => {
+              const input = document.querySelector<HTMLInputElement>(selector);
+              return input?.checkVisibility() && !input.disabled ? performance.now() : false;
+            },
+            selector,
+            { polling: "raf" },
+          );
+          const inputReadyAtMs = await readyAt.jsonValue();
+          await readyAt.dispose();
+          assert(typeof inputReadyAtMs === "number");
           const search = page.locator(selector);
-          await search.fill("catalog input probe");
-          assert.equal(await search.inputValue(), "catalog input probe");
+          await search.fill("Data skill");
+          assert.equal(await search.inputValue(), "Data skill");
           const input = await page.evaluate(() => {
             const reads: { pendingMethods: string[] } = Reflect.get(window, "__coldLoad").read();
             return {
@@ -2200,15 +2213,19 @@ export function createEnginePageScenarios(
               ),
             };
           });
-          assert.equal(input.query, "catalog input probe");
+          assert.equal(input.query, "Data skill");
           if (input.inventoryPending) {
             assert.equal(input.visiblyBusy, true);
             assert.equal(input.loadingMessage, true);
           }
+          const timing = await timingRead;
+          assert.equal(await search.inputValue(), "Data skill");
           return {
             visitStartedAtMs: timing.startedAtMs,
-            visitReadyMs: timing.readyMs,
-            visitReadyAtMs: timing.readyAtMs,
+            visitReadyMs: inputReadyAtMs - timing.startedAtMs,
+            visitReadyAtMs: inputReadyAtMs,
+            inputFrameReadyMs: timing.readyMs,
+            contentReadyMs: timing.contentReadyMs,
             inputAcceptedMs: input.acceptedAtMs - timing.startedAtMs,
             inventoryPendingAtInput: input.inventoryPending,
             inventoryBusyAtInput: input.visiblyBusy,
