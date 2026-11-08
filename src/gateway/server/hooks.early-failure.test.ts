@@ -20,6 +20,8 @@ import {
 import { parseLogLine } from "../../logging/parse-log-line.js";
 import { loggingState } from "../../logging/state.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
+import { getPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { enqueueCommandInLane, getCommandLaneSnapshot } from "../../process/command-queue.js";
 import { resetCommandQueueStateForTest } from "../../process/command-queue.test-support.js";
 import {
@@ -195,6 +197,39 @@ describe("gateway hook early-failure recovery", () => {
 
   afterAll(async () => {
     await logPathTracker.cleanup();
+  });
+
+  it("resolves the live transport registry when each queued hook starts", async () => {
+    mocks.getRuntimeConfig.mockReturnValue(createConfig(false));
+    let currentRegistry = createEmptyPluginRegistry();
+    const firstRegistry = currentRegistry;
+    const releaseFirst = createDeferred<void>();
+    const seen: unknown[] = [];
+    mocks.runCronIsolatedAgentTurn.mockImplementation(async (params) => {
+      seen.push(getPluginRuntimeGatewayRequestScope()?.pluginRegistry);
+      params.onExecutionStarted?.();
+      if (seen.length === 1) {
+        await releaseFirst.promise;
+      }
+      return { status: "ok" as const, summary: "done" };
+    });
+    const dispatcher = createGatewayHookDispatcher({
+      deps: {} as never,
+      logHooks: { warn: vi.fn(), info: vi.fn() } as never,
+      resolvePluginRegistry: () => currentRegistry,
+    });
+    const dispatch = () => dispatcher.dispatchHookAgentTurn(pluginHookTurn, "fixture");
+    try {
+      const first = await dispatch();
+      expect(first.ok).toBe(true);
+      const queued = dispatch();
+      currentRegistry = createEmptyPluginRegistry();
+      releaseFirst.resolve();
+      expect((await queued).ok).toBe(true);
+      expect(seen).toEqual([firstRegistry, currentRegistry]);
+    } finally {
+      releaseFirst.resolve();
+    }
   });
 
   it.each([
