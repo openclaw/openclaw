@@ -570,16 +570,17 @@ const unrelatedArgs = [
     expect(compiled).not.toContain("prepareTtsRequest as");
   });
 
-  it("models telemetry only through live source imports", () => {
+  it("models named consumers only through live source imports", () => {
     const compile = createDynamicConsumerCompiler();
     for (const [relative, name] of [
       ["scripts/perf/transcript-broadcast-measure.ts", "installTeamStressTelemetryIpc"],
       ["test/scripts/team-shape-stress.test.ts", "startTeamStressTelemetry"],
+      ["scripts/perf/update-doctor-generation-measure.ts", "readUpdatePhysicalDatabaseGenerations"],
     ] as const) {
       const file = path.resolve(relative);
       const source = fs.readFileSync(file, "utf8");
       expect(compile()).toContain(`${name} as __dynamic`);
-      const removed = replaceFixture(source, name, "");
+      const removed = replaceFixture(source, name, "otherConsumer");
       expect(compile(new Map([[file, removed]]))).not.toContain(`${name} as __dynamic`);
     }
   });
@@ -696,6 +697,7 @@ function other(lineageCompletion: typeof lineageWriter) {
       "publishDependencyCache",
       "privateDependencyDonor",
       "withDependencyCacheLock",
+      "recoverDependencyCache",
     ];
     const compileWithSources = createDynamicConsumerCompiler();
     const compile = (source: string) => {
@@ -724,7 +726,31 @@ function other(lineageCompletion: typeof lineageWriter) {
         '  # node --input-type=module - "$1"',
       ),
     ]) {
-      expect(compile(disconnected)).toEqual([]);
+      expect(compile(disconnected)).toEqual(["recoverDependencyCache"]);
+    }
+    for (const disconnected of [
+      replaceFixture(wrapper, '"$script_parent_dir/pr-lib/cache-lifetime.mjs"', '""'),
+      replaceFixture(wrapper, "pathToFileURL(process.argv[2])", "pathToFileURL(process.argv[3])"),
+      replaceFixture(
+        wrapper,
+        "const { recoverDependencyCache }",
+        "// const { recoverDependencyCache }",
+      ),
+      replaceFixture(
+        wrapper,
+        '  node --input-type=module - "$script_parent_dir/pr-lib/cache-lifetime.mjs"',
+        '  # node --input-type=module - "$script_parent_dir/pr-lib/cache-lifetime.mjs"',
+      ),
+      replaceFixture(
+        wrapper,
+        'import { pathToFileURL } from "node:url";',
+        '// import { pathToFileURL } from "node:url";',
+      ),
+      replaceFixture(wrapper, "<<'EOF_CACHE_RECOVERY'", "<<'EOF_OTHER'"),
+    ]) {
+      expect(compile(disconnected)).toEqual(
+        expected.filter((name) => name !== "recoverDependencyCache"),
+      );
     }
   });
 

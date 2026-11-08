@@ -282,7 +282,7 @@ export async function inspectPreparedDoctorRehearsal(params: {
     import("../config/paths.js"),
   ]);
   const { preparePluginDoctorMigrationBackupResources } =
-    await import("../plugins/doctor-contract-registry.js");
+    await import("../plugins/doctor-contract-preparation.js");
   const { isSqliteSnapshotFile } = await import("../infra/sqlite-file-header.js");
   const shared = paths.resolveOpenClawStateSqlitePath(env);
   if (!inspectPath(shared)?.isFile()) {

@@ -23,7 +23,7 @@ CACHE_DIR="$ROOT_DIR/.cache/openclaw-bun/$TAG"
 mkdir -p "$CACHE_DIR"
 download() {
   curl --fail --location --proto '=https' --proto-redir '=https' --no-progress-meter --show-error \
-    --connect-timeout 15 --max-time 300 --retry 3 --retry-delay 2 \
+    --connect-timeout 15 --max-time 300 --retry 7 --retry-max-time 300 \
     --output "$WORK/$1" "https://github.com/openclaw/bun/releases/download/$TAG/$1"
 }
 download SHA256SUMS

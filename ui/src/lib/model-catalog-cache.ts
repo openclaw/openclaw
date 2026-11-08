@@ -82,6 +82,7 @@ export type ModelCatalogEntry = {
 
 // Application lifecycle invalidation must not eagerly load catalog readers or presentation.
 export const modelCatalogCache = new WeakMap<ModelCatalogClient, ModelCatalogCache>();
+
 export const modelCatalogObservers = new WeakMap<
   ModelCatalogClient,
   Set<(update: ModelCatalogCacheUpdate) => void>
@@ -377,4 +378,27 @@ export function invalidateModelCatalogCache(
     matches,
   });
   return matches;
+}
+
+export function subscribeModelCatalogCache(
+  client: ModelCatalogClient,
+  listener: (update: ModelCatalogCacheUpdate) => void,
+  readScope?: () => ModelCatalogReadScope,
+): () => void {
+  const scopedListener = readScope
+    ? (update: ModelCatalogCacheUpdate) => {
+        const scope = modelCatalogParams(readScope());
+        if (update.matches(scope, modelCatalogKey(scope))) {
+          listener(update);
+        }
+      }
+    : listener;
+  const listeners = modelCatalogObservers.get(client) ?? new Set();
+  modelCatalogObservers.set(client, listeners);
+  listeners.add(scopedListener);
+  return () => {
+    if (listeners.delete(scopedListener) && listeners.size === 0) {
+      modelCatalogObservers.delete(client);
+    }
+  };
 }

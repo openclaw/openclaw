@@ -27,6 +27,9 @@ export function assertStatusUsageAgentScope(opts: StatusJsonCommandOptions): voi
   if (opts.agent !== undefined && opts.usage !== true) {
     throw new Error("--agent is only valid with --usage");
   }
+  if (opts.agent !== undefined && !opts.agent.trim()) {
+    throw new Error("--agent must not be blank");
+  }
 }
 
 export async function runStatusJsonCommand(params: {

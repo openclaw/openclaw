@@ -215,7 +215,6 @@
   padding: 6px 6px 14px;
   overscroll-behavior: contain;
   scroll-padding-block: 6px 18px;
-  scrollbar-width: thin;
   touch-action: pan-y;
 }
 
@@ -224,7 +223,8 @@
   box-shadow: inset 0 0 0 2px var(--accent);
 }
 
-.sidebar-issues-panel__empty {
+.sidebar-issues-panel__empty,
+.sidebar-issues-panel__loading {
   display: flex;
   min-height: 0;
   flex: 1 1 auto;
@@ -544,9 +544,7 @@ footer.sidebar-issues-panel__mentions-note {
   cursor: var(--cursor-action);
   opacity: 0;
   pointer-events: none;
-  transition:
-    background var(--duration-fast) ease,
-    color var(--duration-fast) ease;
+  transition: color var(--duration-fast) ease;
 }
 
 .sidebar-issues-panel__dismiss svg {
@@ -577,7 +575,6 @@ footer.sidebar-issues-panel__mentions-note {
 
 @media (hover: hover) {
   .sidebar-issues-panel__dismiss:hover {
-    background: color-mix(in srgb, var(--text) 8%, transparent);
     color: var(--text-strong);
   }
 }

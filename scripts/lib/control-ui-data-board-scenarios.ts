@@ -372,6 +372,14 @@ async function galleryPresentationCounts(page: Page) {
       titles: host.querySelectorAll("[data-dashboard-session] h2").length,
       representedCards: represented ? Number(represented.getAttribute("aria-setsize")) : cards,
       windowed: represented !== null && cards < Number(represented.getAttribute("aria-setsize")),
+      chatBootStylesheets: performance
+        .getEntriesByType("resource")
+        .filter((entry) => /\/control-ui-boot-chat-styles-[^/]+\.css(?:\?|$)/u.test(entry.name))
+        .length,
+      activeChatBootStylesheets: Array.from(document.styleSheets).filter(
+        (sheet) =>
+          sheet.href && /\/control-ui-boot-chat-styles-[^/]+\.css(?:\?|$)/u.test(sheet.href),
+      ).length,
     };
   });
 }
@@ -965,7 +973,17 @@ export const dataBoardScenarios: readonly InteractionScenario[] = [
     rowSelector: "[data-dashboard-session]",
     prepare: prepareGallery,
     run: async (page) => {
-      await page.locator(`${galleryHost} select`).last().selectOption("title");
+      const filter = page.locator(`${galleryHost} .dashboards-filter__trigger`);
+      if (await filter.isVisible()) {
+        await filter.click();
+        await page
+          .locator("#dashboards-filter-popover")
+          .getByRole("radio", { name: "Title A–Z", exact: true })
+          .click();
+        await page.keyboard.press("Escape");
+      } else {
+        await page.locator(`${galleryHost} select`).last().selectOption("title");
+      }
       await page.waitForFunction(
         () =>
           document

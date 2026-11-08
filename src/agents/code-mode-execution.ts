@@ -2,7 +2,7 @@ import { setImmediate as yieldToScheduler } from "node:timers/promises";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { codeModeGcAttribution, logCodeModeFailure } from "../logging/code-mode-diagnostic.js";
 import type { AgentRunApprovalWait } from "./agent-run-approval-wait.js";
-import { raceWithAbortSignal } from "./agent-tools.abort.js";
+import { raceWithAbortSignal, readToolTurnHandoff } from "./agent-tools.abort.js";
 import {
   codeModeReplayIdForToolCall,
   isCodeModeSwarmAvailable,
@@ -23,7 +23,7 @@ import type {
   CodeModeExecutorInlineHost,
 } from "./code-mode-executor-types.js";
 import { runCodeModeExecutor } from "./code-mode-executor.js";
-import { CodeModeOutputState } from "./code-mode-json.js";
+import { captureCodeModeValue, CodeModeOutputState } from "./code-mode-json.js";
 import {
   createCodeModeNamespaceRuntime,
   type CodeModeNamespaceRuntime,
@@ -141,6 +141,7 @@ export async function runCodeModeExec(params: {
     output,
     budget,
     parentToolCallId: params.toolCallId,
+    toolCallId: params.toolCallId,
     codeModeReplayId,
     ctx: params.ctx,
     config,
@@ -186,6 +187,10 @@ export async function runCodeModeExec(params: {
       result,
     });
   } catch (error) {
+    const handoff = takeToolTurnHandoffResult(context);
+    if (handoff) {
+      return handoff;
+    }
     const code = signal.aborted ? ("aborted" as const) : codeModeFailureCode(error);
     const failurePhase = code === "invalid_input" ? "input" : "host";
     inlineHost.onFailure?.(error, failurePhase);
@@ -214,6 +219,7 @@ type CodeModeSettlementContext = {
   result: CodeModeWorkerResult;
   output: CodeModeOutputState;
   parentToolCallId: string;
+  toolCallId: string;
   codeModeReplayId: string;
   ctx: ToolSearchToolContext;
   config: CodeModeConfig;
@@ -228,6 +234,26 @@ type CodeModeSettlementContext = {
   signal: AbortSignal;
   onUpdate?: AgentToolUpdateCallback;
 };
+
+function takeToolTurnHandoffResult(
+  params: Pick<
+    CodeModeSettlementContext,
+    "output" | "runtime" | "signal" | "parentToolCallId" | "toolCallId" | "config"
+  >,
+) {
+  const handoff = readToolTurnHandoff(params.signal.reason);
+  if (
+    !handoff ||
+    (handoff.toolCallId !== params.parentToolCallId && handoff.toolCallId !== params.toolCallId)
+  ) {
+    return undefined;
+  }
+  return params.output.takeResult(
+    { status: "completed" as const, telemetry: telemetry(params.runtime) },
+    { value: captureCodeModeValue(handoff.receipt, params.config.maxOutputBytes) },
+    params.runtime.hasNetworkContent(),
+  );
+}
 
 function dispatchCodeModeRequests(
   params: Omit<CodeModeSettlementContext, "result">,
@@ -403,7 +429,7 @@ async function settleCodeModeResult(params: CodeModeSettlementContext) {
   // produced them. The deadline is also the only bound on sequential drain
   // rounds; maxPendingToolCalls stays a per-batch concurrency cap enforced in
   // the worker.
-  const abortedResult = () => codeModeAbortedResult(params);
+  const abortedResult = () => takeToolTurnHandoffResult(params) ?? codeModeAbortedResult(params);
   const parkSnapshot = (waiting: Extract<CodeModeWorkerResult, { status: "waiting" }>) =>
     storeSuspendedRun({
       owner: params.owner,
@@ -547,6 +573,10 @@ async function settleCodeModeResult(params: CodeModeSettlementContext) {
   // Defensive cleanup covers aborts or terminal failures; successful runs have
   // already drained every dispatched call before releasing their snapshot.
   cancelPendingBridgeStates(pending);
+  const handoff = takeToolTurnHandoffResult(params);
+  if (handoff) {
+    return handoff;
+  }
   const storeWarning =
     result.status === "completed"
       ? await commitCodeModeSessionStore(params.owner.sessionStore)
@@ -604,6 +634,7 @@ export async function runWait(params: {
     output: state.output,
     budget,
     parentToolCallId: state.parentToolCallId,
+    toolCallId: params.toolCallId,
     codeModeReplayId: state.replayId,
     ctx: state.ctx,
     config: state.config,
@@ -631,7 +662,12 @@ export async function runWait(params: {
       : undefined;
     if (!ready || resumeBudgetMs === undefined) {
       if (signal.aborted) {
-        return { ...codeModeAbortedResult(state), failurePhase: "bridge" as const };
+        return (
+          takeToolTurnHandoffResult(context) ?? {
+            ...codeModeAbortedResult(state),
+            failurePhase: "bridge" as const,
+          }
+        );
       }
       return storeSuspendedRun(state);
     }
@@ -655,6 +691,10 @@ export async function runWait(params: {
       reservedActiveRunSlot: true,
     });
   } catch (error) {
+    const handoff = takeToolTurnHandoffResult(context);
+    if (handoff) {
+      return handoff;
+    }
     const aborted = signal.aborted;
     const code = aborted ? ("aborted" as const) : codeModeFailureCode(error);
     const failurePhase = code === "invalid_input" ? "input" : "host";

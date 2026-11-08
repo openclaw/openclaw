@@ -146,20 +146,6 @@ function encodeFtsChunk(rows: readonly TranscriptIndexEntry[]): EncodedTranscrip
   return { rows: metadata, textBytes };
 }
 
-function takeFtsChunkEnd(rows: readonly TranscriptIndexEntry[], start: number): number {
-  let bytes = 0;
-  let end = start;
-  while (end < rows.length && end - start < FTS_ROWS_PER_CHUNK) {
-    const rowBytes = Buffer.byteLength(rows[end]?.text ?? "", "utf8");
-    if (end > start && bytes + rowBytes > FTS_TEXT_BYTES_PER_CHUNK) {
-      break;
-    }
-    bytes += rowBytes;
-    end += 1;
-  }
-  return end;
-}
-
 async function streamPreparedProjection(
   plan: PreparedSessionTranscriptProjection,
   port: MessagePort,
@@ -181,16 +167,34 @@ async function streamPreparedProjection(
       return false;
     }
   }
-  for (let offset = 0; offset < ftsRows.length;) {
-    const end = takeFtsChunkEnd(ftsRows, offset);
-    const chunk = encodeFtsChunk(ftsRows.slice(offset, end));
+  let rows: TranscriptIndexEntry[] = [];
+  let bytes = 0;
+  const flush = async () => {
+    const chunk = encodeFtsChunk(rows);
+    rows = [];
+    bytes = 0;
     const reply = await postAndWait(port, { type: "fts-chunk", chunk, sessionId: plan.sessionId }, [
       chunk.textBytes.buffer,
     ]);
-    if (!reply.accepted) {
+    return reply.accepted;
+  };
+  for (const row of ftsRows) {
+    const rowBytes = Buffer.byteLength(row.text, "utf8");
+    if (rows.length > 0 && bytes + rowBytes > FTS_TEXT_BYTES_PER_CHUNK && !(await flush())) {
       return false;
     }
-    offset = end;
+    rows.push(row);
+    bytes += rowBytes;
+    // An oversized row stays whole, but never shares its transport batch.
+    if (
+      (rows.length >= FTS_ROWS_PER_CHUNK || bytes >= FTS_TEXT_BYTES_PER_CHUNK) &&
+      !(await flush())
+    ) {
+      return false;
+    }
+  }
+  if (rows.length > 0 && !(await flush())) {
+    return false;
   }
   return (
     (await postAndWait(port, { type: "plan-finish", sessionId: plan.sessionId })).yield === true

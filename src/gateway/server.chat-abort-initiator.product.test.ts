@@ -434,7 +434,7 @@ it(
       );
       setUserProfileRole(aliceId, "none");
       releaseAbort.resolve();
-      await expect(denied).rejects.toMatchObject({ code: "FORBIDDEN" });
+      await expect(denied).rejects.toThrow("gateway closed (4001): gateway policy changed");
       expect(await wait(terminal(revokeRun.runId))).toBe("aborted");
       const revocationEffects = cancellation.mock.calls
         .filter(([, params]) => params.runId === revokeRun.runId)

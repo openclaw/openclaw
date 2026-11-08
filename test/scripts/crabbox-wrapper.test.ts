@@ -216,7 +216,7 @@ async function main() {
     if (process.env.OPENCLAW_FAKE_CRABBOX_SELECTION_UNKNOWN_PATH) topFiles.push({ path: "not-a-source-candidate.txt" });
     process.stdout.write(JSON.stringify({ candidate: { files: topFiles.length + Number(process.env.OPENCLAW_FAKE_CRABBOX_SELECTION_COUNT_DELTA || "0") }, topFiles })); return;
   }
-  if (args[0] === "--version") { console.log(process.env.OPENCLAW_FAKE_CRABBOX_VERSION || "crabbox 0.81.0"); return; }
+  if (args[0] === "--version") { console.log(process.env.OPENCLAW_FAKE_CRABBOX_VERSION || "crabbox 0.82.0"); return; }
   if (args[0] === "run" && args[1] === "--help") { process.stdout.write(helpText); return; }
   if (args[0] === "warmup" && args[1] === "--help") { process.stdout.write(${JSON.stringify(`${helpText}${fakeWarmupValueOptionHelp}`)}); return; }
   if (args[0] === "actions" && args[1] === "hydrate" && args[2] === "--help") { process.stdout.write(${JSON.stringify(`${helpText}${fakeHydrateValueOptionHelp}`)}); return; }
@@ -325,7 +325,7 @@ main().catch((error) => { process.stderr.write(String(error?.stack || error) + "
         '  if [ -n "${OPENCLAW_FAKE_CRABBOX_INVOCATION_LOG:-}" ]; then',
         `    printf '%s\\n' '["--version"]' >> "$OPENCLAW_FAKE_CRABBOX_INVOCATION_LOG"`,
         "  fi",
-        `  printf '%s\\n' "\${OPENCLAW_FAKE_CRABBOX_VERSION:-crabbox 0.81.0}"`,
+        `  printf '%s\\n' "\${OPENCLAW_FAKE_CRABBOX_VERSION:-crabbox 0.82.0}"`,
         "  exit 0",
         "fi",
         'if [ "$#" -eq 2 ] && [ "$1" = "run" ] && [ "$2" = "--help" ]; then',
@@ -378,7 +378,7 @@ function makeSlowHelpCrabbox(helpText: string, delayMs: number): string {
     String.raw`
 const args = process.argv.slice(2);
 if (args[0] === "--version") {
-  console.log("crabbox 0.81.0");
+  console.log("crabbox 0.82.0");
 } else if (args[0] === "run" && args[1] === "--help") {
   setTimeout(() => { process.stderr.write(${JSON.stringify(runHelpText)}); process.exit(0); }, ${delayMs});
 }`,
@@ -1910,7 +1910,7 @@ describe("scripts/crabbox-wrapper", () => {
       const stateDir = path.join(root, "state");
       const platform = process.platform;
       const arch = process.arch === "x64" ? "amd64" : process.arch;
-      const managed = path.join(stateDir, "tools/crabbox/0.81.0", `${platform}-${arch}`, "crabbox");
+      const managed = path.join(stateDir, "tools/crabbox/0.82.0", `${platform}-${arch}`, "crabbox");
       mkdirSync(path.dirname(managed), { recursive: true });
       // Keep candidate and managed commands distinguishable at the executable boundary.
       const fake = path.join(makeFakeCrabbox(defaultProviderHelp), "crabbox-node");
@@ -1936,7 +1936,7 @@ describe("scripts/crabbox-wrapper", () => {
       };
       const result = runDefaultWrapper(runArgs(provider, "--", "true"), options);
       expect(result.status, result.stderr).toBe(0);
-      expect(result.stderr).toContain(`version=0.81.0 provider=${provider}`);
+      expect(result.stderr).toContain(`version=0.82.0 provider=${provider}`);
       expect(readInvocations(candidateLog)).toEqual([["--version"]]);
       const calls = readInvocations(log);
       expect(calls[0]).toEqual(["--version"]);
@@ -2636,7 +2636,7 @@ describe("scripts/crabbox-wrapper", () => {
       const env = testHomeEnv(home);
       if (customState) {
         env.XDG_STATE_HOME = path.join(home, "selected state");
-        env.OPENCLAW_FAKE_CRABBOX_VERSION = "crabbox 0.81.0";
+        env.OPENCLAW_FAKE_CRABBOX_VERSION = "crabbox 0.82.0";
         const legacyKey = path.join(
           testCrabboxConfigDir(home),
           "testboxes",
@@ -2659,16 +2659,16 @@ describe("scripts/crabbox-wrapper", () => {
   );
 
   it.each([
-    { id: "tbx_default", createKey: true, state: "", version: "0.81.0", selectedKey: false },
-    { id: "tbx_selected", createKey: true, state: "state", version: "0.81.0", selectedKey: true },
-    { id: "blue-hermit", createKey: false, state: "", version: "0.81.0", selectedKey: false },
+    { id: "tbx_default", createKey: true, state: "", version: "0.82.0", selectedKey: false },
+    { id: "tbx_selected", createKey: true, state: "state", version: "0.82.0", selectedKey: true },
+    { id: "blue-hermit", createKey: false, state: "", version: "0.82.0", selectedKey: false },
     ...(process.platform === "win32"
       ? [
           {
             id: "tbx_namespaced",
             createKey: true,
             state: "namespaced",
-            version: "0.81.0",
+            version: "0.82.0",
             selectedKey: true,
           },
         ]
@@ -2727,14 +2727,14 @@ describe("scripts/crabbox-wrapper", () => {
       env: {
         ...testHomeEnv(home),
         XDG_STATE_HOME: stateRoot,
-        OPENCLAW_FAKE_CRABBOX_VERSION: "crabbox 0.81.0",
+        OPENCLAW_FAKE_CRABBOX_VERSION: "crabbox 0.82.0",
       },
     });
     expect(result).toMatchObject({ status: 2, stdout: "" });
     expect(result.stderr).toContain("XDG_STATE_HOME must be absolute");
   });
 
-  it.each([{ version: "0.81.0", stateDirectory: "state " }])(
+  it.each([{ version: "0.82.0", stateDirectory: "state " }])(
     "fails before reuse when a Blacksmith Testbox is claimed by another repo ($version, $stateDirectory)",
     ({ version, stateDirectory }) => {
       const home = invocationLogTempDirs.make("openclaw-crabbox-home-");

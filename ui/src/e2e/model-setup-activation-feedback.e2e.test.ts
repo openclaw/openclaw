@@ -88,7 +88,7 @@ suite.define(() => {
         // Revisit before the old reply: the abandoned loader must not own the new request.
         await page.goBack();
         await page.locator("[data-models-login-discover]").click();
-        await page.getByRole("heading", { name: "Available models", exact: true }).waitFor();
+        await page.locator('.oc-dialog__header h2:text-is("Available models")').waitFor();
         await gateway.waitForRequest(rpc.detect, { after: 1 });
         await gateway.resolveDeferred(rpc.detect);
         await page
