@@ -258,14 +258,12 @@ describe("Muse native MSP harness", () => {
     const before = writes.append.mock.calls.length;
     const result = await run({ prompt: "cutoff" });
     expectFailure(result, "provider stream died mid-reply");
-    const persisted = writes.append.mock.calls
-      .slice(before)
-      .flatMap(
-        ([call]) =>
-          call.messages as Array<{
-            message: { role: string; stopReason?: string; content?: unknown };
-          }>,
-      );
+    const persisted = writes.append.mock.calls.slice(before).flatMap(
+      ([call]) =>
+        call.messages as Array<{
+          message: { role: string; stopReason?: string; content?: unknown };
+        }>,
+    );
     const partial = persisted.findLast((entry) =>
       JSON.stringify(entry.message.content ?? "").includes("Partial answer"),
     );
