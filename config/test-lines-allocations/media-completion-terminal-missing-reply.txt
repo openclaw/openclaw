@@ -1,2 +1,2 @@
-27
-# Regression: queued media completion settles once its dialogue ends without a visible reply, past dedupe expiry.
+48
+# Regression: a successful empty image completion is retryable, and the observer settles it once the Gateway dedupe entry expires.

@@ -20,8 +20,11 @@ import {
   withOwnedSessionTranscriptWrites,
 } from "../../config/sessions/transcript-write-context.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
+import { replayAgentTurnIfCached } from "../../gateway/agent-turn/agent-dedupe.js";
+import { startGatewayMaintenanceTimers } from "../../gateway/server-maintenance.js";
 import type { GatewayRequestContext } from "../../gateway/server-methods/types.js";
 import { createContext as createGatewayContext } from "../../gateway/server-plugin-in-process-dispatch.test-support.js";
+import { createGatewayMaintenanceStateForTest } from "../../gateway/test-helpers.maintenance-state.js";
 import {
   getPluginRuntimeGatewayRequestScope,
   withPluginRuntimeGatewayContextResolver,
@@ -71,6 +74,10 @@ vi.mock("../../config/sessions/session-entry-read-runtime.js", () => ({
   },
 }));
 vi.mock("../../cron/run-continuation-cleanup.js", () => cronContinuationCleanupMocks);
+// mock-isolation: Dedupe maintenance must not start the unrelated device expiry worker.
+vi.mock("../../infra/device-bootstrap.js", () => ({
+  startDevicePairSetupMaintenance: vi.fn(async () => 0),
+}));
 
 import {
   createDefaultMediaGenerateBackgroundScheduler,
@@ -491,27 +498,50 @@ describe("scheduleMediaGenerationTaskCompletion", () => {
     vi.useFakeTimers();
     const scheduled: Array<() => Promise<void>> = [];
     const announce = subagentAnnounceDeliveryMocks.deliverSubagentAnnouncement;
+    // This is the real classifier result for a successful empty image completion,
+    // covered in subagent-announce-media-completion.test.ts.
+    const terminalMissingReply = {
+      delivered: false,
+      path: "direct" as const,
+      reason: "visible_reply_missing" as const,
+      disposition: "retryable" as const,
+    };
     announce
       .mockResolvedValueOnce({ delivered: false, path: "queued", disposition: "session_queued" })
-      .mockResolvedValue({
-        delivered: false,
-        reason: "visible_reply_missing",
-        disposition: "retryable",
+      .mockResolvedValue(terminalMissingReply);
+    const maintenance = createGatewayMaintenanceStateForTest();
+    const dedupeKey = "agent:image-completion";
+    const terminalResponse = { status: "ok", result: { meta: {}, payloads: [] } };
+    maintenance.dedupe.set(dedupeKey, { ts: Date.now(), ok: true, payload: terminalResponse });
+    const replay = () =>
+      replayAgentTurnIfCached({
+        preflight: { agentDedupeKeys: [dedupeKey], runId: "image-completion" },
+        context: { dedupe: maintenance.dedupe, resolveGatewayContext: () => undefined },
+        io: { emitAcceptance: () => {} },
       });
-    const lifecycle = createImageMediaLifecycle();
-    const handle = await lifecycle.createTaskRun({ sessionKey: "agent:main:media", prompt: "p" });
-    assert(handle);
-    scheduleImageCompletion({
-      lifecycle,
-      handle,
-      scheduleBackgroundWork: (w) => scheduled.push(w),
-    });
-    const backgroundWork = scheduled[0]?.();
-    // Past the Gateway's five-minute dedupe expiry, where a resubmitted wake could readmit the dialogue.
-    await vi.advanceTimersByTimeAsync(10 * 60_000);
-    expect(announce).toHaveBeenCalledTimes(2);
-    await backgroundWork;
-    expectCall(detachedTaskRuntimeMocks.completeOperation, { terminalOutcome: "blocked" });
+    expect(replay()).toBe(true);
+    const timers = startGatewayMaintenanceTimers(maintenance);
+    try {
+      const lifecycle = createImageMediaLifecycle();
+      const handle = await lifecycle.createTaskRun({ sessionKey: "agent:main:media", prompt: "p" });
+      assert(handle);
+      scheduleImageCompletion({
+        lifecycle,
+        handle,
+        scheduleBackgroundWork: (w) => scheduled.push(w),
+      });
+      const backgroundWork = scheduled[0]?.();
+      // Past the five-minute dedupe TTL and its one-minute sweep. A resubmitted
+      // wake would miss the cache and could readmit the dialogue.
+      await vi.advanceTimersByTimeAsync(10 * 60_000);
+      expect(announce).toHaveBeenCalledTimes(2);
+      expect(replay()).toBe(false);
+      await backgroundWork;
+      expectCall(detachedTaskRuntimeMocks.completeOperation, { terminalOutcome: "blocked" });
+    } finally {
+      await timers.stopPeriodicTasks();
+      maintenance.worktreeGc.mockRestore();
+    }
   });
 
   it("caps exponential pending-handoff retries until delivery succeeds", async () => {

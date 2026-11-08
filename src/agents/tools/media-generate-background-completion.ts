@@ -231,6 +231,7 @@ export async function wakeMediaGenerationTaskCompletion(params: {
       taskId: handle.taskId,
       runId: handle.runId,
       toolName: params.toolName,
+      disposition: delivery.disposition,
     });
     return { status: "permanent_failure" };
   }
