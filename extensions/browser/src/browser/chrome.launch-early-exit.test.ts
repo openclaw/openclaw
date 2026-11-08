@@ -170,11 +170,14 @@ describe("managed Chrome early child exit", () => {
       expect(await settleLaunch()).toMatchObject({ proc });
       expect(logInfo).toHaveBeenCalledOnce();
       proc.emit("exit", exitSignal ? null : 0, exitSignal);
-      proc.stderr.emit("data", "FATAL: synthetic GPU failure after readiness");
+      proc.stderr.emit(
+        "data",
+        "FATAL: synthetic GPU failure after readiness token=synthetic-private-value",
+      );
       proc.emit("close", exitSignal ? null : 0, exitSignal);
       if (exitSignal) {
         expect(logError).toHaveBeenCalledWith(
-          expect.stringMatching(/SIGABRT[\s\S]*synthetic GPU failure/),
+          expect.stringMatching(/SIGABRT[\s\S]*token=synthetic-private-value/),
         );
       } else {
         expect(logError).not.toHaveBeenCalled();
@@ -201,12 +204,35 @@ describe("managed Chrome early child exit", () => {
     expectDetached(proc);
   });
 
+  it("retries command readiness after late HTTP discovery", async () => {
+    const startedAt = performance.now();
+    diagnoseMock.mockImplementation(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 800));
+      return performance.now() - startedAt >= resolved.localLaunchTimeoutMs + 1_000
+        ? { ok: true, cdpUrl: profile.cdpUrl, ...readyVersion, elapsedMs: 800 }
+        : {
+            ok: false,
+            code: "websocket_health_command_timeout",
+            cdpUrl: profile.cdpUrl,
+            wsUrl: readyVersion.webSocketDebuggerUrl,
+            elapsedMs: 800,
+            message: "synthetic command channel still starting",
+          };
+    });
+    expect(await settleLaunch()).toMatchObject({ proc });
+    expect(diagnoseMock).toHaveBeenCalledTimes(2);
+    expect(proc.kill).not.toHaveBeenCalled();
+    expect(logInfo).toHaveBeenCalledOnce();
+    proc.emit("close", 0, null);
+  });
+
   it("reports a GPU abort after HTTP discovery instead of announcing a started browser", async () => {
     const fatal =
       "FATAL:content/browser/gpu/gpu_data_manager_impl_private.cc:417] GPU process isn't usable. Goodbye.";
+    const rawFatal = `${fatal} token=synthetic-private-value`;
     readVersionMock.mockResolvedValue(readyVersion);
     diagnoseMock.mockImplementation(async () => {
-      proc.stderr.emit("data", `${fatal}\n${"#0 synthetic stack frame\n".repeat(200)}`);
+      proc.stderr.emit("data", `${rawFatal}\n${"#0 synthetic stack frame\n".repeat(200)}`);
       proc.signalCode = "SIGABRT";
       proc.emit("exit", null, "SIGABRT");
       return { ok: true, cdpUrl: profile.cdpUrl, elapsedMs: 0 };
@@ -217,7 +243,8 @@ describe("managed Chrome early child exit", () => {
     expect(String(error)).toContain(fatal);
     expect(String(error)).toContain("retry");
     expect(logInfo).not.toHaveBeenCalled();
-    expect(logError).toHaveBeenCalledWith(expect.stringContaining(fatal));
+    expect(logError).toHaveBeenCalledWith(expect.stringContaining(rawFatal));
+    expect(String(error)).not.toContain("synthetic-private-value");
     expectDetached(proc);
   });
 

@@ -882,11 +882,31 @@ async function launchOpenClawChromeLocked(
       }
 
       let finalDiagnostic: ChromeCdpDiagnostic | null = null;
+      let diagnosticErrorText: string | null = null;
+      if (!launchHttpReachable && !hasExited()) {
+        try {
+          finalDiagnostic = await diagnoseChromeCdp(
+            profile.cdpUrl,
+            MANAGED_CDP_READY_HTTP_TIMEOUT_MS,
+            CHROME_WS_READY_TIMEOUT_MS,
+            undefined,
+            signal,
+          );
+        } catch (err) {
+          diagnosticErrorText = `CDP diagnostic failed: ${safeChromeCdpErrorMessage(err)}.`;
+        }
+      }
+      signal?.throwIfAborted();
+      launchHttpReachable ||=
+        !!finalDiagnostic &&
+        (finalDiagnostic.ok ||
+          !["ssrf_blocked", "http_unreachable", "http_status_failed", "invalid_json"].includes(
+            finalDiagnostic.code,
+          ));
       if (launchHttpReachable) {
         // Keep the child and its stderr until CDP commands work, not just HTTP discovery.
         const cdpDeadline = performance.now() + resolved.localCdpReadyTimeoutMs;
-        launchHttpReachable = false;
-        while (!hasExited() && performance.now() < cdpDeadline) {
+        while (!finalDiagnostic?.ok && !hasExited() && performance.now() < cdpDeadline) {
           const timeoutMs = Math.max(
             CDP_READY_AFTER_LAUNCH_MIN_TIMEOUT_MS,
             Math.min(MANAGED_CDP_READY_HTTP_TIMEOUT_MS, cdpDeadline - performance.now()),
@@ -905,33 +925,15 @@ async function launchOpenClawChromeLocked(
             signal,
           );
           signal?.throwIfAborted();
-          if (hasExited()) {
-            break;
-          }
-          if (finalDiagnostic.ok) {
-            launchHttpReachable = true;
+          if (hasExited() || finalDiagnostic.ok) {
             break;
           }
           await waitForManagedLaunchPoll(CDP_READY_AFTER_LAUNCH_POLL_MS, signal);
         }
+        launchHttpReachable = !hasExited() && finalDiagnostic?.ok === true;
       }
 
       if (!launchHttpReachable) {
-        signal?.throwIfAborted();
-        let diagnosticErrorText: string | null = null;
-        if (!hasExited() && !finalDiagnostic) {
-          try {
-            finalDiagnostic = await diagnoseChromeCdp(
-              profile.cdpUrl,
-              MANAGED_CDP_READY_HTTP_TIMEOUT_MS,
-              CHROME_WS_READY_TIMEOUT_MS,
-              undefined,
-              signal,
-            );
-          } catch (err) {
-            diagnosticErrorText = `CDP diagnostic failed: ${safeChromeCdpErrorMessage(err)}.`;
-          }
-        }
         signal?.throwIfAborted();
         if (hasExited()) {
           // Exit can precede the last stderr delivery. Drain for at most one
@@ -952,64 +954,54 @@ async function launchOpenClawChromeLocked(
           signal?.throwIfAborted();
           finalDiagnostic = null;
           diagnosticErrorText = `Chrome process exited before CDP became ready (code ${spawned.proc.exitCode}, signal ${spawned.proc.signalCode}).`;
-        } else if (finalDiagnostic?.ok) {
-          launchHttpReachable = true;
         }
         const diagnosticText = finalDiagnostic
           ? formatChromeCdpDiagnostic(finalDiagnostic)
           : (diagnosticErrorText ?? "CDP diagnostic failed.");
-        if (launchHttpReachable) {
-          log.debug(diagnosticText);
-        } else {
-          const stderrSignals = stderrDiagnostics.signals();
-          if (
-            allowSingletonRecovery &&
-            stderrSignals.singletonInUse &&
-            clearStaleChromeSingletonLocks(userDataDir)
-          ) {
-            log.warn(
-              `Removed stale Chromium Singleton* locks for profile "${profile.name}" and retrying launch.`,
-            );
-            if (!(await terminateChromeForRetry(proc, userDataDir))) {
-              throw new ManagedChromeCleanupError(
-                `Managed Chrome process ${spawned.pid} survived singleton recovery.`,
-                runningForProcess(proc, spawned.pid),
-              );
-            }
-            releaseSpawnAbort();
-            releaseSpawnAbort = undefined;
-            return await launchOnceAndWait(false);
-          }
-          const hints: string[] = [
-            "Check the browser executable and browser.extraArgs, then retry. If it still fails, use another browser profile or an alternative tool.",
-          ];
-          if (process.platform === "linux" && !resolved.noSandbox) {
-            hints.push(
-              "If running in a container or as root, try setting browser.noSandbox: true.",
-            );
-          }
-          const hintHeadlessMode = resolveManagedBrowserHeadlessMode(
-            resolved,
-            profile,
-            headlessOptions,
+        const stderrSignals = stderrDiagnostics.signals();
+        if (
+          allowSingletonRecovery &&
+          stderrSignals.singletonInUse &&
+          clearStaleChromeSingletonLocks(userDataDir)
+        ) {
+          log.warn(
+            `Removed stale Chromium Singleton* locks for profile "${profile.name}" and retrying launch.`,
           );
-          if (stderrSignals.missingDisplay && !hintHeadlessMode.headless) {
-            hints.push(
-              "No DISPLAY/X server was detected. Set OPENCLAW_BROWSER_HEADLESS=1, remove the headed override, start Xvfb, or run the Gateway in a desktop session.",
+          if (!(await terminateChromeForRetry(proc, userDataDir))) {
+            throw new ManagedChromeCleanupError(
+              `Managed Chrome process ${spawned.pid} survived singleton recovery.`,
+              runningForProcess(proc, spawned.pid),
             );
           }
-          if (stderrSignals.singletonInUse) {
-            hints.push(
-              `The Chromium profile "${profile.name}" is locked. Stop the existing browser or remove stale Singleton* lock files under ~/.openclaw/browser/${profile.name}/user-data.`,
-            );
-          }
-          const launchHints = `\nHint: ${hints.join("\nHint: ")}`;
-          const error = new Error(
-            `Failed to start Chrome CDP on port ${profile.cdpPort} for profile "${profile.name}". ${diagnosticText}${launchHints}${stderrDiagnostics.hint()}`,
-          );
-          log.error(error.message);
-          throw error;
+          releaseSpawnAbort();
+          releaseSpawnAbort = undefined;
+          return await launchOnceAndWait(false);
         }
+        const hints: string[] = [
+          "Check the browser executable and browser.extraArgs, then retry. If it still fails, use another browser profile or an alternative tool.",
+        ];
+        if (process.platform === "linux" && !resolved.noSandbox) {
+          hints.push("If running in a container or as root, try setting browser.noSandbox: true.");
+        }
+        const hintHeadlessMode = resolveManagedBrowserHeadlessMode(
+          resolved,
+          profile,
+          headlessOptions,
+        );
+        if (stderrSignals.missingDisplay && !hintHeadlessMode.headless) {
+          hints.push(
+            "No DISPLAY/X server was detected. Set OPENCLAW_BROWSER_HEADLESS=1, remove the headed override, start Xvfb, or run the Gateway in a desktop session.",
+          );
+        }
+        if (stderrSignals.singletonInUse) {
+          hints.push(
+            `The Chromium profile "${profile.name}" is locked. Stop the existing browser or remove stale Singleton* lock files under ~/.openclaw/browser/${profile.name}/user-data.`,
+          );
+        }
+        const launchHints = `\nHint: ${hints.join("\nHint: ")}`;
+        const errorMessage = `Failed to start Chrome CDP on port ${profile.cdpPort} for profile "${profile.name}". ${diagnosticText}${launchHints}${stderrDiagnostics.hint()}`;
+        log.error(errorMessage);
+        throw new Error(redactToolPayloadText(errorMessage));
       }
 
       signal?.throwIfAborted();

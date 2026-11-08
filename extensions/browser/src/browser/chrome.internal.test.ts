@@ -755,8 +755,8 @@ describe("chrome.ts internal", () => {
             typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
           if (url.includes("/json/version")) {
             discoveryCalls += 1;
+            now += 2;
             if (discoveryCalls === 1) {
-              now += 2;
               throw new Error("ECONNREFUSED");
             }
           }
@@ -768,12 +768,12 @@ describe("chrome.ts internal", () => {
         wsPath: "/devtools/browser/WS_WARMING",
         onCommand: () => undefined,
         run: async (baseUrl) => {
-          const port = new URL(baseUrl).port;
-          const profile = makeProfile(Number(port));
           await expect(
-            launchOpenClawChrome(makeResolved({ localLaunchTimeoutMs: 1 }), profile),
+            launchOpenClawChrome(
+              makeResolved({ localLaunchTimeoutMs: 1, localCdpReadyTimeoutMs: 1 }),
+              makeProfile(Number(new URL(baseUrl).port)),
+            ),
           ).rejects.toThrow("websocket_health_command_timeout");
-          expect(discoveryCalls).toBeGreaterThan(1);
           expect(fakeProc.kill).toHaveBeenCalledWith("SIGKILL");
         },
       });

@@ -1,4 +1,3 @@
-import { redactToolPayloadText } from "openclaw/plugin-sdk/logging-core";
 import { sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { createBoundedUtf8Tail } from "./bounded-utf8-tail.js";
 import { CHROME_STDERR_HINT_MAX_CHARS } from "./cdp-timeouts.js";
@@ -33,7 +32,7 @@ export function createChromeLaunchStderrDiagnostics() {
       }
     },
     hint() {
-      const output = redactToolPayloadText(tail.text().trim());
+      const output = tail.text().trim();
       // Chromium stack dumps can push the actual failure out of a short tail.
       const fatal = output.match(/^.*\bFATAL:.*$/gmu)?.join("\n");
       const excerpt = fatal
