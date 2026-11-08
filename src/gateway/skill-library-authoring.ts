@@ -33,6 +33,44 @@ import {
 } from "./server-methods/skills-library.js";
 
 const active = new Map<string, Set<{ profileId: string; revoke: () => void }>>();
+const rememberedShapes = new Map<
+  string,
+  Pick<SkillLibraryAuthoringCapability, "defaultTarget" | "multipleProfiles">
+>();
+const MAX_REMEMBERED_SHAPES = 512;
+
+function rememberSkillLibraryShape(
+  sessionKey: string,
+  shape: Pick<SkillLibraryAuthoringCapability, "defaultTarget" | "multipleProfiles">,
+) {
+  rememberedShapes.delete(sessionKey);
+  rememberedShapes.set(sessionKey, shape);
+  if (rememberedShapes.size > MAX_REMEMBERED_SHAPES) {
+    const oldest = rememberedShapes.keys().next().value;
+    if (oldest) {
+      rememberedShapes.delete(oldest);
+    }
+  }
+}
+
+function directorySkillLibraryCapability(
+  shape: Pick<SkillLibraryAuthoringCapability, "defaultTarget" | "multipleProfiles">,
+): SkillLibraryAuthoringCapability {
+  return {
+    target: "personal",
+    defaultTarget: shape.defaultTarget,
+    multipleProfiles: shape.multipleProfiles,
+    bind() {
+      return undefined;
+    },
+    async invoke() {
+      throw new SkillLibraryError(
+        "FORBIDDEN",
+        "Skill library authoring is only available on a direct user turn.",
+      );
+    },
+  };
+}
 
 /** A mixed-person steer revokes mutation authority without changing the session's committed pins. */
 export function invalidateSkillAuthoringForOtherRequester(
@@ -115,10 +153,15 @@ export async function prepareGatewaySkillAuthoring(
   isHumanTurn: boolean,
   prepared?: PreparedSkillLibrarySession,
 ): Promise<SkillLibraryAuthoringCapability | undefined> {
-  // The deferred tool directory is part of the stable prompt suffix. A settle or
-  // steer run keeps the same skill_library entry and refuses the call.
-  if (!canListSkillLibrary(options)) {
+  // The deferred tool directory is part of the stable prompt suffix. A settle
+  // client is not the attributed user, so it reuses the session's last human
+  // shape and refuses the call.
+  if (isHumanTurn && !canListSkillLibrary(options)) {
     return undefined;
+  }
+  if (!isHumanTurn) {
+    const remembered = rememberedShapes.get(sessionKey);
+    return remembered ? directorySkillLibraryCapability(remembered) : undefined;
   }
   const authority = libraryAuthority(options);
   const library = prepared?.presentation ?? (await resolveSkillLibraryPresentation(authority));
@@ -127,22 +170,10 @@ export async function prepareGatewaySkillAuthoring(
   if (!library.profileId || library.defaultTarget === "unavailable") {
     return undefined;
   }
-  if (!isHumanTurn) {
-    return {
-      target: "personal",
-      defaultTarget: library.defaultTarget,
-      multipleProfiles: library.multipleProfiles,
-      bind() {
-        return undefined;
-      },
-      async invoke() {
-        throw new SkillLibraryError(
-          "FORBIDDEN",
-          "Skill library authoring is only available on a direct user turn.",
-        );
-      },
-    };
-  }
+  rememberSkillLibraryShape(sessionKey, {
+    defaultTarget: library.defaultTarget,
+    multipleProfiles: library.multipleProfiles,
+  });
   const profileId = library.profileId;
   invalidateSkillAuthoringForOtherRequester(sessionKey, profileId);
   let bound: AdmittedRunContext | undefined;

@@ -203,11 +203,21 @@ describe("human personal namespace authority", () => {
   it("requires admission, refuses synthetic authority, and invalidates a mixed-person steer", async () => {
     const { alice, bob, request } = await setup();
     const owner = request(alice.id);
-    const listed = await prepareGatewaySkillAuthoring(owner, "agent:main:shared", false);
+    const unseen = await prepareGatewaySkillAuthoring(
+      { ...owner, client: { ...owner.client!, internal: { syntheticClient: true } } },
+      "agent:main:never-human",
+      false,
+    );
+    expect(unseen).toBeUndefined();
+    const human = await authoring(owner);
+    const listed = await prepareGatewaySkillAuthoring(
+      { ...owner, client: { ...owner.client!, internal: { syntheticClient: true } } },
+      "agent:main:shared",
+      false,
+    );
     if (!listed) {
       throw new Error("expected a directory skill_library capability");
     }
-    const human = await authoring(owner);
     expect(listed.multipleProfiles).toBe(human.multipleProfiles);
     const listedTool = createSkillLibraryTool(listed);
     const humanTool = createSkillLibraryTool(human);
