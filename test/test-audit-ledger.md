@@ -217,6 +217,15 @@ Its failed CI remains failed; no current-head CI success is claimed. PR189510 re
 
 ## Current qualification
 
+- X spend, pinned main `ee3ec605a59c`: remove one midnight reservation replay
+  already covered by the stronger limits table row. The keeper also checks
+  idempotent settlement, exhaustion and release; separate cases retain stored
+  receipt periods, reset and restart coverage. Spend and API-consumer suites pass
+  before/after on one Blacksmith Testbox (37→36 cases). Ten fewer test lines;
+  production unchanged. Format, lint, types and both unused-file scans pass.
+  Every dependency/export phase ran; unchanged Gateway, UI and changelog export
+  findings remain. Exact-head CI and landing are pending.
+
 Batch115, pinned main `230f05c7ca37`, repairs the read-coalescing recorder
 on the actual socket returned by the mock constructor. The unchanged browser
 case passed; adding a positive assertion for its already-held `models.list`
@@ -351,7 +360,7 @@ permission to delete without root qualification.
 
 ## Pending qualification and proof repairs
 
-- Keep source-only candidates separate from applied removals. Obsolete fixture candidates require current-owner and runtime qualification. Pending: X midnight-spend replay; Cua enum and Twitch settled flag; OC Path malformed-line replay and repeated round-trip assertion. Each needs current-source and runtime keeper qualification.
+- Keep source-only candidates separate from applied removals. Obsolete fixture candidates require current-owner and runtime qualification. Pending: Cua enum and Twitch settled flag; OC Path malformed-line replay and repeated round-trip assertion. Each needs current-source and runtime keeper qualification.
 - Transfer rows before consolidating core failed-tool classification, CodeMode deadline duplication, Android loading/blank-auth, persisted outbox keys/epochs, terminal initial projection, and native PCM/decoder/reader cases. Keep typed host-error precedence and active-run settlement.
 - Repair Android runtime/model fixture custody through existing guaranteed closers; no measured leak is claimed. Retarget misleading coroutine/authority/streaming assertions. Qualify Android dropdown arithmetic, IPv6 URL, empty SMS defaults and component-state mapping against their stronger keepers.
 - Repair swallowed/unrelated setup errors, silent auth/symlink skips, SSRF negative controls, content-absence/privacy results, delayed observer proofs, missing CLI fixture cleanup and aggregate-only tool-result fidelity. Retain CI inventory gaps as route repairs, including PostgreSQL conformance and removed Logbook worker paths.
