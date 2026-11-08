@@ -8,13 +8,14 @@ import { resolveIntegerOption } from "@openclaw/normalization-core/number-coerci
 const CJK_PUNCTUATION_BREAK_AFTER_RE = /[、。，．！？；：）］｝〉》」』】〕〗〙]/u;
 
 export function normalizeChunkLimit(limit: number): number {
-  // A non-finite limit cannot bound anything; keep the text whole like other
-  // non-positive limits instead of producing empty or shattered chunks.
-  if (!Number.isFinite(limit)) {
+  // NaN cannot bound anything; keep the text whole like other non-positive
+  // limits instead of producing empty or shattered chunks. Infinity stays a
+  // valid unbounded limit: chunkByNewline still splits on newlines for it.
+  if (Number.isNaN(limit)) {
     return 0;
   }
   // String slicing truncates fractional indexes, so positive limits need an integer progress step.
-  return limit > 0 ? resolveIntegerOption(limit, 1, { min: 1 }) : limit;
+  return Number.isFinite(limit) && limit > 0 ? resolveIntegerOption(limit, 1, { min: 1 }) : limit;
 }
 
 function findWhitespaceBreak(window: string): number {

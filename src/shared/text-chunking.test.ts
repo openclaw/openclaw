@@ -55,8 +55,9 @@ it("normalizes positive fractional limits before splitting", () => {
 it("keeps text whole for non-finite limits instead of emitting empty chunks", () => {
   const text = "an outbound message that must never vanish";
   expect(normalizeChunkLimit(Number.NaN)).toBe(0);
-  expect(normalizeChunkLimit(Number.POSITIVE_INFINITY)).toBe(0);
   expect(normalizeChunkLimit(-5)).toBe(-5);
+  // Infinity stays a valid unbounded limit: newline splitting still applies.
+  expect(normalizeChunkLimit(Number.POSITIVE_INFINITY)).toBe(Number.POSITIVE_INFINITY);
   expect(chunkTextByBreakResolver(text, Number.NaN, (window) => window.lastIndexOf(" "))).toEqual([
     text,
   ]);

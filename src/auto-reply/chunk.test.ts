@@ -297,6 +297,10 @@ describe("non-finite chunk limits", () => {
   it("does not inject empty chunks for chunkByNewline", () => {
     expect(chunkByNewline("Line one\nLine two", Number.NaN)).toEqual(["Line one\nLine two"]);
   });
+
+  it("keeps newline splitting for an unbounded chunkByNewline limit", () => {
+    expect(chunkByNewline("one\ntwo", Number.POSITIVE_INFINITY)).toEqual(["one", "two"]);
+  });
 });
 
 describe("resolveChunkMode", () => {

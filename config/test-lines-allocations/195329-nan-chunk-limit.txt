@@ -1,4 +1,5 @@
-# Regression tests for the NaN chunk-limit fix (#195329): non-finite limits
-# must keep outbound text whole in chunkMarkdownText, chunkMarkdownTextWithMode,
-# chunkByNewline, and the shared normalizeChunkLimit owner.
-38
+# Regression tests for the NaN chunk-limit fix (#195329): NaN must keep
+# outbound text whole in chunkMarkdownText, chunkMarkdownTextWithMode,
+# chunkByNewline, and the shared normalizeChunkLimit owner; Infinity keeps
+# its unbounded newline-splitting behavior (pinned per review).
+43
