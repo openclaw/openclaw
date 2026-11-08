@@ -275,7 +275,7 @@ describe("prepareSimpleCompletionModel", () => {
         providers: {
           anthropic: {
             baseUrl: "https://api.anthropic.com",
-            models: [{ id: "claude-opus-4-6" }],
+            models: [{ id: "claude-opus-4-6", name: "Claude Opus 4.6" }],
             authHeader: true,
           },
         },
