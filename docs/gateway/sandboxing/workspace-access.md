@@ -41,8 +41,9 @@ existing Docker or Podman runtime exposes the same file backing. A nested bind,
 container-only mount, or unrelated host path does not grant additional access.
 With `ro` access, `/agent` names the admitted agent workspace; the private
 container workdir is a different source and does not alias that workspace.
-Managed project references read the canonical worktree after its normal
-checkpoint. If the original runtime or its namespace mapping is unavailable,
+Managed project references read the live private checkout without pausing the
+sandbox or publishing a checkpoint. Reads use verified file descriptors and may
+observe an in-progress write, just like another reader inside the sandbox. If the original runtime or its namespace mapping is unavailable,
 an absolute alias can fail even when the saved file remains readable through an
 admitted workspace-relative reference. Reading never creates a sandbox or
 reconstructs an unavailable historical mapping.
@@ -101,9 +102,9 @@ checkpoint validation. Its bytes and the pending checkpoint remain preserved.
 The same authorized session can continue using its retained sandbox workspace
 to inspect and explicitly correct that filename with its ordinary permitted
 tools. This workspace can still contain an older view of canonical files; newer
-canonical edits are not imported over the pending changes. File delivery and
-command finalization continue to report the checkpoint failure until correction
-allows normal reconciliation. Existing conflict checks protect concurrent
+canonical edits are not imported over the pending changes. File reads remain
+available from the live checkout; command finalization and file saves continue to
+report the checkpoint failure until correction allows normal reconciliation. Existing conflict checks protect concurrent
 canonical edits, and subsequent preparation imports those accepted changes.
 This continuation does not bypass staged conflicts, journal recovery, or the
 session's current permissions, and OpenClaw does not rename or omit the file.
@@ -266,13 +267,13 @@ cancellation and authority checks. OpenClaw records pending results and
 rollback journals in SQLite, and resumes
 only after settlement. New shell calls and command preparation wait for an active
 checkpoint to release the workspace before proceeding; background commands do not
-hold that preparation lease for their entire lifetime. Concurrent Files requests
-and command checkpoints share equivalent captures while waiting for workspace
-custody. Requests arriving after capture starts trigger a fresh checkpoint so
-later guest writes remain visible. Each caller retains its own authority checks.
-Files requests skip checkpoint custody when a live read confirms that the managed
-worktree has no sandbox projection. A later request observes a newly created
-projection and checkpoints it normally; lifecycle custody still owns absent rows.
+hold that preparation lease for their entire lifetime. Files and assistant-media
+reads select the current backing without acquiring checkpoint custody or pausing
+runtimes. Each read retains its session and workspace authority checks; sandbox
+aliases also verify the existing runtime mount. File saves checkpoint guest changes
+before comparing the editor hash and updating the canonical file. Capture,
+publication, and lifecycle operations retain their reconciliation lease and pause
+requirements.
 Captured workspace authority is checked again after
 filesystem and engine preparation, immediately before filesystem commands,
 container creation/start/setup, and late browser restarts. Closing the owner
