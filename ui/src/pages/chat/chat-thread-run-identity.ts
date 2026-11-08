@@ -136,26 +136,27 @@ export function createRunTurnLookup(items: ChatItem[]) {
     // This lookup owns a fixed item snapshot. Sibling tools share its causal scan,
     // including absent bounds, while distinct observed inputs stay independent.
     const key = JSON.stringify([runId, afterUserSendId]);
-    if (causalBounds.has(key)) {
-      return causalBounds.get(key)!;
+    const cached = causalBounds.get(key);
+    if (cached !== undefined) {
+      return cached;
     }
     messages ??= items.map((item) => (item.kind === "message" ? item.message : null));
     const interval = knownStreamCausalInterval(messages, { runId }, afterUserSendId);
-    if (!interval) {
-      causalBounds.set(key, null);
-      return null;
-    }
-    const ceiling = items.find(
-      (item, index) =>
-        index >= interval.start &&
-        index < interval.end &&
-        startsExecutionTurn(item) &&
-        (item.kind !== "message" || transcriptRunId(item.message) !== runId),
-    );
-    const result = {
-      afterKey: items[interval.start - 1]?.key,
-      beforeKey: ceiling?.key ?? items[interval.end]?.key,
-    };
+    const ceiling =
+      interval &&
+      items.find(
+        (item, index) =>
+          index >= interval.start &&
+          index < interval.end &&
+          startsExecutionTurn(item) &&
+          (item.kind !== "message" || transcriptRunId(item.message) !== runId),
+      );
+    const result = interval
+      ? {
+          afterKey: items[interval.start - 1]?.key,
+          beforeKey: ceiling?.key ?? items[interval.end]?.key,
+        }
+      : null;
     causalBounds.set(key, result);
     return result;
   };

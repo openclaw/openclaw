@@ -54,7 +54,7 @@ it.each(["settled", "scrolling", "start", "start-growth", "programmatic", "end-a
         headerHeight: 0,
         scrollElement: viewport,
         contentElement: content,
-        endAnchor: { active: phase === "end-anchored" },
+        endAnchor: { offset: phase === "end-anchored" ? 0 : null },
         canAutoFollow: () => true,
       },
       () => {},

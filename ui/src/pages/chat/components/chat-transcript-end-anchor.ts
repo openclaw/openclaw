@@ -4,16 +4,12 @@ import { publishTranscriptScroll } from "./chat-transcript-scroll-events.ts";
 
 /** Geometric end anchoring; the pane still owns permission to follow. */
 export class TranscriptEndAnchor {
-  private offset: number | null = null;
+  offset: number | null = null;
   private frame: number | null = null;
   private pendingReconcile: (() => void) | null = null;
   private lastObservedContentSize: number | null = null;
 
   constructor(private readonly afterCommit: (effect: () => void) => void) {}
-
-  get active(): boolean {
-    return this.offset !== null;
-  }
 
   private readonly flushReconcile = () => {
     const reconcile = this.pendingReconcile;
