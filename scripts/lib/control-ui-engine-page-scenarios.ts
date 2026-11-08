@@ -7,7 +7,10 @@ import type {
   SystemChangeEntry,
   SystemChangesListResult,
 } from "../../packages/gateway-protocol/src/index.ts";
-import type { UserProfile } from "../../packages/gateway-protocol/src/schema/users.ts";
+import type {
+  UserProfile,
+  UsersPersonalFileGetResult,
+} from "../../packages/gateway-protocol/src/schema/users.ts";
 import type { loadVoiceWakeConfig } from "../../src/infra/voicewake.ts";
 import type { ModelAuthStatusResult } from "../../ui/src/api/types.ts";
 import {
@@ -1381,6 +1384,7 @@ function createPageFixture(
           "skills.search",
           "secrets.store.set",
           "users.setDisplayName",
+          ...(id === "profile" ? ["users.personalFile.get"] : []),
           "templates.catalog.search",
           "node.list",
           "device.pair.list",
@@ -1409,6 +1413,17 @@ function createPageFixture(
           ? {
               "cron.list": base.methodResponses?.["cron.list"],
               "cron.status": base.methodResponses?.["cron.status"],
+            }
+          : {}),
+        ...(id === "profile"
+          ? {
+              "users.personalFile.get": {
+                agentId: "main",
+                profileId: savedProfile.id,
+                content: "",
+                hash: null,
+                missing: true,
+              } satisfies UsersPersonalFileGetResult,
             }
           : {}),
         "config.get": {
@@ -2143,6 +2158,83 @@ export function createEnginePageScenarios(
         return evidence;
       },
     };
+    if (id === "skill-settings") {
+      const inputVisit: EngineScenario = {
+        ...common,
+        initScript:
+          common.initScript ??
+          createColdLoadProbeInitScript({
+            ownerProbes: false,
+            sidebarCounters: false,
+            latencyMs: gatewayLatencyMs,
+            frameGapMs: 0,
+            events: [],
+          }),
+        id: "page-skill-settings-input-visit",
+        expected:
+          "First visit to Skills settings accepts a filter while installed inventory loads.",
+        prepare: boot,
+        run: async (page) => {
+          const selector = 'input[name="skills-filter"]:enabled';
+          assert(definition.rows, "Skills settings must define full inventory readiness");
+          const timingRead = measureVisit(page, id, {
+            ...definition,
+            ready: selector,
+            rows: undefined,
+            completion: [definition.rows, ...(definition.completion ?? [])],
+          });
+          void timingRead.catch(() => undefined);
+          const readyAt = await page.waitForFunction(
+            (inputSelector) => {
+              const input = document.querySelector<HTMLInputElement>(inputSelector);
+              return input?.checkVisibility() && !input.disabled ? performance.now() : false;
+            },
+            selector,
+            { polling: "raf" },
+          );
+          const inputReadyAtMs = await readyAt.jsonValue();
+          await readyAt.dispose();
+          assert(typeof inputReadyAtMs === "number");
+          const search = page.locator(selector);
+          await search.fill("Data skill");
+          assert.equal(await search.inputValue(), "Data skill");
+          const input = await page.evaluate(() => {
+            const reads: { pendingMethods: string[] } = Reflect.get(window, "__coldLoad").read();
+            return {
+              acceptedAtMs: performance.now(),
+              query: document.querySelector<HTMLInputElement>('input[name="skills-filter"]')?.value,
+              inventoryPending: reads.pendingMethods.includes("skills.status"),
+              visiblyBusy:
+                document
+                  .querySelector(".plugins-toolbar .refresh-button")
+                  ?.getAttribute("aria-busy") === "true",
+              loadingMessage: [...document.querySelectorAll(".settings-empty")].some(
+                (element) => element.textContent?.trim() === "Loading…",
+              ),
+            };
+          });
+          assert.equal(input.query, "Data skill");
+          if (input.inventoryPending) {
+            assert.equal(input.visiblyBusy, true);
+            assert.equal(input.loadingMessage, true);
+          }
+          const timing = await timingRead;
+          assert.equal(await search.inputValue(), "Data skill");
+          return {
+            visitStartedAtMs: timing.startedAtMs,
+            visitReadyMs: inputReadyAtMs - timing.startedAtMs,
+            visitReadyAtMs: inputReadyAtMs,
+            inputFrameReadyMs: timing.readyMs,
+            contentReadyMs: timing.contentReadyMs,
+            inputAcceptedMs: input.acceptedAtMs - timing.startedAtMs,
+            inventoryPendingAtInput: input.inventoryPending,
+            inventoryBusyAtInput: input.visiblyBusy,
+            searchAccepted: true,
+          };
+        },
+      };
+      return [visit, revisit, action, leave, inputVisit].concat(noChanges);
+    }
     if (id === "search") {
       const firstAdvancedOpen: EngineScenario = {
         ...common,

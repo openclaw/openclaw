@@ -209,7 +209,15 @@ async function persistPreparedGatewaySessionLifecycleEvent(
   );
   const { failedRun } = effects ?? {};
   if (persisted && failedRun) {
-    const { runId, error, errorKind, suppressErrorNotice, notice, errorObservation } = failedRun;
+    const {
+      runId,
+      error,
+      errorKind,
+      suppressErrorNotice,
+      notice,
+      desktopNotice,
+      errorObservation,
+    } = failedRun;
     // Only accepted errors pay for branch navigation; assistant detection and
     // report deduplication share the appender's authoritative write snapshot.
     const receipt = {
@@ -226,6 +234,7 @@ async function persistPreparedGatewaySessionLifecycleEvent(
       errorKind,
       suppressErrorNotice,
       notice,
+      desktopNotice,
       errorObservation,
       assertCommitAllowed: params.assertCommitAllowed,
     };

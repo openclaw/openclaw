@@ -265,6 +265,14 @@ export function createSlashMenu() {
       ...items.filter((command) => command.source !== "skill"),
       ...items.filter((command) => command.source === "skill"),
     ];
+    if (value === "/") {
+      // Keyboard selection and rendering must share the full menu's grouped order.
+      state.slashMenuItems = Array.from(
+        Map.groupBy(state.slashMenuItems, (command) =>
+          command.source === "skill" ? "skills" : (command.category ?? "session"),
+        ).values(),
+      ).flat();
+    }
     state.slashMenuOpen = items.length > 0;
     state.slashMenuIndex = Math.max(
       0,
