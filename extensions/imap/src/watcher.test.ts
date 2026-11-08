@@ -1,11 +1,14 @@
+import { generateKeyPairSync } from "node:crypto";
+import { Resolver } from "node:dns/promises";
 import { once } from "node:events";
 import { createServer, type Server, type Socket } from "node:net";
 import type { OpenClawPluginServiceContextV2 } from "openclaw/plugin-sdk/plugin-entry";
 import { createTestPluginServiceScheduler } from "openclaw/plugin-sdk/plugin-test-api";
 import { withTimeout } from "openclaw/plugin-sdk/text-utility-runtime";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { resolveImapConfig, type ImapAccountConfig } from "./config.js";
 import { createImapAuthResult, createImapTestRuntime } from "./imap-test-support.js";
+import type { MailAuthenticator } from "./sender-gate.js";
 import { ImapAccountWatcher } from "./watcher.js";
 
 type MailFixture = { uid: number; raw: string };
@@ -207,7 +210,7 @@ async function startWatcher(
     logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
     serviceHealth: { clearFailure: vi.fn(), reportFailure: vi.fn() },
   };
-  const authenticator = vi.fn(async () => createImapAuthResult("pass"));
+  const authenticator = vi.fn<MailAuthenticator>(async () => createImapAuthResult("pass"));
   const watcher = new ImapAccountWatcher({
     accountId: "inbox",
     account,
@@ -449,6 +452,103 @@ describe("IMAP watcher protocol boundary", () => {
         ),
       ).toBe(true);
       expect(await state.skips.lookup("inbox:duplicate-uid")).toBeUndefined();
+    },
+  );
+
+  it.each(["fail", "permerror", "none", "neutral"] as const)(
+    "permanently rejects DKIM %s without dispatch or retry",
+    async (dkim) => {
+      const { server, state, authenticator, dispatchHookAgentTurn, waitForCursor } =
+        await startWatcher();
+      const auth = createImapAuthResult("none");
+      auth.dkim.results.push({ status: { result: dkim }, info: "" });
+      authenticator.mockResolvedValue(auth);
+      server.append("From: trusted@example.com\r\nSubject: Permanent failure\r\n\r\nMail");
+      await waitForCursor(2);
+      expect(dispatchHookAgentTurn).not.toHaveBeenCalled();
+      expect(authenticator).toHaveBeenCalledTimes(1);
+      expect(await state.skips.lookup("inbox:dmarc-none")).toEqual({ count: 1 });
+    },
+  );
+
+  it.each(["ETIMEOUT", "ESERVFAIL"])(
+    "reauthenticates signed mail after DKIM DNS %s before dispatch",
+    async (code) => {
+      const { authenticate: realAuthenticate, dkimSign } =
+        await vi.importActual<typeof import("mailauth")>("mailauth");
+      const { privateKey, publicKey } = generateKeyPairSync("rsa", { modulusLength: 2048 });
+      const unsigned = "From: trusted@example.com\r\nSubject: DNS recovery\r\n\r\nMail";
+      const signature = {
+        signingDomain: "example.com",
+        selector: "test",
+        privateKey: privateKey.export({ type: "pkcs8", format: "pem" }),
+      };
+      const signingOptions = { ...signature, signatureData: [signature] };
+      const signed = await dkimSign(unsigned, signingOptions);
+      expect(signed.errors).toEqual([]);
+      const key = publicKey.export({ type: "spki", format: "der" }).toString("base64");
+      let resolveRetry!: () => void;
+      const retry = {
+        promise: new Promise<void>((resolve) => {
+          resolveRetry = resolve;
+        }),
+        resolve: () => resolveRetry(),
+      };
+      let lookups = 0;
+      const dnsSpy = vi
+        .spyOn(Resolver.prototype, "resolveTxt")
+        .mockImplementation(async (domain) => {
+          if (domain === "_dmarc.example.com") {
+            return [["v=DMARC1; p=reject"]];
+          }
+          if (domain === "test._domainkey.example.com") {
+            if (++lookups === 1) {
+              throw Object.assign(new Error("fixture DNS failure"), { code });
+            }
+            await retry.promise;
+            return [[`v=DKIM1; k=rsa; p=${key}`]];
+          }
+          return [];
+        });
+      onTestFinished(() => {
+        retry.resolve();
+        dnsSpy.mockRestore();
+      });
+      const {
+        server,
+        state,
+        context,
+        authenticator,
+        dispatchHookAgentTurn: dispatch,
+        waitForCursor,
+      } = await startWatcher({ account: { watch: { mode: "auto", pollSeconds: 0.02 } } });
+      authenticator.mockImplementation(realAuthenticate);
+      server.append(signed.signatures + unsigned);
+      try {
+        await vi.waitFor(() =>
+          expect(context.logger.warn).toHaveBeenCalledWith(
+            "imap: account=inbox uid=2 domain=example.com gate=authentication-temperror retry=true",
+          ),
+        );
+        expect(await state.cursors.lookup("inbox")).toMatchObject({ lastSeenUid: 1 });
+        expect(dispatch).not.toHaveBeenCalled();
+        expect(await authenticator.mock.results[0]?.value).toMatchObject({
+          dkim: { results: [{ status: { result: "temperror" } }] },
+          dmarc: { status: { result: "fail" } },
+        });
+      } finally {
+        retry.resolve();
+      }
+      await waitForCursor(2);
+      expect(dispatch).toHaveBeenCalledTimes(1);
+      expect(dispatch).toHaveBeenCalledWith(
+        expect.objectContaining({ sessionKey: "hook:imap:inbox:17:2" }),
+      );
+      expect(authenticator).toHaveBeenCalledTimes(2);
+      expect(await authenticator.mock.results[1]?.value).toMatchObject({
+        dkim: { results: [{ status: { result: "pass" } }] },
+        dmarc: { status: { result: "pass" } },
+      });
     },
   );
 
