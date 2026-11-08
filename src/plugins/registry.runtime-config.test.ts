@@ -1,8 +1,6 @@
 import { AsyncResource } from "node:async_hooks";
 import os from "node:os";
 import path from "node:path";
-import { setImmediate } from "node:timers/promises";
-import { queryObjects } from "node:v8";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
@@ -21,6 +19,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
+import { expectCollected, expectLiveObjects } from "../test-utils/retention.js";
 import { resolveUserPath } from "../utils.js";
 import {
   createLazyPluginRuntime,
@@ -370,8 +369,11 @@ describe("plugin registry runtime config scope", () => {
   });
 
   it("keeps adopted media capabilities alive without retaining retired registries", async () => {
+    const references: WeakRef<object>[] = [];
     class RetiredRegistry {
-      readonly fixtureLabel = "RetiredRegistry";
+      constructor() {
+        references.push(new WeakRef(this));
+      }
     }
     const runtime = createPluginRuntime();
     const { builder, record, api, owner } = registered("hosted-media", {}, runtime);
@@ -395,8 +397,7 @@ describe("plugin registry runtime config scope", () => {
         readFile,
       });
     try {
-      await setImmediate();
-      expect(queryObjects(RetiredRegistry)).toBe(0);
+      await expectCollected(...references);
       await expect(resource.runInAsyncScope(load)).resolves.toMatchObject({
         buffer: Buffer.from("synthetic media"),
         fileName: "resolved.txt",
@@ -414,8 +415,11 @@ describe("plugin registry runtime config scope", () => {
   it.each(["plain", "custody"] as const)(
     "retains a pending %s runtime selection across adoption, then releases it",
     async (mode) => {
+      const references: WeakRef<object>[] = [];
       class PendingRegistry {
-        readonly fixtureLabel = "PendingRegistry";
+        constructor() {
+          references.push(new WeakRef(this));
+        }
       }
       const resume = createDeferredCore();
       const runtime = createPluginRuntime();
@@ -454,12 +458,10 @@ describe("plugin registry runtime config scope", () => {
         return operation;
       })();
       try {
-        await setImmediate();
-        expect(queryObjects(PendingRegistry)).toBe(1);
+        await expectLiveObjects(references, 1);
         resume.resolve();
         await expect(pending).resolves.toMatchObject({ text: "intermediate" });
-        await setImmediate();
-        expect(queryObjects(PendingRegistry)).toBe(0);
+        await expectCollected(...references);
         // Retaining the completed caller-visible Promise must not retain its old selection.
         await expect(pending).resolves.toMatchObject({ text: "intermediate" });
       } finally {

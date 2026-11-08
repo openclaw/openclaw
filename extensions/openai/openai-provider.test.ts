@@ -1,4 +1,3 @@
-import { queryObjects } from "node:v8";
 import { expectDefined } from "@openclaw/normalization-core";
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import type { Context, Model, SimpleStreamOptions } from "openclaw/plugin-sdk/llm";
@@ -8,6 +7,7 @@ import {
 } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { forceFullGc } from "../../src/test-utils/retention.js";
 import {
   OPENAI_API_BASE_URL,
   OPENAI_CODEX_RESPONSES_BASE_URL,
@@ -689,7 +689,7 @@ describe("buildOpenAIProvider", () => {
     await new Promise<void>((resolve) => {
       setImmediate(resolve);
     });
-    queryObjects(WeakRef);
+    forceFullGc();
     expect(rows.map((row) => row.deref() !== undefined)).toEqual([false, false]);
   });
 

@@ -3,11 +3,12 @@ import { existsSync } from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { setImmediate as nextTurn } from "node:timers/promises";
-import { queryObjects, serialize } from "node:v8";
+import { serialize } from "node:v8";
 import { MessageChannel, Worker } from "node:worker_threads";
 import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { forceFullGc } from "../test-utils/retention.js";
 import { resolveIdentityPathViaExistingAncestorSync } from "./boundary-path.js";
 import {
   acquireGatewayStateOwner,
@@ -139,7 +140,7 @@ it("releases publication captures from retained finished admissions", async () =
   expect(publications).toBe(finished.length);
   const control = new WeakRef({});
   await nextTurn();
-  queryObjects(WeakRef);
+  forceFullGc();
   expect(control.deref()).toBeUndefined();
   expect(finished.filter(({ snapshot }) => snapshot.deref())).toHaveLength(0);
   // Lost reply recovery still consumes the committed evidence after transport cleanup.

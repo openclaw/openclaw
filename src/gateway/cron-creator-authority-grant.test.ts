@@ -1,5 +1,3 @@
-import { setImmediate as nextTurn } from "node:timers/promises";
-import { queryObjects } from "node:v8";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { createTestAdmittedRunContext } from "../agents/admitted-run-context.test-support.js";
@@ -14,6 +12,7 @@ import type {
   EmbeddedRunAttemptParams,
   EmbeddedRunAttemptParamsV2,
 } from "../plugin-sdk/agent-harness-runtime.js";
+import { expectCollected } from "../test-utils/retention.js";
 import type { AgentRuntimeIdentity } from "./agent-runtime-identity-token.js";
 import {
   attachCronStreamExecPolicy,
@@ -101,9 +100,11 @@ describe("cron creator authority grants", () => {
         return scope.signal;
       }
     }
-    const signal = new RevokingCaller().revoke();
-    await nextTurn();
-    expect(queryObjects(RevokingCaller)).toBe(0);
+    const { signal, caller } = (() => {
+      const caller = new RevokingCaller();
+      return { signal: caller.revoke(), caller: new WeakRef(caller) };
+    })();
+    await expectCollected(caller);
     expect(signal.reason).toBeInstanceOf(TypeError);
     expect(signal.reason).toMatchObject({ name: "CronCreatorAuthorityExpiredError", status: 403 });
     expect(() => signal.throwIfAborted()).toThrow(signal.reason);

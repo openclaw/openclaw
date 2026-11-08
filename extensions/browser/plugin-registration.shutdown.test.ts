@@ -1,7 +1,5 @@
 import type { IncomingMessage } from "node:http";
 import type { Duplex } from "node:stream";
-import { setImmediate } from "node:timers/promises";
-import { queryObjects } from "node:v8";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { startLazyPluginServiceModule } from "openclaw/plugin-sdk/plugin-runtime";
 import type { OpenAsyncKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
@@ -12,6 +10,7 @@ import {
 } from "openclaw/plugin-sdk/plugin-test-api";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
+import { expectCollected } from "../../src/test-utils/retention.js";
 import { registerBrowserPlugin } from "./plugin-registration.js";
 import { readSystemProfileImportState } from "./src/browser/system-profile-import-state.js";
 
@@ -50,7 +49,11 @@ vi.mock("./src/browser/session-tab-store.js", () => ({
 }));
 
 it("releases retired import-state stores without clearing a replacement", async () => {
+  const references: WeakRef<object>[] = [];
   class ImportStateOwner {
+    constructor() {
+      references.push(new WeakRef(this));
+    }
     assertCurrent() {}
   }
   let reads = 0;
@@ -95,8 +98,7 @@ it("releases retired import-state stores without clearing a replacement", async 
     expect(reads).toBe(generation + 1);
   }
   await dispose();
-  await setImmediate();
-  expect(queryObjects(ImportStateOwner)).toBe(0);
+  await expectCollected(...references);
   expect(await readSystemProfileImportState()).toBeUndefined();
   expect(reads).toBe(20);
 });
