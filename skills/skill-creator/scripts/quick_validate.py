@@ -94,6 +94,47 @@ def _strip_quotes(value: str) -> str:
     return value[1:-1] if quote in {"'", '"'} and value.endswith(quote) else value
 
 
+_CORE_NULL = re.compile(r"^(?:~|[Nn]ull|NULL)?$")
+_CORE_BOOL = re.compile(r"^(?:[Tt]rue|TRUE|[Ff]alse|FALSE)$")
+_CORE_INT = re.compile(r"^[-+]?[0-9]+$")
+_CORE_INT_OCT = re.compile(r"^0o[0-7]+$")
+_CORE_INT_HEX = re.compile(r"^0x[0-9a-fA-F]+$")
+_CORE_FLOAT = re.compile(
+    r"^(?:[-+]?(?:\.[0-9]+|[0-9]+(?:\.[0-9]*)?)[eE][-+]?[0-9]+"
+    r"|[-+]?(?:\.[0-9]+|[0-9]+\.[0-9]*)"
+    r"|[-+]?\.(?:inf|Inf|INF)|\.(?:nan|NaN|NAN))$"
+)
+
+
+def _core_scalar_key(node):
+    """Resolve a plain scalar key the way the runtime's YAML core schema does.
+
+    The loader treats `yes`/`on` as strings but `true` as a boolean, and a
+    quoted `"true"` stays a string, so duplicate identity is the typed value.
+    """
+
+    value = node.value
+    if node.style is None:
+        if _CORE_NULL.fullmatch(value):
+            return ("null", None)
+        if _CORE_BOOL.fullmatch(value):
+            return ("bool", value[0] in "tT")
+        if _CORE_INT.fullmatch(value):
+            return ("int", int(value, 10))
+        if _CORE_INT_OCT.fullmatch(value):
+            return ("int", int(value[2:], 8))
+        if _CORE_INT_HEX.fullmatch(value):
+            return ("int", int(value[2:], 16))
+        if _CORE_FLOAT.fullmatch(value):
+            lowered = value.lower()
+            if lowered.endswith("nan"):
+                return ("float", "nan")
+            if lowered.endswith("inf"):
+                return ("float", -1 if value.startswith("-") else 1, "inf")
+            return ("float", float(value))
+    return ("str", value)
+
+
 def _load_frontmatter(frontmatter_text: str):
     """Load YAML with the loader's duplicate-key rejection."""
 
@@ -104,18 +145,17 @@ def _load_frontmatter(frontmatter_text: str):
                 # Merge keys are flattened by SafeConstructor and have no constructor.
                 if key_node.tag == "tag:yaml.org,2002:merge":
                     continue
-                # The core schema the runtime reader uses keeps YAML 1.1 boolean
-                # spellings like `yes`/`on` as strings, and its duplicate check
-                # compares authored scalar text. SafeLoader would construct both
-                # as True and reject a file the runtime loads.
+                # SafeLoader constructs YAML 1.1 booleans, so `yes`/`on` collide
+                # with `true`; the core schema used by the runtime reader keeps
+                # them distinct. Compare typed core values, not constructed keys.
                 if not isinstance(key_node, yaml.ScalarNode):
                     continue
-                key = key_node.value
+                key = _core_scalar_key(key_node)
                 if key in keys:
                     raise yaml.constructor.ConstructorError(
                         "while constructing a mapping",
                         node.start_mark,
-                        f"found duplicate key {key!r}",
+                        f"found duplicate key {key_node.value!r}",
                         key_node.start_mark,
                     )
                 keys.append(key)
