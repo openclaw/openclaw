@@ -66,15 +66,19 @@ it("splits at exact rendered budgets while retaining source and formatting", () 
       ({ text }) => (text === "ab" ? "x" : text.startsWith("ab") ? "overflow" : text),
     ],
     [markdownToIR("alpha beta gamma"), 10, ["alpha ", "beta gamma"], plainText],
-    [markdownToIR("abc"), Number.NaN, ["a", "b", "c"]],
+    // An unusable cap (NaN, zero, negative) means "no cap", exactly like Infinity and
+    // like chunkText. Coercing it to a limit of 1 shatters a message into one chunk per
+    // character, which readers see as dozens of separate messages.
+    [markdownToIR("abc"), Number.NaN, ["abc"]],
+    [markdownToIR("abc"), 0, ["abc"]],
+    [markdownToIR("abc"), -1, ["abc"]],
     [markdownToIR(unbounded), Infinity, [unbounded]],
   ];
   for (const [ir, limit, expected, render = renderEscapedHtml, rendered] of cases) {
     const chunks = renderChunks(ir, limit, render);
     expect(sourceTexts(chunks), ir.text).toEqual(expected);
-    expect(
-      chunks.every((chunk) => chunk.rendered.length <= (Number.isNaN(limit) ? 1 : limit)),
-    ).toBe(true);
+    const cap = Number.isFinite(limit) && limit > 0 ? limit : Infinity;
+    expect(chunks.every((chunk) => chunk.rendered.length <= cap)).toBe(true);
     if (rendered) {
       expect(renderedValues(chunks)).toEqual(rendered);
     }

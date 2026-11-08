@@ -1,5 +1,5 @@
 import { findGraphemeChunkEnd } from "@openclaw/normalization-core/grapheme";
-import { resolveIntegerOption } from "@openclaw/normalization-core/number-coercion";
+import { normalizeChunkLimit } from "./chunk-limit.js";
 import { annotateAssistantTranscriptRoleMessageBoundary } from "./ir-annotations.js";
 import { sliceMarkdownIRRanges } from "./ir-slice.js";
 import { mergeAnnotationSpans, mergeStyleSpans } from "./ir-spans.js";
@@ -46,14 +46,14 @@ export function renderMarkdownIRChunksWithinLimit<TRendered>(
     return [];
   }
 
-  // Callers pass Infinity to mean "no size cap" (e.g. a media caption that must not be
-  // split). resolveIntegerOption rejects non-finite values and would fall back to 1,
-  // shattering the text into one chunk per character; emit the whole IR as one chunk.
-  if (options.limit === Number.POSITIVE_INFINITY) {
+  // Callers pass Infinity for "no size cap" (e.g. a media caption that must not be split),
+  // and an unusable limit (NaN/zero/negative, typically a config or budget value that came
+  // out wrong) means the same thing. Both go through the package's chunkLimit contract so
+  // they emit the whole IR as one chunk instead of a chunk per character.
+  const normalizedLimit = normalizeChunkLimit(options.limit);
+  if (!Number.isFinite(normalizedLimit) || normalizedLimit <= 0) {
     return [renderCandidate(options, options.ir).output];
   }
-
-  const normalizedLimit = resolveIntegerOption(options.limit, 1, { min: 1 });
   // Treat the pending worklist as a stack so each dequeue/enqueue stays O(1).
   // The initial reverse keeps the final order stable while avoiding shift/unshift
   // moving every remaining chunk for long messages.

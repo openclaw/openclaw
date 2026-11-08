@@ -2,18 +2,10 @@ import {
   findGraphemeChunkEnd,
   skipWhitespaceGraphemes,
 } from "@openclaw/normalization-core/grapheme";
-import { resolveIntegerOption } from "@openclaw/normalization-core/number-coercion";
+import { normalizeChunkLimit } from "./chunk-limit.js";
 import { scanParenAwareBreakpoints } from "./text-breakpoints.js";
 
 export { avoidTrailingHighSurrogateBreak } from "@openclaw/normalization-core/utf16-slice";
-
-function normalizeChunkLimit(limit: number): number {
-  if (Number.isNaN(limit)) {
-    return 0;
-  }
-  // String slicing truncates fractional indexes, so positive limits need an integer progress step.
-  return Number.isFinite(limit) && limit > 0 ? resolveIntegerOption(limit, 1, { min: 1 }) : limit;
-}
 
 export type TextChunkRange = {
   start: number;
