@@ -3299,6 +3299,9 @@ class ChatController internal constructor(
         optimisticMessage = optimisticUserMessage(runId = runId, text = text, attachments = attachments),
       )
     pendingRunProjectionsByRunId[runId] = projection
+    // Until the request settles, an idle recovery snapshot cannot prove this input ended.
+    // Keep the same uncertainty owner used after a lost ACK, including during admission.
+    unknownOutcomeRunIds.add(runId)
     // Admission may outlive its UI selection; only that selection projects before the ACK.
     if (ownsCapturedUi()) projectPendingRun(runId)
 
@@ -6037,6 +6040,7 @@ class ChatController internal constructor(
         is OutboxSendResult.Acknowledged -> {}
       }
       val ack = result.ack
+      if (direct != null) unknownOutcomeRunIds.remove(item.id)
       // Interactive sends retain their existing permissive ACK policy. Reconnect requires a
       // recognized admission status and run ID before it adopts a previously hidden run.
       val accepted =
