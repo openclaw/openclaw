@@ -399,6 +399,21 @@ describe("auth publication generation recovery", () => {
     },
   );
 
+  it("accumulates the agents rebuilt by coalesced auth mutations (#194911)", () => {
+    type Owner = Parameters<PreparedModelRuntimeAuthPublicationOwner["enqueue"]>[0][number];
+    // SAFETY: enqueue reads only provenance and input.agentId and assigns pending.
+    const owner = (agentId: string) =>
+      ({ input: { agentId }, provenance: "configured" }) as unknown as Owner;
+    const publication = new PreparedModelRuntimeAuthPublicationOwner();
+    const first = publication.enqueue([owner("a3")]);
+    expect(publication.claimPublication(first)).toBe(true);
+    // The second mutation joins the queued transaction and never queues its own publisher.
+    const second = publication.enqueue([owner("a4")]);
+    expect(second).toBe(first);
+    expect(publication.claimPublication(second)).toBe(false);
+    expect([...first.rebuiltAgentIds]).toEqual(["a3", "a4"]);
+  });
+
   it("preserves the retirement reason when an auth gate settles after its owner retires", async () => {
     const { snapshot } = await publishOwner();
     const owner = resolvePreparedModelRuntimeOwnerBySnapshot(snapshot)!;

@@ -580,7 +580,13 @@ export function refreshPreparedModelRuntimeSnapshots(
     // Publication listeners may synchronously read the committed owner. Clear the lifecycle
     // gate before announcing availability so they cannot observe a false missing generation.
     notifyPreparedModelRuntimePublication({ phase: "published" });
-    refreshCommittedProviderCatalogs(owners.values(), publicationAgentIds);
+    // Auth mutations adopted into this replacement were rebuilt by it as well.
+    refreshCommittedProviderCatalogs(
+      owners.values(),
+      publicationAgentIds && adoptedAuthTransaction
+        ? new Set([...publicationAgentIds, ...adoptedAuthTransaction.rebuiltAgentIds])
+        : publicationAgentIds,
+    );
   };
   const publication = publicationQueue
     .enqueue(async () => {
@@ -707,7 +713,8 @@ function invalidateForAuthMutation(event: PreparedModelRuntimeAuthMutation): voi
       }
       if (pendingModelRuntimeReplacement?.degraded || configuredOwnersAreRequestVisible(owners)) {
         notifyPreparedModelRuntimePublication({ phase: "published" });
-        refreshCommittedProviderCatalogs(owners.values(), invalidatedConfiguredAgentIds);
+        // Coalesced mutations share this transaction but queue only its first publisher.
+        refreshCommittedProviderCatalogs(owners.values(), transaction.rebuiltAgentIds);
       }
     });
   };
