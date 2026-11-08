@@ -24,7 +24,10 @@ import { registerOpenClawAgentDatabaseAsyncResource } from "../../state/openclaw
 import { executeExistingOpenClawStateRead } from "../../state/openclaw-state-db-readonly.js";
 import { OpenClawStateLeaseError } from "../../state/openclaw-state-lease-error.js";
 import { localWorkspaceProjectionPath } from "./local-workspace-checkout.js";
-import { acknowledgeConflictInStore } from "./local-workspace-conflict-acknowledgement.js";
+import {
+  acknowledgeConflictInState,
+  acknowledgeConflictInStore,
+} from "./local-workspace-conflict-acknowledgement.js";
 import { LocalWorkspaceConflictError } from "./local-workspace-conflict-error.js";
 import { finishLocalWorkspaceHandoff } from "./local-workspace-handoff.js";
 import { assertLocalWorkspaceProjectionOwner } from "./local-workspace-owner-identity.js";
@@ -321,8 +324,8 @@ async function settleLocalWorkspace<T>(
           projectionRevision: current.revision,
           conflicts: checkpoint?.conflicts,
           acknowledgeConflict: (conflictPath, reviewedGuestVersion) =>
-            acknowledgeConflictInStore(
-              store,
+            acknowledgeConflictInState(
+              state,
               conflictPath,
               reviewedGuestVersion,
               owner.assertCurrent,

@@ -726,5 +726,6 @@ export function projectionOperations(
       await store.delete(current(), owner.workerAuthority);
     },
     rememberPaused: (value: string | null) => update({ paused_runtimes_json: value }),
+    update,
   };
 }

@@ -65,6 +65,7 @@ import { assertValidParams, defineValidatedGatewayHandler } from "./validation.j
 import {
   getSessionWorkspaceFile,
   listSessionWorkspaceFiles,
+  resolveSessionWorkspaceCandidatePath,
   setSessionWorkspaceFile,
 } from "./workspace-files.js";
 
@@ -486,9 +487,14 @@ export const sessionsFilesHandlers: GatewayRequestHandlers = {
         let acknowledgedInCustody = false;
         const writeLocalFile = async () => {
           let reviewedGuestVersion: { sha256?: string; mode?: number } | undefined;
-          const write = (assertCurrent = authorize, targetExpectedHash = params.expectedHash) =>
+          const write = (
+            assertCurrent = authorize,
+            targetExpectedHash = params.expectedHash,
+            targetPath = params.path,
+          ) =>
             setSessionWorkspaceFile({
               ...params,
+              path: targetPath,
               expectedHash: targetExpectedHash,
               root: loaded.root,
               fileRoot: loaded.fileRoot,
@@ -497,6 +503,12 @@ export const sessionsFilesHandlers: GatewayRequestHandlers = {
           if (!worktreeId || !loaded.root) {
             return await write();
           }
+          const candidateBrowserPath = await resolveSessionWorkspaceCandidatePath({
+            root: loaded.root,
+            fileRoot: loaded.fileRoot,
+            filePath: params.path,
+          });
+          const effectivePath = candidateBrowserPath ?? params.path;
           const { withSettledLocalWorkspacePath } =
             await import("../worker-environments/local-workspace-projection.js");
           const { resolveReconciledExpectedHash, acknowledgeLocalWorkspaceConflict } =
@@ -513,13 +525,13 @@ export const sessionsFilesHandlers: GatewayRequestHandlers = {
                   cwd: loaded.root,
                   fileRoot: loaded.fileRoot,
                   worktreeId,
-                  path: params.path,
+                  path: effectivePath,
                   expectedHash: params.expectedHash,
                   projectionPath: custody?.projectionPath,
                   conflicts: custody?.conflicts,
                   assertCurrent: currentAuth,
                 });
-              const update = await write(currentAuth, effectiveExpectedHash);
+              const update = await write(currentAuth, effectiveExpectedHash, effectivePath);
               if (update.status === "updated") {
                 if (update.file.workspacePath) {
                   if (custody?.acknowledgeConflict) {

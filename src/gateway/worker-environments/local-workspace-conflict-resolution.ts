@@ -466,6 +466,26 @@ export async function commitLocalWorkspaceReconciliation(params: {
       for (const entry of base.entries) {
         entriesMap.set(entry.path, entry);
       }
+      const snapshotBase =
+        params.snapshot.baseManifestRaw && params.snapshot.baseManifestRef
+          ? parseWorkerWorkspaceManifest(
+              params.snapshot.baseManifestRaw,
+              params.snapshot.baseManifestRef,
+              params.checkpoint?.buildCacheInputs,
+              "stored",
+            )
+          : undefined;
+      const snapshotCurrentPaths = new Set(params.snapshot.current.entries.map((e) => e.path));
+      if (snapshotBase) {
+        for (const baseEntry of snapshotBase.entries) {
+          if (!snapshotCurrentPaths.has(baseEntry.path)) {
+            entriesMap.delete(baseEntry.path);
+          }
+        }
+      }
+      for (const currentEntry of params.snapshot.current.entries) {
+        entriesMap.set(currentEntry.path, currentEntry);
+      }
       const resolvedSet = new Set(params.resolvedCanonicalPaths);
       for (const resolvedEntry of params.resolvedManifest.entries) {
         if (resolvedSet.has(resolvedEntry.path)) {
@@ -478,6 +498,11 @@ export async function commitLocalWorkspaceReconciliation(params: {
         }
       }
       const directories = new Set<string>(base.directories ?? []);
+      if (params.snapshot.current.directories) {
+        for (const dir of params.snapshot.current.directories) {
+          directories.add(dir);
+        }
+      }
       if (params.resolvedManifest.directories) {
         for (const dir of params.resolvedManifest.directories) {
           directories.add(dir);

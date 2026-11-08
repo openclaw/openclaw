@@ -9,24 +9,40 @@ function resolveCandidateBrowserPath(params: {
   cwd: string;
   fileRoot?: string;
   filePath: string;
+  conflicts?: Record<string, unknown>;
 }): string {
-  const normalized = path.normalize(params.filePath);
-  if (path.isAbsolute(normalized)) {
-    const rel = path.relative(params.cwd, normalized);
+  const normalized = path.normalize(params.filePath).replaceAll("\\", "/");
+  if (params.conflicts && Object.prototype.hasOwnProperty.call(params.conflicts, normalized)) {
+    return normalized;
+  }
+  if (path.isAbsolute(params.filePath)) {
+    const rel = path.relative(params.cwd, path.resolve(params.filePath));
     if (!rel.startsWith("..") && !path.isAbsolute(rel)) {
       return rel.replaceAll("\\", "/");
     }
+  }
+  const cwdCandidate = path
+    .relative(params.cwd, path.resolve(params.cwd, params.filePath))
+    .replaceAll("\\", "/");
+  if (params.conflicts && Object.prototype.hasOwnProperty.call(params.conflicts, cwdCandidate)) {
+    return cwdCandidate;
   }
   const base = params.fileRoot ?? params.cwd;
   const candidate = path.resolve(base, params.filePath);
   const rel = path.relative(params.cwd, candidate);
   if (!rel.startsWith("..") && !path.isAbsolute(rel)) {
-    return rel.replaceAll("\\", "/");
+    const relPath = rel.replaceAll("\\", "/");
+    if (params.conflicts && Object.prototype.hasOwnProperty.call(params.conflicts, relPath)) {
+      return relPath;
+    }
+    if (!params.fileRoot || params.fileRoot === params.cwd) {
+      return relPath;
+    }
   }
-  return path
-    .normalize(params.filePath)
-    .replace(/^(\.\.(\/|\\|$))+/, "")
-    .replaceAll("\\", "/");
+  if (!cwdCandidate.startsWith("..") && !path.isAbsolute(cwdCandidate)) {
+    return cwdCandidate;
+  }
+  return normalized.replace(/^(\.\.(\/|\\|$))+/, "");
 }
 
 export async function resolveReconciledExpectedHash(params: {
@@ -83,6 +99,7 @@ export async function resolveReconciledExpectedHash(params: {
       cwd: params.cwd,
       fileRoot: params.fileRoot,
       filePath: params.path,
+      conflicts,
     });
     const hasConflict = Boolean(
       conflicts && Object.prototype.hasOwnProperty.call(conflicts, browserPath),
@@ -110,6 +127,49 @@ export async function resolveReconciledExpectedHash(params: {
     }
   }
   return { effectiveExpectedHash: params.expectedHash, reviewedGuestVersion: undefined };
+}
+
+export async function acknowledgeConflictInState(
+  state: {
+    current: () => LocalWorkspaceProjection;
+    update: (patch: Record<string, unknown>) => Promise<void>;
+  },
+  filePath: string,
+  reviewedGuestVersion?: { sha256?: string; mode?: number },
+  assertCurrent?: () => void,
+): Promise<void> {
+  assertCurrent?.();
+  const row = state.current();
+  const checkpoint = row.checkpoint_json
+    ? (JSON.parse(row.checkpoint_json) as Record<string, unknown>) // SAFETY: Checkpoint JSON deserializes to a key-value record.
+    : {};
+  const acknowledged = new Set(
+    Array.isArray(checkpoint.acknowledgedPaths) ? checkpoint.acknowledgedPaths : [],
+  );
+  acknowledged.add(filePath);
+  const acknowledgedGuestVersions = {
+    // SAFETY: Acknowledged guest versions map stores reviewed hashes and modes.
+    ...(checkpoint.acknowledgedGuestVersions as
+      | Record<string, { sha256?: string; mode?: number }>
+      | undefined),
+    ...(reviewedGuestVersion ? { [filePath]: reviewedGuestVersion } : {}),
+  };
+  const previousRoot = checkpoint.previousRoot ?? row.baseline_ref ?? null;
+  const resultingRoot = checkpoint.resultingRoot ?? row.baseline_ref ?? "";
+  assertCurrent?.();
+  await state.update({
+    checkpoint_json: JSON.stringify({
+      version: 1,
+      kind: "scan",
+      records: [],
+      removed: [],
+      ...checkpoint,
+      previousRoot,
+      resultingRoot,
+      acknowledgedPaths: [...acknowledged],
+      acknowledgedGuestVersions,
+    }),
+  });
 }
 
 export async function acknowledgeConflictInStore(

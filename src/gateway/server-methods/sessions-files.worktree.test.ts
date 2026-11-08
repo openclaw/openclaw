@@ -136,6 +136,67 @@ async function seedRegisteredWorktreeConflictSession(workspaceDir: string) {
   return { entry, worktreeRecord, projectionDir };
 }
 
+async function seedPreparedWorktreeConflictSession(
+  workspaceDir: string,
+  options?: { subDir?: string; initialFile?: string; initialContent?: string },
+) {
+  setRuntimeConfigSnapshot({});
+  const { requireGit } = await import("../../agents/worktrees/git.js");
+  const { withLocalWorkspaceProjection } =
+    await import("../worker-environments/local-workspace-projection.js");
+  const repoDir = path.join(workspaceDir, "repo");
+  const worktreeDir = path.join(workspaceDir, "worktree");
+  fs.mkdirSync(repoDir, { recursive: true });
+  await requireGit(repoDir, ["init", "--quiet", "-b", "main"]);
+  await requireGit(repoDir, ["config", "user.name", "Test"]);
+  await requireGit(repoDir, ["config", "user.email", "test@example.invalid"]);
+  const initialRel = options?.initialFile ?? "preview.html";
+  const initialData = options?.initialContent ?? "<h1>base</h1>\n";
+  const repoFile = path.join(repoDir, initialRel);
+  fs.mkdirSync(path.dirname(repoFile), { recursive: true });
+  fs.writeFileSync(repoFile, initialData);
+  await requireGit(repoDir, ["add", "."]);
+  await requireGit(repoDir, ["commit", "--quiet", "-m", "base"]);
+  await requireGit(repoDir, ["worktree", "add", "--quiet", "-b", "openclaw/test", worktreeDir]);
+
+  const worktreeId = randomUUID();
+  const worktreeRecord = {
+    id: worktreeId,
+    name: "managed-wt",
+    repoFingerprint: "test",
+    repoRoot: repoDir,
+    path: worktreeDir,
+    branch: "openclaw/test",
+    baseRef: "main",
+    ownerKind: "session" as const,
+    ownerId: key,
+    createdAt: 0,
+    lastActiveAt: 0,
+    snapshotRef: null,
+  };
+  await insertRegistryWorktree(process.env, worktreeRecord);
+  const spawnedCwd = options?.subDir ? path.join(worktreeDir, options.subDir) : worktreeDir;
+  const entry = {
+    sessionId: "worktree-session",
+    lifecycleRevision: "rev-1",
+    updatedAt: 1,
+    spawnedCwd,
+    spawnedWorkspaceDir: worktreeDir,
+    worktree: worktreeRecord,
+  };
+  await sessions.upsertSessionEntryCore(scope, entry);
+  const owner = {
+    agentId: "main",
+    sessionKey: key,
+    sessionId: entry.sessionId,
+    lifecycleRevision: null,
+    assertCurrent: () => {},
+    worktree: worktreeRecord,
+  };
+  const projectionDir = await withLocalWorkspaceProjection(owner, (state) => state.prepare());
+  return { entry, worktreeRecord, projectionDir, owner, worktreeDir, repoDir };
+}
+
 function seedReplicaPressure(env: NodeJS.ProcessEnv) {
   const database = openOpenClawAgentDatabase({ agentId: "main", env });
   const siblingKeys = Array.from(
@@ -424,26 +485,19 @@ describe("sessions.files for managed-worktree sessions", () => {
 
   it("acknowledges and saves a reconciled version via sessions.files.set during conflict", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-      const { entry, projectionDir } = await seedRegisteredWorktreeConflictSession(
-        state.workspaceDir,
-      );
-      const { withLocalWorkspaceStore } =
-        await import("../worker-environments/local-workspace-store.js");
-      const { localWorkspaceProjectionFixture, readLocalWorkspaceProjection } =
-        await import("../worker-environments/local-workspace-store.test-support.js");
-      await withLocalWorkspaceStore({ worktreeId: entry.worktree.id }, async (store) => {
-        await store.create({
-          ...localWorkspaceProjectionFixture(entry.worktree.id, state.workspaceDir),
-          session_key: key,
-          session_id: entry.sessionId,
-          projection_path: projectionDir,
-          pending_ref: "sha256:1111111111111111111111111111111111111111111111111111111111111111",
-          pending_target: "canonical",
-          checkpoint_json: JSON.stringify({
-            conflicts: { "preview.html": {} },
-          }),
-        });
-      });
+      const { entry, projectionDir, owner, worktreeDir } =
+        await seedPreparedWorktreeConflictSession(state.workspaceDir);
+      const guestText = "<h1>guest draft</h1>\n";
+      const guestHash = createHash("sha256").update(guestText).digest("hex");
+      fs.writeFileSync(path.join(projectionDir, "preview.html"), guestText);
+      fs.writeFileSync(path.join(worktreeDir, "preview.html"), preview);
+      const { withLocalWorkspaceProjection } =
+        await import("../worker-environments/local-workspace-projection.js");
+      try {
+        await withLocalWorkspaceProjection(owner as any, (s) => s.synchronize("canonical"));
+      } catch {
+        // expected conflict
+      }
       const invoke = createSessionFilesHandlerInvoker(sessionsFilesHandlers);
       const source = {
         workspaceId: entry.worktree.id,
@@ -454,16 +508,17 @@ describe("sessions.files for managed-worktree sessions", () => {
         sessionKey: key,
         path: "preview.html",
         content: "reconciled administrator content\n",
-        expectedHash,
+        expectedHash: guestHash,
         expectedSource: source,
       });
       expect(result).toMatchObject([{ ok: true }]);
       expect(readPreview(entry.spawnedCwd)).toBe("reconciled administrator content\n");
+      expect(readPreview(projectionDir)).toBe("reconciled administrator content\n");
 
+      const { readLocalWorkspaceProjection } =
+        await import("../worker-environments/local-workspace-store.test-support.js");
       const row = await readLocalWorkspaceProjection(entry.worktree.id);
-      expect(row?.checkpoint_json).toBeTruthy();
-      const checkpoint = JSON.parse(row!.checkpoint_json!);
-      expect(checkpoint.acknowledgedPaths).toContain("preview.html");
+      expect(row?.pending_ref).toBeNull();
     });
   });
 
@@ -672,6 +727,54 @@ describe("sessions.files for managed-worktree sessions", () => {
       expect(row?.checkpoint_json).toBeTruthy();
       const checkpoint = JSON.parse(row!.checkpoint_json!);
       expect(checkpoint.acknowledgedPaths).toContain("preview.html");
+    });
+  });
+
+  it("resolves conflict hash correctly when session has a nested fileRoot", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const { entry, projectionDir, owner, worktreeDir } =
+        await seedPreparedWorktreeConflictSession(state.workspaceDir, {
+          subDir: "sub",
+          initialFile: "sub/handover.md",
+          initialContent: "base handover\n",
+        });
+      const subCanonical = path.join(worktreeDir, "sub", "handover.md");
+      const subProjection = path.join(projectionDir, "sub", "handover.md");
+      fs.writeFileSync(subCanonical, "canonical handover\n");
+      fs.writeFileSync(subProjection, "guest handover draft\n");
+      const guestHash = createHash("sha256").update("guest handover draft\n").digest("hex");
+
+      const { withLocalWorkspaceProjection } =
+        await import("../worker-environments/local-workspace-projection.js");
+      try {
+        await withLocalWorkspaceProjection(owner as any, (projectionState) =>
+          projectionState.synchronize("canonical"),
+        );
+      } catch {
+        // expected conflict
+      }
+
+      const invoke = createSessionFilesHandlerInvoker(sessionsFilesHandlers);
+      const source = {
+        workspaceId: entry.worktree.id,
+        root: worktreeDir,
+        fileRoot: path.join(worktreeDir, "sub"),
+      };
+      const result = await invoke("sessions.files.set", {
+        sessionKey: key,
+        path: "sub/handover.md",
+        content: "reconciled handover content\n",
+        expectedHash: guestHash,
+        expectedSource: source,
+      });
+      expect(result).toMatchObject([{ ok: true }]);
+      expect(fs.readFileSync(subCanonical, "utf8")).toBe("reconciled handover content\n");
+      expect(fs.readFileSync(subProjection, "utf8")).toBe("reconciled handover content\n");
+
+      const { readLocalWorkspaceProjection } =
+        await import("../worker-environments/local-workspace-store.test-support.js");
+      const row = await readLocalWorkspaceProjection(entry.worktree.id);
+      expect(row?.pending_ref).toBeNull();
     });
   });
 });
