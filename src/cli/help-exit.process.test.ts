@@ -336,13 +336,9 @@ it.each(
     ok: false,
     error: { type: "cli_error", message },
   });
-  if (provider === "autoqa-no-such-provider") {
-    expect(result.stderr).toContain("[openclaw] The CLI command failed.");
-    expect(result.stderr).toContain("[openclaw] For help, run `openclaw doctor`.");
-    expect(result.stderr).not.toContain(message);
-  } else {
-    expect(result.stderr).toContain(message);
-  }
+  // Both filters are expected CLI errors now: stderr names the problem instead of the generic line.
+  expect(result.stderr).toContain(message);
+  expect(result.stderr).not.toContain("[openclaw] The CLI command failed.");
 });
 
 it.runIf(process.platform !== "win32")(
