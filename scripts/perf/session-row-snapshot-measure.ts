@@ -121,6 +121,7 @@ const publication: NonNullable<
 >["publicationState"] = {
   factsRevision: 0,
   rows: new WeakMap(),
+  previousViews: new WeakMap(),
   lists: new SessionListViewCache(),
 };
 const recipient = {
