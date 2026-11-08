@@ -442,8 +442,9 @@ it.each([
     if ("type" in routeData) {
       throw new Error("Expected the discovery route to load");
     }
-    expect(inventoryReads).toBe(1);
+    expect(inventoryReads).toBe(0);
     const { page } = await mountPage(context, routeData);
+    expect(inventoryReads).toBe(1);
     if (detail === "return") {
       await waitForSolid(() =>
         expect(page.querySelector("#plugin-catalog-detail-title")).not.toBeNull(),
@@ -503,7 +504,7 @@ it.each([
 );
 
 it.each(["success", "failure", "metadata", "replacement", "reconnect"])(
-  "adopts prepared installed inventory with %s",
+  "refreshes installed inventory at page adoption with %s",
   async (outcome) => {
     const inventory = deferred<PluginListResult>();
     let reads = 0;
@@ -516,10 +517,12 @@ it.each(["success", "failure", "metadata", "replacement", "reconnect"])(
       context,
       createRouteLoaderOptions(createPluginsRouteLocation()),
     );
-    expect(request).toHaveBeenCalledWith("plugins.list", {});
+    expect(request).not.toHaveBeenCalled();
     if ("type" in route) {
       throw new Error("Expected the installed Plugins route to load");
     }
+    const { page } = await mountPage(context, route);
+    expect(reads).toBe(1);
     if (outcome === "metadata") {
       harness.emit(client, true, { hello: harness.gateway.snapshot.hello });
     }
@@ -530,7 +533,6 @@ it.each(["success", "failure", "metadata", "replacement", "reconnect"])(
     if (outcome === "reconnect") {
       harness.emit(client, true, { hello: gatewayHelloForMethods(["plugins.list"]) });
     }
-    const { page } = await mountPage(context, route);
     if (outcome === "replacement" || outcome === "reconnect") {
       await waitForSolid(() => expect(page.textContent).toContain("Fresh plugin"));
       inventory.resolve(createResult(createPlugin({ name: "Retired plugin" })));
@@ -540,10 +542,8 @@ it.each(["success", "failure", "metadata", "replacement", "reconnect"])(
     } else {
       expect(page.querySelector('.settings-loading-skeleton[aria-busy="true"]')).not.toBeNull();
       if (outcome === "failure") {
-        inventory.reject(new Error("Prepared inventory unavailable"));
-        await waitForSolid(() =>
-          expect(page.textContent).toContain("Prepared inventory unavailable"),
-        );
+        inventory.reject(new Error("Inventory unavailable"));
+        await waitForSolid(() => expect(page.textContent).toContain("Inventory unavailable"));
       } else {
         inventory.resolve(createResult());
         await waitForSolid(() => expect(page.textContent).toContain("Workboard"));
@@ -555,18 +555,24 @@ it.each(["success", "failure", "metadata", "replacement", "reconnect"])(
   },
 );
 
-it.each(["denied", "cancelled"])("does not prepare Plugins inventory when %s", async (reason) => {
-  const { client, request, harness } = pageGateway({ "plugins.list": () => createResult() });
-  if (reason === "denied") {
-    harness.emit(client, true, { hello: gatewayHelloForMethods([], ["operator.sessions.read"]) });
-  }
-  const context = createContext(harness.gateway);
-  await pages[1].loader!(context, {
-    ...createRouteLoaderOptions(createPluginsRouteLocation()),
-    shouldRun: () => reason !== "cancelled",
-  });
-  expect(request).not.toHaveBeenCalled();
-});
+it.each(["denied", "cancelled"])(
+  "does not load Plugins inventory before page adoption when %s",
+  async (reason) => {
+    const { client, request, harness } = pageGateway({ "plugins.list": () => createResult() });
+    if (reason === "denied") {
+      harness.emit(client, true, { hello: gatewayHelloForMethods([], ["operator.sessions.read"]) });
+    }
+    const context = createContext(harness.gateway);
+    const route = await pages[1].loader!(context, {
+      ...createRouteLoaderOptions(createPluginsRouteLocation()),
+      shouldRun: () => reason !== "cancelled",
+    });
+    if (reason === "denied" && !("type" in route)) {
+      await mountPage(context, route);
+    }
+    expect(request).not.toHaveBeenCalled();
+  },
+);
 
 it("keeps the latest Install request while an older catalog detail is pending", async () => {
   const details = ["Alpha", "Beta"].map((name) =>

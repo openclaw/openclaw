@@ -232,7 +232,7 @@ it.each([
   ["/plugins/catalog-workboard", "discovery"],
   ["/settings/plugins/workboard", "settings"],
 ] as const)(
-  "refreshes published inventory after delayed preload on %s (%s)",
+  "refreshes published inventory after a delayed page read on %s (%s)",
   async (path, surface) => {
     const selector = path === "/plugins" ? ".plugin-catalog-card" : ".plugin-catalog-detail";
     const plugin = createPlugin({ name: "Fresh route plugin" });
@@ -266,13 +266,12 @@ it.each([
     if ("type" in route) {
       throw new Error("Expected the Plugins route to load");
     }
+    expect(inventoryReads).toBe(0);
+    const { page } = await mountPage(harness.context, route, surface);
     expect(inventoryReads).toBe(1);
-    const { page } = await mountPage(harness.context, undefined, surface);
     const find = queryWithin(page);
     const connect = vi.spyOn(harness.gateway, "connect");
     harness.publishGeneration(1);
-    await page.updateComplete;
-    page.routeData = route;
     await page.updateComplete;
     preload.resolve({ ...createResult(), generation: 0 });
     await waitForSolid(() => expect(find(selector)?.textContent).toContain(plugin.name));
@@ -281,7 +280,7 @@ it.each([
   },
 );
 
-it("targets the selected installed route after its stale inventory refresh fails", async () => {
+it("targets the selected installed route after its inventory refresh fails", async () => {
   const alpha = createPlugin({ id: "alpha", name: "Alpha" });
   const beta = createPlugin({ id: "beta", name: "Beta" });
   const inventory = { ...createResult([alpha, beta]), generation: 1 };
@@ -311,7 +310,7 @@ it("targets the selected installed route after its stale inventory refresh fails
     response = refresh.promise;
     page.routeData = route;
     await page.updateComplete;
-    await waitForSolid(() => expect(harness.calls("plugins.list")).toHaveLength(2));
+    await waitForSolid(() => expect(harness.calls("plugins.list")).toHaveLength(1));
     refresh.reject(new Error("Inventory unavailable"));
     await waitForSolid(() => expect(find('[aria-label="Enable Beta"]')).not.toBeNull());
     await page.updateComplete;

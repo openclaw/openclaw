@@ -33,7 +33,6 @@ import {
 import {
   pluginIdForRoute,
   pluginSettingsNeedsSchema,
-  type PluginsCatalogRead,
   type PluginsRouteData,
 } from "./route-data.ts";
 import type { PluginSettingsEditorProps } from "./settings-editor.tsx";
@@ -235,23 +234,8 @@ export function createPluginsPage(options: {
     onConsentDismiss: promptLaunch.reset,
   });
   const catalogTask = createPageRequest(publish, {
-    task: async (
-      [client, prepared]: readonly [
-        NonNullable<GatewayPageBinding["client"]>,
-        PluginsCatalogRead["result"]?,
-      ],
-      { signal },
-    ) => {
-      if (!prepared) {
-        return client.request<PluginListResult>("plugins.list", {}, { signal });
-      }
-      const result = await prepared;
-      // A plugin publication can overtake the preload while the page module loads.
-      if (pluginGeneration !== undefined && (result.generation ?? -1) < pluginGeneration) {
-        return client.request<PluginListResult>("plugins.list", {}, { signal });
-      }
-      return result;
-    },
+    task: ([client]: readonly [NonNullable<GatewayPageBinding["client"]>], { signal }) =>
+      client.request<PluginListResult>("plugins.list", {}, { signal }),
     onComplete: (result) => {
       replaceResult(result);
       if (surface === "settings") {
@@ -463,10 +447,7 @@ export function createPluginsPage(options: {
     if (catalogId !== state.catalogDetail?.id) {
       void showCatalogDetail(catalogId);
     }
-    const prepared = data.catalogRead;
-    ensureInitialData(
-      prepared && gateway.isRouteDataCurrent(prepared) ? prepared.result : undefined,
-    );
+    ensureInitialData(true);
   }
 
   function invalidateRequests(invalidateCatalog: boolean, retirePresentation = true) {
@@ -531,7 +512,7 @@ export function createPluginsPage(options: {
     );
   }
 
-  function ensureInitialData(prepared?: PluginsCatalogRead["result"]) {
+  function ensureInitialData(refresh = false) {
     if (readAccess === false) {
       return;
     }
@@ -541,7 +522,7 @@ export function createPluginsPage(options: {
     if (surface === "discovery" && !activeRoutePluginId()) {
       void discovery.ensureCategories();
     }
-    // The route admits location and scope before the page starts its reads.
+    // The route admits location before the page starts its reads.
     if (!routeDataConsumed || !gateway.connected || !gateway.client) {
       return;
     }
@@ -556,15 +537,12 @@ export function createPluginsPage(options: {
     if (routeData && pluginSettingsNeedsSchema(surface, routeData.location, context.basePath)) {
       void context.runtimeConfig.ensureSchemaLoaded();
     }
-    if (prepared || (!loading() && !state.result && !state.error)) {
-      void refreshCatalog(gateway.client, prepared);
+    if (refresh || (!loading() && !state.result && !state.error)) {
+      void refreshCatalog();
     }
   }
 
-  async function refreshCatalog(
-    client = gateway.connected ? gateway.client : null,
-    prepared?: PluginsCatalogRead["result"],
-  ) {
+  async function refreshCatalog(client = gateway.connected ? gateway.client : null) {
     if (!client || readAccess === false) {
       return;
     }
@@ -573,7 +551,7 @@ export function createPluginsPage(options: {
     if (surface === "discovery" && !activeRoutePluginId()) {
       void discovery.refresh();
     }
-    const promise = catalogTask.run([client, prepared]);
+    const promise = catalogTask.run([client]);
     void setCatalog(promise);
     await promise;
   }
