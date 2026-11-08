@@ -1,4 +1,5 @@
 import { preserveCompactionReplayWindow } from "@openclaw/ai/transports";
+import { estimateStringTokenPressure } from "@openclaw/normalization-core/cjk-chars";
 import { filterHeartbeatTranscriptArtifacts } from "../../../auto-reply/heartbeat-filter.js";
 import { resolveSessionStorePathCore } from "../../../config/sessions/paths.js";
 import { patchSessionEntryCore } from "../../../config/sessions/session-accessor.js";
@@ -16,48 +17,72 @@ import { OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST } from "../../../context-engine/h
 import { freezeJsonSnapshot } from "../../../shared/immutable-data.js";
 import { shouldMergeConsecutiveTurns } from "../../embedded-agent-helpers/turns.js";
 import { prepareHarnessContextEnginePrompt } from "../../harness/context-engine-lifecycle.js";
+import { estimateMessageTokenPressure } from "../../sessions/context-token-pressure.js";
 import { getHistoryLimitFromSessionKey, limitHistoryTurns } from "../history.js";
 import { log } from "../logger.js";
 import { sanitizeSessionHistory, validateReplayTurns } from "../replay-history.js";
 import { bindToolResultPromptProjectionKeys } from "../tool-result-projection-key.js";
+import { truncateOversizedToolResultsInMessages } from "../tool-result-truncation.js";
 import type { EmbeddedAttemptExecutionPhaseInput } from "./attempt-execution-types.js";
 import { loadAttemptSessionEntryAfterQuotaMaintenance } from "./attempt-transcript-helpers.js";
 import type { EmbeddedRunAttemptInternalParams } from "./internal-params.js";
 import { resolveEmbeddedSessionContextLimits } from "./session-context-limits.js";
 
 function boundSettledFinalizationMessages(attempt: EmbeddedRunAttemptInternalParams) {
-  const requests: ModelContextRequest[] = attempt.settledTurnFinalizationMessages!.map(
-    (message, index) => ({
-      entry: {
-        type: "message",
-        id: String(index),
-        parentId: index ? String(index - 1) : null,
-        timestamp: new Date(message.timestamp).toISOString(),
-        message,
-        seq: index,
-      },
-      omitCheckpoint: false,
-    }),
-  );
+  const contextTokens = attempt.contextTokenBudget ?? 128_000;
+  const boundedToolMessages = truncateOversizedToolResultsInMessages(
+    [...attempt.settledTurnFinalizationMessages!],
+    contextTokens,
+  ).messages;
+  const requests: ModelContextRequest[] = boundedToolMessages.map((message, index) => ({
+    entry: {
+      type: "message",
+      id: String(index),
+      parentId: index ? String(index - 1) : null,
+      timestamp: new Date(message.timestamp).toISOString(),
+      message,
+      seq: index,
+    },
+    omitCheckpoint: false,
+  }));
   const project = (request: ModelContextRequest) => {
     const message = request.entry.type === "message" ? request.entry.message : undefined;
     return message?.role === "toolResult" && request.toolResultOmission
       ? { ...message, content: [{ type: "text" as const, text: request.toolResultOmission }] }
       : message!;
   };
-  // Reuse hydration's byte/event and tool-body omission policy on the selected view.
-  // Only model input changes; the receipt-bearing writer remains the original manager.
-  return selectBoundedModelRequests(
-    requests,
-    (selected) =>
-      new Map(
-        selected.map((request) => [
-          request.entry,
-          Buffer.byteLength(JSON.stringify(project(request)), "utf8") + 1,
-        ]),
-      ),
-    resolveEmbeddedSessionContextLimits(attempt),
-  ).map(project);
+  const readSizes = (selected: readonly ModelContextRequest[]) =>
+    new Map(
+      selected.map((request) => [
+        request.entry,
+        Buffer.byteLength(JSON.stringify(project(request)), "utf8") + 1,
+      ]),
+    );
+  const limits = resolveEmbeddedSessionContextLimits(attempt);
+  const reserveTokens = Math.min(8_192, Math.max(256, Math.floor(contextTokens / 16)));
+  const inputBudget = Math.max(1, contextTokens - reserveTokens);
+  const promptTokens = estimateStringTokenPressure(attempt.prompt ?? "");
+  let maxBytes = limits.maxBytes;
+  // The byte hydration cap alone cannot bound tokens in a finalizer request.
+  // Keep the durable transcript intact while narrowing only this model view.
+  for (let pass = 0; pass < 8; pass += 1) {
+    const selected = selectBoundedModelRequests(requests, readSizes, { ...limits, maxBytes });
+    const messages = selected.map(project);
+    const estimatedInput = Math.ceil(
+      (promptTokens +
+        messages.reduce((sum, message) => sum + estimateMessageTokenPressure(message), 0)) *
+        1.25,
+    );
+    if (estimatedInput <= inputBudget) {
+      return messages;
+    }
+    const selectedBytes = [...readSizes(selected).values()].reduce((sum, size) => sum + size, 0);
+    maxBytes = Math.max(
+      1_024,
+      Math.min(maxBytes - 1, Math.floor((selectedBytes * inputBudget * 0.9) / estimatedInput)),
+    );
+  }
+  throw new RangeError("Settled-turn finalization context still exceeds the model token budget");
 }
 
 export async function prepareEmbeddedAttemptHistory(
