@@ -425,14 +425,14 @@ async function loadWorkerOwner() {
     return undefined;
   }
   const { resolveSharedVitestCompilerEnv } = await import("./lib/vitest-process-env.mts");
-  const [worker, processOwner, runtimeSelection] = await Promise.all([
+  const [worker, processOwner, { areRuntimeOnlyVitestUnitFiles }] = await Promise.all([
     import("./lib/vitest-worker-run.mts"),
     import("./lib/vitest-process.mts"),
     import("./lib/vitest-runtime-selection.mts"),
   ]);
   return {
     createWorkerRun: worker.createVitestWorkerRun,
-    areRuntimeOnlyFiles: runtimeSelection.areRuntimeOnlyVitestUnitFiles,
+    areRuntimeOnlyFiles: areRuntimeOnlyVitestUnitFiles,
     resolveCompilerEnv: resolveSharedVitestCompilerEnv,
     spawn: processOwner.spawnOwnedVitestProcess,
     exitBySignal: processOwner.exitVitestBySignal,
