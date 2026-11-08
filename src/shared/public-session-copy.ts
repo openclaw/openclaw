@@ -37,8 +37,7 @@ export const PUBLIC_SESSION_COPY = {
   publicReadOnly: "Public · Read-only",
   earlierConversation: "Earlier conversation",
   backToLatest: "Back to latest",
-  unavailable:
-    "This conversation is not publicly available. Log in to open conversations you have access to.",
+  unavailable: "This conversation isn’t public. Log in if you have access.",
   sharedEveryone: "Shared with everyone, no login required.",
   liveDescription:
     "This live view includes conversation text, tool steps, shared images, and interactive widgets. Tool result text and reasoning are omitted.",

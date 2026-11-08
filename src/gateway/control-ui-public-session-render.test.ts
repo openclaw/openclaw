@@ -217,7 +217,7 @@ describe("public session document", () => {
       title: "Conversation unavailable",
       unavailable: true,
     });
-    expect(unavailable).toContain("not publicly available");
+    expect(unavailable).toContain("This conversation isn’t public.");
     const unavailableMain = JSDOM.fragment(unavailable).querySelector("main")!;
     expect(unavailableMain.textContent).not.toContain("Public · Read-only");
     expect(unavailableMain.querySelector(".colophon")).toBeNull();
@@ -244,7 +244,7 @@ describe("public session document", () => {
       fragment([], { title: "Conversation unavailable", unavailable: true }).querySelector(
         ".app-skeleton",
       ),
-    ).toBeNull();
+    ).not.toBeNull();
   });
   it("publishes only user and assistant conversation text without internal input or metadata", () => {
     const token = `sk-${"a".repeat(48)}`;

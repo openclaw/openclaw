@@ -89,6 +89,18 @@ function expectUnavailable(f: ReturnType<typeof openReader>) {
   expect(f.document.querySelector("main")!.hasAttribute("data-entry-pending")).toBe(false);
   expect(f.document.title).toBe("Conversation unavailable · OpenClaw");
   expect(f.loginVisibility()).toBe("visible");
+  const login = f.document.querySelector(".entry-actions > #session-login")!;
+  expect(login?.classList.contains("primary")).toBe(true);
+  expect(f.document.querySelector(".topbar #session-login")).toBeNull();
+  expect(f.window.getComputedStyle(f.document.querySelector(".app-skeleton")!).display).toBe(
+    "flex",
+  );
+  expect(f.window.getComputedStyle(f.document.querySelector(".entry-actions")!).display).toBe(
+    "flex",
+  );
+  expect(f.window.getComputedStyle(f.document.querySelector("[data-public-reload]")!).display).toBe(
+    "none",
+  );
   expect(f.replace).not.toHaveBeenCalled();
 }
 
