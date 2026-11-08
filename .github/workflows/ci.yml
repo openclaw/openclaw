@@ -2592,6 +2592,8 @@ jobs:
         id: ui_bun
         if: ${{ !cancelled() && steps.node_setup.outcome == 'success' && contains(fromJSON('["bun-all","dual-all"]'), needs.preflight.outputs.ui_test_runtime_policy) }}
         uses: ./.ci-harness/.github/actions/setup-test-bun
+        with:
+          cache-mode: ${{ needs.preflight.outputs.cache_mode }}
 
       - name: Lint Control UI window.open usage
         if: ${{ !cancelled() && steps.node_setup.outcome == 'success' && matrix.shard == 1 }}
@@ -3279,6 +3281,13 @@ jobs:
           dependency-cache: *trusted_dependency_cache
           restore-test-caches: ${{ (needs.preflight.outputs.runner_profile == 'github' || needs.preflight.outputs.runner_profile == 'hybrid') && (matrix.task == 'bundled-protocol' || matrix.task == 'contracts-plugins-ci-routing' || matrix.task == 'ci-routing' || matrix.task == 'bun-launcher') && 'true' || 'false' }}
 
+      - name: Setup pinned Bun parity runtime
+        id: bun_setup
+        if: startsWith(matrix.task, 'release-lint-')
+        uses: ./.ci-harness/.github/actions/setup-test-bun
+        with:
+          cache-mode: ${{ needs.preflight.outputs.cache_mode }}
+
       - name: Run ${{ matrix.task }} (${{ matrix.runtime }})
         env:
           OPENCLAW_TEST_PROJECTS_PARALLEL: 3
@@ -3775,6 +3784,8 @@ jobs:
       - name: Setup pinned Bun test runtime
         if: matrix.requires_bun == true
         uses: ./.ci-harness/.github/actions/setup-test-bun
+        with:
+          cache-mode: ${{ needs.preflight.outputs.cache_mode }}
 
       - name: Setup Go for docs i18n
         if: matrix.requires_go == true
@@ -4084,6 +4095,13 @@ jobs:
           install-bun: "false"
           dependency-cache: *trusted_dependency_cache
 
+      - name: Setup pinned Bun parity runtime
+        id: bun_setup
+        if: matrix.task == 'lint'
+        uses: ./.ci-harness/.github/actions/setup-test-bun
+        with:
+          cache-mode: ${{ needs.preflight.outputs.cache_mode }}
+
       - name: Compute extension boundary input fingerprint
         id: extension-boundary-inputs
         if: matrix.task == 'lint' && (needs.preflight.outputs.runner_profile != 'hybrid' || needs.preflight.outputs.frozen_target == 'true')
@@ -4108,7 +4126,7 @@ jobs:
           cache-mode: ${{ needs.preflight.outputs.cache_mode }}
 
       - name: Run changed lint
-        if: ${{ !cancelled() && steps.check_setup.outcome == 'success' && matrix.task == 'lint' && (needs.preflight.outputs.run_check_plan == 'true' && needs.check-plan.outputs.central_lint_selection_json || needs.preflight.outputs.central_lint_selection_json) }}
+        if: ${{ !cancelled() && steps.check_setup.outcome == 'success' && steps.bun_setup.outcome == 'success' && matrix.task == 'lint' && (needs.preflight.outputs.run_check_plan == 'true' && needs.check-plan.outputs.central_lint_selection_json || needs.preflight.outputs.central_lint_selection_json) }}
         env:
           NARROW_CHECK_PATHS_JSON: ${{ needs.preflight.outputs.narrow_check_paths_json }}
           CI_LINT_SELECTION_JSON: ${{ (needs.preflight.outputs.run_check_plan == 'true' && needs.check-plan.outputs.central_lint_selection_json || needs.preflight.outputs.central_lint_selection_json) }}
@@ -4129,7 +4147,7 @@ jobs:
           CHANGED_LINT
 
       - name: Run check shard
-        if: ${{ !cancelled() && (steps.check_setup.outcome == 'success' || steps.npm-lock-scope.outputs.skip == 'true') && (matrix.task != 'lint' || !(needs.preflight.outputs.run_check_plan == 'true' && needs.check-plan.outputs.central_lint_selection_json || needs.preflight.outputs.central_lint_selection_json)) }}
+        if: ${{ !cancelled() && (steps.check_setup.outcome == 'success' || steps.npm-lock-scope.outputs.skip == 'true') && (matrix.task != 'lint' || steps.bun_setup.outcome == 'success') && (matrix.task != 'lint' || !(needs.preflight.outputs.run_check_plan == 'true' && needs.check-plan.outputs.central_lint_selection_json || needs.preflight.outputs.central_lint_selection_json)) }}
         env:
           SKIP_NPM_LOCK: ${{ steps.npm-lock-scope.outputs.skip }}
           FROZEN_TARGET: *frozen_target
@@ -4464,6 +4482,12 @@ jobs:
         uses: ./.ci-harness/.github/actions/setup-node-env
         with: *semantic_node_inputs
 
+      - name: Setup pinned Bun parity runtime
+        id: bun_setup
+        uses: ./.ci-harness/.github/actions/setup-test-bun
+        with:
+          cache-mode: ${{ needs.preflight.outputs.cache_mode }}
+
       - name: Cache extension package boundary artifacts for hosted core lint
         id: sdk-boundary-cache
         if: (needs.preflight.outputs.shared_sdk_declarations != 'true' || matrix.requires_sdk_declarations != true) && needs.preflight.outputs.cache_mode != 'off' && needs.preflight.outputs.runner_profile == 'github' && !inputs.release_gate
@@ -4529,7 +4553,7 @@ jobs:
           finish_static_checks
 
       - name: Run shared central lint
-        if: ${{ !cancelled() && matrix.shared_central_lint_selection_json }}
+        if: ${{ !cancelled() && steps.bun_setup.outcome == 'success' && matrix.shared_central_lint_selection_json }}
         env:
           NARROW_CHECK_PATHS_JSON: ${{ needs.preflight.outputs.narrow_check_paths_json }}
           CI_LINT_SELECTION_JSON: ${{ matrix.shared_central_lint_selection_json }}
@@ -4580,6 +4604,12 @@ jobs:
           semantic-checks: "true"
           cache-mode: *cache_mode
           install-bun: "false"
+
+      - name: Setup pinned Bun parity runtime
+        id: bun_setup
+        uses: ./.ci-harness/.github/actions/setup-test-bun
+        with:
+          cache-mode: ${{ needs.preflight.outputs.cache_mode }}
 
       - name: Restore extension package boundary artifacts
         id: sdk-boundary-cache
@@ -4702,6 +4732,13 @@ jobs:
           base-sha: ${{ needs.preflight.outputs.diff_head_revision }}
           fetch-ref: ${{ github.event_name == 'workflow_dispatch' && inputs.release_gate && format('refs/pull/{0}/merge', inputs.pull_request_number) || github.event_name == 'pull_request' && github.event.pull_request.base.ref || github.event.repository.default_branch }}
       - *semantic_node_setup_step
+
+      - name: Setup pinned Bun parity runtime
+        id: bun_setup
+        if: matrix.group == 'boundaries'
+        uses: ./.ci-harness/.github/actions/setup-test-bun
+        with:
+          cache-mode: *cache_mode
 
       - name: Compute extension boundary input fingerprint
         id: extension-boundary-inputs
@@ -4866,8 +4903,15 @@ jobs:
       - *linux_node_checkout_step
       - *linux_node_setup_step
 
+      - name: Setup pinned Bun parity runtime
+        id: bun_setup
+        if: needs.preflight.outputs.run_format_check == 'true'
+        uses: ./.ci-harness/.github/actions/setup-test-bun
+        with:
+          cache-mode: *cache_mode
+
       - name: Check formatting
-        if: ${{ !cancelled() && steps.node_setup.outcome == 'success' && needs.preflight.outputs.run_format_check == 'true' }}
+        if: ${{ !cancelled() && steps.node_setup.outcome == 'success' && steps.bun_setup.outcome == 'success' && needs.preflight.outputs.run_format_check == 'true' }}
         run: pnpm format:check
 
       - name: Check AGENTS.md bootstrap size
@@ -6085,6 +6129,7 @@ jobs:
             -only-testing:OpenClawTests/TalkRealtimeConsultCancellationTests \
             -only-testing:OpenClawTests/TalkRealtimeTranscriptWriteQueueTests \
             -only-testing:OpenClawTests/TalkModeManagerTests \
+            -only-testing:OpenClawTests/TalkTranscriptCompletionTests \
             -only-testing:OpenClawTests/ManagedDocumentEnvelopeTests \
             -only-testing:OpenClawTests/IOSMediaArtifactLoaderTests \
             -only-testing:OpenClawTests/OpenClawTypographyTests \
