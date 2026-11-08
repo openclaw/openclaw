@@ -16,6 +16,7 @@ import type {
   ChannelMessageActionName,
   ChannelThreadingToolContext,
 } from "../../channels/plugins/types.public.js";
+import type { ChannelDeliveryOutcome } from "../../channels/turn/delivery-outcome.js";
 import { isChannelPartialDeliveryError } from "../../channels/turn/partial-delivery-error.js";
 import {
   composeSessionSourceAssertion,
@@ -87,13 +88,22 @@ export async function beforeMessageDeliveryAttempt(input: MessageActionInput): P
   assertMessageDeliveryCurrent(input);
 }
 
-export function projectMessageActionPartialDelivery(error: unknown) {
+export function projectMessageActionPartialDelivery(error: unknown):
+  | {
+      ok: false;
+      deliveryStatus: "partial_failed";
+      sentBeforeError: true;
+      error: string;
+      result: ChannelDeliveryOutcome;
+    }
+  | undefined {
   const directDelivery = isChannelPartialDeliveryError(error) ? error.deliveryResult : undefined;
   const gatewayDelivery =
     error instanceof Error && error.name === "GatewayClientRequestError"
       ? asResultRecord(asResultRecord(error)?.details)?.partialDelivery
       : undefined;
-  const deliveryResult = directDelivery ?? gatewayDelivery;
+  // SAFETY: gateway details.partialDelivery uses the typed ChannelPartialDeliveryError envelope.
+  const deliveryResult = (directDelivery ?? gatewayDelivery) as ChannelDeliveryOutcome | undefined;
   return deliveryResult === undefined
     ? undefined
     : {

@@ -11,6 +11,7 @@ import type {
   ChannelMessageActionName,
   ChannelPlugin,
 } from "../../channels/plugins/types.public.js";
+import { createChannelPartialDeliveryError } from "../../channels/turn/partial-delivery-error.js";
 import * as commandSecretGateway from "../../cli/command-secret-gateway.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -48,7 +49,7 @@ import {
   buildEmbeddedRunnerAssistant,
   makeEmbeddedRunnerAttempt,
 } from "../test-helpers/embedded-agent-runner-e2e-fixtures.js";
-import { readToolResultDetails } from "../tool-result-error.js";
+import { readToolResultDetails, resolveToolResultFailureKind } from "../tool-result-error.js";
 import { jsonResult } from "./common.js";
 import { withGatewayToolCallerIdentity } from "./gateway-caller-context.js";
 import { createMessageTool } from "./message-tool-execution.js";
@@ -392,6 +393,48 @@ describe("message tool queued gateway delivery", () => {
     await tool.execute("send-again", { action: "send", message: "hello" });
     expect(sentIdempotencyKey(runMessageAction, 0)).toBeDefined();
     expect(sentIdempotencyKey(runMessageAction, 1)).toBe(sentIdempotencyKey(runMessageAction, 0));
+  });
+});
+
+describe("message tool partial delivery", () => {
+  it("keeps provider-accepted message ids when a later part fails", async () => {
+    const error = createChannelPartialDeliveryError(new Error("second attachment failed"), {
+      messageIds: ["100000000000000021"],
+      visibleReplySent: true,
+    });
+    const { tool } = createFailingMessageTool(error);
+
+    const result = await tool.execute("partial", { action: "send", message: "hello" });
+
+    expect(readToolResultDetails(result)).toMatchObject({
+      ok: false,
+      action: "send",
+      deliveryStatus: "partial_failed",
+      sentBeforeError: true,
+      acceptedMessageIds: ["100000000000000021"],
+      remainderUnconfirmed: true,
+    });
+    expect(resolveToolResultFailureKind(result)).toBe("failed");
+    expect(result.content).toEqual([
+      { type: "text", text: expect.stringContaining("100000000000000021") },
+    ]);
+  });
+
+  it("still fails without inventing accepted ids when nothing was confirmed", async () => {
+    const error = createChannelPartialDeliveryError(new Error("first part failed"), {
+      messageIds: [],
+      visibleReplySent: true,
+    });
+    const { tool } = createFailingMessageTool(error);
+
+    const result = await tool.execute("partial-empty", { action: "send", message: "hello" });
+
+    expect(readToolResultDetails(result)).toMatchObject({
+      ok: false,
+      acceptedMessageIds: [],
+      remainderUnconfirmed: true,
+    });
+    expect(resolveToolResultFailureKind(result)).toBe("failed");
   });
 });
 

@@ -43,6 +43,39 @@ export function projectScheduledMessageActionPartialResult(params: {
   };
 }
 
+/**
+ * Failure projection for callers without scheduled authority. The operation stays a
+ * failure, but the accepted message ids must survive it: native and MCP error responses
+ * read this tool result, and a caller that only sees the error text cannot tell a partial
+ * delivery from a total one and may resend what already landed.
+ */
+export function projectMessageActionPartialFailureResult(params: {
+  error: unknown;
+  action: ChannelMessageActionName;
+}): Record<string, unknown> | undefined {
+  const partialDelivery = projectMessageActionPartialDelivery(params.error);
+  if (!partialDelivery) {
+    return undefined;
+  }
+  const messageIds = Array.isArray(partialDelivery.result.messageIds)
+    ? partialDelivery.result.messageIds.filter(
+        (id): id is string => typeof id === "string" && id.length > 0,
+      )
+    : [];
+  return {
+    ok: false,
+    action: params.action,
+    deliveryStatus: "partial_failed",
+    sentBeforeError: true,
+    error: partialDelivery.error,
+    acceptedMessageIds: messageIds,
+    remainderUnconfirmed: true,
+    message: messageIds.length
+      ? `Delivered ${messageIds.length} message(s) before the send failed; the remaining content is unconfirmed. Do not resend the accepted message(s).`
+      : "The provider accepted some content before the send failed; the remaining content is unconfirmed. Do not resend accepted content.",
+  };
+}
+
 export function shouldRevalidateCompletedMessageAction(params: {
   hasScheduledAuthority: boolean;
   scheduledRead: boolean;

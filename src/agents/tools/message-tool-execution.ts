@@ -65,6 +65,7 @@ import {
   normalizeMessageToolIdempotencyKeyPart,
 } from "./message-tool-idempotency.js";
 import {
+  projectMessageActionPartialFailureResult,
   projectScheduledMessageActionPartialResult,
   shouldRevalidateCompletedMessageAction,
 } from "./message-tool-scheduled-execution.js";
@@ -640,9 +641,12 @@ function* createMessageToolSteps(
               // Queue-owned retry: the gateway already holds the durable row and
               // caches this outcome under the same idempotency key, so a model resend
               // of the same content collapses instead of minting a second send.
-              const queuedDelivery = projectGatewayQueuedDeliveryResult(error);
-              if (queuedDelivery) {
-                return jsonResult(queuedDelivery);
+              // A partial failure keeps its provider-accepted ids on the same result.
+              const projectedFailure =
+                projectGatewayQueuedDeliveryResult(error) ??
+                projectMessageActionPartialFailureResult({ error, action });
+              if (projectedFailure) {
+                return jsonResult(projectedFailure);
               }
               decisions.recordTypedDenial(error);
               throw error;
