@@ -223,6 +223,17 @@ export async function wakeMediaGenerationTaskCompletion(params: {
   if (delivery.disposition === "session_queued") {
     return { status: "queued" };
   }
+  if (delivery.reason === "visible_reply_missing") {
+    // The completion dialogue already ran to a terminal result under this
+    // idempotency key. Waking again only replays that result, or readmits a
+    // stale dialogue once the Gateway dedupe entry expires.
+    log.warn("Media generation completion dialogue ended without a visible reply", {
+      taskId: handle.taskId,
+      runId: handle.runId,
+      toolName: params.toolName,
+    });
+    return { status: "permanent_failure" };
+  }
   if (delivery.disposition === "retryable" || delivery.reason === "completion_handoff_pending") {
     return { status: "pending" };
   }
