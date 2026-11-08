@@ -170,6 +170,8 @@ export class TranscriptInitialRange {
       // Incoming overscan takes priority over speculative background preparation.
       this.preparingRowKey = rows[predecessor]!.key;
       this.prepareStarted = performance.now();
+      // A resumed reader can have a cached moving range without this predecessor.
+      this.refresh();
     }
     return {
       activeRowKeys: new Set([...active, ...this.endIndexes()].map((index) => rows[index]!.key)),
