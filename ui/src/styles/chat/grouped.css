@@ -701,9 +701,13 @@
   text-decoration: underline;
 }
 
-/* Holds the same space as a delivered message's action row. */
+/* Holds the same total space as a delivered message's action row, but sits right
+   under its bubble (like the final footer) so it reads as part of that message. */
 .chat-message-actions-row--steer {
+  align-items: flex-start;
   min-height: 24px;
+  margin-top: 0;
+  margin-bottom: 4px;
 }
 
 .chat-steer-now__waiting {
