@@ -43,7 +43,12 @@ export function projectDetailsSubagents(rows: readonly DetailsSubagent[], mobile
       ...collection.filter((row) => !isDetailsSubagentWorking(row)),
     ]
       .slice(0, collection.length > (mobile ? 3 : 5) ? 4 : 5)
-      .map(({ key, label, status }): DetailsSubagent => ({ key, label, status }))
+      .map(({ key, label, status, session }): DetailsSubagent => ({
+        key,
+        label,
+        status,
+        session: session && { startedAt: session.startedAt, endedAt: session.endedAt },
+      }))
       .concat(
         ordinary
           .slice(0, DETAILS_SUBAGENT_ACTIVITY_PREVIEW_ROWS)

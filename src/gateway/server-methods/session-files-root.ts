@@ -185,8 +185,9 @@ export async function loadSessionFiles(
   return {
     repository: await resolveRepositoryWorkspaceAccess(loaded, context, assertSourceCurrent),
     readPath: preparedPath,
-    root: preparedPath.root ?? loaded.root,
-    fileRoot: preparedPath.root ? undefined : loaded.fileRoot,
+    readRoot: preparedPath.readRoot,
+    root: loaded.root,
+    fileRoot: loaded.fileRoot,
     diffCwd: loaded.diffCwd,
     // oxlint-disable-next-line unicorn/no-array-sort -- The spread creates a fresh, private array.
     files: [...files.values()].sort((a, b) => {

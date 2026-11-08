@@ -45,7 +45,12 @@ async function run(argv) {
       .split("\n")
       .filter((line) => line.trim())
       .map((line) => JSON.parse(line));
-    rows.sort((a, b) => a.occurred_at.localeCompare(b.occurred_at) || a.id.localeCompare(b.id));
+    // Ignore fractional padding without losing nanoseconds or changing the original timestamps.
+    const timeKey = (row) => {
+      const [seconds, fraction = ""] = row.occurred_at.slice(0, -1).split(".");
+      return seconds + "." + fraction.replace(/0+$/, "");
+    };
+    rows.sort((a, b) => timeKey(a).localeCompare(timeKey(b)) || a.id.localeCompare(b.id));
     return rows;
   }
 

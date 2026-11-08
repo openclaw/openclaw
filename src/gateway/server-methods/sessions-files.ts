@@ -482,18 +482,41 @@ export const sessionsFilesHandlers: GatewayRequestHandlers = {
         if (repository?.kind === "stored") {
           throw new Error("Start this cloud session before editing its repository files.");
         }
+        const worktreeId = loaded.entry.worktree?.id;
+        const writeLocalFile = async () => {
+          const write = (assertCurrent = authorize) =>
+            setSessionWorkspaceFile({
+              ...params,
+              root: loaded.root,
+              fileRoot: loaded.fileRoot,
+              assertCurrent,
+            });
+          if (!worktreeId || !loaded.root) {
+            return await write();
+          }
+          const { withSettledLocalWorkspacePath } =
+            await import("../worker-environments/local-workspace-projection.js");
+          return await withSettledLocalWorkspacePath(
+            { cwd: loaded.root, assertCurrent: authorize },
+            async (custody) => {
+              const update = await write(() => {
+                authorize();
+                custody?.assertCurrent();
+              });
+              if (update.status === "updated") {
+                await custody?.synchronizeProjection?.();
+              }
+              return update;
+            },
+          );
+        };
         const update = repository
           ? await repository.inspect(
               "set",
               { path: params.path, content: params.content, expectedHash: params.expectedHash },
               authorize,
             )
-          : await setSessionWorkspaceFile({
-              ...params,
-              root: loaded.root,
-              fileRoot: loaded.fileRoot,
-              assertCurrent: authorize,
-            });
+          : await writeLocalFile();
         assertSourceCurrent();
         if (update.status === "missing") {
           respondSessionFileNotFound(respond, params.path);

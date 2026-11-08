@@ -39,6 +39,7 @@ type LocalWorkspaceCustody = {
   projectionRevision?: number;
   prepareArchive?: (snapshot: string) => Promise<void>;
   canonicalPaths?: () => Promise<Set<string>>;
+  synchronizeProjection?: () => Promise<void>;
   assertCurrent: () => void;
   workerAuthority: WorktreeWorkerAuthority;
   conflicts?: Record<string, unknown>;
@@ -174,7 +175,6 @@ export async function withSettledLocalWorkspace<T>(
 async function settleLocalWorkspace<T>(
   params: Parameters<typeof withSettledLocalWorkspace>[0],
   operation: (custody?: LocalWorkspaceCustody) => Promise<T>,
-  beginCapture?: () => void,
 ): Promise<T> {
   const context = captureWorktreeRunEndContext(params.env ?? process.env);
   const env = { ...(params.env ?? process.env), ...context.environment };
@@ -277,7 +277,6 @@ async function settleLocalWorkspace<T>(
         },
       };
       return await runLocalWorkspaceProjection(owner, store, async (state, quiescence) => {
-        beginCapture?.();
         if (params.finishRestore) {
           await state.finishRestore();
         } else if (params.restoreSnapshot) {
@@ -314,6 +313,7 @@ async function settleLocalWorkspace<T>(
                 projectionPath: current.projection_path,
                 prepareArchive: state.prepareArchive,
                 canonicalPaths: state.canonicalPaths,
+                synchronizeProjection: () => state.synchronize("projection"),
                 assertCurrent: state.current,
                 workerAuthority: state.workerAuthority,
               }
@@ -325,34 +325,6 @@ async function settleLocalWorkspace<T>(
       });
     },
   );
-}
-
-/** File readers need a fresh checkpoint, not a lease-bearing custody callback. */
-export async function checkpointLocalWorkspacePath(params: {
-  cwd: string;
-  assertCurrent?: () => void;
-}): Promise<void> {
-  const context = captureWorktreeRunEndContext(process.env);
-  const env = { ...process.env, ...context.environment };
-  const worktree = await readLiveRegistryWorktreeByPath(context, params.cwd);
-  params.assertCurrent?.();
-  if (worktree) {
-    const projection = await executeExistingOpenClawStateRead(
-      { path: context.admission.databasePath, env },
-      { type: "localWorkspace.exists", input: { id: worktree.id } },
-      { context, current: true, live: true },
-    );
-    context.admission.assertCurrent();
-    params.assertCurrent?.();
-    // An absent projection has no checkpoint; custody callbacks still own absent rows.
-    if (projection?.exists === false) {
-      return;
-    }
-    const checkpoint = { worktree, env, assertCurrent: params.assertCurrent };
-    await joinLocalWorkspaceOperation(pendingCheckpoints, checkpoint, undefined, (beginCapture) =>
-      settleLocalWorkspace(checkpoint, async () => {}, beginCapture),
-    );
-  }
 }
 
 export async function withSettledLocalWorkspacePath<T>(

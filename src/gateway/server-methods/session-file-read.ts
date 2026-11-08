@@ -1,8 +1,5 @@
 import path from "node:path";
-import {
-  relativePathInsideSandboxRoot,
-  resolveSandboxPathMapping,
-} from "../../agents/path-policy.js";
+import { resolveSandboxPathMapping } from "../../agents/path-policy.js";
 import { resolveToCwd } from "../../agents/sessions/tools/path-utils.js";
 import { getAgentWorkspaceAccess } from "../../agents/workspace-access.js";
 import { resolveAbsolutePathForRead, root as fsSafeRoot } from "../../infra/fs-safe.js";
@@ -15,6 +12,8 @@ import type { WorkspaceRoot } from "./workspace-fs.js";
 export type SessionFileReadBoundary = {
   root?: string;
   fileRoot?: string;
+  /** Physical live backing; root/fileRoot retain the public workspace namespace. */
+  readRoot?: string;
   authorizeHostRead?: () => Promise<boolean>;
 };
 
@@ -28,7 +27,7 @@ export async function prepareSessionFileReadPath(
     assertCurrent: () => void;
     assertReadCurrent: () => void;
   },
-): Promise<{ path: string | null | undefined; root?: string; assertCurrent?: () => void }> {
+): Promise<{ path: string | null | undefined; readRoot?: string; assertCurrent?: () => void }> {
   const sandbox = params.sandboxWorkspace;
   const absolute =
     params.filePath && params.root
@@ -38,7 +37,9 @@ export async function prepareSessionFileReadPath(
     absolute && params.root && sandbox && !isPathInside(params.root, absolute)
       ? resolveSandboxPathMapping([sandbox], absolute)
       : null;
+  let assertWorkspaceCurrent: (() => void) | undefined;
   const assertCurrent = () => {
+    assertWorkspaceCurrent?.();
     params.assertReadCurrent();
     if (mapped && params.root && getAgentWorkspaceAccess(params.root)) {
       throw sessionMutationForbiddenError("Sandbox file backing is not on this Gateway");
@@ -49,66 +50,32 @@ export async function prepareSessionFileReadPath(
   }
   let runtimeWorkspaceDir: string | undefined = sandbox?.runtimeWorkspaceDir;
   let backingRoot = sandbox?.hostRoot;
-  let isWorktreeProjection = false;
-  let projectionConflicts: Record<string, unknown> | undefined;
-  if (params.worktreeId && params.root && !params.historical) {
-    const { checkpointLocalWorkspacePath, withSettledLocalWorkspacePath } =
-      await import("../worker-environments/local-workspace-projection.js");
-    const { LocalWorkspaceConflictError } =
-      await import("../worker-environments/local-workspace-conflict-error.js");
-    const request = { cwd: params.root, assertCurrent: params.assertCurrent };
-    if (mapped) {
-      runtimeWorkspaceDir = await withSettledLocalWorkspacePath(
-        { ...request, allowConflict: true },
-        async (custody) => {
-          if (custody && custody.worktreeId === params.worktreeId) {
-            projectionConflicts = custody.conflicts;
-            return custody.projectionPath;
-          }
-          return undefined;
-        },
-      );
-      backingRoot = runtimeWorkspaceDir;
-      isWorktreeProjection = Boolean(runtimeWorkspaceDir);
-    } else {
-      try {
-        await checkpointLocalWorkspacePath(request);
-      } catch (error) {
-        if (!(error instanceof LocalWorkspaceConflictError)) {
-          throw error;
-        }
-      }
-    }
-    params.assertCurrent();
-  }
-  if (!mapped || !sandbox || !absolute) {
-    return { path: params.filePath };
-  }
-  let targetReadRoot: string | undefined;
-  let targetReadPath = mapped.hostPath;
-  const relative = relativePathInsideSandboxRoot(sandbox.containerRoot, absolute);
-  const normalizedRelative = relative?.replaceAll("\\", "/");
-  const isRetainedConflict =
-    isWorktreeProjection &&
-    normalizedRelative &&
-    projectionConflicts &&
-    normalizedRelative in projectionConflicts;
-  if (isRetainedConflict && runtimeWorkspaceDir && relative) {
-    const separator = sandbox.containerRoot.startsWith("/") ? "/" : "\\";
-    targetReadRoot = runtimeWorkspaceDir;
-    targetReadPath = path.resolve(targetReadRoot, ...relative.split(separator));
-    if (!isPathInside(targetReadRoot, targetReadPath)) {
+  let readRoot: string | undefined;
+  if (sandbox && params.worktreeId && params.root && !params.historical) {
+    const { readLocalWorkspacePath } =
+      await import("../worker-environments/local-workspace-read.js");
+    const backing = await readLocalWorkspacePath({
+      cwd: params.root,
+      worktreeId: params.worktreeId,
+      assertCurrent: params.assertCurrent,
+    });
+    if (mapped && backing.worktreeId !== params.worktreeId) {
       return { path: null };
     }
-  } else if (
+    assertWorkspaceCurrent = backing.assertCurrent;
+    readRoot = backing.root;
+    runtimeWorkspaceDir = backingRoot = readRoot;
+    assertCurrent();
+  }
+  if (!mapped || !sandbox || !absolute) {
+    return { path: params.filePath, readRoot, assertCurrent };
+  }
+  if (
     !params.root ||
     !isPathInside(params.root, mapped.hostPath) ||
     !runtimeWorkspaceDir ||
     !backingRoot
   ) {
-    return { path: null };
-  }
-  if (!backingRoot) {
     return { path: null };
   }
   try {
@@ -123,11 +90,7 @@ export async function prepareSessionFileReadPath(
       assertCurrent,
     });
     assertBackingCurrent();
-    return {
-      path: targetReadPath,
-      root: targetReadRoot,
-      assertCurrent: assertBackingCurrent,
-    };
+    return { path: mapped.hostPath, readRoot, assertCurrent: assertBackingCurrent };
   } catch {
     params.assertReadCurrent();
     // An unavailable or shadowed alias is never retried as a host filesystem grant.
@@ -150,7 +113,7 @@ export async function resolveSessionFileReadTarget(
   const absolutePath = resolveToCwd(filePath, boundary.fileRoot ?? boundary.root);
   if (isPathInside(boundary.root, absolutePath)) {
     return {
-      root: boundary.root,
+      root: boundary.readRoot ?? boundary.root,
       path: path.relative(boundary.root, absolutePath),
       absolutePath,
       outside: false,
