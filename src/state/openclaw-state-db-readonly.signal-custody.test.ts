@@ -291,6 +291,7 @@ it.each([
     });
     const busy = Object.assign(new Error("private SQLite file is still open"), {
       code: failure === "permission" ? "EACCES" : "EBUSY",
+      syscall: "rmdir",
     });
     mocks.prepare.mockImplementation(async () => location(true));
     mocks.removeAsync.mockRejectedValue(busy);

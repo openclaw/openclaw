@@ -35,11 +35,12 @@ it.each([
   "settles state preflight with $code cleanup after read $read (native close capable: $capable, caller signal: $caller)",
   async ({ capable, code, read, caller, settles }) => {
     const remove = fs.promises.rm;
-    // Bun can retain native resources after logical close; fail only this snapshot's removal.
+    // Fail final directory removal, after payload and token retirement have succeeded.
     vi.spyOn(fs.promises, "rm").mockImplementation(async (target, options) => {
-      if ([...busyRoots].some((root) => String(target).startsWith(root))) {
+      if (busyRoots.has(String(target))) {
         throw Object.assign(new Error(`${code}: resource busy or locked, rm '${String(target)}'`), {
           code,
+          syscall: "rmdir",
         });
       }
       return remove(target, options);

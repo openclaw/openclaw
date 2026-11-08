@@ -10,6 +10,7 @@ import {
   type MigrationArtifactVerification,
 } from "./session-sqlite-migration-artifact.js";
 import { cleanupSnapshotOperations } from "./sqlite-readonly-location-cleanup.js";
+import * as retirement from "./sqlite-snapshot-retirement.js";
 import {
   exclusiveCopyPublication,
   snapshotContent,
@@ -159,21 +160,69 @@ it.each(["ENOTEMPTY", "EBUSY"])(
   },
 );
 
-it("keeps a verified backup when its private read image cannot yet be removed on NFS", async () => {
-  const original = await fs.readFile(sourcePath);
-  const remove = fs.rm;
-  vi.spyOn(fs, "rm").mockImplementation(async (...args) => {
-    if (String(args[0]).includes("openclaw-sqlite-readonly-v2-")) {
-      throw Object.assign(new Error("NFS private image still busy"), { code: "EBUSY" });
+it.each([
+  { phase: "directory", code: "EBUSY", succeeds: true },
+  { phase: "directory", code: "ENOTEMPTY", succeeds: true },
+  { phase: "directory", code: "EACCES", succeeds: false },
+  { phase: "directory", code: "EPERM", succeeds: false },
+  { phase: "directory", code: "EIO", succeeds: false },
+  { phase: "payload", code: "EBUSY", succeeds: false },
+  { phase: "retirement", code: "EBUSY", succeeds: false },
+] as const)(
+  "settles a verified backup after $phase cleanup returns $code",
+  async ({ phase, code, succeeds }) => {
+    const original = await fs.readFile(sourcePath);
+    let injected = false;
+    const failure = Object.assign(new Error(`${phase} cleanup refused: ${code}`), {
+      code,
+      syscall: phase === "payload" ? "unlink" : "rmdir",
+    });
+    if (phase === "retirement") {
+      vi.spyOn(retirement, "beginSqliteSnapshotRetirement").mockImplementation(() => {
+        injected = true;
+        throw failure;
+      });
     }
-    return remove(...args);
-  });
-  await fixture.expectSnapshotSuccess({
-    sourceAcquisition: { mode: "isolated-process", stagingRoot: tempDir },
-  });
-  expect(await fs.readFile(sourcePath)).toEqual(original);
-  expect(query("PRAGMA integrity_check")).toEqual([{ integrity_check: "ok" }]);
-});
+    const remove = fs.rm;
+    vi.spyOn(fs, "rm").mockImplementation(async (...args) => {
+      const target = String(args[0]);
+      if (
+        phase !== "retirement" &&
+        target.includes("openclaw-sqlite-readonly-v2-") &&
+        (phase === "directory"
+          ? path.basename(target).startsWith("openclaw-sqlite-readonly-v2-")
+          : path.basename(target) === "database.sqlite.partial")
+      ) {
+        injected = true;
+        throw failure;
+      }
+      return remove(...args);
+    });
+    const capture = snapshot({
+      sourceAcquisition: { mode: "isolated-process", stagingRoot: tempDir },
+      afterPublish: () => {
+        if (phase === "payload") {
+          const directory = fsSync
+            .readdirSync(tempDir)
+            .find((name) => name.startsWith("openclaw-sqlite-readonly-v2-"));
+          assert(directory);
+          fsSync.writeFileSync(
+            path.join(tempDir, directory, "database.sqlite.partial"),
+            "retained private payload",
+          );
+        }
+      },
+    });
+    if (succeeds) {
+      await expect(capture).resolves.toMatchObject({ path: targetPath });
+    } else {
+      await expect(capture).rejects.toMatchObject({ cause: failure });
+    }
+    expect(injected).toBe(true);
+    expect(await fs.readFile(sourcePath)).toEqual(original);
+    expect(query("PRAGMA integrity_check")).toEqual([{ integrity_check: "ok" }]);
+  },
+);
 
 it("publishes a snapshot in a deeply nested destination", async () => {
   let directory = tempDir;

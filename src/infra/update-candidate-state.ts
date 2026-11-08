@@ -119,15 +119,11 @@ async function withStateDatabaseSnapshot<T>(
         undefined,
         progress.onProgress,
       );
-  // A leftover private copy must not fail an update; the Gateway sweep reclaims it.
-  return withPreparedSqliteSnapshot(
-    snapshot,
-    async (location) => {
-      progress.complete((await fs.stat(location)).size);
-      return read(location);
-    },
-    { bestEffortCleanup: true },
-  );
+  // The cleanup owner defers only post-retirement NFS removal failures.
+  return withPreparedSqliteSnapshot(snapshot, async (location) => {
+    progress.complete((await fs.stat(location)).size);
+    return read(location);
+  });
 }
 
 export async function collectStateDatabasePaths(

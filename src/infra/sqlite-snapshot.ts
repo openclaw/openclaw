@@ -592,11 +592,8 @@ export async function createVerifiedSqliteSnapshot(
       const prepared = await prepareSqliteReadOnlyLocation(sourcePath, {
         preserveSourceArtifacts: true,
       });
-      return withPreparedSqliteSnapshot(
-        prepared,
-        (privateSourcePath) =>
-          verifyAndPublishSqliteSnapshot(options, privateSourcePath, recordSourceIntegrity),
-        { bestEffortCleanup: true },
+      return withPreparedSqliteSnapshot(prepared, (privateSourcePath) =>
+        verifyAndPublishSqliteSnapshot(options, privateSourcePath, recordSourceIntegrity),
       );
     }
     if (options.sourceAcquisition) {
@@ -611,19 +608,13 @@ export async function createVerifiedSqliteSnapshot(
             undefined,
             options.onProgress,
           );
-      return withPreparedSqliteSnapshot(
-        prepared,
-        (privateSourcePath) => verifyAndPublishSqliteSnapshot(options, privateSourcePath),
-        { bestEffortCleanup: true },
+      return withPreparedSqliteSnapshot(prepared, (privateSourcePath) =>
+        verifyAndPublishSqliteSnapshot(options, privateSourcePath),
       );
     }
     return verifyAndPublishSqliteSnapshot(options);
   };
-  return retained
-    ? withPreparedSqliteSnapshot(retained.prepared, create, {
-        bestEffortCleanup: true,
-      })
-    : create();
+  return retained ? withPreparedSqliteSnapshot(retained.prepared, create) : create();
 }
 
 async function verifyAndPublishSqliteSnapshot(
