@@ -1,28 +1,13 @@
 import { expect, it } from "vitest";
 import { chunkText, chunkTextRanges } from "./chunk-text.js";
 
-it("normalizes positive fractional limits without emitting empty chunks", () => {
-  expect(chunkText("abc", 0.5)).toEqual(["a", "b", "c"]);
-  expect(chunkText("😀😀", 0.5)).toEqual(["😀", "😀"]);
-});
-
-it("keeps text whole for non-finite limits instead of emitting empty chunks", () => {
-  const text = "a message that must never vanish";
-  expect(chunkText(text, Number.NaN)).toEqual([text]);
-  for (const mode of ["hard", "preferred"] as const) {
-    expect(
-      chunkTextRanges(text, { limit: Number.NaN, mode }).map(({ start, end }) =>
-        text.slice(start, end),
-      ),
-      `mode: ${mode}`,
-    ).toEqual([text]);
-  }
-});
-
-it("keeps grapheme boundaries and surrogate-safe progress in each chunking mode", () => {
+it("keeps grapheme boundaries and progress for fractional and NaN limits in each mode", () => {
   const common = [
     { text: "aaaaaaaaaa👨‍👩‍👧‍👦Z", limit: 12, expected: ["aaaaaaaaaa", "👨‍👩‍👧‍👦Z"] },
     { text: "👨‍👩‍👧‍👦", limit: 4, expected: ["👨‍", "👩‍", "👧‍", "👦"] },
+    { text: "abc", limit: 0.5, expected: ["a", "b", "c"] },
+    { text: "😀😀", limit: 0.5, expected: ["😀", "😀"] },
+    { text: "abc", limit: Number.NaN, expected: ["abc"] },
   ];
   for (const mode of ["plain", "hard", "preferred"] as const) {
     const whitespace =
