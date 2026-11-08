@@ -211,6 +211,9 @@ describe("worktree Git size estimates", () => {
   it("hydrates without reading unrelated ref tips or starting auto-maintenance", async () => {
     const { root, clone, commit } = await partialClone();
     const tree = await git(clone, "rev-parse", `${commit}^{tree}`);
+    // Clones do not inherit the fixture's repo-local identity; CI has no global one.
+    await git(clone, "config", "user.name", "OpenClaw Test");
+    await git(clone, "config", "user.email", "openclaw-test@example.invalid");
     const unrelated = await git(clone, "commit-tree", tree, "-m", "unrelated session");
     await git(clone, "update-ref", "refs/heads/unrelated", unrelated);
     const packed = await runGit(clone, ["pack-objects", ".git/objects/pack/pack"], {
