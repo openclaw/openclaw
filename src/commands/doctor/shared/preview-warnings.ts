@@ -34,6 +34,13 @@ import { VERSION_BOUND_RUNTIME_PLUGIN_POLICY_IDS_BY_SURFACE } from "../../../plu
 import { collectChannelRouteTargets } from "../../../routing/channel-route-targets.js";
 import type { BlockedLegacyOpenAICodexProviderPlan } from "./legacy-config-migrations.runtime.models.js";
 
+function readPreviewToolProfiles(
+  cfg: OpenClawConfigWithLegacyRoster,
+): CustomToolProfiles | undefined {
+  const tools: unknown = cfg.tools;
+  return asOptionalRecord(tools)?.profiles as CustomToolProfiles | undefined; // SAFETY: doctor previews carry validateConfigObject-parsed configs, so tools.profiles is the schema-bounded shape or absent.
+}
+
 function resolveMessageToolAvailability(params: {
   cfg: OpenClawConfig;
   agentId?: string;
@@ -419,13 +426,13 @@ export async function collectDoctorPreviewNotes(params: {
     ...collectProfileConfiguredToolSectionScopeWarnings({
       tools: globalTools,
       pathLabel: "tools",
-      customProfiles: asOptionalRecord(cfg.tools)?.profiles as CustomToolProfiles | undefined,
+      customProfiles: readPreviewToolProfiles(cfg),
     }),
     ...collectByProviderConfiguredToolSectionWarnings({
       tools: globalTools,
       pathLabel: "tools",
       configuredEntries: globalConfiguredEntries,
-      customProfiles: asOptionalRecord(cfg.tools)?.profiles as CustomToolProfiles | undefined,
+      customProfiles: readPreviewToolProfiles(cfg),
     }),
   );
 
@@ -444,14 +451,14 @@ export async function collectDoctorPreviewNotes(params: {
         tools: agentTools,
         inheritedTools: globalTools,
         pathLabel: agentPath,
-        customProfiles: asOptionalRecord(cfg.tools)?.profiles as CustomToolProfiles | undefined,
+        customProfiles: readPreviewToolProfiles(cfg),
       }),
       ...collectByProviderConfiguredToolSectionWarnings({
         tools: agentTools,
         inheritedTools: globalTools,
         pathLabel: agentPath,
         configuredEntries: agentConfiguredEntries,
-        customProfiles: asOptionalRecord(cfg.tools)?.profiles as CustomToolProfiles | undefined,
+        customProfiles: readPreviewToolProfiles(cfg),
       }),
     );
     const modelProvider = modelRef.provider;
@@ -495,7 +502,7 @@ export async function collectDoctorPreviewNotes(params: {
             profilePath: `tools.byProvider.${providerKey}`,
             advicePath: `${agentPath}.byProvider.${overridingEntry?.key ?? providerKey}`,
             profileKind: "inherited provider",
-            customProfiles: asOptionalRecord(cfg.tools)?.profiles as CustomToolProfiles | undefined,
+            customProfiles: readPreviewToolProfiles(cfg),
           });
         }),
       );

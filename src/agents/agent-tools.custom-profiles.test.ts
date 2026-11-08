@@ -4,10 +4,11 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createSessionConversationTestRegistry } from "../test-utils/session-conversation-registry.js";
+import { createOpenClawCodingTools } from "./agent-tools.js";
 import "./test-helpers/fast-coding-tools.js";
 import "./test-helpers/fast-openclaw-tools.js";
-import { createOpenClawCodingTools } from "./agent-tools.js";
 import * as openClawPluginTools from "./openclaw-plugin-tools.js";
+import { resetActivePluginRegistryForTest } from "./test-helpers/temp-plugin-extension-fixtures.js";
 import { createOpenClawOnlyToolConstructionPlan } from "./test-helpers/tool-construction-plan.js";
 
 const openClawOnlyPlan = createOpenClawOnlyToolConstructionPlan();
@@ -38,7 +39,7 @@ function expectToolSurface(
 
 describe("custom tool profiles through createOpenClawCodingTools", () => {
   afterEach(() => {
-    setActivePluginRegistry(null);
+    resetActivePluginRegistryForTest();
   });
 
   it("gates the assembled tool surface through a custom profile", () => {
