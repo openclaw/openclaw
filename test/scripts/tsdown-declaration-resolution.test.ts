@@ -22,6 +22,14 @@ import {
   treeHashes,
 } from "./tsdown-declaration-fixture.js";
 
+function writeAiFixtureInputs(write: (file: string, contents: string) => void) {
+  write("tsdown.ai.config.ts", fs.readFileSync("tsdown.ai.config.ts", "utf8"));
+  for (const name of ["openai", "ws"]) {
+    const license = `node_modules/${name}/LICENSE`;
+    write(license, fs.readFileSync(license, "utf8"));
+  }
+}
+
 const it = createDeclarationTest();
 const coreText = (origin: string) =>
   `export interface Marker { origin: "${origin}" }\ndeclare global { const declarationOrigin: "${origin}"; }\n`;
@@ -563,7 +571,7 @@ console.log("cold sibling ownership and fresh build isolation verified");
   )("honors resolved dts=$dts over the opposite $owner default", ({ owner, dts }, { command }) =>
     command.lifetime.run(async () => {
       const { root, write } = containedFixture(command);
-      write("tsdown.ai.config.ts", fs.readFileSync("tsdown.ai.config.ts", "utf8"));
+      writeAiFixtureInputs(write);
       const outside = path.join(path.dirname(root), "runtime.ts");
       fs.writeFileSync(outside, 'export const runtimeValue = "outside-runtime";');
       const result = await runFixtureModule(
@@ -653,7 +661,7 @@ console.log("resolved declaration override honored");
   }) =>
     command.lifetime.run(async () => {
       const { root, write } = containedFixture(command);
-      write("tsdown.ai.config.ts", fs.readFileSync("tsdown.ai.config.ts", "utf8"));
+      writeAiFixtureInputs(write);
       write(
         "src/second.ts",
         'import "synthetic-wrapper"; export const secondOrigin = declarationOrigin;',

@@ -1,0 +1,2 @@
+# Supply real bundled dependency licenses at both existing release AI fixture sites.
+8
