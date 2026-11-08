@@ -59,35 +59,15 @@ function rememberPromptListing(sessionKey: string, listing: SkillLibraryPromptLi
   promptListings.set(sessionKey, listing);
 }
 
-function assignPromptListing(
-  sessionEntry: { skillLibraryPromptListing?: SkillLibraryPromptListing } | undefined,
-  listing: SkillLibraryPromptListing | undefined,
-) {
-  // Admitted entries are frozen. The process map and the session patch own the
-  // listing; only a mutable caller snapshot can carry it on the object itself.
-  if (
-    !sessionEntry ||
-    !Object.isExtensible(sessionEntry) ||
-    listingsMatch(sessionEntry.skillLibraryPromptListing, listing)
-  ) {
-    return;
-  }
-  if (listing) {
-    sessionEntry.skillLibraryPromptListing = listing;
-  } else {
-    delete sessionEntry.skillLibraryPromptListing;
-  }
-}
-
 async function commitSkillLibraryPromptListing(
   sessionKey: string,
   store: { agentId?: string; storePath?: string },
   listing: SkillLibraryPromptListing | undefined,
 ) {
   if (!store.agentId && !store.storePath) {
-    return;
+    return null;
   }
-  await patchSessionEntryCore(
+  return await patchSessionEntryCore(
     {
       sessionKey,
       ...(store.agentId ? { agentId: store.agentId } : {}),
@@ -234,15 +214,26 @@ export async function resolveGatewaySkillLibraryPromptGrant(params: {
   if (!listingsMatch(previous, next)) {
     rememberPromptListing(params.sessionKey, next);
   }
-  assignPromptListing(params.sessionEntry, next);
+  // The caller's entry is an immutable snapshot. Persistence returns the owner's
+  // committed row, and this turn reads the listing from that result.
+  let listingForTurn = next;
   if (params.listingStore && !listingsMatch(readSkillLibraryPromptListing(storedListing), next)) {
-    await commitSkillLibraryPromptListing(params.sessionKey, params.listingStore, next);
+    const saved = await commitSkillLibraryPromptListing(
+      params.sessionKey,
+      params.listingStore,
+      next,
+    );
+    if (saved) {
+      listingForTurn = readSkillLibraryPromptListing(saved.skillLibraryPromptListing);
+      if (!listingsMatch(next, listingForTurn)) {
+        rememberPromptListing(params.sessionKey, listingForTurn);
+      }
+    }
   }
   if (live) {
     return live;
   }
-  const listing = promptListings.get(params.sessionKey);
-  return listing ? createRefusedSkillLibraryAuthoring(listing) : undefined;
+  return listingForTurn ? createRefusedSkillLibraryAuthoring(listingForTurn) : undefined;
 }
 
 /** Only ordinary attributed human ingress may mint a namespace; actions remain normal tool policy. */

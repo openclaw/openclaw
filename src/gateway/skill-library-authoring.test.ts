@@ -565,4 +565,25 @@ it("reloads a recorded skill_library listing for a settle after restart", async 
     createSkillLibraryTool(live!).description,
   );
   expect(frozen.skillLibraryPromptListing).toBeUndefined();
+  const borrowedKey = "agent:main:skill-library-borrowed";
+  await replaceSessionEntry(
+    { agentId: "main", sessionKey: borrowedKey, storePath },
+    { sessionId: "skill-library-borrowed", updatedAt: 1 },
+  );
+  const borrowed: { skillLibraryPromptListing?: undefined } = {};
+  const borrowedGrant = await resolveGatewaySkillLibraryPromptGrant({
+    owner,
+    sessionKey: borrowedKey,
+    isHumanTurn: true,
+    sessionEntry: borrowed,
+    listingStore: { agentId: "main", storePath },
+  });
+  expect(borrowed.skillLibraryPromptListing).toBeUndefined();
+  expect(
+    loadSessionEntry({ agentId: "main", sessionKey: borrowedKey, storePath })
+      ?.skillLibraryPromptListing,
+  ).toEqual({
+    multipleProfiles: borrowedGrant?.multipleProfiles,
+    defaultTarget: borrowedGrant?.defaultTarget,
+  });
 });
