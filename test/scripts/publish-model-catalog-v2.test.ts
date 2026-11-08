@@ -7,6 +7,7 @@ import {
   type RemoteModelCatalogBundle,
 } from "@openclaw/model-catalog-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import recommendedModels from "../../scripts/lib/recommended-models.json" with { type: "json" };
 import {
   assembleVersionedModelCatalogBundle,
   parsePublishModelCatalogArgs,
@@ -695,5 +696,12 @@ describe("publish model catalog v2", () => {
         ],
       ),
     ).toEqual(["claude-opus-5", "gpt-6.1-sol-20261001"]);
+  });
+
+  it("projects canonical deepseek-flash from the recommended seed", () => {
+    const row = [{ id: "deepseek-flash", name: "DeepSeek V4.1 Flash" }];
+    const withoutFlash = recommendedModels.filter((k) => k !== "deepseek-flash");
+    expect(projectRecommendedModels(withoutFlash, row)).toEqual([]);
+    expect(projectRecommendedModels(recommendedModels, row)).toEqual(["deepseek-flash"]);
   });
 });
