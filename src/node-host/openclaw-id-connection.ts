@@ -11,7 +11,7 @@ import {
   TUNNEL_ALPN,
 } from "../../packages/openclaw-id-protocol/src/index.js";
 
-export class OpenClawIdNodeRemovedError extends Error {
+class OpenClawIdNodeRemovedError extends Error {
   constructor() {
     super("OpenClaw ID node access was removed or is not admitted; re-join this node");
   }

@@ -32,7 +32,7 @@ import { NodeTunnelConnection } from "./openclaw-id-connection.js";
 import type { NodeHostOpenClawIdTarget } from "./openclaw-id-target.js";
 
 /** W is never serialized into config, a worker descriptor or a subprocess environment. */
-export function loadNodeTunnelKey(stateDir = resolveStateDir()): Buffer {
+function loadNodeTunnelKey(stateDir = resolveStateDir()): Buffer {
   return loadOrCreateEndpointKey(path.join(stateDir, "node-openclaw-id", "endpoint.key")).key;
 }
 
