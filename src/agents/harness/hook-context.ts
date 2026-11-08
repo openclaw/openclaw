@@ -25,6 +25,7 @@ export type AgentHarnessHookContext = Omit<
 /**
  * Bind a host-minted audience to its session and pair it with its currentness guard.
  * The host derives the guard from the audience, so hooks never receive one without it.
+ * Every runner's hook context takes these fields from here, so the rule has one owner.
  */
 export function buildAgentHookMemoryAudienceFields(
   memoryAudience: MemoryAudience | undefined,
