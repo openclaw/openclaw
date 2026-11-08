@@ -282,6 +282,7 @@ it("keeps bounded operation state without a preamble or verbose tool log", async
   const { progress, toolItem, update, rendered, lines } = createProgress(quiet, {
     preparedItems: true,
     showWorkStatus: true,
+    toolIcons: true,
   });
   await toolItem("read-1", "read", "start", "running", {
     title: "Private document",
@@ -289,10 +290,12 @@ it("keeps bounded operation state without a preamble or verbose tool log", async
   });
   expect(update).not.toHaveBeenCalled();
   await vi.advanceTimersByTimeAsync(INITIAL_DELAY_MS);
-  rendered().toBe("Read: running");
+  rendered().toBe("📖 Read: running");
   await toolItem("exec-2", "exec", "start", "running");
   await toolItem("read-1", "read", "end", "completed");
-  rendered().toBe("Exec: running");
+  rendered().toBe("🛠️ Exec: running");
+  await toolItem("exec-2", "exec", "end", "completed");
+  rendered().toBe("🛠️ Exec");
   lines().toHaveLength(1);
   expect(JSON.stringify(update.mock.calls)).not.toContain("private/path");
   await progress.pushItemEvent({ itemId: "exec-2", hideFromChannelProgress: true });
