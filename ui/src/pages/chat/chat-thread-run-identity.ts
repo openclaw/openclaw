@@ -142,19 +142,17 @@ export function createRunTurnLookup(items: ChatItem[]) {
     }
     messages ??= items.map((item) => (item.kind === "message" ? item.message : null));
     const interval = knownStreamCausalInterval(messages, { runId }, afterUserSendId);
-    const ceiling =
-      interval &&
-      items.find(
-        (item, index) =>
-          index >= interval.start &&
-          index < interval.end &&
-          startsExecutionTurn(item) &&
-          (item.kind !== "message" || transcriptRunId(item.message) !== runId),
-      );
     const result = interval
       ? {
           afterKey: items[interval.start - 1]?.key,
-          beforeKey: ceiling?.key ?? items[interval.end]?.key,
+          beforeKey:
+            items.find(
+              (item, index) =>
+                index >= interval.start &&
+                index < interval.end &&
+                startsExecutionTurn(item) &&
+                (item.kind !== "message" || transcriptRunId(item.message) !== runId),
+            )?.key ?? items[interval.end]?.key,
         }
       : null;
     causalBounds.set(key, result);
