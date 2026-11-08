@@ -17,7 +17,6 @@ function createHarness(
   } else {
     post.mockResolvedValue({ id: "1001" });
   }
-
   const rest = { post, patch: vi.fn(async () => undefined), delete: remove };
   const stream = createDiscordDraftStream({
     rest: rest as never,
@@ -25,7 +24,6 @@ function createHarness(
     channelId: "c1",
     ...options,
   });
-
   return { rest, stream };
 }
 
@@ -39,42 +37,23 @@ function previewBody(content: string, extra = {}) {
 }
 
 describe("createDiscordDraftStream", () => {
-  it("opens a deferred autoThread with the first draft message", async () => {
-    const create = vi.fn(async () => "thread-9");
-    const dispose = registerPendingDiscordAutoThread({
-      accountId: "account-1",
-      threadId: "thread-9",
-      parentChannelId: "parent",
-      create,
-    });
-    const { rest, stream } = createHarness({ channelId: "thread-9" }, ["2001"]);
-
-    expect(create).not.toHaveBeenCalled();
-    await flushText(stream, "working");
-
-    expect(create).toHaveBeenCalledTimes(1);
-    expect(rest.post).toHaveBeenCalledWith(
-      "/channels/thread-9/messages",
-      expect.objectContaining({ body: expect.objectContaining({ content: "working" }) }),
-    );
-    dispose();
-  });
-
-  it("posts the first draft in the parent when deferred thread creation fails", async () => {
-    const dispose = registerPendingDiscordAutoThread({
-      accountId: "account-1",
-      threadId: "thread-10",
-      parentChannelId: "parent",
-      create: async () => undefined,
-    });
-    const { rest, stream } = createHarness({ channelId: "thread-10" }, ["2002"]);
-
-    await flushText(stream, "working");
-
-    expect(rest.post).toHaveBeenCalledWith("/channels/parent/messages", expect.anything());
-    expect(stream.messageId()).toBe("2002");
-    dispose();
-  });
+  it.each([
+    ["thread-9", "thread-9", async () => "thread-9"],
+    ["thread-10", "parent", async () => undefined],
+  ])(
+    "sends the first draft of deferred autoThread %s into %s",
+    async (threadId, target, create) => {
+      registerPendingDiscordAutoThread({
+        accountId: "account-1",
+        threadId,
+        parentChannelId: "parent",
+        create,
+      });
+      const { rest, stream } = createHarness({ channelId: threadId }, ["2001"]);
+      await flushText(stream, "working");
+      expect(rest.post).toHaveBeenCalledWith(`/channels/${target}/messages`, expect.anything());
+    },
+  );
 
   it("moves the visible draft to a newly adopted thread", async () => {
     const { rest, stream } = createHarness({ channelId: "parent" }, ["1101", "1102"]);

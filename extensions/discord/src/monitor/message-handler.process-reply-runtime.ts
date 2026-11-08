@@ -110,7 +110,8 @@ export function createDiscordMessageReplyRuntime(params: {
   let typingFeedback: ReturnType<typeof createTypingCallbacks> | undefined;
   const getTypingFeedback = () =>
     (typingFeedback ??= createTypingCallbacks({
-      start: () => sendTyping({ rest: params.feedbackRest, channelId: deliverChannelId }),
+      start: () =>
+        sendTyping({ rest: params.feedbackRest, channelId: deliverChannelId, accountId }),
       onStartError: (error) => {
         logTypingFailure({ log: logVerbose, channel: "discord", target: deliverChannelId, error });
       },

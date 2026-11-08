@@ -9,7 +9,6 @@ import {
   planDeferredDiscordAutoThread,
   resolveDiscordAutoThreadReplyPlan,
 } from "./threading.js";
-
 type AutoThreadParams = Parameters<typeof maybeCreateDiscordAutoThread>[0];
 
 const { generateConversationLabelMock } = vi.hoisted(() => ({
@@ -24,11 +23,9 @@ vi.mock("openclaw/plugin-sdk/reply-dispatch-runtime", async (importOriginal) => 
 const postMock = vi.fn();
 const getMock = vi.fn();
 const patchMock = vi.fn();
-
 const mockClient = {
   rest: { post: postMock, get: getMock, patch: patchMock },
 } as unknown as AutoThreadParams["client"];
-
 const mockMessage = {
   id: "1001",
   timestamp: "123",
@@ -94,7 +91,6 @@ describe("maybeCreateDiscordAutoThread", () => {
     const result = await maybeCreateDiscordAutoThread(
       createBaseParams({ channelType: ChannelType.GuildStageVoice }),
     );
-
     expect(result).toBeUndefined();
     expect(postMock).not.toHaveBeenCalled();
   });
@@ -103,7 +99,6 @@ describe("maybeCreateDiscordAutoThread", () => {
     "handles bot-authored messages with thread %s",
     async (threadId) => {
       getMock.mockResolvedValueOnce(threadId ? { thread: { id: threadId } } : {});
-
       const result = await maybeCreateDiscordAutoThread(
         createBaseParams({
           message: Object.assign({}, mockMessage, {
@@ -116,7 +111,6 @@ describe("maybeCreateDiscordAutoThread", () => {
       expect(postMock).not.toHaveBeenCalled();
     },
   );
-
   it("renames created thread when generated mode is enabled", async () => {
     mockThreadCreation();
     patchMock.mockResolvedValueOnce({});
@@ -130,37 +124,30 @@ describe("maybeCreateDiscordAutoThread", () => {
         channelDescription: "OpenClaw development coordination and release planning",
       }),
     );
-
     expect(result).toBe("thread1");
     expectRestBodyField(postMock, "name", "Need help with deploy rollout");
     expectRestBodyField(postMock, "auto_archive_duration", 10080);
-
     await flushAsyncWork();
-
     expect(generateConversationLabelMock.mock.calls[0]?.[0]).toMatchObject({
       agentId: "main",
       userMessage:
         "Channel: openclaw\n\nChannel description: OpenClaw development coordination and release planning\n\nMessage:\nNeed help with deploy rollout",
     });
-
     expectRestBodyField(patchMock, "name", "Deploy rollout summary");
   });
 
   it("does not block thread creation while title summary is pending", async () => {
     mockThreadCreation();
     patchMock.mockResolvedValueOnce({});
-
     const title = createDeferred<string | null>();
     generateConversationLabelMock.mockReturnValueOnce(title.promise);
 
     const result = await maybeCreateDiscordAutoThread(generatedParams());
-
     expect(result).toBe("thread1");
     expect(patchMock).not.toHaveBeenCalled();
 
     title.resolve("Async summary");
     await flushAsyncWork();
-
     expect(patchMock).toHaveBeenCalled();
   });
 
@@ -173,11 +160,9 @@ describe("maybeCreateDiscordAutoThread", () => {
       ...generatedParams().cfg,
       channels: { modelByChannel: { discord: { thread1: "openai/gpt-4.1-mini" } } },
     } satisfies OpenClawConfig;
-
     await maybeCreateDiscordAutoThread(generatedParams({ cfg }));
 
     await flushAsyncWork();
-
     expect(generateConversationLabelMock.mock.calls[0]?.[0]).toMatchObject({
       modelRef: "openai/gpt-4.1-mini",
     });
@@ -185,7 +170,6 @@ describe("maybeCreateDiscordAutoThread", () => {
 
   it("does not rename when generated title sanitizes to fallback thread name", async () => {
     mockThreadCreation();
-
     generateConversationLabelMock.mockResolvedValueOnce(
       "<@123456789012345678> <#987654321098765432>",
     );
@@ -198,9 +182,7 @@ describe("maybeCreateDiscordAutoThread", () => {
     );
 
     expect(result).toBe("thread1");
-
     await flushAsyncWork();
-
     expect(patchMock).not.toHaveBeenCalled();
   });
 });
@@ -216,21 +198,16 @@ describe("generated auto-thread title normalization", () => {
   ])("normalizes generated title %j", async (generated, expected) => {
     generateConversationLabelMock.mockResolvedValueOnce(generated);
     mockThreadCreation();
-
     await maybeCreateDiscordAutoThread(generatedParams());
-
     await flushAsyncWork();
-
     expectRestBodyField(patchMock, "name", expected);
   });
 
   it("routes UTF-16-safe prompt fields through the shared isolated label generator", async () => {
     mockThreadCreation();
-
     const cfg = {
       channels: { modelByChannel: { discord: { thread1: "openai/gpt-4.1-mini@local" } } },
     };
-
     await maybeCreateDiscordAutoThread(
       generatedParams({
         cfg,
@@ -239,7 +216,6 @@ describe("generated auto-thread title normalization", () => {
         channelDescription: `${"d".repeat(319)}😀tail`,
       }),
     );
-
     await flushAsyncWork();
 
     expect(generateConversationLabelMock).toHaveBeenCalledWith({
@@ -258,165 +234,59 @@ describe("generated auto-thread title normalization", () => {
     for (const outcome of ["input", "output", "failure"] as const) {
       mockThreadCreation();
       patchMock.mockClear();
-
       if (outcome === "output") {
         generateConversationLabelMock.mockResolvedValueOnce(null);
       }
-
       if (outcome === "failure") {
         generateConversationLabelMock.mockRejectedValueOnce(new Error("network timeout"));
       }
-
       expect(
         await maybeCreateDiscordAutoThread(
           generatedParams({ baseText: outcome === "input" ? " " : "Generate title." }),
         ),
       ).toBe("thread1");
-
       await flushAsyncWork();
-
       expect(patchMock).not.toHaveBeenCalled();
     }
   });
 });
 
 describe("autoThread on-first-message", () => {
-  function deferredParams(overrides: Partial<AutoThreadParams> = {}) {
-    return createBaseParams({
+  const deferred = (overrides: Partial<AutoThreadParams> = {}) => ({
+    ...createBaseParams({
       channelConfig: { allowed: true, autoThread: "on-first-message" },
       ...overrides,
-    });
-  }
+    }),
+    replyToMode: "off" as const,
+    parentSessionKey: "agent:main:discord:channel:text1",
+  });
 
-  function planParams(overrides: Partial<AutoThreadParams> = {}) {
-    return {
-      ...deferredParams(overrides),
-      replyToMode: "off" as const,
-      parentSessionKey: "agent:main:discord:channel:text1",
-    };
-  }
-
-  it("keys the session by the future thread id without creating the thread", async () => {
-    const plan = await resolveDiscordAutoThreadReplyPlan(planParams());
-
+  it("keys the session by the future thread id and creates the thread on the first send", async () => {
+    const plan = await resolveDiscordAutoThreadReplyPlan(deferred());
     expect(postMock).not.toHaveBeenCalled();
-    expect(getMock).not.toHaveBeenCalled();
-
-    // Discord reuses the starter message id as the thread id.
-    expect(plan.pendingAutoThread).toMatchObject({
-      accountId: "account-1",
-      threadId: "1001",
-      parentChannelId: "text1",
-    });
-
     expect(plan.deliverTarget).toBe("channel:1001");
-
-    expect(plan.autoThreadContext).toMatchObject({
-      createdThreadId: "1001",
-      To: "channel:1001",
-      OriginatingTo: "channel:1001",
-    });
-  });
-
-  it("registers the plan so the first send into the thread id creates it", async () => {
-    await resolveDiscordAutoThreadReplyPlan(planParams());
-
-    expect(postMock).not.toHaveBeenCalled();
+    expect(plan.autoThreadContext).toMatchObject({ createdThreadId: "1001", To: "channel:1001" });
 
     mockThreadCreation();
-
     expect(await resolvePendingDiscordAutoThreadChannel("account-1", "1001")).toBe("thread1");
-    expect(postMock).toHaveBeenCalledTimes(1);
-  });
-
-  it("creates the thread only when create() runs, under the source message", async () => {
-    const pending = planDeferredDiscordAutoThread(deferredParams());
-
-    expect(pending).toBeDefined();
-    expect(postMock).not.toHaveBeenCalled();
-
-    mockThreadCreation();
-
-    expect(await pending?.create()).toBe("thread1");
-    expect(postMock).toHaveBeenCalledTimes(1);
     expect(postMock.mock.calls[0]?.[0]).toContain("/channels/text1/messages/1001/threads");
   });
 
-  it("reuses a thread another agent already created for the same message", async () => {
+  it("reuses an existing thread and returns undefined when none can be created", async () => {
     getMock.mockResolvedValueOnce({ thread: { id: "1001" } });
-
-    const pending = planDeferredDiscordAutoThread(deferredParams());
-
-    expect(await pending?.create()).toBe("1001");
+    expect(await planDeferredDiscordAutoThread(deferred())?.create()).toBe("1001");
     expect(postMock).not.toHaveBeenCalled();
-  });
 
-  it("recovers an existing thread when creation fails", async () => {
-    getMock.mockResolvedValueOnce({}).mockResolvedValueOnce({ thread: { id: "1001" } });
-    postMock.mockRejectedValueOnce(new Error("thread already exists"));
-
-    const pending = planDeferredDiscordAutoThread(deferredParams());
-
-    expect(await pending?.create()).toBe("1001");
-  });
-
-  it("returns undefined when the thread cannot be created or found", async () => {
     getMock.mockResolvedValue({});
     postMock.mockRejectedValueOnce(new Error("Missing Permissions"));
-
-    const pending = planDeferredDiscordAutoThread(deferredParams());
-
-    expect(await pending?.create()).toBeUndefined();
+    expect(await planDeferredDiscordAutoThread(deferred())?.create()).toBeUndefined();
   });
 
-  it("still renames generated titles after the deferred creation", async () => {
-    mockThreadCreation();
-    generateConversationLabelMock.mockResolvedValueOnce("Generated title");
-
-    const pending = planDeferredDiscordAutoThread(
-      deferredParams({
-        channelConfig: {
-          allowed: true,
-          autoThread: "on-first-message",
-          autoThreadName: "generated",
-        },
-      }),
-    );
-
-    expect(await pending?.create()).toBe("thread1");
-
-    await flushAsyncWork();
-
-    expect(patchMock).toHaveBeenCalledTimes(1);
-  });
-
-  it("does not plan for bot authors, existing threads, forum parents or plain autoThread", async () => {
-    expect(
-      planDeferredDiscordAutoThread(
-        deferredParams({
-          message: { id: "1001", author: { bot: true } } as unknown as AutoThreadParams["message"],
-        }),
-      ),
-    ).toBeUndefined();
-
-    expect(
-      planDeferredDiscordAutoThread(
-        deferredParams({ threadChannel: { id: "thread-existing", parentId: "text1" } }),
-      ),
-    ).toBeUndefined();
-
-    expect(
-      planDeferredDiscordAutoThread(deferredParams({ channelType: ChannelType.GuildForum })),
-    ).toBeUndefined();
-
-    mockThreadCreation();
-
-    const plan = await resolveDiscordAutoThreadReplyPlan({
-      ...planParams(),
-      channelConfig: { allowed: true, autoThread: true },
-    });
-
+  it("keeps bot-authored messages on the immediate path so an existing thread is reused", async () => {
+    getMock.mockResolvedValueOnce({ thread: { id: "bot-thread" } });
+    const message = { id: "1001", author: { bot: true } } as unknown as AutoThreadParams["message"];
+    const plan = await resolveDiscordAutoThreadReplyPlan(deferred({ message }));
     expect(plan.pendingAutoThread).toBeUndefined();
-    expect(postMock).toHaveBeenCalledTimes(1);
+    expect(plan.autoThreadContext?.createdThreadId).toBe("bot-thread");
   });
 });

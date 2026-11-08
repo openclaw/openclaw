@@ -7,6 +7,12 @@ import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
  * into it. Every outbound path that can target the thread (reply delivery,
  * progress drafts, message-tool sends) resolves its channel through this
  * registry first, so the thread opens with that message already inside it.
+ *
+ * Accepted edge case: the registry lives in memory. If the Gateway restarts after a turn
+ * started but before its first send, the thread was never created, so a recovered send to
+ * `channel:<messageId>` fails visibly (unknown channel) instead of opening the thread. That
+ * window is one agent turn, and the user can simply ask again; a persisted store would cost
+ * more than the glitch does.
  */
 type PendingDiscordAutoThread = {
   accountId: string;
@@ -46,20 +52,15 @@ export function registerPendingDiscordAutoThread(params: {
 
   pendingThreads.set(key, entry);
 
-  let expiry: ReturnType<typeof setTimeout> | undefined;
+  const expiry = setTimeout(() => dispose(), PENDING_AUTO_THREAD_TTL_MS);
+  expiry.unref?.();
 
   const dispose = () => {
-    if (expiry) {
-      clearTimeout(expiry);
-    }
-
+    clearTimeout(expiry);
     if (pendingThreads.get(key) === entry) {
       pendingThreads.delete(key);
     }
   };
-
-  expiry = setTimeout(dispose, PENDING_AUTO_THREAD_TTL_MS);
-  expiry.unref?.();
 
   entry.dispose = dispose;
 

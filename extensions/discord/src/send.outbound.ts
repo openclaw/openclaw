@@ -345,13 +345,6 @@ async function sendDiscordStructuredMessage(
       { defaultKind: "channel" },
     );
     const { channelId: resolvedChannelId } = await resolveChannelId(rest, recipient, request);
-
-    // Resolve deferred auto-thread creation using the current Discord account.
-    const channelId = await resolvePendingDiscordAutoThreadChannel(
-      account.accountId,
-      resolvedChannelId,
-    );
-
     const content = opts.content?.trim()
       ? rewriteDiscordKnownMentions(opts.content, {
           accountId: account.accountId,
@@ -363,6 +356,11 @@ async function sendDiscordStructuredMessage(
       override: opts.suppressEmbeds,
     });
     const payload = buildPayload();
+    // Open an autoThread "on-first-message" thread only after the payload validated.
+    const channelId = await resolvePendingDiscordAutoThreadChannel(
+      account.accountId,
+      resolvedChannelId,
+    );
     const flags = resolveDiscordMessageFlags({ silent: opts.silent, suppressEmbeds });
     const body = {
       content: content || undefined,

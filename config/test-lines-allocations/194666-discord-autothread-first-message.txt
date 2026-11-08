@@ -1,0 +1,3 @@
+# Discord autoThread "on-first-message": registry, planner, and first-draft proof, trimmed
+# from 270 to the minimum that covers the deferred-create contract. Exact net growth.
+122

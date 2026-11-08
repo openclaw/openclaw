@@ -134,7 +134,11 @@ export async function resolveDiscordAutoThreadReplyPlan(
   const targetChannelId = params.threadChannel?.id ?? (messageChannelId || "unknown");
   const originalReplyTarget = `channel:${targetChannelId}`;
   const createParams = { ...params, messageChannelId: messageChannelId || undefined };
-  const deferred = resolveDiscordAutoThreadMode(params.channelConfig) === "on-first-message";
+  // Bot-authored messages keep the immediate path: it reuses a thread that already exists
+  // under the message (allowBots) and never creates one.
+  const deferred =
+    resolveDiscordAutoThreadMode(params.channelConfig) === "on-first-message" &&
+    !params.message.author?.bot;
   const pendingAutoThread = deferred ? planDeferredDiscordAutoThread(createParams) : undefined;
   if (pendingAutoThread) {
     // From here on, the first outbound send into this thread id opens it.
@@ -360,12 +364,6 @@ export function planDeferredDiscordAutoThread(
   }
   const messageChannelId = resolveTrimmedDiscordMessageChannelId(params);
   if (!messageChannelId) {
-    return undefined;
-  }
-  if (params.message.author?.bot) {
-    logVerbose(
-      `discord: autoThread skipped for bot-authored message ${messageChannelId}/${params.message.id}`,
-    );
     return undefined;
   }
   return {

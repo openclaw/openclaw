@@ -138,15 +138,8 @@ async function writeDiscordComponentMessage(
     { defaultKind: "channel" },
   );
   const { channelId: resolvedChannelId } = await resolveChannelId(rest, recipient, request);
-
-  // Resolve deferred auto-thread creation using the current Discord account.
-  const channelId = await resolvePendingDiscordAutoThreadChannel(
-    accountInfo.accountId,
-    resolvedChannelId,
-  );
-
   if (creating) {
-    const channel = await resolveDiscordChannel(rest, channelId);
+    const channel = await resolveDiscordChannel(rest, resolvedChannelId);
     if (channel && DISCORD_FORUM_LIKE_TYPES.has(channel.type)) {
       throw new Error("Discord components are not supported in forum-style channels");
     }
@@ -221,6 +214,11 @@ async function writeDiscordComponentMessage(
     ...serializePayload(payload),
     ...(messageReference ? { message_reference: messageReference } : {}),
   };
+  // Open an autoThread "on-first-message" thread only after the message validated and built.
+  const channelId = await resolvePendingDiscordAutoThreadChannel(
+    accountInfo.accountId,
+    resolvedChannelId,
+  );
   // Nonce enforcement belongs to Create Message, not edits.
   const body = creating
     ? { ...componentBody, nonce: createDiscordMessageNonce(), enforce_nonce: true }

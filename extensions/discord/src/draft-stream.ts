@@ -51,6 +51,7 @@ export function createDiscordDraftStream(params: {
       return false;
     }
     if (trimmed.length > maxChars) {
+      // Stop streaming once we exceed the cap to avoid repeated API failures.
       streamState.stopped = true;
       params.warn?.(`discord stream preview stopped (text length ${trimmed.length} > ${maxChars})`);
       return false;
@@ -59,6 +60,7 @@ export function createDiscordDraftStream(params: {
       return true;
     }
 
+    // Debounce first preview send for better push notification quality.
     if (streamMessage === undefined && minInitialChars != null && !streamState.final && !complete) {
       if (trimmed.length < minInitialChars) {
         return false;
@@ -86,29 +88,24 @@ export function createDiscordDraftStream(params: {
       const messageReference = replyToMessageId
         ? { message_id: replyToMessageId, fail_if_not_exists: false }
         : undefined;
-
       // autoThread "on-first-message": the first draft send is what opens the thread.
       const sendChannelId = await resolvePendingDiscordAutoThreadChannel(
         params.accountId,
         targetChannelId,
       );
-      if (sendChannelId !== channelId) {
-        channelId = sendChannelId;
-      }
-
+      channelId = sendChannelId;
       const sent = (await rest.post(Routes.channelMessages(sendChannelId), {
         body: {
           ...body,
           ...(messageReference ? { message_reference: messageReference } : {}),
         },
-      })) as { id?: string };
-
+      })) as { id?: string }; // SAFETY: The create response's ID is checked before use.
       if (typeof sent?.id !== "string" || !sent.id) {
         streamState.stopped = true;
         params.warn?.("discord stream preview stopped (missing message id from send)");
         return false;
       }
-
+      // Draft rotation during an in-flight preview is best effort; final delivery is separate.
       streamMessage = { channelId: sendChannelId, messageId: sent.id };
       lastSentText = trimmed;
       return true;
@@ -139,9 +136,7 @@ export function createDiscordDraftStream(params: {
     warn: params.warn,
     warnPrefix: "discord stream preview cleanup failed",
   });
-
   const { loop, update: updateDraft, stop, discardPending, seal } = lifecycle;
-
   const update = (text: string, options?: { complete?: boolean; assertCurrent?: () => void }) =>
     updateDraft({
       text,
