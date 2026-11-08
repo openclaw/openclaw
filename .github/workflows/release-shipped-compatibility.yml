@@ -1,0 +1,116 @@
+name: Published Release Tooling Compatibility
+
+on:
+  schedule:
+    - cron: "17 5 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-shipped-compatibility
+  cancel-in-progress: false
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+jobs:
+  verify:
+    if: github.repository == 'openclaw/openclaw' && github.ref == 'refs/heads/main'
+    name: Main tooling × openclaw@${{ matrix.selector }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    strategy:
+      fail-fast: false
+      matrix:
+        selector: [latest, extended-stable]
+    steps:
+      - name: Checkout main tooling
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Setup main tooling
+        uses: ./.github/actions/setup-node-env
+        with:
+          cache-mode: restore
+          install-bun: "true"
+
+      - name: Resolve published line
+        id: release
+        env:
+          SELECTOR: ${{ matrix.selector }}
+        run: |
+          set -euo pipefail
+          version="$(npm view "openclaw@${SELECTOR}" version --json | node -e '
+            let source = "";
+            process.stdin.setEncoding("utf8");
+            process.stdin.on("data", (chunk) => { source += chunk; });
+            process.stdin.on("end", () => {
+              const value = JSON.parse(source);
+              if (typeof value !== "string" || !/^20[0-9]{2}\.[1-9][0-9]*\.[1-9][0-9]*(?:-[1-9][0-9]*)?$/.test(value)) {
+                throw new Error(`invalid openclaw@${process.env.SELECTOR} version: ${JSON.stringify(value)}`);
+              }
+              process.stdout.write(value);
+            });
+          ')"
+          tag="v${version}"
+          git fetch --no-tags origin "+refs/tags/${tag}:refs/tags/${tag}"
+          sha="$(git rev-parse "${tag}^{commit}")"
+          {
+            echo "version=${version}"
+            echo "tag=${tag}"
+            echo "sha=${sha}"
+          } >> "$GITHUB_OUTPUT"
+          echo "Testing main tooling at ${GITHUB_SHA} against openclaw@${SELECTOR} (${tag}, ${sha})." >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Checkout published source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ steps.release.outputs.sha }}
+          path: shipped
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Install published source dependencies
+        working-directory: shipped
+        env:
+          CI: "true"
+        run: pnpm install --frozen-lockfile --prefer-offline
+
+      - name: Verify published npm bytes with main tooling
+        working-directory: shipped
+        env:
+          RELEASE_VERSION: ${{ steps.release.outputs.version }}
+          TSX_TSCONFIG_PATH: ${{ github.workspace }}/tsconfig.json
+        run: node --import ../scripts/tsx.mjs ../scripts/openclaw-npm-postpublish-verify.ts "$RELEASE_VERSION"
+
+      - name: Render published Plugin SDK with main tooling
+        env:
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
+        run: |
+          mkdir -p .artifacts/release-shipped-compatibility
+          pnpm plugin-sdk:api:diff -- \
+            --base "${RELEASE_TAG}^" \
+            --head "$RELEASE_TAG" \
+            --json ".artifacts/release-shipped-compatibility/plugin-sdk-${{ matrix.selector }}.json" \
+            --summary ".artifacts/release-shipped-compatibility/plugin-sdk-${{ matrix.selector }}.md"
+          cat ".artifacts/release-shipped-compatibility/plugin-sdk-${{ matrix.selector }}.md" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Pack published ClawHub plugins with main tooling
+        run: |
+          node --import ./scripts/tsx.mjs scripts/plugin-release-pretag-pack-check.ts \
+            --root shipped \
+            --tooling-root . \
+            --clawhub-only
+
+      - name: Upload compatibility evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-shipped-compatibility-${{ matrix.selector }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .artifacts/release-shipped-compatibility/
+          if-no-files-found: ignore
+          retention-days: 30

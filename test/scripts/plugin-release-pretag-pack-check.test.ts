@@ -48,6 +48,31 @@ it("maps nonnumeric failures to the CLI failure status", () => {
   expect(pluginReleasePretagExitCode(failure("ETIMEDOUT"))).toBe(1);
 });
 
+it("uses current tooling to pack a shipped ClawHub source tree", async () => {
+  const toolingRoot = makeTempRepoRoot(tempDirs, "openclaw-plugin-pretag-tooling-");
+  command.mockResolvedValue(0);
+
+  await checkPack(repoDir, { clawHubOnly: true, toolingRoot });
+
+  expect(command).toHaveBeenCalledTimes(2);
+  expect(command.mock.calls[0]?.[0]).toMatchObject({
+    args: expect.arrayContaining([
+      join(toolingRoot, "scripts/check-plugin-npm-runtime-builds.mts"),
+    ]),
+    cwd: repoDir,
+  });
+  expect(command.mock.calls[1]?.[0]).toMatchObject({
+    args: [
+      join(toolingRoot, "scripts/plugin-clawhub-publish.sh"),
+      "--pack",
+      "extensions/demo-plugin",
+      "--metadata-root",
+      toolingRoot,
+    ],
+    cwd: repoDir,
+  });
+});
+
 it.each(["live", "terminated"] as const)(
   "retains temporary inputs only when managed cleanup reports %s work",
   async (processTreeState) => {

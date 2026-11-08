@@ -20,6 +20,12 @@ type PluginReleasePretagPackTarget = {
   packNpm: boolean;
 };
 
+type PluginReleasePretagPackOptions = {
+  clawHubOnly?: boolean;
+  timeoutMs?: number;
+  toolingRoot?: string;
+};
+
 /** Preserve conventional managed-command exit statuses at the executable boundary. */
 export function pluginReleasePretagExitCode(error: unknown): number {
   if (
@@ -37,16 +43,19 @@ export function pluginReleasePretagExitCode(error: unknown): number {
 
 function collectPluginReleasePretagPackTargets(
   rootDir = resolve("."),
+  options: Pick<PluginReleasePretagPackOptions, "clawHubOnly"> = {},
 ): PluginReleasePretagPackTarget[] {
   const targets = new Map<string, PluginReleasePretagPackTarget>();
 
-  for (const plugin of collectPublishablePluginPackages(rootDir)) {
-    targets.set(plugin.packageDir, {
-      packageDir: plugin.packageDir,
-      packageName: plugin.packageName,
-      packClawHub: false,
-      packNpm: true,
-    });
+  if (!options.clawHubOnly) {
+    for (const plugin of collectPublishablePluginPackages(rootDir)) {
+      targets.set(plugin.packageDir, {
+        packageDir: plugin.packageDir,
+        packageName: plugin.packageName,
+        packClawHub: false,
+        packNpm: true,
+      });
+    }
   }
   for (const plugin of collectClawHubPublishablePluginPackages(rootDir)) {
     const existing = targets.get(plugin.packageDir);
@@ -106,10 +115,13 @@ async function runCommand(
 
 export async function runPluginReleasePretagPackCheck(
   rootDir = resolve("."),
-  options: { timeoutMs?: number } = {},
+  options: PluginReleasePretagPackOptions = {},
 ): Promise<void> {
+  const sourceRoot = resolve(rootDir);
+  const toolingRoot = resolve(options.toolingRoot ?? sourceRoot);
   const timeoutMs = options.timeoutMs ?? PLUGIN_RELEASE_PRETAG_COMMAND_TIMEOUT_MS;
-  const targets = collectPluginReleasePretagPackTargets(rootDir);
+  const metadataArgs = options.toolingRoot ? ["--metadata-root", toolingRoot] : [];
+  const targets = collectPluginReleasePretagPackTargets(sourceRoot, options);
   const tempRoot = mkdtempSync(join(tmpdir(), "openclaw-plugin-pretag-pack-"));
   const wrapperDir = join(tempRoot, "bin");
   mkdirSync(wrapperDir);
@@ -143,13 +155,17 @@ export async function runPluginReleasePretagPackCheck(
         [
           "--import",
           "tsx",
-          "scripts/check-plugin-npm-runtime-builds.mts",
+          join(toolingRoot, "scripts/check-plugin-npm-runtime-builds.mts"),
           "--package",
           target.packageDir,
         ],
         {
-          commandLabel: `node --import tsx scripts/check-plugin-npm-runtime-builds.mts --package ${target.packageDir}`,
-          cwd: rootDir,
+          commandLabel: `node --import tsx ${join(toolingRoot, "scripts/check-plugin-npm-runtime-builds.mts")} --package ${target.packageDir}`,
+          cwd: sourceRoot,
+          env: {
+            ...packEnv,
+            TSX_TSCONFIG_PATH: join(toolingRoot, "tsconfig.json"),
+          },
           stage: `plugin runtime build for ${target.packageName}`,
           timeoutMs,
         },
@@ -158,10 +174,10 @@ export async function runPluginReleasePretagPackCheck(
         console.log(`npm pack: ${target.packageName}`);
         await runCommand(
           "bash",
-          ["scripts/plugin-npm-publish.sh", "--pack-dry-run", target.packageDir],
+          [join(toolingRoot, "scripts/plugin-npm-publish.sh"), "--pack-dry-run", target.packageDir],
           {
             commandLabel: `bash scripts/plugin-npm-publish.sh --pack-dry-run ${target.packageDir}`,
-            cwd: rootDir,
+            cwd: sourceRoot,
             env: prebuiltPackEnv,
             quietStdout: true,
             stage: `npm pack for ${target.packageName}`,
@@ -174,10 +190,15 @@ export async function runPluginReleasePretagPackCheck(
         console.log(`ClawHub pack: ${target.packageName}`);
         await runCommand(
           "bash",
-          ["scripts/plugin-clawhub-publish.sh", "--pack", target.packageDir],
+          [
+            join(toolingRoot, "scripts/plugin-clawhub-publish.sh"),
+            "--pack",
+            target.packageDir,
+            ...metadataArgs,
+          ],
           {
             commandLabel: `bash scripts/plugin-clawhub-publish.sh --pack ${target.packageDir}`,
-            cwd: rootDir,
+            cwd: sourceRoot,
             env: {
               ...prebuiltPackEnv,
               OPENCLAW_CLAWHUB_PACK_OUTPUT_DIR: outputDir,
@@ -201,9 +222,38 @@ export async function runPluginReleasePretagPackCheck(
   console.log(`plugin-release-pretag-pack-check: packed ${targets.length} publishable plugins.`);
 }
 
+function parseCliArgs(argv: string[]) {
+  let rootDir = ".";
+  let toolingRoot: string | undefined;
+  let clawHubOnly = false;
+  for (let index = 0; index < argv.length; index += 1) {
+    const arg = argv[index];
+    if (arg === "--clawhub-only") {
+      clawHubOnly = true;
+      continue;
+    }
+    if (arg === "--root" || arg === "--tooling-root") {
+      const value = argv[index + 1];
+      if (!value || value.startsWith("-")) {
+        throw new Error(`${arg} requires a path`);
+      }
+      if (arg === "--root") {
+        rootDir = value;
+      } else {
+        toolingRoot = value;
+      }
+      index += 1;
+      continue;
+    }
+    throw new Error(`unknown plugin release pretag pack option: ${arg}`);
+  }
+  return { rootDir, options: { clawHubOnly, toolingRoot } };
+}
+
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
   try {
-    await runPluginReleasePretagPackCheck();
+    const cli = parseCliArgs(process.argv.slice(2));
+    await runPluginReleasePretagPackCheck(cli.rootDir, cli.options);
   } catch (error) {
     console.error(error instanceof Error ? error.message : String(error));
     process.exitCode = pluginReleasePretagExitCode(error);

@@ -989,6 +989,29 @@ AFTER_CD
     expect(releaseWorkflow.jobs.publish.needs).toContain("approve");
   });
 
+  it("runs main publication tooling against both shipped release lines", () => {
+    const workflow = readWorkflow(".github/workflows/release-shipped-compatibility.yml");
+    const verify = workflow.jobs.verify;
+    const steps = verify.steps as WorkflowStep[];
+
+    expect(workflow.on.schedule).toEqual([{ cron: "17 5 * * *" }]);
+    expect(verify.strategy.matrix.selector).toEqual(["latest", "extended-stable"]);
+    expect(verify["timeout-minutes"]).toBe(360);
+    const postpublish = requiredWorkflowStep(steps, "Verify published npm bytes with main tooling");
+    expect(postpublish.run).toContain("../scripts/openclaw-npm-postpublish-verify.ts");
+    expect(postpublish.env?.TSX_TSCONFIG_PATH).toBe("${{ github.workspace }}/tsconfig.json");
+    const pluginSdk = requiredWorkflowStep(
+      steps,
+      "Render published Plugin SDK with main tooling",
+    ).run;
+    expect(pluginSdk).toContain("plugin-sdk:api:diff --");
+    expect(pluginSdk).toContain('--base "${RELEASE_TAG}^"');
+    expect(pluginSdk).toContain('--head "$RELEASE_TAG"');
+    expect(
+      requiredWorkflowStep(steps, "Pack published ClawHub plugins with main tooling").run,
+    ).toContain("--clawhub-only");
+  });
+
   it("scopes generated publication credentials to the repository and separates branch and PR authority", () => {
     const action = readWorkflow(CREATE_GENERATED_PR_TOKENS_ACTION);
     const contents = action.runs.steps.find((step: WorkflowStep) => step.id === "contents-token");
