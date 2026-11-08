@@ -14,13 +14,20 @@ let reportedForeignArguments = false;
 const REDACTED_ARGUMENTS_ENTITLEMENT =
   /\[Key\] com\.apple\.private\.no-read-procargs\s*\[Value\]\s*\[Bool\] true|<key>com\.apple\.private\.no-read-procargs<\/key>\s*<true\/>/u;
 
-/** The running image from its kernel text vnode, which process.title cannot rewrite. */
+/** The running image: the first text mapping, confirmed by the kernel accounting
+ * name (exec basename, truncated to 16 bytes), so a mapped binary cannot pose as it. */
 function readDarwinImagePath(pid: number): string | undefined {
-  const result = spawnSync("/usr/sbin/lsof", ["-a", "-p", String(pid), "-d", "txt", "-Fn"], {
-    encoding: "utf8",
-    timeout: 2_000,
-  });
-  return result.status === 0 ? /^n(\/.+)$/mu.exec(result.stdout)?.[1] : undefined;
+  const options = { encoding: "utf8", timeout: 2_000 } as const;
+  const mapping = spawnSync(
+    "/usr/sbin/lsof",
+    ["-a", "-p", String(pid), "-d", "txt", "-Fn"],
+    options,
+  );
+  const image = mapping.status === 0 ? /^n(\/.+)$/mu.exec(mapping.stdout)?.[1] : undefined;
+  const name = image && spawnSync("/bin/ps", ["-o", "ucomm=", "-p", String(pid)], options);
+  return name && name.status === 0 && name.stdout.trim() === path.basename(image).slice(0, 16)
+    ? image
+    : undefined;
 }
 
 /** A sealed Apple binary that opts out of argument inspection, such as mdworker. */

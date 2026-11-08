@@ -1,3 +1,4 @@
+import path from "node:path";
 import { ProcSafeError } from "@openclaw/proc-safe/errors";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
@@ -129,25 +130,37 @@ it.each([
   // Non-UTF-8 argv also fails alignment; an unentitled shell may hold a runtime.
   { code: "layout-mismatch", image: "/bin/sh", entitled: true, owner: "same", redacted: false },
   { code: "layout-mismatch", image: "", entitled: true, owner: "same", redacted: false },
+  // A process that maps the entitled binary below its own image is still itself.
+  {
+    code: "layout-mismatch",
+    image: mdworker,
+    ucomm: "node",
+    entitled: true,
+    owner: "same",
+    redacted: false,
+  },
 ] as const)(
   "trusts a $code argument image only for an entitled system image ($image)",
-  ({ code, image, entitled, owner, redacted }) => {
+  ({ code, image, entitled, owner, redacted, ...row }) => {
     const error = new ProcSafeError(code, "invalid Darwin argument alignment");
     readCommand.mockImplementation(() => {
       throw error;
     });
+    const ucomm = "ucomm" in row ? row.ucomm : path.basename(image);
     spawn.mockImplementation((command: string) =>
-      command === "/usr/sbin/lsof"
-        ? {
-            status: image ? 0 : 1,
-            stdout: image ? `p992\nftxt\nn${image}\nftxt\nn/usr/lib/dyld\n` : "",
-          }
-        : {
-            status: 0,
-            stdout: entitled
-              ? "[Dict]\n\t[Key] com.apple.private.no-read-procargs\n\t[Value]\n\t\t[Bool] true\n"
-              : "[Dict]\n",
-          },
+      command === "/bin/ps"
+        ? { status: 0, stdout: `${ucomm}\n` }
+        : command === "/usr/sbin/lsof"
+          ? {
+              status: image ? 0 : 1,
+              stdout: image ? `p992\nftxt\nn${image}\nftxt\nn/usr/lib/dyld\n` : "",
+            }
+          : {
+              status: 0,
+              stdout: entitled
+                ? "[Dict]\n\t[Key] com.apple.private.no-read-procargs\n\t[Value]\n\t\t[Bool] true\n"
+                : "[Dict]\n",
+            },
     );
     const inspect = () => readDarwinProcessCommand(992, owner);
     if (redacted) {
