@@ -19,7 +19,6 @@ import {
 import { ConfigWritePostCommitError } from "../../config/io.write-errors.js";
 import { applyMergePatch, createMergePatch } from "../../config/merge-patch.js";
 import { normalizeSubmittedConfigModelRefs } from "../../config/model-input-normalization.js";
-import { isBuiltInModelProviderOverlayId } from "../../config/model-provider-overlay-ids.js";
 import { ConfigMutationConflictError } from "../../config/mutation-conflict.js";
 import {
   collectBaseArrayPaths,
@@ -69,6 +68,7 @@ import {
   hasHashlessPatchLwwStructure,
   isHashlessPatchLwwPath,
 } from "./config-patch-intent.js";
+import { stripBundledProviderRuntimeDefaultsFromCandidate } from "./config-provider-defaults.js";
 import {
   summarizeConfigValidationIssues,
   validateSubmittedConfigOrRespond,
@@ -341,61 +341,6 @@ function rejectDestructiveArrayPatchWithoutIntent(params: {
   return true;
 }
 
-function hasOwnRecordValue(value: unknown, key: string): boolean {
-  return isRecord(value) && Object.hasOwn(value, key);
-}
-
-function stripBundledProviderRuntimeDefaults(params: {
-  candidate: unknown;
-  sourceConfig: unknown;
-}): unknown {
-  if (!isRecord(params.candidate)) {
-    return params.candidate;
-  }
-  const models = params.candidate.models;
-  if (!isRecord(models) || !isRecord(models.providers)) {
-    return params.candidate;
-  }
-  const sourceModels = isRecord(params.sourceConfig) ? params.sourceConfig.models : undefined;
-  const sourceProviders = isRecord(sourceModels) ? sourceModels.providers : undefined;
-
-  let nextProviders: Record<string, unknown> | undefined;
-  for (const [providerId, provider] of Object.entries(models.providers)) {
-    // Runtime overlays can materialize empty defaults that should not become persisted config.
-    if (!isBuiltInModelProviderOverlayId(providerId) || !isRecord(provider)) {
-      continue;
-    }
-    const sourceProvider = isRecord(sourceProviders) ? sourceProviders[providerId] : undefined;
-    let nextProvider: Record<string, unknown> | undefined;
-    if (provider.baseUrl === "" && !hasOwnRecordValue(sourceProvider, "baseUrl")) {
-      nextProvider = { ...provider };
-      delete nextProvider.baseUrl;
-    }
-    if (
-      Array.isArray(provider.models) &&
-      provider.models.length === 0 &&
-      !hasOwnRecordValue(sourceProvider, "models")
-    ) {
-      nextProvider ??= { ...provider };
-      delete nextProvider.models;
-    }
-    if (nextProvider) {
-      nextProviders ??= { ...models.providers };
-      nextProviders[providerId] = nextProvider;
-    }
-  }
-  if (!nextProviders) {
-    return params.candidate;
-  }
-  return {
-    ...params.candidate,
-    models: {
-      ...models,
-      providers: nextProviders,
-    },
-  };
-}
-
 async function prepareConfigReplacementOrRespond(
   params: { raw: string },
   respond: RespondFn,
@@ -426,7 +371,7 @@ async function prepareConfigReplacementOrRespond(
     ? projectRuntimeChangesOntoSource(snapshot.resolved, snapshot.config, restored.result)
     : restored.result;
   const validatedSubmission = validateSubmittedConfigOrRespond({
-    candidate: stripBundledProviderRuntimeDefaults({
+    candidate: stripBundledProviderRuntimeDefaultsFromCandidate({
       candidate: sourceCandidate,
       sourceConfig: snapshot.sourceConfig,
     }),

@@ -1,5 +1,4 @@
 // Resolves plugin SDK aliases for public package imports.
-import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -14,6 +13,7 @@ import { formatErrorMessage } from "../infra/errors.js";
 import { resolveRequiredHomeDir } from "../infra/home-dir.js";
 import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
 import { resolveOpenClawDevSourceRoot } from "./dev-source-root.js";
+import { ensurePrivateJitiCacheRoots } from "./jiti-cache-privacy.js";
 import { PLUGIN_SOURCE_MODULE_EXTENSIONS } from "./native-module-require.js";
 import { PUBLIC_SURFACE_SOURCE_EXTENSIONS } from "./package-entrypoints.js";
 import {
@@ -164,13 +164,11 @@ function resolvePluginLoaderJitiFsCacheDir(params: LoaderModuleResolveParams = {
   if (stat) {
     installMarker = `${Math.trunc(stat.mtimeMs)}-${stat.size}`;
   }
-  return path.join(
-    resolveJitiFsCacheRoot(),
-    "openclaw",
-    "jiti",
-    version,
-    sanitizeJitiCachePathSegment(installMarker),
-  );
+  const marker = sanitizeJitiCachePathSegment(installMarker);
+  const cacheRoot = resolveJitiFsCacheRoot();
+  const fsCacheDir = path.join(cacheRoot, "openclaw", "jiti", version, marker);
+  ensurePrivateJitiCacheRoots(cacheRoot, fsCacheDir);
+  return fsCacheDir;
 }
 
 function isSafePluginSdkSubpathSegment(subpath: string): boolean {
@@ -1067,7 +1065,6 @@ export function buildPluginLoaderJitiOptions(
   )
     ? resolvePluginLoaderJitiFsCacheDir(params)
     : false;
-  if (fsCache) ensurePrivateJitiCacheRoots(fsCache);
   return {
     interopDefault: true,
     fsCache,
@@ -1084,38 +1081,6 @@ export function buildPluginLoaderJitiOptions(
         }
       : {}),
   };
-}
-
-/**
- * Create the jiti cache directories with a PRIVATE mode before jiti first writes to them.
- *
- * jiti materialises its fs cache with a recursive mkdir and the process umask, so under umask 002 it
- * leaves the cache root group-writable (0775). The platform temp-root guard refuses to place a
- * workspace under any group/world-writable ancestor, and its fallback refuses for the same reason —
- * measured 2026-11-08: the doctor persistence test failed with "No safe OpenClaw temp root is
- * available … Temp workspace ancestor is group/world writable without sticky protection", and the
- * state fallback failed identically. Creating the two directories OpenClaw owns at 0700 first makes
- * jiti reuse them instead of creating them wide, and repairs an already-permissive one.
- *
- * The cache ROOT itself (XDG_CACHE_HOME or ~/.cache) is only created when absent: it may belong to
- * the user or to another application, so an existing mode there is left as its owner set it.
- */
-function ensurePrivateJitiCacheRoots(fsCache: string): void {
-  const cacheRoot = resolveJitiFsCacheRoot();
-  const ours = [path.join(cacheRoot, "openclaw"), fsCache];
-  try {
-    fs.mkdirSync(cacheRoot, { recursive: true, mode: 0o700 });
-    for (const directory of ours) {
-      fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
-      fs.chmodSync(directory, 0o700);
-    }
-  } catch (error) {
-    // A cache we cannot prepare is jiti's error to raise, not ours — but never silently: this is the
-    // exact refusal the function exists to prevent, so it is reported where the operator can see it.
-    console.warn(
-      `[plugins] could not prepare a private jiti cache under ${cacheRoot}: ${formatErrorMessage(error)}`,
-    );
-  }
 }
 
 export function createPluginLoaderModuleCacheKey(params: {

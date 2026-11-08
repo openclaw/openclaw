@@ -1,0 +1,6 @@
+# The config.write audit record must name the calling client, not just the Gateway process. The three
+# new end-to-end arms are the only thing standing between a dropped spread in the write path and a
+# journal that silently records no caller while every unit above the seam still passes: a round-trip
+# through config.set, a record with no actor key when no client asked, and the RPC-level assertion
+# that the caller reaches the write options. Exact net growth for PR #195218: +57 -1.
+56
