@@ -14,6 +14,7 @@ import type {
   SessionActorStorageReads,
   SessionActorStorageWrites,
 } from "./session-actor-storage-contract.js";
+import type { SessionEntryMetadataReceipt } from "./session-entry-metadata-receipt.js";
 import type {
   SessionEntryBookkeepingReducer,
   SessionEntryPatchOperation,
@@ -252,6 +253,12 @@ export type SessionActorReceipt = {
     authorityReceipts?: readonly SessionTranscriptAuthorityReceipt[];
     append?: SessionActorAppendCommitted;
     projectionNeedsReconcile: boolean;
+  };
+  /** Canonical entry deltas captured by the durable writer, not rebuilt from the actor snapshot. */
+  entryPublication?: {
+    agentId: string;
+    storePath: string;
+    receipts: readonly SessionEntryMetadataReceipt[];
   };
   pendingInputReceipt?: SessionPendingInputWorkerReceipt;
   pendingInputMutationReceipt?: PendingInputMutationReceipt;

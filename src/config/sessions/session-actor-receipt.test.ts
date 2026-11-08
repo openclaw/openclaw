@@ -176,3 +176,25 @@ it("keeps append receipts independent of retained transcript length", async () =
     expect(readTranscriptEventRows(f.database, f.scope.sessionId)).toHaveLength(257);
   });
 });
+
+it("omits entry publication when an actor phase leaves the entry unchanged", async () => {
+  await withActor(async (f) => {
+    const command: Mutation = {
+      type: "session.actor.patch",
+      input: {
+        target: f.target,
+        commandId: "unchanged-entry",
+        phaseId: "unchanged-entry",
+        expected: f.read().version,
+        reducers: [],
+      },
+    };
+    await f.prepare(command);
+    const result = f.mutate(command);
+    expect(result.kind).toBe("committed");
+    if (result.kind !== "committed") {
+      throw new Error("Expected unchanged phase to commit");
+    }
+    expect(result.receipt.entryPublication).toBeUndefined();
+  });
+});

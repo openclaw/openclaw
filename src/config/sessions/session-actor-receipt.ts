@@ -47,6 +47,7 @@ export function createSessionActorCommittedOutcome<
   after: SessionActorHotState;
   payloads?: ReadonlyMap<number, { event: unknown; serializedBytes: number }>;
   transcriptAuthority?: SessionActorReceipt["transcript"]["authorityReceipts"];
+  entryPublication?: SessionActorReceipt["entryPublication"];
   applied: {
     value: Value;
     pendingInputMutationReceipt?: PendingInputMutationReceipt;
@@ -92,6 +93,7 @@ export function createSessionActorCommittedOutcome<
           Boolean(append?.header?.projectionNeedsReconcile) ||
           Boolean(value && "projectionNeedsReconcile" in value && value.projectionNeedsReconcile),
       },
+      ...(params.entryPublication ? { entryPublication: params.entryPublication } : {}),
       pendingInputReceipt: turn?.custody ?? append?.value.pendingInputReceipt,
       pendingInputMutationReceipt: applied.pendingInputMutationReceipt,
       pendingFinalDelivery: structuredClone(after.entry?.pendingFinalDelivery),

@@ -19,6 +19,7 @@ import {
 } from "../../infra/sqlite-worker-contract.js";
 import { deferSqliteWorkerCommitReceipt } from "../../infra/sqlite-worker-operation-admission.js";
 import { createSqliteWorkerTransferOwner } from "../../infra/sqlite-worker-transfer.js";
+import { captureSessionRowChanges } from "../../sessions/session-row-changes.js";
 import { freezeJsonSnapshot } from "../../shared/immutable-data.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db-contract.js";
 import type { AgentWorkerOperationContext } from "../../state/openclaw-agent-operation-context.js";
@@ -56,6 +57,10 @@ import {
   withSessionActorTransactionState,
 } from "./session-actor-transaction.js";
 import { registerSessionActorTranscriptRewriteOwner } from "./session-actor-transcript-publication.worker.js";
+import {
+  boundSessionEntryMetadataReceipts,
+  captureSessionEntryMetadataReceipts,
+} from "./session-entry-metadata-receipt.js";
 import { readSessionEntryPatchPredicate } from "./session-entry-patch-guard.js";
 import type { SessionEntryWritePostimages } from "./session-entry-write-postimage.js";
 import type { SessionParticipantRecord } from "./session-membership-facts.types.js";
@@ -511,7 +516,9 @@ export function createSessionActorWorker(
           };
           return withSessionActorTransactionState(opened, working, () => {
             phaseStarted = performance.now();
-            const applied = applySessionActorPhase(command, working, borrowed);
+            const { result: applied, changes } = captureSessionRowChanges(opened.db, () =>
+              applySessionActorPhase(command, working, borrowed),
+            );
             recordPhase("actorApplyMs");
             const { value } = applied;
             working.hot.version = {
@@ -529,6 +536,7 @@ export function createSessionActorWorker(
               throw new Error("Session actor lost its native writer revision");
             }
             working.hot.writeToken = pendingToken;
+            const entryReceipts = captureSessionEntryMetadataReceipts(changes);
             const accepted = createSessionActorCommittedOutcome({
               // SAFETY: The read command returned before entering this write transaction.
               phase: phase as SessionActorPhase,
@@ -537,6 +545,15 @@ export function createSessionActorWorker(
               after: working.hot,
               payloads: working.transcript.payloads,
               transcriptAuthority: readStagedSessionTranscriptAuthority(opened),
+              ...(entryReceipts.length
+                ? {
+                    entryPublication: {
+                      agentId: opened.agentId,
+                      storePath: opened.path,
+                      receipts: entryReceipts,
+                    },
+                  }
+                : {}),
               applied,
             });
             if (
@@ -560,6 +577,7 @@ export function createSessionActorWorker(
                 : value && "turn" in value
                   ? value.turn
                   : undefined;
+            boundSessionEntryMetadataReceipts(entryReceipts, accepted);
             const serialized = serialize(accepted);
             diagnosticContext.actorReceiptBytes = serialized.byteLength;
             if (serialized.byteLength > SQLITE_WORKER_MAX_MESSAGE_BYTES) {
@@ -600,6 +618,7 @@ export function createSessionActorWorker(
                     transfer: { handle, frames: finalFrames },
                     publication: turn ?? commitPublication,
                   },
+                  entryPublication: accepted.receipt.entryPublication,
                   final: true,
                 });
                 return { kind: "committed" as const };
@@ -613,6 +632,7 @@ export function createSessionActorWorker(
               kind: "session-actor-admission",
               snapshot: projectSessionActorAuthority(working.hot),
               publication: turn ?? commitPublication,
+              entryPublication: accepted.receipt.entryPublication,
               final: true,
             });
             return { kind: "committed" as const };
