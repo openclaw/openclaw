@@ -757,6 +757,10 @@ struct CommandSessionsScreen: View {
     @State private var isLoading = false
     @State private var loadErrorText: String?
     @State private var actionErrorText: String?
+    /// Notice for a partially loaded roster; rendered alongside the retained rows, never instead of them.
+    @State private var partialLoadText: String?
+    /// Bumped by the partial-load retry button; part of `refreshID` so `.task(id:)` refetches.
+    @State private var refreshNonce = 0
     @State private var statusScope: SessionStatusScope = .active
     @State private var now: Date = .now
     @State private var knownGroups = SessionGroupStore.load()
@@ -905,6 +909,32 @@ struct CommandSessionsScreen: View {
                         .padding(.vertical, 8)
                 }
 
+                if let partialLoadText {
+                    HStack(spacing: 8) {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .font(OpenClawType.captionBold)
+                            .foregroundStyle(OpenClawBrand.warn)
+                        // Identified for UI tests: the leading sidebar shows the same copy
+                        // without an identifier, so the banner notice carries its own. A
+                        // container identifier here would clobber the Refresh button's.
+                        Text(verbatim: partialLoadText)
+                            .font(OpenClawType.captionMedium)
+                            .foregroundStyle(OpenClawBrand.warn)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .accessibilityIdentifier("Sessions.PartialLoad.Notice")
+                        Button {
+                            self.refreshNonce += 1
+                        } label: {
+                            Text(String(localized: "Refresh"))
+                                .font(OpenClawType.subheadSemiBold)
+                        }
+                        .buttonStyle(.borderless)
+                        .accessibilityIdentifier("Sessions.PartialLoad.Refresh")
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.bottom, 8)
+                }
+
                 if let loadErrorText {
                     CommandEmptyStateRow(
                         icon: "exclamationmark.triangle.fill",
@@ -1022,7 +1052,7 @@ struct CommandSessionsScreen: View {
     }
 
     private var refreshID: String {
-        "\(self.appModel.chatViewModelIdentityID):\(self.statusScope.rawValue)"
+        "\(self.appModel.chatViewModelIdentityID):\(self.statusScope.rawValue):\(self.refreshNonce)"
     }
 
     @ViewBuilder
@@ -1237,10 +1267,12 @@ struct CommandSessionsScreen: View {
                 archived: requestsArchived)
             guard !Task.isCancelled, requestedScope == self.statusScope else { return }
             self.sessions = roster.sessions
+            self.partialLoadText = roster.incompleteLoadMessage
         } catch is CancellationError {
             return
         } catch {
             guard !Task.isCancelled, requestedScope == self.statusScope else { return }
+            self.partialLoadText = nil
             let cached = requestsArchived ? [] : await self.appModel.loadCachedChatSessions(
                 gatewayID: sourceGatewayID,
                 agentID: sourceAgentID)

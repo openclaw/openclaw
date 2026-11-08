@@ -43,6 +43,7 @@ it("keeps a retired selection closed when its toolbar import settles", async ({
     handleChatSelectionPointerUp({ currentTarget: thread } as unknown as PointerEvent, {
       paneId: "retired-pane",
       onAskSideChat,
+      onAskNewSession: vi.fn(),
     });
   open();
   await toolbarModule.requested.promise;

@@ -155,19 +155,7 @@ final class ShareViewController: UIViewController {
             credentials: GatewayNodeSessionCredentials(
                 token: config.token,
                 password: config.password),
-            connectOptions: GatewayConnectOptions(
-                role: "node",
-                scopes: [],
-                caps: [],
-                commands: [],
-                permissions: [:],
-                clientId: "openclaw-ios",
-                clientMode: "node",
-                clientDisplayName: "OpenClaw Share",
-                deviceIdentityProfile: .shareExtension,
-                includeDeviceIdentity: true,
-                allowStoredDeviceAuth: config.gatewayStableID != nil,
-                deviceAuthGatewayID: config.gatewayStableID),
+            connectOptions: ShareGatewayRelaySettings.connectOptions(gatewayStableID: config.gatewayStableID),
             sessionBox: nil,
             onConnected: {},
             onDisconnected: { _ in },
@@ -214,7 +202,8 @@ final class ShareViewController: UIViewController {
         let json = String(bytes: data, encoding: .utf8)!
         let eventData = try JSONEncoder().encode(NodeEventParams(event: "agent.request", payloadjson: json))
         let nodeEventParams = String(bytes: eventData, encoding: .utf8)!
-        _ = try await gateway.request(method: "node.event", paramsJSON: nodeEventParams, timeoutSeconds: 25)
+        let result = try await gateway.request(method: "node.event", paramsJSON: nodeEventParams, timeoutSeconds: 25)
+        try ShareSendAdmissionError.requireAccepted(result)
     }
 
     private static func gatewayError(_ code: Int, message: String) -> NSError {

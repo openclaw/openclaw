@@ -13,6 +13,10 @@ import { resolveInstallWorkTimeoutMs } from "./install-mode-options.js";
 import type { NpmSpecResolution } from "./install-source-utils.js";
 import { JsonFileReadError, readJson, readJsonIfExists, writeJson } from "./json-files.js";
 import { resolveNpmCommand } from "./npm-command.js";
+import {
+  filterUnsupportedManagedNpmRootOverrides,
+  readOverrideRecord,
+} from "./npm-managed-root-overrides.js";
 import type { ParsedRegistryNpmSpec } from "./npm-registry-spec.js";
 import { resolveOpenClawPackageRootSync } from "./openclaw-root.js";
 import { isPackageDependencyName } from "./package-json.js";
@@ -58,19 +62,6 @@ type ManagedNpmRootOpenClawHostState = "none" | "managed-active-host" | "linked-
 
 function readDependencyRecord(value: unknown): Record<string, string> {
   return filterStringRecord(value) ?? {};
-}
-
-function readOverrideRecord(value: unknown): Record<string, unknown> {
-  if (!isRecord(value)) {
-    return {};
-  }
-  const overrides: Record<string, unknown> = {};
-  for (const [key, raw] of Object.entries(value)) {
-    if (key.trim()) {
-      overrides[key] = raw;
-    }
-  }
-  return overrides;
 }
 
 function readManagedKeys(
@@ -141,32 +132,6 @@ function resolveHostOverrideReferences(value: unknown, manifest: HostPackageMani
     resolved[key] = resolveHostOverrideReferences(nested, manifest);
   }
   return resolved;
-}
-
-function filterUnsupportedManagedNpmRootOverrides(
-  value: unknown,
-  omitNpmAliases = false,
-): Record<string, unknown> {
-  const overrides = readOverrideRecord(value);
-  const filtered: Record<string, unknown> = {};
-  for (const [key, raw] of Object.entries(overrides)) {
-    if (
-      // Match pnpm's delimiter without confusing npm ranges such as pkg@>1.
-      /[^ |@]>/u.test(key) ||
-      (omitNpmAliases && typeof raw === "string" && raw.trim().startsWith("npm:"))
-    ) {
-      continue;
-    }
-    if (isRecord(raw)) {
-      const nested = filterUnsupportedManagedNpmRootOverrides(raw, omitNpmAliases);
-      if (Object.keys(nested).length > 0) {
-        filtered[key] = nested;
-      }
-      continue;
-    }
-    filtered[key] = raw;
-  }
-  return filtered;
 }
 
 // For bare package-name keys, object rules override the package itself only via ".".

@@ -71,6 +71,18 @@ describe.skipIf(typeof HTMLElement.prototype.checkVisibility !== "function")(
       },
     );
 
+    it("keeps desktop title padding while placing the session menu directly beside it", () => {
+      const { container } = mountChatPaneHeader(containers, {
+        sessionMenuAction: chatPaneHeaderSessionMenu(),
+      });
+      const title = container.querySelector<HTMLElement>(".chat-pane__session-title-button")!;
+      const actions = container.querySelector<HTMLElement>(".chat-pane__identity-actions")!;
+      const style = getComputedStyle(title);
+      expect(style.paddingInlineStart).toBe("8px");
+      expect(style.paddingInlineEnd).toBe("8px");
+      expect(actions.getBoundingClientRect().left).toBeCloseTo(title.getBoundingClientRect().right);
+    });
+
     it.each([false, true])(
       "reserves the trailing header region before actions arrive (agent=%s)",
       async (agent) => {

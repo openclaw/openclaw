@@ -131,7 +131,44 @@ describe("PostgreSQL conformance selection", () => {
       shard: "${{ matrix.shard }}",
     });
     expect(workflow.jobs["ci-gate"].needs).toContain("postgres-conformance");
+    const smoke = requiredWorkflowStep(job.steps, "Run PostgreSQL 16 Gateway cron smoke");
+    expect(smoke.uses).toBe(conformance.uses);
+    expect(smoke.with).toEqual({
+      image:
+        "pgvector/pgvector:pg16@sha256:7b822b0aac60967beb1ea5e576b8602c94c300a157d187f385ae3e0da199b90a",
+      target: "src/gateway/server-database-engine.postgres.test.ts",
+    });
   });
+
+  it.each([
+    ["", "", []],
+    ["2/3", "", ["--shard", "2/3"]],
+    [
+      "",
+      "gateway fixtures/cron.postgres.test.ts",
+      ["--", "gateway fixtures/cron.postgres.test.ts"],
+    ],
+  ])(
+    "forwards the conformance shard %j and target %j as separate arguments",
+    (shard, target, args) => {
+      const action = parse(readFileSync(".github/actions/postgres-conformance/action.yml", "utf8"));
+      const step = requiredWorkflowStep(action.runs.steps, "Run PostgreSQL conformance");
+      const result = runWorkflowShellScript(`node() { printf '<%s>\\n' "$@"; }\n${step.run}`, {
+        env: { ...process.env, CONFORMANCE_SHARD: shard, CONFORMANCE_TARGET: target },
+      });
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.stdout.trim().split("\n")).toEqual(
+        [
+          "scripts/test-database-conformance.mjs",
+          "--engine",
+          "postgres",
+          "--connection",
+          "postgresql://postgres@127.0.0.1:5432/postgres",
+          ...args,
+        ].map((arg) => `<${arg}>`),
+      );
+    },
+  );
 
   it("qualifies pg17 daily and pg16/pg18 weekly in three shards each on main", () => {
     const workflow = parse(
@@ -211,6 +248,16 @@ describe("PostgreSQL conformance selection", () => {
     [["extensions/workboard/README.md", "extensions/workboard/src/store.ts"], true],
     [["extensions/workboard/test/fixtures/README.md", "src/utils/absolute-deadline.test.ts"], true],
     [["src/infra/database-engine/open.ts"], true],
+    ...[
+      "src/cron/store/row-codec.ts",
+      "src/cron/store/runtime-rows.kernel.ts",
+      "src/cron/store/run-finalization.worker.ts",
+      "src/cron/service.ts",
+      "src/cron/service/ops-run.ts",
+      "src/gateway/server-methods/cron.ts",
+      "src/gateway/server-methods/cron-add.ts",
+      "src/gateway/server-methods/cron-run.ts",
+    ].map((file): [string[], boolean] => [[file], true]),
     [["src/commands/doctor-database-port-migrations.ts"], true],
     [["src/infra/database-engine/matrix-roots.postgres.test.ts"], true],
     [["src/infra/database-engine/deleted.test.ts"], true],
@@ -10537,6 +10584,32 @@ describe("ci workflow guards", () => {
     ).toBe(false);
   });
 
+  it.each([
+    { files: 4, rows: 2 },
+    { files: 6, rows: 2 },
+    { files: 10, rows: 3 },
+  ])("packs partial UI unit selections: $files files into $rows rows", ({ files, rows }) => {
+    const selected = Array.from({ length: files }, (_, index) => `ui/src/unit-${index}.test.ts`);
+    const manifest = runCiManifestFixture({
+      bundledPlanner: true,
+      historicalCompatibility: false,
+      eventName: "pull_request",
+      changedPaths: ["src/owner.ts"],
+      selectedTestTargets: selected,
+      targetFiles: selected,
+      uiTestGroupsSource: `export const createUiTestShardGroups = () => ({
+        ui: [{configs: ["ui/vitest.config.ts"], includePatterns: ${JSON.stringify(selected)}}], e2e: [],
+      });`,
+    });
+    expect(manifest.status, manifest.output).toBe(0);
+    expect(readJsonOutput(manifest.outputs, "ui_test_matrix").include).toHaveLength(rows);
+    expect(
+      resolveSelectedUiIncludes(
+        expectDefined(manifest.outputs.ui_test_groups_gzip_base64, "UI selection"),
+      ).flat(),
+    ).toEqual(selected);
+  });
+
   it.each(
     [
       {
@@ -10551,10 +10624,10 @@ describe("ci workflow guards", () => {
         windows: [2],
       },
       {
-        label: "unit and smoke without Windows ownership",
+        label: "small unit selection without Windows ownership",
         windowsArea: false,
         unitOwner: false,
-        ui: [1],
+        ui: [0, 1, 2],
         mocked: [],
         real: [],
         browser: [],
@@ -10643,10 +10716,12 @@ describe("ci workflow guards", () => {
         manifest.outputs.reuse_browser_extension_build === "true",
     ).toBe(selected.mocked.length + selected.browser.length > 0);
     expect(manifest.outputs.run_ui_real_gateway).toBe(String(!isPr && selected.real.length > 0));
+    const expectedUiRows =
+      isPr && !scenario.unitOwner && expectedUi.length > 0 ? 1 : Math.min(3, expectedUi.length);
     expect(readJsonOutput(manifest.outputs, "ui_test_matrix").include).toEqual(
-      expectedUi.slice(0, 3).map((_, index) => ({ shard: index + 1 })),
+      Array.from({ length: expectedUiRows }, (_, index) => ({ shard: index + 1 })),
     );
-    expect(manifest.outputs.ui_test_shard_count).toBe(String(Math.min(3, expectedUi.length)));
+    expect(manifest.outputs.ui_test_shard_count).toBe(String(expectedUiRows));
     expect(
       resolveSelectedUiIncludes(
         expectDefined(manifest.outputs.ui_test_groups_gzip_base64, "UI selection"),

@@ -227,6 +227,7 @@ describe("session message cache", () => {
       label: "Worker",
       status: index === 5 ? ("running" as const) : ("done" as const),
       transcript: "not display data",
+      session: { startedAt: index + 1000, endedAt: index === 5 ? undefined : index + 2000 },
     }));
     expect(projectDetailsSubagents(rows)).toEqual({
       total: 6,
@@ -234,6 +235,7 @@ describe("session message cache", () => {
         key: String(index),
         label: "Worker",
         status: index === 5 ? "running" : "done",
+        session: { startedAt: index + 1000, endedAt: index === 5 ? undefined : index + 2000 },
       })),
       counts: [
         { status: "running", count: 1 },
@@ -266,8 +268,7 @@ describe("session message cache", () => {
     publish.mockClear();
     layout.writeRows(heights);
     expect(publish).not.toHaveBeenCalled();
-    expect(read()?.widgetHeights).toBeUndefined();
-    expect(reloaded.readRows()).toBeUndefined();
+    expect([read()?.widgetHeights, reloaded.readRows()]).toEqual([undefined, undefined]);
   });
   it("retires admitted row heights when the same session key moves to another account", () => {
     const cache: ChatMessageCache = new Map();
@@ -511,8 +512,7 @@ describe("session message cache", () => {
     write(widgetSnapshot(replacement, "session-2"));
     expect(read()?.messages).toEqual(replacement);
     layout.write("canvas:preview", 800);
-    expect(layout.read("canvas:preview")).toBeUndefined();
-    expect(read()?.widgetHeights).toBeUndefined();
+    expect([layout.read("canvas:preview"), read()?.widgetHeights]).toEqual([undefined, undefined]);
   });
 
   it("retains bounded widget sizes through history refreshes within their session", () => {
