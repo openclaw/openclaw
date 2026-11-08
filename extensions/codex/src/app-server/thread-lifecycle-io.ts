@@ -320,8 +320,10 @@ export async function resumeExistingCodexThread(
       ...buildCodexThreadBindingPolicy(params, context),
       webSearchThreadConfigFingerprint,
       // Record why the plan can be disabled: explicit operator denial is a
-      // durable policy edit, not a cold capability verdict.
-      webSearchRequested: params.webSearchAllowed === true,
+      // durable policy edit, not a cold capability verdict. The durable policy
+      // is the request; capability filtering can suppress native search (for
+      // example domain restrictions) without an operator denial.
+      webSearchRequested: params.persistentWebSearchAllowed ?? params.webSearchAllowed ?? false,
       mcpServersFingerprint:
         params.mcpServersFingerprintEvaluated === true
           ? params.mcpServersFingerprint
@@ -647,7 +649,9 @@ export async function startFreshCodexThread(
     const nextBinding: CodexAppServerThreadBinding = {
       ...startedBinding,
       webSearchThreadConfigFingerprint,
-      webSearchRequested: params.webSearchAllowed === true,
+      // Same durable-policy fact as the resume write: capability filtering must
+      // not look like an operator denial.
+      webSearchRequested: params.persistentWebSearchAllowed ?? params.webSearchAllowed ?? false,
       nativeToolPolicyRestricted: restrictedToolSurface ? true : undefined,
     };
     const managedSourceHomeId = codexCatalogHomeId(
