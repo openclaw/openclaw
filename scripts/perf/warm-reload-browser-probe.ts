@@ -83,6 +83,7 @@ export function installWarmReloadBrowserProbe(
   route: string,
   transcriptLatePaint = false,
   composerContext = false,
+  sampleGeometry = true,
 ) {
   if (window !== window.top) {
     return undefined;
@@ -198,7 +199,7 @@ export function installWarmReloadBrowserProbe(
     stopped: false,
   };
   Reflect.set(window, "__warmReloadProof", data);
-  if (transcriptLatePaint) {
+  if (transcriptLatePaint && sampleGeometry) {
     for (const operation of ["get", "getAll", "getAllKeys", "put"] as const) {
       const original = IDBObjectStore.prototype[operation];
       Object.defineProperty(IDBObjectStore.prototype, operation, {
@@ -267,17 +268,28 @@ export function installWarmReloadBrowserProbe(
   observe("element", (entry) => {
     const identifier: unknown = Reflect.get(entry, "identifier");
     const renderTime: unknown = Reflect.get(entry, "renderTime");
-    if (identifier === "openclaw-transcript" && typeof renderTime === "number" && renderTime > 0) {
-      data.firstPaintedRowsMs ??= renderTime;
-    }
-    if (identifier === "openclaw-details" && typeof renderTime === "number" && renderTime > 0) {
-      data.firstDetailsPaintMs ??= renderTime;
+    const element: unknown = Reflect.get(entry, "element");
+    const intersection: DOMRectReadOnly | undefined = Reflect.get(entry, "intersectionRect");
+    if (
+      typeof renderTime !== "number" ||
+      renderTime <= 0 ||
+      !intersection?.width ||
+      !intersection.height
+    ) {
+      return;
     }
     if (
-      identifier === "openclaw-transcript-bottom" &&
-      typeof renderTime === "number" &&
-      renderTime > 0
+      typeof identifier === "string" &&
+      identifier.startsWith("openclaw-transcript") &&
+      element instanceof Element &&
+      element.closest(".chat-virtual-row")
     ) {
+      data.firstPaintedRowsMs ??= renderTime;
+    }
+    if (identifier === "openclaw-details") {
+      data.firstDetailsPaintMs ??= renderTime;
+    }
+    if (identifier === "openclaw-transcript-bottom") {
       data.bottomParagraphPaintMs ??= renderTime;
     }
   });
@@ -343,6 +355,9 @@ export function installWarmReloadBrowserProbe(
                 });
               }
             });
+            if (!sampleGeometry) {
+              return;
+            }
             let previous = "";
             const plugins = () => {
               const runtime = context.plugins;
@@ -388,9 +403,14 @@ export function installWarmReloadBrowserProbe(
   );
   let domVersion = 0;
   const textObserver = new MutationObserver((records) => {
+    if (data.stopped) {
+      textObserver.disconnect();
+      return;
+    }
     domVersion++;
     for (const record of records) {
-      for (const node of record.addedNodes) {
+      const nodes = record.type === "characterData" ? [record.target] : record.addedNodes;
+      for (const node of nodes) {
         const element = node instanceof Element ? node : node.parentElement;
         if (
           !element ||
@@ -416,7 +436,9 @@ export function installWarmReloadBrowserProbe(
         }
       }
     }
-    const bottom = [...document.querySelectorAll(".chat-group.assistant .chat-text p")].at(-1);
+    const bottom = sampleGeometry
+      ? [...document.querySelectorAll(".chat-group.assistant .chat-text p")].at(-1)
+      : undefined;
     if (
       bottom?.textContent?.startsWith("Synthetic paragraph 18.") &&
       bottom.getAttribute("elementtiming") !== "openclaw-transcript-bottom"
@@ -427,9 +449,12 @@ export function installWarmReloadBrowserProbe(
   textObserver.observe(document, {
     childList: true,
     subtree: true,
-    attributes: true,
+    attributes: sampleGeometry,
     characterData: true,
   });
+  if (!sampleGeometry) {
+    return data;
+  }
   document.fonts.addEventListener("loadingdone", () => domVersion++);
   const hash = (text: string) => {
     let value = 2166136261;

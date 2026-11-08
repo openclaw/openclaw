@@ -376,42 +376,52 @@ function SingleChoice(props: WizardStepControlsProps & { options: WizardStepOpti
   };
   const selectedIndex = () =>
     props.options.findIndex((option) => Object.is(option.value, current()));
-  const params = createMemo<PickerParams<ChannelPickerOption>>(() => {
-    const selected = selectedIndex();
-    return {
-      label: label(),
-      value:
-        selected < 0
-          ? null
-          : channels()
-            ? String(props.options[selected]?.value)
-            : String(selected),
-      options: props.options.map<ChannelPickerOption>((option, index) => ({
+  // Keep the bridge's required params object stable while the active step changes.
+  const params: PickerParams<ChannelPickerOption> = {
+    get label() {
+      return label();
+    },
+    get value() {
+      const selected = selectedIndex();
+      return selected < 0
+        ? null
+        : channels()
+          ? String(props.options[selected]?.value)
+          : String(selected);
+    },
+    get options() {
+      return props.options.map<ChannelPickerOption>((option, index) => ({
         value: channels() ? String(option.value) : String(index),
         label: option.label,
         description: option.hint,
         kind: channels() ? "channel" : "neutral",
-      })),
-      disabled: props.busy,
-      invalid: Boolean(props.validationErrorId),
-      describedBy: props.validationErrorId,
-      onChange: (value) => {
-        const answer = channels() ? value : props.options[Number(value)]?.value;
-        if (confirms()) {
-          setPicked({ step: props.step.id, value: answer });
-        } else {
-          props.onAnswer(answer);
-        }
-      },
-    };
-  });
+      }));
+    },
+    get disabled() {
+      return props.busy;
+    },
+    get invalid() {
+      return Boolean(props.validationErrorId);
+    },
+    get describedBy() {
+      return props.validationErrorId;
+    },
+    onChange: (value) => {
+      const answer = channels() ? value : props.options[Number(value)]?.value;
+      if (confirms()) {
+        setPicked({ step: props.step.id, value: answer });
+      } else {
+        props.onAnswer(answer);
+      }
+    },
+  };
   return (
     <Show
       when={props.presentation !== "channels" && props.options.length <= 2}
       fallback={
         <>
-          <Show when={channels()} fallback={<Picker params={params()} />}>
-            <ChannelPicker {...params()} />
+          <Show when={channels()} fallback={<Picker params={params} />}>
+            <ChannelPicker {...params} />
           </Show>
           <Show when={confirms()}>
             <Answer
