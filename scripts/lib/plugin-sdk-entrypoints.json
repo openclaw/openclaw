@@ -365,6 +365,7 @@
   "secret-ref-readonly",
   "channel-status",
   "status-helpers",
+  "status-page",
   "speech",
   "string-normalization-runtime",
   "state-paths",

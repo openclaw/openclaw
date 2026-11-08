@@ -536,6 +536,7 @@ Use `isLoopbackHost(host)` when a plugin must accept only the local machine. It 
     | `plugin-sdk/text-utility-runtime` | Private-local after July 2026; Low-level text and path helpers, including budget-aware grapheme chunk selection, UTF-8 prefix truncation, and five-entity HTML escaping |
     | `plugin-sdk/simple-completion-runtime` | Private-local after July 2026; Prepared simple-completion model helpers and assistant text extraction for lightweight agent tasks |
     | `plugin-sdk/widget-html` | Widget CDN origins, complete-document detection, size validation, and tool input errors |
+    | `plugin-sdk/status-page` | Private official-plugin runtime; asset-free status documents: `renderOpenClawMascot`, `openClawMascotStyles`, `openClawWordmarkTextSvg`, and `escapeHtml` for text and quoted attributes. Use fixed, plugin-owned mascot gradient IDs and CSS selectors. |
     | `plugin-sdk/host-runtime` | Private-local after July 2026; Hostname and SCP host normalization helpers |
     | `plugin-sdk/retry-runtime` | Private-local after July 2026; Retry config and retry runner helpers |
     | `plugin-sdk/agent-runtime` | Deprecated broad barrel for agent dir/identity/workspace helpers, including `resolveAgentDir`, `resolveDefaultAgentDir`, and the deprecated `resolveOpenClawAgentDir` compatibility export; prefer focused agent/runtime subpaths |

@@ -10,6 +10,12 @@ import { promisify } from "node:util";
 import express from "express";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { isLoopbackHost } from "openclaw/plugin-sdk/ssrf-runtime";
+import {
+  escapeHtml,
+  openClawMascotStyles,
+  openClawWordmarkTextSvg,
+  renderOpenClawMascot,
+} from "openclaw/plugin-sdk/status-page";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { deleteBridgeAuthForPort, setBridgeAuthForPort } from "./bridge-auth-registry.js";
 import type { ResolvedBrowserConfig } from "./config.js";
@@ -61,10 +67,38 @@ function buildNoVncBootstrapHtml(params: ResolvedNoVncObserver): string {
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <meta name="referrer" content="no-referrer" />
+  <meta name="color-scheme" content="light" />
   <title>OpenClaw noVNC Observer</title>
+  <style>
+    /* Gateway status-page tokens and geometry, with the observer's existing light theme. */
+    :root{color-scheme:light;--bg:#f8f8f8;--text:#353535;--text-strong:#202020;--muted:#5e5e5e;--accent:#bd4531;--mascot-ground:radial-gradient(closest-side,rgb(32 32 32/.16),rgb(32 32 32/.06) 60%,transparent);font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;font-size:14px;line-height:1.55;letter-spacing:-.01em;color:var(--text);background:var(--bg);-webkit-font-smoothing:antialiased}
+    *{box-sizing:border-box}body{margin:0;background:var(--bg)}
+    .shell{display:flex;min-height:100svh}
+    .content{position:relative;display:flex;flex-direction:column;flex:1;min-width:0}
+    .topbar{display:flex;align-items:flex-start;justify-content:center;padding:14.5px 12px 0}
+    .wordmark{display:block;width:105px;height:32px;color:var(--text-strong)}
+    main{position:relative;flex:1;min-height:calc(100svh - 64px)}
+    .body{position:absolute;top:38%;left:50%;width:min(460px,calc(100% - 48px));transform:translateX(-50%);text-align:center}
+    h1{position:relative;margin:0;color:var(--text-strong);font-size:22px;font-weight:600;line-height:28px;letter-spacing:-.01em;text-wrap:balance}
+    p{margin:6px 0 0;color:var(--muted);font-size:14px;line-height:21px;text-wrap:pretty}
+    a{color:var(--accent)}
+    @media(max-width:768px),(max-width:932px) and (max-height:500px) and (orientation:landscape){.content{padding:0 4px}.body{top:36%;left:24px;right:24px;width:auto;transform:none}h1{font-size:20px;line-height:26px}}
+    ${openClawMascotStyles({
+      busy: ".mascot",
+      error: ".mascot[data-pose=error]",
+      phone:
+        "@media(max-width:768px),(max-width:932px) and (max-height:500px) and (orientation:landscape)",
+    })}
+  </style>
 </head>
 <body>
-  <p>Opening sandbox observer...</p>
+  <div class="shell"><div class="content">
+    <header class="topbar">${openClawWordmarkTextSvg}</header>
+    <main><div class="body">
+      <h1>${renderOpenClawMascot("openclaw-mascot-shell")}Opening sandbox observer…</h1>
+      <p>If it doesn’t open, <a href="${escapeHtml(targetUrl)}">continue to the observer</a>.</p>
+    </div></main>
+  </div></div>
   <script>
     const target = ${encodedTarget};
     window.location.replace(target);

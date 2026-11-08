@@ -1009,6 +1009,9 @@
       ],
       "openclaw/plugin-sdk/skill-workshop-host-cli": [
         "../packages/plugin-sdk/dist/src/plugin-sdk/skill-workshop-host-cli.d.ts"
+      ],
+      "openclaw/plugin-sdk/status-page": [
+        "../packages/plugin-sdk/dist/src/plugin-sdk/status-page.d.ts"
       ]
     }
   }

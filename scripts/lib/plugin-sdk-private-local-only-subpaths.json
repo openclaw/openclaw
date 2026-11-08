@@ -198,6 +198,7 @@
   "sqlite-runtime",
   "sqlite-runtime-testing",
   "sqlite-worker-runtime",
+  "status-page",
   "ssrf-dispatcher",
   "ssrf-runtime-internal",
   "string-normalization-runtime",

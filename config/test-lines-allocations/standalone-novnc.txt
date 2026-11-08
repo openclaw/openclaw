@@ -1,0 +1,2 @@
+# HTTP-rendered observer status, fallback destination, and escaped fragment credentials.
+12
