@@ -235,7 +235,7 @@ it.each([
   "refreshes published inventory after a delayed page read on %s (%s)",
   async (path, surface) => {
     const selector = path === "/plugins" ? ".plugin-catalog-card" : ".plugin-catalog-detail";
-    const plugin = createPlugin({ name: "Fresh route plugin" });
+    const plugin = createPlugin({ name: "Fresh route plugin", catalogId: "catalog-workboard" });
     const result = { ...createResult(plugin), generation: 1 };
     const preload = deferred<typeof result>();
     let inventoryReads = 0;
@@ -503,4 +503,34 @@ it("closes a held discovery detail without waiting for transport", async () => {
   held.reject(new Error("Retired detail must not reappear"));
   await settlePlugins();
   expect(page.textContent).not.toContain("Retired detail must not reappear");
+});
+
+it("keeps the adopted plugin through pending route data and reloads only a new identity", async () => {
+  const alpha = createPlugin({ id: "alpha", name: "Alpha" });
+  const beta = createPlugin({ id: "beta", name: "Beta" });
+  const inventory = createResult([alpha, beta]);
+  const harness = pageFixture({
+    "plugins.list": () => inventory,
+    "plugins.inspect": (params) =>
+      createInspectResult({
+        plugin: (params as { pluginId: string }).pluginId === alpha.id ? alpha : beta,
+      }),
+  });
+  const { page, find } = await harness.mount("/settings/plugins/alpha", inventory);
+  await waitForSolid(() => expect(find("h1")?.textContent).toBe("Alpha"));
+  const reads = harness.calls("plugins.list").length;
+  page.routeData = undefined;
+  await page.updateComplete;
+  page.routeData = {
+    location: createPluginsRouteLocation("/settings/plugins/alpha?view=settings"),
+  };
+  await page.updateComplete;
+  expect(harness.calls("plugins.list")).toHaveLength(reads);
+  expect(harness.calls("plugins.inspect")).toHaveLength(1);
+  page.routeData = undefined;
+  await page.updateComplete;
+  page.routeData = { location: createPluginsRouteLocation("/settings/plugins/beta") };
+  await waitForSolid(() => expect(find("h1")?.textContent).toBe("Beta"));
+  expect(harness.calls("plugins.list")).toHaveLength(reads + 1);
+  expect(harness.calls("plugins.inspect")).toHaveLength(2);
 });

@@ -269,8 +269,9 @@ export function createPluginsPage(options: {
     () => [options.routeData(), options.surface()] as const,
     ([nextRouteData, nextSurface]) => {
       const previous = routeData;
-      routeData = nextRouteData;
-      surface = nextSurface;
+      // A pending loader has no newly admitted location; keep the accepted page.
+      routeData = nextRouteData ?? routeData;
+      surface = nextRouteData ? nextSurface : surface;
       gateway.refresh();
       if (previous !== routeData) {
         credentialPresentation.retire();
