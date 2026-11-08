@@ -103,6 +103,9 @@ export function ApplicationShell(props: {
     props.host.shellRevision();
     return readShellView(props.host);
   });
+  // Single-attribute bindings lack an equality guard; resize-only updates keep inert unchanged.
+  const navBackdropInert = createMemo(() => !view().navDrawerOpen);
+  const settingsSaveStatusInert = createMemo(() => view().mobileNavLayout && view().navDrawerOpen);
   const sessionOwner = createMemo(() => view().context.sessions);
   const sessionRows = createMemo(() =>
     projectOwner(sessionOwner(), (sessions) => sessions.state.result?.sessions),
@@ -298,7 +301,7 @@ export function ApplicationShell(props: {
             class="shell-nav-backdrop"
             tabindex={-1}
             aria-hidden="true"
-            inert={!view().navDrawerOpen}
+            inert={navBackdropInert()}
             onClick={() => props.host.closeNavDrawer({ restoreFocus: true })}
           />
           <div
@@ -468,7 +471,7 @@ export function ApplicationShell(props: {
           </ShellLayoutProvider>
         </main>
         <Show when={view().settingsTakeover}>
-          <div class="settings-save-status" inert={view().mobileNavLayout && view().navDrawerOpen}>
+          <div class="settings-save-status" inert={settingsSaveStatusInert()}>
             <LazySettingsSaveStatus host={props.host} />
           </div>
         </Show>

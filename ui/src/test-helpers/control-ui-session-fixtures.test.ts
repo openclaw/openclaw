@@ -8,6 +8,38 @@ import {
 
 afterEach(() => vi.useRealTimers());
 
+it("keeps published rows authoritative for later list, describe and patch replies", () => {
+  const row = createControlUiSessionRow("agent:main:live", "Live", 10, {
+    status: "running",
+    hasActiveRun: true,
+    activeRunIds: ["run-1"],
+    unread: true,
+  });
+  const sibling = createControlUiSessionRow("agent:main:other", "Other", 1);
+  const sessions = createControlUiSessionFixtures(
+    { rows: [row, sibling], mainKey: row.key },
+    isRecord,
+  );
+  sessions.replaceCanonicalRow({
+    ...row,
+    status: "done",
+    hasActiveRun: false,
+    activeRunIds: [],
+    updatedAt: 20,
+  });
+  const final = { status: "done", hasActiveRun: false, activeRunIds: [] };
+  expect(sessions.list([row, sibling])).toEqual([
+    expect.objectContaining(final),
+    expect.objectContaining({ key: sibling.key, label: "Other" }),
+  ]);
+  expect(sessions.sessionInfo(row.key)).toMatchObject(final);
+  expect(sessions.patch(row.key, { unread: false })).toMatchObject({
+    ok: true,
+    entry: { ...final, unread: false },
+  });
+  expect(sessions.read(row.key)).toMatchObject({ ...final, unread: false });
+});
+
 it("samples fresh wire rows without changing stored facts or previous replies", () => {
   vi.useFakeTimers();
   vi.setSystemTime(100);

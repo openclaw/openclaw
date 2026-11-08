@@ -2288,13 +2288,8 @@ function installControlUiMockGateway(
     setOperatorScopes(scopes) {
       scenario.operatorScopes = [...scopes];
     },
-    getSessionRow(key) {
-      const row = sessions.sessionInfo(key);
-      if (!row) {
-        throw new Error(`Mock Gateway did not return session ${key}`);
-      }
-      return row;
-    },
+    getSessionRow: sessions.requireSessionInfo,
+    setSessionRow: sessions.replaceCanonicalRow,
     setRequestHandler(method, handler) {
       requestHandlers.set(method, handler);
     },

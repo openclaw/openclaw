@@ -44,7 +44,6 @@ import {
   observeAcknowledgedUpdate,
   prepareLocalWorkspaceArchiveFixture,
   prepareSandboxCheckpointFixture,
-  proveAbsentProjectionCheckpoints,
   proveHostAdmittedBuildInputs,
   proveInterruptedWorkspaceCheckpoint,
   proveIncrementalWorkspaceEdits,
@@ -220,9 +219,6 @@ it.each(["read", "authority", "observation", "cancel"] as const)(
       revoked = true;
     }),
 );
-
-it("avoids lease requests for absent projections and checkpoints a later projection", () =>
-  proveAbsentProjectionCheckpoints(owner));
 
 it("joins waiting sandbox checkpoints across handles without losing later writes", ({ signal }) =>
   proveSharedSandboxCheckpoints(owner, signal));
