@@ -64,7 +64,10 @@ const githubMarkup = LINK_FORMS.map(
 ).join("");
 
 const presentationMarkup = `<div class="chat-text">${links("")}</div>
-  <article class="sidebar-markdown">${links("panel-")}</article>`;
+  <article class="sidebar-markdown">${links("panel-")}</article>
+  <div class="chat-group user" style="--inline-code-bg: rgb(12, 34, 56); --inline-code-border: rgb(78, 90, 123); --user-code-bg: rgb(45, 67, 89)">
+    <div class="chat-text"><p><code id="palette-code">inline</code></p><pre id="palette-user-code"><code>block</code></pre></div>
+  </div>`;
 
 // The reported list-edge reference includes a path the parser cannot shorten.
 const LONG_CHIP_PATH = "packages/gateway-protocol/src/session-transport-envelope.ts";
@@ -196,6 +199,8 @@ async function probeWrap(themeMode: "dark" | "light", container: WrapContainer) 
               panelFromText: read("#panel-from-text"),
               panelGlyph: glyph("#panel-from-text"),
               plainCode: read("#plain-code"),
+              paletteCode: read("#palette-code"),
+              paletteUserCode: read("#palette-user-code"),
             },
             samples: measure("wrap-chip", "column", 220, 900),
             long: measure("long-chip", "column", 220, 900),
@@ -239,11 +244,18 @@ fixture.describe("chat file link presentation", () => {
   );
 
   it.each(["light", "dark"] as const)(
-    "tints code spans without a border while file links remain transparent in %s",
+    "preserves palette code colors while file links remain transparent in %s",
     (themeMode) => {
-      const { fromText, plainCode } = observation(themeMode).presentation;
+      const { fromText, plainCode, paletteCode, paletteUserCode } =
+        observation(themeMode).presentation;
       expect(plainCode.backgroundColor).not.toBe(fromText.backgroundColor);
-      expect(plainCode.borderTopWidth).toBe("0px");
+      expect(plainCode.borderTopWidth).toBe("1px");
+      expect(paletteCode).toMatchObject({
+        backgroundColor: "rgb(12, 34, 56)",
+        borderTopWidth: "1px",
+        borderTopColor: "rgb(78, 90, 123)",
+      });
+      expect(paletteUserCode.backgroundColor).toBe("rgb(45, 67, 89)");
       expect(fromText).toMatchObject({
         borderTopWidth: "0px",
         backgroundColor: "rgba(0, 0, 0, 0)",

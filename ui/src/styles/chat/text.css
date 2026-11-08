@@ -1018,14 +1018,6 @@
   text-decoration-style: solid;
 }
 
-.chat-text a.markdown-file-link.markdown-file-link--repeat {
-  padding-inline-start: 0;
-}
-
-.chat-text a.markdown-file-link.markdown-file-link--repeat::before {
-  content: none;
-}
-
 /* A recognized workspace path carries a glyph for its file type, so a file
    reference is identifiable before its label is read — the label itself is only
    the basename. Painted as a masked ::before like the GitHub mark above: it
@@ -1191,11 +1183,13 @@
   color: var(--chat-text-link-hover, var(--link-hover));
 }
 
+/* Inline-code overrides let palettes separate chips from their host without
+   changing the muted surfaces and strong borders of other components. */
 .chat-text :where(:not(pre, a.markdown-file-link) > code) {
-  background: color-mix(in srgb, var(--chat-text, var(--text)) 7%, transparent);
+  background: var(--inline-code-bg, var(--bg-muted));
   padding: 0.1em 0.3em;
   border-radius: var(--radius-sm);
-  border: 0;
+  border: 1px solid var(--inline-code-border, var(--border-strong));
   line-height: 1;
   -webkit-box-decoration-break: clone;
   box-decoration-break: clone;
@@ -1231,7 +1225,10 @@
 
 .chat-group.user .chat-text :where(pre) {
   border-color: transparent;
-  background: color-mix(in srgb, var(--chat-text, var(--text)) 6%, transparent);
+  background: var(
+    --user-code-bg,
+    color-mix(in srgb, var(--chat-text, var(--text)) 6%, transparent)
+  );
 }
 
 .chat-text .code-block-wrapper {
@@ -1524,12 +1521,7 @@
   margin-block-start: calc(var(--chat-block-gap) * 1.5);
 }
 
-.chat-text > p.markdown-lead:where(:not(:first-child)) {
-  margin-block-start: calc(var(--chat-block-gap) * 1.5);
-}
-
-.chat-text > :where(h1, h2, h3, h4, h5, h6) + *,
-.chat-text > p.markdown-lead + * {
+.chat-text > :where(h1, h2, h3, h4, h5, h6) + * {
   margin-block-start: 0.4em;
 }
 

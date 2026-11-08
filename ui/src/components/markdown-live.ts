@@ -97,26 +97,19 @@ export function toStreamingMarkdownDomParts(
         !previous.html.includes('class="markdown-block-art"') &&
         (renderOptions.mode === "document" || boundary <= MARKDOWN_PARSE_LIMIT)));
   let stableHtml = incremental ? previous.html : "";
-  let fileLinkPaths = new Set(incremental ? previous.fileLinkPaths : []);
   const stableAppend = stableMarkdown.slice(incremental ? previous.markdown.length : 0);
   if (stableAppend) {
     const appendedHtml = markdownContentHtml(
-      renderSanitizedMarkdown(stableAppend, { ...renderOptions, fileLinkPaths }),
+      renderSanitizedMarkdown(stableAppend, { ...renderOptions }),
     );
     // File-label collisions and standalone block art depend on the whole prefix.
-    if (
+    stableHtml =
       (stableHtml.length > 0 && isMarkdownBlockArtText(stableAppend)) ||
       (renderOptions.fileLinks &&
-        stableHtml.includes('class="markdown-file-link') &&
-        appendedHtml.includes('class="markdown-file-link'))
-    ) {
-      fileLinkPaths = new Set();
-      stableHtml = markdownContentHtml(
-        renderSanitizedMarkdown(stableMarkdown, { ...renderOptions, fileLinkPaths }),
-      );
-    } else {
-      stableHtml += appendedHtml;
-    }
+        stableHtml.includes('class="markdown-file-link"') &&
+        appendedHtml.includes('class="markdown-file-link"'))
+        ? markdownContentHtml(renderSanitizedMarkdown(stableMarkdown, { ...renderOptions }))
+        : stableHtml + appendedHtml;
   }
   if (HIGHLIGHTABLE_CODE_RE.test(stableHtml) && markdownHighlightingPending()) {
     // Keep provisional code in the mutable tail so highlighting can arrive
@@ -124,16 +117,9 @@ export function toStreamingMarkdownDomParts(
     const retained = previous?.options === renderKey && append ? previous : undefined;
     boundary = retained?.markdown.length ?? 0;
     stableHtml = retained?.html ?? "";
-    fileLinkPaths = new Set(retained?.fileLinkPaths);
     streamingTail = input.slice(boundary);
   } else if (state) {
-    state.rendered = {
-      options: renderKey,
-      markdown: stableMarkdown,
-      html: stableHtml,
-      hasHtml,
-      fileLinkPaths,
-    };
+    state.rendered = { options: renderKey, markdown: stableMarkdown, html: stableHtml, hasHtml };
   }
   if (!streamingTail.trim()) {
     return [stableHtml, ""];
@@ -145,11 +131,7 @@ export function toStreamingMarkdownDomParts(
     tailRepairStart === null
       ? streamingTail
       : repairStreamingMarkdownTail(streamingTail, tailRepairStart - boundary),
-    {
-      ...renderOptions,
-      fileLinkPaths: new Set(fileLinkPaths),
-      streamingOpenFence: tailRepairStart === null,
-    },
+    tailRepairStart === null ? { ...renderOptions, streamingOpenFence: true } : renderOptions,
     false,
     renderMarkdownTokens,
   );

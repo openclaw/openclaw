@@ -95,16 +95,8 @@ function linkLabelText(children: readonly Token[], openIndex: number): string {
   return label.trim();
 }
 
-function decorateFileLink(
-  token: Token,
-  target: { path: string; line: number | null },
-  seenPaths?: Set<string>,
-): void {
+function decorateFileLink(token: Token, target: { path: string; line: number | null }): void {
   token.attrJoin("class", "markdown-file-link");
-  if (seenPaths?.has(target.path)) {
-    token.attrJoin("class", "markdown-file-link--repeat");
-  }
-  seenPaths?.add(target.path);
   token.attrSet("role", "button");
   token.attrSet("tabindex", "0");
   token.attrSet("data-file-path", target.path);
@@ -356,7 +348,6 @@ export function createMarkdownParser(): MarkdownItParser {
     if (env?.fileLinks !== true && !env?.documentFileLinks) {
       return;
     }
-    const seenPaths = env.mode === "message" ? (env.fileLinkPaths ?? new Set<string>()) : undefined;
     const decorations: MarkdownFileLinkDecoration[] = [];
     const fileLinkTokens = (
       label: Token,
@@ -367,7 +358,7 @@ export function createMarkdownParser(): MarkdownItParser {
       const close = new state.Token("link_close", "a", -1);
       open.markup = "file-link";
       close.markup = "file-link";
-      decorateFileLink(open, target, seenPaths);
+      decorateFileLink(open, target);
       decorations.push({
         path: target.path,
         reference,
@@ -418,7 +409,7 @@ export function createMarkdownParser(): MarkdownItParser {
                   : null);
               if (target) {
                 token.attrs = token.attrs?.filter(([name]) => name !== "href") ?? null;
-                decorateFileLink(token, target, seenPaths);
+                decorateFileLink(token, target);
                 if (documentTarget) {
                   token.attrSet("data-file-document-relative", "true");
                 }
@@ -707,39 +698,5 @@ export function createMarkdownParser(): MarkdownItParser {
     );
     return `<span class="markdown-hex-color"><img class="markdown-hex-color__swatch" src="data:image/svg+xml,${image}" alt="" aria-hidden="true">${color}</span>`;
   };
-  markdownParser.core.ruler.after("text_join", "message-leads", (state) => {
-    if (state.env.mode !== "message") {
-      return;
-    }
-    for (const [index, inline] of state.tokens.entries()) {
-      const paragraph = state.tokens[index - 1];
-      if (inline.type !== "inline" || paragraph?.type !== "paragraph_open" || paragraph.hidden) {
-        continue;
-      }
-      const children = inline.children?.filter(
-        (token) => token.type !== "text" || token.content.trim() !== "",
-      );
-      if (children?.[0]?.type !== "strong_open") {
-        continue;
-      }
-      let depth = 0;
-      const close = children.findIndex((token) => {
-        depth += token.nesting;
-        return depth === 0;
-      });
-      const trailing = children.slice(close + 1);
-      const last = trailing[0];
-      if (
-        close > 0 &&
-        (trailing.length === 0 ||
-          (trailing.length === 1 &&
-            (last?.type === "softbreak" ||
-              last?.type === "hardbreak" ||
-              (last?.type === "html_inline" && /^<br\s*\/?>$/iu.test(last.content.trim())))))
-      ) {
-        paragraph.attrJoin("class", "markdown-lead");
-      }
-    }
-  });
   return markdownParser;
 }
