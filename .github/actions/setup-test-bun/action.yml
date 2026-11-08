@@ -56,6 +56,8 @@ runs:
         "$bun_dir/bin/bun" --version
         "$bun_dir/bin/bun" --revision
         echo "$bun_dir/bin" >> "$GITHUB_PATH"
+        # Parity checks clear CI and resolve this explicit, already-verified runtime.
+        echo "OPENCLAW_BUN_PATH=$bun_dir/bin/bun" >> "$GITHUB_ENV"
 
     - name: Save pinned Bun release assets
       if: ${{ success() && inputs.cache-mode == 'read-write' && github.repository == 'openclaw/openclaw' && github.ref == 'refs/heads/main' && github.workflow == 'Vitest Cache Warm' && steps.cache.outputs.cache-hit != 'true' }}

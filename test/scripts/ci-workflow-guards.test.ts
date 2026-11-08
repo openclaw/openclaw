@@ -3807,6 +3807,8 @@ server.listen(0, "127.0.0.1", () => {
     expect(identity.run).toContain("$GITHUB_ACTION_PATH/../../..");
     expect(identity.run).toContain('sha256sum "$pin"');
     expect(identity.run).toContain("path=~/.cache/openclaw-bun/$tag");
+    const install = requiredWorkflowStep(action.runs.steps, "Install pinned Bun test runtime");
+    expect(install.run).toContain('echo "OPENCLAW_BUN_PATH=$bun_dir/bin/bun" >> "$GITHUB_ENV"');
     expect(restore.uses).toBe(CACHE_V5);
     expect(restore.with).not.toHaveProperty("restore-keys");
     expect(save.uses).toBe(CACHE_SAVE_V5);
