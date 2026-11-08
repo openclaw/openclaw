@@ -1152,7 +1152,11 @@ limits.
 CI builds the selected checkout and the exact preflight base with the same
 installed Node, Vite, and dependencies. The temporary base's CSS sidecars are
 normalized through the candidate's pinned compressor before comparison. The
-report identifies both revisions and the toolchain. There is no manually updated
+report identifies both revisions and the toolchain. The base also packages,
+with its own builder, every plugin UI the candidate checkout holds: Settings
+presenters in a fresh checkout, all plugin UIs after a full `pnpm build`.
+Packaging state therefore never reads as growth; the report lists both plugin UI
+inventories. There is no manually updated
 CSS baseline, and the cumulative ceilings still bound a series of small changes.
 If a base already exceeds a size ceiling, the head may hold or reduce that
 surface, but growth beyond 64 bytes of gzip build variance fails the check.
