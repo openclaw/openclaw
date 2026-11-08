@@ -33,7 +33,7 @@ async function handshake() {
   return { socket, connect };
 }
 
-async function acceptHello(
+function sendHello(
   { socket, connect }: Awaited<ReturnType<typeof handshake>>,
   auth?: GatewayHelloOk["auth"],
 ) {
@@ -43,6 +43,13 @@ async function acceptHello(
     ok: true,
     payload: { type: "hello-ok", protocol: PROTOCOL_VERSION, ...(auth ? { auth } : {}) },
   });
+}
+
+async function acceptHello(
+  { socket, connect }: Awaited<ReturnType<typeof handshake>>,
+  auth?: GatewayHelloOk["auth"],
+) {
+  sendHello({ socket, connect }, auth);
   await vi.advanceTimersByTimeAsync(0);
   const subscription = socket.sent
     .map((value) => JSON.parse(value))
@@ -220,12 +227,7 @@ it.each(["route", "timeout", "overflow"])(
     } else if (reason === "timeout") {
       await vi.advanceTimersByTimeAsync(10_000);
     } else {
-      socket.emitMessage({
-        type: "res",
-        id: connect.id,
-        ok: true,
-        payload: { type: "hello-ok", protocol: PROTOCOL_VERSION },
-      });
+      sendHello({ socket, connect });
       for (let index = 1; index <= 257; index++) {
         socket.emitMessage({ type: "event", event: "boot-proof", payload: index, seq: index });
       }
@@ -286,12 +288,7 @@ it.each([false, true])(
     await vi.advanceTimersByTimeAsync(1_000);
     expect(wsInstances).toHaveLength(2);
     const retry = await handshake();
-    retry.socket.emitMessage({
-      type: "res",
-      id: retry.connect.id,
-      ok: true,
-      payload: { type: "hello-ok", protocol: PROTOCOL_VERSION },
-    });
+    sendHello(retry);
     retry.socket.emitMessage({ type: "event", event: "boot-proof", payload: "retry", seq: 1 });
     await vi.advanceTimersByTimeAsync(0);
     if (retryFirst) {
@@ -305,19 +302,22 @@ it.each([false, true])(
   },
 );
 
-it("drops buffered events on reconnect and leaves recovery with the protocol owner", async () => {
+it.each([false, true])("drops buffered events on reconnect (%s)", async (announced) => {
+  vi.spyOn(Math, "random").mockReturnValue(0);
   const { socket, connect } = await handshake();
-  socket.emitMessage({
-    type: "res",
-    id: connect.id,
-    ok: true,
-    payload: { type: "hello-ok", protocol: PROTOCOL_VERSION },
-  });
-  socket.emitMessage({ type: "event", event: "boot-proof", payload: "retired", seq: 1 });
+  sendHello({ socket, connect });
+  if (announced) {
+    await vi.advanceTimersByTimeAsync(0);
+  }
+  const event = announced ? "shutdown" : "boot-proof";
+  const payload = announced ? { restartExpectedMs: 1_500 } : "retired";
+  socket.emitMessage({ type: "event", event, payload, seq: 1 });
   const onEvent = vi.fn();
   const onClose = vi.fn();
-  expect(boot.adopt({ ...options, onEvent, onClose })).toBe(boot.client);
+  const onReconnectScheduled = vi.fn();
+  expect(boot.adopt({ ...options, onEvent, onClose, onReconnectScheduled })).toBe(boot.client);
   socket.emitClose(1006, "restart");
+  expect(onReconnectScheduled).toHaveBeenCalledExactlyOnceWith(announced ? 700 : 800);
   await vi.advanceTimersByTimeAsync(1_000);
   expect(onEvent).not.toHaveBeenCalled();
   expect(onClose).toHaveBeenCalledOnce();
