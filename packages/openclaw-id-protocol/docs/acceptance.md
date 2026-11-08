@@ -26,3 +26,33 @@ every spec test has protocol coverage or a named integration test.
 
 The protocol tests prove the rules; they do not prove that the Gateway, tunnel child, loader
 or Discovery apply them. Each integration test above is the end-to-end proof for its row.
+
+## Node connectivity additions
+
+`authority/nodes.test.ts` exercises the real reference-authority entry points: owner invite
+registration, W proof -> pending -> owner approval -> node-only admission, denial, forged or
+mailbox approval refusal, cross-class key separation, removal and pairing-cleanup events,
+revocation replay after reapproval, invite retention/limits and inactivity. `node-invites.test.ts`
+checks strict join-link decoding, domain-separated HMAC/code vectors and W-signed Discovery requests.
+Authority tests cover the one-hour node invite ceiling, bounded signed descriptions, refusal
+of tampering/replacement, and preserving the owner-reviewed description after admission.
+The existing statement-vector suite validates every new signed schema and signature.
+
+At this protocol-only stage, the Gateway explicitly settles `node_redemption` mail as
+`unsupported` before acknowledging it or saving the cursor. Advertising a mailbox kind does
+not enable its runtime handler. The Gateway consumer stack replaces this refusal with pending
+node enrollment; it must retain settlement-before-acknowledgment ordering.
+
+These are protocol proofs, not claims of deployed transport integration. Required integration
+proof belongs to the consuming stack:
+
+- Discovery: node-auth route restrictions, source/W/claw rate limits, retry deduplication,
+  current-binding snapshot checks, admitted descriptor/snapshot reads and relay admission.
+- Gateway: node-only principals, one-time node pairing/capability approval, manual removal
+  suppression and removal of pairings on node revocation/inactivity. Initial commands and caps
+  must be subsets of the approved description; additions take normal capability approval.
+- Control UI: display the same six-digit code as the node terminal, plus the declared name,
+  platform, commands and caps. No approval until the owner compares and explicitly clicks;
+  leaving the dialog open must never trigger approval.
+- Node host: `openclaw node join` through the real mailbox and owner approval, pin/freshness
+  verification before dialing, reconnect and WebSocket/HTTP worker traffic over the tunnel.

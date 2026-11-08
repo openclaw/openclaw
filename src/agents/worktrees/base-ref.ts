@@ -462,12 +462,11 @@ async function fetchRemoteDefault(
     );
   }
   let remoteRef = `refs/remotes/origin/${branch}`;
-  // An advertised tip already tracked locally is confirmed as a fetch would confirm it,
-  // without fetch's negotiation and pack write; hydration still runs on the commit.
-  let fetchSucceeded =
-    advertisedCommit !== undefined &&
-    advertisedCommit ===
-      (await requireGit(repoRoot, ["for-each-ref", "--format=%(objectname)", remoteRef], options));
+  const cachedCommit =
+    advertisedCommit &&
+    (await requireGit(repoRoot, ["for-each-ref", "--format=%(objectname)", remoteRef], options));
+  // A matching advertised tip skips fetch; hydration still checks the captured commit.
+  let fetchSucceeded = advertisedCommit !== undefined && advertisedCommit === cachedCommit;
   if (!fetchSucceeded) {
     const fetched = await runGit(
       repoRoot,
@@ -476,6 +475,8 @@ async function fetchRemoteDefault(
         "--no-auto-maintenance",
         "--no-recurse-submodules",
         "--no-tags",
+        // This branch's previous tip avoids negotiating unrelated session histories.
+        ...(cachedCommit ? [`--negotiation-tip=${cachedCommit}`] : []),
         "origin",
         `+refs/heads/${branch}:${remoteRef}`,
       ],
@@ -512,13 +513,12 @@ async function fetchRemoteDefault(
       `Remote default ${remoteRef} is unavailable. Repair origin or choose an explicit worktree base ref. ${redactSensitiveText(warnings.join("\n"))}`,
     );
   }
-  const commit = requireGitCommandOutput("git rev-parse remote default", verified).trim();
   if (fetchSucceeded && advertisedBranch && cachedBranch !== branch) {
     await requireGit(repoRoot, ["symbolic-ref", "refs/remotes/origin/HEAD", remoteRef], options);
   }
   return {
     branch,
-    commit,
+    commit: requireGitCommandOutput("git rev-parse remote default", verified).trim(),
     gitOperand: remoteRef,
     recordRef: `origin/${branch}`,
     fetchSucceeded,
