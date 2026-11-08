@@ -93,7 +93,7 @@ describe("receipt-backed aggregate recovery", () => {
 
   it("requires a new explicit admission path and never loosens the historical default", () => {
     const { old, source } = fixture();
-    const original = expectDefined(old.manifest.publicationAdmission);
+    const original = expectDefined(old.manifest.publicationAdmission, "admission");
     const observations = { ...original.observations, sourceDigest: source.digest };
     const admission = createPublicationAdmission(
       source,
