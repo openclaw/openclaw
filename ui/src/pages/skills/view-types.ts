@@ -17,6 +17,8 @@ export type SkillsRouteData = {
   selectedAgentId: string | null;
   selectionIntentRevision: number;
   report: SkillStatusReport | null;
+  /** An admitted prefetch adopted by the mounted Skills request owner. */
+  reportRead?: Promise<SkillStatusReport | undefined>;
   error: string | null;
   clawhubRef?: string;
 };
