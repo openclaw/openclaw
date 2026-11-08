@@ -36,12 +36,14 @@ const runtimeOnlyUnitFiles = new Set([
   "src/auto-reply/reply/dispatch-from-config.test.ts",
   "src/auto-reply/reply/followup-runner.test.ts",
   "src/auto-reply/reply/groups.test.ts",
+  "src/config/io.load-async.test.ts",
   "src/gateway/client-callsites.guard.test.ts",
   "src/gateway/server-methods/session-catalog-privacy.test.ts",
   "src/gateway/server.beam-owned-view.test.ts",
   "src/gateway/talk/client-permission-parity.test.ts",
   "src/gateway/tool-resolution.swarm-collector.test.ts",
   "src/plugins/loader.runtime-registry.test.ts",
+  "src/plugins/plugin-generation-worker.test.ts",
   "test/canonical-descendant.integration.test.ts",
   "test/codex-settled-turn-finalization.integration.test.ts",
   "test/codex-web-search-native.integration.test.ts",
@@ -90,6 +92,8 @@ export function shouldUseRuntimeOnlyVitestWorkers(
       config === "test/vitest/vitest.auto-reply.config.ts" ||
       config === "test/vitest/vitest.auto-reply-reply.config.ts" ||
       config === "test/vitest/vitest.infra.config.ts" ||
+      config === "test/vitest/vitest.runtime-config.config.ts" ||
+      config === "test/vitest/vitest.plugins.config.ts" ||
       config === "test/vitest/vitest.tooling.config.ts" ||
       config === "test/vitest/vitest.unit-fast.config.ts" ||
       config === "test/vitest/vitest.unit-fast-isolated.config.ts" ||
