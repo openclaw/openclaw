@@ -99,9 +99,85 @@ Strict acceptance uses the original existing native registered project `openclaw
 
 VERIFIED precedes exact guard removal. A durable removal intent and completion event allow recovery after unlink or daemon-reload failure without another start. COMPLETED retains the canonical slot and all receipts. Shell failures write exact-journal observations without turning transport uncertainty into a terminal phase. Explicit lifecycle fail remains a terminal FAILED receipt with no automatic rollback/start. Neither terminal state is reusable.
 
+## Retire a completed repair
+
+After successful activation, review the exact `REPAIR_COMPLETED` journal and its
+acceptance receipt, then release the canonical slot through the same deployer:
+
+```sh
+/usr/local/sbin/openclaw-release-deploy --retire-retained-repair \
+  "$OPERATION" "$COMPLETED_JOURNAL_SHA256"
+```
+
+`OPERATION` is the activation's UUID. `COMPLETED_JOURNAL_SHA256` is the SHA-256
+of the reviewed completed `journal/activation.json`, not the incident or build
+receipt hash. Use the same adopted controller closure and private operator
+environment as activation. This action requires the exclusive existing FD9 lock;
+it cannot be combined with another action or waiver.
+
+The owner validates the completed transaction and consumes the immutable receipt
+already accepted by activation. It binds the target SHA to the selected release
+and live cwd, exact PID/start generation and native invocation, recorded
+current/previous pointer identities, and canonical lock inode. Drift, a missing
+or changed acceptance receipt, or any phase other than `REPAIR_COMPLETED` refuses
+retirement. It does not rerun a marker, restart the Gateway, or alter a database.
+
+The private archive `journal/retired-repair-<OPERATION>/` receives durable copies
+of that operation's repair artifacts and an `intent.json` binding their exact
+source and archive descriptors. Original artifacts remain at their bound paths:
+existing receipts refer to those absolute paths and inodes. After rechecking live
+custody, pointers, journal and lock, one atomic rename moves the unchanged journal
+to `activation.json` inside the archive. Both parent directories are fsynced;
+`retirement.json` is then durably published and emitted as the JSON receipt.
+No evidence is deleted and no retention policy changes.
+
+If interrupted, repeat the **same command with the same completed hash**. Before
+the rename it revalidates the original completed transaction; afterward it checks
+the archived journal, artifacts, acceptance and recorded live bindings, finishes
+durability, and emits the same receipt. A new canonical journal refuses replay.
+An absent slot after the rename is safe for ordinary admission because the whole
+evidence bundle and intent precede it. Successful retirement permits a separately
+approved ordinary deploy; it does not authorize that deploy or enable a timer.
+Never use ordinary `--recover`, unlink the journal, or retire `REPAIR_FAILED`.
+
 ## Whole-closure adoption boundary
 
 The exceptional adoption owner binds the exact retained V1 incident, old four-file closure, approved replacement closure and actual canonical FD9 inode. An already gate-aware incumbent uses ordinary `prepare` and `apply`. An ungated V2 incumbent first uses the explicit `retained-controller-adoption bootstrap ROOT REQUEST_JSON` action from the approved off-path replacement library; it never treats a gate file, Boolean, timer stop or flock alone as reader exclusion.
+
+When the fixed gate completed for an earlier incident, use the explicit
+`historical-successor` action from the approved replacement library. Its request
+contains exactly `{version:1,operation,source,oldClosure,replacement,historical}`,
+where `historical` is `{gate,complete}`. Every descriptor is
+`{path,device,inode,sha256}`; both closure arrays contain the shell, library,
+suspension helper, and startup helper in that order. `source` binds the current
+retained V1 `ROLLBACK_FAILED` journal and must differ from the historical source.
+`oldClosure` binds all four actual installed files, independently reviewed even
+if a later ordinary installation differs from the old completion's output.
+`replacement` binds the four approved staged files. Historical adoption cannot
+be combined with accepted-incident retirement or bootstrap.
+
+```sh
+node "$STAGE/release-lib.mjs" retained-controller-adoption historical-successor "$ROOT" @stdin < request.json > binding.json
+node "$STAGE/release-lib.mjs" retained-controller-adoption apply "$ROOT" @stdin < binding.json > adopted.json
+node "$STAGE/release-lib.mjs" retained-controller-adoption context "$ROOT" @stdin < binding.json
+```
+
+Hold the existing exclusive FD9 lock across these commands. The owner validates
+the historical completion's immutable intent, archives, and replacement steps
+without treating its source or closure as current authority. It separately
+checks the current source, lock, actual installed closure, ownership, modes, and
+audited entry hooks. Protocol markers identify separately audited code; they do
+not replace review of the exact four incumbent hashes. Ordinary `prepare` and
+entry admission retain their current-closure requirements.
+
+The existing owner archives the unchanged old gate and actual incumbent files,
+then publishes the successor gate and four replacements through its existing
+durable intents. An interruption replays the same `historical-successor` request
+and returned binding through `apply`; preserve the original staging inodes,
+operation, source, lock, and all history. No gate deletion or manual installation
+is part of recovery. After completion, the installed shell can prepare the new
+retained repair; preparation still owns process, target, and native config-audit
+admission. Historical completion grants no lifecycle or config authority.
 
 Bootstrap durably archives the original journal, all four original files, approved replacements and two argument-independent fail-closed bridges. Each bridge replacement has a persisted old/stage/new inode intent: the library bridge is installed and directory-fsynced first, then the shell bridge. Only afterward does a genuine `/proc` census exclude every previously loaded canonical reader, including stopped, stdin-blocked and FD9-less readers. Unobservable process or namespace state fails closed. The exact original journal is checked again before an immutable exclusion receipt is retained; drift is never restored or rewound. Refusal leaves bridges and evidence in place for exact replay.
 
@@ -137,4 +213,7 @@ model-acceptance rehearsal.
 
 Real-systemd rehearsal must cover root/PID1 entry, typed ExecConditionEx, stop-history persistence, claim/dispatch crashes, absent/repopulated user manager, listener/writer/job races, guard removal/resume and all four-file adoption interruption points. Synthetic native IO tests prove controller decisions, not operating-system contracts. Repository publication does not certify this native rehearsal. Any adoption requires its exact operator procedure and approval; this reconciliation does not access or modify the deployment host.
 
-The protocol deliberately leaves COMPLETED/FAILED canonical journals and operation receipts in place. Retirement/new-operation policy is not inferred from age or a success log; a separately reviewed owner is required before reusing that canonical slot.
+Activation deliberately leaves COMPLETED/FAILED canonical journals and operation
+receipts in place. Only the explicit completed-repair retirement above releases
+a successful slot; age, a success log, or ordinary recovery grants no retirement
+authority. FAILED remains retained for diagnosis.

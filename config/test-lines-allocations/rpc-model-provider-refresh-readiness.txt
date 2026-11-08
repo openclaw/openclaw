@@ -1,2 +1,2 @@
-# 207 own rendered readiness/order/recovery lines; 22 inherited main debt. No spare headroom.
-229
+# 207 own rendered readiness/order/recovery lines; no inherited main debt or spare headroom.
+207
