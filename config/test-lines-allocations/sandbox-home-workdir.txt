@@ -1,0 +1,2 @@
+# Sandbox exec keeps HOME stable across task directories and honors explicit overrides.
+20
