@@ -140,15 +140,10 @@ describe("test-projects args", () => {
   it("uses compiled workers for repair tests while retaining packaged-runtime prerequisites", () => {
     const repair = "src/cli/update-cli/update-command-post-update-repair.test.ts";
     const recovery = "src/cli/update-cli/update-command-post-update-recovery.test.ts";
-    const preparation = (files: string[]) =>
-      resolveVitestPretestBuildMode(
-        planRuns(files).map((plan) => ({
-          configs: [plan.config],
-          includePatterns: plan.includePatterns,
-        })),
-      );
-    expect(preparation([repair])).toBeUndefined();
-    expect(preparation([repair, recovery])).toBe("runtime");
+    const selection = { includePatterns: [repair] };
+    expect(resolveVitestPretestBuildMode([selection])).toBeUndefined();
+    selection.includePatterns.push(recovery);
+    expect(resolveVitestPretestBuildMode([selection])).toBe("runtime");
   });
 
   it("keeps first sign-in's native provider graph isolated with its runtime prerequisite", () => {
