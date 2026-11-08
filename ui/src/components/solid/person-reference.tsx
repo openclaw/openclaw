@@ -63,19 +63,6 @@ function PersonReferenceContent(props: PersonReferenceProperties, host: HTMLElem
     }
   }
 
-  function escape(event: KeyboardEvent) {
-    if (event.key !== "Escape") {
-      return;
-    }
-    event.preventDefault();
-    event.stopPropagation();
-    const restore = portal.card?.contains(document.activeElement);
-    close();
-    if (restore) {
-      portal.returnFocus(trigger ?? null);
-    }
-  }
-
   const syncConnection = () => {
     if (context && connection.transition(context.gateway.snapshot)) {
       close();
@@ -131,7 +118,7 @@ function PersonReferenceContent(props: PersonReferenceProperties, host: HTMLElem
       listen(card, "pointerleave", portal.handleCardPointerLeave),
       listen(document, "pointerdown", outside, true),
       listen(document, "focusin", outside, true),
-      listen(document, "keydown", escape, true),
+      listen(document, "keydown", portal.handleEscape, true),
     ];
     // Navigation ends the portaled card before its retained transcript can render again.
     stopRoute = context?.router.subscribe(close);

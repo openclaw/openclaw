@@ -275,6 +275,7 @@ scripts/lib/watch-pr-ci-run.mts
 scripts/lib/windows-taskkill.mjs
 scripts/pnpm-runner.mts
 scripts/pr-crabbox-gate-publisher.mjs
+scripts/pr-lib/dependency-hold-release.mjs
 scripts/run-vitest.mts
 scripts/stage-openclaw-bun.sh
 scripts/test-projects.test-support.mts
@@ -1171,6 +1172,7 @@ src/infra/package-update-publication-tree.ts
 src/infra/package-update-recovery-contract.ts
 src/infra/package-update-refusal.ts
 src/infra/path-case.ts
+src/infra/path-containment.ts
 src/infra/path-existence.ts
 src/infra/path-guards.ts
 src/infra/plain-object.ts
@@ -1963,6 +1965,7 @@ src/shared/freebsd-process-identity-native.ts
 src/shared/freebsd-process-identity.ts
 src/shared/gateway-edge-auth-headers.ts
 src/shared/gateway-tailscale-auth-policy.ts
+src/shared/environment-key.ts
 src/shared/global-singleton.ts
 src/shared/http-error-response.ts
 src/shared/immutable-data.ts

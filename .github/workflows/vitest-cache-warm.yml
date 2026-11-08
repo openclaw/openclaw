@@ -80,6 +80,12 @@ jobs:
           path: ${{ steps.setup-node-env.outputs.pnpm-store-cache-path }}
           key: ${{ steps.setup-node-env.outputs.pnpm-store-cache-key }}
 
+      - name: Warm pinned Bun release assets
+        if: runner.os == 'Linux'
+        uses: ./.github/actions/setup-test-bun
+        with:
+          cache-mode: read-write
+
       - name: Warm Playwright Chromium
         if: runner.os == 'Linux'
         uses: ./.github/actions/setup-playwright-chromium

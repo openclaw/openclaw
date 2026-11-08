@@ -43,7 +43,8 @@ source-build step; release-workflow budgets and package-integrity checks are unc
 
 Precise PR plans can run the complete source-boundary gate first in an existing
 short, serial 8-class tooling job. Both configs retain separate test processes;
-a 90-second boundary reservation must fit the existing 150-second test budget.
+the boundary reservation is 60 seconds for `bun-all` and 90 seconds for other
+runtime policies, within the existing 150-second test budget.
 Other runners, preparation modes, parallel jobs, and full validation keep their
 standalone boundary ownership.
 
@@ -137,9 +138,11 @@ a release-only test selects that test; full manual/release runs retain the
 complete inventory, including desktop resize proof. Unlabeled PRs keep
 change-selected UI coverage; the label does not expand unrelated platform lanes.
 
-Current UI unit/browser CI retains three native shards with three workers each,
+Current UI unit/browser CI retains up to three native shards with three workers each.
+Partial PR unit selections target three files per row to avoid repeated setup.
+Full UI owners and manual validation retain their existing shard layout,
 complete discovery, runtime ownership, and first-shard WebKit selection.
-Two-shard trials did not reduce measured runner minutes and exceeded the
+Full-inventory two-shard trials did not reduce measured runner minutes and exceeded the
 critical-path budget.
 
 Compact mocked Control UI E2E uses six 16-class jobs with four workers each,
@@ -184,6 +187,14 @@ The exact Doctor plugin-index and SQLite sessions/transcripts built-CLI proofs
 use the runtime-only compiled-worker registry. The local TUI file does the same
 when its existing built-CLI mode is enabled; source TUI and broad, mixed, or
 custom selections retain the full registry.
+
+Packed Node groups also share the runtime-only registry when every group has
+one known configuration and only explicitly qualified files. This includes
+the Gateway client callsite guard, Codex abort settlement, and native search
+authority proofs. Parent and child resolve the same include-file selection;
+broad or mixed selections, extra Vitest arguments, and groups requiring a build
+retain the full registry. Test inventory, process isolation, and artifact
+verification are unchanged.
 
 When the artifact producer selects both channels and core support checks with
 matching compiler heap options, they share one full compiled-worker generation.
@@ -436,6 +447,10 @@ Control UI, repo E2E, and native live browser CI restore the Chromium revision p
 
 The first `checks-ui` shard also runs a curated WebKit overlay and composer-focus project when changed paths touch its interaction owners, their styles, or the subset in `ui/vitest.config.ts`. The manifest owns that selection. WebKit runs sequentially after the existing UI tests, with the same three-worker limit and no additional runner or matrix row. Scheduled runs without changed paths and frozen targets omit it. The selected row installs the pinned Playwright WebKit browser and Linux dependencies. Run the same project explicitly with `OPENCLAW_UI_WEBKIT=1 pnpm --dir ui test --project=webkit --maxWorkers=3`; ordinary UI test runs remain Chromium-only. CDP-dependent modal media and accessibility-tree suites stay on Chromium until their browser-neutral replacements land.
 
+Control UI E2E skips Vitest requirement discovery when its selected files cannot
+include a WebKit or Gateway-runtime suite. Matching or unspecified selections
+retain the existing shard discovery before installing WebKit or preparing runtime.
+
 The WebKit project requires every selected assertion to pass, with no expected-failure exceptions. Shared fixtures wait for usable overlay content, inspect native adopted stylesheets, and establish keyboard traversal independently of Safari's pointer-focus behavior.
 
 Linux baseline ratchets and native grep tests reuse an existing `rg` or download the checksum-pinned ripgrep 15.2.0 release directly into the runner's temporary directory. Setup does not use apt, sudo, package-index refreshes, or package-manager locks. The small archive download has bounded retries and transfer timeouts; unsupported architectures and checksum failures fail the job.
@@ -456,6 +471,12 @@ Changed-owner Node rows use existing file/group timing evidence with a
 150-test-second admission target and the existing 130-row PR cap. Complete files,
 standard configs, and worker policies remain intact; predicted test seconds
 are separate from measured CI wall time.
+Private-QA direct targets can share up to 196 predicted test seconds when the
+same execution policy already selects a slower target. This reserves 104 seconds
+for preparation within a 300-second job budget without increasing the policy's
+longest predicted test row. Repacking must reduce total jobs without adding jobs
+to either private-QA policy. The 12-target limit and hourly reservations remain
+unchanged.
 Compatible selected serial jobs share setup after singleton worker limits are
 fixed. Combined jobs retain the shortest contributing timeout and the existing
 test-work budget; complete and scheduled plans keep their original layout.
@@ -492,6 +513,10 @@ Audited synchronous unit-fast tests can use Bun's native runner; changed test or
 setup bytes return to Vitest. Full Release Validation retains complete Node
 coverage plus qualified Bun coverage; see
 [test runtime selection](/ci/pipeline#test-runtime-selection).
+The protected main warmer publishes the pinned Bun release assets for both Linux
+backends. Readers restore by the complete pin hash and recheck metadata, archive,
+executable, architecture, and revision before use. A cache miss downloads normally;
+a valid cache avoids GitHub Release downloads, including metadata requests.
 Both runtimes group uncached, non-isolated UI files by environment in batches
 to reduce worker restarts while retaining native shard ownership and worker budgets.
 Bun UI workers also use an [allocation-based collection trigger](/ci/scope-and-routing/job-budgets)

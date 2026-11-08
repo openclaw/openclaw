@@ -92,6 +92,7 @@ describe("OpenClaw ID People invalidations", () => {
     await applyMailboxMessage(mail.message, {
       submit: (statement) => h.claw.authority.submit(statement, "mailbox"),
       redeem: (redemption, sender) => h.claw.authority.redeem(redemption, sender),
+      redeemNode: (redemption) => h.claw.authority.redeemNode(redemption),
     });
     await requested;
     const admitted = h.next();
@@ -205,6 +206,7 @@ describe("OpenClaw ID People invalidations", () => {
       await applyMailboxMessage(mail.message, {
         submit: (statement) => h.claw.authority.submit(statement, "mailbox"),
         redeem: (redemption, sender) => h.claw.authority.redeem(redemption, sender),
+        redeemNode: (redemption) => h.claw.authority.redeemNode(redemption),
       });
       await requested;
       return { invite, mail };
@@ -274,6 +276,7 @@ describe("OpenClaw ID People invalidations", () => {
     await applyMailboxMessage(mail.message, {
       submit: (statement) => h.claw.authority.submit(statement, "mailbox"),
       redeem: (redemption, sender) => h.claw.authority.redeem(redemption, sender),
+      redeemNode: (redemption) => h.claw.authority.redeemNode(redemption),
     });
     await pendingRequested;
     const pendingExpired = h.next();

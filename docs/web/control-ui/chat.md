@@ -412,10 +412,16 @@ Double-click selections stay inside the message where they started, including
 when you drag on the second click. Ordinary drag selection and Select All can
 still span multiple messages.
 
-Highlight text and choose **Add to message** to attach a comment to the main
+Highlight text and choose **Add to chat** to attach a comment to the main
 composer. The optional comment field starts on one line, grows to five lines,
 then scrolls internally. Confirm or press Enter to save; Shift+Enter adds a line.
 Saving keeps your existing draft and does not send a message.
+
+**Ask in side chat** asks about the passage in Side chat. **New session**
+opens the new-session launcher with the passage attached as a
+comment; starting the session sends it as a quote ahead of your prompt. The
+launcher's comment preview can delete the passage but not edit it, and your
+current chat draft is left unchanged.
 
 Saving leaves a small, filled comment marker beside the selected passage. Click
 that marker, or the pencil in the comment count's hover preview, to reopen the
@@ -458,7 +464,10 @@ file links also support spaces, emoji, and punctuation in filenames; for example
 `[Read notes](notes/caf%C3%A9%20note.md)` opens the workspace file. Bare CSV
 filenames in authored links, such as `[Read inventory](inventory.csv)`, and code
 spans also open the file preview. Plain-text and inline-code file detection stays
-conservative to avoid turning prose into links.
+conservative to avoid turning prose into links. Unprefixed paths such as
+`src/index.ts` require a recognized file extension, so repository names such as
+`openclaw/openclaw.ai` remain text. For uncommon file extensions, use an explicit
+path such as `./assets/logo.ai` or an authored Markdown link.
 
 In a workspace Markdown file's **Preview**, authored relative file links resolve
 from the document's folder. For example, a report in `reports/review.md` can open
@@ -1423,6 +1432,9 @@ Compact activity controls can open related details without duplicating the full
 lists above the composer. The mobile **Publish PR** control appears only for an
 undismissed branch with publishable work or a retained publication result or
 recovery state. An empty workspace or account discovery alone does not show it.
+
+Subagent rows show elapsed time once the child starts, just like ordinary child-session rows.
+Queued rows have no elapsed label; finished work stops at its recorded end time.
 
 The progress header shows the current step, not a completed-step total. On desktop,
 its options menu stays available when the card is expanded or collapsed and contains
