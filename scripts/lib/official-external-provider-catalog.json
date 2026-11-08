@@ -1440,6 +1440,71 @@
       }
     },
     {
+      "name": "@openclaw/parallel-plugin",
+      "description": "OpenClaw Parallel web search plugin.",
+      "source": "official",
+      "kind": "plugin",
+      "openclaw": {
+        "plugin": {
+          "id": "parallel",
+          "label": "Parallel"
+        },
+        "providerEndpoints": [
+          {
+            "endpointClass": "parallel-native",
+            "hosts": [
+              "api.parallel.ai"
+            ]
+          }
+        ],
+        "contracts": {
+          "webSearchProviders": [
+            "parallel",
+            "parallel-free"
+          ]
+        },
+        "webSearchProviders": [
+          {
+            "id": "parallel",
+            "label": "Parallel Search",
+            "hint": "LLM-optimized dense excerpts from web sources",
+            "onboardingScopes": [
+              "text-inference"
+            ],
+            "credentialLabel": "Parallel API key",
+            "envVars": [
+              "PARALLEL_API_KEY"
+            ],
+            "placeholder": "par-...",
+            "signupUrl": "https://platform.parallel.ai",
+            "docsUrl": "https://docs.openclaw.ai/tools/parallel-search",
+            "credentialPath": "plugins.entries.parallel.config.webSearch.apiKey",
+            "autoDetectOrder": 75
+          },
+          {
+            "id": "parallel-free",
+            "label": "Parallel Search (Free)",
+            "hint": "Free web search via Parallel's hosted Search MCP — no API key required",
+            "onboardingScopes": [
+              "text-inference"
+            ],
+            "requiresCredential": false,
+            "envVars": [],
+            "placeholder": "(no key needed)",
+            "signupUrl": "https://parallel.ai",
+            "docsUrl": "https://docs.openclaw.ai/tools/parallel-search",
+            "credentialPath": ""
+          }
+        ],
+        "install": {
+          "clawhubSpec": "clawhub:@openclaw/parallel-plugin",
+          "npmSpec": "@openclaw/parallel-plugin",
+          "defaultChoice": "npm",
+          "minHostVersion": ">=2026.6.8"
+        }
+      }
+    },
+    {
       "name": "@openclaw/pixverse-provider",
       "description": "OpenClaw PixVerse video provider plugin",
       "source": "official",

@@ -190,6 +190,9 @@ export async function waitForEngineTranscript(
       ...phases,
       messages: snapshot?.[1].snapshot.messages.length ?? 0,
       mountedRows: pane?.querySelectorAll(".chat-virtual-row").length ?? 0,
+      cachedAdmission:
+        pane?.querySelector("[data-cached-session]")?.getAttribute("data-cached-session") ===
+        "true",
       composerReady: input !== null && input !== undefined && !input.disabled,
       transcriptReady: pane ? Reflect.get(pane, "transcriptReady") === true : false,
       longTasksSupported: PerformanceObserver.supportedEntryTypes.includes("longtask"),
@@ -208,19 +211,18 @@ async function persistTranscript(page: Page) {
     const pane = document.querySelector(".chat-pane-cache__pane--active");
     const store:
       | {
-          write(key: string, snapshot: { messages: unknown[] }): void;
+          write(key: string, snapshot: { messages: unknown[] }, weight: number): void;
           flush(): Promise<void>;
         }
       | undefined = pane ? Reflect.get(pane, "sessionSnapshotStore") : undefined;
-    const cache: Map<string, { snapshot: { messages: unknown[] } }> | undefined = pane
-      ? Reflect.get(pane, "chatMessagesBySession")
-      : undefined;
+    const cache: Map<string, { snapshot: { messages: unknown[] }; weight: number }> | undefined =
+      pane ? Reflect.get(pane, "chatMessagesBySession") : undefined;
     const key = pane ? Reflect.get(pane, "sessionKey") : undefined;
     const entry = cache && [...cache].find(([stored]) => stored.endsWith(`\u0000${key}`));
     if (!store || !entry) {
       throw new Error("Warm boot requires the active transcript persistence owner");
     }
-    store.write(entry[0], { ...entry[1].snapshot });
+    store.write(entry[0], { ...entry[1].snapshot }, entry[1].weight);
     await store.flush();
   });
 }
@@ -339,6 +341,8 @@ export function createEngineBootScenarios(
       navigation: "reload",
       route,
       expected: "A same-context reload restores the persisted transcript and enabled composer.",
+      // Persist a credential-admitted boot record so reload can prewarm the stored transcript.
+      fixtureOverrides: () => ({ authMethod: "trusted-proxy" }),
       initScript: bootScript,
       prepare: async (page) => {
         await waitForEngineTranscript(page);

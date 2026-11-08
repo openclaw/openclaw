@@ -33,6 +33,10 @@ import {
   listLiveAgentRunIds,
 } from "../infra/agent-run-registry.js";
 import { throwIfSettledRejected } from "../infra/error-graph-internal.js";
+import {
+  completeGatewayAgentRestartRecovery,
+  type GatewayRestartResumeWindow,
+} from "../infra/gateway-boot-lifecycle.js";
 import { withPluginRuntimeGatewayContextResolver } from "../plugins/runtime/gateway-request-scope.js";
 import { runWithGatewayIndependentRootWorkAdmission } from "../process/gateway-work-admission.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
@@ -43,7 +47,7 @@ import {
   hasCommittedReplyOperationOutcome,
 } from "../sessions/session-controller.state.js";
 import { createDeferredCore, type Deferred } from "../shared/deferred.js";
-import { readAgentDatabaseAdmissionRefusal } from "../state/agent-database-admission.js";
+import { listAgentDatabaseAdmissionRefusals } from "../state/agent-database-admission.js";
 import { withAgentInputRecovery } from "../state/agent-database-preparation-context.js";
 import { resolveExplicitIncognitoAgentSqliteTarget } from "../state/openclaw-agent-db.paths.js";
 import { continueSessionQueuedInputs } from "./queued-chat-inputs.js";
@@ -276,25 +280,25 @@ type RestartStoreTarget = {
 };
 type PreparedRestartStore = {
   target: RestartStoreTarget;
+  windows?: GatewayRestartResumeWindow[];
   entries: Awaited<ReturnType<typeof readSessionEntrySummariesInWorker>>;
   orphaned: Awaited<ReturnType<typeof listOrphanedSessionPendingInputTargets>>;
 };
 
-// Initial discovery and deferred preparation share one operation per physical store.
-// The Gateway lifetime owns the promises; completed stores must not rescan new inputs as orphans.
+// Initial discovery and deferred preparation share one operation per physical agent.
+// Completed agents must not rescan newly admitted inputs as orphans.
 const restartRecovery = new WeakMap<
   object,
   {
     ready: Deferred;
-    allowUnmarked: boolean;
-    stores: Map<string, Promise<void>>;
+    agents: Map<string, Promise<void>>;
   }
 >();
 function getRestartRecovery(context: GatewayRequestContext) {
   const owner = context.agentDatabaseStartup ?? context;
   let recovery = restartRecovery.get(owner);
   if (!recovery) {
-    recovery = { ready: createDeferredCore(), allowUnmarked: true, stores: new Map() };
+    recovery = { ready: createDeferredCore(), agents: new Map() };
     restartRecovery.set(owner, recovery);
   }
   return recovery;
@@ -335,7 +339,6 @@ async function prepareRestartStore(
   target: RestartStoreTarget,
 ): Promise<PreparedRestartStore | undefined> {
   const { signal, log } = params;
-  const recovery = getRestartRecovery(params.context);
   let entries: PreparedRestartStore["entries"];
   try {
     entries = (await readSessionEntrySummariesInWorker(target)).filter(
@@ -344,8 +347,9 @@ async function prepareRestartStore(
     signal.throwIfAborted();
   } catch (error) {
     signal.throwIfAborted();
-    recovery.allowUnmarked = false;
-    log.warn(`Skipped restart resume for agent ${target.agentId}: ${String(error)}`);
+    log.warn(
+      `Agent ${target.agentId} resume deferred: agent database unavailable: ${String(error)}`,
+    );
     return undefined;
   }
   let orphaned: PreparedRestartStore["orphaned"] = [];
@@ -359,24 +363,55 @@ async function prepareRestartStore(
     signal.throwIfAborted();
     log.warn(`Skipped interrupted input settlement for agent ${target.agentId}: ${String(error)}`);
   }
-  return { target, entries, orphaned };
+  const windows = params.context.restartResumeWindows;
+  return {
+    target,
+    entries,
+    orphaned,
+    windows:
+      windows && Object.hasOwn(windows, target.physicalAgentId)
+        ? windows[target.physicalAgentId]
+        : undefined,
+  };
 }
 
-function resumePreparedRestartStore(
+async function prepareRestartStores(
   params: RestartResumeParams,
-  prepared: PreparedRestartStore,
+  targets: RestartStoreTarget[],
+): Promise<PreparedRestartStore[] | undefined> {
+  const prepared: PreparedRestartStore[] = [];
+  for (const target of targets) {
+    const store = await prepareRestartStore(params, target);
+    if (!store) {
+      return undefined;
+    }
+    prepared.push(store);
+  }
+  return prepared;
+}
+
+function resumePreparedRestartStores(
+  params: RestartResumeParams,
+  agentId: string,
+  prepared: PreparedRestartStore[],
 ): Promise<void> {
   const recovery = getRestartRecovery(params.context);
-  let work = recovery.stores.get(prepared.target.storePath);
+  let work = recovery.agents.get(agentId);
   if (!work) {
     work = Promise.resolve().then(() =>
-      withAgentInputRecovery(
-        params.context.agentDatabaseStartup,
-        prepared.target.physicalAgentId,
-        () => resumeRestartStore(params, prepared),
-      ),
+      withAgentInputRecovery(params.context.agentDatabaseStartup, agentId, async () => {
+        let completed = true;
+        for (const store of prepared) {
+          completed = (await resumeRestartStore(params, store)) && completed;
+        }
+        const through = prepared[0]?.windows?.at(-1)?.endedAt;
+        if (completed && through !== undefined) {
+          params.signal.throwIfAborted();
+          await completeGatewayAgentRestartRecovery(agentId, through, prepared[0]?.target.env);
+        }
+      }),
     );
-    recovery.stores.set(prepared.target.storePath, work);
+    recovery.agents.set(agentId, work);
   }
   return work;
 }
@@ -389,33 +424,30 @@ export async function prepareAgentRestartRecovery(
     assertCurrent: () => void;
   },
 ): Promise<(() => Promise<void>) | undefined> {
-  const prepared: PreparedRestartStore[] = [];
-  for (const target of await discoverRestartSessionStores(params, params.env)) {
-    if (target.physicalAgentId !== params.agentId) {
-      continue;
-    }
-    params.assertCurrent();
-    const store = await prepareRestartStore(params, target);
-    params.assertCurrent();
-    if (store && (store.entries.length || store.orphaned.length)) {
-      prepared.push(store);
-    }
-  }
-  if (!prepared.length) {
+  const targets = (await discoverRestartSessionStores(params, params.env)).filter(
+    (target) => target.physicalAgentId === params.agentId,
+  );
+  params.assertCurrent();
+  const prepared = await prepareRestartStores(params, targets);
+  params.assertCurrent();
+  // Empty stores need the startup recovery barrier only to acknowledge pending crash windows.
+  if (
+    !prepared?.some(
+      (store) => store.entries.length || store.orphaned.length || store.windows?.length,
+    )
+  ) {
     return undefined;
   }
   // Do not retain assertCurrent: it belongs to the temporary preparation borrow.
-  const { context, signal, log } = params;
+  const { context, signal, log, agentId } = params;
   const ready = getRestartRecovery(context).ready.promise;
   return async () => {
     await racePromiseWithAbortSignal(ready, signal);
     await runWithGatewayIndependentRootWorkAdmission(
       () =>
         withPluginRuntimeGatewayContextResolver(context.resolveGatewayContext, async () => {
-          for (const store of prepared) {
-            signal.throwIfAborted();
-            await resumePreparedRestartStore({ context, signal, log }, store);
-          }
+          signal.throwIfAborted();
+          await resumePreparedRestartStores({ context, signal, log }, agentId, prepared);
         }),
       "startup:agent-session-resume",
       signal,
@@ -426,66 +458,56 @@ export async function prepareAgentRestartRecovery(
 /** Recover markers and unfinished predecessor runs without reviving older orphans. */
 export async function resumeMarkedSessions(params: RestartResumeParams): Promise<void> {
   const recovery = getRestartRecovery(params.context);
-  const stores: PreparedRestartStore[] = [];
-  let targets: RestartStoreTarget[];
+  const prepared = new Map<string, PreparedRestartStore[]>();
+  const byAgent = new Map<string, RestartStoreTarget[]>();
   try {
-    targets = await discoverRestartSessionStores(params);
+    const targets = await discoverRestartSessionStores(params);
+    for (const refusal of listAgentDatabaseAdmissionRefusals()) {
+      params.log.warn(
+        `Agent ${refusal.agentId} resume deferred: agent database unavailable (${refusal.code})`,
+      );
+    }
     for (const target of targets) {
+      const stores = byAgent.get(target.physicalAgentId) ?? [];
+      stores.push(target);
+      byAgent.set(target.physicalAgentId, stores);
+    }
+    for (const [agentId, stores] of byAgent) {
       params.signal.throwIfAborted();
       if (
-        !recovery.stores.has(target.storePath) &&
-        !params.context.agentDatabaseStartup?.isAgentInputRecoveryPending(target.physicalAgentId)
+        !recovery.agents.has(agentId) &&
+        !params.context.agentDatabaseStartup?.isAgentInputRecoveryPending(agentId)
       ) {
-        const prepared = await prepareRestartStore(params, target);
-        if (prepared) {
-          stores.push(prepared);
+        const batch = await prepareRestartStores(params, stores);
+        if (batch) {
+          prepared.set(agentId, batch);
         }
       }
     }
-    const { context, signal } = params;
-    const preparation = context.agentDatabaseStartup;
-    if (context.restartResumeWindow && recovery.allowUnmarked && preparation) {
-      // Failed preparation prevents adoption; markers in other stores may represent
-      // only a partial shutdown and do not dispose of this store's unfinished runs.
-      const agentIds = listConfiguredSessionStoreAgentIds(context.getRuntimeConfig());
-      const prepared = await Promise.allSettled(
-        agentIds.flatMap(
-          (agentId) => preparation.waitForAgentPreparation(agentId, { signal }) ?? [],
-        ),
-      );
-      if (
-        prepared.some((result) => result.status === "rejected") ||
-        agentIds.some((agentId) => readAgentDatabaseAdmissionRefusal(agentId))
-      ) {
-        recovery.allowUnmarked = false;
-      }
-    }
-  } catch (error) {
-    recovery.allowUnmarked = false;
-    throw error;
   } finally {
     // The startup observer reaches here only after deletion and subagent restoration.
     recovery.ready.resolve();
   }
-  for (const store of stores) {
-    await resumePreparedRestartStore(params, store);
+  for (const [agentId, stores] of prepared) {
+    await resumePreparedRestartStores(params, agentId, stores);
   }
   // Prepared closures must own their FIFO slots before startup unlocks reconnecting sends.
-  for (const target of targets) {
-    await params.context.agentDatabaseStartup?.waitForAgentPreparation(target.physicalAgentId, {
+  for (const agentId of byAgent.keys()) {
+    await params.context.agentDatabaseStartup?.waitForAgentPreparation(agentId, {
       signal: params.signal,
       forInput: true,
     });
   }
-  for (const work of recovery.stores.values()) {
+  for (const work of recovery.agents.values()) {
     await work;
   }
 }
 
 async function resumeRestartStore(
   { context, signal, log }: RestartResumeParams,
-  { target, entries, orphaned }: PreparedRestartStore,
-): Promise<void> {
+  { target, entries, orphaned, windows }: PreparedRestartStore,
+): Promise<boolean> {
+  let completed = true;
   const summary = createRestartResumeSummary("startup");
   for (const { sessionKey } of entries) {
     summary.record(
@@ -496,8 +518,6 @@ async function resumeRestartStore(
   }
   try {
     const processStartedAt = performance.timeOrigin;
-    const window = context.restartResumeWindow;
-    const recovery = getRestartRecovery(context);
     signal.throwIfAborted();
     for (const session of orphaned) {
       try {
@@ -506,6 +526,7 @@ async function resumeRestartStore(
         );
       } catch (error) {
         signal.throwIfAborted();
+        completed = false;
         log.warn(
           `Skipped interrupted input settlement for ${session.sessionKey}: ${String(error)}`,
         );
@@ -542,11 +563,12 @@ async function resumeRestartStore(
             const marker: InternalSessionEntry["resumeAfterRestart"] =
               selected.resumeAfterRestart ??
               ((orphanedRun &&
-                recovery.allowUnmarked &&
-                window &&
-                selected.startedAt !== undefined &&
-                selected.startedAt >= window.startedAt &&
-                selected.startedAt < window.endedAt) ||
+                windows?.some(
+                  (window) =>
+                    selected.startedAt !== undefined &&
+                    selected.startedAt >= window.startedAt &&
+                    selected.startedAt < window.endedAt,
+                )) ||
               (selected.mainRestartRecovery &&
                 selected.abortedLastRun === true &&
                 selected.status === "interrupted" &&
@@ -683,6 +705,7 @@ async function resumeRestartStore(
         if (signal.aborted) {
           throw error;
         }
+        completed = false;
         log.warn(`Skipped restart resume for ${sessionKey}: ${String(error)}`);
       } finally {
         authority?.release();
@@ -691,4 +714,5 @@ async function resumeRestartStore(
   } finally {
     summary.publish();
   }
+  return completed;
 }

@@ -46,6 +46,11 @@ visibility, or remote session-link titles. Side Chat is hidden, and session link
 keep their locally available labels. MCP Apps discovery requires general write
 access. The Gateway continues to authorize every request.
 
+**Settings → Devices** displays the current device inventory while refreshing
+configuration separately. Binding controls keep their own loading and error
+state until configuration is available; a slow configuration read does not
+hold the inventory page open.
+
 Connections without general read access also skip CLI session catalogs, plugin
 tool artwork, detailed usage reads, and the separate command catalog. Slash-command
 menus retain permitted chat metadata or built-in commands without requesting a
@@ -120,6 +125,12 @@ Selecting a repository also shows its identity in the workspace control.
 Session-only connections receive the same read-safe repository identity for
 projects they can already discover, without repository URLs, credentials, or host
 checkout paths. This label does not grant access to private repository content.
+
+Without `operator.write` (for example the `guest` and `contributor` roles), the
+picker lists only agent workspaces and saved projects backed by public GitHub
+repositories, and it hides GitHub search and repository URL entry. A saved
+selection the Gateway no longer lists falls back to the agent workspace. See [Operator scopes](/gateway/operator-scopes) for the exact
+rules.
 
 ## Create a nested session
 
@@ -280,6 +291,8 @@ Opening a nested session from a **Waiting on** link, a direct URL, or browser hi
 
 Use **Snooze → Choose another time** in a session menu to pick a future date and time in your browser’s local time zone. After a successful snooze, **Custom** shows that exact date and time in other session menus for one hour. Choosing another custom time replaces it; presets and Undo leave the remembered choice unchanged. The browser stores this choice separately for each Gateway and signed-in account, and removes it when it expires or the wake time passes. If browser storage is unavailable, the choice remains reusable only in the current page.
 
+Snoozing also hides pinned sessions from the Active sidebar until they wake. Their pins and relative order are preserved, and snoozed sessions remain discoverable with the **Snoozed** or **All** filter.
+
 The chat header’s **Details** panel groups session information into collapsible sections separated by subtle dividers. **Environment** shows the workspace name, branch, worktree, execution device, and model. Absolute workspace paths stay out of the panel text and tooltips; use **Copy path** when you need the full path, copy the branch, or open **Show session files** to browse the workspace. The composer's context ring shows a compact usage breakdown, latest-run tokens, and provider plan limits. **View context** opens the complete report, Refresh, and compaction action in one side panel. Approximate usage keeps its `~` marker. **Changes** keeps pull requests, change totals, checks, and available publication actions together. Background tasks, automations, participants, and task progress retain their existing session-scoped actions. On wide conversations, Details docks beside the transcript; narrower conversations use a dismissible popover below the header. On desktop, use the **Details** toggle to open or close the panel; mobile keeps a close button inside the panel.
 
 Session details share concurrent reads across the sidebar, chat, and resource panels. Returning to a session reuses its details on the same connection, including updates received through complete session snapshots. Incomplete updates, explicit refreshes, and reconnects fetch current details; failed reads remain retryable.
@@ -385,14 +398,18 @@ Still-streaming assistant text stays at the bottom of its run, below saved outpu
 takes its transcript position once saved.
 
 While steering waits for a running tool, the message appears as an ordinary user
-bubble with a small **Send now** link underneath. Session writers can click it to
-interrupt supported running tools and deliver the waiting steer sooner, keeping
-the same agent run alive. The model receives a tool result explaining the user
-interruption. The link disappears when the steer is injected. Tools that cannot
-be interrupted safely, and runtimes without tool interruption, show a quiet
-waiting explanation instead of an action.
-This includes Code Mode aggregate tools and native or remote backends, which
-do not support tool-only interruption.
+bubble. Waiting steers are delivered together, so one small **Send now** link
+appears under the newest steer that can interrupt. Session writers can click it
+to interrupt supported running tools and deliver the waiting steers sooner,
+keeping the same agent run alive. The model receives a tool result explaining
+the user interruption. The link sits in the slot the message's footer actions use
+once it is delivered, so spacing stays the same. When nothing can interrupt, for
+viewers without steer access, tools that cannot be interrupted safely, and
+runtimes without tool interruption, the newest waiting message shows a muted
+**Steering…** label instead; hovering it explains what the steer is waiting for.
+A refused **Send now** returns the row to **Steering…** without a separate error.
+Tools that cannot be interrupted safely include Code Mode aggregate tools and
+native or remote backends, which do not support tool-only interruption.
 
 Accepted steering messages keep their saved transcript positions. Earlier saved
 output stays above the message; later answers and live output appear below it,
@@ -683,6 +700,10 @@ Local onboarding generates a Gateway secret in token mode by default, without a 
 
 Use the agent selector to open an agent's chat or its settings gear to configure
 that agent. Per-agent settings remain at `/settings/agents/<id>`.
+
+The agent's **Automations** panel shows an empty state only after its jobs read
+succeeds. Failed reads show an error with **Refresh** available; previously loaded
+jobs remain visible while a refresh is pending or fails.
 
 Open **Templates** in **Pages**, or visit `/templates`, to discover official Templates.
 This page contains Templates discovery only. Enable **Templates** in **Settings → Labs**

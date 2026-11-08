@@ -54,6 +54,8 @@ export type GatewayHttpServerOptions = {
   getGatewayRequestContext?: () => GatewayRequestContext | undefined;
   httpRequestLifetime?: GatewayHttpRequestLifetime;
   waitForRequestRuntime?: () => Promise<void>;
+  /** Core request readiness is independent of optional startup sidecars. */
+  isRequestRuntimeReady?: () => boolean;
   isStartupPluginRuntimeReady?: () => boolean;
   isTerminalEnabled?: () => boolean;
   tlsOptions?: TlsOptions;

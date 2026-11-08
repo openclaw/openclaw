@@ -169,8 +169,9 @@ export class TranscriptEndAnchor {
     this.offset = null;
   }
 
-  capture(element: HTMLDivElement | null): void {
+  capture(element: HTMLDivElement | null): boolean {
     this.offset = this.recordViewport(element) ? this.maxOffset : null;
+    return this.offset !== null;
   }
 
   reconcile(
