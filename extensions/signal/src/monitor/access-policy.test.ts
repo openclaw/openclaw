@@ -113,3 +113,21 @@ it("authorizes a registered plugin command from an allowlisted direct sender", a
   });
   expect(access.commandAccess.authorized).toBe(true);
 });
+
+it("does not block ordinary open-group text that mentions a plugin command", async () => {
+  registerPluginCommand("signal-test-plugin", {
+    name: "signal-plugin-probe",
+    description: "Signal plugin command authorization probe",
+    handler: () => ({ text: "ok" }),
+  });
+  const access = await resolveAccess({
+    groupPolicy: "open",
+    isGroup: true,
+    commandText: "please explain /signal-plugin-probe",
+  });
+  expect(access.senderAccess.decision).toBe("allow");
+  expect(access.commandAccess).toMatchObject({
+    authorized: false,
+    shouldBlockControlCommand: false,
+  });
+});
