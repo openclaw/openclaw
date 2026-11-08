@@ -1,2 +1,0 @@
-# CPU capture elapsed duration: deterministic clock setup preserves the existing exact-duration assertion while timing and native-capture regressions use the owning measurement.
-5

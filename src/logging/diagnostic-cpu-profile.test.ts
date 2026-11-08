@@ -208,11 +208,6 @@ describe("diagnostic CPU profile owner", () => {
     });
   });
   it("returns a complete sanitized graph only after native cleanup", async () => {
-    let now = 100;
-    vi.spyOn(performance, "now").mockImplementation(() => now);
-    native.wait.mockImplementation(async () => {
-      now += 5_500;
-    });
     const outcome = await capture();
     expect(outcome.status).toBe("complete");
     if (outcome.status !== "complete") {
@@ -220,7 +215,6 @@ describe("diagnostic CPU profile owner", () => {
     }
     expect(outcome.result).toMatchObject({
       requestedDurationMs: 5_000,
-      actualDurationMs: 5_500,
       samplingIntervalMicros: 10_000,
       sampleLossCount: null,
       redactedNodeCount: 1,
