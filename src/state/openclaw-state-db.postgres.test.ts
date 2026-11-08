@@ -79,8 +79,10 @@ import {
 } from "./openclaw-state-db.postgres-fixture.test-support.js";
 import { captureOpenClawStateWorkerContext } from "./openclaw-state-worker-context.js";
 import { executeOpenClawStateWorker } from "./openclaw-state-worker-store.js";
-import { statePostgresRuntime } from "./postgres-schema.generated/runtime.js";
+import { createStatePostgresRuntime } from "./postgres-schema.generated/runtime.js";
 import { ensureUserBackgroundSchema } from "./user-background.store.js";
+
+const statePostgresRuntime = createStatePostgresRuntime();
 
 const configured: unknown = getEnvironmentData("openclaw.test.state.conformance.connection");
 const connection = typeof configured === "string" ? configured : undefined;

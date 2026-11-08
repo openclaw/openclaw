@@ -11,6 +11,8 @@ import {
 } from "../../scripts/generate-postgres-schema.mts";
 import { catalog as readCatalog, portTables } from "../../scripts/lib/postgres-schema-catalog.mts";
 import { generateSqliteSchemaCatalogs } from "../../scripts/lib/sqlite-schema-generation.mts";
+import { expectedPostgresCatalog } from "../../src/infra/database-engine/postgres-catalog.js";
+import { createStatePostgresRuntime } from "../../src/state/postgres-schema.generated/runtime.js";
 import type statePortMetadata from "../../src/state/postgres-schema.generated/state-port.json";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
@@ -38,8 +40,14 @@ function fixture(sql: string) {
 }
 
 describe("PostgreSQL schema generation", () => {
-  it("bounds state port metadata to compact allocation facts", async () => {
-    const { files } = await generatePostgresSchemas(root);
+  it("generates canonical runtime, metadata, and DDL with stable bytes and complete diagnostics", async () => {
+    const { files, report } = await generatePostgresSchemas(root);
+    const runtime = createStatePostgresRuntime();
+    expect(runtime.eagerSql).toBe(files["state.postgres.sql"]);
+    expect(runtime.fragments).toEqual(
+      report.fragments.map(({ file, ...fragment }) => ({ ...fragment, sql: files[file] })),
+    );
+    expect(runtime.expectedCatalog).toEqual(expectedPostgresCatalog(report.catalogs.state!));
     const metadata: typeof statePortMetadata = JSON.parse(files["state-port.json"]!);
     const schemas = [metadata, ...metadata.fragments];
     expect(Buffer.byteLength(files["state-port.json"]!)).toBeLessThan(60_000);
@@ -47,10 +55,6 @@ describe("PostgreSQL schema generation", () => {
     expect(schemas.flatMap((schema) => schema.tables).some((table) => "columns" in table)).toBe(
       false,
     );
-  });
-
-  it("emits null-safe agent triggers and pending search metadata", async () => {
-    const { files, report } = await generatePostgresSchemas(root);
     expect(JSON.parse(files["manifest.json"]!).pendingCapabilities).toEqual(
       report.pendingCapabilities,
     );
@@ -60,10 +64,6 @@ describe("PostgreSQL schema generation", () => {
     ]) {
       expect(files["agent.postgres.sql"]).toContain(fragment);
     }
-  });
-
-  it("emits promoted agent deletion indexes in both runtime artifacts", async () => {
-    const { files, report } = await generatePostgresSchemas(root);
     for (const name of [
       "idx_agent_session_input_completions_session_key",
       "idx_agent_conversation_deliveries_source_session",
@@ -74,6 +74,54 @@ describe("PostgreSQL schema generation", () => {
       expect(index?.sql).toContain(`CREATE INDEX "${name}"`);
       expect(files["agent.postgres.sql"]).toContain(index?.sql);
       expect(files["agent-runtime.ts"]).toContain(name);
+    }
+    for (const file of Object.keys(files).filter((name) => name.endsWith(".postgres.sql"))) {
+      expect(files[file], file).not.toMatch(/^(?:BEGIN;|COMMIT;|SET |CREATE SCHEMA )/m);
+      expect(files[file], file).not.toContain('"openclaw_state".');
+      expect(files[file], file).not.toContain('"openclaw_agent".');
+    }
+    const workspaceMigration = files["state-v34-v35.postgres.sql"]!;
+    expect(workspaceMigration).toContain(
+      "IF to_regclass('local_workspace_projections') IS NOT NULL",
+    );
+    for (const column of [
+      "tree_root_digest",
+      "source_paths_digest",
+      "canonical_fingerprints",
+      "projection_fingerprints",
+    ]) {
+      expect(workspaceMigration).toContain(`ADD COLUMN "${column}" bytea;`);
+    }
+    expect(workspaceMigration).toContain('CREATE TABLE "local_workspace_tree_packs"');
+    expect(workspaceMigration).toContain('CREATE TABLE "local_workspace_source_path_sets"');
+    expect(workspaceMigration).not.toMatch(/\b(?:UPDATE|INSERT|DELETE|DROP)\b/u);
+    expect((await generatePostgresSchemas(root)).files).toEqual(files);
+    expect(
+      report.catalogs
+        .state!.objects.filter((item) => item.sql === null && item.kind === "index")
+        .map((item) => item.name)
+        .toSorted(),
+    ).toEqual(pendingPromotion.map((item) => item.name).toSorted());
+    for (const fragment of report.fragments) {
+      for (const table of fragment.tables) {
+        expect(files["state.postgres.sql"]).not.toContain(`CREATE TABLE "${table}"`);
+        expect(files[fragment.file]).toContain(`CREATE TABLE "${table}"`);
+      }
+    }
+    const exported = await generatePostgresSchemas(root, "openclaw", { includeJsonReport: true });
+    expect(JSON.parse(exported.files["portability-report.json"]!)).toEqual(report);
+    for (const name of ["state", "agent"]) {
+      for (const item of report.catalogs[name]!.objects) {
+        if (item.sql === null) {
+          expect(item.reason, `${name}: ${item.kind} ${item.table}.${item.name}`).toBeTruthy();
+          expect(files["portability-report.md"]).toContain(`\`${item.table}.${item.name}\``);
+        } else {
+          expect(
+            Object.values(files).join("\n"),
+            `${item.kind} ${item.table}.${item.name}`,
+          ).toContain(item.sql);
+        }
+      }
     }
   });
 
@@ -130,62 +178,6 @@ describe("PostgreSQL schema generation", () => {
         { name: "reused", pk: ["id"], identities: [{ column: "id", autoIncrement: false }] },
       ]);
     });
-  });
-
-  it("renders eager and lazy state DDL inside the connection owner's namespace and transaction", async () => {
-    const { files } = await generatePostgresSchemas(root);
-    for (const file of Object.keys(files).filter((name) => name.endsWith(".postgres.sql"))) {
-      expect(files[file], file).not.toMatch(/^(?:BEGIN;|COMMIT;|SET |CREATE SCHEMA )/m);
-      expect(files[file], file).not.toContain('"openclaw_state".');
-      expect(files[file], file).not.toContain('"openclaw_agent".');
-    }
-    const workspaceMigration = files["state-v34-v35.postgres.sql"]!;
-    expect(workspaceMigration).toContain(
-      "IF to_regclass('local_workspace_projections') IS NOT NULL",
-    );
-    for (const column of [
-      "tree_root_digest",
-      "source_paths_digest",
-      "canonical_fingerprints",
-      "projection_fingerprints",
-    ]) {
-      expect(workspaceMigration).toContain(`ADD COLUMN "${column}" bytea;`);
-    }
-    expect(workspaceMigration).toContain('CREATE TABLE "local_workspace_tree_packs"');
-    expect(workspaceMigration).toContain('CREATE TABLE "local_workspace_source_path_sets"');
-    expect(workspaceMigration).not.toMatch(/\b(?:UPDATE|INSERT|DELETE|DROP)\b/u);
-  });
-
-  it("emits canonical SQL or an omission diagnostic and generates identical bytes twice", async () => {
-    const { files, report } = await generatePostgresSchemas(root);
-    expect((await generatePostgresSchemas(root)).files).toEqual(files);
-    expect(
-      report.catalogs
-        .state!.objects.filter((item) => item.sql === null && item.kind === "index")
-        .map((item) => item.name)
-        .toSorted(),
-    ).toEqual(pendingPromotion.map((item) => item.name).toSorted());
-    for (const fragment of report.fragments) {
-      for (const table of fragment.tables) {
-        expect(files["state.postgres.sql"]).not.toContain(`CREATE TABLE "${table}"`);
-        expect(files[fragment.file]).toContain(`CREATE TABLE "${table}"`);
-      }
-    }
-    const exported = await generatePostgresSchemas(root, "openclaw", { includeJsonReport: true });
-    expect(JSON.parse(exported.files["portability-report.json"]!)).toEqual(report);
-    for (const name of ["state", "agent"]) {
-      for (const item of report.catalogs[name]!.objects) {
-        if (item.sql === null) {
-          expect(item.reason, `${name}: ${item.kind} ${item.table}.${item.name}`).toBeTruthy();
-          expect(files["portability-report.md"]).toContain(`\`${item.table}.${item.name}\``);
-        } else {
-          expect(
-            Object.values(files).join("\n"),
-            `${item.kind} ${item.table}.${item.name}`,
-          ).toContain(item.sql);
-        }
-      }
-    }
   });
 
   it("generates computed fragments after their owner prepares native SQLite capabilities", async () => {
