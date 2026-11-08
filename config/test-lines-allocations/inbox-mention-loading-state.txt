@@ -1,2 +1,2 @@
-# Inbox mention loading-vs-empty regression (20 lines); the remaining 46 reconcile inherited base debt per the ratchet's exact-grant rule.
-66
+# Inbox mention loading-vs-empty regression; the remainder reconciles inherited base debt per the ratchet's exact-grant rule.
+41
