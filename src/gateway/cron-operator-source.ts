@@ -18,7 +18,10 @@ import {
 } from "../shared/operator-scope-compat.js";
 import { isSameOpenClawIdTunnelPrincipal } from "./openclaw-id/tunnel-principal.js";
 import { sourceRolePolicy } from "./operator-role-source-policy.js";
-import { decodeGatewayOperatorRecoverySource } from "./operator-run-recovery-source.codec.js";
+import {
+  hasAutomationAdminDelegation,
+  decodeGatewayOperatorRecoverySource,
+} from "./operator-run-recovery-source.codec.js";
 import type { RestartRecoveryOperatorSource } from "./operator-run-recovery-source.codec.js";
 import { restoreGatewayOperatorSource } from "./operator-run-recovery.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
@@ -225,6 +228,14 @@ export function retainCronControlSource<T extends CronSourceCapture>(params: {
         snapshot: {
           ...fresh.snapshot,
           scopes,
+          ...(fresh.snapshot.sourceIngress !== "principal"
+            ? {
+                automationAdmin:
+                  hasAutomationAdminDelegation(previous.source.snapshot) &&
+                  hasAutomationAdminDelegation(fresh.snapshot) &&
+                  operatorScopeSatisfied("operator.admin", scopes),
+              }
+            : {}),
           controlUiAdmin:
             previous.source.snapshot.controlUiAdmin &&
             fresh.snapshot.controlUiAdmin &&

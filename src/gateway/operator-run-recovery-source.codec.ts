@@ -45,6 +45,8 @@ const handshakeRecoverySnapshotSchema = z.strictObject({
   device: z
     .strictObject({ deviceId: boundedString, key: z.string().regex(/^[a-f0-9]{64}$/) })
     .optional(),
+  // Optional for persisted pre-native-parity sources; browser grants keep their original meaning.
+  automationAdmin: z.boolean().optional(),
   controlUiAdmin: z.boolean(),
   localOperator: z.boolean(),
   sourceIngress: z.enum(["control-ui", "internal"]),
@@ -59,6 +61,7 @@ const principalRecoverySnapshotSchema = handshakeRecoverySnapshotSchema.extend({
   authPolicy: z.undefined().optional(),
   sharedGeneration: z.undefined().optional(),
   device: z.undefined().optional(),
+  automationAdmin: z.undefined().optional(),
   controlUiAdmin: z.literal(false),
   localOperator: z.literal(false),
 });
@@ -146,4 +149,13 @@ export function normalizeGatewayOperatorRecoverySnapshot(
   // reloads; canonicalization belongs here, not in a permissive comparison.
   const parsed = operatorRunRecoverySnapshotSchema.safeParse(JSON.parse(json));
   return parsed.success ? freezeJsonSnapshot(parsed.data) : undefined;
+}
+
+/** Legacy browser sources retain delegation; other historical sources never gain it. */
+export function hasAutomationAdminDelegation(snapshot: OperatorRunRecoverySnapshot): boolean {
+  return (
+    snapshot.sourceIngress !== "principal" &&
+    (snapshot.automationAdmin ?? snapshot.controlUiAdmin) &&
+    snapshot.scopes.includes("operator.admin")
+  );
 }

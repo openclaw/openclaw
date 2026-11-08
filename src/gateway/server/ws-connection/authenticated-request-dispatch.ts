@@ -3,6 +3,7 @@ import { GatewayClientRequestError } from "../../../../packages/gateway-client/s
 import {
   GATEWAY_CLIENT_IDS,
   GATEWAY_CLIENT_MODES,
+  isNativeAppUiClient,
 } from "../../../../packages/gateway-protocol/src/client-info.js";
 import type {
   ConnectParams,
@@ -192,7 +193,10 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
       return false;
     };
     const reconnectDevice =
-      client.internal?.authenticatedControlUi === true && client.isDeviceTokenAuth === true
+      (client.internal?.authenticatedControlUi === true ||
+        (client.internal?.authenticatedOperator === true &&
+          isNativeAppUiClient(client.connect.client))) &&
+      client.isDeviceTokenAuth === true
         ? client.internal.operatorDeviceTokenIdentity
         : undefined;
     const reconnectProfile = client.authenticatedUserProfile?.profileId;
