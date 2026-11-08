@@ -1,5 +1,4 @@
 # Regression coverage for showing an open session as archived during its Undo window:
 # browser flow (banner, kept draft, banner Unarchive cancel, sending state), toast
-# cancellation signal and held-vs-sending state. 55 lines are this change's net growth;
-# 16 reconcile the ratchet base's inherited debt reported by CI on this PR.
-71
+# cancellation signal and held-vs-sending state.
+55
