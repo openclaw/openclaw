@@ -55,3 +55,23 @@ it("keeps day/thread boundaries and replies while budgeting UTF-8 headers and pa
     expect(texts[i].includes(label)).toBe(chunk.parts > 1);
   }
 });
+
+it("caps a cross-day reply preview without cutting an emoji in half", async () => {
+  const out = tempDirs.make("chat-transcript-");
+  const rows = [
+    message("1", "2026-10-01T23:59:00Z", "11", "Ann", "a".repeat(79) + "😀"),
+    message("2", "2026-10-02T00:10:00Z", "12", "Bo", "ack", { reply_to_message_id: "1" }),
+  ];
+  const input = path.join(out, "in.jsonl");
+  await writeFile(input, rows.map((row) => JSON.stringify(row)).join("\n") + "\n");
+  execFileSync(process.execPath, [
+    script,
+    "--input",
+    input,
+    "--output-dir",
+    out,
+    "--channel",
+    "#dev",
+  ]);
+  expect(await readFile(path.join(out, "2026-10-02.txt"), "utf8")).toMatch(/"a{79}"/);
+});
