@@ -307,8 +307,22 @@ export async function createClaudeCliTransport(params: {
   return {
     close,
     waitForExit: async () => {
-      await exited;
-      await Promise.all([child.wait().catch(() => undefined), child.waitForExtinction?.()]);
+      const extinct = Promise.all([
+        child.wait().catch(() => undefined),
+        child.waitForExtinction?.(),
+      ]).then(
+        () => undefined,
+        (cause: unknown) => {
+          throw new Error(
+            "Claude CLI process cleanup could not be confirmed; restart the Gateway before retrying.",
+            { cause },
+          );
+        },
+      );
+      // A lost process owner reports an error and never an exit event, so `exited` alone would
+      // wait forever. Its extinction outcome still settles; a rejection means closure is unconfirmed.
+      await Promise.race([exited, extinct]);
+      await extinct;
       child.dispose();
     },
     send,

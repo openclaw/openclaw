@@ -67,3 +67,41 @@ it("waits for Windows tree extinction before ending stdin", async () => {
     await transport.waitForExit();
   }
 });
+
+it("rejects waitForExit when the process owner is lost and never reports an exit", async () => {
+  const lost = new Error("service child cleanup identity lost: anchor channel closed");
+  // The owner emits an error and rejects its waits, but no exit event ever arrives.
+  const child: ClaudeChild = {
+    supportsRawOutput: true,
+    stdin: { write: (_data, callback) => callback?.(), end: () => {} },
+    onStdout: () => {},
+    onStderr: () => {},
+    onError: () => {},
+    onExit: () => {},
+    consumeStdout: () => new Promise<void>(() => {}),
+    wait: () => Promise.reject(lost),
+    waitForExtinction: () => Promise.reject(lost),
+    kill: () => {},
+    dispose: () => {},
+  };
+  vi.spyOn(cliProcess, "createClaudeCliProcessOwner").mockReturnValue({
+    spawn: async () => child,
+    withDiagnostics: async (error: unknown) => error,
+    [Symbol.dispose]: () => {},
+  });
+  const context = { command: "claude", args: [], cwd: ".", env: {} };
+  const transport = await createClaudeCliTransport({
+    context,
+    args: [],
+    initialize: {},
+    currentContext: () => context,
+    onMessage: async () => {},
+    onRequest: async () => () => ({}),
+    onError: () => {},
+  });
+  transport.close();
+  await expect(transport.waitForExit()).rejects.toMatchObject({
+    message: expect.stringContaining("restart the Gateway"),
+    cause: lost,
+  });
+});
