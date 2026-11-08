@@ -1,6 +1,12 @@
 import "../test-utils/prepare-compiled-subprocesses.js";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, expect, it, onTestFinished, vi } from "vitest";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  nextEventLoopTurn,
+  withinTest,
+} from "../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/io.js";
@@ -12,10 +18,14 @@ import {
   type SessionActorStorageBinding,
 } from "../config/sessions/session-actor-storage-binding.js";
 import type { InternalSessionEntry as SessionEntry } from "../config/sessions/types.js";
+import { loadGatewaySessionEntryReadOnlyInWorker } from "../gateway/session-utils-store-worker.js";
+import { withSessionTurn } from "../sessions/session-controller.admission.js";
 import { waitForCapturedSessionNativeAttemptEnd } from "../sessions/session-controller.native-runtime.js";
 import { readSessionControllerOperationState } from "../sessions/session-controller.state.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
+import { resolveSession } from "./command/session.js";
 import { getEmbeddedRunAttachment } from "./embedded-agent-runner/run-state.js";
+import { createLaneControllerFixture } from "./embedded-agent-runner/run/lane-controller.test-support.js";
 import { claimAgentSessionWriter } from "./embedded-agent-runner/run/session-bootstrap.js";
 import {
   abortAndDrainEmbeddedAgentRun,
@@ -269,3 +279,75 @@ it.each(["settle", "replacement", "incarnation"] as const)(
     await rawSettlement;
   },
 );
+
+it("borrows one Incognito owner across Gateway, command resolution and runner admission", async ({
+  signal,
+}) => {
+  const target = await create("nested-command");
+  const config = configFor();
+  setRuntimeConfigSnapshot(config);
+  const controller = new AbortController();
+  const entered = createDeferred();
+  let invoked = false;
+  let sameOwner = false;
+  // Gateway admission retains the memory target while command preparation resolves the key again.
+  const pending = withMemory(target, async () => {
+    const selected = await loadGatewaySessionEntryReadOnlyInWorker({
+      cfg: config,
+      key: target.sessionKey,
+      agentId: target.agentId,
+    });
+    expect(selected.storePath).toBe(target.storePath);
+    return withSessionTurn({ ...target, storePath: selected.storePath }, async (gatewayOwner) => {
+      const resolved = await resolveSession({ cfg: config, ...target });
+      return withSessionTurn(
+        { ...resolved, agentId: resolved.sessionAgentId, abortSignal: controller.signal },
+        async (commandOwner) => {
+          const runtimeTarget = await resolveAgentRunSessionTarget({
+            config,
+            ...target,
+            sessionTarget: { ...target, storePath: resolved.storePath },
+            missingSessionKey: "create",
+          });
+          const fixture = createLaneControllerFixture(
+            {
+              ...target,
+              sessionTarget: runtimeTarget,
+              sessionFile: target.sessionKey,
+              runId: "nested-command",
+              config,
+              workspaceDir: stateDir,
+              prompt: "synthetic",
+              timeoutMs: 30_000,
+              abortSignal: controller.signal,
+            },
+            { globalLane: "test:incognito-admission" },
+          );
+          const execution = fixture.controller.enqueueSession(async () => {
+            invoked = true;
+            sameOwner =
+              gatewayOwner === commandOwner && fixture.getParams().replyOperation === gatewayOwner;
+          });
+          entered.resolve();
+          return execution;
+        },
+      );
+    });
+  }).then(
+    () => undefined,
+    (error: unknown) => error,
+  );
+  try {
+    await withinTest(
+      awaitGateBeforeSettlement(entered.promise, pending, "runner admission was not reached"),
+      signal,
+    );
+    await nextEventLoopTurn();
+    expect(invoked, "runner queued behind its own Gateway owner").toBe(true);
+    expect(sameOwner).toBe(true);
+    expect(await withinTest(pending, signal)).toBeUndefined();
+  } finally {
+    controller.abort();
+    await pending;
+  }
+});
