@@ -283,6 +283,8 @@ export function observeTranscriptOffset(
       !isTranscriptMaintenanceScroll(owner.state, element)
     ) {
       owner.cancelScroll();
+      // A synchronized offset may have no native event to replace accepted follow policy.
+      owner.onReaderScroll();
     }
     const programmatic = owner.isProgrammaticScroll();
     // The follow threshold releases pane policy before a command's last pixels settle.

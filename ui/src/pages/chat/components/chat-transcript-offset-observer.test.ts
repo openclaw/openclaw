@@ -10,6 +10,7 @@ import {
 import { TranscriptEndAnchor } from "./chat-transcript-end-anchor.ts";
 import { TranscriptLayoutOwner } from "./chat-transcript-layout-owner.ts";
 import {
+  isTranscriptMaintenanceScroll,
   isTranscriptProgrammaticScroll,
   observeTranscriptOffset,
   scrollTranscriptOffset,
@@ -196,6 +197,92 @@ it.each([
   expect(state.nativeInputActive).toBe(true);
   element.dispatchEvent(new Event("scrollend"));
   expect(state.nativeInputActive).toBe(false);
+});
+
+it.each([
+  { name: "restores Latest after preparation loses the reader", maintenance: false },
+  { name: "retains preparation through a clamped maintenance correction", maintenance: true },
+])("$name before a native scroll event", ({ maintenance }) => {
+  const element = document.createElement("div");
+  let scrollHeight = 2200;
+  Object.defineProperties(element, {
+    clientHeight: { value: 200 },
+    scrollHeight: { get: () => scrollHeight },
+  });
+  element.scrollTop = 400;
+  const state = new TranscriptOffsetState();
+  const endAnchor = new TranscriptEndAnchor(() => {});
+  // An accepted end command has published follow policy but has not issued motion.
+  const policy: ChatScrollHost = {
+    renderLifecycle: { afterCommit: () => () => {} },
+    chatScrollElement: () => element,
+    chatLastScrollTop: 400,
+    chatHasAutoScrolled: true,
+    chatUserNearBottom: true,
+    chatFollowLocked: false,
+    chatReadingHistory: false,
+    chatNewMessagesBelow: false,
+    chatIsProgrammaticScroll: () => isTranscriptProgrammaticScroll(state, element),
+    chatIsMaintenanceScroll: () => isTranscriptMaintenanceScroll(state, element),
+  };
+  const onNativeScroll = vi.fn((event: Event) => handleChatScroll(policy, event));
+  const virtualizer = new Virtualizer<HTMLDivElement, HTMLElement>({
+    count: 0,
+    initialOffset: 400,
+    getScrollElement: () => element,
+    estimateSize: () => 40,
+    scrollToFn: (offset) => {
+      element.scrollTop = offset;
+    },
+    observeElementRect: (_, callback) => callback({ width: 800, height: 200 }),
+    observeElementOffset: (instance, callback) =>
+      observeTranscriptOffset(
+        {
+          state,
+          getScrollElement: () => element,
+          endAnchor,
+          prependAnchor: new TranscriptPrependAnchor(new Map(), vi.fn(), () => false),
+          canFollowEnd: () => canAutoFollowChat(policy),
+          isProgrammaticScroll: () => isTranscriptProgrammaticScroll(state, element),
+          cancelScroll: () => {
+            state.scrollCommand = null;
+          },
+          onLayoutCorrection: (before, after) => endAnchor.recordLayoutCorrection(before, after),
+          invalidate: vi.fn(),
+          onOffset: vi.fn(),
+          onReaderScroll: (towardEnd) => handleChatScrollTakeover(policy, towardEnd),
+          onComposerLayout: vi.fn(),
+          onNativeScroll,
+        },
+        instance,
+        callback,
+      ),
+  });
+  const { _didMount: mount, _willUpdate: update } = virtualizer;
+  onTestFinished(mount());
+  update();
+  const command = (state.scrollCommand = { target: "end", behavior: "smooth" } as const);
+  if (maintenance) {
+    // Record a real correction, then model the browser clamping it as content shrinks.
+    element.scrollTop = 2000;
+    state.recordProgrammaticScroll?.(400, 2000, true);
+    scrollHeight = 2000;
+    element.scrollTop = 1800;
+  } else {
+    element.scrollTop = 600;
+  }
+  // ResizeObserver can synchronize this movement without a native scroll event.
+  state.syncNativeOffset?.();
+  expect(virtualizer.scrollOffset).toBe(maintenance ? 1800 : 600);
+  expect(onNativeScroll).not.toHaveBeenCalled();
+  expect(state.scrollCommand).toBe(maintenance ? command : null);
+  expect(policy).toMatchObject({
+    chatFollowLocked: !maintenance,
+    chatReadingHistory: !maintenance,
+    chatUserNearBottom: maintenance,
+    chatNewMessagesBelow: !maintenance,
+  });
+  expect(canAutoFollowChat(policy)).toBe(maintenance);
 });
 
 it.each([
