@@ -455,6 +455,11 @@
     );
   }
 
+  /* Bubble surfaces own their width; wide tables scroll inside that surface. */
+  .chat--bubbles .chat-virtual-row {
+    --chat-table-outset: 0px;
+  }
+
   .chat-virtual-row:has(.chat-group.assistant .chat-bubble > .chat-text > .markdown-table) {
     /* Match the maximum outset: overflow-clip-margin does not support calc(). */
     overflow-clip-margin: 12rem;

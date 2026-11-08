@@ -1,0 +1,2 @@
+# Cover table containment and internal scrolling in desktop, phone landscape, and narrow chat bubbles.
+70
