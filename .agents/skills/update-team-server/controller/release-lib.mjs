@@ -2952,11 +2952,12 @@ function retainedRepairLock() {
 function retainedRepairInput(request, building = false) {
   suspensionObject(
     request,
-    ["version", "operation", "source", "target", "process"],
+    ["version", "operation", "source", "target", "process", ...(Object.hasOwn(request, "configSha256") ? ["configSha256"] : [])],
     "retained preparation request",
   );
   if (
     request.version !== 1 ||
+    (Object.hasOwn(request, "configSha256") && !/^[a-f0-9]{64}$/.test(request.configSha256)) ||
     !/^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/.test(request.operation)
   )
     reject("retained preparation request version or operation is invalid");
@@ -3141,16 +3142,20 @@ function retainedRepairSnapshot(root, rawRequest, expected, building = false, ar
   const retainedSource = archivedSource
     ? { file: archivedSource, record, identity: (({ sha256, ...value }) => value)(request.source) }
     : undefined;
+  const current = selectedConfigProcess(root, record, request.process);
+  const proc = process.env.OPENCLAW_TEAM_PROC_ROOT ?? "/proc";
   const evidence = recoveryEvidence(
     namespace.pathname,
     root,
     undefined,
     "selected",
-    undefined,
+    request.configSha256 === undefined ? undefined : {
+      config: { path: record.protectedPaths[0].path, sha256: request.configSha256 },
+      journalSha256: request.source.sha256, databasePath: record.protectedPaths[1].path,
+      runtimeUid: statSync(join(proc, String(current.pid))).uid, process: current,
+    },
     retainedSource,
   );
-  const current = selectedConfigProcess(root, record, request.process);
-  const proc = process.env.OPENCLAW_TEAM_PROC_ROOT ?? "/proc";
   const boot = readFileSync(join(proc, "sys/kernel/random/boot_id"), "utf8").trim();
   if (!/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(boot))
     reject("retained preparation boot identity is invalid");
@@ -3555,7 +3560,7 @@ function retainedRepairBuild(action, root, input) {
   if (action === "request") {
     suspensionObject(
       input,
-      ["operation", "target", "current", "pid", "generation", "journalSha256"],
+      ["operation", "target", "current", "pid", "generation", "journalSha256", ...(Object.hasOwn(input, "configSha256") ? ["configSha256"] : [])],
       "retained build binding",
     );
     const paths = retainedRepairPaths(root, input.operation);
@@ -3575,6 +3580,7 @@ function retainedRepairBuild(action, root, input) {
         source: source.descriptor,
         target: { sha: input.target },
         process: { pid: input.pid, generation: input.generation },
+        ...(Object.hasOwn(input, "configSha256") ? { configSha256: input.configSha256 } : {}),
       },
       true,
     );
@@ -3780,7 +3786,8 @@ function retainedRepairStatic(root, snapshot, build, record) {
   const legacy = snapshot.evidence.record;
   const owner = migrationOwner();
   if (!isDeepStrictEqual(retainedRepairLock(), snapshot.lock)) reject("repair lock identity changed");
-  for (const descriptor of legacy.protectedPaths)
+  // The prepared config descriptor below owns its bytes and replacement inode.
+  for (const descriptor of legacy.protectedPaths.slice(1))
     if (!isDeepStrictEqual(identity(descriptor.path), descriptor)) reject("repair protected inode changed");
   const configEntry = lstatSync(snapshot.config.path);
   if (!isDeepStrictEqual(migrationFile(snapshot.config.path, configEntry.uid,
@@ -3988,6 +3995,77 @@ function retainedRepairEntry(action, root, operation, hash) {
   return retainedRepairTransaction(action, root, file.descriptor);
 }
 
+function retainedRepairRetire(root, operation, hash) {
+  if (!/^[a-f0-9]{64}$/.test(hash)) reject("repair retirement requires the completed journal SHA256");
+  const paths = retainedRepairPaths(root, operation), lock = retainedRepairLock();
+  const archive = join(paths.directory, `retired-repair-${operation}`);
+  const archivedJournal = join(archive, "activation.json"), intentPath = join(archive, "intent.json");
+  const moved = lstatSync(archivedJournal, { throwIfNoEntry: false });
+  if (moved && lstatSync(paths.pathname, { throwIfNoEntry: false }))
+    reject("repair retirement refuses a new canonical journal");
+  const source = retainedRepairRead(moved ? archivedJournal : paths.pathname);
+  const record = validRetainedRepairJournal(migrationJson(source.bytes));
+  if (record.operation !== operation || record.phase !== "REPAIR_COMPLETED" || source.descriptor.sha256 !== hash)
+    reject("repair retirement requires the exact completed operation and journal");
+  let intent;
+  if (moved) {
+    intent = migrationJson(retainedRepairRead(intentPath).bytes);
+    if (intent.version !== 1 || intent.kind !== "retained-repair-retirement" || intent.operation !== operation ||
+        !isDeepStrictEqual(source.descriptor, { ...intent.journal, path: archivedJournal }))
+      reject("repair retirement archive differs from its intent");
+  } else {
+    const context = retainedRepairLifecycleContext(root, { journal: source.descriptor });
+    const acceptance = record.lifecycle.verified.acceptance;
+    if (!isDeepStrictEqual(record.lifecycle.completed.acceptance, acceptance) ||
+        acceptance.path !== `${paths.prefix}.acceptance-receipt.json`)
+      reject("repair retirement acceptance differs from completed activation");
+    // Verification already owns semantic acceptance. Consume its immutable receipt,
+    // without dispatching another marker or reinterpreting mutable session history.
+    retainedRepairBoundFile(acceptance);
+    const owner = retainedRepairNative(root, context, "live-c");
+    const target = context.snapshot.request.target.sha, pointers = record.lifecycle.selected;
+    if (pointers.current.sha !== target || owner.process.release !== join(root, "releases", target))
+      reject("repair retirement target differs from accepted activation");
+    if (!lstatSync(archive, { throwIfNoEntry: false })) {
+      mkdirSync(archive, { mode: 0o700 }); syncPath(paths.directory);
+    }
+    exactDirectory(archive, paths.owner, "repair retirement archive", { privateOnly: true });
+    // Preserve absolute-path/inode bindings in existing receipts. Archive copies
+    // are a closed evidence bundle; original immutable artifacts remain retained.
+    const artifacts = readdirSync(paths.directory).filter(name => name.startsWith(basename(paths.prefix) + ".")).sort().map(name => {
+      const file = retainedRepairRead(join(paths.directory, name));
+      return { source: file.descriptor, archived: retainedRepairFile(join(archive, name), file.bytes) };
+    });
+    const entry = lstatSync(archive);
+    intent = { version: 1, kind: "retained-repair-retirement", operation, journal: source.descriptor,
+      target, owner, pointers, acceptance, lock, archive: { path: archive, device: entry.dev, inode: entry.ino }, artifacts };
+    retainedRepairFile(intentPath, Buffer.from(JSON.stringify(intent) + "\n"));
+  }
+  const entry = exactDirectory(archive, paths.owner, "repair retirement archive", { privateOnly: true });
+  if (!isDeepStrictEqual(intent.archive, { path: archive, device: entry.dev, inode: entry.ino }) ||
+      !isDeepStrictEqual(intent.lock, lock)) reject("repair retirement archive or lock identity changed");
+  retainedRepairBoundFile(intent.acceptance);
+  for (const artifact of intent.artifacts) retainedRepairBoundFile(artifact.archived);
+  const { bootId, cgroup, ...binding } = intent.owner.process;
+  if (!isDeepStrictEqual(retainedRepairObserveLive(root, binding), intent.owner))
+    reject("repair retirement accepted native generation changed");
+  for (const name of ["current", "previous"])
+    if (!isDeepStrictEqual(retainedRepairPointer(root, name), intent.pointers[name]))
+      reject("repair retirement accepted pointers changed");
+  if (!isDeepStrictEqual(retainedRepairLock(), intent.lock)) reject("repair retirement lock identity changed");
+  if (!moved) {
+    if (!isDeepStrictEqual(retainedRepairRead(paths.pathname).descriptor, intent.journal))
+      reject("repair retirement journal changed before archival");
+    renameSync(paths.pathname, archivedJournal);
+  }
+  // Slot release is the sole rename, after the whole bundle and intent are durable.
+  // Replay after that rename finishes both directory fsyncs and publishes the receipt.
+  syncPath(archive); syncPath(paths.directory);
+  const receipt = { ...intent, archivedJournal: { ...intent.journal, path: archivedJournal } };
+  retainedRepairFile(join(archive, "retirement.json"), Buffer.from(JSON.stringify(receipt) + "\n"));
+  return receipt;
+}
+
 function retainedRepairEvent(context, name, create, validate) {
   const pathname = `${context.paths.prefix}.lifecycle-${name}.json`;
   if (lstatSync(pathname, { throwIfNoEntry: false })) {
@@ -4137,7 +4215,10 @@ function retainedRepairLifecycle(action, root, input) {
     if (action === "observe-failure") return { journal: source.descriptor, observation, phase: record.phase };
   }
   const context = retainedRepairLifecycleContext(root, input), { record, paths, snapshot } = context;
-  if (action === "inspect") return { ...context, snapshot, receipt: context.receipt };
+  if (action === "inspect") {
+    const { sha256, ...configIdentity } = snapshot.config;
+    return { ...context, protectedPaths: [configIdentity, ...snapshot.evidence.record.protectedPaths.slice(1)] };
+  }
   if (["REPAIR_FAILED", "REPAIR_COMPLETED"].includes(record.phase)) reject("repair is terminal and cannot be retried");
   const observedB = () => retainedRepairNative(root, context, "live-b");
   const stopped = () => { const value = retainedRepairNative(root, context, "stopped"); retainedRepairWriters(context); return value; };
@@ -4327,7 +4408,7 @@ function recoveryEvidence(pathname, root, expected, position = "observed", confi
         !isDeepStrictEqual(record.predecessor.schemaVersions, record.candidate.schemaVersions)))
       reject("prepared config reconciliation requires a live same-schema predecessor without a runtime change");
     const owner = integer(process.env.OPENCLAW_TEAM_ROOT_UID ?? "0", "journal owner");
-    const journal = migrationFile(pathname, owner, { mode: 0o600 });
+    const journal = migrationFile(retainedSource?.file.path ?? pathname, owner, { mode: 0o600 });
     if (journal.descriptor.sha256 !== reconciliation.journalSha256 ||
         !isDeepStrictEqual(migrationJson(journal.bytes), record))
       reject("config reconciliation journal bytes changed");
@@ -4462,9 +4543,9 @@ function recoveryEvidence(pathname, root, expected, position = "observed", confi
     const config = migrationFile(descriptor.path, uid, { mode: 0o600, group: gid });
     if (!isDeepStrictEqual(config.descriptor, descriptor))
       reject("reconciled config changed during recovery validation; evidence retained");
-    const journal = migrationFile(pathname, owner, { mode: 0o600 });
-    const { sha256, ...journalIdentity } = journal.descriptor;
-    if (sha256 !== snapshot.configReconciliation.journalSha256 || !isDeepStrictEqual(journalIdentity, snapshot.identity))
+    const journal = migrationFile(retainedSource?.file.path ?? pathname, owner, { mode: 0o600 });
+    if (!isDeepStrictEqual(journal.descriptor, retainedSource?.file ??
+        { ...snapshot.identity, sha256: snapshot.configReconciliation.journalSha256 }))
       reject("reconciliation journal changed during recovery validation; evidence retained");
     if (selected) selectedConfigProcess(root, record, snapshot.configReconciliation.process);
   }
@@ -6051,7 +6132,7 @@ function retainedRepairClaimEvidence(root, record) {
   const config=lstatSync(snapshot.config.path);
   if(!isDeepStrictEqual(migrationFile(snapshot.config.path,config.uid,{mode:0o600,group:config.gid}).descriptor,snapshot.config))
     reject("repair claim config changed");
-  for(const path of snapshot.evidence.record.protectedPaths)
+  for(const path of snapshot.evidence.record.protectedPaths.slice(1))
     if(!isDeepStrictEqual(identity(path.path),path)) reject("repair claim protected store changed");
   if(!isDeepStrictEqual(validateFrozenRelease(join(root,"releases",snapshot.request.target.sha),snapshot.request.target.sha,
       snapshot.request.target.manifestSha256,migrationOwner()),snapshot.target)) reject("repair claim target changed");
@@ -7854,6 +7935,10 @@ try {
     case "retained-repair-entry":
       if (args.length !== 4) reject("usage: retained-repair-entry begin|resume ROOT OPERATION HASH");
       result = JSON.stringify(retainedRepairEntry(...args));
+      break;
+    case "retained-repair-retire":
+      if (args.length !== 3) reject("usage: retained-repair-retire ROOT OPERATION COMPLETED_JOURNAL_SHA256");
+      result = JSON.stringify(retainedRepairRetire(...args));
       break;
     case "retained-repair-lifecycle":
       if (args.length !== 3) reject("usage: retained-repair-lifecycle ACTION ROOT INPUT");

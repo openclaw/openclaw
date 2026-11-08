@@ -4,14 +4,12 @@ import { createHash } from "node:crypto";
 import { once } from "node:events";
 import {
   chmodSync,
-  closeSync,
   constants as fsConstants,
   cpSync,
   existsSync,
   lstatSync,
   mkdirSync,
   mkdtempSync,
-  openSync,
   readdirSync,
   readFileSync,
   readlinkSync,
@@ -50,8 +48,12 @@ import {
   copyPrWrapperSources,
   copyPrRoutingWrapperSources,
   createSettledPrCacheEntry,
+  prDirectoryIdentity as identity,
+  runWithPrAnchor,
   prCacheEntries,
   readPrCacheState,
+  readPrCacheRows,
+  sealPrDependencyPlan,
   delegatingGitFixture,
   linkPrWrapperDependencies,
 } from "./pr-wrapper.test-support.js";
@@ -391,6 +393,21 @@ function resolveCommand(command: string): string {
   throw new Error(`command not found in test PATH: ${command}`);
 }
 
+function useOfficialOrigin(fixture: ReturnType<typeof makeMismatchedWrapperRepo>) {
+  fixture.git(fixture.canonical, [
+    "config",
+    "--add",
+    "url." + join(fixture.root, "origin.git") + ".insteadOf",
+    "https://github.com/openclaw/openclaw.git",
+  ]);
+  fixture.git(fixture.canonical, [
+    "remote",
+    "set-url",
+    "origin",
+    "https://github.com/openclaw/openclaw.git",
+  ]);
+}
+
 function seedReadyReview(fixture: ReturnType<typeof makeMismatchedWrapperRepo>) {
   const reviewRoot = join(fixture.canonical, ".worktrees", "pr-123");
   fixture.git(fixture.canonical, [
@@ -460,18 +477,7 @@ describe("scripts/pr wrappers", () => {
     );
     fixture.commit(["scripts/pr", "scripts/pr-lib/review.sh", "recovery-tracked.txt"], true);
     const oldSource = fixture.gitText(["rev-parse", "HEAD"]);
-    fixture.git(fixture.canonical, [
-      "config",
-      "--add",
-      "url." + origin + ".insteadOf",
-      "https://github.com/openclaw/openclaw.git",
-    ]);
-    fixture.git(fixture.canonical, [
-      "remote",
-      "set-url",
-      "origin",
-      "https://github.com/openclaw/openclaw.git",
-    ]);
+    useOfficialOrigin(fixture);
     const worktree = join(fixture.canonical, ".worktrees/pr-123");
     fixture.git(fixture.canonical, ["worktree", "add", "-b", "temp/pr-123", worktree, oldSource]);
     const run = () => runWrapper(fixture, ["review-guard", "123"], "canonical");
@@ -782,9 +788,7 @@ exit "$status"
       '#!/bin/sh\nPATH="$OPENCLAW_TEST_BACKEND_PATH" exec "$OPENCLAW_TEST_GIT" "$@"\n',
     );
 
-    const result = spawnSync(join(fixture.canonical, "scripts", "pr"), ["ls"], {
-      cwd: fixture.canonical,
-      encoding: "utf8",
+    const result = runWrapper(fixture, ["ls"], "canonical", {
       env: {
         ...fixture.env,
         PATH: fixture.bin,
@@ -1044,12 +1048,6 @@ exit "$status"
     db.prepare("UPDATE owner SET cache_dev = ?, db_dev = ?").run(oldDevice, oldDevice);
     const owner = db.prepare("SELECT * FROM owner").all();
     db.close();
-    const identity = (path: string) => {
-      const stat = lstatSync(path, { bigint: true });
-      return Object.fromEntries(
-        (["dev", "ino", "uid", "mode"] as const).map((key) => [key, String(stat[key])]),
-      );
-    };
     const plan = JSON.stringify({
       version: 1,
       cache,
@@ -1057,14 +1055,9 @@ exit "$status"
       before: { owner, installations: [], holds: [] },
       physical: { cache: identity(cache), database: identity(database), installations: [] },
     });
-    const path = join(fixture.root, "plan.json");
-    writeFileSync(path, plan);
     const args = [
       "dependency-cache-recover",
-      path,
-      "--plan-sha256",
-      createHash("sha256").update(plan).digest("hex"),
-      "--confirmed-operator-recovery",
+      ...sealPrDependencyPlan(fixture.root, plan, "--confirmed-operator-recovery"),
     ];
     const untouched = readFileSync(database);
     for (const origin of [
@@ -1072,29 +1065,24 @@ exit "$status"
       "https://github.com/fixture/repo.git",
     ]) {
       fixture.git(fixture.canonical, ["remote", "set-url", "origin", origin]);
-      const rejected = runWrapper(fixture, args, "canonical");
-      expect(rejected.status).not.toBe(0);
-      expect(rejected.stderr).toContain("requires the official OpenClaw repository origin");
-      expect(readFileSync(database)).toEqual(untouched);
-      expect(existsSync(join(cache, ".metadata-lock"))).toBe(false);
+      for (const command of [args, ["dependency-hold-release", "--dry-run"]]) {
+        const rejected = runWrapper(fixture, command, "canonical");
+        expect(rejected.status).not.toBe(0);
+        expect(rejected.stderr).toContain("requires the official OpenClaw repository origin");
+        expect(readFileSync(database)).toEqual(untouched);
+        expect(existsSync(join(cache, ".metadata-lock"))).toBe(false);
+      }
     }
     // Use the existing official-origin fixture transport without reaching the
     // network; production admission still checks the configured official URL.
-    fixture.git(fixture.canonical, [
-      "config",
-      "--add",
-      "url." + join(fixture.root, "origin.git") + ".insteadOf",
-      "https://github.com/openclaw/openclaw.git",
-    ]);
-    fixture.git(fixture.canonical, [
-      "remote",
-      "set-url",
-      "origin",
-      "https://github.com/openclaw/openclaw.git",
-    ]);
+    useOfficialOrigin(fixture);
     const recovered = runWrapper(fixture, args, "canonical");
     expect(recovered.status, recovered.stderr).toBe(0);
     expect(JSON.parse(recovered.stdout).state).toBe("recovered");
+    const released = runWrapper(fixture, ["dependency-hold-release", "--dry-run"], "canonical");
+    expect(released.status, released.stderr).toBe(0);
+    expect(JSON.parse(released.stdout)).toEqual({ version: 1, cache, anchors: [], blocked: [] });
+    expect(readdirSync(cache)).toEqual(["lifetime.sqlite"]);
     expect(existsSync(join(fixture.canonical, "node_modules"))).toBe(false);
 
     const helper = "scripts/pr-lib/cache-lifetime.mjs";
@@ -1170,20 +1158,8 @@ exit "$status"
         String(lstatSync(cache).mode),
       );
     }
-    const before = {
-      owner: db.prepare("SELECT * FROM owner ORDER BY id").all(),
-      installations: db.prepare("SELECT * FROM installations ORDER BY key").all(),
-      holds: db
-        .prepare("SELECT * FROM holds ORDER BY entry_key, anchor_path, anchor_dev, anchor_ino")
-        .all(),
-    };
+    const before = readPrCacheRows(db);
     db.close();
-    const identity = (path: string) => {
-      const stat = lstatSync(path, { bigint: true });
-      return Object.fromEntries(
-        (["dev", "ino", "uid", "mode"] as const).map((name) => [name, String(stat[name])]),
-      );
-    };
     const plan = JSON.stringify({
       version: 1,
       cache,
@@ -1195,20 +1171,8 @@ exit "$status"
         installations: [{ key, ...identity(join(cache, key)) }],
       },
     });
-    const path = join(fixture.root, "plan.json");
-    writeFileSync(path, plan);
-    fixture.git(fixture.canonical, [
-      "config",
-      "--add",
-      "url." + join(fixture.root, "origin.git") + ".insteadOf",
-      "https://github.com/openclaw/openclaw.git",
-    ]);
-    fixture.git(fixture.canonical, [
-      "remote",
-      "set-url",
-      "origin",
-      "https://github.com/openclaw/openclaw.git",
-    ]);
+    const args = sealPrDependencyPlan(fixture.root, plan, "--confirmed-operator-recovery");
+    useOfficialOrigin(fixture);
     parkCanonicalOffAnchor(fixture);
     // Spill dirty pages, then crash only this fixture's writer. Opening this
     // ledger normally would roll it back before checking the stale owner row.
@@ -1240,26 +1204,13 @@ process.kill(process.pid, "SIGKILL");
     cpSync(database, probe);
     cpSync(journal, probe + "-journal");
     const rolledBack = new DatabaseSync(probe);
-    expect(rolledBack.prepare("SELECT * FROM owner ORDER BY id").all()).toEqual(before.owner);
-    expect(
-      rolledBack
-        .prepare("SELECT * FROM holds ORDER BY entry_key, anchor_path, anchor_dev, anchor_ino")
-        .all(),
-    ).toEqual(before.holds);
+    const rows = readPrCacheRows(rolledBack);
+    expect(rows.owner).toEqual(before.owner);
+    expect(rows.holds).toEqual(before.holds);
     rolledBack.close();
     expect(existsSync(probe + "-journal")).toBe(false);
     expect(readFileSync(probe)).not.toEqual(databaseBytes);
-    const result = runWrapper(
-      fixture,
-      [
-        "dependency-cache-recover",
-        path,
-        "--plan-sha256",
-        createHash("sha256").update(plan).digest("hex"),
-        "--confirmed-operator-recovery",
-      ],
-      "linked",
-    );
+    const result = runWrapper(fixture, ["dependency-cache-recover", ...args], "linked");
     expect(result.status).not.toBe(0);
     expect(result.stderr).toContain("running wrapper code materialized from");
     expect(result.stderr).toContain("journal-free ledger");
@@ -1818,20 +1769,12 @@ exec "$OPENCLAW_TEST_NODE" "$OPENCLAW_TEST_FAULT_HELPER" git "$@"
         packages[name] = target;
       }
     }
-    const identity = (path: string) => {
-      const stat = lstatSync(path, { bigint: true });
-      return Object.fromEntries(
-        ["dev", "ino", "uid", "gid", "mode"].map((key) => [
-          key,
-          String(stat[key as keyof typeof stat]),
-        ]),
-      );
-    };
+    const recoveryIdentity = (path: string) => identity(path, ["dev", "ino", "uid", "gid", "mode"]);
     const projection = (directory: string) => {
       const entries: Record<string, Record<string, string>> = {};
       const visit = (name: string) => {
         const path = join(directory, name);
-        entries[name] = identity(path);
+        entries[name] = recoveryIdentity(path);
         if (lstatSync(path).isSymbolicLink()) {
           entries[name].target = readlinkSync(path);
         } else {
@@ -1856,14 +1799,14 @@ exec "$OPENCLAW_TEST_NODE" "$OPENCLAW_TEST_FAULT_HELPER" git "$@"
       runtime: JSON.parse(runtime.stdout),
       anchor: {
         path: anchor,
-        identity: identity(anchor),
-        parentIdentity: identity(fixture.root),
+        identity: recoveryIdentity(anchor),
+        parentIdentity: recoveryIdentity(fixture.root),
         projection: projection(modules),
       },
       donor: {
         path: donor,
-        identity: identity(donor),
-        parentIdentity: identity(fixture.root),
+        identity: recoveryIdentity(donor),
+        parentIdentity: recoveryIdentity(fixture.root),
         modulesSha256: hash(join(donorModules, ".modules.yaml")),
         installLockSha256: hash(join(store, "lock.yaml")),
         packages,
@@ -1896,7 +1839,7 @@ exec "$OPENCLAW_TEST_NODE" "$OPENCLAW_TEST_FAULT_HELPER" git "$@"
       run,
       validate,
       projection,
-      identity,
+      identity: recoveryIdentity,
       helper,
       frozenHelper,
     };
@@ -2156,7 +2099,7 @@ if (process.env.PR_TEST_INSTALL_GATE) {
   }
 
   itPosix(
-    "keeps a live package reader after its bootstrap creator exits and newer installs collect",
+    "keeps a live package reader after its creator exits, then releases its finished hold",
     async ({ signal }) => {
       const fixture = makeFrozenDependencyFixture();
       const env = { ...fixture.env, OPENCLAW_PR_GIT: resolveCommand("git") };
@@ -2217,25 +2160,38 @@ while (readSync(0, command, 0, 1, null) > 0) {
 }
 closeSync(fd);
 `;
-      const first = prepare(0);
-      const creator = spawn(
-        node,
-        [
+      const creatorArgs = (index: number, retain: string) => {
+        const { archive, revision } = prepare(index);
+        return [
           "--input-type=module",
           "-e",
           creatorSource,
           fixture.root,
-          first.archive,
-          first.revision,
-          "yes",
+          archive,
+          revision,
+          retain,
           ANCHOR_PREFIX,
-        ],
-        {
-          cwd: fixture.canonical,
+        ];
+      };
+      const materialize = (index: number) => {
+        const result = runCommand(node, creatorArgs(index, "no"), env, fixture.canonical);
+        expect(result.status, result.stderr).toBe(0);
+        return JSON.parse(result.stdout);
+      };
+      const release = (args: string[]) => {
+        const result = runCommand(
+          node,
+          [join(process.cwd(), "scripts/pr-lib/dependency-hold-release.mjs"), ...args],
           env,
-          stdio: ["ignore", "pipe", "pipe", "pipe"],
-        },
-      );
+        );
+        expect(result.status, result.stderr).toBe(0);
+        return result.stdout;
+      };
+      const creator = spawn(node, creatorArgs(0, "yes"), {
+        cwd: fixture.canonical,
+        env,
+        stdio: ["ignore", "pipe", "pipe", "pipe"],
+      });
       const exited = once(creator, "exit");
       const closed = once(creator, "close");
       const control = creator.stdio[3];
@@ -2277,27 +2233,7 @@ closeSync(fd);
         const original = readScript(reader.path);
         const pressureEntries = new Set<string>();
         for (let index = 1; index <= 5; index++) {
-          const next = prepare(index);
-          const result = spawnSync(
-            node,
-            [
-              "--input-type=module",
-              "-e",
-              creatorSource,
-              fixture.root,
-              next.archive,
-              next.revision,
-              "no",
-              ANCHOR_PREFIX,
-            ],
-            {
-              cwd: fixture.canonical,
-              env,
-              encoding: "utf8",
-            },
-          );
-          expect(result.status, result.stderr).toBe(0);
-          const retired = JSON.parse(result.stdout);
+          const retired = materialize(index);
           expect(existsSync(retired.anchor)).toBe(false);
           expect(existsSync(retired.installation)).toBe(true);
           expect(readPrCacheState(retired.installation)).toEqual({
@@ -2321,8 +2257,37 @@ closeSync(fd);
             signal,
           ),
         ).toBe(original);
-      } finally {
+        const anchor = realpathSync(dirname(dirname(dirname(reader.path))));
+        const packagePath = realpathSync(reader.path);
+        const live = JSON.parse(release(["--dry-run"]));
+        expect(live.blocked).toMatchObject([
+          { path: anchor, blockers: ["process-references"], evidence: { creator: "gone" } },
+        ]);
+        const key = live.blocked[0].holds[0].key;
+        const installation = join(live.cache, key);
         control.end("q");
+        await withinTest(closed, signal);
+        const bytes = release(["--dry-run"]);
+        const plan = JSON.parse(bytes);
+        expect(plan.anchors).toMatchObject([{ path: anchor }]);
+        expect(plan.blocked).toEqual([]);
+        const args = sealPrDependencyPlan(fixture.root, bytes);
+        expect(JSON.parse(release(args))).toMatchObject({ state: "released", settled: [key] });
+        expect(existsSync(anchor)).toBe(false);
+        expect(existsSync(installation)).toBe(true);
+        expect(readScript(packagePath)).toBe(original);
+        expect(readPrCacheState(installation)).toEqual({
+          registered: true,
+          settled: true,
+          anchors: [],
+        });
+        expect(JSON.parse(release(args)).state).toBe("already-released");
+        materialize(6);
+        expect(existsSync(installation)).toBe(false);
+      } finally {
+        if (!control.writableEnded) {
+          control.end("q");
+        }
         await closed;
       }
     },
@@ -2414,30 +2379,14 @@ closeSync(fd);
       fixture.git(fixture.canonical, ["fetch", "origin", "main"]);
 
       const createdRun = (anchor: string, args: string[], input?: string) => {
-        const fd = openSync(anchor, "r");
-        try {
-          return spawnSync(node, args, {
-            cwd: fixture.canonical,
-            env: guard.env,
-            encoding: "utf8",
-            input,
-            stdio: [
-              "pipe",
-              "pipe",
-              "pipe",
-              "ignore",
-              "ignore",
-              "ignore",
-              "ignore",
-              "ignore",
-              "ignore",
-              fd,
-            ],
-          });
-        } finally {
-          closeSync(fd);
-        }
+        return runWithPrAnchor(anchor, args, {
+          cwd: fixture.canonical,
+          env: guard.env,
+          input,
+          runtime: node,
+        });
       };
+
       const materialize = (revision: string) => {
         const anchor = realpathSync(
           mkdtempSync(join(fixture.root, `openclaw-pr-anchor-v3.${process.pid}.`)),
