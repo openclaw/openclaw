@@ -354,16 +354,18 @@ export function retainPreparedSessionEntryPredicate(params: {
   sessionKey: string;
   entry: SessionEntry | undefined;
   matches: (before: SessionEntry | undefined, after: SessionEntry | undefined) => boolean;
+  acquiring?: boolean;
 }) {
+  const { acquiring, ...retention } = params;
   const predicate: PreparedSessionEntryPredicate = {
     entry: params.entry,
-    matches: (entry) => params.matches(params.entry, entry),
-    state: "current",
+    matches: (entry) => params.matches(acquiring ? predicate.entry : params.entry, entry),
+    state: acquiring ? "acquiring" : "current",
     revision: 0,
     pending: new Set(),
   };
   const retained = retainPreparedSessionSharingFacts({
-    ...params,
+    ...retention,
     predicate,
     membership: new Set(),
   });
@@ -379,7 +381,14 @@ export function retainPreparedSessionEntryPredicate(params: {
     canRefresh,
     captureRevision: () => predicate.revision,
     acknowledge: (entry: SessionEntry | undefined, revision: number) => {
-      if (!canRefresh() || retained.hasPendingPublication() || revision !== predicate.revision) {
+      if (predicate.state === "acquiring" && predicate.revision === 0) {
+        predicate.entry = entry;
+      }
+      if (
+        !canRefresh() ||
+        retained.hasPendingPublication() ||
+        (revision !== predicate.revision && predicate.state !== "acquiring")
+      ) {
         return false;
       }
       if (!predicate.matches(entry)) {

@@ -1,0 +1,2 @@
+# Preserve metadata acquisition and policy/lifecycle/source-loss/receipt regression coverage from main #174988.
+108
