@@ -78,7 +78,7 @@ suite.define(() => {
             ),
           { gatewayUrl: controlUiBundledGatewayUrl(suite.server.baseUrl) },
         );
-        await installMockGateway(page, {
+        const gateway = await installMockGateway(page, {
           sessionKey: key,
           hasMultipleSessionSharingIdentities: true,
           presenceUsers: [
@@ -112,7 +112,28 @@ suite.define(() => {
         expect(
           Math.abs((await left(".page-subtitle")) - (await left(".activity-mode-tabs"))),
         ).toBeLessThanOrEqual(8);
+        const toolbar = activity.locator(".activity-feed__toolbar");
+        const time = toolbar.locator(".activity-feed__time-filter");
+        const search = toolbar.locator(".activity-feed__search");
         const people = activity.locator(".activity-feed__people-trigger");
+        const [toolbarBox, tabsBox, timeBox, searchBox, peopleBox] = await Promise.all([
+          toolbar.boundingBox(),
+          toolbar.locator(".activity-mode-tabs").boundingBox(),
+          time.boundingBox(),
+          search.boundingBox(),
+          people.boundingBox(),
+        ]);
+        if (!toolbarBox || !tabsBox || !timeBox || !searchBox || !peopleBox) {
+          throw new Error("Activity toolbar controls must be visible");
+        }
+        expect(Math.abs(tabsBox.x - toolbarBox.x)).toBeLessThan(2);
+        expect(timeBox.x).toBeGreaterThan(toolbarBox.x + toolbarBox.width / 2);
+        expect(tabsBox.x + tabsBox.width).toBeLessThanOrEqual(timeBox.x);
+        expect(timeBox.x + timeBox.width).toBeLessThanOrEqual(searchBox.x);
+        expect(searchBox.x + searchBox.width).toBeLessThanOrEqual(peopleBox.x);
+        expect(
+          Math.abs(peopleBox.x + peopleBox.width - toolbarBox.x - toolbarBox.width),
+        ).toBeLessThan(2);
         await people.click();
         const paint = await readThemedPopupPaint(
           activity.locator(".activity-feed__people-popover:popover-open"),
@@ -148,28 +169,56 @@ suite.define(() => {
         const attribution = activity.locator(".activity-feed__device-attribution");
         await expectCount(attribution.locator("svg")).toBe(1);
         await expect.poll(async () => (await attribution.boundingBox())?.width).toBe(16);
+        await search.getByRole("button").click();
+        const query = search.getByRole("searchbox");
+        await query.fill("release");
+        await waitForControlUiRoute(page, {
+          pathname: `/activity/${alice.id}`,
+          routeId: "activity",
+          search: "?q=release",
+        });
+        const month = time.getByRole("button", { name: "Last 30 days", exact: true });
+        await month.click();
+        await waitForControlUiRoute(page, {
+          pathname: `/activity/${alice.id}`,
+          routeId: "activity",
+          search: "?time=30d&q=release",
+        });
+        await expectAttribute(month, "aria-pressed").toBe("true");
+        expect(await query.inputValue()).toBe("release");
+        await gateway.waitForRequest("sessions.list", {
+          match: { includeActivitySummary: true, involvingProfileId: alice.id, search: "release" },
+        });
+        await time.getByRole("button", { name: "Last 7 days", exact: true }).click();
+        await waitForControlUiRoute(page, { routeId: "activity", search: "?q=release" });
+        await search.getByRole("button", { name: "Close", exact: true }).click();
+        await waitForControlUiRoute(page, { routeId: "activity", search: "" });
         await activity.locator(".activity-feed__people-clear").click();
         await waitForControlUiRoute(page, { pathname: "/activity", routeId: "activity" });
         await group.waitFor();
         await page.setViewportSize({ height: 844, width: 390 });
-        const time = activity.locator(".activity-feed__time-filter");
+        await time.waitFor();
         const buttonTops = await time
           .locator(".settings-segmented__btn")
           .evaluateAll((buttons) =>
             buttons.map((button) => Math.round(button.getBoundingClientRect().top)),
           );
+        expect(buttonTops).toHaveLength(4);
         expect(new Set(buttonTops)).toHaveLength(1);
         await expect
           .poll(async () => {
-            const [searchBox, peopleBox] = await Promise.all([
+            const [phoneSearchBox, phonePeopleBox] = await Promise.all([
               activity.locator(".activity-feed__search").boundingBox(),
               activity.locator(".activity-feed__people-control").boundingBox(),
             ]);
-            return searchBox && peopleBox
-              ? Math.abs(searchBox.y - peopleBox.y)
+            return phoneSearchBox && phonePeopleBox
+              ? Math.abs(phoneSearchBox.y - phonePeopleBox.y)
               : Number.POSITIVE_INFINITY;
           })
           .toBeLessThan(2);
+        expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(
+          true,
+        );
         // The row reads title, one meta line, then Inspect run closing the recap.
         await expectText(liveRow.locator(".activity-feed__session-meta")).toContain("Alice Chen");
         const phoneInspect = feed.locator(
@@ -178,7 +227,7 @@ suite.define(() => {
         expect(await phoneInspect.getAttribute("href")).toBe(
           "/activity?view=run&run=mock%20run%3Aa%2Fb",
         );
-        // The person filter is one icon button that reports the active choice on itself.
+        // The person filter keeps its active trigger and removable chip on phones.
         await people.click();
         await page.locator(`[data-activity-person="${alice.id}"]`).click();
         await waitForControlUiRoute(page, {
@@ -188,7 +237,7 @@ suite.define(() => {
         await expect
           .poll(() => people.evaluate((el) => el.classList.contains("active")))
           .toBe(true);
-        expect(await activity.locator(".activity-feed__people-clear").count()).toBe(0);
+        await activity.locator(".activity-feed__people-clear").waitFor();
         await people.click();
         await page.locator('[data-activity-person=""]').click();
         await waitForControlUiRoute(page, { pathname: "/activity", routeId: "activity" });
@@ -206,7 +255,7 @@ suite.define(() => {
       },
     ));
 
-  it("folds Live activity controls into the filter popover and actions menu on phones", () =>
+  it("keeps Live status filters and actions usable in the phone toolbar", () =>
     suite.withPage(
       { locale: "en-US", serviceWorkers: "block", viewport: { height: 844, width: 390 } },
       async ({ page }) => {
@@ -229,40 +278,50 @@ suite.define(() => {
         await waitForControlUiRoute(page, { pathname: "/activity", routeId: "activity" });
         const activity = page.locator("openclaw-activity-page");
         await activity.locator(".activity-current-work__row").waitFor();
-        for (const [id, isError] of [
-          ["call-one", false],
-          ["call-two", true],
+        for (const [id, name, isError] of [
+          ["call-one", "read", false],
+          ["call-two", "exec", true],
         ] as const) {
           await gateway.emitGatewayEvent("session.tool", {
             stream: "tool",
             runId: "live-run",
             sessionKey: key,
-            data: { toolCallId: id, name: "read", phase: "result", isError, result: { text: id } },
+            data: { toolCallId: id, name, phase: "result", isError, result: { text: id } },
           });
         }
         const entries = activity.locator(".activity-entry");
         await expectCount(entries).toBe(2);
 
-        const trigger = activity.locator("#activity-live-filter-trigger");
-        const statuses = activity.locator('.activity-status-filter input[type="checkbox"]');
+        const toolbar = activity.locator(".activity-live-toolbar");
+        const trigger = toolbar.locator("#activity-live-filter-trigger");
+        const statuses = toolbar.locator(".activity-status-filter");
+        await expectCount(statuses).toBe(3);
+        for (const status of await statuses.all()) {
+          await status.waitFor();
+        }
+        await toolbar.locator(".activity-live-autofollow").getByRole("switch").waitFor();
+        await statuses.nth(1).click();
+        await expectCount(entries).toBe(1);
+        await expectAttribute(statuses.nth(1), "aria-pressed").toBe("false");
+        await statuses.nth(1).click();
+        await expectCount(entries).toBe(2);
+        await expectAttribute(statuses.nth(1), "aria-pressed").toBe("true");
 
         await trigger.click();
         const panel = activity.locator(".activity-live-filter-popover:popover-open");
-        await expectCount(panel.locator('.activity-status-filter input[type="checkbox"]')).toBe(3);
-        await expectCount(panel.locator(".activity-live-autofollow").getByRole("switch")).toBe(1);
-        await statuses.nth(1).click();
+        await panel.getByRole("combobox").selectOption("read");
         await expectCount(entries).toBe(1);
         await expect
           .poll(() => trigger.evaluate((el) => el.classList.contains("active")))
           .toBe(true);
-        await statuses.nth(1).click();
+        await panel.getByRole("combobox").selectOption("");
         await expectCount(entries).toBe(2);
         await expect
           .poll(() => trigger.evaluate((el) => el.classList.contains("active")))
           .toBe(false);
         await page.keyboard.press("Escape");
 
-        const actions = page.locator(".topnav-shell__page-actions .activity-live-actions__trigger");
+        const actions = toolbar.locator(".activity-live-actions__trigger");
         await actions.click();
         await page.getByRole("menuitem", { name: "Expand all" }).click();
         await expect

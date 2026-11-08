@@ -299,6 +299,8 @@ const enActivity = {
     time7d: "Last 7 days",
     time30d: "Last 30 days",
     timeAll: "All time",
+    timeAllShort: "All",
+    searchPeople: "Search people",
     everyone: "Everyone",
     peopleButtonLabel: "Filter sessions by person",
     lastActive: "· {time}",

@@ -156,8 +156,8 @@ it("returns focus to the People trigger once a person is chosen", async () => {
   trigger.click();
   await expect.poll(() => trigger.getAttribute("aria-expanded")).toBe("true");
   await expect
-    .poll(() => document.activeElement?.className)
-    .toContain("activity-feed__people-popover");
+    .poll(() => document.activeElement)
+    .toBe(container.querySelector(".activity-feed__people-search input"));
   container.querySelector<HTMLButtonElement>('[data-activity-person="person"]')?.click();
   await expect.poll(() => trigger.getAttribute("aria-expanded")).toBe("false");
   expect(props.onFiltersChange).toHaveBeenCalledWith(

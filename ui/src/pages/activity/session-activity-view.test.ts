@@ -566,7 +566,7 @@ describe("session activity people filter", () => {
     const trigger = container.querySelector<HTMLButtonElement>(".activity-feed__people-trigger");
     trigger?.click();
     expect(trigger?.getAttribute("aria-expanded")).toBe("true");
-    expect(document.activeElement).toBe(find(".activity-feed__people-popover"));
+    expect(document.activeElement).toBe(find(".activity-feed__people-search input"));
     container.querySelector<HTMLButtonElement>('[data-activity-person=""]')?.click();
     expect(trigger?.getAttribute("aria-expanded")).toBe("false");
 

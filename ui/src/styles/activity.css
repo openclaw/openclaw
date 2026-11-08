@@ -117,28 +117,66 @@ a.activity-current-work__row:hover {
   padding-inline: var(--space-1);
 }
 
-.activity-feed__toolbar,
-.activity-live-toolbar {
+.activity-toolbar {
   display: flex;
   flex: 0 0 auto;
   flex-wrap: wrap;
   align-items: center;
   gap: var(--space-2);
-  padding: var(--space-3) var(--space-4);
+  padding-block: var(--space-4) 0;
 }
 
-.activity-feed__toolbar {
-  padding-inline: 0;
+.activity-toolbar__actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--space-1);
+  min-width: 0;
+  margin-inline-start: auto;
 }
 
-/* Reserve feedback outside the scroll content so errors and retries never shift results. */
+.activity-mode-tabs.hub-tabs {
+  margin: 0;
+  gap: var(--space-1);
+  padding: 0;
+}
+
+.activity-mode-tabs .hub-tab {
+  min-height: var(--settings-control-height);
+  padding: var(--space-1) var(--space-3);
+  border-radius: var(--radius-md);
+  font-size: var(--control-ui-text-sm);
+}
+
+.activity-mode-tabs .hub-tab[active] {
+  background: var(--bg-hover);
+  box-shadow: none;
+}
+
+.activity-mode-tabs .hub-tab:focus-visible {
+  box-shadow: var(--focus-ring);
+}
+
+/* Feedback overlays the space above results without moving retained content. */
 .activity-feed__feedback {
+  position: relative;
+  z-index: 1;
   display: flex;
   flex: 0 0 var(--settings-control-height);
   min-height: var(--settings-control-height);
   align-items: center;
   gap: var(--space-2);
-  margin: 0 var(--space-4);
+  margin: 0 0 calc(-1 * var(--settings-control-height));
+  pointer-events: none;
+}
+
+.activity-feed__feedback:has(> span:not(:empty), > button) {
+  padding-inline: var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--card);
+  pointer-events: auto;
 }
 
 .activity-feed__feedback > span {
@@ -149,88 +187,114 @@ a.activity-current-work__row:hover {
   white-space: nowrap;
 }
 
-.activity-feed__search {
-  position: relative;
-  flex: 1 1 240px;
-  min-width: 180px;
+.activity-toolbar__search.header-search {
+  min-width: 0;
+  min-height: var(--settings-control-height);
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-md);
 }
 
-.activity-feed__search svg {
-  position: absolute;
-  top: 50%;
-  left: 9px;
-  width: 14px;
-  height: 14px;
-  translate: 0 -50%;
-  fill: none;
-  stroke: var(--muted);
-  stroke-width: 1.8px;
-  pointer-events: none;
+.activity-toolbar__search .header-search__title {
+  display: none;
 }
 
-.activity-feed__search input {
+.activity-toolbar__search:not([data-searching]) .header-search__toggle {
+  width: var(--settings-control-height);
   height: var(--settings-control-height);
-  padding-left: 30px;
+}
+
+.activity-toolbar__search[data-searching] {
+  width: 240px;
+  max-width: 100%;
+  gap: var(--space-2);
+  padding-inline: var(--space-3) var(--space-1);
+  border: 1px solid var(--border);
+  background: var(--bg-elevated);
+}
+
+.activity-toolbar__search[data-searching]:focus-within {
+  border-color: var(--ring);
+  box-shadow: var(--focus-ring);
 }
 
 .activity-feed__time-filter {
   flex: 0 0 auto;
   flex-wrap: nowrap;
+  margin-inline-end: var(--space-1);
 }
 
 .activity-feed__people-control {
   position: relative;
   display: flex;
   align-items: center;
-  margin-left: auto;
 }
 
 .activity-feed__people-trigger,
-.activity-feed__people-clear {
+.activity-live-filter-trigger,
+.activity-live-actions__trigger {
+  width: var(--settings-control-height);
+  min-width: var(--settings-control-height);
   height: var(--settings-control-height);
+  padding: 0;
+  color: var(--muted);
+  justify-content: center;
+}
+
+.activity-feed__applied-filters {
+  display: flex;
+  flex: none;
+  margin-top: var(--space-3);
+}
+
+.activity-feed__person-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+  max-width: 100%;
+  padding: var(--space-1);
+  border-radius: var(--radius-full);
+  background: var(--bg-hover);
+  color: var(--text);
+  font-size: var(--control-ui-text-sm);
+}
+
+.activity-feed__selected-person {
+  min-width: 0;
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.activity-feed__people-clear {
+  display: inline-grid;
+  place-items: center;
+  flex: none;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-full);
+  background: transparent;
   color: var(--muted);
 }
 
-.activity-feed__people-trigger {
-  min-width: 64px;
-  max-width: min(220px, 30vw);
-  padding: 3px 10px;
-}
-
-.activity-feed__people-trigger:has(+ .activity-feed__people-clear) {
-  border-radius: var(--radius-md) 0 0 var(--radius-md);
-}
-
-.activity-feed__people-clear {
-  width: 28px;
-  padding: 0;
-  margin-left: -1px;
-  border-radius: 0 var(--radius-md) var(--radius-md) 0;
-}
-
 .activity-feed__people-clear svg {
-  stroke-width: 2;
+  width: 14px;
+  height: 14px;
 }
 
-.activity-feed__people-trigger:focus-visible,
+.activity-feed__people-clear:hover {
+  background: var(--bg-elevated);
+  color: var(--text);
+}
+
 .activity-feed__people-clear:focus-visible {
   outline: none;
-  border-color: var(--ring);
   box-shadow: var(--focus-ring);
-}
-
-.activity-feed__facepile {
-  display: inline-flex;
-  align-items: center;
-}
-
-.activity-feed__facepile .activity-feed__person-avatar + .activity-feed__person-avatar,
-.activity-feed__facepile .activity-feed__person-avatar + .viewer-avatar--overflow {
-  margin-left: -5px;
-}
-
-.activity-feed__facepile .viewer-avatar {
-  border-color: var(--bg-elevated);
 }
 
 .activity-feed__person-avatar {
@@ -274,9 +338,19 @@ a.activity-current-work__row:hover {
 
 .activity-feed__people-panel {
   width: min(340px, calc(100vw - 32px));
-  max-height: min(480px, 70vh);
-  overflow-y: auto;
   padding: var(--space-2);
+}
+
+.activity-feed__people-list {
+  max-height: min(320px, 50vh);
+  overflow-y: auto;
+}
+
+.activity-feed__people-search > svg {
+  width: 14px;
+  height: 14px;
+  flex: none;
+  color: var(--muted);
 }
 
 .activity-feed__people-row {
@@ -890,13 +964,6 @@ a.activity-current-work__row:hover {
   white-space: nowrap;
 }
 
-.activity-live-filter-trigger {
-  width: var(--settings-control-height);
-  min-width: var(--settings-control-height);
-  height: var(--settings-control-height);
-  padding: 0;
-}
-
 .activity-live-filter-trigger.active,
 .activity-feed__people-trigger.active {
   border-color: var(--accent);
@@ -921,16 +988,45 @@ a.activity-current-work__row:hover {
 .activity-status-filters {
   display: inline-flex;
   flex-wrap: wrap;
-  gap: var(--space-3);
+  gap: var(--space-1);
 }
 
 .activity-status-filter {
-  display: inline-flex;
-  align-items: center;
   gap: var(--space-1);
   color: var(--text);
   font-size: var(--control-ui-text-sm);
   cursor: var(--cursor-action);
+  border-radius: var(--radius-full);
+}
+
+.activity-status-filter::before {
+  width: 6px;
+  height: 6px;
+  border-radius: var(--radius-full);
+  background: var(--muted);
+  content: "";
+}
+
+.activity-toolbar .activity-status-filter[aria-pressed="true"] {
+  border-color: var(--border-strong);
+  background: var(--bg-elevated);
+  color: var(--text-strong);
+}
+
+.activity-status-filter[aria-pressed="true"][data-status="running"]::before {
+  background: var(--status-running);
+}
+
+.activity-status-filter[aria-pressed="true"][data-status="done"]::before {
+  background: var(--ok);
+}
+
+.activity-status-filter[aria-pressed="true"][data-status="error"]::before {
+  background: var(--danger);
+}
+
+.activity-live-toolbar {
+  margin-bottom: var(--space-5);
 }
 
 .activity-entry__summary:focus-visible {
@@ -1081,16 +1177,6 @@ a.activity-current-work__row:hover {
     overflow: visible;
   }
 
-  .activity-feed__search,
-  .activity-live-search {
-    flex-basis: 100%;
-    order: -1;
-  }
-
-  .activity-live-filter-trigger {
-    margin-left: auto;
-  }
-
   .activity-feed__main {
     overflow: visible;
     padding-block: var(--space-4);
@@ -1143,78 +1229,42 @@ a.activity-current-work__row:hover {
 }
 
 @media (max-width: 640px) {
-  /* Search and person share a row; the time range takes the full row below. */
-  .activity-feed__search,
-  .activity-live-search {
-    flex: 1 1 0;
-    min-width: 0;
+  .activity-toolbar {
+    row-gap: var(--space-3);
   }
 
-  .activity-feed__search input,
-  .activity-live-search input {
-    text-overflow: ellipsis;
+  .activity-toolbar > .activity-mode-tabs {
+    flex-basis: 100%;
   }
 
-  .activity-feed__people-control {
-    margin-left: 0;
+  .activity-toolbar__actions {
+    flex: 1 1 auto;
   }
 
-  .activity-feed__time-filter {
-    display: flex;
-    flex: 1 0 100%;
-    order: 1;
+  .activity-feed__toolbar .activity-toolbar__actions {
+    flex-basis: 100%;
+  }
+
+  .activity-toolbar__search[data-searching] {
+    flex: 1 1 140px;
+    width: auto;
   }
 
   .activity-feed__time-filter > .settings-segmented__btn {
-    flex: 1;
-    justify-content: center;
+    padding-inline: var(--space-2);
   }
 
-  .activity-feed__people-trigger,
-  .activity-live-filter-trigger,
-  .activity-live-actions__trigger {
-    width: var(--settings-control-height);
-    min-width: 0;
-    max-width: none;
-    height: var(--settings-control-height);
-    padding: 0;
-    justify-content: center;
+  .activity-live-toolbar .activity-status-filters {
+    flex-basis: 100%;
   }
 
-  .activity-feed__people-trigger svg,
-  .activity-live-actions__trigger svg {
-    width: 16px;
-    height: 16px;
+  .activity-live-autofollow {
+    margin-inline-end: auto;
   }
 
   .activity-live-actions__trigger .oc-menu-item__label {
     display: inline-flex;
     flex: none;
-  }
-
-  .activity-live-toolbar {
-    flex-wrap: nowrap;
-  }
-
-  .activity-live-filter-trigger {
-    margin-left: 0;
-  }
-
-  .activity-live-filter-popover__panel {
-    display: grid;
-    gap: var(--space-3);
-  }
-
-  .activity-live-autofollow {
-    justify-content: space-between;
-  }
-
-  /* The panel's labels read as one set: statuses, Tool and Auto-follow. */
-  .activity-live-filter-popover__panel .field > span,
-  .activity-live-autofollow {
-    color: var(--text);
-    font-size: var(--control-ui-text-sm);
-    font-weight: var(--control-ui-font-weight-normal);
   }
 
   /* The page scrolls here, so Active sessions takes the height it needs instead of
@@ -1238,31 +1288,6 @@ a.activity-current-work__row:hover {
 
   .activity-entry + .activity-entry {
     margin-top: var(--space-1);
-  }
-
-  /* Feedback keeps its reserved box but no longer holds a gap open: it floats over
-     the content when there is something to say, so results still never shift. */
-  .activity-feed__feedback {
-    position: relative;
-    z-index: 1;
-    margin: 0 0 calc(-1 * var(--settings-control-height));
-    pointer-events: none;
-  }
-
-  .activity-feed__feedback:has(> span:not(:empty), > button) {
-    padding-inline: var(--space-3);
-    border: 1px solid var(--border);
-    border-radius: var(--radius-md);
-    background: var(--card);
-    pointer-events: auto;
-  }
-
-  .activity-feed__toolbar {
-    padding-block: var(--space-3);
-  }
-
-  .activity-feed__main {
-    padding-top: 0;
   }
 
   /* Rows: title, one meta line, recap, with Inspect run closing the last line. */

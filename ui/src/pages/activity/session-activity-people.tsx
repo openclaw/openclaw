@@ -1,5 +1,6 @@
-import { createMemo, For, Show } from "solid-js";
+import { createMemo, createSignal, For, Show } from "solid-js";
 import type { SessionsListResult } from "../../api/types.ts";
+import { HeaderSearchField } from "../../components/solid/header-search.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import { MenuHeading } from "../../components/solid/menu-heading.tsx";
 import { Popover, type PopoverHandle } from "../../components/solid/popover.tsx";
@@ -12,8 +13,7 @@ import {
   type PresenceViewer,
 } from "../../lib/presence-users.ts";
 import { registerEnglishCatalog, getLocale, t } from "../../lib/reactive/i18n.ts";
-import { createMediaQuery } from "../../lib/reactive/platform.ts";
-import { ACTIVITY_PHONE_QUERY, type SessionActivityFilters } from "./session-activity.ts";
+import type { SessionActivityFilters } from "./session-activity.ts";
 
 registerEnglishCatalog(registerActivityEnglish);
 
@@ -115,6 +115,29 @@ function PersonRow(props: {
   );
 }
 
+export function PersonFilterChip(props: {
+  person: PresenceViewer;
+  presentationRevision?: number;
+  onClear: () => void;
+}) {
+  return (
+    <div class="activity-feed__applied-filters">
+      <span class="activity-feed__person-chip">
+        <PersonAvatar person={props.person} presentationRevision={props.presentationRevision} />
+        <span class="activity-feed__selected-person">{compactPersonLabel(props.person)}</span>
+        <button
+          type="button"
+          class="activity-feed__people-clear"
+          aria-label={t("activityFeed.clearPersonFilter")}
+          onClick={() => props.onClear()}
+        >
+          <Icon name="x" />
+        </button>
+      </span>
+    </div>
+  );
+}
+
 export function PeopleControl(props: {
   view: PeopleView;
   people: readonly ActivityPerson[];
@@ -123,15 +146,20 @@ export function PeopleControl(props: {
 }) {
   let anchor!: HTMLButtonElement;
   let popover: PopoverHandle | undefined;
-  const phone = createMediaQuery(ACTIVITY_PHONE_QUERY);
+  const [query, setQuery] = createSignal("");
+  let searchInput: HTMLInputElement | undefined;
   const selectPerson = (personId: string | null) => {
     popover?.overlay.request(false, "return");
     props.view.onFiltersChange({ ...props.view.filters, personId });
   };
-  const visible = () => props.people.slice(0, 3);
-  const overflow = () => props.people.length - visible().length;
-  const resolved = createMemo(() => props.people.filter((person) => !isUnresolvedPerson(person)));
-  const unresolved = createMemo(() => props.people.filter(isUnresolvedPerson));
+  const matches = createMemo(() => {
+    const needle = query().trim().toLocaleLowerCase();
+    return props.people.filter((person) =>
+      compactPersonLabel(person).toLocaleLowerCase().includes(needle),
+    );
+  });
+  const resolved = createMemo(() => matches().filter((person) => !isUnresolvedPerson(person)));
+  const unresolved = createMemo(() => matches().filter(isUnresolvedPerson));
   return (
     <div class="activity-feed__people-control">
       <button
@@ -141,8 +169,8 @@ export function PeopleControl(props: {
         id="activity-feed-people-trigger"
         type="button"
         class={[
-          "btn btn--sm activity-feed__people-trigger",
-          { active: phone() && Boolean(props.selectedPerson) },
+          "btn btn--sm btn--ghost activity-feed__people-trigger",
+          { active: Boolean(props.selectedPerson) },
         ]}
         aria-label={t("activityFeed.peopleButtonLabel")}
         aria-haspopup="dialog"
@@ -150,52 +178,8 @@ export function PeopleControl(props: {
         aria-expanded="false"
         onClick={() => popover?.overlay.request(!popover.overlay.open)}
       >
-        {phone() ? (
-          <Icon name="users" />
-        ) : props.selectedPerson ? (
-          <>
-            <PersonAvatar
-              person={props.selectedPerson}
-              presentationRevision={props.view.presentationRevision}
-            />
-            <span class="activity-feed__selected-person">
-              {compactPersonLabel(props.selectedPerson)}
-            </span>
-          </>
-        ) : (
-          <span class="activity-feed__facepile" aria-hidden="true">
-            <For
-              each={visible()}
-              keyed={(person) => person.id}
-              fallback={
-                <span class="viewer-avatar viewer-avatar--overflow activity-feed__unknown-avatar">
-                  <Icon name="users" />
-                </span>
-              }
-            >
-              {(person) => (
-                <PersonAvatar
-                  person={person()}
-                  presentationRevision={props.view.presentationRevision}
-                />
-              )}
-            </For>
-            {overflow() > 0 ? (
-              <span class="viewer-avatar viewer-avatar--overflow">+{overflow()}</span>
-            ) : undefined}
-          </span>
-        )}
+        <Icon name="listFilter" />
       </button>
-      {props.selectedPerson && !phone() ? (
-        <button
-          type="button"
-          class="btn btn--sm activity-feed__people-clear"
-          aria-label={t("activityFeed.clearPersonFilter")}
-          onClick={() => props.view.onFiltersChange({ ...props.view.filters, personId: null })}
-        >
-          <Icon name="x" />
-        </button>
-      ) : undefined}
       <Popover
         id="activity-feed-people-popover"
         ref={(handle) => {
@@ -207,33 +191,57 @@ export function PeopleControl(props: {
         placement="bottom-end"
         onOpenChange={(open) => {
           if (open) {
-            popover?.overlay.surface.focus({ preventScroll: true });
+            searchInput?.focus({ preventScroll: true });
+          } else {
+            setQuery("");
           }
         }}
       >
         <div class="activity-feed__people-panel">
-          <PersonRow
-            person={null}
-            view={props.view}
-            count={props.totalSessions}
-            onSelect={selectPerson}
-          />
-          <For each={resolved()} keyed={(person) => person.id}>
-            {(person) => <PersonRow person={person()} view={props.view} onSelect={selectPerson} />}
-          </For>
-          {unresolved().length > 0 ? (
-            <>
-              <div class="session-menu__separator" role="separator" />
-              <MenuHeading label={t("activityFeed.unresolvedIdentities")} />
-              <div data-activity-unresolved>
-                <For each={unresolved()} keyed={(person) => person.id}>
-                  {(person) => (
-                    <PersonRow person={person()} view={props.view} onSelect={selectPerson} />
-                  )}
-                </For>
-              </div>
-            </>
-          ) : undefined}
+          <div class="header-search activity-feed__people-search">
+            <Icon name="search" />
+            <HeaderSearchField
+              label={t("activityFeed.searchPeople")}
+              query={query()}
+              focus={false}
+              inputRef={(element) => {
+                searchInput = element;
+              }}
+              onQueryChange={setQuery}
+              onClose={() => popover?.overlay.request(false, "return")}
+            />
+          </div>
+          <div class="activity-feed__people-list">
+            <Show when={!query().trim()}>
+              <PersonRow
+                person={null}
+                view={props.view}
+                count={props.totalSessions}
+                onSelect={selectPerson}
+              />
+            </Show>
+            <For each={resolved()} keyed={(person) => person.id}>
+              {(person) => (
+                <PersonRow person={person()} view={props.view} onSelect={selectPerson} />
+              )}
+            </For>
+            {unresolved().length > 0 ? (
+              <>
+                <div class="session-menu__separator" role="separator" />
+                <MenuHeading label={t("activityFeed.unresolvedIdentities")} />
+                <div data-activity-unresolved>
+                  <For each={unresolved()} keyed={(person) => person.id}>
+                    {(person) => (
+                      <PersonRow person={person()} view={props.view} onSelect={selectPerson} />
+                    )}
+                  </For>
+                </div>
+              </>
+            ) : undefined}
+            <Show when={query().trim() && matches().length === 0}>
+              <p class="activity-feed__footer">{t("common.pickerNoMatches")}</p>
+            </Show>
+          </div>
           {props.view.result?.peopleIncomplete ? (
             <p class="activity-feed__footer" role="status">
               {t("activityFeed.partialHistory")}

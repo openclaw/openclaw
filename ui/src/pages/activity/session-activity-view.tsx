@@ -1,6 +1,8 @@
+import type { JSX } from "@solidjs/web";
 import {
   createDeferred,
   createMemo,
+  createSignal,
   Errored,
   For,
   isPending,
@@ -10,6 +12,7 @@ import {
 } from "solid-js";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import { IpLocation } from "../../components/ip-location.tsx";
+import { HeaderSearch } from "../../components/solid/header-search.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import { SettingsStatus, SettingsSegmented } from "../../components/solid/settings-ui.tsx";
 import { registerActivityEnglish } from "../../i18n/locales/en-activity.ts";
@@ -27,7 +30,7 @@ import {
   type PresenceViewer,
 } from "../../lib/presence-users.ts";
 import { registerEnglishCatalog, getLocale, t } from "../../lib/reactive/i18n.ts";
-import { PeopleControl } from "./session-activity-people.tsx";
+import { PeopleControl, PersonFilterChip } from "./session-activity-people.tsx";
 import { renderSessionActivityPulse as SessionActivityPulse } from "./session-activity-pulse.tsx";
 import { SessionLinkView } from "./session-activity-row.tsx";
 import {
@@ -41,6 +44,7 @@ import {
 registerEnglishCatalog(registerActivityEnglish);
 
 export type SessionActivityViewProps = {
+  toolbarLeading?: JSX.Element;
   expandedAutomationDays: ReadonlySet<string>;
   filters: SessionActivityFilters;
   presenceViewers: readonly PresenceViewer[];
@@ -281,6 +285,7 @@ function renderActivityLoading() {
 }
 
 export function renderSessionActivityView(props: SessionActivityViewProps) {
+  const [searchOpen, setSearchOpen] = createSignal(false);
   const request = createMemo(() => props.read);
   // Keep accepted rows and scope changes live while their next read settles.
   const read = createDeferred(() => request()?.promise);
@@ -327,40 +332,49 @@ export function renderSessionActivityView(props: SessionActivityViewProps) {
   }
   return (
     <div class="activity-feed">
-      <div class="activity-feed__toolbar">
-        <label class="data-table-search activity-feed__search">
-          <Icon name="search" />
-          <input
-            type="search"
-            aria-label={t("activityFeed.searchPlaceholder")}
-            value={props.filters.query}
-            placeholder={t("activityFeed.searchPlaceholder")}
-            onInput={(event) =>
-              props.onFiltersChange({ ...props.filters, query: event.currentTarget.value })
-            }
+      <div class="activity-toolbar activity-feed__toolbar">
+        {props.toolbarLeading}
+        <div class="activity-toolbar__actions">
+          <SettingsSegmented
+            mode="buttons"
+            class="activity-feed__time-filter"
+            value={props.filters.time}
+            ariaLabel={t("activityFeed.time")}
+            options={ACTIVITY_TIME_FILTERS.map((time) => ({
+              value: time,
+              label: time === "all" ? t("activityFeed.timeAllShort") : time,
+              ariaLabel: t(TIME_LABELS[time]),
+              title: t(TIME_LABELS[time]),
+            }))}
+            onChange={(time) => props.onFiltersChange({ ...props.filters, time })}
+            onReselect={(time) => props.onFiltersChange({ ...props.filters, time })}
           />
-        </label>
-        <SettingsSegmented
-          mode="buttons"
-          class="activity-feed__time-filter"
-          value={props.filters.time}
-          ariaLabel={t("activityFeed.time")}
-          options={ACTIVITY_TIME_FILTERS.map((time) => ({
-            value: time,
-            label: t(TIME_LABELS[time]),
-            ariaLabel: t(TIME_LABELS[time]),
-            compactLabel: time === "all" ? t(TIME_LABELS[time]) : time,
-          }))}
-          onChange={(time) => props.onFiltersChange({ ...props.filters, time })}
-          onReselect={(time) => props.onFiltersChange({ ...props.filters, time })}
-        />
-        <PeopleControl
-          view={props}
-          people={people()}
-          selectedPerson={selectedPerson()}
-          totalSessions={projection().timeCount}
-        />
+          <HeaderSearch
+            title=""
+            class="activity-toolbar__search activity-feed__search"
+            label={t("activityFeed.searchPlaceholder")}
+            query={props.filters.query}
+            open={searchOpen() || Boolean(props.filters.query)}
+            onOpenChange={setSearchOpen}
+            onQueryChange={(query) => props.onFiltersChange({ ...props.filters, query })}
+          />
+          <PeopleControl
+            view={props}
+            people={people()}
+            selectedPerson={selectedPerson()}
+            totalSessions={projection().timeCount}
+          />
+        </div>
       </div>
+      <Show when={selectedPerson()}>
+        {(person) => (
+          <PersonFilterChip
+            person={person()}
+            presentationRevision={props.presentationRevision}
+            onClear={() => props.onFiltersChange({ ...props.filters, personId: null })}
+          />
+        )}
+      </Show>
       <div class="activity-feed__feedback">
         <Loading on={request()} fallback={feedback(undefined, true)}>
           <Errored
