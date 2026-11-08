@@ -909,7 +909,8 @@ describe("openclaw path CLI", () => {
       ["human", { human: true }],
     ])("CLI-S11 reports a failed write inside the %s error envelope", async (_mode, mode) => {
       const { workspaceDir, filePath } = fileFixture("note.md");
-      writeFileSync(filePath, "---\nname: old\n---\n");
+      const before = "---\nname: old\n---\n";
+      writeFileSync(filePath, before, "utf-8");
       chmodSync(filePath, 0o444);
       const rt = createTestRuntime();
       await pathSetCommand(
@@ -921,6 +922,9 @@ describe("openclaw path CLI", () => {
       const output = `${stdoutText(rt)}${stderrText(rt)}`;
       expect(rt.exitCode).toBe(2);
       expect(output).toContain("OC_PATH_WRITE_FAILED");
+      expect(output).toContain("The file was left unchanged");
+      expect(output).not.toContain("restore it from a backup");
+      expect(readFileSync(filePath, "utf-8")).toBe(before);
       if (mode.json === true) {
         expect(JSON.parse(stdoutText(rt))).toMatchObject({
           ok: false,

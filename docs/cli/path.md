@@ -522,7 +522,8 @@ openclaw path find 'oc://config.jsonc/plugins/{github,slack}/enabled'
 Write a leaf. Pair with `--dry-run` to preview the bytes that would be
 written without touching the file. Add `--diff` for a unified diff preview.
 Exits `0` on a successful write, `1` if the substrate refuses (for example, a
-sentinel guard hit), `2` on parse errors or a file read/write I/O error.
+sentinel guard hit) or the file cannot be parsed, `2` for an invalid `oc://`
+address or a file read/write I/O error.
 
 ```bash
 openclaw path set 'oc://gateway.jsonc/version' '2.0' --dry-run

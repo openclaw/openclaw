@@ -415,11 +415,17 @@ export function registerPathCli(program: Command): void {
     } catch (err) {
       // Write failures (ENOSPC/EACCES/...) stay in the documented envelope too.
       const message = err instanceof Error ? err.message : String(err);
+      // fs.writeFile truncates only after open succeeds; an open failure leaves the bytes intact.
+      const untouched =
+        typeof err === "object" && err !== null && "syscall" in err && err.syscall === "open";
       emitError(
         mode,
-        `failed to write ${fsPath}: ${message}. Check that you can write the file and that the volume has ` +
-          "free space. A write that failed partway may have left the file incomplete, so restore it " +
-          "from a backup before retrying.",
+        `failed to write ${fsPath}: ${message}. ` +
+          (untouched
+            ? "The file was left unchanged. Check that you can write it, then retry."
+            : "Check that you can write the file and that the volume has free space. A write that " +
+              "failed partway may have left the file incomplete, so restore it from a backup " +
+              "before retrying."),
         "OC_PATH_WRITE_FAILED",
       );
       process.exitCode = 2;
