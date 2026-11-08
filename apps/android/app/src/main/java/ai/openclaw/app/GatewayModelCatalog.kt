@@ -83,11 +83,12 @@ internal fun parseGatewayModelCatalog(root: JsonObject?): GatewayModelCatalogRes
     hasPendingProviders = (root?.get("pendingProviders") as? JsonArray)?.isNotEmpty() == true,
     // Only display provider identifiers, never profile ids, errors, or endpoint-shaped values.
     failedProviders =
-      failedScopes.mapNotNull {
-        (it["provider"] as? JsonPrimitive)?.takeIf { value -> value.isString }?.contentOrNull?.takeIf { provider ->
-          catalogProviderIdentifier.matches(provider)
-        }
-      }.distinct(),
+      failedScopes
+        .mapNotNull {
+          (it["provider"] as? JsonPrimitive)?.takeIf { value -> value.isString }?.contentOrNull?.takeIf { provider ->
+            catalogProviderIdentifier.matches(provider)
+          }
+        }.distinct(),
     nativeRefreshFailed = refreshFailures.any { (it["acquisition"] as? JsonPrimitive)?.contentOrNull == "native" },
   )
 }

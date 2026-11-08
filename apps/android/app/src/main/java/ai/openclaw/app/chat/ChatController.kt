@@ -4911,17 +4911,29 @@ class ChatController internal constructor(
   private fun catalogRefreshWarning(catalog: GatewayModelCatalogResult): NativeText {
     val providers = catalog.failedProviders.take(3).joinToString(", ") + if (catalog.failedProviders.size > 3) ", …" else ""
     return when {
-      providers.isNotEmpty() && catalog.models.isNotEmpty() ->
+      providers.isNotEmpty() && catalog.models.isNotEmpty() -> {
         nativeText("Some models could not be refreshed (\$providers). Available models can still be selected. Tap Refresh to retry.", providers)
-      providers.isNotEmpty() ->
+      }
+
+      providers.isNotEmpty() -> {
         nativeText("Could not refresh models from \$providers. Tap Refresh to retry.", providers)
-      catalog.nativeRefreshFailed && catalog.models.isNotEmpty() ->
+      }
+
+      catalog.nativeRefreshFailed && catalog.models.isNotEmpty() -> {
         nativeText("Native model discovery failed. Available models can still be selected. Tap Refresh to retry.")
-      catalog.nativeRefreshFailed ->
+      }
+
+      catalog.nativeRefreshFailed -> {
         nativeText("Native model discovery failed. Tap Refresh to retry.")
-      catalog.models.isNotEmpty() ->
+      }
+
+      catalog.models.isNotEmpty() -> {
         nativeText("Some models could not be refreshed. Available models can still be selected. Tap Refresh to retry.")
-      else -> chatMetadataRefreshError
+      }
+
+      else -> {
+        chatMetadataRefreshError
+      }
     }
   }
 
