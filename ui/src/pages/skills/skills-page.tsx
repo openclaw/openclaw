@@ -462,6 +462,8 @@ export function SkillsPage(props: SkillsPageProps) {
     data.skillsError = route.error;
     if (route.report) {
       acceptSkillsReport(data, route.report);
+    } else if (route.reportRead) {
+      void loadSkills(data, { reportRead: route.reportRead });
     } else {
       data.skillsReport = null;
     }
