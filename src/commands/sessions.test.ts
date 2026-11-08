@@ -820,6 +820,56 @@ async function withSqliteStore<T>(
 }
 
 describe("sessionsCommand model resolution", () => {
+  it.each([false, true])(
+    "resolves fallback aliases with the store owner (agent-scoped=%s)",
+    async (agentScoped) => {
+      const store = await writeStore(
+        {
+          global: { sessionId: "alias-fallback", updatedAt: Date.now() - 60_000 },
+          "agent:ops:recorded": {
+            sessionId: "recorded-model",
+            updatedAt: Date.now() - 60_000,
+            modelProvider: "custom",
+            model: "recorded-model",
+          },
+        },
+        "sessions-model-alias",
+        { agentId: "ops" },
+      );
+      setMockSessionsConfig(() => ({
+        session: { scope: "global", store },
+        agents: {
+          ownership: "explicit",
+          defaults: {
+            model: { primary: "selected" },
+            models: { "anthropic/default-model": { alias: "selected" } },
+            sessionStore: { agentId: "ops" },
+          },
+          entries: {
+            ops: agentScoped
+              ? {
+                  model: { primary: "selected" },
+                  models: { "custom/agent-model": { alias: "selected" } },
+                }
+              : {},
+          },
+        },
+      }));
+
+      const payload = await runSessionsJson<SessionsJsonPayload>(sessionsCommand, store);
+
+      expect(payload.sessions?.find((row) => row.key === "global")).toMatchObject({
+        agentId: "ops",
+        modelProvider: agentScoped ? "custom" : "anthropic",
+        model: agentScoped ? "agent-model" : "default-model",
+      });
+      expect(payload.sessions?.find((row) => row.key === "agent:ops:recorded")).toMatchObject({
+        modelProvider: "custom",
+        model: "recorded-model",
+      });
+    },
+  );
+
   beforeEach(() => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2025-12-06T00:00:00Z"));
