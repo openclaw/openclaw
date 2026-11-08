@@ -1,2 +1,2 @@
-86
-# Actual /new initialization after failed typing cleanup, covering immediate and delivery-barrier completion while retaining writer custody.
+285
+# In-process immediate/deferred settlement and shipped Gateway channel fault/reset recovery, retaining writer custody.
