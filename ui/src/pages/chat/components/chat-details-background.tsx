@@ -215,9 +215,7 @@ export function ChatDetailsBackground(
     roster().toSorted((a, b) => ORDER[subagentState(a)] - ORDER[subagentState(b)]),
   );
   const liveSummary = createMemo(() =>
-    props.desktopSubagents && activityReady()
-      ? projectDetailsSubagents(props.details.subagentSessionsUnavailable ? [] : roster())
-      : undefined,
+    props.desktopSubagents && activityReady() ? projectDetailsSubagents(roster()) : undefined,
   );
   const summary = createMemo(() => {
     const cached = props.desktopSubagents ? props.details.cachedDetails?.subagents : undefined;

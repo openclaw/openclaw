@@ -216,7 +216,7 @@ function automationGateway(request: ReturnType<typeof createGatewayRequestMock>)
   return { gateway, publish };
 }
 
-it("retains cached Subagents until the roster observes its parent, then adopts no children", async () => {
+it("retains cached and known native Subagents through hydration and failed refreshes", async () => {
   const remember = vi.fn<NonNullable<ChatDetailsProps["onDetailsSnapshot"]>>();
   const open = vi.fn();
   const view = mountDetails({
@@ -274,6 +274,22 @@ it("retains cached Subagents until the roster observes its parent, then adopts n
   }
   view.update({
     subagentSessionsPending: false,
+    subagentSessionsUnavailable: true,
+    subagentSessions: [
+      { key: view.initial.sessionKey, kind: "direct" },
+      {
+        key: "agent:main:subagent:review",
+        kind: "direct",
+        label: "Known native review",
+        parentSessionKey: view.initial.sessionKey,
+      },
+    ],
+  });
+  await advance();
+  expect(view.group("subagents")?.textContent).toContain("Known native review");
+  view.update({
+    subagentSessionsPending: false,
+    subagentSessionsUnavailable: false,
     subagentSessions: [{ key: view.initial.sessionKey, kind: "direct" }],
   });
   await advance();
