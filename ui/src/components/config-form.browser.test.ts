@@ -183,10 +183,8 @@ describe("config form renderer", () => {
     edit(first, "Editing the first field");
     first.setSelectionRange(2, 8);
 
-    for (const count of [14, 16]) {
-      yields.shift()!();
-      await waitForSolid(() => expect(all("input.settings-input")).toHaveLength(count));
-    }
+    yields.shift()!();
+    await waitForSolid(() => expect(all("input.settings-input")).toHaveLength(16));
     expect(container.querySelector('[aria-busy="true"]')).toBeNull();
     expect(query("input.settings-input", HTMLInputElement)).toBe(first);
     expect(document.activeElement).toBe(first);

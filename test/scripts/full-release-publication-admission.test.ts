@@ -46,7 +46,10 @@ import {
   SOURCE_ADMISSION_PATHS as toolingPaths,
   PUBLICATION_TRANSPORT_PATHS,
 } from "./release-inventory-paths.test-support.js";
-import { prepareSourceInventoryAdmission } from "./source-inventory-admission.test-support.js";
+import {
+  prepareSourceInventoryAdmission,
+  prepareInventoryExemptionPolicy,
+} from "./source-inventory-admission.test-support.js";
 
 type PublicationContext = TestContext & { command: CommandFixture };
 function withCommand(
@@ -433,7 +436,13 @@ async function fixture(
     purpose?: string;
     selection?: Record<string, unknown> | null;
     sameSha?: boolean;
-    qualification?: "valid" | "wrong-input" | "wrong-archive" | "expired";
+    qualification?:
+      | "valid"
+      | "wrong-input"
+      | "wrong-archive"
+      | "expired"
+      | "tampered-history"
+      | "revoked-operator";
     legacyGhArchive?: boolean;
     toolingFullRef?: string;
     androidPin?: string;
@@ -844,6 +853,9 @@ globalThis.fetch = async (input, init = {}) => {
     writePlugins(tooling);
     write(tooling, "apps/android/version.json", androidVersion);
   }
+  if (options.qualification && version === "2026.9.37") {
+    prepareInventoryExemptionPolicy(tooling);
+  }
   let toolingSha = commit(tooling);
   let toolingFullRef = options.toolingFullRef ?? "refs/heads/main";
   let toolingRef = toolingFullRef.replace(/^refs\/heads\//u, "");
@@ -928,8 +940,18 @@ if (${Boolean(options.qualification)}) {
     process.exit(0);
   }
   const responses = JSON.parse(fs.readFileSync(${JSON.stringify(join(temporary, "qualification-responses.json"))}, "utf8"));
+  if (endpoint === "repos/openclaw/openclaw/actions/artifacts/13570296857/zip") {
+    fs.writeFileSync(${JSON.stringify(join(temporary, "historical-read"))}, "read");
+    process.stdout.write(fs.readFileSync(${JSON.stringify(join(temporary, "historical.zip"))}));
+    process.exit(0);
+  }
   const key = JSON.stringify(args);
-  if (Object.hasOwn(responses, key)) { process.stdout.write(responses[key]); process.exit(0); }
+  if (Object.hasOwn(responses, key)) {
+    const response = JSON.parse(responses[key]);
+    if (${JSON.stringify(options.qualification)} === "revoked-operator" && endpoint?.includes("/collaborators/") && fs.existsSync(${JSON.stringify(join(temporary, "historical-read"))})) response.permission = "read";
+    process.stdout.write(JSON.stringify(response));
+    process.exit(0);
+  }
 }
 const expected = ${JSON.stringify(
       toolingFullRef === "refs/heads/main"
@@ -1991,6 +2013,38 @@ describe("FRV publication source admission", () => {
         check(result.registryCalls.filter((entry) => entry.kind === "request")).toEqual([]);
         check(result.firstHopJobs).toEqual([]);
       }
+    }),
+  );
+
+  publicationIt.concurrent.for(["valid", "tampered-history", "revoked-operator"] as const)(
+    "admits 2026.9.37 inventory only with authenticated historical evidence and current authority (%s)",
+    withCase(async (qualification, processFixture, check) => {
+      const result = await fixture(processFixture, check, {
+        qualification,
+        version: "2026.9.37",
+        targetContextRef: "extended-stable/2026.9.33",
+        selection: { ...selection, route: "extended-stable", npmDistTag: "extended-stable" },
+        registry: "healthy",
+      });
+      check(result.status, result.stderr).toBe(qualification === "valid" ? 0 : 1);
+      if (qualification === "valid") {
+        check(result.fact?.status).toBe("source-admitted");
+        check(result.fact?.projection?.version).toBe("2026.9.37");
+      } else {
+        check(result.fact).toBeUndefined();
+        check(result.registryCalls.filter((entry) => entry.kind === "request")).toEqual([]);
+        check(result.firstHopJobs).toEqual([]);
+        check(result.stderr).toContain(
+          qualification === "tampered-history"
+            ? "Historical exemption archive digest mismatch"
+            : "Qualification operator no longer has repository qualification authority",
+        );
+      }
+      check(
+        result.requests.some((args) =>
+          args.includes("repos/openclaw/openclaw/actions/artifacts/13570296857/zip"),
+        ),
+      ).toBe(true);
     }),
   );
 

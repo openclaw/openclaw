@@ -50,7 +50,7 @@ it("bounds compiled rules across worktree churn without clearing every result", 
   expect(reloaded).toEqual(rules);
 });
 
-it("runs the packaged reducer while preserving exact file-read output", async () => {
+it("runs the packaged reducer while preserving exact reads and Code Mode results", async () => {
   const captured = capturePluginRegistration({
     id: "tokenjuice",
     contracts: manifest.contracts,
@@ -89,4 +89,19 @@ it("runs the packaged reducer while preserving exact file-read output", async ()
   ]);
   const preserved = await runner.applyToolResultMiddleware(event("cat README.md"));
   expect(preserved.content).toEqual([{ type: "text", text: raw }]);
+
+  const code = 'return { records: await catalog.search("schema") };';
+  const codeMode = event(code);
+  codeMode.args.code = code;
+  const text = JSON.stringify(
+    { records: Array.from({ length: 250 }, (_, id) => ({ id, value: `record-${id}` })) },
+    null,
+    2,
+  );
+  codeMode.result = {
+    content: [{ type: "text", text }],
+    details: { status: "completed", exitCode: 0, aggregated: text },
+  };
+  const expected = structuredClone(codeMode.result);
+  expect(await runner.applyToolResultMiddleware(codeMode)).toEqual(expected);
 });

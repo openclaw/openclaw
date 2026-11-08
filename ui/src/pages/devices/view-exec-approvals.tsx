@@ -1,5 +1,5 @@
 import { createMemo, For } from "solid-js";
-import { Icon } from "../../components/solid/icon.tsx";
+import { IconButton } from "../../components/solid/icon-button.tsx";
 import { SettingsSelect } from "../../components/solid/settings-select.tsx";
 import {
   SettingsSection,
@@ -565,18 +565,14 @@ function Allowlist(props: {
                   )
                 }
               />
-              <button
-                class="btn btn--icon btn--ghost"
-                type="button"
-                aria-label={t("devices.execApprovals.remove")}
-                title={t("devices.execApprovals.remove")}
+              <IconButton
+                icon="x"
+                label={t("devices.execApprovals.remove")}
                 disabled={props.state.disabled}
                 onClick={() =>
                   props.state.onRemove(props.entries.length <= 1 ? path() : [...path(), index])
                 }
-              >
-                <Icon name="x" />
-              </button>
+              />
             </div>
             <MetaLine parts={allowlistEntryMeta(entry())} />
           </div>

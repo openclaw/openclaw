@@ -155,6 +155,7 @@ function activate(range: HTMLInputElement, gesture: "drag" | "Home" | "ArrowRigh
 type Preview = Awaited<ReturnType<typeof mount>>;
 const disabledPlacement = { showOnNewSession: false, showInSessions: false };
 it("holds during a drag, settles 1.2 seconds after release, and keeps focused controls opaque", async () => {
+  host.style.setProperty("--shell-nav-width", "52px");
   const preference = { ...disabledPlacement, presentation: "full-bleed" } as const;
   const { element, range, preview } = await mount(preference);
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
@@ -184,7 +185,7 @@ it("holds during a drag, settles 1.2 seconds after release, and keeps focused co
   const canvas = host.getBoundingClientRect();
   expect(preview.getBoundingClientRect()).toMatchObject({
     top: canvas.top,
-    left: canvas.left,
+    left: canvas.left + 52,
     width: host.clientWidth,
     height: host.clientHeight,
   });

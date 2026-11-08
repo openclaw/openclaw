@@ -141,6 +141,7 @@ export function isUiTestTarget(relative) {
 
 export const uiE2eRealGatewayTestFiles = [
   "ui/src/e2e/slack-inline-identity.e2e.test.ts",
+  "ui/src/e2e/gateway-fresh-visit.real-gateway.e2e.test.ts",
   "ui/src/e2e/guest-personal-groups.real-gateway.e2e.test.ts",
   "ui/src/e2e/chat-daybreak.real-gateway.e2e.test.ts",
   "ui/src/e2e/plugin-inline-view.real-gateway.e2e.test.ts",
@@ -161,7 +162,6 @@ export const uiE2eRealGatewayTestFiles = [
   "ui/src/e2e/model-catalog-partial-refresh.real-gateway.e2e.test.ts",
   "ui/src/e2e/model-add-provider-to-chat.real-gateway.e2e.test.ts",
   "ui/src/e2e/model-connection-check.real-gateway.e2e.test.ts",
-  "ui/src/e2e/model-providers-fresh-install.real-gateway.e2e.test.ts",
   "ui/src/e2e/model-key-save-check.real-gateway.e2e.test.ts",
   "ui/src/e2e/chat-flow.catalog-bootstrap.e2e.test.ts",
   "ui/src/e2e/worker-initial-setup.real-gateway.e2e.test.ts",
@@ -256,7 +256,6 @@ export const uiE2ePrebuiltParallelTestFiles = [
   "ui/src/e2e/model-catalog-partial-refresh.real-gateway.e2e.test.ts",
   "ui/src/e2e/model-add-provider-to-chat.real-gateway.e2e.test.ts",
   "ui/src/e2e/model-connection-check.real-gateway.e2e.test.ts",
-  "ui/src/e2e/model-providers-fresh-install.real-gateway.e2e.test.ts",
   "ui/src/e2e/model-key-save-check.real-gateway.e2e.test.ts",
   "ui/src/e2e/model-provider-remove-in-use.real-gateway.e2e.test.ts",
   "ui/src/e2e/model-picker-search.real-gateway.e2e.test.ts",

@@ -9,7 +9,7 @@ checkout_prep_branch() {
 
   local prep_branch
   prep_branch=$(resolve_prep_branch_name "$pr")
-  pr_git checkout "$prep_branch"
+  GIT_NO_LAZY_FETCH=1 pr_git checkout "$prep_branch"
 }
 
 resolve_pr_author_access_at_prepare() {
@@ -426,7 +426,8 @@ refresh_prep_branch_for_reviewed_head() {
   prior_prep_head=$(pr_git rev-parse "refs/heads/$prep_branch")
   echo "Prep source head changed from $recorded_source_head to reviewed head $reviewed_head_sha."
   echo "Rebuilding $prep_branch from the reviewed PR head and invalidating stale prepare evidence."
-  pr_git checkout -B "$prep_branch" "$reviewed_head_sha" || return 1
+  prefetch_review_transition_objects "$reviewed_head_sha" || return 1
+  GIT_NO_LAZY_FETCH=1 pr_git checkout -B "$prep_branch" "$reviewed_head_sha" || return 1
   retire_prep_evidence || return 1
 
   # Security: shell-escape values before sourcing this context later.
@@ -552,7 +553,7 @@ prepare_init() {
   fi
 
   fetch_pr_head "$pr" "$reviewed_head_sha" "refs/heads/pr-$pr" "$json" || return 1
-  pr_git checkout -B "pr-$pr-prep" "$reviewed_head_sha" || return 1
+  GIT_NO_LAZY_FETCH=1 pr_git checkout -B "pr-$pr-prep" "$reviewed_head_sha" || return 1
   retire_prep_evidence || return 1
 
   # Security: shell-escape values to prevent command injection via malicious branch names.

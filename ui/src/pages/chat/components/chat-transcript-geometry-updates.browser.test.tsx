@@ -173,7 +173,7 @@ it("publishes native scroll policy and row position in one Solid update", async 
           state: new TranscriptOffsetState(),
           getScrollElement: () => viewport,
           endAnchor: new TranscriptEndAnchor(() => {}),
-          prependAnchor: new TranscriptPrependAnchor(new Map(), vi.fn()),
+          prependAnchor: new TranscriptPrependAnchor(new Map(), vi.fn(), () => false),
           canFollowEnd: () => false,
           isProgrammaticScroll: () => false,
           cancelScroll: vi.fn(),
@@ -789,7 +789,7 @@ it("commits rows before paint when an uncompensated extent shrink clamps the rea
   }
 });
 
-it("commits reader compensation before paint after a deferred measurement", async () => {
+it("holds deferred reader compensation without interrupting native scrolling", async () => {
   const { host, viewport, virtualizer } = await mountPane();
   // The observer's receipt can arrive after this row leaves the mounted window.
   requireElement(host, '.chat-virtual-row[data-index="2"]').style.height = "150px";
@@ -798,37 +798,29 @@ it("commits reader compensation before paint after a deferred measurement", asyn
   expect(virtualizer.scrollDirection).toBe("forward");
   const inner = requireElement(host, ".chat-thread-inner");
   const height = Number.parseFloat(inner.style.height);
-  const notification = vi.spyOn(virtualizer.options, "onChange");
   const paint = vi.fn();
   const frame = requestAnimationFrame(paint);
   try {
     requireElement(host, '.chat-virtual-row[data-index="6"]').style.height = "180px";
     virtualizer.resizeItem(6, 180);
     expect(Number.parseFloat(inner.style.height)).toBe(height + 60);
-    const compensated = new Promise<void>((resolve) => {
-      viewport.addEventListener("scroll", () => resolve(), { once: true });
-    });
+    const retained = requireElement(host, '.chat-virtual-row[data-index="5"]');
+    const top = retained.getBoundingClientRect().top;
     virtualizer.resizeItem(2, 150);
     flush();
     await Promise.resolve();
     flush();
 
-    expect(notification.mock.calls).toEqual([
-      [virtualizer, false],
-      [virtualizer, true],
-    ]);
-    expect(viewport.scrollTop).toBe(510);
-    expect(Number.parseFloat(inner.style.height)).toBe(height + 90);
+    expect(viewport.scrollTop).toBe(480);
+    expect(Number.parseFloat(inner.style.height)).toBe(height + 60);
     expect(paint).not.toHaveBeenCalled();
 
-    // The later native offset receipt must preserve the compensated geometry.
-    await compensated;
-    flush();
-    await new Promise<void>((resolve) => {
-      requestAnimationFrame(() => resolve());
-    });
+    await settleLayout();
+    expect(retained.getBoundingClientRect().top).toBe(top);
+    await expect.poll(() => virtualizer.isScrolling).toBe(false);
     flush();
     expect(viewport.scrollTop).toBe(510);
+    expect(retained.getBoundingClientRect().top).toBe(top);
     expect(Number.parseFloat(inner.style.height)).toBe(height + 90);
   } finally {
     cancelAnimationFrame(frame);

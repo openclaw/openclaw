@@ -3,6 +3,7 @@ import path, { matchesGlob } from "node:path";
 import { pathToFileURL } from "node:url";
 import { resolveTestGitCommits } from "../.github/actions/git-owner/test-prerequisites.mjs";
 import { isTestFileTarget } from "./lib/changed-path-facts.mjs";
+import { blacksmithRunnerLabel } from "./lib/ci-blacksmith-capacity.mjs";
 import {
   formatIosSimulatorSelectionSummary,
   resolveIosSimulatorTestSelection,
@@ -143,7 +144,12 @@ const createPluginContractTestShards =
           task: "contracts-plugins",
         },
       ];
-const createMatrix = (include) => ({ include });
+const createMatrix = (include) => ({
+  include: include.map((row) => {
+    const label = row.runner_label ?? blacksmithRunnerLabel(row.runner);
+    return label ? { ...row, runner_label: label } : row;
+  }),
+});
 // Share setup without combining the target planner's process envelopes.
 const createContractMatrix = (shards, task) =>
   createMatrix(
@@ -937,6 +943,7 @@ if (runCheckPlan && proposedCheckScope?.types) {
         path.posix.normalize(file) === file &&
         !file.includes("\\") &&
         (isTestLineAllocationPath(file) ||
+          (budgetOnlyFallback && facts.surface === "docs") ||
           (["source", "package", "ui", "extension"].includes(facts.surface) &&
             (budgetOnlyFallback || (facts.isTestOnly && facts.isChangedLaneTest))))
       );
@@ -1064,6 +1071,9 @@ const postgresConformancePaths = [
   "src/config/sessions/**",
   "src/agents/harness/context-engine-turn-outbox*",
   "src/gateway/server*.ts",
+  "src/gateway/server-methods/cron.ts",
+  "src/gateway/server-methods/cron-add.ts",
+  "src/gateway/server-methods/cron-run.ts",
   "src/cli/gateway-cli/run.ts",
   "src/commands/*preflight*.ts",
   "src/commands/doctor-database-*.ts",
@@ -1099,6 +1109,11 @@ const postgresConformancePaths = [
   "src/state/openclaw-state-db-contract.ts",
   "src/state/postgres-schema.generated/**",
   "src/cron/store/runtime-authority-store.ts",
+  "src/cron/store/row-codec.ts",
+  "src/cron/store/runtime-rows.kernel.ts",
+  "src/cron/store/run-finalization.worker.ts",
+  "src/cron/service.ts",
+  "src/cron/service/ops-run.ts",
   "src/infra/database-engine/**",
   "src/infra/postgres-sync/**",
   "src/infra/sql-connection.ts",
@@ -1410,6 +1425,10 @@ const nodeTestShards = targetNodeTestShards
       git_commits: resolveTestGitCommits(shard),
       requires_dist: shard.requiresDist,
       runner: shard.runner,
+      runner_label: blacksmithRunnerLabel(
+        shard.runner,
+        Math.max(0, ...(shard.groups ?? []).map((group) => group.minTotalMemoryBytes ?? 0)),
+      ),
       timeout_minutes:
         !shard.requiresDist && testRuntimeMode === "dual-all"
           ? 2 * (shard.timeoutMinutes ?? 60)
