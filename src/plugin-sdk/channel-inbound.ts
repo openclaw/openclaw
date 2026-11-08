@@ -323,6 +323,7 @@ export type {
   SupplementalContextFacts,
 } from "../channels/turn/types.js";
 export type { InboundEventKind } from "../channels/inbound-event/kind.js";
+export type { ChannelReactionContext } from "../channels/reaction-context.js";
 export type { InboundEventKind as InboundTurnKind } from "../channels/inbound-event/kind.js";
 export {
   createCommandTurnContext,

@@ -1106,6 +1106,36 @@ a request still waiting in a rate-limit queue or retry backoff. A provider reque
 already dispatched must still settle and keep its outcome, so an accepted write is
 never reported as unsent or replayed.
 
+## Conversational reactions
+
+Channel plugins can dispatch authorized reaction add/remove events as `room_event`
+observations with command authorization disabled. The optional bounded
+`MsgContext.Reaction` (`ChannelReactionContext` from
+`openclaw/plugin-sdk/channel-inbound`) identifies the actor, account, conversation,
+transport occurrence, action, emoji and original target. Include original text
+only when it is available and permitted by the channel's context policy.
+
+A transport occurrence identifies the reaction event, not the reacted-to message.
+Use the channel's durable ingress owner to dedupe retained replay occurrences.
+These are conversational facts, not task acceptance, approval, or authority to
+perform a protected action. Explicitly bound native approval controls retain
+their separate authorization contract. A room event may intentionally produce no
+visible answer; an agent uses the message tool when a reply is useful.
+
+For keyed outbound reactions, `runReactionReplyWithReceipt` from
+`openclaw/plugin-sdk/channel-feedback` uses the caller's worker-backed plugin
+state. A stable `idempotencyKey` binds the account, destination, exact target and
+mutation. Receipt states distinguish `pending`, `claimed`, `uncertain`,
+`confirmed` and `not-sent`. Only a confirmed provider response completes a
+conversational reaction reply (`message` tool `react` with `final: true`); it never
+accepts a task or clears an approval gate. Removal is not a terminal answer.
+
+A timeout or interrupted claim remains uncertain and cannot automatically resend.
+A proven pre-transport authority refusal records `not-sent`, permitting a later
+authorized retry under the same key. Callers retain bounded receipt namespaces
+and reject new entries at capacity instead of evicting dedupe evidence. Calls
+without an idempotency key retain their existing non-durable behavior.
+
 ## Advanced topics
 
 <CardGroup cols={2}>

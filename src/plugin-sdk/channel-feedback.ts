@@ -55,6 +55,11 @@ export function shouldAckReactionForWhatsApp(params: {
 }
 export { missingTargetError } from "../infra/outbound/target-errors.js";
 export {
+  runReactionReplyWithReceipt,
+  type ReactionReplyReceipt,
+  type ReactionReplyOutcome,
+} from "../channels/reaction-reply.js";
+export {
   BUILD_TOOL_TOKENS,
   CODING_TOOL_TOKENS,
   CONCIERGE_TOOL_TOKENS,
