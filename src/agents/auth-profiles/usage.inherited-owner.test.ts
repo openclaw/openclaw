@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { resetFileLockStateForTest } from "../../plugin-sdk/file-lock.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
@@ -31,6 +31,7 @@ import {
   withEnvOnlyAuthProfileStore,
 } from "./store.js";
 import type { AuthProfileStore } from "./types.js";
+import { isProfileInCooldown } from "./usage-state.js";
 import { markAuthProfileBlockedUntil, markAuthProfileFailure } from "./usage.js";
 
 const PRIMARY_ID = "openai:primary";
@@ -300,6 +301,68 @@ describe("inherited auth-profile usage persistence", () => {
       ownerBlockedUntil: blockedUntil,
       nextRunOrder: [BACKUP_ID, LOCAL_ID, PRIMARY_ID],
     });
+  });
+
+  it("honors an earlier authenticated quota reset without releasing other profiles", async () => {
+    const now = Date.now();
+    const resetAt = Math.ceil(now / 1000) + 60;
+    const mainStore = createMainStore();
+    mainStore.usageStats = {
+      [PRIMARY_ID]: {
+        blockedUntil: now + 6 * 60 * 60_000,
+        blockedReason: "subscription_limit",
+        blockedSource: "wham",
+      },
+    };
+    const localUntil = now + 12 * 60 * 60_000;
+    saveAuthProfileStore(mainStore, mainAgentDir, {
+      filterExternalAuthProfiles: false,
+      syncExternalCli: false,
+    });
+    saveAuthProfileStore(
+      {
+        version: 1,
+        profiles: { [LOCAL_ID]: { type: "api_key", provider: "openai", key: "local-key" } },
+        usageStats: { [LOCAL_ID]: { cooldownUntil: localUntil } },
+      },
+      childAgentDir,
+      { filterExternalAuthProfiles: false, syncExternalCli: false },
+    );
+    const store = ensureAuthProfileStore(childAgentDir);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValueOnce(
+        Response.json({
+          rate_limit: {
+            limit_reached: true,
+            primary_window: { used_percent: 100, reset_at: resetAt },
+          },
+        }),
+      ),
+    );
+    try {
+      await markAuthProfileFailure({
+        store,
+        profileId: PRIMARY_ID,
+        reason: "rate_limit",
+        agentDir: childAgentDir,
+      });
+      clearRuntimeAuthProfileStoreSnapshots();
+      const next = ensureAuthProfileStore(childAgentDir);
+      expect(next.usageStats?.[PRIMARY_ID]?.blockedUntil).toBe(resetAt * 1000);
+      expect(isProfileInCooldown(next, PRIMARY_ID, resetAt * 1000 - 1)).toBe(true);
+      expect(isProfileInCooldown(next, PRIMARY_ID, resetAt * 1000)).toBe(false);
+      expect(isProfileInCooldown(next, LOCAL_ID, resetAt * 1000)).toBe(true);
+      expect(next.usageStats?.[LOCAL_ID]?.cooldownUntil).toBe(localUntil);
+      expect(resolveAuthProfileOrder({ store: next, provider: "openai" })[0]).toBe(BACKUP_ID);
+      vi.spyOn(Date, "now").mockReturnValue(resetAt * 1000);
+      expect(resolveAuthProfileOrder({ store: next, provider: "openai" })[0]).toBe(PRIMARY_ID);
+      expect(loadPersistedAuthProfileStore(mainAgentDir)?.profiles).toEqual(mainStore.profiles);
+      expect(loadPersistedAuthProfileStore(childAgentDir)?.profiles[PRIMARY_ID]).toBeUndefined();
+    } finally {
+      vi.unstubAllGlobals();
+      vi.restoreAllMocks();
+    }
   });
 
   it("clears inherited health without changing selection ownership", async () => {

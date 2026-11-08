@@ -888,6 +888,85 @@ describe("markAuthProfileFailure — WHAM-aware Codex cooldowns", () => {
     },
   );
 
+  it.each(["newer observation", "different account"])(
+    "rejects an earlier reset after a %s",
+    async (change) => {
+      const now = 1_700_000_000_000;
+      const blockedUntil = now + 6 * 60 * 60_000;
+      const store = makeStore({
+        "openai:default": {
+          blockedUntil,
+          blockedReason: "subscription_limit",
+          blockedSource: "wham",
+        },
+      });
+      fetchMock.mockImplementationOnce(async () => {
+        if (change === "newer observation") {
+          store.usageStats = {
+            ...store.usageStats,
+            "openai:default": { ...store.usageStats?.["openai:default"], lastProbeAt: now + 1 },
+          };
+        } else {
+          const profile = store.profiles["openai:default"];
+          if (profile?.type !== "oauth") {
+            throw new Error("Expected OAuth fixture");
+          }
+          profile.accountId = "different-account";
+        }
+        return Response.json({
+          rate_limit: {
+            limit_reached: true,
+            primary_window: { used_percent: 100, reset_after_seconds: 60 },
+          },
+        });
+      });
+
+      await markCodexFailureAt({ store, now });
+
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(store.usageStats?.["openai:default"]?.blockedUntil).toBe(blockedUntil);
+    },
+  );
+
+  it("keeps a saved quota block when an authenticated response has no reset", async () => {
+    const now = 1_700_000_000_000;
+    const blockedUntil = now + 6 * 60 * 60_000;
+    const store = makeStore({
+      "openai:default": {
+        blockedUntil,
+        blockedReason: "subscription_limit",
+        blockedSource: "wham",
+      },
+    });
+    mockWhamResponse(200, {
+      rate_limit: { limit_reached: true, primary_window: { used_percent: 100 } },
+    });
+    await markCodexFailureAt({ store, now });
+    expect(store.usageStats?.["openai:default"]?.blockedUntil).toBe(blockedUntil);
+  });
+
+  it("keeps independent auth health and does not probe a nonquota failure", async () => {
+    const now = 1_700_000_000_000;
+    const cooldownUntil = now + 12 * 60 * 60_000;
+    const blockedUntil = now + 6 * 60 * 60_000;
+    const store = makeStore({
+      "openai:default": {
+        blockedUntil,
+        blockedReason: "subscription_limit",
+        blockedSource: "wham",
+        cooldownUntil,
+        cooldownReason: "auth",
+      },
+    });
+    await markCodexFailureAt({ store, now, reason: "auth" });
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(store.usageStats?.["openai:default"]).toMatchObject({
+      blockedUntil,
+      cooldownUntil,
+      cooldownReason: "auth",
+    });
+  });
+
   it("does not apply a stale WHAM result after the profile changes", async () => {
     const now = 1_700_000_000_000;
     const store = makeStore(undefined);
