@@ -212,7 +212,7 @@ describe("ManagedWorktreeService capacity", () => {
       const stat = fsSync.statSync;
       vi.spyOn(fsSync, "statSync").mockImplementation((...args) => {
         const result = stat(...args);
-        if (result?.isDirectory()) {
+        if (result?.isDirectory() && typeof result.dev === "number") {
           result.dev = isData(args[0]) ? 2 : 1;
         }
         return result;
