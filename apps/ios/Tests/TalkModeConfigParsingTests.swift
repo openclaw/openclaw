@@ -1112,12 +1112,19 @@ struct TalkConfigRefreshTests {
         await gateway.disconnect()
     }
 
-    @Test(.timeLimit(.minutes(1)))
-    func `talk start keeps the last loaded provider when the config refresh fails`() async throws {
+    @Test(.timeLimit(.minutes(1)), arguments: [false, true])
+    func `talk start keeps the last loaded provider when the config refresh fails`(
+        viaTalkToggle: Bool) async throws
+    {
         let served = ServedTalkConfig(Self.relayTalkConfig(provider: "xai", voice: "ara"))
         let creates = AsyncStream<Data>.makeStream()
         defer { creates.continuation.finish() }
+        let previousTalkEnabled = UserDefaults.standard.object(forKey: "talk.enabled")
+        UserDefaults.standard.set(false, forKey: "talk.enabled")
+        defer { UserDefaults.standard.set(previousTalkEnabled, forKey: "talk.enabled") }
         let manager = TalkModeManager(allowSimulatorCapture: true)
+        // The Talk toggle also reloads config beside the start's own refresh; both fail here.
+        let appModel = viaTalkToggle ? NodeAppModel(talkMode: manager) : nil
         let socket = GatewayTestWebSocketTask(sendHook: { [weak manager] socket, message, _ in
             let method = GatewayWebSocketTestSupport.requestMethod(from: message)
             guard let id = GatewayWebSocketTestSupport.requestID(from: message) else { return }
@@ -1151,12 +1158,19 @@ struct TalkConfigRefreshTests {
             manager.updateGatewayConnected(true)
             await manager.reloadConfig(gateway: gateway)
             await served.setFailing(true)
-            manager._test_prepareEnabledRealtimeSessionForClose()
-            await manager.start()
+            if let appModel {
+                appModel.setTalkEnabled(true)
+            } else {
+                manager._test_prepareEnabledRealtimeSessionForClose()
+                await manager.start()
+            }
             var requests = creates.stream.makeAsyncIterator()
             // Bounded wait: without the fix no create is sent; the watchdog ends the stream so the
             // #require below fails the assertion instead of hanging.
-            let watchdog = Task { try? await Task.sleep(for: .seconds(5)); creates.continuation.finish() }
+            let watchdog = Task {
+                try? await Task.sleep(for: .seconds(5))
+                creates.continuation.finish()
+            }
             defer { watchdog.cancel() }
             let frame = try #require(await requests.next())
             let request = try #require(JSONSerialization.jsonObject(with: frame) as? [String: Any])
@@ -1226,14 +1240,14 @@ struct TalkConfigRefreshTests {
     }
 
     private static func relayTalkConfig(provider: String, voice: String) -> Data {
-        Self.json(["talk": ["realtime": [
+        self.json(["talk": ["realtime": [
             "provider": provider, "mode": "realtime", "transport": "gateway-relay", "brain": "agent-consult",
             "providers": [provider: ["voice": voice]],
         ]]])
     }
 
     private static func webRTCTalkConfig(voice: String) -> Data {
-        Self.json(["talk": ["realtime": [
+        self.json(["talk": ["realtime": [
             "provider": "openai", "mode": "realtime", "transport": "webrtc", "brain": "agent-consult",
             // speakerVoice stays fixed: iOS sends `voice`, so only `voice` may decide reuse.
             "model": "gpt-realtime-2", "voice": voice, "speakerVoice": "marin",
