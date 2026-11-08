@@ -72,7 +72,8 @@ export function compileViteConfigConsumers(source, filePath) {
     traverse(ast, {
       CallExpression(call) {
         const { callee, arguments: args } = call.node;
-        const binding = callee.type === "Identifier" && call.scope.getBinding(callee.name);
+        const binding =
+          callee.type === "Identifier" ? call.scope.getBinding(callee.name) : undefined;
         if (
           !binding?.path.isImportSpecifier() ||
           binding.path.node.imported.name !== "lazy" ||
@@ -94,8 +95,9 @@ export function compileViteConfigConsumers(source, filePath) {
         if (imported.type === "BlockStatement") {
           const result = imported.body.find((statement) => statement.type === "ReturnStatement");
           const moduleBinding =
-            result?.argument?.type === "Identifier" &&
-            call.get("arguments.0").scope.getBinding(result.argument.name);
+            result?.argument?.type === "Identifier"
+              ? call.get("arguments.0").scope.getBinding(result.argument.name)
+              : undefined;
           if (
             !moduleBinding?.path.isVariableDeclarator() ||
             moduleBinding.kind !== "const" ||
