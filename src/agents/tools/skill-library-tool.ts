@@ -2,16 +2,17 @@ import { Value } from "typebox/value";
 import { SkillLibraryWorkshopSchema } from "../../../packages/gateway-protocol/src/schema/worker-skill-workshop.js";
 import type { SkillLibraryAuthoringCapability } from "../../skills/library/authoring.js";
 import { decodeSkillLibraryFile, validateSkillLibraryPath } from "../../skills/library/bundle.js";
+import { gateAgentToolExecution } from "../agent-tool-availability.js";
 import { ToolInputError, type AnyAgentTool } from "./common.js";
 import { jsonResult } from "./tool-results.js";
 
 const libraryActions = SkillLibraryWorkshopSchema.properties.action.enum.join(" | ");
 const libraryArguments = `Actions: ${libraryActions}. List takes only action; read uses skill_id from list, not name. Update uses skill_id and expected_revision from read.`;
 
-/** Personal-library authoring, present only while the run owner granted a library capability. */
+/** Personal-library authoring. The definition follows the session listing; `turnRefusal` blocks this turn. */
 export function createSkillLibraryTool(capability: SkillLibraryAuthoringCapability): AnyAgentTool {
   const schema = SkillLibraryWorkshopSchema;
-  return {
+  const tool: AnyAgentTool = {
     name: "skill_library",
     label: "Skill Library",
     displaySummary: "Author skills in the personal library",
@@ -104,4 +105,5 @@ export function createSkillLibraryTool(capability: SkillLibraryAuthoringCapabili
       return jsonResult(result);
     },
   };
+  return capability.turnRefusal ? gateAgentToolExecution(tool, capability.turnRefusal) : tool;
 }

@@ -4,6 +4,11 @@ import {
   type AdmittedRunContext,
 } from "../agents/admitted-run-context.js";
 import { getGatewayToolCallerIdentity } from "../agents/tools/gateway-caller-context.js";
+import { patchSessionEntryCore } from "../config/sessions/session-accessor.js";
+import {
+  readSkillLibraryPromptListing,
+  type SkillLibraryPromptListing,
+} from "../config/sessions/skill-library-prompt-listing.js";
 import { registerAgentRunDelegatedAuthorityClosedHandler } from "../infra/agent-run-registry.js";
 import {
   mergeSkillLibrarySupportFiles,
@@ -33,6 +38,83 @@ import {
 } from "./server-methods/skills-library.js";
 
 const active = new Map<string, Set<{ profileId: string; revoke: () => void }>>();
+const SKILL_LIBRARY_TURN_REFUSAL =
+  "Personal skill library authoring runs only when the person sends the request in this conversation. This turn has no human requester, so the call was not run.";
+// Same-process settle reads this even when the loaded entry is stale. Absence means
+// "not seen yet"; an explicit undefined means a human turn cleared the listing.
+const promptListings = new Map<string, SkillLibraryPromptListing | undefined>();
+
+function listingsMatch(
+  left: SkillLibraryPromptListing | undefined,
+  right: SkillLibraryPromptListing | undefined,
+) {
+  return (
+    left?.multipleProfiles === right?.multipleProfiles &&
+    left?.defaultTarget === right?.defaultTarget &&
+    (left === undefined) === (right === undefined)
+  );
+}
+
+function rememberPromptListing(sessionKey: string, listing: SkillLibraryPromptListing | undefined) {
+  promptListings.set(sessionKey, listing);
+}
+
+function assignPromptListing(
+  sessionEntry: { skillLibraryPromptListing?: SkillLibraryPromptListing } | undefined,
+  listing: SkillLibraryPromptListing | undefined,
+) {
+  if (!sessionEntry || listingsMatch(sessionEntry.skillLibraryPromptListing, listing)) {
+    return;
+  }
+  if (listing) {
+    sessionEntry.skillLibraryPromptListing = listing;
+  } else {
+    delete sessionEntry.skillLibraryPromptListing;
+  }
+}
+
+async function commitSkillLibraryPromptListing(
+  sessionKey: string,
+  store: { agentId?: string; storePath?: string },
+  listing: SkillLibraryPromptListing | undefined,
+) {
+  if (!store.agentId && !store.storePath) {
+    return;
+  }
+  await patchSessionEntryCore(
+    {
+      sessionKey,
+      ...(store.agentId ? { agentId: store.agentId } : {}),
+      ...(store.storePath ? { storePath: store.storePath } : {}),
+    },
+    (entry) => {
+      const current = readSkillLibraryPromptListing(entry.skillLibraryPromptListing);
+      if (listingsMatch(current, listing)) {
+        return null;
+      }
+      return { skillLibraryPromptListing: listing };
+    },
+  );
+}
+
+function createRefusedSkillLibraryAuthoring(
+  listing: SkillLibraryPromptListing,
+): SkillLibraryAuthoringCapability {
+  const refusal = new SkillLibraryError("AUTHORITY_EXPIRED", SKILL_LIBRARY_TURN_REFUSAL);
+  return {
+    target: "personal",
+    defaultTarget: listing.defaultTarget,
+    multipleProfiles: listing.multipleProfiles,
+    turnRefusal: SKILL_LIBRARY_TURN_REFUSAL,
+    assertWorkspaceCurrent() {
+      throw refusal;
+    },
+    bind() {},
+    invoke: async () => {
+      throw refusal;
+    },
+  };
+}
 
 /** A mixed-person steer revokes mutation authority without changing the session's committed pins. */
 export function invalidateSkillAuthoringForOtherRequester(
@@ -90,19 +172,71 @@ async function prepareGatewaySkillLibrarySession(
 }
 
 export async function prepareGatewaySkillLibraryTurn(
-  request: { owner: SkillLibraryRequestOwner; isHumanTurn: boolean; sessionKey: string },
+  request: {
+    owner: SkillLibraryRequestOwner;
+    isHumanTurn: boolean;
+    sessionKey: string;
+    storedListing?: unknown;
+    sessionEntry?: { skillLibraryPromptListing?: SkillLibraryPromptListing };
+    listingStore?: { agentId?: string; storePath?: string };
+  },
   prepareSessionCreation: (prepared?: PreparedSkillLibrarySession) => Promise<void>,
   onAuthoring: () => void,
 ): Promise<SkillLibraryAuthoringCapability | undefined> {
-  const prepared = await prepareGatewaySkillLibrarySession(request.owner, request.isHumanTurn);
+  const prepared = request.isHumanTurn
+    ? await prepareGatewaySkillLibrarySession(request.owner, true)
+    : undefined;
   await prepareSessionCreation(prepared);
   onAuthoring();
-  return prepareGatewaySkillAuthoring(
-    request.owner,
-    request.sessionKey,
-    request.isHumanTurn,
-    prepared,
-  );
+  return resolveGatewaySkillLibraryPromptGrant({ ...request, prepared });
+}
+
+/**
+ * Keep `skill_library` in the session prompt whenever this conversation has a
+ * recorded listing. A turn without a human requester keeps that definition and
+ * is refused at execution. Only an eligible human turn refreshes the listing.
+ */
+export async function resolveGatewaySkillLibraryPromptGrant(params: {
+  owner: SkillLibraryRequestOwner;
+  sessionKey: string;
+  isHumanTurn: boolean;
+  prepared?: PreparedSkillLibrarySession;
+  storedListing?: unknown;
+  sessionEntry?: { skillLibraryPromptListing?: SkillLibraryPromptListing };
+  listingStore?: { agentId?: string; storePath?: string };
+}): Promise<SkillLibraryAuthoringCapability | undefined> {
+  const storedListing = params.storedListing ?? params.sessionEntry?.skillLibraryPromptListing;
+  if (!promptListings.has(params.sessionKey)) {
+    rememberPromptListing(params.sessionKey, readSkillLibraryPromptListing(storedListing));
+  }
+  const previous = promptListings.get(params.sessionKey);
+  let next = previous;
+  let live: SkillLibraryAuthoringCapability | undefined;
+  if (params.isHumanTurn) {
+    live = await prepareGatewaySkillAuthoring(
+      params.owner,
+      params.sessionKey,
+      true,
+      params.prepared,
+    );
+    if (live) {
+      next = { multipleProfiles: live.multipleProfiles, defaultTarget: live.defaultTarget };
+    } else if (canPrepareSkillAuthoring(params.owner, true)) {
+      next = undefined;
+    }
+  }
+  if (!listingsMatch(previous, next)) {
+    rememberPromptListing(params.sessionKey, next);
+  }
+  assignPromptListing(params.sessionEntry, next);
+  if (params.listingStore && !listingsMatch(readSkillLibraryPromptListing(storedListing), next)) {
+    await commitSkillLibraryPromptListing(params.sessionKey, params.listingStore, next);
+  }
+  if (live) {
+    return live;
+  }
+  const listing = promptListings.get(params.sessionKey);
+  return listing ? createRefusedSkillLibraryAuthoring(listing) : undefined;
 }
 
 /** Only ordinary attributed human ingress may mint a namespace; actions remain normal tool policy. */

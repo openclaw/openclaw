@@ -1,12 +1,20 @@
+import path from "node:path";
 import { constants } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { prepareSystemAgentRunAdmission } from "../agents/admitted-run-context.js";
 import { bindAgentToolExecutionLocation } from "../agents/agent-tool-metadata.js";
+import { buildSystemPromptToolingSection } from "../agents/system-prompt-tool-list.js";
+import { createStubTool } from "../agents/test-helpers/agent-tool-stubs.js";
+import { registerHeadlessToolSearchCatalog } from "../agents/tool-search-catalog.js";
+import { buildToolSchemaDirectoryPrompt } from "../agents/tool-search-directory.js";
+import type { ToolSearchCatalogRef } from "../agents/tool-search-types.js";
 import { createToolSurfacePresentationForTest } from "../agents/tool-surface-plan.test-support.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
 import { withGatewayToolCallerIdentity } from "../agents/tools/gateway-caller-context.js";
 import { createSkillLibraryTool } from "../agents/tools/skill-library-tool.js";
+import { loadSessionEntry } from "../config/sessions/session-accessor.sqlite-entry-admitted-read.js";
+import { replaceSessionEntry } from "../config/sessions/session-accessor.sqlite-entry.js";
 import { listSkillLibrary, readSkillLibrary, saveSkillLibrary } from "../skills/library/service.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { prepareUserProfileCatalog } from "../state/user-profile-list.js";
@@ -23,6 +31,7 @@ import {
   invalidateSkillAuthoringForOtherRequester,
   prepareGatewaySkillAuthoring,
   prepareGatewaySkillLibraryTurn,
+  resolveGatewaySkillLibraryPromptGrant,
 } from "./skill-library-authoring.js";
 import { createWorkerConnectionIdentity } from "./worker-environments/connection-identity.test-support.js";
 
@@ -441,4 +450,108 @@ it("serves the worker skill library through the same Gateway capability and reje
     await runtime.close();
     run.close();
   }
+});
+
+it("keeps the skill_library prompt across settle and refuses that turn at execution", async () => {
+  const { alice, request } = await setup();
+  const owner = request(alice.id);
+  const settleSessionKey = "agent:main:skill-library-settle";
+  const grant = async (isHumanTurn: boolean) =>
+    (await resolveGatewaySkillLibraryPromptGrant({
+      owner,
+      sessionKey: settleSessionKey,
+      isHumanTurn,
+    }))!;
+  const human = await grant(true);
+  const settle = await grant(false);
+  const nextHuman = await grant(true);
+  const toolFor = (capability: NonNullable<Awaited<ReturnType<typeof grant>>>) =>
+    createSkillLibraryTool(capability);
+  const surface = (tool: ReturnType<typeof createSkillLibraryTool>) => {
+    const catalogRef: ToolSearchCatalogRef = {};
+    registerHeadlessToolSearchCatalog({
+      catalogRef,
+      tools: [createStubTool("tool_search"), tool],
+    });
+    const directory = buildToolSchemaDirectoryPrompt({ catalogRef });
+    return {
+      directory,
+      section: buildSystemPromptToolingSection({
+        includeToolGuidance: true,
+        toolLines: ["- tool_search", "- skill_library"],
+        toolSchemaDirectoryPrompt: directory,
+        promptSurface: "openclaw_main",
+        availableTools: new Set(["tool_search", "skill_library"]),
+      }).join("\n"),
+    };
+  };
+  const humanTool = toolFor(human);
+  const settleTool = toolFor(settle);
+  const humanSurface = surface(humanTool);
+  expect(settleTool.description).toBe(humanTool.description);
+  expect(settleTool.parameters).toEqual(humanTool.parameters);
+  expect(toolFor(nextHuman).description).toBe(humanTool.description);
+  expect(surface(settleTool)).toEqual(humanSurface);
+  expect(surface(toolFor(nextHuman))).toEqual(humanSurface);
+  expect(humanSurface.directory).toContain("- skill_library (core)");
+  expect(humanSurface.section).toContain(
+    "Author skills in the requesting person's personal library",
+  );
+  const refused = await settleTool.execute("settle-list", { action: "list" });
+  expect(refused.details).toMatchObject({ gated: true });
+  expect(refused.content).toContainEqual(
+    expect.objectContaining({ type: "text", text: expect.stringContaining("no human requester") }),
+  );
+  await expect(settle.invoke({ action: "list" })).rejects.toMatchObject({
+    code: "AUTHORITY_EXPIRED",
+  });
+  expect((await listSkillLibrary(libraryAuthority(owner))).entries).toHaveLength(0);
+  expect(
+    await resolveGatewaySkillLibraryPromptGrant({
+      owner,
+      sessionKey: "agent:main:skill-library-settle-unlisted",
+      isHumanTurn: false,
+    }),
+  ).toBeUndefined();
+  const synthetic = await resolveGatewaySkillLibraryPromptGrant({
+    owner: {
+      ...owner,
+      client: { ...owner.client!, internal: { syntheticClient: true } },
+    },
+    sessionKey: settleSessionKey,
+    isHumanTurn: true,
+  });
+  expect(toolFor(synthetic!).description).toBe(humanTool.description);
+  expect(synthetic?.turnRefusal).toContain("no human requester");
+});
+it("reloads a recorded skill_library listing for a settle after restart", async () => {
+  const { alice, request } = await setup();
+  const owner = request(alice.id);
+  const listingSessionKey = "agent:main:skill-library-listing";
+  const storePath = path.join(temps.make("skill-library-listing-"), "sessions.sqlite");
+  await replaceSessionEntry(
+    { agentId: "main", sessionKey: listingSessionKey, storePath },
+    { sessionId: "skill-library-listing", updatedAt: 1 },
+  );
+  const live = await resolveGatewaySkillLibraryPromptGrant({
+    owner,
+    sessionKey: listingSessionKey,
+    isHumanTurn: true,
+    listingStore: { agentId: "main", storePath },
+  });
+  const saved = loadSessionEntry({ agentId: "main", sessionKey: listingSessionKey, storePath });
+  expect(saved?.skillLibraryPromptListing).toEqual({
+    multipleProfiles: live?.multipleProfiles,
+    defaultTarget: live?.defaultTarget,
+  });
+  const restarted = await resolveGatewaySkillLibraryPromptGrant({
+    owner,
+    sessionKey: "agent:main:skill-library-listing-restart",
+    isHumanTurn: false,
+    storedListing: saved?.skillLibraryPromptListing,
+  });
+  expect(createSkillLibraryTool(restarted!).description).toBe(
+    createSkillLibraryTool(live!).description,
+  );
+  expect(restarted?.turnRefusal).toContain("no human requester");
 });

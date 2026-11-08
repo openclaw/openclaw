@@ -46,6 +46,7 @@ import type { SessionSkillSnapshot } from "./session-prompt-types.js";
 import type { SessionSystemPromptReport } from "./session-system-prompt-report.js";
 import type { SessionToolOverrides } from "./session-tool-overrides.js";
 import type { PendingSessionWorktree } from "./session-worktree-intent.js";
+import type { SkillLibraryPromptListing } from "./skill-library-prompt-listing.js";
 
 export type { SessionToolOverrides } from "./session-tool-overrides.js";
 export type { SessionSystemPromptReport } from "./session-system-prompt-report.js";
@@ -622,6 +623,11 @@ type SessionEntryCore = SessionEntryProvenance &
     skillsSnapshot?: SessionSkillSnapshot;
     /** Explicit authorized immutable library pins; current speakers never replace this selection. */
     skillLibrarySelections?: import("../../../packages/gateway-protocol/src/schema/skill-library.js").SkillLibrarySelection[];
+    /**
+     * Session-stable `skill_library` prompt listing. Announce, settle, and steer
+     * turns keep this definition; only an attributed human turn may author.
+     */
+    skillLibraryPromptListing?: SkillLibraryPromptListing;
     systemPromptReport?: SessionSystemPromptReport;
     /**
      * Generic plugin-owned runtime debug entries shown in verbose status surfaces.
