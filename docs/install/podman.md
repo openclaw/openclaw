@@ -110,6 +110,26 @@ Podman-specific notes:
 
 See [Tailscale](/gateway/tailscale) and [Control UI](/web/control-ui).
 
+## Reaching model servers on the host
+
+Inside the container, `127.0.0.1` is the container itself. To use a model server running on the host (llama.cpp, LM Studio, Ollama, vLLM, or any OpenAI-compatible endpoint), map the host-gateway alias:
+
+```bash
+--add-host=host.docker.internal:host-gateway   # manual podman run
+AddHost=host.docker.internal:host-gateway      # Quadlet
+```
+
+Recent Podman versions also provide `host.containers.internal` automatically. Reference the host server as `http://host.docker.internal:<port>/v1` (or `http://host.containers.internal:<port>/v1`) in the provider `baseUrl`.
+
+<Note>
+Under rootless Podman, the host-gateway alias resolves to a **link-local** address (`169.254.1.2`). Custom/local model providers trust their exact configured `baseUrl` origin, but link-local origins are excluded from that trust, so model requests through the alias are rejected by the SSRF guard (`Blocked: resolves to private/internal/special-use IP address`). Two fixes:
+
+- Prefer the host's LAN or tailnet IP as the provider `baseUrl` (for example `http://192.168.1.10:8080/v1`). That origin is trusted as configured. Base URLs outside loopback/LAN/`.local`/bare-hostname shape (for example a tailnet `100.x` IP literal) still need a credential: set a non-secret placeholder such as `apiKey: "local"`.
+- Or keep the alias and opt in per provider with `models.providers.<id>.request.allowPrivateNetwork: true`.
+</Note>
+
+See [Local models](/gateway/local-models) for provider configuration and [Docker networking, providers, and storage](/install/docker/networking-and-storage) for the Docker equivalent.
+
 ## Systemd (Quadlet, optional)
 
 If you ran `./scripts/podman/setup.sh --quadlet`, setup installs a Quadlet file at `~/.config/containers/systemd/openclaw.container`.

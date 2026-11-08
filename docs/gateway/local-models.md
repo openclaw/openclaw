@@ -188,6 +188,10 @@ Add `--custom-api-key` if the server requires authentication. Discovery uses tha
 
 Custom/local provider entries trust their exact configured `baseUrl` origin for guarded model requests, including loopback, LAN, tailnet, and private DNS hosts. Metadata, link-local, and local-use NAT64 (`64:ff9b:1::/48`) origins remain blocked without explicit opt-in. Requests to other private origins still need `models.providers.<id>.request.allowPrivateNetwork: true`. Set the trust flag to `false` to opt out of exact-origin trust.
 
+<Note>
+Container host-gateway aliases are the link-local exception: under rootless Podman, `host.docker.internal` / `host.containers.internal` (from `--add-host ...:host-gateway` or a Quadlet `AddHost`) resolve to a link-local address (`169.254.1.2`), so requests to a `baseUrl` built on the alias stay blocked even though it is the configured origin. Use the host's LAN or tailnet IP as the `baseUrl` instead, or set `models.providers.<id>.request.allowPrivateNetwork: true`. See [Podman](/install/podman#reaching-model-servers-on-the-host).
+</Note>
+
 `models.providers.<id>.models[].id` is provider-local - do not include the provider prefix. For an MLX server started with `mlx_lm.server --model mlx-community/Qwen3-30B-A3B-6bit`:
 
 - `models.providers.mlx.models[].id: "mlx-community/Qwen3-30B-A3B-6bit"`
