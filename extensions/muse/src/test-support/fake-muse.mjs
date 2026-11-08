@@ -27,6 +27,18 @@ const sessions = new Map();
 const send = (value) => process.stdout.write(`${JSON.stringify({ jsonrpc: "2.0", ...value })}\n`);
 const reply = (id, result) => send({ id, result });
 const reject = (id, code, message, kind) => send({ id, error: { code, message, data: { kind } } });
+// Hold a reply until the test writes to the Unix socket named by `env`.
+function gated(env, id, result) {
+  if (!process.env[env]) {
+    return reply(id, result);
+  }
+  const gate = createConnection(process.env[env]);
+  gate.on("connect", () => gate.write(String(process.pid)));
+  gate.once("data", () => {
+    reply(id, result);
+    gate.end();
+  });
+}
 const accept = (id, params, extra = {}) =>
   reply(id, { commandId: params.commandId, status: "accepted", ...extra });
 const event = (method, params) =>
@@ -83,13 +95,7 @@ createInterface({ input: process.stdin }).on("line", (line) => {
       experimentalApi: false,
       platformOs: "linux",
     };
-    if (process.env.MUSE_FIXTURE_INITIALIZE_GATE) {
-      const gate = createConnection(process.env.MUSE_FIXTURE_INITIALIZE_GATE);
-      gate.on("connect", () => gate.write(String(process.pid)));
-      gate.once("data", () => reply(id, result));
-      return;
-    }
-    reply(id, result);
+    gated("MUSE_FIXTURE_INITIALIZE_GATE", id, result);
   } else if (method === "model/list") {
     const result = process.env.MUSE_FIXTURE_CATALOG_PATH
       ? JSON.parse(readFileSync(process.env.MUSE_FIXTURE_CATALOG_PATH, "utf8"))
@@ -99,16 +105,7 @@ createInterface({ input: process.stdin }).on("line", (line) => {
           source: process.env.MUSE_FIXTURE_CATALOG_SOURCE ?? "providerCatalog",
           models: [{ providerId: "meta", modelId: "muse-spark-1.3" }],
         };
-    if (process.env.MUSE_FIXTURE_CATALOG_GATE) {
-      const gate = createConnection(process.env.MUSE_FIXTURE_CATALOG_GATE);
-      gate.on("connect", () => gate.write(String(process.pid)));
-      gate.once("data", () => {
-        reply(id, result);
-        gate.end();
-      });
-      return;
-    }
-    reply(id, result);
+    gated("MUSE_FIXTURE_CATALOG_GATE", id, result);
   } else if (method === "session/start" || method === "session/resume") {
     const resumed = method === "session/resume";
     // Muse 1.3 uses `internal` for retained sessions it can no longer compose.
