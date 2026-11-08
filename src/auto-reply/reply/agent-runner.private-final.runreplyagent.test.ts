@@ -1,5 +1,9 @@
 import path from "node:path";
 import { assert, describe, expect, it, vi } from "vitest";
+import type { AdmittedRunContext } from "../../agents/admitted-run-context.js";
+import type { RunEmbeddedAgentInternalParams } from "../../agents/embedded-agent-runner/run/internal-params.js";
+import type { EmbeddedAgentRunResult } from "../../agents/embedded-agent-runner/types.js";
+import { createConfiguredSkillWorkshopTool } from "../../agents/tools/skill-workshop-tool-factory.js";
 import type { InboundEventKind } from "../../channels/inbound-event/kind.js";
 import { setRuntimeConfigSnapshot } from "../../config/config.js";
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
@@ -7,6 +11,8 @@ import {
   onAgentEvent as subscribeAgentEvent,
   type AgentEventPayload,
 } from "../../infra/agent-events.js";
+import type { SkillLibraryAuthoringCapability } from "../../skills/library/authoring.js";
+import { SkillLibraryError } from "../../skills/skill-library-error.js";
 import {
   getReplyPayloadMetadata,
   markReplyPayloadForSourceSuppressionDelivery,
@@ -33,6 +39,9 @@ await vi.hoisted(async () => {
   await import("./agent-runner.misc.runreplyagent.test-support.js");
 });
 const { runReplyAgent } = await import("./agent-runner-run.js");
+// Keep the process-wide queue mocked, but execute its actual admitted delivery consumer.
+const { createFollowupRunner } =
+  await vi.importActual<typeof import("./followup-runner.js")>("./followup-runner.js");
 
 setupAgentRunnerTestHooks();
 
@@ -70,6 +79,8 @@ describe("runReplyAgent private message_tool_only final warning (#85714)", () =>
   }
 
   async function runPrivateFinalCase(params: {
+    skillLibraryAuthoring?: SkillLibraryAuthoringCapability;
+    model?: (params: RunEmbeddedAgentInternalParams) => Promise<EmbeddedAgentRunResult>;
     messagingToolSentTargets?: unknown[];
     messagingToolSourceReplyPayloads?: Array<{ text?: string }>;
     didDeliverSourceReplyViaMessageTool?: boolean;
@@ -101,10 +112,14 @@ describe("runReplyAgent private message_tool_only final warning (#85714)", () =>
       ...(params.sendPolicyDenied ? { sendPolicy: "deny" as const } : {}),
     };
     await replaceSessionEntry({ storePath, sessionKey }, sessionEntry);
+    const sessionStore = { [sessionKey]: sessionEntry };
 
     const finalAssistantText =
       params.finalAssistantText ??
       "Here is the answer the user asked for. It includes enough detail to read like a user-facing response rather than a short private note. This should have been sent with the message tool if the channel expected a visible reply.";
+    if (params.model) {
+      runEmbeddedAgentMock.mockImplementationOnce(params.model);
+    }
     runEmbeddedAgentMock.mockResolvedValue({
       // Metadata payloads must not be mistaken for the assistant's final text.
       payloads: params.payloads ?? [{ text: params.payloadText ?? finalAssistantText }],
@@ -138,6 +153,7 @@ describe("runReplyAgent private message_tool_only final warning (#85714)", () =>
       transcriptPrompt: params.transcriptPrompt,
       run: {
         agentId: "main",
+        skillLibraryAuthoring: params.skillLibraryAuthoring,
         agentDir: path.join(rootDir, "agent"),
         sessionId: "session",
         sessionKey,
@@ -188,7 +204,7 @@ describe("runReplyAgent private message_tool_only final warning (#85714)", () =>
         typing: createMockTypingController(),
         sessionCtx,
         sessionEntry,
-        sessionStore: { [sessionKey]: sessionEntry },
+        sessionStore,
         sessionKey,
         storePath,
         defaultModel: "anthropic/claude-opus-4-6",
@@ -211,7 +227,20 @@ describe("runReplyAgent private message_tool_only final warning (#85714)", () =>
           event.stream === "lifecycle" &&
           (event.data.phase === "end" || event.data.phase === "error"),
       );
-      return { result, finalAssistantText, terminalEvent };
+      return {
+        result,
+        finalAssistantText,
+        terminalEvent,
+        followupDefaults: {
+          typing: createMockTypingController(),
+          typingMode: "instant" as const,
+          sessionEntry: sessionStore[sessionKey],
+          sessionStore,
+          sessionKey,
+          storePath,
+          defaultModel: "anthropic/claude-opus-4-6",
+        },
+      };
     } finally {
       unsubscribe();
     }
@@ -219,6 +248,125 @@ describe("runReplyAgent private message_tool_only final warning (#85714)", () =>
 
   const visibleFinal =
     "Visible answer that should be delivered to the source chat. It includes another complete sentence so the substantive-final detector treats it as a real reply.";
+  it.each([true, false])(
+    "admits and delivers the recovered answer without reviving skill authority (granted=%s)",
+    async (granted) => {
+      let bound: AdmittedRunContext | undefined;
+      const invoke = vi.fn<SkillLibraryAuthoringCapability["invoke"]>().mockResolvedValue({
+        entries: [],
+        profileId: "synthetic-profile",
+        multipleProfiles: true,
+        defaultTarget: "workspace",
+        canManageWorkspace: true,
+        defaultSelectionLimit: 20,
+      });
+      const grant: SkillLibraryAuthoringCapability = {
+        target: "personal",
+        defaultTarget: "workspace",
+        multipleProfiles: true,
+        bind(context) {
+          if (bound && context !== bound) {
+            throw new SkillLibraryError(
+              "AUTHORITY_EXPIRED",
+              "Personal authoring cannot move to a replacement run. Send a fresh message.",
+            );
+          }
+          bound = context;
+        },
+        invoke,
+      };
+      let sourceAdmitted = false;
+      const { followupDefaults } = await runPrivateFinalCase({
+        skillLibraryAuthoring: granted ? grant : undefined,
+        finalAssistantText: visibleFinal,
+        model: async (run) => {
+          assert(run.preparedRunAdmission);
+          const context = await run.preparedRunAdmission.admit("embedded");
+          if (granted) {
+            expect(bound).toBe(context);
+            expect(run.skillLibraryAuthoring).toBe(grant);
+            const workshop = createConfiguredSkillWorkshopTool({
+              config: run.config ?? {},
+              agentId: "main",
+              run: { libraryAuthoring: run.skillLibraryAuthoring },
+            });
+            await expect(
+              workshop.execute("source-list", { action: "list", target: "personal" }),
+            ).resolves.toMatchObject({ details: { entries: [] } });
+          } else {
+            expect(run.skillLibraryAuthoring).toBeUndefined();
+          }
+          sourceAdmitted = true;
+          return {
+            payloads: [{ text: visibleFinal }],
+            meta: { durationMs: 0, finalAssistantVisibleText: visibleFinal },
+          };
+        },
+      });
+      expect(sourceAdmitted).toBe(true);
+      expect(vi.mocked(enqueueFollowupRun)).toHaveBeenCalledTimes(1);
+      const retry = vi.mocked(enqueueFollowupRun).mock.calls[0]?.[1];
+      assert(retry);
+      expect(retry.prompt).toContain(visibleFinal);
+      let retryAdmitted = false;
+      runEmbeddedAgentMock.mockImplementationOnce(async (run: RunEmbeddedAgentInternalParams) => {
+        assert(run.preparedRunAdmission);
+        // Call the real runtime admission interface: this must reach the reply owner's
+        // onAdmitted bind, not just exercise the replacement capability directly.
+        const context = await run.preparedRunAdmission.admit("embedded");
+        if (granted) {
+          expect(context).not.toBe(bound);
+          expect(run.skillLibraryAuthoring).toMatchObject({
+            target: "personal",
+            defaultTarget: "personal",
+            multipleProfiles: true,
+          });
+          const workshop = createConfiguredSkillWorkshopTool({
+            config: run.config ?? {},
+            agentId: "main",
+            run: { libraryAuthoring: run.skillLibraryAuthoring },
+          });
+          await expect(
+            workshop.execute("retry-create", {
+              action: "create",
+              name: "synthetic-guide",
+              proposal_content: "# Synthetic guide",
+            }),
+          ).rejects.toMatchObject({
+            name: "SkillLibraryError",
+            code: "AUTHORITY_EXPIRED",
+            message:
+              "Skill authoring is unavailable while retrying an undelivered reply. Send a fresh message requesting the change.",
+          });
+          await expect(
+            workshop.execute("retry-workspace", {
+              action: "write_file",
+              name: "synthetic-guide",
+              file_path: "SKILL.md",
+              content: "# Synthetic guide",
+            }),
+          ).rejects.toThrow("Invalid personal Skill Workshop arguments");
+        } else {
+          expect(run.skillLibraryAuthoring).toBeUndefined();
+        }
+        retryAdmitted = true;
+        // Fixed external runtime output, not a fabricated transport receipt.
+        return {
+          payloads: [markReplyPayloadForSourceSuppressionDelivery({ text: visibleFinal })],
+          meta: { durationMs: 0, finalAssistantVisibleText: visibleFinal },
+        };
+      });
+      const transport = vi.fn(async (_payload: ReplyPayload) => {});
+      await createFollowupRunner({ ...followupDefaults, opts: { onBlockReply: transport } })(retry);
+      expect(retryAdmitted).toBe(true);
+      expect(transport).toHaveBeenCalledTimes(1);
+      expect(transport.mock.calls[0]?.[0]).toMatchObject({ text: visibleFinal });
+      expect(runEmbeddedAgentMock).toHaveBeenCalledTimes(2);
+      expect(invoke).toHaveBeenCalledTimes(granted ? 1 : 0);
+      expect(vi.mocked(enqueueFollowupRun)).toHaveBeenCalledTimes(1);
+    },
+  );
+
   it.each([
     {
       name: "raw final tags",

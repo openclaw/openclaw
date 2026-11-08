@@ -143,8 +143,15 @@ vi.mock("../../runtime.js", () => {
 
 // mock-isolation: Keep the process-wide followup queue and drain registry outside runner cases.
 vi.mock("./queue.js", async () => {
-  const { resolveFollowupAbortSignal } = await import("./queue/types.js");
+  const { resolveFollowupAbortSignal, isFollowupRunAborted, FollowupRunDeferredError } =
+    await import("./queue/types.js");
+  const { completeFollowupRunLifecycle } = await import("./queue/lifecycle.js");
+  const { resolveQueueSettings } = await import("./queue/settings-runtime.js");
   return {
+    resolveQueueSettings,
+    completeFollowupRunLifecycle,
+    isFollowupRunAborted,
+    FollowupRunDeferredError,
     admitFollowupRunLifecycle: vi.fn(async () => {}),
     enqueueFollowupRun: vi.fn(),
     kickFollowupDrainIfIdle: vi.fn(),

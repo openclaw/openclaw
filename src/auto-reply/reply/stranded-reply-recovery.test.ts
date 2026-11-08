@@ -1,5 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
+import type { AdmittedRunContext } from "../../agents/admitted-run-context.js";
 import { attachToolAllowlistIntersection } from "../../agents/tool-policy-shared.js";
+import { createConfiguredSkillWorkshopTool } from "../../agents/tools/skill-workshop-tool-factory.js";
+import type { SkillLibraryAuthoringCapability } from "../../skills/library/authoring.js";
+import { SkillLibraryError } from "../../skills/skill-library-error.js";
 import { markReplyPayloadForSourceSuppressionDelivery } from "../reply-payload.js";
 import { completeFollowupRunLifecycle, markFollowupRunEnqueued } from "./queue/lifecycle.js";
 import type { ReplyOperationRunState } from "./reply-operation-run-state.js";
@@ -70,6 +74,132 @@ describe("buildStrandedReplyRetryFollowupRun lifecycle ownership", () => {
 describe("resolveStrandedReplyRecovery", () => {
   const substantiveFinal =
     "This reply is substantive enough to look user-facing. It contains a second sentence so the private-final policy treats it as stranded output.";
+
+  it.each([
+    { defaultTarget: "workspace", multipleProfiles: true },
+    { defaultTarget: "personal", multipleProfiles: false },
+  ] as const)(
+    "recovers without rebinding or widening $defaultTarget skill authority",
+    async ({ defaultTarget, multipleProfiles }) => {
+      const sourceContext: AdmittedRunContext = {
+        operationalRunInstance: { instanceId: "source-instance", runId: "source-run" },
+      };
+      const retryContext: AdmittedRunContext = {
+        operationalRunInstance: { instanceId: "retry-instance", runId: "retry-run" },
+      };
+      const invoke = vi.fn<SkillLibraryAuthoringCapability["invoke"]>().mockResolvedValue({
+        entries: [],
+        profileId: "synthetic-profile",
+        multipleProfiles,
+        defaultTarget,
+        canManageWorkspace: defaultTarget === "workspace",
+        defaultSelectionLimit: 20,
+      });
+      const grant: SkillLibraryAuthoringCapability = {
+        target: "personal",
+        defaultTarget,
+        multipleProfiles,
+        bind: vi.fn((context) => {
+          if (context !== sourceContext) {
+            throw new SkillLibraryError(
+              "AUTHORITY_EXPIRED",
+              "Personal authoring cannot move to a replacement run. Send a fresh message.",
+            );
+          }
+        }),
+        invoke,
+      };
+      grant.bind(sourceContext);
+      const base = createMockFollowupRun({
+        prompt: "question",
+        run: { skillLibraryAuthoring: grant },
+      });
+      const recovery = resolveStrandedReplyRecovery({
+        base,
+        payloads: [],
+        finalText: substantiveFinal,
+        sourceReplyDeliveryMode: "message_tool_only",
+        sendPolicyDenied: false,
+        successfulSourceReplyDelivery: false,
+        isHeartbeat: false,
+        isRoomEvent: false,
+      });
+      if (recovery.kind !== "retry") {
+        throw new Error("expected retry recovery");
+      }
+      const authoring = recovery.run.run.skillLibraryAuthoring;
+      if (!authoring) {
+        throw new Error("expected restricted authoring, not workspace fallback");
+      }
+      // Admission binds before running the delivery turn. The source grant rejects
+      // this new context; the recovery capability must let the answer proceed.
+      expect(() => authoring.bind(retryContext)).not.toThrow();
+      expect(recovery.run.prompt).toContain(substantiveFinal);
+      expect(recovery.run.toolsAllow).toEqual(["message"]);
+      expect(authoring.multipleProfiles).toBe(multipleProfiles);
+      const workshop = createConfiguredSkillWorkshopTool({
+        config: base.run.config,
+        agentId: base.run.agentId,
+        run: { libraryAuthoring: authoring },
+      });
+      for (const target of [undefined, "personal"]) {
+        await expect(
+          workshop.execute("stale-write", {
+            action: "create",
+            name: "synthetic-guide",
+            proposal_content: "# Synthetic guide",
+            ...(target ? { target } : {}),
+          }),
+        ).rejects.toMatchObject({
+          name: "SkillLibraryError",
+          code: "AUTHORITY_EXPIRED",
+          message:
+            "Skill authoring is unavailable while retrying an undelivered reply. Send a fresh message requesting the change.",
+        });
+      }
+      // Workspace-only arguments must not select a wider fallback tool.
+      await expect(
+        workshop.execute("workspace-write", {
+          action: "write_file",
+          name: "synthetic-guide",
+          file_path: "SKILL.md",
+          content: "# Synthetic guide",
+        }),
+      ).rejects.toThrow("Invalid personal Skill Workshop arguments");
+      expect(invoke).not.toHaveBeenCalled();
+      expect(grant.bind).toHaveBeenCalledTimes(1);
+
+      // Constructing a recovery must not revoke or mutate the live source run.
+      expect(base.run.skillLibraryAuthoring).toBe(grant);
+      grant.bind(sourceContext);
+      const liveWorkshop = createConfiguredSkillWorkshopTool({
+        config: base.run.config,
+        agentId: base.run.agentId,
+        run: { libraryAuthoring: grant },
+      });
+      await expect(
+        liveWorkshop.execute("live-list", { action: "list", target: "personal" }),
+      ).resolves.toMatchObject({ details: { entries: [] } });
+      expect(invoke).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it("does not add a skill grant to an ungranted recovery", () => {
+    const recovery = resolveStrandedReplyRecovery({
+      base: createMockFollowupRun({ prompt: "question" }),
+      payloads: [],
+      finalText: substantiveFinal,
+      sourceReplyDeliveryMode: "message_tool_only",
+      sendPolicyDenied: false,
+      successfulSourceReplyDelivery: false,
+      isHeartbeat: false,
+      isRoomEvent: false,
+    });
+    expect(recovery.kind).toBe("retry");
+    if (recovery.kind === "retry") {
+      expect(recovery.run.run.skillLibraryAuthoring).toBeUndefined();
+    }
+  });
 
   it.each([
     { payload: { text: "The recovered answer is ready." }, expected: "none" },
