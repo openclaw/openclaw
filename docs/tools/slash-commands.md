@@ -406,7 +406,7 @@ list of requirements reaches the agent complete.
     | `/plugins list\|inspect\|show\|get\|install\|enable\|disable` | `commands.plugins: true` | Inspect or mutate plugin state. Owner-only for writes. Alias: `/plugin` |
     | `/debug show\|set\|unset\|reset` | `commands.debug: true` | Runtime-only config overrides. Owner-only |
     | `/restart` | `commands.restart: true` (default) | Restart OpenClaw |
-    | `/update` | `commands.restart: true` (default), owner | Update OpenClaw using its configured update channel; works with default tool profiles. Sends a completion or failure notice in the same chat only when that chat is an owner destination; otherwise the notice is skipped and the outcome stays in the update run record and Control UI |
+    | `/update` | `commands.restart: true` (default), owner | Update OpenClaw using its configured update channel; works with default tool profiles. Sends a completion or failure notice in the same chat only when that chat is an owner destination and its account allows sends; otherwise the notice is skipped and the outcome stays in the update run record and Control UI |
     | `/send on\|off\|inherit` | owner | Set send policy |
 
     Natural-language update requests use the `gateway` tool's `update.run`
