@@ -17,6 +17,7 @@ type CompletionDeliveryDependencies = {
   children: ReadonlyMap<string, ChildState>;
   parents: ReadonlyMap<string, ParentState>;
   retiredParents: Pick<WeakSet<ParentState>, "has">;
+  hasIdleParentThread?: (threadId: string) => boolean;
   unregisterChild: (child: ChildState) => void;
   abandon: (state: ParentState, child: ChildState, assertCurrent: () => void) => Promise<void>;
   settleNestedCompletion: (
@@ -137,9 +138,12 @@ export class CodexNativeSubagentCompletionDelivery {
         deferredToForeground = state.owners.size > 0;
         return;
       }
-      // Live siblings retain the native parent subscription. Do not admit a
-      // replacement turn until their execution has released that protection.
-      if (this.hasLiveSiblings(state)) {
+      // A protected idle subscription can still serve a warm continuation.
+      // Without one, cold resume must wait for the sibling's protection to end.
+      if (
+        this.hasLiveSiblings(state) &&
+        !this.dependencies.hasIdleParentThread?.(state.parentThreadId)
+      ) {
         this.siblingWaiters.add(childState);
         await this.scheduleRetry(
           state,
@@ -195,7 +199,11 @@ export class CodexNativeSubagentCompletionDelivery {
         return;
       }
       const error = delivery.error ?? "completion delivery did not produce a parent response";
-      await this.scheduleRetry(state, childState, error);
+      const siblingBlocked = this.hasLiveSiblings(state);
+      if (siblingBlocked) {
+        this.siblingWaiters.add(childState);
+      }
+      await this.scheduleRetry(state, childState, error, !siblingBlocked);
     } catch (error) {
       if (!this.isCurrent(state, childState)) {
         return;
@@ -205,7 +213,16 @@ export class CodexNativeSubagentCompletionDelivery {
         return;
       }
       const message = formatErrorMessage(error);
-      await this.scheduleRetry(state, childState, message, !childState.completionDeliveryAbandoned);
+      const siblingBlocked = this.hasLiveSiblings(state);
+      if (siblingBlocked) {
+        this.siblingWaiters.add(childState);
+      }
+      await this.scheduleRetry(
+        state,
+        childState,
+        message,
+        !siblingBlocked && !childState.completionDeliveryAbandoned,
+      );
       embeddedAgentLog.warn("Failed to deliver Codex native subagent completion", {
         parentThreadId: state.parentThreadId,
         childThreadId: completion.childThreadId,

@@ -193,9 +193,9 @@ class Monitor {
       children: this.childStates,
       parents: this.parentStates,
       retiredParents: this.retiredParentStates,
+      hasIdleParentThread: options.hasIdleParentThread,
       unregisterChild: (child) => this.unregisterChild(child),
-      abandon: (state, child, assertCurrent) =>
-        this.assignments.abandon(state, child, assertCurrent),
+      abandon: (state, child, check) => this.assignments.abandon(state, child, check),
       settleNestedCompletion: (state, child, assertCurrent) =>
         this.assignments.settleNestedCompletion(state, child, assertCurrent),
       releaseClientRetentionIfIdle: () => this.releaseClientRetentionIfIdle(),

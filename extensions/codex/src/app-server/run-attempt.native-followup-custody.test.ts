@@ -430,9 +430,11 @@ it("reports an earlier turn's unsettled native child to a later turn's sessions_
     await child.spawn("child-running", "child-running-turn");
     expect(await yieldTurn()).toMatchObject({ status: "yielded" });
     await completeTurn(first);
-    // Running native siblings still protect the parent subscription. The completed
-    // result keeps delivery custody until the final sibling releases that protection.
-    expect(delivery).not.toHaveBeenCalled();
+    await vi.waitFor(() =>
+      expect(delivery).toHaveBeenCalledWith(
+        expect.objectContaining({ childSessionKey: "codex-thread:child-settled" }),
+      ),
+    );
 
     // A later turn owns no new claim, yet the still-running child will resume the session.
     const second = await startTurn("run-2");
@@ -441,12 +443,6 @@ it("reports an earlier turn's unsettled native child to a later turn's sessions_
       status: "already_pending",
       pendingChildren: [
         {
-          runId: "codex-thread:child-settled",
-          childSessionKey: "codex-thread:child-settled",
-          state: "completing",
-          wakeArmed: false,
-        },
-        {
           runId: "codex-thread:child-running",
           childSessionKey: "codex-thread:child-running",
           state: "running",
@@ -454,15 +450,15 @@ it("reports an earlier turn's unsettled native child to a later turn's sessions_
         },
       ],
     });
-    expect(result.pendingChildren).toHaveLength(2);
+    expect(result.pendingChildren).toHaveLength(1);
     await completeTurn(second);
     const completion = observeCompletionAttempts();
     try {
       await childTurn("child-running", "Running child result");
       await completion.settle();
       expect(delivery.mock.calls.map(([call]) => call.childSessionKey)).toEqual([
-        "codex-thread:child-running",
         "codex-thread:child-settled",
+        "codex-thread:child-running",
       ]);
     } finally {
       completion.restore();

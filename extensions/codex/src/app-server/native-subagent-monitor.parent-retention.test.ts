@@ -1,6 +1,7 @@
 import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import {
   ensureCodexAppServerClientRuntime,
+  hasIdleCodexThread,
   protectCodexAppServerLiveThread,
   retainCodexAppServerLiveThread,
 } from "./client-runtime.js";
@@ -28,13 +29,20 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-async function setupParentRetention(agentDir: string, releaseCustody = () => {}) {
+async function setupParentRetention(
+  agentDir: string,
+  releaseCustody = () => {},
+  retainIdleSubscription = true,
+) {
   const client = createClient();
   const runtime = createRuntime();
   ensureCodexAppServerClientRuntime(client.client, { agentDir });
-  await retainCodexAppServerLiveThread(client.client, "parent-thread");
+  if (retainIdleSubscription) {
+    await retainCodexAppServerLiveThread(client.client, "parent-thread");
+  }
   const monitor = new CodexNativeSubagentMonitor(client.client, runtime, {
     retainParentThread: (threadId) => protectCodexAppServerLiveThread(client.client, threadId),
+    hasIdleParentThread: (threadId) => hasIdleCodexThread(client.client, threadId),
   });
   onTestFinished(async () => {
     await monitor.retireParent("parent-thread");
@@ -111,6 +119,11 @@ it("keeps an interrupted assignment resumable without pinning its restored paren
   await parent.ready;
   await parent.unregister();
   await expect(releaseForResume()).resolves.toBe(true);
+  expect(client.request).toHaveBeenCalledWith(
+    "thread/unsubscribe",
+    { threadId: "parent-thread" },
+    expect.anything(),
+  );
   expect(await store.readNativeSubagentAssignments?.(identity, historyOwner)).toEqual([assignment]);
   expect(runtime.deliverAgentHarnessCompletion).not.toHaveBeenCalled();
 
@@ -130,6 +143,8 @@ it("permits parent cold resume once every child is terminal, while preserving un
   vi.useFakeTimers();
   const { client, runtime, monitor, releaseForResume } = await setupParentRetention(
     "/tmp/codex-parent-retention",
+    () => {},
+    false,
   );
   runtime.deliverAgentHarnessCompletion.mockResolvedValue({
     delivered: false,
@@ -153,12 +168,7 @@ it("permits parent cold resume once every child is terminal, while preserving un
     nativeCompletionNotification({ agentPath: "child-b", result: "second result" }),
   );
   expect(runtime.deliverAgentHarnessCompletion).toHaveBeenCalledTimes(2);
-  await expect(releaseForResume()).resolves.toBe(true);
-  expect(client.request).toHaveBeenCalledWith(
-    "thread/unsubscribe",
-    { threadId: "parent-thread" },
-    expect.anything(),
-  );
+  await expect(releaseForResume()).resolves.toBe(false);
   const continued = await registerParent(monitor);
   expect(continued.listPendingChildren().map(({ state }) => state)).toEqual([
     "completing",
@@ -174,4 +184,36 @@ it("permits parent cold resume once every child is terminal, while preserving un
   expect(
     runtime.deliverAgentHarnessCompletion.mock.calls.map(([request]) => request.result),
   ).toEqual(["second result", "first result", "second result", "first result"]);
+});
+
+it("retains a failed warm handoff without exhausting retries while a sibling is running", async () => {
+  vi.useFakeTimers();
+  const { client, runtime, monitor } = await setupParentRetention("/tmp/codex-parent-retry");
+  runtime.deliverAgentHarnessCompletion.mockResolvedValue({
+    delivered: false,
+    path: "none",
+    error: "warm continuation unavailable",
+  });
+  const parent = await registerParent(monitor);
+  await notifyChildStarted(client, "parent-thread", "child-a");
+  await notifyChildStarted(client, "parent-thread", "child-b");
+  await parent.unregister();
+  await client.notify(
+    nativeCompletionNotification({ agentPath: "child-a", result: "first result" }),
+  );
+  await vi.advanceTimersByTimeAsync(600_000);
+  const observer = await registerParent(monitor);
+  expect(observer.listPendingChildren()).toMatchObject([
+    { childSessionKey: "codex-thread:child-a", state: "completing" },
+    { childSessionKey: "codex-thread:child-b", state: "running" },
+  ]);
+  runtime.deliverAgentHarnessCompletion.mockResolvedValue({ delivered: true, path: "direct" });
+  await observer.unregister();
+  await client.notify(
+    nativeCompletionNotification({ agentPath: "child-b", result: "second result" }),
+  );
+  await vi.advanceTimersByTimeAsync(5_000);
+  const settled = await registerParent(monitor);
+  expect(settled.listPendingChildren()).toEqual([]);
+  await settled.unregister();
 });

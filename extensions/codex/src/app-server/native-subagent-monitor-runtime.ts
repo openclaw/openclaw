@@ -13,6 +13,7 @@ import {
 import {
   claimCodexAppServerLiveThread,
   hasCodexAppServerLiveThread,
+  hasIdleCodexThread,
   isCodexAppServerLiveThreadProtected,
   retainCodexAppServerLiveThread,
 } from "./client-runtime.js";
@@ -164,6 +165,7 @@ export function createCodexNativeSubagentMonitorRuntime<T extends NativeMonitorC
           void interruptCodexTurnAndWaitBestEffort(client, { threadId, turnId });
         },
         retainParentThread,
+        hasIdleParentThread: (threadId) => hasIdleCodexThread(client, threadId),
         hasObservationBacking: (parentThreadId, childThreadId) =>
           hasCodexAppServerLiveThread(client, parentThreadId) ||
           hasCodexAppServerLiveThread(client, childThreadId),

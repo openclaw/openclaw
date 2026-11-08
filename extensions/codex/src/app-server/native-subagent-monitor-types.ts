@@ -312,6 +312,7 @@ export type MonitorOptions = {
   interruptModelExecution?: (threadId: string, turnId: string) => void;
   retainClient?: () => (() => void) | undefined;
   retainParentThread?: (threadId: string) => (() => void) | undefined;
+  hasIdleParentThread?: (threadId: string) => boolean;
   hasObservationBacking?: (parentThreadId: string, childThreadId: string) => boolean;
   claimChildThread?: (threadId: string) => Promise<unknown>;
   retainChildThread?: (threadId: string) => Promise<unknown>;
