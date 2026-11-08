@@ -7,6 +7,7 @@ import { retryAsync } from "../infra/retry.js";
 import {
   getOrLoadSqliteDatabaseAdmissionForPath,
   prepareSqliteDatabaseAdmission,
+  readSqliteDatabaseCleanClose,
 } from "../infra/sqlite-database-admission.js";
 import { isSqliteLockError } from "../infra/sqlite-error-diagnostics.js";
 import { readSqliteIntegrityFileIdentity } from "../infra/sqlite-file-generation.js";
@@ -238,6 +239,14 @@ class AgentDatabaseStartupAdmission {
         target.agentId !== undefined &&
         runtimeAgentIds.has(target.agentId) &&
         includesOpenClawAgentDatabasePath(runtimePaths, target.path, samePath),
+      cleanClose: (target: PendingInspection["target"]) => {
+        // Ordering only: an unreadable store is inspected (and reported) on the normal path.
+        try {
+          return readSqliteDatabaseCleanClose(target.path);
+        } catch {
+          return false;
+        }
+      },
       track: (work: Promise<unknown>) => this.track(work),
       defer: (inspections: PendingInspection[], reason: string) =>
         this.defer({ env, inspections, reason }),

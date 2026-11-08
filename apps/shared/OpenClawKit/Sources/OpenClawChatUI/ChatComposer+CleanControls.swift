@@ -147,56 +147,60 @@ extension OpenClawChatComposer {
     }
 
     private func cleanInlineModelPicker(compact: Bool) -> some View {
-        let sections = self.viewModel.modelPickerSections
-        return Menu {
-            if let target = self.viewModel.modelSelectionTargetDescription {
-                Text(target)
-                    .font(OpenClawChatTypography.caption)
-                    .accessibilityIdentifier("chat-composer-model-selection-target")
-                Divider()
-            }
-            Group {
-                if self.viewModel.canSelectDefaultModel {
-                    self.modelMenuOption(
-                        self.viewModel.defaultModelLabel,
-                        selectionID: OpenClawChatViewModel.defaultModelSelectionID)
+        Menu {
+            // ViewThatFits constructs both footer variants while typing. Keep catalog
+            // grouping and menu actions inside the menu's own evaluation boundary.
+            ChatDeferredContent {
+                let sections = self.viewModel.modelPickerSections
+                if let target = self.viewModel.modelSelectionTargetDescription {
+                    Text(target)
+                        .font(OpenClawChatTypography.caption)
+                        .accessibilityIdentifier("chat-composer-model-selection-target")
+                    Divider()
                 }
-                if !sections.pinned.isEmpty {
-                    Section("Pinned") {
-                        self.modelOptions(sections.pinned, showsDefaultBadge: false)
+                Group {
+                    if self.viewModel.canSelectDefaultModel {
+                        self.modelMenuOption(
+                            self.viewModel.defaultModelLabel,
+                            selectionID: OpenClawChatViewModel.defaultModelSelectionID)
+                    }
+                    if !sections.pinned.isEmpty {
+                        Section("Pinned") {
+                            self.modelOptions(sections.pinned, showsDefaultBadge: false)
+                        }
+                    }
+                    if !sections.recent.isEmpty {
+                        Section("Recent") {
+                            self.modelOptions(sections.recent, showsDefaultBadge: false)
+                        }
+                    }
+                    ForEach(sections.providers) { provider in
+                        Section(provider.displayName) {
+                            self.modelOptions(provider.models, showsDefaultBadge: false)
+                        }
                     }
                 }
-                if !sections.recent.isEmpty {
-                    Section("Recent") {
-                        self.modelOptions(sections.recent, showsDefaultBadge: false)
+                .disabled(self.cleanModelChoicesDisabled)
+                #if os(macOS)
+                if self.viewModel.modelSelectionID != OpenClawChatViewModel.defaultModelSelectionID {
+                    Divider()
+                    Button {
+                        self.viewModel.toggleSelectedModelPinned()
+                    } label: {
+                        Label(
+                            self.viewModel.isSelectedModelPinned ? "Unpin model" : "Pin model",
+                            systemImage: self.viewModel.isSelectedModelPinned ? "star.slash" : "star")
                     }
                 }
-                ForEach(sections.providers) { provider in
-                    Section(provider.displayName) {
-                        self.modelOptions(provider.models, showsDefaultBadge: false)
-                    }
+                if self.usesDesktopModelMenu {
+                    Divider()
+                    self.modelSignInButton
                 }
-            }
-            .disabled(self.cleanModelChoicesDisabled)
-            #if os(macOS)
-            if self.viewModel.modelSelectionID != OpenClawChatViewModel.defaultModelSelectionID {
-                Divider()
-                Button {
-                    self.viewModel.toggleSelectedModelPinned()
-                } label: {
-                    Label(
-                        self.viewModel.isSelectedModelPinned ? "Unpin model" : "Pin model",
-                        systemImage: self.viewModel.isSelectedModelPinned ? "star.slash" : "star")
-                }
-            }
-            if self.usesDesktopModelMenu {
+                #elseif os(iOS)
                 Divider()
                 self.modelSignInButton
+                #endif
             }
-            #elseif os(iOS)
-            Divider()
-            self.modelSignInButton
-            #endif
         } label: {
             self.cleanInlineModelLabel(compact: compact)
         }

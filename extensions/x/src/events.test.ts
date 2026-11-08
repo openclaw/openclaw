@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { XPostEnvelope } from "./api.js";
+import { X_ACTIVITY_POST_EVENT_TYPES, type XPostEnvelope } from "./api.js";
 import { runXEvents, type XCursorState, type XEventStatus } from "./events.js";
 import { createXTestApi as createXApiClient } from "./test-support/api-client.js";
 import { budgetApi, post } from "./test-support/events.js";
@@ -83,6 +83,145 @@ afterEach(() => {
 });
 
 describe("X event transport", () => {
+  it("times retry sleep, both budget checks, response headers, and first byte separately", async () => {
+    vi.useFakeTimers();
+    const delay = (ms: number) =>
+      new Promise<void>((resolve) => {
+        setTimeout(resolve, ms);
+      });
+    const spend = createXTestSpend();
+    const budgetStarted = Promise.withResolvers<void>();
+    vi.spyOn(spend, "streamResumeAt").mockImplementation(async () => {
+      budgetStarted.resolve();
+      await delay(125);
+      return undefined;
+    });
+    let attempt = 0;
+    const api = budgetApi(spend, async (url) => {
+      if (!url.pathname.endsWith("/stream")) {
+        return Response.json({ data: [] });
+      }
+      if (++attempt === 1) {
+        await delay(20_000);
+        return Response.json({}, { status: 503 });
+      }
+      await delay(20);
+      return new Response(
+        new ReadableStream<Uint8Array>({
+          start(controller) {
+            setTimeout(() => controller.enqueue(new TextEncoder().encode("\n")), 30);
+          },
+        }),
+      );
+    });
+    const onStreamTiming = vi.fn();
+    const test = streamFixture({ api, onStreamTiming });
+    try {
+      await budgetStarted.promise;
+      await vi.advanceTimersByTimeAsync(21_520);
+      await test.connected;
+      expect(onStreamTiming.mock.calls).toEqual([
+        ["budget-preflight", 125],
+        ["budget-check", 125],
+        ["response-headers", 20_000],
+        ["backoff", 1_000],
+        ["budget-preflight", 125],
+        ["budget-check", 125],
+        ["response-headers", 20],
+      ]);
+      await vi.advanceTimersByTimeAsync(30);
+      expect(onStreamTiming).toHaveBeenLastCalledWith("first-byte", 30);
+    } finally {
+      await test.stop();
+    }
+  });
+
+  it("backs off consecutive failed opens but resets after each connected stream", async () => {
+    vi.useFakeTimers();
+    let attempt = 0;
+    const failed = Promise.withResolvers<void>();
+    let stream!: ReadableStreamDefaultController<Uint8Array>;
+    const api = budgetApi(createXTestSpend(), (url) => {
+      if (!url.pathname.endsWith("/stream")) {
+        return Response.json({ data: [] });
+      }
+      if (++attempt <= 3) {
+        return Response.json({}, { status: 503 });
+      }
+      return new Response(
+        new ReadableStream<Uint8Array>({
+          start: (value) => {
+            stream = value;
+          },
+        }),
+      );
+    });
+    const test = streamFixture({
+      api,
+      onStatus: (value) => {
+        if (value.streamBackoffMs) {
+          failed.resolve();
+        }
+      },
+    });
+    const waits = () =>
+      test.statuses.flatMap((value) => (value.streamBackoffMs ? [value.streamBackoffMs] : []));
+    try {
+      await failed.promise;
+      for (const delay of [1_000, 2_000, 4_000]) {
+        expect(waits().at(-1)).toBe(delay);
+        await vi.advanceTimersByTimeAsync(delay);
+      }
+      await test.connected;
+      for (let drop = 0; drop < 7; drop++) {
+        stream.close();
+        await vi.advanceTimersByTimeAsync(0);
+        expect(waits().at(-1)).toBe(1_000);
+        await vi.advanceTimersByTimeAsync(999);
+        expect(attempt).toBe(4 + drop);
+        await vi.advanceTimersByTimeAsync(1);
+        expect(attempt).toBe(5 + drop);
+      }
+    } finally {
+      await test.stop();
+    }
+  });
+
+  it.each([true, false])(
+    "checks buffered data after a synchronous stall (data=%s)",
+    async (hasData) => {
+      // Keep immediates real: advancing timers synchronously holds promise jobs and
+      // the simulated socket delivery until after the overdue idle callback runs.
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+      const test = streamFixture();
+      try {
+        await test.connected;
+        await vi.advanceTimersByTimeAsync(0);
+        const delivery = new Promise<void>((resolve) => {
+          setImmediate(resolve);
+        }).then(() => {
+          if (hasData) {
+            test.send(event(post("20")));
+          }
+        });
+        vi.advanceTimersByTime(27_800);
+        await delivery;
+        await new Promise<void>((resolve) => {
+          setImmediate(resolve);
+        });
+        await vi.advanceTimersByTimeAsync(0);
+        expect(test.statuses.some((value) => value.streamConnected === false)).toBe(!hasData);
+        expect(test.admitted.map((value) => value.post.id)).toEqual(hasData ? ["20"] : []);
+        if (hasData) {
+          await vi.advanceTimersByTimeAsync(25_000);
+          expect(test.statuses).toContainEqual(expect.objectContaining({ streamBackoffMs: 1_000 }));
+        }
+      } finally {
+        await test.stop();
+      }
+    },
+  );
+
   it("warns once per unparseable streak without event content and clears on a good event", async () => {
     vi.useFakeTimers();
     const test = streamFixture();
@@ -263,7 +402,7 @@ describe("X event transport", () => {
   ])(
     "hydrates $label mentions and backfills after an idle reconnect",
     async ({ entities, sinceId }) => {
-      vi.useFakeTimers();
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
       const firstConnected = Promise.withResolvers<void>();
       const reconnected = Promise.withResolvers<void>();
       const firstAdmitted = Promise.withResolvers<void>();
@@ -400,7 +539,10 @@ describe("X event transport", () => {
               data:
                 endpoint === "create"
                   ? []
-                  : [{ event_type: "post.mention.create", filter: { user_id: "9" } }],
+                  : X_ACTIVITY_POST_EVENT_TYPES.map((event_type) => ({
+                      event_type,
+                      filter: { user_id: "9" },
+                    })),
             });
           }
           if (input.endsWith("/oauth2/token")) {

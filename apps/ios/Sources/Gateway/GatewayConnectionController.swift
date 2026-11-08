@@ -948,6 +948,9 @@ extension GatewayConnectionController {
             return false
         }
 
+        if GatewayStableIdentifier.matches(ShareGatewayRelaySettings.loadConfig()?.gatewayStableID, stableID) {
+            ShareGatewayRelaySettings.clearConfig()
+        }
         guard self.persistTLSFingerprint(fingerprint, stableID) else {
             self.appModel?.gatewayStatusText = "Could not update gateway certificate"
             return false
