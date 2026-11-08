@@ -89,9 +89,9 @@ env:
   OCM_VERSION: v0.2.48
   OCM_LINUX_X64_SHA256: d0bdb49d69fa8bf3c3487ff04f4be82126828876f81690afdc002c427e22c1ac
   KOVA_REPOSITORY: openclaw/Kova
-  KOVA_CANONICAL_CONFIG_REF: dcdf014d44574407473d559009bc72bd62405549
+  KOVA_CANONICAL_CONFIG_REF: 869493d1be0dcf10b7ddf96371cf35239a9efbd6
   KOVA_LEGACY_LIST_CONFIG_REF: d69b2209905195bea06980721a92ad8b70808c5d
-  KOVA_TRUSTED_LIVE_REF: dcdf014d44574407473d559009bc72bd62405549
+  KOVA_TRUSTED_LIVE_REF: 869493d1be0dcf10b7ddf96371cf35239a9efbd6
   PERFORMANCE_MODEL_ID: gpt-5.6-luna
   # Release matrices cold-build the candidate runtime before measurement.
   KOVA_SCENARIO_TIMEOUT_MS: ${{ inputs.profile == 'release' && '900000' || '300000' }}
@@ -276,8 +276,8 @@ jobs:
       fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON((github.event_name == 'workflow_dispatch' &&
       startsWith(inputs.dispatch_id, 'full-release-validation-') && vars.OPENCLAW_RELEASE_RUNNER_GROUP ||
       '')), toJSON(vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04' ||
-      'blacksmith-16vcpu-ubuntu-2404'))) || (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04'
-      || 'blacksmith-16vcpu-ubuntu-2404') }}
+      'blacksmith-4vcpu-ubuntu-2404'))) || (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04'
+      || 'blacksmith-4vcpu-ubuntu-2404') }}
     timeout-minutes: 240
     strategy:
       fail-fast: false

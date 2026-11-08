@@ -7,11 +7,11 @@ import {
   readDeferredPluginMigrationsAsync,
 } from "./deferred-plugin-migrations.js";
 import { formatErrorMessage } from "./errors.js";
+import { compareSemverStrings } from "./npm-registry-spec.js";
 import { collectPackageDistContentInventoryErrors } from "./package-dist-inventory.js";
 import { readPackageVersion } from "./package-json.js";
 import { assertNoPendingPackageActivation } from "./package-update-activation.js";
 import { PACKAGE_REFUSAL_CODES } from "./package-update-refusal.js";
-import { compareSemverStrings } from "./update-check.js";
 import { collectGitRuntimeErrors } from "./update-git-runtime.js";
 import { collectInstalledGlobalPackageErrors } from "./update-global.js";
 import { resolveUpdateInstallRoot } from "./update-install-root.js";

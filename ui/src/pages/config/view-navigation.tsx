@@ -6,7 +6,7 @@ import {
   localizedHintForPath,
   type JsonSchema,
 } from "../../components/config-form.shared.ts";
-import { Icon, type IconName } from "../../components/solid/icon.tsx";
+import { Icon } from "../../components/solid/icon.tsx";
 import { t } from "../../lib/reactive/i18n.ts";
 import type { ConfigProps } from "./view-types.ts";
 
@@ -30,43 +30,6 @@ export function getChannelConfigGroups(schema: JsonSchema, hints: ConfigUiHints)
       : []),
   ];
 }
-
-const sidebarIcons: Record<string, IconName> = {
-  all: "layoutGrid",
-  env: "settings",
-  update: "download",
-  agents: "bot",
-  auth: "lock",
-  channels: "messageSquare",
-  messages: "mail",
-  commands: "terminal",
-  hooks: "link",
-  skills: "star",
-  tools: "wrench",
-  gateway: "globe",
-  wizard: "wandSparkles",
-  meta: "penLine",
-  logging: "fileText",
-  browser: "chrome",
-  ui: "panelsTopLeft",
-  models: "box",
-  bindings: "server",
-  broadcast: "radio",
-  tts: "music",
-  transcripts: "book",
-  session: "users",
-  cron: "clock",
-  discovery: "search",
-  talk: "mic",
-  plugins: "asterisk",
-  diagnostics: "activity",
-  cli: "terminal",
-  secrets: "key",
-  acp: "users",
-  mcp: "server",
-  __appearance__: "sun",
-  __notifications__: "bell",
-};
 
 export type SectionCategory = {
   id: string;
@@ -125,7 +88,7 @@ export function ConfigAccordionNav(props: {
   resetContentScroll: (target: EventTarget | null) => void;
 }) {
   return (
-    <div class="config-accordion-nav">
+    <div class="settings-group config-accordion-nav">
       <For each={props.categories} keyed={(category) => category.id}>
         {(category) => {
           const expanded = () =>
@@ -134,10 +97,8 @@ export function ConfigAccordionNav(props: {
           return (
             <div class="config-accordion-group">
               <button
-                class={[
-                  "config-accordion-group__header",
-                  { "config-accordion-group__header--active": expanded() },
-                ]}
+                type="button"
+                class="settings-row settings-row--nav config-accordion-group__header"
                 aria-expanded={expanded() ? "true" : "false"}
                 aria-controls={panelId()}
                 onClick={(event) => {
@@ -145,31 +106,22 @@ export function ConfigAccordionNav(props: {
                   props.resetContentScroll(event.currentTarget);
                 }}
               >
-                <span class="config-accordion-group__icon">
-                  <Icon name={sidebarIcons[category().sections[0]?.key ?? "default"] ?? "file"} />
+                <span class="settings-row__text">
+                  <span class="settings-row__title">{category().label}</span>
                 </span>
-                <span>{category().label}</span>
-                <svg
-                  class={[
-                    "config-accordion-group__chevron",
-                    { "config-accordion-group__chevron--open": expanded() },
-                  ]}
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  stroke-width="2"
-                  width="14"
-                  height="14"
-                >
-                  <polyline points="9 6 15 12 9 18" />
-                </svg>
+                <span class="settings-row__control">
+                  <span class="settings-row__chevron">
+                    <Icon name="chevronRight" />
+                  </span>
+                </span>
               </button>
               <div id={panelId()} class="config-accordion-group__items" hidden={!expanded()}>
                 <For each={category().sections} keyed={(section) => section.key}>
                   {(section) => (
                     <button
+                      type="button"
                       class={[
-                        "config-accordion-group__item",
+                        "settings-row settings-row--nav config-accordion-group__item",
                         {
                           "config-accordion-group__item--active":
                             props.activeSection === section().key,
@@ -181,10 +133,9 @@ export function ConfigAccordionNav(props: {
                         props.resetContentScroll(event.currentTarget);
                       }}
                     >
-                      <span class="config-accordion-group__item-icon">
-                        <Icon name={sidebarIcons[section().key] ?? "file"} />
+                      <span class="settings-row__text">
+                        <span class="settings-row__title">{section().label}</span>
                       </span>
-                      {section().label}
                     </button>
                   )}
                 </For>

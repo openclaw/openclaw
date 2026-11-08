@@ -3,7 +3,8 @@
  *   --repo <task-owned-clone> --output <new-directory> --samples 5
  * Run serial AB/BA arms from the respective source revisions, ten creations per
  * revision. The repository must be a disposable local clone; refs and worktrees
- * are created only there and below output. No network fetch, hooks or setup code.
+ * are created only there and below output. --default-base includes remote refresh
+ * and base hydration against the fixture's file:// origin. No hooks or setup code.
  * Each creation uses the real service, state leases, Git workers and native Git.
  * Workers drain between samples to model infrequent fresh-session creation.
  * Source-loader startup precedes timing; worker startup is included. Owner logs
@@ -29,6 +30,8 @@ const { values } = parseArgs({
     repo: { type: "string" },
     output: { type: "string" },
     samples: { type: "string", default: "5" },
+    "default-base": { type: "boolean" },
+    "expected-commit": { type: "string" },
   },
 });
 assert(values.repo && values.output, "--repo and --output are required");
@@ -114,7 +117,10 @@ setRuntimeConfigSnapshot(config, config);
 const { ManagedWorktreeService } = await import("../../src/agents/worktrees/service.js");
 const { requireGit } = await import("../../src/agents/worktrees/git.js");
 const { drainGlobalSingletonLifecycleState } = await import("../../src/shared/global-singleton.js");
-const commit = await requireGit(repo, ["rev-parse", "HEAD"]);
+if (values["default-base"]) {
+  assert((await requireGit(repo, ["remote", "get-url", "origin"])).startsWith("file://"));
+}
+const commit = values["expected-commit"] ?? (await requireGit(repo, ["rev-parse", "HEAD"]));
 const ownerSha256 = createHash("sha256")
   .update(
     await fs.readFile(new URL("../../src/agents/worktrees/capacity.runtime.ts", import.meta.url)),
@@ -135,7 +141,7 @@ try {
     const created = await service.create({
       repoRoot: repo,
       name: `measure-${path.basename(output)}-${index}`,
-      baseRef: commit,
+      baseRef: values["default-base"] ? undefined : commit,
       ownerKind: "session",
       ownerId: `synthetic-${index}`,
       runSetupScript: false,

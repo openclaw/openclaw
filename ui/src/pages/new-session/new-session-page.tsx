@@ -11,6 +11,7 @@ import {
 } from "solid-js";
 import type { SolidRouteProps } from "../../app-route-types.tsx";
 import { createGatewayControlUiReloadOptions } from "../../app/gateway-control-ui-reload.ts";
+import { mergeNewSessionPageChrome } from "../../app/mobile-nav-layout.ts";
 import {
   cancelStaleChunkRecovery,
   isStaleChunkImportError,
@@ -28,9 +29,11 @@ import { Icon } from "../../components/solid/icon.tsx";
 import { LazyViewError } from "../../components/solid/lazy-view-error.tsx";
 import { LoadingState } from "../../components/solid/loading-state.tsx";
 import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
+import { formatUiError } from "../../lib/format-error.ts";
 import { useOptionalApplication } from "../../lib/reactive/context.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { listen } from "../../lib/reactive/listener.ts";
+import { createMediaQuerySource } from "../../lib/reactive/platform.ts";
 import { projectOwner } from "../../lib/reactive/projection.ts";
 import "../../styles/chat/composer.css";
 import "../../styles/chat/composer-surface.css";
@@ -50,16 +53,23 @@ import { NewSessionComposer } from "./composer.tsx";
 import { ConnectMachineDialog } from "./connect-machine-dialog-view.tsx";
 import { isWorktreeNameValid } from "./create-params.ts";
 import { DraftError, NewSessionBody, preloadNewSessionSubmission } from "./draft-body.solid.tsx";
+import { DraftMobileHeader } from "./draft-mobile-header.tsx";
 import type { DraftSubmissionFlow } from "./draft-submission-flow.ts";
 import { createNewSessionTitle } from "./draft-title.ts";
 import { DraftWelcome } from "./draft-welcome.tsx";
 import {
+  NEW_SESSION_DOCKED_LAYOUT_QUERY,
   NewSessionIncognitoControl,
   NewSessionIncognitoNotice,
+  NewSessionWelcomeHint,
 } from "./incognito-control-view.tsx";
 import { restoredInstantThreadPage } from "./instant-thread-restore.ts";
 import type { NewSessionRouteData } from "./location.ts";
-import { NewSessionPageOwner, type PageHost } from "./new-session-page-owner.ts";
+import {
+  NewSessionPageOwner,
+  type NewSessionPageProps,
+  type PageHost,
+} from "./new-session-page-owner.ts";
 import { createSubmissionAction } from "./submission-action.ts";
 import { AgentSelect, NewSessionPlaceControls } from "./target-controls-view.tsx";
 import type { NewSessionPlaceControlsOptions } from "./target-controls.ts";
@@ -169,7 +179,10 @@ function DraftBlock(props: {
     <Show when={!catalog.isTarget(props.page().data)}>
       <ChatPermissionPicker
         canSelectFull={place().isAdmin()}
-        defaultMode={place().selectedAgent()?.defaultPermissionMode}
+        defaultMode={
+          place().selectedAgent()?.newSessionPermissionMode ??
+          place().selectedAgent()?.defaultPermissionMode
+        }
         disabled={submission().submitting || Boolean(submission().pendingPlacement.sessionKey)}
         disabledReason={submission().submitting ? t("newSession.starting") : undefined}
         mode={submission().permissionMode}
@@ -301,10 +314,10 @@ function DraftBlock(props: {
   );
 }
 
-function PageContent(_props: { data: NewSessionRouteData | undefined }, host: PageHost) {
+function PageContent(shell: NewSessionPageProps, host: PageHost) {
   const context = useOptionalApplication();
   // Native bridge roots do not inherit the router's error boundary.
-  const Content = () => renderPageContent(host);
+  const Content = () => renderPageContent(host, shell);
   const RenderError = (props: { error: unknown; reset: () => void }) => {
     onSettled(() => {
       let active = true;
@@ -329,7 +342,7 @@ function PageContent(_props: { data: NewSessionRouteData | undefined }, host: Pa
   );
 }
 
-function renderPageContent(host: PageHost) {
+function renderPageContent(host: PageHost, shell: NewSessionPageProps) {
   const owner = pageOwners.get(host) ?? new NewSessionPageOwner(host);
   pageOwners.set(host, owner);
   owner.context = useOptionalApplication();
@@ -372,8 +385,7 @@ function renderPageContent(host: PageHost) {
     () => owner,
     pageState.revision,
     submissionError,
-    (failure) =>
-      owner.submission.setError(failure instanceof Error ? failure.message : String(failure)),
+    (failure) => owner.submission.setError(formatUiError(failure)),
   );
   onSettled(() => {
     const preparation = createNewSessionTitle(() => ({
@@ -435,6 +447,8 @@ function renderPageContent(host: PageHost) {
     ];
     return () => stops.forEach((stop) => stop());
   });
+  const dockedLayout = createMediaQuerySource(NEW_SESSION_DOCKED_LAYOUT_QUERY);
+  const [incognitoNoteOpen, setIncognitoNoteOpen] = createSignal(false);
   const visibilityControl = {
     get visibility() {
       return page().submission.visibility;
@@ -446,8 +460,11 @@ function renderPageContent(host: PageHost) {
       return page().submission.pendingPlacement;
     },
     incognitoDisabledReason: () => page().submission.incognitoDisabledReason(),
-    setVisibility: (visibility: Parameters<DraftSubmissionFlow["setVisibility"]>[0]) =>
-      owner.submission.setVisibility(visibility),
+    setVisibility: (visibility: Parameters<DraftSubmissionFlow["setVisibility"]>[0]) => {
+      owner.submission.setVisibility(visibility);
+      // Say what Incognito means when it is turned on; restored drafts stay quiet.
+      setIncognitoNoteOpen(owner.submission.visibility === "incognito" && dockedLayout.read());
+    },
   };
   const completed = () => page().submission.completedSubmission;
   const creationComposer = createMemo(() => {
@@ -476,6 +493,12 @@ function renderPageContent(host: PageHost) {
       disabled: page().context?.gateway.snapshot.phase !== "connected",
     };
   };
+  const readChatHeader = () =>
+    mergeNewSessionPageChrome(host.closest(".shell--onboarding") !== null);
+  const [chatHeader, setChatHeader] = createSignal(readChatHeader());
+  onSettled(() =>
+    listen(host.ownerDocument.defaultView!, "resize", () => setChatHeader(readChatHeader())),
+  );
   const panel = () => page().attachmentPanel;
   const lightbox = () => page().imageLightbox;
   const panelContent = () => {
@@ -491,6 +514,15 @@ function renderPageContent(host: PageHost) {
             <DraftAgentSelect page={page} />
           </Show>
         ));
+        const welcomeHint = children(() => (
+          <Show when={!catalog.isTarget(page().data)} fallback={page().welcomeHint()}>
+            <NewSessionWelcomeHint
+              hint={page().welcomeHint()}
+              noteOpen={incognitoNoteOpen()}
+              onNoteOpenChange={setIncognitoNoteOpen}
+            />
+          </Show>
+        ));
         onSettled(() => {
           renderedPages.add(host);
         });
@@ -502,12 +534,16 @@ function renderPageContent(host: PageHost) {
                 {
                   chat: Boolean(page().submission.pendingMessage),
                   "new-session-page--incognito": page().submission.visibility === "incognito",
+                  "new-session-page--chat-header": chatHeader(),
                 },
               ]}
               style={{ "--chat-thread-max-width": options().chatMessageMaxWidth ?? "48rem" }}
             >
+              <Show when={chatHeader()}>
+                <DraftMobileHeader page={page} shell={shell} submission={visibilityControl} />
+              </Show>
               <SessionBackgroundView context={page().context} surface="new-session" />
-              <Show when={!catalog.isTarget(page().data)}>
+              <Show when={!chatHeader() && !catalog.isTarget(page().data)}>
                 <NewSessionIncognitoControl
                   submission={visibilityControl}
                   draftAvailable={page().submission.capabilities.canStartAsDraft(page().context)}
@@ -531,7 +567,7 @@ function renderPageContent(host: PageHost) {
                     fallback={
                       <DraftWelcome
                         sessions={page().context?.sessions}
-                        options={page().welcomeOptions()}
+                        options={{ ...page().welcomeOptions(), hint: welcomeHint() }}
                         assistantNameControl={assistantNameControl()}
                         composer={<Draft />}
                       />
@@ -635,13 +671,20 @@ function renderPageContent(host: PageHost) {
 }
 
 defineSolidBridge<
-  { data: NewSessionRouteData | undefined },
+  NewSessionPageProps,
   {
     focusComposer(): void;
   }
 >("openclaw-new-session-page", PageContent, {
-  properties: { data: { default: undefined, attribute: false } },
-  propertyChanged: (host) => {
+  properties: {
+    data: { default: undefined, attribute: false },
+    navDrawerOpen: { default: false, attribute: false },
+    gatewayStatus: { default: null, attribute: false },
+  },
+  propertyChanged: (host, key) => {
+    if (key !== "data") {
+      return;
+    }
     const owner = pageOwners.get(host);
     owner?.retireSubmissionPresentation();
     owner?.browser.close();

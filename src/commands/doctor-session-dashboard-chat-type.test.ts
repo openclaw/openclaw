@@ -115,13 +115,13 @@ describe("doctor dashboard chat type backfill", () => {
       before: Record<string, SessionEntry>,
       eligibleKey: string,
     ) => {
-      const preview = repairLegacyDashboardChatTypes({ apply: false, cfg, env });
+      const preview = await repairLegacyDashboardChatTypes({ apply: false, cfg, env });
       await settle();
       expect(preview).toMatchObject({ found: 1, repaired: 0 });
       expect(read()).toEqual(before);
       expectNote("Would record");
 
-      const fixed = repairLegacyDashboardChatTypes({ apply: true, cfg, env });
+      const fixed = await repairLegacyDashboardChatTypes({ apply: true, cfg, env });
       await settle();
       expect(fixed).toMatchObject({ found: 1, repaired: 1 });
       const eligible = before[eligibleKey];
@@ -135,7 +135,7 @@ describe("doctor dashboard chat type backfill", () => {
       // The stamp is the only change: every other durable field stays current.
       expect(read()).toEqual(after);
       expectNote("Recorded");
-      const repeated = repairLegacyDashboardChatTypes({ apply: true, cfg, env });
+      const repeated = await repairLegacyDashboardChatTypes({ apply: true, cfg, env });
       await settle();
       expect(repeated).toMatchObject({ found: 0, repaired: 0 });
       expect(read()).toEqual(after);

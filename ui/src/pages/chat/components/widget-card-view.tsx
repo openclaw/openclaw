@@ -86,7 +86,7 @@ function McpAppHost(
       prop:viewId={props.viewId}
       prop:height={props.height}
       prop:onHeightChange={props.onHeightChange}
-      style={{ display: "block", "min-height": `${props.height}px` }}
+      style={{ "min-height": `${props.height}px` }}
       title={props.title}
     />
   );
@@ -572,7 +572,7 @@ function CanvasPreview(props: {
                 }
                 const frame = source instanceof HTMLIFrameElement ? source : source?.previewFrame;
                 if (!frame) {
-                  showToast({ message: t("chat.toolCards.widgetExportFailed") });
+                  showToast({ severity: "error", message: t("chat.toolCards.widgetExportFailed") });
                   return;
                 }
                 const documentHtml =
@@ -580,15 +580,24 @@ function CanvasPreview(props: {
                 void exportWidget(value, frame, title, { documentHtml })
                   .then((result) => {
                     if (result === "rerender-required") {
-                      showToast({ message: t("chat.toolCards.widgetExportRerender") });
+                      showToast({
+                        severity: "error",
+                        message: t("chat.toolCards.widgetExportRerender"),
+                      });
                     } else if (result === "html") {
-                      showToast({ message: t("chat.toolCards.widgetExportHtmlFallback") });
+                      showToast({
+                        severity: undefined,
+                        message: t("chat.toolCards.widgetExportHtmlFallback"),
+                      });
                     } else if (value === "copy") {
-                      showToast({ message: t("common.copied") });
+                      showToast({ severity: "success", message: t("common.copied") });
                     }
                   })
                   .catch(() => {
-                    showToast({ message: t("chat.toolCards.widgetExportFailed") });
+                    showToast({
+                      severity: "error",
+                      message: t("chat.toolCards.widgetExportFailed"),
+                    });
                   });
               }}
             />

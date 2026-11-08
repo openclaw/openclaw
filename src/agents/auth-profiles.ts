@@ -54,7 +54,10 @@ export {
   withEnvOnlyAuthProfileStore,
   withAuthProfileStoreAgentDir,
 } from "./auth-profiles/store.js";
-export { hasAnyAuthProfileStoreSourceAsync } from "./auth-profiles/source-check.js";
+export {
+  hasAnyAuthProfileStoreSourceAsync,
+  hasLocalAuthProfileStoreSourceAsync,
+} from "./auth-profiles/source-check.js";
 export {
   ensureAuthProfileStore,
   findPersistedAuthProfileCredentialAsync,

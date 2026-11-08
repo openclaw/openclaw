@@ -125,7 +125,7 @@ const toolSchemas = {
   release: strictObject({
     id: cardIdField(),
     token: claimTokenField(),
-    status: Type.Optional(Type.String({ description: "Optional next card status after release." })),
+    status: Type.Optional(Type.String({ description: "Omit: clear claim only, preserve status." })),
   }),
   comment: strictObject({
     id: cardIdField(),
@@ -318,7 +318,7 @@ export function createWorkboardTools(params: {
       name: "workboard_release",
       label: "Workboard Release",
       description:
-        "Release this agent's Workboard claim after finishing, pausing, or handing off card work.",
+        "Release this agent's Workboard claim. Omitting status only clears the claim and preserves the current card status, including running. Pass status (e.g. todo, ready, or review) to pause or hand off work.",
       parameters: toolSchemas.release,
       execute: scopedCardMutation((id, record, scope) =>
         store.releaseClaim(id, { ...scope, status: record.status }),

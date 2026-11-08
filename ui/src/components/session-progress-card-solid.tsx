@@ -2,7 +2,8 @@ import type { ProgressCard, SessionRunStatus } from "@openclaw/gateway-protocol"
 import { createMemo, createUniqueId, onSettled, Show } from "solid-js";
 import { i18nRevision, t } from "../lib/reactive/i18n.ts";
 import type { SessionProgressCardRuntime } from "../lib/session-progress-runtime.ts";
-import { animateDetailsSection, DETAILS_SECTION_MOTION } from "./details-section-motion.ts";
+import { DETAILS_SECTION_MOTION } from "./details-section-motion-options.ts";
+import { animateDetailsSection } from "./details-section-motion.ts";
 import { toSanitizedMarkdownHtml } from "./markdown.ts";
 import {
   CardActivity,
@@ -55,7 +56,7 @@ function CardAction(props: { card: ProgressCard; onAction?: (card: ProgressCard)
   return (
     <Show when={props.onAction}>
       <button
-        class="rail-header__action session-progress-card__dismiss"
+        class="oc-icon-button oc-icon-button--28 rail-header__action session-progress-card__dismiss"
         type="button"
         aria-label={label()}
         title={label()}

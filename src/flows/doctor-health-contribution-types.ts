@@ -36,6 +36,7 @@ type DoctorConfigResult = {
   /** Successful retirement pass awaiting the config-write/no-change boundary. */
   modelRetirementRepairRan?: boolean;
   retirementOnly?: boolean;
+  retirementOnlyBlockers?: readonly string[];
   sourceConfigValid?: boolean;
   sourceLastTouchedVersion?: string;
   skipPluginValidationOnWrite?: boolean;

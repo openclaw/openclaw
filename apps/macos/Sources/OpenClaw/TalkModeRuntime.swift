@@ -1356,11 +1356,7 @@ extension TalkModeRuntime {
     }
 
     func applyTalkConfig(_ cfg: TalkModeGatewayConfigState) async {
-        guard await MainActor.run(body: {
-            guard let state = self.state() else { return false }
-            state.seamColorHex = cfg.seamColorHex
-            return true
-        }) else { return }
+        guard await MainActor.run(body: { self.state() != nil }) else { return }
         self.commitTalkConfig(cfg)
     }
 

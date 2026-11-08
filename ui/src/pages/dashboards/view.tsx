@@ -19,10 +19,11 @@ import {
   onSettled,
 } from "solid-js";
 import type { SessionsListResult } from "../../api/types.ts";
-import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
+import type { ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { HubPageHeader } from "../../components/solid/hub-page-header.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import { PanelRefreshStatus } from "../../components/solid/panel-refresh-status.tsx";
+import { SettingsStatus } from "../../components/solid/settings-ui.tsx";
 import { SettingsWorkspace } from "../../components/solid/settings-workspace.tsx";
 import { registerDashboardsEnglish } from "../../i18n/locales/en-dashboards.ts";
 import { formatUiError } from "../../lib/format-error.ts";
@@ -36,7 +37,9 @@ import {
   sessionNavigationTarget,
 } from "../../lib/sessions/route-navigation.ts";
 import "../../styles/dashboards.css";
+import { DashboardFilterPopover } from "./dashboard-filter-popover.tsx";
 import { DashboardPreview } from "./dashboard-preview.tsx";
+import type { DashboardGalleryFilters, DashboardGalleryHandlers } from "./gallery-filters.ts";
 
 registerDashboardsEnglish();
 
@@ -47,17 +50,6 @@ export type DashboardsRouteData = {
   fallbackAgentId: string;
   mainKey: string;
   globalScope: boolean;
-};
-
-export type DashboardGalleryFilters = {
-  query: string;
-  ownerId: string;
-  sort: "updated" | "title";
-};
-
-export type DashboardGalleryHandlers = {
-  onFilterChange: (filter: Partial<DashboardGalleryFilters>) => void;
-  onNavigate?: ApplicationContext["navigate"];
 };
 
 type DashboardRow = SessionsListResult["sessions"][number];
@@ -150,10 +142,7 @@ function DashboardGrid(props: {
           <div class="dashboard-card__heading">
             <h2>{title()}</h2>
             <Show when={childProps.row.status === "running"}>
-              <span class="dashboard-card__live">
-                <i />
-                {t("dashboardsPage.live")}
-              </span>
+              <SettingsStatus kind="running" label={t("dashboardsPage.live")} />
             </Show>
           </div>
           <div class="dashboard-card__author">
@@ -464,9 +453,15 @@ function DashboardList(props: {
                 }
               />
             </label>
+            <DashboardFilterPopover
+              owners={owners()}
+              filters={props.filters}
+              handlers={props.handlers}
+            />
             <label class="dashboards-select">
               <span>{t("dashboardsPage.authorFilter")}</span>
               <select
+                class="settings-select"
                 value={props.filters.ownerId}
                 onChange={(event) =>
                   props.handlers.onFilterChange({ ownerId: event.currentTarget.value })
@@ -481,6 +476,7 @@ function DashboardList(props: {
             <label class="dashboards-select">
               <span>{t("dashboardsPage.sortLabel")}</span>
               <select
+                class="settings-select"
                 value={props.filters.sort}
                 onChange={(event) => {
                   const sort = event.currentTarget.value;
@@ -531,6 +527,7 @@ function DashboardGallerySkeleton() {
       <div class="dashboards-loading" aria-hidden="true" inert>
         <div class="dashboards-toolbar">
           <div class="dashboards-search skeleton dashboards-loading__control" />
+          <div class="dashboards-filter skeleton dashboards-loading__filter" />
           <For each={[0, 1]}>
             {() => (
               <div class="dashboards-select dashboards-loading__select">

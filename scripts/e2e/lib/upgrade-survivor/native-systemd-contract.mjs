@@ -1,5 +1,16 @@
 import assert from "node:assert/strict";
+import { chmodSync, copyFileSync } from "node:fs";
+import path from "node:path";
 import { classifyReleaseTrain, parseReleaseVersion } from "../../../lib/release-version.mjs";
+
+export function prepareNativeRuntimePath(runtime) {
+  // A runner's selected Node may live below private toolchain directories.
+  // Keep the fixture's executable accessible for its whole owned service lifetime.
+  const node = path.join(runtime, "node");
+  copyFileSync(process.execPath, node);
+  chmodSync(node, 0o755);
+  return `${runtime}:${path.dirname(process.execPath)}:${process.env.PATH}`;
+}
 
 // Native cells run sequentially on one disposable Linux guest. Container flows
 // retain their own planner and manual restart contract.

@@ -10,7 +10,10 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ModelCompatConfig } from "../config/zod-schema.model-compat.js";
 import { registerPluginMetadataProcessMemoLifecycleClear } from "../plugins/plugin-metadata-lifecycle.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
-import { finalizeAgentToolAvailability } from "./agent-tool-availability.js";
+import {
+  bindAgentToolExecutionSchema,
+  finalizeAgentToolAvailability,
+} from "./agent-tool-availability.js";
 import { copyAgentToolMetadata } from "./agent-tool-metadata.js";
 import { wrapToolWithAbortSignal } from "./agent-tools.abort.js";
 import type { HookContext } from "./agent-tools.before-tool-call.types.js";
@@ -232,13 +235,22 @@ export function finalizeAgentTools(options: FinalizeAgentToolsOptions): AnyAgent
   } else {
     publish();
   }
-  return finalized.map((tool) => {
+  return finalized.map((tool, index) => {
+    // Positions are preserved across normalization, wrapping, and availability, so the
+    // input tool still carries the provider-neutral contract for this position.
+    const canonicalParameters = options.tools[index]?.parameters ?? tool.parameters;
     const parameters = memo.published.get(tool.parameters)?.parameters ?? tool.parameters;
     const outputSchema = tool.outputSchema
       ? (memo.published.get(tool.outputSchema)?.parameters ?? tool.outputSchema)
       : undefined;
-    return parameters === tool.parameters && outputSchema === tool.outputSchema
-      ? tool
-      : copyAgentToolMetadata(tool, { ...tool, parameters, outputSchema });
+    const projected =
+      parameters === tool.parameters && outputSchema === tool.outputSchema
+        ? tool
+        : copyAgentToolMetadata(tool, { ...tool, parameters, outputSchema });
+    // The advertised schema is a provider projection (for example Gemini stringifies
+    // literal enums); keep the canonical contract for local validation.
+    return parameters === canonicalParameters
+      ? projected
+      : bindAgentToolExecutionSchema(projected, canonicalParameters);
   });
 }

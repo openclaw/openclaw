@@ -45,8 +45,7 @@ struct TalkModeRuntimeNativeLocaleProofTests {
                 outputFormat: nil,
                 apiKey: nil,
                 referenceAudioPath: nil,
-                referenceText: nil,
-                seamColorHex: nil)
+                referenceText: nil)
             let live = TalkModeRuntime.Dependencies.live
             let runtime = TalkModeRuntime(
                 state: { state },

@@ -1,6 +1,7 @@
 import { createMemo, createUniqueId, onSettled } from "solid-js";
 import type { SessionPermissionMode } from "../../../../../packages/gateway-protocol/src/index.js";
 import { Icon } from "../../../components/solid/icon.tsx";
+import { MenuHeading } from "../../../components/solid/menu-heading.tsx";
 import { Menu, type MenuHandle, type MenuItem } from "../../../components/solid/menu.tsx";
 import { registerModelControlsEnglish } from "../../../i18n/locales/en-model-controls.ts";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../../../lib/external-link.ts";
@@ -43,6 +44,14 @@ function modeLabel(
           mode: t(`chat.permissionControls.modes.${defaultMode}.label`),
         })
       : t("chat.permissionControls.default");
+}
+
+function agentDefaultLabel(defaultMode?: SessionPermissionMode): string {
+  return defaultMode
+    ? t("chat.permissionControls.agentDefaultWithMode", {
+        mode: t(`chat.permissionControls.modes.${defaultMode}.label`),
+      })
+    : t("chat.permissionControls.agentDefault");
 }
 
 function permissionSelection(value: string): PermissionSelection | undefined {
@@ -94,13 +103,13 @@ export function ChatPermissionPicker(props: ChatPermissionPickerProps) {
         label: t("common.learnMore"),
         href: PERMISSION_MODES_DOCS_URL,
         attributes: { target: EXTERNAL_LINK_TARGET, rel: buildExternalLinkRel() },
-        class: "chat-controls__permission-learn-more learn-more-link",
+        class: "oc-menu-heading__action chat-controls__permission-learn-more learn-more-link",
       },
       ...PERMISSION_OPTIONS.map((mode, index): MenuItem => {
         const value = mode ?? DEFAULT_PERMISSION_VALUE;
         const selected = selectedMode() === mode;
         const locked = mode === "full" && !canSelectFull();
-        const label = modeLabel(mode, defaultMode());
+        const label = mode ? modeLabel(mode) : agentDefaultLabel(defaultMode());
         const fullAccess = mode === "full" || (mode === null && defaultMode() === "full");
         return {
           id: value,
@@ -131,7 +140,7 @@ export function ChatPermissionPicker(props: ChatPermissionPickerProps) {
           content: (
             <span class="chat-controls__permission-option-copy">
               <span class="chat-controls__permission-option-title">
-                <span>{modeLabel(mode)}</span>
+                <span>{mode ? modeLabel(mode) : t("chat.permissionControls.agentDefault")}</span>
                 {mode && mode === defaultMode() && (
                   <span class="chat-controls__permission-default-badge">
                     {t("chat.permissionControls.default")}
@@ -228,17 +237,16 @@ export function ChatPermissionPicker(props: ChatPermissionPickerProps) {
       trigger={
         <>
           <span class="chat-controls__permission-icon" aria-hidden="true">
-            <Icon name={permissionIcon(props.mode)} />
+            <Icon name={permissionIcon(props.mode ?? props.defaultMode)} />
           </span>
+          {/* "Default (...)" belongs to the menu row; the trigger names the effective mode. */}
           <span class="chat-controls__inline-select-label chat-controls__permission-label">
-            {modeLabel(props.mode, props.defaultMode)}
+            {modeLabel(props.mode ?? props.defaultMode)}
           </span>
         </>
       }
     >
-      <div class="chat-controls__popover-title chat-controls__permission-heading">
-        {t("chat.permissionControls.label")}
-      </div>
+      <MenuHeading label={t("chat.permissionControls.label")} />
     </Menu>
   );
 }

@@ -29,28 +29,21 @@ suite.define(() => {
         });
         await page.goto(`${suite.server.baseUrl}settings/model-providers`);
         const copilotRow = page.locator('li.provider-row[data-provider-id="github-copilot"]');
-        await copilotRow.locator(".provider-usage__chip", { hasText: "Premium" }).waitFor();
-
-        // An exhausted plan window reads as no headroom, beside the name and in the open row.
-        expect(
-          await copilotRow
-            .locator(".provider-usage__chip", { hasText: "Premium" })
-            .locator(".provider-usage__chip-value")
-            .textContent(),
-        ).toBe("0% left");
+        // An exhausted plan window reads as no headroom, on the closed row and in the open one.
+        await expect
+          .poll(() => copilotRow.locator(".provider-row__status").textContent())
+          .toContain("Premium 0% left");
         const copilot = await expandProvider(page, "github-copilot");
         const premium = copilot.locator(".provider-usage__window", { hasText: "Premium" });
         expect(await premium.getByRole("meter").getAttribute("aria-valuenow")).toBe("0");
         expect(await premium.locator(".provider-usage__window-value").textContent()).toBe(
           "0% left",
         );
-        // A used-up window names itself above the tiles.
-        expect(await copilot.locator(".provider-usage__alert").textContent()).toContain(
-          "Premium is used up",
-        );
+        expect(await premium.getAttribute("data-tone")).toBe("error");
         // Copilot reports no reset time, so the row claims none.
         expect(await premium.locator(".provider-usage__reset").count()).toBe(0);
-        expect(await page.locator('.provider-row[data-provider-id="xai"]').textContent()).toContain(
+        // A balance is a detail until it runs out, so it waits inside the row.
+        expect(await (await expandProvider(page, "xai")).textContent()).toContain(
           "Prepaid balance",
         );
         // Usable providers lead, alphabetical. Anthropic has ready catalog models
@@ -63,7 +56,7 @@ suite.define(() => {
         expect(await page.locator(".provider-list--quiet").count()).toBe(0);
         expect(
           await page.locator('[data-provider-id="anthropic"] .provider-row__meta').textContent(),
-        ).toContain("Credentials managed outside OpenClaw");
+        ).toContain("Account access managed outside OpenClaw");
         expect(
           await page
             .locator('[data-provider-id="github-copilot"] .model-providers__profile-copy strong')

@@ -60,7 +60,11 @@ export function controlUiPluginDistributionsPlugin(repoRoot: string, inputs: Set
       const promised = required
         ? collectSourceCheckoutPluginBuildEntries({ cwd: repoRoot })
             .filter((entry) => {
-              if (!isRecord(entry.packageJson) || !controlUiSource(entry.packageJson)) {
+              if (
+                entry.id === "openclaw-id-access" ||
+                !isRecord(entry.packageJson) ||
+                !controlUiSource(entry.packageJson)
+              ) {
                 return false;
               }
               if (!entry.isolated) {
@@ -113,6 +117,11 @@ export function controlUiPluginDistributionsPlugin(repoRoot: string, inputs: Set
         if (!controlUi) {
           continue;
         }
+        // This Labs-owned island uses the Gateway's flag-gated catalog/assets.
+        // Packaging it in the shared URL inventory makes generic navigation warm its CSS while off.
+        if (pluginId === "openclaw-id-access") {
+          continue;
+        }
         const capabilities = validatePluginUiCapabilities(manifest.uiCapabilities);
         const uiCapabilities = capabilities.ok ? capabilities.capabilities : undefined;
         const packagePath = path.join(rootDir, "package.json");
@@ -137,7 +146,15 @@ export function controlUiPluginDistributionsPlugin(repoRoot: string, inputs: Set
         if (build.directory !== `dist/control-ui/${generation}`) {
           throw new Error(`Incomplete or invalid packaged native UI generation for ${id}`);
         }
-        const revision = pluginControlUiRevision(controlUi, uiCapabilities, build.assets);
+        if (controlUi.panelIcon) {
+          consume(path.join(rootDir, controlUi.panelIcon));
+        }
+        const revision = pluginControlUiRevision(
+          controlUi,
+          uiCapabilities,
+          build.assets,
+          build.panelIcon?.dataUrl,
+        );
         const urls = new Map<string, string>();
         for (const [name, asset] of build.assets) {
           consume(path.join(rootDir, build.directory, name));

@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs";
+import { readFile } from "node:fs/promises";
 import path from "node:path";
 import {
   asNonArrayRecord,
@@ -131,22 +132,38 @@ export type TtsUserPrefs = {
 
 export function readTtsPrefs(prefsPath: string, options?: { forUpdate?: boolean }): TtsUserPrefs {
   try {
-    return asNonArrayRecord(JSON.parse(readFileSync(prefsPath, "utf8"))) as TtsUserPrefs;
+    return parseTtsPrefs(readFileSync(prefsPath, "utf8"));
   } catch (cause) {
-    if (hasErrnoCode(cause, "ENOENT")) {
-      // Missing preferences are a normal first-run state.
-      return {};
-    }
-    const error = new Error(
-      `Unable to read TTS preferences at ${prefsPath}. Repair the file or its permissions.`,
-      { cause },
-    );
-    if (options?.forUpdate) {
-      throw error;
-    }
-    console.warn(`[tts] ${error.message} Using configured defaults.`);
+    return handlePrefsReadError(prefsPath, cause, options?.forUpdate);
+  }
+}
+
+export async function readTtsPrefsAsync(prefsPath: string): Promise<TtsUserPrefs> {
+  try {
+    return parseTtsPrefs(await readFile(prefsPath, "utf8"));
+  } catch (cause) {
+    return handlePrefsReadError(prefsPath, cause);
+  }
+}
+
+function parseTtsPrefs(contents: string): TtsUserPrefs {
+  return asNonArrayRecord(JSON.parse(contents)) as TtsUserPrefs;
+}
+
+function handlePrefsReadError(prefsPath: string, cause: unknown, forUpdate = false): TtsUserPrefs {
+  if (hasErrnoCode(cause, "ENOENT")) {
+    // Missing preferences are a normal first-run state.
     return {};
   }
+  const error = new Error(
+    `Unable to read TTS preferences at ${prefsPath}. Repair the file or its permissions.`,
+    { cause },
+  );
+  if (forUpdate) {
+    throw error;
+  }
+  console.warn(`[tts] ${error.message} Using configured defaults.`);
+  return {};
 }
 
 export function resolveTtsAutoModeFromPrefs(prefs: TtsUserPrefs): TtsAutoMode | undefined {
@@ -161,27 +178,27 @@ export function resolveTtsAutoModeFromPrefs(prefs: TtsUserPrefs): TtsAutoMode | 
 }
 
 /** Return whether this payload should attempt TTS based on session, prefs, and config. */
-export function shouldAttemptTtsPayload(params: {
+export async function shouldAttemptTtsPayload(params: {
   cfg: OpenClawConfig;
   preparedTtsPreferences: PreparedTtsPreferences;
   ttsAuto?: string;
   agentId?: string;
   channelId?: string;
   accountId?: string;
-}): boolean {
+}): Promise<boolean> {
   const sessionAuto = normalizeTtsAutoMode(params.ttsAuto);
   return sessionAuto
     ? sessionAuto !== "off"
     : shouldAttemptConfiguredTtsPayload(params, resolveEffectiveTtsConfig(params.cfg, params));
 }
 
-function shouldAttemptConfiguredTtsPayload(
+async function shouldAttemptConfiguredTtsPayload(
   params: Parameters<typeof shouldAttemptTtsPayload>[0],
   raw: TtsConfig,
-): boolean {
+): Promise<boolean> {
   const scopedPrefsPath = (raw as TtsConfig & { prefsPath?: string }).prefsPath;
   const prefsAuto = resolveTtsAutoModeFromPrefs(
-    readTtsPrefs(
+    await readTtsPrefsAsync(
       resolveTtsPrefsPathValue(
         scopedPrefsPath,
         () => params.preparedTtsPreferences.machinePrefsPath,
@@ -192,16 +209,16 @@ function shouldAttemptConfiguredTtsPayload(
 }
 
 /** Return whether TTS directive markup should be stripped from user-visible text. */
-export function shouldCleanTtsDirectiveText(
+export async function shouldCleanTtsDirectiveText(
   params: Parameters<typeof shouldAttemptTtsPayload>[0],
-): boolean {
+): Promise<boolean> {
   const sessionAuto = normalizeTtsAutoMode(params.ttsAuto);
   if (sessionAuto === "off") {
     return false;
   }
   const raw = resolveEffectiveTtsConfig(params.cfg, params);
   return (
-    (sessionAuto !== undefined || shouldAttemptConfiguredTtsPayload(params, raw)) &&
+    (sessionAuto !== undefined || (await shouldAttemptConfiguredTtsPayload(params, raw))) &&
     raw.modelOverrides?.enabled !== false
   );
 }

@@ -22,6 +22,7 @@ import {
   RUNTIME_DEPENDENCY_OWNERSHIP_RELATIVE_PATH,
   type RuntimeDependencyOwnership,
 } from "../src/infra/runtime-dependency-ownership.js";
+import { managedHandoffRuntimeEntrypoint } from "../src/infra/update-managed-service-handoff-runtime-assets.js";
 import {
   WORKER_BUNDLE_ENTRY_PATH,
   WORKER_BUNDLE_RSYNC_RECEIVER_PATH,
@@ -82,13 +83,14 @@ const MAX_INSTALLED_ROOT_DIST_JS_FILES = 20_000;
 const MAX_INSTALLED_WORKER_DIST_JS_FILES = 10_000;
 const MAX_INSTALLED_BUNDLED_PLUGIN_FILES = 20_000;
 const ROOT_DIST_JAVASCRIPT_MODULE_FILE_RE = /\.(?:c|m)?js$/u;
-// Self-contained bundles (the ~69 MB worker, the ~66 MB sealed package-update recovery helper)
+// Self-contained workers and sealed update recovery helpers
 // need extra headroom, but synchronous read/parse stays bounded.
 const SELF_CONTAINED_WORKER_DEPLOY_DIST_PATHS = new Set([
   `worker/${WORKER_BUNDLE_ENTRY_PATH}`,
   `worker/${WORKER_BUNDLE_RSYNC_RECEIVER_PATH}`,
   `worker/${WORKER_BUNDLE_SQLITE_STORE_PATH}`,
   packageActivationRuntimeEntrypoint.distWorkerPath,
+  managedHandoffRuntimeEntrypoint.distWorkerPath,
 ]);
 const OPTIONAL_OR_EXTERNALIZED_RUNTIME_IMPORTS = new Set([
   // Optional A2UI markdown renderer. Main no longer builds Canvas A2UI, but main's

@@ -97,7 +97,7 @@ suite.define(() => {
           });
           const recovery = await support.waitForConfirmModal(page);
           await ui.button(recovery, `Discard changes and ${action}`, false).waitFor();
-          await ui.expectText(recovery, "Reconnect it to keep those changes");
+          await ui.expectText(recovery, "Reconnect it to keep them");
           return recovery;
         };
 
@@ -382,7 +382,7 @@ suite.define(() => {
         code: "INVALID_REQUEST",
         message: `Session ${key} ${changedMessage}`,
       });
-      const error = page.locator("[data-sidebar-session-error]");
+      const error = page.locator("openclaw-toast-host");
       await ui.expectText(error, changedMessage);
       expect(await error.textContent()).not.toContain("GatewayRequestError");
       await ui.visible(row);

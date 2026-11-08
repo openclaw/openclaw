@@ -1,4 +1,6 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { FailoverError } from "../agents/failover-error.js";
+import { runUtilityCompletion } from "../agents/utility-completion.js";
 import { onAgentEvent, type AgentEventPayload } from "../infra/agent-events.js";
 import { claimAgentRunContext, releaseAgentRunContext } from "../infra/agent-run-registry.js";
 import { registerSecretValueForRedaction } from "../logging/secret-redaction-registry.js";
@@ -6,7 +8,10 @@ import { resetSecretRedactionRegistryForTest } from "../logging/secret-redaction
 import { setGatewayPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
 import { setCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata.test-support.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
-import { createSessionObserverCompletion } from "./session-observer-completion.js";
+import {
+  createSessionObserverCompletion,
+  reportSessionObserverDegradation,
+} from "./session-observer-completion.js";
 import type { defaultCompleteModel } from "./session-observer-model.js";
 import { observerState } from "./session-observer-state.test-support.js";
 import {
@@ -32,6 +37,7 @@ beforeEach(() => {
           modelIdNormalization: {
             providers: { openai: { aliases: { "private-manifest-alias": "gpt-test" } } },
           },
+          modelCatalog: { providers: { openai: { defaultUtilityModel: "gpt-test", models: [] } } },
         },
       ],
     }),
@@ -125,6 +131,107 @@ it.each(["exact tool cap", "invalid schema", "manifest alias"])(
     }
   },
 );
+
+it.each([
+  { name: "provider default", utilityModel: undefined, agentUtilityModel: undefined, warnings: 0 },
+  {
+    name: "configured fallback",
+    utilityModel: { fallbacks: ["openai/gpt-recovery"] },
+    agentUtilityModel: undefined,
+    warnings: 1,
+  },
+  {
+    name: "per-agent model",
+    utilityModel: undefined,
+    agentUtilityModel: "openai/gpt-test",
+    warnings: 1,
+  },
+])(
+  "only posts a conversation warning for explicit utility settings: $name",
+  async ({ utilityModel, agentUtilityModel, warnings }) => {
+    const notices: AgentEventPayload[] = [];
+    const unsubscribe = onAgentEvent((evt) => {
+      if (evt.stream === "notice") {
+        notices.push(evt);
+      }
+    });
+    const prepareModel = vi.fn(async () => {
+      throw new Error("Synthetic utility model failure");
+    });
+    const harness = createHarness({
+      prepareModel,
+      config: {
+        agents: {
+          defaults: { model: "openai/gpt-main", utilityModel },
+          entries: { main: { utilityModel: agentUtilityModel } },
+        },
+      },
+    });
+    try {
+      await startAndAddToolNotes(harness.observer);
+      await advance(24_000);
+      expect(prepareModel).toHaveBeenCalledTimes(2);
+      expect(notices).toHaveLength(warnings);
+      await advance(60_000);
+      expect(prepareModel).toHaveBeenCalledTimes(2);
+    } finally {
+      unsubscribe();
+    }
+  },
+);
+
+it("names missing models and exhausted utility fallbacks without exposing provider error text", async () => {
+  const cfg = {
+    agents: {
+      defaults: {
+        utilityModel: {
+          primary: "fixture/missing@private-profile",
+          fallbacks: ["fixture/unavailable", "fixture/recovery"],
+        },
+      },
+    },
+  };
+  const notices: AgentEventPayload[] = [];
+  const unsubscribe = onAgentEvent((evt) => {
+    if (evt.stream === "notice") {
+      notices.push(evt);
+    }
+  });
+  const complete = vi.fn<NonNullable<Parameters<typeof runUtilityCompletion>[1]>>(
+    async (request) => {
+      throw new FailoverError("private-provider-error", {
+        reason: "model_not_found",
+        provider: request.provider,
+        model: request.model,
+      });
+    },
+  );
+  const request = {
+    config: cfg,
+    agentId: "main",
+    provider: "fixture",
+    model: "missing",
+    useUtilityModel: true,
+    prompt: "Synthetic task",
+    systemPrompt: "Return JSON",
+    timeoutMs: 1000,
+  };
+  try {
+    const error = await runUtilityCompletion(request, complete).catch((caught: unknown) => caught);
+    reportSessionObserverDegradation(
+      { ...observerState(), utilityModelRef: "fixture/missing@private-profile" },
+      error,
+      cfg,
+    );
+    expect(notices[0]?.data.message).toContain(
+      "Unavailable model IDs: fixture/missing, fixture/unavailable, fixture/recovery.",
+    );
+    expect(notices[0]?.data.message).toContain("Utility fallbacks exhausted");
+    expect(notices[0]?.data.message).not.toMatch(/private-profile|private-provider-error/u);
+  } finally {
+    unsubscribe();
+  }
+});
 
 function completionAfter(delay?: number) {
   return vi.fn(

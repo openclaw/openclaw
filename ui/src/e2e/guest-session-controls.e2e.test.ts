@@ -271,7 +271,7 @@ suite.define(() => {
         const send = requireRecord((await gateway.waitForRequest("chat.send")).params);
         expect(send).toMatchObject({ sessionKey: key, message: "Continue my work." });
         const runId = String(send.idempotencyKey);
-        const stop = pane.getByRole("button", { name: "Stop generating", exact: true });
+        const stop = pane.getByRole("button", { name: "Stop", exact: true });
         await stop.waitFor();
         const researchListCount = (
           await gateway.getRequests("sessions.list", { agentId: "research" })

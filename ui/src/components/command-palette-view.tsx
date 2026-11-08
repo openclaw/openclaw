@@ -295,11 +295,6 @@ function PaletteSearch(props: {
           : current().sessionSearchPartial
             ? t("palette.searchPartial")
             : null,
-      current().archivedTranscriptsExcluded > 0
-        ? t("sessionsView.transcriptSearchArchivedExcluded", {
-            count: String(current().archivedTranscriptsExcluded),
-          })
-        : null,
     ].filter((notice): notice is string => Boolean(notice));
   const searchSettled = () =>
     Boolean(current().searchQuery.trim()) &&
@@ -443,6 +438,11 @@ function PaletteSearch(props: {
         </div>
       </Show>
       <div id="cmd-palette-keys" class="cmd-palette__footer">
+        <Show when={current().archivedTranscriptsExcluded > 0}>
+          <span class="cmd-palette__archive-note" role="status">
+            {t("palette.archivedSessionsExcluded")}
+          </span>
+        </Show>
         <Show when={results().items.length > 0 && !current().query.includes("\n")}>
           <PaletteHint shortcut={<Kbd keys={["↑", "↓"]} />} label={t("palette.footer.navigate")} />
           <Show when={!isMobileBrowserPlatform()}>
