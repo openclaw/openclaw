@@ -1839,6 +1839,69 @@ private func pendingHandoffDiagnostic(
         }
     }
 
+    @Test @MainActor func `reconnects keep the user's auto-connect choice`() async throws {
+        let registryIsolation = await GatewayRegistryTestIsolation()
+        defer { registryIsolation.restore() }
+        let state = try TemporaryOpenClawState(instanceID: "autoconnect-\(UUID().uuidString)")
+        defer { state.restore() }
+        try await withUserDefaults(["gateway.autoconnect": false]) {
+            let defaults = UserDefaults.standard
+            let server = try await NativeGatewayWebSocketFixture.start(issuedDeviceTokens: [])
+            defer { server.stop() }
+            server.acceptedOperatorScopes = []
+            let stableID = "autoconnect-\(UUID().uuidString)"
+            let config = try GatewayConnectConfig(
+                url: server.url(),
+                stableID: stableID,
+                tls: GatewayTLSParams(required: false, expectedFingerprint: nil, allowTOFU: false, storeKey: nil),
+                token: nil,
+                bootstrapToken: nil,
+                password: nil,
+                nodeOptions: GatewayConnectOptions(
+                    role: "node",
+                    scopes: [],
+                    caps: [],
+                    commands: [],
+                    permissions: [:],
+                    clientId: "openclaw-ios",
+                    clientMode: "node",
+                    clientDisplayName: "Auto-connect Test",
+                    deviceAuthGatewayID: stableID),
+                ingressAuthorization: nil)
+            let model = NodeAppModel(audioAdmissionInitiallyAllowed: false)
+            model.setScenePhase(.active)
+            func nodeConnects() -> Int {
+                server.roles.filter { $0 == "node" }.count
+            }
+            do {
+                model.applyGatewayConnectConfig(config)
+                try await TestWait.observed("node connected") { model.gatewayConnected }
+                #expect(defaults.bool(forKey: "gateway.autoconnect"))
+
+                // The user turns "Auto-connect on launch" off, then the app returns to the foreground
+                // and replaces a stale socket within the same connect attempt.
+                defaults.set(false, forKey: "gateway.autoconnect")
+                let connectsBeforeRestart = nodeConnects()
+                await model.restartGatewaySessionsAfterForegroundStaleConnection()
+                try await TestWait.state("node reconnected") { nodeConnects() > connectsBeforeRestart }
+                try await TestWait.observed("node connected again") { model.gatewayConnected }
+                #expect(!defaults.bool(forKey: "gateway.autoconnect"))
+
+                // A new connect attempt is an explicit connect and enables launch auto-connect again.
+                let connectsBeforeExplicit = nodeConnects()
+                model.applyGatewayConnectConfig(config, forceReconnect: true)
+                try await TestWait.state("explicit connect") { nodeConnects() > connectsBeforeExplicit }
+                try await TestWait.state("auto-connect enabled") { defaults.bool(forKey: "gateway.autoconnect") }
+            } catch {
+                model.disconnectGateway()
+                await model.waitForGatewaySessionResetIfNeeded()
+                throw error
+            }
+            model.disconnectGateway()
+            await model.waitForGatewaySessionResetIfNeeded()
+        }
+    }
+
     @Test @MainActor func `newer gateway connect generation rejects queued config`() throws {
         let appModel = NodeAppModel()
         defer { appModel.disconnectGateway() }

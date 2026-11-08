@@ -689,6 +689,10 @@ expiry.
 
 `allowed_x_handles` and `excluded_x_handles` are mutually exclusive.
 
+Date bounds are inclusive UTC calendar days. OpenClaw sends the following UTC day
+as xAI's exclusive `to_date` bound; the date reported in the tool result remains
+the date you supplied.
+
 ### x_search example
 
 ```javascript

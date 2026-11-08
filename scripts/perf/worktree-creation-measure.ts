@@ -31,6 +31,7 @@ const { values } = parseArgs({
     output: { type: "string" },
     samples: { type: "string", default: "5" },
     "default-base": { type: "boolean" },
+    "expected-commit": { type: "string" },
   },
 });
 assert(values.repo && values.output, "--repo and --output are required");
@@ -119,7 +120,7 @@ const { drainGlobalSingletonLifecycleState } = await import("../../src/shared/gl
 if (values["default-base"]) {
   assert((await requireGit(repo, ["remote", "get-url", "origin"])).startsWith("file://"));
 }
-const commit = await requireGit(repo, ["rev-parse", "HEAD"]);
+const commit = values["expected-commit"] ?? (await requireGit(repo, ["rev-parse", "HEAD"]));
 const ownerSha256 = createHash("sha256")
   .update(
     await fs.readFile(new URL("../../src/agents/worktrees/capacity.runtime.ts", import.meta.url)),

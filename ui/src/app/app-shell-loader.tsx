@@ -23,7 +23,7 @@ export function ShellLoader(props: ShellLoaderProps): SolidJSX.Element {
       if (!props.runtime.warmBoot) {
         await yieldAfterLayout();
       }
-      return shell;
+      return { OpenClawShell: shell.OpenClawShell };
     },
     { export: "OpenClawShell" },
   );

@@ -1433,6 +1433,9 @@ lists above the composer. The mobile **Publish PR** control appears only for an
 undismissed branch with publishable work or a retained publication result or
 recovery state. An empty workspace or account discovery alone does not show it.
 
+Subagent rows show elapsed time once the child starts, just like ordinary child-session rows.
+Queued rows have no elapsed label; finished work stops at its recorded end time.
+
 The progress header shows the current step, not a completed-step total. On desktop,
 its options menu stays available when the card is expanded or collapsed and contains
 **Refresh task progress** and **Hide this card**. Hiding the card does not stop
