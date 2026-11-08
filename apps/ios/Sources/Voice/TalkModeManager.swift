@@ -2608,21 +2608,31 @@ final class TalkModeManager {
         ChatSendStatus.acceptance(of: response.status) == .terminalSuccess ? nil : startedAt
     }
 
+    static func chatSendRequest(
+        message: String,
+        sessionKey: String,
+        idempotencyKey: String) -> OpenClawChatGatewayRequest
+    {
+        OpenClawChatGatewayRequests.sendMessage(
+            sessionKey: sessionKey,
+            agentID: nil,
+            expectedSessionRoutingContract: nil,
+            message: message,
+            thinking: chatThinkingOverride,
+            idempotencyKey: idempotencyKey,
+            attachments: [])
+    }
+
     private func sendChat(
         _ message: String,
         context: TalkGatewayContext,
         transcriptProcessingGeneration generation: UInt64,
         idempotencyKey: String) async throws -> OpenClawChatSendResponse
     {
-        let request = OpenClawChatGatewayRequests.sendMessage(
-            sessionKey: context.sessionKey,
-            agentID: nil,
-            expectedSessionRoutingContract: nil,
+        let request = Self.chatSendRequest(
             message: message,
-            thinking: Self.chatThinkingOverride,
-            idempotencyKey: idempotencyKey,
-            attachments: [],
-            runTimeoutMs: 30000)
+            sessionKey: context.sessionKey,
+            idempotencyKey: idempotencyKey)
         let res = try await withGatewayStartupAdmission(method: request.method) {
             guard self.isCurrentTranscriptProcessing(generation) else { throw CancellationError() }
             return try await context.gateway.request(request, ifCurrentRoute: context.route)

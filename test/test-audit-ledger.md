@@ -224,7 +224,8 @@ Its failed CI remains failed; no current-head CI success is claimed. PR189510 re
   before/after on one Blacksmith Testbox (37→36 cases). Ten fewer test lines;
   production unchanged. Format, lint, types and both unused-file scans pass.
   Every dependency/export phase ran; unchanged Gateway, UI and changelog export
-  findings remain. Exact-head CI and landing are pending.
+  findings remain. Exact-head CI and security passed;
+  [194931](https://github.com/openclaw/openclaw/pull/194931) merged as `9a848bb13bfb`.
 
 - OC Path, pinned main `a606a90b4bf5`: remove one malformed-line append replay
   and two newline counts implied by exact output equality. The unchanged JSONL
@@ -234,6 +235,14 @@ Its failed CI remains failed; no current-head CI success is claimed. PR189510 re
   types and both unused-file scans pass. All dependency/export phases ran; the
   unchanged UI export findings remain. Exact-head CI and security passed;
   [194908](https://github.com/openclaw/openclaw/pull/194908) merged as `1a505759c0fe`.
+
+Cua, pinned main `058133da525b`: remove the scalar scroll-enum type assertion
+from the text/key dispatch case. The installed-SDK enum parity test, both
+platform scroll mappings and the SDK forwarding case remain unchanged. Both
+focused suites pass before/after (59→59 cases), with one fewer test line and no
+production changes. Format, typed lint, extension types and both unused-file
+scans pass. Both dependency phases and all three export phases ran with unchanged
+Gateway, UI and release-tool findings. Exact-head CI and landing remain pending.
 
 Batch115, pinned main `230f05c7ca37`, repairs the read-coalescing recorder
 on the actual socket returned by the mock constructor. The unchanged browser
@@ -378,7 +387,7 @@ permission to delete without root qualification.
 
 ## Pending qualification and proof repairs
 
-- Keep source-only candidates separate from applied removals. Obsolete fixture candidates require current-owner and runtime qualification. Pending: Cua enum and Twitch settled flag. Each needs current-source and runtime keeper qualification.
+- Keep source-only candidates separate from applied removals. Obsolete fixture candidates require current-owner and runtime qualification. Pending: Twitch settled flag; it needs current-source and runtime keeper qualification.
 - Transfer rows before consolidating core failed-tool classification, CodeMode deadline duplication, Android loading/blank-auth, persisted outbox keys/epochs, terminal initial projection, and native PCM/decoder/reader cases. Keep typed host-error precedence and active-run settlement.
 - Repair Android runtime/model fixture custody through existing guaranteed closers; no measured leak is claimed. Retarget misleading coroutine/authority/streaming assertions. Qualify Android dropdown arithmetic, IPv6 URL, empty SMS defaults and component-state mapping against their stronger keepers.
 - Repair swallowed/unrelated setup errors, silent auth/symlink skips, SSRF negative controls, content-absence/privacy results, delayed observer proofs, missing CLI fixture cleanup and aggregate-only tool-result fidelity. Retain CI inventory gaps as route repairs, including PostgreSQL conformance and removed Logbook worker paths.
