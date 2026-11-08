@@ -23,6 +23,7 @@ import {
 import { collectExtensionPackageJsonCandidates } from "./lib/plugin-publication-candidates.ts";
 import { isPluginPublicationEnabled } from "./lib/plugin-publication-target.mjs";
 import { createReleaseEvidenceReplay } from "./lib/release-evidence-replay.mjs";
+import { retainedPublicationArtifactSource } from "./lib/release-evidence-identity.mjs";
 import { parseReleaseVersion } from "./lib/release-version.mjs";
 import { loadNpmEvidenceReplay, npmEvidenceBinding } from "./plugin-npm-evidence-reuse.mjs";
 import {
@@ -241,11 +242,11 @@ async function authenticatePreparedNpmArtifactEvidence(params, revalidateOnRetur
     client,
   );
   const current = authenticated.evidence.current;
-  const producerSha = current.manifest.workflowSha;
+  const producerSha = retainedPublicationArtifactSource(current.manifest)?.workflow.sha ?? current.manifest.workflowSha;
   if (producerSha !== workflowSha) {
     requireValue(
       producerSha === sourceSha &&
-        current.workflowRefProof === "candidate-owned-admission-v1" &&
+        current.workflowRefProof === (current.manifest.receiptRecovery ? "receipt-backed-recovery-v1" : "candidate-owned-admission-v1") &&
         typeof authenticated.revalidateAuthority === "function",
       "Prepared npm Q != P adoption requires live candidate-owned qualification.",
     );

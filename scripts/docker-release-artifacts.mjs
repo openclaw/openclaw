@@ -715,7 +715,7 @@ export async function verifyDockerReleaseProducer(
   // must carry the authenticated owner callback, never reconstruct it from JSON.
   /** @type {() => void} */
   let revalidateAuthority;
-  if (fullReleaseManifest?.sourceAdmission?.qualificationAdmission) {
+  if (fullReleaseManifest?.sourceAdmission?.qualificationAdmission || fullReleaseManifest?.receiptRecovery) {
     const { authenticateCandidateOwnedArtifact } =
       await import("./validate-full-release-validation-evidence.mjs");
     const authenticated = await authenticateCandidateOwnedArtifact({

@@ -1,0 +1,65 @@
+name: Full Release Receipt Recovery
+
+on:
+  workflow_dispatch:
+    inputs:
+      request:
+        description: Exact original admission, candidate binding, child receipts and publication artifacts
+        required: true
+        type: string
+
+permissions:
+  actions: read
+  contents: read
+
+env:
+  FULL_RELEASE_SOURCE_ADMISSION_CONTRACT: "1"
+  FULL_RELEASE_PUBLICATION_ADMISSION_CONTRACT: "1"
+  FULL_RELEASE_RECEIPT_RECOVERY_CONTRACT: "1"
+
+jobs:
+  aggregate:
+    name: Recover original qualification receipts
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RECEIPT_RECOVERY_REQUEST: ${{ inputs.request }}
+    steps:
+      - name: Check out trusted aggregation tooling
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.workflow_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Set up trusted tooling runtime
+        uses: ./.github/actions/setup-node-env
+        with:
+          install-bun: "false"
+          install-deps: "false"
+      - name: Install trusted tooling dependencies without lifecycle scripts
+        run: pnpm install --frozen-lockfile --ignore-scripts
+      - name: Authenticate retained qualification and collect fresh admission
+        run: node scripts/full-release-receipt-recovery.mjs admit
+      - name: Upload fresh publication observations
+        id: observations
+        uses: actions/upload-artifact@v4
+        with:
+          name: full-release-publication-observations-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/receipt-recovery/publication-observations.json
+          if-no-files-found: error
+          retention-days: 90
+      - name: Seal receipt-backed aggregate
+        id: seal
+        env:
+          OBSERVATIONS_ARTIFACT_ID: ${{ steps.observations.outputs.artifact-id }}
+          OBSERVATIONS_ARTIFACT_DIGEST: ${{ steps.observations.outputs.artifact-digest }}
+        run: node scripts/full-release-receipt-recovery.mjs seal
+      - name: Upload receipt-backed aggregate
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.seal.outputs.artifact_name }}
+          path: ${{ runner.temp }}/receipt-recovery/full-release-validation-manifest.json
+          if-no-files-found: error
+          retention-days: 90

@@ -207,7 +207,7 @@ export function validateFullReleaseNpmPreflight({
     String(manifest.runId) !== String(runId) ||
     String(manifest.runAttempt) !== String(runAttempt) ||
     manifest.targetSha !== sourceSha ||
-    manifest.workflowSha !== toolingSha ||
+    (manifest.workflowSha !== toolingSha && !(manifest.receiptRecovery && retainedSource?.workflow.sha === toolingSha)) ||
     qualified?.schema !== "openclaw.qualified-npm-preflight/v1" ||
     qualified.source?.sha !== sourceSha ||
     !/^[a-f0-9]{64}$/u.test(qualified.manifestSha256 ?? "") ||
@@ -220,7 +220,7 @@ export function validateFullReleaseNpmPreflight({
     !/^[1-9][0-9]*$/u.test(producer?.runAttempt ?? "") ||
     qualified.artifact.runId !== producer?.runId ||
     qualified.artifact.runAttempt !== producer?.runAttempt ||
-    producer?.workflowSha !== toolingSha ||
+    producer?.workflowSha !== (retainedSource?.workflow.sha ?? toolingSha) ||
     (independentProducer
       ? !/^refs\/(?:heads|tags)\/.+$/u.test(manifest.workflowFullRef ?? "")
       : !retainedParentProducer &&
@@ -246,7 +246,7 @@ export function resolveFullReleaseNpmPreflight({ runGh = runReleaseToolingGh, ..
   const { run } = verifyNpmBundleProducer({
     producer,
     repository: options.repository,
-    toolingSha: options.toolingSha,
+    toolingSha: producer.workflowSha,
     qualified: true,
     requireCompletedParent: true,
     runGh,
@@ -261,7 +261,7 @@ export function resolveFullReleaseNpmPreflight({ runGh = runReleaseToolingGh, ..
     artifact.digest !== `sha256:${descriptor.artifact.digest}` ||
     artifact.expired !== false ||
     String(artifact.workflow_run?.id) !== producer.runId ||
-    artifact.workflow_run?.head_sha !== options.toolingSha
+    artifact.workflow_run?.head_sha !== producer.workflowSha
   ) {
     throw new Error("Qualified npm preflight artifact identity changed.");
   }
@@ -292,7 +292,7 @@ export async function downloadFullReleaseNpmPreflight({
       artifactSizeBytes: artifact.size_in_bytes,
       artifactExpiresAt: artifact.expires_at,
       runId: Number(producer.runId),
-      workflowSha: options.toolingSha,
+      workflowSha: producer.workflowSha,
     },
   });
   const files = inspectActionsArtifactZipWithPolicy(archiveBytes, {
@@ -364,7 +364,7 @@ export async function verifyNpmPreflightPublicationLineage({
   publisherFullRef = "refs/heads/main",
   publicationAuthority,
 }) {
-  if (manifest?.sourceAdmission?.qualificationAdmission) {
+  if (manifest?.sourceAdmission?.qualificationAdmission || manifest?.receiptRecovery) {
     const { authenticateCandidateOwnedArtifact } =
       await import("./validate-full-release-validation-evidence.mjs");
     const authenticated = await authenticateCandidateOwnedArtifact({
@@ -538,6 +538,7 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
       // a bypass for admitted candidate-owned qualification.
       if (
         !fullManifest?.sourceAdmission?.qualificationAdmission &&
+        !fullManifest?.receiptRecovery &&
         env.OPENCLAW_NPM_PUBLISH_TAG === "extended-stable" &&
         env.PREFLIGHT_WORKFLOW_BRANCH &&
         env.PREFLIGHT_WORKFLOW_BRANCH === env.EXPECTED_EXTENDED_STABLE_BRANCH &&

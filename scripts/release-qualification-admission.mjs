@@ -262,7 +262,7 @@ function actorIdentity(actor) {
   return { id: actor.id, login: actor.login };
 }
 
-function verifyActor(repository, actor, runGh) {
+export function verifyReleaseQualificationOperator(repository, actor, runGh) {
   const identity = actorIdentity(actor);
   const permission = api(repository, "collaborators/" + identity.login + "/permission", runGh);
   requireValue(
@@ -386,8 +386,8 @@ function verifyProducer(producer, runGh, completed) {
   );
   return {
     run,
-    operator: verifyActor(producer.repository, run.actor, runGh),
-    triggeringOperator: verifyActor(producer.repository, run.triggering_actor, runGh),
+    operator: verifyReleaseQualificationOperator(producer.repository, run.actor, runGh),
+    triggeringOperator: verifyReleaseQualificationOperator(producer.repository, run.triggering_actor, runGh),
   };
 }
 

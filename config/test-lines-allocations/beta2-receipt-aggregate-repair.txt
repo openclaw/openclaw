@@ -1,0 +1,2 @@
+405
+# Receipt-backed aggregate recovery: original producer payload verification, P/Q separation, explicit fresh admission, authenticated parent/coverage rejection, exact current attempts, plugin adoption, and streaming binary integrity boundaries.
