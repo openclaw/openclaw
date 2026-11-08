@@ -262,10 +262,7 @@ test("bounds cross-agent refreshes and yields partial batches to queued agents",
   });
 
   await vi.waitFor(() => expect(started).toHaveLength(2), { timeout: 1_000, interval: 1 });
-  expect(started.map(({ label }) => label)).toEqual([
-    "refresh-fair-a:full",
-    "refresh-fair-b:full",
-  ]);
+  expect(started.map(({ label }) => label)).toEqual(["refresh-fair-a:full", "refresh-fair-b:full"]);
   expect(maxActive).toBe(2);
 
   started[0]!.release.resolve();
@@ -278,7 +275,10 @@ test("bounds cross-agent refreshes and yields partial batches to queued agents",
 
   started[2]!.release.resolve();
   started[3]!.release.resolve();
-  await AsyncWorkScope.runWhenAllIdle(() => owners, () => undefined);
+  await AsyncWorkScope.runWhenAllIdle(
+    () => owners,
+    () => undefined,
+  );
   owners.forEach((owner) => owner.beginClose());
   await Promise.all(owners.map((owner) => owner.drain()));
   expect(maxActive).toBe(2);
@@ -349,7 +349,10 @@ test("lets a report waiting on refresh bypass the fleet permit queue", async ({
   expect(started[3]?.label).toBe("refresh-read-c:full");
   started[1]!.release.resolve();
   started[3]!.release.resolve();
-  await AsyncWorkScope.runWhenAllIdle(() => owners, () => undefined);
+  await AsyncWorkScope.runWhenAllIdle(
+    () => owners,
+    () => undefined,
+  );
   owners.forEach((owner) => owner.beginClose());
   await Promise.all(owners.map((owner) => owner.drain()));
 });
