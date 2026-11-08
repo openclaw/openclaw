@@ -12,11 +12,8 @@ import {
   workspaceTestPlugin,
 } from "../infra/outbound/message-action-runner.test-support.js";
 import { handleMcpJsonRpc } from "./mcp-http.handlers.js";
-import {
-  buildMockMcpToolSchema,
-  mcpToolCallMessage,
-  type McpToolResultPayload,
-} from "./mcp-http.test-support.js";
+import { buildMcpToolSchema } from "./mcp-http.schema.js";
+import { mcpToolCallMessage, type McpToolResultPayload } from "./mcp-http.test-support.js";
 
 beforeEach(() => {
   stubMessageSecrets();
@@ -58,7 +55,7 @@ describe("MCP message tool partial delivery", () => {
         message: "sent partly",
       }),
       tools: [tool],
-      toolSchema: buildMockMcpToolSchema([tool]),
+      toolSchema: buildMcpToolSchema([tool]),
     })) as McpToolResultPayload;
 
     expect(payload.result?.isError).toBe(true);
