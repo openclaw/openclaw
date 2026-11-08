@@ -1,12 +1,9 @@
-import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { globSync } from "tinyglobby";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { resolveCanonicalNodeTestConfig } from "../../scripts/lib/ci-node-test-plan.mts";
-import { collectModuleReferencesFromSource } from "../../scripts/lib/guard-inventory-utils.mjs";
-import { createNativeTypeScriptParser } from "../../scripts/lib/native-typescript.mts";
 import {
   listVitestRuntimeConsumerFiles,
   resolveVitestCliEntry,
@@ -14,6 +11,7 @@ import {
 } from "../../scripts/lib/vitest-build-prerequisites.mts";
 import { resolveLocalVitestScheduling } from "../../scripts/lib/vitest-local-scheduling.mts";
 import { resolveVitestNodeArgs } from "../../scripts/lib/vitest-node-args.mts";
+import { execNodeEvalSync } from "../../src/test-utils/node-process.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { createGatewayDatabaseWorkersVitestConfig } from "../vitest/vitest.gateway-database-workers.config.ts";
 import { createGatewayServerIsolatedVitestConfig } from "../vitest/vitest.gateway-server-isolated.config.ts";
@@ -458,38 +456,38 @@ describe("test-projects args", () => {
     expect(expandedFiles).not.toContain("test/helpers/temp-dir.ts");
     expect(expandedFiles.filter((file) => !file.endsWith(".test.ts"))).toEqual([]);
 
-    // Independent AST parsing excludes import text inside source fixtures.
-    const scanRoots = ["src", "test", "ui", "extensions", "packages"];
-    const grep = spawnSync(
-      "git",
-      ["grep", "-l", "--fixed-strings", "helpers/temp-dir", "--", ...scanRoots],
-      { encoding: "utf8" },
+    // The independent AST oracle uses TypeScript's Node-only synchronous API.
+    const directImporterTests: string[] = JSON.parse(
+      execNodeEvalSync(
+        String.raw`import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
+import fs from "node:fs";
+import path from "node:path";
+import { collectModuleReferencesFromSource } from ${JSON.stringify(new URL("../../scripts/lib/guard-inventory-utils.mjs", import.meta.url).href)};
+import { createNativeTypeScriptParser } from ${JSON.stringify(new URL("../../scripts/lib/native-typescript.mts", import.meta.url).href)};
+const scanRoots = ["src", "test", "ui", "extensions", "packages"];
+const grep = spawnSync("git", ["grep", "-l", "--fixed-strings", "helpers/temp-dir", "--", ...scanRoots], { encoding: "utf8" });
+assert.equal(grep.status, 0);
+using parser = createNativeTypeScriptParser();
+const candidates = grep.stdout.split("\n").map((line) => line.trim())
+  .filter((file) => file.endsWith(".test.ts") && !file.endsWith(".live.test.ts"));
+const directImporterTests = parser.parseSourceFiles(
+  candidates.map((fileName) => ({ fileName, text: fs.readFileSync(fileName, "utf8") })),
+).flatMap((sourceFile) => {
+  const file = path.relative(process.cwd(), sourceFile.fileName).replaceAll("\\", "/");
+  const references = collectModuleReferencesFromSource(sourceFile, {
+    acceptSpecifier: (specifier) => {
+      if (!specifier.startsWith(".")) return false;
+      const resolved = path.posix.normalize(path.posix.join(path.posix.dirname(file), specifier));
+      return resolved.replace(/\.(?:js|ts)$/u, "") === "test/helpers/temp-dir";
+    },
+  });
+  return references.some(({ kind }) => kind === "import" || kind === "export") ? [file] : [];
+});
+console.log(JSON.stringify(directImporterTests));`,
+        { imports: ["./scripts/tsx.mjs"] },
+      ),
     );
-    expect(grep.status).toBe(0);
-    using parser = createNativeTypeScriptParser();
-    const candidates = grep.stdout
-      .split("\n")
-      .map((line) => line.trim())
-      .filter((file) => file.endsWith(".test.ts") && !file.endsWith(".live.test.ts"));
-    const directImporterTests = parser
-      .parseSourceFiles(
-        candidates.map((fileName) => ({ fileName, text: fs.readFileSync(fileName, "utf8") })),
-      )
-      .flatMap((sourceFile) => {
-        const file = path.relative(process.cwd(), sourceFile.fileName).replaceAll("\\", "/");
-        const references = collectModuleReferencesFromSource(sourceFile, {
-          acceptSpecifier: (specifier) => {
-            if (!specifier.startsWith(".")) {
-              return false;
-            }
-            const resolved = path.posix.normalize(
-              path.posix.join(path.posix.dirname(file), specifier),
-            );
-            return resolved.replace(/\.(?:js|ts)$/u, "") === "test/helpers/temp-dir";
-          },
-        });
-        return references.some(({ kind }) => kind === "import" || kind === "export") ? [file] : [];
-      });
     expect(directImporterTests.length).toBeGreaterThan(0);
     expect(directImporterTests.filter((file) => !expandedFiles.includes(file))).toEqual([]);
 
