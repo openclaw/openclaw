@@ -617,7 +617,6 @@ suite.define(() => {
                 expect(sendResponse?.payload?.runId).toBe(runId);
                 await expect.poll(() => provider.requests()).toBe(1);
                 const stop = page.getByRole("button", { name: "Stop generating", exact: true });
-                await stop.waitFor({ state: "visible" });
                 await expect.poll(browserState).toMatchObject({
                   recoveryReady: true,
                   historyLoading: false,
@@ -631,6 +630,24 @@ suite.define(() => {
                 });
                 expect(deliveredHistoryResponses).toBeGreaterThan(0);
                 expect(await composer.inputValue()).toBe(nextDraft);
+                const steer = page.getByRole("button", {
+                  name: "Steer into the active run",
+                  exact: true,
+                });
+                await steer.waitFor({ state: "visible" });
+                await expect.poll(() => steer.isEnabled()).toBe(true);
+                await stop.waitFor({ state: "detached" });
+                // The primary control alternates: a sendable draft shows Steer.
+                // This explicit temporary edit probes Stop; it is not uninterrupted retention.
+                stage = "probe Stop with an empty draft, then restore the exact next draft";
+                await composer.fill("");
+                await stop.waitFor({ state: "visible" });
+                await expect.poll(() => stop.isEnabled()).toBe(true);
+                await composer.fill(nextDraft);
+                expect(await composer.inputValue()).toBe(nextDraft);
+                await steer.waitFor({ state: "visible" });
+                await expect.poll(() => steer.isEnabled()).toBe(true);
+                await stop.waitFor({ state: "detached" });
                 Object.assign(proof, {
                   originalDraftSent: sendRequest?.params?.message === draft,
                   sendAccepted:
@@ -638,7 +655,9 @@ suite.define(() => {
                   acceptedRunMatchesRequest: sendResponse?.payload?.runId === runId,
                   deliveredToAuthoritativeSessionWithSteerPolicy: true,
                   providerRequestsAfterHistory: provider.requests(),
-                  stopVisibleAfterHistory: await stop.isVisible(),
+                  steerEnabledWithNextDraft: true,
+                  stopEnabledWithEmptyDraft: true,
+                  nextDraftRestoredAfterExplicitEdit: true,
                   historyPendingAfterSend: (await browserState()).historyLoading,
                   deliveredHistoryResponsesAtSend: deliveredHistoryResponses,
                 });
