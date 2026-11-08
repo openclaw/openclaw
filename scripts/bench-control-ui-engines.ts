@@ -98,6 +98,7 @@ import {
 import { createEnginePluginMemoryScenarios } from "./lib/control-ui-engine-plugin-memory-scenarios.ts";
 import { createEngineProfileReadinessScenarios } from "./lib/control-ui-engine-profile-readiness.ts";
 import { createEngineRapidNavigationScenarios } from "./lib/control-ui-engine-rapid-navigation-scenarios.ts";
+import { createEngineSettingsSearchScenarios } from "./lib/control-ui-engine-settings-search.ts";
 import { createEngineStreamingScenarios } from "./lib/control-ui-engine-streaming-scenarios.ts";
 import { createEngineStyleScenarios } from "./lib/control-ui-engine-style-scenarios.ts";
 import {
@@ -595,6 +596,7 @@ try {
       values["event-load-interactions-only"],
     ),
     ...createEnginePageScenarios(0, pageOrigin, servers[0]!.server.baseUrl),
+    ...createEngineSettingsSearchScenarios(servers[0]!.server.baseUrl),
     ...createEngineRemountScenarios(),
     ...createEngineRouteTransitionScenarios(async (_page, _transition, run) => {
       await run();
@@ -862,6 +864,10 @@ try {
                 ({ id }) => id === item.id,
               ) ??
               createEngineProfileReadinessScenarios(
+                slot.server.baseUrl,
+                networkProfile.gatewayLatencyMs,
+              ).find(({ id }) => id === item.id) ??
+              createEngineSettingsSearchScenarios(
                 slot.server.baseUrl,
                 networkProfile.gatewayLatencyMs,
               ).find(({ id }) => id === item.id) ??

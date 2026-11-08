@@ -67,11 +67,20 @@ export function createRuntimeConfigEditor(
   const listeners = new Set<(state: RuntimeConfigState) => void>();
   const loads = new Map<"config" | "schema", Promise<unknown>>();
   let schemaRead: Promise<Result<void, string>> | null = null;
+  let schemaDemand: RuntimeConfigState["client"] | "admitted" = null;
   let disposed = false;
 
   const publish = () => {
     if (disposed) {
       return;
+    }
+    // Pre-hello demand belongs to one client; admitted demand survives reconnects.
+    if (
+      !schemaRead &&
+      (schemaDemand === "admitted" || (schemaDemand && schemaDemand === state.client)) &&
+      canLoadConfigSchema()
+    ) {
+      void loadSchema();
     }
     savedNotice.sync();
     for (const listener of listeners) {
@@ -109,13 +118,10 @@ export function createRuntimeConfigEditor(
   };
   const loadConfigOnce = (task: () => Promise<unknown>) =>
     loads.get("config") ?? run(task, "config");
-  // The display reader keeps its request; editing takes custody without waiting
-  // to expose independent schema reads or an explicit replacement refresh.
-  if (initialRead) {
-    void run(() => initialRead, "config");
-  }
-
   const loadSchema = () => {
+    if (canLoadConfigSchema()) {
+      schemaDemand = "admitted";
+    }
     if (loads.has("schema") && schemaRead) {
       return schemaRead;
     }
@@ -138,6 +144,7 @@ export function createRuntimeConfigEditor(
   ) => {
     const epoch = currentConfigConnectionEpoch(state);
     const pendingSchema = loads.get("schema");
+    const previousSchema = schemaRead;
     const config = run(
       () =>
         loadConfig(state, {
@@ -148,11 +155,11 @@ export function createRuntimeConfigEditor(
       "config",
     );
     if ((state.configSchemaVersion !== null || pendingSchema) && canLoadConfigSchema()) {
-      // Config success clears lastError; load the schema afterward to preserve its failures.
+      // Refresh schema after this config replacement unless an independent read supersedes it.
       void config.then(async () => {
         // A plugin change during a schema read needs one catch-up after that read.
         await pendingSchema;
-        if (currentConfigConnectionEpoch(state) === epoch) {
+        if (currentConfigConnectionEpoch(state) === epoch && schemaRead === previousSchema) {
           await loadSchema();
         }
       });
@@ -167,6 +174,13 @@ export function createRuntimeConfigEditor(
     run,
     mutate,
     resetLoads: () => {
+      // Denied read access retires demand; transport reconnects keep admitted interest.
+      if (
+        (gateway.snapshot.phase === "connected" && !canLoadConfigSchema()) ||
+        (schemaDemand !== "admitted" && (schemaDemand !== state.client || !canLoadConfigSchema()))
+      ) {
+        schemaDemand = null;
+      }
       loads.clear();
       schemaRead = null;
     },
@@ -187,6 +201,11 @@ export function createRuntimeConfigEditor(
     }
     return hasOperatorReadAccess(snapshot.hello?.auth ?? null);
   };
+  // The display reader keeps its request; editing takes custody without waiting
+  // to expose independent schema reads or an explicit replacement refresh.
+  if (initialRead) {
+    void run(() => initialRead, "config");
+  }
   return {
     snapshotOwner: writes,
     get state() {
@@ -215,9 +234,15 @@ export function createRuntimeConfigEditor(
       appliedRefresh.reconcile();
     },
     ensureSchemaLoaded: async () => {
-      if (!state.configSchema && canLoadConfigSchema()) {
-        await loadSchema();
+      if (!state.configSchema || !schemaRead) {
+        if (canLoadConfigSchema()) {
+          return loadSchema();
+        }
+        if (!state.connected && schemaDemand !== "admitted") {
+          schemaDemand = state.client;
+        }
       }
+      return { ok: true as const, value: undefined };
     },
     refresh: async (options?: { background?: boolean }) => {
       appliedRefresh.cancel();
