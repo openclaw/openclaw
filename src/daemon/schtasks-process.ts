@@ -13,6 +13,7 @@ import type { PortListener } from "../infra/ports-types.js";
 import { throwSqliteLifecycleErrors } from "../infra/sqlite-lifecycle-errors.js";
 import { resolveSqliteInspectionSignal } from "../infra/sqlite-readonly-worker.js";
 import { parseTcpPort, parseTcpPortFromArgs } from "../infra/tcp-port.js";
+import { withUpdatePhase } from "../infra/update-phase-diagnostics.js";
 import { getWindowsSystem32ExePath } from "../infra/windows-install-roots.js";
 import { readWindowsProcessArgsSync } from "../infra/windows-port-pids.js";
 import { readWindowsProcessStartTimeSync } from "../infra/windows-process-start.js";
@@ -561,10 +562,12 @@ export async function terminateScheduledTaskGatewayListeners(
       stop?.onStopped?.();
     }
     if (settle && stop) {
-      const fact = await settle(() => {
-        assertGatewayServiceUpdateCurrent();
-        assertCurrent?.();
-      }, stop.end);
+      const fact = await withUpdatePhase("scheduled-task-settlement", () =>
+        settle(() => {
+          assertGatewayServiceUpdateCurrent();
+          assertCurrent?.();
+        }, stop.end),
+      );
       stop.onSettlement?.(fact);
       if (fact.status === "replaced") {
         throw ownership.changed;
@@ -633,13 +636,19 @@ function probeWindowsTasklistProcessState(pid: number): "alive" | "missing" | "u
 async function waitForProcessExit(pid: number, timeoutMs: number): Promise<boolean> {
   const probe = process.platform === "win32" ? probeWindowsTasklistProcessState : probeProcessState;
   const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    if (probe(pid) === "missing") {
-      return true;
-    }
-    await sleep(100);
-  }
-  return probe(pid) === "missing";
+  return await withUpdatePhase(
+    "gateway-process-exit",
+    async () => {
+      while (Date.now() < deadline) {
+        if (probe(pid) === "missing") {
+          return true;
+        }
+        await sleep(100);
+      }
+      return probe(pid) === "missing";
+    },
+    { childPid: pid },
+  );
 }
 
 export async function stopStalledGatewayStartup(

@@ -4,6 +4,7 @@ import { sha256Hex } from "../infra/crypto-digest.js";
 import { withFileLock } from "../infra/file-lock.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { createManagedHandoffLeaseStore } from "../infra/update-managed-service-handoff-lease.js";
+import { startUpdatePhase } from "../infra/update-phase-diagnostics.js";
 import { ABSOLUTE_DEADLINE_EXPIRED, awaitWithinDeadline } from "../utils/absolute-deadline.js";
 import { resolveLaunchAgentLabel } from "./launchd-label.js";
 import { resolveLaunchAgentGuiDomain } from "./launchd-runtime.js";
@@ -112,59 +113,75 @@ export async function withGatewayServiceOperationLock<T>(
   const scope: Scope = { active: false, pending: new Set() };
   const next = new Map(inherited);
   next.set(file, scope);
-  return await withFileLock(
-    file,
-    {
-      retries: { retries: 120, factor: 1.1, minTimeout: 25, maxTimeout: 250 },
-      stale: 30_000,
-      // Reacquire only a definitely retired process, never from age alone. The
-      // provider pins the stale bytes/inode and rechecks custody before unlink.
-      // This restores client exclusion, not evidence that native work completed.
-      staleRecovery: "remove-if-definitely-stale",
-      assertResourceUnborrowed,
-    },
-    async () =>
-      scopes.run(next, async () => {
-        scope.active = true;
-        const [outcome] = await Promise.allSettled([
-          Promise.resolve().then(() => {
-            assertScope(scope);
-            return operation(() => assertScope(scope));
-          }),
-        ]);
-        const failures: unknown[] = [];
-        // Only admitted work still pending when the outer callback settles is
-        // ours to join. Preserve its failures rather than reporting a completed
-        // native interval after a detached effect failed.
-        while (scope.pending.size) {
-          for (const result of await Promise.allSettled(scope.pending)) {
-            if (result.status === "rejected") {
-              failures.push(result.reason);
+  const fields = { operationId: path.basename(file) };
+  const finishWait = startUpdatePhase("service-lock-wait", fields);
+  const timing: { finishHeld?: ReturnType<typeof startUpdatePhase> } = {};
+  try {
+    const lockedResult = await withFileLock(
+      file,
+      {
+        retries: { retries: 120, factor: 1.1, minTimeout: 25, maxTimeout: 250 },
+        stale: 30_000,
+        // Reacquire only a definitely retired process, never from age alone. The
+        // provider pins the stale bytes/inode and rechecks custody before unlink.
+        // This restores client exclusion, not evidence that native work completed.
+        staleRecovery: "remove-if-definitely-stale",
+        assertResourceUnborrowed,
+      },
+      async () => {
+        finishWait({ status: "acquired" });
+        timing.finishHeld = startUpdatePhase("service-lock-held", fields);
+        return await scopes.run(next, async () => {
+          scope.active = true;
+          const [outcome] = await Promise.allSettled([
+            Promise.resolve().then(() => {
+              assertScope(scope);
+              return operation(() => assertScope(scope));
+            }),
+          ]);
+          const failures: unknown[] = [];
+          // Only admitted work still pending when the outer callback settles is
+          // ours to join. Preserve its failures rather than reporting a completed
+          // native interval after a detached effect failed.
+          while (scope.pending.size) {
+            for (const result of await Promise.allSettled(scope.pending)) {
+              if (result.status === "rejected") {
+                failures.push(result.reason);
+              }
             }
           }
-        }
-        // Close admission atomically with the final empty-pending observation.
-        scope.active = false;
-        try {
-          const binding = await scope.systemdRead;
-          await binding?.close();
-        } catch (error) {
-          failures.push(error);
-        }
-        if (failures.length) {
-          throw new AggregateError(
-            outcome.status === "rejected" ? [outcome.reason, ...failures] : failures,
-            "Native service operation did not settle successfully.",
-          );
-        }
-        if (outcome.status === "rejected") {
-          throw outcome.reason instanceof Error
-            ? outcome.reason
-            : new Error("Native service operation failed.", { cause: outcome.reason });
-        }
-        return outcome.value;
-      }),
-  );
+          // Close admission atomically with the final empty-pending observation.
+          scope.active = false;
+          try {
+            const binding = await scope.systemdRead;
+            await binding?.close();
+          } catch (error) {
+            failures.push(error);
+          }
+          if (failures.length) {
+            throw new AggregateError(
+              outcome.status === "rejected" ? [outcome.reason, ...failures] : failures,
+              "Native service operation did not settle successfully.",
+            );
+          }
+          if (outcome.status === "rejected") {
+            throw outcome.reason instanceof Error
+              ? outcome.reason
+              : new Error("Native service operation failed.", { cause: outcome.reason });
+          }
+          return outcome.value;
+        });
+      },
+    );
+    timing.finishHeld?.({ status: "released" });
+    return lockedResult;
+  } catch (error) {
+    if (!timing.finishHeld) {
+      finishWait({ outcome: "error" });
+    }
+    timing.finishHeld?.({ outcome: "error" });
+    throw error;
+  }
 }
 
 function resolveGatewayServiceOperationLockPath(env: GatewayServiceEnv): string {

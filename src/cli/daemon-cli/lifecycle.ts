@@ -35,6 +35,7 @@ import {
 import { probePortUsage } from "../../infra/ports-probe.js";
 import { resolveGatewayRestartDrainTimeoutMs } from "../../infra/restart-budget.js";
 import type { GatewayRestartIntent } from "../../infra/restart-intent.js";
+import { withUpdatePhase } from "../../infra/update-phase-diagnostics.js";
 import {
   hasCommandProcessCleanupError,
   ignoreNonCleanupCommandError,
@@ -667,21 +668,27 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
       }
 
       const waitForHealthy = async () =>
-        await waitForGatewayHealthyRestart({
-          service,
-          port: managedRestartPort,
-          attempts: restartHealthAttempts,
-          delayMs: DEFAULT_RESTART_HEALTH_DELAY_MS,
-          ...(process.platform === "win32" ? { timeoutMs: restartWaitMs } : {}),
-          env: restartContext.env,
-          config: restartContext.config,
-          probeHosts: await resolveGatewayServiceProbeHosts(restartContext),
-          ...(restartContext.env.OPENCLAW_UPDATE_IN_PROGRESS !== "1"
-            ? { requirePluginHealth: false }
-            : {}),
-          supervisorKeepsAlive: process.platform === "darwin",
-          signal: getAsyncWorkSignal(),
-        });
+        await withUpdatePhase(
+          "gateway-health-probe",
+          async () =>
+            waitForGatewayHealthyRestart({
+              service,
+              port: managedRestartPort,
+              attempts: restartHealthAttempts,
+              delayMs: DEFAULT_RESTART_HEALTH_DELAY_MS,
+              ...(process.platform === "win32" ? { timeoutMs: restartWaitMs } : {}),
+              env: restartContext.env,
+              config: restartContext.config,
+              probeHosts: await resolveGatewayServiceProbeHosts(restartContext),
+              ...(restartContext.env.OPENCLAW_UPDATE_IN_PROGRESS !== "1"
+                ? { requirePluginHealth: false }
+                : {}),
+              supervisorKeepsAlive: process.platform === "darwin",
+              signal: getAsyncWorkSignal(),
+            }),
+          { action: "restart" },
+        );
+
       let health = await waitForHealthy();
 
       if (!health.healthy && health.staleGatewayPids.length > 0) {

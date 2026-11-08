@@ -26,6 +26,10 @@ import {
   type InstalledTask as Task,
 } from "./schtasks.installed-diagnostics.test-support.js";
 import {
+  installedLifecycleLogging,
+  readInstalledLifecycleEvents,
+} from "./schtasks.installed-lifecycle-log.test-support.js";
+import {
   boundedEnv,
   cellEvidence,
   createInstalledProgressRecorder,
@@ -225,12 +229,14 @@ export async function runInstalledLifecycle(
       OPENCLAW_CONFIG_PATH: configPath,
       OPENCLAW_GATEWAY_PORT: String(gatewayPort),
       OPENCLAW_WINDOWS_TASK_HIDDEN_LAUNCHER: "1",
+      OPENCLAW_LOG_LEVEL: "debug",
     };
     assert.equal(probeScheduledTaskExists(taskName), false);
     await fs.mkdir(stateDir);
     await fs.writeFile(
       configPath,
       JSON.stringify({
+        logging: installedLifecycleLogging(rootDir, role),
         gateway: {
           mode: "local",
           bind: "loopback",
@@ -629,6 +635,10 @@ export async function runInstalledLifecycle(
         "Installed proof recording failed",
       );
     }
+  }
+  // The final cell proof retains only scalar events, before raw log retirement.
+  if (tasks[0]) {
+    observations.lifecycle = await readInstalledLifecycleEvents(tasks[0]);
   }
   for (const task of tasks.toReversed()) {
     try {

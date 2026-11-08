@@ -11,8 +11,22 @@ import type { UpdateServiceDefinitionRecovery } from "./update-command-service-c
 const mocks = vi.hoisted(() => ({
   command: vi.fn(),
   recordStep: vi.fn(),
+  debug: vi.fn(),
+  warn: vi.fn(),
 }));
 
+vi.mock(import("../../logging/subsystem.js"), async (importOriginal) => {
+  const actual = await importOriginal();
+  return {
+    ...actual,
+    createSubsystemLogger: (subsystem: string) => {
+      const logger = actual.createSubsystemLogger(subsystem);
+      return subsystem === "update/diagnostics"
+        ? { ...logger, debug: mocks.debug, warn: mocks.warn }
+        : logger;
+    },
+  };
+});
 vi.mock(import("../../daemon/gateway-entrypoint.js"), async (importOriginal) => ({
   ...(await importOriginal()),
   resolveGatewayInstallEntrypoint: async () => "/fixture/root/dist/entry.js",
@@ -37,6 +51,8 @@ vi.mock(import("../../infra/update-run-ledger.js"), async (importOriginal) => ({
 
 beforeEach(() => {
   vi.useFakeTimers({ now: 1_791_595_070_000 });
+  mocks.debug.mockClear();
+  mocks.warn.mockClear();
   mocks.command.mockReset();
   mocks.recordStep.mockReset();
 });
@@ -143,4 +159,50 @@ it.each([false, true])("retains a timed step when history write fails=%s", (fail
   const run = { runId: "run-1", env: {}, busyTimeoutMs: 71_000 };
   recordServiceTimedStep(result, step, run);
   expect(result.steps).toEqual([step]);
+});
+
+it("retains the requested action and unfinished child phase before its deadline", async () => {
+  let settle!: (result: ReturnType<typeof createCommandResult>) => void;
+  mocks.command.mockImplementation((argv: string[], options) => {
+    if (argv.includes("check")) {
+      return Promise.resolve(probeResult());
+    }
+    options.beforeInput?.(4321, ["private-argv"]);
+    return new Promise<ReturnType<typeof createCommandResult>>((resolve) => {
+      settle = resolve;
+    });
+  });
+  const command = runInstall({ opts: executorOptions() });
+  await vi.advanceTimersByTimeAsync(30_000);
+  const slow = mocks.warn.mock.calls.map(([line]) =>
+    JSON.parse(line.slice("update-phase ".length)),
+  );
+  expect(slow).toContainEqual(
+    expect.objectContaining({
+      phase: "native-child-settlement",
+      event: "slow",
+      action: "install",
+      elapsedMs: 30_000,
+    }),
+  );
+  expect(
+    mocks.debug.mock.calls.map(([line]) => JSON.parse(line.slice("update-phase ".length))),
+  ).toContainEqual(
+    expect.objectContaining({ phase: "native-child-binding", event: "end", childPid: 4321 }),
+  );
+  settle(createCommandResult({ code: 0, stdout: "{}" }));
+  await command;
+  expect(
+    mocks.warn.mock.calls.map(([line]) => JSON.parse(line.slice("update-phase ".length))),
+  ).toContainEqual(
+    expect.objectContaining({
+      phase: "native-child-settlement",
+      event: "end",
+      elapsedMs: 30_000,
+      stdoutBytes: 2,
+    }),
+  );
+  expect(JSON.stringify([...mocks.debug.mock.calls, ...mocks.warn.mock.calls])).not.toContain(
+    "private-argv",
+  );
 });
