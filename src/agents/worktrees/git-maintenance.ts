@@ -168,27 +168,30 @@ async function maintainWorktreePacks(
     env: { GIT_NO_LAZY_FETCH: "1", GIT_ALLOW_PROTOCOL: "" },
   };
   const commonDir = await requireGit(repoRoot, ["rev-parse", "--git-common-dir"], options);
-  // Fetch must not replace the MIDX between batch publication and expiry.
-  await enqueueGitRefMutation(
-    repoRoot,
-    commonDir,
+  // Acquire content capacity before refs; retain atomic B MIDX publication/expiry.
+  await withContentGitSlot(
     () =>
-      withContentGitSlot(async () => {
-        const packDirectory = await resolveGitMetadataPath(repoRoot, "objects/pack", options);
-        // Git rejects an empty pack directory; inspect only this shallow metadata directory.
-        const packs = await fs.readdir(packDirectory).catch((error: unknown) => {
-          if (isMissingPathError(error)) {
-            return [];
-          }
-          throw error;
-        });
-        assertCurrent();
-        const before = packs.filter((name) => name.endsWith(".pack")).length;
-        await report(before);
-        await cleanTemporaryPacks(packDirectory, packs, params.signal, assertCurrent);
-        const after = await consolidatePacks(repoRoot, packDirectory, packs, options);
-        await report(before, after);
-      }, params.signal),
+      enqueueGitRefMutation(
+        repoRoot,
+        commonDir,
+        async () => {
+          const packDirectory = await resolveGitMetadataPath(repoRoot, "objects/pack", options);
+          // Git rejects an empty pack directory; inspect only this shallow metadata directory.
+          const packs = await fs.readdir(packDirectory).catch((error: unknown) => {
+            if (isMissingPathError(error)) {
+              return [];
+            }
+            throw error;
+          });
+          assertCurrent();
+          const before = packs.filter((name) => name.endsWith(".pack")).length;
+          await report(before);
+          await cleanTemporaryPacks(packDirectory, packs, params.signal, assertCurrent);
+          const after = await consolidatePacks(repoRoot, packDirectory, packs, options);
+          await report(before, after);
+        },
+        params.signal,
+      ),
     params.signal,
   );
 }
