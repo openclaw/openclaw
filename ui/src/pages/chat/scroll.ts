@@ -253,13 +253,17 @@ export function handleChatScroll(host: ChatScrollHost, event: Event): void {
   updateChatScrollPosition(host, container);
 }
 
-export function handleChatScrollTakeover(host: ChatScrollHost, towardEnd = false): void {
+export function handleChatScrollTakeover(host: ChatScrollHost, towardEnd?: boolean): void {
   cancelChatScroll(host);
   const container = host.chatScrollElement?.();
   if (container) {
     // Intent can stop a smooth scroll without moving a pixel. Retire queued
     // follow work and publish reader policy even without a native scroll event.
-    updateChatScrollPosition(host, container, towardEnd ? "toward-end" : "reader");
+    updateChatScrollPosition(
+      host,
+      container,
+      towardEnd === undefined ? "reader" : towardEnd ? "toward-end" : "away-from-end",
+    );
   }
 }
 
@@ -276,7 +280,7 @@ export function lockChatScroll(host: ChatScrollHost): void {
 function updateChatScrollPosition(
   host: ChatScrollHost,
   container: HTMLElement,
-  takeover: false | "reader" | "toward-end" = false,
+  takeover: false | "reader" | "toward-end" | "away-from-end" = false,
 ): void {
   const scrollTop = Math.max(0, container.scrollTop);
   const delta = scrollTop - host.chatLastScrollTop;
@@ -295,7 +299,12 @@ function updateChatScrollPosition(
     }
     return;
   }
-  if (isUserScrollUp && distanceFromBottom > CHAT_TRANSCRIPT_END_THRESHOLD_PX) {
+  if (
+    takeover === "away-from-end" ||
+    (isUserScrollUp && distanceFromBottom > CHAT_TRANSCRIPT_END_THRESHOLD_PX)
+  ) {
+    // An upward key owns the viewport before its native movement. Otherwise
+    // incoming content can restart following between keydown and that movement.
     // Taking control before initial history settles must retire its queued
     // force-scroll. Otherwise that delayed commit can overwrite the viewport.
     host.chatHasAutoScrolled = true;
