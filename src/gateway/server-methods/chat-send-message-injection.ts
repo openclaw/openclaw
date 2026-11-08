@@ -94,12 +94,15 @@ export function createChatSendMessageInjectionStarter(params: {
   const { agentId, cfg, entry, sessionKey, storePath, clientRunId, resolvedSessionModel } =
     params.session;
   const { ctx, isInternalTextSlashCommandTurn, replyOptionImages, replyOptionMedia } = params.turn;
-  const assertCurrent = () => {
-    params.abortSignal.throwIfAborted();
-    params.assertCurrent?.();
-    params.operatorAuthority?.assertCurrent();
-  };
-  return async (): Promise<ReplyMessageInjectionAttempt | undefined> => {
+  return async function start(
+    assertSendNowCurrent?: () => void,
+  ): Promise<ReplyMessageInjectionAttempt | undefined> {
+    const assertCurrent = () => {
+      params.abortSignal.throwIfAborted();
+      params.assertCurrent?.();
+      params.operatorAuthority?.assertCurrent();
+      assertSendNowCurrent?.();
+    };
     const target = params.target;
     if (!target || isInternalTextSlashCommandTurn) {
       return undefined;
@@ -269,6 +272,8 @@ export function createChatSendMessageInjectionStarter(params: {
       phase?.mark("detail.run_admission.steer_admit");
       const attempt = await beginSessionControllerSteer({
         input: params.sourceRef.input,
+        retry: start,
+        retryWithdrawnSteer: assertSendNowCurrent !== undefined,
         target,
         text: p.replyToId
           ? buildChatSendReplyInjectionText({ body: text, cfg, ctx, sessionEntry: entry })

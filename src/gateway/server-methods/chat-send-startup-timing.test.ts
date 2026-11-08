@@ -1,9 +1,14 @@
 import { performance } from "node:perf_hooks";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, test, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { AgentHarnessPreflightError } from "../../agents/harness/errors.js";
 import * as dispatch from "../../auto-reply/dispatch.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
-import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
+import {
+  loadTranscriptEvents,
+  replaceSessionEntry,
+} from "../../config/sessions/session-accessor.js";
 import { loadOrCreateProcessDeviceIdentityAsync } from "../../infra/device-identity-async.js";
 import {
   areDiagnosticsEnabledForProcess,
@@ -161,3 +166,127 @@ test.each(["admission_wait", "workspace_readiness"] as const)(
     });
   },
 );
+
+test.each([
+  {
+    name: "storage contention",
+    failure: new Error(
+      "Managed worktree disk reservation cleanup failed; capacity release is unconfirmed",
+      {
+        cause: Object.assign(new Error("database is locked"), {
+          code: "ERR_SQLITE_ERROR",
+          errcode: 5,
+        }),
+      },
+    ),
+    notice: "The request was interrupted because OpenClaw storage is busy.",
+    diagnostic: undefined,
+  },
+  {
+    name: "storage capacity",
+    failure: Object.assign(new Error("database or disk is full"), { code: "SQLITE_FULL" }),
+    notice: "OpenClaw couldn't save your conversation because the disk is full.",
+    diagnostic: undefined,
+  },
+  {
+    name: "concise public preflight",
+    failure: new AgentHarnessPreflightError("private preparation diagnostic", {
+      userMessage:
+        "This workspace is unavailable. Ask the operator to review its setup before retrying.",
+    }),
+    notice: "This workspace is unavailable.",
+    diagnostic:
+      "This workspace is unavailable. Ask the operator to review its setup before retrying.",
+  },
+  {
+    name: "unknown private failure",
+    failure: new Error("private credentials /private/worktree database is locked"),
+    notice: undefined,
+    diagnostic: "Error: private credentials /private/worktree database is locked",
+  },
+])("preserves $name through accepted chat.send", async ({ failure, notice, diagnostic }) => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    await loadOrCreateProcessDeviceIdentityAsync();
+    const sessionKey = "agent:main:startup-storage-failure";
+    const sessionId = "startup-storage-failure-session";
+    const runId = "startup-storage-failure-run";
+    setRuntimeConfigSnapshot({ agents: { defaults: { workspace: state.workspaceDir } } });
+    await replaceSessionEntry(
+      { agentId: "main", sessionKey },
+      {
+        sessionId,
+        updatedAt: Date.now(),
+        status: "done",
+        pendingProjectGitUrl: "https://example.com/synthetic.git",
+      },
+    );
+    const context = createDirectChatContext();
+    const ready = createDeferred();
+    const workspaceSpy = vi.spyOn(workspace, "prepareSessionWorkspace").mockReturnValue({
+      sessionKey,
+      assertCurrent: () => {},
+      promptReady: ready.promise,
+      isReady: () => false,
+      getFailure: () => failure,
+      waitUntilReady: async () => {
+        throw failure;
+      },
+    });
+    const model = vi.spyOn(dispatch, "dispatchInboundMessageWithProjectedDispatcher");
+    const finished = createDeferred();
+    const launch = agentDispatch.startChatDispatch;
+    const dispatchSpy = vi
+      .spyOn(agentDispatch, "startChatDispatch")
+      .mockImplementation((params) => {
+        const result = launch(params);
+        void result.then(finished.resolve, finished.reject);
+        return result;
+      });
+    try {
+      const respond = vi.fn();
+      await handleChatSend({
+        req: { type: "req", id: runId, method: "chat.send" },
+        params: { sessionKey, message: "hello", idempotencyKey: runId },
+        respond,
+        context,
+        client: null,
+        isWebchatConnect: () => false,
+      });
+      expect(respond).toHaveBeenCalledWith(
+        true,
+        expect.objectContaining({ runId, status: "started" }),
+        undefined,
+        expect.objectContaining({ runId }),
+      );
+      ready.reject(failure);
+      await finished.promise;
+      expect(model).not.toHaveBeenCalled();
+      expect(context.logGateway.warn).not.toHaveBeenCalled();
+      const notices = (
+        await loadTranscriptEvents({ agentId: "main", sessionKey, sessionId })
+      ).filter((event) => isRecord(event) && event.type === "custom_message");
+      expect(notices).toHaveLength(1);
+      expect(notices[0]).toMatchObject({
+        customType: "run-failed-before-reply",
+        content: "Your request couldn't be completed.",
+        details: { runId, ...(notice ? { desktopNotice: notice } : {}) },
+      });
+      if (diagnostic) {
+        expect(notices[0]).toMatchObject({ details: { error: diagnostic } });
+        expect(notices[0]).not.toMatchObject({ details: { errorKind: expect.anything() } });
+      }
+      expect(context.broadcast).toHaveBeenCalledWith(
+        "chat",
+        expect.objectContaining({
+          runId,
+          state: "error",
+        }),
+        expect.anything(),
+      );
+    } finally {
+      workspaceSpy.mockRestore();
+      model.mockRestore();
+      dispatchSpy.mockRestore();
+    }
+  });
+});

@@ -12,6 +12,7 @@ export type DetailsSubagents = NonNullable<ChatDetailsSnapshot["subagents"]>;
 export type DetailsSubagent = DetailsSubagents["rows"][number];
 export type DetailsAutomation = NonNullable<ChatDetailsSnapshot["automations"]>["rows"][number];
 export type DetailsSnapshotPatch = Partial<Omit<ChatDetailsSnapshot, "locale">>;
+export const DETAILS_SUBAGENT_ACTIVITY_PREVIEW_ROWS = 3;
 
 export function isDetailsSubagentWorking(row: Pick<DetailsSubagent, "status">) {
   return row.status === "running" || row.status === "waiting";
@@ -42,17 +43,24 @@ export function projectDetailsSubagents(rows: readonly DetailsSubagent[], mobile
       ...collection.filter((row) => !isDetailsSubagentWorking(row)),
     ]
       .slice(0, collection.length > (mobile ? 3 : 5) ? 4 : 5)
-      .map(({ key, label, status }): DetailsSubagent => ({ key, label, status }))
+      .map(({ key, label, status, session }): DetailsSubagent => ({
+        key,
+        label,
+        status,
+        session: session && { startedAt: session.startedAt, endedAt: session.endedAt },
+      }))
       .concat(
-        ordinary.slice(0, 3).map(({ key, label, status, activity, progress, session }) => ({
-          key,
-          label,
-          status,
-          listed: false,
-          activity,
-          progress,
-          session: session && { startedAt: session.startedAt, endedAt: session.endedAt },
-        })),
+        ordinary
+          .slice(0, DETAILS_SUBAGENT_ACTIVITY_PREVIEW_ROWS)
+          .map(({ key, label, status, activity, progress, session }) => ({
+            key,
+            label,
+            status,
+            listed: false,
+            activity,
+            progress,
+            session: session && { startedAt: session.startedAt, endedAt: session.endedAt },
+          })),
       ),
     // Ordinary totals cannot be recovered from their capped preview rows.
     counts: counts.toSorted((a, b) => {

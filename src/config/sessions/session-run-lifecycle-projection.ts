@@ -45,6 +45,7 @@ export type SessionLifecyclePatchEffects = {
     errorKind?: "state_contention";
     suppressErrorNotice?: boolean;
     notice?: string;
+    desktopNotice?: string;
     /** The run's provider error observation; the failure recorder bounds what it keeps. */
     errorObservation?: unknown;
   };
@@ -69,6 +70,8 @@ export type LifecycleEventLike = { ts: number; sessionId?: string } & {
     suppressErrorNotice?: unknown;
     /** Host-authored failure copy the requester already saw; recorded verbatim. */
     errorNotice?: unknown;
+    /** Desktop-only presentation; shared transcript copy stays unchanged. */
+    desktopErrorNotice?: unknown;
     errorObservation?: unknown;
     executionStarted?: unknown;
     livenessState?: unknown;
@@ -482,6 +485,9 @@ export function projectSessionLifecyclePatch(
         (patch.status === "timeout" ? "Run timed out" : undefined),
       ...(typeof params.event.data?.errorNotice === "string"
         ? { notice: params.event.data.errorNotice }
+        : {}),
+      ...(typeof params.event.data?.desktopErrorNotice === "string"
+        ? { desktopNotice: params.event.data.desktopErrorNotice }
         : {}),
     };
   }

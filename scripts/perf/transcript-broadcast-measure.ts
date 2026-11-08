@@ -4263,6 +4263,7 @@ async function rpc(
   method: string,
   params: unknown,
   onResponse?: (id: string) => void,
+  retryStartup = false,
 ) {
   assertGatewayAlive();
   const started = performance.now();
@@ -4272,6 +4273,7 @@ async function rpc(
       method,
       params,
       method === "agent.wait" ? Math.max(180_000, sandboxTurnTimeoutMs + 10_000) : 180_000,
+      retryStartup ? { retryStartup: true } : undefined,
     );
   } catch (error) {
     recordTeamStressRpc(method, performance.now() - started, false);
@@ -5805,11 +5807,18 @@ try {
     const client = await connectClient(index);
     if (index === 0 && !values["resume-existing-turns"]) {
       // Keep the full parent chain present, including the ordinary default main-session link.
-      await rpc(client, "sessions.create", {
-        key: "agent:main:main",
-        visibility: "shared",
-        displayName: "Synthetic broadcast root",
-      });
+      // /readyz can pass before startup sidecars admit the first session mutation.
+      await rpc(
+        client,
+        "sessions.create",
+        {
+          key: "agent:main:main",
+          visibility: "shared",
+          displayName: "Synthetic broadcast root",
+        },
+        undefined,
+        true,
+      );
       if (!historyTurns) {
         const created = await rpc(client, "sessions.create", {
           key: parentKey,
