@@ -1,2 +1,0 @@
-13
-# connect names why the Gateway join lookup could not connect.
