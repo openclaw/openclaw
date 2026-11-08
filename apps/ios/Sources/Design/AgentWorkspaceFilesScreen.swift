@@ -46,9 +46,11 @@ struct AgentWorkspaceFilesScreen: View {
 /// a row-count offset stalls forever on the final page. When the server
 /// reports the end of the directory while the local list is still short, the
 /// only explanation is that overlap, and only a full reload recovers the
-/// inserted rows.
+/// inserted rows. A file deleted before the cursor shifts an unseen row into
+/// offsets already served, so a shrinking total also needs a full reload.
 struct WorkspaceListPagination {
     private(set) var nextOffset = 0
+    private var servedTotal: Int?
 
     enum Outcome: Equatable {
         case advanced
@@ -57,16 +59,20 @@ struct WorkspaceListPagination {
 
     mutating func reset() {
         self.nextOffset = 0
+        self.servedTotal = nil
     }
 
+    @discardableResult
     mutating func consume(
         requestOffset: Int,
         fetchedCount: Int,
         totalEntries: Int,
         localRowCount: Int) -> Outcome
     {
+        let shrank = self.servedTotal.map { totalEntries < $0 } ?? false
         self.nextOffset = requestOffset + fetchedCount
-        if self.nextOffset >= totalEntries, localRowCount < totalEntries {
+        self.servedTotal = totalEntries
+        if shrank || (self.nextOffset >= totalEntries && localRowCount < totalEntries) {
             return .driftDetected
         }
         return .advanced
@@ -234,9 +240,9 @@ struct AgentWorkspaceDirectoryList: View {
                 totalEntries: result.totalentries,
                 localRowCount: self.entries.count) == .driftDetected
             {
-                // The directory changed between pages and the inserted rows
-                // sit before the cursor; restart the listing so they show up
-                // instead of re-requesting the same final page.
+                // The directory changed before the cursor between pages, so
+                // offset paging would skip or re-request rows; restart the
+                // listing so the current contents show up.
                 await self.reload()
             }
         }

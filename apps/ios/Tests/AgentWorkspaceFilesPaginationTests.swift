@@ -44,6 +44,24 @@ struct AgentWorkspaceFilesPaginationTests {
         #expect(pagination.nextOffset == 252)
     }
 
+    @Test func `deletion before the cursor detects drift`() {
+        var pagination = WorkspaceListPagination()
+
+        #expect(pagination.consume(
+            requestOffset: 0,
+            fetchedCount: 250,
+            totalEntries: 251,
+            localRowCount: 250) == .advanced)
+        // A file before the cursor is deleted: the last row shifts into the
+        // already-served offsets, so the offset-250 page comes back empty
+        // while local rows already equal the shrunken total.
+        #expect(pagination.consume(
+            requestOffset: 250,
+            fetchedCount: 0,
+            totalEntries: 250,
+            localRowCount: 250) == .driftDetected)
+    }
+
     @Test func `reload recovers a drifted listing and finishes pagination`() {
         var pagination = WorkspaceListPagination()
 
