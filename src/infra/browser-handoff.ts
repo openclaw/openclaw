@@ -19,6 +19,9 @@ import { randomUUID } from "node:crypto";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { escapeHtml } from "../shared/html-escape.js";
+import { openClawMascotStyles, renderOpenClawMascot } from "../shared/openclaw-mascot.js";
+import { openClawWordmarkTextSvg } from "../shared/openclaw-wordmark.js";
 import { openLocalFile } from "./browser-open.js";
 import { resolvePreferredOpenClawTmpDir } from "./tmp-openclaw-dir.js";
 import {
@@ -28,6 +31,27 @@ import {
 
 const HANDOFF_DIR_PREFIX = "openclaw-browser-handoff-";
 const HANDOFF_FILE_NAME = "handoff.html";
+
+// The Gateway availability page's light tokens and status anatomy, without its app shell.
+// Local handoff files cannot depend on Gateway assets or the application's theme setting.
+const HANDOFF_STYLES = `:root{color-scheme:light;--bg:#f8f8f8;--text:#353535;--text-strong:#202020;--muted:#5e5e5e;--accent:#bd4531;--mascot-ground:radial-gradient(closest-side,rgb(32 32 32/.16),rgb(32 32 32/.06) 60%,transparent);font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;font-size:14px;line-height:1.55;letter-spacing:-.01em;color:var(--text);background:var(--bg);-webkit-font-smoothing:antialiased}
+*{box-sizing:border-box}body{margin:0;background:var(--bg)}
+.shell{display:flex;min-height:100svh}
+.content{position:relative;display:flex;flex-direction:column;flex:1;min-width:0}
+.topbar{display:flex;align-items:flex-start;justify-content:center;padding:14.5px 12px 0}
+.wordmark{display:block;width:105px;height:32px;color:var(--text-strong)}
+main{position:relative;flex:1;min-height:calc(100svh - 64px)}
+.body{position:absolute;top:38%;left:50%;width:min(460px,calc(100% - 48px));transform:translateX(-50%);text-align:center}
+h1{position:relative;margin:0;color:var(--text-strong);font-size:22px;font-weight:600;line-height:28px;letter-spacing:-.01em;text-wrap:balance}
+p{margin:6px 0 0;color:var(--muted);font-size:14px;line-height:21px;text-wrap:pretty}
+a{color:var(--muted);text-underline-offset:3px}a:hover{color:var(--text-strong)}a:focus-visible{outline:2px solid var(--accent);outline-offset:3px}
+@media(max-width:768px),(max-width:932px) and (max-height:500px) and (orientation:landscape){.content{padding:0 4px}.body{top:36%;left:24px;right:24px;width:auto;transform:none}h1{font-size:20px;line-height:26px}}
+${openClawMascotStyles({
+  busy: ".mascot",
+  error: ".mascot[data-pose=error]",
+  phone:
+    "@media(max-width:768px),(max-width:932px) and (max-height:500px) and (orientation:landscape)",
+})}`;
 
 // Clean up the handoff document once the short-lived credentials it carries
 // have expired. The timer is unref'd so CLI commands still exit promptly, and
@@ -94,12 +118,7 @@ export async function openUrlPrivately(targetUrl: string): Promise<boolean> {
 
   const filePath = path.join(directory, HANDOFF_FILE_NAME);
   try {
-    const href = normalizedTargetUrl
-      .replaceAll("&", "&amp;")
-      .replaceAll("<", "&lt;")
-      .replaceAll(">", "&gt;")
-      .replaceAll('"', "&quot;")
-      .replaceAll("'", "&#39;");
+    const href = escapeHtml(normalizedTargetUrl);
     await writeHandoffDocument(
       filePath,
       [
@@ -107,12 +126,18 @@ export async function openUrlPrivately(targetUrl: string): Promise<boolean> {
         '<html lang="en">',
         "<head>",
         '<meta charset="utf-8">',
+        '<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">',
+        '<meta name="color-scheme" content="light">',
         `<meta http-equiv="refresh" content="0; url=${href}">`,
         "<title>OpenClaw</title>",
+        `<style>${HANDOFF_STYLES}</style>`,
         "</head>",
         "<body>",
-        "<p>Opening the OpenClaw Control UI…</p>",
+        `<div class="shell"><div class="content"><header class="topbar">${openClawWordmarkTextSvg}</header>`,
+        '<main><div class="body">',
+        `<h1>${renderOpenClawMascot("openclaw-handoff-mascot-shell")}Opening OpenClaw</h1>`,
         `<p>If nothing happens, <a href="${href}">continue to OpenClaw</a>.</p>`,
+        "</div></main></div></div>",
         `<script>location.replace(${JSON.stringify(normalizedTargetUrl).replaceAll("<", "\\u003c")});</script>`,
         "</body>",
         "</html>",

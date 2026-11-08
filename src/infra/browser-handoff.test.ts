@@ -1,6 +1,7 @@
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { JSDOM } from "jsdom";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { openUrlPrivately } from "./browser-handoff.js";
 import { resolvePreferredOpenClawTmpDir } from "./tmp-openclaw-dir.js";
@@ -51,6 +52,15 @@ it("hands the browser a private file path instead of the credential URL", async 
   expect(content).toContain(`url=${normalized.replaceAll("&", "&amp;")}`);
   expect(content).toContain(`location.replace(${JSON.stringify(normalized)})`);
   expect(content).not.toContain('a"b<c>');
+  const document = JSDOM.fragment(content);
+  expect(document.querySelector("h1")?.textContent).toBe("Opening OpenClaw");
+  expect(document.querySelector('header [role="img"]')?.getAttribute("aria-label")).toBe(
+    "OpenClaw",
+  );
+  expect(document.querySelector('h1 [aria-hidden="true"] svg')).not.toBeNull();
+  expect(document.querySelector("main a")?.getAttribute("href")).toBe(normalized);
+  expect(document.querySelector("main a")?.textContent).toBe("continue to OpenClaw");
+  expect(document.querySelectorAll("[src], link")).toHaveLength(0);
 });
 
 it.runIf(process.platform !== "win32")(
