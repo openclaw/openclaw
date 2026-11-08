@@ -228,12 +228,7 @@ function applyWrites(projection: Projection, writes: ReadonlyMap<string, StoredV
 }
 
 function replay(entries: readonly unknown[], initial?: Projection, start = 0): Projection {
-  // Earlier runs may still hold the admitted projection. Extend a private copy.
-  const projection: Projection = new Map(initial);
-  let bytes = 0;
-  for (const value of projection.values()) {
-    bytes += value.bytes;
-  }
+  const writes = new Map<string, { value: unknown; networkContent: boolean } | null>();
   for (let index = start; index < entries.length; index++) {
     const entry = entries[index];
     if (!isRecord(entry) || entry.type !== "custom" || entry.customType !== CUSTOM_TYPE) {
@@ -257,25 +252,23 @@ function replay(entries: readonly unknown[], initial?: Projection, start = 0): P
           "Code Mode session store contains invalid content provenance; repair the session before using store/load.",
         );
       }
-      const name = readKey(key);
-      const encoded = encode(value, networkContent);
-      bytes += encoded.bytes - (projection.get(name)?.bytes ?? 0);
-      projection.set(name, encoded);
+      writes.set(readKey(key), { value, networkContent });
     }
     for (const key of data.delete) {
-      const name = readKey(key);
-      bytes -= projection.get(name)?.bytes ?? 0;
-      projection.delete(name);
-    }
-    // Replay owns this map. Preserve historical budget errors, but check the
-    // total only after the entry's deletes, just like a committed cell's writes.
-    if (bytes > MAX_TOTAL_BYTES) {
-      throw new RangeError(
-        "Code Mode store exceeds 1 MiB of serialized JSON; delete keys or store less data.",
-      );
+      writes.set(readKey(key), null);
     }
   }
-  return projection;
+  // Commit admission checks historical budgets. Encode only surviving writes;
+  // applyWrites checks the final budget and leaves earlier readers' maps intact.
+  return applyWrites(
+    initial ?? new Map(),
+    new Map(
+      [...writes].map(([key, entry]) => [
+        key,
+        entry === null ? null : encode(entry.value, entry.networkContent),
+      ]),
+    ),
+  );
 }
 
 export type CodeModeSessionStoreAccess = ReturnType<typeof createCodeModeSessionStoreAccess>;

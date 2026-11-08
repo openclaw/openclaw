@@ -572,16 +572,13 @@ it.each(["blue", "red"])(
     find("model-option", "openai/" + id)!.click();
     const container = draw();
     expect(control.selected).toBe("openai/" + id);
-    expect(
-      find("speed-option", color === "blue" ? "on" : "off")?.getAttribute("aria-checked"),
-    ).toBe("true");
-    for (const option of container.querySelectorAll<HTMLButtonElement>(
-      "[data-chat-speed-option]",
-    )) {
-      expect(option.disabled).toBe(
-        color === "red" || option.dataset.chatSpeedOption === "ultrafast",
-      );
+    if (color === "blue") {
+      expect(find("speed-option", "on")?.getAttribute("aria-checked")).toBe("true");
+    } else {
+      expect(find("speed-option")).toBeNull();
     }
+    expect(find("speed-option", "ultrafast")).toBeNull();
+    expect(container.querySelector("[data-chat-speed-option]:disabled")).toBeNull();
     expect(find("thinking-slider")?.disabled).not.toBe(true);
   },
 );

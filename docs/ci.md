@@ -146,6 +146,11 @@ Compact mocked Control UI E2E uses six 16-class jobs with four workers each,
 matching the four observed CPUs per runner and retaining 24 aggregate worker slots.
 Private source-server projects stay serial. The conditional browser-extension
 row, noncompact plans, and real-Gateway worker limits retain their existing rules.
+The Mantis chat recording runs in its dedicated evidence workflow and full release
+validation, or when its test changes; routine CI keeps the equivalent chat lifecycle
+assertions without recording the same scenario again.
+Sidebar cached-row parity screenshots and JSON require `OPENCLAW_CAPTURE_UI_PROOF=1`;
+the parity assertions still run during routine CI.
 Browser suites that only exercise the rendered UI borrow the invocation's
 production bundle. Private source servers are reserved for source-module
 interception, custom build identities, or development-server contracts.
@@ -451,6 +456,12 @@ Changed-owner Node rows use existing file/group timing evidence with a
 150-test-second admission target and the existing 130-row PR cap. Complete files,
 standard configs, and worker policies remain intact; predicted test seconds
 are separate from measured CI wall time.
+Private-QA direct targets can share up to 196 predicted test seconds when the
+same execution policy already selects a slower target. This reserves 104 seconds
+for preparation within a 300-second job budget without increasing the policy's
+longest predicted test row. Repacking must reduce total jobs without adding jobs
+to either private-QA policy. The 12-target limit and hourly reservations remain
+unchanged.
 Compatible selected serial jobs share setup after singleton worker limits are
 fixed. Combined jobs retain the shortest contributing timeout and the existing
 test-work budget; complete and scheduled plans keep their original layout.

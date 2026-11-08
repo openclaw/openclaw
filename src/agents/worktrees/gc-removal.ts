@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
+import { collectNestedErrorCandidates } from "@openclaw/normalization-core/error-coercion";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
@@ -288,6 +289,21 @@ export function createWorktreeGcRemoval(context: {
     assertCurrent?.();
     if (hasWorktreeUnknownOutcome(initialError)) {
       throw initialError;
+    }
+    const { RejectedLocalWorkspaceResultError } =
+      await import("../../gateway/worker-environments/local-workspace-checkpoint.js");
+    const rejected = collectNestedErrorCandidates(initialError).find(
+      (error) => error instanceof RejectedLocalWorkspaceResultError,
+    );
+    if (rejected) {
+      const reason =
+        `Workspace result too large to apply automatically; reserved result ${rejected.resultRef}; ` +
+        `files preserved at ${rejected.projectionPath}. Reduce the change and checkpoint it, or recover manually, then run openclaw worktrees gc --retry-deferred.`;
+      await withOwnerMutation(async () =>
+        deferWorktreeGcRecord(env, record, reason, await prepareOwnerCurrent(record, retiredOwner)),
+      );
+      progress.protect("idle", record.id, reason);
+      return;
     }
     if (retiredOwner && !(initialError instanceof WorktreeRemovalContentionError)) {
       try {

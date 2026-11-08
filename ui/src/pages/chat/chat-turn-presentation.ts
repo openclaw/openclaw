@@ -154,6 +154,32 @@ function turnUserMessages(turn: TurnRenderItem[]): unknown[] {
 }
 
 /**
+ * Elapsed time from the prompt that started a run to the last persisted write of
+ * its output. A message timestamp marks creation, not completion of the model
+ * request, so output without recorded write times stays untimed.
+ */
+function recordedRunDurationMs(turn: TurnRenderItem[], runId: string): number | null {
+  const prompt = turnUserMessages(turn).find((message) => userTurnRunId(message) === runId);
+  const startedAt = asRecord(prompt)?.timestamp;
+  if (typeof startedAt !== "number") {
+    return null;
+  }
+  let endedAt = Number.NEGATIVE_INFINITY;
+  for (const item of turn) {
+    if (item.kind !== "group" || item.role.toLowerCase() === "user" || item.runId !== runId) {
+      continue;
+    }
+    for (const { message } of item.messages) {
+      const recordedAt = asRecord(asRecord(message)?.["__openclaw"])?.recordTimestampMs;
+      if (typeof recordedAt === "number" && recordedAt > endedAt) {
+        endedAt = recordedAt;
+      }
+    }
+  }
+  return endedAt >= startedAt ? endedAt - startedAt : null;
+}
+
+/**
  * Once a turn is done, collect its activity above the preserved answers in one
  * "Worked for X" disclosure. Each partition retains source order without changing
  * the stored transcript. Live turns stay expanded; structural markers stay anchored.
@@ -365,22 +391,6 @@ export function collapseCompletedTurnWork(
         : workRunIds.size === 1 && firstAnswer && workRunIds.has(firstAnswer.runId)
           ? firstAnswer
           : undefined;
-    // Message timestamps describe creation, not completion of the final model
-    // request. Only the lifecycle owner can supply elapsed time for this run.
-    // Older history without matching lifecycle facts, and work spanning several
-    // runs, keep an untimed disclosure.
-    const session = opts.session;
-    const runtimeMs = session?.runtimeMs;
-    const durationMs =
-      session?.key === opts.sessionKey &&
-      ownerReply?.runId !== undefined &&
-      session.lastRunId === ownerReply.runId &&
-      TERMINAL_WORK_STATUSES.has(session.status ?? "") &&
-      typeof runtimeMs === "number" &&
-      Number.isFinite(runtimeMs) &&
-      runtimeMs >= 0
-        ? runtimeMs
-        : null;
     const replyRunId =
       ownerReply &&
       !hasForwardedSource(ownerReply) &&
@@ -395,6 +405,25 @@ export function collapseCompletedTurnWork(
         )
         ? ownerReply.runId
         : undefined;
+    // The session row owns elapsed time while it still describes this run. Once
+    // newer runs advance it, the transcript keeps this run's timing. Work spanning
+    // several runs keeps an untimed disclosure.
+    const session = opts.session;
+    const runtimeMs = session?.runtimeMs;
+    const lifecycleOwnsRun =
+      session?.key === opts.sessionKey &&
+      ownerReply?.runId !== undefined &&
+      session.lastRunId === ownerReply.runId;
+    const durationMs = lifecycleOwnsRun
+      ? TERMINAL_WORK_STATUSES.has(session.status ?? "") &&
+        typeof runtimeMs === "number" &&
+        Number.isFinite(runtimeMs) &&
+        runtimeMs >= 0
+        ? runtimeMs
+        : null
+      : replyRunId
+        ? recordedRunDurationMs(turn, replyRunId)
+        : null;
     result.push(...turn.slice(0, segmentStart));
     result.push({
       kind: "work-group",
