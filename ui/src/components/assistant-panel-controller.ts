@@ -4,7 +4,7 @@ import { isSessionRouteId, type RouteId } from "../app-route-paths.ts";
 import type { AssistantDockOwner } from "../app/assistant-dock.ts";
 import { chatInputOwnerForContext } from "../app/chat-input-owner.ts";
 import type { ApplicationContext } from "../app/context.ts";
-import { listChatAgents } from "../lib/agents/display.ts";
+import { listChatAgents, listSelectableAgents } from "../lib/agents/display.ts";
 import { listen } from "../lib/reactive/listener.ts";
 import {
   prepareSessionNavigationHandoff,
@@ -284,14 +284,17 @@ export function createAssistantPanel(
 
   function homeTarget() {
     const defaults = homeDefaults;
-    const agents = listChatAgents(defaults.agentsList?.agents ?? []);
+    const roster = defaults.agentsList?.agents ?? [];
+    const agents = listChatAgents(roster);
     const defaultId = resolveUiDefaultAgentId(defaults);
     // The sidebar switcher (agentSelection) is the only agent chooser; the dock
     // shows the selected agent's Home and never grows a second switcher.
     const rawSelectedId = getContext()?.agentSelection.state.selectedId;
     const selectedId = rawSelectedId ? normalizeAgentId(rawSelectedId) : "";
+    // A picker-hidden agent can still hold the selection through an open
+    // session; system rows keep their existing fallback to a chat agent.
     const agentId =
-      agents.find((agent) => agent.id === selectedId)?.id ??
+      listSelectableAgents(roster).find((agent) => agent.id === selectedId)?.id ??
       agents.find((agent) => agent.id === defaultId)?.id ??
       agents[0]?.id ??
       defaultId;

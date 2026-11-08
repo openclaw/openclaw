@@ -45,9 +45,9 @@ set one with `openclaw config set agents.defaults.systemAgent.agentId <id>`.
 The Control UI's **Set default** action writes the same designation.
 
 Agents configured with `agents.entries.<id>.picker.hidden: true` are marked
-`(hidden)`: they are excluded from chat-facing agent pickers and switchers, but
-remain valid `sessions_spawn` targets and stay listed here. Native apps
-(macOS, iOS) do not yet consume this flag.
+`(hidden)`: they are excluded from chat-facing agent pickers and switchers in
+the Control UI and the TUI, but remain valid `sessions_spawn` targets and stay
+listed here. Native apps (macOS, iOS) do not yet consume this flag.
 
 Provider-status labels include optional account display names beside account IDs.
 Routing rules continue to identify accounts by channel and account ID.
