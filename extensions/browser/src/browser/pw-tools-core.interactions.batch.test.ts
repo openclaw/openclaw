@@ -120,19 +120,19 @@ function batch(
 
 function useCrashedResolver() {
   const resolvePage = session.getPageForTargetId;
-  const defaultResolve = resolvePage.getMockImplementation();
+  const previousResolve = resolvePage.getMockImplementation();
+  if (!previousResolve) {
+    throw new Error("the crashed-target fixture needs the default page resolver");
+  }
+  type PageResolver = NonNullable<typeof previousResolve>;
   const crashAwareResolve = async (options: { allowCrashed?: boolean }) => {
     if (!options.allowCrashed) {
       throw new BrowserTabCrashedError();
     }
     return page;
   };
-  resolvePage.mockImplementation(crashAwareResolve as unknown as typeof defaultResolve);
-  return () => {
-    if (defaultResolve) {
-      resolvePage.mockImplementation(defaultResolve);
-    }
-  };
+  resolvePage.mockImplementation(crashAwareResolve as unknown as PageResolver);
+  return () => resolvePage.mockImplementation(previousResolve);
 }
 
 describe("executeActViaPlaywright batches", () => {
