@@ -3,6 +3,7 @@
 Quick validation script for skills - minimal version
 """
 
+import json
 import re
 import sys
 from pathlib import Path
@@ -14,11 +15,19 @@ except ModuleNotFoundError:
     yaml = None
 
 MAX_SKILL_NAME_LENGTH = 64
+_BLOCK_SCALAR_HEADER = re.compile(r"[>|](?:[1-9][+-]?|[+-][1-9]?)?")
+
+
+def _split_lines(content: str) -> list[str]:
+    """Split like the runtime parser: normalize CRLF/CR, then break on LF only."""
+    return content.replace("\r\n", "\n").replace("\r", "\n").split("\n")
 
 
 def _extract_frontmatter(content: str) -> Optional[str]:
-    lines = content.splitlines()
-    if not lines or lines[0].strip() != "---":
+    lines = _split_lines(content)
+    # The loader only recognizes a fence that starts the file; leading indentation
+    # leaves the frontmatter unparsed even though the rest looks like YAML.
+    if not lines or lines[0].rstrip() != "---":
         return None
     for i in range(1, len(lines)):
         if lines[i].rstrip() == "---":
@@ -41,7 +50,7 @@ def _parse_simple_frontmatter(frontmatter_text: str) -> Optional[dict[str, str]]
     parsed: dict[str, str] = {}
     current_key: Optional[str] = None
     block_scalar = False
-    for raw_line in frontmatter_text.splitlines():
+    for raw_line in frontmatter_text.split("\n"):
         stripped = raw_line.strip()
         is_indented = raw_line[:1].isspace()
         if not stripped or (stripped.startswith("#") and not (block_scalar and is_indented)):
@@ -68,7 +77,7 @@ def _parse_simple_frontmatter(frontmatter_text: str) -> Optional[dict[str, str]]
         if not key:
             return None
         # Block headers describe the scalar; only its indented body is content.
-        block_scalar = bool(re.fullmatch(r"[>|](?:[1-9][+-]?|[+-][1-9]?)?", value))
+        block_scalar = bool(_BLOCK_SCALAR_HEADER.fullmatch(value))
         if block_scalar:
             value = ""
         elif (value.startswith('"') and value.endswith('"')) or (
@@ -78,6 +87,69 @@ def _parse_simple_frontmatter(frontmatter_text: str) -> Optional[dict[str, str]]
         parsed[key] = value
         current_key = key
     return parsed
+
+
+def _strip_quotes(value: str) -> str:
+    quote = value[:1]
+    return value[1:-1] if quote in {"'", '"'} and value.endswith(quote) else value
+
+
+def _load_frontmatter(frontmatter_text: str):
+    """Load YAML with the loader's duplicate-key rejection."""
+
+    class UniqueKeyLoader(yaml.SafeLoader):
+        def construct_mapping(self, node, deep=False):
+            keys = []
+            for key_node, _ in node.value:
+                # Merge keys are flattened by SafeConstructor and have no constructor.
+                if key_node.tag == "tag:yaml.org,2002:merge":
+                    continue
+                key = self.construct_object(key_node, deep=deep)
+                if key in keys:
+                    raise yaml.constructor.ConstructorError(
+                        "while constructing a mapping",
+                        node.start_mark,
+                        f"found duplicate key {key!r}",
+                        key_node.start_mark,
+                    )
+                keys.append(key)
+            return super().construct_mapping(node, deep=deep)
+
+    return yaml.load(frontmatter_text, Loader=UniqueKeyLoader)
+
+
+def _recover_colon_rich_description(frontmatter_text: str, error) -> Optional[dict[str, str]]:
+    """Quote the `description` value the loader would recover, then parse again.
+
+    The loader recovers free-form description text when YAML fails at that line
+    because the plain scalar contains `: `. Mirror that single-line recovery so
+    the validator accepts the files the loader loads, and leave every other YAML
+    defect (including duplicate keys) an error.
+    """
+    if not isinstance(error, yaml.scanner.ScannerError):
+        return None
+    mark = getattr(error, "problem_mark", None)
+    lines = frontmatter_text.split("\n")
+    if mark is None or not 0 <= mark.line < len(lines):
+        return None
+    pattern = r"""(?:description|"description"|'description'):[ \t]*(.*)"""
+    match = re.fullmatch(pattern, lines[mark.line])
+    if not match:
+        return None
+    value = match.group(1).strip()
+    # Only recover the mapping-value failure; a missing space after the mapping
+    # colon leaves no top-level description pair for the loader to recover.
+    colon_rich = ": " in value or getattr(error, "problem", None) == (
+        "mapping values are not allowed here"
+    )
+    if not value or not colon_rich or _BLOCK_SCALAR_HEADER.fullmatch(value):
+        return None
+    lines[mark.line] = f"description: {json.dumps(_strip_quotes(value), ensure_ascii=False)}"
+    try:
+        parsed = _load_frontmatter("\n".join(lines))
+    except yaml.YAMLError:
+        return None
+    return parsed if isinstance(parsed, dict) else None
 
 
 def validate_skill(skill_path):
@@ -98,11 +170,13 @@ def validate_skill(skill_path):
         return False, "Invalid frontmatter format"
     if yaml is not None:
         try:
-            frontmatter = yaml.safe_load(frontmatter_text)
+            frontmatter = _load_frontmatter(frontmatter_text)
             if not isinstance(frontmatter, dict):
                 return False, "Frontmatter must be a YAML dictionary"
         except yaml.YAMLError as e:
-            return False, f"Invalid YAML in frontmatter: {e}"
+            frontmatter = _recover_colon_rich_description(frontmatter_text, e)
+            if frontmatter is None:
+                return False, f"Invalid YAML in frontmatter: {e}"
     else:
         frontmatter = _parse_simple_frontmatter(frontmatter_text)
         if frontmatter is None:

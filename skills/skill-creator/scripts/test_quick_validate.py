@@ -108,6 +108,133 @@ metadata: |
                     )
                     self.assertEqual(valid, expected, message)
 
+    def test_accepts_colon_rich_description_in_both_parse_modes(self):
+        content = (
+            "---\n"
+            "name: colon-skill\n"
+            "description: Use anime style IMPORTANT: Must be kawaii\n"
+            "---\n"
+            "# Skill\n"
+        )
+        self.assertTrue(*self.validate_content(content))
+        with patch.object(quick_validate, "yaml", None):
+            self.assertTrue(*self.validate_content(content))
+
+    def test_colon_rich_recovery_keeps_description_content_rules(self):
+        content = (
+            "---\n"
+            "name: colon-skill\n"
+            "description: Summarize <notes>: quick capture\n"
+            "---\n"
+            "# Skill\n"
+        )
+        self.assertEqual(
+            self.validate_content(content),
+            (False, "Description cannot contain angle brackets (< or >)"),
+        )
+
+    def test_colon_rich_recovery_requires_bare_key_form(self):
+        for separator in (" : ", "\t: "):
+            with self.subTest(separator=separator):
+                content = f"---\nname: colon-skill\ndescription{separator}a: b\n---\n# Skill\n"
+                self.assertFalse(self.validate_content(content)[0])
+
+    def test_colon_rich_recovery_does_not_mask_flow_collection_errors(self):
+        content = (
+            "---\n"
+            "name: colon-skill\n"
+            "description: Summarize meetings\n"
+            "metadata: [\n"
+            "description: a: b\n"
+            "]\n"
+            "---\n"
+            "# Skill\n"
+        )
+        valid, message = self.validate_content(content)
+        self.assertFalse(valid)
+        self.assertIn("Invalid YAML in frontmatter", message)
+
+    def test_accepts_quoted_colon_rich_description_key(self):
+        content = (
+            "---\n"
+            "name: colon-skill\n"
+            '"description": Use anime style IMPORTANT: Must be kawaii\n'
+            "---\n"
+            "# Skill\n"
+        )
+        self.assertTrue(*self.validate_content(content))
+
+    def test_colon_rich_recovery_rejects_duplicate_keys(self):
+        content = (
+            "---\n"
+            "name: colon-skill\n"
+            "description: Use anime style IMPORTANT: Must be kawaii\n"
+            "name: other-skill\n"
+            "---\n"
+            "# Skill\n"
+        )
+        valid, message = self.validate_content(content)
+        self.assertFalse(valid)
+        self.assertIn("Invalid YAML in frontmatter", message)
+
+    def test_colon_rich_recovery_keeps_astral_characters_whole(self):
+        description = "x" * 1020 + "\U0001f600: y"
+        self.assertEqual(len(description), 1024)
+        content = f"---\nname: colon-skill\ndescription: {description}\n---\n# Skill\n"
+        self.assertTrue(*self.validate_content(content))
+
+    def test_rejects_unicode_line_separator_after_closing_fence(self):
+        content = "---\nname: unicode-skill\ndescription: Summarize\n---\u2028Body\n"
+        self.assertEqual(self.validate_content(content), (False, "Invalid frontmatter format"))
+
+    def test_colon_rich_recovery_requires_mapping_value_error(self):
+        for description in ("ab", '"a b"', "a:b", "https://example.com:8080/path"):
+            with self.subTest(description=description):
+                content = f"---\nname: dot-skill\ndescription:{description}\n---\n# Skill\n"
+                self.assertFalse(self.validate_content(content)[0])
+        content = "---\nname: colon-skill\ndescription: a:\n---\n# Skill\n"
+        self.assertTrue(*self.validate_content(content))
+
+    def test_duplicate_key_check_keeps_merge_keys(self):
+        content = (
+            "---\n"
+            "name: merge-skill\n"
+            "description: Summarize meetings\n"
+            "metadata:\n"
+            "  <<: &base\n"
+            "    owner: team\n"
+            "  extra: 1\n"
+            "---\n"
+            "# Skill\n"
+        )
+        self.assertTrue(*self.validate_content(content))
+
+    def test_colon_rich_recovery_keeps_other_yaml_errors(self):
+        content = (
+            "---\n"
+            "name: broken-skill\n"
+            "description: Use anime style IMPORTANT: Must be kawaii\n"
+            "metadata: *missing\n"
+            "---\n"
+            "# Skill\n"
+        )
+        valid, message = self.validate_content(content)
+        self.assertFalse(valid)
+        self.assertIn("Invalid YAML in frontmatter", message)
+
+    def test_rejects_indented_frontmatter_opening_fence(self):
+        content = "  ---\nname: indented-skill\ndescription: Summarize meetings\n---\n# Skill\n"
+        self.assertEqual(self.validate_content(content), (False, "Invalid frontmatter format"))
+        with patch.object(quick_validate, "yaml", None):
+            self.assertEqual(
+                self.validate_content(content),
+                (False, "Invalid frontmatter format"),
+            )
+
+    def test_accepts_opening_fence_with_trailing_whitespace(self):
+        content = "--- \t\nname: spaced-skill\ndescription: Summarize meetings\n---\n# Skill\n"
+        self.assertTrue(*self.validate_content(content))
+
     def test_accepts_openclaw_invocation_frontmatter(self):
         content = """---
 name: invocable-skill
