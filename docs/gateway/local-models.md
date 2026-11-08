@@ -130,6 +130,44 @@ Setup checklist:
 
 For local-first with a hosted safety net, swap `primary`/`fallbacks` order and keep the same `providers` block and `models.mode: "merge"`.
 
+### Non-interactive hybrid setup
+
+Onboarding configures one provider per run: the `--custom-*` flags only take effect when the resolved auth choice is `custom-api-key` and are silently ignored next to a hosted `--auth-choice`. To script a hosted primary with a local fallback, onboard with the hosted provider first, then add the local server to config:
+
+```bash
+# 1. Onboard with the hosted provider (example: HuggingFace router)
+openclaw onboard --non-interactive --accept-risk --skip-health \
+  --auth-choice huggingface-api-key \
+  --huggingface-api-key "$HF_TOKEN"
+```
+
+Write the local provider to `./local-provider.patch.json5`:
+
+```json5
+{
+  models: {
+    providers: {
+      local: {
+        baseUrl: "http://<host-lan-or-tailnet-ip>:8080/v1",
+        api: "openai-completions",
+        apiKey: "local",
+        models: [{ id: "my-model", name: "Local model", input: ["text"] }],
+      },
+    },
+  },
+}
+```
+
+```bash
+# 2. Add the local server as a second provider
+openclaw config patch --file ./local-provider.patch.json5
+
+# 3. Wire the fallback
+openclaw models fallbacks add "local/my-model"
+```
+
+When the Gateway runs in a container, run steps 2–3 through that container (`openclaw --container <name> ...` or `podman exec`) once it is up — the running gateway locks the config file. See [Podman](/install/podman#reaching-model-servers-on-the-host) for the `baseUrl` choice.
+
 OpenClaw fallbacks switch models per turn on provider errors. For per-request routing that keeps small prompts on the local model and sends only oversized ones to a hosted model, see [Hybrid inference](/providers/llmman#hybrid-inference) with llmman.
 
 ### Regional hosting / data routing
