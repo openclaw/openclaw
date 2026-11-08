@@ -173,6 +173,7 @@ function main() {
           !job.steps.some((step) => step.name === "Run Node test shard") ||
           job.name.startsWith("checks-node-compact-") ||
           job.name.startsWith("checks-node-release-packed-") ||
+          job.name.startsWith("checks-node-worker-e2e") ||
           ciTimingRunnerProfile(job.labels) !== "github"
         ) {
           continue;

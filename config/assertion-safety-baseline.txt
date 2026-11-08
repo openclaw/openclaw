@@ -900,7 +900,7 @@ packages/ai/src/providers/clean-for-gemini.ts	4
 packages/ai/src/providers/google-shared.ts	2
 packages/ai/src/providers/mistral.ts	1
 packages/ai/src/providers/openai-chatgpt-responses-protocol.ts	1
-packages/ai/src/providers/openai-chatgpt-responses.ts	16
+packages/ai/src/providers/openai-chatgpt-responses.ts	15
 packages/ai/src/providers/openai-completions.ts	1
 packages/ai/src/providers/openai-reasoning-effort.ts	5
 packages/ai/src/providers/openai-responses-shared.ts	4
@@ -1011,7 +1011,7 @@ src/agents/agent-bundle-mcp-combined.ts	1
 src/agents/agent-bundle-mcp-materialize.ts	3
 src/agents/agent-bundle-mcp-runtime-shared.ts	2
 src/agents/agent-command.ts	1
-src/agents/agent-hooks/compaction-safeguard.ts	9
+src/agents/agent-hooks/compaction-safeguard.ts	7
 src/agents/agent-project-settings-snapshot.ts	3
 src/agents/agent-run-terminal-delivery.ts	1
 src/agents/agent-run-terminal-receipt.ts	1
@@ -1071,7 +1071,6 @@ src/agents/content-blocks.ts	1
 src/agents/context-cache.ts	1
 src/agents/context-runtime-state.ts	1
 src/agents/cron-creator-authority-context.ts	1
-src/agents/custom-api-registry.ts	1
 src/agents/delegation-capability.ts	1
 src/agents/embedded-agent-helpers/bootstrap.ts	2
 src/agents/embedded-agent-helpers/images.ts	3
@@ -1250,7 +1249,7 @@ src/agents/tool-call-id.ts	7
 src/agents/tool-display-common.ts	1
 src/agents/tool-images.ts	2
 src/agents/tool-policy-shared.ts	1
-src/agents/tool-result-error.ts	2
+src/agents/tool-result-error.ts	1
 src/agents/tool-schema-hints.ts	1
 src/agents/tool-search-catalog.ts	2
 src/agents/tool-search-directory.ts	1
@@ -1261,7 +1260,7 @@ src/agents/tools-effective-inventory.ts	4
 src/agents/tools/agents-wait-tool.ts	1
 src/agents/tools/ask-user-tool.ts	2
 src/agents/tools/chat-history-text.ts	1
-src/agents/tools/common.ts	2
+src/agents/tools/common.ts	1
 src/agents/tools/computer-tool-node.ts	1
 src/agents/tools/computer-tool-request.ts	3
 src/agents/tools/computer-tool.ts	2
@@ -1358,7 +1357,7 @@ src/boards/sqlite-board-codec.ts	7
 src/bootstrap/node-startup-env.ts	1
 src/canvas/documents.ts	1
 src/canvas/serve.runtime.ts	1
-src/canvas/widget-tool.ts	2
+src/canvas/widget-tool.ts	1
 src/channels/account-snapshot-fields.ts	1
 src/channels/allowlist-match.ts	1
 src/channels/allowlists/resolve-utils.ts	3
@@ -1440,7 +1439,7 @@ src/cli/exec-approvals-cli.ts	9
 src/cli/exec-policy-cli.ts	1
 src/cli/gateway-cli/dev.ts	1
 src/cli/gateway-cli/register.ts	4
-src/cli/gateway-cli/run.ts	5
+src/cli/gateway-cli/run.ts	4
 src/cli/gateway-cli/suspend-cli.ts	2
 src/cli/logs-cli.ts	1
 src/cli/mcp-cli.ts	1
@@ -1785,7 +1784,6 @@ src/gateway/session-history-state.ts	2
 src/gateway/session-transcript-derived-readers.ts	1
 src/gateway/sessions-history-http.ts	1
 src/gateway/stale-install.ts	1
-src/gateway/talk/handlers/index.ts	3
 src/gateway/talk/relay/session-create.ts	1
 src/gateway/test-http-response.ts	4
 src/gateway/test-temp-config.ts	1
@@ -1887,7 +1885,6 @@ src/infra/push-apns-http2.ts	1
 src/infra/push-apns.ts	3
 src/infra/question-gateway-resolver.ts	3
 src/infra/question-reaction-runtime.ts	3
-src/infra/restart-coordinator.ts	1
 src/infra/restart-handoff.ts	1
 src/infra/restart-sentinel.ts	1
 src/infra/restart-stale-pids.ts	2
@@ -2141,7 +2138,6 @@ src/plugins/uninstall.ts	1
 src/plugins/update-channel.ts	2
 src/plugins/update-config.ts	2
 src/plugins/update-installed.ts	5
-src/plugins/update-summary.ts	2
 src/plugins/web-search-install-catalog.ts	2
 src/poll-params.ts	1
 src/process/command-queue.ts	2
@@ -2330,7 +2326,6 @@ ui/src/components/mcp-app-theme.ts	1
 ui/src/components/session-data.ts	1
 ui/src/components/session-organizer.ts	5
 ui/src/components/terminal/terminal-connection.ts	2
-ui/src/components/terminal/terminal-controller-lifecycle.ts	1
 ui/src/components/terminal/terminal-panel-upload.ts	2
 ui/src/components/terminal/terminal-pending-actions.ts	1
 ui/src/i18n/lib/translate.ts	1

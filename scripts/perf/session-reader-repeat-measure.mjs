@@ -2,7 +2,6 @@
 // Serial calls own exact counter deltas. Concurrent callers share one wave delta;
 // assigning overlapping deltas to individuals would count the same read repeatedly.
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { Session } from "node:inspector/promises";
@@ -10,6 +9,7 @@ import { loadavg } from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { startCollectedHeapSampling, sumSampledHeapBytes } from "../lib/heap-sampling.ts";
+import { evictLinuxFilePageCache } from "../lib/linux-page-cache.ts";
 
 export async function measureRepeatedSessionReaders({
   values,
@@ -252,16 +252,7 @@ export async function measureRepeatedSessionReaders({
             continue;
           }
           assert(path.resolve(filename).startsWith(root + path.sep));
-          const evict = spawnSync(
-            "python3",
-            [
-              "-c",
-              "import os,sys; f=os.open(sys.argv[1],os.O_RDONLY); os.fsync(f); os.posix_fadvise(f,0,0,os.POSIX_FADV_DONTNEED); os.close(f)",
-              filename,
-            ],
-            { encoding: "utf8" },
-          );
-          assert.equal(evict.status, 0, evict.stderr);
+          evictLinuxFilePageCache(filename);
         }
       }
       for (const [index, caller] of [

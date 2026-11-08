@@ -31,7 +31,7 @@ import { fetchConfiguredLocalOriginWithSsrFGuard } from "openclaw/plugin-sdk/ssr
 import { DEFAULT_OLLAMA_EMBEDDING_MODEL, OLLAMA_CLOUD_BASE_URL } from "./defaults.js";
 import { normalizeOllamaWireModelId } from "./model-id.js";
 import { readProviderBaseUrl } from "./provider-base-url.js";
-import { resolveOllamaApiBase } from "./provider-models.js";
+import { buildOllamaBaseUrlSsrFPolicy, resolveOllamaApiBase } from "./provider-models.js";
 
 export type OllamaEmbeddingProvider = EmbeddingProvider;
 
@@ -221,11 +221,9 @@ async function resolveOllamaEmbeddingClient(
 ): Promise<OllamaEmbeddingClientConfig> {
   const providerConfig = resolveConfiguredProvider(options);
   const remoteBaseUrl = options.remote?.baseUrl?.trim();
-  const baseUrl = resolveOllamaApiBase(
-    remoteBaseUrl || readProviderBaseUrl(providerConfig?.config),
-  );
-  const model = normalizeEmbeddingModel(options.model, options.provider);
   const providerOwnedHost = resolveOllamaApiBase(readProviderBaseUrl(providerConfig?.config));
+  const baseUrl = remoteBaseUrl ? resolveOllamaApiBase(remoteBaseUrl) : providerOwnedHost;
+  const model = normalizeEmbeddingModel(options.model, options.provider);
   // Provider keys and headers belong to this origin only; a remote override
   // must neither resolve nor inherit another host's configured credentials.
   const providerOwnsHost = !remoteBaseUrl || areOllamaHostsEquivalent(baseUrl, providerOwnedHost);
@@ -280,7 +278,9 @@ async function resolveOllamaEmbeddingClient(
   return {
     baseUrl,
     headers,
-    ssrfPolicy: ssrfPolicyFromHttpBaseUrlAllowedOrigin(baseUrl),
+    ssrfPolicy: providerOwnsHost
+      ? buildOllamaBaseUrlSsrFPolicy(baseUrl)
+      : ssrfPolicyFromHttpBaseUrlAllowedOrigin(baseUrl),
     allowPodmanHostGatewayLinkLocal: providerOwnsHost,
     model,
     outputDimensionality: options.dimensions,

@@ -1262,6 +1262,21 @@ export function validateParentManifest(value, expected) {
       "npm stable coverage policy requires release context, blocking performance, and stable soak",
     );
   }
+  for (const exemption of qualificationCoverage?.exemptions ?? []) {
+    const expectedDisposition = {
+      disposition: exemption.disposition,
+      runId: "",
+      supportingEvidence: exemption.supportingEvidence,
+    };
+    if (
+      !isDeepStrictEqual(value.childRuns?.[exemption.childRole], expectedDisposition) ||
+      value.childEvidence?.[exemption.childRole] !== undefined
+    ) {
+      throw new Error(
+        "Exempt qualification child must be recorded as waived-not-run, not candidate evidence",
+      );
+    }
+  }
   const childEvidence = normalizeManifestChildEvidence(value.childEvidence);
   if (validationInputs?.laneWaiver || value.publishInputs?.stableSoakWaiver) {
     throw new Error(
@@ -2071,16 +2086,24 @@ export function createReleaseEvidenceClient(repository = DEFAULT_REPO) {
     validateChildReuse(selection, request) {
       return validateReusableReleaseChild(selection, request);
     },
-    getWorkflowSource(sha) {
+    getWorkflowSource(sha, sourceWorkflowPath = ".github/workflows/full-release-validation.yml") {
+      if (
+        ![
+          ".github/workflows/full-release-validation.yml",
+          ".github/workflows/plugin-npm-release.yml",
+        ].includes(sourceWorkflowPath)
+      ) {
+        throw new Error("Unsupported immutable release workflow path");
+      }
       const exactSha = normalizeSha(sha, "source admission workflow SHA");
       const payload = githubRestJson(
-        `contents/.github/workflows/full-release-validation.yml?ref=${exactSha}`,
+        `contents/${sourceWorkflowPath}?ref=${exactSha}`,
         normalizedRepository,
       );
       if (
         payload?.type !== "file" ||
         payload.encoding !== "base64" ||
-        payload.path !== ".github/workflows/full-release-validation.yml" ||
+        payload.path !== sourceWorkflowPath ||
         !Number.isSafeInteger(payload.size) ||
         payload.size < 1 ||
         payload.size > 1024 * 1024 ||
@@ -2373,6 +2396,7 @@ async function validateStrictChildRun({
     jobs,
     key: child.manifestKey,
     runId,
+    runAttempt: effectiveRunAttempt,
     status: run.status,
   };
   const targetVersion = parentEvidence.manifest.validationInputs?.targetVersion;

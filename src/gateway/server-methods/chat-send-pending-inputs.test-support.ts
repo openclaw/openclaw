@@ -35,6 +35,7 @@ import { getTestPluginRegistry } from "../test-helpers.plugin-registry.js";
 import { releaseGatewaySessionStoreFixture } from "../test/server-sessions-resources.test-helpers.js";
 import { createWorkerSessionPlacementStore } from "../worker-environments/placement-store.js";
 import { handleChatSend } from "./chat-send-handler.js";
+import { bindInProcessRequestMutationAuthority } from "./session-mutation-guards.js";
 import type { GatewayClient, RespondFn } from "./types.js";
 
 export function setClientProfile(
@@ -249,13 +250,19 @@ export function useBrowserFollowupFixture() {
         isWebchatConnect: () => true,
       } as const;
       if (binding) {
-        await handleGatewayRequest({
-          ...request,
-          req: { ...request.req, expectedProfileId: binding.expectedProfileId },
-          signal: binding.signal,
-          sessionMutationCommitGuard: binding.sessionMutationCommitGuard,
-          extraHandlers: { "chat.send": handler },
-        });
+        await handleGatewayRequest(
+          bindInProcessRequestMutationAuthority(
+            {
+              ...request,
+              req: { ...request.req, expectedProfileId: binding.expectedProfileId },
+              signal: binding.signal,
+              sessionMutationCommitGuard: binding.sessionMutationCommitGuard,
+              extraHandlers: { "chat.send": handler },
+            },
+            undefined,
+            undefined,
+          ),
+        );
       } else {
         await withPluginRuntimeGatewayRequestScope(
           { context, isWebchatConnect: request.isWebchatConnect },

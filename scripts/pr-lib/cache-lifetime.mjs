@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import {
   existsSync,
   closeSync,
@@ -8,14 +8,17 @@ import {
   mkdirSync,
   openSync,
   readdirSync,
+  readFileSync,
   realpathSync,
   renameSync,
   rmdirSync,
+  rmSync,
 } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, join, resolve, sep } from "node:path";
 import { performance } from "node:perf_hooks";
 import { DatabaseSync } from "node:sqlite";
+import { isDeepStrictEqual } from "node:util";
 
 // Older frozen collectors recognize neither namespace. Their PID-only policy
 // cannot safely collect an operation whose supervisor exited before its children.
@@ -78,6 +81,29 @@ const identityValues = (stat) => identityKeys.map((key) => String(stat[key]));
 const rowMatches = (row, prefix, stat) =>
   identityKeys.every((key) => row[`${prefix}${key}`] === String(stat[key]));
 
+const ledgerSchema = `
+          CREATE TABLE owner (
+            id INTEGER PRIMARY KEY CHECK (id = 1),
+            cache_dev TEXT NOT NULL, cache_ino TEXT NOT NULL,
+            cache_uid TEXT NOT NULL, cache_mode TEXT NOT NULL,
+            db_dev TEXT NOT NULL, db_ino TEXT NOT NULL,
+            db_uid TEXT NOT NULL, db_mode TEXT NOT NULL,
+            sequence INTEGER NOT NULL DEFAULT 0
+          ) STRICT;
+          CREATE TABLE installations (
+            key TEXT PRIMARY KEY,
+            dev TEXT NOT NULL, ino TEXT NOT NULL, uid TEXT NOT NULL, mode TEXT NOT NULL,
+            settled INTEGER NOT NULL CHECK (settled IN (0, 1)),
+            last_used INTEGER NOT NULL
+          ) STRICT;
+          CREATE TABLE holds (
+            entry_key TEXT NOT NULL REFERENCES installations(key),
+            anchor_path TEXT NOT NULL, anchor_dev TEXT NOT NULL, anchor_ino TEXT NOT NULL,
+            anchor_uid TEXT NOT NULL, anchor_mode TEXT NOT NULL,
+            PRIMARY KEY (entry_key, anchor_path, anchor_dev, anchor_ino)
+          ) STRICT;
+        `;
+
 function physicalFile(path) {
   const stat = lstatSync(path, { bigint: true });
   if (
@@ -131,8 +157,13 @@ function transaction(context, operation, initialize = false) {
   }
 }
 
-function openLedger(cache, cacheIdentity, create, readOnly) {
+function openLedger(cache, cacheIdentity, create, readOnly, recovery = false) {
   const path = join(cache, ledgerName);
+  // Opening a hot journal could repair the database before the sealed preimage
+  // is checked. Explicit identity recovery never adopts unfinished SQL work.
+  if (recovery && readdirSync(cache).some((name) => name.startsWith(`${ledgerName}-`))) {
+    throw new Error("PR dependency recovery requires a journal-free ledger");
+  }
   const fd = openSync(
     path,
     (create ? constants.O_RDWR | constants.O_CREAT | constants.O_EXCL : constants.O_RDONLY) |
@@ -160,28 +191,7 @@ function openLedger(cache, cacheIdentity, create, readOnly) {
       transaction(
         context,
         () => {
-          db.exec(`
-          CREATE TABLE owner (
-            id INTEGER PRIMARY KEY CHECK (id = 1),
-            cache_dev TEXT NOT NULL, cache_ino TEXT NOT NULL,
-            cache_uid TEXT NOT NULL, cache_mode TEXT NOT NULL,
-            db_dev TEXT NOT NULL, db_ino TEXT NOT NULL,
-            db_uid TEXT NOT NULL, db_mode TEXT NOT NULL,
-            sequence INTEGER NOT NULL DEFAULT 0
-          ) STRICT;
-          CREATE TABLE installations (
-            key TEXT PRIMARY KEY,
-            dev TEXT NOT NULL, ino TEXT NOT NULL, uid TEXT NOT NULL, mode TEXT NOT NULL,
-            settled INTEGER NOT NULL CHECK (settled IN (0, 1)),
-            last_used INTEGER NOT NULL
-          ) STRICT;
-          CREATE TABLE holds (
-            entry_key TEXT NOT NULL REFERENCES installations(key),
-            anchor_path TEXT NOT NULL, anchor_dev TEXT NOT NULL, anchor_ino TEXT NOT NULL,
-            anchor_uid TEXT NOT NULL, anchor_mode TEXT NOT NULL,
-            PRIMARY KEY (entry_key, anchor_path, anchor_dev, anchor_ino)
-          ) STRICT;
-        `);
+          db.exec(ledgerSchema);
           db.prepare("INSERT INTO owner VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, 0)").run(
             ...identityValues(cacheIdentity),
             ...identityValues(file),
@@ -190,7 +200,11 @@ function openLedger(cache, cacheIdentity, create, readOnly) {
         true,
       );
     }
-    assertLedgerOwner(context);
+    // Only the explicit sealed recovery path may admit a mismatched owner.
+    // It validates the complete preimage inside its synchronous transaction.
+    if (!recovery) {
+      assertLedgerOwner(context);
+    }
     assertLedgerFiles(cache, cacheIdentity, path, file, fd);
     return context;
   } catch (error) {
@@ -330,7 +344,181 @@ export function withDependencyCacheLock(cache, operation) {
   return withCacheOwner(cache, operation, true);
 }
 
-function withCacheOwner(cache, operation, initialize, readOnly = false) {
+const identityRecord = (stat) =>
+  Object.fromEntries(identityKeys.map((key) => [key, String(stat[key])]));
+
+function recoverySnapshot(db) {
+  const rows = (sql) =>
+    db
+      .prepare(sql)
+      .all()
+      .map((row) => Object.assign({}, row));
+  return {
+    owner: rows("SELECT * FROM owner ORDER BY id"),
+    installations: rows("SELECT * FROM installations ORDER BY key"),
+    holds: rows("SELECT * FROM holds ORDER BY entry_key, anchor_path, anchor_dev, anchor_ino"),
+  };
+}
+
+function assertRecoverySchema(db) {
+  const schema = (database) =>
+    database.prepare("SELECT type, name, tbl_name, sql FROM sqlite_schema ORDER BY name").all();
+  const expected = new DatabaseSync(":memory:");
+  try {
+    expected.exec(ledgerSchema);
+    const integrity = db.prepare("PRAGMA quick_check").all();
+    if (
+      !isDeepStrictEqual(schema(db), schema(expected)) ||
+      db.prepare("PRAGMA user_version").get().user_version !== 0 ||
+      db.prepare("PRAGMA foreign_keys").get().foreign_keys !== 1 ||
+      integrity.length !== 1 ||
+      integrity[0].quick_check !== "ok" ||
+      db.prepare("PRAGMA foreign_key_check").all().length !== 0
+    ) {
+      throw new Error("PR dependency recovery ledger schema or integrity differs");
+    }
+  } finally {
+    expected.close();
+  }
+}
+
+// Device numbers are not durable volume identities. Only an operator-reviewed
+// exact-state adoption may change them; ordinary opens must still reject drift.
+export function recoverDependencyCache(planPath, planSha256) {
+  const bytes = readFileSync(planPath);
+  if (
+    !/^[a-f0-9]{64}$/.test(planSha256) ||
+    createHash("sha256").update(bytes).digest("hex") !== planSha256
+  ) {
+    throw new Error("PR dependency recovery plan seal differs");
+  }
+  const plan = JSON.parse(bytes);
+  const cache = dependencyCacheRoot();
+  if (
+    plan.version !== 1 ||
+    plan.cache !== cache ||
+    typeof plan.reason !== "string" ||
+    !plan.reason.trim() ||
+    !Array.isArray(plan.before?.owner) ||
+    plan.before.owner.length !== 1 ||
+    !Array.isArray(plan.before.installations) ||
+    !Array.isArray(plan.before.holds)
+  ) {
+    throw new Error("Invalid PR dependency recovery plan");
+  }
+  return withCacheOwner(
+    cache,
+    (lock) => {
+      const context = ledger(lock);
+      const physical = () => {
+        const installations = plan.before.installations.map(({ key }) => ({
+          key,
+          ...identityRecord(entryIdentity(cache, join(cache, key))),
+        }));
+        const names = [ledgerName, ".metadata-lock", ...installations.map(({ key }) => key)];
+        if (
+          !isDeepStrictEqual(
+            readdirSync(cache).toSorted((left, right) => left.localeCompare(right)),
+            names.toSorted((left, right) => left.localeCompare(right)),
+          )
+        ) {
+          throw new Error("PR dependency recovery namespace inventory differs");
+        }
+        return {
+          cache: identityRecord(directory(cache)),
+          database: identityRecord(physicalFile(context.path)),
+          installations,
+        };
+      };
+      const observed = physical();
+      if (!isDeepStrictEqual(observed, plan.physical)) {
+        throw new Error("PR dependency recovery physical identities differ");
+      }
+      const beforeOwner = plan.before.owner[0];
+      const oldDevice = beforeOwner.cache_dev;
+      const newDevice = observed.cache.dev;
+      const postimage = {
+        owner: [{ ...beforeOwner, cache_dev: newDevice, db_dev: newDevice }],
+        installations: plan.before.installations.map((row) => ({ ...row, dev: newDevice })),
+        holds: plan.before.holds,
+      };
+      if (
+        !/^[0-9]+$/.test(oldDevice) ||
+        oldDevice === newDevice ||
+        beforeOwner.db_dev !== oldDevice ||
+        observed.database.dev !== newDevice ||
+        !rowMatches(postimage.owner[0], "cache_", observed.cache) ||
+        !rowMatches(postimage.owner[0], "db_", observed.database) ||
+        plan.before.installations.some(
+          (row, index) =>
+            row.dev !== oldDevice ||
+            !rowMatches(postimage.installations[index], "", observed.installations[index]),
+        )
+      ) {
+        throw new Error("PR dependency recovery permits only one device-number adoption");
+      }
+      const result = transaction(
+        context,
+        () => {
+          assertRecoverySchema(context.db);
+          const current = recoverySnapshot(context.db);
+          if (isDeepStrictEqual(current, postimage)) {
+            assertLedgerOwner(context);
+            return "already-recovered";
+          }
+          if (!isDeepStrictEqual(current, plan.before)) {
+            throw new Error("PR dependency recovery preimage differs; reconcile before retrying");
+          }
+          // The metadata mutex excludes native owners; BEGIN IMMEDIATE makes the
+          // complete row comparison and these updates one SQLite writer section.
+          ledger(lock);
+          if (!isDeepStrictEqual(physical(), observed)) {
+            throw new Error("PR dependency recovery identities changed before adoption");
+          }
+          const ownerUpdate = context.db
+            .prepare(
+              "UPDATE owner SET cache_dev = ?, db_dev = ? WHERE id = 1 AND cache_dev = ? AND db_dev = ?",
+            )
+            .run(newDevice, newDevice, oldDevice, oldDevice);
+          if (ownerUpdate.changes !== 1) {
+            throw new Error("PR dependency recovery owner changed");
+          }
+          const update = context.db.prepare(
+            "UPDATE installations SET dev = ? WHERE key = ? AND dev = ?",
+          );
+          for (const { key } of plan.before.installations) {
+            if (update.run(newDevice, key, oldDevice).changes !== 1) {
+              throw new Error("PR dependency recovery installation changed");
+            }
+          }
+          if (!isDeepStrictEqual(recoverySnapshot(context.db), postimage)) {
+            throw new Error("PR dependency recovery postimage differs");
+          }
+          assertLedgerOwner(context);
+          ledger(lock);
+          // Our own DELETE journal exists until COMMIT; compare the sealed
+          // objects directly rather than rejecting that transaction artifact.
+          if (
+            !same(directory(cache), context.cacheIdentity) ||
+            observed.installations.some(
+              (entry) => !rowMatches(entry, "", entryIdentity(cache, join(cache, entry.key))),
+            )
+          ) {
+            throw new Error("PR dependency recovery physical identities changed");
+          }
+          return "recovered";
+        },
+        true,
+      );
+      return { state: result, installations: plan.before.installations.length, planSha256 };
+    },
+    false,
+    false,
+    true,
+  );
+}
+
+function withCacheOwner(cache, operation, initialize, readOnly = false, recovery = false) {
   let created = false;
   if (initialize) {
     mkdirSync(dirname(cache), { recursive: true, mode: 0o700 });
@@ -385,7 +573,7 @@ function withCacheOwner(cache, operation, initialize, readOnly = false) {
     if (created && readdirSync(cache).some((name) => name !== ".metadata-lock")) {
       throw new Error("New PR dependency namespace changed before initialization");
     }
-    context = openLedger(cache, cacheIdentity, created, readOnly);
+    context = openLedger(cache, cacheIdentity, created, readOnly, recovery);
     Object.assign(context, { lockPath: path, lockIdentity: identity, owner, ownerIdentity });
     ledgers.set(lock, context);
     return operation(lock);
@@ -642,6 +830,171 @@ export function collectUnusedDependencyCaches(lock, current = "") {
   return retired;
 }
 
+function retirementSnapshot(context, anchor, reviewed) {
+  const rows = anchorRows(context.db, anchor);
+  const owned = rows.map((row) => {
+    assertHold(row, anchor);
+    const entry = join(context.cache, row.entry_key);
+    const { identity } = installation(context, entry);
+    return { row, entry, identity };
+  });
+  if (
+    reviewed &&
+    !isDeepStrictEqual(
+      owned.map(({ row, identity }) => ({ key: row.entry_key, ...identityRecord(identity) })),
+      reviewed.holds.toSorted((left, right) => left.key.localeCompare(right.key)),
+    )
+  ) {
+    throw new Error("PR dependency reviewed holds differ; retain them");
+  }
+  return { owned, cacheIdentity: context.cacheIdentity, fileIdentity: context.file };
+}
+
+function settleRetirement(context, anchor, snapshot) {
+  const { owned, cacheIdentity, fileIdentity } = snapshot;
+  if (!same(context.cacheIdentity, cacheIdentity) || !same(context.file, fileIdentity)) {
+    throw new Error("PR cache ledger identity changed after anchor retirement");
+  }
+  for (const { entry, identity } of owned) {
+    if (!same(installation(context, entry).identity, identity)) {
+      throw new Error("PR dependency installation changed after anchor retirement");
+    }
+  }
+  return transaction(context, () => {
+    const rows = anchorRows(context.db, anchor);
+    if (
+      !isDeepStrictEqual(
+        rows,
+        owned.map(({ row }) => row),
+      )
+    ) {
+      throw new Error("PR dependency holds changed after retirement; retain them");
+    }
+    const settled = [],
+      retained = [];
+    for (const { row, identity } of owned) {
+      const entry = context.db
+        .prepare("SELECT * FROM installations WHERE key = ?")
+        .get(row.entry_key);
+      if (!entry || !rowMatches(entry, "", identity)) {
+        throw new Error("PR dependency installation ledger changed after retirement");
+      }
+      context.db
+        .prepare(
+          "DELETE FROM holds WHERE entry_key = ? AND anchor_path = ? AND anchor_dev = ? AND anchor_ino = ?",
+        )
+        .run(row.entry_key, row.anchor_path, row.anchor_dev, row.anchor_ino);
+      const result = context.db
+        .prepare(`
+        UPDATE installations SET settled = 1 WHERE key = ?
+          AND NOT EXISTS (SELECT 1 FROM holds WHERE entry_key = ?)
+      `)
+        .run(row.entry_key, row.entry_key);
+      (result.changes ? settled : retained).push(row.entry_key);
+    }
+    return { state: "released", settled, retained };
+  });
+}
+
+export function readDependencyHolds() {
+  const cache = dependencyCacheRoot();
+  if (!lstatSync(cache, { throwIfNoEntry: false })) {
+    return { cache, holds: [] };
+  }
+  const holds = withCacheOwner(
+    cache,
+    (lock) => {
+      const rows = ledger(lock)
+        .db.prepare(`
+      SELECT h.*, i.dev, i.ino, i.uid, i.mode FROM holds h
+      JOIN installations i ON i.key = h.entry_key
+      ORDER BY anchor_path, anchor_dev, anchor_ino, entry_key
+    `)
+        .all();
+      const anchors = new Map();
+      for (const row of rows) {
+        const key = JSON.stringify([row.anchor_path, row.anchor_dev, row.anchor_ino]);
+        if (!anchors.has(key)) {
+          anchors.set(key, {
+            path: row.anchor_path,
+            ...Object.fromEntries(identityKeys.map((name) => [name, row[`anchor_${name}`]])),
+            holds: [],
+          });
+        }
+        anchors.get(key).holds.push({ key: row.entry_key, ...identityRecord(row) });
+      }
+      return [...anchors.values()];
+    },
+    false,
+    true,
+  );
+  return { cache, holds };
+}
+
+export function dependencyHoldState(hold) {
+  const inspect = (read, identity) => {
+    try {
+      const stat = read();
+      return { state: rowMatches(identity, "", stat) ? "present" : "changed", stat };
+    } catch (error) {
+      if (error.code === "ENOENT" || error.code === "ENOTDIR") {
+        return { state: "missing" };
+      }
+      if (error.message.startsWith("Unsafe PR lifetime directory:")) {
+        return { state: "changed" };
+      }
+      throw error;
+    }
+  };
+  const anchor = inspect(() => directory(hold.path), hold);
+  const cache = dependencyCacheRoot();
+  const entries = hold.holds.map((entry) =>
+    inspect(() => entryIdentity(cache, join(cache, entry.key)), entry),
+  );
+  return {
+    anchor: anchor.state,
+    ...(anchor.state === "present" ? { created: anchor.stat.birthtime.toISOString() } : {}),
+    entriesIntact: entries.every((entry) => entry.state === "present"),
+  };
+}
+
+export function releaseFinishedAnchor(reviewed) {
+  const cache = dependencyCacheRoot();
+  const empty = { state: "already-released", settled: [], retained: [] };
+  if (!lstatSync(cache, { throwIfNoEntry: false })) {
+    return empty;
+  }
+  const anchor = {
+    path: reviewed.path,
+    ...Object.fromEntries(identityKeys.map((key) => [key, BigInt(reviewed[key])])),
+  };
+  const snapshot = withCacheOwner(
+    cache,
+    (lock) => {
+      const context = ledger(lock);
+      if (anchorRows(context.db, anchor).length === 0) {
+        return undefined;
+      }
+      return retirementSnapshot(context, anchor, reviewed);
+    },
+    false,
+  );
+  // Holds alone authorize removal. An already released plan never touches its path.
+  if (!snapshot) {
+    return empty;
+  }
+  if (lstatSync(anchor.path, { throwIfNoEntry: false })) {
+    if (!same(directory(anchor.path), anchor)) {
+      throw new Error("PR anchor identity changed; retain it");
+    }
+    rmSync(anchor.path, { recursive: true });
+    if (lstatSync(anchor.path, { throwIfNoEntry: false })) {
+      throw new Error("PR anchor retirement not confirmed");
+    }
+  }
+  return withCacheOwner(cache, (lock) => settleRetirement(ledger(lock), anchor, snapshot), false);
+}
+
 export function retireAnchorDependencies(anchor, retire) {
   assertAnchor(anchor);
   const cache = dependencyCacheRoot();
@@ -653,20 +1006,11 @@ export function retireAnchorDependencies(anchor, retire) {
     return;
   }
   privateDependencyDonor(anchor.path, join(anchor.path, "node_modules"));
-  let cacheIdentity, fileIdentity;
-  const owned = withCacheOwner(
+  const snapshot = withCacheOwner(
     cache,
     (lock) => {
       assertAnchor(anchor);
-      const context = ledger(lock);
-      cacheIdentity = context.cacheIdentity;
-      fileIdentity = context.file;
-      return anchorRows(context.db, anchor).map((row) => {
-        assertHold(row, anchor);
-        const entry = join(cache, row.entry_key);
-        const { identity } = installation(context, entry);
-        return { row, entry, identity };
-      });
+      return retirementSnapshot(ledger(lock), anchor);
     },
     false,
   );
@@ -677,49 +1021,5 @@ export function retireAnchorDependencies(anchor, retire) {
   if (lstatSync(anchor.path, { throwIfNoEntry: false })) {
     throw new Error("PR anchor retirement not confirmed");
   }
-  withCacheOwner(
-    cache,
-    (lock) => {
-      const context = ledger(lock);
-      if (!same(context.cacheIdentity, cacheIdentity) || !same(context.file, fileIdentity)) {
-        throw new Error("PR cache ledger identity changed after anchor retirement");
-      }
-      for (const { entry, identity } of owned) {
-        if (!same(installation(context, entry).identity, identity)) {
-          throw new Error("PR dependency installation changed after anchor retirement");
-        }
-      }
-      transaction(context, () => {
-        const rows = anchorRows(context.db, anchor);
-        if (
-          rows.length !== owned.length ||
-          rows.some((row, index) =>
-            Object.keys(row).some((key) => row[key] !== owned[index].row[key]),
-          )
-        ) {
-          throw new Error("PR dependency holds changed after retirement; retain them");
-        }
-        for (const { row, identity } of owned) {
-          const entry = context.db
-            .prepare("SELECT * FROM installations WHERE key = ?")
-            .get(row.entry_key);
-          if (!entry || !rowMatches(entry, "", identity)) {
-            throw new Error("PR dependency installation ledger changed after retirement");
-          }
-          context.db
-            .prepare(
-              "DELETE FROM holds WHERE entry_key = ? AND anchor_path = ? AND anchor_dev = ? AND anchor_ino = ?",
-            )
-            .run(row.entry_key, row.anchor_path, row.anchor_dev, row.anchor_ino);
-          context.db
-            .prepare(`
-          UPDATE installations SET settled = 1 WHERE key = ?
-            AND NOT EXISTS (SELECT 1 FROM holds WHERE entry_key = ?)
-        `)
-            .run(row.entry_key, row.entry_key);
-        }
-      });
-    },
-    false,
-  );
+  withCacheOwner(cache, (lock) => settleRetirement(ledger(lock), anchor, snapshot), false);
 }

@@ -18,8 +18,14 @@ import type { GitReadOperations } from "./git-read-operations.js";
 
 export type GitWorkerOperations = Omit<
   GitReadOperations,
-  "pull-request.branch-facts" | "checkout.diff"
+  "pull-request.branch-facts" | "checkout.diff" | "repository.branches"
 > & {
+  "repository.branches": {
+    input: GitReadOperations["repository.branches"]["input"];
+    output: GitReadOperations["repository.branches"]["output"] & {
+      observation?: { root: string; gitDir: string; commonDir: string };
+    };
+  };
   "checkout.diff": {
     input: GitReadOperations["checkout.diff"]["input"] & {
       worktreeStatus?: NonNullable<

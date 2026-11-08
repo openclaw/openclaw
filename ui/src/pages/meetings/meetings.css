@@ -405,6 +405,12 @@
   gap: var(--space-3);
 }
 
+/* The sheet owns the inset. */
+.oc-sheet .transcripts-filter-popover__panel {
+  width: auto;
+  padding: 0;
+}
+
 /* A full date plus its calendar needs more than half of the narrowest phones. */
 .transcripts-filter-popover .transcripts-filters__advanced {
   grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));

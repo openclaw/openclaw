@@ -26,7 +26,7 @@ it.runIf("__vitest_browser__" in globalThis)(
             return state();
           },
           refreshWarning: null,
-          doneMessage: "Muse Code is connected",
+          doneMessage: "Muse Code is ready",
           doneDescription: "Muse Spark 1.3 is ready for your agent.",
           doneAction: { label: "Start a new chat with Muse Spark 1.3", onClick: startChat },
           value: undefined,
@@ -50,7 +50,7 @@ it.runIf("__vitest_browser__" in globalThis)(
     setState({ phase: "done", authLabel: "Muse Code" });
     await waitForSolid(() =>
       expect(container.querySelector(".model-setup-wizard__success-title")?.textContent).toBe(
-        "Muse Code is connected",
+        "Muse Code is ready",
       ),
     );
     expect(wizard.getBoundingClientRect().height).toBe(startingHeight);

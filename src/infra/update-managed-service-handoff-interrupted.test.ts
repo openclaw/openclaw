@@ -81,3 +81,48 @@ itUnix(
     );
   },
 );
+
+itUnix.each([
+  { interruptedUpdate: "prepared", pluginCohort: "own" },
+  { interruptedUpdate: "after", pluginCohort: "own" },
+  { interruptedUpdate: "after", pluginCohort: "foreign" },
+  { interruptedUpdate: "prepared", pluginCohort: "risk" },
+] as const)(
+  "settles only this run's plugin cohort after SIGKILL at $interruptedUpdate ($pluginCohort)",
+  async ({ interruptedUpdate, pluginCohort }) => {
+    const own = pluginCohort === "own";
+    const forward = interruptedUpdate === "after";
+    if (pluginCohort === "risk") {
+      // A failed repair that recorded data risk keeps even the original Gateway stopped.
+      const result = await runBoundary("systemd", {
+        ledger: true,
+        controlDisconnect: "transferred",
+        interruptedUpdate,
+        pluginCohort,
+        helperExitCode: 1,
+      });
+      expect(result.state.restored).toBeUndefined();
+      expect(result.log).toContain("data at risk (incomplete-migration)");
+      return;
+    }
+    const result = await runBoundary("systemd", {
+      ledger: true,
+      controlDisconnect: "transferred",
+      interruptedUpdate,
+      pluginCohort,
+      helperExitCode: own && forward ? 0 : 1,
+    });
+    expect(result.run, result.log).toMatchObject({
+      status: own ? (forward ? "succeeded" : "rolled-back") : "failed",
+      phase: "finished",
+    });
+    // Another run's recovery is never this helper's to settle.
+    expect(result.publication).toMatchObject({ cohort: own ? "settled" : "pending" });
+    expect(result.state.postCoreRepaired).toBe(own ? true : undefined);
+    if (own) {
+      expect(result.state.restored).toBe(true);
+    } else {
+      expect(result.log).toContain("post-core repair did not complete");
+    }
+  },
+);

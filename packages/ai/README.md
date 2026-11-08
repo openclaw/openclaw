@@ -35,10 +35,12 @@ OpenAI HTTP adapters report rejected response status and headers through
 invoke the callback before the first event. Retry and failover policy remains
 with the application.
 
-Anthropic Messages and OpenAI-compatible Chat Completions calls stop waiting for
-payload and response hooks when the request signal aborts. A hook can continue
-running after cancellation; embedding hosts can retain that work through
-`observePendingProviderWork` until it settles.
+Anthropic Messages, OpenAI-compatible Chat Completions, Google, Mistral, and
+OpenAI Responses calls stop waiting for payload and response hooks when the
+request signal aborts. A hook can continue running after cancellation; embedding
+hosts can retain that work through `observePendingProviderWork` until it
+settles. Native provider transports get the same payload-hook behavior from
+`applyProviderPayloadHook`.
 
 Hosts that attach request state to async contexts should supply
 `runInDetachedAsyncContext` from a context-free root initialized before requests
@@ -54,9 +56,12 @@ producer reads the latest value, or none once the call has finished.
 
 The Anthropic and Mistral adapters report unreadable tool descriptors as
 a stream error before sending a model request rather than silently omitting them.
-The pinned Mistral SDK chat client is bundled into the adapter; consumers do not
-need the SDK's full package tree. The SDK's Apache-2.0 license ships as
-`dist/mistral.LICENSE`.
+The pinned Mistral and OpenAI SDK clients are bundled into the adapters to avoid
+loading their individual package modules on first use. Their Apache-2.0 licenses
+ship as `dist/mistral.LICENSE` and `dist/openai.LICENSE`. TypeBox remains external
+so host and plugin validation share its mutable format and settings registries.
+OpenAI's `ws` dependency is bundled alongside the client, with its MIT license
+at `dist/ws.LICENSE`.
 
 The explicit `@openclaw/ai/internal/anthropic`, `google`, `google-model-family`, `openai`,
 `openai-completions-compat`, `openai-responses-payload-policy`, `retry-after`, `runtime`, `shared`, and

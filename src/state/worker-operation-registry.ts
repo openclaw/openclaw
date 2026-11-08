@@ -68,10 +68,15 @@ export type WorkerOperationsFromLoaders<
 type Namespace<Key> = Key extends `${infer Domain}.${string}` ? Domain : never;
 type DomainLoaders<Operations extends SqliteWorkerOperations, Context, Domains extends string> = {
   [Domain in Domains]: () => Promise<{
-    [Key in keyof Operations as Key extends Domain | `${Domain}.${string}` ? Key : never]: (
-      input: Operations[Key]["input"],
-      context: Context,
-    ) => Operations[Key]["output"];
+    [
+      Key in keyof Operations as Key extends Domain
+        ? Key
+        : Key extends `${Domain}.${string}`
+          ? Key extends Domains
+            ? never
+            : Key
+          : never
+    ]: (input: Operations[Key]["input"], context: Context) => Operations[Key]["output"];
   }>;
 };
 

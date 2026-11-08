@@ -1,11 +1,13 @@
+/* OpenClaw source: "OpenClaw uses Bluetooth to securely set up a nearby ESP device when you choose device setup." */
+"NSBluetoothAlwaysUsageDescription" = "OpenClaw używa Bluetooth do bezpiecznej konfiguracji pobliskiego urządzenia ESP, gdy wybierzesz opcję konfiguracji urządzenia.";
 /* OpenClaw source: "OpenClaw uses your calendars to show events and scheduling context when you enable calendar access." */
 "NSCalendarsFullAccessUsageDescription" = "OpenClaw używa Twoich kalendarzy do wyświetlania wydarzeń i kontekstu harmonogramu, gdy włączysz dostęp do kalendarza.";
 /* OpenClaw source: "OpenClaw uses your calendars to show events and scheduling context when you enable calendar access." */
 "NSCalendarsUsageDescription" = "OpenClaw używa Twoich kalendarzy do wyświetlania wydarzeń i kontekstu harmonogramu, gdy włączysz dostęp do kalendarza.";
 /* OpenClaw source: "OpenClaw uses your calendars to add events when you enable calendar access." */
 "NSCalendarsWriteOnlyAccessUsageDescription" = "OpenClaw używa Twoich kalendarzy do dodawania wydarzeń, gdy włączysz dostęp do kalendarza.";
-/* OpenClaw source: "OpenClaw uses the camera when you scan a Gateway setup QR code or ask your paired Gateway or assistant to capture a photo or short video from this iPhone, for example to connect to your Gateway or show your assistant a document, device screen, or workspace." */
-"NSCameraUsageDescription" = "OpenClaw używa aparatu podczas skanowania kodu QR konfiguracji Gateway lub gdy poprosisz sparowany Gateway bądź asystenta o zrobienie zdjęcia albo nagranie krótkiego filmu tym iPhone’em, na przykład w celu połączenia z Gateway lub pokazania asystentowi dokumentu, ekranu urządzenia albo miejsca pracy.";
+/* OpenClaw source: "OpenClaw uses the camera when you scan a Gateway or device setup QR code or ask your paired Gateway or assistant to capture a photo or short video from this iPhone, for example to connect to your Gateway or show your assistant a document, device screen, or workspace." */
+"NSCameraUsageDescription" = "OpenClaw używa aparatu, gdy skanujesz kod QR konfiguracji Gateway lub urządzenia albo prosisz sparowany Gateway lub asystenta o zrobienie zdjęcia lub nagranie krótkiego filmu tym iPhonem, na przykład aby połączyć się z Gateway lub pokazać asystentowi dokument, ekran urządzenia albo miejsce pracy.";
 /* OpenClaw source: "OpenClaw uses your contacts so you can search and reference people while using the assistant." */
 "NSContactsUsageDescription" = "OpenClaw używa Twoich kontaktów, aby umożliwić wyszukiwanie osób i odwoływanie się do nich podczas korzystania z asystenta.";
 /* OpenClaw source: "OpenClaw reads your steps, sleep, resting heart rate, and workouts from the Apple Health app to create summaries you request and send them through your Gateway to your configured AI provider." */

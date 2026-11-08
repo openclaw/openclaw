@@ -42,6 +42,7 @@ export async function prepareManagedServiceRuntimeFixture({
     | "cancelAtActivation"
     | "interruptedUpdate"
     | "updaterStopped"
+    | "pluginCohort"
   >;
 }) {
   const appendRuntime = (source: string) => fs.appendFile(recoveryModulePath, source);
@@ -70,6 +71,7 @@ export async function prepareManagedServiceRuntimeFixture({
           runId,
           cut: options.interruptedUpdate,
           updaterStopped: options.updaterStopped,
+          pluginCohort: options.pluginCohort,
         })
       : undefined;
   if (options?.requester) {

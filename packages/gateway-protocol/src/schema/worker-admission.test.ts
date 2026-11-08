@@ -310,7 +310,7 @@ describe("worker protocol schemas", () => {
       fallbackStep("next_fallback", "auth"),
       lifecycle("finishing", { endedAt: 2, error: "x" }),
       lifecycle("end", { endedAt: 3 }),
-      lifecycle("error", { endedAt: 4, error: "x" }),
+      lifecycle("error", { endedAt: 4, error: "x", timeoutPhase: "tool_execution" }),
     ]) {
       check(validateLive, params(validEvent));
     }

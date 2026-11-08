@@ -21,6 +21,7 @@ import {
   isControlUiVersionedPublicAsset,
 } from "../src/gateway/control-ui-root-assets.ts";
 import { selectControlUiRoutePreloads } from "../src/gateway/control-ui-route-preloads.ts";
+import { shouldPrecompressControlUiAsset } from "./config/control-ui-asset-compression.ts";
 import {
   collectControlUiBootAssets,
   controlUiBootPreloadsPlugin,
@@ -37,6 +38,7 @@ import { controlUiPluginDistributionsPlugin } from "./config/control-ui-plugin-d
 import { controlUiSocialCardPlugin } from "./config/control-ui-social-card.ts";
 import { controlUiSolidPlugin } from "./config/control-ui-solid.ts";
 import { extractControlUiStartupAssetPaths } from "./config/control-ui-startup-assets.ts";
+import { controlUiUpdateCachePlugins } from "./config/control-ui-update-cache.ts";
 import { normalizeControlUiBuildInfo } from "./src/build-info-normalizers.ts";
 import type { ControlUiBuildInfo } from "./src/build-info.ts";
 
@@ -81,12 +83,6 @@ const controlUiPrecompressedAssetExtensions = new Set([
 ]);
 
 const compressBrotli = promisify(brotliCompress);
-// Each optional-asset sidecar is an entry in the installed package's updater
-// budget (shipped updaters refuse trees over 50,000). Boot assets and CSS keep
-// sidecars at any size; deferred route and locale-namespace chunks below this
-// size are served uncompressed and then come from the service-worker cache.
-const CONTROL_UI_PRECOMPRESS_MIN_BYTES = 16 * 1024;
-
 function isControlUiPrecompressedAsset(fileName: string) {
   return (
     (fileName === "sw.js" || fileName.startsWith("assets/")) &&
@@ -103,11 +99,7 @@ export async function createControlUiPrecompressedAssetVariants(
     return [];
   }
   const body = typeof source === "string" ? Buffer.from(source) : source;
-  if (
-    body.byteLength < CONTROL_UI_PRECOMPRESS_MIN_BYTES &&
-    path.extname(fileName).toLowerCase() !== ".css" &&
-    !bootAssets.has(fileName)
-  ) {
+  if (!shouldPrecompressControlUiAsset(fileName, body.byteLength, bootAssets.has(fileName))) {
     return [];
   }
   const variants = [
@@ -124,8 +116,8 @@ export async function createControlUiPrecompressedAssetVariants(
     {
       fileName: `${fileName}.gz`,
       // Pinned WASM keeps gzip bytes independent of the host zlib and CPU.
-      // Level 11 retains nearly all of level 12's savings at lower build-time cost.
-      source: Buffer.from(gzip(body, 11)),
+      // Prefer maximum gzip effort for shipped assets; benchmark the added build cost.
+      source: Buffer.from(gzip(body, 12)),
     },
   ];
   return variants.filter((variant) => variant.source.byteLength < body.byteLength);
@@ -375,6 +367,7 @@ export function resolveSourcePackageAliasesForVite(): ControlUiViteAlias[] {
     sourcePackageAlias("normalization-core", "stable-stringify"),
     sourcePackageAlias("normalization-core", "string-coerce"),
     sourcePackageAlias("normalization-core", "string-normalization"),
+    sourcePackageAlias("normalization-core", "stringified-error"),
     sourcePackageAlias("normalization-core", "utf16-slice"),
     sourcePackageAlias("normalization-core", "uuid"),
     sourcePackageAlias("normalization-core"),
@@ -451,6 +444,7 @@ export async function refreshControlUiBuildOutput(
   const publicContent = publicDir ? collectControlUiPublicAssets(publicDir) : undefined;
   const publicAssets = publicContent?.paths ?? [];
   const cacheId = publicContent ? `${buildInfo.buildId}-${publicContent.hash}` : undefined;
+  const publicAssetVersion = publicContent?.hash;
   let selectedBootAssets = bootAssets;
   if (!selectedBootAssets) {
     // Reuse the build-owned graph already serialized by this producer, never a fetched document.
@@ -481,13 +475,13 @@ export async function refreshControlUiBuildOutput(
         // Relative CSS URLs do not inherit their parent stylesheet's query.
         const versioned = assetSource.replace(
           /url\("([^"/?#]+\.woff2)"\)/gu,
-          `url("$1?v=${cacheId}")`,
+          `url("$1?v=${publicAssetVersion}")`,
         );
         fs.writeFileSync(filePath, versioned);
       } else {
         const manifest = JSON.parse(assetSource) as { icons: Array<{ src: string }> };
         for (const icon of manifest.icons) {
-          icon.src += `?v=${cacheId}`;
+          icon.src += `?v=${publicAssetVersion}`;
         }
         fs.writeFileSync(filePath, `${JSON.stringify(manifest, null, 2)}\n`);
       }
@@ -523,7 +517,9 @@ export async function refreshControlUiBuildOutput(
     ]
       .toSorted()
       .map((file) => ({
-        path: file.startsWith("assets/") ? file : `${file}?v=${encodeURIComponent(cacheId ?? "")}`,
+        path: file.startsWith("assets/")
+          ? file
+          : `${file}?v=${encodeURIComponent(publicAssetVersion ?? "")}`,
         integrity:
           "sha256-" +
           createHash("sha256")
@@ -548,7 +544,7 @@ export async function refreshControlUiBuildOutput(
       // Inventory must work before compression sidecars have been written.
       deferredSize.count++;
       deferredSize.rawBytes += assetSource.byteLength;
-      deferredSize.gzipBytes += gzip(assetSource, 11).byteLength;
+      deferredSize.gzipBytes += gzip(assetSource, 12).byteLength;
       return {
         path: file,
         integrity: "sha256-" + createHash("sha256").update(assetSource).digest("base64"),
@@ -568,7 +564,7 @@ export async function refreshControlUiBuildOutput(
     csp: csp.buildControlUiCspHeader({
       inlineScriptHashes: csp.computeInlineScriptHashes(offlineShell.html),
     }),
-    publicAssetVersion: cacheId,
+    publicAssetVersion,
     publicAssets: publicAssets.filter(isControlUiVersionedPublicAsset),
     id: createHash("sha256")
       .update(JSON.stringify({ ...offlineShell, deferredAssets }))
@@ -671,6 +667,30 @@ function controlUiPrecompressedAssetsPlugin(): Plugin {
   };
 }
 
+function compactControlUiDocument(html: string): string {
+  // Dev and preview share this config; only production builds need the minifier.
+  const { transformSync }: typeof import("esbuild") = require("esbuild");
+  // Keep recovery self-contained when every external request fails. Compact only
+  // inline scripts: Vite already minifies CSS; DOM and fallback copy stay intact.
+  return html.replace(
+    /<script\b([^>]*)>([\s\S]*?)<\/script>/gu,
+    (element, attributes: string, source: string) => {
+      if (!source.trim() || /\bsrc\s*=/u.test(attributes)) {
+        return element;
+      }
+      const { code } = transformSync(source, {
+        loader: "js",
+        minify: true,
+        legalComments: "none",
+        charset: "utf8",
+        // The no-module explanation must still run in older browsers.
+        target: /\bnomodule\b/u.test(attributes) ? "es5" : "es2020",
+      });
+      return `<script${attributes}>${code.trim()}</script>`;
+    },
+  );
+}
+
 function controlUiBuildOutputPlugin(
   buildInfo: ControlUiBuildInfo,
   copiedInputs: Set<string>,
@@ -702,7 +722,7 @@ function controlUiBuildOutputPlugin(
             link.replace('rel="stylesheet"', 'rel="preload" as="style"') +
             link.replace(/>$/u, ' id="openclaw-boot-styles" media="print">'),
         );
-        return controlUiBuildIdentityHtml(nonblocking, buildInfo);
+        return compactControlUiDocument(controlUiBuildIdentityHtml(nonblocking, buildInfo));
       },
     },
     writeBundle: {
@@ -977,6 +997,7 @@ export default function controlUiViteConfig(
       controlUiNavigationPreloadsPlugin(),
       controlUiPrecompressedAssetsPlugin(),
       controlUiBuildOutputPlugin(buildInfo, copiedInputs),
+      ...controlUiUpdateCachePlugins(),
       {
         name: "control-ui-dev-stubs",
         configureServer(server) {

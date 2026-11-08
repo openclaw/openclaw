@@ -35,13 +35,15 @@ import { readLocalWorkspaceTree } from "./local-workspace-cas.kernel.js";
 import {
   prepareLegacyArchiveRetention,
   proveAcceptedDirectoryRetention,
+  proveArchivedInputRetention,
   proveLastFileDirectoryRetention,
 } from "./local-workspace-directory-retention.test-support.js";
+import { proveGitIgnoredWorkspaceOutputs } from "./local-workspace-generated-paths.test-support.js";
 import {
+  expectMissing,
   observeAcknowledgedUpdate,
   prepareLocalWorkspaceArchiveFixture,
   prepareSandboxCheckpointFixture,
-  proveAbsentProjectionCheckpoints,
   proveHostAdmittedBuildInputs,
   proveInterruptedWorkspaceCheckpoint,
   proveIncrementalWorkspaceEdits,
@@ -49,12 +51,16 @@ import {
   proveSharedSandboxCheckpoints,
   proveStagedInputCheckpointOwnership,
   proveWorkerOwnedIncrementalWorkspace,
+  proveWorkerOwnedArchive,
 } from "./local-workspace-incremental.test-support.js";
 import { withLocalWorkspaceProjection } from "./local-workspace-projection.js";
+import { proveRejectedWorkspaceCheckpoint } from "./local-workspace-recovery.test-support.js";
 import {
   proveConcurrentWorkspacePreparation,
+  proveColdPreparationCapacityIsolation,
   provePreparationObservationBoundary,
   provePreparationWaiterAuthority,
+  proveWorkspaceWaitAttribution,
   proveWorkspaceIncarnationRecovery,
   proveWarmWorkspaceConflictRecovery,
   proveWarmWorkspaceReuse,
@@ -87,13 +93,12 @@ const writeText = (directory: string, relative: string, data: string) =>
 async function expectText(directory: string, relative: string, expected: string) {
   expect(await readText(directory, relative)).toBe(expected);
 }
-async function expectMissing(directory: string, ...parts: string[]) {
-  await expect(fs.stat(path.join(directory, ...parts))).rejects.toMatchObject({ code: "ENOENT" });
-}
 
 const archiveFixture = (provisionedPaths: string[] = []) =>
   prepareLocalWorkspaceArchiveFixture(owner, provisionedPaths);
 const treePaths = (tree: string) => git(repo, "ls-tree", "-r", "--name-only", tree);
+
+it("keeps archive preparation worker-owned and lossless", () => proveWorkerOwnedArchive(owner));
 
 const suiteDirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterAll(async () => {
@@ -179,8 +184,17 @@ afterEach(async () => {
 
 it("checkpoints sandbox file writes once", () => proveSandboxMutationCheckpoints(owner));
 
-it("keeps unchanged sandbox turns running and reconciles later guest and host edits", () =>
-  proveWarmWorkspaceReuse(owner));
+it.each(["canonical", "projection"] as const)(
+  "quarantines rejected checkpoints while allowing new agent work: %s",
+  (target) => proveRejectedWorkspaceCheckpoint(owner, target),
+);
+
+it("reuses warm workspaces and reconciles edits", () => proveWarmWorkspaceReuse(owner));
+
+it("isolates cold capacity", ({ signal }) => proveColdPreparationCapacityIsolation(owner, signal));
+
+it("attributes sandbox projection custody and joined preparation waits", () =>
+  proveWorkspaceWaitAttribution(owner));
 
 it("coalesces concurrent cold and warm sandbox preparations without retaining completed scans", () =>
   proveConcurrentWorkspacePreparation(owner));
@@ -205,9 +219,6 @@ it.each(["read", "authority", "observation", "cancel"] as const)(
       revoked = true;
     }),
 );
-
-it("avoids lease requests for absent projections and checkpoints a later projection", () =>
-  proveAbsentProjectionCheckpoints(owner));
 
 it("joins waiting sandbox checkpoints across handles without losing later writes", ({ signal }) =>
   proveSharedSandboxCheckpoints(owner, signal));
@@ -410,6 +421,9 @@ it.each([false, true])(
     await proveAcceptedInventoryRecovery(owner, retainedMembership);
   },
 );
+
+it("checkpoints Git changes without ignored build outputs or guest Git metadata", () =>
+  proveGitIgnoredWorkspaceOutputs(owner, root));
 
 it("never admits nested host secrets after guest de-ignore", async () => {
   const prefix = "nested/";
@@ -709,19 +723,21 @@ it.for([false, true])(
       events.push(kind);
     };
     // Keep the cleanup producer and projection gate real; model only container I/O.
-    vi.spyOn(docker, "ensureSandboxContainer").mockResolvedValue({
-      containerName: entry.containerName,
-      containerId: "a".repeat(64),
-      configHash: "checkpoint-fixture-config",
-      mountPlan: {
-        binds: [],
-        protectedTargets: [],
-        skippedBinds: [],
-        readOnlyWorkspaceSkillMounts: [],
-        tmpfs: [],
-      },
-      currentConfig: true,
-    });
+    vi.spyOn(docker, "ensureSandboxContainer").mockImplementation(async (_params, build) =>
+      build({
+        containerName: entry.containerName,
+        containerId: "a".repeat(64),
+        configHash: "checkpoint-fixture-config",
+        mountPlan: {
+          binds: [],
+          protectedTargets: [],
+          skippedBinds: [],
+          readOnlyWorkspaceSkillMounts: [],
+          tmpfs: [],
+        },
+        currentConfig: true,
+      }),
+    );
     vi.spyOn(docker, "execContainerRaw").mockImplementation(async (_engine, args) => {
       if (runtimePaused) {
         return { code: 125, stdout: Buffer.alloc(0), stderr: Buffer.from("Container is paused") };
@@ -740,10 +756,7 @@ it.for([false, true])(
       agentWorkspaceDir: canonical,
     });
     const backend: SandboxBackendHandle = {
-      id: "docker",
-      runtimeId: entry.containerName,
-      runtimeLabel: entry.containerName,
-      workdir: "/workspace",
+      ...container,
       prepareProcessCleanup: container.prepareProcessCleanup!.bind(container),
       buildExecSpec: async () => {
         dispatch("exec");
@@ -1015,36 +1028,7 @@ it.each(["legacy decoder", "failed restore retry", "retention", "legacy retentio
 
 it("preserves later inputs from an older archive without admitting new caches", async () => {
   const { service } = await archiveFixture();
-  const projection = await prepare();
-  const originalAdmission = (await readProjection())!.source_paths_json;
-  const input = ".artifacts/build-cache-inputs/node_modules/late-original.json";
-  expect(JSON.parse(originalAdmission)).not.toContain(input);
-  await writeText(canonical, ".gitignore", ".env.local\n.artifacts/\n");
-  await fs.mkdir(path.dirname(path.join(canonical, input)), { recursive: true });
-  await writeText(canonical, input, "host-admitted input\n");
-  await git(canonical, "add", "--force", "--", input);
-  await prepare();
-  await expectText(projection, input, "host-admitted input\n");
-  const removed = await service.remove({ id: owner.worktree.id, reason: "legacy-admission-probe" });
-  expect(removed.removed).toBe(true);
-  expect(await treePaths(removed.snapshotRef!)).toContain(input);
-  // Before this policy, host-index admission did not update source_paths_json.
-  await withLocalWorkspaceStore({ worktreeId: owner.worktree.id }, async (store) => {
-    await store.update(store.get()!, { source_paths_json: originalAdmission });
-  });
-  await closeOpenClawStateDatabaseAsync();
-  await service.restore({ id: owner.worktree.id });
-  await prepare();
-  await expectText(projection, input, "host-admitted input\n");
-  const generated = ".artifacts/build-cache-inputs/generated-after-restore.json";
-  await writeText(projection, generated, "new disposable cache\n");
-  if (process.platform !== "win32" && process.getuid?.() !== 0) {
-    await fs.chmod(path.join(projection, generated), 0);
-  }
-  await writeText(projection, input, "restored authored edit\n");
-  await synchronize();
-  await expectText(canonical, input, "restored authored edit\n");
-  await expectMissing(canonical, generated);
+  await proveArchivedInputRetention(owner, service);
 });
 
 it.each(["lifecycle reset", "replacement session"] as const)(

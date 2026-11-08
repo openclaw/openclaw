@@ -1,6 +1,8 @@
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { pathForPluginSettings } from "../../app-route-paths.ts";
 import { t } from "../../i18n/index.ts";
+import { registerSessionNavigationEnglish } from "../../i18n/locales/en-session-navigation.ts";
+import { registerSessionOrganizationSharedEnglish } from "../../i18n/locales/en-session-organization-shared.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import {
   readSessionMethodAccess,
@@ -15,19 +17,79 @@ import {
   resolveUiSessionNavigationParentKey,
 } from "../../lib/sessions/session-key.ts";
 import { pluginDetailLocation } from "../plugins/detail-tabs.ts";
+import { cloneChatAttachmentsForIndependentOwner } from "./attachment-payload-store.ts";
 import { isExpiredIncognitoSession, setChatError } from "./chat-history-state.ts";
 import { createChatModelSetupBanner } from "./chat-model-setup.ts";
 import { resolveChatPaneParentSession } from "./chat-pane-header-identity.ts";
 import { ChatPaneRetainedPresentation } from "./chat-pane-retained-presentation.ts";
-import {
-  NEW_SESSION_ACTIVE_RUN_MESSAGE,
-  NEW_SESSION_LIST_LOADING_MESSAGE,
-} from "./chat-pane-shared.ts";
-import { canCreateChatSession } from "./chat-state-route.ts";
+import { canCreateChatSession, resolveChatAgentId } from "./chat-state-route.ts";
+
+registerSessionNavigationEnglish();
 
 /** Creates or resets a conversation while guarding its asynchronous ownership. */
+registerSessionOrganizationSharedEnglish();
+
 export abstract class ChatPaneSessionCreation extends ChatPaneRetainedPresentation {
   readonly sessionCreation = { creatingIncognito: false };
+
+  private activeCatalogContinuation: symbol | null = null;
+
+  protected async continueCatalogSession(key: CatalogSessionKey) {
+    const scope = this.captureConnectionScope();
+    // Attachments count as composed content: an image-only continuation must
+    // send, not silently no-op while the send button looks live.
+    if (!scope || !this.history.catalogSession?.canContinue) {
+      return;
+    }
+    const { state, client } = scope;
+    const draft = state.chatMessage.trim();
+    const attachments = cloneChatAttachmentsForIndependentOwner(state.chatAttachments);
+    if (!draft && attachments.length === 0) {
+      return;
+    }
+    const sourceSessionKey = state.sessionKey;
+    const sourceAgentId = resolveChatAgentId(state);
+    const sourceCatalogGeneration = this.catalogLoadGeneration;
+    const sourceHomeId = this.history.catalogSession.sourceHomeId;
+    const continuation = Symbol("catalog-continuation");
+    this.activeCatalogContinuation = continuation;
+    const isCurrent = () =>
+      this.activeCatalogContinuation === continuation &&
+      this.isConnectionScopeCurrent(scope) &&
+      this.catalogLoadGeneration === sourceCatalogGeneration &&
+      state.sessionKey === sourceSessionKey &&
+      resolveChatAgentId(state) === sourceAgentId;
+    state.chatSending = true;
+    try {
+      const { continueCapturedCatalogSession } =
+        await import("./chat-pane-catalog-continuation.runtime.ts");
+      await continueCapturedCatalogSession({
+        state,
+        client,
+        context: this.context,
+        paneId: this.paneId,
+        key: { ...key, ...(sourceHomeId ? { sourceHomeId } : {}) },
+        agentId: sourceAgentId,
+        attachments,
+        draft,
+        isCurrent,
+        onSessionChange: (next) => this.onPaneSessionChange?.(this.paneId, next),
+      });
+    } catch (error) {
+      if (isCurrent()) {
+        state.lastError = formatUiError(error);
+      }
+    } finally {
+      // Loading and handoff can yield to a newer continuation or scoped send.
+      // Only the captured token may release its own unscoped sending flag.
+      if (this.activeCatalogContinuation === continuation) {
+        this.activeCatalogContinuation = null;
+        if (state.chatSendingScopeKey == null && state.chatSending) {
+          state.chatSending = false;
+        }
+      }
+    }
+  }
 
   protected catalogComposerReason(catalogKey: CatalogSessionKey | null) {
     const { catalogHost, catalogLoading, catalogSession } = this.history;
@@ -37,6 +99,12 @@ export abstract class ChatPaneSessionCreation extends ChatPaneRetainedPresentati
     }
     if (catalogHost?.kind === "node") {
       return { text: t("chat.catalog.remoteViewOnly") };
+    }
+    if (catalogSession?.continuationUnavailableReasonCode === "source-handoff-required") {
+      return { text: t("chat.catalog.sourceHandoffRequired") };
+    }
+    if (catalogSession?.continuationUnavailableReason) {
+      return { text: catalogSession.continuationUnavailableReason };
     }
     // Archivable local Codex rows withhold continuation only when supervision is off.
     if (catalogKey.catalogId !== "codex" || catalogSession?.canArchive !== true) {
@@ -123,7 +191,7 @@ export abstract class ChatPaneSessionCreation extends ChatPaneRetainedPresentati
         actionLabel: t("common.unarchive"),
         actionPending: params.cached,
         disabledReason: !params.selectedSessionId
-          ? "Session lifecycle action requires a durable session identity."
+          ? t("sessionsView.lifecycleIdentityRequired")
           : params.unarchiveAccess.allowed
             ? undefined
             : params.unarchiveAccess.reason,
@@ -178,11 +246,11 @@ export abstract class ChatPaneSessionCreation extends ChatPaneRetainedPresentati
     const isCurrent = () =>
       this.isConnectionScopeCurrent(scope) && this.context.sessions === sessions;
     if (!canCreateChatSession(state)) {
-      setChatError(state, NEW_SESSION_ACTIVE_RUN_MESSAGE);
+      setChatError(state, t("chat.sendErrors.newSessionBusy"));
       return false;
     }
     if (state.sessionsLoading) {
-      setChatError(state, NEW_SESSION_LIST_LOADING_MESSAGE);
+      setChatError(state, t("chat.sendErrors.newSessionLoading"));
       return false;
     }
     const initialAccess = readCreateAccess();

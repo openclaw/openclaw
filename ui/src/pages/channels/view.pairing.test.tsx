@@ -85,9 +85,11 @@ it("renders pending senders and keeps their actions current across refresh", () 
 it("hides cached sender data without pairing access", () => {
   const container = renderInto(createProps({ canManagePairing: false }));
 
-  expect(container.textContent).toContain("operator.pairing access");
+  expect(container.textContent).toContain(
+    "You don’t have permission to review DM access requests.",
+  );
   expect(container.querySelector(".settings-status--warn")?.textContent).toContain(
-    "operator.pairing access",
+    "You don’t have permission to review DM access requests.",
   );
   expect(container.querySelector(".callout")).toBeNull();
   expect(container.textContent).not.toContain("+15551234567");

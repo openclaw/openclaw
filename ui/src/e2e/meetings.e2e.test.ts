@@ -384,7 +384,7 @@ suite.define(() => {
       },
     ));
 
-  it("moves filters and page actions into phone popovers without losing either", () =>
+  it("moves filters to a phone sheet and page actions to a menu without losing either", () =>
     suite.withPage({ viewport: { width: 390, height: 844 }, locale: "en-US" }, async ({ page }) => {
       const gateway = await installMockGateway(page, {
         methodResponses: {
@@ -413,9 +413,7 @@ suite.define(() => {
 
       await trigger.click();
       await panel.waitFor();
-      await panel
-        .getByRole("searchbox", { name: "Provider ID", exact: true })
-        .fill("discord-voice");
+      await panel.getByRole("searchbox", { name: "Provider", exact: true }).fill("discord-voice");
       await panel.getByLabel("Started on or after", { exact: true }).fill("2026-08-01");
       await panel.getByRole("button", { name: "Filter", exact: true }).click();
       await page.waitForURL(/providerId=discord-voice/u);
@@ -466,7 +464,7 @@ suite.define(() => {
       });
       await page.goto(`${suite.server.baseUrl}meetings`);
       const view = page.locator("openclaw-meetings-page");
-      await view.getByRole("heading", { name: "Your meeting notes, together" }).waitFor();
+      await view.getByRole("heading", { name: "No meetings yet." }).waitFor();
       expect(
         await view.getByRole("link", { name: "Set up meeting transcripts" }).getAttribute("href"),
       ).toBe("https://docs.openclaw.ai/cli/transcripts");
@@ -478,6 +476,6 @@ suite.define(() => {
       expect(await view.getByRole("alert").textContent()).toContain(
         "Meetings temporarily unavailable",
       );
-      await expectAbsent(view.getByRole("heading", { name: "Your meeting notes, together" }));
+      await expectAbsent(view.getByRole("heading", { name: "No meetings yet." }));
     }));
 });
