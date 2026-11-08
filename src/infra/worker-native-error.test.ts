@@ -4,7 +4,18 @@ import { decodeNativeWorkerFailure, encodeNativeWorkerFailure } from "./worker-n
 const roundTrip = (error: Error) =>
   decodeNativeWorkerFailure(structuredClone(encodeNativeWorkerFailure(error)));
 
-describe("native worker suppressed errors", () => {
+describe("native worker errors", () => {
+  it.each([
+    { name: "object", cause: { detail: "worker context" }, text: '{"detail":"worker context"}' },
+    { name: "function", cause: () => undefined, text: "[object Function]" },
+    { name: "symbol", cause: Symbol("worker context"), text: "[object Symbol]" },
+  ])("renders non-Error $name causes as cloneable diagnostics", ({ cause, text }) => {
+    expect(roundTrip(new Error("worker failed", { cause }))).toMatchObject({
+      message: "worker failed",
+      cause: text,
+    });
+  });
+
   it("preserves native type and shared failure references", () => {
     const shared = new TypeError("resource failed");
     const failure = new SuppressedError(shared, shared, "disposal failed");

@@ -1,4 +1,8 @@
-type NativeErrorValue = NativeWorkerError | { kind: "value"; value: unknown };
+import { stringifyNonErrorCause } from "@openclaw/normalization-core/error-coercion";
+
+type NativeErrorValue =
+  | NativeWorkerError
+  | { kind: "value"; value: string | number | boolean | bigint | null | undefined };
 
 type NativeWorkerError = {
   kind: "error";
@@ -28,7 +32,16 @@ export function encodeNativeWorkerFailure(value: unknown): NativeWorkerFailure {
   const seen = new Map<Error, NativeWorkerError>();
   const encode = (current: unknown): NativeErrorValue => {
     if (!(current instanceof Error)) {
-      return { kind: "value", value: current };
+      // Native host objects need not be cloneable; only their diagnostic text crosses the port.
+      return {
+        kind: "value",
+        value:
+          typeof current === "function" ||
+          typeof current === "symbol" ||
+          (typeof current === "object" && current !== null)
+            ? stringifyNonErrorCause(current)
+            : current,
+      };
     }
     const prior = seen.get(current);
     if (prior) {

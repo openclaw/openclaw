@@ -1,0 +1,2 @@
+# Preserve the real missing-worker loader error through the native supervisor and render non-Error causes as transport-safe diagnostic text.
+30

@@ -161,7 +161,7 @@ function startSupervisor() {
 function createRequest(
   id: number,
   extra: Pick<NativeWorkerRequest & { type: "create" }, "resource" | "taskPort"> = {},
-): NativeWorkerRequest {
+): Extract<NativeWorkerRequest, { type: "create" }> {
   return {
     type: "create",
     id,
@@ -172,6 +172,25 @@ function createRequest(
     ...extra,
   };
 }
+
+it("forwards missing worker entry errors and joins the failed worker", async () => {
+  const supervisor = startSupervisor();
+  const missingEntry = new URL("./missing-native-worker.mjs", import.meta.url);
+  supervisor.post({
+    ...createRequest(1),
+    filename: { kind: "url", value: missingEntry.href },
+  });
+  await supervisor.until(() =>
+    supervisor.replies.some((reply) => reply.id === 1 && reply.type === "stopped"),
+  );
+
+  expect(supervisor.exitCode()).toBeUndefined();
+  expect(
+    supervisor.replies.find((reply) => reply.id === 1 && reply.type === "error"),
+  ).toMatchObject({
+    error: { message: expect.stringContaining("missing-native-worker.mjs") },
+  });
+});
 
 it("keeps the supervisor alive when a resource attachment endpoint is rejected synchronously", async () => {
   const supervisor = startSupervisor();
