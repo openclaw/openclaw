@@ -4,7 +4,8 @@ import {
   type AdmittedRunContext,
 } from "../agents/admitted-run-context.js";
 import { getGatewayToolCallerIdentity } from "../agents/tools/gateway-caller-context.js";
-import { loadSessionEntry, patchSessionEntryCore } from "../config/sessions/session-accessor.js";
+import { patchSessionEntryCore } from "../config/sessions/session-accessor.js";
+import { readSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import {
   readSkillLibraryPromptListing,
   type SkillLibraryPromptListing,
@@ -52,12 +53,12 @@ function listingsMatch(
   );
 }
 
-function readCommittedPromptListing(params: {
+async function readCommittedPromptListing(params: {
   sessionKey: string;
   storedListing?: unknown;
   sessionEntry?: { skillLibraryPromptListing?: SkillLibraryPromptListing };
   listingStore?: { agentId?: string; storePath?: string };
-}): SkillLibraryPromptListing | undefined {
+}): Promise<SkillLibraryPromptListing | undefined> {
   const passed = readSkillLibraryPromptListing(
     params.storedListing ?? params.sessionEntry?.skillLibraryPromptListing,
   );
@@ -65,13 +66,14 @@ function readCommittedPromptListing(params: {
   if (!store || (!store.agentId && !store.storePath)) {
     return passed;
   }
-  const owned = loadSessionEntry({
+  // The captured store is the physical owner. The session worker serves its
+  // published row, including a retained fact, so this turn does not open the
+  // agent database on the Gateway thread. A missing row has nothing published yet.
+  const owned = await readSessionEntryReadOnlyInWorker({
     sessionKey: params.sessionKey,
     ...(store.agentId ? { agentId: store.agentId } : {}),
     ...(store.storePath ? { storePath: store.storePath } : {}),
   });
-  // An existing row is the published listing, including when this caller holds
-  // an older snapshot. A missing row has nothing published yet.
   return owned ? readSkillLibraryPromptListing(owned.skillLibraryPromptListing) : passed;
 }
 
@@ -207,7 +209,7 @@ export async function resolveGatewaySkillLibraryPromptGrant(params: {
   sessionEntry?: { skillLibraryPromptListing?: SkillLibraryPromptListing };
   listingStore?: { agentId?: string; storePath?: string };
 }): Promise<SkillLibraryAuthoringCapability | undefined> {
-  const storedListing = readCommittedPromptListing(params);
+  const storedListing = await readCommittedPromptListing(params);
   let next = storedListing;
   let live: SkillLibraryAuthoringCapability | undefined;
   if (params.isHumanTurn) {
