@@ -320,21 +320,19 @@ export function createRuntimeConfigCapability(
     }
     return editor;
   };
-  const loadEditorSchema = (loaded: RuntimeConfigEditor, refresh: boolean) => {
-    if (refresh) {
-      pendingSchema = null;
-      return loaded.refreshSchema();
-    }
-    const loading = loaded.ensureSchemaLoaded();
-    // A reconnect can replace schemaRead before this caller's read settles.
-    const receipt = loaded.schemaRead;
-    // Preserve pre-hello demand until admission, including when the editor is already active.
-    pendingSchema = receipt ? null : loading.then(() => ({ ok: true, value: undefined }) as const);
-    return loading.then(() => receipt ?? { ok: true as const, value: undefined });
-  };
   const loadSchema = (refresh: boolean): Promise<Result<void, string>> => {
     if (editor) {
-      return loadEditorSchema(editor, refresh);
+      if (refresh) {
+        pendingSchema = null;
+        return editor.refreshSchema();
+      }
+      const loading = editor.ensureSchemaLoaded();
+      // Keep this caller's receipt when a reconnect replaces the editor's read.
+      const receipt = editor.schemaRead;
+      const result = loading.then(() => receipt ?? { ok: true as const, value: undefined });
+      // An unadmitted pre-hello request stays pending until the editor can read.
+      pendingSchema = receipt ? null : result;
+      return result;
     }
     if (pendingSchema) {
       return pendingSchema;
@@ -343,7 +341,7 @@ export function createRuntimeConfigCapability(
       (loaded) =>
         loaded?.schemaRead ??
         (loaded && pendingSchema === requested
-          ? loadEditorSchema(loaded, refresh)
+          ? loadSchema(refresh)
           : { ok: true, value: undefined }),
     );
     pendingSchema = requested;
