@@ -383,7 +383,7 @@ export function observeTranscriptOffset(
       owner.invalidate();
     }
   };
-  const publishReaderIntent = (towardEnd: boolean) => {
+  const publishReaderIntent = (towardEnd?: boolean) => {
     owner.endAnchor.clear();
     owner.onReaderScroll(towardEnd);
     // Downward input at the physical end need not emit another offset event.
@@ -439,7 +439,7 @@ export function observeTranscriptOffset(
       (event instanceof KeyboardEvent &&
         (["ArrowDown", "PageDown", "End"].includes(event.key) ||
           (event.key === " " && !event.shiftKey)));
-    publishReaderIntent(towardEnd);
+    publishReaderIntent(towardEnd ? true : event instanceof KeyboardEvent ? false : undefined);
   };
   const moveTouch = (event: TouchEvent) => {
     const nextY = localTouchY(event);
