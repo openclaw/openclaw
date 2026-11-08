@@ -771,7 +771,6 @@ describe("Muse native MSP harness", () => {
       const controllers = [new AbortController(), new AbortController()];
       const cancelled = new Error("catalog check cancelled");
       const outcomes: Promise<unknown>[] = [];
-      // Each check parks in fake Muse until the test releases its gate socket.
       const start = async (check: (signal: AbortSignal) => Promise<unknown>) => {
         const connected = once(server, "connection", { signal });
         const index = outcomes.length;

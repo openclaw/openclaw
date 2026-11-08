@@ -30,7 +30,8 @@ const reject = (id, code, message, kind) => send({ id, error: { code, message, d
 // Hold a reply until the test writes to the Unix socket named by `env`.
 function gated(env, id, result) {
   if (!process.env[env]) {
-    return reply(id, result);
+    reply(id, result);
+    return;
   }
   const gate = createConnection(process.env[env]);
   gate.on("connect", () => gate.write(String(process.pid)));
