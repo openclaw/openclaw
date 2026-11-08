@@ -1,4 +1,5 @@
 import { once } from "node:events";
+import { createServer as createHttpServer, get } from "node:http";
 import { connect as connectSocket, createServer, type Socket } from "node:net";
 import { performance } from "node:perf_hooks";
 import { PassThrough, Writable } from "node:stream";
@@ -18,8 +19,8 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-function linkFixture() {
-  const link = createControlUiWireLink();
+function linkFixture(options?: Parameters<typeof createControlUiWireLink>[0]) {
+  const link = createControlUiWireLink(options);
   links.push(link);
   const connect = () => {
     const source = new PassThrough();
@@ -37,21 +38,34 @@ function linkFixture() {
   return { link, connect };
 }
 
-it("shares throughput and overlaps propagation instead of adding RTT to every packet", async () => {
-  const fixture = linkFixture();
-  const first = fixture.connect();
-  const second = fixture.connect();
-  first.source.end(Buffer.alloc(62_500));
-  second.source.end(Buffer.alloc(62_500));
-  await vi.advanceTimersByTimeAsync(49);
-  expect([...first.writes, ...second.writes]).toEqual([]);
-  await vi.advanceTimersByTimeAsync(111);
-  expect(first.writes.reduce((sum, write) => sum + write.bytes, 0)).toBe(62_500);
-  expect(second.writes.reduce((sum, write) => sum + write.bytes, 0)).toBe(62_500);
-  const lastDelivery = Math.max(...[...first.writes, ...second.writes].map((write) => write.atMs));
-  expect(lastDelivery).toBeGreaterThanOrEqual(150);
-  expect(lastDelivery).toBeLessThanOrEqual(158);
-});
+it.each([
+  { profile: "remote defaults", options: undefined, earliest: 150, latest: 158 },
+  {
+    profile: "mobile",
+    options: { megabitsPerSecond: 3, latencyMs: 125 },
+    earliest: 458,
+    latest: 470,
+  },
+])(
+  "shares throughput and overlaps propagation for $profile",
+  async ({ options, earliest, latest }) => {
+    const fixture = linkFixture(options);
+    const first = fixture.connect();
+    const second = fixture.connect();
+    first.source.end(Buffer.alloc(62_500));
+    second.source.end(Buffer.alloc(62_500));
+    await vi.advanceTimersByTimeAsync(options?.latencyMs ? options.latencyMs - 1 : 49);
+    expect([...first.writes, ...second.writes]).toEqual([]);
+    await vi.advanceTimersByTimeAsync(latest);
+    expect(first.writes.reduce((sum, write) => sum + write.bytes, 0)).toBe(62_500);
+    expect(second.writes.reduce((sum, write) => sum + write.bytes, 0)).toBe(62_500);
+    const lastDelivery = Math.max(
+      ...[...first.writes, ...second.writes].map((write) => write.atMs),
+    );
+    expect(lastDelivery).toBeGreaterThanOrEqual(earliest);
+    expect(lastDelivery).toBeLessThanOrEqual(latest);
+  },
+);
 
 it("gives a small flow a turn and does not reserve cancelled bulk bytes", async () => {
   const fixture = linkFixture();
@@ -115,6 +129,43 @@ it("stops feeding a blocked destination until it drains", async () => {
   expect(bytes).toBeGreaterThan(16_384);
 });
 
+it("preserves bytes when propagation timers wake out of order", async () => {
+  const pending = new Map<ReturnType<typeof setTimeout>, () => void>();
+  const schedule = globalThis.setTimeout;
+  vi.spyOn(globalThis, "setTimeout").mockImplementation((callback, delay, ...args) => {
+    const timer = schedule(() => {
+      pending.delete(timer);
+      callback(...args);
+    }, delay);
+    pending.set(timer, () => {
+      clearTimeout(timer);
+      pending.delete(timer);
+      callback(...args);
+    });
+    return timer;
+  });
+  const link = createControlUiWireLink({ latencyMs: 50, megabitsPerSecond: 10_000 });
+  links.push(link);
+  const source = new PassThrough();
+  const chunks: Buffer[] = [];
+  const target = new Writable({
+    write(chunk: Buffer, _encoding, callback) {
+      chunks.push(chunk);
+      callback();
+    },
+  });
+  const body = Buffer.concat([Buffer.alloc(16_384, 1), Buffer.alloc(16_384, 2)]);
+  link.connect(source, target, () => {});
+  source.end(body);
+  await vi.advanceTimersByTimeAsync(2);
+  // Real timer buckets can wake nearby propagation deadlines out of order.
+  vi.setSystemTime(Date.now() + 100);
+  for (const wake of [...pending.values()].toReversed()) {
+    wake();
+  }
+  expect(Buffer.concat(chunks).equals(body)).toBe(true);
+});
+
 it("delivers a real socket response after both peers half-close", async () => {
   vi.useRealTimers();
   const sent = createControlUiWireLink();
@@ -174,6 +225,80 @@ it("delivers a real socket response after both peers half-close", async () => {
     await clientClosed;
     expect(Buffer.concat(requestChunks).toString()).toBe(request);
     expect(Buffer.concat(chunks).toString()).toBe(response);
+  } finally {
+    vi.useRealTimers();
+    sent.close();
+    received.close();
+    for (const socket of sockets) {
+      socket.destroy();
+    }
+    if (proxy) {
+      await proxy.releaseListener();
+      await proxy.claim.release();
+    }
+    await upstream.releaseListener();
+    await upstream.claim.release();
+  }
+});
+
+it("delivers an HTTP connection-close response before closing the client", async () => {
+  vi.useRealTimers();
+  const sent = createControlUiWireLink();
+  const received = createControlUiWireLink();
+  const sockets = new Set<Socket>();
+  const track = (socket: Socket) => {
+    sockets.add(socket);
+    socket.once("close", () => sockets.delete(socket));
+    return socket;
+  };
+  const body = "response from a closing upstream";
+  const observedRequest = Promise.withResolvers<void>();
+  const observedResponse = Promise.withResolvers<void>();
+  const upstreamClosed = Promise.withResolvers<void>();
+  const upstream = await reserveTestPortListener({
+    offsets: [0],
+    createListener: () =>
+      createHttpServer((_request, response) => {
+        response.writeHead(200, {
+          "Content-Length": Buffer.byteLength(body),
+          Connection: "close",
+        });
+        response.end(body);
+      }).on("connection", track),
+  });
+  let proxy: Awaited<ReturnType<typeof reserveTestPortListener>> | undefined;
+  try {
+    proxy = await reserveTestPortListener({
+      offsets: [0],
+      createListener: () =>
+        createServer((client) => {
+          track(client);
+          const remote = track(connectSocket(upstream.claim.port, "127.0.0.1"));
+          remote.once("close", () => upstreamClosed.resolve());
+          sent.connect(client, remote, () => observedRequest.resolve());
+          received.connect(remote, client, () => observedResponse.resolve());
+        }),
+    });
+    const result = Promise.withResolvers<
+      { statusCode: number | undefined; body: string } | { error: string }
+    >();
+    vi.useFakeTimers();
+    get({ host: "127.0.0.1", port: proxy.claim.port, agent: false }, (response) => {
+      const chunks: Buffer[] = [];
+      response.on("data", (chunk: Buffer) => chunks.push(chunk));
+      response.on("end", () =>
+        result.resolve({ statusCode: response.statusCode, body: Buffer.concat(chunks).toString() }),
+      );
+      response.on("error", (error) => result.resolve({ error: error.message }));
+    })
+      .on("socket", track)
+      .on("error", (error) => result.resolve({ error: error.message }));
+    await observedRequest.promise;
+    await vi.advanceTimersByTimeAsync(60);
+    await observedResponse.promise;
+    await upstreamClosed.promise;
+    await vi.advanceTimersByTimeAsync(60);
+    expect(await result.promise).toEqual({ statusCode: 200, body });
   } finally {
     vi.useRealTimers();
     sent.close();

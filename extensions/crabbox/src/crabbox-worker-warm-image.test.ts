@@ -7,6 +7,7 @@ import { crabboxState } from "./crabbox-state.test-support.js";
 import { scenario } from "./crabbox-warm-provider-scenarios.test-support.js";
 import { expectText, updateWarmImage } from "./crabbox-warm-scenarios.test-support.js";
 import { destroyAndWait, commandResult } from "./crabbox-worker-provider.test-support.js";
+import { SCRUB_WORKER_STATE } from "./crabbox-worker-warm-image-scrub.js";
 import { listCrabboxWarmImages } from "./crabbox-worker-warm-image-store.js";
 import {
   captureWarmImage,
@@ -227,6 +228,81 @@ it("scrubs every worker identity and workspace before capturing an enrolled leas
   );
   expect(runScrub).toThrow();
   expect(fs.existsSync(envFile)).toBe(true);
+});
+
+it.each([
+  ["cwd", "ENOENT"],
+  ["cwd", "ESRCH"],
+  ["environ", "ENOENT"],
+  ["environ", "EACCES"],
+  ["SIGTERM", "ESRCH"],
+  ["SIGKILL", "ESRCH"],
+  ["mismatch", ""],
+])("scrubs stale node PIDs but refuses live mismatches (%s %s)", (failure, code) => {
+  const home = tempDirs.make("openclaw-crabbox-scrub-race-");
+  const state = path.join(home, ".openclaw/cloud-workers/worker");
+  const runtime = path.join(home, ".openclaw-worker/node-runtimes/runtime");
+  const runtimeNode = path.join(home, ".openclaw-worker/runtime-node/node");
+  const tmp = path.join(home, "tmp");
+  for (const directory of [state, runtime, path.dirname(runtimeNode), tmp]) {
+    fs.mkdirSync(directory, { recursive: true });
+  }
+  fs.symlinkSync(process.execPath, runtimeNode);
+  fs.symlinkSync(runtime, path.join(state, "runtime"));
+  fs.writeFileSync(path.join(state, "node.pid"), "424242");
+  const preload = path.join(home, "proc-fixture.cjs");
+  fs.writeFileSync(
+    preload,
+    `const fs = require("node:fs");
+const fail = (operation) => {
+  if (operation === ${JSON.stringify(failure)}) {
+    throw Object.assign(new Error(${JSON.stringify(code)}), { code: ${JSON.stringify(code)} });
+  }
+};
+const read = fs.readFileSync.bind(fs);
+fs.readFileSync = (file, ...args) => {
+  if (file === "/proc/424242/stat") return "424242 (node) S 1 424242";
+  if (file === "/proc/424242/environ") {
+    fail("environ");
+    return ${JSON.stringify(`OPENCLAW_STATE_DIR=${state}`)};
+  }
+  return read(file, ...args);
+};
+const realpath = fs.realpathSync.bind(fs);
+fs.realpathSync = (file, ...args) => {
+  if (file === "/proc/424242/cwd") {
+    fail("cwd");
+    return ${JSON.stringify(failure === "mismatch" ? home : runtime)};
+  }
+  return realpath(file, ...args);
+};
+process.kill = (pid, signal) => {
+  if (pid !== -424242 || !${JSON.stringify(failure)}.startsWith("SIG")) {
+    throw new Error("Unexpected signal");
+  }
+  fail(signal);
+};
+global.setTimeout = (callback) => callback();
+`,
+  );
+  const runScrub = () =>
+    execFileSync("/bin/bash", ["-c", SCRUB_WORKER_STATE.replace('"/tmp"', JSON.stringify(tmp))], {
+      cwd: home,
+      env: {
+        HOME: home,
+        TMPDIR: tmp,
+        PATH: process.env.PATH,
+        NODE_OPTIONS: `--require=${preload}`,
+      },
+      stdio: "pipe",
+    });
+  if (failure === "mismatch") {
+    expect(runScrub).toThrow("Cannot scrub a worker whose live node ownership does not match");
+  } else {
+    runScrub();
+  }
+  expect(fs.existsSync(state)).toBe(failure === "mismatch");
+  expect(fs.existsSync(runtime)).toBe(true);
 });
 
 it.each([

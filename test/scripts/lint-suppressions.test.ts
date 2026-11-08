@@ -141,6 +141,8 @@ describe("production lint suppressions", () => {
         "extensions/browser/src/browser/pw-tools-core.activity.ts|unicorn/prefer-dom-node-text-content|1",
         "extensions/codex/session-history-worker-runtime.ts|no-warning-comments|1",
         "extensions/codex/src/app-server/run-attempt-turn-request.ts|preserve-caught-error|1",
+        // Persisted research receipts omit undefined fields exactly as JSON encoding does.
+        "extensions/deep-research/src/job-state.ts|unicorn/prefer-structured-clone|1",
         "extensions/diffs/src/viewer-client.ts|eslint/no-underscore-dangle|1",
         // Markdown rendering sorts fresh private arrays without copying them again.
         "extensions/discord/src/markdown.ts|unicorn/no-array-sort|2",
@@ -162,6 +164,8 @@ describe("production lint suppressions", () => {
         "extensions/x/src/thread.ts|unicorn/no-array-sort|2",
         // The memory census attributes RSS only to the pinned Playwright browser's child tree.
         "scripts/bench-control-ui-engines.ts|no-underscore-dangle|1",
+        // Read rendered content so parked Chat panes cannot satisfy readiness evidence.
+        "scripts/bench-control-ui-rpc-hostage.ts|unicorn/prefer-dom-node-text-content|1",
         // The Talk readiness probe calls the saved media method with its original receiver.
         "scripts/bench-control-ui-talk.ts|typescript/unbound-method|1",
         // The fault observer preserves methods for restoration and supplies each database receiver through .call.
@@ -172,14 +176,21 @@ describe("production lint suppressions", () => {
         // Pinned Playwright exposes WebKit Inspector only through its private connection/session fields.
         "scripts/lib/control-ui-engine-memory.ts|no-underscore-dangle|3",
         "scripts/lib/control-ui-engine-metrics.ts|no-underscore-dangle|3",
+        // The Terminal output probe forwards native fillText with its original canvas receiver.
+        "scripts/lib/control-ui-engine-page-scenarios.ts|typescript/unbound-method|1",
         // The streaming probe forwards native methods with their original receivers.
         "scripts/lib/control-ui-engine-streaming-scenarios.ts|typescript/unbound-method|2",
+        // The heavy-row probe forwards native image decoding with its original image receiver.
+        "scripts/lib/control-ui-heavy-window-scenarios.ts|typescript/unbound-method|1",
+        // The diagnostic observer restores native methods and forwards their original receiver.
+        "scripts/lib/control-ui-mutation-audit.ts|typescript/unbound-method|2",
         // The scheduling probe forwards native methods with the original call receiver through Reflect.apply.
         "scripts/lib/control-ui-resource-counts.ts|typescript/unbound-method|8",
         // The Talk probe forwards native playback, analyser, processor, start, and stop methods with their original receivers.
         "scripts/lib/control-ui-talk-fixture.ts|typescript/unbound-method|5",
         "scripts/lib/plain-gh.mjs|no-warning-comments|1",
         "scripts/lib/sqlite-reliability-process.ts|typescript/prefer-promise-reject-errors|1",
+        "scripts/lib/usage-bench-observer.mjs|typescript/unbound-method|1",
         // The frame census retains native methods and supplies their original receivers through .call.
         "scripts/perf/agent-event-frame-census-preload.mjs|typescript/unbound-method|3",
         // The copy-count probe restores the native method after measurement.
@@ -195,6 +206,8 @@ describe("production lint suppressions", () => {
         "scripts/perf/command-capture-pool-retention.ts|typescript/unbound-method|2",
         // The diagnostics probe restores Session.post and invokes it with its live receiver.
         "scripts/perf/diagnostic-profile-measure.ts|typescript/unbound-method|1",
+        // Node BroadcastChannel.postMessage has no target-origin parameter.
+        "scripts/perf/gateway-runtime-exit-listeners-preload.mjs|unicorn/require-post-message-target-origin|1",
         // Node BroadcastChannel.postMessage has no target-origin parameter.
         "scripts/perf/idle-gateway-measure-preload.mjs|unicorn/require-post-message-target-origin|1",
         // The stack probe compares V8's formatter callback identity without invoking it.
@@ -216,6 +229,8 @@ describe("production lint suppressions", () => {
         "scripts/perf/plugin-transform-preload.mjs|typescript/unbound-method|1",
         // The provider probe forwards native methods with their original receivers.
         "scripts/perf/provider-request-prepare-measure.ts|typescript/unbound-method|3",
+        // SQLite observers preserve native methods for restoration and forward each live receiver.
+        "scripts/perf/schema-crossing-observer.ts|@typescript-eslint/unbound-method|1",
         // Native transaction timing forwards the live receiver and restores the original method.
         "scripts/perf/session-cold-selection.ts|typescript/unbound-method|1",
         // Node worker ports have no browser target origin.
@@ -224,8 +239,14 @@ describe("production lint suppressions", () => {
         "scripts/perf/session-history-reader-setup-measure.mjs|typescript/no-implied-eval|1",
         // The subscription probe forwards track with the original AsyncWorkScope receiver.
         "scripts/perf/session-pr-subscriptions-measure.ts|typescript/unbound-method|1",
+        // The admission-charge probe forwards runTask with the original pool receiver.
+        "scripts/perf/state-read-worker-bench.ts|typescript/unbound-method|1",
+        // Backup attribution forwards the native SQLite receiver and restores both methods in finally.
+        "scripts/perf/stopped-backup-measure.ts|@typescript-eslint/unbound-method|2",
         // The registry-copy probe forwards Map.set with the original map receiver.
         "scripts/perf/subagent-maintenance-capture-measure.ts|typescript/unbound-method|1",
+        // The opt-in syscall census intercepts native addon exports that bypass node:fs.
+        "scripts/perf/sync-fs-turn-preload.mjs|no-underscore-dangle|2",
         // The retention probe measures fresh strings from the transcript JSON decode boundary.
         "scripts/perf/system-prompt-pool-retention.ts|unicorn/prefer-structured-clone|1",
         // The counts-only probe wraps toSorted and restores it in finally; timing uses native methods.
@@ -234,6 +255,10 @@ describe("production lint suppressions", () => {
         "scripts/perf/trajectory-runtime-append.ts|typescript/unbound-method|2",
         // The browser probe forwards IndexedDB writes with each store receiver and restores both methods.
         "scripts/perf/ui-streaming-render-measure.ts|typescript/unbound-method|2",
+        // The pager probe forwards native prepare with its original receiver and restores it.
+        "scripts/perf/usage-refresh-stats-measure.ts|typescript/unbound-method|1",
+        // Rollback failure retains both caught errors in one AggregateError cause.
+        "scripts/pr-lib/cache-lifetime.mjs|preserve-caught-error|1",
         // These owners sort only fresh private arrays, preserving their source collections.
         "src/agents/agent-bundle-lsp-env.ts|unicorn/no-array-sort|1",
         "src/agents/agent-bundle-mcp-runtime.ts|unicorn/prefer-add-event-listener|1",
@@ -284,17 +309,19 @@ describe("production lint suppressions", () => {
         "src/config/sessions/session-transcript-reconcile.close-failure.test-support.mjs|typescript/unbound-method|1",
         "src/config/sessions/session-transcript-reconcile.sql-observer.test-support.ts|typescript/unbound-method|1",
         // Canonical entries must honor toJSON and omit non-JSON values exactly as persistence does.
-        "src/config/sessions/transcript-json.ts|unicorn/prefer-structured-clone|1",
+        "src/config/sessions/transcript-json-normalize.ts|unicorn/prefer-structured-clone|1",
         "src/config/zod-schema.channel-messaging-common.ts|typescript/no-generated-empty-object-type|1",
         // Command declarations compare their stored JSON shape, where undefined properties are omitted.
         "src/cron/store/job-mutations.ts|unicorn/prefer-structured-clone|1",
+        // Hello projections sort private arrays without copying them a second time.
+        "src/gateway/control-ui-plugin-tabs.ts|unicorn/no-array-sort|4",
         // These sort only freshly materialized arrays or locally owned swarm member lists.
         "src/gateway/health/collector.ts|unicorn/no-array-sort|3",
         "src/gateway/methods/read-share-keys.ts|unicorn/no-array-sort|1",
         "src/gateway/node-connection-notifications.ts|unicorn/no-array-sort|1",
         "src/gateway/node-plugin-tool-snapshot.ts|unicorn/no-array-sort|1",
         // These handlers sort only fresh private arrays, preserving their upstream sources.
-        "src/gateway/server-methods/sessions-files.ts|unicorn/no-array-sort|1",
+        "src/gateway/server-methods/session-files-root.ts|unicorn/no-array-sort|1",
         "src/gateway/server-methods/sessions-read.ts|unicorn/no-array-sort|1",
         "src/gateway/server-methods/sessions-search-projected.ts|unicorn/no-array-sort|1",
         "src/gateway/server-methods/tools-catalog.ts|unicorn/no-array-sort|1",
@@ -385,6 +412,8 @@ describe("production lint suppressions", () => {
         "src/state/openclaw-agent-canonical-validation-receipt.test-support.ts|typescript/unbound-method|1",
         // Node worker BroadcastChannel.postMessage accepts only a message, not a browser targetOrigin.
         "src/state/openclaw-agent-worker-store.test-support.ts|unicorn/require-post-message-target-origin|1",
+        // Exact JSON byte accounting must detect every escaped C0 control character.
+        "src/state/openclaw-state-read-request.ts|no-control-regex|1",
         "src/status/status-plugin-health.ts|unicorn/no-array-sort|6",
         "src/test-utils/config-machine-state.ts|typescript/no-unnecessary-type-parameters|1",
         "src/test-utils/vitest-mock-fn.ts|typescript/no-explicit-any|1",
@@ -410,6 +439,8 @@ describe("production lint suppressions", () => {
         "ui/src/pages/logs/view.tsx|solid/no-react-specific-props|1",
         // Session commands relay the owner's original error so the display boundary can format it.
         "ui/src/pages/sessions/view.tsx|typescript/only-throw-error|1",
+        // Pinned WebKit Inspector is the only API that includes detached CSS animations.
+        "ui/src/test-helpers/control-ui-webkit-animations.ts|no-underscore-dangle|1",
       ].filter((entry) => fs.existsSync(path.join(repoRoot, entry.split("|", 1)[0]!))),
     );
   });

@@ -89,6 +89,16 @@ function nativeScroll(container: HTMLElement, offset: number) {
   container.scrollTop = offset;
   container.dispatchEvent(new Event("scroll"));
 }
+function measuredRowBeforeReader(container: HTMLElement): HTMLElement {
+  const row = expectDefined(
+    [...container.querySelectorAll<HTMLElement>(".chat-virtual-row:not([data-prepared-row])")].find(
+      (element) => Number(element.dataset.index) * 120 < container.scrollTop,
+    ),
+    "measured row beginning above the reader offset",
+  );
+  expect(row.offsetHeight).toBe(120);
+  return row;
+}
 function connectPolicy(
   policy: ReturnType<typeof makeChatHost>,
   transcript: ReturnType<typeof createTranscript>,
@@ -283,6 +293,7 @@ it.each([
 );
 
 it("grows the native range before compensating fractional row growth above a reader", async () => {
+  const flushFrames = stubAnimationFrames();
   transcriptDomState.measuredRowHeight = 120;
   const { policy, transcript, mount } = createPolicyTranscript("measurement-extent");
   const rows = numberedContentRows(12);
@@ -298,21 +309,23 @@ it("grows the native range before compensating fractional row growth above a rea
   };
   connectPolicy(policy, transcript, container);
   resize(container, 600);
+  flushFrames();
   nativeScroll(container, container.scrollHeight - container.clientHeight);
   container.dispatchEvent(new WheelEvent("wheel", { deltaY: -24 }));
   nativeScroll(container, container.scrollTop - 24);
   expectReader(policy, true);
-  vi.useFakeTimers();
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  container.dispatchEvent(new Event("scroll"));
   vi.advanceTimersByTime(150);
   renderRows(rows);
   await vi.advanceTimersByTimeAsync(0);
-  const row = expectDefined(
-    container.querySelector<HTMLElement>('[data-index="6"]'),
-    "row above the viewport",
-  );
+  const row = measuredRowBeforeReader(container);
   const before = container.scrollTop;
   Object.defineProperty(row, "offsetHeight", { configurable: true, value: 160.375 });
   resize(row, 160.375);
+  // Row observer delivery defers its compensation to the next native frame.
+  expect(container.scrollTop).toBe(before);
+  flushFrames();
   // Observe the first compensation, before a render or retry can conceal native clamping.
   expect(container.scrollTop).toBe(before + 40.375);
   container.dispatchEvent(new Event("scroll"));
@@ -320,6 +333,7 @@ it("grows the native range before compensating fractional row growth above a rea
 });
 
 it("preserves reader policy when row measurement clamps a positive adjustment to the end", async () => {
+  const flushFrames = stubAnimationFrames();
   transcriptDomState.measuredRowHeight = 120;
   const { policy, transcript, mount } = createPolicyTranscript("measurement-reader");
   const rows: TestContentRow[] = numberedContentRows(12);
@@ -336,22 +350,21 @@ it("preserves reader policy when row measurement clamps a positive adjustment to
   policy.chatIsProgrammaticScroll = () => transcript.isProgrammaticScroll;
   container.addEventListener("scroll", (event) => handleChatScroll(policy, event));
   resize(container, 600);
+  flushFrames();
   nativeScroll(container, total + 84 - 600);
   container.dispatchEvent(new WheelEvent("wheel", { deltaY: -24 }));
   container.scrollTop -= 24;
   container.dispatchEvent(new Event("scroll"));
   expect(policy.chatReadingHistory).toBe(true);
-  vi.useFakeTimers();
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
   container.dispatchEvent(new Event("scroll"));
   vi.advanceTimersByTime(150);
   renderRows(rows);
   await vi.advanceTimersByTimeAsync(0);
-  const row = expectDefined(
-    container.querySelector<HTMLElement>('[data-index="6"]'),
-    "row above the viewport",
-  );
+  const row = measuredRowBeforeReader(container);
   Object.defineProperty(row, "offsetHeight", { configurable: true, value: 160 });
   resize(row, 160);
+  flushFrames();
   expect(container.scrollTop).toBe(total + 84 - 600);
   container.dispatchEvent(new Event("scroll"));
   expectReader(policy, true);
@@ -367,6 +380,56 @@ it("preserves reader policy when row measurement clamps a positive adjustment to
   expectReader(policy, false);
   expect(transcript.isProgrammaticScroll).toBe(false);
 });
+
+it.each(["native return", "resize clamp"] as const)(
+  "preserves a pending %s before above-reader resize compensation",
+  async (movement) => {
+    const flushFrames = stubAnimationFrames();
+    transcriptDomState.measuredRowHeight = 120;
+    const { policy, transcript, mount } = createPolicyTranscript(`resize-arrival-${movement}`);
+    const rows = numberedContentRows(12);
+    const { container, renderRows } = await mount(rows);
+    let nativeHeight = transcriptSize(container) + 84;
+    viewport(container, 600, () => nativeHeight);
+    container.scrollTo = (options?: ScrollToOptions | number) => {
+      if (typeof options === "object") {
+        container.scrollTop = Math.min(options.top ?? container.scrollTop, nativeHeight - 600);
+      }
+    };
+    connectPolicy(policy, transcript, container);
+    resize(container, 600);
+    flushFrames();
+    const originalEnd = nativeHeight - 600;
+    nativeScroll(container, originalEnd);
+    container.dispatchEvent(new WheelEvent("wheel", { deltaY: -80 }));
+    nativeScroll(container, originalEnd - 80);
+    expectReader(policy, true);
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    vi.advanceTimersByTime(150);
+    renderRows(rows);
+    await vi.advanceTimersByTimeAsync(0);
+    const row = measuredRowBeforeReader(container);
+    Object.defineProperty(row, "getBoundingClientRect", {
+      value: () => new DOMRect(0, -200, 800, 120),
+    });
+
+    // Neither movement has delivered its native scroll event yet. A shrink
+    // reaches the end from above; only the reader's positive return grants follow.
+    if (movement === "native return") {
+      container.scrollTop = originalEnd;
+    } else {
+      nativeHeight -= 120;
+      container.scrollTop = nativeHeight - 600;
+    }
+    Object.defineProperty(row, "offsetHeight", { configurable: true, value: 100 });
+    resize(row, 100);
+    expectReader(policy, movement === "resize clamp");
+    container.dispatchEvent(new Event("scroll"));
+    flushFrames();
+    expectReader(policy, movement === "resize clamp");
+    expect(transcript.scrollToEnd({ source: "auto" })).toBe(movement === "native return");
+  },
+);
 
 it.each([
   ["wheel", null, (): null => null, false],

@@ -66,6 +66,7 @@ export type ChatPageHost = ChatHost &
     resourceBasePath: string;
     chatAvatarUrl: string | null;
     senderAgentAvatars?: ReadonlyMap<string, string | null>;
+    cacheChatAvatarSource?: (agentId: string, source: string | null) => void;
     chatAvatarStatus: "none" | "local" | "remote" | "data" | null;
     chatAvatarReason: string | null;
     chatModelSwitchPromises: Record<string, Promise<boolean>>;
@@ -86,6 +87,7 @@ export type ChatPageHost = ChatHost &
     selectedChatSessionArchived: boolean;
     selectedChatSessionIncognito: boolean;
     agentsList: AgentsListResult | null;
+    readChatAgentsList: () => AgentsListResult | null;
     agentsSelectedId: string | null;
     pendingAbort: PendingChatAbort | null;
     pendingSessionMessageReloadSessionKey: string | null;

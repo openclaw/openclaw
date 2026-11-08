@@ -11,6 +11,8 @@ export const StateLeaseLossSchema = z.discriminatedUnion("reason", [
   }),
   z.object({ reason: z.literal("replaced"), owner: z.literal("[redacted]") }),
   z.object({ reason: z.literal("missing") }),
+  z.object({ reason: z.literal("storage-failed") }),
+  z.object({ reason: z.literal("admission-failed") }),
 ]);
 
 export type StateLeaseLoss = z.infer<typeof StateLeaseLossSchema>;
@@ -21,5 +23,5 @@ export function formatStateLeaseLoss(loss: StateLeaseLoss): string {
   }
   return loss.reason === "replaced"
     ? "lease loss: replaced; owner=[redacted]"
-    : "lease loss: missing";
+    : `lease loss: ${loss.reason}`;
 }

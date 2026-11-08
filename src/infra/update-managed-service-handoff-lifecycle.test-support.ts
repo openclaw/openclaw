@@ -29,7 +29,17 @@ export type ManagedServiceManagerBoundaryOptions = {
   rollbackRestoration?: boolean;
   cancelAfterPark?: boolean;
   parentExitTimeoutMs?: number;
-  launchdFault?: "wrong-parent" | "missing-restored-pid" | "dead-restored-pid";
+  launchdOutputPadding?: number;
+  launchdFault?:
+    | "wrong-parent"
+    | "nested-parent"
+    | "foreign-job"
+    | "duplicate-pid"
+    | "missing-restored-pid"
+    | "nested-restored-pid"
+    | "foreign-restored-job"
+    | "duplicate-restored-pid"
+    | "dead-restored-pid";
   launchdTeardown?: {
     bootoutDelayMs?: number;
     clockEachCommandMs?: number;
@@ -75,6 +85,7 @@ export type ManagedServiceCommandTiming = {
 };
 
 export type ManagedServiceManagerBoundaryResult = {
+  publication?: { installedVersion: string; launcher: string; publicationPending: boolean };
   run?: UpdateRunRecord;
   commands: string[];
   parentSignal: NodeJS.Signals | null;
@@ -333,10 +344,15 @@ if (${JSON.stringify(kind)} === "systemd") {
     }
     const fault = ${JSON.stringify(options?.launchdFault)};
     const restoredPid = fault === "dead-restored-pid" ? 2147483647 : ${process.pid};
-    const currentPid = fault === "wrong-parent" ? ${process.pid} : ${parentPid};
-    const pidLine = state.restored && fault === "missing-restored-pid"
+    const currentPid = fault === "wrong-parent" || fault === "nested-parent" ? ${process.pid} : ${parentPid};
+    const pidLine = state.restored && ["missing-restored-pid", "nested-restored-pid"].includes(fault)
       ? "" : "\\tpid = " + (state.restored ? restoredPid : currentPid) + "\\n";
-    process.stdout.write(args[1] + " = {\\n\\tstate = running\\n" + pidLine + "}\\n");
+    const nestedPid = !state.parked && fault === "nested-parent" ? ${parentPid}
+      : state.restored && fault === "nested-restored-pid" ? ${process.pid} : undefined;
+    const nested = nestedPid ? "\\tresource coalition = {\\n\\t\\tpid = " + nestedPid + "\\n\\t}\\n" : "";
+    const foreign = (!state.parked && fault === "foreign-job") || (state.restored && fault === "foreign-restored-job");
+    const duplicate = (!state.parked && fault === "duplicate-pid") || (state.restored && fault === "duplicate-restored-pid");
+    process.stdout.write((foreign ? "gui/501/ai.openclaw.other" : args[1]) + " = {\\n\\tstate = running\\n" + "\\tenvironment = {\\n\\t\\tPADDING = " + "x".repeat(${options?.launchdOutputPadding ?? 0}) + "\\n\\t}\\n" + nested + pidLine + (duplicate ? pidLine : "") + "}\\n");
   }
 }
   `,
@@ -551,8 +567,13 @@ export function createManagedServiceLaunchdClockPreload(params: {
     "const actualSpawn = children.spawn;",
     "const actualSetTimeout = global.setTimeout;",
     "const startedAt = Date.now();",
+    // The recovery budget is elapsed (monotonic) time, so simulated command work
+    // must also advance performance.now(); a wall-clock-only step would leave the
+    // recovery budget unconsumed. Wall-clock steps stay separately injectable.
+    "const performanceStartedAt = performance.now();",
     "let elapsed = 0;",
     "Date.now = () => startedAt + elapsed;",
+    "performance.now = () => performanceStartedAt + elapsed;",
     "global.setTimeout = (callback, delay, ...args) => {",
     "  if (delay === 500) {",
     "    elapsed += delay;",

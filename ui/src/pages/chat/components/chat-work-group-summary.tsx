@@ -10,7 +10,7 @@ import {
   resolveToolCardOutcome,
 } from "../../../lib/chat/tool-cards.ts";
 import { resolveToolDisplayIdentity } from "../../../lib/chat/tool-display-identity.ts";
-import { formatDurationLong } from "../../../lib/format-duration.ts";
+import { formatDurationCompact } from "../../../lib/format-duration.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { BrowserTabPreviews } from "./chat-browser-tab-previews.tsx";
 import { syncToolDisclosureOverflow } from "./chat-tool-card-chrome.tsx";
@@ -31,7 +31,7 @@ type WorkGroupSummaryOptions = {
 };
 
 function prepareWorkGroupSummary(item: WorkGroupSummaryItem) {
-  const duration = formatDurationLong(item.durationMs);
+  const duration = formatDurationCompact(item.durationMs);
   const entries = item.groups.flatMap((group) =>
     group.messages.map(({ message }) => ({
       cards: extractToolCardsCached(message),

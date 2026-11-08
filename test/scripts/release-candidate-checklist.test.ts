@@ -40,6 +40,7 @@ import { validateReleaseButtonInputs } from "../../scripts/openclaw-release-read
 import {
   PluginSdkApiAcknowledgementError,
   createPluginSdkApiReleaseEvidence,
+  findPluginSdkApiReleaseNoteOmissions,
   validatePluginSdkApiReleaseEvidence,
 } from "../../scripts/plugin-sdk-api-release-evidence.mjs";
 import {
@@ -272,6 +273,101 @@ describe("release candidate checklist", () => {
     }
   });
 
+  it("isolates depth-one Plugin SDK predecessor fetches from the release checkout", () => {
+    const fixtureRoot = tempDirs.make("candidate-sdk-review-history-");
+    const sourceRoot = join(fixtureRoot, "source");
+    const originRoot = join(fixtureRoot, "origin.git");
+    const toolingRoot = join(fixtureRoot, "tooling");
+    const git = (root: string, ...args: string[]) =>
+      run("git", args, { cwd: root, capture: true }).trim();
+    mkdirSync(sourceRoot);
+    git(sourceRoot, "init", "--initial-branch=main");
+    git(sourceRoot, "config", "user.name", "Release Fixture");
+    git(sourceRoot, "config", "user.email", "release-fixture@example.com");
+    git(sourceRoot, "config", "commit.gpgsign", "false");
+    writeJson(join(sourceRoot, "package.json"), { version: "2026.10.21-beta.1" });
+    writeFileSync(join(sourceRoot, "history.txt"), "old\n");
+    git(sourceRoot, "add", ".");
+    git(sourceRoot, "commit", "-m", "test: add old release");
+    git(sourceRoot, "-c", "tag.gpgSign=false", "tag", "v2026.10.19");
+    writeFileSync(join(sourceRoot, "history.txt"), "predecessor\n");
+    git(sourceRoot, "commit", "-am", "test: add predecessor release");
+    git(sourceRoot, "-c", "tag.gpgSign=false", "tag", "v2026.10.20-beta.1");
+    writeFileSync(join(sourceRoot, "history.txt"), "candidate\n");
+    git(sourceRoot, "commit", "-am", "test: add candidate release");
+    run("git", ["clone", "--bare", sourceRoot, originRoot], { capture: true });
+    git(originRoot, "config", "uploadpack.allowFilter", "true");
+    run("git", ["clone", "--depth=1", "--no-tags", pathToFileURL(originRoot).href, toolingRoot], {
+      capture: true,
+    });
+    const targetSha = git(toolingRoot, "rev-parse", "HEAD");
+    const outputDir = ".artifacts/release-candidate/fixture";
+    const paths = resolveEarlyPluginSdkApiReviewPaths({ outputDir, targetRoot: toolingRoot });
+    const runCommand = run;
+    let isolatedRoot = "";
+    const reviewOwner = checklistSource.slice(
+      checklistSource.indexOf("function runEarlyPluginSdkApiReview("),
+      checklistSource.indexOf("export function validateParallelsRegistryPackageArtifact("),
+    );
+    const review = runInNewContext(
+      stripNodeTypeScriptTypes(`${reviewOwner}\nrunEarlyPluginSdkApiReview;`),
+      {
+        TOOLING_ROOT: toolingRoot,
+        console: { log: () => {} },
+        isRecord,
+        join,
+        mkdirSync,
+        mkdtempSync,
+        readFileSync,
+        readJson: (file: string) => JSON.parse(readFileSync(file, "utf8")),
+        requireString: (value: unknown) => String(value),
+        resolveEarlyPluginSdkApiBases,
+        resolveEarlyPluginSdkApiReviewPaths,
+        rmSync,
+        tmpdir,
+        run: (command: string, args: string[], options?: { cwd?: string }) => {
+          if (command === "npm") {
+            return JSON.stringify({ beta: "2026.10.20-beta.1" });
+          }
+          if (command === "node") {
+            isolatedRoot = String(options?.cwd);
+            expect(git(isolatedRoot, "rev-parse", "--is-shallow-repository")).toBe("true");
+            expect(git(isolatedRoot, "rev-list", "--count", "--all")).toBe("2");
+            expect(git(isolatedRoot, "rev-parse", "v2026.10.20-beta.1^{commit}")).toBeTruthy();
+            expect(() => git(isolatedRoot, "rev-parse", "v2026.10.19^{commit}")).toThrow();
+            expect(git(isolatedRoot, "config", "--get", "remote.origin.promisor")).toBe("true");
+            mkdirSync(paths.reviewDir, { recursive: true });
+            writeJson(paths.evidencePath, {});
+            writeFileSync(paths.reportPath, "fixture review\n");
+            writeJson(paths.diffPath, {});
+            return "";
+          }
+          return runCommand(command, args, { ...options, capture: true });
+        },
+        validatePluginSdkApiReleaseEvidence: () => ({ status: "passed" }),
+      },
+    ) as (params: {
+      npmDistTag: string;
+      outputDir: string;
+      targetRoot: string;
+      targetSha: string;
+      toolingSha: string;
+    }) => unknown;
+
+    expect(git(toolingRoot, "rev-parse", "--is-shallow-repository")).toBe("true");
+    review({
+      npmDistTag: "beta",
+      outputDir,
+      targetRoot: toolingRoot,
+      targetSha,
+      toolingSha: targetSha,
+    });
+    expect(git(toolingRoot, "rev-parse", "--is-shallow-repository")).toBe("true");
+    expect(() =>
+      git(toolingRoot, "show-ref", "--verify", "refs/tags/v2026.10.20-beta.1"),
+    ).toThrow();
+    expect(existsSync(isolatedRoot)).toBe(false);
+  });
   it.each<[string[], string]>([
     [
       ["--workflow-sha", "b".repeat(40), "--publish-workflow-ref", publishWorkflowRef],
@@ -284,7 +380,8 @@ describe("release candidate checklist", () => {
       ["--run-parallels", "--skip-parallels"],
       "--run-parallels and --skip-parallels cannot be combined",
     ],
-    [["--skip-dispatch"], "--skip-dispatch requires --full-release-run"],
+    [["--skip-dispatch"], "--skip-dispatch requires --full-release-validation-run-id"],
+    [["--full-release-validation-run-id", "111", "--full-release-run", "222"], "do not combine"],
     [["--workflow-ref", "release/2026.5.14"], "--workflow-ref must be main"],
     [["--tag", "v2026.7.1-alpha.3"], "Alpha releases are retired;"],
     [
@@ -305,6 +402,25 @@ describe("release candidate checklist", () => {
     expect(() =>
       parseArgs(flags.includes("--tag") ? flags : ["--tag", "v2026.5.14-beta.3", ...flags]),
     ).toThrow(message);
+  });
+
+  it("keeps help short-circuiting before deprecated alias conflict checks", () => {
+    const result = spawnSync(
+      process.execPath,
+      [
+        "--import",
+        "./scripts/tsx.mjs",
+        "scripts/release-candidate-checklist.mts",
+        "--help",
+        "--full-release-validation-run-id",
+        "111",
+        "--full-release-run",
+        "222",
+      ],
+      { encoding: "utf8" },
+    );
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toContain("Usage: pnpm release:candidate");
   });
 
   it("requires an explicit prepared route and preserves historical normal state semantics", () => {
@@ -380,6 +496,8 @@ describe("release candidate checklist", () => {
     changelogFailure?: boolean;
     mismatchedRun?: boolean;
     defaultOutput?: boolean;
+    unpinnedTooling?: boolean;
+    tagPublished?: boolean;
   };
 
   it.each<QualificationCase>([
@@ -390,7 +508,8 @@ describe("release candidate checklist", () => {
     { launch: "npm-only", generatedFailure: true },
     { launch: "npm-only", changelogFailure: true },
     { mismatchedRun: true },
-    { defaultOutput: true },
+    { defaultOutput: true, tagPublished: true },
+    { unpinnedTooling: true },
     { workflowSha: "b".repeat(40), savedToolingTag: "release-publish/bbbbbbbbbbbb-100" },
     {
       workflowSha: "b".repeat(40),
@@ -462,6 +581,8 @@ describe("release candidate checklist", () => {
       changelogFailure,
       mismatchedRun,
       defaultOutput,
+      unpinnedTooling,
+      tagPublished = false,
     }) => {
       const { root: targetRoot, git } = candidateGitFixture({
         "package.json": JSON.stringify({ version: tag.slice(1) }),
@@ -483,9 +604,11 @@ describe("release candidate checklist", () => {
         "skip-parallels": true,
         "skip-telegram": true,
         "skip-local-generated-check": true,
-        ...(workflowSha
-          ? { "workflow-sha": workflowSha }
-          : { "publish-workflow-ref": publishWorkflowRef }),
+        ...(unpinnedTooling
+          ? {}
+          : workflowSha
+            ? { "workflow-sha": workflowSha }
+            : { "publish-workflow-ref": publishWorkflowRef }),
         ...(sdkAcknowledgement ? { "plugin-sdk-api-acknowledgement": sdkAcknowledgement } : {}),
         "output-dir": `${targetRoot}/evidence 'quoted' $(literal)`,
       });
@@ -591,10 +714,11 @@ describe("release candidate checklist", () => {
       const dispatches: string[][] = [];
       const completion = runInNewContext(
         stripNodeTypeScriptTypes(
-          `${checklistFunctions("checkCandidateAndroidVersion", "publicationSelectionForChecklist", "canUpdateReleaseCandidateState", "savedPublishWorkflowRef", "dispatchFullReleaseUsingHelper", "shellQuote", "formatPluginSdkApiAcknowledgementFailure", "main")}\nmain();`,
+          `${checklistFunctions("checkCandidateAndroidVersion", "publicationSelectionForChecklist", "canUpdateReleaseCandidateState", "savedPublishWorkflowRef", "dispatchFullReleaseUsingHelper", "shellQuote", "formatRequiredCandidateFlagsFailure", "pluginSdkApiAcknowledgementFlag", "main")}\nmain();`,
         ),
         {
           ...coordinatorContext,
+          assertReleaseCandidateTag: () => tagPublished,
           process: {
             argv: ["node", "scripts/release-candidate-checklist.mts", ...candidateArgv],
             cwd: () => targetRoot,
@@ -662,12 +786,20 @@ describe("release candidate checklist", () => {
               throw new Error("candidate changelog rejected");
             }
             return {
+              releaseNotesText: "Fixture notes.",
               releaseNotesCheck: { status: "passed" },
               releaseNotesProvenance: { status: "passed", shippedBaselines: [] },
             };
           },
           runLocalGeneratedCheckIfNeeded: generatedChecks,
-          runEarlyPluginSdkApiReview: () => {},
+          runEarlyPluginSdkApiReview: () =>
+            unpinnedTooling
+              ? {
+                  flag: "--plugin-sdk-api-acknowledgement",
+                  value: "f4b495f3",
+                  reason: "Plugin SDK API changes require acknowledgement digest f4b495f3",
+                }
+              : undefined,
           releaseBranchForTag,
           readFileSync: (file: string) =>
             file.endsWith("plugin-sdk-api-release-diff.md")
@@ -718,6 +850,7 @@ describe("release candidate checklist", () => {
           isDeepStrictEqual,
           sha256: () => "fixture-digest",
           validatePreflightManifest: () => {},
+          findPluginSdkApiReleaseNoteOmissions,
           validatePluginSdkApiReleaseEvidence,
           PluginSdkApiAcknowledgementError,
           stripLeadingPackageManagerSeparator,
@@ -748,6 +881,30 @@ describe("release candidate checklist", () => {
           writeFileSync,
         },
       );
+      const decodeRerunCommand = (message: string) => {
+        const decoded = execFileSync(
+          "bash",
+          ["-c", `pnpm() { printf '%s\\0' "$@"; }\n${message.split("\n").at(-1)}`],
+          { encoding: "utf8", timeout: 10_000 },
+        )
+          .split("\0")
+          .filter(Boolean);
+        expect(decoded.slice(0, 2)).toEqual(["release:candidate", "--"]);
+        return parseArgs(decoded.slice(2));
+      };
+      if (unpinnedTooling) {
+        // Every missing flag is reported once, before waiting on validation.
+        const error = await completion.catch((cause: Error) => cause);
+        expect(error.message).toContain("acknowledgement digest f4b495f3");
+        expect(decodeRerunCommand(error.message)).toEqual({
+          ...parseArgs(candidateArgv),
+          workflowSha: toolingSha,
+          pluginSdkApiAcknowledgement: "f4b495f3",
+        });
+        expect(waitedRuns).toEqual([]);
+        expect(preflight).not.toHaveBeenCalled();
+        return;
+      }
       if (sdkAcknowledgement !== undefined && sdkAcknowledgement !== "f4b495f3") {
         const error = await completion.catch((cause: Error) => cause);
         expect(error.message).toContain(
@@ -761,16 +918,7 @@ describe("release candidate checklist", () => {
             "Review the Plugin SDK API diff artifact before rerunning.",
           );
         }
-        const command = error.message.split("\n").at(-1);
-        const decoded = execFileSync(
-          "bash",
-          ["-c", `pnpm() { printf '%s\\0' "$@"; }\n${command}`],
-          { encoding: "utf8", timeout: 10_000 },
-        )
-          .split("\0")
-          .filter(Boolean);
-        expect(decoded.slice(0, 2)).toEqual(["release:candidate", "--"]);
-        expect(parseArgs(decoded.slice(2))).toEqual({
+        expect(decodeRerunCommand(error.message)).toEqual({
           ...parseArgs(candidateArgv),
           pluginSdkApiAcknowledgement: "f4b495f3",
         });
@@ -879,6 +1027,8 @@ describe("release candidate checklist", () => {
         ).toBeUndefined();
       }
       expect(waitedRuns).toEqual(["111", "222"]);
+      // A pushed tag is read from GitHub instead of reported as still planned.
+      expect(preflight.mock.calls[0]?.[1]).toMatchObject({ allowPlannedTag: !tagPublished });
       expect(
         readFileSync(join(options.outputDir, "release-candidate-evidence.md"), "utf8"),
       ).toContain(tag);
@@ -1187,15 +1337,15 @@ describe("release candidate checklist", () => {
     expect(parseArgs(flags.split(" "))).toMatchObject(expected);
   });
 
-  it("accepts absent and exact lightweight or annotated tags, rejecting mismatches and lookup errors", () => {
+  it("reports absent and published remote tags, rejecting mismatches and lookup errors", () => {
     const { root, git } = candidateGitFixture({ "package.json": "{}" });
     git("remote", "add", "origin", root);
     const targetSha = git("rev-parse", "HEAD");
-    expect(() => assertReleaseCandidateTag("v2026.7.1-beta.4", targetSha, root)).not.toThrow();
+    expect(assertReleaseCandidateTag("v2026.7.1-beta.4", targetSha, root)).toBe(false);
     git("tag", "v2026.7.1-beta.4");
     git("-c", "tag.gpgSign=false", "tag", "-a", "v2026.7.1-beta.5", "-m", "candidate");
     for (const tag of ["v2026.7.1-beta.4", "v2026.7.1-beta.5"]) {
-      expect(() => assertReleaseCandidateTag(tag, targetSha, root)).not.toThrow();
+      expect(assertReleaseCandidateTag(tag, targetSha, root)).toBe(true);
       expect(() => assertReleaseCandidateTag(tag, "f".repeat(40), root)).toThrow("expected");
     }
     git("remote", "set-url", "origin", join(root, "missing-origin"));
@@ -1990,7 +2140,7 @@ describe("release candidate checklist", () => {
         "latest",
         "--publish-workflow-ref",
         preparedWorkflowRef,
-        "--full-release-run",
+        "--full-release-validation-run-id",
         "111",
         "--npm-preflight-run",
         "222",

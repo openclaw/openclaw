@@ -7,6 +7,8 @@ import { STORAGE_FIELD_HELP } from "./zod-schema.storage.js";
 import { TELEMETRY_FIELD_HELP } from "./zod-schema.telemetry.js";
 
 export const CORE_FIELD_HELP: Record<string, string> = {
+  repositoryBranchPrefix:
+    "Prefix for new remote repository session branches. Defaults to openclaw; branches use <prefix>/<workspace GUID>. Existing branches are unchanged.",
   worktreeRoot:
     "Global directory for new managed worktrees. Use an absolute path or ~ for your home directory; defaults to <state-dir>/worktrees. Existing worktrees keep their recorded paths when this changes.",
   worktreeAcceleration:
@@ -33,6 +35,14 @@ export const CORE_FIELD_HELP: Record<string, string> = {
     "Opt-in traffic allowlist for requests and CONNECT tunnels. When present, destinations must appear in this list, a per-secret host binding, or bypassHosts. An empty list permits only bound or bypassed hosts. Restart the Gateway after changing it.",
   "secrets.egressProxy.bypassHosts":
     "Exact hostnames that use authenticated blind CONNECT tunnels for certificate-pinned clients. Sentinels remain ciphertext and will fail vendor authentication instead of exposing plaintext.",
+  "security.audit.suppressions":
+    "Accepted security audit findings to omit from the active summary and findings list. Matching findings remain available under suppressedFindings in JSON output.",
+  "security.installPolicy.enabled":
+    "Enable a trusted local policy command for skill and plugin installs and updates. When enabled without a configured command, supported install targets are blocked.",
+  "security.installPolicy.targets":
+    'Apply the install policy to "skill", "plugin", or both. Omit this list to cover every supported target.',
+  "security.installPolicy.exec":
+    'Trusted local command that returns an "allow", "warn", or "block" install decision. Set an absolute executable path; OpenClaw runs it without a shell.',
   wizard:
     "User-owned setup preferences. Machine-owned wizard history and acknowledgement state live in the shared state database.",
   "wizard.accessMode":
@@ -80,6 +90,8 @@ export const CORE_FIELD_HELP: Record<string, string> = {
     "Checks for updates when the Gateway starts, including read-only extended-stable hints (default: true). Set false to disable automatic Gateway and headless-node update checks, applies, and anonymous update pings.",
   "update.auto.enabled":
     "Enable background auto-update for stable and beta package installs; extended-stable never auto-applies (default: false).",
+  "update.auto.schedule":
+    "Optional cron expression for Gateway automatic-update campaign starts, in the Gateway host timezone. Omit for the existing hourly cadence. Rollout delays and idle countdowns still apply; missed windows are skipped.",
   telemetry:
     "Explicit consent for anonymous feature statistics attached to the daily update check. Feature statistics are disabled by default and never include messages, credentials, or identifiers.",
   ...TELEMETRY_FIELD_HELP,
@@ -107,6 +119,24 @@ export const CORE_FIELD_HELP: Record<string, string> = {
     "Client file and image upload policy for the Gateway and Control UI. Downloads and agent-generated media remain available.",
   "gateway.uploads.enabled":
     "Allows client file and image uploads (default: true). Set false to reject attachments, workspace/terminal uploads, avatar uploads, and archive imports at the Gateway, including direct API requests. Changes apply without restarting. This is not a sandbox or a restriction on channel media, agent tools, or operator shell access.",
+  "gateway.openclawId":
+    "Experimental OpenClaw ID remote access (Labs). When enabled, the Gateway supervises a tunnel child that accepts iroh connections from admitted devices and proxies them to this Gateway. Off by default; while off the Gateway starts no child process, opens no tunnel sockets, and contacts no OpenClaw ID, Discovery or relay service.",
+  "gateway.openclawId.enabled":
+    "Turns on experimental OpenClaw ID remote access (default: false). Changes apply without restarting the Gateway. Remote access also needs relayUrl; linking a claw additionally needs issuerUrl, discoveryUrl and loaderDomain.",
+  "gateway.openclawId.issuerUrl":
+    "OpenClaw ID issuer used to sign in for identity only while linking a claw. It is never trusted for membership, device approval or which server a client dials.",
+  "gateway.openclawId.clientId":
+    "Public OAuth client (authorization code with PKCE) the Control UI uses for Sign in with OpenClaw ID in its account menu. Its redirect URI is <Control UI origin>/openclaw-id/callback; sign-in works only from the Control UI on this machine.",
+  "gateway.openclawId.discoveryUrl":
+    "Discovery service that mirrors the claw descriptor and membership snapshot and relays mailbox messages. It is untrusted: every statement it returns is verified against the claw's pinned owner root.",
+  "gateway.openclawId.relayUrl":
+    "The only iroh relay in the tunnel endpoint's relay map (no public n0 relays, DNS or pkarr). Browsers reach the claw only through this relay.",
+  "gateway.openclawId.loaderDomain":
+    "Bare DNS domain of the OpenClaw ID loader; a linked claw is reachable at https://<name>-<account tag>.<loaderDomain> and its server binding is signed for that hostname.",
+  "gateway.openclawId.ownerDeviceInactivityDays":
+    "Days an owner device may go without reaching this claw before the claw removes it from its allowlist (default: 90). Devices it approved stay.",
+  "gateway.openclawId.memberDeviceInactivityDays":
+    "Days a member's browser may go without reaching this claw before the claw removes it (default: 30). The member stays listed.",
   "gateway.cliAgents":
     "Control UI discovery for external CLI session engines exposed by the Gateway session catalog. Enabled by default; disable to prevent starting those engines from the new-session model picker.",
   "gateway.cliAgents.enabled":
@@ -119,6 +149,8 @@ export const CORE_FIELD_HELP: Record<string, string> = {
     "Shell executable the operator terminal launches. Leave unset to use the host login shell ($SHELL on Unix, %ComSpec% on Windows), or pin an explicit interpreter for a consistent operator environment.",
   "gateway.terminal.detachedSessionTimeoutSeconds":
     "Seconds a terminal session survives after its connection drops (laptop sleep, page reload), staying reattachable via terminal.attach with its recent output replayed. Set 0 to kill sessions the moment the connection drops. Default: 300 (5 minutes). Detached sessions keep running their commands, so shorten this on shared or exposed hosts.",
+  "gateway.repositoryIntegration":
+    "Plugin ID required to admit worker repository source access, including native, GitHub App, and managed OAuth or PAT credentials. Missing, disabled or unloaded owners deny admission. Omit to use native repository behavior; enabling a plugin alone does not select it.",
   "gateway.auth":
     "Authentication policy for gateway HTTP/WebSocket access including mode, credentials, trusted-proxy behavior, and rate limiting. Keep auth enabled for every non-loopback deployment.",
   "gateway.auth.mode":
@@ -162,7 +194,7 @@ export const CORE_FIELD_HELP: Record<string, string> = {
   "gateway.roles.definitions.*.sessions":
     "Session-sharing permissions granted to this role for sessions created by other authenticated people; a person's own sessions remain owner-accessible.",
   "gateway.roles.definitions.*.sessions.others":
-    'Access to other people\'s sessions: "none" hides them, "view" allows reading, "suggest" permits the suggestion flow, and "write" permits participation. Explicit session membership can grant additional access.',
+    'Access to other people\'s sessions: "none" hides them even with explicit session membership, "view" allows reading, "suggest" permits the suggestion flow, and "write" permits participation without membership. Explicit session membership can raise "view" or "suggest" access for a specific session. Session creators and connections holding operator.admin retain their session access.',
   "gateway.roles.definitions.*.sandbox":
     'Execution isolation for newly created sessions: "inherit" (default) uses the agent policy; "required" permanently requires a sandbox, even when the agent sandbox mode is off, and blocks execution if the backend is unavailable.',
   "gateway.roles.definitions.*.agents":
@@ -177,6 +209,8 @@ export const CORE_FIELD_HELP: Record<string, string> = {
     'Model references, source-agent aliases, or trailing prefix wildcards excluded from this role. A pattern such as "provider/family-*" excludes future members of that family too. Exclusions match resolved model identities and take precedence over allowed and source-agent models.',
   "gateway.roles.definitions.*.scopes":
     "Closed list of operator scopes granted as this role's maximum connection authority. Requested, paired, identity-granted, and upgraded scopes are intersected with this list.",
+  "gateway.roles.definitions.*.workerProfiles":
+    "Cloud worker profiles this role may explicitly dispatch its own sessions to. Omitted or empty denies cloud dispatch; administrators retain access. Setup and moves to cloud profiles remain administrator-only.",
   "gateway.roles.definitions.*.accessPolicyPlugin":
     "Optional exact plugin ID whose Gateway access policy must authorize this role. Access is denied when the plugin is missing, disabled, fails to load, or supplies no current authority. Unavailable plugin IDs remain valid configuration so independent staff roles and the Gateway owner can repair access. Omitting this field adds no plugin dependency.",
   "gateway.trustedProxies":
@@ -355,6 +389,8 @@ export const CORE_FIELD_HELP: Record<string, string> = {
     "Optional per-agent default thinking level. Overrides agents.defaults.thinkingDefault for this agent when no per-message or session override is set.",
   "agents.entries.*.reasoningDefault":
     "Optional per-agent default reasoning visibility (on|off|stream). Applies when no per-message or session reasoning override is set.",
+  "agents.entries.*.newSessionPermissionMode":
+    "Permission mode saved on new attended, profiled operator sessions when no explicit mode is supplied. Does not change existing, forked, delegated, or autonomous sessions. Full still requires operator.admin.",
   "agents.entries.*.fastModeDefault":
     'Optional per-agent default for fast mode ("auto", "ultrafast", true, or false). Applies when no per-message or session fast-mode override is set.',
   "agents.defaults.fastModeDefault":

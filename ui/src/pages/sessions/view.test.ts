@@ -6,6 +6,7 @@ import { createSessionGoalFixture } from "../../../../src/gateway/session-goal.t
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { createOverlay, type Overlay } from "../../components/overlay-lifecycle.ts";
 import { registerModalSurface } from "../../components/overlay-registry.ts";
+import { flush } from "../../test-helpers/solid-settle.ts";
 import {
   disposeSessionViews,
   renderSessionsView,
@@ -222,7 +223,7 @@ describe("sessions view", () => {
       "Older",
       "older",
     ]);
-    expect(queryAll("tbody > tr")).toHaveLength(9);
+    expect(queryAll("tbody > tr:not([aria-hidden]):not(.session-window-spacer)")).toHaveLength(9);
   });
 
   it("retains the focused sort button across direction changes", async () => {
@@ -662,12 +663,17 @@ it("preserves the saved ultrafast override until explicitly changed", async () =
 });
 
 const render = (props: Partial<ReturnType<typeof buildProps>>) => renderView([], props);
-const unavailable = "Connect to the Gateway to search transcripts.";
+const unavailable = "Reconnect to search messages.";
 const connectionStatus = () => container.querySelector('.settings-section__desc [role="status"]');
 const transcriptTrigger = () =>
   container.querySelector<HTMLButtonElement>(".sessions-transcript-search__trigger");
-const filterInput = () =>
-  container.querySelector<HTMLInputElement>(".sessions-filter-popover__search input")!;
+const filterInput = () => {
+  if (!container.querySelector(".sessions-filter-popover__search input")) {
+    container.querySelector<HTMLButtonElement>(".sessions-filter-popover__search button")?.click();
+    flush();
+  }
+  return container.querySelector<HTMLInputElement>(".sessions-filter-popover__search input")!;
+};
 const escapeKey = (options: KeyboardEventInit = {}) =>
   new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true, ...options });
 
@@ -706,7 +712,7 @@ describe("sessions transcript search view", () => {
       await Promise.resolve();
 
       const rosterFilter = container.querySelector<HTMLInputElement>(
-        '.sessions-filter-popover__search input[type="text"]',
+        ".sessions-filter-popover__search input",
       );
       const trigger = transcriptTrigger();
       expect(rosterFilter?.value).toBe("agent label");
@@ -732,7 +738,7 @@ describe("sessions transcript search view", () => {
           .querySelector(".sessions-transcript-search__form")
           ?.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
       } else {
-        expect(trigger?.closest("openclaw-tooltip")).toBeNull();
+        expect(trigger?.closest("openclaw-tooltip")?.content).toBe(unavailable);
         render({ transcriptSearchAvailable: true });
         await Promise.resolve();
         expect(connectionStatus()).toBeNull();
@@ -821,5 +827,75 @@ describe("Sessions query clearing", () => {
       overlay?.removeAttribute("open");
       overlay?.remove();
     }
+  });
+});
+
+describe("sessions view at phone width", () => {
+  beforeEach(() => {
+    vi.spyOn(window, "matchMedia").mockImplementation(
+      (media) =>
+        ({
+          matches: media === "(max-width: 640px)",
+          media,
+          addEventListener: () => undefined,
+          removeEventListener: () => undefined,
+        }) as unknown as MediaQueryList,
+    );
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("renders phone row titles and full keys and searches from the toolbar", async () => {
+    const onSearchChange = vi.fn();
+    await renderSettled(
+      [
+        createRow("agent:main:alpha", { label: "Alpha", updatedAt: 1 }),
+        createRow("agent:main:beta", { label: "Beta", updatedAt: 1 }),
+      ],
+      { onSearchChange },
+    );
+    flush();
+
+    expectTexts(".session-list-cell__title", ["Alpha", "Beta"]);
+    expectTexts(".session-list-cell__key", ["agent:main:alpha", "agent:main:beta"]);
+    const search = getInput(".sessions-search input");
+    expect(search?.placeholder).toBe("Search sessions");
+    search!.value = "alp";
+    search!.dispatchEvent(new Event("input", { bubbles: true }));
+    expect(onSearchChange).toHaveBeenCalledWith("alp");
+  });
+
+  it("sorts from the filter and shows a changed sort on the trigger", async () => {
+    const onSortChange = vi.fn();
+    document.body.append(container);
+    const defaults = { onSortChange, searchQuery: "alp", includeGlobal: true, limit: "50" };
+    await renderSettled([createRow("agent:main:alpha", { updatedAt: Date.now() })], defaults);
+    flush();
+    const trigger = getButton(".sessions-filter-popover__trigger");
+    // The toolbar shows the search itself, so only a changed sort lights the trigger.
+    expect(trigger?.classList.contains("active")).toBe(false);
+
+    trigger?.click();
+    flush();
+    const choose = (select: HTMLSelectElement, value: string) => {
+      select.value = value;
+      select.dispatchEvent(new Event("change", { bubbles: true }));
+    };
+    const [, sort, direction] = queryAll<HTMLSelectElement>("#sessions-filter-popover select");
+    choose(sort!, "key");
+    expect(onSortChange).toHaveBeenLastCalledWith("key", "desc");
+    choose(direction!, "asc");
+    expect(onSortChange).toHaveBeenLastCalledWith("updated", "asc");
+    expect(text("#sessions-filter-popover .oc-sheet__title")).toBe("Filters");
+    expect(attr("#sessions-filter-popover .oc-sheet__close", "aria-label")).toBe("Close");
+
+    disposeSessionViews();
+    await renderSettled([createRow("agent:main:alpha", { updatedAt: Date.now() })], {
+      ...defaults,
+      sortDir: "asc",
+    });
+    flush();
+    expect(getButton(".sessions-filter-popover__trigger")?.classList.contains("active")).toBe(true);
   });
 });

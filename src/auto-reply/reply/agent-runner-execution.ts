@@ -316,6 +316,10 @@ async function executeAgentTurnInternalLoop(
       ) {
         params.mcpAppContextLease?.commit();
       }
+      if (info.phase === "before_agent_reply") {
+        // A dispatched hook can accept external work even when it declines the reply.
+        params.followupRun.run.internalEventExecution?.onStarted(runId);
+      }
       const isUserVisibleExecutionActivity =
         info.phase === "turn_accepted" ||
         info.phase === "process_spawned" ||
@@ -581,7 +585,7 @@ async function executeAgentTurnOutcome(
   // Keep committed facts outside cleanup so a restart cannot erase them.
   const compaction: AgentTurnCompaction = { count: 0, durable: [] };
   const completedCompaction = () =>
-    compaction.count > 0
+    compaction.count > 0 || compaction.durable.length > 0
       ? { compaction: { count: compaction.count, durable: [...compaction.durable] } }
       : {};
   let terminalOutcomeCommitted = false;

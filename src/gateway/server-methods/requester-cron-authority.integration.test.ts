@@ -277,7 +277,7 @@ async function createStoredJob(
 }
 
 describe("requester continuation persisted automation management", () => {
-  it("keeps recovery reads scoped and withholds a record when authority closes during its read", async ({
+  it("keeps scheduler notice reads scoped and withholds a record when authority closes during its read", async ({
     signal,
   }) => {
     const config: OpenClawConfig = { ...cfg, tools: { allow: [AUTOMATIONS_TOOL_NAME] } };
@@ -306,7 +306,7 @@ describe("requester continuation persisted automation management", () => {
           },
         },
       );
-    const own = await addOwnedJob(SESSION, "Recovery-visible record");
+    const own = await addOwnedJob(SESSION, "Owned automation record");
     const foreign = await addOwnedJob("agent:main:another-conversation", "Private foreign record");
     const responses = vi.fn<RespondFn>();
     const get = expectDefined(coreGatewayHandlers["cron.get"], "cron.get handler");
@@ -322,7 +322,7 @@ describe("requester continuation persisted automation management", () => {
           }),
       });
 
-    await inRun("recovery-inspection", undefined, async (_identity, admitted) => {
+    await inRun("automation-inspection", undefined, async (_identity, admitted) => {
       bindGatewayContextResolver(admitted, () => fixture.context);
       const entered = createDeferred();
       const release = createDeferred();
@@ -344,7 +344,8 @@ describe("requester continuation persisted automation management", () => {
           config,
           admitted,
           senderIsOwner: false,
-          forceRestartSafeTools: true,
+          trigger: "event",
+          inputProvenance: { kind: "internal_system", sourceTool: "cron" },
         });
         const inspect = (jobId: string) =>
           tools.invoke(AUTOMATIONS_TOOL_NAME, { action: "get", jobId });
@@ -507,8 +508,15 @@ describe("requester continuation persisted automation management", () => {
       ]);
       expect(await fixture.readRuntimeAuthority()).toEqual(fixture.runtimeAuthority);
     } else {
-      // An absent or wrong-method grant stops at the method-scope fence.
-      expect(error).toMatchObject({ message: "missing scope: operator.admin" });
+      // Write now passes the method fence, but cannot bypass job ownership or grant binding.
+      expect(error).toMatchObject({
+        code: "INVALID_REQUEST",
+        message: expect.stringContaining(
+          admin
+            ? "Automation admin grant is missing, expired, or already used."
+            : "Automation not found: " + fixture.before[0]!.id,
+        ),
+      });
       expect(await fixture.read()).toEqual(fixture.before);
     }
   });

@@ -1,11 +1,12 @@
-import { registerSessionOrganizationEnglish } from "../../i18n/locales/en-session-organization.ts";
+import { registerSessionMenuEnglish } from "../../i18n/locales/en-session-menu.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import type { SessionOwnerOption } from "../../lib/session-owner.ts";
 import { Icon } from "./icon.tsx";
+import { MenuHeading } from "./menu-heading.tsx";
 import type { MenuEntry, MenuItem } from "./menu.tsx";
 import { renderSessionOwnerAvatar, renderSessionOwnerChip } from "./session-presentation.tsx";
 
-registerSessionOrganizationEnglish();
+registerSessionMenuEnglish();
 
 export function SidebarMenuRadioItem(params: {
   value: string;
@@ -68,7 +69,7 @@ export function SidebarOwnerFilter(params: {
       content: (
         <>
           <div class="session-menu__separator" role="separator" />
-          <div class="sidebar-session-sort-menu__title">{t("sessionsView.owners")}</div>
+          <MenuHeading label={t("sessionsView.owners")} />
         </>
       ),
     },

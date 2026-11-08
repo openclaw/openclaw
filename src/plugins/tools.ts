@@ -87,7 +87,7 @@ function resolvePluginToolLoadState(params: {
   toolAllowlist?: string[];
   toolDenylist?: string[];
   allowGatewaySubagentBinding?: boolean;
-  hasAuthForProvider?: (providerId: string) => boolean;
+  hasAuthForProvider?: OpenClawPluginToolContext["hasAuthForProvider"];
   env?: NodeJS.ProcessEnv;
   preparedRuntime?: PreparedPluginToolRuntime;
 }) {
@@ -206,7 +206,7 @@ type PluginToolResolutionParams = {
   toolDenylist?: string[];
   suppressNameConflicts?: boolean;
   allowGatewaySubagentBinding?: boolean;
-  hasAuthForProvider?: (providerId: string) => boolean;
+  hasAuthForProvider?: OpenClawPluginToolContext["hasAuthForProvider"];
   env?: NodeJS.ProcessEnv;
   runtimeRegistry?: PluginRegistry;
   preparedRuntime?: PreparedPluginToolRuntime;
@@ -375,7 +375,7 @@ export type PluginToolRegistryAcquisition = {
 
 /** The serving owner retains this view before invoking factories or applying tool policy. */
 export async function acquireStandalonePluginToolRegistry(
-  params: Omit<PluginToolResolutionParams, "runtimeRegistry" | "preparedRuntime">,
+  params: Omit<PluginToolResolutionParams, "runtimeRegistry">,
 ): Promise<PluginToolRegistryAcquisition> {
   const loadState = resolvePluginToolLoadState(params);
   if (!loadState || loadState.onlyPluginIds.length === 0) {
@@ -393,7 +393,14 @@ export async function acquireStandalonePluginToolRegistry(
       }
       return resolvePluginToolsSynchronously(
         resolvePluginToolsFromRegistry(
-          { ...params, runtimeRegistry: acquisition.registry },
+          {
+            ...params,
+            preparedRuntime: {
+              loadContext: loadState.context,
+              metadataSnapshot: loadState.snapshot,
+              registry: acquisition.registry,
+            },
+          },
           loadState,
         ),
       );

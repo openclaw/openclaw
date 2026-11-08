@@ -5,7 +5,11 @@ import type { SessionGitHubPullRequestBinding } from "../config/sessions/types.j
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { createRetainedCache } from "../infra/retained-cache.js";
 import { registerOpenClawStateDatabaseLifecycleListener } from "../state/openclaw-state-db-cache.js";
-import type { ControlUiSessionPullRequest } from "./control-ui-contract.js";
+import type {
+  ControlUiSessionPullRequest,
+  ControlUiSessionPullRequests,
+  ControlUiSessionTaskPullRequest,
+} from "./control-ui-contract.js";
 import {
   createGitHubReadGroup,
   prepareSessionPullRequestGitHubRead,
@@ -22,6 +26,7 @@ type Entry = {
   expiresAt: number;
   startedAt: number;
   failed?: boolean;
+  signature?: string;
   promise?: Promise<ControlUiSessionPullRequest>;
   lastGood?: ControlUiSessionPullRequest;
 };
@@ -31,6 +36,57 @@ registerOpenClawStateDatabaseLifecycleListener((event) => {
     metadata.clear();
   }
 });
+
+function metadataKey(
+  target: Pick<ControlUiSessionPullRequest, "owner" | "repo" | "number">,
+  read: Pick<Read, "host" | "apiBaseUrl" | "cacheScope">,
+  bindingIdentity?: string,
+) {
+  return JSON.stringify([
+    read.host,
+    read.apiBaseUrl,
+    read.cacheScope,
+    target.owner.toLowerCase(),
+    target.repo.toLowerCase(),
+    target.number,
+    bindingIdentity,
+  ]);
+}
+
+/**
+ * Passive rows reuse state chips an active viewer already verified; they never start a lookup.
+ * One credential scope per host and state-chip fields only keep sidebar pushes small.
+ */
+export function withCachedPullRequestStates(
+  tasks: readonly ControlUiSessionTaskPullRequest[],
+  read: { target: { githubHost?: string }; assertCurrent: () => void },
+): ControlUiSessionTaskPullRequest[] {
+  const reads = new Map<string, Read | null>();
+  const readFor = (host: string) => {
+    if (!reads.has(host)) {
+      try {
+        const supported = host === "github.com" || host === read.target.githubHost;
+        reads.set(
+          host,
+          supported ? prepareSessionPullRequestGitHubRead(host, read.assertCurrent) : null,
+        );
+      } catch {
+        reads.set(host, null);
+      }
+    }
+    return reads.get(host);
+  };
+  return tasks.map((known) => {
+    const scope = readFor(new URL(known.url).hostname);
+    const entry = scope ? metadata.get(metadataKey(known, scope)) : undefined;
+    const cached = entry?.access.signal.aborted ? undefined : entry?.lastGood;
+    if (!cached) {
+      return known;
+    }
+    const { owner, repo, number, branch, title, url, state } = cached;
+    return { ...known, pullRequest: { owner, repo, number, branch, title, url, state } };
+  });
+}
 
 /** One GitHub metadata read per credential/repository/number, across task and branch views. */
 export async function readSessionPullRequestMetadata(
@@ -48,21 +104,10 @@ export async function readSessionPullRequestMetadata(
   } = {},
 ): Promise<ControlUiSessionPullRequest> {
   read.assertCurrent();
-  const key = JSON.stringify([
-    read.host,
-    read.apiBaseUrl,
-    read.cacheScope,
-    target.owner.toLowerCase(),
-    target.repo.toLowerCase(),
-    target.number,
-    options.bindingIdentity,
-  ]);
+  const key = metadataKey(target, read, options.bindingIdentity);
   let entry = metadata.get(key);
   const now = Date.now();
-  const matches =
-    !options.expected ||
-    !entry?.lastGood ||
-    pullRequestMetadataSignature(entry.lastGood) === options.expected;
+  const matches = !options.expected || entry?.signature === options.expected;
   const reusable =
     entry &&
     !entry.access.signal.aborted &&
@@ -70,8 +115,15 @@ export async function readSessionPullRequestMetadata(
     entry.expiresAt > now &&
     (entry.failed || matches) &&
     (entry.failed || !options.refresh || entry.startedAt + 10_000 > now);
-  if (!entry || entry.access.signal.aborted) {
-    entry = { access: createGitHubReadGroup(), expiresAt: 0, startedAt: 0 };
+  if (!entry || !reusable) {
+    // Pending metadata belongs to its prepared observation; older completions retain their own entry.
+    entry = {
+      access: createGitHubReadGroup(),
+      expiresAt: 0,
+      startedAt: 0,
+      signature: options.expected,
+      lastGood: entry?.access.signal.aborted ? undefined : entry?.lastGood,
+    };
   }
   const active = entry;
   const release = active.access.add(read.assertCurrent, options.signal);
@@ -88,6 +140,7 @@ export async function readSessionPullRequestMetadata(
       active.promise = load(transport).then(
         (result) => {
           active.lastGood = result;
+          active.signature = pullRequestMetadataSignature(result);
           return result;
         },
         (error: unknown) => {
@@ -122,10 +175,59 @@ export async function readSessionPullRequestMetadata(
   }
 }
 
-export function pullRequestMetadataSignature(
+function pullRequestMetadataSignature(
   pull: Pick<ControlUiSessionPullRequest, "state" | "title" | "headSha">,
 ) {
   return JSON.stringify([pull.state, pull.title, pull.headSha]);
+}
+
+/** Display enrichment retains matching prior details when quota ends after a proven list read. */
+export async function readSessionPullRequestDisplay(
+  pullRequests: readonly ControlUiSessionPullRequest[],
+  read: Read,
+  options: {
+    refresh: boolean;
+    previous?: readonly ControlUiSessionPullRequest[];
+    limit: number;
+  },
+): Promise<Pick<ControlUiSessionPullRequests, "pullRequests" | "rateLimited">> {
+  try {
+    return {
+      pullRequests: await Promise.all(
+        pullRequests.map((item) =>
+          readSessionPullRequestMetadata(
+            item,
+            read,
+            (transport) => finishPullRequest(item, item.branch, transport),
+            { refresh: options.refresh, expected: pullRequestMetadataSignature(item) },
+          ),
+        ),
+      ),
+      rateLimited: false,
+    };
+  } catch (error) {
+    read.assertCurrent();
+    if (!(error instanceof gitHubPublicApi.ControlUiGitHubError && error.statusCode === 429)) {
+      throw error;
+    }
+    const identity = (item: ControlUiSessionPullRequest) =>
+      `${item.owner}/${item.repo}#${item.number}`.toLowerCase();
+    const retained = new Map(options.previous?.map((item) => [identity(item), item]));
+    const fresh = pullRequests.map((item) => {
+      const prior = retained.get(identity(item));
+      retained.delete(identity(item));
+      return prior &&
+        item.state === prior.state &&
+        item.headSha === prior.headSha &&
+        (item.state === "open" || item.state === "draft")
+        ? { ...prior, ...item }
+        : item;
+    });
+    return {
+      pullRequests: [...fresh, ...retained.values()].slice(0, options.limit),
+      rateLimited: true,
+    };
+  }
 }
 
 function derivePullState(value: Record<string, unknown>): ControlUiSessionPullRequest["state"] {
@@ -174,7 +276,10 @@ export function parsePullListItem(value: unknown) {
   };
 }
 
-type PullListItem = NonNullable<ReturnType<typeof parsePullListItem>>;
+type PullRequestChipInput = Pick<
+  ControlUiSessionPullRequest,
+  "number" | "author" | "owner" | "repo" | "title" | "url" | "state" | "headSha"
+>;
 
 // Sub-fetch degradation: quota errors abort the whole refresh (so the caller
 // serves stale chips with the rate-limit flag); anything else just drops the
@@ -191,7 +296,7 @@ function rethrowRateLimit(error: unknown): undefined {
  * rate-limited path renders exactly this, so both callers share one shape.
  */
 export function stateOnlyPullRequestChip(
-  item: PullListItem,
+  item: PullRequestChipInput,
   branch: string,
 ): ControlUiSessionPullRequest {
   return {
@@ -210,7 +315,7 @@ export function stateOnlyPullRequestChip(
 }
 
 export async function finishPullRequest(
-  item: PullListItem,
+  item: PullRequestChipInput,
   branch: string,
   read: ReturnType<typeof prepareSessionPullRequestGitHubRead>,
   preparedDetails?: unknown,

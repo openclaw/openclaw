@@ -208,9 +208,36 @@ describe("Gateway dispatch run ownership", () => {
     },
   );
 
-  it.each([false, true])(
-    "publishes confirmed withdrawal after cleanup (late timeout: %s)",
-    async (late) => {
+  it("preserves an authentication failure after cleanup cancels its unconsumed input", async () => {
+    const { params } = createDispatch(true);
+    const failure = new Error('No credentials found for profile "synthetic:default".');
+    const withdrawal = vi.spyOn(transcript, "readWithdrawnUserTurnInputId");
+    withdrawal.mockReturnValue(undefined);
+    onTestFinished(() => withdrawal.mockRestore());
+    mocks.agentCommand.mockRejectedValueOnce(failure);
+    params.cleanupAbortController.mockImplementation(() => {
+      withdrawal.mockReturnValue("pending-input-1");
+    });
+
+    await dispatchAgentRunFromGateway(params);
+
+    const payload = { runId: params.runId, status: "error", summary: failure.message };
+    expect(params.io.emitFinal).toHaveBeenCalledWith(
+      [false, payload, expect.objectContaining({ message: failure.message, cause: failure })],
+      expect.objectContaining({ error: failure.message }),
+    );
+    expect(setGatewayDedupeEntries).toHaveBeenCalledWith(
+      expect.objectContaining({
+        entry: expect.objectContaining({ ok: false, payload }),
+      }),
+    );
+  });
+
+  it.each(["rpc", "timeout", "late-timeout"] as const)(
+    "publishes confirmed withdrawal after cleanup (%s)",
+    async (reason) => {
+      const late = reason === "late-timeout";
+      const stopReason = reason === "rpc" ? "rpc" : "timeout";
       const { params, entry } = createDispatch(true);
       const withdrawal = vi.spyOn(transcript, "readWithdrawnUserTurnInputId");
       withdrawal.mockReturnValue(undefined);
@@ -218,8 +245,8 @@ describe("Gateway dispatch run ownership", () => {
       const timeout = new Error("deadline elapsed");
       timeout.name = "TimeoutError";
       const abort = () => {
-        entry.adapter.abortStopReason = "timeout";
-        testRpcSourceController(entry).abort(timeout);
+        entry.adapter.abortStopReason = stopReason;
+        testRpcSourceController(entry).abort(stopReason === "rpc" ? "rpc" : timeout);
       };
       mocks.agentCommand.mockImplementation(async () => {
         if (!late) {
@@ -245,10 +272,12 @@ describe("Gateway dispatch run ownership", () => {
 
       const payload = expect.objectContaining({
         status: late ? "error" : "timeout",
-        stopReason: "timeout",
+        stopReason,
         reason: "input_withdrawn_before_turn",
         pendingInputId: "pending-input-1",
-        summary: expect.stringContaining("Raise --timeout and retry"),
+        summary: expect.stringContaining(
+          stopReason === "timeout" ? "Raise --timeout and retry" : "Resend it when ready",
+        ),
       });
       expect(params.io.emitFinal).toHaveBeenCalledWith(
         [!late, payload, late ? expect.objectContaining({ message: "startup failed" }) : undefined],

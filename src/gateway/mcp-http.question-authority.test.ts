@@ -38,10 +38,9 @@ vi.mock("../plugins/hook-runner-global.js", () => ({ getGlobalHookRunner: () => 
 vi.mock("../agents/node-exec-availability.js", () => ({
   loadNodeExecAvailability: async () => ({ cacheKey: "no-nodes", isAvailable: () => false }),
 }));
-vi.mock("../tts/tts-settings.js", () => ({
-  buildTtsSystemPromptHint: () => undefined,
-  resolveModelOverridePolicy: vi.fn(),
-  setTtsMachinePrefsPathResolver: vi.fn(),
+vi.mock("../tts/tts-settings.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../tts/tts-settings.js")>()),
+  buildTtsSystemPromptHintAsync: async () => undefined,
 }));
 
 const sessionKey = "agent:main:main";

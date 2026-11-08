@@ -58,6 +58,9 @@ describe("createWhatsAppLoginTool", () => {
 
   it("rejects credential persistence after the owning tool execution closes", async () => {
     const tool = createOwnerLoginTool();
+    const next = createOwnerLoginTool();
+    expect(next.parameters).toBe(tool.parameters);
+    expect(next.execute).not.toBe(tool.execute);
     const controller = new AbortController();
     let beforeCredentialPersistence: (() => Promise<void>) | undefined;
     startWebLoginWithQrMock.mockImplementationOnce(async (options) => {

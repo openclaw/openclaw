@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { expectBytesEqual } from "../../../test/helpers/file-snapshots.js";
 import {
   emptySqliteCounts,
   observeParentSqlite,
@@ -126,7 +127,7 @@ it.each([
     });
     expect(result.appliedSummaries).toEqual([]);
     expect.soft(readMetadata(sqlitePath)).toEqual(metadata);
-    expect(fs.readFileSync(sqlitePath)).toEqual(databaseBytes);
+    expectBytesEqual(fs.readFileSync(sqlitePath), databaseBytes, "preview database");
   },
 );
 

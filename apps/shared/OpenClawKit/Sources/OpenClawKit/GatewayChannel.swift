@@ -183,6 +183,21 @@ public actor GatewayChannelActor {
         return self.acceptedHTTPBearer?.token
     }
 
+    func dashboardAuthContext(
+        ifCurrentConnectionGeneration expectedGeneration: UInt64) -> GatewayChannelDashboardAuthContext?
+    {
+        guard let binding = self.authBinding(ifCurrentConnectionGeneration: expectedGeneration),
+              let options = self.connectOptions
+        else { return nil }
+        return GatewayChannelDashboardAuthContext(
+            binding: binding,
+            options: options,
+            encoder: self.encoder,
+            token: self.token,
+            password: self.password,
+            httpResourceBearer: self.httpResourceBearer(ifCurrentConnectionGeneration: expectedGeneration))
+    }
+
     nonisolated func retireSocketAdmission() {
         self.socketAdmission.withLock { $0 = false }
     }
@@ -657,6 +672,21 @@ public actor GatewayChannelActor {
                     gatewayID: options.deviceAuthGatewayID,
                     profile: options.deviceIdentityProfile,
                     observedToken: selectedAuth.authDeviceToken)
+            } else if let identity,
+                      let rejectedToken = Self.rejectedStoredDeviceTokenOnlyAuth(
+                          selectedAuth: selectedAuth,
+                          explicitGatewayToken: self.token?.trimmedNonEmpty,
+                          error: error)
+            {
+                // The stored device token was the only credential and the gateway rejected it
+                // (device revoked or gateway state reset). Clear it so reconnect falls back to
+                // pairing instead of resending the same token until the auth rate limit trips.
+                DeviceAuthStore.clearToken(
+                    deviceId: identity.deviceId,
+                    role: role,
+                    gatewayID: options.deviceAuthGatewayID,
+                    profile: options.deviceIdentityProfile,
+                    observedToken: rejectedToken)
             }
             throw error
         }
@@ -711,8 +741,8 @@ extension GatewayChannelActor {
         let explicitToken = self.token?.trimmedNonEmpty
         let explicitBootstrapToken = self.bootstrapToken?.trimmedNonEmpty
         let explicitPassword = self.password?.trimmedNonEmpty
-        let storedEntry: DeviceAuthEntry? = if options.includeDeviceIdentity, options.allowStoredDeviceAuth,
-                                               let deviceId
+        let observedEntry: DeviceAuthEntry? = if options.includeDeviceIdentity, options.allowsDeviceAuthPersistence,
+                                                 let deviceId
         {
             DeviceAuthStore.loadToken(
                 deviceId: deviceId,
@@ -722,6 +752,8 @@ extension GatewayChannelActor {
         } else {
             nil
         }
+        // Fresh ingress may replace a retained credential without presenting it as authority.
+        let storedEntry = options.allowStoredDeviceAuth ? observedEntry : nil
         let storedToken = storedEntry?.token
         let storedScopes = storedEntry?.scopes ?? []
         let requestedScopesExceedStoredToken = Self.requestedScopesExceedStoredToken(
@@ -773,8 +805,8 @@ extension GatewayChannelActor {
             selected.observedTokens = DeviceAuthStore.observeTokens(
                 deviceId: deviceId,
                 gatewayID: options.deviceAuthGatewayID)
-        } else if let storedToken {
-            selected.observedTokens[options.role] = storedToken
+        } else if let observedToken = observedEntry?.token {
+            selected.observedTokens[options.role] = observedToken
         }
         return selected
     }
@@ -1284,6 +1316,24 @@ extension GatewayChannelActor {
         return authError.canRetryWithDeviceToken
     }
 
+    /// Returns the stored device token when it was sent as the only credential and the gateway
+    /// rejected it. The gateway cannot tell a stored device token from a shared token in
+    /// `auth.token`, so it may report either mismatch code.
+    private static func rejectedStoredDeviceTokenOnlyAuth(
+        selectedAuth: SelectedConnectAuth,
+        explicitGatewayToken: String?,
+        error: Error) -> String?
+    {
+        guard explicitGatewayToken == nil,
+              selectedAuth.authDeviceToken == nil,
+              let storedToken = selectedAuth.storedToken,
+              selectedAuth.authToken == storedToken,
+              let detail = (error as? GatewayConnectAuthError)?.detail,
+              detail == .authTokenMismatch || detail == .authDeviceTokenMismatch
+        else { return nil }
+        return storedToken
+    }
+
     private func shouldPauseReconnectAfterAuthFailure(_ error: Error) -> Bool {
         if error is GatewayExternalAuthorizationError { return true }
         guard let authError = error as? GatewayConnectAuthError else {
@@ -1458,7 +1508,8 @@ extension GatewayChannelActor {
             let code = response.error?.code
             let msg = response.error?.message
             let details = gatewayErrorDetails(response.error)
-            throw GatewayResponseError(method: method, code: code, message: msg, details: details)
+            throw GatewayResponseError(
+                method: method, code: code, message: msg, details: details, retryable: response.error?.retryable)
         }
         if let payload = response.payload {
             // Encode back to JSON with Swift's encoder to preserve types and avoid ObjC bridging exceptions.
@@ -1529,6 +1580,7 @@ extension GatewayChannelActor {
         if error is CancellationError ||
             error is OpenClawNativeStateError ||
             error is GatewayConnectAuthError ||
+            error is GatewayExternalAuthorizationError ||
             error is GatewayResponseError ||
             error is GatewayDecodingError ||
             error is GatewayTLSValidationError

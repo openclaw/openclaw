@@ -3,11 +3,9 @@ import {
   DASHSCOPE_WAN_VIDEO_CAPABILITIES,
   DASHSCOPE_WAN_VIDEO_CATALOG_BY_MODEL,
 } from "./dashscope-compatible.js";
+import type { VideoGenerationProvider } from "./provider-types.js";
 import { generateVideo, type GenerateVideoParams } from "./runtime.js";
-import type {
-  VideoGenerationProvider,
-  VideoGenerationProviderCapabilities as Capabilities,
-} from "./types.js";
+import type { VideoGenerationProviderCapabilities as Capabilities } from "./types.js";
 
 const inputImages = [{ url: "https://example.com/reference.png" }];
 

@@ -272,8 +272,8 @@ it("requires the explicit new-run disclosure before removing a selected identity
 
   expect(confirmation.show).toHaveBeenCalledWith(
     expect.objectContaining({
-      confirmLabel: "Use native for new runs",
-      message: expect.stringContaining("Active runs keep their current identity"),
+      confirmLabel: "Use GitHub CLI",
+      message: expect.stringContaining("Active replies keep their current account"),
     }),
   );
   expect(requests).toEqual([]);

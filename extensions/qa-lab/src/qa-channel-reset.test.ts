@@ -27,10 +27,11 @@ describe("QA channel reset processing boundary", () => {
       const inboundCursor = state.getSnapshot().cursor;
       const preview = state.addOutboundMessage({ accountId, to: "dm:alice", text: "You" });
       // Fetch progress and another account's completion cannot release this turn.
-      state.resolvePollCursor({ accountId, cursor: state.getSnapshot().cursor });
-      state.resolvePollCursor({
+      state.poll({ accountId, cursor: state.getSnapshot().cursor });
+      state.recordPollReceipts({ accountId, adoptedEventCursors: [inboundCursor] });
+      state.recordPollReceipts({
         accountId: "unrelated",
-        acknowledgedCursor: state.getSnapshot().cursor,
+        completedEventCursors: [inboundCursor],
       });
       const reset = transport.reset();
       try {
@@ -45,7 +46,7 @@ describe("QA channel reset processing boundary", () => {
           text: "lemon pepper wings with blue cheese",
         });
       } finally {
-        state.resolvePollCursor({ accountId, acknowledgedCursor: inboundCursor });
+        state.recordPollReceipts({ accountId, completedEventCursors: [inboundCursor] });
         await vi.runAllTimersAsync();
         await reset;
       }

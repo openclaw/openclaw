@@ -41,6 +41,16 @@ const MALFORMED_STREAMING_FRAGMENT_USER_MESSAGE =
 
 type ErrorPayload = Record<string, unknown>;
 
+const PROVIDER_PRECAUTION_NOTICE =
+  "Chat stopped as a precaution. Review the findings in chat before continuing.";
+const PROVIDER_REFUSAL_NOTICE_RE =
+  /^The provider refused this request(?: \(category: [a-zA-Z0-9_-]{1,64}\))?\. Revise the request and try again\.$/u;
+
+/** Recognize canonical display copy, not refusal or retry authority. */
+export function isProviderRefusalNoticeText(text: string): boolean {
+  return text === PROVIDER_PRECAUTION_NOTICE || PROVIDER_REFUSAL_NOTICE_RE.test(text);
+}
+
 export function formatProviderRefusalText(message: {
   diagnostics?: unknown;
   errorCode?: unknown;
@@ -60,7 +70,7 @@ export function formatProviderRefusalText(message: {
   const safeCategory =
     typeof category === "string" && /^[a-z0-9_-]{1,64}$/i.test(category) ? category : undefined;
   if (safeCategory === "misalignment") {
-    return "Chat stopped as a precaution. Review the findings in chat before continuing.";
+    return PROVIDER_PRECAUTION_NOTICE;
   }
   return `The provider refused this request${safeCategory ? ` (category: ${safeCategory})` : ""}. Revise the request and try again.`;
 }

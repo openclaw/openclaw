@@ -1,3 +1,5 @@
+import { parseSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
+import { sha256Hex } from "./crypto-digest.js";
 import {
   readSessionCostUsageRollupRowsInDatabase,
   type SessionCostUsageDeferredMetadata,
@@ -17,6 +19,7 @@ import {
   createUsageDayKeyFormatter,
   projectSessionCostSummaries,
 } from "./session-cost-usage-projection.js";
+import type { createUsageCostCollectionAccess } from "./session-cost-usage-refresh-inputs.worker.js";
 import {
   decodeUsageCostRollup,
   decodeUsageCostRollupEnvelope,
@@ -193,6 +196,7 @@ export async function projectUsageCostSessionsInWorker(params: {
   /** Cache keys of `operation.sessions`, in order; undefined for unresolved archives. */
   sessionPaths: ReadonlyArray<string | undefined>;
   access: UsageCostCollectionAccess;
+  readFreshness: ReturnType<typeof createUsageCostCollectionAccess>["readFreshness"];
   readCache: <T>(read: (db: EngineConnection) => T, empty: () => T) => Promise<T>;
   scan: RollupScan;
   throwIfCancelled: () => void;
@@ -218,43 +222,68 @@ export async function projectUsageCostSessionsInWorker(params: {
   ): Promise<UsageCostWorkerResult> => {
     const byPath = new Map(rows.map((row) => [row.key, row]));
     // Uncached sessions remain pending; only cached reports need transcript freshness.
-    const sessions = operation.sessions.filter(
-      (_, index) =>
-        byPath.has(sessionPaths[index] ?? "") ||
-        cacheBudget.deferredPaths.has(sessionPaths[index] ?? ""),
+    const selected = operation.sessions.flatMap((session, index) =>
+      byPath.has(sessionPaths[index] ?? "") ||
+      cacheBudget.deferredPaths.has(sessionPaths[index] ?? "")
+        ? [{ session, filePath: sessionPaths[index] }]
+        : [],
     );
-    const discovered = sessions.flatMap((session) =>
-      session.transcriptFile ? [session.transcriptFile] : [],
-    );
-    for (const file of discovered) {
-      const checkpoint = entries.get(file.filePath)?.envelope?.checkpoint;
-      if (checkpoint?.kind !== "sqlite") {
-        continue;
-      }
-      const rewritten = (checkpoint.generation ?? null) !== (file.generation ?? null);
-      if (rewritten) {
-        // Discovery and reporting crossed a rewrite. Omit the projection without
-        // pruning it; an older checkpoint still needs the normal stale refresh.
-        cacheBudget.deferredPaths.add(file.filePath);
-      }
-      if (rewritten ? checkpoint.mtimeMs >= file.mtimeMs : checkpoint.maxSeq > (file.maxSeq ?? 0)) {
-        // A same-generation append may publish newer totals after discovery.
-        // Across rewrites, the owner's monotonic mutation version orders the
-        // snapshots: newer cache waits for rediscovery instead of rebuilding.
-        Object.assign(file, {
-          size: checkpoint.size,
-          mtimeMs: checkpoint.mtimeMs,
-          eventCount: checkpoint.eventCount,
-          maxSeq: checkpoint.maxSeq,
+    const sqliteSnapshots = [];
+    const unresolved = [];
+    for (const { session, filePath } of selected) {
+      const marker = parseSqliteSessionFileMarker(session.sessionFile);
+      const envelope = filePath ? entries.get(filePath)?.envelope : undefined;
+      const deferred = filePath ? cacheBudget.deferredMetadata.get(filePath) : undefined;
+      const checkpoint = envelope?.checkpoint ?? deferred?.checkpoint;
+      if (marker && filePath && checkpoint?.kind === "sqlite") {
+        sqliteSnapshots.push({
+          session,
+          marker,
+          filePath,
+          checkpoint,
+          generation:
+            envelope?.checkpoint.kind === "sqlite" ? envelope.checkpoint.generation : undefined,
+          generationHash: deferred?.sqliteGenerationHash,
         });
+      } else if (!marker) {
+        // JSONL still needs its physical file identity; unusable SQLite rows need refresh.
+        unresolved.push(session.sessionFile);
       }
     }
+    const mutations = sqliteSnapshots.length
+      ? await params.readFreshness(sqliteSnapshots.map(({ marker }) => marker))
+      : [];
+    const sqliteMutationTimes = new Map<string, number>();
+    const snapshots: UsageCostTranscriptFile[] = [];
+    for (const [index, snapshot] of sqliteSnapshots.entries()) {
+      const { session, filePath, checkpoint, generation, generationHash } = snapshot;
+      const mutation = mutations[index];
+      if (
+        !mutation ||
+        (generationHash
+          ? generationHash !== sha256Hex(JSON.stringify(mutation.generation))
+          : (generation ?? null) !== mutation.generation)
+      ) {
+        continue;
+      }
+      sqliteMutationTimes.set(filePath, mutation.mtimeMs);
+      // These are the recorded snapshot's replay bounds, not current transcript statistics.
+      snapshots.push({
+        kind: "sqlite",
+        filePath,
+        sourcePath: session.sessionFile,
+        sessionId: session.sessionId,
+        mtimeMs: checkpoint.mtimeMs,
+        size: checkpoint.size,
+        maxSeq: checkpoint.maxSeq,
+        eventCount: checkpoint.eventCount,
+        generation: mutation.generation,
+        cold: mutation.cold,
+      });
+    }
     const reportFiles = [
-      ...discovered,
-      ...(await resolveUsageCostTranscriptFiles(
-        sessions.filter((session) => !session.transcriptFile).map((session) => session.sessionFile),
-        params.access,
-      )),
+      ...snapshots,
+      ...(await resolveUsageCostTranscriptFiles(unresolved, params.access)),
     ];
     const filesByPath = new Map(
       reportFiles.flatMap((file) => (file ? [[file.filePath, file] as const] : [])),
@@ -304,6 +333,7 @@ export async function projectUsageCostSessionsInWorker(params: {
         ...source,
         ...operation,
         files: sessionPaths.map((filePath) => filesByPath.get(filePath ?? "")),
+        sqliteMutationTimes,
       })),
       remainingReportBytes: Math.max(0, cacheBudget.remainingBytes),
     };

@@ -257,9 +257,9 @@ export function extractChatSourcePreviews(params: {
     if (group.runId !== params.runId) {
       continue;
     }
-    for (const { message, actionMessage, presentationOwnsFooter } of group.messages) {
-      inputs.push(message, actionMessage, presentationOwnsFooter);
-      if (message === answer || (actionMessage === answer && presentationOwnsFooter !== false)) {
+    for (const { message } of group.messages) {
+      inputs.push(message);
+      if (message === answer) {
         inFrame = true;
         break frameInputs;
       }

@@ -1,10 +1,9 @@
 import type { RouteLoaderOptions } from "@openclaw/uirouter";
 import type { ApplicationContext } from "../../app/context.ts";
+import { hasOperatorReadAccess } from "../../app/operator-access.ts";
 import { formatUiError } from "../../lib/format-error.ts";
-import {
-  formatMissingOperatorReadScopeMessage,
-  isMissingOperatorReadScopeError,
-} from "../../lib/gateway-errors.ts";
+import { isMissingOperatorReadScopeError } from "../../lib/gateway-errors.ts";
+import { formatMissingOperatorReadScopeMessage } from "../../lib/permission-error.ts";
 import { createDefaultUsageDateRange, DEFAULT_USAGE_SESSION_SORT } from "./helpers.ts";
 import { requestUsageSnapshot } from "./request-usage-snapshot.ts";
 import type { UsageRouteData } from "./types.ts";
@@ -54,6 +53,9 @@ export async function loadUsageRouteData(
       context.agentSelection.state.scopeId !== query.agentId
     ) {
       return pending;
+    }
+    if (!hasOperatorReadAccess(current.hello?.auth ?? null)) {
+      return { ...pending, error: formatMissingOperatorReadScopeMessage("usage") };
     }
     const result = await requestUsageSnapshot(
       gatewaySnapshot.client,

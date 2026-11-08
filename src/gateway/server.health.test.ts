@@ -4,15 +4,15 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { expect, test, vi } from "vitest";
 import { writeConfigFile } from "../config/config.js";
+import * as gatewayCrash from "../infra/gateway-crash.js";
 import { drainSystemEvents } from "../infra/system-events.js";
 import type { SystemPresence } from "../infra/system-presence.js";
 import { startGatewayServerHarness, type GatewayServerHarness } from "./server.e2e-ws-harness.js";
 import { installGatewayTestHooks, onceMessage, rpcReq } from "./test-helpers.js";
 
-// Health/presence coverage does not exercise post-restart delivery recovery.
-// Keep that auto-reply graph in the dedicated restart-sentinel suite.
+// mock-isolation: Health/presence coverage keeps the auto-reply graph in the dedicated restart-sentinel suite.
 vi.mock("./server-restart-sentinel.js", () => ({
-  recoverPendingRestartContinuationDeliveries: vi.fn(async () => undefined),
+  recoverPendingProducedSessionDeliveries: vi.fn(async () => undefined),
 }));
 
 const presenceTimeout = { timeout: 6_000 };
@@ -32,6 +32,22 @@ installGatewayTestHooks({
   cleanup: async () => {
     await harness?.close();
   },
+});
+
+test("health and status keep a predecessor crash visible after recovery", async () => {
+  const recentCrashes = [
+    { bootId: "previous-run", pid: 42, startedAtMs: 1_000, detectedAtMs: 3_000, signal: "SIGSEGV" },
+  ];
+  const snapshot = vi.spyOn(gatewayCrash, "getGatewayRecentCrashes").mockReturnValue(recentCrashes);
+  const { ws } = await harness.openClient();
+  try {
+    for (const method of ["health", "health", "status"]) {
+      expect(await rpcReq(ws, method, {})).toMatchObject({ ok: true, payload: { recentCrashes } });
+    }
+  } finally {
+    ws.close();
+    snapshot.mockRestore();
+  }
 });
 
 test(

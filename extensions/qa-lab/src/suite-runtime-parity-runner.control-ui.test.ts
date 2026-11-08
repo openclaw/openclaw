@@ -66,10 +66,7 @@ beforeEach(async () => {
   outputDir = path.join(repoRoot, "output");
   vi.clearAllMocks();
   mocks.readQaBootstrapScenarioCatalog.mockReturnValue({
-    scenarios: [
-      makeQaSuiteTestScenario("runtime-channel", { surface: "channel" }),
-      makeQaSuiteTestScenario("runtime-control-ui", { surface: "control-ui" }),
-    ],
+    scenarios: [makeQaSuiteTestScenario("runtime-channel", { surface: "channel" })],
   });
   mocks.runQaFlowSuiteStandard.mockImplementation(
     async (

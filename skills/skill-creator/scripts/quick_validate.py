@@ -26,6 +26,13 @@ def _extract_frontmatter(content: str) -> Optional[str]:
     return None
 
 
+def _strip_scalar_comment(value: str) -> str:
+    if value.startswith("#"):
+        return ""
+    # Only a leading quote delimits a quoted scalar; apostrophes in plain text do not.
+    return re.sub(r"""^("(?:[^"\\]|\\.)*"|'(?:[^']|'')*'|[^'"].*?)[ \t]+#.*$""", r"\1", value)
+
+
 def _parse_simple_frontmatter(frontmatter_text: str) -> Optional[dict[str, str]]:
     """
     Minimal fallback parser used when PyYAML is unavailable.
@@ -33,29 +40,38 @@ def _parse_simple_frontmatter(frontmatter_text: str) -> Optional[dict[str, str]]
     """
     parsed: dict[str, str] = {}
     current_key: Optional[str] = None
+    block_scalar = False
     for raw_line in frontmatter_text.splitlines():
         stripped = raw_line.strip()
-        if not stripped or stripped.startswith("#"):
+        is_indented = raw_line[:1].isspace()
+        if not stripped or (stripped.startswith("#") and not (block_scalar and is_indented)):
             continue
 
-        is_indented = raw_line[:1].isspace()
         if is_indented:
             if current_key is None:
                 return None
             current_value = parsed[current_key]
-            parsed[current_key] = (
-                f"{current_value}\n{stripped}" if current_value else stripped
-            )
+            if not block_scalar:
+                if not current_value:
+                    stripped = _strip_scalar_comment(stripped)
+                elif not current_value.startswith(("'", '"')):
+                    # Quotes on a plain scalar's continuation are literal text.
+                    stripped = re.sub(r"[ \t]+#.*$", "", stripped)
+            parsed[current_key] = f"{current_value}\n{stripped}" if current_value else stripped
             continue
 
         if ":" not in stripped:
             return None
         key, value = stripped.split(":", 1)
         key = key.strip()
-        value = value.strip()
+        value = _strip_scalar_comment(value.strip())
         if not key:
             return None
-        if (value.startswith('"') and value.endswith('"')) or (
+        # Block headers describe the scalar; only its indented body is content.
+        block_scalar = bool(re.fullmatch(r"[>|](?:[1-9][+-]?|[+-][1-9]?)?", value))
+        if block_scalar:
+            value = ""
+        elif (value.startswith('"') and value.endswith('"')) or (
             value.startswith("'") and value.endswith("'")
         ):
             value = value[1:-1]

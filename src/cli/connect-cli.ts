@@ -30,6 +30,7 @@ import { loadResumableNodeHostGateway, runNodeHost } from "../node-host/runner.j
 import { isDevicePairingJoinCode } from "../pairing/join-code.js";
 import { decodePairingSetupCode, encodePairingSetupCode } from "../pairing/setup-code.js";
 import { defaultRuntime } from "../runtime.js";
+import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { formatCliCommand } from "./command-format.js";
 import { formatDocsHelp, formatHelpExamples } from "./help-format.js";
 import { addNodeCommandOptions } from "./node-cli/command-options.js";
@@ -78,16 +79,19 @@ function parseJoinTarget(target: string): URL | null {
 async function fetchJoinPayload(
   target: URL,
   cloudflareAccess?: CloudflareAccessCredentials,
-): Promise<PairingSetupPayload> {
+  signal?: AbortSignal,
+): Promise<PairingSetupPayload | undefined> {
   const expectedHost = normalizeHostname(target.hostname);
   let release: () => Promise<void> = async () => {};
   try {
+    signal?.throwIfAborted();
     const guarded = await fetchWithSsrFGuard({
       url: target.toString(),
       auditContext: "openclaw-connect-join",
       maxRedirects: 0,
       requireHttps: target.protocol === "https:",
       timeoutMs: JOIN_FETCH_TIMEOUT_MS,
+      signal,
       ...(cloudflareAccess
         ? {
             init: { headers: buildCloudflareAccessHeaders(cloudflareAccess) },
@@ -106,6 +110,7 @@ async function fetchJoinPayload(
       },
     });
     release = guarded.release;
+    signal?.throwIfAborted();
     const response = guarded.response;
     if (
       !response.ok ||
@@ -114,7 +119,8 @@ async function fetchJoinPayload(
       await cancelUnreadResponseBody(response);
       throw new Error("Gateway join code was not found or has expired.");
     }
-    const body = await readResponseWithLimit(response, MAX_JOIN_PAYLOAD_BYTES);
+    const body = await readResponseWithLimit(response, MAX_JOIN_PAYLOAD_BYTES, { signal });
+    signal?.throwIfAborted();
     let decoded: unknown;
     try {
       decoded = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(body)) as unknown;
@@ -123,6 +129,9 @@ async function fetchJoinPayload(
     }
     return decodePairingSetupCode(encodePairingSetupCode(decoded as PairingSetupPayload));
   } catch (error) {
+    if (signal?.aborted) {
+      return undefined;
+    }
     if (error instanceof Error && error.message.startsWith("Gateway ")) {
       throw error;
     }
@@ -258,6 +267,7 @@ export function registerConnectCli(program: Command): void {
           throw new Error(formatMissingTargetError(opts, await loadResumableNodeHostGateway()));
         }
         const joinTarget = parseJoinTarget(resolvedTarget);
+        const signal = joinTarget ? getAsyncWorkSignal() : undefined;
         const saved = await loadNodeHostConfig();
         let initialCloudflareAccess: NodeHostCloudflareAccessConfig | undefined;
         if (joinTarget) {
@@ -279,8 +289,11 @@ export function registerConnectCli(program: Command): void {
         // Providers replay setup codes on restart. The node runtime may use an expired
         // code only to reconnect with a saved device token for the same Gateway.
         const payload = joinTarget
-          ? await fetchJoinPayload(joinTarget, joinCredentials)
+          ? await fetchJoinPayload(joinTarget, joinCredentials, signal)
           : decodePairingSetupCode(resolvedTarget, { allowExpired: opts.ephemeral === true });
+        if (!payload || signal?.aborted) {
+          return;
+        }
         const pair = resolveNodePairGatewayPayload(payload);
         const cloudflareAccess =
           initialCloudflareAccess ??
