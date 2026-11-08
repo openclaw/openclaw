@@ -922,6 +922,7 @@ describe("TalkSettingsPage realtime transport mutation", () => {
       },
       null,
       ["transport", "consultRouting"],
+      null,
     ],
     [
       "GPT-Live fallback",
@@ -933,8 +934,9 @@ describe("TalkSettingsPage realtime transport mutation", () => {
       },
       "consultRouting",
       ["transport"],
+      null,
     ],
-    ["positive rejection", { transports: ["webrtc"] }, null, []],
+    ["positive rejection", { transports: ["webrtc"] }, null, [], null],
     [
       "compatible family fallback",
       { transport: "gateway-relay", transports: ["provider-websocket", "webrtc"] },
@@ -942,7 +944,7 @@ describe("TalkSettingsPage realtime transport mutation", () => {
       [],
       "webrtc",
     ],
-  ] satisfies [string, TalkMutationHarnessOptions, string | null, string[], string?][])(
+  ] satisfies [string, TalkMutationHarnessOptions, string | null, string[], string | null][])(
     "applies provider transport policy: %s",
     async (_name, options, removed, retained, expectedTransport) => {
       const { remove, patchForm } = await selectMutation("provider", "openai", {
