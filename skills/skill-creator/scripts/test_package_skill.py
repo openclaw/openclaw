@@ -55,20 +55,20 @@ class TestPackageSkillSecurity(TestCase):
     def test_failed_write_preserves_output_and_cleans_staging(self):
         skill_dir = self.create_skill("failed-skill")
         for existing in (False, True):
-            with self.subTest(existing=existing):
-                out_dir = self.temp_dir / str(existing)
-                out_dir.mkdir()
-                archive = out_dir / "failed-skill.skill"
-                if existing:
-                    self.assertIsNotNone(package_skill(str(skill_dir), str(out_dir)))
-                    original = archive.read_bytes()
+            out_dir = self.temp_dir / str(existing)
+            out_dir.mkdir()
+            archive = out_dir / "failed-skill.skill"
+            if existing:
+                self.assertIsNotNone(package_skill(str(skill_dir), str(out_dir)))
+                original = archive.read_bytes()
 
-                with patch.object(zipfile.ZipFile, "write", side_effect=OSError("disk full")):
-                    self.assertIsNone(package_skill(str(skill_dir), str(out_dir)))
-
-                self.assertEqual(list(out_dir.iterdir()), [archive] if existing else [])
-                if existing:
-                    self.assertEqual(archive.read_bytes(), original)
+            for operation in ("zipfile.ZipFile.write", "os.walk"):
+                with self.subTest(existing=existing, operation=operation):
+                    with patch(operation, side_effect=OSError("fixture I/O failure")):
+                        self.assertIsNone(package_skill(str(skill_dir), str(out_dir)))
+                    self.assertEqual(list(out_dir.iterdir()), [archive] if existing else [])
+                    if existing:
+                        self.assertEqual(archive.read_bytes(), original)
 
     def test_skips_external_symlinks(self):
         for directory in (False, True):
