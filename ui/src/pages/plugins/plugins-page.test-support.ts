@@ -557,3 +557,7 @@ export function resetPluginsPageTestState(): void {
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
 }
+
+export function methodCalls(request: ReturnType<typeof createClient>["request"], name: string) {
+  return request.mock.calls.filter(([method]) => method === name);
+}

@@ -242,7 +242,12 @@ export function createPluginsPage(options: {
         void showDetails(activeRoutePluginId());
       }
     },
-    onError: (error) => setState({ error: formatUiError(error) }),
+    onError: (error) => {
+      setState({ error: formatUiError(error) });
+      if (surface === "settings" && !details.inspection.receipt()) {
+        void showDetails(activeRoutePluginId());
+      }
+    },
   });
   onSettled(() => {
     let configAutoSaveStatus = runtime.state.configAutoSaveStatus;
@@ -409,6 +414,10 @@ export function createPluginsPage(options: {
       setState({ busy: {} });
     }
     if (shouldRefreshAfterChange) {
+      const catalogId = surface === "discovery" ? activeRoutePluginId() : null;
+      if (catalogId && !state.detail && !details.catalog.receipt()) {
+        void showCatalogDetail(catalogId);
+      }
       void refreshCatalog();
     }
     ensureInitialData();
@@ -442,7 +451,8 @@ export function createPluginsPage(options: {
       return;
     }
     if (surface === "settings" && detailPluginId !== state.detail?.pluginId) {
-      void showDetails(detailPluginId);
+      // The inventory completion starts inspection once; selection still retires the old detail now.
+      void showDetails(detailPluginId, !refreshInventory);
     }
     if (catalogId !== state.catalogDetail?.id) {
       void showCatalogDetail(catalogId);
@@ -498,6 +508,8 @@ export function createPluginsPage(options: {
       result &&
       catalogId &&
       (state.detail ||
+        state.catalogDetail?.result?.plugin.local.installed ||
+        (!state.catalogDetail?.result && !details.catalog.receipt()) ||
         result.plugins.some((plugin) => plugin.installed && plugin.catalogId === catalogId))
     ) {
       void refreshDiscovery();
@@ -574,11 +586,10 @@ export function createPluginsPage(options: {
   }
 
   async function refreshDiscovery(): Promise<void> {
-    if (surface !== "discovery") {
-      return;
+    if (surface === "discovery") {
+      const catalogId = activeRoutePluginId();
+      return catalogId ? showCatalogDetail(catalogId) : discovery.refresh();
     }
-    const catalogId = activeRoutePluginId();
-    return catalogId ? showCatalogDetail(catalogId) : discovery.refresh();
   }
 
   function accessBlockedReason(

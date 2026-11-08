@@ -312,6 +312,13 @@ it("targets the selected installed route after its inventory refresh fails", asy
     await page.updateComplete;
     await waitForSolid(() => expect(harness.calls("plugins.list")).toHaveLength(1));
     refresh.reject(new Error("Inventory unavailable"));
+    await waitForSolid(() =>
+      expect(harness.calls("plugins.inspect")).toContainEqual([
+        "plugins.inspect",
+        { pluginId: beta.id },
+      ]),
+    );
+    expect(page.textContent).toContain("Inventory unavailable");
     await waitForSolid(() => expect(find('[aria-label="Enable Beta"]')).not.toBeNull());
     await page.updateComplete;
     find<HTMLButtonElement>('[aria-label="Enable Beta"]')!.click();
