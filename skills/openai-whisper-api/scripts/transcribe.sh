@@ -62,7 +62,10 @@ if [[ "${OPENAI_API_KEY:-}" == "" ]]; then
 fi
 
 if [[ "$out" == "" ]]; then
-  base="${in%.*}"
+  base="$in"
+  if [[ "${in##*/}" == *.* ]]; then
+    base="${in%.*}"
+  fi
   if [[ "$json_output" == "1" ]]; then
     out="${base}.json"
   else
