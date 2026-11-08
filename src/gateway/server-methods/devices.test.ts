@@ -81,6 +81,7 @@ it("marks only OpenClaw ID operator browsers and forgets bindings of a removed p
     const browser = {
       deviceId: "ocid-browser",
       publicKey: "pk-b",
+      clientId: "openclaw-control-ui",
       clientMode: "webchat",
       role: "operator",
       roles: ["operator"],
@@ -89,7 +90,9 @@ it("marks only OpenClaw ID operator browsers and forgets bindings of a removed p
     const host = {
       deviceId: "node-host",
       publicKey: "pk-h",
-      clientMode: "node",
+      // Approval keeps the latest request's UI mode after the node role is removed.
+      clientId: "openclaw-macos",
+      clientMode: "ui",
       role: "operator",
       roles: ["operator"],
     };

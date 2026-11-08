@@ -1,3 +1,4 @@
+import { GATEWAY_CLIENT_IDS } from "../../../packages/gateway-protocol/src/client-info.js";
 import {
   ErrorCodes,
   errorShape,
@@ -71,7 +72,7 @@ const OPENCLAW_ID_MANAGED_MESSAGE =
   "This browser connects through OpenClaw ID. Manage access on the Access page.";
 
 /**
- * A browser (UI client, never a node) bound to an OpenClaw ID device key is managed by
+ * A Control UI browser (never a node) bound to an OpenClaw ID device key is managed by
  * OpenClaw ID membership while the feature is on: removing it as a device would be
  * undone by its next sign-in. With OpenClaw ID off there is no Access page.
  */
@@ -81,7 +82,8 @@ function isManagedByOpenClawId(
 ): boolean {
   return (
     device != null &&
-    (device.clientMode === "webchat" || device.clientMode === "ui") &&
+    // The Control UI is the only browser client; native apps and node hosts never use it.
+    device.clientId === GATEWAY_CLIENT_IDS.CONTROL_UI &&
     !listApprovedPairedDeviceRoles(device).includes("node") &&
     hasOpenClawIdOperatorBinding(device.deviceId.trim()) &&
     context.getRuntimeConfig().gateway?.openclawId?.enabled === true

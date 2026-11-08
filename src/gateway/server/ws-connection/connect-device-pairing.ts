@@ -2,6 +2,7 @@ import {
   normalizeSortedUniqueTrimmedStringList,
   uniqueStrings,
 } from "@openclaw/normalization-core/string-normalization";
+import { GATEWAY_CLIENT_IDS } from "../../../../packages/gateway-protocol/src/client-info.js";
 import {
   buildPairingConnectCloseReason,
   buildPairingConnectErrorDetails,
@@ -655,9 +656,13 @@ export async function authorizeGatewayConnectDevice(
         });
       }
     }
-    if (role === "operator" && !deviceToken) {
+    if (role === "operator" && !deviceToken && state.isControlUi) {
       // Lanes that issue no token still mark the browser as managed on the Access page.
-      await recordTokenlessOpenClawIdOperator(state.device.id, issuedPeerKey);
+      // Never bind a device that holds a token from another lane: the binding is authority.
+      const current = await getPairedDevice(state.device.id);
+      if (current?.clientId === GATEWAY_CLIENT_IDS.CONTROL_UI && !current.tokens?.operator) {
+        await recordTokenlessOpenClawIdOperator(state.device.id, issuedPeerKey);
+      }
     }
   }
   context.recordAttachTiming?.("deviceTokensMs", tokensStartedAt);
