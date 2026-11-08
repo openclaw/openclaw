@@ -1,6 +1,7 @@
 // Full-entry coverage for before_agent_finalize revision handling in embedded runs.
-import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  mockedBuildEmbeddedRunPayloads,
   mockedGlobalHookRunner,
   mockedRunEmbeddedAttempt,
   resetSharedRunIntegrationHarnessMocks,
@@ -13,7 +14,7 @@ import {
 import type { EmbeddedRunAttemptResult } from "./run/types.js";
 
 const REASONING_ONLY_RETRY_INSTRUCTION =
-  "The previous assistant turn recorded reasoning but did not produce a user-visible answer. Continue from that partial turn and produce the visible answer now. Do not restate the reasoning or restart from scratch.";
+  "Your turn ended without a final reply. Continue from the current conversation and answer the user's request now. Do not repeat completed actions or restart the task. Do not restate your reasoning.";
 
 let session: Awaited<ReturnType<typeof createSharedRunIntegrationSession>>;
 let runEmbeddedAgent: Awaited<ReturnType<typeof loadSharedRunIntegrationHarness>>;
@@ -75,6 +76,9 @@ describe("runEmbeddedAgent before_agent_finalize", () => {
   });
 
   it("replaces an incomplete-turn continuation with a finalize revision", async () => {
+    const { buildEmbeddedRunPayloads } =
+      await vi.importActual<typeof import("./run/payloads.js")>("./run/payloads.js");
+    mockedBuildEmbeddedRunPayloads.mockImplementation(buildEmbeddedRunPayloads);
     mockedRunEmbeddedAttempt
       .mockResolvedValueOnce(
         session.makeAttemptResult({
@@ -101,13 +105,16 @@ describe("runEmbeddedAgent before_agent_finalize", () => {
       )
       .mockResolvedValueOnce(finalAnswerAttempt("Revised recovered answer."));
 
-    await runEmbeddedAgent({
+    const result = await runEmbeddedAgent({
       ...session.runParams,
       provider: "openai",
       model: "gpt-5.5",
       runId: "run-before-finalize-after-incomplete-turn",
     });
 
+    expect(result.payloads).toEqual([
+      expect.objectContaining({ text: "Revised recovered answer." }),
+    ]);
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(3);
     expect(attemptCall(1).prompt).toBe(REASONING_ONLY_RETRY_INSTRUCTION);
     expect(attemptCall(2).prompt).toContain("Tighten the recovered answer.");

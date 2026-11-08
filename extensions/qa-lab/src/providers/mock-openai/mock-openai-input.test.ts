@@ -6,6 +6,19 @@ const settled =
   "[Subagent Context] Every subagent in this batch has now settled, including its descendants.";
 
 describe("terminal requester input", () => {
+  it("keeps reasoning recovery attached to the original subagent task", () => {
+    expect(
+      resolveMockSubagentTurn([
+        kickoff,
+        {
+          role: "user",
+          content:
+            "Your turn ended without a final reply. Continue from the current conversation and answer the user's request now. Do not repeat completed actions or restart the task. Do not restate your reasoning.",
+        },
+      ]),
+    ).toMatchObject({ kind: "kickoff", caseName: "fallback" });
+  });
+
   it("recognizes the timestamped all-settled wake", () => {
     expect(
       resolveMockSubagentTurn([

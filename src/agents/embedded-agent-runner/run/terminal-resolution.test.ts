@@ -26,7 +26,7 @@ vi.mock("./auth-profile-success.js", () => ({
 }));
 
 const REASONING_ONLY_RETRY_INSTRUCTION =
-  "The previous assistant turn recorded reasoning but did not produce a user-visible answer. Continue from that partial turn and produce the visible answer now. Do not restate the reasoning or restart from scratch.";
+  "Your turn ended without a final reply. Continue from the current conversation and answer the user's request now. Do not repeat completed actions or restart the task. Do not restate your reasoning.";
 
 describe("terminal resolution", () => {
   beforeEach(() => {
@@ -519,6 +519,35 @@ describe("terminal resolution", () => {
       kind: "incomplete_turn",
       fallbackSafe: false,
       terminalPresentation: true,
+    });
+  });
+
+  it("does not replay a reasoning-only turn after an unsafe write", async () => {
+    const assistant = buildEmbeddedRunnerAssistant({
+      content: [{ type: "thinking", thinking: "The write finished.", thinkingSignature: "sig" }],
+    });
+    const attempt = makeEmbeddedRunnerAttempt({
+      assistantTexts: [],
+      lastAssistant: assistant,
+      currentAttemptAssistant: assistant,
+      toolMetas: [{ toolName: "write", replaySafe: false }],
+      itemLifecycle: { startedCount: 1, completedCount: 1, activeCount: 0 },
+      replayMetadata: { hadPotentialSideEffects: true, replaySafe: false },
+      currentAttemptReplayMetadata: { hadPotentialSideEffects: true, replaySafe: false },
+    });
+    const input = makeTerminalInput({ attempt });
+    const resolved = await resolveEmbeddedRunTerminal(input);
+    expect(resolved.action).toBe("complete");
+    expect(input.sessionPromptState.activateInternalPrompt).not.toHaveBeenCalled();
+    if (resolved.action !== "complete") {
+      throw new Error("Unsafe write must not retry");
+    }
+    expect(resolved.result.payloads?.[0]?.text).toContain(
+      "some tool actions may have already been executed",
+    );
+    expect(resolved.result.meta.error).toMatchObject({
+      kind: "incomplete_turn",
+      fallbackSafe: false,
     });
   });
 

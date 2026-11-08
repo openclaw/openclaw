@@ -117,7 +117,7 @@ describe("Gateway OpenAI Responses compaction replay", () => {
         expectTextOnce(encodedReasoningContinuationInput, "Continue from the compacted transcript");
         expectTextOnce(
           encodedReasoningContinuationInput,
-          "recorded reasoning but did not produce a user-visible answer",
+          "Continue from the current conversation and answer the user's request now",
         );
 
         await runAgentTurn(client, "replay compaction state");
