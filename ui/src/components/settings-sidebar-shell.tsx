@@ -168,8 +168,19 @@ export function ShellSettingsSidebar(props: {
       },
       onRetryConnect: callbacks.retryGateway,
       onNavigate: host.shellNavigation.navigate,
-      onSearchQueryChange: (nextQuery: string) =>
-        void host.handleSettingsSearchQueryChange(nextQuery),
+      onSearchQueryChange: async (nextQuery: string) => {
+        host.settingsSearchQuery = nextQuery;
+        if (nextQuery.trim()) {
+          try {
+            await Promise.all([
+              context.runtimeConfig.ensureLoaded(),
+              context.runtimeConfig.ensureSchemaLoaded(),
+            ]);
+          } catch {
+            // The owners retain read failures; search input stays available.
+          }
+        }
+      },
       saveIndicator: saveIndicator(),
     };
   });

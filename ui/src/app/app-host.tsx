@@ -397,19 +397,6 @@ export class ShellOwner
     this.shellGateway,
   );
 
-  async handleSettingsSearchQueryChange(nextQuery: string): Promise<void> {
-    this.settingsSearchQuery = nextQuery;
-    const runtimeConfig = this.context?.runtimeConfig;
-    if (!runtimeConfig || !nextQuery.trim()) {
-      return;
-    }
-    try {
-      await Promise.all([runtimeConfig.ensureLoaded(), runtimeConfig.ensureSchemaLoaded()]);
-    } catch {
-      // Runtime config state owns the visible load error; search stays usable.
-    }
-  }
-
   readonly toggleNavigationSurface = this.shellChrome.toggleNavigationSurface;
 
   readonly closeNavDrawer = this.shellChrome.closeNavDrawer;

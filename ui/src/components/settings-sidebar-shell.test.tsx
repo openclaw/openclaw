@@ -33,9 +33,8 @@ function mountSearchSidebar(
 ) {
   const runtime = bootstrapApplication();
   Object.assign(runtime.context, { gateway, runtimeConfig });
-  let owner!: ShellOwner;
   const view = mountSolid(() => {
-    owner = new ShellOwner(document.createElement("openclaw-app-shell"), runtime);
+    const owner = new ShellOwner(document.createElement("openclaw-app-shell"), runtime);
     onSettled(() => runtimeConfig.subscribe(() => owner.invalidate()));
     return (
       <ShellSettingsSidebar
@@ -49,7 +48,16 @@ function mountSearchSidebar(
       />
     );
   });
-  return { runtime, owner, view };
+  return {
+    runtime,
+    view,
+    async search(query: string) {
+      await waitForSolid(() => expect(view.queryByRole("searchbox")).not.toBeNull());
+      const input = view.getByRole<HTMLInputElement>("searchbox");
+      input.value = query;
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    },
+  };
 }
 
 it("keeps known search results with pending schema and retains its failure after config settles", async () => {
@@ -72,10 +80,9 @@ it("keeps known search results with pending schema and retains its failure after
   const { gateway, publish } = createGatewayHarness(createTestGatewayClient(request));
   publish(false, undefined, null);
   const runtimeConfig = createRuntimeConfigCapability(gateway);
-  const { runtime, owner, view } = mountSearchSidebar(gateway, runtimeConfig);
-  let reading = owner.handleSettingsSearchQueryChange("Unmatched schema field");
-  owner.invalidate();
+  const { runtime, view, search } = mountSearchSidebar(gateway, runtimeConfig);
   try {
+    await search("Unmatched schema field");
     await waitForSolid(() =>
       expect(view.container.querySelector<HTMLInputElement>('input[type="search"]')?.value).toBe(
         "Unmatched schema field",
@@ -83,17 +90,14 @@ it("keeps known search results with pending schema and retains its failure after
     );
     expect(view.queryByText(t("common.loading"))).not.toBeNull();
     expect(view.queryByText(t("nav.settingsSearchNoResults"))).toBeNull();
-    reading = Promise.all([reading, owner.handleSettingsSearchQueryChange("Appearance")]).then(
-      () => undefined,
-    );
-    owner.invalidate();
+    await search("Appearance");
     await waitForSolid(() => expect(view.queryByText("Appearance")).not.toBeNull());
     publish(true);
     await waitForSolid(() => expect(request).toHaveBeenCalledWith("config.schema", {}));
     schema.reject(new Error("Synthetic schema unavailable"));
     await waitForSolid(() => expect(view.queryByRole("alert")).not.toBeNull());
     config.resolve(configSnapshot({ count: 1 }, "initial", '{"count":1}'));
-    await reading;
+    await runtimeConfig.ensureLoaded();
     flush();
     expect(view.getByRole("alert").textContent).toContain(t("nav.settingsLoadFailed"));
     expect(view.queryByText("Appearance")).not.toBeNull();
@@ -113,8 +117,7 @@ it("keeps known search results with pending schema and retains its failure after
     view.getByText(t("common.retry")).click();
     await waitForSolid(() => expect(view.queryByRole("alert")).toBeNull());
     expect(attempts).toBe(4);
-    await owner.handleSettingsSearchQueryChange("Unmatched schema field");
-    owner.invalidate();
+    await search("Unmatched schema field");
     await waitForSolid(() =>
       expect(view.queryByText(t("nav.settingsSearchNoResults"))).not.toBeNull(),
     );
@@ -123,7 +126,7 @@ it("keeps known search results with pending schema and retains its failure after
     retrySchema.resolve({ schema: {}, uiHints: {}, version: "ready" });
     refreshSchema.resolve({ schema: {}, uiHints: {}, version: "ready" });
     config.resolve(configSnapshot({}, "cleanup", "{}"));
-    await reading;
+    await runtimeConfig.ensureLoaded();
     view.unmount();
     runtimeConfig.dispose();
     runtime.stop();
@@ -138,10 +141,9 @@ it("completes static search when schema read access is intentionally unavailable
   const { gateway, publish } = createGatewayHarness(client);
   publish(true, client, hello);
   const runtimeConfig = createRuntimeConfigCapability(gateway);
-  const { runtime, owner, view } = mountSearchSidebar(gateway, runtimeConfig);
+  const { runtime, view, search } = mountSearchSidebar(gateway, runtimeConfig);
   try {
-    await owner.handleSettingsSearchQueryChange("Unmatched schema field");
-    owner.invalidate();
+    await search("Unmatched schema field");
     await waitForSolid(() =>
       expect(view.queryByText(t("nav.settingsSearchNoResults"))).not.toBeNull(),
     );

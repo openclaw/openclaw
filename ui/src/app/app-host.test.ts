@@ -566,45 +566,6 @@ describe("OpenClaw shell server preferences", () => {
   });
 });
 
-describe("OpenClaw shell settings search", () => {
-  it("loads search schema alongside config through the original capability", async () => {
-    const loadGate = createDeferred();
-    const firstRuntimeConfig = {
-      ensureLoaded: vi.fn(() => loadGate.promise),
-      ensureSchemaLoaded: vi.fn(() => Promise.resolve()),
-    } as unknown as ApplicationContext["runtimeConfig"];
-    const secondRuntimeConfig = {
-      ensureLoaded: vi.fn(() => Promise.resolve()),
-      ensureSchemaLoaded: vi.fn(() => Promise.resolve()),
-    } as unknown as ApplicationContext["runtimeConfig"];
-    const shell = testShell({ runtimeConfig: firstRuntimeConfig });
-
-    const load = shell.handleSettingsSearchQueryChange("browser");
-    expect(firstRuntimeConfig.ensureSchemaLoaded).toHaveBeenCalledOnce();
-    shell.runtime = {
-      context: { runtimeConfig: secondRuntimeConfig } as unknown as ApplicationContext,
-    };
-    loadGate.resolve();
-    await load;
-
-    expect(firstRuntimeConfig.ensureLoaded).toHaveBeenCalledOnce();
-    expect(secondRuntimeConfig.ensureSchemaLoaded).not.toHaveBeenCalled();
-  });
-
-  it("contains rejected schema loads within settings search", async () => {
-    const runtimeConfig = {
-      ensureLoaded: vi.fn(() => Promise.resolve()),
-      ensureSchemaLoaded: vi.fn(() => Promise.reject(new Error("schema unavailable"))),
-    } as unknown as ApplicationContext["runtimeConfig"];
-    const shell = testShell({ runtimeConfig });
-
-    await expect(shell.handleSettingsSearchQueryChange("browser")).resolves.toBeUndefined();
-
-    expect(runtimeConfig.ensureLoaded).toHaveBeenCalledOnce();
-    expect(runtimeConfig.ensureSchemaLoaded).toHaveBeenCalledOnce();
-  });
-});
-
 describe("OpenClaw shell keyboard shortcuts", () => {
   it("resolves onboarding mode from the active route search", () => {
     expect(resolveOnboardingMode("?onboarding=1")).toBe(true);
