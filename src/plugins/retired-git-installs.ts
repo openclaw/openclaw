@@ -4,32 +4,27 @@
 // once no loaded plugin or install record still uses the path.
 import fs from "node:fs/promises";
 import path from "node:path";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { visitConfigValueTree } from "../config/value-tree.js";
 import { ignoreMissingPath } from "../infra/errno.js";
 import { resolveUserPath } from "../infra/home-dir.js";
 import { isPathStrictlyInside } from "../infra/path-guards.js";
 import { readConfigMachineStateAsync } from "../state/config-machine-state-async.js";
-import { updateConfigMachineState } from "../state/config-machine-state-write.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db-contract.js";
+import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { normalizePluginId } from "./config-state.js";
 import { resolveDefaultPluginGitDir } from "./install-paths.js";
+import {
+  RETIRED_GIT_INSTALLS_STATE_KEY,
+  retiredGitInstallMarkerFrom as markerFrom,
+  type RetiredGitInstallMarker,
+  type RetiredGitInstallStateReplacement,
+} from "./retired-git-installs.kernel.js";
 import {
   applyPluginUninstallDirectoryRemoval,
   type PluginUninstallDirectoryRemoval,
 } from "./uninstall.js";
 
-/** Existing machine-state row. Install records stay unchanged. */
-export const RETIRED_GIT_INSTALLS_STATE_KEY = "plugins.retiredGitInstalls";
-
-type RetiredGitInstallMarker = {
-  version: 1;
-  pluginId: string;
-  target: string;
-  parentDir: string;
-  dev: string;
-  ino: string;
-};
+export { RETIRED_GIT_INSTALLS_STATE_KEY };
 
 type GatewayStartupPluginProtection = {
   configs: readonly unknown[];
@@ -57,24 +52,6 @@ function stateOptions(env?: NodeJS.ProcessEnv): OpenClawStateDatabaseOptions {
   return env ? { env } : {};
 }
 
-function markerFrom(value: unknown): RetiredGitInstallMarker | null {
-  if (!isRecord(value)) {
-    return null;
-  }
-  const { version, pluginId, target, parentDir, dev, ino } = value;
-  if (
-    version !== 1 ||
-    typeof pluginId !== "string" ||
-    typeof target !== "string" ||
-    typeof parentDir !== "string" ||
-    typeof dev !== "string" ||
-    typeof ino !== "string"
-  ) {
-    return null;
-  }
-  return { version, pluginId, target, parentDir, dev, ino };
-}
-
 async function readRetiredGitInstallState(
   env?: NodeJS.ProcessEnv,
 ): Promise<{ records: unknown[] | undefined } | { unreadable: string }> {
@@ -95,19 +72,15 @@ async function readRetiredGitInstallState(
   }
 }
 
-function replaceRetiredGitInstallState(
+async function replaceRetiredGitInstallState(
   env: NodeJS.ProcessEnv | undefined,
-  update: (current: unknown[] | undefined) => unknown[] | undefined,
-): void {
-  updateConfigMachineState<unknown[]>(
-    RETIRED_GIT_INSTALLS_STATE_KEY,
-    (current) => {
-      if (current !== undefined && !Array.isArray(current)) {
-        throw new Error("retired git install record is unreadable");
-      }
-      return update(current);
-    },
-    stateOptions(env),
+  replacement: RetiredGitInstallStateReplacement,
+): Promise<void> {
+  const { runOpenClawStateWorkerOperation } =
+    await import("../state/openclaw-state-worker-store.js");
+  await runOpenClawStateWorkerOperation(
+    captureOpenClawStateWorkerContext(stateOptions(env)),
+    (scope) => scope.execute({ type: "retiredGitInstalls.replace", input: replacement }),
   );
 }
 
@@ -192,13 +165,7 @@ export async function rememberRetiredGitPluginInstall(params: {
     dev: stat.dev.toString(),
     ino: stat.ino.toString(),
   };
-  replaceRetiredGitInstallState(params.env, (current) => [
-    ...(current ?? []).filter((entry) => {
-      const existing = markerFrom(entry);
-      return !existing || path.resolve(existing.target) !== checkout.target;
-    }),
-    marker,
-  ]);
+  await replaceRetiredGitInstallState(params.env, { action: "remember", marker });
   return true;
 }
 
@@ -206,13 +173,10 @@ export async function forgetRetiredGitPluginInstall(params: {
   target: string;
   env?: NodeJS.ProcessEnv;
 }): Promise<void> {
-  const target = path.resolve(params.target);
-  replaceRetiredGitInstallState(params.env, (current) => {
-    const kept = (current ?? []).filter((entry) => {
-      const existing = markerFrom(entry);
-      return !existing || path.resolve(existing.target) !== target;
-    });
-    return kept.length > 0 ? kept : undefined;
+  await replaceRetiredGitInstallState(params.env, {
+    action: "forget",
+    targets: [path.resolve(params.target)],
+    dropUnreadable: false,
   });
 }
 
@@ -295,8 +259,12 @@ export async function cleanupRetiredGitPluginInstalls(params: {
       return null;
     });
     if (!stat) {
-      finished.add(target);
+      // The checkout is already gone. Recheck authority before removing its
+      // empty parent; a revocation must escape the filesystem-error handler.
+      await params.assertCurrent?.();
+      params.beforePersistentApply?.();
       await fs.rmdir(checkout.parentDir).catch(() => undefined);
+      finished.add(target);
       continue;
     }
     if (
@@ -322,12 +290,10 @@ export async function cleanupRetiredGitPluginInstalls(params: {
     }
   }
   if (finished.size > 0 || records.some((entry) => markerFrom(entry) === null)) {
-    replaceRetiredGitInstallState(params.env, (current) => {
-      const kept = (current ?? []).filter((entry) => {
-        const marker = markerFrom(entry);
-        return marker !== null && !finished.has(path.resolve(marker.target));
-      });
-      return kept.length > 0 ? kept : undefined;
+    await replaceRetiredGitInstallState(params.env, {
+      action: "forget",
+      targets: [...finished],
+      dropUnreadable: true,
     });
   }
   return { removed, warnings };

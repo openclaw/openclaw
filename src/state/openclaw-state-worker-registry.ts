@@ -110,6 +110,8 @@ const loaders = {
       (m) => m.pluginModelCatalogCredentialReadOperations,
     ),
   plugins: () => import("../plugins/state.worker.js").then((m) => m.pluginRuntimeOperations),
+  retiredGitInstalls: () =>
+    import("../plugins/retired-git-installs.worker.js").then((m) => m.retiredGitInstallOperations),
   acpReplay: () => import("../acp/event-ledger.worker.js").then((m) => m.acpReplayOperations),
   acp: () =>
     import("../acp/runtime/session-meta-write.worker.js").then((m) => m.acpSessionOperations),

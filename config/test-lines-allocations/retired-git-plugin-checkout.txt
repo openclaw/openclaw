@@ -1,5 +1,6 @@
-334
+371
 # Git checkout retirement after a failed plugin activation. The install regression,
 # cleanup boundaries, and the review regressions for authority, package owners,
-# configured paths, startup references, unreadable state, and background retry
+# configured paths, startup references, unreadable state, background retry,
+# empty-parent revocation, and a pre-existing machine-state row surviving cleanup
 # do not fit in the inherited slack.

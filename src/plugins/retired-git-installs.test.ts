@@ -21,7 +21,8 @@ import {
 } from "./retired-git-installs.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-afterEach(() => {
+afterEach(async () => {
+  await closeOpenClawStateDatabaseAsync();
   closeOpenClawStateDatabaseForTest();
 });
 
@@ -186,6 +187,40 @@ it("stops before deleting when administrator authority is revoked", async () => 
     }),
   ).rejects.toThrow("administrator revoked");
   expect(fs.readFileSync(path.join(directory.repo, "kept.txt"), "utf8")).toBe("old");
+  expect(storedRecords(directory.env)?.length).toBe(1);
+});
+
+it("removes an empty parent after the checkout is already gone", async () => {
+  using directory = retiredCheckout();
+  await remember(directory);
+  writeConfigMachineState("plugins.installedIndex", { plugins: ["kept"] }, { env: directory.env });
+  fs.rmSync(directory.repo, { recursive: true });
+  const removed = await cleanupRetiredGitPluginInstalls({
+    env: directory.env,
+    protectPaths: [],
+  });
+  expect(removed).toEqual({ removed: 0, warnings: [] });
+  expect(fs.existsSync(directory.parentDir)).toBe(false);
+  expect(storedRecords(directory.env)).toBeUndefined();
+  expect(readConfigMachineState("plugins.installedIndex", { env: directory.env })).toEqual({
+    plugins: ["kept"],
+  });
+});
+
+it("stops before removing an empty parent when administrator authority is revoked", async () => {
+  using directory = retiredCheckout();
+  await remember(directory);
+  fs.rmSync(directory.repo, { recursive: true });
+  await expect(
+    cleanupRetiredGitPluginInstalls({
+      env: directory.env,
+      protectPaths: [],
+      beforePersistentApply: () => {
+        throw new Error("administrator revoked");
+      },
+    }),
+  ).rejects.toThrow("administrator revoked");
+  expect(fs.existsSync(directory.parentDir)).toBe(true);
   expect(storedRecords(directory.env)?.length).toBe(1);
 });
 
