@@ -180,14 +180,3 @@ export async function respellUnderRoot(
   const relative = path.relative(canonicalRoot, canonicalCandidate);
   return relative ? path.join(path.resolve(root), relative) : path.resolve(root);
 }
-
-/** Synchronous counterpart of `respellUnderRoot`. */
-export function respellUnderRootSync(root: string, candidate: string): string | undefined {
-  const canonicalRoot = canonicalizeContainmentRootSync(root);
-  const canonicalCandidate = realpathViaExistingPrefixSync(candidate);
-  if (!canonicalCandidate || !isPathInside(canonicalRoot, canonicalCandidate)) {
-    return undefined;
-  }
-  const relative = path.relative(canonicalRoot, canonicalCandidate);
-  return relative ? path.join(path.resolve(root), relative) : path.resolve(root);
-}
