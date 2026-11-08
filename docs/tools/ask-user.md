@@ -98,9 +98,16 @@ keep the question-to-answer summary without timed eviction. **Skip** is
 available everywhere and declines the entire prompt.
 
 Multi-question and multi-select prompts use readable text on Discord, Slack,
-and Telegram; reply in text to answer them. The Control UI and TUI keep the
-full structured stepper. The TUI shows the time remaining, dismisses expired
-prompts, and restores pending questions
+and Telegram; reply in text to answer them. For multiple questions, put one
+answer on each line and prefix it with the question number or id, for example:
+
+```text
+1: Lisbon
+2: 2000
+```
+
+The Control UI and TUI keep the full structured stepper. The TUI shows the time
+remaining, dismisses expired prompts, and restores pending questions
 for the selected session after reconnecting or switching sessions. Local mode
 keeps questions in the running process; they do not survive exiting the TUI.
 

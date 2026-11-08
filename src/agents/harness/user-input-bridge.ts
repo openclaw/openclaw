@@ -46,6 +46,9 @@ type AgentHarnessQuestionPromptPayload = {
 
 type PromptDeliveryParams = Pick<EmbeddedRunAttemptParams, "onBlockReply" | "onPartialReply">;
 
+export const MULTI_QUESTION_REPLY_GUIDANCE =
+  "Reply with your answer. For multiple questions, use one line per answer, prefixed by the question number or id. Use a declared option where choices are fixed. Example for two questions:\n1: <answer for question 1>\n2: <answer for question 2>";
+
 export function emptyAgentHarnessUserInputAnswers(): AgentHarnessUserInputAnswers {
   return { answers: {} };
 }
@@ -196,7 +199,7 @@ export function buildAgentHarnessQuestionPromptPayload(params: {
 
 function questionReplyGuidance(questions: readonly AgentHarnessUserInputQuestion[]): string {
   if (questions.length !== 1) {
-    return "Reply by number or question id. Use a declared option where choices are fixed.";
+    return MULTI_QUESTION_REPLY_GUIDANCE;
   }
   const [question] = questions;
   if (!question || (question.options?.length ?? 0) === 0) {

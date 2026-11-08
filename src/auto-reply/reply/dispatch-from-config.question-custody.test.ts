@@ -9,6 +9,7 @@ import {
   withAgentQuestionAnswerAuthority,
 } from "../../agents/harness/host-private-capabilities.js";
 import { clearAgentHarnesses } from "../../agents/harness/registry.js";
+import { buildAgentHarnessQuestionPromptPayload } from "../../agents/harness/user-input-bridge.js";
 import { resolveReplyCompletion } from "../../agents/reply-completion.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { onDiagnosticEvent, type DiagnosticEventPayload } from "../../infra/diagnostic-events.js";
@@ -360,9 +361,15 @@ describe("question custody", () => {
           "The answer was not accepted: question 'budget'",
           "question-response-rejected",
         );
-        expect(dispatcher.sendFinalReply).toHaveBeenCalledWith(
-          expect.objectContaining({ text: expect.stringContaining("still open") }),
-        );
+        const correction = dispatcher.sendFinalReply.mock.calls[0]?.[0]?.text ?? "";
+        const example = correction.split("Example for two questions:\n")[1] ?? "";
+        expect(example).toBe("1: <answer for question 1>\n2: <answer for question 2>");
+        expect(
+          buildAgentHarnessQuestionPromptPayload({ questionId, questions }).text.endsWith(example),
+        ).toBe(true);
+        const completeAnswer = example
+          .replace("<answer for question 1>", "Lisbon")
+          .replace("<answer for question 2>", "2000");
         await expectPendingQuestionAnswerClaimable(fixture.operation.key, true);
         expect(broker.get({ id: questionId }).question).toMatchObject({ status: "pending" });
         expect(broker.get({ id: questionId }).question.answers).toBeUndefined();
@@ -375,7 +382,7 @@ describe("question custody", () => {
         expect(dispatcher.sendFinalReply).toHaveBeenCalledOnce();
         expect(onResolved).not.toHaveBeenCalled();
 
-        await answerQuestion("1: Lisbon\n2: 2000", "complete-answer");
+        await answerQuestion(completeAnswer, "complete-answer");
         const answered = {
           status: "answered",
           answers: { answers: { destination: ["Lisbon"], budget: ["2000"] } },
@@ -387,7 +394,7 @@ describe("question custody", () => {
         expect(replyResolver).toHaveBeenCalledTimes(2);
         expect(dispatcher.sendFinalReply).toHaveBeenCalledOnce();
 
-        await answerQuestion("1: Lisbon\n2: 2000", "complete-answer");
+        await answerQuestion(completeAnswer, "complete-answer");
         expect(replyResolver).toHaveBeenCalledTimes(2);
         expect(onResolved).toHaveBeenCalledOnce();
         expect(onResumed).toHaveBeenCalledOnce();
