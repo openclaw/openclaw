@@ -1,2 +1,2 @@
-138
-# Real exec-finalization pause counts, preserved-mtime edits/deletion/host isolation, and pause-reason telemetry.
+241
+# Real finalization pause counts and telemetry; probe work bounds, fingerprint reuse, containment and cancellation.

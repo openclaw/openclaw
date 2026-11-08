@@ -443,6 +443,8 @@ if (values["agent-storage-dir"] && !reuseFixture) {
 const root = fileURLToPath(new URL("../../", import.meta.url));
 const owners = [
   "src/gateway/worker-environments/local-workspace-projection.ts",
+  "src/gateway/worker-environments/local-workspace-manifest-scan.ts",
+  "src/gateway/worker-environments/workspace-actual-manifest.ts",
   "src/agents/sandbox/local-workspace.ts",
   "src/agents/sandbox/local-workspace-quiescence.ts",
   "src/gateway/server-methods/sessions-files.ts",
