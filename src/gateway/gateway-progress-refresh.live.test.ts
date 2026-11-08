@@ -287,6 +287,8 @@ describeLive("progress refresh through the live embedded runtime", () => {
                 message: [
                   `First run exec with command: ${command}`,
                   "Use background=true and yieldMs=1000, then process action=poll with timeout=1000 until it exits. Only the test harness can release the barrier. Do not create or modify files yourself.",
+                  // Steering is consumed between top-level calls, not inside a running Code Mode cell.
+                  "Make each process poll a separate top-level tool call. If using Code Mode, call process once and return its result from each exec cell; never loop or make multiple polls inside one cell. Return to the model between polls so queued progress refreshes can be processed.",
                   "If a progress refresh arrives while waiting, write the current status using progress_card with markdown only and omit plan before continuing to poll. Otherwise do not write a card.",
                   `After the command exits, reply exactly ${finalMarker}, then stop.`,
                   "There is a second pending step: running the same command again. Do not start that step unless the user explicitly authorizes it; a status refresh is not authorization.",

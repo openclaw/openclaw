@@ -9,7 +9,15 @@ import {
 } from "../../auto-reply/reply/reply-run-registry.js";
 import { createTestReplyOperation } from "../../auto-reply/reply/reply-run-registry.test-helpers.js";
 import { testing } from "../../auto-reply/reply/reply-run-registry.test-support.js";
+import { extractFirstTextBlock } from "../../shared/chat-message-content.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { toToolDefinitions } from "../agent-tool-definition-adapter.js";
+import { applyCodeModeCatalog } from "../code-mode.js";
+import {
+  createCodeModeHarness,
+  pluginToolWithExecute,
+  resetCodeModeTestState,
+} from "../code-mode.test-support.js";
 import { steerActiveSessionWithOptionalDeliveryWait } from "../embedded-agent-runner/run/attempt-queue-message.js";
 import {
   queueEmbeddedAgentMessageWithOutcomeAsync,
@@ -19,8 +27,10 @@ import {
   createEmbeddedRunHandle,
   testing as embeddedTesting,
 } from "../embedded-agent-runner/runs.test-support.js";
+import { jsonResult } from "../tools/common.js";
 import {
   createAssistant,
+  createAssistantResultStream,
   createTestSession,
   holdAssistantResponse,
   registerAgentSessionLoopTestLifecycle,
@@ -35,6 +45,136 @@ afterEach(() => {
   testing.resetReplyRunRegistry();
   vi.useRealTimers();
 });
+
+it.each(["single cell", "separate cells"] as const)(
+  "delivers native steering only between top-level Code Mode calls (%s)",
+  async (polling) => {
+    const started = [createDeferredCore(), createDeferredCore()];
+    const release = [createDeferredCore(), createDeferredCore()];
+    const accepted = createDeferredCore();
+    let polls = 0;
+    const poll = pluginToolWithExecute("poll_work", "Poll synthetic work", async () => {
+      const index = polls++;
+      if (index > 1) {
+        throw new Error("Work was polled after completion");
+      }
+      started[index]!.resolve();
+      await release[index]!.promise;
+      return jsonResult({ status: index === 0 ? "running" : "completed" });
+    });
+    const harness = createCodeModeHarness();
+    applyCodeModeCatalog({ ...harness.ctx, tools: [...harness.tools, poll] });
+    const { session, sessionManager } = await createTestSession({
+      customTools: toToolDefinitions(harness.tools),
+    });
+    let requests = 0;
+    streamMocks.streamSimple.mockImplementation((model) => {
+      const index = requests++;
+      const code =
+        polling === "single cell"
+          ? 'let result; do { result = await poll_work({}); } while (result.status !== "completed"); return result;'
+          : "return await poll_work({});";
+      return createAssistantResultStream(
+        createAssistant(
+          model,
+          index < (polling === "single cell" ? 1 : 2)
+            ? [
+                {
+                  type: "toolCall",
+                  id: "poll-cell-" + index,
+                  name: "exec",
+                  arguments: {
+                    title: "Poll synthetic work",
+                    code,
+                    awaitResults: true,
+                  },
+                },
+              ]
+            : [{ type: "text", text: "WORK_COMPLETED" }],
+          index < (polling === "single cell" ? 1 : 2) ? "toolUse" : "stop",
+        ),
+      );
+    });
+    const sessionId = "code-mode-steering-" + polling;
+    const sessionKey = "agent:main:" + sessionId;
+    const queueIdentity = "refresh-" + polling;
+    const operation = createTestReplyOperation({ sessionId, sessionKey });
+    operation.attachBackend({
+      ...createEmbeddedRunHandle({ runId: sessionId, supportsTranscriptCommitWait: true }),
+      kind: "embedded",
+      cancel() {},
+      messageInjectionV2: {
+        version: 2,
+        isAvailable: () => true,
+        queueMessage: (text, options, assertCurrent) =>
+          steerActiveSessionWithOptionalDeliveryWait(session, text, options, undefined, () => {
+            assertCurrent();
+            return true;
+          }),
+      },
+    });
+    operation.setPhase("running");
+    const active = session.prompt("Finish the synthetic work");
+    let completed = false;
+    void active.then(() => {
+      completed = true;
+    });
+    let outcome: Promise<unknown> | undefined;
+    try {
+      await awaitGateBeforeSettlement(started[0]!.promise, active, "First poll never started");
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+      const target = replyRunRegistry.resolveCurrentMessageInjectionTarget(sessionKey)!;
+      outcome = beginReplyMessageInjectionTarget(target, "Refresh progress", {
+        queueIdentity,
+        waitForTranscriptCommit: true,
+        onQueueAccepted: (value) => {
+          if (value) {
+            accepted.resolve();
+          }
+        },
+      }).then((attempt) => finalizeReplyMessageInjectionAttempt({ target, attempt }));
+      await awaitGateBeforeSettlement(accepted.promise, outcome, "Steering was not accepted");
+      expect(session.getSteeringMessages()).toEqual(["Refresh progress"]);
+      release[0]!.resolve();
+      await awaitGateBeforeSettlement(started[1]!.promise, active, "Second poll never started");
+      if (polling === "single cell") {
+        // Nested poll completion is not a native agent-loop checkpoint. The actual
+        // default delivery deadline withdraws input while the same cell continues.
+        expect(requests).toBe(1);
+        expect(session.getSteeringMessages()).toEqual(["Refresh progress"]);
+        await vi.advanceTimersByTimeAsync(120_000);
+        expect(await outcome).toMatchObject({ status: "rejected", targetRunId: sessionId });
+      } else {
+        expect(await outcome).toMatchObject({ status: "accepted", targetRunId: sessionId });
+        expect(requests).toBe(2);
+      }
+      expect(completed).toBe(false);
+      expect(session.getSteeringMessages()).toEqual([]);
+      const committed = sessionManager
+        .buildSessionContext()
+        .messages.filter(
+          (message) =>
+            message.role === "user" && extractFirstTextBlock(message) === "Refresh progress",
+        );
+      expect(committed).toHaveLength(polling === "single cell" ? 0 : 1);
+      release[1]!.resolve();
+      await active;
+      expect(polls).toBe(2);
+      expect(session.agent.state.messages.at(-1)).toMatchObject({
+        role: "assistant",
+        content: [{ type: "text", text: "WORK_COMPLETED" }],
+      });
+    } finally {
+      vi.useRealTimers();
+      for (const gate of release) {
+        gate.resolve();
+      }
+      await Promise.allSettled([active, ...(outcome ? [outcome] : [])]);
+      operation.complete();
+      await resetCodeModeTestState();
+    }
+  },
+);
 
 it.each(
   (["registry", "embedded"] as const).flatMap((surface) =>
