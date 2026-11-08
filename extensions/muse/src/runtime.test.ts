@@ -1,7 +1,10 @@
+import { once } from "node:events";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { createServer, type Socket } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { awaitGateBeforeSettlement, withinTest } from "openclaw/plugin-sdk/test-fixtures";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { MusePool } from "./runtime.js";
 
@@ -22,6 +25,69 @@ afterAll(async () => {
 });
 
 describe("Muse process pool", () => {
+  it.runIf(process.platform !== "win32")(
+    "keeps shared initialization alive for another caller",
+    async ({ signal }) => {
+      const pool = new MusePool(fixture);
+      await using server = createServer();
+      const gatePath = join(workspace, "shared.sock");
+      await once(server.listen(gatePath), "listening");
+      const connected = once(server, "connection");
+      vi.stubEnv("MUSE_FIXTURE_INITIALIZE_GATE", gatePath);
+      const firstController = new AbortController();
+      const secondController = new AbortController();
+      const joined = Promise.withResolvers<void>();
+      const listen = secondController.signal.addEventListener.bind(secondController.signal);
+      const registration = vi
+        .spyOn(secondController.signal, "addEventListener")
+        .mockImplementation((...args) => {
+          listen(...args);
+          // Observe cancellation registration, without replacing the real signal or pool.
+          if (args[0] === "abort") {
+            joined.resolve();
+          }
+        });
+      const first = pool.acquire(workspace, undefined, false, firstController.signal);
+      const firstOutcome = first.then(
+        (lease) => ({ lease }),
+        (error: unknown) => ({ error }),
+      );
+      let second: ReturnType<MusePool["acquire"]> | undefined;
+      let socket: Socket | undefined;
+      try {
+        socket = (
+          await withinTest(
+            awaitGateBeforeSettlement(connected, first, "Muse did not reach initialize"),
+            signal,
+          )
+        )[0];
+        const [pid] = await withinTest(once(socket!, "data"), signal);
+        second = pool.acquire(workspace, undefined, false, secondController.signal);
+        // Handle an early rejection while retaining the original result for assertions.
+        void second.catch(() => {});
+        await withinTest(
+          awaitGateBeforeSettlement(joined.promise, second, "Second caller did not join startup"),
+          signal,
+        );
+        firstController.abort(new Error("first caller cancelled"));
+        expect(await withinTest(firstOutcome, signal)).toHaveProperty("error");
+        expect(() => process.kill(Number(pid), 0)).not.toThrow();
+        socket!.write("resume");
+        const surviving = await withinTest(second, signal);
+        expect(await surviving.runtime.host.connection.request("model/list", {})).toMatchObject({
+          providerId: "meta",
+        });
+        surviving.release();
+      } finally {
+        registration.mockRestore();
+        socket?.write("resume");
+        await Promise.allSettled([first, ...(second ? [second] : [])]);
+        socket?.destroy();
+        await pool.dispose();
+      }
+    },
+  );
+
   it.each([undefined, "key-a"])(
     "retires a warm process when managed auth changes with API key %s",
     async (apiKey) => {

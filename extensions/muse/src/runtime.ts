@@ -10,6 +10,7 @@ import {
 } from "@muse-code/sdk";
 import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { racePromiseWithAbortSignal } from "openclaw/plugin-sdk/time-runtime";
 import musePackage from "../package.json" with { type: "json" };
 
 export type MuseOpenSession = {
@@ -97,7 +98,12 @@ export async function openMuseSession(runtime: MuseRuntime, options: MuseOpenSes
 export class MusePool {
   private readonly entries = new Map<
     string,
-    { credentialIdentity: string; pending: Promise<MuseRuntime>; startup: AbortController }
+    {
+      credentialIdentity: string;
+      pending: Promise<MuseRuntime>;
+      startup: AbortController;
+      waiters: Set<object>;
+    }
   >();
   private disposed = false;
   constructor(
@@ -167,7 +173,7 @@ export class MusePool {
         }
         return this.spawn(workspace, env, readOnly, credentialIdentity, startup.signal);
       })();
-      entry = { credentialIdentity, pending, startup };
+      entry = { credentialIdentity, pending, startup, waiters: new Set() };
       this.entries.set(key, entry);
       void pending.catch(() => {
         if (this.entries.get(key) === entry) {
@@ -175,17 +181,47 @@ export class MusePool {
         }
       });
     }
-    const abort = () => entry.startup.abort(signal?.reason);
+    const waiter = {};
+    entry.waiters.add(waiter);
+    const abort = () => {
+      entry.waiters.delete(waiter);
+      // Only the last waiting caller owns cancellation of a shared startup.
+      if (entry.waiters.size === 0) {
+        entry.startup.abort(signal?.reason);
+      }
+    };
     signal?.addEventListener("abort", abort, { once: true });
     let runtime: MuseRuntime;
     try {
-      runtime = await entry.pending;
+      runtime = await racePromiseWithAbortSignal(
+        entry.pending,
+        signal,
+        (aborted) => aborted.reason,
+      );
+      signal?.throwIfAborted();
+    } catch (error) {
+      if (signal?.aborted) {
+        if (entry.waiters.size === 0) {
+          // Retain teardown ownership, but never close a host another lease uses.
+          await entry.pending.then(
+            async (ready) => {
+              if (entry.waiters.size === 0 && ready.users === 0) {
+                await ready.close();
+              }
+            },
+            () => undefined,
+          );
+        }
+        signal.throwIfAborted();
+      }
+      if (entry.startup.signal.aborted && !this.disposed) {
+        // A live caller may arrive while a cancelled startup is still closing.
+        return this.acquire(workspace, apiKey, readOnly, signal);
+      }
+      throw error;
     } finally {
+      entry.waiters.delete(waiter);
       signal?.removeEventListener("abort", abort);
-    }
-    if (signal?.aborted) {
-      await runtime.close();
-      signal.throwIfAborted();
     }
     if (this.disposed) {
       await runtime.close();

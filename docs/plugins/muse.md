@@ -286,6 +286,10 @@ matches. If any of those inputs changed, or the previous transcript was marked
 unsafe to replay, the next turn starts a new Muse session. Changes to Muse's own
 MCP configuration do not start a new session.
 
+Canceling an attempt while Muse is starting also cancels its initialization
+wait. A shared startup continues for other waiting callers; when none remain,
+OpenClaw closes the starting host before settling the cancellation.
+
 If Muse refuses to resume the stored session, the harness starts a new Muse
 session and logs why. Muse runs nothing when it refuses a resume, and the
 OpenClaw transcript keeps the conversation. This covers a session that no
