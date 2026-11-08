@@ -447,10 +447,9 @@ export function createTelegramMessageCache(params?: { scope?: string }): Telegra
     if (minId > maxId) {
       return [];
     }
+    // An absent thread selects the root conversation, not every topic in the chat.
     const matches = (node: TelegramCachedMessageNode) =>
-      options.historyOnly
-        ? node.historyEligible === true && node.threadId === thread
-        : thread === undefined || node.threadId === thread;
+      node.threadId === thread && (!options.historyOnly || node.historyEligible === true);
     const prefix = telegramMessageCacheKeyPrefix({ scopeKey, ...options });
     await hydrateMessageCacheBucket(bucket, maxMessages, scopeKey, hasRetainedStore);
     if (usesRetainedHistory(options.accountId, options.chatId)) {
@@ -636,7 +635,8 @@ export function createTelegramMessageCache(params?: { scope?: string }): Telegra
       const thread = parseTelegramMessageThreadId(threadId);
       if (
         !target ||
-        (threadId !== undefined && (thread === undefined || target.threadId !== String(thread)))
+        (threadId !== undefined && thread === undefined) ||
+        target.threadId !== (thread === undefined ? undefined : String(thread))
       ) {
         return [];
       }
@@ -781,9 +781,10 @@ export async function buildTelegramConversationContext(params: {
 }): Promise<TelegramConversationContextNode[]> {
   const selected = new Map<string, TelegramConversationContextNode>();
   const replyTargetIds = new Set<string>();
+  const threadId = params.threadId === undefined ? undefined : String(params.threadId);
   const sessionBoundaryTimestamp = normalizeSessionBoundaryTimestamp(params.minTimestampMs);
   const addNode = (node: TelegramCachedMessageNode, replyTarget = false) => {
-    if (!node.messageId || node.messageId === params.messageId) {
+    if (!node.messageId || node.messageId === params.messageId || node.threadId !== threadId) {
       return false;
     }
     if (
