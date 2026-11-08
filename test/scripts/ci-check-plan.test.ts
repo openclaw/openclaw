@@ -306,6 +306,34 @@ it("retains the complete full-check stripe inventory", async () => {
   expect(plan.core_type_matrix).toEqual(stripeMatrix(5));
 });
 
+it.each([undefined, "affected", "full"] as const)(
+  "keeps broad guards and types while selecting tooling lint in %s mode",
+  async (extensionLintMode) => {
+    selectLint();
+    const input = planInput({
+      preserveFullChecks: true,
+      extensionLintMode,
+      changedPaths: ["scripts/ci-sdk-declarations.mts"],
+      checkMatrix: checks("lint", "prod-types", "test-types", "guards"),
+      lintCoreMatrix: stripeMatrix(2),
+    });
+    const plan = await createCiCheckPlan(input);
+    expect(plan.core_type_matrix).toEqual(input.coreTypeMatrix);
+    expect(plan.check_matrix.include.filter(({ task }) => task !== "lint")).toEqual(
+      input.checkMatrix.include.filter(({ task }) => task !== "lint"),
+    );
+    if (extensionLintMode === "affected") {
+      expect(plan.lint_core_matrix.include).toEqual([]);
+      expect(JSON.parse(plan.central_lint_selection_json)).toMatchObject({
+        files: ["scripts/ci-sdk-declarations.mts"],
+        rootTestFiles: [],
+      });
+    } else {
+      expect(plan.lint_core_matrix.include.map(({ stripe }) => stripe)).toEqual([1, 2]);
+    }
+  },
+);
+
 it.each([
   [
     "hybrid",
