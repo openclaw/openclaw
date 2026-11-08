@@ -733,7 +733,12 @@ if (selectedTestTargets) {
     selected.has("extensions/browser/chrome-extension/bootstrap.chromium.test.ts");
   runUiRealGateway = e2eTargets.some((file) => realGatewayTargets.has(file));
   runUiE2e = runControlUiE2e || runBrowserExtensionE2e;
-  uiTestShardCount = Math.min(3, uiTargets.length);
+  // Small PR selections share the existing three-worker row instead of repeating setup.
+  // Full UI owners and manual validation retain their established shard layout.
+  uiTestShardCount = Math.min(
+    3,
+    ordinaryPullRequest && !uiOwnerScope.unit ? Math.ceil(uiTargets.length / 3) : uiTargets.length,
+  );
   // Keep the existing worker/row cap; omit empty file partitions.
   uiE2eJobCount = Math.min(uiE2eJobCount - 1, controlTargets.length) + 1;
 }
@@ -936,14 +941,14 @@ if (runCheckPlan && proposedCheckScope?.types) {
       resolveCiCheckFamilyScope(budgetCompanions).mode === "scoped";
     // Shared tests and numeric allocations retain every guard family, including
     // allocation validation. A budget record does not widen otherwise scoped
-    // source companions; compiler/lint owners still discover all consumers.
+    // source or root-test companions; compiler/lint owners still discover all consumers.
     preserveFullChecks = !changedPaths.every((file) => {
       const facts = getChangedPathFacts(file);
       return (
         path.posix.normalize(file) === file &&
         !file.includes("\\") &&
         (isTestLineAllocationPath(file) ||
-          (budgetOnlyFallback && facts.surface === "docs") ||
+          (budgetOnlyFallback && ["docs", "rootTest"].includes(facts.surface)) ||
           (["source", "package", "ui", "extension"].includes(facts.surface) &&
             (budgetOnlyFallback || (facts.isTestOnly && facts.isChangedLaneTest))))
       );
@@ -953,7 +958,7 @@ if (runCheckPlan && proposedCheckScope?.types) {
     runNodeFull &&
     !releaseFastLane &&
     proposedCheckScope.additionalGroups.includes("boundaries") &&
-    (!narrowCheckScope ||
+    (preserveFullChecks ||
       !compilerPaths ||
       compilerPaths.every((file) => file.startsWith("extensions/")))
       ? "additional-checks"

@@ -10584,6 +10584,32 @@ describe("ci workflow guards", () => {
     ).toBe(false);
   });
 
+  it.each([
+    { files: 4, rows: 2 },
+    { files: 6, rows: 2 },
+    { files: 10, rows: 3 },
+  ])("packs partial UI unit selections: $files files into $rows rows", ({ files, rows }) => {
+    const selected = Array.from({ length: files }, (_, index) => `ui/src/unit-${index}.test.ts`);
+    const manifest = runCiManifestFixture({
+      bundledPlanner: true,
+      historicalCompatibility: false,
+      eventName: "pull_request",
+      changedPaths: ["src/owner.ts"],
+      selectedTestTargets: selected,
+      targetFiles: selected,
+      uiTestGroupsSource: `export const createUiTestShardGroups = () => ({
+        ui: [{configs: ["ui/vitest.config.ts"], includePatterns: ${JSON.stringify(selected)}}], e2e: [],
+      });`,
+    });
+    expect(manifest.status, manifest.output).toBe(0);
+    expect(readJsonOutput(manifest.outputs, "ui_test_matrix").include).toHaveLength(rows);
+    expect(
+      resolveSelectedUiIncludes(
+        expectDefined(manifest.outputs.ui_test_groups_gzip_base64, "UI selection"),
+      ).flat(),
+    ).toEqual(selected);
+  });
+
   it.each(
     [
       {
@@ -10598,10 +10624,10 @@ describe("ci workflow guards", () => {
         windows: [2],
       },
       {
-        label: "unit and smoke without Windows ownership",
+        label: "small unit selection without Windows ownership",
         windowsArea: false,
         unitOwner: false,
-        ui: [1],
+        ui: [0, 1, 2],
         mocked: [],
         real: [],
         browser: [],
@@ -10690,10 +10716,12 @@ describe("ci workflow guards", () => {
         manifest.outputs.reuse_browser_extension_build === "true",
     ).toBe(selected.mocked.length + selected.browser.length > 0);
     expect(manifest.outputs.run_ui_real_gateway).toBe(String(!isPr && selected.real.length > 0));
+    const expectedUiRows =
+      isPr && !scenario.unitOwner && expectedUi.length > 0 ? 1 : Math.min(3, expectedUi.length);
     expect(readJsonOutput(manifest.outputs, "ui_test_matrix").include).toEqual(
-      expectedUi.slice(0, 3).map((_, index) => ({ shard: index + 1 })),
+      Array.from({ length: expectedUiRows }, (_, index) => ({ shard: index + 1 })),
     );
-    expect(manifest.outputs.ui_test_shard_count).toBe(String(Math.min(3, expectedUi.length)));
+    expect(manifest.outputs.ui_test_shard_count).toBe(String(expectedUiRows));
     expect(
       resolveSelectedUiIncludes(
         expectDefined(manifest.outputs.ui_test_groups_gzip_base64, "UI selection"),
@@ -13868,6 +13896,8 @@ describe("shared test-source check execution", () => {
   };
 
   it.each([
+    ["test/scripts/ci-check-plan.test.ts", "config/test-lines-allocations/example.txt"],
+    ["test/example.test.ts", "config/test-lines-allocations/example.txt"],
     [
       "extensions/codex/src/session-catalog-index.test.ts",
       "extensions/codex/src/session-catalog-rollouts.test.ts",
@@ -13899,7 +13929,11 @@ describe("shared test-source check execution", () => {
     expect(manifest.status, manifest.output).toBe(0);
     const input = readJsonOutput(manifest.outputs, "check_plan_input_json");
     expect(input.preserveFullChecks).toBe(false);
-    expect(input.typeGraphBoundaryOwner).toBe("additional-checks");
+    expect(input.typeGraphBoundaryOwner).toBe(
+      changedPaths.every((file) => file.startsWith("extensions/"))
+        ? "additional-checks"
+        : "check-plan",
+    );
     const rows = readJsonOutput(manifest.checkPlanOutputs, "check_matrix").include;
     expect(
       rows.flatMap((row: { type_graph_names_json?: string }) =>
@@ -13928,6 +13962,7 @@ describe("shared test-source check execution", () => {
 
   it.each([
     ["test/helpers/shared.ts"],
+    ["test/scripts/ci-check-plan.test.ts", "scripts/generate-kysely-types.mts"],
     ["src/shared.test-support.d.ts"],
     ["src/shared.test-support.ts", "src/runtime.ts"],
     [
