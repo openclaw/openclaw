@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { afterAll, assert, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
@@ -9,11 +10,13 @@ import { withWorktreeAllocationLease } from "../../agents/worktrees/allocation.j
 import { createCopyWorktreeBackend } from "../../agents/worktrees/filesystem-backend.test-support.js";
 import { requireGit } from "../../agents/worktrees/git.js";
 import { withWorktreePreparationTiming } from "../../agents/worktrees/preparation-timing.js";
+import { makeWorktreeRecord } from "../../agents/worktrees/service.test-support.js";
 import { listTemplatesAsync } from "../../agents/worktrees/template-registry-async.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { gitNullConfigPath } from "../../infra/git-exec.js";
 import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import "../../test-utils/prepare-compiled-subprocesses.js";
+import { initializeLocalWorkspaceProjection } from "./local-workspace-checkout.js";
 import { prewarmLocalWorkspaceTemplates } from "./local-workspace-prewarm.js";
 import { cloneLocalWorkspaceTemplate } from "./local-workspace-template.js";
 
@@ -246,6 +249,61 @@ it("retains dependencies without credentials or install debris", async ({ signal
     await expectMissing(checkout, ...installerSecrets, "build", "untracked-output.txt");
   });
 });
+
+it.for([false, true])(
+  "filters fetches from a reused template (existing origin: %s)",
+  async (configured, { signal }) => {
+    const clone = await fixture(signal);
+    const priorUrl = await git(source, "config", "remote.origin.url");
+    if (configured) {
+      await git(source, "config", "remote.origin.url", "https://github.com/example/previous.git");
+    }
+    const seed = await clone("old-fetch-defaults");
+    const url = "https://github.com/example/projection.git";
+    await git(source, "config", "remote.origin.url", url);
+    await git(source, "config", "uploadpack.allowFilter", "true");
+    try {
+      const projectionPath = path.join(path.dirname(seed), "templates", "fetch-proof", "workspace");
+      await withWorktreeAllocationLease({ env, signal }, (allocation) =>
+        initializeLocalWorkspaceProjection({
+          owner: {
+            agentId: "main",
+            sessionKey: "agent:main:fetch-proof",
+            sessionId: "fetch-proof",
+            lifecycleRevision: null,
+            assertCurrent: () => {},
+            env,
+            worktree: makeWorktreeRecord(source, "fetch-proof", { branch: "guest" }),
+          },
+          projectionPath,
+          baseCommit,
+          signal,
+          assertCurrent: () => {},
+          buildCacheInputs: async () => [],
+          dependencies: { sandbox, allocation },
+        }),
+      );
+      expect(mocks.install).toHaveBeenCalledOnce();
+      expect(await git(projectionPath, "config", "--get-all", "remote.origin.url")).toBe(url);
+      await git(
+        projectionPath,
+        "-c",
+        `url.${pathToFileURL(source).href}.insteadOf=${url}`,
+        "fetch",
+        "--no-tags",
+        "origin",
+        changedCommit,
+      );
+      const changedBlob = await git(source, "rev-parse", `${changedCommit}:pnpm-lock.yaml`);
+      expect(
+        await git(projectionPath, "cat-file", "--batch-all-objects", "--batch-check=%(objectname)"),
+      ).not.toContain(changedBlob);
+    } finally {
+      await git(source, "config", "remote.origin.url", priorUrl);
+      await git(source, "config", "--unset", "uploadpack.allowFilter");
+    }
+  },
+);
 
 it.for([
   "external virtual store",

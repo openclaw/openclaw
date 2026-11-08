@@ -4,17 +4,57 @@ import path from "node:path";
 import type { SandboxConfig } from "../../agents/sandbox/types.js";
 import type { WorktreeAllocationGuard } from "../../agents/worktrees/allocation.js";
 import { withWorktreeGitConfig } from "../../agents/worktrees/checkout-git-config.js";
-import { gitEnvironment, requireGit } from "../../agents/worktrees/git.js";
+import { commandError, gitEnvironment, requireGit, runGit } from "../../agents/worktrees/git.js";
 import { timeWorktreePreparationPhase } from "../../agents/worktrees/preparation-timing.js";
 import { resolveStateDir } from "../../config/state-dir.js";
 import { observeDiagnosticsTimelinePhases } from "../../infra/diagnostics-timeline.js";
-import { gitNullConfigPath } from "../../infra/git-exec.js";
+import { gitNullConfigPath, quoteGitConfig } from "../../infra/git-exec.js";
+import { parseGitHubRemoteUrl } from "../github-remote.js";
 import type { LocalWorkspaceOwner } from "./local-workspace-types.js";
 import { prepareWorkerWorkspaceGitPack } from "./workspace-git-base.js";
 import { captureWorkspaceManifestDocument } from "./workspace-manifest-worker.js";
 import { runWorkspaceInventoryCommandToFile } from "./workspace-sync-inventory.js";
 
 const RECONCILE_PHASE = "attempt.setup.sandbox.workspace_selection.prepare.reconcile";
+
+async function configureProjectionFetch(params: {
+  source: string;
+  destination: string;
+  signal: AbortSignal;
+  assertCurrent: () => void;
+}) {
+  const origin = await runGit(params.source, ["config", "--get", "remote.origin.url"], {
+    signal: params.signal,
+    beforeRun: params.assertCurrent,
+  });
+  if (origin.code !== 0 && origin.code !== 1) {
+    throw commandError("git config remote.origin.url", origin);
+  }
+  const repository = parseGitHubRemoteUrl(origin.stdout);
+  if (!repository) {
+    return;
+  }
+  // Reconstruct the address: never export host credentials, helpers or local paths.
+  const url = `https://github.com/${repository.owner}/${repository.repo}`;
+  // A cached template may already have an origin; multiple URLs make push fan out.
+  await requireGit(
+    params.destination,
+    ["config", "--local", "--replace-all", "remote.origin.url", `${url}.git`],
+    {
+      signal: params.signal,
+      beforeRun: params.assertCurrent,
+    },
+  );
+  // Git keys filters by the supplied remote name, even when that name is a URL.
+  const config = ["origin", url, `${url}.git`]
+    .map(
+      (remote) =>
+        `\n[remote ${quoteGitConfig(remote)}]\npromisor=true\npartialclonefilter=blob:none\n`,
+    )
+    .join("");
+  params.assertCurrent();
+  await fs.appendFile(path.join(params.destination, ".git", "config"), config);
+}
 
 export function localWorkspaceProjectionPath(owner: Pick<LocalWorkspaceOwner, "worktree" | "env">) {
   if (!/^[a-f0-9-]{36}$/u.test(owner.worktree.id)) {
@@ -122,6 +162,7 @@ export async function prepareLocalWorkspaceCheckout(params: {
       current();
       await fs.writeFile(path.join(repo, ".git", "shallow"), params.baseCommit + "\n");
     }
+    await configureProjectionFetch(params);
   } finally {
     phases.mark(`${RECONCILE_PHASE}.checkout.cleanup`);
     await fs.rm(temporary, { recursive: true, force: true });
@@ -195,6 +236,9 @@ export async function initializeLocalWorkspaceProjection(params: {
     if (!cloned) {
       phases.mark(`${RECONCILE_PHASE}.checkout`);
       await timeWorktreePreparationPhase("checkout", () => prepareLocalWorkspaceCheckout(checkout));
+    } else {
+      // A retained template may predate the fetch defaults; its key remains source-owned.
+      await configureProjectionFetch(checkout);
     }
     phases.mark(`${RECONCILE_PHASE}.manifest_scan`);
     const initial = await timeWorktreePreparationPhase("snapshot", async () =>
