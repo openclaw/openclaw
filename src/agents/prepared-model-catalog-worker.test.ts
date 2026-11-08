@@ -2,12 +2,59 @@ import { describe, expect, it, vi } from "vitest";
 import { captureRuntimeConfig } from "../config/runtime-source-projection.js";
 import * as cryptoDigest from "../infra/crypto-digest.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
+import { applySkillEnvOverridesFromSnapshot } from "../skills/runtime/env-overrides.js";
 import { fingerprintPreparedModelCatalogGeneration } from "./prepared-model-catalog-fingerprints.js";
 import { createPreparedModelCatalogWorkerInput } from "./prepared-model-catalog-worker.js";
 import type { PreparedModelRuntimeAgentFacts } from "./prepared-model-runtime.catalog-contract.js";
 import { AuthStorage } from "./sessions/auth-storage.js";
 
 describe("prepared model catalog worker input", () => {
+  it("excludes only active skill keys from implicit Gateway environments", () => {
+    const skillKey = "catalog-env-fixture";
+    const envKey = "OPENCLAW_CATALOG_SKILL_FIXTURE";
+    vi.stubEnv(envKey, undefined);
+    const restore = applySkillEnvOverridesFromSnapshot({
+      snapshot: { prompt: "", skills: [{ name: skillKey }] },
+      config: { skills: { entries: { [skillKey]: { env: { [envKey]: "turn-local" } } } } },
+    });
+    const env = { [envKey]: "turn-local", CATALOG_UNRELATED: "preserved" };
+    const agentFacts: PreparedModelRuntimeAgentFacts = {
+      input: { config: {}, agentDir: "/tmp/catalog-agent", allowGatewaySubagentBinding: true },
+      env,
+      authStore: { version: 1, profiles: {} },
+      credentials: {},
+      providerIds: [],
+      configuredModelRefs: [],
+      configuredRuntimeModels: [],
+      runtimeCapabilityModels: [],
+      configuredGeneratedCatalogPluginIds: [],
+      templateAuthStorage: AuthStorage.inMemory({}),
+    };
+    const pluginMetadataSnapshot = createPluginMetadataSnapshotFixture();
+    try {
+      const implicit = createPreparedModelCatalogWorkerInput({
+        agentFacts,
+        pluginMetadataSnapshot,
+      });
+      expect(implicit.input.env).toEqual({ CATALOG_UNRELATED: "preserved" });
+      for (const input of [
+        { ...agentFacts.input, env },
+        { ...agentFacts.input, allowGatewaySubagentBinding: false },
+      ]) {
+        expect(
+          createPreparedModelCatalogWorkerInput({
+            agentFacts: { ...agentFacts, input },
+            pluginMetadataSnapshot,
+          }).input.env,
+        ).toEqual(env);
+      }
+      expect(agentFacts.env).toEqual(env);
+      expect(process.env[envKey]).toBe("turn-local");
+    } finally {
+      restore();
+      vi.unstubAllEnvs();
+    }
+  });
   it("reuses captured config digests while workers independently reconstruct them", () => {
     const marker = "synthetic-worker-roster-boundary";
     const digests = vi.spyOn(cryptoDigest, "sha256Base64Url");
