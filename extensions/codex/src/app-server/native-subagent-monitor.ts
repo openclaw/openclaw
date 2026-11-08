@@ -100,6 +100,7 @@ import {
   registerNativeSubagentParent,
   type NativeParentRegistration,
 } from "./native-subagent-parent-owner.js";
+import { releaseSettledNativeParent } from "./native-subagent-parent-retention.js";
 import { matchesNativeAssignmentLifecycle } from "./native-subagent-pending-assignments.js";
 import {
   CodexNativeSubagentRecoveryCoordinator,
@@ -1198,6 +1199,10 @@ class Monitor {
     releaseNativeModelExecution(childState);
     this.recovery.clearRecoveryTimers(childState);
     this.releaseParentThreadIfChildrenSettled(childState.parentThreadId);
+    const parent = this.parentStates.get(childState.parentThreadId);
+    if (parent) {
+      this.completionDelivery.resumeSiblingWaiters(parent);
+    }
     this.releaseClientRetentionIfIdle();
   }
 
@@ -2238,6 +2243,7 @@ class Monitor {
     this.releaseClientRetentionIfIdle();
     const state = this.parentStates.get(childState.parentThreadId);
     if (state) {
+      this.completionDelivery.resumeSiblingWaiters(state);
       this.submissions.settleChild(state, childState);
       this.assignments.settle(state, childState);
       this.pruneParentIfUnused(state);
@@ -2340,20 +2346,11 @@ class Monitor {
   }
 
   private releaseParentThreadIfChildrenSettled(parentThreadId: string): void {
-    for (const childState of this.childStates.values()) {
-      if (
-        childState.parentThreadId === parentThreadId &&
-        !childState.terminal &&
-        !childState.settledWithoutCompletion
-      ) {
-        return;
-      }
-    }
-    // Pending completion delivery keeps its own custody, but must not block
-    // the parent from resuming to receive those results.
-    const releaseParentThread = this.parentThreadRetentions.get(parentThreadId);
-    this.parentThreadRetentions.delete(parentThreadId);
-    releaseParentThread?.();
+    releaseSettledNativeParent(
+      this.childStates.values(),
+      this.parentThreadRetentions,
+      parentThreadId,
+    );
   }
 
   private hasChildrenForParent(parentThreadId: string): boolean {

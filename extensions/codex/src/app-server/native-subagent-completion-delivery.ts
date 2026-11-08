@@ -68,7 +68,7 @@ export class CodexNativeSubagentCompletionDelivery {
     );
   }
 
-  private resumeSiblingWaiters(state: ParentState, active: ChildState): void {
+  resumeSiblingWaiters(state: ParentState, active?: ChildState): void {
     if (this.hasLiveSiblings(state)) {
       return;
     }
@@ -83,7 +83,9 @@ export class CodexNativeSubagentCompletionDelivery {
         continue;
       }
       const resume = () => {
-        void this.deliverPending(state, waiting);
+        if (this.isCurrent(state, waiting)) {
+          this.finish(state, waiting);
+        }
       };
       const pending = this.attempts.get(waiting) ?? Promise.resolve();
       void pending.then(resume, resume);
@@ -154,6 +156,11 @@ export class CodexNativeSubagentCompletionDelivery {
         return;
       }
       const historyOwner = childState.historyOwner;
+      // A sibling may settle while the handoff is awaiting the Gateway. Retain
+      // that wakeup until this attempt has finished, without racing the next one.
+      if (this.hasLiveSiblings(state)) {
+        this.siblingWaiters.add(childState);
+      }
       const delivery = await this.dependencies.deliver({
         scope: state.completionScope,
         completionCustody: childState.completionCustody,

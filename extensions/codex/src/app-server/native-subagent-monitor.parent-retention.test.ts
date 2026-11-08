@@ -16,6 +16,7 @@ import {
   createRuntime,
   nativeCompletionNotification,
   notifyChildStarted,
+  observeCompletionAttempts,
   registerParent,
   threadRead,
   turnStartedNotification,
@@ -27,6 +28,146 @@ import { releaseCodexBoundLiveThread } from "./thread-lifecycle-warm.js";
 afterEach(() => {
   vi.useRealTimers();
   vi.restoreAllMocks();
+});
+
+it("promptly delivers a waiting completion when the last sibling is interrupted", async () => {
+  vi.useFakeTimers();
+  const attempts = observeCompletionAttempts();
+  const { client, runtime, monitor } = await setupParentRetention(
+    "/tmp/codex-interrupted-sibling",
+    () => {},
+    false,
+  );
+  const parent = await registerParent(monitor);
+  await notifyChildStarted(client, "parent-thread", "child-a");
+  await notifyChildStarted(client, "parent-thread", "child-b");
+  await notifyChildStarted(client, "parent-thread", "child-c");
+  await client.notify(turnStartedNotification("child-b-turn", { threadId: "child-b" }));
+  await client.notify(turnStartedNotification("child-c-turn", { threadId: "child-c" }));
+  await parent.unregister();
+  await client.notify(
+    nativeCompletionNotification({ agentPath: "child-a", result: "first result" }),
+  );
+  expect(runtime.deliverAgentHarnessCompletion).not.toHaveBeenCalled();
+  await client.notify(
+    childTurnCompletedNotification({
+      threadId: "child-b",
+      turnId: "child-b-turn",
+      status: "interrupted",
+    }),
+  );
+  await attempts.settle();
+  expect(runtime.deliverAgentHarnessCompletion).not.toHaveBeenCalled();
+  await client.notify(
+    childTurnCompletedNotification({
+      threadId: "child-c",
+      turnId: "child-c-turn",
+      status: "interrupted",
+    }),
+  );
+  await attempts.settle();
+  expect(runtime.deliverAgentHarnessCompletion).toHaveBeenCalledTimes(1);
+  expect(runtime.deliverAgentHarnessCompletion.mock.calls[0]?.[0].result).toBe("first result");
+});
+
+it.each([false, true])(
+  "settles an in-flight handoff after the last sibling is interrupted (success: %s)",
+  async (success) => {
+    vi.useFakeTimers();
+    const attempts = observeCompletionAttempts();
+    const { client, runtime, monitor } = await setupParentRetention("/tmp/codex-sibling-inflight");
+    type DeliveryResult =
+      | { delivered: false; path: "none"; error: string }
+      | { delivered: true; path: "direct" };
+    let releaseDelivery!: (result: DeliveryResult) => void;
+    let notifyStarted!: () => void;
+    const started = new Promise<void>((resolve) => {
+      notifyStarted = resolve;
+    });
+    const inflight = new Promise<DeliveryResult>((resolve) => {
+      releaseDelivery = resolve;
+    });
+    runtime.deliverAgentHarnessCompletion
+      .mockImplementationOnce(() => {
+        notifyStarted();
+        return inflight;
+      })
+      .mockResolvedValue({ delivered: true, path: "direct" });
+    const parent = await registerParent(monitor);
+    await notifyChildStarted(client, "parent-thread", "child-a");
+    await notifyChildStarted(client, "parent-thread", "child-b");
+    await client.notify(turnStartedNotification("child-b-turn", { threadId: "child-b" }));
+    await parent.unregister();
+    const first = client.notify(
+      nativeCompletionNotification({ agentPath: "child-a", result: "first result" }),
+    );
+    await started;
+    await client.notify(
+      childTurnCompletedNotification({
+        threadId: "child-b",
+        turnId: "child-b-turn",
+        status: "interrupted",
+      }),
+    );
+    releaseDelivery(
+      success
+        ? { delivered: true, path: "direct" }
+        : { delivered: false, path: "none", error: "transient" },
+    );
+    await first;
+    await attempts.settle();
+    expect(runtime.deliverAgentHarnessCompletion).toHaveBeenCalledTimes(success ? 1 : 2);
+  },
+);
+
+it("wakes a waiting completion after a mismatched sibling is retired", async () => {
+  vi.useFakeTimers();
+  const attempts = observeCompletionAttempts();
+  const { client, runtime, monitor } = await setupParentRetention(
+    "/tmp/codex-retired-sibling",
+    () => {},
+    false,
+  );
+  const parent = await registerParent(monitor);
+  await notifyChildStarted(client, "parent-thread", "child-a");
+  await notifyChildStarted(client, "parent-thread", "child-b");
+  await parent.unregister();
+  await client.notify(
+    nativeCompletionNotification({ agentPath: "child-a", result: "first result" }),
+  );
+  expect(runtime.deliverAgentHarnessCompletion).not.toHaveBeenCalled();
+  client.setThreadRead(
+    "child-b",
+    threadRead({
+      childThreadId: "child-b",
+      parentThreadId: "foreign-parent",
+      status: "inProgress",
+    }),
+  );
+  await monitor.reconcileChildThread("child-b");
+  await attempts.settle();
+  expect(runtime.deliverAgentHarnessCompletion).toHaveBeenCalledTimes(1);
+});
+
+it("preserves pending completion delivery when the monitor is disposed", async () => {
+  vi.useFakeTimers();
+  const attempts = observeCompletionAttempts();
+  const { client, runtime, monitor } = await setupParentRetention(
+    "/tmp/codex-disposed-sibling",
+    () => {},
+    false,
+  );
+  const parent = await registerParent(monitor);
+  await notifyChildStarted(client, "parent-thread", "child-a");
+  await notifyChildStarted(client, "parent-thread", "child-b");
+  await parent.unregister();
+  await client.notify(
+    nativeCompletionNotification({ agentPath: "child-a", result: "first result" }),
+  );
+  expect(runtime.deliverAgentHarnessCompletion).not.toHaveBeenCalled();
+  await monitor.dispose();
+  await attempts.settle();
+  expect(runtime.deliverAgentHarnessCompletion).toHaveBeenCalledTimes(1);
 });
 
 async function setupParentRetention(
