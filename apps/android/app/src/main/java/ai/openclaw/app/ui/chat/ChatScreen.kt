@@ -668,13 +668,20 @@ internal fun ChatScreen(
         recents = modelRecents,
       )
     }
+  val catalogModelName = selectedCatalogModel?.name?.takeIf { it.isNotBlank() }
+  // Keep only the displayed name through catalog gaps, never availability or eligibility.
+  // The composer owner binds it to the gateway, agent, and session; a model change resets it.
+  var knownModelName by remember(composerOwner, selectedModelRef) { mutableStateOf<String?>(null) }
+  SideEffect {
+    if (selectedCatalogModel != null) knownModelName = catalogModelName
+  }
+  val selectedModelName = if (selectedCatalogModel == null) knownModelName else catalogModelName
   val selectedModelLabel =
     if (modelSelectionLocked) {
       if (activeSession.agentRuntimeId == "codex") nativeString("Native Codex model") else nativeString("Locked session model")
     } else {
       selectedModelRef?.let { selected ->
-        selectedCatalogModel?.name?.takeIf { it.isNotBlank() }
-          ?: selected.substringAfterLast('/')
+        selectedModelName ?: selected.substringAfterLast('/')
       } ?: nativeString("Model")
     }
   val modelUnavailableReason =

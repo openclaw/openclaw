@@ -3677,6 +3677,93 @@ class ChatComposerLayoutTest {
   }
 
   @Test
+  fun composerKeepsKnownModelNameDuringDisconnectAndCatalogGaps() {
+    val viewModel = showChat(viewportHeight = { 720.dp })
+    val catalog = controllerFlow<List<GatewayModelSummary>>("_modelCatalog")
+    val selectedModel = controllerFlow<String?>("_selectedModelRef")
+    val beta = catalog.value.first().copy(id = "beta", provider = "lab", name = "Beta")
+    composeRule.runOnIdle {
+      selectedModel.value = "lab/beta"
+      catalog.value = listOf(beta)
+    }
+    val chip = composeRule.onNodeWithContentDescription(nativeString("Model"))
+    chip.assertTextEquals("Beta")
+
+    val operatorSession = ReflectionHelpers.getField<GatewaySession>(runtime, "operatorSession")
+    val onDisconnected = ReflectionHelpers.getField<(String) -> Unit>(operatorSession, "onDisconnected")
+    composeRule.runOnIdle { onDisconnected("Offline") }
+    composeRule.runOnIdle {
+      assertEquals("lab/beta", viewModel.chatSelectedModelRef.value)
+      assertTrue(viewModel.chatModelCatalog.value.isEmpty())
+    }
+    captureComposerProof("model-name-offline")
+    chip.assertTextEquals("Beta")
+
+    // A new catalog replaces the displayed name without restoring old eligibility.
+    composeRule.runOnIdle {
+      catalog.value = listOf(beta.copy(name = "Beta renamed", available = false, unavailableReason = GatewayModelUnavailableReason.MissingAuth))
+    }
+    chip.assertTextEquals("Beta renamed")
+    composeRule.runOnIdle { catalog.value = emptyList() }
+    chip.assertTextEquals("Beta renamed")
+    composeRule.runOnIdle {
+      assertEquals("lab/beta", selectedModel.value)
+      assertTrue(chatModelPickerChoices(viewModel.chatModelCatalog.value, emptyList(), emptyList()).isEmpty())
+      assertEquals(null, selectedChatModelUnavailableReason(selectedModel.value, viewModel.chatModelCatalog.value))
+    }
+
+    // A published blank name is fresh metadata, not a missing catalog entry.
+    composeRule.runOnIdle { catalog.value = listOf(beta.copy(name = " ")) }
+    chip.assertTextEquals("beta")
+    composeRule.runOnIdle { catalog.value = emptyList() }
+    chip.assertTextEquals("beta")
+  }
+
+  @Test
+  fun composerModelNameDoesNotCrossGatewayAgentSessionOrSelection() {
+    showChat()
+    val catalog = controllerFlow<List<GatewayModelSummary>>("_modelCatalog")
+    val selectedModel = controllerFlow<String?>("_selectedModelRef")
+    val beta = catalog.value.first().copy(id = "beta", provider = "lab", name = "Beta")
+    composeRule.runOnIdle {
+      controllerFlow<String>("_sessionKey").value = "label-session"
+      controllerFlow<String?>("_sessionOwnerAgentId").value = "main"
+      prefs.gatewayRegistry.upsert(GatewayRegistryEntry("label-other-gateway", GatewayRegistryEntryKind.DISCOVERED, "Other gateway"))
+    }
+    val chip = composeRule.onNodeWithContentDescription(nativeString("Model"))
+    val changes =
+      listOf<() -> Unit>(
+        { selectedModel.value = "lab/alpha" },
+        { controllerFlow<String>("_sessionKey").value = "other-label-session" },
+        { controllerFlow<String?>("_sessionOwnerAgentId").value = "other" },
+        { prefs.gatewayRegistry.setActive("label-other-gateway") },
+      )
+    for ((index, change) in changes.withIndex()) {
+      composeRule.runOnIdle {
+        selectedModel.value = "lab/beta"
+        catalog.value = listOf(beta)
+      }
+      chip.assertTextEquals("Beta")
+      composeRule.runOnIdle {
+        catalog.value = emptyList()
+        change()
+      }
+      val expectedRef = if (index == 0) "lab/alpha" else "lab/beta"
+      composeRule.runOnIdle { assertEquals(expectedRef, selectedModel.value) }
+      chip.assertTextEquals(if (index == 0) "alpha" else "beta")
+    }
+    composeRule.runOnIdle { catalog.value = listOf(beta) }
+    chip.assertTextEquals("Beta")
+    composeRule.runOnIdle {
+      catalog.value = emptyList()
+      selectedModel.value = null
+    }
+    chip.assertTextEquals(nativeString("Model"))
+    composeRule.runOnIdle { selectedModel.value = "lab/beta" }
+    chip.assertTextEquals("beta")
+  }
+
+  @Test
   @Config(qualifiers = "en-rUS-w390dp-h844dp-mdpi")
   fun modelSheetKeepsChatVisibleAndSearchesExpandableProviderGroups() {
     showChat(viewportWidth = 390.dp, viewportHeight = { 844.dp })
