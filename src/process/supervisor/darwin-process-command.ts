@@ -9,7 +9,10 @@ import type { ProcessCommand } from "./service-child-group-ownership.js";
 
 let reportedForeignArguments = false;
 
-const REDACTED_ARGUMENTS_ENTITLEMENT = "com.apple.private.no-read-procargs";
+// codesign prints a key/value dump by default and XML with --xml; some macOS 27
+// hosts reject the XML form for this blob, so accept either representation.
+const REDACTED_ARGUMENTS_ENTITLEMENT =
+  /\[Key\] com\.apple\.private\.no-read-procargs\s*\[Value\]\s*\[Bool\] true|<key>com\.apple\.private\.no-read-procargs<\/key>\s*<true\/>/u;
 
 /** The running image from its kernel text vnode, which process.title cannot rewrite. */
 function readDarwinImagePath(pid: number): string | undefined {
@@ -25,11 +28,11 @@ function isRedactedSystemImage(image: string): boolean {
   if (!image.startsWith("/System/")) {
     return false;
   }
-  const result = spawnSync("/usr/bin/codesign", ["-d", "--entitlements", "-", "--xml", image], {
+  const result = spawnSync("/usr/bin/codesign", ["-d", "--entitlements", "-", image], {
     encoding: "utf8",
     timeout: 2_000,
   });
-  return result.status === 0 && result.stdout.includes(REDACTED_ARGUMENTS_ENTITLEMENT);
+  return result.status === 0 && REDACTED_ARGUMENTS_ENTITLEMENT.test(result.stdout);
 }
 
 function readCommandWithServiceMarker(pid: number) {

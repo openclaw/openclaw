@@ -144,7 +144,9 @@ it.each([
           }
         : {
             status: 0,
-            stdout: entitled ? "<key>com.apple.private.no-read-procargs</key><true/>" : "<dict/>",
+            stdout: entitled
+              ? "[Dict]\n\t[Key] com.apple.private.no-read-procargs\n\t[Value]\n\t\t[Bool] true\n"
+              : "[Dict]\n",
           },
     );
     const inspect = () => readDarwinProcessCommand(992, owner);
