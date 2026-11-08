@@ -365,11 +365,10 @@ describe("admitted WebChat prompt reactions", () => {
     expect(listSessionReactions(scope, { sessionId: scope.sessionId })).toEqual({});
   });
 
-  it("keeps source-reply-only tools send-only even with a current-prompt grant", async () => {
+  it("enforces source-reply-only execution with a stable definition and a current-prompt grant", async () => {
     await persist();
     const selected = tool({ sourceReplyOnly: true });
-    expect(Check(selected.parameters, { action: "send", message: "Done" })).toBe(true);
-    expect(Check(selected.parameters, { action: "react", emoji: "👍" })).toBe(false);
+    expect(selected.parameters).toEqual(tool({}).parameters);
     await expect(execute({ final: true }, selected)).rejects.toThrow('permit only action "send"');
     expect(broadcast).not.toHaveBeenCalled();
     expect(external).not.toHaveBeenCalled();

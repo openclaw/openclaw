@@ -537,9 +537,12 @@ suite.define(() => {
           textIncludes: `${nonOwnerMarker}:`,
           timeoutMs: 60_000,
         });
-        expect(provider.toolAvailability.get(nonOwnerMarker)).toBe(false);
-        expect(provider.results.has(nonOwnerMarker)).toBe(false);
-        expect(nonOwnerReply.text).toContain("Automation tools are unavailable for this caller.");
+        // Stable discovery does not grant this conversation the owner's authority.
+        const nonOwnerRefusal =
+          "automations needs the owner's authority, and this turn was not started by the owner. Do not retry automations.";
+        expect(provider.toolAvailability.get(nonOwnerMarker)).toBe(true);
+        expect(provider.results.get(nonOwnerMarker)).toBe(nonOwnerRefusal);
+        expect(nonOwnerReply.text).toContain(nonOwnerRefusal);
         expect(await gateway.call("cron.get", { id: jobId })).toEqual(jobBeforeNonOwner);
         expect(await gateway.call("cron.runs", { id: jobId })).toEqual(runsBeforeNonOwner);
         expect(managementAuditEvents()).toHaveLength(0);
@@ -700,7 +703,7 @@ suite.define(() => {
               configuredTelegramOwner: ownerResults,
               nonOwnerTelegramConversation: {
                 automationsAvailable: provider.toolAvailability.get(nonOwnerMarker),
-                remove: "unavailable visibly; job and runs unchanged",
+                refusal: provider.results.get(nonOwnerMarker),
               },
               adminManagementAuditEvents: auditEvents.length,
             },

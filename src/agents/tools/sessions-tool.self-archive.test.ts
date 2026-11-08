@@ -345,13 +345,11 @@ describe("sessions tool ownership", () => {
         });
         return;
       }
-      expect(tool.parameters).toHaveProperty("properties.action.enum", [
-        "patch",
-        "stop",
-        "assign_owner",
-      ]);
-      expect(tool.parameters).toHaveProperty("properties.user");
-      expect(tool.parameters).not.toHaveProperty("properties.model");
+      // The full definition stays stable; the control gate refuses settings when they run.
+      expect(tool.parameters).toHaveProperty(
+        "properties.action.enum",
+        expect.arrayContaining(["patch", "stop", "assign_owner"]),
+      );
       for (const denied of [
         { action: "group_set", names: [] },
         { action: "patch", archived: true, model: "other" },
