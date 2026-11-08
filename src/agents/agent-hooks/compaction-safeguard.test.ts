@@ -761,7 +761,7 @@ it("keeps a generated summary whole when verbatim preserved turns overflow the c
   expect(summary.length).toBeLessThanOrEqual(SUMMARY_LIMIT);
   expect(summary).toContain(body);
   expect(summary).not.toContain(SUMMARY_TRUNCATED_MARKER);
-  expect(summary).toContain("## Recent turns preserved verbatim");
+  expect(summary).toContain(`BODY-END\n\n## Recent turns preserved verbatim`);
   expect(summary).toContain("preserved-11-");
   expect(summary).not.toContain("preserved-0-");
 });

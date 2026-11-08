@@ -575,18 +575,19 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
         runtime?.postCompactionSections,
         runtime?.workspaceDir,
       );
+      // Chronological, and the tail cap trims from the head: older verbatim
+      // preserved turns yield before the split turn and the required sections.
       const parts = {
+        preservedTurnsSection: sections.preservedTurnsSection,
         splitTurnSection: sections.splitTurnSection,
         generatedSplitTurnSection: sections.generatedSplitTurnSection,
-        preservedTurnsSection: sections.preservedTurnsSection,
         toolFailureSection,
         fileOpsSummary,
         workspaceContext: await workspaceContextPromise,
       };
       let text = "";
-      let reservedChars = 0;
       const contextRanges: CompactionSuffix["contextRanges"] = [];
-      for (const [name, part] of Object.entries(parts)) {
+      for (const part of Object.values(parts)) {
         if (!part) {
           continue;
         }
@@ -598,10 +599,6 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
         const appended = leadingTrim > 0 ? section.slice(leadingTrim) : section;
         const start = text.length;
         text = appendSummarySection(text, section);
-        // The generated split-turn summary outranks older verbatim preserved turns.
-        if (name === "generatedSplitTurnSection") {
-          reservedChars = text.length;
-        }
         if (typeof part !== "string") {
           contextRanges.push({
             start,
@@ -616,18 +613,13 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
       // ends without newline: "...## Exact identifiers## Tool Failures").
       if (text && !/^\s/.test(text)) {
         text = `\n\n${text}`;
-        reservedChars += reservedChars > 0 ? 2 : 0;
         for (const range of contextRanges) {
           range.start += 2;
           range.end += 2;
           range.segmentStarts = range.segmentStarts.map((segmentStart) => segmentStart + 2);
         }
       }
-      const suffix: CompactionSuffix = {
-        text,
-        contextRanges,
-        ...(reservedChars > 0 ? { reservedChars } : {}),
-      };
+      const suffix: CompactionSuffix = { text, contextRanges };
       const fit = (retention?: SummaryQualityRetention) =>
         fitCompactionSummary(preparation.summaryTokenBudget, (maxChars) =>
           budgetCompactionSummary(body, suffix, maxChars, retention),

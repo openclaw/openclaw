@@ -15,8 +15,6 @@ export type CompactionSuffix = {
   // Keep producer segment boundaries after later suffix sections are appended;
   // otherwise the final tail cap can split an assistant tool-call/result group.
   contextRanges: Array<{ start: number; end: number; segmentStarts: number[] }>;
-  // Leading chars the tail cap keeps whole, trimming the later sections instead.
-  reservedChars?: number;
 };
 
 export type SummaryQualityRetention = Parameters<typeof createSummaryQualityRetentionPlan>[2];
@@ -42,24 +40,6 @@ function capCompactionSuffix(suffix: CompactionSuffix, maxChars: number): string
   if (maxChars <= 0) {
     return "";
   }
-  const reserved = suffix.reservedChars ?? 0;
-  if (reserved > 0) {
-    // A reservation that cannot fit keeps its head, which names the active turn.
-    if (reserved >= maxChars) {
-      return capCompactionSummary(suffix.text.slice(0, reserved), maxChars);
-    }
-    const rest: CompactionSuffix = {
-      text: suffix.text.slice(reserved),
-      contextRanges: suffix.contextRanges
-        .filter((range) => range.start >= reserved)
-        .map((range) => ({
-          start: range.start - reserved,
-          end: range.end - reserved,
-          segmentStarts: range.segmentStarts.map((segmentStart) => segmentStart - reserved),
-        })),
-    };
-    return `${suffix.text.slice(0, reserved)}${capCompactionSuffix(rest, maxChars - reserved)}`;
-  }
   if (maxChars < CONTEXT_TRUNCATED_MARKER.length) {
     const start = resolveSuffixTailStart(suffix, maxChars);
     return sliceUtf16Safe(suffix.text, start);
@@ -72,7 +52,8 @@ function capCompactionSuffix(suffix: CompactionSuffix, maxChars: number): string
       start > range.start && start < range.end && (range.segmentStarts[0] ?? range.end) <= start,
   );
   if (cutRange) {
-    const heading = suffix.text.slice(cutRange.start, cutRange.segmentStarts[0]);
+    // Ranges start after leading separators, so restore one before the heading.
+    const heading = `\n\n${suffix.text.slice(cutRange.start, cutRange.segmentStarts[0]).trim()}`;
     const headedStart = resolveSuffixTailStart(suffix, tailBudget - heading.length);
     if (tailBudget > heading.length && headedStart < cutRange.end) {
       return `${heading}${CONTEXT_TRUNCATED_MARKER}${sliceUtf16Safe(suffix.text, headedStart)}`;
