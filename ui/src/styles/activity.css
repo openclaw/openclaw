@@ -138,7 +138,6 @@ a.activity-current-work__row:hover {
 
 .activity-mode-tabs.hub-tabs {
   margin: 0;
-  gap: var(--space-1);
   padding: 0;
 }
 
@@ -207,7 +206,6 @@ a.activity-current-work__row:hover {
 
 .activity-toolbar__search[data-searching] {
   width: 240px;
-  max-width: 100%;
   gap: var(--space-2);
   padding-inline: var(--space-3) var(--space-1);
   border: 1px solid var(--border);
@@ -222,13 +220,10 @@ a.activity-current-work__row:hover {
 .activity-feed__time-filter {
   flex: 0 0 auto;
   flex-wrap: nowrap;
-  margin-inline-end: var(--space-1);
 }
 
 .activity-feed__people-control {
-  position: relative;
   display: flex;
-  align-items: center;
 }
 
 .activity-feed__people-trigger,
@@ -239,7 +234,6 @@ a.activity-current-work__row:hover {
   height: var(--settings-control-height);
   padding: 0;
   color: var(--muted);
-  justify-content: center;
 }
 
 .activity-feed__applied-filters {
@@ -995,7 +989,6 @@ a.activity-current-work__row:hover {
   gap: var(--space-1);
   color: var(--text);
   font-size: var(--control-ui-text-sm);
-  cursor: var(--cursor-action);
   border-radius: var(--radius-full);
 }
 
