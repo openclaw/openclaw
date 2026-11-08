@@ -61,7 +61,7 @@ jobs:
           OPENCLAW_UI_E2E_ARTIFACT_DIR: .artifacts/release37-ui-diagnostic
           OPENCLAW_UI_E2E_DIAGNOSTIC_DIR: .artifacts/release37-ui-timeouts
         run: |
-          node scripts/run-vitest.mjs run --config test/vitest/vitest.ui-e2e-prebuilt.config.ts --configLoader runner --reporter verbose --reporter github-actions --reporter default --reporter ./scripts/lib/vitest-resource-reporter.mts ui/src/e2e/chat-stop-finished-run.real-gateway.e2e.test.ts --testNamePattern 'allows editing during recovery and sends before initial history completes'
+          node scripts/run-vitest.mjs run --config test/vitest/vitest.ui-e2e-prebuilt.config.ts --configLoader runner --reporter verbose --reporter github-actions --reporter default --reporter ./scripts/lib/vitest-resource-reporter.mts ui/src/e2e/chat-stop-finished-run.real-gateway.e2e.test.ts --testNamePattern 'allows editing during recovery and queues before initial history completes'
       - name: Prove original Stop sibling in a fresh fixture process
         if: ${{ !cancelled() && steps.verify_identity.outcome == 'success' && steps.build.outcome == 'success' }}
         env:
@@ -78,8 +78,7 @@ jobs:
         if: ${{ !cancelled() && steps.verify_identity.outcome == 'success' && steps.build.outcome == 'success' }}
         run: |
           node scripts/run-oxlint.mjs --tsconfig ui/tsconfig.json ui/src/pages/chat/chat-pane-render.ts ui/src/pages/chat/chat-composer-subagent.test.ts
-          node scripts/run-oxlint.mjs src/gateway/server-methods.ts src/gateway/server/ws-connection/authenticated-request-dispatch.ts src/gateway/server-methods/chat-send-setup.ts src/gateway/server-methods/chat-send-handler.ts
-          pnpm exec oxfmt --check .github/workflows/ci.yml ui/src/pages/chat/chat-pane-render.ts ui/src/pages/chat/chat-composer-subagent.test.ts ui/src/e2e/chat-stop-finished-run.real-gateway.e2e.test.ts src/gateway/server-methods.ts src/gateway/server/ws-connection/authenticated-request-dispatch.ts src/gateway/server-methods/chat-send-setup.ts src/gateway/server-methods/chat-send-handler.ts
+          pnpm exec oxfmt --check .github/workflows/ci.yml ui/src/pages/chat/chat-pane-render.ts ui/src/pages/chat/chat-composer-subagent.test.ts ui/src/e2e/chat-stop-finished-run.real-gateway.e2e.test.ts
       - name: Retain only sanitized diagnostic counters and composer proof
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7

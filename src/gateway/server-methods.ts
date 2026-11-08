@@ -566,10 +566,6 @@ export async function handleGatewayRequest(
   diagnostics?: GatewayRpcDiagnostics,
 ): Promise<void> {
   const { req, client, isWebchatConnect, context, signal, hasCurrentClientAuthority } = opts;
-  // Diagnostic-only, never merge: fixed lines only, no request data.
-  if (req.method === "chat.send") {
-    console.error("\nOPENCLAW_SEND_DIAGNOSTIC:router-entered");
-  }
   const profileBinding =
     opts.expectedProfileBinding ??
     (req.expectedProfileId === undefined
@@ -618,9 +614,6 @@ export async function handleGatewayRequest(
       },
     });
     sessionAccessAuthority = authorization.sessionAccessAuthority;
-    if (req.method === "chat.send") {
-      console.error("\nOPENCLAW_SEND_DIAGNOSTIC:router-authorization-returned");
-    }
     entry?.assertOpen();
     if (authorization.error) {
       respond(false, undefined, authorization.error);
@@ -674,13 +667,7 @@ export async function handleGatewayRequest(
         }
       : respondAuthorized;
     const invokeHandler = async () => {
-      if (req.method === "chat.send") {
-        console.error("\nOPENCLAW_SEND_DIAGNOSTIC:lazy-handler-entered");
-      }
       const preparedHandler = await prepareGatewayRequestHandler(handler, entry);
-      if (req.method === "chat.send") {
-        console.error("\nOPENCLAW_SEND_DIAGNOSTIC:lazy-handler-loaded");
-      }
       // Lazy preparation may yield across a hot config change. Keep the router fence
       // unless the canonical owner reconciles accepted input before new admission.
       const uploadError = gatewayRouterUploadPolicyError(requestFacts, methodRegistry);

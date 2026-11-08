@@ -190,10 +190,10 @@ const suite = createControlUiE2eSuite({
 
 suite.define(() => {
   // Desired-behavior regression: keep editing available during recovery, then
-  // admit an ordinary Send without waiting for the first history snapshot.
+  // admit ordinary input to the outbox before history, then deliver after it.
   // A fresh browser has no accepted history; hold real replies independently of
   // the real post-hello recovery digest, without replacing either result.
-  it("allows editing during recovery and sends before initial history completes", async (context) => {
+  it("allows editing during recovery and queues before initial history completes", async (context) => {
     await suite.runScenario(context, {
       retainedState: () => instance.stateDir,
       run: async () => {
@@ -218,6 +218,9 @@ suite.define(() => {
         let sendRequest: Frame | undefined;
         let sendResponse: Frame | undefined;
         let proxyForwardingReturned = false;
+        let authoritativeHistory:
+          | { sessionId?: string; activeLeafEntryId?: string | null }
+          | undefined;
         let connectRequests = 0;
         let historyResponses = 0;
         let successfulHistoryResponses = 0;
@@ -342,6 +345,13 @@ suite.define(() => {
                     historyResponses += 1;
                     if (frame.ok === true && frame.payload?.sessionKey === diagnosticSession) {
                       successfulHistoryResponses += 1;
+                      const payload = frame.payload as EventPayload & {
+                        sessionInfo?: { activeLeafEntryId?: string | null };
+                      };
+                      authoritativeHistory = {
+                        sessionId: payload.sessionId,
+                        activeLeafEntryId: payload.sessionInfo?.activeLeafEntryId,
+                      };
                     }
                   }
                   if (history && holdHistory) heldHistory.push(deliver);
@@ -356,6 +366,27 @@ suite.define(() => {
                     context: { gateway: { snapshot: { phase: string } } };
                   };
                   const state = host.state;
+                  // Read the existing serialized outbox contract, not just its live projection.
+                  // The exact synthetic scope keeps other conversations out of this proof.
+                  const stored = JSON.parse(
+                    sessionStorage.getItem(
+                      `openclaw.control.chatComposer.v4:${encodeURIComponent(state.settings.gatewayUrl?.trim() || "default")}`,
+                    ) ?? '{"sessions":{}}',
+                  ) as {
+                    sessions: Record<
+                      string,
+                      {
+                        queue?: Array<{
+                          id: string;
+                          text: string;
+                          sendRunId?: string;
+                          sendAttempts?: number;
+                        }>;
+                      }
+                    >;
+                  };
+                  const persisted =
+                    stored.sessions["agent:main:send-boundary\u0000agent:main"]?.queue ?? [];
                   return {
                     phase: host.context.gateway.snapshot.phase,
                     sessionMatches: state.sessionKey === "agent:main:send-boundary",
@@ -370,6 +401,13 @@ suite.define(() => {
                     // chatQueue is the real outbox owner's current-scope projection,
                     // not a test-owned array or a count inferred from the DOM.
                     outboxCount: state.chatQueue.length,
+                    queuedOriginalDraft: state.chatQueue[0]?.text === "Finish this fixture turn.",
+                    queuedSendAttempts: state.chatQueue[0]?.sendAttempts ?? 0,
+                    persistedCount: persisted.length,
+                    persistedOriginalDraft: persisted[0]?.text === "Finish this fixture turn.",
+                    persistedMatchesProjection: persisted[0]?.id === state.chatQueue[0]?.id,
+                    persistedRunId: persisted[0]?.sendRunId,
+                    persistedSendAttempts: persisted[0]?.sendAttempts ?? 0,
                     handlerEntries: Number(
                       element.getAttribute("data-diagnostic-handler-entries") ?? 0,
                     ),
@@ -509,8 +547,50 @@ suite.define(() => {
                 proof.sendEnabledAfterRecovery = await send.isEnabled();
                 proof.historyPendingAfterRecovery = (await browserState()).historyLoading;
 
-                stage = "send the original draft through the real control before history completes";
+                stage = "admit the original draft to the outbox while history remains pending";
                 await send.click();
+                await expect.poll(browserState).toMatchObject({
+                  recoveryReady: true,
+                  historyLoading: true,
+                  handlerEntries: 1,
+                  handlerSettled: 0,
+                  draftLength: 0,
+                  outboxCount: 1,
+                  queuedOriginalDraft: true,
+                  queuedSendAttempts: 0,
+                  persistedCount: 1,
+                  persistedOriginalDraft: true,
+                  persistedMatchesProjection: true,
+                  persistedSendAttempts: 0,
+                  runId: null,
+                  hasError: false,
+                });
+                const queuedRunId = (await browserState()).persistedRunId;
+                expect(queuedRunId).toEqual(expect.any(String));
+                expect(sendRequests).toBe(0);
+                expect(proxyForwardingReturned).toBe(false);
+                expect(sendResponse).toBeUndefined();
+                expect(provider.requests()).toBe(0);
+                expect(deliveredHistoryResponses).toBe(0);
+                const nextDraft = "Keep my next draft.";
+                await composer.fill(nextDraft);
+                expect(await composer.inputValue()).toBe(nextDraft);
+                Object.assign(proof, {
+                  originalDraftQueuedBeforeHistory: true,
+                  durableOriginalDraftBeforeHistory: true,
+                  durableSendAttemptsBeforeHistory: 0,
+                  sendRequestsBeforeHistoryRelease: sendRequests,
+                  providerRequestsBeforeHistoryRelease: provider.requests(),
+                  deliveredHistoryResponsesBeforeRelease: deliveredHistoryResponses,
+                  nextDraftEditableWhileQueued: true,
+                });
+
+                // The documented contract joins authoritative session/branch history
+                // before delivery; this is not a Gateway ACK-before-history guarantee.
+                stage = "release authoritative history and deliver the queued draft once";
+                expect(authoritativeHistory?.sessionId).toEqual(expect.any(String));
+                expect(authoritativeHistory?.activeLeafEntryId).toBeNull();
+                releaseHistory();
                 await expect
                   .poll(() => sendResponse)
                   .toMatchObject({
@@ -521,38 +601,42 @@ suite.define(() => {
                 expect(sendRequest?.params).toMatchObject({
                   sessionKey: diagnosticSession,
                   message: draft,
-                  idempotencyKey: expect.any(String),
+                  idempotencyKey: queuedRunId,
+                  sessionId: authoritativeHistory?.sessionId,
+                  expectedLeafEntryId: authoritativeHistory?.activeLeafEntryId,
                 });
-                const runId = sendRequest?.params?.idempotencyKey;
+                const runId = queuedRunId;
                 expect(sendResponse?.payload?.runId).toBe(runId);
                 await expect.poll(() => provider.requests()).toBe(1);
                 const stop = page.getByRole("button", { name: "Stop generating", exact: true });
                 await stop.waitFor({ state: "visible" });
                 await expect.poll(browserState).toMatchObject({
                   recoveryReady: true,
-                  historyLoading: true,
+                  historyLoading: false,
                   runId,
                   sending: false,
                   handlerEntries: 1,
                   handlerSettled: 1,
                   activeSubmitGuards: 0,
-                  draftLength: 0,
+                  draftLength: nextDraft.length,
                   hasError: false,
                 });
-                expect(deliveredHistoryResponses).toBe(0);
+                expect(deliveredHistoryResponses).toBeGreaterThan(0);
+                expect(await composer.inputValue()).toBe(nextDraft);
                 Object.assign(proof, {
                   originalDraftSent: sendRequest?.params?.message === draft,
                   sendAccepted:
                     sendResponse?.ok === true && sendResponse.payload?.status === "started",
                   acceptedRunMatchesRequest: sendResponse?.payload?.runId === runId,
-                  providerRequestsWhileHistoryPending: provider.requests(),
-                  stopVisibleWhileHistoryPending: await stop.isVisible(),
+                  deliveredToAuthoritativeSessionAndLeaf: true,
+                  providerRequestsAfterHistory: provider.requests(),
+                  stopVisibleAfterHistory: await stop.isVisible(),
                   historyPendingAfterSend: (await browserState()).historyLoading,
                   deliveredHistoryResponsesAtSend: deliveredHistoryResponses,
                 });
 
-                stage = "release history and provider; settle the accepted run";
-                releaseHistory();
+                stage =
+                  "release provider and settle the accepted run without replacing the next draft";
                 provider.release();
                 await page.locator(".chat-bubble").getByText(replyText, { exact: true }).waitFor();
                 await expect.poll(browserState).toMatchObject({
@@ -563,10 +647,12 @@ suite.define(() => {
                   handlerEntries: 1,
                   handlerSettled: 1,
                   activeSubmitGuards: 0,
-                  draftLength: 0,
+                  draftLength: nextDraft.length,
                   outboxCount: 0,
+                  persistedCount: 0,
                   hasError: false,
                 });
+                expect(await composer.inputValue()).toBe(nextDraft);
                 await stop.waitFor({ state: "detached" });
                 await expect
                   .poll(async () => {
@@ -589,51 +675,13 @@ suite.define(() => {
                 expect(deliveredHistoryResponses).toBeGreaterThan(0);
                 expect(proof.browserFailed).not.toBe(true);
                 proof.visibleReplyAndRunSettled = true;
-                stage = "draft preserved through recovery; Send completed before initial history";
+                stage =
+                  "draft admitted before history; delivered once after history; next draft preserved";
               } finally {
-                // Snapshot before releasing any hold or stopping the child. Match
-                // only complete fixed lines; never copy logs or request data to proof.
-                const phaseLines = new Set(instance.logs().split(/\r?\n/));
-                const phaseMarkers = {
-                  serverAuthenticatedDispatchEntered:
-                    "OPENCLAW_SEND_DIAGNOSTIC:authenticated-dispatch-entered",
-                  serverRouterEntered: "OPENCLAW_SEND_DIAGNOSTIC:router-entered",
-                  serverRouterAuthorizationReturned:
-                    "OPENCLAW_SEND_DIAGNOSTIC:router-authorization-returned",
-                  serverLazyHandlerEntered: "OPENCLAW_SEND_DIAGNOSTIC:lazy-handler-entered",
-                  serverLazyHandlerLoaded: "OPENCLAW_SEND_DIAGNOSTIC:lazy-handler-loaded",
-                  serverSetupEntered: "OPENCLAW_SEND_DIAGNOSTIC:setup-entered",
-                  serverSetupReturned: "OPENCLAW_SEND_DIAGNOSTIC:setup-returned",
-                  serverPreAdmissionEntered: "OPENCLAW_SEND_DIAGNOSTIC:pre-admission-entered",
-                  serverPreAdmissionReturned: "OPENCLAW_SEND_DIAGNOSTIC:pre-admission-returned",
-                  serverNativeRestrictionEntered:
-                    "OPENCLAW_SEND_DIAGNOSTIC:native-restriction-entered",
-                  serverNativeRestrictionReturned:
-                    "OPENCLAW_SEND_DIAGNOSTIC:native-restriction-returned",
-                  serverAdmissionEntered: "OPENCLAW_SEND_DIAGNOSTIC:admission-entered",
-                  serverAdmissionReturned: "OPENCLAW_SEND_DIAGNOSTIC:admission-returned",
-                  serverDurableStageEntered: "OPENCLAW_SEND_DIAGNOSTIC:durable-stage-entered",
-                  serverDurableStageReturned: "OPENCLAW_SEND_DIAGNOSTIC:durable-stage-returned",
-                  serverRestartSafePersistenceEntered:
-                    "OPENCLAW_SEND_DIAGNOSTIC:restart-safe-persistence-entered",
-                  serverRestartSafePersistenceReturned:
-                    "OPENCLAW_SEND_DIAGNOSTIC:restart-safe-persistence-returned",
-                  serverAckIssued: "OPENCLAW_SEND_DIAGNOSTIC:ack-issued",
-                } as const;
-                for (const [key, marker] of Object.entries(phaseMarkers)) {
-                  proof[key] = phaseLines.has(marker);
-                }
+                // Observe transport before cleanup releases any remaining history.
                 proof.proxyForwardingReturned = proxyForwardingReturned;
                 proof.sendResponseReceived = sendResponse !== undefined;
-                try {
-                  await fs.writeFile(
-                    path.join(artifactDir, "proof.json"),
-                    JSON.stringify(proof, null, 2) + "\n",
-                  );
-                } catch {
-                  // A diagnostic write must not prevent the existing hold cleanup.
-                  proof.phaseSnapshotWriteFailed = true;
-                }
+                proof.sendRequestsBeforeCleanup = sendRequests;
                 try {
                   const finalState = await browserState();
                   Object.assign(proof, {

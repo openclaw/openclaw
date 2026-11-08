@@ -136,11 +136,6 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
     if (closeInvalidatedClient(client, req.method, isCommittedGrantCurrent)) {
       return;
     }
-    // Diagnostic-only, never merge: the leading newline leaves an exact marker
-    // line even when console capture prefixes a timestamp. No request data.
-    if (req.method === "chat.send") {
-      console.error("\nOPENCLAW_SEND_DIAGNOSTIC:authenticated-dispatch-entered");
-    }
     const diagnostics = createGatewayRpcDiagnostics(req.method, getMethodRegistry, extraHandlers);
     logWs("in", "req", { connId, id: req.id, method: req.method });
     const generationState = SharedGatewaySessionGenerationState.fromReader(

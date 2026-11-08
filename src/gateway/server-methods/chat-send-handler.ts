@@ -99,8 +99,6 @@ async function handleChatSendWithOptions(
     onAdmissionOwned,
     options,
   );
-  // Diagnostic-only, never merge: fixed lines only, no request data.
-  console.error("\nOPENCLAW_SEND_DIAGNOSTIC:setup-returned");
   if (!setup) {
     return;
   }
@@ -324,7 +322,6 @@ async function handleChatSendWithOptions(
           throw new Error("Session routing changed before input admission; refresh and retry.");
         }
       };
-      console.error("\nOPENCLAW_SEND_DIAGNOSTIC:durable-stage-entered");
       const staged = await userTurnRecorder.stageApproved?.({
         runId: clientRunId,
         assertCurrent: () => {
@@ -340,7 +337,6 @@ async function handleChatSendWithOptions(
                 return true;
               }),
       });
-      console.error("\nOPENCLAW_SEND_DIAGNOSTIC:durable-stage-returned");
       if (userTurnRecorder.isPendingInputConsumed?.()) {
         admitted.value.cleanupAdmittedRun();
         clearAgentRunContext(clientRunId, lifecycleGeneration);
@@ -368,9 +364,7 @@ async function handleChatSendWithOptions(
     }
     let goalResult: SessionGoalOperationResult | undefined;
     if (restartSafeAdmission) {
-      console.error("\nOPENCLAW_SEND_DIAGNOSTIC:restart-safe-persistence-entered");
       const persistedUserTurn = await persistGatewayUserTurnTranscript();
-      console.error("\nOPENCLAW_SEND_DIAGNOSTIC:restart-safe-persistence-returned");
       const goalOperation = normalizedRequest.value.goalOperation;
       if (goalOperation) {
         const mutation = persistedUserTurn?.sessionTurnMutationResult;
@@ -592,7 +586,6 @@ async function handleChatSendWithOptions(
     assertInputAdmissionCurrent();
     admitted.value.setDiscardAbandonedPreparedMedia(undefined);
     respond(true, ackPayload, undefined, { runId: clientRunId });
-    console.error("\nOPENCLAW_SEND_DIAGNOSTIC:ack-issued");
     context.recordClientActivity?.(client);
     const chatSendAckedAtMs = chatSendTiming?.ackedAtMs ?? performance.now();
     startChatDispatch({
