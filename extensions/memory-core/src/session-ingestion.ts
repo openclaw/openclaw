@@ -19,6 +19,7 @@ import {
 import {
   appendRegularFile,
   assertNoSymlinkParentsSync,
+  redactMemoryIngestionText,
   root,
 } from "openclaw/plugin-sdk/security-runtime";
 import {
@@ -411,7 +412,8 @@ export async function scanSessionIngestionSource(params: {
       break;
     }
     scannedEndIndex = index + 1;
-    const snippet = normalizeSessionCorpusSnippet(lines[index] ?? "");
+    const rawSnippet = normalizeSessionCorpusSnippet(lines[index] ?? "");
+    const snippet = normalizeSessionCorpusSnippet(redactMemoryIngestionText(rawSnippet));
     if (snippet.length < SESSION_INGESTION_MIN_SNIPPET_CHARS) {
       continue;
     }

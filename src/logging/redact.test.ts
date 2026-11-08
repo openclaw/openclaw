@@ -8,6 +8,7 @@ import * as prefilters from "./redact-prefilter.js";
 import {
   getDefaultRedactPatterns,
   redactLogRecordForTransport,
+  redactMemoryIngestionText,
   redactSecrets,
   redactSensitiveFieldValue,
   redactSensitiveLines,
@@ -658,6 +659,25 @@ describe("redactSensitiveText", () => {
   });
 });
 
+describe("redactMemoryIngestionText", () => {
+  it("enforces default and operator patterns when logging redaction is off", () => {
+    const configPath = writeConfig(`{
+      logging: {
+        redactSensitive: "off",
+        redactPatterns: ["/internal-\\\\d+/g"],
+      },
+    }`);
+
+    withEnv({ OPENCLAW_CONFIG_PATH: configPath }, () => {
+      const input = "Safe text OPENAI_API_KEY=sk-1234567890abcdef ticket internal-12345";
+      const output = redactMemoryIngestionText(input);
+
+      expect(output).toContain("Safe text");
+      expect(output).not.toContain("sk-1234567890abcdef");
+      expect(output).not.toContain("internal-12345");
+    });
+  });
+});
 describe("redactSecrets", () => {
   it("redacts nested structured payloads before JSON persistence", () => {
     const input = {

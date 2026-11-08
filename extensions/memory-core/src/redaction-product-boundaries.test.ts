@@ -159,7 +159,7 @@ describe("memory-core transcript and promotion boundaries", () => {
       "utf-8",
     );
     expect(corpus).toContain(safeControlText);
-    expect(corpus).toContain(RAW_DREAMING_SECRET);
+    expect(corpus).not.toContain(RAW_DREAMING_SECRET);
   });
 
   it("promotes only clean trusted content across contamination and provenance gates", async () => {

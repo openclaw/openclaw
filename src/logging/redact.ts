@@ -479,6 +479,13 @@ export function redactToolPayloadTextWithConfig(
 ): string {
   return redactSensitiveText(text, resolveToolPayloadRedaction(loggingConfig));
 }
+/**
+ * Redact memory-ingestion text using the mandatory default credential policy.
+ * Logging configuration cannot disable this protection.
+ */
+export function redactMemoryIngestionText(text: string): string {
+  return redactToolPayloadText(text);
+}
 
 export function isSensitiveFieldKey(key: string): boolean {
   return STRUCTURED_SECRET_FIELD_RE.test(key) || STRUCTURED_SECRET_ENV_FIELD_RE.test(key);
