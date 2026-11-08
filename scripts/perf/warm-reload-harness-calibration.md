@@ -1,5 +1,17 @@
 # Warm-reload harness calibration (2026-11-07)
 
+## Shared annotation cost
+
+The original comparisons below retain the full text-annotation observer in every
+arm, including the collector called minimal. They cannot measure that shared cost.
+A bounded annotator must first reproduce both rows and Details Element Timing in
+the same capture as the full annotator. Then compare full versus lean annotation
+on one build in steady timing mode: eight alternating pairs plus A/A for native
+active, native archived and Team active; report within-order effects for rows,
+FCP, pane start and LoAF. Re-baseline all four workloads with twelve lean reloads.
+Keep the CLI and report shape stable; the bottom-paragraph marker remains visual
+proof only. A marker-time mismatch stops adoption rather than redefining the gate.
+
 The standard Team sampler has a measurable rows cost; the reduced collector does not show a consistent additional rows cost. A steady timing-only Team reload passes the 480 ms text-paint prerequisite. This does **not** establish complete-frame visual qualification or approve a visibility join.
 
 ## Fixed setup
