@@ -16,7 +16,7 @@ import { runWorkspaceInventoryCommandToFile } from "./workspace-sync-inventory.j
 
 const RECONCILE_PHASE = "attempt.setup.sandbox.workspace_selection.prepare.reconcile";
 
-export function localWorkspaceProjectionPath(owner: LocalWorkspaceOwner) {
+export function localWorkspaceProjectionPath(owner: Pick<LocalWorkspaceOwner, "worktree" | "env">) {
   if (!/^[a-f0-9-]{36}$/u.test(owner.worktree.id)) {
     throw new Error("Invalid managed worktree identity");
   }

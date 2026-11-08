@@ -17,6 +17,11 @@ import {
 } from "./scenario-runtime-e2ee-shared.js";
 import type { MatrixQaScenarioContext } from "./scenario-runtime-shared.js";
 
+const matrixQaCliFailureSchema = z.object({
+  ok: z.literal(false),
+  error: z.object({ type: z.literal("cli_error"), message: z.string() }),
+});
+
 const matrixQaCliVerificationStatusSchema = z.looseObject({
   backup: z
     .looseObject({
@@ -111,8 +116,14 @@ export function parseMatrixQaCliJson(result: MatrixQaCliRunResult): unknown {
   }
 }
 
-export function parseMatrixQaCliVerificationStatus(result: MatrixQaCliRunResult) {
-  return matrixQaCliVerificationStatusSchema.parse(parseMatrixQaCliJson(result));
+export function parseMatrixQaCliVerificationStatus(
+  result: MatrixQaCliRunResult,
+): MatrixQaCliVerificationStatus {
+  const payload = parseMatrixQaCliJson(result);
+  const failure = matrixQaCliFailureSchema.safeParse(payload);
+  return failure.success
+    ? { success: false, error: failure.data.error.message }
+    : matrixQaCliVerificationStatusSchema.parse(payload);
 }
 
 export function buildMatrixQaPluginActivationConfig() {

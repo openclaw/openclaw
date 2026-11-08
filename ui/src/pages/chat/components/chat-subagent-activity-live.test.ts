@@ -1,10 +1,9 @@
 /* @vitest-environment jsdom */
-import { createComponent } from "solid-js";
+import { createComponent, createSignal } from "solid-js";
 import { expect, it, onTestFinished, vi } from "vitest";
 import type { SessionObserverDigest } from "../../../../../packages/gateway-protocol/src/schema/sessions.js";
 import type { GatewaySessionRow } from "../../../api/types.ts";
 import { createTestSessionCapability } from "../../../lib/sessions/session-capability.test-support.ts";
-import type { SolidBridgeElement } from "../../../lib/solid-bridge.ts";
 import { disposeSidebarContextLifecycles } from "../../../test-helpers/app-sidebar-context-lifecycle.ts";
 import { createContext } from "../../../test-helpers/app-sidebar.ts";
 import { createApplicationGateway } from "../../../test-helpers/application-context.ts";
@@ -15,8 +14,6 @@ import { flush } from "../../../test-helpers/solid-settle.ts";
 import { listSubagents } from "../chat-subagent-wait.ts";
 import { ChatSubagentActivity } from "./chat-subagent-activity-live.tsx";
 import type { SubagentActivityProps } from "./chat-subagent-activity.tsx";
-
-type ActivityElement = SolidBridgeElement<SubagentActivityProps>;
 
 it("keeps live child headlines scoped to their run, incarnation, and connection", async () => {
   const connection = createApplicationGateway();
@@ -55,10 +52,19 @@ it("keeps live child headlines scoped to their run, incarnation, and connection"
     createContext(connection.gateway, sessions),
   );
   const subscriptions = vi.spyOn(connection.gateway, "subscribeEvents");
-  const view = mountSolid(() => createComponent(ChatSubagentActivity, { rows: rows(child) }), {
-    wrapper: provider.wrapper,
-  });
-  const element = view.container.querySelector<ActivityElement>("openclaw-chat-subagent-activity")!;
+  const onPresentation = vi.fn<NonNullable<SubagentActivityProps["onPresentation"]>>();
+  const [currentChild, setCurrentChild] = createSignal(child);
+  const view = mountSolid(
+    () =>
+      createComponent(ChatSubagentActivity, {
+        get rows() {
+          return rows(currentChild());
+        },
+        onPresentation,
+      }),
+    { wrapper: provider.wrapper },
+  );
+  const element = view.container;
   onTestFinished(() => {
     view.unmount();
     sessions.dispose();
@@ -92,6 +98,7 @@ it("keeps live child headlines scoped to their run, incarnation, and connection"
   expect(element.textContent).not.toContain("Stale narration");
   await emit();
   expect(element.textContent).toContain(digest.headline);
+  expect(onPresentation.mock.lastCall?.[0][0]?.activity).toBe(digest.headline);
   for (const patch of [
     { revision: 1 },
     { runId: "old-run" },
@@ -103,6 +110,9 @@ it("keeps live child headlines scoped to their run, incarnation, and connection"
     await emit({ ...patch, headline: "Stale activity" });
     expect(element.textContent).not.toContain("Stale activity");
   }
+  expect(onPresentation).not.toHaveBeenCalledWith([
+    expect.objectContaining({ activity: "Stale activity" }),
+  ]);
   await emit({ revision: 3, headline: "Running the backend tests" });
   expect(element.textContent).toContain("Running the backend tests");
   await emit({
@@ -112,6 +122,10 @@ it("keeps live child headlines scoped to their run, incarnation, and connection"
   });
   expect(element.querySelector(".chat-subagent-activity__steps")?.textContent).toBe("1/3");
   expect(element.querySelector("meter")?.value).toBe(1);
+  expect(onPresentation.mock.lastCall?.[0][0]).toMatchObject({
+    activity: "Running the backend tests",
+    progress: { completed: 1, total: 3 },
+  });
   expect(element.querySelector(".chat-subagent-activity__row")?.getAttribute("title")).toBe(
     "Backend implementation. Running. Running the backend tests. 1 of 3 steps",
   );
@@ -120,12 +134,15 @@ it("keeps live child headlines scoped to their run, incarnation, and connection"
   connection.publish({ ...connection.gateway.snapshot, hello: gatewayHelloForMethods([]) });
   flush();
   expect(element.textContent).not.toContain("Running the backend tests");
+  expect(onPresentation.mock.lastCall?.[0][0]?.activity).toBeUndefined();
   await emit();
   expect(element.textContent).toContain(digest.headline);
-  element.rows = rows({ ...child, activeRunIds: ["replacement-run"] });
+  setCurrentChild({ ...child, activeRunIds: ["replacement-run"] });
+  flush();
   await emit({ revision: 10 });
   expect(element.textContent).not.toContain(digest.headline);
-  element.rows = rows(child);
+  expect(onPresentation.mock.lastCall?.[0][0]?.activity).toBeUndefined();
+  setCurrentChild(child);
   flush();
   expect(element.textContent).not.toContain(digest.headline);
   await emit({ revision: 11 });
@@ -148,6 +165,7 @@ it("keeps live child headlines scoped to their run, incarnation, and connection"
   flush();
   expect(element.textContent).toContain("Finishing verification");
   expect(element.textContent).not.toContain("Superseded verification");
+  expect(onPresentation.mock.lastCall?.[0][0]?.activity).toBe("Finishing verification");
   expect(element.querySelector(".chat-subagent-activity__steps")?.textContent).toBe("2/3");
   connection.publish({ ...connection.gateway.snapshot, hello: gatewayHelloForMethods([]) });
   await emit();

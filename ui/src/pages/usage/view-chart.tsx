@@ -1,10 +1,10 @@
 import { createMemo, createSignal, For, Show } from "solid-js";
 import { createEmptyCostUsageTotals } from "../../../../src/infra/session-cost-usage-totals.js";
-import { providerDisplayLabel } from "../../components/provider-icon-data.ts";
 import { SettingsSegmented } from "../../components/solid/settings-ui.tsx";
 import { formatUsd } from "../../lib/reactive/format.ts";
 import { getLocale, t } from "../../lib/reactive/i18n.ts";
 import { createMediaQuery } from "../../lib/reactive/platform.ts";
+import { useProviderDisplayLabel } from "../../lib/reactive/provider-presentation.tsx";
 import "../../components/tooltip.ts";
 import {
   formatAnalysisCost,
@@ -75,6 +75,7 @@ export function DailyChartCompact(props: {
   onSelectDay: UsageProps["callbacks"]["filters"]["onSelectDay"];
   range: UsageChartRange;
 }) {
+  const providerDisplayLabel = useProviderDisplayLabel();
   const calendar = createMemo((): { days: CostDailyEntry[]; pending: Set<string> } => {
     /**
      * Every calendar day of the range, so columns never move as a report fills in. Missing days are

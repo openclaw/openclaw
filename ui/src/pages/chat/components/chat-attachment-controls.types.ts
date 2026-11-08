@@ -11,6 +11,8 @@ export type ChatAttachmentControlsProps = {
   attachmentLimits?: ChatAttachmentLimits;
   /** Side chat sends selection metadata as text context, without a file payload. */
   selectionContextOnly?: boolean;
+  /** False where no transcript anchor can reopen the comment editor. */
+  commentsEditable?: boolean;
   attachmentReads?: ChatAttachmentReadLifecycle;
   attachments?: ChatAttachment[];
   disabled?: boolean;

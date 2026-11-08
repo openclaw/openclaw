@@ -195,11 +195,6 @@ async function headerCount(page: Page, count: number, filtered = true) {
 async function prepareRow(page: Page) {
   const button = page.getByRole("button", { name: targetLabel, exact: true });
   await button.waitFor();
-  await page.waitForFunction(
-    () =>
-      document.querySelector<HTMLButtonElement>('.usage-page button[aria-label="Refresh"]')
-        ?.disabled === false,
-  );
   await button.scrollIntoViewIfNeeded();
   await frames(page);
 }
@@ -323,11 +318,11 @@ const expandAllLogsScenario = localScenario(
   async (page) => {
     await page
       .locator(`${logs} .session-logs-header`)
-      .getByRole("button", { name: "Expand All", exact: true })
+      .getByRole("button", { name: "Expand all", exact: true })
       .click();
     await page
       .locator(`${logs} .session-logs-header`)
-      .getByRole("button", { name: "Collapse All", exact: true })
+      .getByRole("button", { name: "Collapse all", exact: true })
       .waitFor();
     await page.waitForFunction(
       ({ logs: logsSelector }) =>

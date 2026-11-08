@@ -114,6 +114,14 @@ it.each([
     expect(container.scrollTop).toBe(readerOffset);
     scrollHeight += 100;
     flushFrames();
+    await Promise.resolve();
+    for (const row of container.querySelectorAll(".chat-virtual-row")) {
+      emitTranscriptResize(row, 800, transcriptDomState.measuredRowHeight);
+    }
+    await Promise.resolve();
+    flushFrames();
+    await Promise.resolve();
+    flushFrames();
     expect(container.scrollTop).toBe(
       distance === 0 && followEnabled && !nativePending ? readerOffset + 100 : readerOffset,
     );

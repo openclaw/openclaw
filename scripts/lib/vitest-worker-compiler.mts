@@ -157,11 +157,12 @@ async function compileVitestWorkerArtifacts(
         generateBundle(_options, bundle) {
           for (const input of Object.keys(inputs)) {
             let packageDirectory = path.dirname(input);
-            if (packageDirectories.has(packageDirectory)) {
-              continue;
-            }
-            packageDirectories.add(packageDirectory);
             while (packageDirectory.startsWith(root)) {
+              // A visited ancestor already contributed its nearest package manifest.
+              if (packageDirectories.has(packageDirectory)) {
+                break;
+              }
+              packageDirectories.add(packageDirectory);
               const manifest = path.join(packageDirectory, "package.json");
               if (fs.existsSync(manifest)) {
                 recordInput(manifest);
@@ -182,6 +183,7 @@ async function compileVitestWorkerArtifacts(
   const commonPlugins = createInputPlugins("");
   const sourceHostWorkerEntries = new Set(
     [
+      runtimeProcessEntrypoints.preparedModelCatalog,
       runtimeProcessEntrypoints.sqliteStore,
       runtimeProcessEntrypoints.sharedStateStore,
       runtimeProcessEntrypoints.doctorDatabaseEngineInspection,

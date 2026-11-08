@@ -139,6 +139,8 @@ export type CronJobsState<Row = CronJob> = {
 };
 
 export type CronState<Row = CronJob> = CronJobsState<Row> & {
+  // History reads follow the presented surface, independently of scheduler reads.
+  canRefreshRuns?: () => boolean;
   cronStatus: CronStatus | null;
   cronScopedTotal: number | null;
   cronScopedNextWakeAtMs: number | null;

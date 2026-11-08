@@ -948,6 +948,9 @@ extension GatewayConnectionController {
             return false
         }
 
+        if GatewayStableIdentifier.matches(ShareGatewayRelaySettings.loadConfig()?.gatewayStableID, stableID) {
+            ShareGatewayRelaySettings.clearConfig()
+        }
         guard self.persistTLSFingerprint(fingerprint, stableID) else {
             self.appModel?.gatewayStatusText = "Could not update gateway certificate"
             return false
@@ -1385,7 +1388,7 @@ extension GatewayConnectionController {
                 fingerprintSha256: fp,
                 isManual: pendingConnect.isManual,
                 attemptGeneration: pendingConnect.suppressionLease.generation)
-            self.appModel?.gatewayStatusText = "Verify gateway TLS fingerprint"
+            self.appModel?.awaitGatewayTrustDecision()
             return .accepted
         case let .failure(failure):
             let problem = self.tlsProbeFailureProblem(failure, host: host, port: port)
