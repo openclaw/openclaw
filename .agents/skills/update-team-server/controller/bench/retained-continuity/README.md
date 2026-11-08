@@ -74,3 +74,35 @@ limit is raised for the large witness; controller decisions are unchanged.
 
 After collecting results, remove the task-owned seed and fixtures, unmount the
 private btrfs filesystem, delete its loop image, and destroy the container.
+
+## Target freeze race
+
+`measure-target-freeze.mjs` reuses the same fixture, qualification and output
+format. It times the actual lock-bearing `request` → `begin` → `origin` owners,
+including all three processes in GNU time and sampled V8 allocation. Fixture
+construction, complete original-witness capture, and synthetic official-main
+movement happen outside the measurement. No remote fetch or live service runs.
+
+Run the same five interleaved timing samples and two allocation samples per arm
+with `measure-target-freeze.mjs` and scenarios `target-advance` and
+`target-unchanged`. Use the main parent before the target-selector fix as baseline.
+In `target-advance`, the operator selected the previous tip before the mirror
+advanced one commit. Baseline uses that exact SHA and must refuse at origin
+capture after publishing `BUILD_PREPARED`. Candidate uses `main` plus the freshly
+frozen mirror SHA and must publish an intent for that SHA and `ORIGIN_FROZEN`.
+These different outcomes demonstrate correctness, not a speedup.
+
+`target-unchanged` uses a fresh exact SHA on both arms and must succeed; it is the
+common-path A/A performance control. Investigate an unexplained increase over
+20% in its median wall time, CPU, or sampled allocation. Every sample verifies
+all 6,000 witnesses were captured and original journal/witness bytes survived.
+`build-retirement` instead prepares a native completed controller adoption and an
+unbound build intent before timing. Baseline must refuse the unsupported
+`retire-build` action; candidate must return `BUILD_RETIRED` and preserve each
+archived artifact byte-for-byte while removing the active files. This arm measures
+the retirement owner and its incumbent inspection child, and likewise compares
+different outcomes. Allocation aggregation counts only `release-lib.mjs` owner
+processes: synthetic native-observation stubs also inherit the sampler, but their
+allocations are fixture IO and are excluded. All raw profiles remain available.
+The standalone regression suite separately covers captured-operation replay and
+fresh-operation admission after retirement.

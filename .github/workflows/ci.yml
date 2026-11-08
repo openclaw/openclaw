@@ -2591,6 +2591,8 @@ jobs:
         id: ui_bun
         if: ${{ !cancelled() && steps.node_setup.outcome == 'success' && contains(fromJSON('["bun-all","dual-all"]'), needs.preflight.outputs.ui_test_runtime_policy) }}
         uses: ./.ci-harness/.github/actions/setup-test-bun
+        with:
+          cache-mode: ${{ needs.preflight.outputs.cache_mode }}
 
       - name: Lint Control UI window.open usage
         if: ${{ !cancelled() && steps.node_setup.outcome == 'success' && matrix.shard == 1 }}
@@ -3774,6 +3776,8 @@ jobs:
       - name: Setup pinned Bun test runtime
         if: matrix.requires_bun == true
         uses: ./.ci-harness/.github/actions/setup-test-bun
+        with:
+          cache-mode: ${{ needs.preflight.outputs.cache_mode }}
 
       - name: Setup Go for docs i18n
         if: matrix.requires_go == true
@@ -6030,6 +6034,7 @@ jobs:
             -only-testing:OpenClawTests/TalkRealtimeConsultCancellationTests \
             -only-testing:OpenClawTests/TalkRealtimeTranscriptWriteQueueTests \
             -only-testing:OpenClawTests/TalkModeManagerTests \
+            -only-testing:OpenClawTests/TalkTranscriptCompletionTests \
             -only-testing:OpenClawTests/ManagedDocumentEnvelopeTests \
             -only-testing:OpenClawTests/IOSMediaArtifactLoaderTests \
             -only-testing:OpenClawTests/OpenClawTypographyTests \

@@ -112,6 +112,11 @@ Gateway protocol; the native authentication path does not persist it in page sto
 
 The **This iPhone** or **This iPad** page contains appearance, notification
 delivery, camera access, keep-awake behavior, and optional Health summaries.
+QR scanning requests camera permission on first use. If access was denied, the
+scanner offers **Open Settings**; allow **Camera** for OpenClaw, then return to
+the scanner. Screen Time or device-management restrictions must be changed by
+the person who manages those restrictions.
+
 Its **Permissions** page shows notification, camera, microphone, speech, location,
 contacts, calendars, reminders, and photo access. Permission requests use native
 iOS prompts; Precise Location shows the system's current state and links to iOS
@@ -353,6 +358,19 @@ creation has a token or password auth path.
    limited for bearer-token safety. If it is limited, configure `wss://` or
    Tailscale Serve, scan a new full-access code from Control UI or `openclaw qr`,
    then reconnect to enable settings and upgrades.
+
+   Full-access connections also prepare the **OpenClaw Share** extension
+   automatically, so sharing a photo or link does not require a second device
+   approval. The extension keeps its own Gateway-scoped, node-only credential;
+   it does not receive the app's administrative credential. Existing Share
+   credentials are not automatically replaced, including after revocation.
+   After upgrading, reconnecting an already full-access app also prepares Share
+   if it has no credential yet. Existing identities and credentials are reused;
+   reconnecting does not restore revoked or removed Share access. To restore it,
+   set up the app again with a new full-access code; a revoked Share identity
+   then needs `openclaw devices approve`.
+   Limited connections still require separate Share approval. Cloudflare Access
+   Gateways continue to require sending from the foreground app.
 
 The Control UI button requires an already paired session with `operator.admin`.
 As a terminal fallback, pick a discovered Gateway in the iOS app (or enable
