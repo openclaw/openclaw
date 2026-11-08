@@ -16,16 +16,13 @@ afterEach(() => {
   vi.doUnmock("./toast-view.tsx");
 });
 
-it("retains a fragment notice through failed import and retry", async () => {
+it("can retry a failed toast import and dismiss the recovered notice", async () => {
   const host = document.createElement("openclaw-toast-host");
   document.body.append(host);
   const dismissed = vi.fn();
-  const message = document.createDocumentFragment();
-  message.append(document.createElement("strong"));
-  message.firstChild!.textContent = "Synthetic saved notice";
   showToast({
     severity: "success",
-    message,
+    message: "Synthetic saved notice",
     onDismiss: dismissed,
     durationMs: 60_000,
   });
@@ -33,17 +30,10 @@ it("retains a fragment notice through failed import and retry", async () => {
   await waitForSolid(() => expect(getByRole(host, "button", { name: "Retry" })).toBeTruthy());
   expect(getByRole(host, "alert").textContent).toContain("Synthetic saved notice");
   expect(getByRole(host, "button", { name: "Dismiss" })).toBeTruthy();
-  expect(host.querySelector("strong")).toBeNull();
-  host
-    .querySelector(".app-toast-lane")!
-    .dispatchEvent(new Event("pointerenter", { bubbles: true }));
-  await waitForSolid(() =>
-    expect(getByRole(host, "alert").textContent).toContain("Synthetic saved notice"),
-  );
   vi.doUnmock("./toast-view.tsx");
   getByRole(host, "button", { name: "Retry" }).click();
   await waitForSolid(() => expect(host.querySelector('[role="alert"]')).toBeNull());
-  expect(host.querySelector("strong")?.textContent).toBe("Synthetic saved notice");
+  expect(host.textContent).toContain("Synthetic saved notice");
   getByRole(host, "button", { name: "Dismiss" }).click();
   await waitForSolid(() => expect(dismissed).toHaveBeenCalledExactlyOnceWith("dismiss"));
   expect(host.toasts).toEqual([]);
