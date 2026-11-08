@@ -88,8 +88,15 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
       source: "auto",
       behavior: this.offsetState.scrollCommand?.behavior ?? "auto",
     });
-  private readonly reconcileEnd = () => {
+  private readonly reconcilePosition = () => {
     if (this.connected && !this.offsetState.pendingInteractionAnchor) {
+      if (
+        !this.offsetState.touchActive &&
+        this.prependAnchor.update(this.virtualizer, this.readerAnchor.rowsMeasured)
+      ) {
+        this.offsetState.syncNativeOffset?.();
+        this.presentation.commitChange(this.invalidate, true);
+      }
       this.commitComposerResize(true);
       // Initial layout owns positioning until the visible range is measured.
       if (!this.initialRange.pending) {
@@ -134,7 +141,7 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
     });
   };
   private readonly rowRefs: TranscriptRowRefs;
-  private readonly readerAnchor = new TranscriptReaderAnchor(this);
+  private readonly readerAnchor = new TranscriptReaderAnchor(this, this.reconcilePosition);
   private readonly captureInteractionResize = (event: Event) => {
     const anchor = resolveChatTranscriptInteractionAnchor(event);
     if (!anchor) {
@@ -156,6 +163,7 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
   readonly prependAnchor = new TranscriptPrependAnchor(
     this.messageElements.elements,
     this.recordEndLayoutCorrection,
+    () => this.presentation.measureRows(),
   );
   private candidateMessageRowKeysById: ReadonlyMap<string, string> = new Map();
   private candidateMessageRowsByKey: ReadonlyMap<string, string> = new Map();
@@ -180,6 +188,7 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
       (element, entry) => this.presentation.measureElement(element, entry),
       (effect) => this.renderer.queueAfterCommit(effect),
       () => this.presentation.measureRowsWithoutScrollAdjustment(),
+      this.readerAnchor.rowsMeasured,
       (index, mode) => this.renderer.prewarmRow(index, mode),
       // Coalesce completion with measured geometry instead of mounting a second
       // range in the ResizeObserver delivery's microtask checkpoint.
@@ -213,15 +222,12 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
         // Read while measured layout is clean; a native clamp needs its rows now.
         const { threadInnerElement: inner, headerHeight: top, offsetState } = this;
         const moved = redraw && inner && this.layout.commitRange(inner, view.getTotalSize() + top);
-        // A read-back inside the committed window can share the next frame.
-        // A fast scroll reaching new rows still needs them before this paint.
+        // Native resize delivery can read a fast scroll before its scroll event.
+        // Keep its position, but replace observed rows outside the delivery cycle.
         const defer = redraw && !(moved || this.canAutoFollow() || offsetState.hasPendingAnchor);
         this.presentation.commitChange(
           () => (redraw ? (this.renderPreviousRows ?? invalidate) : invalidate)(),
-          defer &&
-            (offsetState.measuringOffset
-              ? this.renderer.coversViewport(view.calculateRange())
-              : !sync),
+          offsetState.measuringOffset || (defer && !sync),
         );
         // A caller render can replace the queued redraw without replacing this geometry receipt.
         // Retiring a reader correction can grow the native extent without changing row totals.
@@ -253,7 +259,12 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
             onOffset: (delta) => void (delta && this.initialRange.recordReaderMovement(delta)),
             onComposerLayout: (changed) => this.commitComposerResize(changed),
             onReaderScroll: (towardEnd) => this.callbacks.onReaderScroll?.(towardEnd),
-            onNativeScroll: callbacks.onNativeScroll,
+            onNativeScroll: (event) => {
+              // Measurement may have consumed this offset before its native event.
+              // Commit its queued rows now, ahead of this frame's paint.
+              this.presentation.flushChange();
+              callbacks.onNativeScroll?.(event);
+            },
           },
           instance,
           callback,
@@ -357,7 +368,7 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
   }
 
   private readonly scheduleEndReconcile = (contentSize?: number) =>
-    this.connected && this.endAnchor.scheduleReconcile(this.reconcileEnd, contentSize);
+    this.connected && this.endAnchor.scheduleReconcile(this.reconcilePosition, contentSize);
 
   update(): void {
     if (this.threadInnerElement) {
@@ -377,14 +388,8 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
     this.rowRefs.observeConnected();
     const interactionResizePending = this.offsetState.pendingInteractionAnchor !== null;
     this.offsetState.reconcileInteractionResize(this.scrollElement, this.virtualizer);
-    if (
-      !this.offsetState.touchActive &&
-      this.prependAnchor.update(this.scrollElement, this.virtualizer, this.presentation.measureRows)
-    ) {
-      this.offsetState.syncNativeOffset?.();
-      // Retain the anchor while later measurements converge, one commit per
-      // frame instead of repeatedly laying out replacement rows in this task.
-      this.presentation.commitChange(this.invalidate, true);
+    if (!interactionResizePending && this.prependAnchor.messageKey !== null) {
+      this.renderer.queueAfterCommit(this.reconcilePosition);
     }
     if (!this.initialRange.pending || (this.layout.ready && this.rowKeys.length === 0)) {
       applyPendingScrollOffset(this.scrollRestoreHost);
@@ -614,9 +619,11 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
   scrollToEnd({ source = "manual", behavior = "auto" }: ChatScrollToEndOptions = {}): boolean {
     // Hydration/resize follow cannot replace a saved reader. A new latest
     // command intentionally supersedes restoration.
-    const positioning = this.initialRange.preparingEnd || this.offsetState.pendingScrollOffset;
-    if (source === "auto" && (positioning || !this.canAutoFollow())) {
-      return false;
+    const allowed =
+      source !== "auto" || (!this.offsetState.pendingScrollOffset && this.canAutoFollow());
+    // An accepted end command may still be measuring its destination.
+    if (!allowed || (source === "auto" && this.initialRange.preparingEnd)) {
+      return allowed;
     }
     if (source !== "auto") {
       // End-follow must not let speculative history measurements move its target.
@@ -734,11 +741,11 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
   }
 
   private queueLayout(): void {
-    if (
-      (this.initialRange.pending && this.rowKeys.length) ||
-      this.offsetState.scrollCommand?.target === "message"
-    ) {
-      this.renderer.queueAfterCommit(this.completeLayout);
+    const initial = this.initialRange.pending && this.rowKeys.length > 0;
+    if (initial || this.offsetState.scrollCommand?.target === "message") {
+      const yieldToBrowser =
+        initial && !this.offsetState.pendingScrollOffset && this.rowKeys.length > 1;
+      this.renderer.queueAfterCommit(this.completeLayout, yieldToBrowser);
     }
   }
 

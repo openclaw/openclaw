@@ -19,7 +19,7 @@ import { listDirectoryTreeStrict } from "./directory-walk.js";
 import * as diskSpace from "./disk-space.js";
 import * as fileDescriptor from "./file-descriptor.js";
 import * as sqliteIntegrity from "./sqlite-integrity.js";
-import * as sqliteSource from "./sqlite-snapshot-source.js";
+import * as readOnlyLocation from "./sqlite-readonly-location.js";
 import * as sqliteSnapshot from "./sqlite-snapshot.js";
 import * as inspection from "./update-candidate-state.inspection.js";
 import { discoverUpdateStateSchemaInspectionInProcess } from "./update-candidate-state.js";
@@ -82,6 +82,20 @@ async function retainedWal(file: string, sql: string) {
   }
   await Promise.all(files.map((target, index) => fs.writeFile(target, bytes[index]!)));
   return { files, bytes };
+}
+
+// Another process acts on the source and exits without closing, as a crashed or busy peer would.
+function runSqlitePeer(file: string, readOnly: boolean, sql = "") {
+  const script = `
+    import { DatabaseSync } from 'node:sqlite';
+    const db = new DatabaseSync(process.argv[1], { readOnly: ${readOnly} });
+    db.exec(${JSON.stringify(sql)});
+    db.prepare('SELECT rowid,value FROM payload ORDER BY rowid').all();
+    process.exit(0);`;
+  const probe = spawnSync(resolveTestNodeExecPath(), ["--input-type=module", "-e", script, file], {
+    encoding: "utf8",
+  });
+  expect(probe.status, probe.stderr).toBe(0);
 }
 
 async function fixture(externalAgents = false) {
@@ -217,13 +231,11 @@ it.each(["auto", "off"] as const)(
     const previous = getFsSafeNativeConfig();
     const audit = vi.spyOn(sqliteIntegrity, "assertSqliteIntegrity");
     const generations = vi.spyOn(generationReads, "readUpdateDatabaseGeneration");
-    const engineImages = vi.spyOn(sqliteSource, "prepareSqliteReadOnlyLocationSync");
     try {
       configureFsSafeNative({ mode });
       const backup = await f.capture({ stopped: true });
       expect(audit).not.toHaveBeenCalled();
       expect(generations).not.toHaveBeenCalled();
-      expect(engineImages).not.toHaveBeenCalled();
       expect(backup.databases).toHaveLength(3);
       for (const entry of backup.databases) {
         const bytes = await fs.readFile(entry.snapshotPath);
@@ -273,31 +285,17 @@ it.each([
       }
     }
     const reader = activity.startsWith("reader");
-    const engineImages = vi.spyOn(sqliteSource, "prepareSqliteReadOnlyLocationSync");
     const capture = f.capture({
       stopped: true,
       onProgress: ({ phase, path: source }) => {
         if (phase !== "pre-migration database backup" || source !== f.shared) {
           return;
         }
-        const probe = spawnSync(
-          resolveTestNodeExecPath(),
-          [
-            "--input-type=module",
-            "-e",
-            `
-        import { DatabaseSync } from 'node:sqlite';
-        const db = new DatabaseSync(process.argv[1], { readOnly: ${reader} });
-        ${reader ? "" : "db.exec(\"INSERT INTO payload VALUES ('external write')\");"}
-        ${activity === "checkpoint-writer" ? "db.exec('PRAGMA wal_checkpoint(TRUNCATE)');" : ""}
-        db.prepare('SELECT rowid,value FROM payload ORDER BY rowid').all();
-        process.exit(0);
-      `,
-            f.shared,
-          ],
-          { encoding: "utf8" },
+        runSqlitePeer(
+          f.shared,
+          reader,
+          `${reader ? "" : "INSERT INTO payload VALUES ('external write');"}${activity === "checkpoint-writer" ? "PRAGMA wal_checkpoint(TRUNCATE);" : ""}`,
         );
-        expect(probe.status, probe.stderr).toBe(0);
       },
     });
     if (!reader) {
@@ -307,7 +305,6 @@ it.each([
       return;
     }
     const backup = await capture;
-    expect(engineImages).toHaveBeenCalledTimes(activity === "reader-empty-wal" ? 0 : 1);
     expect(await Promise.all(files.slice(0, 2).map((file) => fs.readFile(file)))).toEqual(
       before.slice(0, 2),
     );
@@ -335,7 +332,6 @@ it.each(["original-custody", "rollback", "ordinary", "maintenance"] as const)(
       f.shared,
       "INSERT INTO payload VALUES ('checkpoint pending');",
     );
-    const parentImages = vi.spyOn(sqliteSource, "prepareSqliteReadOnlyLocationSync");
     const generations = vi.spyOn(generationReads, "readUpdateDatabaseGeneration");
     await using scope =
       mode === "ordinary" || mode === "maintenance" ? maintenanceScope() : undefined;
@@ -353,17 +349,9 @@ it.each(["original-custody", "rollback", "ordinary", "maintenance"] as const)(
           originalCaptureSourcePaths: mode === "original-custody" ? [f.shared] : undefined,
         });
     if (scope) {
-      // Parent SQLite opens require maintenance custody: even read-only opens can release locks.
-      expect(parentImages.mock.calls.map(([file]) => file)).toEqual(
-        mode === "maintenance" ? [f.shared] : [],
-      );
       expect(backup.originalCaptureSourcePaths).toBeUndefined();
     } else {
-      // Automatic capture classifies its generation image; manual originals acquire
-      // only the engine image and never perform generation work.
-      expect(parentImages.mock.calls.map(([file]) => file)).toEqual(
-        mode === "original-custody" ? [f.shared] : [],
-      );
+      // Manual originals retain bytes without promising automatic generation attribution.
       expect(generations.mock.calls.map(([file]) => file)).toEqual(
         mode === "original-custody" ? [] : [f.shared],
       );
@@ -409,6 +397,45 @@ it("keeps the verified digest when a snapshot is replaced before backup metadata
   });
   expect(await fs.readFile(backup.databases[0]!.snapshotPath)).not.toEqual(published);
 });
+
+it.each(["opens", "commits"] as const)(
+  "keeps automatic restoration only when a reader %s between the generation reads",
+  async (activity) => {
+    const f = await fixture();
+    {
+      // A closed WAL database keeps no index until its next connection opens.
+      using database = new DatabaseSync(f.shared);
+      database.exec("PRAGMA journal_mode=WAL");
+    }
+    await expectMissing(`${f.shared}-shm`);
+    const opens = activity === "opens";
+    const images = vi.spyOn(readOnlyLocation, "prepareSqliteReadOnlyLocationSyncInProcess");
+    const backup = await f.capture({
+      onProgress: ({ phase, path: source }) => {
+        if (phase === "pre-migration database backup" && source === f.shared) {
+          runSqlitePeer(
+            f.shared,
+            opens,
+            opens ? "" : "INSERT INTO payload VALUES ('external write')",
+          );
+        }
+      },
+    });
+    // One private image serves the before read; only a real write costs a second one.
+    expect(images).toHaveBeenCalledTimes(opens ? 1 : 2);
+    await expectSnapshot(backup.databases[0]!);
+    // The reader's zero-commit index is equivalent to the closed generation recorded.
+    const now = generationReads.readUpdateDatabaseGenerationPair([f.shared]);
+    expect(backup.sourceGenerations[f.shared]).toBe(
+      opens ? now.emptyReaderAlternates[f.shared] : undefined,
+    );
+    expect(backup.warnings).toEqual(
+      opens
+        ? []
+        : [`Database changed during capture; its snapshot requires manual recovery: ${f.shared}`],
+    );
+  },
+);
 
 it.each(["path", "owner"] as const)(
   "still refuses a changed database %s after discovery",

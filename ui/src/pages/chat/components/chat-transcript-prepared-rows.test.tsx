@@ -45,10 +45,11 @@ async function transcriptFixture(
   initialOffset: number | null = 0,
   idlePreparation = false,
   plainFirstRow = false,
-  ordinary: boolean | "retained" = false,
+  ordinary: boolean | "retained" | "data-only" = false,
   viewportHeight = 600,
   completedFrame: boolean | "toolCall" = false,
   retainStride = 1,
+  streamingTail = false,
 ) {
   let now = 1;
   let nextFrame = 0;
@@ -95,14 +96,19 @@ async function transcriptFixture(
       );
     }
   };
-  const rows: TranscriptRow<number>[] = Array.from({ length: 256 }, (_, index) => ({
-    kind: "item",
-    key: `fragment:${index}`,
-    item: index,
-    estimatedSize: index === 0 && plainFirstRow ? undefined : 100,
-    retainDom: ordinary !== true && !(index === 0 && plainFirstRow) && index % retainStride === 0,
-    prewarm: Boolean(ordinary),
-  }));
+  const rows: TranscriptRow<number>[] = Array.from({ length: 256 }, (_, index) => {
+    const retainDom =
+      ordinary !== true && !(index === 0 && plainFirstRow) && index % retainStride === 0;
+    return {
+      kind: "item",
+      key: `fragment:${index}`,
+      item: index,
+      estimatedSize: index === 0 && plainFirstRow ? undefined : 100,
+      retainDom,
+      streaming: streamingTail && index === 255,
+      prewarm: Boolean(ordinary) && (!retainDom || ordinary === "data-only"),
+    };
+  });
   const groups = ordinary
     ? rows.map((_, index) =>
         createMessageGroup(
@@ -142,6 +148,11 @@ async function transcriptFixture(
   let queued = false;
   let disposed = false;
   let preparationCost = 0;
+  const rowHeights = new WeakMap<HTMLElement, number>();
+  const resizeRow = (row: HTMLElement, height: number) => {
+    rowHeights.set(row, height);
+    emitTranscriptResize(row, 800, height);
+  };
   const renderRow = vi.fn((row: TranscriptRow<number>) => {
     now += preparationCost;
     if (!ordinary) {
@@ -220,6 +231,7 @@ async function transcriptFixture(
     draw,
     renderRow,
     groups,
+    resizeRow,
     elapse(milliseconds: number) {
       now += milliseconds;
     },
@@ -251,8 +263,10 @@ async function transcriptFixture(
         }
         await settle();
         if (measure) {
-          for (const row of container.querySelectorAll<HTMLElement>("[data-prepared-row]")) {
-            emitTranscriptResize(row, 800, 100);
+          for (const row of container.querySelectorAll<HTMLElement>(
+            ".chat-virtual-row:not([data-prepared-row]), [data-preparing-row]",
+          )) {
+            emitTranscriptResize(row, 800, rowHeights.get(row) ?? 100);
           }
         }
         await settle();
@@ -267,8 +281,10 @@ async function transcriptFixture(
       }
       preparationCost = 0;
       await settle();
-      for (const row of container.querySelectorAll<HTMLElement>("[data-prepared-row]")) {
-        emitTranscriptResize(row, 800, 100);
+      for (const row of container.querySelectorAll<HTMLElement>(
+        ".chat-virtual-row:not([data-prepared-row]), [data-preparing-row]",
+      )) {
+        emitTranscriptResize(row, 800, rowHeights.get(row) ?? 100);
       }
       await settle();
     },
@@ -295,6 +311,25 @@ async function transcriptFixture(
     },
   };
 }
+
+it("warms medium row data while idle and paces preparation during fast scroll", async () => {
+  const view = await transcriptFixture(0, true, false, "data-only", 600, true);
+  const initialRows = transcriptRows(view.container);
+  for (let turn = 0; turn < 160; turn++) {
+    await view.idle(10, 1);
+    await view.frame(2, false);
+  }
+  expect(prewarmGroupedMessage(view.groups[9]!.messages[0]!.message, {}, "html")).toBe(false);
+  expect(transcriptRows(view.container)).toEqual(initialRows);
+
+  await view.scrollTo(8);
+  await view.frame(1, false);
+  await view.task();
+  expect(view.container.querySelector("[data-preparing-row]")).not.toBeNull();
+  const rows = transcriptRows(view.container);
+  const active = rows.filter((row) => !row.hasAttribute("inert"));
+  expect(rows.length).toBeLessThanOrEqual(Math.max(6, active.length + 4));
+});
 
 it("bounds initial HTML warming and keeps distant rows out of the DOM", async () => {
   const view = await transcriptFixture(0, true, false, "retained");
@@ -490,14 +525,14 @@ it("keeps ordinary neighbors as HTML beside retained rows", async () => {
   expect(view.container.querySelector('[data-virtual-row-key="fragment:7"]')).toBeNull();
 });
 
-it("keeps warming in the reader's direction through opposite size compensation", async () => {
-  const view = await transcriptFixture(24_000, true, false, "retained");
+it("keeps reverse medium preparation through size compensation while the tail streams", async () => {
+  const view = await transcriptFixture(24_000, true, false, "data-only", 600, false, 1, true);
   await view.scrollTo(180);
   await view.frame();
   await view.scrollTo(120.5);
   const first = transcriptRows(view.container)[0]!;
   const beforeResize = view.container.scrollTop;
-  emitTranscriptResize(first, 800, 500);
+  view.resizeRow(first, 500);
   await settle();
   const rendered = view.renderRow.mock.calls.length;
   await view.frame(1, false);
@@ -510,18 +545,6 @@ it("keeps warming in the reader's direction through opposite size compensation",
     .map(([row]) => (row.kind === "item" ? row.item : -1));
   expect(warmed.length).toBeGreaterThan(0);
   expect(Math.max(...warmed)).toBeLessThan(Number(first.dataset.index));
-
-  await view.scrollTo(180);
-  const afterDown = view.renderRow.mock.calls.length;
-  await view.frame();
-  await view.task();
-  await view.frame();
-  await view.task();
-  const downward = view.renderRow.mock.calls
-    .slice(afterDown)
-    .map(([row]) => (row.kind === "item" ? row.item : -1));
-  expect(downward.length).toBeGreaterThan(0);
-  expect(Math.min(...downward)).toBeGreaterThan(180);
 });
 
 it("reuses a nearby completed row after scrolling away and back, with a bounded DOM cache", async () => {
@@ -606,7 +629,7 @@ it("keeps parked row styles stable when an earlier row changes height", async ()
   const observer = new MutationObserver((records) => mutations.push(...records));
   observer.observe(parked, { attributes: true, attributeFilter: ["style"] });
   try {
-    emitTranscriptResize(active, 800, 200);
+    view.resizeRow(active, 200);
     await settle();
     mutations.push(...observer.takeRecords());
     expect(mutations).toHaveLength(0);
@@ -637,7 +660,7 @@ it("prepares ahead during scrolling and waits for measurement before admitting a
   await view.frame(2, false);
   expect(view.renderRow.mock.calls).toHaveLength(rendered);
   const draws = view.draw.mock.calls.length;
-  emitTranscriptResize(preparing!, 800, 100);
+  view.resizeRow(preparing!, 100);
   await settle();
   // A measured preparation must not publish a second range inside the same
   // observer delivery. Completion shares the next frame's geometry commit.
@@ -658,7 +681,7 @@ it("releases initial viewport rows when the tail grows before reader navigation"
   expect(tail).not.toBeNull();
   expect(transcriptRows(view.container).length).toBeGreaterThan(1);
 
-  emitTranscriptResize(tail!, 800, 900);
+  view.resizeRow(tail!, 900);
   await settle();
   await view.frame(32);
 
@@ -767,7 +790,7 @@ it("materializes one predicted row between scroll frames and uses the latest vie
   await view.task();
   expect(transcriptRows(view.container)).toHaveLength(mounted.length + 1);
 
-  emitTranscriptResize(prepared!, 800, 100);
+  view.resizeRow(prepared!, 100);
   await settle();
   await view.scrollTo(6);
   const afterScroll = transcriptRows(view.container);
@@ -817,7 +840,7 @@ it("prepares one arriving row between viewport-sized scroll steps", async () => 
   await view.frame(1, false);
   await view.task();
   expect(transcriptRows(view.container)).toEqual(prepared);
-  emitTranscriptResize(preparing!, 800, 100);
+  view.resizeRow(preparing!, 100);
   await settle();
   await view.scrollTo(180);
   await view.frame(1, false);

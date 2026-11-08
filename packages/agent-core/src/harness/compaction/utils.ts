@@ -1,4 +1,9 @@
-import { hasRuntimeContextMarker, type AssistantMessage, type Message } from "@openclaw/llm-core";
+import {
+  hasRuntimeContextMarker,
+  type AssistantMessage,
+  type Message,
+  type ToolCall,
+} from "@openclaw/llm-core";
 import { estimateStringChars } from "@openclaw/normalization-core/cjk-chars";
 import { asOptionalRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { sliceUtf16Safe, truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
@@ -36,8 +41,45 @@ export function mergeSummaryFileOperations(
   addFilePaths(fileOps.edited, details.modifiedFiles);
 }
 
-/** Add file operations from tool calls and results to an accumulator. */
-export function extractFileOpsFromMessage(message: AgentMessage, fileOps: FileOperations): void {
+/** Pair outcomes within each tool turn before collecting conservative file metadata. */
+export function extractFileOpsFromMessages(
+  messages: readonly AgentMessage[],
+  fileOps: FileOperations,
+): void {
+  const calls = createToolCallOccurrenceQueue<{ call: ToolCall; name: string }>();
+  const unchanged = new Set<ToolCall>();
+  for (const message of messages) {
+    if (message.role === "assistant") {
+      calls.clear();
+      for (const call of message.content) {
+        if (call.type === "toolCall") {
+          calls.add(call.id, { call, name: normalizeFileToolName(call.name) });
+        }
+      }
+    } else if (message.role === "toolResult") {
+      const occurrence = calls.claim(message.toolCallId);
+      const name = normalizeFileToolName(message.toolName);
+      if (
+        occurrence?.name === name &&
+        (name === "edit" || name === "write") &&
+        asRecord(message.details)?.changed === false
+      ) {
+        unchanged.add(occurrence.call);
+      }
+    } else {
+      calls.clear();
+    }
+  }
+  for (const message of messages) {
+    extractFileOpsFromMessage(message, fileOps, unchanged);
+  }
+}
+
+function extractFileOpsFromMessage(
+  message: AgentMessage,
+  fileOps: FileOperations,
+  unchanged: ReadonlySet<ToolCall>,
+): void {
   if (message.role === "toolResult") {
     if (normalizeFileToolName(message.toolName) !== "apply_patch") {
       return;
@@ -56,7 +98,7 @@ export function extractFileOpsFromMessage(message: AgentMessage, fileOps: FileOp
     return;
   }
   for (const toolCall of message.content) {
-    if (toolCall.type !== "toolCall") {
+    if (toolCall.type !== "toolCall" || unchanged.has(toolCall)) {
       continue;
     }
     const args = asRecord(toolCall.arguments);

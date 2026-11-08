@@ -16,10 +16,7 @@ import type { PersonalSessionGroup } from "../lib/sessions/personal-groups.ts";
 import type { SolidBridgeElement } from "../lib/solid-bridge.ts";
 import type { NewSessionTarget } from "../pages/new-session/location.ts";
 import type { ContributionsElement } from "../plugins/control-ui-contributions.solid.tsx";
-import type {
-  CatalogSessionMenuRequest,
-  SidebarSessionCatalog,
-} from "./app-sidebar-session-catalogs.ts";
+import type { SidebarSessionCatalog } from "./app-sidebar-session-catalogs.ts";
 import type { SessionPullRequestIndicators } from "./app-sidebar-session-pr-indicators.ts";
 import type {
   SidebarSessionProjection,
@@ -107,6 +104,7 @@ export interface SessionListHost {
     | "catalogMenu"
     | "catalogMenuView"
     | "catalogViewMenuPosition"
+    | "closeSessionMenu"
     | "openCatalogViewMenu"
     | "openSessionGroupMenu"
     | "openSessionMenu"
@@ -139,11 +137,7 @@ export interface SessionListHost {
   handleSessionRowClick(event: MouseEvent, session: SidebarRecentSession): void;
   toggleSessionChildren(session: SidebarRecentSession): void;
   toggleSessionPin(session: SidebarRecentSession): void;
-  toggleSessionMenu(
-    session: SidebarRecentSession,
-    trigger: HTMLElement,
-    catalogMenu?: CatalogSessionMenuRequest,
-  ): void;
+  toggleSessionMenu(session: SidebarRecentSession, trigger: HTMLElement): void;
   showMoreChildren(sessionKey: string): void;
   toggleSection(sectionId: string): void;
   expandedAgentId(): string;

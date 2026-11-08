@@ -495,8 +495,8 @@ describe("xai x_search tool", () => {
       });
       const filters = {
         [handleFilter]: Array.from({ length: 20 }, (_, index) => `handle-${index}`),
-        from_date: "2026-03-01",
-        to_date: "2026-03-20",
+        from_date: "2026-02-28",
+        to_date: "2026-02-28",
         enable_image_understanding: true,
       };
       expect(tool).toMatchObject({ name: "x_search", resultContentSource: "network" });
@@ -505,7 +505,7 @@ describe("xai x_search tool", () => {
       expect(firstFetchBody(mockFetch)).toMatchObject({
         input: [{ role: "user", content: "dinner recipes" }],
         max_turns: 2,
-        tools: [{ type: "x_search", ...filters }],
+        tools: [{ type: "x_search", ...filters, to_date: "2026-03-01" }],
       });
       expect(result.details).toMatchObject({
         citations: [citation],

@@ -1,3 +1,5 @@
+/// <reference lib="es2026.typedarrays" />
+
 import {
   buildGatewayConnectAuth,
   buildDeviceAuthPayload,
@@ -32,7 +34,6 @@ import type {
 } from "../app/native-gateway-auth.ts";
 import { isNativeMobileHost } from "../app/native-web-chrome.ts";
 import { i18n } from "../i18n/index.ts";
-import { bytesToHex } from "../lib/bytes-hex.ts";
 import {
   loadDeviceAuthToken,
   loadOrCreateDeviceIdentity,
@@ -129,7 +130,7 @@ export async function deriveLegacyV4RecoveryScope(material: string | undefined):
   }
   try {
     const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(material));
-    return bytesToHex(new Uint8Array(digest));
+    return new Uint8Array(digest).toHex();
   } catch {
     return "";
   }

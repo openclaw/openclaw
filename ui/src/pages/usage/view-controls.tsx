@@ -2,9 +2,15 @@ import type { JSX } from "@solidjs/web";
 import { For, Show, createMemo } from "solid-js";
 import { extractQueryTerms } from "../../../../src/shared/usage-query.js";
 import { Icon } from "../../components/solid/icon.tsx";
+import { InlineAlert } from "../../components/solid/inline-alert.tsx";
 import { RefreshButton } from "../../components/solid/refresh-button.tsx";
 import { SettingsSelect } from "../../components/solid/settings-select.tsx";
 import { SettingsSegmented } from "../../components/solid/settings-ui.tsx";
+import {
+  clearCompositionEnd,
+  isComposingKeyboardEvent,
+  recordCompositionEnd,
+} from "../../lib/ime.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { formatIsoDate } from "./helpers.ts";
 import { applySuggestionToQuery, buildQuerySuggestions, removeQueryToken } from "./query.ts";
@@ -235,8 +241,14 @@ export function createUsageControls(
         value={props.filters.queryDraft}
         aria-label={t("usage.query.placeholder")}
         placeholder={t("usage.query.placeholder")}
+        onBlur={clearCompositionEnd}
+        onCompositionEnd={recordCompositionEnd}
+        onKeyUp={clearCompositionEnd}
         onInput={(event) => props.callbacks.filters.onQueryDraftChange(event.currentTarget.value)}
         onKeyDown={(e: KeyboardEvent) => {
+          if (isComposingKeyboardEvent(e)) {
+            return;
+          }
           if (e.key === "Enter") {
             e.preventDefault();
             props.callbacks.filters.onApplyQuery();
@@ -348,9 +360,9 @@ export function createUsageControls(
     ) : undefined;
   const queryWarningCallout = () =>
     queryWarnings().length > 0 ? (
-      <div class="callout warning usage-callout usage-callout--tight">
+      <InlineAlert tone="warning" class="usage-callout usage-callout--tight">
         {queryWarnings().join(" · ")}
-      </div>
+      </InlineAlert>
     ) : undefined;
   const toolbar = () => (
     <>

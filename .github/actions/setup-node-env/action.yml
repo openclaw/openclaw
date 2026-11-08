@@ -116,6 +116,11 @@ runs:
             ;;
         esac
 
+    - name: Prepare Git capabilities
+      if: runner.os == 'Linux'
+      shell: bash
+      run: bash "$GITHUB_ACTION_PATH/ensure-git.sh"
+
     - name: Prepare semantic check containment
       if: runner.os == 'Linux' && inputs.semantic-checks == 'true'
       shell: bash
@@ -283,7 +288,9 @@ runs:
       if: inputs.cache-mode != 'off' && (inputs.vitest-fs-cache == 'true' || inputs.restore-test-caches == 'true') && runner.os != 'Windows'
       shell: bash
       run: |
-        echo "value=${{ hashFiles('pnpm-lock.yaml', 'pnpm-workspace.yaml', '**/package.json', '**/tsconfig*.json', '**/vitest*.config.*', 'test/vitest/**', 'src/state/*.sql', '!test/vitest/vitest.database-worker-core-paths.mjs', '!test/vitest/vitest.extension-database-workers-paths.mjs', '!test/vitest/vitest.ui-e2e.config.ts', '!test/vitest/vitest.unit-fast-paths.mjs', '!**/node_modules/**', '!.ci-harness/**') }}" >> "$GITHUB_OUTPUT"
+        set -euo pipefail
+        generation="$(node "$GITHUB_ACTION_PATH/transform-fingerprint.mjs")"
+        echo "value=$generation" >> "$GITHUB_OUTPUT"
 
     - name: Restore exact dependency cache
       id: dependency-cache

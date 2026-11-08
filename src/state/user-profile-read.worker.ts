@@ -1,6 +1,7 @@
 import type { EngineConnection } from "../infra/sql-connection.js";
 import { runSqliteReadSnapshotSync } from "../infra/sqlite-transaction.js";
 import { tableExists } from "./openclaw-state-db-schema-helpers.js";
+import type { RegisteredStateReadCommand } from "./openclaw-state-read-operation-registry.js";
 import type { OpenClawStateReadCommand } from "./openclaw-state-read.types.js";
 import {
   listUserChannelIdentitiesInDatabase,
@@ -22,10 +23,13 @@ import {
   readUserProfileAvatarCommand,
 } from "./user-profiles-internal.js";
 
-/** Profile read kernels share the caller's admitted worker connection and error owner. */
+/** Nonregistered profile kernels share the admitted connection; registry reads dispatch separately. */
 export function readUserProfileCommand(
   db: EngineConnection,
-  command: Extract<OpenClawStateReadCommand, { type: `userProfiles.${string}` }>,
+  command: Exclude<
+    Extract<OpenClawStateReadCommand, { type: `userProfiles.${string}` }>,
+    RegisteredStateReadCommand
+  >,
 ) {
   switch (command.type) {
     case "userProfiles.identity":

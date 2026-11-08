@@ -1,7 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { setImmediate } from "node:timers/promises";
-import { afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
 import { showConfirmDialog } from "../../components/confirm-dialog.ts";
@@ -131,6 +131,15 @@ it("retains installed rows through a failed refresh and its retry", async () => 
   const selector = '.plugins-settings-row[data-plugin-id="workboard"]';
   await waitForSolid(() => expect(find(selector)).not.toBeNull());
   const row = find(selector);
+  const badge = find(`${selector} .plugins-settings-row__status`);
+  const removed: Node[] = [];
+  const observer = new MutationObserver((records) => {
+    for (const record of records) {
+      removed.push(...record.removedNodes);
+    }
+  });
+  observer.observe(row!, { subtree: true, childList: true });
+  onTestFinished(() => observer.disconnect());
   harness.publishGeneration(1);
   await harness.waitForCall("plugins.list");
   expect(find(selector)).toBe(row);
@@ -138,13 +147,25 @@ it("retains installed rows through a failed refresh and its retry", async () => 
   await waitForSolid(() => expect(page.textContent).toContain("Synthetic inventory unavailable"));
   expect(find(selector)).toBe(row);
   response = retry.promise;
-  find<HTMLButtonElement>(".plugins-settings-error button")!.click();
+  find<HTMLButtonElement>(".callout.danger button")!.click();
   await waitForSolid(() => expect(harness.calls("plugins.list")).toHaveLength(2));
   expect(find(selector)).toBe(row);
   retry.resolve(createResult(createPlugin({ name: "Updated Workboard" })));
   await waitForSolid(() => expect(find(selector)?.textContent).toContain("Updated Workboard"));
   expect(find(selector)).toBe(row);
   expect(page.textContent).not.toContain("Synthetic inventory unavailable");
+  expect(removed.filter((node) => node === badge)).toHaveLength(0);
+  expect(find(`${selector} .plugins-settings-row__status`)).toBe(badge);
+
+  response = Promise.resolve(createResult(createPlugin({ enabled: true, state: "enabled" })));
+  harness.publishGeneration(2);
+  await waitForSolid(() =>
+    expect(
+      find(`${selector} .plugins-settings-row__status`)?.getAttribute("data-plugin-state"),
+    ).toBe("enabled"),
+  );
+  expect(find(`${selector} .plugins-settings-row__status`)?.textContent).toContain("Enabled");
+  expect(find(`${selector} .settings-status--ok`)).not.toBeNull();
 });
 
 it.each([
@@ -409,7 +430,7 @@ it("retains same-plugin inspection after a failed refresh", async () => {
   fresh.reject(new Error("Inspection unavailable"));
   await waitForSolid(() => expect(page.textContent).toContain("Inspection unavailable"));
   expect(page.textContent).toContain("Known skill");
-  page.querySelector<HTMLButtonElement>(".plugins-settings-error button")!.click();
+  page.querySelector<HTMLButtonElement>(".callout.danger button")!.click();
   await waitForSolid(() => expect(inspections).toBe(3));
   await waitForSolid(() => expect(page.textContent).not.toContain("Inspection unavailable"));
   expect(page.textContent).toContain("Known skill");
