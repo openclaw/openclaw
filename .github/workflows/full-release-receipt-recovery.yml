@@ -28,7 +28,7 @@ jobs:
       RECEIPT_RECOVERY_REQUEST: ${{ inputs.request }}
     steps:
       - name: Check out trusted aggregation tooling
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.workflow_sha }}
           fetch-depth: 0
@@ -36,6 +36,7 @@ jobs:
       - name: Set up trusted tooling runtime
         uses: ./.github/actions/setup-node-env
         with:
+          cache-mode: off
           install-bun: "false"
           install-deps: "false"
       - name: Install trusted tooling dependencies without lifecycle scripts
@@ -44,7 +45,7 @@ jobs:
         run: node scripts/full-release-receipt-recovery.mjs admit
       - name: Upload fresh publication observations
         id: observations
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: full-release-publication-observations-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/receipt-recovery/publication-observations.json
@@ -57,7 +58,7 @@ jobs:
           OBSERVATIONS_ARTIFACT_DIGEST: ${{ steps.observations.outputs.artifact-digest }}
         run: node scripts/full-release-receipt-recovery.mjs seal
       - name: Upload receipt-backed aggregate
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ${{ steps.seal.outputs.artifact_name }}
           path: ${{ runner.temp }}/receipt-recovery/full-release-validation-manifest.json
