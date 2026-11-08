@@ -2,6 +2,8 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Page } from "playwright";
 import { expect, inject, it } from "vitest";
 import { startControlUiBenchGatewayServer } from "../../../scripts/lib/control-ui-bench-gateway-server.ts";
+// Scenario probes use the action-timing owner's optional Window hook.
+import "../../../scripts/lib/control-ui-engine-action-timing.ts";
 import { createEnginePageScenarios } from "../../../scripts/lib/control-ui-engine-page-scenarios.ts";
 import { frames } from "../../../scripts/lib/control-ui-interaction-navigation.ts";
 import {
@@ -16,7 +18,7 @@ import {
   resetControlUiPageObserver,
 } from "../../../scripts/lib/control-ui-page-observer.ts";
 import { waitForControlUiInitialRoster } from "../test-helpers/control-ui-e2e-readiness.ts";
-import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { installNativePluginMockGateway } from "../test-helpers/control-ui-plugin-e2e.ts";
 import { createTeamScaleSidebarListOwner } from "../test-helpers/control-ui-sidebar-list-fixture.ts";
 import { controlUiE2eBuiltModuleRequest } from "./control-ui-built-module.test-support.ts";
 import {
@@ -33,16 +35,17 @@ const suite = createControlUiE2eSuite({
     if (!root) {
       throw new Error("Route request proof requires the shared production UI build");
     }
-    return startControlUiBenchGatewayServer(root, 0, requestLatencyMs);
+    const server = await startControlUiBenchGatewayServer(root, 0, requestLatencyMs);
+    server.setTerminalEnabled(true);
+    return server;
   },
 });
 // First visits must not regain the removed request wave or eager Markdown reader.
 const readyWindowRequestLimits = {
-  skills: 29,
-  "skill-settings": 29,
-  talk: 40,
-  mcp: 65,
-  security: 52,
+  skills: 28,
+  "skill-settings": 28,
+  plugins: 56,
+  "plugin-settings": 59,
 };
 type Route = keyof typeof readyWindowRequestLimits;
 
@@ -66,10 +69,12 @@ async function visit(page: Page, route: Route) {
     defaults: { model: "model-0", modelProvider: "example", contextTokens: 128_000 },
     owners: [],
   });
-  const gateway = await installMockGateway(
+  const gateway = await installNativePluginMockGateway(
     page,
     { ...fixture, awaitInitialRoster: false },
     {
+      nativeAssetLatencyMs: requestLatencyMs,
+      afterInitScript: scenario.initScript,
       requestHandlers: {
         "sessions.list": (params) => {
           if (!isRecord(params)) {
@@ -80,9 +85,6 @@ async function visit(page: Page, route: Route) {
       },
     },
   );
-  if (scenario.initScript) {
-    await page.addInitScript({ content: scenario.initScript });
-  }
   await page.addInitScript(installInteractionNavigationPreloadObserver);
   await installControlUiPageObserver(page);
   await page.goto(new URL(scenario.route, suite.server.baseUrl).href);
@@ -111,7 +113,7 @@ async function visit(page: Page, route: Route) {
 }
 
 suite.define(() => {
-  it.each(["skills", "skill-settings", "talk", "mcp", "security"] as const)(
+  it.each(["skills", "skill-settings", "plugins", "plugin-settings"] as const)(
     "bounds %s ready-window asset requests at 100 ms from a settled New Session",
     (route) =>
       suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
