@@ -1,2 +1,2 @@
-133
-# Exhausted budgets/release signaling plus actual discovery producer and startup warning privacy regressions.
+137
+# Budget/release and discovery warning regressions plus exact real-pool fallback diagnostic assertion.
