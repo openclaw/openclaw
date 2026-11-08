@@ -193,6 +193,7 @@ export function setup(
   entry: SessionEntry = sessionEntry,
   options: {
     config?: OpenClawConfig;
+    sessionTarget?: BoundAgentRunSessionTarget;
     catalogOnlyModel?: boolean;
     accountCatalog?: PreparedAccountCatalogAccess;
     metadataSnapshot?: preparedRuntime.PreparedModelRuntimeSnapshot["metadataSnapshot"];
@@ -315,7 +316,7 @@ export function setup(
   const readSessionEntry = vi
     .spyOn(sessionEntryRuntime, "readSessionEntryInWorker")
     .mockImplementation(async (target) => {
-      expect(target).toEqual(sessionTarget);
+      expect(target).toEqual(options.sessionTarget ?? sessionTarget);
       return entry;
     });
   vi.spyOn(preparedRuntime, "acquireAgentRunPreparedModelRuntime").mockImplementation(
@@ -356,11 +357,11 @@ export function setup(
   ) => {
     await using lease = await acquireRuntimeLease({
       config: options.config ?? config,
-      agentId: sessionTarget.agentId,
+      agentId: (options.sessionTarget ?? sessionTarget).agentId,
       agentDir: "/gateway-agent",
     });
     const { inference } = await prepareWorkerTurnModel({
-      target: sessionTarget,
+      target: options.sessionTarget ?? sessionTarget,
       modelRef: input.request.modelRef,
       runtimeSnapshot: lease.snapshot,
       inferencePlacement: "gateway",

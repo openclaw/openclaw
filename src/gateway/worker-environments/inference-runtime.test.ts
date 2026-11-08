@@ -5,8 +5,11 @@ import { WORKER_PROVIDER_REPLAY_MAX_DATA_BYTES } from "../../../packages/gateway
 import { validateWorkerInferenceTerminalOutcome } from "../../../packages/gateway-protocol/src/schema/worker-inference.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { bindAgentToolExecutionLocation } from "../../agents/agent-tool-metadata.js";
+import { resolveRequesterToolPolicies } from "../../agents/requester-tool-policy.js";
 import { createToolSurfacePresentationForTest } from "../../agents/tool-surface-plan.test-support.js";
 import { makeZeroUsageSnapshot } from "../../agents/usage.js";
+import { resolveWebSearchToolPolicy } from "../../agents/web-search-tool-policy.js";
+import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import { onTrustedInternalDiagnosticEvent } from "../../infra/diagnostic-events.js";
 import type { AssistantMessage, AssistantMessageEvent, StreamFn } from "../../llm/types.js";
 import { createAssistantMessageEventStream } from "../../llm/utils/event-stream.js";
@@ -14,6 +17,7 @@ import type { ProviderWrapStreamFnContext } from "../../plugins/provider-transpo
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import { parseApiErrorInfo } from "../../shared/assistant-error-format.js";
+import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import {
   isWorkerTranscriptMessageFrameSafe,
   WORKER_PROVIDER_REPLAY_LOCAL_RETRY_MESSAGE,
@@ -877,6 +881,90 @@ describe("worker inference provider runtime", () => {
       AUTH_MARKER,
     ]);
   });
+
+  it.each([
+    { name: "deny web_search", deniedTools: ["web_search"], allowed: false },
+    { name: "allow web_search", deniedTools: ["exec"], allowed: true },
+  ])(
+    "prepares dashboard capability facts and preserves inherited tool policy ($name)",
+    async ({ deniedTools, allowed }) => {
+      await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+        const storePath = state.statePath("worker-capabilities.sqlite");
+        const sessionKey = "agent:runtime-agent:dashboard:worker-regression";
+        const parentKey = "agent:runtime-agent:main";
+        const scope = { agentId: "runtime-agent", storePath, sessionKey };
+        const stored = {
+          ...sessionEntry,
+          spawnedBy: parentKey,
+          spawnDepth: 2,
+          inheritedToolPolicyVersion: 1 as const,
+          inheritedToolDeny: deniedTools,
+        };
+        await upsertSessionEntryCore(
+          { ...scope, sessionKey: parentKey },
+          { sessionId: "worker-regression-parent", updatedAt: 1 },
+        );
+        await upsertSessionEntryCore(scope, stored);
+        const configured = { ...config, session: { store: storePath } };
+        const input = params(request(), vi.fn());
+        const target = { ...input.sessionTarget, storePath, sessionKey };
+        const runtime = setup(stored, { config: configured, sessionTarget: target });
+        const readPolicy = () =>
+          resolveRequesterToolPolicies({ config: configured, agentId: scope.agentId, sessionKey });
+        expect(readPolicy).toThrow("Session capability metadata requires worker preparation");
+        const searchTool = {
+          name: "web_search",
+          label: "Search",
+          description: "Search",
+          parameters: Type.Object({}),
+          execute: async () => ({ content: [], details: {} }),
+        };
+        bindAgentToolExecutionLocation(searchTool, { kind: "gateway" });
+        const toolRuntime = createWorkerGatewayToolRuntime({
+          assertCurrent() {},
+          signal: new AbortController().signal,
+          prepare: async () => ({
+            tools: [searchTool],
+            presentation: createToolSurfacePresentationForTest(),
+            policy: {
+              workspaceOnly: true,
+              readOnly: false,
+              applyPatchEnabled: false,
+              applyPatchWorkspaceOnly: true,
+              imageSanitization: {},
+            },
+          }),
+        });
+        vi.spyOn(workerTurnOwners, "getWorkerTurnToolSurface").mockReturnValue(toolRuntime);
+        const observed: boolean[] = [];
+        runtime.applyStreamPolicy.mockImplementation((...args) => {
+          const context = args[11]?.nativeWebSearchPolicyContext;
+          const resolved = resolveWebSearchToolPolicy({
+            config: configured,
+            agentId: scope.agentId,
+            modelProvider: PROVIDER,
+            modelId: MODEL,
+            ...context,
+          });
+          observed.push(resolved.allowed);
+          return { effectiveExtraParams: {}, nativeWebSearchAllowedByToolPolicy: resolved.allowed };
+        });
+        try {
+          await expect(
+            runtime.executor({ ...input, sessionTarget: target }),
+          ).resolves.toMatchObject({
+            type: "done",
+          });
+          expect(
+            runtime.applyStreamPolicy.mock.lastCall?.[11]?.nativeWebSearchPolicyContext,
+          ).toMatchObject({ sessionKey, webSearchEnabled: true });
+          expect(observed).toEqual([allowed]);
+        } finally {
+          await toolRuntime.close();
+        }
+      });
+    },
+  );
 
   it("passes the admitted search capability to the provider and revokes it after prompt policy", async () => {
     const runtime = setup();
