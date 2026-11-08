@@ -109,6 +109,8 @@ export const PROMETHEUS_FAMILY_RESERVES = {
   openclaw_sessions_list_retained_refs: 4,
   openclaw_sessions_list_retained_views: 4,
   openclaw_skill_used_total: 4,
+  openclaw_sqlite_reader_operations_total: 4,
+  openclaw_sqlite_reader_read_bytes_total: 4,
   openclaw_talk_audio_bytes: 4,
   openclaw_talk_event_duration_seconds: 4,
   openclaw_talk_event_total: 4,

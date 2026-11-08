@@ -11,28 +11,23 @@ export function hasChildProcessExited(child: ChildProcess): boolean {
   return child.exitCode != null || child.signalCode != null;
 }
 
-/**
- * Execa waits for stdout/stderr after the direct child exits. Bound that wait
- * when detached descendants keep inherited pipes open, while still draining
- * short output tails. The returned cleanup must run after awaiting the child.
- */
-export function releaseChildProcessOutputAfterExit(child: ChildProcess): () => void {
+/** Bound output draining after an authentic root exit, independently of the transport. */
+export function createChildProcessOutputRelease(releaseOutput: () => void) {
   let idleTimer: NodeJS.Timeout | undefined;
   let releaseTimer: NodeJS.Timeout | undefined;
   let deadlineTimer: NodeJS.Timeout | undefined;
+  let disposed = false;
 
   const cleanup = () => {
+    disposed = true;
     clearTimeout(idleTimer);
     clearTimeout(releaseTimer);
     clearTimeout(deadlineTimer);
-    child.removeListener("exit", onExit);
-    child.stdout?.removeListener("data", onData);
-    child.stderr?.removeListener("data", onData);
+    deadlineTimer = undefined;
   };
   const release = () => {
     cleanup();
-    child.stdout?.destroy();
-    child.stderr?.destroy();
+    releaseOutput();
   };
   const scheduleRelease = () => {
     // Either timer may run before already-buffered pipe data on a loaded loop.
@@ -53,6 +48,9 @@ export function releaseChildProcessOutputAfterExit(child: ChildProcess): () => v
     }
   };
   const onExit = () => {
+    if (disposed) {
+      return;
+    }
     deadlineTimer = setTimeout(() => {
       // Post-deadline data must not cancel release and extend the hard bound.
       deadlineTimer = undefined;
@@ -62,6 +60,23 @@ export function releaseChildProcessOutputAfterExit(child: ChildProcess): () => v
     armIdleTimer();
   };
 
+  return { onData, onExit, dispose: cleanup };
+}
+
+/** Execa may retain pipes inherited by detached descendants after its direct child exits. */
+export function releaseChildProcessOutputAfterExit(child: ChildProcess): () => void {
+  const release = createChildProcessOutputRelease(() => {
+    cleanup();
+    child.stdout?.destroy();
+    child.stderr?.destroy();
+  });
+  const { onData, onExit } = release;
+  const cleanup = () => {
+    release.dispose();
+    child.removeListener("exit", onExit);
+    child.stdout?.removeListener("data", onData);
+    child.stderr?.removeListener("data", onData);
+  };
   child.stdout?.on("data", onData);
   child.stderr?.on("data", onData);
   // A command deadline can transfer output here after the root has already exited.

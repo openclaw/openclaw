@@ -3,6 +3,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { hashCronJobDefinition } from "../definition-hash.js";
 import { PLUGIN_COMMAND_SCHEDULE_MESSAGE } from "../plugin-command-schedule.types.js";
 import { stripCronPinnedExecGrant } from "../scheduled-tool-policy.js";
+import { decodeCronStreamOperatorSource } from "../stream-operator-source.js";
 import { parseCronStreamSandboxTarget } from "../stream-sandbox-target.js";
 import type { CronStoredJob, CronStoreFile } from "../types.js";
 import {
@@ -14,6 +15,7 @@ import {
 export function stripJobRuntimeFields(job: CronStoreFile["jobs"][number]): Record<string, unknown> {
   const {
     streamSandbox: rawStreamSandbox,
+    streamOperatorSource: rawStreamOperatorSource,
     runtimeAuthority: _runtimeAuthority,
     runtimeAuthorityRecoveryRequired: _runtimeAuthorityRecoveryRequired,
     state: _state,
@@ -43,6 +45,9 @@ export function stripJobRuntimeFields(job: CronStoreFile["jobs"][number]): Recor
   // Runtime state and authority have separate owners; JSON is canonical for config.
   return {
     ...rest,
+    ...(rawStreamOperatorSource !== undefined
+      ? { streamOperatorSource: decodeCronStreamOperatorSource(rawStreamOperatorSource) }
+      : {}),
     ...(streamSandbox
       ? { streamSandbox, schedule: { ...job.schedule, kind: "sandbox-stream" } }
       : {}),
@@ -68,7 +73,13 @@ export function resolveCronJobGrantDefinitionRevision(job: CronStoredJob): strin
   if (!storedDefinition) {
     throw new Error(`Cannot canonicalize cron job ${job.id} for grant revision`);
   }
-  const { enabled: _enabled, state: _state, ...definition } = storedDefinition;
+  const {
+    enabled: _enabled,
+    state: _state,
+    ownerProfileId: _ownerProfileId,
+    ownerTransferPending: _ownerTransferPending,
+    ...definition
+  } = storedDefinition;
   return hashCronJobDefinition(definition);
 }
 
@@ -79,8 +90,19 @@ export function decodeStoredCronJobConfig(
   const schedule = isRecord(jobJson.schedule) ? jobJson.schedule : undefined;
   const payload = isRecord(jobJson.payload) ? jobJson.payload : undefined;
   const streamSandbox = parseCronStreamSandboxTarget(jobJson.streamSandbox);
+  // Older stores retained the trusted human creator before management ownership was explicit.
+  const actor = isRecord(jobJson.createdActor) ? jobJson.createdActor : undefined;
+  const ownerProfileId =
+    jobJson.ownerProfileId ??
+    (actor?.type === "human" && actor.source === "profile" && typeof actor.id === "string"
+      ? actor.id
+      : undefined);
   return {
     ...decodeDeliveryConfig(jobJson),
+    ...(jobJson.streamOperatorSource !== undefined
+      ? { streamOperatorSource: decodeCronStreamOperatorSource(jobJson.streamOperatorSource) }
+      : {}),
+    ...(ownerProfileId ? { ownerProfileId } : {}),
     ...(schedule?.kind === "sandbox-stream" && streamSandbox
       ? { schedule: { ...schedule, kind: "stream" }, streamSandbox }
       : {}),

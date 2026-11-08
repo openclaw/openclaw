@@ -81,6 +81,20 @@ of `not-requested` | `delivered` | `not-delivered` | `unknown`. Removed events
 are post-commit: they fire only after durable deletion succeeds and still carry
 the deleted job snapshot so external schedulers can reconcile state.
 
+A failed `finished` event can include `agentTerminal`, a version 1 snapshot of
+content-free observations from the agent attempt selected by the native result
+owner. Its bounded fields describe agent success, terminal message role, final
+text state, error source, assistant stop reason, and observed media. The boolean
+observations use the strings `"true"`, `"false"`, and `"unknown"`. These are
+symptoms, not root-cause or permission classifications. Consumers must preserve
+unknown values and tolerate an absent snapshot, including on older hosts and
+harnesses that do not supply these observations.
+
+The snapshot is omitted after recovery, on successful or skipped runs, and when
+cancellation or another failure replaces the agent outcome. Never borrow it
+from an earlier callback, attempt, or cached reply. It is transient hook metadata;
+it does not add message content or change persisted run-history schemas.
+
 A `scheduled` event is post-commit: it fires only after a successful durable
 write changes an existing job's effective `nextRunAtMs`, excluding that job's
 explicit `added`, `updated`, or `removed` lifecycle event. The top-level

@@ -53,6 +53,9 @@ export async function runCodexSessionRouteHealth(ctx: DoctorHealthFlowContext): 
         }
       : {}),
   });
+  if (result.requiresFullDoctor || result.warnings.length > 0) {
+    ctx.retirementOnly = false;
+  }
   noteDoctorRepairResult(result);
 }
 
@@ -74,6 +77,9 @@ export async function runSessionTranscriptsHealth(ctx: DoctorHealthFlowContext):
     onStepReceipt: (receipt) => {
       ctx.configResult.stateMigrationStepReceipts ??= [];
       ctx.configResult.stateMigrationStepReceipts.push(receipt);
+      if (receipt.outcome === "deferred" || receipt.warnings.length > 0) {
+        ctx.retirementOnly = false;
+      }
     },
   });
 }

@@ -1,3 +1,5 @@
+import path from "node:path";
+import { root } from "@openclaw/fs-safe/root";
 import {
   hasUnavailableSkillSecretOwners,
   isSkillSecretOwnerUnavailable,
@@ -48,6 +50,7 @@ export function prepareInstalledSkillCatalog(params: {
         !isSkillSecretOwnerUnavailable(keys.get(skill.name) ?? skill.name),
     )
     .map((skill) => {
+      const fileHost = resolveSkillFileHost(skill);
       const resource = deliveredByName.get(skill.name);
       const deliveredContent =
         resource?.filePath === skill.filePath ? resource.readContent : undefined;
@@ -80,8 +83,8 @@ export function prepareInstalledSkillCatalog(params: {
         readSearchContent = readInstructions;
       } else if (
         workspace?.loadSkills &&
-        (resolveSkillFileHost(skill) === "workspace" ||
-          (resolveSkillFileHost(skill) !== "gateway" &&
+        (fileHost === "workspace" ||
+          (fileHost !== "gateway" &&
             !snapshot.librarySelections?.some((selection) => selection.name === skill.name)))
       ) {
         reader = async ({ signal }) => {
@@ -100,7 +103,28 @@ export function prepareInstalledSkillCatalog(params: {
         // This resource owner supports whole reads only. Its document bridge
         // is not a substitute for bounded skill-resource authority.
       }
+      const resourceRoot =
+        !sandbox?.enabled &&
+        !reader &&
+        fileHost !== "workspace" &&
+        (fileHost === "gateway" || !workspace?.loadSkills) &&
+        path.isAbsolute(skill.filePath)
+          ? root(path.dirname(skill.filePath))
+          : undefined;
+      // A missing directory must not fail preparation or create an unhandled rejection.
+      // The retained promise still reports the original error when a companion is requested.
+      void resourceRoot?.catch(() => undefined);
+      const contentHash =
+        sandbox?.enabled && typeof deliveredContent === "string"
+          ? resource?.contentHash
+          : skill.contentHash;
       return {
+        catalogRevision: contentHash
+          ? {
+              key: JSON.stringify([contentHash, skill.name, skill.description, skill.locationNote]),
+              contentHash,
+            }
+          : undefined,
         name: skill.name,
         promptListed: promptListed.has(skill.name),
         description: [skill.description, skill.locationNote].filter(Boolean).join("\n"),
@@ -111,6 +135,7 @@ export function prepareInstalledSkillCatalog(params: {
           readContent: sandbox?.enabled ? deliveredContent : skill.readContent,
         },
         reader,
+        resourceRoot,
         assertCurrent,
         readSearchContent,
       };

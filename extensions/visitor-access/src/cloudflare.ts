@@ -1,6 +1,8 @@
+import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
 import { z } from "zod";
 import type { VisitorAccessConfig } from "./config.js";
 import { VisitorAccessError } from "./errors.js";
+import type { VisitorAccountSeats } from "./tool-results.js";
 
 const policyReferenceSchema = z.object({
   id: z
@@ -37,9 +39,26 @@ const responseSchema = z.object({
   result_info: z
     .object({
       total_pages: z.number().int().nonnegative().optional(),
+      total_count: z.number().int().nonnegative().optional(),
+      page: z.number().int().positive().optional(),
       per_page: z.number().int().positive().optional(),
     })
     .optional(),
+});
+
+const accountUserSchema = z.object({
+  access_seat: z.boolean(),
+  gateway_seat: z.boolean(),
+  seat_uid: z.string().min(1).optional(),
+});
+const entitlementSchema = z.object({
+  id: z.string(),
+  deleted_date: z.string(),
+  allocation: z.unknown(),
+});
+const seatAllocationSchema = z.object({
+  type: z.literal("max_count"),
+  value: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
 });
 
 type ManagedPolicy = z.infer<typeof managedPolicySchema>;
@@ -62,6 +81,7 @@ export function visitorTargetKey(target: VisitorTarget): string {
 
 export class VisitorPolicyClient {
   private readonly policiesUrl: string;
+  private readonly accountUrl: string;
 
   constructor(
     private readonly config: VisitorAccessConfig,
@@ -69,7 +89,8 @@ export class VisitorPolicyClient {
     private readonly signal?: AbortSignal,
     private readonly readGithubProvider?: () => GitHubProvider | undefined,
   ) {
-    this.policiesUrl = `https://api.cloudflare.com/client/v4/accounts/${encodeURIComponent(config.accountId)}/access/apps/${encodeURIComponent(config.appId)}/policies`;
+    this.accountUrl = `https://api.cloudflare.com/client/v4/accounts/${encodeURIComponent(config.accountId)}`;
+    this.policiesUrl = `${this.accountUrl}/access/apps/${encodeURIComponent(config.appId)}/policies`;
   }
 
   async read(
@@ -150,6 +171,101 @@ export class VisitorPolicyClient {
     await this.request(url, policy ? "PUT" : "POST", payload, assertPolicyCurrent);
     assertPolicyCurrent();
     return targets;
+  }
+
+  async readAccountSeats(assertCurrent?: () => void): Promise<VisitorAccountSeats> {
+    const deadline = AbortSignal.timeout(10_000);
+    const diagnostics: string[] = [];
+    const observe = async (label: string, read: () => Promise<number>): Promise<number | null> => {
+      try {
+        const value = await read();
+        assertCurrent?.();
+        this.signal?.throwIfAborted();
+        return value;
+      } catch (error) {
+        // Provider diagnostics are optional; live manager/service authority is not.
+        assertCurrent?.();
+        this.signal?.throwIfAborted();
+        diagnostics.push(
+          `${label} unavailable: ${error instanceof VisitorAccessError ? error.message : "Cloudflare returned invalid seat data or the observation timed out; inspect account seats."}`,
+        );
+        return null;
+      }
+    };
+    const read = (suffix: string, permission: string) =>
+      this.request(`${this.accountUrl}${suffix}`, "GET", undefined, assertCurrent, {
+        permission,
+        signal: deadline,
+      });
+    const [capacity, occupied] = await Promise.all([
+      observe("Seat allocation", async () => {
+        const response = await read("/entitlements", "Account Read");
+        const entries = z.array(entitlementSchema).max(10_000).parse(response.result);
+        const active = entries.filter(
+          (entry) => entry.id === "teams.users_allowed" && entry.deleted_date === "",
+        );
+        if (active.length !== 1) {
+          throw new VisitorAccessError(
+            "No unique current teams.users_allowed allocation; inspect the account entitlements.",
+          );
+        }
+        return seatAllocationSchema.parse(active[0]!.allocation).value;
+      }),
+      observe("Seat occupancy", async () => {
+        const seats = new Set<string>();
+        let count = 0;
+        for (let page = 1; page <= 100; page++) {
+          const response = await read(
+            `/access/users?page=${page}&per_page=100`,
+            "Access: Audit Logs Read",
+          );
+          const users = z.array(accountUserSchema).max(1000).parse(response.result);
+          count += users.length;
+          for (const user of users) {
+            // The seat API removes membership by clearing BOTH flags. One identity
+            // shared by Access and Gateway still consumes only one account seat.
+            if (user.access_seat || user.gateway_seat) {
+              if (!user.seat_uid) {
+                throw new VisitorAccessError(
+                  "An occupied user has no seat ID; inspect the account users.",
+                );
+              }
+              seats.add(user.seat_uid);
+            }
+          }
+          const info = response.result_info;
+          if (info?.page !== undefined && info.page !== page) {
+            throw new VisitorAccessError(
+              "Cloudflare returned a different users page; retry the seat observation.",
+            );
+          }
+          const complete =
+            info?.total_pages === undefined
+              ? users.length < (info?.per_page ?? 100)
+              : page >= info.total_pages;
+          if (complete) {
+            if (info?.total_count !== undefined && count !== info.total_count) {
+              throw new VisitorAccessError(
+                "Cloudflare returned an incomplete users list; retry the seat observation.",
+              );
+            }
+            return seats.size;
+          }
+        }
+        throw new VisitorAccessError(
+          "The account users list exceeds the inspection limit; inspect seats in Cloudflare.",
+        );
+      }),
+    ]);
+    const remaining =
+      capacity === null || occupied === null ? null : Math.max(0, capacity - occupied);
+    return {
+      status: remaining === null ? "unknown" : remaining === 0 ? "full" : "available",
+      capacity,
+      occupied,
+      remaining,
+      diagnostics: diagnostics.toSorted(),
+    };
   }
 
   assertGithubConfigured() {
@@ -246,6 +362,7 @@ export class VisitorPolicyClient {
     method: "GET" | "POST" | "PUT" | "DELETE",
     body?: unknown,
     assertCurrent?: () => void,
+    options: { permission?: string; signal?: AbortSignal } = {},
   ) {
     let response: Response;
     assertCurrent?.();
@@ -258,9 +375,11 @@ export class VisitorPolicyClient {
         },
         body: body === undefined ? undefined : JSON.stringify(body),
         redirect: "error",
-        signal: this.signal
-          ? AbortSignal.any([this.signal, AbortSignal.timeout(30_000)])
-          : AbortSignal.timeout(30_000),
+        signal: AbortSignal.any([
+          ...(this.signal ? [this.signal] : []),
+          ...(options.signal ? [options.signal] : []),
+          AbortSignal.timeout(30_000),
+        ]),
       });
     } catch {
       throw new VisitorAccessError(
@@ -269,17 +388,14 @@ export class VisitorPolicyClient {
     }
     if (!response.ok) {
       throw new VisitorAccessError(
-        `Cloudflare request failed (HTTP ${response.status}); check the token's Access policy permissions and retry.`,
+        `Cloudflare request failed (HTTP ${response.status}); check the token's ${options.permission ?? "Access policy"} permissions and retry.`,
       );
     }
-    let data: unknown;
-    try {
-      data = await response.json();
-    } catch {
+    const data = await readProviderJsonResponse<unknown>(response, "Cloudflare").catch(() => {
       throw new VisitorAccessError(
         "Cloudflare returned an unreadable response; retry and inspect the visitor policy.",
       );
-    }
+    });
     const parsed = responseSchema.safeParse(data);
     if (!parsed.success) {
       throw new VisitorAccessError(

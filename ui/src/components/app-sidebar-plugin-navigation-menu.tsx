@@ -1,5 +1,6 @@
 import type { JSX } from "@solidjs/web";
 import { createMemo } from "solid-js";
+import { formatUiError } from "../lib/format-error.ts";
 import { showToast } from "../lib/toast.ts";
 import { SidebarDropdown } from "./app-sidebar-dropdown.tsx";
 import { iconData, type IconName } from "./icon-data.ts";
@@ -56,7 +57,10 @@ export function renderSidebarPluginNavigationMenuForMenus(
     } catch (error) {
       if (!entry.signal.aborted) {
         host.sessionDataContext?.plugins.reportError(entry.pluginId, error);
-        showToast({ message: error instanceof Error ? error.message : String(error) });
+        showToast({
+          severity: "error",
+          message: formatUiError(error),
+        });
       }
     }
   };

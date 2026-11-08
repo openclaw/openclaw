@@ -176,7 +176,7 @@ MiniMax M3 and M3.1 Flash are preferred [Code Mode](/tools/code-mode) models on 
     ```
 
     <Warning>
-    MiniMax-M2.x's Anthropic-compatible streaming endpoint emits `reasoning_content` in OpenAI-style delta chunks instead of native Anthropic thinking blocks, which leaks internal reasoning into visible output if thinking is left enabled implicitly. OpenClaw disables M2.x thinking by default unless you explicitly set `thinking` yourself. MiniMax-M3 (and forward-compatible M3.x) is exempt: M3 emits proper Anthropic thinking blocks and requires thinking active to produce visible content, so OpenClaw keeps M3 on the provider's adaptive thinking path. See the Thinking defaults section under Advanced configuration below.
+    MiniMax M2.x can emit `reasoning_content` in OpenAI-style streaming deltas on the Anthropic-compatible path, which can expose reasoning in visible output. OpenClaw sends `thinking: { type: "disabled" }` by default when the payload has no `thinking` field, but [MiniMax documents that M2.x accepts and ignores this setting](https://platform.minimax.io/docs/api-reference/text-anthropic-api#thinking-control). The `off` default does not guarantee that upstream reasoning or reasoning output is suppressed. See [Thinking defaults](/providers/minimax#advanced-configuration) below for model-specific behavior.
     </Warning>
 
     <Note>
@@ -351,7 +351,7 @@ See [MiniMax Search](/tools/minimax-search) for full web search configuration an
   </Accordion>
 
   <Accordion title="Thinking defaults">
-    On `api: "anthropic-messages"`, OpenClaw injects `thinking: { type: "disabled" }` for MiniMax M2.x models unless an earlier wrapper already set the `thinking` field in the payload. This prevents M2.x's streaming endpoint from emitting `reasoning_content` in OpenAI-style delta chunks, which would leak internal reasoning into visible output.
+    On `api: "anthropic-messages"` for `minimax` and `minimax-portal`, OpenClaw injects `thinking: { type: "disabled" }` for MiniMax M2.x models when the payload has no `thinking` field. This sets the outbound request only; it does not filter response reasoning. [MiniMax's Thinking Control table](https://platform.minimax.io/docs/api-reference/text-anthropic-api#thinking-control) says M2.x accepts but ignores `disabled` and keeps thinking enabled. The M2.x `off` default is an OpenClaw request-level setting, so upstream reasoning, reasoning tokens, and `reasoning_content` output may still occur.
 
     MiniMax-M3 is exempt: M3 returns an empty `content` array with `stop_reason: "end_turn"` when thinking is disabled, so OpenClaw removes the implicit disabled default for M3 and, when a thinking level is set, forces `thinking: { type: "adaptive" }` instead.
 

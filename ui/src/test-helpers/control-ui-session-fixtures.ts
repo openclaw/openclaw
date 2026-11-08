@@ -46,6 +46,7 @@ export function createControlUiSessionRow(
       modelProvider: "openai",
       status: "done",
       totalTokens: 0,
+      workspaceReadDisabledReason: null,
       updatedAt,
     },
     options,
@@ -75,18 +76,6 @@ export function createControlUiMockSessionRow(
       modelProvider: options?.modelProvider ?? "openai",
     }),
   );
-}
-
-export function createControlUiChatHistoryMessage(
-  role: "assistant" | "user",
-  text: string,
-  timestamp: number,
-) {
-  return {
-    content: [{ text, type: "text" }],
-    role,
-    timestamp,
-  };
 }
 
 export function createControlUiSessionFixtures(
@@ -129,6 +118,7 @@ export function createControlUiSessionFixtures(
     records.set(key, {
       row: {
         sessionId: `session:${key}`,
+        workspaceReadDisabledReason: null,
         ...fixture,
         key,
         archivedAt,
@@ -420,7 +410,14 @@ export function createControlUiSessionFixtures(
     }
     return undefined;
   };
-  const materializeResponse = (params: unknown, response: unknown) => {
+  const materializeResponse = (method: string, params: unknown, response: unknown) => {
+    if (
+      method !== "sessions.create" &&
+      method !== "sessions.catalog.continue" &&
+      method !== "beam.owned.continue"
+    ) {
+      return;
+    }
     if (!isRecord(response)) {
       return;
     }
@@ -628,6 +625,13 @@ export function createControlUiSessionFixtures(
     read,
     resolve,
     sessionInfo,
+    requireSessionInfo(this: void, key: string) {
+      const row = sessionInfo(key);
+      if (!row) {
+        throw new Error(`Mock Gateway did not return session ${key}`);
+      }
+      return row;
+    },
     readResponse(
       method: string,
       params: unknown,
@@ -699,6 +703,15 @@ export function createControlUiSessionFixtures(
     list,
     listResponse,
     materializedCount: () => materializedSequence,
+    replaceCanonicalRow(this: void, row: ControlUiSessionFixture) {
+      const value = record(row.key);
+      // Published snapshots and mutation replies share the same canonical row.
+      for (const field of [...Object.keys(value.row), ...Object.keys(row)]) {
+        value.changed.add(field);
+      }
+      value.row = { ...row, key: canonicalKey(row.key) };
+      listed.add(value.row.key);
+    },
     replaceCanonicalList(rows: unknown[]) {
       const replacements: ControlUiSessionFixture[] = [];
       for (const row of rows) {

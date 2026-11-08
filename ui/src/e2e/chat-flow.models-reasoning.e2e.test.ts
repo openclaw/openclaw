@@ -1,10 +1,14 @@
+import { writeFile } from "node:fs/promises";
+import path from "node:path";
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import type { ChatPaneElement } from "../pages/chat/chat-pane-elements.ts";
+import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { revealChatModelOption } from "../test-helpers/select-picker-e2e.ts";
 import { sessionRow } from "./chat-flow-fixtures.test-support.ts";
 import {
   chatSessionListResponse,
+  expectDefined,
   newChatPage,
   createChatFlowE2eSuite,
   controlUiSessionUrl,
@@ -80,7 +84,7 @@ async function expectMenuPlacement(
         placed:
           box !== null &&
           anchor !== null &&
-          (above ? box.y + box.height <= anchor.y - 5 : box.y >= anchor.y + anchor.height + 5),
+          (above ? box.y + box.height <= anchor.y - 3 : box.y >= anchor.y + anchor.height + 3),
         withinViewport: box !== null && box.y >= 8 && box.y + box.height <= height - 8,
       };
     })
@@ -88,6 +92,67 @@ async function expectMenuPlacement(
 }
 
 suite.define(() => {
+  it.each([false, true])(
+    "sizes the effort picker for speed support: %s",
+    async (supportsFastMode) => {
+      const levels = ["off", "minimal", "low", "medium", "high", "xhigh"].map((id) => ({
+        id,
+        label: id,
+      }));
+      const { page } = await openChat(
+        {
+          sessionKey: sessionA,
+          sessions: [
+            sessionRow(sessionA, "Effort picker", 1, {
+              model: "effort-model",
+              modelProvider: "example",
+              thinkingLevel: "high",
+              thinkingLevels: levels,
+            }),
+          ],
+          agentModel: "example/effort-model",
+          models: [
+            {
+              id: "effort-model",
+              name: "Effort model",
+              provider: "example",
+              thinkingLevels: levels,
+              thinkingDefault: "high",
+              supportsFastMode,
+            },
+          ],
+        },
+        sessionA,
+        { viewport: { width: 1280, height: 900 } },
+      );
+      const trigger = page.locator('[data-chat-thinking-select="true"]');
+      const menu = page.locator(".chat-controls__effort-menu");
+      const slider = menu.locator('input[type="range"]');
+      await trigger.click();
+      await menu.waitFor({ state: "visible" });
+      expect(await menu.locator(".chat-controls__speed-panel").count()).toBe(
+        Number(supportsFastMode),
+      );
+      if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
+        const frame = await takeControlUiScreenshotFrame(page, menu, [trigger, slider], {
+          animations: "disabled",
+          animationFrameBeforeCapture: true,
+        });
+        await writeFile(
+          path.join(suite.artifactDir, "effort-" + (supportsFastMode ? "speed" : "only") + ".png"),
+          frame.png,
+        );
+      }
+      await expect
+        .poll(async () => (await menu.boundingBox())?.width)
+        .toBe(supportsFastMode ? 330 : 280);
+      const box = expectDefined(await menu.boundingBox(), "effort menu bounds");
+      const track = expectDefined(await slider.boundingBox(), "effort slider bounds");
+      expect(track.x).toBeGreaterThanOrEqual(box.x);
+      expect(track.x + track.width).toBeLessThanOrEqual(box.x + box.width);
+    },
+  );
+
   it("patches a selectable Claude CLI context window", async () => {
     const sessionKey = sessionA;
     const contextWindows = [
@@ -176,7 +241,7 @@ suite.define(() => {
 
       await page.setViewportSize({ height: 320, width: 1280 });
       await controls.evaluate((element) => {
-        (element as HTMLElement).style.top = "24px";
+        (element as HTMLElement).style.top = "48px"; // Keep the fixture below the pane header.
       });
       await expectMenuPlacement(menu, trigger, false, 320);
       await trigger.click();
@@ -383,7 +448,7 @@ suite.define(() => {
     await page.locator(".agent-chat__composer-combobox textarea").fill(prompt);
     await page.getByRole("button", { name: "Send message" }).click();
 
-    await page.locator(".chat-queue").getByText("Applying chat settings").waitFor({
+    await page.locator(".chat-queue").getByText("Applying session settings").waitFor({
       timeout: 10_000,
     });
     await page.locator(".chat-queue").getByText(prompt).waitFor({ timeout: 10_000 });

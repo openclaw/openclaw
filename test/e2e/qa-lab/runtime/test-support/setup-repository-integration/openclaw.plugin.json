@@ -1,0 +1,28 @@
+{
+  "id": "setup-proof-repository",
+  "name": "Setup proof repository integration",
+  "contracts": {
+    "repositoryIntegrations": [
+      "repository"
+    ]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "preparedCapacity": {
+        "type": "string",
+        "enum": [
+          "image",
+          "repository"
+        ]
+      }
+    },
+    "required": [
+      "preparedCapacity"
+    ]
+  },
+  "activation": {
+    "onStartup": true
+  }
+}

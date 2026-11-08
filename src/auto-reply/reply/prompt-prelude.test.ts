@@ -5,6 +5,8 @@ import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js"
 import { buildCurrentInboundPrompt } from "../../agents/embedded-agent-runner/run/runtime-context-prompt.js";
 import * as gitCoauthorPrompt from "../../agents/git-coauthor-prompt.js";
 import { MESSAGE_TOOL_ONLY_DELIVERY_HINT } from "../../plugin-sdk/message-tool-delivery-hints.js";
+import * as userPreferences from "../../state/user-preferences.js";
+import { bindRequesterProfile } from "../requester-profile.js";
 import { parseSoftResetCommand } from "./commands-reset-mode.js";
 import type { prepareReplyRunContext, PreparedReplyRunContext } from "./get-reply-run-context.js";
 import { prepareReadyReply } from "./get-reply-run-context.test-support.js";
@@ -127,7 +129,7 @@ it("keeps Telegram reply text beside its marker", async () => {
   const prompt = currentPrompt(envelope);
   expect(prompt).toContain('[Replying to: "The restore finished."]\n#42: Tldr');
   expect(envelope.transcriptCommandBody).toBe("Tldr");
-  expect(prompt).toContain("PR attribution: ⟦openclaw:ctx⟧");
+  expect(prompt).not.toContain("PR attribution:");
   expect(prompt.indexOf(threadNote)).toBeGreaterThanOrEqual(0);
   expect(prompt.indexOf(threadNote)).toBeLessThan(prompt.indexOf("System: Scheduled digest."));
   expect(prompt.indexOf("System: Scheduled digest.")).toBeLessThan(
@@ -286,3 +288,43 @@ it("keeps requester trailers in full and resumed backend prompt projections", as
   });
   expect(envelope.transcriptCommandBody).not.toContain(trailer);
 });
+
+it.each([
+  ["alice", false, true],
+  ["bob", false, false],
+  ["carol", false, false],
+  ["alice", true, false],
+] as const)(
+  "composes PR attribution for %s (incognito: %s)",
+  async (sender, incognito, enabled) => {
+    const preferences = new Map([
+      ["alice", true],
+      ["bob", false],
+    ]);
+    vi.spyOn(userPreferences, "getUserPreferenceValues").mockImplementation(async (ids) => ({
+      values: new Map(ids.map((id) => [id, preferences.get(id)])),
+      isCurrent: () => true,
+    }));
+    const sessionCtx = context("Create a PR", {
+      Provider: "discord",
+      ChatType: "group",
+      SenderId: sender,
+    });
+    bindRequesterProfile(sessionCtx, { id: sender, displayName: sender, isCurrent: () => true });
+    const prompt = currentPrompt(
+      await envelopeFor(sessionCtx, {
+        sessionEntry: { sessionId: "attribution", updatedAt: 1, incognito: incognito || undefined },
+      }),
+    );
+    expect(prompt.includes("PR attribution")).toBe(enabled);
+    expect(prompt.includes("🦞 Made with [OpenClaw](https://openclaw.ai)")).toBe(enabled);
+    // Scope wording is the shell-workflow contract, not proof of model compliance.
+    if (enabled) {
+      expect(prompt).toContain("this request from this verified requester only");
+      expect(prompt).toContain("Do not carry it to later requests or other requesters");
+      expect(prompt).toContain(
+        "a request without its own enabled attribution block does not opt in",
+      );
+    }
+  },
+);

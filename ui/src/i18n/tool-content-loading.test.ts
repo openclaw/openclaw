@@ -26,7 +26,7 @@ it.each([
   await load();
   expect(manager.t("chat.toolCards.showFullOutput")).toBe("Vollständige Ausgabe anzeigen");
   expect(manager.t("chat.toolCards.outputLoadFailed")).toBe(
-    "Could not load the full output. Try again.",
+    "Couldn’t load the full output. Try again.",
   );
   expect(manager.t("chat.toolCards.openDetails")).toBe("Open tool details in side panel");
   expect(manager.t("chat.toolCards.toolOutput")).toBe("Tool output");

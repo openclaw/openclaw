@@ -9,7 +9,11 @@ import {
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { findCrabboxBinary } from "./crabbox-binary.js";
 import * as managedBinary from "./crabbox-managed-binary.js";
-import { CRABBOX_WORKER_PROVIDER_ID, parseCrabboxSetupSecrets } from "./crabbox-worker-profile.js";
+import {
+  CRABBOX_WORKER_PROVIDER_ID,
+  isReservedCrabboxSetupSecretName,
+  parseCrabboxSetupSecrets,
+} from "./crabbox-worker-profile.js";
 import {
   crabboxWarmImageRecoveryHint,
   CRABBOX_WARM_IMAGE_WAIT_HINT,
@@ -183,6 +187,7 @@ function createCrabboxSetupSecretsCheck(host: CrabboxDoctorRegistrationHost): He
       }
       const path = `cloudWorkers.profiles.${profileId}.settings.setupEnv`;
       let reason: string | undefined;
+      let fixHint = repairHint;
       const legacy = settings.setupEnv;
       if (
         !Array.isArray(legacy) ||
@@ -194,6 +199,12 @@ function createCrabboxSetupSecretsCheck(host: CrabboxDoctorRegistrationHost): He
         new Set(legacy).size !== legacy.length
       ) {
         reason = "legacy setupEnv is not a bounded list of distinct environment names";
+      } else if (legacy.some(isReservedCrabboxSetupSecretName)) {
+        reason = `legacy setupEnv contains reserved environment names: ${legacy
+          .filter(isReservedCrabboxSetupSecretName)
+          .join(", ")}`;
+        fixHint =
+          "Manually map reserved names under non-reserved setupSecrets keys and update the setup command and repository setup files to use those keys. Existing protected store IDs and destination bindings can stay unchanged. Remove setupEnv after completing that manual migration; Doctor does not rewrite setup commands.";
       } else {
         const facts = legacy.length ? await host.inspectSetupSecrets(legacy, ctx.env) : [];
         const problems = facts.filter(({ status }) => status !== "ready");
@@ -233,7 +244,7 @@ function createCrabboxSetupSecretsCheck(host: CrabboxDoctorRegistrationHost): He
         target: profileId,
         ocPath: path,
         message: `Crabbox profile ${profileId} uses retired plaintext setupEnv${reason ? ` and needs repair (${reason})` : "; protected store entries are ready to migrate"}.`,
-        fixHint: repairHint,
+        fixHint,
       });
     }
     return { config, changes, findings };
@@ -266,7 +277,7 @@ function createCrabboxSetupSecretsCheck(host: CrabboxDoctorRegistrationHost): He
             );
             return settings?.setupEnv !== undefined;
           })
-          .map(({ message }) => `${message} ${repairHint}`),
+          .map(({ message, fixHint }) => `${message} ${fixHint}`),
       };
     },
   };

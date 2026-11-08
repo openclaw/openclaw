@@ -20,6 +20,7 @@ import type {
   GitWorkerResult,
 } from "../../src/infra/git-worker-contract.js";
 import type { WorkerTaskChannel } from "../../src/infra/worker-task-server.js";
+import { startCollectedHeapSampling } from "../lib/heap-sampling.ts";
 
 const warmups = 5;
 const operationKey = (command: GitWorkerCommand) =>
@@ -55,12 +56,7 @@ if (!isMainThread) {
       const inspector =
         process.env.OPENCLAW_GIT_MEASURE_ALLOCATIONS === "1" ? new Session() : undefined;
       if (inspector) {
-        inspector.connect();
-        await inspector.post("HeapProfiler.startSampling", {
-          samplingInterval: 4096,
-          includeObjectsCollectedByMajorGC: true,
-          includeObjectsCollectedByMinorGC: true,
-        });
+        await startCollectedHeapSampling(inspector, 4096);
       }
       const cpu = process.threadCpuUsage();
       const started = performance.now();

@@ -52,7 +52,8 @@ it("admits a session patch and cross-store cold history between page-reclamation
       expect(
         await runSessionColdStorageMaintenance({ config: maintenanceConfig(cold.scope.storePath) }),
       ).toEqual({ archivedTranscripts: 1, externalizedTranscripts: 0 });
-      expect(readSessionColdTranscript(cold.database(), historicalId)).toBeDefined();
+      const archive = readSessionColdTranscript(cold.database(), historicalId);
+      expect(archive).toBeDefined();
       const firstPass = createDeferred();
       const resumePrune = createDeferred();
       let maintenance: ReturnType<typeof enforceSqliteSessionHistoryDiskBudget> | undefined;
@@ -145,8 +146,7 @@ it("admits a session patch and cross-store cold history between page-reclamation
           "history-user",
           "history-assistant",
         ]);
-        expect(readSessionColdTranscript(cold.database(), historicalId)).toBeUndefined();
-        expect(cold.snapshot()).toEqual(cold.original);
+        expect(readSessionColdTranscript(cold.database(), historicalId)).toEqual(archive);
         await expect(patch).resolves.toMatchObject(patchedEntry);
         expect(result).toMatchObject({ removedEntries: 0, removedFiles: 0 });
         expect(result?.totalBytesAfter).toBeLessThanOrEqual(highWaterBytes);

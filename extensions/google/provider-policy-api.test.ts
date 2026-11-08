@@ -1,5 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
-import { normalizeConfig, resolveThinkingProfile } from "./provider-policy-api.js";
+import {
+  normalizeConfig,
+  resolveFastModeSupport,
+  resolveThinkingProfile,
+} from "./provider-policy-api.js";
 
 // Config and model policy must remain usable without initializing streaming transports.
 vi.mock("openclaw/plugin-sdk/provider-stream-shared", () => {
@@ -140,5 +144,42 @@ describe("google provider policy public artifact", () => {
 
   it("honors catalog reasoning=false for non-thinking-level Google models", () => {
     expect(thinking("gemma-4-26b-a4b-it")).toBeUndefined();
+  });
+
+  const studio = "https://generativelanguage.googleapis.com/v1beta";
+  it.each([
+    [{ modelId: "gemini-2.5-flash", api: "google-generative-ai", baseUrl: studio }, true],
+    [
+      {
+        modelId: "gemini-2.5-flash",
+        api: "google-interactions",
+        baseUrl: studio,
+        runtimeId: "openclaw",
+      },
+      true,
+    ],
+    [{ modelId: "gemini-2.5-flash" }, undefined],
+    [{ modelId: "gemma-4-26b-a4b-it", api: "google-generative-ai", baseUrl: studio }, false],
+    [
+      {
+        modelId: "gemini-2.5-flash",
+        api: "google-generative-ai",
+        baseUrl: "https://us-central1-aiplatform.googleapis.com/v1",
+      },
+      false,
+    ],
+    [
+      { modelId: "gemini-2.5-flash", api: "google-interactions", runtimeId: "google-gemini-cli" },
+      false,
+    ],
+    [
+      { modelId: "gemini-2.5-flash", api: "google-interactions", params: { serviceTier: "flex" } },
+      false,
+    ],
+  ])("resolves Fast support for %o", (ctx, expected) => {
+    const requestCapabilities = { endpointClass: "default", allowsAnthropicServiceTier: false };
+    expect(resolveFastModeSupport({ provider: "google", requestCapabilities, ...ctx })).toBe(
+      expected,
+    );
   });
 });

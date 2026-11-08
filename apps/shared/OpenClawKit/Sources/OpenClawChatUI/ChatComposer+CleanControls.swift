@@ -50,7 +50,7 @@ extension OpenClawChatComposer {
                 self.branchMenu
             }
             self.verbosityPicker
-                .disabled(!self.viewModel.composerEffortMutationAvailable)
+                .disabled(!self.viewModel.composerVerboseMutationAvailable)
             self.cleanComposerCapabilityItems
         } label: {
             CompactChatAttachmentLabel()
@@ -92,7 +92,7 @@ extension OpenClawChatComposer {
                 self.branchMenu
             }
             self.verbosityPicker
-                .disabled(!self.viewModel.composerEffortMutationAvailable)
+                .disabled(!self.viewModel.composerVerboseMutationAvailable)
         } label: {
             CompactChatAttachmentLabel(controlSize: self.cleanControlHeight)
         }
@@ -380,7 +380,7 @@ extension OpenClawChatComposer {
         }
         #endif
         if !self.viewModel.composerEffortMutationAvailable {
-            return String(localized: "Thinking and Fast controls require operator.admin access.")
+            return String(localized: "Thinking and Fast controls require operator.write or operator.admin access.")
         }
         if self.viewModel.isUpdatingSessionSettings {
             return String(localized: "Saving session settings.")

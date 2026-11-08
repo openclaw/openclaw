@@ -19,6 +19,7 @@ import {
 } from "../../sessions/session-row-changes.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db-contract.js";
 import type { AgentWorkerOperationContext } from "../../state/openclaw-agent-operation-context.js";
+import { encodeOpenClawStateWorkerError } from "../../state/openclaw-state-worker-error.js";
 import {
   prepareSessionActorEntryWrite,
   writeSessionEntry,
@@ -229,7 +230,22 @@ export function deferSessionActorOutcome({
   recordReceipt: () => void;
   requiresTransaction?: Error;
 }): void {
-  const captured = captureSqliteWorkerCommitReceipt(outcome);
+  let captured: ReturnType<typeof captureSqliteWorkerCommitReceipt>;
+  try {
+    captured = captureSqliteWorkerCommitReceipt(outcome);
+  } catch (error) {
+    const append = outcome.receipt.transcript.append;
+    if (append?.kind !== "metadata" || !append.value.reload?.ok) {
+      throw error;
+    }
+    // A failed optional reload must not discard the append. The receipt capture
+    // owns serialization, avoiding a second history-sized preflight on success.
+    append.value.reload = {
+      ok: false,
+      error: encodeOpenClawStateWorkerError(error, { includeOrdinary: true }),
+    };
+    captured = captureSqliteWorkerCommitReceipt(outcome);
+  }
   diagnosticContext.actorReceiptBytes =
     captured.kind === "inline" ? captured.payloadBytes : captured.serialized.byteLength;
   if (captured.kind === "oversized") {

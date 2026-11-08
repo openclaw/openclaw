@@ -60,6 +60,7 @@ export class SessionManagerMetadata extends SessionManagerEntries {
         canonical,
         appendIntent,
         admission,
+        "reload",
         undefined,
         undefined,
         undefined,

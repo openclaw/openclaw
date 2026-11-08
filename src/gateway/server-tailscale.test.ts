@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const { mocks, makeClaim } = vi.hoisted(() => {
   const stopRouteClaim = vi.fn<() => Promise<void>>(async () => undefined);
-  const claimFixture = (exited = new Promise<void>(() => {}), active = true) => ({
+  const claimFixture = (exited = new Promise<string>(() => {}), active = true) => ({
     exited,
     isActive: () => active,
     stop: stopRouteClaim,
@@ -110,7 +110,7 @@ describe("startGatewayTailscaleExposure", () => {
   });
 
   it("fails startup when the route owner exits after reporting readiness", async () => {
-    mocks.claimTailscaleRoute.mockResolvedValue(makeClaim(Promise.resolve(), false));
+    mocks.claimTailscaleRoute.mockResolvedValue(makeClaim(Promise.resolve("worker code 0"), false));
 
     await expect(startGatewayTailscaleExposure()).rejects.toThrow("claim exited during startup");
     expect(mocks.stopRouteClaim).toHaveBeenCalledOnce();
@@ -228,11 +228,11 @@ describe("managed Tailscale claim recovery", () => {
   afterEach(() => vi.useRealTimers());
 
   function recoverableClaim() {
-    const exited = createDeferred();
+    const exited = createDeferred<string>();
     let active = true;
     const exit = () => {
       active = false;
-      exited.resolve();
+      exited.resolve("worker code 0");
     };
     return {
       exited: exited.promise,

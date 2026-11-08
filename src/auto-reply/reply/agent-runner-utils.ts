@@ -308,6 +308,17 @@ function buildTemplateSenderContext(sessionCtx: TemplateContext) {
   };
 }
 
+/** Share the executed turn's conversation facts with preflight consumers. */
+export function buildEmbeddedRunContext(
+  params: Parameters<typeof buildEmbeddedContextFromTemplate>[0],
+) {
+  return {
+    ...buildEmbeddedContextFromTemplate(params),
+    ...buildTemplateSenderContext(params.sessionCtx),
+    ...buildReplyRunStateParams(params.run),
+  };
+}
+
 /** Reuse the candidate's channel and sender projection for early model routing. */
 export function buildModelResolveContext(
   params: Parameters<typeof buildEmbeddedContextFromTemplate>[0] & {
@@ -315,9 +326,7 @@ export function buildModelResolveContext(
   },
 ) {
   const context = {
-    ...buildEmbeddedContextFromTemplate(params),
-    ...buildTemplateSenderContext(params.sessionCtx),
-    ...buildReplyRunStateParams(params.run),
+    ...buildEmbeddedRunContext(params),
     trigger: params.trigger,
   };
   return {
@@ -429,8 +438,7 @@ export async function buildEmbeddedRunExecutionParams(params: {
   allowTransientCooldownProbe?: boolean;
 }) {
   const authProfile = resolveRunAuthProfile(params.run, params.provider);
-  const embeddedContext = buildEmbeddedContextFromTemplate(params);
-  const senderContext = buildTemplateSenderContext(params.sessionCtx);
+  const embeddedContext = buildEmbeddedRunContext(params);
   const config = params.run.config;
   const automation = params.run.scheduledAutomation;
   automation?.assertCurrent();
@@ -475,8 +483,6 @@ export async function buildEmbeddedRunExecutionParams(params: {
   // Runtime policy keys may differ from session keys for direct-message scoped policy.
   return {
     ...embeddedContext,
-    ...senderContext,
-    ...buildReplyRunStateParams(params.run),
     providerReviewAcknowledgment: params.run.providerReviewAcknowledgment,
     permissionMode: params.run.permissionMode,
     sessionRoot: params.run.sessionRoot,

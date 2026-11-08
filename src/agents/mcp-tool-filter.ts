@@ -1,9 +1,10 @@
+import type { Tool } from "@modelcontextprotocol/client";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { filterStringEntries } from "@openclaw/normalization-core/string-normalization";
 import type { McpServerToolFilterConfig } from "../config/types.mcp.js";
 import { matchesStarSegments } from "../shared/star-pattern.js";
+import type { McpServerCatalog, McpToolCatalog } from "./agent-bundle-mcp-catalog.types.js";
 import { safeToolNameCandidate } from "./agent-bundle-mcp-names.js";
-import type { McpServerCatalog, McpToolCatalog } from "./agent-bundle-mcp-types.js";
 
 /** Match the documented MCP tool-filter glob syntax: exact text plus `*`. */
 function matchesMcpToolFilterPattern(pattern: string, value: string): boolean {
@@ -47,6 +48,20 @@ export type McpToolFilterScope = Pick<McpServerCatalog, "resources" | "prompts">
   safeServerName: string;
   toolNames: readonly string[];
 };
+
+/** Resolve operator filters against the complete tools/list response before hiding any tools. */
+export function createListedMcpToolFilter(
+  filter: McpServerToolFilterConfig | undefined,
+  safeServerName: string,
+  tools: readonly Tool[],
+  capabilities: Pick<McpToolFilterScope, "resources" | "prompts">,
+) {
+  return createMcpToolFilter(filter, {
+    ...capabilities,
+    safeServerName,
+    toolNames: tools.map((tool) => tool.name.trim()),
+  });
+}
 
 /** Reads a server's full advertised inventory, including filtered tools, from a catalog. */
 export function mcpCatalogToolFilterScope(

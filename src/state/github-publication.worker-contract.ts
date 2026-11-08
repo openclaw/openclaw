@@ -14,6 +14,10 @@ type MutationInput<Input> = Input & {
 
 /** Results arrive through native commit receipts, independently of ordinary replies. */
 export type PublicationWorkerOperations = {
+  "githubPublications.personalRestart": {
+    input: { operation: "restart"; instanceId: string; operationId: string };
+    output: void;
+  };
   "githubPublications.maintenance": {
     input: PublicationMaintenanceMutation & { operationId: string };
     output: void;

@@ -17,6 +17,7 @@ const directories = useAutoCleanupTempDirTracker(afterEach);
 
 function exitProbe() {
   const previousExitCode = process.exitCode;
+  process.exitCode = undefined;
   const exit = vi.spyOn(process, "exit").mockImplementation(() => {
     throw new Error("Process exited");
   });
@@ -123,13 +124,14 @@ it.skipIf(process.platform === "win32").each([
   { kind: "execa", signal: "SIGTERM" },
   { kind: "fallback", signal: "SIGINT" },
   { kind: "fallback", signal: "SIGTERM" },
+  { kind: "doctor", signal: "SIGTERM" },
 ])("preserves the $kind signal lifecycle ($signal)", ({ kind, signal }) => {
   const root = directories.make("cli-signal-owner-");
   const result = spawnSync(
     process.execPath,
     createNodeEvalArgs(
       `import { once } from 'node:events';
-         import { installCliSignalExitHandlers, registerSignalExitBarrier } from ${JSON.stringify(new URL("./signal-exit-barrier.ts", import.meta.url).href)};
+         import { installCliSignalExitHandlers, installCliDoctorSignalExitHandlers, registerSignalExitBarrier } from ${JSON.stringify(new URL("./signal-exit-barrier.ts", import.meta.url).href)};
          const releaseSignals = installCliSignalExitHandlers();
          if (${JSON.stringify(kind)} === 'fallback') {
            installCliSignalExitHandlers();
@@ -139,9 +141,16 @@ it.skipIf(process.platform === "win32").each([
          const backstop = setTimeout(() => process.exit(99), 5000);
          registerSignalExitBarrier(async () => { clearTimeout(backstop); });
          process.once("beforeExit", () => {
-           if (${JSON.stringify(kind)} === "fallback") process.stdout.write("|natural");
+           if (${JSON.stringify(kind)} === "fallback" || ${JSON.stringify(kind)} === "doctor") process.stdout.write("|natural");
          });
-         if (${JSON.stringify(kind)} === 'execa') {
+         if (${JSON.stringify(kind)} === 'doctor') {
+           installCliDoctorSignalExitHandlers();
+           process.exit = () => { throw new Error('Forced exit is forbidden'); };
+           registerSignalExitBarrier(async () => {
+             await new Promise(setImmediate);
+             process.stdout.write('doctor drained');
+           });
+         } else if (${JSON.stringify(kind)} === 'execa') {
            const { execa } = await import('execa');
            const child = execa(process.execPath, ['-e', 'setInterval(() => {}, 1000)']);
            await once(child.nodeChildProcess, 'spawn');
@@ -166,7 +175,13 @@ it.skipIf(process.platform === "win32").each([
     },
   );
   expect(result.error, result.stderr).toBeUndefined();
-  if (kind === "execa") {
+  if (kind === "doctor") {
+    expect(result, result.stderr).toMatchObject({
+      status: 143,
+      signal: null,
+      stdout: "doctor drained|natural",
+    });
+  } else if (kind === "execa") {
     expect(result.signal, result.stderr).toBe("SIGTERM");
     expect(result.stderr).toBe("");
   } else if (kind === "fallback") {

@@ -63,7 +63,10 @@ function assertTranscriptRebuildInputs(database: DatabaseSync): void {
 }
 
 /** Convert original bytes under the admitted agent migration; never hydrate oversized identity rows. */
-export function migrateTranscriptPayloadStorageInTransaction(database: DatabaseSync): void {
+export function migrateTranscriptPayloadStorageInTransaction(
+  database: DatabaseSync,
+  schemaSql: string,
+): void {
   if (
     !database.isTransaction ||
     database.prepare("PRAGMA foreign_keys").get()?.foreign_keys !== 0
@@ -77,7 +80,7 @@ export function migrateTranscriptPayloadStorageInTransaction(database: DatabaseS
   const decoder = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
   const codec = resolveZstdCodec();
   database.exec(
-    extractSqliteTableSchema(OPENCLAW_AGENT_SCHEMA_SQL, "transcript_events").replace(
+    extractSqliteTableSchema(schemaSql, "transcript_events").replace(
       "IF NOT EXISTS transcript_events",
       MIGRATION_TABLE,
     ),

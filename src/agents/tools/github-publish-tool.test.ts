@@ -21,6 +21,12 @@ vi.mock("./in-process-gateway.js", async (importOriginal) => ({
 }));
 
 const caller = { agentId: "main", sessionKey: "agent:main:host-owned" };
+
+it("does not prescribe switching to a bound session", () => {
+  expect(createGitHubPublishTool().description).not.toMatch(
+    /Select an existing bound session|separately authorize supported binding\/adoption/,
+  );
+});
 const publication = {
   requestId: "publication-1",
   status: "requested" as const,
@@ -36,6 +42,15 @@ function setup() {
     withGatewayToolCallerIdentity(caller, () => tool.execute(id, args));
   return { callGateway, tool, execute };
 }
+
+it("does not execute inventory previews even with a current Gateway caller", async () => {
+  const { callGateway } = setup();
+  const tool = createGitHubPublishTool({ preview: true });
+  await expect(
+    withGatewayToolCallerIdentity(caller, () => tool.execute("preview", { action: "readiness" })),
+  ).rejects.toThrow("GitHub tool previews cannot execute actions");
+  expect(callGateway).not.toHaveBeenCalled();
+});
 
 it("applies deployment action limits when publication and operator actions are available", () => {
   const [tool] = applyGatewayToolPolicy([createGitHubPublishTool()], {
@@ -198,9 +213,6 @@ it.each<{
     }
     expect(tool.description.includes(action), action).toBe(offered);
   }
-  if (!refresh) {
-    expect(tool.description).not.toMatch(/refresh/i);
-  }
   expect(Value.Check(tool.parameters, {})).toBe(true);
   expect(
     Value.Check(tool.parameters, {
@@ -208,7 +220,7 @@ it.each<{
       pullRequestUrl: "https://github.com/example/repository/pull/1",
     }),
   ).toBe(true);
-  for (const action of ["publish", "edit", "ready", "request_review"]) {
+  for (const action of ["readiness", "publish", "edit", "ready", "request_review"]) {
     expect(Value.Check(tool.parameters, { action }), action).toBe(true);
   }
   for (const action of ["inspect", "merge", "close"]) {
