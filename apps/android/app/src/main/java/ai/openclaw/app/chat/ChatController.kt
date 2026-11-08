@@ -3856,6 +3856,7 @@ class ChatController internal constructor(
 
           "session.message" -> {
             val payload = json.parseToJsonElement(payloadJson).asObjectOrNull() ?: return
+            publishAutomationResult(payload)
             applySessionEvent(payload = payload, refreshWhenMissing = false)
           }
         }
@@ -6777,6 +6778,17 @@ class ChatController internal constructor(
     val verifiedOwner = owner?.takeIf { it.routingVerified } ?: return
     val text = parseAssistantDeltaText(payload)?.trim()?.takeIf(String::isNotEmpty) ?: return
     runCatching { onAssistantReplyFinalized(verifiedOwner, normalizedRunId, text) }
+  }
+
+  // Automation results are committed to their destination conversation as a transcript message.
+  // That conversation gets no chat run terminal, and the run's own session keeps its messages hidden.
+  private fun publishAutomationResult(payload: JsonObject) {
+    val automation = payload["message"].asObjectOrNull()?.get("openclawAutomation").asObjectOrNull() ?: return
+    if (automation["kind"].asStringOrNull() != "cron") return
+    val runId = automation.nonBlankString("runId") ?: return
+    val owner = resolveChatEventRoutingOwner(payload.nonBlankString("sessionKey"), projection = null) ?: return
+    val text = parseAssistantDeltaText(payload)?.trim()?.takeIf(String::isNotEmpty) ?: return
+    runCatching { onAssistantReplyFinalized(owner, runId, text) }
   }
 
   private fun parseAssistantDeltaText(payload: JsonObject): String? {
