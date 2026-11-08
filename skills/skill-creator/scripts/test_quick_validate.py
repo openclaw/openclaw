@@ -3,9 +3,12 @@
 Regression tests for quick skill validation.
 """
 
+import os
+import subprocess
+import sys
 import tempfile
 from pathlib import Path
-from unittest import TestCase, main
+from unittest import TestCase, main, skipUnless
 from unittest.mock import patch
 
 import quick_validate
@@ -20,6 +23,27 @@ class TestQuickValidate(TestCase):
     def validate_content(self, content):
         (self.skill_dir / "SKILL.md").write_text(content, encoding="utf-8")
         return quick_validate.validate_skill(self.skill_dir)
+
+    @skipUnless(hasattr(os, "mkfifo"), "requires FIFO support")
+    def test_rejects_fifo_entry_without_blocking_validation_or_packaging(self):
+        os.mkfifo(self.skill_dir / "SKILL.md")
+        output = self.skill_dir / "dist"
+        for script, extra in (("quick_validate.py", []), ("package_skill.py", [str(output)])):
+            with self.subTest(script=script):
+                result = subprocess.run(
+                    [
+                        sys.executable,
+                        str(Path(__file__).with_name(script)),
+                        str(self.skill_dir),
+                        *extra,
+                    ],
+                    capture_output=True,
+                    text=True,
+                    timeout=3,
+                )
+                self.assertEqual(result.returncode, 1, result.stderr)
+                self.assertIn("SKILL.md must be a regular file", result.stdout)
+        self.assertFalse(output.exists())
 
     def test_accepts_crlf_frontmatter(self):
         content = "---\r\nname: crlf-skill\r\ndescription: ok\r\n---\r\n# Skill\r\n"

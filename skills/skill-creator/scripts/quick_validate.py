@@ -81,6 +81,8 @@ def validate_skill(skill_path):
     skill_md = skill_path / "SKILL.md"
     if not skill_md.exists():
         return False, "SKILL.md not found"
+    if not skill_md.is_file():
+        return False, "SKILL.md must be a regular file"
 
     try:
         content = skill_md.read_text(encoding="utf-8-sig")
