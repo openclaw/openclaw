@@ -38,8 +38,7 @@ import { page as channelsPage } from "./pages/channels/route.ts";
 import { pages as chatPages } from "./pages/chat/route.ts";
 import type { ChatRouteData } from "./pages/chat/session-route-data.ts";
 import { page as cloudWorkersPage } from "./pages/cloud-workers/route.tsx";
-import { canonicalGeneralSettingsLocation } from "./pages/config/route-data.ts";
-import { pages as configPages } from "./pages/config/route.ts";
+import { canonicalSettingsLocation, pages as configPages } from "./pages/config/route.ts";
 import { page as connectionPage } from "./pages/connection/route.ts";
 import { page as cronPage } from "./pages/cron/route.tsx";
 import { page as custodianPage } from "./pages/custodian/route.tsx";
@@ -56,7 +55,7 @@ import { page as logsPage } from "./pages/logs/route.ts";
 import { page as meetingsPage } from "./pages/meetings/route.tsx";
 import { page as memoryImportPage } from "./pages/memory-import/route.ts";
 import { page as modelProvidersPage } from "./pages/model-providers/route.ts";
-import { page as modelSetupPage } from "./pages/model-setup/route.ts";
+import { canonicalModelSetupLocation, page as modelSetupPage } from "./pages/model-setup/route.ts";
 import { page as newSessionPage } from "./pages/new-session/route.ts";
 import { page as pluginPage } from "./pages/plugin/route.tsx";
 import { canonicalPluginsRouteLocation } from "./pages/plugins/route-data.ts";
@@ -170,15 +169,18 @@ function canonicalRouteLocation(
   location: RouteLocation,
   basePath: string,
 ): RouteLocation {
-  return routeId === "config"
-    ? canonicalGeneralSettingsLocation(location, basePath)
-    : routeId === "workboard"
-      ? (resolveWorkboardRouteLocation(location, basePath).canonicalLocation ?? location)
-      : routeId === "plugin"
-        ? canonicalPluginTabLocation(location, basePath)
-        : routeId === "plugins" || routeId === "plugin-settings"
-          ? (canonicalPluginsRouteLocation(location, basePath) ?? location)
-          : location;
+  return (
+    canonicalSettingsLocation(routeId, location, basePath) ??
+    (routeId === "model-setup"
+      ? canonicalModelSetupLocation(location, basePath)
+      : routeId === "workboard"
+        ? (resolveWorkboardRouteLocation(location, basePath).canonicalLocation ?? location)
+        : routeId === "plugin"
+          ? canonicalPluginTabLocation(location, basePath)
+          : routeId === "plugins" || routeId === "plugin-settings"
+            ? (canonicalPluginsRouteLocation(location, basePath) ?? location)
+            : location)
+  );
 }
 
 export function createApplicationRouter(): ApplicationRouter {
@@ -194,15 +196,14 @@ export function createApplicationRouter(): ApplicationRouter {
       if (context.nativeConversation?.interceptNavigation(requested)) {
         return Promise.resolve();
       }
-      const canonical =
-        location || routeId === "config"
-          ? canonicalRouteLocation(routeId, requested, context.basePath)
-          : undefined;
-      // General is a retired URL, not a page to mount between two live destinations.
+      const canonical = canonicalRouteLocation(routeId, requested, context.basePath);
+      const destination =
+        canonical.pathname !== requested.pathname
+          ? (routeIdFromPath(canonical.pathname, context.basePath) ?? routeId)
+          : routeId;
+      // Retired URLs must not mount a page between two live destinations.
       return router.navigate(
-        routeId === "config"
-          ? (routeIdFromPath(canonical!.pathname, context.basePath) ?? routeId)
-          : routeId,
+        destination,
         context,
         routeId === "config"
           ? { ...options, history: options?.history === "push" ? "push" : "replace" }
@@ -366,13 +367,13 @@ export async function startApplicationRouter(
         if (target.status === "success" && !target.isFetching) {
           const pendingVerification = interrupted;
           interrupted = undefined;
-          // Snapshot admission can finish after hello; verify it once even without
+          // Cached admission can finish after hello; verify it once even without
           // an interrupted connection, using the loader's authoritative replacement.
           // SAFETY: This branch accepts only session routes loaded by loadChatRoute.
           const data = target.data as ChatRouteData | undefined;
           if (
             data?.kind === "session" &&
-            data.sessionResolutionFromCache === "snapshot" &&
+            data.sessionResolutionFromCache &&
             !revalidatedCache.has(target.abortController)
           ) {
             revalidatedCache.add(target.abortController);

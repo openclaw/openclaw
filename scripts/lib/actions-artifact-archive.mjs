@@ -895,7 +895,7 @@ function responseRetryAfterMs(response) {
   return undefined;
 }
 
-async function readBoundedResponseBody(response, params) {
+export async function readBoundedResponseBody(response, params) {
   if (!response.ok) {
     await response.body?.cancel().catch(() => undefined);
     const retryAfterMs = responseRetryAfterMs(response);
@@ -1223,10 +1223,41 @@ export async function downloadActionsArtifactArchive(params) {
     expected.runStatePolicy === "same-run-producer-success" ||
     expected.runStatePolicy === "completed-producer-success"
   ) {
-    workflowJobs = await transfer.json(
-      `actions/runs/${expected.runId}/attempts/${expected.runAttempt}/jobs?per_page=100`,
-      "GitHub Actions producer jobs",
-    );
+    const jobs = [];
+    let total;
+    for (let page = 1; page <= 10; page += 1) {
+      const inventory = await transfer.json(
+        "actions/runs/" +
+          expected.runId +
+          "/attempts/" +
+          expected.runAttempt +
+          "/jobs?per_page=100" +
+          (page === 1 ? "" : "&page=" + page),
+        "GitHub Actions producer jobs",
+      );
+      if (
+        !Number.isSafeInteger(inventory.total_count) ||
+        inventory.total_count < 0 ||
+        inventory.total_count > 1000 ||
+        (total !== undefined && total !== inventory.total_count) ||
+        !Array.isArray(inventory.jobs) ||
+        inventory.jobs.length > 100
+      ) {
+        throw new Error("Actions workflow jobs inventory is incomplete.");
+      }
+      total = inventory.total_count;
+      jobs.push(...inventory.jobs);
+      if (jobs.length === total) {
+        break;
+      }
+      if (jobs.length > total || inventory.jobs.length !== 100) {
+        throw new Error("Actions workflow jobs inventory is incomplete.");
+      }
+    }
+    if (jobs.length !== total || new Set(jobs.map((job) => job.id)).size !== jobs.length) {
+      throw new Error("Actions workflow jobs inventory is incomplete or duplicated.");
+    }
+    workflowJobs = { total_count: total, jobs };
     validateActionsArtifactProducerJob({ expected, workflowJobs });
   }
   const archiveBytes = await transfer.archive();

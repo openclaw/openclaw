@@ -230,12 +230,15 @@ describe("X account monitor", () => {
   });
 
   it.each([
-    { pollSeconds: 15, backfillMs: 60_000 },
-    { pollSeconds: 60, backfillMs: 240_000 },
+    { pollSeconds: 15, backfillMs: 60_000, reconnect: false, eventType: "post.mention.create" },
+    { pollSeconds: 60, backfillMs: 240_000, reconnect: false, eventType: "post.mention.create" },
+    { pollSeconds: 15, backfillMs: 1_000, reconnect: true, eventType: "post.mention.create" },
+    { pollSeconds: 15, backfillMs: 1_000, reconnect: true, eventType: "post.reply.create" },
   ])(
-    "backfills missed mentions every $backfillMs ms without admitting a streamed post twice",
-    async ({ pollSeconds, backfillMs }) => {
-      const mentions = [post("502", "10"), post("501", "10")];
+    "deduplicates $eventType with backfill after $backfillMs ms (reconnect=$reconnect)",
+    async ({ pollSeconds, backfillMs, reconnect, eventType }) => {
+      const missedId = reconnect ? "503" : "501";
+      const mentions = [post("502", "10"), post(missedId, "10")];
       const admitted: string[] = [];
       const test = fixture({
         posts: mentions,
@@ -263,35 +266,49 @@ describe("X account monitor", () => {
         );
       const encoder = new TextEncoder();
       let stream!: ReadableStreamDefaultController<Uint8Array>;
-      test.api.openActivityStream.mockResolvedValueOnce(
-        new Response(
-          new ReadableStream<Uint8Array>({
-            start(controller) {
-              stream = controller;
-            },
-          }),
-        ),
+      test.api.openActivityStream.mockImplementation(
+        async () =>
+          new Response(
+            new ReadableStream<Uint8Array>({
+              start(controller) {
+                stream = controller;
+                if (test.api.openActivityStream.mock.calls.length === 2) {
+                  const data = { event_type: eventType, payload: withRecipient(mentions[1]!) };
+                  stream.enqueue(encoder.encode(`${JSON.stringify({ data })}\n`));
+                }
+              },
+            }),
+          ),
       );
       const running = test.start();
       let keepAlive: ReturnType<typeof setInterval> | undefined;
       try {
         await vi.advanceTimersByTimeAsync(0);
-        const data = { event_type: "post.mention.create", payload: withRecipient(mentions[0]!) };
+        const data = { event_type: eventType, payload: withRecipient(mentions[0]!) };
         stream.enqueue(encoder.encode(`${JSON.stringify({ data })}\n`));
         await vi.advanceTimersByTimeAsync(0);
         expect(admitted).toEqual(["502"]);
         expect(test.replies.map((reply) => reply.parent)).toEqual(["502"]);
-        keepAlive = setInterval(() => stream.enqueue(encoder.encode("\n")), 20_000);
+        if (reconnect) {
+          stream.close();
+          await vi.advanceTimersByTimeAsync(0);
+          expect(running.status()).toMatchObject({ connected: false });
+        } else {
+          keepAlive = setInterval(() => stream.enqueue(encoder.encode("\n")), 20_000);
+        }
         await vi.advanceTimersByTimeAsync(backfillMs - 1);
         expect(test.api.getMentions).toHaveBeenCalledOnce();
         await vi.advanceTimersByTimeAsync(1);
         expect(test.api.getMentions).toHaveBeenCalledTimes(2);
         expect(test.api.getMentions.mock.calls[1]?.[0]).toMatchObject({ sinceId: "500" });
-        expect(admitted).toEqual(["502", "501"]);
-        expect(test.replies.map((reply) => reply.parent)).toEqual(["502", "501"]);
+        expect(admitted).toEqual(["502", missedId]);
+        expect(test.replies.map((reply) => reply.parent)).toEqual(["502", missedId]);
         expect(test.dispatch).toHaveBeenCalledTimes(2);
-        expect(await cursor.lookup("default")).toEqual({ userId: "100", sinceId: "502" });
-        expect(test.api.openActivityStream).toHaveBeenCalledOnce();
+        expect(await cursor.lookup("default")).toEqual({
+          userId: "100",
+          sinceId: reconnect ? missedId : "502",
+        });
+        expect(test.api.openActivityStream).toHaveBeenCalledTimes(reconnect ? 2 : 1);
         expect(running.status()).toMatchObject({ connected: true, mode: "stream" });
       } finally {
         clearInterval(keepAlive);

@@ -104,9 +104,21 @@ Set `docker.user` explicitly to override this. `setupCommand` runs as the same
 container user. See [Podman backend](/gateway/sandboxing/podman-backend) for its
 user-namespace and root-user restrictions.
 
+### Shell environment
+
+Sandboxed `exec` commands default `HOME` to the sandbox workspace root, even when
+`workdir` selects a task subdirectory. Home-based configuration and package stores
+therefore persist across commands in that workspace. Explicit `sandbox.docker.env`
+or command `env` values can override `HOME` and XDG paths. The host user's home and
+package stores are not mounted or inherited by this default; separate sandbox
+workspaces keep separate stores.
+
 ### Docker daemon
 
-The Docker CLI inherits the Gateway process environment. Choose the daemon with
+The Docker CLI inherits the Gateway process environment except `MALLOC_CONF` and
+jemalloc entries in `LD_PRELOAD`. Docker and Podman host launches remove those
+Gateway allocator settings so their subprocesses do not inherit background
+threads or profiling; other preload libraries are preserved. Choose the daemon with
 `DOCKER_HOST` or `DOCKER_CONTEXT` (set only one), or the CLI's current context;
 there is no `sandbox.docker` daemon-selection config key. For rootless Docker,
 set `DOCKER_HOST=unix:///run/user/<uid>/docker.sock` in the

@@ -149,6 +149,12 @@ ranges without claiming an exact instant.
 | `knowledge_chronicle_since`     | Occurrence-time range, oldest first. Not "recently imported"                                            |
 | `knowledge_chronicle_last_seen` | Latest dated context for an entity at or before `occurredOnOrBefore` (default now)                      |
 
+- On `knowledge_timeline`, `knowledge_chronicle_day`, and
+  `knowledge_chronicle_since`, `kind` matches the exact `record.type`, such as
+  `decision`, `event`, or `meeting`. It is not the record-kind category used by
+  `knowledge_grep` and `knowledge_lookup` (`page`, `claim`, or `relationship`).
+  Omit `kind` to include all eligible dated types; `kind: "claim"` does not select
+  all claims.
 - To find recently recorded or updated records, query `knowledge_timeline` with
   `timeField: "recorded_at"` or `"updated_at"`. This is a current-record query,
   not a change cursor; use history for audit.

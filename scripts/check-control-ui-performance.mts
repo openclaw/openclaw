@@ -57,8 +57,9 @@ const controlUiPerformanceBudgets = {
   // Initial shell plus shared route styles and the route's own stylesheet.
   chatBootCssRequests: 3,
   newBootCssRequests: 3,
-  // Coordinator accepted the sidebar snapshot-save repair; complete build plus 64 B.
-  chatBootJsGzipBytes: 1_294_652,
+  // Coordinator-accepted completed-run anchor fix: keep cold overscan out of flow.
+  // Current-main 1,296,592 B + 159 B measured growth; no startup growth.
+  chatBootJsGzipBytes: 1_296_751,
   // Channels: raw -159 B, served +22 B; coordinator-accepted normalized trade +64 B.
   newBootJsGzipBytes: 803_250,
   startupCssRequests: 1,

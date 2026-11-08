@@ -722,7 +722,7 @@ it("fails named probes for disabled MCP servers", async () => {
 });
 
 it("reports omitted enabled servers while accepting omitted disabled servers", async () => {
-  const invocationExitCode = process.exitCode;
+  const invocationExitCode = process.exitCode ?? 0;
 
   let catalogServers: Record<
     string,

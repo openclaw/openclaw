@@ -432,9 +432,18 @@ export function isReleaseGhServerError(error) {
   return GH_SERVER_ERROR_PATTERN.test(releaseGhTransportErrorText(error));
 }
 
-export async function readReleaseJobListing(readListing) {
-  for (const [index, perPage] of RELEASE_JOB_LISTING_PAGE_SIZES.entries()) {
-    const smallerPageFallback = index < RELEASE_JOB_LISTING_PAGE_SIZES.length - 1;
+export async function readReleaseJobListing(
+  readListing,
+  pageSizes = RELEASE_JOB_LISTING_PAGE_SIZES,
+) {
+  if (
+    !pageSizes.length ||
+    pageSizes.some((size) => !RELEASE_JOB_LISTING_PAGE_SIZES.includes(size))
+  ) {
+    throw new Error("Invalid release job page size");
+  }
+  for (const [index, perPage] of pageSizes.entries()) {
+    const smallerPageFallback = index < pageSizes.length - 1;
     try {
       return await readListing(perPage, { smallerPageFallback });
     } catch (error) {

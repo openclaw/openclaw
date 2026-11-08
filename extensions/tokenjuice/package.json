@@ -8,7 +8,7 @@
   },
   "type": "module",
   "dependencies": {
-    "tokenjuice": "0.10.0"
+    "tokenjuice": "0.11.0"
   },
   "peerDependencies": {
     "openclaw": ">=2026.11.1"

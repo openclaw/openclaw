@@ -58,6 +58,8 @@ const ROOT_TEST_ENTRY_GLOBS = [
   // The Gateway profiler tests launch these subprocess fixtures through a computed path.
   "test/scripts/fixtures/gateway-bench-cpu-usage.mjs!",
   "test/scripts/fixtures/gateway-bench-profile-startup.mjs!",
+  // The Telegram failure tests launch this isolated ingress fixture by path.
+  "test/scripts/fixtures/mantis-telegram-failure.mts!",
   // SHA-pinned dispatch tests load this admission transport by a generated file URL.
   "test/scripts/full-release-validation-at-sha.admission-fixture.mjs!",
   // The locale finalizer harness preloads this provider through NODE_OPTIONS.
@@ -82,6 +84,8 @@ const ROOT_TEST_ENTRY_GLOBS = [
   "src/infra/exec-host.native.test-support.ts!",
   // The authority retention test launches this isolated V8 heap proof by path.
   "src/agents/harness/tool-authority.runtime.retention.test-support.ts!",
+  // The hook retention test launches this native-ESM child through resolveRuntimeWorkerUrl.
+  "src/gateway/hooks-mapping.retention.test-support.ts!",
   // Generated handoff preload and resolver shims import this helper by URL.
   "test/helpers/managed-handoff-isolation.ts!",
   // The Windows CLI lifetime test launches this isolated probe by path.
@@ -271,6 +275,9 @@ const config = {
   // This fixture deliberately mixes used, aliased, and unused exports so the
   // topology analyzer can prove each classification.
   ignoreIssues: {
+    // Generated subprocess fixtures also consume these shared test helpers;
+    // their imports are not all statically visible to Knip.
+    "src/test-utils/**": ["exports", "nsExports"],
     // The memory-state compatibility facade must retain its pre-registry-bundle type export.
     "src/plugins/memory-state.ts": ["types"],
     "test/fixtures/ts-topology/basic/**": [

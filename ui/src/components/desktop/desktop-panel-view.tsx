@@ -313,9 +313,9 @@ export function DesktopPicker(props: {
                   heading={t("desktop.emptyTitle")}
                   description={t("desktop.empty")}
                 />
-              ) : (
+              ) : props.genuineEmpty ? (
                 <div class="desktop-status">{t("desktop.empty")}</div>
-              )
+              ) : null
             ) : (
               <For each={props.environments} keyed={(environment) => environment.id}>
                 {(environment) => (
