@@ -3,9 +3,9 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { isGatewayProtocolResponseError } from "../../../packages/gateway-client/src/protocol-request.js";
 import type { GatewayClient } from "../../../src/gateway/client.ts";
 
-export async function disableWorkshopWhenIdle(
-  client: Pick<GatewayClient, "request">,
-): Promise<void> {
+export async function disableWorkshopWhenIdle(client: {
+  request: (...args: Parameters<GatewayClient["request"]>) => Promise<unknown>;
+}): Promise<void> {
   const deadline = performance.now() + 60_000;
   for (;;) {
     const remaining = deadline - performance.now();
@@ -24,7 +24,7 @@ export async function disableWorkshopWhenIdle(
       if (
         !isGatewayProtocolResponseError(error) ||
         error.gatewayCode !== "UNAVAILABLE" ||
-        error.retryable !== true ||
+        !error.retryable ||
         !isRecord(error.details) ||
         error.details.mutationAccepted !== false ||
         error.retryAfterMs === undefined ||
