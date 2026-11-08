@@ -251,6 +251,9 @@ export async function createVoiceCallRuntime(params: {
     const realtimeConfig = {
       ...config.realtime,
       tools: resolveVoiceCallRealtimeTools(config.realtime.toolPolicy, config.realtime.tools),
+      // bargeIn is top-level because the streaming path reads the same flag;
+      // the realtime handler still reads it off its own config object.
+      bargeIn: config.bargeIn,
     };
     const resolveCallRegistration = async (call: CallRecord) => {
       const numberRouteKey = resolveVoiceCallNumberRouteKeyForCall(call);

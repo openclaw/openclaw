@@ -75,6 +75,9 @@ export function createVoiceCallBaseConfig(params?: {
       },
       providers: {},
     },
+    bargeIn: {
+      abortAgentRun: false,
+    },
     skipSignatureVerification: false,
     tts: {
       provider: "openai",

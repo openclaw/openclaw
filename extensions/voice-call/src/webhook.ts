@@ -39,10 +39,12 @@ import { normalizeProxyIp } from "./proxy-ip.js";
 import { resolveCallAgentId } from "./resolve-call-agent-id.js";
 import type { CallRecord, NormalizedEvent, WebhookContext } from "./types.js";
 import type { WebhookResponsePayload } from "./webhook.types.js";
+import { createBargeInAbortTrigger } from "./webhook/barge-in-abort-trigger.js";
 import type { RealtimeCallHandler } from "./webhook/realtime-handler.js";
 import { acceptRealtimeInboundRequest } from "./webhook/realtime-inbound-admission.js";
 import { startStaleCallReaper } from "./webhook/stale-call-reaper.js";
 import { StreamDisconnectGrace } from "./webhook/stream-disconnect-grace.js";
+import { createPrefixedWebhookLogger } from "./webhook/webhook-logger.js";
 
 const MAX_WEBHOOK_BODY_BYTES = WEBHOOK_BODY_READ_DEFAULTS.preAuth.maxBytes;
 const WEBHOOK_BODY_TIMEOUT_MS = WEBHOOK_BODY_READ_DEFAULTS.preAuth.timeoutMs;
@@ -113,6 +115,12 @@ export class VoiceCallWebhookServer {
   private readonly streamDisconnectGrace: StreamDisconnectGrace;
   // Revoke pending transcript replies before persistence has created a response guard.
   private readonly streamSpeechGenerations = new WeakMap<CallRecord, symbol>();
+  /**
+   * Barge-in agent-run abort for the streaming path. Inert unless
+   * `bargeIn.abortAgentRun` is set, so audio-only barge-in is the default.
+   */
+  private readonly bargeInAgentAbort = createBargeInAbortTrigger(() => this);
+  /** Realtime voice handler for duplex provider bridges. */
   private realtimeHandler: RealtimeCallHandler | null = null;
   private replayResponses = new Map<string, CachedWebhookResponse>();
   private replayResponseCacheCalls = 0;
@@ -133,13 +141,7 @@ export class VoiceCallWebhookServer {
       error: console.error,
       debug: console.debug,
     };
-    const rawDebug = rawLogger.debug;
-    this.logger = {
-      info: (msg: string) => rawLogger.info(`[voice-call] ${msg}`),
-      warn: (msg: string) => rawLogger.warn(`[voice-call] ${msg}`),
-      error: (msg: string) => rawLogger.error(`[voice-call] ${msg}`),
-      debug: rawDebug ? (msg: string) => rawDebug(`[voice-call] ${msg}`) : undefined,
-    };
+    this.logger = createPrefixedWebhookLogger(rawLogger);
     this.streamDisconnectGrace = new StreamDisconnectGrace(({ providerCallId }) => {
       const call = this.manager.getCallByProviderCallId(providerCallId);
       if (!call) {
@@ -244,9 +246,20 @@ export class VoiceCallWebhookServer {
     this.streamSpeechGenerations.set(current.call, generation);
     this.manager.invalidateAutoResponse(current.call);
     current.provider.clearTtsQueue(providerCallId);
+    this.bargeInAgentAbort.abortForBargeIn(current.call.callId);
     return generation;
   }
 
+  /**
+   * Immediately aborts the agent run behind the interrupted turn.
+   *
+   * Opt-in, and a no-op when no run is tracked for the call - the common case
+   * for a turn the agent already finished answering.
+   */
+
+  /**
+   * Initialize media streaming with the selected realtime transcription provider.
+   */
   private async initializeMediaStreaming(): Promise<void> {
     const streaming = this.config.streaming;
     const pluginConfig = this.coreConfig;
@@ -909,6 +922,7 @@ export class VoiceCallWebhookServer {
         transcript: call.transcript,
         userMessage,
         onEarlyText: speakResponse,
+        onAgentRunStarted: (run) => this.bargeInAgentAbort.registerRun(callId, run),
       });
 
       if (result.error) {
@@ -924,6 +938,7 @@ export class VoiceCallWebhookServer {
         await speakResponse("Sorry, I hit a problem working out a response. Please try again.");
       }
     } finally {
+      this.bargeInAgentAbort.clearTurn(callId);
       response.release();
     }
   }

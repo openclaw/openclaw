@@ -36,6 +36,14 @@ type VoiceResponseParams = {
   userMessage: string;
   /** Delivers completed reply blocks while post-turn work is still running. */
   onEarlyText?: (text: string) => Promise<boolean>;
+  /**
+   * Reports the embedded agent run backing this turn.
+   *
+   * Barge-in is detected on the inbound audio path, but the run identity is
+   * only known here. This publishes it so the webhook can abort that exact run
+   * when the caller speaks over the answer.
+   */
+  onAgentRunStarted?: (run: { sessionId: string; runId: string }) => void;
 };
 
 type VoiceResponsePayload = {
@@ -260,6 +268,7 @@ export async function generateVoiceResponse(params: VoiceResponseParams) {
     coreConfig: cfg,
     agentRuntime,
     onEarlyText,
+    onAgentRunStarted,
   } = params;
 
   const agentId = resolveCallAgentId(params);
@@ -375,6 +384,10 @@ export async function generateVoiceResponse(params: VoiceResponseParams) {
         const timeoutMs =
           voiceConfig.responseTimeoutMs ?? agentRuntime.resolveAgentTimeoutMs({ cfg });
         const runId = `voice:${callId}:${Date.now()}`;
+        // Publish the run identity so caller barge-in can abort this exact run.
+        // The webhook owns the abort; this is only the handoff, and it is inert
+        // when barge-in abort is disabled.
+        onAgentRunStarted?.({ sessionId, runId });
 
         const blockReplyPayloads: VoiceResponsePayload[] = [];
         let latestToolBoundaryMessageIndex: number | undefined;
@@ -490,6 +503,14 @@ export async function generateVoiceResponse(params: VoiceResponseParams) {
   } catch (err) {
     if (err instanceof ModelSelectionLockedError) {
       return { text: null, deliveredEarly: false, error: err.message };
+    }
+    if (err instanceof Error && err.name === "AbortError") {
+      // Barge-in aborts this run on purpose, so it is not a generation failure.
+      // Reporting it as one logged a stack trace per interruption and, worse,
+      // tried to speak a "I hit a problem" notice at the caller for the very
+      // act of interrupting. Settle it as "no response" with no error instead.
+      console.log(`[voice-call] Response generation aborted by barge-in ${callId}`);
+      return { text: null, deliveredEarly: false };
     }
     console.error(`[voice-call] Response generation failed:`, err);
     return { text: null, deliveredEarly: false, error: String(err) };
