@@ -23,6 +23,7 @@ import {
 } from "../../../shared/immutable-data.js";
 import { createStageTimingTracker } from "../../../shared/stage-timing.js";
 import type { AgentMessage } from "../../runtime/index.js";
+import { estimateMessageTokenPressure } from "../../sessions/context-token-pressure.js";
 import { convertToLlm } from "../../sessions/messages.js";
 import { sessionManagerReadInitialContext } from "../../sessions/session-manager-current-turn.js";
 import { SessionManager } from "../../sessions/session-manager.js";
@@ -239,6 +240,48 @@ it("fits a long settled tool turn inside its final-answer request", async () => 
   expect(lastResult.content).toEqual([
     { type: "text", text: "source line\n".repeat(700) + "result 43" },
   ]);
+});
+
+it("keeps fresh tool results when the final-answer request fits", async () => {
+  const fixture = createFixture();
+  const history: AgentMessage[] = [{ role: "user", content: "Continue", timestamp: 1 }];
+  for (let index = 0; index < 14; index += 1) {
+    const assistant = createAssistantOutput(model);
+    assistant.content = [
+      { type: "toolCall", id: `call_${index}`, name: "read", arguments: { index } },
+    ];
+    assistant.stopReason = "toolUse";
+    history.push(assistant, {
+      role: "toolResult",
+      toolCallId: `call_${index}`,
+      toolName: "read",
+      content: [{ type: "text", text: String(index).padStart(2, "0") + "x".repeat(31_998) }],
+      isError: false,
+      timestamp: index + 2,
+    });
+  }
+  fixture.input.attempt.operation = "settled-tool-finalization";
+  fixture.input.attempt.contextTokenBudget = 200_000;
+  fixture.input.attempt.prompt = "Summarize the completed work.";
+  fixture.input.attempt.settledTurnFinalizationMessages = history;
+  mocks.readEntry.mockResolvedValue(undefined);
+
+  await prepareEmbeddedAttemptHistory(fixture.input, fixture.assertActive);
+
+  const selected = fixture.agent.state.messages;
+  expect(selected).toHaveLength(history.length);
+  expect(
+    selected.every((message, index) =>
+      message.role === "toolResult"
+        ? JSON.stringify(message.content) === JSON.stringify(history[index]?.content)
+        : true,
+    ),
+  ).toBe(true);
+  expect(
+    Math.ceil(
+      selected.reduce((sum, message) => sum + estimateMessageTokenPressure(message), 0) * 1.25,
+    ),
+  ).toBeLessThanOrEqual(191_808);
 });
 
 it("publishes restored assistant history without rehashing it on later model requests", async () => {
