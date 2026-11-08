@@ -1,7 +1,10 @@
+import { isIrohEndpointKey } from "../../../packages/openclaw-id-protocol/src/index.js";
 import type { OpenClawIdAuthority } from "./authority.js";
 import { clawOriginOfRecord, setOpenClawIdClawOriginResolver } from "./claw-origin.js";
 import {
   setOpenClawIdTunnelPrincipalLookup,
+  setOpenClawIdNodeDescriptionLookup,
+  setOpenClawIdTunnelActivityRecorder,
   setOpenClawIdTunnelPrincipalResolver,
 } from "./tunnel-principal.js";
 
@@ -40,11 +43,28 @@ export function createTunnelPrincipalPublisher(params: {
           }
         },
       );
+      setOpenClawIdNodeDescriptionLookup((peerKey) =>
+        params.enabled() && isIrohEndpointKey(peerKey)
+          ? params.current()?.current()?.authority?.nodes[peerKey]?.description
+          : undefined,
+      );
+      setOpenClawIdTunnelActivityRecorder((peerKey) => {
+        if (params.enabled()) {
+          void params
+            .current()
+            ?.recordSeen(peerKey)
+            .catch((error: unknown) =>
+              params.warn(`openclaw-id: could not record device activity: ${String(error)}`),
+            );
+        }
+      });
       setOpenClawIdClawOriginResolver(() =>
         params.enabled() ? clawOriginOfRecord(params.current()?.current()) : undefined,
       );
     },
     stop(): void {
+      setOpenClawIdNodeDescriptionLookup(undefined);
+      setOpenClawIdTunnelActivityRecorder(undefined);
       setOpenClawIdTunnelPrincipalResolver(undefined);
       setOpenClawIdTunnelPrincipalLookup(undefined);
       setOpenClawIdClawOriginResolver(undefined);
