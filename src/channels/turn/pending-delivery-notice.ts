@@ -9,7 +9,7 @@ import {
   deliveryContextKey,
   normalizeDeliveryContext,
 } from "../../utils/delivery-context.shared.js";
-import { hasActiveDirectPendingFinalDelivery } from "./direct-delivery-custody.js";
+import { hasActiveDirectPendingFinalDelivery } from "./direct-delivery-active.js";
 
 const PENDING_DELIVERY_NOTICE =
   "I couldn’t confirm whether my previous reply reached this chat, so I won’t resend it automatically. Please ask for any missing remainder.";
