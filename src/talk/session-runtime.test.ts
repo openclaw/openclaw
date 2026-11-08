@@ -1,6 +1,9 @@
 // Talk session runtime tests cover provider lifecycle and session events.
 import { describe, expect, expectTypeOf, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { captureRuntimeConfig } from "../config/runtime-source-projection.js";
+import { createPluginRuntimeStore } from "../plugin-sdk/runtime-store.js";
+import { PluginInstance } from "../plugins/plugin-instance.js";
 import type { RealtimeVoiceProviderPlugin } from "../plugins/types.js";
 import {
   REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ,
@@ -20,6 +23,72 @@ function expectBridgeRequest(
 }
 
 describe("realtime voice bridge session runtime", () => {
+  it("keeps transport callbacks scoped and retired while provider data stays cloneable", async () => {
+    const transport = new PluginInstance("voice-transport");
+    const provider = new PluginInstance("voice-provider");
+    const runtime = createPluginRuntimeStore<string>({
+      pluginId: "voice-transport",
+      errorMessage: "Transport runtime not initialized",
+    });
+    const transcripts: string[] = [];
+    let request!: RealtimeVoiceBridgeCreateRequest;
+    const voiceProvider = provider.wrap(
+      makeVoiceProvider((params) => {
+        expect(runtime.tryGetRuntime()).toBeNull();
+        request = params;
+        return makeBridge();
+      }),
+    );
+    const consult = vi.fn(async () => {
+      await Promise.resolve();
+      return { text: runtime.getRuntime() };
+    });
+    const session = transport.run(() => {
+      runtime.setRuntime("Transport answer");
+      return createRealtimeVoiceBridgeSession({
+        provider: voiceProvider,
+        cfg: { plugins: { allow: [] } },
+        providerConfig: { voice: "test" },
+        audioFormat: REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ,
+        audioSink: { sendAudio: vi.fn() },
+        onTranscript: () => transcripts.push(runtime.getRuntime()),
+        runAgentConsult: consult,
+      });
+    });
+    try {
+      expect(captureRuntimeConfig(request.cfg!)).toEqual({ plugins: { allow: [] } });
+      expect(structuredClone(request.providerConfig)).toEqual({ voice: "test" });
+      expect(structuredClone(request.audioFormat)).toEqual(REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ);
+      await provider.run(async () => {
+        await Promise.resolve();
+        request.onTranscript?.("user", "Check the agenda", true);
+        expect(await request.runAgentConsult!({ prompt: "Check the agenda" })).toEqual({
+          text: "Transport answer",
+        });
+        expect(runtime.tryGetRuntime()).toBeNull();
+      });
+      expect(transcripts).toEqual(["Transport answer"]);
+      await session.close();
+      provider.run(() => request.onTranscript?.("user", "Late transcript", true));
+      await expect(
+        provider.run(() => request.runAgentConsult!({ prompt: "Late task" })),
+      ).rejects.toThrow("Realtime voice session is closed");
+      expect(transcripts).toEqual(["Transport answer"]);
+      expect(consult).toHaveBeenCalledOnce();
+      await transport.dispose();
+      expect(() => provider.run(() => request.onTranscript?.("user", "Retired", true))).toThrow(
+        /voice-transport/,
+      );
+      expect(() => provider.run(() => request.runAgentConsult!({ prompt: "Retired" }))).toThrow(
+        /voice-transport/,
+      );
+    } finally {
+      await session.close();
+      await transport.dispose();
+      await provider.dispose();
+    }
+  });
+
   it.each(["abort", "detach", "cancelled-detach"] as const)(
     "settles accepted native delegation after %s while rejecting new work",
     async (ending) => {
