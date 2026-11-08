@@ -168,28 +168,31 @@ function itemRole(type: MenuItem["type"]): "menuitem" | "menuitemcheckbox" | "me
   return type ? `menuitem${type}` : "menuitem";
 }
 
-function MenuItemPresentation(props: { item: MenuItem; content?: JSX.Element }) {
+function presentationSlot(className: string, value: () => JSX.Element) {
   return (
-    <>
-      <Show when={props.item.icon}>
-        <span class="oc-menu-item__icon">{props.item.icon}</span>
-      </Show>
-      <span
-        class={[
-          "oc-menu-item__label",
-          {
-            "oc-menu-item__label--text": props.content === undefined,
-          },
-          props.item.labelClass,
-        ]}
-      >
-        {props.content ?? props.item.label}
-      </span>
-      <Show when={props.item.details}>
-        <span class="oc-menu-item__details">{props.item.details}</span>
-      </Show>
-    </>
+    <Show when={value()}>
+      <span class={className}>{value()}</span>
+    </Show>
   );
+}
+
+function MenuItemPresentation(props: { item: MenuItem; content?: JSX.Element }) {
+  const icon = presentationSlot("oc-menu-item__icon", () => props.item.icon);
+  const label = (
+    <span
+      class={[
+        "oc-menu-item__label",
+        {
+          "oc-menu-item__label--text": props.content === undefined,
+        },
+        props.item.labelClass,
+      ]}
+    >
+      {props.content ?? props.item.label}
+    </span>
+  );
+  const details = presentationSlot("oc-menu-item__details", () => props.item.details);
+  return [icon, label, details];
 }
 
 /** Menus share native visibility authority; Zag owns navigation and pointer intent. */
