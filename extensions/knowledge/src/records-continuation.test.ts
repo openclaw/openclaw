@@ -50,7 +50,9 @@ it("registered inventory follows every returned offset through a large filtered 
   }
   plugin.register(f.api);
   const tool = factories.get("knowledge_records")?.(toolContext(f.api).tool);
-  if (!tool || Array.isArray(tool)) throw new Error("Expected registered records tool");
+  if (!tool || Array.isArray(tool)) {
+    throw new Error("Expected registered records tool");
+  }
   const call = async (input: { query: string; limit: number; offset?: number }) =>
     (await tool.execute(randomUUID(), input)).details as FeatureOutput<typeof contract, "records">;
   const control = await call({ query: "Unrelated control", limit: 50 });
@@ -69,5 +71,7 @@ it("registered inventory follows every returned offset through a large filtered 
     offset = page.nextOffset;
   } while (offset !== null);
   expect(seen).toEqual(ids);
-  for (const [file, text] of files) expect(await readFile(file, "utf8")).toBe(text);
+  for (const [file, text] of files) {
+    expect(await readFile(file, "utf8")).toBe(text);
+  }
 });
