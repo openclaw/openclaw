@@ -218,13 +218,16 @@ If your Gateway runs in Docker, avoid `npx playwright` (npm override conflicts).
 For custom images, bake Chromium into the image:
 
 ```bash
-OPENCLAW_INSTALL_BROWSER=1 ./scripts/docker/setup.sh
+OPENCLAW_IMAGE=openclaw:local OPENCLAW_INSTALL_BROWSER=1 ./scripts/docker/setup.sh
 ```
 
 The browser also needs system libraries, so installing Chromium in a one-off
 Compose container is not durable. Rebuild the image with
-`OPENCLAW_INSTALL_BROWSER=1` instead. To persist browser downloads and other
-caches, persist `/home/node` with `OPENCLAW_HOME_VOLUME` or a bind mount. See
+`OPENCLAW_IMAGE=openclaw:local OPENCLAW_INSTALL_BROWSER=1` instead. A non-local
+`OPENCLAW_IMAGE` is pulled rather than built, so the browser build option has no
+effect on it; use an official `-browser` image for a prebuilt installation.
+To persist browser downloads and other caches, persist `/home/node` with
+`OPENCLAW_HOME_VOLUME` or a bind mount. See
 [Docker](/install/docker).
 
 ## How it works (internal)
