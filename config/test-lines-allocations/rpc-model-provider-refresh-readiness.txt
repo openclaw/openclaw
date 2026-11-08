@@ -1,2 +1,2 @@
-# Rendered readiness, auth-before-catalog ordering, and publication warning recovery.
-207
+# 207 own rendered readiness/order/recovery lines; 65 inherited b97/c61 debt. No spare headroom.
+272
