@@ -25,6 +25,7 @@ import {
 
 /** Rewrites invalidate only the navigation page containing the changed row. */
 const MODEL_CONTEXT_PAGE_SIZE = 512;
+const MODEL_CONTEXT_SESSION_CACHE_SIZE = 2;
 
 export function modelContextPageWriteScope(
   sessionId: string,
@@ -71,9 +72,9 @@ type NavigationSnapshot = {
 };
 
 const navigationCache = createSqliteQueryCache((database) => {
-  const cache: { snapshot?: NavigationSnapshot } = {};
+  const cache = new Map<string, NavigationSnapshot>();
   registerNodeSqliteDisposeCallback(sqlPublicationAnchor(database), () => {
-    cache.snapshot = undefined;
+    cache.clear();
   });
   return cache;
 });
@@ -210,15 +211,14 @@ export function readModelContextNavigationPages(params: {
 }) {
   const { database, sessionId, generation, through, anchorId, maxEvents, readRows } = params;
   const cache = navigationCache(database);
+  const cached = cache.get(sessionId);
   const cacheable =
     generation !== null &&
     maxEvents !== undefined &&
     !hasUncommittedSqliteWrites(database) &&
     // A historical read must not evict the current branch's warmed prefix facts.
-    (anchorId === undefined ||
-      cache.snapshot?.sessionId !== sessionId ||
-      cache.snapshot.anchorId !== undefined);
-  let snapshot = cacheable ? cache.snapshot : undefined;
+    (anchorId === undefined || cached === undefined || cached.anchorId !== undefined);
+  let snapshot = cacheable ? cached : undefined;
   if (
     snapshot?.sessionId !== sessionId ||
     snapshot.generation !== generation ||
@@ -286,6 +286,8 @@ export function readModelContextNavigationPages(params: {
       for (const [pageIndex, page] of pages) {
         page.through = Math.min((pageIndex + 1) * MODEL_CONTEXT_PAGE_SIZE - 1, through);
       }
+      cache.delete(sessionId);
+      cache.set(sessionId, snapshot);
       return {
         rows: snapshot.rows,
         entries: snapshot.entries,
@@ -351,7 +353,12 @@ export function readModelContextNavigationPages(params: {
       pairing: createModelContextPairing(messages(requests), messages(requests.slice(-maxEvents))),
     };
     trimRequests(snapshot);
-    cache.snapshot = snapshot;
+    cache.delete(sessionId);
+    cache.set(sessionId, snapshot);
+    // Alternating sessions share a reader without retaining every session's navigation.
+    if (cache.size > MODEL_CONTEXT_SESSION_CACHE_SIZE) {
+      cache.delete(cache.keys().next().value!);
+    }
   }
   return { rows, entries, anchorFound, prepared: undefined };
 }

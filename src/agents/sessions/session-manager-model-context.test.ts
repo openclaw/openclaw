@@ -669,7 +669,7 @@ it("refills warmed context when a prompt restart retires a suffix entry", async 
   });
 });
 
-it("keeps warmed current context after historical and smaller-window reads", async () => {
+it("keeps warmed current context across sessions, historical and smaller-window reads", async () => {
   await withSessionState("model-anchor-retention", async ({ scope }) => {
     const source = SessionManager.open(scope);
     const discardedId = source.appendMessage(makeUserMessage("discarded-prefix", 0));
@@ -683,6 +683,14 @@ it("keeps warmed current context after historical and smaller-window reads", asy
       source.appendMessage(makeUserMessage(`question-${index}`, index));
     }
     await waitForSessionTranscriptProjection(scope);
+    const siblingScope = sessionScope(scope.storePath, "model-anchor-retention-sibling");
+    await upsertSessionEntryCore(siblingScope, {
+      sessionId: siblingScope.sessionId,
+      updatedAt: 1,
+    });
+    const sibling = SessionManager.open(siblingScope);
+    await sibling.appendMessageAsync(makeUserMessage("sibling question", 1));
+    await waitForSessionTranscriptProjection(siblingScope);
     const limits = { maxBytes: 8192, maxEvents: 4 };
     const readCurrent = () => SessionManager.openModelContext(scope, { limits });
     const current = readCurrent();
@@ -697,6 +705,9 @@ it("keeps warmed current context after historical and smaller-window reads", asy
     expect(earlier.buildSessionContext().messages.at(-1)).toMatchObject({ content: "question-6" });
 
     withoutPayload([JSON.stringify(discardedId)], () => {
+      expect(
+        SessionManager.openModelContext(siblingScope, { limits }).buildSessionContext(),
+      ).toEqual(sibling.buildSessionContext());
       expect(readCurrent().buildSessionContext()).toEqual(expected);
       expect(
         SessionManager.openModelContext(scope, {
