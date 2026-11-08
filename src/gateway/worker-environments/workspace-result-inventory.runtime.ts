@@ -17,6 +17,7 @@ import { isDerivedWorkspacePath, buildCacheInputPaths } from "./workspace-path-e
 import { reconciliationEntries } from "./workspace-reconcile-derived-paths.js";
 import { WORKSPACE_RESULT_GIT_TIMEOUT_MS as PATCH_TIMEOUT_MS } from "./workspace-result-git.js";
 import {
+  isInitialWorkspaceSourceImport,
   requireWorkerResultStorageRef,
   resolveStagedWorkspaceReadEntry,
   stagedWorkspaceEntryBytes,
@@ -133,7 +134,8 @@ export async function loadStagedWorkerWorkspace(
     Boolean(
       reconciliation &&
       !reconciliation.alreadyAccepted &&
-      reconciliation.baseManifestRef === baseManifestRef,
+      reconciliation.baseManifestRef === baseManifestRef &&
+      !isInitialWorkspaceSourceImport(ref, base, current),
     ),
     nodes,
   );

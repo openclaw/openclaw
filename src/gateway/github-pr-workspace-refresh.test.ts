@@ -11,12 +11,80 @@ import {
   commandResult,
   installGitHubPublicationTestHarness,
 } from "./github-publication.test-support.js";
+import { WorkspaceResultLimitError } from "./worker-environments/workspace-inventory-limits.js";
+import * as workspaceReconcile from "./worker-environments/workspace-reconcile.js";
 
 describe("imported PR source refresh", () => {
   installGitHubPublicationTestHarness({
     creatorEmail: "publication-guest@example.test",
     sandbox: "required",
     realWorktree: true,
+  });
+
+  it("imports a large PR into an empty workspace without counting its source as guest edits", async () => {
+    const f = await fixture({ empty: true });
+    const { runCommandBuffered } =
+      await vi.importActual<typeof import("../process/exec.js")>("../process/exec.js");
+    const transport = mocks.runCommand.getMockImplementation()!;
+    mocks.runCommand.mockImplementation(async (argv, options) =>
+      argv[0] === "git" && ["cat-file", "ls-tree", "ls-files"].some((arg) => argv.includes(arg))
+        ? await runCommandBuffered(argv, options)
+        : await transport(argv, options),
+    );
+    await f.local!.git("-C", f.upstream, "checkout", "topic/existing");
+    const source = path.join(f.upstream, "source");
+    await fs.mkdir(source);
+    for (let index = 0; index < 50_001; index++) {
+      const bucket = path.join(source, String(Math.floor(index / 1000)));
+      if (index % 1000 === 0) {
+        await fs.mkdir(bucket);
+      }
+      await fs.writeFile(path.join(bucket, `${index}.ts`), "export {};\n");
+    }
+    await f.local!.git("-C", f.upstream, "add", "-A");
+    await f.local!.git("-C", f.upstream, "commit", "--quiet", "-m", "Large repository");
+    const head = await f.local!.git("-C", f.upstream, "rev-parse", "HEAD");
+    f.pr.head.sha = f.branch.commit.sha = head;
+
+    expect(await f.invoke()).toMatchObject({ status: "prepared", headCommit: head });
+    for (const directory of [f.cwd, f.projection]) {
+      expect(await fs.readFile(path.join(directory, "source/50/50000.ts"), "utf8")).toBe(
+        "export {};\n",
+      );
+    }
+    expect(await f.git("rev-parse", "HEAD")).toBe(head);
+    expect(await f.guestGit("diff", "--name-only")).toBe("");
+    expect(await f.guestGit("write-tree")).toBe(await f.git("rev-parse", `${head}^{tree}`));
+    await fs.writeFile(path.join(f.projection, "notes.txt"), "keep my work\n");
+    expect(await f.invoke()).toMatchObject({ status: "prepared", changedPaths: [] });
+    expect(await fs.readFile(path.join(f.projection, "notes.txt"), "utf8")).toBe("keep my work\n");
+    expect(f.writes).toEqual([]);
+  }, 120_000);
+
+  it("resumes an initial import rejected by the previous change limit after restart", async () => {
+    const f = await fixture({ empty: true });
+    // Recreate the old admission failure; persistence and restart use the real owners.
+    const refusal = vi
+      .spyOn(workspaceReconcile, "applyStagedWorkerWorkspace")
+      .mockRejectedValueOnce(
+        new WorkspaceResultLimitError(
+          "Workspace result changes 67411 files/directories (limit 50000).",
+        ),
+      );
+    try {
+      await expect(f.invoke()).rejects.toThrow("67411");
+    } finally {
+      refusal.mockRestore();
+    }
+    await closeOpenClawAgentDatabasesAsync();
+    expect(await f.invoke()).toMatchObject({ status: "prepared", headCommit: f.headCommit });
+    for (const directory of [f.cwd, f.projection]) {
+      expect(await fs.readFile(path.join(directory, "pr.txt"), "utf8")).toBe(
+        "original PR contents\n",
+      );
+    }
+    expect(await f.git("rev-parse", "HEAD")).toBe(f.headCommit);
+    expect(f.writes).toEqual([]);
   });
 
   it("returns actionable oversized-result errors through the PR tool and permits a smaller retry", async () => {

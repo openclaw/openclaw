@@ -45,6 +45,7 @@ export async function applyStagedWorkerWorkspace(params: {
   currentManifestRef: string;
   reconciliation: WorkspaceReconciliationPreparation;
   current: WorkerWorkspaceManifest;
+  initialSourceImport?: boolean;
   additionalPaths?: ReadonlySet<string>;
   journal: WorkerWorkspaceReconciliationJournalAdapter;
   assertCurrent?: () => void;
@@ -62,7 +63,10 @@ export async function applyStagedWorkerWorkspace(params: {
   return await withWorkspaceHashContext(async (): Promise<WorkerWorkspaceApplyResult> => {
     const root = await fs.realpath(params.root);
     const { preflight: preflightInput, includePaths: preparedPaths } = params.reconciliation;
-    if (preflightInput.changedPaths.length > MAX_WORKSPACE_RESULT_CHANGED_PATHS) {
+    if (
+      !params.initialSourceImport &&
+      preflightInput.changedPaths.length > MAX_WORKSPACE_RESULT_CHANGED_PATHS
+    ) {
       throw new WorkspaceResultLimitError(
         `Workspace result changes ${preflightInput.changedPaths.length} files/directories (limit ${MAX_WORKSPACE_RESULT_CHANGED_PATHS}).`,
       );

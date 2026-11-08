@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { EMPTY_WORKTREE_INITIAL_COMMIT_ID } from "../../agents/worktrees/empty-source-identity.js";
 import { runGitWorkerOperation } from "../../infra/git-worker.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
 import { drainGlobalSingletonLifecycleState } from "../../shared/global-singleton.js";
@@ -104,6 +105,19 @@ async function workspaceFixture(
 }
 
 type EncodedManifest = ReturnType<typeof encodeManifest>;
+
+it("does not treat an ordinary worker result as an initial source import", async () => {
+  const fixture = await workspaceFixture(
+    { ...makeManifest({}), baseCommit: EMPTY_WORKTREE_INITIAL_COMMIT_ID },
+    {
+      ...makeManifest({}),
+      baseCommit: "a".repeat(40),
+      directories: numberedPaths("added", 50_001),
+    },
+  );
+  await expect(fixture.stage()).rejects.toMatchObject({ code: "WORKSPACE_RESULT_LIMIT" });
+});
+
 async function stageHistoricalResult(
   root: string,
   resultRoot: string,

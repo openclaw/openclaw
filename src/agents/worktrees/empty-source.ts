@@ -1,21 +1,18 @@
-import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { sha256Hex as sourceName } from "@openclaw/normalization-core/node-crypto";
 import { resolveStateDir } from "../../config/state-dir.js";
 import { gitNullConfigPath } from "../../infra/git-exec.js";
 import { mergeProcessEnv } from "../../infra/process-env.js";
+import {
+  EMPTY_WORKTREE_INITIAL_COMMIT as INITIAL_COMMIT,
+  EMPTY_WORKTREE_INITIAL_COMMIT_ID as INITIAL_COMMIT_ID,
+} from "./empty-source-identity.js";
 import { listGitWorktrees, requireGit, worktreePathExists } from "./git.js";
 import { readPendingWorktrees } from "./pending-slots.js";
 import { readRegistryWorktrees } from "./registry-read.js";
 import { captureWorktreeRunEndContext } from "./run-end-lifecycle.js";
 import type { ManagedWorktreeRecord } from "./types.js";
-
-const EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
-const INITIAL_COMMIT = `tree ${EMPTY_TREE}\nauthor OpenClaw <openclaw@localhost> 0 +0000\ncommitter OpenClaw <openclaw@localhost> 0 +0000\n\nEmpty workspace\n`;
-const INITIAL_COMMIT_ID = createHash("sha1")
-  .update(`commit ${Buffer.byteLength(INITIAL_COMMIT)}\0${INITIAL_COMMIT}`)
-  .digest("hex");
 
 function sourceParent(env: NodeJS.ProcessEnv): string {
   return path.join(resolveStateDir(env), "worktree-sources", "empty");
