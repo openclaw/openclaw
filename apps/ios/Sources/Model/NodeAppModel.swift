@@ -1392,10 +1392,13 @@ final class NodeAppModel {
             Task { [weak self] in
                 guard let self else { return }
                 guard !self.forceOperatorTalkPermissionUpgradeRequest else { return }
-                await self.talkMode.reloadConfig(shouldApply: { [weak self] in
-                    guard let self else { return false }
-                    return self.talkMode.isEnabled && !self.forceOperatorTalkPermissionUpgradeRequest
-                })
+                // Runs beside the start's own refresh; a failure must not drop the config that start keeps.
+                await self.talkMode.reloadConfig(
+                    keepLastGoodOnFailure: self.talkMode.gatewayTalkConfigLoaded,
+                    shouldApply: { [weak self] in
+                        guard let self else { return false }
+                        return self.talkMode.isEnabled && !self.forceOperatorTalkPermissionUpgradeRequest
+                    })
                 self.requestTalkPermissionUpgradeIfNeeded()
             }
         }
