@@ -54,13 +54,34 @@ The measured journey includes the driver gaps between gestures; it is not
 single-wheel latency. Mobile retains the programmatic scrollport jump because
 Playwright's mobile WebKit driver does not support wheel input.
 
+The explicit desktop `completed-direct-run-{400,2000}-wheel` scenarios use the
+same completed-run fixtures as the interpolated `-scroll` scenarios. They send
+90 trusted wheel commands per direction, targeting 60 Hz with a delta of 0.75
+viewport height; this is a sustained wheel sequence, not OS kinetic momentum.
+Reports separate offered/accepted commands from browser-observed events and
+actual scroll distance. Coverage uses the first-to-last movement window, with
+the preceding frame gap and first-input-to-movement latency retained; stationary
+tail zero/partial coverage and final coverage are reported separately. The
+scenario drains commands and waits for stable scrolling without forcing an
+endpoint. These are geometric row-box observations, not painted-content proof.
+
 For transcript geometry attribution, add `--transcript-layout-audit`
 to a separate run. This records native scroll writes and offsets,
-retained-row coordinates, streaming block coordinates, and mutation ancestry beside
-each observation, plus a bounded JPEG filmstrip in Chromium. The capture adds layout reads and is not timing evidence. Its
-timestamps let you distinguish ordinary wheel movement, same-frame compensation,
-and a residual jump in content already on screen. Layout-shift sources retain their
+retained-row coordinates, visible bubble IDs and text rectangles, streaming block
+coordinates, and mutation ancestry beside each observation, plus a bounded JPEG
+filmstrip in Chromium, Firefox, and WebKit. The capture adds layout reads and is
+not timing evidence. Geometry describes DOM readiness, not painted coverage;
+inspect the filmstrip for blank, partial, or stale content. Image counts are not
+display refresh counts. Firefox and WebKit image clocks have an approximate
+initial alignment with the DOM clock. Layout-shift sources retain their
 row identity at observer delivery, before virtualization can remove them.
+
+For separate paint attribution, add `--transcript-paint-marker` with
+`--transcript-layout-audit`. A small bottom-left canvas encodes each JavaScript
+scroll-write revision in the captured pixels; the audit records its mapping to
+the requested and actual offsets. The marker adds paint work and can alter the
+captured path. Use unmarked filmstrips for blank-frame acceptance and marked
+captures only to resolve frame/offset identity.
 
 `streaming-645-deltas` types into the composer every 500 ms. Use the explicit
 `streaming-645-deltas-no-input` scenario to measure the same reply without typing.

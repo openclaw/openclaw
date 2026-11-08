@@ -573,6 +573,7 @@ export async function executeLocalWorkspaceManifestRead(
       preserveDirectories,
       buildCacheInputs: new Set(retained),
       reuseFile: fingerprintScan.reuseFile,
+      unchangedProbe: action.kind === "probe",
       onEntry(node, identity) {
         seen.add(node.path);
         const previous = records.get(node.path);

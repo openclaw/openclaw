@@ -1,4 +1,4 @@
-// Built Gateway with streaming chats, scheduled cron, native fio pressure, and persisted restart readback.
+// Built Gateway with streaming chats, foreground exec, pending WS RPCs, cron, and restart readback.
 // TMPDIR=<btrfs-temp> node --import ./scripts/tsx.mjs scripts/perf/shutdown-loaded-measure.ts \
 //   --output <new-dir> --fixture <shutdown-fixture-root> --pressure-directory <btrfs-writer-dir>
 // Use shutdown-loaded-fixture.mjs to prepare the synthetic shape; run each built revision serially.
@@ -14,6 +14,7 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { setTimeout as delay } from "node:timers/promises";
 import { parseArgs } from "node:util";
+import { zstdDecompressSync } from "node:zlib";
 import { buildMockOpenAiResponsesProvider } from "../../src/gateway/test-openai-responses-model.js";
 import { registerSealedRuntimeProcessEntrypoints } from "../../src/infra/runtime-process-url.js";
 import { createDeferredCore } from "../../src/shared/deferred.js";
@@ -27,6 +28,7 @@ import {
   restartToolNames,
   writeRestartPlugin,
   writeRestartJsonText,
+  writeRestartToolCall,
 } from "../../test/gateway-restart.test-support.js";
 import { writeOpenAiResponsesText } from "../../test/helpers/openai-responses-sse.js";
 import { createOpenClawTestInstance } from "../../test/helpers/openclaw-test-instance.js";
@@ -39,10 +41,15 @@ const { values } = parseArgs({
     checkout: { type: "string", default: process.cwd() },
     sessions: { type: "string", default: "16" },
     crons: { type: "string", default: "4" },
+    tools: { type: "string", default: "2" },
+    clients: { type: "string", default: "4" },
+    "ignore-term": { type: "boolean" },
     "pressure-directory": { type: "string" },
     "hold-ms": { type: "string", default: "0" },
     fixture: { type: "string" },
     allocation: { type: "boolean" },
+    "cpu-profile": { type: "boolean" },
+    "seeded-history": { type: "boolean" },
   },
 });
 assert(values.output);
@@ -64,7 +71,27 @@ const cronCount = parseStrictIntegerOption({
   min: 1,
   fallback: 4,
 });
-assert(count <= 256 && cronCount <= 8);
+const toolCount = parseStrictIntegerOption({
+  raw: values.tools,
+  label: "--tools",
+  min: 0,
+  fallback: 2,
+});
+const clientCount = parseStrictIntegerOption({
+  raw: values.clients,
+  label: "--clients",
+  min: 1,
+  fallback: 4,
+});
+assert(
+  count <= 256 &&
+    cronCount <= 8 &&
+    toolCount <= 16 &&
+    clientCount <= 16 &&
+    clientCount <= count + toolCount,
+);
+const turnCount = count + toolCount;
+const shellQuote = (value: string) => `'${value.replaceAll("'", "'\"'\"'")}'`;
 const output = path.resolve(values.output);
 await mkdir(output);
 // Linux child custody requires a built owner without compiler-loader children.
@@ -79,6 +106,8 @@ const ready = new Set<string>();
 const resumed = new Set<string>();
 let restarting = false;
 let heldFinalizers = 0;
+const issuedTools = new Set<string>();
+const toolPids = new Set<number>();
 const reservation = await reserveTestPortListener({
   offsets: [0],
   signal,
@@ -86,6 +115,13 @@ const reservation = await reserveTestPortListener({
     restartProviderServer(
       failure,
       async (request, response, body) => {
+        if (request.url?.startsWith("/tool/")) {
+          ready.add(request.url.slice("/tool/".length));
+          assert(typeof body.pid === "number");
+          toolPids.add(body.pid);
+          response.writeHead(204).end();
+          return;
+        }
         if (request.url === "/finalize") {
           heldFinalizers++;
           await delay(holdMs, undefined, { signal });
@@ -93,10 +129,30 @@ const reservation = await reserveTestPortListener({
           return;
         }
         const text = JSON.stringify(body.input);
-        const marker = /SHUTDOWN_(CHAT_\d+|CRON_\d+)/.exec(text)?.[1];
+        const marker =
+          restartToolNames(body).length > 0
+            ? /SHUTDOWN_(CHAT_\d+|TOOL_\d+|CRON_\d+)/.exec(text)?.[1]
+            : undefined;
         if (body.stream === false) {
           writeRestartJsonText(response, "Synthetic shutdown session", randomUUID());
+        } else if (marker?.startsWith("TOOL_") && !restarting && !issuedTools.has(marker)) {
+          assert(restartToolNames(body).includes("exec"), "Exec tool was not offered");
+          issuedTools.add(marker);
+          const callback = `http://127.0.0.1:${reservation.claim.port}/tool/${marker}`;
+          const script = `${values["ignore-term"] ? "process.on('SIGTERM',()=>{});" : ""}fetch(${JSON.stringify(callback)},{method:'POST',body:JSON.stringify({pid:process.pid})}).then(()=>setInterval(()=>{},1000))`;
+          writeRestartToolCall(
+            response,
+            marker,
+            "exec",
+            {
+              command: `${shellQuote(process.execPath)} -e ${shellQuote(script)}`,
+              yieldMs: 120_000,
+              timeoutSeconds: 600,
+            },
+            1,
+          );
         } else if (marker && !restarting && restartToolNames(body).length > 0) {
+          assert(!marker.startsWith("TOOL_"), "Exec returned before shutdown");
           const id = randomUUID();
           response.writeHead(200, {
             "content-type": "text/event-stream",
@@ -104,9 +160,20 @@ const reservation = await reserveTestPortListener({
           });
           for (const event of [
             {
+              type: "response.created",
+              response: { id: `resp_${id}`, status: "in_progress", output: [] },
+            },
+            {
               type: "response.output_item.added",
               output_index: 0,
               item: { type: "message", id, role: "assistant", status: "in_progress", content: [] },
+            },
+            {
+              type: "response.content_part.added",
+              item_id: id,
+              output_index: 0,
+              content_index: 0,
+              part: { type: "output_text", text: "", annotations: [] },
             },
             {
               type: "response.output_text.delta",
@@ -118,10 +185,24 @@ const reservation = await reserveTestPortListener({
           ]) {
             response.write(`data: ${JSON.stringify(event)}\n\n`);
           }
+          const stream = setInterval(
+            () =>
+              response.write(
+                `data: ${JSON.stringify({
+                  type: "response.output_text.delta",
+                  item_id: id,
+                  output_index: 0,
+                  content_index: 0,
+                  delta: " Still working.",
+                })}\n\n`,
+              ),
+            250,
+          );
+          response.once("close", () => clearInterval(stream));
           ready.add(marker);
         } else {
           if (
-            marker?.startsWith("CHAT_") &&
+            (marker?.startsWith("CHAT_") || marker?.startsWith("TOOL_")) &&
             text.includes("The Gateway restarted while you were working.")
           ) {
             resumed.add(marker);
@@ -141,7 +222,7 @@ const base = restartModelConfig(
   model,
   values.fixture ? path.join(values.fixture, "workspace") : undefined,
   {
-    maxConcurrent: count + cronCount + 2,
+    maxConcurrent: turnCount + cronCount + 2,
     timeoutSeconds: 180,
   },
 );
@@ -149,6 +230,7 @@ const instance = await createOpenClawTestInstance({
   name: "loaded-shutdown",
   cwd: values.checkout,
   entrypoint: [
+    ...(values["cpu-profile"] ? ["--cpu-prof", `--cpu-prof-dir=${output}`] : []),
     "--import",
     new URL("./gateway-shutdown-sweep-preload.mjs", import.meta.url).pathname,
     "dist/entry.js",
@@ -171,12 +253,38 @@ const instance = await createOpenClawTestInstance({
     browser: { enabled: false },
     discovery: { mdns: { mode: "off" } },
     cron: { enabled: true },
-    tools: { allow: ["cron"], codeMode: { enabled: false } },
+    tools: {
+      allow: ["cron", "exec"],
+      codeMode: { enabled: false },
+      exec: { host: "gateway", security: "full", ask: "off" },
+    },
   },
 });
 let client: Awaited<ReturnType<typeof connectRestartClient>> | undefined;
-const keys = Array.from({ length: count }, (_, i) => `agent:main:dashboard:shutdown-${i}`);
-const result: Record<string, unknown> = { count, cronCount, holdMs, valid: false };
+const markers = [
+  ...Array.from({ length: count }, (_, i) => `CHAT_${i}`),
+  ...Array.from({ length: toolCount }, (_, i) => `TOOL_${i}`),
+];
+assert(!values["seeded-history"] || (values.fixture && turnCount <= 140));
+const keys = markers.map((marker, index) =>
+  values["seeded-history"]
+    ? `agent:main:transcript-broadcast-measure-child-${index}`
+    : `agent:main:dashboard:shutdown-${marker.toLowerCase()}`,
+);
+const clients: Array<Awaited<ReturnType<typeof connectRestartClient>>> = [];
+const waits: Promise<void>[] = [];
+const runIds: string[] = [];
+let settledWaits = 0;
+const result: Record<string, unknown> = {
+  count,
+  toolCount,
+  clientCount,
+  cronCount,
+  holdMs,
+  ignoreTerm: values["ignore-term"] === true,
+  seededHistory: values["seeded-history"] === true,
+  valid: false,
+};
 let pressure: ChildProcess | undefined;
 let pressureExit: Promise<unknown> | undefined;
 async function stopPressure() {
@@ -192,6 +300,29 @@ const wait = async (predicate: () => boolean, timeoutMs = 60_000) => {
     await Promise.race([delay(50, undefined, { signal }), failure.promise]);
   }
 };
+function readDurableTranscripts() {
+  const database = new DatabaseSync(path.join(instance.state.agentDir(), "openclaw-agent.sqlite"), {
+    readOnly: true,
+  });
+  try {
+    const readEvents = database.prepare(
+      "SELECT event_json, event_zstd FROM transcript_events WHERE session_id = ? ORDER BY seq",
+    );
+    return keys.map((key) => {
+      const session = readRestartSession(instance.state.agentDir(), key);
+      assert(typeof session?.sessionId === "string");
+      return readEvents.all(session.sessionId).map((row) => {
+        if (typeof row.event_json === "string") {
+          return row.event_json;
+        }
+        assert(row.event_zstd instanceof Uint8Array, "Transcript event has no payload");
+        return zstdDecompressSync(row.event_zstd).toString("utf8");
+      });
+    });
+  } finally {
+    database.close();
+  }
+}
 try {
   if (values.fixture) {
     await mkdir(instance.state.agentDir(), { recursive: true });
@@ -236,13 +367,25 @@ try {
     { deviceAuthScope: instance.url, sharedStateMode: "read-only" },
     signal,
   );
+  for (let index = 0; index < clientCount; index++) {
+    clients.push(
+      await connectRestartClient(
+        instance,
+        { deviceAuthScope: instance.url, sharedStateMode: "read-only" },
+        signal,
+      ),
+    );
+  }
   for (const [i, key] of keys.entries()) {
-    await client.request("sessions.create", { key, agentId: "main" });
-    await client.request(
+    if (!values["seeded-history"]) {
+      await client.request("sessions.create", { key, agentId: "main" });
+    }
+    const run = await client.request<{ runId: string }>(
       "chat.send",
-      { sessionKey: key, message: `SHUTDOWN_CHAT_${i}`, idempotencyKey: randomUUID() },
+      { sessionKey: key, message: `SHUTDOWN_${markers[i]}`, idempotencyKey: randomUUID() },
       { expectFinal: false },
     );
+    runIds.push(run.runId);
   }
   const jobs: Array<{ id: string }> = [];
   for (let index = 0; index < cronCount; index++) {
@@ -259,8 +402,22 @@ try {
       }),
     );
   }
-  await wait(() => ready.size === count + cronCount);
+  await wait(() => ready.size === turnCount + cronCount);
   console.log(`loaded ${ready.size} model requests`);
+  for (const [index, connection] of clients.entries()) {
+    waits.push(
+      connection
+        .request("agent.wait", { runId: runIds[index], timeoutMs: 120_000 }, { timeoutMs: 180_000 })
+        .then(
+          () => {
+            settledWaits++;
+          },
+          () => {
+            settledWaits++;
+          },
+        ),
+    );
+  }
   await delay(1000, undefined, { signal });
   if (values["pressure-directory"]) {
     await mkdir(values["pressure-directory"], { recursive: true });
@@ -292,6 +449,12 @@ try {
       "Pressure writer exited before shutdown",
     );
   }
+  result.pendingRpcs = waits.length - settledWaits;
+  assert(result.pendingRpcs === clientCount, "RPC waits settled before shutdown");
+  assert(toolPids.size === toolCount, "Foreground tools did not start");
+  for (const pid of toolPids) {
+    process.kill(pid, 0);
+  }
   const child = instance.child;
   assert(child);
   const exited = once(child, "exit");
@@ -302,6 +465,17 @@ try {
   result.exitCode = code;
   result.exitSignal = exitSignal;
   await stopPressure();
+  result.survivingToolPids = [...toolPids].filter((pid) => {
+    try {
+      process.kill(pid, 0);
+      return true;
+    } catch {
+      return false;
+    }
+  });
+  assert((result.survivingToolPids as number[]).length === 0, "Exec child survived shutdown");
+  await Promise.all(clients.map((connection) => connection.stopAndWait()));
+  await Promise.all(waits);
   if (pressure) {
     // fio writes a signal notice before its JSON when we stop the bounded workload.
     const raw = await readFile(path.join(output, "pressure.json"), "utf8");
@@ -314,6 +488,10 @@ try {
     result.pressureFsyncs = writers.reduce((total, job) => total + job.sync.total_ios, 0);
   }
   result.heldFinalizers = heldFinalizers;
+  await writeFile(
+    path.join(output, "transcripts-after-stop.json"),
+    JSON.stringify(readDurableTranscripts()),
+  );
   result.markers = keys.filter(
     (key) => readRestartSession(instance.state.agentDir(), key)?.resumeAfterRestart,
   ).length;
@@ -333,7 +511,13 @@ try {
     }
     result.agentDatabaseBytes = (await stat(databasePath)).size;
   }
-  await writeFile(path.join(output, "stop.log"), instance.logs());
+  const stopLog = instance.logs();
+  result.shutdownSteps = Object.fromEntries(
+    [...stopLog.matchAll(/restart trace: ((?:restart\.close|shutdown)\.[\w.-]+) ([\d.]+)ms/g)]
+      .filter((match) => !match[1]!.endsWith(".begin"))
+      .map((match) => [match[1], Number(match[2])]),
+  );
+  await writeFile(path.join(output, "stop.log"), stopLog);
   console.log(JSON.stringify(result));
   await client.stopAndWait();
   client = undefined;
@@ -344,20 +528,38 @@ try {
     { deviceAuthScope: instance.url, sharedStateMode: "read-only" },
     signal,
   );
-  await wait(() => resumed.size === count);
+  await wait(() => resumed.size === turnCount);
   result.resumes = resumed.size;
   let histories = 0;
+  const transcriptProof: Record<string, { partialStream: boolean; toolReceipt: boolean }> = {};
+  result.transcriptProof = transcriptProof;
   for (const [index, key] of keys.entries()) {
     const deadline = Date.now() + 30_000;
     for (;;) {
-      const history: string = JSON.stringify(
-        await client.request<unknown>("chat.history", { sessionKey: key, limit: 10 }),
+      const { messages }: { messages: unknown[] } = await client.request<{ messages: unknown[] }>(
+        "chat.history",
+        {
+          sessionKey: key,
+          limit: 100,
+        },
       );
+      const history: string = JSON.stringify(messages);
       assert(
-        history.includes(`SHUTDOWN_CHAT_${index}`),
+        history.includes(`SHUTDOWN_${markers[index]}`),
         "Persisted user message missing after restart",
       );
-      if (history.includes(`FINISHED_CHAT_${index}`)) {
+      if (history.includes(`FINISHED_${markers[index]}`)) {
+        await writeFile(
+          path.join(output, `history-${markers[index]}.json`),
+          JSON.stringify(messages),
+        );
+        const proof = {
+          partialStream: history.includes(`Synthetic work in progress for ${markers[index]}.`),
+          toolReceipt: messages.some((message) =>
+            JSON.stringify(message).includes('"role":"toolResult"'),
+          ),
+        };
+        transcriptProof[markers[index]!] = proof;
         histories++;
         break;
       }
@@ -366,6 +568,17 @@ try {
     }
   }
   result.persistedRecoveredHistories = histories;
+  const recoveredTranscripts = readDurableTranscripts();
+  await writeFile(
+    path.join(output, "transcripts-after-recovery.json"),
+    JSON.stringify(recoveredTranscripts),
+  );
+  const restartInputs = recoveredTranscripts.map(
+    (events) =>
+      events.filter((event) => event.includes("The Gateway restarted while you were working."))
+        .length,
+  );
+  result.persistedRestartInputs = restartInputs;
   const cron = await Promise.all(
     jobs.map((job) =>
       client!.request<{ entries: unknown[] }>("cron.runs", { id: job.id, limit: 2 }),
@@ -376,10 +589,28 @@ try {
     "Persisted cron outcome missing after restart",
   );
   result.cron = cron;
+  assert(
+    restartInputs.every((inputCount) => inputCount === 1),
+    "Recovery input must persist exactly once",
+  );
+  for (const [index, events] of recoveredTranscripts.entries()) {
+    const persisted = events.join("\n");
+    if (markers[index]!.startsWith("CHAT_")) {
+      assert(
+        persisted.includes(`Synthetic work in progress for ${markers[index]}.`),
+        "Partial streamed assistant text missing from durable transcript",
+      );
+    } else {
+      assert(
+        persisted.includes('"role":"toolResult"'),
+        "Interrupted exec result missing from durable transcript",
+      );
+    }
+  }
   result.valid =
     (holdMs === 0 || heldFinalizers === cronCount) &&
-    result.markers === count &&
-    resumed.size === count &&
+    result.markers === turnCount &&
+    resumed.size === turnCount &&
     code === 0 &&
     exitSignal === null;
   assert(result.valid, "Shutdown or recovery acceptance failed");
@@ -391,6 +622,7 @@ try {
   await writeFile(path.join(output, "gateway.log"), instance.logs());
   await writeFile(path.join(output, "result.json"), JSON.stringify(result, null, 2));
   console.log(JSON.stringify(result));
+  await Promise.all(clients.map((connection) => connection.stopAndWait()));
   await client?.stopAndWait();
   await instance.cleanup();
   reservation.listener.closeAllConnections();

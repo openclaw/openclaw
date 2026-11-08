@@ -31,50 +31,6 @@ export function realpathExistingAncestorSync(candidate: string): string | undefi
   }
 }
 
-/**
- * Canonicalizes a path through its longest existing prefix for containment checks.
- *
- * Unlike `realpathExistingAncestor`, ".." is never folded lexically: the kernel resolves it
- * inside existing prefixes, and a ".." after a missing segment has no canonical meaning until
- * that segment exists (it could become a symlink), so the result is undefined.
- */
-export async function realpathViaExistingPrefix(candidate: string): Promise<string | undefined> {
-  const absolute = path.isAbsolute(candidate)
-    ? candidate
-    : `${process.cwd()}${path.sep}${candidate}`;
-  const root = path.parse(absolute).root;
-  const segments = absolute
-    .slice(root.length)
-    .split(path.sep === "\\" ? /[\\/]/ : "/")
-    .filter((segment) => segment !== "" && segment !== ".");
-  for (let end = segments.length; end >= 0; end -= 1) {
-    const missing = segments.slice(end);
-    if (missing.includes("..")) {
-      return undefined;
-    }
-    const prefix = root + segments.slice(0, end).join(path.sep);
-    try {
-      return path.join(await fsPromises.realpath(prefix), ...missing);
-    } catch (error) {
-      // Only definite absence may fall back to the parent. An unreadable or looping prefix
-      // could be a symlink whose target is unknown, so it has no canonical spelling.
-      if (!isMissingPathError(error)) {
-        return undefined;
-      }
-    }
-    // A dangling symlink exists but cannot be resolved; its spelling says nothing about its target.
-    if (
-      await fsPromises.lstat(prefix).then(
-        () => true,
-        () => false,
-      )
-    ) {
-      return undefined;
-    }
-  }
-  return undefined;
-}
-
 /** Async counterpart for runtime identity capture, including unreadable intermediate paths. */
 export async function realpathExistingAncestor(candidate: string): Promise<string | undefined> {
   const suffix: string[] = [];
