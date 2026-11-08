@@ -89,20 +89,26 @@ for the batch:
 ```bash
 pnpm release:backport-probe -- \
   --baseline "$baseline_sha" \
+  --scan-end "$pinned_main_sha" \
   --candidate "$candidate_sha" > backport-probe.tsv
 ```
 
-The helper uses `git merge-tree --write-tree` with the candidate's parent as
-the explicit merge base, so it simulates that single patch without checking out
-or resetting a worktree. The TSV binds the resolved candidate and baseline,
-classification (`clean`, `conflicted`, or `already-covered`), conflict count,
-touched-file count, every touched path, and whether that path conflicts. It
-refuses root and merge commits whose cherry-pick mainline is ambiguous.
+The helper first requires every candidate to be reachable from the pinned scan
+end, then uses `git merge-tree --write-tree` with the candidate's parent as the
+explicit merge base. This simulates that single patch without checking out or
+resetting a worktree. The TSV binds the resolved candidate, baseline, and scan
+end; records reachability; and reports a patch classification (`clean`,
+`conflicted`, or `already-covered`), conflict count, touched-file count, every
+touched path, and whether that path conflicts. It refuses unreachable, root,
+and merge commits whose provenance or cherry-pick mainline is ambiguous.
 
-Record a failed probe with its exact reason. A clean probe is triage evidence
-only; it does not approve a backport. If the commit needs companions, probe and
-assess the smallest ordered final fix rather than treating each clean commit as
-an independent candidate.
+Every row remains `contract-review-required`: the mechanical probe cannot prove
+runtime reachability, caller-chain closure, or prerequisite dependencies. Record
+a failed probe with its exact reason. A clean patch classification is triage
+evidence only; it does not approve a backport. Trace callers and prerequisites
+under [Close Selected Contracts Before Qualification](#close-selected-contracts-before-qualification).
+If the commit needs companions, probe and assess the smallest ordered final fix
+rather than treating each clean commit as an independent candidate.
 
 ## Close Selected Contracts Before Qualification
 
