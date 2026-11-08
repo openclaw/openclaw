@@ -39,7 +39,7 @@ const descriptor = (path) => {
 function proof(f, ...args) {
   const r = spawnSync("bash", ["-c", 'exec 9<>"$OPENCLAW_TEAM_LOCK_FILE"; flock -n 9 || exit 75; exec "$@"', "retained-proof", process.execPath, f.library, ...args], { env: f.env, encoding: "utf8" });
   assert.equal(r.status, 0, r.stderr);
-  return JSON.parse(r.stdout);
+  return r.stdout.trim() ? JSON.parse(r.stdout) : undefined;
 }
 function call(f, action, input, { lock = true, preload } = {}) {
   const args = [
@@ -198,6 +198,36 @@ function addSession(f, key = "post-failure") {
   db.close();
 }
 
+function reconcileConfig(f) {
+  // Synthetic agents.delete replacement: preserve the model agent and its history.
+  const config = JSON.parse(readFileSync(f.config));
+  config.agents.entries.deletedAgent = {};
+  writeFileSync(f.config, JSON.stringify(config));
+  const previous = readFileSync(f.config), before = descriptor(f.config);
+  delete config.agents.entries.deletedAgent;
+  copyFileSync(f.config, f.config + ".bak");
+  chmodSync(f.config + ".bak", 0o600);
+  replace(f.config, JSON.stringify(config));
+  const next = readFileSync(f.config), after = descriptor(f.config), ts = new Date().toISOString();
+  const audit = { ts, event: "config.write", source: "config-io", result: "rename", configPath: f.config,
+    existsBefore: true, pid: f.pid, previousHash: before.sha256, nextHash: after.sha256,
+    previousBytes: previous.length, nextBytes: next.length };
+  for (const [prefix, entry] of [["previous", before], ["next", after]])
+    Object.assign(audit, { [prefix + "Dev"]: String(entry.device), [prefix + "Ino"]: String(entry.inode),
+      [prefix + "Mode"]: 0o600, [prefix + "Nlink"]: 1, [prefix + "Uid"]: process.getuid(), [prefix + "Gid"]: process.getgid() });
+  const db = new DatabaseSync(f.databasePath);
+  db.exec("CREATE TABLE diagnostic_events(scope TEXT,event_key TEXT,sequence INTEGER,payload_json TEXT)");
+  db.prepare("INSERT INTO diagnostic_events VALUES('config-audit',?,1,?)").run(`${ts}:config.write:${randomUUID()}`, JSON.stringify(audit));
+  db.close();
+  // Native audit loading requires the candidate's SQLite extension contract.
+  chmodSync(f.b, 0o755);
+  chmodSync(join(f.b, "node_modules"), 0o755);
+  mkdirSync(join(f.b, "node_modules/sqlite-vec"));
+  writeFileSync(join(f.b, "node_modules/sqlite-vec/index.js"), "exports.load=db=>db.function('vec_version',()=> 'fixture');");
+  proof(f, "seal-tree", f.b);
+  return after.sha256;
+}
+
 export {
   test,
   fixture,
@@ -210,4 +240,5 @@ export {
   replace,
   journal,
   sealedReplace,
+  reconcileConfig,
 };

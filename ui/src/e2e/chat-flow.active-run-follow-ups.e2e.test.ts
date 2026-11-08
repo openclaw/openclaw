@@ -110,6 +110,80 @@ async function restoredSteer(name: string, age: number, offset: number, seq: num
 }
 
 suite.define(() => {
+  it("offers Send now for a queued steer while a long exec remains active", async () => {
+    const sessionKey = "agent:main:main";
+    const sessionId = `session:${sessionKey}`;
+    const runId = "long-exec-run";
+    const startedAt = Date.now() - 215_000;
+    const steerRunId = "waiting-steer";
+    const message = persistedText("user", "Use the shorter approach.", {
+      idempotencyKey: `${steerRunId}:user`,
+      steerTargetRunId: runId,
+    });
+    const history = {
+      sessionId,
+      sessionInfo: {
+        key: sessionKey,
+        activeRunIds: [runId],
+        hasActiveRun: true,
+        status: "running",
+      },
+      messages: [message],
+      inFlightRun: {
+        runId,
+        startedAt,
+        text: "",
+        events: [
+          agentEvent(
+            runId,
+            sessionKey,
+            "tool",
+            {
+              name: "exec",
+              phase: "start",
+              toolCallId: "held-exec",
+              args: { command: "sleep 300" },
+            },
+            1,
+            startedAt,
+          ),
+        ],
+      },
+      pendingInputs: {
+        items: [
+          {
+            id: "waiting-steer-input",
+            runId: steerRunId,
+            message,
+            acceptedAt: Date.now() - 30_000,
+            state: "queued",
+            steerNow: { status: "available", tools: ["exec"] },
+          },
+        ],
+        total: 1,
+      },
+    };
+    const { page, gateway } = await chatFixture(suite, {
+      methodResponses: { "chat.startup": history, "chat.history": history },
+    });
+    await page.goto(`${suite.server.baseUrl}chat`);
+    await page
+      .locator(".chat-tool-msg-summary")
+      .getByRole("img", { name: "exec", exact: true })
+      .waitFor();
+    await page.getByRole("button", { name: "Stop", exact: true }).waitFor();
+    const link = page
+      .locator(".chat-group.user", { hasText: "Use the shorter approach." })
+      .getByRole("button", { name: "Send now", exact: true });
+    await link.waitFor({ state: "visible" });
+    await link.click();
+    expect((await gateway.waitForRequest("chat.steerNow")).params).toMatchObject({
+      sessionKey,
+      sessionId,
+      runId: steerRunId,
+    });
+  });
+
   it("removes the typed /steer queue chip after consumption while the original run stays active", async () => {
     const { page } = await newChatPage(suite);
     const runId = "active-run";
