@@ -58,6 +58,8 @@ export function createGatewayRunCleanup(
     retireWatchdog,
     waitForCleanup: joinCleanup,
     async settleFinalResources(operations: {
+      loopFailure?: { error: unknown };
+      getExitCode: () => number;
       retireSignals: () => void;
       drainSignals: () => Promise<void>;
       closeTerminalServer: () => Promise<void>;
@@ -65,10 +67,10 @@ export function createGatewayRunCleanup(
       closeSharedState: () => Promise<void>;
       releaseLock: () => Promise<void>;
       clearStartupWatchdog: () => void;
-      clearRequestWatchdogs: () => void;
+      requestWatchdogs: Set<() => void>;
       cleanupSignals: () => void;
       onSettled?: (outcome: "drained" | "retained") => void;
-    }): Promise<unknown[]> {
+    }): Promise<number> {
       const failures: unknown[] = [];
       // Every admitted owner gets its ordered retirement even if an earlier one rejects.
       const finalizers: Array<() => void | Promise<void>> = [
@@ -81,7 +83,12 @@ export function createGatewayRunCleanup(
         operations.closeSharedState,
         operations.releaseLock,
         operations.clearStartupWatchdog,
-        operations.clearRequestWatchdogs,
+        () => {
+          for (const clear of operations.requestWatchdogs) {
+            clear();
+          }
+          operations.requestWatchdogs.clear();
+        },
         joinCleanup,
         operations.cleanupSignals,
       ];
@@ -100,7 +107,21 @@ export function createGatewayRunCleanup(
         cleanupFailed = true;
         failures.push(error);
       }
-      return failures;
+      if (operations.loopFailure) {
+        failures.unshift(operations.loopFailure.error);
+      }
+      if (failures.length === 1) {
+        throw failures[0];
+      }
+      if (failures.length > 1) {
+        throw new AggregateError(failures, "Gateway loop and final resource cleanup failed", {
+          cause: failures[0],
+        });
+      }
+      const code = operations.getExitCode();
+      // Cleanup failure promotes success without replacing a supervisor-owned
+      // failure status that already selects its terminal recovery behavior.
+      return cleanupFailed && code === 0 ? 1 : code;
     },
     drainProcessResources,
     get failed() {

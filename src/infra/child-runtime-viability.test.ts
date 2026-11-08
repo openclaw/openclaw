@@ -20,7 +20,7 @@ describe("child runtime viability", () => {
   it.each([
     { execPath: removedCellarPath, code: "ENOENT", available: false },
     { execPath: process.execPath, code: undefined, available: true },
-    { execPath: removedCellarPath, code: "EACCES", available: true },
+    { execPath: "/fixture/restricted-node", code: "EACCES", available: true },
   ])("classifies executable access $code", ({ execPath, code, available }) => {
     const viability = readChildRuntimeViability({
       execPath,
@@ -34,7 +34,7 @@ describe("child runtime viability", () => {
     expect(formatMissingChildRuntimeWarning(viability)).toBe(
       available
         ? undefined
-        : `Gateway runtime is stale after Node upgrade: child workers are using ${removedCellarPath}, which no longer exists. Restart the Gateway.`,
+        : `The Node.js runtime this Gateway started with (${removedCellarPath}) can no longer start worker processes, likely because it was upgraded or removed. Restart the Gateway.`,
     );
   });
 });

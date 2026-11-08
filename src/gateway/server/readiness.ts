@@ -1,5 +1,6 @@
 import { isFutureDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import type { ChannelAccountSnapshot } from "../../channels/plugins/types.public.js";
+import { readChildRuntimeViability } from "../../infra/child-runtime-viability.js";
 import type { AgentDatabaseAdmissionRefusal } from "../../state/agent-database-admission.js";
 import {
   DEFAULT_CHANNEL_CONNECT_GRACE_MS,
@@ -121,6 +122,9 @@ export function createReadinessChecker(
     }
     if (startup.status === "draining") {
       return { ready: false, failing: ["gateway-draining"], uptimeMs };
+    }
+    if (!readChildRuntimeViability().available) {
+      return { ready: false, failing: ["child-runtime"], uptimeMs };
     }
     const stateDatabaseFailure = deps.getStateDatabaseFailure?.();
     if (stateDatabaseFailure) {

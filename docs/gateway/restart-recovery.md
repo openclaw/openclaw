@@ -235,6 +235,15 @@ result persistence must also settle, or the Gateway reports the remaining work
 when the window expires. Exit-watcher failures are reported after these drains
 settle.
 
+A confirmed unavailable child Node runtime follows this same graceful drain when
+the effective native service command's Node can still start. The lifecycle owner
+requests a fresh-process supervisor handoff once; it never uses the in-process
+restart fallback for a broken retained runtime. If the service runtime is also
+broken or the latest shutdown records runtime recovery within five minutes, the
+Gateway stays up with degraded readiness for operator repair. See
+[Runtime health](/gateway/health#http-probes) for the health fields and report-only
+cases. A handoff failure after shutdown begins requires a service-owner restart.
+
 On Linux and macOS, this also applies when startup recovers from an unsupported
 Node version and the service manager tracks a launcher parent. The launcher
 forwards the stop signal and waits for the serving Gateway to drain within the

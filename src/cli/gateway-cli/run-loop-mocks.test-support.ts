@@ -114,7 +114,9 @@ const consumeGatewaySuspendHandoff =
   vi.fn<typeof import("../../infra/gateway-suspend-coordinator.js").consumeGatewaySuspendHandoff>();
 const disarmGatewaySuspendHandoff = vi.fn();
 const rollbackGatewayRestartSignalAdmission = vi.fn();
-const requestGatewayRestartWithSignalAdmission = vi.fn(() => ({ status: "emitted" as const }));
+const requestGatewayRestartWithSignalAdmission = vi.fn<
+  typeof import("../../infra/restart.js").requestGatewayRestartWithSignalAdmission
+>(() => ({ status: "emitted" }));
 const writeGatewayRestartHandoff = vi.fn<
   typeof import("../../infra/restart-handoff.js").writeGatewayRestartHandoff
 >(async () => ({
@@ -278,6 +280,12 @@ vi.mock("../../infra/gateway-suspend-coordinator.js", () => ({
   disarmGatewaySuspendHandoff: (...args: unknown[]) => disarmGatewaySuspendHandoff(...args),
   resetGatewaySuspendCoordinatorForLifecycleRestart: () =>
     resetGatewaySuspendCoordinatorForLifecycleRestart(),
+}));
+
+// mock-isolation: Keep persistent shutdown history outside the lifecycle fixture.
+vi.mock("../../infra/gateway-boot-lifecycle.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../infra/gateway-boot-lifecycle.js")>()),
+  readGatewayLastShutdownAsync: async () => undefined,
 }));
 
 vi.mock("../../infra/process-respawn.js", async (importOriginal) => ({

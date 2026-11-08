@@ -5,6 +5,7 @@ import * as restartTrace from "../../gateway/restart-trace.js";
 import { GatewayStartupCleanupError } from "../../gateway/server-shutdown.js";
 import type { startGatewayServer } from "../../gateway/server.js";
 import type { GatewayInstallationReplacement } from "../../gateway/stale-install.js";
+import { readChildRuntimeViability } from "../../infra/child-runtime-viability.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import type { GatewayBootLifecycleCompletion } from "../../infra/gateway-boot-lifecycle.js";
 import { acquireGatewayLock } from "../../infra/gateway-lock.js";
@@ -149,6 +150,7 @@ export async function runGatewayLoop(params: {
     releaseOutputOwner?.();
     releaseOutputOwner = undefined;
     releaseInstallationObserver();
+    releaseRuntimeRecovery();
     signals.close();
     cleanup.releaseProcessLifetime();
   };
@@ -267,6 +269,12 @@ export async function runGatewayLoop(params: {
     alreadyCancelledOwner?: GatewayRestartIntent["successorOwner"],
   ): Promise<void> => {
     await signals.drain();
+    if (!readChildRuntimeViability().available) {
+      gatewayLog.error(
+        "Fresh-process restart failed; the unavailable child runtime cannot recover in-process. Restart through the service owner after repairing its runtime.",
+      );
+      return finishLoopAfterCleanup(1);
+    }
     if (foregroundUpdateClosed) {
       return finishLoopAfterCleanup(1);
     }
@@ -1051,6 +1059,11 @@ export async function runGatewayLoop(params: {
     forceExit: (reason) => cleanup.retain(forceExitAfterStabilityBundle(reason)),
     request,
   });
+  const releaseRuntimeRecovery = eagerLifecycleRuntime.registerGatewayRuntimeRecovery({
+    decision: restartDecision,
+    ownsProcessLifecycle: params.ownsProcessLifecycle === true,
+    isCurrent: () => signals.active && !shuttingDown && terminalExitCode === undefined,
+  });
   const releaseInstallationObserver = registerGatewayRunInstallationReplacement({
     waitForUpdates: eagerLifecycleRuntime.waitForSystemServiceUpdateHandoffs,
     logger: gatewayLog,
@@ -1289,7 +1302,10 @@ export async function runGatewayLoop(params: {
   } catch (error) {
     loopFailure = { error };
   }
-  const failures = await cleanup.settleFinalResources({
+  return cleanup.settleFinalResources({
+    loopFailure,
+    getExitCode: () =>
+      hostExitRequested && terminalExitCode === 0 ? hostExitCode : (terminalExitCode ?? 0),
     retireSignals: () => signals.retire(),
     drainSignals: () => signals.drain(),
     closeTerminalServer: async () => {
@@ -1303,29 +1319,9 @@ export async function runGatewayLoop(params: {
     closeSharedState: () => drainGlobalSingletonLifecycleState("shared-state"),
     releaseLock: releaseLockIfHeld,
     clearStartupWatchdog: startupWatchdog.clear,
-    clearRequestWatchdogs: () => {
-      for (const clear of requestWatchdogs) {
-        clear();
-      }
-      requestWatchdogs.clear();
-    },
+    requestWatchdogs,
     cleanupSignals,
     onSettled: params.onProcessResourcesSettled,
   });
-  if (loopFailure) {
-    failures.unshift(loopFailure.error);
-  }
-  if (failures.length === 1) {
-    throw failures[0];
-  }
-  if (failures.length > 1) {
-    throw new AggregateError(failures, "Gateway loop and final resource cleanup failed", {
-      cause: failures[0],
-    });
-  }
-  const code = hostExitRequested && terminalExitCode === 0 ? hostExitCode : (terminalExitCode ?? 0);
-  // Cleanup failure promotes success, but cannot replace a supervisor-owned
-  // failure status that already selects its terminal recovery behavior.
-  return cleanup.failed && code === 0 ? 1 : code;
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

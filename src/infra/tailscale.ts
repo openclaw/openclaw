@@ -16,6 +16,7 @@ import { signalProcessTree } from "../process/kill-tree.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { settlesWithin } from "../shared/settle-within.js";
 import { extractTailscaleServeGatewayUrls } from "../shared/tailscale-status.js";
+import { assertChildRuntimeAvailable, observeChildRuntime } from "./child-runtime-viability.js";
 import { isVitestRuntimeEnv } from "./env.js";
 import { toErrorObject } from "./errors.js";
 import { resolveExecutableFromPathEnv } from "./executable-path.js";
@@ -217,15 +218,17 @@ async function startTailscaleRouteOwner(
   signal?.throwIfAborted();
   const workerUrl = resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.tailscaleRouteOwner);
   const execArgv = workerUrl.pathname.endsWith(".ts") ? ["--import", "tsx"] : undefined;
+  assertChildRuntimeAvailable();
   const worker = fork(
     fileURLToPath(workerUrl),
     [TAILSCALE_ROUTE_OWNER_ARG, JSON.stringify({ argv })],
     {
       execArgv,
       detached: process.platform !== "win32",
-      stdio: ["ignore", "ignore", "ignore", "ipc"],
+      stdio: ["ignore", "ignore", "pipe", "ipc"],
     },
   );
+  const runtimeFailure = observeChildRuntime(worker);
   let routePid: number | undefined;
   let ready = false;
   let active = false;
@@ -277,10 +280,15 @@ async function startTailscaleRouteOwner(
             }
           }
         });
-        worker.once("error", (error) =>
-          reject(toErrorObject(error, "Tailscale route owner failed")),
-        );
-        worker.once("exit", (code, exitSignal) => {
+        worker.once("error", (error) => {
+          failure = toErrorObject(error, "Tailscale route owner failed");
+          // Failed exec has no process to stop; close publishes its runtime diagnosis.
+          if (worker.pid !== undefined) {
+            reject(failure);
+          }
+        });
+        worker.once("close", (code, exitSignal) => {
+          failure = runtimeFailure() ?? failure;
           active = false;
           resolveExit();
           if (!ready) {

@@ -117,6 +117,37 @@ probes: they still wait for initialization and retain their normal authenticatio
 
 A default or system agent database with pending startup inspection/preparation or a confirmed admission failure keeps readiness false, with `failing: ["agent-database:<id>"]` and the exact admission reason and repair hint in `agentDatabases`. Pending startup inspection is reported there with code `agent-database-inspection-pending`. The HTTP listener, Control UI, and admitted agents remain available while readiness is false; pending optional agents do not hold readiness. Readiness does not wait for post-ready subagent recovery or transcript maintenance. Agent-scoped `sessions.list`, plus `sessions.resolve`, `sessions.describe`, and `models.list`, wait up to 20 seconds for their selected agents to finish startup preparation, then recheck request authorization before reading. Requests targeting healthy agents proceed independently. Unscoped session lists continue returning admitted agents while other stores prepare. Writes still require completed admission. RPC requests refused for pending inspection return `UNAVAILABLE` with `retryable: true` and `retryAfterMs: 250`; callers can retry the same request after that delay. Inspection failures and ownership mismatches remain non-retryable. A refused optional agent can remain isolated while healthy agents serve requests. Gateway ready announcements use the same readiness decision.
 
+If Node.js is upgraded or removed while the Gateway is running, its retained
+runtime may stop launching child workers even though the Gateway process is
+still alive. A confirmed missing executable or runtime loader failure marks
+`childRuntime.available` as `false` in health/status and makes `/readyz` return
+`503` with `failing: ["child-runtime"]`. Worker requests explain which runtime
+failed and ask you to restart the Gateway. The diagnosis is logged once and
+further worker launches fail immediately; ordinary worker crashes do not mark
+the runtime unavailable. A health or readiness check that finds the executable
+missing publishes the same diagnosis, even when resident workers still serve reads.
+
+For a service-managed Gateway, the lifecycle owner checks the effective service
+command's Node with a bounded `--version` probe. On macOS, the loaded launchd
+job must also match the service definition on disk. If the probe succeeds, the
+Gateway requests one graceful restart: new work is fenced, active work drains,
+and the supervisor starts a fresh process. An in-process restart cannot repair
+a missing runtime and is never used for this recovery.
+
+The Gateway stays up in report-only mode if the service Node is also unusable,
+the command or recent restart history cannot be verified, or runtime recovery
+was the most recent shutdown within five minutes. Unmanaged foreground and
+embedded Gateways, external supervisors without a verifiable native service
+command, and `OPENCLAW_NO_RESPAWN=1` also remain report-only. Repair the service
+runtime, then use `openclaw gateway restart` (or your process owner's restart).
+
+The existing `childRuntime.available: false` health field and `child-runtime`
+readiness reason remain visible. The runtime log records `restart-requested` or
+`report-only` with the decision reason. Repeated worker failures do not request
+another restart. If a prepared supervisor handoff later fails, the old
+Gateway completes shutdown instead of attempting an in-process restart; inspect
+the logs and restart through the service owner.
+
 A broken Telegram or other channel account can also make `/readyz` return `503` while `/startupz` remains started. Neither check replaces the other: startup completion alone does not certify agent or channel availability.
 
 Disabled, unconfigured, and ordinarily unlinked accounts do not fail channel readiness. An enabled, configured account with a recorded terminal disconnect, blocked lifecycle, or unavailable ingress still fails its health check even if it becomes unlinked. For example, a terminal WhatsApp logout makes `/readyz` return `503` with `failing: ["whatsapp"]` in detailed responses. Terminal disconnects and blocked accounts require operator action; the health monitor does not restart them.

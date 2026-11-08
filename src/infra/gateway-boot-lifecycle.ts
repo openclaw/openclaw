@@ -18,12 +18,9 @@ import {
   buildGatewayCrashLoopBreakerDecision,
   inspectGatewayCrashLoopBreakerInDatabase,
   maintenanceStartupReasons,
+  readGatewayLastShutdownInDatabase,
 } from "./gateway-boot-lifecycle.kernel.js";
-import {
-  executeSqliteQuerySync,
-  executeSqliteQueryTakeFirstSync,
-  getNodeSqliteKysely,
-} from "./kysely-sync.js";
+import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
 import { pathMayExistSync } from "./path-existence.js";
 import { createSqliteWorkerWriteAdmission } from "./sqlite-worker-store.js";
 
@@ -89,26 +86,22 @@ export function readGatewayLastShutdown(
 ): { reason: string | null; completedAtMs: number } | undefined {
   try {
     return withExistingOpenClawStateDatabaseReadOnly(
-      ({ db }) => {
-        const row = executeSqliteQueryTakeFirstSync(
-          db,
-          getNodeSqliteKysely<GatewayBootLifecycleDatabase>(db)
-            .selectFrom("gateway_boot_lifecycle")
-            .select(["reason", "completed_at_ms as completedAtMs"])
-            .where("outcome", "in", ["clean_stop", "planned_restart", "forced_stop"])
-            .where("completed_at_ms", "is not", null)
-            .orderBy("completed_at_ms", "desc")
-            .limit(1),
-        );
-        return row?.completedAtMs == null
-          ? undefined
-          : { ...row, completedAtMs: row.completedAtMs };
-      },
+      ({ db }) => readGatewayLastShutdownInDatabase(db),
       { env },
     );
   } catch {
     return undefined;
   }
+}
+
+/** Runtime recovery captures history through the existing read worker before Node fails. */
+export async function readGatewayLastShutdownAsync(env: NodeJS.ProcessEnv = process.env) {
+  const reply = await executeExistingOpenClawStateRead(
+    { env },
+    { type: "gatewayBoot.lastShutdown", input: undefined },
+    { current: true },
+  );
+  return reply?.shutdown;
 }
 
 export function readGatewayLastInstallationReplacement(env: NodeJS.ProcessEnv = process.env) {

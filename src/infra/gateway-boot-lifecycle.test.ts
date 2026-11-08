@@ -17,6 +17,7 @@ import {
   inspectGatewayCrashLoopBreakerAsync,
   readGatewayLastInstallationReplacement,
   readGatewayLastShutdown,
+  readGatewayLastShutdownAsync,
   recordGatewayBootStart,
   recordGatewayCrashLoopRecovery,
   repairGatewayMaintenanceStartupFailures,
@@ -187,33 +188,44 @@ describe("gateway crash-loop breaker", () => {
     },
   );
 
-  it("reads the last shutdown without mistaking recovery segments or live boots for stops", async () => {
-    const lifecycle = createLifecycleDb();
-    expect(readGatewayLastShutdown(lifecycle.env)).toBeUndefined();
-    const bootId = recordGatewayBootStart(lifecycle.env, 1_000);
-    await completeGatewayBootLifecycle(
-      bootId,
-      { outcome: "clean_stop", reason: "stop (SIGTERM)" },
-      lifecycle.env,
-      3_000,
-    );
-    insertBootRows(lifecycle, [
-      {
-        bootId: "older-stop",
-        startedAtMs: 1_500,
-        completedAtMs: 2_000,
-        outcome: "planned_restart",
-        reason: "restart (SIGUSR2)",
-      },
-      { bootId: "recovery", startedAtMs: 3_001, completedAtMs: 4_000, outcome: "safe_mode_stable" },
-      { bootId: "running", startedAtMs: 4_001 },
-    ]);
+  it.each([
+    ["sync", readGatewayLastShutdown],
+    ["worker", readGatewayLastShutdownAsync],
+  ] as const)(
+    "reads the last shutdown through %s without mistaking recovery or live boots for stops",
+    async (_mode, readShutdown) => {
+      const lifecycle = createLifecycleDb();
+      expect(await readShutdown(lifecycle.env)).toBeUndefined();
+      const bootId = recordGatewayBootStart(lifecycle.env, 1_000);
+      await completeGatewayBootLifecycle(
+        bootId,
+        { outcome: "clean_stop", reason: "stop (SIGTERM)" },
+        lifecycle.env,
+        3_000,
+      );
+      insertBootRows(lifecycle, [
+        {
+          bootId: "older-stop",
+          startedAtMs: 1_500,
+          completedAtMs: 2_000,
+          outcome: "planned_restart",
+          reason: "restart (SIGUSR2)",
+        },
+        {
+          bootId: "recovery",
+          startedAtMs: 3_001,
+          completedAtMs: 4_000,
+          outcome: "safe_mode_stable",
+        },
+        { bootId: "running", startedAtMs: 4_001 },
+      ]);
 
-    expect(readGatewayLastShutdown(lifecycle.env)).toEqual({
-      reason: "stop (SIGTERM)",
-      completedAtMs: 3_000,
-    });
-  });
+      expect(await readShutdown(lifecycle.env)).toEqual({
+        reason: "stop (SIGTERM)",
+        completedAtMs: 3_000,
+      });
+    },
+  );
 
   it("trips from the persisted unclean boot count", () => {
     const db = createLifecycleDb();

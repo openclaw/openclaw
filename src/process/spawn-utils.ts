@@ -6,7 +6,7 @@ import { toErrorObject } from "../infra/errors.js";
 import { assertAppContainerSpawnSupported } from "../infra/windows-appcontainer-spawn.js";
 import { prepareOomScoreAdjustedSpawn } from "./linux-oom-score.js";
 import { getSpawnBroker } from "./spawn-broker/context.js";
-import { brokerSpawnOptions } from "./spawn-broker/host.js";
+import { brokerSpawnOptions } from "./spawn-broker/pipe.js";
 import { recordChildProcessSpawn } from "./spawn-diagnostics.js";
 import type { SpawnInitiation } from "./spawn-initiation.js";
 

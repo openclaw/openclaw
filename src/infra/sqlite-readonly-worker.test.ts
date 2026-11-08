@@ -278,8 +278,11 @@ describe.each(["async", "sync"] as const)("SQLite read-only snapshot worker (%s)
   }
 
   function expectBudget(timeout: number): void {
+    // Runtime diagnosis can probe Node separately after a failed snapshot launch.
     const calls =
-      mode === "sync" ? vi.mocked(spawnSync).mock.calls : vi.mocked(execFile).mock.calls;
+      mode === "sync"
+        ? vi.mocked(spawnSync).mock.calls.filter(([, argv]) => argv?.[0] !== "--version")
+        : vi.mocked(execFile).mock.calls;
     expect(calls).toHaveLength(1);
     expect(calls[0]?.[2]).toMatchObject({ timeout, killSignal: "SIGKILL", windowsHide: true });
     if (mode === "sync") {
