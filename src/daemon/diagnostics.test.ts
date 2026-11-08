@@ -30,6 +30,36 @@ function makeTempStateDir(): string {
 }
 
 describe("readLastGatewayErrorLine", () => {
+  it("opens nonblocking before admitting a diagnostic file and closes rejected handles", async () => {
+    const file = path.join(makeTempStateDir(), "gateway.log");
+    fs.writeFileSync(file, "");
+    const handle = await fsPromises.open(file, "r");
+    const stat = await handle.stat();
+    vi.spyOn(stat, "isFile").mockReturnValue(false);
+    vi.spyOn(handle, "stat").mockResolvedValue(stat);
+    const close = vi.spyOn(handle, "close");
+    const open = vi.spyOn(fsPromises, "open").mockResolvedValue(handle);
+
+    await expect(readGatewayLogTailLines(file)).resolves.toEqual([]);
+    expect(open).toHaveBeenCalledWith(file, fs.constants.O_RDONLY | fs.constants.O_NONBLOCK);
+    expect(close).toHaveBeenCalledOnce();
+    expect(handle.fd).toBe(-1);
+  });
+
+  it("closes a diagnostic handle when descriptor inspection fails", async () => {
+    const file = path.join(makeTempStateDir(), "gateway.log");
+    fs.writeFileSync(file, "");
+    const handle = await fsPromises.open(file, "r");
+    const failure = new Error("diagnostic stat failed");
+    vi.spyOn(handle, "stat").mockRejectedValue(failure);
+    const close = vi.spyOn(handle, "close");
+    vi.spyOn(fsPromises, "open").mockResolvedValue(handle);
+
+    await expect(readGatewayLogTailLines(file)).rejects.toBe(failure);
+    expect(close).toHaveBeenCalledOnce();
+    expect(handle.fd).toBe(-1);
+  });
+
   it("reads the launchd supervisor log instead of a state-dir stderr file on darwin", async () => {
     const stateDir = makeTempStateDir();
     const homeDir = makeTempStateDir();
