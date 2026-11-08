@@ -22,7 +22,9 @@ import {
 } from "./lib/npm-publish-plan.mjs";
 import { collectExtensionPackageJsonCandidates } from "./lib/plugin-publication-candidates.ts";
 import { isPluginPublicationEnabled } from "./lib/plugin-publication-target.mjs";
+import { createReleaseEvidenceReplay } from "./lib/release-evidence-replay.mjs";
 import { parseReleaseVersion } from "./lib/release-version.mjs";
+import { loadNpmEvidenceReplay, npmEvidenceBinding } from "./plugin-npm-evidence-reuse.mjs";
 import {
   inspectPackageTarballBytes,
   verifyPluginPublicationArtifact,
@@ -180,7 +182,9 @@ export async function authenticatePreparedNpmArtifact(params) {
   const { createReleaseEvidenceClient } = await import("./release-ci-summary.mjs");
   const { authenticateFullReleaseValidationEvidence } =
     await import("./validate-full-release-validation-evidence.mjs");
-  const client = params.evidenceClient ?? createReleaseEvidenceClient(repository);
+  const client =
+    params.evidenceClient ??
+    createReleaseEvidenceClient(repository, { immutableReads: params.immutableReads });
   const runId = String(params.fullReleaseValidationRunId);
   const runAttempt = Number(params.fullReleaseValidationRunAttempt);
   const { manifest } = await client.loadManifest(runId, runAttempt);
@@ -257,15 +261,27 @@ export async function authenticatePreparedNpmArtifact(params) {
     );
   }
   const publisherPolicySha256 =
-    producerSha === workflowSha && params.publisherPolicySha256
+    producerSha === workflowSha && params.publisherPolicySha256 && !params.immutableReads
       ? params.publisherPolicySha256
       : sha256(client.getWorkflowSource(producerSha, WORKFLOW_PATH));
-  authenticated.revalidateAuthority?.();
+  if (params.immutableReads && producerSha === workflowSha && params.publisherPolicySha256) {
+    requireValue(
+      publisherPolicySha256 === params.publisherPolicySha256,
+      "Prepared npm publisher policy differs from immutable source",
+    );
+  }
+  const revalidateAuthority = params.immutableReads
+    ? async () => {
+        await params.immutableReads.revalidate(client);
+        await authenticated.revalidateAuthority?.();
+      }
+    : authenticated.revalidateAuthority;
+  await revalidateAuthority?.();
   return {
     artifact: descriptor,
     workflowSha: producerSha,
     publisherPolicySha256,
-    revalidateAuthority: authenticated.revalidateAuthority,
+    revalidateAuthority,
   };
 }
 
@@ -714,7 +730,7 @@ async function main(argv) {
   };
   let adoption;
   if (["load", "consume", "authorize"].includes(command)) {
-    adoption = await authenticatePreparedNpmArtifact({
+    const adoptionParams = {
       ...common,
       selectionMode: common.selectionMode ?? process.env.PREPARED_NPM_SELECTION_MODE,
       plugins: options["--plugins"] ?? process.env.PREPARED_NPM_PLUGINS ?? "",
@@ -722,14 +738,35 @@ async function main(argv) {
       workflowFullRef: process.env.GITHUB_REF,
       fullReleaseValidationRunId: process.env.PREPARED_NPM_FRV_RUN_ID,
       fullReleaseValidationRunAttempt: process.env.PREPARED_NPM_FRV_RUN_ATTEMPT,
-    });
+    };
+    if (options["--evidence-output"] || process.env.PREPARED_NPM_EVIDENCE_ID) {
+      const binding = npmEvidenceBinding(adoptionParams);
+      const { createReleaseEvidenceClient } = await import("./release-ci-summary.mjs");
+      adoptionParams.immutableReads = options["--evidence-output"]
+        ? createReleaseEvidenceReplay(binding)
+        : await loadNpmEvidenceReplay({
+            binding,
+            artifactId: process.env.PREPARED_NPM_EVIDENCE_ID,
+            artifactDigest: process.env.PREPARED_NPM_EVIDENCE_DIGEST,
+            token: common.token,
+            archivePath: process.env.RUNNER_TEMP + "/plugin-npm-evidence.zip",
+            client: createReleaseEvidenceClient(common.repository),
+          });
+    }
+    adoption = await authenticatePreparedNpmArtifact(adoptionParams);
+    if (options["--evidence-output"]) {
+      requireValue(command === "load", "Only trusted preview load can write an evidence handoff");
+      writeFileSync(options["--evidence-output"], adoptionParams.immutableReads.serialize(), {
+        flag: "wx",
+      });
+    }
     Object.assign(common, {
       workflowSha: adoption.workflowSha,
       publisherPolicySha256: adoption.publisherPolicySha256,
     });
   }
   if (command === "authorize") {
-    adoption.revalidateAuthority?.();
+    await adoption.revalidateAuthority?.();
   } else if (command === "seal") {
     const producer = {
       repository: common.repository,
@@ -763,7 +800,7 @@ async function main(argv) {
       artifact: adoption.artifact,
       archivePath: options["--archive-path"],
     });
-    adoption.revalidateAuthority?.();
+    await adoption.revalidateAuthority?.();
     writeFileSync(options["--output"], JSON.stringify(manifest));
     outputValues(options["--github-output"], {
       has_candidates: true,
@@ -787,7 +824,7 @@ async function main(argv) {
       outputDir: options["--output-dir"],
       verificationOutput: options["--verification-output"],
     });
-    adoption.revalidateAuthority?.();
+    await adoption.revalidateAuthority?.();
     outputValues(options["--github-output"], {
       package_name: result.manifest.package.name,
       package_version: result.manifest.package.version,
