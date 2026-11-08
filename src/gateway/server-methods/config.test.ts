@@ -522,3 +522,34 @@ it("uses write-snapshot policies before merging manifest-backed model IDs", asyn
     },
   ]);
 });
+
+// The card's first acceptance arm: a real config.set call must carry the caller's identity into the
+// write. commitGatewayConfigWrite is the boundary the RPC layer hands the actor to, so asserting it
+// here proves the handler resolves the client rather than leaving the journal to name the Gateway.
+it("config.set passes the calling client to the write as an audit actor", async () => {
+  const harness = createConfigHandlerHarness({
+    method: "config.set",
+    params: { raw: JSON.stringify({ gateway: { port: 19_002 } }), baseHash: "base-hash" },
+    overrides: {
+      client: {
+        connect: {
+          client: { id: "openclaw-control-ui", mode: "webchat" },
+          device: { id: "dev-1" },
+        },
+        clientIp: "10.0.0.9",
+        connId: "conn-42",
+      } as never,
+    },
+  });
+  await expectDefined(configHandlers["config.set"], "config.set handler")(harness.options);
+  expect(configWriteMocks.commitGatewayConfigWrite).toHaveBeenCalledWith(
+    expect.objectContaining({
+      actor: {
+        actor: "openclaw-control-ui",
+        deviceId: "dev-1",
+        clientIp: "10.0.0.9",
+        connId: "conn-42",
+      },
+    }),
+  );
+});

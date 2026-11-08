@@ -419,7 +419,7 @@ export async function writeConfigFileFromContext(
     previousMetadata: resolveConfigStatMetadata(previousStat),
     changedPathCount: changedPaths.size,
     changedPaths: [...changedPaths],
-    origin: options.auditOrigin,
+    attribution: { origin: options.auditOrigin, actor: options.auditActor },
     hasMetaBefore,
     hasMetaAfter: hasConfigMeta(stampedOutputConfig),
     gatewayModeBefore,

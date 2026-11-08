@@ -13,6 +13,7 @@ import { formatErrorMessage } from "../infra/errors.js";
 import { resolveRequiredHomeDir } from "../infra/home-dir.js";
 import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
 import { resolveOpenClawDevSourceRoot } from "./dev-source-root.js";
+import { ensurePrivateJitiCacheRoots } from "./jiti-cache-privacy.js";
 import { PLUGIN_SOURCE_MODULE_EXTENSIONS } from "./native-module-require.js";
 import { PUBLIC_SURFACE_SOURCE_EXTENSIONS } from "./package-entrypoints.js";
 import {
@@ -163,13 +164,11 @@ function resolvePluginLoaderJitiFsCacheDir(params: LoaderModuleResolveParams = {
   if (stat) {
     installMarker = `${Math.trunc(stat.mtimeMs)}-${stat.size}`;
   }
-  return path.join(
-    resolveJitiFsCacheRoot(),
-    "openclaw",
-    "jiti",
-    version,
-    sanitizeJitiCachePathSegment(installMarker),
-  );
+  const marker = sanitizeJitiCachePathSegment(installMarker);
+  const cacheRoot = resolveJitiFsCacheRoot();
+  const fsCacheDir = path.join(cacheRoot, "openclaw", "jiti", version, marker);
+  ensurePrivateJitiCacheRoots(cacheRoot, fsCacheDir);
+  return fsCacheDir;
 }
 
 function isSafePluginSdkSubpathSegment(subpath: string): boolean {

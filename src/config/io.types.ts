@@ -38,6 +38,20 @@ export type ConfigWriteAuditOrigin =
   | "plugin-install"
   | "cli";
 
+/**
+ * Transport identity of the client that asked for a write.
+ *
+ * A Gateway-mediated write is performed by the Gateway process, so pid/argv in the journal name the
+ * Gateway for every RPC caller. These fields are what still distinguishes the callers.
+ */
+export type ConfigWriteAuditActor = {
+  /** Client id from the connection handshake (for example `cli` or a Control UI client). */
+  actor: string;
+  deviceId: string;
+  clientIp: string;
+  connId: string;
+};
+
 export type ConfigWriteOptions = {
   /** Offline database-config repair cannot inspect or record shared database state. */
   databaseAccess?: "none";
@@ -47,6 +61,8 @@ export type ConfigWriteOptions = {
   inputBase?: ConfigMutationBase;
   /** Semantic writer label recorded in the config audit journal. */
   auditOrigin?: ConfigWriteAuditOrigin;
+  /** Caller identity recorded beside the label when the write came from an identified client. */
+  auditActor?: ConfigWriteAuditActor;
   /** Read-time env snapshot used to validate `${VAR}` restoration decisions. */
   envSnapshotForRestore?: Record<string, string | undefined>;
   /** Only use envSnapshotForRestore for the config path that produced it. */
