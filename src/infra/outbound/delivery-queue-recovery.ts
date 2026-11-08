@@ -4,6 +4,7 @@ import type {
   ChannelMessageSendCommitContext,
   ChannelMessageUnknownSendReconciliationResult,
 } from "../../channels/message/types.js";
+import { deliverPendingDeliveryNotice } from "../../channels/turn/pending-delivery-notice.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { sleep } from "../../utils/sleep.js";
 import {
@@ -291,7 +292,7 @@ async function settleQueuedFailure(
     // Failed custody forbids sends even after a restart. Keep the completion
     // payload until its idempotent owner projection succeeds, then compact once.
     if (entry.deliveryCompletion) {
-      await settleDurableDelivery(
+      const completion = await settleDurableDelivery(
         entry.deliveryCompletion,
         settlement.outcome === "failed" && settlement.rejectionError !== undefined
           ? { rejectionError: settlement.rejectionError }
@@ -299,6 +300,16 @@ async function settleQueuedFailure(
         params.stateDir,
         stateContext,
       );
+      if (completion.state === "unknown" && entry.deliveryCompletion.kind === "pending-final") {
+        // Persisted failure custody prevents answer replay. Hand its existing notice
+        // debt to the lifecycle sender before compacting this recovery checkpoint.
+        await deliverPendingDeliveryNotice(
+          entry.deliveryCompletion.sessionKey,
+          entry.deliveryCompletion.storePath,
+          entry.deliveryCompletion.agentId,
+          entry.deliveryCompletion.intentId,
+        );
+      }
     }
     const spoolPaths = collectEntrySpoolPaths(
       preparedOutboundPayloads(entry.preparedBatch),

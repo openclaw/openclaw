@@ -18,6 +18,7 @@ export async function deliverPendingDeliveryNotice(
   sessionKey: string,
   storePath: string,
   agentId?: string,
+  expectedIntentId?: string,
 ): Promise<void> {
   const resolvedAgentId = agentId ?? resolveAgentIdFromSessionKey(sessionKey);
   const pending = await withSessionEntriesFromStoresInWorker(
@@ -39,6 +40,7 @@ export async function deliverPendingDeliveryNotice(
         !runtime ||
         !notice ||
         notice.state !== "owed" ||
+        (expectedIntentId !== undefined && notice.intentId !== expectedIntentId) ||
         !context?.channel ||
         !context.to ||
         deliveryContextKey(context) !== deliveryContextKey(deliveryContextFromSession(entry)) ||
