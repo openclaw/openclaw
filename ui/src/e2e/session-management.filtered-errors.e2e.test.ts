@@ -53,7 +53,7 @@ suite.define(() => {
       await page.goto(`${suite.server.baseUrl}sessions`);
       const roster = page.locator("openclaw-sessions-page");
       const search = roster.locator(".sessions-toolbar__search input");
-      await search.pressSequentially("observatory", { delay: 40 });
+      await search.fill("observatory");
       await roster.getByRole("button", { name: "Load more sessions", exact: true }).click();
       await expect
         .poll(() => gateway.getRequests("sessions.list"))
