@@ -11,6 +11,8 @@ import {
   loadSessionEntry,
 } from "../config/sessions/session-accessor.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
+import { resolveInitialDoctorHealthContributions } from "../flows/doctor-health-contributions-initial.js";
+import { exitCodeFromFindings, runDoctorLintChecks } from "../flows/doctor-lint-flow.js";
 import * as boundaryPath from "../infra/boundary-path.js";
 import { recordDeferredPluginMigrations } from "../infra/deferred-plugin-migrations.js";
 import { readDeferredPluginSessionImport } from "../infra/deferred-plugin-session-sources.js";
@@ -72,6 +74,35 @@ describe("doctor state integrity", () => {
     },
   };
   const decline = () => vi.fn(async (_params: { message: string }) => false);
+  async function lintStateIntegrity(cfg: OpenClawConfig) {
+    const unrelatedRunner = async () => {
+      throw new Error("Unrelated Doctor contribution must not run");
+    };
+    const contribution = resolveInitialDoctorHealthContributions({
+      runStructuredHealthRepairs: unrelatedRunner,
+      runGatewayConfigHealth: unrelatedRunner,
+      runAuthProfileMigration: unrelatedRunner,
+      runAuthProfileHealth: unrelatedRunner,
+      runGatewayAuthHealth: unrelatedRunner,
+      runLegacyStateHealth: unrelatedRunner,
+    }).find((entry) => entry.id === "doctor:state-integrity");
+    if (!contribution) {
+      throw new Error("Missing state integrity contribution");
+    }
+    const result = await runDoctorLintChecks(
+      {
+        mode: "lint",
+        cfg,
+        cwd: tempHome,
+        env: process.env,
+        runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+      },
+      { checks: contribution.healthChecks, onlyIds: ["core/doctor/state-integrity"] },
+    );
+    expect(result.checksRun).toBe(1);
+    return result.findings;
+  }
+
   function createAgentDir(agentId: string, nested = true) {
     fs.mkdirSync(path.join(stateDir, "agents", agentId, ...(nested ? ["agent"] : [])), {
       recursive: true,
@@ -238,17 +269,72 @@ describe("doctor state integrity", () => {
   });
 
   it.each(["pairing", "explicit"])(
-    "requires missing OAuth storage for %s configuration",
+    "warns without blocking readiness when legacy OAuth storage is missing for %s configuration",
     async (mode) => {
       if (mode === "explicit") {
         setTestEnvValue("OPENCLAW_OAUTH_DIR", path.join(tempHome, ".oauth"));
       }
       const cfg: OpenClawConfig =
         mode === "pairing" ? { channels: { telegram: { dmPolicy: "pairing" } } } : {};
+      const findings = await lintStateIntegrity(cfg);
+      expect(findings).toContainEqual(
+        expect.objectContaining({ message: "OAuth dir is missing.", severity: "warning" }),
+      );
+      expect(exitCodeFromFindings(findings, "error")).toBe(0);
       const confirmRuntimeRepair = decline();
       await noteStateIntegrity(cfg, { confirmRuntimeRepair, note: noteMock });
       expect(hasRepairPromptMessage(confirmRuntimeRepair, "Create OAuth dir at")).toBe(true);
-      expect(stateIntegrityText()).toContain("CRITICAL: OAuth dir missing");
+      expect(stateIntegrityText()).toContain("OAuth dir missing");
+      expect(stateIntegrityText()).not.toContain("CRITICAL: OAuth dir missing");
+      expect(
+        fs.existsSync(process.env.OPENCLAW_OAUTH_DIR ?? path.join(stateDir, "credentials")),
+      ).toBe(false);
+    },
+  );
+
+  it("creates missing legacy OAuth storage only after consent", async () => {
+    const oauthDir = path.join(tempHome, ".oauth");
+    setTestEnvValue("OPENCLAW_OAUTH_DIR", oauthDir);
+    const confirmRuntimeRepair = vi.fn(async ({ message }: { message: string }) =>
+      message.startsWith("Create OAuth dir at"),
+    );
+    await noteStateIntegrity({}, { confirmRuntimeRepair, note: noteMock });
+    expect(hasRepairPromptMessage(confirmRuntimeRepair, "Create OAuth dir at")).toBe(true);
+    expect(fs.statSync(oauthDir).isDirectory()).toBe(true);
+    expect(doctorChangesText()).toContain("Created OAuth dir:");
+    expect(
+      (await lintStateIntegrity({})).some((finding) => finding.message === "OAuth dir is missing."),
+    ).toBe(false);
+  });
+
+  it.each(["state", "oauth", "sessions"])(
+    "still fails readiness for an unwritable %s directory",
+    async (kind) => {
+      const directory = kind === "state" ? stateDir : path.join(tempHome, kind);
+      fs.mkdirSync(directory, { recursive: true });
+      setTestEnvValue(
+        "OPENCLAW_OAUTH_DIR",
+        kind === "oauth" ? directory : path.join(tempHome, ".oauth"),
+      );
+      const cfg = withMainAgentRoster(
+        kind === "sessions" ? { session: { store: path.join(directory, "sessions.json") } } : {},
+      );
+      const accessSync = fs.accessSync;
+      vi.spyOn(fs, "accessSync").mockImplementation((target, mode) => {
+        if (target === directory && mode === fs.constants.W_OK) {
+          throw Object.assign(new Error("permission denied"), { code: "EACCES" });
+        }
+        return accessSync(target, mode);
+      });
+      const findings = await lintStateIntegrity(cfg);
+      expect(findings).toContainEqual(
+        expect.objectContaining({
+          path: directory,
+          severity: "error",
+          message: expect.stringContaining("not writable"),
+        }),
+      );
+      expect(exitCodeFromFindings(findings, "error")).toBe(1);
     },
   );
 
