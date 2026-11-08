@@ -96,6 +96,11 @@ function isPermissionFailure(error: unknown): boolean {
   if (code === "EACCES" || code === "EPERM") {
     return true;
   }
+  // fs-safe wraps adjacent failures in AggregateError without a cause; the
+  // original permission failure sits in the errors list.
+  if (error instanceof AggregateError) {
+    return error.errors.some((nested) => isPermissionFailure(nested));
+  }
   // SAFETY: AggregateError-style writers chain the original fs error on cause.
   const cause = (error as { cause?: unknown }).cause;
   return cause instanceof Error && cause !== error && isPermissionFailure(cause);
@@ -166,11 +171,11 @@ function readInheritedMacOsAclEntries(dirPath: string): MacOsAclEntry[] {
     .filter((captured) => captured.entry.includes("file_inherit"))
     .map((captured) => ({
       entry: captured.entry
-        .replace(/\\bfile_inherit\\b/g, "")
-        .replace(/\\bdirectory_inherit\\b/g, "")
-        .replace(/\\blimit_inherit\\b/g, "")
-        .replace(/\\bonly_inherit\\b/g, "")
-        .replace(/\\s+/g, " ")
+        .replace(/\bfile_inherit\b/g, "")
+        .replace(/\bdirectory_inherit\b/g, "")
+        .replace(/\blimit_inherit\b/g, "")
+        .replace(/\bonly_inherit\b/g, "")
+        .replace(/\s+/g, " ")
         .trim(),
     }))
     .filter((captured) => captured.entry.length > 0)
@@ -356,7 +361,7 @@ export function privilegedInspectionScript(): string {
     '  process.stderr.write((parent.stderr || "ls -lde failed") + "\\n");',
     "    process.exit(1);",
     "  }",
-    '  inheritedParent = String(parent.stdout || "").split("\\n").map((line) => line.trim()).filter((line) => /^\\d+:\\s/.test(line) && line.includes("file_inherit")).map((line) => ({ position: Number.parseInt(line, 10), entry: line.replace(/^\\d+:\\s*/, "").replace(/\\bfile_inherit\\b/g, "").replace(/\\bdirectory_inherit\\b/g, "").replace(/\\blimit_inherit\\b/g, "").replace(/\\bonly_inherit\\b/g, "").replace(/\\binherited\\b/g, "").replace(/\\s+/g, "").trim() })).filter((item) => item.entry.length > 0);',
+    '  inheritedParent = String(parent.stdout || "").split("\\n").map((line) => line.trim()).filter((line) => /^\\d+:\\s/.test(line) && line.includes("file_inherit")).map((line) => ({ position: Number.parseInt(line, 10), entry: line.replace(/^\\d+:\\s*/, "").replace(/\\bfile_inherit\\b/g, "").replace(/\\bdirectory_inherit\\b/g, "").replace(/\\blimit_inherit\\b/g, "").replace(/\\bonly_inherit\\b/g, "").replace(/\\binherited\\b/g, "").replace(/\\s+/g, " ").trim() })).filter((item) => item.entry.length > 0);',
     "}",
     // A destination that does not exist yet is a privileged first creation:
     // there is no policy to capture, and ls would fail on the missing path.
@@ -367,7 +372,7 @@ export function privilegedInspectionScript(): string {
     '  process.stderr.write((listed.stderr || "ls -lde failed") + "\\n");',
     "    process.exit(1);",
     "  }",
-    '  acl = String(listed.stdout || "").split("\\n").map((line) => line.trim()).filter((line) => /^\\d+:\\s/.test(line)).map((line) => ({ position: Number.parseInt(line, 10), entry: line.replace(/^\\d+:\\s*/, "").replace(/\\binherited\\b/g, "").replace(/\\s+/g, "").trim() })).filter((item) => item.entry.length > 0);',
+    '  acl = String(listed.stdout || "").split("\\n").map((line) => line.trim()).filter((line) => /^\\d+:\\s/.test(line)).map((line) => ({ position: Number.parseInt(line, 10), entry: line.replace(/^\\d+:\\s*/, "").replace(/\\binherited\\b/g, "").replace(/\\s+/g, " ").trim() })).filter((item) => item.entry.length > 0);',
     "}",
     "process.stdout.write(JSON.stringify({ target: cur, existing, acl, inheritedParent }));",
   ].join("");
@@ -453,14 +458,29 @@ function publishConfigFileWithSudo(filePath: string, content: string): void {
       stdio: "inherit",
     });
     assertSpawnSucceeded(`sudo mv ${tempPath} ${target}`, published);
-    // Flush the directory entry so the rename itself survives a crash.
-    flushPrivileged(path.dirname(target));
+    // Flush the directory entry so the rename itself survives a crash. The
+    // publication is already complete at this point; a flush failure is a
+    // warning, not a failed command that would misreport a landed update.
+    try {
+      flushPrivileged(path.dirname(target));
+    } catch (flushError) {
+      defaultRuntime.error(
+        `Warning: the CoreDNS configuration was published but its directory flush failed: ${String(flushError)}`,
+      );
+    }
   } catch (error) {
-    // The staged file is inert and the operator's file was never touched.
-    spawnSync("sudo", ["rm", "-f", tempPath], {
+    // The staged file is inert and the operator's file was never touched,
+    // unless its cleanup also fails - then the leftover's path is reported,
+    // because it may carry the unpublished configuration.
+    const cleanup = spawnSync("sudo", ["rm", "-f", tempPath], {
       encoding: "utf-8",
-      stdio: "ignore",
+      stdio: ["ignore", "ignore", "inherit"],
     });
+    if (cleanup.status !== 0) {
+      defaultRuntime.error(
+        `Warning: the staged copy could not be removed and still holds the unpublished configuration: ${tempPath}`,
+      );
+    }
     throw error;
   }
 }
