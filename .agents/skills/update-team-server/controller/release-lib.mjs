@@ -3618,7 +3618,7 @@ function retainedRepairBuild(action, root, input) {
   if (action === "request") {
     suspensionObject(
       input,
-      ["operation", "target", "current", "pid", "generation", "journalSha256", ...(Object.hasOwn(input, "configSha256") ? ["configSha256"] : [])],
+      ["operation", "target", "current", "pid", "generation", "journalSha256", ...(Object.hasOwn(input, "configSha256") ? ["configSha256"] : []), ...(input.target === "main" ? ["frozenMain"] : [])],
       "retained build binding",
     );
     const paths = retainedRepairPaths(root, input.operation);
@@ -3631,12 +3631,20 @@ function retainedRepairBuild(action, root, input) {
       migrationJson(source.bytes).candidate?.sha !== input.current
     )
       reject("retained build incident binding changed");
+    let target = input.target;
+    if (target === "main") {
+      const intentPath = `${paths.prefix}.build-intent.json`;
+      // begin validates the full captured binding; replay never selects a newer target.
+      target = lstatSync(intentPath, { throwIfNoEntry: false })
+        ? migrationJson(migrationFile(intentPath, paths.owner, { mode: 0o600, limit: retainedSnapshotLimit }).bytes).request.target.sha
+        : input.frozenMain;
+    }
     return retainedRepairInput(
       {
         version: 1,
         operation: input.operation,
         source: source.descriptor,
-        target: { sha: input.target },
+        target: { sha: target },
         process: { pid: input.pid, generation: input.generation },
         ...(Object.hasOwn(input, "configSha256") ? { configSha256: input.configSha256 } : {}),
       },
@@ -3647,6 +3655,8 @@ function retainedRepairBuild(action, root, input) {
     retainedRepairInput(input, true);
     const paths = retainedRepairPaths(root, input.operation),
       pathname = `${paths.prefix}.build-intent.json`;
+    if (lstatSync(join(paths.directory, `retired-build-${input.operation}`), { throwIfNoEntry: false }))
+      reject("retained build operation is retired");
     let snapshot;
     if (lstatSync(pathname, { throwIfNoEntry: false })) {
       snapshot = retainedRepairBuildSnapshot(root, input.operation).snapshot;
@@ -6804,6 +6814,78 @@ function retainedAdoptionRetirePrestart(root, request, inspectOnly = false) {
   if (!isDeepStrictEqual(retainedRepairRead(paths.pathname).descriptor, restored)) reject("prestart restoration changed");
   return receipt;
 }
+function retainedAdoptionRetireBuild(root, input, inspectOnly = false) {
+  suspensionObject(input, ["adoption", "buildIntent"], "prebuild retirement request");
+  const request = input.adoption, paths = retainedAdoptionRequest(root, request), lock = retainedRepairLock();
+  retainedAdoptionRunner(request);
+  const gate = retainedAdoptionGate(paths);
+  const previous = retainedAdoptionCompletion(root, { operation: gate.value.operation, intentSha256: gate.value.intent.sha256 });
+  if (!isDeepStrictEqual(previous.value.closure, request.oldClosure) ||
+      !isDeepStrictEqual(previous.intent.request.source, request.source))
+    reject("prebuild retirement incumbent or source changed");
+  retainedAdoptionLegacy(paths, request.source);
+  for (let index = 0; index < 4; index++) {
+    const approved = request.replacement[index];
+    if (!isDeepStrictEqual(migrationFile(approved.path, paths.owner, { privateOnly: false, mode: index ? 0o644 : 0o755, limit: migrationJournalLimit }).descriptor, approved))
+      reject("prebuild retirement replacement changed");
+  }
+  validMigrationDescriptor(input.buildIntent, "path", "prebuild retirement intent");
+  const name = basename(input.buildIntent.path), operation = name.slice(7, 43);
+  const build = retainedRepairPaths(root, operation);
+  if (input.buildIntent.path !== build.prefix + ".build-intent.json") reject("prebuild retirement intent path is not canonical");
+  const archive = join(paths.directory, "retired-build-" + operation), intentPath = join(archive, "intent.json");
+  let intent;
+  if (lstatSync(intentPath, { throwIfNoEntry: false })) {
+    intent = migrationJson(retainedRepairRead(intentPath).bytes);
+    if (intent.version !== 1 || intent.kind !== "retained-repair-build-retirement" ||
+        !isDeepStrictEqual(intent.request, input) || !isDeepStrictEqual(intent.lock, lock))
+      reject("prebuild retirement retry changed request or lock");
+  } else {
+    // Only the installed incumbent can validate its complete captured snapshot.
+    const checked = spawnSync(repairNativeNode, [request.oldClosure[1].path,
+      "retained-repair-build", "check", root, "@stdin"], {
+      input: JSON.stringify({ operation }), encoding: "utf8", timeout: 60000,
+      stdio: ["pipe", "pipe", "pipe", "ignore", "ignore", "ignore", "ignore", "ignore", "ignore", 9],
+    });
+    if (checked.error || checked.signal || checked.status !== 0) reject("incumbent prebuild inspection failed");
+    const result = migrationJson(Buffer.from(checked.stdout));
+    if (result.phase !== "BUILD_PREPARED" || !isDeepStrictEqual(result.intent, input.buildIntent))
+      reject("prebuild retirement intent changed");
+    const snapshot = migrationJson(retainedRepairBoundFile(input.buildIntent).bytes);
+    if (!isDeepStrictEqual(snapshot.request.source, request.source) || !isDeepStrictEqual(snapshot.closure, request.oldClosure))
+      reject("prebuild retirement belongs to another incumbent or incident");
+    const owner = retainedRepairNative(root, { snapshot, record: {} }, "live-b");
+    const artifacts = ["build-intent", "build-original", "build-witness"].map(suffix =>
+      retainedRepairRead(build.prefix + "." + suffix + ".json").descriptor);
+    intent = { version: 1, kind: "retained-repair-build-retirement", request: input, lock, owner, artifacts };
+  }
+  // No origin observation means this operation never reached off-path publication.
+  if (readdirSync(paths.directory).some(name => name.startsWith(basename(build.prefix) + ".") &&
+      !intent.artifacts.some(file => basename(file.path) === name)) ||
+      lstatSync(repairNativeGuardPath(root, operation), { throwIfNoEntry: false }))
+    reject("prebuild retirement refuses origin, build or lifecycle effects");
+  const files = intent.artifacts.map(source => {
+    const archived = { ...source, path: join(archive, basename(source.path)) };
+    const moved = lstatSync(archived.path, { throwIfNoEntry: false });
+    if (moved && lstatSync(source.path, { throwIfNoEntry: false })) reject("prebuild retirement has duplicate active evidence");
+    retainedRepairBoundFile(moved ? archived : source);
+    return { source, archived, moved: Boolean(moved) };
+  });
+  const { bootId, cgroup, ...binding } = intent.owner.process;
+  if (!isDeepStrictEqual(retainedRepairObserveLive(root, binding), intent.owner)) reject("prebuild retirement live owner changed");
+  retainedAdoptionLegacy(paths, request.source);
+  if (!isDeepStrictEqual(retainedAdoptionReadClosure(paths).map(file => file.descriptor), request.oldClosure) ||
+      !isDeepStrictEqual(retainedRepairLock(), lock)) reject("prebuild retirement authority changed");
+  if (inspectOnly) return { phase: "BUILD_PREPARED", buildIntent: input.buildIntent, owner: intent.owner, artifacts: intent.artifacts };
+  if (!lstatSync(archive, { throwIfNoEntry: false })) { mkdirSync(archive, { mode: 0o700 }); syncPath(paths.directory); }
+  exactDirectory(archive, paths.owner, "prebuild retirement archive", { privateOnly: true });
+  retainedAdoptionJSON(intentPath, intent);
+  for (const file of files) if (!file.moved) renameSync(file.source.path, file.archived.path);
+  syncPath(archive); syncPath(paths.directory);
+  const receipt = { ...intent, phase: "BUILD_RETIRED", artifacts: files.map(({ source, archived }) => ({ source, archived })) };
+  retainedAdoptionJSON(join(archive, "retirement.json"), receipt);
+  return receipt;
+}
 function retainedAdoptionPredecessor(root, paths, predecessor, request) {
   suspensionObject(predecessor, ["gate", "archive", "complete"], "controller adoption predecessor");
   for (const descriptor of Object.values(predecessor)) validMigrationDescriptor(descriptor, "path", "controller adoption predecessor artifact");
@@ -7019,6 +7101,8 @@ function retainedAdoptionEntryGuard(entryCommand, entryArgs) {
 }
 function retainedControllerAdoption(action, root, input) {
   switch (action) {
+    case "inspect-build": return retainedAdoptionRetireBuild(root, input, true);
+    case "retire-build": return retainedAdoptionRetireBuild(root, input);
     case "inspect-prestart": return retainedAdoptionRetirePrestart(root, input, true);
     case "retire-prestart": return retainedAdoptionRetirePrestart(root, input);
     case "bootstrap": return retainedBootstrap(root, input);
