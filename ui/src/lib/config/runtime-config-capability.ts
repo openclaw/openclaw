@@ -24,11 +24,12 @@ import type { RuntimeConfigEditor } from "./runtime-config-editor.ts";
 type OptionalRuntimeConfigCapabilityKey = "canSet" | "canApply" | "canPatch" | "canOpenFile";
 export type RuntimeConfigCapability = Omit<
   RuntimeConfigEditor,
-  OptionalRuntimeConfigCapabilityKey | "snapshotOwner"
+  OptionalRuntimeConfigCapabilityKey | "snapshotOwner" | "ensureSchemaLoaded"
 > &
   Partial<Pick<RuntimeConfigEditor, OptionalRuntimeConfigCapabilityKey>> & {
     ensureDisplayLoaded: () => Promise<void>;
     refreshDisplay: (options?: { background?: boolean }) => Promise<void>;
+    ensureSchemaLoaded: () => Promise<void>;
   };
 
 /** Bootstrap display facts stay eager; editing is activated by the first config operation. */
@@ -134,9 +135,6 @@ export function createRuntimeConfigCapability(
     }
     if (updateEditorConnection) {
       updateEditorConnection(snapshot);
-      if (pendingSchema && !editor?.schemaRead && state.connected) {
-        void loadSchema(false);
-      }
       return;
     }
     const nextCanRead = hasOperatorReadAccess(snapshot.hello?.auth ?? null);
@@ -322,17 +320,8 @@ export function createRuntimeConfigCapability(
   };
   const loadSchema = (refresh: boolean): Promise<Result<void, string>> => {
     if (editor) {
-      if (refresh) {
-        pendingSchema = null;
-        return editor.refreshSchema();
-      }
-      const loading = editor.ensureSchemaLoaded();
-      // Keep this caller's receipt when a reconnect replaces the editor's read.
-      const receipt = editor.schemaRead;
-      const result = loading.then(() => receipt ?? { ok: true as const, value: undefined });
-      // An unadmitted pre-hello request stays pending until the editor can read.
-      pendingSchema = receipt ? null : result;
-      return result;
+      pendingSchema = null;
+      return refresh ? editor.refreshSchema() : editor.ensureSchemaLoaded();
     }
     if (pendingSchema) {
       return pendingSchema;

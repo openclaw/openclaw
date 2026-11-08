@@ -67,11 +67,16 @@ export function createRuntimeConfigEditor(
   const listeners = new Set<(state: RuntimeConfigState) => void>();
   const loads = new Map<"config" | "schema", Promise<unknown>>();
   let schemaRead: Promise<Result<void, string>> | null = null;
+  let schemaDemand: RuntimeConfigState["client"] = null;
   let disposed = false;
 
   const publish = () => {
     if (disposed) {
       return;
+    }
+    // A pre-hello read belongs to this client and starts independently of config.
+    if (schemaDemand && schemaDemand === state.client && canLoadConfigSchema()) {
+      void loadSchema();
     }
     savedNotice.sync();
     for (const listener of listeners) {
@@ -109,13 +114,8 @@ export function createRuntimeConfigEditor(
   };
   const loadConfigOnce = (task: () => Promise<unknown>) =>
     loads.get("config") ?? run(task, "config");
-  // The display reader keeps its request; editing takes custody without waiting
-  // to expose independent schema reads or an explicit replacement refresh.
-  if (initialRead) {
-    void run(() => initialRead, "config");
-  }
-
   const loadSchema = () => {
+    schemaDemand = null;
     if (loads.has("schema") && schemaRead) {
       return schemaRead;
     }
@@ -167,6 +167,10 @@ export function createRuntimeConfigEditor(
     run,
     mutate,
     resetLoads: () => {
+      // Only the same client's first permitted hello keeps unadmitted demand.
+      if (schemaRead || schemaDemand !== state.client || !canLoadConfigSchema()) {
+        schemaDemand = null;
+      }
       loads.clear();
       schemaRead = null;
     },
@@ -187,6 +191,11 @@ export function createRuntimeConfigEditor(
     }
     return hasOperatorReadAccess(snapshot.hello?.auth ?? null);
   };
+  // The display reader keeps its request; editing takes custody without waiting
+  // to expose independent schema reads or an explicit replacement refresh.
+  if (initialRead) {
+    void run(() => initialRead, "config");
+  }
   return {
     snapshotOwner: writes,
     get state() {
@@ -215,9 +224,15 @@ export function createRuntimeConfigEditor(
       appliedRefresh.reconcile();
     },
     ensureSchemaLoaded: async () => {
-      if (!state.configSchema && canLoadConfigSchema()) {
-        await loadSchema();
+      if (!state.configSchema) {
+        if (canLoadConfigSchema()) {
+          return loadSchema();
+        }
+        if (!state.connected) {
+          schemaDemand = state.client;
+        }
       }
+      return { ok: true as const, value: undefined };
     },
     refresh: async (options?: { background?: boolean }) => {
       appliedRefresh.cancel();
