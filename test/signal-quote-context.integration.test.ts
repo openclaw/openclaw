@@ -297,12 +297,6 @@ it("renders the actual quoted ID and UUID author while native, tool and CLI repl
   expect(first.prefix).not.toBe(second.prefix);
 });
 
-it("does not normalize a quoted UUID into a fabricated phone number", async () => {
-  const result = await receive();
-  expect(result.prefix).toContain(`uuid:${author}`);
-  expect(result.prefix).not.toContain("+234567890480123456789");
-});
-
 it("keeps edited-event identity separate from quoted identity and the original native target", async () => {
   const result = await receive({ edit: true });
   expect(result.context.MessageSid).toBe(String(currentId));

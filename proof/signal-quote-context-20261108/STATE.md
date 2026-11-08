@@ -1,12 +1,10 @@
 # Signal quote context repair
 
-- Status: validated and independently reviewed; frozen local-commit handoff to the parent coordinator. No push, PR, deployment or merge is authorized for this worker.
-- Source base: `d43ff5a7e42ae141d1ec2eb2ade3216bfb31e916`; branch: `codex/signal-quote-context-20261108`.
-- Stable source/test snapshot: seven-file SHA-256 manifest digest `253fed0cad13f9f286abbd4b7406c4b6e301b09bba5ae0d0dbc44ebb51b34c72`; fresh independent read-only review found no issues and confirmed unchanged bytes before/after.
-- Outcome: filtered quote ID/body/UUID author use the existing ReplyChain contract. Canonical current/edit ReplyToId, native reply body, visibility and last-entry ownership remain intact.
-- Final behavioral result: 99 passed across three maintained test shards, 183.11 seconds total. Root integration: 4; native monitor sibling: 28; inbound/core suites: 67. See [PROOF.md](PROOF.md) for commands, boundaries and limitations.
-- Final fixture root-only rerun: 4 passed, 120.21 seconds wrapper wall time. Unchanged production/owner/sibling evidence above is reused. Targeted source/test types passed; offline lint and pinned-Bun diagnostic parity passed with 0 warnings/errors. Exact test-line allocation: +432; maintained ratchet passed with 44 lines inherited slack.
-- Tool qualification: earlier setup-only failures were resolved by supplying the clean setup container's system CA target and shasum path; the official pinned Bun fork passed checksum, architecture and revision verification before offline use. No validation bypass or production configuration change occurred.
-- Proof environment: Node 26.13.0, pnpm 12.15.0, own frozen dependencies, cleared environment/fake home, network-isolated bwrap execution, fictional events and loopback transport. Only dependency/tool staging used authorized setup networking.
-- Model dispatch/core session recording and durable outbox persistence remain unproved. No real Signal account, live provider or phone-visible behavior is claimed.
-- Closer: parent coordinator owns independent acceptance, publication and exact-head external review. Human merge and production-action gates remain.
+- Status: native-review test cleanup validated and independently reviewed; frozen local-commit handoff to the parent coordinator. This worker does not push, edit the PR, deploy or merge.
+- Source: clean starting head `911e3f9298db6ef7cb96f8800b9cbe8e79b69ae4`; implementation base `d43ff5a7e42ae141d1ec2eb2ade3216bfb31e916`; branch `codex/signal-quote-context-20261108`.
+- Native feedback: comment [6718063807](https://github.com/openclaw/openclaw/pull/195044#issuecomment-6718063807) reviewed the starting head, requested duplicate-test consolidation and retained missing real Signal/Gateway/agent-model proof before merge. No introduced production finding was reported.
+- Cleanup: delete only the repeated UUID receive case; preserve the complete rendered tuple, native/tool/CLI targeting, edit and no-quote cases. Production and independent mention artifacts stay unchanged.
+- Frozen root test SHA-256: `c672dd4949060ffd724df2c853ddb05e7bf9937aa8a4b28f3623f0eee87fcc77`. Exactly six LF lines removed (325 → 319); allocation 432 → 426, matching root319 + unchanged inbound-owner delta107.
+- Current proof: root-only 3/3 cases passed (54.11s file / 56.28s wrapper); targeted types and lint passed (0 warnings/errors, offline pinned-Bun parity). Exact staged ratchet passed at +426 with 44 lines inherited slack. Formatting parity and fresh bounded independent review passed with no findings; no setup expansion or full-suite rerun.
+- Reused history: 99 tests passed at the implementation revision, followed by a four-case fixture-only rerun. The unchanged 95 other tests are reused; no new aggregate run is claimed. See [PROOF.md](PROOF.md).
+- Gates: shipped real Signal → Gateway → agent/model journey, live account/device proof and core durable persistence remain unproved. Cleanup is not merge approval. Parent owns independent acceptance, publication and exact-head external review.

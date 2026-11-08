@@ -2,7 +2,7 @@
 
 ## Source and outcome
 
-Base: `d43ff5a7e42ae141d1ec2eb2ade3216bfb31e916` (public OpenClaw main). The implementation and tests are committed together with this proof on the assigned task branch. Issues: [#195035](https://github.com/openclaw/openclaw/issues/195035) (quoted identity), [#195036](https://github.com/openclaw/openclaw/issues/195036) (UUID author).
+Implementation base: `d43ff5a7e42ae141d1ec2eb2ade3216bfb31e916` (public OpenClaw main). Published implementation revision: `911e3f9298db6ef7cb96f8800b9cbe8e79b69ae4`. The native-review follow-up removes one duplicate test and updates its exact allocation and proof; production source is unchanged. Issues: [#195035](https://github.com/openclaw/openclaw/issues/195035) (quoted identity), [#195036](https://github.com/openclaw/openclaw/issues/195036) (UUID author).
 
 Signal now carries the filtered incoming quote ID/body/author in the existing `ReplyChain` contract. Its canonical current `ReplyToId` remains unchanged. The superseded quote-to-scalar supplemental projection is removed. The quote parser classifies legacy UUID authors before number normalization and consumes the modern number/UUID fields, retaining existing alias policy matching.
 
@@ -44,11 +44,11 @@ Before production changes, the new rendered-context regressions completed with *
 
 The first candidate run passed the original rendered-ID/UUID assertion and all 33 then-present owner tests. Two later root controls exposed registry fixture lifetime: runtime setup clears the registry per test. Registration was moved from beforeAll to beforeEach; no production routing change was needed.
 
-Final behavioral command: **99 passed across three shards**, 183.11 seconds wrapper wall time. Root integration: 4 passed in 61.64 seconds; native-delivery sibling: 28 passed in 97.03 seconds; inbound owner and core adapter: 67 passed in 20.72 seconds combined. An earlier standalone owner-file run passed all 33 then-present cases in 79.35 seconds; the final owner suite includes the two additional author-shape cases. These are observed local wall times, not a CI runtime prediction.
+Historical implementation validation at `911e3f9298db6ef7cb96f8800b9cbe8e79b69ae4`: **99 passed across three shards**, 183.11 seconds wrapper wall time. Root integration: 4 passed in 61.64 seconds; native-delivery sibling: 28 passed in 97.03 seconds; inbound owner and core adapter: 67 passed in 20.72 seconds combined. An earlier standalone owner-file run passed all 33 then-present cases in 79.35 seconds; the final owner suite includes the two additional author-shape cases. These are observed local wall times, not a CI runtime prediction.
 
-Lint required fixture-only braces and a caught async HTTP listener; production and assertions stayed unchanged. After that final fixture edit, the affected root-only command passed **4/4** again: 117.71 seconds file duration, 120.21 seconds wrapper wall time, about 1% test-body time. Production and unchanged owner/native/core evidence above were reused. The public monitor/core consumer composition is needed to detect silent tool/CLI retargeting; narrower field-only checks missed both defects. No artificial sleep or polling was added.
+In that implementation revision, lint required fixture-only braces and a caught async HTTP listener; production and assertions stayed unchanged. After that final fixture edit, the affected root-only command passed **4/4** again: 117.71 seconds file duration, 120.21 seconds wrapper wall time, about 1% test-body time. Production and unchanged owner/native/core evidence above were reused. The public monitor/core consumer composition is needed to detect silent tool/CLI retargeting; narrower field-only checks missed both defects. No artificial sleep or polling was added.
 
-Static checks completed on the final content:
+Historical static checks completed at the published implementation revision:
 
 - Maintained `run-tsgo` targeted config: passed. The task-local config extends the root compiler options, sets `rootDir` to the repository root and `noEmit`, and includes the five changed production files, both changed TypeScript test files, and normal source/package/UI/test ambient declarations. Its import closure is checked normally; no casts or suppressions weaken the changed contract.
 - Maintained `run-oxlint` on all seven source/test/routing files with that config: **0 warnings, 0 errors**, including CI diagnostic parity with the exact pinned official Bun fork. Offline lint's initial staging failure was a setup failure; the clean setup container was qualified with the system CA target and shasum path, and the normal official stager verified artifact checksum, architecture and revision before offline execution.
@@ -56,7 +56,25 @@ Static checks completed on the final content:
 - Source/test formatting and documentation formatting use the maintained formatter and its pinned-Bun/oxfmt parity check. `git diff --check` is part of commit closeout.
 - Fresh independent source review: **clean**, including a root-fixture-only refresh after the lint fix. Final seven-file SHA-256 manifest digest: `253fed0cad13f9f286abbd4b7406c4b6e301b09bba5ae0d0dbc44ebb51b34c72`.
 
-Author simplify pass retained the existing owners and removed the duplicate scalar quote path. The five production files add 51 and remove 31 lines (net +20); no manager, persistent state, SDK export or alternate formatter was added. Net test growth is +432 lines: the actual public monitor/formatter/tool/CLI/native composition plus edits, last-entry debounce, policy and supported author identities. Each protects a distinct observed failure or affected boundary.
+The implementation simplify pass retained the existing owners and removed the duplicate scalar quote path. The five production files add 51 and remove 31 lines (net +20); no manager, persistent state, SDK export or alternate formatter was added. That revision had +432 net test lines. The native-review cleanup below reduces this to +426 by deleting one repeated receive case; the distinct public monitor/formatter/tool/CLI/native, edit, last-entry debounce, visibility and author-shape contracts remain covered.
+
+## Native-review follow-up
+
+[Native review comment 6718063807](https://github.com/openclaw/openclaw/pull/195044#issuecomment-6718063807), published on November 8, 2026, explicitly reviewed head `911e3f9298db6ef7cb96f8800b9cbe8e79b69ae4`. It reported no introduced production finding, requested consolidation of the redundant UUID receive case, and retained a before-merge requirement for shipped Signal → Gateway → real agent/model behavior proof. These are separate dispositions; source confidence and synthetic harness checks do not satisfy the missing real journey.
+
+The duplicate case repeated the first case's exact input. The retained first case already requires the complete rendered message-ID/UUID-author/body tuple for both quoted IDs and checks native, message-tool and CLI current targets. The edit and no-quote cases remain. The cleanup deletes exactly six LF bytes of test lines (325 → 319) and one repeated receive invocation. The unchanged inbound owner test contributes +107 lines relative to the original base, so the exact allocation is **319 + 107 = 426**, reduced from 432; the shared baseline is unchanged.
+
+Affected root-only validation command:
+
+```sh
+node scripts/run-vitest.mjs test/signal-quote-context.integration.test.ts --maxWorkers=1
+```
+
+The revised fixture passed **3/3 cases**, 54.11 seconds file duration and 56.28 seconds wrapper wall time. Targeted types passed. Affected root-only lint passed with **0 warnings and 0 errors**, including offline pinned-Bun/oxlint diagnostic parity. The exact +426 allocation passed the maintained staged ratchet against the original base: **6,574,072 <= 6,574,116**, preserving 44 lines slack. Formatting parity and `git diff --check` are part of this cleanup's closeout.
+
+The prior 99-test and final-four-case runs above are historical evidence. The unchanged **95** owner/native/core tests are reused, not claimed as rerun, and no new aggregate is presented. Root test SHA-256 after cleanup: `c672dd4949060ffd724df2c853ddb05e7bf9937aa8a4b28f3623f0eee87fcc77`. Fresh bounded independent review confirmed the deletion and allocation reduction with no findings; the complete rendered tuple and all other reviewed source files are unchanged. Production source and the closed independent mention qualification remain unchanged.
+
+The missing real journey remains unfulfilled. No real account, live provider/model execution, phone capture or production send is authorized or performed by this cleanup. The coordinator owns that proof requirement and any publication/review refresh; this local test repair neither clears the native review nor grants merge authority.
 
 ## Proof limits and gates
 
@@ -64,4 +82,4 @@ Model dispatch and core session recording are substituted. The test uses a real 
 
 Existing fake-clock batching/policy owner tests and unchanged native/core sibling tests supply their own bounded contracts; they do not become whole-system proof. Native/container serialization baseline evidence was already independently reproduced before this repair; the new committed integration exercises native HTTP. Container/live-device parity remains unclaimed by this new test.
 
-Fresh independent precommit source review and local required checks are complete. Normal exact-head external CI/review and human merge gates remain. This worker does not push, open a PR, deploy or merge. No private account, message history or business integration source is included.
+The historical implementation review and local checks above do not clear the current native proof requirement. The cleanup passed its affected checks and fresh bounded independent review of the exact six-line deletion and allocation reduction; normal exact-head external CI/review, the missing real journey and human merge gates remain. This worker does not push, open a PR, deploy or merge. No private account, message history or business integration source is included.
