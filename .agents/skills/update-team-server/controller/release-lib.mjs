@@ -3995,6 +3995,77 @@ function retainedRepairEntry(action, root, operation, hash) {
   return retainedRepairTransaction(action, root, file.descriptor);
 }
 
+function retainedRepairRetire(root, operation, hash) {
+  if (!/^[a-f0-9]{64}$/.test(hash)) reject("repair retirement requires the completed journal SHA256");
+  const paths = retainedRepairPaths(root, operation), lock = retainedRepairLock();
+  const archive = join(paths.directory, `retired-repair-${operation}`);
+  const archivedJournal = join(archive, "activation.json"), intentPath = join(archive, "intent.json");
+  const moved = lstatSync(archivedJournal, { throwIfNoEntry: false });
+  if (moved && lstatSync(paths.pathname, { throwIfNoEntry: false }))
+    reject("repair retirement refuses a new canonical journal");
+  const source = retainedRepairRead(moved ? archivedJournal : paths.pathname);
+  const record = validRetainedRepairJournal(migrationJson(source.bytes));
+  if (record.operation !== operation || record.phase !== "REPAIR_COMPLETED" || source.descriptor.sha256 !== hash)
+    reject("repair retirement requires the exact completed operation and journal");
+  let intent;
+  if (moved) {
+    intent = migrationJson(retainedRepairRead(intentPath).bytes);
+    if (intent.version !== 1 || intent.kind !== "retained-repair-retirement" || intent.operation !== operation ||
+        !isDeepStrictEqual(source.descriptor, { ...intent.journal, path: archivedJournal }))
+      reject("repair retirement archive differs from its intent");
+  } else {
+    const context = retainedRepairLifecycleContext(root, { journal: source.descriptor });
+    const acceptance = record.lifecycle.verified.acceptance;
+    if (!isDeepStrictEqual(record.lifecycle.completed.acceptance, acceptance) ||
+        acceptance.path !== `${paths.prefix}.acceptance-receipt.json`)
+      reject("repair retirement acceptance differs from completed activation");
+    // Verification already owns semantic acceptance. Consume its immutable receipt,
+    // without dispatching another marker or reinterpreting mutable session history.
+    retainedRepairBoundFile(acceptance);
+    const owner = retainedRepairNative(root, context, "live-c");
+    const target = context.snapshot.request.target.sha, pointers = record.lifecycle.selected;
+    if (pointers.current.sha !== target || owner.process.release !== join(root, "releases", target))
+      reject("repair retirement target differs from accepted activation");
+    if (!lstatSync(archive, { throwIfNoEntry: false })) {
+      mkdirSync(archive, { mode: 0o700 }); syncPath(paths.directory);
+    }
+    exactDirectory(archive, paths.owner, "repair retirement archive", { privateOnly: true });
+    // Preserve absolute-path/inode bindings in existing receipts. Archive copies
+    // are a closed evidence bundle; original immutable artifacts remain retained.
+    const artifacts = readdirSync(paths.directory).filter(name => name.startsWith(basename(paths.prefix) + ".")).sort().map(name => {
+      const file = retainedRepairRead(join(paths.directory, name));
+      return { source: file.descriptor, archived: retainedRepairFile(join(archive, name), file.bytes) };
+    });
+    const entry = lstatSync(archive);
+    intent = { version: 1, kind: "retained-repair-retirement", operation, journal: source.descriptor,
+      target, owner, pointers, acceptance, lock, archive: { path: archive, device: entry.dev, inode: entry.ino }, artifacts };
+    retainedRepairFile(intentPath, Buffer.from(JSON.stringify(intent) + "\n"));
+  }
+  const entry = exactDirectory(archive, paths.owner, "repair retirement archive", { privateOnly: true });
+  if (!isDeepStrictEqual(intent.archive, { path: archive, device: entry.dev, inode: entry.ino }) ||
+      !isDeepStrictEqual(intent.lock, lock)) reject("repair retirement archive or lock identity changed");
+  retainedRepairBoundFile(intent.acceptance);
+  for (const artifact of intent.artifacts) retainedRepairBoundFile(artifact.archived);
+  const { bootId, cgroup, ...binding } = intent.owner.process;
+  if (!isDeepStrictEqual(retainedRepairObserveLive(root, binding), intent.owner))
+    reject("repair retirement accepted native generation changed");
+  for (const name of ["current", "previous"])
+    if (!isDeepStrictEqual(retainedRepairPointer(root, name), intent.pointers[name]))
+      reject("repair retirement accepted pointers changed");
+  if (!isDeepStrictEqual(retainedRepairLock(), intent.lock)) reject("repair retirement lock identity changed");
+  if (!moved) {
+    if (!isDeepStrictEqual(retainedRepairRead(paths.pathname).descriptor, intent.journal))
+      reject("repair retirement journal changed before archival");
+    renameSync(paths.pathname, archivedJournal);
+  }
+  // Slot release is the sole rename, after the whole bundle and intent are durable.
+  // Replay after that rename finishes both directory fsyncs and publishes the receipt.
+  syncPath(archive); syncPath(paths.directory);
+  const receipt = { ...intent, archivedJournal: { ...intent.journal, path: archivedJournal } };
+  retainedRepairFile(join(archive, "retirement.json"), Buffer.from(JSON.stringify(receipt) + "\n"));
+  return receipt;
+}
+
 function retainedRepairEvent(context, name, create, validate) {
   const pathname = `${context.paths.prefix}.lifecycle-${name}.json`;
   if (lstatSync(pathname, { throwIfNoEntry: false })) {
@@ -7864,6 +7935,10 @@ try {
     case "retained-repair-entry":
       if (args.length !== 4) reject("usage: retained-repair-entry begin|resume ROOT OPERATION HASH");
       result = JSON.stringify(retainedRepairEntry(...args));
+      break;
+    case "retained-repair-retire":
+      if (args.length !== 3) reject("usage: retained-repair-retire ROOT OPERATION COMPLETED_JOURNAL_SHA256");
+      result = JSON.stringify(retainedRepairRetire(...args));
       break;
     case "retained-repair-lifecycle":
       if (args.length !== 3) reject("usage: retained-repair-lifecycle ACTION ROOT INPUT");
