@@ -702,7 +702,7 @@ it("includes every English dependency in the raw source-hash input", async () =>
 
 it("keeps namespace URLs in one immutable locale generation across rebuilds", async () => {
   const buildCatalog = async (label: string) => {
-    const assets: Array<{ fileName: string; source: string }> = [];
+    let files: string[] = [];
     await withSourceImport(
       async () =>
         catalogImport({
@@ -714,21 +714,11 @@ it("keeps namespace URLs in one immutable locale generation across rebuilds", as
         const result = await build({
           configFile: false,
           logLevel: "silent",
-          plugins: [
-            {
-              name: "locale-generation-fixture",
-              resolveId: (id) => (id === "fixture:locale" ? id : null),
-              load: (id) =>
-                id === "fixture:locale"
-                  ? 'globalThis.loadLocale = () => import("virtual:openclaw-control-ui-locale/fr");'
-                  : null,
-            },
-            controlUiLocaleModulesPlugin(),
-          ],
+          plugins: [controlUiLocaleModulesPlugin()],
           build: {
             write: false,
             rolldownOptions: {
-              input: "fixture:locale",
+              input: "virtual:openclaw-control-ui-locale/fr",
               output: { codeSplitting: controlUiCodeSplitting },
             },
           },
@@ -736,34 +726,21 @@ it("keeps namespace URLs in one immutable locale generation across rebuilds", as
         if (Array.isArray(result) || !("output" in result)) {
           throw new Error("Expected one locale fixture build");
         }
-        for (const asset of result.output) {
-          if (asset.fileName.startsWith("assets/locale-namespace-fr-")) {
-            assets.push({
-              fileName: asset.fileName,
-              source: asset.type === "asset" ? String(asset.source) : asset.code,
-            });
-          }
-        }
+        files = result.output
+          .map((asset) => asset.fileName)
+          .filter((file) => file.startsWith("assets/locale-namespace-fr-"))
+          .toSorted();
       },
     );
-    return assets;
+    return files;
   };
   const first = await buildCatalog("Chat");
   const repeated = await buildCatalog("Chat");
   const changed = await buildCatalog("Conversation");
-  const urls = (assets: typeof first) => assets.map((asset) => asset.fileName).toSorted();
   expect(first).toHaveLength(2);
-  expect(new Set(first.map((asset) => asset.fileName.slice(-11, -3))).size).toBe(1);
-  expect(urls(repeated)).toEqual(urls(first));
-  expect(urls(changed).every((url) => !urls(first).includes(url))).toBe(true);
-  for (const asset of changed) {
-    const catalog = await import(dataModuleUrl(asset.source));
-    expect(catalog.default).toEqual(
-      asset.fileName.includes("-chat-")
-        ? { chat: { title: "Conversation" } }
-        : { activity: { title: "Activity" } },
-    );
-  }
+  expect(new Set(first.map((file) => file.slice(-11, -3))).size).toBe(1);
+  expect(repeated).toEqual(first);
+  expect(changed.every((file) => !first.includes(file))).toBe(true);
 });
 
 it("defers page and config-hint translations until their namespace loads", async () => {

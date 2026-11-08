@@ -293,7 +293,7 @@ describe("Control UI mount fallback", () => {
     }
   });
 
-  it("does not begin recovery while the unsupported browser screen is loading", async () => {
+  it("keeps browser guidance recovery manual and preserves fallback artwork", async () => {
     const fetch = vi.fn().mockResolvedValue({ ok: true });
     const win = boot(fetch);
 
@@ -302,11 +302,6 @@ describe("Control UI mount fallback", () => {
 
     expect(fetch).not.toHaveBeenCalled();
     expect(win.document.getElementById("openclaw-mount-fallback")?.hidden).toBe(true);
-  });
-
-  it("preserves fallback artwork when browser guidance fails to load", () => {
-    const win = boot();
-    win.dispatchEvent(new win.Event("openclaw-control-ui-unsupported-browser"));
     win.dispatchEvent(new win.Event("openclaw-control-ui-unsupported-browser-failed"));
 
     expect(fallbackElement(win).hidden).toBe(false);

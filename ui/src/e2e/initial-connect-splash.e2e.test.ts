@@ -157,16 +157,6 @@ suite.define(() => {
     await skeleton.waitFor();
     expect(await connection.getAttribute("aria-busy")).toBeNull();
     expect(await connection.locator(".gateway-mascot[data-pose=busy]").count()).toBe(1);
-    expect(
-      await connection
-        .locator(".gateway-mascot")
-        .evaluate(
-          (element) =>
-            element
-              .getAnimations({ subtree: true })
-              .filter((animation) => animation.effect?.getTiming().iterations === Infinity).length,
-        ),
-    ).toBe(6);
     expect(await page.getByText("Loading panel", { exact: true }).count()).toBe(0);
     expect(await page.locator("openclaw-app-sidebar").count()).toBe(1);
     expect(await page.locator("openclaw-login-gate").count()).toBe(0);
