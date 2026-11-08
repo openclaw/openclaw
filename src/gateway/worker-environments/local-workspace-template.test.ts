@@ -8,7 +8,7 @@ import type { prepareSandboxDependencyTemplate } from "../../agents/sandbox/depe
 import { withWorktreeAllocationLease } from "../../agents/worktrees/allocation.js";
 import { createCopyWorktreeBackend } from "../../agents/worktrees/filesystem-backend.test-support.js";
 import { requireGit } from "../../agents/worktrees/git.js";
-import { withWorktreePreparationTiming } from "../../agents/worktrees/preparation-timing.js";
+import { withWorktreePreparationTiming as withTiming } from "../../agents/worktrees/preparation-timing.js";
 import { listTemplatesAsync } from "../../agents/worktrees/template-registry-async.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { gitNullConfigPath } from "../../infra/git-exec.js";
@@ -174,9 +174,7 @@ it("isolates dependency clones and rebuilds after lockfile changes", async ({ si
   expect(await read(first, dependencyFile)).toBe("consumer edit\n");
   expect(await git(second, "branch", "--show-current")).toBe("openclaw/second");
   expect(mocks.install).toHaveBeenCalledOnce();
-  const third = await withWorktreePreparationTiming("managed", () =>
-    clone("changed-lock", changedCommit),
-  );
+  const third = await withTiming("managed", () => clone("changed-lock", changedCommit));
   expect(await read(third, dependencyFile)).toBe(secondLock);
   expect(await read(third, "pnpm-lock.yaml")).toBe(secondLock);
   expect(mocks.install).toHaveBeenCalledTimes(2);
@@ -184,6 +182,8 @@ it("isolates dependency clones and rebuilds after lockfile changes", async ({ si
     template: "cold",
     "template.reason": "ready",
     "template.missReason": "commit-changed",
+    "template.refreshAttempted": false,
+    "template.refreshRejectReason": "refresh-unavailable",
     "template.priorSourceCommit": baseCommit.slice(0, 12),
     "template.requestedSourceCommit": changedCommit.slice(0, 12),
   });
