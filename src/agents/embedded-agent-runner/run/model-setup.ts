@@ -32,7 +32,6 @@ import {
   assertAgentHarnessExecutionEnvironment,
   prepareAgentHarnessNativeToolPolicyRestricted,
 } from "../../harness/execution-environment.js";
-import { readCodexAccountAuthMode } from "../../harness/model-catalog.js";
 import { getRegisteredAgentHarness } from "../../harness/registry.js";
 import { ensureSelectedAgentHarnessPlugin } from "../../harness/runtime-plugin.js";
 import { selectAgentHarness } from "../../harness/selection.js";
@@ -431,18 +430,6 @@ export async function resolveEmbeddedRunModelSetup(params: {
       });
     observedRoutes = routeVariants ? listModelCatalogObservedRoutes(routeVariants) : undefined;
   } else {
-    const agentId = runParams.agentId;
-    const accountAuthMode =
-      runParams.authProfileId || !runParams.config || !agentId
-        ? undefined
-        : readCodexAccountAuthMode(agentHarness, {
-            config: runParams.config,
-            agentId,
-            agentDir: params.agentDir,
-            workspaceDir: params.workspaceDir,
-            provider,
-            modelId,
-          });
     const tieredResolution = await resolveTieredModel({
       abortSignal: runParams.abortSignal,
       assertCurrent: params.assertCurrent,
@@ -455,7 +442,6 @@ export async function resolveEmbeddedRunModelSetup(params: {
       config: runParams.config,
       workspaceDir: params.workspaceDir,
       authProfileId: runParams.authProfileId,
-      authProfileMode: accountAuthMode,
       preparedModelRuntime: params.preparedModelRuntime,
       staticCatalogOwnsTransport: pluginHarnessOwnsTransport,
     });

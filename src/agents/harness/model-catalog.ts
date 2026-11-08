@@ -36,11 +36,7 @@ import type {
 import { resolveDefaultAgentWorkspaceDir } from "../workspace-default-path.js";
 import { resolveAgentHarnessPolicy } from "./policy.js";
 import { getRegisteredAgentHarness } from "./registry.js";
-import type {
-  AgentHarness,
-  AgentHarnessModelCatalogParams,
-  AgentHarnessModelCatalogResult,
-} from "./types.js";
+import type { AgentHarnessModelCatalogParams, AgentHarnessModelCatalogResult } from "./types.js";
 
 function isCatalogRowList(
   result: AgentHarnessModelCatalogResult,
@@ -420,16 +416,4 @@ export function augmentPreparedModelCatalogWithAgentHarness(params: {
     includePickerRuntimes: params.nativeSelection === undefined,
     observationConfig: input.config,
   });
-}
-
-/** Profile-free Codex login mode for an explicit model the account catalog has not listed. */
-export function readCodexAccountAuthMode(
-  harness: Pick<AgentHarness, "id" | "readModelCatalogReadiness"> | undefined,
-  params: AgentHarnessModelCatalogParams & { provider: string; modelId: string },
-): "oauth" | "token" | undefined {
-  if (harness?.id !== "codex" || params.provider.trim().toLowerCase() !== "openai") {
-    return undefined;
-  }
-  const mode = harness.readModelCatalogReadiness?.({ ...params, scope: "account" })?.authMode;
-  return mode === "oauth" || mode === "token" ? mode : undefined;
 }
