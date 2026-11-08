@@ -3852,6 +3852,73 @@ server.listen(0, "127.0.0.1", () => {
     }
   });
 
+  it("prepares Bun once for lint consumers and prevents restaging after setup failure", () => {
+    const workflow = readCiWorkflow();
+    const context = {
+      eventName: "pull_request",
+      repository: "openclaw/openclaw",
+      runAttempt: 1,
+    } as const;
+    for (const [name, task] of [
+      ["check-shard", "lint"],
+      ["checks-fast-core", "release-lint-core-1"],
+      ["check-lint-hosted-core-shard", ""],
+      ["check-lint-hosted-extension-shard", ""],
+    ] as const) {
+      const reader = requiredWorkflowStep(
+        workflow.jobs[name].steps,
+        "Setup pinned Bun parity runtime",
+      );
+      expect(reader).toMatchObject({
+        id: "bun_setup",
+        uses: "./.ci-harness/.github/actions/setup-test-bun",
+        with: { "cache-mode": "${{ needs.preflight.outputs.cache_mode }}" },
+      });
+      if (task) {
+        for (const selected of [true, false]) {
+          expect(
+            evaluateWorkflowCondition(reader.if, {
+              ...context,
+              matrix: { task: selected ? task : "npm-lock" },
+            }),
+          ).toBe(selected);
+        }
+      } else {
+        expect(reader.if).toBeUndefined();
+      }
+    }
+    for (const [job, name] of [
+      ["check-shard", "Run changed lint"],
+      ["check-shard", "Run check shard"],
+      ["check-lint-hosted-core-shard", "Run shared central lint"],
+    ] as const) {
+      const step = requiredWorkflowStep(workflow.jobs[job].steps, name);
+      expect(
+        evaluateWorkflowCondition(step.if, {
+          ...context,
+          failed: true,
+          steps: {
+            check_setup: { outputs: {}, outcome: "success" },
+            bun_setup: { outputs: {}, outcome: "failure" },
+          },
+          matrix: { task: "lint", shared_central_lint_selection_json: "{}" },
+          preflightOutputs: { central_lint_selection_json: name === "Run check shard" ? "" : "{}" },
+        }),
+      ).toBe(false);
+    }
+    const otherCheck = requiredWorkflowStep(workflow.jobs["check-shard"].steps, "Run check shard");
+    expect(
+      evaluateWorkflowCondition(otherCheck.if, {
+        ...context,
+        steps: {
+          check_setup: { outputs: {}, outcome: "success" },
+          bun_setup: { outputs: {}, outcome: "skipped" },
+        },
+        matrix: { task: "npm-lock" },
+      }),
+    ).toBe(true);
+  });
+
   it("persists isolated transform and compile caches through immutable protected archives", () => {
     const action = readWorkflow(".github/actions/setup-node-env/action.yml");
     const step = (name: string) => requiredWorkflowStep(action.runs.steps, name);
