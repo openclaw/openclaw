@@ -2158,10 +2158,10 @@ private func pendingHandoffDiagnostic(
             }, ingress: makeOrdinaryIngress())
         // Use the current registration so lifecycle refresh does not replace a synthetic capability fixture.
         let currentStableID = "manual|current.gateway.invalid|443"
-        let currentConfig = try Self.makeGatewayConnectConfig(
+        let currentConfig = try await Self.makeGatewayConnectConfig(
             url: #require(URL(string: "wss://127.0.0.1:1")),
             stableID: currentStableID,
-            nodeOptions: await controller.makeConnectOptions(deviceAuthGatewayID: nil))
+            nodeOptions: controller.makeConnectOptions(deviceAuthGatewayID: nil))
         appModel.applyGatewayConnectConfig(currentConfig)
         var finishedIterator = resetFinished.stream.makeAsyncIterator()
 
@@ -2871,10 +2871,10 @@ private func pendingHandoffDiagnostic(
             appModel: appModel,
             startDiscovery: false,
             ingress: makeOrdinaryIngress())
-        let connectedConfig = try Self.makeGatewayConnectConfig(
+        let connectedConfig = try await Self.makeGatewayConnectConfig(
             url: #require(URL(string: "wss://connected.example.com")),
             stableID: connectedID,
-            nodeOptions: await controller.makeConnectOptions(deviceAuthGatewayID: nil))
+            nodeOptions: controller.makeConnectOptions(deviceAuthGatewayID: nil))
         appModel.applyGatewayConnectConfig(connectedConfig)
 
         await controller.forgetGateway(stableID: selectedID)
@@ -3150,10 +3150,10 @@ private func pendingHandoffDiagnostic(
                 appModel: appModel,
                 startDiscovery: false,
                 ingress: makeOrdinaryIngress())
-            let suspendedConfig = try Self.makeGatewayConnectConfig(
+            let suspendedConfig = try await Self.makeGatewayConnectConfig(
                 url: #require(URL(string: "ws://127.0.0.1:1")),
                 stableID: "manual|127.0.0.1|1",
-                nodeOptions: await controller.makeConnectOptions(deviceAuthGatewayID: nil))
+                nodeOptions: controller.makeConnectOptions(deviceAuthGatewayID: nil))
             appModel.applyGatewayConnectConfig(suspendedConfig)
             appModel.gatewayAutoReconnectEnabled = true
             _ = controller.cancelPendingConnectionAttempts(suspendCurrentGateway: true)
