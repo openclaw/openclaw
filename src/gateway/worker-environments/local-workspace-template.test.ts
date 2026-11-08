@@ -250,16 +250,21 @@ it("retains dependencies without credentials or install debris", async ({ signal
   });
 });
 
-it.for([false, true])(
+it.for(["none", "same", "previous"])(
   "filters fetches from a reused template (existing origin: %s)",
   async (configured, { signal }) => {
     const clone = await fixture(signal);
     const priorUrl = await git(source, "config", "remote.origin.url");
-    if (configured) {
-      await git(source, "config", "remote.origin.url", "https://github.com/example/previous.git");
+    const url = "https://github.com/example/projection.git";
+    if (configured !== "none") {
+      await git(
+        source,
+        "config",
+        "remote.origin.url",
+        configured === "same" ? url : "https://github.com/example/previous.git",
+      );
     }
     const seed = await clone("old-fetch-defaults");
-    const url = "https://github.com/example/projection.git";
     await git(source, "config", "remote.origin.url", url);
     await git(source, "config", "uploadpack.allowFilter", "true");
     try {
@@ -285,6 +290,17 @@ it.for([false, true])(
       );
       expect(mocks.install).toHaveBeenCalledOnce();
       expect(await git(projectionPath, "config", "--get-all", "remote.origin.url")).toBe(url);
+      // The same-origin template and its projection each apply the fetch defaults.
+      const config = await read(projectionPath, ".git/config");
+      for (const remote of ["origin", url.slice(0, -4), url]) {
+        expect(config.split(`[remote "${remote}"]`)).toHaveLength(2);
+        expect(await git(projectionPath, "config", "--get-all", `remote.${remote}.promisor`)).toBe(
+          "true",
+        );
+        expect(
+          await git(projectionPath, "config", "--get-all", `remote.${remote}.partialclonefilter`),
+        ).toBe("blob:none");
+      }
       await git(
         projectionPath,
         "-c",

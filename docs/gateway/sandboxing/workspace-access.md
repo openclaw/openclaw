@@ -100,8 +100,9 @@ before retrying preparation. Publication uses the same admission boundary.
 New private checkouts are shallow snapshots. For GitHub.com projects, their
 credential-free HTTPS `origin` and the matching HTTPS repository URLs (with and
 without `.git`) default to `blob:none` fetches: history arrives without historical
-file contents, and checkout or diff fetches missing contents as needed. This also
-applies when creating a checkout from an older dependency template. Host object
+file contents, and checkout or diff fetches missing contents as needed. These
+defaults are reapplied when creating a checkout from a retained dependency
+template, including templates created before these defaults existed. Host object
 stores and credentials remain outside the sandbox; private repository access
 still requires the existing authorized publication workflow.
 

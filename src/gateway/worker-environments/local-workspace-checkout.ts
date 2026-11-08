@@ -8,7 +8,7 @@ import { commandError, gitEnvironment, requireGit, runGit } from "../../agents/w
 import { timeWorktreePreparationPhase } from "../../agents/worktrees/preparation-timing.js";
 import { resolveStateDir } from "../../config/state-dir.js";
 import { observeDiagnosticsTimelinePhases } from "../../infra/diagnostics-timeline.js";
-import { gitNullConfigPath, quoteGitConfig } from "../../infra/git-exec.js";
+import { gitNullConfigPath } from "../../infra/git-exec.js";
 import { parseGitHubRemoteUrl } from "../github-remote.js";
 import type { LocalWorkspaceOwner } from "./local-workspace-types.js";
 import { prepareWorkerWorkspaceGitPack } from "./workspace-git-base.js";
@@ -37,23 +37,18 @@ async function configureProjectionFetch(params: {
   // Reconstruct the address: never export host credentials, helpers or local paths.
   const url = `https://github.com/${repository.owner}/${repository.repo}`;
   // A cached template may already have an origin; multiple URLs make push fan out.
-  await requireGit(
-    params.destination,
-    ["config", "--local", "--replace-all", "remote.origin.url", `${url}.git`],
-    {
+  const config: Record<string, string> = { "remote.origin.url": `${url}.git` };
+  // Git keys filters by the supplied remote name, even when that name is a URL.
+  for (const remote of ["origin", url, `${url}.git`]) {
+    config[`remote.${remote}.promisor`] = "true";
+    config[`remote.${remote}.partialclonefilter`] = "blob:none";
+  }
+  for (const [key, value] of Object.entries(config)) {
+    await requireGit(params.destination, ["config", "--local", "--replace-all", key, value], {
       signal: params.signal,
       beforeRun: params.assertCurrent,
-    },
-  );
-  // Git keys filters by the supplied remote name, even when that name is a URL.
-  const config = ["origin", url, `${url}.git`]
-    .map(
-      (remote) =>
-        `\n[remote ${quoteGitConfig(remote)}]\npromisor=true\npartialclonefilter=blob:none\n`,
-    )
-    .join("");
-  params.assertCurrent();
-  await fs.appendFile(path.join(params.destination, ".git", "config"), config);
+    });
+  }
 }
 
 export function localWorkspaceProjectionPath(owner: Pick<LocalWorkspaceOwner, "worktree" | "env">) {
