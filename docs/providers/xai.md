@@ -181,9 +181,10 @@ remain unchanged. OAuth login retains its authenticated account catalog.
 Catalog context and token-cost metadata follows xAI's live
 [model pages](https://docs.x.ai/developers/models) and
 [pricing page](https://docs.x.ai/developers/pricing). xAI applies higher rates
-when a request crosses its documented 200k-token long-context threshold:
-for Grok 4.5, Grok 4.6, and Grok 4.7, input, cached-input, and output rates double.
-OpenClaw's flat catalog cost fields record the short-context rates. The current
+when a request's prompt reaches its documented 200k-token long-context threshold:
+for every priced Grok model, input, cached-input, and output rates double for the
+whole request. The catalog records both tiers, so usage estimates for long prompts
+use the higher rate. The current
 [Grok Build](https://docs.x.ai/build/overview) coding agent uses Grok 4.7. The
 historical OpenClaw `grok-build-latest` compatibility alias remains pinned to
 Grok 4.5.
