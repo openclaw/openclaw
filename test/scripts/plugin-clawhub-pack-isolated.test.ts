@@ -144,6 +144,17 @@ describe.skipIf(process.platform !== "linux")("isolated ClawHub pack process bou
       "type=bind,src=" + result.output + ",dst=/output",
     ]);
     expect(mounts).toContain("type=bind,src=" + result.source + ",dst=/source-input,readonly");
+    for (const entry of [
+      "cli-invocation.mjs",
+      "cli-parent-lifetime.mjs",
+      "gateway-shutdown-budget.mjs",
+      "node-runtime-env.mjs",
+      "runtime-process-bootstrap.generated.mjs",
+    ]) {
+      expect(mounts).toContain(
+        "type=bind,src=" + result.tooling + "/" + entry + ",dst=/tooling/" + entry + ",readonly",
+      );
+    }
     expect(mounts.some((mount) => mount.includes("/.git,") || mount.includes("/.npmrc,"))).toBe(
       false,
     );

@@ -14,7 +14,7 @@ on:
       - scripts/preinstall-package-manager-warning.mjs
       - scripts/postinstall-bun-cli-launcher.mjs
       - scripts/lib/bun-cli-launcher.*
-      - test/scripts/release-closeout-upgrade-proof.test.mjs
+      - test/scripts/release-closeout-upgrade-proof.test.ts
   workflow_dispatch:
 
 # Deliberately no publisher, environment, secrets, OIDC, or write permissions.
@@ -75,6 +75,7 @@ jobs:
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: closeout-isolation-proof-${{ github.run_id }}
+          include-hidden-files: true
           path: .artifacts/closeout-isolation-proof/
           if-no-files-found: error
           retention-days: 14
@@ -93,7 +94,7 @@ jobs:
           cache-mode: off
       - uses: ./.github/actions/setup-test-bun
       - name: Check proof guard negative controls
-        run: node --test test/scripts/release-closeout-upgrade-proof.test.mjs
+        run: node scripts/run-vitest.mjs run --config test/vitest/vitest.tooling.config.ts test/scripts/release-closeout-upgrade-proof.test.ts
       - name: Build exact closeout source
         run: pnpm build
       - name: Package exact closeout source (not the frozen release)
@@ -154,6 +155,7 @@ jobs:
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: closeout-upgrade-proof-${{ github.run_id }}
+          include-hidden-files: true
           path: |
             .artifacts/closeout-upgrade-proof/**/*.json
             .artifacts/closeout-upgrade-proof/**/*.jsonl

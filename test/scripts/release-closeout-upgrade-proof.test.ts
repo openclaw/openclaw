@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import test from "node:test";
+import { test } from "vitest";
 import {
   assertIdentity,
   assertLifecycle,
@@ -17,7 +17,7 @@ import {
 const head = "a".repeat(40),
   sha = "b".repeat(64),
   version = "2026.11.2";
-function proof(lane) {
+function proof(lane: "node" | "bun") {
   return {
     schema: 1,
     lane,
@@ -68,7 +68,7 @@ test("aggregate verdict requires both coherent complete lanes", () => {
     "realUpdate",
     "postinstallGeneratedLauncher",
     "nodeUnavailable",
-  ]) {
+  ] as const) {
     const bun = proof("bun");
     bun.assertions[key] = false;
     assert.throws(() => verifyPair(proof("node"), bun, head, sha));

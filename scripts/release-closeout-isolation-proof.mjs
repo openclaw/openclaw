@@ -283,6 +283,11 @@ async function main() {
     "extensions",
     "patches",
     "node_modules",
+    "cli-invocation.mjs",
+    "cli-parent-lifetime.mjs",
+    "gateway-shutdown-budget.mjs",
+    "node-runtime-env.mjs",
+    "runtime-process-bootstrap.generated.mjs",
     "package.json",
     "pnpm-lock.yaml",
     "pnpm-workspace.yaml",
@@ -354,7 +359,17 @@ async function main() {
   for (const entry of ["src", "packages", "patches", "node_modules", ".clawhub-cli"]) {
     fs.symlinkSync(fs.realpathSync(path.join(original, entry)), path.join(tooling, entry));
   }
-  for (const entry of ["package.json", "pnpm-lock.yaml", "pnpm-workspace.yaml", "tsconfig.json"]) {
+  for (const entry of [
+    "cli-invocation.mjs",
+    "cli-parent-lifetime.mjs",
+    "gateway-shutdown-budget.mjs",
+    "node-runtime-env.mjs",
+    "runtime-process-bootstrap.generated.mjs",
+    "package.json",
+    "pnpm-lock.yaml",
+    "pnpm-workspace.yaml",
+    "tsconfig.json",
+  ]) {
     fs.copyFileSync(path.join(original, entry), path.join(tooling, entry));
   }
   fs.mkdirSync(path.join(tooling, PACKAGE), { recursive: true });
