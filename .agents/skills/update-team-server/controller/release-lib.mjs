@@ -3028,8 +3028,9 @@ function retainedRepairTranscriptPreservationFailure(database, sessionKey, sessi
   return transcriptPreservationFailure(database, sessionKey, sessionId, windowKey, generation);
 }
 
-function retainedRepairWitness(record, saved) {
+function retainedRepairWitness(record, saved, rewriteEvidence) {
   const schemas = record.candidate.schemaVersions, databasePath = record.protectedPaths[1].path;
+  const accepted = rewriteEvidence?.accepted && new Set(rewriteEvidence.accepted);
   const pending = new Map();
   for (const tuple of sessionWitnessTuples(saved ?? [])) {
     const key = JSON.stringify(tuple.slice(0, 4));
@@ -3046,8 +3047,21 @@ function retainedRepairWitness(record, saved) {
       const id = [agentId, realpathSync(pathname), entry.dev, entry.ino],
         key = JSON.stringify(id);
       for (const tuple of pending.get(key) ?? []) {
-        if (retainedRepairTranscriptPreservationFailure(database, ...tuple.slice(4)))
-          reject("retained preparation requires strict original and current transcript continuity");
+        if (!retainedRepairTranscriptPreservationFailure(database, ...tuple.slice(4))) continue;
+        // Physical identity is already bound by pending's key. Only a selected
+        // candidate, or its sealed accepted generation, can explain this rewrite.
+        const live = rewriteEvidence && tuple[7] && database.prepare(`
+          SELECT t.*, n.current_session_id, owner.current_session_id AS owner_session_id FROM session_windows w
+          LEFT JOIN session_nodes n ON n.session_key = ?
+          JOIN session_nodes owner ON owner.session_key = w.session_key
+          JOIN transcript_rewrite_watermarks t ON t.session_id = w.session_id
+          WHERE w.session_id = ? AND w.session_key = ?
+        `).get(tuple[4], tuple[5], tuple[6]);
+        if (live?.generation && Number.isSafeInteger(live.updated_at) &&
+            live.updated_at > Date.parse(record.createdAt) && live.updated_at <= Date.now() &&
+            ((rewriteEvidence.selectedCandidate && live.current_session_id === tuple[5] && live.owner_session_id === tuple[5]) ||
+              accepted?.has(JSON.stringify([...tuple.slice(0, 7), live.generation])))) continue;
+        reject("retained preparation requires strict original and current transcript continuity");
       }
       pending.delete(key);
       for (const row of database
@@ -3235,7 +3249,7 @@ function retainedRepairSnapshot(root, rawRequest, expected, building = false, ar
   const { name, ...originalDescriptor } = record.originalWitness;
   const witnessPath = join(namespace.directory, name);
   const originalWitnessDescriptor = { path: witnessPath, ...originalDescriptor };
-  const currentWitness = retainedRepairWitness(record, migrationJson(original));
+  const currentWitness = retainedRepairWitness(record, migrationJson(original), { selectedCandidate: current });
   // A retry verifies the captured floor, not equality with an empty/new baseline.
   if (expected)
     retainedRepairWitness(record, expected.currentWitness);
@@ -3848,9 +3862,9 @@ function retainedRepairStatic(root, snapshot, build, record) {
   if (!isDeepStrictEqual(validateFrozenRelease(join(root, "releases", snapshot.request.target.sha),
       snapshot.request.target.sha, snapshot.request.target.manifestSha256, owner), snapshot.target))
     reject("repair frozen target changed");
-  retainedRepairBoundFile(snapshot.originalWitness);
-  for (const floor of [migrationJson(retainedRepairBoundFile(snapshot.originalWitness).bytes),
-      build.currentWitness, snapshot.currentWitness])
+  retainedRepairWitness(legacy, migrationJson(retainedRepairBoundFile(snapshot.originalWitness).bytes),
+    { accepted: build.currentWitness });
+  for (const floor of [build.currentWitness, snapshot.currentWitness])
     retainedRepairWitness(legacy, floor);
   if (record.lifecycle?.stopped) {
     const stopped = record.lifecycle.stopped;
