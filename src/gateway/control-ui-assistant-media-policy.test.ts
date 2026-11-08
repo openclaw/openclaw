@@ -68,6 +68,7 @@ let entry: {
   spawnedCwd?: string;
   sessionRoot?: string;
   permissionMode?: "full" | "workspace";
+  sandbox?: "required";
   execNode?: string;
   deviceFolder?: { deviceId: string; path: string };
   repositoryWorkspaceId?: string;
@@ -173,6 +174,29 @@ async function request(
 // The real HTTP boundary plus real files protect session-root admission and exact-file grants;
 // existing media tests cover static agent roots only.
 describe("assistant image session policy", () => {
+  it.each([undefined, "full"] as const)(
+    "keeps required-sandbox images within the workspace in %s mode",
+    async (permissionMode) => {
+      entry.sandbox = "required";
+      entry.permissionMode = permissionMode;
+      cfg.tools = {};
+      const outside = path.join(temp, "outside.png");
+      const inside = path.join(project, "inside.png");
+      await fs.writeFile(outside, PNG);
+      await fs.writeFile(inside, PNG);
+      expect((await request(outside)).payload).toMatchObject({
+        available: false,
+        code: "outside-allowed-folders",
+        canAllow: true,
+      });
+      expect((await request(outside, { bytes: true })).res.statusCode).toBe(404);
+      expect((await request(inside)).payload).toMatchObject({ available: true });
+      const allowed = (await request(outside, { allow: true })).payload!;
+      const bytes = await request(outside, { ticket: String(allowed.mediaTicket), bytes: true });
+      expect(bytes.res.statusCode).toBe(200);
+      expect(bytes.bytes).toEqual(PNG);
+    },
+  );
   it("binds relative media tickets to the execution directory within the session root", async () => {
     const first = path.join(project, "first");
     const second = path.join(project, "second");

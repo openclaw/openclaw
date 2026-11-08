@@ -1,0 +1,3 @@
+24
+# Existing HTTP media fixture verifies required sandbox beats permissive/full mode while preserving workspace access and exact-image admin grants.
+# Source-backed release regression; no shared ceiling increase.
