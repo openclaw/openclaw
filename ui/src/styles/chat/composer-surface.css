@@ -212,7 +212,7 @@
   --chat-composer-editor-line: calc(var(--chat-composer-editor-size) * 1.5);
 
   position: relative;
-  z-index: 1;
+  z-index: 2;
   display: flex;
   flex-direction: column;
   min-width: 0;
