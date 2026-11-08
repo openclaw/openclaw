@@ -47,10 +47,10 @@ describe("one-shot CLI completion", () => {
   let previousExitCode: typeof process.exitCode;
   beforeEach(() => {
     previousExitCode = process.exitCode;
-    process.exitCode = undefined;
+    process.exitCode = 0;
   });
   afterEach(() => {
-    process.exitCode = previousExitCode;
+    process.exitCode = previousExitCode ?? 0;
     vi.restoreAllMocks();
   });
 
@@ -102,7 +102,7 @@ describe("one-shot CLI completion", () => {
     ).rejects.toBe(commandFailure ?? cleanupFailure);
     expect(onError).toHaveBeenCalledExactlyOnceWith(cleanupFailure);
     expect(runtime.exit).not.toHaveBeenCalled();
-    expect(process.exitCode).toBeUndefined();
+    expect(process.exitCode).toBe(0);
   });
 
   it("does not finalize a long-lived command until its run settles", async () => {
@@ -116,7 +116,7 @@ describe("one-shot CLI completion", () => {
     requestExitAfterOneShotOutput(defaultRuntime, 7);
     await Promise.resolve();
     expect(finalize).not.toHaveBeenCalled();
-    expect(process.exitCode).toBeUndefined();
+    expect(process.exitCode).toBe(0);
     finish.resolve();
     await running;
     expect(finalize).toHaveBeenCalledOnce();
@@ -171,7 +171,7 @@ describe("one-shot CLI completion", () => {
     });
     try {
       await entered.promise;
-      expect(process.exitCode).toBeUndefined();
+      expect(process.exitCode).toBe(0);
     } finally {
       closed.resolve();
       await running;
@@ -199,14 +199,19 @@ describe("one-shot CLI completion", () => {
     expect(process.exitCode).toBe(6);
   });
 
-  it("preserves the default successful outcome", async () => {
-    await runCliWithExitFinalization({
-      run: async () => {
-        requestExitAfterOneShotOutput();
-      },
-      onError: ignoreError,
-    });
-    expect(process.exitCode).toBe(0);
+  it("preserves the default successful outcome", () => {
+    const result = runCliChild(`
+      import { requestExitAfterOneShotOutput, runCliWithExitFinalization } from ${JSON.stringify(oneShotExitUrl.href)};
+      const defaultUnset = process.exitCode === undefined;
+      await runCliWithExitFinalization({
+        run: async () => { requestExitAfterOneShotOutput(); },
+        onError: (error) => { throw error; },
+      });
+      process.stdout.write(JSON.stringify({ defaultUnset, exitCode: process.exitCode }));
+    `);
+    expect(result.error).toBeUndefined();
+    expect(result.status).toBe(0);
+    expect(JSON.parse(result.stdout)).toEqual({ defaultUnset: true, exitCode: 0 });
   });
 
   it.each(["before cleanup", "during cleanup"])(
