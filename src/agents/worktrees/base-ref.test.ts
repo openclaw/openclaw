@@ -240,10 +240,18 @@ describe("worktree default-base preparation", () => {
       "remote update",
     );
     await git(remote, "update-ref", "refs/heads/next", advanced);
+    const unrelated = await createChildCommit("HEAD^{tree}", "unrelated session");
+    await git(repo, "update-ref", "refs/heads/unrelated", unrelated);
+    const packets = path.join(root, "refresh.packets");
+    vi.stubEnv("GIT_TRACE_PACKET", packets);
     await expect(resolveAt(90_000)).resolves.toMatchObject({
       commit: advanced,
       fetchSucceeded: true,
     });
+    const negotiation = await fs.readFile(packets, "utf8");
+    expect(negotiation).toContain(`have ${head}`);
+    expect(negotiation).not.toContain(`have ${unrelated}`);
+    vi.stubEnv("GIT_TRACE_PACKET", undefined);
     expect(network).toEqual(["ls-remote", "fetch", "ls-remote", "ls-remote", "ls-remote", "fetch"]);
 
     // An explicit fetch/ref bypasses preparation reuse, including a force-pushed rewind.
