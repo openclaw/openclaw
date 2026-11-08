@@ -72,31 +72,24 @@ describe("findCutPoint", () => {
   const asynchronousExchange = (resultBeforeText = false) =>
     asynchronousMessages(resultBeforeText).map(messageEntry);
 
-  it("retains an async call whose result follows another assistant fragment", () => {
-    const entries = asynchronousExchange();
+  it.each([
+    ["retains an async call whose result follows another assistant fragment", false, 1],
+    ["can summarize a completed tool exchange before the retained explanation", true, 3],
+  ] as const)("%s", (_name, resultBeforeText, firstKeptEntryIndex) => {
+    const entries = asynchronousExchange(resultBeforeText);
     const result = findCutPoint(entries, 0, entries.length, 100);
 
-    expect(result).toMatchObject({ firstKeptEntryIndex: 1, isSplitTurn: true });
+    expect(result).toMatchObject({ firstKeptEntryIndex, isSplitTurn: true });
   });
 
-  it("can summarize a completed tool exchange before the retained explanation", () => {
-    const entries = asynchronousExchange(true);
-
-    expect(findCutPoint(entries, 0, entries.length, 100).firstKeptEntryIndex).toBe(3);
-  });
-
-  it("summarizes the complete exchange when its call cannot fit the foreground budget", () => {
-    const entries = asynchronousExchange();
+  it.each([
+    ["summarizes the complete exchange when its call cannot fit the foreground budget", true],
+    ["refuses a foreground tail that can only fit an incomplete tool exchange", false],
+  ] as const)("%s", (_name, complete) => {
+    const entries = complete ? asynchronousExchange() : asynchronousExchange().slice(0, -1);
     expect(
       findCutPoint(entries, 0, entries.length, 100, foregroundBudget(entries)).firstKeptEntryIndex,
-    ).toBe(4);
-  });
-
-  it("refuses a foreground tail that can only fit an incomplete tool exchange", () => {
-    const entries = asynchronousExchange().slice(0, -1);
-    expect(
-      findCutPoint(entries, 0, entries.length, 100, foregroundBudget(entries)).firstKeptEntryIndex,
-    ).toBe(entries.length);
+    ).toBe(complete ? 4 : entries.length);
   });
 
   it("keeps an older call when a pending user message arrives before its result", () => {
@@ -113,14 +106,10 @@ describe("findCutPoint", () => {
 
   it("does not pull a previous completed occurrence with a reused provider id into the tail", () => {
     const messages = asynchronousMessages();
-    const earlierCall = messages[1];
-    if (earlierCall?.role !== "assistant") {
-      throw new Error("The fixture is missing its tool-calling assistant");
-    }
     messages.splice(
       1,
       0,
-      structuredClone(earlierCall),
+      callingAssistant("bash", "call-1"),
       toolResultText("Earlier completed result.", 2),
     );
     const entries = messages.map(messageEntry);
