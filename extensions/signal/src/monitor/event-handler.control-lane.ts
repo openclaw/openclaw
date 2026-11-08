@@ -1,4 +1,7 @@
-import type { ChannelInboundMediaInput } from "openclaw/plugin-sdk/channel-inbound";
+import type {
+  ChannelInboundMediaInput,
+  ChannelReactionContext,
+} from "openclaw/plugin-sdk/channel-inbound";
 import type {
   ChannelIngressContextBinding,
   ResolvedChannelMessageIngress,
@@ -24,6 +27,7 @@ export type SignalInboundEntry = {
   isGroup: boolean;
   bodyText: string;
   nativeReplyBody?: string;
+  reaction?: ChannelReactionContext;
   commandBody: string;
   timestamp?: number;
   messageId?: string;

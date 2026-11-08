@@ -14,19 +14,25 @@ import { danger, type RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeNullableString as nonEmptyString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { Client } from "../internal/discord.js";
 import { createMessageDispatchData } from "../internal/gateway-dispatch.js";
+import type { DiscordReactionIngressEvent } from "../internal/listeners.js";
 import { getDiscordRuntime } from "../runtime.js";
 import type { DiscordMessageEvent } from "./listeners.js";
 
 const DISCORD_INGRESS_PAYLOAD_VERSION = 1;
 const DISCORD_INGRESS_DRAIN_INTERVAL_MS = 1_000;
 
+type DiscordIngressRaw = GatewayMessageCreateDispatchData | DiscordReactionIngressEvent;
 type DiscordIngressPayload = {
   version: 1;
   receivedAt: number;
-  rawMessage: GatewayMessageCreateDispatchData;
+  rawMessage: DiscordIngressRaw;
 };
 
 type DiscordIngressBody = Omit<DiscordIngressPayload, "version">;
+
+function isReactionEvent(raw: DiscordIngressRaw): raw is DiscordReactionIngressEvent {
+  return "kind" in raw && raw.kind === "reaction";
+}
 
 export type DiscordIngressLifecycle = Omit<ChannelIngressMonitorLifecycle, "admission">;
 
@@ -38,7 +44,7 @@ type DiscordIngressDispatch = (
 ) => Promise<DiscordIngressDispatchResult | void> | DiscordIngressDispatchResult | void;
 
 type DiscordIngressMonitor = {
-  accept: (rawMessage: GatewayMessageCreateDispatchData) => Promise<void>;
+  accept: (rawMessage: DiscordIngressRaw) => Promise<void>;
   start: () => void;
   stop: () => Promise<void>;
 };
@@ -48,6 +54,22 @@ const DiscordIngressPayloadError = createChannelIngressError("DiscordIngressPayl
 function inspectDiscordMessage(rawMessage: unknown): { eventId: string; laneKey: string } {
   if (!rawMessage || typeof rawMessage !== "object" || Array.isArray(rawMessage)) {
     throw new DiscordIngressPayloadError("Discord MESSAGE_CREATE payload must be an object");
+  }
+  if ("kind" in rawMessage && rawMessage.kind === "reaction") {
+    const reaction = rawMessage as DiscordReactionIngressEvent;
+    if (
+      !/^[a-f0-9]{64}$/.test(reaction.occurrenceId) ||
+      !["added", "removed"].includes(reaction.action) ||
+      !/^[0-9]{15,22}$/.test(reaction.data?.channel_id ?? "") ||
+      !/^[0-9]{15,22}$/.test(reaction.data?.message_id ?? "") ||
+      !/^[0-9]{15,22}$/.test(reaction.data?.user_id ?? "")
+    ) {
+      throw new DiscordIngressPayloadError("Discord reaction occurrence is invalid");
+    }
+    return {
+      eventId: `reaction:${reaction.occurrenceId}`,
+      laneKey: `channel:${reaction.data.channel_id}`,
+    };
   }
   const candidate = rawMessage as { id?: unknown; channel_id?: unknown };
   const eventId = nonEmptyString(candidate.id);
@@ -80,7 +102,7 @@ function decodeDiscordIngressPayload(
     version: candidate.version,
     body: {
       receivedAt: candidate.receivedAt as number,
-      rawMessage: candidate.rawMessage as GatewayMessageCreateDispatchData,
+      rawMessage: candidate.rawMessage as DiscordIngressRaw,
     },
   };
 }
@@ -106,6 +128,10 @@ export function createDiscordIngressMonitor(params: {
   runtime: Pick<RuntimeEnv, "error" | "log">;
   abortSignal?: AbortSignal;
   dispatch: DiscordIngressDispatch;
+  dispatchReaction?: (
+    event: DiscordReactionIngressEvent,
+    lifecycle: DiscordIngressLifecycle,
+  ) => Promise<DiscordIngressDispatchResult | void>;
   onDeadLetter?: (event: DiscordMessageEvent, signal: AbortSignal) => Promise<void>;
   queue?: ChannelIngressQueue<DiscordIngressPayload>;
 }): DiscordIngressMonitor {
@@ -115,7 +141,7 @@ export function createDiscordIngressMonitor(params: {
       accountId: params.accountId,
     });
   const monitor = createChannelIngressMonitor<
-    GatewayMessageCreateDispatchData,
+    DiscordIngressRaw,
     DiscordIngressBody,
     DiscordIngressPayload
   >({
@@ -135,7 +161,7 @@ export function createDiscordIngressMonitor(params: {
       // identity contract as replayed transport payloads.
       const decoded = decodeDiscordIngressPayload(
         { version: DISCORD_INGRESS_PAYLOAD_VERSION, receivedAt, rawMessage: prepared.event },
-        rawMessage.id,
+        inspectDiscordMessage(rawMessage).eventId,
       );
       return { raw: decoded.body.rawMessage, assertCurrent: prepared.assertCurrent };
     },
@@ -154,6 +180,12 @@ export function createDiscordIngressMonitor(params: {
     },
     // Gateway mapping is intentionally delayed until after the durable claim.
     deliver: async (rawMessage, lifecycle) => {
+      if (isReactionEvent(rawMessage)) {
+        if (!params.dispatchReaction) {
+          throw new Error("Discord reaction dispatcher is unavailable");
+        }
+        return await params.dispatchReaction(rawMessage, lifecycle);
+      }
       const event = createMessageDispatchData(params.client, rawMessage);
       return await params.dispatch(event, lifecycle);
     },
@@ -170,6 +202,9 @@ export function createDiscordIngressMonitor(params: {
       // decides access and retains every ambient message for pending history.
       prioritizePending: ({ payload }) => {
         const raw = payload?.rawMessage;
+        if (!raw || isReactionEvent(raw)) {
+          return false;
+        }
         return Boolean(
           params.botUserId &&
           raw?.guild_id &&
@@ -194,7 +229,9 @@ export function createDiscordIngressMonitor(params: {
       },
       onDeadLetter: async (claim, _failure, signal) => {
         const { rawMessage } = decodeDiscordIngressPayload(claim.payload, claim.id).body;
-        await params.onDeadLetter?.(createMessageDispatchData(params.client, rawMessage), signal);
+        if (!isReactionEvent(rawMessage)) {
+          await params.onDeadLetter?.(createMessageDispatchData(params.client, rawMessage), signal);
+        }
       },
       onLog: (message) => params.runtime.error?.(danger(`discord ingress: ${message}`)),
     },

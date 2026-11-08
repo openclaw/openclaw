@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { EventEmitter } from "node:events";
 import {
   GatewayCloseCodes,
@@ -384,10 +385,27 @@ export class GatewayPlugin implements GatewayPluginContract {
     }
     // MESSAGE_CREATE is the durable-ingress raw-envelope boundary. Its listener
     // maps structures only after the queue claim; other events retain eager mapping.
+    const reactionEvent =
+      (payload.t === GatewayDispatchEvents.MessageReactionAdd ||
+        payload.t === GatewayDispatchEvents.MessageReactionRemove) &&
+      this.sessionId &&
+      Number.isSafeInteger(payload.s)
+        ? {
+            kind: "reaction" as const,
+            occurrenceId: createHash("sha256")
+              .update(JSON.stringify([this.sessionId, payload.s]))
+              .digest("hex"),
+            action:
+              payload.t === GatewayDispatchEvents.MessageReactionAdd
+                ? ("added" as const)
+                : ("removed" as const),
+            data: payload.d,
+          }
+        : undefined;
     const data =
       payload.t === GatewayDispatchEvents.MessageCreate
         ? payload.d
-        : mapGatewayDispatchData(this.client, payload.t, payload.d);
+        : mapGatewayDispatchData(this.client, payload.t, payload.d, reactionEvent);
     await this.client.dispatchGatewayEvent(payload.t, data);
   }
 

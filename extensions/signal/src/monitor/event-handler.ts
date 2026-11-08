@@ -28,6 +28,7 @@ import {
   toHistoryMediaEntries,
   type ChannelInboundMediaInput,
   type ChannelInboundTurnPlan,
+  type ChannelReactionContext,
 } from "openclaw/plugin-sdk/channel-inbound";
 import {
   fanInChannelIngressLifecycles,
@@ -59,7 +60,6 @@ import { createRuntimeConfigReader } from "openclaw/plugin-sdk/runtime-config-sn
 import { danger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { resolvePinnedMainDmOwnerFromAllowlist } from "openclaw/plugin-sdk/security-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { enqueueSystemEvent } from "openclaw/plugin-sdk/system-event-runtime";
 import { normalizeE164 } from "openclaw/plugin-sdk/text-utility-runtime";
 import { resolveSignalReplyToMode } from "../accounts.js";
 import {
@@ -80,7 +80,10 @@ import { formatSignalMediaText } from "../media-text.js";
 import { createSignalNativeReplyIdPlan } from "../native-reply.js";
 import { normalizeSignalMessagingTarget } from "../normalize.js";
 import { resolveSignalReactionLevel } from "../reaction-level.js";
-import { registerSignalReplyContext } from "../reply-authors.js";
+import {
+  registerSignalReplyContext,
+  resolveSignalReplyContextWithPersistence,
+} from "../reply-authors.js";
 import { sendReactionSignal, type SignalReactionOpts } from "../send-reactions.js";
 import { sendMessageSignal, sendReadReceiptSignal, sendTypingSignal } from "../send.js";
 import type { SignalIngressLifecycle } from "../signal-ingress.js";
@@ -95,7 +98,6 @@ import type { SignalEventHandlerDeps, SignalReceivePayload } from "./event-handl
 import { resolveSignalQuoteContext } from "./inbound-context.js";
 import { renderSignalMentions, resolveSignalMentionFacts } from "./mentions.js";
 import {
-  buildSignalReactionSystemEventText,
   isSignalReactionMessage,
   resolveSignalReactionTargets,
   resolveSignalStatusReactionTimestamp,
@@ -213,11 +215,14 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
             limit: deps.historyLimit,
           })
         : undefined;
-    const replyToMode = resolveSignalReplyToMode({
-      cfg,
-      accountId: deps.accountId,
-      chatType: entry.isGroup ? "group" : "direct",
-    });
+    // Reactions are not messages that Signal can quote or react to in return.
+    const replyToMode = entry.reaction
+      ? "off"
+      : resolveSignalReplyToMode({
+          cfg,
+          accountId: deps.accountId,
+          chatType: entry.isGroup ? "group" : "direct",
+        });
     const replyThreading = resolveBatchedReplyThreadingPolicy(
       replyToMode,
       entry.isBatched === true,
@@ -258,9 +263,10 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       },
       reply: {
         to: signalTo,
-        replyToId: entry.replyToId ?? entry.messageId,
+        replyToId: entry.reaction ? undefined : (entry.replyToId ?? entry.messageId),
       },
       message: {
+        inboundEventKind: entry.reaction ? "room_event" : undefined,
         body: combinedBody,
         bodyForAgent: entry.bodyText,
         inboundHistory,
@@ -286,6 +292,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       extra: {
         GroupSubject: entry.isGroup ? (entry.groupName ?? undefined) : undefined,
         ReplyThreading: replyThreading,
+        Reaction: entry.reaction,
       },
     });
 
@@ -327,6 +334,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     };
     const statusReactionRecipient = entry.isGroup ? "" : entry.senderRecipient;
     const statusReactionController =
+      !entry.reaction &&
       statusReactionsConfig?.enabled === true &&
       signalReactionLevel.level !== "off" &&
       shouldSendStatusReaction &&
@@ -814,13 +822,11 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       Boolean(!reaction && dataMessage?.attachments?.length);
 
     if (reaction && !hasBodyContent) {
-      if (reaction.isRemove) {
-        return;
-      }
       const emojiLabel = normalizeOptionalString(reaction.emoji) ?? "emoji";
       const reactionSenderName = envelope.sourceName ?? senderDisplay;
-      const reactionGroupId = reaction.groupInfo?.groupId ?? undefined;
-      const reactionGroupName = reaction.groupInfo?.groupName ?? undefined;
+      const reactionGroupId = groupId;
+      const reactionGroupName =
+        dataMessage?.groupInfo?.groupName ?? reaction.groupInfo?.groupName ?? undefined;
       const isReactionGroup = Boolean(reactionGroupId);
       const reactionMessageId = reaction.targetSentTimestamp
         ? String(reaction.targetSentTimestamp)
@@ -829,6 +835,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
         reactionGroupId ? `group:${reactionGroupId}` : `signal:${resolveSignalRecipient(sender)}`,
       );
       if (
+        !reaction.isRemove &&
         conversationKey &&
         (await maybeResolveSignalApprovalReaction({
           cfg,
@@ -869,33 +876,88 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
         groupId: reactionGroupId,
         senderPeerId: reactionSenderPeerId,
       });
-      const groupLabel = isReactionGroup
-        ? `${reactionGroupName ?? "Signal Group"} id:${reactionGroupId}`
-        : undefined;
-      const text = buildSignalReactionSystemEventText({
-        emojiLabel,
-        actorLabel: reactionSenderName,
-        messageId: reactionMessageId,
-        targetLabel: targets[0]?.display,
-        groupLabel,
-      });
+      const timestamp = envelope.timestamp ?? dataMessage?.timestamp;
+      // A target timestamp identifies a message, not a reaction occurrence. Never
+      // mint a fresh identity for replay/history lacking a transport timestamp.
+      if (!Number.isSafeInteger(timestamp) || !timestamp || timestamp <= 0) {
+        return;
+      }
       const senderId = formatSignalSenderId(sender);
-      const contextKey = [
-        "signal",
-        "reaction",
-        "added",
-        reactionMessageId,
-        senderId,
-        emojiLabel,
-        reactionGroupId ?? "",
-      ]
-        .filter(Boolean)
-        .join(":");
-      enqueueSystemEvent(text, {
-        sessionKey: reactionRoute.sessionKey,
-        contextKey,
+      if (senderId.length > 100 || (reactionGroupId?.length ?? 0) > 256) {
+        return;
+      }
+      const occurrenceId = JSON.stringify([deps.accountId, senderId, timestamp]);
+      const target = await resolveSignalReplyContextWithPersistence({
+        accountId: deps.accountId,
+        to: reactionGroupId
+          ? `group:${reactionGroupId}`
+          : `signal:${resolveSignalRecipient(sender)}`,
+        replyToId: reactionMessageId,
       });
-      return;
+      const targetAuthor = targets[0]?.display;
+      const targetQuote = resolveSignalQuoteContext({
+        cfg,
+        accountId: deps.accountId,
+        isGroup: isReactionGroup,
+        effectiveGroupAllow: senderAccess.effectiveGroupAllowFrom,
+        dataMessage: {
+          quote: {
+            author: reaction.targetAuthor,
+            authorUuid: reaction.targetAuthorUuid,
+            text:
+              target &&
+              !target.ambiguous &&
+              targets.some((entry) => entry.display === target.author || entry.id === target.author)
+                ? target.body?.slice(0, 2000)
+                : undefined,
+          },
+        },
+      });
+      const context: ChannelReactionContext = {
+        channel: "signal",
+        accountId: deps.accountId,
+        conversationId: reactionGroupId ?? resolveSignalRecipient(sender),
+        actorId: senderId,
+        occurrenceId,
+        action: reaction.isRemove ? "removed" : "added",
+        emoji: emojiLabel.slice(0, 100),
+        target: {
+          messageId: reactionMessageId,
+          authorId: targetAuthor,
+          ...(targetQuote.visibleQuoteText ? { body: targetQuote.visibleQuoteText } : {}),
+        },
+      };
+      const messageId = `reaction:${occurrenceId}`;
+      const channelIngress = await resolveChannelIngress({
+        agentId: reactionRoute.agentId,
+        sessionKey: reactionRoute.sessionKey,
+        messageId,
+        inboundEventKind: "room_event",
+      });
+      if (!channelIngress.senderAccess.allowed) {
+        return;
+      }
+      const reactionBody = `Conversational reaction (not approval or task acceptance): ${JSON.stringify(context)}`;
+      await handleSignalInboundMessage({
+        cfg,
+        senderName: reactionSenderName,
+        senderDisplay,
+        senderRecipient: resolveSignalRecipient(sender),
+        senderPeerId: reactionSenderPeerId,
+        groupId: reactionGroupId,
+        groupName: reactionGroupName,
+        isGroup: isReactionGroup,
+        bodyText: reactionBody,
+        commandBody: reactionBody,
+        commandAuthorized: false,
+        messageId,
+        timestamp,
+        reaction: context,
+        channelIngress: [channelIngress],
+        turnAdoptionLifecycle,
+        resolveChannelIngress,
+      });
+      return turnAdoptionLifecycle ? { kind: "deferred" } : undefined;
     }
     if (!dataMessage) {
       return;

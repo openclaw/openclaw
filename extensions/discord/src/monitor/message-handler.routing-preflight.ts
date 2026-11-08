@@ -14,7 +14,9 @@ const loadConversationRuntime = createLazyRuntimeModule(
 );
 
 export async function resolveDiscordPreflightRoute(params: {
-  preflight: DiscordMessagePreflightParams;
+  preflight: Pick<DiscordMessagePreflightParams, "cfg" | "accountId"> & {
+    data: Pick<DiscordMessagePreflightParams["data"], "guild_id">;
+  };
   author: User;
   isDirectMessage: boolean;
   isGroupDm: boolean;

@@ -4,6 +4,7 @@ import type {
 } from "../../packages/media-understanding-common/src/types.js";
 /** Shared inbound message context types used by prompt templating and reply dispatch. */
 import type { InboundEventKind } from "../channels/inbound-event/kind.js";
+import type { ChannelReactionContext } from "../channels/reaction-context.js";
 import type { DmScope, ReplyToMode } from "../config/types.base.js";
 import type { GroupToolPolicyConfig } from "../config/types.tools.js";
 import type { GatewayUiCommandTarget } from "../gateway/ui-command-target.types.js";
@@ -343,6 +344,8 @@ export type MsgContext = Partial<CanonicalInboundText> & {
   LocationCaption?: string;
   /** Stable identity of the provider update that carried this message. */
   ProviderUpdateId?: string;
+  /** Typed conversational reaction facts; no command or approval authority. */
+  Reaction?: ChannelReactionContext;
   /** Provider update kind, for example `message` or `edited_message`. */
   ProviderUpdateKind?: string;
   /** Provider-native timestamp for the original message. */
