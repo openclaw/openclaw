@@ -345,8 +345,9 @@ Labs only switches the feature on or off. Everything else lives outside Labs:
   that still needs approval.
 - **Settings → Devices** and `openclaw devices list` mark browsers that connect
   through OpenClaw ID and link to **Access**. They can't be removed or have
-  their tokens revoked as devices: remove the person, or the owner browser
-  under **Your devices**, instead.
+  their tokens revoked as devices. To end someone's access, remove them on
+  **Access**; to remove one of your own owner browsers, use **Your devices** in
+  the account menu. Nodes and other devices are managed as before.
 - There is no owner reset in this version: a claw keeps the recovery kit it was
   linked with, so store the kit safely.
 

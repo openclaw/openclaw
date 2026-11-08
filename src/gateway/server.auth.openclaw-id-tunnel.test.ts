@@ -108,6 +108,11 @@ beforeAll(async () => {
     record: async (deviceId, role, peerKey) => {
       bindings.set(`${deviceId}:${role}`, peerKey);
     },
+    forget: async (tokens) => {
+      for (const token of tokens) {
+        bindings.delete(`${token.deviceId}:${token.role}`);
+      }
+    },
     reportMismatch: () => {},
   });
 });
@@ -404,7 +409,8 @@ describe("OpenClaw ID tunnel devices on a token-mode Gateway", () => {
       auth: { mode: "token" as const, token: TOKEN },
       controlUi: { allowedOrigins: [BROWSER_ORIGIN] },
     };
-    const tunnel = await connectTunnel(OWNER_KEY);
+    const browserIdentity = makeIdentityPath(`openclaw-tunnel-managed-${randomUUID()}.sqlite`);
+    const tunnel = await connectTunnel(OWNER_KEY, { identityPath: browserIdentity });
     tunnel.ws.close();
     const other = await connectTunnel(undefined, { token: TOKEN });
     other.ws.close();
@@ -444,6 +450,21 @@ describe("OpenClaw ID tunnel devices on a token-mode Gateway", () => {
       // With OpenClaw ID off there is no Access page, so the browser is an ordinary device again.
       await writeConfigFile({ gateway });
       expect((await rpcReq(admin.ws, "device.pair.remove", { deviceId })).ok).toBe(true);
+      // The deleted pairing's binding goes with it: the same identity, paired again on
+      // ordinary ingress, starts as an ordinary device.
+      const reused = await connectTunnel(undefined, {
+        token: TOKEN,
+        identityPath: browserIdentity,
+      });
+      reused.ws.close();
+      expect(reused.res.ok).toBe(true);
+      await writeConfigFile({ gateway: { ...gateway, openclawId: { enabled: true } } });
+      const relisted = await rpcReq<{ paired: Array<{ managedBy?: string }> }>(
+        admin.ws,
+        "device.pair.list",
+        {},
+      );
+      expect(relisted.payload?.paired.some((d) => d.managedBy)).toBe(false);
     } finally {
       admin.ws.close();
       await writeConfigFile({ gateway });

@@ -92,6 +92,7 @@ describe("device tokens bound to the authenticated endpoint key", () => {
         throw new Error("uncertain storage outcome");
       },
       record: async () => {},
+      forget: async () => {},
       reportMismatch: vi.fn(),
     });
     expect(

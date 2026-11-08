@@ -40,7 +40,10 @@ import { reconcileRevokedDeviceWorker } from "../device-worker-revocation.js";
 import { GATEWAY_EVENT_DEVICE_PAIR_CHANGED } from "../events.js";
 import { clearRemovedNodeRuntimeState } from "../node-runtime-state.js";
 import { invalidateNodeWakeState } from "../node-wake-state.js";
-import { hasOpenClawIdTokenBinding } from "../openclaw-id/device-token-binding.js";
+import {
+  forgetDeviceTokenBindings,
+  hasOpenClawIdOperatorBinding,
+} from "../openclaw-id/device-token-binding.js";
 import { broadcastRejectedDevicePairing } from "../pairing-events.js";
 import { holdGatewayPolicyResponse } from "../server/ws-policy-close.js";
 import {
@@ -68,9 +71,12 @@ const OPENCLAW_ID_MANAGED_MESSAGE =
   "This browser connects through OpenClaw ID. Manage access on the Access page.";
 
 /**
- * A browser holding a tunnel-issued token is managed by OpenClaw ID membership while
- * the feature is on: removing it as a device would be undone by its next sign-in.
- * With OpenClaw ID off there is no Access page, so it is an ordinary device again.
+ * A browser whose operator token was issued over the tunnel is managed by OpenClaw ID
+ * membership while the feature is on: removing it as a device would be undone by its
+ * next sign-in. Nodes stay ordinary devices, and with OpenClaw ID off there is no
+ * Access page. Accepted gap: lanes that issue no device token (trusted-proxy auth mode,
+ * configured human operator roles) leave no binding, so those browsers stay removable;
+ * their next sign-in pairs them again.
  */
 function isManagedByOpenClawId(
   context: Pick<GatewayRequestContext, "getRuntimeConfig">,
@@ -78,7 +84,8 @@ function isManagedByOpenClawId(
 ): boolean {
   return (
     device != null &&
-    hasOpenClawIdTokenBinding(device.deviceId.trim(), listApprovedPairedDeviceRoles(device)) &&
+    !listApprovedPairedDeviceRoles(device).includes("node") &&
+    hasOpenClawIdOperatorBinding(device.deviceId.trim()) &&
     context.getRuntimeConfig().gateway?.openclawId?.enabled === true
   );
 }
@@ -564,7 +571,8 @@ export const deviceHandlers: GatewayRequestHandlers = {
       respond,
       deviceId,
       run: async (authz) => {
-        if (isManagedByOpenClawId(context, await getPairedDevice(deviceId.trim()))) {
+        const target = await getPairedDevice(deviceId.trim());
+        if (isManagedByOpenClawId(context, target)) {
           refuseOpenClawIdManaged({
             authz,
             deviceId,
@@ -580,6 +588,15 @@ export const deviceHandlers: GatewayRequestHandlers = {
           return;
         }
         clearRemovedNodeRuntimeState({ nodeId: removed.deviceId, context });
+        // A reused identity must not inherit the deleted pairing's tunnel bindings.
+        await forgetDeviceTokenBindings(
+          removed.deviceId,
+          target ? listApprovedPairedDeviceRoles(target) : [],
+        ).catch((error: unknown) => {
+          context.logGateway.warn(
+            `device pairing removed device=${removed.deviceId} but its OpenClaw ID token bindings were not cleared: ${String(error)}`,
+          );
+        });
         // Removal can retire its requester. Keep only its final reply, without
         // letting a failed claim or worker reconciliation skip client teardown.
         try {

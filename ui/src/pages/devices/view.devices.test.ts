@@ -866,7 +866,7 @@ describe("devices inventory rendering", () => {
     expect(buttons).not.toContain("Revoke");
     expect(buttons).not.toContain("Remove…");
     expect(buttons).toContain("Rotate");
-    expect(section.textContent).toContain("Manage it on the Access page.");
+    expect(section.textContent).toContain("Manage people on the Access page");
     expect(section.querySelector("a")?.getAttribute("href")).toBe(
       "/plugin?plugin=openclaw-id-access&id=access",
     );

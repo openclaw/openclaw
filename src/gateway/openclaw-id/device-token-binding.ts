@@ -22,6 +22,8 @@ export type DeviceTokenBindingOwner = {
   lookup(deviceId: string, role: string): string | undefined;
   /** Records that a token was issued to `peerKey` (write-through to the claw record). */
   record(deviceId: string, role: string, peerKey: string): Promise<void>;
+  /** Drops the bindings of a deleted device's tokens, so a reused identity starts unbound. */
+  forget(tokens: ReadonlyArray<{ deviceId: string; role: string; peerKey: string }>): Promise<void>;
   /** Reports a refused token for the security log. */
   reportMismatch(event: {
     deviceId: string;
@@ -100,19 +102,36 @@ export async function checkDeviceTokenPeer(params: {
 }
 
 /**
- * Whether one of these device roles holds a token issued over the tunnel. Such a
- * browser is managed by OpenClaw ID membership (the Access page), not as a device.
- * Unknown or unreadable bindings answer false, keeping ordinary device management.
+ * Whether this device's operator token was issued over the tunnel. Such a browser is
+ * managed by OpenClaw ID membership (the Access page), not as a device. Unknown or
+ * unreadable bindings answer false, keeping ordinary device management.
  */
-export function hasOpenClawIdTokenBinding(deviceId: string, roles: readonly string[]): boolean {
+export function hasOpenClawIdOperatorBinding(deviceId: string): boolean {
   if (!owner || owner === "unreadable") {
     return false;
   }
-  const current = owner;
   try {
-    return roles.some((role) => current.lookup(deviceId, role) !== undefined);
+    return owner.lookup(deviceId, "operator") !== undefined;
   } catch {
     return false;
+  }
+}
+
+/** Forgets the bindings of a deleted pairing. Best effort: the pairing is already gone. */
+export async function forgetDeviceTokenBindings(
+  deviceId: string,
+  roles: readonly string[],
+): Promise<void> {
+  if (!owner || owner === "unreadable") {
+    return;
+  }
+  const current = owner;
+  const tokens = roles.flatMap((role) => {
+    const peerKey = current.lookup(deviceId, role);
+    return peerKey ? [{ deviceId, role, peerKey }] : [];
+  });
+  if (tokens.length > 0) {
+    await current.forget(tokens);
   }
 }
 
