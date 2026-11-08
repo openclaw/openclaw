@@ -1,0 +1,3 @@
+28
+# Net expansion of existing wrong-pin boundary regression covers upload/download CA, blank, malformed and wrong-pin rejection before HTTP bytes.
+# Source-backed release regression; no shared ceiling increase.

@@ -659,38 +659,66 @@ describe("node worker transfer client", () => {
     }
   });
 
-  it("rejects a wrong TLS pin on a new socket", async () => {
-    const root = tempDirs.make("node-worker-transfer-wrong-pin-");
-    const rawManifest = serializeWorkerWorkspaceManifest({
-      version: 1,
-      baseCommit: null,
-      entries: [],
+  describe.each(["download", "upload"] as const)("%s TLS admission", (direction) => {
+    it.each([
+      [undefined, /self.signed certificate|certificate has expired/iu],
+      ["", /self.signed certificate|certificate has expired/iu],
+      [" \t\n ", /self.signed certificate|certificate has expired/iu],
+      ["00".repeat(32), /gateway TLS fingerprint mismatch/u],
+      ["invalid-pin", /gateway TLS fingerprint is invalid/u],
+    ] as const)("rejects an untrusted peer with pin %j before HTTP bytes", async (pin, error) => {
+      const root = tempDirs.make("node-worker-transfer-tls-admission-");
+      const rawManifest = serializeWorkerWorkspaceManifest({
+        version: 1,
+        baseCommit: null,
+        entries: [],
+      });
+      const digest = createHash("sha256").update(rawManifest).digest("hex");
+      const manifestRef = `sha256:${digest}`;
+      const workspaceDir = path.join(root, "workspace");
+      const manifestDir = path.join(root, ".openclaw-worker", "manifests");
+      await fs.mkdir(manifestDir, { recursive: true });
+      await fs.writeFile(path.join(manifestDir, `${digest}.json`), rawManifest);
+      await fs.mkdir(workspaceDir);
+      await fs.writeFile(path.join(workspaceDir, "result.txt"), "private workspace bytes");
+      let requestCount = 0;
+      let receivedBytes = 0;
+      const server = createHttpsServer(
+        { cert: TEST_TLS_CERT_PEM, key: TEST_TLS_KEY_PEM },
+        (_req, res) => {
+          requestCount++;
+          res.writeHead(200).end(rawManifest);
+        },
+      );
+      server.on("secureConnection", (socket) => {
+        socket.on("data", (chunk: Buffer) => (receivedBytes += chunk.byteLength));
+      });
+      const gatewayUrl = (await listen(server)).replace(/^ws/u, "wss");
+      try {
+        await expect(
+          runNodeWorkerWorkspaceTransfer({
+            gatewayUrl,
+            gatewayTlsFingerprint: pin,
+            environmentId: "environment-tls-admission",
+            workspaceDir,
+            manifestHome: root,
+            transfer:
+              direction === "download"
+                ? { direction, token: "test-token", manifestRef }
+                : {
+                    direction,
+                    token: "test-token",
+                    baseManifestRef: manifestRef,
+                    referenceManifestRef: manifestRef,
+                  },
+          }),
+        ).rejects.toMatchObject({ cause: { message: expect.stringMatching(error) } });
+        expect(requestCount).toBe(0);
+        expect(receivedBytes).toBe(0);
+      } finally {
+        await closeServer(server);
+      }
     });
-    const manifestRef = `sha256:${createHash("sha256").update(rawManifest).digest("hex")}`;
-    let requestCount = 0;
-    const server = createHttpsServer(
-      { cert: TEST_TLS_CERT_PEM, key: TEST_TLS_KEY_PEM },
-      (_req, res) => {
-        requestCount += 1;
-        res.writeHead(200).end(rawManifest);
-      },
-    );
-    const gatewayUrl = (await listen(server)).replace(/^ws/u, "wss");
-    try {
-      await expect(
-        runNodeWorkerWorkspaceTransfer({
-          gatewayUrl,
-          gatewayTlsFingerprint: "00".repeat(32),
-          environmentId: "environment-wrong-pin",
-          workspaceDir: path.join(root, "workspace"),
-          manifestHome: root,
-          transfer: { direction: "download", token: "wrong-pin-token", manifestRef },
-        }),
-      ).rejects.toThrow("gateway TLS fingerprint mismatch");
-      expect(requestCount).toBe(0);
-    } finally {
-      await closeServer(server);
-    }
   });
 
   it.each([
