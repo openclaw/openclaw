@@ -184,7 +184,8 @@ Catalog context and token-cost metadata follows xAI's live
 when a request's prompt reaches its documented 200k-token long-context threshold:
 for every priced Grok model, input, cached-input, and output rates double for the
 whole request. The catalog records both tiers, so usage estimates for long prompts
-use the higher rate. The current
+use the higher rate. OAuth configs saved before the catalog had tiers get them from
+`openclaw doctor --fix`; rows with your own prices are left as written. The current
 [Grok Build](https://docs.x.ai/build/overview) coding agent uses Grok 4.7. The
 historical OpenClaw `grok-build-latest` compatibility alias remains pinned to
 Grok 4.5.
