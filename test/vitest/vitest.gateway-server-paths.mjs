@@ -28,6 +28,7 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/config-reload.plugin-drain.test.ts",
   "src/gateway/config-reload.test.ts",
   "src/gateway/config-reload.transcripts.test.ts",
+  "src/gateway/config-reload.write-receipts.test.ts",
   "src/gateway/control-ui-assistant-media-policy.test.ts",
   "src/gateway/control-ui-plugin-assets.test.ts",
   "src/gateway/control-ui-public-session-card.http.test.ts",
