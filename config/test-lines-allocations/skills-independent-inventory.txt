@@ -1,2 +1,2 @@
-# Independent Skills settings readiness with prepared inventory and existing admission.
-78
+# Skills settings readiness: 78 own lines plus 22 lines of prepared-main debt.
+100
