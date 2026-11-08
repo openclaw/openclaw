@@ -23,7 +23,7 @@ import {
   resolveUiDefaultAgentId,
   resolveUiSessionRowAgentId,
 } from "../lib/sessions/session-key.ts";
-import { switchSidebarChipAgent } from "./app-sidebar-agent-selection.ts";
+import { loadSidebarAgentSelection } from "./app-sidebar-agent-selection-loader.ts";
 import {
   projectSidebarAgentSessionRows,
   type SidebarHomeSession,
@@ -608,7 +608,7 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarBase 
     if (!context) {
       return;
     }
-    void switchSidebarChipAgent(
+    loadSidebarAgentSelection(
       this,
       agentId,
       context,

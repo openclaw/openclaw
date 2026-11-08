@@ -316,3 +316,30 @@ it("does not navigate from cached rows when the Gateway denies the fresh read", 
     },
   );
 });
+
+it("does not start a delayed picker action after the active agent changes", async () => {
+  const row = ownedSession(
+    "agent:research:dashboard:00000002-0000-4000-8000-000000000000",
+    "viewer",
+  );
+  await withOwnerSidebar(
+    [row],
+    [viewer, other],
+    "personal",
+    async ({ sidebar, context, settle }) => {
+      await settle();
+      await sidebar.sidebarMenus.preloadMenuRenderer();
+      const onNavigate = vi.fn();
+      sidebar.onNavigate = onNavigate;
+      sidebar.querySelector<HTMLButtonElement>(".sidebar-agent-card__main")!.click();
+      await settle();
+      sidebar
+        .querySelector<HTMLElement>('.sidebar-agent-menu [data-value="agent:research"]')!
+        .click();
+      context.agentSelection.set("research");
+      await settle();
+      expect(onNavigate).not.toHaveBeenCalled();
+    },
+    viewer.id,
+  );
+});
