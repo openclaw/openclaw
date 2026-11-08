@@ -263,3 +263,10 @@ it.each<[string, Partial<VideoGenerationRequest>, Record<string, unknown>, strin
     expect(request().body).not.toHaveProperty(key);
   }
 });
+
+it.each(["21:9", "5:2"])("advertises and sends xAI's %s aspect ratio", async (aspectRatio) => {
+  complete();
+  await generate({ aspectRatio });
+  expect(request().body).toMatchObject({ aspect_ratio: aspectRatio });
+  expect(build().capabilities.generate?.aspectRatios).toContain(aspectRatio);
+});
