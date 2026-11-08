@@ -96,6 +96,13 @@ it("remember replays an accepted request once and rejects changed payloads", asy
   const { evidence } = await f.record(replay.items[0]!.id);
   expect(evidence!.map((e) => e.verified)).toStrictEqual([true]);
   expect((await f.service.remember(input, f.owner)).items).toStrictEqual(replay.items);
+  await expect(
+    f.service.remember(
+      { ...input, items: [...items, { text: "Ships Friday.", kind: "commitment" }] },
+      f.owner,
+    ),
+  ).rejects.toThrow(/different payload/);
+  expect((await f.service.records({ kind: "claim" }, f.owner)).total).toBe(1);
   await expect(changed()).rejects.toThrow(/different payload/);
   const again = await f.remember([
     { text: "  prefers SHORT   replies. ", kind: "preference", subject: "garden pilot" },

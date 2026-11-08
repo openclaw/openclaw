@@ -41,6 +41,14 @@ inode, and birthtime with `fstat`, not SQL. Migration/repair owners publish new
 facts after their DDL. Doctor migrations, repairs, and explicit verification retain
 their required checks; ordinary current-schema opens follow the policy below.
 
+Cold shared-state readiness readers adopt the seal's catalog before consuming
+its completed validation facts. Startup's `database-readiness` diagnostics report
+`statePreflightMs` and `agentPreflightMs` separately; the existing schema counters
+cover agent inspections only. `stateSealCount`, `stateIntegrityCheckCount`, and
+`stateIntegrityMs` distinguish reuse from a required state integrity and foreign-key
+check. State preflight time also includes reader startup, schema and ownership
+inspection, target registry reads, and cleanup.
+
 A clean-close seal whose schema identity changed also takes bounded admission on
 an otherwise current agent database. The writable owner repairs canonical
 non-unique indexes transactionally, verifies the touched tables, and validates
@@ -50,6 +58,15 @@ checks and corruption refusals are unchanged. This applies to Doctor/update open
 as well as Gateway startup: admission records `deferred/pending`, logs repaired
 index names, and leaves full verification owed without minting a verification
 timestamp or clean-close seal.
+
+Full admission can also repair a missing or drifted canonical unique index that
+backs a foreign key. Physical integrity checks run first. If SQLite then reports
+an exact foreign-key schema mismatch and the repair plan restores a canonical
+unique index on that parent table, the owner repairs the indexes transactionally
+and repeats the complete required integrity check before admission. Duplicate
+parent keys, actual orphaned children, and unresolved schema mismatches refuse
+admission and roll back the repair. A successful QUICK check still does not mint
+a FULL verification receipt.
 
 On Linux, macOS, and Windows, a separate process, such as a CLI `agent exec` run while the Gateway
 holds the same agent database, reuses the Gateway's completed admission. The peer
@@ -565,6 +582,15 @@ lease, and cancellation detaches only that caller while the shared operation and
 remaining leases keep their original owner and cleanup authority.
 
 Shared-state reads capture their source and lifecycle authority before queuing.
+Read-only state inspections in one `doctor` or `update` process share a retained
+private image while the source's main file and WAL are unchanged, instead of copying
+the database for each schema, lease, or single-row read. Inside these processes a
+one-shot child seeds the image, so no retained child outlives the read that needed
+it. A commit, a replaced file, or a rollback journal retires the image, and the
+process retires it before finishing. A failed removal of a retired image logs a
+warning and stays with the exit retry and the Gateway sweep. The Gateway itself never
+holds one.
+
 An explicitly inherited snapshot keeps its original bytes. A fresh
 artifact-preserving copy checks the admitted physical file key at each main-file
 open and refuses changed identity rather than following a replacement. Requests
@@ -950,14 +976,18 @@ only an `agentId` and omit `sessionKey`. Pending preparation returns a retryable
 startup refusal. Failed inspection keeps refusing delivery with the recorded
 repair guidance after startup work settles.
 
-Deferred startup retries classified SQLite lock failures during opening or session
-migration up to four attempts with cancellable backoff. Each retry checks deletion
+Deferred startup uses one contention policy for SQLite locks and typed worker
+overload during deletion checks, opening (including required integrity checks),
+session migration, and runtime publication, up to four attempts with cancellable
+backoff. Each preparation retry checks deletion
 status and the original database file identity again; migration retries retain the
 completed opening, and publication retries do not repeat migration. Corruption,
 incompatible schemas, changed file identities, and mixed cleanup failures remain
-terminal. If locks persist through the retry budget, the agent remains degraded
-with `database locked by another process` and guidance to close competing processes
-and restart the Gateway. There is no periodic or on-demand in-process admission
+terminal. If contention persists through the retry budget, the agent remains
+degraded with guidance to let competing work finish and restart the Gateway;
+worker overload does not require Doctor or database repair. Deferred preflight
+failures preserve their original refusal and recovery guidance. There is no
+periodic or on-demand in-process admission
 retry after exhaustion; a new Gateway startup retries admission. No schema or
 configuration changes are required.
 

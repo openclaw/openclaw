@@ -372,6 +372,14 @@ async function galleryPresentationCounts(page: Page) {
       titles: host.querySelectorAll("[data-dashboard-session] h2").length,
       representedCards: represented ? Number(represented.getAttribute("aria-setsize")) : cards,
       windowed: represented !== null && cards < Number(represented.getAttribute("aria-setsize")),
+      chatBootStylesheets: performance
+        .getEntriesByType("resource")
+        .filter((entry) => /\/control-ui-boot-chat-styles-[^/]+\.css(?:\?|$)/u.test(entry.name))
+        .length,
+      activeChatBootStylesheets: Array.from(document.styleSheets).filter(
+        (sheet) =>
+          sheet.href && /\/control-ui-boot-chat-styles-[^/]+\.css(?:\?|$)/u.test(sheet.href),
+      ).length,
     };
   });
 }

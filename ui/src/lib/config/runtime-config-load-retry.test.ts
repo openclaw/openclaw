@@ -1,7 +1,11 @@
 // @vitest-environment node
 import { describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import { createConfigCapabilityHarness, createGatewayHarness } from "./config-test-harness.ts";
+import {
+  createConfigCapabilityHarness,
+  createConfigServerMock,
+  createGatewayHarness,
+} from "./config-test-harness.ts";
 import { makeSnapshot } from "./config-write.test-support.ts";
 import { createRuntimeConfigCapability } from "./runtime-config-capability.ts";
 
@@ -25,6 +29,28 @@ describe("runtime config load retries", () => {
     new Promise<void>((resolve) => {
       setTimeout(resolve, 0);
     });
+
+  it("keeps a cold page's editor ready when the Gateway connects later", async () => {
+    const server = createConfigServerMock();
+    const client = { request: server.request } as unknown as GatewayBrowserClient;
+    const { gateway, publish } = createGatewayHarness(client);
+    publish(false);
+    const runtimeConfig = createRuntimeConfigCapability(gateway);
+    try {
+      await runtimeConfig.ensureLoaded();
+      expect(server.request).not.toHaveBeenCalled();
+      publish(true);
+      await vi.waitFor(() => expect(runtimeConfig.state.configSnapshot?.hash).toBe("hash-1"));
+
+      runtimeConfig.patchForm(["count"], 2);
+      await expect(runtimeConfig.flushFormChanges()).resolves.toBe(true);
+      expect(server.submissions).toHaveLength(1);
+      expect(server.submissions[0]).toMatchObject({ method: "config.set", baseHash: "hash-1" });
+      expect(JSON.parse(server.submissions[0]!.raw)).toEqual({ count: 2 });
+    } finally {
+      runtimeConfig.dispose();
+    }
+  });
 
   it.each(["display", "editor"] as const)(
     "does not republish %s loads that cannot start before read access",

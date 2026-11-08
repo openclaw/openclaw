@@ -209,10 +209,10 @@ describe("ClawHub detail content", () => {
       }),
       container,
     );
-    const body = container.querySelector<HTMLElement>(".skill-reader-dialog__body")!;
     await expect
       .element(page.getByRole("button", { name: "Install Guide", exact: true }))
       .toBeVisible();
+    const body = container.querySelector<HTMLElement>(".skill-reader-dialog__body")!;
     const footer = container.querySelector<HTMLElement>(
       "openclaw-modal-actions.skill-reader-dialog__actions",
     )!;

@@ -51,6 +51,15 @@ struct SettingsHubScreen: View {
                     }
                     ToolbarItem(placement: .topBarTrailing) {
                         Button {
+                            self.push(.deviceSettings)
+                        } label: {
+                            Text("Device")
+                                .font(OpenClawType.subheadSemiBold)
+                        }
+                        .accessibilityIdentifier("SettingsHub.Device")
+                    }
+                    ToolbarItem(placement: .topBarTrailing) {
+                        Button {
                             self.push(.espSetup)
                         } label: {
                             Label { Text("ESP device setup").font(OpenClawType.subheadSemiBold) } icon: {
@@ -267,9 +276,7 @@ struct EmbeddedDashboardContent: View {
             usesNativeEmbed: true,
             embedCompatibility: self.embedCompatibility,
             accessCookie: accessCookie,
-            accessAdmissionIsCurrent: authorization.map { authorization in
-                { authorization.isCurrent() }
-            },
+            accessAdmissionIsCurrent: authorization?.isCurrent,
             accessResponseCheck: authorization?.checkResponse,
             onAccessCookieBoundaryFailure: onAccessCookieBoundaryFailure)
             .id(webContentIdentity)

@@ -63,6 +63,7 @@ export class TranscriptInitialRange {
     ) => number,
     private readonly afterCommit: (effect: () => void) => void,
     private readonly measureRows: () => boolean,
+    private readonly rowsMeasured: (indexes: readonly number[]) => boolean,
     private readonly prewarmRow?: (index: number, mode: MarkdownPrewarmMode) => boolean | undefined,
     private readonly invalidatePreparation: () => void = invalidate,
   ) {
@@ -149,10 +150,31 @@ export class TranscriptInitialRange {
       }
     }
     this.retainViewportRows();
+    const active = this.activeIndexes();
+    const virtualizer = this.virtualizer();
+    const first = active[0];
+    // Ordinary rows would pay another commit on every wheel step. Retained fragments
+    // need preparation before their cold, estimated height can enter the flow.
+    const predecessor =
+      !this.pending &&
+      !this.preparingEnd &&
+      first !== undefined &&
+      rows[first]?.retainDom &&
+      first === (virtualizer.range?.startIndex ?? 0) - 1 &&
+      !this.cachedRowSize(first) &&
+      !virtualizer.itemSizeCache.has(virtualizer.options.getItemKey(first)) &&
+      !this.rowsMeasured([first])
+        ? active.shift()
+        : undefined;
+    if (predecessor !== undefined && this.preparingRowKey !== rows[predecessor]!.key) {
+      // Incoming overscan takes priority over speculative background preparation.
+      this.preparingRowKey = rows[predecessor]!.key;
+      this.prepareStarted = performance.now();
+      // A resumed reader can have a cached moving range without this predecessor.
+      this.refresh();
+    }
     return {
-      activeRowKeys: new Set(
-        [...this.activeIndexes(), ...this.endIndexes()].map((index) => rows[index]!.key),
-      ),
+      activeRowKeys: new Set([...active, ...this.endIndexes()].map((index) => rows[index]!.key)),
       preparingRowKey: this.preparingRowKey,
     };
   }
@@ -210,18 +232,31 @@ export class TranscriptInitialRange {
     }
     const virtualizer = this.virtualizer();
     const height = virtualizer.scrollRect?.height ?? 0;
-    const indexes: number[] = [];
-    let covered = 0;
-    for (let index = this.rows.length - 1; index >= 0 && covered < height; index--) {
-      indexes.push(index);
-      covered +=
-        (virtualizer.itemSizeCache.get(this.rows[index]!.key) ??
-          virtualizer.options.estimateSize(index)) + virtualizer.options.gap;
+    if (height <= 0 || !this.rows.length) {
+      return [];
     }
-    return indexes;
+    const end =
+      virtualizer.getTotalSize() +
+      virtualizer.options.scrollMargin -
+      virtualizer.options.paddingEnd;
+    const first = virtualizer.getVirtualItemForOffset(end - height);
+    if (!first) {
+      return [];
+    }
+    return this.normalIndexes({
+      startIndex: first.index,
+      endIndex: this.rows.length - 1,
+      count: this.rows.length,
+      overscan: virtualizer.options.overscan,
+      lanes: virtualizer.options.lanes,
+    });
   }
 
-  readonly prepareEnd = (ready: () => void, isCurrent: () => boolean): void => {
+  readonly prepareEnd = (ready: () => void, isCurrent: () => boolean, native: boolean): void => {
+    if (native && this.pending) {
+      ready();
+      return;
+    }
     cancelLayout(this);
     this.preparingEnd = true;
     this.refresh();
@@ -230,7 +265,11 @@ export class TranscriptInitialRange {
       if (!this.preparingEnd || !this.canPrepare() || !isCurrent()) {
         return;
       }
-      if (this.measureRows()) {
+      // Native sizes can expand the destination window without moving the current range.
+      if (native) {
+        this.refresh();
+      }
+      if (native ? !this.rowsMeasured(this.endIndexes()) : this.measureRows()) {
         this.invalidate();
         // A measurement can mount another row. Let the browser present before
         // its next pass instead of draining every correction in one task.

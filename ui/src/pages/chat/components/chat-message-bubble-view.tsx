@@ -66,6 +66,7 @@ import { ChatRowDisplayContext } from "./chat-row-display-context.ts";
 import type { SidebarContent } from "./chat-sidebar-content-types.ts";
 import { TranscriptMessageElementsContext } from "./chat-transcript-message-elements.ts";
 import { WorkspaceConflictTranscriptMessage } from "./chat-workspace-conflict.tsx";
+import { SubmittedAppContext } from "./submitted-app-context.tsx";
 
 registerEnglishCatalog(registerChatToolLabelsEnglish);
 
@@ -273,6 +274,9 @@ function MessageText(props: ContentProps) {
       </Match>
       <Match when={prepared().text}>
         <MessageMarkdown
+          onOpenImage={(item, index) =>
+            props.state().imageRenderOptions.openInlineImage(index, item.src)
+          }
           markdown={prepared().text ?? ""}
           messageKey={props.messageKey}
           options={prepared().options}
@@ -390,6 +394,7 @@ function BubbleContents(props: ContentProps) {
       </Show>
       <Show when={props.state().normalizedRole === "user"} fallback={<MessageText {...props} />}>
         <Show when={hasText() || props.options.avatar}>
+          <SubmittedAppContext message={props.state().message} />
           <div class="chat-message-avatar-anchor">
             <MessageText {...props} />
             <MessageAvatar render={props.options.avatar} />

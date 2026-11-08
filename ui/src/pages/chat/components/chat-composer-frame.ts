@@ -12,6 +12,7 @@ import {
   canSubmitBeforeChatHistory,
   isChatControlCommand,
   isModelIndependentChatCommand,
+  parseSlashCommand,
 } from "../../../lib/chat/commands.ts";
 import { updateHumanMentions } from "../../../lib/chat/human-mentions.ts";
 import { clearCompositionEnd, recordCompositionEnd } from "../../../lib/ime.ts";
@@ -79,7 +80,7 @@ export function createChatComposerContext(
   state.slashCommandDispatchConnected = props.connected;
   const canCompose = props.canCompose ?? props.canSend;
   const isBusy = props.sending || streaming;
-  const canAbort = Boolean(props.canAbort && props.onAbort);
+  const canAbort = Boolean(props.canAbort);
   const showAbortableUi = canAbort && !hasTerminalRunStatus(props.runStatus);
   const submittedProgress = props.queue.find((item) =>
     isCurrentSessionSubmittedProgress(item, props.sessionKey, props.runStatus),
@@ -211,6 +212,15 @@ export function createChatComposerContext(
     runInlineCommand: props.connected ? props.onSlashCommand : undefined,
     activateComposerMode: goalComposer.activateCommand,
   };
+  const slashCommand = parseSlashCommand(visibleDraft)?.command;
+  const slashArgsHint =
+    !goalComposer.active &&
+    slashCommand?.args &&
+    !slashCommand.argOptions?.length &&
+    slashMenuHost.resolveArgOptions(slashCommand).length === 0 &&
+    visibleDraft === `/${slashCommand.name} `
+      ? slashCommand.args
+      : undefined;
   const mentionMenuHost: HumanMentionMenuHost = {
     paneId: props.paneId,
     getDraft: skillMenuHost.getDraft,
@@ -636,6 +646,7 @@ export function createChatComposerContext(
     canCompose,
     showAbortableUi,
     visibleDraft,
+    slashArgsHint,
     submitQueued: queuedSubmit.submitQueued,
     queuedSubmitDue: queuedSubmit.queuedSubmitDue,
     flushQueuedSubmit: queuedSubmit.flushQueuedSubmit,

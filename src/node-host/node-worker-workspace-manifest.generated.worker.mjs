@@ -241,7 +241,11 @@ const requestedManifestDigest = process.argv[3] === "resolve" ? process.argv[4] 
 const publishedManifestDigest = process.argv[3] === "publish" ? process.argv[4] : null;
 const memoMode = process.argv.at(-1) === "memo-v1";
 const priorManifestDigests = [
-  ...new Set(process.argv.slice(4).filter((value) => value && value !== "memo-v1")),
+  ...new Set(
+    process.argv
+      .slice(4)
+      .filter((value) => value && value !== "memo-v1" && !value.startsWith("memo:")),
+  ),
 ];
 const MAX_WORKSPACE_GIT_CANDIDATES = 1000000;
 const MAX_WORKSPACE_INVENTORY_ENTRIES = 250000;
@@ -285,13 +289,18 @@ const hashMemo = readHashMemo();
 // seal against code that can rewrite the node's own files or process memory.
 // Block-level forks preserve inode/timestamps; a changed device or stat fact misses.
 // Accept same-size, same-mtime, same-ctime edits, as with the in-process memo.
-for (const digest of priorManifestDigests) {
+const memoFiles = [
+  ...priorManifestDigests.map((digest) =>
+    path.join(process.env.HOME, ".openclaw-worker", "manifests", digest + ".memo"),
+  ),
+  ...process.argv
+    .slice(4)
+    .filter((value) => value.startsWith("memo:"))
+    .map((value) => value.slice(5)),
+];
+for (const memoFile of memoFiles) {
   try {
-    const saved = JSON.parse(
-      readManifestFile(
-        path.join(process.env.HOME, ".openclaw-worker", "manifests", digest + ".memo"),
-      ),
-    );
+    const saved = JSON.parse(readManifestFile(memoFile));
     if (
       !Array.isArray(saved) ||
       saved.length > MAX_WORKSPACE_INVENTORY_ENTRIES ||
@@ -852,8 +861,17 @@ async function main() {
   }
   const ignoredPaths = await initializeBuildCacheInputs();
   assertManifestCurrent();
-  if (eligibleOnly) {
+  // Git owns input eligibility, including authenticated staged inputs. Results
+  // additionally retain authored artifacts without enrolling unrelated ignored files.
+  if (eligibleOnly || requestedBaseCommit) {
     for (const relative of await eligiblePaths(ignoredPaths)) addWithParents(relative);
+    if (!eligibleOnly) {
+      const absolute = path.join(root, ".artifacts");
+      const stats = fs.lstatSync(absolute, { throwIfNoEntry: false });
+      if (stats && (!stats.isDirectory() || walk(".artifacts"))) {
+        recordNode(".artifacts", absolute, stats);
+      }
+    }
   } else {
     walk("");
   }

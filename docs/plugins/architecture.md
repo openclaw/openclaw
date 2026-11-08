@@ -181,13 +181,15 @@ Runs outside the agent's resolved workspace reuse the agent's prepared plugin ge
 
 Tool resolution treats plugins that the prepared generation recorded as disabled or failed (for example, a memory plugin outside the selected memory slot) as settled outcomes and does not load them again for each turn.
 
+Prepared tool generations and synthetic-auth facts keep one process-environment scope even if the runtime replaces `process.env`. Explicit custom environment objects retain separate scopes, so they cannot borrow another environment's prepared facts.
+
 Completed plugin generations reuse their registration grouping and manifest-owner lookup across turns. These facts belong to the registry publication and metadata snapshot; registration in progress stays uncached. Tool factories still receive fresh turn contexts, and returned tools retain that turn's authority, delivery, memory, and sandbox bindings rather than borrowing a later turn's permissions.
 
 Plugin reload reconciles config watcher events after asynchronous metadata preparation. An unchanged source event does not cancel the operation; newer writes or changed config, install records, or source ownership still supersede it.
 
 Ordinary plugin source captures use independent files, including copies reached through aliases. On filesystems with copy-on-write support, these captures can share storage without sharing file identity, reducing data writes for large plugins. File containment and receipt validation run during capture; later source edits take effect on the next reload rather than invalidating the existing snapshot.
 
-Managed installs publish an immutable, unexecuted source snapshot before the matching install record becomes visible. The installed index binds it to the install revision, content and dependency-closure digests, platform and ABI, capture format, and resolution options. Native admission, callbacks, and live instances remain independently owned. Install, update, uninstall, and rollback publication retire displaced source snapshots; active readers keep their generation until release.
+Managed installs record content and dependency-closure digests from unexecuted source capture. Eager snapshot publication is suspended while startup continues to prepare fresh runtime captures. Existing source snapshots remain owned by the installed index, bound to the install revision, content and dependency-closure digests, platform and ABI, capture format, and resolution options. Native admission, callbacks, and live instances remain independently owned. Install, update, uninstall, and rollback publication still retire displaced snapshots; active readers keep their generation until release.
 
 Staging paths cannot be acquired, even with complete receipts. After an interrupted publication, cleanup reclaims staged source only after its writer's custody token is released; completed snapshots remain protected by the installed index and their readers. Before leaving staging, the installed-index SQLite owner journals the completed candidate, including on the first install. The index commit atomically takes ownership from that journal. If the installer exits before commit, lifecycle cleanup can reclaim the unreferenced candidate after writer custody releases.
 
