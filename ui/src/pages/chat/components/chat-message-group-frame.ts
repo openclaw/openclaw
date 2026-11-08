@@ -210,6 +210,8 @@ export function prepareMessageGroupFrame(
   // Footer copy stays available (e.g. a commentary search hit); reply was already dropped for non-owners.
   const footerActionDetails = preparedMessages.at(-1)?.actions ?? null;
   const footerActionMessageKey = actionOwners.at(-1)?.key;
+  const pendingSteer =
+    normalizedRole === "user" ? opts.pendingSteer?.(group.messages.at(-1)?.message) : undefined;
   const hasUserFooterActions =
     normalizedRole === "user" &&
     ((opts.onRewind && !opts.rewindDisabled) || hasMessageActionButtons(footerActionDetails, opts));
@@ -265,10 +267,10 @@ export function prepareMessageGroupFrame(
     footerActionDetails,
     footerActionMessageKey,
     hasUserFooterActions,
-    // An undelivered steer shows only its steer row; identity, time and actions follow delivery.
-    hidesFooter:
-      isTurnBlock ||
-      (normalizedRole === "user" && Boolean(opts.pendingSteer?.(group.messages.at(-1)?.message))),
+    // An undelivered steer's footer slot holds only its steer row; identity, time and
+    // actions follow delivery.
+    pendingSteer,
+    statusFooter: Boolean(sendStatus || pendingSteer),
     sendStatus,
     inlineUserAvatar,
     hasAvatar,

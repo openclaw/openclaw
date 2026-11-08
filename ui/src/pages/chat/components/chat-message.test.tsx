@@ -1,7 +1,9 @@
 /* @vitest-environment jsdom */
 
 import { describe, expect, it, vi } from "vitest";
+import { CHAT_PENDING_INPUT_MESSAGE_PREFIX } from "../../../../../packages/gateway-protocol/src/schema/chat-history-constants.js";
 import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
+import { createPendingSteerLookup, type PendingSteer } from "../chat-pending-inputs.ts";
 import { agentEvent, createHost } from "../tool-stream.test-helpers.ts";
 import { handleAgentEvent } from "../tool-stream.ts";
 import { createChatMessageHarness, buildItems } from "./chat-message-render.test-support.tsx";
@@ -82,52 +84,57 @@ describe("grouped chat rendering", () => {
     message: {},
     steerNow,
   });
-  it.each([
-    {
-      steerNow: { status: "blocked", tools: [] },
-      canSteer: true,
-      reason: "on the next model turn",
-    },
-    {
-      steerNow: { status: "blocked", tools: ["upload"] },
-      canSteer: true,
-      reason: "when the current step finishes",
-    },
-    {
-      steerNow: { status: "available", tools: [] },
-      canSteer: false,
-      reason: "when the current step finishes",
-    },
-  ] as const)(
-    "shows only a steering label while a steer cannot be sent now (%j)",
-    ({ steerNow, canSteer, reason }) => {
-      renderGroupedMessage(createUserMessage("Use the shorter approach."), "user", {
-        pendingSteer: () => ({
-          ...steerInput({ ...steerNow, tools: [...steerNow.tools] }),
-          latest: true as const,
-        }),
-        onSteerNow: canSteer ? vi.fn() : undefined,
-        onRewind: vi.fn(),
-      });
-      expectPresent(".chat-bubble");
-      const status = requireElement(".chat-steer-now [role=status]", HTMLSpanElement);
-      expect(status.textContent).toBe("Steering…");
-      expect(status.getAttribute("aria-label")).toBe(`Steering — sends ${reason}.`);
-      expect(status.title).toBe(status.getAttribute("aria-label"));
-      expectAbsent(".chat-steer-now button");
-      // Undelivered steers get identity, time and actions once they land.
-      expectAbsent(".chat-group-footer");
-    },
-  );
-  it("leaves earlier waiting steers unlabeled", () => {
+  const renderSteer = (steer: PendingSteer, canSteer = true) =>
     renderGroupedMessage(createUserMessage("Use the shorter approach."), "user", {
-      pendingSteer: () => steerInput({ status: "blocked", tools: ["upload"] }),
-      onSteerNow: vi.fn(),
+      pendingSteer: () => steer,
+      onSteerNow: canSteer ? vi.fn() : undefined,
       onRewind: vi.fn(),
     });
-    expectPresent(".chat-bubble");
+  it.each([
+    { tools: [], canSteer: true, reason: "on the next model turn" },
+    { tools: ["upload"], canSteer: true, reason: "when the current step finishes" },
+    { tools: [], canSteer: false, reason: "when the current step finishes", available: true },
+  ])(
+    "labels the newest waiting steer in its footer slot (%j)",
+    ({ tools, canSteer, reason, available }) => {
+      const status = available ? "available" : "blocked";
+      renderSteer(
+        { ...steerInput({ status, tools }), newest: true, sendNow: available || undefined },
+        canSteer,
+      );
+      const label = requireElement(
+        ".chat-group-footer .chat-steer-now [role=status]",
+        HTMLSpanElement,
+      );
+      expect(label.textContent).toBe("Steering…");
+      expect(label.getAttribute("aria-label")).toBe(`Steering — sends ${reason}.`);
+      expect(label.title).toBe(label.getAttribute("aria-label"));
+      expectAbsent(".chat-steer-now button");
+      // Identity, time and actions follow delivery.
+      expectAbsent(".chat-group-footer-actions");
+      expectAbsent(".chat-group-footer__meta");
+    },
+  );
+  it("offers Send now only on the newest sendable steer", () => {
+    renderSteer({ ...steerInput({ status: "available", tools: [] }), sendNow: true });
+    expectPresent(".chat-group-footer .chat-steer-now button");
+    expectAbsent(".chat-steer-now [role=status]");
+  });
+  it.each([
+    { name: "an earlier steer", steer: steerInput({ status: "blocked", tools: ["upload"] }) },
+    {
+      name: "the newest when an earlier steer carries Send now",
+      steer: {
+        ...steerInput({ status: "blocked", tools: ["upload"] }),
+        newest: true,
+        deferToSendNow: true,
+      },
+    },
+  ] as const)("shows no steer row for $name", ({ steer }) => {
+    renderSteer(steer);
+    expectPresent(".chat-group-footer");
     expectAbsent(".chat-steer-now");
-    expectAbsent(".chat-group-footer");
+    expectAbsent(".chat-group-footer-actions");
   });
   it("keeps the delivered user footer", () => {
     renderGroupedMessage(createUserMessage("Use the shorter approach."), "user", {
@@ -135,6 +142,30 @@ describe("grouped chat rendering", () => {
     });
     expectPresent(".chat-group-footer .chat-group-footer-actions");
     expectAbsent(".chat-steer-now");
+  });
+  it("assigns one steer row across steers waiting together", () => {
+    const input = (id: string, acceptedAt: number, status: "available" | "blocked") => ({
+      ...steerInput({ status, tools: status === "blocked" ? ["exec"] : [] }),
+      id,
+      runId: `run-${id}`,
+      acceptedAt,
+    });
+    const lookup = createPendingSteerLookup([
+      input("a", 1, "available"),
+      input("b", 2, "available"),
+      input("c", 3, "blocked"),
+    ]);
+    const row = (id: string) => {
+      const steer = lookup?.({
+        role: "user",
+        content: "x",
+        id: `${CHAT_PENDING_INPUT_MESSAGE_PREFIX}${id}`,
+      });
+      return { newest: steer?.newest, sendNow: steer?.sendNow, defer: steer?.deferToSendNow };
+    };
+    expect(row("a")).toEqual({ newest: undefined, sendNow: undefined, defer: undefined });
+    expect(row("b")).toEqual({ newest: undefined, sendNow: true, defer: undefined });
+    expect(row("c")).toEqual({ newest: true, sendNow: undefined, defer: true });
   });
   function applyNotice(
     host: ReturnType<typeof createHost>,

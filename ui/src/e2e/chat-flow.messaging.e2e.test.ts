@@ -112,7 +112,8 @@ suite.define(() => {
     const links = user.getByRole("button", { name: "Send now", exact: true });
     const link = links.first();
     await link.waitFor({ state: "visible" });
-    await expectCount(links, 2);
+    // Steers waiting together drain together: one Send now, on the newest sendable steer.
+    await expectCount(links, 1);
     await expectCount(user, 1);
     const bubble = await user.locator(".chat-bubble").first().elementHandle();
     const banner = page.locator(".chat-pending-inputs");
@@ -127,10 +128,10 @@ suite.define(() => {
     let reads = await historyReads();
     await link.click();
     const request = await gateway.waitForRequest("chat.steerNow");
-    expect(request.params).toMatchObject({ sessionKey, sessionId, runId });
+    expect(request.params).toMatchObject({ sessionKey, sessionId, runId: "pending-steer-2" });
     await gateway.waitForRequest("chat.history", { after: reads });
     await expectCount(banner, 0);
-    await expectCount(links, 2);
+    await expectCount(links, 1);
     // Steers waiting on the same run share one quiet label on the newest message.
     const blocked = (input: (typeof history.pendingInputs.items)[number]) => ({
       ...input,
@@ -155,12 +156,18 @@ suite.define(() => {
     await expectCount(banner, 0);
     await expectCount(user, 1);
     expect(await bubble?.evaluate((element) => element.isConnected)).toBe(true);
-    const remaining = { ...history, pendingInputs: { items: [secondInput], total: 1 } };
+    // When only the earlier steer can interrupt, it carries Send now and the newest stays bare.
+    const [firstInput] = history.pendingInputs.items;
+    const remaining = {
+      ...history,
+      pendingInputs: { items: [firstInput, blocked(secondInput)], total: 2 },
+    };
     await gateway.setMethodResponse("chat.startup", remaining);
     await gateway.setMethodResponse("chat.history", remaining);
     await gateway.setMethodResponse("chat.steerNow", { status: "interrupted", tools: [] });
     await page.reload();
     await expectCount(links, 1);
+    await expectCount(steering, 0);
     await gateway.setMethodResponse("chat.history", {
       ...history,
       pendingInputs: { items: [], total: 0 },
@@ -168,7 +175,7 @@ suite.define(() => {
     await links.click();
     // Request history is per page load.
     const second = await gateway.waitForRequest("chat.steerNow");
-    expect(second.params).toMatchObject({ runId: "pending-steer-2" });
+    expect(second.params).toMatchObject({ runId });
     await expectCount(links, 0);
     await expectCount(steering, 0);
   });

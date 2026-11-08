@@ -107,13 +107,15 @@ export function ChatSendStatus(props: { status: SendStatus; actions: ChatSendSta
 }
 
 export function ChatSteerNow(props: { input?: PendingSteer; onSend?: (runId: string) => void }) {
-  const sendable = () => props.input?.steerNow?.status === "available" && Boolean(props.onSend);
-  // Steers waiting together share one label on the newest; each keeps its own Send now.
+  // One row speaks for every waiting steer: Send now when the viewer can use it,
+  // otherwise Steering… on the newest.
+  const sendNow = () => Boolean(props.onSend && props.input?.sendNow);
+  const label = () => props.input?.newest && !(props.onSend && props.input.deferToSendNow);
   return (
-    <Show when={(sendable() || props.input?.latest) && props.input?.steerNow}>
+    <Show when={(sendNow() || label()) && props.input?.steerNow}>
       {(steerNow) => (
         <div class="chat-steer-now chat-message-source">
-          {sendable() ? (
+          {sendNow() ? (
             <button
               class="chat-send-status__action"
               type="button"
@@ -133,6 +135,17 @@ export function ChatSteerNow(props: { input?: PendingSteer; onSend?: (runId: str
           )}
         </div>
       )}
+    </Show>
+  );
+}
+
+/** Earlier undelivered steers keep a delivered message's action-row space for their steer row. */
+export function ChatSteerRow(props: { input?: PendingSteer; onSend?: (runId: string) => void }) {
+  return (
+    <Show when={props.input}>
+      <div class="chat-message-actions-row chat-message-actions-row--steer">
+        <ChatSteerNow input={props.input} onSend={props.onSend} />
+      </div>
     </Show>
   );
 }

@@ -38,7 +38,7 @@ import {
 import type { MessageActionDetails } from "./chat-message-markdown.types.ts";
 import { GroupMessageReactions } from "./chat-message-reaction-chips-view.tsx";
 import { messageReactionOptions } from "./chat-message-reaction-model.ts";
-import { ChatSendStatus, ChatSteerNow } from "./chat-message-send-status-view.tsx";
+import { ChatSendStatus, ChatSteerNow, ChatSteerRow } from "./chat-message-send-status-view.tsx";
 import { StreamGroupParts } from "./chat-message-stream-view.tsx";
 import type { AssistantMessageDisclosure } from "./chat-message-text-view.tsx";
 import { MessageMeta } from "./chat-message-timestamp-view.tsx";
@@ -386,8 +386,10 @@ function FramedMessage(props: { frame: MessageGroupFrame; item: GroupMessage; in
         ? avatar
         : undefined,
   }));
+  const earlierSteer = () =>
+    props.index < frame().lastMessageIndex && options().pendingSteer?.(props.item.message);
   const showActions = () =>
-    !frame().options.pendingSteer?.(props.item.message) &&
+    !earlierSteer() &&
     prepared().ownsActions &&
     (hasMessageActionButtons(prepared().actions, frame().options) ||
       Boolean(prepared().actions?.reactionMessageId && frame().options.onReact)) &&
@@ -435,10 +437,7 @@ function FramedMessage(props: { frame: MessageGroupFrame; item: GroupMessage; in
           <ReplyLineConnector line={line()} avatar={frame().hasAvatar} elements={replyElements} />
         </div>
       </Show>
-      <ChatSteerNow
-        input={frame().options.pendingSteer?.(props.item.message)}
-        onSend={options().onSteerNow}
-      />
+      <ChatSteerRow input={earlierSteer() || undefined} onSend={options().onSteerNow} />
       <Show when={showActions()}>
         {(_actions) => {
           const media = createMediaQuerySource(
@@ -555,7 +554,7 @@ function FramedMessageGroup(props: {
           />
         </Show>
       </div>
-      <Show when={!frame().hidesFooter && options().frameFooter !== false}>
+      <Show when={!frame().isTurnBlock && options().frameFooter !== false}>
         <Show
           when={!props.group.isStreaming}
           fallback={<div class="chat-group-footer" aria-hidden="true" />}
@@ -571,11 +570,12 @@ function FramedMessageGroup(props: {
                     frame().isPeerGroup ||
                     (frame().showSenderName && frame().avatarPlacement !== "footer"),
                   ),
-                "chat-group-footer--send-status": Boolean(frame().sendStatus),
+                "chat-group-footer--send-status": frame().statusFooter,
               },
             ]}
           >
-            <Show when={!frame().ownsRunFrame}>
+            <ChatSteerNow input={frame().pendingSteer} onSend={options().onSteerNow} />
+            <Show when={!frame().ownsRunFrame && !frame().pendingSteer}>
               <GroupMessageReactions
                 group={props.group}
                 actionDetails={frame().footerActionDetails}
@@ -583,7 +583,7 @@ function FramedMessageGroup(props: {
                 options={options()}
               />
             </Show>
-            <Show when={!options().activeContinuation}>
+            <Show when={!options().activeContinuation && !frame().pendingSteer}>
               <Show when={!frame().isPeerGroup}>
                 <UserFooterActions frame={frame()} />
               </Show>

@@ -701,8 +701,9 @@
   text-decoration: underline;
 }
 
-.chat-steer-now {
-  margin-block-start: 4px;
+/* Holds the same space as a delivered message's action row. */
+.chat-message-actions-row--steer {
+  min-height: 24px;
 }
 
 .chat-steer-now__waiting {
