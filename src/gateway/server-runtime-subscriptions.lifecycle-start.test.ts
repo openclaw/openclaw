@@ -13,6 +13,7 @@ vi.mock("../config/io.js", () => ({
   getRuntimeConfig: () => ({}),
   getRuntimeConfigSnapshot: () => ({}),
 }));
+// mock-isolation: the audit recorder would otherwise open its own state store.
 vi.mock("../audit/audit-recorder.js", () => ({
   createAuditEventRecorder: () => ({
     record: vi.fn(),
