@@ -177,7 +177,6 @@ describe("collector tool availability", () => {
       registerHeadlessToolSearchCatalog({ catalogRef, tools: finalized });
       const entry = catalogRef.current?.entries.find((tool) => tool.name === "sessions_spawn");
       assert.ok(entry);
-
       expectCollection(finalizedSpawn, offered);
       expectCollection({ parameters: entry.parameters, description: entry.description }, offered);
       const declaration = (await createCodeModeToolApiFile(entry.name, entry)).content;
@@ -190,7 +189,6 @@ describe("collector tool availability", () => {
       }
     },
   );
-
   it("rechecks execution caps on catalog restriction and rebuild", async () => {
     const allow = ["sessions_spawn", "agents_wait"];
     const { tool, params, catalogRef, apply } = catalogFixture(reader(), allow);

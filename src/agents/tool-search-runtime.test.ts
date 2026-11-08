@@ -284,9 +284,7 @@ describe("Tool Search input schemas", () => {
     );
     assert.ok(describeTool);
     expect(wrapped.parameters).toHaveProperty("properties.optional.enum", ["true"]);
-
     const result = await describeTool.execute("describe-deep", { id: target.name });
-
     expect(result.details).toHaveProperty("parameters.properties.optional.const", true);
     expect(result.content).toEqual([
       expect.objectContaining({ type: "text", text: expect.any(String) }),
@@ -310,7 +308,6 @@ describe("Tool Search input schemas", () => {
     expect(catalogRef.current?.entries[0]?.parameters).toBe(presentation);
     expect(resolveAgentToolExecutionSchema(wrapped, wrapped.parameters)).toBe(parameters);
   });
-
   it("advertises canonical Gemini inputs while keeping execution-only exec arguments hidden", async () => {
     const readTool = createReadTool(tempDirs.make("gemini-read"));
     const collectorFields = {
@@ -345,7 +342,6 @@ describe("Tool Search input schemas", () => {
     expect(execEntry.parameters).not.toHaveProperty("properties.yieldMs");
     expect(execEntry.parameters).not.toHaveProperty("properties.durable");
     expect(execEntry.parameters).toHaveProperty("properties.host.enum", ["auto", "gateway"]);
-
     const withoutWait = wrapped.filter((tool) => tool.name !== "agents_wait");
     registerHeadlessToolSearchCatalog({ catalogRef, tools: withoutWait });
     const hidden = catalogRef.current!.entries.find((entry) => entry.name === "sessions_spawn")!;
@@ -359,7 +355,6 @@ describe("Tool Search input schemas", () => {
     expect(
       catalogRef.current!.entries.find((entry) => entry.name === "sessions_spawn")?.parameters,
     ).toHaveProperty("properties.collect");
-
     const input = { path: "nonexistent.txt", optional: true };
     await expect(runtime.call("read", input)).resolves.toMatchObject({
       result: { details: { kind: "not_found", path: "nonexistent.txt", optional: true } },
