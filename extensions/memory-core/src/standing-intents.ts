@@ -149,9 +149,9 @@ async function executeStandingIntent(
         recordDueAt(options.path, result.nextDueAt);
         return result.value;
       } catch (error) {
-        // A failed or uncertain write may have committed; the next owner must sweep, not trust
-        // the deadline learned before it.
-        knownDueAt.delete(options.path);
+        // A failed or uncertain write may have committed; forget the learned deadline and let the
+        // current owner sweep (a failing sweep's own retry replaces this immediate job).
+        recordDueAt(options.path, null);
         throw error;
       } finally {
         await worker.close();
