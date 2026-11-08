@@ -57,9 +57,7 @@ function expectRunIndicators(section: Element | null, rowSelector: string, activ
   expect(dom.all(`${rowSelector} .sidebar-session-indicator .session-glyph__ring`)).toHaveLength(
     active ? 1 : 0,
   );
-  expect(dom.all(".sidebar-recent-sessions__head .session-run-spinner")).toHaveLength(
-    active ? 1 : 0,
-  );
+  expect(dom.all(".sidebar-recent-sessions__head .session-run-spinner")).toHaveLength(0);
 }
 
 describe("AppSidebar session catalog pagination", () => {

@@ -1,4 +1,6 @@
+import * as acorn from "acorn";
 import { describe, expect, it, vi } from "vitest";
+import type { BoardWidgetDataQuery } from "../../packages/gateway-protocol/src/index.js";
 import { WidgetHtmlInputError } from "../plugin-sdk/widget-html.js";
 import type { WidgetPresenter } from "../plugins/plugin-registration.types.js";
 import {
@@ -9,6 +11,8 @@ import {
   widgetPayload as payload,
 } from "./widget-tool.test-support.js";
 import { buildWidgetDocument } from "./wrap.js";
+
+vi.mock("acorn", { spy: true });
 
 const { createTool, expectNoDocument } = useWidgetHarness();
 
@@ -55,12 +59,30 @@ describe("show_widget current-channel presentation", () => {
   it.each(["pending", "rejected", "granted"] as const)(
     "reports the owner's %s capability outcome",
     async (grantState) => {
-      createBoardPutCaller(grantState);
+      const { mock: put } = createBoardPutCaller(grantState);
+      const query: BoardWidgetDataQuery = {
+        name: "main-ci",
+        bindingId: "github.actions.runs",
+        params: {
+          repository: "owner/repo",
+          workflow: "ci.yml",
+          branch: "main",
+          status: null,
+          created: null,
+          perPage: 5,
+          excludePullRequests: true,
+        },
+        fields: ["conclusion", "status"],
+      };
       const tool = createTool({ agentSessionKey: "agent:main:approval", inlineHostEnabled: false });
       const result = await run(tool, {
         pin: true,
-        capabilities: { tools: ["github.actions.runs:owner/repo"] },
+        capabilities: { queries: [query] },
       });
+      expect(put).toHaveBeenCalledWith(
+        "board.widget.put",
+        expect.objectContaining({ declared: { queries: [query] } }),
+      );
       const parsed = payload(result);
       expect(parsed).toMatchObject({ boardWidgetName: "status", capabilityState: grantState });
       expect(parsed.text).toContain(grantState);
@@ -102,27 +124,55 @@ describe("show_widget current-channel presentation", () => {
     });
     await expectNoDocument();
   });
-  it("rejects broken scripts before any side effect", async () => {
-    const { mock: gateway } = createBoardPutCaller();
-    const present = vi.fn<WidgetPresenter["present"]>();
-    const availability = vi.fn<WidgetPresenter["availability"]>();
-    const tool = createTool({
-      sessionId: "syntax",
-      agentSessionKey: "agent:main:syntax",
-      presenters: [{ target: "node_panel", description: "Test panel", availability, present }],
-    });
-    const result = tool.execute("broken", {
-      title: "Broken widget",
-      widget_code: "<p>Widget</p>\n<script>const a='x\n'+b;</script>",
-      pin: true,
-    });
-    await expect(result).rejects.toThrow(WidgetHtmlInputError);
-    await expect(result).rejects.toThrow(
-      "widget_code has a JavaScript syntax error in inline script 1 at line 2, column 16: Unterminated string constant. Offending line: <script>const a='x. Fix the script and call show_widget again.",
+  it("reuses script validation across widget updates while keeping module grammar separate", async () => {
+    const parse = vi.mocked(acorn.parse).mockClear();
+    const present = vi.fn(async () => ({
+      ok: true as const,
+      value: {
+        kind: "message" as const,
+        receipt: { platformMessageIds: [], parts: [], sentAt: 1 },
+      },
+    }));
+    const tool = createTool({ presenters: [currentPresenter(present)] });
+    const script = "await Promise.resolve('widget-validation-reuse');";
+    await Promise.all([
+      run(tool, { widget_code: `<script type=module>${script}</script>` }),
+      run(tool, { widget_code: `<p>Updated</p><script type=module>${script}</script>` }),
+    ]);
+    expect(parse).toHaveBeenCalledTimes(1);
+    await expect(run(tool, { widget_code: `<script>${script}</script>` })).rejects.toThrow(
+      "widget_code has a JavaScript syntax error",
     );
-    expect(gateway).not.toHaveBeenCalled();
-    expect(present).not.toHaveBeenCalled();
-    expect(availability).not.toHaveBeenCalled();
-    await expectNoDocument();
+    await run(tool, { widget_code: `<script type=module>${script}</script>` });
+    expect(parse).toHaveBeenCalledTimes(2);
+    expect(present).toHaveBeenCalledTimes(3);
   });
+  it.each([false, true])(
+    "rejects broken scripts before any side effect (large=%s)",
+    async (large) => {
+      const { mock: gateway } = createBoardPutCaller();
+      const present = vi.fn<WidgetPresenter["present"]>();
+      const availability = vi.fn<WidgetPresenter["availability"]>();
+      const tool = createTool({
+        sessionId: "syntax",
+        agentSessionKey: "agent:main:syntax",
+        presenters: [{ target: "node_panel", description: "Test panel", availability, present }],
+      });
+      const result = tool.execute("broken", {
+        title: "Broken widget",
+        widget_code: `<p>Widget</p>\n<script>${large ? `/*${"x".repeat(32 * 1024)}*/\n` : ""}const a='x\n'+b;</script>`,
+        pin: true,
+      });
+      await expect(result).rejects.toThrow(WidgetHtmlInputError);
+      await expect(result).rejects.toThrow(
+        large
+          ? "widget_code has a JavaScript syntax error in inline script 1 at line 3, column 8: Unterminated string constant. Offending line: const a='x. Fix the script and call show_widget again."
+          : "widget_code has a JavaScript syntax error in inline script 1 at line 2, column 16: Unterminated string constant. Offending line: <script>const a='x. Fix the script and call show_widget again.",
+      );
+      expect(gateway).not.toHaveBeenCalled();
+      expect(present).not.toHaveBeenCalled();
+      expect(availability).not.toHaveBeenCalled();
+      await expectNoDocument();
+    },
+  );
 });

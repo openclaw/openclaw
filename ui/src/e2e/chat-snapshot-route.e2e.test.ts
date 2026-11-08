@@ -1,6 +1,7 @@
 import path from "node:path";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
+import { pathForSession } from "../app-session-path-builder.ts";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiSessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import { readOutboxQueue } from "./chat-outbox-payloads.test-support.ts";
@@ -22,7 +23,9 @@ async function openCachedRoute(page: Page) {
     authMode: "trusted-proxy",
     sessions: [],
     heldMethods: ["sessions.resolve", "chat.startup", "chat.send"],
-    historyMessages: [{ role: "assistant", content: transcript }],
+    sessionTranscripts: {
+      [sessionKey]: { messages: [{ role: "assistant", content: transcript }] },
+    },
     methodResponses: {
       "sessions.describe": { session: row },
       "sessions.resolve": { ok: true, ...row },
@@ -211,6 +214,24 @@ suite.define(() => {
           await page.getByText(transcript, { exact: true }).waitFor();
           await gateway.waitForRequest("sessions.resolve");
           await gateway.waitForRequest("chat.startup");
+          if (outcome === "moved") {
+            await gateway.resolveDeferred("chat.startup", {
+              messages: [{ role: "assistant", content: transcript }],
+              sessionInfo: {
+                ...row,
+                displayName: "Live snapshot conversation",
+                label: "Live snapshot conversation",
+                updatedAt: 2,
+              },
+            });
+            await page
+              .locator(".chat-pane-cache__pane--active")
+              .getByText("Live snapshot conversation", { exact: true })
+              .filter({ visible: true })
+              .first()
+              .waitFor();
+            expect(new URL(page.url()).pathname).toBe(`/chat/main/${reference}`);
+          }
           if (captureUiProof) {
             await page.screenshot({ path: path.join(suite.artifactDir, `cached-${outcome}.png`) });
           }
@@ -240,12 +261,28 @@ suite.define(() => {
             await page.locator(".session-route-not-found").waitFor();
             expect(await page.getByText(transcript, { exact: true }).count()).toBe(0);
           } else if (outcome === "moved" || outcome === "mismatch") {
-            await page.waitForURL(
-              (url) =>
-                url.pathname.startsWith(`/chat/${movedAgent}/`) && !url.pathname.includes(id),
+            const targetPath = pathForSession(
+              "chat",
+              movedAgent,
+              movedKey,
+              new URL(suite.server.baseUrl).pathname,
+              { displayName: row.displayName },
+            );
+            await page.waitForURL((url) => url.pathname === targetPath);
+            // Parked route presentations retain selected panes until their owner retires.
+            const paneSelector = '.chat-pane-cache__pane--active[aria-hidden="false"]:not([inert])';
+            await page.waitForFunction(
+              ({ key, selector }) =>
+                [...document.querySelectorAll(selector)].some(
+                  (pane) =>
+                    pane.checkVisibility({ visibilityProperty: true }) &&
+                    Reflect.get(pane, "sessionKey") === key,
+                ),
+              { key: movedKey, selector: paneSelector },
             );
             await page
-              .locator(".chat-pane-cache__pane--visible")
+              .locator(paneSelector)
+              .filter({ visible: true })
               .getByText(transcript, { exact: true })
               .waitFor({ state: "hidden" });
           } else {
@@ -261,7 +298,7 @@ suite.define(() => {
     },
   );
 
-  it("holds sends after empty startup until route authority settles", async () => {
+  it("holds an early Enter until route authority settles, then sends it once", async () => {
     await suite.withPage(
       { viewport: { width: 1280, height: 900 }, serviceWorkers: "block" },
       async ({ page }) => {
@@ -280,17 +317,20 @@ suite.define(() => {
         await pane.locator(".agent-chat__composer-combobox textarea").fill(draft);
         const send = pane.locator(".chat-send-btn--send");
         expect(await send.isDisabled()).toBe(true);
-        await pane.locator(".agent-chat__composer-combobox textarea").press("Enter");
-        expect(
-          (await pane.locator(".agent-chat__composer-combobox textarea").inputValue()).trimEnd(),
-        ).toBe(draft);
+        const composer = pane.locator(".agent-chat__composer-combobox textarea");
+        await composer.press("Enter");
+        expect(await composer.inputValue()).toBe(draft);
+        expect(await pane.locator(".agent-chat__input--submit-queued").count()).toBe(1);
         expect(await gateway.getRequests("chat.send")).toHaveLength(0);
         const resolution = { ok: true, ...row };
         await gateway.setMethodResponse("sessions.resolve", resolution);
         await gateway.resolveDeferred("sessions.resolve", resolution);
         await page.waitForFunction(() => window.openclawControlUi?.snapshot().routeReady === true);
-        expect(await send.isEnabled()).toBe(true);
-        expect(await gateway.getRequests("chat.send")).toHaveLength(0);
+        expect((await gateway.waitForRequest("chat.send")).params).toMatchObject({
+          message: draft,
+        });
+        await expect.poll(() => composer.inputValue()).toBe("");
+        expect(await gateway.getRequests("chat.send")).toHaveLength(1);
       },
     );
   });

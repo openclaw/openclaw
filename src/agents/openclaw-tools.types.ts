@@ -4,9 +4,13 @@ import type { ConversationReadInvocationOrigin } from "../channels/plugins/conve
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { MemoryAudience } from "../plugins/memory-provider-types.js";
 import type { InputProvenance } from "../sessions/input-provenance.js";
+import type { SkillLibraryAuthoringCapability } from "../skills/library/authoring.js";
 import type { SkillSnapshot } from "../skills/types.js";
 import type { HookContext } from "./agent-tools.before-tool-call.js";
-import type { AgentRunClientContext, AgentRunMessageContext } from "./command/shared-types.js";
+import type {
+  AgentRunClientContext,
+  AgentRunMessageContext,
+} from "./command/execution-context.types.js";
 import type { PreparedPairedComputerUse } from "./computer-use-node-capabilities.js";
 import type { resolveConversationQuestionInputMode } from "./conversation-capability-profile.js";
 import type { ConversationRecallContext } from "./conversation-recall.types.js";
@@ -22,7 +26,6 @@ import type {
   SessionsYieldCallback,
   SessionsYieldRuntimeClaim,
 } from "./tools/sessions-yield-tool.js";
-import type { SkillWorkshopRunOptions } from "./tools/skill-workshop-tool-factory.js";
 
 /** Options shared by the coding-tool factory and its OpenClaw tool surface. */
 export type OpenClawSharedToolsOptions = {
@@ -33,8 +36,6 @@ export type OpenClawSharedToolsOptions = {
   /** Complete model-discoverable catalog, prepared by the current host. */
   installedSkills?: readonly InstalledSkill[];
   skillsSnapshot?: SkillSnapshot;
-  /** Restrict mixed tool owners to reads before the recovery surface is filtered. */
-  forceRestartSafeTools?: boolean;
   /**
    * Overrides the originating-channel sender for blocking questions. An actual
    * harness prompt reservation retains delivery ownership.
@@ -79,8 +80,8 @@ export type OpenClawSharedToolsOptions = {
    * boundary should opt out explicitly.
    */
   wrapBeforeToolCallHook?: boolean;
-  /** Run-owned Workshop authority: review guard and personal library access. */
-  skillWorkshop?: SkillWorkshopRunOptions;
+  /** Run-owner-granted personal-library authority; adds `skill_library`. */
+  skillLibraryAuthoring?: SkillLibraryAuthoringCapability;
   webFetchHostnameAllowlistRef?: { value?: string[] };
   webSearchEnabled?: boolean;
   /** Construction fact for prompt guidance; never contains credentials or diagnostics. */
@@ -115,6 +116,8 @@ export type OpenClawSharedToolsOptions = {
 };
 
 export type OpenClawToolsOptions = {
+  /** Internal inventory projection; the resulting GitHub tool cannot execute. */
+  githubPublicationPreview?: true;
   /** Actual prepared sandbox passed only by the coding-tool assembly owner. */
   sandbox?: import("./sandbox/types.js").SandboxContext | null;
   abortSignal?: AbortSignal;

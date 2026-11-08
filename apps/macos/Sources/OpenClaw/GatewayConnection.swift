@@ -254,6 +254,9 @@ actor GatewayConnection: Observable {
     private(set) var socketGenerationState = GatewaySocketGenerationState()
 
     private var subscribers: [UUID: AsyncStream<PushDelivery>.Continuation] = [:]
+    #if DEBUG
+    private var subscriberWaitersForTesting: [CheckedContinuation<Void, Never>] = []
+    #endif
     var realtimeTalkSubscribers: [UInt64: [UUID: AsyncStream<PushDelivery>.Continuation]] = [:]
     var lastSnapshot: HelloOk? {
         didSet { self.publishConnectedServerLease() }
@@ -1188,6 +1191,13 @@ extension GatewayConnection {
         self.configuredConnection?.endpoint.config.url
     }
 
+    func _test_waitForSubscriber() async {
+        guard self.subscribers.isEmpty else { return }
+        await withCheckedContinuation { continuation in
+            self.subscriberWaitersForTesting.append(continuation)
+        }
+    }
+
     func _test_handlePush(
         _ push: GatewayPush,
         routeGeneration: UInt64? = nil,
@@ -1377,6 +1387,13 @@ extension GatewayConnection {
                 continuation.yield(delivery)
             }
             self.subscribers[id] = continuation
+            #if DEBUG
+            let waiters = self.subscriberWaitersForTesting
+            self.subscriberWaitersForTesting.removeAll()
+            for waiter in waiters {
+                waiter.resume()
+            }
+            #endif
             continuation.onTermination = { @Sendable _ in
                 Task { await connection.removeSubscriber(id) }
             }
@@ -1493,60 +1510,6 @@ extension GatewayConnection {
 // MARK: - Typed gateway API
 
 extension GatewayConnection {
-    struct ConfigGetSnapshot: Decodable {
-        struct SnapshotConfig: Decodable {
-            struct Session: Decodable {
-                let mainKey: String?
-                let scope: String?
-            }
-
-            let session: Session?
-        }
-
-        let config: SnapshotConfig?
-    }
-
-    static func mainSessionKey(fromConfigGetData data: Data) throws -> String {
-        let snapshot = try JSONDecoder().decode(ConfigGetSnapshot.self, from: data)
-        let scope = snapshot.config?.session?.scope?.trimmingCharacters(in: .whitespacesAndNewlines)
-        if scope == "global" {
-            return "global"
-        }
-        return "main"
-    }
-
-    func mainSessionKey(timeoutMs: Double = 15000) async -> String {
-        if let cached = cachedMainSessionKey() {
-            return cached
-        }
-        return await self.refreshMainSessionKey(timeoutMs: timeoutMs)
-    }
-
-    /// The resolved key belongs to this hello's physical socket. Callers must
-    /// recheck the lease synchronously when presenting it outside this actor.
-    func mainSessionKey(ifCurrentServerLease lease: ServerLease, timeoutMs: Double = 15000) async throws -> String {
-        guard await self.isCurrentServerLease(lease) else { throw CancellationError() }
-        if let cached = self.cachedMainSessionKey() { return cached }
-        do {
-            let data = try await self.request(
-                method: "config.get", params: nil, timeoutMs: timeoutMs, ifCurrentServerLease: lease)
-            return try Self.mainSessionKey(fromConfigGetData: data)
-        } catch {
-            try Task.checkCancellation()
-            guard await self.isCurrentServerLease(lease) else { throw CancellationError() }
-            return "main"
-        }
-    }
-
-    func refreshMainSessionKey(timeoutMs: Double = 15000) async -> String {
-        do {
-            let data = try await request(method: "config.get", params: nil, timeoutMs: timeoutMs)
-            return try Self.mainSessionKey(fromConfigGetData: data)
-        } catch {
-            return "main"
-        }
-    }
-
     func setHeartbeatsEnabled(_ enabled: Bool) async -> Bool {
         do {
             try await self.requestVoid(method: .setHeartbeats, params: ["enabled": AnyCodable(enabled)])
@@ -1647,6 +1610,8 @@ extension GatewayConnection {
         agentID: String? = nil,
         limit: Int? = nil,
         maxChars: Int? = nil,
+        cursor: String? = nil,
+        maxBytes: Int? = nil,
         timeoutMs: Int? = nil,
         inputRunIDs: [String]? = nil,
         ifCurrentRoute route: Route? = nil) async throws -> OpenClawChatHistoryPayload
@@ -1657,6 +1622,8 @@ extension GatewayConnection {
             limit: limit,
             maxChars: maxChars,
             inputRunIDs: inputRunIDs,
+            cursor: cursor,
+            maxBytes: maxBytes,
             timeoutMs: timeoutMs)
         let data = try await self.requestHistory(request, ifCurrentRoute: route)
         return try self.decoder.decode(OpenClawChatHistoryPayload.self, from: data)

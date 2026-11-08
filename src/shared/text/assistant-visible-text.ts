@@ -9,12 +9,17 @@ import {
   stripRelevantMemoriesTags,
   stripAssistantInternalTraceLines,
   stripLegacyBracketToolCallBlocks,
+  scanLegacyBracketToolCallBlocks,
   plainToolCallTransform,
   stripInvisibleAssistantText,
   traceLineHeads,
   INTERNAL_TRACE_LINE_RE,
 } from "./assistant-text-transforms.js";
-import { projectLinesOutsideCode } from "./code-regions.js";
+import {
+  findCodeRegions,
+  isInsideSettledBlockCode,
+  projectLinesOutsideCode,
+} from "./code-regions.js";
 import { downgradedToolCallTextFilter } from "./downgraded-tool-call-text.js";
 import { orderInternalScaffoldingStages } from "./internal-scaffolding-stages.js";
 import { modelSpecialTokensTextFilter } from "./model-special-tokens.js";
@@ -148,6 +153,17 @@ export function minimaxToolCallTextFilter(streaming = false): TextFilter {
 export const legacyBracketToolCallTextFilter: TextFilter = {
   transform: stripLegacyBracketToolCallBlocks,
   activationTokens: ["TOOL_CALL", "TOOL_RESULT"],
+  checkpoint(text, boundary, context) {
+    const regions = context.codeRegions();
+    const scan = scanLegacyBracketToolCallBlocks(text, regions);
+    const prefix = scanLegacyBracketToolCallBlocks(text.slice(0, boundary), regions);
+    const retainStart = scan.pending || prefix.pending ? 0 : boundary;
+    return {
+      text: scan.text,
+      retainStart,
+      retainedOutputStart: retainStart ? prefix.text.length : 0,
+    };
+  },
 };
 
 export const assistantTraceTextFilter: TextFilter = {
@@ -210,15 +226,18 @@ export const assistantTraceTextFilter: TextFilter = {
 };
 
 const plainToolCallActivationTokens = ["<parameter=", "<function=", "to="] as const;
-function createPlainToolCallTextProjector() {
+function createPlainToolCallTextProjector(preview = false) {
   const checkpoint: NonNullable<TextFilter["checkpoint"]> = (text, settleBefore, context) =>
     projectPlainTextToolCallBlocks(text, {
       resolveProtectedRanges: context.codeRegions,
       settleBefore,
+      preview,
+      isProtectionSettled: (offset) =>
+        offset < settleBefore || isInsideSettledBlockCode(offset, text, context.codeRegions()),
     });
   const activation = new RegExp(plainToolCallActivationTokens.map(escapeRegExp).join("|"), "i");
   const overlap = Math.max(...plainToolCallActivationTokens.map((token) => token.length - 1));
-  const braceProbe = createPlainTextToolCallBraceProbe();
+  const braceProbe = createPlainTextToolCallBraceProbe(preview);
   let active = false;
   let tail = "";
   return createConditionalTextProjector(
@@ -239,6 +258,28 @@ export const plainToolCallTextFilter: TextFilter = {
   transform: plainToolCallTransform,
   create: createPlainToolCallTextProjector,
 };
+
+/** Channel previews share the call grammar, but cannot expose its provisional tail. */
+export const plainToolCallPreviewTextFilter: TextFilter = {
+  transform: plainToolCallTransform,
+  create: () => createPlainToolCallTextProjector(true),
+};
+
+/**
+ * Settlement of a plain-text tool-call candidate at the end of visible text. Streaming may
+ * publish that tail and retract it later through a replacement, but block replies
+ * (already-delivered chat messages) cannot be retracted, so their drain waits until the
+ * candidate settles.
+ */
+export function hasUnsettledPlainTextToolCall(text: string): boolean {
+  if (!text) {
+    return false;
+  }
+  const projected = projectPlainTextToolCallBlocks(text, {
+    resolveProtectedRanges: findCodeRegions,
+  });
+  return projected.unsettled;
+}
 
 export function sanitizeAssistantVisibleTextWithProfile(
   text: string,

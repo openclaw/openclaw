@@ -257,10 +257,9 @@ suite.define(() => {
         await page.setViewportSize({ width: 900, height: 800 });
         const textarea = page.locator(COMPOSER);
         await textarea.waitFor({ timeout: APP_FIRST_RENDER_TIMEOUT_MS });
+        // Start below the mobile three-line cap so narrowing can grow the draft.
         await textarea.fill(
-          "Resize this populated draft across a narrow pane so its wrapped lines change height without waiting for another input event. ".repeat(
-            2,
-          ),
+          "Resize this populated draft across a narrow pane so its wrapped lines change height without waiting for another input event. ",
         );
         await waitForLayoutSettled(page, COMPOSER);
         const wideHeight = (await textarea.boundingBox())?.height ?? 0;
@@ -446,7 +445,7 @@ suite.define(() => {
       expect(
         await bubble
           .getByText(
-            "Not sent · Rejected by the local attachment allowlist. Send a supported file type.",
+            "Not sent · This file type cannot be attached here. If it is saved in this session, download it from Files, or ask for a ZIP containing the original file.",
           )
           .count(),
       ).toBe(5);

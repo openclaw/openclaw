@@ -146,12 +146,15 @@ it("worker release leaves unrelated receipt scopes unvisited", () => {
   const references = new SharedArrayBuffer(2 * Int32Array.BYTES_PER_ELEMENT);
   Atomics.store(new Int32Array(references), 0, 1);
   record.references.set(owner, references);
+  Atomics.store(record.writerDiagnostic, 1, owner + 1);
   registry.publish(record);
   const stale = structuredClone(registry.capture());
   const visits = vi.spyOn(sibling.writeScopes, "forEach");
   try {
     registry.releaseWorker(owner + 1);
+    expect(Atomics.load(record.writerDiagnostic, 1)).toBe(owner + 1);
     registry.releaseWorker(owner);
+    expect(Atomics.load(record.writerDiagnostic, 1)).toBe(0);
     expect(visits).not.toHaveBeenCalled();
     expect(Atomics.load(new Int32Array(references), 0)).toBe(-1);
     expect(record.references.has(owner)).toBe(false);
@@ -206,18 +209,24 @@ it("retains active source receipts until their last release without suppressing 
     const committed = scopedToken(database, key);
     expect(committed).not.toBe(before);
     releaseSibling();
-    expect(recordsFor(location)[0]!.writeScopes.size).toBe(0);
+    expect(
+      recordsFor(location)[0]!.writeScopes.reduce((size, bucket) => size + bucket.size, 0),
+    ).toBe(0);
     const releaseDeleted = retainScopes(location, ["deleted"])!;
     try {
       retireScopes(database, ["deleted"]);
-      expect(recordsFor(location)[0]!.writeScopes.size).toBe(0);
+      expect(
+        recordsFor(location)[0]!.writeScopes.reduce((size, bucket) => size + bucket.size, 0),
+      ).toBe(0);
     } finally {
       releaseDeleted();
     }
   } finally {
     release();
     releaseSibling();
-    expect(recordsFor(location)[0]!.writeScopes.size).toBe(0);
+    expect(
+      recordsFor(location)[0]!.writeScopes.reduce((size, bucket) => size + bucket.size, 0),
+    ).toBe(0);
   }
 });
 
@@ -233,7 +242,8 @@ it("bounds cold session receipts by bytes without evicting hot receipts or reviv
     expect(scopedToken(database, key)).toBeTypeOf("string");
     expect(scopedToken(database, "hot")).toBe(hot);
   }
-  const retained = () => recordsFor(location)[0]!.writeScopes;
+  const retained = () =>
+    new Map(recordsFor(location)[0]!.writeScopes.flatMap((bucket) => Array.from(bucket)));
   expect([...retained().keys()].reduce((bytes, key) => bytes + key.length * 2, 0)).toBeLessThan(
     1024 * 1024,
   );
@@ -877,6 +887,7 @@ function postgresConnection(anchor: DatabaseSync): PostgresSqlConnection {
       throw new Error("Admission facts must not query PostgreSQL");
     },
     close() {},
+    releaseIdleTransport() {},
     runTransaction(operation, options, ...modes) {
       return runPostgresTransactionSync(this, operation, options, ...modes);
     },

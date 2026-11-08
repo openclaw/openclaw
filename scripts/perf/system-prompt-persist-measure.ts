@@ -16,7 +16,7 @@ import { Session } from "node:inspector/promises";
 import { loadavg } from "node:os";
 import { parseArgs } from "node:util";
 import { shareSessionSystemPrompt } from "../../src/agents/sessions/system-prompt-pool.js";
-import { normalizeTranscriptJsonValue } from "../../src/config/sessions/transcript-json.js";
+import { normalizeTranscriptJsonValue } from "../../src/config/sessions/transcript-json-normalize.js";
 
 const { values } = parseArgs({
   options: {

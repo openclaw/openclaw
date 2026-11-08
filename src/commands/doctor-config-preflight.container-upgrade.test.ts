@@ -133,7 +133,11 @@ describe("container image replacement Doctor repair and startup readiness", () =
       );
       const backups = fs
         .readdirSync(path.dirname(databasePath))
-        .filter((name) => name.startsWith(`${path.basename(databasePath)}.pre-startup-migration-`));
+        .filter(
+          (name) =>
+            name.startsWith(`${path.basename(databasePath)}.pre-startup-migration-`) &&
+            name.endsWith(".bak"),
+        );
       expect(backups).toHaveLength(1);
       const before = new DatabaseSync(path.join(path.dirname(databasePath), backups[0]!), {
         readOnly: true,
@@ -160,10 +164,10 @@ describe("container image replacement Doctor repair and startup readiness", () =
       } finally {
         database.close();
       }
-      await cleanupSessionStateForTest();
+      await cleanupSessionStateForTest({ stateDir });
       const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
       const inspect = () => inspectSessionSqliteRecovery({ cfg: {}, env });
-      const protectedBackups = inspect();
+      const protectedBackups = await inspect();
       expect(protectedBackups.artifacts).toHaveLength(2);
       expect(
         protectedBackups.artifacts.every(
@@ -178,7 +182,7 @@ describe("container image replacement Doctor repair and startup readiness", () =
       fs.mkdirSync(path.dirname(store), { recursive: true });
       fs.writeFileSync(store, "{}");
       await runDoctorSessionSqlite({ env, cfg: {}, agent: "main", store, mode: "import" });
-      await cleanupSessionStateForTest();
+      await cleanupSessionStateForTest({ stateDir });
       // A later update counts once its external supervisor accepts it, not at migration.
       const now = Date.now;
       const clock = vi.spyOn(Date, "now").mockImplementation(() => now() + 1000);
@@ -186,17 +190,17 @@ describe("container image replacement Doctor repair and startup readiness", () =
       const backupRoot = path.join(path.dirname(stateDir), ".openclaw-update", "next", "native");
       await withEnvAsync({ OPENCLAW_SUPERVISOR_MODE: "external" }, async () => {
         await updateMigrateCommand(backupRoot);
-        await cleanupSessionStateForTest();
+        await cleanupSessionStateForTest({ stateDir });
         expect(
-          inspect().artifacts.filter(
+          (await inspect()).artifacts.filter(
             (item) => item.path.endsWith(".bak") && item.outcome === "candidate",
           ),
         ).toHaveLength(0);
         await updateFinishCommand(backupRoot);
       });
       clock.mockRestore();
-      await cleanupSessionStateForTest();
-      const preview = inspect();
+      await cleanupSessionStateForTest({ stateDir });
+      const preview = await inspect();
       expect(preview.artifacts.filter((item) => item.outcome === "candidate")).toHaveLength(3);
       expect(preview.artifacts).toContainEqual(
         expect.objectContaining({
@@ -211,7 +215,7 @@ describe("container image replacement Doctor repair and startup readiness", () =
         readConfig: async () => ({}),
         confirm: async () => true,
       });
-      expect(retired.status).toBe("complete");
+      expect(retired.status, JSON.stringify(retired, null, 2)).toBe("complete");
       expect(retired.totals.removedFiles).toBe(3);
       expect(fs.existsSync(legacyBackup)).toBe(true);
       expect(fs.existsSync(databasePath)).toBe(true);
@@ -248,7 +252,10 @@ describe("container image replacement Doctor repair and startup readiness", () =
       ).toBe(true);
       const backups = fs
         .readdirSync(path.dirname(databasePath))
-        .filter((name) => name.startsWith("openclaw.sqlite.pre-startup-migration-"));
+        .filter(
+          (name) =>
+            name.startsWith("openclaw.sqlite.pre-startup-migration-") && name.endsWith(".bak"),
+        );
       const fullBackups = backups.filter((name) => !name.endsWith(".scoped.bak"));
       const credentialBackups = backups.filter((name) => name.endsWith(".scoped.bak"));
       expect(fullBackups).toHaveLength(1);

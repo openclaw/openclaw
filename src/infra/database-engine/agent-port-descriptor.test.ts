@@ -41,6 +41,44 @@ it("backs up a schema-36 store without requiring the later cold archive chunk ta
   ).toBeUndefined();
 });
 
+it.each([37, 38])(
+  "keeps cold archive chunks and the prior payload CHECK in schema %s backups",
+  async (version) => {
+    const descriptor = await loadAgentPortDescriptor(version);
+    const table = "session_transcript_cold_archive_chunks";
+    expect(descriptor.version).toBe(version);
+    expect(descriptor.tables.map(({ name }) => name)).toContain(table);
+    expect(descriptor.expectedCatalog.some((fact) => fact.table === table)).toBe(true);
+    expect(descriptor.preData).toContain(`CREATE TABLE "${table}"`);
+    expect(descriptor.preData).not.toContain('"event_json" IS NULL AND "event_zstd" IS NULL');
+    expect(descriptor.sqlite).not.toContain("event_json IS NULL AND event_zstd IS NULL");
+  },
+);
+
+it.each([39, 40, 41])(
+  "keeps companion tables and deletion indexes at schema %s",
+  async (version) => {
+    const descriptor = await loadAgentPortDescriptor(version);
+    const receipt = "session_creation_operations";
+    expect(descriptor.tables.some(({ name }) => name === receipt)).toBe(version >= 40);
+    expect(descriptor.expectedCatalog.some((fact) => fact.table === receipt)).toBe(version >= 40);
+    expect(descriptor.preData.includes('CREATE TABLE "session_creation_operations"')).toBe(
+      version >= 40,
+    );
+    expect(descriptor.postData.includes('"idx_agent_session_input_completions_session_key"')).toBe(
+      version >= 40,
+    );
+    const activeFacts = "session_transcript_active_event_facts";
+    expect(descriptor.tables.some(({ name }) => name === activeFacts)).toBe(version >= 41);
+    expect(descriptor.expectedCatalog.some((fact) => fact.table === activeFacts)).toBe(
+      version >= 41,
+    );
+    expect(descriptor.preData.includes(`CREATE TABLE "${activeFacts}"`)).toBe(version >= 41);
+    expect(descriptor.postData.includes(`ALTER TABLE "${activeFacts}"`)).toBe(version >= 41);
+    expect(descriptor.preData).toContain('"event_json" IS NULL AND "event_zstd" IS NULL');
+  },
+);
+
 it.each([21, currentVersion])(
   "migrates only the private v%s copy, retiring legacy usage partitions",
   async (version) => {
@@ -126,4 +164,36 @@ it("preserves raw trajectories and refuses malformed compressed values", async (
   expect(() =>
     decode({ ...legacy, event_codec: "br", event_payload: "not a blob", event_utf8_bytes: 20 }),
   ).toThrow("Invalid compressed trajectory payload");
+});
+
+it("ports retained cold navigation without decoding absent payloads", async () => {
+  const descriptor = await loadAgentPortDescriptor();
+  const row = {
+    session_id: "cold",
+    seq: 0,
+    event_json: null,
+    event_zstd: null,
+    event_utf8_bytes: 123,
+    navigation_json: '{"version":1}',
+    navigation_type: "message",
+  };
+  expect(descriptor.decodeSqlite!.transcript_events!(row)).toBe(row);
+  const omitted = descriptor.projections!.flatMap(({ tables }) => tables);
+  expect(omitted).toContain("session_transcript_active_event_facts");
+  expect(omitted).not.toContain("session_transcript_active_events");
+  expect(omitted).not.toContain("session_transcript_index_state");
+  using source = openNodeSqliteDatabase(":memory:");
+  source.exec(`${descriptor.sqlite}
+    INSERT INTO session_nodes (session_key,current_session_id,entry_json,updated_at)
+      VALUES ('agent:main:retained','retained','{"sessionId":"retained","updatedAt":1}',1);
+    INSERT INTO session_windows (session_id,session_key,created_at,updated_at)
+      VALUES ('retained','agent:main:retained',1,1);
+    INSERT INTO transcript_events (session_id,seq,event_json,created_at)
+      VALUES ('retained',1,'{"type":"message","message":{"role":"user"}}',1);
+    INSERT INTO session_transcript_active_events (session_id,active_position,event_seq,context_eligible)
+      VALUES ('retained',0,1,1);
+    INSERT INTO session_transcript_active_event_facts VALUES ('retained',1,46,'{}');`);
+  const inspected = await inspectDatabasePort({ engine: "sqlite", db: source }, descriptor);
+  expect(inspected.tables.session_transcript_active_events?.rows).toBe(1);
+  expect(inspected.tables.session_transcript_active_event_facts).toBeUndefined();
 });

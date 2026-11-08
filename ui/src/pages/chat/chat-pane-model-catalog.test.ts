@@ -33,7 +33,7 @@ import { makeChatHost, makeRequestMock, requestCalls } from "./chat-host.test-su
 import { createRefreshChatPane } from "./chat-pane-history.test-support.ts";
 import { renderPaneModelControl } from "./chat-pane-model-control.test-support.ts";
 import { ChatPaneModelControl } from "./chat-pane-model-control.tsx";
-import { renderChatPaneComposerControls } from "./chat-pane-session-controls.ts";
+import { renderControls } from "./chat-pane-session-controls.test-support.ts";
 import { createTestChatPane } from "./chat-pane.test-support.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import {
@@ -64,16 +64,8 @@ const menuReady = (container: HTMLElement) =>
   waitForSolid(() => expect(container.querySelector(".chat-controls__model-menu")).not.toBeNull());
 
 function composerControls(state: ChatPageHost) {
-  return renderChatPaneComposerControls({
-    state,
+  return renderControls(state, {
     selectedSession: selectedChatSessionRow(state),
-    agentDefaultModel: undefined,
-    modelAccess: { allowed: true, requiredScope: "operator.write" },
-    effortAccess: { allowed: true, requiredScope: "operator.write" },
-    contextWindowAccess: { allowed: true, requiredScope: "operator.admin" },
-    permissionAccess: { allowed: true, requiredScope: "operator.write" },
-    canSelectFull: true,
-    onModelSetup: vi.fn(),
   }).composerControls;
 }
 
@@ -324,7 +316,7 @@ describe("chat pane composer controls", () => {
       expect(state.chatModelCatalogError).toContain("Previous runtime preparation failed");
       expect(state.chatModelCatalog).toEqual(retained ? cachedModels : []);
       const failureLabel = retained
-        ? "Some models could not be refreshed. Open Models to try again."
+        ? "Couldn’t refresh some models. Open Models to try again."
         : "Models unavailable";
       await menuReady(container);
       expandModelProviders(container);
@@ -474,7 +466,10 @@ describe("chat pane composer controls", () => {
       client,
       undefined,
       undefined,
-      modelCatalogEventInvalidation({ event: "config.changed" }),
+      modelCatalogEventInvalidation({
+        event: "chat.metadata.changed",
+        payload: { modelCatalogChanged: true, authChanged: true },
+      }),
     );
     const refresh = refreshPageChat(host, {
       awaitHistory: true,

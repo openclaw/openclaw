@@ -1,0 +1,2 @@
+# Real finalization persistence regressions for concurrent root/include edits, idempotency, conflicts, include/env retry preservation, bounded retries, and aligned CLI config I/O fixtures.
+177

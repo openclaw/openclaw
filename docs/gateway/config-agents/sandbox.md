@@ -111,6 +111,8 @@ Optional sandboxing for the embedded agent. See [Sandboxing](/gateway/sandboxing
 
 Defaults shown above (`off`/`docker`/`agent`/`none`/`trixie-slim` image/`none` network/etc.) are the actual OpenClaw defaults, not just illustrative values.
 
+Sandbox pruning runs as background housekeeping after runtime preparation, at most once every five minutes. The housekeeping loop continues between turns, so idle and age limits still take effect after a turn releases its runtime. Runtimes and browser containers held by an active turn or managed workspace preparation are retained even when their idle or age limit has expired. A new start waits for cleanup only when that cleanup already owns the same runtime scope or workspace.
+
 Docker and Podman tool and browser containers default to a PID limit of 1024. Explicit global or per-agent `docker.pidsLimit` values override it; shared scope uses only global values.
 
 <Accordion title="Sandbox details">

@@ -91,7 +91,9 @@ describe("lobster plugin tool", () => {
       requiresInput: { prompt: "Which label?" },
     });
     // A new tool instance proves continuation comes from saved state, not the runner's memory.
-    const finished = await createLobsterTool().execute("finish", {
+    const continued = createLobsterTool();
+    expect(continued.parameters).toBe(tool.parameters);
+    const finished = await continued.execute("finish", {
       action: "resume",
       token: resumeToken(second),
       responseJson: '"reviewed"',

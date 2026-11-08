@@ -6,7 +6,6 @@ import { Worker } from "node:worker_threads";
 import { afterEach, expect, it, vi } from "vitest";
 import { sqliteFamilyHashes as familyHashes } from "../../test/helpers/sqlite-family-hashes.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { sourceHostPluginConflict } from "../claws/plugin-capability-probe.js";
 import { captureConfigHealthStateStore } from "../config/io.health-state.js";
 import {
   resolveConfigWidePluginMetadataSnapshot,
@@ -29,6 +28,7 @@ import {
   closeOpenClawStateDatabaseAsync,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
+import { sourceHostPluginConflict } from "../templates/plugin-capability-probe.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import * as bundledDiscovery from "./bundled-discovery-state.js";
@@ -111,7 +111,7 @@ async function seed(env: NodeJS.ProcessEnv, value: InstalledPluginIndex) {
   return database.path;
 }
 
-it("prepares Claw metadata off-thread and observes committed inventory and policy changes", async () => {
+it("prepares Template metadata off-thread and observes committed inventory and policy changes", async () => {
   const env = environment();
   await seed(env, index());
   const pkg = {
@@ -487,6 +487,10 @@ it("reads committed live startup metadata without space for a database snapshot"
         database.exec("PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0; CREATE TABLE unrelated_payload(data BLOB)");
         database.prepare("INSERT INTO config_health_entries(config_path, last_observed_suspicious_signature, updated_at_ms) VALUES (?, ?, ?)").run("/synthetic/openclaw.json", "preserved-health", 123);
         process.on("message", value => {
+          if (value === "close") {
+            process.disconnect();
+            return;
+          }
           database.exec("BEGIN IMMEDIATE; INSERT INTO unrelated_payload VALUES(zeroblob(1048576))");
           if (value === "newer-schema") {
             database.exec("PRAGMA user_version=2147483647");
@@ -570,7 +574,8 @@ it("reads committed live startup metadata without space for a database snapshot"
     ).rejects.toBeInstanceOf(SqliteSchemaVersionError);
   } finally {
     if (writer.connected) {
-      writer.disconnect();
+      // Child-owned disconnect preserves Node's process-and-pipes close event.
+      writer.send("close");
     }
     const [code] = await closed;
     expect(code, stderr).toBe(0);

@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import { VisitorAccessError } from "./errors.js";
+import { grantIdSchema } from "./visitor-input.js";
 import {
   DAY_MS,
   NOW,
@@ -23,6 +24,24 @@ const retainedStaff = 'existing role "staff" retained; this invitation does not 
 
 describe("VisitorAccessService", () => {
   useVisitorFixtures();
+
+  it("validates only the selected invitation and keeps its snapshot detached", async () => {
+    const grants = Array.from({ length: 500 }, (_, i) => visitorGrant(`${i}@example.com`));
+    const fixture = visitorFixture({ grants });
+    await fixture.service.initialize();
+    const selected = grants.at(-1)!;
+    const validate = vi.spyOn(grantIdSchema, "safeParse");
+    try {
+      const invitation = fixture.service.findActiveInvitation(selected.grantId!);
+      expect(invitation).toEqual(selected);
+      expect(validate).toHaveBeenCalledTimes(1);
+      invitation!.expiresAt = null;
+      vi.setSystemTime(NOW + DAY_MS);
+      expect(fixture.service.findActiveInvitation(selected.grantId!)).toBeUndefined();
+    } finally {
+      validate.mockRestore();
+    }
+  });
 
   it("invites the runtime-resolved numeric GitHub account and explains login", async () => {
     const fixture = visitorFixture({

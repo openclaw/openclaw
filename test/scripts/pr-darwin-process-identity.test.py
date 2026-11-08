@@ -133,14 +133,14 @@ class LockTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory(prefix='pr-identity-')
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
-        self.env = dict(os.environ, GIT_CONFIG_NOSYSTEM='1', GIT_CONFIG_GLOBAL='/dev/null', GIT_CONFIG_COUNT='2', GIT_CONFIG_KEY_0='core.hooksPath', GIT_CONFIG_VALUE_0='/dev/null', GIT_CONFIG_KEY_1='commit.gpgSign', GIT_CONFIG_VALUE_1='false', GIT_NO_LAZY_FETCH='1', GIT_ALLOW_PROTOCOL='file', TMPDIR=str(self.root))
+        self.env = dict(os.environ, GIT_CONFIG_NOSYSTEM='1', GIT_CONFIG_GLOBAL='/dev/null', GIT_CONFIG_COUNT='2', GIT_CONFIG_KEY_0='core.hooksPath', GIT_CONFIG_VALUE_0='/dev/null', GIT_CONFIG_KEY_1='commit.gpgSign', GIT_CONFIG_VALUE_1='false', GIT_NO_LAZY_FETCH='1', GIT_ALLOW_PROTOCOL='file', HOME=str(self.root), TMPDIR=str(self.root))
         self.env.pop('BASH_COMPAT', None)
         self.env.pop('OPENCLAW_PR_LOCK_NOTIFY_FD', None)
         self.env.pop('OPENCLAW_PR_DEDICATED_PROCESS_GROUP', None)
         self.repo = self.root/'repo'; self.repo.mkdir()
         self.git('init', '-q', '-b', 'main')
         self.sources = self.root/'source'/'pr-lib';self.sources.mkdir(parents=True)
-        for file in (LOCK, RUNNER, RUNNER.with_name('materialized-anchor.mjs'), PROVIDER, LOCK.with_name('host-tools.sh'), LOCK.with_name('github.sh'), LOCK.with_name('github.mjs'), LOCK.with_name('gh-api-preflight.mjs')):
+        for file in (LOCK, RUNNER, RUNNER.with_name('materialized-anchor.mjs'), RUNNER.with_name('cache-lifetime.mjs'), RUNNER.with_name('git-invocation.mjs'), PROVIDER, LOCK.with_name('host-tools.sh'), LOCK.with_name('github.sh'), LOCK.with_name('github.mjs'), LOCK.with_name('gh-api-preflight.mjs')):
             shutil.copyfile(file,self.sources/file.name)
         library = self.sources.parent/'lib';library.mkdir()
         # Preserve the supervisor's eager script imports without copying an app graph.
@@ -177,7 +177,7 @@ class LockTests(unittest.TestCase):
         return p
 
     def supervise_anchor(self, body, handoff='valid'):
-        anchor = self.root/'openclaw-pr-anchor.fixture'
+        anchor = self.root/'openclaw-pr-anchor-v3.fixture'
         anchor.mkdir(mode=0o700)
         shutil.copytree(self.sources.parent, anchor/'scripts')
         script = anchor/'scripts'/'pr'
@@ -186,7 +186,8 @@ class LockTests(unittest.TestCase):
         script.chmod(0o755)
         outside = self.root/'external-dependency'; outside.mkdir()
         (outside/'preserved').write_text('dependency bytes\n')
-        (anchor/'node_modules').symlink_to(outside, target_is_directory=True)
+        modules = anchor/'node_modules'; modules.mkdir()
+        (modules/'fixture-package').symlink_to(outside, target_is_directory=True)
         opened = anchor
         if handoff == 'foreign':
             opened = self.root/'foreign'; opened.mkdir(mode=0o700)
@@ -246,9 +247,9 @@ class LockTests(unittest.TestCase):
 
     def test_anchor_cleanup_after_clean_completion_preserves_dependency_target(self):
         p, anchor, outside = self.supervise_anchor('acquire_pr_operation_lock 42')
-        self.complete(p, 0)
+        output = self.complete(p, 0)
         self.assertFalse(self.exists())
-        self.assertFalse(anchor.exists())
+        self.assertFalse(anchor.exists(), output)
         self.assertEqual((outside/'preserved').read_text(), 'dependency bytes\n')
 
     def test_anchor_authority_not_inherited_by_operation(self):
@@ -256,23 +257,23 @@ class LockTests(unittest.TestCase):
             'acquire_pr_operation_lock 42\n'
             'test -z "${OPENCLAW_PR_ANCHOR_CREATOR_PID:-}${OPENCLAW_PR_ANCHOR_FD:-}"\n'
             'if { : <&9; } 2>/dev/null; then exit 8; fi')
-        self.complete(p, 0)
+        output = self.complete(p, 0)
         self.assertFalse(self.exists())
-        self.assertFalse(anchor.exists())
+        self.assertFalse(anchor.exists(), output)
 
     def test_anchor_cleanup_after_validation_failure(self):
         p, anchor, outside = self.supervise_anchor(
             'acquire_pr_operation_lock 42\nbegin_pr_operation_validation_phase\nexit 1')
-        self.complete(p, 1)
+        output = self.complete(p, 1)
         self.assertFalse(self.exists())
-        self.assertFalse(anchor.exists())
+        self.assertFalse(anchor.exists(), output)
         self.assertTrue((outside/'preserved').exists())
 
     def test_anchor_retired_after_drained_operation_failure(self):
         p, anchor, _ = self.supervise_anchor('acquire_pr_operation_lock 42\nexit 7')
-        self.complete(p, 7)
+        output = self.complete(p, 7)
         self.assertFalse(self.exists())
-        self.assertFalse(anchor.exists())
+        self.assertFalse(anchor.exists(), output)
 
     def test_anchor_retained_without_creation_authority(self):
         for handoff in ('missing', 'closed', 'wrong-pid', 'foreign'):
@@ -305,8 +306,8 @@ class LockTests(unittest.TestCase):
         while not ready.exists():
             self.assertIsNone(p.poll()); self.assertLess(time.monotonic(), deadline); time.sleep(.02)
         p.send_signal(signal.SIGTERM)
-        self.complete(p, 128+signal.SIGTERM)
-        self.assertFalse(anchor.exists())
+        output = self.complete(p, 128+signal.SIGTERM)
+        self.assertFalse(anchor.exists(), output)
         self.assertTrue(self.exists())
 
     @unittest.skipUnless(sys.platform == 'darwin', 'Darwin sandbox')
@@ -383,6 +384,35 @@ class LockTests(unittest.TestCase):
     def test_group_status_indeterminate_never_dead(self):
         r=self.shell('pr_operation_lock_process_group_status 2147483648')
         self.assertEqual(r.stdout,'indeterminate\n')
+        preload = self.root/'group-probe.cjs'
+        # Fault only the supervisor's read-only group probes; child/helper behavior stays real.
+        preload.write_text('''if (process.argv[1]?.endsWith('/process-group-runner.mjs')) {
+  const kill = process.kill.bind(process);
+  let probes = 0;
+  process.kill = (pid, signal) => {
+    if (pid < 0 && signal === 0) {
+      probes++;
+      throw Object.assign(new Error('fixture probe denied'), { code: 'EACCES' });
+    }
+    return kill(pid, signal);
+  };
+  process.once('exit', () => require('node:fs').writeSync(2, 'group-probes=' + probes + '\\n'));
+}
+''')
+        self.env['NODE_OPTIONS'] = '--require '+str(preload)
+        p = self.supervise('acquire_pr_operation_lock 42\nprintf "%s\\n" "$PR_OPERATION_LOCK_OWNER_OID"')
+        out, err = p.communicate(timeout=15)
+        self.assertEqual(p.returncode, 1, out+err)
+        owner = out.strip()
+        self.assertEqual(self.git('rev-parse', self.ref), owner)
+        data = dict(line.split('=', 1) for line in self.git('cat-file', '-p', owner).splitlines())
+        prefix = 'scripts/pr process-group observation: '
+        observations = [json.loads(line[len(prefix):]) for line in err.splitlines() if line.startswith(prefix)]
+        self.assertEqual(observations, [{'pid': int(data['pgid']), 'error': 'EACCES'}])
+        self.assertIn('group-probes=2\n', err)
+        self.assertIn('process-group state became indeterminate', err)
+        self.assertIn('Retaining the operation lock', err)
+        self.assertIn('scripts/pr lock-recover 42 '+owner+' --confirmed-no-running-tools', err)
 
     def test_lingering_group_retains_lock_after_drain(self):
         # The supervisor performs the real unchanged five-second grace/drain.

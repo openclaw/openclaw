@@ -8,11 +8,11 @@ import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { ContentPresentation } from "../../../lib/solid/presentation.ts";
 import { MessageAttachmentAction } from "./chat-message-attachments-solid.tsx";
 import { MessageImageAction } from "./chat-message-images-solid.tsx";
+import type { MessageMediaAction } from "./chat-message-media-actions.ts";
 import {
   observeChatMediaResourceSubscriber,
   releaseChatMediaResourceOwner,
   schedulePairingQrExpiryRefresh,
-  type MessageMediaAction,
 } from "./chat-message-media.ts";
 import { splitWorkspaceFilename } from "./chat-session-workspace-catalog.ts";
 import type {
@@ -157,6 +157,9 @@ function TranscriptAttachmentRow(props: {
             <span class="workspace-desktop__disclosure" />
           </Show>
           <Icon
+            class={
+              mobile() ? "chat-workspace-mobile__file-icon" : "workspace-desktop__attachment-icon"
+            }
             name={
               props.entry.kind === "image" || props.entry.mimeType?.startsWith("image/")
                 ? "image"
@@ -189,11 +192,20 @@ function TranscriptAttachmentRow(props: {
             </Show>
           </span>
           <Show when={mobile()}>
-            <Icon name="chevronRight" />
+            <Icon name="chevronRight" class="chat-workspace-mobile__chevron" />
           </Show>
         </button>
         <Show when={childProps.action().reason}>
           {(reason) => <span role="status">{reason()}</span>}
+        </Show>
+        <Show when={childProps.action().onFindWorkspaceFile}>
+          <button
+            type="button"
+            aria-label={t("chat.attachments.findInFilesFor", { name: props.entry.label })}
+            onClick={() => childProps.action().onFindWorkspaceFile?.()}
+          >
+            {t("chat.attachments.findInFiles")}
+          </button>
         </Show>
         <Show when={childProps.action().onAllow}>
           <button type="button" onClick={() => childProps.action().onAllow?.()}>

@@ -1,11 +1,12 @@
 import type { Virtualizer } from "@tanstack/virtual-core";
+import { fnv1aUtf16 } from "../../../../../src/shared/fnv1a.js";
 import { CONTROL_UI_BUILD_INFO } from "../../../build-info.ts";
 import { i18n } from "../../../i18n/index.ts";
-import { fnv1aUtf16 } from "../../../lib/fnv1a.ts";
 import { getExpandedToolCards, getExpandedUserMessages } from "../chat-thread.ts";
 import type { ChatWidgetLayout } from "../session-message-cache.ts";
 import type { ChatThreadProps } from "./chat-thread-interactions.ts";
 import { measureTranscriptRow } from "./chat-transcript-geometry.ts";
+import { createTranscriptMemo } from "./chat-transcript-memo.ts";
 import {
   publishTranscriptScroll,
   readTranscriptViewport,
@@ -15,6 +16,9 @@ export type ComposerActivityLayout = {
   strip: HTMLElement;
   pills: ReadonlySet<HTMLElement>;
 };
+
+type TranscriptRowGeometry = { key: string; revision?: string };
+const projectedRows = createTranscriptMemo<readonly TranscriptRowGeometry[]>();
 
 /** Match ResizeObserver's fractional border box without pane transition transforms. */
 export function unscaledBorderBox(element: HTMLElement, style = getComputedStyle(element)) {
@@ -36,13 +40,26 @@ export function unscaledBorderBox(element: HTMLElement, style = getComputedStyle
 /** The native scroll range changes only at these viewport and content writes. */
 export class TranscriptLayoutOwner {
   ready = false;
-  rows: readonly { key: string; revision?: string }[] = [];
+  /** Row-column offset held back from scrollTop while native scrolling is running. */
+  rowShift = 0;
+  private rowGeometry: readonly TranscriptRowGeometry[] = [];
   rowLayout?: ChatWidgetLayout;
   private rowPresentation = "";
   rowWidth = 0;
   paneWidth = 0;
   rowGutter = 0;
-  private recordingRows = false;
+  private cancelRowWrite: (() => void) | null = null;
+
+  get rows(): readonly TranscriptRowGeometry[] {
+    return this.rowGeometry;
+  }
+
+  set rows(rows: readonly TranscriptRowGeometry[]) {
+    // Geometry survives rendered bodies; structural types alone do not discard payloads.
+    this.rowGeometry = projectedRows(rows, [], () =>
+      rows.map(({ key, revision }) => ({ key, revision })),
+    );
+  }
 
   configureRows(props: ChatThreadProps, avatarPlacement: string, transient: boolean): void {
     this.ready = !props.loading;
@@ -81,8 +98,12 @@ export class TranscriptLayoutOwner {
   }
 
   readonly rowMinimum = (index: number): number => {
+    const heights = this.rowLayout?.readRows();
+    if (!heights) {
+      return 0;
+    }
     const key = this.rowLayoutKey(index);
-    return key ? (this.rowLayout?.read(key) ?? 0) : 0;
+    return key ? (heights[key] ?? 0) : 0;
   };
 
   restoreRows(
@@ -113,45 +134,56 @@ export class TranscriptLayoutOwner {
   };
 
   persistRows(instance: Virtualizer<HTMLDivElement, HTMLElement>, positionPending: boolean): void {
-    if (positionPending || !this.ready || this.recordingRows || !this.rowLayout) {
+    if (positionPending || !this.ready || this.cancelRowWrite || !this.rowLayout) {
       return;
     }
-    this.recordingRows = true;
+    let idle: number | undefined;
+    const cancel = () =>
+      idle === undefined ? cancelAnimationFrame(frame) : globalThis.cancelIdleCallback(idle);
+    const write = () => {
+      // A retired callback must not write or clear a replacement task after reconnect.
+      if (this.cancelRowWrite !== cancel) {
+        return;
+      }
+      this.cancelRowWrite = null;
+      if (!this.viewport?.isConnected || !this.ready || instance.scrollElement !== this.viewport) {
+        return;
+      }
+      this.rowLayout?.writeRows(
+        Object.fromEntries(
+          [...instance.elementsCache].flatMap(([id, element]) => {
+            if (!element.isConnected) {
+              return [];
+            }
+            const key = this.rowLayoutKey(instance.indexFromElement(element));
+            const size = instance.itemSizeCache.get(id) ?? 0;
+            // Local disclosure state is not restored on reload.
+            if (
+              !key ||
+              !(size > 0 && size <= 8000) ||
+              element.matches(
+                ":has(details[open], .chat-tool-card__raw-toggle[aria-expanded='true'], .code-block-wrapper:is(.is-expanded, .is-wrapped, .is-json-raw))",
+              )
+            ) {
+              return [];
+            }
+            return [[key, size]];
+          }),
+        ),
+      );
+    };
     // The reveal owner admits this work; reuse measured sizes after paint.
-    requestAnimationFrame(() => {
-      (globalThis.requestIdleCallback ?? requestAnimationFrame).call(globalThis, () => {
-        this.recordingRows = false;
-        if (
-          !this.viewport?.isConnected ||
-          !this.ready ||
-          instance.scrollElement !== this.viewport
-        ) {
-          return;
-        }
-        this.rowLayout?.writeRows(
-          Object.fromEntries(
-            [...instance.elementsCache].flatMap(([id, element]) => {
-              if (!element.isConnected) {
-                return [];
-              }
-              const key = this.rowLayoutKey(instance.indexFromElement(element));
-              const size = instance.itemSizeCache.get(id) ?? 0;
-              // Local disclosure state is not restored on reload.
-              if (
-                !key ||
-                !(size > 0 && size <= 8000) ||
-                element.matches(
-                  ":has(details[open], .chat-tool-card__raw-toggle[aria-expanded='true'], .code-block-wrapper:is(.is-expanded, .is-wrapped, .is-json-raw))",
-                )
-              ) {
-                return [];
-              }
-              return [[key, size]];
-            }),
-          ),
-        );
-      });
+    let frame = requestAnimationFrame(() => {
+      if (this.cancelRowWrite !== cancel) {
+        return;
+      }
+      if (globalThis.requestIdleCallback) {
+        idle = globalThis.requestIdleCallback(write);
+      } else {
+        frame = requestAnimationFrame(write);
+      }
     });
+    this.cancelRowWrite = cancel;
   }
 
   private viewport: HTMLDivElement | null = null;
@@ -350,25 +382,32 @@ export class TranscriptLayoutOwner {
       : style.paddingBottom;
   }
 
-  commitRange(element: HTMLElement, height: number): void {
+  commitRange(element: HTMLElement, rangeHeight: number): boolean {
+    // The shifted column starts above its header; the native end stays where the rows end.
+    const height = rangeHeight - this.rowShift;
     const previous = this.rangeHeights.get(element);
     if (previous === height) {
-      return;
+      return false;
     }
     const shrinking =
       element.parentElement === this.viewport && previous !== undefined && height < previous;
     const before = shrinking ? this.viewport?.scrollTop : undefined;
+    // The direct child's height alone keeps an interior viewport in range.
+    // Read before writing; only a possible native clamp needs a second layout.
+    const staysInRange =
+      before !== undefined && before >= 0 && height - this.viewport!.clientHeight > before + 1;
     this.rangeHeights.set(element, height);
     element.style.height = `${height}px`;
-    if (before !== undefined) {
-      this.publishResize(before);
+    if (before !== undefined && !staysInRange) {
+      return this.publishResize(before);
     }
+    return false;
   }
 
-  private publishResize(before: number): void {
+  private publishResize(before: number): boolean {
     const viewport = this.viewport;
     if (!viewport) {
-      return;
+      return false;
     }
     // Publish the native clamp before another measurement can move the anchor.
     const measuredViewport = readTranscriptViewport(viewport);
@@ -380,9 +419,13 @@ export class TranscriptLayoutOwner {
       viewport: measuredViewport,
       ...(before !== after ? { scrollCorrection: { before, after } } : {}),
     });
+    return before !== after;
   }
 
   disconnect(): void {
+    const cancel = this.cancelRowWrite;
+    this.cancelRowWrite = null;
+    cancel?.();
     for (const observer of this.observers) {
       observer.disconnect();
     }

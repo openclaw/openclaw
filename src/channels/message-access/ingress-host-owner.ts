@@ -1,6 +1,7 @@
 import type { PreparedCommandOwnerAuthority } from "../../auto-reply/command-auth.js";
 import type { PreparedRequesterProfile } from "../../auto-reply/requester-profile.js";
 import type { SessionParticipantIdentity } from "../../config/sessions/session-participant-identity.js";
+import type { prepareChannelOperatorAuthority } from "../../gateway/channel-operator-authority.js";
 import type { GatewayContextResolver } from "../../gateway/server-methods/types.js";
 import type { UserChannelIdentity } from "../../state/user-profiles.types.js";
 import type {
@@ -23,5 +24,7 @@ export type ChannelParticipantInput = {
   gatewayContext: ReturnType<GatewayContextResolver>;
   verifiedPrincipal?: UserChannelIdentity;
   requesterProfile?: PreparedRequesterProfile;
+  operatorAuthority?: Awaited<ReturnType<typeof prepareChannelOperatorAuthority>>;
   commandOwnerAuthority?: PreparedCommandOwnerAuthority;
+  commandOwnerPrincipal?: UserChannelIdentity;
 };

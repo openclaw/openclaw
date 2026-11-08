@@ -69,7 +69,7 @@ it.each([
     );
     const container = renderStatus(status);
     expect(container.querySelector('[role="alert"]')?.textContent).toContain(message);
-    expect(container.textContent).toContain("Showing stale data");
+    expect(container.textContent).toContain("Showing last known data");
     expect(container.querySelector("button")).toBeNull();
     expect(status.awaitingGateway).toBe(false);
   },
@@ -83,6 +83,8 @@ it("does not classify lifecycle words in ordinary error messages", () => {
 
 it("shows a stale-only warning without an alert or button", () => {
   const container = renderStatus({ ...completePanelRefresh(), stale: true });
-  expect(container.querySelector('[role="status"]')?.textContent).toContain("Showing stale data");
+  expect(container.querySelector('[role="status"]')?.textContent).toContain(
+    "Showing last known data",
+  );
   expect(container.querySelector('[role="alert"], button')).toBeNull();
 });

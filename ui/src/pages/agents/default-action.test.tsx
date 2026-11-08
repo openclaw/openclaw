@@ -15,16 +15,33 @@ it("shows admitted default commands and follows confirmed roster state", async (
     .mockReturnValueOnce(first.promise)
     .mockReturnValueOnce(retry.promise);
   const props = createProps({ onSetDefault, presentationRetired: () => retired.promise });
-  const mounted = mountSolid(Agents, props);
+  const container = document.body.appendChild(document.createElement("div"));
+  const mounted = mountSolid(Agents, props, container);
+  const trigger = () =>
+    mounted.container.querySelector<HTMLButtonElement>(".agents-page-menu__trigger")!;
   const control = () =>
-    Array.from(
-      mounted.container.querySelectorAll<HTMLButtonElement>(".agents-toolbar button"),
-    ).find((button) => /Set Default|Saving|^Default$/.test(button.textContent ?? ""))!;
+    [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')].find((item) =>
+      /Set default|Saving|^Default$/.test(item.textContent?.trim() ?? ""),
+    );
+  const disabled = () =>
+    control()?.getAttribute("aria-disabled") === "true" ||
+    (control() as HTMLButtonElement | undefined)?.disabled === true;
+  // Selecting an item closes the menu, so reopen it before reading the label.
+  const reopen = () => {
+    if (trigger().getAttribute("aria-expanded") !== "true") {
+      trigger().click();
+    }
+  };
   try {
-    control().click();
     await vi.waitFor(() => {
-      expect(control().textContent).toContain("Saving");
-      expect(control().disabled).toBe(true);
+      reopen();
+      expect(control()).toBeTruthy();
+    });
+    control()!.click();
+    await vi.waitFor(() => {
+      reopen();
+      expect(control()?.textContent).toContain("Saving");
+      expect(disabled()).toBe(true);
     });
     expect(props.readData().agentsList?.defaultId).toBe("alpha");
     retired.resolve();
@@ -34,20 +51,25 @@ it("shows admitted default commands and follows confirmed roster state", async (
       selectedAgentId: "alpha",
       config: { ...props.config, configSaving: false },
     });
-    await vi.waitFor(() => expect(control().textContent?.trim()).toBe("Default"));
+    await vi.waitFor(() => {
+      reopen();
+      expect(control()?.textContent?.trim()).toBe("Default");
+    });
     mounted.update({ ...props, config: { ...props.config, configSaving: false } });
     await vi.waitFor(() => {
-      expect(control().textContent).toContain("Set Default");
-      expect(control().disabled).toBe(false);
+      reopen();
+      expect(control()?.textContent).toContain("Set default");
+      expect(disabled()).toBe(false);
     });
     first.resolve();
     mounted.update(props);
     await vi.waitFor(() => {
-      expect(control().textContent).toContain("Set Default");
-      expect(control().disabled).toBe(false);
+      reopen();
+      expect(control()?.textContent).toContain("Set default");
+      expect(disabled()).toBe(false);
     });
-    control().click();
-    expect(onSetDefault).toHaveBeenNthCalledWith(2, "beta");
+    control()!.click();
+    await vi.waitFor(() => expect(onSetDefault).toHaveBeenNthCalledWith(2, "beta"));
     retry.resolve();
     const data = props.readData();
     mounted.update({
@@ -55,12 +77,14 @@ it("shows admitted default commands and follows confirmed roster state", async (
       readData: () => ({ ...data, agentsList: { ...data.agentsList!, defaultId: "beta" } }),
     });
     await vi.waitFor(() => {
-      expect(control().textContent?.trim()).toBe("Default");
-      expect(control().disabled).toBe(true);
+      reopen();
+      expect(control()?.textContent?.trim()).toBe("Default");
+      expect(disabled()).toBe(true);
     });
   } finally {
     first.resolve();
     retry.resolve();
     mounted.dispose();
+    container.remove();
   }
 });

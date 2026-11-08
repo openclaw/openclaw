@@ -29,12 +29,69 @@ export function findCodeOwnership(
   return ownership;
 }
 
+/** Reuse canonical Markdown ownership only across safe checkpoint appends. */
+export function createCodeOwnershipResolver() {
+  let ownershipSource = "";
+  let openBlock = false;
+  let ownership: ReturnType<typeof findCodeOwnership> | undefined;
+  return (text: string) => {
+    const last = ownership?.regions.at(-1);
+    // A blank container prefix can gain code content without another newline.
+    const partialContainerLine =
+      last?.block &&
+      last.end < ownershipSource.length &&
+      /^[ \t>]*$/u.test(
+        ownershipSource.slice(
+          Math.max(ownershipSource.lastIndexOf("\n"), ownershipSource.lastIndexOf("\r")) + 1,
+        ),
+      );
+    // A new line can advance settlement even when code ranges stay unchanged.
+    if (
+      ownership &&
+      !partialContainerLine &&
+      !text.includes("\n", ownershipSource.length) &&
+      !text.includes("\r", ownershipSource.length) &&
+      (!last?.block || last.end !== ownershipSource.length || openBlock) &&
+      canReuseMarkdownOwnership(ownershipSource, text, ownership)
+    ) {
+      if (openBlock && last) {
+        ownership = {
+          ...ownership,
+          regions: [...ownership.regions.slice(0, -1), { ...last, end: text.length }],
+        };
+      }
+      ownershipSource = text;
+      return ownership;
+    }
+    ownership = findCodeOwnership(text);
+    ownershipSource = text;
+    const tail = ownership.regions.at(-1);
+    const lineStart = tail
+      ? Math.max(text.lastIndexOf("\n", tail.start - 1), text.lastIndexOf("\r", tail.start - 1)) + 1
+      : 0;
+    const topLevel = tail && /^ {0,3}$/u.test(text.slice(lineStart, tail.start));
+    openBlock = Boolean(
+      tail?.block &&
+      tail.end === text.length &&
+      ((topLevel && scanFenceSpans(text.slice(tail.start)).state.open) ||
+        /^(?: {4}|\t)/u.test(
+          text.slice(Math.max(text.lastIndexOf("\n"), text.lastIndexOf("\r")) + 1),
+        )),
+    );
+    return ownership;
+  };
+}
+
 /** Stable retained Markdown boundary and the context required to resume its tail. */
 export function findTextCheckpoint(
   text: string,
   referenceLength: number,
   resolveOwnership: (text: string) => ReturnType<typeof findCodeOwnership>,
-) {
+): {
+  offset: number;
+  context: string;
+  definitions?: ReturnType<typeof findCodeOwnership>["definitions"];
+} {
   const state = createProtectionScanState();
   let cursor = referenceLength;
   let lastLineStart = cursor;
@@ -50,6 +107,9 @@ export function findTextCheckpoint(
       (!inFence && !state.fenceChar && /\[|^ {0,3}=+[ \t]*\r?\n$/.test(line))
     ) {
       const ownership = resolveOwnership(text);
+      if (ownership.continuation) {
+        return { ...ownership.continuation, definitions: ownership.definitions };
+      }
       const retain = ownership.retainStart;
       let start = retain === 0 ? 0 : text.lastIndexOf("\n", retain - 1) + 1;
       const startsDefinition = ownership.definitions.some(
@@ -135,6 +195,10 @@ export function canReuseMarkdownOwnershipForAppend(
   }
   if (!ownership) {
     return true;
+  }
+  // Closing an angle destination can turn earlier backticks into URL text.
+  if (/[>)]/u.test(appended) && previousText.includes("<")) {
+    return false;
   }
   if (ownership.unsettledDefinitionStarts.length > 0) {
     return false;

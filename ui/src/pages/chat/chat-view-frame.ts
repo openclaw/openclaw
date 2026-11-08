@@ -7,6 +7,7 @@ import type {
   SessionSuggestionResolution,
 } from "../../../../packages/gateway-protocol/src/index.js";
 import type { ExecApprovalDecision, ExecApprovalRequest } from "../../app/exec-approval.ts";
+import { openCommandPaletteWithAttachments } from "../../components/command-palette-contract.ts";
 import type { ImageLightboxItem } from "../../components/image-lightbox.types.ts";
 import type {
   ChatAttachment,
@@ -17,14 +18,13 @@ import { formatUiError } from "../../lib/format-error.ts";
 import { isSessionRunVisuallyActive } from "../../lib/session-run-state.ts";
 import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
 import { showToast } from "../../lib/toast.ts";
-import { uploadsEnabled, uploadsDisabledMessage } from "../../lib/uploads.ts";
 import { releaseChatAttachmentPayloads } from "./attachment-payload-store.ts";
 import { getChatHistoryLoadState } from "./chat-history-state.ts";
 import {
   buildPendingInputQueueItems,
-  dismissChatPendingInputs,
   getChatPendingInputs,
   isPendingInputDismissHidden,
+  mutateChatPendingInput,
 } from "./chat-pending-inputs.ts";
 import type { ChatProviderReviewOwner } from "./chat-provider-review-controller.tsx";
 import { chatStartupStatusLabel } from "./chat-run-startup.ts";
@@ -64,13 +64,13 @@ export type ChatProps = Omit<
   | "onRetryQueuedMessage"
   | "onDiscardQueuedMessage"
   | "onDismissPendingInput"
+  | "onSteerNow"
   | "onFocusComposer"
   | "commentAttachments"
   | "commentsDisabled"
   | "onAddToChat"
   | "onCompanionSelection"
-  | "onOpenSession"
-  | "onSend"
+  | "onNewSessionSelection"
   | "onOpenSidebar"
 > &
   Omit<
@@ -103,11 +103,13 @@ export type ChatProps = Omit<
     historyState?: ChatState;
     /** Session access presentation for dismissing retired inputs; independent of model availability. */
     canDismissPendingInputs?: boolean;
+    canSteerNow?: boolean;
     environmentStartStatus?: import("../../../../packages/gateway-protocol/src/schema/environments.js").WorkerEnvironmentStartStatus;
     providerPolicyNotice?: ProviderPolicyNotice | null;
     // Resolve after the first pane frame prepares the Solid owner's permission facts.
     readProviderReview?: () => ChatProviderReviewOwner | undefined;
     error: string | null;
+    errorDetail?: unknown;
     diskSpace?: SessionPlacementDiskSpace;
     workerRuntimeInstall?: SessionPlacementWorkerRuntimeInstall;
     inlineApproval?: ExecApprovalRequest | null;
@@ -123,6 +125,7 @@ export type ChatProps = Omit<
     ) => void | Promise<void>;
     workspaceConflict?: WorkspaceResultConflict;
     onDismissWorkspaceConflict?: () => void;
+    onDismissRunError?: () => void;
     chatMessageMaxWidth?: string | null;
     showNewMessages?: boolean;
     onScrollToBottom?: (options?: { smooth?: boolean }) => void;
@@ -205,10 +208,6 @@ export function createChatViewFrame(
             if (props.readSignal?.aborted) {
               return true;
             }
-            if (!selectionContextOnly && !uploadsEnabled(props.uploadConfig)) {
-              showToast({ message: uploadsDisabledMessage() });
-              return false;
-            }
             const attachment = createChatSelectionAttachment(
               { ...selection, comment, sessionKey: props.sessionKey },
               { attachmentLimits: props.attachmentLimits, selectionContextOnly },
@@ -228,15 +227,15 @@ export function createChatViewFrame(
       );
     } catch (error) {
       if (current()) {
-        showToast({ message: formatUiError(error) });
+        showToast({ severity: "error", message: formatUiError(error) });
       }
     }
   };
   const canCompose = props.canSend;
   const historyState = props.historyState;
-  const dismissPendingInputs =
+  const dismissPendingInput =
     props.connected && props.canDismissPendingInputs && historyState
-      ? (inputIds: readonly string[]) => void dismissChatPendingInputs(historyState, inputIds)
+      ? (inputId: string) => void mutateChatPendingInput(historyState, { kind: "dismiss", inputId })
       : undefined;
   const questionState = getTranscriptState(props.paneId);
   const openImage = props.onOpenImage
@@ -293,9 +292,11 @@ export function createChatViewFrame(
       : undefined,
     onRetryQueuedMessage: props.connected && canCompose ? props.onQueueRetry : undefined,
     onDiscardQueuedMessage: props.onQueueRemove,
-    onDismissPendingInput: dismissPendingInputs
-      ? (inputId: string) => dismissPendingInputs([inputId])
-      : undefined,
+    onDismissPendingInput: dismissPendingInput,
+    onSteerNow:
+      props.connected && props.canSteerNow && historyState
+        ? (runId: string) => void mutateChatPendingInput(historyState, { kind: "steer", runId })
+        : undefined,
     onCompanionSelection:
       props.canSend && !props.suggestionComposer && props.onCompanionStageAttachment
         ? (selection, anchorRect) =>
@@ -308,10 +309,20 @@ export function createChatViewFrame(
               true,
             )
         : undefined,
+    onNewSessionSelection: (selection) => {
+      const attachment = createChatSelectionAttachment(
+        { ...selection, comment: "", sessionKey: props.sessionKey },
+        { attachmentLimits: props.attachmentLimits },
+        0,
+      );
+      if (attachment) {
+        openCommandPaletteWithAttachments([attachment]);
+      }
+    },
     commentAttachments: props.suggestionComposer ? undefined : props.attachments,
     commentsDisabled: !canCompose || Boolean(props.readSignal?.aborted),
     onAddToChat:
-      props.canSend && !props.suggestionComposer && uploadsEnabled(props.uploadConfig)
+      props.canSend && !props.suggestionComposer
         ? (selection, anchorRect) =>
             void openSelectionComment(
               selection,
@@ -330,7 +341,6 @@ export function createChatViewFrame(
               focusComposer,
             )
         : undefined,
-    onOpenSession: props.onSessionSelect,
     // Portaled menus can outlive a render; resolve focus from the current session owner.
     onFocusComposer: () => focusComposer(true),
   } satisfies Partial<ChatThreadProps>);
@@ -362,7 +372,6 @@ export function createChatViewFrame(
   return {
     approvalSourceSession,
     pendingInputs,
-    dismissPendingInputs,
     asyncQuestions,
     openImmediateImage,
     attachmentDropHandlers,

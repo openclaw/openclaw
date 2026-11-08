@@ -58,6 +58,62 @@ describe("qa-bus state", () => {
     });
   });
 
+  it("records exact account-owned completion without crossing gaps or surviving reset", () => {
+    inbound({ conversation: { id: "first", kind: "direct" } }, "same-provider-id");
+    inbound({ conversation: { id: "second", kind: "direct" } }, "same-provider-id");
+    inbound({ accountId: "other" }, "same-provider-id");
+    outbound("dm:alice", "preview");
+
+    state.recordPollReceipts({ completedEventCursors: [2, 2, 3, 4, 5] });
+    expect(
+      [1, 2, 3, 4, 5].map((cursor) => state.hasCompletedInboundEvent("default", cursor)),
+    ).toEqual([false, true, false, false, false]);
+    expect(state.hasCompletedInboundEvent("other", 3)).toBe(false);
+    expect(state.poll().events.map((event) => event.cursor)).toEqual([1, 4]);
+    state.recordPollReceipts({ completedEventCursors: [] });
+    expect(state.hasCompletedInboundEvent("default", 2)).toBe(true);
+    expect(state.poll().events.map((event) => event.cursor)).toEqual([1, 4]);
+
+    state.reset();
+    inbound({});
+    // A write started before reset may arrive after it; it cannot complete new input.
+    state.recordPollReceipts({ completedEventCursors: [1, 2, 3, 4] });
+    expect(
+      [1, 2, 3, 4, 5].map((cursor) => state.hasCompletedInboundEvent("default", cursor)),
+    ).toEqual([false, false, false, false, false]);
+    state.recordPollReceipts({ completedEventCursors: [5] });
+    expect(state.hasCompletedInboundEvent(undefined, 5)).toBe(true);
+  });
+
+  it("validates whole adoption batches before recording custody or completion", () => {
+    inbound({});
+    inbound({});
+    inbound({ accountId: "other" });
+    outbound("dm:alice", "preview");
+    for (const invalidCursor of [3, 4, 5]) {
+      expect(() =>
+        state.recordPollReceipts({
+          adoptedEventCursors: [2, invalidCursor],
+          completedEventCursors: [1],
+        }),
+      ).toThrow("adopted event must be a retained inbound input for the selected account");
+      expect(state.poll().events.map((event) => event.cursor)).toEqual([1, 2, 4]);
+      expect(state.hasCompletedInboundEvent("default", 1)).toBe(false);
+    }
+    state.recordPollReceipts({ adoptedEventCursors: [2, 2] });
+    expect(state.poll().events.map((event) => event.cursor)).toEqual([1, 4]);
+    expect(state.hasCompletedInboundEvent("default", 2)).toBe(false);
+
+    state.reset();
+    inbound({});
+    expect(() => state.recordPollReceipts({ adoptedEventCursors: [2] })).toThrow(
+      "adopted event must be a retained inbound input for the selected account",
+    );
+    state.recordPollReceipts({ completedEventCursors: [2] });
+    expect(state.poll().events.map((event) => event.cursor)).toEqual([5]);
+    expect(state.hasCompletedInboundEvent("default", 5)).toBe(false);
+  });
+
   let state: ReturnType<typeof createQaBusState>;
   beforeEach(() => {
     state = createQaBusState();

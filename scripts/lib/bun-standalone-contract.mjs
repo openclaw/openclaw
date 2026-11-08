@@ -11,10 +11,11 @@ export const STANDALONE_USAGE =
 
 /**
  * @typedef {{
+ *   allowCodeFromDisk?: true,
  *   aotLogTypeMismatches?: true,
  *   aotExplain?: string[],
  *   aotDisable?: string[],
- *   trim?: true | { allow?: ("run" | "jit")[], locales?: string[] },
+ *   trim?: true | { allow?: ("run" | "jit" | "interpreter" | "password" | "toml" | "yaml" | "json5" | "jsonc")[], locales?: string[] },
  *   functionSource?: false,
  *   disallowCodeGenerationFromStrings?: true | "strict"
  * }} StandaloneAotCompileOptions
@@ -153,10 +154,18 @@ export function parseStandaloneArguments(args) {
   }
   const mode =
     compileFlags[0] === "--aot" ? "aot" : compileFlags[0] === "--bytecode" ? "bytecode" : "jit";
-  if (trimAllow.size) {
+  if (mode === "aot") {
+    // Installed plugins, their workers, and dynamic imports run interpreted.
+    aotCompileOptions.allowCodeFromDisk = true;
+    aotFlags.push("--aot-allow-code-from-disk");
+  }
+  if (trimAllow.size || aotCompileOptions.trim) {
     /** @type {("run" | "jit")[]} */
     const features = ["run", "jit"];
+    /** @type {Exclude<StandaloneAotCompileOptions["trim"], true | undefined>["allow"]} */
     const allow = features.filter((feature) => trimAllow.has(feature));
+    // Fetched plugins and same-executable children are invisible to build-time retention.
+    allow.push("interpreter", "password", "toml", "yaml", "json5", "jsonc");
     aotCompileOptions.trim = { allow };
     aotFlags.push(`--trim-allow=${allow.join(",")}`);
   }

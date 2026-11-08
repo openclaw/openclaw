@@ -5,6 +5,7 @@ import {
   isSyntheticMissingToolResult,
   SYNTHETIC_MISSING_TOOL_RESULT_DETAIL_KEY,
 } from "../../../packages/agent-core/src/harness/session/tool-result-pairing.js";
+import { jsonValid } from "../../infra/database-engine/json-values.js";
 import {
   executeSqliteQueryTakeFirstSync,
   iterateSqliteQuerySync,
@@ -299,6 +300,8 @@ function withTranscriptContextSnapshot<T>(
         database.db,
         () => {
           const db = getSessionKysely(database.db);
+          // Compressed rows were validated before encoding; inspect raw identity only.
+          const nativeJsonValid = jsonValid(database.db, sql`coalesce(event_json, '{}')`);
           const fence = resolveSqliteSessionTranscriptReadFence({ database, ...resolved });
           const version = readTranscriptContextVersionInTransaction(database, resolved.sessionId);
           if (through) {
@@ -422,6 +425,7 @@ function withTranscriptContextSnapshot<T>(
                           omitCheckpoint,
                           omission,
                           transcriptPredicateSql(database.db, "message_role"),
+                          nativeJsonValid,
                         ),
                       ])
                       .as("bytes"),
@@ -448,6 +452,7 @@ function withTranscriptContextSnapshot<T>(
                       omitCheckpoint,
                       omission,
                       transcriptPredicateSql(database.db, "message_role"),
+                      nativeJsonValid,
                     ).as("event_json"),
                   ])
                   .where("seq", "in", [...bySeq.keys()]);

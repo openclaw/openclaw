@@ -1,19 +1,22 @@
 import { realpathSync } from "node:fs";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import type { SandboxConfig } from "../../agents/sandbox/types.js";
 import type { WorktreeAllocationGuard } from "../../agents/worktrees/allocation.js";
 import { withWorktreeGitConfig } from "../../agents/worktrees/checkout-git-config.js";
-import { requireGit } from "../../agents/worktrees/git.js";
+import { gitEnvironment, requireGit } from "../../agents/worktrees/git.js";
 import { timeWorktreePreparationPhase } from "../../agents/worktrees/preparation-timing.js";
 import { resolveStateDir } from "../../config/state-dir.js";
+import { observeDiagnosticsTimelinePhases } from "../../infra/diagnostics-timeline.js";
+import { gitNullConfigPath } from "../../infra/git-exec.js";
 import type { LocalWorkspaceOwner } from "./local-workspace-types.js";
 import { prepareWorkerWorkspaceGitPack } from "./workspace-git-base.js";
 import { captureWorkspaceManifestDocument } from "./workspace-manifest-worker.js";
 import { runWorkspaceInventoryCommandToFile } from "./workspace-sync-inventory.js";
 
-export function localWorkspaceProjectionPath(owner: LocalWorkspaceOwner) {
+const RECONCILE_PHASE = "attempt.setup.sandbox.workspace_selection.prepare.reconcile";
+
+export function localWorkspaceProjectionPath(owner: Pick<LocalWorkspaceOwner, "worktree" | "env">) {
   if (!/^[a-f0-9-]{36}$/u.test(owner.worktree.id)) {
     throw new Error("Invalid managed worktree identity");
   }
@@ -35,6 +38,7 @@ export async function prepareLocalWorkspaceCheckout(params: {
   signal: AbortSignal;
   assertCurrent: () => void;
 }) {
+  using phases = observeDiagnosticsTimelinePhases(`${RECONCILE_PHASE}.checkout.pack`);
   const { signal, assertCurrent: current, destination: repo } = params;
   const temporary = await fs.mkdtemp(path.join(params.temporaryRoot, "git-"));
   try {
@@ -57,13 +61,14 @@ export async function prepareLocalWorkspaceCheckout(params: {
         ),
     );
     current();
+    phases.mark(`${RECONCILE_PHASE}.checkout.index`);
     await fs.mkdir(repo, { recursive: true, mode: 0o700 });
     const cleanEnv = {
       PATH: process.env.PATH,
       HOME: temporary,
       GIT_CONFIG_NOSYSTEM: "1",
-      GIT_CONFIG_GLOBAL: os.devNull,
-      GIT_CONFIG_SYSTEM: os.devNull,
+      GIT_CONFIG_GLOBAL: gitNullConfigPath(),
+      GIT_CONFIG_SYSTEM: gitNullConfigPath(),
       GIT_NO_REPLACE_OBJECTS: "1",
       GIT_TERMINAL_PROMPT: "0",
     };
@@ -83,30 +88,22 @@ export async function prepareLocalWorkspaceCheckout(params: {
     ]);
     current();
     await runWorkspaceInventoryCommandToFile({
-      argv: [
-        "git",
-        "-c",
-        "core.hooksPath=" + os.devNull,
-        "-c",
-        "core.fsmonitor=false",
-        "-C",
-        repo,
-        "index-pack",
-        "--stdin",
-      ],
+      argv: ["git", "-C", repo, "index-pack", "--stdin"],
       inputPath: pack,
       outputPath: path.join(temporary, "index-pack-result"),
-      baseEnv: cleanEnv,
+      baseEnv: gitEnvironment(cleanEnv),
       signal,
       timeoutMs: 300_000,
       maxOutputBytes: 4096,
     });
     current();
+    phases.mark(`${RECONCILE_PHASE}.checkout.materialize`);
     await fs.writeFile(path.join(repo, ".git", "shallow"), params.baseCommit + "\n", {
       mode: 0o600,
     });
     await git(["checkout", "--quiet", "-b", params.branch, params.baseCommit]);
   } finally {
+    phases.mark(`${RECONCILE_PHASE}.checkout.cleanup`);
     await fs.rm(temporary, { recursive: true, force: true });
   }
 }
@@ -132,6 +129,7 @@ export async function initializeLocalWorkspaceProjection(params: {
   buildCacheInputs: () => Promise<string[]>;
   dependencies?: { sandbox: SandboxConfig; allocation: WorktreeAllocationGuard };
 }) {
+  using phases = observeDiagnosticsTimelinePhases(`${RECONCILE_PHASE}.initialize`);
   const { signal, assertCurrent: current, dependencies } = params;
   const parent = path.dirname(params.projectionPath);
   await fs.mkdir(parent, { recursive: true, mode: 0o700 });
@@ -152,6 +150,7 @@ export async function initializeLocalWorkspaceProjection(params: {
       signal,
       assertCurrent: current,
     };
+    phases.mark(`${RECONCILE_PHASE}.template`);
     const cloned =
       dependencies &&
       (await (
@@ -174,8 +173,10 @@ export async function initializeLocalWorkspaceProjection(params: {
         },
       }));
     if (!cloned) {
+      phases.mark(`${RECONCILE_PHASE}.checkout`);
       await timeWorktreePreparationPhase("checkout", () => prepareLocalWorkspaceCheckout(checkout));
     }
+    phases.mark(`${RECONCILE_PHASE}.manifest_scan`);
     const initial = await timeWorktreePreparationPhase("snapshot", async () =>
       captureWorkspaceManifestDocument({
         root: repo,
@@ -185,9 +186,11 @@ export async function initializeLocalWorkspaceProjection(params: {
       }),
     );
     current();
+    phases.mark(`${RECONCILE_PHASE}.publish`);
     await fs.rename(repo, params.projectionPath);
     return initial;
   } finally {
+    phases.mark(`${RECONCILE_PHASE}.cleanup`);
     await fs.rm(temporary, { recursive: true, force: true });
   }
 }

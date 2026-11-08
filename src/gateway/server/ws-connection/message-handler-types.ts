@@ -13,6 +13,7 @@ import type { DeviceBootstrapProfile } from "../../../shared/device-bootstrap-pr
 import type { GatewayAuthPolicy } from "../../auth-policy.types.js";
 import type { AuthRateLimiter } from "../../auth-rate-limit.js";
 import type { GatewayAuthResult, ResolvedGatewayAuth } from "../../auth.js";
+import type { GitHubIdentityPreparationTiming } from "../../github-user-identity.types.js";
 import type { GatewayAttributedIngress } from "../../ingress-attribution.js";
 import type { GatewayMethodRegistry } from "../../methods/registry.js";
 import type { NodePairingAutoApproveClientIpSource } from "../../node-pairing-auto-approve.types.js";
@@ -67,6 +68,8 @@ export type GatewayWsMessageHandlerParams = {
   pluginNodeCapabilities?: PluginNodeCapabilitySurface[];
   connectNonce: string;
   getResolvedAuth: () => ResolvedGatewayAuth;
+  /** Fixed at startup and advertised to admins, because flags can differ from config. */
+  gatewayExposure?: { bindHost: string; tailscaleMode: "off" | "serve" | "funnel" };
   getRequiredSharedGatewaySessionGeneration?: () => string | undefined;
   /** Optional rate limiter for auth brute-force protection. */
   rateLimiter?: AuthRateLimiter;
@@ -102,6 +105,7 @@ export type GatewayWsMessageHandlerParams = {
 };
 
 export type GatewayConnectAttachTiming =
+  | GitHubIdentityPreparationTiming
   | "deviceAuthorizationMs"
   | "deviceLookupMs"
   | "deviceTokensMs"
@@ -109,6 +113,7 @@ export type GatewayConnectAttachTiming =
   | "identityMs"
   | "profileEnsureMs"
   | "profileAuthorityMs"
+  | "profileProjectionMs"
   | "scopeGrantMs"
   | "operatorDeviceMs"
   | "sessionRegistrationMs"

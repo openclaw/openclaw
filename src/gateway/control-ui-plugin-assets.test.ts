@@ -300,7 +300,26 @@ it.each([
   },
 );
 
-it("hot-applies Custom plugin UI admission without replacing the backend plugin", async () => {
+it("serves enabled user-installed native UI without an experimental opt-in", async () => {
+  await withConfig(async () => {
+    const fixture = activateFixture("workspace");
+    const catalog = await listControlUiPluginCatalog();
+    expect(catalog.plugins).toEqual([expect.objectContaining({ pluginId: fixture.record.id })]);
+    expect(catalog.diagnostics).toEqual([]);
+
+    const entry = catalog.plugins[0]!;
+    const cookie = cookieForGrant();
+    const server = assetServer();
+    expectBody(await fetchAsset(server, entry.entryUrl, { headers: { cookie } }), firstSource);
+
+    fixture.record.enabled = false;
+    expect((await listControlUiPluginCatalog()).plugins).toEqual([]);
+    expect(listControlUiPluginTabAuthGrants(["operator.read"])).toEqual([]);
+    await expectStatus(fetchAsset(server, entry.entryUrl, { headers: { cookie } }), 404);
+  });
+});
+
+it("hot-applies the native UI opt-out without replacing the backend plugin", async () => {
   await withConfig(async () => {
     const fixture = activateFixture("workspace");
     fixture.record.trustedOfficialInstall = true;
@@ -310,7 +329,7 @@ it("hot-applies Custom plugin UI admission without replacing the backend plugin"
       {
         pluginId: fixture.record.id,
         code: "custom-plugin-ui-disabled",
-        message: expect.stringContaining("Settings > Labs"),
+        message: expect.stringContaining("Gateway configuration"),
       },
     ]);
     expect(listControlUiPluginTabAuthGrants(["operator.read"])).toEqual([]);
@@ -343,7 +362,7 @@ it("hot-applies Custom plugin UI admission without replacing the backend plugin"
     }
     expect((await listControlUiPluginCatalog()).plugins).toEqual([]);
 
-    setRuntimeConfigSnapshot(customPlugins(true));
+    setRuntimeConfigSnapshot({});
     expect((await listControlUiPluginCatalog()).plugins).toEqual([entry]);
     expect(listControlUiPluginTabAuthGrants(["operator.read"])).toContainEqual(matchingPlugin);
     expect(listControlUiPluginWidgetKinds(["operator.read"])).toContainEqual(matchingPlugin);
@@ -353,7 +372,7 @@ it("hot-applies Custom plugin UI admission without replacing the backend plugin"
     for (const asset of [entry.entryUrl, ...entry.styles]) {
       await expectStatus(fetchAsset(server, asset, { headers: { cookie } }), 200);
     }
-  });
+  }, customPlugins(false));
 });
 
 it.each([
@@ -923,4 +942,57 @@ it("refreshes UI declarations and retires receipts when browser bytes stay uncha
   const undeclared = await reloadControlUiPluginCatalog(fixture.record.id);
   expect(undeclared.plugins[0]).not.toHaveProperty("uiCapabilities");
   expect(undeclared.plugins[0]!.revision).not.toBe(next.plugins[0]!.revision);
+});
+
+it("snapshots plugin-relative panel SVGs and falls back without disabling browser modules", async () => {
+  const fixture = activateFixture();
+  fixture.record.controlUi!.panelIcon = "panel.svg";
+  const iconPath = path.join(fixture.rootDir, "panel.svg");
+  const svg =
+    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 4h18v16H3z" fill="none" stroke="currentColor"/></svg>';
+  fs.writeFileSync(iconPath, svg);
+  const first = await listControlUiPluginCatalog();
+  expect(first.plugins[0]?.panelIcon).toBe("data:image/svg+xml," + encodeURIComponent(svg));
+  fs.writeFileSync(iconPath, svg.replace("M3 4", "M5 4"));
+  expect(await listControlUiPluginCatalog()).toEqual(first);
+  const next = await reloadControlUiPluginCatalog(fixture.record.id);
+  expect(next.plugins[0]?.revision).not.toBe(first.plugins[0]?.revision);
+  for (const source of ["<svg><script>alert(1)</script></svg>", "<html/>", "x".repeat(16385)]) {
+    fs.writeFileSync(iconPath, source);
+    const catalog = await reloadControlUiPluginCatalog(fixture.record.id);
+    expect(catalog.plugins).toHaveLength(1);
+    expect(catalog.plugins[0]).not.toHaveProperty("panelIcon");
+  }
+  fs.unlinkSync(iconPath);
+  expect((await reloadControlUiPluginCatalog(fixture.record.id)).plugins[0]).not.toHaveProperty(
+    "panelIcon",
+  );
+  const outside = path.join(tempDirs.make("panel-icon-outside-"), "valid.svg");
+  fs.writeFileSync(outside, svg);
+  fs.symlinkSync(outside, iconPath);
+  expect((await reloadControlUiPluginCatalog(fixture.record.id)).plugins[0]).not.toHaveProperty(
+    "panelIcon",
+  );
+});
+
+it("removes the ID plugin catalog, grants and routes immediately when its Labs switch is off", async () => {
+  await withConfig(async () => {
+    const fixture = activateFixture();
+    fixture.record.id = "openclaw-id-access";
+    setRuntimeConfigSnapshot({ gateway: { openclawId: { enabled: true } } });
+    const entry = (await listControlUiPluginCatalog()).plugins[0]!;
+    expect(entry.pluginId).toBe("openclaw-id-access");
+    const server = assetServer("", AUTH_NONE);
+    await expectStatus(fetchAsset(server, entry.entryUrl), 200);
+    for (const openclawId of [undefined, { enabled: false }]) {
+      setRuntimeConfigSnapshot({ gateway: { openclawId } });
+      const catalog = await listControlUiPluginCatalog();
+      expect(catalog.plugins).toEqual([]);
+      expect(catalog.diagnostics).toEqual([]);
+      expect(listControlUiPluginTabAuthGrants(["operator.read"])).toEqual([]);
+      for (const asset of [entry.entryUrl, ...entry.styles]) {
+        await expectStatus(fetchAsset(server, asset), 404);
+      }
+    }
+  });
 });

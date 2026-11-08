@@ -15,7 +15,6 @@ import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createLoginResult,
   createOwnerLoginConfig,
-  exerciseDeferredModelAccess,
   prepareTelegramLoginSessionStore,
   registerLoginCommand,
   type TelegramLoginFlow,
@@ -265,11 +264,6 @@ describe("registerTelegramNativeCommands /login", () => {
     await vi.waitFor(() => expect(messages(sendMessage)).toContain(completed));
   });
 
-  it.each(["all", "cancel"] as const)(
-    "delivers long-provider controls and resolves deferred consent (%s) through a fresh dispatcher",
-    exerciseDeferredModelAccess,
-  );
-
   it("rejects group /login codex without sending the device code publicly", async () => {
     const loginFlow = vi.fn<TelegramLoginFlow>(async (params) => {
       await params.prompter.note("URL: https://auth.openai.com/codex/device\nCode: SECRET");
@@ -306,6 +300,20 @@ describe("registerTelegramNativeCommands /login", () => {
     expect(loginFlow).not.toHaveBeenCalled();
     expect(messages(sendMessage)).toContain(
       "Only an OpenClaw owner can sign in here. Ask the owner to connect this provider or grant you owner access.",
+    );
+  });
+
+  it("tells the owner which models the saved credential added", async () => {
+    const loginFlow = vi.fn<TelegramLoginFlow>(async () => ({
+      ...createLoginResult("openai:codex"),
+      modelAccess: { message: "Added openai/* to allowed models.", applied: true },
+    }));
+    const { handler, sendMessage } = await registerOwnedLogin(loginFlow);
+
+    await handler(ownerContext());
+
+    await vi.waitFor(() =>
+      expect(messages(sendMessage)).toContain(`${completed} Added openai/* to allowed models.`),
     );
   });
 

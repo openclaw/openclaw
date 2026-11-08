@@ -13,11 +13,13 @@ import {
 } from "./session-delivery-queue-runtime.js";
 import {
   enqueueClaimedSessionDelivery as enqueueClaimed,
-  enqueueSessionDelivery as enqueue,
   releaseSessionDeliveryClaim as releaseClaim,
 } from "./session-delivery-queue-storage.js";
 import * as storage from "./session-delivery-queue-storage.js";
-import { withSessionDeliveryQueue } from "./session-delivery-queue.test-helpers.js";
+import {
+  enqueueUnclaimedSessionDeliveryFixture as enqueue,
+  withSessionDeliveryQueue,
+} from "./session-delivery-queue.test-helpers.js";
 
 const nativeDrain = recovery.drainPendingSessionDelivery;
 const loadPending = storage.loadPendingSessionDelivery;
@@ -27,13 +29,10 @@ const agentTurn = (messageId = "artifact:ready") => ({
   kind: "agentTurn" as const,
   sessionKey: "agent:main:main",
   message: "generated artifact ready",
+  expectedMediaUrls: ["/tmp/synthetic-artifact.png"],
   messageId,
 });
-const systemEvent = (text: string) => ({
-  kind: "systemEvent" as const,
-  sessionKey: "agent:main:main",
-  text,
-});
+const producedDelivery = (message: string) => ({ ...agentTurn(message), message });
 type RuntimeOptions = Partial<
   Omit<Parameters<typeof startRuntime>[0], "queueContext" | "scheduler">
 >;
@@ -110,7 +109,7 @@ function runtimeFixture(context: OpenClawStateWorkerContext) {
     },
     wake: () => track(Promise.resolve(clock.advanceBy(0))),
     enqueue: (payload = agentTurn()) => enqueue(payload, context),
-    enqueueEvent: (text: string) => enqueue(systemEvent(text), context),
+    enqueueEvent: (text: string) => enqueue(producedDelivery(text), context),
     schedule: (id: string) => scheduleSessionDelivery(id, context),
     release: (id: string) => releaseClaim(id, context),
     async claim(leaseMs = 60_000) {
@@ -244,7 +243,7 @@ describe("session delivery queue runtime", () => {
   });
 
   it("ignores a stale claim lookup after rollback and release", async ({ runtime: r }) => {
-    const { id } = await enqueueClaimed(systemEvent("released claim"), 60_000, r.context);
+    const { id } = await enqueueClaimed(producedDelivery("released claim"), 60_000, r.context);
     const claimed = await r.pendingClaim(id);
     const staleRead = r.gate(claimed);
     vi.spyOn(storage, "loadPendingSessionDelivery").mockImplementationOnce(() => staleRead.promise);

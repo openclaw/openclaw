@@ -9,6 +9,7 @@ import {
   createGatewaySchedulerClock,
   createTestGatewayScheduler,
 } from "../test-utils/gateway-scheduler-clock.js";
+import { makeCronJob } from "./delivery.test-helpers.js";
 import type { CronService } from "./service.js";
 import {
   createCronServiceWithStateForTest,
@@ -113,18 +114,15 @@ async function readResponsiveCronSnapshot(cron: CronService) {
 }
 
 function futureJob(id: string, createdAtMs = nowMs, withNextRun = true): CronJob {
-  return {
+  return makeCronJob({
     id,
     name: id,
-    enabled: true,
     createdAtMs,
     updatedAtMs: createdAtMs,
     schedule: { kind: "every", everyMs: 60_000, anchorMs: createdAtMs },
-    sessionTarget: "isolated",
-    wakeMode: "next-heartbeat",
     payload: { kind: "agentTurn", message: id },
     state: withNextRun ? { nextRunAtMs: createdAtMs + 60_000 } : {},
-  };
+  });
 }
 
 function systemEventJob(id: string, schedule: CronJob["schedule"]) {
@@ -139,6 +137,26 @@ function systemEventJob(id: string, schedule: CronJob["schedule"]) {
   };
 }
 
+function observeSchedulerRefreshes(holdReply?: () => Promise<void> | undefined) {
+  const refreshes: Promise<unknown>[] = [];
+  const createLease = stateWorker.createOpenClawStateWorkerLease;
+  vi.spyOn(stateWorker, "createOpenClawStateWorkerLease").mockImplementation((...args) => {
+    const lease = createLease(...args);
+    const execute = lease.execute;
+    vi.spyOn(lease, "execute").mockImplementation((command) => {
+      const completed = execute(command);
+      if (command.type !== "cron.schedulerRefresh") {
+        return completed;
+      }
+      refreshes.push(completed);
+      const hold = holdReply?.();
+      return hold ? completed.then((result) => hold.then(() => result)) : completed;
+    });
+    return lease;
+  });
+  return refreshes;
+}
+
 describe("CronService read operations", () => {
   afterEach(() => {
     for (const cron of services.splice(0)) {
@@ -146,19 +164,40 @@ describe("CronService read operations", () => {
     }
     vi.restoreAllMocks();
   });
-  it("publishes the scheduler's next run after a cached list and status read", async () => {
+  it("publishes changed scheduler snapshots without waking on unchanged reads or declarations", async () => {
     const now = Date.parse("2026-09-30T12:00:00.000Z");
+    const refreshes = observeSchedulerRefreshes();
     const { cron, state, clock, scheduler } = createService({}, now);
+    const { cron: passive } = createService({ cronEnabled: false }, now);
+    const declaration = {
+      ...systemEventJob("snapshot tick", { kind: "every", everyMs: 60_000, anchorMs: now }),
+      declarationKey: "plugin:synthetic:maintenance",
+    };
+    const settleRefreshes = async () => {
+      await nextEventLoopTurn();
+      await Promise.all(refreshes);
+    };
     try {
       await cron.start();
-      const job = await cron.add(
-        systemEventJob("snapshot tick", { kind: "every", everyMs: 60_000, anchorMs: now }),
-      );
+      const job = await cron.add(declaration);
+      await settleRefreshes();
+      refreshes.length = 0;
+      const revision = cronStoreModule.getCronJobsStoreRevision(state.deps.storeKey);
       const before = await cron.listPage();
       const beforeStatus = await cron.status();
       expect(before.jobs[0]?.state.nextRunAtMs).toBe(now + 60_000);
       expect(await cron.status()).toBe(beforeStatus);
+      for (let index = 0; index < 3; index++) {
+        expect((await passive.listPage()).jobs[0]?.id).toBe(job.id);
+        expect(await cron.add(declaration)).toMatchObject({ created: false, updated: false });
+      }
+      await settleRefreshes();
+      expect(refreshes).toHaveLength(0);
+      expect(cronStoreModule.getCronJobsStoreRevision(state.deps.storeKey)).toBe(revision);
       await cron.update(job.id, { name: "updated snapshot tick" });
+      await settleRefreshes();
+      expect(refreshes.length).toBeGreaterThan(0);
+      expect((await passive.listPage()).jobs[0]?.name).toBe("updated snapshot tick");
       const updatedStatus = await cron.status();
       expect(updatedStatus).not.toBe(beforeStatus);
       expect(await cron.status()).toBe(updatedStatus);
@@ -226,30 +265,16 @@ describe("CronService read operations", () => {
       };
     });
     await writeCronStoreSnapshot({ storePath, jobs });
-    const refreshes: Promise<unknown>[] = [];
     const dispatched = createDeferred();
     const releaseReply = createDeferred();
     let holdNextReply = false;
-    const createLease = stateWorker.createOpenClawStateWorkerLease;
-    vi.spyOn(stateWorker, "createOpenClawStateWorkerLease").mockImplementation((...args) => {
-      const lease = createLease(...args);
-      const execute = lease.execute;
-      vi.spyOn(lease, "execute").mockImplementation((command) => {
-        const completed = execute(command);
-        if (command.type === "cron.schedulerRefresh") {
-          refreshes.push(completed);
-          if (holdNextReply) {
-            holdNextReply = false;
-            dispatched.resolve();
-            return completed.then(async (result) => {
-              await releaseReply.promise;
-              return result;
-            });
-          }
-        }
-        return completed;
-      });
-      return lease;
+    const refreshes = observeSchedulerRefreshes(() => {
+      if (holdNextReply) {
+        holdNextReply = false;
+        dispatched.resolve();
+        return releaseReply.promise;
+      }
+      return undefined;
     });
     const { cron, state, scheduler } = createService();
     const releaseMutation = createDeferred();
@@ -434,10 +459,7 @@ describe("CronService read operations", () => {
     expect(jobs[0]?.state.nextRunAtMs).toBe(nowMs + 120_000);
   });
   it("keeps sibling writes visible when separately loaded services mutate and run jobs", async () => {
-    const runSessionEvent = vi.fn<NonNullable<CronServiceDeps["runSessionEvent"]>>(async () => ({
-      status: "ok",
-    }));
-    const { cron: cronA } = createService({ runSessionEvent });
+    const { cron: cronA, runSessionEvent } = createService();
     const { cron: cronB } = createService();
 
     await cronA.status();
@@ -457,12 +479,9 @@ describe("CronService read operations", () => {
   });
 
   it("avoids duplicate runs across lexical aliases of one store", async () => {
-    const runSessionEvent = vi.fn<NonNullable<CronServiceDeps["runSessionEvent"]>>(async () => ({
-      status: "ok",
-    }));
     const now = Date.parse("2025-12-13T00:00:00.000Z");
-    const deps = { runSessionEvent };
-    const first = createService(deps, now);
+    const first = createService({}, now);
+    const { runSessionEvent } = first;
 
     await first.cron.start();
     const atMs = Date.parse("2025-12-13T00:00:01.000Z");
@@ -472,7 +491,7 @@ describe("CronService read operations", () => {
     });
 
     const aliasedStorePath = `${path.dirname(storePath)}/../${path.basename(path.dirname(storePath))}/${path.basename(storePath)}`;
-    const second = createService({ ...deps, storePath: aliasedStorePath }, now);
+    const second = createService({ runSessionEvent, storePath: aliasedStorePath }, now);
 
     await second.cron.start();
     expect((await cronStoreModule.loadCronStore(aliasedStorePath)).jobs).toHaveLength(1);

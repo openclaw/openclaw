@@ -509,7 +509,6 @@ describe("subagent registry steer restarts", () => {
     await updateRun(previous.runId, (draft) => {
       draft.endedHookEmittedAt = endedAt;
       draft.endedReason = "subagent-error";
-      draft.terminalOwner = "interrupted-recovery";
       draft.execution = { status: "terminal", endedAt, outcome: { status: "error" } };
       draft.completion = { required: true, resultText: "stale completion", capturedAt: endedAt };
       draft.cleanupCompletedAt = endedAt;
@@ -545,12 +544,7 @@ describe("subagent registry steer restarts", () => {
       status: "running",
       lifecycleGeneration: "test-generation",
     });
-    for (const key of [
-      "endedHookEmittedAt",
-      "endedReason",
-      "terminalOwner",
-      "cleanupCompletedAt",
-    ] as const) {
+    for (const key of ["endedHookEmittedAt", "endedReason", "cleanupCompletedAt"] as const) {
       expect(run[key], key).toBeUndefined();
     }
     expect(run.execution.endedAt).toBeUndefined();

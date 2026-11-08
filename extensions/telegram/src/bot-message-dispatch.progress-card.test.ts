@@ -30,6 +30,44 @@ import { renderTelegramProgressDraftPreview } from "./progress-draft-preview.js"
 import type * as TelegramEditModule from "./send-edit.js";
 
 describeTelegramDispatch("dispatchTelegramMessage progress cards", () => {
+  it.each(["status", "raw"] as const)(
+    "compacts consecutive tool rows only with %s command text",
+    async (commandText) => {
+      const { answerDraftStream } = setupDraftStreams();
+      // Dispatch catches and logs errors, so assert after dispatch.
+      let preview = "";
+      dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ replyOptions }) => {
+        for (const id of ["1", "2", "3"]) {
+          const event = { toolCallId: id, name: "bash", args: { command: `printf ${id}` } };
+          await emitToolStart(replyOptions, { ...event, phase: "start" });
+          await replyOptions?.onItemEvent?.({
+            ...event,
+            itemId: `tool:${id}`,
+            kind: "tool",
+            phase: "end",
+            status: "completed",
+          });
+          await answerDraftStream.flush();
+        }
+        preview = answerDraftStream.updatePreview.mock.lastCall?.[0].text ?? "";
+        return { queuedFinal: false };
+      });
+      await dispatchWithContext({
+        context: createContext({
+          ctxPayload: createDirectSessionPayload(),
+          threadSpec: { id: undefined, scope: "none" },
+          replyThreadId: undefined,
+        }),
+        streamMode: "progress",
+        telegramCfg: {
+          streaming: { mode: "progress", progress: { toolProgress: true, commandText } },
+        },
+      });
+      expect(preview.match(/Bash/g)).toHaveLength(commandText === "status" ? 1 : 3);
+      expect(preview.includes("Bash ×3")).toBe(commandText === "status");
+    },
+  );
+
   it("keeps a full plan and recent activity after failed named tool items", () => {
     const richMessages = true;
     const commandLines = Array.from({ length: 8 }, (_, index) =>

@@ -119,6 +119,41 @@ describe.skipIf(!connection)("PostgreSQL agent-owned memory search admission", (
     });
   });
 
+  it("retries first creation without publishing an uninitialized anchor", () => {
+    const filename = path.join(dirs.make("pg-interrupted-creation-"), "agent.sqlite");
+    using local = openNodeSqliteDatabase(filename);
+    const selection = {
+      effectiveEngines: resolveDatabaseFamilyEngines({ database: { engine: "postgres" } }),
+      postgres: { connection: "postgresql://127.0.0.1:1/unavailable", schemaPrefix: "interrupted" },
+    };
+    withEngineStoreAdmission(() => {
+      expect(() =>
+        withDatabaseEngineSelection(selection, () =>
+          openAgentEngineStore(local, "retry", filename),
+        ),
+      ).toThrow("Cannot open PostgreSQL connection");
+      expect(
+        local.prepare("SELECT name FROM sqlite_master WHERE name = 'openclaw_engine_anchor'").all(),
+      ).toEqual([]);
+      selection.postgres.connection = connection!;
+      const retried = withDatabaseEngineSelection(selection, () =>
+        openAgentEngineStore(local, "retry", filename),
+      );
+      if (!isPostgresSqlConnection(retried)) {
+        throw new Error("Expected PostgreSQL agent store");
+      }
+      try {
+        expect(retried.prepare("SELECT agent_id, role FROM schema_meta").get()).toEqual({
+          agent_id: "retry",
+          role: "agent",
+        });
+      } finally {
+        retried.exec(`DROP SCHEMA "${getPostgresPhysicalFacts(retried)!.namespace}" CASCADE`);
+        retried.close();
+      }
+    });
+  });
+
   it("re-admits persisted memory extensions without DDL", () => {
     withEngineStoreAdmission(() => {
       expect(
@@ -283,6 +318,7 @@ describe.skipIf(!connection)("PostgreSQL vector decoder migration", () => {
         version: 31,
         postgresVectorDecoderVersion: 1,
         postgresVectorSearchVersion: 1,
+        postgresTextSearchVersion: 1,
       };
       let db = open(predecessor);
       const namespace = getPostgresPhysicalFacts(db)!.namespace;

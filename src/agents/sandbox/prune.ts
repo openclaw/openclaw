@@ -14,48 +14,53 @@ import { stopCachedBrowserBridgesForContainer } from "./browser-bridges.js";
 import { resolveSandboxConfigForAgent } from "./config.js";
 import { dockerSandboxBackendManager } from "./docker-backend.js";
 import {
+  maybeRunSandboxRegistryHousekeeping,
+  startSandboxRegistryHousekeeping,
+  withSandboxRuntimePrune,
+} from "./registry-lifecycle.js";
+import {
   assertSandboxRegistryRetirementCurrent,
   readBrowserRegistry,
   readRegistry,
   removeSandboxRegistryGeneration,
   removeSandboxRegistryRuntime,
   withSandboxRegistryEntryLock,
-  type SandboxBrowserRegistryEntry,
   type SandboxRegistryEntry,
 } from "./registry.js";
 import { shouldPruneSandboxRegistryEntry, type SandboxRegistryPrune } from "./registry.kernel.js";
 import { resolveSandboxAgentId } from "./shared.js";
-
-let lastPruneAtMs = 0;
-
-type PruneableRegistryEntry = Pick<
-  SandboxRegistryEntry,
-  "containerName" | "backendId" | "createdAtMs" | "lastUsedAtMs" | "sessionKey"
->;
-
-function resolveEntryPruneConfig(config: OpenClawConfig, entry: PruneableRegistryEntry) {
-  return resolveSandboxConfigForAgent(config, resolveSandboxAgentId(entry.sessionKey)).prune;
-}
+import { captureSandboxStateOwner } from "./state-owner.js";
 
 /** Removes expired registry entries and their backing runtime resources. */
 async function pruneSandboxRegistryEntries<TEntry extends SandboxRegistryEntry>(params: {
   config: OpenClawConfig;
   assertCurrent?: () => void;
-  read: () => Promise<{ entries: TEntry[] }>;
-  remove: (entry: TEntry, prune: SandboxRegistryPrune) => Promise<void>;
+  entries: TEntry[];
+  remove: (
+    entry: TEntry,
+    prune: SandboxRegistryPrune,
+    assertPruneCurrent: () => void,
+  ) => Promise<void>;
 }) {
   using phases = observeDiagnosticsTimelinePhases("attempt.setup.sandbox.prune.registry_read");
   const now = Date.now();
-  const registry = await params.read();
   params.assertCurrent?.();
-  for (const entry of registry.entries) {
-    const prune = { ...resolveEntryPruneConfig(params.config, entry), now };
+  for (const entry of params.entries) {
+    const prune = {
+      ...(entry.sessionKey.startsWith("worktree-dependencies:")
+        ? { idleHours: 0, maxAgeDays: 0 }
+        : resolveSandboxConfigForAgent(params.config, resolveSandboxAgentId(entry.sessionKey))
+            .prune),
+      now,
+    };
     if (!shouldPruneSandboxRegistryEntry(entry, prune)) {
       continue;
     }
     try {
       phases.mark("attempt.setup.sandbox.prune.retire");
-      await params.remove(entry, prune);
+      await withSandboxRuntimePrune(entry, (assertPruneCurrent) =>
+        params.remove(entry, prune, assertPruneCurrent),
+      );
       params.assertCurrent?.();
     } catch (error) {
       params.assertCurrent?.();
@@ -73,14 +78,27 @@ async function pruneSandboxRegistryEntries<TEntry extends SandboxRegistryEntry>(
 }
 
 /** Prunes ordinary sandbox runtime containers from the configured backend manager. */
-async function pruneSandboxContainers(config: OpenClawConfig, guard: WorkspaceStateGuard) {
+async function pruneSandboxContainers(
+  config: OpenClawConfig,
+  guard: WorkspaceStateGuard,
+  entries: SandboxRegistryEntry[],
+) {
   const assertCurrent = guard.beforeLegacyApply;
-  await pruneSandboxRegistryEntries<SandboxRegistryEntry>({
+  await pruneSandboxRegistryEntries({
     config,
     assertCurrent,
-    read: readRegistry,
-    remove: (entry, prune) =>
-      removeSandboxRegistryRuntime(
+    entries,
+    remove: (entry, prune, assertPruneCurrent) => {
+      const assertRemovalCurrent = () => {
+        assertCurrent?.();
+        assertPruneCurrent();
+      };
+      if (entry.sessionKey.startsWith("worktree-dependencies:")) {
+        return import("./dependency-template.js").then(({ retireSandboxDependencyBuilder }) =>
+          retireSandboxDependencyBuilder(entry, assertRemovalCurrent, true),
+        );
+      }
+      return removeSandboxRegistryRuntime(
         entry,
         async (current) => {
           using _ = observeDiagnosticsTimelinePhases("attempt.setup.sandbox.prune.backend_remove");
@@ -91,51 +109,56 @@ async function pruneSandboxContainers(config: OpenClawConfig, guard: WorkspaceSt
               `Sandbox backend "${backendId}" is unavailable; enable its plugin before removing this runtime.`,
             );
           }
-          assertCurrent?.();
+          assertRemovalCurrent();
           await manager.removeRuntime({
             entry: current,
             config,
             agentId: resolveSandboxAgentId(current.sessionKey),
           });
-          assertCurrent?.();
+          assertRemovalCurrent();
         },
         {
           reserveRuntime: usesSandboxRuntimeReservations(entry.backendId ?? "docker"),
           prune,
-          guard,
+          guard: { ...guard, beforeLegacyApply: assertRemovalCurrent },
           preservePersistentExecs: true,
         },
-      ),
+      );
+    },
   });
 }
 
 /** Prunes browser bridge containers and closes matching in-process bridge servers. */
 async function pruneSandboxBrowsers(config: OpenClawConfig, assertCurrent?: () => void) {
-  await pruneSandboxRegistryEntries<SandboxBrowserRegistryEntry>({
+  await pruneSandboxRegistryEntries({
     config,
     assertCurrent,
-    read: readBrowserRegistry,
-    remove: async (entry, prune) => {
+    entries: (await readBrowserRegistry()).entries,
+    remove: async (entry, prune, assertPruneCurrent) => {
+      const assertRemovalCurrent = () => {
+        assertCurrent?.();
+        assertPruneCurrent();
+      };
       using phases = observeDiagnosticsTimelinePhases("attempt.setup.sandbox.prune.browser_lock");
       await withSandboxRegistryEntryLock({ ...entry, backendId: "docker" }, async () => {
         phases.mark("attempt.setup.sandbox.prune.browser_read");
-        assertCurrent?.();
+        assertRemovalCurrent();
         const current = (await readBrowserRegistry()).entries.find(
           (candidate) => candidate.containerName === entry.containerName,
         );
-        assertCurrent?.();
+        assertRemovalCurrent();
         if (!current || !shouldPruneSandboxRegistryEntry(current, prune)) {
           return;
         }
         try {
           phases.mark("attempt.setup.sandbox.prune.browser_authority");
-          await assertSandboxRegistryRetirementCurrent("browser", entry);
+          assertSandboxRegistryRetirementCurrent("browser", entry);
         } catch {
           return;
         }
         phases.mark("attempt.setup.sandbox.prune.browser_bridge_stop");
-        await stopCachedBrowserBridgesForContainer(current.containerName, assertCurrent);
-        assertCurrent?.();
+        await stopCachedBrowserBridgesForContainer(current.containerName, assertRemovalCurrent);
+        assertRemovalCurrent();
         phases.mark("attempt.setup.sandbox.prune.browser_remove");
         await dockerSandboxBackendManager.removeRuntime({
           entry: {
@@ -147,41 +170,71 @@ async function pruneSandboxBrowsers(config: OpenClawConfig, assertCurrent?: () =
           config,
           agentId: resolveSandboxAgentId(current.sessionKey),
         });
-        assertCurrent?.();
+        assertRemovalCurrent();
         phases.mark("attempt.setup.sandbox.prune.browser_registry_remove");
-        await removeSandboxRegistryGeneration("browser", current, assertCurrent);
-        assertCurrent?.();
+        await removeSandboxRegistryGeneration("browser", current, assertRemovalCurrent);
+        assertRemovalCurrent();
       });
     },
   });
 }
 
-/** Runs sandbox pruning at most once per throttle window. */
+/** Coalesced housekeeping belongs to the state owner, not the requesting turn. */
+export async function runSandboxPrune(assertHost: () => void): Promise<void> {
+  assertHost();
+  const assertLiveHost = await captureSandboxStateOwner();
+  const assertCurrent = () => {
+    assertHost();
+    assertLiveHost();
+  };
+  assertCurrent();
+  await pruneSandboxes(undefined, assertCurrent, assertCurrent);
+}
+
+export function scheduleSandboxPrune(assertHost: () => void, request = false): void {
+  startSandboxRegistryHousekeeping(
+    () => runSandboxPrune(assertHost),
+    (error) => defaultRuntime.error?.(`Sandbox prune failed: ${formatErrorMessage(error)}`),
+    undefined,
+    request,
+  );
+}
+
 export async function maybePruneSandboxes(
   config?: OpenClawConfig,
   assertCurrent?: () => void,
   assertHost?: () => void,
 ) {
   assertCurrent?.();
-  const now = Date.now();
-  if (now - lastPruneAtMs < 5 * 60 * 1000) {
-    return;
-  }
-  lastPruneAtMs = now;
+  return maybeRunSandboxRegistryHousekeeping(() =>
+    pruneSandboxes(config, assertCurrent, assertHost),
+  );
+}
+
+async function pruneSandboxes(
+  config?: OpenClawConfig,
+  assertCurrent?: () => void,
+  assertHost?: () => void,
+) {
   using phases = observeDiagnosticsTimelinePhases("attempt.setup.sandbox.prune.import");
   try {
     const currentConfig = config ?? getRuntimeConfig();
     const { recoverSandboxPersistentExecOrphans } = await import("./persistent-exec.js");
+    const { entries } = await readRegistry();
     try {
       phases.mark("attempt.setup.sandbox.prune.orphan_recovery");
-      await recoverSandboxPersistentExecOrphans();
+      await recoverSandboxPersistentExecOrphans(entries);
     } catch (error) {
       defaultRuntime.error?.(
         `Sandbox stream allocation cleanup failed: ${formatErrorMessage(error)}`,
       );
     }
     phases.mark("attempt.setup.sandbox.prune.containers");
-    await pruneSandboxContainers(currentConfig, { assertHost, beforeLegacyApply: assertCurrent });
+    await pruneSandboxContainers(
+      currentConfig,
+      { assertHost, beforeLegacyApply: assertCurrent },
+      entries,
+    );
     assertCurrent?.();
     phases.mark("attempt.setup.sandbox.prune.browsers");
     await pruneSandboxBrowsers(currentConfig, assertCurrent);

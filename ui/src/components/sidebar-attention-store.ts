@@ -2,7 +2,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { CronCompactJob, ModelAuthStatusResult } from "../api/types.ts";
 import { gatewayPresentationScope } from "../app/gateway-presentation-scope.ts";
 import { createMentionsCapability, type MentionsCapability } from "../app/mentions.ts";
-import { hasOperatorReadAccess } from "../app/operator-access.ts";
+import { hasOperatorReadAccess, isRestrictedSessionGuest } from "../app/operator-access.ts";
 import type {
   SidebarAttentionStoreOwner as StoreOwner,
   SidebarAttentionStoreSources,
@@ -133,7 +133,9 @@ export class SidebarAttentionStoreOwner implements StoreOwner {
           }
         } else if (isCronInventoryInvalidation(event, sources.gateway.snapshot)) {
           this.load(false);
-        } else if (modelAuthEventInvalidates(event)) {
+        } else if (
+          modelAuthEventInvalidates(event, sources.agentSelection.state.selectedId ?? undefined)
+        ) {
           this.load(true, false);
         }
       }),
@@ -286,10 +288,13 @@ export class SidebarAttentionStoreOwner implements StoreOwner {
         ) ?? [];
     const overlay = this.sources.overlays.snapshot;
     const update = resolveSidebarUpdateAttention(this.sources);
-    const scopeUpgrade = buildScopeUpgradeInboxEntry({
-      scopes: gateway.hello?.auth?.scopes,
-      state: this.sources.scopeUpgrade.state,
-    });
+    // Expected guest permissions are not a browser-repair incident. Profile keeps the explicit request.
+    const scopeUpgrade = isRestrictedSessionGuest(gateway.hello?.auth ?? null)
+      ? null
+      : buildScopeUpgradeInboxEntry({
+          scopes: gateway.hello?.auth?.scopes,
+          state: this.sources.scopeUpgrade.state,
+        });
     const attention = buildSidebarAttentionEntries({
       cronJobs: this.cronJobs,
       cronSchedulerEnabled: this.cronSchedulerEnabled,

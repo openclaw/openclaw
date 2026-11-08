@@ -8,6 +8,7 @@ import type { ApplicationContext } from "../../app/context.ts";
 import { githubIdentityViewFixture } from "../../features/github-connections/github-identity.test-support.ts";
 import type { AgentsPanel } from "../../lib/agents/panels.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
+import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { cleanupSolid, mountSolid } from "../../test-helpers/mount-solid.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import {
@@ -20,7 +21,11 @@ import {
   ownedAgentsContext,
   snapshot,
 } from "./agents-page.test-support.ts";
-import { createBaseParams } from "./panels-tools-skills.test-support.ts";
+import {
+  createBaseParams,
+  createReadToolCatalog,
+  openToolGroups,
+} from "./panels-tools-skills.test-support.ts";
 import { AgentTools } from "./panels-tools-skills.tsx";
 
 afterEach(cleanupSolid);
@@ -43,6 +48,7 @@ function effective(label: string): ToolsEffectiveResult {
 async function mountEffective(
   read: () => Promise<ToolsEffectiveResult>,
   panel: AgentsPanel = "tools",
+  scopes: string[] = ["operator.admin"],
 ) {
   const request = vi.fn(async (method: string) => {
     if (method === "agents.list") {
@@ -55,23 +61,16 @@ async function mountEffective(
       return read();
     }
     if (method === "tools.catalog") {
-      return {
-        agentId: "main",
-        profiles: [],
-        groups: [
-          {
-            id: "core",
-            label: "Built-in tools",
-            source: "core",
-            tools: [{ id: "read", label: "Read", description: "Read", source: "core" }],
-          },
-        ],
-      };
+      return createReadToolCatalog();
     }
     throw new Error(`Unexpected gateway method: ${method}`);
   });
   const client = createTestGatewayClient(request);
   const currentGateway = gateway(snapshot(client));
+  currentGateway.snapshot.hello = gatewayHelloForMethods(
+    currentGateway.snapshot.hello?.features?.methods ?? [],
+    scopes,
+  );
   const listeners = new Set<() => void>();
   const modelOverrides: Record<string, string | null> = {};
   // SAFETY: This fixture supplies the session state and subscription consumed by the Agents page.
@@ -85,13 +84,12 @@ async function mountEffective(
     },
   } as unknown as ApplicationContext["sessions"];
   const context = await ownedAgentsContext(currentGateway, { sessions });
-  const agents = context.agents;
   const save = vi.fn(async () => true);
   Object.assign(context.runtimeConfig, { save, state: {} });
   const route = (next: AgentsPanel) => ({
     ...agentsRouteData(
       currentGateway,
-      agents.state.agentsList,
+      context.agents.state.agentsList,
       context.settingsAgentSelection.state.selectedId,
       context.settingsAgentSelection,
     ),
@@ -142,6 +140,34 @@ const preview = (container: HTMLElement) =>
   container.querySelector(".agent-tools-runtime-chip")?.textContent;
 
 describe("Agents effective-tools read", () => {
+  it.each([{ scopes: [] }, { scopes: ["operator.sessions.read"] }])(
+    "honors the active read grant $scopes",
+    async ({ scopes }) => {
+      const view = await mountEffective(async () => effective("Readable preview"), "tools", scopes);
+      await view.settleEffective();
+      expect(view.calls()).toHaveLength(scopes.length ? 1 : 0);
+      expect(view.request.mock.calls.filter(([method]) => method === "tools.catalog")).toHaveLength(
+        0,
+      );
+      expect(preview(view.container)?.includes("Readable preview") ?? false).toBe(
+        scopes.length > 0,
+      );
+    },
+  );
+
+  it("keeps a space before the enabled summary and the session key", async () => {
+    const view = await mountEffective(async () => effective("Read"));
+    view.context.settingsAgentSelection.set("main");
+    await view.settleEffective();
+    const descriptions = [...view.container.querySelectorAll(".settings-section__desc")].map(
+      (element) => element.textContent,
+    );
+    expect(
+      descriptions.some((text) => /permissions\. \d+\/\d+ enabled(?:$|\s)/.test(text ?? "")),
+    ).toBe(true);
+    expect(descriptions.some((text) => /Session: \S/.test(text ?? ""))).toBe(true);
+  });
+
   it("loads only on demand, joins pending receipts, and retains the accepted result across panel visits", async () => {
     const pending = deferred<ToolsEffectiveResult>();
     const view = await mountEffective(() => pending.promise, "files");
@@ -154,9 +180,9 @@ describe("Agents effective-tools read", () => {
       agentId: "main",
       sessionKey: "main",
     });
-    expect(view.container.textContent).toContain("Loading…");
+    expect(view.container.textContent).toContain("Loading preview…");
     await waitForSolid(() =>
-      expect(view.container.querySelector(".agent-tool-card")).not.toBeNull(),
+      expect(view.container.querySelector(".agent-tools-group")).not.toBeNull(),
     );
     expect(
       view.container.querySelector<HTMLButtonElement>(".agent-tools-buttons button")?.disabled,
@@ -182,6 +208,7 @@ describe("Agents effective-tools read", () => {
     await waitForSolid(() => expect(preview(view.container)).toContain("Accepted preview"));
     const github = view.container.querySelector("openclaw-github-identity");
     const preset = view.container.querySelector<HTMLButtonElement>(".agent-tools-buttons button")!;
+    openToolGroups(view.container);
     const card = view.container.querySelector<HTMLDetailsElement>("#agent-tool-read")!;
     const group = card.closest<HTMLDetailsElement>(".agent-tools-group")!;
     const toggle = card.querySelector<HTMLInputElement>("input.settings-toggle__input")!;
@@ -194,7 +221,7 @@ describe("Agents effective-tools read", () => {
       reason: "patch",
     });
     await waitForSolid(() => expect(view.calls()).toHaveLength(2));
-    expect(view.container.textContent).toContain("Loading…");
+    expect(view.container.textContent).toContain("Loading preview…");
     expect(view.container.querySelector("#agent-tool-read")).toBe(card);
     expect(card.open).toBe(true);
     expect(group.open).toBe(true);
@@ -264,23 +291,17 @@ describe("Agents effective-tools read", () => {
     },
   );
 
-  it("refreshes after saving tool settings and sends the current session after navigation", async () => {
-    const read = vi
-      .fn<() => Promise<ToolsEffectiveResult>>()
-      .mockResolvedValueOnce(effective("Before save"))
-      .mockResolvedValue(effective("After save"));
+  it("sends the current session after navigation", async () => {
+    const read = vi.fn<() => Promise<ToolsEffectiveResult>>().mockResolvedValue(effective("Tools"));
     const view = await mountEffective(read);
-    await waitForSolid(() => expect(preview(view.container)).toContain("Before save"));
-    await view.page.read().onConfigSave();
-    await waitForSolid(() => expect(preview(view.container)).toContain("After save"));
-    expect(view.save).toHaveBeenCalledOnce();
-    expect(view.calls()).toHaveLength(2);
+    await waitForSolid(() => expect(preview(view.container)).toContain("Tools"));
+    expect(view.calls()).toHaveLength(1);
     emitGatewaySnapshot(view.currentGateway, {
       ...snapshot(view.client),
       sessionKey: "agent:main:next",
     });
     view.setPanel("tools");
-    await waitForSolid(() => expect(view.calls()).toHaveLength(3));
+    await waitForSolid(() => expect(view.calls()).toHaveLength(2));
     expect(view.request).toHaveBeenLastCalledWith("tools.effective", {
       agentId: "main",
       sessionKey: "agent:main:next",
@@ -300,6 +321,7 @@ describe("Agents effective-tools read", () => {
     const view = await mountEffective(read);
     await waitForSolid(() => expect(preview(view.container)).toContain("Old session preview"));
     expect(view.container.textContent).toContain("Old session notice");
+    openToolGroups(view.container);
     emitGatewaySnapshot(view.currentGateway, {
       ...snapshot(view.client),
       sessionKey: "agent:main:replacement",
@@ -329,6 +351,7 @@ describe("Agents effective-tools read", () => {
       .mockReturnValue(next.promise);
     const view = await mountEffective(read);
     await waitForSolid(() => expect(preview(view.container)).toContain("Initial model preview"));
+    openToolGroups(view.container);
     view.modelOverrides.main = "openai/gpt-5-mini";
     view.publishSessions();
     await waitForSolid(() => expect(view.calls()).toHaveLength(2));
@@ -405,6 +428,13 @@ describe("Agents effective-tools read", () => {
     await view.settleEffective();
     expect(view.calls()).toHaveLength(1);
     view.emit("config.changed", {});
+    await view.settleEffective();
+    expect(view.calls()).toHaveLength(1);
+    view.emit("chat.metadata.changed", {
+      agentId: "main",
+      modelCatalogChanged: true,
+      authChanged: true,
+    });
     expect(await view.settleEffective()).toMatchObject({
       groups: [{ tools: [{ label: "Inventory 2" }] }],
     });

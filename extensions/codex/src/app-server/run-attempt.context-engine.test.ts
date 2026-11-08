@@ -38,6 +38,7 @@ import {
   attachSqliteSessionTarget,
   readTranscriptMessagesByIdentity,
 } from "./sqlite-session.test-helpers.js";
+import { isCodexTurnContextHandoff } from "./test-support.js";
 
 const CODEX_TURN_START_TEXT_INPUT_MAX_CHARS = 1 << 20;
 let sessionFile: string;
@@ -211,7 +212,12 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
       } else if (scenario === "no authored cap") {
         expect(assembly?.tokenBudget).toBe(500_000);
         expect(assembly?.runtimeSettings?.limits.promptTokenBudget).toBe(500_000);
-        expect(harness.requests.some(({ method }) => method === "thread/inject_items")).toBe(false);
+        expect(
+          harness.requests.some(
+            ({ method, params: requestParams }) =>
+              method === "thread/inject_items" && !isCodexTurnContextHandoff(requestParams),
+          ),
+        ).toBe(false);
       } else {
         expect(assembly?.tokenBudget).toBeGreaterThan(0);
         expect(assembly?.tokenBudget).toBeLessThan(480_000);
@@ -220,7 +226,10 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
           maxOutputTokens: 20_000,
         });
         expect(bootstrap?.runtimeSettings?.limits.promptTokenBudget).toBe(500_000);
-        const history = harness.requests.filter(({ method }) => method === "thread/inject_items");
+        const history = harness.requests.filter(
+          ({ method, params: requestParams }) =>
+            method === "thread/inject_items" && !isCodexTurnContextHandoff(requestParams),
+        );
         expect(history).toHaveLength(1);
         expect(JSON.stringify(history[0]?.params)).toContain("PRIOR_BUDGET_CONTEXT");
         expect(input).not.toContain("PRIOR_BUDGET_CONTEXT");

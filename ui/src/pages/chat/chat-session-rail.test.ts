@@ -429,9 +429,8 @@ describe("ChatSessionRailElement", () => {
       },
     });
     const textarea = element.querySelector("textarea")!;
-    await waitForSolid(() =>
-      expect(element.querySelector('button[aria-label="Delete comment"]')).not.toBeNull(),
-    );
+    await vi.dynamicImportSettled();
+    expect(element.querySelector('button[aria-label="Delete comment"]')).not.toBeNull();
     element.querySelector<HTMLButtonElement>('button[aria-label="Delete comment"]')!.click();
     expect(onAttachmentsChange).toHaveBeenCalledWith([]);
     expect(document.activeElement).toBe(textarea);

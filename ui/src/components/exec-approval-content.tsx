@@ -1,7 +1,7 @@
 import { Show, createMemo, createUniqueId, onSettled } from "solid-js";
 import { formatApprovalDisplayPath } from "../../../src/infra/approval-display-paths.ts";
 import { normalizeCommandSpans } from "../../../src/shared/exec-approval-command-spans.ts";
-import { summarizeApprovalScopeLabel } from "../app/approval-presentation.ts";
+import { approvalHostLabel, summarizeApprovalScopeLabel } from "../app/approval-presentation.ts";
 import type { ExecApprovalRequest, ExecApprovalRequestPayload } from "../app/exec-approval.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import { shortenOpaqueIdRuns } from "../lib/session-display.ts";
@@ -19,14 +19,12 @@ function ExecApprovalHost(props: {
       class="exec-approval-host"
       title={props.request.host === "node" ? (props.request.nodeId ?? undefined) : undefined}
     >
-      {props.request.host === "sandbox"
-        ? t("execApproval.labels.sandbox")
-        : props.request.host === "node"
-          ? props.nodeDisplayName ||
-            (props.request.nodeId
-              ? shortenOpaqueIdRuns(props.request.nodeId)
-              : t("execApproval.labels.node"))
-          : props.request.host}
+      {props.request.host === "node"
+        ? props.nodeDisplayName ||
+          (props.request.nodeId
+            ? shortenOpaqueIdRuns(props.request.nodeId)
+            : approvalHostLabel(props.request.host))
+        : approvalHostLabel(props.request.host)}
     </span>
   );
 }
@@ -132,12 +130,14 @@ export function ExecApprovalBody(props: {
   lastError?: string;
 }) {
   const detailsId = createUniqueId();
+  const destination = () =>
+    props.request.host === "node" && (props.nodeDisplayName || props.request.nodeId);
   return (
     <div class="exec-approval-terminal">
       <div class="exec-approval-shell mono">
-        <Show when={(props.request.host && props.request.host !== "gateway") || props.request.cwd}>
+        <Show when={destination() || props.request.cwd}>
           <div class="exec-approval-prompt">
-            <Show when={props.request.host && props.request.host !== "gateway"}>
+            <Show when={destination()}>
               <span>
                 <span class="sr-only">{t("execApproval.labels.host")}: </span>
                 <ExecApprovalHost request={props.request} nodeDisplayName={props.nodeDisplayName} />
@@ -175,7 +175,7 @@ export function ExecApprovalBody(props: {
           triggerTitle={t("execApproval.requestDetails")}
           trigger={<Icon name="info" />}
           triggerClass={[
-            "btn btn--sm btn--icon btn--ghost exec-approval-info",
+            "oc-icon-button oc-icon-button--28 exec-approval-info",
             { "exec-approval-info--error": Boolean(props.lastError) },
           ]}
           class="exec-approval-details"

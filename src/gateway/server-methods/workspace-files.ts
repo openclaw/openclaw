@@ -13,6 +13,8 @@ import { insideGitCheckout } from "../../agents/worktrees/git.js";
 import { FsSafeError } from "../../infra/fs-safe.js";
 import { isPathInside } from "../../infra/path-guards.js";
 import { BROWSER_IMAGE_MIME_TYPES } from "../../shared/browser-image-mime-types.js";
+import { isWorkspaceScratchPath, SCRATCH_EXPIRED_MESSAGE } from "../../shared/scratch-expiry.js";
+import { foldSearchCase } from "../../shared/search-case.js";
 import { WORKSPACE_PREVIEW_MAX_BYTES } from "../workspace-file-limits.js";
 import { resolveSessionFileReadTarget, type SessionFileReadBoundary } from "./session-file-read.js";
 import {
@@ -162,13 +164,14 @@ async function toSessionFileEntry(
   opts: {
     includeContent?: boolean;
     workspaceRoot?: WorkspaceRoot;
+    readRoot?: string;
     assertCurrent?: () => void;
     authorizeHostRead?: () => Promise<boolean>;
     onOutsideBoundary?: () => void;
   } = {},
 ): Promise<SessionFileEntry | undefined> {
   const target = await resolveSessionFileReadTarget(
-    { root, fileRoot, authorizeHostRead: opts.authorizeHostRead },
+    { root, fileRoot, readRoot: opts.readRoot, authorizeHostRead: opts.authorizeHostRead },
     touched.path,
   );
   const base = {
@@ -190,7 +193,14 @@ async function toSessionFileEntry(
     return undefined;
   }
   if (!stat?.isFile) {
-    return { ...base, missing: true };
+    return {
+      ...base,
+      name:
+        !stat && isWorkspaceScratchPath(target.absolutePath)
+          ? `${SCRATCH_EXPIRED_MESSAGE}: ${base.name}`
+          : base.name,
+      missing: true,
+    };
   }
   const entry: SessionFileEntry = {
     ...base,
@@ -255,7 +265,7 @@ export async function listSessionWorkspaceFiles(
   },
 ) {
   const root = params.root;
-  const workspaceRoot = root ? await openWorkspaceRoot(root) : undefined;
+  const workspaceRoot = root ? await openWorkspaceRoot(params.readRoot ?? root) : undefined;
   const gitCheckout =
     workspaceRoot && "access" in workspaceRoot
       ? undefined
@@ -293,7 +303,8 @@ export async function listSessionWorkspaceFiles(
     const readRoot = workspaceRoot ?? root;
     if (search) {
       const entries: SessionFileBrowserEntry[] = [];
-      const query = search.toLowerCase();
+      // Normalize comparison text only; on-disk filenames stay original.
+      const query = foldSearchCase(search).normalize("NFC");
       let visitedEntries = 0;
       let truncated = false;
       const shouldStop = (): boolean => {
@@ -317,7 +328,7 @@ export async function listSessionWorkspaceFiles(
           }
           visitedEntries += 1;
           const browserPath = dir ? `${dir}/${dirent.name}` : dirent.name;
-          if (browserPath.toLowerCase().includes(query)) {
+          if (foldSearchCase(browserPath).normalize("NFC").includes(query)) {
             const entry = toWorkspaceBrowserEntry(browserPath, dirent, relevance);
             if (entry) {
               entries.push(entry);
@@ -391,6 +402,7 @@ export async function getSessionWorkspaceFile(
 ): Promise<{ root?: string; file?: SessionFileEntry; reason?: "outside_session_boundary" }> {
   let outsideBoundary = false;
   const options = {
+    readRoot: params.readRoot,
     includeContent: params.includeContent !== false,
     assertCurrent: params.assertCurrent,
     authorizeHostRead: params.authorizeHostRead,

@@ -99,6 +99,10 @@ function snapshot(fixture) {
       ),
     ),
     historicalMarker: config.agents?.entries?.ops?.default === true,
+    // Candidates since the plugin move keep this setting in the plugin's own config.
+    workshopMode:
+      config.plugins?.entries?.["skill-workshop"]?.config?.autonomous?.mode ??
+      config.skills?.workshop?.autonomous?.mode,
     legacySourceSha256: fs.existsSync(fixture.storePath)
       ? hash(fs.readFileSync(fixture.storePath))
       : null,
@@ -376,6 +380,7 @@ function seed(p) {
 
 function assertRepaired(fixture, observed) {
   assert.equal(observed.historicalMarker, false, "Doctor did not retire the repaired marker");
+  assert.equal(observed.workshopMode, "off", "Doctor lost the configured Skill Workshop mode");
   assert.equal(observed.legacySourceSha256, null, "Canonical cron repair created a retired source");
   assert.equal(observed.quarantinedJobs, 0, "Canonical jobs were unexpectedly quarantined");
   assert.deepEqual(

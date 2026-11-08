@@ -222,9 +222,7 @@ describe("handleQaInbound", () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
     await receiveAttachments(...attachments);
     expect(runtime.channel.inbound.dispatch).toHaveBeenCalledTimes(1);
-    expect(
-      firstRunAssembledParams(runtime).ctxPayload.media?.every((fact) => fact.path === undefined),
-    ).toBe(true);
+    expect(firstRunAssembledParams(runtime).ctxPayload.media).toEqual([]);
     expect(warn).toHaveBeenCalledTimes(attachments.length);
   });
 
@@ -359,21 +357,31 @@ describe("QA preview terminal ownership", () => {
     turn.error("dispatch failed");
     await turn.partial("late");
     expect(deleteQaBusMessage).toHaveBeenCalledOnce();
+    expect(deleteQaBusMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ messageId: "preview-1" }),
+    );
     expect(sendQaBusMessage).toHaveBeenCalledOnce();
   });
 
-  it("preserves the dispatch failure when preview cleanup also fails", async () => {
-    const failure = new Error("dispatch failed");
-    vi.mocked(deleteQaBusMessage).mockRejectedValueOnce(new Error("cleanup failed"));
-    await expect(
-      runQaInbound(async (turn) => {
-        await turn.replyOptions?.onPartialReply?.({ text: "unfinished" });
-        throw failure;
-      }),
-    ).rejects.toBe(failure);
-    expect(deleteQaBusMessage).toHaveBeenCalledOnce();
-    expect(console.warn).toHaveBeenCalledWith(expect.stringContaining("cleanup failed"));
-  });
+  it.each([
+    { label: "Error", failure: new Error("dispatch failed") },
+    { label: "undefined", failure: undefined },
+  ])(
+    "preserves the $label dispatch failure when preview cleanup also fails",
+    async ({ failure }) => {
+      const dispatch = createDeferred<void>();
+      vi.mocked(deleteQaBusMessage).mockRejectedValueOnce(new Error("cleanup failed"));
+      await expect(
+        runQaInbound(async (turn) => {
+          await turn.replyOptions?.onPartialReply?.({ text: "unfinished" });
+          dispatch.reject(failure);
+          await dispatch.promise;
+        }),
+      ).rejects.toBe(failure);
+      expect(deleteQaBusMessage).toHaveBeenCalledOnce();
+      expect(console.warn).toHaveBeenCalledWith(expect.stringContaining("cleanup failed"));
+    },
+  );
 });
 
 it("admits symbolic group members from each supplied config snapshot", async () => {

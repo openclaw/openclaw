@@ -1,24 +1,15 @@
 import { createEffect, createSignal, onSettled } from "solid-js";
 import type { PluginsUninstallResult } from "../../../../packages/gateway-protocol/src/schema/plugins.js";
-import {
-  pathForRoute,
-  pluginCatalogIdFromPath,
-  pluginSettingsIdFromPath,
-} from "../../app-route-paths.ts";
+import { pathForRoute } from "../../app-route-paths.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { hasOperatorAdminAccess, hasOperatorReadAccess } from "../../app/operator-access.ts";
 import { showConfirmDialog } from "../../components/confirm-dialog.ts";
 import { hasModalSurface, registryFor } from "../../components/overlay-registry.ts";
 import { formatUiError } from "../../lib/format-error.ts";
-import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
 import { GatewayPageBinding, type GatewayPageChange } from "../../lib/gateway-page-binding.ts";
 import { isComposingKeyboardEvent } from "../../lib/ime.ts";
 import { createPageRequest } from "../../lib/page-request.ts";
-import {
-  loadPluginDiscoveryDetail,
-  type PluginListResult,
-  type PluginMutationResult,
-} from "../../lib/plugins/index.ts";
+import type { PluginListResult, PluginMutationResult } from "../../lib/plugins/index.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { listen } from "../../lib/reactive/listener.ts";
 import { createCredentialPresentation } from "./credential-presentation.ts";
@@ -26,6 +17,7 @@ import { installedPluginDetailTabFromHash } from "./detail-tabs.ts";
 import { createPluginDiscovery } from "./plugin-discovery.ts";
 import { createPluginHelp } from "./plugin-help.ts";
 import { createPluginMcpLogin } from "./plugin-mcp-login.ts";
+import { createPluginPromptLaunch } from "./plugin-prompt-launch.ts";
 import { createPluginPageTargets } from "./plugin-removal-focus.ts";
 import { pluginRowKey, type PluginRowMessage } from "./plugin-row-message.tsx";
 import { pluginMutationWarnings, createPluginsConsent } from "./plugins-consent.ts";
@@ -34,12 +26,15 @@ import { createPluginsMutationPresentation } from "./plugins-mutation-presentati
 import { createPluginsPageIcons } from "./plugins-page-icons.ts";
 import {
   createPluginsPageState,
-  installRequestForDiscoveryDetail,
   mergePluginCatalogItem,
   pluginMutationBlockedReason,
   type PluginMutationAction,
 } from "./plugins-page-model.ts";
-import type { PluginsRouteData } from "./route-data.ts";
+import {
+  pluginIdForRoute,
+  pluginSettingsNeedsSchema,
+  type PluginsRouteData,
+} from "./route-data.ts";
 import type { PluginSettingsEditorProps } from "./settings-editor.tsx";
 import type { PluginSettingsTab } from "./settings-view.tsx";
 import { createPluginPreview } from "./skill-preview.tsx";
@@ -57,6 +52,7 @@ export function createPluginsPage(options: {
   let routeData: PluginsRouteData | undefined;
   let surface: "discovery" | "settings" = "settings";
   const [revision, setRevision] = createSignal(0, { ownedWrite: true });
+  const [renderedIconRevision, setRenderedIconRevision] = createSignal(0);
   const [settingsTab, setSettingsTab] = createSignal<PluginSettingsTab>("installed");
 
   const state = createPluginsPageState();
@@ -98,7 +94,17 @@ export function createPluginsPage(options: {
     publish();
   }
 
-  let installRequestGeneration = 0;
+  const promptLaunch = createPluginPromptLaunch({
+    context,
+    state,
+    gateway: () => gateway,
+    consent: () => consent,
+    isActive: () => active,
+    pathname: () => routeData?.location.pathname,
+    accessBlockedReason,
+    setMessage,
+    publish,
+  });
   const help = createPluginHelp(context);
   let pluginConfigEditPending = false;
   let routeDataConsumed = false;
@@ -112,6 +118,7 @@ export function createPluginsPage(options: {
     onInstalledUrlsChange: (urls) => setState({ iconUrls: urls }),
     onCatalogUrlsChange: (urls) => setState({ catalogIconUrls: urls }),
     onChange: publish,
+    onRenderedChange: () => setRenderedIconRevision((current) => current + 1),
   });
   const gateway = new GatewayPageBinding(publish, {
     getGateway: () => context.gateway,
@@ -132,8 +139,8 @@ export function createPluginsPage(options: {
   const mcpLogin = createPluginMcpLogin(gateway, {
     getDetail: () => state.detail,
     getName: (pluginId) => state.result?.plugins.find((plugin) => plugin.id === pluginId)?.name,
-    canSignIn: () => canCallGatewayMethod(gateway.snapshot, "mcp.authLogin", "operator.admin"),
     refresh: showDetails,
+    setMessage,
   });
   const discovery = createPluginDiscovery(
     {
@@ -194,6 +201,8 @@ export function createPluginsPage(options: {
     };
   };
 
+  onSettled(() => context.overlays.subscribe(publish));
+
   const canMutate = () => state.result?.mutationAllowed === true && accessBlockedReason() === null;
 
   const mutationPresentation = createPluginsMutationPresentation({
@@ -209,6 +218,7 @@ export function createPluginsPage(options: {
     gateway,
     getContext: () => context,
     getResult: () => state.result,
+    getCatalogDetail: () => state.catalogDetail?.result ?? null,
     canMutate,
     isBusy: (rowKey) => Boolean(state.busy[rowKey]),
     setBusy,
@@ -220,6 +230,8 @@ export function createPluginsPage(options: {
     refreshCatalogAfterMutation: refreshCatalog,
     presentMutation: mutationPresentation.present,
     onChange: publish,
+    onMutationSuccess: promptLaunch.complete,
+    onConsentDismiss: promptLaunch.reset,
   });
   const catalogTask = createPageRequest(publish, {
     task: ([client]: readonly [NonNullable<GatewayPageBinding["client"]>], { signal }) =>
@@ -259,7 +271,8 @@ export function createPluginsPage(options: {
         credentialPresentation.retire();
         skillPreview.close();
         if (previous?.location.pathname !== routeData?.location.pathname) {
-          installRequestGeneration += 1;
+          consent.invalidateCatalogInstall();
+          promptLaunch.reset();
           mcpLogin.reset();
         }
         applyRouteData();
@@ -272,6 +285,7 @@ export function createPluginsPage(options: {
   createEffect(
     () => {
       revision();
+      renderedIconRevision();
       return icons.rendered();
     },
     (rendered) =>
@@ -287,6 +301,7 @@ export function createPluginsPage(options: {
     return () => {
       stopKeydown();
       active = false;
+      promptLaunch.reset();
       catalogTask.cancel();
       details.inspection.release();
       details.catalog.release();
@@ -339,13 +354,9 @@ export function createPluginsPage(options: {
       event.stopPropagation();
       return;
     }
-    if (state.detail) {
+    // Settings details bubble to the shell's shared, location-aware parent navigation.
+    if (state.detail && surface === "discovery") {
       setState({ detail: null });
-      if (surface === "settings") {
-        context.replace("plugin-settings", {
-          pathname: pathForRoute("plugin-settings", context.basePath),
-        });
-      }
       event.stopPropagation();
     }
   };
@@ -450,6 +461,7 @@ export function createPluginsPage(options: {
   }
 
   function invalidateRequests(invalidateCatalog: boolean, retirePresentation = true) {
+    promptLaunch.reset();
     credentialPresentation.retire();
     details.inspection.reset();
     details.catalog.reset();
@@ -463,7 +475,6 @@ export function createPluginsPage(options: {
     if (retirePresentation) {
       setState({ detail: null, catalogDetail: null });
     }
-    installRequestGeneration += 1;
     consent.reset();
   }
 
@@ -500,12 +511,8 @@ export function createPluginsPage(options: {
 
   const loading = () => gateway.connected && (!routeDataConsumed || catalogTask.pending);
 
-  function activeRoutePluginId(): string | null {
-    const pathname = routeData?.location.pathname ?? "";
-    return surface === "settings"
-      ? pluginSettingsIdFromPath(pathname, context.basePath)
-      : pluginCatalogIdFromPath(pathname, context.basePath);
-  }
+  const activeRoutePluginId = () =>
+    pluginIdForRoute(surface, routeData?.location.pathname ?? "", context.basePath);
 
   function uninstallingSelection(): boolean {
     return Boolean(
@@ -537,6 +544,8 @@ export function createPluginsPage(options: {
       (activeRoutePluginId() && state.installedDetailTab === "configuration")
     ) {
       void context.runtimeConfig.ensureLoaded();
+    }
+    if (routeData && pluginSettingsNeedsSchema(surface, routeData.location, context.basePath)) {
       void context.runtimeConfig.ensureSchemaLoaded();
     }
     if (!loading() && !state.result && !state.error) {
@@ -569,6 +578,8 @@ export function createPluginsPage(options: {
     return pluginMutationBlockedReason({
       connected,
       hasAdminAccess: hasOperatorAdminAccess(context.gateway.snapshot.hello?.auth ?? null),
+      actorKind:
+        context.gateway.snapshot.hello?.auth.roleAllowsAdmin === false ? "member" : "browser",
       mutationAllowed,
     });
   }
@@ -601,6 +612,7 @@ export function createPluginsPage(options: {
   }
 
   function setMessage(key: string, message: PluginRowMessage | null) {
+    promptLaunch.onMessage(key, message);
     const next = { ...state.messages };
     if (message) {
       next[key] = message;
@@ -613,43 +625,6 @@ export function createPluginsPage(options: {
   function applyMutationResult(result: PluginMutationResult) {
     icons.installed.invalidate(result.plugin.id);
     replaceResult(mergePluginCatalogItem(state.result, result.plugin));
-  }
-
-  async function installCatalogEntry(id: string): Promise<void> {
-    const scope = gateway.capture();
-    const key = `install:${id}`;
-    if (!scope || !canMutate() || state.busy[key]) {
-      return;
-    }
-    const generation = ++installRequestGeneration;
-    setBusy(key, "install");
-    try {
-      const result =
-        state.catalogDetail?.result?.plugin.id === id
-          ? state.catalogDetail.result
-          : await loadPluginDiscoveryDetail(scope.client, id);
-      if (!gateway.isCurrent(scope) || generation !== installRequestGeneration) {
-        return;
-      }
-      const request = installRequestForDiscoveryDetail(result);
-      setBusy(key, null);
-      if (request) {
-        await consent.install(request, key);
-      } else {
-        setMessage(key, {
-          kind: "warning",
-          text: t("pluginsPage.installAvailabilityChanged"),
-        });
-      }
-    } catch (error) {
-      if (gateway.isCurrent(scope) && generation === installRequestGeneration) {
-        setMessage(key, { kind: "error", text: formatUiError(error) });
-      }
-    } finally {
-      if (gateway.isCurrent(scope)) {
-        setBusy(key, null);
-      }
-    }
   }
 
   function closeCatalogDetail() {
@@ -745,7 +720,8 @@ export function createPluginsPage(options: {
     canEditConfig,
     showDetails,
     showCatalogDetail,
-    installCatalogEntry,
+    installCatalogEntry: consent.installCatalogEntry,
+    recommendedPrompts: promptLaunch,
     closeCatalogDetail,
     uninstall,
     reloadConfig(this: void) {

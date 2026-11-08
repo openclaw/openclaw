@@ -40,7 +40,11 @@ const getQuickJsModules = createLazyRuntimeModule(async () => {
   const [wasmModule, encoding] = await Promise.all([
     compile("quickjs.wasm", "quickjs-wasi/quickjs.wasm"),
     compile("encoding.so", "quickjs-wasi/encoding.so"),
-  ]);
+  ]).catch((error: unknown) => {
+    // A failed asset load must not poison later cells in this process.
+    getQuickJsModules.clear();
+    throw error;
+  });
   return {
     wasmModule,
     wasmExtensions: [{ name: "encoding", wasm: encoding }],

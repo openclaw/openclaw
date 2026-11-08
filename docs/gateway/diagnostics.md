@@ -234,8 +234,9 @@ and can exceed `1`. See
 
 `sessions.patch` and `sessions.patchMany` calls lasting at least one second add
 an info-level `slow session patch` record even when diagnostics are disabled.
-The message includes total elapsed milliseconds, the method, and fixed phase
-durations, for example `slow session patch 1176ms method=sessions.patch catalog=1100ms response=20ms`.
+The message includes total elapsed milliseconds, the method, target count (at most
+100), up to eight sorted mutation field names (plus an omitted-field count), and fixed phase
+durations, for example `slow session patch 1176ms method=sessions.patch targets=1 fields=unread catalog=1100ms response=20ms`.
 Replacement snapshots use the metadata reader for bounded exact-key selections
 and the maintenance reader for larger or label-owner selections, independently of
 the transcript-history reader. Snapshot time includes worker preparation and reads.
@@ -268,13 +269,32 @@ keys or request values. Worktree preparation measures only work required before
 the response; provisioning already deferred to an initial turn stays with that
 turn's lifecycle.
 
-At trace log level, chat startup diagnostics break `detail.attempt.system-prompt`
+Slow chat startup diagnostics break `detail.attempt.system-prompt`
 into sandbox policy,
 tool catalog text, session entry, runtime facts, reference paths, provider
 contributions, memory and watched-session context, project memory, TTS preferences,
 rendering, and reporting. These `detail.attempt.system-prompt.*` phases measure
 elapsed preparation time, including awaited work, without recording prompt content.
 The parent and nested phase totals overlap; do not add them together as CPU time.
+
+`detail.attempt.bundle-tools.*` separates core normalization, MCP configuration,
+runtime acquisition and materialization, LSP startup, policy filtering, bundled
+normalization, final projection, and cleanup after failure. These fixed phases
+appear in the existing `slow chat send` record without trace logging or timeline
+configuration. Workspace bootstrap reads and skill preparation belong to the
+separate `attempt.bootstrap` and `attempt.skills` stages; plugin tool factories
+run in `attempt.tool-base`.
+
+Dependency builder retirement appears under
+`detail.attempt.setup.sandbox.workspace_selection.prepare.reconcile.dependency.retire`.
+Its fixed sub-stages separate registry lookup, builder processing, lock acquisition,
+retirement claim, engine target validation, identity inspection, `kill`, `wait`,
+and terminal-state `verify`. Physical `remove` belongs to housekeeping.
+`verify.attempts` counts verification calls in that report window; it is a count,
+not milliseconds. Each call performs one inspect, with no OpenClaw polling or
+backoff. Engine-internal polling and cleanup waits remain inside their command's
+elapsed time. These fields use the existing slow-send line without enabling
+timeline logging; parent and child durations overlap.
 
 Managed worktree preparation emits one info-level `managed worktree preparation`
 record on return or failure. `kind=managed` covers checkout creation;
@@ -462,6 +482,11 @@ are retained; their syntax does not prove that a computed name is public. Review
 the profile before sharing it. Full profiles retain graph edges, native signed script IDs, and sample order. V8 can
 emit samples out of timestamp order, so signed time deltas are preserved for profile
 viewers to reconstruct timestamps and order samples.
+
+`actualDurationMs` uses a monotonic clock from requesting profiler startup until
+profiler stop completes. It includes `startBlockedMs` and asynchronous startup and
+stop overhead. Native `profile.startTime` and `profile.endTime` remain unchanged
+and can describe a shorter sampling interval.
 
 Sampling can outlast the requested interval when the event loop is blocked. The
 response limit does not bound the runtime's internal allocation during that delay. Profile
@@ -699,8 +724,10 @@ installation root, with URLs such as `openclaw:src/...`, `openclaw:dist/...`, an
 `openclaw:packages/<name>/src/...` or `openclaw:packages/<name>/dist/...` for
 workspace packages. Paths outside the installation root are not OpenClaw code.
 Profiles label dependency frames as `[dep:<pkg>]` with URL
-`node_modules/<pkg>`, including scoped packages and pnpm layouts; symbols,
-versions, filenames, and absolute paths stay hidden. URLs with query or fragment
+`node_modules/<pkg>`, including scoped packages and pnpm layouts. First-party
+`@openclaw/*` packages retain safe function symbols, including private method
+names such as `#prepare`; third-party symbols stay hidden. Versions, filenames,
+and absolute paths stay hidden for all dependencies. URLs with query or fragment
 markers remain redacted. Frames with script ID `0`,
 an empty URL, and a negative line number use `[native]`, except for known V8
 engine labels such as `(root)`, `(V8 API)`, `(GC)`, and `(PARSER)`. Preserving those
@@ -718,8 +745,11 @@ when such references are omitted or a size-capped summary replaces the tree.
 
 The complete result is capped at 1 MiB. When the tree and samples exceed that cap,
 `truncated` is true and `summary` replaces `profile`. Summary entries combine
-identical call stacks, retain up to eight frames in leaf-first order, and contain
-`selfBytes`, inclusive `totalBytes`, and `count` (the number of sampled allocations
+identical call stacks and retain up to eight frames in leaf-first order. Repeated
+recursive runs that fit those slots are collapsed, with `×N` on the last frame of
+the repeated run. Longer stacks retain the allocating leaf, the nearest omitted
+OpenClaw caller, and its outermost OpenClaw owner; `[...]` marks skipped frames.
+Entries contain `selfBytes`, inclusive `totalBytes`, and `count` (the number of sampled allocations
 at those sites, not an exact object count). Entries are ordered by `totalBytes`,
 then `selfBytes`; lower-ranked entries are omitted to fit the cap. Inclusive totals
 overlap across callers, so do not add them together. Start with large `selfBytes`
@@ -781,8 +811,13 @@ at 90%. The main thread's V8 `heap_size_limit` is the primary signal
 limit (`worker_heap_threshold`), including process-wide heap flag overrides. RSS
 includes every worker and native allocation, so `rss_threshold` uses the smaller of
 physical RAM and the process/cgroup memory constraint, independently of V8 heap
-limits. Unknown limits are omitted; Bun's compatibility heap metadata is not treated
-as a V8 limit. RSS growth alone does not indicate pressure.
+limits. On Node/Linux with a positive process constraint below physical RAM,
+`process_memory_threshold` also checks the remaining constrained allowance using
+`process.availableMemory()`. Its `usedBytes` is the constraint minus that remaining
+allowance, not process RSS: cgroup charges can exhaust headroom before RSS reaches
+the same 80%/90% thresholds. This signal follows heap and RSS priority within each
+severity. Unknown limits are omitted; Bun's compatibility heap metadata is not
+treated as a V8 limit. RSS growth alone does not indicate pressure.
 
 Warning and critical journal lines and diagnostic events retain the measured
 `usedBytes`, `limitBytes`, and `thresholdBytes`; worker pressure also identifies
@@ -862,6 +897,11 @@ workers. Retirement requests are asynchronous, skip active work, and keep native
 close/checkpoint operations off the main thread. Active operations keep their
 custody and the usual 30-minute database retention window resumes after use.
 No stored data, database schema, or update procedure changes.
+
+Transcript history and search lanes retain one warm reader for up to five idle
+minutes. Other transcript lanes retire after 90 idle seconds to span minute-spaced
+bursts, keeping their independent request ordering and growing again on demand. Whole-lane idle cleanup
+uses the existing rotation path, so its retirement reason is `rotation`.
 
 When a task pool recreates an idle-retired Worker within five minutes, it keeps
 one replacement warm for five minutes of inactivity. Other slots retain their
