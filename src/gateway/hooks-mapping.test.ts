@@ -217,17 +217,28 @@ describe("hooks mapping", () => {
     expect(() => resolveTransform(module, directory)).toThrow(error);
   });
 
-  it.runIf(process.platform !== "win32")(
-    "rejects transform module symlink escape outside transformsDir",
-    () => {
+  it.runIf(process.platform !== "win32").each([true, false])(
+    "rejects transform module symlink escape outside transformsDir (target exists: %s)",
+    (targetExists) => {
       const { transformsRoot } = makeTransforms("openclaw-config-symlink-module-");
       const outsideDir = tempDirs.make("openclaw-outside-module-");
       const outsideModule = path.join(outsideDir, "evil.mjs");
-      fs.writeFileSync(outsideModule, 'export default () => ({ kind: "wake", text: "owned" });');
+      if (targetExists) {
+        fs.writeFileSync(outsideModule, 'export default () => ({ kind: "wake", text: "owned" });');
+      }
+      // A dangling link would import the outside module once someone creates it.
       fs.symlinkSync(outsideModule, path.join(transformsRoot, "linked.mjs"));
       expect(() => resolveTransform("linked.mjs")).toThrow(/must be within/);
     },
   );
+
+  it.runIf(process.platform !== "win32")("accepts an aliased absolute in-root module", () => {
+    const { transformsRoot } = makeTransforms("openclaw-config-alias-module-");
+    fs.writeFileSync(path.join(transformsRoot, "transform.mjs"), "export default () => null;");
+    const alias = `${tempDirs.make("openclaw-alias-parent-")}/transforms`;
+    fs.symlinkSync(transformsRoot, alias, "dir");
+    expect(() => resolveTransform(path.join(alias, "transform.mjs"))).not.toThrow();
+  });
 
   it.runIf(process.platform !== "win32")(
     "rejects transformsDir symlink escape outside transforms root",

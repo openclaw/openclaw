@@ -11,6 +11,7 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { safeRealpathSync } from "../infra/boundary-path.js";
 import type { ExecHost } from "../infra/exec-approvals.js";
+import { respellUnderRootSync } from "../infra/path-containment.js";
 import { isPathInside, safeStatSync } from "../infra/path-guards.js";
 import type { BashSandboxConfig } from "./bash-tools.shared.js";
 import { assertSandboxPath } from "./sandbox-paths.js";
@@ -231,7 +232,12 @@ function resolveBackendHostWorkdirCandidate(params: {
       failIfInvalid: false,
     };
   }
-  const hostPath = path.resolve(params.workdir);
+  const workspaceRoot = path.resolve(params.sandbox.workspaceDir);
+  // A workdir spelled through an alias of the workspace maps like its canonical spelling.
+  const lexicalHostPath = path.resolve(params.workdir);
+  const hostPath = isPathInside(workspaceRoot, lexicalHostPath)
+    ? lexicalHostPath
+    : (respellUnderRootSync(workspaceRoot, params.workdir) ?? lexicalHostPath);
   const readOnlySkillMapping = mapContainerWorkdirToHost({
     workdir: params.workdir,
     sandbox: params.sandbox,
@@ -241,10 +247,10 @@ function resolveBackendHostWorkdirCandidate(params: {
   if (readOnlySkillMapping) {
     return { ...readOnlySkillMapping, failIfInvalid: false };
   }
-  if (isPathInside(path.resolve(params.sandbox.workspaceDir), hostPath)) {
+  if (isPathInside(workspaceRoot, hostPath)) {
     return {
       hostPath,
-      hostRoot: path.resolve(params.sandbox.workspaceDir),
+      hostRoot: workspaceRoot,
       containerRoot: normalizeContainerPath(params.sandbox.containerWorkdir),
       failIfInvalid: true,
     };

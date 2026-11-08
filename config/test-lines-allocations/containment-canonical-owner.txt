@@ -1,0 +1,2 @@
+180
+# Shared containment canonicalization owner: alias/dangling/.. walk parity, and regressions for workspace data loss on uninstall, plugin reinstall deleting itself, hook transform dangling-link escape, aliased includes/managed media.
