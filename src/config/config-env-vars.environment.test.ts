@@ -18,7 +18,8 @@ it("preserves read ownership, snapshots and rollback across a SHARE_ENV worker",
         import { Worker, SHARE_ENV } from 'node:worker_threads';
         const { applyConfigEnvVars, createConfigRuntimeEnvBase, cloneEnvWithPlatformSemantics,
           snapshotEnv, restoreEnvChangesIfUnchanged, resetPublishedConfigRuntimeEnv,
-          prepareConfigRuntimeEnv, getPublishedConfigRuntimeEnvState } =
+          prepareConfigRuntimeEnv, getPublishedConfigRuntimeEnvState,
+          withConfigReadEnvChanges, captureConfigReadEnvMutation } =
           await import(${JSON.stringify(owner.href)});
         const key = 'OPENCLAW_TEST_ENV_OWNERSHIP';
         delete process.env[key];
@@ -31,7 +32,19 @@ it("preserves read ownership, snapshots and rollback across a SHARE_ENV worker",
         const publishedConfig = { env: { vars: { [publishedKey]: 'published' } } };
         prepareConfigRuntimeEnv({ previousConfig: {}, nextConfig: publishedConfig }).publish().commit();
         const retained = process.env;
-        await once(new Worker('', { eval: true, env: SHARE_ENV }), 'exit');
+        await withConfigReadEnvChanges(retained, async (restore) => {
+          await once(new Worker('', { eval: true, env: SHARE_ENV }), 'exit');
+          // Exercise stock Bun's replacement on runtimes whose worker keeps identity.
+          if (process.env === retained) process.env = { ...process.env };
+          const scopeKey = key + '_SCOPE';
+          const scoped = { env: { vars: { [scopeKey]: 'candidate' } } };
+          const custom = {};
+          captureConfigReadEnvMutation(process.env, () => applyConfigEnvVars(scoped));
+          captureConfigReadEnvMutation(custom, () => applyConfigEnvVars(scoped, custom));
+          restore();
+          assert.equal(process.env[scopeKey], undefined);
+          assert.equal(custom[scopeKey], 'candidate');
+        });
         assert.equal(getPublishedConfigRuntimeEnvState().ownedEnv[publishedKey], 'published');
         assert.equal(createConfigRuntimeEnvBase(publishedConfig)[publishedKey], undefined);
         assert.equal(createConfigRuntimeEnvBase(cfg)[key], undefined);

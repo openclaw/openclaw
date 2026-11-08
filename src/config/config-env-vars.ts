@@ -84,7 +84,7 @@ export function restoreEnvChangesIfUnchanged(params: {
 }
 
 type ConfigReadEnvChanges = {
-  env: NodeJS.ProcessEnv;
+  environmentKey: object;
   receipts: Array<() => void>;
   active: boolean;
 };
@@ -95,7 +95,11 @@ export async function withConfigReadEnvChanges<T>(
   env: NodeJS.ProcessEnv,
   run: (restore: () => void) => Promise<T>,
 ): Promise<T> {
-  const scope: ConfigReadEnvChanges = { env, receipts: [], active: true };
+  const scope: ConfigReadEnvChanges = {
+    environmentKey: captureEnvironmentKey(env),
+    receipts: [],
+    active: true,
+  };
   try {
     return await configReadEnvChanges.run(scope, () =>
       run(() => {
@@ -214,7 +218,7 @@ export function captureConfigReadEnvMutation<T>(
     };
     // Snapshot rejection and include compensation consume the same receipt once.
     retainRestore?.(restore);
-    if (scope?.active && scope.env === env) {
+    if (scope?.active && scope.environmentKey === resolveEnvironmentKey(env)) {
       scope.receipts.push(restore);
     }
   }

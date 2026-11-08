@@ -26,6 +26,8 @@ it("retires derived native modes after the first SHARE_ENV worker", () => {
         assert.equal(getFsSafeNativeConfig().mode, 'off');
         const retained = process.env;
         await once(new Worker('', { eval: true, env: SHARE_ENV }), 'exit');
+        // Exercise stock Bun's replacement on runtimes whose worker keeps identity.
+        if (process.env === retained) process.env = { ...process.env };
         assert.equal(fsSafeEnvInput(process.env).OPENCLAW_FS_SAFE_NATIVE_MODE, undefined);
         assert.equal(fsSafeEnvInput(retained).OPENCLAW_FS_SAFE_NATIVE_MODE, undefined);
         const custom = { ...process.env };
