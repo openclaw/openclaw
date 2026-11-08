@@ -85,6 +85,30 @@ import { captureAuthProfileWriteExecution } from "./write-execution.js";
 
 class AuthProfileSharedSourceChangedError extends Error {}
 
+type AuthProfileSharedSource = ReturnType<typeof captureSharedAuthSource>;
+
+function captureSharedAuthSource(databasePath: string) {
+  const commits = watchAuthProfileNativeCommits(databasePath);
+  return {
+    databasePath,
+    commits,
+    unchanged: commits.capture(),
+    revision: getRuntimeAuthProfileStoreMutationRevisionAtDatabasePath(databasePath),
+  };
+}
+
+function assertSharedAuthSourceCurrent(source: AuthProfileSharedSource, databasePath: string) {
+  if (
+    source.databasePath !== databasePath ||
+    !source.unchanged() ||
+    getRuntimeAuthProfileStoreMutationRevisionAtDatabasePath(databasePath) !== source.revision
+  ) {
+    throw new AuthProfileSharedSourceChangedError(
+      "Auth profile shared store changed before write admission; retry.",
+    );
+  }
+}
+
 /** The existing SQLite worker owns BEGIN/read/save/COMMIT; host callbacks keep their scope. */
 type AuthProfileStoreUpdate = {
   existingDatabaseTarget?: { kind: "agent"; agentId: string; path: string; env: NodeJS.ProcessEnv };
@@ -147,8 +171,20 @@ export function runAuthProfileStoreUpdate(params: AuthProfileStoreUpdate): Promi
         ? [params.existingDatabaseTarget?.path ?? resolveAuthProfileDatabasePath(params.agentDir)]
         : []),
     ]);
+    let sharedSource: AuthProfileSharedSource | undefined;
     try {
+      // A warm caller may already have used inherited rows. Keep their source
+      // observation across FIFO preparation and admission, not just the transaction.
+      if (!params.envOnly && !sharedWrite && getPreparedSharedAuthStoreOwnership(env)) {
+        const sharedPath = resolveSharedAuthStorePath(env);
+        if (sharedPath !== target?.path) {
+          sharedSource = captureSharedAuthSource(sharedPath);
+        }
+      }
       await reservation.ready;
+      if (sharedSource) {
+        assertSharedAuthSourceCurrent(sharedSource, resolveSharedAuthStorePath(env));
+      }
       const prepared = await prepareAuthProfileWriteTransactionAsync(
         params.agentDir,
         { ...params.options, env },
@@ -174,8 +210,10 @@ export function runAuthProfileStoreUpdate(params: AuthProfileStoreUpdate): Promi
           databaseTarget,
         },
         transferred ? execution : undefined,
+        sharedSource,
       );
     } finally {
+      sharedSource?.commits.dispose();
       if (!transferred) {
         await execution?.release();
       }
@@ -188,18 +226,13 @@ async function runPreparedAuthProfileStoreUpdate(
   params: AuthProfileStoreUpdate,
   { databaseTarget, sharedOwner }: ReturnType<typeof prepareAuthProfileWriteTransaction>,
   capturedExecution?: ReturnType<typeof captureOpenClawAgentDatabaseExecution>,
+  earlySharedSource?: AuthProfileSharedSource,
 ): Promise<void> {
   const owner = { ...sharedOwner, databasePath: databaseTarget.path };
   let acknowledged = false;
   let exchangePort: MessagePort | undefined;
   let nativeCommits: ReturnType<typeof watchAuthProfileNativeCommits> | undefined;
-  let sharedSource:
-    | {
-        commits: ReturnType<typeof watchAuthProfileNativeCommits>;
-        unchanged: () => boolean;
-        revision: number;
-      }
-    | undefined;
+  let sharedSource = earlySharedSource;
   let committedIsCurrent = () => false;
   let invalidationAttempted = false;
   let commitGranted = false;
@@ -222,15 +255,9 @@ async function runPreparedAuthProfileStoreUpdate(
       if (sharedSource || owner.databasePath === owner.sharedDatabasePath) {
         return;
       }
-      // Fence native commits and published mutations before the worker reads inherited rows.
-      const commits = watchAuthProfileNativeCommits(owner.sharedDatabasePath);
-      sharedSource = {
-        commits,
-        unchanged: commits.capture(),
-        revision: getRuntimeAuthProfileStoreMutationRevisionAtDatabasePath(
-          owner.sharedDatabasePath,
-        ),
-      };
+      // Cold and env-only callers have no earlier inherited read. Bootstrap
+      // retains its own source handoff; capture the prepared target only here.
+      sharedSource = captureSharedAuthSource(owner.sharedDatabasePath);
     };
     const assertOwner = () => {
       if (
@@ -247,15 +274,8 @@ async function runPreparedAuthProfileStoreUpdate(
     const assertRequest = () => {
       params.assertCurrent?.();
       assertAuthority();
-      if (
-        sharedSource &&
-        (!sharedSource.unchanged() ||
-          getRuntimeAuthProfileStoreMutationRevisionAtDatabasePath(owner.sharedDatabasePath) !==
-            sharedSource.revision)
-      ) {
-        throw new AuthProfileSharedSourceChangedError(
-          "Auth profile shared store changed before write admission",
-        );
+      if (sharedSource) {
+        assertSharedAuthSourceCurrent(sharedSource, owner.sharedDatabasePath);
       }
     };
     const receive = (request: SqliteWorkerAdmissionRequest): boolean => {
@@ -478,7 +498,9 @@ async function runPreparedAuthProfileStoreUpdate(
     .finally(() => {
       exchangePort?.close();
       nativeCommits?.dispose();
-      sharedSource?.commits.dispose();
+      if (sharedSource !== earlySharedSource) {
+        sharedSource?.commits.dispose();
+      }
     });
 }
 

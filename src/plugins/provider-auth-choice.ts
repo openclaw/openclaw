@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from "node:util";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import {
   resolveDefaultAgentId,
@@ -133,10 +134,16 @@ export function applyProviderPluginAuthMethodResultConfig(params: {
   }
 
   for (const profile of result.profiles) {
+    const configured = nextConfig.auth?.profiles?.[profile.profileId];
     nextConfig = applyAuthProfileConfig(nextConfig, {
       profileId: profile.profileId,
       provider: profile.credential.provider,
-      mode: profile.credential.type,
+      mode:
+        profile.credential.type === "token" &&
+        configured?.provider === profile.credential.provider &&
+        configured.mode === "oauth"
+          ? "oauth"
+          : profile.credential.type,
       ...("email" in profile.credential && profile.credential.email
         ? { email: profile.credential.email }
         : {}),
@@ -225,8 +232,28 @@ async function prepareProviderPluginAuthMethod(
       return;
     }
     await params.beforePersistentEffect?.();
+    const incomingProfiles = new Map(
+      profiles.map(({ profileId, credential }) => [profileId, credential]),
+    );
     await persistProviderAuthProfileBatch({
       profiles,
+      beforeWrite: () => {
+        params.signal?.throwIfAborted();
+        params.assertCurrent?.();
+      },
+      validateCurrentCredential: (profileId, current) => {
+        const incoming = incomingProfiles.get(profileId);
+        if (
+          current &&
+          incoming &&
+          !isDeepStrictEqual(current, store.profiles[profileId]) &&
+          (current.provider !== incoming.provider ||
+            (current.type !== incoming.type &&
+              !(current.type === "oauth" && incoming.type === "token")))
+        ) {
+          throw new Error(`Auth profile "${profileId}" changed during sign-in; retry.`);
+        }
+      },
       config: nextConfig,
       agentDir,
       ...(params.env ? { env: params.env } : {}),

@@ -193,6 +193,7 @@ export async function persistAuthProfileBatch(
       let storeWasAbsent = false;
       let preparedOwner: PreparedAuthProfileStoreOwner | undefined;
       await runAuthProfileStoreUpdate({
+        assertCurrent: params.beforeWrite,
         agentDir: params.agentDir,
         envOnly: false,
         options: {
@@ -201,11 +202,13 @@ export async function persistAuthProfileBatch(
           env: params.stateDir ? undefined : getScopedAuthProfileEnv(),
         },
         update(prepared) {
-          params.beforeWrite?.();
           storeWasAbsent = !prepared.storePresent;
           const next = prepared.store;
           for (const [profileId, entry] of profiles) {
-            params.validateCurrentCredential?.(profileId, next.profiles[profileId]);
+            params.validateCurrentCredential?.(
+              profileId,
+              next.profiles[profileId] ?? prepared.mainStore?.profiles[profileId],
+            );
             if (!entry.replaceExisting && Object.hasOwn(next.profiles, profileId)) {
               continue;
             }
