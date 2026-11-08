@@ -18,11 +18,9 @@ import {
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
+import { acknowledgeLocalWorkspaceConflict } from "./local-workspace-conflict-acknowledgement.js";
 import { synchronizeResolvedCanonicalPaths } from "./local-workspace-conflict-resolution.js";
-import {
-  acknowledgeLocalWorkspaceConflict,
-  withLocalWorkspaceProjection,
-} from "./local-workspace-projection.js";
+import { withLocalWorkspaceProjection } from "./local-workspace-projection.js";
 import { withLocalWorkspaceStore } from "./local-workspace-store.js";
 import { readLocalWorkspaceProjection } from "./local-workspace-store.test-support.js";
 import type { LocalWorkspaceOwner } from "./local-workspace-types.js";
