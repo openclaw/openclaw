@@ -2,8 +2,21 @@
 import { describe, expect, it } from "vitest";
 import { createIrcIngressSubject } from "./ingress-identity.js";
 import { normalizeIrcAllowEntry, resolveIrcOutboundSessionRoute } from "./normalize.js";
+import { isChannelTarget, normalizeIrcMessagingTarget } from "./normalize.js";
 
 describe("irc normalize", () => {
+  it("treats RFC 2812 + and ! channel prefixes as group conversations", () => {
+    for (const target of ["+modeless", "!ABCDEroom"]) {
+      expect(isChannelTarget(target)).toBe(true);
+      expect(normalizeIrcMessagingTarget(`channel:${target}`)).toBe(target);
+      expect(resolveIrcOutboundSessionRoute({ cfg: {}, agentId: "main", target })).toMatchObject({
+        peer: { kind: "group", id: target },
+        chatType: "group",
+        to: target,
+      });
+    }
+  });
+
   it("builds canonical channel and direct session routes", () => {
     const cfg = { session: { dmScope: "per-channel-peer" as const } };
     expect(

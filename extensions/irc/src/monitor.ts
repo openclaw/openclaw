@@ -39,7 +39,7 @@ import {
   type IrcIngressLifecycle,
   type IrcIngressMonitor,
 } from "./irc-ingress.js";
-import { normalizeIrcAllowEntry } from "./normalize.js";
+import { isChannelTarget, normalizeIrcAllowEntry } from "./normalize.js";
 import { sanitizeIrcAssistantText } from "./outbound-base.js";
 import { resolveIrcGroupMatch, resolveIrcGroupRequireMention } from "./policy.js";
 import { createIrcReconnectBackoff } from "./reconnect-backoff.js";
@@ -244,10 +244,7 @@ export async function monitorIrcProvider(
         (hasEntries(account.config.groupAllowFrom) || hasEntries(routeGroupAllowFrom))
           ? "allowlist"
           : groupPolicy;
-      const channelTarget =
-        message.target.startsWith("#") || message.target.startsWith("&")
-          ? message.target
-          : `#${message.target}`;
+      const channelTarget = isChannelTarget(message.target) ? message.target : `#${message.target}`;
       const peerId = message.isGroup ? channelTarget : message.senderNick;
       const route = resolveAgentRoute({
         cfg,

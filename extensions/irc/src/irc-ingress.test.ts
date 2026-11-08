@@ -130,6 +130,31 @@ describe("IRC durable ingress", () => {
     });
   });
 
+  it("classifies an RFC 2812 +modeless channel PRIVMSG as a group conversation", async () => {
+    await withQueue(async (queue, start) => {
+      const dispatch = vi.fn<IrcIngressDispatch>(async (_message, lifecycle) => {
+        await lifecycle.onAdopted();
+      });
+      const ingress = start(queue, dispatch);
+      try {
+        await ingress
+          .openConnection("connection-modeless")
+          .accept(":alice!ident@example.org PRIVMSG +modeless :hello", "bot");
+        await ingress.waitForIdle();
+        expect(dispatch).toHaveBeenCalledTimes(1);
+        expect(dispatch.mock.calls[0]?.[0]).toMatchObject({
+          target: "+modeless",
+          rawTarget: "+modeless",
+          senderNick: "alice",
+          text: "hello",
+          isGroup: true,
+        });
+      } finally {
+        await ingress.stop();
+      }
+    });
+  });
+
   it("keeps a completion tombstone for the same local event id", async () => {
     await withQueue(async (queue) => {
       const dispatch = vi.fn<IrcIngressDispatch>(async (_message, lifecycle) => {

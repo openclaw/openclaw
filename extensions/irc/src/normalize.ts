@@ -5,8 +5,11 @@ import { hasIrcControlChars } from "./control-chars.js";
 
 const IRC_TARGET_PATTERN = /^[^\s:]+$/u;
 
+// RFC 2812 §2.3.1 channel names begin with &, #, +, or !.
+const IRC_CHANNEL_PREFIXES = ["#", "&", "+", "!"] as const;
+
 export function isChannelTarget(target: string): boolean {
-  return target.startsWith("#") || target.startsWith("&");
+  return IRC_CHANNEL_PREFIXES.some((prefix) => target.startsWith(prefix));
 }
 
 export function normalizeIrcMessagingTarget(raw: string): string | undefined {
@@ -21,7 +24,7 @@ export function normalizeIrcMessagingTarget(raw: string): string | undefined {
   }
   if (normalizeLowercaseStringOrEmpty(target).startsWith("channel:")) {
     target = target.slice("channel:".length).trim();
-    if (!target.startsWith("#") && !target.startsWith("&")) {
+    if (!isChannelTarget(target)) {
       target = `#${target}`;
     }
   }

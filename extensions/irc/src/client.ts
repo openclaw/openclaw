@@ -6,6 +6,7 @@ import { captureEffectAuthority } from "openclaw/plugin-sdk/fetch-runtime";
 import { withTimeout } from "openclaw/plugin-sdk/security-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { findGraphemeChunkEnd } from "openclaw/plugin-sdk/text-grapheme";
+import { isChannelTarget } from "./normalize.js";
 import {
   parseIrcLine,
   parseIrcPrefix,
@@ -209,7 +210,7 @@ export async function connectIrcClient(options: IrcClientOptions) {
 
   const join = (channel: string) => {
     const target = sanitizeIrcTarget(channel);
-    if (!target.startsWith("#") && !target.startsWith("&")) {
+    if (!isChannelTarget(target)) {
       throw new Error(`IRC JOIN target must be a channel: ${channel}`);
     }
     sendRaw(`JOIN ${target}`);
