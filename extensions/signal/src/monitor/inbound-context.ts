@@ -10,6 +10,7 @@ import {
   resolveSignalSender,
 } from "../identity.js";
 import type { SignalDataMessage } from "./event-handler.types.js";
+import { renderSignalMentions } from "./mentions.js";
 
 export function resolveSignalQuoteContext(params: {
   cfg: Parameters<typeof resolveChannelContextVisibilityMode>[0]["cfg"];
@@ -23,7 +24,10 @@ export function resolveSignalQuoteContext(params: {
     channel: "signal",
     accountId: params.accountId,
   });
-  const quoteText = normalizeOptionalString(params.dataMessage?.quote?.text) ?? "";
+  const quoteText = renderSignalMentions(
+    normalizeOptionalString(params.dataMessage?.quote?.text) ?? "",
+    params.dataMessage?.quote?.mentions,
+  );
   const quoteSender = resolveSignalSender({
     sourceNumber: params.dataMessage?.quote?.author ?? null,
     sourceUuid: params.dataMessage?.quote?.authorUuid ?? null,
