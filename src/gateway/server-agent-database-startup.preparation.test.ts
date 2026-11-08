@@ -28,6 +28,8 @@ const mocks = vi.hoisted(() => ({
   opened: vi.fn(),
   refreshSecrets: vi.fn(),
   refreshModels: vi.fn(),
+  retireModels: vi.fn(),
+  clearAuth: vi.fn(),
   replacement: vi.fn(),
   modelSnapshot: vi.fn(),
   snapshot: vi.fn(),
@@ -94,6 +96,12 @@ vi.mock("../agents/prepared-model-runtime.js", () => ({
   refreshPreparedModelRuntimeSnapshots: mocks.refreshModels,
   getPreparedModelRuntimeSnapshot: mocks.modelSnapshot,
   getPendingPreparedModelRuntimeReplacement: mocks.replacement,
+  retirePreparedModelRuntimeAgent: mocks.retireModels,
+}));
+// mock-isolation: This scheduling suite observes withdrawal without opening auth storage.
+vi.mock("../agents/auth-profiles/runtime-snapshots.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../agents/auth-profiles/runtime-snapshots.js")>()),
+  clearRuntimeAuthProfileStoreSnapshotAtDatabasePath: mocks.clearAuth,
 }));
 // mock-isolation: Configured model inputs are not the behavior under test.
 vi.mock("../agents/prepared-model-runtime.configured.js", () => ({
@@ -156,6 +164,7 @@ function createFleet(
   });
   mocks.journal.mockResolvedValue("absent");
   mocks.refreshModels.mockResolvedValue(undefined);
+  mocks.retireModels.mockResolvedValue(undefined);
   mocks.modelSnapshot.mockReturnValue({});
   mocks.migrate.mockImplementation(async ({ assertCurrent }) => assertCurrent());
   mocks.revision.mockImplementation(() => revision);

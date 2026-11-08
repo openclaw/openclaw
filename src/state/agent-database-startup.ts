@@ -358,6 +358,7 @@ class AgentDatabaseStartupAdmission {
         const preparation: {
           maintenance?: () => Promise<void>;
           recoverInputs?: () => Promise<void>;
+          withdraw?: () => void;
         } = {};
         let revokeReadAdmission: (() => void) | undefined;
         const publicationComplete = createDeferredCore();
@@ -469,7 +470,7 @@ class AgentDatabaseStartupAdmission {
                     this.publishingAgentId = agentId;
                     for (let attempt = 1; ; attempt++) {
                       try {
-                        await activation.publishAgent(input);
+                        preparation.withdraw = (await activation.publishAgent(input)) || undefined;
                         break;
                       } catch (error) {
                         const superseded =
@@ -616,6 +617,9 @@ class AgentDatabaseStartupAdmission {
           if (!this.stopped) {
             const reason = formatErrorMessage(error);
             failPendingAgentDatabase(refusal, error, { env });
+            if (this.pending.get(agentId) === recovery) {
+              preparation.withdraw?.();
+            }
             log.warn("agent database remains degraded", {
               agentId,
               paths,

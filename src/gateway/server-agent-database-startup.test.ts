@@ -6,7 +6,10 @@ import { afterEach, expect, it, vi } from "vitest";
 import { closeGatewayTestWebSocket } from "../../test/helpers/gateway-websocket.js";
 import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
-import { saveAuthProfileStore } from "../agents/auth-profiles.js";
+import {
+  getPreparedRuntimeAuthProfileStoreSnapshot,
+  saveAuthProfileStore,
+} from "../agents/auth-profiles.js";
 import { modelDefinition } from "../agents/model-auth.fixtures.test-support.js";
 import { listConfiguredOwnerInputs } from "../agents/prepared-model-runtime.configured.js";
 import {
@@ -38,8 +41,11 @@ import * as logging from "../logging/subsystem.js";
 import { runExec } from "../process/exec.js";
 import * as spawnBroker from "../process/spawn-broker/context.js";
 import {
+  activateSecretsRuntimeSnapshotIfCurrent,
   activateSecretsRuntimeSnapshotWithSource,
   getActiveSecretsRuntimeSnapshot,
+  getActiveSecretsRuntimeSnapshotRevision,
+  prepareSecretsRuntimeSnapshot,
 } from "../secrets/runtime.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -47,7 +53,6 @@ import {
   AgentDatabaseAdmissionError,
   listAgentDatabaseAdmissionRefusals,
   readAgentDatabaseAdmissionRefusal,
-  readAgentDatabaseReadAdmissionRefusal,
 } from "../state/agent-database-admission.js";
 import { withAgentDatabaseStartupAdmission } from "../state/agent-database-startup.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-readonly.js";
@@ -62,9 +67,13 @@ import { captureOpenClawAgentDatabaseExecution } from "../state/openclaw-agent-e
 import { assertOpenClawDatabasesReady } from "../state/openclaw-database-preflight.js";
 import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import { acquireTestPortBlock, type TestPortClaim } from "../test-utils/port-claims.js";
+import {
+  holdInspectedAgentHandoff,
+  prepareAgentHandoffStores,
+} from "./server-agent-database-startup.handoff.test-support.js";
+import "./server-methods/chat-send-external-entry.js";
 // Keep cold module evaluation outside the lifecycle and RPC behavior deadlines.
 import { loadGatewayTestConfig } from "./test-helpers.config-runtime.js";
-import "./server-methods/chat-send-external-entry.js";
 import { gatewayReplyMock, testState } from "./test-helpers.runtime-state.js";
 import {
   connectWebchatClient,
@@ -686,9 +695,14 @@ it.for([
   },
 );
 
-it.for(["carlos", "hal"] as const)(
-  "keeps both inspected agents usable when %s publishes first",
-  async (firstAgent, { signal }) => {
+it.for([
+  ["carlos", "success"],
+  ["hal", "success"],
+  ["carlos", "reject"],
+  ["hal", "reject"],
+] as const)(
+  "keeps sibling usable when inspected agent %s publishes first (cleanup %s)",
+  async ([firstAgent, cleanup], { signal }) => {
     testState.agentsConfig = {
       ownership: "explicit",
       entries: { main: {}, carlos: {}, hal: {} },
@@ -698,98 +712,80 @@ it.for(["carlos", "hal"] as const)(
     const env = { ...process.env };
     const cfg = loadGatewayTestConfig();
     setRuntimeConfigSnapshot(cfg);
-    saveAuthProfileStore({
-      version: 1,
-      profiles: {
-        "anthropic:fleet": {
-          type: "api_key",
-          provider: "anthropic",
-          keyRef: { source: "env", provider: "default", id: "OPENCLAW_TEST_FLEET_SECRET" },
-        },
-      },
-    });
-    const paths = ["main", "carlos", "hal"].map(
-      (agentId) => openOpenClawAgentDatabase({ agentId, env }).path,
-    );
-    await closeDatabases();
-    for (const pathname of paths) {
-      retireSqliteDatabaseAdmissionForPath(pathname);
-    }
-    for (const pathname of paths.slice(1)) {
-      revokeSqliteDatabaseAdmissionsForPath(pathname);
-      const database = new DatabaseSync(pathname);
-      database.exec("PRAGMA journal_mode=DELETE; DROP INDEX idx_agent_session_nodes_active");
-      database.close();
-    }
-    let preparation: Promise<unknown> | undefined;
-    const firstPublished = createDeferredCore();
-    const firstReleasing = createDeferredCore();
-    const secondMigrated = createDeferredCore();
-    const secondPublished = createDeferredCore();
-    const releaseFirst = createDeferredCore();
-    let firstVisibleToSibling: boolean | undefined;
-    const started = await withAgentDatabaseStartupAdmission(async (admission) => {
-      const activate = admission.activate.bind(admission);
-      vi.spyOn(admission, "activate").mockImplementation((activation) =>
-        activate({
-          ...activation,
-          // Minimal Gateways omit the normal post-listener configured model publication.
-          preparationReady: activation.preparationReady.then(() =>
-            refreshPreparedModelRuntimeSnapshots(getRuntimeConfig(), {
-              gatewayLifecycle: true,
-              catalogMode: "static",
-              allowGatewaySubagentBinding: true,
-            }),
-          ),
-          openAgent: async (input) => {
-            if (input.agentId !== firstAgent) {
-              await withinTest(firstPublished.promise, signal);
-            }
-            const opened = await activation.openAgent(input);
-            return {
-              [Symbol.asyncDispose]: async () => {
-                await opened?.[Symbol.asyncDispose]();
-                if (input.agentId === firstAgent) {
-                  firstReleasing.resolve();
-                  await withinTest(releaseFirst.promise, signal);
-                }
-              },
-            };
-          },
-          migrateAgent: async (input) => {
-            const migrated = await activation.migrateAgent(input);
-            if (input.agentId !== firstAgent) {
-              secondMigrated.resolve();
-            }
-            return migrated;
-          },
-          publishAgent: async (input) => {
-            if (input.agentId !== firstAgent) {
-              firstVisibleToSibling = !readAgentDatabaseReadAdmissionRefusal(firstAgent, { env });
-            }
-            await activation.publishAgent(input);
-            if (input.agentId === firstAgent) {
-              firstPublished.resolve();
-            } else {
-              secondPublished.resolve();
-            }
-          },
-        }),
-      );
+    await prepareAgentHandoffStores(["main", "carlos", "hal"], env);
+    const {
+      started: server,
+      preparation: prepared,
+      siblingPreparation: siblingReady,
+      firstPublished,
+      firstReleasing,
+      secondPublished,
+      releaseFirst,
+    } = await withAgentDatabaseStartupAdmission(async (admission) => {
+      const handoff = holdInspectedAgentHandoff(admission, { firstAgent, cleanup, env, signal });
       await assertOpenClawDatabasesReady({ env, operation: "gateway-startup", config: cfg });
-      preparation = admission.pendingPreparation;
+      const preparation = admission.pendingPreparation;
+      const siblingPreparation = admission.waitForAgentPreparation(
+        firstAgent === "carlos" ? "hal" : "carlos",
+        { env },
+      );
       const portClaim = await acquireTestPortBlock({ offsets: [0, 1, 2, 3, 4] });
-      return startTestGatewayServer(portClaim, { bind: "loopback", auth: { mode: "none" } });
+      const started = await startTestGatewayServer(portClaim, {
+        bind: "loopback",
+        auth: { mode: "none" },
+      });
+      return { ...handoff, started, preparation, siblingPreparation };
     });
     try {
-      await withinTest(Promise.all([firstReleasing.promise, secondMigrated.promise]), signal);
-      await withinTest(secondPublished.promise, signal);
-      expectPreparedModel(firstAgent);
+      await withinTest(firstReleasing.promise, signal);
+      await withinTest(siblingReady!, signal);
+      expect(await withinTest(secondPublished.promise, signal)).toBe(true);
+      const inputs = listConfiguredOwnerInputs(getRuntimeConfig(), undefined, true);
+      const firstInput = inputs.find((input) => input.agentId === firstAgent)!;
+      const siblingInput = inputs.find(
+        (input) => input.agentId !== firstAgent && input.agentId !== "main",
+      )!;
+      const siblingModel = getPreparedModelRuntimeSnapshot(siblingInput);
+      expect(getPreparedModelRuntimeSnapshot(firstInput)).toBeDefined();
+      expect(
+        getPreparedRuntimeAuthProfileStoreSnapshot(
+          firstInput.agentDir,
+          firstInput.inheritedAuthDir,
+        ),
+      ).toBeDefined();
+      const staleSecrets =
+        cleanup === "reject"
+          ? await prepareSecretsRuntimeSnapshot({
+              config: getActiveSecretsRuntimeSnapshot()!.sourceConfig,
+              env,
+              includeConfigRefs: false,
+            })
+          : undefined;
+      const secretsRevision = getActiveSecretsRuntimeSnapshotRevision();
       releaseFirst.resolve();
-      await withinTest(preparation!, signal);
-      expect(firstVisibleToSibling).toBe(true);
+      await withinTest(prepared!, signal);
       const secrets = getActiveSecretsRuntimeSnapshot();
-      for (const agentId of ["carlos", "hal"]) {
+      if (cleanup === "reject") {
+        expect(readAgentDatabaseAdmissionRefusal(firstAgent, { env })?.code).toBe(
+          "agent-database-inspection-failed",
+        );
+        // Keep the input captured while readable: re-enumeration would hide a retained owner.
+        expect(getPreparedModelRuntimeSnapshot(firstInput)).toBeUndefined();
+        expect(
+          getPreparedRuntimeAuthProfileStoreSnapshot(
+            firstInput.agentDir,
+            firstInput.inheritedAuthDir,
+          ),
+        ).toBeUndefined();
+        expect(secrets?.authStores.some((store) => store.agentDir === firstInput.agentDir)).toBe(
+          false,
+        );
+        expect(activateSecretsRuntimeSnapshotIfCurrent(staleSecrets!, secretsRevision)).toBe(false);
+        expect(getPreparedModelRuntimeSnapshot(siblingInput)).toBe(siblingModel);
+      }
+      for (const agentId of ["carlos", "hal"].filter(
+        (id) => cleanup !== "reject" || id !== firstAgent,
+      )) {
         expect(readAgentDatabaseAdmissionRefusal(agentId, { env })).toBeUndefined();
         expectPreparedModel(agentId);
         const database = openOpenClawAgentDatabase({ agentId, env });
@@ -804,7 +800,7 @@ it.for(["carlos", "hal"] as const)(
     } finally {
       firstPublished.resolve();
       releaseFirst.resolve();
-      await started.close();
+      await server.close();
     }
   },
 );
