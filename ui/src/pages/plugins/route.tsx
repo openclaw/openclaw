@@ -9,7 +9,6 @@ import type { SolidRouteProps } from "../../app-route-types.tsx";
 import type { ApplicationContext } from "../../app/context.ts";
 import {
   canonicalPluginsRouteLocation,
-  pluginSettingsNeedsSchema,
   pluginsRouteLocation,
   type PluginsRouteData,
 } from "./route-data.ts";
@@ -30,14 +29,7 @@ function definePluginsPage(routeId: "plugins" | "plugin-settings", surface: Plug
         return redirect(canonical);
       }
       if (surface === "settings") {
-        const configLoad = context.runtimeConfig.ensureLoaded();
-        void configLoad
-          .then(() =>
-            pluginSettingsNeedsSchema(surface, location, context.basePath)
-              ? context.runtimeConfig.ensureSchemaLoaded()
-              : undefined,
-          )
-          .catch(() => undefined);
+        void context.runtimeConfig.ensureLoaded().catch(() => undefined);
       }
       return { location } satisfies PluginsRouteData;
     },

@@ -810,19 +810,29 @@ it.each([
   ["/settings/plugins?tab=advanced", true],
   ["/settings/plugins/workboard?view=settings", true],
   ["/settings/plugins/workboard#configuration", true],
-] as const)("preloads schema only for configuration surfaces at %s", async (url, schemaNeeded) => {
-  const { harness } = pageGateway({});
-  const context = createContext(harness.gateway);
-  const loader = pages[1].loader;
-  if (!loader) {
-    throw new Error("Plugin Settings route has no loader");
-  }
+] as const)(
+  "loads schema after adopting configuration surfaces at %s",
+  async (url, schemaNeeded) => {
+    const { harness } = pageGateway({
+      "plugins.list": () => createResult(),
+      "plugins.inspect": () => createInspectResult(),
+    });
+    const context = createContext(harness.gateway);
+    const loader = pages[1].loader;
+    if (!loader) {
+      throw new Error("Plugin Settings route has no loader");
+    }
 
-  await loader(context, createRouteLoaderOptions(createPluginsRouteLocation(url)));
-
-  expect(context.runtimeConfig.ensureLoaded).toHaveBeenCalledOnce();
-  expect(context.runtimeConfig.ensureSchemaLoaded).toHaveBeenCalledTimes(schemaNeeded ? 1 : 0);
-});
+    const route = await loader(context, createRouteLoaderOptions(createPluginsRouteLocation(url)));
+    if ("type" in route) {
+      throw new Error("Expected the Plugin Settings route to load");
+    }
+    expect(context.runtimeConfig.ensureLoaded).toHaveBeenCalledOnce();
+    expect(context.runtimeConfig.ensureSchemaLoaded).not.toHaveBeenCalled();
+    await mountPage(context, route);
+    expect(context.runtimeConfig.ensureSchemaLoaded).toHaveBeenCalledTimes(schemaNeeded ? 1 : 0);
+  },
+);
 
 async function mountSettings(options: {
   connected: boolean;

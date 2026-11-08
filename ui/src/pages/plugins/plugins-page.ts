@@ -30,11 +30,7 @@ import {
   pluginMutationBlockedReason,
   type PluginMutationAction,
 } from "./plugins-page-model.ts";
-import {
-  pluginIdForRoute,
-  pluginSettingsNeedsSchema,
-  type PluginsRouteData,
-} from "./route-data.ts";
+import { pluginIdForRoute, type PluginsRouteData } from "./route-data.ts";
 import type { PluginSettingsEditorProps } from "./settings-editor.tsx";
 import type { PluginSettingsTab } from "./settings-view.tsx";
 import { createPluginPreview } from "./skill-preview.tsx";
@@ -540,8 +536,15 @@ export function createPluginsPage(options: {
     ) {
       void context.runtimeConfig.ensureLoaded();
     }
-    if (routeData && pluginSettingsNeedsSchema(surface, routeData.location, context.basePath)) {
-      void context.runtimeConfig.ensureSchemaLoaded();
+    if (routeData) {
+      const { search, hash } = routeData.location;
+      const params = new URLSearchParams(search);
+      const needsSchema = activeRoutePluginId()
+        ? params.get("view") === "settings" || hash === "#configuration"
+        : surface === "settings" && params.get("tab") === "advanced";
+      if (needsSchema) {
+        void context.runtimeConfig.ensureSchemaLoaded();
+      }
     }
     if (refresh || (!loading() && !state.result && !state.error)) {
       void refreshCatalog();

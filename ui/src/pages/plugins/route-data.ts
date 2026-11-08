@@ -57,15 +57,3 @@ export function pluginIdForRoute(
     ? pluginSettingsIdFromPath(pathname, basePath)
     : pluginCatalogIdFromPath(pathname, basePath);
 }
-
-export function pluginSettingsNeedsSchema(
-  surface: "discovery" | "settings",
-  location: RouteLocation,
-  basePath: string,
-): boolean {
-  const search = new URLSearchParams(location.search);
-  if (pluginIdForRoute(surface, location.pathname, basePath)) {
-    return search.get("view") === "settings" || location.hash === "#configuration";
-  }
-  return surface === "settings" && search.get("tab") === "advanced";
-}
