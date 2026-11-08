@@ -478,7 +478,7 @@ final class NodeAppModel {
     @ObservationIgnored private var operatorTalkConnectionGeneration: UInt64 = 0
     @ObservationIgnored private var operatorTalkHydrationGeneration: UInt64?
     @ObservationIgnored private var credentialHandoffFailureGeneration: UInt64?
-    @ObservationIgnored private(set) var gatewayConnectGeneration: UInt64 = 0
+    private(set) var gatewayConnectGeneration: UInt64 = 0
     /// Socket, foreground and wake reconnects keep their attempt's generation, so they must not
     /// override an "Auto-connect on launch" choice the user made after the attempt connected.
     @ObservationIgnored private var autoConnectEnabledGeneration: UInt64?
