@@ -145,6 +145,7 @@ import {
 import { createEngineRemountScenarios } from "./lib/control-ui-remount-scenarios.ts";
 import { installControlUiResourceCounts } from "./lib/control-ui-resource-counts.ts";
 import { launchTalkObservationBrowser } from "./lib/control-ui-talk-fixture.ts";
+import { startTranscriptLayoutAudit } from "./lib/control-ui-transcript-layout-audit.ts";
 import {
   createWorkboardResourceFixture,
   prepareWorkboardResourceSource,
@@ -178,6 +179,7 @@ const { values } = parseArgs({
     "native-audit": { type: "boolean", default: false },
     allocations: { type: "boolean", default: false },
     "mutation-audit": { type: "boolean", default: false },
+    "transcript-layout-audit": { type: "boolean", default: false },
     "live-region-audit": { type: "boolean", default: false },
     "remount-audit": { type: "boolean", default: false },
     "route-transitions": { type: "boolean", default: false },
@@ -295,6 +297,17 @@ if (values["control-bundle-dir"]?.length && !values["compare-bundle-dir"]) {
 }
 if (values.trace && values["cpu-only"]) {
   throw new Error("Choose --trace or --cpu-only; use separate untraced timing runs");
+}
+if (
+  values["transcript-layout-audit"] &&
+  (values.trace ||
+    values["cpu-only"] ||
+    values["cpu-profile"] ||
+    values["native-audit"] ||
+    values.allocations ||
+    values["mutation-audit"])
+) {
+  throw new Error("--transcript-layout-audit requires a separate diagnostic run");
 }
 if (
   (values["mutation-audit"] || values["remount-audit"]) &&
@@ -752,6 +765,7 @@ try {
     idleDurationMs,
     allocations: values.allocations,
     mutationAudit: values["mutation-audit"],
+    transcriptLayoutAudit: values["transcript-layout-audit"],
     liveRegionAudit: values["live-region-audit"],
     remountAudit: values["remount-audit"],
     routeTransitions: values["route-transitions"],
@@ -761,23 +775,25 @@ try {
       : undefined,
     cpuThrottle,
     memorySoakRounds,
-    collection: values["live-region-audit"]
-      ? "Live-region MutationObserver diagnostic; DOM update candidates, not screen-reader speech or timing proof"
-      : values.allocations
-        ? "V8 sampled allocations including major/minor-GC collected objects; diagnostic overhead, not timing proof"
-        : values["remount-audit"]
-          ? "DOM attachment census with synchronous removal snapshots; diagnostic overhead, not timing proof. DOM detach is not Solid disposal."
-          : values["mutation-audit"]
-            ? "MutationObserver over document/open shadow roots and formatter wrappers; diagnostic overhead, not timing proof. Pixel differences include caret/animation changes. Child-content identity is sampled at observer delivery."
-            : values["native-audit"]
-              ? "Chromium native timeline, V8 samples and LayerTree; diagnostic instrumentation, not timing proof"
-              : values["cpu-profile"]
-                ? "V8 sampled self-time census; diagnostic attribution, not timing proof"
-                : values.trace
-                  ? "Playwright tracing and engine Inspector/Profiler; overhead included"
-                  : values["cpu-only"]
-                    ? "WebKit smoothed utilization diagnostic (not action CPU) and Chromium CDP thread CPU; no timeline or script profiler"
-                    : "Untraced wall and browser-local application time; Chromium CDP counters only, unavailable WebKit/Firefox counters are null",
+    collection: values["transcript-layout-audit"]
+      ? "Transcript frame geometry, mutation ancestry and Chromium screencast; diagnostic overhead, not timing proof"
+      : values["live-region-audit"]
+        ? "Live-region MutationObserver diagnostic; DOM update candidates, not screen-reader speech or timing proof"
+        : values.allocations
+          ? "V8 sampled allocations including major/minor-GC collected objects; diagnostic overhead, not timing proof"
+          : values["remount-audit"]
+            ? "DOM attachment census with synchronous removal snapshots; diagnostic overhead, not timing proof. DOM detach is not Solid disposal."
+            : values["mutation-audit"]
+              ? "MutationObserver over document/open shadow roots and formatter wrappers; diagnostic overhead, not timing proof. Pixel differences include caret/animation changes. Child-content identity is sampled at observer delivery."
+              : values["native-audit"]
+                ? "Chromium native timeline, V8 samples and LayerTree; diagnostic instrumentation, not timing proof"
+                : values["cpu-profile"]
+                  ? "V8 sampled self-time census; diagnostic attribution, not timing proof"
+                  : values.trace
+                    ? "Playwright tracing and engine Inspector/Profiler; overhead included"
+                    : values["cpu-only"]
+                      ? "WebKit smoothed utilization diagnostic (not action CPU) and Chromium CDP thread CPU; no timeline or script profiler"
+                      : "Untraced wall and browser-local application time; Chromium CDP counters only, unavailable WebKit/Firefox counters are null",
     order:
       "Serial network profiles alternate each pair; engine/configuration/bundle positions rotate and reverse across pairs; fresh browser context per observation",
     acceptance:
@@ -973,6 +989,9 @@ try {
             let measurement: Awaited<ReturnType<typeof startEngineMeasurement>> | undefined;
             let cpuProfile: ColdLoadCpuProfile | undefined;
             let layerAudit: Awaited<ReturnType<typeof createControlUiLayerAudit>> | undefined;
+            let transcriptLayoutAudit:
+              | Awaited<ReturnType<typeof startTranscriptLayoutAudit>>
+              | undefined;
             let memory: Awaited<ReturnType<typeof createEngineMemoryCollector>> | undefined;
             let throttle: Awaited<ReturnType<typeof context.newCDPSession>> | undefined;
             let accessibility:
@@ -1360,6 +1379,14 @@ try {
                   Reflect.set(window, "openclawMemoryDocumentIdentity", identity);
                 }, artifactPrefix);
               }
+              if (values["transcript-layout-audit"]) {
+                transcriptLayoutAudit = await startTranscriptLayoutAudit(
+                  page,
+                  artifactDir,
+                  artifactPrefix,
+                  engine,
+                );
+              }
               if (scenario.id.startsWith("gesture-")) {
                 await startControlUiGestureProbe(page, scenario.id);
                 gestureRecording = true;
@@ -1429,6 +1456,11 @@ try {
               observation.scenarioMs = performance.now() - start;
               if (!isEngineIdleScenario(scenario) && scenario.visibility !== "hidden") {
                 observation.settleFrameIntervalMs = await frames(page);
+              }
+              if (transcriptLayoutAudit) {
+                const audit = transcriptLayoutAudit;
+                transcriptLayoutAudit = undefined;
+                await audit.finish();
               }
               observation.wallMs = performance.now() - start;
               observation.settleWaitMs = observation.wallMs - observation.scenarioMs;
@@ -1651,6 +1683,7 @@ try {
               phase = "capture";
               observation.errorEvents = errors;
               try {
+                await transcriptLayoutAudit?.finish();
                 if (gestureRecording) {
                   observation.gesture = await stopControlUiGestureProbe(page);
                 }
