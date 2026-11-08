@@ -518,7 +518,7 @@ async function fetchRemoteDefault(
   }
   return {
     branch,
-    commit: verified.stdout.trim(),
+    commit: requireGitCommandOutput("git rev-parse remote default", verified).trim(),
     gitOperand: remoteRef,
     recordRef: `origin/${branch}`,
     fetchSucceeded,
