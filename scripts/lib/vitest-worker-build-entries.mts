@@ -83,10 +83,7 @@ import { pluginProcessRuntimeEntrypoints } from "../../src/plugins/process-runti
 import { pluginRetentionEntrypoints } from "../../src/plugins/retention-runtime.test-support.ts";
 import { pluginRuntimeRetentionEntrypoint } from "../../src/plugins/runtime-retention-entrypoint.test-support.ts";
 import { processProbeEntrypoints } from "../../src/process/process-probes-runtime.test-support.ts";
-import {
-  execOutputRetentionEntrypoint,
-  serviceChildCleanupRetentionEntrypoint,
-} from "../../src/process/retention-runtime.test-support.ts";
+import { execOutputRetentionEntrypoint } from "../../src/process/retention-runtime.test-support.ts";
 import { proxyCaptureNativeProcessEntrypoints } from "../../src/proxy-capture/native-process-runtime.test-support.ts";
 import { workerBundleArchiveEntrypoint } from "../../src/shared/worker-bundle-archive-runtime.test-support.ts";
 import { persistenceRuntimeEntrypoint } from "../../src/skills/library/persistence-runtime.test-support.ts";
@@ -351,7 +348,6 @@ export const vitestWorkerBuildEntries = {
     ...Object.values(pluginProcessRuntimeEntrypoints),
     ...Object.values(pluginRetentionEntrypoints),
     execOutputRetentionEntrypoint,
-    serviceChildCleanupRetentionEntrypoint,
     eventHubRetentionEntrypoint,
     eventStreamRetentionEntrypoint,
     ...Object.values(agentCoreRetentionEntrypoints),
