@@ -586,6 +586,29 @@ extension OpenClawSnapshotUITests {
         self.attachScreenshot(named: "existing-session-latest-output")
     }
 
+    func testSwitchingChatsOpensAtLatestMessage() throws {
+        try XCTSkipIf(UIDevice.current.userInterfaceIdiom != .phone, "Phone reader positioning proof only")
+        self.launchApp(
+            for: ScreenshotTarget(
+                initialTab: "chat",
+                initialDestination: "chat",
+                name: "chat-switch-latest"),
+            additionalArguments: ["--openclaw-chat-switch-fixture", "--openclaw-slow-model-catalog-fixture"])
+        let app = try XCTUnwrap(self.app)
+        let composer = app.otherElements["chat-composer-surface"]
+        XCTAssertTrue(app.staticTexts["OPENCLAW_SWITCH_A_LATEST"].waitForExistence(timeout: 15))
+
+        // The transcript paints while the held model catalog keeps the chat's load running.
+        try self.selectSidebarDestination("Launch plan")
+        let latest = app.staticTexts["OPENCLAW_SWITCH_B_LATEST"]
+        let landedAtLatest = latest.waitForExistence(timeout: 2)
+        self.attachScreenshot(named: "chat-switch-latest")
+        XCTAssertTrue(landedAtLatest, "CHAT_SWITCH_LANDED_AWAY_FROM_LATEST")
+        XCTAssertLessThanOrEqual(latest.frame.maxY, composer.frame.minY + 1)
+        let first = app.staticTexts["OPENCLAW_SWITCH_B_FIRST"]
+        XCTAssertFalse(first.exists && first.isHittable)
+    }
+
     func testTaskListLongPressOffersRefreshDismissAndClear() throws {
         self.launchApp(
             for: Self.chatScreenshotTarget,
@@ -1004,6 +1027,30 @@ extension OpenClawSnapshotUITests {
         XCTAssertTrue(delivered.waitForExistence(timeout: 30), "Shared message did not reach the app's chat")
         self.attachScreenshot(named: "share-photo-delivered")
         print("IOS_SHARE_CHECKPOINT delivered-without-companion-approval")
+    }
+
+    func testLiveGatewayWorkshopDocumentationOpensOutsideTheApp() throws {
+        // Run with an isolated Gateway and Safari as the default browser.
+        _ = try self.launchPairedLiveGatewayApp(initialTab: "chat", initialDestination: "chat")
+        let app = self.relaunchConnectedLiveGatewayApp(initialTab: "chat", initialDestination: "skillWorkshop")
+        let learnMore = app.webViews.links["Learn more"].firstMatch
+        XCTAssertTrue(learnMore.waitForExistence(timeout: 10), app.debugDescription)
+
+        let browser = XCUIApplication(bundleIdentifier: "com.apple.mobilesafari")
+        defer {
+            browser.terminate()
+            app.activate()
+        }
+        learnMore.tap()
+        XCTAssertTrue(
+            browser.wait(for: .runningForeground, timeout: 10),
+            "The documentation link must leave the authenticated Settings WebView")
+        let background = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "state != %d", XCUIApplication.State.runningForeground.rawValue),
+            object: app)
+        XCTAssertEqual(XCTWaiter.wait(for: [background], timeout: 5), .completed)
+        app.activate()
+        XCTAssertTrue(learnMore.waitForExistence(timeout: 5), "Returning preserves the Workshop page")
     }
 
     func testLiveGatewayPairChatAndRelaunch() throws {

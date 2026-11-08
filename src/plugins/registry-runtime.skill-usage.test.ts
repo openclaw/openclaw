@@ -1,6 +1,4 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import { setImmediate as nextTurn } from "node:timers/promises";
-import { queryObjects } from "node:v8";
 import { expect, it, onTestFinished } from "vitest";
 import { wrapToolWithBeforeToolCallHook } from "../agents/agent-tools.before-tool-call.js";
 import { createStubTool } from "../agents/test-helpers/agent-tool-stubs.js";
@@ -10,6 +8,7 @@ import { waitForDiagnosticEventsDrained } from "../infra/diagnostic-events.js";
 import { consumeRunSkillUsage } from "../skills/runtime/run-usage.js";
 import { registerSkillUsageTracking } from "../skills/runtime/skill-usage.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { expectCollected } from "../test-utils/retention.js";
 import { createOwnershipRecord } from "./registry-ownership.test-support.js";
 import { createRuntimeTestRegistry } from "./registry-runtime.test-helpers.js";
 import { disposePluginRegistryInstances } from "./runtime.js";
@@ -59,9 +58,7 @@ it("records skill use for the executing plugin tool call and reads it back by pa
   })();
   await waitForDiagnosticEventsDrained();
   await stopTracking();
-  await nextTurn();
-  queryObjects(WeakRef);
-  expect(reference.deref()).toBeUndefined();
+  await expectCollected(reference);
   expect(late?.(() => skills.recordUsed(use))).toBe(false);
 
   const canonicalFile = canonicalizePath(skillFile);

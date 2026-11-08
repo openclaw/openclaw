@@ -1,4 +1,6 @@
 import Foundation
+import Observation
+import Synchronization
 import Testing
 import UniformTypeIdentifiers
 @testable import OpenClawChatUI
@@ -88,6 +90,57 @@ struct ChatComposerStateTests {
         case refresh
         case pinnedQuestionRetirement
         case detached
+    }
+
+    @Test(arguments: [false, true])
+    func `closed model pickers defer catalog projection`(clean: Bool) {
+        let vm = OpenClawChatViewModel(sessionKey: "main", transport: ComposerParityTransport())
+        defer { vm.detachTransport() }
+        vm.modelChoices = (0..<2000).map { index in
+            OpenClawChatModelChoice(
+                modelID: "model-\(index)",
+                name: "Model \(index)",
+                provider: "provider-\(index % 20)",
+                contextWindow: 200_000)
+        }
+        vm.input = "A draft being typed"
+        let composer = OpenClawChatComposer(
+            viewModel: vm,
+            style: .standard,
+            showsSessionSwitcher: false,
+            userAccent: nil,
+            composerChrome: clean ? .clean : .full,
+            isComposerEnabled: true,
+            isAttachmentInputEnabled: true,
+            messagePlaceholder: nil,
+            talkControl: nil,
+            dictationControl: nil,
+            voiceNoteControl: nil)
+        let changes = Mutex(0)
+        // Exercise the production builders, including both ViewThatFits candidates.
+        // Favorites/recents are projection-only inputs, unlike catalog reads needed
+        // by the visible selected-model label and send availability.
+        let duration = ContinuousClock().measure {
+            withObservationTracking {
+                for _ in 0..<40 {
+                    if clean {
+                        withExtendedLifetime(composer.cleanTrailingControls) {}
+                    } else {
+                        withExtendedLifetime(composer.modelPicker) {}
+                    }
+                }
+            } onChange: {
+                changes.withLock { $0 += 1 }
+            }
+        }
+        print("composer-menu-construction chrome=\(clean ? "clean" : "full") rows=2000 builds=40 elapsed=\(duration)")
+
+        vm.modelPickerFavorites = ["provider-0/model-0"]
+        vm.modelPickerRecents = ["provider-1/model-1"]
+
+        #expect(
+            changes.withLock { $0 } == 0,
+            "Constructing the closed picker must not group or observe the full catalog")
     }
 
     @Test(arguments: ComposerRouteTransition.allCases)
@@ -214,7 +267,7 @@ struct ChatComposerStateTests {
         vm.input = "main draft"
 
         vm.switchSession(to: "other")
-        #expect(vm.input == "")
+        #expect(vm.input.isEmpty)
         vm.input = "other draft"
 
         vm.switchSession(to: "main")

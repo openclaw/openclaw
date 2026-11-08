@@ -40,8 +40,16 @@ vi.mock("./agent-database-admission.js", async (importOriginal) => {
     ),
     failPendingAgentDatabase: vi.fn<typeof actual.failPendingAgentDatabase>(
       (refusal, cause, options) => {
+        const previous = actual.listAgentDatabaseAdmissionRefusals(options);
         actual.failPendingAgentDatabase(refusal, cause, options);
-        admissionState.failed.push(refusal.agentId);
+        // Observe recorded verdicts; repeating an already-recorded refusal is idempotent.
+        if (
+          actual
+            .listAgentDatabaseAdmissionRefusals(options)
+            .some((entry) => !previous.includes(entry))
+        ) {
+          admissionState.failed.push(refusal.agentId);
+        }
       },
     ),
   };

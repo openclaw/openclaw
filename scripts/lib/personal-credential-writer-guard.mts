@@ -322,6 +322,8 @@ const genericCredentialCallers = new Map<string, readonly string[]>([
       key("src/state/local-onboarding-state.worker.ts", "localOnboarding.complete"),
       // installationCountStateKey is fixed to telemetry.installationCount.<endpoint hash>.
       key("src/infra/telemetry-store.worker.ts", "telemetry.claimInstallationCount"),
+      // Pairing receipts are fixed to devicePairing.openclawIdNode.<peer>, never credential keys.
+      key("src/infra/device-pairing-openclaw-id.worker.ts", "consumeOpenClawIdNodePairingInWorker"),
       // Fixed update recovery/cohort prefixes cannot address authProfiles.store.
       ...[
         "beginPluginCohortRecovery",
