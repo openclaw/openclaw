@@ -32,7 +32,7 @@ export function createSidebarSnapshot(host: {
   clearSidebarSnapshot(): void;
 }) {
   let publish: (() => void) | undefined;
-  let pending = false;
+  let pending = true;
   let saved = false;
   let lastCapture = "none";
   const store = new SessionSnapshotStore();

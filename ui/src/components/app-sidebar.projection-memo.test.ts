@@ -331,6 +331,8 @@ describe("sidebar projection memo", () => {
   });
 
   it("keeps a pending boot read across connected view recreation and retires it on detach", async () => {
+    const clones = vi.spyOn(Node.prototype, "cloneNode");
+    const imports = vi.spyOn(document, "importNode");
     const pending = createDeferred<SidebarSnapshotModel | null>();
     const read = vi
       .spyOn(SessionSnapshotStore.prototype, "readSidebar")
@@ -364,6 +366,13 @@ describe("sidebar projection memo", () => {
       ),
     );
     expect(read).toHaveBeenCalledOnce();
+    const frames = new Set(
+      [...clones.mock.results, ...imports.mock.results]
+        .filter((result) => result.type === "return")
+        .map((result) => result.value)
+        .filter((node) => node instanceof Element && node.matches("aside.sidebar")),
+    );
+    expect(frames.size).toBe(1);
     host.remove();
     await settleLitElement(sidebar);
     provider.append(host);

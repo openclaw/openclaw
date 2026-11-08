@@ -1,0 +1,2 @@
+9
+# Count real sidebar frame allocations before warm cached content in the existing lifecycle regression.
