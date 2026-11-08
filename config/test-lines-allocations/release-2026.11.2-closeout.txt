@@ -1,0 +1,2 @@
+782
+# Exact current-tree closeout regression budget: 620 lines of existing recovery, isolation, snapshot and launcher debt plus 162 new real-proof guard lines. No spare test-line headroom is granted.
