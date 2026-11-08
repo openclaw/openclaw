@@ -360,6 +360,26 @@ it("caps oversized windows and disables failed capture without failing the sampl
   expect(recorder.sample({ startedAt: 0, endedAt: 1_500 })).toBeUndefined();
 });
 
+it.each(["unsupported", "failed"])("preserves kernel evidence when CPU capture is %s", (kind) => {
+  const evidence = ' kernel=[{"at":1100,"state":"S","wchan":"futex_wait","syscall":"202"}]';
+  native.kernel.mockReturnValue({
+    take: (stall: unknown) => (stall ? evidence : ""),
+    stop: vi.fn(),
+  });
+  native.versions.node = kind === "unsupported" ? "24.22.1" : "26.6.0";
+  const { handles, sampleAt } = fixture();
+  handles[0]!.stop.mockImplementation(() => {
+    throw new Error("native capture failed");
+  });
+  const result = sampleAt(1_500);
+  expect(result).toContain(evidence);
+  expect(result).toContain("windowMs=1500");
+  expect(result).toContain("cpuProfile=unavailable");
+  expect(result).not.toContain("intervalMs=");
+  expect(Buffer.byteLength(result!)).toBeLessThanOrEqual(2_048);
+  expect(sampleAt(3_000, null)).toBeUndefined();
+});
+
 it.each(["runtime", "profiler", "worker"])(
   "leaves an unsupported or conflicting %s alone",
   (kind) => {
@@ -372,11 +392,7 @@ it.each(["runtime", "profiler", "worker"])(
   },
 );
 
-it.skipIf(
-  process.platform !== "linux" ||
-    Boolean(process.versions.bun) ||
-    Number(process.versions.node.split(".")[0]) < 26,
-)(
+it.skipIf(process.platform !== "linux" || Boolean(process.versions.bun))(
   "captures the main thread's live futex wait three times within the profile byte cap",
   async () => {
     // Vitest runs in a worker; a subprocess exercises the real main-thread recorder.
