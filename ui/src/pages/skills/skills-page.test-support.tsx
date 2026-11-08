@@ -1,6 +1,6 @@
 import type { SkillsLibraryListResult } from "@openclaw/gateway-protocol";
 import { createRouter, definePage } from "@openclaw/uirouter";
-import { createSignal, flush } from "solid-js";
+import { Show, createSignal, flush } from "solid-js";
 import { onTestFinished, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { SkillStatusReport } from "../../api/types.ts";
@@ -42,9 +42,10 @@ export function mountSkills(
     options?: Parameters<GatewayBrowserClient["request"]>[2],
   ) => Promise<unknown>,
   surface: "discovery" | "settings" = "discovery",
-  initialData: SkillsRouteFixture = {},
+  initialData: SkillsRouteFixture & { pendingRoute?: boolean } = {},
 ) {
   const {
+    pendingRoute = false,
     report = { workspaceDir: "/workspace", managedSkillsDir: "/managed", skills: [] },
     ...initialRoute
   } = initialData;
@@ -120,22 +121,28 @@ export function mountSkills(
     agents,
     selectedAgentId: "main",
     selectionIntentRevision: selection.intentRevision,
-    statusRead: null,
     error: null,
     ...initialRoute,
   };
-  const [routeData, setRouteData] = createSignal(initialRouteData, { ownedWrite: true });
+  const [routeData, setRouteData] = createSignal<SkillsRouteData | undefined>(
+    pendingRoute ? undefined : initialRouteData,
+    { ownedWrite: true },
+  );
   const [currentSurface, setCurrentSurface] = createSignal(surface);
   const mounted = mountSolid(() => (
     <ApplicationProvider value={context}>
-      <SkillsPage routeData={routeData()} surface={currentSurface()} />
+      <Show when={Boolean(routeData())}>
+        <SkillsPage routeData={routeData()} surface={currentSurface()} />
+      </Show>
     </ApplicationProvider>
   ));
   flush();
   nextReport = null;
-  const page = mounted.container.querySelector<HTMLElement>("openclaw-skills-page")!;
   return {
-    page,
+    get page() {
+      return mounted.container.querySelector<HTMLElement>("openclaw-skills-page")!;
+    },
+    container: mounted.container,
     unmount: mounted.unmount,
     connection,
     agents,

@@ -20,7 +20,7 @@ import {
 import { formatUiError, formatUiExternalText } from "../format-error.ts";
 import { registerEnglishCatalog } from "../reactive/i18n.ts";
 import type { ClawHubSearchResult } from "./clawhub-search.ts";
-import { loadSkillStatusReport, type SkillStatusReportResult } from "./status-report.ts";
+import { loadSkillStatusReport } from "./status-report.ts";
 
 registerEnglishCatalog(registerSkillsBrowserEnglish);
 
@@ -237,8 +237,8 @@ export async function loadSkills(
   state: SkillsState,
   options?: {
     clearMessages?: boolean;
+    reportRead?: Promise<SkillStatusReport | undefined>;
     operation?: Exclude<SkillOperation, null>;
-    statusRead?: Promise<SkillStatusReportResult>;
   },
 ) {
   const client = state.client;
@@ -268,16 +268,10 @@ export async function loadSkills(
   state.skillsLoading = true;
   state.skillsError = null;
   try {
-    const result = options?.statusRead
-      ? await options.statusRead
-      : { ok: true as const, report: await loadSkillStatusReport(client, agentId) };
+    const res = await (options?.reportRead ?? loadSkillStatusReport(client, agentId));
     if (!isCurrent()) {
       return;
     }
-    if (!result.ok) {
-      throw result.error;
-    }
-    const res = result.report;
     if (res && Array.isArray(res.skills)) {
       acceptSkillsReport(state, res);
     }

@@ -316,7 +316,7 @@ async function settleLocalWorkspace<T>(
   );
 }
 
-/** File readers need a fresh checkpoint, not a lease-bearing custody callback. */
+/** Writes checkpoint guest edits before comparing and updating canonical files. */
 export async function checkpointLocalWorkspacePath(params: {
   cwd: string;
   assertCurrent?: () => void;

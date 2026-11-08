@@ -40,7 +40,7 @@ function defineSkillsPage(routeId: "skills" | "skill-settings", surface: "discov
       }
       // Metadata-only snapshots preserve the transport while inventory overlaps lazy page code.
       const current = gateway.snapshot;
-      const statusRead =
+      const reportRead =
         client &&
         selectedAgentId &&
         options.shouldRun() &&
@@ -49,18 +49,17 @@ function defineSkillsPage(routeId: "skills" | "skill-settings", surface: "discov
         current.hello === gatewaySnapshot.hello &&
         hasOperatorReadAccess(current.hello?.auth ?? null) &&
         selectionOwner.intentRevision === selectionIntentRevision
-          ? loadSkillStatusReport(client, selectedAgentId).then(
-              (report) => ({ ok: true as const, report }),
-              (error: unknown) => ({ ok: false as const, error }),
-            )
-          : null;
+          ? loadSkillStatusReport(client, selectedAgentId)
+          : undefined;
+      // A preload can be abandoned before a view adopts its failure.
+      void reportRead?.catch(() => undefined);
       return {
         gateway,
         gatewaySnapshot,
         agents,
         selectedAgentId,
         selectionIntentRevision,
-        statusRead,
+        reportRead,
         error,
         clawhubRef,
       };

@@ -1,2 +1,2 @@
-# Skills pending-inventory scope, truthful loading, and route-prepared read regression.
-105
+# Independent Skills settings readiness with prepared inventory and existing admission.
+70

@@ -2158,7 +2158,7 @@ export function createEnginePageScenarios(
         return evidence;
       },
     };
-    if (id === "skills") {
+    if (id === "skill-settings") {
       const inputVisit: EngineScenario = {
         ...common,
         initScript:
@@ -2170,11 +2170,12 @@ export function createEnginePageScenarios(
             frameGapMs: 0,
             events: [],
           }),
-        id: "page-skills-input-visit",
-        expected: "First visit to Skills accepts a search without waiting for installed inventory.",
+        id: "page-skill-settings-input-visit",
+        expected:
+          "First visit to Skills settings accepts a filter while installed inventory loads.",
         prepare: boot,
         run: async (page) => {
-          const selector = '.skill-discovery input[type="search"]:enabled';
+          const selector = 'input[name="skills-filter"]:enabled';
           const timing = await measureVisit(page, id, {
             ...definition,
             ready: selector,
@@ -2188,19 +2189,21 @@ export function createEnginePageScenarios(
             const reads: { pendingMethods: string[] } = Reflect.get(window, "__coldLoad").read();
             return {
               acceptedAtMs: performance.now(),
-              query: document.querySelector<HTMLInputElement>(
-                '.skill-discovery input[type="search"]',
-              )?.value,
+              query: document.querySelector<HTMLInputElement>('input[name="skills-filter"]')?.value,
               inventoryPending: reads.pendingMethods.includes("skills.status"),
               visiblyBusy:
                 document
-                  .querySelector(".skill-discovery .plugin-catalog-grid")
+                  .querySelector(".plugins-toolbar .refresh-button")
                   ?.getAttribute("aria-busy") === "true",
+              loadingMessage: [...document.querySelectorAll(".settings-empty")].some(
+                (element) => element.textContent?.trim() === "Loading…",
+              ),
             };
           });
           assert.equal(input.query, "catalog input probe");
           if (input.inventoryPending) {
             assert.equal(input.visiblyBusy, true);
+            assert.equal(input.loadingMessage, true);
           }
           return {
             visitStartedAtMs: timing.startedAtMs,

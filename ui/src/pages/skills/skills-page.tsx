@@ -450,7 +450,7 @@ export function SkillsPage(props: SkillsPageProps) {
     data.skillsLoading = false;
     data.skillsError = route.error;
     if (!route.error) {
-      void loadSkills(data, { statusRead: route.statusRead ?? undefined });
+      void loadSkills(data, { reportRead: route.reportRead });
     }
     if (route.clawhubRef && route.clawhubRef !== data.clawhubDetailRef) {
       openClawHubDetail(route.clawhubRef);

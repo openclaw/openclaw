@@ -1,7 +1,7 @@
 import type { JSX } from "@solidjs/web";
 import type { SkillLibraryEntry } from "../../../../packages/gateway-protocol/src/index.ts";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import type { SkillStatusEntry } from "../../api/types.ts";
+import type { SkillStatusEntry, SkillStatusReport } from "../../api/types.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import type {
   ClawHubSkillDetail,
@@ -9,7 +9,6 @@ import type {
   loadClawHubDetail,
   SkillsState,
 } from "../../lib/skills/index.ts";
-import type { SkillStatusReportResult } from "../../lib/skills/status-report.ts";
 
 export type SkillsRouteData = {
   gateway: ApplicationContext["gateway"];
@@ -17,7 +16,8 @@ export type SkillsRouteData = {
   agents: ApplicationContext["agents"];
   selectedAgentId: string | null;
   selectionIntentRevision: number;
-  statusRead: Promise<SkillStatusReportResult> | null;
+  /** An admitted prefetch adopted by the mounted Skills request owner. */
+  reportRead?: Promise<SkillStatusReport | undefined>;
   error: string | null;
   clawhubRef?: string;
 };

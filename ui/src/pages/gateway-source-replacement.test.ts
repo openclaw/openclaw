@@ -237,7 +237,6 @@ function mountSkillsPage(
     agents: context.agents,
     selectedAgentId: context.settingsAgentSelection.state.selectedId,
     selectionIntentRevision: context.settingsAgentSelection.intentRevision,
-    statusRead: null,
     error: null,
     ...loadedRouteData,
   };
@@ -401,7 +400,13 @@ it.each(["resolve", "reject"])(
     input.value = "prepared";
     input.dispatchEvent(new Event("input", { bubbles: true }));
     await waitForSolid(() => expect(input.value).toBe("prepared"));
+    expect(input.disabled).toBe(false);
+    expect(mounted.find(".plugins-toolbar .refresh-button")?.getAttribute("aria-busy")).toBe(
+      "true",
+    );
+    expect(mounted.find(".skills-toolbar__status option")?.textContent).toBe("All");
     expect(mounted.text()).toContain("Loading");
+    expect(mounted.text()).not.toContain("No skills");
     if (outcome === "resolve") {
       pending.resolve(skillReport("Prepared skill"));
       await waitForSolid(() => expect(mounted.text()).toContain("Prepared skill"));
@@ -409,6 +414,8 @@ it.each(["resolve", "reject"])(
       pending.reject(new Error("Inventory unavailable"));
       await waitForSolid(() => expect(mounted.text()).toContain("Inventory unavailable"));
     }
+    expect(mounted.find('input[name="skills-filter"]')).toBe(input);
+    expect(input.value).toBe("prepared");
     expect(request.mock.calls.filter(([method]) => method === "skills.status")).toHaveLength(1);
   },
 );

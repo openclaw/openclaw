@@ -20,48 +20,6 @@ afterEach(() => {
 });
 
 describe("Skills discovery lifecycle", () => {
-  it.each(["discovery", "settings"] as const)(
-    "keeps %s usable while its initial inventory is pending",
-    async (surface) => {
-      const pending = deferred<unknown>();
-      const request = vi.fn(async (method: string) => {
-        if (method === "skills.status") {
-          return pending.promise;
-        }
-        if (method === "skills.library.list") {
-          return { ...personalLibrary, defaultTarget: "workspace" };
-        }
-        if (method === "skills.search") {
-          return { results: [remoteSkill] };
-        }
-        throw new Error(`Unexpected method: ${method}`);
-      });
-      const { page } = mountSkills(request, surface, { report: null });
-      await waitForFast(() =>
-        expect(request).toHaveBeenCalledWith("skills.status", { agentId: "main" }),
-      );
-      if (surface === "discovery") {
-        const search = page.querySelector<HTMLInputElement>('input[name="skills-search"]')!;
-        expect(search).not.toBeNull();
-        search.value = "calendar";
-        search.dispatchEvent(new Event("input", { bubbles: true }));
-        flush();
-        expect(search.value).toBe("calendar");
-        await waitForFast(() =>
-          expect(
-            page.querySelector<HTMLButtonElement>(".plugin-catalog-card__install")?.disabled,
-          ).toBe(true),
-        );
-      } else {
-        await waitForFast(() => expect(page.textContent).toContain("Loading"));
-        expect(page.textContent).not.toContain("No skills");
-      }
-      pending.resolve({ skills: [createSkill({ name: "Calendar installed" })] });
-      await waitForFast(() => expect(page.textContent).toContain("Calendar installed"));
-      expect(request.mock.calls.filter(([method]) => method === "skills.status")).toHaveLength(1);
-    },
-  );
-
   it("keeps Discovery library status in sync with a held editor toggle", async () => {
     onTestFinished(installDialogPolyfill());
     const entry = libraryEntry();

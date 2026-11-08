@@ -254,7 +254,10 @@ function SkillsToolbar(props: {
         aria-label={t("skillsPage.title")}
         options={STATUS_TABS.map((tab) => ({
           value: tab.id,
-          label: `${t(tab.labelKey)} ${props.statusCounts[tab.id]}`,
+          label:
+            props.view.loading && !props.view.state.skillsReport
+              ? t(tab.labelKey)
+              : `${t(tab.labelKey)} ${props.statusCounts[tab.id]}`,
         }))}
         onChange={(event) => {
           const next = STATUS_TABS.find((tab) => tab.id === event.currentTarget.value);
