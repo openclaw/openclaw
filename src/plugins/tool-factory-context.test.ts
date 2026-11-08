@@ -1,12 +1,19 @@
 import assert from "node:assert/strict";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { expect, expectTypeOf, it, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
-import { createOperationalRunInstanceRef } from "../agents/admitted-run-context.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
+import {
+  createOperationalRunInstanceRef,
+  prepareAgentRunAdmission,
+  resolveAdmittedRunActiveAssertion,
+} from "../agents/admitted-run-context.js";
 import {
   captureGatewayToolCallerAssertion,
+  createAdmittedGatewayToolCallerIdentity,
   withGatewayToolCallerIdentity,
 } from "../agents/tools/gateway-caller-context.js";
+import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
+import { withGuardedFetchRequestAuthority } from "../infra/net/fetch-request-authority.js";
 import { createPluginRuntimeMock } from "../plugin-sdk/test-helpers/plugin-runtime-mock.js";
 import { InvocationFrame } from "./plugin-instance-invocation.js";
 import { markPluginRegistryRetired } from "./registry-lifecycle.js";
@@ -332,5 +339,113 @@ it.each(["allowed", "owner-close", "run-close", "plugin-close"] as const)(
       expect(() => tool.prepareArguments?.({})).toThrow(/closed|no longer active/);
     }
     expect(effect).toHaveBeenCalledTimes(mode === "allowed" ? 1 : 0);
+  },
+);
+
+it.each(["allowed", "replaced", "inherited-close", "abort", "no-admission"] as const)(
+  "retains composed effect authority across tool preparation: %s",
+  async (mode) => {
+    const entered = createDeferred();
+    const release = createDeferred();
+    const abort = new AbortController();
+    const admissions: ReturnType<typeof prepareAgentRunAdmission>[] = [];
+    const runId = "plugin-effect-" + mode;
+    const prepare = () => {
+      const admission = prepareAgentRunAdmission({
+        cfg: {},
+        facts: {
+          runId,
+          agentId: "main",
+          ingress: { kind: "system", boundary: "test", state: "present" },
+        },
+        operationalRunInstance: createOperationalRunInstanceRef(runId),
+      });
+      admissions.push(admission);
+      return admission;
+    };
+    let inheritedCurrent = true;
+    const beforeRequest = vi.fn();
+    const fetchImpl = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      init?.signal?.throwIfAborted();
+      return new Response("accepted");
+    });
+    let work: Promise<unknown> | undefined;
+    try {
+      const admission = mode === "no-admission" ? undefined : prepare();
+      const context = await admission?.admit("embedded");
+      const identity =
+        context &&
+        createAdmittedGatewayToolCallerIdentity({
+          agentId: "main",
+          sessionKey: "agent:main:" + runId,
+          admittedRunContext: context,
+        });
+      const registration = register(
+        () => ({
+          ...probe(() => {}),
+          async execute(_id, _args, signal) {
+            entered.resolve();
+            await release.promise;
+            // No cooperative assertion here: the host callback must carry it to final dispatch.
+            const result = await fetchWithSsrFGuard({
+              url: "https://public.example/effect",
+              lookupFn: async () => [{ address: "93.184.216.34", family: 4 }],
+              fetchImpl,
+              signal,
+            });
+            try {
+              return { content: [], details: { text: await result.response.text() } };
+            } finally {
+              await result.release();
+            }
+          },
+        }),
+        { assertInvocationCurrent: context && resolveAdmittedRunActiveAssertion(context) },
+      );
+      const execute = () =>
+        withGatewayToolCallerIdentity(identity, () =>
+          registration.tool().execute("probe", {}, abort.signal),
+        );
+      work =
+        mode === "no-admission"
+          ? execute()
+          : withGuardedFetchRequestAuthority(
+              () => assert(inheritedCurrent, "inherited authority closed"),
+              execute,
+              beforeRequest,
+            );
+      void work.catch(() => {});
+      await awaitGateBeforeSettlement(entered.promise, work, "Tool settled before preparation");
+      expect(fetchImpl).not.toHaveBeenCalled();
+      if (mode === "replaced") {
+        await prepare().admit("embedded");
+        expect(() => admission?.assertCurrent()).toThrow("no longer active");
+        expect(identity?.receiptAuthority?.()).toBe(false);
+      } else if (mode === "inherited-close") {
+        inheritedCurrent = false;
+      } else if (mode === "abort") {
+        abort.abort(new Error("ordinary cancellation"));
+      }
+      release.resolve();
+      if (mode === "allowed" || mode === "no-admission") {
+        await expect(work).resolves.toMatchObject({ details: { text: "accepted" } });
+      } else {
+        await expect(work).rejects.toThrow(
+          /no longer active|inherited authority closed|ordinary cancellation/,
+        );
+      }
+      expect(fetchImpl).toHaveBeenCalledTimes(
+        mode === "allowed" || mode === "no-admission" ? 1 : 0,
+      );
+      expect(beforeRequest).toHaveBeenCalledTimes(mode === "allowed" ? 1 : 0);
+    } finally {
+      release.resolve();
+      abort.abort();
+      await work?.catch(() => {});
+      for (const admission of admissions.toReversed()) {
+        admission.close();
+        expect(() => admission.assertCurrent()).toThrow();
+      }
+    }
   },
 );

@@ -5,6 +5,7 @@ import type { AnyAgentTool } from "../agents/tools/common.js";
 import { isInvalidConfigError } from "../config/io.invalid-config.js";
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { withGuardedFetchRequestAuthority } from "../infra/net/fetch-request-authority.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { runWithTrackedCancellation } from "../shared/async-work-resources.js";
 import { bindPluginInlineViewInvocation } from "./inline-view.js";
@@ -82,11 +83,14 @@ export function bindPluginToolCallbacks(
     const result = await withPluginRuntimePluginScope(
       { pluginId: entry.pluginId, pluginSource: entry.source },
       () =>
-        invoke(() => {
-          const execute = (executionSignal?: AbortSignal) =>
-            tool.execute(toolCallId, params, executionSignal, onUpdate);
-          return signal ? runWithTrackedCancellation(signal, execute) : execute();
-        }),
+        invoke(() =>
+          // Recheck this invocation after asynchronous preparation, at guarded transport dispatch.
+          withGuardedFetchRequestAuthority(assertInvocationCurrent, () => {
+            const execute = (executionSignal?: AbortSignal) =>
+              tool.execute(toolCallId, params, executionSignal, onUpdate);
+            return signal ? runWithTrackedCancellation(signal, execute) : execute();
+          }),
+        ),
       registry,
     );
     return bindPluginInlineViewInvocation(result, entry.pluginId, tool.name, toolCallId);
