@@ -1,17 +1,8 @@
-import {
-  definePage,
-  redirect,
-  type RouteLoaderOptions,
-  type RouteLocation,
-} from "@openclaw/uirouter";
+import { definePage, type RouteLoaderOptions, type RouteLocation } from "@openclaw/uirouter";
 import { routePageSpec } from "../../app-route-paths.ts";
 import type { SolidRouteProps } from "../../app-route-types.tsx";
 import type { ApplicationContext } from "../../app/context.ts";
-import {
-  canonicalPluginsRouteLocation,
-  pluginsRouteLocation,
-  type PluginsRouteData,
-} from "./route-data.ts";
+import { pluginsRouteLocation, type PluginsRouteData } from "./route-data.ts";
 
 type PluginsSurface = "discovery" | "settings";
 
@@ -22,12 +13,8 @@ function definePluginsPage(routeId: "plugins" | "plugin-settings", surface: Plug
       const routeLocation = pluginsRouteLocation(location);
       return `${routeLocation.pathname}\u0000${routeLocation.search}\u0000${routeLocation.hash}`;
     },
-    loader: (context: ApplicationContext, options: RouteLoaderOptions) => {
+    loader: (_context: ApplicationContext, options: RouteLoaderOptions) => {
       const location = pluginsRouteLocation(options.location);
-      const canonical = canonicalPluginsRouteLocation(location, context.basePath);
-      if (canonical) {
-        return redirect(canonical);
-      }
       return { location } satisfies PluginsRouteData;
     },
     component: async () => {
