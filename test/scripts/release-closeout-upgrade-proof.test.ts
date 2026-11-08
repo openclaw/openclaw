@@ -1,4 +1,4 @@
-// Runner guard/fixture syntax tests only; these do NOT constitute real upgrade evidence.
+// Runner guard/settings/fixture tests only; these do NOT constitute real upgrade evidence.
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
@@ -7,10 +7,12 @@ import { test } from "vitest";
 import {
   assertIdentity,
   assertLifecycle,
+  assertSettingsPreserved,
   assertStable,
   assertUpdate,
   lifecycleObserverSource,
   pluginSource,
+  settingsFixture,
   verifyPair,
 } from "../../scripts/release-closeout-upgrade-proof.mjs";
 
@@ -35,6 +37,44 @@ function proof(lane: "node" | "bun") {
     },
   };
 }
+test("settings fixture uses supported disabled scheduling and explicit plugin policy", () => {
+  const config = settingsFixture({ workspace: "/proof/workspace", plugin: "/proof/plugin" });
+  assert.deepEqual(config.agents, { defaults: { workspace: "/proof/workspace" } });
+  assert.deepEqual(config.cron, { enabled: false });
+  assert.equal(Object.hasOwn(config, "meta"), false);
+  assert.deepEqual(config.plugins.allow, ["closeout-owner-proof", "skill-workshop"]);
+  assert.equal(config.plugins.entries.codex.enabled, false);
+});
+test("every existing setting survives while new bookkeeping is allowed", () => {
+  const before = settingsFixture({ workspace: "/proof/workspace", plugin: "/proof/plugin" });
+  const after = structuredClone(before);
+  Object.assign(after, { wizard: { lastRunCommand: "doctor" } });
+  Object.assign(after, { meta: { migrations: { skillWorkshopPlugin: true } } });
+  assertSettingsPreserved(before, after);
+  const expandedAllowlist = structuredClone(after);
+  expandedAllowlist.plugins.allow.push("unexpected-plugin");
+  assert.throws(() => assertSettingsPreserved(before, expandedAllowlist));
+  function checkSettings(value: object, keys: string[] = []) {
+    for (const [key, setting] of Object.entries(value)) {
+      const parts = [...keys, key];
+      for (const replacement of [undefined, null, "changed", [], {}]) {
+        const changed = structuredClone(after);
+        let target: Record<string, unknown> = changed;
+        for (const part of keys) target = target[part] as Record<string, unknown>;
+        if (replacement === undefined) delete target[key];
+        else target[key] = replacement;
+        assert.throws(() => assertSettingsPreserved(before, changed), parts.join("."));
+      }
+      if (setting && typeof setting === "object" && !Array.isArray(setting)) {
+        checkSettings(setting, parts);
+      }
+    }
+  }
+  checkSettings(before);
+  assert.throws(() => assertSettingsPreserved({ empty: {} }, {}));
+  assert.throws(() => assertSettingsPreserved({ empty: {} }, { empty: [] }));
+  assert.throws(() => assertSettingsPreserved({ heartbeat: { every: "0m" } }, {}));
+});
 test("exact identities and stable-only baseline fail closed", () => {
   assertIdentity(head, sha);
   assert.throws(() => assertIdentity("a".repeat(12), sha));

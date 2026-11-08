@@ -34,6 +34,47 @@ const hash = (bytes) => createHash("sha256").update(bytes).digest("hex");
 const readJson = (file) => JSON.parse(fs.readFileSync(file, "utf8"));
 const writeJson = (file, value) => fs.writeFileSync(file, JSON.stringify(value, null, 2) + "\n");
 
+export function settingsFixture({ workspace, plugin }) {
+  return {
+    gateway: {
+      mode: "local",
+      bind: "loopback",
+      auth: { mode: "token", token: "synthetic-closeout-token" },
+      controlUi: { enabled: false },
+    },
+    // Retired heartbeat fields intentionally migrate out of config in Doctor.
+    // Use current scheduler policy so this is preservation proof, not migration proof.
+    agents: { defaults: { workspace } },
+    cron: { enabled: false },
+    update: { checkOnStart: false },
+    // The published updater predates the Workshop migration marker. Including
+    // the plugin avoids an allowlist migration without using candidate-only config.
+    plugins: {
+      allow: ["closeout-owner-proof", "skill-workshop"],
+      load: { paths: [plugin] },
+      entries: { "closeout-owner-proof": { enabled: true }, codex: { enabled: false } },
+    },
+  };
+}
+
+// Permit updater bookkeeping, but every original setting must survive.
+export function assertSettingsPreserved(before, actual, key = "config") {
+  for (const [name, value] of Object.entries(before)) {
+    const actualValue = actual?.[name];
+    const message = "Changed existing setting: " + key + "." + name;
+    assert(actual && Object.hasOwn(actual, name), message);
+    if (value && typeof value === "object" && !Array.isArray(value)) {
+      assert(
+        actualValue && typeof actualValue === "object" && !Array.isArray(actualValue),
+        message,
+      );
+      assertSettingsPreserved(value, actualValue, key + "." + name);
+    } else {
+      assert.deepEqual(actualValue, value, message);
+    }
+  }
+}
+
 export function assertIdentity(head, sha256) {
   assert.match(head ?? "", /^[a-f0-9]{40}$/, "--head must be the full candidate commit");
   assert.match(sha256 ?? "", /^[a-f0-9]{64}$/, "--sha256 must bind the supplied archive");
@@ -417,21 +458,7 @@ async function runLane(options) {
       path.join(plugin, "doctor-contract-api.mjs"),
       'export { normalizeCompatibilityConfig } from "./index.mjs";\n',
     );
-    const config = {
-      gateway: {
-        mode: "local",
-        bind: "loopback",
-        auth: { mode: "token", token: "synthetic-closeout-token" },
-        controlUi: { enabled: false },
-      },
-      agents: { defaults: { workspace: path.join(work, "workspace"), heartbeat: { every: "0m" } } },
-      update: { checkOnStart: false },
-      plugins: {
-        allow: ["closeout-owner-proof"],
-        load: { paths: [plugin] },
-        entries: { "closeout-owner-proof": { enabled: true } },
-      },
-    };
+    const config = settingsFixture({ workspace: path.join(work, "workspace"), plugin });
     fs.mkdirSync(config.agents.defaults.workspace, { recursive: true });
     fs.writeFileSync(env.OPENCLAW_CONFIG_PATH, JSON.stringify(config, null, 2) + "\n");
     writeJson(path.join(out, "settings-before.json"), config);
@@ -570,17 +597,7 @@ async function runLane(options) {
     assert.equal(readJson(path.join(packageRoot, "package.json")).version, manifest.version);
     const after = readJson(env.OPENCLAW_CONFIG_PATH);
     writeJson(path.join(out, "settings-after.json"), after);
-    // Permit updater bookkeeping, but every original setting must survive.
-    function preserved(before, actual, key = "config") {
-      for (const [name, value] of Object.entries(before)) {
-        if (value && typeof value === "object" && !Array.isArray(value)) {
-          preserved(value, actual?.[name], key + "." + name);
-        } else {
-          assert.deepEqual(actual?.[name], value, "Changed existing setting: " + key + "." + name);
-        }
-      }
-    }
-    preserved(config, after);
+    assertSettingsPreserved(config, after);
     assert.equal(hash(fs.readFileSync(memory)), memoryHash);
     assert.equal(fs.readFileSync(source, "utf8"), "release-closeout-external-asset\n");
     assert.equal(fs.readlinkSync(path.join(plugin, "config.txt")), source);

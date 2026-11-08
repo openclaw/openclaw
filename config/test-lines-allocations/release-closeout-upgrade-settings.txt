@@ -1,0 +1,2 @@
+40
+# Guard supported disabled-scheduler/plugin fixture policy and strict existing-setting preservation.
