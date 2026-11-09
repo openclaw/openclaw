@@ -4,6 +4,7 @@ import { createSignal } from "solid-js";
 import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
+import { loadSettings, patchSettings } from "../../app/settings.ts";
 import { i18n } from "../../i18n/index.ts";
 import { createAgentIdentityCapability } from "../../lib/agents/identity.ts";
 import { createAgentCapability } from "../../lib/agents/index.ts";
@@ -25,8 +26,8 @@ import {
 } from "../../test-helpers/solid-application-context.tsx";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { stubManualIntersectionObserver } from "../chat/components/chat-media-observer.test-support.ts";
+import type { DashboardsRouteData } from "./gallery-filters.ts";
 import { page as dashboardRoute } from "./route.ts";
-import type { DashboardsRouteData } from "./view.tsx";
 
 function pageContext(overrides: {
   sessions?: Partial<ApplicationContext["sessions"]>;
@@ -123,6 +124,11 @@ function connect(readList: (params: Parameters<GatewayRequestHandler>[1]) => unk
 }
 
 beforeEach(async () => {
+  const display = loadSettings().dashboardsDisplay;
+  patchSettings({ dashboardsDisplay: undefined });
+  onTestFinished(() => {
+    patchSettings({ dashboardsDisplay: display });
+  });
   await i18n.setLocale("en");
   // Gallery E2E owns Board preview rendering; these tests stop before viewport admission.
   stubManualIntersectionObserver(() => {});
@@ -286,6 +292,8 @@ it.each([false, true])("keeps pages across row events; retires late pages: %s", 
   flush();
   expect(cardTitles(element)).toEqual(["Updated", "Old"]);
   expect(requests).toHaveLength(2);
+  element.querySelector<HTMLButtonElement>('button[aria-label="Search dashboards"]')!.click();
+  flush();
   const search = element.querySelector<HTMLInputElement>('input[type="search"]')!;
   changeValue(search, "old");
   expect(cardTitles(element)).toEqual(["Old"]);
@@ -308,17 +316,31 @@ it("renders the route host and filters by search and author and sorts cards by t
   expect(cardTitles(element)).toEqual(["Zulu monitor", "Alpha signals"]);
   expect(element.querySelector(".dashboard-preview")?.hasAttribute("inert")).toBe(true);
 
+  element.querySelector<HTMLButtonElement>('button[aria-label="Search dashboards"]')!.click();
+  flush();
   const search = element.querySelector<HTMLInputElement>('input[type="search"]')!;
   changeValue(search, "signals");
   expect(cardTitles(element)).toEqual(["Alpha signals"]);
 
   changeValue(search, "");
-  const [authorSelect, sortSelect] = element.querySelectorAll<HTMLSelectElement>("select");
-  changeValue(authorSelect!, "mira");
+  element.querySelector<HTMLButtonElement>('button[aria-label="Filter by author"]')!.click();
+  await waitForSolid(() =>
+    expect(document.querySelector(".dashboards-authors__row")).not.toBeNull(),
+  );
+  const mira = [...document.querySelectorAll<HTMLLabelElement>(".dashboards-authors__row")].find(
+    (label) => label.textContent?.includes("Mira"),
+  )!;
+  mira.querySelector<HTMLInputElement>('input[type="checkbox"]')!.click();
+  flush();
   expect(cardTitles(element)).toEqual(["Alpha signals"]);
   expect(element.querySelector(".dashboard-card__author")?.textContent).toContain("Mira");
 
-  changeValue(authorSelect!, "", false);
-  changeValue(sortSelect!, "title");
+  element.querySelector<HTMLButtonElement>('button[aria-label="Remove author filter"]')!.click();
+  flush();
+  element.querySelector<HTMLButtonElement>('button[aria-label="Display"]')!.click();
+  await waitForSolid(() =>
+    expect(document.querySelector("#dashboards-display select")).not.toBeNull(),
+  );
+  changeValue(document.querySelector<HTMLSelectElement>("#dashboards-display select")!, "title");
   expect(cardTitles(element)).toEqual(["Alpha signals", "Zulu monitor"]);
 });
