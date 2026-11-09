@@ -583,6 +583,7 @@ type SandboxToolParams = {
   abortSignal?: AbortSignal;
   root: string;
   bridge: SandboxFsBridge;
+  stagedMediaPaths?: ReadonlyMap<string, string>;
   memoryWriteProvenance?: MemoryWriteProvenanceObserver;
   modelContextWindowTokens?: number;
   imageSanitization?: ImageSanitizationLimits;
