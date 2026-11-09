@@ -451,6 +451,83 @@ describe("interactive Dev update discovery", () => {
     },
   );
 
+  it.each([
+    { name: "current", ahead: 0, discovery: "manual" },
+    { name: "ahead", ahead: 2, discovery: "manual" },
+    { name: "current", ahead: 0, discovery: "background" },
+    { name: "ahead", ahead: 2, discovery: "background" },
+  ])(
+    "retires an announced target after $discovery discovery of a $name checkout",
+    async ({ name, ahead, discovery }) => {
+      const published = vi.fn();
+      await runGatewayUpdateCheck({ cfg: autoConfig, onUpdateScheduleChange: published });
+      expect(campaign.getState()?.state).toBe("countdown");
+      published.mockClear();
+      lifecycle.onUpdateScheduleChange = published;
+      mockDevGitStatus({
+        currentSha: ahead === 0 ? "upstream-sha" : "ahead-sha",
+        ahead,
+        behind: 0,
+      });
+
+      if (discovery === "manual") {
+        await refreshGatewayUpdateStatus(() => autoConfig);
+      } else {
+        await runGatewayUpdateCheck({ cfg: autoConfig, onUpdateScheduleChange: published });
+      }
+
+      expect(
+        published.mock.calls.map(([schedule]) => [
+          Boolean(schedule.target),
+          Boolean(schedule.campaign),
+        ]),
+      ).toEqual(
+        discovery === "manual"
+          ? [[false, false]]
+          : [
+              [true, true],
+              [false, false],
+            ],
+      );
+      expect(getUpdateSchedule()?.install?.git?.status).toBe(name);
+      expect(getUpdateSchedule()?.target).toBeUndefined();
+      expect(getUpdateSchedule()?.campaign).toBeUndefined();
+      expect(getUpdateAvailable()).toBeNull();
+      expect(campaign.getState()).toBeUndefined();
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(runCampaignUpdate).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["availability", "schedule"] as const)(
+    "cancels an obsolete campaign when its %s notification throws",
+    async (notification) => {
+      const onUpdateAvailableChange = vi.fn();
+      const onUpdateScheduleChange = vi.fn();
+      await runGatewayUpdateCheck({
+        cfg: autoConfig,
+        onUpdateAvailableChange,
+        onUpdateScheduleChange,
+      });
+      expect(campaign.getState()?.state).toBe("countdown");
+      lifecycle.onUpdateAvailableChange = onUpdateAvailableChange;
+      lifecycle.onUpdateScheduleChange = onUpdateScheduleChange;
+      const error = new Error("update notification failed");
+      const callback =
+        notification === "availability" ? onUpdateAvailableChange : onUpdateScheduleChange;
+      callback.mockImplementationOnce(() => {
+        throw error;
+      });
+      mockDevGitStatus({ currentSha: "upstream-sha", behind: 0 });
+
+      await expect(refreshGatewayUpdateStatus(() => autoConfig)).rejects.toBe(error);
+
+      expect(campaign.getState()).toBeUndefined();
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(runCampaignUpdate).not.toHaveBeenCalled();
+    },
+  );
+
   it("publishes manual target changes through the lifecycle callbacks", async () => {
     const onUpdateAvailableChange = vi.fn();
     const onUpdateScheduleChange = vi.fn();
