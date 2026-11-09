@@ -63,14 +63,30 @@ describe("Templates Gateway contract", () => {
         ...catalogEntry,
         version: coordinate.version,
         workspaceFiles: 2,
-        skills: 0,
+        skills: 1,
         plugins: 1,
         mcpServers: 0,
         scheduledJobs: 0,
         contents: {
           instructions: [{ name: "AGENTS.md", source: "AGENTS.md", excerpt: "Purpose" }],
-          skills: [{ name: "research", version: "1", excerpt: "Research" }],
-          integrations: [{ name: "lobster", kind: "plugin", version: "1" }],
+          skills: [
+            {
+              name: "research",
+              source: "clawhub",
+              ref: "research",
+              version: "1.0.0",
+              excerpt: "Research",
+            },
+          ],
+          integrations: [
+            {
+              name: "lobster",
+              kind: "plugin",
+              source: "clawhub",
+              ref: "lobster",
+              version: "1.0.0",
+            },
+          ],
           automations: [],
         },
       },
