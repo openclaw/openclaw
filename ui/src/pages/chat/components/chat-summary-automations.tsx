@@ -17,7 +17,6 @@ import type { ApplicationGateway } from "../../../app/gateway.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { Tooltip } from "../../../components/solid/tooltip.tsx";
 import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
-import { isRecurringSchedule } from "../../../lib/cron-next-run.ts";
 import { isCronInventoryInvalidation } from "../../../lib/cron/inventory-connection.ts";
 import { loadCompactCronJobsPage, retireCronJobsRequest } from "../../../lib/cron/jobs.ts";
 import { createInitialCronState } from "../../../lib/cron/state.ts";
@@ -25,6 +24,7 @@ import { createGatewayConnectionLifecycle } from "../../../lib/gateway-connectio
 import { canCallGatewayMethod, canPresentGatewayMethod } from "../../../lib/gateway-methods.ts";
 import { createGatewayRetryOwner } from "../../../lib/gateway-retry.ts";
 import { shouldHandleNavigationClick } from "../../../lib/navigation-click.ts";
+import { isRecurringSchedule } from "../../../lib/presenter.ts";
 import { useOptionalApplication } from "../../../lib/reactive/context.ts";
 import { elementRef } from "../../../lib/reactive/element-ref.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";

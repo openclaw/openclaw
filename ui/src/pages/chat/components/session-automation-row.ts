@@ -1,5 +1,5 @@
 import type { CronCompactJob } from "../../../api/types.ts";
-import { isRecurringSchedule, readAutomationNextRun } from "../../../lib/cron-next-run.ts";
+import { isRecurringSchedule, readAutomationNextRun } from "../../../lib/presenter.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import type { DetailsAutomation } from "../chat-details-snapshot.ts";
 

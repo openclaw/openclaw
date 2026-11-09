@@ -3,12 +3,12 @@ import type { CronJob } from "../../api/types.ts";
 import { HubTabs } from "../../components/solid/hub-tabs.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import { SettingsSection, SettingsPage } from "../../components/solid/settings-ui.tsx";
+import { isCronJobActiveFailure } from "../../lib/cron-status.ts";
 import {
   cronJobNextRunFacts,
   isRecurringSchedule,
   readAutomationNextRun,
-} from "../../lib/cron-next-run.ts";
-import { isCronJobActiveFailure } from "../../lib/cron-status.ts";
+} from "../../lib/presenter.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { FailureDetails } from "./view-attention.tsx";
 import {
@@ -170,12 +170,7 @@ function DetailHeader(
           <span class="cron-detail-sub">
             <Show when={scheduleIcon()}>
               {(name) => (
-                <span
-                  class="cron-detail-sub__schedule"
-                  role="img"
-                  aria-label={cadence()}
-                  title={cadence()}
-                >
+                <span role="img" aria-label={cadence()} title={cadence()}>
                   <Icon name={name()} />
                 </span>
               )}

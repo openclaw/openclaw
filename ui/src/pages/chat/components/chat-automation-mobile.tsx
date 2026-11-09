@@ -4,8 +4,8 @@ import { Icon } from "../../../components/solid/icon.tsx";
 import { PanelEmptyState } from "../../../components/solid/panel-empty-state.tsx";
 import { registerChatSessionOptionalEnglish } from "../../../i18n/locales/en-chat-session-optional.ts";
 import { registerCronEnglish } from "../../../i18n/locales/en-cron.ts";
-import { isRecurringSchedule } from "../../../lib/cron-next-run.ts";
 import { handleNavigationClick } from "../../../lib/navigation-click.ts";
+import { isRecurringSchedule } from "../../../lib/presenter.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { ChatLazyBoundary } from "./chat-lazy-boundary.tsx";
 import {

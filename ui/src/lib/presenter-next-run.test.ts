@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { readAutomationNextRun, type AutomationNextRunFacts } from "./cron-next-run.ts";
+import { readAutomationNextRun, type AutomationNextRunFacts } from "./presenter.ts";
 
 afterEach(() => void vi.useRealTimers());
 const formatAutomationNextRun = (facts: AutomationNextRunFacts, nowMs: number) => {
