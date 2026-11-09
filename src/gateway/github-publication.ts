@@ -686,7 +686,7 @@ export function createGitHubPublicationCoordinator(params: {
     listUnreportedResults(): GitHubPublicationTranscriptReport[] {
       return refuseLegacyPublication("listUnreportedResults", "listUnreportedResultsAsync");
     },
-    async listUnreportedResultsAsync() {
+    async listUnreportedResultsAsync(): Promise<GitHubPublicationTranscriptReport[]> {
       const publications: GitHubPublicationTranscriptReport[] = [
         ...(await methods.listUnreportedResultsAsync()),
         ...(await repository.listUnreportedResultsAsync()),
