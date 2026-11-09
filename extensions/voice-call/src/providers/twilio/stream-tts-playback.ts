@@ -1,5 +1,6 @@
 // Voice Call module streams a segmented TTS reply over one Twilio media stream.
 import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
+import { raceWithTimeout } from "openclaw/plugin-sdk/time-runtime";
 import type { MediaStreamHandler } from "../../media-stream.js";
 import type { TelephonySpeechPlan, TelephonyTtsProvider } from "../../telephony-tts.js";
 
@@ -46,6 +47,45 @@ export async function playSegmentedTtsViaStream(params: {
       }, CHUNK_DELAY_MS);
     };
 
+    const synthTimeoutMs = ttsProvider.synthesisTimeoutMs;
+
+    /**
+     * Bound one TTS provider step by the synthesis timeout and the playback
+     * abort signal, holding the carrier stream open with keep-alive silence
+     * while it runs.
+     *
+     * Every step that reaches the provider needs this bound, not just
+     * synthesis. Directive resolution performs async provider and preference
+     * lookups, so an unbounded await there would stream keep-alive silence
+     * forever and never release this stream's serialized queue slot: the
+     * caller would hear endless silence and the turn could never settle.
+     */
+    const boundedProviderStep = async <T>(step: () => Promise<T>, label: string): Promise<T> => {
+      // Hold the stream open across this step's gap; the `finally` stops
+      // silence before any speech frame is sent.
+      startKeepAlive();
+      try {
+        return await raceWithTimeout<T, never>(
+          step,
+          synthTimeoutMs,
+          () => {
+            throw new Error(`Telephony TTS ${label} timed out after ${synthTimeoutMs}ms`);
+          },
+          {
+            signal,
+            onAbort: () => {
+              throw signal.reason instanceof Error
+                ? signal.reason
+                : new Error(`Telephony TTS ${label} aborted`);
+            },
+          },
+        );
+      } finally {
+        // Speech may start next: silence must stop before the first frame.
+        stopKeepAlive();
+      }
+    };
+
     // Resolved once below, before any segment is played.
     let plan: TelephonySpeechPlan | undefined;
 
@@ -54,46 +94,14 @@ export async function playSegmentedTtsViaStream(params: {
      * Returns the delivered byte count, or null when playback was aborted.
      */
     const playSegment = async (segment: string): Promise<number | null> => {
-      if (!plan) {
+      const prepared = plan;
+      if (!prepared) {
         throw new Error("Telephony speech plan not prepared");
       }
-      // Hold the stream open across this segment's synthesis gap; the
-      // synthesis `finally` below stops it before any speech frame is sent.
-      startKeepAlive();
-      let muLawAudio: Buffer;
-      let synthTimeout: ReturnType<typeof setTimeout> | null = null;
-      let removeAbortListener = () => {};
-      const synthTimeoutMs = ttsProvider.synthesisTimeoutMs;
-      try {
-        const synthPromise = plan.synthesizeSegment(segment);
-        const timeoutPromise = new Promise<Buffer>((_, reject) => {
-          synthTimeout = setTimeout(() => {
-            reject(new Error(`Telephony TTS synthesis timed out after ${synthTimeoutMs}ms`));
-          }, synthTimeoutMs);
-        });
-        const abortPromise = new Promise<never>((_, reject) => {
-          const onAbort = () => {
-            reject(
-              signal.reason instanceof Error
-                ? signal.reason
-                : new Error("Telephony TTS synthesis aborted"),
-            );
-          };
-          signal.addEventListener("abort", onAbort, { once: true });
-          removeAbortListener = () => signal.removeEventListener("abort", onAbort);
-          if (signal.aborted) {
-            onAbort();
-          }
-        });
-        muLawAudio = await Promise.race([synthPromise, timeoutPromise, abortPromise]);
-      } finally {
-        if (synthTimeout) {
-          clearTimeout(synthTimeout);
-        }
-        // Speech starts next: silence must stop before the first frame.
-        stopKeepAlive();
-        removeAbortListener();
-      }
+      const muLawAudio = await boundedProviderStep(
+        () => prepared.synthesizeSegment(segment),
+        "synthesis",
+      );
 
       if (muLawAudio.length === 0) {
         throw new Error("Telephony TTS produced no audio");
@@ -141,12 +149,11 @@ export async function playSegmentedTtsViaStream(params: {
     let anyAudioBuffered = false;
 
     try {
-      startKeepAlive();
       // Resolve the inline TTS directive contract over the complete reply
       // exactly once, then split the resolved spoken text. Splitting after
       // resolution means a long reply can never divide a directive block, and
       // the one resolved override set applies to every segment.
-      plan = await ttsProvider.prepareSpeech(text);
+      plan = await boundedProviderStep(() => ttsProvider.prepareSpeech(text), "speech preparation");
       const segments = plan.segments;
       if (segments.length === 0) {
         return;

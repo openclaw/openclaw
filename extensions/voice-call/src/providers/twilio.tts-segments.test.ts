@@ -41,6 +41,10 @@ function wireProvider(params: {
   signal: AbortSignal;
   synthesizeSegment: (segment: string) => Promise<Buffer>;
   sendAudio?: (streamSid: string, chunk: Buffer) => { sent: boolean };
+  prepareSpeech?: (text: string) => Promise<{
+    segments: string[];
+    synthesizeSegment: (segment: string) => Promise<Buffer>;
+  }>;
 }) {
   const sendAudio = vi.fn(params.sendAudio ?? (() => ({ sent: true })));
   const sendMarkAndWait = vi.fn(async () => {});
@@ -62,10 +66,12 @@ function wireProvider(params: {
   params.provider.setTTSProvider({
     synthesisTimeoutMs: 5_000,
     synthesizeForTelephony: async () => Buffer.alloc(160),
-    prepareSpeech: async (text: string) => ({
-      segments: chunkTelephonyReply(text, MAX_TELEPHONY_TTS_SYNTH_CHARS),
-      synthesizeSegment: params.synthesizeSegment,
-    }),
+    prepareSpeech:
+      params.prepareSpeech ??
+      (async (text: string) => ({
+        segments: chunkTelephonyReply(text, MAX_TELEPHONY_TTS_SYNTH_CHARS),
+        synthesizeSegment: params.synthesizeSegment,
+      })),
   });
   return { sendAudio, sendMarkAndWait, clearAudio };
 }
@@ -193,6 +199,41 @@ describe("TwilioProvider segmented stream playback", () => {
       // The first segment's frames were already accepted, so the partially
       // played reply must be flushed rather than left for the caller to hear.
       expect(clearAudio).toHaveBeenCalledWith("MZ-fail");
+      expect(sendMarkAndWait).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("bounds directive resolution by the synthesis timeout", async () => {
+    vi.useFakeTimers();
+    try {
+      const provider = createProvider();
+      provider.registerCallStream("CA-prep", "MZ-prep");
+      const { sendMarkAndWait } = wireProvider({
+        provider,
+        signal: new AbortController().signal,
+        synthesizeSegment: async () => Buffer.alloc(160),
+        // Directive resolution performs async provider and preference lookups.
+        // Model one that never settles.
+        prepareSpeech: () => new Promise(() => {}),
+      });
+
+      const playback = provider.playTts({
+        callId: "call-prep",
+        providerCallId: "CA-prep",
+        text: longReply(),
+      });
+      const settled = playback.then(
+        () => "resolved" as const,
+        (error: unknown) => (error instanceof Error ? error.message : "rejected"),
+      );
+      await vi.advanceTimersByTimeAsync(6_000);
+
+      // Left unbounded, this step streams keep-alive silence forever and never
+      // releases the stream's serialized queue slot, so the caller hears
+      // endless silence and the turn can never settle.
+      expect(await settled).toBe("Telephony TTS speech preparation timed out after 5000ms");
       expect(sendMarkAndWait).not.toHaveBeenCalled();
     } finally {
       vi.useRealTimers();
