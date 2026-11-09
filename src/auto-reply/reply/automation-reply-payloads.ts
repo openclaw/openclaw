@@ -1,4 +1,6 @@
 import { hasOutboundReplyContent } from "openclaw/plugin-sdk/reply-payload";
+import { resolveExplicitFinalSourceReplyDeliveryEvidence } from "../../agents/embedded-agent-runner/delivery-evidence.js";
+import type { ReplyCompletion } from "../../agents/reply-completion.js";
 import { hasPendingAutomationContinuation } from "../../cron/automation-result.js";
 import { isHostNoticePayload, isReplyPayloadTerminalContent } from "../reply-payload.js";
 import type { ReplyPayload } from "../types.js";
@@ -58,4 +60,28 @@ export function retainAutomationReasoningWithFinal(payloads: ReplyPayload[]): Re
     )
     ? payloads
     : payloads.filter((payload) => payload.isReasoning !== true);
+}
+
+/** Call only after route and content dedupe confirms an already delivered final. */
+export function canCompleteMessagingToolDuplicate(params: {
+  result: SettledAgentTurn["result"];
+  completion: ReplyCompletion;
+  successfulTerminal: boolean;
+  pendingContinuation: boolean;
+  sourceReplyDeliveryMode: InternalGetReplyOptions["sourceReplyDeliveryMode"];
+}): boolean {
+  const { result, completion, successfulTerminal, pendingContinuation, sourceReplyDeliveryMode } =
+    params;
+  if (["blocked", "pending", "silent"].includes(completion.outcome)) {
+    return false;
+  }
+  // A successful automatic final can confirm an earlier send. "missing" means
+  // the runtime has not observed a terminal reply; it does not retain custody.
+  const canConfirmEarlierSend =
+    successfulTerminal && !pendingContinuation && sourceReplyDeliveryMode !== "message_tool_only";
+  return (
+    (result.sourceReplyDeliveryState === undefined ||
+      (result.sourceReplyDeliveryState === "missing" && canConfirmEarlierSend)) &&
+    (resolveExplicitFinalSourceReplyDeliveryEvidence(result) === undefined || canConfirmEarlierSend)
+  );
 }
