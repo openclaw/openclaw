@@ -71,7 +71,12 @@ text. This enables bounded, redacted input messages, output messages, tool
 inputs, tool outputs, tool definitions, and OTLP log bodies. System prompts
 remain excluded. Provider-internal `thinking` and `redacted_thinking` payloads
 are also excluded: compatibility attributes retain only a redacted structural
-marker, while GenAI message attributes omit those parts.
+marker, while GenAI message attributes omit those parts. Inline image data
+longer than 128 KiB, which no attribute could carry whole, is dropped from
+model input and output messages; the image part and its MIME type remain.
+Serialized JSON over 512 KiB goes directly through bounded truncation rather
+than attempting to fit the whole value after redaction. Every retained string
+is still redacted before truncation.
 
 Completed assistant commentary uses the same setting. With content capture
 off, commentary events contain timing, sequence, harness, and text-length
