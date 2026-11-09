@@ -165,13 +165,7 @@ export function resetTranscriptTestDom(): void {
 
 export type TestContentRow = Extract<TranscriptRow, { kind: "content" }>;
 
-export const offsetOwner = <
-  Overrides extends Partial<Parameters<typeof observeTranscriptOffset>[0]>,
->(
-  state: TranscriptOffsetState,
-  element: HTMLDivElement,
-  overrides: Overrides,
-) => ({
+const offsetOwnerDefaults = (state: TranscriptOffsetState, element: HTMLDivElement) => ({
   state,
   getScrollElement: () => element,
   endAnchor: new TranscriptEndAnchor(() => {}),
@@ -185,6 +179,17 @@ export const offsetOwner = <
   onOffset: vi.fn(),
   onReaderScroll: vi.fn(),
   onComposerLayout: vi.fn(),
+});
+
+// Infer overrides from their values, not the observer's contextual owner type.
+export const offsetOwner = <
+  Overrides extends Partial<Parameters<typeof observeTranscriptOffset>[0]>,
+>(
+  state: TranscriptOffsetState,
+  element: HTMLDivElement,
+  overrides: Overrides,
+): ReturnType<typeof offsetOwnerDefaults> & NoInfer<Overrides> => ({
+  ...offsetOwnerDefaults(state, element),
   ...overrides,
 });
 
