@@ -99,6 +99,21 @@ describe("Telegram formatting", () => {
     }
   });
 
+  it("keeps a prose mention of a start tag as text beside Markdown formatting", () => {
+    expect(markdownToTelegramHtml("Use the <b> tag to make text **bold**.")).toBe(
+      "Use the &lt;b&gt; tag to make text <b>bold</b>.",
+    );
+  });
+
+  it.each([
+    ["<i>one <i>two</i>", "&lt;i&gt;one <i>two</i>"],
+    ['<a href="https://example.com">docs', '&lt;a href="https://example.com"&gt;docs'],
+    ['<pre><code class="language-js">x', '&lt;pre&gt;&lt;code class="language-js"&gt;x'],
+  ])("escapes authored start tags that never close: %s", (input, expected) => {
+    expect(markdownToTelegramHtml(input)).toBe(expected);
+    expect(htmlText(input)).toBe(expected);
+  });
+
   it("aligns Unicode cells in raw HTML table fallbacks", () => {
     const input = [
       "<table><tr><th>Name</th><th>Mark</th><th>Note</th></tr>",
