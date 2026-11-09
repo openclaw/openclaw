@@ -1286,7 +1286,9 @@
   --code-block-icon: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='M3 6h18M3 12h15a3 3 0 1 1 0 6h-4m2-2-2 2 2 2M3 18h7'/></svg>");
 }
 
-.code-block-wrapper.is-wrapped .code-block-viewport :where(pre code) {
+/* Human fences have no wrap control; share wrapped code layout, except aligned block art. */
+.code-block-wrapper.is-wrapped .code-block-viewport :where(pre code),
+.chat-group.user :where(pre code:not(.markdown-block-art)) {
   width: auto;
   min-width: 0;
   overflow-wrap: anywhere;
@@ -1324,12 +1326,6 @@
   padding: 0;
   font-size: 12px;
   white-space: pre;
-}
-
-/* Human fences have no wrap control: keep their source spacing while fitting the bubble. */
-.chat-group.user .chat-text :where(pre code:not(.markdown-block-art)) {
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
 }
 
 .chat-text :where(pre code.markdown-block-art),
