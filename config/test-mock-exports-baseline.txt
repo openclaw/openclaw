@@ -3789,7 +3789,6 @@
 ["src/commands/models/list.probe.targets.test.ts","../../agents/prepared-model-catalog.js","fd0a6f145da294750b4e8e137ed19503c2adb233d966a918735e00716f240b4d",1]
 ["src/commands/models/list.probe.targets.test.ts","../../agents/provider-auth-aliases.js","c03ac1f35bc92676c9d73c66f35e819757e83309d90f6c11faa12e974bae7af6",1]
 ["src/commands/models/list.probe.targets.test.ts","../../secrets/resolve.js","28150dce08bed824d8e7229243c7213c2c9edbb7ba8bfe5ff0659605179e6fb8",1]
-["src/commands/models/list.status.test.ts","../../agents/auth-profiles/paths.js","de0c9478cbe42e432fee7a885c570e6340743ec1f1f29184e6349cf1db02d3f9",1]
 ["src/commands/models/list.status.test.ts","../../agents/auth-profiles/persisted.js","6a83769a074caa7bd3b28734c46c7d5d673902532a66a1ef4778676d81392169",1]
 ["src/commands/models/list.status.test.ts","../../agents/auth-profiles/usage.js","5d1a0945f20a309bbb1d18a72fd9e6d1953f0dce9d7f89f3c437f8b07507dad2",1]
 ["src/commands/models/list.status.test.ts","../../agents/harness/runtime-plugin.js","4e85e85fa9603a1e7ffe13da22cf9bd56da2ec1df14d35bd62648aba02896706",1]
