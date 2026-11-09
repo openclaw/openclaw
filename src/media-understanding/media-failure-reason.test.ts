@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
+import { summarizeDecisionReason } from "../../packages/media-understanding-common/src/format.js";
 import { ProviderHttpError } from "../agents/provider-http-errors.js";
 import { formatMediaFailureReason, formatMediaFailureSummary } from "./media-failure-reason.js";
-import { summarizeDecisionReason } from "../../packages/media-understanding-common/src/format.js";
 
 function providerFailure(
   message: string,
