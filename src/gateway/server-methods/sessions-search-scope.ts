@@ -1,13 +1,10 @@
 import type { SessionsSearchParams } from "../../../packages/gateway-protocol/src/index.js";
 import { listAgentIds } from "../../agents/agent-scope-config.js";
 import { isConfiguredSessionStoreAgentId } from "../../config/sessions.js";
+import { resolveAgentMainSessionKey } from "../../config/sessions/main-session.js";
 import { resolvePersistedSessionStoreOwnerForKey } from "../../config/sessions/session-store-owner.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import {
-  isAcpSessionKey,
-  normalizeAgentIdStrict,
-  parseAgentSessionKey,
-} from "../../routing/session-key.js";
+import { normalizeAgentIdStrict, parseAgentSessionKey } from "../../routing/session-key.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import { invalidSessionRequest } from "../session-request-error.js";
 import {
@@ -26,19 +23,25 @@ export function resolveSessionSearchScope(cfg: OpenClawConfig, params: SessionsS
   const agentIds = new Set<string>();
   const rosterAgentIds = new Set(listAgentIds(cfg));
   for (const sessionKey of params.sessionKeys ?? []) {
-    const acpOwnerAgentId =
-      parseAgentSessionKey(sessionKey) && isAcpSessionKey(sessionKey)
-        ? resolveSessionStoreAgentId(cfg, sessionKey)
-        : undefined;
-    const configuredAcpOwner = Boolean(
+    // Store ownership, not an ACP-shaped suffix, admits an existing qualified transcript.
+    const configuredStoreKey =
       requestedAgentId &&
       !rosterAgentIds.has(requestedAgentId) &&
       isConfiguredSessionStoreAgentId(cfg, requestedAgentId) &&
-      acpOwnerAgentId === requestedAgentId &&
-      resolvePersistedSessionStoreOwnerForKey(cfg, sessionKey).kind === "none",
+      parseAgentSessionKey(sessionKey) &&
+      resolveSessionStoreAgentId(cfg, sessionKey) === requestedAgentId &&
+      resolvePersistedSessionStoreOwnerForKey(cfg, sessionKey).kind === "none"
+        ? resolveStoredSessionKeyForAgentStore({ cfg, agentId: requestedAgentId, sessionKey })
+        : undefined;
+    const configuredStoreOwner = Boolean(
+      requestedAgentId &&
+      configuredStoreKey &&
+      configuredStoreKey !== "global" &&
+      configuredStoreKey !== "unknown" &&
+      configuredStoreKey !== resolveAgentMainSessionKey({ cfg, agentId: requestedAgentId }),
     );
     const requestedAgent =
-      requestedAgentId && configuredAcpOwner
+      requestedAgentId && configuredStoreOwner
         ? ({ ok: true, agentId: requestedAgentId } as const)
         : requestedAgentId &&
             !isConfiguredSessionStoreAgentId(cfg, requestedAgentId) &&
