@@ -197,7 +197,7 @@ pr_preflight_baseline_arguments() {
       --expected-head|--baseline|--expected-tree|--expected-review|--predecessor-head|--predecessor-binding|--incoming-head|--incoming-review|--publication-oid)
         [[ "$value" =~ ^[a-f0-9]{40}$ ]] || return 2 ;;
       --publication-receipt) case "$value" in push|sync) ;; *) return 2 ;; esac ;;
-      --resolutions|--source-review) ;;
+      --resolutions|--source-review|--coauthors) ;;
       --signer) [ "$command" = prepare-baseline-signing-request ] || return 2 ;;
       *) return 2 ;;
     esac
@@ -211,7 +211,7 @@ pr_preflight_baseline_arguments() {
       for option in --incoming-head --incoming-review --publication-receipt --publication-oid; do case "$seen" in *" $option "*) ;; *) return 2 ;; esac; done ;;
     esac
   else
-    for option in --source-review --incoming-head --incoming-review --publication-receipt --publication-oid; do case "$seen" in *" $option "*) return 2 ;; esac; done
+    for option in --source-review --coauthors --incoming-head --incoming-review --publication-receipt --publication-oid; do case "$seen" in *" $option "*) return 2 ;; esac; done
   fi
 }
 pr_preflight_baseline_arguments "$@" || { echo "Invalid baseline admission options; proof is explicit and unavailable for successor/signing commands." >&2; exit 2; }
@@ -1455,7 +1455,7 @@ if [ "${1-}" = merge-run ] || [ "${1-}" = merge-recover ] || [ "${1-}" = prepare
     fi
     merge_cli_args+=("$merge_cli_arg")
     merge_cli_body_next=false
-    if [ "$merge_cli_arg" = --body-file ] || [ "$merge_cli_arg" = --legacy-refusal ] || [ "$merge_cli_arg" = --pre-dispatch-refusal ] || [ "$merge_cli_arg" = --admin-evidence ] || [ "$merge_cli_arg" = --resolutions ] || [ "$merge_cli_arg" = --signed-commit ] || [ "$merge_cli_arg" = --source-review ]; then merge_cli_body_next=true; fi
+    if [ "$merge_cli_arg" = --body-file ] || [ "$merge_cli_arg" = --legacy-refusal ] || [ "$merge_cli_arg" = --pre-dispatch-refusal ] || [ "$merge_cli_arg" = --admin-evidence ] || [ "$merge_cli_arg" = --resolutions ] || [ "$merge_cli_arg" = --signed-commit ] || [ "$merge_cli_arg" = --source-review ] || [ "$merge_cli_arg" = --coauthors ]; then merge_cli_body_next=true; fi
   done
   set -- "${merge_cli_args[@]}"
 fi
@@ -1525,7 +1525,7 @@ Usage:
     Publish an exact signed correction for enumerated proof prerequisites. Keeps NEEDS WORK and unresolved findings.
     Requires no armed auto-merge/queue. Never qualifies gates or merge, and never creates a GraphQL commit alias.
   scripts/pr prepare-baseline-refresh <PR> --expected-head <SHA> --baseline <SHA> [--resolutions <file>]
-    Pending-proof source: add --for-proof --expected-tree <OID> --expected-review <OID> [--source-review <file>].
+    Pending-proof source: add --for-proof --expected-tree <OID> --expected-review <OID> [--source-review <file>] [--coauthors <file>].
     Published-source continuation: also select --incoming-head <SHA> --incoming-review <OID> --publication-receipt <push|sync> --publication-oid <OID>.
   scripts/pr prepare-baseline-successor <PR> --expected-head <SHA> --expected-tree <OID> --expected-review <OID> --predecessor-head <SHA> --predecessor-binding <OID> --baseline <SHA> [--resolutions <file>]
   scripts/pr prepare-baseline-signing-request <PR> --expected-head <SHA> --baseline <SHA> --signer <fingerprint> [--resolutions <file>] [successor identity options]
