@@ -1,10 +1,11 @@
 import { createHash } from "node:crypto";
+import { realpathSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { deserialize } from "node:v8";
 import { inflateRawSync } from "node:zlib";
-import { afterEach, expect, it } from "vitest";
+import { afterEach, assert, expect, it, vi } from "vitest";
 import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { requireGit } from "../../agents/worktrees/git.js";
@@ -36,6 +37,7 @@ import { localWorkspaceProjectionFixture } from "./local-workspace-store.test-su
 import type { LocalWorkspaceMutation } from "./local-workspace-store.types.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
+afterEach(() => vi.restoreAllMocks());
 const hash = (value: string) => createHash("sha256").update(value).digest("hex");
 
 it.each(["edit", "delete one-child root", "delete two-sided root"])(
@@ -162,11 +164,9 @@ it.each(["edit", "delete one-child root", "delete two-sided root"])(
       patch: { checkpoint_json: null },
       manifest: checkpoint,
     });
-    expect(
-      decodeLocalWorkspaceTree(
-        readLocalWorkspaceManifestRows(db, { ...input, revision: revision + 1 }).records,
-      ),
-    ).toEqual(expected);
+    const accepted = readLocalWorkspaceManifestRows(db, { ...input, revision: revision + 1 });
+    assert(accepted.records, "A fresh reader must receive the accepted baseline records");
+    expect(decodeLocalWorkspaceTree(accepted.records)).toEqual(expected);
     expect(result.preparations).toHaveLength(1);
     const packs = result.preparations!.flatMap(
       (batch) => (deserialize(inflateRawSync(batch)) as LocalWorkspacePreparation).packs!,
@@ -242,6 +242,39 @@ async function repairFixture(historicalCache = false) {
   };
   return { projection, canonical, snapshot, treeRoot, records };
 }
+
+it.each(["probe", "scan"] as const)(
+  "avoids redundant path validation for accepted baseline fingerprints (%s)",
+  async (kind) => {
+    const { projection, canonical, snapshot, records } = await repairFixture();
+    vi.spyOn(Date, "now").mockReturnValue(Date.now() + 60_000);
+    const rows = [JSON.stringify([...records.values()])];
+    const action = {
+      kind: "scan" as const,
+      target: "canonical" as const,
+      canonicalRoot: canonical,
+    };
+    const first = await executeLocalWorkspaceManifestRead({ ...snapshot, records: rows }, action);
+    assert(first.kind === "scan" && first.fingerprints, "Expected a real fingerprint observation");
+    const resolved = vi.spyOn(realpathSync, "native");
+    const opened = vi.spyOn(fs, "open");
+    const second = await executeLocalWorkspaceManifestRead(
+      {
+        ...snapshot,
+        row: {
+          ...snapshot.row,
+          projection_fingerprints: Buffer.from(first.fingerprints.blob, "base64"),
+        },
+        records: rows,
+      },
+      { ...action, kind },
+    );
+    expect(second).toMatchObject({ kind: "scan", resultingRoot: snapshot.row.baseline_ref });
+    const target = path.join(projection, "nested/file.txt");
+    expect(resolved.mock.calls.filter(([file]) => file === target)).toHaveLength(0);
+    expect(opened.mock.calls.filter(([file]) => file === target)).toHaveLength(0);
+  },
+);
 
 it.each([
   ["projection", false],

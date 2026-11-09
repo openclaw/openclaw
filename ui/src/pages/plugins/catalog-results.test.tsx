@@ -107,9 +107,9 @@ describe("renderPluginCatalogResults", () => {
     const { container, ui } = await mount(props);
     ui.node("openclaw-panel-empty-state").not.toBeNull();
     update(container, { ...props, remoteError: "ClawHub unavailable" });
-    ui.content(".callout.warning").toContain("ClawHub unavailable");
+    ui.content(".callout.warn").toContain("ClawHub unavailable");
     ui.node("openclaw-panel-empty-state").toBeNull();
-    container.querySelector<HTMLButtonElement>(".callout.warning button")!.click();
+    container.querySelector<HTMLButtonElement>(".callout.warn button")!.click();
     expect(props.onRetry).toHaveBeenCalledOnce();
 
     const pending = Promise.withResolvers<null>();
@@ -244,6 +244,25 @@ describe("renderPluginCatalogResults", () => {
     await waitForSolid(() => ui.node('[data-plugin-id="second"]').not.toBeNull());
     ui.node('[data-plugin-id="tool"]').toBe(card);
     ui.node("input").toBe(search);
+  });
+
+  it.each([
+    { phone: false, focused: true },
+    { phone: true, focused: false },
+  ])("focuses the search on arrival unless at phone width: %o", async ({ phone, focused }) => {
+    vi.stubGlobal("matchMedia", () => ({
+      matches: phone,
+      addEventListener: () => {},
+      removeEventListener: () => {},
+    }));
+    try {
+      const { container } = await mount(baseProps());
+      const search = container.querySelector<HTMLInputElement>("input")!;
+      expect(search.hasAttribute("autofocus")).toBe(focused);
+      expect(document.activeElement === search).toBe(focused);
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 
   it("does not rescan the large catalog for unrelated feedback updates", async () => {

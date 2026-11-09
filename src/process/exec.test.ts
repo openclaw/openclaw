@@ -132,6 +132,22 @@ describe("runCommandWithTimeout", () => {
   );
 
   it.skipIf(process.platform === "win32")(
+    "reports confirmed process-tree extinction after a child-requested signal",
+    async () => {
+      const result = await runNode("process.kill(process.pid, 'SIGTERM')", {
+        killProcessTree: true,
+        requireProcessTreeExtinction: true,
+      });
+      expect(result).toMatchObject({
+        code: null,
+        signal: "SIGTERM",
+        termination: "signal",
+        cleanup: "normal",
+      });
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
     "reports normal extinction after a successful native-style command with a SIGKILL timeout",
     async () => {
       const result = await runNode("process.stdout.write('enabled\\n')", {
@@ -238,7 +254,7 @@ describe("runCommandWithTimeout", () => {
     ],
     [
       "does not treat combined overflow as selected-stream overflow",
-      "process.stderr.write('abcdefgh'); setImmediate(() => process.stdout.write('x'))",
+      "process.stdout.write('abcdefghx')",
       {
         maxCombinedOutputBytes: 8,
         maxOutputBytes: 16,
@@ -247,8 +263,8 @@ describe("runCommandWithTimeout", () => {
       },
       {
         termination: "exit",
-        stdout: "",
-        stderr: "abcdefgh",
+        stdout: "abcdefgh",
+        stderr: "",
         outputLimitExceeded: undefined,
       },
     ],

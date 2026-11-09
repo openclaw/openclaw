@@ -25,6 +25,7 @@ import {
 } from "./lib/package-lifecycle-marker.mjs";
 import {
   cleanPackedOpenClawTarballs,
+  newestOpenClawTarball,
   validatePackedTarballOutputName,
 } from "./lib/packed-openclaw-tarballs.mts";
 import { isRecord } from "./lib/record-shared.mjs";
@@ -167,28 +168,6 @@ function resolveOptionalTimerTimeoutMs(valueMs: unknown) {
   return valueMs === undefined ? undefined : resolveTimerTimeoutMs(Number(valueMs), 1);
 }
 
-function resolvePackedOpenClawFileName(value: string) {
-  const filename = value.trim();
-  if (
-    !filename.endsWith(".tgz") ||
-    (!filename.startsWith("openclaw-") &&
-      !filename.includes(":") &&
-      !filename.includes("/") &&
-      !filename.includes("\\"))
-  ) {
-    return "";
-  }
-  if (
-    !/^openclaw-[A-Za-z0-9._-]+\.tgz$/u.test(filename) ||
-    filename.includes("\0") ||
-    filename !== path.basename(filename) ||
-    filename !== path.win32.basename(filename)
-  ) {
-    throw new Error(`npm pack reported unsafe OpenClaw tarball filename: ${filename}`);
-  }
-  return filename;
-}
-
 export function parseArgs(argv: string[]) {
   const options = parseFlagArgs(
     argv,
@@ -285,6 +264,7 @@ function run(command: string, args: string[], cwd: string, options: RunOptions =
     let timedOut = false;
     let outputLimitExceeded = false;
     let stdout = "";
+    let stderrTail = "";
     let stdoutBytes = 0;
     let settled = false;
     let forceKillTimeout: ReturnType<typeof setTimeout> | undefined;
@@ -385,6 +365,11 @@ function run(command: string, args: string[], cwd: string, options: RunOptions =
       child.stdout?.pipe(process.stderr, { end: false });
     }
     child.stderr?.pipe(process.stderr, { end: false });
+    if (command === "npm" && args[0] === "pack") {
+      child.stderr?.on("data", (chunk) => {
+        stderrTail = (stderrTail + String(chunk)).slice(-4096);
+      });
+    }
     child.on("error", (error) => finish(error));
     child.on("close", (status, signal) => {
       if (timedOut) {
@@ -405,7 +390,11 @@ function run(command: string, args: string[], cwd: string, options: RunOptions =
         finish(undefined, stdout);
         return;
       }
-      finish(new Error(`${command} ${args.join(" ")} failed with ${status ?? signal}`));
+      finish(
+        new Error(
+          `${command} ${args.join(" ")} failed with ${status ?? signal}${status === 1 && stderrTail ? `\n${stderrTail.trimEnd()}` : ""}`,
+        ),
+      );
     });
   });
 }
@@ -449,35 +438,6 @@ async function runCapture(command: string, args: string[], cwd: string, options:
 
 export { run as runCommandForTest, runCapture as runCaptureForTest };
 
-async function newestOpenClawTarball(outputDir: string, packOutput: string) {
-  let fromOutput = "";
-  for (const line of packOutput.split(/\r?\n/u)) {
-    const filename = resolvePackedOpenClawFileName(line);
-    if (filename) {
-      fromOutput = filename;
-    }
-  }
-  if (fromOutput) {
-    return path.join(outputDir, fromOutput);
-  }
-
-  const entries = await fs.readdir(outputDir);
-  const packed = entries
-    .filter((entry) => {
-      try {
-        return resolvePackedOpenClawFileName(entry) === entry;
-      } catch {
-        return false;
-      }
-    })
-    .toSorted()
-    .at(-1);
-  if (!packed) {
-    throw new Error(`missing packed OpenClaw tarball in ${outputDir}`);
-  }
-  return path.join(outputDir, packed);
-}
-
 async function writePackJson(
   packOutput: string,
   tarball: string,
@@ -491,21 +451,13 @@ async function writePackJson(
     throw new Error("npm pack --json output was not valid JSON", { cause: error });
   }
   const entries = resolveNpmJsonEntries(parsed);
-  if (
-    entries.length === 0 ||
-    entries.some((entry) => !entry || typeof entry !== "object" || Array.isArray(entry))
-  ) {
+  if (entries.length === 0 || !entries.every(isRecord)) {
     throw new Error("npm pack --json output did not contain package results");
   }
   const filename = path.basename(tarball);
   for (const entry of entries) {
-    if (
-      entry &&
-      typeof entry === "object" &&
-      "filename" in entry &&
-      typeof entry.filename === "string"
-    ) {
-      (entry as MutableJsonRecord).filename = filename;
+    if (typeof entry.filename === "string") {
+      entry.filename = filename;
     }
   }
   const target = path.resolve(sourceDir, packJsonPath);
@@ -1010,12 +962,28 @@ export async function packOpenClawPackageForDocker(
         outputPath,
         ...(packTool === "npm" ? ["--json=false"] : []),
       ];
-      packOutput = await runCaptureImpl(packTool, packArgs, sourcePath, {
-        timeoutMs: resolveTimeoutMs(
-          "OPENCLAW_DOCKER_PACKAGE_PACK_TIMEOUT_MS",
-          DEFAULT_PACKAGE_PACK_TIMEOUT_MS,
-        ),
-      });
+      const runPack = () =>
+        runCaptureImpl(packTool, packArgs, sourcePath, {
+          timeoutMs: resolveTimeoutMs(
+            "OPENCLAW_DOCKER_PACKAGE_PACK_TIMEOUT_MS",
+            DEFAULT_PACKAGE_PACK_TIMEOUT_MS,
+          ),
+        });
+      try {
+        packOutput = await runPack();
+      } catch (error) {
+        if (
+          packTool !== "npm" ||
+          !(error instanceof Error) ||
+          !error.message.includes("Exit handler never called!")
+        ) {
+          throw error;
+        }
+        // npm can exit before settling its pack promise; keep the prepared source locked for one retry.
+        console.error("==> npm exited before completing pack; retrying once");
+        await cleanPackedOpenClawTarballs(outputPath);
+        packOutput = await runPack();
+      }
     } catch (error) {
       packageError = error;
       throw error;

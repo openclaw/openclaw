@@ -457,7 +457,7 @@ async function readCliScan(
   requestedId?: string,
 ): Promise<ClaudeCliScan> {
   const cacheKey = `${treeSnapshot.root}\0cli\0${requestedId ?? ""}`;
-  const now = Date.now();
+  const now = performance.now();
   const cached = claudeSessionScanCache.get(cacheKey);
   if (!forceRefresh && cached?.treeStamp === treeSnapshot.treeStamp && cached.hardExpiresAt > now) {
     setBoundedCache(
@@ -478,7 +478,7 @@ async function readCliScan(
     const result = await entry.records;
     if (!result.context.complete) {
       // Retry transient per-file I/O without waiting for the five-minute tree backstop.
-      entry.hardExpiresAt = Date.now() + CLAUDE_PARTIAL_SCAN_TTL_MS;
+      entry.hardExpiresAt = performance.now() + CLAUDE_PARTIAL_SCAN_TTL_MS;
     }
     return result;
   } catch (error) {

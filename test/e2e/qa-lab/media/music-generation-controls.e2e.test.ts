@@ -8,7 +8,7 @@ import type { OpenClawConfig } from "../../../../src/config/types.openclaw.js";
 import type {
   MusicGenerationProvider,
   MusicGenerationRequest,
-} from "../../../../src/music-generation/types.js";
+} from "../../../../src/music-generation/provider-types.js";
 import { prepareMediaCapabilityProviders } from "../../../../src/plugins/capability-provider-runtime.js";
 import { createPluginManifestRecordFixture } from "../../../../src/plugins/plugin-metadata.test-support.js";
 import { createEmptyPluginRegistry } from "../../../../src/plugins/registry.js";

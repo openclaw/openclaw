@@ -93,7 +93,7 @@ describe("session category mutations", () => {
         await h.list.promise.catch(() => undefined);
         await flushRead();
         expect(h.category()).toBeUndefined();
-        expect(h.sessions.state.error).toContain("The session move was saved");
+        expect(h.sessions.state.error).toContain("The move was saved");
         expect(h.sessions.state.error).toContain("injected list failure");
       }
     },
@@ -139,7 +139,7 @@ describe("session category mutations", () => {
   it("does not roll back an uncertain transport failure and never retries the write", async () => {
     const pending = h.sessions.patch(initial.key, { category: "Beta" }, options);
     h.replies[0]!.reject(new Error("connection lost"));
-    await expect(pending).rejects.toThrow("could not be confirmed");
+    await expect(pending).rejects.toThrow("Couldn’t confirm the session move");
     expect(h.category()).toBe("Beta");
     await h.listStarted.promise;
     h.list.resolve(result({ category: "Beta", updatedAt: 2 }));

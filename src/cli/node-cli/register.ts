@@ -64,6 +64,9 @@ export function registerNodeCli(program: Command) {
   )
     .option("--session-host", "Host worker sessions for this foreground process")
     .addOption(new Option("--ephemeral").hideHelp())
+    .addOption(
+      new Option("--resume-device <id>", "Resume only this saved paired device").hideHelp(),
+    )
     .addOption(new Option("--desktop-sharing").hideHelp())
     .addOption(new Option("--no-desktop-sharing").hideHelp())
     .option(
@@ -90,8 +93,16 @@ export function registerNodeCli(program: Command) {
         defaultRuntime.exit(1);
         return;
       }
-      const { host, port, contextPath, tls, tlsFingerprint, cloudflareAccess, gatewayCandidates } =
-        gatewayOptions;
+      const {
+        host,
+        port,
+        contextPath,
+        tls,
+        tlsFingerprint,
+        cloudflareAccess,
+        gatewayCandidates,
+        gatewayTarget,
+      } = gatewayOptions;
       if (port === null) {
         defaultRuntime.error(formatInvalidPortOption("--port"));
         defaultRuntime.exit(1);
@@ -111,6 +122,7 @@ export function registerNodeCli(program: Command) {
         gatewayContextPath: contextPath,
         gatewayCloudflareAccess: cloudflareAccess,
         gatewayCandidates,
+        gatewayTarget,
         gatewayBootstrapToken: pair?.bootstrapToken,
         gatewayBootstrapExpiresAtMs: pair?.expiresAtMs,
         preferGatewayBootstrapToken: opts.pair !== undefined,
@@ -121,6 +133,7 @@ export function registerNodeCli(program: Command) {
         installedAppsSharing: opts.shareInstalledApps,
         desktopSharingEnabled: opts.desktopSharing,
         gatewayAuthFromEnv: opts.authFromEnv,
+        resumeDeviceId: opts.resumeDevice,
         parentStdin: opts.parentStdin,
         commands: opts.commands ?? inheritOptionFromParent<string[]>(command, "commands"),
         allCommands: opts.allCommands ?? inheritOptionFromParent<boolean>(command, "allCommands"),

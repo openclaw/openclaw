@@ -7,6 +7,7 @@ import {
 import type { SearchConfigRecord } from "openclaw/plugin-sdk/provider-web-search";
 import {
   externalContentStamp,
+  nativeWebSearchCodecs,
   buildSearchCacheKey,
   DEFAULT_SEARCH_COUNT,
   formatCliCommand,
@@ -173,12 +174,6 @@ function normalizeBraveUiLang(value: string | undefined): string | undefined {
   }
   return `${normalizeLowercaseStringOrEmpty(language)}-${region.toUpperCase()}`;
 }
-
-type BraveSearchResponse = {
-  web?: {
-    results?: Array<{ title?: string; url?: string; description?: string; page_age?: string }>;
-  };
-};
 
 function logBraveHttp(
   diagnosticsEnabled: boolean,
@@ -390,7 +385,7 @@ export async function executeBraveSearch(
     logBraveHttp(diagnosticsEnabled, "cache miss", { mode: braveMode });
 
     const start = Date.now();
-    const url = new URL(braveBaseUrl);
+    let url = new URL(braveBaseUrl);
     url.pathname = `${url.pathname.replace(/\/+$/u, "")}${
       braveMode === "llm-context" ? BRAVE_LLM_CONTEXT_ENDPOINT_PATH : BRAVE_SEARCH_ENDPOINT_PATH
     }`;
@@ -412,7 +407,9 @@ export async function executeBraveSearch(
       url.searchParams.set("freshness", `1970-01-01to${dateBefore}`);
     }
     if (braveMode === "web") {
-      url.searchParams.set("count", String(requestedCount));
+      url = new URL(
+        nativeWebSearchCodecs["brave.search"].request(url.href, query, requestedCount).url,
+      );
       if (normalizedUiLang) {
         url.searchParams.set("ui_lang", normalizedUiLang);
       }
@@ -476,22 +473,10 @@ export async function executeBraveSearch(
             sources: data.sources,
           };
         }
-        const data = await readProviderJsonResponse<BraveSearchResponse>(httpResponse, errorLabel);
-        const results = Array.isArray(data.web?.results) ? data.web.results : [];
+        const data = await readProviderJsonResponse(httpResponse, errorLabel);
         return {
           mode: "web" as const,
-          results: results.slice(0, requestedCount).map((entry) => {
-            const description = entry.description ?? "";
-            const title = entry.title ?? "";
-            const resultUrl = entry.url ?? "";
-            return {
-              title: title ? wrapWebContent(title, "web_search") : "",
-              url: resultUrl,
-              description: description ? wrapWebContent(description, "web_search") : "",
-              published: entry.page_age || undefined,
-              siteName: resolveSiteName(resultUrl) || undefined,
-            };
-          }),
+          results: nativeWebSearchCodecs["brave.search"].results(data, requestedCount),
         };
       },
     );

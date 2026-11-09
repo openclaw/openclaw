@@ -50,6 +50,7 @@ import {
   resolveLocalPairingFallback,
 } from "./devices-cli-fallback.js";
 import { callDevicesGateway, type DevicesRpcOpts } from "./devices-cli.rpc.js";
+import { isUnknownRequestIdError } from "./devices-cli.unknown-id.js";
 import { ExpectedCliError } from "./expected-cli-error.js";
 import { prepareCliGatewayStateAccess } from "./gateway-rpc.runtime.js";
 import { runWithLocalStateOwner } from "./local-state-owner.js";
@@ -119,22 +120,6 @@ function isDevicePairingApprovalDenied(error: unknown): boolean {
   return normalizeLowercaseStringOrEmpty(normalizeErrorMessage(error)).includes(
     "device pairing approval denied",
   );
-}
-
-function isUnknownRequestIdError(error: unknown): boolean {
-  const maybeGatewayError =
-    typeof error === "object" && error !== null
-      ? (error as { gatewayCode?: unknown; message?: unknown })
-      : undefined;
-  const gatewayCode = maybeGatewayError?.gatewayCode;
-  if (gatewayCode !== undefined && gatewayCode !== "INVALID_REQUEST") {
-    return false;
-  }
-  const message =
-    typeof maybeGatewayError?.message === "string"
-      ? maybeGatewayError.message
-      : normalizeErrorMessage(error);
-  return normalizeLowercaseStringOrEmpty(message).includes("unknown requestid");
 }
 
 function isScopeUpgradePendingApproval(error: unknown): boolean {
@@ -681,12 +666,24 @@ export async function runDevicesDeleteCommand(
     );
     return;
   }
-  const result = await callDevicesGateway(
-    `device.pair.${operation}`,
-    opts,
-    { [field]: trimmed },
-    operation === "remove" ? { removedLocalDeviceId: trimmed } : undefined,
-  );
+  let result: unknown;
+  try {
+    result = await callDevicesGateway(
+      `device.pair.${operation}`,
+      opts,
+      { [field]: trimmed },
+      operation === "remove" ? { removedLocalDeviceId: trimmed } : undefined,
+    );
+  } catch (error) {
+    if (!isUnknownRequestIdError(error, field)) {
+      throw error;
+    }
+    failDevicesCommand(
+      opts.json,
+      terminalText`No ${operation === "remove" ? "paired device" : "pending device request"} matches ${sanitizeForLog(trimmed)}. Run ${formatCliCommand("openclaw devices list")} and retry with the current ${field}.`,
+    );
+    return;
+  }
   if (opts.json) {
     defaultRuntime.writeJson(result);
     return;

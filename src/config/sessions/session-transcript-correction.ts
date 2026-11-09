@@ -228,6 +228,7 @@ async function runPreparedTranscriptCorrection<T>(
         }),
         async run(worker, commit) {
           const hydration = await source.owner.readTranscript({
+            caller: "correction",
             target: source.scope,
             resolvedScope: resolved,
             expectedIdentity: source.expectedIdentity,

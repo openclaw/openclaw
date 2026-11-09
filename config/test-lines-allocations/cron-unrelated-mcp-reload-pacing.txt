@@ -1,0 +1,2 @@
+116
+# Cover MCP reload during native preparation, retained native-runtime authority, and failed paced checks across restart.

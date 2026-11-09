@@ -1,0 +1,2 @@
+17
+# Keep the trim-retention contract for disk plugins in both AOT input modes.

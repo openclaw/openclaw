@@ -1,13 +1,15 @@
 import { createHash } from "node:crypto";
+import path from "node:path";
 import { parseKeyValueOutput } from "../daemon/runtime-parse.js";
 import { resolveExecutablePath } from "../infra/executable-path.js";
+import { getHostExecMemoryBudget } from "../process/child-memory.js";
 import { getProcessSupervisor } from "../process/supervisor/index.js";
 import type { RunExit, SpawnInput, TerminationReason } from "../process/supervisor/types.js";
 
 type ControlOptions = Pick<SpawnInput, "env" | "assertCurrent" | "initiateSpawn">;
 type StopOptions = Pick<ControlOptions, "assertCurrent">;
 type LaunchOptions = ControlOptions &
-  Pick<SpawnInput, "cwd" | "timeoutMs" | "memoryLimitBytes"> & {
+  Pick<SpawnInput, "cwd" | "timeoutMs"> & {
     id: string;
     argv: string[];
     env: Record<string, string>;
@@ -15,7 +17,7 @@ type LaunchOptions = ControlOptions &
   };
 export type DurableProcessObservation =
   | { state: "missing" }
-  | { state: "running"; pid?: number }
+  | { state: "running"; pid?: number; cgroupDirectory?: string }
   | {
       state: "exited";
       exitCode: number | null;
@@ -113,6 +115,7 @@ export async function launchDurableProcess(params: LaunchOptions): Promise<{ uni
     .split("\n")
     .map((line) => /^([A-Za-z_][A-Za-z0-9_]*)=/.exec(line)?.[1])
     .filter((key) => key && !(key in params.env));
+  const budget = getHostExecMemoryBudget();
   const properties = {
     Type: "exec",
     ExitType: "cgroup",
@@ -123,7 +126,9 @@ export async function launchDurableProcess(params: LaunchOptions): Promise<{ uni
     StandardOutput: `append:${params.logPath}`,
     StandardError: "inherit",
     RuntimeMaxSec: params.timeoutMs ? `${params.timeoutMs / 1000}s` : "infinity",
-    MemoryMax: params.memoryLimitBytes ?? "infinity",
+    // Bound one unit at the full allowance; the sampler accounts concurrent work.
+    MemoryMax: budget?.memoryBytes ?? "infinity",
+    ...(budget ? { MemorySwapMax: budget.swapBytes, OOMPolicy: "kill" } : {}),
     UnsetEnvironment: unset.join(" "),
   };
   const helperEnv: NodeJS.ProcessEnv = { ...params.env };
@@ -161,7 +166,7 @@ export async function readDurableProcess(unit: string): Promise<DurableProcessOb
   const reply = await control(
     [
       "show",
-      "--property=LoadState,ActiveState,SubState,MainPID,ExecMainCode,ExecMainStatus,Result",
+      "--property=LoadState,ActiveState,SubState,MainPID,ControlGroup,ExecMainCode,ExecMainStatus,Result",
     ],
     unit,
   );
@@ -176,7 +181,16 @@ export async function readDurableProcess(unit: string): Promise<DurableProcessOb
     ["activating", "deactivating", "reloading"].includes(fields.activestate ?? "") ||
     (fields.activestate === "active" && fields.substate !== "exited")
   ) {
-    return { state: "running", pid: Number(fields.mainpid) || undefined };
+    const group = fields.controlgroup;
+    const cgroupDirectory =
+      group?.startsWith("/") && !group.split("/").includes("..")
+        ? path.join("/sys/fs/cgroup", group)
+        : undefined;
+    return {
+      state: "running",
+      pid: Number(fields.mainpid) || undefined,
+      ...(cgroupDirectory ? { cgroupDirectory } : {}),
+    };
   }
   const code = Number(fields.execmaincode),
     status = Number(fields.execmainstatus),

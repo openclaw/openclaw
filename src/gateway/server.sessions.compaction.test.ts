@@ -762,7 +762,7 @@ test("sessions.compact preserves summary-elided queued follow-up work", async ()
   }
   const queue = getExistingFollowupQueue(sessionKey)!;
   expect(queue.summaryElisions).toHaveLength(1);
-  const elidedSource = queue.summaryElisions[0]!.sources[0]!;
+  const elidedSource = queue.summaryElisions[0]!.entries[0]!.source;
   expect(elidedSource.controllerInput).toBeDefined();
 
   const { ws } = await openClient();
@@ -770,9 +770,9 @@ test("sessions.compact preserves summary-elided queued follow-up work", async ()
     const compacted = await rpcReq(ws, "sessions.compact", { key: "main" });
 
     expect(compacted.ok).toBe(true);
-    expect(getExistingFollowupQueue(sessionKey)?.summaryElisions[0]?.sources).toContain(
-      elidedSource,
-    );
+    expect(
+      getExistingFollowupQueue(sessionKey)?.summaryElisions[0]?.entries.map(({ source }) => source),
+    ).toContain(elidedSource);
     expect(elidedSource.controllerInput?.retirementRequested).not.toBe(true);
     expect(embeddedRunMock.compactEmbeddedAgentSession).toHaveBeenCalledOnce();
     expectNoSessionQueueCleanup();

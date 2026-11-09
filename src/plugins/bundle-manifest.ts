@@ -5,6 +5,7 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { normalizeUniqueSingleOrTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
+import { validatePluginRecommendedPrompts } from "../../packages/plugin-package-contract/src/index.js";
 import { matchRootFileOpenFailure } from "../infra/boundary-file-read.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -45,6 +46,7 @@ type BundlePluginManifest = {
   name?: string;
   description?: string;
   version?: string;
+  recommendedPrompts?: string[];
   skills: string[];
   settingsFiles?: string[];
   onboardingSkill?: string;
@@ -306,6 +308,25 @@ export function loadBundleManifest(params: {
   }
   const extensions = isRecord(raw.extensions) ? raw.extensions : undefined;
   const openai = isRecord(extensions?.["com.openai"]) ? extensions["com.openai"] : undefined;
+  const presentation =
+    params.bundleFormat === "agent"
+      ? isRecord(openai?.interface)
+        ? openai.interface
+        : undefined
+      : params.bundleFormat === "codex"
+        ? interfaceRecord
+        : undefined;
+  const defaultPrompt = presentation?.defaultPrompt;
+  const prompts = validatePluginRecommendedPrompts(
+    typeof defaultPrompt === "string" ? [defaultPrompt] : defaultPrompt,
+  );
+  if (prompts.ok && prompts.recommendedPrompts !== undefined) {
+    manifest.recommendedPrompts = prompts.recommendedPrompts;
+  } else if (!prompts.ok) {
+    log.warn(
+      `ignoring invalid bundle interface.defaultPrompt in ${loaded.manifestPath}: ${prompts.error}`,
+    );
+  }
   const onboardingSkill = normalizeOptionalString(openai?.onboardingSkill);
   if (onboardingSkill) {
     const relative = path.normalize(onboardingSkill);

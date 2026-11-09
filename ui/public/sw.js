@@ -354,19 +354,36 @@ async function precacheOfflineShell(signal) {
   // A deep chat URL must resolve the portable bundle against the registered app
   // root. No fetched document, credential, or route-specific metadata is retained.
   const escapedPath = SCOPE_PATH.replaceAll("&", "&amp;").replaceAll('"', "&quot;");
-  const html = OFFLINE_BOOT.html
+  let html = OFFLINE_BOOT.html
     .replaceAll('src="./', () => `src="${escapedPath}`)
     .replaceAll('href="./', () => `href="${escapedPath}`)
     .replace(
       "<html",
       () => `<html data-openclaw-control-ui-base-path="${escapedPath.slice(0, -1)}"`,
     );
+  let csp = OFFLINE_BOOT.csp;
+  const importMap = /(<script\b[^>]*\btype="importmap"[^>]*>)([\s\S]*?)(<\/script>)/u.exec(html);
+  if (importMap) {
+    // Map URLs, like module URLs, belong to the worker scope even on deep links.
+    const rooted = importMap[2].replaceAll(
+      '"./assets/',
+      JSON.stringify(`${SCOPE_PATH}assets/`).slice(0, -1),
+    );
+    const [previousHash, rootedHash] = await Promise.all(
+      [importMap[2], rooted].map(async (source) => {
+        const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(source));
+        return `'sha256-${btoa(String.fromCharCode(...new Uint8Array(digest)))}'`;
+      }),
+    );
+    html = html.replace(importMap[0], () => importMap[1] + rooted + importMap[3]);
+    csp = csp.replace(previousHash, rootedHash);
+  }
   await cache.put(
     OFFLINE_SHELL_URL,
     new Response(html, {
       headers: {
         "Content-Type": "text/html; charset=utf-8",
-        "Content-Security-Policy": OFFLINE_BOOT.csp,
+        "Content-Security-Policy": csp,
         "Referrer-Policy": "no-referrer",
         "X-Content-Type-Options": "nosniff",
       },
@@ -614,7 +631,6 @@ self.addEventListener("push", (event) => {
     data = { title: "OpenClaw", body: event.data.text() };
   }
 
-  const title = data.title || "OpenClaw";
   const options = {
     body: data.body || "",
     icon:
@@ -626,13 +642,14 @@ self.addEventListener("push", (event) => {
     badge: "./favicon-32.png",
     tag: data.tag || "openclaw-notification",
     renotify: data.renotify === true,
+    silent: false, // macOS otherwise defaults Web Push to silent.
     data: {
       url: data.url || self.registration.scope,
       explicitUrl: Boolean(data.url),
     },
   };
 
-  event.waitUntil(self.registration.showNotification(title, options));
+  event.waitUntil(self.registration.showNotification(data.title || "OpenClaw", options));
 });
 
 self.addEventListener("notificationclick", (event) => {

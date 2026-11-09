@@ -162,6 +162,7 @@ export class SessionManagerCore extends SessionEntryNavigation<SessionEntry> {
     this.assertTranscriptViewAvailable();
     const capturedTarget = captureSessionTranscriptTargetBinding(target);
     const hydration = prepareSessionManagerHydration(capturedTarget, {
+      caller: complete ? "model-complete" : "model-reload",
       limits: complete ? undefined : this.boundedContextLimits,
       signal,
       manager: this,
@@ -182,7 +183,6 @@ export class SessionManagerCore extends SessionEntryNavigation<SessionEntry> {
       signal?.throwIfAborted();
       assertOwned();
       hydration.assertCurrent();
-      this.assertTranscriptViewAvailable();
       const current = this.captureTranscriptView();
       if (
         revision !== this.hydrationRevision ||

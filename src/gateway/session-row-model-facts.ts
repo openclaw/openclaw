@@ -2,7 +2,7 @@ import { normalizeOptionalAgentRuntimeId } from "../agents/agent-runtime-id.js";
 import { DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { listRegisteredAgentHarnesses } from "../agents/harness/registry.js";
 import type { AgentHarnessSessionRuntimeOwnership } from "../agents/harness/types.js";
-import type { ModelCatalogEntry } from "../agents/model-catalog.js";
+import type { ModelCatalogEntry } from "../agents/model-catalog.types.js";
 import { normalizeStoredOverrideModel } from "../agents/model-selection-persisted.js";
 import { parseModelRef } from "../agents/model-selection.js";
 import { resolveSessionConfiguredDefault } from "../agents/session-model-ref.js";

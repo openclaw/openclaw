@@ -403,7 +403,10 @@ To post a notice into a session's chat without sending it to the model, call
 `appendAssistantMirrorMessageByIdentity` with `text` and
 `deliveryMirror: { kind: "plugin-notice", pluginId, type, data }`. Every client
 shows the text. `data` is JSON that a client can use to render a richer row for a
-notice type it knows. The row is never replayed to the model.
+notice type it knows. The row is never replayed to the model. For a notice from
+background work that must skip a reset session or also reach the session's
+channel, use `api.runtime.system.postSessionNotice`; see
+[background session notices](/plugins/sdk-runtime#background-session-notices).
 
 For ordinary session preparation, await `getSessionEntryAsync`,
 `readSessionUpdatedAtAsync`, `getConversationSessionAsync`, or
@@ -434,6 +437,50 @@ When awaiting further preparation after `readSessionTranscriptCatalogPage`, its
 optional second argument captures an actor-currentness assertion. Call it at final
 serialization along with the caller's session/source checks. It does not grant
 access to the transcript or extend the session reader's lifetime.
+
+## Skill authoring
+
+`skill-authoring-runtime` is a private official-plugin runtime for plugins that
+keep learned skills in the per-agent folder their manifest names in
+`agentSkillsDir`. Skill loading already reads that folder; this subpath writes it.
+
+The host resolves the skills root from the calling plugin's own manifest. Calls take
+the target agent (`{ config, agentId }`) and a skill name, never a folder or path, so
+a plugin cannot name another plugin's skills. A plugin without `agentSkillsDir` gets
+`SkillAuthoringError` with code `no_skills_root`.
+
+- `resolveSkillsRoot({ config, agentId })` returns the calling plugin's folder for
+  one agent, for listing its skills.
+- `readSkillFile({ config, agentId, skillName, filePath })` and `listSkillFiles`
+  read with byte limits and refuse links.
+- `normalizeSkillFilePath(path)` accepts `SKILL.md` or a relative path below
+  `assets/`, `examples/`, `references/`, `scripts/`, or `templates/`.
+- `parseSkillFrontmatter` parses strictly; `splitSkillFrontmatter` returns the
+  frontmatter record and body and never throws.
+- `validateSkillFile({ skillName, filePath, content, maxSkillBytes })` checks
+  the support path, the `SKILL.md` frontmatter (`name` must match the folder,
+  `description` must be 1 to 1,024 bytes), the size limits, and the skill security
+  scan. It returns the description.
+- `writeSkillFile` and `removeSkillFile` validate, then change one file of one
+  skill. A skill name that is not one plain folder name, or a skill folder that a
+  link moves outside the root, is refused.
+- `commitSkillChange({ config, agentId, skillName, apply })` runs `apply`,
+  refreshes skill discovery, and dispatches one `skill_changed` hook with
+  `source: "plugin"`, the calling plugin's `pluginId`, and the before and after
+  artifacts. A failed `apply` dispatches nothing. Serialize overlapping changes to
+  one skill in the plugin.
+
+These calls must run inside a plugin call (a tool, hook, command, service, or
+`api.lifecycle.runInBackgroundContext` work). They carry the calling plugin's live
+authority from the host and check it after each awaited step and immediately before
+each file change and the `skill_changed` dispatch. When the plugin is disabled,
+replaced, or unloaded, they throw `PluginInstanceUnavailableError` and commit
+nothing.
+
+Refusals throw `SkillAuthoringError`. Its message says what to change, and its
+`code` (`invalid_path`, `path_escape`, `too_large`, `invalid_frontmatter`,
+`unsafe_content`, or `no_skills_root`) lets the plugin add its own guidance.
+Versioning, drafts, and naming rules stay with the plugin.
 
 ## Stateful CLI commands
 
@@ -519,5 +566,8 @@ This capability is host-local and is never a wire environment override.
 
 `process-runtime` exports `createBoundedLineFramer` for bounded LF-delimited byte
 streams. It preserves incomplete lines and leaves CR handling to the consumer.
+`stripGatewayAllocatorEnv` removes `MALLOC_CONF` and jemalloc `LD_PRELOAD`
+entries in place from a caller-owned child environment. Copy inherited values
+first; never pass `process.env`. Other preload libraries remain available.
 Node duplex calls may supply `assertCurrent` to compose caller-owned liveness with
 the runtime's existing dispatch and delivery authority.
