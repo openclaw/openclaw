@@ -14,6 +14,7 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 export type TemplateCatalogEntry = ClawHubTemplateCatalogEntry;
 export type TemplateCatalogDetail = ClawHubTemplateCatalogDetail;
 export type TemplateCatalogSource = { packageName: string; version: string };
+export type TemplateUploadSource = { kind: "upload"; archiveBase64: string };
 export type TemplateAddReviewPlan = TemplateLifecyclePlanResult;
 
 export type TemplateAddApplyResult = {
@@ -103,7 +104,7 @@ export async function readTemplatePreview(
 
 export async function readTemplateAddReviewPlan(
   client: GatewayBrowserClient,
-  source: TemplateCatalogSource,
+  source: TemplateCatalogSource | TemplateUploadSource,
 ): Promise<TemplateAddReviewPlan> {
   const plan = await client.request<TemplateLifecyclePlanResult>("templates.add.plan", { source });
   if (plan.operation !== "add" || !plan.planIntegrity) {
@@ -114,7 +115,7 @@ export async function readTemplateAddReviewPlan(
 
 export async function applyTemplateAdd(
   client: GatewayBrowserClient,
-  source: TemplateCatalogSource,
+  source: TemplateCatalogSource | TemplateUploadSource,
   options: {
     acknowledgeClawHubRisk?: boolean;
     reviewPlan?: TemplateAddReviewPlan;

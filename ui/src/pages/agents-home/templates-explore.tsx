@@ -31,6 +31,7 @@ import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { createLayoutMeasurement } from "../../lib/reactive/layout-measurement.ts";
 import { observeWindowResize } from "../../lib/reactive/window-resize.ts";
 import { TemplateArtwork } from "./template-artwork.tsx";
+import { TemplateUpload } from "./template-upload.tsx";
 import "../../styles/agents-home.css";
 import "../../styles/carapace-control-ui.css";
 import "../../styles/plugins.css";
@@ -218,6 +219,7 @@ export function TemplatesExplore(props: { onSelect?: (entry: TemplateCatalogEntr
       />
       <SettingsPage wide carapace>
         <div class="agents-home">
+          <TemplateUpload />
           <section
             class="agents-home__explore plugin-catalog-results"
             data-templates-explore

@@ -1,5 +1,6 @@
 import type { Static } from "typebox";
 import { Type } from "typebox";
+import { MAX_TEMPLATE_UPLOAD_BASE64_LENGTH } from "../template-source-limits.js";
 import { closedObject } from "./closed-object.js";
 import { PluginDeclaredSurfaceSchema, PluginOperatorGrantsSchema } from "./plugins.js";
 import { NonEmptyString } from "./primitives.js";
@@ -221,6 +222,10 @@ export const TemplatesAddPlanParamsSchema = closedObject({
   source: Type.Union([
     TemplateCatalogCoordinateSchema,
     closedObject({ kind: Type.Literal("local"), path: NonEmptyString }),
+    closedObject({
+      kind: Type.Literal("upload"),
+      archiveBase64: Type.String({ minLength: 4, maxLength: MAX_TEMPLATE_UPLOAD_BASE64_LENGTH }),
+    }),
   ]),
   agentId: Type.Optional(NonEmptyString),
 });
@@ -229,6 +234,10 @@ export const TemplatesAddApplyParamsSchema = closedObject({
   source: Type.Union([
     TemplateCatalogCoordinateSchema,
     closedObject({ kind: Type.Literal("local"), path: NonEmptyString }),
+    closedObject({
+      kind: Type.Literal("upload"),
+      archiveBase64: Type.String({ minLength: 4, maxLength: MAX_TEMPLATE_UPLOAD_BASE64_LENGTH }),
+    }),
   ]),
   agentId: Type.Optional(NonEmptyString),
   planIntegrity: Type.Optional(NonEmptyString),

@@ -63,6 +63,30 @@ API clients can preview with `templates.add.plan` and apply with
 Pass the returned `planIntegrity` and any required dependency acknowledgements to
 apply. Paths refer to directories on the Gateway host, not the caller's machine.
 
+## Import a Template archive in the Control UI
+
+With Templates enabled, open **Pages → Templates → Import Template** and select
+a `.tgz` built with `openclaw templates build`. The file is read from your
+browser's computer, not from a path on the Gateway. Uploads are limited to 1 MiB
+compressed, 8 MiB extracted, and 4,096 archive entries. Unsafe paths, links,
+malformed archives, and invalid projects are rejected before installation.
+
+Review the proposed agent, actions, dependency capabilities, and trust warnings,
+then confirm Add. The exact archive bytes bind the review to installation through
+the existing live Add owner; no publication or restart is needed. Local uploads
+are not ClawHub-scanned. Current operator-admin authority is required. Canceling,
+leaving the page, or changing the connection drops the browser's pending archive.
+After an uncertain installation result, inspect the agent before uploading again.
+
+For API clients, the same `templates.add.plan` and `templates.add.apply` methods
+accept `source: { kind: "upload", archiveBase64: "..." }`. Reuse the exact payload
+and the returned `planIntegrity`, with the normal dependency acknowledgements,
+for apply. No permanent upload registry is created.
+
+Template Add logs record a correlation ID, operation stage, outcome, and duration
+without archive bytes or Template contents. Use the correlation ID when
+investigating an unsuccessful import.
+
 ## Create with an agent
 
 With Templates enabled in Labs, choose **Create Template** from the agent's left-sidebar

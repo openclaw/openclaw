@@ -3,6 +3,15 @@ import { en } from "./en.ts";
 
 const enTemplates = {
   templatesCatalog: {
+    importTitle: "Import Template",
+    importDescription:
+      "Choose a Template .tgz from this computer (up to 1 MiB). Review before installing.",
+    archiveLabel: "Template archive",
+    invalidArchive: "Choose a nonempty Template .tgz archive up to 1 MiB.",
+    processingArchive: "Processing Template…",
+    installedAgent: "Installed agent: {agentId}",
+    incompleteImport: "Installation did not complete. Inspect the agent before retrying.",
+    importAgent: "Agent: {agentId}",
     explore: "Templates",
     exploreDescription: "Purpose-built agents for your team.",
     title: "Templates",
@@ -74,7 +83,8 @@ const enTemplates = {
     instructionAdded: "Added to the workspace",
     trustReview: "ClawHub flagged this package for review. Read the warning before adding.",
     reviewTitle: "Review before adding",
-    reviewDescription: "This template needs permission to add the following plugins or skills.",
+    reviewDescription:
+      "Review these changes and any requested plugin or skill permissions before adding.",
     version: "Version {version}",
     contentsLoading: "Loading template contents…",
     noVersion: "This template has no published release yet.",

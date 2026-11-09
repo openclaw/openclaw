@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import {
   ErrorCodes,
@@ -35,6 +36,7 @@ import {
   TemplateGatewayPlanChangedError,
 } from "../../templates/gateway-add-apply.js";
 import { planTemplateAddForGateway } from "../../templates/gateway-add-plan.js";
+import type { TemplateAddDiagnosticStage } from "../../templates/gateway-add-source.js";
 import { TemplateGatewayConsentError } from "../../templates/gateway-plugin-consent.js";
 import { TemplateSkillConsentError } from "../../templates/gateway-skill-consent.js";
 import {
@@ -49,11 +51,40 @@ import { assertValidParams } from "./validation.js";
 
 const log = createSubsystemLogger("gateway/templates-add");
 
+// One terminal record per request; never serialize request data or caught errors.
+function templateAddDiagnostic(operation: "plan" | "apply") {
+  const correlationId = randomUUID();
+  const started = performance.now();
+  return (
+    stage: "params" | "policy" | TemplateAddDiagnosticStage,
+    outcome: "success" | "partial" | "invalid_params" | "forbidden" | "failed",
+    sourceKind?: "local" | "upload" | "clawhub",
+  ) => {
+    const metadata = {
+      operation,
+      stage,
+      outcome,
+      correlationId,
+      durationMs: Math.round(performance.now() - started),
+      ...(sourceKind ? { sourceKind } : {}),
+    };
+    if (outcome === "success") {
+      log.info("Template add completed", metadata);
+    } else {
+      log.warn("Template add did not complete", metadata);
+    }
+  };
+}
+
 export const templatesAddHandlers: GatewayRequestHandlers = {
   "templates.add.plan": async ({ params, respond, context, client, hasCurrentClientAuthority }) => {
+    const diagnostic = templateAddDiagnostic("plan");
     if (!assertValidParams(params, validateTemplatesAddPlanParams, "templates.add.plan", respond)) {
+      diagnostic("params", "invalid_params");
       return;
     }
+    const sourceKind = "kind" in params.source ? params.source.kind : "clawhub";
+    let stage: "policy" | TemplateAddDiagnosticStage = "policy";
     const assertLocalSourceAuthority = () => {
       if (
         "kind" in params.source &&
@@ -81,26 +112,30 @@ export const templatesAddHandlers: GatewayRequestHandlers = {
       if (!listedMcp.ok) {
         throw new Error(listedMcp.error);
       }
+      stage = "source_resolution_and_plan";
       const plan = await planTemplateAddForGateway({
         source: params.source,
+        onStage: (nextStage) => {
+          stage = nextStage;
+        },
         ...(params.agentId ? { agentId: params.agentId } : {}),
         config,
         sourceMcpServers: listedMcp.mcpServers,
       });
       assertTemplatesLabsEnabled(context.getRuntimeConfig());
       assertLocalSourceAuthority();
+      diagnostic(stage, "success", sourceKind);
       respond(true, plan);
     } catch (error) {
       if (
         error instanceof TemplatesLabsDisabledError ||
         error instanceof TemplateGatewayAuthorityError
       ) {
+        diagnostic(stage, "forbidden", sourceKind);
         respond(false, undefined, errorShape(ErrorCodes.FORBIDDEN, error.message));
         return;
       }
-      log.error(
-        `templates.add.plan failed: ${error instanceof Error ? error.message : String(error)}`,
-      );
+      diagnostic(stage, "failed", sourceKind);
       const message =
         error instanceof ClawHubSourceError
           ? error.message
@@ -117,11 +152,15 @@ export const templatesAddHandlers: GatewayRequestHandlers = {
     sessionMutationCommitGuard,
     hasCurrentClientAuthority,
   }) => {
+    const diagnostic = templateAddDiagnostic("apply");
     if (
       !assertValidParams(params, validateTemplatesAddApplyParams, "templates.add.apply", respond)
     ) {
+      diagnostic("params", "invalid_params");
       return;
     }
+    const sourceKind = "kind" in params.source ? params.source.kind : "clawhub";
+    let stage: "policy" | TemplateAddDiagnosticStage = "policy";
     const configPath = resolveConfigPath();
     const configEnv = process.env;
     const assertCurrent = () => {
@@ -169,8 +208,12 @@ export const templatesAddHandlers: GatewayRequestHandlers = {
       const application = createRuntimeConfigWriteApplication(
         captureGatewayRootWorkAdmissionContinuationScope()?.run,
       );
+      stage = "apply";
       const result = await applyTemplateAddForGateway({
         source: params.source,
+        onStage: (nextStage) => {
+          stage = nextStage;
+        },
         ...(params.agentId ? { agentId: params.agentId } : {}),
         planIntegrity: params.planIntegrity,
         ...(params.acknowledgeClawHubRisk ? { acknowledgeClawHubRisk: true } : {}),
@@ -326,11 +369,9 @@ export const templatesAddHandlers: GatewayRequestHandlers = {
           });
         },
       });
+      diagnostic(stage, result.status === "complete" ? "success" : "partial", sourceKind);
       respond(true, result);
     } catch (error) {
-      log.error(
-        `templates.add.apply failed: ${error instanceof Error ? error.message : String(error)}`,
-      );
       const code =
         error instanceof TemplateGatewayAuthorityError ||
         error instanceof TemplatesLabsDisabledError
@@ -343,6 +384,7 @@ export const templatesAddHandlers: GatewayRequestHandlers = {
                 error.code === "clawhub_risk_acknowledgement_required")
             ? ErrorCodes.INVALID_REQUEST
             : ErrorCodes.UNAVAILABLE;
+      diagnostic(stage, code === ErrorCodes.FORBIDDEN ? "forbidden" : "failed", sourceKind);
       const message =
         error instanceof TemplateGatewayAuthorityError ||
         error instanceof TemplatesLabsDisabledError ||

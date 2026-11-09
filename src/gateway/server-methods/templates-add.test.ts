@@ -14,6 +14,12 @@ import { coreGatewayHandlers } from "./core-handlers.js";
 import { templatesAddHandlers } from "./templates-add.js";
 import type { RespondFn } from "./types.js";
 
+const diagnosticLog = vi.hoisted(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn() }));
+vi.mock("../../logging/subsystem.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../logging/subsystem.js")>()),
+  createSubsystemLogger: () => diagnosticLog,
+}));
+
 const planAdd = vi.hoisted(() => vi.fn());
 const applyAdd = vi.hoisted(() => vi.fn());
 const listMcp = vi.hoisted(() => vi.fn());
@@ -78,21 +84,23 @@ async function callAdd(
   getRuntimeConfig: () => unknown = () => enabled,
   options: {
     hasCurrentClientAuthority?: () => boolean;
+    source?: typeof source | { kind: "local"; path: string };
     cron?: unknown;
     applyPluginLifecycleChange?: unknown;
   } = {},
 ) {
-  const { hasCurrentClientAuthority, ...runtime } = options;
+  const { hasCurrentClientAuthority, source: sourceOverride = source, ...runtime } = options;
   const method = `templates.add.${operation}`;
   const respond = vi.fn<RespondFn>();
   const handler = expectDefined(templatesAddHandlers[method], method);
   await handler({
     req: { type: "req", id: "add", method },
-    params: operation === "plan" ? { source } : params,
+    params:
+      operation === "plan" ? { source: sourceOverride } : { ...params, source: sourceOverride },
     respond,
     context: { getRuntimeConfig, ...runtime } as never,
     client:
-      operation === "apply"
+      operation === "apply" || "kind" in sourceOverride
         ? ({ connect: { role: "operator", scopes: ["operator.admin"] } } as never)
         : null,
     hasCurrentClientAuthority,
@@ -140,6 +148,7 @@ it("plans from the persisted roster, not a stale Gateway cache", async () => {
   const request = await callAdd("plan");
   expect(planAdd).toHaveBeenCalledWith({
     source,
+    onStage: expect.any(Function),
     config: onDisk,
     sourceMcpServers: {},
   });
@@ -430,4 +439,78 @@ it("rechecks reviewed access at the plugin reload's persistent apply", async () 
 
   expect(applied).not.toHaveBeenCalled();
   expect(request[0]?.[2]).toMatchObject({ code: "UNAVAILABLE" });
+});
+
+it.each(["plan", "apply"] as const)(
+  "logs bounded %s outcomes without source or error data",
+  async (operation) => {
+    const localSource = { kind: "local" as const, path: "/private/template-secret" };
+    const operationMock = operation === "plan" ? planAdd : applyAdd;
+    operationMock.mockRejectedValueOnce(new Error("private error with token=secret"));
+    const response = await callAdd(operation, () => enabled, { source: localSource });
+    expect(response[0]?.[2]).toMatchObject({ code: "UNAVAILABLE" });
+    expect(diagnosticLog.warn).toHaveBeenCalledExactlyOnceWith("Template add did not complete", {
+      operation,
+      stage: operation === "plan" ? "source_resolution_and_plan" : "apply",
+      outcome: "failed",
+      sourceKind: "local",
+      correlationId: expect.stringMatching(/^[a-f0-9-]{36}$/),
+      durationMs: expect.any(Number),
+    });
+    expect(diagnosticLog.error).not.toHaveBeenCalled();
+    expect(JSON.stringify(diagnosticLog.warn.mock.calls)).not.toContain("private");
+    const firstId = diagnosticLog.warn.mock.calls[0]?.[1].correlationId;
+    operationMock.mockResolvedValueOnce(operation === "plan" ? plan : ready);
+    await callAdd(operation, () => enabled, { source: localSource });
+    expect(diagnosticLog.info).toHaveBeenCalledExactlyOnceWith(
+      "Template add completed",
+      expect.objectContaining({ operation, outcome: "success", sourceKind: "local" }),
+    );
+    expect(diagnosticLog.info.mock.calls[0]?.[1].correlationId).not.toBe(firstId);
+  },
+);
+
+it.each(["plan", "apply"] as const)(
+  "records the failing upload stage for %s",
+  async (operation) => {
+    const operationMock = operation === "plan" ? planAdd : applyAdd;
+    operationMock.mockImplementationOnce(async (input) => {
+      input.onStage?.("upload_decode_and_staging");
+      input.onStage?.("upload_extraction");
+      throw new Error("private upload error");
+    });
+    await callAdd(operation, () => enabled, { source: { kind: "upload", archiveBase64: "YWJj" } });
+    expect(diagnosticLog.warn).toHaveBeenCalledExactlyOnceWith(
+      "Template add did not complete",
+      expect.objectContaining({
+        operation,
+        stage: "upload_extraction",
+        outcome: "failed",
+        sourceKind: "upload",
+      }),
+    );
+    expect(JSON.stringify(diagnosticLog.warn.mock.calls)).not.toContain("private");
+  },
+);
+
+it("records local source authority rejection without resolving the source", async () => {
+  await callAdd("plan", () => enabled, {
+    source: { kind: "local", path: "/private/template-secret" },
+    hasCurrentClientAuthority: () => false,
+  });
+  expect(planAdd).not.toHaveBeenCalled();
+  expect(diagnosticLog.warn).toHaveBeenCalledExactlyOnceWith(
+    "Template add did not complete",
+    expect.objectContaining({ stage: "policy", outcome: "forbidden", sourceKind: "local" }),
+  );
+});
+
+it("records a partial Add as a non-success outcome", async () => {
+  applyAdd.mockResolvedValueOnce({ ...complete, status: "partial" });
+  await callAdd("apply");
+  expect(diagnosticLog.info).not.toHaveBeenCalled();
+  expect(diagnosticLog.warn).toHaveBeenCalledExactlyOnceWith(
+    "Template add did not complete",
+    expect.objectContaining({ operation: "apply", stage: "apply", outcome: "partial" }),
+  );
 });

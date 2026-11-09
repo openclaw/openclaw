@@ -26,7 +26,11 @@ import {
   projectGatewayTemplateAddPlan,
   type GatewayTemplateAddPlanningContext,
 } from "./gateway-add-plan.js";
-import { withResolvedTemplateAddSource, type TemplateAddSource } from "./gateway-add-source.js";
+import {
+  withResolvedTemplateAddSource,
+  type TemplateAddSource,
+  type TemplateAddStageHook,
+} from "./gateway-add-source.js";
 import { projectTemplateConfiguredAccess } from "./gateway-disclosure.js";
 import { plansMatchAcrossSourceRoots } from "./gateway-plan-projection.js";
 import { bindTemplatePluginInstallConsent } from "./gateway-plugin-consent.js";
@@ -70,6 +74,7 @@ type StagedAddHandoff = {
 export async function applyTemplateAddForGateway(
   input: ClawHubFetchOptions & {
     source: TemplateAddSource;
+    onStage?: TemplateAddStageHook;
     agentId?: string;
     planIntegrity?: string;
     acknowledgeClawHubRisk?: boolean;
@@ -101,6 +106,7 @@ export async function applyTemplateAddForGateway(
   try {
     const resolved = await withResolvedTemplateAddSource({
       coordinate: input.source,
+      onStage: input.onStage,
       mode: "apply",
       ...(input.acknowledgeClawHubRisk ? { acknowledgeClawHubRisk: true } : {}),
       ...(input.baseUrl ? { baseUrl: input.baseUrl } : {}),
@@ -121,6 +127,7 @@ export async function applyTemplateAddForGateway(
           },
           stateContext,
           async (allocationLease) => {
+            input.onStage?.("apply");
             const assertAllocationCurrent = () => {
               input.assertCurrent();
               allocationLease.assertCurrent();
