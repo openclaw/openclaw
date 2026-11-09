@@ -1,0 +1,4 @@
+# Net test-line growth from PR "fix(cli): show the gateway health reason in status --deep"
+# (new regression asserting status --deep surfaces the gateway health reason as an
+# ExpectedCliError instead of the generic "The CLI command failed." line).
+45

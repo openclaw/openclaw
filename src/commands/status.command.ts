@@ -6,6 +6,7 @@ import {
   readPairingConnectErrorDetails,
 } from "../../packages/gateway-protocol/src/connect-error-details.js";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
+import { throwExpectedCliError } from "../cli/expected-cli-error.js";
 import { withProgress } from "../cli/progress.js";
 import { OPENCLAW_WRAPPER_ENV_KEY } from "../daemon/program-args.js";
 import { readRestartSentinelReadOnly } from "../infra/restart-sentinel.js";
@@ -116,7 +117,7 @@ export async function statusCommand(
 
   // Structured probe failures belong to nonthrowing JSON; text status keeps failures loud.
   if (health && "error" in health) {
-    throw new Error(health.error);
+    throwExpectedCliError(health.error);
   }
 
   const {

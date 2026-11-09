@@ -1,4 +1,4 @@
-import { beforeEach, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createMockGatewayService } from "../daemon/service.test-helpers.js";
 import { statusJsonCommand } from "./status-json.js";
 import { statusCommand } from "./status.command.js";
@@ -10,6 +10,9 @@ const mocks = vi.hoisted(() => ({
   node: vi.fn(),
 }));
 vi.mock("./node-runtime-diagnostics.js", () => ({ collectNodeRuntimeFindings: async () => [] }));
+vi.mock("../security/audit.runtime.js", () => ({
+  runSecurityAudit: async () => ({ summary: { critical: 0, warn: 0, info: 0 }, findings: [] }),
+}));
 vi.mock("./status.scan.js", () => ({ scanStatus: mocks.scan }));
 vi.mock("./status.scan.fast-json.js", () => ({ scanStatusJsonFast: mocks.scan }));
 // mock-isolation: Inject scan failures without starting live status or database probes.
@@ -96,3 +99,45 @@ it.each([
     }
   },
 );
+
+describe("status --deep gateway health failures", () => {
+  function createUnreachableScan() {
+    return {
+      cfg: { update: { channel: "stable" } },
+      sourceConfig: {},
+      summary: { ok: true, configuredChannels: [] },
+      osSummary: { platform: "linux" },
+      update: { installKind: "npm", git: { tag: null, branch: null } },
+      memory: null,
+      memoryPlugin: null,
+      gatewayMode: "local",
+      gatewayConnection: { url: "ws://127.0.0.1:18789", urlSource: "config" },
+      remoteUrlMissing: false,
+      gatewayReachable: false,
+      gatewayProbe: null,
+      gatewaySelf: null,
+      gatewayProbeAuthWarning: null,
+      agentStatus: [],
+      secretDiagnostics: [],
+      configDiagnostics: undefined,
+      env: {},
+    };
+  }
+
+  it("reports the gateway health reason instead of a generic CLI failure", async () => {
+    mocks.scan.mockResolvedValue(createUnreachableScan());
+    mocks.gateway.mockResolvedValue({
+      installed: false,
+      loadState: { status: "not-loaded" },
+      running: false,
+      command: null,
+      env: {},
+    });
+    const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+
+    await expect(statusCommand({ deep: true }, runtime)).rejects.toMatchObject({
+      name: "ExpectedCliError",
+      message: "Gateway is unreachable",
+    });
+  });
+});
