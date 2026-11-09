@@ -124,7 +124,6 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/managed-image-attachments.authority.test.ts",
   "src/gateway/managed-image-attachments.branch-retention.test.ts",
   "src/gateway/managed-image-attachments.conditional.test.ts",
-  "src/gateway/managed-image-attachments.playback.test.ts",
   "src/gateway/managed-image-attachments.recovery.test.ts",
   "src/gateway/managed-image-attachments.sqlite-visibility.test.ts",
   "src/gateway/managed-image-attachments.test.ts",
