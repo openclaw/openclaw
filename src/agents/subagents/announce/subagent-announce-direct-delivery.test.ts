@@ -160,6 +160,20 @@ function expectNoReplay(fixture: ReturnType<typeof setup>, dispatches = 1) {
   expect(fixture.send).not.toHaveBeenCalled();
 }
 
+it.each([false, true])(
+  "dispatches native completion fallback with requireVisibleReply=%s",
+  async (requireVisibleReply) => {
+    const fixture = setup("agent_harness_completion");
+    fixture.params.requireVisibleReply = requireVisibleReply;
+    fixture.dispatchDone.resolve(response());
+    await fixture.startDelivery();
+    expect(fixture.dispatch.mock.calls[0]?.[2]?.replyExpectation).toBe(
+      requireVisibleReply ? "required" : "optional",
+    );
+    expectNoReplay(fixture);
+  },
+);
+
 it("preserves the direct completion phase without replacing controller custody", async () => {
   const fixture = setup("subagent_announce");
   const expected = { delivered: true, path: "direct" };
