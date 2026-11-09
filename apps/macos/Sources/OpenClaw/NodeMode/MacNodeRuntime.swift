@@ -1,8 +1,10 @@
 import Foundation
 import OpenClawIPC
 import OpenClawKit
+import OSLog
 
 actor MacNodeRuntime {
+    private let logger = Logger(subsystem: "ai.openclaw", category: "simulator-preview")
     private static let maxGatewayPayloadBytes = 25 * 1024 * 1024
     private static let maxInlineMediaRawBytes = (maxGatewayPayloadBytes / 4) * 3
     private static let desktopOwnedCommands = Set([
@@ -313,6 +315,7 @@ actor MacNodeRuntime {
             simulatorCleanupSucceeded = true
         } catch {
             simulatorCleanupSucceeded = false
+            self.logger.error("Simulator pasteboard cleanup failed during desktop revocation; clear the Simulator clipboard")
         }
         let desktop = if let desktopAvailability {
             desktopAvailability
@@ -828,11 +831,19 @@ extension MacNodeRuntime {
         let lifecycleGeneration = self.computerInputReleaseGeneration
         await self.cachedMainActorServices?.releaseHeldInput(
             lifecycleGeneration: lifecycleGeneration)
-        try? await self.cachedMainActorServices?.stopSimulatorCapture(sessionId: nil)
+        do {
+            try await self.cachedMainActorServices?.stopSimulatorCapture(sessionId: nil)
+        } catch {
+            self.logger.error("Simulator pasteboard cleanup failed during input release; clear the Simulator clipboard")
+        }
     }
 
     func shutdown() async {
-        try? await self.cachedMainActorServices?.stopSimulatorCapture(sessionId: nil)
+        do {
+            try await self.cachedMainActorServices?.stopSimulatorCapture(sessionId: nil)
+        } catch {
+            self.logger.error("Simulator pasteboard cleanup failed during shutdown; clear the Simulator clipboard")
+        }
         await self.codexThreadCatalogClient.shutdown()
         // Terminal stop settles computer actions through releaseHeldComputerInput
         // first, so no window observation can still write a capture.
