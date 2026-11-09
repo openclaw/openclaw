@@ -5,16 +5,30 @@ import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-sta
 import { makeUserMessage } from "../../../test/helpers/user-message.js";
 import {
   appendTranscriptEvent,
+  loadTranscriptEventsSync,
   upsertSessionEntryCore,
   type SessionTranscriptRuntimeTarget,
 } from "../../config/sessions/session-accessor.js";
 import { transcriptEventJsonSql } from "../../config/sessions/transcript-payload.js";
 import { getNodeSqliteKysely } from "../../infra/kysely-sync.js";
 import { resolveZstdCodec } from "../../infra/zstd-codec.js";
+import type { Context } from "../../llm/types.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { normalizeMessagesForLlmBoundary } from "../embedded-agent-runner/run/attempt-llm-boundary.js";
+import { reconcilePrePersistedCurrentUserTurn } from "../embedded-agent-runner/run/pre-persisted-user-turn.js";
 import { makeAgentAssistantMessage } from "../test-helpers/agent-message-fixtures.js";
+import {
+  createAssistant,
+  createAssistantResultStream,
+  createTestSession,
+  registerAgentSessionLoopTestLifecycle,
+  streamMocks,
+  testModel,
+} from "./agent-session-loop-correctness.test-support.js";
 import { SessionManager } from "./session-manager.js";
+
+registerAgentSessionLoopTestLifecycle();
 
 async function withHistory(
   label: string,
@@ -788,3 +802,141 @@ it.each([false, true])(
     );
   },
 );
+
+it.each([
+  { label: "under cap", promptBytes: 0, resultBytes: 0, maxEvents: 20, kept: 8 },
+  { label: "oversized prompt", promptBytes: 15_000, resultBytes: 0, maxEvents: 20, kept: 4 },
+  { label: "oversized tool frame", promptBytes: 0, resultBytes: 15_000, maxEvents: 20, kept: 2 },
+  { label: "cut inside tool frame", promptBytes: 15_000, resultBytes: 0, maxEvents: 3, kept: 2 },
+])("retains owned history at actual inference after $label", async (scenario) => {
+  await withOpenClawTestState({ label: "oversized-turn-inference" }, async (state) => {
+    const target = {
+      agentId: "main",
+      sessionId: "oversized-turn-inference",
+      sessionKey: "agent:main:oversized-turn-inference",
+      storePath: path.join(state.agentDir("main"), "openclaw-agent.sqlite"),
+    };
+    await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
+    const source = await SessionManager.openAsync(target);
+    const appendOwnedCall = (owner: string) =>
+      source.appendMessageAsync(
+        createAssistant(
+          testModel,
+          [{ type: "toolCall", id: "repeat", name: "read", arguments: { path: owner } }],
+          "toolUse",
+        ),
+      );
+    const appendOwnedResult = (text: string) =>
+      source.appendMessageAsync({
+        role: "toolResult",
+        toolCallId: "repeat",
+        toolName: "read",
+        isError: false,
+        content: [{ type: "text", text }],
+        timestamp: 2,
+      });
+    await source.appendMessageAsync({ role: "user", content: "older request", timestamp: 0 });
+    await appendOwnedCall("older-owner.txt");
+    await appendOwnedResult("older-owned-result");
+    await source.appendMessageAsync({
+      role: "user",
+      content: "previous request:" + "x".repeat(scenario.promptBytes),
+      timestamp: 1,
+    });
+    await appendOwnedCall("current-owner.txt");
+    await appendOwnedResult("current-owned-result:" + "x".repeat(scenario.resultBytes));
+    const reply = createAssistant(testModel, [{ type: "text", text: "retained final reply" }]);
+    await source.appendMessageAsync(reply);
+    const current = {
+      role: "user" as const,
+      content: "continue the prior answer",
+      timestamp: 3,
+      idempotencyKey: "next-turn",
+    };
+    await source.appendMessageAsync(current);
+    const before = loadTranscriptEventsSync(target);
+    const limits = { maxBytes: 7000, maxEvents: scenario.maxEvents };
+    const view = await SessionManager.openModelContextAsync(target, { limits });
+    const selected = view.buildSessionContext().messages;
+    expect(Buffer.byteLength(JSON.stringify(selected))).toBeLessThanOrEqual(limits.maxBytes);
+    expect(selected.length).toBeLessThanOrEqual(limits.maxEvents);
+    expect(view.isPersisted()).toBe(false);
+
+    // Use the real SDK agent and provider loop, not a fake active-session object.
+    // Only external model I/O is replaced; SQLite selection and prompt conversion are real.
+    const { session } = await createTestSession({ sessionManager: view });
+    const convert = session.agent.convertToLlm;
+    session.agent.convertToLlm = (messages) =>
+      convert(normalizeMessagesForLlmBoundary(messages, { includeTimestamp: false }));
+    expect(
+      reconcilePrePersistedCurrentUserTurn({
+        activeSession: session,
+        currentUserTurnMessage: current,
+        durableUserTurnMessage: current,
+        userTurnAlreadyPersisted: true,
+      }),
+    ).toBe(true);
+    const requests: Context["messages"][] = [];
+    streamMocks.streamSimple.mockImplementation((model, context) => {
+      requests.push(structuredClone(context.messages));
+      return createAssistantResultStream(
+        createAssistant(model, [{ type: "text", text: "continued with prior context" }]),
+      );
+    });
+    try {
+      await session.prompt(current.content);
+      expect(requests).toHaveLength(1);
+      const messages = requests[0]!;
+      expect(messages).toHaveLength(scenario.kept);
+      expect(messages.at(-2)).toMatchObject({ role: "assistant", content: reply.content });
+      expect(messages.at(-1)).toMatchObject({ role: "user", content: current.content });
+      expect(
+        messages.filter(
+          (message) => message.role === "user" && message.content === current.content,
+        ),
+      ).toHaveLength(1);
+      expect(Buffer.byteLength(JSON.stringify(messages))).toBeLessThanOrEqual(limits.maxBytes);
+      expect(messages.length).toBeLessThanOrEqual(limits.maxEvents);
+      if (scenario.kept === 8) {
+        expect(messages.map((message) => message.role)).toEqual([
+          "user",
+          "assistant",
+          "toolResult",
+          "user",
+          "assistant",
+          "toolResult",
+          "assistant",
+          "user",
+        ]);
+        expect(messages[1]).toMatchObject({
+          content: [{ type: "toolCall", id: "repeat", arguments: { path: "older-owner.txt" } }],
+        });
+        expect(messages[2]).toMatchObject({
+          role: "toolResult",
+          toolCallId: "repeat",
+          content: [{ type: "text", text: "older-owned-result" }],
+        });
+      } else {
+        expect(JSON.stringify(messages)).not.toContain("older-owned-result");
+        expect(JSON.stringify(messages)).not.toContain("previous request:");
+      }
+      if (scenario.kept >= 4) {
+        expect(messages.at(-4)).toMatchObject({
+          role: "assistant",
+          content: [{ type: "toolCall", id: "repeat", arguments: { path: "current-owner.txt" } }],
+        });
+        expect(messages.at(-3)).toMatchObject({
+          role: "toolResult",
+          toolCallId: "repeat",
+          content: [{ type: "text", text: "current-owned-result:" }],
+        });
+      } else {
+        expect(messages.map((message) => message.role)).toEqual(["assistant", "user"]);
+      }
+      expect(session.getLastAssistantText()).toBe("continued with prior context");
+    } finally {
+      session.dispose();
+      expect(loadTranscriptEventsSync(target)).toEqual(before);
+    }
+  });
+});
