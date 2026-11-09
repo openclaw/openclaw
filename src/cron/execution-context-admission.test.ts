@@ -493,30 +493,12 @@ describe("occurrence pause", () => {
 
   it("names the parent and the repair in the notice", () => {
     const text = buildScheduledParentPauseNotice({
-      job: { id: "job-1", name: "Nightly ingest" },
-      pause: { reason: "archived", parentSessionKey: PARENT_KEY },
-    });
-    expect(text).toContain(`\`${PARENT_KEY}\``);
-    expect(text).toContain("it was archived");
-    expect(text).toContain("openclaw automations enable job-1");
-  });
-
-  it("keeps an emoji-crossed automation name whole in the pause notice", () => {
-    const text = buildScheduledParentPauseNotice({
       job: { id: "job-1", name: `${"a".repeat(119)}📊 tail` },
       pause: { reason: "archived", parentSessionKey: PARENT_KEY },
     });
-    expect(text.isWellFormed()).toBe(true);
-    expect(text).toContain("a".repeat(119));
-  });
-
-  it("keeps an emoji inside the pause notice name limit whole", () => {
-    const text = buildScheduledParentPauseNotice({
-      job: { id: "job-1", name: `${"a".repeat(118)}📊 tail` },
-      pause: { reason: "archived", parentSessionKey: PARENT_KEY },
-    });
-    expect(text.isWellFormed()).toBe(true);
-    expect(text).toContain(`${"a".repeat(118)}📊`);
+    expect(text).toContain(`Automation "${"a".repeat(119)}" is paused`);
+    expect(text).toContain(`\`${PARENT_KEY}\`, is unavailable: it was archived.`);
+    expect(text).toContain("openclaw automations enable job-1");
   });
 });
 

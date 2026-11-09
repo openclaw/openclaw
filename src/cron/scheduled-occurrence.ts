@@ -1,10 +1,10 @@
-import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 /**
  * The admitted-occurrence contract shared by the cron service and every
  * executor. `admitScheduledOccurrence` in `execution-context-admission.ts`
  * creates occurrences; this module stays free of runtime dependencies so cron
  * core can import it.
  */
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { AdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
 import type { OperationalRunInstanceRef } from "../agents/operational-run-instance.js";
 import type { SessionEntry } from "../config/sessions/types.js";
