@@ -211,6 +211,10 @@ export class SessionManagerSuffixPersistence extends SessionManagerPersistence {
           )
         : undefined;
     const persistedSuffixStartSeq = candidateSeq ?? this.persistedSuffixStartSeq;
+    this.ownTranscriptEntries([
+      ...this.fileEntries,
+      ...this.opaqueFileEntries.map((entry) => entry.record),
+    ]);
     const current = new SessionManagerSuffixPersistence(this.cwd, undefined, this.fileEntries);
     current.opaqueFileEntries = this.opaqueFileEntries.map((entry) => ({ ...entry }));
     current.buildIndex();
@@ -303,6 +307,10 @@ export class SessionManagerSuffixPersistence extends SessionManagerPersistence {
     }
     const preparedEntries = [...retainedContextPrefix, ...expectedPersistedEntries];
     const prepared = new SessionManagerSuffixPersistence(this.cwd, undefined, preparedEntries);
+    prepared.ownTranscriptEntries([
+      ...prepared.fileEntries,
+      ...prepared.opaqueFileEntries.map((entry) => entry.record),
+    ]);
     const restoreOmittedParentAncestry = (
       source: SessionManagerSuffixPersistence,
       destination: SessionManagerSuffixPersistence,
@@ -455,6 +463,10 @@ export class SessionManagerSuffixPersistence extends SessionManagerPersistence {
     const adoptPrepared = (version?: typeof this.transcriptVersion) => {
       // Publish the detached tree before later post-commit observers can append through this manager.
       this.fileEntries = prepared.fileEntries.map(restoreCustomData);
+      this.ownTranscriptEntries(
+        this.cacheTtlProjectionPrefixes?.flatMap((prefix) => prefix.entries) ?? [],
+      );
+      this.pendingWritableTranscriptEntries = prepared.pendingWritableTranscriptEntries;
       this.opaqueFileEntries = prepared.opaqueFileEntries;
       this.buildIndex();
       restoreOmittedParentAncestry(prepared, this);

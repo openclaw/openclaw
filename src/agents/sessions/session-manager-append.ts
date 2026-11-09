@@ -399,6 +399,7 @@ export class SessionManagerAppend extends SessionManagerSuffixPersistence {
     if (projection && !needsReload) {
       const previous = this.byId.get(projection.messageId);
       if (previous?.type === "message") {
+        this.pendingWritableTranscriptEntries.delete(previous);
         const rewritten = { ...previous, message: projection.message };
         this.byId.set(previous.id, rewritten);
         this.fileEntries = this.fileEntries.map((candidate) =>
@@ -494,9 +495,13 @@ export class SessionManagerAppend extends SessionManagerSuffixPersistence {
           if (prefix.anchorIds.length) {
             return [prefix];
           }
-          return canonicalEntry.type === "reset" || canonicalEntry.type === "branch_summary"
-            ? []
-            : [{ ...prefix, anchorIds: [canonicalEntry.id] }];
+          if (canonicalEntry.type === "reset" || canonicalEntry.type === "branch_summary") {
+            for (const entry of prefix.entries) {
+              this.pendingWritableTranscriptEntries.delete(entry);
+            }
+            return [];
+          }
+          return [{ ...prefix, anchorIds: [canonicalEntry.id] }];
         });
       }
       if (canonicalEntry.type === "label") {
@@ -556,7 +561,12 @@ export class SessionManagerAppend extends SessionManagerSuffixPersistence {
             ? this.boundedContextLimits.maxEvents
             : this.byId.size + this.opaqueParentsById.size
           : this.byId.size,
-        isInterruptedTail,
+        isInterruptedTail:
+          isInterruptedTail &&
+          ((entry) => {
+            this.ownTranscriptEntries([entry]);
+            return isInterruptedTail(entry);
+          }),
       },
       includeOmitted,
     );

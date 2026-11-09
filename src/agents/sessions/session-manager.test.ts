@@ -26,6 +26,7 @@ import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
 import { withMockedPlatform } from "../../test-utils/vitest-spies.js";
 import { makeAgentAssistantMessage } from "../test-helpers/agent-message-fixtures.js";
+import { SessionManagerCore } from "./session-manager-core.js";
 import { sessionScope } from "./session-manager-fixtures.test-support.js";
 import { buildSessionContext, CURRENT_SESSION_VERSION, SessionManager } from "./session-manager.js";
 
@@ -206,29 +207,36 @@ describe("SessionManager.open", () => {
     );
   });
 
-  it("does not mutate frozen caller entries during in-memory migration", () => {
-    const entries = [
-      null,
-      Object.freeze(sessionHeader("frozen-legacy-session", "/tmp", 2)),
-      Object.freeze({
-        type: "message" as const,
-        id: "frozen-legacy-hook",
-        parentId: null,
-        timestamp: "2026-01-01T00:00:01.000Z",
-        message: Object.freeze({ role: "hookMessage", content: "frozen hook context" }),
-      }),
-    ] as const;
+  it.each(["caller", "hydration"])(
+    "does not mutate frozen %s entries during migration",
+    (source) => {
+      const entries = [
+        null,
+        Object.freeze(sessionHeader("frozen-legacy-session", "/tmp", 2)),
+        Object.freeze({
+          type: "message" as const,
+          id: "frozen-legacy-hook",
+          parentId: null,
+          timestamp: "2026-01-01T00:00:01.000Z",
+          message: Object.freeze({ role: "hookMessage", content: "frozen hook context" }),
+        }),
+      ] as const;
 
-    const manager = SessionManager.fromEntries(Object.freeze(entries));
+      const frozen = Object.freeze(entries);
+      const manager =
+        source === "caller"
+          ? SessionManager.fromEntries(frozen)
+          : new SessionManagerCore("/tmp", undefined, frozen);
 
-    expect(manager.getEntry("frozen-legacy-hook")).toMatchObject({
-      message: { role: "custom", customType: "hook", content: "frozen hook context" },
-    });
-    expect(entries[2].message).toEqual({
-      role: "hookMessage",
-      content: "frozen hook context",
-    });
-  });
+      expect(manager.getEntry("frozen-legacy-hook")).toMatchObject({
+        message: { role: "custom", customType: "hook", content: "frozen hook context" },
+      });
+      expect(entries[2].message).toEqual({
+        role: "hookMessage",
+        content: "frozen hook context",
+      });
+    },
+  );
 
   it("keeps stale appenders valid across a reset while snapshot replacement rotates generation", async () => {
     const { dir, scope } = createScope("sqlite-reset-stale-appender");

@@ -14,6 +14,7 @@ import {
 } from "./model-prompt-projection-append.js";
 import { withSessionManagerAppend } from "./session-manager-append-admission.js";
 import { SessionManagerAppend } from "./session-manager-append.js";
+import { retainAnchoredSessionPrefix } from "./session-manager-codec.js";
 import { generateSessionEntryId } from "./session-manager-id.js";
 import { prepareSessionManagerSync } from "./session-manager-incognito-scope.js";
 import { SessionManagerActorCommittedError } from "./session-manager-persistence-error.js";
@@ -30,6 +31,10 @@ import type {
   SessionInfoEntry,
   SessionLeafControl,
 } from "./session-manager-types.js";
+import {
+  sessionManagerReadTranscriptBranch,
+  sessionManagerReadToolResultProjectionEntries,
+} from "./session-manager-view-types.js";
 import { withSessionManagerWrite } from "./session-manager-write-admission.js";
 
 type LeafControlSelection = {
@@ -324,8 +329,8 @@ export class SessionManagerEntries extends SessionManagerAppend {
     this.appendParentId = params.appendParentId;
     this.appendMode = params.appendMode;
     this.pendingDeliberateAppend = false;
-    this.cacheTtlProjectionPrefixes = this.cacheTtlProjectionPrefixes?.filter(
-      (prefix) => prefix.anchorIds.length > 0,
+    this.cacheTtlProjectionPrefixes = this.cacheTtlProjectionPrefixes?.filter((prefix) =>
+      retainAnchoredSessionPrefix(prefix, this.pendingWritableTranscriptEntries),
     );
   }
 
@@ -361,7 +366,16 @@ export class SessionManagerEntries extends SessionManagerAppend {
 
   /** Omitted projection metadata follows its retained branch anchors, outside model history. */
   getToolResultProjectionEntries() {
-    let entries: (SessionEntry | Record<string, unknown>)[] = this.getBranch();
+    this.getBranch();
+    this.ownTranscriptEntries(
+      this.cacheTtlProjectionPrefixes?.flatMap((prefix) => prefix.entries) ?? [],
+    );
+    return this[sessionManagerReadToolResultProjectionEntries]();
+  }
+
+  [sessionManagerReadToolResultProjectionEntries]() {
+    let entries: (SessionEntry | Record<string, unknown>)[] =
+      this[sessionManagerReadTranscriptBranch]();
     for (const prefix of this.cacheTtlProjectionPrefixes ?? []) {
       const anchor = prefix.anchorIds.length
         ? entries.findIndex((entry) => prefix.anchorIds.some((id) => id === entry.id))

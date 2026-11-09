@@ -108,6 +108,7 @@ export class SessionManagerBranching extends SessionManagerMetadata {
         }
         // This is the selected path in a new session, not an inactive side branch.
         // Its navigation controls are omitted, so copied entries must advance the leaf.
+        this.ownTranscriptEntries([node.entry]);
         const branchEntry: SessionEntry = { ...node.entry, parentId: tailId };
         delete branchEntry.appendMode;
         entries.push(branchEntry);
@@ -117,6 +118,7 @@ export class SessionManagerBranching extends SessionManagerMetadata {
       if (parseOpaqueLeafEntry(node.record)) {
         continue;
       }
+      this.ownTranscriptEntries([node.record]);
       opaqueEntries.push({
         index: entries.length + 1,
         record: { ...node.record, parentId: tailId },
@@ -199,6 +201,10 @@ export class SessionManagerBranching extends SessionManagerMetadata {
         version?: SessionTranscriptContextVersion,
       ) => {
         this.fileEntries = branch.fileEntries;
+        this.ownTranscriptEntries(
+          this.cacheTtlProjectionPrefixes?.flatMap((prefix) => prefix.entries) ?? [],
+        );
+        this.pendingWritableTranscriptEntries = branch.pendingWritableTranscriptEntries;
         this.opaqueFileEntries = branch.opaqueFileEntries;
         this.sessionId = newSessionId;
         this.buildIndex();
