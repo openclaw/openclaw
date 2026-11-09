@@ -14,6 +14,7 @@ import type {
   CliBackendExecutionMode,
   CliBackendPromptContext,
 } from "../../plugins/cli-backend.types.js";
+import type { MemoryAudience } from "../../plugins/memory-provider-types.js";
 import type { PluginInstanceConsumer } from "../../plugins/plugin-instance.types.js";
 import type { SpawnSecretInput } from "../../process/supervisor/types.js";
 import type { AdmittedRunContext } from "../admitted-run-context.js";
@@ -231,6 +232,8 @@ export type PreparedCliRunContext = {
   cwd?: string;
   backendResolved: ResolvedCliBackend;
   hostOwnedTools?: readonly string[];
+  /** Host-minted memory audience for this turn's hooks; its leases release with run cleanup. */
+  memoryAudience?: MemoryAudience;
   preparedBackend: CliPreparedBackend;
   /** Enforced timeout of this run's managed Claude MCP server, when present. */
   managedMcpToolTimeoutMs?: number;

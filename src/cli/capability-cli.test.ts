@@ -961,11 +961,12 @@ describe("capability cli", () => {
     },
   );
 
-  it.each(["local", "gateway", "audio", "tts", "image", "image-model"])(
+  const ttsGatewayKinds = ["tts status", "tts providers", "tts personas", "tts disable"];
+  it.each(["local", "gateway", "audio", "tts", "image", "image-model", ...ttsGatewayKinds])(
     "cancels pending %s execution",
     async (kind) => {
       await interruptCapability((waitForAbort) => {
-        if (kind === "gateway") {
+        if (kind === "gateway" || kind.startsWith("tts")) {
           mocks.callGateway.mockImplementationOnce(({ signal }) => waitForAbort(signal));
         } else if (kind === "local") {
           mocks.completeWithPreparedSimpleCompletionModel.mockImplementationOnce(({ options }) =>
@@ -982,17 +983,12 @@ describe("capability cli", () => {
           describeImage.mockImplementationOnce((_params, execution) =>
             waitForAbort(execution?.signal),
           );
-          return runCapability(
-            "image",
-            "describe",
-            "--file",
-            "photo.jpg",
-            ...(kind === "image-model" ? ["--model", "ollama/vision"] : []),
-            "--json",
-          );
-        } else {
-          mocks.callGateway.mockImplementationOnce(({ signal }) => waitForAbort(signal));
-          return runCapability("tts", "convert", "--text", "hello", "--gateway", "--json");
+          const model = kind === "image-model" ? ["--model", "ollama/vision"] : [];
+          return runCapability("image", "describe", "--file", "photo.jpg", ...model, "--json");
+        }
+        if (kind.startsWith("tts")) {
+          const command = kind === "tts" ? ["convert", "--text", "hello"] : [kind.slice(4)];
+          return runCap("capability", "tts", ...command, "--gateway", "--json");
         }
         return runModelProbe(...(kind === "gateway" ? ["--gateway"] : []));
       });

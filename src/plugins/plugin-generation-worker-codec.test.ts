@@ -1,6 +1,5 @@
-import { setImmediate as nextTurn } from "node:timers/promises";
-import { queryObjects } from "node:v8";
 import { expect, it, vi } from "vitest";
+import { expectCollected } from "../test-utils/retention.js";
 import { markPluginSourceCaptureOperation } from "./plugin-generation-source-lookup.js";
 import {
   GenerationCodec,
@@ -38,13 +37,6 @@ it("attests source preparation handles independently of callback names and captu
   expect(sender.isSourcePreparationCall(-1)).toBe(false);
 });
 const weak = (...values: object[]) => values.map((value) => new WeakRef(value));
-async function expectCollected(references: WeakRef<object>[]) {
-  const control = new WeakRef({});
-  await nextTurn();
-  queryObjects(WeakRef);
-  expect(control.deref()).toBeUndefined();
-  expect(references.map((reference) => reference.deref())).toEqual(references.map(() => undefined));
-}
 
 function resourceTransport() {
   const nativeRoots = nativeRootTransport();
@@ -108,7 +100,7 @@ it.each(["sync", "async"])(
       return references;
     }
     const references = await recovery();
-    await expectCollected(references);
+    await expectCollected(...references);
     expect(parent.value()).toBe(42);
     await recovery();
     await parent.disposeAsync();
@@ -132,7 +124,7 @@ it.each(["sync", "async"])("releases %s method replies after their last owner", 
     return references;
   }
   const references = await cycle();
-  await expectCollected(references);
+  await expectCollected(...references);
 });
 
 it("keeps shared callbacks with their remaining owner and retries failed disposal", async () => {
@@ -225,7 +217,7 @@ it("releases ordinary message graphs while retaining callable identity", async (
     return weak(payload, child, decoded, decoded.child);
   }
   const references = exchange();
-  await expectCollected(references);
+  await expectCollected(...references);
   expect(callable(41)).toBe(42);
   const sameArgument = (first: object, second: object) => first === second;
   const compare = receiver.decode(sender.encode(sameArgument)) as typeof sameArgument;

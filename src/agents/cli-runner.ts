@@ -240,6 +240,7 @@ async function runPreparedCliAgentOwned(
     agentId: params.agentId,
     sessionKey: params.sessionKey,
     sessionId: params.sessionId,
+    ...(context.memoryAudience ? { memoryAudience: context.memoryAudience } : {}),
     workspaceDir: params.workspaceDir,
     trigger: params.trigger,
     ...(params.config ? { config: params.config } : {}),

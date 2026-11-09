@@ -32,7 +32,6 @@ import type {
   CliBackendPreparedExecution,
   CliBackendPromptContext,
 } from "../../plugins/cli-backend.types.js";
-import { buildAgentHookContextChannelFields } from "../../plugins/hook-agent-context.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import {
   LEGACY_IMPLICIT_AGENT_ID,
@@ -142,6 +141,7 @@ import { buildCliMcpGrantContext } from "./mcp-grant-context.js";
 import { resolveCliCatalogCapabilities } from "./model-capabilities.js";
 import { prepareClaudeCliSession } from "./prepare-claude-session.js";
 import { detectNodeClaudePlacement, resolveClaudeCliContextModelId } from "./prepare-claude.js";
+import { prepareCliTurnHookContext } from "./prepare-hook-context.js";
 import * as mcp from "./prepare-mcp.js";
 import { runWithCliPreparationSource } from "./prepare-source.js";
 import {
@@ -629,19 +629,17 @@ async function prepareCliRunContextWithinReadFence(
       ? { tokens: modelContextTokens, source: "model" as const }
       : resolvedContextWindowInfo;
   let openClawHistoryMessages: unknown[] | undefined;
-  const promptBuildHookContext = {
-    runId: params.runId,
-    agentId: sessionAgentId,
-    sessionKey: params.sessionKey,
-    sessionId: params.sessionId,
-    workspaceDir,
-    modelProviderId: params.provider,
-    modelId,
-    contextTokenBudget: contextWindowInfo.tokens,
-    trigger: params.trigger,
-    inputProvenance: params.inputProvenance,
-    ...buildAgentHookContextChannelFields(params),
-  };
+  const { turnAudience, promptBuildHookContext } = await prepareCliTurnHookContext(
+    { ...params, config: runConfig },
+    {
+      agentId: sessionAgentId,
+      workspaceDir,
+      modelId,
+      contextTokenBudget: contextWindowInfo.tokens,
+      skip: skipsTurnPreparation,
+      resources: callerToolAuthorityResources,
+    },
+  );
   const promptBuildHookRunner = skipsTurnPreparation ? undefined : getGlobalHookRunner();
   let promptBuildHookResult: ResolvedPromptBuildHookResult | undefined;
   if (!skipsTurnPreparation) {
@@ -978,10 +976,11 @@ async function prepareCliRunContextWithinReadFence(
             ...(skillLibraryAuthoring ? { skillLibraryAuthoring } : {}),
             ...(loopbackBundleMcp ? { bundledTools: loopbackBundleMcp.tools } : {}),
             ...(mcpToolAuth ? { toolAuth: mcpToolAuth } : {}),
+            turnAudience: turnAudience.forGrant(mcpGrant.context.sessionKey),
           })
         : undefined;
     const mcpClientGrant = mcpClient?.grant;
-    // The grant's cleanup also releases the memory audience leased for this turn.
+    // The turn's audience releases with caller resources after this cleanup revokes the grant.
     // Configured MCP tools close only after their grant can no longer reach them.
     const cleanupMcpClientGrant = sequenceCliCleanups(
       mcpClient?.cleanup,
@@ -1599,6 +1598,7 @@ async function prepareCliRunContextWithinReadFence(
       cwd,
       backendResolved,
       hostOwnedTools,
+      ...(turnAudience.memoryAudience ? { memoryAudience: turnAudience.memoryAudience } : {}),
       preparedBackend: preparedBackendFinal,
       ...(loopbackServerConfig &&
       !systemAgentMcpConfig &&

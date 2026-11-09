@@ -110,7 +110,7 @@
 .chat-group.tool {
   --chat-message-column-max: var(--chat-message-max-width, min(980px, 100%));
   display: block;
-  padding-inline-start: calc(var(--chat-group-inset-start) + var(--chat-avatar-gutter));
+  padding-inline-start: calc(var(--chat-group-inset) + var(--chat-avatar-gutter));
 }
 
 /* Tool activity, completed work and live narration are blocks inside a turn,
@@ -701,8 +701,12 @@
   text-decoration: underline;
 }
 
-.chat-steer-now {
-  margin-block-start: 4px;
+/* Holds the same total space as a delivered message's action row, but sits right
+   under its bubble (like the final footer) so it reads as part of that message. */
+.chat-message-actions-row--steer {
+  align-items: start;
+  min-height: 24px;
+  margin-block: 0 4px;
 }
 
 /* Chat divider (e.g., compaction marker) */
@@ -1244,7 +1248,7 @@ button.chat-reply-attribution__target {
   padding: 2px 3px;
   margin: -2px -3px;
   border: 0;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   background: none;
   color: inherit;
   font: inherit;
@@ -2250,7 +2254,7 @@ button.chat-reply-attribution__target:disabled {
   gap: 8px;
   min-height: 32px;
   padding-block: 4px;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   list-style: none;
   cursor: default;
 }

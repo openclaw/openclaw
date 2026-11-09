@@ -170,6 +170,18 @@ async function createOfflineSurface(warm = false) {
 }
 
 describe("warm boot app root", () => {
+  it("renders an admitted warm shell without waiting for cold construction", async () => {
+    const yielding = Promise.withResolvers<void>();
+    vi.stubGlobal("chrome", {});
+    vi.stubGlobal("scheduler", { yield: () => yielding.promise });
+    vi.spyOn(document, "hidden", "get").mockReturnValue(false);
+    onTestFinished(() => yielding.resolve());
+
+    const { container } = await createWarmSurface();
+    expect(runtime!.warmBoot).toBe(true);
+    expect(container.querySelector("openclaw-app-shell")).not.toBeNull();
+  });
+
   it("loads a focused dashboard after startup and reports its committed result to automation", async () => {
     window.history.replaceState({}, "", `/focus${focusSource}`);
     const starting = Promise.withResolvers<void>();

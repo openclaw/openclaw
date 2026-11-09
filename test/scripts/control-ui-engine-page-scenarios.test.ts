@@ -5,6 +5,7 @@ import { createEnginePageScenarios } from "../../scripts/lib/control-ui-engine-p
 it.each([
   { id: "page-cron-visit", origin: "new-session" },
   { id: "page-cloud-workers-revisit", origin: "new-session" },
+  { id: "page-custodian-greeting-visit", origin: "new-session" },
   { id: "page-terminal-first-create-visit", origin: "new-session" },
   { id: "page-terminal-first-attach-visit", origin: "new-session" },
   { id: "page-terminal-first-output-revisit", origin: "new-session" },

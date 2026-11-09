@@ -1937,23 +1937,23 @@ describe("prepareCliRunContext", () => {
     },
   );
 
-  it("uses the recorded worktree bootstrap instead of the configured checkout", async () => {
+  it("keeps agent bootstrap and adds only project instructions from a project worktree", async () => {
     setCliRunnerPrepareTestDeps({ resolveBootstrapContextForRun: loadBootstrapContext });
     const { dir, sessionTarget } = fixture.session;
     const task = path.join(dir, "task");
     fs.mkdirSync(task);
-    fs.writeFileSync(path.join(dir, "AGENTS.md"), "SHARED-RULE-MUST-NOT-LEAK");
-    fs.writeFileSync(path.join(dir, "SOUL.md"), "SHARED-SOUL-MUST-NOT-LEAK");
-    fs.writeFileSync(path.join(task, "AGENTS.md"), "BRANCH-RULE");
-    fs.writeFileSync(path.join(task, "SOUL.md"), "BRANCH-SOUL");
+    fs.writeFileSync(path.join(dir, "SOUL.md"), "AGENT-SOUL");
+    fs.writeFileSync(path.join(task, "AGENTS.md"), "PROJECT-RULE");
+    fs.writeFileSync(path.join(task, "SOUL.md"), "PROJECT-SOUL-MUST-NOT-LEAK");
     const context = await fixture.prepare({
       config: { agents: { entries: { main: { workspace: dir } } } },
       workspaceDir: dir,
       cwd: task,
       sessionEntry: { sessionId: sessionTarget.sessionId, updatedAt: 1, sessionRoot: task },
     });
-    expect(context.systemPrompt).toContain("BRANCH-RULE");
-    expect(context.systemPrompt).toContain("BRANCH-SOUL");
+    for (const text of ["AGENT-SOUL", "PROJECT-RULE"]) {
+      expect(context.systemPrompt).toContain(text);
+    }
     expect(context.systemPrompt).not.toContain("MUST-NOT-LEAK");
   });
 

@@ -6,12 +6,35 @@ import {
 import { bindUserTurnPromptReactionSource } from "../../sessions/user-turn-transcript-admission.js";
 import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.types.js";
 import { createCurrentPromptReaction } from "../current-prompt-reaction.js";
+import type { DashboardMessageReadAdmission } from "../message-action-turn-capability.js";
 import { resolveSessionMutationAuthorizationAsync } from "../session-sharing-authorization-async.js";
 import { SessionMutationAuthorizationChangedError } from "../session-sharing.js";
 import type { AdmittedChatSend } from "./chat-send-admission.js";
 import type { ChatSendExternalAuthorityAdmission } from "./chat-send-external-authority-contract.js";
 import type { PreparedChatSendSession } from "./chat-send-session.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
+
+/** Dashboard reads during the run follow the registration's current session identity. */
+export function createChatSendDashboardReadAdmission(params: {
+  admission: Pick<AdmittedChatSend, "sourceRef">;
+  session: Pick<PreparedChatSendSession, "agentId" | "clientRunId" | "sessionKey">;
+  assertDashboardReadCurrent: (() => void) | undefined;
+}): DashboardMessageReadAdmission | undefined {
+  const { admission, session, assertDashboardReadCurrent } = params;
+  if (!assertDashboardReadCurrent) {
+    return undefined;
+  }
+  return {
+    agentId: session.agentId,
+    runId: session.clientRunId,
+    sessionKey: session.sessionKey,
+    // Fresh-session initialization updates this original registration's SID.
+    get sessionId() {
+      return getRpcSourceIdentity(admission.sourceRef).sessionId;
+    },
+    assertCurrent: assertDashboardReadCurrent,
+  };
+}
 
 /** One source authorization survives queue adoption; read grants retain the original work lease. */
 export async function createChatSendDashboardAuthority(params: {
