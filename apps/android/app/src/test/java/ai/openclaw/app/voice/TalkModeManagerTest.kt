@@ -463,7 +463,7 @@ class TalkModeManagerTest {
   @Test
   fun duplicateFinalForPendingTalkRunDoesNotStartAllResponseTts() {
     val manager = createManager()
-    val final = CompletableDeferred<Boolean>()
+    val final = CompletableDeferred<Boolean?>()
 
     manager.ttsOnAllResponses = true
     setPrivateField(manager, "pendingRunId", "run-talk")
@@ -957,6 +957,107 @@ class TalkModeManagerTest {
         },
       )
     }.toString()
+
+  @Test
+  fun nativeTalkDoesNotRecoverSpeechAfterTerminalFailure() =
+    runBlocking {
+      for (state in listOf("aborted", "error")) assertNativeTalkTerminalSpeech(state)
+    }
+
+  @Test
+  fun nativeTalkRecoversMissingFinalButUsesSuccessfulFinalText() =
+    runBlocking {
+      for (state in listOf("final", null)) assertNativeTalkTerminalSpeech(state)
+    }
+
+  private suspend fun assertNativeTalkTerminalSpeech(state: String?) {
+    val chatSent = CompletableDeferred<Unit>()
+    val historyReads = ConcurrentLinkedQueue<Unit>()
+    withNativeTalk(
+      history = {
+        historyReads.add(Unit)
+        """{"messages":[{"role":"assistant","content":[{"type":"text","text":"Synthetic history reply"}]}]}"""
+      },
+      interceptRequest = { request, socket ->
+        if (request.getValue("method").jsonPrimitive.content == "chat.send") {
+          val id = request.getValue("id").jsonPrimitive.content
+          val requestedRunId =
+            request
+              .getValue("params")
+              .jsonObject
+              .getValue("idempotencyKey")
+              .jsonPrimitive.content
+          val runId = if (state == null) "native-missing-final" else requestedRunId
+          socket.send(
+            """{"type":"res","id":"$id","ok":true,"payload":{"runId":"$runId","status":"started"}}""",
+          )
+          if (state != null) {
+            socket.send(
+              """{"type":"event","event":"chat","payload":{"runId":"$runId","sessionKey":"main","state":"$state","message":{"role":"assistant","content":"Synthetic terminal reply"}}}""",
+            )
+          }
+          chatSent.complete(Unit)
+          true
+        } else {
+          false
+        }
+      },
+    ) { proof, _ ->
+      val recognizer = currentRecognizer()
+      recognizer.triggerOnReadyForSpeech(Bundle())
+      recognizer.triggerOnEndOfSpeech()
+      recognizer.triggerOnResults(recognitionResults("Synthetic native terminal outcome"))
+      advanceTalkSilence(proof)
+      awaitTalkWork(proof) { chatSent.isCompleted }
+
+      if (state == "aborted" || state == "error") {
+        awaitTalkWork(proof) {
+          historyReads.isNotEmpty() ||
+            proof.synthesizer.requested.isCompleted ||
+            proof.manager.isListening.value
+        }
+        assertTrue(
+          "$state must not recover an unrelated or partial reply from history",
+          historyReads.isEmpty(),
+        )
+        assertFalse("$state must not start reply synthesis", proof.synthesizer.requested.isCompleted)
+        assertEquals(0, proof.player.playCalls)
+        assertTrue("$state must return continuous Talk to listening", proof.manager.isListening.value)
+      } else {
+        if (state == null) {
+          // Wait for the ACK remap before advancing once; do not time out real socket IO.
+          awaitTalkWork(proof) {
+            readPrivateField(proof.manager, "pendingRunId") == "native-missing-final"
+          }
+          proof.scheduler.advanceTimeBy(45_001)
+        }
+        awaitTalkWork(proof) { proof.synthesizer.requested.isCompleted }
+        assertEquals(
+          if (state == null) "Synthetic history reply" else "Synthetic terminal reply",
+          proof.synthesizer.requested.await(),
+        )
+        if (state == null) {
+          assertEquals(
+            "Missing final still probes in-flight state and recovers reply history",
+            2,
+            historyReads.size,
+          )
+        } else {
+          assertTrue(
+            "A successful final uses its own text without reading history",
+            historyReads.isEmpty(),
+          )
+        }
+        completeRemoteSynthesis(proof.synthesizer)
+        proof.scheduler.runCurrent()
+        assertEquals(1, proof.player.playCalls)
+        proof.player.finished.complete(Unit)
+        awaitTalkWork(proof) { proof.manager.isListening.value }
+      }
+      assertTrue(recognizer.isDestroyed)
+      assertFalse(currentRecognizer().isDestroyed)
+    }
+  }
 
   @Test
   fun nativeTalkSendsRecognizedPhraseAfterSilenceAndRestartsAfterReply() =
@@ -3699,7 +3800,7 @@ class TalkModeManagerTest {
         assertFalse("A run the Gateway still executes must outlast the observation window", wait.isCompleted)
 
         proof.manager.handleGatewayEvent("chat", """{"runId":"slow-run","sessionKey":"main","state":"final"}""")
-        assertTrue(withTimeout(5_000) { wait.await() })
+        assertEquals(true, withTimeout(5_000) { wait.await() })
       }
     }
 
@@ -3709,7 +3810,7 @@ class TalkModeManagerTest {
       withNativeTalk(history = { """{"messages":[],"inFlightRun":{"runId":"other-run","text":""}}""" }) { proof, _ ->
         val wait = proof.scope.async(UnconfinedTestDispatcher(proof.scheduler)) { proof.manager.waitForChatFinal("run-missing-final") }
         proof.scheduler.advanceTimeBy(45_001)
-        assertFalse(withTimeout(5_000) { wait.await() })
+        assertNull(withTimeout(5_000) { wait.await() })
       }
     }
 
@@ -3735,7 +3836,7 @@ class TalkModeManagerTest {
 
           if (complete) {
             proof.manager.handleGatewayEvent("chat", """{"runId":"slow-run","sessionKey":"main","state":"final"}""")
-            assertTrue(withTimeout(5_000) { wait.await() })
+            assertEquals(true, withTimeout(5_000) { wait.await() })
           } else {
             proof.manager.stopAllCapture()
             withTimeout(5_000) { wait.join() }
@@ -3760,7 +3861,7 @@ class TalkModeManagerTest {
       }) { proof, _ ->
         val wait = proof.scope.async(UnconfinedTestDispatcher(proof.scheduler)) { proof.manager.waitForChatFinal("slow-run") }
         proof.scheduler.advanceTimeBy(45_001)
-        assertFalse(withTimeout(5_000) { wait.await() })
+        assertNull(withTimeout(5_000) { wait.await() })
       }
     }
 
@@ -3952,14 +4053,14 @@ private data class RealtimePlaybackProof(
 )
 
 private class FakeTalkSpeechSynthesizer : TalkSpeechSynthesizing {
-  val requested = CompletableDeferred<Unit>()
+  val requested = CompletableDeferred<String>()
   val result = CompletableDeferred<TalkSpeakResult>()
 
   override suspend fun synthesize(
     text: String,
     directive: TalkDirective?,
   ): TalkSpeakResult {
-    requested.complete(Unit)
+    requested.complete(text)
     return result.await()
   }
 }

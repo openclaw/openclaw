@@ -301,7 +301,7 @@ class TalkModeManager internal constructor(
   private val realtimeRelayModelSupported get() = configCache.get().value.realtimeRelayModelSupported
 
   @Volatile private var pendingRunId: String? = null
-  private var pendingFinal: CompletableDeferred<Boolean>? = null
+  private var pendingFinal: CompletableDeferred<Boolean?>? = null
   private val completedRunsLock = Any()
   private val completedRunStates = LinkedHashMap<String, Boolean>()
   private val completedRunTexts = LinkedHashMap<String, String>()
@@ -2306,8 +2306,12 @@ class TalkModeManager internal constructor(
         setStatus(if (ack.normalizedStatus == "error") nativeText("Chat error") else nativeText("Aborted"))
         return
       }
-      val ok = if (ack.isTerminalSuccess) true else waitForChatFinal(runId)
-      if (!ok) {
+      val completed = if (ack.isTerminalSuccess) true else waitForChatFinal(runId)
+      if (completed == false) {
+        setStatus(nativeText("No reply"))
+        return
+      }
+      if (completed == null) {
         Log.w(tag, "chat final timeout runId=$runId; attempting history fallback")
       }
       // Use text cached from the final event first — avoids chat.history polling
@@ -2315,7 +2319,7 @@ class TalkModeManager internal constructor(
         synchronized(completedRunsLock) { completedRunTexts.remove(runId) }
           ?: waitForAssistantText(
             chatSendAckHistorySinceSeconds(ack, startedAt),
-            if (ok) 12_000 else 25_000,
+            if (completed == true) 12_000 else 25_000,
           )
       if (assistant.isNullOrBlank()) {
         setStatus(nativeText("No reply"))
@@ -2503,7 +2507,8 @@ class TalkModeManager internal constructor(
     }
   }
 
-  internal suspend fun waitForChatFinal(runId: String): Boolean {
+  // Only an unknown outcome (null) permits history recovery; false is an explicit terminal failure.
+  internal suspend fun waitForChatFinal(runId: String): Boolean? {
     consumeRunCompletion(runId)?.let { return it }
     val deferred = (if (pendingRunId == runId) pendingFinal else null) ?: armPendingRun(runId)
 
@@ -2522,7 +2527,7 @@ class TalkModeManager internal constructor(
             currentCoroutineContext().ensureActive()
             // An unavailable snapshot falls through to the existing reply-history recovery.
           }
-          deferred.complete(false)
+          deferred.complete(null)
         }
       try {
         deferred.await()
@@ -2546,9 +2551,9 @@ class TalkModeManager internal constructor(
     return root["inFlightRun"].asObjectOrNull()?.get("runId").asJsonStringOrNull() == runId
   }
 
-  private fun armPendingRun(runId: String): CompletableDeferred<Boolean> {
+  private fun armPendingRun(runId: String): CompletableDeferred<Boolean?> {
     pendingFinal?.cancel()
-    val deferred = CompletableDeferred<Boolean>()
+    val deferred = CompletableDeferred<Boolean?>()
     pendingRunId = runId
     pendingFinal = deferred
     return deferred
