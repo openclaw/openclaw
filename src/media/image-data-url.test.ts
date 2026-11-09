@@ -15,6 +15,18 @@ describe("decodeDataUrl", () => {
     );
   });
 
+  it("accepts media type parameters before the base64 marker", () => {
+    const result = decodeDataUrl("data:image/png;charset=utf-8;base64,SGVsbG8=");
+    expect(result.mimeType).toBe("image/png");
+    expect(result.buffer.toString()).toBe("Hello");
+  });
+
+  it("accepts multiple media type parameters before the base64 marker", () => {
+    const result = decodeDataUrl("data:image/jpeg;foo=bar;charset=utf-8;base64,SGVsbG8=");
+    expect(result.mimeType).toBe("image/jpeg");
+    expect(result.buffer.toString()).toBe("Hello");
+  });
+
   it.each([0, 1])("checks a canonical-size payload with %i extra bytes", (extraBytes) => {
     const bytes = MAX_IMAGE_BYTES + extraBytes;
     const input = `data:image/png;base64,${Buffer.alloc(bytes).toString("base64")}`;
@@ -30,6 +42,11 @@ describe("decodeDataUrl", () => {
   it.each([
     {
       dataUrl: "data:text/plain;base64,SGVsbG8=",
+      maxBytes: undefined,
+      error: /Unsupported data URL type/i,
+    },
+    {
+      dataUrl: "data:text/plain;charset=utf-8;base64,SGVsbG8=",
       maxBytes: undefined,
       error: /Unsupported data URL type/i,
     },

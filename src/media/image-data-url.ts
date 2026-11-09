@@ -13,7 +13,8 @@ export function decodeDataUrl(
 } {
   const trimmed = dataUrl.trim();
   // Capturing the full payload can exhaust the RegExp stack before the size guard.
-  const match = /^data:([^;,]+);base64,/i.exec(trimmed);
+  // Media type parameters (RFC 2397) are allowed before the base64 marker.
+  const match = /^data:([^;,]+)(?:;[^;,]+)*;base64,/i.exec(trimmed);
   const b64 = match ? trimmed.slice(match[0].length) : "";
   if (!match || !b64 || /[^a-z0-9+/=\r\n]/i.test(b64)) {
     throw new Error("Invalid data URL (expected base64 data: URL).");
