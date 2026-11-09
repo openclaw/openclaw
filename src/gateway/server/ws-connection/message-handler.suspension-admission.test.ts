@@ -27,6 +27,10 @@ vi.mock("../../../config/config.js", () => ({
 vi.mock("../../../config/io.js", () => ({
   getRuntimeConfig: loadConfigMock,
 }));
+vi.mock("../../../config/runtime-snapshot.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../config/runtime-snapshot.js")>()),
+  readRuntimeConfig: loadConfigMock,
+}));
 vi.mock("../../../infra/system-presence.js", () => ({
   commitPresence: vi.fn(),
   upsertPresence: upsertPresenceMock,

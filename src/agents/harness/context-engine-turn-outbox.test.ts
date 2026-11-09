@@ -66,6 +66,7 @@ const runtimeContext = {
   modelId: "claude-sonnet-4-6",
   tokenBudget: 180_000,
   modelContextWindow: 200_000,
+  promptCache: { lastCallUsage: { input: 1_200, cacheRead: 150_000, total: 151_200 } },
 };
 type TurnPayload = Parameters<typeof enqueueContextEngineTurnCommit>[0]["payload"];
 
@@ -215,6 +216,7 @@ describe("context-engine turn outbox", () => {
           sessionIdUsed: target.sessionId,
           sessionKey: target.sessionKey,
           sessionFile: target.storePath,
+          runtimeContext: { promptCache: runtimeContext.promptCache },
           turnCandidate: {
             admission,
             terminalEntryId: appended.entryId,
@@ -234,6 +236,8 @@ describe("context-engine turn outbox", () => {
           { role: "user", content: "current" },
           message,
         ]);
+        const { promptCache } = runtimeContext;
+        expect(commitTurn.mock.calls[0]![0].runtimeContext).toMatchObject({ promptCache });
         expect(warn).not.toHaveBeenCalled();
       } else {
         expect(commitTurn).not.toHaveBeenCalled();

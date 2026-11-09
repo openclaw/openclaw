@@ -306,7 +306,7 @@ export async function commitSkillRootChange<T>(params: {
   /** Host-resolved plugin owner, reported with `source: "plugin"`. */
   pluginId?: string;
   apply: () => Promise<T>;
-  /** Core callers' bookkeeping after discovery refresh; a throw skips the dispatch. */
+  /** Caller bookkeeping after discovery refresh; a throw skips the dispatch. */
   beforeDispatch?: (result: T) => Promise<void>;
   assertCurrent?: () => void;
 }): Promise<T> {
@@ -328,11 +328,12 @@ export async function commitSkillRootChange<T>(params: {
   const after = await snapshot();
   try {
     const { refreshSkillsDiscovery } = await import("../runtime/refresh.js");
-    // `skills.changed` broadcasts this reason: core Workshop keeps its shipped "workshop";
-    // other authors use the existing generic "manual".
+    // `skills.changed` broadcasts this reason: a plugin's per-agent skills root is the
+    // "workshop" discovery tier, so its commits keep the shipped "workshop" reason; other
+    // authors use the existing generic "manual".
     await refreshSkillsDiscovery({
       config: params.config,
-      reason: params.source === "workshop" ? "workshop" : "manual",
+      reason: params.source === "workshop" || params.source === "plugin" ? "workshop" : "manual",
     });
   } catch (error) {
     log.warn(`Skill changed, but discovery refresh failed: ${formatErrorMessage(error)}`);

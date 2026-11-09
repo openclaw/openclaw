@@ -42,6 +42,9 @@ import { verifyDoctorLintPrivateAuthRetirement } from "./doctor-lint.private-aut
 import { snapshotDoctorLintSqliteFamily } from "./doctor-lint.test-support.js";
 import { createTestRuntime } from "./test-runtime-config-helpers.js";
 
+// Bundled Doctor checks still run; this one reports the plugin switch tests turn off.
+const SKILL_WORKSHOP_CHECK_ID = "skill-workshop/tool-policy";
+
 const mocks = vi.hoisted(() => ({
   resolveDoctorContributionHealthChecks: vi.fn(),
   sqliteOpen: vi.fn<(filename: string, readOnly: boolean, database: DatabaseSync) => void>(),
@@ -220,7 +223,12 @@ describe("doctor lint state isolation", () => {
           }),
         ]);
         using stdout = captureStdout();
-        const opts = { json: true, includeAllChecks: mode === "rehearsal-worker" };
+        // Learned skills are not part of this report; Workshop's plugin-off check would add one.
+        const opts = {
+          json: true,
+          includeAllChecks: mode === "rehearsal-worker",
+          skipIds: [SKILL_WORKSHOP_CHECK_ID],
+        };
         const exitCode =
           mode === "rehearsal-worker"
             ? await runDoctorLintCliInProcess(runtime, opts, { commandStartedAtMs: Date.now() })
@@ -568,7 +576,10 @@ describe("doctor lint state isolation", () => {
           const before = snapshotDoctorLintSqliteFamily(source.path);
           privateStates.length = 0;
           observed.length = 0;
-          const exitCode = await runDoctorLintCli(runtime, { json: true });
+          const exitCode = await runDoctorLintCli(runtime, {
+            json: true,
+            skipIds: [SKILL_WORKSHOP_CHECK_ID],
+          });
           const report = JSON.parse(String(stdout.mock.calls.at(-1)?.[0]));
           expect(report.findings).toEqual([]);
           expect(exitCode).toBe(0);

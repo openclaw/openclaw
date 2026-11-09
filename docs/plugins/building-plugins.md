@@ -69,7 +69,7 @@ local proof.
   "version": "1.0.0",
   "type": "module",
   "dependencies": {
-    "typebox": "1.3.37"
+    "typebox": "1.4.3"
   },
   "peerDependencies": {
     "openclaw": ">=2026.3.24-beta.2"
@@ -409,6 +409,14 @@ operator, installed plugin code, or a modified OpenClaw runtime. Sensitive
 local tools should still require an explicit plugin or operator opt-in and
 refuse to run when active-model metadata is missing or unsuitable.
 
+`ctx.hasAuthForProvider(providerId)` and `ctx.resolveApiKeyForProvider(providerId)`
+report and resolve the agent's provider credentials. Pass
+`{ credentialType: "oauth" }` (or `"api_key"`, `"token"`) as the second argument
+to consider only ordered stored profiles of that type; a typed resolve never
+falls back to environment variables or another credential type. The bundled xAI
+plugin uses this to run `x_search` on a Grok OAuth subscription without
+borrowing a billed API key.
+
 The manifest declares ownership and discovery; execution still calls the live
 registered tool implementation. Keep `toolMetadata.<tool>.optional: true`
 aligned with `api.registerTool(..., { optional: true })` so OpenClaw can avoid
@@ -462,7 +470,7 @@ Oxlint is not type-aware, so it cannot enforce these annotations.
 
 1. Watch [openclaw/openclaw](https://github.com/openclaw/openclaw/releases) releases (`Watch` > `Releases`). Beta tags look like `v2026.3.N-beta.1`. You can also follow [@openclaw](https://x.com/openclaw) on X for release announcements.
 2. Test your plugin against the beta tag as soon as it appears. The window before stable is typically only a few hours.
-3. Post in your plugin's thread in the `plugin-forum` Discord channel ([discord.gg/clawd](https://discord.gg/clawd)) after testing, with either `all good` or what broke. Create a thread if you do not have one yet.
+3. Post in your plugin's thread in the `plugin-forum` Discord channel ([OpenClaw Discord](https://openclaw.ai/discord?from=docs-plugins-building-plugins)) after testing, with either `all good` or what broke. Create a thread if you do not have one yet.
 4. If something breaks, open or update an issue titled `Beta blocker: <plugin-name> - <summary>` and apply the `beta-blocker` label. Link the issue in your thread.
 5. Open a PR to `main` titled `fix(<plugin-id>): beta blocker - <summary>` and link the issue in both the PR and your Discord thread. Contributors cannot label PRs, so the title is the PR-side signal for maintainers and automation. Blockers with a PR get merged; blockers without one might ship anyway.
 6. Silence means green. Missing the window usually means your fix lands in the next cycle.

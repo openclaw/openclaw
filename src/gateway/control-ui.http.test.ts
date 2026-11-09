@@ -1144,14 +1144,14 @@ it.each(["hardlink", "symlink", "outside"] as const)(
   },
 );
 
-it("rejects trusted-proxy avatar metadata requests without operator.read scope", async () => {
-  expectMissingOperatorReadResponse(
-    await runAvatarRequest({
-      url: "/avatar/main?meta=1",
-      ...trustedProxyRequest({ "x-openclaw-scopes": "" }),
-      config: createAvatarConfig(os.tmpdir(), "https://example.com/avatar.png"),
-    }),
-  );
+// Session-scoped readers (guests) receive avatar URLs from agent.identity.get.
+it.each(["", "operator.sessions.write"])("gates avatar metadata on scopes %j", async (scopes) => {
+  const reply = await runAvatarRequest({
+    url: "/avatar/main?meta=1",
+    ...trustedProxyRequest({ "x-openclaw-scopes": scopes }),
+    config: createAvatarConfig(os.tmpdir(), "https://example.com/avatar.png"),
+  });
+  expectStatus(reply, scopes ? 200 : 403);
 });
 
 it("keeps JSON-Accept requests for explicit assets and plugin recovery routes", async () => {

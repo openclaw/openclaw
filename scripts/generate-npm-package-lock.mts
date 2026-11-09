@@ -1126,19 +1126,31 @@ type OverrideViolation = {
 
 // Trusted release tooling validates frozen targets as well as current main. Keep each
 // reviewed npm tarball exact here until no supported frozen target can reference it.
-const NPM_BUNDLED_DEPENDENCY_POLICIES = new Map(
-  ["11.20.0", "12.1.0", "12.2.0"].map((version) => [
-    version,
+const NPM_BUNDLE_EXCEPTIONS_THROUGH_12_2_0 = new Map([
+  ["node_modules/npm/node_modules/minimatch", "10.2.5"],
+  ["node_modules/npm/node_modules/brace-expansion", "5.0.9"],
+  ["node_modules/npm/node_modules/ip-address", "10.5.0"],
+]);
+const NPM_BUNDLED_DEPENDENCY_POLICIES = new Map<
+  string,
+  { allowMissingBundleMarker: boolean; exceptions: Map<string, string> }
+>([
+  ["11.20.0", { allowMissingBundleMarker: true, exceptions: NPM_BUNDLE_EXCEPTIONS_THROUGH_12_2_0 }],
+  ["12.1.0", { allowMissingBundleMarker: false, exceptions: NPM_BUNDLE_EXCEPTIONS_THROUGH_12_2_0 }],
+  ["12.2.0", { allowMissingBundleMarker: false, exceptions: NPM_BUNDLE_EXCEPTIONS_THROUGH_12_2_0 }],
+  // npm 12.2.1 bundles brace-expansion 5.0.12, satisfying the workspace override, and
+  // ip-address 10.7.2, which is newer than 12.2.0's bundle but still below the override.
+  [
+    "12.2.1",
     {
-      allowMissingBundleMarker: version === "11.20.0",
+      allowMissingBundleMarker: false,
       exceptions: new Map([
         ["node_modules/npm/node_modules/minimatch", "10.2.5"],
-        ["node_modules/npm/node_modules/brace-expansion", "5.0.9"],
-        ["node_modules/npm/node_modules/ip-address", "10.5.0"],
+        ["node_modules/npm/node_modules/ip-address", "10.7.2"],
       ]),
     },
-  ]),
-);
+  ],
+]);
 
 function isApprovedNpmBundledDependency(packages: UnknownRecord, lockPath: string) {
   const npm = recordAt(packages, "node_modules/npm");
