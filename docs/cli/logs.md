@@ -68,6 +68,29 @@ profile uses `openclaw-YYYY-MM-DD.log`, while named profiles use
 `openclaw-<profile>-YYYY-MM-DD.log` (for example,
 `openclaw-dev-YYYY-MM-DD.log`).
 
+## JSON events
+
+`--json` writes a stream of JSON objects, one per line. Read the `type` field
+before interpreting each record:
+
+| `type`   | Meaning on stdout                                                                                                                           |
+| -------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| `meta`   | Log-source metadata, emitted initially and when the source changes. Fields such as `file`, `sourceKind`, and `cursor` depend on the source. |
+| `log`    | A parsed log record with `message` and `raw`. Optional fields include `time`, `level`, `subsystem`, `module`, and `plugin`.                 |
+| `raw`    | A line that could not be parsed as a JSON object, preserved in `raw`.                                                                       |
+| `notice` | A tail warning, such as truncation or a cursor reset; its text is in `message`.                                                             |
+
+For example, with `jq` installed, keep both parsed and unparsed log records while
+excluding metadata and tail notices:
+
+```bash
+openclaw logs --json | jq -c 'select(.type == "log" or .type == "raw")'
+```
+
+Connection and reconnection notices go to stderr, as do terminal log-fetch
+errors. Keep stderr separate from stdout when consuming the event stream.
+Argument-validation failures use a different JSON envelope; see below.
+
 ## Fallback and recovery behavior
 
 - If local configuration cannot be read or parsed, `openclaw logs` reads local file logs and warns with `openclaw doctor --fix` guidance. This recovery also works with `--follow`; explicit URL targets retain their authentication requirements.
