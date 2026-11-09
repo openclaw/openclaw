@@ -62,6 +62,14 @@ The gallery uses the shared session-event reconciler and paced fallback refresh.
 Omitted fields never clear richer session facts already held by another view.
 Other session lists retain their existing compact or full projections.
 
+Each card's **Session** label and the **Session attribution** filter use the same
+rule: the session creator (`createdActor`), then the session owner (`owner.actor`)
+when no creator is recorded. If neither is available, the gallery uses the
+session's agent ID, falling back to the selected or default agent. It displays
+the actor's label when available, otherwise its ID. This describes the session's
+attribution, not who authored individual dashboard widgets. Agent-created widgets
+can appear in a session attributed to a human.
+
 - **Graduation:** agent calls `show_widget` from an inline-capable chat → widget
   renders in the transcript → hover shows **Pin to dashboard** → widget appears
   on the session's board. The agent can pass `pin: true` to do the same. A

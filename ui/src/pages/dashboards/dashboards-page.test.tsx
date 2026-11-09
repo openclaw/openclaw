@@ -287,34 +287,58 @@ it.each([false, true])("keeps pages across row events; retires late pages: %s", 
   expect(cardTitles(element)).toEqual(["Old"]);
 });
 
-it("renders the route host and filters by search and author and sorts cards by title", async () => {
-  const authoredRow = (key: string, name: string, updatedAt: number, id: string, label: string) =>
-    row(`agent:main:dashboard:${key}`, name, {
-      updatedAt,
-      createdActor: { type: "human", id, label },
-    });
+it("labels and filters session attribution with creator, owner, and agent fallbacks", async () => {
   const data = routeData(
-    authoredRow("zulu", "Zulu monitor", 30, "peter", "Peter"),
-    authoredRow("alpha", "Alpha signals", 10, "mira", "Mira"),
+    row("agent:main:dashboard:zulu", "Zulu monitor", {
+      updatedAt: 30,
+      createdActor: { type: "human", id: "peter", label: "Peter" },
+      owner: { actor: { type: "agent", id: "writer", label: "Writer" } },
+    }),
+    row("agent:main:dashboard:alpha", "Alpha signals", {
+      updatedAt: 10,
+      owner: { actor: { type: "human", id: "mira", label: "Mira" } },
+    }),
+    row("agent:writer:dashboard:beta", "Beta metrics", { updatedAt: 20, agentId: "writer" }),
+    row("agent:main:dashboard:gamma", "Gamma metrics", { updatedAt: 15 }),
   );
   const { container } = await mountDashboard(undefined, data);
   flush();
 
   const element = container.querySelector<HTMLElement>("openclaw-dashboards-page")!;
-  expect(cardTitles(element)).toEqual(["Zulu monitor", "Alpha signals"]);
+  expect(cardTitles(element)).toEqual([
+    "Zulu monitor",
+    "Beta metrics",
+    "Gamma metrics",
+    "Alpha signals",
+  ]);
   expect(element.querySelector(".dashboard-preview")?.hasAttribute("inert")).toBe(true);
+  expect(
+    Array.from(
+      element.querySelectorAll(".dashboard-card__author > span:last-child"),
+      (label) => label.textContent,
+    ),
+  ).toEqual(["Session: Peter", "Session: writer", "Session: main", "Session: Mira"]);
 
   const search = element.querySelector<HTMLInputElement>('input[type="search"]')!;
   changeValue(search, "signals");
   expect(cardTitles(element)).toEqual(["Alpha signals"]);
 
   changeValue(search, "");
-  const [authorSelect, sortSelect] = element.querySelectorAll<HTMLSelectElement>("select");
-  changeValue(authorSelect!, "mira");
+  const [attributionSelect, sortSelect] = element.querySelectorAll<HTMLSelectElement>("select");
+  expect(attributionSelect!.closest("label")?.textContent).toContain("Session attribution");
+  expect(attributionSelect!.options[0]?.textContent).toBe("All session attributions");
+  changeValue(attributionSelect!, "mira");
   expect(cardTitles(element)).toEqual(["Alpha signals"]);
-  expect(element.textContent).toContain("By Mira");
+  expect(element.textContent).toContain("Session: Mira");
+  changeValue(attributionSelect!, "writer");
+  expect(cardTitles(element)).toEqual(["Beta metrics"]);
 
-  changeValue(authorSelect!, "", false);
+  changeValue(attributionSelect!, "", false);
   changeValue(sortSelect!, "title");
-  expect(cardTitles(element)).toEqual(["Alpha signals", "Zulu monitor"]);
+  expect(cardTitles(element)).toEqual([
+    "Alpha signals",
+    "Beta metrics",
+    "Gamma metrics",
+    "Zulu monitor",
+  ]);
 });

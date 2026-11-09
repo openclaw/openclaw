@@ -105,6 +105,7 @@ suite.define(() => {
     await suite.withPage(
       {
         colorScheme: mode,
+        locale: "en-US",
         viewport: { width: 1440, height: 900 },
         ...(capture
           ? { recordVideo: { dir: suite.artifactDir, size: { width: 1440, height: 900 } } }
@@ -244,7 +245,7 @@ suite.define(() => {
   it("keeps the phone gallery geometry from skeleton to loaded", async () => {
     const rows = [{ ...dashboardRows[0]!, hasBoard: true }];
     await suite.withPage(
-      { colorScheme: "light", viewport: { width: 390, height: 844 } },
+      { colorScheme: "light", locale: "en-US", viewport: { width: 390, height: 844 } },
       async ({ page }) => {
         await page.route("**/dashboard-gallery-widget.html", (route) =>
           route.fulfill({ contentType: "text/html; charset=utf-8", body: widgetMarkup }),
@@ -293,7 +294,7 @@ suite.define(() => {
 
   it("opens a responsive gallery card without restarting its retained dashboard widgets", async () => {
     await suite.withPage(
-      { colorScheme: "dark", viewport: { width: 1440, height: 900 } },
+      { colorScheme: "dark", locale: "en-US", viewport: { width: 1440, height: 900 } },
       async ({ page }) => {
         await page.route("**/dashboard-gallery-widget.html", (route) =>
           route.fulfill({
@@ -347,7 +348,7 @@ suite.define(() => {
         });
         await releaseCard.waitFor();
         expect(await gallery.locator("[data-dashboard-session]").count()).toBe(12);
-        expect(await gallery.getByText("By Mira", { exact: true }).count()).toBe(6);
+        expect(await gallery.getByText("Session: Mira", { exact: true }).count()).toBe(6);
         await waitForPreview(releaseCard);
         expect(await releaseCard.locator('[data-widget-name="release-tools"]').count()).toBe(0);
         expect(await gateway.getRequests("board.widget.appView")).toHaveLength(0);
@@ -430,13 +431,15 @@ suite.define(() => {
         await popover.getByRole("radio", { name: "Title A–Z" }).click();
         await expect.poll(() => cards.first().locator("h2").textContent()).toBe("Dashboard 1");
         expect(await filter.getAttribute("class")).toContain("active");
-        await popover.getByRole("radio", { name: "All authors" }).click();
+        await popover.getByRole("radio", { name: "All session attributions" }).click();
         await popover.getByRole("radio", { name: "Recently updated" }).click();
         await expect.poll(() => cards.count()).toBe(12);
         expect(await filter.getAttribute("class")).not.toContain("active");
 
         // Each group is one tab stop, and arrow keys move the checked option with wraparound.
-        const authors = popover.locator(".dashboards-filter__authors").getByRole("radio");
+        const authors = popover
+          .getByRole("radiogroup", { name: "Session attribution" })
+          .getByRole("radio");
         await expect
           .poll(() =>
             authors.evaluateAll((options) =>
