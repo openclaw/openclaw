@@ -14,6 +14,7 @@ import {
   deleteSessionEntryRows,
   writeSessionEntry,
 } from "./session-accessor.sqlite-entry-store.js";
+import { clearHistoryNavigation } from "./session-accessor.sqlite-history.test-support.js";
 import {
   readSessionInputCompletion,
   writeSessionInputCompletion,
@@ -369,13 +370,7 @@ it("initializes over a retained transcript and preserves prepared snapshots, rel
         header(scope.sessionId),
         timedMessageEvent("retained-user", null, "2026-01-01T00:00:01.000Z", user("retained")),
       ]);
-      database.db
-        .prepare(`UPDATE transcript_events
-        SET navigation_type = NULL, navigation_custom_type = NULL,
-            navigation_display = 0, message_role = NULL, navigation_last_type = NULL,
-            navigation_last_custom_type = NULL, navigation_valid = 1
-        WHERE session_id = ?`)
-        .run(scope.sessionId);
+      clearHistoryNavigation(database, scope.sessionId);
       deleteSessionEntryRows(database, scope.sessionKey);
     });
     expect(f.events()).toHaveLength(2);

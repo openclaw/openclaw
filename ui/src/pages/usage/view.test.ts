@@ -277,16 +277,16 @@ describe("renderUsage", () => {
     base.callbacks.filters.onQueryDraftChange = onQueryDraftChange;
     document.body.appendChild(container);
     try {
-      expect(container.querySelector(".usage-filter-option")).toBeNull();
+      expect(container.querySelector('[role="menuitemcheckbox"]')).toBeNull();
       const { dropdown, surface, trigger } = openProviderFilter(container);
-      const first = [...dropdown.querySelectorAll(".usage-filter-option")].find(
+      const first = [...dropdown.querySelectorAll('[role="menuitemcheckbox"]')].find(
         (item) => item.getAttribute("aria-label") === "clear",
       )!;
       expect(trigger.getAttribute("aria-label")).toBe("Provider All");
       await waitForSolid(() => expect(trigger.getAttribute("aria-expanded")).toBe("true"));
       for (const provider of ["clear", "second"]) {
         const option = [
-          ...dropdown.querySelectorAll<HTMLButtonElement>(".usage-filter-option"),
+          ...dropdown.querySelectorAll<HTMLButtonElement>('[role="menuitemcheckbox"]'),
         ].find((item) => item.getAttribute("aria-label") === provider)!;
         option.click();
         await waitForSolid(() => expect(option.getAttribute("aria-checked")).toBe("true"));
@@ -347,7 +347,8 @@ describe("renderUsage", () => {
     document.body.appendChild(container);
     onTestFinished(() => container.remove());
     const { dropdown } = openProviderFilter(container);
-    const providerOptions = () => dropdown.querySelectorAll<HTMLElement>(".usage-filter-option");
+    const providerOptions = () =>
+      dropdown.querySelectorAll<HTMLElement>('[role="menuitemcheckbox"]');
     const values = () => [...providerOptions()].map((option) => option.getAttribute("aria-label"));
     const chartModeButton = (label: string) =>
       [...container.querySelectorAll<HTMLButtonElement>(".usage-view-options button")].find(
@@ -356,7 +357,7 @@ describe("renderUsage", () => {
 
     expect(chartModeButton("Tokens")?.getAttribute("aria-pressed")).toBe("true");
     expect(chartModeButton("Cost")?.getAttribute("aria-pressed")).toBe("false");
-    expect(values()).toEqual(["first", "second"]);
+    expect(values()).toEqual(["second", "first"]);
     expect(
       [...providerOptions()]
         .find((option) => option.getAttribute("aria-checked") === "true")
@@ -368,14 +369,14 @@ describe("renderUsage", () => {
     flush();
     expect(chartModeButton("Tokens")?.getAttribute("aria-pressed")).toBe("false");
     expect(chartModeButton("Cost")?.getAttribute("aria-pressed")).toBe("true");
-    expect(values()).toEqual(["first", "second"]);
+    expect(values()).toEqual(["second", "first"]);
     // The replacement report is already scoped by the Gateway.
     setData({
       ...data(),
       ...projectUsageData(data().sessions.filter((session) => session.agentId === "main")),
     });
     flush();
-    expect(values()).toEqual(["first"]);
+    expect(values()).toEqual(["second", "first"]);
     expect(container.querySelector(".usage-query-suggestion")).toBeNull();
 
     setData({
@@ -383,7 +384,7 @@ describe("renderUsage", () => {
       ...projectUsageData([usageSession("replacement", "main", "second-new")]),
     });
     flush();
-    expect(values()).toEqual(["second-new"]);
+    expect(values()).toEqual(["second", "second-new"]);
     container.querySelector<HTMLButtonElement>(".usage-query-suggestion")?.click();
     expect(props.callbacks.filters.onQueryDraftChange).toHaveBeenCalledWith(
       'label:"Team  Planning" provider:second-new ',
