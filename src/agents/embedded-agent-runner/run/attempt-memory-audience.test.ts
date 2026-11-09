@@ -20,6 +20,8 @@ vi.mock("../../../plugins/memory-state.js", () => ({
 // mock-isolation: captures the attempt's log levels without emitting them.
 vi.mock("../logger.js", () => ({ log: { warn: mocks.warn, info: mocks.info, debug: vi.fn() } }));
 
+import { issueHumanSenderTurn } from "../../../plugins/memory-human-sender-turn.js";
+import { createOperationalRunInstanceRef } from "../../operational-run-instance.js";
 import { resolveEmbeddedAttemptMemoryAudience } from "./attempt-memory-audience.js";
 
 const ROOT_KEY = "agent:main:root";
@@ -92,5 +94,29 @@ it.each(["legacy", "stale", "unverified"] as const)(
         expect.objectContaining({ kind: "unverified", sessionKey: CHILD_KEY }),
       );
     }
+  },
+);
+
+it.each([
+  ["its own admitted run", true, "owner-private"],
+  ["a copied run", false, undefined],
+] as const)(
+  "reads the typed owner turn of a stale child only from %s",
+  async (_name, sameRun, expectedKind) => {
+    const params = spawnedChildAttempt("stale");
+    const admittedRunContext = { operationalRunInstance: createOperationalRunInstanceRef("run") };
+    const humanSenderTurn = issueHumanSenderTurn({ sessionKey: CHILD_KEY, senderIsOwner: true });
+    humanSenderTurn.bind(
+      sameRun
+        ? admittedRunContext
+        : { operationalRunInstance: createOperationalRunInstanceRef("source-run") },
+    );
+    const resolved = await resolveEmbeddedAttemptMemoryAudience({
+      ...params,
+      run: { senderIsOwner: true, humanSenderTurn, admittedRunContext },
+    });
+    expect(resolved.memoryAudience?.kind).toBe(expectedKind);
+    expect(mocks.warn).toHaveBeenCalledTimes(sameRun ? 0 : 1);
+    resolved.release();
   },
 );

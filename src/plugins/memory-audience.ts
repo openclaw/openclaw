@@ -1,3 +1,4 @@
+import type { OperationalRunInstanceRef } from "../agents/operational-run-instance.js";
 import {
   isSessionDeliveryGenerationRevokedError,
   prepareSessionGenerationFacts,
@@ -7,6 +8,7 @@ import type { SessionEntry } from "../config/sessions/types.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { isIncognitoSessionKey, parseAgentSessionKey } from "../routing/session-key.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
+import { type HumanSenderTurn, readHumanSenderTurn } from "./memory-human-sender-turn.js";
 import type { MemoryAudience, MemoryCallerContext } from "./memory-provider-types.js";
 
 const MAX_LINEAGE_HOPS = 64;
@@ -194,8 +196,63 @@ type MemoryAudienceResolutionParams = {
   /** Session store of another configured agent; without it, cross-agent lineage is denied. */
   resolveAgentStorePath?: (agentId: string) => string;
   scheduledParent?: ScheduledMemoryParent;
+  /** Gateway-issued sender of this turn, read only for the run that admitted it. */
+  humanSenderTurn?: HumanSenderTurn;
+  operationalRunInstance?: OperationalRunInstanceRef;
   assertCallerCurrent?: () => void;
 };
+
+/**
+ * A spawned session typed into by an authenticated owner gets that owner's own
+ * private audience, as the owner's direct chat would. Nothing is inherited, so
+ * only this session's admitted incarnation is leased; its ancestors are not read.
+ */
+async function resolveHumanOwnerAudience(
+  params: MemoryAudienceResolutionParams,
+  admittedEntry: SessionEntry,
+): Promise<MemoryAudienceResolution> {
+  const { agentId, sessionKey, sessionId } = params;
+  const assertCallerCurrent = params.assertCallerCurrent ?? (() => {});
+  const record: AudienceRecord = { leases: [], state: "current", holders: 0 };
+  const deny = (kind: MemoryAudienceDenialKind, reason: string): MemoryAudienceResolution => {
+    releaseRecordLeases(record);
+    return { status: "denied", kind, reason };
+  };
+  if (!isAgentSessionKey(sessionKey, agentId) || !isSessionId(sessionId)) {
+    return deny("ineligible", `session ${sessionKey} is malformed`);
+  }
+  if (admittedEntry.sessionId !== sessionId) {
+    return deny("unverified", `session ${sessionKey} no longer matches its admitted turn`);
+  }
+  try {
+    const lease = await leaseSessionGeneration({
+      agentId,
+      sessionKey,
+      storePath: params.storePath,
+      entry: admittedEntry,
+    });
+    if (!lease) {
+      return deny(
+        "unverified",
+        `session ${sessionKey} changed while its memory audience was resolved`,
+      );
+    }
+    record.leases.push(lease);
+    assertCallerCurrent();
+    assertRecordCurrent(record);
+    return {
+      status: "granted",
+      ...mintMemoryAudience({ kind: "owner-private", agentId }, sessionKey, record),
+    };
+  } catch (error) {
+    releaseRecordLeases(record);
+    assertCallerCurrent();
+    return deny(
+      "unverified",
+      `session storage could not verify the session: ${formatErrorMessage(error)}`,
+    );
+  }
+}
 
 /**
  * Resolve from the current entry already admitted by the host turn owner.
@@ -206,6 +263,28 @@ export async function resolveMemoryAudienceFromEntry(
   params: MemoryAudienceResolutionParams,
   admittedEntry: SessionEntry,
 ): Promise<MemoryAudienceResolution> {
+  // A scheduled occurrence is never a human turn, whatever run it rides on.
+  const humanSender = params.scheduledParent
+    ? undefined
+    : readHumanSenderTurn(params.humanSenderTurn, {
+        sessionKey: params.sessionKey,
+        operationalRunInstance: params.operationalRunInstance,
+      });
+  if (humanSender && admittedEntry.spawnedBy !== undefined) {
+    // The current human's own standing replaces the spawn receipt; a non-owner
+    // never borrows the owner standing that spawned the session.
+    if (!humanSender.senderIsOwner || params.senderIsOwner !== true) {
+      return {
+        status: "denied",
+        kind: "ineligible",
+        reason: `spawned session ${params.sessionKey} grants no memory audience to a non-owner sender`,
+      };
+    }
+    // Owner-private memory never enters a shared room; such a session keeps its lineage rules.
+    if (admittedEntry.chatType !== "group" && admittedEntry.chatType !== "channel") {
+      return await resolveHumanOwnerAudience(params, admittedEntry);
+    }
+  }
   let { sessionKey, sessionId, senderIsOwner } = params;
   const { agentId } = params;
   let hopAgentId = agentId;

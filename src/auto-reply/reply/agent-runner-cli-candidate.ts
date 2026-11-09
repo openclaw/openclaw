@@ -519,6 +519,7 @@ export async function runCliFallbackCandidate(
             currentInboundAudio: hasInboundAudio(turn.sessionCtx),
             agentAccountId: turn.followupRun.run.agentAccountId,
             skillLibraryAuthoring: params.candidateRun.skillLibraryAuthoring,
+            humanSenderTurn: params.candidateRun.humanSenderTurn,
             toolAuthorityFingerprint,
             // Native input is already host-authored. Keep its stable delivery
             // context out of the model-output normalization wrapper.

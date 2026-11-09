@@ -13,6 +13,7 @@ export async function resolveCliMcpMemoryAudience(
     | "config"
     | "sessionId"
     | "senderIsOwner"
+    | "humanSenderTurn"
     | "sessionEntry"
     | "sessionTarget"
     | "storePath"

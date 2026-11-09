@@ -24,6 +24,7 @@ import { createDeferredCore } from "../../shared/deferred.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { resolveChatAbortDiagnosticReason } from "../chat-abort-diagnostics.js";
 import { acceptGatewayDeviceSourceAuthority } from "../device-revocation.js";
+import { isExternalGatewayRequestFrame } from "../external-request-frame.js";
 import { runOutsideOperatorToolGatewayAuthority } from "../operator-tool-gateway-authority.js";
 import { readQueuedChatInputAdmission } from "../queued-chat-input-admission.js";
 import { deriveGatewaySessionLifecycleSnapshot } from "../session-lifecycle-projection.js";
@@ -165,8 +166,12 @@ export async function handleChatSendWithStorage(
     isSystemGenerated:
       request.suppressCommandInterpretation || request.systemProvenanceReceipt !== undefined,
     turnKind: request.turnKind,
+    isExternalRequestFrame: isExternalGatewayRequestFrame(req),
   };
   const cronCreatorAuthority = externalAuthorityAdmission?.resolve(externalAdmissionParams);
+  const humanSenderTurn = options
+    ? undefined
+    : externalAuthorityAdmission?.issueHumanSenderTurn(externalAdmissionParams);
 
   const admissionStartedAt = Date.now();
   const commitInitialInput = req.method === "sessions.create";
@@ -640,6 +645,7 @@ export async function handleChatSendWithStorage(
           request.turnKind === "main",
       },
       cronCreatorAuthority,
+      humanSenderTurn,
       assertDashboardReadCurrent,
       getSessionInitializationOptions: createChatSendSessionInitialization({
         sessionKey,

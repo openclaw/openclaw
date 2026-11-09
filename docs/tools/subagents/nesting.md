@@ -142,6 +142,17 @@ session predates memory lineage receipts and must be respawned from its parent.
 Children whose parents lack a lifecycle revision must be respawned after the
 parent's next reset, which establishes a current lifecycle revision.
 
+An owner typing into a child session through the Control UI or another
+authenticated operator connection gets their own private memory audience for
+that turn, as in their own direct chat. Lineage, parent resets, and stale
+lineage do not apply to that turn, and nothing is inherited from the parent. The
+Gateway attests the sender when it admits the `chat.send` turn; copied chat
+metadata, launch text, and forwarded turns never qualify. A non-owner operator
+typing into a child gets no memory audience, even when an owner spawned it.
+Children in a group or channel keep their lineage audience. Turns without a
+human sender, such as subagent runs, scheduled runs, `sessions_send`,
+announcements, and heartbeats, keep the lineage rules above.
+
 A child spawned into a different agent inherits only the owner's private
 audience, applied to the child agent's own memory, and only when an owner turn
 spawned it from the owner's direct chat. The spawn already requires the target to

@@ -32,6 +32,7 @@ import {
 import { captureGatewayDeviceRevocation } from "../../device-revocation.js";
 import { errorShapeFromError } from "../../error-shape.js";
 import { createExpectedProfileBinding } from "../../expected-profile.js";
+import { markExternalGatewayRequestFrame } from "../../external-request-frame.js";
 import { hasCurrentRemoteControlUiIngress } from "../../ingress-attribution.js";
 import {
   isOpenClawIdTunnelPrincipalCurrent,
@@ -541,6 +542,7 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
           if (signal?.aborted || !hasCurrentClientAuthority() || !hasCurrentRuntimeAuthority()) {
             return;
           }
+          markExternalGatewayRequestFrame(req);
           await runOutsideGatewayRootWorkAdmission(() =>
             handleGatewayRequest(
               bindWebSocketRequestMutationAuthority(

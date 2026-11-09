@@ -64,6 +64,7 @@ export type RunCliAgentParams = Pick<
   | "bashElevated"
   | "toolsAllow"
   | "skillLibraryAuthoring"
+  | "humanSenderTurn"
   | "disableTrajectory"
 > & {
   preparedTtsPreferences?: import("../../tts/tts-preferences.js").PreparedTtsPreferences;
