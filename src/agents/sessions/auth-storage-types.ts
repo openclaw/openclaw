@@ -1,4 +1,4 @@
-import type { OAuthCredentials } from "../../llm/utils/oauth/types.js";
+import type { OAuthCredentials, OAuthProviderInterface } from "../../llm/utils/oauth/types.js";
 import type { AuthProfileCredentialSource } from "../auth-profiles/types.js";
 
 export type ApiKeyCredential = {
@@ -21,6 +21,13 @@ type TokenCredential = {
 export type AuthCredential = ApiKeyCredential | OAuthCredential | TokenCredential;
 
 export type AuthStorageData = Record<string, AuthCredential>;
+
+/** Catalog consumers observe credentials and modifiers without session mutation. */
+export interface ReadonlyAuthStorage {
+  get(provider: string): AuthCredential | undefined;
+  hasAuth(provider: string): boolean;
+  getOAuthProviders(): OAuthProviderInterface[];
+}
 
 export type LockResult<T> = {
   result: T;

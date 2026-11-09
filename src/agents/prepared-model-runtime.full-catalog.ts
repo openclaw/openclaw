@@ -36,7 +36,7 @@ import type {
   PreparedModelRuntimeCatalogMode,
   PreparedModelRuntimePluginGeneration,
 } from "./prepared-model-runtime.types.js";
-import type { ReadonlyAuthStorage } from "./sessions/auth-storage-readonly.js";
+import type { ReadonlyAuthStorage } from "./sessions/auth-storage-types.js";
 
 const fullModelCatalogSnapshots = new WeakSet<ModelCatalogSnapshot>();
 

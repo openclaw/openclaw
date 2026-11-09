@@ -1,6 +1,6 @@
 import type { Model } from "../../llm/types.js";
 import { modelTransportRoutesMatch } from "../model-compat-catalog.js";
-import type { ReadonlyAuthStorage } from "./auth-storage-readonly.js";
+import type { ReadonlyAuthStorage } from "./auth-storage-types.js";
 import type { ProviderRequestConfig } from "./model-registry-sources.js";
 
 /** Registry availability describes host credentials, never a native runtime's command. */

@@ -278,6 +278,8 @@ describe("production lint suppressions", () => {
         "src/agents/mcp-http-transport.ts|unicorn/prefer-add-event-listener|3",
         "src/agents/prepared-model-runtime.synthetic-auth.ts|unicorn/no-array-sort|1",
         "src/agents/session-dirs.ts|unicorn/no-array-sort|1",
+        // Readonly credentials preserve AuthStorage.inMemory's JSON omission and serialization contract.
+        "src/agents/sessions/auth-storage-readonly.ts|unicorn/prefer-structured-clone|1",
         "src/agents/tool-schema-hints.ts|unicorn/no-array-sort|1",
         // Media list snapshots must honor the JSON serialization contract; structuredClone cannot materialize plugin-bound proxies.
         "src/agents/tools/media-generate-tool-actions-shared.ts|unicorn/prefer-structured-clone|1",

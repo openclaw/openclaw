@@ -25,7 +25,7 @@ import {
   type PersistedPluginModelCatalog,
   type PluginModelCatalogMetadataSnapshot,
 } from "../plugin-model-catalog.js";
-import type { ReadonlyAuthStorage } from "./auth-storage-readonly.js";
+import type { ReadonlyAuthStorage } from "./auth-storage-types.js";
 import { createRegistryRuntimeModel } from "./model-registry-runtime-model.js";
 import {
   formatValidationPath,

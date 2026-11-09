@@ -10,7 +10,7 @@ import type {
   PluginModelCatalogMetadataSnapshot,
   PersistedPluginModelCatalog,
 } from "./plugin-model-catalog.js";
-import type { ReadonlyAuthStorage } from "./sessions/auth-storage-readonly.js";
+import type { ReadonlyAuthStorage } from "./sessions/auth-storage-types.js";
 import {
   getModelRegistryProviderRequestConfig,
   hasModelRegistryConfiguredAuth,

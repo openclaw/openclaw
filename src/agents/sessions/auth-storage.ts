@@ -74,6 +74,7 @@ import type {
   AuthStorageBackend,
   AuthStorageData,
   LockResult,
+  ReadonlyAuthStorage,
 } from "./auth-storage-types.js";
 import { resolveConfigValue } from "./resolve-config-value.js";
 
@@ -337,7 +338,7 @@ class InMemoryAuthStorageBackend implements StorageBackend {
 /**
  * Provider-keyed credential facade backed by the canonical auth-profile store.
  */
-export class AuthStorage {
+export class AuthStorage implements ReadonlyAuthStorage {
   /** Resolve the selected auth store's display path without loading credentials. */
   static resolvePathForDisplayAsync = resolveAuthStorePathForDisplayAsync;
 
