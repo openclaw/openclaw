@@ -106,11 +106,21 @@ template, including templates created before these defaults existed. Host object
 stores and credentials remain outside the sandbox; private repository access
 still requires the existing authorized publication workflow.
 
+The agent Git wrapper also defaults GitHub fork URL fetches to `blob:none` in
+these blobless repositories. This covers HTTPS, `git@github.com:owner/repo`, and
+`ssh://git@github.com/owner/repo` addresses through the agent's normal `git`
+command on POSIX hosts and Docker/Podman sandboxes. Git records the fetched URL
+as a promisor so later checkout and diff can retrieve fork-only file contents.
+Explicit `--filter` and `--no-filter` choices are preserved. Full repositories,
+other hosts, and direct invocations of a Git binary outside the wrapper retain
+Git's normal defaults.
+
 Use `github_publish` with `action: "prepare_pr"` for eligible PR continuation and
 `refresh_base` for base updates. For separate commit inspection, prefer
 `git fetch --no-tags --depth=1 <url> <commit>...`; deepen explicitly if the task
 needs ancestry, or use `--filter=blob:none` when history is required. Existing
-checkouts, other hosts, forks, and other URL spellings need these explicit flags.
+checkouts without blobless defaults and commands outside the wrapper need these
+explicit flags for fork fetches.
 An unbounded fetch in a shallow checkout can otherwise download the repository's
 entire history, including obsolete blobs. Servers must support filtering;
 Git warns and falls back to an unfiltered fetch when they do not.

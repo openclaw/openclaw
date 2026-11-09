@@ -222,11 +222,11 @@ it.each(["fetch", "repair", "inventory", "success", "auth failure", "cleanup fai
     const published: (string | Uint8Array | undefined)[] = [];
     mockGit().mockImplementation(async (argv, options): Promise<processExec.SpawnResult> => {
       const cwd = argv[argv.indexOf("-C") + 1];
+      if (argv.includes("--show-object-format")) {
+        return gitOutput(`sha1\n${path.join(target, ".git", "shallow")}`);
+      }
       if (argv.includes("--git-path")) {
         return gitOutput(objects);
-      }
-      if (argv.includes("--show-object-format")) {
-        return gitOutput("sha1");
       }
       if (argv.includes("config")) {
         return { ...successfulGit, code: 1 };
@@ -330,11 +330,11 @@ it.each(["success", "revoked", "uncertain"] as const)(
     const token = "synthetic-admitted-token";
     const admitted = vi.fn();
     mockGit().mockImplementation(async (argv, options) => {
+      if (argv.includes("--show-object-format")) {
+        return gitOutput(`sha1\n${path.join(target, ".git", "shallow")}`);
+      }
       if (argv.includes("--git-path")) {
         return gitOutput(objects);
-      }
-      if (argv.includes("--show-object-format")) {
-        return gitOutput("sha1");
       }
       if (argv.includes("init")) {
         staging = argv[argv.indexOf("-C") + 1]!;

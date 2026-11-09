@@ -136,7 +136,12 @@ Publication and base refresh reuse exact commits already stored locally instead
 of fetching them again. Partial clones still fetch missing contents when the
 operation needs those files. Missing publication commits use the cached target
 and default base tips for fetch negotiation when available, avoiding unrelated
-session histories while retaining commit ancestry and trees.
+session histories while retaining commit ancestry and trees. When a cached base
+and an existing promisor registration for the publication URL are available,
+acquisition uses temporary Git metadata and writes directly to the existing
+object store. This avoids scanning every session ref before negotiation; local
+refs and shallow boundaries stay unchanged. The first filtered fetch for a URL
+uses the original repository so Git can register it for later content hydration.
 Only sessions with a writable managed sandbox are offered this action; direct
 host sessions merge the base with git in their workspace before publishing.
 Resolve reported conflicts and repeat it with `conflictsResolved: true` and the
