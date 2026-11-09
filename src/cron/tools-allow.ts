@@ -1,3 +1,4 @@
+import { resolveEmbeddedAttemptToolConstructionPlan } from "../agents/embedded-agent-runner/run/attempt-tool-construction-plan.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../routing/account-id.js";
 import { parseRawSessionConversationRef } from "../sessions/session-key-utils.js";
 import {
@@ -59,10 +60,47 @@ export function resolveCronRunToolsAllow(
     : job.payload.toolsAllow;
 }
 
+/** A script that never names `MCP` cannot reach it, so its evaluation starts no MCP server. */
+export function cronScriptReferencesMcp(script: string): boolean {
+  return /\bMCP\b/.test(script);
+}
+
+type CronCreatorReauthorizationJob = {
+  payload?: { kind?: unknown; toolsAllow?: string[] | undefined; script?: unknown };
+  trigger?: { script?: unknown };
+  scheduledToolPolicy?: unknown;
+  owner?: { sessionKey?: string; accountId?: string };
+  toolsAllowProvenance?: { callerOrigin?: unknown };
+};
+
+/**
+ * The isolated prompt executor admits an agent turn's scheduled account whatever
+ * its cap. A script (payload or condition) admits it only while resolving its
+ * capability profile: when its cap constructs agent tools, or when it names `MCP`.
+ */
+function cronJobRunAdmitsScheduledAccount(job: CronCreatorReauthorizationJob): boolean {
+  if (!cronJobUsesToolRuntime(job)) {
+    return false;
+  }
+  if (job.payload?.kind === "agentTurn") {
+    return true;
+  }
+  const { constructTools } = resolveEmbeddedAttemptToolConstructionPlan({
+    toolsEnabled: true,
+    toolsAllow: job.payload?.toolsAllow,
+  });
+  return (
+    constructTools ||
+    [job.trigger?.script, job.payload?.kind === "script" ? job.payload.script : undefined].some(
+      (script) => typeof script === "string" && cronScriptReferencesMcp(script),
+    )
+  );
+}
+
 /**
  * A job needs creator reauthorization when its account-scoped tool cap cannot
  * resolve a channel at run time. This mirrors the scheduled account liveness
- * guard, which only tool-runtime jobs reach: the owner account is named (not the
+ * guard for the runs that reach it: the owner account is named (not the
  * default), the recorded creator origin is unknown (an external origin carries
  * its channel and a local origin resolves via the delivery channel), and the
  * owner session key is not a group/channel ref (those parse to a channel). Such
@@ -71,16 +109,10 @@ export function resolveCronRunToolsAllow(
  * and clears this state.
  */
 export function cronJobNeedsCreatorReauthorization(params: {
-  job: {
-    payload?: { kind?: unknown; toolsAllow?: readonly string[] | undefined };
-    trigger?: { script?: unknown };
-    scheduledToolPolicy?: unknown;
-    owner?: { sessionKey?: string; accountId?: string };
-    toolsAllowProvenance?: { callerOrigin?: unknown };
-  };
+  job: CronCreatorReauthorizationJob;
 }): boolean {
   const { job } = params;
-  if (!cronJobUsesToolRuntime(job) || job.payload?.toolsAllow === undefined) {
+  if (job.payload?.toolsAllow === undefined || !cronJobRunAdmitsScheduledAccount(job)) {
     return false;
   }
   const policy = resolveCronScheduledToolPolicy({
