@@ -365,7 +365,8 @@ final class VoiceWakeManager {
             self.suppressionReasons.isEmpty
     }
 
-    func invalidatePendingCommand() {
+    /// Tears down recognition and restarts active listening, beyond canceling a pending command.
+    func discardCaptureForRouteChange() {
         // A route change also retires buffered recognition results. Canceling only
         // the send task lets the old microphone capture dispatch into the new chat.
         let wasListening = self.isListening
