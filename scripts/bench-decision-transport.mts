@@ -67,10 +67,15 @@ function parseProductionSample(
     value.fixture,
     workload === "conversion" ? "provider-defined-v1-estimates" : fixture,
   );
-  if (workload === "runtime-v1") assert.equal(value.mode, mode);
+  if (workload === "runtime-v1") {
+    assert.equal(value.mode, mode);
+  }
   const clones = mode === "work" ? value.clones : undefined;
-  if (mode === "work") assert(isRecord(clones));
-  else assert(!Object.hasOwn(value, "clones"), "Cost must use the unwrapped native clone");
+  if (mode === "work") {
+    assert(isRecord(clones));
+  } else {
+    assert(!Object.hasOwn(value, "clones"), "Cost must use the unwrapped native clone");
+  }
   assert.equal(value.evaluations, evaluations);
   assert.equal(value.validatedOutputs, evaluations);
   for (const field of ["connections", "responseBytes", "socketsAfterPoolClose"]) {

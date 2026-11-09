@@ -442,9 +442,15 @@ async function benchmarkRegisteredV1(evaluations: number, fixture: string, mode:
   // Only the known fixture and its native-cloned result are inspected by reference.
   function observeClone<T>(...args: [T, StructuredSerializeOptions?]): T {
     clones.calls++;
-    if (args[0] === batch || args[0] === admittedBatch) clones.stateBearingBatches++;
-    if (args[0] === admittedQuestions) clones.questions++;
-    if (args[0] === reported) clones.results++;
+    if (args[0] === batch || args[0] === admittedBatch) {
+      clones.stateBearingBatches++;
+    }
+    if (args[0] === admittedQuestions) {
+      clones.questions++;
+    }
+    if (args[0] === reported) {
+      clones.results++;
+    }
     const result = nativeClone(...args);
     if (args[0] === batch) {
       admittedBatch = result;
@@ -458,7 +464,9 @@ async function benchmarkRegisteredV1(evaluations: number, fixture: string, mode:
   let peakRssBytes = memoryBefore.rss;
   const cpuBefore = process.cpuUsage();
   try {
-    if (mode === "work") globalThis.structuredClone = observeClone;
+    if (mode === "work") {
+      globalThis.structuredClone = observeClone;
+    }
     for (let index = 0; index < evaluations; index++) {
       const started = performance.now();
       const outcome = await withOperatorToolGatewayAuthority(
