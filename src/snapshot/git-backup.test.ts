@@ -317,6 +317,38 @@ it.each(["missing", "old-schema", "removed"] as const)(
   },
 );
 
+it.skipIf(process.platform === "win32").each([" repository ", "parent / repository "])(
+  "creates literal repository paths: %j",
+  async (name) => {
+    const { repositoryPath, init } = await repositoryFixture(name);
+    await expect(init()).resolves.toEqual({ repositoryPath });
+    expect((await fs.stat(path.join(repositoryPath, ".git"))).isDirectory()).toBe(true);
+    expect((await fs.stat(repositoryPath)).mode & 0o777).toBe(0o700);
+    await expect(fs.stat(repositoryPath.trim())).rejects.toMatchObject({ code: "ENOENT" });
+  },
+);
+
+it.skipIf(process.platform === "win32")(
+  "adopts existing literal repositories through parent aliases",
+  async () => {
+    const root = tempRoot();
+    const physical = path.join(root, "physical");
+    const alias = path.join(root, "alias");
+    await fs.mkdir(physical, { mode: 0o700 });
+    const physicalRepository = path.join(physical, " repository ");
+    await initializeGitBackupRepository({
+      repositoryPath: physicalRepository,
+      stateDir: path.join(root, "state"),
+    });
+    await fs.symlink(physical, alias, "dir");
+    const repositoryPath = path.join(alias, " repository ");
+    await expect(
+      initializeGitBackupRepository({ repositoryPath, stateDir: path.join(root, "state") }),
+    ).resolves.toEqual({ repositoryPath });
+    expect(await fs.realpath(repositoryPath)).toBe(physicalRepository);
+  },
+);
+
 it.skipIf(process.platform === "win32")(
   "rejects group-writable adopted roots with a chmod hint",
   async () => {

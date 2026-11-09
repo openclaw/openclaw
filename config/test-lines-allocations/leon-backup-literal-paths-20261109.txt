@@ -1,0 +1,2 @@
+30
+# Native Git repository creation preserves literal and nested names, private permissions, and existing parent aliases; shared resolver tests shrink by two lines.
