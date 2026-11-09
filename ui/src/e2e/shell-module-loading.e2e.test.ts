@@ -81,7 +81,7 @@ suite.define(() => {
       const reachable = createDeferredCore();
       let probes = 0;
       await page.route("**/index.html", async (route) => {
-        if (route.request().method() !== "HEAD") {
+        if (route.request().headers()["x-openclaw-reachability-probe"] !== "1") {
           await route.fallback();
           return;
         }
@@ -191,7 +191,7 @@ suite.define(() => {
       const documents = trackDocuments(page);
       let probes = 0;
       page.on("request", (request) => {
-        if (request.method() === "HEAD") {
+        if (request.headers()["x-openclaw-reachability-probe"] === "1") {
           probes += 1;
         }
       });
