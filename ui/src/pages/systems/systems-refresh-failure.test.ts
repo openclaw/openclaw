@@ -217,6 +217,11 @@ it("keeps a live Simulator capture through telemetry and inventory polls", async
     )!;
     input.value = "café";
     input.dispatchEvent(new Event("input", { bubbles: true }));
+    flush();
+    expect(
+      mounted.container.querySelector<HTMLButtonElement>(".simulator-preview__text button")
+        ?.disabled,
+    ).toBe(false);
     mounted.container.querySelector<HTMLButtonElement>(".simulator-preview__text button")!.click();
     await waitForSolid(() =>
       expect(mounted.container.textContent).toContain("typed input refused"),
@@ -233,6 +238,7 @@ it("keeps a live Simulator capture through telemetry and inventory polls", async
     expect(retryInput.value).toBe("café");
     retryInput.value = "漢".repeat(1366);
     retryInput.dispatchEvent(new Event("input", { bubbles: true }));
+    flush();
     mounted.container.querySelector<HTMLButtonElement>(".simulator-preview__text button")!.click();
     expect(mounted.container.querySelector('[role="alert"]')?.textContent).toContain("4,096");
     expect(retryInput.value).toBe("漢".repeat(1366));
