@@ -178,6 +178,15 @@ describe("config io audit helpers", () => {
     const record = finalizeConfigWriteAuditRecord({
       base: {
         ...createAuditRecordBase(path.join(home, ".openclaw", "openclaw.json")),
+        argv: [
+          "openclaw",
+          "config",
+          "set",
+          "--expect-current-json",
+          "null",
+          "channels.slack.token",
+          "synthetic-audit-secret",
+        ],
         suspicious: [
           "provider returned ya29.fake-access-token-with-enough-length",
           "plugin returned AIzaSyD-very-real-looking-google-api-key-123",
@@ -193,16 +202,36 @@ describe("config io audit helpers", () => {
       record,
     });
 
-    const raw = JSON.stringify(
-      listConfigAuditRecordsForTests({
-        env: {},
-        homedir: () => home,
-      }),
-    );
+    const records = listConfigAuditRecordsForTests({ env: {}, homedir: () => home });
+    expect(records).toHaveLength(1);
+    const raw = JSON.stringify(records);
     expect(raw).not.toContain("AIzaSyD-very-real-looking");
     expect(raw).not.toContain("ya29.fake-access-token");
     expect(raw).not.toContain("abcd-efgh-ijkl-mnop");
+    expect(raw).not.toContain("synthetic-audit-secret");
   });
+
+  it.each([0, 1, 2])(
+    "redacts the new config value with conditional options at position %s",
+    (index) => {
+      for (const [configPath, value, expected] of [
+        ["channels.slack.token", "synthetic-secret", "***"],
+        ["gateway.port", "19002", "19002"],
+      ] as const) {
+        const args: string[] = [configPath, value];
+        const redacted: string[] = [configPath, expected];
+        args.splice(index, 0, "--expect-current-json", "null");
+        redacted.splice(index, 0, "--expect-current-json", "null");
+        const argv = ["openclaw", "config", "set", ...args];
+        expect(createAuditRecordBase("/tmp/openclaw.json", argv).argv).toEqual([
+          "openclaw",
+          "config",
+          "set",
+          ...redacted,
+        ]);
+      }
+    },
+  );
 
   it("caps caller-supplied processInfo argv at 8 entries before redaction", () => {
     const longArgv = [

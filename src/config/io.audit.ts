@@ -25,6 +25,7 @@ const CONFIG_SET_VALUE_OPTIONS = new Set([
   "--batch-file",
   "--batch-json",
   "--container",
+  "--expect-current-json",
   "--log-level",
   "--profile",
   "--provider-allowlist",
