@@ -1,4 +1,4 @@
-# Regression test for the macOS stale-updater launchd scan. The scan used to swallow
-# failures and report the system as healthy. The new test makes the scan reject and
-# asserts the unreadable-scan warning is surfaced instead of silently dropped.
-21
+# Exercise the real macOS stale-updater scan with native failures and rejections.
+# Assert actionable warnings retain failure details while redacting private paths.
+# Exact net test-line growth against the PR base, including the native mock repair.
+35

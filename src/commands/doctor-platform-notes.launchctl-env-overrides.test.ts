@@ -39,7 +39,10 @@ vi.mock("../daemon/launchd.js", async (importActual) => {
     findStaleOpenClawUpdateLaunchdJobs: mocks.findJobs,
   };
 });
-vi.mock("../daemon/launchd-exec.js", () => ({ execLaunchctl: mocks.execLaunchctl }));
+vi.mock("../daemon/launchd-exec.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../daemon/launchd-exec.js")>()),
+  execLaunchctl: mocks.execLaunchctl,
+}));
 // mock-isolation: keep real service locks in this test invocation's temporary directory.
 vi.mock("../infra/tmp-openclaw-dir.js", async () => ({
   resolvePreferredOpenClawTmpDir: (await import("node:os")).tmpdir,
@@ -389,30 +392,28 @@ describe("macOS stale updater warnings", () => {
     expect(message).toContain("openclaw gateway restart");
   });
 
-  it("warns instead of reporting healthy when the stale updater scan fails", async () => {
-    mocks.readCommand.mockResolvedValue({
-      programArguments: ["/bin/node", "cli", "gateway"],
-      environment: { HOME: "/tmp/openclaw-doctor-service" },
-    });
-    mocks.execLaunchctl.mockResolvedValue({
-      code: 1,
-      stdout: "",
-      stderr: "launchctl list failed: Operation not permitted",
-    });
+  it.each(["exit", "reject"])(
+    "warns without private paths when the stale updater scan fails (%s)",
+    async (failure) => {
+      const privatePath = "/Users/private owner/Library/LaunchAgents/updater.plist";
+      const detail = `Operation not permitted: "${privatePath}"`;
+      if (failure === "exit") {
+        mocks.execLaunchctl.mockResolvedValue({ code: 1, stdout: "", stderr: detail });
+      } else {
+        mocks.execLaunchctl.mockRejectedValueOnce(new Error(detail));
+      }
 
-    await noteMacGatewayPlatformWarnings({});
+      await noteMacGatewayPlatformWarnings({});
 
-    expect(mocks.execLaunchctl).toHaveBeenCalledWith(["list"]);
-    const staleWarning = mocks.note.mock.calls
-      .map((call) => call[0])
-      .find(
-        (message): message is string =>
-          typeof message === "string" && message.includes("stale OpenClaw updater launchd jobs"),
+      const [message, title] = expectDefined<unknown[]>(mocks.note.mock.calls[0], "note call 0");
+      expect(title).toBe("Gateway (macOS)");
+      expect(message).toBe(
+        `Could not inspect stale OpenClaw updater launchd jobs: ${failure === "exit" ? "launchctl list failed (exit 1): " : ""}Operation not permitted: [redacted-path]; interrupted-update leftovers were NOT checked. Check launchctl availability and rerun openclaw doctor.`,
       );
-    expect(staleWarning).toBeDefined();
-    expect(staleWarning).toContain("Could not inspect stale OpenClaw updater launchd jobs");
-    expect(staleWarning).toContain("NOT checked");
-  });
+      expect(message).not.toContain(privatePath);
+      expect(message).not.toContain("private owner");
+    },
+  );
 });
 
 describe("collectGatewayPlatformWarnings", () => {

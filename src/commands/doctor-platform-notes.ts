@@ -17,6 +17,7 @@ import {
 import { mergeGatewayServiceEnv } from "../daemon/service-env-merge.js";
 import { resolveGatewayService } from "../daemon/service.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { redactSupportDiagnosticLine } from "../logging/diagnostic-support-redaction.js";
 import { runExec } from "../process/exec.js";
 import { shortenHomePath } from "../utils.js";
 import type { DoctorPrompter } from "./doctor-prompter.js";
@@ -76,7 +77,11 @@ async function collectMacStaleOpenClawUpdateLaunchdJobsWarning(): Promise<string
   try {
     jobs = await findStaleOpenClawUpdateLaunchdJobs(scanEnv);
   } catch (error) {
-    return `Could not inspect stale OpenClaw updater launchd jobs: ${formatErrorMessage(error)}; interrupted-update leftovers were NOT checked. Check launchctl availability and rerun ${formatCliCommand("openclaw doctor", baseEnv)}.`;
+    const detail = redactSupportDiagnosticLine(formatErrorMessage(error), {
+      env: scanEnv,
+      stateDir: resolveStateDir(scanEnv),
+    });
+    return `Could not inspect stale OpenClaw updater launchd jobs: ${detail}; interrupted-update leftovers were NOT checked. Check launchctl availability and rerun ${formatCliCommand("openclaw doctor", baseEnv)}.`;
   }
   if (jobs.length === 0) {
     return null;
