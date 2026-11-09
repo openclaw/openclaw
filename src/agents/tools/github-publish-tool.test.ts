@@ -395,3 +395,45 @@ it.each([undefined, false, true])(
     });
   },
 );
+
+it("names placeholder fields instead of blaming the host", async () => {
+  const { callGateway, execute } = setup();
+  const placeholders = { title: "x", body: "", workspacePath: "/tmp" };
+  await expect(execute({ action: "readiness", ...placeholders })).rejects.toThrow(
+    "workspacePath is accepted only with action publish. Send only the fields readiness needs",
+  );
+  await expect(execute({ action: "readiness", title: "x", body: "" })).rejects.toThrow(
+    "remove title, body",
+  );
+  await expect(
+    execute({ action: "inspect_pr", pullRequestUrl: "https://github.com/o/r/pull/1", body: "" }),
+  ).rejects.toThrow("remove body");
+  expect(callGateway).not.toHaveBeenCalled();
+});
+
+it("tells an unbound conversation how to publish, but not when reading a child", async () => {
+  const { callGateway, execute } = setup();
+  const unbound = {
+    policy: { read: "admitted", write: "unknown" },
+    custody: { kind: "unbound_workspace" },
+    target: { kind: "unknown", reason: "not-qualified" },
+    request: { kind: "none", selection: "current" },
+    remedies: [],
+  };
+  callGateway.mockResolvedValue(unbound);
+  const own = (await execute({ action: "readiness" })).details as { next?: string };
+  expect(own.next).toContain("publish with workspacePath");
+  const child = (await execute({ action: "readiness", publishingSessionKey: "agent:main:child" }))
+    .details;
+  expect(child).toEqual(unbound);
+});
+
+it("limits session-bound landing actions and points other PRs to the native route", () => {
+  const { description } = createGitHubPublishTool();
+  expect(description).toContain(
+    "inspect, ready, merge and close act only on this session's own published PR",
+  );
+  expect(description).toContain("for OpenClaw, scripts/pr");
+  expect(description).toContain("A session publishes one checkout");
+  expect(description).toContain("status started is not success");
+});
