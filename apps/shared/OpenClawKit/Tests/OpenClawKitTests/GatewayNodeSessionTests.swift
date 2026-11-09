@@ -948,6 +948,14 @@ extension GatewayChannelActor {
 
 @Suite(.serialized)
 struct GatewayNodeSessionTests {
+    @Test func `personal identity use requires exact bound Gateway boot id`() {
+        let server = ["bootId": AnyCodable("gateway-bound")]
+        #expect(GatewayChannelActor.matchesExpectedGateway(server: server, expectedGatewayId: "gateway-bound"))
+        #expect(!GatewayChannelActor.matchesExpectedGateway(server: server, expectedGatewayId: "other-gateway"))
+        #expect(!GatewayChannelActor.matchesExpectedGateway(server: [:], expectedGatewayId: "gateway-bound"))
+        #expect(GatewayChannelActor.matchesExpectedGateway(server: [:], expectedGatewayId: nil))
+    }
+
     @Test(arguments: [false, true])
     func `wire presence is reconstructed before bounded delivery and gaps resynchronize`(
         versionGap: Bool) async throws

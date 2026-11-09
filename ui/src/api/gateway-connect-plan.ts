@@ -300,6 +300,7 @@ export async function buildBrowserGatewayConnectPlan({
       role,
       scopes,
       device,
+      ...(nativeAuth?.personalIdentity ? { personalIdentity: nativeAuth.personalIdentity } : {}),
       ...(!nativeAuth && opts.includeSessionMessageBodies
         ? { includeSessionMessageBodies: true }
         : {}),

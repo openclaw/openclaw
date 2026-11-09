@@ -1,0 +1,4 @@
+# Shared OAuth recovery through administrator RPC, native SQLite credential/order owners,
+# inherited-view publication, live authority revocation, and cross-state-owner refusal.
+# Owner fixture: 64.63s wall / 58.53s Vitest; mock-only proof cannot establish these owners.
+270

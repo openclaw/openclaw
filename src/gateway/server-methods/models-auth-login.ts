@@ -3,6 +3,7 @@ import {
   errorShape,
   validateSystemAgentSetupAuthStartParams,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { resolveSharedMainAuthLoginTarget } from "../../agents/auth-profiles/shared-login-target.js";
 import { runModelsAuthLoginFlowForGateway } from "../../commands/models/auth.js";
 import { resolveManifestDeclaredProviderAuthChoices } from "../../plugins/provider-auth-choices.js";
 import {
@@ -78,7 +79,17 @@ export const modelsAuthLoginHandlers: GatewayRequestHandlers = {
         );
         return;
       }
+      const sharedTarget = resolveSharedMainAuthLoginTarget(
+        context.getRuntimeConfig(),
+        params.agentId,
+      );
       const assertLoginCurrent = () => {
+        if (
+          sharedTarget &&
+          !resolveSharedMainAuthLoginTarget(context.getRuntimeConfig(), params.agentId)
+        ) {
+          throw new Error("Shared credential ownership changed during sign-in.");
+        }
         assertOwner?.();
         if (client.invalidated || !client.connect.scopes?.includes("operator.admin")) {
           throw new Error("Provider login authority is no longer active.");
@@ -131,6 +142,7 @@ export const modelsAuthLoginHandlers: GatewayRequestHandlers = {
                     signal,
                     openUrl,
                     browserOrigin: client.browserOrigin,
+                    authPolicy: client.authPolicy,
                   })
                 : undefined;
               const assertFlowCurrent = () => {

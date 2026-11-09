@@ -21,6 +21,7 @@ import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../lib/external-link
 import "../lib/toast-host.tsx";
 import { formatGatewayHost } from "../lib/gateway-host.ts";
 import { classifyGatewaySecret } from "../lib/gateway-secret-shape.ts";
+import { clearCompositionEnd, isComposingKeyboardEvent, recordCompositionEnd } from "../lib/ime.ts";
 import { registerEnglishCatalog, t } from "../lib/reactive/i18n.ts";
 import { listen } from "../lib/reactive/listener.ts";
 import { useVisiblePoll } from "../lib/reactive/visible-poll.ts";
@@ -142,6 +143,9 @@ function LoginForm(
     props.model.onConnect();
   };
   const submitOnEnter = (event: KeyboardEvent) => {
+    if (isComposingKeyboardEvent(event)) {
+      return;
+    }
     if (event.key === "Enter") {
       connect();
     }
@@ -164,6 +168,9 @@ function LoginForm(
             props.cancelRefresh();
             props.model.onGatewayUrlChange(event.currentTarget.value);
           }}
+          onCompositionEnd={recordCompositionEnd}
+          onKeyUp={clearCompositionEnd}
+          onBlur={clearCompositionEnd}
           onKeyDown={submitOnEnter}
           placeholder="wss://gateway.example:443"
         />
@@ -184,6 +191,9 @@ function LoginForm(
               props.cancelRefresh();
               props.model.onSecretChange(event.currentTarget.value);
             }}
+            onCompositionEnd={recordCompositionEnd}
+            onKeyUp={clearCompositionEnd}
+            onBlur={clearCompositionEnd}
             onKeyDown={submitOnEnter}
             placeholder={t("login.secretPlaceholder")}
           />

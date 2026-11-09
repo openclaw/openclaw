@@ -328,7 +328,7 @@ final class DashboardManager {
             configuration = try await dashboardConfiguration(
                 endpoint: endpoint, mode: mode, target: .primary, token: authToken).configuration
         } catch {
-            guard self.endpointGeneration == generation else { return }
+            guard self.endpointGeneration == generation, !(error is CancellationError) else { return }
             for controller in currentControllers() {
                 controller.showFailure(
                     title: "Dashboard unavailable",

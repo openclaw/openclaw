@@ -44,8 +44,10 @@ struct DashboardNativeGatewayAuth: Sendable {
         scopes: [String],
         nonce: String,
         signedAt: Int64,
+        personalIdentity: GatewayPersonalIdentityIntent? = nil,
         client: [String: String]) throws -> Data
     {
+        let signedPersonalIdentity = personalIdentity?.signed(at: signedAt)
         let fields = GatewayDeviceAuthPayload.Fields(
             deviceId: identity.deviceId,
             client: .init(id: "openclaw-macos", mode: "ui"),
@@ -53,18 +55,24 @@ struct DashboardNativeGatewayAuth: Sendable {
             scopes: scopes,
             signedAtMs: signedAt,
             token: credential.signatureToken,
-            nonce: nonce)
+            nonce: nonce,
+            personalIdentity: signedPersonalIdentity,
+            platform: client["platform"],
+            deviceFamily: client["deviceFamily"])
         // Match the canonical native connection's compatibility payload.
         let payload = GatewayDeviceAuthPayload.buildConnectCompatibilityPayload(fields: fields)
         guard let device = GatewayDeviceAuthPayload.signedDeviceDictionary(
             payload: payload, identity: identity, signedAtMs: signedAt, nonce: nonce)
         else { throw CancellationError() }
-        let result: [String: OpenClawProtocol.AnyCodable] = [
+        var result: [String: OpenClawProtocol.AnyCodable] = [
             "client": .init(client),
             "scopes": .init(scopes),
             "auth": .init(credential.auth),
             "device": .init(device),
         ]
+        if let signedPersonalIdentity {
+            result["personalIdentity"] = .init(signedPersonalIdentity.wireValue)
+        }
         return try JSONEncoder().encode(result)
     }
 }

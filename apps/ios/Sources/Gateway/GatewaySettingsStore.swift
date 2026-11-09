@@ -253,6 +253,9 @@ enum GatewaySettingsStore {
     {
         let stableID = self.authenticationOwnerID(routeStableID: gatewayStableID)
         guard !stableID.isEmpty else { return false }
+        if service == self.gatewayCustomHeadersService {
+            self.invalidateShareRelayTransport(gatewayStableID: stableID)
+        }
         let sanitized = GatewayCustomHeaders.sanitized(headers)
         guard !sanitized.isEmpty else {
             return self.clearGatewayCustomHeaders(gatewayStableID: stableID, service: service)
@@ -277,6 +280,9 @@ enum GatewaySettingsStore {
     {
         let stableID = self.authenticationOwnerID(routeStableID: gatewayStableID)
         guard !stableID.isEmpty else { return false }
+        if service == self.gatewayCustomHeadersService {
+            self.invalidateShareRelayTransport(gatewayStableID: stableID)
+        }
         let account = self.customHeadersAccount(stableID: stableID)
         let canonicalDeleted = GenericPasswordKeychainStore.delete(service: service, account: account)
         var legacyCleared = true
@@ -296,7 +302,19 @@ enum GatewaySettingsStore {
     /// Full onboarding reset is the explicit forget boundary for every gateway's proxy secrets.
     @discardableResult
     static func clearGatewayCustomHeaders(service: String = GatewaySettingsStore.gatewayCustomHeadersService) -> Bool {
-        GenericPasswordKeychainStore.deleteAll(service: service)
+        if service == self.gatewayCustomHeadersService {
+            ShareGatewayRelaySettings.clearConfig()
+        }
+        return GenericPasswordKeychainStore.deleteAll(service: service)
+    }
+
+    private static func invalidateShareRelayTransport(gatewayStableID: String) {
+        guard GatewayStableIdentifier.matches(
+            ShareGatewayRelaySettings.loadConfig()?.gatewayStableID, gatewayStableID)
+        else { return }
+        // Reconnect republishes the accepted transport. Until then, a removed
+        // service token must not survive in the extension's shared bundle.
+        ShareGatewayRelaySettings.clearConfig()
     }
 
     private static func customHeadersAccount(stableID: String) -> String {

@@ -1,0 +1,3 @@
+# Native CronService regression for direct main-session policy-scoped message authority.
+# Extends existing session-event/model fixture; preserves delivery and revocation guards.
+64

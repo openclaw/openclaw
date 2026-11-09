@@ -1,5 +1,60 @@
 import OpenClawProtocol
 
+public enum GatewayPersonalIdentityIntent: Sendable, Equatable {
+    case bind(bindingId: String)
+    case use(bindingId: String, profileId: String, gatewayId: String)
+
+    public func signed(at issuedAtMs: Int64) -> SignedGatewayPersonalIdentityIntent {
+        switch self {
+        case let .bind(bindingId):
+            .init(phase: .bind, bindingId: bindingId, profileId: nil, gatewayId: nil, issuedAtMs: issuedAtMs)
+        case let .use(bindingId, profileId, gatewayId):
+            .init(phase: .use, bindingId: bindingId, profileId: profileId, gatewayId: gatewayId, issuedAtMs: issuedAtMs)
+        }
+    }
+}
+
+public struct SignedGatewayPersonalIdentityIntent: Sendable, Equatable {
+    enum Phase: String, Sendable { case bind, use }
+    let phase: Phase
+    let bindingId: String
+    let profileId: String?
+    let gatewayId: String?
+    let issuedAtMs: Int64
+
+    public var wireValue: [String: AnyCodable] {
+        var value: [String: AnyCodable] = [
+            "mode": AnyCodable("personal-identity"),
+            "provider": AnyCodable("tailscale"),
+            "bindingId": AnyCodable(self.bindingId),
+            "issuedAtMs": AnyCodable(self.issuedAtMs),
+            "phase": AnyCodable(self.phase.rawValue),
+        ]
+        if let profileId = self.profileId, let gatewayId = self.gatewayId {
+            value["profileId"] = AnyCodable(profileId)
+            value["gatewayId"] = AnyCodable(gatewayId)
+        }
+        return value
+    }
+
+    var signatureValue: [String] {
+        switch self.phase {
+        case .bind:
+            ["personal-identity", "tailscale", "bind", self.bindingId, String(self.issuedAtMs)]
+        case .use:
+            [
+                "personal-identity",
+                "tailscale",
+                "use",
+                self.bindingId,
+                self.profileId ?? "",
+                self.gatewayId ?? "",
+                String(self.issuedAtMs),
+            ]
+        }
+    }
+}
+
 public enum OpenClawGatewayClientCapability {
     public static let agentKind = "agent-kind"
     public static let inlineWidgets = "inline-widgets"
@@ -31,6 +86,8 @@ public struct GatewayConnectOptions: Sendable, Equatable {
     /// Stable Gateway owner for device tokens. Nil preserves legacy unscoped storage only when
     /// `allowStoredDeviceAuth` is true; false plus nil disables both lookup and persistence.
     public var deviceAuthGatewayID: String?
+    public var personalIdentity: GatewayPersonalIdentityIntent?
+    public var expectedGatewayId: String?
 
     public init(
         role: String,
@@ -47,7 +104,9 @@ public struct GatewayConnectOptions: Sendable, Equatable {
         deviceIdentityProfile: GatewayDeviceIdentityProfile = .primary,
         includeDeviceIdentity: Bool = true,
         allowStoredDeviceAuth: Bool = true,
-        deviceAuthGatewayID: String? = nil)
+        deviceAuthGatewayID: String? = nil,
+        personalIdentity: GatewayPersonalIdentityIntent? = nil,
+        expectedGatewayId: String? = nil)
     {
         self.role = role
         self.scopes = scopes
@@ -64,6 +123,8 @@ public struct GatewayConnectOptions: Sendable, Equatable {
         self.includeDeviceIdentity = includeDeviceIdentity
         self.allowStoredDeviceAuth = allowStoredDeviceAuth
         self.deviceAuthGatewayID = deviceAuthGatewayID
+        self.personalIdentity = personalIdentity
+        self.expectedGatewayId = expectedGatewayId
     }
 }
 
@@ -114,7 +175,13 @@ extension GatewayConnectOptions {
     }
 
     /// Additive connect-frame fields, sent only when this node declares them.
-    func applyOptionalConnectParams(to params: inout [String: OpenClawProtocol.AnyCodable]) {
+    func applyOptionalConnectParams(
+        to params: inout [String: OpenClawProtocol.AnyCodable],
+        signedPersonalIdentity: SignedGatewayPersonalIdentityIntent? = nil)
+    {
+        if let signedPersonalIdentity {
+            params["personalIdentity"] = OpenClawProtocol.AnyCodable(signedPersonalIdentity.wireValue)
+        }
         if !self.commands.isEmpty {
             params["commands"] = OpenClawProtocol.AnyCodable(self.commands)
         }

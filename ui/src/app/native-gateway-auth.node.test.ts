@@ -252,6 +252,60 @@ describe("native authenticated Control UI", () => {
     return currentSocket(challenge.nonce, challenge.ts);
   }
 
+  it("forwards the challenge-bound personal identity from the native signer", async () => {
+    respondWith((challenge) => {
+      const response = nativeAuthorization(challenge);
+      return {
+        ...response,
+        result: {
+          ...response.result,
+          personalIdentity: {
+            mode: "personal-identity",
+            provider: "tailscale",
+            phase: "use",
+            bindingId: "binding-1",
+            profileId: "profile-1",
+            gatewayId: "gateway-1",
+            issuedAtMs: challenge.signedAt,
+          },
+        },
+      };
+    });
+    const socket = connect();
+    const frame = await socket.connect.promise;
+    expect(frame.params.personalIdentity).toEqual({
+      mode: "personal-identity",
+      provider: "tailscale",
+      phase: "use",
+      bindingId: "binding-1",
+      profileId: "profile-1",
+      gatewayId: "gateway-1",
+      issuedAtMs: signedAt,
+    });
+  });
+
+  it("rejects a personal identity with a different challenge timestamp", async () => {
+    respondWith((challenge) => {
+      const response = nativeAuthorization(challenge);
+      return {
+        ...response,
+        result: {
+          ...response.result,
+          personalIdentity: {
+            mode: "personal-identity",
+            provider: "tailscale",
+            phase: "use",
+            bindingId: "binding-1",
+            profileId: "profile-1",
+            gatewayId: "gateway-1",
+            issuedAtMs: challenge.signedAt - 1,
+          },
+        },
+      };
+    });
+    await expectRejected(connect());
+  });
+
   it.each(["before challenge", "after challenge"])(
     "uses the approved native identity on older WebViews when the port arrives %s",
     async (arrival) => {

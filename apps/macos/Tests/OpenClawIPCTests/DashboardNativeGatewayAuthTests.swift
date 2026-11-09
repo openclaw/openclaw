@@ -5,6 +5,32 @@ import Testing
 @testable import OpenClawKit
 
 struct DashboardNativeGatewayAuthTests {
+    @Test func `personal dashboard signature binds the local identity intent`() throws {
+        let key = Curve25519.Signing.PrivateKey()
+        let identity = DeviceIdentity(
+            deviceId: SHA256.hash(data: key.publicKey.rawRepresentation).map { String(format: "%02x", $0) }.joined(),
+            publicKey: key.publicKey.rawRepresentation.base64EncodedString(),
+            privateKey: key.rawRepresentation.base64EncodedString(), createdAtMs: 0)
+        let json = try DashboardNativeGatewayAuth.sign(
+            identity: identity, credential: .deviceToken("accepted-secret"), scopes: ["operator.read"],
+            nonce: "challenge", signedAt: 123,
+            personalIdentity: .use(bindingId: "binding-1", profileId: "profile-1", gatewayId: "gateway-1"),
+            client: ["id": "openclaw-macos", "mode": "ui", "platform": "macOS", "deviceFamily": "Mac"])
+        let result = try #require(JSONSerialization.jsonObject(with: json) as? [String: Any])
+        let personal = try #require(result["personalIdentity"] as? [String: Any])
+        #expect(personal["gatewayId"] as? String == "gateway-1")
+        #expect(personal["issuedAtMs"] as? Int == 123)
+        let device = try #require(result["device"] as? [String: Any])
+        let rawSignature = try #require(device["signature"] as? String)
+        let padded = rawSignature.replacingOccurrences(of: "-", with: "+")
+            .replacingOccurrences(of: "_", with: "/") + "=="
+        let signature = try #require(Data(base64Encoded: padded))
+        let payload = "[\"openclaw-device-auth\",\"v4\",\"\(identity.deviceId)\",\"openclaw-macos\",\"ui\",\"operator\",[\"operator.read\"],\"123\",\"accepted-secret\",\"challenge\",\"macos\",\"mac\",[\"personal-identity\",\"tailscale\",\"use\",\"binding-1\",\"profile-1\",\"gateway-1\",\"123\"]]"
+        #expect(key.publicKey.isValidSignature(signature, for: Data(payload.utf8)))
+        #expect(!key.publicKey.isValidSignature(signature, for: Data(payload.replacingOccurrences(
+            of: "gateway-1", with: "other-gateway").utf8)))
+    }
+
     @Test(arguments: ["token", "password", "deviceToken"])
     func `native signature proves the challenge and exact granted scopes without exporting a key`(
         method: String) throws

@@ -154,6 +154,22 @@ private actor GatewayEndpointRemoteEnsureGate {
 
 @Suite(.gatewayTLSStoreIsolated, .testWaitLimit)
 struct GatewayEndpointStoreTests {
+    @Test func `personal Primary preference is explicit and invalidates only the local connection snapshot`() {
+        let shared = self.source(mode: .local, personalIdentityEnabled: false)
+        let personal = self.source(mode: .local, personalIdentityEnabled: true)
+        let remoteShared = self.source(mode: .remote, personalIdentityEnabled: false)
+        let remoteWithLocalPreferenceSet = self.source(mode: .remote, personalIdentityEnabled: true)
+
+        #expect(shared.mode == .local)
+        #expect(personal.mode == .local)
+        #expect(shared.hasSameConnectionIdentity(as: shared))
+        #expect(personal.hasSameConnectionIdentity(as: personal))
+        #expect(!shared.hasSameConnectionIdentity(as: personal))
+        #expect(remoteShared.mode == .remote)
+        #expect(remoteWithLocalPreferenceSet.mode == .remote)
+        #expect(remoteShared.hasSameConnectionIdentity(as: remoteWithLocalPreferenceSet))
+    }
+
     @MainActor
     @Test func `live local source uses canonical default and named profile ports`() async throws {
         let configPath = TestIsolation.tempConfigPath()
@@ -221,6 +237,7 @@ struct GatewayEndpointStoreTests {
         localHost: String = "127.0.0.1",
         bindMode: String? = "loopback",
         scheme: String = "ws",
+        personalIdentityEnabled: Bool = false,
         transport: AppState.RemoteTransport = .ssh,
         directURL: URL? = nil,
         tlsFingerprint: String? = nil,
@@ -237,6 +254,8 @@ struct GatewayEndpointStoreTests {
             localHost: localHost,
             scheme: scheme,
             bindMode: bindMode,
+            personalIdentityEnabled: personalIdentityEnabled,
+            localTLSCertificateFingerprint: nil,
             remoteTransport: transport,
             directRemoteURL: directURL,
             remoteTLSFingerprint: tlsFingerprint,

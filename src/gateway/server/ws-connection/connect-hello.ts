@@ -228,7 +228,9 @@ export async function sendGatewayHello(
       methods: gatewayMethods.filter(
         (method) =>
           (method !== "mcp.authLogin" ||
-            Boolean(resolveBrowserAuthOrigin(context.browserOrigin))) &&
+            Boolean(
+              resolveBrowserAuthOrigin(context.browserOrigin, { authPolicy: state.authPolicy }),
+            )) &&
           (isOpenClawIdEnabled(context.configSnapshot.gateway?.openclawId) ||
             !method.startsWith("openclawId.")),
       ),

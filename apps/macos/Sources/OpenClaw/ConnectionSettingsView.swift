@@ -237,6 +237,16 @@ struct ConnectionSettingsView: View {
                 }
             }
             self.healthRow
+            Toggle("Use my Tailscale identity", isOn: Binding(
+                get: { AppDefaults.standard.bool(forKey: "gateway.primary.personalIdentityEnabled") },
+                set: { enabled in
+                    AppDefaults.standard.set(enabled, forKey: "gateway.primary.personalIdentityEnabled")
+                    Task { await GatewayEndpointStore.shared.refresh() }
+                }))
+            Text("The Primary Gateway stays on this Mac. OpenClaw verifies your Tailscale identity through this Mac's Serve route before using the local Gateway. Turning this off uses the normal local shared owner.")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
         } header: {
             Text("Local Gateway")
         } footer: {

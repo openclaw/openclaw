@@ -136,11 +136,11 @@ export function markTemplateReadyAsync(
   id: string,
   now: number,
   commitGuard: () => void,
-  content?: Pick<WorktreeTemplateRecord, "sourceCommit" | "contentKey">,
+  publication?: OpenClawStateWorkerOperations["worktrees.templates.ready"]["input"]["publication"],
 ): Promise<boolean> {
   return runTemplateCommand(
     env,
-    { type: "worktrees.templates.ready", input: { id, now, content } },
+    { type: "worktrees.templates.ready", input: { id, now, publication } },
     commitGuard,
   );
 }

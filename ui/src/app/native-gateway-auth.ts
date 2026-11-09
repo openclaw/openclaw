@@ -29,6 +29,7 @@ export type NativeGatewayAuthorization = {
   device: NonNullable<ConnectParams["device"]>;
   expectedHelloAuth?: NativeGatewayHelloExpectation;
   expectedGatewayId?: string;
+  personalIdentity?: ConnectParams["personalIdentity"];
 };
 
 export type NativeGatewayConnectAuth = (challenge: {
@@ -92,6 +93,7 @@ function readAuthorization(
   const result = isRecord(value) ? value : {};
   const client = isRecord(result.client) ? result.client : {};
   const device = isRecord(result.device) ? result.device : {};
+  const personal = result.personalIdentity;
   const id = normalizeGatewayClientId(typeof client.id === "string" ? client.id : undefined);
   const mode = normalizeGatewayClientMode(
     typeof client.mode === "string" ? client.mode : undefined,
@@ -109,6 +111,24 @@ function readAuthorization(
     device.signedAt !== challenge.signedAt
   ) {
     throw new Error(t("runtimeErrors.nativeAuthorization"));
+  }
+  if (
+    personal !== undefined &&
+    (!isRecord(personal) ||
+      personal.mode !== "personal-identity" ||
+      personal.provider !== "tailscale" ||
+      personal.phase !== "use" ||
+      typeof personal.bindingId !== "string" ||
+      !personal.bindingId ||
+      personal.bindingId.length > 128 ||
+      typeof personal.profileId !== "string" ||
+      !personal.profileId ||
+      typeof personal.gatewayId !== "string" ||
+      !personal.gatewayId ||
+      personal.gatewayId.length > 128 ||
+      personal.issuedAtMs !== challenge.signedAt)
+  ) {
+    throw new Error("The app returned an invalid Gateway authorization. Reconnect in the app.");
   }
   const auth = readNativeCredential(result.auth);
   const expectedGatewayId = result.expectedGatewayId;
@@ -143,6 +163,19 @@ function readAuthorization(
     auth,
     ...(expectedHelloAuth ? { expectedHelloAuth } : {}),
     ...(expectedGatewayId !== undefined ? { expectedGatewayId } : {}),
+    ...(isRecord(personal)
+      ? {
+          personalIdentity: {
+            mode: "personal-identity" as const,
+            provider: "tailscale" as const,
+            phase: "use" as const,
+            bindingId: personal.bindingId as string,
+            profileId: personal.profileId as string,
+            gatewayId: personal.gatewayId as string,
+            issuedAtMs: challenge.signedAt,
+          },
+        }
+      : {}),
     device: {
       id: device.id,
       publicKey: device.publicKey,

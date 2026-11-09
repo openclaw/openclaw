@@ -210,6 +210,7 @@ type GatewayKernelContext = {
   isConfigReloadSettled: () => boolean;
   /** Prepared listener certificate pin; undefined when Gateway TLS is disabled. */
   gatewayTlsFingerprint?: string;
+  clients: import("../server/client-registry.js").GatewayClientRegistry;
   sessionCompanion?: import("../session-companion.js").SessionCompanionService;
   sessionObserver?: SessionObserverService;
   sessionActivitySummaries?: import("../session-activity-summaries.js").SessionActivitySummaryService;

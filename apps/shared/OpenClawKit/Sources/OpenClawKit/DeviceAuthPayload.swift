@@ -20,6 +20,9 @@ public enum GatewayDeviceAuthPayload {
         public let signedAtMs: Int64
         public let token: String?
         public let nonce: String
+        public let personalIdentity: SignedGatewayPersonalIdentityIntent?
+        public let platform: String?
+        public let deviceFamily: String?
 
         public init(
             deviceId: String,
@@ -28,7 +31,10 @@ public enum GatewayDeviceAuthPayload {
             scopes: [String],
             signedAtMs: Int64,
             token: String?,
-            nonce: String)
+            nonce: String,
+            personalIdentity: SignedGatewayPersonalIdentityIntent? = nil,
+            platform: String? = nil,
+            deviceFamily: String? = nil)
         {
             self.deviceId = deviceId
             self.client = client
@@ -37,16 +43,51 @@ public enum GatewayDeviceAuthPayload {
             self.signedAtMs = signedAtMs
             self.token = token
             self.nonce = nonce
+            self.personalIdentity = personalIdentity
+            self.platform = platform
+            self.deviceFamily = deviceFamily
         }
     }
 
     public static func buildConnectCompatibilityPayload(
         fields: Fields) -> String
     {
+        if let personalIdentity = fields.personalIdentity {
+            return self.buildV4(fields: fields, personalIdentity: personalIdentity)
+        }
         // Managed gateways deployed before v3 metadata payload support still
         // verify v2 signatures. Swift connect signers temporarily omit signed
         // metadata until managed and supported self-managed gateways verify v3.
-        (["v2"] + self.components(fields)).joined(separator: "|")
+        return (["v2"] + self.components(fields)).joined(separator: "|")
+    }
+
+    private static func buildV4(
+        fields: Fields,
+        personalIdentity: SignedGatewayPersonalIdentityIntent) -> String
+    {
+        let value: [Any] = [
+            "openclaw-device-auth",
+            "v4",
+            fields.deviceId,
+            fields.client.id,
+            fields.client.mode,
+            fields.role,
+            fields.scopes,
+            String(fields.signedAtMs),
+            fields.token ?? "",
+            fields.nonce,
+            self.normalizeMetadataField(fields.platform),
+            self.normalizeMetadataField(fields.deviceFamily),
+            personalIdentity.signatureValue,
+        ]
+        guard let data = try? JSONSerialization.data(
+            withJSONObject: value,
+            options: [.fragmentsAllowed, .withoutEscapingSlashes]),
+            let payload = String(data: data, encoding: .utf8)
+        else {
+            return ""
+        }
+        return payload
     }
 
     public static func buildV3(

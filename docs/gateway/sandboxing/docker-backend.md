@@ -115,7 +115,10 @@ workspaces keep separate stores.
 
 ### Docker daemon
 
-The Docker CLI inherits the Gateway process environment. Choose the daemon with
+The Docker CLI inherits the Gateway process environment except `MALLOC_CONF` and
+jemalloc entries in `LD_PRELOAD`. Docker and Podman host launches remove those
+Gateway allocator settings so their subprocesses do not inherit background
+threads or profiling; other preload libraries are preserved. Choose the daemon with
 `DOCKER_HOST` or `DOCKER_CONTEXT` (set only one), or the CLI's current context;
 there is no `sandbox.docker` daemon-selection config key. For rootless Docker,
 set `DOCKER_HOST=unix:///run/user/<uid>/docker.sock` in the

@@ -254,6 +254,18 @@ Disabled, unconfigured, and ordinarily unlinked accounts do not fail channel rea
 
 Unexpected channel exits use automatic restart backoff. Intentional stops cancel a pending retry; failed restart waits leave a stopped account with `restartPending: false` and the failure recorded in `lastError`.
 
+A previously connected channel can recover its transport without failing the
+whole Gateway. During the existing two-minute reconnect grace, `/readyz` stays
+`200` when all other readiness checks pass, and detailed responses include
+`degraded: ["discord"]` (or the affected channel IDs). Channel status retains
+`connected: false`, `lifecycle: "recovering"`, `healthState: "reconnect-grace"`,
+and the disconnect timestamp; transport logs record the reconnect attempts.
+The window starts at the first disconnect and retries do not renew it. Recovery
+clears degradation. An unrecovered channel fails readiness after the window,
+including while an agent run is active. Blocked or terminal failures bypass
+reconnect grace. Initial connection still uses the existing startup readiness
+rules; an account that has never connected is not a reconnecting account.
+
 Remote unauthenticated startup responses contain only `ok` and `status`. Local-direct and authenticated callers also receive `version`, `uptimeMs`, and `pendingReason` while startup is pending. Readiness details follow the same local-or-authenticated gate because they can name failing subsystems.
 
 Proxies listed in `gateway.trustedProxies` can request aggregate readiness and
@@ -384,12 +396,27 @@ appears as `[async task:...]`, distinct from a sampled call frame. Unnamed work
 remains unattributed. Lower-ranked entries are dropped first to keep each report within 2 KiB;
 `reportTruncated=true` identifies this log-size trimming.
 
-The recorder skips Bun, Node 24 (which lacks the bounded coarse-sampling API),
-and processes already started with conflicting profiling, tracing, or debugger
-options. Callback labels still work on those runtimes. Native blocking work can
+On Node 24, the observer instead captures up to three interrupted JavaScript
+stacks, 250 ms apart, after 500 ms without a heartbeat. It opens no debugger
+listener and starts no CPU profiler. Each stack contains at most 16 frames,
+with bounded symbol/location lengths; at most three stack payloads can wait
+for the main thread. Reports use `sampleMode=interrupt`, `truncated=true`, and
+`null` self times: these are point observations, not sampled CPU durations.
+Source maps and user-defined stack formatting hooks are not invoked. Native
+calls may defer inspector interrupts until unrelated JavaScript resumes;
+captures dispatched more than 100 ms late are discarded. Such calls can still
+produce kernel-only evidence.
+
+The recorder skips Bun and processes already started with conflicting
+profiling, tracing, or debugger options. Callback labels still work on those
+runtimes. Native blocking work can
 remain unsymbolized, and an unusually long stall can exhaust the sample cap;
 `truncated=true` identifies incomplete evidence. Recorder failures are logged
 once and disable recording for that monitor's lifetime.
+
+Linux kernel observations remain available when CPU recording is unsupported,
+conflicting, or fails. These reports use `cpuProfile=unavailable` instead of CPU
+sample counts and intervals; they retain the stall bounds and `kernel` evidence.
 
 `samples=0` means neither retained profile contains a timestamped sample in that
 stall interval. It does not prove the entire process stopped or identify the

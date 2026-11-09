@@ -40,6 +40,8 @@ type ModelContextNavigationRow = {
   entry: ContextEntry;
   bytes: number;
   withoutCheckpointBytes: number;
+  /** Payload needs the JavaScript projection owner; cached with the row across warm reads. */
+  exceptional?: true;
 };
 type NavigationPage = {
   token: string | undefined;

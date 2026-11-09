@@ -70,6 +70,8 @@ extension GatewayConnection {
         guard let credential = Self.controlUiCredential(
             method: method, source: binding.source, config: endpoint.config, token: deviceToken)
         else { throw CancellationError() }
+        let personalIdentity = try await self.personalIdentityIntent(ifCurrentServerLease: lease)
+        guard !endpoint.enablesPrimaryPersonalIdentity || personalIdentity != nil else { throw CancellationError() }
         let client = [
             "id": "openclaw-macos", "mode": "ui",
             "displayName": InstanceIdentity.displayName,
@@ -83,6 +85,7 @@ extension GatewayConnection {
             scopes: scopes,
             nonce: nonce,
             signedAt: signedAt,
+            personalIdentity: personalIdentity,
             client: client)
         let isCurrent: @Sendable () -> Bool = {
             guard self.serverLeaseMatchesCurrentState(lease),
@@ -98,10 +101,23 @@ extension GatewayConnection {
         return DashboardNativeGatewayAuth(json: json, isCurrent: isCurrent)
     }
 
+    func controlUiPersonalTLSParams(endpoint: EndpointSnapshot) async throws -> GatewayTLSParams {
+        let lease = try await self.controlUiServerLease(endpoint: endpoint)
+        let personalIdentity = try await self.personalIdentityIntent(ifCurrentServerLease: lease)
+        guard endpoint.enablesPrimaryPersonalIdentity,
+              personalIdentity != nil,
+              let fingerprint = self.configuredTLSFingerprintSHA256(),
+              let route = Self.primaryPersonalIdentityTLSRoute(url: endpoint.config.url, gatewayFingerprint: fingerprint),
+              await self.isCurrentServerLease(lease)
+        else { throw CancellationError() }
+        return route.params
+    }
+
     private func controlUiServerLease(endpoint: EndpointSnapshot) async throws -> ServerLease {
         guard self.includeDeviceIdentity, endpoint.browserSession == nil,
               let lease = await self.captureServerLease(),
               lease.route.matches(config: endpoint.config), lease.route.browserSession == nil,
+              lease.route.enablesPrimaryPersonalIdentity == endpoint.enablesPrimaryPersonalIdentity,
               GatewayTLSRoute.hasSameConnectionIdentity(lease.route.tls, endpoint.tls),
               endpoint.routeAuthority == nil || endpoint.routeAuthority == lease.route.authority,
               endpoint.revision == nil || endpoint.revision == lease.endpointRevision,

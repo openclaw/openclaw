@@ -44,6 +44,28 @@ struct DeviceAuthPayloadTests {
     }
 
     @Test
+    func `builds v4 payload with provider and complete personal intent`() {
+        let payload = GatewayDeviceAuthPayload.buildConnectCompatibilityPayload(
+            fields: .init(
+                deviceId: "dev-1",
+                client: .init(id: "openclaw-macos", mode: "ui"),
+                role: "operator",
+                scopes: ["operator.admin", "operator.read"],
+                signedAtMs: 1_800_000_000_000,
+                token: "tok/123",
+                nonce: "nonce/abc",
+                personalIdentity: GatewayPersonalIdentityIntent.bind(bindingId: "binding-1")
+                    .signed(at: 1_800_000_000_000),
+                platform: "  MACOS ",
+                deviceFamily: "  Desktop "))
+
+        #expect(
+            payload
+                ==
+                "[\"openclaw-device-auth\",\"v4\",\"dev-1\",\"openclaw-macos\",\"ui\",\"operator\",[\"operator.admin\",\"operator.read\"],\"1800000000000\",\"tok/123\",\"nonce/abc\",\"macos\",\"desktop\",[\"personal-identity\",\"tailscale\",\"bind\",\"binding-1\",\"1800000000000\"]]")
+    }
+
+    @Test
     func `signed device dictionary preserves 64-bit timestamp`() throws {
         let tempDir = URL(fileURLWithPath: ProcessInfo.processInfo.environment["TMPDIR"] ?? NSTemporaryDirectory())
             .appendingPathComponent(UUID().uuidString, isDirectory: true)

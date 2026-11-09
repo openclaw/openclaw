@@ -8,7 +8,7 @@ struct TailscaleServeGatewayBeacon: Equatable {
     var port: Int
 }
 
-enum TailscaleServeGatewayDiscovery {
+public enum TailscaleServeGatewayDiscovery {
     private static let maxCandidates = 32
     private static let probeConcurrency = 6
     private static let defaultProbeTimeoutSeconds: TimeInterval = 1.6
@@ -77,6 +77,38 @@ enum TailscaleServeGatewayDiscovery {
         return beacons.sorted {
             $0.displayName.localizedCaseInsensitiveCompare($1.displayName) == .orderedAscending
         }
+    }
+
+    /// Resolve this machine's own Serve endpoint from the local Tailscale status.
+    /// The probe sends no credentials and accepts only a Gateway WebSocket challenge.
+    static func discoverLocalGatewayServe(
+        timeoutSeconds: TimeInterval = 2.0,
+        context: DiscoveryContext = .live) async -> TailscaleServeGatewayBeacon?
+    {
+        guard timeoutSeconds > 0,
+              let statusJson = await context.tailscaleStatus(),
+              let status = try? JSONDecoder().decode(TailscaleStatus.self, from: Data(statusJson.utf8)),
+              let dnsName = self.normalizeDnsName(status.selfNode?.dnsName)
+        else { return nil }
+
+        let timeout = min(self.defaultProbeTimeoutSeconds, timeoutSeconds)
+        guard await context.probeHost(dnsName, timeout) else { return nil }
+        return TailscaleServeGatewayBeacon(
+            displayName: self.displayName(hostName: status.selfNode?.hostName, dnsName: dnsName),
+            tailnetDns: dnsName,
+            host: dnsName,
+            port: 443)
+    }
+
+    public static func discoverLocalGatewayServeURL(
+        timeoutSeconds: TimeInterval = 2.0) async -> URL?
+    {
+        guard let beacon = await self.discoverLocalGatewayServe(timeoutSeconds: timeoutSeconds) else { return nil }
+        var components = URLComponents()
+        components.scheme = "wss"
+        components.host = beacon.host
+        components.port = beacon.port
+        return components.url
     }
 
     private static func collectCandidates(status: TailscaleStatus) -> [TailscaleServeGatewayBeacon] {

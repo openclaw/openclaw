@@ -460,6 +460,17 @@ async function authenticateGatewayConnectCore(
     rejectUnauthorized(authResult);
     return undefined;
   }
+  if (authResult.openclawId?.kind === "node") {
+    if (role !== "node" || connectParams.client.mode !== "node") {
+      const message = 'OpenClaw ID node keys require role "node" and client mode "node"';
+      markHandshakeFailure("openclaw-id-node-role-required");
+      sendHandshakeErrorResponse(ErrorCodes.INVALID_REQUEST, message);
+      close(1008, message);
+      return undefined;
+    }
+    // Device proof above covers the original request. A node key never carries operator scopes.
+    clearUnboundScopes();
+  }
   // The device signs its requested scopes; the live principal caps authority only
   // after signature verification. Empty requests select the current grant ceiling.
   const remoteIngressPrincipal = remoteIngress?.resolvePrincipal();
