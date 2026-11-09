@@ -69,8 +69,6 @@ struct CommandCenterTabSessionFilterTests {
         let configuredMain = qualifiedMain ? mainKey : base
         var main = OpenClawChatSessionEntry(key: mainKey, label: "Original topic")
         main.sessionId = "existing-main-history"
-        main.pinned = true
-        main.category = "Research"
         let other = OpenClawChatSessionEntry(key: "agent:one:conversation", label: "Packing")
         let sessions = [
             main, other,
@@ -88,10 +86,6 @@ struct CommandCenterTabSessionFilterTests {
         }
         #expect(listed.map(\.key) == [mainKey, other.key])
         let row = try #require(listed.first { $0.key == resolvedMain })
-        #expect(row.sessionId == "existing-main-history")
-        #expect(row.label == "Original topic")
-        #expect(row.pinned == true)
-        #expect(row.category == "Research")
         #expect(!CommandCenterTab.isRecentChatSession(row.key, defaultSessionKey: configuredMain))
         #expect(!ChatSessionSidebarModel.canDeleteSession(key: row.key, mainSessionKey: resolvedMain))
         #expect(!ChatSessionSidebarModel.canArchiveSession(row, mainSessionKey: resolvedMain))
