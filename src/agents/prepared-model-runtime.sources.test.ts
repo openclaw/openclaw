@@ -178,9 +178,12 @@ function persistedFixture() {
 
 describe("prepared catalog source composition", () => {
   it.each([true, false])(
-    "admits persisted-only models only with current credentials (%s)",
+    "admits deferred persisted-only models only with current credentials (%s)",
     async (authenticated) => {
       const { facts, generation, catalogs } = persistedFixture();
+      generation.pluginMetadataSnapshot = createPluginMetadataSnapshotFixture({
+        plugins: [{ id: pluginId, providers: [providerId], activation: { onStartup: false } }],
+      });
       await using cache = createPluginCache();
       bindPluginMetadataSnapshotCache(generation.pluginMetadataSnapshot, cache);
       facts.input = { ...facts.input, config: {} };
@@ -218,15 +221,17 @@ describe("prepared catalog source composition", () => {
       };
       const batch = await prepareConfiguredRuntimeFactsBatch(prepared);
       const registry = batch.catalogs.get(facts.input)!.templateModelRegistry;
-      const publication = await prepareCatalogPublicationFacts(
-        prepared.agentFacts[0]!,
-        prepared.pluginGeneration,
-        "static",
-        { modelsJsonContents: null, pluginCatalogs: catalogs },
-      );
-      expect(publication.catalogModels.some((row) => row.id === "persisted-only")).toBe(
-        authenticated,
-      );
+      for (const prepare of [prepareFullCatalogFacts, prepareCatalogPublicationFacts]) {
+        const publication = await prepare(
+          prepared.agentFacts[0]!,
+          prepared.pluginGeneration,
+          "static",
+          { modelsJsonContents: null, pluginCatalogs: catalogs },
+        );
+        expect(publication.catalogModels.some((row) => row.id === "persisted-only")).toBe(
+          authenticated,
+        );
+      }
       const result = await resolveModelAsync(
         providerId,
         "persisted-only",
