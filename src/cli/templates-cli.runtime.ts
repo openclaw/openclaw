@@ -56,16 +56,13 @@ import {
 } from "./templates-cli-output.js";
 import type { TemplatesAddOptions, TemplatesInspectOptions } from "./templates-cli.js";
 
-type TemplateCliSkillWarning = {
-  ref: string;
-  version: string;
-  integrity: string;
-  riskWarning: string;
-};
-
+type TemplateCliSkillWarning =
+  import("../templates/package-install-options.js").TemplateSkillWarning;
 function addPlanSkillWarnings(plan: TemplateAddPlan): TemplateCliSkillWarning[] {
   return collectTemplateSkillWarningReviews(plan).map(({ actionId, ...warning }) => {
-    if (actionId !== `skill:${warning.ref}`) {
+    if (
+      actionId !== ("path" in warning ? `skill:bundled:${warning.path}` : `skill:${warning.ref}`)
+    ) {
       throw new Error("The Template skill trust review is incomplete.");
     }
     return warning;
@@ -94,7 +91,11 @@ function logTemplateAddPlanSummary(plan: TemplateAddPlan): void {
     runtime.log(`Skill trust warnings (${skillWarnings.length}):`);
     for (const warning of skillWarnings) {
       runtime.log(
-        redactSensitiveText(`  ${warning.ref}@${warning.version} (${warning.integrity})`),
+        redactSensitiveText(
+          "path" in warning
+            ? `  bundled:${warning.path} (${warning.digest})`
+            : `  ${warning.ref}@${warning.version} (${warning.integrity})`,
+        ),
       );
       runtime.log(redactSensitiveText(`    ${warning.riskWarning}`));
     }
@@ -140,7 +141,7 @@ export async function runTemplatesInspectCommand(
     return;
   }
 
-  const inventory = templateDependencyInventory(result.manifest);
+  const inventory = templateDependencyInventory(result.manifest, result.snapshot.bundledSources);
   const diagnostics = result.diagnostics;
   const valid = diagnostics.every((diagnostic) => diagnostic.level !== "error");
   const payload = {
@@ -284,6 +285,7 @@ async function runTemplatesAddFromSource(
     manifest: result.manifest,
     templateMarkdownBody: result.templateMarkdownBody,
     packageBootstrap: result.packageBootstrap,
+    bundledSources: result.snapshot.bundledSources,
     source: result.source,
     diagnostics: result.diagnostics,
     context: {
@@ -295,8 +297,8 @@ async function runTemplatesAddFromSource(
         resolveAgentWorkspaceDir(config, agentId),
       ),
       existingMcpServers: listedMcpServers.mcpServers,
-      packagePreflight: (pkg: Parameters<typeof preflightTemplatePackage>[0], workspace: string) =>
-        preflightTemplatePackage(pkg, workspace, { config }),
+      packagePreflight: (pkg, workspace, sourceContext) =>
+        preflightTemplatePackage(pkg, workspace, { config, ...sourceContext }),
     },
   });
 
@@ -347,7 +349,7 @@ async function runTemplatesAddFromSource(
   let riskApproved = Boolean(opts.acknowledgeClawhubRisk);
   if (warnedPackages.length > 0 && !riskApproved) {
     if (process.stdin.isTTY && process.stdout.isTTY && !opts.json) {
-      runtime.log("ClawHub trust warnings:");
+      runtime.log("Dependency trust warnings:");
       for (const { target, warning } of warnedPackages) {
         runtime.log(redactSensitiveText(`  ${target}: ${warning}`));
       }
@@ -355,7 +357,7 @@ async function runTemplatesAddFromSource(
     }
     if (!riskApproved) {
       const message =
-        "ClawHub trust warnings require --acknowledge-clawhub-risk or interactive confirmation.";
+        "Dependency trust warnings require --acknowledge-clawhub-risk or interactive confirmation.";
       emitTemplateFailure(opts.json, message, {
         schemaVersion: TEMPLATE_ADD_RESULT_SCHEMA_VERSION,
         stability: TEMPLATE_OUTPUT_STABILITY,
@@ -393,18 +395,24 @@ async function runTemplatesAddFromSource(
   if (warnings.length > 0) {
     const byRef = new Map<string, TemplateCliSkillWarning>();
     for (const warning of warnings) {
-      if (byRef.has(warning.ref)) {
+      if (byRef.has("path" in warning ? `bundled:${warning.path}` : warning.ref)) {
         throw new Error("The Template skill trust review contains a duplicate package.");
       }
-      byRef.set(warning.ref, warning);
+      byRef.set("path" in warning ? `bundled:${warning.path}` : warning.ref, warning);
     }
     skillConsent = {
       assertApproved: (pkg) => {
-        const reviewed = byRef.get(pkg.ref);
+        const reviewed = byRef.get("path" in pkg ? `bundled:${pkg.path}` : pkg.ref);
         if (
           !reviewed ||
-          reviewed.version !== pkg.version ||
-          reviewed.integrity !== pkg.integrity ||
+          ("path" in pkg
+            ? !("path" in reviewed) ||
+              reviewed.path !== pkg.path ||
+              reviewed.name !== pkg.name ||
+              reviewed.digest !== pkg.digest
+            : !("ref" in reviewed) ||
+              reviewed.version !== pkg.version ||
+              reviewed.integrity !== pkg.integrity) ||
           reviewed.riskWarning !== pkg.riskWarning
         ) {
           throw new Error("Skill trust state changed; review the Template again.");

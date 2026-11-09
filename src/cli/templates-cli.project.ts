@@ -213,6 +213,7 @@ export async function runTemplatesDevCommand(
       manifest: result.manifest,
       templateMarkdownBody: result.templateMarkdownBody,
       packageBootstrap: result.packageBootstrap,
+      bundledSources: result.snapshot.bundledSources,
       source: {
         ...result.source,
         integrityKind: "artifact",

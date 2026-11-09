@@ -18,11 +18,15 @@ import {
   type ClawPackageLifecycleLease,
 } from "../state/claw-package-lifecycle-lease.js";
 import { readTemplatePackageRefsForAdd } from "./add-state-write.js";
-import type { PersistedTemplatePackageRef } from "./package-extension-provenance.js";
+import { installBundledTemplateSkill } from "./bundled-skill.js";
 import type { InstallTemplatePackagesOptions } from "./package-install-options.js";
-import { packageFromAction } from "./package-plan-action.js";
+import { bundledDependencyFromAction, packageFromAction } from "./package-plan-action.js";
 import { matchesPlannedPluginProbe } from "./package-plugin-probe-match.js";
-import { createStatelessTemplatePackageReceipt } from "./package-stateless-receipt.js";
+import {
+  createStatelessTemplatePackageReceipt,
+  createBundledTemplatePackageReceipt,
+  type TemplatePackageReceipt,
+} from "./package-stateless-receipt.js";
 import {
   inspectTemplatePluginCapabilities,
   probeTemplatePluginArtifact,
@@ -41,7 +45,7 @@ export class TemplatePackageInstallError extends Error {
   constructor(
     readonly code: string,
     message: string,
-    readonly installedPackages: PersistedTemplatePackageRef[],
+    readonly installedPackages: TemplatePackageReceipt[],
     options?: ErrorOptions,
   ) {
     super(message, options);
@@ -51,14 +55,14 @@ export class TemplatePackageInstallError extends Error {
 
 // A stateless Add keeps this receipt only until it succeeds or its rollback finishes.
 const statelessPluginInstallStamps = new WeakMap<
-  PersistedTemplatePackageRef,
+  TemplatePackageReceipt,
   { pluginId: string; installedAt: string }
 >();
 
 export async function installTemplatePackages(
   plan: TemplateAddPlan,
   options: InstallTemplatePackagesOptions = {},
-): Promise<PersistedTemplatePackageRef[]> {
+): Promise<TemplatePackageReceipt[]> {
   const pluginIds = plan.actions
     .filter((action) => action.kind === "package" && action.details?.kind === "plugin")
     .map((action) => {
@@ -92,7 +96,7 @@ export async function installTemplatePackages(
 
 /** Undo only plugin installs made by this in-flight Add, before its agent is published. */
 export async function rollbackStatelessTemplatePackages(
-  packages: PersistedTemplatePackageRef[],
+  packages: TemplatePackageReceipt[],
   options: Pick<
     InstallTemplatePackagesOptions,
     "assertCurrent" | "prepareEffect" | "env" | "path" | "runtime"
@@ -101,7 +105,7 @@ export async function rollbackStatelessTemplatePackages(
   const errors: string[] = [];
   const runtime = options.runtime ?? defaultRuntime;
   for (const pkg of packages.toReversed()) {
-    if (pkg.kind !== "plugin" || pkg.origin !== "template-introduced") {
+    if (pkg.source !== "clawhub" || pkg.kind !== "plugin" || pkg.origin !== "template-introduced") {
       continue;
     }
     const stamp = statelessPluginInstallStamps.get(pkg);
@@ -180,7 +184,7 @@ export async function rollbackStatelessTemplatePackages(
 async function installTemplatePackagesUnlocked(
   plan: TemplateAddPlan,
   options: InstallTemplatePackagesOptions,
-): Promise<PersistedTemplatePackageRef[]> {
+): Promise<TemplatePackageReceipt[]> {
   const runtime = options.runtime ?? defaultRuntime;
   const installPlugin = async (params: Parameters<typeof installManagedPlugin>[0]) => {
     const result = await installManagedPlugin(params);
@@ -193,13 +197,34 @@ async function installTemplatePackagesUnlocked(
     }
     return result.plugin;
   };
-  const installedPackages: PersistedTemplatePackageRef[] = [];
+  const installedPackages: TemplatePackageReceipt[] = [];
 
   for (const action of plan.actions.filter((candidate) => candidate.kind === "package")) {
     let packageLease: ClawPackageLifecycleLease | null = null;
     let pluginNotice: TemplatePluginInstallNotice | undefined;
     let pluginCompleted = false;
     try {
+      if (action.details?.source === "bundled") {
+        const dependency = bundledDependencyFromAction(action);
+        if (dependency.kind !== "skill")
+          throw new Error("Bundled plugin installation is unavailable.");
+        await installBundledTemplateSkill({
+          rootDir: plan.template.packageRoot,
+          workspace: plan.agent.workspace,
+          dependency,
+          options,
+        });
+        installedPackages.push(
+          createBundledTemplatePackageReceipt(plan, dependency, {
+            nowMs: options.nowMs,
+            status: "complete",
+            relationship: "managed",
+            origin: dependency.ownerAction === "reuse" ? "pre-existing" : "template-introduced",
+            independentOwner: dependency.ownerAction === "reuse",
+          }),
+        );
+        continue;
+      }
       const pkg = packageFromAction(action);
       if (pkg.kind === "plugin" && pkg.ownerAction === "install") {
         pluginNotice = {

@@ -10,6 +10,7 @@ import { isSafeTemplateRelativePath, portableTemplatePathKey } from "./schema-po
 import {
   MAX_MANAGED_FILE_BYTES,
   MAX_TEMPLATE_DIRECTORY_BYTES,
+  MAX_TEMPLATE_DIRECTORY_DEPTH,
   MAX_TEMPLATE_DIRECTORY_ENTRIES,
 } from "./source-limits.js";
 
@@ -49,7 +50,8 @@ export async function snapshotTemplateDependencyDirectory(params: {
       .split("/")
       .some((part) => part === ".git" || part === "node_modules");
   const walked = await walkDirectory(directory, {
-    maxDepth: 16,
+    // Read one boundary level so depth exhaustion cannot silently omit eligible files.
+    maxDepth: MAX_TEMPLATE_DIRECTORY_DEPTH + 1,
     maxEntries: MAX_TEMPLATE_DIRECTORY_ENTRIES,
     symlinks: "include",
     descend: (entry) => !excluded(entry.relativePath),
@@ -67,23 +69,30 @@ export async function snapshotTemplateDependencyDirectory(params: {
   for (const entry of walked.entries.toSorted((a, b) =>
     Buffer.compare(Buffer.from(a.relativePath), Buffer.from(b.relativePath)),
   )) {
+    if (entry.depth > MAX_TEMPLATE_DIRECTORY_DEPTH) {
+      throw new Error("Bundled dependency exceeds its directory depth limit.");
+    }
     const path = entry.relativePath.replaceAll("\\", "/");
     const key = portableTemplatePathKey(path);
     if (!isSafeTemplateRelativePath(path) || portablePaths.has(key)) {
       throw new Error(`Bundled dependency has an unsafe or colliding path: ${path}.`);
     }
     portablePaths.add(key);
-    if (entry.kind === "directory") continue;
-    if (entry.kind !== "file")
+    if (entry.kind === "directory") {
+      continue;
+    }
+    if (entry.kind !== "file") {
       throw new Error(`Bundled dependency contains a link or nonregular file: ${path}.`);
+    }
     const read = await root.read(path, {
       symlinks: "reject",
       hardlinks: "reject",
       maxBytes: MAX_MANAGED_FILE_BYTES,
     });
     byteLength += read.buffer.byteLength;
-    if (byteLength > MAX_TEMPLATE_DIRECTORY_BYTES)
+    if (byteLength > MAX_TEMPLATE_DIRECTORY_BYTES) {
       throw new Error("Bundled dependency exceeds its total byte limit.");
+    }
     files.push({
       path,
       byteLength: read.buffer.byteLength,
@@ -100,8 +109,9 @@ export async function materializeTemplateDependencyDirectory(params: {
   snapshot: TemplateDirectorySnapshot;
 }): Promise<AsyncDisposable & { directory: string; createArchive(): Promise<string> }> {
   const current = await snapshotTemplateDependencyDirectory(params);
-  if (current.digest !== params.snapshot.digest)
+  if (current.digest !== params.snapshot.digest) {
     throw new Error("Bundled dependency changed after review; create a fresh Add plan.");
+  }
   const temporary = await tempWorkspace({
     rootDir: resolvePreferredOpenClawTmpDir(),
     prefix: "openclaw-template-dependency-",
@@ -120,14 +130,16 @@ export async function materializeTemplateDependencyDirectory(params: {
       if (
         read.buffer.byteLength !== file.byteLength ||
         digestTemplateBytes(read.buffer) !== file.digest
-      )
+      ) {
         throw new Error("Bundled dependency changed while preparing installation.");
+      }
       await mkdir(join(directory, dirname(file.path)), { recursive: true });
       await target.create(file.path, read.buffer);
     }
     const afterCopy = await snapshotTemplateDependencyDirectory(params);
-    if (afterCopy.digest !== params.snapshot.digest)
+    if (afterCopy.digest !== params.snapshot.digest) {
       throw new Error("Bundled dependency membership changed while preparing installation.");
+    }
     let archive: string | undefined;
     return {
       directory,

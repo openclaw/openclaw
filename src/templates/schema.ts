@@ -299,7 +299,17 @@ const dependencyReferenceSchema = z
   .strict();
 
 const bundledDependencySchema = z.object({ path: packageRelativePath }).strict();
-const dependencySchema = z.union([dependencyReferenceSchema, bundledDependencySchema]);
+const dependencySchema = z.unknown().transform((value, ctx) => {
+  const schema =
+    isRecord(value) && Object.hasOwn(value, "path")
+      ? bundledDependencySchema
+      : dependencyReferenceSchema;
+  const parsed = schema.safeParse(value);
+  if (parsed.success) return parsed.data;
+  for (const issue of parsed.error.issues)
+    ctx.addIssue({ code: "custom", path: issue.path, message: issue.message });
+  return z.NEVER;
+});
 
 const environmentReference = nonEmptyString.regex(
   /^\$\{[A-Z_][A-Z0-9_]*\}$/,
