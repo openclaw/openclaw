@@ -16,8 +16,7 @@ const mocks = vi.hoisted(() => ({
 }));
 const findBoundWebPushSubscriptionByEndpoint = mocks.findBoundWebPushSubscriptionByEndpoint;
 
-// Exercise handler composition without a live identity store or projection worker;
-// the existing session-read suites own the resolver's visibility policy.
+// mock-isolation: Bind a synthetic Gateway without opening the host identity store.
 vi.mock("../../infra/device-identity-async.js", () => ({
   loadOrCreateProcessDeviceIdentityAsync: vi.fn(async () => ({ deviceId: "gateway-fixture" })),
 }));
@@ -26,6 +25,7 @@ vi.mock("../session-row-projection-access.js", async (importOriginal) => ({
   requireSessionRowProjection: () => mocks.projection,
   getSessionRowProjection: () => mocks.projection,
 }));
+// mock-isolation: Supply visibility outcomes; the real prepared-reader regression runs separately.
 vi.mock("../sessions-resolve.js", () => ({
   withPreparedSessionResolve: async (
     _params: unknown,
