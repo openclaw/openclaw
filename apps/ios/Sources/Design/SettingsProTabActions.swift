@@ -311,7 +311,7 @@ extension SettingsProTab {
             format: String(
                 localized: "Setup link loaded for %@:%@ (%@). Tap Connect to apply."),
             link.host,
-            link.port.formatted(),
+            String(link.port),
             security)
     }
 
@@ -452,7 +452,7 @@ extension SettingsProTab {
         self.setupStatusText = String(
             format: String(localized: "QR loaded. Connecting to %@:%@..."),
             link.host,
-            link.port.formatted())
+            String(link.port))
         let host = self.manualGatewayHost.trimmingCharacters(in: .whitespacesAndNewlines)
         guard self.resolvedManualPort(host: host) != nil else {
             self.setupStatusText = String(localized: "Failed: invalid port")
