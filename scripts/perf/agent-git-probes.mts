@@ -26,8 +26,9 @@ const { values } = parseArgs({
     samples: { type: "string" },
   },
 });
-if (!values["scratch-parent"])
+if (!values["scratch-parent"]) {
   throw new Error("--scratch-parent is required; only the new child directory is removed");
+}
 const integer = (name: "files" | "commits" | "samples", fallback: number) =>
   parseStrictIntegerOption({ raw: values[name] ?? "", label: `--${name}`, fallback, min: 1 });
 const files = integer("files", 62_000);
@@ -52,8 +53,9 @@ const git = (cwd: string, args: string[], input?: string) => {
     encoding: "utf8",
     maxBuffer: 16 * 1024 * 1024,
   });
-  if (result.status !== 0)
+  if (result.status !== 0) {
     throw new Error(`git ${args[0]}: ${result.error?.message ?? result.stderr}`);
+  }
   return result.stdout.trim();
 };
 type Sample = {
@@ -83,8 +85,9 @@ try {
   git(origin, ["config", "uploadpack.allowAnySHA1InWant", "true"]);
   const content = "synthetic workspace content\n".padEnd(18_000, "x");
   let input = `blob\nmark :1\ndata ${Buffer.byteLength(content)}\n${content}\ncommit refs/heads/main\ncommitter Fixture <fixture@example.invalid> 1700000000 +0000\ndata 4\nbase\n`;
-  for (let index = 0; index < files; index++)
+  for (let index = 0; index < files; index++) {
     input += `M 100644 :1 files/${Math.floor(index / 1000)}/file-${index}.txt\n`;
+  }
   input += "\n";
   for (let index = 0; index < commits; index++) {
     const text = `history ${index}\n`;
@@ -132,8 +135,9 @@ try {
       { cwd: workspace, env: sampleEnv, encoding: "utf8", maxBuffer: 16 * 1024 * 1024 },
     );
     const wallMs = performance.now() - started;
-    if (result.status !== expectedCode)
+    if (result.status !== expectedCode) {
       throw new Error(`${lane}: exit ${result.status}, expected ${expectedCode}: ${result.stderr}`);
+    }
     const events = readFileSync(trace, "utf8")
       .trim()
       .split("\n")
@@ -182,8 +186,9 @@ try {
       after.fetchChildren !== 0 ||
       after.packBytes !== 0 ||
       !after.hint
-    )
+    ) {
       throw new Error("Missing-object count contract failed");
+    }
   }
   for (let index = 0; index < samples; index++) {
     sample("present-A1", false, ["cat-file", "-t", base], 0);
@@ -207,8 +212,9 @@ try {
     const disabled = sample(`global-no-lazy-${name}`, false, [...args], 128, {
       GIT_NO_LAZY_FETCH: "1",
     });
-    if (disabled.fetchChildren !== 0 || disabled.packBytes !== 0)
+    if (disabled.fetchChildren !== 0 || disabled.packBytes !== 0) {
       throw new Error("Global no-lazy control fetched objects");
+    }
     sample(`history-guarded-${name}`, true, [...args], 0);
   }
   const stats = (numbers: number[]) => {
