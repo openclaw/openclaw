@@ -1,4 +1,4 @@
 # Latest retains measured destination rows until three stable end frames.
-# Covers prior PageUp motion, native reader cancellation, growth, and parked resume.
-# 166 net test lines, replacing the existing 32-line Latest allocation.
-198
+# 147 net test lines replace the existing 32-line Latest allocation.
+# Reconcile exactly 346 inherited lines of debt measured on e23c587c16f.
+525
