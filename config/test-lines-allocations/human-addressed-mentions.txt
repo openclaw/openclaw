@@ -1,0 +1,4 @@
+# Real-Gateway proof that a message addressed to people (selected mentions, agent not named)
+# commits, notifies, and leaves an in-flight agent run untouched in interrupt mode, plus the
+# decision and transcript-transparency unit contracts. Shares its fixture with the committed-mention test.
+195
