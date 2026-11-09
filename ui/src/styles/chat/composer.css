@@ -1439,40 +1439,12 @@
   overscroll-behavior-inline: contain;
   scrollbar-width: none;
 
-  .chat-selection-annotations__chip.chat-attachment-thumb {
-    height: 56px;
-    min-width: 0;
-    max-width: min(216px, 100%);
-  }
-
-  .chat-selection-annotations__chip .chat-attachment-file {
-    gap: 10px;
-    padding: 7px 13px 7px 7px;
-  }
-
-  .chat-attachment-preview-icon {
-    display: grid;
-    place-items: center;
-    flex: 0 0 40px;
-    width: 40px;
-    height: 40px;
-    border-radius: max(0px, calc(var(--chat-attachment-radius) - 8px));
-    corner-shape: inherit;
-    background: transparent;
-    color: var(--muted);
-  }
-
-  .chat-attachment-preview-icon svg {
-    width: 16px;
-    height: 16px;
-    stroke-width: 1.75px;
-  }
-
   .chat-comment-preview {
     .chat-selection-annotations__chip.chat-attachment-thumb {
       --chat-attachment-radius: calc(var(--radius-md) * var(--openclaw-corner-radius-scale));
 
       height: 30px;
+      max-width: min(216px, 100%);
     }
 
     .chat-attachment-file {
@@ -1481,9 +1453,16 @@
     }
 
     .chat-attachment-preview-icon {
-      flex-basis: 16px;
+      display: grid;
+      place-items: center;
+      flex: 0 0 16px;
       width: 16px;
       height: 16px;
+      color: var(--muted);
+    }
+
+    .chat-attachment-preview-icon svg {
+      stroke-width: 1.75px;
     }
 
     .chat-comment-count-gap {
