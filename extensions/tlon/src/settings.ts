@@ -150,11 +150,10 @@ function parseSettingsEvent(event: unknown): { key: string; value: unknown } | n
     return null;
   }
 
-  const wrapped = (event as Record<string, unknown>)["settings-event"];
-  if (!wrapped || typeof wrapped !== "object") {
+  const evt = (event as { "settings-event"?: Record<string, unknown> })["settings-event"];
+  if (!evt || typeof evt !== "object") {
     return null;
   }
-  const evt = wrapped as Record<string, unknown>;
 
   const operation = evt["put-entry"] ? "put-entry" : "del-entry";
   const entry = evt[operation] as Record<string, unknown> | undefined;
