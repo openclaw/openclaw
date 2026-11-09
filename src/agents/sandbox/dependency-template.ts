@@ -3,6 +3,7 @@ import { observeDiagnosticsTimelinePhases } from "../../infra/diagnostics-timeli
 import { redactSensitiveText } from "../../logging/redact.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { timeWorktreePreparationPhase } from "../worktrees/preparation-timing.js";
+import { resolveSandboxDependencyStore } from "./config-contract.js";
 import {
   DOCKER_SANDBOX_ENGINE,
   execContainer,
@@ -33,6 +34,8 @@ const CONTAINER_PREFIX = "openclaw-deps-";
 const SCOPE_PREFIX = "worktree-dependencies:";
 const DEPENDENCY_PHASE = "attempt.setup.sandbox.workspace_selection.prepare.reconcile.dependency";
 
+class SandboxDependencyStorageError extends Error {}
+
 type StartedBuilder = {
   containerName: string;
   containerId: string;
@@ -40,12 +43,12 @@ type StartedBuilder = {
 };
 
 function dependencyDockerConfig(cfg: SandboxConfig, image: string): SandboxDockerConfig {
-  return {
+  const storeDir = cfg.docker.env?.PNPM_CONFIG_STORE_DIR ?? cfg.docker.env?.npm_config_store_dir;
+  return resolveSandboxDependencyStore({
     ...cfg.docker,
     image,
     containerPrefix: CONTAINER_PREFIX,
     // Builder state must be writable even with a missing image HOME, and never staged.
-    tmpfs: [...cfg.docker.tmpfs, "/tmp/openclaw-deps:mode=1777"],
     env: {
       CI: "1",
       HOME: "/tmp/openclaw-deps",
@@ -53,10 +56,11 @@ function dependencyDockerConfig(cfg: SandboxConfig, image: string): SandboxDocke
       XDG_DATA_HOME: "/tmp/openclaw-deps/data",
       XDG_STATE_HOME: "/tmp/openclaw-deps/state",
       XDG_CACHE_HOME: "/tmp/openclaw-deps/cache",
+      ...(storeDir !== undefined ? { PNPM_CONFIG_STORE_DIR: storeDir } : {}),
     },
     setupCommand: undefined,
     binds: undefined,
-  };
+  });
 }
 
 export type SandboxDependencyTemplateIdentity = {
@@ -305,6 +309,7 @@ export async function prepareSandboxDependencyTemplate(params: {
       const installTimeout = AbortSignal.timeout(15 * 60_000);
       timeout = installTimeout;
       phases.mark(`${DEPENDENCY_PHASE}.install`);
+      // Retained dependencies must still run lifecycle scripts for the new source commit.
       const installed = await timeWorktreePreparationPhase("setup", () =>
         execContainer(
           identity.engine,
@@ -315,7 +320,7 @@ export async function prepareSandboxDependencyTemplate(params: {
             containerId,
             "/bin/sh",
             "-c",
-            `exec pnpm install ${docker.network === "none" ? "--offline " : ""}--frozen-lockfile --store-dir "$XDG_DATA_HOME/pnpm/store"`,
+            `exec pnpm install ${docker.network === "none" ? "--offline " : ""}--frozen-lockfile --config.optimistic-repeat-install=false --store-dir "$PNPM_CONFIG_STORE_DIR"`,
           ],
           {
             allowFailure: true,
@@ -329,6 +334,14 @@ export async function prepareSandboxDependencyTemplate(params: {
       if (installed.code === 0) {
         return { installed: true };
       }
+      // Detect before truncation: pnpm may emit progress after its storage error.
+      if (
+        /ENOSPC|no\s+space\s+left\s+on\s+device/iu.test(`${installed.stdout}\n${installed.stderr}`)
+      ) {
+        throw new SandboxDependencyStorageError(
+          "Sandbox dependency installation ran out of space. Check free bytes and inodes in /tmp/openclaw-deps and the workspace. For a full temporary pnpm store, set sandbox.docker.env.PNPM_CONFIG_STORE_DIR to a disk-backed workspace path, then retry.",
+        );
+      }
       // pnpm reports some failures on stdout. Redact before truncating secret context.
       const tail = redactSensitiveText(`${installed.stdout}\n${installed.stderr}`, {
         mode: "tools",
@@ -339,9 +352,12 @@ export async function prepareSandboxDependencyTemplate(params: {
         installed: false,
         reason: `pnpm install failed (exit ${installed.code})${tail ? `: ${tail}` : ""}`,
       };
-    } catch {
+    } catch (error) {
       // Exceptions may include engine invocation details; retain only the failure category.
       assertCurrent();
+      if (error instanceof SandboxDependencyStorageError) {
+        throw error;
+      }
       return {
         installed: false,
         reason: timeout?.aborted

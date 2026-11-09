@@ -350,12 +350,17 @@ export function createUpdateCliFixture(fixtureOptions: { databaseEngines?: strin
     runRestartFallbackScenario: async (params: { daemonInstall: "ok" | "fail" }) => {
       mockOwnedGitService();
       const entrypoint = path.join(process.cwd(), "dist", "index.js");
-      update.mockGitUpdateAfterMutation(update.makeOkUpdateResult({ root: process.cwd() }));
+      update.mockGitUpdateAfterMutation(
+        update.makeOkUpdateResult({ root: process.cwd(), after: { version: VERSION } }),
+        false,
+        { databaseEngines: ["sqlite", "postgres"] },
+      );
       vi.mocked(update.resolveGatewayInstallEntrypoint).mockResolvedValue(entrypoint);
       if (params.daemonInstall === "fail") {
         mockGatewayInstallFailure(entrypoint);
       }
       mocks.serviceLoaded.mockResolvedValue(true);
+      mockGatewayHealth(VERSION, "updated-gateway");
 
       await update.updateCommand({});
 

@@ -182,6 +182,65 @@ describe("ClawRouter plugin", () => {
     },
   );
 
+  it.each([
+    ["a configured row", {}],
+    [
+      "a discovered row",
+      {
+        params: {
+          clawrouterRoute: {
+            api: "openai-responses",
+            baseUrl: "https://clawrouter.example/v1",
+            upstreamModel: "gpt-5.5",
+          },
+        },
+      },
+    ],
+  ] as const)("keeps optional tool inputs optional for %s on OpenAI Responses", async (_, row) => {
+    const payloads: Array<Record<string, unknown>> = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof globalThis.fetch>(async (input, init) => {
+        payloads.push((await new Request(input, init).json()) as Record<string, unknown>);
+        const completed = { status: "completed", output: [], usage: { input_tokens: 1 } };
+        return new Response(
+          `data: ${JSON.stringify({ type: "response.completed", response: completed })}\n\n`,
+          { headers: { "Content-Type": "text/event-stream" } },
+        );
+      }),
+    );
+    const wrapped = provider.wrapStreamFn?.({
+      provider: "clawrouter",
+      modelId: "openai/gpt-5.5",
+      streamFn: streamSimple,
+    });
+    const parameters = {
+      type: "object",
+      properties: { document: { type: "string" }, recommendation: { type: "string" } },
+      required: ["document"],
+      additionalProperties: false,
+    };
+    const stream = await wrapped!(
+      streamModel(row),
+      {
+        messages: [{ role: "user", content: "Send the synthetic document", timestamp: 1 }],
+        tools: [{ name: "send_report", description: "Send a document", parameters }],
+      },
+      { apiKey: "synthetic-router-key", cacheRetention: "none" },
+    );
+    await stream.result();
+    // Omitted strictness makes OpenAI require every optional input.
+    expect(payloads[0]?.tools).toEqual([
+      {
+        type: "function",
+        name: "send_report",
+        description: "Send a document",
+        strict: false,
+        parameters,
+      },
+    ]);
+  });
+
   it.each(["wrapStreamFn", "wrapSimpleCompletionStreamFn"] as const)(
     "%s preserves the catalog model identity through an Anthropic response",
     async (hook) => {

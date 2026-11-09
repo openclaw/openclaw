@@ -27,6 +27,45 @@ import {
   isSidebarSlotVisible,
 } from "./sidebar-layout.ts";
 
+it("refreshes a plugin Layout-menu icon without changing its label or layout", () => {
+  const { pane, state } = createTestChatPane({
+    client: createGatewayBrowserClientFixture(),
+    sessions: createSessionCapabilityFixture(),
+  });
+  const definition: SidebarPanelDefinition = {
+    slot: "plugin:fixture/activity",
+    label: "Activity",
+    icon: "activity",
+    available: true,
+    content: null,
+    loading: { variant: "files", label: "Loading activity" },
+    empty: { description: "No activity" },
+  };
+  const workspace = createPaneHeaderWorkspaceFixture(state);
+  const row = { key: state.sessionKey, kind: "direct" as const, updatedAt: 0 };
+  const controls = { openPanelSlot: vi.fn(), closePanelSlot: vi.fn() };
+  const renderIcon = () =>
+    pane
+      .renderPaneHeader(
+        workspace,
+        row,
+        false,
+        undefined,
+        false,
+        null,
+        state.sidebarLayout,
+        [definition],
+        undefined,
+        undefined,
+        controls,
+      )
+      .header.panelMenuActions?.find((action) => action.id === "panel-plugin:fixture/activity")
+      ?.icon;
+  expect(renderIcon()).toBe("activity");
+  definition.icon = "terminal";
+  expect(renderIcon()).toBe("terminal");
+});
+
 it("opens Discussion in the current presentation after a retained desktop header becomes mobile", async () => {
   const { pane, state } = createTestChatPane({
     client: createGatewayBrowserClientFixture(),

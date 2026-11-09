@@ -219,26 +219,22 @@ it("attachment authority, record-scoped reads, tampering, paths and links are en
     f.service.save_page(draft([{ ...evidence, path: "artifacts/../../private-file" }]), f.owner),
   ).rejects.toThrow(/Unsafe/);
   const saved = await f.service.save_page(draft([evidence]), f.owner);
-  const file = path.join(f.root, "private", evidence.path);
+  const file = path.join(f.root, "private", evidence.path),
+    download = () =>
+      f.service.attachment({ id: saved.id, path: evidence.path, sha256: evidence.sha256 }, f.owner);
   await writeFile(file, "tampered");
   expect(
     (await f.service.record({ includeEvidence: true, id: saved.id }, f.owner)).evidence![0]!
       .verified,
   ).toBe(false);
-  await expect(
-    f.service.attachment({ id: saved.id, path: evidence.path, sha256: evidence.sha256 }, f.owner),
-  ).rejects.toThrow(/hash/);
+  await expect(download()).rejects.toThrow(/hash/);
   await rm(file);
   await symlink(path.join(f.base, "outside"), file);
-  await expect(
-    f.service.attachment({ id: saved.id, path: evidence.path, sha256: evidence.sha256 }, f.owner),
-  ).rejects.toThrow(/Unsafe/);
+  await expect(download()).rejects.toThrow(/Unsafe/);
   await rm(file);
   await writeFile(path.join(f.base, "outside"), "private original");
   await link(path.join(f.base, "outside"), file);
-  await expect(
-    f.service.attachment({ id: saved.id, path: evidence.path, sha256: evidence.sha256 }, f.owner),
-  ).rejects.toThrow(/Unsafe/);
+  await expect(download()).rejects.toThrow(/Unsafe/);
 });
 
 it("source files are independent of the catalog scan byte budget; legacy large text is retained", async () => {

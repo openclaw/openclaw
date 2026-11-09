@@ -1,12 +1,16 @@
 import { agentVitestProjectOwners } from "../../test/vitest/vitest.agents-paths.mjs";
 import { databaseWorkerCoreTestFiles } from "../../test/vitest/vitest.database-worker-core-paths.mjs";
-import { matchesVitestCliSelection } from "../../test/vitest/vitest.pattern-file.ts";
+import {
+  loadPatternListFromEnv,
+  matchesVitestCliSelection,
+} from "../../test/vitest/vitest.pattern-file.ts";
 import {
   includesRuntimeConfig,
   resolveVitestRuntimeConfigScopes,
   type VitestRuntimeTestSelection,
 } from "./vitest-build-prerequisites.mts";
 import { collectVitestFileFilters } from "./vitest-cli-mode.mts";
+import type { VitestWorkerPreset } from "./vitest-worker-descriptor.mts";
 
 export const TUI_PTY_BUILT_CLI_CANARY_PATTERN =
   "launches openclaw chat as local mode through a real PTY";
@@ -20,8 +24,12 @@ const runtimeOnlyBuiltCliFiles = new Set([
   "test/scripts/sqlite-sessions-transcripts-flip-proof.built-cli.e2e.test.ts",
 ]);
 
-// These owner tests use production workers, without compiled test-only fixtures.
+// These selections need no compiled test-only fixtures.
 const runtimeOnlyUnitFiles = new Set([
+  "src/agents/agent-tools.delegated-authority.test.ts",
+  "src/agents/session-placement-computer.test.ts",
+  "src/agents/subagents/announce/subagent-announce.incognito.test.ts",
+  "src/agents/subagents/spawn/subagent-spawn.production-boundary.test.ts",
   "src/auto-reply/reply/commands-system-prompt.test.ts",
   "src/auto-reply/reply/dispatch-acp.test.ts",
   "src/auto-reply/reply/dispatch-from-config.delivery.test.ts",
@@ -29,9 +37,130 @@ const runtimeOnlyUnitFiles = new Set([
   "src/auto-reply/reply/dispatch-from-config.test.ts",
   "src/auto-reply/reply/followup-runner.test.ts",
   "src/auto-reply/reply/groups.test.ts",
+  "src/config/io.load-async.test.ts",
+  "src/gateway/client-callsites.guard.test.ts",
+  "src/gateway/server-methods/session-catalog-privacy.test.ts",
+  "src/gateway/server.beam-owned-view.test.ts",
+  "src/gateway/talk/client-permission-parity.test.ts",
+  "src/gateway/tool-resolution.swarm-collector.test.ts",
+  "src/plugins/loader.runtime-registry.test.ts",
+  "src/plugins/plugin-generation-source-inspection.worker.test.ts",
+  "src/plugins/plugin-generation-worker.test.ts",
+  "test/canonical-descendant.integration.test.ts",
+  "test/codex-settled-turn-finalization.integration.test.ts",
+  "test/codex-web-search-native.integration.test.ts",
+  "test/codex-web-search-policy.integration.test.ts",
+  "test/conversation-tools.codex.integration.test.ts",
+  "test/cron-conversation-delivery.codex.integration.test.ts",
+  "test/decision-tool.codex.integration.test.ts",
+  "test/plugins/chat-abort-codex.gateway.test.ts",
+  "test/plugins/codex-native-search.gateway.test.ts",
+  "test/plugins/deep-research-routing.gateway.test.ts",
+  "test/scripts/ci-test-timings-tooling.test.ts",
+  "test/scripts/eager-import-closure.test.ts",
+  "test/scripts/lint-suppressions.test.ts",
+  "test/scripts/plugin-sdk-surface-report.test.ts",
+  "test/scripts/pr-wrapper-source-closure.test.ts",
+  "test/scripts/type-suppression-inventory.test.ts",
+  "test/skill-usage.codex.integration.test.ts",
+  "test/vitest-projects-config.test.ts",
 ]);
 
-export function areRuntimeOnlyVitestUnitFiles(files: readonly string[]): boolean {
+// These tooling proofs use compiled harness entries, not production workers.
+const toolingOnlyUnitFiles = new Set([
+  "test/scripts/vitest-prebuilt-ai.test.ts",
+  "test/scripts/ci-changed-build-selection.test.ts",
+  "test/scripts/ci-changed-node-test-plan.integration.test.ts",
+  "test/scripts/vitest-worker-artifacts.batch.test.ts",
+  "test/scripts/run-vitest-progress.test.ts",
+  "test/scripts/run-vitest.test.ts",
+  "test/scripts/extension-test-plan.test.ts",
+  "test/scripts/test-extension.test.ts",
+  "test/scripts/test-projects.test.ts",
+  "test/scripts/plugin-sdk-surface-report.test.ts",
+]);
+
+/** A selection supported by both narrow graphs must retain its parent's graph. */
+export function selectVitestWorkerPreset(
+  runtimeOnly: boolean,
+  toolingOnly: boolean,
+  parent?: VitestWorkerPreset,
+): VitestWorkerPreset {
+  if (parent === "runtime" && runtimeOnly) {
+    return "runtime";
+  }
+  return toolingOnly ? "tooling" : runtimeOnly ? "runtime" : "full";
+}
+
+/** Share the exact group decision between CI's archive hint and worker owner. */
+export function resolveCiVitestWorkerPreset(
+  plans: {
+    target?: string;
+    configs?: string[];
+    includePatterns?: readonly string[] | null;
+    requiresDist?: boolean;
+    pretestBuildMode?: string;
+    env?: NodeJS.ProcessEnv;
+  }[],
+  hasExtraArgs = false,
+): VitestWorkerPreset {
+  const supports = (
+    files: typeof areRuntimeOnlyVitestUnitFiles,
+    selection: typeof shouldUseRuntimeOnlyVitestWorkers,
+  ) =>
+    !hasExtraArgs &&
+    plans.length > 0 &&
+    plans.every((plan) =>
+      plan.target !== undefined
+        ? files([plan.target])
+        : plan.configs?.length === 1 &&
+          Boolean(plan.includePatterns?.length) &&
+          !plan.requiresDist &&
+          plan.pretestBuildMode === undefined &&
+          selection(
+            plan.configs[0]!,
+            [],
+            plan.env ?? {},
+            undefined,
+            plan.includePatterns ?? undefined,
+          ),
+    );
+  return selectVitestWorkerPreset(
+    supports(areRuntimeOnlyVitestUnitFiles, shouldUseRuntimeOnlyVitestWorkers),
+    supports(areToolingOnlyVitestUnitFiles, shouldUseToolingOnlyVitestWorkers),
+  );
+}
+
+function areToolingOnlyVitestUnitFiles(files: readonly string[]): boolean {
+  return files.length > 0 && files.every((file) => toolingOnlyUnitFiles.has(file));
+}
+
+function selectedFiles(
+  args: string[],
+  env: NodeJS.ProcessEnv,
+  includePatterns?: readonly string[],
+) {
+  return (
+    includePatterns ??
+    loadPatternListFromEnv("OPENCLAW_VITEST_INCLUDE_FILE", env) ??
+    collectVitestFileFilters(args)
+  ).map((file) => file.replaceAll("\\", "/").replace(/^\.\//u, ""));
+}
+
+export function shouldUseToolingOnlyVitestWorkers(
+  config: string,
+  args: string[],
+  env: NodeJS.ProcessEnv,
+  _testNamePattern?: string | RegExp,
+  includePatterns?: readonly string[],
+): boolean {
+  return (
+    config === "test/vitest/vitest.tooling.config.ts" &&
+    areToolingOnlyVitestUnitFiles(selectedFiles(args, env, includePatterns))
+  );
+}
+
+function areRuntimeOnlyVitestUnitFiles(files: readonly string[]): boolean {
   return files.length > 0 && files.every((file) => runtimeOnlyUnitFiles.has(file));
 }
 
@@ -43,9 +172,7 @@ export function shouldUseRuntimeOnlyVitestWorkers(
   testNamePattern?: string | RegExp,
   includePatterns?: readonly string[],
 ): boolean {
-  const files = (includePatterns ?? collectVitestFileFilters(args)).map((file) =>
-    file.replaceAll("\\", "/").replace(/^\.\//u, ""),
-  );
+  const files = selectedFiles(args, env, includePatterns);
   if (files.length === 0) {
     return false;
   }
@@ -53,9 +180,20 @@ export function shouldUseRuntimeOnlyVitestWorkers(
     return files.every((file) => runtimeOnlyBuiltCliFiles.has(file));
   }
   if (
-    (config === "test/vitest/vitest.auto-reply.config.ts" ||
+    (config === "test/vitest/vitest.agents-core.config.ts" ||
+      config === "test/vitest/vitest.agents-spawn-production-boundary.config.ts" ||
+      config === "test/vitest/vitest.auto-reply.config.ts" ||
       config === "test/vitest/vitest.auto-reply-reply.config.ts" ||
-      config === "test/vitest/vitest.infra.config.ts") &&
+      config === "test/vitest/vitest.infra.config.ts" ||
+      config === "test/vitest/vitest.runtime-config.config.ts" ||
+      config === "test/vitest/vitest.plugins.config.ts" ||
+      config === "test/vitest/vitest.tooling.config.ts" ||
+      config === "test/vitest/vitest.unit-fast.config.ts" ||
+      config === "test/vitest/vitest.unit-fast-isolated.config.ts" ||
+      config === "test/vitest/vitest.gateway-client.config.ts" ||
+      config === "test/vitest/vitest.gateway-database-workers.config.ts" ||
+      config === "test/vitest/vitest.gateway-methods.config.ts" ||
+      config === "test/vitest/vitest.gateway-server.config.ts") &&
     areRuntimeOnlyVitestUnitFiles(files)
   ) {
     return true;

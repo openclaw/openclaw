@@ -100,7 +100,9 @@ export function createSubagentCoordinationHistoryProjection(
         }
         return message;
       }
-      if (record.display === false) {
+      // A delivery mirror records a reply the run sent to the human, such as a
+      // message(action=send) from a private coordination turn; it is the outcome.
+      if (record.display === false || isOpenClawDeliveryMirrorAssistantMessage(record)) {
         return message;
       }
       if (
