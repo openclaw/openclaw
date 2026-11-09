@@ -1,5 +1,6 @@
 import { resolveDefaultAgentId } from "../agents/agent-scope-config.js";
 import { listRunningSessions } from "../agents/bash-process-registry.js";
+import { isAgentRunRestartAbortReason } from "../agents/run-termination.js";
 import {
   isMessageWaitingSubagentSession,
   listLiveSubagentRootSessions,
@@ -140,7 +141,8 @@ async function persistRunningSessions(
   };
   for (const operation of activeSessionOperations()) {
     assertCurrent();
-    if (operation.abortSignal.aborted) {
+    const restartAborted = isAgentRunRestartAbortReason(operation.abortSignal.reason);
+    if (operation.abortSignal.aborted && !restartAborted) {
       summary.record(
         operation.agentId ??
           parseAgentSessionKey(operation.key)?.agentId ??
@@ -157,7 +159,8 @@ async function persistRunningSessions(
       sessionId: operation.sessionId,
       storePath: target?.physicalStorePath ?? target?.storeScope,
       // Completed replies can retain execution custody only to settle workspace uploads.
-      needsResume: !operation.result && !hasCommittedReplyOperationOutcome(operation),
+      needsResume:
+        (!operation.result || restartAborted) && !hasCommittedReplyOperationOutcome(operation),
     });
   }
   for (const runId of listLiveAgentRunIds()) {
@@ -189,22 +192,18 @@ async function persistRunningSessions(
     assertCurrent();
     add(session);
   }
-  const selectors = new Map<string, SessionIdentity[]>();
+  const selectors = new Map<string, { first: SessionIdentity; batch: SessionIdentity[] }>();
   for (const session of sessions.values()) {
     const key = JSON.stringify([session.agentId, session.storePath]);
-    const batch = selectors.get(key) ?? [];
-    batch.push(session);
-    selectors.set(key, batch);
+    const group = selectors.get(key) ?? { first: session, batch: [] };
+    group.batch.push(session);
+    selectors.set(key, group);
   }
   // The replacement owner resolves each selector. Do not rediscover every store
   // before allowing the first marker write to commit.
   const writes = await Promise.allSettled(
-    [...selectors.values()].map(async (batch) => {
+    [...selectors.values()].map(async ({ first, batch }) => {
       assertCurrent();
-      const first = batch[0];
-      if (!first) {
-        return;
-      }
       const selected = new Map(batch.map((session) => [session.sessionKey, session]));
       const preserveQueued = await applySessionEntryReplacements<
         Array<{ session: SessionIdentity; preserve: () => void }>
