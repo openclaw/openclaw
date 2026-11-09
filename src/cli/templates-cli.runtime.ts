@@ -117,7 +117,7 @@ function logTemplateAddPlanSummary(plan: TemplateAddPlan): void {
           : "invalid declaration";
     runtime.log(`  MCP ${sanitizeTerminalText(action.id)}: ${sanitizeTerminalText(target)}`);
   }
-  runtime.log(`Cron jobs: ${plan.summary.cronJobActions}`);
+  runtime.log(`Automations: ${plan.summary.cronJobActions}`);
   if (plan.capabilityChanges.length > 0) {
     runtime.log(`Capability escalations (${plan.capabilityChanges.length}):`);
     for (const change of plan.capabilityChanges) {
@@ -193,7 +193,7 @@ export async function runTemplatesInspectCommand(
     );
   }
   runtime.log(`MCP servers: ${Object.keys(result.manifest.mcpServers).length}`);
-  runtime.log(`Cron jobs: ${result.manifest.cronJobs.length}`);
+  runtime.log(`Automations: ${result.manifest.automations.length}`);
   if (!valid) {
     runtime.error(formatTemplateDiagnostics(diagnostics));
     runtime.exit(1);
