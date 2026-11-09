@@ -111,6 +111,7 @@ describe("secret egress proxy", () => {
   async function rawConnect(params: {
     auth?: string;
     proxyOrigin?: string;
+    target?: string;
   }): Promise<{ response: string; socket: Socket }> {
     const proxyUrl = new URL(params.proxyOrigin ?? proxy.proxyOrigin);
     const socket = net.connect(Number(proxyUrl.port), proxyUrl.hostname);
@@ -120,10 +121,9 @@ describe("secret egress proxy", () => {
       socket.once("connect", resolve);
       socket.once("error", reject);
     });
+    const target = params.target ?? `localhost:${originPort}`;
     const authLine = params.auth ? `Proxy-Authorization: ${params.auth}\r\n` : "";
-    socket.write(
-      `CONNECT localhost:${originPort} HTTP/1.1\r\nHost: localhost:${originPort}\r\n${authLine}\r\n`,
-    );
+    socket.write(`CONNECT ${target} HTTP/1.1\r\nHost: ${target}\r\n${authLine}\r\n`);
     const response = await new Promise<string>((resolve, reject) => {
       let buffered = "";
       const onData = (chunk: Buffer) => {
@@ -805,6 +805,33 @@ describe("secret egress proxy", () => {
       );
     },
   );
+
+  it("completes CONNECT and verified TLS for a hostname longer than 64 characters", async () => {
+    // Object-storage endpoint shape from #152529: <bucket>.<account-id>.<provider-domain>.
+    const longHostname = `${"a".repeat(40)}.${"b".repeat(32)}.example.com`;
+    expect(longHostname.length).toBeGreaterThan(64);
+    const sentinel = mintSecretSentinel("unused-secret-value", { label: "long-hostname" });
+    proxyEnv = registerSentinel({ sentinel, allowedHosts: [longHostname] });
+
+    // The leaf is minted from the CONNECT hostname, so no DNS lookup or request is needed.
+    const { response, socket } = await rawConnect({
+      auth: basicProxyAuth(registeredPassword(proxyEnv)),
+      target: `${longHostname}:${originPort}`,
+    });
+    expect(response).toContain("200 Connection Established");
+
+    const secureSocket = tls.connect({
+      socket,
+      servername: longHostname,
+      ca: fs.readFileSync(proxy.caCertPath),
+    });
+    await new Promise<void>((resolve, reject) => {
+      secureSocket.once("secureConnect", resolve);
+      secureSocket.once("error", reject);
+    });
+    expect(secureSocket.authorized).toBe(true);
+    secureSocket.destroy();
+  });
 
   it("revokes only the owning process's Basic authorization and keeps audits payload-free", async () => {
     const secret = "audit-secret-value";

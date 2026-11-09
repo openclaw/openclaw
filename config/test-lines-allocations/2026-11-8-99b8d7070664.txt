@@ -1,0 +1,5 @@
+27
+# LOCAL 2026.11.8 row 14; source 99b8d70706649b286fe25a26f450dff6c5f3ce17.
+# Uses bounded descriptive CN while preserving exact hostname SAN and authorization checks. Scope limits: None for bounded certificate change: actual CONNECT and verified TLS.
+# Keeps distinct regression invariants; exact net LF measured at integration.
+# Scalar baseline unchanged; focused private proof retained.
