@@ -29,7 +29,11 @@ import {
 import { loadOrCreateEndpointKey } from "../gateway/openclaw-id/tunnel-child/keyfile.js";
 import { registerSecretValueForRedaction } from "../logging/secret-redaction-registry.js";
 import { NodeTunnelConnection } from "./openclaw-id-connection.js";
-import { assessNodeDescriptor, nodeDiscoveryCall } from "./openclaw-id-discovery.js";
+import {
+  assessNodeDescriptor,
+  nodeDiscoveryCall,
+  OpenClawIdNodeRemovedError,
+} from "./openclaw-id-discovery.js";
 import type { NodeHostOpenClawIdTarget } from "./openclaw-id-target.js";
 
 /** W is never serialized into config, a worker descriptor or a subprocess environment. */
@@ -56,6 +60,8 @@ export async function startNodeTunnelTransport(options: {
   stateDir?: string;
   directAddrs?: string[];
   onTerminal: (error: Error) => void;
+  /** Bridge callers see only a 502; this carries the locally built refusal reason. */
+  onRefusal: (error: Error) => void;
 }) {
   if (process.platform === "win32") {
     throw new Error("Labs OpenClaw ID node transport currently requires Unix sockets");
@@ -77,6 +83,7 @@ export async function startNodeTunnelTransport(options: {
   // Serialize Discovery refreshes so probes and reconnects use the last persisted evidence.
   let refresh = Promise.resolve();
   let persistenceFailure: Error | undefined;
+  let lastRefusal: string | undefined;
   const session = new NodeTunnelConnection({
     endpoint,
     resolveTarget: (signal) => {
@@ -123,8 +130,22 @@ export async function startNodeTunnelTransport(options: {
         };
       });
       refresh = result.then(
-        () => {},
-        () => {},
+        () => {
+          lastRefusal = undefined;
+        },
+        (error: unknown) => {
+          // Report each distinct refusal once; removal and persistence failures are terminal.
+          if (
+            !signal.aborted &&
+            !persistenceFailure &&
+            error instanceof Error &&
+            !(error instanceof OpenClawIdNodeRemovedError) &&
+            error.message !== lastRefusal
+          ) {
+            lastRefusal = error.message;
+            options.onRefusal(error);
+          }
+        },
       );
       return result;
     },

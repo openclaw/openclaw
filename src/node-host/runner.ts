@@ -390,6 +390,8 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<{ connected
               writeStderrLine(error.message);
               void finish(1);
             },
+            onRefusal: (error) =>
+              writeStderrLine(`OpenClaw ID connection refused: ${error.message}`),
           }),
         )
       : undefined;

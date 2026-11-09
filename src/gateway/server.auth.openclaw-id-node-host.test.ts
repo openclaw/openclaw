@@ -283,6 +283,7 @@ describe.skipIf(!hasBinding)("native OpenClaw ID node transport", () => {
       },
       directAddrs: ready.directAddrs.filter((addr) => addr.startsWith("127.0.0.1:")),
       onTerminal: terminal,
+      onRefusal: (error) => discoveryErrors.push(error.message),
     });
   }, 30_000);
 

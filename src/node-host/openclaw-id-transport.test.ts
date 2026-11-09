@@ -43,6 +43,7 @@ let signatureErrors: string[];
 let reads: number;
 let persistenceError: Error | undefined;
 let terminal: ReturnType<typeof vi.fn<(error: Error) => void>>;
+let refusal: ReturnType<typeof vi.fn<(error: Error) => void>>;
 let connect: ReturnType<typeof vi.fn<Endpoint["connect"]>>;
 
 async function responseFor(
@@ -120,6 +121,7 @@ beforeAll(async () => {
 
 beforeEach(async () => {
   terminal = vi.fn<(error: Error) => void>();
+  refusal = vi.fn<(error: Error) => void>();
   reads = 0;
   signatureErrors = [];
   persistenceError = undefined;
@@ -185,6 +187,7 @@ async function start() {
       saved = structuredClone(next);
     },
     onTerminal: terminal,
+    onRefusal: refusal,
   };
   const tunnel = await startNodeTunnelTransport(options);
   transports.push(tunnel);
@@ -258,11 +261,16 @@ unixTest.each(["missing", "stale", "invalid", "future", "node omitted"] as const
       );
     }
     expect(await requestThrough(tunnel)).toBe(502);
+    expect(await requestThrough(tunnel)).toBe(502);
     expect(connect).not.toHaveBeenCalled();
     if (kind === "node omitted") {
       expect(terminal).toHaveBeenCalledWith(
         expect.objectContaining({ message: expect.stringContaining("re-join") }),
       );
+      expect(refusal).not.toHaveBeenCalled();
+    } else {
+      // Each distinct refusal reaches the operator once, not on every bridged request.
+      expect(refusal).toHaveBeenCalledTimes(1);
     }
     expect(reads).toBeGreaterThan(0);
     expect(signatureErrors).toEqual([]);
@@ -318,6 +326,9 @@ unixTest.each(["ftp://relay.example/", "https://user:pass@relay.example/"])(
     expect(saved.pin.binding_seq).toBe(2);
     expect(saved.freshness?.snapshot).toMatchObject({ seq: 3, binding_seq: 2 });
     expect(saved.relayUrl).toBe("https://relay.example/");
+    expect(refusal.mock.calls.map(([error]) => error.message)).toEqual([
+      expect.stringContaining("invalid relay URL"),
+    ]);
     // The older but still fresh evidence is refused after the routing failure.
     served = await responseFor(world.binding, { seq: 2 });
     expect(await requestThrough(tunnel)).toBe(502);
