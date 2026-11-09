@@ -5811,7 +5811,6 @@
 ["src/plugins/runtime/metadata-registry-loader.test.ts","../../config/plugin-auto-enable.js","3874f661498e5f2e6ecb8154e22c422e8dd103d4b43a5c9862117c00dbef57dd",1]
 ["src/plugins/runtime/metadata-registry-loader.test.ts","../control-plane-workspace.js","bb6038326369c2cb761276779caf4c19a3e2dac4ea91d491448650fc5d21b32c",1]
 ["src/plugins/runtime/metadata-registry-loader.test.ts","../loader.js","bb46c7fb962250c1d00b18ed45192a77368b904a23e6954364b3d2735ebac0c8",1]
-["src/plugins/runtime/runtime-config.test.ts","../../config/io.runtime.js","832b4a00e3f83ac9f5efb6acd74913977f2c1c7dd45251bcca1a730fcc839599",1]
 ["src/plugins/runtime/runtime-config.test.ts","../../config/mutate.js","34a8c41b06c385e1c36f53cb6cc3578341cd598631587d8dc065e58a3d7c20b5",1]
 ["src/plugins/runtime/runtime-embedded-agent.runtime.test.ts","../../agents/admitted-run-context.js","db43a4a2acb1b62b2532bb8ebf7f37b8aba2228f2951aebf244b2fa0eb80b28f",1]
 ["src/plugins/runtime/runtime-embedded-agent.runtime.test.ts","../../agents/embedded-agent.js","31e50203b3c36a0c5088d134131416e3da9a9aa3e9a877a60b6124811a8bbdd7",1]
