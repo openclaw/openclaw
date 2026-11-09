@@ -116,7 +116,7 @@ function HelpTitle(params: {
               }
             }}
           >
-            <Icon name="info" />
+            <Icon name="circleQuestionMark" />
           </button>
           <div slot="content" class="settings-section__help-panel">
             <For each={params.paragraphs}>{(text) => <p>{text}</p>}</For>
@@ -450,15 +450,15 @@ export function DefaultModels(props: DefaultModelsViewProps) {
     return choices;
   });
 
+  // Discovery reports on the heading line, so the rows below it never move.
+  const catalogProgress = <CatalogProgress {...props} />;
   return (
     <SettingsSection
       title={t("modelProviders.defaults.title")}
       description={t("modelProviders.defaults.subtitle")}
+      actions={catalogProgress}
     >
       <div class="model-providers__defaults">
-        {!props.loading && props.models.length === 0 ? (
-          <div class="callout warning">{t("modelProviders.defaults.noModels")}</div>
-        ) : undefined}
         <SettingsRow
           title={t("modelProviders.defaults.primary")}
           control={
@@ -472,6 +472,37 @@ export function DefaultModels(props: DefaultModelsViewProps) {
               onChange={props.onPrimaryChange}
             />
           }
+        />
+        <FallbackModel
+          label={t("modelProviders.defaults.fallback")}
+          fallbacks={props.selection.fallbacks}
+          primary={props.selection.primary}
+          options={options()}
+          disabled={modelControlsDisabled() || saving() || !props.selection.primary}
+          title={title()}
+          onChange={props.onFallbackChange}
+        />
+        <BehaviorSetting
+          field={"thinking"}
+          view={props}
+          value={props.thinkingLevel ?? ""}
+          options={thinkingOptions()}
+          overridden={props.thinkingOverridden}
+          onChange={props.onThinkingChange}
+          onReset={props.onThinkingReset}
+        />
+        <BehaviorSetting<ReturnType<typeof formatFastModeValue>>
+          field={"fastMode"}
+          view={props}
+          value={fastMode()}
+          options={fastModeOptions()}
+          overridden={props.fastModeOverridden}
+          onChange={(value) => {
+            if (value !== fastMode()) {
+              props.onFastModeChange(fastModeOptionValue(value));
+            }
+          }}
+          onReset={props.onFastModeReset}
         />
         <SettingsRow
           title={
@@ -529,38 +560,6 @@ export function DefaultModels(props: DefaultModelsViewProps) {
             />
           }
         />
-        <FallbackModel
-          label={t("modelProviders.defaults.fallback")}
-          fallbacks={props.selection.fallbacks}
-          primary={props.selection.primary}
-          options={options()}
-          disabled={modelControlsDisabled() || saving() || !props.selection.primary}
-          title={title()}
-          onChange={props.onFallbackChange}
-        />
-        <BehaviorSetting
-          field={"thinking"}
-          view={props}
-          value={props.thinkingLevel ?? ""}
-          options={thinkingOptions()}
-          overridden={props.thinkingOverridden}
-          onChange={props.onThinkingChange}
-          onReset={props.onThinkingReset}
-        />
-        <BehaviorSetting<ReturnType<typeof formatFastModeValue>>
-          field={"fastMode"}
-          view={props}
-          value={fastMode()}
-          options={fastModeOptions()}
-          overridden={props.fastModeOverridden}
-          onChange={(value) => {
-            if (value !== fastMode()) {
-              props.onFastModeChange(fastModeOptionValue(value));
-            }
-          }}
-          onReset={props.onFastModeReset}
-        />
-        <CatalogProgress {...props} />
         {props.canMutate ? renderMutationMessage(props.message) : undefined}
       </div>
     </SettingsSection>

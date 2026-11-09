@@ -845,11 +845,14 @@ test("write-scoped operators manage chat organization but not admin session sett
     expect(activeDeleteDenied.ok).toBe(false);
     expect(activeDeleteDenied.error?.message).toContain("Archive it first");
 
-    const archivedDeleted = await rpcReq<{ ok: true }>(ws, "sessions.delete", {
-      key: "agent:main:topic-b",
-      archivedOnly: true,
-    });
-    expect(archivedDeleted.ok).toBe(true);
+    for (const deleted of [true, false]) {
+      const archivedDeleted = await rpcReq(ws, "sessions.delete", {
+        key: "agent:main:topic-b",
+        deleteTranscript: true,
+        archivedOnly: true,
+      });
+      expect(archivedDeleted).toMatchObject({ ok: true, payload: { deleted } });
+    }
     const archivedAfterDelete = await rpcReq<SessionsListResult>(ws, "sessions.list", {
       archived: true,
     });

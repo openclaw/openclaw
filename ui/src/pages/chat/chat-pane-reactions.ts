@@ -306,7 +306,7 @@ export abstract class ChatPaneReactions extends ChatPaneSharingActions {
           !requestClient.offlineRecoveryRetired &&
           gatewayPresentationScope(gateway) === deferredOwner
         ) {
-          showToast({ message: formatUiError(error) });
+          showToast({ severity: "error", message: formatUiError(error) });
         }
       } finally {
         if (ownsTarget()) {

@@ -31,6 +31,8 @@ type CachedChatItems = {
   items: ReturnType<typeof buildChatItems>;
   liveStream: {
     index: number;
+    /** Before first text, the builder's seed occupies the indicator's insertion slot. */
+    onset?: Extract<ChatItem, { kind: "stream" }>;
     identity: string;
     prefix: string | null;
     ownedCanvas: ReturnType<typeof collectOwnedCanvasPreviews>;
@@ -118,6 +120,7 @@ function sameMessageGroup(previous: MessageGroup, next: MessageGroup): boolean {
     JSON.stringify(previous.sender) === JSON.stringify(next.sender) &&
     JSON.stringify(previous.replyToSender) === JSON.stringify(next.replyToSender) &&
     sameReplySource(previous.replyToMessage, next.replyToMessage) &&
+    previous.replyPreviousMessageId === next.replyPreviousMessageId &&
     previous.replyShared === next.replyShared &&
     sameReplySource(previous.replyTurnSource, next.replyTurnSource) &&
     sameReplySource(previous.replyCurrentSource, next.replyCurrentSource) &&
@@ -197,6 +200,7 @@ function sameChatItem(previous: RenderChatItem, next: RenderChatItem): boolean {
         previous.isStreaming === next.isStreaming &&
         JSON.stringify(previous.replyToSender) === JSON.stringify(next.replyToSender) &&
         sameReplySource(previous.replyToMessage, next.replyToMessage) &&
+        previous.replyPreviousMessageId === next.replyPreviousMessageId &&
         previous.runId === next.runId &&
         previous.boundaryId === next.boundaryId
       );
@@ -321,6 +325,7 @@ function sameEntries<T>(previous?: readonly T[], next?: readonly T[]): boolean {
 function sameChatItemsStructuralInput(
   previous: BuildChatItemsProps,
   next: BuildChatItemsProps,
+  ignoreWorkingPhase = false,
 ): boolean {
   const previousReasoning = previous.reasoning?.items;
   const nextReasoning = next.reasoning?.items;
@@ -358,14 +363,15 @@ function sameChatItemsStructuralInput(
     previous.workerSetupPending === next.workerSetupPending &&
     previous.showToolCalls === next.showToolCalls &&
     previous.persistCommentary === next.persistCommentary &&
-    previous.runWorking === next.runWorking &&
-    previous.runFinalizing === next.runFinalizing &&
+    (ignoreWorkingPhase ||
+      (previous.runWorking === next.runWorking && previous.runFinalizing === next.runFinalizing)) &&
     previous.runActive === next.runActive &&
     previous.subagentWait?.startedAt === next.subagentWait?.startedAt &&
     previous.subagentWait?.runId === next.subagentWait?.runId &&
     (previous.subagentWait === undefined) === (next.subagentWait === undefined) &&
     previous.questionPrompts === next.questionPrompts &&
-    previous.loading === next.loading &&
+    // Loading only suppresses progress indicators on an initially empty thread.
+    (previous.loading === next.loading || (!next.runWorking && !next.subagentWait)) &&
     sameEntries(previous.replyPeople, next.replyPeople) &&
     previous.replyLocalPerson === next.replyLocalPerson &&
     previous.searchOpen === next.searchOpen &&
@@ -385,7 +391,7 @@ function liveStreamIdentity(input: BuildChatItemsProps): string {
 function updateCachedLiveStream(cached: CachedChatItems, input: BuildChatItemsProps): boolean {
   const reasoning = activeChatReasoning(input.reasoning);
   const live = cached.liveStream;
-  const item = live ? cached.items[live.index] : undefined;
+  const item = live?.onset ?? (live ? cached.items[live.index] : undefined);
   if (
     (input.stream === null && !reasoning) ||
     !live ||
@@ -403,7 +409,15 @@ function updateCachedLiveStream(cached: CachedChatItems, input: BuildChatItemsPr
   if (!reasoning && (text.length === 0 || stripHeartbeatTokenForDisplay(text).shouldSkip)) {
     return false;
   }
-  cached.items[live.index] = { ...item, text, thinking: reasoning?.text };
+  const next = { ...item, text, thinking: reasoning?.text };
+  if (live.onset) {
+    // Keep the prior projection intact while the new stream changes row membership.
+    cached.items = cached.items.toSpliced(live.index, input.runFinalizing ? 1 : 0, next);
+    live.onset = undefined;
+    chatItemsGenerations.set(cached.items, ++cached.generation);
+  } else {
+    cached.items[live.index] = next;
+  }
   return true;
 }
 
@@ -450,10 +464,19 @@ export function buildCachedChatItems(
   });
   // Keep stream-only updates off the loaded-history path; structural changes
   // still use the full builder.
-  if (cached.input && sameChatItemsStructuralInput(cached.input, input)) {
+  const previousInput = cached.input;
+  // The first answer also retires its working indicator; all other facts must match.
+  const finalizingOnset =
+    cached.liveStream?.onset &&
+    previousInput !== null &&
+    input.runWorking !== true &&
+    input.runFinalizing === true &&
+    input.runActive === true &&
+    previousInput.stream !== input.stream;
+  if (previousInput && sameChatItemsStructuralInput(previousInput, input, finalizingOnset)) {
     if (
-      cached.input.stream === input.stream &&
-      activeChatReasoning(cached.input.reasoning)?.text ===
+      previousInput.stream === input.stream &&
+      activeChatReasoning(previousInput.reasoning)?.text ===
         activeChatReasoning(input.reasoning)?.text
     ) {
       return cached.items;
@@ -496,12 +519,16 @@ export function buildCachedChatItems(
   chatItemsGenerations.set(items, ++cached.generation);
   cached.input = input;
   cached.items = items;
-  const liveStreamIndex = findLiveStreamIndex(items);
+  const onset = cached.facts.streamOnset;
+  const liveStreamIndex = onset
+    ? items.findIndex((item) => item.kind === "reading-indicator" && item.key === onset.key)
+    : findLiveStreamIndex(items);
   cached.liveStream =
     liveStreamIndex < 0
       ? null
       : {
           index: liveStreamIndex,
+          onset,
           identity: liveStreamIdentity(input),
           prefix: accumulatedStreamText(input.streamSegments, sanitizeStreamText),
           ownedCanvas: collectOwnedCanvasPreviews(items),

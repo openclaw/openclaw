@@ -39,6 +39,10 @@ Rich Telegram surfaces: formatted messages, inline keyboards, agent message acti
 
     Default: off, for client compatibility — some current Desktop, Web, Android, and third-party clients render accepted rich messages as unsupported. Keep this off unless every client used with the bot can render them. `/status` shows whether the current session has rich messages on or off.
 
+    With rich messages off, tight numbered Markdown lists keep properly indented bullet children attached to their parent without added blank lines. Separate bullet and numbered sections keep their paragraph spacing.
+
+    Caller-authored HTML escapes literal `<` characters without consuming a later supported tag or a closing code tag. A supported start tag without a matching end tag, such as `<b>` mentioned in prose, stays visible as text instead of making Telegram reject the message. Existing tag, attribute, and entity restrictions still apply.
+
     Link previews are on by default. `channels.telegram.linkPreview: false` disables automatic entity detection for rich text. OpenClaw explicitly marks bare URLs so they remain tappable, except URLs containing `&`, which stay plain to avoid Telegram's query-separator encoding issue. Use a labeled Markdown link for those URLs.
 
   </Accordion>

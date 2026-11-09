@@ -66,9 +66,9 @@ jobs:
     runs-on: &linux_runner_xlarge >-
       ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}',
       toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON((vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' ||
-      inputs.use_github_hosted_runners) && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404'))) ||
+      inputs.use_github_hosted_runners) && 'ubuntu-24.04' || 'blacksmith-8vcpu-ubuntu-2404'))) ||
       ((vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || inputs.use_github_hosted_runners) && 'ubuntu-24.04'
-      || 'blacksmith-32vcpu-ubuntu-2404') }}
+      || 'blacksmith-8vcpu-ubuntu-2404') }}
     outputs:
       source_check_json: ${{ steps.source_evidence.outputs.bundle_json }}
     steps:
@@ -149,6 +149,7 @@ jobs:
           sparse-checkout: |
             .github/actions/git-owner
             .github/actions/setup-node-env
+            .github/actions/setup-ripgrep
             scripts
 
       - name: Setup supported Node runtime
@@ -204,9 +205,14 @@ jobs:
           exec python3 -I -S .release-harness/.github/actions/git-owner/owner.py \
             --policy .release-harness/.github/actions/git-owner/release-ancestry.py
 
+      - name: Setup ripgrep for source checks
+        uses: ./.release-harness/.github/actions/setup-ripgrep
+
       - name: Check source, test types, and architecture
         env:
           OPENCLAW_LOCAL_CHECK: "0"
+          # The 32-class delivers only 8 CPUs/31 GiB; concurrent oxlint shards lost the runner.
+          OPENCLAW_OXLINT_SHARD_CONCURRENCY: "1"
         run: |
           set -euo pipefail
           harness_root="$RUNNER_TEMP/npm-preflight-release-harness"
@@ -859,7 +865,9 @@ jobs:
           (needs.check_openclaw_npm.result == 'success' || inputs.source_check_json != '') &&
           needs.check_sdk_npm.result == 'success' && needs.check_dependencies_npm.result == 'success' &&
           needs.check_contents_npm.result == 'success' }}
-    runs-on: *linux_runner_xlarge
+    runs-on: >-
+      ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}',
+      toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON('ubuntu-24.04'))) || ('ubuntu-24.04') }}
     outputs:
       qualified_preflight_bundle_json: ${{ steps.qualified_bundle.outputs.bundle_json }}
     steps:

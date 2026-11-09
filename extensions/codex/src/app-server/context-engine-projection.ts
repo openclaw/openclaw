@@ -18,7 +18,7 @@ type CodexContextProjection = {
 type PrepareContextFile = (
   message: AgentMessage,
   maxChars: number,
-) => Promise<{ text?: string; images: ImageContent[] }>;
+) => Promise<{ text?: string; images: ImageContent[]; imageOnly?: boolean }>;
 
 /** Attachment preparation must not degrade to a prompt that silently loses the saved input. */
 export class CodexContextAttachmentError extends Error {}
@@ -106,49 +106,59 @@ export async function projectContextEngineAssemblyForCodex(params: {
   prepareFileContext?: PrepareContextFile;
   currentUserTurnIdempotencyKey?: string;
   currentUserMessage?: AgentMessage;
+  imageHistory?: "none" | "latest-turn";
 }): Promise<CodexContextProjection> {
   const prompt = params.prompt.trim();
   const maxRenderedContextChars = normalizeRenderedContextMaxChars(params.maxRenderedContextChars);
   const messages = params.assembledMessages.filter(
     (message) => message.role !== "custom" || isCodexDurableCustomMessage(message),
   );
-  const options: {
-    maxTextPartChars: number;
-    toolPayloadMode: "elide" | "preserve";
-    maxRenderedContextChars: number;
-    prepareFileContext?: PrepareContextFile;
-    currentUserTurnIdempotencyKey?: string;
-  } = {
+  const options: MessageRenderOptions = {
     maxTextPartChars: Math.min(
       MAX_TEXT_PART_CHARS,
       Math.max(DEFAULT_TEXT_PART_CHARS, Math.floor(maxRenderedContextChars / 4)),
     ),
     toolPayloadMode: params.toolPayloadMode ?? "elide",
-    maxRenderedContextChars,
-    prepareFileContext: params.prepareFileContext,
-    currentUserTurnIdempotencyKey: params.currentUserTurnIdempotencyKey,
   };
   const tail: Array<{ text: string; separatorLength: number; images?: ImageContent[] }> = [];
   let retainedImageChars = 0;
   let totalChars = 0;
   let retainedChars = 0;
+  let seenImageTurn = params.imageHistory === "none";
   // Count the discarded prefix for the existing marker, but never materialize the
   // whole history. Sigil neutralization preserves UTF-16 length and cannot span separators.
   for (let index = messages.length - 1; index >= 0; index--) {
     const message = messages[index]!;
     if (
       message.role === "user" &&
-      options.currentUserTurnIdempotencyKey &&
-      Reflect.get(message, "idempotencyKey") === options.currentUserTurnIdempotencyKey
+      params.currentUserTurnIdempotencyKey &&
+      Reflect.get(message, "idempotencyKey") === params.currentUserTurnIdempotencyKey
     ) {
       continue;
     }
-    const remaining = options.maxRenderedContextChars - retainedChars;
+    const remaining = maxRenderedContextChars - retainedChars;
     // Read only retained attachments, then charge their rendered text to this same window.
-    const files =
+    let files =
       remaining > 0 && (message.role === "user" || message.role === "assistant")
-        ? await options.prepareFileContext?.(message, Math.min(remaining, options.maxTextPartChars))
+        ? await params.prepareFileContext?.(message, Math.min(remaining, options.maxTextPartChars))
         : undefined;
+    if (params.imageHistory && files?.imageOnly) {
+      // Newest first: retain a complete album, with no fallback to older pixels
+      // when the latest photo could not be restored or exceeds the budget.
+      if (seenImageTurn) {
+        files = {
+          ...files,
+          images: [],
+          text: [
+            files.text,
+            "[Earlier image pixels omitted; retrieve the attachment if requested.]",
+          ]
+            .filter(Boolean)
+            .join("\n"),
+        };
+      }
+      seenImageTurn = true;
+    }
     // Use the shared image estimate; native image payloads consume context too.
     const imageChars =
       (files?.images.length ?? 0) * IMAGE_BLOCK_TOKENS * APPROX_RENDERED_CHARS_PER_TOKEN;
@@ -192,7 +202,7 @@ export async function projectContextEngineAssemblyForCodex(params: {
   const retainedContext = ordered.map((entry) => entry.text).join("");
   const fitted = truncateOlderContext(
     retainedContext,
-    options.maxRenderedContextChars - retainedImageChars,
+    maxRenderedContextChars - retainedImageChars,
     totalChars,
   );
   const imageGroups: CodexProjectedImageGroup[] = [];

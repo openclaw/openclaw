@@ -78,7 +78,7 @@ it.each([
     });
     await waitForSolid(() => {
       expect(contextValue(container, "Workspace")).toBe(resolvedAgentWorkspace);
-      expect(contextValue(container, "Primary Model")).toBe(expectedModel);
+      expect(contextValue(container, "Primary model")).toBe(expectedModel);
       expect(contextValue(container, "Skills filter")).toBe("2 selected");
     });
   },
@@ -109,7 +109,10 @@ it("shows Overview context as rows that open their owning tabs", async () => {
     ),
   );
   expect(container.querySelector(".settings-kv")).toBeNull();
-  expect(overviewRow(container, "Primary Model")).toBeUndefined();
+  const primaryModel = overviewRow(container, "Primary model");
+  assert(primaryModel);
+  expect(primaryModel.querySelector(".model-picker")).not.toBeNull();
+  expect(primaryModel.querySelector(".settings-row__value")).toBeNull();
   const skills = overviewRow(container, "Skills filter");
   expect(skills?.querySelector(".settings-row__value")?.textContent).toBe("2 selected");
   skills?.click();
@@ -135,16 +138,15 @@ it("shows read-only facts the agent has", () => {
   expect(value("Runtime")).toBe("codex (fallback pi)");
 });
 
-it("shows the unsaved note only while config changes are dirty", () => {
+it("edits models without a Save or Reload of its own", () => {
   const defaults = createProps();
-  const render = (configFormDirty: boolean) =>
-    renderAgents({
-      config: { ...defaults.config, configForm: agentConfig({}), configFormDirty },
-    });
-  const note = "You have unsaved config changes.";
-  expect(render(false).textContent).not.toContain(note);
-  const dirty = render(true);
-  expect(dirty.textContent).toContain(note);
+  const dirty = renderAgents({
+    config: { ...defaults.config, configForm: agentConfig({}), configFormDirty: true },
+  });
+  const labels = [...dirty.querySelectorAll("button")].map((button) => button.textContent?.trim());
+  expect(labels).not.toContain("Save");
+  expect(labels).not.toContain("Reload config");
+  expect(dirty.querySelector(".callout.warn")).toBeNull();
 });
 
 it("reaches Agent defaults from Overview and with no agent selected, not from other tabs", () => {

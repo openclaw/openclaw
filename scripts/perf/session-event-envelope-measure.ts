@@ -14,6 +14,8 @@
  * report absolute costs and spread, and do not infer whole-Gateway tail changes.
  * --audiences selects distinct prepared row identities (default 2); use 8 with 65
  * clients to measure reuse within interleaved audiences rather than across all clients.
+ * --distinct-viewers keeps each recipient's authorization key distinct while sharing
+ * those prepared row identities, measuring equivalent views across viewer profiles.
  * --fresh-fields replaces every nested field per event to measure misses separately.
  * --profile <path> saves the sampled profile when used with --allocations.
  * Add --no-turbo-inlining to Node for callee attribution. Compare --clients 1/10/60
@@ -62,6 +64,7 @@ const { values } = parseArgs({
     events: { type: "string", default: "3000" },
     clients: { type: "string", default: "65" },
     audiences: { type: "string", default: "2" },
+    "distinct-viewers": { type: "boolean", default: false },
     sessions: { type: "string", default: "1" },
     allocations: { type: "boolean", default: false },
     profile: { type: "string" },
@@ -98,7 +101,8 @@ let audienceRows: GatewaySessionRow[];
 mock.module(new URL("../../src/gateway/session-row-presentation.ts", import.meta.url), {
   namedExports: {
     prepareSessionRowPublication: () => (client: GatewayClient) => ({
-      getAudienceKey: () => client.connect.scopes?.[0] ?? "viewer",
+      getAudienceKey: () =>
+        values["distinct-viewers"] ? client.connId : (client.connect.scopes?.[0] ?? "viewer"),
       getPresentation: () => ({
         present: () => audienceRows[Number(client.connect.scopes![0])],
         sharing: {},
@@ -467,6 +471,7 @@ console.log(
     events,
     clients,
     audiences,
+    distinctViewers: values["distinct-viewers"],
     sessions,
     freshFields: values["fresh-fields"],
     sourceRevisions: values["source-revisions"],

@@ -3,6 +3,7 @@ import { asPositiveSafeInteger } from "@openclaw/normalization-core/number-coerc
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { commonPrefixLength } from "@openclaw/normalization-core/string-normalization";
+import { resolveDefaultModelMaxTokens } from "../agents/defaults.js";
 import { asBoolean } from "../utils/boolean.js";
 import { readParsedField } from "../utils/string-readers.js";
 import type { ModelDefinitionConfig, ModelProviderConfig } from "./provider-model-shared.js";
@@ -298,7 +299,7 @@ function buildOpenAICompatibleLiveModel(
     ) ??
     fallback.maxTokens ??
     template?.maxTokens ??
-    Math.min(contextWindow, 8192);
+    resolveDefaultModelMaxTokens(contextWindow);
   const explicitReasoning = readLiveModelCatalogBooleanField(record, [
     "reasoning",
     "supports_reasoning",

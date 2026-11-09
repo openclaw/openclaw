@@ -2,10 +2,10 @@ import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import { buildChannelWizardMocks } from "../../../scripts/control-ui-mock-channels.ts";
 import { emptyPairingSnapshot } from "../pages/channels/pairing.test-support.ts";
+import { answerConfirmModal } from "../test-helpers/control-ui-e2e-readiness.ts";
 import {
   defaultControlUiFeatureMethods,
   installMockGateway,
-  waitForConfirmModal,
 } from "../test-helpers/control-ui-e2e.ts";
 import { configSchema, objectSchema } from "./config-composer-fixtures.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -42,7 +42,21 @@ const schema = configSchema(
   { "channels.telegram.botToken": { sensitive: true, advanced: false } },
 );
 
-async function openChannels(page: Page) {
+const storedConfig = {
+  channels: { telegram: { enabled: true, dmPolicy: "pairing", botToken: "__OPENCLAW_REDACTED__" } },
+};
+const storedSnapshot = {
+  ...snapshot,
+  config: storedConfig,
+  sourceConfig: storedConfig,
+  runtimeConfig: storedConfig,
+  parsed: storedConfig,
+  raw: JSON.stringify(storedConfig),
+};
+// What the Gateway sends when the file holds "Bearer ${TOKEN}": redacted like plaintext, no text.
+const templateSnapshot = { ...storedSnapshot, raw: null };
+
+async function openChannels(page: Page, current: Record<string, unknown> = snapshot) {
   const wizard = buildChannelWizardMocks();
   const gateway = await installMockGateway(page, {
     featureMethods: [
@@ -66,7 +80,7 @@ async function openChannels(page: Page) {
       "wizard.start": wizard.start,
       "wizard.next": wizard.next,
       "channels.pairing.list": emptyPairingSnapshot(),
-      "config.get": snapshot,
+      "config.get": current,
       "config.schema": schema,
       "config.patch": { ok: true, config, hash: "channel-config" },
     },
@@ -82,13 +96,7 @@ async function openChannels(page: Page) {
 
 /** Answers the unsaved-changes prompt; the dialog behind it has its own Discard and Save. */
 async function choose(page: Page, name: "Keep editing" | "Discard" | "Save") {
-  const prompt = await waitForConfirmModal(
-    page,
-    page.locator("openclaw-modal-dialog").filter({
-      has: page.locator('dialog[open][aria-label="Unsaved changes"]'),
-    }),
-  );
-  await prompt.getByRole("button", { name, exact: true }).click();
+  await answerConfirmModal(page, /^Save changes to /u, name);
 }
 
 suite.define(() => {
@@ -107,6 +115,13 @@ suite.define(() => {
       expect(await writes()).toBe(0);
 
       await detail.getByRole("button", { name: "Close", exact: true }).click();
+      const confirmation = page.getByRole("dialog", {
+        name: "Save changes to Telegram?",
+        exact: true,
+      });
+      await expect
+        .poll(() => confirmation.textContent())
+        .toContain("Your changes to Telegram aren’t saved. Discarding removes them.");
       await choose(page, "Keep editing");
       expect(await token.inputValue()).toBe(PARTIAL);
       expect(await writes()).toBe(0);
@@ -193,6 +208,52 @@ suite.define(() => {
       await gateway.waitForRequest("wizard.start");
       await page.locator(".channels-wizard").waitFor();
       expect(await detail.count()).toBe(0);
+    });
+  });
+
+  it("replaces a stored token only with what was typed", async () => {
+    await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
+      const { gateway, detail, token } = await openChannels(page, storedSnapshot);
+      const status = detail.getByRole("status");
+      expect(await token.inputValue()).toBe("");
+      expect(await token.getAttribute("readonly")).toBeNull();
+      expect(await token.getAttribute("placeholder")).toBe("••••••••");
+
+      await token.fill(PARTIAL);
+      await expect.poll(() => status.textContent()).toBe("Unsaved changes");
+      await token.fill("");
+      await expect
+        .poll(() => detail.getByRole("status").filter({ hasText: "Unsaved changes" }).count())
+        .toBe(0);
+      expect(await gateway.getRequests("config.patch")).toHaveLength(0);
+
+      await token.fill(PARTIAL);
+      await gateway.deferNext("config.patch");
+      await detail.getByRole("button", { name: "Save", exact: true }).click();
+      const request = await gateway.waitForRequest("config.patch");
+      expect(JSON.parse((request.params as { raw: string }).raw)).toEqual({
+        channels: { telegram: { botToken: PARTIAL } },
+      });
+      await gateway.resolveDeferred("config.patch", {
+        ok: true,
+        config: storedConfig,
+        hash: "channel-config-2",
+      });
+      await expect.poll(() => status.textContent()).toBe("Saved");
+    });
+  });
+
+  it("keeps a stored token read-only when the file holds a template", async () => {
+    await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
+      const { gateway, detail, token } = await openChannels(page, templateSnapshot);
+      expect(await token.getAttribute("readonly")).not.toBeNull();
+      await token.click();
+      await page.keyboard.type(PARTIAL);
+      expect(await token.inputValue()).toBe("");
+      expect(await detail.getByRole("status").filter({ hasText: "Unsaved changes" }).count()).toBe(
+        0,
+      );
+      expect(await gateway.getRequests("config.patch")).toHaveLength(0);
     });
   });
 

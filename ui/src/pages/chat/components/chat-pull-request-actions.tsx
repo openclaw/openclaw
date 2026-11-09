@@ -65,7 +65,7 @@ export function PullRequestActions(props: {
     presented: () => presented() && menu?.overlay.open === true,
     onCopied: () => {
       menu?.close();
-      showToast({ message: t("chat.pullRequests.linkCopied") });
+      showToast({ severity: "success", message: t("chat.pullRequests.linkCopied") });
     },
   });
   const checks = () => props.pullRequest?.checks;
@@ -280,7 +280,12 @@ export function PullRequestActions(props: {
                             class="oc-menu-item__icon chat-ci__status"
                             data-state={rollup()?.state}
                           >
-                            <Icon name={rollup()?.icon ?? "listChecks"} />
+                            <Show
+                              when={rollup()?.state !== "running"}
+                              fallback={<span class="btn__spinner" />}
+                            >
+                              <Icon name={rollup()?.icon ?? "listChecks"} />
+                            </Show>
                           </span>
                           <span class="oc-menu-item__label">
                             {rollup()?.label ?? t("chat.pullRequests.automationNoChecks")}

@@ -33,6 +33,12 @@ stdout (`ok: false`, `error.type: "cli_error"`) and exit with status 1. Without
 Malformed request timeouts, invalid tab indexes, and Gateway request rejections
 also use this JSON failure envelope, including navigation, resize, and cookie requests.
 
+Ctrl-C or SIGTERM cancels pending reads such as status, tabs, and plain snapshots
+without printing late results. Already-accepted actions, `errors --clear`,
+`requests --clear`, and `snapshot --labels` still wait for their receipt.
+This includes the status readback for `start` and `stop`. Interrupted `doctor`
+reads do not report the browser as unhealthy.
+
 The CLI reserves 10 additional seconds beyond the request timeout for node and
 Gateway transport, allowing browser timeout diagnostics to reach the caller.
 
@@ -121,6 +127,8 @@ openclaw browser delete-profile --name work
 ```
 
 Use a specific profile with `--browser-profile <name>` on any subcommand, for example `openclaw browser --browser-profile work tabs`.
+
+Automatic local profile creation skips CDP ports already occupied by another process. The check does not reserve the port; browser launch still checks availability. Explicit ports and CDP URLs remain unchanged.
 
 On macOS, `system-profiles` lists real Chrome, Brave, Edge, or Chromium profiles available on the host. `import-profile` decrypts their cookies after one macOS Keychain/Touch ID consent prompt and injects them into a fresh OpenClaw-managed profile. It imports cookies only. Local storage and IndexedDB are unchanged. Some Google sessions use device-bound session credentials (DBSC) and can still require re-authentication after import.
 
@@ -296,6 +304,10 @@ openclaw browser snapshot
 openclaw browser snapshot --urls
 ```
 
+Page-text extraction through the browser API counts its character budget in UTF-16
+code units. If a limit falls inside a surrogate pair, extraction omits the whole
+pair rather than returning a broken character; the result remains truncated.
+
 Screenshot:
 
 ```bash
@@ -360,6 +372,9 @@ the existing timeout and cancellation still apply.
 Explicit download paths and `trace stop --out` preserve filename whitespace where the filesystem supports it. Quote these paths, for example `openclaw browser download <ref> " report.pdf "`. Output paths must stay inside their managed download or trace directory.
 
 If saving a download fails, OpenClaw requests cancellation of the transfer and reports the original save error. Correct the output path or filesystem problem before starting a new download.
+
+If a page closes before its next download starts, the pending download wait rejects
+immediately. Accepted downloads keep their existing save and cancellation behavior.
 
 When an action opens a modal dialog, text output reports the block and pending dialog IDs. The JSON response returns `blockedByDialog` with `browserState.dialogs.pending`. Pass `--dialog-id` to answer it directly. Dialogs handled outside OpenClaw appear under `browserState.dialogs.recent`.
 

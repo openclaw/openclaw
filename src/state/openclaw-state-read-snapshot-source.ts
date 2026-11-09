@@ -11,11 +11,13 @@ import {
   StateDatabaseAdmissionPendingError,
   StateDatabaseOfflineMaintenanceError,
 } from "../infra/gateway-state-owner-record.js";
-import { createSqliteLifecycleAggregateError } from "../infra/sqlite-lifecycle-errors.js";
+import {
+  createSqliteLifecycleAggregateError,
+  SqliteSnapshotCleanupError,
+} from "../infra/sqlite-lifecycle-errors.js";
 import {
   deferSqliteSnapshotCleanupAfterRead,
   retainSnapshotTempDirectory,
-  SqliteSnapshotCleanupError,
 } from "../infra/sqlite-readonly-location-cleanup.js";
 import type {
   AsyncPreparedSqliteReadOnlyLocation,
@@ -27,9 +29,11 @@ import {
   runSqliteReadOnlyOperation,
   sqliteInspectionTimeoutError,
 } from "../infra/sqlite-readonly-worker.js";
+import { isSqliteSnapshotReuseActive } from "../infra/sqlite-snapshot-reuse.js";
 import {
   forkSqlitePrivateSnapshot,
   prepareSqliteReadOnlyLocation,
+  prepareSqliteReadOnlyLocationAwaited,
   startSqliteReadOnlyLocationAsync,
 } from "../infra/sqlite-snapshot-source.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -119,6 +123,7 @@ export async function prepareOpenClawStateReadSnapshotSource({
         preserveSourceArtifacts,
         signal: admissionSignal,
         expectedSourceIdentity: preserveSourceArtifacts ? captured.identity : undefined,
+        reuse: true,
       });
       // Sync readers must publish the same source without waiting for a Promise reaction.
       materialization = mapRetainedOperation(preparation, (location) => {
@@ -210,14 +215,25 @@ export async function prepareOpenClawStateReadSnapshotSource({
         } else {
           prepared = { location: pathname, cleanupAsync: async () => true };
         }
+      } else if (artifactPreserving && isSqliteSnapshotReuseActive()) {
+        prepared = await prepareSqliteReadOnlyLocationAwaited(pathname, {
+          signal: admissionSignal,
+          expectedSourceIdentity: admission.identity,
+          reuse: true,
+        });
+        // A borrowed image settles at once, so cancellation has not been observed yet.
+        admissionSignal.throwIfAborted();
       } else if (artifactPreserving) {
         // Share only the retained read producer, never a generic mutable snapshot lease.
         preparation = startSqliteReadOnlyLocationAsync(pathname, {
           preserveSourceArtifacts: true,
           signal: admissionSignal,
           expectedSourceIdentity: admission.identity,
+          reuse: true,
         });
         prepared = await preparation.result;
+        // A borrowed image settles at once, so cancellation has not been observed yet.
+        admissionSignal.throwIfAborted();
       } else {
         prepared = await prepareSqliteReadOnlyLocation(pathname, {
           preserveSourceArtifacts: artifactPreserving,
