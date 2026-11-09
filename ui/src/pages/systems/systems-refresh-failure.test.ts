@@ -148,6 +148,7 @@ it("keeps a live Simulator capture through telemetry and inventory polls", async
     if (method === "node.invoke") {
       const action = (params as { params: { action: string } }).params.action;
       if (action === "stop") return { payload: { ok: true } };
+      if (action === "type") throw new Error("typed input refused");
       if (action === "start") {
         return { payload: { sessionId: "session", sequence: 0, width: 402, height: 874 } };
       }
@@ -210,6 +211,38 @@ it("keeps a live Simulator capture through telemetry and inventory polls", async
           (params as { params: { action: string } }).params.action === "stop",
       ),
     ).toHaveLength(0);
+
+    const input = mounted.container.querySelector<HTMLInputElement>(
+      ".simulator-preview__text input",
+    )!;
+    input.value = "café";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    mounted.container.querySelector<HTMLButtonElement>(".simulator-preview__text button")!.click();
+    await waitForSolid(() =>
+      expect(mounted.container.textContent).toContain("typed input refused"),
+    );
+    mounted.container
+      .querySelector<HTMLButtonElement>(".simulator-preview__header button")!
+      .click();
+    await waitForSolid(() =>
+      expect(mounted.container.querySelector(".simulator-preview__text input")).not.toBeNull(),
+    );
+    const retryInput = mounted.container.querySelector<HTMLInputElement>(
+      ".simulator-preview__text input",
+    )!;
+    expect(retryInput.value).toBe("café");
+    retryInput.value = "漢".repeat(1366);
+    retryInput.dispatchEvent(new Event("input", { bubbles: true }));
+    mounted.container.querySelector<HTMLButtonElement>(".simulator-preview__text button")!.click();
+    expect(mounted.container.querySelector('[role="alert"]')?.textContent).toContain("4,096");
+    expect(retryInput.value).toBe("漢".repeat(1366));
+    expect(
+      request.mock.calls.filter(
+        ([method, params]) =>
+          method === "node.invoke" &&
+          (params as { params: { action: string } }).params.action === "type",
+      ),
+    ).toHaveLength(1);
   } finally {
     mounted.unmount();
     context.runtimeConfig.dispose();

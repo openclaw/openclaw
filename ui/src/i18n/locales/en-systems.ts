@@ -68,6 +68,7 @@ const enSystems = {
       viewOnly: "View only · enable Computer Control in the Mac app to interact",
       disconnected: "Preview disconnected · retry to regain control",
       textLabel: "Type or paste into Simulator",
+      textTooLong: "Text must fit in 4,096 UTF-8 bytes.",
       sendText: "Send",
       home: "Home",
     },

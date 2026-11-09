@@ -62,6 +62,8 @@ export function SimulatorPreview(props: {
   const [fps, setFps] = createSignal(0);
   const [retry, setRetry] = createSignal(0);
   const [text, setText] = createSignal("");
+  const [textError, setTextError] = createSignal<string | null>(null);
+  const [sendingText, setSendingText] = createSignal(false);
   let frameSession: { sessionId: string; executionId: string } | undefined;
   let gesture: { pointerId: number; fromX: number; fromY: number } | undefined;
   let active = false;
@@ -78,27 +80,41 @@ export function SimulatorPreview(props: {
     },
   );
 
-  const sendInput = (action: string, details: Record<string, unknown> = {}) => {
+  const sendInput = (
+    action: string,
+    details: Record<string, unknown> = {},
+    onSuccess?: () => void,
+  ) => {
     const session = frameSession;
     if (!session || !props.canControl || !active || error()) {
       return;
     }
     const client = props.client;
     const nodeId = props.nodeId;
-    void inputQueue.enqueue(() =>
-      invoke(client, nodeId, "simulator.act", {
+    return inputQueue.enqueue(async () => {
+      await invoke(client, nodeId, "simulator.act", {
         ...session,
         action,
         ...details,
-      }),
-    );
+      });
+      onSuccess?.();
+    });
   };
 
   const sendText = () => {
     const value = text();
-    if (value && frameSession && image() && !error()) {
-      sendInput("type", { text: value });
-      setText("");
+    if (!value || !frameSession || !image() || error() || sendingText()) return;
+    if (new TextEncoder().encode(value).byteLength > 4096) {
+      setTextError(t("systems.simulator.textTooLong"));
+      return;
+    }
+    setTextError(null);
+    const request = sendInput("type", { text: value }, () => {
+      setText((current) => (current === value ? "" : current));
+    });
+    if (request) {
+      setSendingText(true);
+      void request.finally(() => setSendingText(false));
     }
   };
 
@@ -346,13 +362,17 @@ export function SimulatorPreview(props: {
               aria-label={t("systems.simulator.textLabel")}
               placeholder={t("systems.simulator.textLabel")}
               value={text()}
-              onInput={(event) => setText(event.currentTarget.value)}
+              onInput={(event) => {
+                setText(event.currentTarget.value);
+                setTextError(null);
+              }}
             />
-            <button type="submit" disabled={!text()}>
+            <button type="submit" disabled={!text() || sendingText()}>
               {t("systems.simulator.sendText")}
             </button>
           </form>
         </Show>
+        <Show when={textError()}>{(message) => <span role="alert">{message()}</span>}</Show>
       </footer>
     </section>
   );
