@@ -26,7 +26,9 @@ function createMockSettingsApi(settings: Record<string, unknown>, logs?: string[
     manager: createSettingsManager(api, logs && { log: (message) => logs.push(message) }),
     emit: async (key: string, value: unknown) =>
       handlers.event?.({
-        "put-entry": { desk: "moltbot", "bucket-key": "tlon", "entry-key": key, value },
+        "settings-event": {
+          "put-entry": { desk: "moltbot", "bucket-key": "tlon", "entry-key": key, value },
+        },
       }),
   };
 }
@@ -71,8 +73,12 @@ describe("tlon settings store", () => {
     const updates: TlonSettingsStore[] = [];
     await manager.startSubscription((settings) => updates.push(settings));
     await emit("autoDiscoverChannels", false);
+    await emit("ownerShip", "~mug");
 
-    expect(updates).toEqual([expect.objectContaining({ autoDiscoverChannels: false })]);
+    expect(updates).toEqual([
+      expect.objectContaining({ autoDiscoverChannels: false }),
+      expect.objectContaining({ autoDiscoverChannels: false, ownerShip: "~mug" }),
+    ]);
   });
 
   it("preserves pending approval contents without logging them", async () => {
