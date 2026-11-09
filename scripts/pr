@@ -172,11 +172,60 @@ pr_read_workflow_successor_request "$@" || {
   exit 2
 }
 
+# Lexical baseline admission precedes source selection and lock acquisition.
+# The admitted workflow rechecks semantic identities against its owned checkout.
+PR_BASELINE_FOR_PROOF=0
+pr_preflight_baseline_arguments() {
+  local command="${1-}" proof=false seen=" " option value
+  if [ "$command" = prepare-baseline-signing-continue ]; then
+    for option in "$@"; do [ "$option" != --for-proof ] || return 2; done
+  fi
+  case "$command" in prepare-baseline-refresh|prepare-baseline-successor|prepare-baseline-signing-request) ;; *) return 0 ;; esac
+  [[ "${2-}" =~ ^[1-9][0-9]*$ ]] || return 2
+  shift 2
+  while [ "$#" -gt 0 ]; do
+    option="$1"
+    case "$seen" in *" $option "*) return 2 ;; esac
+    seen="$seen$option "
+    if [ "$option" = --for-proof ]; then
+      [ "$command" = prepare-baseline-refresh ] || return 2
+      proof=true; shift; continue
+    fi
+    [ "$#" -ge 2 ] && [ -n "$2" ] || return 2
+    value="$2"
+    case "$option" in
+      --expected-head|--baseline|--expected-tree|--expected-review|--predecessor-head|--predecessor-binding|--incoming-head|--incoming-review|--publication-oid)
+        [[ "$value" =~ ^[a-f0-9]{40}$ ]] || return 2 ;;
+      --publication-receipt) case "$value" in push|sync) ;; *) return 2 ;; esac ;;
+      --resolutions|--source-review|--coauthors) ;;
+      --signer) [ "$command" = prepare-baseline-signing-request ] || return 2 ;;
+      *) return 2 ;;
+    esac
+    shift 2
+  done
+  if [ "$proof" = true ]; then
+    PR_BASELINE_FOR_PROOF=1
+    for option in --expected-head --baseline --expected-tree --expected-review; do case "$seen" in *" $option "*) ;; *) return 2 ;; esac; done
+    for option in --predecessor-head --predecessor-binding --signer; do case "$seen" in *" $option "*) return 2 ;; esac; done
+    case "$seen" in *" --incoming-head "*|*" --incoming-review "*|*" --publication-receipt "*|*" --publication-oid "*)
+      for option in --incoming-head --incoming-review --publication-receipt --publication-oid; do case "$seen" in *" $option "*) ;; *) return 2 ;; esac; done ;;
+    esac
+  else
+    for option in --source-review --coauthors --incoming-head --incoming-review --publication-receipt --publication-oid; do case "$seen" in *" $option "*) return 2 ;; esac; done
+  fi
+}
+pr_preflight_baseline_arguments "$@" || { echo "Invalid baseline admission options; proof is explicit and unavailable for successor/signing commands." >&2; exit 2; }
+
 # Explicit admin first admission or qualified recovery may select current main.
 # Parse before source selection, then parse normally again before taking a lock.
 PR_WORKFLOW_RECOVERY_OUTCOME=""
 PR_WORKFLOW_RECOVERY_HEAD=""
 PR_WORKFLOW_ADMISSION=0
+# This one producer invocation uses authenticated current-main code; the retained
+# workflow binding stays unchanged until an independently reviewed successor.
+if [ "$requested_subcommand" = prepare-baseline-refresh ] && [ "$PR_BASELINE_FOR_PROOF" = 1 ]; then
+  PR_WORKFLOW_ADMISSION=proof-baseline
+fi
 # Checkout salvage selects current tooling once, never a new workflow binding.
 if [ "$requested_subcommand" = review-transition-recover ]; then
   [ "$#" -eq 6 ] && [[ "${2-}" =~ ^[1-9][0-9]*$ ]] && [ -n "${3-}" ] &&
@@ -319,7 +368,7 @@ try {
       if (!listing) return null;
       return readAt(listing);
     };
-    const isCurrentAdmission = value => value === "1" || value === "review-recovery";
+    const isCurrentAdmission = value => value === "1" || value === "review-recovery" || value === "proof-baseline";
     const requireSource = (source, anchor = "refs/remotes/origin/main") => {
       if (!oid.test(source)) throw new Error("Invalid workflow source");
       run(["merge-base", "--is-ancestor", source, anchor]);
@@ -1406,7 +1455,7 @@ if [ "${1-}" = merge-run ] || [ "${1-}" = merge-recover ] || [ "${1-}" = prepare
     fi
     merge_cli_args+=("$merge_cli_arg")
     merge_cli_body_next=false
-    if [ "$merge_cli_arg" = --body-file ] || [ "$merge_cli_arg" = --legacy-refusal ] || [ "$merge_cli_arg" = --pre-dispatch-refusal ] || [ "$merge_cli_arg" = --admin-evidence ] || [ "$merge_cli_arg" = --resolutions ] || [ "$merge_cli_arg" = --signed-commit ]; then merge_cli_body_next=true; fi
+    if [ "$merge_cli_arg" = --body-file ] || [ "$merge_cli_arg" = --legacy-refusal ] || [ "$merge_cli_arg" = --pre-dispatch-refusal ] || [ "$merge_cli_arg" = --admin-evidence ] || [ "$merge_cli_arg" = --resolutions ] || [ "$merge_cli_arg" = --signed-commit ] || [ "$merge_cli_arg" = --source-review ] || [ "$merge_cli_arg" = --coauthors ]; then merge_cli_body_next=true; fi
   done
   set -- "${merge_cli_args[@]}"
 fi
@@ -1476,6 +1525,8 @@ Usage:
     Publish an exact signed correction for enumerated proof prerequisites. Keeps NEEDS WORK and unresolved findings.
     Requires no armed auto-merge/queue. Never qualifies gates or merge, and never creates a GraphQL commit alias.
   scripts/pr prepare-baseline-refresh <PR> --expected-head <SHA> --baseline <SHA> [--resolutions <file>]
+    Pending-proof source: add --for-proof --expected-tree <OID> --expected-review <OID> [--source-review <file>] [--coauthors <file>].
+    Published-source continuation: also select --incoming-head <SHA> --incoming-review <OID> --publication-receipt <push|sync> --publication-oid <OID>.
   scripts/pr prepare-baseline-successor <PR> --expected-head <SHA> --expected-tree <OID> --expected-review <OID> --predecessor-head <SHA> --predecessor-binding <OID> --baseline <SHA> [--resolutions <file>]
   scripts/pr prepare-baseline-signing-request <PR> --expected-head <SHA> --baseline <SHA> --signer <fingerprint> [--resolutions <file>] [successor identity options]
   scripts/pr prepare-baseline-signing-continue <PR> --request <OID> --signed-commit <file>

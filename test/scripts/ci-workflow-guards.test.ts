@@ -2775,6 +2775,11 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
     const suite = "ui/src/e2e/stale-build-recovery.production.e2e.test.ts";
     mkdirSync(bin);
     mkdirSync(vitest, { recursive: true });
+    mkdirSync(path.join(root, "test/vitest"), { recursive: true });
+    symlinkSync(
+      path.resolve("test/vitest/vitest.pattern-file.ts"),
+      path.join(root, "test/vitest/vitest.pattern-file.ts"),
+    );
     mkdirSync(path.dirname(path.join(root, suite)), { recursive: true });
     writeFileSync(path.join(root, suite), "");
     writeFileSync(
@@ -2817,6 +2822,7 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
           SELECT_RUNTIME: selected,
           PREPARE_EXIT: exit,
           OPENCLAW_NODE_TEST_GROUPS_GZIP_BASE64: "",
+          OPENCLAW_VITEST_INCLUDE_FILE: "",
           VITEST_SHARD_INDEX: "1",
           VITEST_SHARD_COUNT: "1",
         },
@@ -3748,6 +3754,34 @@ server.listen(0, "127.0.0.1", () => {
         resolvedNode,
       ).trim();
       expect(warmerKey.startsWith(otherRuntimePrefix)).toBe(false);
+    }
+  });
+
+  it("keeps each compiled worker preset in a separate archive", () => {
+    const setup = readWorkflow(".github/actions/setup-node-env/action.yml");
+    const steps = setup.runs.steps as WorkflowStep[];
+    const restore = requiredWorkflowStep(steps, "Restore compiled Vitest workers");
+    expect(restore.with?.path).toBe("${{ steps.vitest-worker-cache-meta.outputs.path }}");
+    expect(restore.with?.["restore-keys"]).toBe(
+      "${{ steps.vitest-worker-cache-meta.outputs.prefix }}-${{ steps.vitest-worker-cache-meta.outputs.preset }}-\n",
+    );
+    const warmer = readWorkflow(".github/workflows/vitest-cache-warm.yml");
+    const warmSteps = warmer.jobs.warm.steps as WorkflowStep[];
+    for (const preset of ["full", "runtime", "tooling"]) {
+      const save = requiredWorkflowStep(
+        warmSteps,
+        preset === "full"
+          ? "Save compiled Vitest workers"
+          : `Save ${preset} compiled Vitest workers`,
+      );
+      expect(save.with?.path).toBe(
+        `.artifacts/vitest-worker-cache/run-cache${preset === "full" ? "" : `-${preset}`}-0`,
+      );
+      expect(save.with?.key).toBe(
+        preset === "full"
+          ? "${{ steps.setup-node-env.outputs.vitest-worker-cache-key }}"
+          : `\${{ steps.setup-node-env.outputs.vitest-worker-cache-prefix }}-${preset}-\${{ github.run_id }}-\${{ github.run_attempt }}`,
+      );
     }
   });
 

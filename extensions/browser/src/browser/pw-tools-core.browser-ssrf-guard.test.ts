@@ -154,6 +154,7 @@ describe("pw-tools-core browser SSRF guards", () => {
           expect(poll()).toBe(true);
         }
         currentUrl = "https://93.184.216.34/target";
+        return { dispose: async () => {} };
       });
       const { documentHandle } = documentPage(waitForFunction, {
         url: () => currentUrl,

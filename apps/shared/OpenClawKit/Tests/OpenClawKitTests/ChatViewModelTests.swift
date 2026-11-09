@@ -8957,6 +8957,40 @@ struct ChatViewModelTests {
         #expect(await transport.sessionSettingsPatches().isEmpty)
     }
 
+    @Test func `health poll recovery reloads composer capabilities loaded before connect`() async throws {
+        let calls = AsyncCounter()
+        let writerCatalog = OpenClawChatComposerCapabilityCatalog(
+            sessionSettingsAvailable: true,
+            modelMutationAvailable: true,
+            effortMutationAvailable: true,
+            permissionMutationAvailable: true)
+        let (_, vm) = await makeViewModel(
+            historyResponses: [historyPayload(sessionId: "sess-main")],
+            sessionsResponses: [sessionsResponse([
+                sessionEntry(key: "main", updatedAt: 1, sessionId: "sess-main"),
+            ])],
+            composerCapabilityCatalogHook: { _, _ in
+                // The composer's first load runs before the operator route exists.
+                await calls.increment() == 1 ? OpenClawChatComposerCapabilityCatalog() : writerCatalog
+            },
+            healthResponses: [false, true])
+        let bootstrap = try #require(await MainActor.run {
+            vm.load()
+            return vm.bootstrapTask
+        })
+        await bootstrap.value
+        await vm.loadComposerCapabilities()
+        #expect(await MainActor.run { !vm.healthOK && !vm.composerModelMutationAvailable })
+
+        // The chat's own health poll, not a gateway health event, observes the connection.
+        await vm.pollHealthIfNeeded(force: true)
+        await calls.wait { $0 >= 2 }
+        await waitForObservedState {
+            vm.composerModelMutationAvailable && vm.composerEffortMutationAvailable
+        }
+        #expect(await calls.current() == 2)
+    }
+
     @Test func `composer capabilities fail closed and discard a stale catalog`() async throws {
         let gate = AsyncGate()
         let calls = AsyncCounter()

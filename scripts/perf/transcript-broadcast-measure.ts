@@ -204,6 +204,7 @@ const { values } = parseArgs({
     "exec-io-storm": { type: "boolean", default: false },
     "worktree-tool-churn": { type: "boolean", default: false },
     "stress-tool-search": { type: "boolean", default: false },
+    "oldgen-workload": { type: "boolean", default: false },
     "stress-network-tool": { type: "boolean", default: false },
     "attempt-setup-image": { type: "string" },
     "sandbox-image": { type: "string" },
@@ -257,6 +258,7 @@ const { values } = parseArgs({
     "startup-targets": { type: "string" },
     "startup-source-preload": { type: "string" },
     "gateway-preload": { type: "string" },
+    "post-doctor-fixture-script": { type: "string" },
     revision: { type: "string" },
     operations: { type: "string" },
     "warmup-operations": { type: "string" },
@@ -453,6 +455,17 @@ const gatewayPreload = values["gateway-preload"]
       sha256: createHash("sha256").update(readFileSync(values["gateway-preload"])).digest("hex"),
     }
   : undefined;
+const postDoctorFixtureScript = values["post-doctor-fixture-script"]
+  ? {
+      path: realpathSync(path.resolve(values["post-doctor-fixture-script"])),
+      sha256: createHash("sha256")
+        .update(readFileSync(values["post-doctor-fixture-script"]))
+        .digest("hex"),
+    }
+  : undefined;
+if (postDoctorFixtureScript && !values["team-stress"]) {
+  throw new Error("--post-doctor-fixture-script requires --team-stress");
+}
 const retentionScenario = scenario === "attempt-retention";
 if (
   values["list-filter-churn"] &&
@@ -518,6 +531,9 @@ if (
   );
 }
 const toolScenario = scenario === "chat.send" || reasoningScenario;
+if (values["oldgen-workload"] && (!values["team-stress"] || !values["stress-tools"])) {
+  throw new Error("--oldgen-workload requires --team-stress and --stress-tools");
+}
 if (values["stress-tool-search"] && !values["stress-tools"]) {
   throw new Error("--stress-tool-search requires --stress-tools");
 }
@@ -3094,6 +3110,9 @@ const mock = createServer((req, res) => {
                     code:
                       storeCode +
                       execIoCode +
+                      (values["oldgen-workload"]
+                        ? 'const foundSkills = await skills.search("quasar", 5); if (!foundSkills.skills.some(skill => skill.name.startsWith("synthetic-"))) throw new Error("Synthetic skill search omitted fixture guides");\n'
+                        : "") +
                       (values["stress-tool-search"]
                         ? 'if (!(await catalog.search("read file content", { limit: 5 })).some(tool => tool.name === "read")) throw new Error("Synthetic tool search omitted read");\n'
                         : "") +
@@ -5577,8 +5596,17 @@ async function connectClient(index: number) {
   await client.waitOpen();
   const hello = await rpc(client, "connect", clientConnectParams[index]);
   const handshakeElapsedMs = performance.now() - started;
+  if (!Value.Check(HelloOkSchema, hello)) {
+    throw new Error(
+      `Invalid hello schema: ${JSON.stringify(
+        [...Value.Errors(HelloOkSchema, hello)].map(({ instancePath, message }) => ({
+          instancePath,
+          message,
+        })),
+      )}`,
+    );
+  }
   if (
-    !Value.Check(HelloOkSchema, hello) ||
     hello.protocol !== PROTOCOL_VERSION ||
     !hello.features.methods.includes("sessions.list") ||
     !hello.features.methods.includes("sessions.describe") ||
@@ -5587,7 +5615,17 @@ async function connectClient(index: number) {
     !hello.auth.scopes.includes("operator.admin") ||
     hello.snapshot.sessionDefaults?.defaultAgentId !== "main"
   ) {
-    throw new Error("connect did not return a valid hello snapshot");
+    throw new Error(
+      `Invalid hello snapshot: ${JSON.stringify({
+        protocol: hello.protocol,
+        hasSessionsList: hello.features.methods.includes("sessions.list"),
+        hasSessionsDescribe: hello.features.methods.includes("sessions.describe"),
+        role: hello.auth.role,
+        authMethod: hello.auth.method,
+        scopes: hello.auth.scopes,
+        defaultAgentId: hello.snapshot.sessionDefaults?.defaultAgentId,
+      })}`,
+    );
   }
   if (
     client.ws.extensions.includes("permessage-deflate") !== (proxyViewers || trustedProxyScenario)
@@ -5692,6 +5730,24 @@ try {
     if (code !== 0) {
       throw new Error(`Fixture Doctor exited ${code ?? signal}; inspect ${output}/doctor.log`);
     }
+    if (postDoctorFixtureScript) {
+      const buildRoot = path.dirname(path.dirname(path.resolve(values.entry)));
+      const preparation = launch(
+        [
+          "--import",
+          path.join(buildRoot, "scripts/tsx.mjs"),
+          postDoctorFixtureScript.path,
+          buildRoot,
+        ],
+        "post-doctor-fixture",
+      );
+      const [preparationCode, preparationSignal] = await once(preparation, "close");
+      if (preparationCode !== 0) {
+        throw new Error(
+          `Post-Doctor fixture preparation exited ${preparationCode ?? preparationSignal}; inspect ${output}/post-doctor-fixture.log`,
+        );
+      }
+    }
   }
   await new Promise<void>((resolve, reject) => {
     mock.once("error", reject);
@@ -5702,6 +5758,7 @@ try {
     values.entry,
     port,
     [
+      ...(values["oldgen-workload"] ? ["--expose-gc"] : []),
       ...(values["heap-snapshot"] ? ["--heap-snapshot-string-limit=131072"] : []),
       ...(values.allocations || values["stream-start-allocations"] || values["trace-gc"]
         ? ["--trace-gc-nvp"]
@@ -5711,6 +5768,9 @@ try {
         ? new URL("./team-shape-stress-loader.mjs", import.meta.url).href
         : "./scripts/tsx.mjs",
       ...(gatewayPreload ? ["--import", gatewayPreload.path] : []),
+      ...(values["oldgen-workload"]
+        ? ["--import", new URL("./2312-oldgen-preload.mjs", import.meta.url).href]
+        : []),
       ...(values["exec-io-storm"]
         ? ["--import", fileURLToPath(new URL("./agent-exec-io-preload.mjs", import.meta.url))]
         : []),
@@ -6913,7 +6973,7 @@ try {
   const retainedProfilePath = path.join(output, "retained.heapprofile");
   let retainedProfileStartedAt: number | undefined;
   if (soakScenario) {
-    await sampleMemory();
+    await sampleMemory(values["oldgen-workload"] && values["team-stress-retention-sampling"]);
   }
   for (
     let round = 0;
@@ -6924,6 +6984,16 @@ try {
       : round < (idleScenario ? 2 : rounds);
     round++
   ) {
+    if (values["oldgen-workload"] && round > 0 && round % 5 === 0) {
+      const current = await rpc(sender, "config.get", {});
+      if (!isRecord(current) || typeof current.hash !== "string") {
+        throw new Error("Synthetic reload requires the current config hash");
+      }
+      await rpc(sender, "config.patch", {
+        baseHash: current.hash,
+        raw: JSON.stringify({ logging: { level: round % 10 === 0 ? "info" : "warn" } }),
+      });
+    }
     const verifyWorkspaceMutation = mutateTurnStartWorkspaces(round, keys);
     if (values["turn-start-phases"] && round < coldSessionRounds) {
       await delay(roundIntervalMs);
@@ -7503,7 +7573,9 @@ try {
               throw subscriberFailure;
             }
             await delay(Math.min(memoryIntervalMs, pacedUntil - Date.now()));
-            await sampleMemory();
+            await sampleMemory(
+              values["oldgen-workload"] && values["team-stress-retention-sampling"],
+            );
           }
         }
       } finally {
@@ -8542,6 +8614,7 @@ try {
     output,
     ...(coldIdle ? { coldIdle } : {}),
     gatewayPreload,
+    postDoctorFixtureScript,
     gatewayReadyMs,
     syntheticPlugins: Math.max(syntheticPluginCount, reloadPluginId || scopePluginId ? 1 : 0),
     ...(values["plugin-update"]
