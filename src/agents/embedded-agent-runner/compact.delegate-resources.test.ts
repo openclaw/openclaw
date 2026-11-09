@@ -794,7 +794,7 @@ module.exports = { id: ${JSON.stringify(providerId)}, register(api) {
                 if (mode !== "cleanup-tail") {
                   expect(current.tools.every((tool) => tool.database.isOpen)).toBe(true);
                 }
-                const owner = captured?.work ?? parent;
+                const owner = captured?.active.work ?? parent;
                 expect(owner.hasPendingWork).toBe(true);
                 let finished = false;
                 drained = owner.drain().then(() => {
@@ -836,7 +836,7 @@ module.exports = { id: ${JSON.stringify(providerId)}, register(api) {
               current.finish.resolve();
               await Promise.allSettled([operation, ...current.pending]);
               await (drained ?? parent.drain());
-              await captured?.work.drain();
+              await captured?.active.work.drain();
               await captured?.release();
               await previousLease?.[Symbol.asyncDispose]();
               await resetPreparedModelRuntimeSnapshotsForTest();
