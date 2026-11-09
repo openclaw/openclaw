@@ -130,7 +130,7 @@ export function resolveCiVitestWorkerPreset(
   );
 }
 
-export function areToolingOnlyVitestUnitFiles(files: readonly string[]): boolean {
+function areToolingOnlyVitestUnitFiles(files: readonly string[]): boolean {
   return files.length > 0 && files.every((file) => toolingOnlyUnitFiles.has(file));
 }
 
@@ -159,7 +159,7 @@ export function shouldUseToolingOnlyVitestWorkers(
   );
 }
 
-export function areRuntimeOnlyVitestUnitFiles(files: readonly string[]): boolean {
+function areRuntimeOnlyVitestUnitFiles(files: readonly string[]): boolean {
   return files.length > 0 && files.every((file) => runtimeOnlyUnitFiles.has(file));
 }
 
