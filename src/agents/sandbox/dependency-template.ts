@@ -55,7 +55,6 @@ function dependencyDockerConfig(cfg: SandboxConfig, image: string): SandboxDocke
       XDG_CONFIG_HOME: "/tmp/openclaw-deps/config",
       XDG_DATA_HOME: "/tmp/openclaw-deps/data",
       XDG_STATE_HOME: "/tmp/openclaw-deps/state",
-      XDG_CACHE_HOME: "/tmp/openclaw-deps/cache",
       ...(storeDir !== undefined ? { PNPM_CONFIG_STORE_DIR: storeDir } : {}),
     },
     setupCommand: undefined,

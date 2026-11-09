@@ -42,6 +42,15 @@ async function makeWorkspace(files: Record<string, string>) {
   return { ...fixture, manifestPath, readLocal, capture };
 }
 const cacheRoots = [
+  ".npm/_cacache",
+  ".npm/_logs",
+  ".cache/pip",
+  ".cache/uv",
+  ".pnpm-store",
+  ".bun/install/cache",
+  ".cargo/registry",
+  ".cargo/git",
+  ".gradle/caches",
   ".local/share/pnpm/store",
   "artifacts/task-environment/local/share/pnpm/store",
   ...["tmp", ".pnpm-store", "tools"].map((name) => `.openclaw/${name}`),
@@ -70,6 +79,9 @@ const userFiles = {
   ".openclaw/project.json": "project data\n",
   ".cache/openclaw/notes.md": "user notes\n",
   ".cache/user-data.json": "user data\n",
+  ".npm/npmrc": "user configuration\n",
+  ".cargo/config.toml": "user configuration\n",
+  ".gradle/gradle.properties": "user configuration\n",
   ...Object.fromEntries(
     cacheRoots.flatMap((root) => [
       [`${root}-notes`, "user notes\n"],
