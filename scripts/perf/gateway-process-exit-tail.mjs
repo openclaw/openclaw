@@ -14,6 +14,7 @@ const { values } = parseArgs({
     plugins: { type: "string", default: "24" },
     samples: { type: "string", default: "5" },
     "leak-ms": { type: "string", default: "0" },
+    "watchdog-ms": { type: "string" },
   },
 });
 if (!values.output) {
@@ -34,7 +35,15 @@ import {channel} from 'node:diagnostics_channel';
 channel('child_process').subscribe(({process:child})=>child.once('spawn',()=>appendFileSync(process.env.EXIT_TAIL_EVENTS,JSON.stringify({phase:'child',pid:child.pid,parent:process.pid})+'\\n')));
 process.env.EXIT_TAIL_ROOT_PID ??= String(process.pid);
 if (isMainThread && process.pid === Number(process.env.EXIT_TAIL_ROOT_PID)) {
-  const record = phase => appendFileSync(process.env.EXIT_TAIL_EVENTS, JSON.stringify({phase, at:performance.timeOrigin+performance.now(), cpu:process.cpuUsage(), memory:process.memoryUsage(), resources:process.getActiveResourcesInfo()})+'\\n');
+  const record = (phase, extra = {}) => appendFileSync(process.env.EXIT_TAIL_EVENTS, JSON.stringify({phase, ...extra, at:performance.timeOrigin+performance.now(), cpu:process.cpuUsage(), memory:process.memoryUsage(), resources:process.getActiveResourcesInfo()})+'\\n');
+  const scheduleTimeout = globalThis.setTimeout;
+  globalThis.setTimeout = function(callback,ms,...args) {
+    if (String(callback).includes('command settled but the process is still alive')) {
+      ms = ${values["watchdog-ms"] === undefined ? "ms" : Number(values["watchdog-ms"])};
+      record('watchdogArmed', {delayMs: ms});
+    }
+    return Reflect.apply(scheduleTimeout,this,[callback,ms,...args]);
+  };
   let clean = false;
   let profiler;
   const finishProfile=()=>{

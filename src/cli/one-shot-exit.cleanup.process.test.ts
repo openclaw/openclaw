@@ -217,6 +217,7 @@ it.for([
       expect(result.stderr, diagnostics).toContain(
         "command settled but the process is still alive after 200ms; active resources:",
       );
+      expect(result.stderr, diagnostics).toContain("; active handles:");
       expect(result.stderr.includes("; terminating"), diagnostics).toBe(terminated);
     } else {
       expect(result.stderr, diagnostics).not.toContain("still alive");
@@ -224,9 +225,9 @@ it.for([
   },
 );
 
-it.skipIf(process.platform === "win32")(
-  "does not leave a clean Gateway waiting on a lingering timer after finalization",
-  async ({ expect, signal, onTestFinished }) => {
+it.skipIf(process.platform === "win32").for([600, 5_000])(
+  "allows natural Gateway exit while bounding a lingering $0 ms timer after finalization",
+  async (lingerMs, { expect, signal, onTestFinished }) => {
     const fixture = createFixtureLifetime();
     onTestFinished(() => fixture.cleanup());
     await fixture.run(async () => {
@@ -249,8 +250,8 @@ it.skipIf(process.platform === "win32")(
             return {
               startupSettled: Promise.resolve(), getTailscaleIngressEndpoint: () => undefined,
               close: async () => {
-                const lingering = setTimeout(() => {}, 5_000);
-                setTimeout(() => { clearTimeout(lingering); process.exitCode = 1; }, 1_500).unref();
+                const lingering = setTimeout(() => {}, ${lingerMs});
+                if (${lingerMs} > 1_000) setTimeout(() => { clearTimeout(lingering); process.exitCode = 1; }, 2_000).unref();
                 console.log("completed cleanly");
               },
             };
@@ -280,7 +281,13 @@ it.skipIf(process.platform === "win32")(
       expect(result.stdout).toContain("completed cleanly");
       expect(result.stdout).toContain("finalized");
       expect(fs.readFileSync(receipt, "utf8")).toBe("accepted writes settled");
-      expect(result.stderr).toContain("still alive after 100ms");
+      if (lingerMs < 1_000) {
+        expect(result.status).toBe(0);
+        expect(result.stderr).not.toContain("still alive");
+      } else {
+        expect(result.stderr).toContain("still alive after 1000ms");
+        expect(result.stderr).toMatch(/active handles:.*Socketx2/u);
+      }
     });
   },
 );

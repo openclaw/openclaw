@@ -70,7 +70,8 @@ count per agent instead of repeating warnings for each such session.
 
 After a clean shutdown, the Gateway waits for final cleanup and flushes file logs
 and output pipes. On macOS and Linux, any remaining referenced handles get a
-100 ms final drain before the process re-raises `SIGTERM`. Failed or retained
+one-second final drain before the process logs remaining handle types and re-raises
+`SIGTERM`. Failed or retained
 cleanup keeps its existing deadline and exit-status handling.
 
 ## Unexpected exits

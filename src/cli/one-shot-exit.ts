@@ -132,11 +132,18 @@ function armSettledExitWatchdog(params: { delayMs: number; terminateFailedExit: 
   const { delayMs, terminateFailedExit } = params;
   // Unref'd: a natural exit is never delayed.
   setTimeout(() => {
-    const counts = new Map<string, number>();
-    for (const resource of process.getActiveResourcesInfo()) {
-      counts.set(resource, (counts.get(resource) ?? 0) + 1);
-    }
-    const resources = [...counts].map(([name, count]) => `${name}x${count}`).join(", ");
+    const summarize = (names: string[]) => {
+      const counts = new Map<string, number>();
+      for (const name of names) {
+        counts.set(name, (counts.get(name) ?? 0) + 1);
+      }
+      return [...counts].map(([name, count]) => `${name}x${count}`).join(", ") || "unreported";
+    };
+    const handles =
+      // SAFETY: Node's diagnostic API returns handle objects; other runtimes may omit it.
+      (process as NodeJS.Process & { _getActiveHandles?: () => object[] })["_getActiveHandles"]?.();
+    const resources = summarize(process.getActiveResourcesInfo());
+    const handleTypes = summarize(handles?.map((handle) => handle.constructor.name) ?? []);
     // Only a clean POSIX outcome is ended here unless the caller opted out; a non-zero status
     // can be a supervisor's restart instruction that no signal can carry, so it stays with the
     // supervisor.
@@ -144,7 +151,7 @@ function armSettledExitWatchdog(params: { delayMs: number; terminateFailedExit: 
       process.platform !== "win32" && (terminateFailedExit || resolveProcessExitCode() === 0);
     writeSync(
       2,
-      `command settled but the process is still alive after ${delayMs}ms; active resources: ${resources || "unreported"}${terminate ? "; terminating" : ""}\n`,
+      `command settled but the process is still alive after ${delayMs}ms; active resources: ${resources}; active handles: ${handleTypes}${terminate ? "; terminating" : ""}\n`,
     );
     if (terminate) {
       // Re-raise the stop signal with its default action: no Node exit teardown
