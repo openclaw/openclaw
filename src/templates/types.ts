@@ -8,12 +8,7 @@ import type {
   TemplateDiagnostic,
   TemplateSourceIdentity,
 } from "./manifest-contract.js";
-import type {
-  TemplateManifest,
-  TemplateOpenClawExtension,
-  TemplateOpenClawProfile,
-  TemplatePackage,
-} from "./schema.js";
+import type { TemplateManifest, TemplatePackage } from "./schema.js";
 
 export { TEMPLATE_BOOTSTRAP_FILE_NAMES, type TemplateDiagnostic } from "./manifest-contract.js";
 export type { TemplateSourceIdentity } from "./manifest-contract.js";
@@ -22,8 +17,6 @@ export type {
   TemplateCronJob,
   TemplateManifest,
   TemplateMcpServer,
-  TemplateOpenClawExtension,
-  TemplateOpenClawProfile,
   TemplatePackage,
 } from "./schema.js";
 
@@ -31,7 +24,7 @@ export const TEMPLATE_ADD_PLAN_SCHEMA_VERSION = "openclaw.templateAddPlan.v1" as
 export const TEMPLATE_INSPECT_RESULT_SCHEMA_VERSION = "openclaw.templateInspect.v1" as const;
 export const TEMPLATE_OUTPUT_STABILITY = "experimental" as const;
 
-type TemplateExtensionFormat = TemplateOpenClawExtension["format"];
+type TemplateExtensionFormat = TemplateAppliedExtension["format"];
 
 export type ResolvedTemplatePackage = TemplatePackage & {
   integrity: string;
@@ -78,13 +71,8 @@ type TemplateSourceFileSnapshot = {
   digest: string;
 };
 
-type TemplateProfileSourceSnapshot = TemplateSourceFileSnapshot & {
-  sourcePath: string;
-};
-
 type TemplateSourceSnapshot = {
   manifest: TemplateSourceFileSnapshot;
-  openClawProfile?: TemplateProfileSourceSnapshot;
   workspaceSources: TemplateWorkspaceSourceSnapshot[];
   packageBootstrap?: TemplateWorkspaceSourceSnapshot;
 };
@@ -95,7 +83,6 @@ export type TemplateReadResult =
       manifest: TemplateManifest;
       templateMarkdownBody?: Buffer;
       packageBootstrap?: TemplateWorkspaceSourceSnapshot;
-      openClawProfile?: TemplateOpenClawProfile;
       source: TemplateSourceIdentity;
       snapshot: TemplateSourceSnapshot;
       diagnostics: TemplateDiagnostic[];
@@ -118,21 +105,6 @@ export type TemplateAddPlanAction = {
   scratch?: string;
   blocked: boolean;
   reason?: string;
-};
-
-export type TemplateExtensionPlan = TemplateOpenClawExtension & {
-  detectedFormat?: TemplateExtensionFormat;
-  integrity?: string;
-  installId?: string;
-  ownerAction?: "install" | "reuse";
-  requirementState: "satisfied" | "missing-installable" | "conflicting" | "setup-required";
-  mapped: string[];
-  unavailable: string[];
-  adapterIdentity?: string;
-  declaredCapabilities?: PluginAcceptedDeclaredSurface;
-  capabilityGrants?: PluginOperatorGrants;
-  capabilityGrantsByPluginId?: TemplatePluginCapabilityGrantsById;
-  blocked: boolean;
 };
 
 export type TemplateAddCapabilityChange = {
@@ -188,7 +160,6 @@ export type TemplateAddPlan = {
     ready: boolean;
     requirements: TemplateLocalPrerequisite[];
   };
-  extensions?: TemplateExtensionPlan[];
   blockers: TemplateDiagnostic[];
   diagnostics: TemplateDiagnostic[];
 };

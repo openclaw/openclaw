@@ -47,7 +47,7 @@ import { buildTemplateAddPlan } from "./lifecycle.js";
 import * as mcpInstall from "./mcp.js";
 import * as packageInstall from "./packages.js";
 import { readTemplateManifestFile } from "./reader.js";
-import { parseTemplateOpenClawProfile } from "./schema.js";
+import { parseTemplateManifest } from "./schema.js";
 import type { TemplateManifest, TemplateReadResult } from "./types.js";
 import * as workspaceFiles from "./workspace.js";
 
@@ -686,9 +686,11 @@ it.each([false, true])(
       let config = baseConfig();
       setRuntimeConfigSnapshot(config);
       const plan = await buildTemplateAddPlan({
-        manifest: source.manifest,
+        manifest: {
+          ...source.manifest,
+          agent: { ...source.manifest.agent, heartbeat: { every: "5m" } },
+        },
         source: source.source,
-        openClawProfile: { schemaVersion: 1, agent: { heartbeat: { every: "5m" } } },
         context: { config, workspace: fixture.statePath("added-workspace") },
       });
       const run = vi.fn(async () => ({ status: "ok" as const }));
@@ -794,9 +796,11 @@ it.each([
       setRuntimeConfigSnapshot(config);
       const makePlan = () =>
         buildTemplateAddPlan({
-          manifest: source.manifest,
+          manifest: {
+            ...source.manifest,
+            agent: { ...source.manifest.agent, heartbeat: { every } },
+          },
           source: source.source,
-          openClawProfile: { schemaVersion: 1, agent: { heartbeat: { every } } },
           context: { config, workspace: fixture.statePath("added-workspace") },
         });
       const plan = await makePlan();
@@ -955,15 +959,14 @@ it.each([
   async (_name, activeHours, expectedHours, allowed) => {
     await withOpenClawTestState({ label: "template-portable-active-hours" }, async (fixture) => {
       const source = await portableSource(fixture);
-      const profile = parseTemplateOpenClawProfile({
-        schemaVersion: 1,
-        agent: { heartbeat: { every: "5m", activeHours } },
+      const profile = parseTemplateManifest({
+        ...source.manifest,
+        agent: { ...source.manifest.agent, heartbeat: { every: "5m", activeHours } },
       });
       assert(profile.ok, JSON.stringify(profile.diagnostics));
       const plan = await buildTemplateAddPlan({
-        manifest: source.manifest,
+        manifest: profile.manifest,
         source: source.source,
-        openClawProfile: profile.profile,
         context: {
           config: baseConfig(),
           workspace: fixture.statePath("added-workspace"),

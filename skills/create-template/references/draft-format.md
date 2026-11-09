@@ -35,15 +35,14 @@ workspace:
 Use `workspace.bootstrapFiles` for supported startup files and `workspace.files` for other managed files. A nonempty `CLAW.md` body already supplies `SOUL.md`; do not also map `SOUL.md` separately. Include optional dependencies only when relevant:
 
 ```yaml
-packages:
-  - kind: skill
-    source: clawhub
-    ref: "@publisher/skill-name"
+skills:
+  - ref: "@publisher/skill-name"
     version: 1.2.3
-  - kind: plugin
-    source: clawhub
-    ref: "@publisher/plugin-name"
+plugins:
+  - ref: "@publisher/plugin-name"
     version: 2.0.0
 ```
 
 These package entries reference ClawHub versions. They do not copy skill or plugin code into the Template archive. Keep tokens, credentials, personal accounts, and runtime-specific model choices out of the draft. The review service rejects unsafe paths and credential-like contents before publication.
+
+Put supported native settings such as tools, sandbox, memory, heartbeat, groupChat, and humanDelay directly under `agent`. `CLAW.md` owns all configuration; keep `schemaVersion: 1` and use the top-level `skills` and `plugins` lists for dependencies.

@@ -116,18 +116,6 @@ export async function buildTemplateProject(projectPath: string, outputPath: stri
       assertValidatedBytes("BOOTSTRAP.md", bootstrap, project.template.packageBootstrap);
       files.set("BOOTSTRAP.md", bootstrap);
     }
-    if (project.template.openClawProfile) {
-      const profileSnapshot = project.template.snapshot.openClawProfile;
-      if (!profileSnapshot) {
-        throw new TemplateProjectError(
-          "project_invalid",
-          "Validated OpenClaw profile is missing its source snapshot.",
-        );
-      }
-      const profile = await readSelectedProjectFile(project.root, profileSnapshot.sourcePath);
-      assertValidatedBytes(profileSnapshot.sourcePath, profile, profileSnapshot);
-      files.set(profileSnapshot.sourcePath, profile);
-    }
     for (const source of project.template.snapshot.workspaceSources) {
       const bytes = await readSelectedProjectFile(project.root, source.sourcePath);
       assertValidatedBytes(source.sourcePath, bytes, source);
