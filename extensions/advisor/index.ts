@@ -236,7 +236,10 @@ export default definePluginEntry({
           const native = typeof event.data.itemId === "string";
           if (phase === "start") {
             session.pending.add(native ? `native:${toolCallId}` : toolCallId);
-            session.toolCalls += 1;
+            // A Code Mode exec and the calls it makes inside count as one model step.
+            if (typeof event.data.parentToolCallId !== "string") {
+              session.toolCalls += 1;
+            }
           } else if (!native) {
             session.pending.delete(toolCallId);
           }

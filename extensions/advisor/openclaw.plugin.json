@@ -46,7 +46,7 @@
   "uiHints": {
     "everyToolCalls": {
       "label": "Review every N tool calls",
-      "help": "Review after this many tool calls in a conversation. 0 turns this trigger off."
+      "help": "Review after this many model tool calls in a conversation; calls made inside a Code Mode `exec` count as part of that call. 0 turns this trigger off."
     },
     "everyMinutes": {
       "label": "Review every N minutes",
