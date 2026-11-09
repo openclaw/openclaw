@@ -113,7 +113,7 @@ suite.define(() => {
       await device.waitFor();
       expect(await device.isDisabled()).toBe(true);
       expect(await tooltipTitleText(device)).toBe(
-        "No worker slots are available. Wait for a slot or pick another device.",
+        "No session slots are available. Wait for a slot or pick another device.",
       );
       expect(await restrictedDevice.isEnabled()).toBe(true);
       await captureDeviceRuntimeUiProof(suite, page, "01-embedded-device-capacity-gated.png");
@@ -127,9 +127,7 @@ suite.define(() => {
         .toContainEqual({ runtimeId: "codex" });
       await expect
         .poll(() => tooltipTitleText(restrictedDevice))
-        .toBe(
-          "Authorize codex.exec-server.stdio.v1 in the Gateway node command policy, or pick another device.",
-        );
+        .toBe("Ask an admin to allow the required command on this device, or pick another device.");
       await captureDeviceRuntimeUiProof(
         suite,
         page,
@@ -140,7 +138,7 @@ suite.define(() => {
       expect(await device.locator(".session-menu__description").count()).toBe(0);
       await expect
         .poll(() => tooltipTitleText(device))
-        .toBe("This runtime does not support paired devices");
+        .toBe("This runtime doesn’t support paired devices");
       await captureDeviceRuntimeUiProof(suite, page, "03-cloud-only-device-disabled.png");
       await selectModel("anthropic/claude-sonnet-4-6");
       await pollDisabled(device).toBe(true);
@@ -202,7 +200,7 @@ suite.define(() => {
       expect(await row("saturated").isDisabled()).toBe(true);
       await row("saturated").hover();
       await pollText(details("saturated")).toContain(
-        "No worker slots are available. Wait for a slot or pick another device.",
+        "No session slots are available. Wait for a slot or pick another device.",
       );
       expect(
         await details("saturated").locator(".new-session-page__capacity-caption").count(),
@@ -311,7 +309,7 @@ suite.define(() => {
       }
       await gateway.resolveDeferred("environments.list", catalog("available", 0));
       await selectedRow.hover();
-      await pollText(details("alpha-device")).toContain("No worker slots are available");
+      await pollText(details("alpha-device")).toContain("No session slots are available");
       expect(await selectedRow.getAttribute("aria-pressed")).toBe("true");
       expect(await selectedControl.evaluate((element) => element.isConnected)).toBe(true);
       await selectedControl.dispose();

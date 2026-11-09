@@ -1,4 +1,5 @@
 import path from "node:path";
+import type { DatabaseSync } from "node:sqlite";
 import type { RetainedOperation } from "@openclaw/worker-runtime/lifecycle";
 import { requireNativeDatabaseFile } from "../infra/database-engine/physical-facts.js";
 import { getStateDatabaseSchemaLease } from "../infra/gateway-state-owner.js";
@@ -15,9 +16,17 @@ import type {
 } from "../infra/sqlite-readonly-location.types.js";
 import { runSqliteReadOnlyOperation } from "../infra/sqlite-readonly-worker.js";
 import {
+  captureReusableSqliteSource,
+  isSqliteSnapshotReuseActive,
+  leaseReusableSqliteSnapshot,
+  publishReusableSqliteSnapshot,
+} from "../infra/sqlite-snapshot-reuse.js";
+import {
   prepareSqliteReadOnlyLocationAwaited,
   startSqliteReadOnlyLocationAsync,
 } from "../infra/sqlite-snapshot-source.js";
+import type { DatabaseFileIdentity } from "../infra/sqlite-worker-identity.js";
+import { isUpdateRunAdmissionReadCommand } from "../infra/update-run-admission.types.js";
 import {
   borrowOpenClawStateDatabaseForAsyncRead,
   retainOpenClawStateDatabaseForIndependentRead,
@@ -54,6 +63,38 @@ export function isStateReadReply<Type extends OpenClawStateReadCommand["type"]>(
   type: Type,
 ): reply is StateReadReply<Type> {
   return reply.ok && reply.type === type;
+}
+
+/**
+ * Reads repeat far more often than this owner commits, and each backup copies the whole
+ * file. A retained owner of a replaced path keeps its own bytes, so it never shares them.
+ */
+async function prepareOwnedStateReadImage(
+  database: DatabaseSync,
+  pathname: string,
+  expectedIdentity: DatabaseFileIdentity | undefined,
+  authority: { assertCurrent: () => void },
+  signal: AbortSignal,
+) {
+  const lease =
+    expectedIdentity && !database.isTransaction
+      ? leaseReusableSqliteSnapshot(pathname, expectedIdentity, { logicalReader: true })
+      : undefined;
+  if (lease) {
+    return lease;
+  }
+  const source = expectedIdentity ? captureReusableSqliteSource(pathname) : undefined;
+  const prepared = await prepareSqliteReadOnlyLocationFromOwnedDatabase(
+    database,
+    authority.assertCurrent,
+    signal,
+    "async",
+  );
+  return source
+    ? publishReusableSqliteSnapshot(pathname, source, prepared, () => prepared.cleanupAsync(), {
+        logicalOnly: true,
+      })
+    : prepared;
 }
 
 type Selection = {
@@ -273,30 +314,29 @@ export function startOpenClawStateReadOperation(
       authority.assertCurrent();
       return undefined;
     }
-    if (native && !independentWarmSource) {
-      if (isPostgresSqlConnection(native.database.db)) {
-        requireNativeDatabaseFile("postgres", "file-snapshot");
-      }
-      prepared = await prepareSqliteReadOnlyLocationFromOwnedDatabase(
-        native.database.db,
-        authority.assertCurrent,
-        signal,
-        "async",
-      );
-    } else if (!snapshot && preserveArtifacts && !independentWarmSource) {
-      const sourceIdentity = { key: context.admission.identity.key };
-      const validation = selectedTransport.startValidateFresh(context, authority);
-      await validation;
-      if (
-        (command.type === "plugins.metadata.read" || command.type === "config.health.read") &&
+    if (!snapshot && preserveArtifacts && !independentWarmSource) {
+      const currentMetadata =
+        (command.type === "plugins.metadata.read" ||
+          command.type === "config.health.read" ||
+          isUpdateRunAdmissionReadCommand(command)) &&
         !context.existingSchemaPath &&
         !context.maintenanceScope &&
         !getStateDatabaseSchemaLease(pathname) &&
-        (hasVerifiedLiveSqliteOwner(pathname) || readSqliteDatabaseCleanClose(pathname))
-      ) {
-        // Read startup metadata in the child's pinned transaction instead of
-        // copying unrelated state. Sealed files retain custody in that child;
-        // unclean and retained snapshots keep their private recovery owner.
+        (!native ||
+          (!isPostgresSqlConnection(native.database.db) &&
+            canReadWarmNativeSourceIndependently(
+              native.database,
+              pathname,
+              context.admission.identity.key,
+            ))) &&
+        (hasVerifiedLiveSqliteOwner(pathname) || readSqliteDatabaseCleanClose(pathname));
+      if (!native || currentMetadata) {
+        await selectedTransport.startValidateFresh(context, authority);
+      }
+      if (currentMetadata) {
+        // Metadata reads pin the admitted source in a child before copying a warm
+        // writer's unrelated state. Replaced paths and retained/private snapshots
+        // keep their original recovery owner; the native borrow lasts through close.
         authority.assertCurrent();
         const inspected = await runSqliteReadOnlyOperation(
           pathname,
@@ -328,11 +368,33 @@ export function startOpenClawStateReadOperation(
           });
         }
       }
-      if (selection.snapshotPreparation === "awaited") {
+    }
+    if (native && !independentWarmSource) {
+      if (isPostgresSqlConnection(native.database.db)) {
+        requireNativeDatabaseFile("postgres", "file-snapshot");
+      }
+      prepared = await prepareOwnedStateReadImage(
+        native.database.db,
+        pathname,
+        canReadWarmNativeSourceIndependently(
+          native.database,
+          pathname,
+          context.admission.identity.key,
+        )
+          ? context.admission.identity
+          : undefined,
+        authority,
+        signal,
+      );
+    } else if (!snapshot && preserveArtifacts && !independentWarmSource) {
+      const sourceIdentity = { key: context.admission.identity.key };
+      if (selection.snapshotPreparation === "awaited" || isSqliteSnapshotReuseActive()) {
         prepared = await prepareSqliteReadOnlyLocationAwaited(pathname, {
           signal,
           expectedSourceIdentity: sourceIdentity,
+          reuse: true,
           allowLiveOwner:
+            selection.snapshotPreparation === "awaited" &&
             command.type === "plugins.metadata.read" &&
             context.maintenanceScope?.ownsSchemaMaintenance !== true &&
             !getStateDatabaseSchemaLease(pathname),
@@ -342,6 +404,7 @@ export function startOpenClawStateReadOperation(
           preserveSourceArtifacts: true,
           signal,
           expectedSourceIdentity: sourceIdentity,
+          reuse: true,
         });
         const location = await preparation.result;
         prepared = location;

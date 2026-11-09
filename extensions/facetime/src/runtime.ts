@@ -206,8 +206,7 @@ export async function createFaceTimeRuntime(params: {
           }
         }),
       );
-    }, OUTBOUND_RECONCILE_DELAY_MS);
-    outboundReconcileTimer.unref?.();
+    }, OUTBOUND_RECONCILE_DELAY_MS).unref();
   };
   const cancelPendingOutboundCall = async (): Promise<
     | {

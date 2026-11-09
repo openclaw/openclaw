@@ -149,7 +149,7 @@ export async function prepareNodeClaudeSkillSession(io: OpenClawPluginNodeHostCo
             return {
               tools: [
                 {
-                  name: "skill_workshop",
+                  name: "skill_library",
                   description: workshop.description,
                   inputSchema: { ...workshop.inputSchema, type: "object" as const },
                 },
@@ -158,8 +158,8 @@ export async function prepareNodeClaudeSkillSession(io: OpenClawPluginNodeHostCo
           });
           mcp.setRequestHandler("tools/call", async (request) => {
             assertCurrent();
-            if (request.params.name !== "skill_workshop" || pending.size >= 8) {
-              throw new Error("Only this turn's Skill Workshop is available.");
+            if (request.params.name !== "skill_library" || pending.size >= 8) {
+              throw new Error("Only this turn's Skill Library is available.");
             }
             const id = randomUUID();
             const call = createDeferredCore<CallToolResult>();
@@ -224,7 +224,7 @@ export async function prepareNodeClaudeSkillSession(io: OpenClawPluginNodeHostCo
       assertCurrent();
       // Only this host-controlled tool may skip Claude's prompt. Native tools
       // retain the node's existing execution and permission policy.
-      argv.push("--mcp-config", configPath, "--allowedTools", "mcp__openclaw__skill_workshop");
+      argv.push("--mcp-config", configPath, "--allowedTools", "mcp__openclaw__skill_library");
     }
     return {
       argv,

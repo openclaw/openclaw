@@ -299,6 +299,7 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
         diagnosticOwner = createDiagnosticEmbeddedRunOwner({
           watchdogAttempt: operation
             ? operation.watchdog.attachAttempt({
+                nested: true,
                 assertCurrent: () => {
                   params.abortSignal?.throwIfAborted();
                   assertSessionControllerOperation(operation);
@@ -523,6 +524,7 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
                   summaryOutputPolicy,
                   {
                     requestBudget: accountingRecorder?.requestBudget,
+                    requestFromEntryId: accountingRecorder?.requestFromEntryId,
                     pendingUserEntryId: accountingRecorder?.pendingUserEntryId,
                     onSummaryReady: () => {
                       summaryReady = true;

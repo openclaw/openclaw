@@ -54,6 +54,10 @@ workspace, `skills/` wins over `.agents/skills/`. Both directories participate i
 snapshot refresh and sandbox synchronization. Sandboxed runs read the
 materialized copies, not the original host paths.
 
+After a Gateway restart, sandbox skill synchronization compares existing copies
+with the current source content. Unchanged files are retained; changed or removed
+instructions and supporting files are reconciled before the turn uses them.
+
 Managed worktree sessions keep their recorded source workspace as the skill
 source. That source is read and watched on the Gateway, even when a File Transfer
 plugin serves the agent workspace from a paired node. The node reads its configured
@@ -170,7 +174,7 @@ skill. Different owners can use the same friendly name without one skill
 silently replacing another.
 
 <Warning>
-A shared Gateway remains [one trust domain](/start/teams#one-trust-boundary).
+A shared Gateway remains [one trust domain](/start/multiplayer#one-trust-boundary).
 Skills attached to a shared session are inputs to that session, not secret
 storage. Library ownership governs management and discovery; it does not grant
 new tools, credentials, host installation rights, or isolation from the Gateway
@@ -201,8 +205,13 @@ another. Enablement does not bypass agent allowlists, required binaries,
 operating-system restrictions, or other prerequisites.
 
 A managed bundle is limited to 256 files, 1 MiB per file, and 8 MiB total.
-Worker resource delivery also has an 8 MiB aggregate limit; narrow the session
-selection if its complete bundles exceed that limit. Published revisions are
+Worker resource delivery also has an 8 MiB aggregate limit. If the selected
+bundles exceed it, delivery omits supporting files and adds a notice to the
+delivered instructions. Complete instructions are retained when they fit;
+otherwise that skill receives an explicit unavailability notice, never partial
+instructions. The turn can continue with available tools. The notice explains
+how to request a missing resource or narrow the selection. Gateway logs identify
+each reduced skill, its size, and its largest file. Published revisions are
 retained, including revisions still selected by older sessions.
 
 ZIP imports allow up to 16 unfinished uploads per Gateway profile and 32
@@ -316,10 +325,11 @@ slash commands, with the same precedence and allowlist as the execution
 workspace catalog above. They appear only when you could create a session in that
 project, and switching projects replaces the list.
 
-Skills with `disable-model-invocation: true` stay out of the `$` picker and the
-model's normal prompt, so the model cannot select them on its own. An authorized
-explicit `$skill-name` reference still invokes them; the flag only hides the
-skill from model-initiated selection.
+Eligible, user-invocable skills with `disable-model-invocation: true` appear in
+the `$` picker and inline slash suggestions, but stay out of the model's normal
+prompt so it cannot select them on its own. Selecting one inserts an explicit
+`$skill-name` reference. Bundle prompt-template commands remain available as
+leading slash commands, not as `$` references or inline skill suggestions.
 
 ## Skill Workshop
 
@@ -465,6 +475,10 @@ When the user asks to generate an image, use the `image_generate` tool...
   under [Gating](#gating) works. Use `{baseDir}` in the body to reference the
   skill folder path.
 </Note>
+
+The bundled skill-creator Python validator also works without PyYAML. In that
+mode, trailing comments on plain indented description lines are ignored; hashes
+inside quoted or block-scalar content remain literal.
 
 ### Optional frontmatter keys
 
@@ -943,6 +957,15 @@ Concurrent first searches share one build; cancelling a waiter does not cancel
 its owner. Later searches reuse the completed index for that prepared catalog
 and still check current run authority. Names and descriptions have twice the lexical
 weight of body text; exact names rank first.
+Fresh runs share metadata preparation from compact published skill revisions,
+without retaining another copy of every description in their lookup keys.
+Up to four catalog selections retain their current content-only indexes between
+runs, within a shared 64 MiB conservative byte budget. Oversized selections remain
+available to their active run but are not retained for later runs. Readers and permission checks remain run-specific. Local file bodies still
+pass file admission on each fresh run before their confirmed revisions reuse an index.
+Delivered instruction bodies reuse the same index when only companion files change.
+Prepared bodies share a 12 MiB cache, bounded to 2,048 revisions; byte limits and
+UTF-8 normalization are part of each prepared document's identity.
 
 Body indexing reads at most 1,024 skills in name order, four at a time. Each body
 contributes at most 16 KiB, reduced equally across the selected skills

@@ -37,7 +37,10 @@ import type { BashSandboxConfig } from "./bash-tools.shared.js";
 import { EXEC_NODE_PATH_PREPEND_WARNING } from "./exec-node-path-prepend.js";
 import { prepareGitHubToolEnvironment } from "./github-tool-identity.js";
 import { sanitizeEnvVars } from "./sandbox/sanitize-env-vars.js";
-import { isSubagentEnvelopeSession } from "./subagents/spawn/subagent-capabilities.js";
+import {
+  isSubagentEnvelopeSession,
+  isVisibleSpawnedSession,
+} from "./subagents/spawn/subagent-capabilities.js";
 import { ToolInputError } from "./tools/common.js";
 
 export type ExecToolArgs = Record<string, unknown> & {
@@ -192,9 +195,12 @@ export function resolveExecNotificationDefaults(defaults?: ExecToolDefaults) {
           agentId: notifyAgentSession.agentId,
         }),
       });
-      return isSubagentEnvelopeSession(notifySessionKey, {
-        entry: read.entries.find(({ sessionKey }) => sessionKey === notifySessionKey)?.entry,
-      });
+      const entry = read.entries.find(({ sessionKey }) => sessionKey === notifySessionKey)?.entry;
+      // Visible spawns are interactive; only hidden workers report through the announce chain.
+      return (
+        isSubagentEnvelopeSession(notifySessionKey, { entry }) &&
+        !isVisibleSpawnedSession(notifySessionKey, { entry })
+      );
     })().catch(() => {
       // Identity enrichment must not prevent exec; retry the worker on the next call.
       subagentSession = undefined;
@@ -416,7 +422,6 @@ export function resolvePreparedExecEnvironment(params: {
   execParams: ExecToolArgs;
   host: ExecHost;
   sandbox?: BashSandboxConfig;
-  containerWorkdir?: string | null;
   channelContext?: PluginHookChannelContext;
   subagentExecution?: boolean;
   defaultPathPrepend: string[];
@@ -537,7 +542,7 @@ export function resolvePreparedExecEnvironment(params: {
           defaultPath: DEFAULT_PATH,
           paramsEnv: untrustedRequestedEnv,
           sandboxEnv: params.sandbox.env,
-          containerWorkdir: params.containerWorkdir ?? params.sandbox.containerWorkdir,
+          containerWorkdir: params.sandbox.containerWorkdir,
         })
       : (hostEnvResult?.env ?? inheritedBaseEnv);
 

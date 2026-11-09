@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 import type { Selectable, Updateable } from "kysely";
 import { REPOSITORY_BRANCH_PREFIX_PATTERN } from "../config/repository-branch-prefix.js";
 import { readWorkerPlacementMovesReadOnly } from "../gateway/worker-environments/placement-move-row-codec.js";
@@ -410,4 +411,106 @@ export function deleteSessionRepositoryWorkspaceInDatabase(
     owner: deleted ? { agentId: deleted.agent_id, sessionKey: deleted.session_key } : undefined,
     changed: deleted !== undefined,
   };
+}
+/** Offline retained-owner repair; its caller owns the transaction and live commit admission. */
+export function restoreSessionRepositoryWorkspaceDiskInDatabase(
+  db: EngineConnection,
+  input: {
+    source: SessionRepositoryWorkspaceRecord;
+    expectedCurrent: SessionRepositoryWorkspaceRecord | null;
+  },
+  nowMs: number,
+): RepositoryWorkspaceMutationResult {
+  if (!db.isTransaction) {
+    throw new Error("Repository disk recovery requires its offline shared-state transaction");
+  }
+  const { source } = input;
+  if (!source.diskAuthority || !source.baseCommit || !source.baseManifestHash) {
+    throw new Error("Repository disk recovery requires a complete sealed binding");
+  }
+  const current = readSessionRepositoryWorkspaceInDatabase(db, source.workspaceId);
+  const owner = findSessionRepositoryWorkspaceInDatabase(db, source);
+  if (
+    !isDeepStrictEqual(current ?? null, input.expectedCurrent) ||
+    (owner && owner.workspaceId !== source.workspaceId)
+  ) {
+    throw new Error("Repository disk recovery selection changed");
+  }
+  if (
+    current &&
+    !isDeepStrictEqual(
+      {
+        ...source,
+        diskAuthority: current.diskAuthority,
+        revision: current.revision,
+        createdAtMs: current.createdAtMs,
+        updatedAtMs: current.updatedAtMs,
+      },
+      { ...current, diskAuthority: current.diskAuthority },
+    )
+  ) {
+    throw new Error("Repository disk recovery would overwrite a different workspace");
+  }
+  assertRepositoryWorkspaceDiskIdentity(
+    source.diskAuthority,
+    findWorkerEnvironment(db, source.diskAuthority.environmentId),
+  );
+  if (current?.diskAuthority) {
+    if (!isDeepStrictEqual(current.diskAuthority, source.diskAuthority)) {
+      throw new Error("Repository disk recovery would overwrite a different resource receipt");
+    }
+    return {
+      workspaceId: current.workspaceId,
+      workspace: current,
+      owner: { agentId: current.agentId, sessionKey: current.sessionKey },
+      changed: false,
+    };
+  }
+  if (current) {
+    return bindSessionRepositoryWorkspaceDiskInDatabase(
+      db,
+      {
+        workspaceId: current.workspaceId,
+        expectedRevision: current.revision,
+        diskAuthority: source.diskAuthority,
+      },
+      nowMs,
+    );
+  }
+  // Insert only metadata into the same owner. Ordinary disk binding below still verifies
+  // the exact restored placement, attachment, receipt, base and absence of pending results.
+  if (!tableExists(db, table)) {
+    ensureSessionRepositoryWorkspaceSchema(db);
+  }
+  executeSqliteQueryTakeFirstSync(
+    db,
+    query(db)
+      .insertInto(table)
+      .values({
+        workspace_id: source.workspaceId,
+        agent_id: source.agentId,
+        session_key: source.sessionKey,
+        url: source.url,
+        requested_ref: source.requestedRef,
+        run_setup_script: source.runSetupScript ? 1 : 0,
+        base_commit: source.baseCommit,
+        base_manifest_hash: source.baseManifestHash,
+        branch: source.branch,
+        checkpoint_ref: source.checkpointRef,
+        manifest_hash: source.manifestHash,
+        disk_authority_json: null,
+        revision: source.revision,
+        created_at_ms: source.createdAtMs,
+        updated_at_ms: nowMs,
+      }),
+  );
+  return bindSessionRepositoryWorkspaceDiskInDatabase(
+    db,
+    {
+      workspaceId: source.workspaceId,
+      expectedRevision: source.revision,
+      diskAuthority: source.diskAuthority,
+    },
+    nowMs,
+  );
 }

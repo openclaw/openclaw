@@ -20,6 +20,7 @@ import {
   clonePersistentCacheSlots,
   pruneFsModuleCache,
   resolveShardPlans,
+  resolveShardChildCommand,
   resolveTestProjectsEntrypoint,
   runShardPlans,
   type ShardGroupPlan,
@@ -29,6 +30,11 @@ import nativeBunQualification from "../../scripts/lib/ci-test-native-bun-qualifi
 import { resolveCiTestRuntimeSelections } from "../../scripts/lib/ci-test-runtime.mts";
 import * as buildPrerequisites from "../../scripts/lib/vitest-build-prerequisites.mts";
 import { collectVitestFileFilters } from "../../scripts/lib/vitest-cli-mode.mts";
+import {
+  selectVitestWorkerPreset,
+  shouldUseRuntimeOnlyVitestWorkers,
+  shouldUseToolingOnlyVitestWorkers,
+} from "../../scripts/lib/vitest-runtime-selection.mts";
 import * as workerOwner from "../../scripts/lib/vitest-worker-run.mts";
 import { createVitestRunSpecs } from "../../scripts/test-projects.test-support.mts";
 import * as groupOwner from "../../scripts/vitest-process-group.mts";
@@ -36,9 +42,10 @@ import { createDeferred, withTestTimeout } from "../helpers/promise.js";
 import { testRunnerFixtureEnv } from "./prepared-script-wrapper.test-support.js";
 
 const gatewayCoreConfig = "test/vitest/vitest.gateway-core.config.ts";
+const gatewayDatabaseConfig = "test/vitest/vitest.gateway-database-workers.config.ts";
 
 const nativeQualificationFixtures = vi.hoisted(() => ({
-  first: "packages/markdown-core/src/chunk-text.test.ts",
+  first: "src/utils/string-readers.test.ts",
   second: "src/utils/chunk-items.test.ts",
   helperTest: "src/agents/embedded-agent-runner/run/compaction-timeout.test.ts",
   helper: "src/agents/test-helpers/agent-message-fixtures.ts",
@@ -175,6 +182,334 @@ afterEach(() => {
 });
 
 describe("scripts/ci-run-node-test-shard.mts", () => {
+  it.each([
+    {
+      configs: ["test/vitest/vitest.unit-fast.config.ts"],
+      files: [
+        "test/codex-web-search-policy.integration.test.ts",
+        "test/decision-tool.codex.integration.test.ts",
+      ],
+      preset: "runtime",
+    },
+    {
+      configs: ["test/vitest/vitest.unit-fast-isolated.config.ts"],
+      files: ["test/scripts/type-suppression-inventory.test.ts"],
+      preset: "runtime",
+    },
+    {
+      configs: ["test/vitest/vitest.infra.config.ts"],
+      files: [
+        "src/agents/subagents/announce/subagent-announce.incognito.test.ts",
+        "src/plugins/loader.runtime-registry.test.ts",
+        "test/canonical-descendant.integration.test.ts",
+        "test/codex-web-search-native.integration.test.ts",
+        "test/cron-conversation-delivery.codex.integration.test.ts",
+        "test/skill-usage.codex.integration.test.ts",
+      ],
+      preset: "runtime",
+    },
+    {
+      configs: [gatewayDatabaseConfig],
+      files: [
+        "test/plugins/chat-abort-codex.gateway.test.ts",
+        "test/plugins/codex-native-search.gateway.test.ts",
+      ],
+      preset: "runtime",
+    },
+    {
+      configs: ["test/vitest/vitest.gateway-database-workers.config.ts"],
+      files: [
+        "src/gateway/talk/client-permission-parity.test.ts",
+        "src/gateway/tool-resolution.swarm-collector.test.ts",
+        "test/plugins/deep-research-routing.gateway.test.ts",
+      ],
+      preset: "runtime",
+    },
+    {
+      configs: ["test/vitest/vitest.gateway-methods.config.ts"],
+      files: ["src/gateway/server-methods/session-catalog-privacy.test.ts"],
+      preset: "runtime",
+    },
+    {
+      configs: ["test/vitest/vitest.agents-spawn-production-boundary.config.ts"],
+      files: ["src/agents/subagents/spawn/subagent-spawn.production-boundary.test.ts"],
+      preset: "runtime",
+    },
+    {
+      configs: ["test/vitest/vitest.runtime-config.config.ts"],
+      files: ["src/config/io.load-async.test.ts"],
+      preset: "runtime",
+    },
+    {
+      configs: ["test/vitest/vitest.plugins.config.ts"],
+      files: ["src/plugins/plugin-generation-source-inspection.worker.test.ts"],
+      preset: "runtime",
+    },
+    {
+      configs: ["test/vitest/vitest.plugins.config.ts"],
+      files: ["src/plugins/plugin-generation-source-inspection.worker.test.ts", "unknown.test.ts"],
+      preset: "full",
+    },
+    {
+      configs: ["test/vitest/vitest.agents-core.config.ts"],
+      files: [
+        "src/agents/agent-tools.delegated-authority.test.ts",
+        "src/agents/session-placement-computer.test.ts",
+      ],
+      preset: "runtime",
+    },
+    {
+      configs: ["test/vitest/vitest.gateway-server.config.ts"],
+      files: ["src/gateway/server.beam-owned-view.test.ts"],
+      preset: "runtime",
+    },
+    {
+      configs: ["test/vitest/vitest.agents-spawn-production-boundary.config.ts"],
+      files: [
+        "src/agents/subagents/spawn/subagent-spawn.production-boundary.test.ts",
+        "unknown.test.ts",
+      ],
+      preset: "full",
+    },
+    {
+      configs: ["test/vitest/vitest.agents-spawn-production-boundary.config.ts"],
+      files: [],
+      preset: "full",
+    },
+    {
+      configs: ["test/vitest/vitest.gateway-client.config.ts"],
+      files: ["src/gateway/client-callsites.guard.test.ts"],
+      preset: "runtime",
+    },
+    {
+      configs: ["test/vitest/vitest.auto-reply.config.ts"],
+      files: ["src/auto-reply/reply/dispatch-from-config.delivery.test.ts"],
+      preset: "runtime",
+    },
+    {
+      configs: ["test/vitest/vitest.tooling.config.ts"],
+      files: [
+        "test/codex-settled-turn-finalization.integration.test.ts",
+        "test/conversation-tools.codex.integration.test.ts",
+        "test/scripts/ci-test-timings-tooling.test.ts",
+        "test/scripts/eager-import-closure.test.ts",
+        "test/scripts/lint-suppressions.test.ts",
+        "test/scripts/plugin-sdk-surface-report.test.ts",
+        "test/scripts/pr-wrapper-source-closure.test.ts",
+        "test/vitest-projects-config.test.ts",
+      ],
+      preset: "runtime",
+    },
+    {
+      configs: ["test/vitest/vitest.tooling.config.ts"],
+      files: [
+        "test/scripts/ci-test-timings-tooling.test.ts",
+        "test/scripts/vitest-worker-shutdown.test.ts",
+      ],
+      preset: "full",
+    },
+    {
+      configs: ["test/vitest/vitest.tooling.config.ts"],
+      files: [
+        "test/scripts/ci-changed-build-selection.test.ts",
+        "test/scripts/ci-changed-node-test-plan.integration.test.ts",
+        "test/scripts/test-projects.test.ts",
+      ],
+      preset: "tooling",
+    },
+    {
+      configs: ["test/vitest/vitest.tooling.config.ts"],
+      files: ["test/scripts/test-extension.test.ts", "unknown.test.ts"],
+      preset: "full",
+    },
+    {
+      configs: ["test/vitest/vitest.tooling.config.ts"],
+      files: ["test/scripts/plugin-sdk-surface-report.test.ts"],
+      sibling: {
+        configs: ["test/vitest/vitest.runtime-config.config.ts"],
+        includePatterns: ["src/config/io.load-async.test.ts"],
+      },
+      preset: "runtime",
+    },
+    { configs: [gatewayDatabaseConfig], files: [], preset: "full" },
+    { configs: [gatewayDatabaseConfig], files: null, preset: "full" },
+    { configs: [gatewayDatabaseConfig], files: undefined, preset: "full" },
+    {
+      configs: ["custom.config.ts"],
+      files: ["test/plugins/chat-abort-codex.gateway.test.ts"],
+      preset: "full",
+    },
+    {
+      configs: [gatewayDatabaseConfig],
+      files: ["test/plugins/chat-abort-codex.gateway.test.ts", "unknown.test.ts"],
+      preset: "full",
+    },
+  ])(
+    "shares compatible $preset workers for $configs / $files",
+    async ({ configs, files, preset, sibling }) => {
+      machine(8, 31);
+      const createWorker = vi.spyOn(workerOwner, "createVitestWorkerRun");
+      const inheritedInclude = path.join(makeScratchDir(), "include.json");
+      writeFileSync(
+        inheritedInclude,
+        JSON.stringify(["test/plugins/chat-abort-codex.gateway.test.ts"]),
+      );
+      const code = await runPlans(
+        groupPlans([{ configs, includePatterns: files }, ...(sibling ? [sibling] : [])]),
+        {
+          env: {
+            OPENCLAW_VITEST_INCLUDE_FILE: inheritedInclude,
+            OPENCLAW_CI_TEST_RUNTIME_POLICY: "node",
+          },
+          runChild: async (args, env) => {
+            if (preset !== "full") {
+              if (!sibling) {
+                expect(readList(env.OPENCLAW_VITEST_INCLUDE_FILE!)).toEqual(files);
+              }
+
+              const specs = createVitestRunSpecs(args, { baseEnv: env });
+              expect(specs).toHaveLength(1);
+              for (const spec of specs) {
+                const selectionArgs = [
+                  spec.config,
+                  args,
+                  spec.env,
+                  undefined,
+                  spec.includePatterns ?? undefined,
+                ] as const;
+                expect(
+                  selectVitestWorkerPreset(
+                    shouldUseRuntimeOnlyVitestWorkers(...selectionArgs),
+                    shouldUseToolingOnlyVitestWorkers(...selectionArgs),
+                    preset === "runtime" ? "runtime" : "tooling",
+                  ),
+                ).toBe(preset);
+              }
+            }
+            return 0;
+          },
+        },
+      );
+      expect(code).toBe(0);
+      expect(createWorker).toHaveBeenCalledTimes(1);
+      expect(createWorker.mock.results[0]!.value.descriptor.preset).toBe(preset);
+    },
+  );
+
+  it.each([
+    { extra: [], args: [], jobArgs: undefined, preset: "runtime" },
+    {
+      targets: [
+        "src/config/io.load-async.test.ts",
+        "src/plugins/loader.runtime-registry.test.ts",
+        "src/plugins/plugin-generation-worker.test.ts",
+        "test/scripts/ci-test-timings-tooling.test.ts",
+        "test/scripts/type-suppression-inventory.test.ts",
+      ],
+      args: [],
+      jobArgs: undefined,
+      preset: "runtime",
+    },
+    {
+      targets: ["test/scripts/run-vitest.test.ts"],
+      args: [],
+      jobArgs: undefined,
+      preset: "tooling",
+    },
+    { extra: [nodeTarget], args: [], jobArgs: undefined, preset: "full" },
+    { extra: [], args: ["--root", "custom-root"], jobArgs: undefined, preset: "full" },
+    { extra: [], args: ["--root", "custom-root"], jobArgs: [], preset: "full" },
+  ])(
+    "passes the $preset artifact owner through the CI child bootstrap",
+    async ({ targets, extra = [], args, jobArgs, preset }) => {
+      machine(8, 31);
+      const createWorker = vi.spyOn(workerOwner, "createVitestWorkerRun");
+      const plans = resolveShardPlans({
+        OPENCLAW_NODE_TEST_TARGETS_JSON: JSON.stringify(
+          targets ?? ["src/auto-reply/reply/dispatch-from-config.delivery.test.ts", ...extra],
+        ),
+      });
+      const result = await recordPlans(plans, {
+        env: {
+          OPENCLAW_NODE_TEST_VITEST_ARGS_JSON: JSON.stringify(args),
+          OPENCLAW_NODE_TEST_ENV_JSON: JSON.stringify(
+            jobArgs ? { OPENCLAW_NODE_TEST_VITEST_ARGS_JSON: JSON.stringify(jobArgs) } : {},
+          ),
+        },
+      });
+      expect(result.code).toBe(0);
+      expect(createWorker).toHaveBeenCalledTimes(1);
+      const owner = createWorker.mock.results[0]!.value;
+      expect(owner.descriptor.preset).toBe(preset);
+      const child = resolveShardChildCommand(["run"], "node", "scripts/test-projects.mts", owner);
+      for (const narrow of ["runtime", "tooling"]) {
+        expect(child.args.includes(`--worker-preset=${narrow}`)).toBe(preset === narrow);
+      }
+    },
+  );
+
+  it.each([
+    { event: "schedule", runId: "101", observed: true },
+    { event: "pull_request", runId: "100", observed: true },
+    { event: "pull_request", runId: "101", observed: false },
+  ])(
+    "keeps runtime membership with the observation pilot ($event/$runId)",
+    async ({ event, runId, observed }) => {
+      const runChild = vi
+        .fn<NonNullable<RunOptions["runChild"]>>()
+        .mockImplementation(async (_args, env) => {
+          if (env.OPENCLAW_VITEST_OBSERVATION_DIR) {
+            const launch = readList(path.join(env.OPENCLAW_VITEST_OBSERVATION_DIR, "launch.json"));
+            expect(launch).toMatchObject({
+              mode: "shadow",
+              selection: { runtime: env.OPENCLAW_VITEST_RUNTIME },
+              fallbackReasons: expect.arrayContaining(["no-prior-snapshot"]),
+            });
+          }
+          return 1;
+        });
+      const code = await runPlans(
+        groupPlans([
+          {
+            configs: [bunConfig],
+            shard_name: "pilot",
+            includePatterns: [nodeTarget, vitestBunTarget, nativeBunTarget],
+          },
+        ]),
+        {
+          concurrency: 1,
+          runChild,
+          env: {
+            CI: "true",
+            GITHUB_ACTIONS: "true",
+            GITHUB_EVENT_NAME: event,
+            GITHUB_RUN_ID: runId,
+            OPENCLAW_CI_TEST_RUNTIME_POLICY: "dual-all",
+            OPENCLAW_CI_TEST_OBSERVATIONS_DIR: makeScratchDir(),
+          },
+        },
+      );
+      const calls = runChild.mock.calls;
+      expect(code).toBe(1);
+      expect(calls.map(([, env]) => env.OPENCLAW_VITEST_RUNTIME)).toEqual(["node", "bun", "bun"]);
+      expect(calls[2]?.[0]).toEqual(["--native-bun", `./${nativeBunTarget}`]);
+      expect(calls[2]?.[1].OPENCLAW_VITEST_OBSERVATION_DIR).toBeUndefined();
+      for (const [args, env] of calls.slice(0, 2)) {
+        expect(args.includes("--experimental.recordDependencies")).toBe(observed);
+        expect(Boolean(env.OPENCLAW_VITEST_OBSERVATION_DIR)).toBe(observed);
+        if (observed) {
+          expect(args).toContain("--reporter=verbose");
+          expect(args).toContain("--reporter=github-actions");
+        }
+      }
+      if (observed) {
+        expect(calls[0]?.[1].OPENCLAW_VITEST_OBSERVATION_DIR).not.toBe(
+          calls[1]?.[1].OPENCLAW_VITEST_OBSERVATION_DIR,
+        );
+      }
+    },
+  );
+
   it.each([{ flags: ["--root", "alternate"] }])(
     "preserves the native Gateway invocation for $flags",
     ({ flags }) => {
@@ -527,7 +862,7 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
   it("keeps changed qualification inputs on Vitest without dropping their coverage", () => {
     const cwd = makeScratchDir();
     const { helperTest, helper, setup } = nativeQualificationFixtures;
-    const files = [bunTarget, helperTest, nativeBunTarget];
+    const files = [bunTarget, helperTest, nativeBunTarget].toSorted();
     const copyInput = (file: string) => {
       mkdirSync(path.dirname(path.join(cwd, file)), { recursive: true });
       writeFileSync(path.join(cwd, file), readFileSync(file));
@@ -543,7 +878,7 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
     expect(resolveCiTestRuntimeSelections(selection, "dual-all", cwd)).toEqual([
       { runtime: "node" },
       { runtime: "bun", includePatterns: [nativeBunTarget] },
-      { runtime: "bun", engine: "bun-test", files: [bunTarget, helperTest] },
+      { runtime: "bun", engine: "bun-test", files: [bunTarget, helperTest].toSorted() },
     ]);
     writeFileSync(path.join(cwd, helper), "// changed fixture helper\n");
     expect(resolveCiTestRuntimeSelections(selection, "dual-all", cwd)).toEqual([

@@ -28,13 +28,14 @@ const buildOwners = [
 const voiceOwners = [
   /^apps\/ios\/WatchApp\/(?:Sources\/|Info\.plist$)/u,
   /^apps\/ios\/ActivityWidget\//u,
-  /^apps\/ios\/Tests\/(?:TalkRealtimeVoiceSessionCleanupTests|TalkRealtimeConsultCancellationTests|TalkRealtimeTranscriptWriteQueueTests|TalkModeConfigParsingTests|ManagedDocumentEnvelopeTests|IOSMediaArtifactLoaderTests|OpenClawTypographyTests)\.swift$/u,
+  /^apps\/ios\/Tests\/(?:TalkRealtimeVoiceSessionCleanupTests|TalkRealtimeConsultCancellationTests|TalkRealtimeTranscriptWriteQueueTests|TalkModeConfigParsingTests|TalkTranscriptCompletionTests|ManagedDocumentEnvelopeTests|IOSMediaArtifactLoaderTests|OpenClawTypographyTests)\.swift$/u,
   /^apps\/ios\/Tests\/Fixtures\/managed-document-message\.json$/u,
 ];
 
 const lifecycleOwners = [
+  /^apps\/ios\/Tests\/QRScannerResultHandoffTests\.swift$/u,
   /^scripts\/ios-access-restart-proof\.py$/u,
-  /^apps\/ios\/Tests\/(?:CloudflareAccessClientTests|CloudflareAccessBrowserPresenterTests|CloudflareAccessTransferTests|CloudflareAccessSessionStoreTests|CloudflareAccessTestTokens|ChatTypingFocusTests|ChatSendHydrationTests|GatewayIngressControllerTests|GatewayIngressActivationTests|GatewayIngressWireTests|GatewayIngressLoginPreparationTests|GatewayAccessRestartTests|GatewayOperatorFleetTests|GatewayConnectionControllerTests|GatewayConnectionSecurityTests|GatewaySettingsStoreTests|IOSMediaArtifactLoaderTests|OpenClawTypographyTests)\.swift$/u,
+  /^apps\/ios\/Tests\/(?:CloudflareAccessClientTests|CloudflareAccessBrowserPresenterTests|CloudflareAccessTransferTests|CloudflareAccessSessionStoreTests|CloudflareAccessTestTokens|ChatTypingFocusTests|ChatSendHydrationTests|SettingsHubTests|GatewayIngressControllerTests|GatewayIngressActivationTests|GatewayIngressWireTests|GatewayIngressLoginPreparationTests|GatewayAccessDeviceAuthBindingTests|GatewayAccessRestartTests|GatewayOperatorFleetTests|GatewayConnectionControllerTests|GatewayConnectionSecurityTests|GatewaySettingsStoreTests|IOSMediaArtifactLoaderTests|OpenClawTypographyTests)\.swift$/u,
   /^apps\/shared\/OpenClawKit\/Tests\/OpenClawKitTests\/ChatComposerTextViewIOSTests\.swift$/u,
 ];
 

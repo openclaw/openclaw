@@ -10,6 +10,7 @@ import type {
   SessionToolOverrides,
 } from "../config/sessions.js";
 import type { SessionEntryCreateWithTranscriptOptions } from "../config/sessions/session-accessor.types.js";
+import type { SessionCreationOperation } from "../config/sessions/session-creation-operation.js";
 import type {
   SessionCreatedActor,
   SessionCreatedVia,
@@ -94,15 +95,18 @@ export type GatewaySessionCommitResult =
       resolved: { modelProvider: string; model: string };
       resetExisting: boolean;
     }
-  | { ok: false; error: ErrorShape };
+  | { ok: false; error: ErrorShape; initializationNotCommitted?: true };
 
 export type CreateGatewaySessionResult =
   | (Extract<GatewaySessionCommitResult, { ok: true }> & {
       postCommit: { status: "completed" } | { status: "failed"; error: unknown };
     })
-  | Extract<GatewaySessionCommitResult, { ok: false }>;
+  | (Extract<GatewaySessionCommitResult, { ok: false }> & {
+      initializationRolledBack?: true;
+    });
 
 export type CreateGatewaySessionParams = {
+  creationOperation?: SessionCreationOperation;
   onPhase?: (phase: SessionCreatePhase) => void;
   cfg: OpenClawConfig;
   operatorAuthority?: Promise<
@@ -158,6 +162,8 @@ export type CreateGatewaySessionParams = {
   /** Canonical agent default prepared by the RPC adapter, used only without a selected root. */
   defaultSessionRoot?: string;
   permissionMode?: SessionEntry["permissionMode"];
+  /** Direct profiled operator creation only; never inherited by autonomous callers. */
+  applyAgentPermissionDefault?: boolean;
   toolOverrides?: SessionToolOverrides;
   communication?: SessionEntry["communication"];
   /** Prepares session-owned resources while the target lifecycle fence is held. */
@@ -170,6 +176,8 @@ export type CreateGatewaySessionParams = {
   /** Clear a prior node binding when a new Gateway-host session replaces it. */
   clearExecBinding?: boolean;
   clearSpawnedCwd?: boolean;
+  /** Explicit worktree creation keeps the active-parent refusal. */
+  worktree?: boolean;
   fork?: boolean;
   forkFrom?: "last-completed";
   /** Live requester capability for an agent's current-transcript fork; never a wire parameter. */
@@ -194,6 +202,8 @@ export type CreateGatewaySessionParams = {
   waitForModelCatalog?: <T>(operation: () => Promise<T>) => Promise<T>;
   /** Trusted in-process initializer; never populated from public Gateway params. */
   initialEntry?: TrustedInitialSessionEntry;
+  /** Host-verified catalog handoff origin for a new ordinary conversation; never a wire input. */
+  initialCatalogContinuation?: { id: string; catalogId: string; hostId: string; threadId: string };
   /** Trusted prepared assistant reply committed with a new ordinary session, never a wire input. */
   initialAssistantMessage?: { message: SessionTranscriptAssistantMessage; idempotencyKey?: string };
   /** Keep a new ordinary session unusable until afterCreate succeeds, or roll it back. */
@@ -241,6 +251,7 @@ export type CreateGatewaySessionParams = {
 };
 
 export type GatewaySessionResetParams = {
+  creationOperation?: SessionCreationOperation;
   key: string;
   agentId?: string;
   spawnedCwd?: string;

@@ -29,6 +29,7 @@ import { Icon } from "../../components/solid/icon.tsx";
 import { LazyViewError } from "../../components/solid/lazy-view-error.tsx";
 import { LoadingState } from "../../components/solid/loading-state.tsx";
 import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
+import { formatUiError } from "../../lib/format-error.ts";
 import { useOptionalApplication } from "../../lib/reactive/context.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { listen } from "../../lib/reactive/listener.ts";
@@ -178,7 +179,10 @@ function DraftBlock(props: {
     <Show when={!catalog.isTarget(props.page().data)}>
       <ChatPermissionPicker
         canSelectFull={place().isAdmin()}
-        defaultMode={place().selectedAgent()?.defaultPermissionMode}
+        defaultMode={
+          place().selectedAgent()?.newSessionPermissionMode ??
+          place().selectedAgent()?.defaultPermissionMode
+        }
         disabled={submission().submitting || Boolean(submission().pendingPlacement.sessionKey)}
         disabledReason={submission().submitting ? t("newSession.starting") : undefined}
         mode={submission().permissionMode}
@@ -381,8 +385,7 @@ function renderPageContent(host: PageHost, shell: NewSessionPageProps) {
     () => owner,
     pageState.revision,
     submissionError,
-    (failure) =>
-      owner.submission.setError(failure instanceof Error ? failure.message : String(failure)),
+    (failure) => owner.submission.setError(formatUiError(failure)),
   );
   onSettled(() => {
     const preparation = createNewSessionTitle(() => ({

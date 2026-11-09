@@ -38,6 +38,18 @@ File tools recognize aliases of the session's trusted root and working directory
 
 New sessions, including managed worktree sessions, inherit the configured global or per-agent tool/exec policy when no mode is specified. Exec and file-tool settings are independent: host `apply_patch` permits paths outside the workspace by default, consistently with unrestricted file tools. Set `tools.exec.applyPatch.workspaceOnly: true` or use a restricted session mode for containment. See [apply_patch containment](/tools/apply-patch#notes) for the file settings, session-mode precedence, and whole-agent worker defaults.
 
+For attended sessions created directly by a profiled operator, you can opt in to
+an explicit per-agent default with `agents.entries.<agentId>.newSessionPermissionMode`.
+Choose `read-only`, `guarded`, `workspace`, or `full`. A configured `full` default
+resolves to `workspace` for creators with `operator.write` but no `operator.admin`.
+Explicit request modes win; an explicit `full` request still requires current
+`operator.admin` authority. Existing sessions, forks,
+catalog sessions, delegated callers, and autonomous runs do not receive this
+creation-only default. Changing it does not alter already-created sessions.
+The New Session picker displays this caller-specific mode in its **Default** label;
+leaving Default selected lets the Gateway apply it with current authorization.
+Existing sessions keep their tool-policy-based Default label and clearing behavior.
+
 Creating a worktree pins the working directory without selecting a permission mode. Explicit modes and modes already saved on existing sessions remain unchanged.
 
 When a session uses **Agent default**, the Control UI permission picker shows the agent's resolved exec posture when it matches a session mode, for example **Ask me** for `tools.exec.mode: "ask"` without a stricter host approval policy, and marks that mode's menu row **Default**. Resolution includes global settings, agent overrides, and host approval floors. Without those settings or sandboxing, the default is full access. Allowlist-only policy and non-equivalent `security`/`ask` pairs, including `ask: "always"`, keep the plain **Default** label. Agents whose sandbox configuration could apply to their sessions also keep plain **Default**, because effective policy cannot be stated at agent scope. This is display metadata, not an authorization decision or a filesystem-access guarantee; tool policy still applies. Selecting **Agent default** clears the session override; it does not save the displayed mode into the session.

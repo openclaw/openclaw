@@ -95,7 +95,10 @@ export function createNodeWorkerPreparedWorkspaceTransport(options: {
         const preparation =
           current && readWorkerProjectPreparation(current.profileSnapshot.project);
         if (
-          current?.state !== "provisioning" ||
+          !(
+            current?.state === "provisioning" ||
+            (current?.state === "ready" && current.preparation?.consumedAtMs != null)
+          ) ||
           current.ownerEpoch !== record.ownerEpoch ||
           current.provisionOperationId !== record.provisionOperationId ||
           !enrollment?.nodeSetupId ||

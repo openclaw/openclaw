@@ -60,6 +60,7 @@ export async function withSessionWorkspaceRecovery<T>(params: {
       authorize();
       const action = params.action === "delete" ? "Delete" : "Archive";
       const confirmed = await showConfirmDialog({
+        title: t("sessionsView.discardWorkspaceTitle"),
         message: t(`sessionsView.discardWorkspace${action}Confirm`, {
           session: params.session.label,
         }),

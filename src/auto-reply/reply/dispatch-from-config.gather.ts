@@ -164,13 +164,15 @@ export async function gatherDispatchRequest(
   };
   const { cfg, dispatcher } = normalizedParams;
   bindReplyDispatcherConversationContext(dispatcher, ctx.agentText);
+  const targetSessionKey = resolveCommandTurnTargetSessionKey(ctx) ?? ctx.SessionKey;
   const targetAgentId = resolveSessionAgentId({
-    sessionKey: resolveCommandTurnTargetSessionKey(ctx) ?? ctx.SessionKey,
+    sessionKey: targetSessionKey,
     config: cfg,
     fallbackAgentId: ctx.AgentId,
   });
   await waitForAgentInputAdmission(targetAgentId, {
     cfg,
+    sessionKey: targetSessionKey,
     signal: params.replyOptions?.abortSignal,
   });
   const refusal = readAgentDatabaseAdmissionRefusal(targetAgentId);

@@ -15,9 +15,20 @@ suite.define(() => {
     async (failure) => {
       await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
         await page.clock.install();
-        await page.route("**/healthz", (route) =>
-          route.fulfill({ status: 200, json: { ok: true, status: "live" } }),
-        );
+        await pauseVirtualClock(page);
+        await page.addInitScript(() => {
+          const fetch = window.fetch.bind(window);
+          window.fetch = (input, init) => {
+            const url = new URL(
+              input instanceof Request ? input.url : String(input),
+              location.href,
+            );
+            // Keep continuously live health out of real HTTP while retries use the virtual clock.
+            return url.origin === location.origin && url.pathname === "/healthz"
+              ? Promise.resolve(Response.json({ ok: true, status: "live" }))
+              : fetch(input, init);
+          };
+        });
         const denied = failure === "denied";
         const gateway = await installMockGateway(page, {
           methodResponses: {
@@ -33,22 +44,44 @@ suite.define(() => {
           },
         });
         await page.goto(suite.server.baseUrl);
-        await gateway.waitForRequest("connect");
         const gate = page.locator(".login-gate");
-        await gate.waitFor();
-        await pauseVirtualClock(page);
+        const recovery = denied ? gate : page.locator(".gateway-connection-view");
+        // Request receipt precedes the queued response and recovery-surface rendering.
+        await expect
+          .poll(async () => {
+            await page.clock.runFor(1);
+            return {
+              attempts: (await gateway.getRequests("connect")).length,
+              visible: await recovery.isVisible(),
+            };
+          })
+          .toEqual({ attempts: 1, visible: true });
         const initialAttempts = (await gateway.getRequests("connect")).length;
         for (let second = 0; second < 60; second++) {
           await page.clock.runFor(1_000);
           // WebCrypto and fetch use real threads; settle the handshake before advancing again.
           await expect
             .poll(async () => {
-              await page.clock.runFor(1);
-              return page.evaluate(() =>
-                (window as MockGatewayWindow)
-                  .openclawControlUiE2eGateway!.socketStates()
-                  .every((socket) => socket.readyState === WebSocket.CLOSED),
-              );
+              const handshake = await page.evaluate(() => {
+                const mockGateway = (window as MockGatewayWindow).openclawControlUiE2eGateway!;
+                const sockets = mockGateway.socketStates();
+                const requests = mockGateway.requests.filter(
+                  (request) => request.method === "connect",
+                ).length;
+                return {
+                  preparing:
+                    requests < sockets.length &&
+                    sockets.some((socket) => socket.readyState === WebSocket.OPEN),
+                  settled:
+                    requests === sockets.length &&
+                    sockets.every((socket) => socket.readyState === WebSocket.CLOSED),
+                };
+              });
+              // Let real-thread signing finish before spending the socket's virtual deadline.
+              if (!handshake.preparing) {
+                await page.clock.runFor(1);
+              }
+              return handshake.settled;
             })
             .toBe(true);
         }

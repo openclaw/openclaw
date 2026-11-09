@@ -10,6 +10,7 @@ import {
 import { createAgentLifecycleTerminalBackstop } from "../../auto-reply/reply/agent-lifecycle-terminal.js";
 import { cleanupBrowserSessionsForLifecycleEnd } from "../../browser-lifecycle-cleanup.js";
 import { selectLiveRuntimeConfig } from "../../config/runtime-snapshot.js";
+import type { restoreCronOperatorSource } from "../../gateway/cron-operator-source.js";
 import {
   assertAgentRunLifecycleGenerationCurrent,
   getAgentEventLifecycleGeneration,
@@ -28,6 +29,7 @@ import {
   runWithDiagnosticTraceContext,
 } from "../../infra/diagnostic-trace-context.js";
 import { isFastTestRuntimeEnv } from "../../infra/env.js";
+import { GatewayDispatchUnavailableError } from "../../infra/restart-recovery-errors.js";
 import {
   logMessageDispatchCompleted,
   logMessageDispatchStarted,
@@ -401,18 +403,35 @@ async function runCronIsolatedAgentTurnInTrace(
                 },
               );
               const { executeCronRun } = await cronExecutorRuntimeLoader.load();
-              const operator = params.job.operatorSource
-                ? await (
-                    await cronOperatorSourceLoader.load()
-                  ).restoreCronOperatorSource({
-                    job: params.job,
-                    agentId: prepared.context.agentId,
-                    sessionKey: prepared.context.runSessionKey,
-                    entry: prepared.context.cronSession.sessionEntry,
-                    signal: abortSignal,
-                    deliveryAttemptFence: params.deliveryAttemptFence,
-                  })
-                : undefined;
+              let operator: Awaited<ReturnType<typeof restoreCronOperatorSource>>;
+              try {
+                operator = params.job.operatorSource
+                  ? await (
+                      await cronOperatorSourceLoader.load()
+                    ).restoreCronOperatorSource({
+                      job: params.job,
+                      target: {
+                        agentId: prepared.context.agentId,
+                        sessionKey: prepared.context.runSessionKey,
+                        entry: prepared.context.cronSession.sessionEntry,
+                      },
+                      signal: abortSignal,
+                      deliveryAttemptFence: params.deliveryAttemptFence,
+                    })
+                  : undefined;
+              } catch (error) {
+                if (!(error instanceof GatewayDispatchUnavailableError) || !error.retryable) {
+                  throw error;
+                }
+                // Source recovery precedes model/tool admission. Keep its typed
+                // transient disposition so a one-shot retries the same intent.
+                return {
+                  status: "error",
+                  error: normalizeCronRunErrorText(error),
+                  executionStarted: false,
+                  errorClassification: { kind: "reason", reason: "server_error" },
+                };
+              }
               if (operator) {
                 operatorLease.defer(operator.release);
               }

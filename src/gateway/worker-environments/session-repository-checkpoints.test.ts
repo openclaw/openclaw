@@ -28,7 +28,6 @@ import * as workspaceResultGit from "./workspace-result-git.js";
 import { requireWorkspaceResultGit as git } from "./workspace-result-git.js";
 import {
   hasWorkerWorkspaceResultRef,
-  readStagedWorkerWorkspaceResult,
   workerWorkspaceResultRef,
 } from "./workspace-result-staging.js";
 
@@ -388,7 +387,10 @@ it("reuses accepted blobs while preserving cumulative provenance, deletions and 
   expect((await f.current())?.checkpointRef).toBeNull();
   await first.verify();
   await first.publish();
-  const parent = await readStagedWorkerWorkspaceResult(f.artifact, first.checkpointRef);
+  const parent = await workspaceManifestWorker.loadStagedWorkspaceManifest(
+    f.artifact,
+    first.checkpointRef,
+  );
   const firstObject = await git(f.artifact, ["rev-parse", first.checkpointRef + ":first.bin"]);
   const delta = path.join(f.root, "delta-only");
   await fs.mkdir(delta);
@@ -417,7 +419,10 @@ it("reuses accepted blobs while preserving cumulative provenance, deletions and 
   expect(importBytes[0]).toBeGreaterThan(large.length);
   expect(importBytes[1]).toBeLessThan(16 * 1024);
   console.info("Checkpoint import bytes", importBytes);
-  const stored = await readStagedWorkerWorkspaceResult(f.artifact, second.checkpointRef);
+  const stored = await workspaceManifestWorker.loadStagedWorkspaceManifest(
+    f.artifact,
+    second.checkpointRef,
+  );
   expect(stored.baseManifestRef).toBe(f.base.manifestRef);
   expect(stored.base.baseCommit).toBe(baseCommit);
   const guard = authority();
@@ -682,7 +687,7 @@ it.each(["recovery", "publication"])(
       refs.map(async (ref) => ({
         ref,
         objectId: await git(artifact, ["rev-parse", `${ref}^{commit}`]),
-        snapshot: await readStagedWorkerWorkspaceResult(artifact, ref),
+        snapshot: await workspaceManifestWorker.loadStagedWorkspaceManifest(artifact, ref),
       })),
     );
     expect(candidates).toHaveLength(2);
@@ -733,7 +738,10 @@ it("keeps new Git lineage and publication bytes when checkpoint files are unchan
   const f = await fixture("working edit\n", true);
   const first = await f.stage("before-empty-commit");
   const accepted = await first.publish();
-  const previous = await readStagedWorkerWorkspaceResult(f.artifact, first.checkpointRef);
+  const previous = await workspaceManifestWorker.loadStagedWorkspaceManifest(
+    f.artifact,
+    first.checkpointRef,
+  );
   const empty = path.join(f.root, "empty-delta");
   await fs.mkdir(empty);
   await git(f.remote, [
