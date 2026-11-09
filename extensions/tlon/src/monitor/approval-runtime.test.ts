@@ -99,6 +99,16 @@ describe("Tlon approval targeting", () => {
     expect(fixture.state.pendingApprovals).toEqual([]);
   });
 
+  it("still blocks the ship for a direct DM request", async () => {
+    const fixture = createFixture([{ ...createApproval(0), verifiedDirect: true }]);
+
+    expect(await fixture.handleApprovalResponse("block", "~owner")).toBe(true);
+
+    expect(fixture.poke).toHaveBeenCalledWith(
+      expect.objectContaining({ app: "chat", mark: "chat-block-ship", json: { ship: "~ship-0" } }),
+    );
+  });
+
   it("does not guess when a bare decision has multiple pending requests", async () => {
     const fixture = createFixture();
 
@@ -111,6 +121,26 @@ describe("Tlon approval targeting", () => {
     expect(JSON.stringify(fixture.poke.mock.calls)).toContain("dm-99");
   });
 });
+
+it.each(["approve", "block"] as const)(
+  "does not change verified-ship access for an unverified club %s decision",
+  async (decision) => {
+    const fixture = createFixture([
+      { ...createApproval(0), clubId: "0v3.club", originalMessage: undefined },
+    ]);
+
+    expect(await fixture.handleApprovalResponse(decision, "~owner")).toBe(true);
+
+    expect(fixture.state.effectiveDmAllowlist).toEqual([]);
+    expect(fixture.state.pendingApprovals).toEqual([]);
+    expect(fixture.poke.mock.calls.map(([payload]) => payload.mark)).not.toContain(
+      "chat-block-ship",
+    );
+    expect(JSON.stringify(fixture.poke.mock.calls)).toContain(
+      decision === "approve" ? "No direct DM access was granted" : "No ship was blocked",
+    );
+  },
+);
 
 it("does not unblock a ship after owner authority changes during the blocked-list read", async () => {
   const fixture = createFixture([]);

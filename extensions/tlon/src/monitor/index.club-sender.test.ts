@@ -194,23 +194,26 @@ describe("monitorTlonProvider club (group DM) sender identity", () => {
       expect(context.extra.SenderRole).toBe("user");
       expect(context.extra.CommandAuthorized).toBe(false);
       inboundRuntimeMock.dispatch.mockClear();
+      await sendChat({ whom: "~bus", author: "~bus", text: "direct message", id: "~bus/direct" });
+      expect(inboundRuntimeMock.dispatch).not.toHaveBeenCalled();
+      expect(pokedTexts().join("")).toContain("New DM request from ");
       await sendChat({ whom: CLUB_ID, author: "~bus", text: "another message", id: "~bus/next" });
       expect(inboundRuntimeMock.dispatch).not.toHaveBeenCalled();
     });
   });
 
-  it("does not replay an approval after the owner changes during the settings write", async () => {
+  it("does not replay a direct DM approval after the owner changes during the settings write", async () => {
     startMonitorDefaults({
       pendingApprovals: [
         {
           id: "dm-pending",
           type: "dm",
           requestingShip: "~bus",
-          clubId: CLUB_ID,
+          verifiedDirect: true,
           timestamp: 1,
           originalMessage: {
             messageId: "~bus/pending",
-            messageText: "saved club message",
+            messageText: "saved direct message",
             messageContent: [],
             timestamp: 1,
           },

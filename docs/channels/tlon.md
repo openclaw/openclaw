@@ -225,7 +225,10 @@ messages never carry owner authority: owner commands, approval replies, and admi
 work in a 1:1 DM with the bot. `dmAllowlist` applies only to verified 1:1 DMs. Every group DM
 message requires explicit owner approval, even when its claimed author is on `dmAllowlist`.
 Approval can replay the saved message as an ordinary unverified sender; later group DM messages
-require another approval. Without an owner configured, group DM messages are dropped and logged.
+require another approval. Approving or blocking a group DM request does not change direct-DM
+access or block a ship, because the claimed author is unverified. A group DM claiming the owner
+has no saved text to replay; approving it only dismisses the request. Without an owner configured,
+group DM messages are dropped and logged.
 
 Pending DM requests saved by versions before this behavior cannot be told apart from group DM
 claims. Approving one still adds the ship to `dmAllowlist`, but its stored message is not

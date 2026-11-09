@@ -240,7 +240,9 @@ export function createTlonApprovalRuntime(params: {
     if (parsed.action === "approve") {
       switch (approval.type) {
         case "dm":
-          await addToDmAllowlist(approval.requestingShip);
+          if (approval.clubId === undefined) {
+            await addToDmAllowlist(approval.requestingShip);
+          }
           if (!ownerStillCurrent()) {
             return true;
           }
@@ -307,7 +309,9 @@ export function createTlonApprovalRuntime(params: {
           break;
       }
     } else if (parsed.action === "block") {
-      await setShipBlocked(approval.requestingShip, true);
+      if (approval.type !== "dm" || approval.clubId === undefined) {
+        await setShipBlocked(approval.requestingShip, true);
+      }
     }
     if (!ownerStillCurrent()) {
       return true;
