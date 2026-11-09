@@ -50,6 +50,8 @@ export function createNostrDurableCursor(options: { since: number; replayOverlap
       backfillComplete = true;
       return safeCandidate();
     },
+    /** Latest point an in-process replay may start from and still include every rejected event. */
+    transientReplayCeiling: (): number | undefined => transientReplayCeiling,
   };
 }
 
