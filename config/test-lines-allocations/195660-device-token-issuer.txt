@@ -1,0 +1,4 @@
+# Unit test for issueGatewayConnectDeviceTokens: a browser token issued over a QR/setup-code or
+# device-key pairing is bound to the live shared-auth generation (plus the three guard cases).
+# Exact net growth for PR #195660; no existing test covers the issuer choice in this path.
+55
