@@ -71,7 +71,6 @@
     var(--sidebar-rail-background)
   );
   --sidebar-rail-control-size: 36px;
-  --sidebar-rail-action-size: 30px;
   --sidebar-rail-glyph-size: 19px;
   --sidebar-rail-item-gap: 8px;
   flex: 0 0 var(--shell-nav-rail-width, 52px);
@@ -214,22 +213,16 @@
   }
 }
 
+/* The accent fill is the only thing that sets New session apart: it keeps the
+   rail's control size and 8px pitch so the column reads as one stack. */
 .sidebar-rail__create {
   display: flex;
   flex: 0 0 auto;
   justify-content: center;
   width: var(--sidebar-rail-control-size);
-  padding-bottom: 8px;
-  border-bottom: 1px solid var(--sidebar-rail-divider-color, var(--border));
 }
 
 .sidebar-rail__create .sidebar-new-session {
-  width: var(--sidebar-rail-action-size);
-  min-width: var(--sidebar-rail-action-size);
-  height: var(--sidebar-rail-action-size);
-  min-height: var(--sidebar-rail-action-size);
-  flex-basis: var(--sidebar-rail-action-size);
-  margin: calc((var(--sidebar-rail-control-size) - var(--sidebar-rail-action-size)) / 2);
   background: var(--sidebar-rail-action-bg);
   color: var(--sidebar-rail-action-foreground);
 }
@@ -439,9 +432,11 @@
   background: var(--surface-selected-hover);
 }
 
-/* Page links take the session rows' rhythm: 30px fill, 15px muted icon, 13px title. */
+/* Page links take the session rows' rhythm: 30px fill, 15px muted icon, 13px
+   title, and the same lead column (the 1px transparent border is part of the inset). */
 .sidebar-pages__entry .nav-item {
   min-height: var(--sidebar-session-row-floor, 30px);
+  padding-inline-start: calc(var(--sidebar-inset) + var(--sidebar-session-row-inset) - 1px);
   background: transparent;
   border-color: transparent;
 }
@@ -581,7 +576,6 @@ html.openclaw-native-web-chrome body .shell:not(.shell--mobile-nav) .sidebar-she
 /* One 40px step for every control; blocks add a fixed 8px beyond the step. */
 .shell--mobile-nav .sidebar-rail {
   --sidebar-rail-control-size: 36px;
-  --sidebar-rail-action-size: 30px;
   --sidebar-rail-item-gap: 4px;
   --sidebar-rail-block-gap: 8px;
   flex-basis: calc(48px + var(--shell-divider-size));
@@ -608,10 +602,7 @@ html.openclaw-native-web-chrome body .shell:not(.shell--mobile-nav) .sidebar-she
 
 .shell--mobile-nav .sidebar-rail__create {
   margin-block-end: calc(var(--sidebar-rail-block-gap) - var(--sidebar-rail-item-gap));
-  padding-bottom: calc(
-    var(--sidebar-rail-block-gap) -
-      (var(--sidebar-rail-control-size) - var(--sidebar-rail-action-size)) / 2
-  );
+  padding-bottom: var(--sidebar-rail-block-gap);
   border-bottom: var(--shell-divider-size) solid
     var(--sidebar-rail-divider-color, var(--resize-handle-rest-color));
 }
@@ -634,7 +625,6 @@ html.openclaw-native-web-chrome body .shell:not(.shell--mobile-nav) .sidebar-she
 @media (hover: none), (pointer: coarse) {
   .shell:not(.shell--mobile-nav) .sidebar-rail {
     --sidebar-rail-control-size: 38px;
-    --sidebar-rail-action-size: 38px;
     flex-basis: 52px;
   }
 
