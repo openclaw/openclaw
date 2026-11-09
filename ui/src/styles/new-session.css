@@ -244,13 +244,6 @@ html:is(.openclaw-native-macos, .openclaw-native-desktop) .new-session-page__inc
   }
 }
 
-/* Recent sessions share the composer column instead of floating as a
-   narrower list under it. */
-.new-session-page .agent-chat__recents {
-  width: calc(100% - var(--chat-composer-side-inset, 36px));
-  max-width: var(--chat-thread-max-width, 48rem);
-}
-
 /* Placement stays separate from the welcome identity. Shared pickers retain
    their own popup, selection, and disabled-state behavior. */
 .new-session-page__triggers {
@@ -277,43 +270,40 @@ span.new-session-page__select {
   align-items: center;
   min-width: 0;
   max-width: 100%;
-  /* The row's pill shape. The select wrappers and their triggers inherit it,
-     so a lone project chip and the bordered checkout pair paint the same
-     corners; the pair's segments square off their shared edge below. */
-  border-radius: var(--radius-full);
 }
 
+/* The bordered pair keeps the row's pill shape; its two triggers square off
+   the edge they share so the pair reads as one control. */
 .new-session-page__workspace--checkout {
   border: 1px solid var(--border);
+  border-radius: var(--radius-full);
 }
 
 .new-session-page__workspace > span.new-session-page__select {
   flex: 0 1 auto;
   min-width: 0;
-  border-radius: inherit;
 }
 
 /* Keep a short repository name readable even beside a very long branch. */
 .new-session-page__workspace--checkout > span.new-session-page__select:first-of-type {
   flex-shrink: 0;
   max-width: 65%;
+}
+
+.new-session-page__workspace--checkout #new-session-project-trigger {
   border-start-end-radius: 0;
   border-end-end-radius: 0;
 }
 
-.new-session-page__workspace--checkout > span.new-session-page__select:last-of-type {
-  border-start-start-radius: 0;
-  border-end-start-radius: 0;
-}
-
 .new-session-page__workspace--checkout #new-session-checkout-trigger {
   border-inline-start: 1px solid var(--border);
+  border-start-start-radius: 0;
+  border-end-start-radius: 0;
 }
 
 .new-session-page__workspace .new-session-page__trigger {
   min-width: 0;
   max-width: 100%;
-  border-radius: inherit;
 }
 
 .new-session-page__workspace .new-session-page__trigger-label {

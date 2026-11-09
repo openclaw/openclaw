@@ -262,9 +262,7 @@ suite.define(() => {
     await page.evaluate(() => document.fonts.ready);
     // A narrow chat pane; the second pass lets inherited text wrap, as a
     // theme or plugin stylesheet may, which must not squeeze the timestamp.
-    await page.addStyleTag({
-      content: ".new-session-page .agent-chat__recents { width: 320px; }",
-    });
+    await page.addStyleTag({ content: ".agent-chat__recents { width: 320px; }" });
     for (const textWrap of ["default", "inherited-wrap"] as const) {
       if (textWrap === "inherited-wrap") {
         await page.addStyleTag({

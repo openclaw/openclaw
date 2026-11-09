@@ -235,18 +235,17 @@ div.chat-thread:where(.chat-thread--annotations) {
      their default proportion of that column. */
   --chat-message-column-max: min(var(--chat-message-max-width, 100%), 900px, 68%);
   --chat-run-block-gap: 8px;
-  /* Equal insets: the user's reserved avatar column on the trailing side
-     mirrors the assistant's on the leading side, so both sit the same distance
-     inside the composer's edges. */
-  --chat-group-inset-start: 4px;
-  --chat-group-inset-end: 4px;
+  /* One inset on both sides: the user's reserved avatar column on the
+     trailing side mirrors the assistant's on the leading side, so both sit the
+     same distance inside the composer's edges. */
+  --chat-group-inset: 4px;
   display: flex;
   gap: var(--chat-avatar-gap);
   align-items: flex-start;
   margin-block: 0 var(--chat-turn-gap);
   /* Keep the row bounds fixed while identity adds its existing inner gutter. */
   margin-inline: 0;
-  padding-inline: var(--chat-group-inset-start) var(--chat-group-inset-end);
+  padding-inline: var(--chat-group-inset);
 }
 
 @media (hover: none),
@@ -260,7 +259,7 @@ div.chat-thread:where(.chat-thread--annotations) {
 
 /* Both sides share the content edge inside the trailing avatar gutter. */
 .chat-group:where(:not(.user), .chat-group--peer) {
-  padding-inline-end: calc(var(--chat-group-inset-end) + var(--chat-avatar-gutter));
+  padding-inline-end: calc(var(--chat-group-inset) + var(--chat-avatar-gutter));
 }
 
 .chat-group.user {
@@ -350,8 +349,7 @@ div.chat-thread:where(.chat-thread--annotations) {
 .chat-thread--direct .chat-group {
   --chat-avatar-column: 0px;
   --chat-avatar-gap: 0px;
-  --chat-group-inset-start: 0px;
-  --chat-group-inset-end: 0px;
+  --chat-group-inset: 0px;
 }
 
 @media (max-width: 768px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
@@ -359,8 +357,7 @@ div.chat-thread:where(.chat-thread--annotations) {
     --chat-avatar-column: 0px;
     --chat-avatar-gap: 0px;
     --chat-message-column-max: 82%;
-    --chat-group-inset-start: 0px;
-    --chat-group-inset-end: 0px;
+    --chat-group-inset: 0px;
   }
 
   .chat-group :is(.chat-avatar, .chat-avatar-slot) {

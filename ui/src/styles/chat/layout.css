@@ -2574,7 +2574,7 @@ openclaw-chat-ci-details {
 }
 
 .chat-pr__publication-status > summary:focus-visible {
-  border-radius: var(--radius-sm);
+  border-radius: 4px;
   outline: none;
   box-shadow: var(--focus-ring);
 }

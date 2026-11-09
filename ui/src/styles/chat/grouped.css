@@ -110,7 +110,7 @@
 .chat-group.tool {
   --chat-message-column-max: var(--chat-message-max-width, min(980px, 100%));
   display: block;
-  padding-inline-start: calc(var(--chat-group-inset-start) + var(--chat-avatar-gutter));
+  padding-inline-start: calc(var(--chat-group-inset) + var(--chat-avatar-gutter));
 }
 
 /* Tool activity, completed work and live narration are blocks inside a turn,
