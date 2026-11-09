@@ -1,0 +1,2 @@
+# Real CLI/WebSocket regression: interrupt reads without losing generation receipts.
+112
