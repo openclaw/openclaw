@@ -526,9 +526,9 @@ export function createSessionShareCatalog(api: OpenClawPluginApi): SessionCatalo
       let nodes: CatalogNode[];
       try {
         nodes = (await (query.listNodes?.() ?? api.runtime.nodes.list())).nodes;
-      } catch {
+      } catch (error) {
         query.signal?.throwIfAborted();
-        return [];
+        throw error;
       }
       query.signal?.throwIfAborted();
       if (api.runtime.config.current() !== config) {

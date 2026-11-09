@@ -122,6 +122,19 @@ async function catalogFixture() {
 }
 
 describe("session-share receiver catalog", () => {
+  it("reports runtime discovery failure and recovers", async () => {
+    const fixture = await catalogFixture();
+    const failure = new Error("Paired node inventory is unavailable. Reconnect and retry.");
+    fixture.list.mockRejectedValueOnce(failure);
+    await expect(fixture.catalog.list({})).rejects.toBe(failure);
+    expect(fixture.invoke).not.toHaveBeenCalled();
+
+    await fixture.hydrate();
+    expect((await fixture.catalog.list({}))[0]?.sessions).toEqual([nativeSession]);
+    fixture.list.mockResolvedValueOnce({ nodes: [] });
+    expect(await fixture.catalog.list({})).toEqual([]);
+  });
+
   it("bounds requested-node admission and refresh concurrency without interrupting admitted work", async () => {
     const fixture = await catalogFixture();
     fixture.list.mockResolvedValue({
@@ -415,20 +428,27 @@ describe("session-share receiver catalog", () => {
     expect(onHost).toHaveBeenCalledTimes(1);
   });
 
-  it("does not start catalog work after cancellation during node discovery", async () => {
-    const fixture = await catalogFixture();
-    const gate = createDeferred<Awaited<ReturnType<PluginRuntime["nodes"]["list"]>>>();
-    const controller = new AbortController();
-    const listing = fixture.catalog.list({
-      signal: controller.signal,
-      listNodes: () => gate.promise,
-    });
-    const reason = new Error("viewer retired");
-    controller.abort(reason);
-    gate.resolve({ nodes: [] });
-    await expect(listing).rejects.toBe(reason);
-    expect(fixture.invoke).not.toHaveBeenCalled();
-  });
+  it.each(["resolve", "reject"])(
+    "does not start catalog work after cancellation during node discovery (%s)",
+    async (settlement) => {
+      const fixture = await catalogFixture();
+      const gate = createDeferred<Awaited<ReturnType<PluginRuntime["nodes"]["list"]>>>();
+      const controller = new AbortController();
+      const listing = fixture.catalog.list({
+        signal: controller.signal,
+        listNodes: () => gate.promise,
+      });
+      const reason = new Error("viewer retired");
+      controller.abort(reason);
+      if (settlement === "resolve") {
+        gate.resolve({ nodes: [] });
+      } else {
+        gate.reject(new Error("Node discovery failed after cancellation"));
+      }
+      await expect(listing).rejects.toBe(reason);
+      expect(fixture.invoke).not.toHaveBeenCalled();
+    },
+  );
 
   it.each([false, undefined])(
     "preserves slow refresh dispatch attribution (%s) with rate-limited private-safe logs",
