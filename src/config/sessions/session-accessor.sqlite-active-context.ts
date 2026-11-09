@@ -2,12 +2,17 @@ import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { sql } from "kysely";
 import { BACKGROUND_RESULT_PLACEMENT_CUSTOM_TYPE } from "../../../packages/agent-core/src/harness/session/background-result-placement.js";
-import { jsonArrayElements, jsonPathValue } from "../../infra/database-engine/json-values.js";
+import {
+  jsonArrayElements,
+  jsonNativeFieldsValid,
+  jsonPathValue,
+} from "../../infra/database-engine/json-values.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   iterateSqliteQuerySync,
 } from "../../infra/kysely-sync.js";
+import { isPostgresSqlConnection } from "../../infra/sql-connection.js";
 import { currentSqliteOperationTiming } from "../../infra/sqlite-reader-lifecycle.js";
 import { withCurrentProjectionSnapshot } from "./session-accessor.sqlite-active-projection.js";
 import type {
@@ -455,13 +460,20 @@ export function readSessionTranscriptBoundedActiveContextCore(
         truncated = true;
       }
     }
-    const dependencyField = <T = string | null>(path: string) =>
-      jsonPathValue<T>(
-        projection.database.db,
-        /* kysely-allow-raw: fixed materialized navigation column shared by dependency predicates. */
-        sql.ref("dependency.navigation_json"),
-        sql.val(path),
+    const dependencyNavigation =
+      /* kysely-allow-raw: fixed materialized navigation column shared by dependency predicates. */ sql.ref<string>(
+        "dependency.navigation_json",
       );
+    // PostgreSQL rows JSONB cannot decode reach the JavaScript classifier below unfiltered;
+    // SQLite decodes these escapes natively and keeps its covered-fact plan.
+    const postgres = isPostgresSqlConnection(projection.database.db);
+    const dependencyNative = jsonNativeFieldsValid(projection.database.db, dependencyNavigation);
+    const dependencyField = <T = string | null>(path: string) => {
+      const value = jsonPathValue<T>(projection.database.db, dependencyNavigation, sql.val(path));
+      return postgres
+        ? /* kysely-allow-raw: CASE fences native decoding of escapes JSONB rejects. */ sql<T>`CASE WHEN ${dependencyNative} THEN ${value} END`
+        : value;
+    };
     const dependencyCandidates = Array.from(
       iterateSqliteQuerySync(
         projection.database.db,
@@ -510,6 +522,7 @@ export function readSessionTranscriptBoundedActiveContextCore(
           .select(["event_seq", "navigation_json", "serialized_bytes"])
           .where((eb) =>
             eb.or([
+              ...(postgres ? [eb.not(dependencyNative)] : []),
               eb.and([
                 eb("context_eligible", "=", 0),
                 eb(

@@ -5,6 +5,8 @@ import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { i18n } from "../../i18n/index.ts";
+import { createAgentIdentityCapability } from "../../lib/agents/identity.ts";
+import { createAgentCapability } from "../../lib/agents/index.ts";
 import type { SessionListOptions, SessionListSnapshot } from "../../lib/sessions/index.ts";
 import {
   createTestSessionCapability,
@@ -31,11 +33,13 @@ function pageContext(overrides: {
   gateway?: ApplicationContext["gateway"];
   agentSelection?: Partial<ApplicationContext["agentSelection"]>;
 }): ApplicationContext {
+  const gateway = overrides.gateway ?? createApplicationGateway().gateway;
   return {
     basePath: "",
-    gateway: createApplicationGateway().gateway,
+    gateway,
     agentSelection: { state: { selectedId: "main", scopeId: null }, subscribe: () => () => {} },
-    agents: { state: { agentsList: null } },
+    agents: createAgentCapability(gateway),
+    agentIdentity: createAgentIdentityCapability(gateway),
     sessions: { listSnapshot: () => snapshot(null), subscribeList: () => () => {} },
     ...overrides,
   } as ApplicationContext;
@@ -312,7 +316,7 @@ it("renders the route host and filters by search and author and sorts cards by t
   const [authorSelect, sortSelect] = element.querySelectorAll<HTMLSelectElement>("select");
   changeValue(authorSelect!, "mira");
   expect(cardTitles(element)).toEqual(["Alpha signals"]);
-  expect(element.textContent).toContain("By Mira");
+  expect(element.querySelector(".dashboard-card__author")?.textContent).toContain("Mira");
 
   changeValue(authorSelect!, "", false);
   changeValue(sortSelect!, "title");

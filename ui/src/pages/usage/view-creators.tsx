@@ -3,12 +3,14 @@ import type {
   SessionUsageCreator,
   SessionsUsageAggregates,
 } from "../../../../src/shared/usage-types.js";
+import type { OverlayPlacement } from "../../components/overlay-anchor.ts";
+import { Icon } from "../../components/solid/icon.tsx";
 import { SessionOwnerChip } from "../../components/solid/session-owner-chip.tsx";
-import { SettingsSelect } from "../../components/solid/settings-select.tsx";
 import { SettingsSection } from "../../components/solid/settings-ui.tsx";
 import { presenceViewerLabel } from "../../lib/presence-users.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { formatUsageCost, formatUsageTokens } from "./metrics.ts";
+import { UsageValuePicker, type UsageValueOption } from "./view-value-picker.tsx";
 
 type UsageCreatorGroup = NonNullable<SessionsUsageAggregates["byCreator"]>[number];
 
@@ -59,15 +61,38 @@ function creatorLabel({ key, actor }: SessionUsageCreator): string {
     : name;
 }
 
+/** Whether a creator is the signed-in viewer, by profile identity or human actor id. */
+function isViewerCreator(creator: SessionUsageCreator, viewerId: string | null | undefined) {
+  if (!viewerId || !creator.actor) {
+    return false;
+  }
+  const identity = creator.actor.identity;
+  return identity?.type === "profile"
+    ? identity.id === viewerId
+    : creator.actor.type === "human" && creator.actor.id === viewerId;
+}
+
 export function UsageCreatorFilter(props: {
   options: readonly SessionUsageCreator[];
   selectedKey: string | null;
+  viewerId?: string | null;
+  placement?: OverlayPlacement;
   onSelect: (key: string | null) => void;
 }) {
-  const options = createMemo(() => {
-    const entries = props.options
-      .toSorted((a, b) => creatorLabel(a).localeCompare(creatorLabel(b)))
-      .map((creator) => ({ value: creator.key, label: creatorLabel(creator) }));
+  const options = createMemo((): UsageValueOption[] => {
+    const entries = props.options.map((creator): UsageValueOption => {
+      const viewer = isViewerCreator(creator, props.viewerId);
+      return {
+        value: creator.key,
+        label: viewer ? t("usage.creators.you") : creatorLabel(creator),
+        secondary: viewer ? creatorLabel(creator) : undefined,
+        count: creator.sessionCount,
+        pinned: viewer,
+        leading: creator.actor?.id ? (
+          <SessionOwnerChip owner={creator.actor} size="row" />
+        ) : undefined,
+      };
+    });
     // Keep the active filter explicit when this range has no creator metadata.
     if (
       props.selectedKey !== null &&
@@ -75,16 +100,32 @@ export function UsageCreatorFilter(props: {
     ) {
       entries.push({ value: props.selectedKey, label: t("usage.creators.selected") });
     }
-
-    return [{ value: "", label: t("usage.creators.all") }, ...entries];
+    return entries;
   });
+  const selectedLabel = () =>
+    props.selectedKey === null
+      ? t("usage.creators.all")
+      : (options().find((option) => option.value === props.selectedKey)?.label ??
+        t("usage.creators.selected"));
   return (
-    <SettingsSelect
-      class="usage-select usage-creator-filter"
-      aria-label={t("usage.creators.select")}
-      value={props.selectedKey ?? ""}
-      options={options()}
-      onChange={(event) => props.onSelect(event.currentTarget.value || null)}
+    <UsageValuePicker
+      id="creator"
+      label={t("usage.creators.select")}
+      class="usage-creator-filter"
+      triggerClass="usage-select usage-creator-trigger"
+      placement={props.placement}
+      multiple={false}
+      options={options}
+      isSelected={(value) => value === props.selectedKey}
+      searchLabel={() => t("usage.filters.search.creator")}
+      onToggle={(value) => props.onSelect(value === props.selectedKey ? null : value)}
+      onClear={() => props.onSelect(null)}
+      trigger={
+        <>
+          <span class="usage-creator-trigger__label">{selectedLabel()}</span>
+          <Icon name="chevronDown" />
+        </>
+      }
     />
   );
 }

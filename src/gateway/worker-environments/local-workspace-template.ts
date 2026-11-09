@@ -267,7 +267,7 @@ export async function prepareLocalWorkspaceTemplate(params: LocalWorkspaceTempla
       ),
     validate: (existing, templateOptions) =>
       validateTemplate(existing.path, existing.sourceCommit, templateOptions),
-    refresh: async (existing, templateOptions) => {
+    refresh: async (existing, preparing, templateOptions) => {
       // Retain exact commit identity: lifecycle scripts and local packages can consume
       // any source file. Reinstall after advancing; only the full checkout is skipped.
       const changed = await runGit(
@@ -287,7 +287,8 @@ export async function prepareLocalWorkspaceTemplate(params: LocalWorkspaceTempla
       if (changed.code !== 0 || changed.termination !== "exit") {
         return false;
       }
-      await prepare(existing.path, templateOptions, existing.sourceCommit);
+      await backend.cloneTemplate(existing.path, preparing.path, templateOptions);
+      await prepare(preparing.path, templateOptions, existing.sourceCommit);
       return true;
     },
     prepare: (preparing, templateOptions) => prepare(preparing.path, templateOptions),
