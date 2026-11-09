@@ -804,7 +804,12 @@ openclaw-pending-session-create {
 
 .chat-scroll-to-bottom {
   position: absolute;
-  bottom: calc(var(--chat-scroll-to-bottom-gap) + var(--chat-scroll-to-bottom-clearance, 0px));
+  /* Activity clearance is measured from the transcript's bottom edge, which
+     already lies below the composer's overlapping top. */
+  bottom: calc(
+    var(--chat-scroll-to-bottom-gap) +
+      max(var(--chat-composer-overlap, 0px), var(--chat-scroll-to-bottom-clearance, 0px))
+  );
   left: 50%;
   display: inline-flex;
   align-items: center;
