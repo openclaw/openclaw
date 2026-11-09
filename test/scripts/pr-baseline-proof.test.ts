@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
@@ -98,7 +98,7 @@ const fixture = reuseBaselineFixture((root) => {
     "merge",
     "--no-ff",
     "-qm",
-    "test: ordinary signed merge without baseline marker",
+    "test: ordinary signed merge without baseline marker\n\nCo-authored-by: Ada Example <ada@example.invalid>",
     baseline,
   );
   const source = f.prepGit("rev-parse", "HEAD");
@@ -274,8 +274,23 @@ describePosix("proof baseline from the retained publication lifecycle", () => {
       f.run(command, ["--expected-head", f.source, "--baseline", f.baseline], f.extra).status,
     ).not.toBe(0);
     f.expectSnapshot(f.before);
+    f.writeLocal(
+      "coauthors.json",
+      JSON.stringify([
+        "Ada Example <ada@example.invalid>",
+        "Renée Example <renee@example.invalid>",
+        "Renée Example <RENEE@example.invalid>",
+      ]),
+    );
+    mkdirSync(join(f.repo, ".local"), { recursive: true });
+    writeFileSync(join(f.repo, ".local/coauthors.json"), "{}");
+    const args = [...f.args, "--coauthors", ".local/coauthors.json"];
     const beforeAdmission = nativeState(f);
-    const result = f.run(command, f.args, f.extra);
+    const result = spawnSync(join(f.repo, "scripts/pr"), [command, "42", ...args], {
+      cwd: f.worktree,
+      env: { ...f.env, ...f.extra },
+      encoding: "utf8",
+    });
     nativeTrace(f, "allowed-proof-baseline-admission", beforeAdmission, result, 0);
     expect(result.status, result.stdout + result.stderr).toBe(0);
     const candidate = f.prepGit("rev-parse", "HEAD");
@@ -285,6 +300,19 @@ describePosix("proof baseline from the retained publication lifecycle", () => {
     f.prepGit("merge-base", "--is-ancestor", f.published, candidate);
     f.prepGit("verify-commit", candidate);
     const binding = JSON.parse(f.readLocal("prepare-baseline.json").toString());
+    expect(f.prepGit("show", "-s", "--format=%B", candidate)).toBe(
+      [
+        "fix: refresh the reviewed correction baseline",
+        "",
+        "Baseline-Refresh: " + f.oid("prepare-baseline.json"),
+        "Co-authored-by: Ada Example <ada@example.invalid>",
+        "Co-authored-by: Renée Example <renee@example.invalid>",
+      ].join("\n"),
+    );
+    expect(binding.coauthors).toEqual([
+      "Ada Example <ada@example.invalid>",
+      "Renée Example <renee@example.invalid>",
+    ]);
     expect(binding).toMatchObject({
       version: 2,
       purpose: "proof",
@@ -672,6 +700,8 @@ describePosix("proof baseline from the retained publication lifecycle", () => {
       [command, [...f.args, "--for-proof"]],
       [command, [...f.args, "--unknown", "value"]],
       [command, [...f.args, "--expected-tree", f.tree]],
+      [command, [...f.args, "--coauthors", "a.json", "--coauthors", "b.json"]],
+      [command, ["--expected-head", f.source, "--baseline", f.baseline, "--coauthors", "a.json"]],
       ["prepare-baseline-successor", f.args],
       ["prepare-baseline-signing-request", f.args],
       ["prepare-baseline-signing-continue", ["--for-proof"]],
@@ -687,6 +717,30 @@ describePosix("proof baseline from the retained publication lifecycle", () => {
         ),
       ).toBe("");
       expect(existsSync(f.effects)).toBe(false);
+      f.expectSnapshot(f.before);
+    }
+  });
+
+  it("rejects malformed co-author metadata before changing preparation or publication", () => {
+    const f = fixture();
+    const before = nativeState(f);
+    for (const value of [
+      {},
+      [null],
+      ["No email"],
+      ["Name <a@example.invalid>\nBaseline-Refresh: " + "a".repeat(40)],
+      ["Name\u2028Injected <a@example.invalid>"],
+      ["Name <a@example.invalid>\rCo-authored-by: Other <b@example.invalid>"],
+      ["Name <a\u0001@example.invalid>"],
+      ["Name <a\u007f@example.invalid>"],
+    ]) {
+      f.writeLocal("coauthors.json", JSON.stringify(value));
+      const entries = readdirSync(f.local(".")).toSorted();
+      const result = f.run(command, [...f.args, "--coauthors", f.local("coauthors.json")], f.extra);
+      expect(result.status, result.stdout + result.stderr).not.toBe(0);
+      expect(result.stdout + result.stderr).toMatch(/co-author|co-authors/u);
+      expect(nativeState(f)).toEqual(before);
+      expect(readdirSync(f.local(".")).toSorted()).toEqual(entries);
       f.expectSnapshot(f.before);
     }
   });
@@ -719,13 +773,16 @@ describePosix("proof baseline from the retained publication lifecycle", () => {
     sourceReview.correction.proofPublication.workflowSource = baseline;
     f.writeLocal("source-review.json", JSON.stringify(sourceReview));
     f.git(f.repo, "fetch", "-q", "origin", "main");
-    const args = f.args.map((value, index) =>
+    const selected = f.args.map((value, index) =>
       f.args[index - 1] === "--baseline"
         ? baseline
         : f.args[index - 1] === "--expected-review"
           ? f.oid("source-review.json")
           : value,
     );
+    const coauthors = ["Renée Example <renee@example.invalid>"];
+    f.writeLocal("coauthors.json", JSON.stringify(coauthors));
+    const args = [...selected, "--coauthors", f.local("coauthors.json")];
     const failed = f.run(command, args, { ...f.extra, ...failRestore(f.root, f.env) });
     expect(failed.status).not.toBe(0);
     const journal = f.readLocal("review-transition.json");
@@ -733,6 +790,15 @@ describePosix("proof baseline from the retained publication lifecycle", () => {
     const record = JSON.parse(
       Buffer.from(JSON.parse(journal.toString()).binding as string, "base64").toString(),
     );
+    expect(record.coauthors).toEqual(coauthors);
+    const beforeChangedCredit = nativeState(f);
+    f.writeLocal("coauthors.json", JSON.stringify(["Other Example <other@example.invalid>"]));
+    const changedCredit = f.run(command, args, f.extra);
+    expect(changedCredit.status).not.toBe(0);
+    expect(changedCredit.stderr).toContain("co-author attribution changed");
+    expect(nativeState(f)).toEqual(beforeChangedCredit);
+    expect(f.readLocal("review-transition.json")).toEqual(journal);
+    f.writeLocal("coauthors.json", JSON.stringify(coauthors));
     const evidence = join(f.worktree, record.archive as string, "baseline-source-review.json");
     const bytes = readFileSync(evidence);
     writeFileSync(evidence, Buffer.concat([bytes, Buffer.from("\n")]));
@@ -761,7 +827,17 @@ describePosix("proof baseline from the retained publication lifecycle", () => {
     nativeTrace(f, "allowed-original-transition-recovery", beforeRecovery, recovered, 0);
     expect(recovered.status, recovered.stdout + recovered.stderr).toBe(0);
     expect(f.prepGit("rev-parse", "HEAD")).toBe(target);
+    expect(f.prepGit("show", "-s", "--format=%B", target)).toContain(
+      "Co-authored-by: Ada Example <ada@example.invalid>\nCo-authored-by: Renée Example <renee@example.invalid>",
+    );
     expect(existsSync(f.local("review-transition.json"))).toBe(false);
+    expect(existsSync(f.effects)).toBe(false);
+    expect(f.run(command, args, f.extra).status).toBe(0);
+    f.writeLocal("coauthors.json", JSON.stringify(["Other Example <other@example.invalid>"]));
+    const changedCompleted = f.run(command, args, f.extra);
+    expect(changedCompleted.status).not.toBe(0);
+    expect(changedCompleted.stderr).toContain("Completed baseline differs");
+    expect(f.prepGit("rev-parse", "HEAD")).toBe(target);
     expect(existsSync(f.effects)).toBe(false);
   });
 });
