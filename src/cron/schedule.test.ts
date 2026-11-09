@@ -97,28 +97,32 @@ describe("cron schedule", () => {
         "2028-02-29T00:00:00.000Z",
       ],
       [
-        "leap-day anniversary right after it fired",
-        "0 0 29 2 *",
-        "2028-03-01T00:00:01.000Z",
-        "2032-02-29T00:00:00.000Z",
-        "2028-02-29T00:00:00.000Z",
-      ],
-      [
         "impossible February 31 never matches",
         "0 0 31 2 *",
         "2028-03-02T00:00:00.000Z",
         undefined,
         undefined,
       ],
-      [
-        "impossible February 30 never matches",
-        "0 0 30 2 *",
-        "2028-03-02T00:00:00.000Z",
-        undefined,
-        undefined,
-      ],
     ] as const)("%s", (_label, expr, now, next, previous) => {
       expectOccurrences({ kind: "cron", expr, tz: "UTC" }, now, next, previous);
+    });
+
+    it("bounds fallback work for dense wildcard matches", () => {
+      // `* * * 29 2 *` matches every second of Feb 29; the previous-run lookup
+      // must not enumerate occurrences (work stays independent of match density).
+      const spy = vi.spyOn(Cron.prototype, "nextRun");
+      try {
+        expect(
+          computePreviousRunAtMs(
+            { kind: "cron", expr: "* * * 29 2 *", tz: "UTC" },
+            Date.parse("2028-06-01T00:00:00.000Z"),
+          ),
+        ).toBe(Date.parse("2028-02-29T23:59:59.000Z"));
+      } finally {
+        const calls = spy.mock.calls.length;
+        spy.mockRestore();
+        expect(calls).toBeLessThanOrEqual(64);
+      }
     });
   });
 

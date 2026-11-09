@@ -12,8 +12,6 @@ const CRON_EVAL_CACHE_MAX = 512;
 const DAY_MS = 86_400_000;
 // Croner patterns default to a 1970 start year; probing earlier cannot yield runs.
 const CRON_PROBE_FLOOR_MS = Date.UTC(1970, 0, 1);
-// Exceeds any calendar year so at-most-yearly patterns cannot match twice between probes.
-const CRON_PROBE_STEP_MS = 400 * DAY_MS;
 const cronEvalCache = new Map<string, Cron>();
 const cronTimezoneFormatters = new WeakMap<Cron, Intl.DateTimeFormat>();
 
@@ -289,36 +287,39 @@ export function computeNextRunAtMs(schedule: CronSchedule, nowMs: number): numbe
  * Croner 10.x recurseBackward throws `TypeError` when the decrement crosses a
  * month shorter than the pattern's day-of-month (e.g. `0 0 29 2 *` walking back
  * across non-leap February, or impossible `0 0 31 2 *`). nextRun resolves the
- * same expressions, so probe backward in year-sized steps and walk forward from
- * the first hit; patterns that reach this path match at most once per year, so
- * the walk stays bounded by the 1970..now probe count.
+ * same expressions, so binary-search the latest instant whose next run is still
+ * before refMs: nextRun is monotone non-decreasing, and the search needs at most
+ * log2(refMs - floor) probes regardless of how densely the expression matches
+ * (a forward walk from the first hit would enumerate every dense occurrence,
+ * e.g. every second of Feb 29 for `* * * 29 2 *`).
  */
-function previousRunBeforeMsByForwardWalk(cron: Cron, refMs: number): number | undefined {
-  let probeMs = Math.max(CRON_PROBE_FLOOR_MS, refMs - CRON_PROBE_STEP_MS);
-  for (;;) {
-    const first = cron.nextRun(new Date(probeMs))?.getTime();
-    if (first !== undefined && first < refMs) {
-      let previous = first;
-      for (;;) {
-        const next = cron.nextRun(new Date(previous))?.getTime();
-        if (next === undefined || next >= refMs) {
-          return previous;
-        }
-        previous = next;
-      }
-    }
-    if (probeMs <= CRON_PROBE_FLOOR_MS) {
-      return undefined;
-    }
-    probeMs = Math.max(CRON_PROBE_FLOOR_MS, probeMs - CRON_PROBE_STEP_MS);
+function previousRunBeforeMsByNextRunProbe(cron: Cron, refMs: number): number | undefined {
+  const floorMs = Math.min(CRON_PROBE_FLOOR_MS, refMs);
+  const nextAfter = (instantMs: number) => cron.nextRun(new Date(instantMs))?.getTime();
+  const firstMs = nextAfter(floorMs);
+  // No run in (floorMs, refMs) at all: probing earlier cannot change the answer.
+  if (firstMs === undefined || firstMs >= refMs) {
+    return undefined;
   }
+  let lowMs = floorMs; // invariant: nextAfter(lowMs) < refMs
+  let highMs = refMs; // invariant: nextAfter(highMs) >= refMs
+  while (highMs - lowMs > 1) {
+    const midMs = lowMs + Math.floor((highMs - lowMs) / 2);
+    const nextMs = nextAfter(midMs);
+    if (nextMs !== undefined && nextMs < refMs) {
+      lowMs = midMs;
+    } else {
+      highMs = midMs;
+    }
+  }
+  return nextAfter(lowMs);
 }
 
 function previousRunBeforeMs(cron: Cron, refMs: number): number | undefined {
   try {
     return cron.previousRuns(1, new Date(refMs))[0]?.getTime();
   } catch {
-    return previousRunBeforeMsByForwardWalk(cron, refMs);
+    return previousRunBeforeMsByNextRunProbe(cron, refMs);
   }
 }
 
