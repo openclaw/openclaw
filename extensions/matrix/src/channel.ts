@@ -33,6 +33,7 @@ import {
   createLazyRuntimeNamedExport,
   createLazyRuntimeModule,
 } from "openclaw/plugin-sdk/lazy-runtime";
+import { chunkMarkdownText } from "openclaw/plugin-sdk/reply-runtime";
 import {
   buildProbeChannelStatusSummary,
   collectStatusIssuesFromLastError,
@@ -43,10 +44,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import {
-  chunkTextForOutbound,
-  sanitizeAssistantVisibleText,
-} from "openclaw/plugin-sdk/text-chunking";
+import { sanitizeAssistantVisibleText } from "openclaw/plugin-sdk/text-chunking";
 import { matrixMessageActions } from "./actions.js";
 import { matrixApprovalCapability } from "./approval-native.js";
 import { matrixPluginBase } from "./channel.setup.js";
@@ -288,7 +286,7 @@ function matchesMatrixToolContextRoom(params: {
 
 const matrixChannelOutbound: ChannelOutboundAdapter = {
   deliveryMode: "direct",
-  chunker: chunkTextForOutbound,
+  chunker: chunkMarkdownText,
   chunkerMode: "markdown",
   textChunkLimit: 4000,
   sanitizeText: ({ text }) => sanitizeAssistantVisibleText(text),
