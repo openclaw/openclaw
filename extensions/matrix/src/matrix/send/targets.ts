@@ -87,17 +87,17 @@ async function resolveDirectRoomId(
   // A failed homeserver read is not a missing mapping: keep the operator pointed at the real cause.
   if (inspection.directReadError) {
     throw new Error(
-      `Could not read m.direct for ${trimmed} from the homeserver: ${describeMatrixReadError(inspection.directReadError)}`,
+      `Could not read m.direct for ${trimmed} from the homeserver: ${describeMatrixReadError(inspection.directReadError)}. Retry after homeserver access recovers.`,
     );
   }
   if (inspection.joinedRoomsReadError) {
     throw new Error(
-      `Could not read joined rooms for ${trimmed} from the homeserver: ${describeMatrixReadError(inspection.joinedRoomsReadError)}`,
+      `Could not read joined rooms for ${trimmed} from the homeserver: ${describeMatrixReadError(inspection.joinedRoomsReadError)}. Retry after homeserver access recovers.`,
     );
   }
   if (inspection.mappedRoomIds.length > 0) {
     throw new Error(
-      `No direct room found for ${trimmed} (${inspection.mappedRoomIds.length} mapped room(s) could not be verified as direct)`,
+      `No direct room found for ${trimmed} (${inspection.mappedRoomIds.length} mapped room(s) could not be verified as direct). Run \`openclaw matrix direct inspect --user-id ${trimmed}\` to review the mapping.`,
     );
   }
 

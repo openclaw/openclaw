@@ -1,0 +1,3 @@
+# Matrix direct-room diagnostics: regression coverage for an unreadable m.direct account, an
+# unreadable joined-room list, and a mapped room that cannot be verified (PR #196020).
+30

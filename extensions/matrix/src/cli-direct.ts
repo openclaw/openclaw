@@ -12,7 +12,7 @@ import type { CoreConfig } from "./types.js";
 type MatrixCliDirectRoomCandidate = Omit<MatrixDirectRoomCandidate, "explicit">;
 type MatrixCliDirectRoomInspection = Omit<
   Awaited<ReturnType<typeof inspectMatrixDirectRooms>>,
-  "mappedRooms"
+  "mappedRooms" | "directReadError" | "joinedRoomsReadError"
 > & {
   accountId: string;
   mappedRooms: MatrixCliDirectRoomCandidate[];
