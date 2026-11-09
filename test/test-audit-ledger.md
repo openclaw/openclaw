@@ -477,7 +477,12 @@ without inventory, rejecting before any repository read. It now sends valid
 inventory and requires the existing snapshot to remain byte-identical.
 The named-shard timing test is renamed to describe its duration roundtrip;
 unused persisted metadata fields are not restored as incidental assertions.
-Runtime and mutation qualification remain pending in this source checkpoint.
+All four suites passed on the original and repaired tests (34 cases) under
+Node 26.13.0 on macOS. A deliberate owner mutation that ignored the configured
+repository root passed the original control and failed the repaired snapshot
+assertion. Production and test bytes were restored after the mutation.
+The baseline took 28.67 seconds and the candidate 22.67 seconds wall time;
+these single runs establish correctness, not a performance improvement.
 
 ## Pending qualification and proof repairs
 
