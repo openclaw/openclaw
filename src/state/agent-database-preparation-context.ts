@@ -1,6 +1,5 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeAgentId } from "../routing/session-key.js";
-import { normalizeSessionKeyPreservingOpaquePeerIds } from "../sessions/session-key-utils.js";
 import { AsyncContext } from "../shared/async-context.js";
 import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 
@@ -121,12 +120,13 @@ export function waitForAgentInputAdmission(
     });
   };
   return (async () => {
-    let sessionKey = options.sessionKey
-      ? normalizeSessionKeyPreservingOpaquePeerIds(options.sessionKey)
-      : undefined;
-    if (sessionKey && options.cfg) {
-      const { canonicalizeMainSessionAlias } = await import("../config/sessions/main-session.js");
-      sessionKey = canonicalizeMainSessionAlias({ cfg: options.cfg, agentId, sessionKey });
+    let sessionKey = options.sessionKey;
+    if (sessionKey) {
+      const { resolveSessionStoreKey, canonicalizeSessionKeyForAgent } =
+        await import("../gateway/session-store-key.js");
+      sessionKey = options.cfg
+        ? resolveSessionStoreKey({ cfg: options.cfg, storeAgentId: agentId, sessionKey })
+        : canonicalizeSessionKeyForAgent(agentId, sessionKey);
     }
     await owner.waitForAgentPreparation(agentId, { env: options.env, signal, forWrite: true });
     if (!owner.hasPendingAgents || (!options.storePath && !options.cfg?.session?.store)) {

@@ -150,11 +150,12 @@ it("serves startup reads and unrelated turns while a resumed session retains inp
   }
   const send = (sessionKey: string, message: string) =>
     gateway!.client.request<{ runId: string }>("chat.send", {
+      agentId: "main",
       sessionKey,
       message,
       idempotencyKey: message,
     });
-  const fresh = send(resumeKey, "FRESH_DURING_RESUME");
+  const fresh = send("startup-resuming", "FRESH_DURING_RESUME");
   void fresh.catch(() => {});
   stage = "unrelated acceptance";
   const healthy = await send(healthyKey, "HEALTHY_DURING_RESUME");
