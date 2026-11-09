@@ -8,7 +8,11 @@ import {
   installMockGateway,
 } from "./chat-flow.test-support.ts";
 import { selectAllSidebarSessions } from "./sidebar-navigation.test-support.ts";
-import { chooseSidebarOwner, closeSidebarMenu } from "./sidebar-session-menu.test-support.ts";
+import {
+  chooseSidebarOwner,
+  closeSidebarMenu,
+  seedSidebarOwnerFilter,
+} from "./sidebar-session-menu.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
 
@@ -65,6 +69,7 @@ suite.define(() => {
             },
           },
         });
+        await seedSidebarOwnerFilter(page, suite.server.baseUrl, "viewer", "involving-me");
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, selected));
         await expectBrowser(page.locator(".agent-chat__composer-combobox textarea")).toBeVisible();
         const sidebar = page.locator("openclaw-app-sidebar");

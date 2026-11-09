@@ -2,6 +2,7 @@ import { setImmediate as nextTurn } from "node:timers/promises";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { GatewaySessionRow, SessionsListResult } from "../api/types.ts";
+import { storeSidebarSessionOwnerFilter } from "../components/app-sidebar-session-types.ts";
 import {
   createTestSessionCapability,
   sessionsResult,
@@ -12,7 +13,6 @@ import {
   createSidebarElement,
   TWO_AGENTS,
 } from "./app-sidebar.ts";
-import { storeSidebarSessionOwnerFilter } from "../components/app-sidebar-session-types.ts";
 import { createApplicationContextProvider } from "./application-context.ts";
 import { createTestGatewayClient } from "./gateway-client.ts";
 import { settleLitElement } from "./lit-settle.ts";

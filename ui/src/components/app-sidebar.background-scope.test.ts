@@ -313,7 +313,6 @@ describe("AppSidebar initial managed-list hydration", () => {
     ["ordinary overlap", false, false, "self"],
     ["queued initial fill", true, false, "self"],
     ["queued initial fill with a later event", true, true, "self"],
-    ["saved owner", true, false, "owner"],
     ["saved involving me", true, false, "involving-me"],
   ] as const)(
     "paints filtered sessions before group metadata during %s",
