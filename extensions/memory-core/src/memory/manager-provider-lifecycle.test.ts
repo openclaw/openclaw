@@ -164,9 +164,9 @@ describe("memory index", () => {
       checkedAtMs: expect.any(Number),
       cacheExpiresAtMs: expect.any(Number),
     });
-    expect((cachedBeforeProbe?.cacheExpiresAtMs ?? 0) - (cachedBeforeProbe?.checkedAtMs ?? 0)).toBe(
-      30_000,
-    );
+    expect(
+      (cachedBeforeProbe?.cacheExpiresAtMs ?? 0) - (cachedBeforeProbe?.checkedAtMs ?? 0),
+    ).toBeCloseTo(30_000);
     await expect(second.probeEmbeddingAvailability()).resolves.toStrictEqual({
       ok: true,
       checked: true,
@@ -175,6 +175,29 @@ describe("memory index", () => {
       cacheExpiresAtMs: cachedBeforeProbe?.cacheExpiresAtMs,
     });
     expect(providerFixture.embedQueryCalls).toBe(1);
+  });
+
+  it("expires cached embedding probe readiness on elapsed time even when the wall clock steps back", async () => {
+    const manager = await getPersistentManager(createCfg({}));
+
+    await expect(manager.probeEmbeddingAvailability()).resolves.toEqual({ ok: true });
+    const cached = manager.getCachedEmbeddingAvailability();
+    expect(cached?.checkedAtMs).toEqual(expect.any(Number));
+    const checkedAtMs = cached?.checkedAtMs ?? 0;
+
+    // The real elapsed window passes while the wall clock rolls back an hour:
+    // a Date.now-keyed cache would never lapse, so the probe must be re-run.
+    const perfSpy = vi.spyOn(performance, "now").mockReturnValue(checkedAtMs + 31_000);
+    const dateSpy = vi.spyOn(Date, "now").mockReturnValue(checkedAtMs - 3_600_000);
+    try {
+      expect(manager.getCachedEmbeddingAvailability()).toBeNull();
+    } finally {
+      perfSpy.mockRestore();
+      dateSpy.mockRestore();
+    }
+
+    // The next probe re-runs against the provider instead of serving stale readiness.
+    await expect(manager.probeEmbeddingAvailability()).resolves.toEqual({ ok: true });
   });
 
   it("clears cached embedding probe readiness when local embeddings degrade", async () => {
