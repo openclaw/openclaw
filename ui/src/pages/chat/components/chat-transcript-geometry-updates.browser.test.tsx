@@ -291,7 +291,7 @@ it.each([30, "estimate", "oversized"] as const)(
       expect(predecessor.getBoundingClientRect().height).toBe(height);
       expect(getComputedStyle(predecessor).opacity).toBe("1");
       expect(getComputedStyle(predecessor).position).toBe("absolute");
-      expect(getComputedStyle(predecessor).clipPath).not.toBe("none");
+      expect(getComputedStyle(predecessor).clip).toBe(`rect(0px, auto, ${item.size}px, auto)`);
       expect(predecessor.hasAttribute("inert")).toBe(true);
       expect(requireElement(host, '.chat-virtual-row[data-index="4"]')).toBe(retained);
       expect(painted).not.toHaveBeenCalled();

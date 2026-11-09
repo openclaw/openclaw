@@ -1,0 +1,3 @@
+# Assert measured predecessor placement, paintability, and retained-row stability,
+# including an actual height larger than its estimated slot. Exact net test growth.
+14

@@ -141,6 +141,9 @@ function TranscriptRows(props: {
               });
               const active = createMemo(() => props.snapshot.activeRowKeys.has(row()?.key ?? ""));
               const preparing = createMemo(() => row()?.key === props.snapshot.preparingRowKey);
+              const preparingPredecessor = createMemo(
+                () => preparing() && virtualRow().index + 1 === activeRows()[0]?.index,
+              );
               const streaming = createMemo(() => row()?.streaming === true);
               const gap = () => gaps().get(virtualRow().key) ?? 0;
               return (
@@ -160,15 +163,15 @@ function TranscriptRows(props: {
                       position: active() ? undefined : "absolute",
                       top: active()
                         ? undefined
-                        : preparing()
+                        : preparingPredecessor()
                           ? `${virtualRow().start - blockStart()}px`
                           : "0",
-                      opacity: active() || preparing() ? undefined : "0",
-                      // Paint the measurement row inside its estimated slot without
-                      // letting an underestimated height overlap admitted content.
-                      "clip-path":
-                        !active() && preparing()
-                          ? `inset(0 0 max(0px, calc(100% - ${virtualRow().size}px)) 0)`
+                      opacity: active() || preparingPredecessor() ? undefined : "0",
+                      // Keep speculative preparation hidden; the incoming predecessor
+                      // paints inside its estimated slot before entering normal flow.
+                      clip:
+                        !active() && preparingPredecessor()
+                          ? `rect(0, auto, ${virtualRow().size}px, auto)`
                           : undefined,
                       "content-visibility":
                         preparing() || streaming() ? "visible" : active() ? undefined : "hidden",
