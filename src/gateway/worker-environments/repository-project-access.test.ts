@@ -48,6 +48,7 @@ it.each([
   });
   const source = {
     project,
+    isSnapshotBaseAncestor: async () => false,
     setupRecipe: undefined,
     recipe: { source: "none" as const, inputs: {}, env: {} },
     assertCurrent: () => assert(identityCurrent, new Error("Repository identity changed")),
