@@ -43,6 +43,7 @@ final class SimulatorCaptureService {
     private var captureErrorPipe: Pipe?
     private var touchErrorPipe: Pipe?
     private var touchInputPipe: Pipe?
+    private var deviceUDID: String?
     private var frames: SimulatorFrameBuffer?
     private var touchReady: SimulatorTouchReadiness?
     private var lastRead = Date.distantPast
@@ -56,6 +57,7 @@ final class SimulatorCaptureService {
         self.executionId = executionId
         do {
             let udid = try Self.bootedIOSDevice()
+            self.deviceUDID = udid
             let captureOutput = SimulatorFrameBuffer()
             let touchOutput = SimulatorTouchReadiness()
             let capture = try Self.helper("openclaw-simulator-capture", arguments: ["12", udid, "jpeg"])
@@ -135,7 +137,7 @@ final class SimulatorCaptureService {
         guard self.sessionId == sessionId, let frames, let touchReady else { throw CaptureError.staleSession }
         if let failure = frames.failure ?? touchReady.failure { throw CaptureError.unavailable(failure) }
         guard let latest = frames.latest else { throw CaptureError.unavailable("device frame unavailable") }
-        guard Date().timeIntervalSince(latest.receivedAt) < 3 else {
+        guard latest.isFresh(at: Date()) else {
             throw CaptureError.unavailable("device frames stopped arriving")
         }
         self.lastRead = Date()
@@ -174,8 +176,8 @@ final class SimulatorCaptureService {
             }
             try write(data)
         }
-        func key(_ usage: UInt32, shift: Bool = false) throws {
-            var data = Data([9, shift ? 2 : 0, 0, 0, 0])
+        func key(_ usage: UInt32, modifiers: UInt8 = 0) throws {
+            var data = Data([9, modifiers, 0, 0, 0])
             var bits = usage.bigEndian
             withUnsafeBytes(of: &bits) { data.append(contentsOf: $0) }
             try write(data)
@@ -219,37 +221,30 @@ final class SimulatorCaptureService {
             guard let keys, let usage = mapping[keys] else { throw CaptureError.invalidInput }
             try key(usage)
         case .type:
-            guard let text, !text.isEmpty, text.count <= 256 else { throw CaptureError.invalidInput }
-            for character in text {
-                guard let mapped = Self.keyForCharacter(character) else { throw CaptureError.invalidInput }
-                try key(mapped.0, shift: mapped.1)
-                try await Task.sleep(for: .milliseconds(12))
+            guard let text, !text.isEmpty, text.utf8.count <= 4096,
+                  let udid = self.deviceUDID else { throw CaptureError.invalidInput }
+            // Keep the device pasteboard private to this input. The HID chord uses
+            // the same exact device as capture; restore even if control is revoked.
+            let before = try await Self.pasteboard("pbpaste", udid: udid)
+            try validate()
+            guard self.sessionId == sessionId else { throw CaptureError.staleSession }
+            var inputError: Error?
+            do {
+                _ = try await Self.pasteboard("pbcopy", udid: udid, input: Data(text.utf8))
+                try key(0x19, modifiers: 0x08)
+                try await Task.sleep(for: .milliseconds(100))
+            } catch {
+                inputError = error
             }
+            do {
+                _ = try await Self.pasteboard("pbcopy", udid: udid, input: before)
+            } catch {
+                _ = try? await Self.pasteboard("pbcopy", udid: udid, input: Data())
+                throw CaptureError.unavailable("device pasteboard could not be restored after typing")
+            }
+            if let inputError { throw inputError }
         default:
             throw CaptureError.invalidInput
-        }
-    }
-
-    private static func keyForCharacter(_ character: Character) -> (UInt32, Bool)? {
-        guard character.unicodeScalars.count == 1,
-              let scalar = character.unicodeScalars.first, scalar.value <= 127 else { return nil }
-        let ascii = UInt8(scalar.value)
-        switch ascii {
-        case 97...122: return (UInt32(ascii - 97) + 4, false)
-        case 65...90: return (UInt32(ascii - 65) + 4, true)
-        case 49...57: return (UInt32(ascii - 49) + 0x1E, false)
-        case 48: return (0x27, false)
-        case 32: return (0x2C, false)
-        case 10: return (0x28, false)
-        case 46: return (0x37, false)
-        case 44: return (0x36, false)
-        case 45: return (0x2D, false)
-        case 95: return (0x2D, true)
-        case 47: return (0x38, false)
-        case 58: return (0x33, true)
-        case 59: return (0x33, false)
-        case 64: return (0x1F, true)
-        default: return nil
         }
     }
 
@@ -272,6 +267,7 @@ final class SimulatorCaptureService {
         self.captureErrorPipe = nil
         self.touchErrorPipe = nil
         self.touchInputPipe = nil
+        self.deviceUDID = nil
         self.frames = nil
         self.touchReady = nil
     }
@@ -293,6 +289,20 @@ final class SimulatorCaptureService {
         process.executableURL = url
         process.arguments = arguments
         return process
+    }
+
+    private static func pasteboard(_ action: String, udid: String, input: Data? = nil) async throws -> Data {
+        do {
+            let result = try await BoundedProcess.run(
+                path: "/usr/bin/xcrun", arguments: ["simctl", action, udid],
+                input: input, outputLimit: 64 * 1024, timeout: 3)
+            guard result.terminationStatus == 0 else {
+                throw CaptureError.unavailable("device pasteboard command failed")
+            }
+            return result.output
+        } catch {
+            throw CaptureError.unavailable("device pasteboard command failed")
+        }
     }
 
     private static func bootedIOSDevice() throws -> String {
@@ -318,8 +328,16 @@ final class SimulatorCaptureService {
     }
 }
 
-private final class SimulatorFrameBuffer: @unchecked Sendable {
-    struct Latest { let sequence: UInt64; let jpeg: Data; let width: Int; let height: Int; let receivedAt: Date }
+final class SimulatorFrameBuffer: @unchecked Sendable {
+    struct Latest {
+        let sequence: UInt64
+        let jpeg: Data
+        let width: Int
+        let height: Int
+        let receivedAt: Date
+
+        func isFresh(at date: Date) -> Bool { date.timeIntervalSince(self.receivedAt) < 3 }
+    }
     private let lock = NSLock()
     private var buffer = Data()
     private var current: Latest?

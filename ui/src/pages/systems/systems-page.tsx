@@ -500,22 +500,24 @@ function SystemsWorkspace(props: {
             {t("systems.desktop")}
           </button>
         </Show>
-        <button
-          class="systems-icon-button"
-          title={t(controller().statsVisible() ? "systems.hideStats" : "systems.stats")}
-          aria-label={t(controller().statsVisible() ? "systems.hideStats" : "systems.stats")}
-          aria-pressed={controller().statsVisible() ? "true" : "false"}
-          onClick={() => {
-            const show = !controller().statsVisible();
-            controller().updatePresentation({ showStats: show });
-            if (show) {
-              // Hidden stats aren't polled, so revealing them must not show an old sample.
-              void controller().refreshTelemetry();
-            }
-          }}
-        >
-          <Icon name="activity" />
-        </button>
+        <Show when={controller().state.preview !== "simulator"}>
+          <button
+            class="systems-icon-button"
+            title={t(controller().statsVisible() ? "systems.hideStats" : "systems.stats")}
+            aria-label={t(controller().statsVisible() ? "systems.hideStats" : "systems.stats")}
+            aria-pressed={controller().statsVisible() ? "true" : "false"}
+            onClick={() => {
+              const show = !controller().statsVisible();
+              controller().updatePresentation({ showStats: show });
+              if (show) {
+                // Hidden stats aren't polled, so revealing them must not show an old sample.
+                void controller().refreshTelemetry();
+              }
+            }}
+          >
+            <Icon name="activity" />
+          </button>
+        </Show>
         <button
           class="systems-icon-button"
           title={t("systems.details")}

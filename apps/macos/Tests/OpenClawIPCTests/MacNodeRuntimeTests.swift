@@ -1,3 +1,4 @@
+import AppKit
 import CoreLocation
 import Dispatch
 import Foundation
@@ -8,6 +9,28 @@ import Testing
 
 @Suite(.testWaitLimit)
 struct MacNodeRuntimeTests {
+    @MainActor
+    @Test func `Simulator frame parser rejects a stale device image`() throws {
+        let bitmap = try #require(NSBitmapImageRep(
+            bitmapDataPlanes: nil, pixelsWide: 1, pixelsHigh: 1,
+            bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+            colorSpaceName: .deviceRGB, bytesPerRow: 4, bitsPerPixel: 32))
+        bitmap.setColor(.red, atX: 0, y: 0)
+        let jpeg = try #require(bitmap.representation(using: .jpeg, properties: [:]))
+        var length = UInt32(jpeg.count).bigEndian
+        var bytes = Data()
+        withUnsafeBytes(of: &length) { bytes.append(contentsOf: $0) }
+        bytes.append(jpeg)
+        let frames = SimulatorFrameBuffer()
+        frames.append(Data(bytes.prefix(2)))
+        #expect(frames.latest == nil)
+        frames.append(Data(bytes.dropFirst(2)))
+        let frame = try #require(frames.latest)
+        #expect(frame.width == 1 && frame.height == 1 && frame.sequence == 1)
+        #expect(frame.isFresh(at: frame.receivedAt.addingTimeInterval(2)))
+        #expect(!frame.isFresh(at: frame.receivedAt.addingTimeInterval(4)))
+    }
+
     private actor ComputerProviderWorkerProbe: MacNodeHostWorking {
         private let commands: Set<String>
         private let supportsEntered: AsyncTestGate?

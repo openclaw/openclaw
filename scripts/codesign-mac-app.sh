@@ -393,6 +393,15 @@ if [ -f "$MAC_CONTROL_CLI" ]; then
   echo "Signing macOS control CLI"; sign_plain_item "$MAC_CONTROL_CLI"
 fi
 
+for simulator_helper in openclaw-simulator-touch openclaw-simulator-capture; do
+  simulator_binary="$APP_BUNDLE/Contents/MacOS/$simulator_helper"
+  if [ -f "$simulator_binary" ]; then
+    echo "Signing $simulator_helper"
+    sign_plain_item "$simulator_binary"
+    codesign --verify --strict "$simulator_binary"
+  fi
+done
+
 MLX_TTS_HELPER="$APP_BUNDLE/Contents/MacOS/openclaw-mlx-tts"
 if [ -f "$MLX_TTS_HELPER" ]; then
   echo "Signing MLX TTS helper"; sign_plain_item "$MLX_TTS_HELPER"
