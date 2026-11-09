@@ -293,6 +293,7 @@ it.for(["none", "same", "previous"])(
       expect(mocks.install).toHaveBeenCalledOnce();
       vi.stubEnv("GIT_CONFIG_PARAMETERS", undefined);
       expect(await git(projectionPath, "config", "--get-all", "remote.origin.url")).toBe(url);
+      expect(await git(projectionPath, "config", "--get-all", "openclaw.projection")).toBe("true");
       // The same-origin template and its projection each apply the fetch defaults.
       const config = await read(projectionPath, ".git/config");
       for (const remote of ["origin", url.slice(0, -4), url]) {

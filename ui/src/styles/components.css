@@ -873,6 +873,12 @@ openclaw-toast-host[data-toast-placement="shell"] .app-toast-lane--top-center {
 /* On a phone both lanes share one column at the top: the center lane, then
  * arrivals. Each toast spans the screen between the gutters. */
 @media (max-width: 768px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
+  /* Touch has no hover: keep dismissal visible, including the renderer fallback. */
+  .app-toast > .app-toast__dismiss {
+    opacity: 1;
+    scale: 1;
+  }
+
   .shell--session {
     --app-toast-shell-top: calc(
       var(--safe-area-top) + var(--shell-topbar-height) + var(--chat-mobile-pane-header-height) +

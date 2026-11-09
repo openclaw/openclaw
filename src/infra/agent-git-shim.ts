@@ -1,6 +1,6 @@
 export const AGENT_GIT_SANDBOX_BIN = "/openclaw/git-tools";
 
-/** A PATH tool contract: probes stay local; fork fetches and content reads retain partial-clone behavior. */
+/** A PATH tool contract: local probes, shared history, and partial-clone fetches/hydration. */
 export const AGENT_GIT_SHIM = `#!/bin/sh
 shim_dir=\${0%/*}
 search_path=
@@ -18,21 +18,41 @@ PATH=$search_path
 export PATH
 is_probe() {
   filter_fetch=
+  projection_fetch=
+  explicit_filter=
+  fetch_filter=
+  fetch_depth=
+  shallow_change=
   argument_count=$#
   while [ "$#" -gt 0 ]; do
     case $1 in
-      -C|-c|--git-dir|--work-tree|--namespace) [ "$#" -ge 2 ] || return 1; shift 2 ;;
+      -C|-c|--git-dir|--work-tree|--namespace|--config-env) [ "$#" -ge 2 ] || return 1; shift 2 ;;
       -C*|-c*) shift ;;
       --*) shift ;;
       -p|-P) shift ;;
-      fetch)
+      fetch|pull)
         global_count=$((argument_count - $#))
+        command=$1
         shift
         for arg do
           case $arg in
-            --filter|--filter=*|--no-filter|--all|--multiple) return 1 ;;
+            --) break ;;
+            --?*)
+              name=\${arg%%=*}
+              for option in --depth --deepen --shallow-since --shallow-exclude --unshallow --update-shallow; do
+                case $option in "$name"*) shallow_change=1 ;; esac
+              done ;;
           esac
         done
+        [ "$command" = fetch ] || return 1
+        for arg do
+          case $arg in
+            --) break ;;
+            --all|--multiple) return 1 ;;
+            --filter|--filter=*|--no-filter) explicit_filter=1 ;;
+          esac
+        done
+        projection_fetch=1
         for arg do
           case $arg in
             https://github.com/*|git@github.com:*|ssh://git@github.com/*) filter_fetch=1 ;;
@@ -57,8 +77,9 @@ is_probe() {
   done
   return 1
 }
-is_blobless() {
-  # Keep Git's global options (-C, -c, --git-dir, ...) on the config query.
+query_repository() {
+  query=$1; shift
+  # Keep Git's global options (-C, -c, --git-dir, ...) on repository queries.
   tail_count=$(($# - global_count))
   prefix_count=$global_count
   while [ "$prefix_count" -gt 0 ]; do
@@ -66,18 +87,45 @@ is_blobless() {
     shift
     prefix_count=$((prefix_count - 1))
   done
-  while [ "$tail_count" -gt 0 ]; do shift; tail_count=$((tail_count - 1)); done
-  git "$@" config --get-regexp '^remote\\..*\\.partialclonefilter$' '^blob:none$' >/dev/null 2>&1
+  shift "$tail_count"
+  case $query in
+    projection) git "$@" config --bool --get openclaw.projection 2>/dev/null ;;
+    common) git "$@" rev-parse --path-format=absolute --git-common-dir ;;
+    blobless) git "$@" config --get-regexp '^remote\\..*\\.partialclonefilter$' '^blob:none$' >/dev/null 2>&1 ;;
+  esac
+}
+check_shared_shallow() {
+  common=$(query_repository common "$@" 2>/dev/null) || return 0
+  # Both the primary checkout and its linked worktrees share this shallow file.
+  for linked in "$common"/worktrees/*/gitdir; do
+    if [ -f "$linked" ]; then
+      echo 'OpenClaw: shallow-changing fetch/pull would alter history shared by linked worktrees; command not run. Fetch without shallow options for new tips. For older history, use gh api repos/<owner>/<repo>/commits/<sha> or gh api repos/<owner>/<repo>/compare/<base>...<head>; for local history, ask the operator to repair the managed base with openclaw doctor --fix, then retry git log.' >&2
+      return 1
+    fi
+  done
+}
+fetch_defaults() {
+  if [ "$(query_repository projection "$@")" = true ]; then
+    [ "$shallow_change" = 1 ] || fetch_depth=64
+    [ "$explicit_filter" = 1 ] || fetch_filter=blob:none
+  elif [ "$filter_fetch" = 1 ] && [ "$explicit_filter" != 1 ] && query_repository blobless "$@"; then
+    fetch_filter=blob:none
+  fi
 }
 if ! is_probe "$@"; then
-  if [ "$filter_fetch" = 1 ] && is_blobless "$@"; then
-    # Native fetch records the URL as a promisor, including its hydration source.
+  if [ "$projection_fetch" = 1 ]; then fetch_defaults "$@"; fi
+  if [ "$shallow_change" = 1 ] || [ -n "$fetch_depth" ]; then
+    check_shared_shallow "$@" || exit 2
+  fi
+  if [ -n "$fetch_filter$fetch_depth" ]; then
+    # Native Git owns promisor registration; only standalone projections get a depth cap.
     tail_count=$(($# - global_count - 1))
     prefix_count=$((global_count + 1))
     while [ "$prefix_count" -gt 0 ]; do
       set -- "$@" "$1"; shift; prefix_count=$((prefix_count - 1))
     done
-    set -- "$@" --filter=blob:none
+    [ -z "$fetch_filter" ] || set -- "$@" "--filter=$fetch_filter"
+    [ -z "$fetch_depth" ] || set -- "$@" "--depth=$fetch_depth"
     while [ "$tail_count" -gt 0 ]; do
       set -- "$@" "$1"; shift; tail_count=$((tail_count - 1))
     done
