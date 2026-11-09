@@ -10,6 +10,7 @@
 // Add &proof=1 only for a separate attribution run: inject scoped 300/1000 ms
 // crypto stalls 10/30 seconds after whole-soak starts. proof=interrupt injects
 // one unscoped 1200 ms JS spin after 5 seconds. Never gate latency on either.
+// proof=interrupt-periodic adds six such spins, 10 seconds apart, for a 60 s run.
 import { pbkdf2Sync } from "node:crypto";
 import { syncBuiltinESMExports } from "node:module";
 import { performance } from "node:perf_hooks";
@@ -25,18 +26,22 @@ if (interruptMode !== null) {
   }
   const workerThreads = (await import("node:worker_threads")).default;
   const { pathToFileURL } = await import("node:url");
-  const observer = new URL(
-    "../../dist/logging/diagnostic-stall-observer.worker.js",
-    import.meta.url,
-  );
+  const observer = isMainThread
+    ? new URL("./logging/diagnostic-stall-observer.worker.js", pathToFileURL(process.argv[1]))
+    : new URL(new URL(import.meta.url).searchParams.get("observerUrl") ?? import.meta.url);
   if (isMainThread) {
+    const workerPreload = new URL(import.meta.url);
+    workerPreload.searchParams.set("observerUrl", observer.href);
     const NativeWorker = workerThreads.Worker;
     workerThreads.Worker = class extends NativeWorker {
       constructor(filename, options) {
         super(
           filename,
           String(filename) === observer.href
-            ? { ...options, execArgv: [...(options?.execArgv ?? []), "--import", import.meta.url] }
+            ? {
+                ...options,
+                execArgv: [...(options?.execArgv ?? []), "--import", workerPreload.href],
+              }
             : options,
         );
       }
@@ -53,6 +58,15 @@ if (interruptMode !== null) {
         "STALL_INTERRUPT_COST " + JSON.stringify({ mode: interruptMode, threadId, ...row }) + "\n",
       );
     emit({ event: "ready", atMs: now() });
+    const sampleObserver = () =>
+      emit({
+        event: "observer",
+        atMs: now(),
+        cpu: process.threadCpuUsage(),
+        heapUsed: process.memoryUsage().heapUsed,
+      });
+    sampleObserver();
+    setInterval(sampleObserver, 10_000).unref();
     const heartbeat = new BigInt64Array(workerData.heartbeat);
     const records = new WeakMap();
     let attempts = 0;
@@ -284,13 +298,16 @@ if (isMainThread) {
         void stopInspector?.("whole-soak");
       }
       if (
-        proof === "interrupt" &&
+        (proof === "interrupt" || proof === "interrupt-periodic") &&
         message.captureId === "whole-soak" &&
         message.action === "start"
       ) {
         void import("../../src/logging/diagnostic-stall-cpu.test-support.ts").then(
           ({ stallCpuOwner }) => {
-            setTimeout(() => stallCpuOwner(1_200), 5_000).unref();
+            const count = proof === "interrupt-periodic" ? 6 : 1;
+            for (let index = 0; index < count; index++) {
+              setTimeout(() => stallCpuOwner(1_200), 5_000 + index * 10_000).unref();
+            }
           },
         );
       }

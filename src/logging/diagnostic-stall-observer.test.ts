@@ -4,6 +4,7 @@ import { afterEach, expect, it, vi } from "vitest";
 const observer = vi.hoisted(() => ({
   heartbeat: new BigInt64Array(new SharedArrayBuffer(24)),
   write: vi.fn(),
+  connect: vi.fn(),
   post: vi.fn(),
   message: vi.fn(),
 }));
@@ -23,7 +24,7 @@ vi.mock("node:worker_threads", async (original) => ({
 vi.mock("node:inspector/promises", async (original) => ({
   ...(await original<typeof import("node:inspector/promises")>()),
   Session: class {
-    connectToMainThread() {}
+    connectToMainThread = observer.connect;
     disconnect() {}
     post = observer.post;
   },
@@ -91,7 +92,7 @@ it.each([false, true, null])(
 );
 
 it.skipIf(Boolean(process.versions.bun) || Number(process.versions.node.split(".")[0]) >= 26)(
-  "bounds interrupted stacks and rejects captures dispatched after native work returns",
+  "starts only after a missed heartbeat, bounds stacks, and rejects delayed captures",
   async () => {
     vi.resetModules();
     vi.useFakeTimers();
@@ -99,6 +100,8 @@ it.skipIf(Boolean(process.versions.bun) || Number(process.versions.node.split(".
     vi.spyOn(performance, "now").mockImplementation(() => Date.now());
     observer.heartbeat.set([1_000n, 0n, 3n]);
     observer.message.mockReset();
+    observer.connect.mockClear();
+    observer.post.mockReset();
     let dispatchDelay = 101;
     observer.post.mockImplementation(() =>
       Promise.resolve({
@@ -106,6 +109,15 @@ it.skipIf(Boolean(process.versions.bun) || Number(process.versions.node.split(".
       }),
     );
     await import("./diagnostic-stall-observer.worker.js");
+    for (let tick = 0; tick < 20; tick++) {
+      observer.heartbeat[0] = BigInt(Date.now());
+      await vi.advanceTimersByTimeAsync(250);
+    }
+    await vi.advanceTimersByTimeAsync(249);
+    expect(observer.connect).not.toHaveBeenCalled();
+    expect(observer.post).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(observer.connect).toHaveBeenCalledTimes(1);
     await vi.advanceTimersByTimeAsync(1_000);
     expect(observer.message).not.toHaveBeenCalled();
     expect(observer.heartbeat[2]).toBe(3n);
