@@ -39,27 +39,20 @@ type UnknownRecord = Record<string, unknown>;
 
 type NormalizeOptions = {
   applyDefaults?: boolean;
-  /** Reject an unresolvable `at` + `tz` (create/patch requests); stored jobs keep loading as UTC. */
-  rejectUnresolvableAtTimezone?: boolean;
+  /** Read an offset-less `at` as wall time in `tz` (create/patch requests only; stored jobs load as before). */
+  resolveAtTimezone?: boolean;
   /** Session context used to resolve "current" sessionTarget during create-time defaulting. */
   sessionContext?: { sessionKey?: string };
 };
 
 /** Resolves an offset-less `at` as wall time in `tz`, matching `cron add --at X --tz Y`. */
-function resolveZonedAt(
-  at: string,
-  timezone: string | undefined,
-  reject: boolean | undefined,
-): string | undefined {
+function resolveZonedAt(at: string, timezone: string | undefined): string | undefined {
   if (!timezone || !isOffsetlessIsoDateTime(at)) {
     return undefined;
   }
   const resolved = parseOffsetlessIsoDateTimeInTimeZone(at, timezone);
   if (resolved.ok) {
     return resolved.iso;
-  }
-  if (!reject) {
-    return undefined;
   }
   throw new TypeError(
     resolved.reason === "invalid-timezone"
@@ -92,9 +85,10 @@ function coerceSchedule(schedule: UnknownRecord, options: NormalizeOptions) {
   const atString = normalizeOptionalString(next.at) ?? "";
   // An authored tz decides how an offset-less `at` reads, so resolve it before the
   // UTC fallback below; the tz itself is then dropped with the other non-cron fields.
+  // Stored jobs never carry it, so load normalization keeps reading them as UTC.
   const zonedAtIso =
-    kind === "at" && atString
-      ? resolveZonedAt(atString, timezone, options.rejectUnresolvableAtTimezone)
+    kind === "at" && atString && options.resolveAtTimezone
+      ? resolveZonedAt(atString, timezone)
       : undefined;
   const parsedAtMs = atString ? parseAbsoluteTimeMs(atString) : null;
 
@@ -539,7 +533,7 @@ export function normalizeCronJobCreate(
 ): CronJobCreate | null {
   return normalizeCronJobInput(raw, {
     applyDefaults: true,
-    rejectUnresolvableAtTimezone: true,
+    resolveAtTimezone: true,
     ...options,
   }) as CronJobCreate | null;
 }
@@ -551,7 +545,7 @@ export function normalizeCronJobPatch(
 ): CronJobPatch | null {
   return normalizeCronJobInput(raw, {
     applyDefaults: false,
-    rejectUnresolvableAtTimezone: true,
+    resolveAtTimezone: true,
     ...options,
   }) as CronJobPatch | null;
 }

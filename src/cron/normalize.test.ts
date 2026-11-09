@@ -239,8 +239,8 @@ it.each([
   expect(() => createMain({ schedule })).toThrow(message);
   expect(() => normalizePatch({ schedule })).toThrow(message);
 });
-it("loads a stored at job with an unresolvable tz as plain UTC", () => {
-  const schedule = { kind: "at", at: "2026-11-10T09:00:00", tz: "Asia/Nowhere" };
+it("keeps loading a stored at job as UTC even when it carries a valid tz", () => {
+  const schedule = { kind: "at", at: "2026-11-10T09:00:00", tz: "Asia/Shanghai" };
   expect(normalizeCronJobInput({ schedule })?.schedule).toEqual({
     kind: "at",
     at: "2026-11-10T09:00:00.000Z",
