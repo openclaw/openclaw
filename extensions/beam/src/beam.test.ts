@@ -65,6 +65,33 @@ async function serve(
 }
 
 describe("Beam receiver", () => {
+  it("acknowledges an explicit source release and rejects later source turns without changing history", async () => {
+    const store = memoryStore();
+    const endpoint = await serve(store, {
+      resolveClient: () => ({ ...writeClient(), profileId: "source-publisher" }),
+    });
+    const published = (await (await postUpload(endpoint)).json()) as { publicationId: string };
+    expect(published.publicationId).toMatch(/^[a-f0-9]{32}$/);
+    const release = sampleUpload({ handoffId: published.publicationId });
+    const first = await postUpload(endpoint, release);
+    expect(first.status).toBe(200);
+    expect(await first.json()).toMatchObject({
+      handoff: { id: published.publicationId, owner: "gateway", access: "shared" },
+    });
+    const frozen = await store.get(sampleUpload().beamId);
+    const late = await postUpload(
+      endpoint,
+      sampleUpload({ title: "Local fork", updatedAt: "2026-08-01T00:00:00Z" }),
+    );
+    expect(late.status).toBe(409);
+    expect(await late.json()).toMatchObject({
+      ok: false,
+      handoff: { id: published.publicationId, owner: "gateway" },
+    });
+    expect(await store.get(sampleUpload().beamId)).toEqual(frozen);
+    expect((await postUpload(endpoint, release)).status).toBe(200);
+  });
+
   it("attributes each uploaded snapshot to its verified publisher, never payload claims", async () => {
     const store = memoryStore();
     let profileId: string | undefined = "uploader-profile";
@@ -90,7 +117,7 @@ describe("Beam receiver", () => {
   });
 
   it("orders replacement snapshots without refreshing stale state", async () => {
-    const { keyedStore, store, close } = persistentBeamTestStore();
+    const { keyedStore, store, close } = await persistentBeamTestStore();
     let receivedAt = 100;
     let profileId = "terminal-publisher";
     const endpoint = await serve(store, {
@@ -126,11 +153,18 @@ describe("Beam receiver", () => {
         });
         const previousEntry = await entryFor(body.beamId);
         const before = Date.now();
-        expect((await postUpload(endpoint, body)).status).toBe(200);
+        const response = await postUpload(endpoint, body);
+        expect(response.status).toBe(200);
+        const { publicationId } = await response.json();
+        expect(publicationId).toMatch(/^[a-f0-9]{32}$/);
+        if (previousEntry) {
+          expect(publicationId).toBe(previousEntry.value.publicationId);
+        }
         const after = Date.now();
         if (accepted) {
           expected = {
             ...body,
+            publicationId,
             receivedAt,
             createdAt: second ? 600 : 100,
             uploaderProfileId: profileId,
@@ -256,6 +290,48 @@ describe("Beam receiver", () => {
   });
 });
 
+it("stops mirror polling a source after the receiver acknowledges its ownership transfer", async () => {
+  const store = memoryStore();
+  let requests = 0;
+  const endpoint = await serve(
+    store,
+    { resolveClient: () => ({ ...writeClient(), profileId: "source-publisher" }) },
+    () => {
+      requests++;
+      return false;
+    },
+  );
+  let reads = 0;
+  const catalog = createBeamTestCatalog({
+    sessions: [{ threadId: "handoff", recencyAt: Date.now() }],
+    items: () => [{ type: "agentMessage", text: `Source turn ${++reads}` }],
+  });
+  const runner = createBeamTestRunner({
+    endpoint,
+    now: () => Date.now(),
+    listCatalogs: () => [catalog],
+  });
+  await runner.tick();
+  const row = [...store.values.values()][0]!;
+  const release = {
+    version: 1 as const,
+    beamId: row.beamId,
+    source: row.source,
+    title: row.title,
+    updatedAt: row.updatedAt,
+    completed: row.completed,
+    items: row.items,
+    handoffId: row.publicationId,
+  };
+  expect((await postUpload(endpoint, release)).status).toBe(200);
+  await runner.tick();
+  expect(requests).toBe(3);
+  await runner.tick();
+  expect(requests).toBe(3);
+  expect(reads).toBe(2);
+  expect((await store.get(row.beamId))?.items).toEqual(row.items);
+});
+
 it("retries a rejected terminal upload through the real loopback receiver", async () => {
   const store = memoryStore();
   const requests: string[] = [];
@@ -307,7 +383,7 @@ describe("Beam session catalog", () => {
   ])(
     "finds canonically equivalent $language titles without rewriting snapshots",
     async ({ titles }) => {
-      const { keyedStore, store, close } = persistentBeamTestStore();
+      const { keyedStore, store, close } = await persistentBeamTestStore();
       const endpoint = await serve(store);
       const catalog = createBeamSessionCatalog(store);
       const uploads = titles.map((title, index) =>
@@ -344,7 +420,7 @@ describe("Beam session catalog", () => {
   );
 
   it("permanently deletes only known gateway sessions and allows re-upload", async () => {
-    const { store, close } = persistentBeamTestStore();
+    const { store, close } = await persistentBeamTestStore();
     const endpoint = await serve(store);
     const catalog = createBeamSessionCatalog(store);
     const params = { ...catalogParams, confirmNoOtherRunner: true as const };
@@ -402,13 +478,20 @@ describe("Beam session catalog", () => {
   it("lists newest sessions and reads paginated transcript items for Gateway continuation", async () => {
     const store = memoryStore();
     const current = {
-      ...sampleUpload({ truncated: true, sourceModel }),
+      ...sampleUpload({
+        truncated: true,
+        sourceModel,
+        handoffId: "a".repeat(32),
+        publicationId: "a".repeat(32),
+      }),
+      publisherProfileId: "source-publisher",
       createdAt: 100,
       receivedAt: 200,
     };
     current.items.push({ type: "userMessage", text: "Latest" });
     const itemsBeforeRead = structuredClone(current.items);
     store.values.set(current.beamId, current);
+    store.handoffValues.set(current.beamId, current);
     store.values.set(otherBeamId, {
       ...sampleUpload({ beamId: otherBeamId }),
       createdAt: 50,
@@ -429,7 +512,10 @@ describe("Beam session catalog", () => {
     ).toEqual([[catalogParams.threadId, "live", "claude", true, true]]);
     expect(catalog.audience).toBe("gateway-operators");
 
-    await expect(catalog.copyToGatewaySession?.(catalogParams)).resolves.toEqual({
+    await expect(
+      catalog.copyToGatewaySession?.({ ...catalogParams, agentId: "main", assertCurrent() {} }),
+    ).resolves.toMatchObject({
+      continuation: { agentId: "main", reservedNow: true },
       displayName: "Fix the upload flow",
       preferredModel: "openai/gpt-5.6-sol",
     });

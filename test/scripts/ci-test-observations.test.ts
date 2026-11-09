@@ -6,7 +6,11 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { writeCiTestLaunchInputs } from "../../scripts/lib/ci-test-launch-inputs.mts";
 import { createCiTestObservationCapture } from "../../scripts/lib/ci-test-observation-capture.mts";
-import { collectTestObservations } from "../../scripts/lib/ci-test-observations.mjs";
+import {
+  collectTestObservations,
+  compactTestObservations,
+  decodeTestObservations,
+} from "../../scripts/lib/ci-test-observations.mjs";
 
 const context = {
   repository: "example/project",
@@ -303,13 +307,13 @@ describe("CI observation export", () => {
         configuration: {},
         env: { OPENCLAW_VITEST_OBSERVATION_DIR: directory },
       });
-      for (const line of receipts({ interrupted: true })) {
+      const events = receipts({ interrupted: true }).map((line) => {
         const match = /\[vitest:(\w+)\] (.*)/u.exec(line)!;
-        capture!.record(match[1]!, JSON.parse(match[2]!));
-      }
-      expect(
-        JSON.parse(readFileSync(path.join(directory, "observations.json"), "utf8")),
-      ).toMatchObject({
+        return { kind: match[1]!, value: JSON.parse(match[2]!) };
+      });
+      events.forEach(({ kind, value }) => capture!.record(kind, value));
+      const snapshot = readFileSync(path.join(directory, "observations.json"), "utf8");
+      expect(JSON.parse(snapshot)).toMatchObject({
         observations: {
           invocations: [
             {
@@ -326,23 +330,23 @@ describe("CI observation export", () => {
         configuration: {},
         env: { OPENCLAW_VITEST_OBSERVATION_DIR: directory },
       });
-      expect(() => unavailable!.record("run", {})).not.toThrow();
+      expect(() => unavailable!.record(events[0]!.kind, events[0]!.value)).not.toThrow();
+      expect(readFileSync(path.join(directory, "observations.json"), "utf8")).toBe(snapshot);
     } finally {
       rmSync(directory, { recursive: true, force: true });
     }
   });
 
-  it("retains terminal outcomes when native dependency indexes expand beyond the export limit", () => {
+  it("preserves large shared dependency graphs and terminal outcomes within the export limit", () => {
     const directory = mkdtempSync(path.join(tmpdir(), "ci-observation-capture-"));
     try {
-      const files = Array.from({ length: 80 }, (_, index) => ({
+      const files = Array.from({ length: 789 }, (_, index) => ({
         ...file,
         file: `src/example-${index}.test.ts`,
       }));
       const modules = Array.from(
-        { length: 300 },
-        (_, index) =>
-          `src/${"a".repeat(140)}/${"b".repeat(140)}/${"c".repeat(140)}/module-${index}.ts`,
+        { length: 1077 },
+        (_, index) => `src/shared/${"a".repeat(8)}/module-${index}.ts`,
       );
       writeFileSync(
         path.join(directory, "dependencies.json"),
@@ -351,7 +355,9 @@ describe("CI observation export", () => {
           projects: {
             unit: {
               modules,
-              files: Object.fromEntries(files.map((row) => [row.file, modules.map((_, i) => i)])),
+              files: Object.fromEntries(
+                files.slice(0, -1).map((row) => [row.file, modules.map((_, i) => i)]),
+              ),
             },
           },
         }),
@@ -389,17 +395,42 @@ describe("CI observation export", () => {
       const result = JSON.parse(text);
       expect(Buffer.byteLength(text)).toBeLessThanOrEqual(8 * 1024 * 1024);
       expect(result.preExecution).toEqual(initial.preExecution);
-      const invocation = result.observations.invocations[0];
+      expect(result.observations.version).toBe(2);
+      const decoded = decodeTestObservations(result.observations);
+      expect(Buffer.byteLength(JSON.stringify(decoded))).toBeGreaterThan(8 * 1024 * 1024);
+      const invocation = decoded.invocations[0]!;
       expect(invocation.elapsedMs).toBe(100);
       expect(invocation.files.map((row: { outcome: string }) => row.outcome)).toEqual(
         files.map((_, index) => (index === 1 ? "failed" : index === 2 ? "unknown" : "passed")),
       );
-      expect(
-        invocation.files.every((row: { dependencies: null }) => row.dependencies === null),
-      ).toBe(true);
+      for (const row of invocation.files.slice(0, -1)) {
+        expect(row.dependencies).toEqual(
+          [row.file, ...modules].toSorted((a, b) => a.localeCompare(b)),
+        );
+      }
+      expect(invocation.files.at(-1)?.dependencies).toBeNull();
     } finally {
       rmSync(directory, { recursive: true, force: true });
     }
+  });
+
+  it("rejects malformed compact graphs without erasing unknown dependencies", () => {
+    const original = collectTestObservations(receipts().join("\n"), context, dependencies);
+    const compact = compactTestObservations(original);
+    expect(decodeTestObservations(compact)).toEqual(original);
+    expect(decodeTestObservations(original)).toBe(original);
+    expect(
+      decodeTestObservations(
+        compactTestObservations(collectTestObservations(receipts().join("\n"), context)),
+      ).invocations[0]?.files[0]?.dependencies,
+    ).toBeNull();
+    for (const invalid of [-1, 0.5, compact.dependencyPaths.length, "0", null]) {
+      const changed = structuredClone(compact);
+      Object.assign(changed.invocations[0]!.files[0]!, { dependencies: [invalid] });
+      expect(() => decodeTestObservations(changed)).toThrow("Invalid dependency path index");
+    }
+    compact.dependencyPaths[0] = "../outside.ts";
+    expect(() => decodeTestObservations(compact)).toThrow("Invalid dependency path table");
   });
 
   it("preserves the incomplete snapshot when terminal receipts cannot be exported", () => {

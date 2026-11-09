@@ -6,6 +6,10 @@ import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoin
 import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
 import { WorkerTaskError, WorkerTaskPool } from "../../infra/worker-task-pool.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
+import {
+  recordWorktreePreparationFailure,
+  startWorktreePreparationPhase,
+} from "./preparation-timing.js";
 
 type Runtime = {
   pool?: WorkerTaskPool<FsSafeProvisionCopy, FsSafeCopyReply>;
@@ -54,6 +58,10 @@ export async function copyProvisionedPathsInWorker(
     Atomics.notify(decision, 0);
   };
   options.signal?.addEventListener("abort", refuse, { once: true });
+  // Until the first mutation request, time includes pool admission, worker startup,
+  // and filesystem preflight. Do not report it as time spent copying file bytes.
+  const finishWait = startWorktreePreparationPhase("provisionCopyWait");
+  let finishCopy: (() => void) | undefined;
   try {
     const reply = await pool.run(
       { type: "provision", source, destination, paths, decision: decision.buffer },
@@ -66,6 +74,10 @@ export async function copyProvisionedPathsInWorker(
               throw failure.error;
             }
             assertCurrent();
+            if (!finishCopy) {
+              finishWait();
+              finishCopy = startWorktreePreparationPhase("provisionCopy");
+            }
             Atomics.compareExchange(decision, 0, 0, 1);
           } catch (error) {
             failure ??= { error };
@@ -87,8 +99,12 @@ export async function copyProvisionedPathsInWorker(
     }
     return reply.paths;
   } catch (error) {
-    throw failure ? failure.error : error;
+    const cause = failure ? failure.error : error;
+    recordWorktreePreparationFailure(finishCopy ? "provisionCopy" : "provisionCopyWait", cause);
+    throw cause;
   } finally {
+    finishWait();
+    finishCopy?.();
     options.signal?.removeEventListener("abort", refuse);
   }
 }

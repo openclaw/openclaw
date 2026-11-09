@@ -90,6 +90,12 @@ it("lists compact attention facts without automation definitions", async () => {
       atMs: 1_788_587_495_278,
       consecutiveErrors: 3,
     };
+    const admissionDeferred = {
+      reason: "Agent is busy",
+      sinceMs: 1_788_587_495_278,
+      attempts: 5,
+      retryAtMs: 1_788_591_095_278,
+    };
     const job = createCronJob({
       agentId: "ops",
       updatedAtMs: 1_788_587_495_278,
@@ -100,6 +106,7 @@ it("lists compact attention facts without automation definitions", async () => {
         runningAtMs: 0,
         lastTriggerEvalAtMs: 1_788_587_495_500,
         autoDisabled,
+        admissionDeferred,
         lastStatus: "error",
         lastMeaningfulResult: {
           outcome: "blocked",
@@ -144,6 +151,7 @@ it("lists compact attention facts without automation definitions", async () => {
             runningAtMs: 0,
             lastTriggerEvalAtMs: 1_788_587_495_500,
             autoDisabled,
+            admissionDeferred,
             lastRunStatus: "error",
             lastMeaningfulResult: {
               outcome: "blocked",

@@ -8,7 +8,7 @@ RUN --mount=type=cache,id=openclaw-install-sh-nonroot-apt-cache,target=/var/cach
   --mount=type=cache,id=openclaw-install-sh-nonroot-apt-lists,target=/var/lib/apt,sharing=locked \
   set -eux; \
   for attempt in 1 2 3; do \
-    if apt-get update -o Acquire::Retries=3; then break; fi; \
+    if apt-get update -o Acquire::Retries=3 -o APT::Update::Error-Mode=any; then break; fi; \
     echo "apt-get update failed (attempt ${attempt})" >&2; \
     if [ "${attempt}" -eq 3 ]; then exit 1; fi; \
     sleep 3; \

@@ -159,12 +159,10 @@ describe("effort selection", () => {
     onTestFinished(installTitleTooltips(document));
     const focusComposer = (event: MouseEvent | PointerEvent) =>
       focusComposerFromChrome(event, true, textarea);
-    composer.addEventListener("pointerdown", focusComposer);
-    composer.addEventListener("click", focusComposer);
-    onTestFinished(() => {
-      composer.removeEventListener("pointerdown", focusComposer);
-      composer.removeEventListener("click", focusComposer);
-    });
+    const lifetime = new AbortController();
+    composer.addEventListener("pointerdown", focusComposer, { signal: lifetime.signal });
+    composer.addEventListener("click", focusComposer, { signal: lifetime.signal });
+    onTestFinished(() => lifetime.abort());
     textarea.focus();
     await page.elementLocator(trigger).click();
     await expect.poll(() => surface.matches(":popover-open")).toBe(true);
@@ -175,7 +173,9 @@ describe("effort selection", () => {
     await userEvent.keyboard("{Escape}");
     await expect.poll(() => details.open).toBe(false);
     await userEvent.keyboard("{Enter}");
-    await expect.poll(() => surface.matches(":popover-open")).toBe(true);
+    // A visible slider proves the reopen and waits out the lazy panel chunk before Tab.
+    const range = () => host!.querySelector<HTMLInputElement>("input[type=range]");
+    await expect.poll(() => range()?.checkVisibility()).toBe(true);
     // macOS WebKit uses Option-Tab to traverse controls inside the open picker.
     await userEvent.keyboard(
       navigator.platform.includes("Mac") &&
@@ -184,7 +184,7 @@ describe("effort selection", () => {
         ? "{Alt>}{Tab}{/Alt}"
         : "{Tab}",
     );
-    await expect.poll(() => document.activeElement).toBe(host!.querySelector("input[type=range]"));
+    await expect.poll(() => document.activeElement).toBe(range());
     await userEvent.keyboard("{Escape}");
     await expect.poll(() => details.open).toBe(false);
     await expect.poll(() => surface.matches(":popover-open")).toBe(false);
@@ -218,18 +218,14 @@ describe("effort selection", () => {
     ultra.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowLeft", bubbles: true }));
     expect(onFastModeSelect).toHaveBeenLastCalledWith("on", "effort-preview");
     await speedFixture(speedState("ultrafast", ["priority", "ultrafast"], false));
-    expect(speed("ultrafast").disabled).toBe(true);
-    expect(speed("on")).toBeNull();
+    expect(host!.querySelector(".chat-controls__speed-panel")).toBeNull();
     const standardOnly = await speedFixture(speedState("ultrafast", ["default"], false));
-    expect(speed("off").getAttribute("aria-checked")).toBe("true");
-    for (const option of host!.querySelectorAll<HTMLButtonElement>("[data-chat-speed-option]")) {
-      expect(option.disabled).toBe(true);
-      option.click();
-    }
+    expect(host!.querySelector(".chat-controls__speed-panel")).toBeNull();
     expect(standardOnly.onFastModeSelect).not.toHaveBeenCalled();
     expect(standardOnly.input.disabled).toBe(false);
     expect(host!.querySelector(".chat-controls__effort-zap")).toBeNull();
     await speedFixture(speedState(true, undefined, false, true));
+    expect(host!.querySelector(".chat-controls__speed-panel")).toBeNull();
     expect(summary().getAttribute("data-chat-fast-mode")).toBe("false");
     expect(host!.querySelector(".chat-controls__effort-zap")).toBeNull();
     expect(host!.querySelector(".chat-controls__effort-fast-badge")).toBeNull();
@@ -254,23 +250,14 @@ describe("effort selection", () => {
     expect([glyph.width, glyph.height]).toEqual([zap.clientWidth, zap.clientHeight]);
   });
 
-  it("shows the effective level and marks the default level in the menu", async () => {
-    const badge = (selector: string) =>
-      host!.querySelector<HTMLElement>(`${selector} .chat-controls__permission-default-badge`);
+  it("shows the effective level without a default badge", async () => {
     await fixture(["low", "medium", "high"], "high", true);
     expect(summary().textContent?.trim()).toBe("High");
     expect(summary().getAttribute("aria-label")).toBe("Effort: Default (High)");
-    expect(badge("[data-chat-thinking-preview-committed]")?.textContent).toBe("Default");
-    expect(badge("[data-chat-thinking-preview-committed]")?.checkVisibility()).toBe(true);
-
-    const { input } = await fixture(["low", "medium", "high"], "medium");
-    expect(summary().getAttribute("aria-label")).toBe("Effort: Medium");
-    expect(badge("[data-chat-thinking-preview-committed]")).toBeNull();
-    input.value = "0";
-    input.dispatchEvent(new Event("input", { bubbles: true }));
-    flush();
-    expect(badge('[data-chat-thinking-preview-index="0"]')?.checkVisibility()).toBe(true);
-    expect(badge('[data-chat-thinking-preview-index="1"]')).toBeNull();
+    expect(host!.querySelector("[data-chat-thinking-preview-committed]")?.textContent?.trim()).toBe(
+      "High",
+    );
+    expect(host!.querySelector(".chat-controls__permission-default-badge")).toBeNull();
   });
 
   it("previews effort without committing and restores the committed level on cancel or blur", async () => {

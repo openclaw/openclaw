@@ -16,6 +16,7 @@ import {
   type PlainTextToolCallMessageProjection,
   type PlainTextToolCallNameMatcher,
   type PlainTextToolCallMessageNormalization,
+  type PlainTextToolCallProtectedRangeResolver,
 } from "../../packages/tool-call-repair/src/index.js";
 import type { StreamFn } from "../agents/runtime/index.js";
 import type { ThinkLevel } from "../auto-reply/thinking.js";
@@ -29,7 +30,7 @@ import { streamSimple } from "../llm/stream.js";
 import type { AssistantMessage, Model } from "../llm/types.js";
 import { createAssistantMessageEventStream } from "../llm/utils/event-stream.js";
 import { mapAssistantMessageStream } from "../llm/utils/stream-wrapper.js";
-import { findCodeRegions } from "../shared/text/code-regions.js";
+import { createCodeRegionResolver } from "../shared/text/code-regions.js";
 import { assertProviderStreamEvent } from "./provider-stream-event-normalization.js";
 export { recordSuppressedReasoning } from "@openclaw/llm-core/diagnostics";
 export { applyOpenAICompletionsToolReasoning } from "@openclaw/ai/internal/openai";
@@ -59,6 +60,7 @@ export {
   stripSystemPromptCacheBoundary,
 } from "@openclaw/ai/internal/shared";
 export {
+  applyProviderPayloadHook,
   createEmptyTransportUsage,
   mergeTransportHeaders,
   createProviderWaitObserver,
@@ -91,6 +93,7 @@ export function composeProviderStreamWrappers(
 function promotePlainTextToolCalls(
   message: unknown,
   toolNames: Set<string>,
+  resolveProtectedRanges: PlainTextToolCallProtectedRangeResolver,
 ): PlainTextToolCallMessageProjection | undefined {
   const messageRecord = asOptionalObjectRecord(message);
   if (
@@ -104,7 +107,7 @@ function promotePlainTextToolCalls(
     createToolCallBlock: createPromotedPlainTextToolCallBlock,
     isRetainableNonTextBlock: () => true,
     message,
-    resolveProtectedRanges: findCodeRegions,
+    resolveProtectedRanges,
   });
 }
 
@@ -127,6 +130,7 @@ function normalizeProviderDoneMessage(
   allowPromotion: boolean,
   toolNames: Set<string>,
   matcher: PlainTextToolCallNameMatcher,
+  resolveProtectedRanges: PlainTextToolCallProtectedRangeResolver,
   preserveEmptyTextBlocks = false,
 ): PlainTextToolCallMessageNormalization {
   const scrubbedMessage = projectScrubbedPlainTextToolCallMessage({
@@ -134,7 +138,7 @@ function normalizeProviderDoneMessage(
     matcher,
     message,
     preserveEmptyTextBlocks,
-    resolveProtectedRanges: findCodeRegions,
+    resolveProtectedRanges,
   });
   if (scrubbedMessage) {
     return { kind: "scrubbed", ...scrubbedMessage };
@@ -144,7 +148,7 @@ function normalizeProviderDoneMessage(
   if (!allowPromotion) {
     return undefined;
   }
-  const promotedMessage = promotePlainTextToolCalls(message, toolNames);
+  const promotedMessage = promotePlainTextToolCalls(message, toolNames, resolveProtectedRanges);
   return promotedMessage ? { kind: "promoted", ...promotedMessage } : undefined;
 }
 
@@ -160,6 +164,7 @@ function wrapPlainTextToolCallStream(
     return source;
   }
   const matcher = createProviderToolNameMatcher(toolNames);
+  const resolveProtectedRanges = createCodeRegionResolver();
   const output = createAssistantMessageEventStream();
 
   void (async () => {
@@ -173,13 +178,14 @@ function wrapPlainTextToolCallStream(
             allowPromotion,
             toolNames,
             matcher,
+            resolveProtectedRanges,
             preserveEmptyTextBlocks,
           ),
-        // findCodeRegions resolves exactly the CommonMark fenced/indented/inline code shapes
+        // The resolver preserves exactly the CommonMark fenced/indented/inline code shapes
         // the carried fence scan models (and yields to the full parse for the rest), so its
         // protection is safe to trust from the fast path.
         protectedRangesFenceCompatible: true,
-        resolveProtectedRanges: findCodeRegions,
+        resolveProtectedRanges,
         stopAfterDone: true,
       });
       for await (const normalizedEvent of normalizedEvents) {

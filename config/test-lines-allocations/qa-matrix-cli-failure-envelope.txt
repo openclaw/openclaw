@@ -1,0 +1,2 @@
+# Exercise the canonical CLI failure envelope through Matrix QA's existing refusal check.
+15

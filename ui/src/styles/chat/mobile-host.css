@@ -176,7 +176,7 @@
     inset-inline-start: 3px;
     width: calc(50% - 3px);
     border-radius: 16px;
-    background: var(--bg-hover);
+    background: var(--surface-selected);
     transition: inset-inline-start var(--motion-sheet);
   }
 
@@ -496,8 +496,11 @@
 .sidebar-region--mobile-host .chat-mobile-host,
 .sidebar-region--mobile-host .chat-mobile-host * {
   --scrollbar-thumb: transparent;
+  --scrollbar-thumb-near: transparent;
   --scrollbar-thumb-hover: transparent;
   scrollbar-color: transparent transparent;
+  /* The native host keeps standard overlay-style scrollbars, not the styled thumb. */
+  scrollbar-width: thin;
 }
 
 /* Reserve space only on existing scrollports. Hidden layout wrappers must not
@@ -526,8 +529,10 @@
 
 /* Separate hover: the build guards hover selectors on touch devices. */
 .sidebar-region--mobile-host .chat-mobile-host :hover,
-.sidebar-region--mobile-host .chat-mobile-host :is(:focus-within, [data-mobile-scrolling]) {
+.sidebar-region--mobile-host .chat-mobile-host :focus-within,
+.sidebar-region--mobile-host .chat-mobile-host [data-mobile-scrolling] {
   --scrollbar-thumb: color-mix(in srgb, var(--muted) 32%, transparent);
+  --scrollbar-thumb-near: var(--scrollbar-thumb);
   --scrollbar-thumb-hover: color-mix(in srgb, var(--muted) 64%, transparent);
   scrollbar-color: var(--scrollbar-thumb) transparent;
 }
@@ -606,14 +611,10 @@
 }
 
 /* Mounted pages reveal without delaying interaction or resetting their scroll. */
-.sidebar-region--mobile-host
-  .chat-mobile-host
-  :is(
-    .chat-mobile-host__details,
-    .chat-mobile-host__panels,
-    .chat-mobile-host__page,
-    .chat-mobile-details-page
-  ):not([hidden]) {
+.sidebar-region--mobile-host .chat-mobile-host .chat-mobile-host__details:not([hidden]),
+.sidebar-region--mobile-host .chat-mobile-host .chat-mobile-host__panels:not([hidden]),
+.sidebar-region--mobile-host .chat-mobile-host .chat-mobile-host__page:not([hidden]),
+.sidebar-region--mobile-host .chat-mobile-host .chat-mobile-details-page:not([hidden]) {
   opacity: 1;
   translate: 0 0;
   transition:

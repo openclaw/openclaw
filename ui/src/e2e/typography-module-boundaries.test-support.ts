@@ -76,7 +76,7 @@ export function defineTypographyModuleBoundaryTests(
         expect(report.body).toMatch(/^"?JetBrains Mono/u);
         expect(report.shortcut).toMatch(/^system-ui,/u);
         const applePlatform = platform === "MacIntel";
-        expect(report.text).toBe(applePlatform ? "⌘⇧," : "Ctrl+Shift+,");
+        expect(report.text).toBe(applePlatform ? "⌘⇧," : "Ctrl⇧,");
 
         await page.keyboard.press("Escape");
         await selectChatLayoutAction(page, /^(Side panel|Minimize side panel)$/);
@@ -85,9 +85,7 @@ export function defineTypographyModuleBoundaryTests(
           panelSelector.getByRole("button", { name }).locator(".side-panel-type-option__shortcut"),
         );
         await panelSelector.waitFor();
-        const labels = applePlatform
-          ? ["⌘⌥⇧E", "⌘⇧B", "⌘⇧S"]
-          : ["Ctrl+Alt+Shift+E", "Ctrl+Shift+B", "Ctrl+Shift+S"];
+        const labels = applePlatform ? ["⌘⌥⇧E", "⌘⇧B", "⌘⇧S"] : ["CtrlAlt⇧E", "Ctrl⇧B", "Ctrl⇧S"];
         const shortcuts = await Promise.all(
           panelShortcuts.map((shortcut) =>
             shortcut.evaluate((key) => {

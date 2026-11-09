@@ -17,7 +17,7 @@ function mountPhoneUsage(filters: Parameters<typeof usageState>[0] = {}) {
 }
 
 const trigger = (root: ParentNode) =>
-  root.querySelector<HTMLButtonElement>(".usage-filter-sheet__trigger");
+  root.querySelector<HTMLButtonElement>('[aria-controls="usage-filter-sheet"]');
 
 describe("Usage at phone width", () => {
   beforeEach(() => {
@@ -34,9 +34,9 @@ describe("Usage at phone width", () => {
   it.each([
     ["a preset range", {}, false],
     ["a custom range", { startDate: "2020-01-01", endDate: "2020-01-02" }, true],
-    ["UTC", { timeZone: "utc" as const }, true],
+    ["UTC", { timeZone: "utc" as const }, false],
     ["an identity", { creatorKey: "creator" }, true],
-    ["the instance scope", { scope: "instance" as const }, true],
+    ["the instance scope", { scope: "instance" as const }, false],
     ["a query", { query: "model:a", queryDraft: "model:a" }, true],
   ])("marks the trigger for %s", (_name, filters, active) => {
     const { root } = mountPhoneUsage({ ...todayRange, ...filters });

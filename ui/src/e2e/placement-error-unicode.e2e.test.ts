@@ -96,7 +96,7 @@ suite.define(() => {
           const alert = page.getByRole("alert").filter({ hasText: lead });
           await expect(alert).toBeVisible();
           await alert.locator("summary").click();
-          const detail = alert.locator("pre");
+          const detail = alert.locator(".lazy-view-error__detail");
           await expect(detail).toBeVisible();
           const rendered = await detail.textContent();
           const renderedWellFormed =
