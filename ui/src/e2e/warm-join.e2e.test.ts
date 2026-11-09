@@ -68,6 +68,23 @@ async function releaseModule(page: Page, module: Awaited<ReturnType<typeof holdM
   await response;
 }
 
+async function readSurfaceAtAnimationTime(page: Page, time: number) {
+  return page.evaluate((elapsed) => {
+    const root = document.documentElement;
+    for (const animation of root.getAnimations()) animation.currentTime = elapsed;
+    // Read in this task: a queued animation finish callback cannot reveal the body for us.
+    return {
+      surface: Reflect.get(window, "warmJoinSurface").read() as Surface,
+      warmFrame: root.getAttribute("data-openclaw-warm-frame"),
+      now: performance.now(),
+      composerVisible:
+        document
+          .querySelector("#openclaw-boot-composer")
+          ?.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true }) ?? false,
+    };
+  }, time);
+}
+
 async function prepareWarmPage(page: Page) {
   const fixture = createControlUiTeamScaleFixture({
     baseUrl: suite.server.baseUrl,
@@ -154,6 +171,20 @@ async function prepareWarmPage(page: Page) {
     content: `globalThis.__name = (fn) => fn; Reflect.set(window, "__paneChrome", (${installPaneChromeProbe.toString()})()); (${installWarmReloadBrowserProbe.toString()})("chat");`,
   });
   await page.addInitScript(installVisibleSurfaceProbe);
+  await page.addInitScript(() => {
+    const animate = Element.prototype.animate;
+    Element.prototype.animate = function (keyframes, options) {
+      const animation = animate.call(this, keyframes, options);
+      if (this === document.documentElement) {
+        // Native animation time is independent of Playwright's task/rAF clock.
+        queueMicrotask(() => {
+          animation.pause();
+          animation.currentTime = 0;
+        });
+      }
+      return animation;
+    };
+  });
   await page.clock.install();
   await pauseVirtualClock(page);
 }
@@ -223,9 +254,9 @@ suite.define(() => {
         await page.reload({ waitUntil: "domcontentloaded" });
         await pane.request;
         await page.clock.runFor(449);
-        expect((await readSurface(page)).skeleton).toBe(false);
+        expect((await readSurfaceAtAnimationTime(page, 449)).surface.skeleton).toBe(false);
         await page.clock.runFor(1);
-        expect((await readSurface(page)).skeleton).toBe(true);
+        expect((await readSurfaceAtAnimationTime(page, 450)).surface.skeleton).toBe(true);
         expect((await readSurface(page)).transcript).toBe(false);
         const boot = page.locator("#openclaw-boot-composer");
         expect(
@@ -241,6 +272,35 @@ suite.define(() => {
           "Synthetic draft typed in the deadline fallback",
         );
         expect(await page.locator("#openclaw-boot-composer").count()).toBe(0);
+      } finally {
+        pane.release();
+      }
+    });
+  });
+
+  it("reveals the deadline skeleton while JavaScript callback delivery is stalled", async () => {
+    await suite.withPage({ viewport, serviceWorkers: "block" }, async ({ page }) => {
+      await prepareWarmPage(page);
+      const pane = await holdModuleResponse(
+        page,
+        controlUiE2eBuiltModuleRequest("ui/src/pages/chat/route-entry.ts"),
+      );
+      try {
+        await page.reload({ waitUntil: "domcontentloaded" });
+        await pane.request;
+        await page.clock.runFor(430);
+        const before = await readSurfaceAtAnimationTime(page, 449);
+        expect(before.warmFrame).toBe("holding");
+        expect(before.surface.skeleton).toBe(false);
+        const deadline = await readSurfaceAtAnimationTime(page, 450);
+        expect(deadline.now).toBe(before.now);
+        expect(deadline.warmFrame).toBe("holding");
+        expect(deadline.surface.skeleton).toBe(true);
+        expect(deadline.surface.transcript).toBe(false);
+        expect(deadline.composerVisible).toBe(true);
+        await releaseModule(page, pane);
+        await page.clock.runFor(400);
+        expectComplete(await readSurface(page));
       } finally {
         pane.release();
       }

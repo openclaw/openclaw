@@ -32,7 +32,13 @@ export function finishBootFrame(region?: "sidebar" | "transcript"): void {
   const root = document.documentElement;
   if (!root.hasAttribute("data-openclaw-warm-frame")) return;
   if (region) committedBootRegions.add(region);
-  if (!region || committedBootRegions.size === 2) root.removeAttribute("data-openclaw-warm-frame");
+  if (!region || committedBootRegions.size === 2) {
+    root
+      .getAnimations()
+      .find((animation) => animation.id === "openclaw-warm-frame")
+      ?.cancel();
+    root.removeAttribute("data-openclaw-warm-frame");
+  }
 }
 
 /** Takes the static element before the first app commit replaces the boot frame. */
