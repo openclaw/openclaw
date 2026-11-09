@@ -19,7 +19,8 @@ import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { isMap, isSeq, type Node } from "yaml";
 import type { MdAst } from "./ast.js";
 import { setMdOcPath } from "./edit.js";
-import { rebuildMdRaw } from "./emit.js";
+import { insertMdSource } from "./emit.js";
+import { formatFrontmatterValue } from "./frontmatter-format.js";
 import type { JsoncAst, JsoncEntry, JsoncValue } from "./jsonc/ast.js";
 import { insertJsoncOcPath, setJsoncOcPath } from "./jsonc/edit.js";
 import { resolveJsoncOcPath } from "./jsonc/resolve.js";
@@ -31,6 +32,7 @@ import { formatOcPath, isPattern, OcPathError } from "./oc-path.js";
 import { resolveMdOcPath } from "./resolve.js";
 import { guardSentinel } from "./sentinel.js";
 import { slugify } from "./slug.js";
+import { sourceLineOffset } from "./source.js";
 import type { YamlAst } from "./yaml/ast.js";
 import { insertYamlOcPath, setYamlOcPath } from "./yaml/edit.js";
 import { resolveYamlOcPath } from "./yaml/resolve.js";
@@ -449,20 +451,23 @@ function setMdInsertion(ast: MdAst, info: InsertionInfo, value: string): SetResu
     if (info.marker !== "+") {
       return { ok: false, reason: "not-writable", detail: "md file-level insertion uses bare `+`" };
     }
-    const newAst: MdAst = {
-      ...ast,
-      blocks: [
-        ...ast.blocks,
-        {
-          heading: value,
-          slug: slugify(value),
-          line: 0,
-          bodyText: "",
-          items: [],
-        },
-      ],
+    const gap = ast.raw.replace(/^\uFEFF/, "").length > 0 && !/\n\r?\n$/.test(ast.raw) ? "\n" : "";
+    return {
+      ok: true,
+      ast: insertMdSource(ast, ast.raw.length, `${gap}## ${value}`, (shifted, line) => ({
+        ...shifted,
+        blocks: [
+          ...shifted.blocks,
+          {
+            heading: value,
+            slug: slugify(value),
+            line: line + gap.length,
+            bodyText: "",
+            items: [],
+          },
+        ],
+      })),
     };
-    return { ok: true, ast: rebuildMdRaw(newAst) };
   }
 
   if (p.section === "[frontmatter]") {
@@ -481,11 +486,31 @@ function setMdInsertion(ast: MdAst, info: InsertionInfo, value: string): SetResu
         detail: `frontmatter key '${key}' already exists; use set, not insert`,
       };
     }
-    const newAst: MdAst = {
-      ...ast,
-      frontmatter: [...ast.frontmatter, { key, value, line: 0 }],
+    const endLine = ast.frontmatterEndLine;
+    const hasFrontmatter = endLine !== undefined;
+    const offset =
+      endLine !== undefined
+        ? sourceLineOffset(ast.raw, endLine)
+        : ast.raw.startsWith("\uFEFF")
+          ? 1
+          : 0;
+    const entry = `${key}: ${formatFrontmatterValue(value)}`;
+    return {
+      ok: true,
+      ast: insertMdSource(
+        ast,
+        offset,
+        hasFrontmatter ? entry : `---\n${entry}\n---`,
+        (shifted, line) => ({
+          ...shifted,
+          frontmatterEndLine: hasFrontmatter ? shifted.frontmatterEndLine : line + 2,
+          frontmatter: [
+            ...shifted.frontmatter,
+            { key, value, line: line + (hasFrontmatter ? 0 : 1) },
+          ],
+        }),
+      ),
     };
-    return { ok: true, ast: rebuildMdRaw(newAst) };
   }
 
   // section-level: append item. Value can be `key: value` (kv) or plain text.
@@ -498,29 +523,38 @@ function setMdInsertion(ast: MdAst, info: InsertionInfo, value: string): SetResu
     if (blockIdx === -1) {
       return { ok: false, reason: "unresolved" };
     }
-    const block = expectDefined(ast.blocks[blockIdx], "located Markdown block index");
     const kvMatch = /^([^:]+?)\s*:\s*(.+)$/.exec(value);
     const itemLine = `- ${value}`;
     const kvKey =
       kvMatch === null ? undefined : expectDefined(kvMatch[1], "Markdown item key capture");
     const kvValue =
       kvMatch === null ? undefined : expectDefined(kvMatch[2], "Markdown item value capture");
-    const bodyPrefix = block.bodyText.length === 0 ? "" : block.bodyText.replace(/\n*$/, "\n");
-    const newItem = {
-      text: value,
-      slug: slugify(kvKey ?? value),
-      line: block.line + bodyPrefix.split("\n").length,
-      ...(kvKey !== undefined && kvValue !== undefined
-        ? { kv: { key: kvKey.trim(), value: kvValue.trim() } }
-        : {}),
+    const nextBlock = ast.blocks[blockIdx + 1];
+    const offset = nextBlock ? sourceLineOffset(ast.raw, nextBlock.line) : ast.raw.length;
+    return {
+      ok: true,
+      ast: insertMdSource(ast, offset, itemLine, (shifted, line) => ({
+        ...shifted,
+        blocks: shifted.blocks.map((entry, index) =>
+          index !== blockIdx
+            ? entry
+            : {
+                ...entry,
+                items: [
+                  ...entry.items,
+                  {
+                    text: value,
+                    slug: slugify(kvKey ?? value),
+                    line,
+                    ...(kvKey !== undefined && kvValue !== undefined
+                      ? { kv: { key: kvKey.trim(), value: kvValue.trim() } }
+                      : {}),
+                  },
+                ],
+              },
+        ),
+      })),
     };
-    const newBlocks = ast.blocks.slice();
-    newBlocks[blockIdx] = {
-      ...block,
-      items: [...block.items, newItem],
-      bodyText: bodyPrefix + itemLine,
-    };
-    return { ok: true, ast: rebuildMdRaw({ ...ast, blocks: newBlocks }) };
   }
 
   return { ok: false, reason: "not-writable" };

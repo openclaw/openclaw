@@ -207,9 +207,10 @@ depending on the per-kind AST shape.
 
 - Markdown frontmatter values and `- key: value` item fields are string
   leaves. Values are literal, including `$1`, `$&`, and `$$`. Markdown
-  insertions append sections, frontmatter keys, or section items and render a
-  standard Markdown format for the changed file. Section bodies are not
-  writable as a whole through `set`.
+  edits replace only the selected source range. Insertions append sections,
+  frontmatter keys, or section items without rebuilding unrelated content.
+  Existing comments, formatting, line endings, and the final-newline convention
+  are preserved. Section bodies are not writable as a whole through `set`.
 - JSONC leaf writes coerce the string value to the existing leaf type
   (`string`, finite `number`, `true`/`false`, or `null`). Use `--value-json`
   when a JSONC/JSON/JSONL leaf replacement should parse `<value>` as JSON and
@@ -229,9 +230,9 @@ depending on the per-kind AST shape.
 
 Use `--dry-run` before user-visible writes when the exact bytes matter. JSONC
 and YAML edits patch the existing document (via `jsonc-parser` or the `yaml`
-document API), so untouched bytes usually survive; markdown rebuilds the file
-from its parsed structure on any edit, which can normalize incidental
-formatting outside the changed leaf. Add `--diff` when you want the preview
+document API), so untouched bytes usually survive. Markdown edits preserve
+bytes outside the selected source range, including comments, anchors, and
+LF/CRLF line endings. Add `--diff` when you want the preview
 as a focused before/after patch instead of the full rendered file.
 The patch records line-ending changes and missing final newlines, so applying
 it produces the same bytes as the write.
