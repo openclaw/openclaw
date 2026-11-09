@@ -228,57 +228,53 @@ export function RunToolbar(props: CronRunsSectionProps) {
     toggle.focus({ preventScroll: true });
   };
   return (
-    <div class="cron-toolbar cron-run-toolbar">
-      <div class="cron-toolbar__primary">
-        <div class="cron-toolbar__actions">
-          <div class="cron-toolbar__filters">
-            {searchOpen() ? (
-              <HeaderSearchField
-                class="settings-input cron-search-field"
-                label={t("cron.runs.searchRuns")}
-                placeholder={t("cron.runs.searchPlaceholder")}
-                query={props.runsQuery}
-                focus={searchExpanded()}
-                onQueryChange={(query) => {
-                  setSearchExpanded(true);
-                  props.onRunsFiltersChange({ cronRunsQuery: query });
-                }}
-                onClose={closeSearch}
-              />
-            ) : undefined}
-            <IconButton
-              ref={(element) => (toggle = element)}
-              class="cron-search-toggle"
-              icon={searchOpen() ? "x" : "search"}
-              label={searchOpen() ? t("common.close") : t("cron.runs.searchRuns")}
-              onClick={() => (searchOpen() ? closeSearch() : setSearchExpanded(true))}
-            />
-            <Popover
-              id="cron-runs-filters"
-              label={t("cron.list.filters")}
-              class="cron-filter-popover"
-              triggerClass={[iconButtonClass(), { active: active() }]}
-              trigger={<Icon name="listFilter" />}
-              placement="bottom-end"
-            >
-              <div class="cron-filter-popover__panel">
-                <RunFilterMenus {...props} />
-              </div>
-            </Popover>
+    <div class="cron-toolbar__actions">
+      <div class="cron-toolbar__filters">
+        {searchOpen() ? (
+          <HeaderSearchField
+            class="settings-input cron-search-field"
+            label={t("cron.runs.searchRuns")}
+            placeholder={t("cron.runs.searchPlaceholder")}
+            query={props.runsQuery}
+            focus={searchExpanded()}
+            onQueryChange={(query) => {
+              setSearchExpanded(true);
+              props.onRunsFiltersChange({ cronRunsQuery: query });
+            }}
+            onClose={closeSearch}
+          />
+        ) : undefined}
+        <IconButton
+          ref={(element) => (toggle = element)}
+          class="cron-search-toggle"
+          icon={searchOpen() ? "x" : "search"}
+          label={searchOpen() ? t("common.close") : t("cron.runs.searchRuns")}
+          onClick={() => (searchOpen() ? closeSearch() : setSearchExpanded(true))}
+        />
+        <Popover
+          id="cron-runs-filters"
+          label={t("cron.list.filters")}
+          class="cron-filter-popover"
+          triggerClass={[iconButtonClass(), { active: active() }]}
+          trigger={<Icon name="listFilter" />}
+          placement="bottom-end"
+        >
+          <div class="cron-filter-popover__panel">
+            <RunFilterMenus {...props} />
           </div>
-          {(props.canCreate ?? props.canManage) ? (
-            <button
-              ref={props.focus?.ref("create")}
-              type="button"
-              class="btn primary btn--sm cron-new-task"
-              data-test-id="cron-new-task"
-              onClick={() => props.onOpenCreate?.()}
-            >
-              <Icon name="plus" /> {t("cron.list.newTask")}
-            </button>
-          ) : undefined}
-        </div>
+        </Popover>
       </div>
+      {(props.canCreate ?? props.canManage) ? (
+        <button
+          ref={props.focus?.ref("create")}
+          type="button"
+          class="btn primary btn--sm cron-new-task"
+          data-test-id="cron-new-task"
+          onClick={() => props.onOpenCreate?.()}
+        >
+          <Icon name="plus" /> {t("cron.list.newTask")}
+        </button>
+      ) : undefined}
     </div>
   );
 }

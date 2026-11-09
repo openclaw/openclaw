@@ -18,7 +18,7 @@ import {
 import type { CronJobActionProps, CronProps } from "./view-types.ts";
 export function JobRow(
   props: CronJobActionProps &
-    Pick<CronProps, "jobs" | "onSelectJob" | "focus" | "phoneLayout"> & {
+    Pick<CronProps, "jobs" | "onSelectJob" | "focus" | "phoneLayout" | "showAgent"> & {
       job: CronJob;
       index: number;
       count: number;
@@ -122,25 +122,39 @@ export function JobRow(
             <span class="cron-table__name-copy">
               <span class="cron-table__name-line">
                 <span class="cron-table__name-text">{displayName()}</span>
-                <JobStateIndicator job={props.job} />
+                <JobStateIndicator job={props.job} hideHealthy />
                 {props.job.trigger ? <TriggerIndicator /> : undefined}
               </span>
               <span class="cron-table__name-meta">
                 <JobCell
                   class="cron-table__schedule"
                   label={t("cron.jobs.schedule")}
-                  value={<JobSchedule job={props.job} />}
+                  value={<JobSchedule job={props.job} readable />}
                 />
-                <AgentRowChip agentId={props.job.agentId} />
+                {props.showAgent !== false ? (
+                  <>
+                    <span class="cron-table__meta-separator" aria-hidden="true">
+                      {" "}
+                      ·{" "}
+                    </span>
+                    <AgentRowChip agentId={props.job.agentId} />
+                  </>
+                ) : undefined}
                 <SuccessfulLastRun job={props.job} />
                 {description() ? (
-                  <span
-                    class="cron-table__description"
-                    data-test-id={`cron-row-description-${props.job.id}`}
-                    title={`${t("cron.form.description")}: ${description()}`}
-                  >
-                    {description()}
-                  </span>
+                  <>
+                    <span class="cron-table__meta-separator" aria-hidden="true">
+                      {" "}
+                      ·{" "}
+                    </span>
+                    <span
+                      class="cron-table__description"
+                      data-test-id={`cron-row-description-${props.job.id}`}
+                      title={`${t("cron.form.description")}: ${description()}`}
+                    >
+                      {description()}
+                    </span>
+                  </>
                 ) : undefined}
               </span>
               {isCronJobActiveFailure(props.job) ? (

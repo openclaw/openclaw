@@ -12,7 +12,6 @@ import { i18nRevision, t } from "../../lib/reactive/i18n.ts";
 import { createMediaQuery } from "../../lib/reactive/platform.ts";
 import { createCronPage } from "./cron-page-state.ts";
 import { CronRunTranscriptView } from "./run-transcript.tsx";
-import { HistoryButton } from "./view-controls.tsx";
 import { buildCronViewProps } from "./view-props.ts";
 import { CronView } from "./view.tsx";
 
@@ -99,31 +98,17 @@ export function CronPageContent(props: { page: ReturnType<typeof createCronPage>
       scopeControl()
     );
   const phoneList = () => phoneLayout() && !viewProps().editingJob && !viewProps().createOpen;
-  const historyOverview = () =>
-    !phoneLayout() &&
-    viewProps().listTab === "activity" &&
-    !viewProps().editingJob &&
-    !viewProps().createOpen;
   return (
     <>
       <HubPageHeader
         active="cron"
-        class={
-          phoneLayout()
-            ? undefined
-            : historyOverview()
-              ? "cron-header cron-header--history"
-              : "cron-header"
-        }
-        title={historyOverview() ? t("cron.list.runHistory") : undefined}
+        class={phoneLayout() ? undefined : "cron-header"}
         subtitle={
-          historyOverview()
-            ? t("cron.list.historySubtitle")
-            : pageHeader().filtered
-              ? t("cron.list.sessionFilter")
-              : phoneLayout()
-                ? undefined
-                : t("cron.list.subtitle")
+          pageHeader().filtered
+            ? t("cron.list.sessionFilter")
+            : phoneLayout()
+              ? undefined
+              : t("cron.list.subtitle")
         }
         docsUrl="https://docs.openclaw.ai/automation/cron-jobs"
         actions={
@@ -134,12 +119,7 @@ export function CronPageContent(props: { page: ReturnType<typeof createCronPage>
               scopeControl()
             )
           ) : (
-            <div class="cron-header__actions">
-              {!viewProps().editingJob && !viewProps().createOpen ? (
-                <HistoryButton {...viewProps()} />
-              ) : undefined}
-              {scopeAction()}
-            </div>
+            <div class="cron-header__actions">{scopeAction()}</div>
           )
         }
       />
@@ -150,6 +130,8 @@ export function CronPageContent(props: { page: ReturnType<typeof createCronPage>
           canManageJob={canPresentJob}
           canCreate={canPresentCreate()}
           phoneLayout={phoneList()}
+          showAgent={!pageHeader().filtered && !pageHeader().selectedAgentId}
+          onSelectListTab={phoneLayout() ? undefined : props.page.selectListTab}
           toolbarScope={phoneList() && !pageHeader().filtered ? scopeControl() : undefined}
           busy={props.page.saving() || viewProps().busy}
           toggleSavingJobId={props.page.toggleSavingJobId()}

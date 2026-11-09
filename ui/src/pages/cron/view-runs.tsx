@@ -26,7 +26,10 @@ export type CronRunsSectionProps = Pick<
   | "onRunMount"
 > &
   Partial<
-    Pick<CronProps, "phoneLayout" | "jobs" | "canManage" | "canCreate" | "onOpenCreate" | "focus">
+    Pick<
+      CronProps,
+      "phoneLayout" | "showAgent" | "jobs" | "canManage" | "canCreate" | "onOpenCreate" | "focus"
+    >
   > & {
     overview?: boolean;
     conditionActivity?: {

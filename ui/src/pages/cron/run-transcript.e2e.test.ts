@@ -57,8 +57,8 @@ async function installCron(page: Page, methodResponses: Record<string, unknown>)
   return gateway;
 }
 async function openRunHistory(page: Page) {
-  if (!(await page.getByRole("region", { name: "Run history", exact: true }).count())) {
-    await page.getByRole("button", { name: "Run history", exact: true }).click();
+  if (!(await page.getByRole("tabpanel", { name: "Run history", exact: true }).count())) {
+    await page.getByRole("tab", { name: "Run history", exact: true }).click();
   }
   const button = buttonNamed(page.locator(".cron-run-entry"), "View transcript");
   await button.click();
@@ -80,7 +80,7 @@ suite.define(() => {
       );
       try {
         await installCron(page, { "cron.history": history("Delayed transcript output") });
-        await page.getByRole("button", { name: "Run history", exact: true }).waitFor();
+        await page.getByRole("tab", { name: "Run history", exact: true }).waitFor();
         expect(heldHistory.requests()).toBe(0);
         expect(held.requests()).toBe(0);
         const { button, region } = await openRunHistory(page);
@@ -248,7 +248,7 @@ suite.define(() => {
       expect(await exactText(region, conversationScope).count()).toBe(1);
       expect(await region.getByText("Started at", { exact: false }).count()).toBe(0);
       expect(await gateway.getRequests("cron.history")).toHaveLength(0);
-      expect(new URL(page.url()).pathname).toBe("/cron");
+      expect(new URL(page.url()).pathname).toBe("/automations");
     });
   });
 

@@ -1261,6 +1261,14 @@
   width: min(300px, calc(100vw - 48px));
 }
 
+/* Desktop and tablet use the same 1120px column as Usage's SettingsPage wide.
+   Cap the outer page as well so shell/embed overrides cannot spread the list. */
+.cron-page--desktop {
+  width: 100%;
+  max-width: 1120px;
+  margin-inline: auto;
+}
+
 /* Desktop and tablet use a flat list; phone keeps the original toolbar and cards. */
 .cron-header__actions,
 .cron-page--desktop .cron-toolbar__navigation {
@@ -1278,28 +1286,6 @@
 
 .cron-page--desktop .cron-toolbar__navigation {
   flex: 0 0 auto;
-}
-
-.cron-page--desktop .cron-tabs {
-  padding: 0;
-  gap: var(--space-1);
-}
-
-.cron-page--desktop .hub-tab {
-  height: var(--settings-control-height);
-  padding: 0 var(--space-3);
-  border-radius: var(--radius-md);
-}
-
-.cron-page--desktop .hub-tab[active],
-.cron-page--desktop .hub-tab:hover {
-  background: var(--bg-hover);
-  box-shadow: none;
-}
-
-.cron-page--desktop .hub-tab:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: -2px;
 }
 
 .cron-page--desktop .cron-toolbar__filters {
@@ -1320,7 +1306,7 @@
 .cron-page--desktop .cron-table__row {
   grid-template-columns: auto minmax(0, 1fr) minmax(100px, 160px) auto;
   min-height: var(--list-row-min-height);
-  padding: var(--space-3) var(--space-2);
+  padding: var(--space-2);
   border-radius: var(--radius-md);
 }
 
@@ -1329,12 +1315,34 @@
 }
 
 .cron-table__toggle {
+  /* Keep the shared switch's track, thumb, focus and disabled treatment. */
+  --accent: var(--muted);
+  --accent-foreground: var(--bg);
+
   display: flex;
   align-items: center;
 }
 
 .cron-page--desktop .cron-table__state {
   margin-top: 0;
+}
+
+.cron-page--desktop .cron-table__name-meta {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: var(--control-ui-text-sm);
+  font-weight: 400;
+  line-height: 1.4;
+  white-space: nowrap;
+}
+
+.cron-page--desktop .cron-table__name-meta openclaw-agent-row-chip {
+  flex: 0 1 auto;
+  min-width: 0;
+}
+
+.cron-page--desktop .cron-table__meta-separator {
+  flex: none;
 }
 
 .cron-page--desktop .cron-table__cell {
@@ -1373,23 +1381,13 @@
   padding: 0;
 }
 
-.cron-header .cron-history {
-  padding: var(--space-2) var(--space-3);
-  border-radius: var(--radius-md);
-}
-
-.cron-header .cron-history[aria-pressed="true"] {
-  background: var(--bg-hover);
-  box-shadow: none;
-}
-
 .cron-page--desktop .cron-run-entry--compact {
   display: grid;
   grid-template-columns: 32px minmax(0, 1fr) minmax(100px, 160px) 62px;
   align-items: center;
   gap: var(--space-3);
   min-height: var(--list-row-min-height);
-  padding: var(--space-3) var(--space-2);
+  padding: var(--space-2);
   border: 0;
   border-radius: var(--radius-md);
 }
@@ -1414,11 +1412,12 @@
 }
 
 .cron-page--desktop .cron-run-entry__secondary {
+  line-height: 1.4;
   display: flex;
   align-items: center;
   gap: 6px;
   min-width: 0;
-  margin-top: 3px;
+  margin-top: 2px;
   font-size: var(--control-ui-text-sm);
 }
 
@@ -1430,7 +1429,7 @@
 .cron-page--desktop .cron-run-entry__error,
 .cron-page--desktop .cron-run-entry__summary {
   overflow: hidden;
-  margin-top: 3px;
+  margin-top: 2px;
   font-size: var(--control-ui-text-sm);
   text-overflow: ellipsis;
   white-space: nowrap;

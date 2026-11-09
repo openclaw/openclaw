@@ -75,7 +75,9 @@ describe("cron view run history", () => {
   });
 
   it("renders run summaries as sanitized markdown", async () => {
+    const job = createCronViewJob("job-1");
     const container = await renderView({
+      jobs: [job],
       runs: [
         createRun({ ts: 3, summary: "**bold** <script>alert(1)</script>" }),
         createRun({
@@ -88,6 +90,9 @@ describe("cron view run history", () => {
       ],
     });
     expect(container.querySelector(".cron-run-entry__summary")?.textContent).toContain("bold");
+    expect(
+      container.querySelector(".cron-run-entry__secondary openclaw-agent-row-chip"),
+    ).not.toBeNull();
     expect(container.querySelector(".cron-run-entry__summary strong")).toBeNull();
     expect(container.querySelectorAll(".cron-run-entry__summary")).toHaveLength(1);
     expect(container.querySelector(".cron-run-entry__error")?.textContent).toBe("Execution failed");
@@ -100,6 +105,8 @@ describe("cron view run history", () => {
     const body = getElement(container, ".cron-run-entry__body", HTMLDivElement);
     expect(body.querySelector("strong")?.textContent).toBe("bold");
     expect(body.querySelector("script")).toBeNull();
+    const scoped = await renderView({ jobs: [job], runs: [createRun()], showAgent: false });
+    expect(scoped.querySelector(".cron-run-entry__secondary openclaw-agent-row-chip")).toBeNull();
   });
 
   it("shows empty guidance only for settled history and offers recovery after failure", async () => {

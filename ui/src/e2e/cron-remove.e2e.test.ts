@@ -96,7 +96,7 @@ suite.define(() => {
       await expect.poll(() => row.count()).toBe(0);
       expect(await search.inputValue()).toBe("Nightly");
       expect(await search.evaluate((el) => el === document.activeElement)).toBe(true);
-      await page.getByRole("button", { name: "Run history", exact: true }).press("Enter");
+      await page.getByRole("tab", { name: "Run history", exact: true }).press("Enter");
       const create = page.locator(".cron-new-task");
       await create.press("Enter");
       await back.press("Enter");

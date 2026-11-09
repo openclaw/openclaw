@@ -99,17 +99,8 @@ export function ListView(props: CronProps) {
             <div
               id="cron-list-panel"
               class="cron-tab-panel"
-              role={!props.phoneLayout && props.listTab === "activity" ? "region" : "tabpanel"}
-              aria-label={
-                !props.phoneLayout && props.listTab === "activity"
-                  ? t("cron.list.runHistory")
-                  : undefined
-              }
-              aria-labelledby={
-                !props.phoneLayout && props.listTab === "activity"
-                  ? undefined
-                  : `cron-list-tab-${props.listTab === "activity" ? "activity" : props.jobsEnabledFilter}`
-              }
+              role="tabpanel"
+              aria-labelledby={`cron-list-tab-${props.listTab === "activity" ? "activity" : props.jobsEnabledFilter}`}
             >
               {props.listTab === "activity" ? (
                 <ListSection phoneLayout={props.phoneLayout}>
@@ -409,6 +400,7 @@ function JobRows(props: CronProps & { rows: CronJob[] }) {
       <JobRow
         job={row.job}
         phoneLayout={props.phoneLayout}
+        showAgent={props.showAgent}
         jobs={props.jobs}
         canManage={canManageJob()}
         canCreate={canCreate()}

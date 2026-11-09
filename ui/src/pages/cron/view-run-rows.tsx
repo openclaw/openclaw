@@ -217,6 +217,7 @@ export function RunRows(
           <CompactRun
             entry={row.entry}
             agentId={agentId()}
+            showAgent={props.showAgent}
             formatTimestamp={props.formatTimestamp}
             highlightedRunId={props.highlightedRunId}
             onRunMount={props.onRunMount}

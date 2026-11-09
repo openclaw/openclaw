@@ -56,6 +56,12 @@ registerEnglishCatalog(registerCronEnglish);
 
 type CronListTab = "tasks" | "activity";
 type CronDetailTab = "settings" | "history";
+type CronRouteListTab = "all" | "enabled" | "disabled" | "activity";
+
+function resolveListTab(search: string): CronRouteListTab {
+  const tab = new URLSearchParams(search).get("tab");
+  return tab === "enabled" || tab === "disabled" || tab === "activity" ? tab : "all";
+}
 
 /** Owns page presentation; cron admission and mutation chains remain synchronous. */
 export function createCronPage(context: () => ApplicationContext, host: () => HTMLElement) {
@@ -132,7 +138,7 @@ export function createCronPage(context: () => ApplicationContext, host: () => HT
     // Replacing the owner retires results from the previous agent scope.
     resetGatewayState(context().gateway.snapshot);
     cron.cronAgentId = scopeId;
-    setListTab("tasks");
+    setListTab(resolveListTab(routeSearch) === "activity" ? "activity" : "tasks");
     setDetailTab("settings");
     ensureInitialData();
     publish();
@@ -289,6 +295,8 @@ export function createCronPage(context: () => ApplicationContext, host: () => HT
         ? detailTab() === "history"
         : !nextCron.cronCreateOpen && listTab() === "activity";
     cron = nextCron;
+    const tab = resolveListTab(routeSearch);
+    updateCronJobsFilter(cron, { cronJobsEnabledFilter: tab === "activity" ? "all" : tab });
     const routeData = cronRoute.resolveCronRouteData(routeSearch);
     cron.cronSessionFilter = routeData.session;
     routeSelection.requested = false;
@@ -357,8 +365,8 @@ export function createCronPage(context: () => ApplicationContext, host: () => HT
 
   let lastPanelKey: string | null = null;
 
-  function setRouteSearch(search: string) {
-    if (search === routeSearch) {
+  function setRouteSearch(search: string, restoreSelection = false) {
+    if (search === routeSearch && !restoreSelection) {
       return;
     }
     presentation.retire();
@@ -367,17 +375,51 @@ export function createCronPage(context: () => ApplicationContext, host: () => HT
     cron.cronError = null;
     cron.cronNotice = null;
     const routeData = cronRoute.resolveCronRouteData(search);
-    if (JSON.stringify(cron.cronSessionFilter) !== JSON.stringify(routeData.session)) {
+    const scopeChanged =
+      JSON.stringify(cron.cronSessionFilter) !== JSON.stringify(routeData.session);
+    if (scopeChanged) {
       resetGatewayState(context().gateway.snapshot);
-      ensureInitialData();
     }
-    setListTab("tasks");
+    const tab = resolveListTab(search);
+    const enabledFilter = tab === "activity" ? cron.cronJobsEnabledFilter : tab;
+    const enabledChanged = cron.cronJobsEnabledFilter !== enabledFilter;
+    updateCronJobsFilter(cron, { cronJobsEnabledFilter: enabledFilter });
+    setListTab(tab === "activity" ? "activity" : "tasks");
     setDetailTab("settings");
     routeSelection.target = routeData.jobId || routeData.session ? routeData : null;
     routeSelection.requested = false;
     cron.cronRunsRunId = null;
     pendingRunScroll = false;
     publish();
+    if (scopeChanged) {
+      ensureInitialData();
+    } else {
+      if (enabledChanged) {
+        void presentation.read("jobs", (current) =>
+          loadCronJobsPage(current, { tableFilters: true }),
+        );
+      }
+      if (tab === "activity" && active) {
+        onSettled(() => void presentation.runTask(loadCronRuns));
+      }
+    }
+  }
+
+  function selectListTab(tab: CronRouteListTab) {
+    const params = new URLSearchParams(routeSearch);
+    if (tab === "all") {
+      params.delete("tab");
+    } else {
+      params.set("tab", tab);
+    }
+    const query = params.toString();
+    const search = query ? `?${query}` : "";
+    // Phone tabs are local; returning to desktop can select the URL we already have.
+    if (search === routeSearch) {
+      setRouteSearch(search, true);
+      return;
+    }
+    context().navigate("cron", { search });
   }
 
   function preparePanel() {
@@ -748,6 +790,7 @@ export function createCronPage(context: () => ApplicationContext, host: () => HT
     revision: projection.revision,
     publish,
     setRouteSearch,
+    selectListTab,
     registerRun(this: void, element: HTMLElement, entry: () => CronRunLogEntry) {
       runRows.set(element, entry);
       afterRender();

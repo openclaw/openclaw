@@ -11,20 +11,6 @@ import { t } from "../../lib/reactive/i18n.ts";
 import type { CronJobActionProps, CronProps } from "./view-types.ts";
 
 registerCronEnglish();
-export function HistoryButton(props: Pick<CronProps, "listTab" | "onListTabChange">) {
-  return (
-    <button
-      type="button"
-      class="btn btn--ghost btn--sm cron-history"
-      data-test-id="cron-list-tab-activity"
-      aria-controls="cron-list-panel"
-      aria-pressed={props.listTab === "activity" ? "true" : "false"}
-      onClick={() => props.onListTabChange(props.listTab === "activity" ? "tasks" : "activity")}
-    >
-      {t("cron.list.runHistory")}
-    </button>
-  );
-}
 export function ErrorBanner(props: { error: string | null; reads?: CronProps["reads"] }) {
   const modelRequest = createMemo(() => props.reads?.modelRequest());
   return (

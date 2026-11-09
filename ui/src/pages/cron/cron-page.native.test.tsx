@@ -107,6 +107,9 @@ it("loads history and delivery accounts only for their visible automation surfac
   const context = createContext(gateway);
   context.agents.state.agentsList!.agents.push({ id: "garden" });
   const page = createPage({ ...context, acquireChannels: () => channels }, { render: true });
+  vi.mocked(context.navigate).mockImplementation((_route, options) => {
+    page.routeSearch = options?.search ?? "";
+  });
   const clickTab = (id: string) => page.querySelector<HTMLButtonElement>(testId(id))!.click();
   try {
     await waitForSolid(() => expect(row(page, job.id)).not.toBeNull());
@@ -117,8 +120,9 @@ it("loads history and delivery accounts only for their visible automation surfac
     expect(page.querySelector(".page-subtitle a")?.textContent).toContain("Learn more");
     expect(page.querySelector(".hub-page-header__actions .agent-select__trigger")).not.toBeNull();
     const history = getButtonByText(page, "Run history");
-    expect(history.getAttribute("role")).not.toBe("tab");
-    expect(history.closest('[role="tablist"]')).toBeNull();
+    expect(history.getAttribute("role")).toBe("tab");
+    const tabs = history.closest('[role="tablist"]');
+    expect(tabs).not.toBeNull();
     expectCalls(request, ["cron.runs", "channels.status"], 0);
     history.click();
     await waitForSolid(() =>
@@ -126,14 +130,17 @@ it("loads history and delivery accounts only for their visible automation surfac
         "Garden review complete",
       ),
     );
-    expect(page.querySelector("h1")?.textContent).toBe("Run history");
-    expect(page.querySelector('[role="region"][aria-label="Run history"]')).not.toBeNull();
+    expect(page.querySelector("h1")?.textContent).toBe("Automations");
+    expect(
+      page.querySelector('[role="tabpanel"][aria-labelledby="cron-list-tab-activity"]'),
+    ).not.toBeNull();
     expect(page.querySelector(".page-subtitle")?.textContent).toContain(
-      "Every run of your automations.",
+      "Schedule recurring tasks for your agents.",
     );
-    expect(history.getAttribute("aria-pressed")).toBe("true");
-    expect(page.querySelector(".cron-list-hub-tabs")).toBeNull();
-    expect(page.querySelector(".cron-toolbar:not(.cron-run-toolbar)")).toBeNull();
+    expect(history.getAttribute("aria-selected")).toBe("true");
+    expect(page.querySelector('[role="tablist"]')).toBe(tabs);
+    expect(page.querySelector(testId("cron-list-tab-activity"))).toBe(history);
+    expect(page.querySelectorAll('.cron-list-hub-tabs [role="tab"]')).toHaveLength(4);
     expect(page.querySelector(".hub-page-header__actions .agent-select__trigger")).not.toBeNull();
     expectCalls(request, ["cron.runs"], 1);
 
@@ -143,7 +150,7 @@ it("loads history and delivery accounts only for their visible automation surfac
     expectCalls(request, ["cron.runs"], 2);
     emitEvent(gateway);
     await page.settle();
-    history.click();
+    clickTab("cron-tab-all");
     await page.settle();
     expect(page.querySelector("h1")?.textContent).toBe("Automations");
     held.resolve(result);

@@ -55,7 +55,7 @@ suite.define(() => {
             );
             await page.getByRole("tab", { name: "Aktivitätsverlauf", exact: true }).click();
           } else {
-            await page.getByRole("button", { name: "Run history", exact: true }).click();
+            await page.getByRole("tab", { name: "Run history", exact: true }).click();
             await page.locator('[aria-controls="cron-runs-filters"]').click();
           }
           const labels = page.locator(

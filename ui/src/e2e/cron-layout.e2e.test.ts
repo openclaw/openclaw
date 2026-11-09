@@ -11,11 +11,11 @@ const responsiveViewports = [
   { width: 390, height: 844 },
   { width: 768, height: 1024 },
   { width: 1366, height: 768 },
-  { width: 1440, height: 900 },
+  { width: 1920, height: 900 },
 ] as const;
 
 suite.define(() => {
-  it("keeps Automations toolbar, run actions, and history title visible across widths", async () => {
+  it("keeps Automations toolbar, run actions, and persistent tabs visible across widths", async () => {
     const context = await suite.browser.newContext({
       colorScheme: "light",
       locale: "en-US",
@@ -42,7 +42,8 @@ suite.define(() => {
                 const actions = document.querySelector<HTMLElement>(".cron-toolbar__actions");
                 const table = document.querySelector<HTMLElement>(".cron-table");
                 const tabGroup = document.querySelector<HTMLElement>(".cron-list-hub-tabs");
-                if (!primary || !filters || !actions || !table || !tabGroup) {
+                const row = table?.querySelector<HTMLElement>(".cron-table__row");
+                if (!primary || !filters || !actions || !table || !tabGroup || !row) {
                   return null;
                 }
                 const filtersBox = filters.getBoundingClientRect();
@@ -67,6 +68,10 @@ suite.define(() => {
                     ) <= 1,
                   actionsContainFilters: actions.contains(filters),
                   primaryContainsActions: primary.contains(actions),
+                  contentWidthCapped: tableBox.width <= 1120,
+                  compactRowPadding:
+                    getComputedStyle(row).paddingTop ===
+                    getComputedStyle(row).getPropertyValue("--space-2").trim(),
                 };
               }),
             )
@@ -78,6 +83,8 @@ suite.define(() => {
               filtersInlineWithActions: true,
               actionsContainFilters: true,
               primaryContainsActions: true,
+              contentWidthCapped: true,
+              compactRowPadding: true,
             });
         }
         expect(
@@ -87,7 +94,7 @@ suite.define(() => {
         ).toEqual(
           viewport.width <= 480
             ? ["All", "Active", "Paused", "Activity history"]
-            : ["All", "Active", "Paused"],
+            : ["All", "Active", "Paused", "Run history"],
         );
         expect(await page.locator(".cron-toolbar__filters").getByRole("radiogroup").count()).toBe(
           0,
@@ -99,7 +106,7 @@ suite.define(() => {
           "Healthy automation",
         ]);
         const phone = viewport.width <= 480;
-        expect(await page.getByRole("button", { name: "Run history", exact: true }).count()).toBe(
+        expect(await page.getByRole("tab", { name: "Run history", exact: true }).count()).toBe(
           phone ? 0 : 1,
         );
         expect(
@@ -147,34 +154,44 @@ suite.define(() => {
           await page.getByRole("tab", { name: "Activity history", exact: true }).click();
           expect(await page.locator(".cron-run-filter-search input").isVisible()).toBe(true);
           expect(await page.getByRole("tab", { name: "All", exact: true }).count()).toBe(1);
+          const phoneUrl = page.url();
+          await page.setViewportSize(responsiveViewports[1]);
           await page.getByRole("tab", { name: "All", exact: true }).click();
+          expect(page.url()).toBe(phoneUrl);
+          await page.locator(".cron-table__row").first().waitFor();
         } else {
-          const history = page.getByRole("button", { name: "Run history", exact: true });
+          const history = page.getByRole("tab", { name: "Run history", exact: true });
           const createBox = await page.locator(".cron-new-task").boundingBox();
-          const activeFill = await page
+          const activeIndicator = await page
             .locator('[role="tab"][aria-selected="true"]')
-            .evaluate((tab) => getComputedStyle(tab).backgroundColor);
+            .evaluate((tab) => getComputedStyle(tab).boxShadow);
+          expect(activeIndicator).not.toBe("none");
           await history.click();
           await page.mouse.move(0, 0);
-          await page.getByRole("heading", { name: "Run history", exact: true }).waitFor();
-          expect(await history.getAttribute("aria-pressed")).toBe("true");
+          await page.getByRole("heading", { name: "Automations", exact: true }).waitFor();
+          await expect.poll(() => history.getAttribute("aria-selected")).toBe("true");
           await expect
-            .poll(() => history.evaluate((button) => getComputedStyle(button).backgroundColor))
-            .toBe(activeFill);
+            .poll(() => history.evaluate((tab) => getComputedStyle(tab).boxShadow))
+            .toBe(activeIndicator);
           const historyCreateBox = await page.locator(".cron-new-task").boundingBox();
           expect(historyCreateBox?.x).toBe(createBox?.x);
           expect(historyCreateBox?.y).toBe(createBox?.y);
           expect(await page.locator(".page-subtitle").textContent()).toContain(
-            "Every run of your automations.",
+            "Schedule recurring tasks for your agents.",
           );
-          expect(await page.locator(".cron-toolbar:not(.cron-run-toolbar)").count()).toBe(0);
-          expect(await page.getByRole("tab", { name: "All", exact: true }).count()).toBe(0);
+          expect(await page.getByRole("tab", { name: "All", exact: true }).isVisible()).toBe(true);
           expect(await page.locator(".cron-new-task").isVisible()).toBe(true);
           expect(await page.locator(".cron-header .agent-select__trigger").isVisible()).toBe(true);
-          await history.click();
-          await page.getByRole("heading", { name: "Automations", exact: true }).waitFor();
+          await page.getByRole("tab", { name: "All", exact: true }).click();
+          await page.locator(".cron-table__row").first().waitFor();
         }
       }
+      await page.locator(".agent-select__trigger").click();
+      await page.locator('.agent-select__option[value=""]').click();
+      await expect.poll(() => page.locator(".cron-table openclaw-agent-row-chip").count()).toBe(2);
+      await page.locator(".agent-select__trigger").click();
+      await page.locator('.agent-select__option[value="main"]').click();
+      await expect.poll(() => page.locator(".cron-table openclaw-agent-row-chip").count()).toBe(0);
     } finally {
       await context.close();
     }

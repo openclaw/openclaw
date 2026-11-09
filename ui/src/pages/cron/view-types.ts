@@ -21,6 +21,8 @@ export type CronProps = Omit<CronViewProps, OptionalViewProp | "gateway"> &
     /** Phone retains the original toolbar and job cards. */
     phoneLayout?: boolean;
     toolbarScope?: JSX.Element;
+    showAgent?: boolean;
+    onSelectListTab?: (tab: "all" | "enabled" | "disabled" | "activity") => void;
     toggleSavingJobId?: string | null;
     focus?: {
       readonly target: string | undefined;

@@ -224,7 +224,7 @@ suite.define(() => {
         "cron.runs": runsPage(oldRuns, 51, 0, 50),
       });
       await page.goto(`${suite.server.baseUrl}cron`);
-      await page.getByRole("button", { name: "Run history", exact: true }).click();
+      await page.getByRole("tab", { name: "Run history", exact: true }).click();
       await page.getByText(oldRuns[0]!.summary, { exact: true }).waitFor();
       await gateway.deferNext("cron.runs", { query: "Lunar", offset: 0 });
       await page.getByRole("button", { name: "Search runs", exact: true }).click();

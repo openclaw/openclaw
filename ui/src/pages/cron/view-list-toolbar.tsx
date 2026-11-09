@@ -19,11 +19,7 @@ const ENABLED_TABS: Array<{
 ];
 function ListTabs(props: CronProps) {
   const active = createMemo(() =>
-    props.listTab === "activity"
-      ? props.phoneLayout
-        ? "activity"
-        : null
-      : props.jobsEnabledFilter,
+    props.listTab === "activity" ? "activity" : props.jobsEnabledFilter,
   );
   return (
     <HubTabs<CronJobsEnabledFilter | "activity">
@@ -37,18 +33,18 @@ function ListTabs(props: CronProps) {
           label: t(tab.labelKey),
           testId: `cron-tab-${tab.value}`,
         })),
-        ...(props.phoneLayout
-          ? [
-              {
-                value: "activity" as const,
-                label: t("cron.list.activityTab"),
-                testId: "cron-list-tab-activity",
-              },
-            ]
-          : []),
+        {
+          value: "activity",
+          label: t(props.phoneLayout ? "cron.list.activityTab" : "cron.list.runHistory"),
+          testId: "cron-list-tab-activity",
+        },
       ]}
       ariaLabel={t("cron.list.viewLabel")}
       onSelect={(value) => {
+        if (props.onSelectListTab) {
+          props.onSelectListTab(value);
+          return;
+        }
         if (value === "activity") {
           props.onListTabChange("activity");
           return;
@@ -145,56 +141,60 @@ export function ListToolbar(
     <>
       {props.phoneLayout ? (
         phoneToolbar()
-      ) : props.listTab === "activity" ? (
-        <RunToolbar {...props} />
       ) : (
-        <div class="cron-toolbar">
+        <div class={["cron-toolbar", { "cron-run-toolbar": props.listTab === "activity" }]}>
           <div class="cron-toolbar__primary">
             <div class="cron-toolbar__navigation">
               <ListTabs {...props} />
             </div>
-            <div class="cron-toolbar__actions">
-              {props.listTab === "tasks" ? (
-                <div class="cron-toolbar__filters">
-                  {searchOpen() ? (
-                    <HeaderSearchField
-                      class="settings-input cron-search-field"
-                      label={t("cron.list.searchPlaceholder")}
-                      query={props.jobsQuery}
-                      focus={searchExpanded()}
-                      controlRef={() => props.focus?.ref("search")}
-                      onQueryChange={(query) => {
-                        setSearchExpanded(true);
-                        props.onJobsFiltersChange({ cronJobsQuery: query });
-                      }}
-                      onClose={closeSearch}
-                    />
-                  ) : undefined}
-                  <button
-                    ref={[
-                      props.focus?.ref("search", () => !searchOpen()),
-                      (element: HTMLButtonElement) => (searchToggle = element),
-                    ]}
-                    type="button"
-                    class={[iconButtonClass(), "cron-search-toggle"]}
-                    aria-label={searchOpen() ? t("common.close") : t("cron.list.searchPlaceholder")}
-                    title={searchOpen() ? t("common.close") : t("cron.list.searchPlaceholder")}
-                    onClick={() => (searchOpen() ? closeSearch() : setSearchExpanded(true))}
-                  >
-                    <Icon name={searchOpen() ? "x" : "search"} />
-                  </button>
-                  <JobsFilterPopover {...props} active={props.hasAdvancedJobsFilters} />
-                </div>
-              ) : undefined}
-              <RefreshButton
-                class="cron-refresh"
-                label={t("cron.list.refresh")}
-                tooltip={refreshing() ? t("cron.list.refreshing") : t("cron.list.refresh")}
-                busy={refreshing()}
-                onClick={() => void refresh()}
-              />
-              {newTask()}
-            </div>
+            {props.listTab === "activity" ? (
+              <RunToolbar {...props} />
+            ) : (
+              <div class="cron-toolbar__actions">
+                {props.listTab === "tasks" ? (
+                  <div class="cron-toolbar__filters">
+                    {searchOpen() ? (
+                      <HeaderSearchField
+                        class="settings-input cron-search-field"
+                        label={t("cron.list.searchPlaceholder")}
+                        query={props.jobsQuery}
+                        focus={searchExpanded()}
+                        controlRef={() => props.focus?.ref("search")}
+                        onQueryChange={(query) => {
+                          setSearchExpanded(true);
+                          props.onJobsFiltersChange({ cronJobsQuery: query });
+                        }}
+                        onClose={closeSearch}
+                      />
+                    ) : undefined}
+                    <button
+                      ref={[
+                        props.focus?.ref("search", () => !searchOpen()),
+                        (element: HTMLButtonElement) => (searchToggle = element),
+                      ]}
+                      type="button"
+                      class={[iconButtonClass(), "cron-search-toggle"]}
+                      aria-label={
+                        searchOpen() ? t("common.close") : t("cron.list.searchPlaceholder")
+                      }
+                      title={searchOpen() ? t("common.close") : t("cron.list.searchPlaceholder")}
+                      onClick={() => (searchOpen() ? closeSearch() : setSearchExpanded(true))}
+                    >
+                      <Icon name={searchOpen() ? "x" : "search"} />
+                    </button>
+                    <JobsFilterPopover {...props} active={props.hasAdvancedJobsFilters} />
+                  </div>
+                ) : undefined}
+                <RefreshButton
+                  class="cron-refresh"
+                  label={t("cron.list.refresh")}
+                  tooltip={refreshing() ? t("cron.list.refreshing") : t("cron.list.refresh")}
+                  busy={refreshing()}
+                  onClick={() => void refresh()}
+                />
+                {newTask()}
+              </div>
+            )}
           </div>
         </div>
       )}

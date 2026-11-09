@@ -21,7 +21,10 @@ import { RUN_DELIVERY_LABELS, runStatusLabel } from "./view-run-status.ts";
 import type { CronProps } from "./view-types.ts";
 
 export function CompactRun(
-  props: Parameters<typeof LegacyRun>[0] & { agentId: string | null | undefined },
+  props: Parameters<typeof LegacyRun>[0] & {
+    agentId: string | null | undefined;
+    showAgent?: boolean;
+  },
 ) {
   const id = createUniqueId();
   const failed = () => props.entry.status === "error" || props.entry.completionStatus === "failed";
@@ -94,7 +97,7 @@ export function CompactRun(
           />
         </Popover>
         <div class="cron-run-entry__secondary muted">
-          {props.agentId !== null ? (
+          {props.showAgent !== false && props.agentId !== null ? (
             <>
               <AgentRowChip agentId={props.agentId ?? undefined} />
               <span aria-hidden="true">·</span>

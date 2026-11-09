@@ -1,4 +1,5 @@
 import { Show } from "solid-js";
+import { resolveExactDurationParts } from "../../../../src/infra/format-time/format-duration-exact.ts";
 import type { CronJob } from "../../api/types.ts";
 import type { IconName } from "../../components/solid/icon.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
@@ -8,7 +9,7 @@ import {
   resolveCronJobLastRunStatus,
 } from "../../lib/cron-status.ts";
 import { formatUiExternalText } from "../../lib/format-error.ts";
-import { formatMs, formatRelativeTimestamp } from "../../lib/format.ts";
+import { formatMs, formatRelativeTimestamp, formatUnit } from "../../lib/format.ts";
 import { formatCronSchedule } from "../../lib/presenter.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { runStatusLabel } from "./view-runs.tsx";
@@ -26,7 +27,7 @@ export function describeJobSchedule(job: CronJob): string {
 }
 
 /** The zone stays separate so the phone card can drop it; the detail view keeps it. */
-export function JobSchedule(props: { job: CronJob }) {
+export function JobSchedule(props: { job: CronJob; readable?: boolean }) {
   const schedule = () => props.job.schedule;
   const zone = () => {
     const current = schedule();
@@ -34,6 +35,12 @@ export function JobSchedule(props: { job: CronJob }) {
   };
   const expression = () => {
     const current = schedule();
+    if (props.readable && current.kind === "every") {
+      const duration = resolveExactDurationParts(current.everyMs)
+        ?.map((part) => formatUnit({ ...part, unitDisplay: "long" }))
+        .join(" ");
+      return t("cron.scheduleLabel.every", { duration: duration ?? t("common.na") });
+    }
     return current.kind === "cron"
       ? formatCronSchedule({ schedule: { ...current, tz: undefined } })
       : describeJobSchedule(props.job);
@@ -72,7 +79,7 @@ export function describeJobNextRun(job: CronJob, absolute = false): string {
       : t("cron.jobState.nextRelative", { at: formatRelativeTimestamp(next) });
 }
 
-export function JobStateIndicator(props: { job: CronJob }) {
+export function JobStateIndicator(props: { job: CronJob; hideHealthy?: boolean }) {
   const presentation = (): [string, IconName | null, string] => {
     const autoDisabled = props.job.state?.autoDisabled;
     const waiting = props.job.enabled && props.job.state?.admissionDeferred;
@@ -96,16 +103,18 @@ export function JobStateIndicator(props: { job: CronJob }) {
             : ["active", null, t("cron.detail.active")];
   };
   return (
-    <span
-      class={["cron-table__state", `cron-table__state--${presentation()[0]}`]}
-      role="img"
-      aria-label={presentation()[2]}
-      title={presentation()[2]}
-    >
-      <Show when={presentation()[1]} fallback={<span class="cron-table__state-dot" />}>
-        {(name) => <Icon name={name()} />}
-      </Show>
-    </span>
+    <Show when={!props.hideHealthy || presentation()[1] !== null}>
+      <span
+        class={["cron-table__state", `cron-table__state--${presentation()[0]}`]}
+        role="img"
+        aria-label={presentation()[2]}
+        title={presentation()[2]}
+      >
+        <Show when={presentation()[1]} fallback={<span class="cron-table__state-dot" />}>
+          {(name) => <Icon name={name()} />}
+        </Show>
+      </span>
+    </Show>
   );
 }
 export function TriggerIndicator() {
@@ -195,9 +204,15 @@ export function SuccessfulLastRun(props: { job: CronJob }) {
   return (
     <>
       {resolveCronJobLastRunStatus(props.job) === "ok" && time() !== undefined ? (
-        <span class="cron-table__last-success muted">
-          {t("cron.list.lastRun", { at: formatRelativeTimestamp(time()) })}
-        </span>
+        <>
+          <span class="cron-table__meta-separator" aria-hidden="true">
+            {" "}
+            ·{" "}
+          </span>
+          <span class="cron-table__last-success muted">
+            {t("cron.list.lastRun", { at: formatRelativeTimestamp(time()) })}
+          </span>
+        </>
       ) : undefined}
     </>
   );
