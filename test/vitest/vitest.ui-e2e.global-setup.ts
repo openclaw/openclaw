@@ -32,6 +32,7 @@ export default async function setup(project: TestProject) {
   if (root.getProvidedContext().controlUiE2eChromium !== undefined) {
     return;
   }
+  const setupStarted = performance.now();
   const executablePath = resolvePlaywrightChromiumExecutablePath(chromium.executablePath());
   const available = canRunPlaywrightChromium(executablePath);
   if (available) {
@@ -49,6 +50,7 @@ export default async function setup(project: TestProject) {
       buildInfo: { buildId, version },
     });
   }
+  const launchStarted = performance.now();
   const browser = available
     ? await chromium.launchServer({
         executablePath,
@@ -56,6 +58,7 @@ export default async function setup(project: TestProject) {
         args: ["--disable-partial-raster", "--disable-gpu-rasterization"],
       })
     : undefined;
+  const launchMs = performance.now() - launchStarted;
   // onClose runs after the entire invocation and worker pool settle, including
   // sibling projects whose setup borrowed the endpoint. A browser crash fails
   // its connected suites; the CI harness does not retry or relaunch it.
@@ -84,6 +87,9 @@ export default async function setup(project: TestProject) {
     available,
     wsEndpoint: browser?.wsEndpoint() ?? null,
   });
+  console.info(
+    `[ui-e2e] Chromium setup ${Math.round(performance.now() - setupStarted)} ms; launch ${Math.round(launchMs)} ms; available=${available}`,
+  );
 }
 
 // Inspector.targetCrashed has no payload. The browser Target domain retains the

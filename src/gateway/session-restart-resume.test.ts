@@ -150,7 +150,7 @@ it.for(["prepared", "managed", "crash", "slow-crash", "failed"] as const)(
           context.agentDatabaseStartup = admission.observation;
           context.resolveGatewayContext = () => context;
           if (crash) {
-            context.restartResumeWindow = { startedAt: 100, endedAt: 200 };
+            context.restartResumeWindows = { main: [{ startedAt: 100, endedAt: 200 }] };
           }
           const params = { context, signal: admission.signal, log: { warn: vi.fn() } };
           const wait = admission.observation.waitForAgentPreparation.bind(admission.observation);
@@ -259,7 +259,13 @@ it.for(["prepared", "managed", "crash", "slow-crash", "failed"] as const)(
                 reason: "Controlled preparation failure",
               });
             } else {
-              expect(params.log.warn).not.toHaveBeenCalled();
+              expect(params.log.warn.mock.calls.flat()).toEqual(
+                mode === "prepared"
+                  ? []
+                  : [
+                      "Agent main resume deferred: agent database unavailable (agent-database-inspection-pending)",
+                    ],
+              );
               expect(discover).toHaveBeenCalledOnce();
               expect(loadExactSessionEntry(target)?.entry.resumeAfterRestart).toBeUndefined();
               expect(loadExactSessionEntry(target)?.entry.lifecycleRunId).toBeUndefined();
@@ -291,8 +297,8 @@ it.each(["crash", "markers", "failed-preparation", "clean-or-unknown"] as const)
         return { agentId, sessionKey: `agent:${agentId}:${name}` };
       };
       const cases: Array<[string, Partial<InternalSessionEntry>, boolean]> = [
-        ["crash", {}, mode === "crash" || mode === "markers"],
-        ["yielded", { endedAt: 120 }, mode === "crash" || mode === "markers"],
+        ["crash", {}, mode !== "clean-or-unknown"],
+        ["yielded", { endedAt: 120 }, mode !== "clean-or-unknown"],
         ["stale", { startedAt: 1, updatedAt: 999 }, false],
         ["missing-start", { startedAt: undefined }, false],
         ["new-incarnation", { startedAt: 200 }, false],
@@ -370,7 +376,7 @@ it.each(["crash", "markers", "failed-preparation", "clean-or-unknown"] as const)
                   }
                 : {}),
               ...(mode !== "clean-or-unknown"
-                ? { restartResumeWindow: { startedAt: 100, endedAt: 200 } }
+                ? { restartResumeWindows: { main: [{ startedAt: 100, endedAt: 200 }] } }
                 : {}),
             },
             signal: new AbortController().signal,
@@ -400,6 +406,114 @@ it.each(["crash", "markers", "failed-preparation", "clean-or-unknown"] as const)
       } finally {
         resume.mockRestore();
         releaseAgentRunContext("live", claim);
+      }
+    }),
+);
+
+it.for(["archived", "incognito"] as const)("does not mark a %s hidden message wait", (kind) =>
+  withOpenClawTestState({ scenario: "minimal" }, async () => {
+    setRuntimeConfigSnapshot({});
+    const target = { agentId: "main", sessionKey: `agent:main:subagent:${kind}` };
+    const runId = `parked-${kind}`;
+    replaceSessionEntrySync(target, {
+      sessionId: runId,
+      updatedAt: 1,
+      lifecycleRunId: runId,
+      activeWriterRunId: runId,
+      ...(kind === "archived" ? { archivedAt: 1 } : { incognito: true }),
+    });
+    subagentRuns.set(
+      runId,
+      createSubagentRunRecord({
+        runId,
+        childSessionKey: target.sessionKey,
+        childAgentId: target.agentId,
+        childSessionIdentity: { sessionId: runId },
+        endedAt: 1,
+        pauseReason: "sessions_yield",
+        waitForMessage: true,
+      }),
+    );
+    try {
+      await persistRunningSessionsForRestart({ cfg: {} });
+      expect(loadExactSessionEntry(target)?.entry.resumeAfterRestart).toBeUndefined();
+    } finally {
+      subagentRuns.delete(runId);
+    }
+  }),
+);
+
+it("marks the active execution when an older message wait remains in the same session", () =>
+  withOpenClawTestState({ scenario: "minimal" }, async () => {
+    setRuntimeConfigSnapshot({});
+    const target = {
+      agentId: "main",
+      sessionKey: "agent:main:dashboard:replaced-message-wait",
+      sessionId: "replaced-message-wait",
+    };
+    const runId = "current-execution";
+    replaceSessionEntrySync(target, {
+      sessionId: target.sessionId,
+      updatedAt: 1,
+      lifecycleRunId: runId,
+      activeWriterRunId: runId,
+    });
+    const oldRunId = "old-message-wait";
+    subagentRuns.set(
+      oldRunId,
+      createSubagentRunRecord({
+        runId: oldRunId,
+        childSessionKey: target.sessionKey,
+        childAgentId: target.agentId,
+        childSessionIdentity: { sessionId: target.sessionId },
+        endedAt: 1,
+        pauseReason: "sessions_yield",
+        waitForMessage: true,
+      }),
+    );
+    const claim = claimAgentRunContext(runId, target, { trackOwner: true, ownsContext: true });
+    try {
+      await persistRunningSessionsForRestart({ cfg: {} });
+      expect(loadExactSessionEntry(target)?.entry.resumeAfterRestart).toEqual({
+        queuedInputIds: [],
+      });
+    } finally {
+      releaseAgentRunContext(runId, claim);
+      subagentRuns.delete(oldRunId);
+    }
+  }));
+
+it.each(["restart", "user", "completed"] as const)(
+  "selects retained %s work at the restart marker snapshot",
+  (ending) =>
+    withOpenClawTestState({ scenario: "minimal" }, async () => {
+      setRuntimeConfigSnapshot({});
+      const target = {
+        agentId: "main",
+        sessionKey: `agent:main:before-markers-${ending}`,
+        sessionId: `before-markers-${ending}`,
+      };
+      replaceSessionEntrySync(target, { sessionId: target.sessionId, updatedAt: 1 });
+      const { operation, release } = await withSessionTurn(target, async (active) => {
+        assert(active);
+        if (ending === "completed") {
+          active.freezeAbort();
+        }
+        return { operation: active, release: active.retainExecution() };
+      });
+      try {
+        if (ending !== "completed") {
+          expect(ending === "restart" ? operation.abortForRestart() : operation.abortByUser()).toBe(
+            true,
+          );
+        }
+        await persistRunningSessionsForRestart({ cfg: {} });
+        expect(loadExactSessionEntry(target)?.entry.resumeAfterRestart).toEqual(
+          ending === "restart" ? { queuedInputIds: [] } : undefined,
+        );
+      } finally {
+        release();
+        await operation.ownerSettlement;
       }
     }),
 );

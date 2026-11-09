@@ -8,7 +8,6 @@ import {
 } from "../../infra/kysely-sync.js";
 import { sqlPublicationAnchor } from "../../infra/sql-connection.js";
 import { withSqlitePostCommitPublications } from "../../infra/sqlite-post-commit.js";
-import { prepareSqliteReadOnlyLocationAwaited } from "../../infra/sqlite-snapshot-source.js";
 import { runSqliteReadSnapshotSync } from "../../infra/sqlite-transaction.js";
 import {
   assertExistingDatabaseIdentity,
@@ -55,6 +54,7 @@ import { prepareSessionColdSourceGuard } from "./session-cold-storage-source-gua
 import { readSessionColdTranscript } from "./session-cold-storage-state.js";
 import { readSessionCreationReceipt } from "./session-creation-receipts.js";
 import { createSessionEntryReadScope } from "./session-entry-cohort.worker.js";
+import { prepareSessionEntryInspectionSnapshot } from "./session-entry-inspection-snapshot.worker.js";
 import { captureSessionEntryReadSource } from "./session-entry-read-source.js";
 import type {
   SessionEntryReadWorkerInput,
@@ -147,6 +147,7 @@ export async function readExactSessionEntriesWithLifecycleAsync(
       preserveSourceArtifacts: _,
       expectedIdentity: admittedIdentity,
       inspectionSourcePath,
+      inspectionSnapshot,
       ...selection
     } = request;
     // Cold sources are identified here, without opening or initializing the original database.
@@ -182,15 +183,13 @@ export async function readExactSessionEntriesWithLifecycleAsync(
       }
     };
     assertOriginal();
-    const snapshot = await prepareSqliteReadOnlyLocationAwaited(request.database.path, {
-      signal,
-      expectedSourceIdentity: expectedIdentity,
-    });
+    const snapshot = await prepareSessionEntryInspectionSnapshot(request, signal, expectedIdentity);
     let result: SessionExactEntriesWorkerResult;
     let cleaned: boolean;
     try {
       signal.throwIfAborted();
       assertOriginal();
+      snapshot.assertCurrent?.();
       const read = withArtifactPreservingStateReads(() =>
         withFreshOpenClawAgentDatabaseReadOnly(
           (database) => {
@@ -199,7 +198,7 @@ export async function readExactSessionEntriesWithLifecycleAsync(
               {
                 ...selection,
                 database: { agentId: database.agentId, path: database.path },
-                expectedIdentity: readDatabasePathIdentitySync(database.path),
+                expectedIdentity: inspectionSnapshot ?? readDatabasePathIdentitySync(database.path),
               },
               database,
             );

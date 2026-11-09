@@ -556,7 +556,7 @@ export const contract = defineFeatureContract({
       kind: "query",
       description:
         "Operator settings: agents, effective store assignments and store inventory. Never creates storage.",
-      input: empty,
+      input: Type.Object({ includeRecordCounts: Type.Optional(Type.Boolean()) }),
       output: StoresSnapshot,
     },
     stores_change: {

@@ -1,7 +1,7 @@
 import { sanitizeForLog } from "../../../packages/terminal-core/src/ansi.js";
 import { resolveAgentWorkspaceDir, tryResolveSoleAgentId } from "../../agents/agent-scope.js";
 import {
-  applyPluginAutoEnable,
+  applyPluginAutoEnableAsync,
   materializePluginAutoEnableCandidates,
 } from "../../config/plugin-auto-enable.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -93,7 +93,7 @@ export async function runDoctorRepairSequence(params: {
   findings: readonly HealthFinding[];
   authProfilesRepaired: boolean;
   modelRetirementRepairRan: boolean;
-  modelRetirementOnly: boolean;
+  modelRetirementBlockers: string[];
   openAICodexAuthProfileIdMap?: ReadonlyMap<string, string>;
   retiredModelRefConfig?: Pick<OpenClawConfig, "agents" | "models">;
   pluginMetadataSnapshot?: PluginMetadataSnapshot;
@@ -112,7 +112,7 @@ export async function runDoctorRepairSequence(params: {
     env,
   );
   let modelRetirementRepairRan = false;
-  let modelRetirementOnly = false;
+  const modelRetirementBlockers: string[] = [];
   let retiredModelRefConfig: Pick<OpenClawConfig, "agents" | "models"> | undefined;
   const resolveCurrentPluginMetadataScope = () => {
     const config = state.candidate;
@@ -298,11 +298,13 @@ export async function runDoctorRepairSequence(params: {
   if (missingConfiguredPluginInstallRepair.changes.length > 0) {
     appendNotes(changeNotes, missingConfiguredPluginInstallRepair.changes);
     applyMutation(
-      applyPluginAutoEnable({
-        config: state.candidate,
-        env,
-        manifestRegistry: pluginMetadataSnapshotState.current?.manifestRegistry,
-      }),
+      await runWithCurrentPluginMetadata(() =>
+        applyPluginAutoEnableAsync({
+          config: state.candidate,
+          env,
+          manifestRegistry: pluginMetadataSnapshotState.current?.manifestRegistry,
+        }),
+      ),
     );
     if (repairedPluginIds.length > 0) {
       applyMutation(
@@ -408,12 +410,16 @@ export async function runDoctorRepairSequence(params: {
         }),
       );
     }
-    const onlyRetirementPending =
-      !state.pendingChanges &&
-      changeNotes.length === 0 &&
-      warningNotes.length === 0 &&
-      authRepair.findings.length === 0 &&
-      !params.modelReplacements?.length;
+    modelRetirementBlockers.push(
+      ...[
+        state.pendingChanges && "model-retirement.pending-changes",
+        changeNotes.length > 0 && "model-retirement.change-notes",
+        warningNotes.length > 0 && "model-retirement.warning-notes",
+        codexRouteRepair.warnings.length > 0 && "model-retirement.warning-notes.codex-routes",
+        authRepair.findings.length > 0 && "model-retirement.auth-findings",
+        Boolean(params.modelReplacements?.length) && "model-retirement.model-replacements",
+      ].filter((blocker): blocker is string => Boolean(blocker)),
+    );
     const modelRepair = repairStaleAgentModelRefs(state.candidate, {
       modelReplacements: params.modelReplacements,
       env,
@@ -423,10 +429,15 @@ export async function runDoctorRepairSequence(params: {
     applyMutation(modelRepair);
     modelRetirementRepairRan =
       modelRepair.warnings.length === 0 && hasDeferredUpdateModelRetirement(env);
-    modelRetirementOnly = onlyRetirementPending && modelRetirementRepairRan;
+    if (modelRepair.warnings.length > 0) {
+      modelRetirementBlockers.push("model-retirement.model-repair-warnings");
+    }
   } else if (packageSwapInProgress) {
     recordUpdateModelRetirement("deferred", env);
     warningNotes.push(DEFERRED_UPDATE_MODEL_RETIREMENT_WARNING);
+  }
+  if (!modelRetirementRepairRan && modelRetirementBlockers.length === 0) {
+    modelRetirementBlockers.push("model-retirement");
   }
   const authProfilesRepaired =
     authFieldRepair.changes.length > 0 ||
@@ -449,7 +460,7 @@ export async function runDoctorRepairSequence(params: {
     findings: authRepair.findings,
     authProfilesRepaired,
     modelRetirementRepairRan,
-    modelRetirementOnly,
+    modelRetirementBlockers,
     installedPluginIdRecovery: installedPluginRecovery.recovery,
     ...(retiredModelRefConfig ? { retiredModelRefConfig } : {}),
     openAICodexAuthProfileIdMap,
