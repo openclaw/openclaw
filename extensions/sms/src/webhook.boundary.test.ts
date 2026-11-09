@@ -289,7 +289,7 @@ it.each(["source", "route"] as const)(
                 port,
                 index,
                 fixture,
-                scope === "source" ? "127.0.0.1" : `203.0.113.${Math.floor(index / 8) + 1}`,
+                scope === "source" ? "127.0.0.1" : `203.0.113.${Math.floor(index / 16) + 1}`,
               ),
             );
           }
@@ -329,10 +329,10 @@ it.each(["source", "route"] as const)(
           }
           const released = await fixture.wait(Promise.all(held.map((pending) => pending.result)));
           expect(released.filter((statusCode) => statusCode === 403)).toHaveLength(
-            scope === "source" ? 8 : 64,
+            scope === "source" ? 16 : 64,
           );
           expect(released.filter((statusCode) => statusCode === 429)).toHaveLength(
-            scope === "source" ? 56 : 0,
+            scope === "source" ? 48 : 0,
           );
 
           const recoveryForm: Record<string, string> = createSmsTestForm(
