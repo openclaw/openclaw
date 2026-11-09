@@ -25,7 +25,11 @@ import {
   createDesktopPanelLifecycle,
   type DesktopPanelInputSnapshot,
 } from "./desktop-panel-lifecycle.ts";
-import type { DesktopPanelState, DesktopSizingMode } from "./desktop-panel-state.ts";
+import type {
+  DesktopFocusRegion,
+  DesktopPanelState,
+  DesktopSizingMode,
+} from "./desktop-panel-state.ts";
 import { projectDesktopPanelView } from "./desktop-panel-view-data.ts";
 import { DesktopSessionOwner } from "./desktop-session-owner.ts";
 import { desktopSourceForEnvironment } from "./desktop-source.ts";
@@ -55,6 +59,7 @@ export function createDesktopPanel(
   let connectionFailure: "error" | "lost" | "closed" | null = null;
   let desktopApps: WorkerDesktopAppId[] = [];
   let sizingMode: DesktopSizingMode = "fit";
+  let focusRegion: DesktopFocusRegion | undefined;
   let canResize = false;
   const handoff = new DesktopConnectionHandoff();
   let savedCredentials: DesktopCredentials | undefined;
@@ -272,6 +277,7 @@ export function createDesktopPanel(
     desktopApps = [];
     controlling = false;
     sizingMode = "fit";
+    focusRegion = undefined;
     canResize = false;
     disconnectedReason = null;
     hostSetup.clear();
@@ -419,6 +425,7 @@ export function createDesktopPanel(
       savedCredentials = undefined;
       credentialAuth = undefined;
       sizingMode = "fit";
+      focusRegion = undefined;
     }
     canResize = false;
     hostSetup.clear();
@@ -516,6 +523,13 @@ export function createDesktopPanel(
         viewOnly: !pending.observed.control,
         canResize: pending.observed.canResize,
         sizingMode,
+        focusRegion,
+        focusHint: t("desktop.focusAreaHint"),
+        onFocusRegion: (region) => {
+          if (pending.operationId === operation) {
+            focusRegion = region;
+          }
+        },
         target,
         onConnect: () => {
           if (pending.operationId === operation) {
@@ -695,6 +709,9 @@ export function createDesktopPanel(
             void connectEnvironment(currentId, controlling);
           },
           onSizingChange: (mode) => {
+            if (mode !== "focus") {
+              focusRegion = undefined;
+            }
             sizingMode = mode;
             notify();
             handoff.setSizingMode(mode);

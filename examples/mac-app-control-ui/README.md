@@ -52,10 +52,11 @@ Open a conversation hosted on that Mac node. Any model available to OpenClaw
 can use the published Xcode tools to edit, build, inspect issues, and test.
 Accept Xcode's connection prompt for this node. In Control UI, select the paired
 Mac in the Desktop picker, or use the Desktop tab in a device-hosted
-conversation. Select **Fit height** for a tall iPhone view, **Fit** for the full
-Mac display, and **Take Control** to send pointer and keyboard input. Fit height
-scales the whole display; it does not isolate the Simulator window. Full
-screen gives the Simulator more room.
+conversation. Select **Focus area**, then drag around the Simulator window to
+fill the viewer with it. This keeps the Mac's pointer coordinates aligned with
+the zoomed image. Select **Fit** to return to the full display, or **Fit height**
+to scale the whole display to the viewer's height. Select **Take Control** to
+send pointer and keyboard input. Full screen gives the Simulator more room.
 
 For a macOS SwiftUI app, keep Xcode's canvas visible and use its `#Preview`.
 For an iOS app, boot a device in Xcode or Simulator and run the app there. The

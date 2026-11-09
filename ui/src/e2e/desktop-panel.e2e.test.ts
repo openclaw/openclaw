@@ -215,6 +215,45 @@ sizingSuite.define(() => {
       await peer.send([createRfbRawFrame(), marker]);
       await expect.poll(dimensions).toEqual([1000, 750]);
       await capture("fit-before-axis");
+      await sizing.selectOption("focus");
+      const focusOverlay = panel.locator(".desktop-focus-overlay");
+      await expect(focusOverlay).toBeVisible();
+      const canvasBounds = await canvas.boundingBox();
+      if (!canvasBounds) {
+        throw new Error("Desktop canvas must be visible");
+      }
+      await page.mouse.move(canvasBounds.x + 200, canvasBounds.y + 100);
+      await page.mouse.down();
+      await page.mouse.move(canvasBounds.x + 400, canvasBounds.y + 400);
+      await page.mouse.up();
+      await expect(focusOverlay).toBeHidden();
+      expect(await pointer()).toBeNull();
+      await expect.poll(async () => (await dimensions())[1]).toBeGreaterThan(750);
+      await page.mouse.click(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2);
+      await expect.poll(pointer).toEqual([240, 200]);
+      await capture("focused-area");
+      await peer.send([[0, 0, 0, 1, 0, 0, 0, 0, 6, 64, 4, 176, 255, 255, 255, 33]]);
+      await expect
+        .poll(() =>
+          canvas.evaluate((element: HTMLCanvasElement) => [element.width, element.height]),
+        )
+        .toEqual([1600, 1200]);
+      await page.mouse.click(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2);
+      await expect.poll(pointer).toEqual([480, 400]);
+      await peer.send([[0, 0, 0, 1, 0, 0, 0, 0, 3, 32, 2, 88, 255, 255, 255, 33]]);
+      await expect
+        .poll(() =>
+          canvas.evaluate((element: HTMLCanvasElement) => [element.width, element.height]),
+        )
+        .toEqual([800, 600]);
+      await sizing.selectOption("fit");
+      await expect.poll(dimensions).toEqual([1000, 750]);
+      await sizing.selectOption("focus");
+      await expect(focusOverlay).toBeVisible();
+      await focusOverlay.press("ArrowRight");
+      await focusOverlay.press("Enter");
+      await expect(focusOverlay).toBeHidden();
+      await sizing.selectOption("fit");
       await selectAxis("fit-height");
       await expect.poll(dimensions).toEqual([Math.round((bounds.height * 4) / 3), bounds.height]);
       expect(await scroll("top", 100)).toBe(0);

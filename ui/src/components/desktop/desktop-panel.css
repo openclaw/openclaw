@@ -812,6 +812,38 @@ openclaw-desktop-panel {
     inset: 0;
     background: var(--bg);
   }
+  .desktop-focus-overlay {
+    position: absolute;
+    inset: 0;
+    z-index: 2;
+    cursor: crosshair;
+    touch-action: none;
+    user-select: none;
+    background: rgb(0 0 0 / 20%);
+  }
+  .desktop-focus-overlay[hidden],
+  .desktop-focus-selection[hidden] {
+    display: none;
+  }
+  .desktop-focus-hint {
+    position: absolute;
+    top: 12px;
+    left: 50%;
+    max-width: calc(100% - 24px);
+    padding: 6px 10px;
+    transform: translateX(-50%);
+    border-radius: 8px;
+    background: var(--bg);
+    color: var(--text);
+    text-align: center;
+    pointer-events: none;
+  }
+  .desktop-focus-selection {
+    position: absolute;
+    border: 2px solid var(--accent);
+    background: rgb(255 255 255 / 15%);
+    pointer-events: none;
+  }
   /* View-only affordance: clicking anywhere on the desktop takes control. */
   .desktop-stage__take-control {
     position: absolute;

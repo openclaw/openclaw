@@ -133,6 +133,8 @@ it.each(sizingCases)("Match authentication: %j", async ({ documentMode, canResiz
   expect(handle.setSizingMode).toHaveBeenLastCalledWith("fit-height");
   selectSizing(panel, "fit-width");
   expect(handle.setSizingMode).toHaveBeenLastCalledWith("fit-width");
+  selectSizing(panel, "focus");
+  expect(handle.setSizingMode).toHaveBeenLastCalledWith("focus");
   if (canResize && control) {
     selectSizing(panel, "match");
     await panel.updateComplete;
@@ -145,6 +147,22 @@ it.each(sizingCases)("Match authentication: %j", async ({ documentMode, canResiz
     expect(audio?.getAttribute("aria-label")).toBe("Audio unavailable");
     expect(audio?.disabled).toBe(true);
   }
+});
+
+it("retains the selected focus area when taking control of the same desktop", async () => {
+  const request = observeRequest((params) => ({ control: params?.control }));
+  const { connect } = connections(true);
+  const panel = await mount(request, connect);
+  const region = { x: 0.2, y: 0.3, width: 0.25, height: 0.4 };
+  selectSizing(panel, "focus");
+  connect.mock.calls[0]![0].onFocusRegion?.(region);
+  clickPanelButton(panel, ".desktop-stage__take-control");
+  await connected(panel, connect, 2);
+  expect(connect.mock.calls[1]![0]).toMatchObject({
+    focusRegion: region,
+    sizingMode: "focus",
+    viewOnly: false,
+  });
 });
 
 it.each(["retry", "demotion", "permission loss", "source change"] as const)(

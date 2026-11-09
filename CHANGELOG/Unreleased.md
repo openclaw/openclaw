@@ -3,6 +3,7 @@
 ### Changes
 
 - Developer workflow: document Xcode MCP and interactive Mac/iOS Simulator development through a paired Mac node and Control UI Desktop.
+- Control UI: focus the Desktop viewer on a selected app window area while preserving pointer input.
 
 ### Fixes
 
