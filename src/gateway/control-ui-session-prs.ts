@@ -183,12 +183,18 @@ async function resolveSessionBranch(
   };
 }
 
-function parsePullList(value: unknown, host: string): PullListItem[] {
+function parsePullList(value: unknown, host: string, branchStartedAt?: number): PullListItem[] {
   if (!Array.isArray(value)) {
     return [];
   }
   return value.map(parsePullListItem).filter((item): item is PullListItem => {
     if (!item) {
+      return false;
+    }
+    // Head queries match by branch name only. A recycled worktree name reuses its
+    // branch name, so an older PR on that name is another task's work.
+    const createdAt = item.createdAt ? Date.parse(item.createdAt) : Number.NaN;
+    if (branchStartedAt !== undefined && createdAt < branchStartedAt) {
       return false;
     }
     const url = URL.parse(item.url);
@@ -234,6 +240,7 @@ async function fetchBranchPullRequests(
       items = parsePullList(
         await read.request(pullsByHeadUrl(context.owner, context.repo, queryHead, read.apiBaseUrl)),
         read.host,
+        context.branchStartedAt,
       );
       lists.set(queryHead, items);
     }
@@ -266,6 +273,7 @@ async function fetchBranchPullRequests(
       items = parsePullList(
         await read.request(pullsByHeadUrl(parent.owner, parent.repo, head, read.apiBaseUrl)),
         read.host,
+        context.branchStartedAt,
       );
     }
   }
