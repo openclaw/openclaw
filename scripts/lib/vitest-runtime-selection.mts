@@ -91,6 +91,45 @@ export function selectVitestWorkerPreset(
   return toolingOnly ? "tooling" : runtimeOnly ? "runtime" : "full";
 }
 
+/** Share the exact group decision between CI's archive hint and worker owner. */
+export function resolveCiVitestWorkerPreset(
+  plans: {
+    target?: string;
+    configs?: string[];
+    includePatterns?: readonly string[] | null;
+    requiresDist?: boolean;
+    pretestBuildMode?: string;
+    env?: NodeJS.ProcessEnv;
+  }[],
+  hasExtraArgs = false,
+): VitestWorkerPreset {
+  const supports = (
+    files: typeof areRuntimeOnlyVitestUnitFiles,
+    selection: typeof shouldUseRuntimeOnlyVitestWorkers,
+  ) =>
+    !hasExtraArgs &&
+    plans.length > 0 &&
+    plans.every((plan) =>
+      plan.target !== undefined
+        ? files([plan.target])
+        : plan.configs?.length === 1 &&
+          Boolean(plan.includePatterns?.length) &&
+          !plan.requiresDist &&
+          plan.pretestBuildMode === undefined &&
+          selection(
+            plan.configs[0]!,
+            [],
+            plan.env ?? {},
+            undefined,
+            plan.includePatterns ?? undefined,
+          ),
+    );
+  return selectVitestWorkerPreset(
+    supports(areRuntimeOnlyVitestUnitFiles, shouldUseRuntimeOnlyVitestWorkers),
+    supports(areToolingOnlyVitestUnitFiles, shouldUseToolingOnlyVitestWorkers),
+  );
+}
+
 export function areToolingOnlyVitestUnitFiles(files: readonly string[]): boolean {
   return files.length > 0 && files.every((file) => toolingOnlyUnitFiles.has(file));
 }
