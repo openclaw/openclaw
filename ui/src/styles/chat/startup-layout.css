@@ -436,8 +436,8 @@ div.chat-thread:where(.chat-thread--annotations) {
 
 .chat-pane__header:not(.chat-pane__header--mobile) .chat-details-toggle,
 .chat-pane__header:not(.chat-pane__header--mobile) .chat-pane__layout-trigger {
-  min-height: 32px;
-  height: 32px;
+  min-height: 28px;
+  height: 28px;
   gap: 6px;
   padding-inline: 8px;
 }
@@ -474,7 +474,9 @@ div.chat-thread:where(.chat-thread--annotations) {
 
 /* Desktop composition; mobile keeps its own presenter and touch targets. */
 .chat-pane__header:not(.chat-pane__header--mobile) {
-  --chat-pane-header-icon-size: 32px;
+  /* Every control in the desktop header row is 28px (--rail-header-action-size)
+     with the shared icon-button radius, so the row reads as one toolbar. */
+  --chat-pane-header-icon-size: 28px;
 
   /* Lift the header's stacking context so its floating connection indicator
      paints over the transcript below. */
@@ -497,7 +499,8 @@ div.chat-thread:where(.chat-thread--annotations) {
   --icon-button-stroke: 1.6px;
   --icon-button-color: var(--icon-interactive, var(--control-secondary-text, var(--muted)));
 
-  /* Header composition supplies the approved glyph to the native Details trigger. */
+  /* Header composition supplies the approved glyph to the native Details trigger;
+     the base rule's --radius-md keeps it in the same shape as the icon buttons beside it. */
   & .chat-details-toggle {
     width: var(--rail-header-action-size);
     min-width: var(--rail-header-action-size);
@@ -506,8 +509,6 @@ div.chat-thread:where(.chat-thread--annotations) {
     padding: 0;
     justify-content: center;
     border-color: transparent;
-    border-radius: calc(8px * var(--openclaw-corner-radius-scale));
-    corner-shape: superellipse(1.5);
     background: transparent;
   }
 
@@ -541,7 +542,7 @@ div.chat-thread:where(.chat-thread--annotations) {
       .chat-pane__session-title-input,
       .chat-pane__parent-session
     ) {
-    min-height: 32px;
+    min-height: 28px;
     padding: 0 8px;
     margin-inline: 0;
     font-family: inherit;
