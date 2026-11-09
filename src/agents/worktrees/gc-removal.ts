@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
+import { collectNestedErrorCandidates } from "@openclaw/normalization-core/error-coercion";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
@@ -12,7 +13,7 @@ import {
 import { hasWorktreeUnknownOutcome } from "./errors.js";
 import type { WorktreeGcProgress } from "./gc-progress.js";
 import { worktreePathExists } from "./git.js";
-import { prepareWorktreeRegistryGuard } from "./registry-read.js";
+import { prepareWorktreeRegistryGuard, readRegistryWorktreeForMutation } from "./registry-read.js";
 import {
   deferFailedWorktreeRemoval,
   deferWorktreeCleanup,
@@ -288,6 +289,26 @@ export function createWorktreeGcRemoval(context: {
     assertCurrent?.();
     if (hasWorktreeUnknownOutcome(initialError)) {
       throw initialError;
+    }
+    const { RejectedLocalWorkspaceResultError } =
+      await import("../../gateway/worker-environments/local-workspace-checkpoint.js");
+    const rejected = collectNestedErrorCandidates(initialError).find(
+      (error) => error instanceof RejectedLocalWorkspaceResultError,
+    );
+    if (rejected) {
+      const reason =
+        `Workspace result too large to apply automatically; reserved result ${rejected.resultRef}; ` +
+        `files preserved at ${rejected.projectionPath}. Reduce the change and checkpoint it, or recover manually, then run openclaw worktrees gc --retry-deferred. ${rejected.message}`;
+      await withOwnerMutation(async () => {
+        const commitGuard = await prepareOwnerCurrent(record, retiredOwner);
+        // Archive preparation may have saved a new snapshot before rejecting its overlay.
+        const current = await readRegistryWorktreeForMutation({ env, id: record.id, commitGuard });
+        if (current) {
+          await deferWorktreeGcRecord(env, current, reason, commitGuard);
+        }
+      });
+      progress.protect("idle", record.id, reason);
+      return;
     }
     if (retiredOwner && !(initialError instanceof WorktreeRemovalContentionError)) {
       try {

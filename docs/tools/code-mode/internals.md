@@ -211,8 +211,10 @@ JSON and metadata; histories above 4,096 entries or 1,024 live keys are not cach
 Session removal and database shutdown discard retained projections. When the
 cached IDs are a prefix of the current branch, only appended entries are replayed
 into a private copy of the projection. Divergent branches and rewrites replay
-from the beginning through the same validation and budget checks. Loaded values
-remain detached copies, and persisted bytes do not change.
+from the beginning. Replay validates every entry's shape, keys, and provenance,
+resolves the final writes and deletes, then encodes only surviving values and
+checks the final projection's budget. Commit admission owns historical budget
+checks. Loaded values remain detached copies, and persisted bytes do not change.
 
 Only a cell that settles `completed` commits its non-empty write set. Core
 appends one `custom` entry with type `openclaw.code-mode-store` through

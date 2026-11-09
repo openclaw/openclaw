@@ -8,7 +8,9 @@ import { hasErrnoCode } from "../infra/errno.js";
 import { gitNullConfigPath, gitReadOnlyEnvironment } from "../infra/git-exec.js";
 import { appendGitConfig, gitMaintenanceEnvironment } from "../infra/git-maintenance-env.js";
 import { retryableGitNetworkOperation, withGitNetworkRetry } from "../infra/git-network-retry.js";
+import { withGitObjectStoreTransport } from "../infra/git-object-store-transport.js";
 import { createCommandError } from "../process/command-error.js";
+import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import { runCommandBuffered } from "../process/exec.js";
 import { withGitProcessOperation, type GitProcessOperation } from "../process/spawn-diagnostics.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
@@ -156,56 +158,112 @@ export async function requireGitHubPublicationCommit(
   cwd: string,
   env: NodeJS.ProcessEnv,
   failure: string,
-  options: { contents?: boolean; commitPresent?: boolean } = {},
+  options: { contents?: boolean; commitPresent?: boolean; baseBranch?: string } = {},
 ) {
-  const fetch = async (missing?: string[]) => {
-    const result = await run(
-      [
-        ...GITHUB_CREDENTIAL_ARGS,
-        "-c",
-        `core.hooksPath=${os.devNull}`,
-        "-c",
-        "core.fsmonitor=false",
-        "fetch",
-        "--no-auto-maintenance",
-        "--no-tags",
-        "--no-write-fetch-head",
-        "--recurse-submodules=no",
-        // Keep ancestry and tree metadata; callers request file contents below.
-        ...(missing ? ["--refetch", "--stdin"] : ["--filter=blob:none"]),
-        "--",
-        githubRepositoryUrl(repository, host),
-        ...(missing ? [] : [sha]),
-      ],
-      { cwd, env, ...(missing ? { input: `${missing.join("\n")}\n` } : {}) },
-    );
-    if (result.code !== 0 || result.error) {
-      throw createGitHubPublicationGitError(
-        failure,
-        missing ? "content fetch" : "commit fetch",
-        result,
-        DEFAULT_COMMAND_TIMEOUT_MS,
+  const fetch = async (missing?: string[], tips = [sha]) => {
+    const command = async (directory: string, argv: string[], gitEnv = env, input?: string) => {
+      const result = await run(argv, { cwd: directory, env: gitEnv, input });
+      if (result.error && hasCommandProcessCleanupError(result.error)) {
+        throw result.error;
+      }
+      if (result.code !== 0 || result.error) {
+        throw createGitHubPublicationGitError(
+          failure,
+          missing ? "content fetch" : "commit fetch",
+          result,
+          DEFAULT_COMMAND_TIMEOUT_MS,
+        );
+      }
+      return result.stdout.toString("utf8").trim();
+    };
+    const acquire = (directory: string, gitEnv: NodeJS.ProcessEnv) =>
+      command(
+        directory,
+        [
+          ...GITHUB_CREDENTIAL_ARGS,
+          "-c",
+          `core.hooksPath=${os.devNull}`,
+          "-c",
+          "core.fsmonitor=false",
+          ...(directory === cwd ? [] : ["-c", "core.alternateRefsCommand=true"]),
+          "fetch",
+          "--no-auto-maintenance",
+          "--no-tags",
+          "--no-write-fetch-head",
+          "--recurse-submodules=no",
+          // Match managed base refresh: omit unrelated session histories from negotiation.
+          ...tips.map((tip) => `--negotiation-tip=${tip}`),
+          // Keep ancestry and tree metadata; callers request file contents below.
+          ...(missing ? ["--refetch", "--stdin"] : ["--filter=blob:none"]),
+          "--",
+          githubRepositoryUrl(repository, host),
+          ...(missing ? [] : [sha]),
+        ],
+        gitEnv,
+        missing ? `${missing.join("\n")}\n` : undefined,
+      );
+    // Git must register a new URL's promisor in the source repository before
+    // temporary metadata can borrow its object store without losing lazy hydration.
+    const registered =
+      !missing && tips.length > 0
+        ? await command(cwd, [
+            "git",
+            "config",
+            "--type=bool",
+            "--default=false",
+            "--get",
+            `remote.${githubRepositoryUrl(repository, host)}.promisor`,
+          ])
+        : "false";
+    // Without a cached base, retain Git's ordinary discovery of common history.
+    if (registered !== "true") {
+      await acquire(cwd, env);
+    } else {
+      const isolatedEnv = {
+        ...env,
+        GIT_DIR: undefined,
+        GIT_COMMON_DIR: undefined,
+        GIT_WORK_TREE: undefined,
+      };
+      await withGitObjectStoreTransport(
+        cwd,
+        (directory, args) => command(directory, ["git", ...args], isolatedEnv),
+        (directory, objects) =>
+          acquire(directory, { ...isolatedEnv, GIT_OBJECT_DIRECTORY: objects }),
       );
     }
   };
   if (!options.commitPresent) {
     // Fetching a present non-promisor commit still makes Git enumerate every
-    // promisor object for connectivity. Probe the physical commit without lazy
-    // fetching or trusting commit-graph metadata; content hydration stays below.
+    // promisor object for connectivity. Probe physical commits without lazy
+    // fetching or commit-graph metadata; collect cached base tips in the same process.
     const present = await run(
       [
         "git",
         "-c",
         "core.commitGraph=false",
-        "rev-list",
-        "--missing=allow-any",
-        "--no-walk",
-        `${sha}^{commit}`,
+        "cat-file",
+        "--batch-check=%(objectname) %(objecttype)",
       ],
-      { cwd, env },
+      {
+        cwd,
+        env,
+        input: [
+          sha,
+          "refs/remotes/origin/HEAD",
+          ...(options.baseBranch ? [`refs/remotes/origin/${options.baseBranch}`] : []),
+        ]
+          .map((ref) => `${ref}^{commit}\n`)
+          .join(""),
+      },
     );
-    if (present.code !== 0 || !present.stdout.toString("utf8").trim()) {
-      await fetch();
+    const [commit, ...tips] = present.stdout
+      .toString("utf8")
+      .trim()
+      .split("\n")
+      .map((line) => (line.endsWith(" commit") ? line.slice(0, -7) : ""));
+    if (present.code !== 0 || !commit) {
+      await fetch(undefined, tips.filter(Boolean));
     }
   }
   if (!options.contents) {

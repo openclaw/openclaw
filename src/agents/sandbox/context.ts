@@ -1,7 +1,9 @@
 import fs from "node:fs/promises";
 import type { CapturedSessionEntryReadSource } from "../../config/sessions/session-entry-read-source.types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { AGENT_GIT_SANDBOX_BIN } from "../../infra/agent-git-shim.js";
 import { observeDiagnosticsTimelinePhases } from "../../infra/diagnostics-timeline.js";
+import { getGatewayAgentGitBinDir } from "../../infra/openclaw-cli-shim.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
   ensureBrowserControlAuth,
@@ -35,6 +37,7 @@ import {
 } from "../worktrees/preparation-timing.js";
 import { createSandboxBackend, getSandboxBackendWorkdirResolver } from "./backend.js";
 import { ensureSandboxBrowser } from "./browser.js";
+import { resolveSandboxDependencyStore } from "./config-contract.js";
 import { resolveSandboxConfigForAgent } from "./config.js";
 import { SANDBOX_GITHUB_CONFIG_DIR } from "./constants.js";
 import { retainSandboxContainerUsage } from "./container-usage.js";
@@ -274,6 +277,7 @@ async function prepareSandboxWorkspaceSelection(
       ? {
           ...resolved.cfg,
           scope: "session" as const,
+          docker: resolveSandboxDependencyStore(resolved.cfg.docker),
           workspaceAccess:
             resolveSandboxConfigForAgent(params.config, runtime.agentId).workspaceAccess === "ro"
               ? ("ro" as const)
@@ -458,6 +462,13 @@ async function resolveSandboxContextWithAuthority(
                 })();
           if (githubMount) {
             (readOnlyResourceMounts ??= []).push(githubMount);
+          }
+          const gitBinDir = getGatewayAgentGitBinDir();
+          if (gitBinDir && (cfg.backend === "docker" || cfg.backend === "podman")) {
+            (readOnlyResourceMounts ??= []).push({
+              hostPath: gitBinDir,
+              containerPath: AGENT_GIT_SANDBOX_BIN,
+            });
           }
 
           const provisionBackend = () => {

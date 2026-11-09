@@ -55,11 +55,20 @@ export async function readBackupEngineInProcess(
   sourcePath: string,
   preserveSourceArtifacts = false,
 ): Promise<BackupEngine> {
+  return inspectPhysicalStoreInProcess(sourcePath, preserveSourceArtifacts, (db) =>
+    readEngineAnchorIdentity(db, sourcePath),
+  );
+}
+
+/** Child-only physical inspection shares the engine reader's source and cleanup custody. */
+export async function inspectPhysicalStoreInProcess<T>(
+  sourcePath: string,
+  preserveSourceArtifacts: boolean,
+  inspect: (db: DatabaseSync) => T,
+): Promise<T> {
   if (!preserveSourceArtifacts) {
     try {
-      const inspected = tryInspectSqliteReadOnlyInProcess(sourcePath, (db) =>
-        readEngineAnchorIdentity(db, sourcePath),
-      );
+      const inspected = tryInspectSqliteReadOnlyInProcess(sourcePath, inspect);
       if (inspected) {
         return inspected.value;
       }
@@ -88,6 +97,9 @@ export async function readBackupEngineInProcess(
       },
     },
     "SQLite engine inspection",
-    () => readBackupEngineImage(prepared.location, sourcePath),
+    () => {
+      using db = openNodeSqliteDatabase(prepared.location, { readOnly: true });
+      return inspect(db);
+    },
   );
 }

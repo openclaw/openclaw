@@ -74,18 +74,15 @@
   --sidebar-rail-action-size: 30px;
   --sidebar-rail-glyph-size: 19px;
   --sidebar-rail-item-gap: 8px;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
   flex: 0 0 var(--shell-nav-rail-width, 52px);
   min-width: 0;
   min-height: 0;
   padding: 8px 4px;
-  gap: var(--sidebar-rail-item-gap);
   border-inline-end: var(--shell-divider-size) solid var(--resize-handle-rest-color);
   background: var(--sidebar-rail-surface, transparent);
 }
 
+.sidebar-rail,
 .sidebar-rail__views,
 .sidebar-rail__bottom,
 .sidebar-rail__pins {
@@ -659,7 +656,6 @@ html.openclaw-native-web-chrome body .shell:not(.shell--mobile-nav) .sidebar-she
   &.shell--nav-collapsed {
     --shell-controls-width: var(--shell-chrome-control-size);
     --shell-nav-width: var(--shell-nav-rail-width);
-    grid-template-columns: var(--shell-nav-width) minmax(0, 1fr);
 
     .shell-nav {
       clip-path: inset(0 calc(100% - var(--shell-nav-rail-width)) 0 0);

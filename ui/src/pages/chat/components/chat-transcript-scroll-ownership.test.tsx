@@ -292,6 +292,30 @@ it.each([
   },
 );
 
+it.each([
+  ["PageUp", () => new KeyboardEvent("keydown", { key: "PageUp" }), true],
+  ["ArrowUp", () => new KeyboardEvent("keydown", { key: "ArrowUp" }), true],
+  ["Home", () => new KeyboardEvent("keydown", { key: "Home" }), true],
+  ["Shift-Space", () => new KeyboardEvent("keydown", { key: " ", shiftKey: true }), true],
+  ["PageDown", () => new KeyboardEvent("keydown", { key: "PageDown" }), false],
+  ["pointer contact", () => new PointerEvent("pointerdown"), false],
+] as const)(
+  "%s establishes reader policy before native movement at the end",
+  async (name, input, away) => {
+    const { policy, transcript, mount } = createPolicyTranscript(`end-input-${name}`);
+    const { container } = await mount();
+    viewport(container, 400, 2000);
+    nativeScroll(container, 1600);
+    connectPolicy(policy, transcript, container);
+    policy.chatLastScrollTop = 1600;
+    container.dispatchEvent(input());
+    expectReader(policy, away);
+    // The next content receipt may request follow before the key's native scroll arrives.
+    expect(transcript.scrollToEnd({ source: "auto" })).toBe(!away);
+    expect(container.scrollTop).toBe(1600);
+  },
+);
+
 it("grows the native range before compensating fractional row growth above a reader", async () => {
   const flushFrames = stubAnimationFrames();
   transcriptDomState.measuredRowHeight = 120;
@@ -315,6 +339,7 @@ it("grows the native range before compensating fractional row growth above a rea
   nativeScroll(container, container.scrollTop - 24);
   expectReader(policy, true);
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  container.dispatchEvent(new Event("scroll"));
   vi.advanceTimersByTime(150);
   renderRows(rows);
   await vi.advanceTimersByTimeAsync(0);

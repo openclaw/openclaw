@@ -45,7 +45,9 @@ import { syncControlUiSystemChrome } from "./control-ui-presentation.ts";
 import type { SolidReadinessShell } from "./control-ui-readiness-solid.ts";
 import type { ControlUiReadiness, ControlUiReadinessOutlet } from "./control-ui-readiness.ts";
 import { createGatewayControlUiReloadOptions } from "./gateway-control-ui-reload.ts";
+import { gatewayPresentationScope } from "./gateway-presentation-scope.ts";
 import { postNativeNavState, type NativeNavState } from "./native-nav-state.ts";
+import { isNativeEmbedHost } from "./native-web-chrome.ts";
 import { resolveOnboardingMode } from "./onboarding-mode.ts";
 import { RouteElements, type RouteElementEvent } from "./route-elements.ts";
 import { changedServerUiPrefs } from "./server-prefs-intent.ts";
@@ -141,7 +143,15 @@ export class ShellOwner
 
   /** A cold connection has no navigation yet, so the compact drawer stays closed. */
   get initialConnectionPending(): boolean {
-    return Boolean(this.context && this.runtime && readShellView(this).initialGatewayConnection);
+    const runtime = this.runtime;
+    return Boolean(
+      runtime &&
+      this.routeState.routeId === undefined &&
+      !isNativeEmbedHost() &&
+      !runtime.warmBoot &&
+      !gatewayPresentationScope(runtime.context.gateway).readyOnce &&
+      runtime.context.gateway.snapshot.phase !== "connected",
+    );
   }
 
   get workspaceChromeVisible(): boolean {
@@ -386,22 +396,6 @@ export class ShellOwner
   private readonly handleGatewayEvent = this.shellGateway.handleGatewayEvent.bind(
     this.shellGateway,
   );
-
-  async handleSettingsSearchQueryChange(nextQuery: string): Promise<void> {
-    this.settingsSearchQuery = nextQuery;
-    const runtimeConfig = this.context?.runtimeConfig;
-    if (!runtimeConfig || !nextQuery.trim()) {
-      return;
-    }
-    try {
-      await runtimeConfig.ensureLoaded();
-      if (this.context?.runtimeConfig === runtimeConfig) {
-        await runtimeConfig.ensureSchemaLoaded();
-      }
-    } catch {
-      // Runtime config state owns the visible load error; search stays usable.
-    }
-  }
 
   readonly toggleNavigationSurface = this.shellChrome.toggleNavigationSurface;
 
