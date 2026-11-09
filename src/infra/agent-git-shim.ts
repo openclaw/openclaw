@@ -1,6 +1,6 @@
 export const AGENT_GIT_SANDBOX_BIN = "/openclaw/git-tools";
 
-/** A PATH tool contract: probes stay local; content reads retain Git's blob hydration. */
+/** A PATH tool contract: probes stay local; fork fetches and content reads retain partial-clone behavior. */
 export const AGENT_GIT_SHIM = `#!/bin/sh
 shim_dir=\${0%/*}
 search_path=
@@ -17,12 +17,28 @@ done
 PATH=$search_path
 export PATH
 is_probe() {
+  filter_fetch=
+  argument_count=$#
   while [ "$#" -gt 0 ]; do
     case $1 in
       -C|-c|--git-dir|--work-tree|--namespace) [ "$#" -ge 2 ] || return 1; shift 2 ;;
       -C*|-c*) shift ;;
       --*) shift ;;
       -p|-P) shift ;;
+      fetch)
+        global_count=$((argument_count - $#))
+        shift
+        for arg do
+          case $arg in
+            --filter|--filter=*|--no-filter|--all|--multiple) return 1 ;;
+          esac
+        done
+        for arg do
+          case $arg in
+            https://github.com/*|git@github.com:*|ssh://git@github.com/*) filter_fetch=1 ;;
+          esac
+        done
+        return 1 ;;
       cat-file)
         shift
         for arg do case $arg in -e|-t) return 0 ;; esac; done
@@ -41,7 +57,32 @@ is_probe() {
   done
   return 1
 }
+is_blobless() {
+  # Keep Git's global options (-C, -c, --git-dir, ...) on the config query.
+  tail_count=$(($# - global_count))
+  prefix_count=$global_count
+  while [ "$prefix_count" -gt 0 ]; do
+    set -- "$@" "$1"
+    shift
+    prefix_count=$((prefix_count - 1))
+  done
+  while [ "$tail_count" -gt 0 ]; do shift; tail_count=$((tail_count - 1)); done
+  git "$@" config --get-regexp '^remote\\..*\\.partialclonefilter$' '^blob:none$' >/dev/null 2>&1
+}
 if ! is_probe "$@"; then
+  if [ "$filter_fetch" = 1 ] && is_blobless "$@"; then
+    # Native fetch records the URL as a promisor, including its hydration source.
+    tail_count=$(($# - global_count - 1))
+    prefix_count=$((global_count + 1))
+    while [ "$prefix_count" -gt 0 ]; do
+      set -- "$@" "$1"; shift; prefix_count=$((prefix_count - 1))
+    done
+    set -- "$@" --filter=blob:none
+    while [ "$tail_count" -gt 0 ]; do
+      set -- "$@" "$1"; shift; tail_count=$((tail_count - 1))
+    done
+    exec git "$@"
+  fi
   exec git "$@"
 fi
 # Older Git ignores GIT_NO_LAZY_FETCH; transport denial still keeps probes offline.

@@ -5,6 +5,7 @@ import { pathToFileURL } from "node:url";
 import { afterEach, expect, it } from "vitest";
 import { createExecTool } from "../agents/bash-tools.js";
 import { quoteCliArg } from "../cli/quote-cli-arg.js";
+import { prepareLocalWorkspaceCheckout } from "../gateway/worker-environments/local-workspace-checkout.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { withTempDir } from "../test-utils/temp-dir.js";
 import {
@@ -20,7 +21,7 @@ import {
 afterEach(clearGatewayAgentCliShim);
 
 it.skipIf(process.platform === "win32")(
-  "keeps agent probes local while hydrating history and allowing negotiated recovery",
+  "keeps probes local and hydrates origin and fork history after filtered fetches",
   () =>
     withTempDir("agent-git-probes-", async (root) => {
       const env = {
@@ -119,5 +120,75 @@ it.skipIf(process.platform === "win32")(
       ).toBe(0);
       expect((await command(["cat-file", "-t", missing])).aggregated).toBe("commit");
       expect(await fs.readFile(path.join(clone, ".git/config"), "utf8")).toBe(config);
+      // A fork can contain blobs that the projection's origin cannot hydrate.
+      const fork = path.join(root, "fork");
+      const projection = path.join(root, "projection");
+      const forkUrl = "https://github.com/fixture/contributor.git";
+      git(root, "clone", origin, fork);
+      git(fork, "checkout", "-b", "contributor-pr");
+      git(fork, "config", "uploadpack.allowFilter", "true");
+      git(origin, "config", "remote.origin.url", "https://github.com/fixture/base.git");
+      await prepareLocalWorkspaceCheckout({
+        source: origin,
+        destination: projection,
+        temporaryRoot: root,
+        baseCommit: missing,
+        branch: "projection",
+        signal: new AbortController().signal,
+        assertCurrent: () => {},
+      });
+      git(
+        projection,
+        "config",
+        `url.${pathToFileURL(origin).href}.insteadOf`,
+        "https://github.com/fixture/base.git",
+      );
+      for (const content of ["obsolete fork content", "current fork content"]) {
+        await fs.writeFile(path.join(fork, "fork.txt"), content);
+        git(fork, "add", ".");
+        git(fork, "commit", "-m", content);
+      }
+      const objects = () =>
+        git(projection, "cat-file", "--batch-all-objects", "--batch-check=%(objecttype)").split(
+          "\n",
+        );
+      const blobs = objects().filter((type) => type === "blob").length;
+      for (const url of [
+        forkUrl,
+        "git@github.com:fixture/contributor.git",
+        "ssh://git@github.com/fixture/contributor.git",
+      ]) {
+        git(projection, "config", "--add", `url.${pathToFileURL(fork).href}.insteadOf`, url);
+        expect(
+          (
+            await command(
+              ["-C", projection, "fetch", "--refetch", "--", url, "contributor-pr"],
+              root,
+            )
+          ).exitCode,
+        ).toBe(0);
+        expect(objects().filter((type) => type === "blob")).toHaveLength(blobs);
+        expect(git(projection, "config", "--get", `remote.${url}.promisor`)).toBe("true");
+      }
+      expect((await command(["diff", "HEAD", "FETCH_HEAD"], projection)).aggregated).toContain(
+        "current fork content",
+      );
+      expect((await command(["checkout", "--detach", "FETCH_HEAD"], projection)).exitCode).toBe(0);
+      expect(await fs.readFile(path.join(projection, "fork.txt"), "utf8")).toBe(
+        "current fork content",
+      );
+      expect(objects().filter((type) => type === "blob")).toHaveLength(blobs + 1);
+      expect(
+        (
+          await command(
+            ["fetch", "--refetch", "--no-filter", forkUrl, "contributor-pr"],
+            projection,
+          )
+        ).exitCode,
+      ).toBe(0);
+      expect(objects().filter((type) => type === "blob").length).toBeGreaterThan(blobs + 1);
+      git(fork, "config", `url.${pathToFileURL(fork).href}.insteadOf`, forkUrl);
+      expect((await command(["fetch", forkUrl, "contributor-pr"], fork)).exitCode).toBe(0);
+      expect(git(fork, "config", "--local", "--list")).not.toContain("promisor");
     }),
 );
