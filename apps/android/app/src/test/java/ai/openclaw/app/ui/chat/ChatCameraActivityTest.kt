@@ -38,7 +38,12 @@ class ChatCameraActivityTest {
     val directory = File(app.cacheDir, "chat-camera/$captureId")
     assertTrue(directory.mkdirs())
     val intent = Intent(app, ChatCameraActivity::class.java).putExtra(ChatCameraActivity.EXTRA_CAPTURE_ID, captureId)
-    val controller = Robolectric.buildActivity(ChatCameraActivity::class.java, intent).create().start().resume()
+    val controller =
+      Robolectric
+        .buildActivity(ChatCameraActivity::class.java, intent)
+        .create()
+        .start()
+        .resume()
     val activity = controller.get()
     try {
       assertFalse(activity.isFinishing)
