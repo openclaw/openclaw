@@ -238,12 +238,12 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
     },
     {
       configs: ["test/vitest/vitest.plugins.config.ts"],
-      files: ["src/plugins/plugin-generation-worker.test.ts"],
+      files: ["src/plugins/plugin-generation-source-inspection.worker.test.ts"],
       preset: "runtime",
     },
     {
       configs: ["test/vitest/vitest.plugins.config.ts"],
-      files: ["src/plugins/plugin-generation-worker.test.ts", "unknown.test.ts"],
+      files: ["src/plugins/plugin-generation-source-inspection.worker.test.ts", "unknown.test.ts"],
       preset: "full",
     },
     {
