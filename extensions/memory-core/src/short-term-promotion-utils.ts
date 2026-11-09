@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import path from "node:path";
+import { redactToolPayloadText } from "openclaw/plugin-sdk/logging-core";
 import type { MemoryEntryProvenance } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
 import { DEFAULT_MEMORY_DEEP_DREAMING_MAX_PROMOTED_SNIPPET_TOKENS } from "openclaw/plugin-sdk/memory-core-host-status";
 import {
@@ -208,6 +209,9 @@ export function isContaminatedDreamingSnippet(
   const snippet = normalizeSnippet(raw);
   if (!snippet) {
     return false;
+  }
+  if (redactToolPayloadText(snippet) !== snippet) {
+    return true;
   }
   if (
     /<!--\s*openclaw-memory-promotion:/i.test(snippet) ||
