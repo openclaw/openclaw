@@ -105,6 +105,8 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -804,7 +806,10 @@ private fun AudioInputDevicePanel(
   val preferredAvailable = devices.any { it.key == preferredDeviceKey }
   val unavailablePreferredDevice =
     preferredDeviceKey?.takeUnless { preferredAvailable }?.let(::audioInputDeviceOptionFromKey)
-  ClawPanel(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+  ClawPanel(
+    modifier = Modifier.selectableGroup(),
+    verticalArrangement = Arrangement.spacedBy(4.dp),
+  ) {
     AudioInputDeviceRow(
       title = nativeString("Automatic"),
       subtitle =
@@ -853,9 +858,15 @@ private fun AudioInputDeviceRow(
     title = title,
     subtitle = subtitle,
     metadata = nativeString("Next session").takeIf { pending },
+    modifier =
+      Modifier.selectable(
+        selected = selected,
+        enabled = onClick != null,
+        role = Role.RadioButton,
+        onClick = onClick ?: {},
+      ),
     leading = { ClawIconBadge(Icons.Default.Mic) },
-    trailing = if (selected) ({ SettingsSelectionCheck() }) else null,
-    onClick = onClick,
+    trailing = if (selected) ({ Box(Modifier.clearAndSetSemantics {}) { SettingsSelectionCheck() } }) else null,
   )
 }
 
@@ -2076,7 +2087,10 @@ private fun AppearanceSettingsScreen(
         optionLabel = { "${it.percent}%" },
       )
     }
-    ClawPanel(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+    ClawPanel(
+      modifier = Modifier.selectableGroup(),
+      verticalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
       Text(text = nativeString("App language"), style = ClawTheme.type.section, color = ClawTheme.colors.text)
       AppLanguage.entries.forEachIndexed { index, language ->
         if (index > 0) HorizontalDivider(color = ClawTheme.colors.border)
@@ -2109,11 +2123,14 @@ private fun AppearanceThemeFamilyCard(
         .clip(shape)
         .background(if (selected) ClawTheme.colors.surfacePressed else ClawTheme.colors.surface)
         .border(1.dp, if (selected) ClawTheme.colors.primary else ClawTheme.colors.borderStrong, shape)
-        .clickable(onClick = onClick)
+        .selectable(selected = selected, role = Role.RadioButton, onClick = onClick)
         .padding(ClawTheme.spacing.xs),
     verticalArrangement = Arrangement.spacedBy(ClawTheme.spacing.xxs),
   ) {
-    Row(verticalAlignment = Alignment.CenterVertically) {
+    Row(
+      modifier = Modifier.clearAndSetSemantics {},
+      verticalAlignment = Alignment.CenterVertically,
+    ) {
       Row(
         modifier = Modifier.weight(1f),
         horizontalArrangement = Arrangement.spacedBy(4.dp),
@@ -2190,10 +2207,15 @@ private fun AppLanguageRow(
 ) {
   ClawListItem(
     title = appLanguageTitle(language),
+    modifier = Modifier.selectable(selected = selected, role = Role.RadioButton, onClick = onClick),
     subtitle = appLanguageRowSubtitle(language = language, systemLanguageTag = systemLanguageTag),
     leading = { ClawIconBadge(Icons.Default.Language) },
-    trailing = if (selected) ({ SettingsSelectionCheck() }) else null,
-    onClick = onClick,
+    trailing =
+      if (selected) {
+        { Box(Modifier.clearAndSetSemantics {}) { SettingsSelectionCheck() } }
+      } else {
+        null
+      },
   )
 }
 
