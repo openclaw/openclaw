@@ -426,7 +426,7 @@ describe.skipIf(!connection)("Gateway PostgreSQL shared-state bootstrap", () => 
       type BroadcastEvent = ReturnType<typeof toCronBroadcastEvent>;
       const probeFinished = createDeferred<BroadcastEvent>();
       const finishedEvents = new Map<string, BroadcastEvent>();
-      let probeId: string | undefined;
+      const probeState: { id?: string } = {};
       await using secondGateway = new AsyncDisposableStack();
       const restarted = await startGatewayWithClient({
         cfg: config,
@@ -440,7 +440,7 @@ describe.skipIf(!connection)("Gateway PostgreSQL shared-state bootstrap", () => 
           const cronEvent = payload as BroadcastEvent;
           if (cronEvent.action === "finished") {
             finishedEvents.set(cronEvent.jobId, cronEvent);
-            if (cronEvent.jobId === probeId) {
+            if (cronEvent.jobId === probeState.id) {
               probeFinished.resolve(cronEvent);
             }
           }
@@ -467,7 +467,7 @@ describe.skipIf(!connection)("Gateway PostgreSQL shared-state bootstrap", () => 
         payload: { kind: "agentTurn", message: probePrompt },
         delivery: { mode: "none" },
       });
-      probeId = probe.id;
+      probeState.id = probe.id;
       // The broadcast may precede the cron.add response on the same connection.
       const alreadyFinished = finishedEvents.get(probe.id);
       if (alreadyFinished) {
