@@ -5,6 +5,7 @@ import { getClientManager } from "./client-manager-registry.js";
 import { resolveTwitchAccountContext } from "./config.js";
 import { TWITCH_CHAT_MESSAGE_LIMIT } from "./constants.js";
 import { sendMessageTwitchInternal } from "./send.js";
+import { isTwitchDirectMessageTarget, normalizeTwitchMessagingTarget } from "./target.js";
 import type {
   ChannelOutboundAdapter,
   ChannelOutboundContext,
@@ -33,16 +34,19 @@ export const twitchOutbound = {
     const trimmed = to?.trim() ?? "";
     const allowListRaw = normalizeStringEntries(allowFrom ?? []);
     const hasWildcard = allowListRaw.includes("*");
+    // Only a list already empty under native channel normalization is unrestricted.
+    // Unsupported messaging addresses must not turn a restrictive list into allow-all.
+    const hasConfiguredChannels = allowListRaw.some((entry) => normalizeTwitchChannel(entry));
     const allowList = allowListRaw
       .filter((entry: string) => entry !== "*")
-      .map((entry: string) => normalizeTwitchChannel(entry))
+      .map((entry: string) => normalizeTwitchMessagingTarget(entry))
       .filter((entry): entry is string => entry.length > 0);
 
-    const normalizedTo = normalizeTwitchChannel(trimmed);
+    const normalizedTo = normalizeTwitchMessagingTarget(trimmed);
     const restricted = mode === "implicit" || mode === "heartbeat";
     if (
       normalizedTo &&
-      (!restricted || hasWildcard || allowList.length === 0 || allowList.includes(normalizedTo))
+      (!restricted || hasWildcard || !hasConfiguredChannels || allowList.includes(normalizedTo))
     ) {
       return { ok: true, to: normalizedTo };
     }
@@ -73,8 +77,16 @@ export const twitchOutbound = {
       );
     }
 
-    const channel = to || account.channel;
-    if (!channel) {
+    // Explicit DM/user addresses are unsupported and must not be delivered to the
+    // account channel. A channel target that normalizes to empty (for example a bare
+    // "#") still keeps the sender's default-channel fallback.
+    const target = to.trim();
+    if (isTwitchDirectMessageTarget(target)) {
+      throw new Error("Delivering to Twitch requires target <channel-name>");
+    }
+    const deliveryChannel =
+      normalizeTwitchMessagingTarget(target) || normalizeTwitchChannel(account.channel);
+    if (!deliveryChannel) {
       throw new Error("No channel specified and no default channel in account config");
     }
 
@@ -84,13 +96,8 @@ export const twitchOutbound = {
           "Required: username, clientId, and accessToken (config or env for default account).",
       );
     }
-    // A target that normalizes to empty still uses the account's default channel.
-    const deliveryChannel = normalizeTwitchChannel(channel) || account.channel;
-    if (!deliveryChannel) {
-      throw new Error("No channel specified and no default channel in account config");
-    }
     const result = await sendMessageTwitchInternal({
-      channel: normalizeTwitchChannel(deliveryChannel),
+      channel: deliveryChannel,
       text,
       cfg,
       account,
