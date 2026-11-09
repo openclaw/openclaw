@@ -134,3 +134,42 @@ test("retired source cannot sign detached work and live source revocation stops 
   );
   assert.equal(io, 0);
 });
+
+test("owner's scheduled job in its DM signs as scheduled; other sessions and requesters do not", async () => {
+  const scheduled = {
+    scheduled: true,
+    sessionKey: options.sessionKey,
+    messageId: "cron:job-1:run-1",
+    assertCurrent() {},
+  };
+  const signed = async (fetchOptions, source = scheduled) => {
+    let received;
+    const fetch = withArthaConnectorContext(
+      async (r) => {
+        received = r;
+        return new Response();
+      },
+      fetchOptions,
+      deps,
+    );
+    await withConnectorSource(
+      () => source,
+      () => fetch("https://pitch.artha.vc/mcp", { headers: { Authorization: `Bearer ${bearer}` } }),
+    );
+    return received.headers.get("x-artha-connector-context");
+  };
+  const header = await signed(options);
+  const claims = JSON.parse(Buffer.from(header.split(".")[0], "base64url"));
+  assert.equal(claims.session_kind, "scheduled");
+  assert.equal(claims.message_id, "cron:job-1:run-1");
+  assert.equal(claims.conversation_id, options.sessionKey);
+  assert.equal(await signed({ ...options, sessionKey: "agent:main:cron:job-1" }), null);
+  assert.equal(
+    await signed({
+      ...options,
+      requesterScope: { ...options.requesterScope, requesterSenderId: "+911" },
+    }),
+    null,
+  );
+  assert.equal(await signed(options, { ...scheduled, sessionKey: "agent:main:cron:job-1" }), null);
+});

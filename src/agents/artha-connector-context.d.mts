@@ -7,6 +7,8 @@ type ConnectorSource = {
   channel?: string;
   accountId?: string;
   senderId?: string | null;
+  /** The owner's own scheduled job running in its DM session. */
+  scheduled?: true;
   assertCurrent: () => void;
 };
 export function withConnectorSource<T>(

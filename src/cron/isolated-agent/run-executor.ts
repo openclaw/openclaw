@@ -5,6 +5,7 @@ import {
   createOperationalRunInstanceRef,
   prepareAgentRunAdmission,
 } from "../../agents/admitted-run-context.js";
+import { withConnectorSource } from "../../agents/artha-connector-context.mjs";
 import type { BootstrapContextMode } from "../../agents/bootstrap-files.js";
 import { resolveCliRuntimeToolsAllow } from "../../agents/cli-runner/tool-policy.js";
 import {
@@ -769,7 +770,23 @@ function createCronPromptExecutor(
           acceptedContextEngineTurnCandidate = contextEngineTurnCandidate;
           return result;
         }
-        const { resolveFastModeState, runEmbeddedAgent } = await cronEmbeddedRuntimeLoader.load();
+        const runtime = await cronEmbeddedRuntimeLoader.load();
+        const { resolveFastModeState } = runtime;
+        // A job its owner set up in their own DM may read that owner's personal
+        // connectors (DFS allows reads only). Jobs in other sessions stay unsigned.
+        const connectorSource = () =>
+          scheduledToolPolicy?.mode === "account" &&
+          scheduledToolPolicy.ownerSessionKey === params.runSessionKey &&
+          !params.abortSignal?.aborted
+            ? {
+                scheduled: true as const,
+                sessionKey: params.runSessionKey,
+                messageId: `cron:${params.job.id}:${runId}`,
+                assertCurrent: () => params.abortSignal?.throwIfAborted(),
+              }
+            : undefined;
+        const runEmbeddedAgent = (args: Parameters<typeof runtime.runEmbeddedAgent>[0]) =>
+          withConnectorSource(connectorSource, () => runtime.runEmbeddedAgent(args));
         const promptCacheKey = resolveIsolatedCronPromptCacheKey({
           job: params.job,
           agentId: params.agentId,

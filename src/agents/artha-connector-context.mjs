@@ -44,18 +44,21 @@ export function withArthaConnectorContext(fetchFn, options, dependencies = {}) {
       const requester = options.requesterScope;
       const route = /^agent:[^:]+:whatsapp:([^:]+):direct:([^:]+)$/.exec(options.sessionKey ?? "");
       const bearer = headers.get("authorization")?.match(/^Bearer (\S+)$/)?.[1];
-      // No message source means discovery/job/subagent/operator traffic. Other
-      // Artha tools may still work; personal connector broker calls fail closed.
+      // No source means discovery/subagent/operator traffic. Other Artha tools
+      // may still work; personal connector broker calls fail closed. A scheduled
+      // source is the owner's own job running in this DM; DFS limits it to reads.
+      const fromMessage =
+        current?.channel === "whatsapp" &&
+        current.accountId === route?.[1] &&
+        normalize(current.senderId) === normalize(route?.[2]);
       if (
         bearer &&
         route &&
         current?.messageId &&
         current.sessionKey === options.sessionKey &&
-        current.channel === "whatsapp" &&
+        (current.scheduled === true || fromMessage) &&
         requester?.messageChannel === "whatsapp" &&
-        current.accountId === route[1] &&
         requester.agentAccountId === route[1] &&
-        normalize(current.senderId) === normalize(route[2]) &&
         normalize(requester.requesterSenderId) === normalize(route[2])
       ) {
         current.assertCurrent();
@@ -80,7 +83,7 @@ export function withArthaConnectorContext(fetchFn, options, dependencies = {}) {
             v: 1,
             aud: "artha-personal-mcp",
             identity_mode: "per-requester",
-            session_kind: "interactive",
+            session_kind: current.scheduled === true ? "scheduled" : "interactive",
             user_id: email,
             channel: "whatsapp",
             chat_kind: "private",
