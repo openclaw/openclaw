@@ -1516,10 +1516,18 @@ try {
     if (phase.cronEvents.finished !== cronRuns || connected.size !== 1) {
       throw new Error("Browser did not receive every completed cron run on its single socket");
     }
-    await page.waitForFunction(
-      (count) => document.querySelectorAll(".cron-table__last-run").length === count,
-      Math.min(cronRuns, cronJobs),
-    );
+    // Completed runs are verified above; disabled rows should settle back to paused.
+    await page.waitForFunction(() => {
+      const rows = document.querySelectorAll(".cron-table__row");
+      return (
+        rows.length > 0 &&
+        [...rows].every(
+          (row) =>
+            row.querySelector(".cron-table__state--paused") &&
+            !row.querySelector(".cron-table__running"),
+        )
+      );
+    });
     if (values.screenshot) {
       await page.screenshot({ path: values.screenshot, fullPage: true });
     }
