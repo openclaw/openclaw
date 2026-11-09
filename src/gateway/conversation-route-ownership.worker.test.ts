@@ -33,6 +33,7 @@ import {
 } from "../test-utils/openclaw-test-state.js";
 import {
   prepareConversationDeliveryRouteAuthorization,
+  prepareConversationRouteEligibilitiesForAgent,
   resolveConversationRouteEligibilitiesForAgent,
   withAuthorizedConversationDelivery,
   withAuthorizedQueuedConversationDelivery,
@@ -357,7 +358,7 @@ it.each(["final", "queued"] as const)(
   },
 );
 
-it("allows no-op binding delivery and fences a retained grant after reassignment", async () => {
+it("allows owned delivery, rejects another agent's conversation, and fences a retained grant after reassignment", async () => {
   const cfg: OpenClawConfig = {
     ...config,
     agents: { entries: { main: {}, other: {} } },
@@ -379,17 +380,35 @@ it("allows no-op binding delivery and fences a retained grant after reassignment
     conversationRef,
     expectedRouteFingerprint: resolveConversationRouteFingerprint(conversation!),
   };
+  const foreignPeer = "foreign-binding-authority";
+  const foreignSeed = seedConversation(foreignPeer);
+  const foreignConversation = await readConversation(
+    foreignSeed.scope,
+    foreignSeed.conversationRef,
+  );
+  expect(foreignConversation).toMatchObject({ nativeChannelId: "native-original" });
   const bindings = getSessionBindingService();
   await bindings.bind({
     conversation: bindingRef,
     targetSessionKey: sessionKey,
     targetKind: "session",
   });
+  await bindings.bind({
+    conversation: { channel: "reef", accountId: "default", conversationId: foreignPeer },
+    targetSessionKey: "agent:other:reef:channel:foreign",
+    targetKind: "session",
+  });
   const routeAuthority = await prepareConversationDeliveryRouteAuthorization({
     ...authority,
     conversation: conversation!,
   });
+  const prepared = await prepareConversationRouteEligibilitiesForAgent({
+    config: cfg,
+    agentId: "main",
+    conversations: [conversation!, foreignConversation!],
+  });
   try {
+    expect(prepared.read()).toEqual(["eligible", "denied"]);
     const handler = await createChannelHandler({
       cfg,
       channel: "reef",
@@ -402,7 +421,29 @@ it("allows no-op binding delivery and fences a retained grant after reassignment
     await expect(handler.sendText("allowed after no-op settlement")).resolves.toMatchObject({
       messageId: "allowed",
     });
-    expect(sendText).toHaveBeenCalledOnce();
+    expect(sendText).toHaveBeenCalledTimes(1);
+
+    const foreignHandler = await createChannelHandler({
+      cfg,
+      channel: "reef",
+      to: `reef:${foreignPeer}`,
+      withDirectAdapterHandoff: (initiate) =>
+        withAuthorizedConversationDelivery(
+          {
+            config: cfg,
+            readCurrentConfig: () => cfg,
+            agentId: "main",
+            scope,
+            conversationRef: foreignSeed.conversationRef,
+            expectedRouteFingerprint: resolveConversationRouteFingerprint(foreignConversation!),
+          },
+          initiate,
+        ),
+    });
+    await expect(foreignHandler.sendText("rejected for the other agent")).rejects.toThrow(
+      "Conversation is no longer available to this agent",
+    );
+    expect(sendText).toHaveBeenCalledTimes(1);
 
     // Only the runtime binding changes; the retained config, plugin, and conversation stay current.
     const replacement = await bindings.bind({
@@ -414,11 +455,13 @@ it("allows no-op binding delivery and fences a retained grant after reassignment
       targetSessionKey: "agent:other:reef:channel:replacement",
     });
     expect(await readConversation(scope, conversationRef)).toEqual(conversation);
+    expect(() => prepared.read()).toThrow("Conversation binding ownership changed");
     await expect(handler.sendText("rejected after runtime reassignment")).rejects.toThrow(
       "Conversation binding ownership changed",
     );
-    expect(sendText).toHaveBeenCalledOnce();
+    expect(sendText).toHaveBeenCalledTimes(1);
   } finally {
+    prepared.dispose();
     routeAuthority.dispose();
   }
 });
