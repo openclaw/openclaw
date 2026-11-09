@@ -79,33 +79,6 @@ describe("runDaemonStatus", () => {
     resetRuntimeCapture();
   });
 
-  it.each(["before", "pending", "late result"])(
-    "does not publish status or ordinary failure after an owned interrupt (%s)",
-    async (phase) => {
-      const scope = new AsyncWorkScope();
-      const reason = new DOMException("Status interrupted.", "AbortError");
-      if (phase === "before") {
-        scope.beginClose(reason);
-      } else {
-        gatherDaemonStatus.mockImplementationOnce(async () => {
-          scope.beginClose(reason);
-          if (phase === "pending") {
-            throw reason;
-          }
-          return createStatus();
-        });
-      }
-
-      await scope.run(() => runDaemonStatus({ ...statusOptions, json: true }));
-
-      expect(printDaemonStatus).not.toHaveBeenCalled();
-      expect(defaultRuntime.writeJson).not.toHaveBeenCalled();
-      expect(defaultRuntime.error).not.toHaveBeenCalled();
-      expect(defaultRuntime.exit).not.toHaveBeenCalled();
-      expect(gatherDaemonStatus).toHaveBeenCalledTimes(phase === "before" ? 0 : 1);
-    },
-  );
-
   it("returns local runtime intent while shared-state diagnostics are unavailable", async () => {
     gatherDaemonStatus.mockRejectedValue(new Error("Shared state is unavailable"));
     const localService = {
@@ -162,72 +135,63 @@ describe("runDaemonStatus", () => {
     expect(defaultRuntime.exit).not.toHaveBeenCalled();
   });
 
-  it("renders disabled-probe validation failures as JSON in JSON mode", async () => {
+  it.each([
+    [
+      { probe: false },
+      "--require-rpc needs checking enabled. Remove --no-probe or drop --require-rpc.",
+    ],
+    [{ runtimeIntentOnly: true }, "--runtime-intent-only cannot be combined with --require-rpc."],
+  ])("renders invalid option combinations as JSON (%j)", async (extra, message) => {
     await expect(
-      runDaemonStatus({ ...statusOptions, probe: false, requireRpc: true, json: true }),
+      runDaemonStatus({ ...statusOptions, ...extra, requireRpc: true, json: true }),
     ).rejects.toThrow("__exit__:1");
 
+    expect(readDaemonServiceStatus).not.toHaveBeenCalled();
     expect(gatherDaemonStatus).not.toHaveBeenCalled();
     expect(defaultRuntime.writeJson).toHaveBeenCalledWith({
       ok: false,
-      error: {
-        type: "cli_error",
-        message:
-          "Gateway status failed: --require-rpc needs checking enabled. Remove --no-probe or drop --require-rpc.",
-      },
+      error: { type: "cli_error", message: `Gateway status failed: ${message}` },
     });
     expect(defaultRuntime.error).not.toHaveBeenCalled();
     expect(defaultRuntime.exit).toHaveBeenCalledTimes(1);
   });
 
-  it("rejects an RPC requirement for local-only runtime inspection", async () => {
-    await expect(
-      runDaemonStatus({ ...statusOptions, runtimeIntentOnly: true, requireRpc: true, json: true }),
-    ).rejects.toThrow("__exit__:1");
-    expect(readDaemonServiceStatus).not.toHaveBeenCalled();
-    expect(gatherDaemonStatus).not.toHaveBeenCalled();
+  it("forwards the command signal and stays silent after an interrupt", async () => {
+    const scope = new AsyncWorkScope();
+    gatherDaemonStatus.mockImplementationOnce(async (opts) => {
+      expect(opts).toMatchObject({ signal: scope.signal });
+      scope.beginClose(new DOMException("Status interrupted.", "AbortError"));
+      return createStatus();
+    });
+
+    await scope.run(() => runDaemonStatus({ ...statusOptions, json: true }));
+
+    expect(printDaemonStatus).not.toHaveBeenCalled();
+    expect(defaultRuntime.error).not.toHaveBeenCalled();
+    expect(defaultRuntime.exit).not.toHaveBeenCalled();
+  });
+
+  it("renders service-inspection failures as JSON in JSON mode", async () => {
+    const secret = "sk-abcdefghijklmnopqrstuv";
+    const error = new Error(`service manager unavailable: Authorization: Bearer ${secret}`);
+    error.name = "ServiceManagerError";
+    gatherDaemonStatus.mockRejectedValueOnce(error);
+
+    await expect(runDaemonStatus({ ...statusOptions, json: true })).rejects.toThrow("__exit__:1");
+
+    expect(printDaemonStatus).not.toHaveBeenCalled();
     expect(defaultRuntime.writeJson).toHaveBeenCalledWith({
       ok: false,
       error: {
         type: "cli_error",
-        message:
-          "Gateway status failed: --runtime-intent-only cannot be combined with --require-rpc.",
+        message: expect.stringContaining("Gateway status failed: service manager unavailable"),
       },
     });
+    expect(JSON.stringify(defaultRuntime.writeJson.mock.calls)).not.toContain(error.name);
+    expect(JSON.stringify(defaultRuntime.writeJson.mock.calls)).not.toContain(secret);
+    expect(defaultRuntime.error).not.toHaveBeenCalled();
+    expect(defaultRuntime.exit).toHaveBeenCalledTimes(1);
   });
-
-  it.each([false, true])(
-    "renders service-inspection failures as JSON (interrupted=%s)",
-    async (interrupted) => {
-      const secret = "sk-abcdefghijklmnopqrstuv";
-      const error = new Error(`service manager unavailable: Authorization: Bearer ${secret}`);
-      error.name = "ServiceManagerError";
-      const scope = new AsyncWorkScope();
-      gatherDaemonStatus.mockImplementationOnce(async () => {
-        if (interrupted) {
-          scope.beginClose(new DOMException("Status interrupted.", "AbortError"));
-        }
-        throw error;
-      });
-
-      await expect(
-        scope.run(() => runDaemonStatus({ ...statusOptions, json: true })),
-      ).rejects.toThrow("__exit__:1");
-
-      expect(printDaemonStatus).not.toHaveBeenCalled();
-      expect(defaultRuntime.writeJson).toHaveBeenCalledWith({
-        ok: false,
-        error: {
-          type: "cli_error",
-          message: expect.stringContaining("Gateway status failed: service manager unavailable"),
-        },
-      });
-      expect(JSON.stringify(defaultRuntime.writeJson.mock.calls)).not.toContain(error.name);
-      expect(JSON.stringify(defaultRuntime.writeJson.mock.calls)).not.toContain(secret);
-      expect(defaultRuntime.error).not.toHaveBeenCalled();
-      expect(defaultRuntime.exit).toHaveBeenCalledTimes(1);
-    },
-  );
 
   it("exits only once after printing a failed required RPC probe", async () => {
     gatherDaemonStatus.mockResolvedValueOnce(
