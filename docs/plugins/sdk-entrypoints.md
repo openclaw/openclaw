@@ -515,6 +515,22 @@ database writer and file publication boundaries too. Versioned owner-bound RPC
 names let CLI callers require updated plugin handlers without assuming that an
 updated Gateway also upgraded an independently installed plugin.
 
+## Prepared Decision HTTP runtime
+
+`openclaw/plugin-sdk/decisions-http-runtime` supplies `executeDecisionHttp(execution)`
+for provider-owned JSON Decision protocols. Import it lazily. Supply prepared
+provider auth, headers, request overrides, base URL, relative endpoint path,
+serialized body, signal, monotonic deadline, live admission assertion, and a
+provider-owned response decoder returning a Decision V2 provider outcome.
+It owns guarded HTTP dispatch, bounded JSON reads, credential-reflection rejection,
+cancellation, release, and standard HTTP failure classification. It makes one
+request, never discovers credentials, and never retries paid inference. The
+provider owns request eligibility, native semantics, retention controls, and
+validation of decoded results. `evaluateDecisionHttp(context, route)` projects the
+host-prepared V2 context into those execution inputs without importing a broad
+host-runtime facade in the provider. OpenAI-compatible and System One adapters share
+this executor without sharing their wire codecs.
+
 ## OpenAI-compatible Decisions runtime
 
 `openclaw/plugin-sdk/decisions-openai-runtime` supplies the shared native

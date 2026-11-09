@@ -1684,6 +1684,10 @@
       "types": "./dist/plugin-sdk/decisions-openai-runtime.d.ts",
       "default": "./dist/plugin-sdk/decisions-openai-runtime.js"
     },
+    "./plugin-sdk/decisions-http-runtime": {
+      "types": "./dist/plugin-sdk/decisions-http-runtime.d.ts",
+      "default": "./dist/plugin-sdk/decisions-http-runtime.js"
+    },
     "./plugin-sdk/secret-ref-readonly": {
       "types": "./dist/plugin-sdk/secret-ref-readonly.d.ts",
       "default": "./dist/plugin-sdk/secret-ref-readonly.js"

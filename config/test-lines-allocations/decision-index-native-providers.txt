@@ -1,0 +1,2 @@
+# Native registration/HTTP protocols, provider limits, GLiDE expected scores, manifest picker projection and search-key isolation.
+329

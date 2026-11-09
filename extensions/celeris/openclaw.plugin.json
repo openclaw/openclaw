@@ -1,0 +1,112 @@
+{
+  "id": "celeris",
+  "name": "Celeris",
+  "categories": [
+    "models"
+  ],
+  "activation": {
+    "onStartup": false
+  },
+  "enabledByDefault": true,
+  "providers": [
+    "celeris"
+  ],
+  "providerEndpoints": [
+    {
+      "endpointClass": "celeris-native",
+      "hosts": [
+        "inference.celeris.ai"
+      ]
+    }
+  ],
+  "setup": {
+    "providers": [
+      {
+        "id": "celeris",
+        "envVars": [
+          "CELERIS_API_KEY"
+        ]
+      }
+    ]
+  },
+  "providerAuthChoices": [
+    {
+      "provider": "celeris",
+      "method": "api-key",
+      "choiceId": "celeris-api-key",
+      "appGuidedSecret": true,
+      "credentialOnly": true,
+      "choiceLabel": "Celeris API key",
+      "groupId": "celeris",
+      "groupLabel": "Celeris",
+      "groupHint": "Native Decision models",
+      "optionKey": "celerisApiKey",
+      "cliFlag": "--celeris-api-key",
+      "cliOption": "--celeris-api-key <key>",
+      "cliDescription": "Celeris API key"
+    }
+  ],
+  "contracts": {
+    "decisionProviders": [
+      "celeris"
+    ]
+  },
+  "modelCatalog": {
+    "providers": {
+      "celeris": {
+        "baseUrl": "https://inference.celeris.ai/celeris-1-decision/v1",
+        "models": [
+          {
+            "id": "celeris-1.1-decision",
+            "name": "Celeris-1.1 Decision",
+            "input": [
+              "text"
+            ],
+            "inference": {
+              "chat": false,
+              "decision": {
+                "protocol": "openai-decisions",
+                "input": [
+                  "text"
+                ],
+                "questions": {
+                  "boolean": {
+                    "probabilities": "boolean",
+                    "abstention": false
+                  },
+                  "choice": {
+                    "probabilities": "categorical",
+                    "abstention": false,
+                    "minOptions": 2,
+                    "maxOptions": 255
+                  },
+                  "score": {
+                    "probabilities": "categorical",
+                    "abstention": false,
+                    "minOptions": 2,
+                    "maxOptions": 64
+                  }
+                },
+                "confidence": "provider-specific",
+                "reasoning": {
+                  "modes": [
+                    "auto"
+                  ]
+                },
+                "limits": {
+                  "maxQuestions": 400,
+                  "maxRequestTokens": 131072
+                }
+              }
+            }
+          }
+        ]
+      }
+    }
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

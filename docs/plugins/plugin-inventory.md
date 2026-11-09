@@ -52,7 +52,7 @@ Each entry lists the package, distribution route, and description.
 
 ## Core npm package
 
-79 plugins
+82 plugins
 
 - **[a2a](/plugins/reference/a2a)** (`@openclaw/a2a`) - included in OpenClaw. A2A v1.0 Agent-to-Agent protocol channel plugin.
 
@@ -86,6 +86,8 @@ Each entry lists the package, distribution route, and description.
 
 - **[canvas](/plugins/reference/canvas)** (`@openclaw/canvas-plugin`) - included in OpenClaw. Presents hosted widget documents on paired macOS panels.
 
+- **[celeris](/plugins/reference/celeris)** (`@openclaw/celeris`) - included in OpenClaw, and also from npm or ClawHub: `@openclaw/celeris`. Adds Celeris model provider support to OpenClaw.
+
 - **[clawrouter](/plugins/reference/clawrouter)** (`@openclaw/clawrouter`) - included in OpenClaw. Adds ClawRouter model provider support to OpenClaw.
 
 - **[cloudflare](/plugins/reference/cloudflare)** (`@openclaw/cloudflare`) - included in OpenClaw, and also from npm or ClawHub: `@openclaw/cloudflare`. Cloudflare R2 storage for named OpenClaw storage locations.
@@ -109,6 +111,8 @@ Each entry lists the package, distribution route, and description.
 - **[elevenlabs](/plugins/reference/elevenlabs)** (`@openclaw/elevenlabs-speech`) - included in OpenClaw. Adds media understanding provider support. Adds realtime transcription provider support. Adds text-to-speech provider support.
 
 - **[fal](/plugins/reference/fal)** (`@openclaw/fal-provider`) - included in OpenClaw. Adds fal model provider support to OpenClaw.
+
+- **[fastino](/plugins/reference/fastino)** (`@openclaw/fastino-provider`) - included in OpenClaw, and also from npm or ClawHub: `@openclaw/fastino-provider`. Native GLiDE Boolean, Choice and Score decisions.
 
 - **[file-transfer](/plugins/reference/file-transfer)** (`@openclaw/file-transfer`) - included in OpenClaw. Fetch, list, and write files on paired nodes via dedicated node commands. Bypasses bash stdout truncation by using base64 over node.invoke for binaries up to 16 MB.
 
@@ -155,6 +159,8 @@ Each entry lists the package, distribution route, and description.
 - **[migrate-hermes](/plugins/reference/migrate-hermes)** (`@openclaw/migrate-hermes`) - included in OpenClaw. Imports Hermes configuration, memories, skills, and supported credentials into OpenClaw.
 
 - **[minimax](/plugins/reference/minimax)** (`@openclaw/minimax-provider`) - included in OpenClaw. Adds MiniMax, MiniMax Portal model provider support to OpenClaw.
+
+- **[nace](/plugins/reference/nace)** (`@openclaw/nace`) - included in OpenClaw, and also from npm or ClawHub: `@openclaw/nace`. Adds Nace model provider support to OpenClaw.
 
 - **[nvidia](/plugins/reference/nvidia)** (`@openclaw/nvidia-provider`) - included in OpenClaw. Adds NVIDIA model provider support to OpenClaw.
 
@@ -348,7 +354,7 @@ Each entry lists the package, distribution route, and description.
 
 - **[particle](/plugins/reference/particle)** (`@openclaw/particle-provider`) - npm or ClawHub: `@openclaw/particle-provider`. Adds Particle model provider support to OpenClaw.
 
-- **[perplexity](/plugins/reference/perplexity)** (`@openclaw/perplexity-plugin`) - npm or ClawHub: `@openclaw/perplexity-plugin`. Adds web search provider support.
+- **[perplexity](/plugins/reference/perplexity)** (`@openclaw/perplexity-plugin`) - npm or ClawHub: `@openclaw/perplexity-plugin`. Adds Perplexity Decisions model provider support to OpenClaw.
 
 - **[pixverse](/plugins/reference/pixverse)** (`@openclaw/pixverse-provider`) - npm or ClawHub: `@openclaw/pixverse-provider`. OpenClaw PixVerse video generation provider plugin.
 
