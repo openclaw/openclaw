@@ -6,7 +6,7 @@ import {
   findForeignLaunchdJobs,
   formatForeignLaunchdJobs,
   repairForeignLaunchdJob,
-  type ForeignLaunchdJob,
+  type ForeignLaunchdJobScan,
 } from "../daemon/launchd-foreign-jobs.js";
 import { readGatewayForcedRestartSummary } from "../daemon/restart-storm.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -27,9 +27,9 @@ export async function noteMacForeignLaunchdJobs(
   if (process.platform !== "darwin") {
     return;
   }
-  let jobs: ForeignLaunchdJob[];
+  let scan: ForeignLaunchdJobScan;
   try {
-    jobs = await findForeignLaunchdJobs(env);
+    scan = await findForeignLaunchdJobs(env);
   } catch (error) {
     note(
       `Could not inspect foreign launchd jobs: ${sanitizeTerminalText(formatErrorMessage(error))}. No jobs were removed.`,
@@ -37,15 +37,19 @@ export async function noteMacForeignLaunchdJobs(
     );
     return;
   }
-  if (jobs.length === 0) {
+  const { jobs, warning } = scan;
+  if (jobs.length === 0 && !warning) {
     return;
   }
-  const lines = [formatForeignLaunchdJobs(jobs)];
-  const restarts = readGatewayForcedRestartSummary(env);
-  if (restarts.count > 0) {
-    lines.push(
-      `${restarts.count} external forced Gateway restart(s) in the last ${Math.round(restarts.windowMs / 60_000)} minutes. Listed lifecycle jobs may be responsible; this is not proof of attribution.`,
-    );
+  const lines = warning ? [warning] : [];
+  if (jobs.length > 0) {
+    lines.push(formatForeignLaunchdJobs(jobs));
+    const restarts = readGatewayForcedRestartSummary(env);
+    if (restarts.count > 0) {
+      lines.push(
+        `${restarts.count} external forced Gateway restart(s) in the last ${Math.round(restarts.windowMs / 60_000)} minutes. Listed lifecycle jobs may be responsible; this is not proof of attribution.`,
+      );
+    }
   }
   const candidates = jobs.filter((job) => job.safeToRemove);
   if (candidates.length > 0) {

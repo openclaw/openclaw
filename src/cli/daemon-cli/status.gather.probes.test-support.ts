@@ -1,6 +1,6 @@
 import { vi } from "vitest";
 import type { GatewayServiceInventory } from "../../daemon/inspect.js";
-import type { ForeignLaunchdJob } from "../../daemon/launchd-foreign-jobs.js";
+import type { ForeignLaunchdJobScan } from "../../daemon/launchd-foreign-jobs.js";
 import type { StaleOpenClawUpdateLaunchdJob } from "../../daemon/launchd.js";
 import * as gatewayBootLifecycle from "../../infra/gateway-boot-lifecycle.js";
 import type { PortConnections, PortUsage } from "../../infra/ports-types.js";
@@ -78,8 +78,8 @@ export const findStaleOpenClawUpdateLaunchdJobs = vi.fn<
   (env?: NodeJS.ProcessEnv) => Promise<StaleOpenClawUpdateLaunchdJob[]>
 >(async () => []);
 export const findForeignLaunchdJobs = vi.fn<
-  (env?: NodeJS.ProcessEnv) => Promise<ForeignLaunchdJob[]>
->(async () => []);
+  (env?: NodeJS.ProcessEnv) => Promise<ForeignLaunchdJobScan>
+>(async () => ({ jobs: [] }));
 export const readLastGatewayErrorLine = vi.fn<(_env?: NodeJS.ProcessEnv) => Promise<string | null>>(
   async () => null,
 );

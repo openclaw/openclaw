@@ -23,6 +23,10 @@ export type ForeignLaunchdJob = {
   plistPath?: string;
   diagnostic?: string;
 };
+export type ForeignLaunchdJobScan = {
+  jobs: ForeignLaunchdJob[];
+  warning?: string;
+};
 
 const MAX_JOBS = 64;
 const INSPECTION_TIMEOUT_MS = 2_000;
@@ -305,9 +309,9 @@ async function inspectJob(
 
 export async function findForeignLaunchdJobs(
   env: NodeJS.ProcessEnv = process.env,
-): Promise<ForeignLaunchdJob[]> {
+): Promise<ForeignLaunchdJobScan> {
   if (process.platform !== "darwin") {
-    return [];
+    return { jobs: [] };
   }
   const result = await execLaunchctl(["list"], INSPECTION_TIMEOUT_MS);
   if (result.code !== 0) {
@@ -321,23 +325,26 @@ export async function findForeignLaunchdJobs(
       }),
     ),
   ].toSorted();
-  if (labels.length > MAX_JOBS) {
-    throw new Error(
-      `Too many OpenClaw launchd jobs to inspect safely (${labels.length}; limit ${MAX_JOBS}).`,
-    );
-  }
   const jobs: ForeignLaunchdJob[] = [];
   const deadline = Date.now() + 10_000;
-  for (const label of labels) {
+  let inspected = 0;
+  for (const label of labels.slice(0, MAX_JOBS)) {
     if (Date.now() >= deadline) {
-      throw new Error("OpenClaw launchd job inspection exceeded its 10-second budget.");
+      break;
     }
     const job = await inspectJob(label, env);
+    inspected++;
     if (job) {
       jobs.push(job);
     }
   }
-  return jobs;
+  const uninspected = labels.length - inspected;
+  return uninspected > 0
+    ? {
+        jobs,
+        warning: `Foreign launchd scan incomplete: ${uninspected} of ${labels.length} candidates not inspected.`,
+      }
+    : { jobs };
 }
 
 export function formatForeignLaunchdJobs(jobs: ForeignLaunchdJob[]): string {

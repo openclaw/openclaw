@@ -353,6 +353,12 @@ describe("printDaemonStatus", () => {
     expect(output()).not.toContain("Listed lifecycle jobs may be responsible");
   });
 
+  it("reports an incomplete launchd scan even without findings", () => {
+    const warning = "Foreign launchd scan incomplete: 1 of 65 candidates not inspected.";
+    printDaemonStatus({ service: { foreignLaunchdInspectionWarning: warning } });
+    expectMockLineContains(runtime.error, warning);
+  });
+
   it("prints stale updater launchd job guidance", () => {
     printDaemonStatus({
       service: {
