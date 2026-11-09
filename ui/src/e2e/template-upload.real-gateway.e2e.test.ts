@@ -90,7 +90,9 @@ suite.define(() => {
     await expect
       .poll(
         async () => {
-          if (dashboard.code !== 0) dashboard = await owner.cli(["dashboard", "--json"]);
+          if (dashboard.code !== 0) {
+            dashboard = await owner.cli(["dashboard", "--json"]);
+          }
           return dashboard.code;
         },
         { timeout: 45_000, message: owner.logs() },
