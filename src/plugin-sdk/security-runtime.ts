@@ -109,7 +109,6 @@ export { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
  * See https://docs.openclaw.ai/plugins/sdk-subpaths#sensitive-text-redaction.
  */
 export { redactSensitiveText } from "../logging/redact.js";
-export { redactMemoryIngestionText } from "../logging/redact.js";
 export { safeEqualSecret } from "../security/secret-equal.js";
 
 export { resolvePinnedMainDmOwnerFromAllowlist } from "../security/dm-policy-shared.js";

@@ -18,6 +18,7 @@ vi.mock("openclaw/plugin-sdk/memory-host-events", () => ({
 }));
 
 import { runDreamingSweepPhases } from "./dreaming-phases.js";
+import { isContaminatedDreamingSnippet } from "./short-term-promotion-utils.js";
 import { applyShortTermPromotions, type PromotionCandidate } from "./short-term-promotion.js";
 import { createMemoryCoreTestHarness } from "./test-helpers.js";
 
@@ -159,9 +160,25 @@ describe("memory-core transcript and promotion boundaries", () => {
       "utf-8",
     );
     expect(corpus).toContain(safeControlText);
-    expect(corpus).not.toContain(RAW_DREAMING_SECRET);
+    expect(corpus).toContain(RAW_DREAMING_SECRET);
   });
 
+  it("rejects credential-bearing transcript snippets at the promotion boundary", () => {
+    const credentialSnippet = `User: Remember this deployment detail ${RAW_PROMOTION_SECRET}`;
+    const safeSnippet = "User: Remember the deployment window is Friday.";
+
+    expect(
+      isContaminatedDreamingSnippet(credentialSnippet, {
+        allowTranscriptTurnSnippet: true,
+      }),
+    ).toBe(true);
+
+    expect(
+      isContaminatedDreamingSnippet(safeSnippet, {
+        allowTranscriptTurnSnippet: true,
+      }),
+    ).toBe(false);
+  });
   it("promotes only clean trusted content across contamination and provenance gates", async () => {
     const workspaceDir = await createWorkspace("redaction-promotion-");
     const sourcePath = "memory/2026-08-03.md";

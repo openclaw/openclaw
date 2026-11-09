@@ -3,7 +3,6 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
-  appendSessionCorpusLines,
   foreignSessionIngestionSource,
   scanSessionIngestionSource,
   sessionIngestionSourceFromCorpus,
@@ -247,52 +246,4 @@ describe("session ingestion", () => {
       );
     },
   );
-  it("redacts credentials before candidate and corpus persistence", async () => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-session-redaction-"));
-    tempDirs.push(dir);
-    const archiveFile = path.join(dir, "archive.jsonl");
-    const safeText = "Safe transcript text survives ingestion.";
-    const secret = "OPENAI_API_KEY=sk-1234567890abcdef";
-    const timestamp = "2026-04-05T18:00:00.000Z";
-
-    await fs.writeFile(
-      archiveFile,
-      `${JSON.stringify({
-        type: "message",
-        id: "redaction-message-1",
-        timestamp,
-        message: { role: "user", content: `${safeText} ${secret}`, timestamp },
-      })}\n`,
-      "utf-8",
-    );
-
-    const scan = await scanSessionIngestionSource({
-      source: foreignSessionIngestionSource("main", archiveFile),
-      seenMessages: {},
-      verifyContent: true,
-      classifyDay: () => "include",
-    });
-
-    expect(scan.candidates).toHaveLength(1);
-    const candidate = scan.candidates[0];
-    expect(candidate.snippet).toContain(safeText);
-    expect(candidate.snippet).not.toContain(secret);
-    expect(candidate.rendered).not.toContain(secret);
-
-    const results = await appendSessionCorpusLines({
-      workspaceDir: dir,
-      day: candidate.day,
-      lines: [candidate],
-    });
-
-    expect(results[0]?.snippet).toContain(safeText);
-    expect(results[0]?.snippet).not.toContain(secret);
-
-    const corpus = await fs.readFile(
-      path.join(dir, "memory", ".dreams", "session-corpus", `${candidate.day}.txt`),
-      "utf-8",
-    );
-    expect(corpus).toContain(safeText);
-    expect(corpus).not.toContain(secret);
-  });
 });
