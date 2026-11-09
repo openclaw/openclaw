@@ -2,6 +2,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { UI_APPEARANCE_PREFERENCE_KEYS } from "../../../packages/gateway-protocol/src/schema/ui-appearance-preferences.ts";
+import type { UsersPrefsGetResult } from "../../../packages/gateway-protocol/src/schema/users.ts";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { GatewayRequestError } from "../api/gateway-connect-errors.ts";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
@@ -264,22 +265,28 @@ describe("ShellGatewayOwner profile appearance integration", () => {
     expect(loadSettings().accent).toBe("#445566");
   });
 
-  it.each(["error", "unavailable"])(
+  it.each(["error", "no_durable_identity"])(
     "automatically recovers an initial %s profile read on the same connection",
     async (failure) => {
       vi.useFakeTimers();
       vi.spyOn(console, "error").mockImplementation(() => undefined);
       const { context, owner, snapshot, request } = createProfileAppearanceGateway("profile-owner");
       patchSettings({ theme: "claw", themeMode: "system" });
-      const saved = {
+      const saved: UsersPrefsGetResult = {
         status: "ok",
-        entries: { "ui.theme": "knot", "ui.themeMode": "dark", "ui.railShortcuts": [] },
+        entries: {
+          "ui.theme": "knot",
+          "ui.themeMode": "dark",
+          "ui.fontUi": "jetbrains-mono",
+          "ui.fontChat": "lora",
+          "ui.railShortcuts": [],
+        },
       };
       request.mockResolvedValue(saved);
       if (failure === "error") {
         request.mockRejectedValueOnce(new Error("temporary preference read failure"));
       } else {
-        request.mockResolvedValueOnce({ status: "unavailable" });
+        request.mockResolvedValueOnce({ status: "no_durable_identity" });
       }
       await owner.ensureRuntimeConfig(snapshot, context.runtimeConfig);
       expect(loadSettings()).toMatchObject({ theme: "claw", themeMode: "system" });
@@ -288,7 +295,12 @@ describe("ShellGatewayOwner profile appearance integration", () => {
       expect(request).toHaveBeenCalledOnce();
       await vi.advanceTimersByTimeAsync(1_000);
       await vi.dynamicImportSettled();
-      expect(loadSettings()).toMatchObject({ theme: "knot", themeMode: "dark" });
+      expect(loadSettings()).toMatchObject({
+        theme: "knot",
+        themeMode: "dark",
+        fontUi: "jetbrains-mono",
+        fontChat: "lora",
+      });
       await owner.ensureRuntimeConfig(snapshot, context.runtimeConfig);
       expect(request).toHaveBeenCalledTimes(2);
     },

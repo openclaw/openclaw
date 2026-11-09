@@ -265,7 +265,12 @@ suite.define(() => {
       async ({ page }) => {
         const profileResponse = {
           status: "ok",
-          entries: { "ui.theme": "knot", "ui.themeMode": "dark" },
+          entries: {
+            "ui.theme": "knot",
+            "ui.themeMode": "dark",
+            "ui.fontUi": "jetbrains-mono",
+            "ui.fontChat": "lora",
+          },
         };
         const gateway = await installMockGateway(page, {
           ...scenario,
@@ -301,6 +306,26 @@ suite.define(() => {
           })
           .toBe(2);
         await expect.poll(read).toEqual({ theme: "openknot", mode: "dark" });
+        await expect
+          .poll(() =>
+            evaluateControlUiContext(page, (app) => ({
+              fontUi: app.theme.settings.fontUi,
+              fontChat: app.theme.settings.fontChat,
+            })),
+          )
+          .toEqual({ fontUi: "jetbrains-mono", fontChat: "lora" });
+        await expect
+          .poll(() =>
+            page.evaluate(() => ({
+              ui: getComputedStyle(document.body).fontFamily,
+              chat: getComputedStyle(document.querySelector(".settings-typography-preview__prose")!)
+                .fontFamily,
+            })),
+          )
+          .toMatchObject({
+            ui: expect.stringContaining("JetBrains Mono"),
+            chat: expect.stringContaining("Lora"),
+          });
         await expect
           .poll(() => page.locator(".settings-theme-card--knot").getAttribute("class"))
           .toContain("settings-theme-card--active");
