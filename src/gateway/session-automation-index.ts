@@ -1,20 +1,23 @@
 /** Process-local index of session keys that enabled cron jobs are bound to. */
+import { registerSessionMaintenancePreserveKeysProvider } from "../config/sessions/store-maintenance-preserve.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { tryResolveCronJobEffectiveAgentId } from "../cron/agent-id.js";
+import { resolveScheduledPrincipal } from "../cron/execution-context.js";
 import { resolveCronJobSessionBindings } from "../cron/job-session-bindings.js";
-import type { CronJob } from "../cron/types.js";
+import type { CronStoredJob } from "../cron/types.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 
 type SessionAutomationSource = {
   /** Current in-memory cron jobs; undefined until the cron store is loaded. */
-  getJobs: () => readonly CronJob[] | undefined;
+  getJobs: () => readonly CronStoredJob[] | undefined;
   getDefaultAgentId: () => string | undefined;
 };
 
 let source: SessionAutomationSource | null = null;
 
 let memo: {
-  jobs: readonly CronJob[] | undefined;
+  jobs: readonly CronStoredJob[] | undefined;
   defaultAgentId: string | undefined;
   cfg: OpenClawConfig;
   keys: ReadonlySet<string>;
@@ -71,7 +74,7 @@ function publishAutomationKeys(current: ReadonlySet<string>) {
 }
 
 function buildAutomationKeys(
-  jobs: readonly CronJob[],
+  jobs: readonly CronStoredJob[],
   cfg: OpenClawConfig,
   defaultAgentId: string | undefined,
 ): ReadonlySet<string> {
@@ -104,6 +107,34 @@ function refreshAutomationKeys(cfg: OpenClawConfig) {
   publishedKeys ??= memo.keys;
   return memo;
 }
+
+/**
+ * Creating conversations of enabled jobs, resolved exactly as occurrence
+ * admission resolves the parent it pauses on when that row is archived.
+ * Disabled or removed jobs release their parent on the next maintenance pass.
+ */
+function* enabledAutomationParentSessionKeys(): Generator<string> {
+  const defaultAgentId = source?.getDefaultAgentId();
+  for (const job of source?.getJobs() ?? []) {
+    if (!job.enabled) {
+      continue;
+    }
+    const agentId = tryResolveCronJobEffectiveAgentId(job, defaultAgentId);
+    if (!agentId) {
+      continue;
+    }
+    const principal = resolveScheduledPrincipal(job, { trigger: "cron", agentId });
+    if (!("error" in principal) && principal.kind === "parent") {
+      yield principal.parent.sessionKey;
+    }
+  }
+}
+
+// Automatic archiving would pause these jobs at their next occurrence.
+registerSessionMaintenancePreserveKeysProvider(async () => ({
+  capture: enabledAutomationParentSessionKeys,
+  dispose() {},
+}));
 
 /** True when an enabled cron job is bound to the canonical session key. */
 export function sessionHasAutomation(
