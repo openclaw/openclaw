@@ -47,7 +47,10 @@ and fails if cloning is unavailable. The client identity is generated with the
 synthetic fixture and must accompany its state migration receipt; no real
 credentials or fixture configuration are copied. Check free space
 before generation. The state fixture remains reusable; every run removes its
-own cloned state and task-created containers.
+own cloned state and task-created containers. Cleanup reads the stopped instance's
+canonical sandbox registry, resolves its names to immutable engine IDs, removes
+only those IDs, and verifies absence before deleting state. An unresolved cleanup
+fails the run and preserves its state; successful receipts are in `cleanup.json`.
 
 ```sh
 node --import ./scripts/tsx.mjs scripts/perf/sandbox-template-drain-measure.ts \

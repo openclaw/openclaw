@@ -1,0 +1,3 @@
+101
+# Interrupted validation/replacement preserves the last-good generation for resumed callers.
+# Cover atomic publication rollback, staged source/index custody and interrupted-clone cleanup.

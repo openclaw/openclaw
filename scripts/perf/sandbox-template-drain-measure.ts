@@ -28,6 +28,7 @@ import { root as openRoot } from "@openclaw/fs-safe/root";
 import { buildMockOpenAiResponsesProvider } from "../../src/gateway/test-openai-responses-model.js";
 import { listDirectoryTreeStrict } from "../../src/infra/directory-walk.js";
 import { writeGatewayRestartIntentSync } from "../../src/infra/restart-intent.js";
+import { closeOpenClawStateDatabaseAsync } from "../../src/state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../../src/state/openclaw-state-db.paths.js";
 import {
   connectRestartClient,
@@ -36,6 +37,7 @@ import {
 import { writeOpenAiResponsesText } from "../../test/helpers/openai-responses-sse.js";
 import { createOpenClawTestInstance } from "../../test/helpers/openclaw-test-instance.js";
 import { BASE_GATEWAY_BENCH_CONFIG } from "../lib/gateway-bench-runtime.js";
+import { cleanupDrainFixtureContainers } from "./sandbox-template-drain-cleanup.js";
 
 assert(
   Number.isFinite(getHeapStatistics().total_allocated_bytes),
@@ -93,10 +95,9 @@ await fs.writeFile(
   { mode: 0o755 },
 );
 const installsFile = path.join(output, "installs.log");
-const containersFile = path.join(output, "containers.log");
 await fs.writeFile(
   path.join(bin, "docker"),
-  `#!/bin/sh\nif test "$1" = create; then previous=; for argument in "$@"; do if test "$previous" = --name; then echo "$argument" >> ${shell(containersFile)}; fi; previous="$argument"; done; fi\ncase "$*" in *'pnpm install '*) echo install >> ${shell(installsFile)};; esac\nexec ${shell(actualDocker)} "$@"\n`,
+  `#!/bin/sh\ncase "$*" in *'pnpm install '*) echo install >> ${shell(installsFile)};; esac\nexec ${shell(actualDocker)} "$@"\n`,
   { mode: 0o755 },
 );
 const metricImport = path.join(output, "metrics.mjs");
@@ -467,19 +468,21 @@ try {
   await save();
   throw error;
 } finally {
-  await fs.writeFile(release, "");
-  await client?.stopAndWait();
-  await instance.cleanup();
-  if (existsSync(containersFile)) {
-    const names = [
-      ...new Set((await fs.readFile(containersFile, "utf8")).trim().split("\n").filter(Boolean)),
-    ];
-    if (names.length) {
-      execFileSync(actualDocker, ["rm", "--force", ...names], { stdio: "ignore" });
+  try {
+    await fs.writeFile(release, "");
+    await client?.stopAndWait();
+    await instance.stopGateway();
+    // Preserve state if native cleanup cannot prove resource retirement.
+    await cleanupDrainFixtureContainers({ env: instance.env, engine: actualDocker, output });
+    await instance.cleanup();
+  } finally {
+    try {
+      await closeOpenClawStateDatabaseAsync();
+    } finally {
+      provider.closeAllConnections();
+      await new Promise<void>((resolve) => {
+        provider.close(() => resolve());
+      });
     }
   }
-  provider.closeAllConnections();
-  await new Promise<void>((resolve) => {
-    provider.close(() => resolve());
-  });
 }
