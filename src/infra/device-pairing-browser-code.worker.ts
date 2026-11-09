@@ -348,16 +348,11 @@ export function decideBrowserPairRequestInWorker(
     {
       callerScopes: [...input.callerScopes],
       approvedVia: "owner",
-      ...(input.sharedGatewaySessionGeneration
-        ? {
-            tokenIssuer: {
-              kind: "shared-gateway-auth" as const,
-              generation: input.sharedGatewaySessionGeneration,
-            },
-          }
-        : {}),
     },
     input.nowMs,
+    input.sharedGatewaySessionGeneration
+      ? { kind: "shared-gateway-auth", generation: input.sharedGatewaySessionGeneration }
+      : undefined,
   );
   if (approved?.status !== "approved") {
     // The method requires operator.admin, which covers every requested scope. Throwing

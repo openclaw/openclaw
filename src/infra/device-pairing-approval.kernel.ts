@@ -199,6 +199,8 @@ export function approveDevicePairingInWorker(
   requestId: string,
   options: Omit<DevicePairingApprovalOptions, "isApprovalCurrent"> | undefined,
   nowMs: number,
+  // Issuer selection belongs to the worker, not public SDK approval options.
+  tokenIssuer?: DeviceAuthToken["issuer"],
 ): ApproveDevicePairingResult {
   return withPendingDevicePairingApproval(requestId, nowMs, (state, pendingRecord, existing) => {
     const autoApproveScopes = options?.autoApproveNewDeviceScopes;
@@ -282,7 +284,7 @@ export function approveDevicePairingInWorker(
       tokens[roleForToken] = createDeviceAuthToken({
         role: roleForToken,
         scopes: nextScopes,
-        issuer: options?.tokenIssuer,
+        issuer: tokenIssuer,
         existing: existingToken,
         preserveExistingIssuer: true,
         now: tokenNow,
