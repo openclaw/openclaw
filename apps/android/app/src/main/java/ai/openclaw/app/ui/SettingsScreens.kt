@@ -2338,17 +2338,18 @@ private fun AboutLinksPanel() {
 private fun LicensesSettingsScreen(onBack: () -> Unit) {
   val context = LocalContext.current
   val licenses = remember(context) { loadAndroidLicenseNotices(context.assets) }
-  var selectedLicense by remember { mutableStateOf<AndroidLicenseNotice?>(null) }
+  var selectedLicenseFileName by rememberSaveable { mutableStateOf<String?>(null) }
+  val selectedLicense = licenses.firstOrNull { it.fileName == selectedLicenseFileName }
   val backToListOrSettings = {
     if (selectedLicense == null) {
       onBack()
     } else {
-      selectedLicense = null
+      selectedLicenseFileName = null
     }
   }
 
   BackHandler(enabled = selectedLicense != null) {
-    selectedLicense = null
+    selectedLicenseFileName = null
   }
 
   SettingsDetailFrame(
@@ -2365,7 +2366,7 @@ private fun LicensesSettingsScreen(onBack: () -> Unit) {
         }
       } else {
         ClawListPanel(items = licenses) { license ->
-          LicenseListRow(license = license, onClick = { selectedLicense = license })
+          LicenseListRow(license = license, onClick = { selectedLicenseFileName = license.fileName })
         }
       }
     } else {

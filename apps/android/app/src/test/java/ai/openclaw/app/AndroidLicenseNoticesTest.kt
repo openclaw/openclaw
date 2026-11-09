@@ -1,14 +1,137 @@
 package ai.openclaw.app
 
+import ai.openclaw.app.ui.SettingsDetailScreen
+import ai.openclaw.app.ui.SettingsRoute
+import ai.openclaw.app.ui.design.ClawDesignTheme
+import android.content.Context
+import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.junit4.StateRestorationTester
+import androidx.compose.ui.test.junit4.v2.createComposeRule
+import androidx.compose.ui.test.onNodeWithContentDescription
+import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollTo
+import androidx.lifecycle.SavedStateHandle
+import androidx.lifecycle.ViewModelStore
+import kotlinx.coroutines.flow.MutableStateFlow
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
+import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
+import org.robolectric.annotation.Config
+import org.robolectric.util.ReflectionHelpers
 
 @RunWith(RobolectricTestRunner::class)
+@Config(sdk = [34])
 class AndroidLicenseNoticesTest {
+  @get:Rule val composeRule = createComposeRule()
+
+  @Test
+  fun selectedSettingsDetailsSurviveSavedStateRestorationAndBackClearsThem() {
+    val app = RuntimeEnvironment.getApplication() as NodeApp
+    val previousRuntime = app.peekRuntime()
+    val prefs = SecurePrefs(app, app.getSharedPreferences("settings-detail-restoration", Context.MODE_PRIVATE))
+    val runtime = NodeRuntime(app, prefs, NodeRuntimeMode.ScreenshotFixture)
+    val models = ViewModelStore()
+    val mounted = mutableStateOf(true)
+    val route = mutableStateOf(SettingsRoute.Licenses)
+    val restoration = StateRestorationTester(composeRule)
+    var parentBacks = 0
+    try {
+      bindNodeRuntimeTestFixture(app, runtime)
+      val model = MainViewModel(app, prefs, SavedStateHandle()).also { models.put("settings", it) }
+      // Seed external data only; selection, saving, restoration and Back use the real screens.
+      fun <T> summaryState(field: String): MutableStateFlow<GatewaySummaryState<T>> =
+        ReflectionHelpers.getField(ReflectionHelpers.getField<Any>(runtime, field), "mutableState")
+
+      val skills = summaryState<GatewaySkillsSummary>("skillsSummary")
+      skills.value =
+        GatewaySummaryState(
+          summary =
+            GatewaySkillsSummary(
+              listOf(
+                GatewaySkillSummary(
+                  skillKey = "restoration-skill",
+                  name = "Restoration skill",
+                  description = "Skill fixture",
+                  source = "workspace",
+                  emoji = null,
+                  disabled = false,
+                  eligible = true,
+                  blockedByAllowlist = false,
+                  blockedByAgentFilter = false,
+                  bundled = false,
+                  missingCount = 0,
+                  installCount = 0,
+                ),
+              ),
+            ),
+        )
+      val logs = summaryState<GatewayHealthLogsSummary>("healthLogsSummary")
+      val logSummary =
+        GatewaySummaryState(
+          summary =
+            GatewayHealthLogsSummary(
+              entries = listOf(GatewayLogEntry("2026-11-09T09:41:00Z", "warn", null, "Restoration log", "raw log fixture")),
+            ),
+        )
+      logs.value = logSummary
+      restoration.setContent {
+        if (mounted.value) {
+          ClawDesignTheme {
+            key(route.value) {
+              SettingsDetailScreen(viewModel = model, route = route.value, onBack = { parentBacks++ })
+            }
+          }
+        }
+      }
+      val cases =
+        listOf(
+          Triple(SettingsRoute.Licenses, "Manrope", "SIL OPEN FONT LICENSE Version 1.1"),
+          Triple(SettingsRoute.Skills, "Restoration skill", "Inspect and manage installed skill state."),
+          Triple(SettingsRoute.Health, "Restoration log", "raw log fixture"),
+        )
+      for ((target, item, detail) in cases) {
+        composeRule.runOnIdle { route.value = target }
+        composeRule.onNodeWithText(item).performScrollTo().performClick()
+        composeRule.onNodeWithText(detail, substring = true).performScrollTo().assertIsDisplayed()
+        if (target == SettingsRoute.Health) {
+          // A new tail must not replace the snapshot already open in the detail screen.
+          composeRule.runOnIdle { logs.value = GatewaySummaryState(summary = GatewayHealthLogsSummary()) }
+        }
+        restoration.emulateSavedInstanceStateRestore()
+        composeRule.onNodeWithText(detail, substring = true).performScrollTo().assertIsDisplayed()
+        if (target == SettingsRoute.Health) {
+          for (value in listOf("09:41", "WARN", "Unknown", "Restoration log")) {
+            composeRule.onNodeWithText(value).performScrollTo().assertIsDisplayed()
+          }
+          composeRule.runOnIdle { logs.value = logSummary }
+        }
+        composeRule.onNodeWithContentDescription("Back").performScrollTo().performClick()
+        restoration.emulateSavedInstanceStateRestore()
+        composeRule.onNodeWithText(detail, substring = true).assertDoesNotExist()
+        composeRule.onNodeWithText(item).performScrollTo().assertIsDisplayed()
+        assertEquals(0, parentBacks)
+      }
+    } finally {
+      try {
+        composeRule.runOnIdle { mounted.value = false }
+        models.clear()
+      } finally {
+        try {
+          closeNodeRuntimeTestFixture(runtime)
+        } finally {
+          bindNodeRuntimeTestFixture(app, previousRuntime)
+        }
+      }
+    }
+  }
+
   @Test
   fun isAndroidLicenseFileName_acceptsTxtOnly() {
     assertTrue(isAndroidLicenseFileName("MANROPE_OFL.txt"))
