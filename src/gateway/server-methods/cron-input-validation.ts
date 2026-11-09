@@ -30,6 +30,7 @@ import {
   requiresExternalCronDelivery,
   resolveDeliveryTarget,
 } from "../../cron/isolated-agent/delivery-target.js";
+import { isCronGmailHookSessionTurn } from "../../cron/isolated-agent/model-selection.js";
 import { resolveCarriedCronModelSelection } from "../../cron/isolated-agent/session-carried-model.js";
 import { resolveCronAgentSessionKey } from "../../cron/isolated-agent/session-key.js";
 import { normalizeCronJobCreate, normalizeCronJobPatch } from "../../cron/normalize.js";
@@ -44,13 +45,11 @@ import { cronJobUsesToolRuntime } from "../../cron/tools-allow.js";
 import type { CronJob, CronJobCreate, CronJobPatch, CronStoredJob } from "../../cron/types.js";
 import { resolveTargetPrefixedChannel } from "../../infra/outbound/channel-target-prefix.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
-import { resolveHookExternalContentSource } from "../../security/external-content-source.js";
 import {
   AGENT_HARNESS_SESSION_ID_LOCKED_MESSAGE,
   AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE,
   isAgentHarnessSessionKey,
 } from "../../sessions/agent-harness-session-key.js";
-import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
 import { operatorScopeSatisfied } from "../../shared/operator-scope-compat.js";
 import { isUserModelAuthProfileId } from "../../state/user-model-account-id.js";
 import type { UserModelAccountSelection } from "../model-account-authority.js";
@@ -376,11 +375,10 @@ export async function captureCronCreatorSession(
             cfg,
             agentId: agentId ?? resolveDefaultAgentId(cfg),
             model: job.payload.model,
-            isGmailHook:
-              (job.payload.externalContentSource ??
-                resolveHookExternalContentSource(
-                  parseAgentSessionKey(executionSessionKey)?.rest ?? executionSessionKey,
-                )) === "gmail",
+            isGmailHook: isCronGmailHookSessionTurn(
+              job.payload.externalContentSource,
+              executionSessionKey,
+            ),
             sessionEntry: callerScope ? creatorSession : undefined,
             executionSessionEntry: executionSession?.entry,
             runtimeSessionEntry,
@@ -499,7 +497,8 @@ async function assertCronEditKeepsRunnableInference(
     cfg,
     agentId,
     model: job.payload.model,
-    isGmailHook: job.payload.externalContentSource === "gmail",
+    // Session-target runs read Gmail hook policy from their target, as create does.
+    isGmailHook: isCronGmailHookSessionTurn(job.payload.externalContentSource, executionKey ?? ""),
     executionSessionEntry: executionEntry,
   };
   let unrecorded: Awaited<ReturnType<typeof captureCronInferenceBinding>>;

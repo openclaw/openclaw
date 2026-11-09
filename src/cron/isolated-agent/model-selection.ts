@@ -11,6 +11,8 @@ import { resolveAgentModelPrimaryValue } from "../../config/model-input.js";
 /** Resolves provider/model precedence for scheduled runs. */
 import type { AgentConfig } from "../../config/types.agents.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { resolveHookExternalContentSource } from "../../security/external-content-source.js";
+import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
 import { resolveCronAgentConfig } from "./run-config.js";
 import {
   DEFAULT_MODEL,
@@ -89,6 +91,18 @@ function formatCronPayloadModelRejection(params: {
     return `automation model override '${modelOverride}' rejected by ${policyPath}: ${modelRef} is not in [${allowedModels}]`;
   }
   return `automation model override '${modelOverride}' rejected: ${error}`;
+}
+
+/** A persistent-session turn uses Gmail hook policy when its payload or target session says so. */
+export function isCronGmailHookSessionTurn(
+  externalContentSource: string | undefined,
+  sessionKey: string,
+): boolean {
+  return (
+    (externalContentSource ??
+      resolveHookExternalContentSource(parseAgentSessionKey(sessionKey)?.rest ?? sessionKey)) ===
+    "gmail"
+  );
 }
 
 export async function resolveCronModelSelectionOwner(params: {

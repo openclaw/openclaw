@@ -596,6 +596,23 @@ describe("cron handler inference binding persistence", () => {
     },
   );
 
+  it("judges an unbound Gmail-session job by the Gmail hook route", async ({ fixture }) => {
+    fixture.setGmailProfile(subscriptionId);
+    const job = unboundJob({ sessionTarget: "session:agent:main:hook:gmail:synthetic" });
+    job.payload = { kind: "agentTurn", message: "Check the inbox.", toolsAllow: [] };
+    await saveCronJobsStore(fixture.storePath, { version: 1, jobs: [job] });
+    const stored = await fixture.reload();
+    const patch = { payload: { kind: "agentTurn", message: "Check the inbox again." } };
+    const refusal = await fixture.invoke("cron.update", { id: stored.id, patch }, null, {
+      expectedSuccess: false,
+    });
+    expect(refusal).toMatchObject({
+      message: expect.stringContaining(
+        `stored account ${subscriptionId}. Select the account in the edit with model openai/gpt-4o@${subscriptionId},`,
+      ),
+    });
+  });
+
   it("records the resolved account when an unchanged declaration converges onto an unbound job", async ({
     fixture,
   }) => {
