@@ -20,6 +20,7 @@ import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -1188,6 +1189,88 @@ class NodeRuntimeAgentSelectionTest {
         assertEquals("scout", runtime.chat.sessionOwnerAgentId.value)
       } finally {
         loader.join(2_000)
+        closeNodeRuntimeTestFixture(runtime)
+      }
+    }
+
+  @Test
+  fun cancelledCatalogContinuationClearsBusyStateAndAllowsRetry() =
+    runBlocking {
+      val runtime = createConnectedRuntime()
+      val requestStarted = CompletableDeferred<Unit>()
+      val releaseResponse = CompletableDeferred<Unit>()
+      val entry =
+        SessionCatalogEntry(
+          catalogId = "codex",
+          hostId = "desktop",
+          threadId = "cancelled-thread",
+          agentId = "main",
+          status = "idle",
+          archived = false,
+          canContinue = true,
+        )
+      try {
+        val originalSessionKey = runtime.chat.sessionKey.value
+        var requestCount = 0
+        runtime.gatewayDataRequestOverrideForTests = { _, method, _ ->
+          check(method == "sessions.catalog.continue")
+          requestCount += 1
+          requestStarted.complete(Unit)
+          releaseResponse.await()
+          """{"sessionKey":"agent:main:catalog"}"""
+        }
+        val continuation = async { runtime.continueSessionCatalogEntry(entry) }
+        withTimeout(2_000) { requestStarted.await() }
+        assertEquals(entry.locatorId, runtime.sessionCatalogState.value.continuingEntryId)
+        assertFalse(runtime.continueSessionCatalogEntry(entry))
+        assertEquals(1, requestCount)
+
+        // The ViewModel caller can be cleared without disconnecting the process runtime.
+        withTimeout(2_000) { continuation.cancelAndJoin() }
+        assertTrue(continuation.isCancelled)
+        assertEquals(null, runtime.sessionCatalogState.value.continuingEntryId)
+        assertEquals(null, runtime.sessionCatalogState.value.errorText)
+        assertEquals(originalSessionKey, runtime.chat.sessionKey.value)
+
+        releaseResponse.complete(Unit)
+        assertTrue(withTimeout(2_000) { runtime.continueSessionCatalogEntry(entry) })
+        assertEquals(2, requestCount)
+        assertEquals("agent:main:catalog", runtime.chat.sessionKey.value)
+        assertEquals(null, runtime.sessionCatalogState.value.continuingEntryId)
+      } finally {
+        releaseResponse.complete(Unit)
+        closeNodeRuntimeTestFixture(runtime)
+      }
+    }
+
+  @Test
+  fun failedCatalogContinuationClearsBusyStateWithoutSelectingSession() =
+    runBlocking {
+      val runtime = createConnectedRuntime()
+      try {
+        val originalSessionKey = runtime.chat.sessionKey.value
+        val entry =
+          SessionCatalogEntry(
+            catalogId = "codex",
+            hostId = "desktop",
+            threadId = "failed-thread",
+            agentId = "main",
+            status = "idle",
+            archived = false,
+            canContinue = true,
+          )
+        var requestedMethod: String? = null
+        runtime.gatewayDataRequestOverrideForTests = { _, method, _ ->
+          requestedMethod = method
+          "{}"
+        }
+
+        assertFalse(withTimeout(2_000) { runtime.continueSessionCatalogEntry(entry) })
+        assertEquals("sessions.catalog.continue", requestedMethod)
+        assertEquals(null, runtime.sessionCatalogState.value.continuingEntryId)
+        assertEquals("Could not open this session.", runtime.sessionCatalogState.value.errorText)
+        assertEquals(originalSessionKey, runtime.chat.sessionKey.value)
+      } finally {
         closeNodeRuntimeTestFixture(runtime)
       }
     }
