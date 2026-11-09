@@ -1093,11 +1093,6 @@
     min-width: 0;
   }
 
-  .btn.agents-page-menu__trigger {
-    width: 44px;
-    height: 44px;
-  }
-
   /* With the menu in the floating header, no row is left above the tabs. */
   .page-header-actions:has(> .agents-toolbar-actions):not(:has(.agents-page-menu)) {
     display: none;

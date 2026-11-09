@@ -149,6 +149,18 @@ fixture.describe("Settings rhythm", () => {
     expect(g.refresh.radius).toBe(g.searchInput.radius);
   });
 
+  it("keeps the Agents menu trigger on the shared 38px phone control height", async () => {
+    const page = await fixture.page({ viewport: { width: 390, height: 844 } });
+    try {
+      await page.setContent(styleDocument(css, markup, 'data-theme-mode="dark"'));
+      const g = await readGeometry(page);
+      expect([g.menu.width, g.menu.height]).toEqual([38, 38]);
+      expect(g.create.height).toBe(38);
+    } finally {
+      await page.close();
+    }
+  });
+
   it("nests the emoji picker trigger concentrically inside its field", async () => {
     const g = await fixture.withPage(
       "emoji",
