@@ -413,6 +413,7 @@ export async function executeMutableUpdate(
         assertCurrent: assertExecutionCurrent,
         writeOptions: captureWriteOptions(),
         gatewayStartupRuntime,
+        ownerService: preManagedServiceStop,
       },
       params,
       originalRun,

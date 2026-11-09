@@ -523,4 +523,102 @@ describe("mutable update execution", () => {
         }
       }),
   );
+
+  it.each(["git", "package"] as const)(
+    "refuses a held PostgreSQL owner before candidate validation of a %s install",
+    async (kind) =>
+      withTestDir({ prefix: "postgres-capture-early-" }, async (root) => {
+        const params = await runParams(root, kind);
+        const { env } = params.opts.run;
+        await writeFixtureJson(path.join(root, "openclaw.json"), {
+          database: {
+            engine: "postgres",
+            postgres: { connection: "postgresql://synthetic.invalid/update-capture" },
+          },
+        });
+        // A foreign or absent service is never stopped by the updater.
+        mocks.maybeStopService.mockImplementation(async () => ({
+          ...inspectOrStopService("inspect"),
+          running: false,
+          serviceEnv: env,
+          serviceUpdateVerdict: { kind: "absent" },
+        }));
+        const acquire = gatewayLock.acquireGatewayLock;
+        vi.spyOn(gatewayLock, "acquireGatewayLock").mockImplementation(async (options) =>
+          options?.role === "sqlite-maintenance" ? null : acquire(options),
+        );
+        const events: string[] = [];
+        mocks.runGitUpdate.mockImplementation(
+          async (options: Parameters<typeof updateGitInstall>[0]) => {
+            await options.inspectGitTarget({ schemaVersions: { state: 15, agent: 19 } });
+            await options.validateCandidate!(root);
+            events.push("validated");
+            return { ...successfulUpdate, mode: "git" };
+          },
+        );
+        mocks.runPackageUpdate.mockImplementation(async (options: PackageInstallUpdateParams) => {
+          await options.validateCandidate(root);
+          events.push("validated");
+          return successfulUpdate;
+        });
+        const execution = await withUpdateCommandExecutor(
+          params.opts.run.runId,
+          async (executor) => {
+            params.opts.run.executorFence = await executor.enter(root);
+            return execute(params);
+          },
+        );
+
+        expect(mocks.validateCanary).not.toHaveBeenCalled();
+        expect(events).toEqual([]);
+        expect(execution, JSON.stringify(execution?.failure)).toMatchObject({
+          mutationStarted: false,
+          result: { status: "error", reason: "database-engine-preflight" },
+        });
+        expect(execution?.failure?.detail).toContain("exclusive state ownership");
+      }),
+  );
+
+  it.each(["owned", "unresolved"] as const)(
+    "keeps candidate validation when a running %s service will release the owner",
+    async (verdict) =>
+      withTestDir({ prefix: "postgres-capture-managed-" }, async (root) => {
+        // The restart executor check is covered elsewhere; this case owns validation order.
+        const params = { ...(await runParams(root, "package")), shouldRestart: false };
+        const { env } = params.opts.run;
+        await writeFixtureJson(path.join(root, "openclaw.json"), {
+          database: {
+            engine: "postgres",
+            postgres: { connection: "postgresql://synthetic.invalid/update-capture" },
+          },
+        });
+        mocks.maybeStopService.mockImplementation(async ({ phase }) => {
+          const state = { ...inspectOrStopService(phase), serviceEnv: env };
+          if (verdict === "unresolved") {
+            state.serviceUpdateVerdict = { kind: "unresolved", root, fingerprint: "fixture" };
+          }
+          return state;
+        });
+        const acquire = gatewayLock.acquireGatewayLock;
+        vi.spyOn(gatewayLock, "acquireGatewayLock").mockImplementation(async (options) =>
+          options?.role === "sqlite-maintenance" && !mocks.serviceStopped ? null : acquire(options),
+        );
+        const events: string[] = [];
+        mocks.runPackageUpdate.mockImplementation(async (options: PackageInstallUpdateParams) => {
+          await options.validateCandidate(root);
+          events.push("validated");
+          return successfulUpdate;
+        });
+        const execution = await withUpdateCommandExecutor(
+          params.opts.run.runId,
+          async (executor) => {
+            params.opts.run.executorFence = await executor.enter(root);
+            return execute(params);
+          },
+        );
+
+        expect(events, JSON.stringify(execution?.failure)).toEqual(["validated"]);
+        expect(execution?.result.reason).not.toBe("database-engine-preflight");
+      }),
+  );
 });
