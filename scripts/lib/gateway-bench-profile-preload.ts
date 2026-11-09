@@ -1,3 +1,5 @@
+import { AsyncLocalStorage } from "node:async_hooks";
+import { channel } from "node:diagnostics_channel";
 import { readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { Session } from "node:inspector/promises";
 import { registerHooks, syncBuiltinESMExports } from "node:module";
@@ -25,6 +27,100 @@ import {
   startGatewayBenchWorkerMessages,
 } from "./gateway-bench-worker-messages.ts";
 import { GatewayBenchWorkerProfiler } from "./gateway-bench-worker-profile.ts";
+
+// Count-only observer. Real producer/queue/preparation owners still execute unchanged.
+const transcriptObservation = new AsyncLocalStorage<string>();
+const transcriptChannel = channel("openclaw.benchmark.session-projection");
+const transcriptRows = new Map<string, Record<string, string>>();
+const transcriptKind = (update: {
+  message?: unknown;
+  messageId?: string;
+  target?: { sessionKey?: string };
+  sessionKey?: string;
+}) => {
+  const key = update.target?.sessionKey ?? update.sessionKey;
+  if (!key?.startsWith("agent:main:transcript-broadcast-measure-child-")) {
+    return undefined;
+  }
+  const message = update.message as { role?: string; content?: { type?: string }[] } | undefined;
+  const role =
+    message?.role === "assistant" &&
+    Array.isArray(message.content) &&
+    message.content.some((part) => part.type === "toolCall")
+      ? "tool-call"
+      : (message?.role ?? "marker");
+  return `${update.messageId?.startsWith("transcript-bench-") ? "probe" : "other"}-${role}`;
+};
+export const benchmarkTranscriptPublication = {
+  reset() {
+    transcriptRows.clear();
+  },
+  count(operation: string, kind = transcriptObservation.getStore(), durationMs?: number) {
+    const sourceKind =
+      kind ??
+      (operation === "materialization" || operation.startsWith("presentation-")
+        ? "unattributed"
+        : undefined);
+    if (sourceKind) {
+      transcriptChannel.publish({
+        operation: `transcript.${operation}.${sourceKind}`,
+        publications: 1,
+        durationMs,
+      });
+    }
+  },
+  input(update: Parameters<typeof transcriptKind>[0]) {
+    this.count("input", transcriptKind(update));
+  },
+  run<T>(update: Parameters<typeof transcriptKind>[0], consume: () => T): T {
+    const kind = transcriptKind(update);
+    if (!kind) {
+      return consume();
+    }
+    return transcriptObservation.run(kind, () => {
+      this.count("handled");
+      return consume();
+    });
+  },
+  consume<T>(consume: () => T): T {
+    const started = performance.now();
+    try {
+      return consume();
+    } finally {
+      this.count("consume", undefined, performance.now() - started);
+    }
+  },
+  row(row: Record<string, unknown> | undefined) {
+    if (!row || !transcriptObservation.getStore() || !transcriptChannel.hasSubscribers) {
+      return;
+    }
+    const key = JSON.stringify([row.agentId, row.key]);
+    const next: Record<string, string> = {};
+    for (const [field, value] of Object.entries(row)) {
+      const encoded = JSON.stringify(value);
+      if (encoded !== undefined) {
+        next[field] = encoded;
+      }
+    }
+    const previous = transcriptRows.get(key);
+    transcriptRows.set(key, next);
+    if (!previous) {
+      this.count("row-first");
+      return;
+    }
+    let changed = false;
+    for (const field of new Set([...Object.keys(previous), ...Object.keys(next)])) {
+      if (previous[field] === next[field]) {
+        continue;
+      }
+      this.count(`field-${field}`);
+      if (field !== "snapshotAt") {
+        changed = true;
+      }
+    }
+    this.count(changed ? "row-changed" : "row-unchanged");
+  },
+};
 
 function sampleCpu(): GatewayCpuUsageSnapshot {
   return {
@@ -73,6 +169,8 @@ if (isMainThread) {
   const workerAttribution = process.env.OPENCLAW_BENCH_WORKER_ATTRIBUTION === "1";
   const workerAttributionSourceHooks = new Set<string>();
   const sessionProjectionCounts = process.env.OPENCLAW_BENCH_SESSION_PROJECTION_COUNTS === "1";
+  const transcriptPublicationCounts =
+    process.env.OPENCLAW_BENCH_TRANSCRIPT_PUBLICATION_COUNTS === "1";
   const sessionProjectionSource = process.env.OPENCLAW_BENCH_SESSION_PROJECTION_SOURCE;
   const historySource = process.env.OPENCLAW_BENCH_HISTORY_SOURCE;
   const retainToolContext = process.env.OPENCLAW_BENCH_RETAIN_TOOL_CONTEXT === "1";
@@ -82,6 +180,7 @@ if (isMainThread) {
   if (
     broadcastTiming ||
     sessionProjectionCounts ||
+    transcriptPublicationCounts ||
     sessionProjectionSource ||
     workerAttribution ||
     historySource ||
@@ -149,6 +248,72 @@ if (isMainThread) {
     registerHooks({
       load(url, context, nextLoad) {
         const loaded = nextLoad(url, context);
+        if (transcriptPublicationCounts) {
+          const replacements: readonly (readonly [string, string])[] =
+            url === new URL("../../src/gateway/server-session-events.ts", import.meta.url).href
+              ? [
+                  [
+                    "  return (update: InternalSessionTranscriptUpdate): Promise<false | void> => {",
+                    "  return (update: InternalSessionTranscriptUpdate): Promise<false | void> => {\n    benchmarkTranscriptPublication.input(update);",
+                  ],
+                  [
+                    "const published = await handleTranscriptUpdateBroadcast(",
+                    "const published = await benchmarkTranscriptPublication.run(pending.update, () => handleTranscriptUpdateBroadcast(",
+                  ],
+                  [
+                    "sessionKey ? undefined : joinQueue,\n        );",
+                    "sessionKey ? undefined : joinQueue,\n        ));",
+                  ],
+                  [
+                    "      const sessionRow = record && read?.present(record);",
+                    "      const sessionRow = record && read?.present(record);\n      benchmarkTranscriptPublication.row(sessionRow);",
+                  ],
+                ]
+              : url ===
+                  new URL("../../src/gateway/session-event-prepared-row.ts", import.meta.url).href
+                ? [
+                    [
+                      "                yieldUntil = claimTurn(resumed);",
+                      "                benchmarkTranscriptPublication.count('consume-attempt');\n                yieldUntil = claimTurn(resumed);",
+                    ],
+                    [
+                      "                return yieldUntil ? deferred : consume(read);",
+                      "                if (yieldUntil) benchmarkTranscriptPublication.count('deferred');\n                return yieldUntil ? deferred : benchmarkTranscriptPublication.consume(() => consume(read));",
+                    ],
+                  ]
+                : url ===
+                    new URL("../../src/gateway/session-row-projection.ts", import.meta.url).href
+                  ? [
+                      [
+                        "materializedSequence: ++materializedCount,",
+                        "materializedSequence: (benchmarkTranscriptPublication.count('materialization'), ++materializedCount),",
+                      ],
+                    ]
+                  : url ===
+                      new URL("../../src/gateway/session-row-projection-record.ts", import.meta.url)
+                        .href
+                    ? [
+                        [
+                          "  const now = options.now ?? Date.now();",
+                          "  benchmarkTranscriptPublication.count(record.key.startsWith('agent:main:transcript-broadcast-measure-child-') ? 'presentation-leaf' : 'presentation-ancestor');\n  const now = options.now ?? Date.now();",
+                        ],
+                      ]
+                    : [];
+          if (replacements.length) {
+            let source = readFileSync(new URL(url), "utf8");
+            for (const [anchor, replacement] of replacements) {
+              if (source.split(anchor).length !== 2) {
+                throw new Error(`Transcript count anchor changed in ${url}`);
+              }
+              source = source.replace(anchor, replacement);
+            }
+            return {
+              ...loaded,
+              format: "module-typescript",
+              source: `import { benchmarkTranscriptPublication } from ${JSON.stringify(import.meta.url)};\n${source}`,
+            };
+          }
+        }
         if (toolExecutionSource && url === toolExecutionOwner) {
           return {
             ...loaded,
@@ -460,10 +625,26 @@ ${source}`;
         const workerMemory = message.includeWorkers
           ? workerMemoryModule?.sampleTrackedWorkerMemory()
           : undefined;
+        let databaseIntegrity: GatewayResourceSnapshot["databaseIntegrity"];
+        if (message.databaseIntegrity) {
+          const [
+            { readSqliteDatabaseIntegrityVerification },
+            { captureAgentDatabaseStartupIntegrity },
+          ] = await Promise.all([
+            import("../../src/infra/sqlite-database-admission.js"),
+            import("../../src/state/agent-database-startup-integrity.js"),
+          ]);
+          const { pathname, agentId } = message.databaseIntegrity;
+          databaseIntegrity = {
+            ...readSqliteDatabaseIntegrityVerification(pathname),
+            pending: Boolean(captureAgentDatabaseStartupIntegrity(pathname, agentId)),
+          };
+        }
         const resources = message.initial
           ? initialResources
           : {
               ...sampleResources(),
+              ...(databaseIntegrity ? { databaseIntegrity } : {}),
               ...(workerMemory ? { workers: workerMemory } : {}),
               ...(sessionCensus ? { sessionCensus } : {}),
             };
@@ -540,6 +721,9 @@ ${source}`;
           return;
         }
         namedDiagnostics.set(captureId, startGatewayBenchDiagnostics());
+        if (transcriptPublicationCounts) {
+          benchmarkTranscriptPublication.reset();
+        }
         markGc("diagnostics-start", captureId);
         reply();
       } else {

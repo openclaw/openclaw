@@ -89,6 +89,12 @@
 // token/activity metadata patches and transcript appends at staggered 1–3 s intervals
 // throughout 30 s (30/15/10 updates per key, 430 of each write across 23 keys).
 // The fixture plugin uses the public session writer; status remains run-owner controlled.
+// Native publication proof: --transcript-tool-rounds 30 --transcript-round-interval-ms 2080
+// --subscription-clients 30,20,8 --runs 20 --clients 58; every committed occurrence is
+// matched to its exact recipient set. --transcript-publication-counts is a separate
+// source-entry diagnostic pass, excluded from CPU/allocation acceptance.
+// Notification-only control: --transcript-replay-seconds 60 --transcript-replay-interval-ms 104
+// republishes committed user messages while all native SSE streams stay active; it performs no appends.
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { createCipheriv, createHash, generateKeyPairSync, randomUUID } from "node:crypto";
 import { once } from "node:events";
@@ -123,6 +129,7 @@ import type { SessionsPatchParams } from "../../packages/gateway-protocol/src/sc
 import { PROTOCOL_VERSION } from "../../packages/gateway-protocol/src/version.ts";
 import { isRecord } from "../../packages/normalization-core/src/record-coerce.ts";
 import { stripInboundMetadata } from "../../src/auto-reply/reply/strip-inbound-meta.js";
+import { projectChatDisplayMessage } from "../../src/gateway/chat-display-projection.core.ts";
 import { prepareSessionEventMetrics } from "../../src/gateway/session-event-metrics.js";
 import {
   publicKeyRawBase64UrlFromEd25519Pem,
@@ -136,7 +143,7 @@ import {
   summarizeMockInferenceRequest,
 } from "../e2e/lib/mock-inference-facts.ts";
 import { readBody } from "../e2e/lib/mock-openai-http.mjs";
-import { stopChild } from "../lib/gateway-bench-child.ts";
+import { stopChild, stopGatewayGracefully } from "../lib/gateway-bench-child.ts";
 import { startGatewayBenchDiagnostics } from "../lib/gateway-bench-diagnostics.ts";
 import {
   GATEWAY_PROFILE_CHANNEL,
@@ -177,6 +184,12 @@ const { values } = parseArgs({
     diagnostics: { type: "boolean", default: false },
     "broadcast-timing": { type: "boolean", default: false },
     "session-projection-counts": { type: "boolean", default: false },
+    "transcript-publication-counts": { type: "boolean", default: false },
+    "transcript-tool-rounds": { type: "string", default: "0" },
+    "transcript-round-interval-ms": { type: "string", default: "4000" },
+    "transcript-replay-seconds": { type: "string", default: "0" },
+    "transcript-replay-interval-ms": { type: "string", default: "104" },
+    "subscription-clients": { type: "string" },
     "session-projection-source": { type: "string" },
     "disable-inlining": { type: "boolean", default: false },
     "transport-counts": { type: "boolean", default: false },
@@ -530,7 +543,35 @@ if (
     "--session-census and --fingerprint-retention require --scenario session-idle-retention --entry src/entry.ts",
   );
 }
-const toolScenario = scenario === "chat.send" || reasoningScenario;
+const transcriptToolRounds = integer(
+  values["transcript-tool-rounds"],
+  "--transcript-tool-rounds",
+  0,
+);
+const transcriptRoundIntervalMs = integer(
+  values["transcript-round-interval-ms"],
+  "--transcript-round-interval-ms",
+  1,
+);
+const transcriptReplaySeconds = integer(
+  values["transcript-replay-seconds"],
+  "--transcript-replay-seconds",
+  0,
+);
+const transcriptReplayIntervalMs = integer(
+  values["transcript-replay-interval-ms"],
+  "--transcript-replay-interval-ms",
+  1,
+);
+if (
+  transcriptReplaySeconds &&
+  (transcriptToolRounds || transcriptReplaySeconds > 120 || values["turn-start-phases"])
+) {
+  throw new Error(
+    "Transcript replay requires at most 120 seconds, without tool rounds or turn-start phases",
+  );
+}
+const toolScenario = scenario === "chat.send" || reasoningScenario || transcriptToolRounds > 0;
 if (values["oldgen-workload"] && (!values["team-stress"] || !values["stress-tools"])) {
   throw new Error("--oldgen-workload requires --team-stress and --stress-tools");
 }
@@ -629,6 +670,24 @@ const exactClients = integer(
   "--exact-clients",
   0,
 );
+const transcriptPublication = transcriptToolRounds > 0 || transcriptReplaySeconds > 0;
+const subscriptionClients = values["subscription-clients"]
+  ?.split(",")
+  .map((count) => integer(count, "--subscription-clients", 0));
+if (
+  subscriptionClients &&
+  (subscriptionClients.length !== 3 ||
+    subscriptionClients.reduce((sum, count) => sum + count, 0) !== clientCount ||
+    values["exact-clients"] !== undefined ||
+    !transcriptPublication)
+) {
+  throw new Error(
+    "--subscription-clients requires roster,exact,hybrid counts totaling --clients with transcript publication, without --exact-clients",
+  );
+}
+if (transcriptPublication && scenario !== "transcript-broadcast") {
+  throw new Error("Transcript publication requires --scenario transcript-broadcast");
+}
 if (exactClients > clientCount) {
   throw new Error("--exact-clients must not exceed --clients");
 }
@@ -761,6 +820,9 @@ if (
 }
 const chunkCount = integer(values.chunks, "--chunks");
 const chunkIntervalMs = integer(values["chunk-interval-ms"], "--chunk-interval-ms", 0);
+if (transcriptPublication && sessionEventAncestors === undefined) {
+  throw new Error("Transcript publication measurement requires explicit --session-event-ancestors");
+}
 const sessionRowChurnSeconds = integer(
   values["session-row-churn-seconds"],
   "--session-row-churn-seconds",
@@ -1069,7 +1131,7 @@ if (
 ) {
   throw new Error("--session-projection-source requires --entry src/entry.ts");
 }
-if (values["session-projection-counts"]) {
+if (values["session-projection-counts"] || values["transcript-publication-counts"]) {
   if (path.resolve(values.entry) !== path.resolve("src/entry.ts")) {
     throw new Error("--session-projection-counts requires --entry src/entry.ts");
   }
@@ -1466,8 +1528,8 @@ if (sessionEventAncestors !== undefined) {
   // Explicit fixture lineage must not acquire sessions.create's implicit main-session parent.
   cfg.session = { ...cfg.session, dmScope: "per-channel-peer" };
 }
-if (scenario === "sessions.cleanup") {
-  // Exercise live preservation admission repeatedly without consuming the fixture inventory.
+if (scenario === "sessions.cleanup" || transcriptPublication) {
+  // Repeated measurements must preserve the generated fixture inventory.
   cfg.session = {
     ...cfg.session,
     maintenance: { ...cfg.session?.maintenance, mode: "warn" },
@@ -1914,6 +1976,80 @@ if (sessionRowChurnSeconds) {
     entries: { ...cfg.plugins?.entries, [id]: { enabled: true } },
   };
 }
+if (transcriptPublication) {
+  const id = "synthetic-transcript-publication";
+  const pluginDir = path.join(output, id);
+  mkdirSync(pluginDir);
+  writeFileSync(
+    path.join(pluginDir, "openclaw.plugin.json"),
+    JSON.stringify({
+      id,
+      activation: { onStartup: true },
+      configSchema: { type: "object", additionalProperties: false },
+    }),
+  );
+  writeFileSync(
+    path.join(pluginDir, "index.mjs"),
+    `
+import { publishSessionTranscriptUpdateByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
+export default { id: ${JSON.stringify(id)}, register(api) {
+  let active = false;
+  let updates = 0;
+  let messages = [];
+  let updateTimes = [];
+  const committedUsers = new Map();
+  let unsubscribe;
+  api.registerService({ id: "synthetic-transcript-counts", start() {
+    unsubscribe = api.runtime.events.onSessionTranscriptUpdate(update => {
+      const key = update.target?.sessionKey ?? update.sessionKey;
+      if (key?.startsWith("agent:main:transcript-broadcast-measure-child-") && update.target && update.messageId && update.message?.role === "user") committedUsers.set(key, update);
+      if (active && key?.startsWith("agent:main:transcript-broadcast-measure-child-")) {
+        updates++;
+        updateTimes.push(Date.now());
+        if (update.messageId && update.message) messages.push({ key, messageId: update.messageId, message: update.message, startedAt: Date.now() });
+      }
+    });
+  }, stop() { unsubscribe?.(); } });
+  api.registerGatewayMethod("benchmark.transcriptCounts", async ({ params, respond }) => {
+    if (params.action === "replay") {
+      const sources = params.keys.map(key => committedUsers.get(key));
+      if (sources.some(source => !source?.target?.sessionId)) throw new Error("Replay requires committed native user messages for every key");
+      const started = performance.now();
+      const count = Math.ceil(${transcriptReplaySeconds * 1000} / ${transcriptReplayIntervalMs});
+      for (let index = 0; index < count; index++) {
+        await new Promise(resolve => setTimeout(resolve, Math.max(0, started + index * ${transcriptReplayIntervalMs} - performance.now())));
+        const source = sources[index % sources.length];
+        await publishSessionTranscriptUpdateByIdentity({ ...source.target, update: {
+          messageId: source.messageId, messageSeq: source.messageSeq, message: source.message,
+          ...(source.runId ? { runId: source.runId } : {}),
+        } });
+      }
+      await new Promise(resolve => setTimeout(resolve, Math.max(0, started + ${transcriptReplaySeconds * 1000} - performance.now())));
+      const ordinals = new Map();
+      const receipts = new Map();
+      for (const { key, messageId } of messages) {
+        const identity = JSON.stringify([key, messageId]);
+        const occurrence = ordinals.get(identity) ?? 0;
+        ordinals.set(identity, occurrence + 1);
+        receipts.set(key, [key, messageId, occurrence]);
+      }
+      respond(true, { updates: count, receipts: [...receipts.values()] });
+      return;
+    }
+    active = params.action === "start";
+    if (active) { updates = 0; messages = []; updateTimes = []; }
+    respond(true, { updates, messages, updateTimes });
+  }, { scope: "operator.write" });
+} };\n`,
+  );
+  cfg.plugins = {
+    ...cfg.plugins,
+    enabled: true,
+    allow: [...new Set([...(cfg.plugins?.allow ?? []), id])],
+    load: { ...cfg.plugins?.load, paths: [...(cfg.plugins?.load?.paths ?? []), pluginDir] },
+    entries: { ...cfg.plugins?.entries, [id]: { enabled: true } },
+  };
+}
 if (
   scenario === "plugins.reload" ||
   scenario === "plugin.scope" ||
@@ -2319,7 +2455,11 @@ const toolPaths = Array.from({ length: retentionScenario ? 3 : 1 }, (_, index) =
   writeFileSync(
     file,
     "Synthetic allocation benchmark tool result.\n" +
-      (retentionScenario ? promptContent.update(Buffer.alloc(8192)).toString("hex") : ""),
+      (retentionScenario
+        ? promptContent.update(Buffer.alloc(8192)).toString("hex")
+        : transcriptToolRounds
+          ? promptContent.update(Buffer.alloc(4096)).toString("hex")
+          : ""),
   );
   return file;
 });
@@ -2652,6 +2792,7 @@ let cohort:
       phases: StreamStartPhases;
       beforeRelease?: () => Promise<void>;
       afterToolStreamStart?: () => Promise<void>;
+      afterPrimaryStreamStart?: (index: number) => Promise<void>;
       activeInputAdmission?: Promise<void>;
       ready: Promise<void>;
       release: () => void;
@@ -2837,6 +2978,10 @@ const mock = createServer((req, res) => {
         : [];
     const toolOutput = toolOutputs.at(-1);
     const continuation = toolScenario && toolOutput !== undefined;
+    const nativeToolRound =
+      transcriptToolRounds && toolOutput
+        ? Number(toolOutput.call_id.split("_").at(-1)) + 1
+        : Math.floor(toolOutputs.length / toolPaths.length);
     const primaryMessage = cohort
       ? `Reply with benchmark stream ${index}. Transcript-broadcast cohort ${cronOperatorJobs[0]?.cohortId ?? cohort.id}.`
       : undefined;
@@ -3059,7 +3204,12 @@ const mock = createServer((req, res) => {
       res.writeHead(200, { "content-type": "text/event-stream" });
       let toolAnswer;
       let reasoningReplayKey = toolOutput?.call_id;
-      if (primary && toolScenario && cohort) {
+      if (
+        toolScenario &&
+        cohort &&
+        index !== undefined &&
+        (primary || (continuation && nativeToolRound < transcriptToolRounds))
+      ) {
         const currentCohort = cohort;
         const toolWorktree = values["sandbox-image"]
           ? "/workspace"
@@ -3070,7 +3220,7 @@ const mock = createServer((req, res) => {
           throw new Error("Synthetic foreground turn has no owned worktree");
         }
         const items = toolPaths.map((toolPath, toolIndex) => {
-          const callId = `call_allocation_${currentCohort.id}_${index}_${toolIndex}`;
+          const callId = `call_allocation_${currentCohort.id}_${index}_${toolIndex}${transcriptToolRounds ? `_${nativeToolRound}` : ""}`;
           currentCohort.toolCallIds.add(callId);
           const storeKey = `benchmark-${index}-${toolIndex}`;
           const previous = sessionStoreValues.get(storeKey);
@@ -3099,7 +3249,7 @@ const mock = createServer((req, res) => {
           }
           return {
             type: "function_call",
-            id: `fc_${currentCohort.id}_${index}_${toolIndex}`,
+            id: `fc_${currentCohort.id}_${index}_${toolIndex}${transcriptToolRounds ? `_${nativeToolRound}` : ""}`,
             call_id: callId,
             name: values["stress-tools"] ? "exec" : "read",
             arguments: JSON.stringify(
@@ -3160,7 +3310,7 @@ const mock = createServer((req, res) => {
           {
             type: "response.completed",
             response: {
-              id: `resp_${cohort.id}`,
+              id: `resp_${cohort.id}${transcriptToolRounds ? `_${index}_${nativeToolRound}` : ""}`,
               status: "completed",
               output: [...(preambleItem ? [preambleItem] : []), ...items],
               usage: { input_tokens: 11, output_tokens: 10, total_tokens: 21 },
@@ -3196,6 +3346,12 @@ const mock = createServer((req, res) => {
         } else if (firstRequestPhase) {
           recoveredResponses++;
         }
+      }
+      if (transcriptToolRounds && index !== undefined && (primary || continuation) && cohort) {
+        const target =
+          cohort.phases.streamsReleasedAtEpochMs! +
+          (nativeToolRound + (index - 1) / runCount) * transcriptRoundIntervalMs;
+        await delay(Math.max(0, target - epochNow()));
       }
       if (providerDelayMs > 0) {
         await delay(providerDelayMs);
@@ -3264,6 +3420,9 @@ const mock = createServer((req, res) => {
           void cohort.activeInputAdmission.catch(cohort.reject);
         }
         if ((primary || continuation) && event.type === "response.output_text.delta") {
+          if (primary) {
+            await cohort?.afterPrimaryStreamStart?.(index!);
+          }
           await delay(chunkIntervalMs);
         }
       }
@@ -3395,6 +3554,7 @@ const coldSetupRpc: Array<{
   durationMs: number;
   sessionKey?: string;
 }> = [];
+let lastTranscriptEventAt = 0;
 let lastSubscriberEventAt = performance.now();
 let lastSubscriberEventName: string | undefined;
 let closing = false;
@@ -3519,6 +3679,9 @@ const env = {
     ? { OPENCLAW_PERF_FSYNC_DELAY_MS: process.env.OPENCLAW_PERF_FSYNC_DELAY_MS }
     : {}),
   ...(values["session-projection-counts"] ? { OPENCLAW_BENCH_SESSION_PROJECTION_COUNTS: "1" } : {}),
+  ...(values["transcript-publication-counts"]
+    ? { OPENCLAW_BENCH_TRANSCRIPT_PUBLICATION_COUNTS: "1" }
+    : {}),
   ...(values["disable-inlining"] ? { OPENCLAW_BENCH_DISABLE_INLINING: "1" } : {}),
   ...(sessionProjectionSource
     ? { OPENCLAW_BENCH_SESSION_PROJECTION_SOURCE: sessionProjectionSource }
@@ -3813,6 +3976,35 @@ const keys = Array.from({ length: sessionCount }, (_, index) =>
       ? `agent:main:transcript-broadcast-measure-${port}-child-${index}`
       : `agent:main:transcript-broadcast-measure-child-${index}`,
 );
+const hasRosterSubscription = (index: number) =>
+  !subscriptionClients ||
+  index < subscriptionClients[0]! ||
+  index >= subscriptionClients[0]! + subscriptionClients[1]!;
+const exactSubscriptionKeys = (index: number) =>
+  subscriptionClients
+    ? index < subscriptionClients[0]!
+      ? []
+      : [keys[(index - subscriptionClients[0]!) % keys.length]!]
+    : index < exactClients
+      ? keys
+      : [];
+const hasExactSubscription = (index: number, key: string) =>
+  exactSubscriptionKeys(index).includes(key);
+const transcriptSessionIds = new Map<string, string>();
+type TranscriptReceipt = {
+  key: string;
+  message: Record<string, unknown>;
+  kind: string;
+  startedAt: number;
+  deliveries: Map<number, number>;
+  frames: Map<
+    number,
+    { event: string; seq?: number; message: unknown; hasActiveRun: unknown; activeRunIds: unknown }
+  >;
+};
+const transcriptReceipts = new Map<string, TranscriptReceipt>();
+const transcriptMessageDeliveryTimes: number[] = [];
+const transcriptOrdinals = Array.from({ length: clientCount }, () => new Map<string, number>());
 const rowChurnSchedule = sessionRowChurnSeconds
   ? keys.map((key, index) => ({
       key,
@@ -4040,7 +4232,7 @@ const connectParams = {
   caps: [
     "session-scoped-events",
     "chat-only-assistant-text",
-    ...(!rosterBodyOptionalCounts && exactClients < clientCount
+    ...(!rosterBodyOptionalCounts && (subscriptionClients || exactClients < clientCount)
       ? ["roster-message-bodies-optional"]
       : []),
     ...(values["presence-deltas"] ? ["presence-deltas"] : []),
@@ -4068,7 +4260,7 @@ const clientConnectParams: (typeof connectParams)[] = [];
 for (let offset = 0; clientConnectParams.length < clientCount; offset++) {
   for (const capabilityCohort of sessionCapabilityCohorts) {
     if (offset < capabilityCohort.clients) {
-      if (clientConnectParams.length < exactClients) {
+      if (exactSubscriptionKeys(clientConnectParams.length).length) {
         capabilityCohort.exactClients++;
       }
       clientConnectParams.push({
@@ -4657,6 +4849,8 @@ async function finishStressSubagent(
   }
   throw new Error(`stress subagent completion timed out in phase ${state.phase}`);
 }
+let beginTranscriptWindow: (() => Promise<void>) | undefined;
+let runTranscriptReplay: ((keys: string[]) => Promise<void>) | undefined;
 let completedSoakRounds = 0;
 let sessionResets = 0;
 let teamStressWrites = 0;
@@ -4765,6 +4959,25 @@ async function runRound(
     reject,
   };
   const current = cohort;
+  if (transcriptReplaySeconds && measuredRound !== undefined) {
+    const streaming = new Set<number>();
+    const held = Promise.withResolvers<void>();
+    current.afterPrimaryStreamStart = async (index) => {
+      streaming.add(index);
+      if (streaming.size === current.expectedCount) {
+        current.afterPrimaryStreamStart = undefined;
+        void runTranscriptReplay!(roundKeys).then(held.resolve, held.reject);
+      }
+      await held.promise;
+    };
+  }
+  if (transcriptToolRounds && measuredRound !== undefined) {
+    const beforeRelease = current.beforeRelease;
+    current.beforeRelease = async () => {
+      await beforeRelease?.();
+      await beginTranscriptWindow?.();
+    };
+  }
   const activeInputs: {
     sessionKey: string;
     runId: string;
@@ -4893,11 +5106,12 @@ async function runRound(
           }
         })()
       : undefined;
-  const providerTimeoutMs = values["sandbox-image"]
-    ? sandboxTurnTimeoutMs
-    : values["attempt-setup-image"] || values["stress-worktree-fanout"]
-      ? 170_000
-      : 45_000;
+  const providerTimeoutMs =
+    values["sandbox-image"] || transcriptPublication
+      ? sandboxTurnTimeoutMs
+      : values["attempt-setup-image"] || values["stress-worktree-fanout"]
+        ? 170_000
+        : 45_000;
   const timeout = setTimeout(
     () =>
       current.reject(
@@ -4938,7 +5152,7 @@ async function runRound(
         }
         const message =
           `Reply with benchmark stream ${index + 1}. Transcript-broadcast cohort ${current.id}.` +
-          (retentionScenario || idleScenario
+          (retentionScenario || idleScenario || transcriptReplaySeconds
             ? `\nSynthetic prompt payload: ${promptContent.update(Buffer.alloc(promptBytes / 2)).toString("hex")}`
             : "");
         if (cronOperatorJob) {
@@ -5230,16 +5444,21 @@ async function runRound(
     await captureWork;
   }
 }
-async function drainEvents(requireSubscriberQuiet = true) {
+async function drainEvents(requireSubscriberQuiet = true, receiptsDrained?: () => boolean) {
   const started = performance.now();
   const timeoutMs = values["stress-worktree-fanout"] ? 60_000 : 15_000;
   while (performance.now() - started < timeoutMs) {
     assertGatewayAlive();
     if (
       activeStreams === 0 &&
-      (teamStressFanout
-        ? teamStressFanout.isDrained(requireSubscriberQuiet)
-        : !requireSubscriberQuiet || performance.now() - lastSubscriberEventAt >= 1000)
+      (receiptsDrained
+        ? receiptsDrained()
+        : teamStressFanout
+          ? teamStressFanout.isDrained(requireSubscriberQuiet)
+          : !requireSubscriberQuiet ||
+            performance.now() -
+              (transcriptPublication ? lastTranscriptEventAt : lastSubscriberEventAt) >=
+              1000)
     ) {
       return;
     }
@@ -5438,6 +5657,7 @@ async function connectClient(index: number) {
   const recapRows = new Map<string, RecapReceipt>();
   perClientRecaps[index] = recapRows;
   const rowEvents = new GatewaySessionRowEvents();
+  const ancestorViews = new Map<string, Record<string, unknown>>();
   let previousSeq: number | undefined;
   let receivedFrameBytes = 0;
   const client = createGatewayWsClient({
@@ -5457,6 +5677,9 @@ async function connectClient(index: number) {
       githubVolumeUi.get(index)?.emit(event);
       lastSubscriberEventAt = performance.now();
       lastSubscriberEventName = event.event;
+      if (transcriptPublication && measuring && event.event === "session.message") {
+        transcriptMessageDeliveryTimes.push(epochNow());
+      }
       if (
         measuringWholeSoakAllocation &&
         (event.event === "session.message" || event.event === "sessions.changed")
@@ -5472,6 +5695,98 @@ async function connectClient(index: number) {
         previousSeq = event.seq;
       }
       const payload = isRecord(event.payload) ? event.payload : undefined;
+      if (transcriptPublication) {
+        const decoded = rowEvents.project(event);
+        const facts = isRecord(decoded.event.payload) ? decoded.event.payload : undefined;
+        if (decoded.missingBaseline) {
+          subscriberFailure ??= new Error(`client ${index} lost its session row baseline`);
+        }
+        if (
+          facts &&
+          ["session.message", "sessions.changed"].includes(event.event) &&
+          typeof facts.sessionKey === "string" &&
+          keys.includes(facts.sessionKey)
+        ) {
+          const key = facts.sessionKey;
+          if (event.event === "session.message" || facts.phase === "message") {
+            lastTranscriptEventAt = performance.now();
+          }
+          if (
+            (event.event === "session.message" || facts.phase === "message") &&
+            !hasRosterSubscription(index) &&
+            !hasExactSubscription(index, key)
+          ) {
+            subscriberFailure ??= new Error(
+              `client ${index} received an unsubscribed transcript event for ${key}`,
+            );
+          }
+          const row = facts.session;
+          if (
+            !isRecord(row) ||
+            row.key !== key ||
+            (transcriptSessionIds.has(key) && row.sessionId !== transcriptSessionIds.get(key))
+          ) {
+            subscriberFailure ??= new Error(
+              `client ${index} received the wrong session row for ${key}`,
+            );
+          }
+          const ancestors = Array.isArray(facts.ancestorSessions) ? facts.ancestorSessions : [];
+          for (const ancestor of ancestors) {
+            if (isRecord(ancestor) && typeof ancestor.key === "string") {
+              ancestorViews.set(ancestor.key, ancestor);
+            }
+          }
+          const references = Array.isArray(facts.ancestorSessionRefs)
+            ? facts.ancestorSessionRefs
+            : [];
+          for (const reference of references) {
+            const retained =
+              isRecord(reference) && typeof reference.key === "string"
+                ? ancestorViews.get(reference.key)
+                : undefined;
+            if (
+              !isRecord(reference) ||
+              !retained ||
+              retained.sessionId !== reference.sessionId ||
+              retained.ancestorRevision !== reference.revision
+            ) {
+              subscriberFailure ??= new Error(`client ${index} lost an ancestor certificate`);
+            }
+          }
+          if (measuring && typeof facts.messageId === "string") {
+            const messageIdentity = JSON.stringify([key, facts.messageId]);
+            const occurrence = transcriptOrdinals[index]!.get(messageIdentity) ?? 0;
+            transcriptOrdinals[index]!.set(messageIdentity, occurrence + 1);
+            const identity = JSON.stringify([key, facts.messageId, occurrence]);
+            let observed = transcriptReceipts.get(identity);
+            if (!observed) {
+              observed = {
+                key,
+                kind: "native",
+                message: {},
+                startedAt: epochNow(),
+                deliveries: new Map(),
+                frames: new Map(),
+              };
+              transcriptReceipts.set(identity, observed);
+            }
+            observed.deliveries.set(index, epochNow());
+            observed.frames.set(index, {
+              event: event.event,
+              seq: event.seq,
+              message: facts.message,
+              hasActiveRun: isRecord(row) ? row.hasActiveRun : undefined,
+              activeRunIds: isRecord(row) ? row.activeRunIds : undefined,
+            });
+          }
+          if (
+            event.event === "session.message" &&
+            ancestors.length + references.length !== sessionEventAncestors
+          ) {
+            subscriberFailure ??= new Error(`client ${index} received an incomplete ancestor view`);
+          }
+        }
+      }
       // Client 1 is an exact session subscriber, distinct from the RPC sender.
       if (values["turn-start-phases"] && index === 1 && payload) {
         const turn = [...(cohort?.turns.values() ?? [])].find(
@@ -5510,7 +5825,7 @@ async function connectClient(index: number) {
       ) {
         sessionEventRuns.get(payload.sessionKey)?.resolve(payload.runId);
       }
-      if (values["activity-summaries"] || sessionRowChurnSeconds) {
+      if (!transcriptPublication && (values["activity-summaries"] || sessionRowChurnSeconds)) {
         const decoded = rowEvents.project(event);
         if (decoded.missingBaseline) {
           subscriberFailure ??= new Error(`client ${index} lost its session row baseline`);
@@ -5554,7 +5869,7 @@ async function connectClient(index: number) {
         const attribution = prepareSessionEventMetrics(event.event, payload, [], undefined)?.("");
         if (attribution) {
           const delivery =
-            index < exactClients &&
+            hasExactSubscription(index, String(payload?.sessionKey)) &&
             typeof payload?.sessionKey === "string" &&
             keys.includes(payload.sessionKey)
               ? "subscribed"
@@ -5664,6 +5979,10 @@ async function connectClient(index: number) {
   }
   return client;
 }
+let nativeShutdown:
+  | { kind: "graceful"; proof: Awaited<ReturnType<typeof stopGatewayGracefully>> }
+  | { kind: "process-tree-cleanup"; error: string }
+  | undefined;
 let cleanupPromise: Promise<void> | undefined;
 function cleanup() {
   return (cleanupPromise ??= (async () => {
@@ -5693,6 +6012,14 @@ function cleanup() {
       client.close();
     }
     policyNode?.close();
+    if (transcriptPublication && gateway?.connected) {
+      try {
+        nativeShutdown = { kind: "graceful", proof: await stopGatewayGracefully(gateway, 30_000) };
+      } catch (error) {
+        nativeShutdown = { kind: "process-tree-cleanup", error: String(error) };
+      }
+      writeFileSync(path.join(output, "native-shutdown.json"), JSON.stringify(nativeShutdown));
+    }
     await Promise.all(
       children.map((child) => stopChild(child, { teardownGraceMs: 10_000, killGraceMs: 2000 })),
     );
@@ -5754,6 +6081,9 @@ try {
     mock.listen(mockPort, "127.0.0.1", resolve);
   });
   await ready(mockPort, "/health");
+  const stopPreload = new URL("../lib/gateway-bench-stop-preload.mjs", import.meta.url);
+  stopPreload.searchParams.set("parentPid", String(process.pid));
+  stopPreload.searchParams.set("entry", path.resolve(values.entry));
   const gatewayArgs = buildGatewayBenchChildArgs(
     values.entry,
     port,
@@ -5788,6 +6118,7 @@ try {
         : []),
       "--import",
       "./scripts/lib/gateway-bench-profile-preload.ts",
+      ...(transcriptPublication ? ["--import", stopPreload.href] : []),
       ...(values["team-stress"] ? ["--import", teamStressPreload] : []),
       ...(values["turn-start-phases"] ? ["--import", turnStartPreload] : []),
       ...(values["transport-counts"]
@@ -5956,8 +6287,10 @@ try {
         }
       }
     }
-    await rpc(client, "sessions.subscribe", {});
-    for (const key of index < exactClients ? keys : []) {
+    if (hasRosterSubscription(index)) {
+      await rpc(client, "sessions.subscribe", {});
+    }
+    for (const key of exactSubscriptionKeys(index)) {
       await rpc(client, "sessions.messages.subscribe", { key, subscriptionId: key });
     }
   }
@@ -6090,6 +6423,19 @@ try {
   if (sessionEventAncestors !== undefined) {
     for (const key of ["agent:main:main", parentKey, ...keys]) {
       await verifySessionEventLineage(key);
+    }
+  }
+  if (transcriptPublication) {
+    for (const key of keys) {
+      const described = await rpc(sender, "sessions.describe", { key });
+      if (
+        !isRecord(described) ||
+        !isRecord(described.session) ||
+        typeof described.session.sessionId !== "string"
+      ) {
+        throw new Error(`Transcript fixture has no current session identity: ${key}`);
+      }
+      transcriptSessionIds.set(key, described.session.sessionId);
     }
   }
   for (const target of diffTargets) {
@@ -6308,6 +6654,34 @@ try {
     }
   }
   console.log("PHASE subscribed-and-reset");
+  if (transcriptPublication) {
+    const deadline = performance.now() + 600_000;
+    console.log("PHASE waiting-for-canonical-integrity-verification");
+    while (true) {
+      const { databaseIntegrity } = await readGatewayResources(gateway, {
+        databaseIntegrity: {
+          pathname: path.join(root, "agents/main/agent/openclaw-agent.sqlite"),
+          agentId: "main",
+        },
+      });
+      if (
+        databaseIntegrity &&
+        !databaseIntegrity.pending &&
+        typeof databaseIntegrity.verifiedAt === "number"
+      ) {
+        writeFileSync(
+          path.join(output, "integrity-verification.json"),
+          JSON.stringify(databaseIntegrity),
+        );
+        break;
+      }
+      if (performance.now() >= deadline) {
+        throw new Error("Canonical fixture integrity verification did not finish within 600s");
+      }
+      await delay(1000);
+    }
+    console.log("PHASE canonical-integrity-verified");
+  }
   let idleTurnCohorts: Awaited<ReturnType<typeof runRound>>[] = [];
   const listFilterShapes = [
     {},
@@ -7118,6 +7492,7 @@ try {
       values.diagnostics ||
       values["transport-counts"] ||
       values["session-projection-counts"] ||
+      values["transcript-publication-counts"] ||
       values["config-capture-counts"]
         ? await startGatewayDiagnostics(gateway, `round-${round}`)
         : undefined;
@@ -7133,6 +7508,19 @@ try {
     );
     const listLatencies = rpcLatencies["sessions.list"]!;
     const rowChurnReceipts: Array<Record<string, unknown>> = [];
+    transcriptReceipts.clear();
+    transcriptMessageDeliveryTimes.length = 0;
+    for (const ordinals of transcriptOrdinals) {
+      ordinals.clear();
+    }
+    let transcriptSourceCounts: unknown;
+    let transcriptPacingStartedAt = 0;
+    let transcriptPacingEndedAt = 0;
+    let transcriptReplayDrainMs = 0;
+    let transcriptSteadyCpu: ReturnType<typeof measureGatewayCpuUsage> | undefined;
+    let transcriptSteadyAllocation:
+      | Awaited<ReturnType<typeof measureGatewayAllocations>>
+      | undefined;
     const usageCacheStatuses: Record<string, number> = {};
     const initialPollPhasesMs: number[] = [];
     let streamStart: Awaited<ReturnType<typeof runRound>> | undefined;
@@ -7147,12 +7535,99 @@ try {
       diffSessionKey?: string;
       githubOptionsSessionKey?: string;
     }> = [];
+    const nativeWindowDone = Promise.withResolvers<void>();
+    let nativeWindowWork: Promise<unknown> | undefined;
     const workload = async () => {
       let polling = true;
       let stopPolling!: () => void;
       const stopped = new Promise<void>((resolve) => {
         stopPolling = resolve;
       });
+      if (transcriptPublication) {
+        beginTranscriptWindow = async () => {
+          const captureReady = Promise.withResolvers<void>();
+          const capture = async () => {
+            const cpuBefore = await readGatewayCpuUsage(measuredGateway);
+            transcriptPacingStartedAt = epochNow();
+            captureReady.resolve();
+            await nativeWindowDone.promise;
+            transcriptPacingEndedAt = epochNow();
+            transcriptSteadyCpu = measureGatewayCpuUsage(
+              cpuBefore,
+              await readGatewayCpuUsage(measuredGateway),
+            );
+          };
+          nativeWindowWork = values.allocations
+            ? measureGatewayAllocations(
+                measuredGateway,
+                path.join(output, `transcript-${round}.heapprofile`),
+                runCount * (transcriptToolRounds + 1),
+                capture,
+                { samplingIntervalBytes: heapSamplingIntervalBytes },
+              ).then((allocation) => {
+                transcriptSteadyAllocation = allocation;
+              })
+            : capture();
+          void nativeWindowWork.catch(captureReady.reject);
+          await captureReady.promise;
+        };
+        if (transcriptReplaySeconds) {
+          runTranscriptReplay = async (replayKeys) => {
+            if (activePrimaryStreams !== runCount) {
+              throw new Error("Replay requires the full live native cohort");
+            }
+            await beginTranscriptWindow!();
+            try {
+              const replay = await rpc(sender, "benchmark.transcriptCounts", {
+                action: "replay",
+                keys: replayKeys,
+              });
+              if (
+                !isRecord(replay) ||
+                !Array.isArray(replay.receipts) ||
+                replay.receipts.length !== runCount
+              ) {
+                throw new Error("Replay receipt certificates are unavailable");
+              }
+              const expected = replay.receipts.map(
+                ([key, messageId, occurrence]: [string, string, number]) => ({
+                  identity: JSON.stringify([key, messageId, occurrence]),
+                  recipients: clients.flatMap((_client, index) =>
+                    hasRosterSubscription(index) || hasExactSubscription(index, key) ? [index] : [],
+                  ),
+                }),
+              );
+              const drainStarted = performance.now();
+              const deadline = drainStarted + 15_000;
+              while (
+                !expected.every(
+                  ({ identity, recipients }) =>
+                    (transcriptReceipts.get(identity)?.frames.size ?? 0) === recipients.length &&
+                    recipients.every((index) =>
+                      transcriptReceipts.get(identity)?.frames.has(index),
+                    ),
+                )
+              ) {
+                assertGatewayAlive();
+                if (subscriberFailure) {
+                  throw subscriberFailure;
+                }
+                if (performance.now() >= deadline) {
+                  throw new Error("Replay recipients did not drain while native streams were held");
+                }
+                await delay(10);
+              }
+              transcriptReplayDrainMs = performance.now() - drainStarted;
+              if (activePrimaryStreams !== runCount) {
+                throw new Error("Replay outlived the live native cohort");
+              }
+            } finally {
+              nativeWindowDone.resolve();
+              await nativeWindowWork;
+            }
+          };
+        }
+      }
       const rowChurnWork = sessionRowChurnSeconds
         ? (async () => {
             while (true) {
@@ -7602,8 +8077,44 @@ try {
         if (turnScenario || !values["dashboard-rpc"]) {
           const beforeDrain = perClientCounters.map((counts) => Object.fromEntries(counts));
           const drainStarted = performance.now();
-          // Turn-start proof owns exact receipts; busy fixture metadata need not become quiet.
-          await drainEvents(!values["turn-start-phases"]);
+          // Receipt-owned proof does not wait for unrelated fixture metadata to become quiet.
+          let expectedTranscriptFrames: Array<[string, number]> | undefined;
+          if (transcriptPublication) {
+            transcriptSourceCounts = await rpc(sender, "benchmark.transcriptCounts", {
+              action: "stop",
+            });
+            if (
+              !isRecord(transcriptSourceCounts) ||
+              !Array.isArray(transcriptSourceCounts.messages)
+            ) {
+              throw new Error("Native source receipts are unavailable");
+            }
+            const ordinals = new Map<string, number>();
+            expectedTranscriptFrames = transcriptSourceCounts.messages.map(
+              (source: { key: string; messageId: string; message: unknown }) => {
+                const scopedId = JSON.stringify([source.key, source.messageId]);
+                const occurrence = ordinals.get(scopedId) ?? 0;
+                ordinals.set(scopedId, occurrence + 1);
+                const visible = projectChatDisplayMessage(source.message) !== undefined;
+                const recipients = clients.filter(
+                  (_client, index) =>
+                    hasRosterSubscription(index) ||
+                    (visible && hasExactSubscription(index, source.key)),
+                ).length;
+                return [JSON.stringify([source.key, source.messageId, occurrence]), recipients];
+              },
+            );
+          }
+          await drainEvents(
+            !values["turn-start-phases"],
+            expectedTranscriptFrames
+              ? () =>
+                  expectedTranscriptFrames.every(
+                    ([identity, count]) =>
+                      (transcriptReceipts.get(identity)?.frames.size ?? 0) === count,
+                  )
+              : undefined,
+          );
           console.log(
             `FANOUT_BOUNDARY ${JSON.stringify({
               round,
@@ -7614,17 +8125,27 @@ try {
           );
         }
       } finally {
-        measuring = false;
-        if (workloadCpuProfilePath) {
-          await controlGatewayProfile(measuredGateway, "cpu", "stop", workloadCpuProfilePath);
+        nativeWindowDone.resolve();
+        beginTranscriptWindow = undefined;
+        runTranscriptReplay = undefined;
+        try {
+          await nativeWindowWork;
+        } finally {
+          measuring = false;
+          if (workloadCpuProfilePath) {
+            await controlGatewayProfile(measuredGateway, "cpu", "stop", workloadCpuProfilePath);
+          }
         }
       }
     };
     if (values["operator-access-policy"]) {
       await controlAuthorityCounters(gateway, "start");
     }
+    if (transcriptPublication) {
+      await rpc(sender, "benchmark.transcriptCounts", { action: "start" });
+    }
     const allocation =
-      values.allocations && !soakScenario
+      values.allocations && !soakScenario && !transcriptPublication
         ? await measureGatewayAllocations(
             gateway,
             path.join(output, `allocation-${round}.heapprofile`),
@@ -7633,7 +8154,7 @@ try {
             { samplingIntervalBytes: heapSamplingIntervalBytes },
           )
         : undefined;
-    if (!values.allocations || soakScenario) {
+    if (!values.allocations || soakScenario || transcriptPublication) {
       await measuredWorkload();
     }
     const authorityCounts = values["operator-access-policy"]
@@ -7716,6 +8237,12 @@ try {
       );
     }
     if (
+      transcriptToolRounds &&
+      (toolCalls !== runCount * transcriptToolRounds || toolResults !== toolCalls)
+    ) {
+      throw new Error(`Native tool rounds incomplete: ${toolCalls}/${toolResults}`);
+    }
+    if (
       retentionScenario &&
       (toolCalls !== runCount * toolPaths.length ||
         toolResults !== toolCalls ||
@@ -7748,7 +8275,10 @@ try {
     }
     teamStressFanout?.assertComplete();
     // Exact turn-start receipts replace window-wide fanout equality under background churn.
-    for (const event of turnScenario && !teamStressFanout && !values["turn-start-phases"]
+    for (const event of turnScenario &&
+    !transcriptPublication &&
+    !teamStressFanout &&
+    !values["turn-start-phases"]
       ? ["session.message", "sessions.changed"]
       : []) {
       const expected = perClientCounters[0]?.get(event) ?? 0;
@@ -7793,11 +8323,222 @@ try {
     const deliveredEvents = [...counters.values()].reduce((sum, count) => sum + count, 0);
     const deliveredSessionEvents =
       (counters.get("session.message") ?? 0) + (counters.get("sessions.changed") ?? 0);
-    const sourceEvents = deliveredSessionEvents / clientCount;
+    const sourceEvents =
+      isRecord(transcriptSourceCounts) && typeof transcriptSourceCounts.updates === "number"
+        ? transcriptSourceCounts.updates
+        : deliveredSessionEvents / clientCount;
+    if (transcriptPublication) {
+      if (!isRecord(transcriptSourceCounts) || !Array.isArray(transcriptSourceCounts.messages)) {
+        throw new Error("Native transcript source receipts are missing");
+      }
+      const sourceOrdinals = new Map<string, number>();
+      const committedIds = new Set<string>();
+      writeFileSync(
+        path.join(output, `transcript-receipts-${round}.json`),
+        JSON.stringify({
+          sources: transcriptSourceCounts.messages,
+          counts: diagnostics?.gateway.groups.filter((group) =>
+            group.operation.startsWith("transcript."),
+          ),
+          received: [...transcriptReceipts].map(([identity, receipt]) => ({
+            identity,
+            frames: [...receipt.frames],
+          })),
+        }),
+      );
+      for (const source of transcriptSourceCounts.messages) {
+        if (
+          !isRecord(source) ||
+          typeof source.messageId !== "string" ||
+          typeof source.key !== "string"
+        ) {
+          throw new Error("Invalid native source receipt");
+        }
+        const expected = projectChatDisplayMessage(source.message);
+        const messageIdentity = JSON.stringify([source.key, source.messageId]);
+        const occurrence = sourceOrdinals.get(messageIdentity) ?? 0;
+        sourceOrdinals.set(messageIdentity, occurrence + 1);
+        const identity = JSON.stringify([source.key, source.messageId, occurrence]);
+        committedIds.add(identity);
+        const receipt = transcriptReceipts.get(identity);
+        const activeTool =
+          (transcriptReplaySeconds &&
+            Number(source.startedAt) >= transcriptPacingStartedAt &&
+            Number(source.startedAt) <= transcriptPacingEndedAt) ||
+          (transcriptToolRounds &&
+            isRecord(source.message) &&
+            (source.message.role === "toolResult" ||
+              (Array.isArray(source.message.content) &&
+                source.message.content.some(
+                  (part: unknown) => isRecord(part) && part.type === "toolCall",
+                ))));
+        for (let index = 0; index < clientCount; index++) {
+          const subscribed =
+            hasRosterSubscription(index) ||
+            (expected !== undefined && hasExactSubscription(index, source.key));
+          const actual = receipt?.frames.get(index);
+          const omit =
+            clientConnectParams[index]!.caps.includes("roster-message-bodies-optional") &&
+            !hasExactSubscription(index, source.key);
+          if (
+            Boolean(actual) !== subscribed ||
+            (actual &&
+              activeTool &&
+              (actual.hasActiveRun !== true ||
+                (Array.isArray(actual.activeRunIds) && actual.activeRunIds.length === 0))) ||
+            (actual &&
+              (actual.event !== (expected ? "session.message" : "sessions.changed") ||
+                (omit || !expected
+                  ? actual.message !== undefined
+                  : !isRecord(actual.message) ||
+                    actual.message.role !== expected.role ||
+                    JSON.stringify(actual.message.content) !== JSON.stringify(expected.content))))
+          ) {
+            throw new Error(
+              `Native transcript delivery mismatch: client ${index}, ${source.key}, ${String(isRecord(source.message) ? source.message.role : "unknown")}`,
+            );
+          }
+        }
+        if (receipt) {
+          receipt.message = isRecord(source.message) ? source.message : {};
+          receipt.kind = String(receipt.message.role);
+          receipt.startedAt = Number(source.startedAt);
+        }
+      }
+      if ([...transcriptReceipts.keys()].some((id) => !committedIds.has(id))) {
+        throw new Error(
+          "Native recipient observed a message absent from committed source receipts",
+        );
+      }
+    }
+    const appendReceipts = [...transcriptReceipts.values()];
+    const steadyReceipts = appendReceipts.filter(
+      (receipt) =>
+        receipt.startedAt >= transcriptPacingStartedAt &&
+        receipt.startedAt <= transcriptPacingEndedAt,
+    );
+    const steadySourceUpdates =
+      isRecord(transcriptSourceCounts) && Array.isArray(transcriptSourceCounts.updateTimes)
+        ? transcriptSourceCounts.updateTimes.filter(
+            (at: number) => at >= transcriptPacingStartedAt && at <= transcriptPacingEndedAt,
+          ).length
+        : 0;
+    if (
+      transcriptReplaySeconds &&
+      (steadySourceUpdates !==
+        Math.ceil((transcriptReplaySeconds * 1000) / transcriptReplayIntervalMs) ||
+        steadyReceipts.some((receipt) => receipt.kind !== "user"))
+    ) {
+      throw new Error("Replay window did not publish every scheduled committed user message");
+    }
+    if (transcriptPublication && !steadySourceUpdates) {
+      throw new Error("Native steady window did not capture source notifications");
+    }
+    if (transcriptSteadyAllocation) {
+      transcriptSteadyAllocation.operationCount = steadySourceUpdates;
+      transcriptSteadyAllocation.estimatedAllocatedBytesPerOperation =
+        transcriptSteadyAllocation.sampledAllocatedBytes / steadySourceUpdates;
+      transcriptSteadyAllocation.gcMsPerOperation =
+        transcriptSteadyAllocation.gcMs / steadySourceUpdates;
+    }
+    const messageFrames = appendReceipts.flatMap((receipt) =>
+      [...receipt.deliveries].flatMap(([client, at]) =>
+        receipt.frames.get(client)?.event === "session.message" ? [at] : [],
+      ),
+    );
+    const steadyMessageFrames = messageFrames.filter(
+      (at) => at >= transcriptPacingStartedAt && at <= transcriptPacingEndedAt,
+    );
     const sortedListLatencies = listLatencies.toSorted((a, b) => a - b);
     const sample = {
       round,
       scenario,
+      ...(transcriptPublication
+        ? {
+            transcriptPublication: {
+              sourceMessageOccurrencesWithRecipients: appendReceipts.length,
+              nativeToolRounds: transcriptToolRounds,
+              steadySourceUpdates,
+              steadySourceMessagesWithRecipients: steadyReceipts.length,
+              countsScope:
+                "whole measured turn, including admission and drain; steady CPU/allocation use timestamp-filtered source updates",
+              workload: transcriptReplaySeconds
+                ? "live-native-committed-user-notification-replay"
+                : "live-native-tool-rounds",
+              steadyCpu: transcriptSteadyCpu,
+              steadyAllocation: transcriptSteadyAllocation,
+              steadyScope: transcriptReplaySeconds
+                ? "committed-user notification replay while every native SSE stream is held active; no durable transcript writes"
+                : "native cohort release through recipient drain, including source-receipt collection; admission and whole-turn metrics remain separate",
+              sourceUpdates: isRecord(transcriptSourceCounts)
+                ? {
+                    updates: transcriptSourceCounts.updates,
+                    messageCount: Array.isArray(transcriptSourceCounts.messages)
+                      ? transcriptSourceCounts.messages.length
+                      : undefined,
+                  }
+                : undefined,
+              sourceEventsScope:
+                "actual foreground transcript notifications; excludes lifecycle events",
+              messageKind: transcriptReplaySeconds
+                ? "committed-user-replay"
+                : "native-assistant-tool",
+              toolResultFixtureBytes: transcriptToolRounds
+                ? 8192 + Buffer.byteLength("Synthetic allocation benchmark tool result.\n")
+                : undefined,
+              semanticCountsScope:
+                "unfiltered child row before per-viewer projection; only snapshotAt excluded from equality and counted separately",
+              validationScope:
+                "all event sequences and decoded row delta baselines; foreground row identities/ancestor certificates, committed message recipients/role/content, and active native tool/replay run facts",
+              subscriptionClients,
+              replaySeconds: transcriptReplaySeconds,
+              replayDrainMs: transcriptReplayDrainMs,
+              scheduleIntervalMs: transcriptReplaySeconds
+                ? transcriptReplayIntervalMs
+                : transcriptRoundIntervalMs,
+              startedAtEpochMs: transcriptPacingStartedAt,
+              endedAtEpochMs: transcriptPacingEndedAt,
+              sourceMessageNotificationsPerSecond:
+                (steadySourceUpdates * 1000) /
+                (transcriptPacingEndedAt - transcriptPacingStartedAt),
+              deliveredMessageFrames: messageFrames.length,
+              steadyMessageFrames: steadyMessageFrames.length,
+              steadyAggregateMessageFrames: transcriptMessageDeliveryTimes.filter(
+                (at) => at >= transcriptPacingStartedAt && at <= transcriptPacingEndedAt,
+              ).length,
+              deliveredFrames: appendReceipts.reduce(
+                (sum, receipt) => sum + receipt.deliveries.size,
+                0,
+              ),
+              framesPerSourceMessageOccurrence:
+                appendReceipts.reduce((sum, receipt) => sum + receipt.deliveries.size, 0) /
+                appendReceipts.length,
+              controlledOutgoingMessageFramesPerSecond:
+                (steadyMessageFrames.length * 1000) /
+                (transcriptPacingEndedAt - transcriptPacingStartedAt),
+              outgoingMessageFramesPerSecond:
+                (transcriptMessageDeliveryTimes.filter(
+                  (at) => at >= transcriptPacingStartedAt && at <= transcriptPacingEndedAt,
+                ).length *
+                  1000) /
+                (transcriptPacingEndedAt - transcriptPacingStartedAt),
+              sourceNotificationToDeliveryMs: summarizeLatencies(
+                steadyReceipts.flatMap((receipt) =>
+                  [...receipt.deliveries.values()].map(
+                    (receivedAt) => receivedAt - receipt.startedAt,
+                  ),
+                ),
+              ),
+              counts: diagnostics?.gateway.groups.filter((group) =>
+                group.operation.startsWith("transcript."),
+              ),
+              receipts: appendReceipts.map(
+                ({ deliveries, message: _message, frames: _frames, ...receipt }) =>
+                  Object.assign(receipt, { recipients: [...deliveries.keys()] }),
+              ),
+            },
+          }
+        : {}),
       ...(sessionRowChurnSeconds
         ? {
             rowChurn: {
@@ -8517,6 +9258,9 @@ try {
   }
   // Process exit plus drained log streams makes promotion accounting independent of pipe buffering.
   await cleanup();
+  if (transcriptPublication && nativeShutdown?.kind !== "graceful") {
+    throw new Error(`Native fixture shutdown was not clean: ${JSON.stringify(nativeShutdown)}`);
+  }
   if (values.diagnostics) {
     const log = readFileSync(path.join(output, "gateway.log"), "utf8");
     const stalls = [
@@ -8823,6 +9567,7 @@ try {
     broadcastTiming: values["broadcast-timing"],
     workerAttribution: process.env.OPENCLAW_BENCH_WORKER_ATTRIBUTION === "1",
     sessionProjectionCounts: values["session-projection-counts"],
+    transcriptPublicationCounts: values["transcript-publication-counts"],
     sessionProjectionSource,
     inliningDisabled: values["disable-inlining"],
     transportCounts: values["transport-counts"],
@@ -9113,6 +9858,28 @@ try {
   writeFileSync(path.join(output, "result.json"), JSON.stringify(result, null, 2));
   console.log(`RESULT ${path.join(output, "result.json")}`);
 } catch (error) {
+  if (transcriptPublication && clients[0]) {
+    try {
+      const sources = await clients[0].request(
+        "benchmark.transcriptCounts",
+        { action: "stop" },
+        5000,
+      );
+      writeFileSync(
+        path.join(output, "transcript-failure.json"),
+        JSON.stringify({
+          error: String(error),
+          sources,
+          received: [...transcriptReceipts].map(([identity, receipt]) => ({
+            identity,
+            frames: [...receipt.frames],
+          })),
+        }),
+      );
+    } catch {
+      /* Preserve the original failure when the Gateway has closed. */
+    }
+  }
   if (values["github-options-observe"]) {
     writeFileSync(
       path.join(output, "github-options-failure.json"),

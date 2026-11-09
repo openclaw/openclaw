@@ -43,6 +43,7 @@ export type GatewayCpuUsageSnapshot = {
 };
 
 export type GatewayResourceSnapshot = GatewayCpuUsageSnapshot & {
+  databaseIntegrity?: { verifiedAt?: number; pending: boolean };
   memory: NodeJS.MemoryUsage;
   heapSpaces: HeapSpaceInfo[];
   sessionRowSelections?: ReturnType<typeof getSessionRowSelectionMetrics>;
@@ -75,6 +76,7 @@ export type GatewayBenchCommand =
       channel: typeof GATEWAY_PROFILE_CHANNEL;
       kind: "resource-usage";
       action: "sample";
+      databaseIntegrity?: { pathname: string; agentId: string };
       initial?: boolean;
       includeWorkers?: boolean;
       collectGarbage?: boolean;
@@ -283,6 +285,7 @@ export async function readGatewayCpuUsage(
 export async function readGatewayResources(
   child: ChildProcess,
   options: {
+    databaseIntegrity?: { pathname: string; agentId: string };
     initial?: boolean;
     includeWorkers?: boolean;
     collectGarbage?: boolean;

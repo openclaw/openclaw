@@ -471,10 +471,14 @@ export function compileDynamicConsumerEdges(source, filePath, scriptEntrypoints 
   );
   addNamedImport(manifestNames, path.resolve(path.dirname(tsdownPath), runtimeManifestSpecifier));
 
-  const benchmarkGeneratorPath = "scripts/lib/gateway-bench-worker-messages.ts";
-  const benchmarkGenerator = fs.readFileSync(benchmarkGeneratorPath, "utf8");
-  const generatedNames = emittedSelfNamedImportNames(benchmarkGenerator);
-  addNamedImport(generatedNames, benchmarkGeneratorPath);
+  for (const generatorPath of [
+    "scripts/lib/gateway-bench-worker-messages.ts",
+    "scripts/lib/gateway-bench-profile-preload.ts",
+    "scripts/perf/trajectory-flush-preload.mts",
+  ]) {
+    const generatedNames = emittedSelfNamedImportNames(fs.readFileSync(generatorPath, "utf8"));
+    addNamedImport(generatedNames, generatorPath);
+  }
 
   const transportPath = "extensions/team-reports/src/report-fixture-transport.test-support.ts";
   const redirectedSpecifier = fs
@@ -601,12 +605,6 @@ export function compileDynamicConsumerEdges(source, filePath, scriptEntrypoints 
       ),
     );
   }
-
-  const trajectoryFlushPreloadPath = "scripts/perf/trajectory-flush-preload.mts";
-  const trajectoryFlushNames = emittedSelfNamedImportNames(
-    fs.readFileSync(trajectoryFlushPreloadPath, "utf8"),
-  );
-  addNamedImport(trajectoryFlushNames, trajectoryFlushPreloadPath);
 
   const poolLifecyclePath = "scripts/perf/pg-pool-lifecycle.mts";
   const poolFixtureSpecifier = fs
