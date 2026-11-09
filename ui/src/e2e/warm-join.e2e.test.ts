@@ -171,11 +171,18 @@ async function prepareWarmPage(page: Page) {
   expect(
     saved?.snapshot.details?.subagents?.counts.reduce((total, count) => total + count.count, 0),
   ).toBe(18);
-  expect(
-    await page.evaluate(() =>
-      Object.keys(localStorage).some((key) => key.startsWith("openclaw.control.bootRecord.v1:")),
-    ),
-  ).toBe(true);
+  // Live owner publications persist the boot record after the snapshot save settles.
+  await expect
+    .poll(
+      () =>
+        page.evaluate(() =>
+          Object.keys(localStorage).some((key) =>
+            key.startsWith("openclaw.control.bootRecord.v1:"),
+          ),
+        ),
+      { timeout: 5_000 },
+    )
+    .toBe(true);
   await page.addInitScript({
     content: `globalThis.__name = (fn) => fn; Reflect.set(window, "__paneChrome", (${installPaneChromeProbe.toString()})()); (${installWarmReloadBrowserProbe.toString()})("chat");`,
   });
