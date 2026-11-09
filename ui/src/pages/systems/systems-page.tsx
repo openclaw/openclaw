@@ -528,74 +528,79 @@ function SystemsWorkspace(props: {
           <Icon name="panelRightOpen" />
         </button>
       </header>
-      <div
-        class={["systems-overview", { "systems-overview--compact": !controller().statsVisible() }]}
-        role="region"
-        aria-label={`${t("systems.telemetry")} / ${t("systems.backups.title")}`}
-        tabindex={0}
-      >
-        <Show when={props.inventoryRead.receipt()} keyed>
-          {(receipt) => (
-            <Errored
-              fallback={(error) => (
-                <div class="systems-callout systems-callout--error" role="alert">
-                  {formatUiError(error())}
-                  <button
-                    onClick={() => void controller().refresh("manual")}
-                    disabled={props.inventoryRead.pending()}
-                  >
-                    {t("common.retry")}
-                  </button>
-                </div>
-              )}
-            >
-              <Loading on={receipt}>{readStatus()}</Loading>
-            </Errored>
-          )}
-        </Show>
-        {!controller().connected() ? (
-          <div class="systems-callout" role="status">
-            {t("systems.offlineGateway")}
-          </div>
-        ) : null}
-        {auxiliaryErrors().length ? (
-          <details class="systems-callout">
-            <summary>{t("systems.errors")}</summary>
-            <For each={auxiliaryErrors()}>{(error) => <p>{error}</p>}</For>
-          </details>
-        ) : null}
-        {controller().statsVisible() ? (
-          <div class="systems-overview__telemetry">
-            <Show
-              when={row()}
-              fallback={
-                <Show when={props.inventoryRead.pending()}>
-                  <div class="systems-metrics" aria-hidden="true">
-                    <div class="systems-vitals">
-                      <Repeat count={3}>{() => <div class="systems-vital skeleton" />}</Repeat>
-                    </div>
+      {controller().state.preview === "simulator" ? null : (
+        <div
+          class={[
+            "systems-overview",
+            { "systems-overview--compact": !controller().statsVisible() },
+          ]}
+          role="region"
+          aria-label={`${t("systems.telemetry")} / ${t("systems.backups.title")}`}
+          tabindex={0}
+        >
+          <Show when={props.inventoryRead.receipt()} keyed>
+            {(receipt) => (
+              <Errored
+                fallback={(error) => (
+                  <div class="systems-callout systems-callout--error" role="alert">
+                    {formatUiError(error())}
+                    <button
+                      onClick={() => void controller().refresh("manual")}
+                      disabled={props.inventoryRead.pending()}
+                    >
+                      {t("common.retry")}
+                    </button>
                   </div>
-                </Show>
-              }
-            >
-              {(selected) => (
-                <SystemMeasurements
-                  row={selected()}
-                  controller={controller()}
-                  summary
-                  onDetails={() => controller().updatePresentation({ showDetails: true })}
-                />
-              )}
-            </Show>
-          </div>
-        ) : null}
-        {!row() || row()!.environment.id === "gateway" ? (
-          <SystemsBackups
-            controller={controller()}
-            onDetails={() => controller().updatePresentation({ showDetails: true })}
-          />
-        ) : null}
-      </div>
+                )}
+              >
+                <Loading on={receipt}>{readStatus()}</Loading>
+              </Errored>
+            )}
+          </Show>
+          {!controller().connected() ? (
+            <div class="systems-callout" role="status">
+              {t("systems.offlineGateway")}
+            </div>
+          ) : null}
+          {auxiliaryErrors().length ? (
+            <details class="systems-callout">
+              <summary>{t("systems.errors")}</summary>
+              <For each={auxiliaryErrors()}>{(error) => <p>{error}</p>}</For>
+            </details>
+          ) : null}
+          {controller().statsVisible() ? (
+            <div class="systems-overview__telemetry">
+              <Show
+                when={row()}
+                fallback={
+                  <Show when={props.inventoryRead.pending()}>
+                    <div class="systems-metrics" aria-hidden="true">
+                      <div class="systems-vitals">
+                        <Repeat count={3}>{() => <div class="systems-vital skeleton" />}</Repeat>
+                      </div>
+                    </div>
+                  </Show>
+                }
+              >
+                {(selected) => (
+                  <SystemMeasurements
+                    row={selected()}
+                    controller={controller()}
+                    summary
+                    onDetails={() => controller().updatePresentation({ showDetails: true })}
+                  />
+                )}
+              </Show>
+            </div>
+          ) : null}
+          {!row() || row()!.environment.id === "gateway" ? (
+            <SystemsBackups
+              controller={controller()}
+              onDetails={() => controller().updatePresentation({ showDetails: true })}
+            />
+          ) : null}
+        </div>
+      )}
       <div class="systems-body">
         <div class="systems-desktop">
           {simulatorNode() &&
