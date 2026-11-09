@@ -2018,6 +2018,11 @@ class NodeRuntime internal constructor(
         player = TalkAudioPlayer(appContext),
         localSpeech = SystemSpeechSpeaker(appContext),
       ).also { controller ->
+        // Chat can navigate without a UI action when its selected session is deleted.
+        // Subscribe before returning so the initial selection cannot swallow that change.
+        scope.launch(start = CoroutineStart.UNDISPATCHED) {
+          chat.selectionGeneration.drop(1).collect { controller.stop() }
+        }
         scope.launch {
           controller.state.collect { state ->
             voiceWakeManager.setSuppressed(VoiceWakeSuppressionReason.MessageSpeech, state?.isActive == true)
