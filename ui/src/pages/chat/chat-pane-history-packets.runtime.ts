@@ -359,14 +359,18 @@ export async function loadPreparedChatHistoryPackets(
       (page.result.requestBudget?.maxBytes ?? 0) > CHAT_HISTORY_REQUEST_MAX_BYTES);
   try {
     let selector = chatHistoryPageSelector(state, direction);
-    if (!selector || (!readerIntent && "messageId" in selector)) {
+    if (!selector || (!readerIntent && direction !== "older" && "messageId" in selector)) {
       return false;
     }
+    // A trimmed boot edge may reopen once before its one small fill; reader
+    // pagination alone owns adaptive envelopes and speculative continuation.
+    const bootBoundary = !readerIntent && "messageId" in selector;
+    const packetLimit = readerIntent ? MAX_RESIDENT_SEGMENTS : bootBoundary ? 2 : 1;
     let budget =
       readerIntent && !staged && "cursor" in selector
         ? readChatHistoryRequestBudget(state, prepareChatHistoryPages(state, [], direction))
         : undefined;
-    for (let packet = 0; packet < (readerIntent ? MAX_RESIDENT_SEGMENTS : 1); packet++) {
+    for (let packet = 0; packet < packetLimit; packet++) {
       const requestedCursor: string = "cursor" in selector ? selector.cursor : "";
       const boundary =
         "messageId" in selector
@@ -407,7 +411,7 @@ export async function loadPreparedChatHistoryPackets(
         coverageAdvanced = true;
         operation.root = operation.edge();
         if (
-          ++sparse >= (readerIntent ? 3 : 1) ||
+          ++sparse >= (readerIntent ? 3 : 2) ||
           !(direction === "older" ? next.hasMore : next.hasNewer)
         ) {
           break;

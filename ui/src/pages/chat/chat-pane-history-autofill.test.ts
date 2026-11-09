@@ -140,8 +140,9 @@ it("reopens a trimmed cache boundary before its single automatic fill", async ()
   expect(state.chatMessages.map(nativeHistorySeq)).toEqual([1, 3, 4]);
   expect(request.mock.calls.map(([, params]) => params)).toMatchObject([
     { messageId: "source-3", sessionId: "current", limit: 1 },
-    { cursor: "older-2", limit: 1000 },
+    { cursor: "older-2", limit: 80, maxBytes: 256 * 1024 },
   ]);
+  expect(request).toHaveBeenCalledTimes(2);
   expect(pane.stagedOlder).toMatchObject({ page: null, load: null });
 });
 

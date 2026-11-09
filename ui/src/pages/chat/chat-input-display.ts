@@ -51,8 +51,9 @@ export function selectChatInputDisplay(
           !sendKeys.has(`${item.sendRunId}:user`)),
     ),
     pendingInputs: unseenInputs.filter(
-      (input) => !input.queued && asNullableRecord(input.message)?.display !== false,
+      (input) =>
+        (!input.queued || input.steerNow) && asNullableRecord(input.message)?.display !== false,
     ),
-    queuedInputs: unseenInputs.filter((input) => input.queued),
+    queuedInputs: unseenInputs.filter((input) => input.queued && !input.steerNow),
   };
 }

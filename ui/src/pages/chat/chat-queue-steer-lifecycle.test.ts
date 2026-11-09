@@ -32,324 +32,287 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-it.each(["custody", "receipt", "retry", "remount", "deferred", "deferred-remount"] as const)(
-  "reconciles steering placement through %s and history",
-  async (ackMode) => {
-    vi.useFakeTimers();
-    vi.setSystemTime(10_000);
-    const sessionKey = "agent:main:queue-steer";
-    const original = {
-      role: "user",
-      content: "Original prompt",
-      timestamp: 1,
-      __openclaw: { id: "original", seq: 1, idempotencyKey: "active-run:user" },
-    };
-    const queued = {
-      id: "queued-steer",
-      text: "Take over the other work too",
-      createdAt: 2_000,
-      sendRunId: "steer-send",
-      sendState: "waiting-idle" as const,
-      sessionKey,
-      agentId: "main",
-    };
-    const history: ChatHistoryResult = {
-      messages: [original],
+it.each([
+  "custody",
+  "receipt",
+  "retry",
+  "remount",
+  "deferred",
+  "deferred-remount",
+  "steer-now",
+  "steer-now-blocked",
+] as const)("reconciles steering placement through %s and history", async (ackMode) => {
+  vi.useFakeTimers();
+  vi.setSystemTime(10_000);
+  const sessionKey = "agent:main:queue-steer";
+  const original = {
+    role: "user",
+    content: "Original prompt",
+    timestamp: 1,
+    __openclaw: { id: "original", seq: 1, idempotencyKey: "active-run:user" },
+  };
+  const queued = {
+    id: "queued-steer",
+    text: "Take over the other work too",
+    createdAt: 2_000,
+    sendRunId: "steer-send",
+    sendState: "waiting-idle" as const,
+    sessionKey,
+    agentId: "main",
+  };
+  const history: ChatHistoryResult = {
+    messages: [original],
+    sessionId: "queue-steer-session",
+    sessionInfo: {
+      key: sessionKey,
       sessionId: "queue-steer-session",
-      sessionInfo: {
-        key: sessionKey,
-        sessionId: "queue-steer-session",
-        kind: "direct",
-        hasActiveRun: true,
-        activeRunIds: ["active-run"],
-        status: "running",
-      },
-      inFlightRun: { runId: "active-run", text: "Already visible output.", startedAt: 5_000 },
-    };
-    const requested = createDeferred();
-    const ack = createDeferred<unknown>();
-    const retryRequested = createDeferred();
-    const retryAck = createDeferred<unknown>();
-    let requests = 0;
-    let host = makeChatHost({
-      sessionKey,
-      chatMessagesBySession: new Map(),
-      requestHandlers: {
-        "chat.history": history,
-        "chat.send": () => {
-          if (++requests > 1) {
-            retryRequested.resolve();
-            return retryAck.promise;
-          }
-          requested.resolve();
-          return ack.promise;
-        },
-      },
-    });
-    // Queue actions return after admission. Observe the pane's transport owner
-    // releasing the request so ACK assertions cannot race its async continuation.
-    let transport = createDeferred();
-    let chatSending = host.chatSending;
-    Object.defineProperty(host, "chatSending", {
-      get: () => chatSending,
-      set: (value: boolean) => {
-        const wasSending = chatSending;
-        chatSending = value;
-        if (wasSending && !value) {
-          transport.resolve();
+      kind: "direct",
+      hasActiveRun: true,
+      activeRunIds: ["active-run"],
+      status: "running",
+    },
+    inFlightRun: { runId: "active-run", text: "Already visible output.", startedAt: 5_000 },
+  };
+  const requested = createDeferred();
+  const ack = createDeferred<unknown>();
+  const retryRequested = createDeferred();
+  const retryAck = createDeferred<unknown>();
+  let requests = 0;
+  let host = makeChatHost({
+    sessionKey,
+    chatMessagesBySession: new Map(),
+    requestHandlers: {
+      "chat.history": history,
+      "chat.send": () => {
+        if (++requests > 1) {
+          retryRequested.resolve();
+          return retryAck.promise;
         }
+        requested.resolve();
+        return ack.promise;
       },
-    });
-    vi.spyOn(host.sessions, "reconcileMutation").mockResolvedValue({ status: "refreshed" });
-    vi.spyOn(host.sessions, "listBranches").mockResolvedValue([]);
-    await loadChatHistory(host);
-    expect(
-      admitQueuedMessageForSession(
-        host,
-        captureChatOutboxAdmission(host, sessionKey, "main"),
-        queued,
-      ),
-    ).toBe(true);
-    const container = document.createElement("div");
-    const recovery = document.createElement("div");
-    document.body.append(container, recovery);
-    let sending: Promise<void> | undefined;
-    const [queueProps, setQueueProps] = createSignal<Parameters<typeof renderChatQueueSolid>[0]>({
-      queue: [],
+    },
+  });
+  // Queue actions return after admission. Observe the pane's transport owner
+  // releasing the request so ACK assertions cannot race its async continuation.
+  let transport = createDeferred();
+  let chatSending = host.chatSending;
+  Object.defineProperty(host, "chatSending", {
+    get: () => chatSending,
+    set: (value: boolean) => {
+      const wasSending = chatSending;
+      chatSending = value;
+      if (wasSending && !value) {
+        transport.resolve();
+      }
+    },
+  });
+  vi.spyOn(host.sessions, "reconcileMutation").mockResolvedValue({ status: "refreshed" });
+  vi.spyOn(host.sessions, "listBranches").mockResolvedValue([]);
+  await loadChatHistory(host);
+  expect(
+    admitQueuedMessageForSession(
+      host,
+      captureChatOutboxAdmission(host, sessionKey, "main"),
+      queued,
+    ),
+  ).toBe(true);
+  const container = document.createElement("div");
+  const recovery = document.createElement("div");
+  document.body.append(container, recovery);
+  let sending: Promise<void> | undefined;
+  const [queueProps, setQueueProps] = createSignal<Parameters<typeof renderChatQueueSolid>[0]>({
+    queue: [],
+    onQueueRemove: vi.fn(),
+  });
+  mountSolid(() => createComponent(renderChatQueueSolid, merge(queueProps)), { container });
+  const [sendState, setSendState] = createSignal<ReturnType<typeof readPendingSendStatus>>(null);
+  mountSolid(
+    () =>
+      createComponent(ChatSendStatus, {
+        get status() {
+          return sendState();
+        },
+        actions: {
+          onRetryQueuedMessage: (id) => {
+            sending = retryQueuedChatMessage(host, id);
+          },
+        },
+      }),
+    { container: recovery },
+  );
+  const snapshot = () => {
+    const pending = getChatPendingInputs(host);
+    const inputs = pending
+      ? [...pending.page.items.filter((input) => !input.queued), ...pending.queuedInputs]
+      : [];
+    const display = selectChatInputDisplay(host.chatMessages, host.chatQueue, inputs);
+    let sendStatus: ReturnType<typeof readPendingSendStatus> = null;
+    const messageText = (message: unknown) => {
+      const status = readPendingSendStatus(message);
+      if (status?.id === queued.id) {
+        sendStatus = status;
+      }
+      return extractText(message);
+    };
+    setQueueProps({
+      canAbort: true,
+      queue: host.chatQueue,
+      displayQueue: [...buildPendingInputQueueItems(display.queuedInputs), ...display.queue],
+      onQueueSteer: (id) => {
+        sending = steerQueuedChatMessage(host, id);
+      },
       onQueueRemove: vi.fn(),
     });
-    mountSolid(() => createComponent(renderChatQueueSolid, merge(queueProps)), { container });
-    const [sendState, setSendState] = createSignal<ReturnType<typeof readPendingSendStatus>>(null);
-    mountSolid(
-      () =>
-        createComponent(ChatSendStatus, {
-          get status() {
-            return sendState();
-          },
-          actions: {
-            onRetryQueuedMessage: (id) => {
-              sending = retryQueuedChatMessage(host, id);
-            },
-          },
-        }),
-      { container: recovery },
-    );
-    const snapshot = () => {
-      const pending = getChatPendingInputs(host);
-      const inputs = pending
-        ? [...pending.page.items.filter((input) => !input.queued), ...pending.queuedInputs]
-        : [];
-      const display = selectChatInputDisplay(host.chatMessages, host.chatQueue, inputs);
-      let sendStatus: ReturnType<typeof readPendingSendStatus> = null;
-      const messageText = (message: unknown) => {
-        const status = readPendingSendStatus(message);
-        if (status?.id === queued.id) {
-          sendStatus = status;
-        }
-        return extractText(message);
-      };
-      setQueueProps({
-        canAbort: true,
+    const thread = projectTranscriptChain(
+      buildChatItems({
+        paneId: "queue-steer-lifecycle",
+        sessionKey,
+        runId: host.chatRunId,
+        messages: host.chatMessages,
         queue: host.chatQueue,
-        displayQueue: [...buildPendingInputQueueItems(display.queuedInputs), ...display.queue],
-        onQueueSteer: (id) => {
-          sending = steerQueuedChatMessage(host, id);
-        },
-        onQueueRemove: vi.fn(),
-      });
-      const thread = projectTranscriptChain(
-        buildChatItems({
-          paneId: "queue-steer-lifecycle",
-          sessionKey,
-          runId: host.chatRunId,
-          messages: host.chatMessages,
-          queue: host.chatQueue,
-          pendingInputs: inputs,
-          toolMessages: host.chatToolMessages ?? [],
-          streamSegments: host.chatStreamSegments ?? [],
-          stream: host.chatStream,
-          streamStartedAt: host.chatStreamStartedAt,
-          showToolCalls: true,
-        }),
-        { sessionKey, runWorking: true, searchActive: false },
-      ).transcriptItems.flatMap((item) =>
-        item.kind === "stream-run"
-          ? item.parts.flatMap((part) => (part.kind === "stream" ? [part.text] : []))
-          : item.kind === "agent-run-frame"
-            ? item.parts.flatMap((part) =>
-                part.kind === "stream-run"
-                  ? part.parts.flatMap((stream) => (stream.kind === "stream" ? [stream.text] : []))
-                  : chatItemGroups(part).flatMap((group) =>
-                      group.messages.map(({ message }) => messageText(message)),
-                    ),
-              )
-            : chatItemGroups(item).flatMap((group) =>
-                group.messages.map(({ message }) => messageText(message)),
-              ),
-      );
-      setSendState(sendStatus);
-      flush();
-      return {
-        thread,
-        queue: [...container.querySelectorAll(".chat-queue__item")].map((item) =>
-          item.textContent?.includes(queued.text) ? queued.text : "other queued input",
-        ),
-      };
+        pendingInputs: inputs,
+        toolMessages: host.chatToolMessages ?? [],
+        streamSegments: host.chatStreamSegments ?? [],
+        stream: host.chatStream,
+        streamStartedAt: host.chatStreamStartedAt,
+        showToolCalls: true,
+      }),
+      { sessionKey, runWorking: true, searchActive: false },
+    ).transcriptItems.flatMap((item) =>
+      item.kind === "stream-run"
+        ? item.parts.flatMap((part) => (part.kind === "stream" ? [part.text] : []))
+        : item.kind === "agent-run-frame"
+          ? item.parts.flatMap((part) =>
+              part.kind === "stream-run"
+                ? part.parts.flatMap((stream) => (stream.kind === "stream" ? [stream.text] : []))
+                : chatItemGroups(part).flatMap((group) =>
+                    group.messages.map(({ message }) => messageText(message)),
+                  ),
+            )
+          : chatItemGroups(item).flatMap((group) =>
+              group.messages.map(({ message }) => messageText(message)),
+            ),
+    );
+    setSendState(sendStatus);
+    flush();
+    return {
+      thread,
+      queue: [...container.querySelectorAll(".chat-queue__item")].map((item) =>
+        item.textContent?.includes(queued.text) ? queued.text : "other queued input",
+      ),
     };
-    try {
-      expect(snapshot()).toEqual({
-        thread: [original.content, "Already visible output."],
-        queue: [queued.text],
-      });
-      container.querySelector<HTMLButtonElement>(".chat-queue__steer")!.click();
-      await requested.promise;
-      const delivered = [original.content, queued.text, "Already visible output."];
-      expect.soft(snapshot(), "request dispatch").toEqual({ thread: delivered, queue: [] });
-      let deferred = false;
-      let consumed = false;
-      let continued = false;
-      let prefixPersisted = false;
-      let steerProjected = true;
-      const continueOutput = () => {
-        continued = true;
-        history.inFlightRun!.text = prefixPersisted
-          ? "Later output."
-          : "Already visible output. Later output.";
-        handleChatGatewayEvent(host, {
-          sessionKey,
-          runId: "active-run",
-          state: "delta",
-          message: { role: "assistant", content: history.inFlightRun!.text },
-        });
-      };
-      const expected = () => ({
-        thread: [
-          original.content,
-          ...(prefixPersisted ? ["Already visible output."] : []),
-          ...(!deferred && steerProjected ? [queued.text] : []),
-          ...(prefixPersisted
-            ? continued
-              ? ["Later output."]
-              : []
-            : [continued ? "Already visible output. Later output." : "Already visible output."]),
-          ...(!deferred && !steerProjected ? [queued.text] : []),
-        ],
-        queue: deferred && !consumed ? [queued.text] : [],
-      });
-      if (ackMode === "retry") {
-        ack.reject(new Error("Steer rejected"));
-        await transport.promise;
-        steerProjected = false;
-        expect.soft(snapshot(), "rejected delivery").toEqual(expected());
-        expect
-          .soft(host.chatQueue, "rejected source")
-          .toMatchObject([{ id: queued.id, sendState: "failed" }]);
-        const retry = recovery.querySelector<HTMLButtonElement>(".chat-send-status__retry");
-        expect(retry?.textContent?.trim()).toBe("Retry");
-        continueOutput();
-        expect.soft(snapshot(), "output after rejected delivery").toEqual(expected());
-        transport = createDeferred();
-        retry!.click();
-        await retryRequested.promise;
-        steerProjected = true;
-        expect.soft(snapshot(), "retry retains original run ownership").toEqual(expected());
-      }
-      (ackMode === "retry" ? retryAck : ack).resolve({
-        runId: queued.sendRunId,
-        status: "started",
-        ...(ackMode === "receipt" || ackMode === "remount" ? { messageSeq: 3 } : {}),
-      });
-      await transport.promise;
-      expect(host.chatRunId).toBe("active-run");
-      expect.soft(snapshot(), "ACK").toEqual(expected());
-      if (ackMode === "custody" || ackMode === "retry" || ackMode.startsWith("deferred")) {
-        deferred = ackMode.startsWith("deferred");
-        history.pendingInputs = {
-          items: [
-            {
-              id: "accepted-steer",
-              runId: queued.sendRunId,
-              message: { role: "user", content: queued.text, timestamp: 10_000 },
-              acceptedAt: 10_000,
-              state: "queued",
-              ...(deferred ? { queued: true as const } : {}),
-            },
-          ],
-          total: 1,
-          queuedCount: deferred ? 1 : 0,
-        };
-      }
-      await loadChatHistory(host);
-      expect.soft(snapshot(), "history before persisted copy").toEqual(expected());
-      if (ackMode === "remount" || ackMode === "deferred-remount") {
-        // The producer has persisted the prefix; an older page still omits the
-        // submitted steer when the pane is recreated from its actual cache.
-        history.messages = [
-          original,
-          nativeMessage("assistant", "Already visible output.", 5_000, {
-            id: "pre-steer",
-            seq: 2,
-            runId: "active-run",
-          }),
-        ];
-        prefixPersisted = true;
-        history.inFlightRun!.text = "";
-        await loadChatHistory(host);
-        const cached = readChatSessionSnapshot(host.chatMessagesBySession!, host, { sessionKey });
-        expect(cached).not.toBeNull();
-        const previous = host;
-        host = makeChatHost({
-          sessionKey,
-          client: previous.client,
-          chatSubmissions: previous.chatSubmissions,
-          chatMessagesBySession: previous.chatMessagesBySession,
-          requestHandlers: { "chat.history": history },
-        });
-        vi.spyOn(host.sessions, "reconcileMutation").mockResolvedValue({ status: "refreshed" });
-        vi.spyOn(host.sessions, "listBranches").mockResolvedValue([]);
-        previous.sessions.dispose();
-        applyChatCacheSnapshot(host, cached!);
-        await loadChatHistory(host);
-        expect.soft(snapshot(), "new pane keeps authoritative input placement").toEqual(expected());
-      }
-      consumed = true;
-      history.pendingInputs = { items: [], total: 0, queuedCount: 0 };
-      history.inputReceipts = [
-        {
-          runId: queued.sendRunId,
-          state: "consumed",
-          consumedByEventId: "persisted-steer",
-        },
-      ];
-      await loadChatHistory(host);
-      expect.soft(snapshot(), "consumption before the transcript page").toEqual(expected());
-      if (!continued) {
-        continueOutput();
-      }
-      expect.soft(snapshot(), "continued output").toEqual(expected());
-      const steer = {
-        role: "user",
-        content: queued.text,
-        timestamp: 10_000,
-        __openclaw: {
-          id: "persisted-steer",
-          seq: 3,
-          idempotencyKey: `${queued.sendRunId}:user`,
-          steerTargetRunId: "active-run",
-        },
-      };
-      deferred = false;
-      applySessionMessagePayload(host, { message: steer }, true, {
-        kind: "live",
-        activeRunId: "active-run",
-      });
-      history.messages = [...history.messages!, steer];
-      history.pendingInputs = { items: [], total: 0, queuedCount: 0 };
+  };
+  try {
+    expect(snapshot()).toEqual({
+      thread: [original.content, "Already visible output."],
+      queue: [queued.text],
+    });
+    container.querySelector<HTMLButtonElement>(".chat-queue__steer")!.click();
+    await requested.promise;
+    const delivered = [original.content, queued.text, "Already visible output."];
+    expect.soft(snapshot(), "request dispatch").toEqual({ thread: delivered, queue: [] });
+    let deferred = false;
+    let consumed = false;
+    let continued = false;
+    let prefixPersisted = false;
+    let steerProjected = true;
+    const continueOutput = () => {
+      continued = true;
       history.inFlightRun!.text = prefixPersisted
         ? "Later output."
         : "Already visible output. Later output.";
-      await loadChatHistory(host);
-      expect.soft(snapshot(), "persisted copy replaces optimistic").toEqual(expected());
+      handleChatGatewayEvent(host, {
+        sessionKey,
+        runId: "active-run",
+        state: "delta",
+        message: { role: "assistant", content: history.inFlightRun!.text },
+      });
+    };
+    const expected = () => ({
+      thread: [
+        original.content,
+        ...(prefixPersisted ? ["Already visible output."] : []),
+        ...(!deferred && steerProjected ? [queued.text] : []),
+        ...(prefixPersisted
+          ? continued
+            ? ["Later output."]
+            : []
+          : [continued ? "Already visible output. Later output." : "Already visible output."]),
+        ...(!deferred && !steerProjected ? [queued.text] : []),
+      ],
+      queue: deferred && !consumed ? [queued.text] : [],
+    });
+    if (ackMode === "retry") {
+      ack.reject(new Error("Steer rejected"));
+      await transport.promise;
+      steerProjected = false;
+      expect.soft(snapshot(), "rejected delivery").toEqual(expected());
+      expect
+        .soft(host.chatQueue, "rejected source")
+        .toMatchObject([{ id: queued.id, sendState: "failed" }]);
+      const retry = recovery.querySelector<HTMLButtonElement>(".chat-send-status__retry");
+      expect(retry?.textContent?.trim()).toBe("Retry");
+      continueOutput();
+      expect.soft(snapshot(), "output after rejected delivery").toEqual(expected());
+      transport = createDeferred();
+      retry!.click();
+      await retryRequested.promise;
+      steerProjected = true;
+      expect.soft(snapshot(), "retry retains original run ownership").toEqual(expected());
+    }
+    (ackMode === "retry" ? retryAck : ack).resolve({
+      runId: queued.sendRunId,
+      status: "started",
+      ...(ackMode === "receipt" || ackMode === "remount" ? { messageSeq: 3 } : {}),
+    });
+    await transport.promise;
+    expect(host.chatRunId).toBe("active-run");
+    expect.soft(snapshot(), "ACK").toEqual(expected());
+    if (
+      ackMode === "custody" ||
+      ackMode === "retry" ||
+      ackMode.startsWith("deferred") ||
+      ackMode.startsWith("steer-now")
+    ) {
+      deferred = ackMode.startsWith("deferred");
+      history.pendingInputs = {
+        items: [
+          {
+            id: "accepted-steer",
+            runId: queued.sendRunId,
+            message: { role: "user", content: queued.text, timestamp: 10_000 },
+            acceptedAt: 10_000,
+            state: "queued",
+            ...(deferred || ackMode.startsWith("steer-now") ? { queued: true as const } : {}),
+            ...(ackMode.startsWith("steer-now")
+              ? {
+                  steerNow: {
+                    status: ackMode === "steer-now" ? "available" : "blocked",
+                    tools: [],
+                  },
+                }
+              : {}),
+          },
+        ],
+        total: 1,
+        queuedCount: deferred || ackMode.startsWith("steer-now") ? 1 : 0,
+      };
+    }
+    const steeringInput = ackMode.startsWith("steer-now")
+      ? history.pendingInputs?.items[0]
+      : undefined;
+    await loadChatHistory(host);
+    expect.soft(snapshot(), "history before persisted copy").toEqual(expected());
+    if (ackMode.startsWith("steer-now")) {
+      expect(steeringInput).toBeDefined();
+      expect(
+        selectChatInputDisplay([], [], [{ ...steeringInput!, message: { display: false } }]),
+      ).toMatchObject({ pendingInputs: [], queuedInputs: [] });
+    }
+    if (ackMode === "remount" || ackMode === "deferred-remount") {
+      // The producer has persisted the prefix; an older page still omits the
+      // submitted steer when the pane is recreated from its actual cache.
       history.messages = [
         original,
         nativeMessage("assistant", "Already visible output.", 5_000, {
@@ -357,35 +320,106 @@ it.each(["custody", "receipt", "retry", "remount", "deferred", "deferred-remount
           seq: 2,
           runId: "active-run",
         }),
-        steer,
-        {
-          role: "assistant",
-          content: "Later output.",
-          timestamp: 11_000,
-          __openclaw: { id: "post-steer", seq: 4, runId: "active-run" },
-        },
       ];
-      history.inFlightRun = undefined;
-      history.sessionInfo = {
-        ...history.sessionInfo!,
-        hasActiveRun: false,
-        activeRunIds: [],
-        status: "done",
-        lastRunId: "active-run",
-      };
+      prefixPersisted = true;
+      history.inFlightRun!.text = "";
       await loadChatHistory(host);
-      expect.soft(snapshot(), "finished history").toEqual({
-        thread: [original.content, "Already visible output.", queued.text, "Later output."],
-        queue: [],
+      const cached = readChatSessionSnapshot(host.chatMessagesBySession!, host, { sessionKey });
+      expect(cached).not.toBeNull();
+      const previous = host;
+      host = makeChatHost({
+        sessionKey,
+        client: previous.client,
+        chatSubmissions: previous.chatSubmissions,
+        chatMessagesBySession: previous.chatMessagesBySession,
+        requestHandlers: { "chat.history": history },
       });
-    } finally {
-      ack.resolve({ runId: queued.sendRunId, status: "started" });
-      retryAck.resolve({ runId: queued.sendRunId, status: "started" });
-      await sending;
-      if (host.chatSending) {
-        await transport.promise;
-      }
-      host.sessions.dispose();
+      vi.spyOn(host.sessions, "reconcileMutation").mockResolvedValue({ status: "refreshed" });
+      vi.spyOn(host.sessions, "listBranches").mockResolvedValue([]);
+      previous.sessions.dispose();
+      applyChatCacheSnapshot(host, cached!);
+      await loadChatHistory(host);
+      expect.soft(snapshot(), "new pane keeps authoritative input placement").toEqual(expected());
     }
-  },
-);
+    consumed = true;
+    history.pendingInputs = { items: [], total: 0, queuedCount: 0 };
+    history.inputReceipts = [
+      {
+        runId: queued.sendRunId,
+        state: "consumed",
+        consumedByEventId: "persisted-steer",
+      },
+    ];
+    await loadChatHistory(host);
+    expect.soft(snapshot(), "consumption before the transcript page").toEqual(expected());
+    if (!continued) {
+      continueOutput();
+    }
+    expect.soft(snapshot(), "continued output").toEqual(expected());
+    const steer = {
+      role: "user",
+      content: queued.text,
+      timestamp: 10_000,
+      __openclaw: {
+        id: "persisted-steer",
+        seq: 3,
+        idempotencyKey: `${queued.sendRunId}:user`,
+        steerTargetRunId: "active-run",
+      },
+    };
+    deferred = false;
+    applySessionMessagePayload(host, { message: steer }, true, {
+      kind: "live",
+      activeRunId: "active-run",
+    });
+    history.messages = [...history.messages!, steer];
+    history.pendingInputs = { items: [], total: 0, queuedCount: 0 };
+    history.inFlightRun!.text = prefixPersisted
+      ? "Later output."
+      : "Already visible output. Later output.";
+    await loadChatHistory(host);
+    expect.soft(snapshot(), "persisted copy replaces optimistic").toEqual(expected());
+    if (steeringInput) {
+      expect(selectChatInputDisplay(host.chatMessages, [], [steeringInput])).toMatchObject({
+        pendingInputs: [],
+        queuedInputs: [],
+      });
+    }
+    history.messages = [
+      original,
+      nativeMessage("assistant", "Already visible output.", 5_000, {
+        id: "pre-steer",
+        seq: 2,
+        runId: "active-run",
+      }),
+      steer,
+      {
+        role: "assistant",
+        content: "Later output.",
+        timestamp: 11_000,
+        __openclaw: { id: "post-steer", seq: 4, runId: "active-run" },
+      },
+    ];
+    history.inFlightRun = undefined;
+    history.sessionInfo = {
+      ...history.sessionInfo!,
+      hasActiveRun: false,
+      activeRunIds: [],
+      status: "done",
+      lastRunId: "active-run",
+    };
+    await loadChatHistory(host);
+    expect.soft(snapshot(), "finished history").toEqual({
+      thread: [original.content, "Already visible output.", queued.text, "Later output."],
+      queue: [],
+    });
+  } finally {
+    ack.resolve({ runId: queued.sendRunId, status: "started" });
+    retryAck.resolve({ runId: queued.sendRunId, status: "started" });
+    await sending;
+    if (host.chatSending) {
+      await transport.promise;
+    }
+    host.sessions.dispose();
+  }
+});
