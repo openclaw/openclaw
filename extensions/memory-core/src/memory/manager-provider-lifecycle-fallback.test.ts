@@ -1,5 +1,5 @@
+import type { MemoryEmbeddingProvider } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 import { describe, expect, it, vi } from "vitest";
-import type { EmbeddingProvider } from "./embeddings.js";
 import { createManagerIndexFixture } from "./manager-index.test-support.js";
 import type { MemoryIndexManager } from "./manager.js";
 
@@ -11,20 +11,20 @@ describe("memory index", () => {
   const { createConfig: createCfg, getFreshManager, getPersistentManager } = fixture;
   const fieldsOf = (manager: Awaited<ReturnType<typeof getFreshManager>>) =>
     manager as unknown as {
-      provider: EmbeddingProvider | null;
+      provider: MemoryEmbeddingProvider | null;
       providerInitialized: boolean;
       providerRuntime: { id: string; cacheKeyData: Record<string, unknown> };
       providerKey: string;
       computeProviderKey: () => string;
     };
-  const makeProvider = (id: string, model: string): EmbeddingProvider => ({
+  const makeProvider = (id: string, model: string): MemoryEmbeddingProvider => ({
     id,
     model,
     embed: async () => [1, 0, 0, 0],
     embedBatch: async (texts) => texts.map(() => [1, 0, 0, 0]),
     close: async () => {},
   });
-  const failedProvider = (id: string, model: string): EmbeddingProvider => {
+  const failedProvider = (id: string, model: string): MemoryEmbeddingProvider => {
     const fail = async (): Promise<never> => {
       throw providerFixture.createLocalWorkerExitError();
     };
@@ -255,11 +255,11 @@ describe("memory index", () => {
       offload: { supported: true, offloadedLayers: 24, totalLayers: 24 },
       context: { requestedSize: 4096 },
     }));
-    const provider: EmbeddingProvider = {
+    const provider: MemoryEmbeddingProvider = {
       id: "local",
       model: "test-model.gguf",
       embed: vi.fn(async () => [1, 0, 0, 0]),
-      embedBatch: vi.fn<EmbeddingProvider["embedBatch"]>(async (texts) =>
+      embedBatch: vi.fn<MemoryEmbeddingProvider["embedBatch"]>(async (texts) =>
         texts.map(() => [1, 0, 0, 0]),
       ),
     };

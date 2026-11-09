@@ -4,10 +4,10 @@ import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { setImmediate as yieldToEventLoop } from "node:timers/promises";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import type { MemoryEmbeddingProvider } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 import { resolveSessionTranscriptsDirForAgent } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import { hashText } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { describe, expect, it, vi } from "vitest";
-import type { EmbeddingProvider } from "./embeddings.js";
 import {
   createManagerIndexFixture,
   holdMemoryTestOperation as hold,
@@ -15,7 +15,7 @@ import {
 import type { MemoryIndexWorkItem } from "./manager-sync-base.js";
 
 type LifecycleFields = {
-  provider: EmbeddingProvider | null;
+  provider: MemoryEmbeddingProvider | null;
   providerKey: string;
   computeProviderKey: () => string;
   ensureProviderInitialized: () => Promise<void>;

@@ -8,6 +8,7 @@ import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts"
 import {
   applyUsageQuery,
   openUsageFilter,
+  selectUsageTimeZone,
   installUsageOverviewGateway as installMockGateway,
 } from "./usage-overview-fixture.test-support.ts";
 
@@ -177,9 +178,7 @@ suite.define(() => {
             },
           });
           await page.goto(`${suite.server.baseUrl}usage`);
-          await page
-            .getByRole("combobox", { name: "Time zone", exact: true })
-            .selectOption(timeZone);
+          await selectUsageTimeZone(page, timeZone);
           // The page title stays with its subtitle instead of moving into the toolbar row.
           await page.locator(".content-header--stacked .page-title").waitFor();
           const content = page.locator("main.content");
@@ -371,7 +370,7 @@ suite.define(() => {
         const cachedRow = page.locator(".session-bar-row").filter({ hasText: "Cached session" });
         await expect.poll(() => pendingRow.count(), { timeout: 10_000 }).toBe(1);
 
-        await page.getByRole("combobox", { name: "Time zone", exact: true }).selectOption("utc");
+        await selectUsageTimeZone(page, "utc");
         await expect
           .poll(async () => (await gateway.getRequests("sessions.usage")).at(-1)?.params)
           .toMatchObject({ mode: "utc" });
@@ -508,7 +507,10 @@ suite.define(() => {
       await expect
         .poll(async () => (await gateway.getRequests("sessions.usage")).length)
         .toBeGreaterThan(requestsBeforeRangeChange);
+      const display = page.getByRole("button", { name: "Display", exact: true });
+      await display.click();
       await page.getByRole("button", { name: "Cost", exact: true }).click();
+      await display.click();
 
       const windowCards = page.locator(".cost-window");
       await expect.poll(() => windowCards.count()).toBe(4);

@@ -15,7 +15,7 @@ import {
   preloadUsage,
   refreshButton,
 } from "./usage-page.test-support.ts";
-import { openUsageFilter } from "./view-render.test-support.ts";
+import { openUsageDisplay, openUsageFilter } from "./view-render.test-support.ts";
 
 afterEach(cleanupUsagePageTest);
 
@@ -353,14 +353,13 @@ describe("Usage query failure ownership", () => {
             ]!;
           input.value = change === "start date" ? "2026-07-01" : "2026-08-08";
           input.dispatchEvent(new Event("change", { bubbles: true }));
-        } else if (change === "scope") {
-          [...page.querySelectorAll<HTMLButtonElement>("button")]
-            .find((button) => button.textContent?.trim() === "Current instance")!
+        } else if (change === "scope" || change === "time zone") {
+          const { surface } = openUsageDisplay(page, change === "scope" ? "Sessions" : "Time zone");
+          surface
+            .querySelector<HTMLButtonElement>(
+              `[role="menuitemradio"][aria-label="${change === "scope" ? "Current instance" : "UTC"}"]`,
+            )!
             .click();
-        } else if (change === "time zone") {
-          const select = page.querySelector<HTMLSelectElement>("select.usage-select")!;
-          select.value = "utc";
-          select.dispatchEvent(new Event("change", { bubbles: true }));
         } else if (change === "agent") {
           selection.setScope("writer");
         } else {
