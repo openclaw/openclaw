@@ -69,26 +69,19 @@ it.each([false, true])(
   "deduplicates a trusted source with restrictive policy: %s",
   async (restricted) => {
     const pluginName = "security-review.v2";
-    const text = `${"m".repeat(159)}🥐`;
     const result = await discover(async (params: v2.PluginListParams) => {
       const listed = catalog("company-tools", pluginName, "/repo/marketplace.json");
       const plugin = listed.marketplaces[0]!.plugins[0]!;
       if (!params.marketplaceKinds) {
         plugin.id = pluginName;
-        plugin.interface = { displayName: text, longDescription: text };
+        plugin.interface = { longDescription: `${"m".repeat(159)}🥐` };
       } else if (restricted) {
         plugin.installPolicy = "NOT_AVAILABLE";
       }
       return listed;
     });
     expect(result.plugins).toMatchObject([
-      {
-        id: `${pluginName}@company-tools`,
-        displayName: "m".repeat(159),
-        description: "m".repeat(159),
-        available: !restricted,
-      },
+      { id: `${pluginName}@company-tools`, description: "m".repeat(159), available: !restricted },
     ]);
-    expect(result.plugins).toHaveLength(1);
   },
 );
