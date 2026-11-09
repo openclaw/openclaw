@@ -142,6 +142,12 @@ acquisition uses temporary Git metadata and writes directly to the existing
 object store. This avoids scanning every session ref before negotiation; local
 refs and shallow boundaries stay unchanged. The first filtered fetch for a URL
 uses the original repository so Git can register it for later content hydration.
+Managed worktree default-branch refresh uses the same isolated object-store
+transport when a cached base commit is physically available and origin uses the
+standard branch mapping. Custom fetch mappings keep Git's normal source-side fetch. It preserves origin's
+effective Git transport settings and publishes only the fetched default tracking
+ref. Other branches and the source `FETCH_HEAD` remain unchanged; ordinary source
+fetch and repair still handle an unavailable cached base.
 Only sessions with a writable managed sandbox are offered this action; direct
 host sessions merge the base with git in their workspace before publishing.
 Resolve reported conflicts and repeat it with `conflictsResolved: true` and the
