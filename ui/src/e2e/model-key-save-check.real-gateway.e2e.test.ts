@@ -12,8 +12,6 @@ import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.js"
 import { expandProvider } from "./model-providers.test-support.ts";
 import { respondAsReasoningModel } from "./reasoning-upstream.test-support.js";
 
-// A provider that judges the key it receives, like a real one: revoked keys get 401,
-// keys without model access get 403, an overloaded account gets 500, others answer.
 const STATUS_BY_KEY: Record<string, [number, string]> = {
   "sk-synthetic-revoked": [401, "Incorrect API key provided"],
   "sk-synthetic-noaccess": [403, "This key has no access to the requested model"],
