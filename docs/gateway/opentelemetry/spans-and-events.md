@@ -83,11 +83,13 @@ Omitting the option preserves prompt statistics for interested subscribers.
 Run-scoped spans (run, message and prompt processing, model call, model usage,
 harness, tool execution, and skill use) additionally carry
 `gen_ai.conversation.id` and `openclaw.session.id` — the session id, so trace
-backends group turns into one conversation per session incarnation — but only
+backends group every turn of a session into one conversation — but only
 while `diagnostics.otel.captureContent` is `true`; the attributes are absent
 by default and never label metrics. The value is the session id, not the
-session key: a reset or recreate starts a new conversation, matching the
-LLM's context boundary, and the raw key (which can embed channel peer ids) is
+session key: a `/new` reset clears history but preserves the durable session
+id, so reset continuations stay grouped in the same backend conversation, and
+a fresh id arises when a session is first created. The raw key (which can
+embed channel peer ids) is
 never exported. See
 [privacy and trace context](/gateway/opentelemetry/privacy-and-trace-context#session-identity).
 

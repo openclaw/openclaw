@@ -72,9 +72,12 @@ harness, tool execution, and skill use) carry:
   grouping, valued with the session id.
 - `openclaw.session.id`: the same session id under the OpenClaw-native key.
 
-The value is the session id — the per-incarnation identifier, not the session
-key — so a reset or recreate starts a new conversation in the backend, matching
-the LLM's own context boundary. The raw session key (which can embed channel
+The value is the session id — the durable identifier OpenClaw assigns at
+session creation, not the session key — so backends group every turn of a
+session into one conversation. A `/new` reset clears history but preserves the
+durable session id, so reset continuations stay grouped in the same backend
+conversation; a fresh conversation id arises when a session is first created.
+The raw session key (which can embed channel
 peer ids and collides across Gateways that share a collector) is never
 exported. Session ids are still stable identifiers of a conversation; the
 shared `captureContent` gate exists so identity travels only to a collector

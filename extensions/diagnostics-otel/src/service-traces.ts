@@ -313,10 +313,12 @@ export function createDiagnosticsTraceRuntime(
     // Session identity rides the captureContent gate: a collector trusted with raw
     // prompt and tool content is trusted with the session identifier, so trace
     // backends can group spans per conversation. The value is the session id —
-    // the per-incarnation identifier, not the session key — so a reset or
-    // recreate groups as a new conversation, matching the LLM's own context
-    // boundary; the raw session key (which can embed channel peer ids) is never
-    // exported. Metric attributes stay low-cardinality and never carry session
+    // the durable identifier assigned at session creation, not the session key.
+    // A /new reset clears history but preserves the durable session id, so reset
+    // continuations stay grouped in the same backend conversation; a fresh id
+    // arises when a session is first created. The raw session key (which can
+    // embed channel peer ids) is never exported.
+    // Metric attributes stay low-cardinality and never carry session
     // identifiers.
     if (runtimeOptions.captureContent) {
       const sessionId = evt.sessionId;
