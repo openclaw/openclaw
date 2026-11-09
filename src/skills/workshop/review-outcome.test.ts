@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import path from "node:path";
 import type { StatementSync } from "node:sqlite";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -380,13 +381,18 @@ describe("postWorkshopChangeNotice", () => {
       path: currentGeneration.storePath,
     });
     const prototype: StatementSync = Object.getPrototypeOf(db.prepare("SELECT 1"));
+    // Detached fixture maintenance is not part of the notice caller operation.
+    const observation = new AsyncLocalStorage<boolean>();
     const reads: string[] = [];
     const observers = (["all", "get", "iterate", "run"] as const).map((method) => {
       const original = prototype[method];
       return vi.spyOn(prototype, method).mockImplementation(
         new Proxy(original, {
           apply(read, receiver: StatementSync, args) {
-            if (/\b(?:session_nodes|session_windows)\b/iu.test(receiver.sourceSQL)) {
+            if (
+              observation.getStore() &&
+              /\b(?:session_nodes|session_windows)\b/iu.test(receiver.sourceSQL)
+            ) {
               reads.push(receiver.sourceSQL);
             }
             return Reflect.apply(read, receiver, args);
@@ -395,12 +401,14 @@ describe("postWorkshopChangeNotice", () => {
       );
     });
     const publish = () =>
-      postWorkshopChangeNotice({
-        config: {},
-        generation: currentGeneration,
-        runId,
-        changes: [change({})],
-      });
+      observation.run(true, () =>
+        postWorkshopChangeNotice({
+          config: {},
+          generation: currentGeneration,
+          runId,
+          changes: [change({})],
+        }),
+      );
     try {
       await publish();
       expect(mocks.appendAssistantMessageToSessionTranscript).toHaveBeenCalledTimes(1);
