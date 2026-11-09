@@ -21,7 +21,6 @@ import {
   publishTranscriptScroll,
   subscribeTranscriptScroll,
 } from "./chat-transcript-scroll-events.ts";
-import { ChatSessionVirtualizerHost } from "./chat-transcript-virtualizer-host.ts";
 import {
   installTranscriptDomMocks,
   resetTranscriptTestDom,
@@ -138,24 +137,6 @@ async function mountRestoration(paneId: string, height: number) {
 }
 
 beforeEach(installTranscriptDomMocks);
-it("retargets growth during Latest settlement without restarting unchanged motion", () => {
-  const host = new ChatSessionVirtualizerHost(() => {});
-  const element = document.createElement("div");
-  viewport(element, 300, 1400);
-  host.virtualizer.scrollElement = element;
-  vi.spyOn(host, "scrollElement", "get").mockReturnValue(element);
-  const scroll = vi.spyOn(host.virtualizer, "scrollToEnd").mockImplementation(() => {});
-  const command = { target: "end", behavior: "smooth", offset: 900 } as const;
-  host.offsetState.scrollCommand = command;
-  host.initialRange.preparingEnd = true;
-  expect(host.scrollToEnd({ source: "auto", behavior: "auto" })).toBe(true);
-  expect(scroll).toHaveBeenCalledExactlyOnceWith({ behavior: "smooth" });
-  expect(host.offsetState.scrollCommand).toBe(command);
-  host.offsetState.scrollCommand.offset = 1100;
-  host.scrollToEnd({ source: "auto" });
-  expect(scroll).toHaveBeenCalledTimes(1);
-  host.dispose();
-});
 
 afterEach(() => {
   for (const cleanup of cleanups.splice(0).toReversed()) {

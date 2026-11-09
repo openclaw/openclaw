@@ -631,7 +631,7 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
     } else if (this.offsetState.pendingScrollOffset || !this.canAutoFollow()) {
       return false;
     } else if (this.initialRange.preparingEnd && this.offsetState.scrollCommand?.target === "end") {
-      // An unissued end command is already preparing this destination.
+      // Preparation and native settling already own this destination.
       return true;
     }
     scrollTranscriptToEnd(

@@ -291,12 +291,11 @@ export function observeTranscriptOffset(
       const actualOffset = element?.scrollTop;
       owner.state.maintenanceScrollOffset = actualOffset === target ? actualOffset : null;
     }
-    // Unissued Latest and native smooth settling can carry earlier motion.
-    // Instant commands own no such trajectory after their measured writes.
+    // Native smooth settling, including preparation, can carry earlier motion.
+    // Instant and automatic commands must yield to an unclassified reader.
     if (
       delta < 0 &&
       owner.state.scrollCommand?.target === "end" &&
-      owner.state.scrollCommand.offset !== undefined &&
       owner.state.scrollCommand.behavior !== "smooth" &&
       !isTranscriptMaintenanceScroll(owner.state, element)
     ) {
