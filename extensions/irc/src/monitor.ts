@@ -40,7 +40,12 @@ import {
   type IrcIngressMonitor,
 } from "./irc-ingress.js";
 import { normalizeIrcAllowEntry } from "./normalize.js";
-import { renderIrcPlainText, sanitizeIrcAssistantText } from "./outbound-base.js";
+import {
+  renderIrcPlainText,
+  sanitizeIrcAssistantText,
+  startsAfterParagraphBreak,
+  type IrcInlineCodeCarry,
+} from "./outbound-base.js";
 import { resolveIrcGroupMatch, resolveIrcGroupRequireMention } from "./policy.js";
 import { createIrcReconnectBackoff } from "./reconnect-backoff.js";
 import { getIrcRuntime } from "./runtime.js";
@@ -149,13 +154,23 @@ export async function monitorIrcProvider(
         );
         return { kind: "completed" };
       }
-      const deliverReply = async (target: string, payload: OutboundReplyPayload) => {
+      const deliverReply = async (
+        target: string,
+        payload: OutboundReplyPayload,
+        stream?: { carry: IrcInlineCodeCarry; opensCarry: boolean },
+      ) => {
+        const carry = stream?.carry;
+        if (carry && startsAfterParagraphBreak(payload.text ?? "")) {
+          carry.ticks = 0;
+        }
         await deliverFormattedTextWithAttachments({
           payload: {
             ...payload,
             text: renderIrcPlainText(sanitizeIrcAssistantText(payload.text ?? ""), {
               cfg,
               accountId: account.accountId,
+              carry,
+              opensCarry: stream?.opensCarry,
             }),
           },
           send: async ({ text }) => {
@@ -434,6 +449,9 @@ export async function monitorIrcProvider(
         },
       });
 
+      // Block streaming delivers one reply as several fragments; this tracks inline
+      // code that a fragment boundary splits.
+      const streamedInlineCode: IrcInlineCodeCarry = { ticks: 0 };
       await core.channel.inbound.dispatch({
         cfg,
         channel: CHANNEL_ID,
@@ -441,8 +459,19 @@ export async function monitorIrcProvider(
         route: { agentId: route.agentId, sessionKey: route.sessionKey },
         ctxPayload,
         delivery: {
-          deliver: async (payload) => {
-            await deliverReply(peerId, payload);
+          deliver: async (payload, info) => {
+            // Tool summaries are standalone messages. Block fragments can leave an
+            // inline code span open; the final fragment can only finish one.
+            await deliverReply(
+              peerId,
+              payload,
+              info?.kind === "tool"
+                ? undefined
+                : { carry: streamedInlineCode, opensCarry: info?.kind === "block" },
+            );
+            if (info?.kind === "final") {
+              streamedInlineCode.ticks = 0;
+            }
           },
           onError: (err, info) => {
             runtime.error?.(`irc ${info.kind} reply failed: ${String(err)}`);

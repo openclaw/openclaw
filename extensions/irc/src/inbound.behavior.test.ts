@@ -1,4 +1,5 @@
 // Irc tests cover inbound.behavior plugin behavior.
+import { EmbeddedBlockChunker } from "openclaw/plugin-sdk/agent-runtime";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ResolvedIrcAccount } from "./accounts.js";
@@ -42,6 +43,15 @@ const {
     upsertPairingRequestMock: vi.fn(async () => ({ code: "CODE", created: true })),
   };
 });
+
+/** Splits a reply into fragments with the block chunker that block streaming uses. */
+function blockStream(reply: string): string[] {
+  const blocks: string[] = [];
+  const chunker = new EmbeddedBlockChunker({ minChars: 20, maxChars: 40 });
+  chunker.append(reply);
+  chunker.drain({ force: true, emit: (chunk) => blocks.push(chunk) });
+  return blocks;
+}
 
 function installIrcRuntime() {
   setIrcRuntime(
@@ -309,13 +319,50 @@ describe("irc inbound behavior", () => {
       reply: "| Name | State |\n| --- | --- |\n| **docs** | ready |",
       expected: ["docs\n\u2022 State: ready"],
     },
-  ])("sanitizes $name on the inbound reply path", async ({ reply, expected, tables }) => {
+    {
+      name: "a lone backtick in a whole reply, unchanged",
+      reply: "it`s **bold**",
+      expected: ["it`s bold"],
+    },
+    {
+      name: "inline code split across streamed blocks",
+      blocks: blockStream(`\`${"x".repeat(30)} **KEEP_LITERAL** tail\``),
+      expected: ["x".repeat(30), "**KEEP_LITERAL** tail"],
+    },
+    {
+      name: "inline code split over three streamed blocks",
+      blocks: blockStream(
+        "Use `f(*args, **kwargs, **opts, *rest, **more, *tail, **last, **extra, **mored, *zed, **end)` or **stop**.",
+      ),
+      expected: [
+        "Use f(*args, **kwargs, **opts, *rest,",
+        "**more, *tail, **last, **extra,",
+        "**mored, *zed, **end) or stop.",
+      ],
+    },
+    {
+      name: "fenced and spaced backticks in streamed blocks without carrying them over",
+      blocks: ["```sh\necho `\n```", "odd ` tick", "**bold**"],
+      expected: ["echo `", "odd ` tick", "bold"],
+    },
+    {
+      name: "an unclosed span ended by a paragraph break between streamed blocks",
+      blocks: ["see `foo", "\n\nthen **bold**"],
+      expected: ["see foo", "then bold"],
+    },
+  ])("sanitizes $name on the inbound reply path", async ({ reply, blocks, expected, tables }) => {
     const coreRuntime = createPluginRuntimeMock();
     const sendReply = vi.fn(async (_target: string, _text: string) => {});
-    type Deliver = { delivery: { deliver: (payload: { text: string }) => Promise<void> } };
-    vi.mocked(coreRuntime.channel.inbound.dispatchReply).mockImplementation(
-      (async (p: Deliver) => await p.delivery.deliver({ text: reply })) as never,
-    );
+    type Deliver = {
+      delivery: {
+        deliver: (payload: { text: string }, info: { kind: string }) => Promise<void>;
+      };
+    };
+    vi.mocked(coreRuntime.channel.inbound.dispatchReply).mockImplementation((async (p: Deliver) => {
+      for (const text of blocks ?? [reply ?? ""]) {
+        await p.delivery.deliver({ text }, { kind: blocks ? "block" : "final" });
+      }
+    }) as never);
     setIrcRuntime(coreRuntime as never);
 
     await receive({
