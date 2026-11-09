@@ -128,7 +128,7 @@ export function ChatThread(input: ChatThreadInput) {
     () =>
       ready() === false &&
       isPresented() &&
-      (!prepareHistory || !input.props.loading || input.props.messages.length > 0)
+      (!input.props.loading || input.props.messages.length > 0)
         ? 0
         : undefined,
   );
@@ -139,7 +139,10 @@ export function ChatThread(input: ChatThreadInput) {
           onSettled(() => {
             // Let this frame paint the composer before preparing the transcript in a task.
             if (ready() === undefined) {
-              scheduleLayout(reveal, () => () => setReady(false));
+              scheduleLayout(
+                reveal,
+                () => () => (prepareHistory ? setReady(false) : reveal.schedule(0)),
+              );
             }
             return () => {
               cancelLayout(reveal);
