@@ -548,6 +548,7 @@ describe("mutable update execution", () => {
           options?.role === "sqlite-maintenance" ? null : acquire(options),
         );
         const events: string[] = [];
+        let refusal = "";
         mocks.runGitUpdate.mockImplementation(
           async (options: Parameters<typeof updateGitInstall>[0]) => {
             await options.inspectGitTarget({ schemaVersions: { state: 15, agent: 19 } });
@@ -556,8 +557,14 @@ describe("mutable update execution", () => {
             return { ...successfulUpdate, mode: "git" };
           },
         );
+        // The package runner reports a thrown validation error as its own failed step.
         mocks.runPackageUpdate.mockImplementation(async (options: PackageInstallUpdateParams) => {
-          await options.validateCandidate(root);
+          try {
+            await options.validateCandidate(root);
+          } catch (error) {
+            refusal = String(error);
+            return { ...successfulUpdate, status: "error", reason: "global-install-failed" };
+          }
           events.push("validated");
           return successfulUpdate;
         });
@@ -575,7 +582,9 @@ describe("mutable update execution", () => {
           mutationStarted: false,
           result: { status: "error", reason: "database-engine-preflight" },
         });
-        expect(execution?.failure?.detail).toContain("exclusive state ownership");
+        expect(kind === "git" ? execution?.failure?.detail : refusal).toContain(
+          "exclusive state ownership",
+        );
       }),
   );
 

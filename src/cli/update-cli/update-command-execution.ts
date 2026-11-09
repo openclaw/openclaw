@@ -397,41 +397,41 @@ export async function executeMutableUpdate(
         nodeRunner: params.packageUpdateNodeRunner,
         assertCurrent: assertExecutionCurrent,
       });
+      const snapshot = await readCandidateConfig(env);
+      const validation = await validateUpdateCandidateWithProgress(
+        {
+          root,
+          sourcePackageRoot: params.root,
+          config: snapshot.config,
+          env,
+          assertCurrent: assertExecutionCurrent,
+          writeOptions: captureWriteOptions(),
+          gatewayStartupRuntime,
+          ownerService: preManagedServiceStop,
+        },
+        params,
+        originalRun,
+      );
+      assertExecutionCurrent();
+      doctorConfigChanges = [...(validation.doctorConfigChanges ?? [])];
+      if (validation.status === "ok") {
+        await rollbackCapture.observeCandidate(root);
+        validatedConfigSnapshot = snapshot;
+        candidateSchemaVersions = validation.candidateSchemaVersions;
+        gatewayRestartCompletion = validation.gatewayRestartCompletion === true;
+        doctorConfigWrites = validation.doctorConfigWrites === true;
+        observedGatewayStartupMs = validation.steps.find(
+          (step) => step.name === "candidate-gateway-startup" && step.exitCode === 0,
+        )?.durationMs;
+      }
+      candidateFailureReason = validation.status === "error" ? validation.reason : undefined;
+      return validation.steps;
     } catch (error) {
       if (error instanceof UpdatePreMutationError) {
         candidateFailureReason = error.reason;
       }
       throw error;
     }
-    const snapshot = await readCandidateConfig(env);
-    const validation = await validateUpdateCandidateWithProgress(
-      {
-        root,
-        sourcePackageRoot: params.root,
-        config: snapshot.config,
-        env,
-        assertCurrent: assertExecutionCurrent,
-        writeOptions: captureWriteOptions(),
-        gatewayStartupRuntime,
-        ownerService: preManagedServiceStop,
-      },
-      params,
-      originalRun,
-    );
-    assertExecutionCurrent();
-    doctorConfigChanges = [...(validation.doctorConfigChanges ?? [])];
-    if (validation.status === "ok") {
-      await rollbackCapture.observeCandidate(root);
-      validatedConfigSnapshot = snapshot;
-      candidateSchemaVersions = validation.candidateSchemaVersions;
-      gatewayRestartCompletion = validation.gatewayRestartCompletion === true;
-      doctorConfigWrites = validation.doctorConfigWrites === true;
-      observedGatewayStartupMs = validation.steps.find(
-        (step) => step.name === "candidate-gateway-startup" && step.exitCode === 0,
-      )?.durationMs;
-    }
-    candidateFailureReason = validation.status === "error" ? validation.reason : undefined;
-    return validation.steps;
   };
   let servicePrepared = false;
   // Activation-window timing the install runners cannot observe.
