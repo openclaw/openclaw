@@ -18,6 +18,7 @@ import {
   createAppServerOptions,
   createLeasedCodexLifecycleHarness,
   createParams as createThreadLifecycleParams,
+  readEmptyNativeConfig,
   resetThreadLifecycleTestFixtures,
   startOrResumeThreadWithoutSkills as startOrResumeThread,
 } from "./thread-lifecycle.test-fixtures.js";
@@ -34,16 +35,6 @@ function createThreadLifecycleAppServerOptions(): ReturnType<typeof createAppSer
     ...createAppServerOptions(),
     connectionClass: "local-loopback",
   };
-}
-
-function readEmptyNativeConfig(method: string) {
-  if (method === "config/read") {
-    return { config: {}, origins: {}, layers: [] };
-  }
-  if (method === "configRequirements/read") {
-    return { requirements: null };
-  }
-  throw new Error(`unexpected method: ${method}`);
 }
 
 async function seedAdoptedThreadBinding(params: EmbeddedRunAttemptParams, cwd: string) {

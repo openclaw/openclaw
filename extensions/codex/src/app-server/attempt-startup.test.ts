@@ -48,7 +48,10 @@ import {
   retireSharedCodexAppServerClientIfCurrent,
 } from "./shared-client.js";
 import { createClientHarness, stubCodexInferenceTransportEnv } from "./test-support.js";
-import { createCodexLifecycleHarness } from "./thread-lifecycle.test-fixtures.js";
+import {
+  createCodexLifecycleHarness,
+  readEmptyNativeConfig,
+} from "./thread-lifecycle.test-fixtures.js";
 import { retainCodexAppServerBindingSubscription } from "./thread-ownership.js";
 
 vi.mock("./desktop-generation.js", async (importOriginal) => ({
@@ -120,16 +123,10 @@ const threadStartResult = (threadId = "thread-1") => createThreadStartResult(thr
 async function bindToRetiredLeasedOwner() {
   const paths = createAttemptPaths(tempRoots);
   const respond = async (method: string) => {
-    if (method === "config/read") {
-      return { config: {}, origins: {}, layers: [] };
-    }
-    if (method === "configRequirements/read") {
-      return { requirements: null };
-    }
     if (method === "thread/start" || method === "thread/resume") {
       return threadStartResult("bound-thread");
     }
-    throw new Error(`unexpected method: ${method}`);
+    return readEmptyNativeConfig(method);
   };
   const owner = createCodexLifecycleHarness({ respond });
   const ownerExitCodesAtResume: Array<number | null> = [];
@@ -298,18 +295,12 @@ describe("startCodexAttemptThread", () => {
     const paths = createAttemptPaths(tempRoots);
     const harness = createCodexLifecycleHarness({
       respond: async (method, params) => {
-        if (method === "config/read") {
-          return { config: {}, origins: {}, layers: [] };
-        }
-        if (method === "configRequirements/read") {
-          return { requirements: null };
-        }
         if (method === "thread/start") {
           return threadStartResult(
             (params as { ephemeral?: boolean }).ephemeral ? "incognito" : "ordinary",
           );
         }
-        throw new Error(`unexpected method: ${method}`);
+        return readEmptyNativeConfig(method);
       },
     });
     const start = vi.spyOn(CodexAppServerClient, "start").mockResolvedValue(harness.client);

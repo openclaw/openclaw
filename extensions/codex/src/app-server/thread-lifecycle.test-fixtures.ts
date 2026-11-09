@@ -96,6 +96,16 @@ type NativeFixtureThread = {
   subscribed: boolean;
 };
 
+export function readEmptyNativeConfig(method: string) {
+  if (method === "config/read") {
+    return { config: {}, origins: {}, layers: [] };
+  }
+  if (method === "configRequirements/read") {
+    return { requirements: null };
+  }
+  throw new Error(`unexpected method: ${method}`);
+}
+
 /** A synthetic native server, not a client mock: requests still cross the real wire and guards. */
 export function createCodexLifecycleHarness(options: {
   respond: (method: string, params?: unknown) => unknown;
