@@ -16,7 +16,7 @@ import {
   sessionMutationGatewayHello,
 } from "../../test-helpers/gateway-methods.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
-import { waitForSolid } from "../../test-helpers/solid-settle.ts";
+import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import {
   ChatComposerCapabilityHost,
   ChatComposerCapabilityDialogs,
@@ -220,7 +220,8 @@ function createAddServerHarness(
         .click();
       expect(query("form")).toBe(form);
       container.querySelector<HTMLInputElement>('[name="mcp-name"]')!.value = "docs";
-      container.querySelector<HTMLSelectElement>('[name="mcp-transport"]')!.value = "stdio";
+      container.querySelector<HTMLInputElement>('input[type="radio"][value="stdio"]')!.click();
+      flush();
       container.querySelector<HTMLInputElement>('[name="mcp-target"]')!.value = "docs-mcp";
       query("form")!.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
       await waitForSolid(() => expect(host.dialogView(context, state, session).busy).toBe(false));
@@ -229,6 +230,31 @@ function createAddServerHarness(
 }
 
 describe("ChatComposerCapabilityHost", () => {
+  it("gates tool previews on session read access, including callbacks retained across revocation", async () => {
+    const request = vi.fn().mockResolvedValue(toolsResult("readable"));
+    const { context, props, open, load, result } = toolsHarness(request);
+    const scopes = (values: string[]) => {
+      context.gateway.snapshot.hello = gatewayHelloForMethods(["tools.effective"], values);
+    };
+    scopes([]);
+    open();
+    load();
+    expect(request).not.toHaveBeenCalled();
+    scopes(["operator.sessions.read"]);
+    open();
+    await result("readable");
+    const retained = props().onOpenToolAccess;
+    scopes([]);
+    retained?.("github");
+    expect(request).toHaveBeenCalledOnce();
+    expect(props().toolsEffectiveResult).toBeNull();
+    expect(props().onOpenToolAccess).toBeUndefined();
+    scopes(["operator.sessions.read"]);
+    open();
+    await result("readable");
+    expect(request).toHaveBeenCalledTimes(2);
+  });
+
   it("keeps unavailable plugin settings distinct from an empty configuration in the open menu", async () => {
     const { context, props } = capabilityHarness(vi.fn(), null);
     const guest = sessionMutationGatewayHello([
@@ -318,7 +344,7 @@ describe("ChatComposerCapabilityHost", () => {
     ],
     [
       { navigateAfterSave: true },
-      "The active session changed before it could be enabled.",
+      "Couldn’t enable this server. The active session changed. Try again.",
       ["global"],
     ],
     [{ refreshError: "refresh failed" }, "refresh failed", ["global", "load"]],
@@ -329,7 +355,7 @@ describe("ChatComposerCapabilityHost", () => {
       await harness.submit();
       expect(harness.globalWrites).toEqual([disabledServer]);
       expect(harness.alert()).toContain(
-        "The server was saved disabled globally, but enabling it for this session failed:",
+        "The server was saved but is still disabled. Couldn’t enable it for this session.",
       );
       expect(harness.alert()).toContain(error);
       expect(harness.events).toEqual(events);
@@ -404,9 +430,7 @@ describe("ChatComposerCapabilityHost", () => {
         mcp: { servers: { github: { url: "https://mcp.example.test", enabled: true } } },
       },
     });
-    context.gateway.snapshot.hello = {
-      features: { methods: ["tools.effective"] },
-    } as NonNullable<typeof context.gateway.snapshot.hello>;
+    context.gateway.snapshot.hello = gatewayHelloForMethods(["tools.effective"]);
     props().onOpenToolAccess?.("github");
     await vi.waitFor(() => expect(props().toolsEffectiveResult).toBe(firstResult));
 
@@ -608,7 +632,7 @@ describe("ChatComposerCapabilityHost", () => {
     props().onOpenToolAccess?.("github");
     await vi.waitFor(() => expect(props().toolsEffectiveError).toBe(true));
 
-    expect(props().toolAccessMutationBlockedReason).toBe("Couldn’t load tools.");
+    expect(props().toolAccessMutationBlockedReason).toBe("Couldn’t load tools. Try again.");
 
     props().onOpenToolAccess?.("github");
     await vi.waitFor(() => expect(props().toolsEffectiveResult).not.toBeNull());

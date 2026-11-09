@@ -1,9 +1,10 @@
 import { createMemo, onSettled, Repeat, Show } from "solid-js";
-import { Icon } from "../../../components/solid/icon.tsx";
+import { InlineAlert } from "../../../components/solid/inline-alert.tsx";
 import { registerChatComposerEnglish } from "../../../i18n/locales/en-chat-composer.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { createMediaQuerySource } from "../../../lib/reactive/platform.ts";
 import type { ComposerDictationOwner } from "../composer-dictation.ts";
+import { isRealtimeTalkMicrophoneIssueMessage } from "../talk/input.ts";
 import type { RealtimeTalkLevelSignal } from "../talk/level.ts";
 import { createMicrophoneMeter, type MicrophoneMeterStatus } from "../talk/microphone-meter.ts";
 import type { RealtimeTalkStatus } from "../talk/session.ts";
@@ -127,6 +128,8 @@ export function MicrophoneActivity(props: {
 export function ChatVoiceStatus(props: {
   status?: RealtimeTalkStatus;
   detail?: string | null;
+  /** Defaults to warning for microphone access problems and danger otherwise. */
+  tone?: "danger" | "warning";
   onDismissError?: () => void;
   onUseSystemDefaultMicrophone?: () => Promise<void>;
 }) {
@@ -135,35 +138,30 @@ export function ChatVoiceStatus(props: {
       when={props.status === "connecting"}
       fallback={
         <Show when={props.status === "error" && props.detail}>
-          <div class="agent-chat__composer-errors agent-chat__composer-errors--standalone">
-            <div class="agent-chat__composer-error agent-chat__talk-status" role="alert">
-              <span class="agent-chat__composer-error-icon" aria-hidden="true">
-                <Icon name="alertTriangle" />
-              </span>
-              <div class="callout__content">
-                <div class="agent-chat__talk-status-text">{props.detail}</div>
-                <Show when={props.onUseSystemDefaultMicrophone}>
-                  <button
-                    class="btn btn--sm"
-                    type="button"
-                    onClick={() => void props.onUseSystemDefaultMicrophone?.()}
-                  >
-                    {t("chat.composer.useSystemDefaultMicrophoneForCall")}
-                  </button>
-                </Show>
-              </div>
-              <Show when={props.onDismissError}>
+          <InlineAlert
+            tone={
+              props.tone ??
+              (props.detail && isRealtimeTalkMicrophoneIssueMessage(props.detail)
+                ? "warning"
+                : "danger")
+            }
+            class="agent-chat__composer-alert"
+            onDismiss={props.onDismissError}
+            dismissLabel={t("chat.composer.dismissVoiceInputError")}
+            action={
+              <Show when={props.onUseSystemDefaultMicrophone}>
                 <button
-                  class="callout__dismiss"
+                  class="btn btn--sm"
                   type="button"
-                  onClick={() => props.onDismissError?.()}
-                  aria-label={t("chat.composer.dismissVoiceInputError")}
+                  onClick={() => void props.onUseSystemDefaultMicrophone?.()}
                 >
-                  <Icon name="x" />
+                  {t("chat.composer.useSystemDefaultMicrophoneForCall")}
                 </button>
               </Show>
-            </div>
-          </div>
+            }
+          >
+            {props.detail}
+          </InlineAlert>
         </Show>
       }
     >
@@ -203,7 +201,7 @@ export function ComposerDictationStatus(props: {
           <span
             class={[
               "agent-chat__dictation-phase",
-              { "agent-chat__dictation-phase--listening": !dictation.finalizing },
+              { "agent-chat__dictation-phase--listening text-shimmer": !dictation.finalizing },
             ]}
           >
             {dictation.finalizing

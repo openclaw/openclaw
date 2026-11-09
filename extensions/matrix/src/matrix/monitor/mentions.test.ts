@@ -236,7 +236,7 @@ describe("resolveMentions", () => {
     it("detects mention in formatted_body with plain user ID", () => {
       const result = resolveFormatted(
         "Bot: hello",
-        '<a href="https://matrix.to/#/@bot:matrix.org">Bot</a>: hello',
+        '<A class="x" HREF=\'https://example.com\' href="https://matrix.to/#/@bot:matrix.org">Bot</A></a>: hello',
       );
       expect(result.wasMentioned).toBe(true);
     });
@@ -260,7 +260,7 @@ describe("resolveMentions", () => {
     it("does not detect mention for different user ID", () => {
       const result = resolveFormatted(
         "Other: hello",
-        '<a href="https://matrix.to/#/@other:matrix.org">Other</a>: hello',
+        '<a href="https://matrix.to/#/@bot:matrix.org" href="https://matrix.to/#/@other:matrix.org">Other</a>: hello',
       );
       expect(result.wasMentioned).toBe(false);
     });

@@ -1,0 +1,2 @@
+# Preserve the existing dismiss case's accessible-name, tooltip absence, and action assertions.
+3

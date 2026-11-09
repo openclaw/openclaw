@@ -2,6 +2,12 @@ import type { JSX } from "@solidjs/web";
 import { afterEach, expect, it, vi } from "vitest";
 /* @vitest-environment jsdom */
 import type { SelectPicker } from "../../components/select-picker.ts";
+import { createChannelCapability } from "../../lib/channels/index.ts";
+import {
+  createApplicationGateway,
+  createApplicationGatewaySnapshot,
+} from "../../test-helpers/application-context-fixtures.ts";
+import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { updatePickers, openPicker, choosePickerValue } from "../../test-helpers/select-picker.ts";
 import {
   pairingAccount as personal,
@@ -79,9 +85,11 @@ it("renders pending senders and keeps their actions current across refresh", () 
 it("hides cached sender data without pairing access", () => {
   const container = renderInto(createProps({ canManagePairing: false }));
 
-  expect(container.textContent).toContain("operator.pairing access");
+  expect(container.textContent).toContain(
+    "You don’t have permission to review DM access requests.",
+  );
   expect(container.querySelector(".settings-status--warn")?.textContent).toContain(
-    "operator.pairing access",
+    "You don’t have permission to review DM access requests.",
   );
   expect(container.querySelector(".callout")).toBeNull();
   expect(container.textContent).not.toContain("+15551234567");
@@ -141,7 +149,9 @@ it("uses the channel picker and clears the account filter when the channel chang
 });
 
 it("disables every request action while one mutation is active", () => {
-  const props = createProps({ channels: { pairingBusyRequestId: request.requestId } });
+  const props = createProps({
+    channels: { pairingBusy: { requestId: request.requestId, action: "approve" } },
+  });
   props.channels.pairingSnapshot!.requests.push({
     ...request,
     requestId: "other-request",
@@ -155,6 +165,63 @@ it("disables every request action while one mutation is active", () => {
   expect(actionButtons).toHaveLength(4);
   expect(actionButtons.every((button) => button.disabled)).toBe(true);
 });
+
+it.each(["approve", "dismiss"] as const)(
+  "shows progress only for the pending %s action and restores it on failure",
+  async (kind) => {
+    const held = Promise.withResolvers<unknown>();
+    const client = createTestGatewayClient(() => held.promise);
+    const { gateway } = createApplicationGateway(
+      createApplicationGatewaySnapshot({ client, phase: "connected" }),
+    );
+    const channels = createChannelCapability(gateway);
+    const props = createProps({
+      pairingPrompt: { kind, request, notify: false, bootstrapCommandOwner: false },
+    });
+    props.channels = channels.state;
+    channels.state.pairingSnapshot = pairingSnapshot();
+    let mutation: Promise<unknown> = Promise.resolve();
+    props.onPairingPromptConfirm = () => {
+      mutation =
+        kind === "approve"
+          ? channels.approvePairing({ ...request, notify: false, bootstrapCommandOwner: false })
+          : channels.dismissPairing(request);
+    };
+    const view = (current: ChannelsProps) => (
+      <>
+        {renderChannelPairingQueue(current)}
+        {renderChannelPairingPrompt(current)}
+      </>
+    );
+    const container = renderInto(props, view);
+    const confirm = container.querySelector<HTMLButtonElement>(
+      "openclaw-modal-actions button:last-child",
+    )!;
+    const buttons = Array.from(
+      container.querySelectorAll<HTMLButtonElement>(".channels-pairing-request__actions button"),
+    );
+    try {
+      confirm.click();
+      renderChannelView(view, props, container);
+      expect(confirm.textContent?.trim()).toBe("Loading…");
+      expect(buttons.map((button) => button.textContent?.trim())).toEqual(
+        kind === "approve" ? ["Loading…", "Dismiss"] : ["Approve", "Loading…"],
+      );
+      expect(buttons.every((button) => button.disabled)).toBe(true);
+      held.reject(new Error("Request failed"));
+      await mutation;
+      renderChannelView(view, props, container);
+      expect(confirm.textContent?.trim()).toBe(kind === "approve" ? "Approve" : "Dismiss");
+      expect(buttons.map((button) => button.textContent?.trim())).toEqual(["Approve", "Dismiss"]);
+      expect(buttons.every((button) => !button.disabled)).toBe(true);
+      expect(container.querySelector('[role="alert"]')?.textContent).toContain("Request failed");
+    } finally {
+      held.resolve({});
+      await mutation;
+      channels.dispose();
+    }
+  },
+);
 
 it("shows explicit notification and first-owner choices for an admin", () => {
   const container = renderInto(

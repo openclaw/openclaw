@@ -2,6 +2,7 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core/expect";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { captureMethodCall } from "../../../../test/helpers/capture-method-call.js";
 import {
@@ -27,6 +28,7 @@ import type {
   BoundParent,
   SpawnBoundaryOptions,
 } from "./subagent-spawn.participants.test-support.js";
+import { readBoundExecutionState } from "./subagent-spawn.production-boundary.diagnostics.test-support.js";
 import { createBoundSpawnInvocation } from "./subagent-spawn.production-boundary.test-support.js";
 
 const whenIdle = (bound: BoundParent, run: () => void | Promise<void> = () => {}) =>
@@ -208,7 +210,27 @@ export function registerManagedWorktreeSpawnCases(
           );
         await enter(preparationStarted.promise, "workspace preparation");
         releasePreparation.resolve();
-        await enter(modelStarted.promise, "model entry");
+        try {
+          await enter(modelStarted.promise, "model entry");
+        } catch (cause) {
+          if (signal.aborted) {
+            throw cause;
+          }
+          const receipt = asOptionalRecord(bound.context.dedupe.get(`agent:${details.runId}`));
+          const error = asOptionalRecord(receipt?.error);
+          const original = asOptionalRecord(error?.cause);
+          // Inspect only terminal errors from this synthetic child before teardown retires it.
+          const diagnostic = {
+            ...readBoundExecutionState(bound, details.runId),
+            errorMessage:
+              typeof error?.message === "string" ? error.message.slice(0, 1_000) : undefined,
+            causeMessage:
+              typeof original?.message === "string" ? original.message.slice(0, 1_000) : undefined,
+          };
+          throw new Error(`Child ended before model entry: ${JSON.stringify(diagnostic)}`, {
+            cause,
+          });
+        }
         const child = loadSessionEntry(childScope);
         const checkout = expectDefined(
           await managedWorktrees.findLiveByOwner("session", childSessionKey),

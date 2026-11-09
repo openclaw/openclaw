@@ -1,4 +1,6 @@
 import type { AgentDatabaseAdmissionRefusal } from "./agent-database-admission.js";
+import type { AgentDatabaseStartupVerifier } from "./agent-database-startup-integrity.js";
+import type { AgentSchemaInspection } from "./openclaw-agent-schema-inspection.js";
 import type { OpenClawDatabaseSchemaPreflight } from "./openclaw-database-preflight.types.js";
 
 export type PendingAgentDatabaseInspection = {
@@ -20,8 +22,11 @@ export type AgentDatabaseStartupActivation = {
   migrateAgent: (
     input: AgentDatabaseStartupPreparationInput,
   ) => Promise<void | { maintain?: () => Promise<void>; recoverInputs?: () => Promise<void> }>;
-  publishAgent: (input: AgentDatabaseStartupPreparationInput) => Promise<void>;
+  /** Admission may fail after publication; its publisher owns withdrawal of retained inputs. */
+  publishAgent: (input: AgentDatabaseStartupPreparationInput) => Promise<void | (() => void)>;
   captureReadAdmission?: (input: AgentDatabaseStartupPreparationInput) => () => void;
+  /** The Gateway owns full verification after bounded current-schema admission. */
+  verifyIntegrity?: AgentDatabaseStartupVerifier;
 };
 export type AgentDatabaseStartupPreparationPhase =
   | "inspection"
@@ -45,4 +50,14 @@ export type PendingAgentDatabaseRecovery = {
   phase: AgentDatabaseStartupPreparationPhase;
   phaseStartedAt: number;
   phaseDurationsMs: Partial<Record<AgentDatabaseStartupPreparationPhase, number>>;
+};
+
+export type PreparedSchemaHeader = Pick<
+  AgentSchemaInspection,
+  "version" | "writerAppVersion" | "agentSchemaMeta"
+>;
+export type PreparedSchemaHeaders = {
+  statePath: string;
+  headers: Map<string, PreparedSchemaHeader>;
+  state?: { identity: string; schemaAdmissionId: string };
 };

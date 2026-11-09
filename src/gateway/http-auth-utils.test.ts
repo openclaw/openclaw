@@ -2,7 +2,6 @@ import assert from "node:assert/strict";
 import { getEventListeners, once } from "node:events";
 import type { IncomingMessage } from "node:http";
 import { setImmediate as nextTurn } from "node:timers/promises";
-import { queryObjects } from "node:v8";
 import {
   createPluginRegistryFixture,
   registerVirtualTestPlugin,
@@ -23,6 +22,7 @@ import {
 } from "../state/user-profile-writes.js";
 import { linkEmail, setDisplayName } from "../state/user-profile-writes.worker.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { forceFullGc } from "../test-utils/retention.js";
 import type { GatewayAuthResult } from "./auth.js";
 import {
   authorizeControlUiSessionOwnerReadRequestOrReply,
@@ -213,7 +213,7 @@ describe("HTTP gateway owner profiles", () => {
       const control = new WeakRef({ unowned: true });
       // Leave the creation job before collecting; dereferencing first would retain the capture.
       await nextTurn();
-      queryObjects(WeakRef);
+      forceFullGc();
       expect(control.deref()).toBeUndefined();
       for (const [name, reference] of Object.entries(retired)) {
         expect(reference.deref(), `completed HTTP ${name} should collect`).toBeUndefined();

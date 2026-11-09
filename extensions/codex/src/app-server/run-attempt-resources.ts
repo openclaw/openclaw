@@ -62,6 +62,14 @@ import { isCodexNativeDelegationDisabledForRun } from "./thread-requests.js";
 import { createCodexTrajectoryRecorder } from "./trajectory.js";
 import type { CodexAppServerTurnRouter, CodexThreadRouteReservation } from "./turn-router.js";
 
+const CODEX_ONE_SHOT_CLIENT_CLOSE_OPTIONS = {
+  exitTimeoutMs: 6_000,
+  // A clean Codex shutdown can spend several seconds flushing its state database
+  // after stdin closes under release-path load. Preserve a bounded grace period
+  // so that work is not converted into a forced, uncertain cleanup receipt.
+  forceKillDelayMs: 5_000,
+} as const;
+
 export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
   const { context } = prompt;
   const { runtime, attemptTools } = context;
@@ -172,12 +180,16 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
     }
     state.sharedCodexClientRetiredForOneShotCleanup = true;
     const client = state.client;
-    const retired = clearSharedCodexAppServerClientIfCurrentAndUnclaimed(client);
+    // The first close starts the memoized transport shutdown; joining it cannot extend grace.
+    const retired = clearSharedCodexAppServerClientIfCurrentAndUnclaimed(
+      client,
+      CODEX_ONE_SHOT_CLIENT_CLOSE_OPTIONS,
+    );
     // Retained peers prevent retirement; preserve their client without treating
     // missing close evidence as a completed one-shot cleanup.
     const result =
       client && retired.closed
-        ? await client.closeAndWait({ exitTimeoutMs: 2_000, forceKillDelayMs: 250 })
+        ? await client.closeAndWait(CODEX_ONE_SHOT_CLIENT_CLOSE_OPTIONS)
         : undefined;
     if (!result || result.cleanup === "uncertain") {
       throw new Error("Codex one-shot client cleanup could not be confirmed");
@@ -197,10 +209,7 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
       const ownedClient = state.releaseSharedClientLease ? state.client : undefined;
       releaseSharedClientLeaseOnce();
       if (ownedClient) {
-        const result = await ownedClient.closeAndWait({
-          exitTimeoutMs: 2_000,
-          forceKillDelayMs: 250,
-        });
+        const result = await ownedClient.closeAndWait(CODEX_ONE_SHOT_CLIENT_CLOSE_OPTIONS);
         if (params.oneShotCliRun && result.cleanup === "uncertain") {
           throw new Error("Codex isolated client cleanup could not be confirmed");
         }

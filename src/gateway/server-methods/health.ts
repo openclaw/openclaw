@@ -3,6 +3,8 @@ import type { ChannelAccountSnapshot } from "../../channels/plugins/types.public
 import { readChildRuntimeViability } from "../../infra/child-runtime-viability.js";
 import { formatErrorMessage as formatError } from "../../infra/errors.js";
 import { readGatewayMaintenanceWork } from "../../infra/gateway-active-work.js";
+import { getGatewayRecentCrashes } from "../../infra/gateway-crash.js";
+import { settleCurrentReadPreparations } from "../../shared/current-read-authority.js";
 import { prepareStatusSummary } from "../../status/summary.js";
 import { buildContextEngineHealthSummary } from "../health/context-engine.js";
 import { buildDeliveryQueueHealthSummary } from "../health/delivery-queue.js";
@@ -84,8 +86,10 @@ export const healthHandlers: GatewayRequestHandlers = {
         ...cachedState
       } = cached;
       // The queue owner reuses health facts until a write receipt or claim expiry invalidates them.
-      const deliveryQueues = await buildDeliveryQueueHealthSummary();
-      const contextEngines = await buildContextEngineHealthSummary();
+      const [deliveryQueues, contextEngines] = await settleCurrentReadPreparations([
+        buildDeliveryQueueHealthSummary(),
+        buildContextEngineHealthSummary(),
+      ] as const);
       // A reset sampler has no current window; never revive the cached reading.
       const eventLoop = getEventLoopHealth?.();
       respond(
@@ -103,6 +107,7 @@ export const healthHandlers: GatewayRequestHandlers = {
             : {}),
           // Live check. The cache must not keep a path that disappeared after it was stored.
           childRuntime: readChildRuntimeViability(),
+          recentCrashes: getGatewayRecentCrashes(),
         },
         undefined,
         { cached: true },
@@ -123,6 +128,7 @@ export const healthHandlers: GatewayRequestHandlers = {
           coreReady: context.getReadiness?.().coreReady,
           modelRuntime: getPreparedModelRuntimeStartupStatus(),
           childRuntime: readChildRuntimeViability(),
+          recentCrashes: getGatewayRecentCrashes(),
         },
         undefined,
       );
@@ -162,6 +168,7 @@ export const healthHandlers: GatewayRequestHandlers = {
         pid: process.pid,
         shutdownBudget: shutdownStatus,
         childRuntime: readChildRuntimeViability(),
+        recentCrashes: getGatewayRecentCrashes(),
         pluginReload: context.getPluginReloadStatus?.(),
       },
       undefined,

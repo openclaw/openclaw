@@ -1,6 +1,11 @@
 import { throwSqliteLifecycleErrors } from "../../infra/sqlite-lifecycle-errors.js";
 import type { DatabasePathIdentity } from "../../infra/sqlite-worker-identity.js";
-import { GatewayRetainedWorkScope } from "../../shared/async-work-scope.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { getSpawnBroker, runWithSpawnBroker } from "../../process/spawn-broker/context.js";
+import {
+  GatewayRetainedWorkScope,
+  isAsyncWorkScopeActiveHere,
+} from "../../shared/async-work-scope.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { runInDetachedAsyncContext } from "../../shared/detached-async-context.js";
 import { registerOpenClawStatePathAsyncResource } from "../../state/openclaw-state-db-cache.js";
@@ -12,6 +17,7 @@ import type { SandboxRegistryEntry } from "./registry.types.js";
 
 const lifetimes = new Map<string, ReturnType<typeof createLifetime>>();
 const HOUSEKEEPING_INTERVAL_MS = 5 * 60 * 1000;
+const log = createSubsystemLogger("sandbox");
 
 type RuntimeUseTarget =
   | { scopeKey: string; workspaceDir?: string }
@@ -23,6 +29,7 @@ function createLifetime({ admission }: OpenClawStateWorkerContext) {
   const work = new GatewayRetainedWorkScope();
   const slots = new Map<string, RuntimeSlot>();
   let housekeeping: Promise<void> | undefined;
+  let housekeepingRequested = false;
   let lastHousekeepingAtMs = -Infinity;
   let recurringHousekeeping:
     | { run: () => Promise<void>; onError: (error: unknown) => void }
@@ -34,7 +41,7 @@ function createLifetime({ admission }: OpenClawStateWorkerContext) {
   };
   const tickHousekeeping = () => {
     const recurring = recurringHousekeeping;
-    if (!recurring || work.isClosing || housekeeping) {
+    if (!recurring || (work.isClosing && !isAsyncWorkScopeActiveHere(work.scope)) || housekeeping) {
       return;
     }
     void owner.maybeRunHousekeeping(recurring.run).catch(recurring.onError);
@@ -87,7 +94,7 @@ function createLifetime({ admission }: OpenClawStateWorkerContext) {
       };
     },
     run<T>(run: () => Promise<T>): Promise<T> {
-      if (work.isClosing) {
+      if (work.isClosing && !isAsyncWorkScopeActiveHere(work.scope)) {
         return Promise.reject(new Error("Sandbox registry admission is closed"));
       }
       // Accepted removal owns its persistence signal across scheduler cancellation.
@@ -167,25 +174,43 @@ function createLifetime({ admission }: OpenClawStateWorkerContext) {
       if (housekeeping) {
         return housekeeping;
       }
+      if (work.isClosing && !isAsyncWorkScopeActiveHere(work.scope)) {
+        return Promise.reject(new Error("Sandbox registry admission is closed"));
+      }
       const now = Date.now();
-      if (now - lastHousekeepingAtMs < HOUSEKEEPING_INTERVAL_MS) {
+      if (!housekeepingRequested && now - lastHousekeepingAtMs < HOUSEKEEPING_INTERVAL_MS) {
         return Promise.resolve();
       }
       lastHousekeepingAtMs = now;
-      housekeeping = runInDetachedAsyncContext(() => owner.run(run)).finally(() => {
+      const broker = getSpawnBroker();
+      housekeeping = runInDetachedAsyncContext(() =>
+        runWithSpawnBroker(broker, () =>
+          work.scope.track(async () => {
+            do {
+              housekeepingRequested = false;
+              await run();
+            } while (housekeepingRequested);
+          }),
+        ),
+      ).finally(() => {
         housekeeping = undefined;
       });
       return housekeeping;
     },
-    startHousekeeping(run: () => Promise<void>, onError: (error: unknown) => void): void {
-      if (work.isClosing) {
+    startHousekeeping(
+      run: () => Promise<void>,
+      onError: (error: unknown) => void,
+      request = false,
+    ): void {
+      if (work.isClosing && !isAsyncWorkScopeActiveHere(work.scope)) {
         throw new Error("Sandbox registry admission is closed");
       }
-      if (recurringHousekeeping) {
-        return;
+      if (!recurringHousekeeping) {
+        const broker = getSpawnBroker();
+        recurringHousekeeping = { run: () => runWithSpawnBroker(broker, run), onError };
+        armHousekeepingTimer();
       }
-      recurringHousekeeping = { run, onError };
-      armHousekeepingTimer();
+      housekeepingRequested ||= request;
       tickHousekeeping();
     },
   };
@@ -224,7 +249,15 @@ export function withSandboxRegistrySettlement<T>(
 }
 
 export function prepareSandboxRegistryClose() {
-  return lifetime(captureOpenClawStateWorkerContext()).retainGateway();
+  const context = captureOpenClawStateWorkerContext();
+  const owner = lifetime(context);
+  const gateway = owner.retainGateway();
+  owner.startHousekeeping(
+    async () =>
+      (await import("./prune.js")).runSandboxPrune(() => context.admission.assertCurrent()),
+    (error) => log.error(`Sandbox recovery failed: ${String(error)}`),
+  );
+  return gateway;
 }
 
 /** A context holds its runtime scope; managed preparation also holds its exact projection. */
@@ -270,9 +303,10 @@ export function startSandboxRegistryHousekeeping(
   run: () => Promise<void>,
   onError: (error: unknown) => void,
   context = captureOpenClawStateWorkerContext(),
+  request = false,
 ): void {
   context.admission.assertCurrent();
-  lifetime(context).startHousekeeping(run, onError);
+  lifetime(context).startHousekeeping(run, onError, request);
 }
 
 /** Provider-confirmed removal keeps only exact terminal cleanup authority after read admission closes. */

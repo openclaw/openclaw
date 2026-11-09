@@ -256,4 +256,81 @@ struct GatewayChannelDeviceTokenRetryTests {
             await channel.shutdown()
         }
     }
+
+    @Test(arguments: [
+        (GatewayConnectAuthDetailCode.authTokenMismatch, true),
+        (GatewayConnectAuthDetailCode.authDeviceTokenMismatch, false),
+    ])
+    func `rejected stored device token is cleared when it was the only credential`(
+        detailCode: GatewayConnectAuthDetailCode,
+        canRetryWithDeviceToken: Bool) async throws
+    {
+        let tempDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+
+        try await DeviceIdentityStore.withStateDirectory(tempDir) {
+            let identity = DeviceIdentityStore.loadOrCreate()
+            let gatewayID = "revoked-device-token-test"
+            _ = DeviceAuthStore.storeToken(
+                deviceId: identity.deviceId,
+                role: "operator",
+                token: "revoked-device-token",
+                gatewayID: gatewayID)
+
+            // A revoked device (or reset gateway state) rejects every connect that presents the old token.
+            let recorder = ConnectAuthRecorder()
+            let session = GatewayTestWebSocketSession(taskFactory: {
+                GatewayTestWebSocketTask(
+                    sendHook: { _, message, sendIndex in
+                        if sendIndex == 0 { recorder.append(from: message) }
+                    },
+                    receiveHook: { task, receiveIndex in
+                        if receiveIndex == 0 {
+                            return .data(GatewayWebSocketTestSupport.connectChallengeData())
+                        }
+                        return .data(GatewayWebSocketTestSupport.connectAuthFailureData(
+                            id: task.snapshotConnectRequestID() ?? "connect",
+                            detailCode: detailCode.rawValue,
+                            canRetryWithDeviceToken: canRetryWithDeviceToken))
+                    })
+            })
+            let channel = try GatewayChannelActor(
+                url: #require(URL(string: "ws://example.invalid")),
+                token: nil,
+                session: WebSocketSessionBox(session: session),
+                connectOptions: GatewayConnectOptions(
+                    role: "operator",
+                    scopes: ["operator.read"],
+                    caps: [],
+                    commands: [],
+                    permissions: [:],
+                    clientId: "openclaw-ios-test",
+                    clientMode: "ui",
+                    clientDisplayName: "iOS Test",
+                    includeDeviceIdentity: true,
+                    deviceAuthGatewayID: gatewayID))
+            await channel._test_setConnectFailureBackoffWaitHandler {}
+
+            do {
+                try await channel.connect()
+                Issue.record("expected the revoked stored device token to be rejected")
+            } catch let error as GatewayConnectAuthError {
+                #expect(error.detail == detailCode)
+            }
+            #expect(DeviceAuthStore.loadToken(
+                deviceId: identity.deviceId,
+                role: "operator",
+                gatewayID: gatewayID) == nil)
+
+            // The next attempt no longer resends the rejected token.
+            _ = try? await channel.connect()
+            let firstAuth = try #require(recorder.auth(at: 0))
+            #expect(firstAuth["token"] as? String == "revoked-device-token")
+            #expect(session.snapshotMakeCount() >= 2)
+            #expect(recorder.auth(at: 1)?["token"] == nil)
+            await channel.shutdown()
+        }
+    }
 }

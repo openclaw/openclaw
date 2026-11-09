@@ -197,6 +197,11 @@ describe("plugin HTTP route runtime scopes", () => {
         hasAvatar: false,
         updatedAt: 1,
       };
+      const device = {
+        kind: "owner" as const,
+        peerKey: `iroh:${"ef".repeat(32)}`,
+        authority: { clawId: "route-claw", rootPub: "route-root", listedSeq: 1 },
+      };
       let scope: RuntimeScope;
       const response = await invoke(
         {
@@ -213,12 +218,17 @@ describe("plugin HTTP route runtime scopes", () => {
             trustDeclaredOperatorScopes: false,
             authenticatedUserProfile: profile,
             operatorRoleActor: { kind: "system" },
+            openclawIdPrincipal: device,
           },
         },
       );
       expect(response.handled).toBe(true);
       expect(scope?.client?.internal?.operatorRoleActor).toEqual(
         auth === "gateway" ? { kind: "system" } : undefined,
+      );
+      // Durable work dispatched from the route keeps the relayed device that authorized it.
+      expect(scope?.client?.internal?.openclawIdPrincipal).toEqual(
+        auth === "gateway" ? device : undefined,
       );
       expect(scope?.client?.authenticatedUserProfile).toEqual(
         auth === "gateway" ? profile : undefined,

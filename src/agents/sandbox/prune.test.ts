@@ -149,6 +149,7 @@ describe("maybePruneSandboxes", () => {
     const { acquireSandboxRuntimeUse, prepareSandboxRegistryClose } =
       await import("./registry-lifecycle.js");
     const { scheduleSandboxPrune } = await import("./prune.js");
+    vi.useFakeTimers({ toFake: ["Date", "setInterval", "clearInterval"] });
     const gateway = prepareSandboxRegistryClose();
     const held = await acquireSandboxRuntimeUse({ scopeKey: "shared" });
     configMocks.getRuntimeConfig.mockReturnValue({
@@ -162,7 +163,6 @@ describe("maybePruneSandboxes", () => {
         }),
       ],
     });
-    vi.useFakeTimers({ toFake: ["Date", "setInterval", "clearInterval"] });
     try {
       scheduleSandboxPrune(() => {});
       await maybePruneSandboxes();

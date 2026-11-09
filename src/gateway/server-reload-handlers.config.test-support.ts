@@ -154,8 +154,11 @@ export function createConfigWriteListenerRef(): ConfigWriteListenerRef {
   return { current: null };
 }
 
-export function publishConfigWrite(listener: ConfigWriteListener, event: ConfigWriteNotification) {
-  const application = createRuntimeConfigWriteApplication();
+export function publishConfigWrite(
+  listener: ConfigWriteListener,
+  event: ConfigWriteNotification,
+  application = createRuntimeConfigWriteApplication(),
+) {
   listener(attachRuntimeConfigWriteApplication(event, application));
   return application.result;
 }
@@ -206,6 +209,36 @@ export function createTestCronState(overrides: Partial<GatewayCronState> = {}): 
     reconcileStreamWatchers: vi.fn(async () => {}),
     stopStreamWatchers: vi.fn(async () => {}),
     ...overrides,
+  };
+}
+
+export function createHotReloadHandlerTestParams(
+  params: Pick<GatewayReloadHandlerParams, "scheduler" | "deps"> &
+    Partial<GatewayReloadHandlerParams>,
+  initialState = createDefaultGatewayReloadState(),
+): GatewayReloadHandlerParams {
+  let state: ReturnType<GatewayReloadHandlerParams["getState"]> = initialState;
+  return {
+    getState: () => state,
+    setState: (next) => {
+      state = next;
+    },
+    broadcast: vi.fn(),
+    getPluginRegistry: vi.fn(),
+    startChannel: vi.fn(async () => new Map()),
+    stopChannel: vi.fn(async () => {}),
+    releaseChannelRouteHandoffs: vi.fn(),
+    pruneInactiveChannelAccountState: vi.fn(),
+    reloadPlugins: vi.fn(async () => makePluginReloadResult()),
+    logHooks: createInfoWarnErrorLogger(),
+    logChannels: { info: vi.fn(), error: vi.fn() },
+    logCron: { error: vi.fn() },
+    logReload: createInfoWarnErrorLogger(),
+    cronReconciliation: {
+      arm: vi.fn(() => ({ complete: vi.fn(async () => {}) })),
+      invalidate: vi.fn(),
+    },
+    ...params,
   };
 }
 

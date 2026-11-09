@@ -19,7 +19,7 @@ import {
 } from "./session-entry-read-runtime.js";
 import type { PreparedSessionEntryWorkerRead } from "./session-entry-read-runtime.types.js";
 import { assertCapturedSessionEntryReadSource } from "./session-entry-read-source.js";
-import { readExactSessionEntriesWithLifecycle } from "./session-entry-read.worker.js";
+import { readExactSessionEntriesWithLifecycleAsync } from "./session-entry-read.worker.js";
 import * as preparation from "./session-transcript-worker-resources.js";
 
 it("projects worker discovery config while retaining the host configuration owner", () =>
@@ -107,30 +107,34 @@ it.each(["title", "retirement"] as const)("retains ordinary list source across %
   }),
 );
 
-it("reuses a live worker-prepared source without another qualification and rejects revoked custody", () =>
-  withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
-    const database = openOpenClawAgentDatabase({ agentId: "main", env });
-    const storePath = database.path;
-    const sessionKey = "agent:main:prepared";
-    replaceSessionEntrySync(
-      { agentId: "main", env, sessionKey },
-      { sessionId: "prepared", updatedAt: 1 },
-    );
-    await closeOpenClawAgentDatabasesAsync();
-    const qualify = vi.spyOn(preparation, "prepareSessionStoreCandidatesInWorker");
-    try {
-      await withArtifactPreservingStateReads(
-        () =>
+it.each([false, true])(
+  "reuses a live prepared source and rejects revoked custody (inspection=%s)",
+  (inspection) =>
+    withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
+      const database = openOpenClawAgentDatabase({ agentId: "main", env });
+      const storePath = database.path;
+      const sessionKey = "agent:main:prepared";
+      replaceSessionEntrySync(
+        { agentId: "main", env, sessionKey },
+        { sessionId: "prepared", updatedAt: 1 },
+      );
+      await closeOpenClawAgentDatabasesAsync();
+      const qualify = vi.spyOn(preparation, "prepareSessionStoreCandidatesInWorker");
+      try {
+        const read = () =>
           withSessionEntriesFromStoreInWorker(
             { agentId: "main", storePath, env, sessionKeys: [sessionKey], projection: "full" },
             async (outer) => {
-              const source = outer.result.snapshotSource;
+              const source = outer.result.snapshotSource ?? outer.result.source;
               expect(source).toBeDefined();
-              if (!source) {
+              if (!source || typeof source.databaseIdentity !== "string") {
                 throw new Error("Original source provenance missing");
               }
               const count = qualify.mock.calls.length;
               const caller = new AbortController();
+              const stat = vi.spyOn(fs, "statSync");
+              const realpath = vi.spyOn(fs.realpathSync, "native");
+              let ownerCalls = 0;
               const input = {
                 agentId: "main",
                 storePath,
@@ -139,30 +143,47 @@ it("reuses a live worker-prepared source without another qualification and rejec
                 projection: "full" as const,
                 preparedSource: {
                   ...source,
+                  databaseIdentity: source.databaseIdentity,
                   assertCurrent() {
-                    outer.assertCurrent();
-                    caller.signal.throwIfAborted();
+                    const before = stat.mock.calls.length + realpath.mock.calls.length;
+                    try {
+                      outer.assertCurrent();
+                      caller.signal.throwIfAborted();
+                    } finally {
+                      ownerCalls += stat.mock.calls.length + realpath.mock.calls.length - before;
+                    }
                   },
                 },
               };
-              await withSessionEntriesFromStoreInWorker(input, async (inner) => {
-                expect(inner.result.entries[0]?.entry.sessionId).toBe("prepared");
-                expect(inner.result.snapshotSource).toEqual(source);
-              });
-              expect(qualify.mock.calls.length).toBe(count);
-              caller.abort(new Error("caller revoked"));
-              await expect(
-                withSessionEntriesFromStoreInWorker(input, async () => undefined),
-              ).rejects.toThrow("caller revoked");
-              expect(qualify.mock.calls.length).toBe(count);
+              try {
+                await withSessionEntriesFromStoreInWorker(input, async (inner) => {
+                  expect(inner.result.entries[0]?.entry.sessionId).toBe("prepared");
+                  expect(inner.result.snapshotSource ?? inner.result.source).toEqual(source);
+                });
+                expect(qualify.mock.calls.length).toBe(count);
+                // The caller owns its live guard; this reader must not repeat its physical checks.
+                if (!inspection) {
+                  expect(stat.mock.calls.length + realpath.mock.calls.length - ownerCalls).toBe(0);
+                }
+                caller.abort(new Error("caller revoked"));
+                await expect(
+                  withSessionEntriesFromStoreInWorker(input, async () => undefined),
+                ).rejects.toThrow("caller revoked");
+                expect(qualify.mock.calls.length).toBe(count);
+              } finally {
+                stat.mockRestore();
+                realpath.mockRestore();
+              }
             },
-          ),
-        { agentDatabases: true },
-      );
-    } finally {
-      qualify.mockRestore();
-    }
-  }));
+          );
+        await (inspection
+          ? withArtifactPreservingStateReads(read, { agentDatabases: true })
+          : read());
+      } finally {
+        qualify.mockRestore();
+      }
+    }),
+);
 
 it("rejects a locator retargeted after worker qualification before the original snapshot read", () =>
   withOpenClawTestState({ scenario: "minimal" }, async (state) => {
@@ -304,32 +325,37 @@ it.each([
       );
       const sourcePath = database.path;
       await closeOpenClawAgentDatabasesAsync();
-      const prepare = snapshots.prepareSqliteReadOnlyLocationSync;
-      const cleanup = vi.fn<(value: ReturnType<typeof prepare>) => boolean>((snapshot) => {
-        expect(snapshot.cleanup()).toBe(true);
-        expect(fs.existsSync(snapshot.location)).toBe(false);
-        return !cleanupFails;
-      });
+      const prepare = snapshots.prepareSqliteReadOnlyLocationAwaited;
+      const cleanup = vi.fn<(value: Awaited<ReturnType<typeof prepare>>) => Promise<boolean>>(
+        async (snapshot) => {
+          expect(await snapshot.cleanupAsync()).toBe(true);
+          expect(fs.existsSync(snapshot.location)).toBe(false);
+          return !cleanupFails;
+        },
+      );
       const capture = vi
-        .spyOn(snapshots, "prepareSqliteReadOnlyLocationSync")
-        .mockImplementation((...args) => {
-          const snapshot = prepare(...args);
+        .spyOn(snapshots, "prepareSqliteReadOnlyLocationAwaited")
+        .mockImplementation(async (...args) => {
+          const snapshot = await prepare(...args);
           if (missing) {
             fs.unlinkSync(snapshot.location);
           }
-          return { ...snapshot, cleanup: () => cleanup(snapshot) };
+          return { ...snapshot, cleanupAsync: () => cleanup(snapshot) };
         });
       try {
-        expect(() =>
-          readExactSessionEntriesWithLifecycle({
-            kind: "session-exact-entries",
-            database: { agentId: "main", path: sourcePath },
-            env,
-            sessionKeys: [sessionKey],
-            projection: "full",
-            preserveSourceArtifacts: true,
-          }),
-        ).toThrow(
+        await expect(
+          readExactSessionEntriesWithLifecycleAsync(
+            {
+              kind: "session-exact-entries",
+              database: { agentId: "main", path: sourcePath },
+              env,
+              sessionKeys: [sessionKey],
+              projection: "full",
+              preserveSourceArtifacts: true,
+            },
+            new AbortController().signal,
+          ),
+        ).rejects.toThrow(
           missing
             ? "Session entry read lost its captured physical owner"
             : "Session authority snapshot cleanup failed",

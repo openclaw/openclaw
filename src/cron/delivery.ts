@@ -1,6 +1,7 @@
 /** Channel notifications share outbound's durable send and conversation-write owner. */
 import type { ReplyPayload } from "../auto-reply/reply-payload.js";
 import type { NormalizeReplySkipReason } from "../auto-reply/reply/normalize-reply-skip-reason.js";
+import { createMessageReceiptFromOutboundResults } from "../channels/message/receipt.js";
 import { createChannelReplyTransform } from "../channels/message/reply-transform.js";
 import {
   durableMessageBatchMayHaveReachedRecipient,
@@ -33,7 +34,7 @@ import {
   normalizeDirectCronDeliveryPayloads,
 } from "./isolated-agent/delivery-payload-normalization.js";
 import { createCronExecutionId } from "./run-id.js";
-import type { CronJob } from "./types.js";
+import type { CronDeliveryTrace, CronJob } from "./types.js";
 export { resolveCronDeliveryPlan } from "./delivery-plan.js";
 
 type CronAnnounceTarget = {
@@ -72,6 +73,7 @@ export async function sendCronAnnouncePayloadStrict(params: {
     deliveryAttemptFence: CronCompletionDeliveryFence | null;
   };
   onDeliveryAttempt?: (reachedRecipient: boolean) => void;
+  onDeliveryReceipt?: (receipt: NonNullable<CronDeliveryTrace["receipts"]>[number]) => void;
 }): Promise<CronAnnounceResult> {
   const delivery = params.target;
   params.abortSignal.throwIfAborted();
@@ -185,7 +187,21 @@ export async function sendCronAnnouncePayloadStrict(params: {
           assertDirectAdapterHandoff: fence?.assertCurrent,
           onDeliveredPayload: ({ hookContent, ...payload }) =>
             deliveredPayloads.push({ ...payload, spokenText: hookContent }),
-          onDeliveryResult: () => {
+          onDeliveryResult: (deliveryResult) => {
+            if (params.onDeliveryReceipt) {
+              const receipt = createMessageReceiptFromOutboundResults({
+                results: [deliveryResult],
+              });
+              for (const part of receipt.parts) {
+                params.onDeliveryReceipt({
+                  channel: part.raw?.channel ?? deliveryResult.channel,
+                  to: part.raw?.target?.id ?? deliveryResult.target?.id ?? delivery.to,
+                  accountId: delivery.accountId,
+                  threadId: part.threadId ?? delivery.threadId,
+                  messageId: part.platformMessageId,
+                });
+              }
+            }
             if (!recipientReached) {
               recipientReached = true;
               params.onDeliveryAttempt?.(true);

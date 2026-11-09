@@ -47,6 +47,9 @@ command handling is enabled for the surface.
       and an adjacent separator (or its own line ending when alone on a line)
       are removed. Text with no recognized directive is unchanged.
       Added prompt context is not scanned for text commands or stripped as directives.
+    - Ordinary prose such as `How does /queue work?` stays unchanged. Native
+      `/queue` commands and explicit `/queue:` syntax still validate their arguments;
+      a mistyped mode such as `/queue backlog` still produces an error.
     - In **directive-only** messages (the message is only directives), they
       persist to the session and reply with an acknowledgement. Both the literal
       command and its delivered acknowledgement are retained as user/assistant
@@ -70,7 +73,9 @@ command handling is enabled for the surface.
 Command replies delivered through the shared dispatcher are part of the conversation
 on every channel. Native command menus and button selections on Discord and
 Telegram, Slack argument menus, and Mattermost model pickers are also retained after delivery.
-These exchanges appear in session history and later model context.
+These exchanges appear in session history and later model context, except read-only
+`/status` replies: their command and reply remain visible in history but do not enter
+model context or interrupt an active turn.
 Login codes, pairing codes,
 login URLs, and sensitive `/config set` or `/debug set` values are redacted in the
 recorded copy; delivered instructions and command execution are unchanged.
@@ -78,6 +83,33 @@ recorded copy; delivered instructions and command execution are unchanged.
 without changing the old transcript. `/stop` records the command with its abort
 notice. `/btw` and `/side` remain ephemeral; ordinary message edits and deletions
 do not rewrite transcript history.
+
+## Fork a conversation
+
+Use /fork [title] in a Telegram forum topic to create a sibling topic in the
+same supergroup. Thread bindings must be enabled and the bot needs **Manage
+Topics**. DMs, channel-direct topics, and unthreaded groups are not supported.
+The original topic keeps its session; future replies in the new topic use the
+copied session. The new topic has the same supergroup audience.
+
+The new topic starts with a literal recap of the last three available visible
+text messages. This recap is not the context limit: the session fork inherits the
+existing conversation snapshot. Hidden reasoning and tool output are not posted.
+Links and mentions in copied excerpts do not notify people or expand previews.
+A busy source forks through its last completed turn, not an in-flight partial
+answer. A fork does not clone the workspace or undo file and external effects.
+
+In the Control UI, typed `/fork [title]` uses the same operation as **Fork
+conversation** and selects the new session. Inherited messages already appear in
+history, so the UI does not insert a duplicate recap. **Fork from here** remains
+the separate message-level action that cuts before the selected user message.
+
+Session ancestry and the exact inherited history cut use the existing session
+fork records. Channel setup and recap delivery can fail independently: the
+command reports whether the copied session, native thread, and recap were
+confirmed. A known copied session or created thread is retained after a later
+failure. Check that outcome and the thread list before retrying; do not assume a
+failed acknowledgment means nothing was created.
 
 <a id="config" />
 
@@ -234,6 +266,7 @@ plugins, and installed skills.
     | `/new [model]` | Archive the current session and start a fresh one |
     | `/reset [soft [message]]` | Reset the current session in place. `soft` keeps the transcript, drops reused CLI backend session ids, and reruns startup |
     | `/name <title>` | Name or rename the current session. Omit the title to see the current name and a suggestion |
+    | `/fork [title]` | Copy the current conversation into an independent session; supported channel threads create a sibling thread |
     | `/compact [instructions]` | Compact the session context. See [Compaction](/concepts/compaction) |
     | `/stop` | Abort the current run |
     | `/session idle <duration\|off>` | Manage thread-binding idle expiry |
@@ -278,7 +311,6 @@ plugins, and installed skills.
     | `/exec host=<auto\|sandbox\|gateway\|node> security=<deny\|allowlist\|full> ask=<off\|on-miss\|always> node=<id>` | Show resolved exec defaults; persist host/node placement, apply security/ask to this message only. See [Session permission modes](/gateway/permission-modes) |
     | `/login [provider]` | Show sign-in providers, then choose a connection method when several are available. Owner/admin only |
     | `/login refresh` | Refresh saved sign-in status without signing in again. Owner/admin only |
-    | `/login access <provider>` | Reopen model-access choices for a provider without signing in again. Owner/admin only |
     | `/model [name\|default\|list\|status] [-s\|--session\|-a\|--agent\|-g\|--global]` | Show or select a model. `-s` changes only this session; owner/admin `-a` and `-g` also update configured defaults |
     | `/models [provider] [page] [limit=<n>\|all]` | List configured/auth-available providers or models |
     | `/queue <mode>` | Manage active-run queue behavior. See [Queue](/concepts/queue) and [Queue steering](/concepts/queue-steering) |
@@ -308,7 +340,7 @@ plugins, and installed skills.
         | Update the global default | `/model <model> -g` (or `--global`) | Changes this session and requests an update for `agents.defaults.model` |
         | Use the configured default again | `/model default -s` | Clears this session's model selection without writing defaults; compatible auth pins remain and incompatible pins clear |
 
-        With `modelSelectionScope` unset, `/model <model>` changes only the current session, including for owners/admins. Without owner/admin authority, bare commands remain session-only and explicit `-a` and `-g` requests are rejected. Selecting the effective configured default clears the session model pin, but agent/global scope still requests the configured-default write. Immutable configuration stays unchanged. Asynchronous write errors do not revert the session selection.
+        With `modelSelectionScope` unset, `/model <model>` changes only the current session, including for owners/admins. Without owner/admin authority, bare commands remain session-only and explicit `-a` and `-g` requests are rejected. Selecting the effective configured default clears the session model pin, but agent/global scope still requests the configured-default write. Immutable configuration stays unchanged. Requested default updates continue after the command reply; asynchronous write errors do not revert the session selection.
 
         - If the agent is idle, the next run uses it right away.
         - If a run is active, the switch is marked pending and applied at the next clean retry point.
@@ -374,14 +406,22 @@ list of requirements reaches the agent complete.
     | `/plugins list\|inspect\|show\|get\|install\|enable\|disable` | `commands.plugins: true` | Inspect or mutate plugin state. Owner-only for writes. Alias: `/plugin` |
     | `/debug show\|set\|unset\|reset` | `commands.debug: true` | Runtime-only config overrides. Owner-only |
     | `/restart` | `commands.restart: true` (default) | Restart OpenClaw |
-    | `/update` | `commands.restart: true` (default), owner | Update OpenClaw using its configured update channel; works with default tool profiles and sends a completion or failure notice in the same chat |
+    | `/update` | `commands.restart: true` (default), owner | Update OpenClaw using its configured update channel; works with default tool profiles. See notice delivery rules below |
     | `/send on\|off\|inherit` | owner | Set send policy |
 
     Natural-language update requests use the `gateway` tool's `update.run`
     action. `/update` provides the same update operation without requiring a
     functioning model or access to that tool. Both use the Gateway update
     handler, also used by the Control UI. Chat access alone does not grant
-    permission to update. See
+    permission to update.
+
+    External update notices go only to destinations listed in
+    `commands.ownerAllowFrom` or a linked administrator's direct conversation,
+    and require the destination account's `actions.sendMessage` policy to allow
+    sends. Group and channel chats do not inherit a person's owner authority.
+    If a notice is skipped, the outcome stays in the update run record and
+    Control UI; the notice is not redirected to another chat. Internal sessions
+    can receive notices in their transcript. See
     [Updating from chat](/install/updating#from-chat).
 
   </Accordion>
@@ -482,6 +522,10 @@ Numeric selections such as `/model 3` are not supported.
 /model default     # use configured default, following the selected scope
 /model status      # detailed view with endpoint and API mode
 ```
+
+For plain-text model browsing, `/models openai limit=5` selects a custom page size
+(`size=5` is an alias). Emitted **More** and out-of-range **Try** commands retain
+that size; omit it for the default 20 models per page, or use `all` to disable pagination.
 
 On Discord, the bare native `/model` and `/models` commands open an interactive
 picker. Choose a provider and model from the dropdowns, then select **Submit**.
@@ -649,7 +693,7 @@ See [BTW side questions](/tools/btw) for the full behavior.
     - Native commands entering shared reply dispatch restore an archived command-source session in place before execution. The session ID and history are retained. Restart-recovery tombstones, active worker placement, and non-human or unauthorized requests remain blocked with recovery guidance; archive and retention policies are unchanged. Discord's direct status and picker shortcuts do not use this dispatch path.
     - **`/login`** requires a private chat or Control UI session. It shows provider buttons without starting sign-in. API keys and local setup use the Control UI handoff. `/login codex` still selects OpenAI device pairing. Retry messages name the exact connection command.
     - **`/login openrouter`** sends a browser sign-in action through the Gateway's managed HTTPS address. Approve access in your browser, then return to chat for the saved result. See [OpenRouter](/providers/openrouter#getting-started) for address requirements. Use `/login cancel` to cancel a pending sign-in.
-    - After login, model restrictions can prompt **Show all provider models** or **Keep current restrictions**. Credentials stay saved either way, and the question does not block another sign-in. An expired question or changed restrictions opens a fresh choice without signing in again. `/login cancel` can cancel the pending question without removing saved credentials.
+    - After login, if model restrictions hide every model of the provider, OpenClaw adds `<provider>/*` to them and says so in the completion message. Restrictions that already name some of the provider's models stay unchanged.
     - Chat login applies saved credentials directly to the running Gateway. If sign-in status cannot be confirmed, use `/login refresh`, then `/models`; you do not need to repeat authentication.
     - **`/stop`** targets the active chat session to abort the selected run and stop its ordinary Gateway or sandbox commands, including commands that already yielded a process handle. Later model runs, commands, and queued input remain untouched while Stop prepares cancellation. It waits for command cleanup and reports an error if cleanup cannot be confirmed. Services started with `background: true` keep running; stop those separately with their process handle.
 
@@ -664,6 +708,7 @@ See [BTW side questions](/tools/btw) for the full behavior.
     - Command-only messages from allowlisted senders are handled immediately (bypass queue + model).
     - Inline shortcuts (`/help`, `/commands`, `/status`, `/whoami`) also work embedded in normal messages and are stripped before the model sees the remaining text.
     - In Control UI, every non-skill slash command can be selected in the middle of a draft. The command runs separately, only the command invocation is removed, and the surrounding draft remains unsent.
+    - A later slash token at the caret keeps its completion menu even when the draft starts with another command. Enter or clicking a command runs only that invocation; Tab completes without sending. Active freeform argument collection still owns slash-like argument text.
     - In Control UI (WebChat), selecting a skill from slash completion inserts the existing `$skill-name` reference into the message (for example, `Please use $weather to check Sydney`).
     - Inline command dispatch follows the same connection, permission, and confirmation checks as sending that command by itself. Typing slash-like prose without selecting or submitting the completion does not execute it.
     - On external channels, unauthorized text command-only messages are silently ignored. Inline `/...` tokens are treated as plain text. Native `/compact` returns an authorization refusal when a channel-admitted sender cannot use the command. Reset denials show a permission reply only when the request and reply stay in WebChat.

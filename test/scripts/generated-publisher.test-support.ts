@@ -273,9 +273,13 @@ export function prepareGeneratedPublisherFixture(
 
       const branchRef = "refs/heads/" + headBranch;
       const originGit = (...args: string[]) => runGit(root, ["--git-dir", origin, ...args]);
-      const branchExists =
-        spawnSync("git", ["--git-dir", origin, "show-ref", "--verify", branchRef]).status === 0;
-      const branchHead = branchExists ? originGit("rev-parse", branchRef) : "";
+      const branch = spawnSync(
+        "git",
+        ["--git-dir", origin, "show-ref", "--verify", "--hash", branchRef],
+        { encoding: "utf8" },
+      );
+      const branchExists = branch.status === 0;
+      const branchHead = branchExists ? branch.stdout.trim() : "";
       const generated = (file: string) =>
         branchExists ? originGit("show", `${branchRef}:generated/${file}.txt`) : "";
       return {

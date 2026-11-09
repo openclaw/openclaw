@@ -10,6 +10,8 @@ import {
 export type ContextEntry = SessionTreeEntry & { seq: number };
 export type ModelContextRequest = {
   entry: ContextEntry;
+  /** The payload stays at its acceptance row; this marker owns its model-visible position. */
+  placement?: ContextEntry;
   omitCheckpoint: boolean;
   toolResultOmission?: string;
 };
@@ -159,9 +161,12 @@ export function selectBoundedModelRequests(
     }
   }
   // A large newest atomic frame may consume the headroom without exceeding the hard cap.
+  // A cut that starts on the trailing user message keeps only the prompt the caller
+  // removes before inference, so an oversized previous turn would leave no history.
   const latestTurnStart = turnStarts.at(-1) ?? candidates.length;
+  const trailingPromptOnly = latestTurnStart === candidates.length - 1 && cut === latestTurnStart;
   let selected = candidates.slice(
-    cut === candidates.length || cut > latestTurnStart ? fallbackCut : cut,
+    cut === candidates.length || cut > latestTurnStart || trailingPromptOnly ? fallbackCut : cut,
   );
   // A discarded prefix no longer needs savings from retained tool results.
   // Recount after turn/frame closure, then restore newest affordable bodies.

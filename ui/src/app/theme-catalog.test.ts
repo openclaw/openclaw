@@ -142,6 +142,30 @@ it.each([
   },
 );
 
+it("publishes the catalog without reapplying a built-in palette", async () => {
+  patchSettings({ theme: "claw", themeMode: "light" });
+  const { gateway, current } = createGatewayStoreTestStore();
+  const theme = createApplicationTheme(loadSettings(), gateway);
+  const palette = theme.appliedPalette;
+  const styleWrites = vi.spyOn(document.documentElement.style, "setProperty");
+  gateway.start();
+  current().request.mockResolvedValue(builtinCatalog());
+  current().testOptions.onHello?.(GATEWAY_STORE_TEST_HELLO);
+  try {
+    await vi.waitFor(() => expect(theme.catalog?.themes).toContainEqual(descriptor));
+    expect(theme.appliedPalette).toBe(palette);
+    expect(styleWrites).not.toHaveBeenCalled();
+    current().testOptions.onEvent?.(createGatewayEvent("plugins.changed"));
+    await vi.waitFor(() => expect(current().request).toHaveBeenCalledTimes(2));
+    expect(theme.appliedPalette).toBe(palette);
+    expect(styleWrites).not.toHaveBeenCalled();
+  } finally {
+    theme.dispose();
+    gateway.stop();
+    styleWrites.mockRestore();
+  }
+});
+
 it("notifies leaf branding consumers when a newly selected built-in palette loads", async () => {
   const { gateway, current } = createGatewayStoreTestStore();
   const theme = createApplicationTheme(loadSettings(), gateway);
@@ -662,3 +686,21 @@ it.each(["Appearance discovery", "profile selection"] as const)(
     }
   },
 );
+
+it("preserves startup palette validation errors until Settings can localize them", async () => {
+  const { gateway, current } = createGatewayStoreTestStore();
+  const applicationTheme = createApplicationTheme(loadSettings(), gateway);
+  gateway.start();
+  const malformed = createThemeDefinitionFixture({
+    light: createThemePaletteFixture({ background: "" }),
+  });
+  current().request.mockResolvedValue(catalog(malformed));
+  current().testOptions.onHello?.({ ...GATEWAY_STORE_TEST_HELLO });
+  try {
+    await vi.waitFor(() => expect(applicationTheme.catalog?.error).toBeInstanceOf(Error));
+    expect(applicationTheme.catalog?.error).toMatchObject({ message: "background" });
+  } finally {
+    applicationTheme.dispose();
+    gateway.stop();
+  }
+});

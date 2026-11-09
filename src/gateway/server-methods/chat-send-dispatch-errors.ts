@@ -1,3 +1,7 @@
+import {
+  collectNestedErrorCandidates,
+  extractErrorCode,
+} from "@openclaw/normalization-core/error-coercion";
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import { classifyAgentRunTerminalOutcome } from "../../agents/agent-run-terminal-outcome.js";
 import type { AgentRunTerminalOutcome } from "../../agents/agent-run-terminal-outcome.types.js";
@@ -11,6 +15,7 @@ import { DispatchSessionRefreshRequiredError } from "../../auto-reply/reply/disp
 import { readAgentRunTerminalOutcome } from "../../channels/turn/agent-run-terminal-outcome.js";
 import { SessionGoalOperationError } from "../../config/sessions/goals-operations.js";
 import { clearAgentRunContext, getAgentRunContext } from "../../infra/agent-run-registry.js";
+import { classifyGatewayStorageFailure } from "../../infra/sqlite-error-diagnostics.js";
 import {
   getRpcSourceIdentity,
   getRpcSourceLifecycleGeneration,
@@ -28,6 +33,7 @@ import { ExpectedProfileMismatchError } from "../expected-profile.js";
 import { chatAbortMarkerTimestampMs, type ChatAbortMarker } from "../server-chat-state.js";
 import { persistGatewaySessionLifecycleEvent } from "../session-lifecycle-state.js";
 import { SessionMutationAuthorizationChangedError } from "../session-mutation-authorization-error.js";
+import { WORKSPACE_RESULT_LIMIT_ERROR_CODE } from "../worker-environments/workspace-inventory-limits.js";
 import { formatForLog } from "../ws-log.js";
 import { buildAbortedChatSendPayload } from "./chat-abort-authorization.js";
 import { broadcastChatError, broadcastChatTerminal } from "./chat-broadcast.js";
@@ -126,10 +132,32 @@ type PendingDispatchLifecycleError = {
   endedAt: number;
   error: string;
   errorKind?: "state_contention";
+  notice?: string;
+  desktopNotice?: string;
   sessionId: string;
   lifecycleRevision?: string;
   startedAt: number;
 };
+
+function resolveDesktopChatSendErrorNotice(error: unknown): string | undefined {
+  // Provisioning preserves the typed cause; never expose its paths or raw diagnostics.
+  if (
+    collectNestedErrorCandidates(error).some(
+      (candidate) => extractErrorCode(candidate) === WORKSPACE_RESULT_LIMIT_ERROR_CODE,
+    )
+  ) {
+    return "This workspace exceeds OpenClaw's file or size limits.";
+  }
+  const storageFailure = classifyGatewayStorageFailure(error);
+  const notice =
+    storageFailure === "SQLITE_BUSY" || storageFailure === "SQLITE_LOCKED"
+      ? "The request was interrupted because OpenClaw storage is busy."
+      : (resolveChatSendStorageErrorMessage(error) ??
+        renderAgentHarnessPreflightUserMessage(error, { audience: "desktop" }) ??
+        renderFailoverCodeUserCopy(describeFailoverError(error).code));
+  // Desktop notices state the failure, without the following recovery advice.
+  return notice?.split(/(?<=[.!?])\s+|\r?\n/u, 1)[0];
+}
 
 function formatChatSendError(error: unknown): string {
   if (error instanceof DispatchSessionRefreshRequiredError) {
@@ -358,6 +386,7 @@ export function createChatSendDispatchErrorLifecycle(params: {
     }
     const errorMessage = formatChatSendError(err);
     const errorKind = resolveStateContentionPresentation(err)?.errorKind;
+    const desktopNotice = resolveDesktopChatSendErrorNotice(err);
     const queuedFollowupEnqueued = isQueuedFollowupEnqueued();
     if (queuedFollowupEnqueued) {
       context.logGateway.warn(
@@ -432,6 +461,7 @@ export function createChatSendDispatchErrorLifecycle(params: {
         endedAt: Date.now(),
         error: errorMessage,
         errorKind,
+        desktopNotice,
         sessionId: getRpcSourceIdentity(activeRunAbort.entry).sessionId,
         lifecycleRevision:
           session.entry?.lifecycleRevision ?? admission.initialSessionEntry?.lifecycleRevision,
@@ -483,6 +513,94 @@ export function createChatSendDispatchErrorLifecycle(params: {
         publish();
       }
     }
+  };
+
+  const persistLifecycleError = async (dispatchError: PendingDispatchLifecycleError) => {
+    try {
+      // A yielded source can still hold its own controller claim. The
+      // exact writer gate permits its failure without ending a successor.
+      await persistGatewaySessionLifecycleEvent({
+        sessionKey,
+        ...(agentId ? { agentId } : {}),
+        expectedWriter: {
+          ...(dispatchError.allowUnstartedFailure ? { allowUnstartedFailure: true } : {}),
+          runId: clientRunId,
+          sessionId: dispatchError.sessionId,
+          lifecycleRevision: dispatchError.lifecycleRevision,
+        },
+        assertCommitAllowed: () => {
+          if (!isSourceCurrent()) {
+            throw new Error("Chat input was replaced before its failure could be persisted");
+          }
+        },
+        event: {
+          runId: clientRunId,
+          sessionId: dispatchError.sessionId,
+          lifecycleGeneration,
+          ts: dispatchError.endedAt,
+          data: {
+            phase: "error",
+            startedAt: dispatchError.startedAt,
+            endedAt: dispatchError.endedAt,
+            error: dispatchError.error,
+            errorKind: dispatchError.errorKind,
+            ...(dispatchError.notice ? { errorNotice: dispatchError.notice } : {}),
+            ...(dispatchError.desktopNotice
+              ? { desktopErrorNotice: dispatchError.desktopNotice }
+              : {}),
+            ...dispatchError.terminationFields,
+          },
+        },
+      });
+      if (!hidden && !dispatchError.terminationFields.aborted) {
+        await admission.recordFailureNotice?.({
+          runId: clientRunId,
+          error: dispatchError.error,
+          errorKind: dispatchError.errorKind,
+          notice: dispatchError.notice,
+        });
+      }
+      emitSessionsChanged(context, {
+        sessionKey,
+        ...(agentId ? { agentId } : {}),
+        reason: "chat.dispatch-error",
+      });
+    } catch (persistErr: unknown) {
+      context.logGateway.warn(
+        `webchat session lifecycle persist failed after error: ${formatForLog(persistErr)}`,
+      );
+    }
+  };
+
+  /**
+   * Preparation (memory flush, preflight compaction, sandbox setup) can return a
+   * failure before any runtime lifecycle exists. Record it as this run's durable
+   * terminal so history and other clients show the outcome, not only the live broadcast.
+   */
+  let unstartedDesktopNotice: string | undefined;
+  const captureUnstartedFailure = (error: unknown): never => {
+    // Source completion flattens this error before delivering the unstarted terminal.
+    unstartedDesktopNotice = resolveDesktopChatSendErrorNotice(error);
+    throw error;
+  };
+
+  const recordUnstartedFailure = async (failure: { error: string; notice?: string }) => {
+    if (suppressLifecycle || params.isAgentRunStarted()) {
+      return;
+    }
+    await persistLifecycleError({
+      allowUnstartedFailure: true,
+      terminationFields: {},
+      endedAt: Date.now(),
+      ...failure,
+      errorKind: resolveStateContentionPresentation(failure.error)?.errorKind,
+      notice: failure.notice,
+      desktopNotice: unstartedDesktopNotice,
+      sessionId: getRpcSourceIdentity(activeRunAbort.entry).sessionId,
+      lifecycleRevision:
+        session.entry?.lifecycleRevision ?? admission.initialSessionEntry?.lifecycleRevision,
+      startedAt: getRpcSourceStartedAt(activeRunAbort.entry) ?? now,
+    });
   };
 
   const finalize = async () => {
@@ -543,55 +661,7 @@ export function createChatSendDispatchErrorLifecycle(params: {
       });
       clearAgentRunContext(clientRunId, lifecycleGeneration);
       context.removeChatRun(clientRunId, clientRunId, sessionKey);
-      try {
-        // A yielded source can still hold its own controller claim. The
-        // exact writer gate permits its failure without ending a successor.
-        await persistGatewaySessionLifecycleEvent({
-          sessionKey,
-          ...(agentId ? { agentId } : {}),
-          expectedWriter: {
-            ...(dispatchError.allowUnstartedFailure ? { allowUnstartedFailure: true } : {}),
-            runId: clientRunId,
-            sessionId: dispatchError.sessionId,
-            lifecycleRevision: dispatchError.lifecycleRevision,
-          },
-          assertCommitAllowed: () => {
-            if (!isSourceCurrent()) {
-              throw new Error("Chat input was replaced before its failure could be persisted");
-            }
-          },
-          event: {
-            runId: clientRunId,
-            sessionId: dispatchError.sessionId,
-            lifecycleGeneration,
-            ts: dispatchError.endedAt,
-            data: {
-              phase: "error",
-              startedAt: dispatchError.startedAt,
-              endedAt: dispatchError.endedAt,
-              error: dispatchError.error,
-              errorKind: dispatchError.errorKind,
-              ...dispatchError.terminationFields,
-            },
-          },
-        });
-        if (!hidden && !dispatchError.terminationFields.aborted) {
-          await admission.recordFailureNotice?.({
-            runId: clientRunId,
-            error: dispatchError.error,
-            errorKind: dispatchError.errorKind,
-          });
-        }
-        emitSessionsChanged(context, {
-          sessionKey,
-          ...(agentId ? { agentId } : {}),
-          reason: "chat.dispatch-error",
-        });
-      } catch (persistErr: unknown) {
-        context.logGateway.warn(
-          `webchat session lifecycle persist failed after error: ${formatForLog(persistErr)}`,
-        );
-      }
+      await persistLifecycleError(dispatchError);
     } finally {
       try {
         publishDispatchError?.();
@@ -602,5 +672,12 @@ export function createChatSendDispatchErrorLifecycle(params: {
     }
   };
 
-  return { broadcastError, classifyFailure, finalize, handleError };
+  return {
+    broadcastError,
+    captureUnstartedFailure,
+    classifyFailure,
+    finalize,
+    handleError,
+    recordUnstartedFailure,
+  };
 }

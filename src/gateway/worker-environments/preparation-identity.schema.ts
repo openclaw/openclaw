@@ -38,17 +38,17 @@ const Preparation = z
   })
   .strict();
 
-const EmptyPreparation = Preparation.omit({
+const RuntimePreparation = Preparation.omit({
   setupRecipe: true,
   runSetupScript: true,
   recipe: true,
 }).extend({
-  source: z.literal("empty"),
+  source: z.enum(["empty", "image"]),
 });
 
 export type WorkerPreparationArtifacts = z.infer<typeof WorkerPreparationArtifactsSchema>;
 export type WorkerProjectPreparationIdentity = z.infer<typeof Preparation>;
-export type WorkerEmptyPreparationIdentity = z.infer<typeof EmptyPreparation>;
+export type WorkerRuntimePreparationIdentity = z.infer<typeof RuntimePreparation>;
 
 /** Immutable artifact facts are separate from the reserve's demand/expiry/consumption tuple. */
 export function readWorkerProjectPreparation(
@@ -66,11 +66,11 @@ export function readWorkerProjectPreparation(
 
 export function readWorkerPreparation(
   profile: Readonly<Record<string, unknown>>,
-): WorkerProjectPreparationIdentity | undefined {
+): WorkerProjectPreparationIdentity | WorkerRuntimePreparationIdentity | undefined {
   if (profile.runtimePreparation === undefined) {
     return readWorkerProjectPreparation(profile.project);
   }
-  const parsed = EmptyPreparation.safeParse(profile.runtimePreparation);
+  const parsed = RuntimePreparation.safeParse(profile.runtimePreparation);
   if (!parsed.success || profile.project !== undefined) {
     throw new Error("Worker runtime preparation identity is invalid");
   }
@@ -79,10 +79,10 @@ export function readWorkerPreparation(
 
 export function workerPreparationSourceKey(profile: Readonly<Record<string, unknown>>) {
   if (profile.runtimePreparation !== undefined) {
-    readWorkerPreparation(profile);
+    const preparation = readWorkerPreparation(profile);
     // Capacity spans runtime generations; the preparation key separately fences
     // claims by namespace, settings, execution mode, and exact artifacts.
-    return "empty";
+    return preparation && "source" in preparation ? preparation.source : undefined;
   }
   return isRecord(profile.project) ? Digest.parse(profile.project.key) : undefined;
 }

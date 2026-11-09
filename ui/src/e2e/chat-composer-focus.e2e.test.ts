@@ -9,6 +9,14 @@ const expectFocus = (locator: Locator, focused = true) =>
   expect
     .poll(() => locator.evaluate((element) => document.activeElement === element))
     .toBe(focused);
+const expectActiveOption = (option: Locator) =>
+  expect
+    .poll(() =>
+      option.evaluate(
+        (element) => document.activeElement?.getAttribute("aria-activedescendant") === element.id,
+      ),
+    )
+    .toBe(true);
 
 const measureComposer = (composer: Locator) =>
   composer.evaluate(async (element) => {
@@ -52,7 +60,7 @@ async function openAgentPicker(page: Page) {
     picker,
     trigger: picker.locator(".agent-select__trigger"),
     menu: picker.locator(".agent-select__menu"),
-    option: picker.getByRole("menuitemradio", { name: "research", exact: true }),
+    option: picker.getByRole("option", { name: "research", exact: true }),
     composer: page.locator(".new-session-page__message"),
   };
 }
@@ -103,11 +111,11 @@ suite.define(() => {
       await trigger.waitFor({ state: "visible" });
       await trigger.focus();
       await page.keyboard.press("Enter");
-      // Opening initializes the selected row after its animation completes.
-      const selected = picker.getByRole("menuitemradio", { name: "main", exact: true });
-      await expectFocus(selected);
+      // The list retains focus while its active descendant follows navigation.
+      const selected = picker.getByRole("option", { name: "main", exact: true });
+      await expectActiveOption(selected);
       await page.keyboard.press("ArrowDown");
-      await expectFocus(option);
+      await expectActiveOption(option);
 
       await page.keyboard.press("Space");
 
@@ -120,17 +128,18 @@ suite.define(() => {
 
       await trigger.focus();
       await page.keyboard.press("Enter");
-      await expectFocus(option);
+      await expectActiveOption(option);
 
       await page.keyboard.type("r");
 
-      await expect.poll(() => composer.inputValue()).toBe("r");
+      await expectActiveOption(option);
+      await expect.poll(() => composer.inputValue()).toBe("");
     });
   });
 
   it("keeps agent-menu activation keys out of the composer while its trigger retains focus", async () => {
     await suite.withPage({}, async ({ page }) => {
-      const { trigger, menu, option, composer } = await openAgentPicker(page);
+      const { trigger, menu, composer } = await openAgentPicker(page);
       await composer.waitFor({ state: "visible" });
 
       await trigger.click();
@@ -141,8 +150,8 @@ suite.define(() => {
 
       await expect
         .poll(() => menu.evaluate((element) => element.matches(":popover-open")))
-        .toBe(true);
-      await expectFocus(option);
+        .toBe(false);
+      await expectFocus(trigger);
       await expect.poll(() => composer.inputValue()).toBe("");
     });
   });

@@ -104,7 +104,7 @@ export class CreationComposer {
     const stopBeforeUnload = listen(window, "beforeunload", onBeforeUnload);
     const unregister = registerControlUiReloadGuard(
       () => !this.hasInput,
-      () => showToast({ message: t("newSession.followUpReloadBlocked") }),
+      () => showToast({ severity: "error", message: t("newSession.followUpReloadBlocked") }),
     );
     this.unregisterReload = () => {
       unregister();

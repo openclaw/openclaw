@@ -2,11 +2,11 @@ import {
   asFiniteNumberInRange,
   parseStrictFiniteNumber,
 } from "@openclaw/normalization-core/number-coercion";
+import type { SpeechDirectiveTokenParseContext } from "./provider-types.js";
 import type {
-  SpeechDirectiveTokenParseContext,
   SpeechDirectiveTokenParseResult,
   SpeechProviderOverrides,
-} from "./provider-types.js";
+} from "./tts-runtime-types.js";
 
 /** Parse a numeric speech directive token and return provider overrides when policy allows it. */
 export function parseSpeechDirectiveNumberOverride(params: {
