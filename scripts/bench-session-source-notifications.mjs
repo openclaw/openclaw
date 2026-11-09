@@ -27,6 +27,7 @@ const { values } = parseArgs({
     replacement: { type: "string" },
     "replacement-marker": { type: "string" },
     "replacement-session-id": { type: "string" },
+    "replacement-message-id": { type: "string" },
   },
 });
 assert.equal(process.platform, "win32");
@@ -276,7 +277,9 @@ async function run(kind, index) {
     result.sessionId = session.sessionId;
     const params = { agentId: "main", sessionKey: session.key };
     const marker = `SOURCE_NOTIFICATION_PROOF_192941_${kind}_${index}`;
-    assert((await rpc("chat.inject", { ...params, message: marker })).ok);
+    const injected = await rpc("chat.inject", { ...params, message: marker });
+    assert(injected.ok);
+    result.messageId = injected.messageId;
     async function history() {
       const start = performance.now();
       const h = await rpc("chat.history", { ...params, limit: 20 });
@@ -406,10 +409,12 @@ async function run(kind, index) {
         );
         assert(values["replacement-session-id"], "Supply the seeded replacement session ID");
         assert.notEqual(values["replacement-session-id"], session.sessionId);
+        assert(values["replacement-message-id"], "Supply the replacement anchor message ID");
         const alternate = await rpc("chat.history", {
           ...params,
           limit: 20,
           sessionId: values["replacement-session-id"],
+          messageId: values["replacement-message-id"],
         });
         assert.equal(alternate.sessionId, values["replacement-session-id"]);
         assert(Array.isArray(alternate.messages));
