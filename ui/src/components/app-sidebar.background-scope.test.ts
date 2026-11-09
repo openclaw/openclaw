@@ -399,7 +399,7 @@ describe("AppSidebar initial managed-list hydration", () => {
       const provider = createApplicationContextProvider(context);
       const sidebar = await createSidebarElement();
       storeSidebarSessionOwnerFilter(gateway.gateway.connection.gatewayUrl, "synthetic-operator", {
-        ownerId: filter === "owner" || filter === "self" ? "synthetic-operator" : null,
+        ownerId: filter === "self" ? "synthetic-operator" : null,
         involvingMe: filter === "involving-me",
       });
       provider.append(sidebar.hostElement);
