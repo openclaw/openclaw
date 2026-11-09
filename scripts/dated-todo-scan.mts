@@ -155,6 +155,7 @@ function runDatePrefilter(root: string, paths: string[], useGit = false): string
       ? [
           "grep",
           "-l",
+          "-z",
           "-I",
           "-i",
           "-E",
@@ -167,6 +168,7 @@ function runDatePrefilter(root: string, paths: string[], useGit = false): string
         ]
       : [
           "-l",
+          "--null",
           "-i",
           "--hidden",
           "--no-ignore",
@@ -253,7 +255,7 @@ function loadPrefilteredFiles(root: string): LoadedFile[] {
       .filter((file) => file && isScannablePath(file)),
   );
   const files = runDatePrefilter(root, ["."])
-    .split("\n")
+    .split("\0")
     .map((file) => file.replace(/^\.\//u, ""))
     .filter((file) => tracked.has(file));
   return loadFiles(root, files);
