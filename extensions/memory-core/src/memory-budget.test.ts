@@ -238,4 +238,61 @@ describe("compactMemoryForBudget — bounded MEMORY.md compaction (regression fo
     expect(result.compacted).toContain("USER-AUTHORED: keep this unheaded durable note.");
     expect(result.compacted).not.toContain("(2026-04-20)");
   });
+
+  it.each(["", "### Project: alpha\n\n"])(
+    "preserves an annotated promotion section with subsection %j (#164089)",
+    (subsection) => {
+      const mixed = [
+        promotionSection("2026-04-10", 400),
+        subsection + PROMOTION_MARKER_LINE + " <!-- USER-AUTHORED: keep café 🐚 -->",
+        "- handwritten bullet",
+      ].join("\n");
+      const result = compactMemoryForBudget({
+        existingMemory: [mixed, promotionSection("2026-04-20", 600)].join("\n"),
+        newSection: `\n${promotionSection("2026-04-29", 400)}`,
+        budgetChars: 1_100,
+      });
+      expect(result.droppedDates).toEqual(["2026-04-20"]);
+      expect(result.compacted).toBe(mixed);
+    },
+  );
+
+  it.each([
+    { name: "clean LF", marker: PROMOTION_MARKER_LINE, newline: "\n", generated: true },
+    { name: "clean CRLF", marker: PROMOTION_MARKER_LINE, newline: "\r\n", generated: true },
+    {
+      name: "annotated CRLF",
+      marker: `${PROMOTION_MARKER_LINE} <!-- keep café 🐚 -->`,
+      newline: "\r\n",
+      generated: false,
+    },
+    ...["\u2028", "\u2029"].flatMap((separator) => [
+      {
+        name: `embedded ${JSON.stringify(separator)}`,
+        marker: `<!-- openclaw-memory-promotion:before${separator}after -->`,
+        newline: "\n",
+        generated: false,
+      },
+      {
+        name: `trailing ${JSON.stringify(separator)}`,
+        marker: PROMOTION_MARKER_LINE + separator,
+        newline: "\n",
+        generated: true,
+      },
+    ]),
+  ])("retains the marker line domain: $name", ({ marker, newline, generated }) => {
+    const existing = [
+      "## Promoted From Short-Term Memory (2026-04-10)",
+      marker,
+      "- preserved line domain",
+      "",
+    ].join(newline);
+    const result = compactMemoryForBudget({
+      existingMemory: existing,
+      newSection: promotionSection("2026-04-29", 600),
+      budgetChars: 100,
+    });
+    expect(result.droppedDates).toEqual(generated ? ["2026-04-10"] : []);
+    expect(result.compacted).toBe(generated ? "" : existing);
+  });
 });
