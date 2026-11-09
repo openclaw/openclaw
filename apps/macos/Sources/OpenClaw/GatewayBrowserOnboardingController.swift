@@ -19,7 +19,7 @@ final class GatewayBrowserOnboardingController: NSWindowController, NSWindowDele
     func present(_ link: GatewayAddDeepLink) {
         // A new external intent replaces the editor, cancelling any pending sign-in.
         self.close()
-        self.present(title: "Add Gateway", content: GatewayProfileEditor(
+        self.present(title: String(localized: "Add Gateway"), content: GatewayProfileEditor(
             name: link.name ?? "",
             address: link.url.absoluteString,
             onCancel: { [weak self] in self?.close() },

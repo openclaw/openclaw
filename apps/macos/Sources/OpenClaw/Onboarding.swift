@@ -560,7 +560,7 @@ final class OnboardingController: NSObject, NSWindowDelegate {
         let hosting = NSHostingController(rootView: content)
         let window = NSWindow(contentViewController: hosting)
         window.isRestorable = false
-        window.title = "Welcome to OpenClaw"
+        window.title = String(localized: "Welcome to OpenClaw")
         window.styleMask = Self.windowStyleMask
         window.setContentSize(NSSize(width: OnboardingView.windowWidth, height: OnboardingView.windowHeight))
         if let visibleFrame = (NSScreen.main ?? NSScreen.screens.first)?.visibleFrame {
