@@ -136,7 +136,7 @@ describe("monitorTlonProvider club (group DM) sender identity", () => {
     });
   });
 
-  it("rechecks owner citation access between reads in the owner's 1:1 DM", async () => {
+  it("rechecks owner admission while loading citations in the owner's 1:1 DM", async () => {
     startMonitorDefaults();
     await withMonitor(async () => {
       sseClientMock.scry.mockClear().mockImplementationOnce(async () => {
@@ -146,7 +146,8 @@ describe("monitorTlonProvider club (group DM) sender identity", () => {
       await sendOwnerDm("~nec/5", "", [citation(DIARY, 1), citation("heap/~private/gallery", 2)]);
 
       expect(sseClientMock.scry).toHaveBeenCalledOnce();
-      expect(inboundRuntimeMock.buildContext.mock.calls[0]?.[0].sender.roles).toEqual(["user"]);
+      expect(inboundRuntimeMock.buildContext).not.toHaveBeenCalled();
+      expect(inboundRuntimeMock.dispatch).not.toHaveBeenCalled();
     });
   });
 
@@ -194,6 +195,77 @@ describe("monitorTlonProvider club (group DM) sender identity", () => {
       expect(context.extra.CommandAuthorized).toBe(false);
       inboundRuntimeMock.dispatch.mockClear();
       await sendChat({ whom: CLUB_ID, author: "~bus", text: "another message", id: "~bus/next" });
+      expect(inboundRuntimeMock.dispatch).not.toHaveBeenCalled();
+    });
+  });
+
+  it("does not replay an approval after the owner changes during the settings write", async () => {
+    startMonitorDefaults({
+      pendingApprovals: [
+        {
+          id: "dm-pending",
+          type: "dm",
+          requestingShip: "~bus",
+          clubId: CLUB_ID,
+          timestamp: 1,
+          originalMessage: {
+            messageId: "~bus/pending",
+            messageText: "saved club message",
+            messageContent: [],
+            timestamp: 1,
+          },
+        },
+      ],
+    });
+    ingressMock.receive.mockResolvedValue({ kind: "ignored" });
+    await withMonitor(async () => {
+      const writeStarted = Promise.withResolvers<void>();
+      const releaseWrite = Promise.withResolvers<void>();
+      sseClientMock.poke.mockImplementation(async (payload) => {
+        if (payload.json?.["put-entry"]?.["entry-key"] === "dmAllowlist") {
+          writeStarted.resolve();
+          await releaseWrite.promise;
+        }
+      });
+
+      const approval = sendOwnerDm("~nec/owner-change", "approve dm-pending");
+      await writeStarted.promise;
+      settingsManagerMock.startSubscription.mock.calls[0]?.[0]({ ownerShip: "~mug" });
+      releaseWrite.resolve();
+      await approval;
+
+      expect(inboundRuntimeMock.dispatch).not.toHaveBeenCalled();
+    });
+  });
+
+  it("stops an approved replay when the owner changes during ingress resolution", async () => {
+    startMonitorDefaults({
+      pendingApprovals: [
+        {
+          id: "dm-citation",
+          type: "dm",
+          requestingShip: "~bus",
+          clubId: CLUB_ID,
+          timestamp: 1,
+          originalMessage: {
+            messageId: "~bus/replay",
+            messageText: "saved club message",
+            messageContent: [],
+            timestamp: 1,
+          },
+        },
+      ],
+    });
+    ingressMock.receive.mockResolvedValue({ kind: "ignored" });
+    await withMonitor(async () => {
+      const resolveStable = inboundRuntimeMock.resolveStable.getMockImplementation();
+      inboundRuntimeMock.resolveStable.mockImplementationOnce(async (params) => {
+        const result = await resolveStable!(params);
+        settingsManagerMock.startSubscription.mock.calls[0]?.[0]({ ownerShip: "~mug" });
+        return result;
+      });
+      await sendOwnerDm("~nec/replay-change", "approve dm-citation");
+      expect(inboundRuntimeMock.resolveStable).toHaveBeenCalledOnce();
       expect(inboundRuntimeMock.dispatch).not.toHaveBeenCalled();
     });
   });

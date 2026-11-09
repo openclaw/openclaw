@@ -32,7 +32,10 @@ export function createTlonApprovalRuntime(params: {
     effectiveDmAllowlist: string[];
     effectiveOwnerShip: string | null;
   };
-  processApprovedMessage: (approval: PendingApproval) => Promise<void>;
+  processApprovedMessage: (
+    approval: PendingApproval,
+    ownerStillCurrent: () => boolean,
+  ) => Promise<void>;
   refreshWatchedChannels: () => Promise<number>;
 }) {
   const { api, runtime, botShipName, state, processApprovedMessage, refreshWatchedChannels } =
@@ -212,10 +215,14 @@ export function createTlonApprovalRuntime(params: {
     return true;
   };
 
-  const handleApprovalResponse = async (text: string): Promise<boolean> => {
+  const handleApprovalResponse = async (text: string, ownerShip: string): Promise<boolean> => {
     const parsed = parseApprovalResponse(text);
     if (!parsed) {
       return false;
+    }
+    const ownerStillCurrent = () => state.effectiveOwnerShip === ownerShip;
+    if (!ownerStillCurrent()) {
+      return true;
     }
 
     const approval = findPendingApproval(state.pendingApprovals, parsed.id);
@@ -234,6 +241,9 @@ export function createTlonApprovalRuntime(params: {
       switch (approval.type) {
         case "dm":
           await addToDmAllowlist(approval.requestingShip);
+          if (!ownerStillCurrent()) {
+            return true;
+          }
           if (requiresResendAfterApproval(approval)) {
             runtime.log?.(
               `[tlon] Not replaying pre-upgrade DM request from ${approval.requestingShip}: sender provenance unknown; owner told to request a resend`,
@@ -242,17 +252,20 @@ export function createTlonApprovalRuntime(params: {
             runtime.log?.(
               `[tlon] Processing original message from ${approval.requestingShip} after approval`,
             );
-            await processApprovedMessage(approval);
+            await processApprovedMessage(approval, ownerStillCurrent);
           }
           break;
         case "channel":
           if (approval.channelNest) {
             await addToChannelAllowlist(approval.requestingShip, approval.channelNest);
+            if (!ownerStillCurrent()) {
+              return true;
+            }
             if (approval.originalMessage) {
               runtime.log?.(
                 `[tlon] Processing original message from ${approval.requestingShip} in ${approval.channelNest} after approval`,
               );
-              await processApprovedMessage(approval);
+              await processApprovedMessage(approval, ownerStillCurrent);
             }
           }
           break;
@@ -267,6 +280,9 @@ export function createTlonApprovalRuntime(params: {
                   "join-all": true,
                 },
               });
+              if (!ownerStillCurrent()) {
+                return true;
+              }
               runtime.log?.(`[tlon] Joined group ${approval.groupFlag} after approval`);
               setTimeout(() => {
                 void (async () => {
@@ -293,6 +309,9 @@ export function createTlonApprovalRuntime(params: {
     } else if (parsed.action === "block") {
       await setShipBlocked(approval.requestingShip, true);
     }
+    if (!ownerStillCurrent()) {
+      return true;
+    }
     await sendOwnerNotification(formatApprovalConfirmation(approval, parsed.action));
 
     state.pendingApprovals = removePendingApproval(state.pendingApprovals, approval.id);
@@ -300,15 +319,22 @@ export function createTlonApprovalRuntime(params: {
     return true;
   };
 
-  const handleAdminCommand = async (text: string): Promise<boolean> => {
+  const handleAdminCommand = async (text: string, ownerShip: string): Promise<boolean> => {
     const command = parseAdminCommand(text);
     if (!command) {
       return false;
+    }
+    const ownerStillCurrent = () => state.effectiveOwnerShip === ownerShip;
+    if (!ownerStillCurrent()) {
+      return true;
     }
 
     switch (command.type) {
       case "blocked": {
         const blockedShips = await getBlockedShips();
+        if (!ownerStillCurrent()) {
+          return true;
+        }
         await sendOwnerNotification(formatBlockedList(blockedShips));
         runtime.log?.(`[tlon] Owner requested blocked ships list (${blockedShips.length} ships)`);
         return true;
@@ -321,11 +347,18 @@ export function createTlonApprovalRuntime(params: {
         return true;
       case "unblock": {
         const shipToUnblock = command.ship;
-        if (!(await isShipBlocked(shipToUnblock))) {
+        const blocked = await isShipBlocked(shipToUnblock);
+        if (!ownerStillCurrent()) {
+          return true;
+        }
+        if (!blocked) {
           await sendOwnerNotification(`${shipToUnblock} is not blocked.`);
           return true;
         }
         const success = await setShipBlocked(shipToUnblock, false);
+        if (!ownerStillCurrent()) {
+          return true;
+        }
         await sendOwnerNotification(
           success ? `Unblocked ${shipToUnblock}.` : `Failed to unblock ${shipToUnblock}.`,
         );
