@@ -48,7 +48,8 @@ import {
 type ModelsConfigPluginMetadataSnapshot = Pick<
   PluginMetadataSnapshot,
   "index" | "manifestRegistry" | "owners" | "pluginIds"
->;
+> &
+  Partial<Pick<PluginMetadataSnapshot, "normalizePluginId">>;
 
 type EnsureOpenClawModelsJsonOptions = {
   env?: NodeJS.ProcessEnv;

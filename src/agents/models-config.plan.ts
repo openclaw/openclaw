@@ -47,7 +47,8 @@ export type PreparedModelsConfigContext = Readonly<{
   pluginMetadataSnapshot?: Pick<
     PluginMetadataSnapshot,
     "index" | "manifestRegistry" | "owners" | "pluginIds"
-  >;
+  > &
+    Partial<Pick<PluginMetadataSnapshot, "normalizePluginId">>;
   preparedStaticProviderCatalog?: PreparedProviderStaticCatalog;
   providerDiscoveryProviderIds?: readonly string[];
   providerDiscoveryTimeoutMs?: number;

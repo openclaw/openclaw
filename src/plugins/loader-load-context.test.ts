@@ -1,4 +1,5 @@
 import { afterEach, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { setGatewayPluginMetadataSnapshot } from "./current-plugin-metadata-snapshot.js";
 import { clearCurrentPluginMetadataSnapshot } from "./current-plugin-metadata-state.js";
 import * as installedPluginIndexRecords from "./installed-plugin-index-records.js";
@@ -60,4 +61,48 @@ it("uses the published install ledger for projected manifests and follows its re
   expect(next.installRecords).toEqual({ alpha: { source: "npm", spec: "alpha@2" } });
   expect(first.installRecords.alpha?.spec).toBe("alpha@1");
   expect(read).not.toHaveBeenCalled();
+});
+
+it.each<{ policy: string; plugins: NonNullable<OpenClawConfig["plugins"]> }>([
+  { policy: "deny", plugins: { deny: [" PROVIDER-ALIAS "] } },
+  { policy: "disabled", plugins: { entries: { " PROVIDER-ALIAS ": { enabled: false } } } },
+])(
+  "normalizes captured runtime and source $policy policy with the supplied metadata",
+  ({ plugins }) => {
+    const metadata = restorePluginMetadataSnapshot(
+      createPluginMetadataSnapshotFixture({
+        plugins: [{ id: "owner", providers: ["provider-alias"], origin: "global" }],
+      }),
+    );
+    const config: OpenClawConfig = { plugins: { allow: ["owner"], ...plugins } };
+    const activationSourceConfig: OpenClawConfig = { plugins: { ...config.plugins } };
+    const context = resolvePluginLoadCacheContext({
+      config,
+      activationSourceConfig,
+      env: {},
+      installRecords: {},
+      normalizePluginId: metadata.normalizePluginId,
+    });
+    expect(context.normalized.allow).toEqual(["owner"]);
+    expect(context.normalized.deny).toEqual(plugins.deny ? ["owner"] : []);
+    expect(context.normalized.entries.owner?.enabled).toBe(plugins.entries ? false : undefined);
+    expect(context.activationSource.plugins.allow).toEqual(["owner"]);
+    expect(context.activationSource.plugins.deny).toEqual(plugins.deny ? ["owner"] : []);
+    expect(context.activationSource.plugins.entries.owner?.enabled).toBe(
+      plugins.entries ? false : undefined,
+    );
+    expect(context.cfg.plugins).toEqual(config.plugins);
+    expect(context.activationSourceConfig.plugins).toEqual(activationSourceConfig.plugins);
+  },
+);
+
+it("keeps ordinary loader normalization when no prepared resolver is supplied", () => {
+  const context = resolvePluginLoadCacheContext({
+    config: { plugins: { allow: [" GOOGLE-GEMINI-CLI "], deny: [" PROVIDER-ALIAS "] } },
+    activationSourceConfig: { plugins: { entries: { " MINIMAX-PORTAL ": { enabled: false } } } },
+    installRecords: {},
+  });
+  expect(context.normalized.allow).toEqual(["google"]);
+  expect(context.normalized.deny).toEqual(["provider-alias"]);
+  expect(context.activationSource.plugins.entries.minimax?.enabled).toBe(false);
 });

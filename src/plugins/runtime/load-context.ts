@@ -30,6 +30,8 @@ export type PluginRuntimeLoadContext = {
   logger: PluginLogger;
   manifestRegistry?: PluginManifestRegistry;
   metadataSnapshot?: PluginMetadataSnapshot;
+  /** Alias identity used for the registered callbacks, including metadata-free lookups. */
+  normalizePluginId?: PluginLoadOptions["normalizePluginId"];
   installRecords?: Record<string, PluginInstallRecord>;
   preferBuiltPluginArtifacts?: boolean;
   expectedSourceDigests?: PluginLoadOptions["expectedSourceDigests"];
@@ -73,6 +75,7 @@ export function setPluginRuntimeLoadContext(
   const capturedIdentity = previous?.loaderCacheIdentity ?? loaderCacheIdentity;
   const bound = {
     ...context,
+    normalizePluginId: previous ? previous.normalizePluginId : context.normalizePluginId,
     activationInputFingerprint: activationInputFingerprint(context.rawConfig, context.env),
     ...(capturedIdentity ? { loaderCacheIdentity: capturedIdentity } : {}),
     // Host preparation may rebind metadata, but it cannot change already-registered closures.

@@ -164,6 +164,7 @@ export function loadManifestMetadataRegistry(
   return {
     index: snapshot.index,
     manifestRegistry: snapshot.manifestRegistry,
+    normalizePluginId: snapshot.normalizePluginId,
   };
 }
 
