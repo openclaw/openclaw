@@ -213,6 +213,66 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
       preset: "runtime",
     },
     {
+      configs: ["test/vitest/vitest.gateway-database-workers.config.ts"],
+      files: [
+        "src/gateway/talk/client-permission-parity.test.ts",
+        "src/gateway/tool-resolution.swarm-collector.test.ts",
+        "test/plugins/deep-research-routing.gateway.test.ts",
+      ],
+      preset: "runtime",
+    },
+    {
+      configs: ["test/vitest/vitest.gateway-methods.config.ts"],
+      files: ["src/gateway/server-methods/session-catalog-privacy.test.ts"],
+      preset: "runtime",
+    },
+    {
+      configs: ["test/vitest/vitest.agents-spawn-production-boundary.config.ts"],
+      files: ["src/agents/subagents/spawn/subagent-spawn.production-boundary.test.ts"],
+      preset: "runtime",
+    },
+    {
+      configs: ["test/vitest/vitest.runtime-config.config.ts"],
+      files: ["src/config/io.load-async.test.ts"],
+      preset: "runtime",
+    },
+    {
+      configs: ["test/vitest/vitest.plugins.config.ts"],
+      files: ["src/plugins/plugin-generation-worker.test.ts"],
+      preset: "runtime",
+    },
+    {
+      configs: ["test/vitest/vitest.plugins.config.ts"],
+      files: ["src/plugins/plugin-generation-worker.test.ts", "unknown.test.ts"],
+      preset: "full",
+    },
+    {
+      configs: ["test/vitest/vitest.agents-core.config.ts"],
+      files: [
+        "src/agents/agent-tools.delegated-authority.test.ts",
+        "src/agents/session-placement-computer.test.ts",
+      ],
+      preset: "runtime",
+    },
+    {
+      configs: ["test/vitest/vitest.gateway-server.config.ts"],
+      files: ["src/gateway/server.beam-owned-view.test.ts"],
+      preset: "runtime",
+    },
+    {
+      configs: ["test/vitest/vitest.agents-spawn-production-boundary.config.ts"],
+      files: [
+        "src/agents/subagents/spawn/subagent-spawn.production-boundary.test.ts",
+        "unknown.test.ts",
+      ],
+      preset: "full",
+    },
+    {
+      configs: ["test/vitest/vitest.agents-spawn-production-boundary.config.ts"],
+      files: [],
+      preset: "full",
+    },
+    {
       configs: ["test/vitest/vitest.gateway-client.config.ts"],
       files: ["src/gateway/client-callsites.guard.test.ts"],
       preset: "runtime",
@@ -299,19 +359,28 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
 
   it.each([
     { extra: [], args: [], jobArgs: undefined, preset: "runtime" },
+    {
+      targets: [
+        "src/config/io.load-async.test.ts",
+        "src/plugins/loader.runtime-registry.test.ts",
+        "src/plugins/plugin-generation-worker.test.ts",
+      ],
+      args: [],
+      jobArgs: undefined,
+      preset: "runtime",
+    },
     { extra: [nodeTarget], args: [], jobArgs: undefined, preset: "full" },
     { extra: [], args: ["--root", "custom-root"], jobArgs: undefined, preset: "full" },
     { extra: [], args: ["--root", "custom-root"], jobArgs: [], preset: "full" },
   ])(
     "passes the $preset artifact owner through the CI child bootstrap",
-    async ({ extra, args, jobArgs, preset }) => {
+    async ({ targets, extra = [], args, jobArgs, preset }) => {
       machine(8, 31);
       const createWorker = vi.spyOn(workerOwner, "createVitestWorkerRun");
       const plans = resolveShardPlans({
-        OPENCLAW_NODE_TEST_TARGETS_JSON: JSON.stringify([
-          "src/auto-reply/reply/dispatch-from-config.delivery.test.ts",
-          ...extra,
-        ]),
+        OPENCLAW_NODE_TEST_TARGETS_JSON: JSON.stringify(
+          targets ?? ["src/auto-reply/reply/dispatch-from-config.delivery.test.ts", ...extra],
+        ),
       });
       const result = await recordPlans(plans, {
         env: {

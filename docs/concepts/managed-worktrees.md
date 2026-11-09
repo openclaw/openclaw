@@ -80,7 +80,15 @@ with sandbox mode `all` or `non-main` in the background. Agents with sandbox mod
 `off` skip background dependency preparation; creator-role-required sandboxes
 still prepare dependencies on first use. A session arriving during preparation
 waits for the same build; later checkouts arrive with `node_modules`. Other selected commits
-still prepare their dependencies on first use. Shutdown cancels preparation and
+still run dependency installation on first use. When the frozen lockfile and Git
+attributes are unchanged, an idle template imports only the new Git objects and
+checks out the source delta before reinstalling into its retained dependencies.
+Repeat installation still runs repository lifecycle scripts when manifests and
+lockfiles are unchanged.
+Concurrent requests for that commit share the refresh. Lockfile or attribute changes
+build a fresh template; a template still being cloned cannot be refreshed. Each
+clone still receives only the selected source snapshot in its private Git object
+store. Shutdown cancels preparation and
 drains accepted installer cleanup. Before publishing a template, OpenClaw fences
 the disposable installer against restart and verifies that it has stopped. Container
 removal runs serially in the background, so a slow Docker or Podman removal does
@@ -103,8 +111,10 @@ cache falls back promptly instead of waiting through network retries.
 
 The reusable generation binds the source commit, frozen lockfile, immutable image
 (including its Node and pnpm versions), guest path, and sandbox policy. A changed
-generation prepares a new template with a distinct builder identity; background
-housekeeping recovers interrupted builders independently of template expiration. Installation failure or changed tracked source
+generation uses a distinct builder identity, including incremental refreshes.
+Exact commit identity remains necessary because repository lifecycle scripts and
+local packages can consume source files outside the lockfile and manifests.
+Background housekeeping recovers interrupted builders independently of template expiration. Installation failure or changed tracked source
 records a warning with a bounded, redacted tail of the installer output and keeps
 a source-only template for that generation. Repeated preparations with the same
 inputs reuse that source-only template without rerunning the failed install. Missing
@@ -124,7 +134,9 @@ the original PR selected for subsequent publication; the earlier publication
 receipt remains unchanged.
 Publication and base refresh reuse exact commits already stored locally instead
 of fetching them again. Partial clones still fetch missing contents when the
-operation needs those files.
+operation needs those files. Missing publication commits use the cached target
+and default base tips for fetch negotiation when available, avoiding unrelated
+session histories while retaining commit ancestry and trees.
 Only sessions with a writable managed sandbox are offered this action; direct
 host sessions merge the base with git in their workspace before publishing.
 Resolve reported conflicts and repeat it with `conflictsResolved: true` and the
@@ -262,7 +274,12 @@ The Gateway keeps one prepared checkout per active repository, destination root,
 
 Preparation logs include `templateDetails` with the backend, selection or failure reason, clone-byte estimate, and an error code when available. Reasons distinguish disabled acceleration, empty or profiled checkouts, native probing, ACL rejection, checkout policy, missing or stale templates, template creation, and disk admission.
 
-The `checkout` phase includes its child phases; do not add it to `templateApply`. Sub-phases separate registration metadata and inspection, commit preparation, clone admission estimates, destination preparation, marker replacement, index location/copy/refresh, prompt publication, template release, and warm-slot acquisition/application. The clone-byte estimate is a disk-admission allowance, not measured bytes written.
+Preparation phases are inclusive. For sandbox dependency preparation, `checkout`,
+`setup`, and a concurrent caller's `mutationWait` are inside `templatePrepare`;
+`templateApply` measures each private clone separately. A warm caller waiting
+for a build therefore reports preparation time without running a second install.
+For managed source checkouts, `checkout` includes its child phases; do not add it
+to `templateApply`. Sub-phases separate registration metadata and inspection, commit preparation, clone admission estimates, destination preparation, marker replacement, index location/copy/refresh, prompt publication, template release, and warm-slot acquisition/application. The clone-byte estimate is a disk-admission allowance, not measured bytes written.
 
 The `workspaceWait` phase records waits for private sandbox workspace reconciliation custody and for an already-running preparation. It includes waits behind another caller's dependency-template build, even when the waiting caller ultimately reuses the prepared workspace without selecting a template itself.
 
@@ -615,9 +632,11 @@ Each cleanup pass batches session-owner activity and worker-placement reads in d
 
 Cleanup remembers protected checkouts' deferral reasons and fingerprints instead of repeating unchanged inspections. Managed activity, registry lifecycle changes, and observed checkout or HEAD changes invalidate those decisions. Run `openclaw worktrees gc --retry-deferred` to force another inspection after repairing files or Git metadata. Remembered idle-cleanup protection never exempts a checkout from cap eviction. The nullable derived-state column is added on database admission without a schema-version change; older builds ignore these dispositions and resume their previous inspection behavior. Snapshot retention remains 30 days.
 
-A Git timeout or an oversized snapshot without a quarantined checkpoint records its removal stage, elapsed milliseconds, attempt count, and next retry time in the existing revision-bound cleanup disposition. Automatic retries wait two hours initially, then double up to 24 hours; passes inside that window skip checkout inventory work. This backoff survives Gateway restarts. An explicit `--retry-deferred` bypasses the wait, while owner activity or a new registry lifecycle invalidates the old disposition. Existing rows require no migration; builds that understand only the deferral reason retain their existing protection behavior. Slow-removal log lines include the checkout path, stage durations, tracked and non-ignored untracked counts when available, and the deferral decision. A timeout during deletion preserves the pending snapshot and prevents a new run from using the potentially partial checkout; use the recovery procedure below.
+A Git timeout records its removal stage, elapsed milliseconds, attempt count, and next retry time in the existing revision-bound cleanup disposition. Automatic retries wait two hours initially, then double up to 24 hours; passes inside that window skip checkout inventory work. This backoff survives Gateway restarts. An explicit `--retry-deferred` bypasses the wait, while owner activity or a new registry lifecycle invalidates the old disposition. Existing rows require no migration; builds that understand only the deferral reason retain their existing protection behavior. Slow-removal log lines include the checkout path, stage durations, tracked and non-ignored untracked counts when available, and the deferral decision. A timeout during deletion preserves the pending snapshot and prevents a new run from using the potentially partial checkout; use the recovery procedure below.
 
-A rejected local workspace checkpoint is terminal for automatic application. Idle cleanup preserves its result reservation, any saved Git ref, and guest files, and records a cleanup deferral instead of retrying removal on a timer. The cleanup summary (`openclaw worktrees gc --json` or `worktrees.gc`) names the reserved result and guest path. Reduce the change and checkpoint the corrected workspace, or recover the files manually, then run `openclaw worktrees gc --retry-deferred`. The existing result byte and path limits remain enforced; an explicit retry does not reapply the rejected result.
+When cleanup recaptures a workspace created by an older build, current Git eligibility excludes ignored `dist/` and `.cache/openclaw-bun/` output even if an older capture accepted those paths. This retires capture membership without deleting files; tracked or explicitly admitted inputs remain eligible.
+
+A rejected local workspace checkpoint or archive overlay is terminal for automatic application. Accepted checkpoints can accumulate more data than one archive overlay permits; that rejection also preserves the checkout and records the byte count, limit, and largest new paths. Idle cleanup preserves its result reservation, any saved Git ref, and guest files, and records a cleanup deferral instead of retrying removal on a timer. The cleanup summary (`openclaw worktrees gc --json` or `worktrees.gc`) names the reserved result and guest path. Reduce the change and checkpoint the corrected workspace, or recover the files manually, then run `openclaw worktrees gc --retry-deferred`. The existing result byte and path limits remain enforced; an explicit retry does not reapply the rejected result.
 
 Missing or corrupt Git objects also use this persisted backoff. One failed idle-cleanup attempt pauses further idle snapshots for the shared repository, including sibling checkouts in the same sweep. Pack consolidation independently verifies only the bounded batch it may retire; missing snapshot objects do not force a full repository integrity scan or block healthy packs. A damaged selected pack stops that batch without deleting its sources. Checkouts remain protected until the objects needed by their snapshots are available locally. Cleanup reports the repository needing repair and preserves the checkouts. Restore missing objects or repair the clone, then run `openclaw worktrees gc --retry-deferred` to retry immediately. The existing cleanup revision invalidates the remembered failure when its worktree's owner or lifecycle changes; no database migration is required. Explicit removal and capacity eviction retain their existing policies.
 
