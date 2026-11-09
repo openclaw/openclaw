@@ -714,7 +714,9 @@ describe("Muse native MSP harness", () => {
       }
       await harness.verifySetup(verification);
       await harness.verifySetup(verification);
-      await harness.loadModelCatalog(scope);
+      const models = await harness.loadModelCatalog(scope);
+      // Rows without an MSP contextLimit leave the window to core rather than guessing one.
+      expect(Array.isArray(models) && !models.some((model) => "contextWindow" in model)).toBe(true);
       expect(harness.readModelCatalogReadiness(verification)).toEqual({ accountType: "native" });
       const initialRequests = await readRequests(log);
       expect(initialRequests.filter((request) => request.event === "spawn")).toHaveLength(1);

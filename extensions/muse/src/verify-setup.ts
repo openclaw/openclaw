@@ -25,13 +25,22 @@ function museDisplayName(modelId: string, displayLabel: unknown): string {
   return label;
 }
 
+// MSP reports the native window; without it core sizes Muse sessions at its 200k default.
+function museContextWindow(contextLimit: unknown): { contextWindow?: number } {
+  return typeof contextLimit === "number" && Number.isSafeInteger(contextLimit) && contextLimit > 0
+    ? { contextWindow: contextLimit }
+    : {};
+}
+
 /** One lifecycle owner for read-only catalog hosts; every read still asks Meta for live access. */
 export class MuseCatalogReader {
   private current: { binaryPath: string; pool: MusePool } | undefined;
 
   async read(
     ctx: Pick<AgentHarnessSetupVerificationContext, "config" | "signal" | "assertCurrent">,
-  ): Promise<{ id: string; name: string; provider: string; nativeRuntime: string }[]> {
+  ): Promise<
+    { id: string; name: string; provider: string; nativeRuntime: string; contextWindow?: number }[]
+  > {
     ctx.signal.throwIfAborted();
     ctx.assertCurrent();
     const config = ctx.config.plugins?.entries?.muse?.config;
@@ -72,6 +81,7 @@ export class MuseCatalogReader {
                 name: museDisplayName(model.modelId, model.displayLabel),
                 provider: "meta",
                 nativeRuntime: "muse",
+                ...museContextWindow(model.contextLimit),
               },
             ]
           : [],
