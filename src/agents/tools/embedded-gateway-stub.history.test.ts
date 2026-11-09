@@ -1,6 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { Value } from "typebox/value";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { seedCanonicalAcpSessionMeta } from "../../acp/runtime/session-meta-fixture.test-support.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import {
@@ -307,17 +307,11 @@ describe("embedded session history for configured ACP store owners", () => {
   let projection: Awaited<ReturnType<typeof createSessionRowProjection>> | undefined;
   let unbindProjection: (() => void) | undefined;
 
-  beforeAll(async () => {
-    state = await createOpenClawTestState({ prefix: "embedded-acp-history-" });
-  });
-
-  afterAll(async () => {
-    await state?.cleanup();
-  });
 
   beforeEach(async () => {
     projection = undefined;
     unbindProjection = undefined;
+    state = await createOpenClawTestState({ prefix: "embedded-acp-history-" });
     setRuntimeConfigSnapshot(acpConfig);
     replaceSessionEntrySync(acpScope, { sessionId: acpScope.sessionId, updatedAt: Date.now() });
     // Real ACP spawn rows persist runtime metadata; the resolve probe's
@@ -347,24 +341,17 @@ describe("embedded session history for configured ACP store owners", () => {
   });
 
   afterEach(async () => {
-    unbindProjection?.();
-    projection?.dispose();
-    await projection?.ensureMaterialized();
-    const cleanupScope = { stateDir: state.stateDir, rootPath: state.root };
-    await drainSessionStateForTest(cleanupScope);
-    for (const agentId of ["main", acpAgentId]) {
-      runOpenClawAgentWriteTransaction(
-        ({ db }) => {
-          const kysely = getNodeSqliteKysely<AgentDatabase>(db);
-          // FTS identities lack a foreign key; their trigger clears search content.
-          executeSqliteQuerySync(db, kysely.deleteFrom("session_transcript_fts_rows"));
-          executeSqliteQuerySync(db, kysely.deleteFrom("session_nodes"));
-        },
-        { agentId },
-      );
+    try {
+      unbindProjection?.();
+      projection?.dispose();
+      await projection?.ensureMaterialized();
+    } finally {
+      try {
+        await state?.cleanup();
+      } finally {
+        vi.restoreAllMocks();
+      }
     }
-    await drainSessionStateForTest(cleanupScope);
-    vi.restoreAllMocks();
   });
 
   it("reads a configured ACP owner transcript without an explicit agent id", async () => {
