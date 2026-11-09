@@ -6,6 +6,7 @@ const entrypoint = createTestEntrypoint(import.meta.url, "plugins");
 export const pluginProcessRuntimeEntrypoints = {
   nativeRequire: entrypoint("native-module-require"),
   sourceBuild: entrypoint("plugin-source-build"),
+  browserCompiler: entrypoint("runtime-compiler"),
   installRecordCommit: entrypoint("install-record-commit"),
   lifecycleLease: entrypoint("plugin-lifecycle-lease"),
   installedPluginIndex: entrypoint("installed-plugin-index-store"),

@@ -3,11 +3,7 @@ import path from "node:path";
 import { TLSSocket } from "node:tls";
 import { afterEach, beforeAll, expect, it, vi } from "vitest";
 import { GATEWAY_CLIENT_IDS } from "../../packages/gateway-protocol/src/client-info.js";
-import {
-  awaitGateBeforeSettlement,
-  createDeferred,
-  nextEventLoopTurn,
-} from "../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { getRuntimeConfig } from "../config/io.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
@@ -16,13 +12,12 @@ import type { PluginRecord } from "../plugins/registry.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
 import { createPluginRecord } from "../plugins/status.test-helpers.js";
-import * as processExec from "../process/exec.js";
-import { drainGlobalSingletonLifecycleState } from "../shared/global-singleton.js";
 import { closeOpenClawStateDatabaseByPathAsync } from "../state/openclaw-state-db-cache.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import * as userProfileCatalog from "../state/user-profile-list.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { registerPluginCompilerLifecycleTests } from "./control-ui-plugin-assets.compiler.suite.js";
 import {
   handleControlUiPluginAssetRequest,
   listControlUiPluginCatalog,
@@ -228,34 +223,7 @@ beforeAll(async () => {
   await import("./control-ui.js");
 });
 
-it("joins admitted browser compilation before registry shutdown settles", async () => {
-  activateFixture();
-  const entered = createDeferred();
-  const resume = createDeferred();
-  const compile = processExec.runExec;
-  const gate = vi.spyOn(processExec, "runExec").mockImplementationOnce(async (...args) => {
-    entered.resolve();
-    await resume.promise;
-    return compile(...args);
-  });
-  const catalog = listControlUiPluginCatalog();
-  let closing: Promise<void> | undefined;
-  try {
-    await awaitGateBeforeSettlement(entered.promise, catalog, "catalog skipped compilation");
-    closing = drainGlobalSingletonLifecycleState("plugin-registry");
-    await awaitGateBeforeSettlement(
-      nextEventLoopTurn(),
-      closing,
-      "registry shutdown skipped admitted compilation",
-    );
-    resume.resolve();
-    await Promise.all([catalog, closing]);
-  } finally {
-    resume.resolve();
-    await Promise.allSettled([catalog, closing]);
-    gate.mockRestore();
-  }
-});
+registerPluginCompilerLifecycleTests(activateFixture);
 
 it("omits settings-only presentations from activation while keeping ordinary plugins", async () => {
   const fixture = activateFixture();

@@ -30,6 +30,8 @@ await fs.writeFile(
 import {appendFileSync} from 'node:fs';
 import {isMainThread} from 'node:worker_threads';
 import {Session} from 'node:inspector';
+import {channel} from 'node:diagnostics_channel';
+channel('child_process').subscribe(({process:child})=>child.once('spawn',()=>appendFileSync(process.env.EXIT_TAIL_EVENTS,JSON.stringify({phase:'child',pid:child.pid,parent:process.pid})+'\\n')));
 process.env.EXIT_TAIL_ROOT_PID ??= String(process.pid);
 if (isMainThread && process.pid === Number(process.env.EXIT_TAIL_ROOT_PID)) {
   const record = phase => appendFileSync(process.env.EXIT_TAIL_EVENTS, JSON.stringify({phase, at:performance.timeOrigin+performance.now(), cpu:process.cpuUsage(), memory:process.memoryUsage(), resources:process.getActiveResourcesInfo()})+'\\n');
@@ -227,7 +229,11 @@ for (let sample = 0; sample < Number(values.samples); sample++) {
             .split("\n")
             .slice(1);
     const table = processTable();
-    const owned = new Set([child.pid]);
+    const observed = (await fs.readFile(events, "utf8")).trim().split("\n").map(JSON.parse);
+    const owned = new Set([
+      child.pid,
+      ...observed.filter((event) => event.phase === "child").map((event) => event.pid),
+    ]);
     for (let previous = 0; previous !== owned.size;) {
       previous = owned.size;
       for (const line of table) {
@@ -247,6 +253,9 @@ for (let sample = 0; sample < Number(values.samples); sample++) {
     const exit = await ended;
     clearTimeout(watchdog);
     const records = (await fs.readFile(events, "utf8")).trim().split("\n").map(JSON.parse);
+    for (const event of records.filter((record) => record.phase === "child")) {
+      owned.add(event.pid);
+    }
     const clean = records.find((event) => event.phase === "clean");
     if (!clean) {
       throw new Error("Gateway did not report clean shutdown");

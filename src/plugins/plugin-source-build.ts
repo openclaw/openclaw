@@ -1,4 +1,4 @@
-import { spawnSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import Module, { createRequire } from "node:module";
@@ -11,7 +11,6 @@ import { isPathInside } from "../infra/path-guards.js";
 import { createJiti } from "./jiti-factory.js";
 import { useNodeModuleHooks } from "./native-module-require.js";
 import { markPluginSourceAcquisitionError } from "./plugin-instance-error.js";
-import { pluginCompilerCommand } from "./runtime-compiler.js";
 
 const require = createRequire(import.meta.url);
 
@@ -53,13 +52,11 @@ export function buildPluginTypeScriptSource(root: string) {
       const { default: generate }: typeof import("@babel/generator") = require("@babel/generator");
       const sourceText = fs.readFileSync(input, "utf8");
       const mode = sources.get(destination)?.mode;
-      const [command, ...args] = pluginCompilerCommand();
-      const transformSource = (
-        source: string,
-        sourcefile = input,
-        outputFormat?: "esm" | "cjs",
-      ) => {
-        const result = spawnSync(
+      const binary = require.resolve("esbuild/bin/esbuild");
+      const [command, ...args] =
+        process.platform === "win32" ? [process.execPath, binary] : [binary];
+      const transformSource = (source: string, sourcefile = input, fmt?: "esm" | "cjs") =>
+        execFileSync(
           command,
           [
             ...args,
@@ -72,18 +69,16 @@ export function buildPluginTypeScriptSource(root: string) {
             '--tsconfig-raw={"compilerOptions":{"experimentalDecorators":true,"useDefineForClassFields":true}}',
             "--log-level=error",
             "--color=false",
-            ...(outputFormat ? [`--format=${outputFormat}`] : []),
+            ...(fmt ? [`--format=${fmt}`] : []),
           ],
-          { input: source, encoding: "utf8", maxBuffer: Infinity, windowsHide: true },
+          {
+            input: source,
+            encoding: "utf8",
+            maxBuffer: Infinity,
+            windowsHide: true,
+            stdio: "pipe",
+          },
         );
-        if (result.error) {
-          throw result.error;
-        }
-        if (result.status !== 0) {
-          throw new Error(result.stderr || "Plugin compiler exited without output");
-        }
-        return result.stdout;
-      };
       const createImportHelper = () => {
         const helper = path.join(path.dirname(destination), `.import-meta-${randomUUID()}.mjs`);
         fs.writeFileSync(
