@@ -1330,6 +1330,7 @@
     {"path":"apps/ios/Sources/Gateway/GatewayTrustPromptAlert.swift","kind":"ui-call","surface":"apple","id":"native.apple.7de1240a2af7cf06","source":"Trust and connect"},
     {"path":"apps/ios/Sources/Gateway/GatewayTrustPromptAlert.swift","kind":"ui-modifier","surface":"apple","id":"native.apple.f773977df72ff006","source":"Trust this gateway?"},
     {"path":"apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatMediaPlayer.kt","kind":"ui-call","surface":"android","id":"native.android.fcb86891a74d1cc1","source":"Audio playback is unavailable"},
+    {"path":"apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatMediaPlayer.kt","kind":"ui-call","surface":"android","id":"native.android.360bb260020bb3b0","source":"Audio position"},
     {"path":"apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatMediaPlayer.kt","kind":"ui-call","surface":"android","id":"native.android.014d9f6f8273ffa1","source":"Media unavailable"},
     {"path":"apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatMediaPlayer.kt","kind":"ui-call","surface":"android","id":"native.android.e811d66091630de4","source":"Pause audio"},
     {"path":"apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatMediaPlayer.kt","kind":"ui-call","surface":"android","id":"native.android.aba912a2e413ac37","source":"Paused for voice playback"},
