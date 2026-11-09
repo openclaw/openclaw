@@ -70,6 +70,7 @@ describe("Doctor legacy audit skips", () => {
           // Same bytes, size and mtime under a new file identity, as after a volume remount or
           // copy. The copy is written beside the original so it cannot reuse its inode.
           const before = await fs.stat(audit.config.raw);
+          const bytes = await fs.readFile(audit.config.raw);
           const copy = `${audit.config.raw}.copy`;
           await fs.copyFile(audit.config.raw, copy);
           await fs.utimes(copy, before.atimeMs / 1000, before.mtimeMs / 1000);
@@ -77,6 +78,7 @@ describe("Doctor legacy audit skips", () => {
           const after = await fs.stat(audit.config.raw);
           expect(after.ino).not.toBe(before.ino);
           expect([after.size, after.mtimeMs]).toEqual([before.size, before.mtimeMs]);
+          await expect(fs.readFile(audit.config.raw)).resolves.toEqual(bytes);
         } else {
           // Revisit unchanged content after a backup restore changes file metadata.
           await fs.utimes(audit.config.raw, 1, 1);
@@ -283,6 +285,12 @@ describe("Doctor legacy audit skips", () => {
       const checkpoints = openLegacyAuditRawCheckpointStore(state.stateDir).entries();
       const imported = audit.configRecords();
       expect(imported).toHaveLength(1);
+      const execPath = await state.writeJson("exec-approvals.json", {
+        version: 1,
+        defaults: { security: "allowlist", ask: "on-miss" },
+        agents: {},
+      });
+      const execBytes = await fs.readFile(execPath);
 
       const result = await autoMigrateLegacyState({
         cfg,
@@ -300,6 +308,15 @@ describe("Doctor legacy audit skips", () => {
       expect(() => throwIfDoctorStateMigrationRefused(result.stepReceipts)).toThrow(
         "Doctor stopped",
       );
+      expect(result.stepReceipts.find((receipt) => receipt.id === "exec-approvals")).toMatchObject({
+        outcome: "refused",
+        changes: [],
+        refusal: {
+          code: "blocked-by-prior-refusal",
+          message: expect.stringContaining('prior step "audit-logs"'),
+        },
+      });
+      await expect(fs.readFile(execPath)).resolves.toEqual(execBytes);
       expect(audit.configRecords()).toEqual(imported);
       await expect(fs.readFile(audit.config.raw)).resolves.toEqual(rawBytes);
       expect(openLegacyAuditRawCheckpointStore(state.stateDir).entries()).toEqual(checkpoints);
