@@ -807,6 +807,33 @@ describe("secret egress proxy", () => {
     expect(auditText).not.toContain(sentinel);
   });
 
+  it("completes CONNECT and verified TLS for a hostname longer than 64 characters", async () => {
+    // Object-storage endpoint shape from #152529: <bucket>.<account-id>.<provider-domain>.
+    const longHostname = `${"a".repeat(40)}.${"b".repeat(32)}.example.com`;
+    expect(longHostname.length).toBeGreaterThan(64);
+    const sentinel = mintSecretSentinel("unused-secret-value", { label: "long-hostname" });
+    proxyEnv = registerSentinel(sentinel, [longHostname]);
+
+    // The leaf is minted from the CONNECT hostname, so no DNS lookup or request is needed.
+    const { response, socket } = await rawConnect({
+      auth: basicProxyAuth(registeredPassword(proxyEnv)),
+      target: `${longHostname}:${originPort}`,
+    });
+    expect(response).toContain("200 Connection Established");
+
+    const secureSocket = tls.connect({
+      socket,
+      servername: longHostname,
+      ca: fs.readFileSync(proxy.caCertPath),
+    });
+    await new Promise<void>((resolve, reject) => {
+      secureSocket.once("secureConnect", resolve);
+      secureSocket.once("error", reject);
+    });
+    expect(secureSocket.authorized).toBe(true);
+    secureSocket.destroy();
+  });
+
   it.each([
     { host: "[::1]", allowed: true },
     { host: "localhost.example.com", allowed: false },

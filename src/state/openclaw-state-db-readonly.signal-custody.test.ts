@@ -278,7 +278,7 @@ async function duringCleanup(
 
 it.each([
   { capable: false, failure: "busy", succeeds: true },
-  { capable: true, failure: "busy", succeeds: false },
+  { capable: true, failure: "busy", succeeds: true },
   { capable: false, failure: "permission", succeeds: false },
   { capable: false, failure: "read", succeeds: false },
   { capable: false, failure: "native close", succeeds: false },
@@ -291,6 +291,7 @@ it.each([
     });
     const busy = Object.assign(new Error("private SQLite file is still open"), {
       code: failure === "permission" ? "EACCES" : "EBUSY",
+      syscall: "rmdir",
     });
     mocks.prepare.mockImplementation(async () => location(true));
     mocks.removeAsync.mockRejectedValue(busy);

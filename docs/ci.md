@@ -84,6 +84,9 @@ Committed `config/postgres-conformance-timings.json` measurements price file wor
 configuration startup, and preparation; they never select the test inventory.
 Cold file scheduling follows Vitest's file-size order. The allocator minimizes
 predicted tail time, then total work, so preparation consumers can share one job.
+Shard 1 reserves 150 seconds for the PR-only PostgreSQL 16 Gateway cron smoke,
+including its second worker preparation and service lifecycle. All callers use
+the same deterministic assignment, including runs without that extra smoke.
 Unknown targets retain a default weight. Inspect any assignment with
 `--shard 1/3 --list` (or `2/3`, `3/3`). Refresh measurements from successful natural
 runs as the suite changes. The latest two file samples track recent workload

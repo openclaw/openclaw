@@ -10,6 +10,7 @@ import {
   type VitestRuntimeTestSelection,
 } from "./vitest-build-prerequisites.mts";
 import { collectVitestFileFilters } from "./vitest-cli-mode.mts";
+import type { VitestWorkerPreset } from "./vitest-worker-descriptor.mts";
 
 export const TUI_PTY_BUILT_CLI_CANARY_PATTERN =
   "launches openclaw chat as local mode through a real PTY";
@@ -43,6 +44,7 @@ const runtimeOnlyUnitFiles = new Set([
   "src/gateway/talk/client-permission-parity.test.ts",
   "src/gateway/tool-resolution.swarm-collector.test.ts",
   "src/plugins/loader.runtime-registry.test.ts",
+  "src/plugins/plugin-generation-source-inspection.worker.test.ts",
   "src/plugins/plugin-generation-worker.test.ts",
   "test/canonical-descendant.integration.test.ts",
   "test/codex-settled-turn-finalization.integration.test.ts",
@@ -63,6 +65,61 @@ const runtimeOnlyUnitFiles = new Set([
   "test/vitest-projects-config.test.ts",
 ]);
 
+// These tooling proofs use compiled harness entries, not production workers.
+const toolingOnlyUnitFiles = new Set([
+  "test/scripts/vitest-prebuilt-ai.test.ts",
+  "test/scripts/ci-changed-build-selection.test.ts",
+  "test/scripts/ci-changed-node-test-plan.integration.test.ts",
+  "test/scripts/vitest-worker-artifacts.batch.test.ts",
+  "test/scripts/run-vitest-progress.test.ts",
+  "test/scripts/run-vitest.test.ts",
+  "test/scripts/extension-test-plan.test.ts",
+  "test/scripts/test-extension.test.ts",
+  "test/scripts/test-projects.test.ts",
+  "test/scripts/plugin-sdk-surface-report.test.ts",
+]);
+
+/** A selection supported by both narrow graphs must retain its parent's graph. */
+export function selectVitestWorkerPreset(
+  runtimeOnly: boolean,
+  toolingOnly: boolean,
+  parent?: VitestWorkerPreset,
+): VitestWorkerPreset {
+  if (parent === "runtime" && runtimeOnly) {
+    return "runtime";
+  }
+  return toolingOnly ? "tooling" : runtimeOnly ? "runtime" : "full";
+}
+
+export function areToolingOnlyVitestUnitFiles(files: readonly string[]): boolean {
+  return files.length > 0 && files.every((file) => toolingOnlyUnitFiles.has(file));
+}
+
+function selectedFiles(
+  args: string[],
+  env: NodeJS.ProcessEnv,
+  includePatterns?: readonly string[],
+) {
+  return (
+    includePatterns ??
+    loadPatternListFromEnv("OPENCLAW_VITEST_INCLUDE_FILE", env) ??
+    collectVitestFileFilters(args)
+  ).map((file) => file.replaceAll("\\", "/").replace(/^\.\//u, ""));
+}
+
+export function shouldUseToolingOnlyVitestWorkers(
+  config: string,
+  args: string[],
+  env: NodeJS.ProcessEnv,
+  _testNamePattern?: string | RegExp,
+  includePatterns?: readonly string[],
+): boolean {
+  return (
+    config === "test/vitest/vitest.tooling.config.ts" &&
+    areToolingOnlyVitestUnitFiles(selectedFiles(args, env, includePatterns))
+  );
+}
+
 export function areRuntimeOnlyVitestUnitFiles(files: readonly string[]): boolean {
   return files.length > 0 && files.every((file) => runtimeOnlyUnitFiles.has(file));
 }
@@ -75,11 +132,7 @@ export function shouldUseRuntimeOnlyVitestWorkers(
   testNamePattern?: string | RegExp,
   includePatterns?: readonly string[],
 ): boolean {
-  const files = (
-    includePatterns ??
-    loadPatternListFromEnv("OPENCLAW_VITEST_INCLUDE_FILE", env) ??
-    collectVitestFileFilters(args)
-  ).map((file) => file.replaceAll("\\", "/").replace(/^\.\//u, ""));
+  const files = selectedFiles(args, env, includePatterns);
   if (files.length === 0) {
     return false;
   }
