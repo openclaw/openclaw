@@ -24,6 +24,7 @@ import {
   makeEmbeddedRunnerAttempt,
 } from "./test-helpers/embedded-agent-runner-e2e-fixtures.js";
 import { drainScenarioDatabase } from "./test-helpers/embedded-run-scenario.test-support.js";
+import { createSenseNovaFaultTransport } from "./test-helpers/sensenova-fault-transport.js";
 
 type ProviderFault =
   | { status: 200; text: string }
@@ -42,7 +43,7 @@ type AttemptObservation = {
   provider: string;
   model: string;
   profileId?: string;
-  fault: ProviderFault;
+  fault: ProviderFault | { status: 429; window: "sensenova" };
 };
 
 type ScenarioOutcome = Awaited<ReturnType<typeof runScenario>>;
@@ -97,7 +98,7 @@ beforeEach(() => {
   sleepWithAbortMock.mockClear();
 });
 
-function makeProviderConfig(fallbacks: string[]): OpenClawConfig {
+function makeProviderConfig(fallbacks: string[], primary = "openai/mock-1"): OpenClawConfig {
   const provider = (modelIds: string[]) => ({
     api: "openai-responses" as const,
     apiKey: "test-key",
@@ -108,13 +109,14 @@ function makeProviderConfig(fallbacks: string[]): OpenClawConfig {
   });
   return {
     agents: {
-      defaults: { model: { primary: "openai/mock-1", fallbacks } },
+      defaults: { model: { primary, fallbacks } },
       entries: { test: {} },
     },
     models: {
       providers: {
         openai: provider(["mock-1"]),
         groq: provider(["mock-2", "mock-3"]),
+        sensenova: provider(["deepseek-v4-flash", "deepseek-flash"]),
       },
     },
   };
@@ -139,7 +141,10 @@ async function withScenarioWorkspace<T>(
   }
 }
 
-function writeProfiles(agentDir: string, profiles: { openai: 1 | 2; groq?: boolean }): void {
+function writeProfiles(
+  agentDir: string,
+  profiles: { openai: 1 | 2; groq?: boolean; sensenova?: boolean },
+): void {
   const entries: Array<[string, string, string, number]> = [
     ["openai:p1", "openai", "openai-one", 1],
   ];
@@ -148,6 +153,9 @@ function writeProfiles(agentDir: string, profiles: { openai: 1 | 2; groq?: boole
   }
   if (profiles.groq) {
     entries.push(["groq:p1", "groq", "groq-one", 3]);
+  }
+  if (profiles.sensenova) {
+    entries.push(["sensenova:p1", "sensenova", "synthetic-test-key", 4]);
   }
   saveAuthProfileStore(
     {
@@ -254,6 +262,11 @@ async function runScenario(params: {
   config: OpenClawConfig;
   runId: string;
 }) {
+  const primary = params.config.agents?.defaults?.model;
+  const [primaryProvider = "openai", primaryModel = "mock-1"] =
+    typeof primary === "object" && primary?.primary
+      ? primary.primary.split("/", 2)
+      : ["openai", "mock-1"];
   const { replaceSessionEntry } = await import("../config/sessions/session-accessor.js");
   const sessionTarget = {
     agentId: "test",
@@ -279,8 +292,8 @@ async function runScenario(params: {
     const outcome = await maintenance.run(() =>
       runWithModelFallback<EmbeddedAgentRunResult>({
         cfg: params.config,
-        provider: "openai",
-        model: "mock-1",
+        provider: primaryProvider,
+        model: primaryModel,
         runId: params.runId,
         sessionId: sessionTarget.sessionId,
         sessionKey: sessionTarget.sessionKey,
@@ -548,6 +561,107 @@ it.each([false, true])("walks the mixed fault chain (exhausted=%s)", async (exha
       }
     },
   );
+});
+
+it("recovers from the SenseNova minute-window 429 without disabling its profile", async () => {
+  await withScenarioWorkspace(async ({ agentDir, workspaceDir }) => {
+    writeProfiles(agentDir, { openai: 1, sensenova: true });
+    const config = makeProviderConfig(["sensenova/deepseek-flash"], "sensenova/deepseek-v4-flash");
+    const observations: AttemptObservation[] = [];
+    const transport = await createSenseNovaFaultTransport();
+    runEmbeddedAttemptMock.mockImplementation(async (params) => {
+      const modelId = params.modelId;
+      const assistant = await transport.call(params.provider, modelId);
+      observations.push({
+        provider: params.provider,
+        model: modelId,
+        profileId: params.authProfileId,
+        fault:
+          assistant.stopReason === "error"
+            ? transport.getPhase() === "billing"
+              ? { status: 402 }
+              : { status: 429, window: "sensenova" }
+            : {
+                status: 200,
+                text:
+                  transport.getPhase() === "minute-window"
+                    ? "fallback recovered"
+                    : "next turn recovered",
+              },
+      });
+      return {
+        ...makeEmbeddedRunnerAttempt({
+          lastAssistant: assistant,
+          assistantTexts:
+            assistant.stopReason === "stop"
+              ? [
+                  transport.getPhase() === "minute-window"
+                    ? "fallback recovered"
+                    : "next turn recovered",
+                ]
+              : [],
+        }),
+        sessionIdUsed: params.sessionId,
+      };
+    });
+
+    try {
+      const first = expectResult(
+        await runScenario({ agentDir, workspaceDir, config, runId: "sensenova-minute-window" }),
+      );
+      expect(new Set(observations.map(({ profileId }) => profileId))).toEqual(
+        new Set(["sensenova:p1"]),
+      );
+      expect(first.result.payloads?.[0]?.text).toContain("fallback recovered");
+      expect(transport.requests.map(({ model, status }) => [model, status])).toEqual([
+        ...Array.from({ length: 10 }, () => ["deepseek-v4-flash", 429]),
+        ["deepseek-flash", 200],
+      ]);
+      expect(transport.transportErrors[0]).toMatchObject({
+        errorCode: "insufficient_quota",
+        errorType: "rate_limit_error",
+      });
+      expect(transport.transportErrors[0]?.errorBody).toContain("inference exceeds tpm/rpm limit");
+      expect(first.attempts).toMatchObject([
+        { provider: "sensenova", model: "deepseek-v4-flash", reason: "rate_limit" },
+      ]);
+      const stats = (await readUsageStats(agentDir))["sensenova:p1"];
+      expect(stats).toMatchObject({
+        cooldownReason: "rate_limit",
+        cooldownModel: "deepseek-v4-flash",
+      });
+      expect(stats?.disabledUntil).toBeUndefined();
+
+      transport.setPhase("recovered");
+      const next = expectResult(
+        await runScenario({ agentDir, workspaceDir, config, runId: "sensenova-next-turn" }),
+      );
+      expect(
+        observations
+          .slice(-1)
+          .map(({ provider, model, profileId }) => [provider, model, profileId]),
+      ).toEqual([["sensenova", "deepseek-v4-flash", "sensenova:p1"]]);
+      expect(next.result.payloads?.[0]?.text).toContain("next turn recovered");
+      expect((await readUsageStats(agentDir))["sensenova:p1"]?.disabledUntil).toBeUndefined();
+
+      transport.setPhase("billing");
+      await runScenario({
+        agentDir,
+        workspaceDir,
+        config: makeProviderConfig([], "sensenova/deepseek-v4-flash"),
+        runId: "sensenova-billing-control",
+      });
+      expect(transport.requests.at(-1)).toEqual({ model: "deepseek-v4-flash", status: 402 });
+      expect(transport.transportErrors.at(-1)).toMatchObject({
+        errorCode: "billing_hard_limit_reached",
+      });
+      expect((await readUsageStats(agentDir))["sensenova:p1"]?.disabledUntil).toBeGreaterThan(
+        Date.now(),
+      );
+    } finally {
+      await transport.close();
+    }
+  });
 });
 
 it.each(["model fallback", "auth profile", "exhausted profiles"] as const)(
