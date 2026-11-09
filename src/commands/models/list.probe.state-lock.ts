@@ -16,7 +16,7 @@ export async function acquireAuthProbeStateLock(signal: AbortSignal) {
     }
     throw new ExpectedCliError({
       message: error.message,
-      humanOutput: `${error.message}\nFor a live provider check, run ${formatCliCommand('openclaw gateway call models.probe --params \'{"provider":"<provider>"}\' --json')}.`,
+      humanOutput: error.message,
       machineOutput: error.message,
       cause: error,
     });

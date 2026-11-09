@@ -142,8 +142,7 @@ it("refuses CLI probes while a live Gateway owns canonical state", async () => {
       argv: ["node", "openclaw", "models", "status", "--probe"],
       env: {},
     }).join("\n");
-    expect(output).toContain(message);
-    expect(output).toContain("openclaw gateway call models.probe");
+    expect(output).toBe(message);
     expect(formatCliJsonFailure(error, { env: {} })).toEqual({
       ok: false,
       error: { type: "cli_error", message },
