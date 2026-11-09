@@ -1,0 +1,3 @@
+17
+# Source 433a0c35850349620fbcb23cf6792f2e7d882fde; mcp-oauth-refresh-boundary.ts wrapFetch: use existing isProvenDeliveryNotSentError to mark not-attempted and restore only the exact claim in finish. Preserve all live lease checks and conservative ambiguous-send refusal.
+# Exact net LF growth of independently justified retained regressions against frozen LOCAL11.8 baseline; no removed assertions or scalar change.

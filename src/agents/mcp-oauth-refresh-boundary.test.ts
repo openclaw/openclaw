@@ -171,6 +171,23 @@ describe("real MCP SDK token HTTP and durable owner", () => {
     expect(fetchFn).toHaveBeenCalledOnce();
   });
 
+  it.each([
+    { code: "EAI_AGAIN", syscall: "getaddrinfo" },
+    { code: "ECONNREFUSED", syscall: "connect" },
+  ])("restores the grant after $code before the token request", async (cause) => {
+    seed();
+    const fetchFn = vi.fn<typeof fetch>(async () => {
+      throw new TypeError("fetch failed", { cause: Object.assign(new Error(cause.code), cause) });
+    });
+    await expect(refresh(fetchFn)).rejects.toMatchObject({
+      oauthRefreshOutcome: { phase: "before-dispatch", outcome: "not-attempted" },
+    });
+    expect((await read()).refreshClaim).toBeUndefined();
+    fetchFn.mockImplementation(async () => tokens());
+    await expect(refresh(fetchFn)).resolves.toBe("synthetic-new-access");
+    expect(fetchFn).toHaveBeenCalledTimes(2);
+  });
+
   it.each(["lost-response", "503", "nested-rejection", "invalid-success", "rejected-fresh"])(
     "fences %s without SDK fallback deleting client provenance or replaying a grant",
     async (failure) => {
