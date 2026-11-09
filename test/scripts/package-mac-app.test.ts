@@ -1897,7 +1897,7 @@ try {
     { mutation: "app-build", skipMlx: true },
     { mutation: "cli-build", skipMlx: true },
   ])(
-    "keeps native builds inside the committed Swift lock ($mutation, skip MLX $skipMlx)",
+    "keeps native app/CLI and SwiftBuild MLX builds inside the committed Swift lock ($mutation, skip MLX $skipMlx)",
     ({ mutation, skipMlx }) => {
       const root = tempDirs.make("openclaw-package-swift-boundaries-");
       const events = path.join(root, "events");
@@ -1951,12 +1951,12 @@ try {
               operation=edited-resolve
               cp ${JSON.stringify(edited)} "$SWIFT_PACKAGE_ROOT/Package.resolved" ;;
             'package --scratch-path '*' unedit --force Peekaboo') operation=unedit ;;
-            'build '*"--product OpenClaw "*) operation=app-build ;;
-            'build '*"--product openclaw-mac "*) operation=cli-build ;;
-            'build '*"--product openclaw-mlx-tts "*' --show-bin-path')
+            'build --build-system native '*"--product OpenClaw "*) operation=app-build ;;
+            'build --build-system native '*"--product openclaw-mac "*) operation=cli-build ;;
+            'build --build-system swiftbuild '*"--product openclaw-mlx-tts "*' --show-bin-path')
               operation=helper-products
               printf '%s\\n' "$ROOT_DIR/helper-products" ;;
-            'build '*"--product openclaw-mlx-tts "*) operation=helper-build ;;
+            'build --build-system swiftbuild '*"--product openclaw-mlx-tts "*) operation=helper-build ;;
             *) printf 'unexpected swift: %s\\n' "$*" >&2; return 79 ;;
           esac
           event "$operation"

@@ -536,10 +536,11 @@ build_swift_architecture() {
   local target_flags=(-Xswiftc -target -Xswiftc "$arch-apple-macosx$deployment_target")
   echo "🔨 Building $PRODUCT ($BUILD_CONFIG) [$arch]"
   verify_snapshot_swift_lock
-  swift build -c "$BUILD_CONFIG" --jobs "$SWIFT_BUILD_JOBS" --product "$PRODUCT" --build-path "$BUILD_PATH" --arch "$arch" "${target_flags[@]}" -Xlinker -rpath -Xlinker @executable_path/../Frameworks
+  # App, CLI, and Sparkle packaging consume the native backend's configuration directory.
+  swift build --build-system native -c "$BUILD_CONFIG" --jobs "$SWIFT_BUILD_JOBS" --product "$PRODUCT" --build-path "$BUILD_PATH" --arch "$arch" "${target_flags[@]}" -Xlinker -rpath -Xlinker @executable_path/../Frameworks
   verify_snapshot_swift_lock
   echo "🔨 Building openclaw-mac ($BUILD_CONFIG) [$arch]"
-  swift build -c "$BUILD_CONFIG" --jobs "$SWIFT_BUILD_JOBS" --product openclaw-mac --build-path "$BUILD_PATH" --arch "$arch" "${target_flags[@]}" -Xlinker -rpath -Xlinker @executable_path/../Frameworks
+  swift build --build-system native -c "$BUILD_CONFIG" --jobs "$SWIFT_BUILD_JOBS" --product openclaw-mac --build-path "$BUILD_PATH" --arch "$arch" "${target_flags[@]}" -Xlinker -rpath -Xlinker @executable_path/../Frameworks
   verify_snapshot_swift_lock
   arch_peekaboo_commit="$(compiled_peekaboo_commit "$PEEKABOO_SNAPSHOT_MOUNT" "$PEEKABOO_LOCKED_SOURCE_COMMIT")"
   printf '%s\n' "$arch_peekaboo_commit" > "$SWIFT_WORK_ROOT/peekaboo-commit"
