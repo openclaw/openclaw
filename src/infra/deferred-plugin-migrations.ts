@@ -194,11 +194,21 @@ export const deferredPluginMigrationReadOperations = {
   }),
 } satisfies WorkerOperationHandlers<EngineConnection>;
 
+/** Guidance changes do not change the obligations protecting retained migration inputs. */
+function sameDeferredPluginMigrationInputs(
+  current: readonly DeferredPluginMigration[],
+  expected: readonly DeferredPluginMigration[],
+): boolean {
+  const inputs = (pending: readonly DeferredPluginMigration[]) =>
+    pending.map(({ reason: _reason, command: _command, ...fields }) => fields);
+  return isDeepStrictEqual(inputs(current), inputs(expected));
+}
+
 function assertPendingGeneration(
   current: readonly DeferredPluginMigration[],
   expected: readonly DeferredPluginMigration[],
 ): void {
-  if (!isDeepStrictEqual(current, expected)) {
+  if (!sameDeferredPluginMigrationInputs(current, expected)) {
     throw new DeferredPluginMigrationConflictError(current);
   }
 }
@@ -352,7 +362,7 @@ export function withDeferredPluginMigrationsCurrent<T>(
   const result = runOpenClawStateWriteTransaction(
     ({ db }) => {
       const pending = pendingMigrationRecords(readPendingMigrationRows(db));
-      if (!isDeepStrictEqual(pending, expectedPending) && params.onConflict) {
+      if (params.onConflict && !sameDeferredPluginMigrationInputs(pending, expectedPending)) {
         // Commit preservation facts against these rows; callers refuse publication after return.
         return params.onConflict(pending);
       }

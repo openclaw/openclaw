@@ -1,0 +1,3 @@
+# RH-2-09 Doctor deferred-migration identity regression coverage.
+# Added physical test lines; task-owned allocation, not a shared ceiling edit.
+298

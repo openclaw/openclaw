@@ -5,7 +5,10 @@ import { afterAll, beforeAll, describe, expect, it, onTestFinished, vi } from "v
 import * as terminalNote from "../../packages/terminal-core/src/note.js";
 import { readConfigFileSnapshot } from "../config/io.js";
 import { writeOpenClawConfig } from "../config/test-helpers.js";
-import { readDeferredPluginMigrations } from "../infra/deferred-plugin-migrations.js";
+import {
+  readDeferredPluginMigrations,
+  recordDeferredPluginMigrations,
+} from "../infra/deferred-plugin-migrations.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { buildUpdateRehearsalPathEnv } from "../infra/update-rehearsal-paths.js";
 import { seedInstalledPluginIndex } from "../plugins/test-helpers/installed-plugin-index.js";
@@ -205,6 +208,68 @@ describe("configured plugin migration deferral", () => {
       );
     });
   });
+
+  it("promotes heartbeat config after rewriting only retained obligation guidance", () =>
+    withDoctorConfigPreflightHome(async (home) => {
+      const pluginId = "guidance-fixture";
+      const root = path.join(home, "guidance-plugin");
+      await installStatelessFixture(root, pluginId);
+      const config = {
+        ...createPluginConfig(pluginId, { region: "us-en" }, [root]),
+        agents: {
+          defaults: { heartbeat: { agentId: "main", every: "30m", skipWhenBusy: true } },
+          entries: { main: { workspace: path.join(home, "workspace") } },
+        },
+      };
+      const configPath = await writeOpenClawConfig(home, config);
+      await recordDeferredPluginMigrations({
+        pending: [
+          {
+            pluginId,
+            reason:
+              "Package convergence must wait until the updating parent releases its install records.",
+            command: "openclaw update repair",
+            requiresStateMigration: true,
+            configPaths: [["plugins", "entries", pluginId, "config"]],
+          },
+        ],
+      });
+      await seedInstalledPluginIndex(
+        { [pluginId]: { source: "path", sourcePath: root, installPath: root } },
+        { config },
+      );
+      const databasePath = path.join(home, ".openclaw", "state", "openclaw.sqlite");
+      await closeOpenClawStateDatabaseByPathAsync(databasePath);
+      await withEnvAsync(
+        {
+          OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+          OPENCLAW_UPDATE_IN_PROGRESS: "1",
+          OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE: "1",
+          OPENCLAW_UPDATE_POST_CORE_CONVERGENCE: undefined,
+        },
+        async () => {
+          const result = await runDoctorConfigPreflight(doctorOptions);
+          expect(result.snapshot.valid).toBe(true);
+          expect(readDeferredPluginMigrations()).toEqual([
+            expect.objectContaining({
+              pluginId,
+              requiresStateMigration: true,
+              command: "openclaw doctor --fix",
+              reason: expect.stringContaining("has not confirmed"),
+            }),
+          ]);
+          const written = JSON.parse(await fs.readFile(configPath, "utf8"));
+          expect(written).not.toHaveProperty("agents.defaults.heartbeat.skipWhenBusy");
+          expect(written.agents.defaults.heartbeat).toEqual({ agentId: "main", every: "30m" });
+          expect(written.plugins.entries[pluginId].config).toEqual({ region: "us-en" });
+          const retained = readDeferredPluginMigrations();
+          await closeOpenClawStateDatabaseByPathAsync(databasePath);
+          expect(readDeferredPluginMigrations()).toEqual(retained);
+          expect((await runDoctorConfigPreflight(doctorOptions)).snapshot.valid).toBe(true);
+          expect(readDeferredPluginMigrations()).toEqual(retained);
+        },
+      );
+    }));
 
   it.each(["linked", "unrecorded"] as const)(
     "keeps a %s config-path plugin available only when package convergence skips it",

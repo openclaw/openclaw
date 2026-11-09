@@ -339,7 +339,7 @@ describe("deferred configured-plugin migrations", () => {
     },
   );
 
-  it.each(["identical", "stronger", "additional"] as const)(
+  it.each(["identical", "reason", "command", "stronger", "additional"] as const)(
     "resolves only the captured pending generation after an %s report",
     async (change) => {
       const { env } = fixture();
@@ -348,14 +348,27 @@ describe("deferred configured-plugin migrations", () => {
       await recordDeferredPluginMigrations({
         env,
         pending: [
-          change === "stronger"
-            ? { ...pending, requiresStateMigration: true }
-            : change === "additional"
-              ? { ...pending, pluginId: "new-plugin" }
-              : pending,
+          change === "reason"
+            ? { ...pending, reason: "Inspection remains pending." }
+            : change === "command"
+              ? { ...pending, command: "openclaw update repair" }
+              : change === "stronger"
+                ? { ...pending, requiresStateMigration: true }
+                : change === "additional"
+                  ? { ...pending, pluginId: "new-plugin" }
+                  : pending,
         ],
       });
       const before = readDeferredPluginMigrations({ env });
+      const matches = change === "identical" || change === "reason" || change === "command";
+      expect(
+        withDeferredPluginMigrationsCurrent(
+          { env, expectedPending, onConflict: () => false },
+          () => true,
+        ),
+      ).toBe(matches);
+      await closeOpenClawStateDatabaseAsync();
+      expect(readDeferredPluginMigrations({ env })).toEqual(before);
       const complete = () =>
         recordDeferredPluginMigrations({
           env,
@@ -363,8 +376,9 @@ describe("deferred configured-plugin migrations", () => {
           resolvedPluginIds: [pending.pluginId],
           expectedPending,
         });
-      if (change === "identical") {
+      if (matches) {
         await expect(complete()).resolves.toEqual([]);
+        await closeOpenClawStateDatabaseAsync();
         expect(readDeferredPluginMigrations({ env })).toEqual([]);
       } else {
         await expect(complete()).rejects.toThrow("Plugin migration obligations changed");
