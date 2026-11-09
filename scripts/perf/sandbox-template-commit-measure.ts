@@ -8,6 +8,8 @@
  * behavior without local dependencies. --files may shrink this correctness-only fixture.
  * --contract also checks concurrent source changes and lockfile invalidation;
  * --seed-only followed by --resume --burst 20 in another process checks restart reuse.
+ * --alternate [--burst 20] seeds three commits, then measures concurrent A/B/C waves.
+ * Results are saved before asserting zero repeated dependency preparations.
  * Reuse the same --output; burst CPU/allocation are aggregate, not per-caller costs.
  * --profile records a separate source-change CPU profile (exclude from timing pairs).
  * Create them with git show <base>:src/gateway/worker-environments/<name>.ts.
@@ -49,6 +51,7 @@ const { values } = parseArgs({
     "seed-only": { type: "boolean" },
     resume: { type: "boolean" },
     burst: { type: "string" },
+    alternate: { type: "boolean" },
     "baseline-dir": { type: "string" },
   },
 });
@@ -328,33 +331,53 @@ async function verifyClone(destination: string, baseCommit: string) {
     );
   }
 }
+async function burst(label: string, ref: string, count: number) {
+  const processCpu = process.cpuUsage();
+  const allocated = getHeapStatistics().total_allocated_bytes;
+  const before = installs;
+  const started = performance.now();
+  const destinations = await Promise.all(
+    Array.from({ length: count }, (_, i) => clone(`${label}-${process.pid}-${i}`, ref, false)),
+  );
+  rows.push({
+    label,
+    elapsedMs: performance.now() - started,
+    processCpuMs: Object.values(process.cpuUsage(processCpu)).reduce((a, b) => a + b) / 1000,
+    mainThreadAllocatedBytes: getHeapStatistics().total_allocated_bytes - allocated,
+    installs: installs - before,
+    ...(values.alternate ? { generations: await listTemplatesAsync(process.env) } : {}),
+  });
+  for (const destination of destinations) {
+    await verifyClone(destination, git("rev-parse", ref));
+  }
+}
+let alternationInstalls: number | undefined;
 try {
   if (!values.resume) {
     await clone("seed", "fixture-initial");
   }
-  if (values.burst) {
+  if (values.alternate) {
+    assert(!values.resume && !values["seed-only"] && !values.contract && !values.profile);
+    const count = Number(values.burst ?? "3");
+    assert(Number.isSafeInteger(count) && count >= 3 && count <= 100);
+    await clone("seed-source-one", "fixture-source-one");
+    await clone("seed-source-two", "fixture-source-two");
+    rows.push({ label: "seed-generations", generations: await listTemplatesAsync(process.env) });
+    const before = installs;
+    for (const [index, ref] of [
+      "fixture-initial",
+      "fixture-source-one",
+      "fixture-source-two",
+    ].entries()) {
+      await burst(`alternate-${index}`, ref, Math.floor(count / 3) + (index < count % 3 ? 1 : 0));
+    }
+    alternationInstalls = installs - before;
+  } else if (values.burst) {
     const count = Number(values.burst);
     assert(Number.isSafeInteger(count) && count > 0 && count <= 100);
-    const processCpu = process.cpuUsage();
-    const allocated = getHeapStatistics().total_allocated_bytes;
     const before = installs;
-    const started = performance.now();
-    const destinations = await Promise.all(
-      Array.from({ length: count }, (_, i) =>
-        clone(`resumed-${process.pid}-${i}`, "fixture-initial", false),
-      ),
-    );
-    rows.push({
-      label: "burst",
-      elapsedMs: performance.now() - started,
-      processCpuMs: Object.values(process.cpuUsage(processCpu)).reduce((a, b) => a + b) / 1000,
-      mainThreadAllocatedBytes: getHeapStatistics().total_allocated_bytes - allocated,
-      installs: installs - before,
-    });
+    await burst("burst", "fixture-initial", count);
     assert.equal(installs - before, 0, "Restart with unchanged template inputs must not reinstall");
-    for (const destination of destinations) {
-      await verifyClone(destination, git("rev-parse", "fixture-initial"));
-    }
   } else if (!values["seed-only"]) {
     await clone("source-change", "fixture-source-one");
   }
@@ -375,6 +398,7 @@ try {
         files: payloadFiles,
         payloadBytes: payloadFiles * 17742,
         installs,
+        alternationInstalls,
         rows,
         templates: await listTemplatesAsync(process.env),
       },
@@ -382,6 +406,9 @@ try {
       2,
     ),
   );
+  if (values.alternate) {
+    assert.equal(alternationInstalls, 0, "Returning to three prepared commits must not reinstall");
+  }
 } finally {
   // Cleanup only this isolated database's builders; never enumerate global containers.
   for (const entry of (await readRegistry({ env: process.env })).entries) {

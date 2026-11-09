@@ -81,13 +81,14 @@ with sandbox mode `all` or `non-main` in the background. Agents with sandbox mod
 still prepare dependencies on first use. A session arriving during preparation
 waits for the same build; later checkouts arrive with `node_modules`. Other selected commits
 still run dependency installation on first use. When the frozen lockfile and Git
-attributes are unchanged, OpenClaw clones the idle template into a separate generation,
+attributes are unchanged, OpenClaw clones a prepared template into a separate generation,
 imports only the new Git objects, and checks out the source delta before reinstalling
 into its retained dependencies.
 Repeat installation still runs repository lifecycle scripts when manifests and
 lockfiles are unchanged.
 Concurrent requests for that commit share the refresh. Lockfile or attribute changes
-build a fresh template; a template still being cloned cannot be refreshed. Each
+build a fresh template. Refresh never changes the source generation, including while
+another session is cloning it. Each
 clone still receives only the selected source snapshot in its private Git object
 store. Shutdown cancels preparation and
 drains accepted installer cleanup. Validation leaves the last-good generation published;
@@ -101,6 +102,20 @@ and retry during housekeeping, including after a Gateway restart. This cleanup
 also runs when ordinary sandbox idle and age pruning are disabled.
 The private checkout storage must support filesystem acceleration, and
 `worktreeAcceleration: false` disables this preparation too.
+
+Sandbox preparation retains up to four recently used generations per repository
+and private template root, across runtime identities. Returning to a retained
+commit reuses its prepared dependencies instead of refreshing the shared template
+back and forth. Every build still passes disk admission. Live clone and installer
+readers can temporarily retain additional generations; cleanup never removes
+their files before those readers settle.
+
+Older runtime identities become eligible for cleanup after six unused hours.
+The most recently used identity keeps the ordinary idle retention window, subject
+to the four-generation limit. Hourly maintenance shares the existing deletion
+spacing and IO-pressure limits without holding the template publication lock while
+waiting. Completed projections have independent Git metadata and COW file references,
+so retiring their original template does not remove their files or dependencies.
 
 Dependency preparation uses the selected sandbox image, network restrictions,
 and guest working directory, without configured credentials, custom bind mounts,
@@ -147,11 +162,14 @@ object store. This avoids scanning every session ref before negotiation; local
 refs and shallow boundaries stay unchanged. The first filtered fetch for a URL
 uses the original repository so Git can register it for later content hydration.
 Managed worktree default-branch refresh uses the same isolated object-store
-transport when a cached base commit is physically available and origin uses the
-standard branch mapping. Custom fetch mappings keep Git's normal source-side fetch. It preserves origin's
-effective Git transport settings and publishes only the fetched default tracking
-ref. Other branches and the source `FETCH_HEAD` remain unchanged; ordinary source
-fetch and repair still handle an unavailable cached base.
+transport regardless of origin's configured fetch mappings. It fetches only the
+default branch and publishes its tracking ref; additional PR refspecs and custom
+destinations do not broaden that operation. The shared repository's ref-mutation
+queue is held only for ref publication, so other worktrees can register while
+transport runs. Origin's effective transport settings, other branches, and the
+source `FETCH_HEAD` remain unchanged. An unavailable cached base is fetched through
+the same isolated transport; ordinary explicit fetches still own broader ref
+refresh and repository repair.
 Only sessions with a writable managed sandbox are offered this action; direct
 host sessions merge the base with git in their workspace before publishing.
 Resolve reported conflicts and repeat it with `conflictsResolved: true` and the
@@ -425,7 +443,7 @@ For partial clones, OpenClaw inventories missing objects before estimating check
 
 Empty pack directories skip pack mutation admission; threshold-gated commit-graph and loose-object maintenance still runs. Packs arriving after that inventory are handled by the next maintenance pass.
 
-Pack consolidation keeps promisor and ordinary packs separate. Each group selects up to 1,024 of its smallest eligible packs, capped at 16 GiB of pack data and 128 MiB of index data per pass. The index budget admits multiple large fetch indexes; a budget smaller than two ordinary indexes would leave their packs permanently fragmented. Consolidation combines at least two packs only when the smaller inputs together reach the largest selected pack's size. Otherwise it leaves that largest pack untouched and considers the smaller batch. The index budget bounds object metadata even for highly compressed inputs. Git verifies each selected pack and index, then streams all their objects into a replacement without fetching missing partial-clone objects. The single-threaded writer searches for deltas across separately fetched revisions with a 10-object window and an 8 MiB window-memory budget, so historical blob reads do not permanently retain every revision at full size. This budget bounds the delta-search window, not total process RSS; unrelated objects can cost more background CPU without shrinking. Inputs retire only after Git publishes the verified replacement. Kept packs, cruft packs, and packs outside the batch remain untouched. This size-based policy lets bounded batches keep converging below 16 packs without repeatedly rewriting a large pack for tiny additions. Maintenance removes optional multi-pack-index lookup metadata, including stale indexes, so Git uses individual pack indexes without a repository-wide rebuild. Verification and rewriting each have a 30-minute subprocess budget. Backlogs drain over successive passes; consolidation does not guarantee a fixed pack count for arbitrary repository growth or impose an operating-system RSS limit. Consolidation uses low-priority Git subprocesses, one thread per pack process, and idle I/O priority where `ionice` is available. On delegated Linux services, maintenance runs in the resource-limited `agent-exec` group. Foreground Git retains its Gateway placement. Maintenance acquires the project checkout lease without waiting and skips busy projects without consuming their hourly slot. Losing the lease mid-pass defers that repository to its next hourly pass instead of suspending maintenance. Verification and rewriting run beside fetch and other ref updates; only retiring the replaced inputs waits for the repository's ref-mutation queue. The checkout lease also prevents concurrent maintenance owners from rewriting the same project.
+Pack consolidation keeps promisor and ordinary packs separate. Each group selects up to 1,024 of its smallest eligible packs, capped at 16 GiB of pack data and 128 MiB of index data per pass. The index budget admits multiple large fetch indexes; a budget smaller than two ordinary indexes would leave their packs permanently fragmented. Consolidation combines at least two packs only when the smaller inputs together reach the largest selected pack's size. Otherwise it leaves that largest pack untouched and considers the smaller batch. The index budget bounds object metadata even for highly compressed inputs. Git verifies each selected pack and index, then streams all their objects into a replacement without fetching missing partial-clone objects. The single-threaded writer searches for deltas across separately fetched revisions with a 10-object window and an 8 MiB window-memory budget, so historical blob reads do not permanently retain every revision at full size. This budget bounds the delta-search window, not total process RSS; unrelated objects can cost more background CPU without shrinking. Inputs retire only after Git publishes the verified replacement. Kept packs, cruft packs, and packs outside the batch remain untouched. This size-based policy lets bounded batches keep converging below 16 packs without repeatedly rewriting a large pack for tiny additions. Maintenance removes optional multi-pack-index lookup metadata, including stale indexes, so Git uses individual pack indexes without a repository-wide rebuild. Verification and rewriting each have a 30-minute subprocess budget. Backlogs drain over successive passes; consolidation does not guarantee a fixed pack count for arbitrary repository growth or impose an operating-system RSS limit. Consolidation uses low-priority Git subprocesses, one thread per pack process, and idle I/O priority where `ionice` is available. On delegated Linux services, maintenance runs in the resource-limited `agent-exec` group. Foreground Git retains its Gateway placement. A separate project Git maintenance lease serializes background passes. Verification and rewriting do not hold the project checkout lease, so foreground preparation and fetch can proceed during pack writing. Only optional pack-index invalidation and retirement take the checkout lease without waiting; a busy checkout defers maintenance without consuming its hourly slot. Retirement joins the ref-mutation queue before acquiring the checkout lease and stops starting pack deletions after 250 ms, leaving valid duplicates for a later sweep. Losing maintenance ownership defers the pass instead of suspending the repository. Lease-wait logs include the holder's operation as well as its unique identity.
 
 A fresh clone is not a replacement for a managed project's object store: remote
 history does not include its unpublished commits, local branches, snapshots, or
