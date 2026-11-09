@@ -183,6 +183,7 @@ const { values } = parseArgs({
     "mutation-audit": { type: "boolean", default: false },
     "transcript-layout-audit": { type: "boolean", default: false },
     "transcript-paint-marker": { type: "boolean", default: false },
+    "transcript-paint-probe": { type: "boolean", default: false },
     "live-region-audit": { type: "boolean", default: false },
     "remount-audit": { type: "boolean", default: false },
     "route-transitions": { type: "boolean", default: false },
@@ -308,6 +309,9 @@ if (values.trace && values["cpu-only"]) {
 }
 if (values["transcript-paint-marker"] && !values["transcript-layout-audit"]) {
   throw new Error("--transcript-paint-marker requires --transcript-layout-audit");
+}
+if (values["transcript-paint-probe"] && !values["transcript-layout-audit"]) {
+  throw new Error("--transcript-paint-probe requires --transcript-layout-audit");
 }
 if (
   values["transcript-layout-audit"] &&
@@ -788,6 +792,7 @@ try {
     mutationAudit: values["mutation-audit"],
     transcriptLayoutAudit: values["transcript-layout-audit"],
     transcriptPaintMarker: values["transcript-paint-marker"],
+    transcriptPaintProbe: values["transcript-paint-probe"],
     liveRegionAudit: values["live-region-audit"],
     remountAudit: values["remount-audit"],
     routeTransitions: values["route-transitions"],
@@ -1415,6 +1420,7 @@ try {
                   artifactPrefix,
                   engine,
                   values["transcript-paint-marker"],
+                  values["transcript-paint-probe"],
                 );
               }
               if (scenario.id.startsWith("gesture-")) {

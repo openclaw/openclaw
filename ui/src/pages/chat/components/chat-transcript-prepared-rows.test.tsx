@@ -525,26 +525,29 @@ it("keeps ordinary neighbors as HTML beside retained rows", async () => {
   expect(view.container.querySelector('[data-virtual-row-key="fragment:7"]')).toBeNull();
 });
 
-it("keeps reverse medium preparation through size compensation while the tail streams", async () => {
+it("keeps reverse medium forecasts through size compensation while the tail streams", async () => {
   const view = await transcriptFixture(24_000, true, false, "data-only", 600, false, 1, true);
   await view.scrollTo(180);
   await view.frame();
   await view.scrollTo(120.5);
-  const first = transcriptRows(view.container)[0]!;
+  const first = view.container.querySelector<HTMLElement>(
+    ".chat-virtual-row:not([data-prepared-row])",
+  )!;
   const beforeResize = view.container.scrollTop;
   view.resizeRow(first, 500);
   await settle();
-  const rendered = view.renderRow.mock.calls.length;
   await view.frame(1, false);
   expect(view.container.scrollTop).toBeGreaterThan(beforeResize);
   await view.task();
   await view.frame(1, false);
   await view.task();
-  const warmed = view.renderRow.mock.calls
-    .slice(rendered)
-    .map(([row]) => (row.kind === "item" ? row.item : -1));
-  expect(warmed.length).toBeGreaterThan(0);
-  expect(Math.max(...warmed)).toBeLessThan(Number(first.dataset.index));
+  const forecasts = [
+    ...view.container.querySelectorAll<HTMLElement>("[data-preparing-row][data-prepared-row]"),
+  ];
+  expect(forecasts.length).toBeGreaterThan(0);
+  expect(Math.max(...forecasts.map((row) => Number(row.dataset.index)))).toBeLessThan(
+    Number(first.dataset.index),
+  );
 });
 
 it("reuses a nearby completed row after scrolling away and back, with a bounded DOM cache", async () => {
@@ -639,40 +642,43 @@ it("keeps parked row styles stable when an earlier row changes height", async ()
   }
 });
 
-it("prepares ahead during scrolling and waits for measurement before admitting another row", async () => {
-  const view = await transcriptFixture();
-  await view.frame(8);
-  await view.scrollTo(1);
-  await view.frame();
-  await view.frame(1, false);
-  await view.scrollTo(4);
-  const activeIndexes = () =>
-    [...view.container.querySelectorAll<HTMLElement>("[data-index]:not([data-prepared-row])")].map(
-      (row) => Number(row.dataset.index),
-    );
-  await view.frame(1, false);
-  const rendered = view.renderRow.mock.calls.length;
-  const preparing = view.container.querySelector<HTMLElement>("[data-preparing-row]");
-  expect(preparing).not.toBeNull();
-  expect(preparing!.getAttribute("data-preparing-row")).toBe("true");
-  expect(view.container.querySelectorAll("[data-preparing-row]")).toHaveLength(1);
-  expect(Number(preparing!.dataset.index)).toBeGreaterThan(Math.max(...activeIndexes()));
-  await view.frame(2, false);
-  expect(view.renderRow.mock.calls).toHaveLength(rendered);
-  const draws = view.draw.mock.calls.length;
-  view.resizeRow(preparing!, 100);
-  await settle();
-  // A measured preparation must not publish a second range inside the same
-  // observer delivery. Completion shares the next frame's geometry commit.
-  expect(view.container.querySelectorAll("[data-preparing-row]")).toHaveLength(1);
-  expect(view.draw.mock.calls).toHaveLength(draws);
-  expect(view.renderRow.mock.calls).toHaveLength(rendered);
-  await view.frame(1, false);
-  expect(view.renderRow.mock.calls).toHaveLength(rendered);
-  await view.frame(1, false);
-  expect(view.renderRow.mock.calls).toHaveLength(rendered + 1);
-  expect(view.container.querySelectorAll("[data-preparing-row]")).toHaveLength(1);
-});
+it.each([
+  { direction: "down", initialOffset: 0, destination: 60 },
+  { direction: "up", initialOffset: 24_000, destination: 180 },
+])(
+  "paints the $direction forecast outside active flow before measurement",
+  async ({ direction, initialOffset, destination }) => {
+    const view = await transcriptFixture(initialOffset, true);
+    const before = transcriptRows(view.container);
+    await view.scrollTo(destination);
+    const active = transcriptRows(view.container)
+      .filter((row) => !row.hasAttribute("data-prepared-row"))
+      .map((row) => Number(row.dataset.index));
+    const forecasts = [
+      ...view.container.querySelectorAll<HTMLElement>("[data-preparing-row][data-prepared-row]"),
+    ].filter((row) => !before.includes(row));
+    expect(forecasts.length).toBeGreaterThan(1);
+    for (const row of forecasts) {
+      expect(row.hasAttribute("inert")).toBe(true);
+      expect(row.getAttribute("aria-hidden")).toBe("true");
+      expect(row.style.position).toBe("absolute");
+      expect(row.style.opacity).not.toBe("0");
+      expect(row.style.display).not.toBe("none");
+      if (direction === "up") {
+        expect(Number(row.dataset.index)).toBeLessThan(Math.min(...active));
+      } else {
+        expect(Number(row.dataset.index)).toBeGreaterThan(Math.max(...active));
+      }
+    }
+    const mounted = transcriptRows(view.container);
+    const rendered = view.renderRow.mock.calls.length;
+    await view.frame(2, false);
+    await view.task();
+    expect(transcriptRows(view.container)).toEqual(mounted);
+    expect(view.renderRow.mock.calls).toHaveLength(rendered);
+    expect(view.container.scrollTop).toBe(destination * 100);
+  },
+);
 
 it("releases initial viewport rows when the tail grows before reader navigation", async () => {
   const view = await transcriptFixture(null);
@@ -774,35 +780,6 @@ it("continues idle warming when the viewport fills the retained DOM budget", asy
   expect(view.container.querySelectorAll("[data-prepared-row]").length).toBeLessThanOrEqual(12);
 });
 
-it("materializes one predicted row between scroll frames and uses the latest viewport", async () => {
-  const view = await transcriptFixture(0, true, false, "retained");
-  await view.idle();
-  await view.frame(1, false);
-  await view.task();
-  await view.scrollTo(3);
-  const mounted = transcriptRows(view.container);
-  await view.task();
-  const prepared = transcriptRows(view.container).find((row) => !mounted.includes(row));
-  expect(prepared).toBeDefined();
-  expect(prepared!.getAttribute("data-preparing-row")).toBe("true");
-  expect(Number(prepared!.dataset.index)).toBeGreaterThan(3);
-  await view.frame(1, false);
-  await view.task();
-  expect(transcriptRows(view.container)).toHaveLength(mounted.length + 1);
-
-  view.resizeRow(prepared!, 100);
-  await settle();
-  await view.scrollTo(6);
-  const afterScroll = transcriptRows(view.container);
-  await view.frame(1, false);
-  await view.task();
-  await view.frame(1, false);
-  await view.task();
-  const next = transcriptRows(view.container).find((row) => !afterScroll.includes(row));
-  expect(next).toBeDefined();
-  expect(Number(next!.dataset.index)).toBeGreaterThan(6);
-});
-
 it("stops preparing when the predicted DOM window has no retainable rows", async () => {
   const view = await transcriptFixture(0, true, false, true);
   await view.updateRow(24, 24);
@@ -819,66 +796,21 @@ it("stops preparing when the predicted DOM window has no retainable rows", async
   expect(view.renderRow.mock.calls).toHaveLength(rendered);
 });
 
-it("prepares one arriving row between viewport-sized scroll steps", async () => {
-  const view = await transcriptFixture(0, true, false, "retained");
-  await view.scrollTo(60);
-  const mounted = transcriptRows(view.container);
-  const rendered = view.renderRow.mock.calls.length;
-  await view.frame(1, false);
-  await view.task();
-  await view.frame(1, false);
-  await view.task();
-  expect(view.renderRow.mock.calls.length).toBeGreaterThan(rendered);
-  const preparing = view.container.querySelector<HTMLElement>("[data-preparing-row]");
-  expect(preparing).not.toBeNull();
-  expect(preparing!.hasAttribute("inert")).toBe(true);
-  expect(Number(preparing!.dataset.index)).toBeGreaterThan(66);
-  expect(transcriptRows(view.container).filter((row) => !mounted.includes(row))).toEqual([
-    preparing,
-  ]);
-  const prepared = transcriptRows(view.container);
-  await view.frame(1, false);
-  await view.task();
-  expect(transcriptRows(view.container)).toEqual(prepared);
-  view.resizeRow(preparing!, 100);
-  await settle();
-  await view.scrollTo(180);
-  await view.frame(1, false);
-  await view.task();
-  await view.frame(1, false);
-  await view.task();
-  expect(
-    Number(view.container.querySelector<HTMLElement>("[data-preparing-row]")!.dataset.index),
-  ).toBeGreaterThan(180);
-});
-
-it("warms rows when earlier animation callbacks delay preparation delivery", async () => {
-  const view = await transcriptFixture(0, true, false, "retained");
-  await view.scrollTo(60);
-  const rendered = view.renderRow.mock.calls.length;
-  // The next frame may already contain another scroll target.
-  await view.task();
-  expect(view.renderRow.mock.calls.length).toBeGreaterThan(rendered);
-});
-
-it("keeps Markdown warming ahead while one DOM row awaits measurement", async () => {
-  const view = await transcriptFixture(0, true, false, "retained");
+it("warms ordinary Markdown beside forecast retained rows", async () => {
+  const view = await transcriptFixture(0, true, false, "retained", 600, false, 2);
   await view.scrollTo(60);
   await view.task();
-  const preparing = view.container.querySelector("[data-preparing-row]");
-  expect(preparing).not.toBeNull();
   await view.scrollTo(120);
   const prewarm = vi.spyOn(ChatTranscriptRenderer.prototype, "prewarmRow");
   await view.frame(1, false);
   await view.task();
-  expect(prewarm.mock.calls.some(([index]) => index > 130)).toBe(true);
-  expect(view.container.querySelector("[data-preparing-row]")).toBe(preparing);
-  expect(view.container.querySelectorAll("[data-preparing-row]")).toHaveLength(1);
+  expect(prewarm.mock.calls.some(([index]) => index > 130 && index % 2 === 1)).toBe(true);
+  expect(view.container.querySelector("[data-preparing-row][data-prepared-row]")).not.toBeNull();
 });
 
 it("warms arriving rows after a delayed timer without running twice in one frame", async () => {
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-  const view = await transcriptFixture(0, true, false, "retained");
+  const view = await transcriptFixture(0, true, false, true);
   await view.scrollTo(60);
   const rendered = view.renderRow.mock.calls.length;
   await view.frame(1, false);
@@ -889,12 +821,11 @@ it("warms arriving rows after a delayed timer without running twice in one frame
   expect(view.renderRow.mock.calls).toHaveLength(warmed);
 });
 
-it("prepares ahead of the active upward overscan", async () => {
+it("keeps upward forecasts outside active flow without moving the reader", async () => {
   const view = await transcriptFixture(24_000, true, true);
   await view.scrollTo(9);
   await view.frame(2);
   await view.scrollTo(5);
-  expect(view.container.querySelector('[data-virtual-row-key="fragment:1"]')).toBeNull();
   const firstActiveIndex = Math.min(
     ...transcriptRows(view.container)
       .filter((row) => !row.hasAttribute("data-prepared-row"))

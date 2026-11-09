@@ -97,3 +97,91 @@ it("yields between destination-size corrections and waits for a stable end befor
   expect(range.preparingEnd).toBe(false);
   expect(frames.size).toBe(0);
 });
+
+it.each([
+  { delta: 1200, expected: [40, 41, 42], nextExpected: [45, 46, 47] },
+  { delta: -1200, expected: [20, 21, 22], nextExpected: [15, 16, 17] },
+])(
+  "keeps approaching rows paintable until active admission during a $delta px fling",
+  ({ delta, expected, nextExpected }) => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    let now = 1;
+    vi.spyOn(performance, "now").mockImplementation(() => now);
+    const rows = Array.from({ length: 100 }, (_, index) => ({
+      kind: "item" as const,
+      key: String(index),
+      item: index,
+      retainDom: true,
+    }));
+    const virtualizer = new Virtualizer<HTMLDivElement, HTMLElement>({
+      count: rows.length,
+      initialRect: { width: 800, height: 300 },
+      initialOffset: 3600,
+      getItemKey: (index) => String(index),
+      getScrollElement: () => null,
+      estimateSize: () => 120,
+      scrollToFn: () => {},
+      observeElementRect: () => () => {},
+      observeElementOffset: () => () => {},
+    });
+    const range = new TranscriptInitialRange(
+      0,
+      () => virtualizer,
+      defaultRangeExtractor,
+      () => {},
+      () => 0,
+      () => true,
+      () => 120,
+      queueMicrotask,
+      () => false,
+      () => false,
+    );
+    onTestFinished(() => {
+      range.disconnect();
+      vi.restoreAllMocks();
+      vi.useRealTimers();
+    });
+    range.updateRows(rows);
+    virtualizer.setOptions({
+      ...virtualizer.options,
+      rangeExtractor: (window) => range.extract(window),
+    });
+    range.presentation(rows);
+    range.finish();
+    range.recordReaderMovement(delta);
+    const presentation = range.presentation(rows);
+    expect(presentation.forecastRowKeys.size).toBe(expected.length);
+    for (const index of expected) {
+      expect(presentation.forecastRowKeys.has(String(index))).toBe(true);
+      expect(presentation.activeRowKeys.has(String(index))).toBe(false);
+    }
+
+    // A faster next sample predicts beyond the previous forecast before it arrives.
+    const step = delta / 2;
+    now = 17;
+    range.recordReaderMovement(step);
+    virtualizer.scrollOffset = 3600 + step;
+    const approaching = range.presentation(rows);
+    expect(approaching.forecastRowKeys).toEqual(
+      new Set([...expected, ...nextExpected].map(String)),
+    );
+    const mounted = new Set(virtualizer.getVirtualItems().map((item) => String(item.key)));
+    for (const index of expected) {
+      expect(mounted.has(String(index))).toBe(true);
+      expect(approaching.activeRowKeys.has(String(index))).toBe(false);
+    }
+
+    now = 33;
+    range.recordReaderMovement(step);
+    virtualizer.scrollOffset = 3600 + delta;
+    const admitted = range.presentation(rows);
+    for (const index of expected) {
+      expect(admitted.activeRowKeys.has(String(index))).toBe(true);
+      expect(admitted.forecastRowKeys.has(String(index))).toBe(false);
+    }
+
+    now = 134;
+    vi.advanceTimersByTime(100);
+    expect(range.presentation(rows).forecastRowKeys.size).toBe(0);
+  },
+);
