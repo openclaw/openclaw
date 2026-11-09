@@ -277,7 +277,7 @@ describe("context advancement through embedded attempt guards", () => {
       using promptStateLease = retainEmbeddedSessionPromptState(sessionId);
       const sessionPromptState = promptStateLease.state;
       const promptContext = await prepareEmbeddedAttemptPromptContext({
-        attempt: { config: {}, contextTokenBudget: 8192, sessionId },
+        attempt: { config: {}, contextTokenBudget: 8192, model, sessionId },
         capabilityToolNames: new Set(["read_fixture"]),
         includeBoundaryTimestamp: false,
         isRawModelRun: false,
