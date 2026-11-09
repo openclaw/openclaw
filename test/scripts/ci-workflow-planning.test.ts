@@ -6441,7 +6441,11 @@ describe("ci workflow guards", () => {
             expect(route(runner, override)).toBe("ubuntu-24.04");
           }
         }
-        for (const preflightOutputs of [{ frozen_target: "" }, { compatibility_target: "true" }]) {
+        const retainedTypeAllocations: Record<string, string>[] = [
+          { frozen_target: "" },
+          { compatibility_target: "true" },
+        ];
+        for (const preflightOutputs of retainedTypeAllocations) {
           expect(route(typeRunner, { preflightOutputs })).toBe("blacksmith-4vcpu-ubuntu-2404");
         }
         // Frozen defaults retain their historical hosted route; hybrid owns its own layout.
