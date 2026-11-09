@@ -1,0 +1,3 @@
+# decodeDataUrl accepts RFC 2397 media type parameters before the ;base64 marker.
+# Covers parameterized image and non-image rejection cases (#195750).
+17
