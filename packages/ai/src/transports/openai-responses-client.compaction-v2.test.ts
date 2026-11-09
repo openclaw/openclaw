@@ -10,6 +10,8 @@ import { captureOpenAIResponsesCompaction } from "./openai-responses-compaction-
 import * as fixtures from "./openai-responses-prompt-observer.test-support.js";
 import { outputItem } from "./openai-stream-cases.test-support.js";
 const initialHost = getAiTransportHost();
+const astralBoundaryText = "a".repeat(255_997) + "😀".repeat(2);
+const astralRetainedText = "a".repeat(255_997) + "😀";
 const model = fixtures.createModel({
   id: "gpt-5.4",
   api: "openai-chatgpt-responses",
@@ -167,15 +169,18 @@ describe.each([
     expect(JSON.stringify(requests[1]?.body)).toContain("real request");
   });
 });
-it("bounds retained multilingual input without reviving older users", async () => {
+it.each<[string, string, string]>([
+  ["BMP", "中".repeat(64_001), "中".repeat(64_000)],
+  ["astral", astralBoundaryText, astralRetainedText],
+])("bounds retained %s input without reviving older users", async (_name, text, expected) => {
   const result = await compact({
     ...context,
-    messages: [fixtures.userMessage("oldest", 1), fixtures.userMessage("中".repeat(64_001), 2)],
+    messages: [fixtures.userMessage("oldest", 1), fixtures.userMessage(text, 2)],
   });
   expect(result.output).toHaveLength(2);
   expect(JSON.stringify(result.output)).not.toContain("oldest");
   expect(result.output[0]).toMatchObject({
-    content: [{ type: "input_text", text: "中".repeat(64_000) }],
+    content: [{ type: "input_text", text: expected }],
   });
 });
 it.each<[string, unknown[]]>([
