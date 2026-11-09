@@ -960,7 +960,15 @@ internal fun ChatScreen(
       )
     }
     if (talkActive) {
-      ChatNotice(title = if (talkMicrophoneMuted) nativeString("Talk · Microphone muted") else nativeString("Talk"), body = talkStatusText)
+      ChatNotice(
+        title = if (talkMicrophoneMuted) nativeString("Talk · Microphone muted") else nativeString("Talk"),
+        body = talkStatusText,
+      ) {
+        TalkMicrophoneButton(
+          muted = talkMicrophoneMuted,
+          onClick = { viewModel.setTalkMicrophoneMuted(!talkMicrophoneMuted) },
+        )
+      }
     }
     ChatSwarmProgress(groups = swarmGroups)
   }
@@ -1185,8 +1193,6 @@ internal fun ChatScreen(
       },
       talkActive = talkActive,
       onToggleTalk = onToggleTalk,
-      talkMicrophoneMuted = talkMicrophoneMuted,
-      onToggleTalkMicrophone = { viewModel.setTalkMicrophoneMuted(!talkMicrophoneMuted) },
       onFixConnection = onOpenGatewaySettings,
       onOpenProvidersModels = ::openProviderSignIn,
       onCopyDiagnostics = {
@@ -2963,6 +2969,7 @@ private fun DiffStatChip(
 private fun ChatNotice(
   title: String,
   body: String,
+  trailingContent: (@Composable () -> Unit)? = null,
 ) {
   Surface(
     modifier = Modifier.fillMaxWidth(),
@@ -2981,6 +2988,7 @@ private fun ChatNotice(
         Text(text = title, style = ClawTheme.type.section, color = ClawTheme.colors.text)
         Text(text = body, style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted)
       }
+      trailingContent?.invoke()
     }
   }
 }
@@ -3235,8 +3243,6 @@ private fun ChatComposer(
   onToggleDictation: () -> Unit,
   talkActive: Boolean,
   onToggleTalk: () -> Unit,
-  talkMicrophoneMuted: Boolean,
-  onToggleTalkMicrophone: () -> Unit,
   onFixConnection: () -> Unit,
   onOpenProvidersModels: () -> Unit,
   onCopyDiagnostics: () -> Unit,
@@ -3456,7 +3462,6 @@ private fun ChatComposer(
             }
             Row(verticalAlignment = Alignment.CenterVertically) {
               if (talkActive) {
-                TalkMicrophoneButton(muted = talkMicrophoneMuted, onClick = onToggleTalkMicrophone)
                 LiveTalkButton(active = true, onClick = { if (ownerReady) onToggleTalk() })
               } else {
                 Box {

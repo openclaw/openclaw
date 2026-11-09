@@ -6514,7 +6514,7 @@ class ChatComposerLayoutTest {
     val controlBounds = controls.map { it.getUnclippedBoundsInRoot() }.toMutableList()
     if (talkActive) {
       val mic = composeRule.onNode(hasContentDescription(nativeString("Mute microphone")) or hasContentDescription(nativeString("Unmute microphone")))
-      controlBounds += mic.assertIsDisplayed().assertHasClickAction().getUnclippedBoundsInRoot()
+      mic.assertIsDisplayed().assertHasClickAction()
     }
     val primary = primaryAction?.let { composeRule.onNodeWithContentDescription(nativeString(it)).getUnclippedBoundsInRoot() }
     val dictation =
