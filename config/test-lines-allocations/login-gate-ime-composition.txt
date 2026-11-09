@@ -1,2 +1,2 @@
-79
-# Login-gate IME composition regressions: composing Enter on the Gateway URL/secret fields stays inert, a later ordinary Enter connects (jsdom + real-Chromium browser coverage).
+39
+# Login-gate IME composition regressions: composing Enter on the Gateway URL/secret fields stays inert, a later ordinary Enter connects (jsdom coverage).
