@@ -580,6 +580,17 @@ The resulting managed worktree is owned by the session, and every agent run in t
 
 Reply commands `/new` and `/reset`, and automatic idle resets, start a fresh conversation context while keeping the session's managed worktree, project, and working directory. Plain **New Chat** in the Control UI deliberately leaves the previous worktree through the normal cleanup flow.
 
+If an earlier local publication adopted a conversation into a managed worktree,
+create a linked ordinary conversation to continue in its original workspace.
+Call `sessions.create` with the old conversation's key as `parentSessionKey`, the
+absolute original workspace as `cwd`, `worktree: false`, and
+`emitCommandHooks: false`; leave `key` unset. Continue using the returned key.
+The new conversation starts fresh at that folder under the normal workspace-path
+permissions. The old conversation keeps its history, file links, managed checkout,
+and publication receipts. Recover any pending publication there using its original
+request identity. This also keeps each conversation's historical file references
+associated with the source that produced them.
+
 Archiving a session returns after its archive state and publication are committed, preserving the conversation and worktree binding. After sending the response, the Gateway wakes background maintenance to snapshot and remove the checkout. The response does not wait for Git or the worktree allocation lease. A failed metadata write leaves the checkout untouched. If cleanup cannot finish safely, the session stays archived and its files remain available for a later cleanup pass. Hourly garbage collection also picks up automatically archived sessions. Cleanup holds the session lifecycle mutation only while admitting its registry claim and publishing the removed checkout. Git runs outside that mutation. Unarchiving before cleanup starts keeps the existing checkout; during cleanup, unarchive reports that removal is in progress and asks you to retry after it settles. An incomplete deletion requires recovery of its preserved snapshot before unarchive.
 
 Slow archive requests log request-owned phase durations, including snapshot reads,

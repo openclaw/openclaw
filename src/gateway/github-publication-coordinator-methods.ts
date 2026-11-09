@@ -10,6 +10,7 @@ import type {
   GitHubPublicationRow as PublicationRow,
   RepositoryGitHubPublicationRow,
 } from "../state/github-publication-read.types.js";
+import { deriveGitHubPublicationTaskId } from "../state/github-publication-requester.js";
 import { readGitHubPublicationSessionLifecycleInWorker } from "../state/github-publication-session-lifecycles.js";
 import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
 import {
@@ -328,7 +329,9 @@ export function createGitHubPublicationCoordinatorMethods(params: {
       workspaceTree: string;
     }): Promise<PublicationRow> => {
       const now = Date.now();
-      const requestId = randomUUID();
+      const requestId = input.requester.snapshot.origin
+        ? deriveGitHubPublicationTaskId(input.requester.snapshot.origin, input.idempotencyKey)
+        : randomUUID();
       assertRequester();
       {
         worktreeOwner.assertCurrent();

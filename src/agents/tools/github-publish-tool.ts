@@ -31,6 +31,7 @@ import {
 } from "../sandbox/github-publication.js";
 import type { SandboxContext } from "../sandbox/types.js";
 import { stringEnum } from "../schema/string-enum.js";
+import type { SpawnedToolContext } from "../spawned-context.js";
 import type { AnyAgentTool } from "./common.js";
 import { jsonResult } from "./common.js";
 import {
@@ -178,7 +179,10 @@ export function createGitHubPublishTool(
     runId?: string;
     onYield?: SessionsYieldCallback;
     senderIsOwner?: boolean;
-  } = {},
+  } & Pick<
+    SpawnedToolContext,
+    "inheritedToolAllowlist" | "inheritedToolDenylist" | "sessionPermissionPolicy"
+  > = {},
 ): AnyAgentTool {
   const publicationAvailable = options.publicationAvailable !== false;
   const workspacePreparationAvailable = !options.sandbox;
@@ -214,7 +218,10 @@ export function createGitHubPublishTool(
           prepareAvailable,
           refreshBaseAvailable,
           evidenceAvailable,
-        ),
+        ) +
+        (publicationAvailable && workspacePreparationAvailable
+          ? " For a local task checkout, supply workspacePath after committing its changes. Publication uses a separate task checkout and returns here without changing this conversation's workspace."
+          : ""),
     parameters: resolveGitHubPublishParameters({
       publicationAvailable,
       prepareAvailable,
@@ -298,6 +305,19 @@ export function createGitHubPublishTool(
                 sessionKey: caller.sessionKey,
                 workspaceBaseRefreshSandbox: options.sandbox ?? undefined,
                 workspacePrAdoptionSessionId: options.sessionId,
+                workspacePublicationRunId: options.runId,
+                ...(method === "sessions.github.publish" &&
+                (options.inheritedToolAllowlist ||
+                  options.inheritedToolDenylist ||
+                  options.sessionPermissionPolicy)
+                  ? {
+                      workspacePublicationPolicy: {
+                        allow: [...(options.inheritedToolAllowlist ?? [])],
+                        deny: [...(options.inheritedToolDenylist ?? [])],
+                        permissionMode: options.sessionPermissionPolicy?.mode,
+                      },
+                    }
+                  : {}),
               },
               () =>
                 callAgentToolGatewayRequest({
