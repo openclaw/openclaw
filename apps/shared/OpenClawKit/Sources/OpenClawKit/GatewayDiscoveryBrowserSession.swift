@@ -5,6 +5,8 @@ import Network
 public final class GatewayDiscoveryBrowserSession {
     private var browsers: [String: NWBrowser] = [:]
     private var states: [String: NWBrowser.State] = [:]
+    /// Cancelled browsers still deliver queued callbacks; only the current start may report.
+    private var generation = 0
 
     public init() {}
 
@@ -18,6 +20,7 @@ public final class GatewayDiscoveryBrowserSession {
         onResults: @escaping @MainActor (String, Set<NWBrowser.Result>) -> Void)
     {
         guard !self.isRunning else { return }
+        let generation = self.generation
         for domain in OpenClawBonjour.gatewayServiceDomains {
             let parameters = NWParameters.tcp
             parameters.includePeerToPeer = true
@@ -26,15 +29,16 @@ public final class GatewayDiscoveryBrowserSession {
                 using: parameters)
             browser.stateUpdateHandler = { [weak self] state in
                 Task { @MainActor in
-                    guard let self else { return }
+                    guard let self, self.generation == generation else { return }
                     self.states[domain] = state
                     let status = GatewayDiscoveryStatusText.make(
                         states: Array(self.states.values), hasBrowsers: self.isRunning)
                     onState(domain, state, status)
                 }
             }
-            browser.browseResultsChangedHandler = { results, _ in
+            browser.browseResultsChangedHandler = { [weak self] results, _ in
                 Task { @MainActor in
+                    guard let self, self.generation == generation else { return }
                     onResults(domain, results)
                 }
             }
@@ -44,6 +48,7 @@ public final class GatewayDiscoveryBrowserSession {
     }
 
     public func stop() {
+        self.generation += 1
         for browser in self.browsers.values {
             browser.cancel()
         }
