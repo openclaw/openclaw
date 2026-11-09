@@ -156,7 +156,8 @@ export async function restoreColdSessionClaims(
           agentId: claim.store.databaseAgentId,
           env,
           sessionId: generation.session_id,
-          storePath: claim.store.path,
+          // File-symlink stores keep external cold archives beside the original locator.
+          storePath: claim.store.archiveStorePath ?? claim.store.path,
         },
         beforePersistentApply,
       );

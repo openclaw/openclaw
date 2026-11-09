@@ -11,10 +11,7 @@ import {
   canonicalizeMainSessionAlias,
   resolveAgentMainSessionKey,
 } from "../../config/sessions/main-session.js";
-import {
-  resolveSessionStorePathCore,
-  resolveSessionStorePathWithContext,
-} from "../../config/sessions/paths.js";
+import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import {
   loadExactSessionEntryCandidatesReadOnlyBatch,
   resolveSessionEntry,
@@ -129,14 +126,10 @@ export async function withSandboxRuntimeStatusInWorker<T>(
     {
       agentId: classification.classificationAgentId,
       sessionKey: classification.comparableSessionKey,
-      storePath: resolveSessionStorePathWithContext(
-        params.cfg?.session?.store,
-        {
-          agentId: classification.classificationAgentId,
-          env: source.env,
-        },
-        { cwd: source.cwd },
-      ),
+      storePath: resolveSessionStorePathCore(params.cfg?.session?.store, {
+        agentId: classification.classificationAgentId,
+        env: source.env,
+      }),
       env: source.env,
     },
     source.assertCurrent,

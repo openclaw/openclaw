@@ -2,7 +2,9 @@ import path from "node:path";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PreparedAgentDatabaseMigrationDiscovery } from "../infra/state-migrations.media-persistence-targets.js";
 import { DoctorUnreadableStateDatabaseError } from "../infra/state-repair-message.js";
+import { isUpdateRehearsalReadOnlyPath } from "../infra/update-rehearsal-paths.js";
 import type { OpenClawDatabaseSchemaPreflight } from "../state/openclaw-database-preflight.js";
+import { resolveRelativeSessionStoreMigrationTargets } from "./doctor-relative-session-store-paths.js";
 
 export type DoctorDatabasePreflight = OpenClawDatabaseSchemaPreflight & {
   agentDatabaseMigrationDiscovery?: PreparedAgentDatabaseMigrationDiscovery;
@@ -46,10 +48,15 @@ export async function prepareDoctorDatabasePreflight(
       ? {
           // Custom stores go through the artifact-preserving header reader; discovery
           // must not open live SQLite files before the update guard.
-          configuredAgentDatabaseTargets: listAgentIds(cfg).map((agentId) => ({
-            agentId,
-            path: path.join(resolveAgentDir(cfg, agentId), "openclaw-agent.sqlite"),
-          })),
+          configuredAgentDatabaseTargets: (registered) => [
+            ...listAgentIds(cfg).map((agentId) => ({
+              agentId,
+              path: path.join(resolveAgentDir(cfg, agentId), "openclaw-agent.sqlite"),
+            })),
+            ...resolveRelativeSessionStoreMigrationTargets(cfg, process.env, registered).filter(
+              (target) => !isUpdateRehearsalReadOnlyPath(target.path, process.env),
+            ),
+          ],
           configuredAgentDatabaseCandidatePaths:
             targets.resolveConfiguredAgentDatabaseCandidatePaths(cfg, { env: process.env }),
           agentAdmissionConfig: cfg,

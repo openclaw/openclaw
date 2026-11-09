@@ -95,3 +95,20 @@ function resolveAgentIdFromSqliteDatabasePath(databasePath: string): string | un
   }
   return normalizeAgentId(path.basename(agentDir));
 }
+
+export function parseSqliteTargetSuffixIndex(fileName: string, prefix: string): number | undefined {
+  if (fileName === `${prefix}.sqlite`) {
+    return 1;
+  }
+  if (!fileName.startsWith(`${prefix}.`) || !fileName.endsWith(".sqlite")) {
+    return undefined;
+  }
+  const rawValue = fileName.slice(prefix.length + 1, -".sqlite".length);
+  if (!/^[1-9]\d*$/.test(rawValue)) {
+    return undefined;
+  }
+  const value = Number(rawValue);
+  return Number.isSafeInteger(value) && value >= 2 && String(value) === rawValue
+    ? value
+    : undefined;
+}
