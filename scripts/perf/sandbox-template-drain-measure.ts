@@ -1,12 +1,7 @@
 /**
- * Real Gateway graceful-drain fixture; synthetic provider, real Git and Docker.
- * node --import ./scripts/tsx.mjs scripts/perf/sandbox-template-drain-measure.ts \
- *   --repo <synthetic-git-repo> --output <new-directory> --image <local-node-pnpm-image> \
- *   --case validation --action drain --sessions 20
- * Run control/control/drain on the same exact checkout and fixture. The input repo
- * is cloned; no existing source or Gateway state is changed. The validation gate
- * is an external Git process at the actual template status command. Refresh uses
- * a real package prepare script blocked inside its dependency-builder container.
+ * Real Gateway graceful-drain fixture; synthetic provider, real Git and containers.
+ * See the adjacent Markdown for setup and replay. Input repositories are cloned.
+ * Validation pauses Git status; refresh pauses a real in-container prepare script.
  * Readiness is the first synthetic provider request for each accepted session,
  * not model quality or final-response latency. Child exit must be code 0, no signal.
  * CPU/allocation are Gateway process counters (exclude Git/container descendants).
@@ -52,6 +47,7 @@ const { values } = parseArgs({
     repo: { type: "string" },
     output: { type: "string" },
     image: { type: "string" },
+    backend: { type: "string", default: "docker" },
     case: { type: "string", default: "validation" },
     action: { type: "string", default: "drain" },
     sessions: { type: "string", default: "20" },
@@ -61,6 +57,8 @@ const { values } = parseArgs({
 assert(values.repo && values.output && values.image, "--repo, --output, --image required");
 assert(["validation", "refresh"].includes(values.case));
 assert(["control", "drain"].includes(values.action));
+const backend = values.backend;
+assert(backend === "docker" || backend === "podman");
 const expectedRebuilds =
   values["expected-rebuilds"] === undefined ? undefined : Number(values["expected-rebuilds"]);
 assert(
@@ -78,7 +76,7 @@ await fs.mkdir(path.join(output, "tmp"));
 
 const shell = (s: string) => `'${s.replaceAll("'", "'\\''")}'`;
 const actualGit = execFileSync("/usr/bin/which", ["git"], { encoding: "utf8" }).trim();
-const actualDocker = execFileSync("/usr/bin/which", ["docker"], { encoding: "utf8" }).trim();
+const actualEngine = execFileSync("/usr/bin/which", [backend], { encoding: "utf8" }).trim();
 const git = (...args: string[]) =>
   execFileSync(actualGit, ["-C", repo, ...args], { encoding: "utf8" }).trim();
 execFileSync(actualGit, ["clone", "--local", "--quiet", path.resolve(values.repo), repo]);
@@ -96,8 +94,8 @@ await fs.writeFile(
 );
 const installsFile = path.join(output, "installs.log");
 await fs.writeFile(
-  path.join(bin, "docker"),
-  `#!/bin/sh\ncase "$*" in *'pnpm install '*) echo install >> ${shell(installsFile)};; esac\nexec ${shell(actualDocker)} "$@"\n`,
+  path.join(bin, backend),
+  `#!/bin/sh\ncase "$*" in *'pnpm install '*) echo install >> ${shell(installsFile)};; esac\nexec ${shell(actualEngine)} "$@"\n`,
   { mode: 0o755 },
 );
 const metricImport = path.join(output, "metrics.mjs");
@@ -173,10 +171,14 @@ const instance = await createOpenClawTestInstance({
       maxConcurrent: count,
       sandbox: {
         mode: "all",
-        backend: "docker",
+        backend,
         scope: "session",
         workspaceAccess: "rw",
-        docker: { image: values.image, user: "0:0", network: "none" },
+        docker: {
+          image: values.image,
+          user: backend === "docker" ? "0:0" : undefined,
+          network: "none",
+        },
       },
     }),
   },
@@ -254,6 +256,7 @@ const save = async () => {
         action: values.action,
         sessions: count,
         platform: process.platform,
+        backend,
         runtime: process.version,
         stateShape,
         builds: builds.length,
@@ -477,7 +480,12 @@ try {
     await client?.stopAndWait();
     await instance.stopGateway();
     // Preserve state if native cleanup cannot prove resource retirement.
-    await cleanupDrainFixtureContainers({ env: instance.env, engine: actualDocker, output });
+    await cleanupDrainFixtureContainers({
+      env: instance.env,
+      engine: actualEngine,
+      backend,
+      output,
+    });
     await instance.cleanup();
   } finally {
     try {

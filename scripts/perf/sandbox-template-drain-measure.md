@@ -2,7 +2,7 @@
 
 This workload launches the real Gateway CLI with an isolated state directory,
 real WebSocket requests, a loopback synthetic OpenAI Responses provider, native
-Git, and real Docker dependency installation. It never sends requests to a live
+Git, and real Docker or native Podman dependency installation. It never sends requests to a live
 model or an existing Gateway. Use only generated synthetic repositories/state.
 
 Run with Node exposing `v8.getHeapStatistics().total_allocated_bytes` (verified on
@@ -67,6 +67,16 @@ all cohort turns before recording a supported restart intent and sending
 SIGTERM. Exit must be code zero with no terminating signal. The successor starts
 with the same state; the harness never resends accepted turns.
 
+For native rootless Podman, pass `--backend podman` and supply the task's isolated
+`podman` executable/store through PATH and its normal engine environment. The
+same backend is used for dependency builders, runtime containers, and cleanup.
+The fixture leaves the Podman user unspecified so the existing runtime owner
+selects `keep-id`; Docker uses `0:0`. Bake package-manager installation into the
+image. Do not route the Docker backend through Podman's Docker-compatible API or
+override daemon identity checks. On Linux, keep the synthetic state seed and
+the helper's TMPDIR on the same clone-capable filesystem, such as btrfs, and
+record that filesystem with the selected backend in the measurement report.
+
 Use `--action control --expected-rebuilds 0` to release the same gate without a
 drain. Run two control/control samples, then at least five interleaved
 baseline/candidate drain pairs. Same-input candidate acceptance is zero native
@@ -99,7 +109,7 @@ response latency. The fixture provider's reply content is synthetic.
 
 `process-metrics.jsonl` records Gateway lifetime process CPU, exact cumulative
 main-thread V8 allocation, and peak RSS. CPU includes Gateway workers but excludes
-Git, Docker, and container processes. Allocation excludes worker heaps. RSS is
+Git, engine CLI, and container processes. Allocation excludes worker heaps. RSS is
 not allocation. Keep all metrics; report filesystem/backend, host load, actual
 state size, sample spread, and any differences from the production shape.
 

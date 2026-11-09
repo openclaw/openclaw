@@ -8,10 +8,11 @@ import { readRegistry } from "../../src/agents/sandbox/registry.js";
 export async function cleanupDrainFixtureContainers(params: {
   env: NodeJS.ProcessEnv;
   engine: string;
+  backend: "docker" | "podman";
   output: string;
 }) {
   const inspect = (name: string) => {
-    const result = spawnSync(params.engine, ["inspect", "--format", "{{.Id}}", name], {
+    const result = spawnSync(params.engine, ["container", "inspect", "--format", "{{.Id}}", name], {
       encoding: "utf8",
       timeout: 30_000,
       maxBuffer: 1024 * 1024,
@@ -30,7 +31,7 @@ export async function cleanupDrainFixtureContainers(params: {
   // Allocation reserves this registry before native effects, including partial builders.
   // The CLI wrapper does not observe runtime allocations routed through the node worker.
   const { entries } = await readRegistry({ env: params.env });
-  assert(entries.every((entry) => entry.backendId === "docker"));
+  assert(entries.every((entry) => entry.backendId === params.backend));
   const ids = [...new Set(entries.flatMap((entry) => inspect(entry.containerName) ?? []))];
   if (ids.length) {
     execFileSync(params.engine, ["rm", "--force", ...ids], { timeout: 60_000, stdio: "pipe" });
