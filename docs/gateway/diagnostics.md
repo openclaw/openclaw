@@ -269,13 +269,32 @@ keys or request values. Worktree preparation measures only work required before
 the response; provisioning already deferred to an initial turn stays with that
 turn's lifecycle.
 
-At trace log level, chat startup diagnostics break `detail.attempt.system-prompt`
+Slow chat startup diagnostics break `detail.attempt.system-prompt`
 into sandbox policy,
 tool catalog text, session entry, runtime facts, reference paths, provider
 contributions, memory and watched-session context, project memory, TTS preferences,
 rendering, and reporting. These `detail.attempt.system-prompt.*` phases measure
 elapsed preparation time, including awaited work, without recording prompt content.
 The parent and nested phase totals overlap; do not add them together as CPU time.
+
+`detail.attempt.bundle-tools.*` separates core normalization, MCP configuration,
+runtime acquisition and materialization, LSP startup, policy filtering, bundled
+normalization, final projection, and cleanup after failure. These fixed phases
+appear in the existing `slow chat send` record without trace logging or timeline
+configuration. Workspace bootstrap reads and skill preparation belong to the
+separate `attempt.bootstrap` and `attempt.skills` stages; plugin tool factories
+run in `attempt.tool-base`.
+
+Dependency builder retirement appears under
+`detail.attempt.setup.sandbox.workspace_selection.prepare.reconcile.dependency.retire`.
+Its fixed sub-stages separate registry lookup, builder processing, lock acquisition,
+retirement claim, engine target validation, identity inspection, `kill`, `wait`,
+and terminal-state `verify`. Physical `remove` belongs to housekeeping.
+`verify.attempts` counts verification calls in that report window; it is a count,
+not milliseconds. Each call performs one inspect, with no OpenClaw polling or
+backoff. Engine-internal polling and cleanup waits remain inside their command's
+elapsed time. These fields use the existing slow-send line without enabling
+timeline logging; parent and child durations overlap.
 
 Managed worktree preparation emits one info-level `managed worktree preparation`
 record on return or failure. `kind=managed` covers checkout creation;
@@ -463,6 +482,11 @@ are retained; their syntax does not prove that a computed name is public. Review
 the profile before sharing it. Full profiles retain graph edges, native signed script IDs, and sample order. V8 can
 emit samples out of timestamp order, so signed time deltas are preserved for profile
 viewers to reconstruct timestamps and order samples.
+
+`actualDurationMs` uses a monotonic clock from requesting profiler startup until
+profiler stop completes. It includes `startBlockedMs` and asynchronous startup and
+stop overhead. Native `profile.startTime` and `profile.endTime` remain unchanged
+and can describe a shorter sampling interval.
 
 Sampling can outlast the requested interval when the event loop is blocked. The
 response limit does not bound the runtime's internal allocation during that delay. Profile
@@ -787,8 +811,13 @@ at 90%. The main thread's V8 `heap_size_limit` is the primary signal
 limit (`worker_heap_threshold`), including process-wide heap flag overrides. RSS
 includes every worker and native allocation, so `rss_threshold` uses the smaller of
 physical RAM and the process/cgroup memory constraint, independently of V8 heap
-limits. Unknown limits are omitted; Bun's compatibility heap metadata is not treated
-as a V8 limit. RSS growth alone does not indicate pressure.
+limits. On Node/Linux with a positive process constraint below physical RAM,
+`process_memory_threshold` also checks the remaining constrained allowance using
+`process.availableMemory()`. Its `usedBytes` is the constraint minus that remaining
+allowance, not process RSS: cgroup charges can exhaust headroom before RSS reaches
+the same 80%/90% thresholds. This signal follows heap and RSS priority within each
+severity. Unknown limits are omitted; Bun's compatibility heap metadata is not
+treated as a V8 limit. RSS growth alone does not indicate pressure.
 
 Warning and critical journal lines and diagnostic events retain the measured
 `usedBytes`, `limitBytes`, and `thresholdBytes`; worker pressure also identifies
@@ -1061,6 +1090,29 @@ shared responses, without adding wire fields or inspecting rows again. Both
 counters use the existing bounded asynchronous diagnostics path. OpenTelemetry
 names are `openclaw.sessions.list.baseline_retirements` and
 `openclaw.sessions.list.base_misses`, with the same labels.
+
+`openclaw_session_projection_rows_retained_entries` counts the actual resident
+entries in the Gateway's session-row projection maps. This inventory supports
+session selection, sharing, and display; it is separate from connection event
+baselines and diagnostic session activity states. `openclaw_session_projection_owners`
+counts live projection owners. Both gauges have no labels or session identities.
+
+`openclaw_session_projection_rows_retained_bytes` estimates plain data reachable
+from those rows, deduplicating shared objects within each projection. Sampling
+uses existing memory samples (normally every 30 seconds during diagnostic
+activity), with a fixed 100,000-visit and 64-depth budget per projection. It
+never serializes contents, invokes getters, reads SQLite, or walks data on writes
+or Prometheus scrapes. `openclaw_session_projection_rows_estimate_truncated`
+counts owners whose estimate hit that budget or unsupported data; a nonzero value
+means the byte estimate covers only part of the graph. Even an untruncated estimate
+excludes closure captures and native storage and is not V8 retained-size attribution.
+Use exact entry counts to distinguish inventory growth from increasing bytes per
+row; use heap snapshots to attribute references hidden inside closures.
+
+Owners unregister on disposal and subtract their last sample, returning these
+gauges to zero when the last projection closes. OpenTelemetry uses the same names
+with the `openclaw.` prefix in place of `openclaw_`. The diagnostic event is
+`sessions.projection.retention`, carrying only aggregate numeric fields.
 
 `openclaw_session_event_rows_retained_entries` and
 `openclaw_session_event_rows_retained_bytes` report aggregate count and estimated

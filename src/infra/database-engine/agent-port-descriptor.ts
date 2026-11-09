@@ -9,11 +9,20 @@ import {
 } from "../../../packages/memory-host-sdk/src/host/memory-search-schema.js";
 import { readTranscriptPayload } from "../../config/sessions/transcript-payload.js";
 import { deriveTranscriptPredicateFields } from "../../config/sessions/transcript-predicate-fields.js";
+import {
+  AGENT_ACTIVE_EVENT_FACTS_SCHEMA_VERSION,
+  withoutAgentPostgresActiveEventFacts,
+} from "../../state/openclaw-agent-active-event-facts-schema.js";
 import { withoutAgentPostgresColdArchiveChunks } from "../../state/openclaw-agent-cold-archive-chunks-schema.js";
 import { withoutAgentPostgresColdNavigation } from "../../state/openclaw-agent-cold-navigation-schema.js";
+import {
+  AGENT_CREATION_OPERATIONS_SCHEMA_VERSION,
+  withoutAgentPostgresCreationOperations,
+} from "../../state/openclaw-agent-creation-operations-schema.js";
 import { FIRST_USE_ADDITIVE_AGENT_COLUMN_DEFINITIONS } from "../../state/openclaw-agent-db-additive-columns.js";
 import {
   AGENT_COLD_ARCHIVE_CHUNKS_SCHEMA_VERSION,
+  AGENT_COLD_NAVIGATION_SCHEMA_VERSION,
   AGENT_MEMORY_REVISION_SCHEMA_VERSION,
   AGENT_VECTOR_DECODER_SCHEMA_VERSION,
   AGENT_TEXT_SEARCH_SCHEMA_VERSION,
@@ -184,11 +193,13 @@ export async function loadAgentPortDescriptor(
     }
     // Schema 30 appends columns; 31–36 and 38 change only PostgreSQL search, triggers, or indexes.
     // Schema 37 adds a cold archive companion table; 39 relaxes the transcript payload CHECK.
+    // Schema 40 adds creation receipts; predecessors retain their receipt-free catalog.
+    // Schema 41 adds active event facts; predecessors retain their unknown-row fallback.
     // Pin the remaining shared layout so future DDL gets its own descriptor.
     if (
       backup ||
-      OPENCLAW_AGENT_SCHEMA_VERSION !== 39 ||
-      ![27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38].includes(sourceVersion)
+      OPENCLAW_AGENT_SCHEMA_VERSION !== 41 ||
+      ![27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40].includes(sourceVersion)
     ) {
       throw new DatabasePortDataError(
         `Missing agent PostgreSQL backup descriptor for version ${sourceVersion}`,
@@ -200,10 +211,14 @@ export async function loadAgentPortDescriptor(
   ): fact is typeof fact & { value: PortTable["columns"][number] } => fact.kind === "column";
   const historical = sourceVersion !== agentEngineSchema.version;
   const legacyColdArchive = sourceVersion < AGENT_COLD_ARCHIVE_CHUNKS_SCHEMA_VERSION;
+  const legacyCreation = sourceVersion < AGENT_CREATION_OPERATIONS_SCHEMA_VERSION;
+  const legacyActiveFacts = sourceVersion < AGENT_ACTIVE_EVENT_FACTS_SCHEMA_VERSION;
   const legacyTrajectory = sourceVersion < 30;
   const catalog = agentPostgresRuntime.expectedCatalog.filter(
     (fact) =>
       !(legacyColdArchive && fact.table === "session_transcript_cold_archive_chunks") &&
+      !(legacyCreation && fact.table === "session_creation_operations") &&
+      !(legacyActiveFacts && fact.table === "session_transcript_active_event_facts") &&
       (!legacyTrajectory ||
         fact.table !== "trajectory_runtime_events" ||
         !isColumn(fact) ||
@@ -221,7 +236,10 @@ export async function loadAgentPortDescriptor(
     tables: [
       ...metadata.tables
         .filter(
-          ({ name }) => !(legacyColdArchive && name === "session_transcript_cold_archive_chunks"),
+          ({ name }) =>
+            !(legacyColdArchive && name === "session_transcript_cold_archive_chunks") &&
+            !(legacyCreation && name === "session_creation_operations") &&
+            !(legacyActiveFacts && name === "session_transcript_active_event_facts"),
         )
         .map(({ name, identities }) => ({
           name,
@@ -465,6 +483,15 @@ export async function loadAgentPortDescriptor(
   const legacyRevision = sourceVersion < AGENT_MEMORY_REVISION_SCHEMA_VERSION;
   const withoutLegacyColdArchive = (sql: string) =>
     legacyColdArchive ? withoutAgentPostgresColdArchiveChunks(sql) : sql;
+  const withoutLaterSchema = (sql: string) => {
+    const activeFacts = legacyActiveFacts ? withoutAgentPostgresActiveEventFacts(sql) : sql;
+    const creation = legacyCreation
+      ? withoutAgentPostgresCreationOperations(activeFacts)
+      : activeFacts;
+    return sourceVersion < AGENT_COLD_NAVIGATION_SCHEMA_VERSION
+      ? withoutAgentPostgresColdNavigation(creation)
+      : creation;
+  };
   let postData = legacyRevision
     ? withLegacyAgentPostgresMemoryRevisionTriggers(descriptor.postData)
     : descriptor.postData;
@@ -504,30 +531,34 @@ export async function loadAgentPortDescriptor(
           }))
         : []),
     ],
-    preData: withoutAgentPostgresColdNavigation(
+    preData: withoutLaterSchema(
       withoutLegacyColdArchive(
         legacyTrajectory
           ? withLegacyAgentPostgresTrajectoryStorage(descriptor.preData)
           : descriptor.preData,
       ),
     ),
-    postData: withoutLegacyColdArchive(postData),
+    postData: withoutLaterSchema(withoutLegacyColdArchive(postData)),
     expectedCatalog: catalog.map((fact) =>
-      sourceVersion < 36 && fact.kind === "indexes" && fact.table === "memory_index_sources"
-        ? {
-            table: fact.table,
-            kind: fact.kind,
-            value: Number(fact.value) - MEMORY_PATH_POSTGRES_INDEXES.length,
-          }
-        : sourceVersion < 29 &&
-            fact.kind === "indexes" &&
-            (fact.table === "session_nodes" || fact.table === "session_reactions")
-          ? { table: fact.table, kind: fact.kind, value: Number(fact.value) + 1 }
-          : sourceVersion < 28 &&
-              fact.table === "transcript_event_identities" &&
-              fact.kind === "indexes"
-            ? { table: fact.table, kind: fact.kind, value: 5 }
-            : fact,
+      legacyCreation &&
+      fact.kind === "indexes" &&
+      ["session_input_completions", "conversation_deliveries"].includes(fact.table)
+        ? { table: fact.table, kind: fact.kind, value: Number(fact.value) - 1 }
+        : sourceVersion < 36 && fact.kind === "indexes" && fact.table === "memory_index_sources"
+          ? {
+              table: fact.table,
+              kind: fact.kind,
+              value: Number(fact.value) - MEMORY_PATH_POSTGRES_INDEXES.length,
+            }
+          : sourceVersion < 29 &&
+              fact.kind === "indexes" &&
+              (fact.table === "session_nodes" || fact.table === "session_reactions")
+            ? { table: fact.table, kind: fact.kind, value: Number(fact.value) + 1 }
+            : sourceVersion < 28 &&
+                fact.table === "transcript_event_identities" &&
+                fact.kind === "indexes"
+              ? { table: fact.table, kind: fact.kind, value: 5 }
+              : fact,
     ),
     inspectSqliteSource: undefined,
     migrateSqliteSource: undefined,

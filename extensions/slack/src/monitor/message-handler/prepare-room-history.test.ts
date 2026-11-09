@@ -6,6 +6,7 @@ import type * as SystemEventRuntime from "openclaw/plugin-sdk/system-event-runti
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SlackMessageEvent } from "../../types.js";
 import type * as SlackMediaRuntime from "../media.runtime.js";
+import { resolveSlackRoomHistory } from "./prepare-room-history.js";
 import { prepareSlackMessage } from "./prepare.js";
 import {
   createInboundSlackTestContext,
@@ -109,6 +110,56 @@ describe("Slack platform-authoritative automatic room history", () => {
       }));
     return { history, replies, createContext, ctx, account, prepare, setHistory, setThread, seed };
   }
+
+  it("drains bounded sender lookups when room history authority is revoked", async () => {
+    const f = fixture(6, "all");
+    f.setHistory(
+      Array.from({ length: 6 }, (_, index) => ({
+        ts: `${19 - index}.000`,
+        user: `H${index}`,
+        text: `history ${index}`,
+      })),
+    );
+    const gates = Array.from({ length: 6 }, () => Promise.withResolvers<{ name: string }>());
+    const started: string[] = [];
+    f.ctx.resolveUserName = vi.fn((id) => {
+      started.push(id);
+      return gates[Number(id.slice(1))]!.promise;
+    });
+    let current = true;
+    let settled = false;
+    const reading = resolveSlackRoomHistory({
+      ctx: f.ctx,
+      message: { type: "message", channel: "C1", ts: "20.000", user: "U1", text: "current" },
+      excludedMessageIds: new Set(),
+      allowFromLower: [],
+      contextVisibilityMode: "all",
+      assertCurrent: () => {
+        if (!current) {
+          throw new Error("retired history");
+        }
+      },
+    }).then((result) => {
+      settled = true;
+      return result;
+    });
+    try {
+      await vi.waitFor(() => expect(started).toHaveLength(4));
+      current = false;
+      gates[Number(started[0]!.slice(1))]!.resolve({ name: "retired" });
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+      expect(settled).toBe(false);
+      expect(started).toHaveLength(4);
+      gates.forEach((gate) => gate.resolve({ name: "retired" }));
+      await expect(reading).resolves.toEqual([]);
+      expect(started).toHaveLength(4);
+    } finally {
+      gates.forEach((gate) => gate.resolve({ name: "retired" }));
+      await reading;
+    }
+  });
 
   it("recovers a capped, authorized snapshot across monitor replacement and edits", async () => {
     const f = fixture(2);

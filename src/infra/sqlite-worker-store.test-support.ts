@@ -14,6 +14,8 @@ import { runSqliteImmediateTransactionSync } from "./sqlite-transaction.js";
 import { bindSqliteWorkerDatabase } from "./sqlite-worker-binding.js";
 import {
   SQLITE_WORKER_PREPARE_COMMAND,
+  SQLITE_WORKER_CLOSE_RECEIPT,
+  type SqliteWorkerCloseReceipt,
   type SqliteWorkerPreparedBackend,
 } from "./sqlite-worker-contract.js";
 import { requestSqliteWorkerOperationAdmission } from "./sqlite-worker-operation-admission.js";
@@ -46,6 +48,7 @@ if (parentPort) {
 }
 
 export type FixtureOpenInput =
+  | { type: "retirement" }
   | { type: "disk-full" }
   | { type: "link"; existingPath: string }
   | { type: "observe"; markerPath: string }
@@ -125,6 +128,7 @@ function createFixtureBackend(
     executeSqliteQuerySync(db, query.insertInto("entries").values({ value }));
   const actor = randomUUID();
   let writes = 0;
+  let retirementReceipt: SqliteWorkerCloseReceipt | undefined;
   let prepared = false;
   const preparationOwners: (SqliteReaderOwner | undefined)[] = [];
   let delayedClose: { markerPath: string; reject: boolean } | undefined;
@@ -148,8 +152,15 @@ function createFixtureBackend(
     return receipt;
   }
   function closeNative(): undefined {
+    retirementReceipt = undefined;
     clearNodeSqliteKyselyCacheForDatabase(db);
     db.close();
+    if (input?.type === "retirement") {
+      retirementReceipt = {
+        identity: { key: "fixture", canonicalPath: databasePath },
+        incarnation: actor,
+      };
+    }
   }
   if (input?.type === "disk-full") {
     db.exec("PRAGMA journal_mode=WAL; PRAGMA max_page_count=2");
@@ -164,6 +175,9 @@ function createFixtureBackend(
     });
   }
   return {
+    ...(input?.type === "retirement"
+      ? { [SQLITE_WORKER_CLOSE_RECEIPT]: () => retirementReceipt }
+      : {}),
     [SQLITE_WORKER_PREPARE_COMMAND](commandType) {
       if (input?.type !== "prepare" || commandType !== "append" || prepared) {
         return undefined;

@@ -152,8 +152,10 @@ describe("chat permission failure ownership", () => {
         recoveryUnavailable = recovery !== "immediate";
         pending.reject(new Error("saved mode could not be applied to the active run"));
         await selection;
-        expect(state.chatError).toContain("Couldn't change permissions");
-        expect(state.chatError).toContain("saved mode could not be applied to the active run");
+        expect(state.chatError).toBe(t("chat.permissionControls.updateFailed"));
+        expect(state.lastErrorDetail).toEqual(
+          new Error("saved mode could not be applied to the active run"),
+        );
         expect(state.lastError).toBe(state.chatError);
         if (recovery !== "immediate") {
           draw();
@@ -390,7 +392,8 @@ describe("chat permission failure ownership", () => {
         expect(selectedChatSessionRow(state)).toBeUndefined();
         expectErrors(state, null);
       } else {
-        expect(state.chatError).toContain("Permission update rejected");
+        expect(state.chatError).toBe(t("chat.permissionControls.updateFailed"));
+        expect(state.lastErrorDetail).toEqual(new Error("Permission update rejected"));
         expect(state.lastError).toBe(state.chatError);
       }
     } finally {

@@ -1,6 +1,6 @@
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { resolveProviderThinkingLevel, type ThinkLevel } from "../../auto-reply/thinking.js";
-import { findModelCatalogEntry } from "../model-catalog.js";
+import { findModelCatalogEntry } from "../model-catalog-lookup.js";
 import type { ModelCatalogEntry } from "../model-catalog.types.js";
 
 /** Selects both CLI capabilities from the same logical/native catalog identity. */

@@ -30,6 +30,7 @@ import { setImmediate as nextTurn, setTimeout as delay } from "node:timers/promi
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { transformSync } from "esbuild";
+import { startCollectedHeapSampling, sumSampledHeapBytes } from "../lib/heap-sampling.ts";
 import { summarizeDurationDistribution } from "../lib/perf-duration-distribution.ts";
 
 const { values } = parseArgs({
@@ -162,8 +163,6 @@ const hook = registerHooks({
   },
 });
 const hash = (value) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
-const sampledBytes = (node) =>
-  node.selfSize + node.children.reduce((sum, child) => sum + sampledBytes(child), 0);
 try {
   const { withOpenClawTestState } = await import("../../src/test-utils/openclaw-test-state.ts");
   const { replaceSessionEntrySync } = await import("../../src/config/sessions/session-accessor.ts");
@@ -236,12 +235,7 @@ try {
           await nextTurn();
           await nextTurn();
           if (values.mode === "allocation") {
-            inspector.connect();
-            await inspector.post("HeapProfiler.startSampling", {
-              samplingInterval: 4096,
-              includeObjectsCollectedByMajorGC: true,
-              includeObjectsCollectedByMinorGC: true,
-            });
+            await startCollectedHeapSampling(inspector, 4096);
           }
           sharingReads = 0;
           sharingKeys = 0;
@@ -268,7 +262,9 @@ try {
           loop.disable();
           const allocation =
             values.mode === "allocation"
-              ? sampledBytes((await inspector.post("HeapProfiler.stopSampling")).profile.head)
+              ? sumSampledHeapBytes(
+                  (await inspector.post("HeapProfiler.stopSampling")).profile.head,
+                )
               : null;
           if (values.mode === "allocation") {
             inspector.disconnect();

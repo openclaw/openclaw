@@ -181,7 +181,7 @@ suite.define(() => {
         __mockError: { code: "INVALID_REQUEST", message: "Transcript export exceeds 4 MiB" },
       });
       await click(reader, "Download JSONL");
-      await reader.getByRole("alert").filter({ hasText: "Download failed" }).waitFor();
+      await reader.getByRole("alert").filter({ hasText: "Couldn’t download" }).waitFor();
       await control(page, "link", "Meeting capture").click();
       const capture = page.locator("openclaw-meeting-capture-settings");
       await text(capture, "Not active").waitFor();

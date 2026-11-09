@@ -43,7 +43,7 @@ describe("login gate failure recovery", () => {
       url: "wss://gateway.example",
       bootstrapToken: "synthetic-bootstrap-token",
     }),
-  ).replace(/=+$/g, "");
+  ).replace(/[=]+$/g, "");
 
   it("pauses the busy countdown while hidden and catches up on return and reconnect", async () => {
     vi.useFakeTimers();
@@ -155,16 +155,16 @@ describe("login gate failure recovery", () => {
     expect(failure.dataset.kind).toBe("trusted-proxy");
     expectText(failure, "failure-raw").toBe("unauthorized");
     expect(failure.querySelectorAll(".login-gate__failure-steps code")).toHaveLength(0);
-    expect(steps).toMatch(/(?:open|use|sign in).*?(?:authenticated proxy|SSO).*?URL/iu);
+    expect(steps).toContain("Open the dashboard through the sign-in proxy");
     expect(part(failure, "failure-docs").getAttribute("href")).toBe(
       "https://docs.openclaw.ai/gateway/trusted-proxy-auth",
     );
-    expect(steps).toMatch(/configured/iu);
-    expect(element.querySelector(".login-gate__failure")?.textContent).toMatch(
-      /missing.*?identity[- ]headers?|identity[- ]headers?.*?missing/iu,
-    );
-    expect(steps).toMatch(/forward/iu);
-    expect(steps).toMatch(/WebSocket upgrade/iu);
+    const details = failure.querySelector<HTMLDetailsElement>(".login-gate__failure-detail");
+    expect(details?.open).toBe(false);
+    expect(details?.querySelector("summary")?.textContent).toBe("Show details");
+    expect(details?.textContent).toContain("identity headers");
+    expect(details?.textContent).toContain("WebSocket upgrade");
+    expect(steps).not.toMatch(/headers|WebSocket/iu);
     expect(steps).not.toMatch(/generate.*?token|replace.*?(?:token|password)|Gateway is running/iu);
   });
 
@@ -172,12 +172,10 @@ describe("login gate failure recovery", () => {
     const error = "Profile verification unavailable";
     const element = await mountFailure(error, Codes.AUTHENTICATED_PROFILE_UNAVAILABLE);
     expect(part(element, "failure").dataset.kind).toBe("profile-unavailable");
-    expectText(element, "failure-title").toBe("Couldn't verify your account");
-    expectText(element, "failure-summary").toBe(
-      "OpenClaw couldn't check your account right now. Please try again shortly.",
-    );
+    expectText(element, "failure-title").toBe("Couldn’t verify your account");
+    expectText(element, "failure-summary").toBe("Couldn’t verify your account. Try again shortly.");
     expectText(element, "failure-steps").toContain("Retry");
-    expectText(element, "failure-steps").toContain("person who manages OpenClaw");
+    expectText(element, "failure-steps").toContain("ask an admin");
     expect(part(element, "failure-steps").querySelectorAll("code")).toHaveLength(0);
     expectText(element, "failure-raw").toBe(error);
   });
@@ -187,18 +185,18 @@ describe("login gate failure recovery", () => {
     const failure = part(element, "failure");
     expect(failure.dataset).toMatchObject({ kind: "access-denied", tone: "warn" });
     expectText(failure, "failure-title").toBe("No access to this Gateway");
-    expectText(failure, "failure-steps").toContain(
-      "Ask a Gateway administrator to assign your profile a role",
-    );
-    expect(part(failure, "failure-steps").querySelector("code")?.textContent).toBe(
-      "openclaw users list --json",
-    );
+    expectText(failure, "failure-steps").toContain("Ask an admin to grant or restore your access.");
+    const details = failure.querySelector<HTMLDetailsElement>(".login-gate__failure-detail");
+    expect(details?.open).toBe(false);
+    expect(details?.textContent).toContain("openclaw users list --json");
+    expect(details?.textContent).toContain("users.setRole");
+    expectText(failure, "failure-steps").not.toMatch(/users.list|users.setRole/u);
     expect(part(failure, "failure-docs").getAttribute("href")).toBe(
       "https://docs.openclaw.ai/gateway/operator-scopes#named-operator-roles",
     );
     expect(failure.textContent).not.toMatch(/openclaw gateway run|Gateway unreachable/u);
     expectText(failure, "failure-steps").toContain(
-      "Sign in as a different user, or choose Connect after an administrator grants access.",
+      "Sign in with a different account, or choose Connect after an admin grants access.",
     );
     expectText(failure, "failure-steps").not.toMatch(
       /Gateway is running|Gateway URL|token|password/iu,
@@ -227,13 +225,9 @@ describe("login gate failure recovery", () => {
     expect(element.querySelector('label[for="login-gate-credential"]')?.textContent).toBe(
       "Gateway secret",
     );
-    expect(input).toMatchObject({
-      placeholder: "Paste the token or type the password",
-      type: "password",
-      value: "old-secret",
-    });
+    expect(input).toMatchObject({ type: "password", value: "old-secret" });
+    expect(input.placeholder).toBe("Paste the token or type the password");
     expect(element.querySelector('[role="radiogroup"]')).toBeNull();
-
     input.value = "";
     input.dispatchEvent(new Event("input", { bubbles: true }));
     element.props = { ...element.props, secret: "" };
@@ -242,7 +236,6 @@ describe("login gate failure recovery", () => {
     input.dispatchEvent(new Event("input", { bubbles: true }));
     expect(element.props.onSecretChange).toHaveBeenNthCalledWith(1, "");
     expect(element.props.onSecretChange).toHaveBeenNthCalledWith(2, "replacement-secret");
-
     element
       .querySelector<HTMLButtonElement>('[aria-label="Toggle Gateway secret visibility"]')
       ?.click();
@@ -250,7 +243,11 @@ describe("login gate failure recovery", () => {
     element.props = { ...element.props, secret: "replacement-secret", showGatewaySecret: true };
     await element.updateComplete;
     expect(input).toMatchObject({ type: "text", value: "replacement-secret" });
-    input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    for (const isComposing of [true, false]) {
+      input.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "Enter", bubbles: true, isComposing }),
+      );
+    }
     expect(element.props.onConnect).toHaveBeenCalledOnce();
   });
 
@@ -276,7 +273,7 @@ describe("login gate failure recovery", () => {
     const element = await mountFailure("protocol mismatch", Codes.PROTOCOL_MISMATCH);
     const replace = vi.fn();
     vi.stubGlobal("window", { location: { href: "https://gateway.example/chat", replace } });
-    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true }));
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response()));
 
     const failure = part(element, 'failure[data-kind="protocol-mismatch"]');
     const refresh = part(failure, "failure-refresh");
@@ -301,6 +298,7 @@ describe("login gate failure recovery", () => {
       () => false,
       () => {
         showToast({
+          severity: "error",
           message: "Recovery needs a reload. Unsaved starts will be lost.",
           actionLabel: "Discard unsaved starts and reload",
           onAction: discard,
@@ -311,7 +309,7 @@ describe("login gate failure recovery", () => {
       part(element, "failure-refresh").click();
       expect(reload).not.toHaveBeenCalled();
       await vi.waitFor(() => {
-        expectText(element, ".app-toast__message").toContain("Unsaved starts will be lost.");
+        expectText(element, ".app-toast__description").toContain("Unsaved starts will be lost.");
       });
       const action = element.querySelector<HTMLButtonElement>(".app-toast__action");
       expect(action?.textContent?.trim()).toBe("Discard unsaved starts and reload");
@@ -329,9 +327,9 @@ describe("login gate failure recovery", () => {
     await element.updateComplete;
 
     expect(element.textContent).toContain(
-      "Waiting for approval… this page connects on its own once the request is approved.",
+      "Waiting for approval… This page connects automatically once approved.",
     );
-    expect(element.textContent).not.toContain("Once approved, click Connect.");
+    expect(element.textContent).not.toContain("Once approved, choose Connect.");
     expect(element.querySelector('[aria-hidden="true"].session-run-spinner')).not.toBeNull();
     const checkNow = part(element, "connect");
     expect(checkNow.textContent?.trim()).toBe("Check now");
@@ -340,7 +338,7 @@ describe("login gate failure recovery", () => {
 
     element.props = { ...element.props, reconnectPending: false };
     await element.updateComplete;
-    expect(element.textContent).toContain("Once approved, click Connect.");
+    expect(element.textContent).toContain("Once approved, choose Connect.");
     expect(element.textContent).not.toContain("Waiting for approval…");
     expect(element.querySelector(".session-run-spinner")).toBeNull();
     expect(checkNow.textContent?.trim()).toBe("Connect");
@@ -391,8 +389,8 @@ describe("login gate failure recovery", () => {
       (entry) => entry.textContent?.trim(),
     );
     expect(steps).toEqual([
-      "Use HTTPS/Tailscale Serve, or open http://127.0.0.1:18789 on the Gateway host.",
-      "Do not use a remote plain-HTTP URL; a token or password cannot replace browser device identity.",
+      "Use HTTPS/Tailscale Serve, or open http://127.0.0.1:18789 on the computer running OpenClaw.",
+      "Don’t use a remote HTTP URL. A token or password can’t replace browser device identity.",
     ]);
   });
 
@@ -407,8 +405,10 @@ describe("login gate failure recovery", () => {
       new KeyboardEvent("keydown", { bubbles: true, cancelable: true, key: " " }),
     );
 
-    await vi.waitFor(() => expect(button?.getAttribute("aria-label")).toBe("Copy failed"));
-    expect(status.textContent).toBe("Copy failed");
+    await vi.waitFor(() =>
+      expect(button?.getAttribute("aria-label")).toBe("Couldn’t copy. Try again."),
+    );
+    expect(status.textContent).toBe("Couldn’t copy. Try again.");
     expect(writeText).toHaveBeenCalledExactlyOnceWith("openclaw status");
     expect(execCommand).toHaveBeenCalledOnce();
   });
@@ -426,8 +426,8 @@ describe("login gate failure recovery", () => {
     buttons[1]?.click();
 
     await vi.waitFor(() => {
-      expect(buttons[0]?.getAttribute("aria-label")).toBe("Copied!");
-      expect(buttons[1]?.getAttribute("aria-label")).toBe("Copied!");
+      expect(buttons[0]?.getAttribute("aria-label")).toBe("Copied");
+      expect(buttons[1]?.getAttribute("aria-label")).toBe("Copied");
     });
     expect(writeText.mock.calls).toEqual([["openclaw status"], ["openclaw gateway run"]]);
     expect(buttons[2]?.getAttribute("aria-label")).toBe("Copy command");
@@ -438,7 +438,7 @@ describe("login gate failure recovery", () => {
     );
     for (const [index, button] of buttons.slice(0, 2).entries()) {
       expect(retained[index]).toBe(button);
-      expect(retained[index]?.getAttribute("aria-label")).toBe("Copied!");
+      expect(retained[index]?.getAttribute("aria-label")).toBe("Copied");
     }
   });
 
@@ -454,7 +454,9 @@ describe("login gate failure recovery", () => {
     const { command, button, status } = copyControls(element);
 
     command?.click();
-    await vi.waitFor(() => expect(button?.getAttribute("aria-label")).toBe("Copy failed"));
+    await vi.waitFor(() =>
+      expect(button?.getAttribute("aria-label")).toBe("Couldn’t copy. Try again."),
+    );
     const failedReset = schedule.mock.calls.find(([, delay]) => delay === 2_000)?.[0];
     if (typeof failedReset !== "function") {
       throw new Error("Expected the failed copy feedback to schedule its reset");
@@ -467,12 +469,12 @@ describe("login gate failure recovery", () => {
     failedReset();
     expect(status.hidden).toBe(true);
     finishCopy();
-    await vi.waitFor(() => expect(button?.getAttribute("aria-label")).toBe("Copied!"));
+    await vi.waitFor(() => expect(button?.getAttribute("aria-label")).toBe("Copied"));
     expect(status.hidden).toBe(false);
 
     failedReset();
-    expect(button?.getAttribute("aria-label")).toBe("Copied!");
-    expect(status.textContent).toBe("Copied!");
+    expect(button?.getAttribute("aria-label")).toBe("Copied");
+    expect(status.textContent).toBe("Copied");
 
     const successfulReset = schedule.mock.calls.find(([, delay]) => delay === 1_500)?.[0];
     if (typeof successfulReset !== "function") {

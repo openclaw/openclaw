@@ -15,6 +15,7 @@ import {
   type PluginInstallTransaction,
 } from "./install-transaction.js";
 import * as installer from "./install.js";
+import * as officialInstallRecords from "./official-external-install-records.js";
 import * as catalog from "./official-external-plugin-catalog.js";
 import { installableEntry } from "./official-external-plugin-catalog.test-support.js";
 import {
@@ -39,6 +40,79 @@ afterEach(() => {
 });
 
 describe("plugin update authority", () => {
+  it.each([
+    [undefined, "@openclaw/acpx", true],
+    ["@openclaw/acpx@beta", "@openclaw/acpx", true],
+    ["@vendor/acpx-fork", "@vendor/acpx-fork", false],
+  ] as const)(
+    "reuses admitted official identity for npm override %s to %s (trusted=%s)",
+    async (specOverride, packageName, trusted) => {
+      await withPluginState("plugin-update-official-identity", async (state) => {
+        const installPath = state.statePath("extensions", "acpx");
+        await state.writeJson("extensions/acpx/package.json", {
+          name: "@openclaw/acpx",
+          version: "1.0.0",
+        });
+        const stagedArtifactDir = state.path("stage");
+        writeArtifacts(stagedArtifactDir, {
+          "package.json": {
+            name: packageName,
+            version: "1.0.1",
+            openclaw: { extensions: ["./index.js"] },
+          },
+          "index.js": "export default function register() {}\n",
+          "openclaw.plugin.json": { id: "acpx", configSchema: { type: "object" } },
+        });
+        vi.spyOn(installMetadata, "resolveNpmSpecMetadata").mockResolvedValue({
+          ok: true,
+          metadata: { name: packageName, version: "1.0.1" },
+        });
+        const resolveOfficial = vi.spyOn(
+          officialInstallRecords,
+          "resolveTrustedSourceLinkedOfficialNpmInstall",
+        );
+        const install = vi
+          .spyOn(installer, "installPluginFromNpmSpec")
+          .mockImplementationOnce(async (options) => {
+            await options.onBeforePluginArtifactCommit?.({
+              pluginId: "acpx",
+              stagedArtifactDir,
+              currentArtifactDir: installPath,
+              mode: "update",
+            });
+            return {
+              ok: true,
+              pluginId: "acpx",
+              targetDir: installPath,
+              version: "1.0.1",
+              extensions: ["index.js"],
+            };
+          });
+
+        const result = await updateNpmInstalledPlugins({
+          config: singleInstallConfig("acpx", {
+            source: "npm",
+            spec: "@openclaw/acpx",
+            installPath,
+          }),
+          ...(specOverride ? { specOverrides: { acpx: specOverride } } : {}),
+          onCapabilityConsent: acceptCapabilities,
+        });
+
+        expect(resolveOfficial).toHaveBeenCalledOnce();
+        expect(install).toHaveBeenCalledExactlyOnceWith(
+          expect.objectContaining({
+            spec: specOverride ?? "@openclaw/acpx",
+            trustedSourceLinkedOfficialInstall: trusted,
+          }),
+        );
+        expect(result.outcomes).toEqual([
+          expect.objectContaining({ pluginId: "acpx", status: "updated", nextVersion: "1.0.1" }),
+        ]);
+      });
+    },
+  );
+
   it.each([false, true])(
     "leaves failed peer-link repair rollback with its owner (deferred=%s)",
     async (deferred) => {

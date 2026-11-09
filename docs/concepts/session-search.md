@@ -104,6 +104,11 @@ and result order can differ from SQLite. See
 [PostgreSQL search](/reference/database-engines#search-on-postgresql) for extension
 requirements and supported modes.
 
+If a durable transcript search returns no word matches, Chinese, Japanese, and
+Korean terms are retried as literal substrings. Other terms keep their word or
+prefix matching. This retry scans text in the selected scope, so narrow the session
+selection for large histories. It does not expand searches that already found hits.
+
 Agent namespace prefixes are literal, including underscores in agent IDs.
 The default-agent PostgreSQL RPC search uses a planner-selective prefix predicate
 so selective text queries can start from the full-text index. Explicit session

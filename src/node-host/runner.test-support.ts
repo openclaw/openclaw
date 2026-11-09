@@ -71,6 +71,7 @@ const mocks = vi.hoisted(() => {
     activeRuntime: {
       invoke: vi.fn(async () => {}),
       handleInput: vi.fn(),
+      setLocalMcpAllowed: vi.fn(),
       cancel: vi.fn(),
       cancelAll: vi.fn(async () => {}),
       tryPauseForUpdate: vi.fn(async () => true),
@@ -270,7 +271,7 @@ export { loadResumableNodeHostGateway, mocks, runNodeHost, startNodeHostMcpManag
 
 export async function withReadyNodeHost(
   runTest: (host: {
-    running: Promise<void>;
+    running: ReturnType<typeof runNodeHost>;
     stop: () => (() => void) | undefined;
     client: (typeof mocks.capturedGatewayClients)[number];
     options: GatewayClientOptions;

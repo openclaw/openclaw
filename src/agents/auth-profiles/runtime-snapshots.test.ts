@@ -165,6 +165,9 @@ describe("runtime auth profile snapshots", () => {
     const next = {
       ...store,
       runtimeInheritsMainState: true,
+      // Resolving external profiles and finding none is the startup shape, not a catalog change.
+      runtimeExternalProfileIds: [],
+      runtimeExternalProfileIdsAuthoritative: true,
       lastGood: { openai: "openai:default" },
       usageStats: {
         "openai:default": {

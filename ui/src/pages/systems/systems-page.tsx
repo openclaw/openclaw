@@ -32,7 +32,7 @@ import { SystemsBackups } from "./systems-backups.tsx";
 import type { SystemsInventoryRow } from "./systems-data.ts";
 import { SystemMeasurements } from "./systems-measurements.tsx";
 import { createSystemsRead } from "./systems-read.ts";
-import { systemKind, systemName, systemPlatform, systemStatus } from "./systems-sidebar.tsx";
+import { systemKindLabel, systemName, systemPlatform, systemStatus } from "./systems-sidebar.tsx";
 import type { Systems } from "./systems-state.ts";
 import "../../styles/systems.css";
 
@@ -369,7 +369,11 @@ function SystemsWorkspace(props: {
                   ? "systems.noHostDesktopHint"
                   : "systems.noDesktopHint",
               )
-            : t("systems.accessHint");
+            : t(
+                controller().desktopAccessDenied()
+                  ? "systems.desktopAccessRequired"
+                  : "systems.accessHint",
+              );
   const Desktop = () => {
     let panel!: HTMLElementTagNameMap["openclaw-desktop-panel"];
     onSettled(() => {
@@ -402,7 +406,7 @@ function SystemsWorkspace(props: {
       <header class="systems-toolbar">
         <div class="systems-heading">
           <h2>{title()}</h2>
-          <span>{row() ? t("systems." + systemKind(row()!)) : t("systems.selectHint")}</span>
+          <span>{row() ? systemKindLabel(row()!) : t("systems.selectHint")}</span>
         </div>
         <select
           class="settings-select systems-mobile-picker"
