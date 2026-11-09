@@ -315,7 +315,7 @@ syncFixtureBuiltinExports(["node:child_process", "node:fs", "node:fs/promises"])
                   OPENCLAW_NODE_TEST_PLAN_CONCURRENCY: route === "ci-shared" ? "2" : "1",
                 }
               : {}),
-            // runNodeScript owns every wrapper route, so its fixture preload is always a Node import.
+            OPENCLAW_VITEST_RUNTIME: "node",
             ...fixturePreloadEnv(preload, "node"),
           }),
           20_000,
