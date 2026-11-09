@@ -152,3 +152,45 @@ it("keeps updated imports cache-stable without reusing changed immutable assets"
     }
   }
 });
+
+it("builds hoisted installs that nest one package version under several dependents", async () => {
+  const root = tempDirs.make("control-ui-update-cache-hoisted-");
+  // Hoisted linking copies a non-hoisted version under each dependent; Vite
+  // keeps every physical copy as its own module.
+  const files = {
+    "index.html":
+      '<html><head></head><body><script type="module" src="./entry.js"></script></body></html>',
+    "entry.js": 'import { a } from "a"; import { b } from "b"; globalThis.values = [a, b];',
+    "node_modules/a/package.json": '{"name":"a","version":"1.0.0","main":"index.js"}',
+    "node_modules/a/index.js": 'import { dup } from "dup"; export const a = `a:${dup}`;',
+    "node_modules/a/node_modules/dup/package.json":
+      '{"name":"dup","version":"8.1.0","main":"index.js"}',
+    "node_modules/a/node_modules/dup/index.js": 'export const dup = "nested";',
+    "node_modules/b/package.json": '{"name":"b","version":"1.0.0","main":"index.js"}',
+    "node_modules/b/index.js": 'import { dup } from "dup"; export const b = `b:${dup}`;',
+    "node_modules/b/node_modules/dup/package.json":
+      '{"name":"dup","version":"8.1.0","main":"index.js"}',
+    "node_modules/b/node_modules/dup/index.js": 'export const dup = "nested";',
+  };
+  for (const [name, source] of Object.entries(files)) {
+    await fs.mkdir(path.dirname(path.join(root, name)), { recursive: true });
+    await fs.writeFile(path.join(root, name), source);
+  }
+  const result = await build({
+    root,
+    configFile: false,
+    publicDir: false,
+    logLevel: "silent",
+    plugins: controlUiUpdateCachePlugins(),
+    build: { write: false, modulePreload: { polyfill: false } },
+  });
+  if (Array.isArray(result) || !("output" in result)) {
+    throw new Error("Expected one fixture build");
+  }
+  const moduleIds = result.output.flatMap((item) => (item.type === "chunk" ? item.moduleIds : []));
+  for (const dependent of ["a", "b"]) {
+    expect(moduleIds).toContain(
+      path.join(root, "node_modules", dependent, "node_modules/dup/index.js"),
+    );
+  }
+});
