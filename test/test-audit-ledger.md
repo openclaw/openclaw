@@ -404,6 +404,29 @@ permission to delete without root qualification.
 
 - Exact root/scripts records cover129 accepted paths (reconciled from the earlier117), including: the seven earlier retention/APNs/appcast/architecture/Buzz/descendant/channel-read records, the ClawRouter managed-Gateway fixture, all ten `cli-json-stdout` entry suites, CLI message authority, SQLite maintenance, provider-stall cancellation and Codex account usage, managed proxy and node cancellation. The latter four retain1/1,1/2,1/3 and1/1 physical/expanded cases respectively. All are source-only records and add no aggregate credit: overlap with older root/docs/scripts summaries is unresolved. The gross test/scripts inventory remains1,606 candidate paths, not certified unread paths.
 
+### Current-source script follow-up
+
+At `e08aa74ea39e35d01ba8e8f84e317747aba1bf3f`, eight suites added after the frozen
+census were reviewed with their owners, relevant callers, support and history.
+All 23 declarations / 36 expanded cases are retained. These are standalone
+counts, not additions to the overlapping root/scripts aggregate. This is source
+review only: no runtime qualification, test removal or production change.
+
+| Suite under `test/scripts/`           | Declarations / cases | Retained contract                                                                                                             |
+| ------------------------------------- | -------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| `generated-output-utils.test.ts`      | 5 / 12               | Exact write/check results, empty output, one-read cost, metadata/mode preservation and real blocked-parent errors.            |
+| `package-root-modules.test.ts`        | 3 / 3                | Independent parser oracle, packaged sibling imports and transitive closure with a missing-file diagnostic.                    |
+| `perf-gc-collections.test.ts`         | 1 / 1                | Inclusive start/exclusive end, append behavior across observer batches and the next measurement window.                       |
+| `setup-node-env-git.test.ts`          | 5 / 7                | Actual setup shell, privilege selection, bounded installation, capability recheck and failure propagation.                    |
+| `shared-fixture-isolation.test.ts`    | 2 / 3                | Real enclosing Git repositories, ignored archive discovery and an authoritative empty root index.                             |
+| `stylelint-selector-indexing.test.ts` | 5 / 5                | Selector semantics and normalized allowances scoped by identity, file, context and occurrence count; stale-allowance removal. |
+| `vitest-declared-inputs.test.ts`      | 1 / 2                | Real dependency recording and selected-versus-full failure oracles for archive and manifest inputs.                           |
+| `vitest-worker-run.test.ts`           | 1 / 3                | Borrowers settle after close, listeners detach and disposal preserves failures, including rejection before readiness.         |
+
+The package parser oracle cannot replace manifest membership or missing-file
+proof. Mocked inventory and UI coordinator tests cannot replace the real nested
+Git and worker-owner boundaries. No safe consolidation was identified.
+
 ## Pending qualification and proof repairs
 
 - Keep source-only candidates separate from applied removals. Obsolete fixture candidates require current-owner and runtime qualification. Pending: Twitch settled flag; it needs current-source and runtime keeper qualification.
