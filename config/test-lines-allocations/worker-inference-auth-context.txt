@@ -1,0 +1,2 @@
+27
+# Regression coverage for nexus/fix-openai-siwc
