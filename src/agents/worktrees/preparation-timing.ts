@@ -2,6 +2,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { performance } from "node:perf_hooks";
 import { createQueuedDiagnosticPhaseEmitter } from "../../infra/diagnostic-events.js";
 import { recordDiagnosticsTimelineDuration } from "../../infra/diagnostics-timeline.js";
+import type { FsSafeProvisionCopyDiagnostics } from "../../infra/fs-safe-copy-worker-contract.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 
 type PreparationPhase =
@@ -70,11 +71,16 @@ type TemplateDetails = {
   cloneBytes?: number;
   errorCode?: string;
 };
+type CopyDetails = FsSafeProvisionCopyDiagnostics & {
+  roundTripMs?: number;
+  roundTripResidualApproxMs?: number;
+};
 type PreparationTimingState = {
   enabled: boolean;
   template: TemplateState;
   templateDetails: TemplateDetails;
   phases: Partial<Record<PreparationPhase, number>>;
+  copyDetails: CopyDetails;
   activePhases: number;
   coveredSince: number;
   coveredMs: number;
@@ -100,6 +106,24 @@ export function setWorktreePreparationTemplate(
       current.template = template;
     }
     Object.assign(current.templateDetails, details);
+  }
+}
+
+/** Numeric aggregates share the existing preparation receipt and event. */
+export function setWorktreePreparationCopyDetails(details: CopyDetails) {
+  const current = preparation.getStore();
+  if (current) {
+    Object.assign(
+      current.copyDetails,
+      Object.fromEntries(
+        Object.entries(details)
+          .filter(([, value]) => Number.isFinite(value))
+          .map(([key, value]) => [
+            key,
+            Math.round(Math.min(Number.MAX_SAFE_INTEGER, Math.max(0, value))),
+          ]),
+      ),
+    );
   }
 }
 
@@ -158,6 +182,7 @@ export async function withWorktreePreparationTiming<T>(
     template: "unavailable",
     templateDetails: { reason: "not-requested" },
     phases: {},
+    copyDetails: {},
     activePhases: 0,
     coveredSince: 0,
     coveredMs: 0,
@@ -201,10 +226,11 @@ export async function withWorktreePreparationTiming<T>(
           Math.max(0, end - start - coveredMs),
         );
         log.info("managed worktree preparation", {
-          consoleMessage: `managed worktree preparation kind=${kind} template=${current.template} templateDetails=${JSON.stringify(current.templateDetails)} outcome=${outcome} errorDetails=${JSON.stringify(errorDetails)} durationMs=${durationMs} unattributedMs=${unattributedMs} phaseDurationsMs=${JSON.stringify(phaseDurationsMs)}`,
+          consoleMessage: `managed worktree preparation kind=${kind} template=${current.template} templateDetails=${JSON.stringify(current.templateDetails)} copyDetails=${JSON.stringify(current.copyDetails)} outcome=${outcome} errorDetails=${JSON.stringify(errorDetails)} durationMs=${durationMs} unattributedMs=${unattributedMs} phaseDurationsMs=${JSON.stringify(phaseDurationsMs)}`,
           kind,
           template: current.template,
           templateDetails: current.templateDetails,
+          copyDetails: current.copyDetails,
           outcome,
           ...errorDetails,
           durationMs,
@@ -224,6 +250,9 @@ export async function withWorktreePreparationTiming<T>(
                 `template.${key}`,
                 value,
               ]),
+            ),
+            ...Object.fromEntries(
+              Object.entries(current.copyDetails).map(([key, value]) => [`copy.${key}`, value]),
             ),
             outcome,
             ...errorDetails,

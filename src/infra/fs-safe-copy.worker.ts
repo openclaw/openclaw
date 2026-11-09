@@ -14,10 +14,11 @@ import type {
   FsSafeCopyReply,
   FsSafeCopyWrite,
   FsSafeProvisionCopy,
+  FsSafeProvisionCopyDiagnostics,
 } from "./fs-safe-copy-worker-contract.js";
 import { normalizeFsSafeNativeEnv } from "./fs-safe-env.js";
 
-function failure(error: unknown): FsSafeCopyReply {
+function failure(error: unknown): Extract<FsSafeCopyReply, { type: "failed" }> {
   return {
     type: "failed",
     message: error instanceof Error ? error.message : String(error),
@@ -37,6 +38,8 @@ if (parentPort) {
   configureFsSafeNative(nativeConfig);
   serveWorkerTasks<FsSafeCopyReply, FsSafeCopyRead | FsSafeProvisionCopy>(
     async (command, channel, control) => {
+      const startedAt = performance.now();
+      const diagnostics: FsSafeProvisionCopyDiagnostics = {};
       try {
         switch (command.type) {
           case "provision": {
@@ -44,17 +47,19 @@ if (parentPort) {
               throw new Error("Worktree provisioning requires its live host channel");
             }
             const decision = new Int32Array(command.decision);
-            return await control.runNativeSection<FsSafeCopyReply>(async () => {
+            const receipt = await control.runNativeSection<FsSafeCopyReply>(async () => {
               const { copyProvisionedPaths } =
                 await import("../agents/worktrees/provisioned-copy.js");
               return {
                 type: "provisioned",
+                diagnostics,
                 paths: await copyProvisionedPaths(
                   command.source,
                   command.destination,
                   command.paths,
                   {
                     signal: control.signal,
+                    diagnostics,
                     assertCurrent: () => {
                       control.throwIfCancelled();
                       Atomics.store(decision, 0, 0);
@@ -74,6 +79,8 @@ if (parentPort) {
                 ),
               };
             });
+            diagnostics.workerMs = performance.now() - startedAt;
+            return receipt;
           }
           case "probe":
             return {
@@ -89,7 +96,12 @@ if (parentPort) {
             throw new Error("Unknown native worktree read operation");
         }
       } catch (error) {
-        return failure(error);
+        const reply = failure(error);
+        if (command.type === "provision") {
+          diagnostics.workerMs = performance.now() - startedAt;
+          reply.diagnostics = diagnostics;
+        }
+        return reply;
       }
     },
   );

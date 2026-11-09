@@ -180,15 +180,17 @@ describe("ManagedWorktreeService provisioned state", () => {
       unsubscribe();
       setDiagnosticsEnabledForProcess(diagnosticsEnabled);
     }
-    expect(phases).toEqual([
-      expect.objectContaining({
-        details: expect.objectContaining({
-          outcome: "returned",
-          provisionInspect: expect.any(Number),
-          provisionCopy: expect.any(Number),
-        }),
-      }),
-    ]);
+    expect(phases).toHaveLength(1);
+    expect(phases[0]).toMatchObject({
+      details: {
+        outcome: "returned",
+        provisionInspect: expect.any(Number),
+        provisionCopy: expect.any(Number),
+        "copy.workerMs": expect.any(Number),
+        "copy.authorityWaitMs": expect.any(Number),
+        "copy.sourceBytes": 41,
+      },
+    });
     expect(JSON.stringify(phases)).not.toContain("synthetic provisioned");
     expect(await getRegistryWorktreeProvisionedPaths(env, created.id)).toEqual(inspection.paths);
     expect(await fs.readFile(path.join(created.path, ".env.local"), "utf8")).toBe(

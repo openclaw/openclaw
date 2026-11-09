@@ -8,9 +8,8 @@ const { run, poolOptions, log, event } = vi.hoisted(() => ({
   log: vi.fn(),
   event: vi.fn(),
 }));
-// Only the worker transport is simulated; timing and host authority are the production owners.
-vi.mock("../../infra/worker-task-pool.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../infra/worker-task-pool.js")>()),
+// mock-isolation: The copy host owns this synthetic transport, pool lifetime and telemetry sinks.
+vi.mock("../../infra/worker-task-pool.js", () => ({
   WorkerTaskPool: class {
     constructor(options: unknown) {
       poolOptions(options);
@@ -19,36 +18,23 @@ vi.mock("../../infra/worker-task-pool.js", async (importOriginal) => ({
   },
   WorkerTaskError: class extends Error {},
 }));
-vi.mock("../../infra/runtime-worker-url.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../infra/runtime-worker-url.js")>()),
-  resolveRuntimeWorkerUrl: () => new URL("file:///copy-worker.js"),
+// mock-isolation: Each test owns its pool; do not retain it in process-global state.
+vi.mock("../../shared/global-singleton.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../shared/global-singleton.js")>()),
+  resolveGlobalSingleton: (_key: symbol, create: () => unknown) => create(),
 }));
-vi.mock("../../shared/global-singleton.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../shared/global-singleton.js")>();
-  return {
-    ...actual,
-    resolveGlobalSingleton: (...args: Parameters<typeof actual.resolveGlobalSingleton>) =>
-      args[0] === Symbol.for("openclaw.worktreeProvisionCopies")
-        ? args[1]()
-        : actual.resolveGlobalSingleton(...args),
-  };
-});
-vi.mock("../../infra/diagnostic-events.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../infra/diagnostic-events.js")>()),
+// mock-isolation: Observe the receipt without dispatching diagnostics outside the fixture.
+vi.mock("../../infra/diagnostic-events.js", () => ({
   createQueuedDiagnosticPhaseEmitter: () => event,
 }));
-vi.mock("../../infra/diagnostics-timeline.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../infra/diagnostics-timeline.js")>()),
+// mock-isolation: Timeline storage is outside the timing/authority contract.
+vi.mock("../../infra/diagnostics-timeline.js", () => ({
   recordDiagnosticsTimelineDuration: vi.fn(),
 }));
-vi.mock("../../logging/subsystem.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../logging/subsystem.js")>()),
-  createSubsystemLogger: () => ({ info: log }),
-}));
-afterEach(() => {
-  vi.restoreAllMocks();
-  vi.resetAllMocks();
-});
+// mock-isolation: Capture preparation output without a process-wide logging sink.
+vi.mock("../../logging/subsystem.js", () => ({ createSubsystemLogger: () => ({ info: log }) }));
+afterEach(vi.restoreAllMocks);
+afterEach(vi.resetAllMocks);
 
 it.each(["returned", "skipped", "waiting-failure", "copy-failure"] as const)(
   "separates waiting from active copying on %s",
@@ -65,18 +51,21 @@ it.each(["returned", "skipped", "waiting-failure", "copy-failure"] as const)(
       if (outcome === "skipped") {
         return { type: "provisioned", paths: [] };
       }
-      options.onNotification();
-      expect(Atomics.load(new Int32Array(input.decision), 0)).toBe(1);
       // Later file mutations recheck authority without restarting the copy span.
-      clock = 50;
-      Atomics.store(new Int32Array(input.decision), 0, 0);
-      options.onNotification();
-      expect(Atomics.load(new Int32Array(input.decision), 0)).toBe(1);
+      for (clock of [40, 50]) {
+        Atomics.store(new Int32Array(input.decision), 0, 0);
+        options.onNotification();
+        expect(Atomics.load(new Int32Array(input.decision), 0)).toBe(1);
+      }
       clock = 65;
       if (outcome === "copy-failure") {
         throw failure;
       }
-      return { type: "provisioned", paths: ["file"] };
+      return {
+        type: "provisioned",
+        paths: ["file"],
+        diagnostics: { workerMs: 25, authorityWaitMs: 10 },
+      };
     });
     const pending = withWorktreePreparationTiming("managed", () =>
       copyProvisionedPathsInWorker("source", "destination", ["file"], { assertCurrent }),
@@ -89,12 +78,17 @@ it.each(["returned", "skipped", "waiting-failure", "copy-failure"] as const)(
     }
     expect(poolOptions).toHaveBeenCalledWith(expect.objectContaining({ maxWorkers: 2 }));
     const receipt = log.mock.calls[0]?.[1];
+    const waiting = outcome === "waiting-failure" || outcome === "skipped";
     expect(receipt.phaseDurationsMs).toEqual(
-      outcome === "waiting-failure" || outcome === "skipped"
-        ? { provisionCopyWait: 40 }
-        : { provisionCopyWait: 40, provisionCopy: 25 },
+      waiting ? { provisionCopyWait: 40 } : { provisionCopyWait: 40, provisionCopy: 25 },
     );
     expect(receipt.unattributedMs).toBe(0);
+    if (outcome === "returned") {
+      expect(receipt.copyDetails.workerMs).toBe(25);
+      expect(receipt.copyDetails.authorityWaitMs).toBe(10);
+      expect(receipt.copyDetails.roundTripResidualApproxMs).toBe(40);
+    }
+    expect(receipt.copyDetails.roundTripMs).toBe(waiting ? 40 : 65);
     if (outcome === "waiting-failure" || outcome === "copy-failure") {
       expect(receipt.errorPhase).toBe(
         outcome === "waiting-failure" ? "provisionCopyWait" : "provisionCopy",
