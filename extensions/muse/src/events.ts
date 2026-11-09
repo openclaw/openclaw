@@ -183,7 +183,7 @@ export async function consumeTurn(
       } else if (item.kind === "agentMessage") {
         // The completed item is authoritative; streamed deltas only drive live UI.
         // Append the notice so an already-streamed partial reply also exposes the cutoff.
-        const text = `${item.text ?? ""}${item.cutOff ? "\n\n[Response incomplete: the provider stream ended unexpectedly.]" : ""}`;
+        const text = `${item.text ?? ""}${item.cutOff ? "\n\n[Response incomplete: the provider stream ended unexpectedly. You can send a follow-up message to ask for the rest.]" : ""}`;
         await emitField(item, "text", text);
         visibleText += text;
         messages.push(assistantMessage(params, [{ type: "text", text }]));

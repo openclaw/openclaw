@@ -600,7 +600,7 @@ describe("Muse native MSP harness", () => {
       const { run, events } = setup();
       const result = await run({ prompt });
       const text =
-        "Partial answer: the first two steps are\n\n[Response incomplete: the provider stream ended unexpectedly.]";
+        "Partial answer: the first two steps are\n\n[Response incomplete: the provider stream ended unexpectedly. You can send a follow-up message to ask for the rest.]";
       expectFailure(result, "provider stream ended mid-reply");
       expect(result.assistantTexts).toEqual([text]);
       expect(
@@ -625,7 +625,7 @@ describe("Muse native MSP harness", () => {
     const result = await run({ prompt: "cutofftool", onAgentToolResult });
     expectFailure(result, "provider stream ended mid-reply");
     expect(result.assistantTexts).toEqual([
-      "Partial answer: the first two steps are\n\n[Response incomplete: the provider stream ended unexpectedly.]",
+      "Partial answer: the first two steps are\n\n[Response incomplete: the provider stream ended unexpectedly. You can send a follow-up message to ask for the rest.]",
     ]);
     expect(result.messagesSnapshot.filter((message) => message.role === "toolResult")).toHaveLength(
       1,
