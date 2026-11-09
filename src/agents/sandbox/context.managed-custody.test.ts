@@ -5,6 +5,7 @@ import { create as createTar } from "tar";
 import { assert, expect, it, onTestFinished, vi } from "vitest";
 import packageJson from "../../../package.json" with { type: "json" };
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
+import { writeJsonFile } from "../../../test/helpers/temp-repo.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import type { SessionCreatedActor } from "../../config/sessions/session-entry-provenance.js";
@@ -65,33 +66,23 @@ it.skipIf(process.platform === "win32")(
     const template = path.join(state.root, "template");
     const projection = path.join(state.root, "projection");
     const payload = path.join(state.root, "package");
-    await fs.mkdir(template);
-    await fs.mkdir(payload);
-    await fs.writeFile(
-      path.join(payload, "package.json"),
-      JSON.stringify({ name: "fixture-payload", version: "1.0.0", main: "index.cjs" }),
-    );
-    await fs.writeFile(path.join(payload, "index.cjs"), "module.exports = 'prepared';\n");
+    writeJsonFile(path.join(payload, "package.json"), { name: "payload", version: "1.0.0" });
+    await fs.writeFile(path.join(payload, "index.js"), "module.exports = 'prepared';\n");
     await createTar({ gzip: true, cwd: state.root, file: path.join(state.root, "payload.tgz") }, [
       "package",
     ]);
-    await fs.writeFile(
-      path.join(template, "package.json"),
-      JSON.stringify({
-        name: "review-fixture",
-        private: true,
-        packageManager: packageJson.packageManager,
-        dependencies: { "fixture-payload": "file:../payload.tgz" },
-        scripts: {
-          postinstall: "node -e \"require('fs').appendFileSync('lifecycle.txt','ran\\n')\"",
-        },
-      }),
-    );
+    writeJsonFile(path.join(template, "package.json"), {
+      packageManager: packageJson.packageManager,
+      dependencies: { payload: "file:../payload.tgz" },
+      scripts: {
+        postinstall: "node -e \"require('fs').appendFileSync('lifecycle.txt','ran\\n')\"",
+      },
+    });
     await fs.writeFile(
       path.join(template, "pnpm-workspace.yaml"),
       "packageImportMethod: clone-or-copy\nverifyDepsBeforeRun: false\n",
     );
-    // Translate the container namespace into private host paths, preserving store identity.
+    // Preserve the guest store identity; Corepack owns the prepared host toolchain.
     const guestEnv = (env: Record<string, string>) =>
       Object.fromEntries(
         Object.entries(env).map(([key, value]) => [
@@ -107,11 +98,9 @@ it.skipIf(process.platform === "win32")(
           HOME: state.root,
           CI: "1",
           ...guestEnv(env),
-          // Test setup preserves this toolchain cache before isolating HOME/XDG.
           COREPACK_HOME: process.env.COREPACK_HOME,
           COREPACK_ENABLE_NETWORK: "0",
           PNPM_CONFIG_OFFLINE: "true",
-          // Corepack selects the pinned version; pnpm must not download itself again.
           PNPM_CONFIG_PM_ON_FAIL: "ignore",
         },
         encoding: "utf8",
@@ -171,9 +160,7 @@ it.skipIf(process.platform === "win32")(
       workspaceCwd: projection,
       assertCurrent: owner.assertCurrent,
       protectRuntimeScope: async () => {},
-      retain: () => {
-        throw new Error("Unexpected retain");
-      },
+      retain: () => assert.fail("Unexpected retain"),
       provision: async (callback) => callback(),
       checkpoint: async () => {},
       terminate: async () => {},
@@ -183,7 +170,7 @@ it.skipIf(process.platform === "win32")(
     const context = await custody.prepareContext(config, "agent:main:review", projection);
     assert(context);
     lifetime.defer(() => context[Symbol.dispose]?.());
-    const dependency = path.join(projection, "node_modules/fixture-payload/index.cjs");
+    const dependency = path.join(projection, "node_modules/payload/index.js");
     await using original = await fs.open(dependency, "r");
     const before = await original.stat();
     run(
@@ -194,9 +181,9 @@ it.skipIf(process.platform === "win32")(
     expect((await fs.stat(dependency)).ino).toBe(before.ino);
     expect(await fs.readFile(path.join(projection, "lifecycle.txt"), "utf8")).toBe("ran\nran\n");
     await fs.writeFile(dependency, "review edit\n");
-    expect(
-      await fs.readFile(path.join(template, "node_modules/fixture-payload/index.cjs"), "utf8"),
-    ).toBe("module.exports = 'prepared';\n");
+    expect(await fs.readFile(path.join(template, "node_modules/payload/index.js"), "utf8")).toBe(
+      "module.exports = 'prepared';\n",
+    );
   },
 );
 
