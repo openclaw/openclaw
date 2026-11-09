@@ -1560,6 +1560,10 @@ class ChatController internal constructor(
     val capturedOwnerAgentId =
       normalizeSessionSelectionOwner(sessionKey, ownerAgentId)
         ?: if (sessionKey == _sessionKey.value) resolveAgentIdForSessionKey(sessionKey) else null
+    val lease = captureRequestLease(requestCacheScope)
+
+    fun ownsGateway(): Boolean = requestCacheScope == currentCacheScope()
+
     return try {
       val params =
         buildJsonObject {
@@ -1570,12 +1574,15 @@ class ChatController internal constructor(
           // create the child under a newer gateway default for unscoped parent keys.
           capturedOwnerAgentId?.let { put("agentId", JsonPrimitive(it)) }
         }
-      val lease = captureRequestLease(requestCacheScope) ?: throw GatewayRequestNotEnqueued("not connected")
-      val createdKey = parseCreatedSessionKey(json, requestSessionCreate(requestCacheScope, params, lease))
+      val connection = lease ?: throw GatewayRequestNotEnqueued("not connected")
+      val createdKey =
+        parseCreatedSessionKey(json, requestSessionCreate(requestCacheScope, params, connection))
+      // Only return a navigable key while its creating Gateway is still focused.
+      if (!connection.isCurrent() || !ownsGateway()) return null
       fetchSessionsForCurrentWindow(archived = false)
-      createdKey
+      publishGatewayState(connection, ::ownsGateway) { createdKey }
     } catch (err: Throwable) {
-      updateErrorText(err.message)
+      publishGatewayState(lease, ::ownsGateway) { updateErrorText(err.message) }
       null
     }
   }
@@ -1673,7 +1680,9 @@ class ChatController internal constructor(
       cancelOutboxSessionMutation(snapshot, mutationLease)
       val createdKey = root.nonBlankString("sessionKey") ?: return@runOutboxSessionMutation null
       if (!isCurrentSessionAction(snapshot)) {
-        fetchSessionsForCurrentWindow()
+        if (snapshot.gatewayScope == currentCacheScope()) {
+          fetchSessionsForCurrentWindow()
+        }
         return@runOutboxSessionMutation null
       }
       SessionForkResult(
@@ -2023,7 +2032,12 @@ class ChatController internal constructor(
       } else {
         recoverOutboxAfterAmbiguousSessionMutation(snapshot, mutationLease)
       }
-      if (switchGeneration == null || isCurrentSessionAction(snapshot)) updateErrorText(err.message)
+      if (
+        snapshot.gatewayScope == currentCacheScope() &&
+        (switchGeneration == null || isCurrentSessionAction(snapshot))
+      ) {
+        updateErrorText(err.message)
+      }
       null
     } finally {
       if (mutatesBranch) releaseOutboxSessionMutation(snapshot, mutationLease)
