@@ -328,7 +328,6 @@ export async function monitorSingleAccount(params: MonitorSingleAccountParams): 
     const eventDispatcher = createEventDispatcher(account);
     const durableIngress = createFeishuDurableIngress({
       accountId,
-      cfg,
       dispatcher: eventDispatcher,
       ...(account.encryptKey ? { encryptKey: account.encryptKey } : {}),
       runtime: runtime ?? {},

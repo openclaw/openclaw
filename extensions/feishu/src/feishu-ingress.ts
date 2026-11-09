@@ -12,13 +12,9 @@ import { isRecord } from "openclaw/plugin-sdk/channel-secret-basic-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/concurrency-runtime";
 import { collectErrorGraphCandidates, formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { ChannelReplayClaimHandle } from "openclaw/plugin-sdk/persistent-dedupe";
-import { createRuntimeConfigReader } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { normalizeNullableString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { racePromiseWithAbortSignal } from "openclaw/plugin-sdk/time-runtime";
-import type { ClawdbotConfig } from "../runtime-api.js";
-import { resolveFeishuAccount } from "./accounts.js";
 import { resolveFeishuGroupSession } from "./bot-content.js";
-import { resolveFeishuGroupConfig } from "./policy.js";
 import { getFeishuRuntime } from "./runtime.js";
 import { isFeishuGroupChatType, normalizeFeishuEventChatType } from "./types.js";
 
@@ -46,7 +42,6 @@ type FeishuIngressFacts = {
 
 type FeishuIngressOptions = {
   accountId: string;
-  cfg?: ClawdbotConfig;
   dispatcher: Pick<Lark.EventDispatcher, "invoke">;
   encryptKey?: string;
   runtime: {
@@ -126,7 +121,8 @@ function inspectFeishuIngressEnvelope(
   rawEnvelope: string,
   encryptKey: string | undefined,
   allowInvalidLane = false,
-  account?: { accountId: string; cfg: ClawdbotConfig },
+  previousScope?: "group_topic" | "group_topic_sender",
+  previousReplyInThread: "enabled" | "disabled" = "disabled",
 ): FeishuIngressFacts | null {
   const envelope = decryptEnvelope(parseRawEnvelope(rawEnvelope), encryptKey);
   const nestedHeader = isRecord(envelope.header) ? envelope.header : null;
@@ -162,8 +158,7 @@ function inspectFeishuIngressEnvelope(
     }
     let peerId = chatId;
     const chatType = normalizeFeishuEventChatType(message?.chat_type);
-    if (account && message && isFeishuGroupChatType(chatType)) {
-      const feishuCfg = resolveFeishuAccount(account).config;
+    if (previousScope && message && isFeishuGroupChatType(chatType)) {
       const sender = isRecord(event.sender) ? event.sender : null;
       const senderId = isRecord(sender?.sender_id) ? sender.sender_id : null;
       // Missing native thread identity is hydrated only after durable admission.
@@ -179,8 +174,7 @@ function inspectFeishuIngressEnvelope(
           rootId: normalizeNullableString(message.root_id) ?? undefined,
           threadId: normalizeNullableString(message.thread_id) ?? undefined,
           chatType: chatType ?? undefined,
-          groupConfig: resolveFeishuGroupConfig({ cfg: feishuCfg, groupId: chatId }),
-          feishuCfg,
+          feishuCfg: { groupSessionScope: previousScope, replyInThread: previousReplyInThread },
         });
         if (
           session.groupSessionScope === "group_topic" ||
@@ -347,14 +341,8 @@ export function buildFeishuFlushIngressLifecycle(
 }
 
 export function createFeishuDurableIngress(options: FeishuIngressOptions) {
-  const readConfig = options.cfg ? createRuntimeConfigReader(options.cfg) : undefined;
   const inspect = (rawEnvelope: string, allowInvalidLane: boolean) =>
-    inspectFeishuIngressEnvelope(
-      rawEnvelope,
-      options.encryptKey,
-      allowInvalidLane,
-      readConfig ? { accountId: options.accountId, cfg: readConfig() } : undefined,
-    );
+    inspectFeishuIngressEnvelope(rawEnvelope, options.encryptKey, allowInvalidLane);
   let socketTerminator: (() => void) | undefined;
   const activeLifecycles = new Map<string, FeishuIngressLifecycle>();
 
@@ -369,18 +357,7 @@ export function createFeishuDurableIngress(options: FeishuIngressOptions) {
         getFeishuRuntime().state.openChannelIngressQueue<FeishuIngressPayload>({
           accountId: options.accountId,
         })),
-    inspect: (rawEnvelope, context) => {
-      const facts = inspect(rawEnvelope, context.phase === "admission");
-      if (context.phase === "claim" && facts?.laneKey !== context.claimedLaneKey) {
-        // Rows retained across the topic-queue upgrade still own their original
-        // chat lane. Validate that identity without dropping recoverable work.
-        const legacy = inspectFeishuIngressEnvelope(rawEnvelope, options.encryptKey);
-        if (legacy?.laneKey === context.claimedLaneKey) {
-          return legacy;
-        }
-      }
-      return facts;
-    },
+    inspect: (rawEnvelope, context) => inspect(rawEnvelope, context.phase === "admission"),
     payload: {
       version: FEISHU_INGRESS_PAYLOAD_VERSION,
       serialize: (rawEnvelope, { receivedAt }) => ({ receivedAt, rawEnvelope }),
@@ -471,6 +448,42 @@ export function createFeishuDurableIngress(options: FeishuIngressOptions) {
     pollIntervalMs: options.pollIntervalMs ?? FEISHU_INGRESS_POLL_INTERVAL_MS,
     retention: "standard",
     drain: {
+      // Durable receipt order is always per chat. The receiver registers topic
+      // reservations before handing off, so barriers include the entire backlog.
+      deriveLaneKey: (record) => {
+        const payload = record.payload;
+        try {
+          return isRecord(payload) && typeof payload.rawEnvelope === "string"
+            ? inspect(payload.rawEnvelope, true)?.laneKey
+            : undefined;
+        } catch {
+          // Claim validation owns terminal settlement for malformed retained rows.
+          return undefined;
+        }
+      },
+      reconcileStoredLaneKey: (record, storedLaneKey) => {
+        const payload = record.payload;
+        if (!isRecord(payload) || typeof payload.rawEnvelope !== "string") {
+          return false;
+        }
+        // Earlier topic-queue candidates persisted session-scoped lanes. Accept
+        // only identities derivable from the original event, independent of config.
+        for (const scope of ["group_topic", "group_topic_sender"] as const) {
+          for (const replyInThread of ["disabled", "enabled"] as const) {
+            const previous = inspectFeishuIngressEnvelope(
+              payload.rawEnvelope,
+              options.encryptKey,
+              true,
+              scope,
+              replyInThread,
+            );
+            if (previous?.laneKey === storedLaneKey) {
+              return true;
+            }
+          }
+        }
+        return false;
+      },
       deferredLaneOccupancy: "release",
       adoptionStallTimeoutMs: options.adoptionStallTimeoutMs ?? DEFAULT_INGRESS_ADOPTION_STALL_MS,
       resolveNonRetryableFailure: resolveFeishuIngressNonRetryableFailure,

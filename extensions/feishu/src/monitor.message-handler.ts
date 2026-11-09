@@ -534,7 +534,29 @@ export function createFeishuMessageReceiveHandler({
     }
     if (turnAdoptionLifecycle) {
       try {
-        await inboundDebouncer.enqueue(debounceEntry);
+        const processing = inboundDebouncer.enqueue(debounceEntry);
+        if (debounceEntry.topicOrder) {
+          // Receipt order is now owned by the registered topic reservation.
+          // Retain the durable claim, but release intake before agent adoption.
+          turnAdoptionLifecycle.onDeferred();
+          const settled = processing.catch(async (err: unknown) => {
+            debounceEntry.topicOrder?.release();
+            if (claim.kind === "claimed") {
+              claim.handle.release({ error: err });
+            }
+            try {
+              await turnAdoptionLifecycle.onAbandoned();
+            } catch (abandonError) {
+              error(
+                `feishu[${accountId}]: failed to abandon deferred topic: ${String(abandonError)}`,
+              );
+            }
+            error(`feishu[${accountId}]: error handling deferred topic: ${String(err)}`);
+          });
+          trackTask?.(settled);
+        } else {
+          await processing;
+        }
         return { kind: "deferred" };
       } catch (err) {
         debounceEntry.topicOrder?.release();

@@ -539,6 +539,7 @@ export const PR_PROTECTED_RUNTIME_TEST_FILES: readonly string[] = [
   "extensions/feishu/src/monitor.dedupe-lifecycle.test.ts",
   "extensions/feishu/src/monitor.lifecycle.test.ts",
   "extensions/feishu/src/monitor.message-handler.ingress.test.ts",
+  "extensions/feishu/src/monitor.message-handler.topic-durable.test.ts",
   "extensions/feishu/src/monitor.post-replay.test.ts",
   "extensions/feishu/src/monitor.reaction.test.ts",
   "extensions/feishu/src/outbound-delivery.test.ts",

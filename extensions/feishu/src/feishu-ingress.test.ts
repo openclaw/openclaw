@@ -8,7 +8,6 @@ import { createNonExitingRuntimeEnv } from "openclaw/plugin-sdk/plugin-test-runt
 import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { withOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { ClawdbotConfig } from "../runtime-api.js";
 import { feishuDedupeState } from "./dedup-state.js";
 import { claimUnprocessedFeishuMessage, finalizeFeishuMessageProcessing } from "./dedup.js";
 import { resolveFeishuMessageDedupeKey } from "./dedupe-key.js";
@@ -82,12 +81,10 @@ const failAdoption = async () => {
 
 function createTestIngress(params: {
   queue: FeishuIngressQueue;
-  cfg?: ClawdbotConfig;
   dispatch?: (data: ReturnType<typeof messageEnvelope>) => unknown;
 }) {
   return createFeishuDurableIngress({
     accountId: "default",
-    cfg: params.cfg,
     queue: params.queue,
     dispatcher: {
       invoke: async (data) => await params.dispatch?.(data as ReturnType<typeof messageEnvelope>),
@@ -290,60 +287,64 @@ describe("Feishu durable ingress", () => {
     });
   });
 
-  it.each([false, true])(
-    "keeps buffered input in its configured lane until handoff (topics=%s)",
-    async (topics) => {
-      await withQueue(async (queue, startIngress) => {
-        const buffered = createDeferred<FeishuIngressLifecycle>();
-        const dispatched: string[] = [];
-        const ingress = startIngress({
-          queue,
-          cfg: topics ? { channels: { feishu: { groupSessionScope: "group_topic" } } } : undefined,
-          dispatch: async (data) => {
-            const lifecycle = ingress.resolveLifecycle({ event_id: data.header.event_id });
-            if (!lifecycle) {
-              throw new Error("Missing ingress lifecycle");
-            }
-            dispatched.push(data.header.event_id);
-            if (data.header.event_id === "evt-buffered") {
-              buffered.resolve(lifecycle);
-              return { kind: "deferred" };
-            }
-            await lifecycle.onAdopted();
-            return undefined;
-          },
-        });
-        ingress.start();
-        await ingress.invoke(messageEnvelope("evt-buffered", "omt-a"), { needCheck: false });
-        const first = await buffered.promise;
-        try {
-          await ingress.invoke(messageEnvelope("evt-later", "omt-a"), { needCheck: false });
-          const sentinel = messageEnvelope("evt-other", "omt-b");
-          if (!topics) {
-            sentinel.event.message.chat_id = "oc-other-chat";
-          }
-          await ingress.invoke(sentinel, { needCheck: false });
-          await vi.waitFor(() => expect(dispatched).toContain("evt-other"));
-          expect((await queue.listPending()).map((row) => row.id)).toEqual(["evt-later"]);
-          expect(dispatched).toEqual(["evt-buffered", "evt-other"]);
-        } finally {
-          await first.onAdopted();
-          await ingress.waitForIdle();
-        }
-        expect(dispatched).toEqual(["evt-buffered", "evt-other", "evt-later"]);
-      });
-    },
-  );
-
-  it("recovers retained chat-lane rows after enabling topic queues", async () => {
+  it("keeps buffered input in its chat lane until a lifecycle handoff", async () => {
     await withQueue(async (queue, startIngress) => {
-      const before = startIngress({ queue });
-      await before.invoke(messageEnvelope("evt-upgrade", "omt-a"), { needCheck: false });
-      await before.stop();
+      const buffered = createDeferred<FeishuIngressLifecycle>();
+      const dispatched: string[] = [];
+      const ingress = startIngress({
+        queue,
+        dispatch: async (data) => {
+          const lifecycle = ingress.resolveLifecycle({ event_id: data.header.event_id });
+          if (!lifecycle) {
+            throw new Error("Missing ingress lifecycle");
+          }
+          dispatched.push(data.header.event_id);
+          if (data.header.event_id === "evt-buffered") {
+            buffered.resolve(lifecycle);
+            return { kind: "deferred" };
+          }
+          await lifecycle.onAdopted();
+          return undefined;
+        },
+      });
+      ingress.start();
+      await ingress.invoke(messageEnvelope("evt-buffered", "omt-a"), { needCheck: false });
+      const first = await buffered.promise;
+      try {
+        await ingress.invoke(messageEnvelope("evt-later", "omt-a"), { needCheck: false });
+        const sentinel = messageEnvelope("evt-other", "omt-b");
+        sentinel.event.message.chat_id = "oc-other-chat";
+        await ingress.invoke(sentinel, { needCheck: false });
+        await vi.waitFor(() => expect(dispatched).toContain("evt-other"));
+        expect((await queue.listPending()).map((row) => row.id)).toEqual(["evt-later"]);
+        expect(dispatched).toEqual(["evt-buffered", "evt-other"]);
+      } finally {
+        await first.onAdopted();
+        await ingress.waitForIdle();
+      }
+      expect(dispatched).toEqual(["evt-buffered", "evt-other", "evt-later"]);
+    });
+  });
+
+  it.each([
+    "chat:oc-chat",
+    "chat:oc-chat:topic:omt-a",
+    "chat:oc-chat:topic:omt-a:sender:ou-user",
+    "chat:oc-chat:topic:omt-other",
+  ])("recovers a retained lane independently of current session scope: %s", async (laneKey) => {
+    await withQueue(async (queue, startIngress) => {
+      await queue.enqueue(
+        "evt-upgrade",
+        {
+          version: 1,
+          receivedAt: Date.now(),
+          rawEnvelope: JSON.stringify(messageEnvelope("evt-upgrade", "omt-a")),
+        },
+        { laneKey },
+      );
       const dispatched: string[] = [];
       const after = startIngress({
         queue,
-        cfg: { channels: { feishu: { groupSessionScope: "group_topic" } } },
         dispatch: async (data) => {
           dispatched.push(data.header.event_id);
           await after.resolveLifecycle({ event_id: data.header.event_id })?.onAdopted();
@@ -351,10 +352,37 @@ describe("Feishu durable ingress", () => {
       });
       after.start();
       await after.waitForIdle();
-      expect(dispatched).toEqual(["evt-upgrade"]);
+      if (laneKey.endsWith("omt-other")) {
+        expect(dispatched).toEqual([]);
+        expect(await queue.listFailed?.()).toMatchObject([
+          { id: "evt-upgrade", reason: "invalid-event" },
+        ]);
+      } else {
+        expect(dispatched).toEqual(["evt-upgrade"]);
+      }
       expect(await queue.listPending()).toEqual([]);
     });
   });
+
+  it.each([undefined, 42, "not-json"])(
+    "settles an invalid retained envelope instead of blocking the drain: %s",
+    async (rawEnvelope) => {
+      await withQueue(async (queue, startIngress) => {
+        const payload = { version: 1 as const, receivedAt: Date.now(), rawEnvelope: "" };
+        Reflect.set(payload, "rawEnvelope", rawEnvelope);
+        await queue.enqueue("evt-corrupt", payload, { laneKey: "chat:oc-chat" });
+        const dispatch = vi.fn();
+        const ingress = startIngress({ queue, dispatch });
+        ingress.start();
+        await ingress.waitForIdle();
+        expect(dispatch).not.toHaveBeenCalled();
+        expect(await queue.listPending()).toEqual([]);
+        expect(await queue.listFailed?.()).toMatchObject([
+          { id: "evt-corrupt", reason: "invalid-event" },
+        ]);
+      });
+    },
+  );
 
   it("stops without stranding a buffered delivery or its durable claim", async () => {
     await withQueue(async (queue, startIngress) => {

@@ -96,6 +96,7 @@ export const databaseWorkerExtensionTestFiles = [
   "extensions/discord/src/monitor/native-command.guild-guards.test.ts",
   "extensions/discord/src/monitor/native-command.interaction-boundary.test.ts",
   "extensions/feishu/src/monitor.message-handler.ingress.test.ts",
+  "extensions/feishu/src/monitor.message-handler.topic-durable.test.ts",
   "extensions/feishu/src/doctor.test.ts",
   "extensions/googlechat/src/monitor-ingress.test.ts",
   "extensions/googlechat/src/monitor.test.ts",
