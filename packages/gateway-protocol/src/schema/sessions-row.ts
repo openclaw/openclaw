@@ -316,6 +316,8 @@ export const SessionRowSchema = Type.Object(
       ]),
     ),
     toolOverrides: Type.Optional(SessionToolOverridesSchema),
+    /** Originating agent runs for the session's running background exec processes. */
+    backgroundProcessRunIds: Type.Optional(Type.Array(NonEmptyString, { minItems: 1 })),
   },
   { additionalProperties: true },
 );

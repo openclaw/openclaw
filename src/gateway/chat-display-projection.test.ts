@@ -535,11 +535,37 @@ it.each([
   },
 );
 
-const execStatus = { exitCode: 7, durationMs: 12.5, cwd: "/workspace", ok: false };
+const execStatus = {
+  exitCode: 7,
+  durationMs: 12.5,
+  cwd: "/workspace",
+  ok: false,
+  sessionId: "exec-session",
+};
 it.each([
   ["exec", { ...execStatus, sessionKey: "agent:helper:main" }, {}],
-  ["exec", {}, { exitCode: Number.NaN, durationMs: Infinity, sessionKey: " padded ", ok: "true" }],
-  ["exec", {}, { exitCode: "0", durationMs: -Infinity, sessionKey: "s".repeat(33), ok: 1 }],
+  [
+    "exec",
+    {},
+    {
+      exitCode: Number.NaN,
+      durationMs: Infinity,
+      sessionKey: " padded ",
+      sessionId: " padded ",
+      ok: "true",
+    },
+  ],
+  [
+    "exec",
+    {},
+    {
+      exitCode: "0",
+      durationMs: -Infinity,
+      sessionKey: "s".repeat(33),
+      sessionId: "s".repeat(33),
+      ok: 1,
+    },
+  ],
 ] as const)(
   "preserves valid %s status and strips malformed fields (%j, %j)",
   (toolName, valid, invalid) => {

@@ -216,7 +216,7 @@ describe("PR preparation handoff", () => {
       }
       const entries = [...messages.slice(0, 3), terminal, ...messages.slice(3)];
       expect(framesOf(projectHistory(entries, { messages: entries }))[0]?.outcome.kind).toBe(
-        "failed",
+        ["aborted", "live-abort"].includes(reason) ? "interrupted" : "failed",
       );
     },
   );
@@ -394,6 +394,7 @@ describe("background media handoff", () => {
       ...mediaHistory("image_generate"),
       { role: "assistant", runId: "media-run", stopReason, content: "Generation stopped." },
     ];
-    expect(framesOf(projectHistory(messages, { messages }))[0]?.outcome.kind).toBe("failed");
+    const expectedOutcome = stopReason === "aborted" ? "interrupted" : "failed";
+    expect(framesOf(projectHistory(messages, { messages }))[0]?.outcome.kind).toBe(expectedOutcome);
   });
 });

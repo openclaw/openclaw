@@ -22,7 +22,7 @@ import {
   type StreamRunRenderItem,
   type WorkGroupRenderItem,
 } from "./chat-turn-presentation.ts";
-import { isLiveTerminalForRun } from "./terminal-message-identity.ts";
+import { isLiveTerminalForRun, readLiveTerminalDisposition } from "./terminal-message-identity.ts";
 
 type AgentRunFramePart =
   | MessageGroup
@@ -38,8 +38,11 @@ export type AgentRunFrameRenderItem = {
   outcome:
     | { kind: "active" }
     | { kind: "completed"; actionOwner: MessageGroup["messages"][number] | null }
+    | { kind: "continued" }
     | { kind: "interrupted" }
     | { kind: "failed" };
+  /** The active state comes from a retained background exec, not a live reply stream. */
+  backgroundActive?: boolean;
   parts: AgentRunFramePart[];
   /** Completed runs share one identity/footer across independently virtualized rows. */
   fragment?: {
@@ -182,34 +185,30 @@ export function coalesceAgentRunFrames(
     activeRunId?: string | null;
     /** Session-wide liveness does not grant foreground stream ownership. */
     activeRunIds?: readonly string[];
+    session?: {
+      lastRunId?: string | null;
+      abortedLastRun?: boolean;
+      backgroundProcessRunIds?: readonly string[] | null;
+    };
   } = {},
 ): Array<AgentRunFrameInput | AgentRunFrameRenderItem> {
   if (opts.searchActive) {
     return items;
   }
   const result: Array<AgentRunFrameInput | AgentRunFrameRenderItem> = [];
+  const messages = opts.messages ?? [];
+  const continuedRunIds = new Set<string>();
   const lastAssistantByRun = new Map<string, unknown>();
-  const terminalRuns = new Set<string>();
-  const activeRunIds = new Set(opts.activeRunIds);
-  for (const message of opts.messages ?? []) {
+  for (const message of messages) {
     const id = transcriptRunId(message);
     const record = asRecord(message);
-    if (id && record?.role === "assistant") {
-      lastAssistantByRun.set(id, message);
-      const terminal = hasTerminalRunOutcome(message, id);
-      // A delayed active-session snapshot cannot revive a run whose terminal we already observed.
-      if (terminal) {
-        activeRunIds.delete(id);
-      }
-      if (
-        terminal ||
-        record.stopReason === "stop" ||
-        record.stopReason === "error" ||
-        assistantMessageIsInterrupted(message) ||
-        resolveAssistantReplyPhase(message) === "final_answer"
-      ) {
-        terminalRuns.add(id);
-      }
+    if (!id || record?.role !== "assistant") {
+      continue;
+    }
+    lastAssistantByRun.set(id, message);
+    const sourceRunId = asRecord(asRecord(record["__openclaw"])?.execCompletion)?.sourceRunId;
+    if (typeof sourceRunId === "string" && assistantMessageCanOwnTurnActions(message, true)) {
+      continuedRunIds.add(sourceRunId);
     }
   }
   let boundaryId: string | undefined;
@@ -246,17 +245,46 @@ export function coalesceAgentRunFrames(
     if (!runId || !frameRunId || parts.length === 0) {
       return;
     }
+    const backgroundProcessActive = opts.session?.backgroundProcessRunIds?.includes(runId) ?? false;
+    const completedActionOwner = completedFrameActionOwner(parts);
+    const lastAssistant = lastAssistantByRun.get(runId);
+    const lastAssistantRecord = asRecord(lastAssistant);
+    const liveTerminalDisposition = readLiveTerminalDisposition(lastAssistant);
+    const stopReason =
+      typeof lastAssistantRecord?.stopReason === "string"
+        ? lastAssistantRecord.stopReason.toLowerCase()
+        : "";
+    const sessionInterrupted = opts.session?.lastRunId === runId && opts.session.abortedLastRun;
+    const explicitInterruption =
+      (assistantMessageIsInterrupted(lastAssistant) || sessionInterrupted) &&
+      liveTerminalDisposition !== "error" &&
+      liveTerminalDisposition !== "timeout" &&
+      stopReason !== "timeout" &&
+      stopReason !== "timed_out";
+    const failedOutcome = failed && !explicitInterruption;
+    const explicitTerminalOutcome =
+      failed || hasTerminalRunOutcome(lastAssistant, runId) || sessionInterrupted;
+    // Persisted terminal state wins over stale active-session/stream snapshots.
+    // A surviving background exec is reported separately by backgroundActive.
     const active =
-      runId === opts.activeRunId || activeRunIds.has(runId) || parts.some(itemIsActive);
+      !explicitTerminalOutcome &&
+      ((!completedActionOwner && backgroundProcessActive) ||
+        opts.activeRunId === runId ||
+        opts.activeRunIds?.includes(runId) ||
+        parts.some(itemIsActive));
+    const continued =
+      !explicitTerminalOutcome && !completedActionOwner && continuedRunIds.has(runId);
     // A stopped history snapshot can end between tool iterations. Keep its
     // saved output, but never claim that the absent final answer completed.
     const interrupted =
-      !active &&
-      !handedOff &&
-      !terminalRuns.has(runId) &&
-      frameRunId !== opts.activeRunId &&
-      asRecord(lastAssistantByRun.get(runId))?.stopReason === "toolUse";
-    const actionOwner = active || failed ? null : completedFrameActionOwner(parts);
+      explicitInterruption ||
+      (!explicitTerminalOutcome &&
+        !active &&
+        !handedOff &&
+        !continued &&
+        frameRunId !== opts.activeRunId &&
+        lastAssistantRecord?.stopReason === "toolUse");
+    const actionOwner = active || failedOutcome ? null : completedActionOwner;
     if (!openedBoundaryId && !active && !actionOwner && !interrupted) {
       result.push(...parts);
       parts = [];
@@ -288,13 +316,16 @@ export function coalesceAgentRunFrames(
       key,
       runId,
       boundaryId: frameBoundaryId,
-      outcome: failed
+      outcome: failedOutcome
         ? { kind: "failed" }
         : active
           ? { kind: "active" }
           : interrupted
             ? { kind: "interrupted" }
-            : { kind: "completed", actionOwner },
+            : continued
+              ? { kind: "continued" }
+              : { kind: "completed", actionOwner },
+      backgroundActive: backgroundProcessActive,
       parts,
       ...(detachedGroups.length > 0 ? { detachedGroups } : {}),
     });

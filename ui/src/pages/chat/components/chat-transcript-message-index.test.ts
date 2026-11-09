@@ -74,6 +74,7 @@ function onlyFrame(chain: Chain) {
   expect(frames).toHaveLength(1);
   return frames[0]!;
 }
+
 const transcriptParts = (chain: Chain) =>
   chain.transcriptItems.flatMap((item) => (item.kind === "agent-run-frame" ? item.parts : [item]));
 const kind = <K extends RenderItem["kind"]>(items: readonly RenderItem[], type: K) =>

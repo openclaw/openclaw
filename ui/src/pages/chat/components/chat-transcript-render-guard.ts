@@ -95,8 +95,8 @@ function itemDependencies(item: TranscriptDependencyItem): readonly unknown[] {
     // Grouping recreates frame wrappers; only the outcome and nested content invalidate a row.
     return [
       item.key,
-      outcome.kind,
-      outcome.kind === "completed" ? outcome.actionOwner : null,
+      item.backgroundActive,
+      outcome.kind === "completed" ? outcome.actionOwner : outcome.kind,
       item.fragment?.first,
       item.fragment?.last,
       item.fragment?.firstBubbleKey,

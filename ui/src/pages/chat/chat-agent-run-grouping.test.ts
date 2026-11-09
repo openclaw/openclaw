@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { MessageGroup } from "../../lib/chat/chat-types.ts";
 import { coalesceAgentRunFrames } from "./chat-agent-run-grouping.ts";
-import { message as chatMessage } from "./chat-thread-fixtures.test-support.ts";
+import { message as chatMessage, toolResult } from "./chat-thread-fixtures.test-support.ts";
 import type {
   ActivityRunRenderItem,
   StreamRunRenderItem,
@@ -60,6 +60,82 @@ const assistant = (key: string, overrides: Record<string, unknown>) =>
   group("assistant", key, "run-1", overrides);
 const toolGroup = (key: string) => group("tool", key, "run-1");
 const terminalContent = (block: unknown) => ({ stopReason: "stop", content: [block] });
+const textBlock = (text: string) => ({ type: "text", text });
+
+function execCompletionNoticeMessages(
+  options: {
+    status?: "completed" | "failed";
+    exitCode?: number;
+    sourceRunId?: string;
+    noticeRunId?: string;
+    answerRunId?: string;
+    includeAnswer?: boolean;
+  } = {},
+) {
+  const sessionId = "exec-session-a";
+  const noticeRunId = options.noticeRunId ?? "run-exec-notice";
+  const unrelatedAnswer = options.answerRunId && options.answerRunId !== noticeRunId;
+  const terminalNotice = options.includeAnswer !== false && !unrelatedAnswer;
+  const completion = {
+    sourceRunId: options.sourceRunId ?? "run-background-a",
+    sessionId,
+    status: options.status ?? "completed",
+    exitCode: options.exitCode ?? 0,
+  };
+  return [
+    chatMessage(
+      "assistant",
+      [
+        {
+          type: "toolCall",
+          id: "exec-call-a",
+          name: "exec",
+          arguments: { command: "sleep 30" },
+        },
+      ],
+      1,
+      { stopReason: "toolUse", __openclaw: { runId: "run-background-a" } },
+    ),
+    toolResult(
+      "exec-call-a",
+      "exec",
+      [textBlock(`Command still running (session ${sessionId}, pid 10).`)],
+      2,
+      { details: { sessionId }, __openclaw: { runId: "run-background-a" } },
+    ),
+    chatMessage(
+      "assistant",
+      terminalNotice
+        ? [textBlock("The background review finished successfully.")]
+        : [
+            {
+              type: "toolCall",
+              id: "notice-log-call",
+              name: "process",
+              arguments: { action: "log", sessionId },
+            },
+          ],
+      3,
+      {
+        stopReason: terminalNotice ? "stop" : "toolUse",
+        __openclaw: {
+          runId: noticeRunId,
+          ...(terminalNotice && completion.status === "completed" && completion.exitCode === 0
+            ? { execCompletion: completion }
+            : {}),
+        },
+      },
+    ),
+    ...(unrelatedAnswer && options.includeAnswer !== false
+      ? [
+          chatMessage("assistant", [textBlock("An unrelated run completed.")], 4, {
+            stopReason: "stop",
+            __openclaw: { runId: options.answerRunId },
+          }),
+        ]
+      : []),
+  ];
+}
 
 type AgentRunFrameRenderItem = Extract<
   ReturnType<typeof coalesceAgentRunFrames>[number],
@@ -103,6 +179,109 @@ describe("coalesceAgentRunFrames", () => {
       expect(frame.parts).toHaveLength(2);
     },
   );
+
+  it.each([
+    ["error", { stopReason: "error" }, { kind: "failed" }],
+    ["timeout", { stopReason: "timeout" }, { kind: "failed" }],
+    ["timed_out", { stopReason: "timed_out" }, { kind: "failed" }],
+    [
+      "cancellation",
+      { stopReason: "aborted", openclawAbort: { aborted: true } },
+      { kind: "interrupted" },
+    ],
+  ])(
+    "preserves an explicit %s outcome while its background exec survives",
+    (label, terminal, expectedOutcome) => {
+      const runId = `run-background-${label}`;
+      const sessionId = `exec-session-${label}`;
+      const assistantMessage = chatMessage(
+        "assistant",
+        [
+          {
+            type: "toolCall",
+            id: `exec-call-${label}`,
+            name: "exec",
+            arguments: { command: "sleep 30" },
+          },
+        ],
+        1,
+        { ...terminal, __openclaw: { runId } },
+      );
+      const toolMessage = toolResult(
+        `exec-call-${label}`,
+        "exec",
+        [textBlock(`Command still running (session ${sessionId}, pid 10).`)],
+        2,
+        { details: { sessionId }, __openclaw: { runId } },
+      );
+      const frames = coalesceAgentRunFrames(
+        [
+          userBoundary("background-request"),
+          group("assistant", `terminal-${label}`, runId, {
+            ...terminal,
+            __openclaw: { runId },
+          }),
+          group("tool", `running-background-exec-${label}`, runId),
+        ],
+        {
+          messages: [assistantMessage, toolMessage],
+          activeRunId: runId,
+          activeRunIds: [runId],
+          session: { backgroundProcessRunIds: [runId] },
+        },
+      );
+      const original = frames.find(
+        (item): item is AgentRunFrameRenderItem =>
+          item.kind === "agent-run-frame" && item.runId === runId,
+      );
+
+      expect(original?.outcome).toEqual(expectedOutcome);
+      expect(original?.backgroundActive).toBe(true);
+    },
+  );
+
+  it("marks a reply-less run continued after its successful exec notice is answered", () => {
+    const frames = coalesceAgentRunFrames(
+      [
+        userBoundary("background-request"),
+        group("assistant", "background-tool-use", "run-background-a", {
+          stopReason: "toolUse",
+        }),
+        group("tool", "background-exec-result", "run-background-a"),
+        group("assistant", "exec-notice-answer", "run-exec-notice", { stopReason: "stop" }),
+      ],
+      { messages: execCompletionNoticeMessages(), activeRunId: null },
+    );
+    const original = frames.find(
+      (item): item is AgentRunFrameRenderItem =>
+        item.kind === "agent-run-frame" && item.runId === "run-background-a",
+    );
+
+    expect(original?.outcome).toEqual({ kind: "continued" });
+  });
+
+  it.each([
+    ["a different source run", { sourceRunId: "run-unrelated" }],
+    ["no terminal notice answer", { includeAnswer: false }],
+    ["an answer from another run", { answerRunId: "run-unrelated-answer" }],
+  ])("keeps the original run interrupted after %s", (_name, options) => {
+    const frames = coalesceAgentRunFrames(
+      [
+        userBoundary("background-request"),
+        group("assistant", "background-tool-use", "run-background-a", {
+          stopReason: "toolUse",
+        }),
+        group("tool", "background-exec-result", "run-background-a"),
+      ],
+      { messages: execCompletionNoticeMessages(options), activeRunId: null },
+    );
+    const original = frames.find(
+      (item): item is AgentRunFrameRenderItem =>
+        item.kind === "agent-run-frame" && item.runId === "run-background-a",
+    );
+
+    expect(original?.outcome).toEqual({ kind: "interrupted" });
+  });
 
   it("keeps one lifecycle-stable frame key while preserving semantic part keys", () => {
     const runId = "run-1";

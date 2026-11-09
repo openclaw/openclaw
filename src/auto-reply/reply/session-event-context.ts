@@ -156,7 +156,7 @@ export function buildSessionEventContext(params: {
   text: string;
   options: Pick<
     SessionEventOptions,
-    "source" | "sourceTurnId" | "sourceRunId" | "scheduledAutomation"
+    "source" | "sourceTurnId" | "sourceRunId" | "execCompletion" | "scheduledAutomation"
   >;
   readmissionAttempt?: number;
   occurrenceId: string;
@@ -188,6 +188,9 @@ export function buildSessionEventContext(params: {
         : options.sourceRunId
           ? { runId: options.sourceRunId }
           : {}),
+      ...(options.source === "exec" && options.execCompletion
+        ? { execCompletion: options.execCompletion }
+        : {}),
     },
     ChatType: channelRouteTargetsMatchExact({
       left: deliveryContext,

@@ -1,0 +1,3 @@
+# PR #196292 regression coverage for background-process ownership, timeout classification, completion provenance, and retained transcript invalidation.
+# Includes focused UI tests and the real Gateway/Control UI path; keep the shared test-line baseline unchanged.
+536

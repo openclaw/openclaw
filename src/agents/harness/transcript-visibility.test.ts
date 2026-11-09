@@ -6,7 +6,12 @@ import { projectAgentHarnessTranscriptMessageForDisplay } from "./transcript-vis
 
 const scheduled = { kind: "internal_system", sourceTool: "cron_execution" } as const;
 const project = (message: AgentMessage, inputProvenance?: InputProvenance) =>
-  projectAgentHarnessTranscriptMessageForDisplay({ hidden: false, inputProvenance, message });
+  projectAgentHarnessTranscriptMessageForDisplay({
+    hidden: false,
+    inputProvenance,
+    runId: "run-current",
+    message,
+  });
 
 it("hides scheduled artifacts without a run registry, but preserves errors and ordinary replies", () => {
   const input = { role: "user", content: "Check the queue", timestamp: 1 } as const;
@@ -59,4 +64,34 @@ it("hides steered refresh input using its own provenance", () => {
     provenance: refresh,
   } as AgentMessage;
   expect(project(input)).toMatchObject({ display: false });
+});
+
+it("records only successful managed exec outcomes on their answering run", () => {
+  const reply = makeAgentAssistantMessage({
+    content: [{ type: "text", text: "The process completed." }],
+  });
+  const projected = project(reply, {
+    kind: "internal_system",
+    sourceTool: "exec",
+    runId: "origin-run",
+    execCompletion: { sessionId: "exec-1", status: "completed", exitCode: 0 },
+  });
+
+  expect(Reflect.get(projected, "__openclaw")).toMatchObject({
+    execCompletion: {
+      sourceRunId: "origin-run",
+      sessionId: "exec-1",
+      status: "completed",
+      exitCode: 0,
+    },
+  });
+  expect(Reflect.get(reply, "__openclaw")).toBeUndefined();
+
+  const failed = project(reply, {
+    kind: "internal_system",
+    sourceTool: "exec",
+    runId: "origin-run",
+    execCompletion: { sessionId: "exec-1", status: "failed", exitCode: 7 },
+  });
+  expect(Reflect.get(failed, "__openclaw")).toBeUndefined();
 });

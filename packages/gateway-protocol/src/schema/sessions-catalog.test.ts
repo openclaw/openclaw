@@ -213,6 +213,7 @@ describe("SessionRowSchema", () => {
       ...baseRow,
       lastRunId: "run-settled",
       backgroundProcessCount: 1,
+      backgroundProcessRunIds: ["run-background"],
       snapshotAt: 200,
       activeLeafEntryId: "leaf-rendered",
       activeModel: "fixture-model",
@@ -249,6 +250,9 @@ describe("SessionRowSchema", () => {
       { backgroundProcessCount: 0 },
       { backgroundProcessCount: -1 },
       { backgroundProcessCount: 1.5 },
+      { backgroundProcessRunIds: [] },
+      { backgroundProcessRunIds: [""] },
+      { backgroundProcessRunIds: [1] },
     ]);
     rows.accepts(
       baseRow,

@@ -1,6 +1,6 @@
 import type { SessionsListParams } from "../../packages/gateway-protocol/src/index.js";
 import { SESSION_ROWS_DELTA_PREFIX } from "../../packages/gateway-protocol/src/session-row-fields.js";
-import { prepareRunningBackgroundProcessCount } from "../agents/bash-process-observation.js";
+import { prepareRunningBackgroundProcessFacts } from "../agents/bash-process-observation.js";
 import { resolveProjectedAgentRunModel } from "../infra/agent-run-registry.js";
 import { isIncognitoSessionKey } from "../routing/session-key.js";
 import { resolveSendPolicy } from "../sessions/send-policy.js";
@@ -228,7 +228,7 @@ export function prepareProjectedSessionPresentation(
       : prepareOperatorModelPresentation({ cfg, policyConfig, client });
   const publicationRows = publicationState?.rows;
   const subagentRuns = rowContext.subagentRuns.atTime(now);
-  const countBackgroundProcesses = prepareRunningBackgroundProcessCount();
+  const readBackgroundProcessFacts = prepareRunningBackgroundProcessFacts();
   const preparedRowContext = { ...rowContext, subagentRuns };
   const runState = (
     key: string,
@@ -354,9 +354,11 @@ export function prepareProjectedSessionPresentation(
     record: records.MaterializedRow,
     options: PresentationOptions,
   ): GatewaySessionRow | null => {
-    const backgroundProcessCount = countBackgroundProcesses(
+    const backgroundProcessFacts = readBackgroundProcessFacts(
       record.materialized.source.backgroundProcessScope,
     );
+    const { count: backgroundProcessCount, runIds: backgroundProcessRunIds } =
+      backgroundProcessFacts;
     const run = active(record);
     const preparedFacts = record.facts?.present();
     const childOwnerSessionKeys = resolveSessionChildOwners({
@@ -469,6 +471,9 @@ export function prepareProjectedSessionPresentation(
       facts[22] = childActivity.revision;
       facts[23] = backgroundProcessCount;
       facts.length = 24;
+      for (const id of backgroundProcessRunIds) {
+        facts.push(id);
+      }
       if (run?.runIds) {
         for (const id of run.runIds) {
           facts.push(id);
@@ -545,6 +550,7 @@ export function prepareProjectedSessionPresentation(
       preparedFacts,
       preparedRunState: temporal,
       backgroundProcessCount,
+      backgroundProcessRunIds,
     });
     row.childOwnerSessionKeys = [...childOwnerSessionKeys];
     row.fastMode = presentFastMode(row.fastMode);

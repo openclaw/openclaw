@@ -166,7 +166,10 @@ export function projectTranscriptChain(
     messages?: readonly unknown[];
     activeRunId?: string | null;
     activeRunIds?: readonly string[];
-    session?: Pick<GatewaySessionRow, "key" | "lastRunId" | "status" | "runtimeMs">;
+    session?: Pick<
+      GatewaySessionRow,
+      "key" | "lastRunId" | "abortedLastRun" | "status" | "runtimeMs" | "backgroundProcessRunIds"
+    >;
   },
 ): TranscriptChain {
   const { session } = options;
@@ -182,10 +185,11 @@ export function projectTranscriptChain(
     options.messages,
     options.activeRunId,
     JSON.stringify(options.activeRunIds),
-    session?.key,
     session?.lastRunId,
+    session?.abortedLastRun,
     session?.status,
     session?.runtimeMs,
+    session?.backgroundProcessRunIds,
     readLiveTerminalRevision(),
   ];
   const cached = chains.get(chatItems);
@@ -385,7 +389,7 @@ export function projectTranscriptIndex(
         );
         const content = JSON.stringify(
           item.kind === "agent-run-frame"
-            ? [item.outcome.kind, messages]
+            ? [messages, item.backgroundActive, item.outcome.kind]
             : messages.length
               ? messages
               : item,

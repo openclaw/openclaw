@@ -182,6 +182,7 @@ export function buildGatewaySessionSnapshot(params: {
     lastRunId: sessionRow.lastRunId ?? null,
     hasAutomation: sessionRow.hasAutomation ?? false,
     backgroundProcessCount: sessionRow.backgroundProcessCount ?? null,
+    backgroundProcessRunIds: sessionRow.backgroundProcessRunIds ?? null,
     ...(params.activeRunState == null
       ? {}
       : {

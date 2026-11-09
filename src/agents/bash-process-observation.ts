@@ -33,38 +33,71 @@ function inScope(session: ProcessSession, scope: ProcessObservationScope): boole
   );
 }
 
-/** Live row metadata must not inherit the process panel's output and row limits. */
-export function countRunningBackgroundProcesses(scope: ProcessObservationScope): number {
-  return listRunningSessions().filter((session) => !session.exited && inScope(session, scope))
-    .length;
+export type RunningBackgroundProcessFacts = {
+  count: number;
+  runIds: string[];
+};
+
+function readRunningBackgroundProcessFacts(
+  sessions: readonly ProcessSession[],
+  scope: ProcessObservationScope,
+): RunningBackgroundProcessFacts {
+  let count = 0;
+  const runIds = new Set<string>();
+  for (const session of sessions) {
+    if (!session.exited && inScope(session, scope)) {
+      count++;
+      if (session.originRunId) {
+        runIds.add(session.originRunId);
+      }
+    }
+  }
+  return { count, runIds: [...runIds].toSorted() };
 }
 
 /** One synchronous presentation shares a snapshot; recreate after yielding. */
-export function prepareRunningBackgroundProcessCount() {
-  const counts = new Map<string, Map<string | undefined, number>>();
+export function prepareRunningBackgroundProcessFacts() {
+  const sessionsByScope = new Map<string, ProcessSession[]>();
   for (const session of listRunningSessions()) {
     const { scopeKey, agentId } = session;
     if (session.exited || !scopeKey || (scopeKey === "global" && agentId === undefined)) {
       continue;
     }
-    let agents = counts.get(scopeKey);
-    if (!agents) {
-      counts.set(scopeKey, (agents = new Map()));
+    let sessions = sessionsByScope.get(scopeKey);
+    if (!sessions) {
+      sessionsByScope.set(scopeKey, (sessions = []));
     }
-    agents.set(agentId, (agents.get(agentId) ?? 0) + 1);
+    sessions.push(session);
   }
-  return ({ scopeKeys, agentId }: ProcessObservationScope): number => {
+  return ({ scopeKeys, agentId }: ProcessObservationScope): RunningBackgroundProcessFacts => {
     let count = 0;
+    const runIds = new Set<string>();
     for (let i = 0; i < scopeKeys.length; i++) {
       const key = scopeKeys[i]!;
       if (scopeKeys.indexOf(key) !== i) {
         continue;
       }
-      const agents = counts.get(key);
-      count += (agents?.get(agentId) ?? 0) + (agents?.get(undefined) ?? 0);
+      for (const session of sessionsByScope.get(key) ?? []) {
+        if (
+          (session.agentId === undefined || session.agentId === agentId) &&
+          (key !== "global" || session.agentId === agentId)
+        ) {
+          count++;
+          if (session.originRunId) {
+            runIds.add(session.originRunId);
+          }
+        }
+      }
     }
-    return count;
+    return { count, runIds: [...runIds].toSorted() };
   };
+}
+
+/** Reads current scoped process facts without consuming output or exit notifications. */
+export function readRunningBackgroundProcessFactsForScope(
+  scope: ProcessObservationScope,
+): RunningBackgroundProcessFacts {
+  return readRunningBackgroundProcessFacts(listRunningSessions(), scope);
 }
 
 /** Non-consuming observation: never drains poll output or acknowledges an exit notification. */

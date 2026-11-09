@@ -78,6 +78,9 @@ export function projectToolResultDetails(
       projected[key] = value;
     }
   }
+  if (isDisplayRouteIdentifier(record.sessionId, maxChars)) {
+    projected.sessionId = record.sessionId;
+  }
   if (typeof record.cwd === "string") {
     const cwd = truncateChatHistoryText(record.cwd, maxChars);
     projected.cwd = cwd.text;
