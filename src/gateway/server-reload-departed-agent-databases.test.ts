@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { expect, it, onTestFinished } from "vitest";
+import { expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import {
   clearRuntimeConfigSnapshot,
@@ -10,12 +10,17 @@ import {
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isDeletedAgentDatabasePath } from "../infra/agent-database-readers.js";
 import { retainSqliteDatabaseAdmissionLocation } from "../infra/sqlite-database-admission.js";
-import { assertAgentSessionWriteAdmission } from "../sessions/session-agent-work-admission.js";
+import {
+  assertAgentSessionWriteAdmission,
+  sessionWorkAdmissionClosures,
+} from "../sessions/session-agent-work-admission.js";
+import { beginSessionEffect } from "../sessions/session-controller.lifecycle.js";
 import { useAgentDatabaseDirectories } from "../state/openclaw-agent-db-lifecycle.test-support.js";
 import { hasOpenClawAgentDatabaseAsyncResources } from "../state/openclaw-agent-db-resources.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import { listOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.test-support.js";
+import { beginAgentDeletionJournal } from "../test-utils/agent-deletion-journal.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { buildGatewayReloadPlan } from "./config-reload-plan.js";
 import { createRecoveryRestartMock } from "./config-reload.test-support.js";
@@ -231,4 +236,82 @@ it("follows the later committed roster when two reloads overlap", async () => {
   expect(path.resolve(survivorPath)).toBe(
     opened.find((database) => database.agentId === "main")?.path,
   );
+});
+
+it("leaves a journaled agents.delete cleanup in charge of the open database", async () => {
+  const { env, opened } = installState(["main", "worker"]);
+  const worker = opened.find((database) => database.agentId === "worker");
+  if (!worker) {
+    throw new Error("fixture did not open worker");
+  }
+  beginAgentDeletionJournal(
+    {
+      agentId: "worker",
+      operationId: "worker-delete-journal",
+      agentDir: path.dirname(worker.path),
+      workspaceDir: path.dirname(worker.path),
+      sessionsDir: path.dirname(worker.path),
+      deleteFiles: false,
+      phase: "retiring",
+    },
+    { env },
+  );
+  await commitRoster(createHandlers(), roster(["main"]));
+  expect(worker.database.db.isOpen).toBe(true);
+  expect(isDeletedAgentDatabasePath(worker.path)).toBe(false);
+  expect(() => assertAgentSessionWriteAdmission({ agentId: "worker", env })).not.toThrow();
+});
+
+it("settles an active turn before closing the removed agent's database", async () => {
+  const { opened } = installState(["main", "worker"]);
+  const worker = opened.find((database) => database.agentId === "worker");
+  if (!worker) {
+    throw new Error("fixture did not open worker");
+  }
+  const interrupted = createDeferred();
+  let openWhenInterrupted = false;
+  const turn = await beginSessionEffect({
+    agentId: "worker",
+    env: process.env,
+    scope: worker.path,
+    identities: ["agent:worker:live"],
+    owner: Symbol("live-turn"),
+    assertAllowed: () => {},
+    onInterrupt: () => {
+      openWhenInterrupted = worker.database.db.isOpen;
+      interrupted.resolve();
+      turn.release();
+    },
+  });
+  const removal = commitRoster(createHandlers(), roster(["main"]));
+  const winner = await Promise.race([
+    interrupted.promise.then(() => "interrupted" as const),
+    removal.then(() => "closed" as const),
+  ]);
+  expect(winner).toBe("interrupted");
+  expect(openWhenInterrupted).toBe(true);
+  await removal;
+  expect(holderIds()).not.toContain("worker");
+  expect(isDeletedAgentDatabasePath(worker.path)).toBe(true);
+});
+
+it("clears the session-write block when cleanup fails and the agent is re-added", async () => {
+  const { env } = installState(["main", "worker"]);
+  const memory = await import("../plugins/memory-runtime.js");
+  const closeMemory = vi
+    .spyOn(memory, "closeActiveMemorySearchManagerCore")
+    .mockRejectedValueOnce(new Error("memory close failed"));
+  try {
+    await commitRoster(createHandlers(), roster(["main"]));
+    const workerWriteBlocked = () =>
+      [...sessionWorkAdmissionClosures].some(
+        (closure) => closure.agent?.agentId === "worker" && closure.identities.length === 0,
+      );
+    expect(workerWriteBlocked()).toBe(true);
+    await commitRoster(createHandlers(), roster(["main", "worker"]));
+    expect(workerWriteBlocked()).toBe(false);
+    expect(() => assertAgentSessionWriteAdmission({ agentId: "worker", env })).not.toThrow();
+  } finally {
+    closeMemory.mockRestore();
+  }
 });

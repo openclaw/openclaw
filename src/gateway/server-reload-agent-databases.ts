@@ -52,6 +52,10 @@ export async function reviveAgentDatabasesAfterConfigCommit(
 /**
  * Closing a removed agent's holders keeps its files. A later roster admission
  * clears the fence; agents.delete remains the path that purges stored history.
+ *
+ * Reader revival follows PR #159013: deletion fences readers across isolates,
+ * and only an owner the committed roster admits again is revived. Surviving
+ * agents are not revived, and an active deletion journal keeps its own cleanup.
  */
 export async function reconcileAgentDatabasesAfterConfigCommit(params: {
   previousConfig: OpenClawConfig;
@@ -60,23 +64,27 @@ export async function reconcileAgentDatabasesAfterConfigCommit(params: {
 }): Promise<void> {
   const { previousConfig, nextConfig, warn } = params;
   await enqueueAgentDatabaseReconciliation(async () => {
-    for (const agentId of explicitAgentIds(previousConfig)) {
-      if (admittedAgentIds(previousConfig, nextConfig).has(agentId)) {
-        continue;
+    try {
+      for (const agentId of explicitAgentIds(previousConfig)) {
+        if (admittedAgentIds(previousConfig, nextConfig).has(agentId)) {
+          continue;
+        }
+        if (await agentDeletionOwnsCleanup(agentId)) {
+          continue;
+        }
+        if (!(await agentHasOpenDatabaseHolder(agentId))) {
+          continue;
+        }
+        try {
+          await releaseDepartedAgentDatabase(agentId, previousConfig, nextConfig);
+        } catch (error) {
+          warn(
+            `agent ${agentId} left the roster; database release failed: ${formatErrorMessage(error)}. Restart the Gateway before deleting that agent's files.`,
+          );
+        }
       }
-      if (!(await agentHasOpenDatabaseHolder(agentId))) {
-        continue;
-      }
-      try {
-        await releaseDepartedAgentDatabase(agentId, previousConfig, nextConfig);
-      } catch (error) {
-        warn(
-          `agent ${agentId} left the roster; database release failed: ${formatErrorMessage(error)}. Restart the Gateway before deleting that agent's files.`,
-        );
-      }
-      if (admittedAgentIds(previousConfig, nextConfig).has(agentId)) {
-        await reviveAgentDatabases([agentId], warn);
-      }
+    } finally {
+      releaseAdmittedWorkClosures(admittedAgentIds(previousConfig, nextConfig));
     }
     await reviveAgentDatabases(
       listAgentIds(nextConfig).filter((agentId) =>
@@ -87,6 +95,7 @@ export async function reconcileAgentDatabasesAfterConfigCommit(params: {
   });
 }
 
+/** Revive fenced readers only. Admission closures are released separately. */
 async function reviveAgentDatabases(
   agentIds: readonly string[],
   warn: (message: string) => void,
@@ -99,14 +108,18 @@ async function reviveAgentDatabases(
   try {
     const { reviveAgentDatabases: revive } = await import("../state/openclaw-agent-db-readers.js");
     await revive(returningAgents);
-    for (const agentId of returningAgents) {
-      releaseDepartedWorkAdmission(agentId);
-    }
   } catch (error) {
     warn(
       `agent config committed; worker reader revival will reconcile at next task: ${formatErrorMessage(error)}`,
     );
   }
+}
+
+/** agents.delete still owns purge after it commits the roster change. */
+async function agentDeletionOwnsCleanup(agentId: string): Promise<boolean> {
+  const { readAgentDeletionJournalAsync } = await import("../state/agent-deletion-journal.js");
+  const journal = await readAgentDeletionJournalAsync(agentId);
+  return journal !== undefined && !journal.cleanupCompleted;
 }
 
 async function agentHasOpenDatabaseHolder(agentId: string): Promise<boolean> {
@@ -131,6 +144,7 @@ async function releaseDepartedAgentDatabase(
 ): Promise<void> {
   const normalized = normalizeAgentId(agentId);
   await blockDepartedAgentWork(normalized);
+  await drainDepartedAgentWork(normalized);
   const [
     { prepareAgentDeleteDatabases, isPathOwnedBySurvivingAgent },
     { resolveEffectiveAgentDir },
@@ -238,4 +252,39 @@ function releaseDepartedWorkAdmission(agentId: string): void {
   }
   departedWorkAdmissions.delete(normalizeAgentId(agentId));
   release();
+}
+
+/** Re-admission must not depend on a reader fence that cleanup never installed. */
+function releaseAdmittedWorkClosures(admitted: ReadonlySet<string>): void {
+  const agentIds: string[] = [];
+  for (const agentId of departedWorkAdmissions.keys()) {
+    if (admitted.has(agentId)) {
+      agentIds.push(agentId);
+    }
+  }
+  for (const agentId of agentIds) {
+    releaseDepartedWorkAdmission(agentId);
+  }
+}
+
+/**
+ * Same running-effect settlement agents.delete waits on before it retires
+ * persistence owners. The effect releases only after its terminal write, so
+ * history and database close cannot revoke that write.
+ */
+async function drainDepartedAgentWork(agentId: string): Promise<void> {
+  const [{ startAgentWorkAdmissionInterruption }, { createAgentRunDirectAbortError }] =
+    await Promise.all([
+      import("../sessions/session-controller.lifecycle.js"),
+      import("../agents/run-termination.js"),
+    ]);
+  await startAgentWorkAdmissionInterruption({
+    agentId,
+    reason: createAgentRunDirectAbortError(),
+    assertCurrent: () => {
+      if (liveAgentIds()?.has(agentId)) {
+        throw new Error(`Agent ${agentId} returned to the roster during work drain.`);
+      }
+    },
+  }).released;
 }
