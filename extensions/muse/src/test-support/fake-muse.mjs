@@ -73,22 +73,13 @@ function answer() {
     });
   }
   if (active.prompt === "usage") {
-    // One notice per completion; another turn's and a malformed notice must not count.
-    const { turnId } = active;
-    const notices = [
-      [turnId, 1000, 1020],
-      [turnId, 1200, 1234],
-      ["other", 5, 9],
-      [turnId, "1", 9],
-    ];
-    for (const [turnId, promptTokens, totalTokens] of notices) {
-      event("session/tokenUsage", {
-        turnId,
-        promptTokens,
-        totalTokens,
-        usage: { reasoningTokens: 5 },
-      });
-    }
+    // Two completions of this turn count; another turn's and a malformed notice must not.
+    const notice = (turnId, promptTokens, totalTokens, usage = { reasoningTokens: 5 }) =>
+      event("session/tokenUsage", { turnId, promptTokens, totalTokens, usage });
+    notice(active.turnId, 1000, 1020);
+    notice(active.turnId, 1200, 1234);
+    notice("other", 5, 9);
+    notice(active.turnId, "1", 9);
   }
   const responses = new Map([
     ["credential", `credential:${process.env.META_API_KEY ?? "cli-login"}`],

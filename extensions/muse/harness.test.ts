@@ -372,16 +372,10 @@ describe("Muse native MSP harness", () => {
     ]);
   });
 
-  it("runs a consented turn whose conversation tool policy is restricted", async () => {
-    const { run, log } = setup(true);
-    await run({ pluginHarnessToolPolicyRestricted: true });
-    const requests = await readRequests(log);
-    expect(requests.map((request) => request.method)).toContain("turn/start");
-  });
-
-  it("reports this turn's Muse token usage and last-completion context", async () => {
+  it("runs a restricted-policy turn and reports only that turn's Muse usage", async () => {
     const { run } = setup();
-    expect((await run({ prompt: "usage" })).attemptUsage).toMatchObject({
+    const result = await run({ pluginHarnessToolPolicyRestricted: true, prompt: "usage" });
+    expect(result.attemptUsage).toMatchObject({
       input: 2200,
       output: 54,
       reasoningTokens: 10,
