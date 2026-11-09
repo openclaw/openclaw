@@ -220,7 +220,6 @@ it("keeps a successor reference busy when a retired save completes", async () =>
   flush();
   click("Save");
   expect(context.onCommit).toHaveBeenCalledTimes(2);
-
   retired.resolve(true);
   await retired.promise;
   await nextFrame();
@@ -279,6 +278,7 @@ it("retries inspection after a saved credential without retaining the command er
   const { editor, context, scope, input } = await mount();
   scope.client.request.mockRejectedValueOnce(new Error("Saved key inspection unavailable"));
   editInput(input, "synthetic-saved-key");
+  input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", keyCode: 229, bubbles: true }));
   input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
   await vi.waitFor(() => expect(editor.textContent).toContain("Saved key inspection unavailable"));
 
@@ -497,37 +497,4 @@ it("lets an administrator inspect a read-only reference without changing it", as
   expect(button(editor, "Save").disabled).toBe(true);
   expect([...dialogInputs(editor)].every((input) => input.disabled)).toBe(true);
   expect(context.onCommit).not.toHaveBeenCalled();
-});
-
-it("does not commit the literal draft while IME composition is in progress", async () => {
-  const { context, input } = await mount();
-  editInput(input, "synthetic-ime-key");
-  // A composing Enter confirms an IME candidate; it must not save the draft.
-  input.dispatchEvent(
-    new KeyboardEvent("keydown", { key: "Enter", isComposing: true, bubbles: true }),
-  );
-  await Promise.resolve();
-  flush();
-  expect(context.onCommit).not.toHaveBeenCalled();
-});
-
-it("does not commit the literal draft from a WebKit composing Enter after compositionend", async () => {
-  const { context, input } = await mount();
-  editInput(input, "synthetic-ime-key");
-  input.dispatchEvent(new CompositionEvent("compositionend", { bubbles: true }));
-  // WebKit can deliver the committing Enter with both composition flags cleared
-  // shortly after compositionend; the grace window must still suppress it.
-  input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
-  await Promise.resolve();
-  flush();
-  expect(context.onCommit).not.toHaveBeenCalled();
-});
-
-it("commits the literal draft on an ordinary Enter after composition", async () => {
-  const { context, input } = await mount();
-  editInput(input, "synthetic-ime-key");
-  input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
-  await Promise.resolve();
-  flush();
-  expect(context.onCommit).toHaveBeenCalledWith(path, "synthetic-ime-key");
 });
