@@ -27,6 +27,15 @@ it.each([
     "No answer was returned. Ask again if you still need one.",
     "No answer was returned. Ask again if you still need one. Note: some tool actions may have already been executed — please verify before retrying.",
   ].map((notice) => [notice, notice, notice] as const),
+  ...[
+    "The provider refused this request (category: reasoning_extraction). Revise the request and try again.",
+    "Chat stopped as a precaution. Review the findings in chat before continuing.",
+  ].map((notice) => [notice, notice, `Your request couldn't be completed: ${notice}`] as const),
+  [
+    "The provider refused this request (category: reasoning_extraction). Revise the request and try again. Private explanation: synthetic detail",
+    expect.any(String),
+    "Your request couldn't be completed.",
+  ],
   ...storageFailures.map(([error, , summary]) => {
     const content = `⚠️ ${summary} For details, open Settings → Logs in the Control UI or run \`openclaw logs --follow\` in your terminal.`;
     return [error, expect.any(String), content] as const;

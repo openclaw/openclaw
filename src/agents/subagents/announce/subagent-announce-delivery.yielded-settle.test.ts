@@ -1,11 +1,17 @@
 import { expect, it, onTestFinished, vi } from "vitest";
 import type { sendMessage } from "../../../infra/outbound/message.js";
 import { captureSessionTarget } from "../../../sessions/session-controller.target.js";
+import { MISSING_REPLY_NOTICE_TEXT } from "../../reply-completion.js";
 import { deliverSubagentAnnouncement, testing } from "./subagent-announce-delivery.test-support.js";
 
 const payloads = (text = "parent answer") => [{ text }];
 const visibleResult = { payloads: payloads(), deliveryStatus: { status: "sent", resultCount: 1 } };
 const silentResult = { payloads: [], meta: { terminalReply: { disposition: "silent" } } };
+const deliveredMissingNotice = {
+  payloads: [{ text: MISSING_REPLY_NOTICE_TEXT, isStatusNotice: true, isError: true }],
+  meta: { error: { kind: "incomplete_turn" }, terminalReplyExpectation: "result-required" },
+  deliveryStatus: { status: "sent", resultCount: 1 },
+};
 const missingReply = { delivered: false, reason: "visible_reply_missing" };
 const visibleReply = { delivered: true, requesterVisibleFinalDelivered: true };
 const intentionalNonDelivery = {
@@ -45,13 +51,15 @@ it.each`
   name                                                      | response                                                            | expected                                                                          | options
   ${"delivered final"}                                      | ${ok(visibleResult)}                                                | ${visibleReply}                                                                   | ${undefined}
   ${"required public reply"}                                | ${ok(visibleResult)}                                                | ${visibleReply}                                                                   | ${publicGroup}
-  ${"required public silence"}                              | ${ok(silentResult)}                                                 | ${{ delivered: true }}                                                            | ${publicGroup}
+  ${"required public silence"}                              | ${ok(silentResult)}                                                 | ${missingReply}                                                                   | ${publicGroup}
+  ${"required public empty reply"}                          | ${ok({ payloads: [] })}                                             | ${missingReply}                                                                   | ${publicGroup}
+  ${"required public missing-answer notice delivered"}      | ${ok(deliveredMissingNotice)}                                       | ${visibleReply}                                                                   | ${publicGroup}
   ${"normalized silent result: ok"}                         | ${ok(normalizedSilence)}                                            | ${{ delivered: true }}                                                            | ${undefined}
   ${"normalized silent result: timeout"}                    | ${{ status: "timeout", result: normalizedSilence }}                 | ${missingReply}                                                                   | ${undefined}
   ${"runtime timeout"}                                      | ${{ status: "timeout", summary: "aborted", stopReason: "timeout" }} | ${missingReply}                                                                   | ${undefined}
   ${"failed turn"}                                          | ${{ status: "error" }}                                              | ${missingReply}                                                                   | ${undefined}
   ${"empty successful optional turn"}                       | ${ok({ payloads: [] })}                                             | ${{ delivered: true }}                                                            | ${undefined}
-  ${"optional silence promoted to a required human reply"}  | ${ok(requiredSilence)}                                              | ${{ delivered: true }}                                                            | ${undefined}
+  ${"optional silence promoted to a required human reply"}  | ${ok(requiredSilence)}                                              | ${missingReply}                                                                   | ${undefined}
   ${"failed silence"}                                       | ${ok(failedSilence)}                                                | ${missingReply}                                                                   | ${undefined}
   ${"undelivered text"}                                     | ${ok({ payloads: payloads("unsent answer") })}                      | ${missingReply}                                                                   | ${undefined}
   ${"private room: plain final suppressed by policy"}       | ${ok(policySuppression)}                                            | ${intentionalNonDelivery}                                                         | ${undefined}
@@ -112,7 +120,7 @@ it.each`
     } else {
       expect(dispatch.mock.calls[0]?.slice(1)).toMatchObject([
         options.public ? {} : { expectedExistingSessionId: "requester-session-dm" },
-        { replyExpectation: options.public ? "required" : "optional" },
+        { replyExpectation: options.public ? "result-required" : "optional" },
       ]);
       // The conversation's configured reply policy decides, not this handoff.
       expect(dispatch.mock.calls[0]?.[1]).not.toHaveProperty("sourceReplyDeliveryMode");

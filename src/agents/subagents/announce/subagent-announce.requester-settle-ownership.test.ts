@@ -247,6 +247,7 @@ it.each([
     if (continuationOwed) {
       const call = deliverSpy.mock.calls[0]![0];
       expect(call.sourceTool).toBe("subagent_settle");
+      expect(call.requireVisibleReply).toBe(yielded ? true : undefined);
       expect(call.triggerMessage).not.toContain("retry result 0");
       expect(call.triggerMessage).toContain("Already delivered child results");
       if (allDelivered) {

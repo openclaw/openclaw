@@ -1,10 +1,7 @@
 import { hasOutboundReplyContent } from "openclaw/plugin-sdk/reply-payload";
-import { hasCompletionMessageSessionSpawn } from "../../agents/accepted-session-spawn.js";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import {
-  hasCommittedSourceReplyDeliveryEvidence,
   hasCompletedSourceReplyDeliveryEvidence,
-  hasVisibleCommittedMessagingToolDeliveryEvidence,
   resolveExplicitFinalSourceReplyDeliveryEvidence,
   resolveSourceReplyDelivery,
 } from "../../agents/embedded-agent-runner/delivery-evidence.js";
@@ -18,6 +15,7 @@ import {
   shouldDeliverMissingReplyNotice,
 } from "../../agents/reply-completion.js";
 import { buildAgentRuntimeDeliveryPlan } from "../../agents/runtime-plan/build.js";
+import { listSessionFollowupCompletions } from "../../agents/subagents/completion/session-followup-completion.js";
 import type { SessionDeliveryGeneration } from "../../config/sessions/session-delivery-generation.types.js";
 import { logVerbose } from "../../globals.js";
 import { defaultRuntime } from "../../runtime.js";
@@ -46,7 +44,10 @@ import {
   retainAutomationReasoningWithFinal,
 } from "./automation-reply-payloads.js";
 import { deliverBlockReply } from "./block-reply-delivery.js";
-import { resolveFollowupDeliveryPayloads } from "./followup-delivery-payloads.js";
+import {
+  resolveFollowupDeliveryPayloads,
+  resolveFollowupPayloadContext,
+} from "./followup-delivery-payloads.js";
 import { createFollowupSpeechPreparer } from "./followup-delivery-tts.js";
 import type { InternalGetReplyOptions } from "./get-reply.types.js";
 import { resolveOriginMessageProvider } from "./origin-routing.js";
@@ -65,20 +66,10 @@ import {
 } from "./stalled-turn-recovery.js";
 import { resolveStrandedReplyRecovery } from "./stranded-reply-recovery.js";
 import { createTypingSignaler } from "./typing-mode.js";
-import { buildWaitingStatusPayload } from "./waiting-status.js";
-
-function resolveFollowupPayloadContext(turn: AdmittedFollowupTurn) {
-  return {
-    cfg: turn.config,
-    messageProvider: turn.queued.run.messageProvider,
-    originatingAccountId: turn.queued.originatingAccountId ?? turn.queued.run.agentAccountId,
-    originatingChannel: turn.queued.originatingChannel,
-    originatingChatType: turn.queued.originatingChatType,
-    originatingReplyToMode: turn.queued.originatingReplyToMode,
-    originatingTo: turn.queued.originatingTo,
-    originatingThreadId: turn.queued.originatingThreadId,
-  };
-}
+import {
+  attachWaitingStatusProgressContinuation,
+  buildQueuedWaitingStatusPayload,
+} from "./waiting-status.js";
 
 /** Resolves one final queued delivery action without performing transport I/O. */
 export async function resolveFollowupDeliveryDecision(params: {
@@ -211,6 +202,14 @@ export async function resolveFollowupDeliveryDecision(params: {
     trigger: turn.queued.run.internalEventExecution ? "event" : "user",
     currentInboundEventKind: turn.queued.currentInboundEventKind,
   });
+  const peerFollowups =
+    terminalReplyExpectation === "required"
+      ? listSessionFollowupCompletions({
+          requesterSessionKey: turn.queued.run.sessionKey ?? "",
+          requesterAgentId: turn.queued.run.agentId,
+          requesterTurnRunId: execution.runId,
+        })
+      : [];
   const {
     successfulTerminal,
     authoredSilence,
@@ -220,6 +219,7 @@ export async function resolveFollowupDeliveryDecision(params: {
   } = resolveAutomationReplyState(execution.outcome, {
     opts,
     terminalFailurePayload: accounting.terminalFailurePayload,
+    hasPendingFollowups: peerFollowups.length > 0,
   });
   const directBlockDeliveries = execution.outcome.directBlockDeliveries;
   const sourceReplyDelivery = resolveSourceReplyDelivery(
@@ -325,24 +325,13 @@ export async function resolveFollowupDeliveryDecision(params: {
     turn.operation.fail("run_failed", new Error(MISSING_REPLY_NOTICE_TEXT));
     opts?.onAgentRunTerminalOutcome?.("failed");
   }
-  const waitingStatusParams = {
-    completion,
-    continuationPending: result.meta?.continuationPending === true,
-    mediaContinuation:
-      result.meta?.continuationPending === true &&
-      !hasCompletionMessageSessionSpawn(result.acceptedSessionSpawns),
-    yielded: result.meta?.yielded === true,
-    yieldAcknowledgment: result.meta?.yieldAcknowledgment,
-    // Child spawns are side effects, not user-visible messages. They must not
-    // suppress the explicit waiting reply for the parent turn.
-    hasVisibleMessageDelivery:
-      hasCommittedSourceReplyDeliveryEvidence(result) ||
-      hasVisibleCommittedMessagingToolDeliveryEvidence(result) ||
-      result.didSendDeterministicApprovalPrompt === true,
-  };
   const waitingStatusPayload = terminalRunFailed
     ? undefined
-    : buildWaitingStatusPayload(waitingStatusParams);
+    : buildQueuedWaitingStatusPayload({
+        result,
+        completion,
+        peerContinuation: peerFollowups.length > 0,
+      });
   const fallbackPayload = terminalRunFailed
     ? accounting.terminalFailurePayload &&
       isInteractive &&
@@ -408,6 +397,16 @@ export async function resolveFollowupDeliveryDecision(params: {
   }
   if (execution.outcome.automation) {
     payloads = retainAutomationReasoningWithFinal(payloads);
+  }
+  if (!explicitSilence && peerFollowups.length > 0) {
+    await attachWaitingStatusProgressContinuation({
+      payload: payloads.find(
+        (payload) => getReplyPayloadMetadata(payload)?.continuationStatus === true,
+      ),
+      replyPayloads: payloads,
+      followups: peerFollowups,
+      operation: turn.operation,
+    });
   }
   return payloads.length > 0
     ? { kind: "deliver" as const, payloads, resolved: runtimeResolved }
