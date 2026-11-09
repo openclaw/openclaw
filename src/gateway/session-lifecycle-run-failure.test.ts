@@ -501,18 +501,23 @@ describe("durable pre-reply run failure", () => {
     });
   });
 
-  it.each(["raw", "auth", "auth_permanent"] as const)(
-    "keeps %s provider authentication guidance through terminal persistence and history",
+  it.each(["raw", "auth", "auth_permanent", "route_unavailable"] as const)(
+    "keeps %s provider guidance through terminal persistence and history",
     async (kind) => {
       await withOpenClawTestState({ scenario: "minimal" }, async () => {
         setRuntimeConfigSnapshot({});
         await seed();
         const secret = "synthetic-provider-diagnostic-secret";
-        const providerError = `unexpected status 401 Unauthorized: Missing bearer or basic authentication in header, url: https://api.openai.com/v1/responses, request id: req_401, Authorization: Bearer ${secret}`;
+        const providerError =
+          kind === "route_unavailable"
+            ? `400 Your credit balance is too low. Authorization: Bearer ${secret}`
+            : `unexpected status 401 Unauthorized: Missing bearer or basic authentication in header, url: https://api.openai.com/v1/responses, request id: req_401, Authorization: Bearer ${secret}`;
         const failureCopy =
-          kind === "auth_permanent"
-            ? "⚠️ The AI service isn't accepting your login. Sign in again under Models in the Control UI or run `openclaw configure`."
-            : "⚠️ Couldn't sign in to the AI service. Sign in again under Models in the Control UI or run `openclaw configure`.";
+          kind === "route_unavailable"
+            ? "⚠️ The provider cannot serve this model right now. Choose another model."
+            : kind === "auth_permanent"
+              ? "⚠️ The AI service isn't accepting your login. Sign in again under Models in the Control UI or run `openclaw configure`."
+              : "⚠️ Couldn't sign in to the AI service. Sign in again under Models in the Control UI or run `openclaw configure`.";
         const canonicalCopy = renderAssistantRequestFailureCopy({
           reason: kind === "raw" ? "auth" : kind,
         });
@@ -522,7 +527,7 @@ describe("durable pre-reply run failure", () => {
             ? new Error(providerError)
             : new FailoverError(canonicalCopy, {
                 reason: kind,
-                status: kind === "auth" ? 401 : 403,
+                status: kind === "route_unavailable" ? 400 : kind === "auth" ? 401 : 403,
                 rawError: providerError,
               });
         let persistence: Promise<void> | undefined;

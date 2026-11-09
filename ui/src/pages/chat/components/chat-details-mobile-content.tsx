@@ -99,7 +99,7 @@ type ChatDetailsMobileRootContent = {
   /** The publication owner supplies the review entry, including retained publication/recovery states. */
   publicationEntry?: ChatDetailsMobileEntry;
   processes: ChatDetailsMobileProcessesProps["data"] | undefined;
-  /** Keep every native child; the host routes unlisted children through onSessionSelect. */
+  /** The root shows the native subagent collection; ordinary subsessions stay in the sidebar. */
   subagents: Omit<NonNullable<ChatDetailsMobileRootProps["subagents"]>, "rows">;
   /** One session-owned inventory, shared with desktop; never construct it in the opener. */
   automations?: { inventory: SessionAutomationInventory; summary: ChatDetailsMobileEntry };

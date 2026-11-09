@@ -115,6 +115,10 @@ export function registerWebhooksCli(program: Command) {
     gmail
       .command("run")
       .description("Run gog watch serve + auto-renew loop")
+      .addHelpText(
+        "after",
+        "\nGog v0.48.0 supports child-only token environment sources. Older Gog keeps working with a warning. Interactive setup/run can offer eligible Homebrew upgrades; restart existing watchers after upgrading.",
+      )
       .option("--account <email>", "Gmail account to watch")
       .option("--topic <topic>", "Pub/Sub topic path (projects/.../topics/..)"),
   ).action(async (opts) => {

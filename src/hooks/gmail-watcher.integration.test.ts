@@ -1,4 +1,5 @@
 // Real spawn/killProcessTree: fake gog leaves a SIGTERM-resistant child for shutdown to reap.
+import { randomBytes } from "node:crypto";
 import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -24,6 +25,9 @@ describePosix("gmail-watcher process-tree shutdown (integration)", () => {
     const wait = <T>(work: Promise<T>) => withinTest(work, signal);
     const tmpDir = mkdtempSync(join(tmpdir(), "openclaw-gog-integration-"));
     const pids: number[] = [];
+    const pushToken = randomBytes(24).toString("hex");
+    const hookToken = randomBytes(24).toString("hex");
+    const transportReceipt = join(tmpDir, "transport.json");
     onTestFinished(async () => {
       try {
         await stopGmailWatcher();
@@ -49,6 +53,11 @@ describePosix("gmail-watcher process-tree shutdown (integration)", () => {
     writeScript(helperPath, [
       fixtureReceiptClientSource(receipts.endpoint),
       'import { renameSync, writeFileSync } from "node:fs";',
+      `writeFileSync(${JSON.stringify(transportReceipt)}, JSON.stringify({
+        push: process.env.OPENCLAW_GOG_WATCH_PUSH_TOKEN === ${JSON.stringify(pushToken)},
+        hook: process.env.OPENCLAW_GOG_WATCH_HOOK_TOKEN === ${JSON.stringify(hookToken)},
+        argvClean: !process.argv.some(arg => arg.includes(${JSON.stringify(pushToken)}) || arg.includes(${JSON.stringify(hookToken)}))
+      }));`,
       'process.on("SIGTERM", () => {});',
       "setInterval(() => {}, 1000);",
       `writeFileSync(${JSON.stringify(`${helperPidPath}.tmp`)}, [process.ppid, process.pid].join(" "));`,
@@ -60,9 +69,10 @@ describePosix("gmail-watcher process-tree shutdown (integration)", () => {
     writeScript(gogScript, [
       "#!/bin/bash",
       'case "$*" in',
+      '  *"schema gmail watch serve"*) echo \'{ "schema_version": 1, "command": { "type": "command", "name": "serve", "flags": [{"name":"token","type":"string"},{"name":"hook-token","type":"string"},{"name":"token-env","type":"string"},{"name":"hook-token-env","type":"string"}] } }\'; exit 0 ;;',
       '  *"watch start"*) echo "[gog] watch registered"; exit 0 ;;',
       '  *"watch serve"*)',
-      `    ${JSON.stringify(process.execPath)} ${JSON.stringify(helperPath)} &`,
+      `    ${JSON.stringify(process.execPath)} ${JSON.stringify(helperPath)} "$@" &`,
       "    trap 'echo \"[gog] SIGTERM (child NOT killed)\"; exit 0' TERM",
       "    while true; do sleep 0.3; done ;;",
       "esac",
@@ -70,8 +80,11 @@ describePosix("gmail-watcher process-tree shutdown (integration)", () => {
     chmodSync(gogScript, 0o755);
 
     vi.stubEnv("PATH", `${tmpDir}:${process.env["PATH"] ?? ""}`);
+    const config = createGmailConfig("integration@example.com");
+    config.hooks!.token = hookToken;
+    config.hooks!.gmail!.pushToken = pushToken;
     const result = await wait(
-      startGmailWatcher(createGmailConfig("integration@example.com"), {
+      startGmailWatcher(config, {
         scheduler: createTestGatewayScheduler(),
         signal,
       }),
@@ -83,6 +96,11 @@ describePosix("gmail-watcher process-tree shutdown (integration)", () => {
 
     pids.push(...readFileSync(helperPidPath, "utf8").split(" ").map(Number));
     expect(pids.map(alive)).toEqual([true, true]);
+    expect(JSON.parse(readFileSync(transportReceipt, "utf8"))).toEqual({
+      push: true,
+      hook: true,
+      argvClean: true,
+    });
 
     await wait(stopGmailWatcher());
 

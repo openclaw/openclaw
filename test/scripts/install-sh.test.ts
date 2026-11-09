@@ -515,6 +515,32 @@ NODE
     expect(result.status, result.stderr || result.stdout).toBe(0);
   });
 
+  it("publishes Git clones before Node is provisioned (#195366)", () => {
+    const result = runInstallShell(`
+      set -euo pipefail
+      source "${SCRIPT_PATH}"
+      run_quiet_step() { shift; "$@"; }
+      ui_error() { :; }
+      ui_info() { :; }
+      node() { echo "node ran before ensure_node" >&2; return 127; }
+      git() {
+        local target="\${*: -1}"
+        mkdir -p "$target/.git" "$target/src"
+        printf 'complete\\n' > "$target/checkout.marker"
+      }
+      fresh="$HOME/no-node/fresh"
+      clone_git_checkout_transactionally https://example.invalid/openclaw.git "$fresh" --filter=blob:none
+      [[ -f "$fresh/checkout.marker" && -d "$fresh/.git" && -d "$fresh/src" ]]
+      empty="$HOME/no-node/empty"
+      mkdir -p "$empty"
+      clone_git_checkout_transactionally https://example.invalid/openclaw.git "$empty"
+      [[ -f "$empty/checkout.marker" && -d "$empty/.git" && -d "$empty/src" ]]
+      [[ -z "$(find "$HOME/no-node" "$empty" -maxdepth 1 -name '.openclaw-clone.*' -print -quit)" ]]
+    `);
+
+    expect(result.status, result.stderr || result.stdout).toBe(0);
+  });
+
   it("keeps the full Git install on the canonical checkout after an alias is retargeted", () => {
     const result = runInstallShell(`
       set -euo pipefail
@@ -527,7 +553,7 @@ NODE
       target="$(cd "$target" && pwd -P)"
       replacement="$(cd "$replacement" && pwd -P)"
       ln -s "$target" "$alias_path"
-
+      npm() { [[ "$1" == view ]] || return 1; printf '>=24.16.0 <25 || >=26.1.0\\n'; }
       check_git() { return 0; }
       resolve_git_openclaw_ref() { printf 'main\\n'; }
       checkout_git_openclaw_ref() {
@@ -1493,7 +1519,7 @@ EOF
       warn_duplicate_openclaw_global_installs() { :; }; npm_global_bin_dir() { :; }; warn_shell_path_missing_dir() { :; }
       has_openclaw_config() { return 0; }; refresh_gateway_service_if_loaded() { :; }
       run_doctor() { return 9; }; resolve_openclaw_version() { printf 'test-version\n'; }
-      retire_git_wrapper_after_npm_install() { :; }; show_footer_links() { :; }
+      retire_git_wrapper_after_npm_install() { :; }; show_footer_links() { :; }; npm() { [[ "$1" == view ]] || return 1; printf '>=24.16.0 <25 || >=26.1.0\\n'; }
       main
     `);
 
@@ -2039,8 +2065,8 @@ EOF
       source "${SCRIPT_PATH}"
       OS=${os}
       bootstrap_gum_temp() { :; }
-      print_installer_banner() { :; }
-      print_gum_status() { :; }
+      print_installer_banner() { :; }; print_gum_status() { :; }
+      npm() { [[ "$1" == view ]] || return 1; printf '>=24.16.0 <25 || >=26.1.0\\n'; }
       detect_os_or_die() { :; }
       detect_openclaw_checkout() { :; }
       show_install_plan() { :; }
@@ -2138,8 +2164,8 @@ EOF
     ["24.21.0", ">=24.22.1 <25 || >=26.12.1", true],
     ["24.22.1", ">=24.22.1 <25 || >=26.12.1", false],
     ["24.21.0", ">=24.16.0 <25 || >=26.1.0", false],
-    ["24.21.0", "", true],
-    ["26.12.0", "", true],
+    ["24.21.0", "", false],
+    ["26.12.0", "", false],
     ["26.12.1", "", false],
   ])(
     "selects a package-compatible runtime for Node %s and engines %s",
@@ -2169,6 +2195,13 @@ EOF
       expect(result.status, result.stdout + result.stderr).toBe(0);
       expect(result.stdout).toContain("package install reached");
       expect(result.stdout.includes("runtime upgraded")).toBe(upgrade);
+      const warnings = result.stderr.match(/SECURITY WARNING:/g) ?? [];
+      expect(warnings).toHaveLength(!upgrade && ["24.21.0", "26.12.0"].includes(version) ? 1 : 0);
+      expect(result.stdout).not.toContain("SECURITY WARNING:");
+      if (warnings.length) {
+        expect(result.stderr).toContain("may trust TLS certificates signed with keys compromised");
+        expect(result.stderr).toContain("Node 24.22.1+ on the 24.x line or Node 26.12.1+");
+      }
     },
   );
 

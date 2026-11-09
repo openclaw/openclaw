@@ -3,7 +3,7 @@ import { formatDocsLink } from "../../../packages/terminal-core/src/links.js";
 import { sanitizeTerminalText } from "../../../packages/terminal-core/src/safe-text.js";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { isChannelVisibleInConfiguredLists } from "../../channels/plugins/exposure.js";
-import { listReadOnlyChannelPluginsForConfig } from "../../channels/plugins/read-only.js";
+import { listReadOnlyChannelPluginsForConfigAsync } from "../../channels/plugins/read-only.js";
 import { resolveChannelAccountSnapshot } from "../../channels/plugins/status.js";
 import type { AnyChannelPlugin as ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import type { ChannelAccountSnapshot } from "../../channels/plugins/types.public.js";
@@ -121,7 +121,7 @@ export async function channelsListCommand(
 
   // JSON needs only manifest-backed account ids. Text keeps setup-backed snapshots
   // because its credential/status details are part of the human output contract.
-  const plugins = listReadOnlyChannelPluginsForConfig(cfg, {
+  const plugins = await listReadOnlyChannelPluginsForConfigAsync(cfg, {
     ...(!opts.json ? { includeSetupFallbackPlugins: true } : {}),
     metadataSnapshot,
   });

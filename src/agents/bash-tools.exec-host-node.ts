@@ -47,8 +47,8 @@ import {
 } from "./bash-tools.exec-host-node-policy.js";
 import type { ExecuteNodeHostCommandParams } from "./bash-tools.exec-host-node.types.js";
 import * as execHostShared from "./bash-tools.exec-host-shared.js";
+import type { ExecToolDetails } from "./bash-tools.exec-result.types.js";
 import { createApprovalSlug } from "./bash-tools.exec-runtime.js";
-import type { ExecToolDetails } from "./bash-tools.exec-types.js";
 import { abortable } from "./embedded-agent-runner/run/abortable.js";
 import { formatExecDeniedReasonMessage } from "./exec-approval-result.js";
 import {

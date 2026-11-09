@@ -5,6 +5,7 @@ import type {
   FeatureInvocationContext,
 } from "openclaw/plugin-sdk/feature-plugin";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { Check } from "typebox/value";
 import { featurePrincipal, toolGrant, type VaultAccess } from "./access.js";
 import { attachWorkspaceFile } from "./attachment-file.js";
@@ -25,6 +26,7 @@ import { buildKnowledgeMemoryPrompt } from "./memory-prompt.js";
 import { createKnowledgeMemoryRuntime } from "./memory-provider.js";
 import { locatePluginFiles } from "./plugin-files.js";
 import { queryFreshness } from "./query-freshness.js";
+import { registerRecallGateHook } from "./recall-gate-hook.js";
 import { searchDetail } from "./search-detail.js";
 import type { StorageOperations } from "./storage-host.js";
 import { createStoreOperations } from "./store-assignments.js";
@@ -136,6 +138,9 @@ export function createKnowledgeService(
   }
   if (typeof api.on === "function") {
     registerMemoryIndexHook(api, stores);
+    if (policy.recallGate) {
+      registerRecallGateHook(api, stores, policy.recallGate);
+    }
   }
   const maintenance = new Maintenance(stores, {
     info: (m) => api.logger?.info?.(m),
@@ -215,7 +220,7 @@ export function createKnowledgeService(
         work(opened.runtime, access),
       );
       if (write && opened.access.scope.visibility === "private") {
-        opened.runtime.live.invalidate();
+        opened.runtime.client.invalidate();
       }
       return result;
     };
@@ -464,7 +469,7 @@ export function createKnowledgeService(
           ontologyAvailable: false,
           ontologyFingerprint: "",
           issues: 0,
-          message: message.slice(0, 300),
+          message: truncateUtf16Safe(message, 300),
         });
         if (opened.kind !== "ready") {
           return notReady(opened.agentId, opened.kind, opened.message);
@@ -492,9 +497,6 @@ export function createKnowledgeService(
             `This store couldn't be opened. ${(e as Error).message}`,
           );
         }
-        if (scope === "private") {
-          runtime.live.ensureWatching();
-        }
         return {
           ...base,
           checkedAt: catalog.checkedAt,
@@ -503,7 +505,7 @@ export function createKnowledgeService(
           store: "ready" as const,
           scope,
           writesEnabled: canWrite,
-          live: scope === "private" ? runtime.live.state : "stopped",
+          live: scope === "private" ? runtime.client.liveState : "stopped",
           snapshot: catalog.snapshot,
           records: catalog.records,
           validRecords: catalog.records,

@@ -1,5 +1,6 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { observeDiagnosticsTimelinePhases } from "../../infra/diagnostics-timeline.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { BROWSER_BRIDGES } from "./browser-bridges.js";
 import {
   bindDockerPersistentTarget,
@@ -21,6 +22,17 @@ import {
   assertSandboxRegistryEntryCurrent,
   assertSandboxBrowserRegistryEntryCurrent,
 } from "./registry.js";
+
+const log = createSubsystemLogger("sandbox/quiescence");
+const pauseCounts = {
+  checkpoint: 0,
+  preparation: 0,
+  reconcile: 0,
+  publication: 0,
+  retirement: 0,
+  restore: 0,
+};
+export type LocalWorkspacePauseReason = keyof typeof pauseCounts;
 
 /** Registered runtimes and retained stream children can write the exact private mount. */
 export async function readLocalWorkspaceRuntimes(
@@ -186,6 +198,7 @@ export function parseLocalWorkspacePausedRuntimes(
 /** Caller holds the projection lease through pause, reconciliation, and resume. */
 export async function quiesceLocalWorkspace(params: {
   workspaceDir: string;
+  reason?: LocalWorkspacePauseReason;
   env?: NodeJS.ProcessEnv;
   retained: LocalWorkspacePausedRuntime[];
   persist: (runtimes: LocalWorkspacePausedRuntime[]) => void | Promise<void>;
@@ -300,6 +313,11 @@ export async function quiesceLocalWorkspace(params: {
       await runtime.assertCurrent();
       phases.mark("attempt.setup.sandbox.workspace_selection.quiesce.pause");
       await execContainer(engine, ["pause", id], { signal: AbortSignal.timeout(30_000) });
+      const reason = params.reason ?? "reconcile";
+      log.info(`Local workspace pause: reason=${reason} count=${++pauseCounts[reason]}`, {
+        engine: engine.id,
+        runtime: runtime.kind,
+      });
     }
     releases.push(async () => {
       using resumePhases = observeDiagnosticsTimelinePhases(

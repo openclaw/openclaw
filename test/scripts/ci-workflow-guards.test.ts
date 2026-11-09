@@ -1520,9 +1520,11 @@ AFTER_CD
             eventName: "pull_request",
             repository: "openclaw/openclaw",
             runAttempt: 1,
+            failed: true,
             preflightOutputs: { run_docs_content: enabled },
             steps: {
               node_setup: { outcome: "success", outputs: {} },
+              bun_setup: { outcome: "failure", outputs: {} },
               clawhub_docs: { outcome: "success", outputs: {} },
             },
           }),
@@ -1532,15 +1534,20 @@ AFTER_CD
     }
     const format = job.steps.find((step: WorkflowStep) => step.name === "Check formatting");
     expect(format.if).not.toContain("run_docs_content");
-    expect(
-      evaluateWorkflowCondition(format.if, {
-        eventName: "pull_request",
-        repository: "openclaw/openclaw",
-        runAttempt: 1,
-        preflightOutputs: { run_docs_content: "false", run_format_check: "true" },
-        steps: { node_setup: { outcome: "success", outputs: {} } },
-      }),
-    ).toBe(true);
+    for (const outcome of ["success", "failure"] as const) {
+      expect(
+        evaluateWorkflowCondition(format.if, {
+          eventName: "pull_request",
+          repository: "openclaw/openclaw",
+          runAttempt: 1,
+          preflightOutputs: { run_docs_content: "false", run_format_check: "true" },
+          steps: {
+            node_setup: { outcome: "success", outputs: {} },
+            bun_setup: { outcome, outputs: {} },
+          },
+        }),
+      ).toBe(outcome === "success");
+    }
     const preflight = readCiWorkflow().jobs.preflight;
     expect(preflight.outputs.run_docs_content).toBe(
       "${{ steps.manifest.outputs.run_docs_content }}",
@@ -1692,7 +1699,7 @@ AFTER_CD
         );
         const hosted = runnerBackend === "github" || runAttempt > 1;
         expect(runner, JSON.stringify(context)).toBe(
-          hosted ? "ubuntu-24.04" : "blacksmith-8vcpu-ubuntu-2404",
+          hosted ? "ubuntu-24.04" : "blacksmith-2vcpu-ubuntu-2404",
         );
         expect(parallel, JSON.stringify(context)).toBe(hosted ? 2 : 4);
       }
@@ -1760,7 +1767,7 @@ AFTER_CD
     } as const;
     expect(evaluateWorkflowExpression("${{ " + prepare.if + " }}", releaseChild)).toBe(true);
     expect(evaluateWorkflowExpression(job["runs-on"], releaseChild)).toBe(
-      "blacksmith-16vcpu-ubuntu-2404",
+      "blacksmith-4vcpu-ubuntu-2404",
     );
     expect(evaluateWorkflowExpression(parallelism!, releaseChild)).toBe(1);
     for (const recovery of [
@@ -2122,12 +2129,10 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
     expect(sdkSaveStep.uses).toBe(CACHE_SAVE_V5);
     expect(sdkSaveStep.with?.key).toBe("${{ steps.android-sdk-cache.outputs.cache-primary-key }}");
     expect(gradleCacheStep).toMatchObject({
-      if: "inputs.cache-mode != 'off'",
       uses: SETUP_GRADLE_V6,
       with: {
         "add-job-summary": "never",
         "cache-provider": "basic",
-        "cache-read-only": "${{ inputs.cache-mode != 'read-write' }}",
       },
     });
     expect(installStep.run).toContain(`"${packageId}"`);
@@ -2154,6 +2159,49 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
       "sha256sum --check -",
     ]);
   });
+
+  it("restores release Gradle inputs without SDK caches or cache writes", () => {
+    const steps = readAndroidToolchainAction().runs.steps;
+    const gradle = requiredWorkflowStep(steps, "Setup Gradle cache");
+    const sdk = requiredWorkflowStep(steps, "Restore Android SDK cache");
+    const release = requiredWorkflowStep(
+      readWorkflow(".github/workflows/android-store-release.yml").jobs.release.steps,
+      "Setup Android toolchain",
+    );
+    expect(release.with).toMatchObject({ "cache-mode": "off", "gradle-cache-mode": "restore" });
+    for (const [inputs, restoreGradle, restoreSdk, readOnly] of [
+      [release.with, true, false, true],
+      [{ "cache-mode": "off" }, false, false, true],
+      [{ "cache-mode": "restore" }, true, true, true],
+      [{ "cache-mode": "read-write" }, true, true, false],
+      [{ "cache-mode": "read-write", "gradle-cache-mode": "off" }, false, true, true],
+    ] as const) {
+      expect(evaluateWorkflowExpression(`\${{ ${gradle.if} }}`, { inputs })).toBe(restoreGradle);
+      expect(evaluateWorkflowExpression(`\${{ ${sdk.if} }}`, { inputs })).toBe(restoreSdk);
+      expect(evaluateWorkflowExpression(gradle.with?.["cache-read-only"], { inputs })).toBe(
+        readOnly,
+      );
+    }
+  });
+
+  it.each(["CACHE_MODE", "GRADLE_CACHE_MODE"])(
+    "rejects invalid Android cache authority in %s",
+    (invalidInput) => {
+      const validation = requiredWorkflowStep(
+        readAndroidToolchainAction().runs.steps,
+        "Validate cache mode",
+      );
+      const result = runWorkflowShellScript(expectDefined(validation.run, "cache validation"), {
+        env: {
+          CACHE_MODE: "off",
+          GRADLE_CACHE_MODE: "restore",
+          INSTALL_SCREENSHOT_EMULATORS: "false",
+          [invalidInput]: "invalid",
+        },
+      });
+      expect(result.status).toBe(2);
+    },
+  );
 
   it("binds release targets to current authenticated ref evidence", () => {
     const workflow = readCiWorkflow();
@@ -2377,7 +2425,7 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
         ciValue(jobName, "runs-on", { ...context, ...overrides });
       for (const eventName of ["pull_request", "push"] as const) {
         expect(runner({ eventName }), jobName).toBe(
-          jobName === "security-fast" ? "blacksmith-4vcpu-ubuntu-2404" : "ubuntu-24.04",
+          jobName === "security-fast" ? "blacksmith-2vcpu-ubuntu-2404" : "ubuntu-24.04",
         );
       }
       expect(
@@ -2386,7 +2434,7 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
           headRepository: "contributor/openclaw",
         }),
         `${jobName}: untrusted fork first attempt`,
-      ).toBe("blacksmith-4vcpu-ubuntu-2404");
+      ).toBe("blacksmith-2vcpu-ubuntu-2404");
       for (const override of [
         { runAttempt: 0 },
         { runAttempt: 2 },
@@ -2400,7 +2448,7 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
       for (const runnerBackend of ["", "blacksmith"] as const) {
         for (const eventName of ["pull_request", "push"] as const) {
           expect(runner({ eventName, runnerBackend }), jobName).toBe(
-            jobName === "preflight" ? "blacksmith-4vcpu-ubuntu-2404" : "ubuntu-24.04",
+            jobName === "preflight" ? "blacksmith-2vcpu-ubuntu-2404" : "ubuntu-24.04",
           );
         }
       }
@@ -2408,10 +2456,10 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
     for (const [jobName, task, expected] of [
       ["preflight", undefined, "ubuntu-24.04"],
       ["security-fast", undefined, "ubuntu-24.04"],
-      ["checks-ui", undefined, "blacksmith-8vcpu-ubuntu-2404"],
+      ["checks-ui", undefined, "blacksmith-2vcpu-ubuntu-2404"],
       ["checks-ui-e2e", "browser-extension", "ubuntu-24.04"],
-      ["checks-ui-e2e", "control-ui", "blacksmith-16vcpu-ubuntu-2404"],
-      ["checks-ui-e2e-real-gateway", undefined, "blacksmith-16vcpu-ubuntu-2404"],
+      ["checks-ui-e2e", "control-ui", "blacksmith-4vcpu-ubuntu-2404"],
+      ["checks-ui-e2e-real-gateway", undefined, "blacksmith-4vcpu-ubuntu-2404"],
     ] as const) {
       expect(
         ciValue(jobName, "runs-on", {
@@ -2428,7 +2476,7 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
           ...context,
           preflightOutputs: { frozen_target: frozenTarget },
         }),
-      ).toBe("blacksmith-32vcpu-ubuntu-2404");
+      ).toBe("blacksmith-8vcpu-ubuntu-2404");
     }
     for (const authorAssociation of ["OWNER", "MEMBER", "COLLABORATOR", "CONTRIBUTOR"]) {
       for (const headRepository of ["openclaw/openclaw", "contributor/openclaw"]) {
@@ -2444,7 +2492,7 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
           ).toBe(
             runnerBackend === "hybrid" && headRepository === "openclaw/openclaw"
               ? "ubuntu-24.04"
-              : "blacksmith-4vcpu-ubuntu-2404",
+              : "blacksmith-2vcpu-ubuntu-2404",
           );
         }
       }
@@ -2454,12 +2502,12 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
   it.each([
     {
       file: "full-release-validation.yml",
-      runner: "blacksmith-4vcpu-ubuntu-2404",
+      runner: "blacksmith-2vcpu-ubuntu-2404",
       job: "release_decision",
     },
     {
       file: "openclaw-npm-preflight.yml",
-      runner: "blacksmith-32vcpu-ubuntu-2404",
+      runner: "blacksmith-8vcpu-ubuntu-2404",
       job: "check_openclaw_npm",
     },
   ])("honors the global hosted runner override for $file/$job", ({ file, runner, job }) => {
@@ -2497,6 +2545,7 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
       const runsOn = readCiWorkflow().jobs["check-shard"]["runs-on"];
       const lintMatrix = {
         runner: "blacksmith-32vcpu-ubuntu-2404",
+        runner_label: "blacksmith-8vcpu-ubuntu-2404",
         task: "lint",
       };
       const evaluateDispatch = (
@@ -2510,7 +2559,7 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
           ...overrides,
         });
 
-      expect(evaluateDispatch("blacksmith")).toBe("blacksmith-32vcpu-ubuntu-2404");
+      expect(evaluateDispatch("blacksmith")).toBe("blacksmith-8vcpu-ubuntu-2404");
       for (const backend of ["blacksmith", "github", "hybrid"] as const) {
         expect(
           evaluateDispatch(backend, backend === "blacksmith" ? { releaseGate: true } : {}),
@@ -2522,7 +2571,7 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
         frozenTarget: true,
         targetContextRef,
       };
-      expect(evaluateDispatch("hybrid", frozenFrv)).toBe("blacksmith-32vcpu-ubuntu-2404");
+      expect(evaluateDispatch("hybrid", frozenFrv)).toBe("blacksmith-8vcpu-ubuntu-2404");
       expect(evaluateDispatch("github", frozenFrv)).toBe("ubuntu-24.04");
       for (const overrides of [
         { frozenTarget: false },
@@ -2540,7 +2589,7 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
           matrix: lintMatrix,
           runnerBackend: "blacksmith",
         }),
-      ).toBe("blacksmith-32vcpu-ubuntu-2404");
+      ).toBe("blacksmith-8vcpu-ubuntu-2404");
     },
   );
 
@@ -2620,7 +2669,7 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
           runnerBackend,
           preflightOutputs: { hybrid_hosted_offload: String(offload) },
         } as const;
-        expect(ciValue("checks-ui", "runs-on", context)).toBe("blacksmith-8vcpu-ubuntu-2404");
+        expect(ciValue("checks-ui", "runs-on", context)).toBe("blacksmith-2vcpu-ubuntu-2404");
         for (const [jobName, timeout] of [
           ["build-artifacts", 20],
           ["android", 20],
@@ -2643,6 +2692,11 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
     const suite = "ui/src/e2e/stale-build-recovery.production.e2e.test.ts";
     mkdirSync(bin);
     mkdirSync(vitest, { recursive: true });
+    mkdirSync(path.join(root, "test/vitest"), { recursive: true });
+    symlinkSync(
+      path.resolve("test/vitest/vitest.pattern-file.ts"),
+      path.join(root, "test/vitest/vitest.pattern-file.ts"),
+    );
     mkdirSync(path.dirname(path.join(root, suite)), { recursive: true });
     writeFileSync(path.join(root, suite), "");
     writeFileSync(
@@ -2685,6 +2739,7 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
           SELECT_RUNTIME: selected,
           PREPARE_EXIT: exit,
           OPENCLAW_NODE_TEST_GROUPS_GZIP_BASE64: "",
+          OPENCLAW_VITEST_INCLUDE_FILE: "",
           VITEST_SHARD_INDEX: "1",
           VITEST_SHARD_COUNT: "1",
         },
@@ -2888,7 +2943,12 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
       jobId?: string;
       jobCondition?: string;
     }> = [];
-    const rubySetups: Array<{ file: string; step: WorkflowStep }> = [];
+    const rubySetups: Array<{
+      file: string;
+      step: WorkflowStep;
+      jobId?: string;
+      jobCondition?: string;
+    }> = [];
     for (const file of [
       ...findYamlFiles(".github/workflows"),
       ...findYamlFiles(".github/actions"),
@@ -2911,7 +2971,7 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
             directCaches.push({ file, step, jobId, jobCondition });
           }
           if (step.uses?.startsWith("ruby/setup-ruby@")) {
-            rubySetups.push({ file, step });
+            rubySetups.push({ file, step, jobId, jobCondition });
           }
           if (
             step.uses === "./.github/actions/setup-node-env" ||
@@ -2925,11 +2985,20 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
       }
     }
     expect(rubySetups.length).toBeGreaterThan(0);
-    for (const { file, step } of rubySetups) {
+    for (const { file, step, jobId, jobCondition } of rubySetups) {
       const bundlerCache = step.with?.["bundler-cache"] ?? false;
       expect([false, true, "false", "true"], `${file}: ${step.name}`).toContain(bundlerCache);
       if (bundlerCache === true || bundlerCache === "true") {
-        expect(String(step.if), `${file}: ${step.name}`).toContain("cache_write_allowed == 'true'");
+        if (file === ".github/workflows/ios-store-release.yml" && jobId === "release") {
+          expectIncludes(jobCondition, [
+            "github.repository == 'openclaw/openclaw'",
+            "github.ref == 'refs/heads/main'",
+          ]);
+        } else {
+          expect(String(step.if), `${file}: ${step.name}`).toContain(
+            "cache_write_allowed == 'true'",
+          );
+        }
       }
     }
     expect(callers.length).toBeGreaterThan(0);
@@ -3015,6 +3084,7 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
         }
         const releaseCacheId = new Map([
           ["${{ runner.temp }}/openclaw-watch-rtc-release-libraries", "watch-rtc-cache"],
+          ["${{ runner.temp }}/openclaw-ios-release-cas", "ios-compilation-cache"],
           ["~/Library/Developer/Xcode/DerivedData/OpenClaw-*/SourcePackages", "ios-packages-cache"],
         ]).get(String(step.with?.path));
         if (file === ".github/workflows/ios-store-release.yml" && releaseCacheId) {
@@ -3604,6 +3674,34 @@ server.listen(0, "127.0.0.1", () => {
     }
   });
 
+  it("keeps each compiled worker preset in a separate archive", () => {
+    const setup = readWorkflow(".github/actions/setup-node-env/action.yml");
+    const steps = setup.runs.steps as WorkflowStep[];
+    const restore = requiredWorkflowStep(steps, "Restore compiled Vitest workers");
+    expect(restore.with?.path).toBe("${{ steps.vitest-worker-cache-meta.outputs.path }}");
+    expect(restore.with?.["restore-keys"]).toBe(
+      "${{ steps.vitest-worker-cache-meta.outputs.prefix }}-${{ steps.vitest-worker-cache-meta.outputs.preset }}-\n",
+    );
+    const warmer = readWorkflow(".github/workflows/vitest-cache-warm.yml");
+    const warmSteps = warmer.jobs.warm.steps as WorkflowStep[];
+    for (const preset of ["full", "runtime", "tooling"]) {
+      const save = requiredWorkflowStep(
+        warmSteps,
+        preset === "full"
+          ? "Save compiled Vitest workers"
+          : `Save ${preset} compiled Vitest workers`,
+      );
+      expect(save.with?.path).toBe(
+        `.artifacts/vitest-worker-cache/run-cache${preset === "full" ? "" : `-${preset}`}-0`,
+      );
+      expect(save.with?.key).toBe(
+        preset === "full"
+          ? "${{ steps.setup-node-env.outputs.vitest-worker-cache-key }}"
+          : `\${{ steps.setup-node-env.outputs.vitest-worker-cache-prefix }}-${preset}-\${{ github.run_id }}-\${{ github.run_attempt }}`,
+      );
+    }
+  });
+
   it("warms full builds with the release runtime without changing test cache selectors", () => {
     const warmer = readWorkflow(".github/workflows/vitest-cache-warm.yml");
     const npm = readWorkflow(".github/workflows/openclaw-npm-preflight.yml");
@@ -3742,60 +3840,150 @@ server.listen(0, "127.0.0.1", () => {
     });
   });
 
-  it("shares transform generations with the warmer after CI exports its harness", () => {
-    const action = readWorkflow(".github/actions/setup-node-env/action.yml");
-    const generationStep = (action.runs.steps as WorkflowStep[]).find(
-      (step) => step.name === "Resolve Vitest transform cache generation",
-    );
-    const expression = expectDefined(
-      generationStep?.run?.match(/\$\{\{(.*?)\}\}/u)?.[1],
-      "transform generation expression",
-    );
-    const sourceFiles = {
-      "pnpm-lock.yaml": "lockfileVersion: '9.0'",
-      "pnpm-workspace.yaml": "packages: ['packages/*']",
-      "package.json": '{"name":"fixture"}',
-      "packages/worker/package.json": '{"name":"worker"}',
-      "packages/worker/tsconfig.json": "{}",
-      "vitest.config.ts": "export default {}",
-      "test/vitest/shared.ts": "export const shared = {}",
-      "src/state/schema.sql": "CREATE TABLE fixture (id TEXT);",
-      ".github/actions/setup-security-review/package.json": '{"name":"review"}',
-      ".ci-harness-source/package.json": '{"name":"real-source"}',
+  it("keeps pinned Bun cache publication with the protected warmer", () => {
+    const action = readWorkflow(".github/actions/setup-test-bun/action.yml");
+    const restore = requiredWorkflowStep(action.runs.steps, "Restore pinned Bun release assets");
+    const save = requiredWorkflowStep(action.runs.steps, "Save pinned Bun release assets");
+    const identity = requiredWorkflowStep(action.runs.steps, "Resolve pinned Bun cache identity");
+    expect(identity.run).toContain("$GITHUB_ACTION_PATH/../../..");
+    expect(identity.run).toContain('sha256sum "$pin"');
+    expect(identity.run).toContain("path=~/.cache/openclaw-bun/$tag");
+    const install = requiredWorkflowStep(action.runs.steps, "Install pinned Bun test runtime");
+    expect(install.run).toContain('echo "OPENCLAW_BUN_PATH=$bun_dir/bin/bun" >> "$GITHUB_ENV"');
+    expect(restore.uses).toBe(CACHE_V5);
+    expect(restore.with).not.toHaveProperty("restore-keys");
+    expect(save.uses).toBe(CACHE_SAVE_V5);
+    expect(save.with).toEqual(restore.with);
+    const publisher = {
+      eventName: "schedule" as const,
+      repository: "openclaw/openclaw",
+      ref: "refs/heads/main",
+      workflow: "Vitest Cache Warm",
+      inputs: { "cache-mode": "read-write" },
+      steps: { cache: { outputs: { "cache-hit": "false" } } },
+      runAttempt: 1,
     };
-    const files: Record<string, string> = { ...sourceFiles };
-    const fingerprint = () =>
-      runInNewContext(expression, {
-        hashFiles: (...patterns: string[]) => {
-          const includes = patterns.filter((pattern) => !pattern.startsWith("!"));
-          const excludes = patterns
-            .filter((pattern) => pattern.startsWith("!"))
-            .map((pattern) => pattern.slice(1));
-          const hash = createHash("sha256");
-          for (const [file, contents] of Object.entries(files).toSorted(([left], [right]) =>
-            left.localeCompare(right),
-          )) {
-            if (
-              includes.some((pattern) => minimatch(file, pattern, { dot: true })) &&
-              !excludes.some((pattern) => minimatch(file, pattern, { dot: true }))
-            ) {
-              hash.update(createHash("sha256").update(contents).digest());
-            }
-          }
-          return hash.digest("hex");
-        },
-      });
-    const warmer = fingerprint();
-    files[".ci-harness/.github/actions/setup-security-review/package.json"] =
-      sourceFiles[".github/actions/setup-security-review/package.json"];
-    files[".ci-harness/tsconfig.json"] = "{}";
-    files["node_modules/dependency/package.json"] = '{"name":"dependency"}';
-    expect(fingerprint()).toBe(warmer);
-    for (const [file, contents] of Object.entries(sourceFiles)) {
-      files[file] = `${contents}\n`;
-      expect(fingerprint(), file).not.toBe(warmer);
-      files[file] = contents;
+    expect(evaluateWorkflowCondition(save.if, publisher)).toBe(true);
+    for (const rejected of [
+      { repository: "contributor/openclaw" },
+      { ref: "refs/pull/123/merge" },
+      { workflow: "CI" },
+      { inputs: { "cache-mode": "restore" } },
+      { steps: { cache: { outputs: { "cache-hit": "true" } } } },
+      { failed: true },
+    ]) {
+      expect(evaluateWorkflowCondition(save.if, { ...publisher, ...rejected })).toBe(false);
     }
+    const warmer = readWorkflow(".github/workflows/vitest-cache-warm.yml");
+    const publish = requiredWorkflowStep(
+      warmer.jobs.dependencies.steps,
+      "Warm pinned Bun release assets",
+    );
+    expect(publish).toMatchObject({
+      if: "runner.os == 'Linux'",
+      uses: "./.github/actions/setup-test-bun",
+      with: { "cache-mode": "read-write" },
+    });
+    for (const name of ["checks-node-core-test-nondist-shard", "checks-ui"]) {
+      const reader = requiredWorkflowStep(
+        readCiWorkflow().jobs[name].steps,
+        "Setup pinned Bun test runtime",
+      );
+      expect(reader.with?.["cache-mode"]).toBe("${{ needs.preflight.outputs.cache_mode }}");
+    }
+    for (const [name, condition] of [
+      ["check-docs", "needs.preflight.outputs.run_format_check == 'true'"],
+      ["check-additional-shard", "matrix.group == 'boundaries'"],
+    ] as const) {
+      const reader = requiredWorkflowStep(
+        readCiWorkflow().jobs[name].steps,
+        "Setup pinned Bun parity runtime",
+      );
+      expect(reader).toMatchObject({
+        id: "bun_setup",
+        if: condition,
+        uses: "./.ci-harness/.github/actions/setup-test-bun",
+        with: { "cache-mode": "${{ needs.preflight.outputs.cache_mode }}" },
+      });
+      for (const enabled of [true, false]) {
+        expect(
+          evaluateWorkflowCondition(reader.if, {
+            eventName: "pull_request",
+            repository: "openclaw/openclaw",
+            runAttempt: 1,
+            preflightOutputs: { run_format_check: String(enabled) },
+            matrix: { group: enabled ? "boundaries" : "source-contracts" },
+          }),
+        ).toBe(enabled);
+      }
+    }
+  });
+
+  it("prepares Bun once for lint consumers and prevents restaging after setup failure", () => {
+    const workflow = readCiWorkflow();
+    const context = {
+      eventName: "pull_request",
+      repository: "openclaw/openclaw",
+      runAttempt: 1,
+    } as const;
+    for (const [name, task] of [
+      ["check-shard", "lint"],
+      ["checks-fast-core", "release-lint-core-1"],
+      ["check-lint-hosted-core-shard", ""],
+      ["check-lint-hosted-extension-shard", ""],
+    ] as const) {
+      const reader = requiredWorkflowStep(
+        workflow.jobs[name].steps,
+        "Setup pinned Bun parity runtime",
+      );
+      expect(reader).toMatchObject({
+        id: "bun_setup",
+        uses: "./.ci-harness/.github/actions/setup-test-bun",
+        with: { "cache-mode": "${{ needs.preflight.outputs.cache_mode }}" },
+      });
+      if (task) {
+        for (const selected of [true, false]) {
+          expect(
+            evaluateWorkflowCondition(reader.if, {
+              ...context,
+              matrix: { task: selected ? task : "npm-lock" },
+            }),
+          ).toBe(selected);
+        }
+      } else {
+        expect(reader.if).toBeUndefined();
+      }
+    }
+    for (const [job, name] of [
+      ["check-shard", "Run changed lint"],
+      ["check-shard", "Run check shard"],
+      ["check-lint-hosted-core-shard", "Run shared central lint"],
+    ] as const) {
+      const step = requiredWorkflowStep(workflow.jobs[job].steps, name);
+      expect(
+        evaluateWorkflowCondition(step.if, {
+          ...context,
+          failed: true,
+          steps: {
+            check_setup: { outputs: {}, outcome: "success" },
+            bun_setup: { outputs: {}, outcome: "failure" },
+          },
+          matrix: { task: "lint", shared_central_lint_selection_json: "{}" },
+          preflightOutputs: { central_lint_selection_json: name === "Run check shard" ? "" : "{}" },
+        }),
+      ).toBe(false);
+    }
+    const otherCheck = requiredWorkflowStep(workflow.jobs["check-shard"].steps, "Run check shard");
+    expect(
+      evaluateWorkflowCondition(otherCheck.if, {
+        ...context,
+        steps: {
+          check_setup: { outputs: {}, outcome: "success" },
+          bun_setup: { outputs: {}, outcome: "skipped" },
+        },
+        matrix: { task: "npm-lock" },
+      }),
+    ).toBe(true);
   });
 
   it("persists isolated transform and compile caches through immutable protected archives", () => {
@@ -5662,7 +5850,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
           : `checks-ui (${shard}/${scenario.shards.length})`,
       );
       expect(evaluateWorkflowExpression(ui["runs-on"], rowContext)).toBe(
-        scenario.frozenTarget ? "ubuntu-24.04" : "blacksmith-8vcpu-ubuntu-2404",
+        scenario.frozenTarget ? "ubuntu-24.04" : "blacksmith-2vcpu-ubuntu-2404",
       );
       const env = Object.fromEntries(
         Object.entries({ ...ui.env, ...test.env }).map(([key, value]) => [

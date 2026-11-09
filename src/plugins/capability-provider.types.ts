@@ -7,7 +7,7 @@ import type {
 } from "../../packages/gateway-protocol/src/schema/environments.js";
 import type { SecretRef } from "../config/types.secrets.js";
 import type { ImageGenerationProvider } from "../image-generation/provider-types.js";
-import type { MediaUnderstandingProvider } from "../media-understanding/types.js";
+import type { MediaUnderstandingProvider } from "../media-understanding/provider-types.js";
 import type { MusicGenerationProvider } from "../music-generation/provider-types.js";
 import type { SpawnResult } from "../process/exec.js";
 import type {
@@ -21,15 +21,17 @@ import type {
   RealtimeTranscriptionSession,
 } from "../realtime-transcription/provider-types.js";
 import type {
-  RealtimeVoiceBridge,
-  RealtimeVoiceBrowserSession,
   RealtimeVoiceBrowserSessionCreateRequest,
   RealtimeVoiceBridgeCreateRequest,
+  RealtimeVoiceProviderConfiguredContext,
+  RealtimeVoiceProviderResolveConfigContext,
+} from "../talk/provider-contexts.js";
+import type {
+  RealtimeVoiceBridge,
+  RealtimeVoiceBrowserSession,
   RealtimeVoiceProviderCapabilities,
   RealtimeVoiceProviderConfig,
-  RealtimeVoiceProviderConfiguredContext,
   RealtimeVoiceProviderId,
-  RealtimeVoiceProviderResolveConfigContext,
 } from "../talk/provider-types.js";
 import type { TranscriptSourceProvider as TranscriptsSourceProviderCapability } from "../transcripts/provider-types.js";
 import type {
@@ -322,6 +324,17 @@ export type WorkerRecipePreparation = {
   ignoredPropertiesNote?: string;
   note?: string;
   phaseDurationsMs?: {
+    retainedGit?: number;
+    retainedManifest?: number;
+    inspection?: number;
+    seedPreparation?: number;
+    seedTransfer?: number;
+    seedVerification?: number;
+    seedCheckout?: number;
+    seedManifest?: number;
+    gitUpdate?: number;
+    toolchainPreparation?: number;
+    preparedManifest?: number;
     onCreate?: number;
     updateContent?: number;
     detectedInstall?: number;
@@ -444,8 +457,9 @@ export type WorkerProvider = {
         /** Verify an already enrolled allocation without transferring, running setup, or capturing it. */
         inspectPreparedWorkspace?: (transport: {
           runScript: (script: string, signal: AbortSignal) => Promise<string>;
+          recordRecipePreparation?: (value: WorkerRecipePreparation) => Promise<void>;
         }) => Promise<void>;
-        /** Bound to this provision attempt; retained callbacks reject after it closes. */
+        /** Bound to this preparation attempt; retained callbacks reject after it closes. */
         prepare: (transport: {
           runScript: (script: string, signal: AbortSignal) => Promise<string>;
           /** Render using this provider command's remaining budget before repository code runs. */
@@ -476,6 +490,15 @@ export type WorkerProvider = {
       };
     },
   ) => Promise<WorkerLease>;
+  /**
+   * Refresh an available, unbound enrolled worker through the same project preparation owner.
+   * Never allocate, capture, or enroll. Honor project authority and settle commands on abort.
+   * Core publishes the refreshed prepared workspace before binding it to a session.
+   */
+  refreshPreparedProject?: (
+    lease: { leaseId: string; profile: WorkerProfile },
+    project: NonNullable<NonNullable<Parameters<WorkerProvider["provision"]>[2]>["project"]>,
+  ) => Promise<void>;
   /** Provider-owned transport for repository lifecycle commands on an enrolled lease. */
   runSetupCommand?: (
     lease: { leaseId: string; profile: WorkerProfile },

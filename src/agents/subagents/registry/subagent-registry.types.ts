@@ -172,6 +172,8 @@ export type SubagentRunRecord = Omit<SubagentRunReadRecord, "execution" | "colle
   requesterTurnRunId?: string;
   /** Durable proof that this requester attempt invoked sessions_yield. */
   requesterTurnYielded?: true;
+  /** This yield waits for its requester, rather than owned child completions. */
+  waitForMessage?: true;
   /** Completion-producing row retirement deferred until requesterTurnRunId settles. */
   retireAfterRequesterTurn?: boolean;
   requesterOrigin?: DeliveryContext;

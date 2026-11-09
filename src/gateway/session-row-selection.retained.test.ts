@@ -3,8 +3,11 @@ import type { SessionsListParams } from "../../packages/gateway-protocol/src/ind
 import * as pinPolicy from "../config/sessions/session-pin-policy.js";
 import type { InternalSessionEntry as SessionEntry } from "../config/sessions/types.js";
 import { createSessionIdentityProjection } from "./session-identity-projection.js";
+import { getSessionListBaseMiss } from "./session-list-diagnostics.js";
+import * as listFilters from "./session-list-filters.js";
 import type { SessionListFilteredEntries } from "./session-list-filters.js";
 import { SessionListViewCache } from "./session-list-view-cache.js";
+import { shareSidebarSessionRows } from "./session-row-presentation.js";
 import {
   create as createRow,
   identity,
@@ -14,6 +17,7 @@ import {
 import { createSessionRowSelection } from "./session-row-selection.js";
 import { selectSessionEntries } from "./session-utils-list.js";
 import { buildSessionListRowMetadataContext } from "./session-utils-projection.js";
+import type { GatewaySessionRow } from "./session-utils.types.js";
 
 const now = 1_800_000_000_000;
 const storePath = "/synthetic/retained.sqlite";
@@ -110,6 +114,7 @@ function fixture() {
       partitions: selected.partitions,
       retained,
       getTarget: selected.get,
+      modelSearchMayMatch: () => false,
       configuredAgentIds: selected.configuredAgentIds,
       getRowContext: () => context,
       userProfileIdentityById: context.userProfileIdentityById,
@@ -191,6 +196,7 @@ it("keeps sidebar baselines when fixed query partitions advance through many rev
     state.put(`agent:main:retention-${index}`, {
       sessionId: String(index),
       updatedAt: now + index,
+      archivedAt: index % 2 ? 0 : undefined,
     });
   }
   const cache = new SessionListViewCache();
@@ -205,7 +211,7 @@ it("keeps sidebar baselines when fixed query partitions advance through many rev
   };
   try {
     const initialBytes = queries.map((opts) => read(opts).bytes);
-    const partitions = state.selection.read().partitions!;
+    const partitions = state.selection.read().partitions!.filter((part) => part.entries.size);
     const keys = partitions.map((partition) => partition.entries.keys().next().value!);
     // Keep old revision tokens live: pruning must follow the owner, never collection.
     const oldRevisions: object[] = [];
@@ -238,6 +244,136 @@ it("keeps sidebar baselines when fixed query partitions advance through many rev
   }
 });
 
+it("keeps concurrent audience baselines under a daytime roster's selection pressure", () => {
+  const state = fixture();
+  for (let index = 0; index < 25_000; index++) {
+    state.put(`agent:main:day-${index}`, {
+      sessionId: String(index),
+      updatedAt: now + index,
+      lastInteractionAt: now + index,
+    });
+  }
+  const queries = new Map<string, SessionsListParams>();
+  // Seventy connections share 22 audiences; equal audience/query keys share a view.
+  for (let connection = 0; connection < 70; connection++) {
+    for (const sortBy of ["updatedAt", "lastInteractionAt", "activity"] as const) {
+      queries.set(`${connection % 22}:${sortBy}`, { sortBy, archived: "all", limit: 200 });
+    }
+  }
+  const cache = new SessionListViewCache();
+  const controls = new Map<string, SessionListViewCache>();
+  const baselines = new Map<string, string>();
+  const presented = new WeakMap<SessionEntry, GatewaySessionRow>();
+  let unknownBases = 0;
+  const differentReplies: string[] = [];
+  try {
+    for (let round = 0; round < 2; round++) {
+      if (round) {
+        const key = "agent:main:day-24999";
+        state.put(key, { ...state.rows.get(key)!.entry, updatedAt: now + 25_000 });
+      }
+      for (const [key, opts] of queries) {
+        const selection = cache.get(`selection:${key}`);
+        selection.selection = state.select(state.selection, opts, cache.partitions(selection));
+        cache.update(selection);
+        const rows = selection.selection.entries.map(([rowKey, entry]) => {
+          let row = presented.get(entry);
+          if (!row) {
+            row = Object.freeze({ key: rowKey, kind: "direct", updatedAt: entry.updatedAt });
+            presented.set(entry, row);
+          }
+          return row;
+        });
+        const view = cache.get(`rows:${key}`);
+        cache.setRows(view, rows, true);
+        const control = controls.get(key) ?? new SessionListViewCache();
+        controls.set(key, control);
+        const witness = control.get(key);
+        control.setRows(witness, rows, true);
+        const baseline = baselines.get(key);
+        const actual = shareSidebarSessionRows(rows, baseline, view.rowHistory);
+        const expected = shareSidebarSessionRows(rows, baseline, witness.rowHistory);
+        if (round) {
+          unknownBases += Number(getSessionListBaseMiss(actual) === "unknown-base");
+          if (JSON.stringify(actual) !== JSON.stringify(expected)) {
+            differentReplies.push(key);
+          }
+          expect(expected.rowsDelta?.order).toHaveLength(200);
+          expect(expected.sessions).toHaveLength(1);
+        }
+        baselines.set(key, `delta:${actual.rowsRevision}`);
+      }
+    }
+    expect(unknownBases).toBe(0);
+    expect(differentReplies).toEqual([]);
+  } finally {
+    cache.clear();
+    controls.forEach((control) => control.clear());
+  }
+});
+
+it("reads only the requested archive partitions without an eager roster copy", () => {
+  const state = fixture();
+  for (let index = 0; index < 1024; index++) {
+    state.put(`agent:main:stream-${index}`, {
+      sessionId: String(index),
+      updatedAt: index,
+      archivedAt: index % 2 ? 0 : undefined,
+    });
+  }
+  const partitions = state.selection.read().partitions!;
+  const largestPartition = Math.max(...partitions.map((part) => part.entries.size));
+  let archived: boolean | "all" = false;
+  let read = 0;
+  const spies = partitions.flatMap((part) => {
+    const visit = (entry: SessionEntry) => {
+      expect(entry.archivedAt !== undefined).toBe(part.archived);
+      expect(archived === "all" || part.archived === archived).toBe(true);
+      read++;
+    };
+    const each = part.entries.forEach.bind(part.entries);
+    const direct = vi.spyOn(part.entries, "forEach").mockImplementation((callback) => {
+      each((pair, key, map) => {
+        visit(pair[1]);
+        callback(pair, key, map);
+      });
+    });
+    const values = part.entries.values.bind(part.entries);
+    const iterated = vi.spyOn(part.entries, "values").mockImplementation(function* () {
+      for (const pair of values()) {
+        visit(pair[1]);
+        yield pair;
+      }
+      return undefined;
+    });
+    return [direct, iterated];
+  });
+  let filtered = 0;
+  const filter = listFilters.filterSessionEntries;
+  using _ = vi.spyOn(listFilters, "filterSessionEntries").mockImplementation((params) => {
+    expect(read).toBe(filtered);
+    const result = filter(params);
+    expect(read - filtered).toBeLessThanOrEqual(largestPartition);
+    filtered = read;
+    return result;
+  });
+  try {
+    for (archived of [false, true, "all"] as const) {
+      read = filtered = 0;
+      const result = state.select(state.selection, { archived, limit: 10 }, new Map());
+      expect(result.totalCount).toBe(archived === "all" ? 1024 : 512);
+      expect(read).toBe(result.totalCount);
+      expect(result.entries.map(([, entry]) => entry.sessionId)).toEqual(
+        Array.from({ length: 10 }, (_value, index) =>
+          String(1023 - Number(archived === false) - index * (archived === "all" ? 1 : 2)),
+        ),
+      );
+    }
+  } finally {
+    spies.forEach((spy) => spy.mockRestore());
+  }
+});
+
 it("reads only the requested page from retained ordered partitions", () => {
   const state = fixture();
   const count = 10_800;
@@ -256,8 +392,7 @@ it("reads only the requested page from retained ordered partitions", () => {
     const retained = new Map<object, SessionListFilteredEntries>();
     state.select(state.selection, opts, retained);
     const reads = { entries: 0, ownerEntries: 0 };
-    for (const partition of state.selection.read().partitions!) {
-      const part = retained.get(partition.revision)!;
+    for (const part of retained.values()) {
       for (const field of ["entries", "ownerEntries"] as const) {
         part[field] = new Proxy(part[field], {
           get(target, key, receiver) {
@@ -283,8 +418,8 @@ it("reads only the requested page from retained ordered partitions", () => {
       nextOffset: (opts.offset ?? 0) + opts.limit,
     });
     expect(result.ownerFacet.map((owner) => owner.id)).toEqual(["ada", "bob"]);
-    expect(reads.entries).toBeLessThanOrEqual((opts.offset ?? 0) + opts.limit + 64);
-    expect(reads.ownerEntries).toBeLessThanOrEqual(owned.length + 64);
+    expect(reads.entries).toBeLessThanOrEqual((opts.offset ?? 0) + opts.limit + retained.size);
+    expect(reads.ownerEntries).toBeLessThanOrEqual(owned.length + retained.size);
     expect(pins).toHaveBeenCalledTimes(reads.entries + reads.ownerEntries);
   }
 });
@@ -336,6 +471,8 @@ it.for([0x12e7, 0x4b91])("matches fresh selection after seeded write sequences (
     ),
     ...([
       { label: "alpha" },
+      { search: "alpha" },
+      { search: "nonexistent" },
       { boardFace: "dashboard" },
       { group: "work" },
       { projectId: "one" },
