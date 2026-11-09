@@ -17,6 +17,7 @@ import { runCliProcessChild } from "../cli/cli-process-child.test-helpers.js";
 import { runStartupConfigPreflight } from "../commands/startup-config-preflight.js";
 import { resetConfigRuntimeState } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { CronJob } from "../cron/types.js";
 import { resetDatabaseEngineSelectionForTest } from "../infra/database-engine/context.test-support.js";
 import { migrateLegacyDesktopStreamOptOuts } from "../infra/device-pairing-node-desktop-migration.js";
 import { acquireGatewayLock } from "../infra/gateway-lock.js";
@@ -325,12 +326,15 @@ describe.skipIf(!connection)("Gateway PostgreSQL shared-state bootstrap", () => 
     }));
 
   it(
-    "keeps a completed retained one-shot disabled after its Gateway process is killed",
+    "recovers completed and interrupted one-shots after their Gateway process is killed",
     { timeout: 90_000 },
     async ({ signal }) => {
       await using resources = new AsyncDisposableStack();
       const prompt = "Report the retained one-shot result.";
       const summary = "Retained one-shot completed.";
+      const unfinishedPrompt = "Report the unfinished one-shot result.";
+      const accepted = createDeferred<void>();
+      let holdUnfinished = true;
       const requests: string[] = [];
       const providerServer = createServer((request, response) => {
         void (async () => {
@@ -338,7 +342,14 @@ describe.skipIf(!connection)("Gateway PostgreSQL shared-state bootstrap", () => 
             response.writeHead(404).end();
             return;
           }
-          requests.push(await readRequestText(request));
+          const body = await readRequestText(request);
+          requests.push(body);
+          if (holdUnfinished && body.includes(unfinishedPrompt)) {
+            holdUnfinished = false;
+            // Leave the accepted response open; a duplicate must finish so replay fails visibly.
+            accepted.resolve();
+            return;
+          }
           writeOpenAiResponsesText(response, {
             text: summary,
             messageId: "retained-one-shot-message",
@@ -458,6 +469,40 @@ describe.skipIf(!connection)("Gateway PostgreSQL shared-state bootstrap", () => 
       const owners = await readOwner();
       expect(owners).toHaveLength(1);
       expect(JSON.parse(owners[0]!.payload_json)).toMatchObject({ owner: { pid: firstChild.pid } });
+      const unfinishedJob = await gateway.request<{ id: string }>("cron.add", {
+        name: "unfinished-one-shot",
+        agentId: "main",
+        enabled: true,
+        deleteAfterRun: false,
+        schedule: { kind: "at", at: new Date(Date.now() - 1_000).toISOString() },
+        sessionTarget: "isolated",
+        wakeMode: "now",
+        payload: { kind: "agentTurn", message: unfinishedPrompt },
+        delivery: { mode: "none" },
+        failureAlert: { after: 1, cooldownMs: 0 },
+      });
+      // Omit the completion wait: the process must die with accepted, unfinished work.
+      const unfinishedRun = await gateway.request<{ runId: string }>("cron.run", {
+        id: unfinishedJob.id,
+        mode: "force",
+      });
+      expect(unfinishedRun).toMatchObject({ enqueued: true, runId: expect.any(String) });
+      await withinTest(accepted.promise, signal);
+      const activeJob = await gateway.request<CronJob>("cron.get", { id: unfinishedJob.id });
+      expect(activeJob).toMatchObject({
+        enabled: true,
+        state: { runningAtMs: expect.any(Number), runningReceiptId: expect.any(String) },
+      });
+      const readUnfinishedReceipt = () =>
+        queryRows<{ receipt_id: string; request_run_id: string; status: string }>(
+          `SELECT receipt_id, request_run_id, status FROM ${quoteIdentifier(anchor.namespace)}.cron_run_receipts WHERE job_id = $1`,
+          [unfinishedJob.id],
+        );
+      const receipt = {
+        receipt_id: activeJob.state.runningReceiptId,
+        request_run_id: unfinishedRun.runId,
+      };
+      expect(await readUnfinishedReceipt()).toEqual([{ ...receipt, status: "running" }]);
       await instance.crashGateway();
       expect(firstChild.signalCode).toBe("SIGKILL");
       await disconnectGatewayClient(gateway);
@@ -537,10 +582,44 @@ describe.skipIf(!connection)("Gateway PostgreSQL shared-state bootstrap", () => 
       expect(history.entries).toEqual([
         expect.objectContaining({ runId: run.runId, status: "ok", completionStatus: "succeeded" }),
       ]);
+      const interruptedError = "cron: job interrupted by gateway restart";
+      const recovered = await restarted.request<CronJob>("cron.get", { id: unfinishedJob.id });
+      expect(recovered).toMatchObject({
+        enabled: false,
+        state: {
+          lastRunStatus: "error",
+          lastStatus: "error",
+          lastError: interruptedError,
+          lastDelivered: false,
+          lastDeliveryStatus: "unknown",
+          lastFailureNotificationDeliveryStatus: "not-requested",
+        },
+      });
+      expect(recovered.state.runningAtMs).toBeUndefined();
+      expect(recovered.state.runningReceiptId).toBeUndefined();
+      expect(recovered.state.nextRunAtMs).toBeUndefined();
+      expect(recovered.state.consecutiveErrors).toBe(activeJob.state.consecutiveErrors);
+      expect(recovered.state.failureAlertIncident).toBeUndefined();
+      const interruptedHistory = await restarted.request<{ entries: unknown[] }>("cron.runs", {
+        id: unfinishedJob.id,
+        limit: 10,
+      });
+      expect(interruptedHistory.entries).toEqual([
+        expect.objectContaining({
+          runId: unfinishedRun.runId,
+          status: "error",
+          completionStatus: "failed",
+          error: interruptedError,
+          delivered: false,
+          deliveryStatus: "unknown",
+        }),
+      ]);
+      expect(await readUnfinishedReceipt()).toEqual([{ ...receipt, status: "interrupted" }]);
       await disconnectGatewayClient(restarted);
       await instance.stopGateway();
       expect(await readAnchor(current)).toEqual(anchor);
       expect(requests.filter((body) => body.includes(prompt))).toHaveLength(1);
+      expect(requests.filter((body) => body.includes(unfinishedPrompt))).toHaveLength(1);
       expect(requests.filter((body) => body.includes(probePrompt))).toHaveLength(1);
       const jobs = await queryRows<{ enabled: string; job_json: string }>(
         `SELECT enabled, job_json FROM ${quoteIdentifier(anchor.namespace)}.cron_jobs WHERE job_id = $1`,
@@ -561,6 +640,15 @@ describe.skipIf(!connection)("Gateway PostgreSQL shared-state bootstrap", () => 
         { status: "succeeded", terminal_summary: summary, detail_json: expect.any(String) },
       ]);
       expect(JSON.parse(runs[0]!.detail_json)).toMatchObject({ runId: run.runId });
+      const interruptedRuns = await queryRows<{ status: string; detail_json: string }>(
+        `SELECT status, detail_json FROM ${quoteIdentifier(anchor.namespace)}.task_runs WHERE runtime = 'cron' AND source_id = $1`,
+        [unfinishedJob.id],
+      );
+      expect(interruptedRuns).toEqual([{ status: "failed", detail_json: expect.any(String) }]);
+      expect(JSON.parse(interruptedRuns[0]!.detail_json)).toMatchObject({
+        runId: unfinishedRun.runId,
+        error: interruptedError,
+      });
     },
   );
 
