@@ -32,6 +32,8 @@ export type PluginRuntimeLoadContext = {
   logger: PluginLogger;
   manifestRegistry?: PluginManifestRegistry;
   metadataSnapshot?: PluginMetadataSnapshot;
+  /** Alias identity used for the registered callbacks, including metadata-free lookups. */
+  normalizePluginId?: PluginLoadOptions["normalizePluginId"];
   installRecords?: Record<string, PluginInstallRecord>;
   preferBuiltPluginArtifacts?: boolean;
   expectedSourceDigests?: PluginLoadOptions["expectedSourceDigests"];
@@ -78,6 +80,7 @@ export function setPluginRuntimeLoadContext(
   const bound = {
     ...context,
     environmentKey: context.environmentKey ?? captureEnvironmentKey(context.env),
+    normalizePluginId: previous ? previous.normalizePluginId : context.normalizePluginId,
     activationInputFingerprint: activationInputFingerprint(context.rawConfig, context.env),
     ...(capturedIdentity ? { loaderCacheIdentity: capturedIdentity } : {}),
     // Selection belongs to the generation that registered these closures, not later metadata.

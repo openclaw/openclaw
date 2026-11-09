@@ -168,6 +168,7 @@ function bindRuntimeLoadContext(
       logger,
       manifestRegistry,
       selectedContextEngine,
+      normalizePluginId: options.normalizePluginId,
       metadataSnapshot:
         context.metadataSnapshot?.manifestRegistry === manifestRegistry
           ? context.metadataSnapshot
