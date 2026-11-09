@@ -1,4 +1,5 @@
 import type { PluginRuntime } from "openclaw/plugin-sdk/core";
+import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import type { CoreConfig } from "../types.js";
 import { hasPendingDiscussionOpenForDestination } from "./binding-generation.js";
 import {
@@ -10,6 +11,9 @@ import { resolveDiscussionBindingAccount } from "./eligibility.js";
 import { discussionSessionKey } from "./naming.js";
 import { prepareClickClackDiscussionChannelRevocation } from "./revoked-channel-store.js";
 import { prepareDiscussionSessionEntry } from "./session-authority.js";
+
+// The plugin child logger never reaches stdout, where container operators look.
+const discussionsLog = createSubsystemLogger("clickclack/discussions");
 
 export async function resolveClickClackDiscussionRoute(params: {
   runtime: PluginRuntime;
@@ -73,11 +77,9 @@ export async function resolveClickClackDiscussionRoute(params: {
         binding: matched.binding,
       });
     } catch (error) {
-      params.runtime.logging
-        .getChildLogger({ plugin: "clickclack", feature: "discussions" })
-        .warn(
-          `discussion attachment refresh failed for channel ${params.channelId}: ${String(error)}`,
-        );
+      discussionsLog.warn(
+        `discussion attachment refresh failed for channel ${params.channelId}: ${String(error)}`,
+      );
       return { state: "revoked" };
     }
     if (!binding) {

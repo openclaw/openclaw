@@ -5,6 +5,7 @@ import {
 } from "openclaw/plugin-sdk/command-detection";
 import type { PluginRuntime } from "openclaw/plugin-sdk/core";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { setLoggerOverride } from "openclaw/plugin-sdk/runtime-env";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   getClickClackDiscussionBindingStore,
@@ -181,35 +182,37 @@ describe("ClickClack inbound mention gating", () => {
   });
 
   it("records attachment persistence failures before dropping inbound delivery", async () => {
-    const mainSessionKey = "agent:research:main";
-    const bindingStore = getClickClackDiscussionBindingStore(runtime);
-    await bindDiscussion({ sessionId: "old-session-id" });
-    const persisted = runtime.state.openSyncKeyedStore<ClickClackDiscussionBinding>({
-      namespace: "discussion-bindings",
-      maxEntries: 10_000,
-      overflowPolicy: "reject-new",
-    });
-    persisted.register = vi.fn(() => {
-      throw new Error("SQLITE_FULL");
-    });
+    setLoggerOverride({ level: "silent", consoleLevel: "warn", consoleStyle: "compact" });
+    const consoleWarn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    try {
+      const mainSessionKey = "agent:research:main";
+      const bindingStore = getClickClackDiscussionBindingStore(runtime);
+      await bindDiscussion({ sessionId: "old-session-id" });
+      const persisted = runtime.state.openSyncKeyedStore<ClickClackDiscussionBinding>({
+        namespace: "discussion-bindings",
+        maxEntries: 10_000,
+        overflowPolicy: "reject-new",
+      });
+      persisted.register = vi.fn(() => {
+        throw new Error("SQLITE_FULL");
+      });
 
-    const currentConfig = createInboundDiscussionConfig() satisfies CoreConfig;
-    await handleCurrent(
-      discussionAccount({ replyMode: "model" }),
-      { body: "Old discussion" },
-      currentConfig,
-    );
+      const currentConfig = createInboundDiscussionConfig() satisfies CoreConfig;
+      await handleCurrent(
+        discussionAccount({ replyMode: "model" }),
+        { body: "Old discussion" },
+        currentConfig,
+      );
 
-    expect(runtime.channel.inbound.dispatch).not.toHaveBeenCalled();
-    expect(bindingStore.get(mainSessionKey)).toMatchObject({ sessionId: "old-session-id" });
-    const children = vi.mocked(runtime.logging.getChildLogger).mock;
-    const loggerCall = children.calls.findIndex(
-      ([context]) => context?.plugin === "clickclack" && context.feature === "discussions",
-    );
-    const logger = children.results[loggerCall]?.value;
-    expect(logger?.warn).toHaveBeenCalledWith(
-      "discussion attachment refresh failed for channel chn_1: Error: SQLITE_FULL",
-    );
+      expect(runtime.channel.inbound.dispatch).not.toHaveBeenCalled();
+      expect(bindingStore.get(mainSessionKey)).toMatchObject({ sessionId: "old-session-id" });
+      expect(consoleWarn.mock.calls.flat().join("\n")).toMatch(
+        /discussion attachment refresh failed for channel chn_1: Error: SQLITE_FULL/su,
+      );
+    } finally {
+      consoleWarn.mockRestore();
+      setLoggerOverride(null);
+    }
   });
 
   it.each<{
