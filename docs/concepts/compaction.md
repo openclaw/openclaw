@@ -215,6 +215,24 @@ history but keeps fixed instructions and tools.
 
 Configure compaction under `agents.defaults.compaction` in your `openclaw.json`. The most common knobs are listed below; for the full reference, see [Session management deep dive](/reference/session-management-compaction).
 
+### Compaction summary size
+
+A persisted compaction summary (the generated body plus the "Recent turns preserved verbatim" and split-turn sections, tool failures, file operations, and post-compaction workspace sections) is capped at 16,000 characters by default. On long-context models this cap often truncates summaries that would otherwise fit in the window. Set `agents.defaults.compaction.maxSummaryChars` to raise or lower it (1,000–200,000):
+
+```json
+{
+  "agents": {
+    "defaults": {
+      "compaction": {
+        "maxSummaryChars": 64000
+      }
+    }
+  }
+}
+```
+
+The preserved-turns and split-turn sections scale with the configured cap (half of it each), and the foreground prompt's token-budget check against the active model window stays in place, so a larger value cannot overflow the window: the finalizer still shrinks the artifact until it fits beside the prompt and retained history.
+
 ### Using a different model
 
 The built-in OpenClaw runtime starts compaction with the active session model. Set `agents.defaults.compaction.model` to select a different summarization model. The override accepts a `provider/model-id` string or a bare alias configured under `agents.defaults.models`:

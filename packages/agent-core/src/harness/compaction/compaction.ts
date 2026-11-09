@@ -1,5 +1,4 @@
 import type { Model, ModelRequestHeaders, StreamFn, Usage } from "@openclaw/llm-core";
-import { estimateStringTokenPressure } from "@openclaw/normalization-core/cjk-chars";
 import { sliceUtf16Safe, truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { AgentCoreCompletionRuntimeDeps } from "../../runtime-deps.js";
 import type { AgentMessage, ThinkingLevel } from "../../types.js";
@@ -17,6 +16,12 @@ import {
   MAX_LATEST_USER_REQUEST_CHARS,
   parseCompactionDetails,
 } from "./compaction-details.js";
+import {
+  capCompactionSummary,
+  fitCompactionSummary,
+  MAX_COMPACTION_SUMMARY_CHARS,
+  SUMMARY_TRUNCATED_MARKER,
+} from "./compaction-summary-limits.js";
 import { resolveCompactionThreshold } from "./compaction-threshold.js";
 import { runSummarizationCompletion } from "./summarization-completion.js";
 import { buildSummaryCheckpointPrompt } from "./summary-checkpoint-prompt.js";
@@ -54,10 +59,13 @@ export interface CompactionResult<T = unknown> {
   details?: T;
 }
 
-// Persisted summaries replay on every later request, so their owner enforces
-// this provider-independent 16K hard bound.
-export const MAX_COMPACTION_SUMMARY_CHARS = 16_000;
-export const SUMMARY_TRUNCATED_MARKER = "\n\n[Compaction summary truncated to fit budget]";
+// The summary cap is configurable (default 16K); see compaction-summary-limits.
+export {
+  capCompactionSummary,
+  fitCompactionSummary,
+  MAX_COMPACTION_SUMMARY_CHARS,
+  SUMMARY_TRUNCATED_MARKER,
+};
 const TURN_CONTEXT_PREFIX = "\n\n---\n\n**Turn Context (split turn):**\n\n";
 const LATEST_USER_REQUEST_TRUNCATED_MARKER = "\n[... latest user request truncated ...]\n";
 const MAX_REQUIRED_ASK_CONTEXT_CHARS = 2_000;
@@ -90,59 +98,6 @@ export function formatRequiredAskContext(rawAsk: string): string {
   return `${truncateUtf16Safe(source, headBudget)}${REQUIRED_ASK_CONTEXT_TRUNCATED_MARKER}${sliceUtf16Safe(source, -tailBudget)}`;
 }
 
-export function capCompactionSummary(
-  summary: string,
-  maxChars = MAX_COMPACTION_SUMMARY_CHARS,
-  preservedSuffix = "",
-) {
-  if (maxChars <= 0 || summary.length <= maxChars) {
-    return summary;
-  }
-  const suffix = preservedSuffix && summary.endsWith(preservedSuffix) ? preservedSuffix : "";
-  if (maxChars < SUMMARY_TRUNCATED_MARKER.length + suffix.length) {
-    return truncateUtf16Safe(summary, maxChars);
-  }
-  const budget = maxChars - SUMMARY_TRUNCATED_MARKER.length - suffix.length;
-  const prefix = suffix ? summary.slice(0, -suffix.length) : summary;
-  return `${truncateUtf16Safe(prefix, budget)}${SUMMARY_TRUNCATED_MARKER}${suffix}`;
-}
-
-/** Let each summary owner preserve its structure before checking the foreground token budget. */
-export function fitCompactionSummary<T extends { summary: string }>(
-  tokenBudget: number | undefined,
-  render: (maxChars: number) => T | undefined,
-): Result<T, CompactionError> {
-  const fits = (candidate: T) =>
-    tokenBudget === undefined || estimateStringTokenPressure(candidate.summary) <= tokenBudget;
-  const full = render(MAX_COMPACTION_SUMMARY_CHARS);
-  if (full && fits(full)) {
-    return ok(full);
-  }
-  let low = 1;
-  let high = MAX_COMPACTION_SUMMARY_CHARS - 1;
-  let fitted: T | undefined;
-  while (low <= high) {
-    const mid = Math.floor((low + high) / 2);
-    const candidate = render(mid);
-    if (!candidate) {
-      low = mid + 1;
-    } else if (fits(candidate)) {
-      fitted = candidate;
-      low = mid + 1;
-    } else {
-      high = mid - 1;
-    }
-  }
-  return fitted
-    ? ok(fitted)
-    : err(
-        new CompactionError(
-          "summarization_failed",
-          "The compaction summary cannot fit beside the foreground prompt and retained history.",
-        ),
-      );
-}
-
 export interface CompactionSettings {
   /** Enable automatic compaction decisions. */
   enabled: boolean;
@@ -150,12 +105,15 @@ export interface CompactionSettings {
   reserveTokens: number;
   /** Approximate recent-context tokens to keep after compaction. */
   keepRecentTokens: number;
+  /** Max characters for a single persisted compaction summary (default 16,000). */
+  maxSummaryChars?: number;
 }
 
 export const DEFAULT_COMPACTION_SETTINGS: CompactionSettings = {
   enabled: true,
   reserveTokens: 16384,
   keepRecentTokens: 20000,
+  maxSummaryChars: MAX_COMPACTION_SUMMARY_CHARS,
 };
 
 export function calculateContextTokens(usage: Usage): number {
@@ -739,7 +697,9 @@ function finalizeCompaction(
       ? `## Latest unresolved user request\n${JSON.stringify(preparation.latestUnresolvedUserRequest)}\n\n`
       : ""
   }`;
-  const fitted = fitCompactionSummary(preparation.summaryTokenBudget, (maxChars) => {
+  const fitted = fitCompactionSummary(
+    preparation.summaryTokenBudget,
+    (maxChars) => {
     const requiredChars = fileOperations.length + requiredPrefix.length;
     if (maxChars <= requiredChars + SUMMARY_TRUNCATED_MARKER.length) {
       return undefined;
@@ -769,7 +729,9 @@ function finalizeCompaction(
         suffix,
       )}`,
     };
-  });
+    },
+    preparation.settings.maxSummaryChars ?? MAX_COMPACTION_SUMMARY_CHARS,
+  );
   if (!fitted.ok) {
     return fitted;
   }

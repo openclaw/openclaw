@@ -353,6 +353,8 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
               ? createCompactionRequestBudget({
                   contextWindow,
                   reserveTokens: this.settingsManager.getCompactionSettings().reserveTokens,
+                  maxSummaryChars:
+                    this.settingsManager.getCompactionSettings().maxSummaryChars,
                   systemPrompt: this.agent.state.systemPrompt,
                   tools: this.agent.state.tools,
                   pendingPrompt: expandedText,

@@ -4,6 +4,7 @@ import { parseCompactionDetails } from "../../../packages/agent-core/src/harness
 import {
   capCompactionSummary,
   compactWithoutSummary,
+  MAX_COMPACTION_SUMMARY_CHARS,
 } from "../../../packages/agent-core/src/harness/compaction/compaction.js";
 import { InvalidSummaryOutputError } from "../../../packages/agent-core/src/harness/types.js";
 import { withSessionTranscriptWriteAssertion } from "../../config/sessions/transcript-write-context.js";
@@ -494,7 +495,10 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
 
     const completedCompaction = {
       ...compactionResult,
-      summary: capCompactionSummary(compactionResult.summary),
+      summary: capCompactionSummary(
+        compactionResult.summary,
+        options.settings.maxSummaryChars ?? MAX_COMPACTION_SUMMARY_CHARS,
+      ),
     };
 
     // Custom hooks may choose a different retained boundary. Validate their
@@ -706,6 +710,7 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
             ? createCompactionRequestBudget({
                 contextWindow,
                 reserveTokens: settings.reserveTokens,
+                maxSummaryChars: settings.maxSummaryChars,
                 systemPrompt: this.agent.state.systemPrompt,
                 tools: this.agent.state.tools,
               })

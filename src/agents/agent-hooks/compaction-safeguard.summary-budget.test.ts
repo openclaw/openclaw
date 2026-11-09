@@ -14,7 +14,7 @@ import {
   testing,
 } from "./compaction-safeguard.test-support.js";
 
-const { MAX_COMPACTION_SUMMARY_CHARS } = testing;
+const { MAX_COMPACTION_SUMMARY_CHARS, resolveSplitTurnContextChars } = testing;
 const CJK_PROSE = "迁移记录需要保留已确认的部署决策与运行状态。";
 const REQUIRED_ASK = `confirm the rollout status for ${Array.from(
   { length: 160 },
@@ -91,5 +91,27 @@ describe("compaction-safeguard mixed-script summary budget", () => {
     expect(summary.length).toBeLessThanOrEqual(MAX_COMPACTION_SUMMARY_CHARS);
     expect(mockSummarizeCompactionHistory).toHaveBeenCalledTimes(1);
     expect(consumeCompactionSafeguardCancellation(sessionManager)).toBeNull();
+  });
+
+  it.each([48_000, 64_000])("keeps a long summary under the configured %s cap", async (maxChars) => {
+    mockSummarizeCompactionHistory.mockResolvedValue(structuredSummary({ decisions: "d".repeat(30_000) }));
+    const sessionManager = createQualityGuardSessionManager({
+      qualityGuardMaxRetries: 0,
+      maxSummaryChars: maxChars,
+    });
+    const event = createCompactionEvent({ messageText: "summarize me" });
+
+    const { result } = await runCompactionScenario(sessionManager, event);
+
+    const { summary } = expectCompactionResult(result);
+    expect(summary.length).toBeGreaterThan(MAX_COMPACTION_SUMMARY_CHARS);
+    expect(summary.length).toBeLessThanOrEqual(maxChars);
+    expect(summary).toContain("d".repeat(100));
+  });
+
+  it("derives the split-turn budget from the configured cap", () => {
+    expect(resolveSplitTurnContextChars(16_000)).toBe(8_000);
+    expect(resolveSplitTurnContextChars(48_000)).toBe(24_000);
+    expect(resolveSplitTurnContextChars(64_000)).toBe(32_000);
   });
 });

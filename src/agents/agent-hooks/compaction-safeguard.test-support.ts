@@ -14,10 +14,12 @@ type CompactionSafeguardTestApi = {
   buildCompactionStructureInstructions: CallableFunction;
   resolveRecentTurnsPreserve: CallableFunction;
   resolveQualityGuardMaxRetries: CallableFunction;
+  resolveSplitTurnContextChars: CallableFunction;
   extractOpaqueIdentifiers: CallableFunction;
   auditSummaryQuality: CallableFunction;
   capCompactionSummary: CallableFunction;
   budgetCompactionSummary: CallableFunction;
+  resolveCompactionSummaryMaxChars: CallableFunction;
   MAX_COMPACTION_SUMMARY_CHARS: number;
   SUMMARY_TRUNCATED_MARKER: string;
   CONTEXT_TRUNCATED_MARKER: string;

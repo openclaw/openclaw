@@ -1,4 +1,7 @@
-import { MAX_COMPACTION_SUMMARY_CHARS } from "../../../../packages/agent-core/src/harness/compaction/compaction.js";
+import {
+  MAX_COMPACTION_SUMMARY_CHARS,
+  resolveCompactionSummaryMaxChars,
+} from "../../../../packages/agent-core/src/harness/compaction/compaction-summary-limits.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import type { PromptOptions } from "../agent-session-types.js";
 import {
@@ -12,6 +15,8 @@ export type CompactionRequestBudget = Readonly<{
   reserveTokens: number;
   fixedTokens: number;
   pendingTokens: number;
+  /** Configured summary cap used to reserve tokens for the finalized artifact. */
+  maxSummaryChars?: number;
   /** Known queue reservation, replaced by the SDK's projected queue at submission. */
   pendingQueuedContextTokens?: number;
   /** Overlap credit applies only to the user body, never newly added context. */
@@ -59,6 +64,7 @@ export function takePromptCompactionRequestBudget(
 export function createCompactionRequestBudget(params: {
   contextWindow: number;
   reserveTokens: number;
+  maxSummaryChars?: number;
   systemPrompt?: string;
   tools?: readonly { name: string; description: string; parameters: unknown }[];
   fixedTokenPressure?: FixedRequestTokenPressure;
@@ -94,6 +100,11 @@ export function createCompactionRequestBudget(params: {
   return {
     contextWindow: params.contextWindow,
     reserveTokens: params.reserveTokens,
+    // Omitted when unset so budgets without a configured cap keep their exact
+    // shape for existing consumers; readers fall back to the default cap.
+    ...(params.maxSummaryChars === undefined
+      ? {}
+      : { maxSummaryChars: resolveCompactionSummaryMaxChars(params.maxSummaryChars) }),
     fixedTokens,
     pendingUserIdempotencyKey: params.pendingUserIdempotencyKey,
     pendingTokens: pendingUserTokens + additionalContextTokens,
@@ -188,7 +199,7 @@ export function resolveCompactionRetentionBudget(
   const summaryTokens = estimateCompactionHistoryTokens([
     {
       role: "compactionSummary",
-      summary: "x".repeat(MAX_COMPACTION_SUMMARY_CHARS),
+      summary: "x".repeat(budget.maxSummaryChars ?? MAX_COMPACTION_SUMMARY_CHARS),
       tokensBefore: 0,
       timestamp: 0,
     },

@@ -405,6 +405,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "agents.defaults.compaction.provider": "Compaction Provider",
   "agents.defaults.compaction.thinkingLevel": "Compaction Thinking Level",
   "agents.defaults.compaction.keepRecentTokens": "Compaction Keep Recent Tokens",
+  "agents.defaults.compaction.maxSummaryChars": "Compaction Max Summary Chars",
   "agents.defaults.compaction.identifierPolicy": "Compaction Identifier Policy",
   "agents.defaults.compaction.recentTurnsPreserve": "Compaction Preserve Recent Turns",
   "agents.defaults.compaction.qualityGuard": "Compaction Quality Guard",

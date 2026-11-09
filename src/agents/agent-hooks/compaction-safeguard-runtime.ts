@@ -16,6 +16,8 @@ type CompactionSafeguardRuntimeValue = {
    */
   model?: Model;
   recentTurnsPreserve?: number;
+  /** Max chars for the finalized compaction artifact; falls back to compaction settings. */
+  maxSummaryChars?: number;
   workspaceDir?: string;
   postCompactionSections?: string[];
   qualityGuardEnabled?: boolean;

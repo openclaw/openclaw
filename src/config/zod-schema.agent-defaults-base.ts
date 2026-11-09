@@ -146,6 +146,13 @@ export const AgentDefaultsBaseSchema = z.strictObject({
       thinkingLevel: z.union([AgentThinkingLevelSchema, z.literal("inherit")]).optional(),
       /** Embedded OpenClaw keepRecentTokens budget used for cut-point selection. */
       keepRecentTokens: z.number().int().positive().optional(),
+      /**
+       * Max characters kept for a persisted compaction summary. Safeguard
+       * preserved-turn and split-turn sections scale with this cap; the
+       * foreground token-budget check still bounds the final artifact.
+       * Default: 16000.
+       */
+      maxSummaryChars: z.number().int().min(1000).max(200_000).optional(),
       /** Identifier-preservation instruction policy for compaction summaries. */
       identifierPolicy: z.union([z.literal("strict"), z.literal("off")]).optional(),
       /** Preserve this many most-recent user/assistant turns verbatim in compaction summary context. */

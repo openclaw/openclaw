@@ -15,7 +15,32 @@ describe("SettingsManager runtime overrides", () => {
       enabled: false,
       reserveTokens: 50_000,
       keepRecentTokens: 16_000,
+      maxSummaryChars: 16_000,
     });
+  });
+
+  it("returns the 16000 default when maxSummaryChars is unset", () => {
+    const settingsManager = SettingsManager.inMemory();
+    expect(settingsManager.getCompactionMaxSummaryChars()).toBe(16_000);
+    expect(settingsManager.getCompactionSettings().maxSummaryChars).toBe(16_000);
+  });
+
+  it("applies and clamps a configured maxSummaryChars", () => {
+    expect(
+      SettingsManager.inMemory({ compaction: { maxSummaryChars: 48_000 } }).getCompactionMaxSummaryChars(),
+    ).toBe(48_000);
+    expect(
+      SettingsManager.inMemory({ compaction: { maxSummaryChars: 10 } }).getCompactionMaxSummaryChars(),
+    ).toBe(1_000);
+    expect(
+      SettingsManager.inMemory({ compaction: { maxSummaryChars: 1_000_000 } }).getCompactionMaxSummaryChars(),
+    ).toBe(200_000);
+    expect(
+      SettingsManager.inMemory({ compaction: { maxSummaryChars: -5 } }).getCompactionMaxSummaryChars(),
+    ).toBe(16_000);
+    expect(
+      SettingsManager.inMemory({ compaction: { maxSummaryChars: Number.NaN } }).getCompactionMaxSummaryChars(),
+    ).toBe(16_000);
   });
 
   it("keeps mutable defaults separate from a shared frozen input", () => {

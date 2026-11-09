@@ -93,4 +93,17 @@ describe("createCompactionRequestBudget", () => {
       pendingQueuedContextTokens: 0,
     });
   });
+
+  it("stores the resolved maxSummaryChars only when configured", () => {
+    expect(
+      createCompactionRequestBudget({ contextWindow: 100, reserveTokens: 10 }).maxSummaryChars,
+    ).toBeUndefined();
+    expect(
+      createCompactionRequestBudget({
+        contextWindow: 100,
+        reserveTokens: 10,
+        maxSummaryChars: 48_000,
+      }).maxSummaryChars,
+    ).toBe(48_000);
+  });
 });

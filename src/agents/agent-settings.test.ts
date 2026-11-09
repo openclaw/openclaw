@@ -114,6 +114,28 @@ describe("applyAgentCompactionSettingsFromConfig", () => {
     });
   });
 
+  it("applies maxSummaryChars when explicitly configured", () => {
+    const { settingsManager, applyOverrides } = applyReserve(20_000, undefined, {
+      maxSummaryChars: 48_000,
+    });
+    expect(settingsManager.getCompactionMaxSummaryChars()).toBe(48_000);
+    expect(applyOverrides).toHaveBeenCalledWith({
+      compaction: { maxSummaryChars: 48_000 },
+    });
+  });
+
+  it("preserves current maxSummaryChars when the config omits it", () => {
+    const settingsManager = SettingsManager.inMemory({
+      compaction: { maxSummaryChars: 32_000 },
+    });
+    const applyOverrides = vi.spyOn(settingsManager, "applyOverrides");
+    applySettings({ settingsManager, cfg: compactionConfig({ mode: "safeguard" }) });
+    expect(settingsManager.getCompactionMaxSummaryChars()).toBe(32_000);
+    expect(applyOverrides).not.toHaveBeenCalledWith(
+      expect.objectContaining({ compaction: expect.objectContaining({ maxSummaryChars: expect.anything() }) }),
+    );
+  });
+
   it("preserves current keepRecentTokens when safeguard mode leaves it unset", () => {
     const { settingsManager, applyOverrides } = applyReserve(25_000, undefined, {
       mode: "safeguard",
@@ -131,6 +153,7 @@ describe("applyAgentCompactionSettingsFromConfig", () => {
       enabled: true,
       reserveTokens: 4_096,
       keepRecentTokens: 20_000,
+      maxSummaryChars: 16_000,
     });
     expect(shouldCompact(1, 16_384, settingsManager.getCompactionSettings())).toBe(false);
   });
@@ -207,6 +230,7 @@ describe("applyAgentAutoCompactionGuard", () => {
       enabled: false,
       reserveTokens: 50_000,
       keepRecentTokens: 20_000,
+      maxSummaryChars: 16_000,
     });
   });
 

@@ -19,12 +19,14 @@ export function applyAgentCompactionSettingsFromConfig(params: {
 }): void {
   const currentReserveTokens = params.settingsManager.getCompactionReserveTokens();
   const currentKeepRecentTokens = params.settingsManager.getCompactionKeepRecentTokens();
+  const currentMaxSummaryChars = params.settingsManager.getCompactionMaxSummaryChars();
   const compactionCfg = params.cfg?.agents?.defaults?.compaction;
   // Omission preserves embedded/project settings. OpenClaw config reloads create a new
   // prepared manager; same-manager resource reloads reuse cfg and reapply explicit values.
   const configuredEnabled = compactionCfg?.enabled;
 
   const configuredKeepRecentTokens = compactionCfg?.keepRecentTokens;
+  const configuredMaxSummaryChars = compactionCfg?.maxSummaryChars;
   const contextTokenBudget = floorPositiveFiniteNumber(params.contextTokenBudget);
   const requestedReserveTokens = Math.max(
     currentReserveTokens,
@@ -39,13 +41,21 @@ export function applyAgentCompactionSettingsFromConfig(params: {
           reserveTokens: requestedReserveTokens,
         });
   const targetKeepRecentTokens = configuredKeepRecentTokens ?? currentKeepRecentTokens;
+  const targetMaxSummaryChars = configuredMaxSummaryChars ?? currentMaxSummaryChars;
 
-  const overrides: { reserveTokens?: number; keepRecentTokens?: number } = {};
+  const overrides: {
+    reserveTokens?: number;
+    keepRecentTokens?: number;
+    maxSummaryChars?: number;
+  } = {};
   if (targetReserveTokens !== currentReserveTokens) {
     overrides.reserveTokens = targetReserveTokens;
   }
   if (targetKeepRecentTokens !== currentKeepRecentTokens) {
     overrides.keepRecentTokens = targetKeepRecentTokens;
+  }
+  if (targetMaxSummaryChars !== currentMaxSummaryChars) {
+    overrides.maxSummaryChars = targetMaxSummaryChars;
   }
 
   const shouldApplyEnabled =
