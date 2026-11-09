@@ -867,10 +867,17 @@ it("commits rows before paint when an uncompensated extent shrink clamps the rea
 it("holds deferred reader compensation without interrupting native scrolling", async () => {
   const { host, viewport, virtualizer } = await mountPane();
   // The observer's receipt can arrive after this row leaves the mounted window.
-  requireElement(host, '.chat-virtual-row[data-index="2"]').style.height = "150px";
+  // Its physical height must survive a later overscan remount.
+  const style = document.createElement("style");
+  style.textContent =
+    '.geometry-transcript-fixture .chat-virtual-row[data-index="2"] { height: 150px; }';
+  host.append(style);
   scrollReader(viewport, 480);
   expect(virtualizer.isScrolling).toBe(true);
   expect(virtualizer.scrollDirection).toBe("forward");
+  // A delayed measurement can restore preceding overscan after the movement window.
+  const now = performance.now.bind(performance);
+  vi.spyOn(performance, "now").mockImplementation(() => now() + 110);
   const inner = requireElement(host, ".chat-thread-inner");
   const height = Number.parseFloat(inner.style.height);
   const paint = vi.fn();
