@@ -73,6 +73,15 @@ afterEach(async () => {
 });
 
 describe("isStaleChunkImportError", () => {
+  it.each([
+    ["Importing a module script failed.", true],
+    ["Failed to fetch dynamically imported module: /assets/lazy.js", true],
+    ["error loading dynamically imported module: /assets/lazy.js", true],
+    ["Load failed", false],
+  ])("classifies the browser TypeError %s", (message, expected) => {
+    expect(isStaleChunkImportError(new TypeError(message))).toBe(expected);
+  });
+
   it.each([false, true])(
     "leaves route recovery to its retry owner (persistent failure: %s)",
     async (persistent) => {
@@ -738,7 +747,10 @@ describe("retryStaleChunkReloadWhenReachable single-shot", () => {
 
       expect(fetchMock).toHaveBeenCalledExactlyOnceWith(
         `${location.origin}${resourceBase}/index.html`,
-        expect.objectContaining({ method: "HEAD", cache: "no-store" }),
+        expect.objectContaining({
+          cache: "no-store",
+          headers: { "X-OpenClaw-Reachability-Probe": "1" },
+        }),
       );
       expect(replace).toHaveBeenCalledOnce();
       const destination = new URL(replace.mock.calls[0]![0]);

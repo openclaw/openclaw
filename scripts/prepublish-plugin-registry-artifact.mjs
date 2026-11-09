@@ -4,6 +4,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { compareReleaseVersions } from "./lib/release-version.mjs";
 
 export const PREPUBLISH_PLUGIN_REGISTRY_MANIFEST = "prepublish-plugin-registry.json";
 const SCHEMA = "openclaw.prepublish-plugin-registry/v1";
@@ -132,6 +133,17 @@ function validateManifestShape(manifest) {
   }
 }
 
+function validateRegistryPackageTarball(artifactDir, entry) {
+  const tarball = path.join(artifactDir, entry.tarball);
+  if (sha256File(tarball) !== entry.sha256) {
+    throw new Error(`prepublish plugin registry tarball SHA-256 mismatch for ${entry.name}`);
+  }
+  const packageJson = readTarballPackageJson(tarball);
+  if (packageJson.name !== entry.name || packageJson.version !== entry.version) {
+    throw new Error(`prepublish plugin registry tarball identity mismatch for ${entry.name}`);
+  }
+}
+
 /**
  * @param {ValidatePrepublishPluginRegistryParams} params
  * @returns {{ manifest: PrepublishPluginRegistryManifest, manifestPath: string, manifestSha256: string }}
@@ -187,14 +199,7 @@ export function validatePrepublishPluginRegistryArtifact(params) {
     );
   }
   for (const entry of manifest.packages) {
-    const tarball = path.join(artifactDir, entry.tarball);
-    if (sha256File(tarball) !== entry.sha256) {
-      throw new Error(`prepublish plugin registry tarball SHA-256 mismatch for ${entry.name}`);
-    }
-    const packageJson = readTarballPackageJson(tarball);
-    if (packageJson.name !== entry.name || packageJson.version !== entry.version) {
-      throw new Error(`prepublish plugin registry tarball identity mismatch for ${entry.name}`);
-    }
+    validateRegistryPackageTarball(artifactDir, entry);
   }
   return { manifest, manifestPath, manifestSha256 };
 }
@@ -272,7 +277,72 @@ function readPreparedRegistryPackages(preparedBundleDir, sourceSha, candidateVer
     candidateVersion,
     packages: entries,
   });
+  for (const entry of entries) {
+    validateRegistryPackageTarball(preparedBundleDir, entry);
+  }
   return entries;
+}
+
+function assertCompatibleRuntimePlugins(repoRoot, sourceSha, candidateVersion, requiredPackages) {
+  const policyPath = "src/plugins/official-runtime-plugins.ts";
+  const trackedPolicy = execFileSync("git", ["ls-tree", sourceSha, "--", policyPath], {
+    cwd: repoRoot,
+    encoding: "utf8",
+  }).trim();
+  // Older selected releases have no runtime floor. Untracked files cannot add one.
+  if (!trackedPolicy) {
+    return;
+  }
+  if (!/^100(?:644|755) blob /u.test(trackedPolicy)) {
+    throw new Error("selected runtime plugin policy must be a tracked regular file");
+  }
+  // This selected-source module is import-free, erasable TS. A fresh process avoids
+  // reusing a cached policy when a synchronous caller advances the same checkout.
+  const candidates = JSON.parse(
+    execFileSync(
+      process.execPath,
+      [
+        "--input-type=module",
+        "--eval",
+        `import { pathToFileURL } from "node:url";
+const { CONFIGURED_RUNTIME_PLUGIN_INSTALL_CANDIDATES: candidates } = await import(pathToFileURL(process.argv[1]).href);
+if (!Array.isArray(candidates)) throw new Error("selected runtime plugin policy must export an install candidate array");
+process.stdout.write(JSON.stringify(candidates));`,
+        path.join(repoRoot, policyPath),
+      ],
+      { cwd: repoRoot, encoding: "utf8", timeout: 10_000, stdio: ["ignore", "pipe", "pipe"] },
+    ),
+  );
+  for (const candidate of candidates) {
+    if (
+      !candidate ||
+      typeof candidate.npmSpec !== "string" ||
+      (candidate.versionBoundToOpenClaw !== undefined &&
+        typeof candidate.versionBoundToOpenClaw !== "boolean")
+    ) {
+      throw new Error("selected runtime plugin policy contains an invalid install candidate");
+    }
+    if (
+      !candidate.versionBoundToOpenClaw ||
+      !requiredPackages.includes(candidate.npmSpec) ||
+      candidate.minimumCompatibleVersion === undefined
+    ) {
+      continue;
+    }
+    const floor = candidate.minimumCompatibleVersion;
+    const comparison =
+      typeof floor === "string" &&
+      floor === floor.trim() &&
+      typeof candidateVersion === "string" &&
+      candidateVersion === candidateVersion.trim()
+        ? compareReleaseVersions(candidateVersion, floor)
+        : null;
+    if (comparison === null || comparison < 0) {
+      throw new Error(
+        `${candidate.npmSpec} candidate ${candidateVersion} does not satisfy selected-source minimum ${String(floor)} at ${sourceSha}; align the release cohort before packaging`,
+      );
+    }
+  }
 }
 
 export function createPrepublishPluginRegistryArtifact(params) {
@@ -300,10 +370,6 @@ export function createPrepublishPluginRegistryArtifact(params) {
   if (rootPackage.version !== params.candidateVersion) {
     throw new Error("root package version differs from the requested candidate version");
   }
-  fs.mkdirSync(outputDir, { recursive: true });
-  if (fs.readdirSync(outputDir).length !== 0) {
-    throw new Error(`prepublish plugin registry output directory must be empty: ${outputDir}`);
-  }
   const packages = params.preparedBundleDir
     ? readPreparedRegistryPackages(
         params.preparedBundleDir,
@@ -311,6 +377,26 @@ export function createPrepublishPluginRegistryArtifact(params) {
         params.candidateVersion,
       )
     : [];
+  const pluginSources = requiredPackages.flatMap((packageName) => {
+    if (packages.some((entry) => entry.name === packageName)) {
+      return [];
+    }
+    const { packageDir, packageJson } = findPublishablePlugin(repoRoot, packageName);
+    if (packageJson.version !== params.candidateVersion) {
+      throw new Error(`${packageName} version differs from the root package candidate`);
+    }
+    return [{ packageName, packageDir }];
+  });
+  assertCompatibleRuntimePlugins(
+    repoRoot,
+    params.sourceSha,
+    params.candidateVersion,
+    requiredPackages,
+  );
+  fs.mkdirSync(outputDir, { recursive: true });
+  if (fs.readdirSync(outputDir).length !== 0) {
+    throw new Error(`prepublish plugin registry output directory must be empty: ${outputDir}`);
+  }
   for (const entry of packages) {
     fs.copyFileSync(
       path.join(params.preparedBundleDir, entry.tarball),
@@ -318,14 +404,7 @@ export function createPrepublishPluginRegistryArtifact(params) {
       fs.constants.COPYFILE_EXCL,
     );
   }
-  for (const packageName of requiredPackages) {
-    if (packages.some((entry) => entry.name === packageName)) {
-      continue;
-    }
-    const { packageDir, packageJson } = findPublishablePlugin(repoRoot, packageName);
-    if (packageJson.version !== params.candidateVersion) {
-      throw new Error(`${packageName} version differs from the root package candidate`);
-    }
+  for (const { packageName, packageDir } of pluginSources) {
     const before = new Set(fs.readdirSync(outputDir));
     const buildAndPack = path.join(repoRoot, "scripts/lib/plugin-npm-build-and-pack.mts");
     if (fs.existsSync(buildAndPack)) {

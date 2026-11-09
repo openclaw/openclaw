@@ -6,27 +6,26 @@ export function createIdleImport<T>(importModule: () => Promise<T>, onLoaded?: (
   let onlineRetryAttempted = false;
   let stopOnline: (() => void) | undefined;
 
-  const requireActive = () => {
-    if (!active) {
-      throw new DOMException("Idle import disposed", "AbortError");
-    }
-  };
-
   const run = (): Promise<T> => {
     moduleLoad ??= importModule()
-      .catch(async (error: unknown) => {
-        const { retryFailedControlUiImport } = await import("../app/stale-chunk-reload.ts");
-        return retryFailedControlUiImport(error, () => {
-          requireActive();
-          return importModule();
-        });
-      })
+      .catch((error: unknown) =>
+        import("../app/stale-chunk-reload.ts").then((recovery) =>
+          recovery.retryFailedControlUiImport(error, () => {
+            if (!active) {
+              throw error;
+            }
+            return importModule();
+          }),
+        ),
+      )
       .then((value) => {
-        if (onLoaded) {
-          requireActive();
-        }
         stopOnline?.();
-        onLoaded?.(value);
+        if (active) {
+          onLoaded?.(value);
+        } else if (onLoaded) {
+          // Reactivation must deliver the callback; existing callers keep this result.
+          moduleLoad = null;
+        }
         return value;
       })
       .catch((error: unknown) => {

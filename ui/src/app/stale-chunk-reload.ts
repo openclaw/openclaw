@@ -53,7 +53,7 @@ const unavailableStorage = {};
 let importReachability: Promise<boolean> | undefined;
 // A shared probe can release automatic and manual recovery in the same microtask.
 // Admit one navigation before either path can replace the guard or reload.
-let inFlightDocumentProbe: Promise<boolean> | null = null;
+let inFlightDocumentProbe: Promise<{ sameBuild: boolean } | null> | null = null;
 
 // These browser errors identify failed assets, not whether the deployed build changed.
 export function isStaleChunkImportError(error: unknown): error is Error {
@@ -118,7 +118,7 @@ function controlUiDocumentUrl(): string {
   return url.href;
 }
 
-function probeControlUiDocument(): Promise<boolean> {
+function probeControlUiDocument(): Promise<{ sameBuild: boolean } | null> {
   if (inFlightDocumentProbe) {
     return inFlightDocumentProbe;
   }
@@ -127,13 +127,23 @@ function probeControlUiDocument(): Promise<boolean> {
     const timeout = setTimeout(() => controller.abort(), DOCUMENT_PROBE_TIMEOUT_MS);
     try {
       const response = await fetch(controlUiDocumentUrl(), {
-        method: "HEAD",
         cache: "no-store",
+        headers: { "X-OpenClaw-Reachability-Probe": "1" },
         signal: controller.signal,
       });
-      return response.ok;
+      if (!response.ok) {
+        return null;
+      }
+      // Public-asset/cache stamps can survive updates; use the full build identity.
+      const encoded = /globalThis\.OPENCLAW_CONTROL_UI_BUILD_INFO=(.*?);<\/script>/u.exec(
+        await response.text(),
+      )?.[1];
+      const buildInfo: unknown = encoded ? JSON.parse(encoded) : null;
+      return {
+        sameBuild: isRecord(buildInfo) && buildInfo.buildId === CONTROL_UI_BUILD_INFO.buildId,
+      };
     } catch {
-      return false;
+      return null;
     } finally {
       clearTimeout(timeout);
     }
@@ -226,43 +236,18 @@ export async function scheduleStaleChunkReload(deps: StaleChunkReloadDeps = {}):
     recoveryByStorage.set(storageIdentity, target);
     // Reachability is shared by build, not owned by the first caller's connection.
     // Each caller checks its current authority at the reload below.
-    const wait = () => {
-      const reachable = waitForReachableControlUiDocument(
-        { timeoutMs: deps.buildId === undefined ? Infinity : undefined },
+    const wait = () =>
+      waitForReachableControlUiDocument(
+        {
+          timeoutMs: deps.buildId === undefined ? Infinity : undefined,
+          checkServingBuild: deps.checkServingBuild,
+        },
         () =>
           recoveryByStorage.get(storageIdentity) === target &&
           target.buildId === buildId &&
           canReloadControlUiDocument(),
         controller.signal,
       );
-      if (!target.checkServingBuild) {
-        return reachable;
-      }
-      return reachable.then(async (available) => {
-        if (!available) {
-          return false;
-        }
-        try {
-          const response = await fetch(controlUiDocumentUrl(), {
-            cache: "no-store",
-            headers: { "X-OpenClaw-Reachability-Probe": "1" },
-            signal: AbortSignal.timeout(DOCUMENT_PROBE_TIMEOUT_MS),
-          });
-          if (!response.ok) {
-            return false;
-          }
-          // Public-asset/cache stamps can survive updates; use the full build identity.
-          const encoded = /globalThis\.OPENCLAW_CONTROL_UI_BUILD_INFO=(.*?);<\/script>/u.exec(
-            await response.text(),
-          )?.[1];
-          const buildInfo: unknown = encoded ? JSON.parse(encoded) : null;
-          return !isRecord(buildInfo) || buildInfo.buildId !== CONTROL_UI_BUILD_INFO.buildId;
-        } catch {
-          // A second interruption cannot justify replacing a usable document.
-          return false;
-        }
-      });
-    };
     const delayMs = Math.max(
       guardDelayMs,
       deps.buildId === undefined ? 0 : Math.floor(Math.random() * BUILD_RELOAD_JITTER_MS),
@@ -361,13 +346,13 @@ async function waitForReachableControlUiDocument(
     const reachable = await raceWithTimeout(
       probeControlUiDocument,
       remaining > 0 ? Math.min(remaining, DOCUMENT_PROBE_TIMEOUT_MS) : DOCUMENT_PROBE_TIMEOUT_MS,
-      () => false,
+      () => null,
     );
     if (signal?.aborted || !isCurrent()) {
       return false;
     }
     if (reachable) {
-      return true;
+      return !deps.checkServingBuild || !reachable.sameBuild;
     }
     const remainingWait = deadline - performance.now();
     if (remainingWait <= 0) {

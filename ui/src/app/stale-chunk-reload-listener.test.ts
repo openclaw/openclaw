@@ -28,11 +28,9 @@ describe("installStaleChunkReloadListener", () => {
     vi.stubGlobal(
       "fetch",
       vi.fn<typeof fetch>(
-        async (_input, init) =>
+        async () =>
           new Response(
-            init?.method === "HEAD"
-              ? null
-              : `<script>globalThis.OPENCLAW_CONTROL_UI_BUILD_INFO=${JSON.stringify(CONTROL_UI_BUILD_INFO)};</script>`,
+            `<script>globalThis.OPENCLAW_CONTROL_UI_BUILD_INFO=${JSON.stringify(CONTROL_UI_BUILD_INFO)};</script>`,
           ),
       ),
     );
@@ -53,34 +51,30 @@ describe("installStaleChunkReloadListener", () => {
     async (action) => {
       const replace = stubDocumentNavigation();
       const document = deferred<Response>();
-      const fetchMock = vi.fn<typeof fetch>(async (_input, init) =>
-        init?.method === "HEAD" ? new Response(null) : document.promise,
-      );
+      const fetchMock = vi.fn<typeof fetch>(() => document.promise);
       vi.stubGlobal("fetch", fetchMock);
       const uninstall = installStaleChunkReloadListener();
       try {
         dispatchPreloadError(new Error("Importing a module script failed."));
         await vi.advanceTimersByTimeAsync(0);
-        expect(fetchMock).toHaveBeenCalledTimes(2);
-        if (action === "dismiss") {
-          cancelStaleChunkRecovery();
-        } else {
-          await expect(scheduleStaleChunkReload()).resolves.toBe(true);
-        }
+        expect(fetchMock).toHaveBeenCalledOnce();
+        const recovery =
+          action === "dismiss" ? cancelStaleChunkRecovery() : scheduleStaleChunkReload();
         document.resolve(
           new Response(
             '<script>globalThis.OPENCLAW_CONTROL_UI_BUILD_INFO={"buildId":"new-build"};</script>',
           ),
         );
+        if (recovery) {
+          await expect(recovery).resolves.toBe(true);
+        }
         await vi.advanceTimersByTimeAsync(0);
         expect(replace).toHaveBeenCalledTimes(action === "dismiss" ? 0 : 1);
         if (action === "dismiss") {
           fetchMock.mockImplementation(
-            async (_input, init) =>
+            async () =>
               new Response(
-                init?.method === "HEAD"
-                  ? null
-                  : '<script>globalThis.OPENCLAW_CONTROL_UI_BUILD_INFO={"buildId":"new-build"};</script>',
+                '<script>globalThis.OPENCLAW_CONTROL_UI_BUILD_INFO={"buildId":"new-build"};</script>',
               ),
           );
           dispatchPreloadError(new Error("Importing a module script failed."));

@@ -29,16 +29,39 @@ afterEach(() => {
 });
 
 describe("createIdleImport", () => {
-  it("settles a shared successful import when one consumer retires", async () => {
-    const pending = createDeferred<typeof loadedModule>();
-    const shared = createIdleImport(() => pending.promise);
-    const first = shared.load();
-    const second = shared.load();
-    shared.dispose();
-    pending.resolve(loadedModule);
-    await expect(first).resolves.toBe(loadedModule);
-    await expect(second).resolves.toBe(loadedModule);
-  });
+  it.each([false, true])(
+    "settles a shared import after disposal (callback: %s)",
+    async (callback) => {
+      const pending = createDeferred<typeof loadedModule>();
+      const shared = createIdleImport(() => pending.promise, callback ? onLoaded : undefined);
+      const first = shared.load();
+      const second = shared.load();
+      shared.dispose();
+      pending.resolve(loadedModule);
+      await expect(first).resolves.toBe(loadedModule);
+      await expect(second).resolves.toBe(loadedModule);
+      expect(onLoaded).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["load", "schedule"] as const)(
+    "delivers a disposed completion when reactivated through %s",
+    async (method) => {
+      const pending = createDeferred<typeof loadedModule>();
+      importModule.mockReturnValueOnce(pending.promise);
+      const first = idleImport.load();
+      idleImport.dispose();
+      pending.resolve(loadedModule);
+      await expect(first).resolves.toBe(loadedModule);
+      expect(onLoaded).not.toHaveBeenCalled();
+
+      await idleImport[method]();
+      await vi.runAllTimersAsync();
+      expect(onLoaded).toHaveBeenCalledExactlyOnceWith(loadedModule);
+      await expect(idleImport.load()).resolves.toBe(loadedModule);
+      expect(onLoaded).toHaveBeenCalledOnce();
+    },
+  );
 
   it.each([false, true])(
     "waits out an import outage without retrying a disposed owner (%s)",

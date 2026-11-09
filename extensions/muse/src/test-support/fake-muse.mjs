@@ -143,6 +143,13 @@ createInterface({ input: process.stdin }).on("line", (line) => {
       } else if (prompt === "loggedout") {
         // Muse 1.3 reports a missing credential this way.
         fail("authRequired", "not logged in: run /login to add an API key");
+      } else if (prompt === "quota") {
+        complete("failed", {
+          kind: "modelError",
+          message: "fixture quota exhausted",
+          retryable: false,
+          quota: { limitKind: "tierLimit", resetsAtMs: Date.UTC(2030, 0, 2, 3, 4) },
+        });
       } else if (["approval", "approval-settle", "approval-deny-only"].includes(prompt)) {
         const denyOnly = prompt === "approval-deny-only";
         event("approval/requested", {

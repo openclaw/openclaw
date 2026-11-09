@@ -4,6 +4,12 @@
  *   --output .local/checkpoint-candidate --mode owner --requests 2048 --burst 64
  * Add --revision <base-sha> to load the original owner/callers without changing
  * the checkout. Run fresh processes in AB/BA order; each owns synthetic state.
+ * --mode turn-loop runs ten real sandbox finalizations per turn, with eight unchanged
+ * commands and two synthetic guest edits. Only engine I/O is faked at execContainer.
+ * Use --requests 5 --burst 1 --files 62000 --file-bytes 19050 --transcript-mib 35840;
+ * --reuse-fixture reopens it for A/A and interleaved A/B runs. Each changed command
+ * must publish its bytes before finalization returns. This is owner proof, not
+ * native Podman/btrfs or model/Gateway latency. Engine pause delays are not simulated.
  * --mode file-read uses the same Gateway with a real Docker guest continuously
  * writing its private projection. Use --requests 30 --burst 1 --read-interval-ms 2000
  * --files 62000 --file-bytes 19050 for a minute of Control UI file reads. Reports
@@ -300,6 +306,7 @@ assert(
       "owner",
       "gateway",
       "file-read",
+      "turn-loop",
       "maintenance",
       "publication",
       "heartbeat",
@@ -308,6 +315,8 @@ assert(
 );
 assert(!values.absent || values.mode !== "owner");
 const fileReads = values.mode === "file-read";
+const turnLoop = values.mode === "turn-loop";
+assert(!turnLoop || Number(values.burst) === 1);
 const gatewayMode = values.mode === "gateway" || fileReads;
 const readIntervalMs = Number(values["read-interval-ms"]);
 assert(Number.isSafeInteger(readIntervalMs) && readIntervalMs >= 0);
@@ -371,7 +380,7 @@ const siblingWorktrees = Number(values["sibling-worktrees"]);
 assert(Number.isSafeInteger(siblingWorktrees) && siblingWorktrees >= 0);
 assert(!siblingWorktrees || serialTurns);
 const reuseFixture = values["reuse-fixture"];
-assert(!reuseFixture || values.mode === "preparation" || fileReads);
+assert(!reuseFixture || values.mode === "preparation" || fileReads || turnLoop);
 const requests = Number(values.requests),
   burst = Number(values.burst),
   files = Number(values.files),
@@ -381,7 +390,7 @@ const fileBytes = Number(values["file-bytes"]);
 assert(Number.isSafeInteger(fileBytes) && fileBytes >= 0);
 const transcriptMiB = Number(values["transcript-mib"]);
 assert(Number.isSafeInteger(transcriptMiB) && transcriptMiB >= 0);
-assert(!transcriptMiB || values.mode === "preparation" || fileReads);
+assert(!transcriptMiB || values.mode === "preparation" || fileReads || turnLoop);
 for (const value of [requests, burst, files, port, worktrees]) {
   assert(Number.isSafeInteger(value) && value > 0);
 }
@@ -434,7 +443,10 @@ if (values["agent-storage-dir"] && !reuseFixture) {
 const root = fileURLToPath(new URL("../../", import.meta.url));
 const owners = [
   "src/gateway/worker-environments/local-workspace-projection.ts",
+  "src/gateway/worker-environments/local-workspace-manifest-scan.ts",
+  "src/gateway/worker-environments/workspace-actual-manifest.ts",
   "src/agents/sandbox/local-workspace.ts",
+  "src/agents/sandbox/local-workspace-quiescence.ts",
   "src/gateway/server-methods/sessions-files.ts",
   "src/gateway/server-methods/session-file-read.ts",
   "src/gateway/server-methods/session-files-root.ts",
@@ -463,6 +475,10 @@ let acquisitions = 0,
   probes = 0;
 const custodyDurationsMs: number[] = [];
 const containerCommands: string[] = [];
+const finalizations: Array<{ changed: boolean; durationMs: number; pauses: number }> = [];
+let fakePauses = 0;
+let fakePaused = false;
+const fakeContainerId = "a".repeat(64);
 const guestTicks: Array<{ at: number; gapMs: number }> = [];
 const guestHeartbeats = new EventEmitter();
 const nextGuestHeartbeat = () =>
@@ -471,6 +487,29 @@ const manifestReads: Array<{ kind: string; target?: string; bytes: number }> = [
 const leaseSources = new Map<string, { scope: string; stack: string; calls: number }>();
 Object.assign(globalThis, {
   __containerCommandMeasure: (command: string) => containerCommands.push(command),
+  __turnEngine: (args: string[]) => {
+    containerCommands.push(args[0]!);
+    if (args[0] === "pause") {
+      assert(!fakePaused, "Cannot pause an already-paused fixture");
+      fakePaused = true;
+      fakePauses++;
+    } else if (args[0] === "unpause") {
+      assert(fakePaused, "Cannot resume a running fixture");
+      fakePaused = false;
+    } else {
+      assert.equal(args[0], "inspect", `Unexpected engine command: ${args.join(" ")}`);
+    }
+    return {
+      code: 0,
+      stderr: "",
+      stdout:
+        args[0] !== "inspect"
+          ? ""
+          : args[2] === "{{.State.Paused}}"
+            ? String(fakePaused)
+            : `${fakeContainerId} true ${fakePaused}`,
+    };
+  },
   __manifestReadMeasure: (action: { kind: string; target?: string }, bytes: number) =>
     manifestReads.push({ kind: action.kind, target: action.target, bytes }),
   __custodyDurationMeasure: (durationMs: number) => custodyDurationsMs.push(durationMs),
@@ -498,6 +537,15 @@ registerHooks({
   load(url, context, nextLoad) {
     const relative = url.startsWith("file:") ? path.relative(root, fileURLToPath(url)) : "";
     let code = source.get(relative);
+    if (turnLoop && relative === "src/agents/sandbox/container-engine.ts") {
+      code = fs.readFileSync(path.join(root, relative), "utf8");
+      const anchor = "export async function execContainer(";
+      const start = code.indexOf(anchor);
+      assert(start >= 0);
+      const body = code.indexOf("  let result;", start);
+      assert(body >= 0);
+      code = code.slice(0, body) + "  return globalThis.__turnEngine(args);\n" + code.slice(body);
+    }
     if (fileReads && relative === "src/agents/sandbox/container-engine.ts") {
       code = fs.readFileSync(path.join(root, relative), "utf8");
       const anchor = "let result;\n  try {";
@@ -827,6 +875,7 @@ const clients: Array<import("../../src/gateway/client.js").GatewayClient> = [];
 const handlerDurations: number[] = [];
 let stopRpcDiagnostics = () => {};
 let stopLeaseDiagnostics = () => {};
+let turnProjection: Awaited<ReturnType<typeof prepareLocalSandboxWorkspace>>;
 let guestName: string | undefined;
 let guestProcess: ReturnType<typeof spawn> | undefined;
 let guestExited: Promise<void> | undefined;
@@ -858,7 +907,7 @@ measurement: try {
     void heartbeatDone.catch(ready.reject);
     heartbeatLease = await ready.promise;
   }
-  if (!reuseFixture && (gatewayMode || values.mode === "preparation")) {
+  if (!reuseFixture && (gatewayMode || values.mode === "preparation" || turnLoop)) {
     if (transcriptMiB) {
       const { seedTeamShapeSessions } = await import("./team-shape-sessions.ts");
       const database = agent.openOpenClawAgentDatabase({ agentId: "main" });
@@ -904,6 +953,84 @@ measurement: try {
       { agentId: "main", path: db.path },
     );
     await agent.closeOpenClawAgentDatabasesAsync();
+  }
+  let runTurn: (() => Promise<void>) | undefined;
+  if (turnLoop) {
+    assert(workspace);
+    const { bindLocalSandboxWorkspace } =
+      await import("../../src/agents/sandbox/local-workspace.js");
+    const { createSandboxTestContext } = await import("../../src/agents/sandbox/test-fixtures.js");
+    const { createHostSandboxFsBridge } =
+      await import("../../src/agents/test-helpers/host-sandbox-fs-bridge.js");
+    const backend: import("../../src/agents/sandbox/backend-handle.types.js").SandboxBackendHandle =
+      {
+        id: "docker",
+        runtimeId: "synthetic-turn",
+        runtimeLabel: "synthetic-turn",
+        workdir: "/workspace",
+        buildExecSpec: async () => ({ argv: [], env: {}, stdinMode: "pipe-closed" }),
+        runShellCommand: async () => {
+          throw new Error("Unexpected bridge command");
+        },
+      };
+    turnProjection = await prepareLocalSandboxWorkspace({
+      cfg: config,
+      agentId: owner.agentId,
+      sessionKey,
+      workspaceDir: canonical,
+      sandbox,
+    });
+    assert(turnProjection, "Turn must retain the real workspace owner");
+    const context = createSandboxTestContext({
+      overrides: {
+        backend,
+        workspaceDir: workspace,
+        fsBridge: createHostSandboxFsBridge(workspace),
+      },
+    });
+    bindLocalSandboxWorkspace(context, turnProjection);
+    await (
+      await import("../../src/agents/sandbox/registry.js")
+    ).updateRegistry({
+      containerName: "synthetic-turn",
+      backendId: "docker",
+      sessionKey,
+      workspaceDir: workspace,
+      workspaceSource: "managed-worktree",
+      image: "synthetic",
+      createdAtMs: 1,
+      lastUsedAtMs: 1,
+    });
+    let edit = 0;
+    runTurn = async () => {
+      for (let tool = 0; tool < 10; tool++) {
+        const spec = await backend.buildExecSpec({ command: "synthetic", env: {}, usePty: false });
+        const editedFile = Math.floor((files * (tool === 4 ? 1 : 2)) / 3);
+        const relative = `file-${editedFile}.txt`;
+        const content = tool === 4 || tool === 9 ? `synthetic edit ${++edit}\n` : undefined;
+        if (content) {
+          assert(!fakePaused, "Guest command cannot write while frozen");
+          fs.writeFileSync(path.join(workspace!, relative), content);
+        }
+        const began = performance.now(),
+          beforePauses = fakePauses;
+        await backend.finalizeExec!({
+          status: "completed",
+          exitCode: 0,
+          timedOut: false,
+          token: spec.finalizeToken,
+        });
+        finalizations.push({
+          changed: Boolean(content),
+          durationMs: performance.now() - began,
+          pauses: fakePauses - beforePauses,
+        });
+        assert(!fakePaused, "Finalization must resume the guest");
+        if (content) {
+          assert.equal(fs.readFileSync(path.join(canonical, relative), "utf8"), content);
+        }
+      }
+    };
   }
   if (fileReads) {
     assert(workspace);
@@ -1044,23 +1171,25 @@ measurement: try {
     return prepared.workspaceDir;
   };
   const runOne = (i: number) =>
-    gatewayMode
-      ? clients[i % clients.length]!.request(
-          fileReads ? "sessions.files.get" : "sessions.files.list",
-          { sessionKey, ...(fileReads ? { path: `/workspace/file-${i % files}.txt` } : {}) },
-        )
-      : values.mode === "preparation"
-        ? prepareWorkspace()
-        : values.mode === "maintenance"
-          ? sweep()
-          : values.mode === "publication"
-            ? projection.withSettledLocalWorkspace(
-                { worktree: owner.worktree, env: process.env },
-                async () => {},
-              )
-            : values.mode === "heartbeat"
-              ? heartbeatLease!.assertOwned().then(() => heartbeatLease!.renew())
-              : checkpoint();
+    turnLoop
+      ? runTurn!()
+      : gatewayMode
+        ? clients[i % clients.length]!.request(
+            fileReads ? "sessions.files.get" : "sessions.files.list",
+            { sessionKey, ...(fileReads ? { path: `/workspace/file-${i % files}.txt` } : {}) },
+          )
+        : values.mode === "preparation"
+          ? prepareWorkspace()
+          : values.mode === "maintenance"
+            ? sweep()
+            : values.mode === "publication"
+              ? projection.withSettledLocalWorkspace(
+                  { worktree: owner.worktree, env: process.env },
+                  async () => {},
+                )
+              : values.mode === "heartbeat"
+                ? heartbeatLease!.assertOwned().then(() => heartbeatLease!.renew())
+                : checkpoint();
   if (serialTurns) {
     const { snapshotSqliteReaderMetrics } =
       await import("../../src/infra/sqlite-reader-metrics.js");
@@ -1557,6 +1686,7 @@ measurement: try {
   probes = 0;
   custodyDurationsMs.length = 0;
   containerCommands.length = 0;
+  finalizations.length = 0;
   leaseSources.clear();
   const { onInternalDiagnosticEvent, waitForDiagnosticEventsDrained } =
     await import("../../src/infra/diagnostic-events.js");
@@ -1682,6 +1812,18 @@ measurement: try {
   const report = {
     mode: values.mode,
     harnessSha256,
+    turn: turnLoop
+      ? {
+          tools: 10,
+          changed: 2,
+          unchanged: 8,
+          pauses: containerCommands.filter((command) => command === "pause").length,
+          unpauses: containerCommands.filter((command) => command === "unpause").length,
+          filesystemType: fs.statfsSync(output).type,
+          engine: "synthetic execContainer seam; no injected delay",
+          finalizations,
+        }
+      : undefined,
     guest: fileReads
       ? {
           image: values["guest-image"],
@@ -1714,10 +1856,10 @@ measurement: try {
     transcriptMiB,
     separateAgentStorage: Boolean(values["agent-storage-dir"]),
     agentDatabaseBytes:
-      values.mode === "preparation" || fileReads
+      values.mode === "preparation" || fileReads || turnLoop
         ? fs.statSync(agent.openOpenClawAgentDatabase({ agentId: "main" }).path).size
         : undefined,
-    sessionRows: gatewayMode || values.mode === "preparation" ? 10_001 : 0,
+    sessionRows: gatewayMode || values.mode === "preparation" || turnLoop ? 10_001 : 0,
     worktrees: maintained.length,
     sources: Object.fromEntries(
       [...source].map(([file, code]) => [file, createHash("sha256").update(code).digest("hex")]),
@@ -1778,7 +1920,7 @@ measurement: try {
   }
   if (workspace) {
     fs.writeFileSync(path.join(workspace, "file-0.txt"), "fresh later guest write\n");
-    const refreshed = await runOne(0);
+    const refreshed = turnLoop ? await projection.checkpointLocalWorkspace(owner) : await runOne(0);
     if (fileReads) {
       assert.equal(
         (refreshed as { file?: { content?: string } }).file?.content,
@@ -1797,6 +1939,16 @@ measurement: try {
     }
   } else {
     assert.equal(fs.readFileSync(path.join(canonical, "file-0.txt"), "utf8"), initial);
+  }
+  if (turnLoop) {
+    fs.writeFileSync(path.join(workspace!, "file-0.txt"), initial);
+    for (const editedFile of [Math.floor(files / 3), Math.floor((2 * files) / 3)]) {
+      fs.writeFileSync(
+        path.join(workspace!, `file-${editedFile}.txt`),
+        `synthetic ${editedFile}\n`.padEnd(fileBytes, "."),
+      );
+    }
+    await projection.checkpointLocalWorkspace(owner);
   }
   let retainedMemory;
   if (values.instrument === "retention") {
@@ -1820,6 +1972,12 @@ measurement: try {
   fs.writeFileSync(path.join(output, values.report), JSON.stringify(verified, null, 2));
   console.log(JSON.stringify(verified));
 } finally {
+  turnProjection?.[Symbol.dispose]();
+  if (turnLoop) {
+    await (
+      await import("../../src/agents/sandbox/registry.js")
+    ).removeRegistryEntry("synthetic-turn");
+  }
   if (guestName) {
     // Only the named task fixture is stopped, including if an interrupted read left it paused.
     spawnSync("docker", ["unpause", guestName], { stdio: "ignore" });
