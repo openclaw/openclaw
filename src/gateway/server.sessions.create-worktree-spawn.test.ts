@@ -249,8 +249,9 @@ test.each([
   ["inherited", true],
   ["registered", false],
   ["github", false],
+  ["github", undefined],
 ] as const)(
-  "required visible spawn selects %s project (managed worktree: %s)",
+  "required visible spawn selects %s project (requested worktree: %s)",
   async (source, worktree) => {
     const { entry: parent } = await createManagedProjectParent(true);
     const projectName = worktree ? "tool-selected-project" : "sandbox-external-project";
@@ -266,14 +267,12 @@ test.each([
     try {
       const result = await spawn({
         // Sandbox rejection must not await unrelated automatic title generation.
-        label: worktree ? "Selected project child" : "Rejected project child",
+        label: "Selected project child",
         ...(source === "registered"
           ? { projectId: project.id }
           : source === "github"
             ? {
-                projectGitUrl: worktree
-                  ? "git@github.com:example/selected.git"
-                  : "https://github.com/example/restricted.git",
+                projectGitUrl: "git@github.com:example/selected.git",
               }
             : {}),
         ...(worktree
@@ -282,7 +281,7 @@ test.each([
               worktreeName: "selected-child",
               worktreeBaseRef: "main",
             }
-          : {}),
+          : { worktree }),
       }).catch((error: unknown) => {
         creationError = error;
         return undefined;
@@ -294,28 +293,20 @@ test.each([
         await settleWorkspaceRuns(context, storePath, childKey);
       }
       const child = childKey ? readEntry(childKey) : undefined;
-      if (!worktree) {
-        if (source === "registered") {
-          expect(creationError).toMatchObject({
-            message: expect.stringContaining("outside the sandboxed agent workspace"),
-          });
-          expect(childKey).toBeUndefined();
-          expect(bindChild).not.toHaveBeenCalled();
-          expect(registerRun).not.toHaveBeenCalled();
-        } else {
-          expect(creationError).toBeUndefined();
-          expect(child).toMatchObject({ sandbox: "required", status: "failed" });
-          expect(child?.lastRunError).toContain("outside the sandboxed agent workspace");
-        }
+      if (source === "registered" && !worktree) {
+        expect(creationError).toMatchObject({
+          message: expect.stringContaining("outside the sandboxed agent workspace"),
+        });
+        expect(childKey).toBeUndefined();
+        expect(bindChild).not.toHaveBeenCalled();
+        expect(registerRun).not.toHaveBeenCalled();
         expect(createWorktree).not.toHaveBeenCalled();
-        if (childKey) {
-          expect(await managedWorktrees.findLiveByOwner("session", childKey)).toBeUndefined();
-        }
         expect(child?.worktree).toBeUndefined();
         expect(child?.projectId).toBeUndefined();
         expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
         return;
       }
+      expect(creationError).toBeUndefined();
       expect(result?.details, JSON.stringify(result?.details)).toMatchObject({
         status: "accepted",
       });
@@ -325,6 +316,14 @@ test.each([
         expect(child?.projectId).toBe(project.id);
       }
       expect(child?.worktree?.repoRoot).toBe(source === "inherited" ? repository : otherRepository);
+      const owned = await managedWorktrees.findLiveByOwner("session", childKey!);
+      expect(owned).toBeDefined();
+      expect(child).toMatchObject({
+        worktree: { id: owned?.id },
+        spawnedCwd: owned?.path,
+        sessionRoot: owned?.path,
+      });
+      expect(child?.spawnedCwd).not.toBe(source === "inherited" ? repository : otherRepository);
       expect(await readReadme(child!.spawnedCwd!)).toBe(
         source === "inherited" ? "selected-project\n" : `${projectName}\n`,
       );
@@ -337,6 +336,7 @@ test.each([
         expect(projectCloneMocks.materializeProjectClone).not.toHaveBeenCalled();
       }
       await expect(fs.stat(path.join(child!.spawnedCwd!, "setup-marker.txt"))).rejects.toThrow();
+      expect(dispatchInboundMessageMock).toHaveBeenCalledOnce();
       expect(registerRun).toHaveBeenCalledOnce();
     } finally {
       if (childKey) {
