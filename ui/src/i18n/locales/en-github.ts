@@ -113,7 +113,7 @@ const enGitHub = {
     publishAsLabel: "Publish as",
     personal: "My GitHub",
     system: "Shared agent account",
-    agent: "Agent override",
+    agent: "Own account",
     publishAs: "Publish as @{account}",
     account: "Publication account",
     newAction: en.githubPublication.newAction,

@@ -240,8 +240,8 @@ it.each(["system-configured", "agent-override", null] as const)(
 );
 
 it.each([
-  [false, "agent-override", "Agent override"],
-  [true, "agent-override", "Agent override"],
+  [false, "agent-override", "Own account"],
+  [true, "agent-override", "Own account"],
   [true, "system-configured", "Shared agent account"],
 ] as const)(
   "offers radio account choices, disambiguating matching logins only: %s (%s)",
@@ -271,7 +271,7 @@ it.each([
     expect(choices[0]?.textContent).toContain("@agent-bot");
     expect(choices[1]?.textContent).toContain(sameLogin ? "@agent-bot" : "@alice-tools");
     expect(menu?.textContent?.includes(sourceLabel)).toBe(sameLogin);
-    expect(menu?.textContent).not.toContain("System GitHub");
+    expect(menu?.textContent).not.toMatch(/System GitHub|Agent override/);
     expect(menu?.textContent?.includes("My GitHub")).toBe(sameLogin);
     expect(menu?.textContent).not.toContain("applies only to this explicit Publish PR action");
     expect(choices[0]?.querySelector(".oc-menu-item__details svg")).not.toBeNull();
