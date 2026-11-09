@@ -611,6 +611,27 @@ it.each([true, false])(
   },
 );
 
+it("refuses a 401 retry with a token from an explicit reconnect of the same account", async () => {
+  await withRequestFixture(async ({ state, credential, controller, authState, refresh }) => {
+    await controller.initializeAuthProfile();
+    const held = authState.apiKeyInfo?.apiKey;
+    // A reconnect starts a new authorization lifetime even for the same account.
+    await upsertAuthProfileWithLockOrThrow({
+      profileId,
+      credential: {
+        ...credential,
+        access: "synthetic-reconnected",
+        expires: Date.now() + 3_600_000,
+      },
+      agentDir: state.agentDir(),
+    });
+    const error = "401 Invalid or expired credentials (reason=no auth context)";
+    await expect(controller.maybeRefreshRuntimeAuthForAuthError(error, false)).resolves.toBe(false);
+    expect(authState.apiKeyInfo?.apiKey).toBe(held);
+    expect(refresh).not.toHaveBeenCalled();
+  });
+});
+
 it.each(["during-prepare", "after-resolve"] as const)(
   "refuses a reconnected canonical account %s without an automation binding",
   async (boundary) => {

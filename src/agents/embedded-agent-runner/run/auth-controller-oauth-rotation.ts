@@ -1,3 +1,5 @@
+import type { AuthProfileAuthorization } from "../../auth-profiles/authorization-contract.js";
+import { assertSettledAuthProfileAuthorization } from "../../auth-profiles/authorization-settle.js";
 import { hasOAuthIdentity, isSafeToCopyOAuthIdentity } from "../../auth-profiles/oauth-identity.js";
 import { getApiKeyForModelCore } from "../../model-auth.js";
 import type { createRuntimeAuthDeadline } from "../../runtime-auth-refresh.js";
@@ -12,10 +14,13 @@ export async function adoptRotatedOAuthCredential(input: {
   params: EmbeddedRunAuthControllerParams;
   state: EmbeddedRunAuthControllerParams["state"];
   withAuthDeadline: ReturnType<typeof createRuntimeAuthDeadline>["run"];
+  /** The run's captured account lifetime; an explicit reconnect retires it. */
+  authorization: AuthProfileAuthorization | undefined;
 }): Promise<boolean> {
-  const { params, state } = input;
+  const { params, state, authorization } = input;
   const held = state.apiKeyInfo;
-  if (held?.mode !== "oauth") {
+  // Without a captured lifetime a replacement token cannot be bound to this run.
+  if (held?.mode !== "oauth" || !authorization) {
     return false;
   }
   const profileId = held.profileId;
@@ -23,8 +28,8 @@ export async function adoptRotatedOAuthCredential(input: {
   if (!profileId || selected?.type !== "oauth") {
     return false;
   }
-  const current = await input.withAuthDeadline("credential resolution", (signal) =>
-    getApiKeyForModelCore({
+  const current = await input.withAuthDeadline("credential resolution", async (signal) => {
+    const resolved = await getApiKeyForModelCore({
       model: state.models.runtime,
       cfg: params.config,
       profileId,
@@ -44,8 +49,11 @@ export async function adoptRotatedOAuthCredential(input: {
           throw new Error("Provider credentials changed account identity.");
         }
       },
-    }),
-  );
+    });
+    // A sibling refresh keeps this lifetime (wait for it to settle); a reconnect retires it.
+    await assertSettledAuthProfileAuthorization(authorization.assertCurrent, signal);
+    return resolved;
+  });
   // Sentinels are stable per value, so equal strings mean the stored token is unchanged.
   if (
     current.profileId !== profileId ||

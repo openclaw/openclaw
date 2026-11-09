@@ -688,7 +688,14 @@ export function createEmbeddedRunAuthController(params: EmbeddedRunAuthControlle
         /\btoken_expired\b|\bauthentication token is expired\b/iu.test(errorText)
       ) {
         await applyApiKeyInfo(state.lastProfileId, state.profileIndex, true);
-      } else if (!(await adoptRotatedOAuthCredential({ params, state, withAuthDeadline }))) {
+      } else if (
+        !(await adoptRotatedOAuthCredential({
+          params,
+          state,
+          withAuthDeadline,
+          authorization: requestAuthAuthorization,
+        }))
+      ) {
         return false;
       }
       return true;
