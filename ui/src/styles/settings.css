@@ -2201,9 +2201,10 @@ openclaw-approvals-page .data-table-pagination__info {
   min-width: 0;
 }
 
+/* Height comes from the shared trigger (--settings-control-height); 9px plus the
+   1px border puts the avatar on the sidebar's 22px content edge. */
 .settings-sidebar__agent .agent-select__trigger {
   min-width: 0;
-  min-height: 32px;
   padding: 0 9px;
   border-color: transparent;
   background: transparent;
@@ -2225,12 +2226,6 @@ openclaw-approvals-page .data-table-pagination__info {
   .settings-sidebar__agent
   .agent-select__trigger[aria-expanded="true"] {
   background: var(--bg-hover);
-}
-
-@media (pointer: coarse) {
-  .settings-sidebar__agent .agent-select__trigger {
-    min-height: var(--settings-touch-control-height);
-  }
 }
 
 .settings-sidebar__search::after {
