@@ -998,6 +998,57 @@ describe("signal createSignalEventHandler inbound context", () => {
     expect(context.ReplyToIsQuote).toBe(true);
   });
 
+  it.each([
+    { complete: true, ignoreAttachments: false, notice: "", media: [["image/jpeg", "/tmp/image"]] },
+    {
+      complete: true,
+      ignoreAttachments: true,
+      notice: "[signal attachment unavailable]",
+      media: [["image/jpeg", undefined]],
+    },
+    {
+      complete: false,
+      ignoreAttachments: false,
+      notice: "",
+      media: [
+        ["text/x-signal-plain", "/tmp/carrier"],
+        ["image/jpeg", "/tmp/image"],
+      ],
+    },
+    {
+      complete: false,
+      ignoreAttachments: true,
+      notice: "[signal 2 attachments unavailable]",
+      media: [
+        ["text/x-signal-plain", undefined],
+        ["image/jpeg", undefined],
+      ],
+    },
+  ])(
+    "handles long text and an image with complete=$complete, ignoreAttachments=$ignoreAttachments",
+    async ({ complete, ignoreAttachments, notice, media }) => {
+      // The complete body is 3,600 UTF-8 bytes, but only 3,000 JavaScript characters.
+      const message = "café ".repeat(complete ? 600 : 400);
+      const handler = createTestHandler({
+        cfg: createDirectConfig(),
+        ignoreAttachments,
+        fetchAttachment: async ({ attachment }) => ({ path: "/tmp/" + attachment.id }),
+      });
+
+      await receiveMessage(handler, {
+        message,
+        attachments: [
+          { id: "carrier", contentType: "text/x-signal-plain", size: 3600 },
+          { id: "image", contentType: "image/jpeg", size: 8 },
+        ],
+      });
+
+      const context = requireCapturedContext();
+      expect(context.BodyForAgent).toBe(message.trim() + (notice ? "\n\n" + notice : ""));
+      expect(context.media?.map(({ contentType, path }) => [contentType, path])).toEqual(media);
+    },
+  );
+
   it("forwards all fetched attachments via MediaPaths/MediaTypes", async () => {
     const handler = createTestHandler({
       cfg: createDirectConfig(),

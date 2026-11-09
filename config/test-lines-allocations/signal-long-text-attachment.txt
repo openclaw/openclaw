@@ -1,2 +1,3 @@
-20
-# Signal long-text attachment: dedupe the text/x-signal-plain carrier once signal-cli has merged it into the body.
+48
+# Signal receive-handler regressions: 51 net test lines consume 3 existing spare lines.
+# Exact measured total and ceiling: 6,591,995; shared scalar and unrelated tests unchanged.
