@@ -131,6 +131,41 @@ describe("runSessionsSendA2AFlow reply delivery", () => {
     return vi.mocked(runAgentStep).mock.calls[0]![0];
   }
 
+  it.each([
+    { name: "missing final", disposition: "empty", delivered: false, notify: true },
+    { name: "intentional silence", disposition: "silent", delivered: false, notify: false },
+    { name: "already delivered", disposition: "empty", delivered: true, notify: false },
+  ] as const)("closes a channel peer request with $name", async (scenario) => {
+    const origin = { channel: "telegram", to: "-100123", accountId: "family", threadId: "554" };
+    await runFlow({
+      runId: "peer-missing-final",
+      targetAgentId: "worker",
+      targetSessionKey: "agent:worker:main",
+      requesterAgentId: "main",
+      requesterSessionKey: "agent:main:telegram:group:-100123:topic:554",
+      requesterSession: { sessionId: "original-requester" },
+      requesterOrigin: origin,
+      replyMode: "peer",
+      reply: {
+        status: "ok",
+        terminalReply: { disposition: scenario.disposition },
+        sourceReplyDelivered: scenario.delivered,
+      },
+    });
+    if (scenario.notify) {
+      expect(deliveredStep()).toMatchObject({
+        sessionKey: "agent:main:telegram:group:-100123:topic:554",
+        expectedSession: { sessionId: "original-requester" },
+        deliveryContext: origin,
+        message: expect.stringContaining("peer-missing-final"),
+        extraSystemPrompt: expect.stringContaining("Do not repeat completed actions"),
+      });
+    } else {
+      expectNoDelivery();
+    }
+    expect(gatewayCalls).toEqual([]);
+  });
+
   it.each([true, false])(
     "recovers a long delayed peer answer or reports missing history (%s)",
     async (available) => {

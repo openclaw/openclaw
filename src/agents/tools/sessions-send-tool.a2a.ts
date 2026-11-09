@@ -100,6 +100,25 @@ export async function runSessionsSendA2AFlow(params: {
       return;
     }
     if (wait.terminalReply?.disposition !== "visible") {
+      // A reverse send to another session cannot settle this captured return route.
+      if (
+        wait.terminalReply?.disposition === "empty" &&
+        params.replyMode === "peer" &&
+        !wait.sourceReplyDelivered &&
+        params.requesterSessionKey &&
+        params.requesterSessionKey !== params.targetSessionKey &&
+        params.requesterOrigin?.channel &&
+        params.requesterOrigin.to &&
+        !isInternalMessageChannel(params.requesterOrigin.channel)
+      ) {
+        await deliverRequesterReply({
+          ...requesterStepContext,
+          sessionKey: params.requesterSessionKey,
+          message: `sessions_send target ${params.displayKey} completed run ${params.runId} without a final result. The original request still needs a response.`,
+          extraSystemPrompt:
+            "Recover the result of this exact run using existing session access if available; otherwise tell the user that the result is missing. Do not repeat completed actions or treat a separate internal acknowledgment as delivery to the user. Reply in this original conversation.",
+        });
+      }
       return;
     }
     const { replyText: reply, replyTruncated } = await resolveSessionsSendReply(wait, {
