@@ -1,0 +1,7 @@
+# Real-Gateway E2E for the macOS session-menu native link handoff (PR #144596): both menu
+# actions posting the final session URL to the openclawLink bridge with no popup reservation,
+# the paired destination context signing in and loading the posted URL verbatim, and the
+# never-paired context stopping at the login gate, plus the two unit regressions covering the
+# handoff and the browser-popup fallback when the bridge rejects the post.
+# Exact net growth for PR #144596.
+302
