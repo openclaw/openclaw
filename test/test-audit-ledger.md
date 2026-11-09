@@ -456,6 +456,29 @@ tests and failed the repaired tests: project identity, tree identity,
 completeness, path, mode, duplicate path, byte bound and comparison base.
 Source bytes were restored after each mutation. No production code changed.
 
+### CI observation and timing follow-up
+
+At `2d5b14db1a64086d838c3f6a096a29900c299dfb`, four suites were reviewed with
+their owners, callers, support, history and CI routing: 23 declarations / 34
+expanded cases. These standalone counts do not add to the overlapping
+root/scripts aggregate. All cases remain; no safe deletion or consolidation
+was identified.
+
+| Suite under `test/scripts/`        | Declarations / cases | Retained contract                                                                                                                                         |
+| ---------------------------------- | -------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ci-test-observations.test.ts`     | 14 / 17              | Checkout identity, immutable launch inputs, native outcomes, dependency graphs, bounded exports, privacy, malformed evidence and the real export command. |
+| `ci-shard-timings-refresh.test.ts` | 3 / 11               | Runtime-specific wall costs, selection identity, runner exclusions and unchanged timing bytes on invalid evidence.                                        |
+| `vitest-shard-timings.test.ts`     | 4 / 4                | Duplicate ownership rejection, whole-config identity, reordered selection history and named-shard duration persistence.                                   |
+| `weighted-test-shards.test.ts`     | 2 / 2                | Deterministic weighted assignment across batches and rejection of an empty shard list.                                                                    |
+
+One mixed declaration retains its interrupted/missing-dependency proof and
+repairs the unavailable-repository control. Previously it sent a terminal event
+without inventory, rejecting before any repository read. It now sends valid
+inventory and requires the existing snapshot to remain byte-identical.
+The named-shard timing test is renamed to describe its duration roundtrip;
+unused persisted metadata fields are not restored as incidental assertions.
+Runtime and mutation qualification remain pending in this source checkpoint.
+
 ## Pending qualification and proof repairs
 
 - Keep source-only candidates separate from applied removals. Obsolete fixture candidates require current-owner and runtime qualification. Pending: Twitch settled flag; it needs current-source and runtime keeper qualification.
