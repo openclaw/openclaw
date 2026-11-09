@@ -250,6 +250,21 @@ restart the Slack monitor. The Gateway remains running.
 
     Bot-authored room messages also require either the sending bot to be explicitly listed in that room's `users` allowlist, or at least one explicit Slack owner ID from `channels.slack.allowFrom` to be a current room member. Wildcards and display-name owner entries do not satisfy owner presence. Owner presence uses Slack `conversations.members`; make sure the app has the matching read scope for the room type (`channels:read` for public channels, `groups:read` for private channels). If the member lookup fails, OpenClaw drops the bot-authored room message.
 
+    <a id="trusted-user-token-apps" />
+    Slack adds the posting app's `bot_id` to messages a person sends through that app with their own user token, so OpenClaw treats them as bot messages by default. To accept those posts as messages from the person, list the app ID (`A...`) in `channels.slack.trustedUserTokenAppIds` (or `channels.slack.accounts.<id>.trustedUserTokenAppIds`):
+
+    ```json5
+    {
+      channels: {
+        slack: {
+          trustedUserTokenAppIds: ["A0123456789"],
+        },
+      },
+    }
+    ```
+
+    A message counts as human only when it carries a listed `app_id`, is not a `bot_message`, and Slack `users.info` reports its `user` as a person rather than a bot. It then follows that user's channel, `users`, `allowFrom`, and mention rules; `allowBots`, owner presence, and bot loop protection do not apply. Posts the listed app makes with its own bot token name its bot user and stay bot messages, as do posts whose user lookup fails. The setting defaults to empty. This app's own ID is never trusted, so its own posts stay ignored.
+
     `allowBots` controls incoming turns, not context visibility. A human request can still include accessible bot-authored room history and thread context when `allowBots: false`; the configured `contextVisibility` and sender allowlist rules still apply.
 
     Accepted bot-authored Slack messages use shared [bot loop protection](/channels/bot-loop-protection). Configure `channels.defaults.botLoopProtection` for the default budget, then override with `channels.slack.botLoopProtection` or `channels.slack.channels.<id>.botLoopProtection` when a workspace or channel needs a different limit.

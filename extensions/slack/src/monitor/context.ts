@@ -138,7 +138,7 @@ type SlackSessionTitleParams = Omit<SlackSessionStatusParams, "status"> & {
   title: string;
 };
 
-type SlackUserInfo = { name?: string; imageUrl?: string; error?: unknown };
+type SlackUserInfo = { name?: string; imageUrl?: string; isBot?: boolean; error?: unknown };
 
 const SLACK_CHANNEL_CACHE_MAX_ENTRIES = 1024;
 const SLACK_USER_CACHE_MAX_ENTRIES = 2048;
@@ -452,7 +452,7 @@ function createSlackMonitorContextFields(
         normalizeOptionalString(profile?.image_192) ??
         normalizeOptionalString(profile?.image_512) ??
         normalizeOptionalString(profile?.image_72);
-      const entry = { name, imageUrl };
+      const entry = { name, imageUrl, isBot: info.user?.is_bot };
       writeLruMapEntry(userCache, cacheKey, entry, SLACK_USER_CACHE_MAX_ENTRIES);
       return entry;
     } catch (error) {
