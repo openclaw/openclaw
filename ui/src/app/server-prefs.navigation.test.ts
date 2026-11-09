@@ -4,11 +4,9 @@ import { createDeferred } from "../../../test/helpers/promise.js";
 import { i18n } from "../i18n/index.ts";
 import { resolveServerUiPrefWriteStatus } from "./server-prefs-controls.ts";
 import { changedServerUiPrefs } from "./server-prefs-intent.ts";
-import {
-  readProfileAppearancePrefs,
-  writeProfileAppearancePrefs,
-} from "./server-prefs-profile-runtime.ts";
+import { readProfileAppearancePrefs } from "./server-prefs-profile-runtime.ts";
 import { applyServerUiPrefs, refreshProfileAppearancePrefs } from "./server-prefs-reconcile.ts";
+import { writeProfileAppearancePrefs } from "./server-prefs-write-batch.ts";
 import {
   createServerPrefsWriter,
   createProfilePrefsServer as server,

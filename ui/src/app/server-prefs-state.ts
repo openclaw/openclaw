@@ -155,6 +155,8 @@ export type ServerUiPrefs = SyncedServerUiPrefs &
   Record<string, unknown> & {
     /** Observed profile value, not a fresh read that could erase concurrent group edits. */
     personalSessionGroupsBase?: PersonalSessionGroup[] | null;
+    /** Transient authored predecessor; consumed before the outbox is persisted. */
+    personalSessionGroupsPrevious?: PersonalSessionGroup[];
     /** Browser-only edit base: the observed snapshot with subsequent authored membership operations folded in. */
     sidebarEntriesBase?: readonly string[];
     /** Browser-only: an unacknowledged authored reorder, including a reversal back to the edit base. */

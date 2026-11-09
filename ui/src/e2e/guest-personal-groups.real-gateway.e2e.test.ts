@@ -3,6 +3,8 @@ import path from "node:path";
 import type { Page } from "playwright";
 import type { ViteDevServer } from "vite";
 import { expect, it } from "vitest";
+import type { AgentToolGatewayRequestCaller } from "../../../src/agents/tools/in-process-gateway.ts";
+import { runPersonalSessionGroups } from "../../../src/agents/tools/sessions-personal-groups.ts";
 import type { GatewayServer } from "../../../src/gateway/server-public.ts";
 import {
   setDisplayName,
@@ -33,7 +35,7 @@ const otherKey = "agent:main:dashboard:groups-other";
 const people = ["groups-owner@example.test", "groups-other@example.test"];
 const capture = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 
-function rpc<T>(page: Page, method: string, params: Record<string, unknown>): Promise<T> {
+function rpc<T>(page: Page, method: string, params: unknown): Promise<T> {
   return evaluateControlUiContext(
     page,
     async (app, request) => {
@@ -48,7 +50,7 @@ function rpc<T>(page: Page, method: string, params: Record<string, unknown>): Pr
 }
 
 suite.define(() => {
-  it("preserves children and browser-local groups with only session permissions", async (test) => {
+  it("preserves children and profile groups through agent edits with only session permissions", async (test) => {
     let state: Awaited<ReturnType<typeof createOpenClawTestState>> | undefined;
     let gateway: GatewayServer | undefined;
     const proxies: ViteDevServer[] = [];
@@ -181,11 +183,15 @@ suite.define(() => {
           },
           async ({ page }) => {
             const methods: string[] = [];
+            const preferenceWrites: Record<string, unknown>[] = [];
             page.on("websocket", (socket) =>
               socket.on("framesent", (frame) => {
                 const request = JSON.parse(frame.payload.toString());
                 if (request.type === "req" && request.method !== "connect") {
                   methods.push(request.method);
+                  if (request.method === "users.prefs.set") {
+                    preferenceWrites.push(request.params.entries);
+                  }
                 }
               }),
             );
@@ -253,7 +259,44 @@ suite.define(() => {
             await expect
               .poll(() => sidebar.getByRole("link", { name: /Updated verification notes/ }).count())
               .toBe(2);
-            await create("Later", "Release checklist");
+            const focusId = await group("Focus").getAttribute("data-personal-session-group");
+            if (!focusId) {
+              throw new Error("Visible Focus collection has no identity");
+            }
+            const observed = [{ id: focusId, label: "Focus", sessionKeys: [parentKey] }];
+            await expect
+              .poll(
+                async () =>
+                  await rpc(page, "users.prefs.get", { keys: ["ui.personalSessionGroups"] }),
+              )
+              .toMatchObject({ entries: { "ui.personalSessionGroups": observed } });
+            const agentRequest: AgentToolGatewayRequestCaller = <T>({
+              method,
+              params,
+            }: Parameters<AgentToolGatewayRequestCaller>[0]) => rpc<T>(page, method, params ?? {});
+            expect(
+              (
+                await runPersonalSessionGroups(
+                  "personal_group_list",
+                  { action: "personal_group_list" },
+                  agentRequest,
+                )
+              ).details,
+            ).toEqual({ status: "ok", groups: observed, expectedGroups: observed });
+            const later = { id: "agent-later", label: "Later", sessionKeys: [otherKey] };
+            await runPersonalSessionGroups(
+              "personal_group_set",
+              {
+                action: "personal_group_set",
+                groups: [...observed, later],
+                expectedGroups: observed,
+              },
+              agentRequest,
+            );
+            await page.reload();
+            await waitForControlUiGatewayReady(page);
+            await group("Later").waitFor();
+            await group("Focus").waitFor();
             await menu("Later", "Move up");
             const order = () =>
               sidebar
@@ -273,7 +316,12 @@ suite.define(() => {
             await expect.poll(order).toEqual(["Later", "This week"]);
             expect(
               await rpc(page, "users.prefs.get", { keys: ["ui.personalSessionGroups"] }),
-            ).toMatchObject({ status: "ok", entries: {} });
+            ).toMatchObject({
+              status: "ok",
+              entries: {
+                "ui.personalSessionGroups": [later, { ...observed[0], label: "This week" }],
+              },
+            });
             const freshContext = await suite.newBrowserContext({
               reducedMotion: "reduce",
               storageState: initialStorage,
@@ -281,13 +329,12 @@ suite.define(() => {
             const fresh = await freshContext.newPage();
             await fresh.goto(controlUiSessionUrl(suite.server.baseUrl, parentKey));
             await waitForControlUiGatewayReady(fresh);
-            expect(await fresh.locator("[data-personal-session-group]").count()).toBe(0);
+            await expect.poll(() => fresh.locator("[data-personal-session-group]").count()).toBe(2);
             await suite.closeBrowserContext(freshContext);
             await menu("This week", "Remove section");
             await expect.poll(order).toEqual(["Later"]);
             expect(await sidebar.locator(`[data-session-key="${parentKey}"]`).count()).toBe(1);
             const forbidden = new Set([
-              "users.prefs.set",
               "sessions.patch",
               "sessions.patchMany",
               "sessions.delete",
@@ -301,6 +348,14 @@ suite.define(() => {
               "config.set",
             ]);
             expect(methods.filter((method) => forbidden.has(method))).toEqual([]);
+            expect(preferenceWrites.length).toBeGreaterThan(0);
+            expect(
+              preferenceWrites.every(
+                (entries) =>
+                  Object.keys(entries).length === 1 &&
+                  Object.hasOwn(entries, "ui.personalSessionGroups"),
+              ),
+            ).toBe(true);
             if (artifactDir) {
               await writeFile(
                 path.join(artifactDir, "runtime.json"),

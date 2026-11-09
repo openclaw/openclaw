@@ -6,7 +6,7 @@ import { createDeferred } from "../../../test/helpers/promise.js";
 import { gatewayHelloForMethods } from "../test-helpers/gateway-methods.ts";
 import { resolveServerUiPrefWriteStatus } from "./server-prefs-controls.ts";
 import { changedServerUiPrefs } from "./server-prefs-intent.ts";
-import { adoptLocalPersonalSessionGroups } from "./server-prefs-reconcile.ts";
+import { adoptLocalPersonalSessionGroups } from "./server-prefs-profile-runtime.ts";
 import {
   createProfilePrefsServer,
   installServerPrefsStorage,
@@ -55,14 +55,13 @@ it("retains an existing guest layout through agent editing and reload without sy
     { action: "personal_group_list" },
     request,
   );
-  const snapshot = listed.details as { groups: (typeof focus)[]; expectedGroups: unknown };
-  expect(snapshot.groups).toEqual([focus]);
+  expect(listed.details).toEqual({ status: "ok", groups: [focus], expectedGroups: [focus] });
   await runPersonalSessionGroups(
     "personal_group_set",
     {
       action: "personal_group_set",
-      groups: [...snapshot.groups, later],
-      expectedGroups: snapshot.expectedGroups,
+      groups: [focus, later],
+      expectedGroups: [focus],
     },
     request,
   );
@@ -133,4 +132,72 @@ it("rechecks scoped authority after the group read before saving", async () => {
   await vi.dynamicImportSettled();
   expect(guest.request.mock.calls.some(([method]) => method === "users.prefs.set")).toBe(false);
   expect(loadSettings().personalSessionGroups).toEqual([focus]);
+});
+
+it.each([
+  { operation: "remove", remote: false, foreign: false },
+  { operation: "rename", remote: false, foreign: false },
+  { operation: "remove", remote: true, foreign: false },
+  { operation: "remove", remote: false, foreign: true },
+])(
+  "settles descendant $operation without erasing concurrent groups (remote=$remote, foreign=$foreign)",
+  async ({ operation, remote, foreign }) => {
+    const backend = createProfilePrefsServer({ guest: {} });
+    const guest = backend.connect("guest");
+    await guest.refresh();
+    const started = createDeferred();
+    const ack = createDeferred();
+    const original = guest.request.getMockImplementation()!;
+    let held = false;
+    if (remote) {
+      backend.profiles.guest![key] = [later];
+    }
+    guest.request.mockImplementation(async (method, params) => {
+      const result = await original(method, params);
+      if (method === "users.prefs.set" && !held) {
+        held = true;
+        started.resolve();
+        await ack.promise;
+      }
+      return result;
+    });
+    const before = loadSettings();
+    const first = patchSettings({ personalSessionGroups: [focus] });
+    pushServerUiPrefs(guest.writer, changedServerUiPrefs(before, first)!, hooks());
+    await started.promise;
+    const desired = operation === "remove" ? [] : [{ ...focus, label: "Renamed" }];
+    const second = patchSettings({ personalSessionGroups: desired });
+    pushServerUiPrefs(guest.writer, changedServerUiPrefs(first, second)!, hooks());
+    if (foreign) {
+      localStorage.setItem(
+        "openclaw.control.serverPrefs.pending.v1:" + scope + ":profile:guest",
+        JSON.stringify({ personalSessionGroups: [later], personalSessionGroupsBase: null }),
+      );
+    }
+    ack.resolve();
+    await vi.dynamicImportSettled();
+    const expected = foreign ? [focus, later] : remote ? [later, ...desired] : desired;
+    expect(backend.profiles.guest![key]).toEqual(expected);
+    expect(loadSettings().personalSessionGroups).toEqual(expected);
+  },
+);
+
+it("adopts a pre-upgrade queued layout using its saved confirmed profile baseline", async () => {
+  const backend = createProfilePrefsServer({ guest: {} });
+  const guest = backend.connect("guest");
+  await guest.refresh();
+  Object.assign(guest.writer.state, { connected: false });
+  const before = loadSettings();
+  const next = patchSettings({ personalSessionGroups: [focus] });
+  pushServerUiPrefs(guest.writer, changedServerUiPrefs(before, next)!, hooks());
+  const pendingKey = "openclaw.control.serverPrefs.pending.v1:" + scope + ":profile:guest";
+  const oldPayload = JSON.parse(localStorage.getItem(pendingKey)!);
+  delete oldPayload.personalSessionGroupsBase;
+  localStorage.setItem(pendingKey, JSON.stringify(oldPayload));
+  resetServerUiPrefsSync();
+  Object.assign(guest.writer.state, { connected: true });
+  flushServerUiPrefs(guest.writer, hooks());
+  await vi.dynamicImportSettled();
+  expect(backend.profiles.guest![key]).toEqual([focus]);
+  expect(localStorage.getItem(pendingKey)).toBeNull();
 });

@@ -1,3 +1,3 @@
-# One production-dispatch regression proves guest personal collection CRUD/order, CAS, profile isolation and unchanged shared controls.
-# Includes the existing preference fixture's narrow-scope and real caller bindings. Exact net LF growth.
-77
+336
+# Guest collection tooling: dispatcher CAS/authorization, browser-local adoption, queued-layout upgrade, overlapping edits, profile isolation, and real-Gateway browser/agent reload proof.
+# Exactly 77 + 203 + 3 - 2 + 55 net test LF against the prepared target base; shared scalar unchanged.

@@ -68,8 +68,11 @@ class ServerUiPrefsOutbox {
   pendingScope = "";
   pendingPrefs: ServerUiPrefs | null = null;
   pendingPersistedKeys = new Set<string>();
-  // The active pin operation alone can observe local successors; foreign adoption detaches it.
-  composeSidebar: ((pending: ServerUiPrefs | null, next: ServerUiPrefs) => void) | null = null;
+  // Only an active navigation write observes local successors; foreign adoption detaches its key.
+  compositions: Record<
+    string,
+    ((pending: ServerUiPrefs | null, next: ServerUiPrefs) => void) | undefined
+  > = {};
   pushWriter: ServerUiPrefsWriter | null = null;
   pushScope = "";
   pushClient: GatewayBrowserClient | null = null;
@@ -144,7 +147,7 @@ function updateRetainedLocalKeys(
   }
 }
 function adoptPendingScope(scope: string): void {
-  sync.composeSidebar = null;
+  sync.compositions = {};
   sync.pendingScope = scope;
   const stored = readStoredPrefs(PENDING_KEY, scope);
   sync.pendingPrefs = stored.prefs;
@@ -153,7 +156,9 @@ function adoptPendingScope(scope: string): void {
   );
 }
 function writePendingStorage(prefs: ServerUiPrefs | null): void {
-  if (prefs && !prefs.personalSessionGroups) delete prefs.personalSessionGroupsBase;
+  if (prefs && !prefs.personalSessionGroups) {
+    delete prefs.personalSessionGroupsBase;
+  }
   if (prefs && !prefs.sidebarEntries) {
     clearSidebarEntriesMetadata(prefs);
   }
@@ -188,12 +193,14 @@ function cancelPendingKeys(scope: string, keys: readonly SyncedPrefKey[]): void 
   if (!remaining.sidebarEntries) {
     clearSidebarEntriesMetadata(remaining);
   }
-  if (!remaining.personalSessionGroups) delete remaining.personalSessionGroupsBase;
+  if (!remaining.personalSessionGroups) {
+    delete remaining.personalSessionGroupsBase;
+  }
   const next = Object.keys(remaining).length ? remaining : null;
   if (scope === sync.pendingScope) {
     sync.pendingPrefs = next;
-    if (keys.includes("sidebarEntries")) {
-      sync.composeSidebar = null;
+    for (const key of keys) {
+      delete sync.compositions[key];
     }
     writePendingStorage(next);
     return;
@@ -232,8 +239,8 @@ function reconcilePersistedPendingPrefs(adoptKeys: readonly SyncedPrefKey[] = []
     ) {
       continue;
     }
-    if (key === "sidebarEntries" && !prefIntentMatches(pending, current, key)) {
-      sync.composeSidebar = null;
+    if (!prefIntentMatches(pending, current, key)) {
+      delete sync.compositions[key];
     }
     if (!Object.hasOwn(current, key)) {
       delete pending[key];
@@ -246,13 +253,16 @@ function reconcilePersistedPendingPrefs(adoptKeys: readonly SyncedPrefKey[] = []
       pending.sidebarEntriesBase = current.sidebarEntriesBase;
       pending.sidebarEntriesOrder = current.sidebarEntriesOrder;
     }
-    if (key === "personalSessionGroups")
+    if (key === "personalSessionGroups") {
       pending.personalSessionGroupsBase = current.personalSessionGroupsBase;
+    }
   }
   if (!pending.sidebarEntries) {
     clearSidebarEntriesMetadata(pending);
   }
-  if (!pending.personalSessionGroups) delete pending.personalSessionGroupsBase;
+  if (!pending.personalSessionGroups) {
+    delete pending.personalSessionGroupsBase;
+  }
   sync.pendingPrefs = Object.keys(pending).length ? pending : null;
 }
 function batchIsCurrent(batch: ServerUiPrefs): boolean {
@@ -270,7 +280,7 @@ export function resetServerUiPrefsSync() {
   sync.applyingServerPrefs = sync.pushDraining = sync.drainRequested = false;
   sync.pendingScope = "";
   sync.pendingPrefs = sync.pushWriter = null;
-  sync.composeSidebar = null;
+  sync.compositions = {};
   sync.pendingPersistedKeys.clear();
   sync.pushScope = "";
   sync.pushClient = null;
@@ -427,7 +437,7 @@ export function pushServerUiPrefs(
     keys.filter((key) => !blockedKeys.includes(key)),
     false,
   );
-  const writablePrefs = blockedKeys.length
+  const writablePrefs: ServerUiPrefs = blockedKeys.length
     ? Object.fromEntries(
         Object.entries(prefs).filter(
           ([key]) => !blockedKeys.some((blockedKey) => blockedKey === key),
@@ -435,15 +445,18 @@ export function pushServerUiPrefs(
       )
     : { ...prefs };
   if (
-    Object.hasOwn(writablePrefs, "personalSessionGroups") &&
-    !Object.hasOwn(writablePrefs, "personalSessionGroupsBase")
+    writablePrefs.personalSessionGroups !== undefined &&
+    writablePrefs.personalSessionGroupsBase === undefined
   ) {
     writablePrefs.personalSessionGroupsBase =
       resolveProfileAppearancePrefs(writer.state.client?.gatewayUrl ?? "", sync.pushProfileId)
         ?.personalSessionGroups ?? null;
   }
   reconcilePersistedPendingPrefs(keys);
-  sync.composeSidebar?.(sync.pendingPrefs, writablePrefs);
+  for (const key of keys) {
+    sync.compositions[key]?.(sync.pendingPrefs, writablePrefs);
+  }
+  delete writablePrefs.personalSessionGroupsPrevious;
   sync.pendingPrefs = mergePendingUiPrefs(sync.pendingPrefs, writablePrefs);
   mergePendingIntoStorage();
   publishPreferenceWrites();
@@ -457,7 +470,7 @@ export function flushServerUiPrefs(
   reconcilePersistedPendingPrefs(SYNCED_PREF_KEYS);
   sync.pushEpoch += 1;
   sync.pushDraining = sync.drainRequested = false;
-  sync.composeSidebar = null;
+  sync.compositions = {};
   sync.pushAfterCommit = hooks.afterCommit;
   startPendingDrain(writer);
 }

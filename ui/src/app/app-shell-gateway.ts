@@ -634,12 +634,16 @@ export class ShellGatewayOwner {
         console.error("[gateway] profile preference refresh failed:", error);
       }
     };
-    source.promise = import("./server-prefs-reconcile.ts")
-      .then(async (runtime) => {
+    source.promise = import("./server-prefs-profile-runtime.ts")
+      .then(async (profileRuntime) => {
         if (!remainsCurrent()) {
           return;
         }
-        runtime.adoptLocalPersonalSessionGroups(runtimeConfig, { profile: snapshot });
+        profileRuntime.adoptLocalPersonalSessionGroups(runtimeConfig, { profile: snapshot });
+        const runtime = await import("./server-prefs-reconcile.ts");
+        if (!remainsCurrent()) {
+          return;
+        }
         const pending = runtime.loadProfileAppearancePrefs(client, profileId, scope, {
           isCurrent: remainsCurrent,
         });

@@ -56,6 +56,9 @@ export function changedServerUiPrefs(previous: UiSettings, next: UiSettings): Se
   if (prefs.sidebarEntries !== undefined) {
     prefs.sidebarEntriesBase = [...previous.sidebarEntries];
   }
+  if (prefs.personalSessionGroups !== undefined) {
+    prefs.personalSessionGroupsPrevious = previous.personalSessionGroups ?? [];
+  }
   return Object.keys(prefs).length > 0 ? prefs : null;
 }
 /** The observed base is part of pin intent, not independently acknowledgeable metadata. */
