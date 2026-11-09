@@ -16,6 +16,15 @@ import {
 import { createReleaseEvidenceReplay } from "../../scripts/lib/release-evidence-replay.mjs";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
+// Keep promise-based retry sleeps on the same clock as the deadline assertions.
+vi.mock("node:timers/promises", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("node:timers/promises")>()),
+  setTimeout: (delay: number) =>
+    new Promise<void>((resolve) => {
+      setTimeout(resolve, delay);
+    }),
+}));
+
 const REPOSITORY = "openclaw/openclaw";
 const TOOLING = "a".repeat(40);
 const TARGET = "b".repeat(40);
