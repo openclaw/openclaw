@@ -1504,7 +1504,9 @@ try {
                     page,
                     scenario.id === "event-load-unloaded"
                       ? -1
-                      : Number(scenario.id.slice("event-load-".length)),
+                      : scenario.id === "event-load-pageup"
+                        ? 0
+                        : Number(scenario.id.slice("event-load-".length)),
                     eventLoadTools,
                   )),
                 };
