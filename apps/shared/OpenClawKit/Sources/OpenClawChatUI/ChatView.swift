@@ -1275,13 +1275,12 @@ extension OpenClawChatView {
                   self.viewModel.currentSessionTarget == target,
                   self.readerInteractionRevision == interactionRevision,
                   !self.scroll.isUserScrolling,
-                  self.scroll.followTarget == nil, self.searchMessageID == nil,
-                  let firstRowID
+                  self.scroll.followTarget == nil, self.searchMessageID == nil
             else { return }
             // The new page precedes this boundary. Keep the reader on the content they were reading.
             if self.transcriptPresentation.rows == historyRows {
                 self.loadEarlierHistory()
-            } else {
+            } else if let firstRowID {
                 self.scrollCommand.enqueue(
                     to: firstRowID, anchor: .top, sessionTarget: target, offsetFromRow: offsetFromRow)
             }
