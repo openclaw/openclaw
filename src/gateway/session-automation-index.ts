@@ -15,6 +15,9 @@ type SessionAutomationSource = {
 };
 
 let source: SessionAutomationSource | null = null;
+// Set once this process creates a cron service that will load jobs; cleared when it registers.
+// A failed load leaves it set, so automatic archiving waits instead of pausing jobs.
+let awaitingSource = false;
 
 let memo: {
   jobs: readonly CronStoredJob[] | undefined;
@@ -29,7 +32,17 @@ let publishedKeys: ReadonlySet<string> | undefined;
 /** The latest started cron service supplies the display-only automation index. */
 export function registerSessionAutomationSource(next: SessionAutomationSource | null): void {
   source = next;
+  if (next) {
+    awaitingSource = false;
+  }
   invalidateSessionAutomationIndex();
+}
+
+/** A Gateway cron service exists and its jobs will register once loaded. */
+export function expectSessionAutomationSource(): void {
+  if (!source) {
+    awaitingSource = true;
+  }
 }
 
 /**
@@ -133,6 +146,8 @@ function* enabledAutomationParentSessionKeys(): Generator<string> {
 // Automatic archiving would pause these jobs at their next occurrence.
 registerSessionMaintenancePreserveKeysProvider(async () => ({
   capture: enabledAutomationParentSessionKeys,
+  // Before the first load, any idle chat could be a parent.
+  isPending: () => awaitingSource && !source,
   dispose() {},
 }));
 

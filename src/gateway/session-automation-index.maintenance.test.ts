@@ -4,7 +4,10 @@ import type { SessionEntry } from "../config/sessions/types.js";
 import { parentRowFactsFromEntry } from "../cron/execution-context-admission.js";
 import { classifyScheduledParent, resolveScheduledPrincipal } from "../cron/execution-context.js";
 import type { CronStoredJob } from "../cron/types.js";
-import { registerSessionAutomationSource } from "./session-automation-index.js";
+import {
+  expectSessionAutomationSource,
+  registerSessionAutomationSource,
+} from "./session-automation-index.js";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const chatKey = "agent:main:dashboard:00000000-0000-4000-8000-000000000001";
@@ -39,12 +42,21 @@ function parentJob(enabled: boolean): CronStoredJob {
   } as CronStoredJob;
 }
 
-async function maintain(jobs: CronStoredJob[], overrides: Partial<Maintenance>) {
+const subagentKey = "agent:main:subagent:00000000-0000-4000-8000-000000000003";
+
+function registerJobs(jobs: CronStoredJob[]) {
   registerSessionAutomationSource({ getJobs: () => jobs, getDefaultAgentId: () => "main" });
+}
+
+async function maintain(jobs: CronStoredJob[] | "not-loaded", overrides: Partial<Maintenance>) {
+  if (jobs !== "not-loaded") {
+    registerJobs(jobs);
+  }
   const now = Date.now();
   const store: Record<string, SessionEntry> = {
     [chatKey]: { sessionId: "chat-session", updatedAt: now - 40 * DAY_MS },
     [otherKey]: { sessionId: "other-session", updatedAt: now - 35 * DAY_MS },
+    [subagentKey]: { sessionId: "subagent-session", updatedAt: now - 35 * DAY_MS },
   };
   await applyFileBackedSessionStoreMaintenance({
     store,
@@ -69,6 +81,8 @@ function nextOccurrenceParentState(job: CronStoredJob, entry: SessionEntry | und
 }
 
 afterEach(() => {
+  // Registration settles any pending load before the next test.
+  registerJobs([]);
   registerSessionAutomationSource(null);
 });
 
@@ -89,5 +103,27 @@ describe.each(phases)("%s maintenance", (_phase, overrides, archiveReason) => {
   ])("archives the idle chat with %s as before", async (_label, jobs) => {
     const store = await maintain(jobs, overrides);
     expect(store[chatKey]).toMatchObject({ archivedAt: expect.any(Number), archiveReason });
+  });
+});
+
+describe.each(phases)("%s maintenance before cron loads", (_phase, overrides, archiveReason) => {
+  it("defers archiving until the Gateway's cron jobs register, then protects the parent", async () => {
+    expectSessionAutomationSource();
+    const pending = await maintain("not-loaded", overrides);
+    expect(pending[chatKey]?.archivedAt).toBeUndefined();
+    expect(pending[otherKey]?.archivedAt).toBeUndefined();
+    if (overrides.pruneAfterMs !== undefined) {
+      // Disposable runtime rows are still pruned; only archiving waits.
+      expect(pending[subagentKey]).toBeUndefined();
+    }
+
+    const loaded = await maintain([parentJob(true)], overrides);
+    expect(loaded[chatKey]?.archivedAt).toBeUndefined();
+    expect(loaded[otherKey]).toMatchObject({ archiveReason });
+  });
+
+  it("archives as before when no cron service will load", async () => {
+    const store = await maintain("not-loaded", overrides);
+    expect(store[chatKey]).toMatchObject({ archiveReason });
   });
 });
