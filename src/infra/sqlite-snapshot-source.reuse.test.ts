@@ -1,9 +1,12 @@
 import fs from "node:fs";
 import path from "node:path";
 import { beforeEach, expect, it, vi } from "vitest";
+import { withArtifactPreservingStateReads } from "../state/artifact-preserving-state-reads.js";
 import { useSqliteTempDirs } from "./sqlite-shard-lifecycle.test-support.js";
 import { withSqliteSnapshotReuse } from "./sqlite-snapshot-reuse.js";
 import {
+  getArtifactPreservingSqliteRead,
+  prepareArtifactPreservingSqliteRead,
   prepareSqliteReadOnlyLocationAwaited,
   prepareSqliteReadOnlyLocationSync,
 } from "./sqlite-snapshot-source.js";
@@ -32,6 +35,30 @@ vi.mock("./sqlite-readonly-worker.js", async (importOriginal) => ({
 }));
 
 const directories = useSqliteTempDirs();
+
+it("keeps one inspection image through borrowed reads, rejects replaced sources and cleans up on failure", async () => {
+  const source = settledSource();
+  let image: string | undefined;
+  await expect(
+    withArtifactPreservingStateReads(
+      async () => {
+        await prepareArtifactPreservingSqliteRead(source);
+        image = getArtifactPreservingSqliteRead(source)!.canonicalPath;
+        await prepareArtifactPreservingSqliteRead(source);
+        expect(getArtifactPreservingSqliteRead(source)?.canonicalPath).toBe(image);
+        expect(fs.readFileSync(image, "utf8")).toBe("main");
+        expect(worker.copies).toBe(1);
+        fs.renameSync(source, `${source}.original`);
+        fs.writeFileSync(source, "replacement");
+        expect(() => getArtifactPreservingSqliteRead(source)).toThrow(/identity changed/);
+        throw new Error("inspection failed");
+      },
+      { agentDatabases: true },
+    ),
+  ).rejects.toThrow("inspection failed");
+  expect(fs.existsSync(image!)).toBe(false);
+  expect(fs.readFileSync(source, "utf8")).toBe("replacement");
+});
 
 function settledSource() {
   const source = path.join(directories.make("sqlite-source-reuse-"), "source.sqlite");

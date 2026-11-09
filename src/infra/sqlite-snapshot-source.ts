@@ -59,7 +59,13 @@ import {
   createSqliteSnapshotStagingDirectory,
   createSqliteSnapshotStagingDirectorySync,
 } from "./sqlite-snapshot-staging.js";
-import { readDatabaseFileIdentity, type DatabaseFileIdentity } from "./sqlite-worker-identity.js";
+import {
+  assertExistingDatabaseIdentity,
+  readDatabasePathIdentitySync,
+  readDatabaseFileIdentity,
+  type DatabaseFileIdentity,
+  type DatabasePathIdentity,
+} from "./sqlite-worker-identity.js";
 import { isUpdateRehearsalPrivateDatabase } from "./update-rehearsal-paths.js";
 
 /** The inspection scope owns private readers until native close and snapshot disposal settle. */
@@ -67,12 +73,15 @@ function retainArtifactSnapshot(
   scope: Exclude<ReturnType<typeof artifactPreservingReads.getStore>, false | undefined>,
   key: string,
   prepared: PreparedSqliteReadOnlyLocation,
+  sourceIdentity: DatabasePathIdentity,
 ) {
   const releaseScope = retainSnapshotTempDirectory(
     prepared.cleanupRoot ?? path.dirname(prepared.location),
   );
+  scope.privateRoots.add(prepared.cleanupRoot ?? path.dirname(prepared.location));
   const snapshot = {
     ...prepared,
+    sourceIdentity,
     cleanup: () => {
       releaseScope();
       return prepared.cleanup();
@@ -84,6 +93,23 @@ function retainArtifactSnapshot(
   };
   scope.snapshots.set(key, snapshot);
   return snapshot;
+}
+
+/** Borrow report-owned bytes through an awaited worker read; the report owns disposal. */
+export function getArtifactPreservingSqliteRead(
+  pathname: string,
+): DatabasePathIdentity | undefined {
+  const scope = artifactPreservingReads.getStore();
+  const snapshot = scope && scope.snapshots.get(path.resolve(pathname));
+  if (!snapshot) {
+    // The update driver already captured the entire disposable SQLite family.
+    return scope && isUpdateRehearsalPrivateDatabase(pathname, process.env)
+      ? readDatabasePathIdentitySync(pathname)
+      : undefined;
+  }
+  const { sourceIdentity } = snapshot;
+  assertExistingDatabaseIdentity(pathname, sourceIdentity.key, sourceIdentity.birthtime);
+  return readDatabasePathIdentitySync(snapshot.location);
 }
 
 /** Prepare inspection bytes without changing the original-path reader's admission checks. */
@@ -102,16 +128,18 @@ export async function prepareArtifactPreservingSqliteRead(
   ) {
     return;
   }
+  const sourceIdentity = readDatabasePathIdentitySync(pathname);
   const prepared = await prepareSqliteReadOnlyLocation(pathname, {
     preserveSourceArtifacts: true,
     signal,
     reuse: true,
+    expectedSourceIdentity: sourceIdentity,
   });
   // Concurrent callers can join one producer; the report retains only one of its leases.
   if (scope.snapshots.has(key)) {
     await prepared.cleanupAsync();
   } else {
-    retainArtifactSnapshot(scope, key, prepared);
+    retainArtifactSnapshot(scope, key, prepared, sourceIdentity);
   }
 }
 
@@ -129,8 +157,9 @@ export function openSqliteReadOnlyDatabase(
   const key = path.resolve(pathname);
   let snapshot = scope.snapshots.get(key);
   if (!snapshot && !isUpdateRehearsalPrivateDatabase(pathname, process.env)) {
+    const sourceIdentity = readDatabasePathIdentitySync(pathname);
     const prepared = prepareSqliteReadOnlyLocationSync(pathname);
-    snapshot = retainArtifactSnapshot(scope, key, prepared);
+    snapshot = retainArtifactSnapshot(scope, key, prepared, sourceIdentity);
   }
   const release = snapshot
     ? retainSnapshotTempDirectory(snapshot.cleanupRoot ?? path.dirname(snapshot.location))

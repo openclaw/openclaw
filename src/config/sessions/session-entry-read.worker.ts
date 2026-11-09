@@ -147,6 +147,7 @@ export async function readExactSessionEntriesWithLifecycleAsync(
       preserveSourceArtifacts: _,
       expectedIdentity: admittedIdentity,
       inspectionSourcePath,
+      inspectionSnapshot,
       ...selection
     } = request;
     // Cold sources are identified here, without opening or initializing the original database.
@@ -182,15 +183,27 @@ export async function readExactSessionEntriesWithLifecycleAsync(
       }
     };
     assertOriginal();
-    const snapshot = await prepareSqliteReadOnlyLocationAwaited(request.database.path, {
-      signal,
-      expectedSourceIdentity: expectedIdentity,
-    });
+    const snapshot = inspectionSnapshot
+      ? {
+          location: inspectionSnapshot.canonicalPath,
+          cleanupAsync: async () => true,
+        }
+      : await prepareSqliteReadOnlyLocationAwaited(request.database.path, {
+          signal,
+          expectedSourceIdentity: expectedIdentity,
+        });
     let result: SessionExactEntriesWorkerResult;
     let cleaned: boolean;
     try {
       signal.throwIfAborted();
       assertOriginal();
+      if (inspectionSnapshot) {
+        assertExistingDatabaseIdentity(
+          snapshot.location,
+          inspectionSnapshot.key,
+          inspectionSnapshot.birthtime,
+        );
+      }
       const read = withArtifactPreservingStateReads(() =>
         withFreshOpenClawAgentDatabaseReadOnly(
           (database) => {
@@ -199,7 +212,7 @@ export async function readExactSessionEntriesWithLifecycleAsync(
               {
                 ...selection,
                 database: { agentId: database.agentId, path: database.path },
-                expectedIdentity: readDatabasePathIdentitySync(database.path),
+                expectedIdentity: inspectionSnapshot ?? readDatabasePathIdentitySync(database.path),
               },
               database,
             );

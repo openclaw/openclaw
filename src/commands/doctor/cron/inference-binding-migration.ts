@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   resolveAgentConfig,
@@ -29,6 +30,8 @@ import { quoteCliArg } from "../../../cli/quote-cli-arg.js";
 import { resolveMergedModelProviderConfig } from "../../../config/model-provider-config.js";
 import { captureRuntimeConfig } from "../../../config/runtime-source-projection.js";
 import { resolveSessionAuthProfileOverrideSource } from "../../../config/sessions/auth-profile-override-provenance.js";
+import { resolveSessionStorePathCore } from "../../../config/sessions/paths.js";
+import { prepareSqliteTargetFromSessionStorePath } from "../../../config/sessions/session-sqlite-target.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { tryResolveCronJobEffectiveAgentId } from "../../../cron/agent-id.js";
 import type { CronInferenceBinding } from "../../../cron/inference-binding.js";
@@ -42,8 +45,11 @@ import {
   resolveCronSessionTargetSessionKey,
 } from "../../../cron/session-target.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
+import { prepareArtifactPreservingSqliteRead } from "../../../infra/sqlite-snapshot-source.js";
 import type { PluginDoctorCronJob } from "../../../plugins/doctor-contract-module.js";
 import { resolveProviderAuthProfileId } from "../../../plugins/provider-runtime.js";
+import { isArtifactPreservingStateRead } from "../../../state/artifact-preserving-state-reads.js";
+import { resolveOpenClawAgentSqlitePath } from "../../../state/openclaw-agent-db.paths.js";
 import { getOpenClawDatabaseMaintenanceScope } from "../../../state/openclaw-state-db-async-lifecycle.js";
 import { resolveOpenClawStateSqlitePath } from "../../../state/openclaw-state-db.paths.js";
 import { isUserModelAuthProfileId } from "../../../state/user-model-account-id.js";
@@ -61,6 +67,7 @@ export async function maybeRepairCronInferenceBindings(params: {
   const changes: Array<{ job: PluginDoctorCronJob; binding: CronInferenceBinding }> = [];
   const descriptions: string[] = [];
   const capturedConfigs = new Map<OpenClawConfig, OpenClawConfig>();
+  const inspectedAgents = new Set<string>();
   const captureConfig = (config: OpenClawConfig): OpenClawConfig => {
     let captured = capturedConfigs.get(config);
     if (!captured) {
@@ -108,6 +115,22 @@ export async function maybeRepairCronInferenceBindings(params: {
         // Resolve legacy ownership before capturing; matching provider loads share this generation.
         // Account selection and authorization still use each job's own agent and session.
         const config = captureConfig(params.cfg);
+        // The inspection owner retains one image for sessions, auth and catalogs across jobs.
+        if (isArtifactPreservingStateRead("agent") && !inspectedAgents.has(agentId)) {
+          const sessionTarget = await prepareSqliteTargetFromSessionStorePath(
+            resolveSessionStorePathCore(config.session?.store, { agentId, env }),
+            { agentId, env },
+          );
+          for (const agentPath of new Set([
+            resolveOpenClawAgentSqlitePath({ agentId, env }),
+            sessionTarget.path,
+          ])) {
+            if (existsSync(agentPath)) {
+              await prepareArtifactPreservingSqliteRead(agentPath);
+            }
+          }
+          inspectedAgents.add(agentId);
+        }
         const baseKey =
           resolveCronSessionTargetSessionKey(job.sessionTarget) ?? `cron:${stored.id}`;
         const sessionKey = resolveCronAgentSessionKey({
