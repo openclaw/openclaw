@@ -82,6 +82,13 @@ async function waitForPreview(card: Locator) {
   await frame.waitFor();
   await frame.contentFrame().getByText("All systems nominal", { exact: true }).waitFor();
 }
+async function searchDashboards(gallery: Locator, query: string) {
+  const field = gallery.getByRole("searchbox", { name: "Search dashboards", exact: true });
+  if (!(await field.isVisible())) {
+    await gallery.getByRole("button", { name: "Search dashboards", exact: true }).click();
+  }
+  await field.fill(query);
+}
 suite.define(() => {
   it.each(["dark", "light"] as const)("fits empty dashboard previews in %s mode", async (mode) => {
     const capture = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
@@ -135,14 +142,14 @@ suite.define(() => {
         });
         await page.goto(`${suite.server.baseUrl}dashboards`);
         const gallery = page.locator("openclaw-dashboards-page");
-        const toolbar = gallery.locator(".dashboards-toolbar");
-        await gallery.locator(".dashboards-loading__control").first().waitFor();
-        const loadingToolbar = await toolbar.boundingBox();
+        const header = gallery.locator(".dashboards-header");
+        await gallery.locator(".dashboards-loading").waitFor();
+        const loadingHeader = await header.boundingBox();
         await gateway.resolveDeferred("sessions.list");
-        await gallery.getByRole("searchbox").waitFor();
-        const loadedToolbar = await toolbar.boundingBox();
-        expect(loadedToolbar!.y).toBeCloseTo(loadingToolbar!.y, 0);
-        expect(Math.abs(loadedToolbar!.height - loadingToolbar!.height)).toBeLessThan(1);
+        await gallery.locator("[data-dashboard-session]").first().waitFor();
+        const loadedHeader = await header.boundingBox();
+        expect(loadedHeader!.y).toBeCloseTo(loadingHeader!.y, 0);
+        expect(Math.abs(loadedHeader!.height - loadingHeader!.height)).toBeLessThan(1);
         const emptyCard = gallery.locator(`[data-dashboard-session="${emptyKey}"]`);
         const filledCard = gallery.locator(`[data-dashboard-session="${selectedSessionKey}"]`);
         const empty = emptyCard.locator(".board-empty");
@@ -184,7 +191,8 @@ suite.define(() => {
                 left: preview.left,
                 right: preview.right,
               },
-              content: [element, ...element.children].map((child) => {
+              // The sheet extends beyond its frame; the empty-state content must stay readable.
+              content: [...element.children].map((child) => {
                 const rect = child.getBoundingClientRect();
                 return { top: rect.top, bottom: rect.bottom, left: rect.left, right: rect.right };
               }),
@@ -209,14 +217,14 @@ suite.define(() => {
         await emptyCard.hover();
         await expect.poll(async () => (await emptyCard.boundingBox())!.y).toBeLessThan(restingY);
         await saveFrame("hover", emptyCard);
-        await gallery.getByRole("searchbox").fill("No matching dashboard");
+        await searchDashboards(gallery, "No matching dashboard");
         await gallery.locator("[data-dashboards-no-results]").waitFor();
         await saveFrame("search-empty", gallery.locator("[data-dashboards-no-results]"));
         await gateway.setMethodResponse("sessions.list", {
           cases: [responseCase({ hasBoard: true }, list([]))],
         });
         await page.reload();
-        await gallery.locator(".dashboards-loading__control").first().waitFor();
+        await gallery.locator(".dashboards-loading").waitFor();
         await gateway.resolveDeferred("sessions.list");
         await gallery.locator("[data-dashboards-empty]").waitFor();
         expect(await gallery.locator("[data-dashboards-no-results]").count()).toBe(0);
@@ -274,17 +282,17 @@ suite.define(() => {
         await page.goto(`${suite.server.baseUrl}dashboards`);
         const gallery = page.locator("openclaw-dashboards-page");
         const geometry = async () => {
-          const toolbar = (await gallery.locator(".dashboards-toolbar").boundingBox())!;
+          const header = (await gallery.locator(".dashboards-header").boundingBox())!;
           const card = (await gallery.locator(".dashboard-card").first().boundingBox())!;
-          return { toolbarHeight: toolbar.height, cardY: card.y, cardHeight: card.height };
+          return { headerHeight: header.height, cardY: card.y, cardHeight: card.height };
         };
-        await gallery.locator(".dashboards-loading__control").first().waitFor();
+        await gallery.locator(".dashboards-loading").waitFor();
         const loading = await geometry();
         await gateway.resolveDeferred("sessions.list");
-        await gallery.getByRole("searchbox").waitFor();
+        await gallery.locator("[data-dashboard-session]").first().waitFor();
         await gallery.locator("[data-dashboard-session]").waitFor();
         const loaded = await geometry();
-        expect(loaded.toolbarHeight).toBeCloseTo(loading.toolbarHeight, 0);
+        expect(loaded.headerHeight).toBeCloseTo(loading.headerHeight, 0);
         expect(loaded.cardY).toBeCloseTo(loading.cardY, 0);
         expect(loaded.cardHeight).toBeCloseTo(loading.cardHeight, 0);
       },
@@ -293,7 +301,7 @@ suite.define(() => {
 
   it("opens a responsive gallery card without restarting its retained dashboard widgets", async () => {
     await suite.withPage(
-      { colorScheme: "dark", viewport: { width: 1440, height: 900 } },
+      { colorScheme: "dark", viewport: { width: 1440, height: 900 }, hasTouch: true },
       async ({ page }) => {
         await page.route("**/dashboard-gallery-widget.html", (route) =>
           route.fulfill({
@@ -347,7 +355,12 @@ suite.define(() => {
         });
         await releaseCard.waitFor();
         expect(await gallery.locator("[data-dashboard-session]").count()).toBe(12);
-        expect(await gallery.getByText("By Mira", { exact: true }).count()).toBe(6);
+        expect(
+          await gallery
+            .locator(".dashboard-card__author")
+            .getByText("Mira", { exact: true })
+            .count(),
+        ).toBe(6);
         await waitForPreview(releaseCard);
         expect(await releaseCard.locator('[data-widget-name="release-tools"]').count()).toBe(0);
         expect(await gateway.getRequests("board.widget.appView")).toHaveLength(0);
@@ -383,7 +396,7 @@ suite.define(() => {
         const documentStartedAt = await page.evaluate(() => performance.timeOrigin);
         await openSidebarPages(page);
         await page.getByRole("link", { name: "Dashboards", exact: true }).click();
-        await gallery.getByRole("searchbox").fill("Release health");
+        await searchDashboards(gallery, "Release health");
         await releaseCard.locator("a").click();
         await page.waitForURL(
           /\/dashboard\/main\/release-health-1234567890abcdef1234567890abcdef(?:\?.*)?$/u,
@@ -421,46 +434,58 @@ suite.define(() => {
           .toEqual({ documentWidth: 390, viewportWidth: 390, columns: 1 });
 
         const cards = gallery.locator("[data-dashboard-session]");
-        const filter = gallery.locator(".dashboards-filter__trigger");
+        const filter = gallery.getByRole("button", { name: "Filter by author", exact: true });
         expect(await filter.getAttribute("class")).not.toContain("active");
         await filter.click();
-        const popover = page.locator("#dashboards-filter-popover");
-        await popover.getByRole("radio", { name: "Riley" }).click();
+        const popover = page.locator("#dashboards-author-filter");
+        const riley = popover.getByRole("checkbox", { name: /Riley/ });
+        const mira = popover.getByRole("checkbox", { name: /Mira/ });
+        await riley.check();
         await expect.poll(() => cards.count()).toBe(6);
-        await popover.getByRole("radio", { name: "Title A–Z" }).click();
-        await expect.poll(() => cards.first().locator("h2").textContent()).toBe("Dashboard 1");
+        await mira.check();
+        await expect.poll(() => cards.count()).toBe(12);
         expect(await filter.getAttribute("class")).toContain("active");
-        await popover.getByRole("radio", { name: "All authors" }).click();
-        await popover.getByRole("radio", { name: "Recently updated" }).click();
+        await popover.getByRole("button", { name: "Clear", exact: true }).click();
         await expect.poll(() => cards.count()).toBe(12);
         expect(await filter.getAttribute("class")).not.toContain("active");
+        await page.keyboard.press("Escape");
 
-        // Each group is one tab stop, and arrow keys move the checked option with wraparound.
-        const authors = popover.locator(".dashboards-filter__authors").getByRole("radio");
-        await expect
-          .poll(() =>
-            authors.evaluateAll((options) =>
-              options.map((option) => option.getAttribute("tabindex")),
-            ),
-          )
-          .toEqual(["0", "-1", "-1"]);
-        await authors.first().focus();
-        await page.keyboard.press("ArrowUp");
-        await expect.poll(() => authors.last().getAttribute("aria-checked")).toBe("true");
-        expect(await authors.last().evaluate((option) => option.matches(":focus"))).toBe(true);
+        const display = gallery.getByRole("button", { name: "Display", exact: true });
+        const displayMenu = page.locator("#dashboards-display");
+        await display.click();
+        await displayMenu.getByLabel("Ordering").selectOption("title");
+        await expect.poll(() => cards.first().locator("h2").textContent()).toBe("Dashboard 1");
+        await displayMenu.getByRole("button", { name: "List", exact: true }).click();
+        await displayMenu.getByLabel("Grouping").selectOption("author");
+        await expect.poll(() => gallery.locator(".dashboard-row").count()).toBe(12);
+        await expect.poll(() => gallery.locator(".dashboards-group__heading").count()).toBe(2);
+        await page.keyboard.press("Escape");
+        await page.reload();
+        await expect.poll(() => gallery.locator(".dashboard-row").count()).toBe(12);
+        await expect.poll(() => gallery.locator(".dashboards-group__heading").count()).toBe(2);
+        await expect.poll(() => cards.first().locator("h2").textContent()).toBe("Dashboard 1");
+        await display.click();
+        await displayMenu.getByRole("button", { name: "Grid", exact: true }).click();
+        await displayMenu.getByLabel("Grouping").selectOption("none");
+        await displayMenu.getByLabel("Ordering").selectOption("updated");
+        await page.keyboard.press("Escape");
+
+        // Native checkboxes remain reachable and toggle author selection with Space.
+        await filter.click();
+        await riley.focus();
+        await page.keyboard.press("Space");
         await expect.poll(() => cards.count()).toBe(6);
-        await page.keyboard.press("ArrowDown");
-        await expect.poll(() => authors.first().getAttribute("aria-checked")).toBe("true");
+        expect(await riley.evaluate((input) => input.matches(":focus"))).toBe(true);
+        await page.keyboard.press("Space");
         await expect.poll(() => cards.count()).toBe(12);
 
         // An outside tap only closes the popover; the next one opens the card.
         const galleryUrl = page.url();
         const card = cards.nth(1);
-        const cardBox = (await card.boundingBox())!;
-        await page.mouse.click(cardBox.x + 4, cardBox.y + cardBox.height - 8);
+        await card.locator("a").tap();
         await popover.waitFor({ state: "hidden" });
         expect(page.url()).toBe(galleryUrl);
-        await page.mouse.click(cardBox.x + 4, cardBox.y + cardBox.height - 8);
+        await card.locator("a").tap();
         await expect.poll(() => page.url()).not.toBe(galleryUrl);
       },
     );

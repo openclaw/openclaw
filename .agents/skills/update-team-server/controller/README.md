@@ -215,6 +215,13 @@ For a gate-aware incumbent, use the retained adoption owner and its exact
 approved closure descriptors; replacing files outside that owner leaves the
 completed gate bound to the predecessor and correctly refuses admission.
 
+A completed gate from an earlier incident requires the explicit
+[`historical-successor` adoption action](RETAINED-REPAIR.md#whole-closure-adoption-boundary).
+It binds that gate and completion as immutable history, plus the new retained
+V1 incident and independently reviewed actual four-file incumbent and replacement
+closures. It reuses the existing adoption publication and replay owner; neither
+an old completion nor a new operation UUID authorizes today's files or incident.
+
 ## Installed closure
 
 Install from one reviewed, merged OpenClaw commit. These four files are one

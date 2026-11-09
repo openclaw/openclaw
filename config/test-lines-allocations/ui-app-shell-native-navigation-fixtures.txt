@@ -1,0 +1,4 @@
+# ui/src/app/app-host-native-shell.test.ts: +2 LF lines in #194506.
+# Identify ready routes in native navigation and drawer-focus fixtures so
+# their existing assertions exercise navigation after cold-connection locking.
+2

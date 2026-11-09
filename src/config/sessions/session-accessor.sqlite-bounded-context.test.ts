@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import path from "node:path";
 import { expect, it as baseIt, vi } from "vitest";
+import { BACKGROUND_RESULT_PLACEMENT_CUSTOM_TYPE } from "../../../packages/agent-core/src/harness/session/background-result-placement.js";
 import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { CURRENT_SESSION_VERSION, SessionManager } from "../../agents/sessions/session-manager.js";
 import { makeAgentAssistantMessage } from "../../agents/test-helpers/agent-message-fixtures.js";
@@ -31,6 +32,7 @@ import {
   readSessionTranscriptBoundedMessageTailPage as tailPage,
 } from "./session-accessor.sqlite-active-events.js";
 import {
+  clearHistoryNavigation,
   readActiveTranscriptStats as activeStats,
   readSessionTranscriptHistoryEventById as historyEvent,
   withRecentActiveTranscriptEvents as visitRecentEvents,
@@ -133,6 +135,85 @@ async function withBoundedContextScope(run: (scope: Scope) => Promise<void>): Pr
 
 const it = baseIt.extend<{ scope: Scope }>({
   scope: async ({ task: _task }, use) => withBoundedContextScope(use),
+});
+
+it("keeps bounded hydration identical with complete, partial and absent active facts", async ({
+  scope,
+}) => {
+  const compare = async (ids: string[], maxEvents = 1) => {
+    await waitProjection(scope);
+    const database = openOpenClawAgentDatabase({ agentId: scope.agentId });
+    const { db } = database;
+    const countFacts = () =>
+      db
+        .prepare(
+          "SELECT count(*) AS count FROM session_transcript_active_event_facts WHERE session_id = ?",
+        )
+        .get(scope.sessionId)?.count;
+    const count = countFacts();
+    expect(count).toBeGreaterThan(0);
+    const read = () =>
+      boundedContext(scope, { maxBytes: 16_384, maxEvents, transaction: database });
+    db.exec("SAVEPOINT active_fact_coverage");
+    try {
+      const full = read();
+      const stats = activeStats(scope);
+      expect(eventIds(full.events)).toEqual([scope.sessionId, ...ids]);
+      expect(full.serializedBytes).toBe(serializedBytes(full.events));
+      for (const predicate of ["AND seq % 2 = 0", ""]) {
+        db.prepare(
+          `DELETE FROM session_transcript_active_event_facts WHERE session_id = ? ${predicate}`,
+        ).run(scope.sessionId);
+        expect(read()).toEqual(full);
+        expect(activeStats(scope)).toEqual(stats);
+      }
+      expect(countFacts()).toBe(0);
+    } finally {
+      db.exec("ROLLBACK TO active_fact_coverage; RELEASE active_fact_coverage");
+    }
+    expect(countFacts()).toBe(count);
+  };
+  const pending = {
+    ...makeAgentAssistantMessage({
+      provider: "openclaw",
+      model: "automation-result",
+      content: [{ type: "text" as const, text: "Retained background result" }],
+    }),
+    excludeFromContext: true,
+    openclawModelPlacement: "pending",
+  };
+  await persist(scope, [
+    user("root", null),
+    transcriptMessage("pending", "root", pending),
+    transcriptMessage("excluded", "pending", { ...pending, model: "ordinary" }),
+    user("tail", "excluded"),
+  ]);
+  await compare(["pending", "tail"]);
+  await appendTranscriptEvent(scope, {
+    type: "custom",
+    id: "placement",
+    parentId: "tail",
+    customType: BACKGROUND_RESULT_PLACEMENT_CUSTOM_TYPE,
+    data: { afterEntryId: "tail", resultEntryIds: ["pending"] },
+  });
+  await persist(scope, [user("next", "placement")]);
+  await compare(["pending", "placement", "next"], 2);
+  await appendTranscriptEvent(scope, reset("reset", "next"));
+  await persist(scope, [user("fresh", "reset")]);
+  await compare(["reset", "fresh"]);
+  await appendTranscriptEvent(scope, compaction("summary", "fresh", "fresh", "Earlier work"));
+  await persist(scope, [user("newest", "summary")]);
+  await compare(["summary", "newest"]);
+  await appendTranscriptEvent(scope, {
+    type: "leaf",
+    id: "switch",
+    parentId: "newest",
+    // Leaf selection cannot cross the latest reset boundary.
+    targetId: "fresh",
+  });
+  await compare(["reset", "fresh"]);
+  await persist(scope, [user("branch", "fresh")]);
+  await compare(["reset", "branch"]);
 });
 
 it("reports slow hydration scan shape without formatting fast reads or draining byte-limited scans", async ({
@@ -351,13 +432,7 @@ it.for([false, true])(
     await waitProjection(scope);
     runOpenClawAgentWriteTransaction(
       (database) => {
-        database.db
-          .prepare(`UPDATE transcript_events
-          SET navigation_type = NULL, navigation_custom_type = NULL,
-              navigation_display = 0, message_role = NULL, navigation_last_type = NULL,
-              navigation_last_custom_type = NULL, navigation_valid = 1
-          WHERE session_id = ?`)
-          .run(scope.sessionId);
+        clearHistoryNavigation(database, scope.sessionId);
         if (unindexedHeader) {
           // Imported headers can lack identity ownership while later messages are indexed.
           database.db
@@ -490,15 +565,7 @@ it.for(["header", "compaction"] as const)(
       await waitProjection(scope);
     }
     runOpenClawAgentWriteTransaction(
-      (database) => {
-        database.db
-          .prepare(`UPDATE transcript_events
-            SET navigation_type = NULL, navigation_custom_type = NULL,
-                navigation_display = 0, message_role = NULL, navigation_last_type = NULL,
-                navigation_last_custom_type = NULL, navigation_valid = 1
-            WHERE session_id = ?`)
-          .run(scope.sessionId);
-      },
+      (database) => clearHistoryNavigation(database, scope.sessionId),
       { agentId: scope.agentId },
     );
     const { db } = openOpenClawAgentDatabase({ agentId: scope.agentId });

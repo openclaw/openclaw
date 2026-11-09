@@ -59,7 +59,6 @@ it.each([
   expect(busy).not.toBeNull();
   const placeholders = busy?.querySelectorAll(".skeleton") ?? [];
   expect(placeholders.length).toBeGreaterThan(0);
-  expect(busy?.querySelector(".dashboards-toolbar")).not.toBeNull();
   expect(busy?.querySelectorAll(".dashboards-grid .dashboard-preview").length).toBeGreaterThan(0);
   for (const placeholder of placeholders) {
     expect(placeholder.closest('[aria-hidden="true"]')).not.toBeNull();
@@ -98,20 +97,20 @@ it.each([
 });
 
 it.each([
-  [{ ownerIds: [] }, false],
-  [{ ownerIds: ["riley"] }, true],
-] as const)("marks the phone filter trigger for %j", (selected, active) => {
+  [{ ownerIds: [], sort: "updated" }, false],
+  [{ ownerIds: ["riley"], sort: "updated" }, true],
+  [{ ownerIds: [], sort: "title" }, false],
+] as const)("marks the author filter trigger for %j", (selected, active) => {
   const { container } = mountSolid(() => (
     <DashboardsView
       data={routeData([dashboard])}
       readReady={() => undefined}
-      filters={{ ...filters, ownerIds: [...selected.ownerIds] }}
+      filters={{ ...filters, sort: selected.sort, ownerIds: [...selected.ownerIds] }}
       handlers={handlers}
     />
   ));
 
-  const trigger = container.querySelector(".dashboards-filter__trigger");
-  expect(trigger?.getAttribute("aria-label")).toBe("Filters");
+  const trigger = container.querySelector('button[aria-label="Filter by author"]');
   expect(trigger?.classList.contains("active")).toBe(active);
 });
 

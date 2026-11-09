@@ -4,7 +4,7 @@ import { HeaderSearchField } from "../../components/solid/header-search.tsx";
 import { IconButton, iconButtonClass } from "../../components/solid/icon-button.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import { Popover } from "../../components/solid/popover.tsx";
-import { renderSessionOwnerChip } from "../../components/solid/session-presentation.tsx";
+import { SessionOwnerChip } from "../../components/solid/session-owner-chip.tsx";
 import { t } from "../../lib/reactive/i18n.ts";
 import { listen } from "../../lib/reactive/listener.ts";
 import type { SessionCreatedActor } from "../../lib/session-owner.ts";
@@ -35,18 +35,19 @@ export function DashboardSearch(props: { query: string; onQueryChange: (query: s
   const [phone, setPhone] = createSignal(media?.matches ?? false);
   onSettled(() => (media ? listen(media, "change", () => setPhone(media.matches)) : undefined));
   const [open, setOpen] = createSignal(false);
-  let toggle: HTMLElement | undefined;
+  let toggle: HTMLButtonElement | undefined;
   const close = () => {
     props.onQueryChange("");
     setOpen(false);
-    queueMicrotask(() => toggle?.querySelector("button")?.focus({ preventScroll: true }));
+    queueMicrotask(() => toggle?.focus({ preventScroll: true }));
   };
   return (
     <Show
       when={open() || props.query || phone()}
       fallback={
-        <span ref={(element) => (toggle = element)} class="dashboards-search-toggle">
+        <span class="dashboards-search-toggle">
           <IconButton
+            ref={(element) => (toggle = element)}
             size={36}
             icon="search"
             label={t("dashboardsPage.searchLabel")}
@@ -190,7 +191,7 @@ export function DashboardAuthorFilter(props: {
             ref={(element) => queueMicrotask(() => element.focus({ preventScroll: true }))}
             type="search"
             autocomplete="off"
-            spellcheck={false}
+            spellcheck="false"
             placeholder={t("dashboardsPage.filterAuthors")}
             aria-label={t("dashboardsPage.filterAuthors")}
             value={query()}
@@ -225,9 +226,14 @@ export function DashboardAuthorFilter(props: {
               >
                 <Checkbox
                   checked={selected().includes(author().id)}
-                  onChange={() => toggle(author().id)}
+                  onChange={(event) => {
+                    const input = event.currentTarget;
+                    toggle(author().id);
+                    // Selection reorders rows; retain focus on the moved checkbox.
+                    onSettled(() => input.focus({ preventScroll: true }));
+                  }}
                 />
-                {renderSessionOwnerChip(author().avatar, "row")}
+                <SessionOwnerChip owner={author().avatar} size="row" />
                 <span class="dashboards-authors__name">
                   <AuthorName
                     name={authorDisplayName(author(), props.selfId)}
@@ -265,14 +271,14 @@ export function DashboardAuthorChip(props: {
             fallback={
               <>
                 <span class="dashboards-chip__prefix">{t("dashboardsPage.authorIs")}</span>
-                {renderSessionOwnerChip(picked()[0]!.avatar, "row")}
+                <SessionOwnerChip owner={picked()[0]!.avatar} size="row" />
                 <span>{authorDisplayName(picked()[0]!, props.selfId)}</span>
               </>
             }
           >
             <span class="dashboards-chip__stack" aria-hidden="true">
               <For each={picked().slice(0, 3)} keyed={(author) => author.id}>
-                {(author) => renderSessionOwnerChip(author().avatar, "row")}
+                {(author) => <SessionOwnerChip owner={author().avatar} size="row" />}
               </For>
             </span>
             <span>{t("dashboardsPage.authorCount", { count: String(picked().length) })}</span>
