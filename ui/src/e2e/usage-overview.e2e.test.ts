@@ -235,9 +235,7 @@ suite.define(() => {
         await option.waitFor({ state: "hidden" });
         const query = page.locator(".usage-filter-menu__query input");
         await openUsageFilter(page);
-        // Escape belongs to the topmost overlay, including a hovered trigger's tooltip.
         await page.mouse.move(0, 0);
-        await expect.poll(() => page.locator("openclaw-tooltip[open]").count()).toBe(0);
         await page.keyboard.press("Tab");
         await expect
           .poll(() =>
@@ -250,6 +248,15 @@ suite.define(() => {
         await expect
           .poll(() => query.evaluate((element) => element === document.activeElement))
           .toBe(true);
+        // Keyboard focus opens the query hint; Escape dismisses that overlay before the menu.
+        const queryHint = page.getByRole("tooltip").filter({ hasText: "Filter sessions (e.g." });
+        await queryHint.waitFor({ state: "visible" });
+        await page.keyboard.press("Escape");
+        await queryHint.waitFor({ state: "hidden" });
+        expect(
+          await page.locator(".usage-filter-menu__trigger").getAttribute("aria-expanded"),
+        ).toBe("true");
+        expect(await query.inputValue()).toBe('model:"Local Model" ');
         await page.keyboard.press("Escape");
         await expect
           .poll(() => page.locator(".usage-filter-menu__trigger").getAttribute("aria-expanded"))

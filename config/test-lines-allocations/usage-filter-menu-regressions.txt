@@ -1,2 +1,2 @@
-# Existing Usage tests: Filter/submenu/chip interactions, query ownership, exports and keyboard access without losing the query on Escape.
-53
+# Existing Usage tests: Filter/submenu/chip interactions, query ownership, exports and keyboard access; focus-hint dismissal precedes root Escape without losing the query.
+58
