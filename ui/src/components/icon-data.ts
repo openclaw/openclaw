@@ -554,6 +554,17 @@ export const iconData = {
   ]),
   list: strokePathData("M8 6h13", "M8 12h13", "M8 18h13", "M3 6h.01", "M3 12h.01", "M3 18h.01"),
   listFilter: strokePathData("M3 6h18", "M7 12h10", "M10 18h4"),
+  slidersHorizontal: strokePathData(
+    "M10 5H3",
+    "M12 19H3",
+    "M14 3v4",
+    "M16 17v4",
+    "M21 12h-9",
+    "M21 19h-5",
+    "M21 5h-7",
+    "M8 10v4",
+    "M8 12H3",
+  ),
   // Filled dots opt out of the shared fill="none" stroke shell.
   gripVertical: strokeIconData([
     ["circle", { cx: "9", cy: "6", r: "1.1", fill: "currentColor", stroke: "none" }],

@@ -142,7 +142,9 @@ it.each([
     expect(await ref(linked, "HEAD")).toBe(tip);
     // Isolated default refresh need not inspect or prune unrelated broken tips.
     expect(await trackingRefs(clone)).toBe(
-      entry === "worktree" ? "refs/remotes/origin/retired" : "",
+      entry === "worktree" || entry === "missing cached default"
+        ? "refs/remotes/origin/retired"
+        : "",
     );
     expect((await fetch("--prune")).code).toBe(0);
     expect(await trackingRefs(clone)).toBe("");
