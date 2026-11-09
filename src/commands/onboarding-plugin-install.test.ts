@@ -6,6 +6,7 @@ import type { PluginInstallRecord as PersistedPluginInstallRecord } from "../con
 import type { PluginEnableResult } from "../plugins/enable.js";
 import { installPluginDirectoryIntoExtensions } from "../plugins/install-shared.js";
 import type { PluginInstallUpdate } from "../plugins/installs.js";
+import { nonRetainingConsentFixture } from "../plugins/test-helpers/artifact-consent.js";
 import { createColdPluginFixture } from "../plugins/test-helpers/cold-plugin-fixtures.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { withTestDir } from "../test-helpers/temp-dir.js";
@@ -255,10 +256,7 @@ describe("ensureOnboardingPluginInstalled", () => {
     vi.stubEnv("OPENCLAW_ALLOW_PLUGIN_INSTALL_OVERRIDES", undefined);
     vi.stubEnv("OPENCLAW_PLUGIN_INSTALL_OVERRIDES", undefined);
     withTimeout.mockImplementation(async <T>(promise: Promise<T>) => await promise);
-    prepareManagedPluginArtifactConsentHandler.mockResolvedValue({
-      onBeforePluginArtifactCommit: async () => {},
-      applyAcceptedSurface: (_pluginId, record) => record,
-    });
+    prepareManagedPluginArtifactConsentHandler.mockResolvedValue(nonRetainingConsentFixture());
     invalidatePluginRuntimeDiscoveryAfterConfigMutation.mockResolvedValue(undefined);
   });
 

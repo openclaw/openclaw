@@ -5,6 +5,7 @@ import type { OpenClawConfig } from "../../../config/types.js";
 import { resolveRegistryUpdateChannel } from "../../../infra/update-channels.js";
 import { resolveClawHubInstallSpecsForUpdateChannel } from "../../../plugins/install-channel-specs.js";
 import { createPluginMetadataSnapshotFixture } from "../../../plugins/plugin-metadata.test-support.js";
+import { nonRetainingConsentFixture } from "../../../plugins/test-helpers/artifact-consent.js";
 import { resolveOpenClawStateSqlitePath } from "../../../state/openclaw-state-db.paths.js";
 import { mockCall } from "../../../test-utils/mock-call-assertions.js";
 import { VERSION } from "../../../version.js";
@@ -338,10 +339,7 @@ export function setupPluginInstallSuite() {
     mockNpmRegistryTags({ beta: VERSION, latest: VERSION });
     // Explicit empty env fixtures fall back to the OS home, outside Vitest's env copy.
     vi.spyOn(os, "homedir").mockReturnValue(tempDirs.make("openclaw-doctor-home-"));
-    prepareManagedPluginArtifactConsentHandler.mockResolvedValue({
-      onBeforePluginArtifactCommit: async () => {},
-      applyAcceptedSurface: (_pluginId, record) => record,
-    });
+    prepareManagedPluginArtifactConsentHandler.mockResolvedValue(nonRetainingConsentFixture());
     mocks.loadPluginMetadataSnapshot.mockReturnValue({ plugins: [], diagnostics: [] });
     mocks.loadPluginManifestRegistryCore.mockReturnValue({ plugins: [], diagnostics: [] });
     mocks.loadInstalledPluginIndexInstallRecords.mockResolvedValue({});
