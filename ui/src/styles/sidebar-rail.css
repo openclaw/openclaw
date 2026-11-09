@@ -738,17 +738,27 @@ html.openclaw-native-macos:not(.openclaw-native-web-chrome)
   max-width: 100%;
 }
 
+/* The Sessions title is a picker that keeps the panel title's 4px inset and
+   mirrors the session row beneath it: the avatar fills a lead column so it
+   centers on the row glyphs, and the label starts on the row text column.
+   Height and radius match the toolbar buttons beside it. */
 .sidebar-session-owner-filter .picker-select__trigger {
   justify-content: flex-start;
-  gap: 5px;
+  gap: var(--sidebar-row-gap);
   width: auto;
-  min-height: 30px;
-  padding: 4px 6px 4px 5px;
+  min-height: var(--rail-header-action-size);
+  padding: 0 6px 0 4px;
   border: 0;
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-md);
   corner-shape: superellipse(1.5);
   background: transparent;
   font-weight: 600;
+}
+
+.sidebar-session-owner-filter .picker-select__trigger .picker-select__leading {
+  flex: 0 0 var(--sidebar-lead);
+  width: var(--sidebar-lead);
+  justify-content: center;
 }
 
 .sidebar-session-owner-filter .picker-select__copy {
@@ -826,8 +836,9 @@ html.openclaw-native-macos:not(.openclaw-native-web-chrome)
 }
 
 .sidebar--rail .sidebar-session-toolbar__button {
-  width: 28px;
-  height: 28px;
+  width: var(--rail-header-action-size);
+  height: var(--rail-header-action-size);
+  border-radius: var(--radius-md);
 }
 
 html.openclaw-native-web-chrome .shell:not(.shell--mobile-nav) .sidebar-panel-header {
