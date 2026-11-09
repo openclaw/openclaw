@@ -427,6 +427,35 @@ The package parser oracle cannot replace manifest membership or missing-file
 proof. Mocked inventory and UI coordinator tests cannot replace the real nested
 Git and worker-owner boundaries. No safe consolidation was identified.
 
+### Adaptive CI follow-up
+
+At `9bdea97f3c1589841d1c1cf81a9bea7ae70886aa`, eight adaptive-CI suites were
+reviewed with their owners, callers, support and history: 40 declarations / 85
+expanded cases. These standalone counts do not add to the overlapping
+root/scripts aggregate. No safe removal or consolidation was identified.
+
+| Suite under `test/scripts/`      | Declarations / cases | Retained contract                                                                                                 |
+| -------------------------------- | -------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| `ci-adaptive-costs.test.ts`      | 7 / 7                | Setup and audit costs, per-execution billing rounding, unknown prices and real CLI output.                        |
+| `ci-adaptive-selection.test.ts`  | 4 / 11               | Full scheduled inventory, conservative fallback, incomplete history and recommendations that only add candidates. |
+| `ci-adaptive-decisions.test.ts`  | 1 / 2                | Revision/tree-bound comparisons in shallow checkouts and dirty-checkout fallback.                                 |
+| `ci-adaptive-evaluation.test.ts` | 4 / 10               | Project-qualified outcomes, unavailable evidence, source/timing validation and CLI reports.                       |
+| `ci-adaptive-priors.test.ts`     | 8 / 29               | Bounded tree comparisons, artifact provenance, cutoff, consumer identity and unavailable-network fallback.        |
+| `ci-adaptive-model.test.ts`      | 2 / 2                | Project-qualified dependencies, unknown inputs, validated model data and outcome-independent ranking.             |
+| `ci-adaptive-jev.test.ts`        | 5 / 13               | Opaque identity, complete responses, provider fallback, shared deadline and usage accounting.                     |
+| `ci-adaptive-markdown.test.ts`   | 9 / 11               | Content-qualified omissions, changed dependencies, symlinks and a shared selection graph.                         |
+
+Three fixture repairs retain the existing declarations: give same-path projects
+different dependencies; run invalid-tree cases against an isolated, bounded Git
+tree with a successful control; preserve the comparison tree when changing only
+the base revision. Previously the latter two checks could reject at unrelated
+guards. The source classification was R77/F8 expanded cases, with no C/D cases.
+All eight suites passed on the original and repaired tests (85 cases) with
+Node 26.13.0 on macOS. Eight deliberate owner mutations escaped the original
+tests and failed the repaired tests: project identity, tree identity,
+completeness, path, mode, duplicate path, byte bound and comparison base.
+Source bytes were restored after each mutation. No production code changed.
+
 ## Pending qualification and proof repairs
 
 - Keep source-only candidates separate from applied removals. Obsolete fixture candidates require current-owner and runtime qualification. Pending: Twitch settled flag; it needs current-source and runtime keeper qualification.
