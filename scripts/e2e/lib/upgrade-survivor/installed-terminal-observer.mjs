@@ -233,7 +233,7 @@ function publishedWorkerOptions(data) {
 }
 
 function isolatedWorkerRole(launch, role) {
-  const allowed = ["eval", "env", "execArgv", "workerData"];
+  const allowed = new Set(["eval", "env", "execArgv", "workerData"]);
   return (
     launch?.environment === "empty" &&
     Array.isArray(launch.execArgv) &&
@@ -242,7 +242,7 @@ function isolatedWorkerRole(launch, role) {
     Array.isArray(launch.keys) &&
     launch.keys.includes("env") &&
     launch.keys.includes("execArgv") &&
-    launch.keys.every((key) => allowed.includes(key))
+    launch.keys.every((key) => allowed.has(key))
   );
 }
 

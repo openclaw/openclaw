@@ -6,10 +6,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { gunzipSync } from "node:zlib";
 import { afterEach, expect, it } from "vitest";
-import {
-  readInstalledTerminalDependencyTree,
-  readInstalledTerminalMetadata,
-} from "../../scripts/e2e/lib/upgrade-survivor/installed-terminal-contracts.mjs";
+import { readInstalledTerminalDependencyTree } from "../../scripts/e2e/lib/upgrade-survivor/installed-terminal-contracts.mjs";
 import {
   captureInstalledTerminalProcessAbsence,
   installedTerminalDescendants,
