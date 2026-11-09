@@ -216,6 +216,15 @@ function convertMonitor(
         schedulingInputsRequested: true,
         scheduleChanged,
       });
+      if (previous.state.runningAtMs !== undefined) {
+        // Conversion may disable a monitor whose recovery needs Gateway startup.
+        // Keep its execution facts; cron still owns settlement of that result.
+        Object.assign(job.state, {
+          runningAtMs: previous.state.runningAtMs,
+          runningReceiptId: previous.state.runningReceiptId,
+          runningScheduleChangeId: previous.state.runningScheduleChangeId,
+        });
+      }
     }
   }
   job.updatedAtMs = nowMs;

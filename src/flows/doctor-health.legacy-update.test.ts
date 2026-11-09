@@ -6,6 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { formatCliCommand } from "../cli/command-format.js";
+import { ensureHeartbeatMonitorJobs } from "../commands/doctor-heartbeat-cadence-migration.js";
 import { retireHeartbeatWithDoctor } from "../commands/doctor-heartbeat-retirement.js";
 import * as doctorMaintenance from "../commands/doctor-maintenance.js";
 import { runDoctorSessionSqlite } from "../commands/doctor-session-sqlite.js";
@@ -193,7 +194,14 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 
-it.each(["stopped", "live", "unproved", "notification"] as const)(
+it.each([
+  "stopped",
+  "live",
+  "unproved",
+  "notification",
+  "notification-disabled",
+  "notification-resume-disabled",
+] as const)(
   "keeps update Doctor successful with a %s heartbeat runtime owner",
   async (ownership) => {
     await resultState(async (state, resultPath) => {
@@ -202,7 +210,9 @@ it.each(["stopped", "live", "unproved", "notification"] as const)(
       const configBefore = fs.readFileSync(state.configPath);
       const storePath = resolveCronJobsStorePathFromConfig(cfg, state.env);
       const runningAtMs = Date.now() - 1_000;
-      const startupNotification = ownership === "notification";
+      const disabledDuringConversion =
+        ownership === "notification-disabled" || ownership === "notification-resume-disabled";
+      const startupNotification = ownership === "notification" || disabledDuringConversion;
       const offline = ownership === "stopped" || startupNotification;
       const storeKey = runOpenClawStateWriteTransaction(
         ({ db }) => {
@@ -304,7 +314,17 @@ it.each(["stopped", "live", "unproved", "notification"] as const)(
           if (offline) {
             expect(await service.readRuntime()).toMatchObject({ status: "stopped" });
           }
-          await retireHeartbeatWithDoctor(cfg, state.env);
+          if (ownership === "notification-resume-disabled") {
+            // Reproduce a durable pending receipt left by an interrupted Doctor
+            // after payload conversion, before config retirement disabled it.
+            await ensureHeartbeatMonitorJobs(cfg, storePath, state.env);
+          }
+          await retireHeartbeatWithDoctor(
+            disabledDuringConversion
+              ? { ...cfg, agents: { ...cfg.agents, defaults: { heartbeat: { every: "0m" } } } }
+              : cfg,
+            state.env,
+          );
         });
         const runtime = createDoctorRuntime();
         await expect(runDoctor(runtime)).resolves.toBeUndefined();
@@ -314,7 +334,7 @@ it.each(["stopped", "live", "unproved", "notification"] as const)(
           expectResult(resultPath, { status: "ok" });
           expect(loadedCronStoreFromRows(after.rows).store.jobs[0]).toMatchObject({
             payload: { kind: "agentTurn" },
-            enabled: true,
+            enabled: !disabledDuringConversion,
             state: { runningAtMs, consecutiveErrors: 9 },
           });
           expect(after.history).toEqual(before.history);
@@ -341,20 +361,36 @@ it.each(["stopped", "live", "unproved", "notification"] as const)(
           });
           try {
             await gateway!.run(() => cron.start());
-            await notified.promise;
-            expect(enqueueSessionEvent).toHaveBeenCalledExactlyOnceWith(
-              expect.stringContaining("10 consecutive run failures"),
-              expect.objectContaining({ agentId: "main", jobId: "interrupted-monitor" }),
-            );
+            if (!disabledDuringConversion) {
+              await notified.promise;
+              expect(enqueueSessionEvent).toHaveBeenCalledExactlyOnceWith(
+                expect.stringContaining("10 consecutive run failures"),
+                expect.objectContaining({ agentId: "main", jobId: "interrupted-monitor" }),
+              );
+            } else {
+              // An operator-disabled job needs result settlement, not a new
+              // auto-disable transition or its notification.
+              expect(enqueueSessionEvent).not.toHaveBeenCalled();
+            }
             const settled = read();
             const recovered = loadedCronStoreFromRows(settled.rows).store.jobs[0]!;
             expect(recovered).toMatchObject({
               payload: { kind: "agentTurn" },
               enabled: false,
-              state: { consecutiveErrors: 10, autoDisabled: { reason: "consecutive-failures" } },
+              state: {
+                consecutiveErrors: 10,
+                lastRunAtMs: runningAtMs,
+                lastRunStatus: "error",
+                lastError: "synthetic provider failure",
+                lastDurationMs: 500,
+              },
             });
+            if (!disabledDuringConversion) {
+              expect(recovered.state.autoDisabled?.reason).toBe("consecutive-failures");
+            }
             expect(recovered.state.runningAtMs).toBeUndefined();
             expect(settled.history).toEqual(after.history);
+            expect(settled.history).toHaveLength(1);
             expect(
               withExistingOpenClawStateDatabaseReadOnly(
                 ({ db }) => readCronQuarantinedJobsInDatabase(db, storeKey),
