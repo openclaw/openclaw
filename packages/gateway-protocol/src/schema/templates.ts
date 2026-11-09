@@ -218,12 +218,18 @@ export const TemplateSkillAcknowledgementSchema = closedObject({
 });
 
 export const TemplatesAddPlanParamsSchema = closedObject({
-  source: TemplateCatalogCoordinateSchema,
+  source: Type.Union([
+    TemplateCatalogCoordinateSchema,
+    closedObject({ kind: Type.Literal("local"), path: NonEmptyString }),
+  ]),
   agentId: Type.Optional(NonEmptyString),
 });
 
 export const TemplatesAddApplyParamsSchema = closedObject({
-  source: TemplateCatalogCoordinateSchema,
+  source: Type.Union([
+    TemplateCatalogCoordinateSchema,
+    closedObject({ kind: Type.Literal("local"), path: NonEmptyString }),
+  ]),
   agentId: Type.Optional(NonEmptyString),
   planIntegrity: Type.Optional(NonEmptyString),
   acknowledgeClawHubRisk: Type.Optional(Type.Boolean()),

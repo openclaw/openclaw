@@ -35,17 +35,45 @@ describe("Template Add CLI state ownership", () => {
     );
   });
 
-  it("permits read-only preview but refuses Add while another process owns Gateway state", async () => {
+  it("rejects an unsupported online workspace override before dispatch", async () => {
+    await fixture.startOwner();
+    await expect(
+      runTemplatesAddCommand(source, { json: true, workspace: path.join(root, "custom") }),
+    ).rejects.toThrow("does not support --workspace");
+    expect(fixture.transport.request).not.toHaveBeenCalled();
+  });
+
+  it("routes local Add through the live owner while preview stays read-only", async () => {
     await fs.writeFile(
       process.env.OPENCLAW_CONFIG_PATH!,
       JSON.stringify({ gateway: { controlUi: { experimental: { templates: true } } } }),
     );
     await fixture.startOwner();
     const before = await snapshotTree(root);
-    await expect(runTemplatesAddCommand(source, { json: true })).rejects.toThrow(
-      /exclusive offline state ownership.*stop the Gateway/s,
-    );
-    expect(output).toEqual([]);
+    fixture.handlers["templates.add.plan"] = async ({ params, respond }) => {
+      expect(params).toEqual({ source: { kind: "local", path: source } });
+      respond(true, {
+        planIntegrity: "sha256:reviewed",
+        blockers: [],
+        pluginReviews: [],
+        skillReviews: [],
+      });
+    };
+    fixture.handlers["templates.add.apply"] = async ({ params, respond }) => {
+      expect(params).toMatchObject({
+        source: { kind: "local", path: source },
+        planIntegrity: "sha256:reviewed",
+      });
+      respond(true, {
+        agentId: "demo",
+        status: "complete",
+        readiness: { ready: true, requirements: [] },
+      });
+    };
+    await runTemplatesAddCommand(source, { json: true });
+    expect(output).toEqual([expect.objectContaining({ agentId: "demo", status: "complete" })]);
+    output.length = 0;
+    fixture.transport.request.mockClear();
     expect(await snapshotTree(root)).toEqual(before);
 
     await runTemplatesAddCommand(source, { dryRun: true, json: true });

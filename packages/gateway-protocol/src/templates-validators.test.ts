@@ -40,6 +40,15 @@ const checkPlan = planResult.accepts;
 const rejectPlan = planResult.rejects;
 
 describe("Templates Gateway contract", () => {
+  it("accepts local project Add without expanding catalog or update sources", () => {
+    const source = { kind: "local", path: "/operator/template-project" };
+    addPlan.accepts({ source });
+    addApply.accepts({ source, planIntegrity: "sha256:reviewed" });
+    addApply.rejects({ source: { ...source, archive: "untrusted.tgz" } });
+    detail.rejects(source);
+    updateApply.rejects({ agentId: "demo", source, planIntegrity: "sha256:reviewed" });
+  });
+
   it("allows the public catalog and exact publisher Add coordinates", () => {
     search.accepts({}, { query: "workflow", limit: 30 }, { overview: true, limit: 8 });
     search.rejects({ sourceRoot: "/private/template" });

@@ -14,11 +14,8 @@ import { hasErrnoCode } from "../infra/errno.js";
 import { isPathInside } from "../infra/path-guards.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { selectNextTemplateAgentId } from "./add-agent-id.js";
-import {
-  withResolvedClawHubSource,
-  type ClawHubTemplateTrust,
-  type ClawHubCoordinate,
-} from "./clawhub-source.js";
+import type { ClawHubTemplateTrust } from "./clawhub-source.js";
+import { withResolvedTemplateAddSource, type TemplateAddSource } from "./gateway-add-source.js";
 import { bindTemplateLifecycleTrust, projectTemplateAddPlan } from "./gateway-plan-projection.js";
 import { buildTemplateAddPlan } from "./lifecycle.js";
 import { preflightTemplatePackage } from "./packages.js";
@@ -116,7 +113,7 @@ export async function buildGatewayTemplateAddPlan(
 export function projectGatewayTemplateAddPlan(
   plan: TemplateAddPlan,
   source: VerifiedTemplateSource,
-  trust: ClawHubTemplateTrust,
+  trust: Pick<ClawHubTemplateTrust, "trustWarning" | "riskAcknowledgementRequired">,
   config: OpenClawConfig,
 ): TemplateLifecyclePlanResult {
   const pluginReviews = projectTemplatePluginCapabilityReviews(plan);
@@ -129,10 +126,10 @@ export function projectGatewayTemplateAddPlan(
 export async function planTemplateAddForGateway(
   input: GatewayTemplateAddPlanningContext &
     ClawHubFetchOptions & {
-      source: ClawHubCoordinate;
+      source: TemplateAddSource;
     },
 ): Promise<TemplateLifecyclePlanResult> {
-  const resolved = await withResolvedClawHubSource({
+  const resolved = await withResolvedTemplateAddSource({
     coordinate: input.source,
     mode: "preview",
     ...(input.baseUrl ? { baseUrl: input.baseUrl } : {}),

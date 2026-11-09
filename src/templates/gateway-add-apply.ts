@@ -19,7 +19,6 @@ import {
   type StatelessTemplateAddOptions,
 } from "./add-stateless.js";
 import { TemplateAddMutationError } from "./add.js";
-import { withResolvedClawHubSource, type ClawHubCoordinate } from "./clawhub-source.js";
 import type { TemplateCronGateway, PersistedTemplateCronRef } from "./cron.js";
 import { digestTemplateValue } from "./digest.js";
 import {
@@ -27,6 +26,7 @@ import {
   projectGatewayTemplateAddPlan,
   type GatewayTemplateAddPlanningContext,
 } from "./gateway-add-plan.js";
+import { withResolvedTemplateAddSource, type TemplateAddSource } from "./gateway-add-source.js";
 import { projectTemplateConfiguredAccess } from "./gateway-disclosure.js";
 import { plansMatchAcrossSourceRoots } from "./gateway-plan-projection.js";
 import { bindTemplatePluginInstallConsent } from "./gateway-plugin-consent.js";
@@ -69,7 +69,7 @@ type StagedAddHandoff = {
 
 export async function applyTemplateAddForGateway(
   input: ClawHubFetchOptions & {
-    source: ClawHubCoordinate;
+    source: TemplateAddSource;
     agentId?: string;
     planIntegrity?: string;
     acknowledgeClawHubRisk?: boolean;
@@ -99,7 +99,7 @@ export async function applyTemplateAddForGateway(
   const stateContext = captureOpenClawStateWorkerContext({ env: input.policyConfig.env });
   let settledResult: GatewayTemplateAddApplyResult | undefined;
   try {
-    const resolved = await withResolvedClawHubSource({
+    const resolved = await withResolvedTemplateAddSource({
       coordinate: input.source,
       mode: "apply",
       ...(input.acknowledgeClawHubRisk ? { acknowledgeClawHubRisk: true } : {}),

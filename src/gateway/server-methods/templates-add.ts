@@ -50,11 +50,27 @@ import { assertValidParams } from "./validation.js";
 const log = createSubsystemLogger("gateway/templates-add");
 
 export const templatesAddHandlers: GatewayRequestHandlers = {
-  "templates.add.plan": async ({ params, respond, context }) => {
+  "templates.add.plan": async ({ params, respond, context, client, hasCurrentClientAuthority }) => {
     if (!assertValidParams(params, validateTemplatesAddPlanParams, "templates.add.plan", respond)) {
       return;
     }
+    const assertLocalSourceAuthority = () => {
+      if (
+        "kind" in params.source &&
+        (hasCurrentClientAuthority?.() === false ||
+          (client &&
+            (client.invalidated ||
+              (client.connect.role ?? "operator") !== "operator" ||
+              !client.connect.scopes?.includes(ADMIN_SCOPE))) ||
+          (!client && !context.localEmbedded))
+      ) {
+        throw new TemplateGatewayAuthorityError(
+          "Local Template preview requires current operator-admin authority.",
+        );
+      }
+    };
     try {
+      assertLocalSourceAuthority();
       assertTemplatesLabsEnabled(context.getRuntimeConfig());
       const config = await readCurrentConfigForPolicyCheckAsync({
         configPath: resolveConfigPath(),
@@ -72,9 +88,13 @@ export const templatesAddHandlers: GatewayRequestHandlers = {
         sourceMcpServers: listedMcp.mcpServers,
       });
       assertTemplatesLabsEnabled(context.getRuntimeConfig());
+      assertLocalSourceAuthority();
       respond(true, plan);
     } catch (error) {
-      if (error instanceof TemplatesLabsDisabledError) {
+      if (
+        error instanceof TemplatesLabsDisabledError ||
+        error instanceof TemplateGatewayAuthorityError
+      ) {
         respond(false, undefined, errorShape(ErrorCodes.FORBIDDEN, error.message));
         return;
       }

@@ -304,6 +304,40 @@ describe("Template Add dependency consent authority (real Gateway RPC)", () => {
 
       const admin = await connect({ scopes: ["operator.read", "operator.admin"], token });
       const reader = await connect({ scopes: ["operator.read"], token });
+      const localProject = `${state.workspaceDir}/local-project`;
+      await fs.mkdir(localProject, { recursive: true });
+      await fs.writeFile(
+        `${localProject}/package.json`,
+        JSON.stringify({ name: "@fixture/local-live", version, openclaw: { template: "CLAW.md" } }),
+      );
+      const localManifest =
+        "---\nschemaVersion: 1\nagent: { id: local-live }\n---\nLocal live instructions.\n";
+      await fs.writeFile(`${localProject}/CLAW.md`, localManifest);
+      const localSource = { kind: "local", path: localProject };
+      await expect(
+        reader.client.request("templates.add.plan", { source: localSource }),
+      ).rejects.toThrow();
+      const localReview = await admin.client.request<TemplateLifecyclePlanResult>(
+        "templates.add.plan",
+        { source: localSource },
+      );
+      expect(localReview.trustWarning).toContain("not published to or scanned");
+      await fs.writeFile(`${localProject}/CLAW.md`, localManifest + "Changed.");
+      await expect(
+        admin.client.request("templates.add.apply", {
+          source: localSource,
+          planIntegrity: localReview.planIntegrity,
+        }),
+      ).rejects.toThrow("changed since review");
+      await fs.writeFile(`${localProject}/CLAW.md`, localManifest);
+      await expect(
+        admin.client.request("templates.add.apply", {
+          source: localSource,
+          planIntegrity: localReview.planIntegrity,
+        }),
+      ).resolves.toMatchObject({ agentId: "local-live", status: "complete" });
+      expect(recoveryRestart).not.toHaveBeenCalled();
+
       const source = (fixture: Fixture) => ({ packageName: fixture.templateName, version });
       const plan = async (client: GatewayClient, fixture: Fixture) =>
         await client.request<TemplateLifecyclePlanResult>("templates.add.plan", {
