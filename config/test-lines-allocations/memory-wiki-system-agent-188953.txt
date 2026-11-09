@@ -1,2 +1,2 @@
 # Regression coverage for the system agent CLI default.
-25
+22
