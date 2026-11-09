@@ -14,6 +14,8 @@ private struct SimulatorInputParams: Decodable {
     let action: OpenClawComputerAction
     let x: Double?
     let y: Double?
+    let fromX: Double?
+    let fromY: Double?
     let text: String?
     let keys: String?
 }
@@ -76,7 +78,8 @@ extension MacNodeRuntime {
         let services = await self.mainActorServices()
         let params = try await services.simulatorInput(
             sessionId: input.sessionId, action: input.action,
-            x: input.x, y: input.y, text: input.text, keys: input.keys)
+            x: input.x, y: input.y, fromX: input.fromX, fromY: input.fromY,
+            text: input.text, keys: input.keys)
         try await services.activateSimulator(sessionId: input.sessionId, desktopPermit: desktopPermit)
         let result = try await services.performComputerAct(
             params, lifecycleGeneration: lifecycleGeneration, desktopPermit: desktopPermit)

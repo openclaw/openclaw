@@ -165,7 +165,8 @@ final class SimulatorCaptureService {
     func input(
         sessionId: String,
         action: OpenClawComputerAction,
-        x: Double?, y: Double?, text: String?, keys: String?) async throws -> OpenClawComputerActParams
+        x: Double?, y: Double?, fromX: Double?, fromY: Double?,
+        text: String?, keys: String?) async throws -> OpenClawComputerActParams
     {
         do {
             try await self.validateWindow(sessionId: sessionId)
@@ -174,23 +175,29 @@ final class SimulatorCaptureService {
             throw error
         }
         guard let metadata else { throw CaptureError.staleSession }
-        guard [.leftClick, .leftMouseDown, .mouseMove, .leftMouseUp, .type, .key].contains(action) else {
+        guard [.leftClick, .leftClickDrag, .type, .key].contains(action) else {
             throw CaptureError.staleSession
         }
-        let point: (Double, Double)?
-        if let x, let y, x.isFinite, y.isFinite, (0...1).contains(x), (0...1).contains(y) {
+        func point(_ x: Double?, _ y: Double?) -> (Double, Double)? {
+            guard let x, let y, x.isFinite, y.isFinite,
+                  (0...1).contains(x), (0...1).contains(y) else { return nil }
             let scale = Double(metadata.refWidth) / metadata.displayWidth
-            point = (
+            return (
                 (metadata.windowX - metadata.displayX + x * metadata.windowWidth) * scale,
                 (metadata.windowY - metadata.displayY + y * metadata.windowHeight) * scale)
-        } else if action == .type || action == .key {
-            point = nil
-        } else {
+        }
+        let target = point(x, y)
+        let from = point(fromX, fromY)
+        if action != .type && action != .key && target == nil {
+            throw CaptureError.staleSession
+        }
+        if action == .leftClickDrag && from == nil {
             throw CaptureError.staleSession
         }
         return OpenClawComputerActParams(
-            action: action, displayFrameId: point == nil ? nil : metadata.displayFrameId,
-            x: point?.0, y: point?.1, text: text, keys: keys,
+            action: action, displayFrameId: target == nil ? nil : metadata.displayFrameId,
+            x: target?.0, y: target?.1, fromX: from?.0, fromY: from?.1,
+            text: text, keys: keys,
             screenIndex: metadata.screenIndex, refWidth: metadata.refWidth,
             deliveryMode: .foreground)
     }

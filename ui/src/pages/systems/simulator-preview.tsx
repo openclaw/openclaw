@@ -63,9 +63,7 @@ export function SimulatorPreview(props: {
   const [retry, setRetry] = createSignal(0);
   const [text, setText] = createSignal("");
   let frameSession: { sessionId: string; executionId: string } | undefined;
-  let moveTimer: ReturnType<typeof setTimeout> | undefined;
-  let pendingMove: { x: number; y: number } | undefined;
-  let dragging = false;
+  let gesture: { pointerId: number; fromX: number; fromY: number } | undefined;
   let active = false;
   let endCapture: (() => void) | undefined;
   let previousStop: Promise<void> = Promise.resolve();
@@ -113,23 +111,12 @@ export function SimulatorPreview(props: {
     };
   };
 
-  const flushMove = () => {
-    clearTimeout(moveTimer);
-    moveTimer = undefined;
-    if (pendingMove) {
-      sendInput("mouse_move", pendingMove);
-      pendingMove = undefined;
-    }
-  };
-
   createEffect(
     () => props.canControl,
     (canControl) => {
       if (!canControl) {
         inputQueue.retire();
-        dragging = false;
-        clearTimeout(moveTimer);
-        pendingMove = undefined;
+        gesture = undefined;
       }
     },
   );
@@ -239,9 +226,7 @@ export function SimulatorPreview(props: {
       return () => {
         end();
         if (endCapture === end) endCapture = undefined;
-        dragging = false;
-        clearTimeout(moveTimer);
-        pendingMove = undefined;
+        gesture = undefined;
       };
     },
   );
@@ -280,27 +265,22 @@ export function SimulatorPreview(props: {
                 event.preventDefault();
                 event.currentTarget.focus();
                 event.currentTarget.setPointerCapture(event.pointerId);
-                dragging = true;
-                sendInput("left_mouse_down", point(event));
-              }}
-              onPointerMove={(event) => {
-                if (!dragging) return;
-                pendingMove = point(event);
-                if (!moveTimer) moveTimer = setTimeout(flushMove, 50);
+                const from = point(event);
+                gesture = { pointerId: event.pointerId, fromX: from.x, fromY: from.y };
               }}
               onPointerUp={(event) => {
-                if (!dragging) return;
-                dragging = false;
-                pendingMove = point(event);
-                flushMove();
-                sendInput("left_mouse_up", point(event));
+                const from = gesture;
+                if (!from || from.pointerId !== event.pointerId) return;
+                gesture = undefined;
+                const to = point(event);
+                if (Math.hypot(to.x - from.fromX, to.y - from.fromY) < 0.01) {
+                  sendInput("left_click", to);
+                } else {
+                  sendInput("left_click_drag", { fromX: from.fromX, fromY: from.fromY, ...to });
+                }
               }}
               onPointerCancel={(event) => {
-                if (!dragging) return;
-                dragging = false;
-                clearTimeout(moveTimer);
-                pendingMove = undefined;
-                sendInput("left_mouse_up", point(event));
+                if (gesture?.pointerId === event.pointerId) gesture = undefined;
               }}
               onKeyDown={(event) => {
                 if (!props.canControl || event.metaKey || event.ctrlKey || event.altKey) return;

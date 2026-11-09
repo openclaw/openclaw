@@ -28,7 +28,8 @@ protocol MacNodeRuntimeMainActorServices: Sendable {
     func stopSimulatorCapture(forExecutionId executionId: String) async
     func simulatorInput(
         sessionId: String, action: OpenClawComputerAction,
-        x: Double?, y: Double?, text: String?, keys: String?) async throws -> OpenClawComputerActParams
+        x: Double?, y: Double?, fromX: Double?, fromY: Double?,
+        text: String?, keys: String?) async throws -> OpenClawComputerActParams
     func activateSimulator(sessionId: String, desktopPermit: MacDesktopAvailabilityCoordinator.Permit) throws
 
     func locationAuthorizationStatus() -> CLAuthorizationStatus
@@ -110,10 +111,12 @@ final class LiveMacNodeRuntimeMainActorServices: MacNodeRuntimeMainActorServices
 
     func simulatorInput(
         sessionId: String, action: OpenClawComputerAction,
-        x: Double?, y: Double?, text: String?, keys: String?) async throws -> OpenClawComputerActParams
+        x: Double?, y: Double?, fromX: Double?, fromY: Double?,
+        text: String?, keys: String?) async throws -> OpenClawComputerActParams
     {
         try await self.simulatorCapture.input(
-            sessionId: sessionId, action: action, x: x, y: y, text: text, keys: keys)
+            sessionId: sessionId, action: action, x: x, y: y,
+            fromX: fromX, fromY: fromY, text: text, keys: keys)
     }
 
     func activateSimulator(sessionId: String, desktopPermit: MacDesktopAvailabilityCoordinator.Permit) throws {

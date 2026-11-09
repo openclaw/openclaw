@@ -204,10 +204,11 @@ struct MacNodeRuntimeTests {
 
         func simulatorInput(
             sessionId: String, action: OpenClawComputerAction,
-            x: Double?, y: Double?, text: String?, keys: String?) async throws -> OpenClawComputerActParams
+            x: Double?, y: Double?, fromX: Double?, fromY: Double?,
+            text: String?, keys: String?) async throws -> OpenClawComputerActParams
         {
             return OpenClawComputerActParams(
-                action: action, x: x, y: y, text: text, keys: keys,
+                action: action, x: x, y: y, fromX: fromX, fromY: fromY, text: text, keys: keys,
                 refWidth: 1200, deliveryMode: .foreground)
         }
 

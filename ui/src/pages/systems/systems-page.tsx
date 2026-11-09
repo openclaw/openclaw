@@ -472,23 +472,33 @@ function SystemsWorkspace(props: {
             )}
           </For>
         </select>
-        <Show when={simulatorNode()}>
-          <button
-            class="systems-text-button"
-            aria-pressed={controller().state.preview === "simulator" ? "true" : "false"}
-            onClick={() => controller().updatePresentation({ preview: "simulator" })}
-          >
-            {t("systems.simulator.title")}
-          </button>
-          <Show when={canView()}>
+        <Show when={availableSimulator()}>
+          {(entry) => (
             <button
               class="systems-text-button"
-              aria-pressed={controller().state.preview === "desktop" ? "true" : "false"}
-              onClick={() => controller().updatePresentation({ preview: "desktop" })}
+              aria-pressed={
+                controller().state.preview === "simulator" &&
+                controller().state.selectedId === entry().environment.id
+                  ? "true"
+                  : "false"
+              }
+              onClick={() => {
+                controller().select(entry().environment.id);
+                controller().updatePresentation({ preview: "simulator" });
+              }}
             >
-              {t("systems.desktop")}
+              {t("systems.simulator.title")}
             </button>
-          </Show>
+          )}
+        </Show>
+        <Show when={simulatorNode() && canView()}>
+          <button
+            class="systems-text-button"
+            aria-pressed={controller().state.preview === "desktop" ? "true" : "false"}
+            onClick={() => controller().updatePresentation({ preview: "desktop" })}
+          >
+            {t("systems.desktop")}
+          </button>
         </Show>
         <button
           class="systems-icon-button"
