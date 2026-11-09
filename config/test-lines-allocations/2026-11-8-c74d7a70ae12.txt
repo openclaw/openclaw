@@ -1,0 +1,2 @@
+59
+# Exercise optional OpenAI Responses inputs through configured and discovered ClawRouter dispatch.
