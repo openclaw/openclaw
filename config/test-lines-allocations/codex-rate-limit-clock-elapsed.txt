@@ -1,2 +1,2 @@
-# Expire the Codex rate-limit cache on elapsed time for PR #195XXX.
+# Expire the Codex rate-limit cache on elapsed time for PR #195557.
 44
