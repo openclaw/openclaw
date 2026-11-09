@@ -339,6 +339,48 @@ struct ChatSourcePreviewTests {
         #expect(cards == [[], [self.first, self.second], []])
     }
 
+    @Test @MainActor func `split row cards follow each row's visible text across repeated renders`() {
+        func split(_ text: String, id: UUID = UUID(), run: String? = nil) -> OpenClawChatMessage {
+            OpenClawChatMessage(id: id, role: "assistant", content: [
+                .init(type: "toolCall", id: "call", name: "read"),
+                .init(type: "tool_result", text: "Recorded", id: "call"),
+                .init(type: "text", text: text),
+            ], timestamp: 3, transcriptRunID: run ?? self.runID, phase: "final_answer")
+        }
+        let state = ChatSourcePreviewState()
+        let cited = split("Read \(self.first).")
+        let uncited = split("Read \(self.first).", run: "other-run")
+        let search = self.search([self.row(self.first), self.row(self.second)])
+        state.update([search, cited, uncited])
+        let render = { (messages: [OpenClawChatMessage]) in
+            messages.flatMap(\.workPresentationParts).map { state.previews(for: $0).map(\.url.absoluteString) }
+        }
+        for _ in 0..<3 {
+            #expect(render([cited, uncited]) == [[], [self.first], [], []])
+        }
+
+        let revised = split("Read \(self.second).", id: cited.id)
+        #expect(render([revised]) == [[], []])
+        state.update([search, revised])
+        #expect(render([revised]) == [[], [self.second]])
+
+        // Same row and content; each step changes one footer input of the visible text from the step before.
+        func footer(_ stopReason: String?, cites url: String? = nil, ownsFooter: Bool = true) -> OpenClawChatMessage {
+            var part = OpenClawChatMessage(
+                id: cited.id, role: "assistant", content: [.init(type: "text", text: "")], timestamp: 3,
+                transcriptRunID: self.runID, stopReason: stopReason, errorMessage: "See \(url ?? self.second).")
+            part.presentationBlockIndex = 5
+            part.presentationOwnsFooter = ownsFooter
+            return part
+        }
+        let cards = { (part: OpenClawChatMessage) in state.previews(for: part).map(\.url.absoluteString) }
+        #expect(cards(footer(nil)).isEmpty)
+        #expect(cards(footer("error")) == [self.second])
+        #expect(cards(footer("error", cites: self.first)).isEmpty)
+        #expect(cards(footer("error")) == [self.second])
+        #expect(cards(footer("error", ownsFooter: false)).isEmpty)
+    }
+
     private func answer(_ text: String) -> OpenClawChatMessage {
         OpenClawChatMessage(
             role: "assistant", content: [.init(type: "text", text: text, mimeType: nil, fileName: nil, content: nil)],
