@@ -53,10 +53,12 @@ async function mountReview(initialContext: ApplicationContext) {
     return <TemplateCreatorReview context={context()} />;
   });
   const name = () => page.getByLabelText<HTMLInputElement>("Name");
-  const publish = () => page.getByRole<HTMLButtonElement>("button", { name: "Publish to ClawHub" });
+  const publish = () =>
+    page.getByRole<HTMLButtonElement>("button", { name: "Publish", exact: true });
   const status = () => page.getByRole("status").textContent;
   await vi.advanceTimersByTimeAsync(0);
   await waitForSolid(() => expect(name().value).toBe("Release Brief"));
+  expect(page.queryByRole("button", { name: "Ask for changes" })).toBeNull();
   return {
     ...page,
     name,

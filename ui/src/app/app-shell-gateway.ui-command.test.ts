@@ -1,7 +1,49 @@
 /* @vitest-environment jsdom */
 
 import { expect, it, vi } from "vitest";
+import { openTemplateCreator } from "../pages/templates/creator-owner.ts";
 import { createProfileAppearanceGateway } from "./app-shell-gateway.test-support.ts";
+
+vi.mock("../pages/templates/creator-owner.ts", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../pages/templates/creator-owner.ts")>()),
+  openTemplateCreator: vi.fn(),
+}));
+
+it("hands the exact draft, agent, and source conversation to the existing review owner", async () => {
+  const { context, owner } = createProfileAppearanceGateway(null);
+  const target = {
+    agentId: "research",
+    sessionKey: "agent:research:dashboard:source",
+    draftId: "ec8f46b0-4ca3-4991-8a73-dfdcc8764087",
+  };
+  owner.handleGatewayEvent({
+    type: "event",
+    event: "ui.command",
+    payload: {
+      command: { kind: "template-review", draftId: target.draftId },
+      agentId: target.agentId,
+      sessionKey: target.sessionKey,
+    },
+  });
+  await vi.waitFor(() => expect(openTemplateCreator).toHaveBeenCalledWith(context, target));
+});
+
+it("drops a deferred review handoff after its application context retires", async () => {
+  vi.mocked(openTemplateCreator).mockClear();
+  const { host, owner } = createProfileAppearanceGateway(null);
+  owner.handleGatewayEvent({
+    type: "event",
+    event: "ui.command",
+    payload: {
+      command: { kind: "template-review", draftId: "ec8f46b0-4ca3-4991-8a73-dfdcc8764087" },
+      agentId: "research",
+      sessionKey: "agent:research:dashboard:source",
+    },
+  });
+  host.context = null;
+  await vi.dynamicImportSettled();
+  expect(openTemplateCreator).not.toHaveBeenCalled();
+});
 
 it("opens the current agent GitHub identity panel without exposing authorization data", () => {
   const { context, owner } = createProfileAppearanceGateway(null);

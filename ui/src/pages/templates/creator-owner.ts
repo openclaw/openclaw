@@ -3,7 +3,11 @@ import type { ApplicationContext } from "../../app/context.ts";
 import { t } from "../../i18n/index.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { showToast } from "../../lib/toast.ts";
-import { templateCreatorOwner, type CreatorOwner } from "./creator-publication.ts";
+import {
+  templateCreatorOwner,
+  type CreatorOwner,
+  type TemplateReviewTarget,
+} from "./creator-publication.ts";
 import { canCreateTemplateDraft } from "./draft-navigation.ts";
 
 const runtime = createLazyImportLoader(() => import("./creator-flow.ts"));
@@ -33,7 +37,11 @@ async function loadTemplateCreator(context: ApplicationContext, owner: CreatorOw
       }
       const flow = result.loaded.templateCreatorFlow(context);
       if (isCurrent()) {
-        await flow.start(agentId);
+        if (pending.review) {
+          flow.open(agentId, pending.review.draftId, pending.review.sessionKey);
+        } else {
+          await flow.start(agentId);
+        }
       }
     }
   } catch (error) {
@@ -42,7 +50,7 @@ async function loadTemplateCreator(context: ApplicationContext, owner: CreatorOw
         severity: "error",
         message: formatUiError(error),
         actionLabel: t("common.retry"),
-        onAction: () => startTemplateCreator(context, agentId),
+        onAction: () => requestTemplateCreator(context, agentId, pending.review),
       });
     }
   } finally {
@@ -52,7 +60,11 @@ async function loadTemplateCreator(context: ApplicationContext, owner: CreatorOw
   }
 }
 
-function startTemplateCreator(context: ApplicationContext, agentId: string) {
+function requestTemplateCreator(
+  context: ApplicationContext,
+  agentId: string,
+  review?: Omit<TemplateReviewTarget, "agentId">,
+) {
   const client = context.gateway.snapshot.client;
   if (!client || !canCreateTemplateDraft(context)) {
     return;
@@ -60,22 +72,31 @@ function startTemplateCreator(context: ApplicationContext, agentId: string) {
   const owner = templateCreatorOwner(context);
   const revision = context.gateway.connectionRevision;
   if (
-    owner.flow?.busy === "starting" ||
-    (owner.pending?.client === client && owner.pending.revision === revision)
+    !review &&
+    (owner.flow?.busy === "starting" ||
+      (owner.pending?.client === client && owner.pending.revision === revision))
   ) {
     return;
   }
   // Claim before yielding; direct route open/start can retire this exact intent.
-  owner.pending = { agentId, client, revision };
+  owner.pending = { agentId, client, revision, ...(review ? { review } : {}) };
   if (!owner.loading) {
     owner.loading = true;
     void loadTemplateCreator(context, owner);
   }
 }
 
+/** Presentation only: the person reviews and explicitly publishes through the existing owner. */
+export function openTemplateCreator(context: ApplicationContext, target: TemplateReviewTarget) {
+  requestTemplateCreator(context, target.agentId, {
+    draftId: target.draftId,
+    sessionKey: target.sessionKey,
+  });
+}
+
 export function templateCreatorAction(context: ApplicationContext, agentId: string | undefined) {
   if (!agentId || !canCreateTemplateDraft(context)) {
     return undefined;
   }
-  return () => startTemplateCreator(context, agentId);
+  return () => requestTemplateCreator(context, agentId);
 }

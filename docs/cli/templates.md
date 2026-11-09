@@ -37,14 +37,18 @@ when **Templates** is enabled in **Settings → Labs**.
 
 ## Create with an agent
 
-With Templates enabled in Labs, choose **Create Template** from the agent's left-sidebar
-row menu. Pinned agents keep this action in a focused row menu. The action sends
-the bundled `$create-template` skill invocation into that agent's existing main
-chat. The agent proposes portable behavior with an input, job, output, and
-authority boundary, then writes its private draft in that conversation. When
-the draft is ready, the Control UI opens a review modal; the agent does not
-return a review link or create or fork a session. This flow currently requires
-a workspace on the Gateway host.
+Ask the agent, “create a new template from this agent.” The bundled
+`create-template` skill prepares a request-specific private draft and opens
+review in that same conversation. No sidebar setup or special command is
+required. The agent proposes portable behavior with an input, job, output, and
+authority boundary; it does not publish, return a review link, or create or
+fork a session. Review requires Templates enabled in Labs, an active administrator
+Control UI connection, and a workspace on the Gateway host. If review is unavailable,
+the proposal stays private.
+
+The optional **Create Template** action in the agent's left-sidebar row menu
+still invokes the same skill in that agent's existing main chat. Pinned agents
+keep this action in a focused row menu.
 
 The review modal shows the exact archive files and
 declared skill, plugin, MCP, and automation requirements. The Name field is
@@ -67,6 +71,13 @@ to the Template's ClawHub page.
 After ClawHub makes it public, others can discover it and Add it as an ordinary agent.
 
 ## Author locally
+
+`openclaw templates draft <workspace> --json` initializes an empty private
+proposal in that workspace and returns its unique `draftId` and path. It does
+not copy source files, start a model turn, contact ClawHub, or publish. Each
+invocation creates a distinct proposal; retain the returned ID instead of
+searching for a latest draft. The bundled skill uses this command when a chat
+request did not arrive with a UI-created draft.
 
 Create a minimal project, validate its inputs, preview it without mutation,
 and build an immutable package artifact:
@@ -277,14 +288,15 @@ There is no Template ownership record or reverse-install operation.
 
 ## Command reference
 
-| Command                              | Purpose                                          |
-| ------------------------------------ | ------------------------------------------------ |
-| `templates create [path]`            | Create a minimal local Template project.         |
-| `templates validate [path]`          | Validate project inputs and package contents.    |
-| `templates dev [path]`               | Build and preview locally without mutation.      |
-| `templates build [path] --out <tgz>` | Build a deterministic package artifact.          |
-| `templates inspect <source>`         | Inspect a canonical package or `CLAW.md`.        |
-| `templates add <source>`             | Create a new agent and install its requirements. |
+| Command                              | Purpose                                           |
+| ------------------------------------ | ------------------------------------------------- |
+| `templates draft <workspace>`        | Initialize a private proposal without publishing. |
+| `templates create [path]`            | Create a minimal local Template project.          |
+| `templates validate [path]`          | Validate project inputs and package contents.     |
+| `templates dev [path]`               | Build and preview locally without mutation.       |
+| `templates build [path] --out <tgz>` | Build a deterministic package artifact.           |
+| `templates inspect <source>`         | Inspect a canonical package or `CLAW.md`.         |
+| `templates add <source>`             | Create a new agent and install its requirements.  |
 
 Use `--json` for experimental machine-readable output. Validation errors,
 blocked requirements, and failed additions exit `1`.
