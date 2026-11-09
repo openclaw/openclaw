@@ -39,8 +39,11 @@ const mocks = vi.hoisted(() => {
     ensureAuthProfileStore: vi.fn().mockReturnValue(store),
     getRuntimeAuthProfileStoreSnapshot: vi.fn(),
     loadPersistedAuthProfileStore: vi.fn().mockReturnValue(store),
-    resolveAuthStorePathForDisplay: vi.fn(
-      (agentDir?: string) => `${agentDir ?? "/tmp/openclaw-agent"}/auth-profiles.json`,
+    resolveAuthStorePathForDisplay: vi.fn(() => {
+      throw new Error("sync auth store display path must not be used");
+    }),
+    resolveAuthStorePathForDisplayAsync: vi.fn(
+      async (agentDir?: string) => `${agentDir ?? "/tmp/openclaw-agent"}/auth-profiles.json`,
     ),
     resolveProfileUnusableUntilForDisplay: vi.fn(),
     resolveEnvApiKey: vi.fn((provider: string) => envAuth[provider] ?? null),
@@ -91,6 +94,7 @@ vi.mock("../../agents/workspace.js", () => ({
 }));
 vi.mock("../../agents/auth-profiles/paths.js", () => ({
   resolveAuthStorePathForDisplay: mocks.resolveAuthStorePathForDisplay,
+  resolveAuthStorePathForDisplayAsync: mocks.resolveAuthStorePathForDisplayAsync,
 }));
 vi.mock("../../agents/auth-profiles/persisted.js", () => ({
   loadPersistedAuthProfileStore: mocks.loadPersistedAuthProfileStore,

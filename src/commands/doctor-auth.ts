@@ -27,7 +27,7 @@ import {
   prepareSharedAuthStoreOwnership,
   resolveSharedAuthStorePath,
 } from "../agents/auth-profiles/path-resolve.js";
-import { resolveAuthStorePathForDisplay } from "../agents/auth-profiles/paths.js";
+import { resolveAuthStorePathForDisplayAsync } from "../agents/auth-profiles/paths.js";
 import { withAuthProfileReaderCleanup } from "../agents/auth-profiles/reader-cleanup.js";
 import { prepareAgentAuthProfileRowsRead } from "../agents/auth-profiles/sqlite-read.js";
 import {
@@ -403,7 +403,7 @@ async function collectAuthProfileTargetFindings(params: {
 }): Promise<HealthFinding[]> {
   const findings: HealthFinding[] = [];
   const owner = params.labelStores ? `${params.target.label} auth profile` : "Auth profile";
-  const path = resolveAuthStorePathForDisplay(params.target.agentDir);
+  const path = await resolveAuthStorePathForDisplayAsync(params.target.agentDir);
   const orderedProfiles = new Map(
     Object.entries(params.store.order ?? {}).flatMap(([provider, profileIds]) =>
       profileIds.map((profileId) => [profileId, provider] as const),
