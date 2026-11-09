@@ -1,3 +1,4 @@
+import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { runState } from "./chat-runtime-fixtures.test-support.ts";
@@ -10,6 +11,34 @@ const RETAINED_IMAGE_DATA_URL =
 const omittedImage = { type: "image", omitted: true, bytes: 149255 };
 const computerCall = { name: "computer", toolCallId: "capture" };
 const screenshotArgs = { action: "screenshot" };
+
+async function revealRetainedScreenshot(page: Page) {
+  const screenshot = page.locator("img.chat-message-image");
+  const summary = page.locator("button.chat-tool-msg-summary", {
+    hasText: /^Computer\s*screenshot$/,
+  });
+  await expect
+    .poll(async () => {
+      const [images, summaries] = await Promise.all([screenshot.count(), summary.count()]);
+      return (images === 1 && summaries === 0) || (images === 0 && summaries === 1);
+    })
+    .toBe(true);
+  const summaries = await summary.count();
+  if (summaries === 0) {
+    expect(await screenshot.count()).toBe(1);
+    return;
+  }
+  expect(summaries).toBe(1);
+  expect(await screenshot.count()).toBe(0);
+  await expect.poll(() => summary.getAttribute("aria-expanded")).toBe("false");
+  const body = page
+    .locator(".chat-tool-msg-collapse", { has: summary })
+    .locator(".chat-tool-msg-body");
+  expect(await body.count()).toBe(0);
+  await summary.click();
+  await expect.poll(() => summary.getAttribute("aria-expanded")).toBe("true");
+  await body.waitFor({ state: "attached" });
+}
 
 suite.define(() => {
   it.each(["history", "result-first", "receipt-first"] as const)(
@@ -121,6 +150,7 @@ suite.define(() => {
               await result();
             }
           }
+          await revealRetainedScreenshot(page);
           const screenshot = page.locator("img.chat-message-image");
           await screenshot.waitFor({ state: "visible" });
           expect(
@@ -139,6 +169,7 @@ suite.define(() => {
             expect(await stop.isVisible()).toBe(true);
           } else {
             await page.reload();
+            await revealRetainedScreenshot(page);
             await page.locator("img.chat-message-image").waitFor({ state: "visible" });
             expect(await omitted.count()).toBe(0);
           }
