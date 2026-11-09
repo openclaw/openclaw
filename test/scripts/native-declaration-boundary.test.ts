@@ -15,6 +15,131 @@ import {
 
 const roots = useAutoCleanupTempDirTracker(afterEach);
 
+// Observe the real API launch without replacing its compiler, filesystem, or error.
+// Temporary release diagnosis: remove once the ETXTBSY writer is identified.
+vi.mock("typescript/unstable/async", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("typescript/unstable/async")>();
+  return {
+    ...actual,
+    API: class extends actual.API {
+      private readonly launchOptions;
+
+      constructor(options: ConstructorParameters<typeof actual.API>[0] = {}) {
+        super(options);
+        this.launchOptions = options;
+      }
+
+      override async parseConfigFile(
+        ...args: Parameters<typeof actual.API.prototype.parseConfigFile>
+      ) {
+        try {
+          return await super.parseConfigFile(...args);
+        } catch (error) {
+          if (error instanceof Error && error.message.includes("ETXTBSY")) {
+            const options = this.launchOptions;
+            if (!("pipe" in options) && options.tsserverPath) {
+              reportNativeExecutableWriters(options.tsserverPath);
+            }
+          }
+          throw error;
+        }
+      }
+    },
+  };
+});
+
+function reportNativeExecutableWriters(executable: string) {
+  // Failure-only metadata: never inspect environment, command lines, or file contents.
+  try {
+    const realpath = fs.realpathSync.native(executable);
+    const target = fs.statSync(realpath);
+    const writers: { pid: number; fd: string; flags: string }[] = [];
+    let scanned = 0;
+    let inaccessible = 0;
+    let truncated = false;
+    const deadline = Date.now() + 250;
+    const pids = [
+      String(process.pid),
+      ...fs.readdirSync("/proc").filter((pid) => /^\d+$/u.test(pid) && pid !== String(process.pid)),
+    ];
+    outer: for (const pid of pids) {
+      if (Date.now() >= deadline) {
+        truncated = true;
+        break;
+      }
+      let descriptors: string[];
+      try {
+        descriptors = fs.readdirSync(`/proc/${pid}/fd`);
+      } catch {
+        inaccessible++;
+        continue;
+      }
+      for (const fd of descriptors) {
+        if (Date.now() >= deadline || scanned >= 8192 || writers.length >= 32) {
+          truncated = true;
+          break outer;
+        }
+        scanned++;
+        try {
+          const stat = fs.statSync(`/proc/${pid}/fd/${fd}`);
+          if (stat.dev !== target.dev || stat.ino !== target.ino) continue;
+          const info = fs.readFileSync(`/proc/${pid}/fdinfo/${fd}`, "utf8");
+          const flags = /^flags:\s+([0-7]+)$/mu.exec(info)?.[1];
+          if (flags && (Number.parseInt(flags, 8) & 3) !== 0) {
+            writers.push({ pid: Number(pid), fd, flags });
+          }
+        } catch {
+          inaccessible++;
+        }
+      }
+    }
+    console.error("native ETXTBSY launch metadata", {
+      executable,
+      realpath,
+      dev: target.dev,
+      ino: target.ino,
+      nlink: target.nlink,
+      pid: process.pid,
+      writers,
+      scanned,
+      inaccessible,
+      truncated,
+    });
+  } catch {
+    // Diagnostic failure must never replace the original compiler failure.
+    console.error("native ETXTBSY launch metadata unavailable", { executable, pid: process.pid });
+  }
+}
+
+it.skipIf(process.platform !== "linux")(
+  "reports a native executable's actual writable inode without swallowing ETXTBSY",
+  async () => {
+    const root = fs.realpathSync.native(roots.make("native-declaration-busy-executable-"));
+    const fixture = createNativeFixture(root);
+    const fd = fs.openSync(fixture.native, "r+");
+    const report = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      await expect(fixture.compile()).rejects.toThrow(/ETXTBSY/u);
+      const target = fs.statSync(fixture.native);
+      expect(report).toHaveBeenCalledWith(
+        "native ETXTBSY launch metadata",
+        expect.objectContaining({
+          executable: fixture.native,
+          realpath: fs.realpathSync.native(fixture.native),
+          dev: target.dev,
+          ino: target.ino,
+          writers: expect.arrayContaining([
+            expect.objectContaining({ pid: process.pid, fd: String(fd) }),
+          ]),
+        }),
+      );
+    } finally {
+      fs.closeSync(fd);
+      report.mockRestore();
+    }
+  },
+);
+
 it("keeps test-only ambient augmentation out of declaration roots but in test graphs", () => {
   const root = fs.realpathSync.native(roots.make("native-declaration-production-roots-"));
   // Use the actual production/test selection rules with a tiny semantic-free fixture.
