@@ -46,8 +46,9 @@ const CONTROL_UI_LOCALE_GZIP_BYTES = 300 * KIB;
 // Small, explicit headroom over the optimized baseline. Budget changes should
 // accompany an intentional loading or chunking decision.
 const controlUiPerformanceBudgets = {
-  // Coordinator-approved full locale hints: measured document plus 64 B headroom.
-  documentGzipBytes: 13_893,
+  // Coordinator-approved full locale hints plus the warm-frame admission hint
+  // (#195865): measured 13,962 B plus 64 B headroom.
+  documentGzipBytes: 14_026,
   // Consolidated eager/route partitions measure 5/20/17 requests over HTTP/1.1.
   // Preserve the initial two-request headroom; route limits match their measured graphs.
   startupJsRequests: 7,
@@ -57,12 +58,11 @@ const controlUiPerformanceBudgets = {
   // Initial shell plus shared route styles and the route's own stylesheet.
   chatBootCssRequests: 3,
   newBootCssRequests: 3,
-  // Coordinator-accepted transcript anchor (#194751): retained drift 27/44 px → 0/0,
-  // WebKit wheel input restored; desktop scroll CPU median/p95 -6.57%/-7.79%.
-  // Current-main 1,296,175 B + 140 B measured growth + 64 B build variance.
-  chatBootJsGzipBytes: 1_296_379,
-  // Channels: raw -159 B, served +22 B; coordinator-accepted normalized trade +64 B.
-  newBootJsGzipBytes: 803_250,
+  // Coordinator-accepted warm cached-page reveal latch (#195865): measured
+  // 1,297,532 B (+495 B over its CI base) plus 64 B headroom.
+  chatBootJsGzipBytes: 1_297_596,
+  // Same warm reveal latch (#195865): measured 803,300 B (+623 B) plus 64 B.
+  newBootJsGzipBytes: 803_364,
   startupCssRequests: 1,
   // Solid 2 action/optimistic runtime adoption; offset tracked by HF-STARTUP-BUDGET.
   // Jacob Tomlinson approved +50 B for native inline views (#173135, 2026-10-22).

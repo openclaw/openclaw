@@ -245,6 +245,7 @@ describeControlUiE2e("Plugin overview", () => {
     const linear = {
       ...calendarPlugin,
       id: "linear",
+      catalogId: "ch_bGluZWFy",
       name: "Linear",
       packageName: "@openclaw/linear",
       description: summary,
@@ -369,7 +370,7 @@ describeControlUiE2e("Plugin overview", () => {
     };
     const { page } = await setup(
       {
-        "plugins.list": inventory([calendarPlugin]),
+        "plugins.list": inventory([plugin]),
         "plugins.catalog.get": catalog,
         "plugins.inspect": {
           ...calendarInspection,

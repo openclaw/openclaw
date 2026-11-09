@@ -4,6 +4,11 @@ The existing cross-engine harness can keep background sessions active while a
 foreground turn executes tools. It uses the production UI and the existing mock
 Gateway; it does not measure provider latency or a production server's capacity.
 
+For a bounded typing/scroll/idle comparison, pass `--event-load-interactions-only`.
+It omits navigation from the timed workload; the same final status, unread and
+history verification still runs after measurement. The default also times
+session and route switches.
+
 Build once with `pnpm ui:build`, then run a bounded scenario first:
 
 ```sh
@@ -17,12 +22,18 @@ NODE_DISABLE_COMPILE_CACHE=1 node --import ./scripts/tsx.mjs \
 
 `event-load-unloaded` has no active turn. `event-load-0` has the foreground turn
 only. The remaining scenarios add 5, 20 or 100 active background sessions to the
-same inventory. `--event-load-tools` defaults to 200 and
+same inventory. `--event-load-inventory` selects the held roster size (1,000 by default;
+use 5,000 for the Team-scale comparison). Setup refreshes the public session
+owner to that limit and asserts `heldSessionRows`; changing the fixture alone
+would leave the normal 200-row sidebar window. It changes held rows, not active load.
+`--event-load-tools` defaults to 200 and
 `--event-load-duration-ms` to 240000. Duration is a safety ceiling, not a trailing
 wait: measurement ends after the last action. Every loaded action must start and
-finish before that ceiling while background work remains active. After the first
-live output is verified, trusted typing admits the first half of the foreground
-calls. The browser-side scroll loop admits the remainder. One producer retains
+finish before that ceiling while background work remains active. Setup primes
+and verifies the first live tool before background delivery starts; this keeps
+setup backlog out of the interaction measurement. The measured clock starts
+with background delivery, then trusted typing admits the first half of the foreground
+calls. The browser-side scroll loop admits the remainder over its control socket. One producer retains
 the six-second total offering rate, pausing between waves if necessary. Every
 start, update and result has a nominal deadline; delayed delivery drains that
 finite schedule in chronological order without restarting tool lifetimes. The
@@ -48,8 +59,8 @@ Every background row must
 settle, and all foreground tool results must remain in history. Blank scroll
 frames fail the scenario. Failed observations retain partial counters and CPU.
 
-Live snapshots update the mock's canonical row owner, so list, describe, history
-and mutation replies agree after a reconnect. List queries keep the existing
+Live snapshots update the external producer's canonical row and history owner, so
+list and history replies agree with the event stream. List queries keep the existing
 filtering, ordering and pagination owner and refresh it only when queried. Row
 delta baselines belong to a connected socket: a replacement connection receives
 a full row before its deltas, and disconnected emissions do not advance that
@@ -99,21 +110,58 @@ is coalesced by agent over 500 ms, but none occurred inside the captured short
 turns. This workload excludes those unobserved periodic events and small agent
 item-boundary events; it models the measured durable, tool and narration paths.
 
-The mock producer runs inside the measured renderer. Its producer and delivery
-elapsed diagnostics overlap application work and cannot be subtracted as CPU.
-Use a separate `--cpu-profile` Chromium run to attribute this cost. The idle phase
-and its surrounding collector calls record inner/outer bounds for elapsed time
-and received background frames. Normalize foreground-only idle CPU to the loaded
-interval before subtraction; retain the resulting CPU/frame range when those
-bounds differ materially. This estimates incremental renderer CPU per received
-background frame, including the mock producer. A backlog can make the idle phase
-measure catch-up rather than steady load; inspect actual rates and delivery lag.
-Whole-action
-CPU includes different amounts of background work when an action takes longer;
-do not divide total scenario CPU by offered events or subtract unequal windows.
+The load producer runs in the Node harness process, outside the renderer. It
+owns the timer, row snapshots, message histories, subscription membership and
+JSON encoding, and sends event frames over a native loopback WebSocket. The
+browser forwards the raw `MessageEvent` data directly to the connection's native
+EventTarget listeners. It does not parse, encode or re-schedule native frames
+through the cold-load probe's simulated transport; production decoding and event
+handling then run normally. Initial RPC/bootstrap fixtures remain the existing mock; this is a
+client-event benchmark, not a Gateway capacity benchmark. A separate small
+progress frame per producer tick updates observation counters and never reaches
+the application. The browser still owns timing/DOM probes and sends foreground
+wave admission commands; it does not schedule background events.
+
+`offeredBackgroundHz` is producer durable receipts per elapsed second;
+`achievedBackgroundHz` counts those receipts observed at the client's event
+listener. `offeredBackgroundFrameHz` and `receivedBackgroundFrameHz` include
+status, tool and narration frames; `pendingBackgroundFrames` reports the
+producer/client difference at the measurement boundary. Compare like units:
+100 active sessions nominally produce 200 durable receipts per second, plus
+status and subscription-specific frames. Offered counters are sampled in Node;
+client counters stop after an awaited browser observation, so their boundary
+can differ by the final delivery batch. Inspect both rates and scheduler lag.
+Do not divide scenario CPU by offered events when delivery is behind.
+
+Use a separate `--cpu-profile --engines chromium` run to attribute client work;
+the existing source-mapped CPU census excludes the Node producer. WebKit
+`--trace` provides application Timeline attribution in a separate run; named
+`engine:event-load:<phase>:start/end` marks bound the idle and input phases. Firefox
+CPU is unavailable. For per-event CPU, use the one-second idle phase after
+foreground tools drain, compare against `event-load-0`, and normalize that
+foreground-only idle CPU to the loaded interval before subtraction. Inner and
+outer bounds for elapsed time and received frames remain available as
+`idleMinimum*`/`idleMaximum*`; retain a CPU/frame range when they differ
+materially. Whole-action CPU includes different amounts of background work when
+an action takes longer, so use it alongside scroll and input latency rather
+than subtracting unequal windows.
 
 For a candidate, use the harness's immutable base, candidate and identical-base
 control bundle options. Retain at least 20 rotated pairs plus A/A across the
 required engines and viewports before accepting a performance change. Record
 host load, median, p95 and spread; do not interpret an effect smaller than A/A
 variation as a win. Keep reports under `.artifacts/`, outside committed source.
+
+The synchronous owner diagnostic runs separately from browser presentation:
+
+```sh
+NODE_DISABLE_COMPILE_CACHE=1 node --import ./scripts/tsx.mjs \
+  scripts/perf/session-held-list-measure.ts --mode capability
+```
+
+It retains two overlapping lists at 1,000 and 5,000 rows. Its full and patch
+events include the browser producer's `permissionMode: null` clearing receipt;
+omitting that field skips permission reconciliation and understates owner cost.
+Initial list rows stay canonical. Parsing, row reconstruction and synchronous
+owner timings exclude socket delivery, sidebar and Sessions-page projections,
+and Solid/DOM work. These diagnostics cannot replace browser acceptance.

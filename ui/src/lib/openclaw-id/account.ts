@@ -183,7 +183,7 @@ export async function signInWithOpenClawId(params: {
   };
   // Reserved while the click still counts as user activation; the callback answers through
   // localStorage, so the popup needs no opener.
-  const popup = reserveExternalWindowForDeferredNavigation({ popup: true });
+  const popup = reserveExternalWindowForDeferredNavigation({ popup: { width: 520, height: 720 } });
   try {
     const started = await params.client.request<{ authorizationUrl: string; state: string }>(
       "openclawId.authority",

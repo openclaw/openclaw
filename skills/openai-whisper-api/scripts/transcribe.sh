@@ -62,7 +62,12 @@ if [[ "${OPENAI_API_KEY:-}" == "" ]]; then
 fi
 
 if [[ "$out" == "" ]]; then
-  base="${in%.*}"
+  base="$in"
+  name="${in##*/}"
+  # Strip a suffix only when the basename has an extension after any leading dotfile dot.
+  if [[ "$name" == *.* && "${name#.}" == *.* ]]; then
+    base="${in%.*}"
+  fi
   if [[ "$json_output" == "1" ]]; then
     out="${base}.json"
   else
@@ -70,10 +75,10 @@ if [[ "$out" == "" ]]; then
   fi
 fi
 
-mkdir -p "$(dirname "$out")"
+mkdir -p -- "$(dirname -- "$out")"
 
 # Reject predictable output failures before making a paid request.
-if [[ -d "$out" || ( -e "$out" && ! -w "$out" ) || ( ! -e "$out" && ! -w "$(dirname "$out")" ) ]]; then
+if [[ -d "$out" || ( -e "$out" && ! -w "$out" ) || ( ! -e "$out" && ! -w "$(dirname -- "$out")" ) ]]; then
   echo "Cannot write output to $out. Choose a writable file with --out." >&2
   exit 1
 fi
@@ -158,4 +163,4 @@ else
   cat "$tmp" >"$out"
 fi
 
-echo "$out"
+printf '%s\n' "$out"

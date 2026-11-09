@@ -44,6 +44,7 @@ import {
   testModel,
 } from "../../sessions/agent-session-loop-correctness.test-support.js";
 import { convertToLlm } from "../../sessions/messages.js";
+import { sessionManagerReadInitialContext } from "../../sessions/session-manager-current-turn.js";
 import { SessionManager } from "../../sessions/session-manager.js";
 import { makeAgentAssistantMessage } from "../../test-helpers/agent-message-fixtures.js";
 import { createStubTool } from "../../test-helpers/agent-tool-stubs.js";
@@ -413,8 +414,14 @@ describe("prompt-cache boundary regressions", () => {
           validateAnthropicTurns: api === "anthropic-messages",
           allowSyntheticToolResults: true,
         };
+        const restored = await manager[sessionManagerReadInitialContext]();
+        expect(restored.messages.every(Object.isFrozen)).toBe(true);
+        const restoredAssistant = restored.messages.find((message) => message.role === "assistant");
+        expect(
+          Object.isFrozen(expectDefined(restoredAssistant, "restored assistant").content),
+        ).toBe(true);
         const sanitized = await sanitizeSessionHistory({
-          messages: manager.buildSessionContext().messages,
+          messages: restored.messages,
           modelApi: api,
           policy,
           sessionManager: manager,

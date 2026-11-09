@@ -69,6 +69,12 @@ async function run(argv) {
     );
   }
 
+  // Caps a reply preview at 80 code units without cutting a surrogate pair in half.
+  const quotePreview = (text) => {
+    const cap = Math.min(text.length, 80);
+    return text.slice(0, /[\uDC00-\uDFFF]/.test(text[cap] ?? "") ? cap - 1 : cap);
+  };
+
   // Renders one message as transcript lines: time, author, reply target, then the text.
   function messageLines(row, byId, labels, day) {
     const { payload } = row;
@@ -80,10 +86,11 @@ async function run(argv) {
         target.occurred_at.slice(0, 10) === day
           ? clock(target.occurred_at)
           : target.occurred_at.slice(0, 10) + " " + clock(target.occurred_at);
+      const content = target.payload.deleted_at ? "[deleted]" : target.payload.content || "";
       const quote =
         target.occurred_at.slice(0, 10) === day
           ? ""
-          : ' "' + (target.payload.content || "").replace(/\s+/g, " ").slice(0, 80) + '"';
+          : ' "' + quotePreview(content.replace(/\s+/g, " ")) + '"';
       reply = " ↩ " + labels.get(target.payload.author_id) + " " + when + quote;
     } else if (payload.reply_to_message_id) {
       reply = " ↩ earlier message";

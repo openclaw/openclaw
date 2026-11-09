@@ -1,6 +1,7 @@
 import { channel } from "node:diagnostics_channel";
 import fs from "node:fs";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { threadId, type Worker } from "node:worker_threads";
 import { afterEach, beforeEach, expect, vi } from "vitest";
 import type { FixtureReceiptChannel } from "../../../test/helpers/fixture-receipts.js";
@@ -72,6 +73,7 @@ export function usePreparedCatalogWorkerFixtures(
 ) {
   const retirements = new Set<() => void | Promise<void>>();
   const workers = new Set<Worker>();
+  const catalogWorkerUrls = new Set<string>();
   const workerObservers = new Set<(worker: Worker) => void>();
   const catalogSettlements = new Map<string, (operation: PromiseLike<unknown>) => void>();
   let restoreCatalogWorkerFactory: (() => void) | undefined;
@@ -92,10 +94,11 @@ export function usePreparedCatalogWorkerFixtures(
     const catalogWorkerUrl = resolveRuntimeWorkerUrl(
       runtimeProcessEntrypoints.preparedModelCatalog,
     ).href;
+    catalogWorkerUrls.add(catalogWorkerUrl);
     const tracking = vi.spyOn(workerCpu, "createCpuTrackedWorker").mockImplementation((...args) => {
       const worker = createWorker(...args);
       // Compiler services also use Worker threads; this fixture owns only catalog computation.
-      if (String(args[0]) === catalogWorkerUrl) {
+      if (catalogWorkerUrls.has(String(args[0]))) {
         workers.add(worker);
         for (const observe of workerObservers) {
           observe(worker);
@@ -141,6 +144,7 @@ export function usePreparedCatalogWorkerFixtures(
         restoreWorkerFactory?.();
         restoreWorkerFactory = undefined;
         workers.clear();
+        catalogWorkerUrls.clear();
         workerObservers.clear();
         restoreCatalogWorkerFactory?.();
         restoreCatalogWorkerFactory = undefined;
@@ -156,9 +160,20 @@ export function usePreparedCatalogWorkerFixtures(
     });
   });
   return {
-    createCatalogPool: (env: NodeJS.ProcessEnv) =>
-      new WorkerTaskPool<PreparedModelCatalogWorkerTask, PreparedModelWorkerResult>({
-        workerUrl: resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.preparedModelCatalog),
+    createCatalogPool: (env: NodeJS.ProcessEnv, preload?: URL) => {
+      let workerUrl = resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.preparedModelCatalog);
+      if (preload) {
+        const entry = path.join(tempDirs.make("openclaw-catalog-preload-"), "worker.mts");
+        fs.writeFileSync(
+          entry,
+          `await import(${JSON.stringify(preload.href)});
+await import(${JSON.stringify(workerUrl.href)});`,
+        );
+        workerUrl = pathToFileURL(entry);
+      }
+      catalogWorkerUrls.add(workerUrl.href);
+      return new WorkerTaskPool<PreparedModelCatalogWorkerTask, PreparedModelWorkerResult>({
+        workerUrl,
         maxWorkers: 1,
         idleTimeoutMs: 0,
         restartOnError: false,
@@ -167,7 +182,8 @@ export function usePreparedCatalogWorkerFixtures(
           workerData: { sourceCaptureDirectory: tempDirs.make("openclaw-catalog-heap-captures-") },
           env,
         },
-      }),
+      });
+    },
     readCatalogWorkers: (): readonly Worker[] => [...workers],
     observeWorkers: (onWorker?: (worker: Worker) => void) => {
       const spawned: Worker[] = [];

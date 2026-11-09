@@ -16,6 +16,8 @@ export const rootRuntimeProcessDeclarationEntries = {
 
 export const runtimeProcessDeclarationEntries = {
   ...rootRuntimeProcessDeclarationEntries,
+  // Cold policy readers require this native sibling in every worker preset.
+  "plugin-metadata-readers.runtime": "src/plugins/plugin-metadata-readers.runtime.ts",
   // Codex is package-owned and excluded from the root runtime bundle.
   "extensions/codex/catalog-page-worker-entrypoint":
     "extensions/codex/catalog-page-worker-entrypoint.ts",

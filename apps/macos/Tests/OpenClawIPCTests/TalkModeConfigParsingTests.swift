@@ -1,3 +1,4 @@
+import Foundation
 import OpenClawKit
 import OpenClawProtocol
 import Testing
