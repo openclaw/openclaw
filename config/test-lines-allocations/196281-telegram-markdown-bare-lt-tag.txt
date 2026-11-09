@@ -1,0 +1,3 @@
+# Telegram Markdown replies keep a supported tag after a bare `<word` that has no closing `>`.
+# Exact net growth for PR #196281.
+1

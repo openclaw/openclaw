@@ -306,6 +306,7 @@ describe("file references", () => {
   it("keeps native HTML text, tags and file refs intact", () => {
     expect(htmlText("Check README.md")).toBe("Check README.md");
     expect(htmlText("x<y <b>z</b>")).toBe("x&lt;y <b>z</b>");
+    expect(renderTelegramHtmlText("x<y <b>z</b>")).toBe("x&lt;y <b>z</b>");
     expect(htmlText("<code>i<n</code>")).toBe("<code>i&lt;n</code>");
     expect(renderTelegramHtmlText("Check README.md")).toContain("<code>README.md</code>");
   });
