@@ -492,6 +492,28 @@ describe("sendMessageMatrix media", () => {
     },
   );
 
+  it.each([
+    ["still PNG", ["IHDR", "IDAT"], false],
+    ["APNG", ["IHDR", "acTL", "IDAT"], undefined],
+  ])("marks only a proven %s as not animated (#195814)", async (_label, chunks, expected) => {
+    const chunk = (type: string) =>
+      Buffer.concat([Buffer.from([0, 0, 0, 0]), Buffer.from(type, "latin1"), Buffer.alloc(4)]);
+    const png = Buffer.concat([
+      Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+      ...chunks.map(chunk),
+    ]);
+    loadOutboundMediaFromUrlMock.mockResolvedValueOnce({
+      buffer: png,
+      fileName: "chart.png",
+      contentType: "image/png",
+      kind: "image",
+    });
+    getImageMetadataMock.mockResolvedValueOnce({ width: 640, height: 480 });
+    await send("", { mediaUrl: "chart.png" });
+    const info = requireRecord(sentContent().info, "image info");
+    expect(info["org.matrix.msc4230.is_animated"]).toBe(expected);
+  });
+
   it("rejects mixed attachments when a room becomes encrypted while an image is resized", async () => {
     const preparation = vi.spyOn(client, "prepareRoomForMessageSend");
     const failure = new Error("assembled media rejected");
