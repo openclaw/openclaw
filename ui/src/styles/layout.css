@@ -2224,8 +2224,9 @@ div.shell.shell--onboarding {
   min-width: 0;
   min-height: 32px;
   margin-inline: -8px;
-  /* The avatar shares the session rows' lead column. */
-  padding: 4px 8px 4px calc(var(--sidebar-inset) + var(--sidebar-session-row-inset));
+  /* The avatar shares the session rows' lead column in both reading directions. */
+  padding-block: 4px;
+  padding-inline: calc(var(--sidebar-inset) + var(--sidebar-session-row-inset)) 8px;
   border: 0;
   border-radius: var(--radius-md);
   background: transparent;
@@ -2730,7 +2731,8 @@ a:is(
 .sidebar-zone-entry .sidebar-recent-session {
   --session-row-bg: var(--session-row-tint, transparent);
 
-  padding: 0 11px 0 calc(var(--sidebar-inset) + var(--sidebar-session-row-inset));
+  padding-block: 0;
+  padding-inline: calc(var(--sidebar-inset) + var(--sidebar-session-row-inset)) 11px;
   transition:
     border-color var(--duration-fast) ease,
     background var(--duration-fast) ease,
