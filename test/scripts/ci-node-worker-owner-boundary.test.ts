@@ -43,6 +43,7 @@ it.for(["frozen", "modern-missing", "modern-corrupt", "modern-unshared", "frozen
         for (const file of [
           "lib/vitest-process.mts",
           "lib/vitest-process-env.mts",
+          "lib/vitest-runtime-selection.mts",
           "vitest-process-group.mts",
         ]) {
           const source = JSON.stringify(pathToFileURL(join(root, "scripts", file)).href);

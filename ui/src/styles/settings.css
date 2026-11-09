@@ -720,27 +720,13 @@ openclaw-appearance-background .settings-background-preview .session-background_
 }
 
 /* A row's own details chevron: the quiet disclosure's glyph, as a button after the row's action. */
-.btn.settings-details-toggle {
-  width: 28px;
-  min-width: 28px;
-  height: 28px;
-  min-height: 28px;
-  padding: 0;
-  color: var(--muted);
-}
-
-.btn.settings-details-toggle svg {
-  width: var(--list-row-icon-size);
-  height: var(--list-row-icon-size);
-}
-
 .settings-details-toggle[aria-expanded="true"] svg {
   transform: rotate(90deg);
 }
 
 /* At the row's end, the glyph lines up with the other rows' chevrons, also when the control
    wraps under the title on phones. The tooltip host is display: contents. */
-.settings-row__control > openclaw-tooltip:last-child > .btn.settings-details-toggle {
+.settings-row__control > openclaw-tooltip:last-child > .settings-details-toggle {
   margin-inline: auto -6px;
 }
 
@@ -1152,7 +1138,8 @@ openclaw-appearance-background .settings-background-preview .session-background_
 /* Short values line up with the selects in the same column. */
 .settings-row:not(.settings-row--stacked)
   .settings-row__control
-  > :is([data-settings-chat-message-width], [data-settings-terminal-font]) {
+  > [data-settings-chat-message-width],
+.settings-row:not(.settings-row--stacked) .settings-row__control > [data-settings-terminal-font] {
   width: 220px;
   text-align: start;
 }
@@ -2118,6 +2105,21 @@ openclaw-approvals-page .data-table-pagination__info {
 
   .approval-log__chevron {
     grid-area: 1 / 4;
+  }
+}
+
+.standing-grants-empty {
+  display: grid;
+
+  &::before,
+  & > span {
+    grid-area: 1 / 1;
+  }
+
+  /* Reserve the translated empty copy while the read still says Unknown. */
+  &::before {
+    content: attr(data-empty-message);
+    visibility: hidden;
   }
 }
 

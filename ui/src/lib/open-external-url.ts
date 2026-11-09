@@ -49,12 +49,29 @@ export function resolveSafeExternalUrl(
   return parsed && ALLOWED_EXTERNAL_PROTOCOLS.has(parsed.protocol) ? parsed.toString() : null;
 }
 
+// Window features use CSS pixels, including on scaled and secondary displays.
+// The browser constrains placement to the available work area, including its own chrome.
+function centeredPopupFeatures(size: { width: number; height: number }): string {
+  const width = Math.min(size.width, window.screen.availWidth);
+  const height = Math.min(size.height, window.screen.availHeight);
+  const left = Math.round(window.screenX + (window.outerWidth - width) / 2);
+  const top = Math.round(window.screenY + (window.outerHeight - height) / 2);
+  return `popup,width=${width},height=${height},left=${left},top=${top}`;
+}
+
+/** Reserves an opener-isolated window during user activation for later navigation. */
 export function reserveExternalWindowForDeferredNavigation(
-  opts: { popup?: boolean } = {},
+  opts: { popup?: boolean | { width: number; height: number } } = {},
 ): WindowProxy | null {
+  const features =
+    typeof opts.popup === "object"
+      ? centeredPopupFeatures(opts.popup)
+      : opts.popup
+        ? "popup"
+        : undefined;
   // Reserve while user activation is live, then detach the opener before any
   // caller-controlled URL can be loaded into the new browsing context.
-  const opened = window.open("about:blank", "_blank", opts.popup ? "popup" : undefined);
+  const opened = window.open("about:blank", "_blank", features);
   if (opened) {
     opened.opener = null;
   }

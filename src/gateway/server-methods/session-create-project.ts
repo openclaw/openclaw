@@ -36,6 +36,7 @@ import { ensureSessionDiffBaseline } from "../../sessions/session-diff-baseline.
 import { createDeferredCore } from "../../shared/deferred.js";
 import { githubApiToken } from "../github-public-api.js";
 import { ADMIN_SCOPE } from "../operator-scopes.js";
+import { projectRequesterForClient } from "../project-access.js";
 import { prepareGatewayProjectGitHubIdentity } from "../project-github-identity.js";
 import type { PreparedGatewaySessionLifecycle } from "../session-create-service.types.js";
 import { commitPreparedSessionWorkspace } from "../session-lifecycle-preparation.js";
@@ -43,11 +44,13 @@ import { invalidSessionRequest } from "../session-request-error.js";
 import { resolveExplicitSessionName } from "../session-title-state.js";
 import {
   prepareSessionWorktree,
+  resolveSessionProjectRoot,
   resolveSessionWorktreeBase,
 } from "../session-worktree-preparation.js";
 import { hasActiveAgentRuntimeAuthority } from "./agent-runtime-authority.js";
 import type { AdmittedChatSend } from "./chat-send-admission.js";
 import type { PreparedChatSendSession } from "./chat-send-session.js";
+import type { GatewayClient } from "./client-types.js";
 import { emitSessionsChanged } from "./session-change-event.js";
 import { prepareSessionCreateFilesystemRoot } from "./session-create-root.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
@@ -57,6 +60,20 @@ const SESSION_PROJECT_OWNERSHIP_ERROR =
 const workspacePreparations = new KeyedAsyncQueue();
 
 type RepositorySource = NonNullable<SessionsCreateParams["repository"]>;
+
+/** A hidden registry project reads as an unknown id to restricted requesters. */
+export async function resolveRequestedSessionProjectRoot(
+  cfg: OpenClawConfig,
+  params: Pick<SessionsCreateParams, "projectId" | "worktree">,
+  client: GatewayClient | null,
+): Promise<Result<string | undefined, ErrorShape>> {
+  const projectId = normalizeOptionalString(params.projectId);
+  if (!projectId) {
+    return ok(undefined);
+  }
+  const requester = projectRequesterForClient(client);
+  return await resolveSessionProjectRoot(cfg, projectId, params.worktree === true, requester);
+}
 
 export function resolveSessionRepositoryCreation(
   params: SessionsCreateParams,

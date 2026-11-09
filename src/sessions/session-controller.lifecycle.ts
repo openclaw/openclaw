@@ -34,6 +34,7 @@ import { assertAgentControllerAdmissionOpen } from "./session-controller.lifecyc
 import {
   createLifecycleDiagnosticOperation,
   type SessionLifecycleDiagnosticLabel,
+  type SessionLifecycleDiagnosticWaitDurations,
 } from "./session-controller.lifecycle-diagnostics.js";
 import {
   runAfterRetiringSessionSources,
@@ -124,6 +125,7 @@ export async function runSessionMutation<T>(
   params: {
     requiredSessionId?: string;
     diagnosticLabel?: SessionLifecycleDiagnosticLabel;
+    diagnosticSubphaseDurationsMs?: Readonly<SessionLifecycleDiagnosticWaitDurations>;
     prepare?: (owner: {
       closeWorkAdmissions: (reason: Error) => void;
       operations: readonly ReplyOperation[];
@@ -210,6 +212,7 @@ export async function runSessionMutation<T>(
       targets.flatMap((target) => target.aliases.map((alias) => `${target.storeScope}\0${alias}`)),
     signal,
     mutationKind: params.diagnosticLabel ?? params.kind,
+    subphaseDurationsMs: params.diagnosticSubphaseDurationsMs,
   });
   const mutation: Mutation = {
     diagnostic,

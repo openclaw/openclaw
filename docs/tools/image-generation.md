@@ -35,6 +35,10 @@ configure `agents.defaults.mediaModels.image`, set up a provider API key,
 or sign in with OpenAI ChatGPT/Codex OAuth.
 </Note>
 
+A key in `models.providers.<provider>.apiKey` also makes the tool available,
+including an env-backed SecretRef. Inline keys in an auth or billing cooldown
+remain unavailable.
+
 ## Quick start
 
 <Steps>
@@ -101,6 +105,7 @@ does not force the legacy `response_format` parameter on custom endpoints.
 | ------------------------------------------------ | --------------------------------------------------------------------------------------------------- | ---------------------------------------------- |
 | OpenAI image generation with API billing         | `openai/gpt-image-2`                                                                                | `OPENAI_API_KEY`                               |
 | OpenAI GPT Image 2.5                             | `openai/gpt-image-2.5-flare` or `openai/gpt-image-2.5-sunburst`                                     | Explicit OpenAI API-key route                  |
+| OpenAI GPT Image 2.6                             | `openai/gpt-image-2.6-flare` or `openai/gpt-image-2.6-sunburst`                                     | Explicit OpenAI API-key route                  |
 | OpenAI image generation with ChatGPT/Codex OAuth | `openai/gpt-image-2`                                                                                | OpenAI ChatGPT/Codex OAuth                     |
 | OpenAI transparent-background PNG/WebP           | `openai/gpt-image-1.5`                                                                              | `OPENAI_API_KEY` or OpenAI ChatGPT/Codex OAuth |
 | DeepInfra image generation                       | `deepinfra/black-forest-labs/FLUX-1-schnell`                                                        | `DEEPINFRA_API_KEY`                            |
@@ -116,8 +121,8 @@ for one reference or `images` for multiple. For Krea 2 models on fal, those
 references are sent as style references instead of edit inputs.
 Provider-supported output hints such as `quality`, `outputFormat`, and
 `background` are forwarded when available and reported as ignored when a
-provider does not declare support. OpenAI and fal GPT Image 2.5 declare
-transparent-background support. Other providers may still preserve PNG alpha if their
+provider does not declare support. OpenAI GPT Image 2.5 and 2.6 and fal GPT
+Image 2.5 declare transparent-background support. Other providers may still preserve PNG alpha if their
 backend emits it.
 
 OpenAI supports `low` and `auto` moderation for both text-to-image generation
@@ -199,7 +204,7 @@ the peer who requested the image.
 <ParamField path="resolution" type='"1K" | "2K" | "4K"'>Resolution hint.</ParamField>
 <ParamField path="quality" type='"low" | "medium" | "high" | "xhigh" | "max" | "auto"'>
   Quality hint when the model supports it. GPT Image 2.5 supports `xhigh`
-  and `max` through OpenAI and fal.
+  and `max` through OpenAI and fal; GPT Image 2.6 supports them through OpenAI.
 </ParamField>
 <ParamField path="outputFormat" type='"png" | "jpeg" | "webp"'>
   Output format hint when the provider supports it.
@@ -347,6 +352,19 @@ and ComfyUI support 1.
     fal converts aspect-ratio hints to valid dimensions, such as `3:2` to
     `1536x1024`. Invalid explicit sizes fail with a size error. fal does not accept
     `resolution` overrides for these models or infer resolution from edit inputs.
+
+  </Accordion>
+  <Accordion title="GPT Image 2.6 through OpenAI">
+    Select `openai/gpt-image-2.6-sunburst` for detailed work such as dense text
+    and complex layouts, or `openai/gpt-image-2.6-flare` for fast iteration.
+    The default stays `openai/gpt-image-2`.
+
+    Both models use the GPT Image 2.5 OpenAI rules above: generation and edits,
+    up to 5 reference images, `xhigh` and `max` quality, `auto` or flexible
+    `WIDTHxHEIGHT` sizes, and transparent PNG or WebP backgrounds through the
+    [explicit OpenAI API-key route](/providers/openai/image-and-video#gpt-image-2.5).
+    OpenClaw does not yet expose 2.6 `complexity`, markup-guided edits, SVG
+    output, or animated GIF output.
 
   </Accordion>
   <Accordion title="OpenAI gpt-image-2 (and gpt-image-1.5)">

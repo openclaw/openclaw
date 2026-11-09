@@ -33,18 +33,18 @@ import type {
 } from "../ui/src/api/types.ts";
 import { activityPulseBoundaries } from "../ui/src/pages/activity/activity-pulse-window.ts";
 import type { ActivityTimeFilter } from "../ui/src/pages/activity/session-activity.ts";
+import { createControlUiChatHistoryMessage as chatHistoryMessage } from "../ui/src/test-helpers/control-ui-chat-history-fixtures.ts";
 import {
   controlUiSessionPath,
   createControlUiMockBootstrapConfig,
   createControlUiMockGatewayInitScript,
   createControlUiMockSameOriginGatewayScript,
-  prepareControlUiMockGatewayScenario,
-  type ControlUiMockGatewayScenario,
 } from "../ui/src/test-helpers/control-ui-e2e.ts";
 import {
-  createControlUiChatHistoryMessage as chatHistoryMessage,
-  createControlUiMockSessionRow as sessionRow,
-} from "../ui/src/test-helpers/control-ui-session-fixtures.ts";
+  prepareNativePluginMockGatewayScenario,
+  type NativeControlUiMockGatewayScenario,
+} from "../ui/src/test-helpers/control-ui-plugin-e2e.ts";
+import { createControlUiMockSessionRow as sessionRow } from "../ui/src/test-helpers/control-ui-session-fixtures.ts";
 import { workboardUi } from "../ui/src/test-helpers/control-ui-workboard-fixture.ts";
 import { buildWorkboardMocks } from "../ui/src/test-helpers/control-ui-workboard-fixtures.ts";
 import { installWorkboardBoardMock } from "../ui/src/test-helpers/control-ui-workboard-mocks.ts";
@@ -1551,7 +1551,7 @@ function syntheticAvatar(color: "coral" | "green"): string {
 
 async function createChatPickerScenario(
   fixture?: CliOptions["fixture"],
-): Promise<ControlUiMockGatewayScenario> {
+): Promise<NativeControlUiMockGatewayScenario> {
   const baseTime =
     fixture === "session-design" ? Date.now() : Date.parse("2026-05-22T09:00:00.000Z");
   const rosterTime = Date.now();
@@ -1964,7 +1964,7 @@ async function createChatPickerScenario(
     tokenBudget: 300_000,
     continuationTurns: 3,
   };
-  const rosterSessions: NonNullable<ControlUiMockGatewayScenario["sessions"]> =
+  const rosterSessions: NonNullable<NativeControlUiMockGatewayScenario["sessions"]> =
     rosterAgents.flatMap((agent, index) => [
       sessionRow(`agent:${agent.id}:main`, agent.name, rosterTime - (index + 1) * 720_000, {
         agentId: agent.id,
@@ -2404,7 +2404,7 @@ async function createChatPickerScenario(
       },
     ],
   } satisfies SystemChangesListResult;
-  const scenario: ControlUiMockGatewayScenario = {
+  const scenario: NativeControlUiMockGatewayScenario = {
     assistantAgentId: "main",
     assistantName: "Molty",
     defaultAgentId: "main",
@@ -3654,7 +3654,7 @@ function escapeScriptContent(script: string): string {
 }
 
 async function createMockGatewayPlugin(
-  scenario: ControlUiMockGatewayScenario,
+  scenario: NativeControlUiMockGatewayScenario,
   fixture?: CliOptions["fixture"],
   sandbox?: SessionDesignSandbox,
 ): Promise<Plugin> {
@@ -3668,7 +3668,7 @@ async function createMockGatewayPlugin(
           ],
         }
       : scenario;
-  const prepared = await prepareControlUiMockGatewayScenario(
+  const prepared = await prepareNativePluginMockGatewayScenario(
     fixture === "workboard-states" ? { ...mockScenario, nativePlugins: [] } : mockScenario,
   );
   if (fixture === "workboard-states") {

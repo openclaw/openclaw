@@ -82,8 +82,9 @@ describe("MCP App sandbox security", () => {
       ["/mcp-app-sandbox", 8443],
       ["/mcp-app-sandbox", 8444, hostOrigin, gatewayUrl, "https://control.example"],
     ];
+    const message = "Couldn’t load this app. Check its URL and try again.";
     for (const args of invalid) {
-      expect(() => resolve(...args)).toThrow("This app couldn’t open. Check the app’s settings.");
+      expect(() => resolve(...args)).toThrow(message);
     }
   });
 

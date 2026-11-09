@@ -50,6 +50,11 @@ type SessionMenuProps = {
   trigger: HTMLElement | null;
   disabled: boolean;
   actionDisabledReasons: Partial<Record<SessionMenuActionKind, string>>;
+  nestedSession: {
+    creating: boolean;
+    disabledReason?: string;
+    onCreate: () => void;
+  } | null;
   forkDisabled: boolean;
   forkFromLastCompleted: boolean;
   archiveAllowed: boolean;
@@ -147,6 +152,31 @@ function SessionMenuContent(
     }
     return [
       ...view.primary(),
+      ...(!batch() && props.nestedSession
+        ? [
+            {
+              id: "new-nested-session",
+              label: t(
+                props.nestedSession.creating
+                  ? "sessionsView.creatingNestedSession"
+                  : "sessionsView.newNestedSession",
+              ),
+              class: "session-menu__item",
+              labelClass: "session-menu__text",
+              disabled:
+                props.disabled ||
+                props.nestedSession.creating ||
+                Boolean(props.nestedSession.disabledReason),
+              attributes: { title: props.nestedSession.disabledReason },
+              icon: (
+                <span class="session-menu__icon" aria-hidden="true">
+                  <Icon name="plus" />
+                </span>
+              ),
+              closeOnSelect: false,
+            },
+          ]
+        : []),
       primaryDivider,
       ...view.organization(),
       ...(!batch()
@@ -233,6 +263,11 @@ function SessionMenuContent(
       );
       if (action && props.selectionCount === 1 && !actionDisabled("plugin", action.disabled)) {
         runAction({ kind: "plugin", id: action.id });
+      }
+    } else if (value === "new-nested-session") {
+      const nested = props.nestedSession;
+      if (nested && !props.disabled && !nested.creating && !nested.disabledReason) {
+        nested.onCreate();
       }
     } else if (value === "stop-cloud-worker") {
       runAction({ kind: value });
@@ -325,6 +360,7 @@ export const SessionMenu = defineSolidBridge<SessionMenuProps>(
       trigger: { default: null, attribute: false },
       disabled: { default: false, attribute: false },
       actionDisabledReasons: { default: {}, attribute: false },
+      nestedSession: { default: null, attribute: false },
       forkDisabled: { default: false, attribute: false },
       forkFromLastCompleted: { default: false, attribute: false },
       archiveAllowed: { default: false, attribute: false },

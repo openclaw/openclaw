@@ -10,7 +10,10 @@ import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.j
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { decodeLocalWorkspaceTree, localWorkspaceDigestBytes } from "./local-workspace-cas.js";
 import { readLocalWorkspaceTree } from "./local-workspace-cas.kernel.js";
-import { withLocalWorkspaceProjection } from "./local-workspace-projection.js";
+import {
+  checkpointLocalWorkspace,
+  withLocalWorkspaceProjection,
+} from "./local-workspace-projection.js";
 import { readLocalWorkspaceProjection } from "./local-workspace-store.test-support.js";
 import type { LocalWorkspaceOwner } from "./local-workspace-types.js";
 
@@ -22,6 +25,92 @@ const expectText = async (root: string, relative: string, expected: string) => {
 const expectMissing = async (root: string, relative: string) => {
   await expect(fs.stat(path.join(root, relative))).rejects.toMatchObject({ code: "ENOENT" });
 };
+
+export async function proveRejectedWorkspaceCheckpoint(
+  owner: LocalWorkspaceOwner,
+  target: "canonical" | "projection",
+) {
+  const prepare = () => withLocalWorkspaceProjection(owner, (state) => state.prepare());
+  const settle = () => withLocalWorkspaceProjection(owner, (state) => state.settle());
+  const readProjection = () => readLocalWorkspaceProjection(owner.worktree.id);
+  const projection = await prepare();
+  const source = target === "canonical" ? projection : owner.worktree.path;
+  const destination = target === "canonical" ? owner.worktree.path : projection;
+  const resultPath = target === "canonical" ? "result.txt" : "source.txt";
+  const retry = () => (target === "canonical" ? checkpointLocalWorkspace(owner) : prepare());
+  await writeText(source, resultPath, "retained rejected result\n");
+  const { workerWorkspaceResultStaging: staging, hasWorkerWorkspaceResultRef } =
+    await import("./workspace-result-staging.js");
+  const stage = staging.stageWorkerWorkspaceResult;
+  // Model an old, already-staged result refused by reconciliation admission.
+  const admission = vi
+    .spyOn(staging, "stageWorkerWorkspaceResult")
+    .mockImplementationOnce(async (params) => {
+      await stage(params);
+      throw Object.assign(
+        new Error("Result changes too many files; add build outputs to .gitignore"),
+        {
+          code: "WORKSPACE_RESULT_LIMIT",
+        },
+      );
+    });
+  await expect(retry()).rejects.toThrow("add build outputs to .gitignore");
+  admission.mockRestore();
+  const pending = (await readProjection())!;
+  expect(pending.rejectedResult).toMatchObject({
+    ref: pending.pending_ref,
+    reason: expect.stringContaining(".openclaw/tmp/"),
+  });
+  expect(JSON.parse(pending.checkpoint_json!)).toMatchObject({ kind: "scan" });
+  expect(pending.journal_json).toBeNull();
+  expect(
+    await hasWorkerWorkspaceResultRef({
+      root: owner.worktree.repoRoot,
+      stagedResultRef: pending.pending_ref!,
+    }),
+  ).toBe(true);
+  if (target === "canonical") {
+    await expectMissing(destination, resultPath);
+  } else {
+    await expectText(destination, resultPath, "original\n");
+  }
+  if (target === "projection") {
+    await writeText(projection, "guest-only.txt", "guest work while host result is parked\n");
+  }
+  // A fresh owner consumes durable rejection instead of reapplying the staged
+  // payload. Preparation preserves guest bytes for agent repair.
+  for (let attempt = 0; attempt < 2; attempt++) {
+    await expect(settle()).rejects.toThrow("add build outputs to .gitignore");
+    if (target === "canonical") {
+      expect(await prepare()).toBe(projection);
+    } else {
+      await expect(prepare()).rejects.toThrow("add build outputs to .gitignore");
+    }
+    expect((await readProjection())!.pending_ref).toBe(pending.pending_ref);
+  }
+  await expect(retry()).rejects.toThrow("add build outputs to .gitignore");
+  expect((await readProjection())!.pending_ref).toBe(pending.pending_ref);
+  await expectText(source, resultPath, "retained rejected result\n");
+  await writeText(source, resultPath, "corrected result\n");
+  await retry();
+  await expectText(destination, resultPath, "corrected result\n");
+  if (target === "projection") {
+    await expectText(projection, "guest-only.txt", "guest work while host result is parked\n");
+    await checkpointLocalWorkspace(owner);
+    await expectText(
+      owner.worktree.path,
+      "guest-only.txt",
+      "guest work while host result is parked\n",
+    );
+  }
+  expect(await readProjection()).toMatchObject({ pending_ref: null, pending_target: null });
+  expect(
+    await hasWorkerWorkspaceResultRef({
+      root: owner.worktree.repoRoot,
+      stagedResultRef: pending.pending_ref!,
+    }),
+  ).toBe(true);
+}
 
 export async function proveOversizedWorkspaceRecovery({
   owner,
@@ -203,7 +292,6 @@ export async function proveAggregateWorkspaceRecovery({
       "src/App/" + (index % 2 ? "obj" : "bin") + "/Debug/net10.0/output-" + index + ".dll",
   );
   const sourceText = "authored edit survives aggregate recovery\n";
-  await fs.writeFile(path.join(projection, ".gitignore"), ".env.local\n**/bin/\n**/obj/\n");
   for (const relative of artifacts) {
     const file = path.join(projection, relative);
     await fs.mkdir(path.dirname(file), { recursive: true });
@@ -224,7 +312,11 @@ export async function proveAggregateWorkspaceRecovery({
   expect(String(failure)).toContain("805306368 byte limit");
   expect(String(failure)).toContain("openclaw sandbox recover");
   const pending = (await readLocalWorkspaceProjection(owner.worktree.id))!.pending_ref;
-  await expect(prepareSandbox()).rejects.toThrow("openclaw sandbox recover");
+  {
+    using repair = await prepareSandbox();
+    expect(repair?.workspaceDir).toBe(projection);
+    expect((await readLocalWorkspaceProjection(owner.worktree.id))!.rejectedResult).toBeDefined();
+  }
   expect((await readLocalWorkspaceProjection(owner.worktree.id))!.pending_ref).toBe(pending);
   expect(await fs.readFile(path.join(canonical, "source.txt"), "utf8")).toBe("original\n");
   const recovery = {
@@ -256,6 +348,7 @@ export async function proveAggregateWorkspaceRecovery({
     throw new Error("Preparation after aggregate relocation failed", { cause: error });
   });
   expect(resumed).toBeDefined();
+  await resumed!.checkpoint();
   expect(await fs.readFile(path.join(canonical, "source.txt"), "utf8")).toBe(sourceText);
   expect(await fs.readFile(path.join(canonical, "bin/authored-script"), "utf8")).toBe(
     "authored executable\n",

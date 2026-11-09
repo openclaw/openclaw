@@ -74,6 +74,7 @@ suite.define(() => {
             (element) => element.scrollHeight - element.clientHeight - element.scrollTop,
           );
         await append(0, 30);
+        await expect.poll(bottomGap).toBeLessThan(2);
         await scroller.evaluate((element) => {
           element.scrollTop = element.scrollHeight;
         });

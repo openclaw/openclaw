@@ -21,13 +21,28 @@ import {
   readInstalledTerminalHeartbeat,
 } from "../../scripts/e2e/lib/upgrade-survivor/installed-terminal-observer.mjs";
 import { readWorkerCellPackageIdentity } from "../../scripts/e2e/lib/upgrade-survivor/worker-cell-package.mjs";
-import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
+import { execNodeEvalSync, resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { readJsonLines, runProcess, writeJson } from "./upgrade-survivor-shard.test-support.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 const node = resolveTestNodeExecPath();
 const observer = path.resolve("scripts/e2e/lib/upgrade-survivor/installed-terminal-observer.mjs");
+
+function captureNodeProcessAbsence(directory: string): InstalledTerminalProcessAbsence[] {
+  const receipts: InstalledTerminalProcessAbsence[] = JSON.parse(
+    execNodeEvalSync(
+      `import {captureInstalledTerminalProcessAbsence} from ${JSON.stringify(observer)};
+       process.stdout.write(JSON.stringify(captureInstalledTerminalProcessAbsence(${JSON.stringify(directory)})));`,
+      {
+        env: { ...process.env, NODE_OPTIONS: "", OPENCLAW_INSTALLED_TERMINAL_OBSERVER: "" },
+        timeout: 10_000,
+      },
+    ),
+  );
+  expect(receipts.every((receipt) => receipt.observerPid !== process.pid)).toBe(true);
+  return receipts;
+}
 
 function fixture() {
   const root = fs.realpathSync(dirs.make("installed-terminal-observer-"));
@@ -491,7 +506,12 @@ it.skipIf(process.platform !== "linux")(
       { spawned: true, code: null, signal: "SIGKILL", errorCode: "ETIMEDOUT" },
       { spawned: false, child: null, code: null, signal: null, errorCode: "ENOENT" },
     ]);
-    expect(captureInstalledTerminalProcessAbsence(f.spec.directory)).toEqual([]);
+    if (process.versions.bun) {
+      expect(() => captureInstalledTerminalProcessAbsence(f.spec.directory)).toThrow(
+        "Kernel absence capture requires the Node monotonic clock",
+      );
+    }
+    expect(captureNodeProcessAbsence(f.spec.directory)).toEqual([]);
   },
 );
 
@@ -719,7 +739,7 @@ it("requires parent-native process exit when IPC disconnect suppresses aggregate
       events.map((row, sequence) => JSON.stringify({ ...row, sequence })).join("\n") + "\n",
     );
   writeParent(withoutExit);
-  const processAbsence = captureInstalledTerminalProcessAbsence(f.spec.directory);
+  const processAbsence = captureNodeProcessAbsence(f.spec.directory);
   expect(processAbsence).toHaveLength(1);
   const receipt = processAbsence[0];
   assert(receipt);
@@ -749,7 +769,7 @@ it("requires parent-native process exit when IPC disconnect suppresses aggregate
       row.event === "spawn" ? Object.assign({}, row, { child: process.pid }) : row,
     ),
   );
-  expect(captureInstalledTerminalProcessAbsence(f.spec.directory)[0]?.errorCode).toBe(null);
+  expect(captureNodeProcessAbsence(f.spec.directory)[0]?.errorCode).toBe(null);
   writeParent(withoutExit);
   const childLog = path.join(f.spec.directory, `${receipt.child}-0.jsonl`);
   const childRows = readJsonLines<Record<string, unknown>>(childLog);
@@ -963,7 +983,7 @@ it.skipIf(process.platform !== "linux")(
         expect(() => readInstalledTerminalEvents(f.spec.directory)).toThrow(
           "no unique native exit",
         );
-        const processAbsence = captureInstalledTerminalProcessAbsence(f.spec.directory);
+        const processAbsence = captureNodeProcessAbsence(f.spec.directory);
         expect(processAbsence).toHaveLength(1);
         expect(processAbsence[0]).toMatchObject({
           child: pid,
@@ -1745,7 +1765,7 @@ it.each([false, true])(
     const heartbeatRelative = "dist/state/openclaw-state-lease-heartbeat.worker.js";
     const revision = historical
       ? "8b18b5578f66eab1501cba4cef2310d88bfb9a41"
-      : "aedae9dc410202f22504c6183823fd411699f723";
+      : "7ef902d3b4126b2f1f5d58aaad3d1340b1e0315d";
     for (const relative of [sqliteRelative, checkRelative, heartbeatRelative]) {
       const file = path.join(packageRoot, relative);
       fs.mkdirSync(path.dirname(file), { recursive: true });
@@ -1767,7 +1787,7 @@ it.each([false, true])(
     assert(typeof probeSource === "string");
     if (!historical) {
       expect(createHash("sha256").update(probeSource).digest("hex")).toBe(
-        "cdd22785b67a4371d10fe8a3152a8ae370507691f3e52bfb76c32cf83e03d0f4",
+        "8700a6c51bb2bd0040ec85d263d81ab1fd34057fa290290d568187ed945da1dc",
       );
     }
     fs.writeFileSync(probe, probeSource);

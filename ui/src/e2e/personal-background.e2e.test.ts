@@ -367,7 +367,7 @@ suite.define(() => {
       const gateway = await installBackground(page, preference, {
         methodResponses: { "users.background.upload": { status: "conflict" } },
       });
-      const section = await visitAppearance(page);
+      const section = await visitAppearance(page, true);
       const image = await imageFixture(page);
       await uploadImage(page, section, "replacement.png", image.png);
       await gateway.waitForRequest("users.background.upload");

@@ -1,5 +1,6 @@
 // Signed statement bodies (owner-key spec section 3). Field names are the wire names.
 import type { Ed25519PublicKey, IrohEndpointKey, KeyFingerprint } from "../keys.js";
+import type { StatementVersion } from "../version.js";
 
 /** Statement types. The type string is part of the signed domain-separation prefix. */
 export const STATEMENT_TYPES = [
@@ -10,6 +11,9 @@ export const STATEMENT_TYPES = [
   "Revocation",
   "MembershipSnapshot",
   "InviteRedemption",
+  "RootReset",
+  "NodeInviteCap",
+  "NodeRedemption",
 ] as const;
 
 /** One of {@link STATEMENT_TYPES}. */
@@ -19,9 +23,9 @@ export type StatementType = (typeof STATEMENT_TYPES)[number];
 export type UnixSeconds = number;
 
 /**
- * The only root epoch in v1-draft. A claw's root never changes (owner reset is out of scope;
- * see OCF-319), so `root_epoch` is a constant: statements carry it, and anything else is
- * malformed.
+ * The only root epoch in v1-draft. There are no root epochs: an owner reset replaces the root
+ * without one (RootReset), so `root_epoch` is a constant: statements carry it, and anything
+ * else is malformed.
  */
 export const ROOT_EPOCH = 1;
 
@@ -38,11 +42,18 @@ export type MemberRole = (typeof MEMBER_ROLES)[number];
 /** Most owner devices one claw keeps. Adding past it is refused with `limit_reached`. */
 export const MAX_OWNER_DEVICES = 20;
 /** Most iroh peer keys one owner device certificate may carry. */
-export const MAX_OWNER_DEVICE_PEER_KEYS = 5;
-/** Most members one claw keeps. */
-export const MAX_MEMBERS = 50;
+export const MAX_OWNER_DEVICE_PEER_KEYS = 10;
+/**
+ * Most members one claw keeps. It equals the statement list limit, so a snapshot listing every
+ * member still validates.
+ */
+export const MAX_MEMBERS = 256;
 /** Most iroh peer keys (browsers) one member may have at a claw. */
-export const MAX_MEMBER_PEER_KEYS = 5;
+export const MAX_MEMBER_PEER_KEYS = 10;
+/** Most invites one claw keeps, in any state. Registering past it is refused with `limit_reached`. */
+export const MAX_INVITES = 100;
+/** Most node keys one claw keeps, separate from members and owner devices. */
+export const MAX_NODES = 256;
 
 /**
  * Certifies an owner device key D (and optionally its iroh peer keys W). It is signed by R or by
@@ -101,6 +112,8 @@ export const MEMBERSHIP_OPS = [
   "revoke_device",
   "add_owner_device",
   "deny_invite",
+  "add_node",
+  "remove_node",
 ] as const;
 /** One of {@link MEMBERSHIP_OPS}. */
 export type MembershipOp = (typeof MEMBERSHIP_OPS)[number];
@@ -114,6 +127,8 @@ export type MembershipTarget =
       peer_keys: IrohEndpointKey[];
       invite_id: string | null;
     }
+  | { op: "add_node"; peer_key: IrohEndpointKey; label: string; invite_id: string }
+  | { op: "remove_node"; peer_key: IrohEndpointKey }
   | { op: "remove"; account_id: string }
   | { op: "set_role"; account_id: string; role: MemberRole }
   | { op: "revoke_device"; peer_key: IrohEndpointKey }
@@ -136,10 +151,14 @@ export const REVOCATION_KINDS = ["owner_device", "peer_key"] as const;
 export type RevocationKind = (typeof REVOCATION_KINDS)[number];
 
 /**
- * Removes a key by fingerprint from the claws that receive it. Nothing remembers it afterwards:
- * the removed key is simply no longer listed.
+ * Removes a key by fingerprint from one claw. It covers only what its signer saw: a key listed
+ * at or before `seq`. A key listed again after that seq is a new approval it does not cover, so
+ * the same bytes submitted later change nothing. Nothing remembers the revocation afterwards.
  */
 export type RevocationBody = {
+  claw_id: string;
+  /** The claw's membership seq the signer last saw (the snapshot's seq). */
+  seq: number;
   target_fp: KeyFingerprint;
   target_kind: RevocationKind;
   reason: string;
@@ -153,6 +172,18 @@ export type SnapshotOwnerDevice = { device_pub: Ed25519PublicKey; caps: OwnerCap
 
 /** One member entry in a snapshot. */
 export type SnapshotMember = { account_id: string; role: MemberRole; peer_keys: IrohEndpointKey[] };
+
+/**
+ * Protocol versions a Gateway accepts for new input, per versioned surface, ascending. Clients
+ * pick the highest version they share with it (`selectVersion`). The tunnel is not listed: its
+ * version is negotiated by QUIC ALPN inside the handshake K_srv authenticates.
+ */
+export type ProtocolVersions = {
+  /** Signed statement envelope versions. */
+  statement: number[];
+  /** ClawDescriptor versions. */
+  descriptor: number[];
+};
 
 /**
  * Gateway-signed (K_gw) mirror of the claw's current allowlist for Discovery listing and relay
@@ -170,6 +201,14 @@ export type MembershipSnapshotBody = {
   /** Owner device peer keys the relay should admit. */
   owner_peer_keys: IrohEndpointKey[];
   members: SnapshotMember[];
+  /**
+   * The versions this Gateway accepts. Signed by K_gw and only used from a snapshot that passed
+   * `assessFreshness`, so Discovery cannot edit it. It can still replay an older list a client
+   * has not seen; the Gateway refusing unlisted versions is what keeps that harmless.
+   */
+  protocols: ProtocolVersions;
+  /** Node-only keys: never owner or member authority. */
+  node_peer_keys: IrohEndpointKey[];
   issued_at: UnixSeconds;
 };
 
@@ -185,6 +224,48 @@ export type InviteRedemptionBody = {
   requested_at: UnixSeconds;
 };
 
+/**
+ * Owner reset (OCF-319): the Gateway, with the K_gw of the claw's current binding, vouches that
+ * the claw's root is now `new_root_pub` from `binding_seq` on. Reset only happens on the claw's
+ * machine. It keeps K_srv and K_gw, so the new binding (signed by the new root at this
+ * binding_seq) names the same keys as the binding it replaces.
+ */
+export type RootResetBody = {
+  claw_id: string;
+  new_root_pub: Ed25519PublicKey;
+  /** The new binding's binding_seq: higher than the binding the reset replaces. */
+  binding_seq: number;
+  issued_at: UnixSeconds;
+};
+
+/** A single-use node invitation, registered directly with its proof key. */
+export type NodeInviteCapBody = Pick<
+  InviteCapBody,
+  "claw_id" | "invite_id" | "label" | "created_at" | "expires_at" | "secret_hash"
+>;
+
+/** Bounds for self-reported node metadata; declarations never grant authority. */
+export const MAX_NODE_DISPLAY_NAME = 128;
+export const MAX_NODE_PLATFORM = 64;
+export const MAX_NODE_SURFACE_ITEMS = 64;
+export const MAX_NODE_SURFACE_NAME = 128;
+export type NodeDescription = {
+  display_name: string;
+  platform: string;
+  commands: string[];
+  caps: string[];
+};
+
+/** Self-signed by W (the same raw key encoded as ed25519: in the envelope). */
+export type NodeRedemptionBody = {
+  description: NodeDescription;
+  claw_id: string;
+  invite_id: string;
+  peer_key: IrohEndpointKey;
+  proof: string;
+  requested_at: UnixSeconds;
+};
+
 /** Maps each statement type to its body. */
 export type StatementBodies = {
   OwnerDeviceCert: OwnerDeviceCertBody;
@@ -194,6 +275,9 @@ export type StatementBodies = {
   Revocation: RevocationBody;
   MembershipSnapshot: MembershipSnapshotBody;
   InviteRedemption: InviteRedemptionBody;
+  RootReset: RootResetBody;
+  NodeInviteCap: NodeInviteCapBody;
+  NodeRedemption: NodeRedemptionBody;
 };
 
 /**
@@ -204,7 +288,8 @@ export type StatementBodies = {
  * checked against the claw's current owner devices, which only the Gateway knows.
  */
 export type SignedStatement<T extends StatementType = StatementType> = {
-  v: 1;
+  /** Envelope version; selects the schema and the signing domain. */
+  v: StatementVersion;
   type: T;
   body: StatementBodies[T];
   signer: Ed25519PublicKey;

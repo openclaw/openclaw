@@ -16,6 +16,112 @@
       "openrouter": {
         "models": [
           {
+            "id": "parallel/decisions-fast",
+            "name": "Parallel: Decisions Fast",
+            "baseUrl": "https://openrouter.ai/api/v1",
+            "input": [
+              "text"
+            ],
+            "contextWindow": 32000,
+            "inference": {
+              "chat": false,
+              "decision": {
+                "protocol": "openrouter-systemone",
+                "input": [
+                  "text"
+                ],
+                "questions": {
+                  "boolean": {
+                    "probabilities": "boolean",
+                    "abstention": false
+                  },
+                  "choice": {
+                    "probabilities": "categorical",
+                    "abstention": false,
+                    "minOptions": 2,
+                    "maxOptions": 255
+                  },
+                  "score": {
+                    "probabilities": "categorical",
+                    "abstention": false,
+                    "minOptions": 2,
+                    "maxOptions": 10
+                  }
+                },
+                "confidence": "provider-specific",
+                "reasoning": {
+                  "modes": [
+                    "auto"
+                  ]
+                },
+                "grounding": {
+                  "webSearch": true
+                },
+                "limits": {
+                  "maxQuestions": 100,
+                  "maxStateAndQuestionTokens": 32000
+                },
+                "billing": {
+                  "unit": "requests",
+                  "source": "provider-docs"
+                }
+              }
+            }
+          },
+          {
+            "id": "parallel/decisions-fast:free",
+            "name": "Parallel: Decisions Fast (free)",
+            "baseUrl": "https://openrouter.ai/api/v1",
+            "input": [
+              "text"
+            ],
+            "contextWindow": 32000,
+            "inference": {
+              "chat": false,
+              "decision": {
+                "protocol": "openrouter-systemone",
+                "input": [
+                  "text"
+                ],
+                "questions": {
+                  "boolean": {
+                    "probabilities": "boolean",
+                    "abstention": false
+                  },
+                  "choice": {
+                    "probabilities": "categorical",
+                    "abstention": false,
+                    "minOptions": 2,
+                    "maxOptions": 255
+                  },
+                  "score": {
+                    "probabilities": "categorical",
+                    "abstention": false,
+                    "minOptions": 2,
+                    "maxOptions": 10
+                  }
+                },
+                "confidence": "provider-specific",
+                "reasoning": {
+                  "modes": [
+                    "auto"
+                  ]
+                },
+                "grounding": {
+                  "webSearch": true
+                },
+                "limits": {
+                  "maxQuestions": 100,
+                  "maxStateAndQuestionTokens": 32000
+                },
+                "billing": {
+                  "unit": "requests",
+                  "source": "provider-docs"
+                }
+              }
+            }
+          },
+          {
             "id": "typesafe/jev-1.13",
             "name": "TypeSafe: Jev 1.13",
             "baseUrl": "https://openrouter.ai/api/v1",
