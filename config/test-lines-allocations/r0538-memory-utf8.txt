@@ -1,0 +1,3 @@
+# R0538: malformed MEMORY.md byte preservation at local rewrite/delete and real remote maintenance dispatch.
+# Retains strict workspace reads, valid Unicode/BOM/U+FFFD, missing-file and permission controls.
+131

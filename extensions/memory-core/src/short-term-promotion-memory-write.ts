@@ -7,8 +7,9 @@ import {
   writeFileWindowFully,
 } from "openclaw/plugin-sdk/file-access-runtime";
 import type { MemoryWorkspaceFiles } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
+import { decodeUtf8Input } from "openclaw/plugin-sdk/runtime-doctor-migrations";
 import { replaceFileAtomic } from "openclaw/plugin-sdk/security-runtime";
-import { getMemoryWorkspaceMaintenance, readWorkspaceText } from "./memory-workspace-files.js";
+import { getMemoryWorkspaceMaintenance, readWorkspaceFile } from "./memory-workspace-files.js";
 
 type MemoryFileCommit = Parameters<
   NonNullable<MemoryWorkspaceFiles["maintenance"]>["commitContent"]
@@ -79,14 +80,20 @@ export async function resolveMemoryWritePath(
 }
 
 export async function readMemoryContent(filePath: string, workspaceDir?: string): Promise<string> {
-  return await (
-    workspaceDir ? readWorkspaceText(workspaceDir, filePath) : fs.readFile(filePath, "utf-8")
+  const bytes = await (
+    workspaceDir ? readWorkspaceFile(workspaceDir, filePath) : fs.readFile(filePath)
   ).catch((error: unknown) => {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      return "";
+    if (extractErrorCode(error) === "ENOENT") {
+      return null;
     }
     throw error;
   });
+  return bytes === null
+    ? ""
+    : decodeUtf8Input(
+        bytes,
+        `Memory file ${filePath} (preserve the original and convert a copy to UTF-8 before retrying)`,
+      );
 }
 
 export function isAtomicReplacePermissionError(error: unknown): boolean {

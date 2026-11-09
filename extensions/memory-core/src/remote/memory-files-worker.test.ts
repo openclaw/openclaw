@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { PassThrough, Writable } from "node:stream";
@@ -191,6 +192,46 @@ it("preserves the malformed diary error code across the remote file protocol", a
       error: { code: "ERR_INVALID_UTF8", message: expect.stringContaining("must be valid UTF-8") },
     });
     expect(await fs.readFile(dreamsPath)).toEqual(bytes);
+  } finally {
+    input.end();
+    await worker;
+    output.destroy();
+  }
+});
+
+it("refuses malformed MEMORY.md through the real maintenance commit dispatch", async () => {
+  const memoryPath = path.join(state.workspaceDir, "MEMORY.md");
+  const bytes = Buffer.concat([Buffer.from("# Memory\n- a"), Buffer.from([0xff])]);
+  await fs.writeFile(memoryPath, bytes);
+  const lossy = bytes.toString("utf8");
+  const input = new PassThrough();
+  const output = new PassThrough();
+  const worker = serveMemoryFiles({ workspace: state.workspaceDir, input, output });
+  try {
+    input.end(
+      JSON.stringify({
+        operation: "maintenance",
+        method: "commitContent",
+        args: [
+          {
+            filePath: memoryPath,
+            tempPrefix: "MEMORY.md.promotion",
+            expectedHash: createHash("sha256").update(lossy).digest("hex"),
+            expectedContent: lossy,
+            allowInPlaceFallback: true,
+            content: `${lossy}\n- promoted entry\n`,
+          },
+        ],
+      }),
+    );
+    await worker;
+    expect(JSON.parse(String(output.read()))).toMatchObject({
+      error: {
+        code: "ERR_INVALID_UTF8",
+        message: expect.stringContaining("convert a copy to UTF-8 before retrying"),
+      },
+    });
+    expect(await fs.readFile(memoryPath)).toEqual(bytes);
   } finally {
     input.end();
     await worker;

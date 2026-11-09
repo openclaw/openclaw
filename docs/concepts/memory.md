@@ -53,9 +53,10 @@ observations, session summaries, and raw context that may still be useful
 later. These are indexed for `memory_search` and `memory_get`, but are not
 injected into the bootstrap prompt on every turn.
 
-Daily-memory maintenance requires valid UTF-8. If decoding fails, the operation
-stops before rewriting that file. Preserve the original and convert a copy to
-UTF-8 before retrying.
+Daily-memory maintenance and promotion or forget rewrites of `MEMORY.md` require
+valid UTF-8. If decoding fails, the operation stops before rewriting that file.
+Preserve the original and convert a copy to UTF-8 before retrying. Valid Unicode,
+including an intentional replacement character (`�`), is preserved.
 
 Over time, useful material from daily notes is distilled into `MEMORY.md` by
 the default [dreaming](/concepts/dreaming) sweep. The generated workspace

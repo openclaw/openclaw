@@ -6,6 +6,7 @@ import {
   commitMemoryContent,
   hashMemoryContent,
   MemoryWriteConflictError,
+  readMemoryContent,
   resolveMemoryWritePath,
 } from "./short-term-promotion-memory-write.js";
 
@@ -189,3 +190,92 @@ it.runIf(process.platform !== "win32" && readOnlyParentRejectsWrites)(
     expect(await fs.readFile(memoryPath, "utf-8")).toBe(original);
   },
 );
+
+it.each(["rewrite", "remove"] as const)(
+  "refuses to %s a memory file that is not valid UTF-8",
+  async (operation) => {
+    const malformed = Buffer.concat([Buffer.from("# Memory\n- a"), Buffer.from([0xff])]);
+    const memoryPath = await setupMemoryFile("placeholder");
+    await fs.writeFile(memoryPath, malformed);
+    const lossy = malformed.toString("utf8");
+
+    await expect(
+      commitMemoryContent({
+        filePath: memoryPath,
+        tempPrefix: `${path.basename(memoryPath)}.promotion`,
+        expectedHash: hashMemoryContent(lossy),
+        expectedContent: lossy,
+        allowInPlaceFallback: true,
+        content: operation === "remove" ? null : `${lossy}\n- promoted entry\n`,
+      }),
+    ).rejects.toMatchObject({ code: "ERR_INVALID_UTF8" });
+
+    expect(await fs.readFile(memoryPath)).toEqual(malformed);
+  },
+);
+
+it.runIf(process.platform !== "win32" && readOnlyParentRejectsWrites)(
+  "preserves malformed memory when the parent directory is read-only",
+  async () => {
+    const malformed = Buffer.from([0x23, 0x20, 0xff]);
+    const memoryPath = await setupMemoryFile("placeholder", true);
+    await fs.writeFile(memoryPath, malformed);
+    const lossy = malformed.toString("utf8");
+
+    await expect(
+      commitMemoryContent({
+        filePath: memoryPath,
+        tempPrefix: `${path.basename(memoryPath)}.promotion`,
+        expectedHash: hashMemoryContent(lossy),
+        expectedContent: lossy,
+        allowInPlaceFallback: true,
+        content: `${lossy}\n- promoted entry\n`,
+      }),
+    ).rejects.toMatchObject({ code: "ERR_INVALID_UTF8" });
+
+    expect(await fs.readFile(memoryPath)).toEqual(malformed);
+  },
+);
+
+it("keeps strict workspace reads and their recovery guidance", async () => {
+  const memoryPath = await setupMemoryFile("placeholder");
+  const malformed = Buffer.from([0xff]);
+  await fs.writeFile(memoryPath, malformed);
+
+  await expect(readMemoryContent(memoryPath, path.dirname(memoryPath))).rejects.toMatchObject({
+    code: "ERR_INVALID_UTF8",
+    message: expect.stringContaining("convert a copy to UTF-8 before retrying"),
+  });
+  expect(await fs.readFile(memoryPath)).toEqual(malformed);
+});
+
+it("merges valid Unicode memory including a BOM and literal replacement character", async () => {
+  const original = "\uFEFF# Long-Term Memory\n\n- note: 中文 🦀 \uFFFD tail\n";
+  const memoryPath = await setupMemoryFile(original);
+  const replacement = `${original}- promoted entry\n`;
+
+  await commitMemoryContent({
+    filePath: memoryPath,
+    tempPrefix: `${path.basename(memoryPath)}.promotion`,
+    expectedHash: hashMemoryContent(original),
+    content: replacement,
+  });
+
+  expect(await fs.readFile(memoryPath)).toEqual(Buffer.from(replacement, "utf8"));
+});
+
+it("still creates a missing memory file on first promotion", async () => {
+  const memoryPath = await setupMemoryFile("placeholder");
+  await fs.rm(memoryPath);
+  expect(await readMemoryContent(memoryPath)).toBe("");
+  expect(await readMemoryContent(memoryPath, path.dirname(memoryPath))).toBe("");
+  const content = "# Long-Term Memory\n\n- first entry\n";
+
+  await commitMemoryContent({
+    filePath: memoryPath,
+    tempPrefix: `${path.basename(memoryPath)}.promotion`,
+    content,
+  });
+
+  expect(await fs.readFile(memoryPath, "utf8")).toBe(content);
+});
