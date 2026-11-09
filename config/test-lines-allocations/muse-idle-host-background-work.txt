@@ -1,0 +1,2 @@
+24
+# Muse runtime pool: an idle host stays open while its Muse sessions still emit events from Muse-initiated runs.

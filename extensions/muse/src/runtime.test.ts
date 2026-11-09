@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { MusePool } from "./runtime.js";
+import { MusePool, openMuseSession } from "./runtime.js";
 
 let workspace: string;
 const fixture = fileURLToPath(new URL("./test-support/fake-muse.mjs", import.meta.url));
@@ -67,6 +67,30 @@ describe("Muse process pool", () => {
       }
     },
   );
+  it("keeps an idle host open while its Muse sessions still report work", async () => {
+    const pool = new MusePool(fixture);
+    try {
+      const lease = await pool.acquire(workspace, "key-a", false);
+      const session = await openMuseSession(lease.runtime, {
+        workspace,
+        modelId: "muse-spark-1.3",
+        approvalMode: "allowAll",
+      });
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      lease.release();
+      await vi.advanceTimersByTimeAsync(299_000);
+      // Muse starts follow-up runs itself (after a background workflow) with no lease held.
+      const turn = await session.sendUserTurn({ input: [{ type: "text", text: "hello" }] });
+      await turn.completed;
+      await vi.advanceTimersByTimeAsync(299_000);
+      expect(lease.runtime.closing).toBe(false);
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(lease.runtime.closing).toBe(true);
+    } finally {
+      vi.useRealTimers();
+      await pool.dispose();
+    }
+  });
   it("isolates pooled credentials, reuses matching hosts, and closes idle hosts", async () => {
     const pool = new MusePool(fixture);
     try {
