@@ -120,7 +120,9 @@ it("focuses the atomic editor during a mobile tap and consumes a retargeted tool
     .poll(() => container.querySelector<HTMLElement>('[data-composer-editor="true"]'))
     .not.toBeNull();
   const editor = container.querySelector<HTMLElement>('[data-composer-editor="true"]')!;
-  document.activeElement instanceof HTMLElement && document.activeElement.blur();
+  if (document.activeElement instanceof HTMLElement) {
+    document.activeElement.blur();
+  }
   let focusedDuringPointerDown = false;
   editor.addEventListener(
     "pointerdown",

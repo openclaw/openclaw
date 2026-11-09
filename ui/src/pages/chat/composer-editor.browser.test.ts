@@ -93,6 +93,17 @@ describe.each(["chat", "new-session"] as const)("%s document-aware composer", (k
     },
   );
 
+  it("fits the compact conversation height after activating a chip", async () => {
+    const f = fixture(kind);
+    const pane = document.createElement("div");
+    pane.style.cssText = "container:chat-conversation / size; width:230px; height:150px";
+    document.body.append(pane);
+    pane.append(f.surface);
+    await layout();
+    expect(getComputedStyle(f.view.dom).paddingBlock).toBe("2px");
+    expect(f.view.dom.getBoundingClientRect().height).toBe(24);
+  });
+
   it("keeps required separators when deleting whitespace beside a chip", async () => {
     const f = fixture(kind);
     focusComposerInput(f.input);

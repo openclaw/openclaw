@@ -295,10 +295,7 @@
    state; this block stays after the dictation rules so it wins their ties. */
 :root .agent-chat__input[data-incognito="true"],
 :root .agent-chat__input--dictating[data-incognito="true"]:focus-within,
-:root
-  .agent-chat__input[data-incognito="true"]:has(
-    .agent-chat__composer-combobox > :is(textarea, input):focus
-  ) {
+:root .agent-chat__input[data-incognito="true"]:has(.agent-chat__composer-combobox:focus-within) {
   border-style: dashed;
   /* Same edge as the /new Incognito composer, so sending keeps the frame. */
   border-color: color-mix(in srgb, var(--text-strong) 22%, transparent);
@@ -379,7 +376,6 @@
 
 .agent-chat__composer-combobox
   > :where(textarea, input, .agent-chat__composer-placeholder, .agent-chat__composer-prediction),
-.agent-chat__composer-combobox > :where(.chat-composer-editor),
 .agent-chat__composer-prediction-actions {
   /* Keep text aligned while the native scrollport reaches the surface edge. */
   padding-inline: calc(
@@ -387,8 +383,7 @@
   );
 }
 
-.agent-chat__composer-combobox > :is(textarea, input),
-.agent-chat__composer-combobox > .chat-composer-editor {
+.agent-chat__composer-combobox > :is(textarea, input) {
   --control-ui-touch-input-size: var(--chat-composer-editor-size);
 
   width: 100%;
@@ -439,7 +434,6 @@
     scrollbar-gutter: stable;
   }
 
-  /* Keep the total end inset when the real editor scrollbar takes that space. */
   .agent-chat__composer-combobox > .chat-composer-editor[data-composer-overflow] {
     padding-inline-end: calc(var(--chat-composer-editor-inset-inline) - var(--scrollbar-size));
   }
@@ -474,7 +468,7 @@
   --chat-composer-scroll-mask-bottom: transparent;
 }
 
-.agent-chat__composer-combobox > :is(textarea, input):focus-visible {
+.agent-chat__composer-combobox:focus-within {
   box-shadow: none;
 }
 
@@ -1533,38 +1527,4 @@
     max-height: calc(var(--chat-composer-editor-line) + 4px);
     padding-block: 2px;
   }
-}
-
-/* The editor lays out the avatar, label, caret and wrapping in one document. */
-.chat-composer-editor {
-  cursor: text;
-  overflow: hidden;
-  font-family: inherit;
-}
-.chat-composer-editor .cm-scroller {
-  min-height: 0;
-  overflow: auto;
-  scrollbar-width: thin;
-}
-.chat-composer-editor .cm-content {
-  font: inherit;
-  caret-color: var(--text-strong);
-}
-.chat-composer-editor--disabled {
-  opacity: 0.5;
-  cursor: default;
-}
-/* A selected person is one atomic chip, styled exactly like a sent reference. */
-.chat-composer-editor .chat-composer-mention {
-  /* One unit: wrap before the chip, never between its avatar and name. */
-  white-space: nowrap;
-}
-
-/* A selected chip highlights as one unit, avatar included. */
-.chat-composer-editor .chat-composer-mention .markdown-person-reference__avatar {
-  user-select: text;
-  -webkit-user-select: text;
-}
-.agent-chat__composer-combobox:has(> .chat-composer-editor) > .agent-chat__composer-placeholder {
-  display: none;
 }

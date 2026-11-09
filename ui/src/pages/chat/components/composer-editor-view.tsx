@@ -1,3 +1,4 @@
+import "../../../styles/chat/person-reference.css";
 import { defaultKeymap, history, historyKeymap, isolateHistory } from "@codemirror/commands";
 import {
   Compartment,
@@ -34,6 +35,7 @@ import {
   rememberMentionHistory,
   mentionDecorations,
 } from "./composer-editor-mentions.tsx";
+import { composerEditorTheme } from "./composer-editor-theme.ts";
 
 /** CM owns layout, selection, history, clipboard and IME. The hidden native field
  * is only the existing controller's raw-value/event port; its geometry is never used. */
@@ -48,6 +50,7 @@ export function mountComposerEditor(
   mentions: () => readonly HumanMention[],
   application?: ApplicationContext,
   initialHistory?: ComposerEditorSnapshot,
+  avatarUrls?: ReadonlyMap<string, string>,
 ) {
   const configuration = new Compartment();
   let syncing = false;
@@ -72,7 +75,12 @@ export function mountComposerEditor(
         return label.startsWith("@") && mention.start + 1 < mention.end
           ? [
               Decoration.replace({
-                widget: new MentionChip(mention.profileId, label, application),
+                widget: new MentionChip(
+                  mention.profileId,
+                  label,
+                  application,
+                  avatarUrls?.get(mention.profileId),
+                ),
               }).range(mention.start, mention.end),
             ]
           : [];
@@ -343,14 +351,7 @@ export function mountComposerEditor(
             }
           }
         }),
-        EditorView.theme({
-          "&": { outline: "none" },
-          "&.cm-focused": { outline: "none" },
-          ".cm-scroller": { fontFamily: "inherit", lineHeight: "inherit" },
-          ".cm-content": { padding: "0", minHeight: "1lh" },
-          ".cm-line": { padding: "0" },
-          ".cm-placeholder": { color: "var(--muted)" },
-        }),
+        composerEditorTheme,
       ],
     }),
   });
@@ -514,7 +515,14 @@ export function mountComposerEditor(
       const previous = view.state.doc.toString();
       const effects: StateEffect<unknown>[] = [];
       const nextMentions = readHumanMentions(input.value, mentions()) ?? [];
-      const nextMentionSignature = JSON.stringify(nextMentions);
+      const nextMentionSignature = JSON.stringify(
+        nextMentions.map((mention) => [
+          mention.profileId,
+          mention.start,
+          mention.end,
+          avatarUrls?.get(mention.profileId),
+        ]),
+      );
       const nextAttributes = JSON.stringify([
         attributes(),
         input.disabled,

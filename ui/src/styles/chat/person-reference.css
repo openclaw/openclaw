@@ -62,7 +62,7 @@
 }
 
 /* Decorative initials must not change the selected or copied mention text. */
-.markdown-person-reference__avatar.is-fallback::after {
+.markdown-person-reference__avatar:is(.is-fallback, .is-pending)::after {
   content: attr(data-initials);
   display: grid;
   place-items: center;

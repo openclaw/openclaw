@@ -1,18 +1,19 @@
 import { Show } from "solid-js";
 import { IdentityAvatarImage, createIdentityAvatarPresentation } from "./identity-avatar-image.tsx";
 import { useIdentityAvatarView } from "./identity-avatar-view.ts";
-import "../../styles/chat/person-reference.css";
 
 /** Shared, noninteractive presentation for sent references and composer widgets. */
 export function PersonReferenceLabel(props: {
   profileId: string;
   label: string;
+  avatarUrl?: string;
   literalPrefix?: boolean;
 }) {
   const avatar = useIdentityAvatarView(() => ({
     id: props.profileId,
     identity: { type: "profile", id: props.profileId },
     name: props.label.replace(/^@/u, ""),
+    profileAvatarUrl: props.avatarUrl,
   }));
   const presentation = createIdentityAvatarPresentation(avatar);
   return (

@@ -8,6 +8,7 @@ import { listen } from "../../lib/reactive/listener.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../lib/solid-bridge.ts";
 import { createPortaledHovercard, createPortaledHovercardOwner } from "../portaled-hovercard.ts";
 import { PersonReferenceLabel } from "./person-reference-label.tsx";
+import "../../styles/chat/person-reference.css";
 import type { createPersonReferenceCard } from "./person-reference.runtime.ts";
 
 type ActivePersonCard = {

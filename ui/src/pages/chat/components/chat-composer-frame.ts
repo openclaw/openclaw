@@ -363,15 +363,16 @@ export function createChatComposerContext(
     adjustTextareaHeight(target, { nativeInput: true });
     target.dir = detectTextDirection(target.value);
     const mentions = getMentions();
+    const nextMentions = updateHumanMentions(
+      props.getDraft?.() ?? props.draft,
+      target.value,
+      mentions,
+      state.mentionInput,
+    );
     commitComposerDraft(
       props,
       target.value,
-      updateHumanMentions(
-        props.getDraft?.() ?? props.draft,
-        target.value,
-        mentions,
-        state.mentionInput,
-      ),
+      mentions.length || nextMentions.length ? nextMentions : undefined,
     );
     state.mentionInput = undefined;
     const activatedGoal = goalComposer.activateDraft(target.value);

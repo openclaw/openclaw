@@ -397,6 +397,7 @@ suite.define(() => {
         range.selectNodeContents(nameNode!);
         return {
           font: Number.parseFloat(getComputedStyle(person).fontSize),
+          paddingTop: getComputedStyle(person.closest(".chat-composer-editor")!).paddingTop,
           avatarWidth: avatar.width,
           avatarHeight: avatar.height,
           gap: range.getBoundingClientRect().left - avatar.right,
@@ -409,6 +410,7 @@ suite.define(() => {
       expect(geometry.avatarHeight).toBeCloseTo(geometry.avatarWidth, 1);
       expect(geometry.gap).toBeGreaterThanOrEqual(2);
       expect(geometry.documentWidth).toBeLessThanOrEqual(width);
+      expect(geometry.paddingTop).toBe("10px");
       if (width === 390) {
         await captureUiProof(suite, page, "atomic-selected-mention-mobile.png");
       }

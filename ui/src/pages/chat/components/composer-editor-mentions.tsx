@@ -15,18 +15,29 @@ export class MentionChip extends WidgetType {
     readonly profileId: string,
     readonly label: string,
     readonly application: ApplicationContext | undefined,
+    readonly avatarUrl?: string,
   ) {
     super();
   }
   override eq(other: MentionChip) {
-    return other.profileId === this.profileId && other.label === this.label;
+    return (
+      other.profileId === this.profileId &&
+      other.label === this.label &&
+      other.avatarUrl === this.avatarUrl
+    );
   }
   toDOM() {
     const node = document.createElement("span");
     node.className = "markdown-person-reference chat-composer-mention";
     node.dataset.profileId = this.profileId;
     // Provide the capability in this separate root; CM owns its lifetime.
-    const label = () => <PersonReferenceLabel profileId={this.profileId} label={this.label} />;
+    const label = () => (
+      <PersonReferenceLabel
+        profileId={this.profileId}
+        label={this.label}
+        avatarUrl={this.avatarUrl}
+      />
+    );
     chipDisposers.set(
       node,
       render(

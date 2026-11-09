@@ -10,7 +10,7 @@ import { listen } from "./listener.ts";
 
 /** One foreign-DOM owner shared by Chat and New Session. Load CM only when a
  * selected person needs inline layout; retain it until this draft unmounts. */
-export function createComposerEditorBinding() {
+export function createComposerEditorBinding(avatarUrls?: ReadonlyMap<string, string>) {
   const application = useOptionalApplication();
   let input: HTMLTextAreaElement | undefined;
   let composing = false;
@@ -35,7 +35,7 @@ export function createComposerEditorBinding() {
   }
   function activate() {
     if (input && !editor && !composing && mentions().length && mountEditor) {
-      editor = mountEditor(input, mentions, application, entryHistory);
+      editor = mountEditor(input, mentions, application, entryHistory, avatarUrls);
       entryHistory = undefined;
     }
   }

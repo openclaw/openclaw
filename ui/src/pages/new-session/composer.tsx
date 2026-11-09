@@ -394,7 +394,7 @@ export function NewSessionComposer(props: {
   const messageValue = createLiveValue(visibleMessage, (input: HTMLTextAreaElement) =>
     syncComposerInput(input),
   );
-  const editorRef = createComposerEditorBinding();
+  const editorRef = createComposerEditorBinding(textarea.mentionMenu.selectedAvatarUrls);
   let input: HTMLTextAreaElement | undefined;
   let composer: HTMLDivElement | undefined;
   let footer: HTMLDivElement | undefined;
@@ -543,14 +543,15 @@ export function NewSessionComposer(props: {
                 const target = event.currentTarget;
                 adjustTextareaHeight(target, { nativeInput: true });
                 const mentions = frame().mentionMenuHost.getMentions();
+                const nextMentions = updateHumanMentions(
+                  options().message,
+                  target.value,
+                  mentions,
+                  textarea.mentionInput,
+                );
                 options().onInput(
                   target.value,
-                  updateHumanMentions(
-                    options().message,
-                    target.value,
-                    mentions,
-                    textarea.mentionInput,
-                  ),
+                  mentions.length || nextMentions.length ? nextMentions : undefined,
                 );
                 textarea.mentionInput = undefined;
                 frame().updateMenus(target, event);

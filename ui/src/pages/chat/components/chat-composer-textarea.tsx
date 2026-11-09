@@ -49,7 +49,7 @@ export function renderComposerTextarea(
     // The native IME preview owns the field until composition commits.
     return ownerState.composerComposing && element ? element.value : next;
   }, syncComposerInput);
-  const editorRef = createComposerEditorBinding();
+  const editorRef = createComposerEditorBinding(ownerState.mentionMenu.selectedAvatarUrls);
   const textareaRef = elementRef<HTMLTextAreaElement>((node) => {
     element = node;
     valueRef(node);
