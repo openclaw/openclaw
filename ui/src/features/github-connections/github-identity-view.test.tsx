@@ -253,9 +253,7 @@ describe("GitHub identity view", () => {
     );
     identity.showPatFallback();
     identity.setDraft("token", "synthetic-first-token");
-    const view = mountSolid(() => (
-      <GitHubIdentity identity={identity} onOpenConnections={vi.fn()} />
-    ));
+    const view = mountSolid(() => <GitHubConnectionSetup identity={identity} />);
     const oldSaving = identity.configure();
     await vi.advanceTimersByTimeAsync(0);
     flush();
@@ -297,7 +295,13 @@ describe("GitHub identity view", () => {
               identity = createGitHubIdentityView({
                 runExternalMutation: createMutationRunner(client),
               });
-              return <GitHubIdentity identity={identity} onOpenConnections={vi.fn()} />;
+              // Profile shows the account summary with its setup beneath it.
+              return (
+                <>
+                  <GitHubIdentity identity={identity} onOpenConnections={vi.fn()} />
+                  <GitHubConnectionSetup identity={identity} />
+                </>
+              );
             },
           }),
         }),
@@ -459,9 +463,7 @@ describe("GitHub identity view", () => {
       },
     );
     identity.showPatFallback();
-    const view = mountSolid(() => (
-      <GitHubIdentity identity={identity} onOpenConnections={vi.fn()} />
-    ));
+    const view = mountSolid(() => <GitHubConnectionSetup identity={identity} />);
     const input = view.container.querySelector<HTMLInputElement>(".settings-secret input")!;
     input.focus();
     input.value = "synthetic-pat";

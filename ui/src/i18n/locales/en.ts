@@ -1254,7 +1254,7 @@ const startupEnglish = {
   githubConnections: {
     title: "GitHub accounts",
     mine: "My GitHub",
-    system: "System GitHub",
+    system: "Shared agent account",
     forMe: "For me",
     forSystem: "For the system",
   },

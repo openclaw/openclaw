@@ -1,7 +1,7 @@
 import type { UiCommandParams } from "@openclaw/gateway-protocol";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import type { GatewayBrowserClient, GatewayEventFrame, GatewayHelloOk } from "../api/gateway.ts";
-import { isSessionRouteId, pathForAgentPanel } from "../app-route-paths.ts";
+import { isSessionRouteId } from "../app-route-paths.ts";
 import {
   BROWSER_PANEL_TOGGLE_EVENT,
   DESKTOP_PANEL_TOGGLE_EVENT,
@@ -366,11 +366,9 @@ export class ShellGatewayOwner {
       return;
     }
     if (command.kind === "agent-github-settings") {
-      const agentId = commandParams.agentId?.trim();
-      if (agentId) {
-        context.navigate("agents", {
-          pathname: pathForAgentPanel(agentId, "tools", context.basePath),
-        });
+      // Every agent's account is set in one place, beside the shared agent account.
+      if (commandParams.agentId?.trim()) {
+        context.navigate("profile", { hash: "#settings-profile-github-connections" });
       }
       return;
     }

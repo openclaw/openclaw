@@ -40,7 +40,7 @@ it("opens the current agent GitHub identity panel without exposing authorization
     },
   });
 
-  expect(navigate).toHaveBeenCalledWith("agents", {
-    pathname: "/settings/agents/release/tools",
+  expect(navigate).toHaveBeenCalledWith("profile", {
+    hash: "#settings-profile-github-connections",
   });
 });
