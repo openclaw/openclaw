@@ -81,13 +81,14 @@ with sandbox mode `all` or `non-main` in the background. Agents with sandbox mod
 still prepare dependencies on first use. A session arriving during preparation
 waits for the same build; later checkouts arrive with `node_modules`. Other selected commits
 still run dependency installation on first use. When the frozen lockfile and Git
-attributes are unchanged, OpenClaw clones the idle template into a separate generation,
+attributes are unchanged, OpenClaw clones a prepared template into a separate generation,
 imports only the new Git objects, and checks out the source delta before reinstalling
 into its retained dependencies.
 Repeat installation still runs repository lifecycle scripts when manifests and
 lockfiles are unchanged.
 Concurrent requests for that commit share the refresh. Lockfile or attribute changes
-build a fresh template; a template still being cloned cannot be refreshed. Each
+build a fresh template. Refresh never changes the source generation, including while
+another session is cloning it. Each
 clone still receives only the selected source snapshot in its private Git object
 store. Shutdown cancels preparation and
 drains accepted installer cleanup. Validation leaves the last-good generation published;
@@ -101,6 +102,20 @@ and retry during housekeeping, including after a Gateway restart. This cleanup
 also runs when ordinary sandbox idle and age pruning are disabled.
 The private checkout storage must support filesystem acceleration, and
 `worktreeAcceleration: false` disables this preparation too.
+
+Sandbox preparation retains up to four recently used generations per repository
+and private template root, across runtime identities. Returning to a retained
+commit reuses its prepared dependencies instead of refreshing the shared template
+back and forth. Every build still passes disk admission. Live clone and installer
+readers can temporarily retain additional generations; cleanup never removes
+their files before those readers settle.
+
+Older runtime identities become eligible for cleanup after six unused hours.
+The most recently used identity keeps the ordinary idle retention window, subject
+to the four-generation limit. Hourly maintenance shares the existing deletion
+spacing and IO-pressure limits without holding the template publication lock while
+waiting. Completed projections have independent Git metadata and COW file references,
+so retiring their original template does not remove their files or dependencies.
 
 Dependency preparation uses the selected sandbox image, network restrictions,
 and guest working directory, without configured credentials, custom bind mounts,
