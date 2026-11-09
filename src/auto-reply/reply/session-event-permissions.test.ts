@@ -248,6 +248,7 @@ it.for([
   "retained-overrides-downgrade",
   "retained-database-replacement",
   "retained-config-downgrade",
+  "unrelated-agent-config",
   "remapped-workspace",
   "remapped-guarded",
   "remapped-default",
@@ -285,6 +286,7 @@ it.for([
       }
       const remapped = change.startsWith("remapped-");
       const toolOnly = change === "tool-only-delivery";
+      const unrelatedConfig = change === "unrelated-agent-config";
       const producerMode = toolOnly
         ? "full"
         : change === "remapped-workspace"
@@ -329,6 +331,12 @@ it.for([
               "read tool",
             );
             await read.execute("read-completion", { path: filePath });
+            if (unrelatedConfig) {
+              setRuntimeConfigSnapshot({
+                ...config,
+                agents: { ...config.agents, entries: { ...config.agents?.entries, other: {} } },
+              });
+            }
             const write = tools.find((tool) => tool.name === "write");
             if (retainedDowngrade) {
               expect(write).toBeDefined();
@@ -505,7 +513,9 @@ it.for([
       expect(accepted).toEqual({ ok: true });
       const evidence = JSON.stringify(outcome);
       expect(await fs.readFile(filePath, "utf8"), evidence).toBe(
-        change === "new-session" || remapped || toolOnly ? "completed\n" : "original\n",
+        change === "new-session" || remapped || toolOnly || unrelatedConfig
+          ? "completed\n"
+          : "original\n",
       );
       expect(runEmbeddedAgentMock, evidence).toHaveBeenCalledOnce();
       expect(observedMode, evidence).toBe(
@@ -520,7 +530,7 @@ it.for([
                 : "full",
       );
       expect(attempted, evidence).toBe(
-        change === "new-session" || retainedDowngrade || remapped || toolOnly,
+        change === "new-session" || retainedDowngrade || remapped || toolOnly || unrelatedConfig,
       );
       expect(retainedWriteRejected).toBe(retainedDowngrade);
       if (change === "new-session") {

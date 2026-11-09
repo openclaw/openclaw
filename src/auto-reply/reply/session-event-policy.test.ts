@@ -1,15 +1,47 @@
-import { expect, it } from "vitest";
+import { afterEach, expect, it } from "vitest";
 import { modelDefinition } from "../../agents/model-auth.fixtures.test-support.js";
 import {
   createConfigResolutionFacts,
   setConfigResolutionFacts,
 } from "../../config/resolution-facts.js";
 import { captureRuntimeConfigWithSource } from "../../config/runtime-config-capture-state.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { makeCronJob } from "../../cron/delivery.test-helpers.js";
 import { withPluginMetadataSnapshotScope } from "../../plugins/current-plugin-metadata-snapshot.js";
 import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
-import { captureScheduledSessionEventConfigPolicy } from "./session-event-policy.js";
+import {
+  captureScheduledSessionEventConfigPolicy,
+  captureSessionEventConfigPolicy,
+} from "./session-event-policy.js";
+import { getSessionEventRuntimeConfig } from "./session-event-target.js";
+
+afterEach(() => clearRuntimeConfigSnapshot());
+
+it.each([
+  ["another agent's entry", { other: {} }, true],
+  ["its own agent's entry", { main: { tools: { deny: ["exec"] } } }, false],
+] satisfies Array<[string, NonNullable<OpenClawConfig["agents"]>["entries"], boolean]>)(
+  "keeps an unscheduled event across a publication of %s",
+  (_change, entries, retained) => {
+    const before: OpenClawConfig = { agents: { ownership: "explicit", entries: { main: {} } } };
+    setRuntimeConfigSnapshot(before);
+    const policy = captureSessionEventConfigPolicy(getSessionEventRuntimeConfig(), "main");
+    setRuntimeConfigSnapshot({
+      ...before,
+      agents: { ...before.agents, entries: { ...before.agents?.entries, ...entries } },
+    });
+    const check = () => policy.assertCurrent(getSessionEventRuntimeConfig(), ["telegram"]);
+    if (retained) {
+      expect(check).not.toThrow();
+    } else {
+      expect(check).toThrow("Session event configuration changed");
+    }
+  },
+);
 
 it.each([
   ["openclaw", false, true],

@@ -54,7 +54,7 @@ export function captureSessionEventConfigPolicy(
   let checkedConfig = config;
   let checkedPublication = publication;
   let changed = false;
-  let matches = job ? captureScheduledSessionEventConfigPolicy(captured, agentId, job) : undefined;
+  let matches = captureScheduledSessionEventConfigPolicy(captured, agentId, job);
   return {
     get changed() {
       return changed;
@@ -72,7 +72,7 @@ export function captureSessionEventConfigPolicy(
       if (current === checkedConfig && currentPublication === checkedPublication) {
         return;
       }
-      if (!matches?.(current, routeChannels)) {
+      if (!matches(current, routeChannels)) {
         // Only this recorded refusal permits the handoff owner to re-admit unstarted work.
         changed = true;
         throw new Error("Session event configuration changed; inspect the run before retrying");
@@ -84,19 +84,23 @@ export function captureSessionEventConfigPolicy(
 }
 
 /** Scheduled message actions re-admit their destination policy at each invocation. The
- * turn still owns its creator's channel ceilings and its automatic delivery route. */
+ * turn still owns its creator's channel ceilings and its automatic delivery route.
+ * Unscheduled events use the same facts without a creator, so a publication that only
+ * changes another agent does not refuse this agent's event. */
 export function captureScheduledSessionEventConfigPolicy(
   config: OpenClawConfig,
   agentId: string,
-  job: CronStoredJob,
+  job: CronStoredJob | undefined,
   selection?: PolicySelection,
 ) {
   const captured = captureRuntimeConfig(config);
   const runtimeOwnsMcpServers =
     selection?.agentRuntime === "openclaw" && selection.cliExecution === false;
-  const creatorChannel = resolveScheduledToolCallerContext({
-    scheduledToolPolicy: resolveCronJobToolPolicyContext(job, resolveCronRunToolsAllow(job)),
-  }).channel;
+  const creatorChannel =
+    job &&
+    resolveScheduledToolCallerContext({
+      scheduledToolPolicy: resolveCronJobToolPolicyContext(job, resolveCronRunToolsAllow(job)),
+    }).channel;
   const authProvider =
     selection &&
     resolveProviderIdForAuth(selection.provider, {
