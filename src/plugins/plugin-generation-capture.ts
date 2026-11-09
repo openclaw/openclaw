@@ -20,7 +20,6 @@ import { getPluginGenerationMetrics } from "./plugin-generation-metrics.js";
 import { createPluginGenerationReceipt } from "./plugin-generation-receipt.js";
 import { createPluginGenerationReferenceCapture } from "./plugin-generation-reference-capture.js";
 import {
-  createPluginGenerationCapture,
   createPluginGenerationSourceLookup,
   createPluginSourceFacts,
   markPluginSourceCaptureOperation,
@@ -69,11 +68,6 @@ import {
 
 export type { PluginGenerationArtifact } from "./plugin-generation-artifact.types.js";
 
-/** Capture selective entries and whole dependencies without replacing earlier file bytes. */
-export const capturePluginGenerationArtifactInScope = createPluginGenerationCapture(
-  createPluginGenerationArtifact,
-);
-
 /** Install snapshots contain unexecuted source bytes, never native admission or live custody. */
 export function capturePluginSourceSnapshot(
   rootDir: string,
@@ -118,7 +112,7 @@ export function capturePluginSnapshotGeneration(
   );
 }
 
-function createPluginGenerationArtifact(
+export function createPluginGenerationArtifact(
   rootDir: string,
   entryFile?: string | readonly string[],
   execute?: <T>(run: () => T) => T,
@@ -543,7 +537,7 @@ function createPluginGenerationArtifact(
         moduleCapture.staticImports = visitPluginSourceReferences(
           source,
           readPluginCapturedCode(target, capturedDirectories.has(target)),
-          resolution.get(source),
+          () => resolution.get(source),
           entry && !executableEntry
             ? captureObservedReference
             : (reference, kind) => observed.set(`${kind}\0${reference}`, null),

@@ -80,7 +80,7 @@ it("preserves caller-owned recovery instructions in request notices", async () =
   const error = "Session is busy; wait for the current run to finish.";
   const { container } = publishedNotices<TopbarProps>(renderChatTopbarNotices, { error });
   await waitForSolid(() => {
-    expect(container.querySelector(".chat-error strong")?.textContent).toBe(error);
+    expect(container.querySelector(".chat-error .app-toast__message")?.textContent).toBe(error);
     expect(container.querySelector("details")).toBeNull();
   });
 });
@@ -197,15 +197,16 @@ it.each([
   await waitForSolid(() => expect(container.querySelector(".chat-error")).not.toBeNull());
   const notice = container.querySelector(".chat-error");
   if (contention) {
-    expect(notice?.classList.contains("chat-composer-neighbor-card--warn")).toBe(true);
+    expect(notice?.classList.contains("app-toast--warning")).toBe(true);
     expect(notice?.classList.contains("chat-composer-neighbor-card--danger")).toBe(false);
     expect(notice?.getAttribute("role")).toBe("status");
     const details = notice?.querySelector("details");
     expect(details).toMatchObject({ open: false });
-    expect(details?.querySelector("strong")?.textContent).toBe(
-      "OpenClaw is busy. Check status before trying again.",
+    expect(notice?.querySelector(".app-toast__message")?.textContent).toBe("OpenClaw is busy.");
+    expect(notice?.querySelector(".app-toast__description")?.textContent).toBe(
+      "Check status before trying again.",
     );
-    expect(details?.querySelector("pre")?.textContent).toBe(diagnostic);
+    expect(details?.querySelector(".lazy-view-error__detail")?.textContent).toBe(diagnostic);
     expect(notice?.querySelector("img")).toBeNull();
   }
   const action = notice?.querySelector<HTMLButtonElement>(".chat-error__refresh");
@@ -239,7 +240,7 @@ it.each([
     expect(container.querySelector("details")).toBe(details);
     expect(details.open).toBe(true);
     expect(document.activeElement).toBe(summary);
-    expect(details.querySelector("pre")?.textContent).toBe(
+    expect(details.querySelector(".lazy-view-error__detail")?.textContent).toBe(
       kind === "run" ? diagnostic : t("newSession.placementStartFailed", { error: diagnostic }),
     );
   });
@@ -297,7 +298,7 @@ it.each(["refresh", "details", "message"] as const)(
     expect(notice.textContent).toContain(
       diagnostic === "Stopped." ? diagnostic : "Request interrupted.",
     );
-    expect(notice.querySelector(".chat-error__dismiss")).toBeNull();
+    expect(notice.querySelector(".app-toast__dismiss")).toBeNull();
     const details = notice.querySelector("details");
     if (variant === "message") {
       expect(details).toBeNull();
@@ -305,7 +306,7 @@ it.each(["refresh", "details", "message"] as const)(
       expect(details?.open).toBe(false);
       expect(details?.querySelector("summary .chat-copy-btn")).toBeNull();
       details!.open = true;
-      expect(details?.querySelector("pre")?.textContent).toBe(diagnostic);
+      expect(details?.querySelector(".lazy-view-error__detail")?.textContent).toBe(diagnostic);
       expect(details?.querySelector(".chat-copy-btn")?.getAttribute("aria-label")).toBe(
         t("chat.copyError"),
       );
@@ -356,7 +357,11 @@ describe("chat view notice integration", () => {
         expect(alert.getAttribute("role")).toBe("alert");
         const details = requireElement(alert, "details", "error disclosure");
         expect(details.hasAttribute("open")).toBe(false);
-        const fullDiagnostic = requireElement(details, "pre", "full diagnostic");
+        const fullDiagnostic = requireElement(
+          details,
+          ".lazy-view-error__detail",
+          "full diagnostic",
+        );
         expect(fullDiagnostic.textContent).toBe(renderedDiagnostic);
         expect(fullDiagnostic.getAttribute("aria-label")).toBe("Error details");
         expect(alert.textContent).not.toMatch(/[⚠🛠]/u);
@@ -366,7 +371,7 @@ describe("chat view notice integration", () => {
         expect(summary.textContent).toContain("Show details");
         expect(summary.textContent).not.toContain("Error details");
         expect(alert.querySelectorAll(".chat-copy-btn")).toHaveLength(1);
-        const copy = summary.querySelector<HTMLButtonElement>('[aria-label="Copy error"]');
+        const copy = details.querySelector<HTMLButtonElement>('[aria-label="Copy error"]');
         expect(copy).not.toBeNull();
         for (const open of [false, true]) {
           details.toggleAttribute("open", open);
@@ -408,7 +413,9 @@ describe("chat view notice integration", () => {
         onRetrySessionPlacementStartup,
       });
       const alert = await waitForElement(container, ".chat-error", "startup error");
-      expect(requireElement(alert, "pre", "startup diagnostic").textContent).toBe(
+      expect(
+        requireElement(alert, ".lazy-view-error__detail", "startup diagnostic").textContent,
+      ).toBe(
         "Couldn’t start this session. Retry setup.  Provisioning failed\n  Final diagnostic line  ",
       );
       expect(alert.textContent).not.toContain("⚠");
@@ -416,10 +423,12 @@ describe("chat view notice integration", () => {
       expect(requireElement(details, "summary", "startup header").textContent).toContain(
         "Show details",
       );
-      expect(requireElement(details, "pre", "startup diagnostic").getAttribute("aria-label")).toBe(
-        "Error details",
-      );
-      const copy = details.querySelector<HTMLButtonElement>('summary [aria-label="Copy error"]');
+      expect(
+        requireElement(details, ".lazy-view-error__detail", "startup diagnostic").getAttribute(
+          "aria-label",
+        ),
+      ).toBe("Error details");
+      const copy = details.querySelector<HTMLButtonElement>('[aria-label="Copy error"]');
       expect(copy).not.toBeNull();
       copy?.click();
       await waitForFast(() =>

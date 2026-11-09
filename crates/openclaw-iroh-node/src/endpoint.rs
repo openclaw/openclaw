@@ -1,10 +1,10 @@
 //! Endpoint binding and dialing.
 
-use std::{str::FromStr, sync::Arc};
+use std::{str::FromStr, sync::Arc, time::Duration};
 
 use iroh::{
     Endpoint as IrohEndpoint, EndpointAddr, EndpointId, RelayMode, RelayUrl, SecretKey, Watcher,
-    endpoint::{RelayStatus, presets},
+    endpoint::{QuicTransportConfig, RelayStatus, presets},
 };
 use napi::bindgen_prelude::*;
 use napi_derive::napi;
@@ -25,6 +25,8 @@ pub struct BindOptions {
     pub bind_addr: Option<String>,
     /// When false, no IP transports are bound: relay-only (like the browser). Default true.
     pub ip_transports: Option<bool>,
+    /// QUIC connection keep-alive interval in milliseconds (nonzero).
+    pub keep_alive_ms: Option<u32>,
 }
 
 /// Binds an endpoint with the Minimal preset (no pkarr, no n0 DNS, no n0 relays) and our relay only.
@@ -49,6 +51,16 @@ pub async fn bind(opts: BindOptions) -> Result<Endpoint> {
         .secret_key(SecretKey::from_bytes(&key))
         .alpns(alpns)
         .relay_mode(relay);
+    if let Some(ms) = opts.keep_alive_ms {
+        if ms == 0 {
+            return Err(js_err("keepAliveMs must be positive"));
+        }
+        b = b.transport_config(
+            QuicTransportConfig::builder()
+                .keep_alive_interval(Duration::from_millis(u64::from(ms)))
+                .build(),
+        );
+    }
     if opts.ip_transports == Some(false) {
         b = b.clear_ip_transports();
     }
@@ -102,7 +114,7 @@ pub struct HomeRelayWatcher(Mutex<watch::Receiver<Vec<HomeRelayStatus>>>);
 #[napi]
 impl HomeRelayWatcher {
     /// Resolves with the status: at once on the first call, then after each change.
-    /// Resolves null once the endpoint is gone.
+    /// Resolves null once the endpoint is closed.
     #[napi]
     pub async fn next(&self) -> Option<Vec<HomeRelayStatus>> {
         let mut rx = self.0.lock().await;
@@ -151,13 +163,13 @@ impl Endpoint {
         let mut source = self.0.home_relay_status();
         let (tx, mut rx) = watch::channel(home_relay_statuses(source.get()));
         rx.mark_changed();
-        tokio::spawn(async move {
+        tokio::spawn(self.0.closed().run_until(async move {
             while let Ok(list) = source.updated().await {
                 if tx.send(home_relay_statuses(list)).is_err() {
                     break;
                 }
             }
-        });
+        }));
         HomeRelayWatcher(Mutex::new(rx))
     }
 

@@ -4,6 +4,7 @@ import path from "node:path";
 import { visitJavaScriptStatements } from "./javascript-statements.mjs";
 const JS_FILE_RE = /\.(?:cjs|js|mjs)$/u;
 const TS_FILE_RE = /\.(?:cts|ts|mts)$/u;
+const CONTROL_UI_ROOT = "dist/control-ui/";
 const require = createRequire(import.meta.url);
 
 /** Strip types for import analysis only; distribution bytes remain unchanged. */
@@ -102,6 +103,7 @@ function appendImportEdges(
   onStaticImport,
   onLiteralCall,
   onImportOccurrence,
+  controlUiImports,
 ) {
   const occurrences = onImportOccurrence ? [] : undefined;
   function visit(node) {
@@ -172,12 +174,16 @@ function appendImportEdges(
       specifier?.startsWith(".") &&
       (kind !== "import-meta-url" || hasRuntimeFileExtension(specifier, includeTypeScript))
     ) {
-      const importedPath = path.posix.normalize(
+      let importedPath = path.posix.normalize(
         path.posix.join(
           path.posix.dirname(importerPath),
           kind === "require" ? specifier : stripSpecifierSuffix(specifier),
         ),
       );
+      // Browser module imports use the document's map; require and URL assets do not.
+      if (kind === undefined && importerPath.startsWith(CONTROL_UI_ROOT)) {
+        importedPath = controlUiImports.get(importedPath) ?? importedPath;
+      }
       // stageManagedHandoffRuntime copies this entry and stages its private proc-safe
       // closure before launch; this URL belongs to that runtime, not the tarball.
       const stagedNativeUrl =
@@ -282,6 +288,23 @@ export function collectPackageDistImports(params) {
         );
   const imports = [];
   const packageJsons = packageJsonsFor(params, files);
+  const controlUiImports = new Map();
+  const controlUiIndex = `${CONTROL_UI_ROOT}index.html`;
+  if (files.includes(controlUiIndex)) {
+    const encoded = /<script\b[^>]*\btype="importmap"[^>]*>([\s\S]*?)<\/script>/iu.exec(
+      params.readText(controlUiIndex),
+    );
+    // The portable Control UI build emits exact document-relative mappings.
+    for (const [alias, target] of Object.entries(JSON.parse(encoded?.[1] ?? "{}").imports ?? {})) {
+      if (!alias.startsWith("./") || typeof target !== "string" || !target.startsWith("./")) {
+        throw new Error("Unsupported Control UI package import-map entry");
+      }
+      const importedPath = path.posix.join(CONTROL_UI_ROOT, target);
+      controlUiImports.set(path.posix.join(CONTROL_UI_ROOT, alias), importedPath);
+      // Also check mapped CSS/preload targets that have no JavaScript import edge.
+      imports.push({ importerPath: controlUiIndex, importedPath });
+    }
+  }
 
   for (const importerPath of files) {
     if (
@@ -301,6 +324,7 @@ export function collectPackageDistImports(params) {
       params.onStaticImport,
       params.onLiteralCall,
       params.onImportOccurrence,
+      controlUiImports,
     );
   }
 

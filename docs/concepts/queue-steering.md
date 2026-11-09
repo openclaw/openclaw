@@ -16,7 +16,7 @@ An older followup does not disable steering for later input. OpenClaw tries each
 
 ## Runtime boundary
 
-Steering does not interrupt a tool call that is already running. An assistant message's tool calls are a committed plan until one of them starts executing:
+Ordinary steering does not interrupt a tool call that is already running. An assistant message's tool calls are a committed plan until one of them starts executing:
 
 1. The assistant asks for tool calls.
 2. In sequential mode, OpenClaw launches the first executable call without checking steering. After a call from that assistant message has started, OpenClaw checks before each later call, including after asynchronous resolution, validation, and pre-execution hooks.
@@ -27,6 +27,23 @@ Steering does not interrupt a tool call that is already running. An assistant me
 
 This keeps every requested tool call paired with a result without discarding a freshly requested plan before any tool executes.
 
+In the Control UI, a waiting steer has a small **Send now** link below its normal
+user bubble. A session writer can use it to interrupt supported running tools
+without aborting the run. Each interrupted tool records that the user interrupted
+it; the steer then reaches the next model decision after those results. Repeated
+clicks do not reinject the message or interrupt later work. When a running tool
+cannot safely stop, or the runtime does not support tool-only interruption, the
+UI shows the steer as **Steering…** instead of offering the link, and its hover
+text explains the wait.
+
+Foreground local `exec` waits for process cleanup before delivery. Interrupting a
+`process` poll only stops that wait; its independently owned background command
+keeps running, and the tool result tells the model how to poll or stop it. Node,
+durable, and explicitly backgrounded execution do not offer this shortcut.
+Code Mode aggregate tools and native or remote backends do not support tool-only
+interruption. Their pending steers keep waiting for the runtime boundary, with
+the same quiet explanation in the UI.
+
 Internal updates, including subagent completion reports, also use this steering boundary. These updates can be hidden from the chat transcript and do not appear in the user message queue. A skipped tool therefore does not necessarily mean a user message is waiting; the agent processes the incoming update before deciding which tools to call next.
 
 In the built-in runtime, each steered user input gets its own delivered answer in order. A later answer does not replace a completed answer to an earlier input, even when steering skipped its pending tools.
@@ -34,6 +51,19 @@ In the built-in runtime, each steered user input gets its own delivered answer i
 Recording a steering receipt while another input is being persisted keeps the active turn running. Accepted inputs remain in order and reach the next available model boundary.
 
 If the built-in runtime reaches its 120-second transcript-delivery deadline and proves that it removed the exact queued message before submission, that input returns to followup custody in its original queue position. Younger steers already accepted by the active run stay there and are not replayed. A timeout without proven withdrawal remains non-replayable because the runtime may still consume the input; this also applies to the native Codex confirmation timeout.
+
+After that fallback, **Send now** stays below the waiting message while the
+original run still has supported, interruptible tools running. Clicking it stops
+those tool calls through the same cleanup path. The queued message keeps its
+place and is delivered once when the run can accept it or the next turn starts.
+The action never targets a later run. Unsupported tools keep the wait explanation.
+
+Queued follow-ups show **Queued behind the current turn** in the Control UI,
+including messages whose steering attempt fell back to the queue. Use **Stop**
+to stop the current turn, or the available **Steer** / **Send now** action to
+redirect it. Slow-send logs distinguish admission waits with
+`detail.reply.admission.active_run_wait`, `mailbox_wait`, `inputs_wait`,
+`followup_barrier_wait`, and `successor_barrier_wait` timings under the same prefix.
 
 A steered channel reply carries that message's quoted or forwarded context into
 the model input. Quoted content stays conversation data; commands and answers to

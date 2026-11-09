@@ -19,6 +19,7 @@ import {
   getGeneratedMediaTaskIdsForSessionKey,
   hasNewGeneratedMediaTaskForSessionKey,
 } from "../../agents/media-generation-activity.js";
+import { resolveCyberAccessProgramForProvider } from "../../agents/model-catalog-access-programs.js";
 import { findModelInCatalog } from "../../agents/model-catalog-lookup.js";
 import { createUnrecordedScheduledAccountRefusal } from "../../agents/scheduled-unrecorded-account.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
@@ -60,10 +61,11 @@ export async function runCliFallbackCandidate(
     onCompactionAccounting: (fact: CompactionAccountingFact) => void;
   },
 ): ReturnType<typeof runCliAgentWithLifecycle> {
-  if (
-    params.candidateRun.cyberAccessProgram !== undefined &&
-    params.candidateRun.cyberAccessProgram !== "standard"
-  ) {
+  const accessProgram = resolveCyberAccessProgramForProvider(
+    params.candidateRun.cyberAccessProgram,
+    params.provider,
+  ).program;
+  if (accessProgram !== undefined && accessProgram !== "standard") {
     throw new Error(
       "Daybreak access is unsupported by this CLI runtime. Select Standard or use the OpenClaw or native Codex runtime.",
     );

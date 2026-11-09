@@ -434,13 +434,13 @@ describe("release validation no-push transport", () => {
       const runner = String(job(release, "qa_lab_runtime_pair_lane_release_checks")["runs-on"]);
       const runsOn = (vars: Record<string, string>) =>
         runInNewContext(runner.slice(3, -2), runnerSandbox({ vars }));
-      expect(runsOn({ OPENCLAW_CI_RUNNER_BACKEND: backend })).toBe("blacksmith-8vcpu-ubuntu-2404");
+      expect(runsOn({ OPENCLAW_CI_RUNNER_BACKEND: backend })).toBe("blacksmith-2vcpu-ubuntu-2404");
       expect(
         runsOn({
           OPENCLAW_CI_RUNNER_BACKEND: backend,
           OPENCLAW_RELEASE_RUNNER_GROUP: "release",
         }),
-      ).toEqual({ group: "release", labels: "blacksmith-8vcpu-ubuntu-2404" });
+      ).toEqual({ group: "release", labels: "blacksmith-2vcpu-ubuntu-2404" });
       const notice = job(release, "resolve_target").steps?.find(
         (candidate) => candidate.name === "Report release runner routing",
       );
@@ -537,24 +537,30 @@ describe("release validation no-push transport", () => {
               runner.slice(3, -2),
               runnerSandbox({ inputs: { use_github_hosted_runners: resolved } }),
             ),
-          ).toBe(expected ? "ubuntu-24.04" : "blacksmith-32vcpu-ubuntu-2404");
+          ).toBe(expected ? "ubuntu-24.04" : "blacksmith-8vcpu-ubuntu-2404");
         }
       }
     },
   );
 
   it.each([
-    ["openclaw/openclaw", "hybrid", false, "blacksmith-4vcpu-ubuntu-2404"],
-    ["openclaw/openclaw", "github", false, "ubuntu-24.04"],
-    ["openclaw/openclaw", "", false, "ubuntu-24.04"],
-    ["fork/openclaw", "hybrid", false, "ubuntu-24.04"],
-    ["openclaw/openclaw", "hybrid", true, "ubuntu-24.04"],
+    ["openclaw/openclaw", "hybrid", false],
+    ["openclaw/openclaw", "github", false],
+    ["openclaw/openclaw", "boat", false],
+    ["openclaw/openclaw", "", false],
+    ["fork/openclaw", "hybrid", false],
+    ["openclaw/openclaw", "hybrid", true],
   ])(
-    "routes serial candidate jobs for %s/%s (hosted=%s)",
-    (repository, backend, hosted, runner) => {
+    "routes short release controls and reusable candidate jobs for %s/%s (hosted=%s)",
+    (repository, backend, hosted) => {
       const targets = [
         [FULL_RELEASE, "resolve_target"],
+        [FULL_RELEASE, "plugin_compatibility_readiness"],
         [FULL_RELEASE, "evidence_reuse"],
+        [FULL_RELEASE, "release_checks_independent"],
+        [FULL_RELEASE, "release_checks_candidate"],
+        [FULL_RELEASE, "performance"],
+        [FULL_RELEASE, "release_execution_plan"],
         [".github/workflows/full-release-candidate.yml", "discover"],
         [".github/workflows/full-release-candidate.yml", "resolve_candidate"],
         [LIVE_E2E, "validate_selected_ref"],
@@ -566,17 +572,25 @@ describe("release validation no-push transport", () => {
           continue;
         }
         const expression = job(readWorkflow(workflowPath!), name!)["runs-on"]!;
-        const actual = expression.startsWith("${{")
-          ? runInNewContext(
-              expression.slice(3, -2),
-              runnerSandbox({
-                github: { repository },
-                inputs: { use_github_hosted_runners: hosted },
-                vars: { OPENCLAW_CI_RUNNER_BACKEND: backend },
-              }),
-            )
-          : expression;
-        expect(actual, `${workflowPath}:${name}`).toBe(runner);
+        const label = "ubuntu-24.04";
+        for (const runnerGroup of ["", "release"]) {
+          const actual = expression.startsWith("${{")
+            ? runInNewContext(
+                expression.slice(3, -2),
+                runnerSandbox({
+                  github: { repository },
+                  inputs: { use_github_hosted_runners: hosted, runner_group: runnerGroup },
+                  vars: {
+                    OPENCLAW_CI_RUNNER_BACKEND: backend,
+                    OPENCLAW_RELEASE_RUNNER_GROUP: runnerGroup,
+                  },
+                }),
+              )
+            : expression;
+          expect(actual, `${workflowPath}:${name}:${runnerGroup}`).toEqual(
+            runnerGroup ? { group: runnerGroup, labels: label } : label,
+          );
+        }
       }
     },
   );

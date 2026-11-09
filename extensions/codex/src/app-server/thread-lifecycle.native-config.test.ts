@@ -22,6 +22,7 @@ import {
 } from "./inference-routing.js";
 import { isJsonObject, type JsonObject } from "./protocol.js";
 import {
+  createAgentLifecycleHarness,
   bindProductionHarnessHostCapabilitiesForTest,
   createParams,
   setupRunAttemptTestHooks,
@@ -36,10 +37,10 @@ import {
 } from "./session-binding.test-helpers.js";
 import {
   createAppServerOptions,
-  createLeasedCodexLifecycleHarness,
   nativeQuestionConfigFixture,
   startOrResumeThread,
 } from "./thread-lifecycle.test-fixtures.js";
+import { CodexIncognitoPolicyChangeError } from "./thread-policy.js";
 setupRunAttemptTestHooks();
 
 describe("Codex native configuration lifecycle", () => {
@@ -63,6 +64,19 @@ describe("Codex native configuration lifecycle", () => {
     };
   }
 
+  const retainLiveThread = (
+    client: Parameters<typeof startOrResumeThread>[0]["client"],
+    binding: Awaited<ReturnType<typeof startOrResumeThread>>,
+  ) =>
+    retainCodexAppServerLiveThread(
+      client,
+      binding.threadId,
+      binding.liveThreadOwnership?.release,
+      binding.liveThreadConfigFingerprint,
+      null,
+      binding.liveThreadEphemeralPolicy,
+    );
+
   function readNativeConfig(method: string, config: JsonObject = {}) {
     if (method === "config/read") {
       return { config, origins: {}, layers: [] };
@@ -80,8 +94,7 @@ describe("Codex native configuration lifecycle", () => {
     "loaded unowned",
   ] as const)("continues a managed conversation with a lost inference route: %s", async (state) => {
     registerCodexTestSessionIdentity(sessionFile, "session-1", "agent:main:session-1");
-    const fixture = await createLeasedCodexLifecycleHarness({
-      agentDir: path.join(tempDir, "agent"),
+    const fixture = await createAgentLifecycleHarness({
       respond: async (method) => {
         if (method === "account/read") {
           return { account: { type: "apiKey" } };
@@ -156,8 +169,7 @@ describe("Codex native configuration lifecycle", () => {
     async (authored) => {
       let enabled = authored;
       const native = threadStartResult("question-thread", { cwd: workspaceDir });
-      const fixture = await createLeasedCodexLifecycleHarness({
-        agentDir: path.join(tempDir, "agent"),
+      const fixture = await createAgentLifecycleHarness({
         respond: async (method) => {
           if (method === "thread/start" || method === "thread/resume") {
             return native;
@@ -215,8 +227,7 @@ describe("Codex native configuration lifecycle", () => {
 
   it("resumes the bound thread after replacing the inference proxy client", async () => {
     const createClient = (persistedThreads: string[] = []) =>
-      createLeasedCodexLifecycleHarness({
-        agentDir: path.join(tempDir, "agent"),
+      createAgentLifecycleHarness({
         persistedThreads,
         respond: async (method) => {
           if (method === "account/read") {
@@ -258,9 +269,15 @@ describe("Codex native configuration lifecycle", () => {
     }
   });
 
-  it.each([false, true])(
-    "suppresses plugin suggestions on start and resume without disabling plugins (authored: %s)",
-    async (authored) => {
+  // An authored native base keeps its place on start and cold resume; OpenClaw's base
+  // then rides the developer carrier.
+  it.each([
+    [false, undefined],
+    [true, "model_instructions_file"],
+    [false, "instructions"],
+  ] as const)(
+    "suppresses plugin suggestions and places the base on start and resume (authored: %s, native base: %s)",
+    async (authored, nativeBaseKey) => {
       registerCodexTestSessionIdentity(sessionFile, "session-1", "agent:main:session-1");
       const native = threadStartResult("plugin-thread", { cwd: workspaceDir });
       const config: JsonObject = {
@@ -272,26 +289,36 @@ describe("Codex native configuration lifecycle", () => {
           ? { "features.tool_suggest": true, "features.recommended_plugins": true }
           : {}),
       };
-      const fixture = await createLeasedCodexLifecycleHarness({
-        agentDir: path.join(tempDir, "agent"),
+      const fixture = await createAgentLifecycleHarness({
         respond: async (method) => {
           if (method === "thread/start" || method === "thread/resume") {
             return native;
           }
-          return readNativeConfig(method);
+          return readNativeConfig(
+            method,
+            nativeBaseKey ? { [nativeBaseKey]: "Operator policy" } : {},
+          );
         },
       });
       const common = { ...lifecycleParams(fixture.client), config };
-      await startOrResumeThread(common);
+      const carrierKey = nativeBaseKey ? "developerInstructions" : "baseInstructions";
+      const threads = [await startOrResumeThread(common)];
       fixture.seed(native, { loaded: false, subscribed: false });
-      await startOrResumeThread(common);
+      threads.push(await startOrResumeThread(common));
 
       const requests = fixture.writes
         .map((line): unknown => JSON.parse(line))
         .filter(isJsonObject)
         .filter((frame) => frame.method === "thread/start" || frame.method === "thread/resume");
       expect(requests.map((frame) => frame.method)).toEqual(["thread/start", "thread/resume"]);
-      for (const request of requests) {
+      for (const [index, request] of requests.entries()) {
+        // Reports read the base the lifecycle placed, whichever carrier holds it; warm reuse
+        // compares the resume request with the creation request.
+        const placed = threads[index]?.preparedOpenClawBaseInstructions;
+        expect(placed).toBe(threads[0]?.preparedOpenClawBaseInstructions);
+        expect(placed).toContain("You are a personal assistant running inside OpenClaw.");
+        const carrier = isJsonObject(request.params) ? request.params[carrierKey] : undefined;
+        expect(typeof carrier === "string" && carrier.startsWith(`${placed}`)).toBe(true);
         expect(request.params).toMatchObject({
           config: {
             "features.tool_suggest": false,
@@ -302,15 +329,129 @@ describe("Codex native configuration lifecycle", () => {
             apps: { calendar: { enabled: true } },
           },
         });
+        expect(isJsonObject(request.params) && "baseInstructions" in request.params).toBe(
+          !nativeBaseKey,
+        );
       }
     },
   );
 
+  // A replacement replaces the base too, as on the default engine. A live thread keeps its ID and
+  // history: it is unloaded, then cold-resumed with the explicit base, which beats its saved one.
+  it.each([
+    ["from creation", undefined],
+    ["from creation beside a native base", "instructions"],
+    ["after creation", undefined],
+  ] as const)("replaces the base for a systemPrompt replacement %s", async (when, key) => {
+    registerCodexTestSessionIdentity(sessionFile, "session-1", "agent:main:session-1");
+    const native = threadStartResult("replaced-thread", { cwd: workspaceDir });
+    const fixture = await createAgentLifecycleHarness({
+      respond: async (method) =>
+        method === "thread/start" || method === "thread/resume"
+          ? native
+          : method === "thread/inject_items"
+            ? {}
+            : readNativeConfig(method, key ? { [key]: "Operator policy" } : {}),
+    });
+    const replaced = {
+      ...lifecycleParams(fixture.client),
+      developerInstructions: "",
+      systemPromptReplaced: true,
+    };
+    const live = when === "after creation";
+    const created = await startOrResumeThread(live ? lifecycleParams(fixture.client) : replaced);
+    if (live) {
+      await retainLiveThread(fixture.client, created);
+    } else {
+      fixture.seed(native, { loaded: false, subscribed: false });
+    }
+    const resumed = await startOrResumeThread(replaced);
+
+    const frames = fixture.writes
+      .map((line): unknown => JSON.parse(line))
+      .filter(isJsonObject)
+      .map((frame) => [frame.method, isJsonObject(frame.params) ? frame.params : {}] as const)
+      .filter(
+        ([method]) =>
+          typeof method === "string" && /^thread\/(?:start|unsubscribe|resume)$/u.test(method),
+      );
+    expect(frames.map(([method]) => method)).toEqual(
+      live
+        ? ["thread/start", "thread/unsubscribe", "thread/resume"]
+        : ["thread/start", "thread/resume"],
+    );
+    expect(resumed.threadId).toBe(created.threadId);
+    expect(frames[0]?.[1].baseInstructions).toEqual(
+      live
+        ? expect.stringContaining("personal assistant running inside OpenClaw")
+        : key
+          ? undefined
+          : "",
+    );
+    expect(frames.at(-1)?.[1]).toMatchObject({ developerInstructions: "" });
+    expect(frames.at(-1)?.[1].baseInstructions).toBe(key ? undefined : "");
+    expect(resumed.preparedOpenClawBaseInstructions).toBeUndefined();
+  });
+
+  // The native-owned incognito continuation sends nothing, so reports keep the creation base.
+  it("reports the creation base on a native-owned incognito continuation", async () => {
+    params.sessionKey = "agent:main:dashboard:incognito-native-owned";
+    registerCodexTestSessionIdentity(sessionFile, "session-1", params.sessionKey);
+    const fixture = await createAgentLifecycleHarness({
+      respond: async (method) =>
+        method === "thread/start"
+          ? threadStartResult("native-owned-thread", { cwd: workspaceDir })
+          : readNativeConfig(method),
+    });
+    const first = await startOrResumeThread(lifecycleParams(fixture.client));
+    const creationBase = first.preparedOpenClawBaseInstructions;
+    const stored = await readCodexAppServerBinding(sessionFile);
+    if (stored?.threadId !== first.threadId) {
+      throw new Error("expected the started incognito binding");
+    }
+    await writeCodexAppServerBinding(sessionFile, { ...stored, preserveNativeModel: true });
+    await retainLiveThread(fixture.client, first);
+    params.promptMode = "minimal"; // a base this live thread never receives
+    const continued = await startOrResumeThread(lifecycleParams(fixture.client));
+
+    expect(continued).toMatchObject({ threadId: first.threadId, lifecycle: { action: "resumed" } });
+    expect(continued.preparedOpenClawBaseInstructions).toBe(creationBase);
+    const threadRequests = fixture.writes.filter((line) =>
+      /"thread\/(?:start|resume)"/u.test(line),
+    );
+    expect(threadRequests).toHaveLength(1);
+  });
+
+  it("refuses warm incognito reuse when OpenClaw's base changes beside an authored native base", async () => {
+    params.sessionKey = "agent:main:dashboard:incognito-operator-base";
+    registerCodexTestSessionIdentity(sessionFile, "session-1", params.sessionKey);
+    const fixture = await createAgentLifecycleHarness({
+      respond: async (method) => {
+        if (method === "thread/start") {
+          return threadStartResult("incognito-operator-thread", { cwd: workspaceDir });
+        }
+        return readNativeConfig(method, { instructions: "Operator policy" });
+      },
+    });
+    const first = await startOrResumeThread(lifecycleParams(fixture.client));
+    expect(first.liveThreadEphemeralPolicy?.baseInstructions).toContain(
+      "You are a personal assistant running inside OpenClaw.",
+    );
+    await retainLiveThread(fixture.client, first);
+    const unchanged = await startOrResumeThread(lifecycleParams(fixture.client));
+    expect(unchanged.threadId).toBe(first.threadId);
+    await retainLiveThread(fixture.client, unchanged);
+    // Only OpenClaw's base text changes; it rides the developer carrier for this thread.
+    params.promptMode = "minimal";
+    await expect(startOrResumeThread(lifecycleParams(fixture.client))).rejects.toBeInstanceOf(
+      CodexIncognitoPolicyChangeError,
+    );
+  });
+
   it.each([false, true])(
     "validates every operator parent provider in final native config (overridden: %s)",
     async (overridden) => {
-      const fixture = await createLeasedCodexLifecycleHarness({
-        agentDir: path.join(tempDir, "agent"),
+      const fixture = await createAgentLifecycleHarness({
         respond: async (method) => {
           if (method === "account/read") {
             return { account: { type: "apiKey" } };
@@ -368,8 +509,7 @@ describe("Codex native configuration lifecycle", () => {
     "routes the final native provider after %s without reusing the injected URL as upstream",
     async (recovery) => {
       registerCodexTestSessionIdentity(sessionFile, "session-1", "agent:main:session-1");
-      const fixture = await createLeasedCodexLifecycleHarness({
-        agentDir: path.join(tempDir, "agent"),
+      const fixture = await createAgentLifecycleHarness({
         persistedThreads: ["old-thread"],
         respond: async (method) => {
           if (method === "account/read") {
@@ -432,8 +572,7 @@ describe("Codex native configuration lifecycle", () => {
   it.each(["missing issuer", "policy introduced during preparation"] as const)(
     "refuses an unowned route before native dispatch when %s",
     async (restriction) => {
-      const fixture = await createLeasedCodexLifecycleHarness({
-        agentDir: path.join(tempDir, "agent"),
+      const fixture = await createAgentLifecycleHarness({
         respond: async (method) => {
           if (method === "thread/start") {
             return threadStartResult("unexpected-thread");
@@ -487,8 +626,7 @@ describe("Codex native configuration lifecycle", () => {
       ...threadStartResult("native-provider-thread", { cwd: workspaceDir }),
       modelProvider: nativeProvider,
     };
-    const fixture = await createLeasedCodexLifecycleHarness({
-      agentDir: path.join(tempDir, "agent"),
+    const fixture = await createAgentLifecycleHarness({
       respond: async (method) => {
         if (method === "thread/start" || method === "thread/resume") {
           return native;
@@ -552,8 +690,7 @@ describe("Codex native configuration lifecycle", () => {
         }
         return readNativeConfig(method);
       });
-      const fixture = await createLeasedCodexLifecycleHarness({
-        agentDir: path.join(tempDir, "agent"),
+      const fixture = await createAgentLifecycleHarness({
         respond,
         persistedThreads: ["thread-reused"],
       });
