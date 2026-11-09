@@ -42,7 +42,7 @@ export function retainSessionColdNavigationInTransaction(
     const payload =
       row.navigation_json !== null
         ? { event_json: null, event_zstd: null }
-        : prepareColdTranscriptPayload(database.db, readTranscriptPayload(row));
+        : prepareColdTranscriptPayload(database.db, readTranscriptPayload(row, sessionId, row.seq));
     executeSqliteQuerySync(
       database.db,
       db

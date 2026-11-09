@@ -93,7 +93,7 @@ export class ReadOnlySqliteTranscriptReader {
           .onRef("event.session_id", "=", "first.session_id")
           .onRef("event.seq", "=", "first.seq"),
       )
-      .select(["event.session_id", "event.event_json"]);
+      .select(["event.session_id", "event.seq", "event.event_json"]);
     const query = this.compressed
       ? firstEvents.select(["event.event_zstd", "event.event_utf8_bytes"])
       : firstEvents.select((eb) => [
@@ -108,7 +108,9 @@ export class ReadOnlySqliteTranscriptReader {
       let eventJson: unknown;
       try {
         // Native SQL decoding would let one corrupt payload abort the entire database scan.
-        eventJson = this.compressed ? readTranscriptPayload(row) : row.event_json;
+        eventJson = this.compressed
+          ? readTranscriptPayload(row, row.session_id, row.seq)
+          : row.event_json;
       } catch (error) {
         reportError(row.session_id, error);
         continue;

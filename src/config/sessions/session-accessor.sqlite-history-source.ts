@@ -20,6 +20,7 @@ import {
 } from "./session-accessor.sqlite-history-projection.js";
 import {
   getActiveTranscriptKysely,
+  readProjectionTranscriptPayload,
   readSnapshotEventRows,
   type CurrentTranscriptProjection,
   type SessionTranscriptMessageEvent,
@@ -28,7 +29,6 @@ import { resolveTranscriptBoundaryWindow } from "./session-accessor.sqlite-reset
 import { isVisibleHistoryNonMessageEvent } from "./session-history-visibility.js";
 import { SessionTranscriptProjectionUnavailableError } from "./session-transcript-projection-error.js";
 import { transcriptEventReadBytesSql } from "./session-transcript-read-bytes.js";
-import { readTranscriptPayload } from "./transcript-payload.js";
 
 type SqliteSourceCursor = Exclude<SessionTranscriptSourceCursor, { kind: "archive" }>;
 
@@ -183,7 +183,10 @@ export function readSessionTranscriptSourcePageFromProjection(
         : readSnapshotEventRows(
             projection,
             selected.map((row) => row.seq),
-          ).map((row) => [row.seq, parseStoredTranscriptEvent(readTranscriptPayload(row))]),
+          ).map((row) => [
+            row.seq,
+            parseStoredTranscriptEvent(readProjectionTranscriptPayload(projection, row, row.seq)),
+          ]),
     );
     let messageSeq: number = cursor.messageSeq;
     for (const row of selected) {

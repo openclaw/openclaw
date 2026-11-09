@@ -50,7 +50,11 @@ export function readTranscriptRawDeltaInDatabase(
       maxEvents,
       maxBytes,
       beforeEventSeq,
-      { generation: watermark.generation ?? undefined, indexedSeq: watermark.maxSeq ?? -1 },
+      {
+        generation: watermark.generation ?? undefined,
+        indexedSeq: watermark.maxSeq ?? -1,
+        resolved,
+      },
     );
   };
   return database.db.isTransaction

@@ -490,10 +490,7 @@ export function readTranscriptEventAtSeqInTransaction(
       .where("seq", "=", seq),
   );
   return row
-    ? {
-        event: JSON.parse(readTranscriptPayload(row)) as TranscriptEvent,
-        seq: sqliteNumber(row.seq),
-      }
+    ? { event: JSON.parse(readTranscriptPayload(row, sessionId, seq)) as TranscriptEvent, seq }
     : undefined;
 }
 
@@ -593,7 +590,10 @@ function visitTranscriptEventRows(
       query = query.where("seq", ">", afterSeq);
     }
     for (const row of iterateSqliteQuerySync(database.db, query)) {
-      visit({ eventJson: readTranscriptPayload(row), seq: sqliteNumber(row.seq) });
+      visit({
+        eventJson: readTranscriptPayload(row, sessionId, row.seq),
+        seq: sqliteNumber(row.seq),
+      });
     }
   });
 }
@@ -643,7 +643,7 @@ export function readTranscriptStorageRows(
     ).rows;
     return rows.map((row) => ({
       createdAt: sqliteNumber(row.created_at),
-      eventJson: readTranscriptPayload(row),
+      eventJson: readTranscriptPayload(row, sessionId, row.seq),
       seq: sqliteNumber(row.seq),
     }));
   });

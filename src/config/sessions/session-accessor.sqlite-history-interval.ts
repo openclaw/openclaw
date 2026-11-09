@@ -22,6 +22,7 @@ import { positionTranscriptDisplayEvents } from "./session-accessor.sqlite-displ
 import { findUnindexedActiveTranscriptEntry } from "./session-accessor.sqlite-history-navigation.js";
 import {
   getActiveTranscriptKysely,
+  readProjectionTranscriptPayload,
   readSnapshotEventRows,
   selectActiveTranscriptIdentityRows,
   type SessionTranscriptMessageAnchorPage,
@@ -31,7 +32,7 @@ import {
 import { readUnindexedHistoryControls } from "./session-accessor.sqlite-reset-window.js";
 import { isVisibleHistoryNonMessageEvent } from "./session-history-visibility.js";
 import { transcriptEventReadBytesSql } from "./session-transcript-read-bytes.js";
-import { readTranscriptPayload, transcriptPredicateSql } from "./transcript-payload.js";
+import { transcriptPredicateSql } from "./transcript-payload.js";
 import { assertTranscriptNavigationValid } from "./transcript-predicate-fields.js";
 
 /** Select display slots without loading custom content or details into history metadata. */
@@ -174,7 +175,9 @@ export function readDisplayableActiveEventById(
       return undefined;
     }
     const event = readSnapshotEventRows(projection, [indexed.event_seq])[0];
-    return event ? { ...indexed, event_json: readTranscriptPayload(event) } : undefined;
+    return event
+      ? { ...indexed, event_json: readProjectionTranscriptPayload(projection, event, event.seq) }
+      : undefined;
   }
   const unindexed = findUnindexedActiveTranscriptEntry(projection, eventId);
   if (
@@ -193,7 +196,7 @@ export function readDisplayableActiveEventById(
         active_position: unindexed.active_position,
         message_position: unindexed.message_position,
         event_type: typeof unindexed.event.type === "string" ? unindexed.event.type : null,
-        event_json: readTranscriptPayload(event),
+        event_json: readProjectionTranscriptPayload(projection, event, event.seq),
       }
     : undefined;
 }
@@ -306,7 +309,9 @@ function readHistoricalDisplayEventRange(
     projection,
     selected.map((row) => row.event_seq),
   );
-  const payloadBySeq = new Map(payloads.map((row) => [row.seq, readTranscriptPayload(row)]));
+  const payloadBySeq = new Map(
+    payloads.map((row) => [row.seq, readProjectionTranscriptPayload(projection, row, row.seq)]),
+  );
   return positionTranscriptDisplayEvents(
     projection,
     displaySource,

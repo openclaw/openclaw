@@ -23,6 +23,7 @@ import type {
 import { iterateUnindexedActiveTranscriptNavigation } from "./session-accessor.sqlite-history-navigation.js";
 import {
   getActiveTranscriptKysely,
+  readProjectionTranscriptPayload,
   selectActiveTranscriptIdentityRows,
   selectActiveTranscriptMetadataRows,
   type CurrentTranscriptProjection,
@@ -44,7 +45,6 @@ import type { SessionTranscriptContextSelection } from "./session-history-read.t
 import { transcriptEventReadBytesSql } from "./session-transcript-read-bytes.js";
 import { resolveSqliteSessionTranscriptReadFence } from "./session-transcript-read-fence.js";
 import {
-  readTranscriptPayload,
   transcriptEventDependencyNavigationSql,
   transcriptEventResetNavigationSql,
   transcriptPredicateSql,
@@ -584,7 +584,10 @@ export function readSessionTranscriptBoundedActiveContextCore(
           .select(["seq", "event_json", "event_zstd", "event_utf8_bytes"])
           .where("seq", "in", transcriptPositionSet(projection, payloadSequences)),
       )) {
-        payloads.set(row.seq, JSON.parse(readTranscriptPayload(row)));
+        payloads.set(
+          row.seq,
+          JSON.parse(readProjectionTranscriptPayload(projection, row, row.seq)),
+        );
       }
     }
     // Retain logical ancestry across the byte cutoff without loading parent payloads.

@@ -136,7 +136,7 @@ function readTranscriptPayloadSlice(
         .$if(afterSeq !== undefined, (query) => query.where("seq", ">", afterSeq!))
         .orderBy("seq", "asc"),
     )) {
-      slice.payloads.push(readTranscriptPayload(row));
+      slice.payloads.push(readTranscriptPayload(row, sessionId, row.seq));
       bytes += row.payload_bytes;
       if (bytes >= TRANSCRIPT_PAYLOAD_SLICE_BYTES) {
         slice.resumeAfterSeq = row.seq;

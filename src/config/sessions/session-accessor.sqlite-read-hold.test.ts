@@ -195,7 +195,15 @@ describe("SQLite transcript readers release the read snapshot before parsing", (
       .run(scope.sessionId);
     // The header fills the first slice; the corrupt row is read after it committed and was parsed.
     sliceBudget.bytes = 1;
-    expect(() => readEvents(scope)).toThrow(/Compressed transcript payload length does not match/u);
+    expect(() => readEvents(scope)).toThrow(
+      expect.objectContaining({
+        name: "SessionTranscriptCorruptionError",
+        code: "TRANSCRIPT_CORRUPT",
+        message: expect.stringContaining(
+          `Transcript ${scope.sessionId} row 1 is corrupt: Compressed transcript payload length does not match`,
+        ),
+      }),
+    );
   });
 
   it("rereads in one transaction when the transcript changes between slices", async () => {

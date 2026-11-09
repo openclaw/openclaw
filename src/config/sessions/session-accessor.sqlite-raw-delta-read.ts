@@ -49,6 +49,7 @@ export function readTranscriptRawDeltaFromProjection(
       generation: projection.generation,
       indexedSeq: projection.state.indexedSeq,
       readColdPayload: projection.readColdPayload,
+      resolved: projection.resolved,
     },
   );
 }
@@ -61,10 +62,9 @@ export function readRawDeltaInTransaction(
   maxEvents: number,
   maxBytes: number,
   beforeEventSeq: number | undefined,
-  snapshot?: {
+  snapshot?: Parameters<typeof readProjectionTranscriptPayload>[0] & {
     generation: string | undefined;
     indexedSeq: number;
-    readColdPayload?: (seq: number) => string;
   },
 ): SessionTranscriptRawDeltaResult {
   const watermark = snapshot
@@ -149,7 +149,7 @@ export function readRawDeltaInTransaction(
       }
     }
   }
-  const payloadSource = snapshot ?? {};
+  const payloadSource = snapshot ?? { resolved: scope };
   const rows =
     selectedCount === 0
       ? []
