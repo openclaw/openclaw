@@ -21,7 +21,7 @@ import {
 afterEach(clearGatewayAgentCliShim);
 
 it.skipIf(process.platform === "win32")(
-  "keeps probes local and hydrates origin and fork history after filtered fetches",
+  "keeps probes local, bounds projection fetches, and preserves shared worktree history",
   () =>
     withTempDir("agent-git-probes-", async (root) => {
       const env = {
@@ -124,7 +124,12 @@ it.skipIf(process.platform === "win32")(
       const fork = path.join(root, "fork");
       const projection = path.join(root, "projection");
       const forkUrl = "https://github.com/fixture/contributor.git";
+      for (let index = 0; index < 80; index++) {
+        git(origin, "commit", "--allow-empty", "-m", `old history ${index}`);
+      }
       git(root, "clone", origin, fork);
+      git(origin, "commit", "--allow-empty", "-m", "base advanced past fork point");
+      const projectionBase = git(origin, "rev-parse", "HEAD");
       git(fork, "checkout", "-b", "contributor-pr");
       git(fork, "config", "uploadpack.allowFilter", "true");
       git(origin, "config", "remote.origin.url", "https://github.com/fixture/base.git");
@@ -132,7 +137,7 @@ it.skipIf(process.platform === "win32")(
         source: origin,
         destination: projection,
         temporaryRoot: root,
-        baseCommit: missing,
+        baseCommit: projectionBase,
         branch: "projection",
         signal: new AbortController().signal,
         assertCurrent: () => {},
@@ -153,27 +158,53 @@ it.skipIf(process.platform === "win32")(
           "\n",
         );
       const blobs = objects().filter((type) => type === "blob").length;
+      git(projection, "config", `url.${pathToFileURL(fork).href}.insteadOf`, forkUrl);
+      git(projection, "config", "remote.origin.url", forkUrl);
+      expect((await command(["fetch", "--prune"], projection)).exitCode).toBe(0);
+      expect(objects().filter((type) => type === "commit").length).toBeLessThanOrEqual(65);
+      expect(objects().filter((type) => type === "blob")).toHaveLength(blobs);
+      git(projection, "config", "remote.origin.url", "https://github.com/fixture/base.git");
       for (const url of [
         forkUrl,
         "git@github.com:fixture/contributor.git",
         "ssh://git@github.com/fixture/contributor.git",
       ]) {
-        git(projection, "config", "--add", `url.${pathToFileURL(fork).href}.insteadOf`, url);
+        if (url !== forkUrl) {
+          git(projection, "config", "--add", `url.${pathToFileURL(fork).href}.insteadOf`, url);
+        }
         expect(
           (
             await command(
-              ["-C", projection, "fetch", "--refetch", "--", url, "contributor-pr"],
+              [
+                "-C",
+                projection,
+                "fetch",
+                "--filter=blob:none",
+                "--refetch",
+                "--",
+                url,
+                "contributor-pr",
+              ],
               root,
             )
           ).exitCode,
         ).toBe(0);
         expect(objects().filter((type) => type === "blob")).toHaveLength(blobs);
+        expect(objects().filter((type) => type === "commit").length).toBeLessThanOrEqual(65);
+        expect(git(projection, "log", "-2", "--format=%s", `${projectionBase}..FETCH_HEAD`)).toBe(
+          "current fork content\nobsolete fork content",
+        );
         expect(git(projection, "config", "--get", `remote.${url}.promisor`)).toBe("true");
       }
-      expect((await command(["diff", "HEAD", "FETCH_HEAD"], projection)).aggregated).toContain(
+      const forkHead = git(projection, "rev-parse", "FETCH_HEAD");
+      expect((await command(["fetch", "origin", "main"], projection)).exitCode).toBe(0);
+      expect(git(projection, "log", "--format=%s", `${projectionBase}..${forkHead}`)).toBe(
+        "current fork content\nobsolete fork content",
+      );
+      expect((await command(["diff", projectionBase, forkHead], projection)).aggregated).toContain(
         "current fork content",
       );
-      expect((await command(["checkout", "--detach", "FETCH_HEAD"], projection)).exitCode).toBe(0);
+      expect((await command(["checkout", "--detach", forkHead], projection)).exitCode).toBe(0);
       expect(await fs.readFile(path.join(projection, "fork.txt"), "utf8")).toBe(
         "current fork content",
       );
@@ -181,14 +212,104 @@ it.skipIf(process.platform === "win32")(
       expect(
         (
           await command(
-            ["fetch", "--refetch", "--no-filter", forkUrl, "contributor-pr"],
+            ["fetch", "--refetch", "--no-filter", "--depth=128", forkUrl, "contributor-pr"],
             projection,
           )
         ).exitCode,
       ).toBe(0);
       expect(objects().filter((type) => type === "blob").length).toBeGreaterThan(blobs + 1);
+      expect(Number(git(projection, "rev-list", "--count", "FETCH_HEAD"))).toBeGreaterThan(64);
       git(fork, "config", `url.${pathToFileURL(fork).href}.insteadOf`, forkUrl);
       expect((await command(["fetch", forkUrl, "contributor-pr"], fork)).exitCode).toBe(0);
       expect(git(fork, "config", "--local", "--list")).not.toContain("promisor");
+      // Linked worktrees share shallow boundaries, but sandbox projections do not.
+      git(origin, "tag", "cutoff", old);
+      const shared = path.join(root, "shared base");
+      const linked = path.join(root, "linked worktree");
+      git(root, "clone", "--filter=blob:none", "--depth=1", pathToFileURL(origin).href, shared);
+      git(shared, "worktree", "add", "--detach", linked);
+      const shallow = path.join(shared, ".git/shallow");
+      const boundary = await fs.readFile(shallow, "utf8");
+      const sharedPacks = await fs.readdir(path.join(shared, ".git/objects/pack"));
+      const shallowFlags = [
+        ["--depth=2"],
+        ["--deepen", "2"],
+        ["--shallow-since=2000-01-01"],
+        ["--shallow-exclude=cutoff"],
+        ["--unshallow"],
+        ["--update-shallow"],
+      ];
+      await fs.writeFile(trace, "");
+      for (const verb of ["fetch", "pull"]) {
+        for (const flags of shallowFlags) {
+          const result = await command([
+            "-C",
+            root,
+            "-C",
+            "linked worktree",
+            verb,
+            ...(verb === "fetch" ? ["--filter=blob:none"] : []),
+            ...flags,
+            "origin",
+            "main",
+          ]);
+          expect(await fs.readFile(shallow, "utf8")).toBe(boundary);
+          expect(result.exitCode).toBe(2);
+          expect(result.aggregated).toContain("gh api repos/<owner>/<repo>/commits/<sha>");
+          expect(result.aggregated).toContain("compare/<base>...<head>");
+        }
+      }
+      git(shared, "config", `url.${pathToFileURL(fork).href}.insteadOf`, forkUrl);
+      expect(
+        (await command(["fetch", "--depth=1", forkUrl, "contributor-pr"], linked)).exitCode,
+      ).toBe(2);
+      // The primary checkout shares the same boundary too, including via --git-dir.
+      expect(
+        (await command([`--git-dir=${shared}/.git`, "fetch", "--depth", "2", "origin", "main"]))
+          .exitCode,
+      ).toBe(2);
+      expect(await fs.readFile(shallow, "utf8")).toBe(boundary);
+      expect(await fs.readdir(path.join(shared, ".git/objects/pack"))).toEqual(sharedPacks);
+      expect(await fs.readFile(trace, "utf8")).not.toContain("upload-pack");
+      expect((await command(["fetch", forkUrl, "contributor-pr"], linked)).exitCode).toBe(0);
+      expect(await fs.readFile(shallow, "utf8")).toBe(boundary);
+      expect(Number(git(linked, "rev-list", "--count", "FETCH_HEAD"))).toBeGreaterThan(64);
+      // Ordinary fetch gets new tips without deepening; API/Doctor guidance is necessary.
+      git(origin, "commit", "--allow-empty", "-m", "next tip");
+      const next = git(origin, "rev-parse", "HEAD");
+      expect((await command(["fetch", "origin", "main"], linked)).exitCode).toBe(0);
+      expect(git(linked, "rev-parse", "origin/main")).toBe(next);
+      expect(git(linked, "rev-list", "--count", "origin/main")).toBe("2");
+      expect(await fs.readFile(shallow, "utf8")).toBe(boundary);
+      // The maintenance owner can unshallow; agent log then sees the requested history.
+      git(shared, "fetch", "--unshallow", "origin", "main");
+      expect((await command(["log", "--format=%H", "origin/main"], linked)).aggregated).toContain(
+        old,
+      );
+      expect((await command(["fetch", "--depth=1", "origin", "main"], linked)).exitCode).toBe(2);
+      expect((await command(["pull", "--deepen=2", "origin", "main"], shared)).exitCode).toBe(2);
+      await expect(fs.stat(shallow)).rejects.toMatchObject({ code: "ENOENT" });
+      for (const [index, flags] of shallowFlags.entries()) {
+        const standalone = path.join(root, `standalone-${index}`);
+        git(
+          root,
+          "clone",
+          "--filter=blob:none",
+          "--depth=1",
+          pathToFileURL(origin).href,
+          standalone,
+        );
+        const result = await command(
+          [index % 2 ? "pull" : "fetch", "--ff-only", ...flags, "origin", "main"].filter(
+            (arg) => index % 2 || arg !== "--ff-only",
+          ),
+          standalone,
+        );
+        expect(result.exitCode, result.aggregated).toBe(0);
+        expect(result.aggregated).not.toContain("OpenClaw:");
+        expect(git(standalone, "rev-list", "--count", "HEAD")).toBe(
+          ["2", "3", "85", "84", "85", "1"][index],
+        );
+      }
     }),
 );
