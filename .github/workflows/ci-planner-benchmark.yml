@@ -2,6 +2,14 @@ name: CI Planner Benchmark
 
 on:
   workflow_dispatch:
+  pull_request:
+    types: [opened, reopened, synchronize]
+    paths:
+      - ".github/workflows/ci-planner-benchmark.yml"
+      - "scripts/bench-ci-planner.mts"
+      - "test/scripts/ci-planner-benchmark.test.ts"
+      - "config/knip.config.ts"
+      - "scripts/bench-ci-planner.md"
 
 permissions:
   contents: read
@@ -15,8 +23,71 @@ env:
   CI: "true"
 
 jobs:
+  validate:
+    if: >-
+      github.event_name == 'pull_request' && github.repository == 'openclaw/openclaw' &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    defaults:
+      run:
+        shell: bash
+        working-directory: harness
+    steps:
+      - name: Checkout exact PR head
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          path: harness
+          fetch-depth: 1
+          persist-credentials: false
+          submodules: false
+
+      - name: Setup Node
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "24.22.1"
+          package-manager-cache: false
+
+      - name: Setup pinned pnpm
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.0.1
+        with:
+          package_json_file: harness/package.json
+          run_install: false
+          cache: false
+
+      - name: Verify checkout and toolchain identities
+        env:
+          HARNESS_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$HARNESS_SHA"
+          test "$(node --version)" = v24.22.1
+          test "$(pnpm --version)" = 12.15.0
+          /usr/bin/time --version
+
+      - name: Install from the frozen lockfile
+        timeout-minutes: 15
+        run: |
+          set -euo pipefail
+          pnpm install --frozen-lockfile
+          git diff --exit-code
+
+      - name: Validate the measurement tool
+        timeout-minutes: 20
+        env:
+          OPENCLAW_VITEST_RUNTIME: node
+        run: |
+          set -euo pipefail
+          pnpm test test/scripts/ci-planner-benchmark.test.ts --maxWorkers=1 --reporter=verbose
+          node scripts/run-tsgo.mjs -p test/tsconfig/tsconfig.test.root.tooling.json --incremental
+          node scripts/run-oxlint.mjs --tsconfig test/tsconfig/tsconfig.test.root.tooling.json scripts/bench-ci-planner.mts test/scripts/ci-planner-benchmark.test.ts
+          pnpm format:check scripts/bench-ci-planner.mts test/scripts/ci-planner-benchmark.test.ts config/knip.config.ts .github/workflows/ci-planner-benchmark.yml scripts/bench-ci-planner.md
+          pnpm check:workflows
+          pnpm deadcode:unused-files
+
   measure:
-    if: github.repository == 'openclaw/openclaw'
+    if: github.event_name == 'workflow_dispatch' && github.repository == 'openclaw/openclaw'
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     defaults:
@@ -77,9 +148,11 @@ jobs:
 
       - name: Validate the measurement tool
         timeout-minutes: 20
+        env:
+          OPENCLAW_VITEST_RUNTIME: node
         run: |
           set -euo pipefail
-          pnpm test test/scripts/ci-planner-benchmark.test.ts --maxWorkers=1
+          pnpm test test/scripts/ci-planner-benchmark.test.ts --maxWorkers=1 --reporter=verbose
           node scripts/run-tsgo.mjs -p test/tsconfig/tsconfig.test.root.tooling.json --incremental
           node scripts/run-oxlint.mjs --tsconfig test/tsconfig/tsconfig.test.root.tooling.json scripts/bench-ci-planner.mts test/scripts/ci-planner-benchmark.test.ts
           pnpm format:check scripts/bench-ci-planner.mts test/scripts/ci-planner-benchmark.test.ts config/knip.config.ts .github/workflows/ci-planner-benchmark.yml scripts/bench-ci-planner.md

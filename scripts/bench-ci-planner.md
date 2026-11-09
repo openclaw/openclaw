@@ -5,11 +5,18 @@ imports, real test inventory and matrix construction, then the real check planne
 when the manifest requests it. It does not execute the planned tests or change
 planner policy, timing weights, caches, or runtime code.
 
-The manual **CI Planner Benchmark** workflow runs on one Ubuntu 24.04 runner with
+The manually dispatched measurement job runs on one Ubuntu 24.04 runner with
 Node 24.22.1 and the repository's integrity-pinned pnpm 12.15.0. It installs the
 harness and workload separately with their own frozen lockfiles, validates the
 harness, and writes one bounded JSON artifact. No provider credentials, simulator,
 service, release, or publication step is part of this workflow.
+
+Pull requests from branches in the canonical repository run focused validation,
+including drafts, when a benchmark source, test, guide, workflow, or Knip entry
+changes. This job checks out the exact PR head and runs the focused tests on
+Node 24.22.1, including real-process timeout and cancellation contracts, plus
+type, lint, format, workflow and Knip checks. It does not run the fifteen-flow
+baseline or upload a measurement artifact. The baseline remains manual-only.
 
 The harness revision is the selected workflow commit. The default workload is
 `79f5aeb133830a1db60b55cff3cf7a617086aa07`; these revisions are deliberately
