@@ -7,6 +7,7 @@ import { serveWorkerTasks } from "../infra/worker-task-server.js";
 import {
   discardPostgresNamespace,
   fingerprintPostgresDatabase,
+  prunePostgresSchemaCaptures,
 } from "./database-backup-core.worker.js";
 import {
   capturePostgresBackupInWorker,
@@ -26,10 +27,20 @@ serveWorkerTasks<BackupReply, BackupTask>((task, _channel, control) => {
       }),
     );
   }
-  if (task.operation === "fingerprint" || task.operation === "family") {
+  if (
+    task.operation === "fingerprint" ||
+    task.operation === "family" ||
+    task.operation === "prune"
+  ) {
     const anchor = readBackupEngine(task.params.sourcePath);
     if (anchor.engine !== "postgres") {
       throw new Error("PostgreSQL anchor disappeared.");
+    }
+    if (task.operation === "prune") {
+      const { directoryPrefix } = task.params;
+      return withDatabasePortConnection(task.params.config, (client) =>
+        prunePostgresSchemaCaptures(client, { storeId: anchor.storeId, directoryPrefix }),
+      );
     }
     if (task.operation === "fingerprint") {
       return withDatabasePortConnection(task.params.config, (client) =>

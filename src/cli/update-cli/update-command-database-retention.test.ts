@@ -10,6 +10,7 @@ import { createPackageSwapFixture } from "../../infra/package-update-swap.test-s
 import * as databaseBackup from "../../infra/update-database-backup.js";
 import { createGitRuntimeTransaction } from "../../infra/update-runner-git-runtime.js";
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";
+import * as snapshotBackup from "../../snapshot/database-backup.js";
 import { captureUpdateDatabases } from "./update-command-database-backup.js";
 import { recordUpdateDatabaseWrites } from "./update-command-database-receipts.js";
 import type { MutableUpdateExecutionParams } from "./update-command-execution.types.js";
@@ -123,6 +124,7 @@ it.each(
     [
       { restorable: false, lateRefusal: false, outcome: "success" },
       { restorable: true, lateRefusal: false, outcome: "success" },
+      { restorable: true, lateRefusal: false, outcome: "success", discardFails: true },
       { restorable: true, lateRefusal: true, outcome: "success" },
       { restorable: true, lateRefusal: true, outcome: "failure" },
       { restorable: true, lateRefusal: false, outcome: "failure" },
@@ -132,8 +134,8 @@ it.each(
     ].map((scenario) => Object.assign(scenario, { kind })),
   ),
 )(
-  "retains $kind snapshots: restorable=$restorable, lateRefusal=$lateRefusal, outcome=$outcome",
-  async ({ kind, restorable, lateRefusal, outcome }) => {
+  "retains $kind snapshots: restorable=$restorable, lateRefusal=$lateRefusal, outcome=$outcome, discardFails=$discardFails",
+  async ({ kind, restorable, lateRefusal, outcome, discardFails }) => {
     const base = await fs.realpath(dirs.make("update-database-retention-"));
     const fixture = await createPackageSwapFixture(base);
     const root = fixture.packageRoot;
@@ -158,6 +160,13 @@ it.each(
         warnings: [],
       };
     });
+    const discard = vi
+      .spyOn(snapshotBackup, "discardPostgresSchemaCaptures")
+      .mockImplementation(async () => {
+        if (discardFails) {
+          throw new Error("synthetic capture drop failure");
+        }
+      });
     let transaction: PackageUpdateTransaction | undefined;
     let capture: Awaited<ReturnType<typeof captureUpdateDatabases>> | undefined;
     const onTransaction = async (value: PackageUpdateTransaction) => {
@@ -230,7 +239,16 @@ it.each(
       finalResult,
       () => {},
     );
-    if (restorable && !lateRefusal && outcome === "success") {
+    const retired = restorable && !lateRefusal && outcome === "success";
+    // Server-side captures are dropped only where their snapshots retire, and first.
+    expect(discard).toHaveBeenCalledTimes(retired ? 1 : 0);
+    if (retired && discardFails) {
+      // A failed drop keeps the manifests and reports the pending cleanup.
+      expect(JSON.stringify(finalResult.steps.at(-1))).toContain(
+        "PostgreSQL capture cleanup remains pending",
+      );
+    }
+    if (retired && !discardFails) {
       await expect(
         fs.stat(kind === "git" ? path.dirname(snapshotPath) : snapshotPath),
       ).rejects.toMatchObject({ code: "ENOENT" });

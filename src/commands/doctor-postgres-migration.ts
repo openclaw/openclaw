@@ -1,7 +1,11 @@
 import { randomUUID } from "node:crypto";
 import type { DatabaseEngineInput } from "../infra/database-engine/types.js";
 import { hasUpdateDoctorMigrationCapture } from "../infra/update-doctor-migration-attribution.js";
-import { capturePostgresBackup, fingerprintPostgresBackup } from "../snapshot/database-backup.js";
+import {
+  capturePostgresBackup,
+  fingerprintPostgresBackup,
+  prunePostgresSchemaCaptures,
+} from "../snapshot/database-backup.js";
 
 /** Retain the exact predecessor under the same custody as the version runner. */
 export async function backupDoctorPostgresMigration(
@@ -9,8 +13,12 @@ export async function backupDoctorPostgresMigration(
   input: NonNullable<DatabaseEngineInput>,
   maintenance: { assertAdmission(): void },
 ): Promise<{ changes: string[]; generation?: string }> {
-  const directory = `${sourcePath}.pre-startup-migration-${randomUUID()}.postgres.bak`;
+  const prefix = `${sourcePath}.pre-startup-migration-`;
+  const directory = `${prefix}${randomUUID()}.postgres.bak`;
   const config = { database: { engine: "postgres" as const, postgres: input } };
+  maintenance.assertAdmission();
+  // Each capture's schema lives on the server; drop the ones whose backup was removed.
+  const pruned = await prunePostgresSchemaCaptures(sourcePath, config, prefix);
   maintenance.assertAdmission();
   const before = hasUpdateDoctorMigrationCapture()
     ? undefined
@@ -19,6 +27,7 @@ export async function backupDoctorPostgresMigration(
     sourcePath,
     directory,
     profile: "exact",
+    carrier: "postgres-schema",
     config,
     assertCurrent: () => maintenance.assertAdmission(),
   });
@@ -28,5 +37,14 @@ export async function backupDoctorPostgresMigration(
   if (before !== undefined && before !== generation) {
     throw new Error(`PostgreSQL changed during its pre-migration backup: ${sourcePath}`);
   }
-  return { changes: [`Saved pre-migration PostgreSQL backup: ${directory}`], generation };
+  return {
+    changes: [
+      ...pruned.map(
+        (schema) =>
+          `Dropped PostgreSQL capture schema ${schema}; its pre-migration backup was removed.`,
+      ),
+      `Saved pre-migration PostgreSQL backup: ${directory}`,
+    ],
+    generation,
+  };
 }

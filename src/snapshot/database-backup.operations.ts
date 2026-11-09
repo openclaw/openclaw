@@ -34,6 +34,7 @@ import { decodePluginCohortRecoveryPairRows } from "../infra/update-run-recovery
 import { INSTALLED_PLUGIN_INDEX_STATE_KEY } from "../plugins/plugin-metadata-state.kernel.js";
 import {
   captureDatabaseArtifact,
+  capturePostgresSchema,
   exportPostgresBackup,
   restorePostgresBackup,
   discardPostgresNamespace,
@@ -93,6 +94,8 @@ export async function capturePostgresBackupInWorker(params: {
   pluginOwners?: DatabasePortPluginOwners;
   assertCurrent: () => void;
   gitIdentity?: GitBackupIdentity;
+  /** Keep an exact capture on its server; omit it for the portable SQLite export. */
+  carrier?: "postgres-schema";
 }): Promise<PostgresExportEnvelope> {
   const { createVerifiedSqliteSnapshot } = await import("../infra/sqlite-snapshot.js");
   params.assertCurrent();
@@ -118,14 +121,24 @@ export async function capturePostgresBackupInWorker(params: {
         baseDescriptor,
       );
       params.assertCurrent();
-      const manifest = await exportPostgresBackup({ ...params, client, descriptor, anchor });
-      await verifyPostgresExportEnvelope(
-        params.directory,
-        manifest,
-        inspectHeldAnchor,
-        params.profile,
-      );
-      await fs.unlink(path.join(params.directory, ".pending"));
+      const manifest = params.carrier
+        ? await capturePostgresSchema({ ...params, client, descriptor, anchor })
+        : await exportPostgresBackup({ ...params, client, descriptor, anchor });
+      try {
+        await verifyPostgresExportEnvelope(
+          params.directory,
+          manifest,
+          inspectHeldAnchor,
+          params.profile,
+        );
+        await fs.unlink(path.join(params.directory, ".pending"));
+      } catch (error) {
+        // An incomplete capture must not leave its server copy behind.
+        if (manifest.schema) {
+          await discardPostgresNamespace(client, manifest.schema);
+        }
+        throw error;
+      }
       requireDirectorySync(await syncDirectory(params.directory), "PostgreSQL backup");
       requireDirectorySync(
         await syncDirectory(path.dirname(params.directory)),
@@ -318,6 +331,10 @@ export type BackupTask =
       };
     }
   | {
+      operation: "prune";
+      params: { sourcePath: string; config: OpenClawConfig; directoryPrefix: string };
+    }
+  | {
       operation: "fingerprint";
       params: {
         sourcePath: string;
@@ -329,4 +346,5 @@ export type BackupReply =
   | void
   | PostgresExportEnvelope
   | string
+  | string[]
   | Awaited<ReturnType<typeof preparePostgresRestoreInWorker>>;

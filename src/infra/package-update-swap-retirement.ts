@@ -147,6 +147,7 @@ export async function retireVerifiedPackageSwap(params: {
   previousRoot: PackageRootIntegrityFingerprint | undefined;
   backupRoot: string;
   databaseBackupRoot: string | undefined;
+  discardDatabaseCaptures?: () => Promise<void>;
   retireLegacyBackups?: RetireLegacyPackageBackups;
   launchers: PackageLauncherBackup;
   packageBackedUp: boolean;
@@ -214,13 +215,23 @@ export async function retireVerifiedPackageSwap(params: {
   // Verified activation ends automatic database restoration, so the snapshots
   // share the retired package backup's lifetime.
   if (params.databaseBackupRoot) {
-    const message = await discardPackageUpdateBackup(
-      `${params.databaseBackupRoot}.databases`,
-      "pre-migration database snapshots",
-      params.globalRoot,
-      assertRetirementCurrent,
-      cleanupDeadlineAtMs,
+    const snapshots = `${params.databaseBackupRoot}.databases`;
+    // Server-side captures go first; their manifests stay until the drop succeeds.
+    const pending = await params.discardDatabaseCaptures?.().then(
+      () => undefined,
+      (error: unknown) =>
+        `PostgreSQL capture cleanup remains pending at ${snapshots}: ${formatErrorMessage(error)}`,
     );
+    assertRetirementCurrent();
+    const message =
+      pending ??
+      (await discardPackageUpdateBackup(
+        snapshots,
+        "pre-migration database snapshots",
+        params.globalRoot,
+        assertRetirementCurrent,
+        cleanupDeadlineAtMs,
+      ));
     if (message) {
       messages.push(message);
     }
