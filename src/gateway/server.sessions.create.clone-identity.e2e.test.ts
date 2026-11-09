@@ -162,7 +162,14 @@ test.each(
       });
     }
     const created = await create(operation === "refresh");
-    expect(reachedBoundary).toBe(true);
+    expect(
+      reachedBoundary,
+      JSON.stringify({
+        errors: chatErrors(),
+        pending: created.entry?.pendingWorktree,
+        projectId: created.entry?.projectId,
+      }),
+    ).toBe(true);
     if (identity === "allowed") {
       expect(git.requests.length).toBeGreaterThan(0);
       expect(git.requests.every((authorization) => authorization === AUTHORIZATION)).toBe(true);
