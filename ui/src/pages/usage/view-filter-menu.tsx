@@ -143,9 +143,7 @@ export function createUsageFilterFields(ctx: UsageFilterContext) {
       .filter(
         (term) =>
           !isHasErrors(term) &&
-          !(QUERY_FIELDS as readonly string[]).includes(
-            normalizeLowercaseStringOrEmpty(term.key ?? ""),
-          ),
+          !QUERY_FIELDS.some((key) => key === normalizeLowercaseStringOrEmpty(term.key ?? "")),
       ),
   );
   return { ctx, fields, hasErrors, toggleHasErrors, otherTerms };

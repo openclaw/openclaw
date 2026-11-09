@@ -232,8 +232,12 @@ suite.define(() => {
         await option.click();
         await expect.poll(() => option.getAttribute("aria-checked")).toBe("true");
         await page.locator(".usage-filter-menu__trigger").click();
+        await option.waitFor({ state: "hidden" });
         const query = page.locator(".usage-filter-menu__query input");
         await openUsageFilter(page);
+        // Escape belongs to the topmost overlay, including a hovered trigger's tooltip.
+        await page.mouse.move(0, 0);
+        await expect.poll(() => page.locator("openclaw-tooltip[open]").count()).toBe(0);
         await page.keyboard.press("Tab");
         await expect
           .poll(() =>
