@@ -94,7 +94,14 @@ describe("candidate acquisition GitHub API quota wait", () => {
       fetchImpl: async (_url, options) => {
         const signal = options?.signal;
         const aborted = new Promise<never>((_resolve, reject) => {
-          signal?.addEventListener("abort", () => reject(signal.reason), { once: true });
+          signal?.addEventListener(
+            "abort",
+            () =>
+              reject(
+                signal.reason instanceof Error ? signal.reason : new Error(String(signal.reason)),
+              ),
+            { once: true },
+          );
         });
         if (stage === "headers") {
           return aborted;
