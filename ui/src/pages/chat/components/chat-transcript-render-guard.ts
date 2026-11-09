@@ -118,6 +118,7 @@ export function transcriptContextDependencies(
     | "failureActionsRunId"
     | "modelCatalog"
     | "displayFacts"
+    | "replyMessageAccess"
   >,
 ): unknown[] {
   if (item.kind === "notice") {
@@ -137,8 +138,14 @@ export function transcriptContextDependencies(
       const display = props.displayFacts?.forRow(persistedMessageEntryId(source.message))?.read();
       dependencies.push(display?.scope, display?.facts);
       if (source.replyTarget?.kind === "id") {
-        const loaded = loadedSources.get(source.replyTarget.id);
-        dependencies.push(source.replyTarget.id, loaded?.message, loaded?.senderLabel);
+        const id = source.replyTarget.id;
+        const loaded = loadedSources.get(id);
+        dependencies.push(
+          id,
+          loaded?.message ?? props.replyMessageAccess?.read(id),
+          loaded?.senderLabel,
+          loaded ? undefined : props.replyMessageAccess?.status?.(id),
+        );
       }
     }
   }

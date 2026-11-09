@@ -96,7 +96,9 @@ describe("receipt fanout", () => {
       ...container.querySelectorAll<HTMLElement>(".chat-tool-msg-collapse--manual"),
     ];
     await waitForSolid(() => expect(tools()).toHaveLength(2));
-    for (const tool of tools()) click(tool, ".chat-tool-row__toggle");
+    for (const tool of tools()) {
+      click(tool, ".chat-tool-row__toggle");
+    }
     await settleToolBridges(container);
     const firstTool = tools()[0]!;
     const firstToggle = required(firstTool, ".chat-tool-row__toggle");
@@ -265,5 +267,53 @@ describe("receipt fanout", () => {
     expect(
       narration(buildCachedChatItems({ ...input, toolMessages: [result("new output")] })),
     ).toBe(initial);
+  });
+
+  it("updates an unloaded reply when its own lookup settles", async () => {
+    const lookup: { status: "pending" | "missing"; message?: unknown } = { status: "pending" };
+    const access = {
+      revision: 0,
+      navigationId: null,
+      read: () => lookup.message,
+      status: () => lookup.status,
+      open: vi.fn(),
+    };
+    const props = threadProps(
+      "unloaded-reply-receipt",
+      "agent:main:direct:unloaded-reply",
+      [
+        msg("user", "Current prompt", 1_500, { __openclaw: { id: "current-prompt" } }),
+        msg("assistant", "Current answer", 2_000, {
+          __openclaw: { id: "answer", replyToId: "older" },
+        }),
+      ],
+      { replyMessageAccess: access },
+    );
+    const { transcript, container, rerender } = updatingThread(props);
+    onTestFinished(() => {
+      render(null, container);
+      transcript.dispose();
+    });
+    rerender();
+    transcript.start();
+    await waitForSolid(() =>
+      expect(container.querySelector(".chat-reply-attribution--pending")).not.toBeNull(),
+    );
+    lookup.status = "missing";
+    access.revision++;
+    rerender();
+    await waitForSolid(() =>
+      expect(container.querySelector(".chat-reply-attribution__unavailable")?.textContent).toBe(
+        "Original message unavailable",
+      ),
+    );
+    lookup.message = msg("user", "Recovered original", 1_000, { __openclaw: { id: "older" } });
+    access.revision++;
+    rerender();
+    await waitForSolid(() =>
+      expect(container.querySelector(".chat-reply-attribution__excerpt")?.textContent).toBe(
+        "Recovered original",
+      ),
+    );
   });
 });
