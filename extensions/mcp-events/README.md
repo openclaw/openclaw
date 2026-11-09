@@ -8,11 +8,15 @@ OpenAI's versioned MCP Events webhook profile for MCP 2.0 (protocol version
 
 1. Configure and authenticate an HTTP MCP server through OpenClaw's existing MCP
    connection settings. This plugin does not store a second set of credentials.
-2. Enable `mcp-events` and configure `callbackOrigin` with a public HTTPS origin.
-   Forward only `/plugins/mcp-events/callback/*` through your reverse proxy. Do not
-   expose the Gateway administration surface. OpenClaw neither creates a tunnel
+2. Enable `mcp-events` and configure `callbackBaseUrl` with a public HTTPS URL. It
+   may include a path prefix (`https://proxy.example.com/openclaw`). Forward only
+   `<callbackBaseUrl>/plugins/mcp-events/callback/*` through your reverse proxy,
+   with any prefix removed, to the Gateway's `/plugins/mcp-events/callback/*`. Do
+   not expose the Gateway administration surface. OpenClaw neither creates a tunnel
    nor changes network exposure for you. DNS/public-address preflight does not
-   prove reachability; the server's signed challenge does.
+   prove reachability; the server's signed challenge does. The earlier
+   origin-only `callbackOrigin` setting is retired; `openclaw doctor --fix`
+   moves it to `callbackBaseUrl`.
 3. Create an automation with an authored agent-turn instruction and this schedule:
 
 ```json

@@ -9,16 +9,19 @@
     "onStartup": true
   },
   "enabledByDefault": false,
+  "doctorContract": {
+    "configRepair": true
+  },
   "configSchema": {
     "type": "object",
     "additionalProperties": false,
     "required": [
-      "callbackOrigin"
+      "callbackBaseUrl"
     ],
     "properties": {
-      "callbackOrigin": {
+      "callbackBaseUrl": {
         "type": "string",
-        "description": "Public HTTPS origin forwarding only /plugins/mcp-events/callback/* to the Gateway. No automatic tunnel or admin exposure."
+        "description": "Public HTTPS URL, optionally with a path prefix. Forward only <callbackBaseUrl>/plugins/mcp-events/callback/* to the Gateway's /plugins/mcp-events/callback/*. No automatic tunnel or admin exposure."
       },
       "maxPendingEvents": {
         "type": "integer",
@@ -30,8 +33,8 @@
     }
   },
   "uiHints": {
-    "callbackOrigin": {
-      "label": "Public HTTPS callback origin"
+    "callbackBaseUrl": {
+      "label": "Public HTTPS callback base URL"
     },
     "maxPendingEvents": {
       "label": "Pending event limit",

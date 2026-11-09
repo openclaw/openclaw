@@ -178,7 +178,7 @@ describe("MCP Events callback and subscription lifecycle", () => {
       }
     };
     deps = {
-      config: { callbackOrigin: "https://receiver.example.com", maxPendingEvents: 2 },
+      config: { callbackBaseUrl: "https://receiver.example.com", maxPendingEvents: 2 },
       runtime: {
         state: {
           openKeyedStore: <T>(options: OpenAsyncKeyedStoreOptions): PluginStateKeyedStore<T> => {
@@ -439,6 +439,36 @@ describe("MCP Events callback and subscription lifecycle", () => {
     expect.soft(subscribed).toHaveLength(1);
     expect(diagnostics()).toHaveLength(1);
     await expectEvent(200);
+  });
+
+  it("subscribes under a callback base path and keeps the binding until that base changes", async () => {
+    const restart = async (callbackBaseUrl: string) => {
+      await current!.stop();
+      deps = { ...deps, config: { ...deps.config, callbackBaseUrl }, scheduler: createScheduler() };
+      current = new McpEventsService(deps);
+      await current.start();
+    };
+    await restart("https://relay.example.com/tenant-a");
+    expect(record(subscribed[0]?.delivery)?.url).toBe(
+      "https://relay.example.com/tenant-a/plugins/mcp-events/callback/" + bindingId,
+    );
+    await expectEvent(200);
+    await restart("https://relay.example.com/tenant-a");
+    expect([subscribed.length, unsubscribed.length]).toEqual([1, 0]);
+    const [retiredBinding, retiredSecret] = [bindingId, secret];
+    await restart("https://relay.example.com/tenant-b");
+    expect(subscribed).toHaveLength(2);
+    expect(record(subscribed[1]?.delivery)?.url).toBe(
+      "https://relay.example.com/tenant-b/plugins/mcp-events/callback/" + bindingId,
+    );
+    const body = JSON.stringify(event("evt-2"));
+    const late = await post(
+      body,
+      "evt-2",
+      signed(retiredSecret, body, "evt-2", now),
+      retiredBinding,
+    );
+    expect(late.status).toBe(410);
   });
 
   it("retries past eight failures and coalesces recovery with reconciliation", async () => {
