@@ -30,7 +30,9 @@ const ALL_CASES = [
     ".agent-chat__input, .agent-chat__input--dictating::after, .agent-chat__disabled-banner, .agent-chat__composer-notices .chat-composer-neighbor-card, .agent-chat__composer-alert, .agent-chat__talk-status",
   ),
   ...corners("9999px", "9999px", ".chip, .statusDot"),
-  ...corners("10px", "10px", ".run-inspector__panel, .settings-segmented"),
+  ...corners("10px", "10px", ".run-inspector__panel"),
+  // Row controls share --field-radius, which scales with the engine like .btn; no superellipse.
+  ...corners("10px", "12.5px", ".settings-segmented"),
   ...corners("14px", "17.5px", ".chat"),
   ...corners("3px", "3px", ".round-checkbox"),
   ...corners("2px", "2px", ".square-checkbox"),
