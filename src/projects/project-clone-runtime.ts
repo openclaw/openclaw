@@ -10,6 +10,7 @@ import {
   type GitCommandOptions,
 } from "../infra/git-exec.js";
 import { withGitNetworkRetry, type GitOperationStarter } from "../infra/git-network-retry.js";
+import { withGitObjectStoreTransport } from "../infra/git-object-store-transport.js";
 import { withGitRepositoryRepair } from "../infra/git-repository-repair.js";
 import {
   CommandProcessCleanupError,
@@ -259,57 +260,20 @@ async function withProjectCheckoutTransport(
   options: ProjectCloneOptions,
   run: (staging: string, stagingOptions: ProjectCloneOptions) => Promise<void>,
 ): Promise<void> {
-  const [objectPath, objectFormatResult] = await Promise.all([
-    runProjectCheckoutGit(input, options, [
-      "rev-parse",
-      "--path-format=absolute",
-      "--git-path",
-      "objects",
-    ]),
-    runProjectCheckoutGit(input, options, ["rev-parse", "--show-object-format"]),
-  ]);
-  if (objectPath.code !== 0 || objectPath.termination !== "exit") {
-    throw new ProjectCloneError(
-      "clone_failed",
-      "The managed repository object store could not be verified. Remove the repository and retry.",
-    );
-  }
-  const objectFormat = objectFormatResult.stdout.trim();
-  if (
-    objectFormatResult.code !== 0 ||
-    objectFormatResult.termination !== "exit" ||
-    (objectFormat !== "sha1" && objectFormat !== "sha256")
-  ) {
-    throw new ProjectCloneError(
-      "clone_failed",
-      "The managed repository object format could not be verified. Remove the repository and retry.",
-    );
-  }
-  const objects = await fs.realpath(objectPath.stdout.trim());
-  const staging = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-project-fetch-"));
-  let retainStaging = false;
-  try {
-    const initialized = await runProjectCheckoutGit({ target: staging }, options, [
-      "init",
-      "--bare",
-      `--object-format=${objectFormat}`,
-    ]);
-    if (initialized.code !== 0 || initialized.termination !== "exit") {
-      throw new ProjectCloneError(
-        "clone_failed",
-        "Git could not prepare a safe repository refresh. Retry the session.",
-      );
-    }
-    const stagingOptions = { ...options, objectDirectory: objects };
-    await run(staging, stagingOptions);
-  } catch (error) {
-    retainStaging = hasCommandProcessCleanupError(error);
-    throw error;
-  } finally {
-    if (!retainStaging) {
-      await fs.rm(staging, { recursive: true, force: true });
-    }
-  }
+  await withGitObjectStoreTransport(
+    input.target,
+    async (target, args) =>
+      requireGitCommandOutput(
+        "git prepare object transport",
+        await runProjectCheckoutGit({ target }, options, args),
+        () =>
+          new ProjectCloneError(
+            "clone_failed",
+            "Git could not prepare a safe repository refresh. Retry the session.",
+          ),
+      ).trim(),
+    (staging, objectDirectory) => run(staging, { ...options, objectDirectory }),
+  );
 }
 
 /** Refreshes refs in an existing Gateway-managed project checkout. */
@@ -426,7 +390,6 @@ export async function unshallowProjectCheckout(
   const lock = await fs.open(`${shallow}.lock`, "wx");
   try {
     await withProjectCheckoutTransport(input, options, async (staging, stagingOptions) => {
-      await fs.copyFile(shallow, path.join(staging, "shallow"));
       const result = await runProjectCheckoutGit(
         { target: staging, url: input.url },
         stagingOptions,
