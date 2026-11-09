@@ -77,6 +77,7 @@ internal fun SkillsSettingsScreen(
   onBack: () -> Unit,
 ) {
   val skillsState by viewModel.skillsState.collectAsState()
+  val activeGatewayStableId by viewModel.activeGatewayStableId.collectAsState()
   val skillMutationKeys by viewModel.skillMutationKeys.collectAsState()
   val clawHubState by viewModel.clawHubSkillSearchState.collectAsState()
   val clawHubMethodsAvailable by viewModel.clawHubSkillMethodsAvailable.collectAsState()
@@ -84,7 +85,7 @@ internal fun SkillsSettingsScreen(
   val operatorAdminScopeAvailable by viewModel.operatorAdminScopeAvailable.collectAsState()
   val canManageSkills = isConnected && operatorAdminScopeAvailable
   val skills = skillsState.summary?.skills.orEmpty()
-  var selectedSkillKey by remember { mutableStateOf<String?>(null) }
+  var selectedSkillKey by remember(activeGatewayStableId) { mutableStateOf<String?>(null) }
   var selectedTabName by rememberSaveable { mutableStateOf(SkillsTab.Installed.name) }
   var installedSearch by rememberSaveable { mutableStateOf("") }
   var installedFilterName by rememberSaveable { mutableStateOf(InstalledSkillFilter.All.name) }
