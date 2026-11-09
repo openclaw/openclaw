@@ -100,7 +100,7 @@ struct ChatSourcePreviewProjector {
             let wasCited: Bool
             if let cached = self.entries[message.id], cached.message == message {
                 entry = cached
-                wasCited = true
+                wasCited = !cached.links.isEmpty
             } else {
                 wasCited = self.entries[message.id]?.links.isEmpty == false
                 entry = Entry(
