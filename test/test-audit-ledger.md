@@ -450,7 +450,11 @@ different dependencies; run invalid-tree cases against an isolated, bounded Git
 tree with a successful control; preserve the comparison tree when changing only
 the base revision. Previously the latter two checks could reject at unrelated
 guards. The source classification was R77/F8 expanded cases, with no C/D cases.
-Runtime and mutation qualification remain pending; no production code changed.
+All eight suites passed on the original and repaired tests (85 cases) with
+Node 26.13.0 on macOS. Eight deliberate owner mutations escaped the original
+tests and failed the repaired tests: project identity, tree identity,
+completeness, path, mode, duplicate path, byte bound and comparison base.
+Source bytes were restored after each mutation. No production code changed.
 
 ## Pending qualification and proof repairs
 
