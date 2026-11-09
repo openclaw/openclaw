@@ -30,7 +30,6 @@ import {
   prepareSqliteReadOnlyLocationInProcess,
   prepareSqliteReadOnlyLocationSyncInProcess,
 } from "./sqlite-readonly-location.js";
-import { inspectSqliteSchemaHeaderInProcess } from "./sqlite-schema-header-inspection.js";
 import { createSqliteSnapshotStagingDirectory } from "./sqlite-snapshot-staging.js";
 import {
   StateDatabaseDiscoverySchema,
@@ -535,6 +534,8 @@ export async function snapshotUpdateCandidateState(
     onProgress?: (progress: UpdateStateInspectionProgress) => void;
   },
 ): Promise<z.infer<typeof UpdateCandidateStateSnapshotSchema>> {
+  const { inspectSqliteSchemaHeaderInProcess } =
+    await import("./sqlite-schema-header-inspection.js");
   const { createVerifiedSqliteSnapshot } = await import("./sqlite-snapshot.js");
   const { AGENT_FTS_SCHEMAS } = await import("../state/openclaw-agent-fts-schema.js");
   const { copyUpdateCandidatePlugins, UpdateCandidatePluginPlanSchema } =
