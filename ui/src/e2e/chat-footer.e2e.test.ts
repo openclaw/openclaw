@@ -157,11 +157,14 @@ async function verifyFooter(page: Page, width: number, height: number, touch: bo
     .poll(() => chatThreadDistanceFromBottom(page))
     .toBeLessThanOrEqual(CHAT_TRANSCRIPT_END_THRESHOLD_PX);
   await waitForChatScrollIdle(page);
-  const boundary = await thread.evaluate((element) => ({
-    transcriptBottom: element.getBoundingClientRect().bottom,
-    footerTop: document.querySelector(".chat-footer")!.getBoundingClientRect().top,
-  }));
-  expect(boundary.transcriptBottom).toBeLessThanOrEqual(boundary.footerTop);
+  // The transcript runs up to the composer without an empty band between them.
+  const gap = await thread.evaluate(
+    (element) =>
+      document.querySelector(".chat-footer .agent-chat__composer-shell")!.getBoundingClientRect()
+        .top - element.getBoundingClientRect().bottom,
+  );
+  expect(gap).toBeGreaterThanOrEqual(0);
+  expect(gap).toBeLessThan(1);
 
   await gateway.setOnline(false);
   await gateway.closeLatest();
