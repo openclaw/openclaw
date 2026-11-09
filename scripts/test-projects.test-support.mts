@@ -90,6 +90,7 @@ import {
   filterUnitConfigTestFiles,
 } from "../test/vitest/vitest.unit-paths.mjs";
 import {
+  classifyPackageJsonScriptChange,
   detectChangedLanes,
   listChangedPathsFromGit as listChangedPathsFromGitSource,
 } from "./changed-lanes.mts";
@@ -146,6 +147,7 @@ import {
   resolveShardTimingKey,
   type VitestShardTimingSpec,
 } from "./lib/vitest-shard-metadata.mts";
+import { readWindowsTargets } from "./lib/windows-test-targets.mts";
 
 export { isTestFileTarget } from "./lib/changed-path-facts.mjs";
 
@@ -3287,6 +3289,7 @@ const EXACT_TOOLING_TARGETS = new Map<string, string[]>([
   ["scripts/e2e/cron-cli-docker.sh", [dockerBuild, "docker-e2e-observability"]],
   ["scripts/ios-release-upload.sh", ["ios-release-wrapper-args", "ios-release-fastlane-gates"]],
   ["scripts/release-verify-beta.ts", ["release-wrapper-scripts"]],
+  ["scripts/container-registry-readback.mjs", ["container-registry-readback"]],
   ["scripts/lib/bundled-plugin-build-entries.mjs", ["bundled-plugin-build-entries", releaseCheck]],
   ["scripts/lib/docker-e2e-package.sh", [dockerBuild]],
   ["scripts/relay-build-limit-warnings.mts", [dockerBuild]],
@@ -3576,7 +3579,12 @@ const SEMANTIC_TOOLING_TARGET_PATTERNS: Array<[RegExp, string[]]> = [
   [/^\.github\/workflows\/package-acceptance\.yml$/u, [packageAcceptance]],
   [
     /^\.github\/workflows\/vercel-container-registry-publish\.yml$/u,
-    ["docker-channel-promote", "release-plan-producer", "vercel-container-registry-publish"],
+    [
+      "container-registry-readback",
+      "docker-channel-promote",
+      "release-plan-producer",
+      "vercel-container-registry-publish",
+    ],
   ],
   [
     /^\.github\/workflows\/plugin-clawhub-new\.yml$/u,
@@ -4712,6 +4720,31 @@ function newlyConsumedMockModules(
   );
 }
 
+function changedWindowsTestInventory(cwd: string, baseRef: string | undefined): string[] | null {
+  if (!baseRef) {
+    return null;
+  }
+  const before = spawnSync("git", ["show", `${baseRef}:package.json`], {
+    cwd,
+    encoding: "utf8",
+    maxBuffer: GIT_LS_FILES_MAX_BUFFER_BYTES,
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  if (before.error || before.status !== 0) {
+    return null;
+  }
+  try {
+    const after = fs.readFileSync(path.join(cwd, "package.json"), "utf8");
+    if (classifyPackageJsonScriptChange(before.stdout, after) !== "windowsTestTooling") {
+      return null;
+    }
+    const previous = new Set(readWindowsTargets(JSON.parse(before.stdout).scripts));
+    return readWindowsTargets(JSON.parse(after).scripts).filter((file) => !previous.has(file));
+  } catch {
+    return null;
+  }
+}
+
 function resolveBoundedChangedTestTargetPlan(
   changedPaths: string[],
   options: ChangedTestTargetOptions,
@@ -4885,6 +4918,19 @@ function resolveBoundedChangedTestTargetPlan(
         }),
     );
     for (const manifest of manifests) {
+      const windowsTargets =
+        manifest === "package.json" ? changedWindowsTestInventory(cwd, options.baseRef) : null;
+      if (windowsTargets !== null) {
+        // Windows inventory edits do not change the package's runtime API.
+        // Keep manifest readers above and admit new Windows targets explicitly.
+        targets.push(...windowsTargets);
+        options.onSelection?.({
+          rule: "windows-test-inventory",
+          input: manifest,
+          targets: windowsTargets,
+        });
+        continue;
+      }
       const name = readImportGraphManifest(cwd, manifest).name;
       if (typeof name !== "string") {
         continue;

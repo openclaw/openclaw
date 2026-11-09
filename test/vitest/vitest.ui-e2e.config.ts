@@ -71,6 +71,7 @@ export const uiE2ePrivateServerTestFiles = [
   "ui/src/e2e/deepseek-search.real-gateway.e2e.test.ts",
   "ui/src/e2e/desktop-resize.real-gateway.e2e.test.ts",
   "ui/src/e2e/device-platform-family.real-gateway.e2e.test.ts",
+  "ui/src/e2e/gateway-fresh-visit.real-gateway.e2e.test.ts",
   "ui/src/e2e/initial-connect-splash.e2e.test.ts",
   "ui/src/e2e/locale-offline-retry.e2e.test.ts",
   "ui/src/e2e/mcp-app-conformance.e2e.test.ts",
@@ -82,7 +83,6 @@ export const uiE2ePrivateServerTestFiles = [
   "ui/src/e2e/model-key-save-check.real-gateway.e2e.test.ts",
   "ui/src/e2e/model-picker-search.real-gateway.e2e.test.ts",
   "ui/src/e2e/model-provider-remove-in-use.real-gateway.e2e.test.ts",
-  "ui/src/e2e/model-providers-fresh-install.real-gateway.e2e.test.ts",
   "ui/src/e2e/model-setup-provider-errors.real-gateway.e2e.test.ts",
   "ui/src/e2e/mount-recovery.e2e.test.ts",
   "ui/src/e2e/native-notifications-loading.e2e.test.ts",
@@ -117,6 +117,7 @@ export const uiE2eRuntimeBudgetTestFile = resolveUiTypeScriptPath(
 // These independent fixture/build owners do not share the source optimizer cache.
 // New files stay bundled unless they own every UI server they use.
 export const uiE2eProductionArtifactTestFiles = [
+  "ui/src/e2e/gateway-fresh-visit.http.e2e.test.ts",
   "ui/src/e2e/service-worker-update.e2e.test.ts",
   "ui/src/e2e/phone-stale-build-recovery.e2e.test.ts",
 ].map((file) => resolveUiTypeScriptPath(file));

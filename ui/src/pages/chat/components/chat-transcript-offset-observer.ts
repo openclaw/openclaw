@@ -27,6 +27,7 @@ export class TranscriptOffsetState {
     | null = null;
   touching = false;
   touchScrolling = false;
+  nativeInputActive = false;
   renderedTouchActive = false;
   maintenanceScrollOffset: number | null = null;
   pendingInteractionAnchor: ChatTranscriptInteractionAnchor | null = null;
@@ -227,6 +228,7 @@ export function observeTranscriptOffset(
     // Commands can move upward as rows retire. Keep the actual write's
     // provenance until its native event arrives, even after command retirement.
     if (before !== after) {
+      owner.state.nativeInputActive = false;
       owner.state.maintenanceScrollOffset = after;
       maintenanceRevision += 1;
     }
@@ -374,13 +376,14 @@ export function observeTranscriptOffset(
     }
   };
   const finishScroll = () => {
+    owner.state.nativeInputActive = false;
     // Only touch scrolling holds history; wheel and trackpad settles need no render.
     if (!owner.state.touching && owner.state.touchScrolling) {
       owner.state.touchScrolling = false;
       owner.invalidate();
     }
   };
-  const publishReaderIntent = (towardEnd: boolean) => {
+  const publishReaderIntent = (towardEnd?: boolean) => {
     owner.endAnchor.clear();
     owner.onReaderScroll(towardEnd);
     // Downward input at the physical end need not emit another offset event.
@@ -417,6 +420,7 @@ export function observeTranscriptOffset(
     owner.endAnchor.cancelComposerResize();
     owner.state.pendingInteractionAnchor = null;
     owner.state.maintenanceScrollOffset = null;
+    owner.state.nativeInputActive = true;
     // Native scrolling may precede input delivery. Attribute the gesture before
     // cancellation or offset synchronization publishes that consumed movement.
     publishInput(event);
@@ -435,7 +439,7 @@ export function observeTranscriptOffset(
       (event instanceof KeyboardEvent &&
         (["ArrowDown", "PageDown", "End"].includes(event.key) ||
           (event.key === " " && !event.shiftKey)));
-    publishReaderIntent(towardEnd);
+    publishReaderIntent(towardEnd ? true : event instanceof KeyboardEvent ? false : undefined);
   };
   const moveTouch = (event: TouchEvent) => {
     const nextY = localTouchY(event);
@@ -529,6 +533,7 @@ export function observeTranscriptOffset(
     contactIds.clear();
     owner.state.touching = false;
     owner.state.touchScrolling = false;
+    owner.state.nativeInputActive = false;
     listeners.abort();
   };
 }

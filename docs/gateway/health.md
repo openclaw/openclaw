@@ -137,6 +137,26 @@ always-on check listener. Connection refusal is expected before the initial bind
 and after transport closure. An in-process restart can close and reopen the
 listener while the same PID stays alive; requests racing closure can also reset.
 
+While the listener is available, the normal Control UI document and static app
+assets remain available during core startup or draining. A fresh browser loads
+the real application shell and shows its connection state while waiting for the
+Gateway. Existing conversations keep their mounted route, transcript and draft.
+Authentication failures still use the normal sign-in flow.
+
+When the app assets are unavailable, a self-contained `503` availability page
+retries automatically with bounded request timeouts and backoff. It does not require
+the app bundle or a WebSocket connection. APIs and authenticated dynamic routes
+keep their normal admission and authorization checks. Optional startup sidecars
+do not block the normal UI once core request preparation is ready.
+
+An HTTP document is not a completed WebSocket handshake: the loaded app still owns
+connection recovery and reload-required states. If the document loads but the app
+cannot mount after three recovery navigations, its fallback offers manual reload
+and wait actions. A fresh browser with no cached
+app cannot receive a Gateway page while its listener is fully stopped. An existing
+ingress can provide a retryable HTML error page for that interval; keep API and
+WebSocket handling intact, and do not label an unknown connection failure an update.
+
 Supervisors should combine HTTP checks with process and exit information, allow
 bounded startup/restart grace, and honor the process owner's shutdown budget.
 One refusal or reset during these transitions does not prove a wedged Gateway.
@@ -173,6 +193,11 @@ a per-agent recovery predecessor. Database and model/plugin preparation still
 gate their own consumers.
 
 A default or system agent database with pending startup inspection/preparation or a confirmed admission failure keeps readiness false, with `failing: ["agent-database:<id>"]` and the exact admission reason and repair hint in `agentDatabases`. Pending startup inspection is reported there with code `agent-database-inspection-pending`. The HTTP listener, Control UI, and admitted agents remain available while readiness is false; pending optional agents do not hold readiness. Readiness does not wait for transcript maintenance or resumed agent work to finish. Agent-scoped `sessions.list`, plus `sessions.resolve`, `sessions.describe`, and `models.list`, wait up to 20 seconds for their selected agents to finish startup preparation, then recheck request authorization before reading. Requests targeting healthy agents proceed independently. Unscoped session lists continue returning admitted agents while other stores prepare. Writes still require completed admission. RPC requests refused for pending inspection return `UNAVAILABLE` with `retryable: true` and `retryAfterMs: 250`; callers can retry the same request after that delay. Inspection failures and ownership mismatches remain non-retryable. A refused optional agent can remain isolated while healthy agents serve requests. Gateway ready announcements use the same readiness decision.
+
+Agents whose admission is closed by deletion appear separately in `agentDeletions`
+with code `agent-deletion`. Pending or completed deletion does not fail `ready` or
+`coreReady`, including after the agent is removed from configuration. Ordinary
+requests remain refused; pending cleanup follows the deletion journal.
 
 If a newer model-runtime publication supersedes deferred agent preparation, admission
 waits for that publication once, then retries preparation against current configuration
@@ -228,6 +253,18 @@ for ordinary service start and traffic admission.
 Disabled, unconfigured, and ordinarily unlinked accounts do not fail channel readiness. An enabled, configured account with a recorded terminal disconnect, blocked lifecycle, or unavailable ingress still fails its health check even if it becomes unlinked. For example, a terminal WhatsApp logout makes `/readyz` return `503` with `failing: ["whatsapp"]` in detailed responses. Terminal disconnects and blocked accounts require operator action; the health monitor does not restart them.
 
 Unexpected channel exits use automatic restart backoff. Intentional stops cancel a pending retry; failed restart waits leave a stopped account with `restartPending: false` and the failure recorded in `lastError`.
+
+A previously connected channel can recover its transport without failing the
+whole Gateway. During the existing two-minute reconnect grace, `/readyz` stays
+`200` when all other readiness checks pass, and detailed responses include
+`degraded: ["discord"]` (or the affected channel IDs). Channel status retains
+`connected: false`, `lifecycle: "recovering"`, `healthState: "reconnect-grace"`,
+and the disconnect timestamp; transport logs record the reconnect attempts.
+The window starts at the first disconnect and retries do not renew it. Recovery
+clears degradation. An unrecovered channel fails readiness after the window,
+including while an agent run is active. Blocked or terminal failures bypass
+reconnect grace. Initial connection still uses the existing startup readiness
+rules; an account that has never connected is not a reconnecting account.
 
 Remote unauthenticated startup responses contain only `ok` and `status`. Local-direct and authenticated callers also receive `version`, `uptimeMs`, and `pendingReason` while startup is pending. Readiness details follow the same local-or-authenticated gate because they can name failing subsystems.
 
@@ -365,6 +402,10 @@ options. Callback labels still work on those runtimes. Native blocking work can
 remain unsymbolized, and an unusually long stall can exhaust the sample cap;
 `truncated=true` identifies incomplete evidence. Recorder failures are logged
 once and disable recording for that monitor's lifetime.
+
+Linux kernel observations remain available when CPU recording is unsupported,
+conflicting, or fails. These reports use `cpuProfile=unavailable` instead of CPU
+sample counts and intervals; they retain the stall bounds and `kernel` evidence.
 
 `samples=0` means neither retained profile contains a timestamped sample in that
 stall interval. It does not prove the entire process stopped or identify the

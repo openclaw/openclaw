@@ -39,10 +39,7 @@ import { BROWSER_STARTUP_TIMEOUT_MS } from "./constants.js";
 import { BROWSER_ERROR_REASONS, BrowserProfileUnavailableError } from "./errors.js";
 import { getExtensionRelayModule } from "./extension-relay.runtime.js";
 import { getBrowserProfileCapabilities } from "./profile-capabilities.js";
-import {
-  CDP_READY_AFTER_LAUNCH_MIN_TIMEOUT_MS,
-  CDP_READY_AFTER_LAUNCH_POLL_MS,
-} from "./server-context.constants.js";
+import { CDP_READY_AFTER_LAUNCH_POLL_MS } from "./server-context.constants.js";
 import {
   assertProfileLifecycleContext,
   beginProfileTransition,
@@ -381,46 +378,6 @@ export function createProfileAvailability({
     });
   };
 
-  const waitForCdpReadyAfterLaunch = async (
-    signal: AbortSignal,
-    running: RunningChrome,
-  ): Promise<void> => {
-    // launchOpenClawChrome() can return before Chrome is fully ready to serve /json/version + CDP WS.
-    // If a follow-up call races ahead, we can hit PortInUseError trying to launch again on the same port.
-    const deadlineMs = performance.now() + state().resolved.localCdpReadyTimeoutMs;
-    while (performance.now() < deadlineMs) {
-      const remainingMs = Math.max(0, deadlineMs - performance.now());
-      const attemptTimeoutMs = Math.max(
-        CDP_READY_AFTER_LAUNCH_MIN_TIMEOUT_MS,
-        Math.min(MANAGED_CDP_READY_HTTP_TIMEOUT_MS, remainingMs),
-      );
-      signal.throwIfAborted();
-      if (await isReachable(attemptTimeoutMs, { signal })) {
-        const ownsEndpoint = await isChromeCdpOwnedByPid(
-          profile.cdpUrl,
-          running.pid,
-          attemptTimeoutMs,
-          getCdpReachabilityPolicy(),
-          signal,
-        );
-        signal.throwIfAborted();
-        if (!ownsEndpoint) {
-          throw new BrowserProfileUnavailableError(
-            `Managed Chrome for profile "${profile.name}" did not own its CDP endpoint.`,
-          );
-        }
-        return;
-      }
-      await waitForPoll(CDP_READY_AFTER_LAUNCH_POLL_MS, signal);
-    }
-    throw new Error(
-      `Chrome CDP websocket for profile "${profile.name}" is not reachable after start. ${await describeCdpFailure(
-        MANAGED_CDP_READY_HTTP_TIMEOUT_MS,
-        signal,
-      )}`,
-    );
-  };
-
   const waitForChromeMcpReadyAfterAttach = async (signal: AbortSignal): Promise<void> => {
     const deadlineMs = performance.now() + CHROME_MCP_ATTACH_READY_WINDOW_MS;
     let lastError: unknown;
@@ -595,7 +552,19 @@ export function createProfileAvailability({
         );
       }
       try {
-        await waitForCdpReadyAfterLaunch(signal, launched);
+        const ownsEndpoint = await isChromeCdpOwnedByPid(
+          profile.cdpUrl,
+          launched.pid,
+          MANAGED_CDP_READY_HTTP_TIMEOUT_MS,
+          getCdpReachabilityPolicy(),
+          signal,
+        );
+        signal.throwIfAborted();
+        if (!ownsEndpoint) {
+          throw new BrowserProfileUnavailableError(
+            `Managed Chrome for profile "${profile.name}" did not own its CDP endpoint.`,
+          );
+        }
         adoptRunning(launched, signal);
         runtime.managedLaunchFailure = undefined;
       } catch (err) {

@@ -457,7 +457,10 @@ async function authorizeGatewayConnectCore(
 
   // Explicit tunnel attribution uses its own peer admission, never ambient Serve auth.
   if (ingressAttribution?.kind === "openclaw-id-tunnel") {
-    return await authorizeOpenClawIdTunnel(ingressAttribution.peerKey);
+    return await authorizeOpenClawIdTunnel(
+      ingressAttribution.peerKey,
+      authSurface === "ws-control-ui",
+    );
   }
 
   if (
@@ -593,10 +596,17 @@ async function authorizeGatewayConnectCore(
  * refused outright, including while the service publishes no resolver. A tunnel
  * request never falls back to the Gateway's other authentication methods.
  */
-async function authorizeOpenClawIdTunnel(peerKey: string): Promise<GatewayAuthResult> {
+async function authorizeOpenClawIdTunnel(
+  peerKey: string,
+  allowNode: boolean,
+): Promise<GatewayAuthResult> {
   const principal = await resolveOpenClawIdTunnelPrincipal(peerKey);
   if (!principal) {
     return { ok: false, reason: "openclaw_id_not_admitted" };
+  }
+  // Worker transport routes use their own credentials, not operator HTTP auth.
+  if (principal.kind === "node" && !allowNode) {
+    return { ok: false, reason: "openclaw_id_node_role_required" };
   }
   const user = openclawIdTunnelUser(principal);
   return { ok: true, method: "trusted-proxy", ...(user ? { user } : {}), openclawId: principal };

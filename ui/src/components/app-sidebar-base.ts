@@ -45,6 +45,7 @@ export type AppSidebarProps = {
   sessionKey: string;
   sidebarEntries: readonly string[];
   navigationVisible: boolean;
+  connectionPending?: boolean;
   navigationView: "pages" | "sessions" | "online";
   navigationCollapsed: boolean;
   sidebarAgentsMode: "chip" | "roster";
@@ -85,6 +86,7 @@ export const appSidebarProperties = {
   sessionKey: { default: "", attribute: false },
   sidebarEntries: { default: DEFAULT_SIDEBAR_ENTRIES, attribute: false },
   navigationVisible: { default: true, attribute: false },
+  connectionPending: { default: false, attribute: false },
   navigationView: { default: "sessions", attribute: false },
   navigationCollapsed: { default: false, type: Boolean },
   sidebarAgentsMode: { default: "chip", attribute: false },
@@ -130,6 +132,7 @@ export abstract class AppSidebarBase {
   declare sessionKey: AppSidebarProps["sessionKey"];
   declare sidebarEntries: AppSidebarProps["sidebarEntries"];
   declare navigationVisible: AppSidebarProps["navigationVisible"];
+  declare connectionPending: AppSidebarProps["connectionPending"];
   declare navigationView: AppSidebarProps["navigationView"];
   declare navigationCollapsed: AppSidebarProps["navigationCollapsed"];
   declare sidebarAgentsMode: AppSidebarProps["sidebarAgentsMode"];
@@ -179,10 +182,7 @@ export abstract class AppSidebarBase {
   ) {
     for (const key of Object.keys(appSidebarProperties)) {
       Object.defineProperty(this, key, {
-        get: () =>
-          key === "sidebarAgentsMode"
-            ? (this.sidebarSnapshot?.mode ?? Reflect.get(hostElement, key))
-            : Reflect.get(hostElement, key),
+        get: () => Reflect.get(hostElement, key),
         set: (value: unknown) => {
           Reflect.set(hostElement, key, value);
         },
