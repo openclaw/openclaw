@@ -1,3 +1,0 @@
-# Net test-line growth from PR "fix(cli): show the --probe/--plain option conflict in models status"
-# (regression asserts the conflicting --probe --plain selection rejects with an ExpectedCliError).
-9

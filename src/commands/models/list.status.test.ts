@@ -399,16 +399,14 @@ describe("modelsStatusCommand auth overview", () => {
   });
 
   it.each([
-    ["probeConcurrency", "--probe-concurrency", "2.5", "integer"],
-    ["probeTimeout", "--probe-timeout", "abc", "number"],
-  ])("rejects invalid %s", async (key, flag, value, kind) => {
+    [{ probeConcurrency: "2.5" }, "--probe-concurrency must be a positive integer."],
+    [{ probeTimeout: "abc" }, "--probe-timeout must be a positive number."],
+    [{ json: false, plain: true }, "--probe cannot be used with --plain output."],
+  ])("rejects invalid options %j", async (opts, message) => {
     const localRuntime = createTestRuntime();
     await expect(
-      modelsStatusCommand({ json: true, probe: true, [key]: value }, localRuntime),
-    ).rejects.toMatchObject({
-      name: "ExpectedCliError",
-      message: `${flag} must be a positive ${kind}.`,
-    });
+      modelsStatusCommand({ json: true, probe: true, ...opts }, localRuntime),
+    ).rejects.toMatchObject({ name: "ExpectedCliError", message });
     expect(mocks.runAuthProbes).not.toHaveBeenCalled();
     expect(localRuntime.log).not.toHaveBeenCalled();
   });
@@ -827,14 +825,5 @@ describe("modelsStatusCommand auth overview", () => {
     expect(localRuntime.writeStdout).toHaveBeenCalledOnce();
     expect(localRuntime.log).not.toHaveBeenCalled();
     expect(localRuntime.exit).toHaveBeenCalledWith(1);
-  });
-
-  it("rejects --probe with --plain output as an ExpectedCliError", async () => {
-    await expect(
-      modelsStatusCommand({ plain: true, probe: true }, createTestRuntime()),
-    ).rejects.toMatchObject({
-      name: "ExpectedCliError",
-      message: "--probe cannot be used with --plain output.",
-    });
   });
 });
