@@ -22,8 +22,14 @@ if (
     "Expected build root, configuration, source revision, MLX flag, result directory and unique macOS architectures",
   );
 }
-const concurrency = Math.min(architectures.length, availableParallelism());
-const jobs = Math.max(1, Math.floor(availableParallelism() / concurrency));
+const availableJobs = availableParallelism();
+const requestedJobs = Number(process.env.OPENCLAW_MAC_SWIFT_JOBS ?? availableJobs);
+if (!Number.isSafeInteger(requestedJobs) || requestedJobs < 1) {
+  throw new Error("OPENCLAW_MAC_SWIFT_JOBS must be a positive integer");
+}
+const jobBudget = Math.min(availableJobs, requestedJobs);
+const concurrency = Math.min(architectures.length, jobBudget);
+const jobs = Math.max(1, Math.floor(jobBudget / concurrency));
 const controller = new AbortController();
 const owned: Array<{ arch: string; lock: string; work: string; treeSafe: boolean }> = [];
 const failures: unknown[] = [];

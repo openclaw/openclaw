@@ -147,7 +147,41 @@ describe.skipIf(process.platform === "win32" || availableParallelism() < 2)(
   "parallel macOS Swift build ownership",
   () => {
     const test = createMacScriptTest();
-    test.for(["success", "failure", "wrong-source", "cancel", "cleanup-failure"])(
+    test.for(["0", "-1", "2.5", "invalid"])(
+      "rejects invalid Swift job budget %s before work",
+      async (budget, { mac }) => {
+        const root = mac.createTempDir("openclaw-swift-invalid-jobs-");
+        const stage = path.join(root, "stage");
+        const result = await mac.run(
+          process.execPath,
+          [
+            path.resolve("scripts/build-mac-swift.mts"),
+            root,
+            "release",
+            "b".repeat(40),
+            "0",
+            stage,
+            "arm64",
+          ],
+          {
+            env: { ...process.env, OPENCLAW_MAC_SWIFT_JOBS: budget },
+            encoding: "utf8",
+          },
+        );
+        expect(result.status).not.toBe(0);
+        expect(result.stderr).toContain("OPENCLAW_MAC_SWIFT_JOBS must be a positive integer");
+        expect(existsSync(stage)).toBe(false);
+      },
+    );
+    test.for([
+      "success",
+      "bounded",
+      "serial",
+      "failure",
+      "wrong-source",
+      "cancel",
+      "cleanup-failure",
+    ])(
       "joins architecture workers and preserves assembly safety: %s",
       { timeout: 15_000 },
       async (mode, { mac, onTestFinished, signal }) => {
@@ -202,10 +236,12 @@ const exited = new Promise(resolve => child.on('exit', resolve));
 process.on('SIGTERM', async () => { child.kill(); await exited; event('stopped:' + arch); process.exit(143); });
 const released = new Promise(resolve => process.once('SIGUSR2', resolve));
 console.log('ready:' + arch + ':' + process.pid);
+if (mode === 'serial') process.emit('SIGUSR2');
 await released;
 event('barrier:' + arch);
 if (mode === 'cancel' || (mode === 'failure' && arch === 'arm64')) await new Promise(() => {});
 child.kill(); await exited;
+event('done:' + arch);
 if (mode === 'failure') process.exit(42);
 fs.writeFileSync(path.join(work, 'peekaboo-commit'), mode === 'wrong-source' ? 'wrong' : commit);
 `,
@@ -253,6 +289,8 @@ touch "$ROOT_DIR/assembled"
               HOME: root,
               PATH: `${root}:${process.env.PATH}`,
               TMPDIR: path.join(root, "unavailable"),
+              OPENCLAW_MAC_SWIFT_JOBS:
+                mode === "bounded" ? "3" : mode === "serial" ? "1" : undefined,
             },
             onReady(owned) {
               child = owned;
@@ -285,20 +323,32 @@ touch "$ROOT_DIR/assembled"
           signal,
         );
         // Each worker installs its release handler before publishing its PID.
-        for (const pid of workers.values()) {
-          process.kill(pid, "SIGUSR2");
+        if (mode !== "serial") {
+          for (const pid of workers.values()) {
+            process.kill(pid, "SIGUSR2");
+          }
         }
         if (mode === "cancel") {
           child!.kill("SIGTERM");
         }
         const code = await withinTest(closed, signal);
+        const succeeds = ["success", "bounded", "serial"].includes(mode);
         expect(code, stderr).toBe(
-          mode === "success" ? 0 : mode === "cancel" ? 143 : mode === "cleanup-failure" ? 2 : 1,
+          succeeds ? 0 : mode === "cancel" ? 143 : mode === "cleanup-failure" ? 2 : 1,
         );
-        expect(existsSync(path.join(root, "assembled"))).toBe(mode === "success");
+        expect(existsSync(path.join(root, "assembled"))).toBe(succeeds);
         expect(existsSync(stage)).toBe(mode === "cleanup-failure");
         expect(readdirSync(mountParent)).toHaveLength(mode === "cleanup-failure" ? 1 : 0);
         const events = read(root, "events").trim().split("\n");
+        if (mode === "bounded" || mode === "serial") {
+          expect(events.filter((event) => event.startsWith("build:")).toSorted()).toEqual([
+            "build:arm64:1",
+            "build:x86_64:1",
+          ]);
+        }
+        if (mode === "serial") {
+          expect(events.indexOf("done:arm64")).toBeLessThan(events.indexOf("build:x86_64:1"));
+        }
         expect(events.filter((event) => event.startsWith("cleanup:")).toSorted()).toEqual([
           "cleanup:arm64",
           "cleanup:x86_64",
