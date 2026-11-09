@@ -48,7 +48,8 @@ if (interruptMode !== null) {
     };
     syncBuiltinESMExports();
   } else if (process.argv[1] && pathToFileURL(process.argv[1]).href === observer.href) {
-    const { Session } = await import("node:inspector/promises");
+    const inspector = (await import("node:inspector/promises")).default;
+    const { Session } = inspector;
     const { writeSync } = await import("node:fs");
     const { workerData, threadId } = workerThreads;
     const now = () => performance.now() + (performance.timeOrigin - workerData.timeOrigin);
@@ -70,73 +71,73 @@ if (interruptMode !== null) {
     const heartbeat = new BigInt64Array(workerData.heartbeat);
     const records = new WeakMap();
     let attempts = 0;
-    // These originals always receive their Session explicitly through .call(this) below.
-    const { connectToMainThread: connect, post, disconnect } = Session.prototype;
-    Session.prototype.connectToMainThread = function () {
-      const row = { attempt: ++attempts, atMs: now(), failed: 0 };
-      records.set(this, row);
-      emit({ event: "start", ...row });
-      const at = performance.now();
-      try {
-        if (interruptMode !== "off") {
-          connect.call(this);
+    inspector.Session = class extends Session {
+      connectToMainThread() {
+        const row = { attempt: ++attempts, atMs: now(), failed: 0 };
+        records.set(this, row);
+        emit({ event: "start", ...row });
+        const at = performance.now();
+        try {
+          if (interruptMode !== "off") {
+            super.connectToMainThread();
+          }
+        } catch (error) {
+          row.failed = 1;
+          throw error;
+        } finally {
+          row.connectCallMs = performance.now() - at;
         }
-      } catch (error) {
-        row.failed = 1;
-        throw error;
-      } finally {
-        row.connectCallMs = performance.now() - at;
       }
-    };
-    Session.prototype.post = async function (method, parameters) {
-      const row = records.get(this);
-      const at = now();
-      row.postAtMs = at;
-      const beat = Atomics.load(heartbeat, 0);
-      row.captureRequest = Number(
-        parameters?.expression ===
-          'globalThis[Symbol.for("openclaw.stallFlightRecorder.capture")]?.()',
-      );
-      try {
-        const result =
-          interruptMode === "off"
-            ? { result: { type: "undefined" } }
-            : await post.call(
-                this,
-                method,
-                interruptMode === "noop" && row.captureRequest
-                  ? { ...parameters, expression: "undefined" }
-                  : parameters,
-              );
-        const snapshot = result.result?.value;
-        row.captureMs = snapshot?.captureMs ?? null;
-        row.dispatchMs = snapshot?.endedAt === undefined ? null : snapshot.endedAt - at;
-        row.sampleCount = snapshot?.stacks?.length ?? 0;
-        row.frameCount = snapshot?.stacks?.[0]?.frames?.length ?? 0;
-        row.late = Number((row.dispatchMs ?? 0) > 100);
-        row.exception = Number(Boolean(result.exceptionDetails));
-        return result;
-      } catch (error) {
-        row.failed = 1;
-        throw error;
-      } finally {
-        row.roundTripMs = now() - at;
-        row.heartbeatChanged = Number(Atomics.load(heartbeat, 0) !== beat);
-      }
-    };
-    Session.prototype.disconnect = function () {
-      const row = records.get(this);
-      const at = performance.now();
-      try {
-        if (interruptMode !== "off") {
-          disconnect.call(this);
+      async post(method, parameters) {
+        const row = records.get(this);
+        const at = now();
+        row.postAtMs = at;
+        const beat = Atomics.load(heartbeat, 0);
+        row.captureRequest = Number(
+          parameters?.expression ===
+            'globalThis[Symbol.for("openclaw.stallFlightRecorder.capture")]?.()',
+        );
+        try {
+          const result =
+            interruptMode === "off"
+              ? { result: { type: "undefined" } }
+              : await super.post(
+                  method,
+                  interruptMode === "noop" && row.captureRequest
+                    ? { ...parameters, expression: "undefined" }
+                    : parameters,
+                );
+          const snapshot = result.result?.value;
+          row.captureMs = snapshot?.captureMs ?? null;
+          row.dispatchMs = snapshot?.endedAt === undefined ? null : snapshot.endedAt - at;
+          row.sampleCount = snapshot?.stacks?.length ?? 0;
+          row.frameCount = snapshot?.stacks?.[0]?.frames?.length ?? 0;
+          row.late = Number((row.dispatchMs ?? 0) > 100);
+          row.exception = Number(Boolean(result.exceptionDetails));
+          return result;
+        } catch (error) {
+          row.failed = 1;
+          throw error;
+        } finally {
+          row.roundTripMs = now() - at;
+          row.heartbeatChanged = Number(Atomics.load(heartbeat, 0) !== beat);
         }
-      } finally {
-        row.disconnectCallMs = performance.now() - at;
-        emit({ event: "end", ...row });
-        records.delete(this);
+      }
+      disconnect() {
+        const row = records.get(this);
+        const at = performance.now();
+        try {
+          if (interruptMode !== "off") {
+            super.disconnect();
+          }
+        } finally {
+          row.disconnectCallMs = performance.now() - at;
+          emit({ event: "end", ...row });
+          records.delete(this);
+        }
       }
     };
+    syncBuiltinESMExports();
   }
 }
 

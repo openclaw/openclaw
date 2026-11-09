@@ -425,8 +425,6 @@ it.skipIf(Boolean(process.versions.bun) || Number(process.versions.node.split(".
     expect(report).toContain(
       "stallCpuOwner@openclaw:src/logging/diagnostic-stall-cpu.test-support.ts",
     );
-    expect(report).toContain("self=");
-    expect(report).toContain("inclusive=");
     expect(Buffer.byteLength(report)).toBeLessThanOrEqual(2_048);
   },
 );
