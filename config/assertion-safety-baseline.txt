@@ -2231,11 +2231,10 @@ src/talk/provider-internal.ts	2
 src/talk/turn-context-tracker.ts	2
 src/templates/cron.ts	9
 src/templates/mcp.ts	1
-src/templates/openclaw-profile.ts	1
 src/templates/project-build.ts	4
 src/templates/project.ts	2
 src/templates/reader.ts	3
-src/templates/schema.ts	2
+src/templates/schema.ts	1
 src/trajectory/export.ts	7
 src/trajectory/runtime-store.sqlite.ts	1
 src/trajectory/runtime.ts	2
