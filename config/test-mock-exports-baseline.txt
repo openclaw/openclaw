@@ -2697,7 +2697,6 @@
 ["src/cli/daemon-cli/status.test.ts","./status.print.js","f407629804f7e304f319eaf91eac7f1a4cb69ac64d32a82dcb72fd197398ff03",1]
 ["src/cli/devices-cli.gateway.test.ts","../config/gateway-dispatch-config.js","4b8660d2c3814cb09c8a80bee9949d7cd907f86226b260f5ec2e0f68903e54cc",1]
 ["src/cli/devices-cli.lazy.test.ts","./devices-cli.runtime.js","343b88ba149c792942f434098ffdc40fc4c292a4c684d232c9aa21872e64871a",1]
-["src/cli/devices-cli.test.ts","../gateway/call.js","2b4034f14005e9374bc2239e493dbcd455f60ff3fcf88222bbb6d0aa43950547",1]
 ["src/cli/devices-cli.test.ts","../infra/device-pairing-approval.js","23708fa2736ba998b1d766d6f1f3986d070648cb6f2cc0def361476ec1b78e51",1]
 ["src/cli/devices-cli.test.ts","../infra/device-pairing-tokens.js","f2e3c8d60b2a95ca13aabf04f5fe2f435b2f4eac0c27546e69e11856a2d9be62",1]
 ["src/cli/devices-cli.test.ts","../infra/device-pairing.js","97745e3652009c1b6f573aaa570f2ff0d493ccd5edba8c187f337cfada531698",1]
