@@ -191,6 +191,79 @@ const fixture = reuseBaselineFixture((root) => {
 
 const directFixture = reuseBaselineFixture((root) => createBaselineFixture(root, 1));
 
+function nativeState(f: ReturnType<typeof fixture>) {
+  return {
+    preparedHead: f.prepGit("rev-parse", "HEAD"),
+    indexTree: f.prepGit("write-tree"),
+    hostedHead: f.git(f.repo, "rev-parse", "topic"),
+    files: Object.fromEntries(
+      [
+        "prep-context.env",
+        "prepare-baseline.json",
+        "review-transition.json",
+        "prep.env",
+        "gates.env",
+        "correction-review.json",
+        "prepare-push-result.env",
+      ].map((name) => [name, existsSync(f.local(name)) ? f.oid(name) : null]),
+    ),
+    effects: existsSync(f.effects)
+      ? readFileSync(f.effects, "utf8").trim().split(/\r?\n/u).filter(Boolean)
+      : [],
+  };
+}
+
+function replaceCustodyAfterObservation(f: ReturnType<typeof fixture>, marker: string) {
+  const gh = join(f.root, "bin/gh");
+  const injected = `const args = process.argv.slice(2);
+if (args.some(a => a === 'repos/fixture/repo/pulls/42') && !fs.existsSync(${JSON.stringify(marker)})) {
+  const ref = 'refs/openclaw/pr-operation-locks/42';
+  const held = cp.spawnSync('git', ['-C', root, 'rev-parse', '--verify', '--quiet', ref], {encoding:'utf8'});
+  if (held.status === 0 && git('cat-file', '-t', held.stdout.trim()) === 'blob') {
+    fs.writeFileSync(${JSON.stringify(marker)}, JSON.stringify({previousOwner:held.stdout.trim(),objectType:'blob'}));
+    git('update-ref', ref, ${JSON.stringify(f.source)}, held.stdout.trim());
+  }
+}`;
+  writeFileSync(
+    gh,
+    readFileSync(gh, "utf8").replace("const args = process.argv.slice(2);", injected),
+  );
+}
+
+function nativeTrace(
+  f: ReturnType<typeof fixture>,
+  scenario: string,
+  before: ReturnType<typeof nativeState>,
+  result: ReturnType<ReturnType<typeof fixture>["run"]>,
+  expectedPushes: number,
+) {
+  const canary = "SYNTHETIC_NATIVE_PROOF_SECRET_CANARY";
+  const redact = (text: string) =>
+    text
+      .replaceAll(f.root, "<fixture>")
+      .replaceAll(process.cwd(), "<implementation>")
+      .replaceAll(canary, "<redacted-canary>")
+      .replace(/SHA256:[A-Za-z0-9+/]+/gu, "<redacted-fingerprint>");
+  expect(redact(f.root + "/key " + canary)).toBe("<fixture>/key <redacted-canary>");
+  const after = nativeState(f);
+  expect(after.effects.filter((effect) => effect === "push")).toHaveLength(expectedPushes);
+  expect(after.effects.filter((effect) => effect === "graphql")).toHaveLength(0);
+  const record = JSON.stringify({
+    scenario,
+    adapter: "synthetic GitHub; real native wrapper and local Git remote",
+    ownerBlob: f.prepGit("rev-parse", "HEAD:scripts/pr-lib/baseline-refresh.mjs"),
+    before,
+    after,
+    expectedPushes,
+    exitCode: result.status,
+    stdout: redact(result.stdout),
+    stderr: redact(result.stderr),
+  });
+  expect(record).not.toContain(canary);
+  expect(record).not.toMatch(/-----BEGIN [^-]*PRIVATE KEY|gh[pousr]_[A-Za-z0-9]{20}|oauth_token/gu);
+  console.info("NATIVE_AUTHORITY_TRACE " + record);
+}
+
 describePosix("proof baseline from the retained publication lifecycle", () => {
   it("refuses both old routes, creates a descendant, then publishes only with new exact-candidate proof review", () => {
     const f = fixture();
@@ -201,7 +274,9 @@ describePosix("proof baseline from the retained publication lifecycle", () => {
       f.run(command, ["--expected-head", f.source, "--baseline", f.baseline], f.extra).status,
     ).not.toBe(0);
     f.expectSnapshot(f.before);
+    const beforeAdmission = nativeState(f);
     const result = f.run(command, f.args, f.extra);
+    nativeTrace(f, "allowed-proof-baseline-admission", beforeAdmission, result, 0);
     expect(result.status, result.stdout + result.stderr).toBe(0);
     const candidate = f.prepGit("rev-parse", "HEAD");
     expect(candidate).not.toBe(f.source);
@@ -262,7 +337,9 @@ describePosix("proof baseline from the retained publication lifecycle", () => {
       expect(f.run(denied, [], f.extra).status, denied).not.toBe(0);
       expect(existsSync(f.effects)).toBe(false);
     }
+    const beforePublication = nativeState(f);
     const pushed = f.run("prepare-publish-for-proof", [], f.extra);
+    nativeTrace(f, "allowed-exact-candidate-publication", beforePublication, pushed, 1);
     expect(pushed.status, pushed.stdout + pushed.stderr).toBe(0);
     expect(f.git(f.repo, "rev-parse", "topic")).toBe(candidate);
     expect(readFileSync(f.effects, "utf8")).toBe("push\n");
@@ -616,23 +693,15 @@ describePosix("proof baseline from the retained publication lifecycle", () => {
 
   it("refuses replaced operation custody after a hosted observation", () => {
     const f = fixture();
-    const gh = join(f.root, "bin/gh");
     const marker = f.local("owner-replaced");
-    const injected =
-      "const args = process.argv.slice(2);\nif (args.some(a => a === 'repos/fixture/repo/pulls/42') && !fs.existsSync(" +
-      JSON.stringify(marker) +
-      ")) { fs.writeFileSync(" +
-      JSON.stringify(marker) +
-      ", 'replaced'); git('update-ref', 'refs/openclaw/pr-operation-locks/42', " +
-      JSON.stringify(f.source) +
-      "); }";
-    writeFileSync(
-      gh,
-      readFileSync(gh, "utf8").replace("const args = process.argv.slice(2);", injected),
-    );
+    replaceCustodyAfterObservation(f, marker);
+    const beforeCustodyLoss = nativeState(f);
     const result = f.run(command, f.args, f.extra);
+    nativeTrace(f, "refused-replaced-custody-admission", beforeCustodyLoss, result, 0);
+    expect(nativeState(f)).toEqual(beforeCustodyLoss);
     expect(result.status, result.stdout + result.stderr).not.toBe(0);
-    expect(existsSync(marker)).toBe(true);
+    expect(JSON.parse(readFileSync(marker, "utf8")).objectType).toBe("blob");
+    expect(f.git(f.repo, "rev-parse", "refs/openclaw/pr-operation-locks/42")).toBe(f.source);
     expect(existsSync(f.local("prepare-baseline.json"))).toBe(false);
     expect(existsSync(f.local("review-transition.json"))).toBe(false);
     expect(existsSync(f.effects)).toBe(false);
@@ -675,7 +744,21 @@ describePosix("proof baseline from the retained publication lifecycle", () => {
     const refused = f.run(command, f.args, f.extra);
     expect(refused.status).not.toBe(0);
     expect(f.readLocal("review-transition.json")).toEqual(journal);
+    const replacement = f.local("recovery-owner-replaced");
+    replaceCustodyAfterObservation(f, replacement);
+    const beforeRecoveryLoss = nativeState(f);
+    const lost = f.run(command, args, f.extra);
+    nativeTrace(f, "refused-replaced-custody-recovery", beforeRecoveryLoss, lost, 0);
+    expect(lost.status, lost.stdout + lost.stderr).not.toBe(0);
+    expect(JSON.parse(readFileSync(replacement, "utf8")).objectType).toBe("blob");
+    expect(f.git(f.repo, "rev-parse", "refs/openclaw/pr-operation-locks/42")).toBe(f.source);
+    expect(nativeState(f)).toEqual(beforeRecoveryLoss);
+    expect(f.readLocal("review-transition.json")).toEqual(journal);
+    // The injected foreign ref belongs only to this settled private fixture.
+    f.git(f.repo, "update-ref", "-d", "refs/openclaw/pr-operation-locks/42", f.source);
+    const beforeRecovery = nativeState(f);
     const recovered = f.run(command, args, f.extra);
+    nativeTrace(f, "allowed-original-transition-recovery", beforeRecovery, recovered, 0);
     expect(recovered.status, recovered.stdout + recovered.stderr).toBe(0);
     expect(f.prepGit("rev-parse", "HEAD")).toBe(target);
     expect(existsSync(f.local("review-transition.json"))).toBe(false);

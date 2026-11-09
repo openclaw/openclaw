@@ -3,7 +3,6 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
 import { isDirectRunUrl } from "../lib/direct-run.mjs";
 import {
   baselineProofContinuation,
@@ -11,6 +10,12 @@ import {
 } from "./correction-continuation.mjs";
 import { validateCorrectionReview } from "./correction-review-policy.mjs";
 import { incomingReview } from "./incoming-review.mjs";
+import {
+  evidenceReplay,
+  readRegular,
+  requireCheckout,
+  requireOperationOwner,
+} from "./preparation-state.mjs";
 import { validateReviewArtifacts } from "./review-artifacts.mjs";
 import { worktreeEntry } from "./review-transition-state.mjs";
 
@@ -22,9 +27,6 @@ const modes = new Set(["100644", "100755", "120000"]);
 const decoder = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
 const present = (path) => Boolean(fs.lstatSync(path, { throwIfNoEntry: false }));
 const digest = (bytes) => createHash("sha256").update(bytes).digest("hex");
-// Invocation-local replay facts, never a persisted admission or recovery token.
-let replayFiles;
-let replayDirectories;
 
 function git(args, options = {}) {
   return execFileSync(executable, args, { maxBuffer: Infinity, ...options });
@@ -62,33 +64,6 @@ function hash(bytes, write = false) {
         fs.rmSync(directory, { recursive: true, force: true });
       }
     }
-  }
-}
-
-// Empty resolution files are valid blobs. Read the opened regular descriptor once;
-// Git receives those bytes without filters, pathname rereads or text normalization.
-export function readRegular(path) {
-  const fd = fs.openSync(path, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
-  try {
-    const before = fs.fstatSync(fd);
-    if (!before.isFile()) {
-      throw new Error(`Expected a regular file: ${path}`);
-    }
-    const bytes = fs.readFileSync(fd);
-    const after = fs.fstatSync(fd);
-    if (["size", "mtimeMs", "ctimeMs"].some((key) => before[key] !== after[key])) {
-      throw new Error(`File changed while reading: ${path}`);
-    }
-    if (replayFiles) {
-      const value = digest(bytes);
-      if (Object.hasOwn(replayFiles, path) && replayFiles[path] !== value) {
-        throw new Error("Preparation evidence changed during replay: " + path);
-      }
-      replayFiles[path] = value;
-    }
-    return bytes;
-  } finally {
-    fs.closeSync(fd);
   }
 }
 
@@ -569,8 +544,8 @@ function proofInventory(archives) {
         throw new Error("Invalid retained proof directory.");
       }
       const names = fs.readdirSync(archive).toSorted();
-      if (replayDirectories) {
-        replayDirectories[archive] = names;
+      if (evidenceReplay.directories) {
+        evidenceReplay.directories[archive] = names;
       }
       return [
         archive,
@@ -894,8 +869,8 @@ function retainedAuthority(binding) {
       if (present(archived)) {
         throw new Error(`Unexpected retained publication evidence: ${archived}`);
       }
-      if (replayFiles) {
-        replayFiles[archived] = null;
+      if (evidenceReplay.files) {
+        evidenceReplay.files[archived] = null;
       }
     }
     if ([".local/pr-meta.json", ".local/pr-meta.env", ".local/review.json"].includes(path)) {
@@ -997,32 +972,6 @@ function atomicWrite(path, bytes) {
   fs.renameSync(pending, path);
 }
 
-export function requireOperationOwner(pr, root, lockRef, lockOid) {
-  if (lockRef !== `refs/openclaw/pr-operation-locks/${pr}` || !oidPattern.test(lockOid)) {
-    throw new Error("Missing baseline transition operation owner.");
-  }
-  execFileSync("bash", [
-    "-c",
-    'source "$1"; pr_git() { "${OPENCLAW_PR_GIT:-${GIT_EXEC:-git}}" "$@"; }; pr_operation_lock_owner_is_current "$2" "$3" "$4"',
-    "baseline-operation-owner",
-    fileURLToPath(new URL("./operation-lock.sh", import.meta.url)),
-    root,
-    lockRef,
-    lockOid,
-  ]);
-}
-
-export function requireCheckout(source, anchor, branch, cwd, gitDir) {
-  if (
-    fs.realpathSync(".") !== cwd ||
-    text("rev-parse", "--absolute-git-dir") !== gitDir ||
-    text("symbolic-ref", "--short", "HEAD") !== branch ||
-    ![source, anchor].includes(text("rev-parse", `refs/heads/${branch}`))
-  ) {
-    throw new Error("Baseline transition source or preparation branch changed.");
-  }
-}
-
 function workspace(source, ownedPaths) {
   const foreign = (names) =>
     names
@@ -1122,8 +1071,8 @@ function transition(command, pr, source, anchor, branch, root, lockRef, lockOid,
   const gitDir = text("rev-parse", "--absolute-git-dir");
   const ownedPaths = paths(source, anchor);
   const work = workspace(source, ownedPaths);
-  replayFiles = {};
-  replayDirectories = {};
+  evidenceReplay.files = {};
+  evidenceReplay.directories = {};
   const journal = JSON.parse(readRegular(".local/review-transition.json"));
   exactKeys(journal, ["version", "pr", "source", "target", "mode", "branch", "binding"]);
   if (
@@ -1186,10 +1135,10 @@ function transition(command, pr, source, anchor, branch, root, lockRef, lockOid,
     }),
   );
 
-  const files = replayFiles;
-  const directories = replayDirectories;
-  replayFiles = undefined;
-  replayDirectories = undefined;
+  const files = evidenceReplay.files;
+  const directories = evidenceReplay.directories;
+  evidenceReplay.files = undefined;
+  evidenceReplay.directories = undefined;
   for (const path of [...authorityPaths, ...retiredNames.map((name) => `.local/${name}`)]) {
     const value = present(path) ? digest(readRegular(path)) : null;
     if (Object.hasOwn(files, path) && files[path] !== value) {
@@ -1505,8 +1454,8 @@ function unsignedCommit(bytes) {
 }
 
 function continueSigning(pr, oid, commitPath) {
-  replayFiles = {};
-  replayDirectories = {};
+  evidenceReplay.files = {};
+  evidenceReplay.directories = {};
   const request = readSigningRequest(pr, oid);
   if (JSON.parse(Buffer.from(request.binding, "base64")).version === 2) {
     throw new Error("Proof baseline signing continuation is unsupported.");
@@ -1569,10 +1518,10 @@ function continueSigning(pr, oid, commitPath) {
   ) {
     throw new Error("Correction review authority changed while awaiting signature.");
   }
-  const files = replayFiles;
-  const directories = replayDirectories;
-  replayFiles = undefined;
-  replayDirectories = undefined;
+  const files = evidenceReplay.files;
+  const directories = evidenceReplay.directories;
+  evidenceReplay.files = undefined;
+  evidenceReplay.directories = undefined;
   process.stdout.write(
     JSON.stringify({
       target,

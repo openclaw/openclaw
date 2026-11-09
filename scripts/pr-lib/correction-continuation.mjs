@@ -4,8 +4,8 @@ import fs from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { isDirectRunUrl } from "../lib/direct-run.mjs";
-import { readRegular, requireCheckout, requireOperationOwner } from "./baseline-refresh.mjs";
 import { incomingReview } from "./incoming-review.mjs";
+import { readRegular, requireCheckout, requireOperationOwner } from "./preparation-state.mjs";
 
 const scripts = dirname(fileURLToPath(import.meta.url));
 const executable = process.env.OPENCLAW_PR_GIT || process.env.GIT_EXEC || "git";
