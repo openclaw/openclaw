@@ -54,7 +54,10 @@ function missingVisibleReplyResult(completedSuccessfully: boolean): SubagentAnno
     path: "direct",
     reason: "visible_reply_missing",
     error: "completion agent did not produce a visible reply",
-    ...(completedSuccessfully ? { disposition: "retryable" as const } : {}),
+    // A completed run's final reply is settled: retrying the same completion cannot
+    // produce text that was never written, so re-admission only repeats the failure
+    // until the dedupe window expires. Suspending is the durable outcome.
+    ...(completedSuccessfully ? { disposition: "permanent_failure" as const } : {}),
   };
 }
 
