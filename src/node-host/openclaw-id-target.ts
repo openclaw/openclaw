@@ -38,7 +38,7 @@ export function dialableNodeHostOpenClawIdTarget(
   const { discoveryUrl } = target;
   if (discoveryUrl === undefined) {
     throw new Error(
-      "OpenClaw ID Discovery origin is missing; re-join this node with a new link and --discovery-url",
+      "OpenClaw ID Discovery origin is missing; ask the owner to remove this node on the Access page, then re-join this node with a new link and --discovery-url",
     );
   }
   return { ...target, discoveryUrl };

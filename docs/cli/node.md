@@ -528,8 +528,8 @@ IP transports remain enabled so iroh can establish a direct encrypted path.
 
 The public target requires `discoveryUrl`, the deployment-selected Discovery
 API origin for enrollment and descriptor refresh. A preview target saved without
-it does not connect: re-join with a new link and `--discovery-url`, which keeps the
-target's verified trust. The origin is never inferred from
+it does not connect: ask the owner to remove the node on the Access page, then re-join
+with a new link and `--discovery-url`, which keeps the target's verified trust. The origin is never inferred from
 the claw hostname or relay URL. Enrollment saves the selected origin; an explicit
 `--discovery-url` overrides a saved origin. There is no default Discovery origin.
 The origin must use HTTPS (HTTP is allowed
