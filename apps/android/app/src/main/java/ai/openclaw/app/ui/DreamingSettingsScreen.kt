@@ -122,7 +122,7 @@ private fun DreamDiaryRow(entry: GatewayDreamDiaryEntry) {
         maxLines = 1,
         overflow = TextOverflow.Ellipsis,
       )
-      Text(text = entry.text, style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted, maxLines = 2, overflow = TextOverflow.Ellipsis)
+      Text(text = entry.text, style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted)
     }
   }
 }
