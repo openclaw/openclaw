@@ -264,7 +264,9 @@ describe("independent release child reuse", () => {
       active += 1;
       peak = Math.max(peak, active);
       try {
-        await new Promise<void>((resolve) => setTimeout(resolve, 2_000 + (4 - (attempt % 4)) * 100));
+        await new Promise<void>((resolve) => {
+          setTimeout(resolve, 2_000 + (4 - (attempt % 4)) * 100);
+        });
         if (/per_page=(100|50)&page=2$/u.test(endpoint)) {
           throw new Error("gh: Server Error (HTTP 502)");
         }
@@ -318,7 +320,9 @@ describe("independent release child reuse", () => {
       started.push(attempt);
       active += 1;
       try {
-        await new Promise<void>((resolve) => setTimeout(resolve, attempt === 1 ? 1_000 : 2_000));
+        await new Promise<void>((resolve) => {
+          setTimeout(resolve, attempt === 1 ? 1_000 : 2_000);
+        });
         if (attempt === 1) {
           throw new Error("gh: Forbidden (HTTP 403)");
         }
