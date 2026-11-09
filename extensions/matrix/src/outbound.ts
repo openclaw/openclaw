@@ -13,11 +13,12 @@ import {
   renderMessagePresentationFallbackText,
   type MessagePresentation,
 } from "openclaw/plugin-sdk/interactive-runtime";
+import { chunkMarkdownTextWithMode } from "openclaw/plugin-sdk/reply-chunking";
 import {
   resolveSendableOutboundReplyParts,
   sendPayloadMediaSequence,
 } from "openclaw/plugin-sdk/reply-payload";
-import { chunkMarkdownText, type ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
+import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { sendMessageMatrix, sendPollMatrix } from "./matrix/send.js";
 import type { MatrixExtraContentFields } from "./matrix/send/types.js";
@@ -153,7 +154,7 @@ async function sendMatrixOutbound(
 
 export const matrixOutbound: ChannelOutboundAdapter = {
   deliveryMode: "direct",
-  chunker: chunkMarkdownText,
+  chunker: (text, limit) => chunkMarkdownTextWithMode(text, limit, "length"),
   chunkerMode: "markdown",
   textChunkLimit: 4000,
   presentationCapabilities: matrixPresentationCapabilities,

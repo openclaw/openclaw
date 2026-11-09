@@ -33,7 +33,7 @@ import {
   createLazyRuntimeNamedExport,
   createLazyRuntimeModule,
 } from "openclaw/plugin-sdk/lazy-runtime";
-import { chunkMarkdownText } from "openclaw/plugin-sdk/reply-runtime";
+import { chunkMarkdownTextWithMode } from "openclaw/plugin-sdk/reply-chunking";
 import {
   buildProbeChannelStatusSummary,
   collectStatusIssuesFromLastError,
@@ -286,7 +286,7 @@ function matchesMatrixToolContextRoom(params: {
 
 const matrixChannelOutbound: ChannelOutboundAdapter = {
   deliveryMode: "direct",
-  chunker: chunkMarkdownText,
+  chunker: (text, limit) => chunkMarkdownTextWithMode(text, limit, "length"),
   chunkerMode: "markdown",
   textChunkLimit: 4000,
   sanitizeText: ({ text }) => sanitizeAssistantVisibleText(text),
