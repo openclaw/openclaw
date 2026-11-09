@@ -82,6 +82,9 @@ for (const scenario of ["allowed", "revoked"] as const) {
           NODE_EXTRA_CA_CERTS: github.cert,
           NO_PROXY: [process.env.NO_PROXY, "127.0.0.1", "localhost"].filter(Boolean).join(","),
           no_proxy: [process.env.no_proxy, "127.0.0.1", "localhost"].filter(Boolean).join(","),
+          // This fixture owns command selection; CLI PATH bootstrap would otherwise
+          // prefer system gh over the isolated GitHub transport on a clean CI host.
+          OPENCLAW_PATH_BOOTSTRAPPED: "1",
           PATH: path.dirname(git) + path.delimiter + process.env.PATH,
           TMPDIR: root,
           XDG_CACHE_HOME: path.join(root, "cache"),
