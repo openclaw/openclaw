@@ -172,6 +172,9 @@ export function prepareSessionTranscriptHydration(
         memory.assertCurrent();
         return {
           kind: "transcript-maintenance",
+          ...(request.operation === "code-mode-store" && request.leafEntryId === null
+            ? { store: { writes: new Map(), incremental: false } }
+            : {}),
           ...(request.operation === "custom-branch" && request.leafEntryId === null
             ? { events: [] }
             : {}),
