@@ -381,6 +381,135 @@ select.usage-select {
   max-width: min(320px, calc(100vw - 48px));
 }
 
+/* Searchable value lists: the search stays put while the rows scroll under it. */
+.oc-menu.usage-value-picker {
+  --oc-overlay-max-width: min(320px, calc(100dvw - 16px));
+
+  width: min(300px, calc(100dvw - 16px));
+  padding: 0;
+  overflow: hidden;
+  background: var(--bg-elevated);
+}
+
+.usage-value-picker__search {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 8px;
+  height: 40px;
+  padding: 0 8px 0 12px;
+  border-bottom: 1px solid var(--border);
+  color: var(--muted);
+}
+
+.usage-value-picker__search > svg {
+  flex: none;
+  width: 14px;
+  height: 14px;
+}
+
+.usage-value-picker__search input {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  padding: 0;
+  border: 0;
+  outline: 0;
+  background: none;
+  color: var(--text-strong);
+  font: inherit;
+  font-size: var(--control-ui-text-sm);
+}
+
+.usage-value-picker__search input::placeholder {
+  color: var(--text-tertiary);
+}
+
+.usage-value-picker__action {
+  flex: none;
+  padding: 2px 6px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--muted);
+  font: inherit;
+  font-size: var(--control-ui-text-xs);
+  cursor: var(--cursor-action);
+}
+
+.usage-value-picker__action:is(:hover, :focus-visible) {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+.usage-value-picker__list {
+  max-height: min(288px, calc(var(--oc-overlay-available-height, 100dvh) - 56px));
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: var(--menu-padding);
+}
+
+.usage-value-picker__option .oc-menu-item__icon:has(> :empty) {
+  display: none;
+}
+
+.usage-value-picker__label {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+}
+
+.usage-value-picker__name,
+.usage-value-picker__secondary {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.usage-value-picker__secondary {
+  color: var(--text-tertiary);
+}
+
+.usage-value-picker__count {
+  font-variant-numeric: tabular-nums;
+}
+
+.usage-value-picker__empty {
+  padding: 10px 8px;
+  color: var(--muted);
+  font-size: var(--control-ui-text-sm);
+}
+
+.usage-creator-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 240px;
+  color: var(--text);
+  cursor: var(--cursor-action);
+}
+
+.usage-creator-trigger__label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.usage-creator-trigger > .oc-menu-item__label {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.usage-creator-trigger svg {
+  flex: none;
+  width: 14px;
+  height: 14px;
+  color: var(--muted);
+}
+
 .usage-filter-option {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr);
@@ -393,7 +522,8 @@ select.usage-select {
   font-size: 12px;
 }
 
-.usage-filter-option .oc-menu-item__check {
+.usage-filter-option .oc-menu-item__check,
+.usage-value-picker__option .oc-menu-item__check {
   order: 0;
   margin-inline-start: 0;
 }
