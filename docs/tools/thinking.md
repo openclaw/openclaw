@@ -94,6 +94,30 @@ cannot be made non-thinking by changing an effort label.
 6. Global default (`agents.defaults.thinkingDefault` in config).
 7. Fallback: provider-declared default when available; otherwise reasoning-capable models resolve to `medium` or the nearest supported non-`off` level for that model, and non-reasoning models stay `off`. For declared Qwen chat-template models, this fallback does not send a nested effort: the server keeps its template default until a turn, session, or configuration selects a level.
 
+### Subagent spawns
+
+A native `sessions_spawn` child resolves its own level from a separate chain, and the
+target agent's `thinkingDefault` is not part of it. In order:
+
+1. An explicit `sessions_spawn.thinking` argument.
+2. The requester agent's `agents.entries.*.subagents.thinking`.
+3. The target agent's `agents.entries.*.subagents.thinking`.
+4. `agents.defaults.subagents.thinking`.
+5. The caller's own selected level, when that level was chosen explicitly rather than
+   inherited from an automatic parent tier.
+
+The first value that resolves is saved on the child session as its initial
+`thinkingLevel`, so it also outranks the child's own `thinkingDefault` on every
+subsequent turn. When none of the five applies, the child uses its own model default
+like any other turn. ACP runtime spawns go one step further and also apply the target
+agent's `thinkingDefault`, then its per-model `params.thinking`.
+
+To make a native child run at a level regardless of the caller, set
+`agents.entries.<target>.subagents.thinking` on the target; a requester-side
+`subagents.thinking` still wins over it. Source:
+`src/agents/subagents/spawn/subagent-spawn-thinking.ts`, shared by native spawns
+(`subagent-spawn-plan.ts`) and ACP spawns (`acp-spawn-runtime.ts`).
+
 ## Setting a model default
 
 Use `params.thinking` to set the default for one configured model without changing
