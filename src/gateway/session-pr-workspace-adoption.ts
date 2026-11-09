@@ -84,23 +84,31 @@ export async function adoptUnboundPullRequestWorkspace(params: {
           candidate.cleanupUncertain ||
           candidate.finalizationFailed),
     );
-    const child = listSubagentRunsForRequester(target.sessionKey, {
-      requesterSessionId: entry.sessionId,
-      requesterLifecycleRevision: entry.lifecycleRevision,
-      requesterAgentId: target.agentId,
-      requesterStorePath: target.storePath,
-    }).find(
-      (run) =>
-        run.execution.endedAt === undefined ||
-        run.killReconciliation ||
-        run.requesterSettleWake ||
-        run.delivery?.status === "pending" ||
-        run.delivery?.status === "in_progress",
-    );
+    const describeProcess = (exec: NonNullable<typeof process>) =>
+      !exec.exited
+        ? `background exec ${exec.id} is still running; poll or kill it`
+        : exec.finalizing
+          ? `background exec ${exec.id} is still cleaning up; poll it until it settles`
+          : `background exec ${exec.id} could not confirm its cleanup; inspect it with process log`;
+    const child = () =>
+      listSubagentRunsForRequester(target.sessionKey, {
+        requesterSessionId: entry.sessionId,
+        requesterLifecycleRevision: entry.lifecycleRevision,
+        requesterAgentId: target.agentId,
+        requesterStorePath: target.storePath,
+      }).find(
+        (run) =>
+          run.execution.endedAt === undefined ||
+          run.killReconciliation ||
+          run.requesterSettleWake ||
+          run.delivery?.status === "pending" ||
+          run.delivery?.status === "in_progress",
+      );
+    const blockingChild = process ? undefined : child();
     const blocker = process
-      ? `background exec ${process.id} ${process.exited ? "is still cleaning up" : "is still running"}; poll or kill it`
-      : child
-        ? `child ${child.childSessionKey} has not finished or delivered its result`
+      ? describeProcess(process)
+      : blockingChild
+        ? `child ${blockingChild.childSessionKey} has not finished or delivered its result`
         : context.terminalSessions?.listAgent({
               kind: "agent",
               agentId: target.agentId,
