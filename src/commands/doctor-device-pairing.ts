@@ -21,6 +21,7 @@ import {
 import { formatErrorMessage } from "../infra/errors.js";
 import { normalizeDeviceAuthScopes, type DeviceAuthEntry } from "../shared/device-auth.js";
 import { roleScopesAllow } from "../shared/operator-scope-compat.js";
+import { shortenHomeInString } from "../utils.js";
 
 const DEVICE_PAIRING_CHECK_ID = "core/doctor/device-pairing";
 
@@ -269,7 +270,7 @@ function describeLocalDeviceAuthReadFailure(subject: string, error: unknown): He
     docsUrl: "https://docs.openclaw.ai/cli/devices",
     path: "identity.device-auth",
     requirement: "local-device-auth-unreadable",
-    message: `Could not read ${subject}, so local device token scopes were not checked: ${sanitizeTerminalText(formatErrorMessage(error))}`,
+    message: `Could not read ${subject}, so local device token scopes were not checked: ${sanitizeTerminalText(shortenHomeInString(formatErrorMessage(error)))}`,
     fixHint: `Keep the client credential store and correct the reported access or corruption error, then rerun openclaw doctor and inspect the device with ${inspectCommand}.`,
   };
 }

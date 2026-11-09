@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -80,6 +81,7 @@ function pairedDevice(overrides: Partial<GatewayPairedDevice> = {}) {
 }
 
 describe("collectDevicePairingHealthFindings", () => {
+  const unreadablePath = path.join(os.homedir(), ".openclaw", "client", "credentials.sqlite");
   let collectDevicePairingHealthFindings: typeof import("./doctor-device-pairing.js").collectDevicePairingHealthFindings;
   const collect = (mode: "local" | "remote", healthOk = false) =>
     collectDevicePairingHealthFindings({ cfg: { gateway: { mode } }, healthOk });
@@ -278,8 +280,10 @@ describe("collectDevicePairingHealthFindings", () => {
       stub: async () =>
         vi
           .spyOn(await import("../infra/device-auth-store.js"), "loadDeviceAuthTokens")
-          .mockRejectedValueOnce(new Error("synthetic inventory failure")),
-      message: "Could not read the local device auth token inventory",
+          .mockRejectedValueOnce(
+            new Error(`EACCES: permission denied, realpath '${unreadablePath}'`),
+          ),
+      message: `Could not read the local device auth token inventory, so local device token scopes were not checked: EACCES: permission denied, realpath '${path.join("~", ".openclaw", "client", "credentials.sqlite")}'`,
     },
   ] as const)(
     "reports an unreadable local $name instead of a clean device check",
@@ -287,7 +291,8 @@ describe("collectDevicePairingHealthFindings", () => {
       await withApprovedOperatorPairing(async () => {
         using rejected = await stub();
 
-        await expect(collect("local")).resolves.toEqual([
+        const findings = await collect("local");
+        expect(findings).toEqual([
           expect.objectContaining({
             severity: "warning",
             category: "fix-now",
@@ -297,6 +302,7 @@ describe("collectDevicePairingHealthFindings", () => {
             fixHint: expect.stringContaining("openclaw devices list"),
           }),
         ]);
+        expect(findings[0]?.message).not.toContain(unreadablePath);
         expect(rejected).toHaveBeenCalledOnce();
       });
     },
