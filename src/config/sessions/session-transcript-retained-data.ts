@@ -7,10 +7,7 @@ import {
   jsonRemovePaths,
   jsonSetPath,
 } from "../../infra/database-engine/json-values.js";
-import {
-  executeSqliteQuerySync,
-  executeSqliteQueryTakeFirstSync,
-} from "../../infra/kysely-sync.js";
+import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
 import type { EngineConnection } from "../../infra/sql-connection.js";
 import { isPostgresSqlConnection } from "../../infra/sql-connection.js";
 import {
@@ -162,24 +159,6 @@ export function copyRetainedTranscriptPayload(
   parentId?: string | null,
 ): void {
   const db = getSessionKysely(database.db);
-  // Parent repair of a row native fields cannot decode happens in JavaScript.
-  const exceptionalJson =
-    parentId === undefined
-      ? undefined
-      : executeSqliteQueryTakeFirstSync(
-          database.db,
-          db
-            .selectFrom("transcript_events")
-            .select(
-              /* kysely-allow-raw: only rows JSONB rejects are materialized in JavaScript. */
-              sql<
-                string | null
-              >`CASE WHEN ${jsonNativeFieldsValid(database.db, transcriptEventJsonSql(database.db))}
-                THEN NULL ELSE ${transcriptEventJsonSql(database.db)} END`.as("event_json"),
-            )
-            .where("session_id", "=", sessionId)
-            .where("seq", "=", sourceSeq),
-        )?.event_json;
   const copied = withSqliteDatabaseWriteScope(
     database.db,
     [sqliteSessionIdWriteScope(sessionId)],
@@ -196,14 +175,12 @@ export function copyRetainedTranscriptPayload(
                 const eventJson: AliasableExpression<string | null> =
                   parentId === undefined
                     ? eb.ref("event_json")
-                    : typeof exceptionalJson === "string"
-                      ? /* kysely-allow-raw: bound JavaScript-repaired JSON text. */ sql<string>`CAST(${JSON.stringify(Object.assign(JSON.parse(exceptionalJson), { parentId }))} AS TEXT)`
-                      : jsonSetPath(
-                          database.db,
-                          transcriptEventJsonSql(database.db),
-                          sql.lit("$.parentId"),
-                          sql.val(parentId),
-                        );
+                    : jsonSetPath(
+                        database.db,
+                        transcriptEventJsonSql(database.db),
+                        sql.lit("$.parentId"),
+                        sql.val(parentId),
+                      );
                 return [
                   eb.val(sessionId).as("session_id"),
                   eb.val(destinationSeq).as("seq"),

@@ -12,6 +12,7 @@ import {
   executeSqliteQueryTakeFirstSync,
   iterateSqliteQuerySync,
 } from "../../infra/kysely-sync.js";
+import { isPostgresSqlConnection } from "../../infra/sql-connection.js";
 import { currentSqliteOperationTiming } from "../../infra/sqlite-reader-lifecycle.js";
 import { withCurrentProjectionSnapshot } from "./session-accessor.sqlite-active-projection.js";
 import type {
@@ -463,11 +464,16 @@ export function readSessionTranscriptBoundedActiveContextCore(
       /* kysely-allow-raw: fixed materialized navigation column shared by dependency predicates. */ sql.ref<string>(
         "dependency.navigation_json",
       );
-    // Rows native fields cannot decode reach the JavaScript classifier below unfiltered.
+    // PostgreSQL rows JSONB cannot decode reach the JavaScript classifier below unfiltered;
+    // SQLite decodes these escapes natively and keeps its covered-fact plan.
+    const postgres = isPostgresSqlConnection(projection.database.db);
     const dependencyNative = jsonNativeFieldsValid(projection.database.db, dependencyNavigation);
-    const dependencyField = <T = string | null>(path: string) =>
-      /* kysely-allow-raw: CASE fences native decoding of escapes JSONB rejects. */
-      sql<T>`CASE WHEN ${dependencyNative} THEN ${jsonPathValue<T>(projection.database.db, dependencyNavigation, sql.val(path))} END`;
+    const dependencyField = <T = string | null>(path: string) => {
+      const value = jsonPathValue<T>(projection.database.db, dependencyNavigation, sql.val(path));
+      return postgres
+        ? /* kysely-allow-raw: CASE fences native decoding of escapes JSONB rejects. */ sql<T>`CASE WHEN ${dependencyNative} THEN ${value} END`
+        : value;
+    };
     const dependencyCandidates = Array.from(
       iterateSqliteQuerySync(
         projection.database.db,
@@ -516,7 +522,7 @@ export function readSessionTranscriptBoundedActiveContextCore(
           .select(["event_seq", "navigation_json", "serialized_bytes"])
           .where((eb) =>
             eb.or([
-              eb.not(dependencyNative),
+              ...(postgres ? [eb.not(dependencyNative)] : []),
               eb.and([
                 eb("context_eligible", "=", 0),
                 eb(

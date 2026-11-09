@@ -207,7 +207,7 @@ export function readTranscriptMirrorFacts(
           const event = JSON.parse(row.event_json) as TranscriptEvent;
           if (row.is_source) {
             if (
-              Number(row.is_source) === 2 &&
+              row.is_source === 2 &&
               readSessionTranscriptRunId(readTranscriptEventMessage(event)) !== sourceRunId
             ) {
               continue;
