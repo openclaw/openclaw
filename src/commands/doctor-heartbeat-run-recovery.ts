@@ -1,5 +1,6 @@
 import { resolveDefaultAgentId } from "../agents/agent-scope-config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { cloneCronJobForMutation } from "../cron/service/jobs-mutation.js";
 import type { DeferredCronNotifications } from "../cron/service/state.js";
 import { receiptFromRow, type CronRunReceiptDatabase } from "../cron/store/run-receipt-read.js";
 import { prepareCronRunReceiptWriteSchema } from "../cron/store/run-receipt-write-admission.js";
@@ -12,6 +13,7 @@ import { DoctorMaintenanceRefusalError } from "../infra/update-doctor-result.js"
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
 import type { OpenClawStateDatabase } from "../state/openclaw-state-db-contract.js";
+import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import type { DoctorCronJob } from "./doctor-heartbeat-jobs.js";
 
 export class DoctorHeartbeatMigrationDeferredError extends DoctorMaintenanceRefusalError {
@@ -41,13 +43,15 @@ export function recoverDoctorHeartbeatRun(params: {
   owner.assertCurrent();
   // Maintenance admission has verified legacy Gateway shutdown and excluded a
   // current Gateway writer. A persisted marker now belongs to startup recovery.
-  const recovered = {
+  // Notification-dependent recovery may roll back its savepoint. Keep the
+  // original run state for conversion and the Gateway's subsequent recovery.
+  const recovered = cloneCronJobForMutation({
     ...job,
     payload:
       job.payload.kind === "heartbeat"
         ? { ...job.payload, kind: "systemEvent" as const, text: "" }
         : job.payload,
-  };
+  });
   const receiptRow = executeSqliteQuerySync(
     database.db,
     getNodeSqliteKysely<CronRunReceiptDatabase>(database.db)
@@ -59,28 +63,46 @@ export function recoverDoctorHeartbeatRun(params: {
   ).rows[0];
   const notifications: DeferredCronNotifications = [];
   const logs: CronRunRecoveryOutcome["logs"] = [];
-  const result = recoverCronJobInDatabase({
-    database,
-    storeKey,
-    job: recovered,
-    receipt: receiptRow ? receiptFromRow(receiptRow) : undefined,
-    receiptSchema: prepareCronRunReceiptWriteSchema(database.db),
-    state: {
-      deps: {
-        nowMs: () => nowMs,
-        cronConfig: cfg.cron,
-        defaultAgentId: resolveDefaultAgentId(cfg),
-        log: createCronMutationLogger(logs),
+  const startupRequired = new Error("Cron recovery requires Gateway notification dispatch");
+  let result: ReturnType<typeof recoverCronJobInDatabase>;
+  try {
+    result = runOpenClawStateWriteTransaction(
+      () => {
+        const outcome = recoverCronJobInDatabase({
+          database,
+          storeKey,
+          job: recovered,
+          receipt: receiptRow ? receiptFromRow(receiptRow) : undefined,
+          receiptSchema: prepareCronRunReceiptWriteSchema(database.db),
+          state: {
+            deps: {
+              nowMs: () => nowMs,
+              cronConfig: cfg.cron,
+              defaultAgentId: resolveDefaultAgentId(cfg),
+              log: createCronMutationLogger(logs),
+            },
+          },
+          notifications,
+        });
+        if (notifications.length) {
+          throw startupRequired;
+        }
+        return outcome;
       },
-    },
-    notifications,
-  });
-  if (notifications.length) {
-    // Offline Doctor cannot deliver startup notifications. Roll back settlement
-    // with the conversion so Gateway startup can recover and dispatch them.
-    throw new DoctorHeartbeatMigrationDeferredError(
-      `Heartbeat migration deferred: automation ${job.id} needs Gateway startup recovery notifications. Its job and configuration were retained; restart the Gateway, then rerun openclaw doctor --fix.`,
+      { database },
+      { operationLabel: "doctor.heartbeat-run-recovery" },
     );
+  } catch (error) {
+    if (error !== startupRequired) {
+      throw error;
+    }
+    // Commit conversion with the original marker/history/receipt. The ordinary
+    // payload survives runtime loading, so startup recovers and dispatches the
+    // notification once instead of quarantining a retired heartbeat row.
+    createSubsystemLogger("cron").warn(
+      `Automation ${job.id} converted; run recovery and its notifications will complete at the next Gateway start.`,
+    );
+    return job;
   }
   const log = createSubsystemLogger("cron");
   for (const entry of logs) {

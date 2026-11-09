@@ -11,10 +11,20 @@ import * as doctorMaintenance from "../commands/doctor-maintenance.js";
 import { runDoctorSessionSqlite } from "../commands/doctor-session-sqlite.js";
 import { loadExactSessionEntry } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { cronRunLogEntryToDetail } from "../cron/run-history-detail.js";
+import { CronService } from "../cron/service.js";
 import { resolveCronJobsStorePathFromConfig } from "../cron/store.js";
 import { resolveCronStoreKeyInDatabase } from "../cron/store/paths.js";
-import { loadCronRows, upsertCronJobRow } from "../cron/store/row-codec.js";
-import { readCronRunRecordsInDatabase } from "../cron/store/run-history.kernel.js";
+import { readCronQuarantinedJobsInDatabase } from "../cron/store/quarantine.kernel.js";
+import {
+  loadedCronStoreFromRows,
+  loadCronRows,
+  upsertCronJobRow,
+} from "../cron/store/row-codec.js";
+import {
+  readCronRunRecordsInDatabase,
+  recordCronRunInDatabase,
+} from "../cron/store/run-history.kernel.js";
 import { replaceCronRuntimeAuthorityRows } from "../cron/store/runtime-authority-store.js";
 import { getCronStoreKysely } from "../cron/store/schema.js";
 import * as runtimePaths from "../daemon/runtime-paths.js";
@@ -29,6 +39,7 @@ import { getFileLockProcessStartTime } from "../shared/pid-alive.js";
 import { withExistingOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import type { OpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { runDoctorHealthFlow } from "./doctor-health.js";
 const { mocks, createDoctorRuntime, createDoctorConfig, stubDoctorEnv, withDoctorState } =
@@ -182,7 +193,7 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 
-it.each(["stopped", "live", "unproved"] as const)(
+it.each(["stopped", "live", "unproved", "notification"] as const)(
   "keeps update Doctor successful with a %s heartbeat runtime owner",
   async (ownership) => {
     await resultState(async (state, resultPath) => {
@@ -191,6 +202,8 @@ it.each(["stopped", "live", "unproved"] as const)(
       const configBefore = fs.readFileSync(state.configPath);
       const storePath = resolveCronJobsStorePathFromConfig(cfg, state.env);
       const runningAtMs = Date.now() - 1_000;
+      const startupNotification = ownership === "notification";
+      const offline = ownership === "stopped" || startupNotification;
       const storeKey = runOpenClawStateWriteTransaction(
         ({ db }) => {
           const key = resolveCronStoreKeyInDatabase(db, storePath, state.env);
@@ -209,7 +222,7 @@ it.each(["stopped", "live", "unproved"] as const)(
               sessionTarget: "main",
               wakeMode: "next-heartbeat",
               payload: { kind: "systemEvent", text: "legacy placeholder" },
-              state: { runningAtMs },
+              state: { runningAtMs, ...(startupNotification ? { consecutiveErrors: 9 } : {}) },
             },
             0,
           );
@@ -229,6 +242,31 @@ it.each(["stopped", "live", "unproved"] as const)(
               })
               .where("store_key", "=", key),
           );
+          if (startupNotification) {
+            recordCronRunInDatabase(db, {
+              storeKey: key,
+              jobId: job.id,
+              runId: `cron:${job.id}:${runningAtMs}`,
+              agentId: "main",
+              startedAt: runningAtMs,
+              endedAt: runningAtMs + 500,
+              status: "failed",
+              error: "synthetic provider failure",
+              detail: cronRunLogEntryToDetail(
+                {
+                  ts: runningAtMs + 500,
+                  jobId: job.id,
+                  action: "finished",
+                  status: "error",
+                  completionStatus: "failed",
+                  error: "synthetic provider failure",
+                  runAtMs: runningAtMs,
+                  durationMs: 500,
+                },
+                { storeKey: key },
+              ),
+            });
+          }
           return key;
         },
         { env: state.env },
@@ -242,9 +280,10 @@ it.each(["stopped", "live", "unproved"] as const)(
           { env: state.env },
         )!;
       const before = read();
+      await seedCompletedRuntimePinMigration(state.env);
       let live: Awaited<ReturnType<typeof acquireGatewayLock>> | undefined;
       try {
-        if (ownership !== "stopped") {
+        if (!offline) {
           // Admission has its own live-writer refusal coverage. Reach the migration
           // guard here with a real live owner or no established offline custody.
           vi.spyOn(doctorMaintenance, "beginDoctorMaintenance").mockResolvedValue(undefined);
@@ -260,10 +299,9 @@ it.each(["stopped", "live", "unproved"] as const)(
           );
         }
         const service = managedService(state);
-        await seedCompletedRuntimePinMigration(state.env);
         mocks.config.mockReturnValue(cfg);
         mocks.runContributions.mockImplementation(async () => {
-          if (ownership === "stopped") {
+          if (offline) {
             expect(await service.readRuntime()).toMatchObject({ status: "stopped" });
           }
           await retireHeartbeatWithDoctor(cfg, state.env);
@@ -272,7 +310,63 @@ it.each(["stopped", "live", "unproved"] as const)(
         await expect(runDoctor(runtime)).resolves.toBeUndefined();
         expect(runtime.exit).not.toHaveBeenCalledWith(1);
         const after = read();
-        if (ownership === "stopped") {
+        if (startupNotification) {
+          expectResult(resultPath, { status: "ok" });
+          expect(loadedCronStoreFromRows(after.rows).store.jobs[0]).toMatchObject({
+            payload: { kind: "agentTurn" },
+            enabled: true,
+            state: { runningAtMs, consecutiveErrors: 9 },
+          });
+          expect(after.history).toEqual(before.history);
+          const notified = Promise.withResolvers<void>();
+          const enqueueSessionEvent = vi.fn(async () => {
+            notified.resolve();
+            return { ok: true as const };
+          });
+          const cron = new CronService({
+            scheduler: createTestGatewayScheduler(),
+            storePath,
+            cronEnabled: true,
+            defaultAgentId: "main",
+            nowMs: () => runningAtMs + 1_000,
+            log: { debug() {}, info() {}, warn() {}, error() {} },
+            enqueueSystemEvent: vi.fn(),
+            enqueueSessionEvent,
+            runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
+          });
+          const gateway = await acquireGatewayLock({
+            env: state.env,
+            role: "gateway",
+            allowInTests: true,
+          });
+          try {
+            await gateway!.run(() => cron.start());
+            await notified.promise;
+            expect(enqueueSessionEvent).toHaveBeenCalledExactlyOnceWith(
+              expect.stringContaining("10 consecutive run failures"),
+              expect.objectContaining({ agentId: "main", jobId: "interrupted-monitor" }),
+            );
+            const settled = read();
+            const recovered = loadedCronStoreFromRows(settled.rows).store.jobs[0]!;
+            expect(recovered).toMatchObject({
+              payload: { kind: "agentTurn" },
+              enabled: false,
+              state: { consecutiveErrors: 10, autoDisabled: { reason: "consecutive-failures" } },
+            });
+            expect(recovered.state.runningAtMs).toBeUndefined();
+            expect(settled.history).toEqual(after.history);
+            expect(
+              withExistingOpenClawStateDatabaseReadOnly(
+                ({ db }) => readCronQuarantinedJobsInDatabase(db, storeKey),
+                { env: state.env },
+              ),
+            ).toEqual([]);
+          } finally {
+            cron.stop();
+            await cron.waitForIdle();
+            await gateway?.release();
+          }
+        } else if (ownership === "stopped") {
           expectResult(resultPath, { status: "ok" });
           expect(after.rows[0]?.payload_kind).toBe("agentTurn");
           expect(JSON.parse(after.rows[0]!.state_json)).toMatchObject({
