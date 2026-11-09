@@ -181,6 +181,52 @@ it("measures an appended end row before starting a smooth journey", async () => 
   expect(targets.every((height) => height === 1354)).toBe(true);
 });
 
+it("follows a growing final row while cold history measurements settle", async () => {
+  await page.viewport(1200, 900);
+  saveChatSessionScrollPosition("end-follow-browser", "agent:main:end-follow", {
+    scrollTop: 0,
+    anchorToEnd: false,
+  });
+  const host = new EndFollowFixture();
+  fixture = host;
+  host.earlierRowHeight = 33.5;
+  host.lastRowHeight = 35;
+  host.olderRows = Array.from({ length: 800 }, (_, index): TranscriptRow => {
+    const content = document.createElement("div");
+    content.style.height = `${index % 2 ? 35 : 33.5}px`;
+    content.textContent = `Earlier result ${index}`;
+    return { kind: "content", key: `cold-${index}`, estimatedSize: 240, content };
+  });
+  host.style.cssText = "display: block; width: 800px";
+  document.body.append(host);
+  await host.settleUpdates();
+  const thread = host.querySelector<HTMLElement>(".chat-thread")!;
+  const distance = () => thread.scrollHeight - thread.clientHeight - thread.scrollTop;
+  await expect.poll(() => thread.scrollTop).toBe(0);
+  host.transcript.scrollToEnd({ behavior: "smooth" });
+  await expect.poll(distance, { timeout: 5_000 }).toBeLessThanOrEqual(1);
+  for (let index = 0; index < 30; index++) {
+    host.lastRowHeight += 3.5;
+    host.requestRender();
+    await host.updateComplete;
+    await settleFrames();
+  }
+  await settleFrames();
+  expect(Math.abs(distance())).toBeLessThanOrEqual(8);
+});
+
+it("releases a completed Latest target when the reader takes over without moving", async () => {
+  const { host, thread, extent } = await mountFollowingFixture();
+  host.transcript.scrollToEnd({ behavior: "auto" });
+  host.transcript.cancelScroll();
+  const offset = thread.scrollTop;
+  host.lastRowHeight += 42;
+  host.requestRender();
+  await expect.poll(() => extent.offsetHeight).toBe(1342);
+  await settleFrames();
+  expect(thread.scrollTop).toBe(offset);
+});
+
 it("keeps the cached tail mounted when full history replaces the boot window", async () => {
   await page.viewport(1200, 900);
   saveChatSessionScrollPosition("end-follow-browser", "agent:main:end-follow", {
