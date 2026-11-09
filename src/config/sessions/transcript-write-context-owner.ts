@@ -1,7 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { runWithCliHistoryWriter } from "./cli-history-boundary.js";
 import type { CapturedSessionEntryReadSource } from "./session-entry-read-source.types.js";
-import type { OwnedSessionTranscriptWriteContext } from "./transcript-write-context.js";
+import type { OwnedSessionTranscriptWriteContext } from "./transcript-write-context.types.js";
 import type { SessionEntry } from "./types.js";
 
 export type TranscriptSourcePublication = {

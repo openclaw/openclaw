@@ -13,10 +13,8 @@ import {
   composeSessionSourceAssertion,
   type SessionSourceAssertion,
 } from "../../config/sessions/session-source-authority.js";
-import {
-  withOwnedSessionTranscriptWrites,
-  type OwnedSessionTranscriptWriteContext,
-} from "../../config/sessions/transcript-write-context.js";
+import { withOwnedSessionTranscriptWrites } from "../../config/sessions/transcript-write-context.js";
+import type { OwnedSessionTranscriptWriteContext } from "../../config/sessions/transcript-write-context.types.js";
 import {
   resolveCompactionSuccessorTranscript,
   type ContextEngine,

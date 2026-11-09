@@ -8,8 +8,8 @@ import {
   captureOwnedTranscriptWriteAssertion,
   withSessionMetadataPublication,
   withSessionTranscriptWriteAssertion,
-  type SessionMetadataCommit,
 } from "../../config/sessions/transcript-write-context.js";
+import type { SessionMetadataCommit } from "../../config/sessions/transcript-write-context.types.js";
 import type { Model } from "../../llm/types.js";
 import type { ThinkingLevel } from "../runtime/index.js";
 import { AgentSessionPrompting } from "./agent-session-prompting.js";

@@ -5,9 +5,11 @@ import {
   SessionTranscriptWriterClaimReboundError,
   withSessionMetadataPublication,
   withSessionTranscriptWriteAssertion,
-  type SessionMetadataChange,
-  type SessionMetadataCommit,
 } from "../../config/sessions/transcript-write-context.js";
+import type {
+  SessionMetadataChange,
+  SessionMetadataCommit,
+} from "../../config/sessions/transcript-write-context.types.js";
 import { bindStreamLlmRuntime } from "../../llm/model-runtime-binding.js";
 import type { Message, Model } from "../../llm/types.js";
 import { sanitizeCompactionReplayMessages } from "../compaction-replay.js";

@@ -3,9 +3,11 @@ import { sameSessionTranscriptTargetBinding } from "../../config/sessions/transc
 import {
   captureSessionMetadataPublication,
   SessionTranscriptWriterClaimReboundError,
-  type SessionMetadataChange,
-  type SessionMetadataCommit,
 } from "../../config/sessions/transcript-write-context.js";
+import type {
+  SessionMetadataChange,
+  SessionMetadataCommit,
+} from "../../config/sessions/transcript-write-context.types.js";
 import { withSessionManagerAppend } from "./session-manager-append-admission.js";
 import { SessionManagerEntries } from "./session-manager-entries.js";
 import { generateSessionEntryId } from "./session-manager-id.js";

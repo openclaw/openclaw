@@ -2136,6 +2136,7 @@ src/config/sessions/session-transcript-worker-resources.ts
 src/config/sessions/session-transcript-worker-runtime.ts
 src/config/sessions/transcript-write-context-owner.ts
 src/config/sessions/transcript-write-context.ts
+src/config/sessions/transcript-write-context.types.ts
 src/sessions/session-lifecycle-events.ts
 src/sessions/session-row-facts.ts
 src/state/openclaw-agent-worker-store.ts

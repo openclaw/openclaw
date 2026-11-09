@@ -12,9 +12,9 @@ import { composeSessionSourceAssertion } from "../../../config/sessions/session-
 import {
   getOwnedSessionTranscriptInitialWriter,
   SessionTranscriptWriterClaimReboundError,
-  type OwnedSessionTranscriptWriteContext,
   withOwnedSessionTranscriptWrites,
 } from "../../../config/sessions/transcript-write-context.js";
+import type { OwnedSessionTranscriptWriteContext } from "../../../config/sessions/transcript-write-context.types.js";
 import { captureAgentRunTerminalPersistence } from "../../../infra/agent-run-terminal-writes.js";
 import { readDatabasePathIdentitySync } from "../../../infra/sqlite-worker-identity.js";
 import { IncognitoSessionMissingError } from "../../../state/incognito-session-error.js";
