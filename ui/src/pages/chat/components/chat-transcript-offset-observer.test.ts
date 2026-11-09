@@ -61,7 +61,7 @@ it("keeps maintenance and active commands owned until the committed viewport set
 });
 
 it.each([undefined, 1000])(
-  "keeps latest through a temporary native end clamp (issued target: %s)",
+  "keeps latest through prior native motion and an end clamp (issued target: %s)",
   (offset) => {
     const element = document.createElement("div");
     let height = 1000;
@@ -109,6 +109,12 @@ it.each([undefined, 1000])(
     expect(state.scrollCommand).toBe(command);
     expect(cancelScroll).not.toHaveBeenCalled();
 
+    // A prior PageUp can still deliver native motion while Latest prepares its target.
+    element.scrollTop = 760;
+    element.dispatchEvent(new Event("scroll"));
+    expect(state.scrollCommand).toBe(command);
+    expect(cancelScroll).not.toHaveBeenCalled();
+
     command.offset = 1000;
     element.dispatchEvent(new Event("scroll"));
     element.dispatchEvent(new Event("scrollend"));
@@ -121,6 +127,12 @@ it.each([undefined, 1000])(
     element.scrollTop = 1000;
     element.dispatchEvent(new Event("scroll"));
     expect(cancelScroll).toHaveBeenCalledExactlyOnceWith(true);
+
+    cancelScroll.mockClear();
+    state.scrollCommand = { target: "end", behavior: "smooth" };
+    element.dispatchEvent(new KeyboardEvent("keydown", { key: "PageUp", bubbles: true }));
+    expect(state.scrollCommand).toBeNull();
+    expect(cancelScroll).toHaveBeenCalledExactlyOnceWith();
   },
 );
 
