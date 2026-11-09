@@ -221,7 +221,16 @@ export function renderSignalText(dataMessage?: SignalDataMessage | null) {
       .join("");
     return [{ start, end, text }];
   });
-  const edited = applyMarkdownTextEdits(normalized, codeEdits);
+  // Escape source punctuation, not the code fences we generated. Unstyled messages
+  // retain their existing Markdown behavior; native ranges define literal text.
+  const literalEdits = styles.length
+    ? Array.from(normalized.matchAll(/[\\`*_{}[\]()#+\-.!|>~<&]/g))
+        .filter(
+          (match) => !codeEdits.some(({ start, end }) => start <= match.index && match.index < end),
+        )
+        .map((match) => ({ start: match.index, end: match.index + 1, text: `\\${match[0]}` }))
+    : [];
+  const edited = applyMarkdownTextEdits(normalized, [...codeEdits, ...literalEdits]);
   const formattedText = renderMarkdownWithMarkers(
     {
       text: edited.text,

@@ -80,7 +80,37 @@ it("moves a style that covers a mention and keeps literal backticks in monospace
   expect(ctx.RawBody).toBe("@alice `x`");
 });
 
+it("preserves existing Markdown when no native styles are present", async () => {
+  const handler = createSignalEventHandler(
+    createBaseSignalEventHandlerDeps({ cfg: { messages: { inbound: { debounceMs: 0 } } } }),
+  );
+  const message = "**literal** x\\";
+  await handler(createSignalReceiveEvent({ dataMessage: { message } }));
+  const ctx = expectDefined(capturedCtx, "Signal MsgContext");
+  expect(ctx.BodyForAgent).toBe(message);
+  expect(ctx.RawBody).toBe(message);
+  expect(ctx.CommandBody).toBe(message);
+});
+
 it.each([
+  ...["x\\", "*literal* [link](x) &amp; <tag> `tick`"].map((message) => ({
+    name: `literal punctuation ${JSON.stringify(message)}`,
+    message,
+    textStyles: [{ start: 0, length: message.length, style: "BOLD" }],
+    styles: [{ start: 0, end: message.length, style: "bold" }],
+  })),
+  {
+    name: "literal text beside native monospace",
+    message: "*raw* `x\\` x\\",
+    textStyles: [
+      { start: 6, length: 4, style: "MONOSPACE" },
+      { start: 11, length: 2, style: "BOLD" },
+    ],
+    styles: [
+      { start: 6, end: 10, style: "code" },
+      { start: 11, end: 13, style: "bold" },
+    ],
+  },
   {
     name: "combined bold and monospace",
     message: "ship",
