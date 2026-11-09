@@ -163,7 +163,7 @@ final class SimulatorCaptureService {
     func input(
         sessionId: String, action: OpenClawComputerAction,
         x: Double?, y: Double?, fromX: Double?, fromY: Double?,
-        text: String?, keys: String?, validate: () throws -> Void) async throws
+        text: String?, keys: String?, validate: @escaping () throws -> Void) async throws
     {
         guard self.sessionId == sessionId, !self.inputInProgress,
               self.touchReady?.ready == true, self.touchReady?.failure == nil,
