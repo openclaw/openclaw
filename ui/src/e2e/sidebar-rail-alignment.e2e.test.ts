@@ -49,6 +49,70 @@ suite.define(() => {
           const owner = page.locator(".sidebar-session-owner-filter .picker-select__trigger");
           await owner.waitFor();
           await selectAllSidebarSessions(page);
+          const firstRow = page.locator(".sidebar-sessions .sidebar-recent-session").first();
+          await firstRow.waitFor();
+          // The Sessions title picker is one toolbar control among the header's
+          // buttons and mirrors the row beneath it: a plain title starts on the
+          // row glyph column; with an owner avatar, the avatar centers on that
+          // column and the label starts on the row text column.
+          const measureHeader = () =>
+            page.locator(".sidebar-session-toolbar").evaluate((toolbar) => {
+              const box = (selector: string) =>
+                toolbar.querySelector(selector)?.getBoundingClientRect() ?? null;
+              const leading = box(".picker-select__trigger .picker-select__leading");
+              return {
+                controls: [
+                  ".sidebar-session-owner-filter .picker-select__trigger",
+                  ".sidebar-session-sort",
+                  ".sidebar-session-toolbar__collapse",
+                ].map((selector) => ({
+                  selector,
+                  height: box(selector)!.height,
+                  radius: getComputedStyle(toolbar.querySelector(selector)!).borderRadius,
+                })),
+                radiusToken: getComputedStyle(document.documentElement)
+                  .getPropertyValue("--radius-md")
+                  .trim(),
+                avatarCenter: leading ? leading.x + leading.width / 2 : null,
+                labelLeft: box(".picker-select__label")!.x,
+              };
+            });
+          const row = await firstRow.evaluate((element) => {
+            const glyph = element
+              .querySelector(".sidebar-session-indicator")!
+              .getBoundingClientRect();
+            return {
+              glyphLeft: glyph.x,
+              glyphCenter: glyph.x + glyph.width / 2,
+              textLeft: element
+                .querySelector(".sidebar-recent-session__text")!
+                .getBoundingClientRect().x,
+            };
+          });
+          const allOwners = await measureHeader();
+          for (const control of allOwners.controls) {
+            expect(control.height, control.selector).toBe(28);
+            expect(control.radius, control.selector).toBe(allOwners.radiusToken);
+          }
+          expect(allOwners.avatarCenter).toBeNull();
+          expect(allOwners.labelLeft).toBe(row.glyphLeft);
+          await page.locator("#sidebar-session-owner-title").click();
+          await page
+            .locator('.sidebar-session-owner-filter [role="option"][data-value="owner:riley"]')
+            .click();
+          // The owner avatar arrives with the picker's next render.
+          await expect
+            .poll(async () => {
+              const mine = await measureHeader();
+              return mine.avatarCenter === null
+                ? null
+                : {
+                    avatarCentered: Math.abs(mine.avatarCenter - row.glyphCenter) <= 0.5,
+                    label: mine.labelLeft,
+                  };
+            })
+            .toEqual({ avatarCentered: true, label: row.textLeft });
+          await selectAllSidebarSessions(page);
           await page
             .locator(".sidebar-recent-session__name")
             .filter({ hasText: "Release notes" })
