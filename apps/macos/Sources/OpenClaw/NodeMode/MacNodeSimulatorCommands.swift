@@ -53,7 +53,7 @@ extension MacNodeRuntime {
             throw OpenClawNodeError(code: .invalidRequest, message: "INVALID_REQUEST: unknown simulator capture action")
         }
         let payload = if let frame {
-            String(decoding: try JSONEncoder().encode(frame), as: UTF8.self)
+            try String(decoding: JSONEncoder().encode(frame), as: UTF8.self)
         } else {
             #"{"stopped":true}"#
         }

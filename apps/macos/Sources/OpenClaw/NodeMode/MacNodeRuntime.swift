@@ -227,8 +227,7 @@ actor MacNodeRuntime {
                 return Self.errorResponse(
                     req, code: .unavailable, message: "UNAVAILABLE: computer control lifecycle changed")
             }
-            if controlsComputer && !self.computerControlEnabled()
-            {
+            if controlsComputer, !self.computerControlEnabled() {
                 await desktop.invalidate(permit, reason: "computer-disabled")
                 await desktop.finishInvocation(permit)
                 return BridgeInvokeResponse(
@@ -315,7 +314,8 @@ actor MacNodeRuntime {
             simulatorCleanupSucceeded = true
         } catch {
             simulatorCleanupSucceeded = false
-            self.logger.error("Simulator pasteboard cleanup failed during desktop revocation; clear the Simulator clipboard")
+            self.logger
+                .error("Simulator pasteboard cleanup failed during desktop revocation; clear the Simulator clipboard")
         }
         let desktop = if let desktopAvailability {
             desktopAvailability

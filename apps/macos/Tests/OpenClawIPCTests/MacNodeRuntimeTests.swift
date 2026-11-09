@@ -213,6 +213,7 @@ struct MacNodeRuntimeTests {
         var simulatorStarts = 0
         var simulatorStops = 0
         var simulatorInputCount = 0
+        var simulatorActive = false
         var simulatorStopError: Error?
         var actResultOk = true
         var simulatorStartEntered: AsyncTestGate?
@@ -226,6 +227,7 @@ struct MacNodeRuntimeTests {
 
         func startSimulatorCapture(executionId: String) async throws -> SimulatorCaptureService.Frame {
             self.simulatorStarts += 1
+            self.simulatorActive = true
             self.simulatorStartEntered?.open()
             await self.releaseSimulatorStart?.wait()
             return self.simulatorFrame()
@@ -239,10 +241,12 @@ struct MacNodeRuntimeTests {
 
         func stopSimulatorCapture(sessionId: String?) async throws {
             self.simulatorStops += 1
+            self.simulatorActive = false
             if let simulatorStopError { throw simulatorStopError }
         }
         func stopSimulatorCapture(forExecutionId executionId: String) async throws {
             self.simulatorStops += 1
+            self.simulatorActive = false
             if let simulatorStopError { throw simulatorStopError }
         }
 
@@ -252,6 +256,7 @@ struct MacNodeRuntimeTests {
             text: String?, keys: String?, desktopPermit: MacDesktopAvailabilityCoordinator.Permit) async throws
         {
             try self.desktopAvailability.validate(desktopPermit)
+            guard self.simulatorActive else { throw SimulatorCaptureService.CaptureError.staleSession }
             self.simulatorInputCount += 1
             if !self.actResultOk {
                 throw SimulatorCaptureService.CaptureError.unavailable("input could not be delivered")
@@ -1121,9 +1126,10 @@ extension MacNodeRuntimeTests {
         #expect(services.releasedExecutionScopes.count == 1)
         #expect(services.simulatorStops == 1)
         #expect(services.desktopPlatform.assertions.isEmpty)
-        #expect(!(await self.invoke(
+        let late = await self.invoke(
             runtime, "sim-late", "simulator.act",
-            "{\"action\":\"mouse_move\",\"sessionId\":\"sim-session\",\"executionId\":\"\(execution)\",\"x\":0.6,\"y\":0.5}")).ok)
+            "{\"action\":\"mouse_move\",\"sessionId\":\"sim-session\",\"executionId\":\"\(execution)\",\"x\":0.6,\"y\":0.5}")
+        #expect(!late.ok)
     }
 
     @MainActor

@@ -74,10 +74,12 @@ final class SimulatorCaptureService {
             capture.standardOutput = capturePipe
             capture.standardError = captureErrorPipe
             capturePipe.fileHandleForReading.readabilityHandler = { handle in
-                captureOutput.append(handle.availableData)
+                do { try captureOutput.append(handle.read(upToCount: 65536) ?? Data()) }
+                catch { captureOutput.stop("capture output read failed") }
             }
             captureErrorPipe.fileHandleForReading.readabilityHandler = { handle in
-                captureOutput.appendError(handle.availableData)
+                do { try captureOutput.appendError(handle.read(upToCount: 65536) ?? Data()) }
+                catch { captureOutput.stop("capture error output read failed") }
             }
             capture.terminationHandler = { process in
                 captureOutput.stop("capture exited with status \(process.terminationStatus)")
@@ -96,10 +98,12 @@ final class SimulatorCaptureService {
             touch.standardError = touchErrorPipe
             touch.standardOutput = touchAckPipe
             touchErrorPipe.fileHandleForReading.readabilityHandler = { handle in
-                touchOutput.append(handle.availableData)
+                do { try touchOutput.append(handle.read(upToCount: 65536) ?? Data()) }
+                catch { touchOutput.stop("input error output read failed") }
             }
             touchAckPipe.fileHandleForReading.readabilityHandler = { handle in
-                touchOutput.appendAck(handle.availableData)
+                do { try touchOutput.appendAck(handle.read(upToCount: 65536) ?? Data()) }
+                catch { touchOutput.stop("input acknowledgment read failed") }
             }
             touch.terminationHandler = { process in
                 touchOutput.stop("input exited with status \(process.terminationStatus)")
@@ -131,9 +135,12 @@ final class SimulatorCaptureService {
                             }
                         }
                     }
-                    return Frame(sessionId: sessionId, sequence: frame.sequence,
-                                 jpegBase64: frame.jpeg.base64EncodedString(),
-                                 width: frame.width, height: frame.height)
+                    return Frame(
+                        sessionId: sessionId,
+                        sequence: frame.sequence,
+                        jpegBase64: frame.jpeg.base64EncodedString(),
+                        width: frame.width,
+                        height: frame.height)
                 }
                 try await Task.sleep(for: .milliseconds(20))
             }
@@ -155,9 +162,12 @@ final class SimulatorCaptureService {
             throw CaptureError.unavailable("device frames stopped arriving")
         }
         self.lastRead = Date()
-        return Frame(sessionId: sessionId, sequence: latest.sequence,
-                     jpegBase64: latest.sequence > sequence ? latest.jpeg.base64EncodedString() : nil,
-                     width: latest.width, height: latest.height)
+        return Frame(
+            sessionId: sessionId,
+            sequence: latest.sequence,
+            jpegBase64: latest.sequence > sequence ? latest.jpeg.base64EncodedString() : nil,
+            width: latest.width,
+            height: latest.height)
     }
 
     func input(
@@ -219,8 +229,9 @@ final class SimulatorCaptureService {
                 for step in 1...12 {
                     try await Task.sleep(for: .milliseconds(20))
                     let fraction = Float(step) / 12
-                    try touch(2, (origin.0 + (target.0 - origin.0) * fraction,
-                                  origin.1 + (target.1 - origin.1) * fraction))
+                    try touch(2, (
+                        origin.0 + (target.0 - origin.0) * fraction,
+                        origin.1 + (target.1 - origin.1) * fraction))
                 }
                 try touch(3, target)
             } catch {
@@ -290,7 +301,8 @@ final class SimulatorCaptureService {
         guard self.sessionId == sessionId, let frames = self.frames else { throw CaptureError.staleSession }
         if let failure = frames.failure { throw CaptureError.unavailable(failure) }
         guard self.captureProcess?.isRunning == true,
-              let latest = frames.latest, latest.isFresh(at: Date()) else {
+              let latest = frames.latest, latest.isFresh(at: Date())
+        else {
             throw CaptureError.unavailable("device frames stopped arriving")
         }
     }
@@ -412,11 +424,12 @@ final class SimulatorCaptureService {
             throw CaptureError.unavailable("xcrun simctl could not list booted devices")
         }
         guard let root = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let devices = root["devices"] as? [String: [[String: Any]]] else {
+              let devices = root["devices"] as? [String: [[String: Any]]]
+        else {
             throw CaptureError.unavailable("xcrun simctl could not list booted devices")
         }
         let booted = devices.filter { $0.key.contains("SimRuntime.iOS-") }
-            .flatMap { $0.value }.filter { $0["state"] as? String == "Booted" }
+            .flatMap(\.value).filter { $0["state"] as? String == "Booted" }
             .compactMap { $0["udid"] as? String }
         guard !booted.isEmpty else { throw CaptureError.noDevice }
         guard booted.count == 1 else { throw CaptureError.multipleDevices }
@@ -432,14 +445,22 @@ final class SimulatorFrameBuffer: @unchecked Sendable {
         let height: Int
         let receivedAt: Date
 
-        func isFresh(at date: Date) -> Bool { date.timeIntervalSince(self.receivedAt) < 3 }
+        func isFresh(at date: Date) -> Bool {
+            date.timeIntervalSince(self.receivedAt) < 3
+        }
     }
+
     private let lock = NSLock()
     private var buffer = Data()
     private var current: Latest?
     private var stoppedReason: String?
-    var latest: Latest? { self.lock.withLock { self.current } }
-    var failure: String? { self.lock.withLock { self.stoppedReason } }
+    var latest: Latest? {
+        self.lock.withLock { self.current }
+    }
+
+    var failure: String? {
+        self.lock.withLock { self.stoppedReason }
+    }
 
     func append(_ data: Data) {
         self.lock.withLock {
@@ -457,12 +478,17 @@ final class SimulatorFrameBuffer: @unchecked Sendable {
                 guard let source = CGImageSourceCreateWithData(jpeg as CFData, nil),
                       let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
                       let width = properties[kCGImagePropertyPixelWidth] as? Int,
-                      let height = properties[kCGImagePropertyPixelHeight] as? Int else {
+                      let height = properties[kCGImagePropertyPixelHeight] as? Int
+                else {
                     self.stoppedReason = "invalid JPEG device frame"
                     return
                 }
-                self.current = Latest(sequence: (self.current?.sequence ?? 0) + 1,
-                                      jpeg: jpeg, width: width, height: height, receivedAt: Date())
+                self.current = Latest(
+                    sequence: (self.current?.sequence ?? 0) + 1,
+                    jpeg: jpeg,
+                    width: width,
+                    height: height,
+                    receivedAt: Date())
             }
         }
     }
@@ -483,19 +509,33 @@ final class SimulatorTouchReadiness: @unchecked Sendable {
     private var stoppedReason: String?
     private var acknowledgments: UInt64 = 0
     private var eofAcknowledged = false
-    var ready: Bool { self.lock.withLock { self.isReady } }
-    var failure: String? { self.lock.withLock { self.stoppedReason } }
-    var cancelCount: UInt64 { self.lock.withLock { self.acknowledgments } }
-    var inputEOF: Bool { self.lock.withLock { self.eofAcknowledged } }
+    var ready: Bool {
+        self.lock.withLock { self.isReady }
+    }
+
+    var failure: String? {
+        self.lock.withLock { self.stoppedReason }
+    }
+
+    var cancelCount: UInt64 {
+        self.lock.withLock { self.acknowledgments }
+    }
+
+    var inputEOF: Bool {
+        self.lock.withLock { self.eofAcknowledged }
+    }
+
     func append(_ data: Data) {
         self.lock.withLock {
             self.output = String((self.output + String(decoding: data, as: UTF8.self)).suffix(500))
             if self.output.contains("touch-helper ready") { self.isReady = true }
         }
     }
+
     func stop(_ reason: String) {
         self.lock.withLock { self.stoppedReason = reason }
     }
+
     func appendAck(_ data: Data) {
         self.lock.withLock {
             self.acknowledgments += UInt64(data.filter { $0 == 1 }.count)

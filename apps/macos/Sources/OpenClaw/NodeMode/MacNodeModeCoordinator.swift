@@ -639,7 +639,13 @@ final class MacNodeModeCoordinator: NSObject {
                 let routeStillAuthoritative = await self.routeAuthorityAllowsInvoke(attempt.routeAuthorityGeneration)
                 let currentRoute = await self.session.currentRoute()
                 guard routeStillAuthoritative, currentRoute == installedRoute else { return }
-                let desktopCommands = ["desktop.stream", "screen.snapshot", "computer.act", "simulator.capture", "simulator.act"]
+                let desktopCommands = [
+                    "desktop.stream",
+                    "screen.snapshot",
+                    "computer.act",
+                    "simulator.capture",
+                    "simulator.act",
+                ]
                 if attempt.options.commands.contains(where: desktopCommands.contains) {
                     await self.installDesktopRoute(
                         installedRoute,
