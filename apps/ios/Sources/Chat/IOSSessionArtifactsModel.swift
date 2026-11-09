@@ -29,7 +29,6 @@ struct IOSSessionArtifact: Identifiable, Sendable {
 
     var symbol: String {
         switch self.category {
-        case .all: "doc"
         case .images: "photo"
         case .media: self.summary.mimetype?.hasPrefix("audio/") == true ? "waveform" : "film"
         case .documents: self.summary.mimetype == "application/pdf" ? "doc.richtext" : "doc.text"
@@ -40,15 +39,11 @@ struct IOSSessionArtifact: Identifiable, Sendable {
         self.summary.sizebytes.map { ByteCountFormatter.string(fromByteCount: Int64($0), countStyle: .file) }
     }
 
-    enum Category: CaseIterable, Identifiable {
-        case all, documents, images, media
-        var id: Self {
-            self
-        }
+    enum Category {
+        case documents, images, media
 
         var title: String {
             switch self {
-            case .all: String(localized: "All")
             case .documents: String(localized: "Documents")
             case .images: String(localized: "Images")
             case .media: String(localized: "Audio & video")
@@ -63,22 +58,11 @@ final class IOSSessionArtifactsModel {
     private(set) var artifacts: [IOSSessionArtifact] = []
     private(set) var isLoading = false
     private(set) var hasLoaded = false
-    private(set) var isPartial = false
     private(set) var errorMessage: String?
-    var searchText = ""
-    var category = IOSSessionArtifact.Category.all
     @ObservationIgnored private let acquire: @Sendable () async throws -> IOSSessionArtifactAccess
 
     init(acquire: @escaping @Sendable () async throws -> IOSSessionArtifactAccess) {
         self.acquire = acquire
-    }
-
-    var filteredArtifacts: [IOSSessionArtifact] {
-        let query = self.searchText.trimmingCharacters(in: .whitespacesAndNewlines)
-        return self.artifacts.filter {
-            (self.category == .all || $0.category == self.category) &&
-                (query.isEmpty || $0.title.localizedStandardContains(query))
-        }
     }
 
     func refresh() async {
@@ -94,7 +78,6 @@ final class IOSSessionArtifactsModel {
             var seen = Set<String>()
             self.artifacts = result.artifacts.filter { seen.insert($0.id).inserted }
                 .map { IOSSessionArtifact(summary: $0) }
-            self.isPartial = result.omittedoversized == true || result.nextcursor != nil
             self.hasLoaded = true
         } catch is CancellationError {
             if !Task.isCancelled {
@@ -123,11 +106,11 @@ final class IOSSessionArtifactsModel {
     static func message(for error: any Error) -> String {
         if let error = error as? GatewayResponseError {
             if error.missingScopeDetails != nil || error.code == "FORBIDDEN" {
-                return String(localized: "This connection does not have permission to access these artifacts.")
+                return String(localized: "This connection does not have permission to access these files.")
             }
             if error.code == "METHOD_NOT_FOUND" || error.message.hasPrefix("unknown method:") {
                 return String(
-                    localized: "This Gateway does not support the artifact browser. Update the Gateway and try again.")
+                    localized: "This Gateway does not support Outputs. Update the Gateway and try again.")
             }
         }
         if let error = error as? URLError, [.notConnectedToInternet, .networkConnectionLost, .cannotConnectToHost]
@@ -147,6 +130,6 @@ final class IOSSessionArtifactsModel {
             }
         }
         return String(
-            localized: "Unable to load artifacts. Reconnect or refresh and try again. The file may have been removed.")
+            localized: "Unable to load outputs. Reconnect or refresh and try again. The file may have been removed.")
     }
 }

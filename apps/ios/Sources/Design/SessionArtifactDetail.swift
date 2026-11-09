@@ -6,6 +6,7 @@ import UniformTypeIdentifiers
 struct SessionArtifactDetail: View {
     let artifact: IOSSessionArtifact
     let load: @MainActor @Sendable () async throws -> OpenClawChatMediaData
+    @State private var showsFullImage = false
     @State private var hasLoadedFile = false
     @State private var preview: Preview = .unavailable
     @State private var isLoading = false
@@ -100,12 +101,19 @@ struct SessionArtifactDetail: View {
                     .padding()
                 }
             case let .image(image):
-                ScrollView {
+                Button {
+                    self.showsFullImage = true
+                } label: {
                     Image(uiImage: image)
                         .resizable()
                         .scaledToFit()
                         .padding()
-                        .accessibilityLabel(self.artifact.title)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(self.artifact.title)
+                .accessibilityHint("Opens image preview")
+                .fullScreenCover(isPresented: self.$showsFullImage) {
+                    ChatMediaImagePreview(image: image) { self.showsFullImage = false }
                 }
             case let .pdf(document):
                 ArtifactPDFPreview(document: document)

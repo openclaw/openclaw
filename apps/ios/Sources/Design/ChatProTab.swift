@@ -39,12 +39,20 @@ struct ChatProTab: View {
     private struct ArtifactsPresentation: Identifiable {
         let id = UUID()
         let sessionKey: String
-        let title: String
         let identity: String
         let controlUIInputs: GatewayConnectConfig.ControlUIInputs?
         let transport: IOSGatewayChatTransport
     }
 
+    private struct OutputsRefresh: Equatable {
+        let identity: String
+        let controlUIInputs: GatewayConnectConfig.ControlUIInputs?
+        let connected: Bool
+        let isBusy: Bool
+        let messageIDs: [UUID]
+    }
+
+    @State private var outputsAvailableFor: OutputsRefresh?
     @State private var artifactsPresentation: ArtifactsPresentation?
     @State private var transcriptShareItem: TranscriptShareItem?
     @State private var showsTranscriptExportError = false
@@ -95,18 +103,23 @@ struct ChatProTab: View {
                     }
                 }
                 .sheet(item: self.$artifactsPresentation) { item in
-                    SessionArtifactsScreen(sessionTitle: item.title) {
+                    SessionArtifactsScreen {
                         guard await self.isCurrentArtifactsPresentation(item) else { throw CancellationError() }
                         let access = try await item.transport.acquireSessionArtifactAccess(sessionKey: item.sessionKey)
                         guard await self.isCurrentArtifactsPresentation(item) else { throw CancellationError() }
                         return access
                     }
                 }
+                .task(id: self.outputsRefresh) {
+                    await self.refreshOutputsAvailability()
+                }
                 .onChange(of: self.artifactsIdentity) { _, _ in
                     self.artifactsPresentation = nil
+                    self.outputsAvailableFor = nil
                 }
                 .onChange(of: self.appModel.activeGatewayConnectConfig?.controlUIInputs) { _, _ in
                     self.artifactsPresentation = nil
+                    self.outputsAvailableFor = nil
                 }
                 .sheet(item: self.$transcriptShareItem) { item in
                     OpenClawChatFileShareSheet(fileURL: item.fileURL)
@@ -143,7 +156,10 @@ struct ChatProTab: View {
             self.headerAgentIdentity
         }
         .sharedBackgroundVisibility(.hidden)
-        if !self.appModel.isLocalChatFixtureEnabled {
+        if !self.appModel.isLocalChatFixtureEnabled,
+           self.outputsAvailableFor?.identity == self.artifactsIdentity,
+           self.outputsAvailableFor?.controlUIInputs == self.appModel.activeGatewayConnectConfig?.controlUIInputs
+        {
             ToolbarItem(placement: .topBarTrailing) {
                 self.artifactsButton
             }
@@ -454,9 +470,9 @@ struct ChatProTab: View {
             self.openArtifacts()
         } label: {
             Label {
-                Text("Artifacts").font(OpenClawType.body)
+                Text("Outputs").font(OpenClawType.body)
             } icon: {
-                Image(systemName: "tray.full")
+                Image(systemName: "doc")
                     .font(.system(size: 18))
             }
             .labelStyle(.iconOnly)
@@ -466,7 +482,7 @@ struct ChatProTab: View {
         .contentShape(Rectangle())
         .buttonStyle(.plain)
         .disabled(self.viewModel == nil || !self.gatewayConnected)
-        .accessibilityLabel("Artifacts")
+        .accessibilityLabel("Outputs")
         .accessibilityHint("Browse files shared in this conversation")
         .accessibilityIdentifier("chat-session-artifacts")
     }
@@ -586,15 +602,47 @@ struct ChatProTab: View {
         }
     }
 
+    private var outputsRefresh: OutputsRefresh {
+        OutputsRefresh(
+            identity: self.artifactsIdentity,
+            controlUIInputs: self.appModel.activeGatewayConnectConfig?.controlUIInputs,
+            connected: self.gatewayConnected,
+            isBusy: self.viewModel?.isLoading == true || self.viewModel?.isSending == true ||
+                (self.viewModel?.pendingRunCount ?? 0) > 0,
+            messageIDs: self.viewModel?.messages.map(\.id) ?? [])
+    }
+
+    private func refreshOutputsAvailability() async {
+        let refresh = self.outputsRefresh
+        // Settled transcript identities refresh metadata without a request for each streamed token.
+        guard refresh.connected, !refresh.isBusy, !self.appModel.isLocalChatFixtureEnabled,
+              let viewModel,
+              let transport = self.appModel.makeChatTransport() as? IOSGatewayChatTransport
+        else { return }
+        do {
+            let access = try await transport.acquireSessionArtifactAccess(
+                sessionKey: viewModel.sessionKey, assistantOutputsOnly: true)
+            let result = try await access.list()
+            try Task.checkCancellation()
+            guard self.outputsRefresh == refresh else { return }
+            self.outputsAvailableFor = result.artifacts.isEmpty ? nil : refresh
+        } catch {
+            // A transient disconnection keeps known outputs visible but disabled.
+            if !Task.isCancelled, self.outputsRefresh == refresh,
+               let response = error as? GatewayResponseError,
+               response.missingScopeDetails != nil || response.code == "FORBIDDEN"
+            {
+                self.outputsAvailableFor = nil
+            }
+        }
+    }
+
     private func openArtifacts() {
         guard self.gatewayConnected, let viewModel,
               let transport = self.appModel.makeChatTransport() as? IOSGatewayChatTransport
         else { return }
         self.artifactsPresentation = ArtifactsPresentation(
             sessionKey: viewModel.sessionKey,
-            title: viewModel.sessions.first { $0.key == viewModel.sessionKey }?.displayName ??
-                (viewModel.sessionKey == self.appModel
-                    .mainSessionKey ? String(localized: "Main Session") : viewModel.sessionKey),
             identity: self.artifactsIdentity,
             controlUIInputs: self.appModel.activeGatewayConnectConfig?.controlUIInputs,
             transport: transport)

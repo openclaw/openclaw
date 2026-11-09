@@ -21,11 +21,16 @@ enum ChatImagePreviewLayout {
 }
 
 @MainActor
-struct ChatMediaImagePreview: View {
+public struct ChatMediaImagePreview: View {
     let image: OpenClawPlatformImage
     let onClose: @MainActor () -> Void
 
-    var body: some View {
+    public init(image: OpenClawPlatformImage, onClose: @escaping @MainActor () -> Void) {
+        self.image = image
+        self.onClose = onClose
+    }
+
+    public var body: some View {
         ZStack(alignment: .topTrailing) {
             Color.black.ignoresSafeArea()
             #if os(iOS)

@@ -42,22 +42,16 @@ final class SessionArtifactsUITests: XCTestCase {
         let openArtifacts = app.buttons["chat-session-artifacts"]
         XCTAssertTrue(openArtifacts.waitForExistence(timeout: 5))
         XCTAssertTrue(openArtifacts.isHittable)
-        XCTAssertLessThanOrEqual(openArtifacts.frame.maxX, app.buttons["Chat actions"].frame.minX)
         self.capture(app, named: "session-artifacts-toolbar")
         openArtifacts.tap()
 
         let project = self.rows(in: app, title: "Project brief.txt").firstMatch
         XCTAssertTrue(project.waitForExistence(timeout: 15))
         self.capture(app, named: "session-artifacts-list")
-        let search = app.searchFields.firstMatch
-        XCTAssertTrue(search.waitForExistence(timeout: 5))
-        search.tap()
-        search.typeText("Notes")
         let notes = self.rows(in: app, title: "Notes.txt")
         XCTAssertTrue(notes.element(boundBy: 1).waitForExistence(timeout: 5))
         XCTAssertEqual(notes.count, 2, "Files with the same title must retain their distinct identities")
 
-        self.replaceSearch(search, with: "Project")
         XCTAssertTrue(project.waitForExistence(timeout: 5))
         project.tap()
         let textPreview = app.staticTexts["artifact-preview-text"]
@@ -65,23 +59,6 @@ final class SessionArtifactsUITests: XCTestCase {
         XCTAssertTrue(textPreview.label.contains("A native place to find, preview, and save files"))
         self.capture(app, named: "session-artifact-text-preview")
         self.backToArtifacts(app)
-        XCTAssertEqual(search.value as? String, "Project", "Returning from preview preserves the search")
-        self.replaceSearch(search, with: "")
-        // Native search uses a close icon on newer iOS, and Cancel on older layouts.
-        let closeSearch = app.buttons.matching(NSPredicate(format: "label IN %@", ["close", "Cancel"])).firstMatch
-        XCTAssertTrue(closeSearch.waitForExistence(timeout: 5))
-        closeSearch.tap()
-        XCTAssertTrue(app.buttons["artifacts-done"].waitForExistence(timeout: 5))
-
-        let typeFilter = app.buttons["artifact-type-filter"]
-        XCTAssertTrue(typeFilter.waitForExistence(timeout: 5))
-        typeFilter.tap()
-        app.buttons["Images"].tap()
-        let image = self.rows(in: app, title: "Color study.png").firstMatch
-        XCTAssertTrue(image.waitForExistence(timeout: 5))
-        XCTAssertFalse(project.exists)
-        typeFilter.tap()
-        app.buttons["Documents"].tap()
         let pdf = self.rows(in: app, title: "Preview.pdf").firstMatch
         XCTAssertTrue(pdf.waitForExistence(timeout: 5))
         pdf.tap()
@@ -100,7 +77,6 @@ final class SessionArtifactsUITests: XCTestCase {
         // Verify dismissal by navigating back and checking the collection and draft below.
         // The system activity's cached AX elements can outlive its visible presentation.
         self.backToArtifacts(app)
-        XCTAssertTrue(typeFilter.label.contains("Documents") || typeFilter.value as? String == "Documents")
         let done = app.buttons["artifacts-done"]
         XCTAssertTrue(done.waitForExistence(timeout: 5))
         done.tap()
@@ -113,14 +89,8 @@ final class SessionArtifactsUITests: XCTestCase {
             format: "identifier BEGINSWITH %@ AND label CONTAINS %@", "artifact-row-", title))
     }
 
-    private func replaceSearch(_ search: XCUIElement, with value: String) {
-        search.tap()
-        let previous = search.value as? String ?? ""
-        search.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: previous.count) + value)
-    }
-
     private func backToArtifacts(_ app: XCUIApplication) {
-        let back = app.navigationBars["Preview"].buttons["Artifacts"]
+        let back = app.navigationBars["Preview"].buttons["Outputs"]
         XCTAssertTrue(back.waitForExistence(timeout: 5))
         back.tap()
     }

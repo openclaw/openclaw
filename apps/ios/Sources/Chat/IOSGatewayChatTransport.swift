@@ -590,7 +590,10 @@ struct IOSGatewayChatTransport: OpenClawChatGatewayTransport {
         return loaded
     }
 
-    func acquireSessionArtifactAccess(sessionKey: String) async throws -> IOSSessionArtifactAccess {
+    func acquireSessionArtifactAccess(
+        sessionKey: String,
+        assistantOutputsOnly: Bool = false) async throws -> IOSSessionArtifactAccess
+    {
         guard let mediaArtifactLoader,
               let route = await self.currentSessionMutationRoute(),
               let gatewayID = await self.gateway.currentGatewayID(ifCurrentRoute: route)
@@ -608,7 +611,13 @@ struct IOSGatewayChatTransport: OpenClawChatGatewayTransport {
                 // would duplicate images or lose exportable items.
                 let request = OpenClawChatGatewayRequests.artifactsList(
                     sessionKey: target.sessionKey, agentID: target.agentID)
-                let data = try await self.gateway.request(request, ifCurrentRoute: route)
+                var params = request.params
+                if assistantOutputsOnly {
+                    params["messageRole"] = AnyCodable("assistant")
+                }
+                let data = try await self.gateway.request(
+                    OpenClawChatGatewayRequest(method: request.method, params: params, timeoutMs: request.timeoutMs),
+                    ifCurrentRoute: route)
                 guard await isCurrent() else { throw CancellationError() }
                 return try JSONDecoder().decode(ArtifactsListResult.self, from: data)
             },

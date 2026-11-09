@@ -14,12 +14,6 @@ struct IOSSessionArtifactsModelTests {
         #expect(model.artifacts.map(\.id) == ["first", "second", "image"])
         #expect(model.artifacts[1].canDownload == false)
         #expect(await gateway.downloads == 0)
-        model.searchText = " REPORT "
-        #expect(model.filteredArtifacts.map(\.id) == ["first", "second"])
-        model.category = .images
-        #expect(model.filteredArtifacts.isEmpty)
-        model.searchText = ""
-        #expect(model.filteredArtifacts.map(\.id) == ["image"])
     }
 
     @Test func `refresh failure preserves prior catalog and reports error rather than an empty collection`() async {
@@ -70,8 +64,7 @@ struct IOSSessionArtifactsModelTests {
         await model.refresh()
         #expect(model.errorMessage == nil)
         #expect(model.artifacts.map(\.id) == ["image-without-mime"])
-        model.category = .images
-        #expect(model.filteredArtifacts.count == 1)
+        #expect(model.artifacts[0].category == .images)
     }
 
     @Test(arguments: ["text/html", "image/svg+xml", "application/xml"])
