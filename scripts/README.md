@@ -331,6 +331,12 @@ NODE_DISABLE_COMPILE_CACHE=1 node --import ./scripts/tsx.mjs scripts/bench-contr
   --bundle-dir dist/control-ui --pairs 10 --viewport both
 ```
 
+Use `--fresh-browser` to start a new browser process for every observation when
+the host cannot reliably reuse a process after closing a context. Apply it to
+every comparison arm. The manifest records this mode; do not pool it with
+reused-process runs because browser caches and compilation state differ. Warm
+boot still reloads within the observation's own context.
+
 `bench-control-ui-rpc-payloads.ts` seeds each compiled Gateway with the storage
 owners from that Gateway's source checkout. The source root defaults to the
 parent of `dist/` for the selected `--entry`; use `--fixture-source-root` and

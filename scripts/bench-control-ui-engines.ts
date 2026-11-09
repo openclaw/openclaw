@@ -172,6 +172,7 @@ const { values } = parseArgs({
     "page-phases": { type: "string", default: "visit,action,leave" },
     "page-origin": { type: "string", default: "new-session" },
     pairs: { type: "string", default: "1" },
+    "fresh-browser": { type: "boolean", default: false },
     trace: { type: "boolean", default: false },
     "observer-origins": { type: "boolean", default: false },
     "gesture-geometry": { type: "boolean", default: false },
@@ -767,6 +768,7 @@ try {
     })),
     host: { platform: os.platform(), arch: os.arch(), cpus: os.cpus().length, load: os.loadavg() },
     pairs,
+    freshBrowser: values["fresh-browser"],
     viewports,
     networkProfiles,
     methodDelay: values["rpc-delay-method"]
@@ -814,8 +816,7 @@ try {
                     : values["cpu-only"]
                       ? "WebKit smoothed utilization diagnostic (not action CPU) and Chromium CDP thread CPU; no timeline or script profiler"
                       : "Untraced wall and browser-local application time; Chromium CDP counters only, unavailable WebKit/Firefox counters are null",
-    order:
-      "Serial network profiles alternate each pair; engine/configuration/bundle positions rotate and reverse across pairs; fresh browser context per observation",
+    order: `Serial network profiles alternate each pair; engine/configuration/bundle positions rotate and reverse across pairs; fresh browser ${values["fresh-browser"] ? "process and " : ""}context per observation`,
     acceptance:
       "Census screens >1.3x engine/Chromium; confirm with ten rotated pairs plus A/A. Fix proof: twenty rotated pairs plus A/A; median regression <=5% and p95 no worse. Missing CPU clocks cannot certify CPU wins on a noisy host; >20% attributable regression blocks.",
     rapidNavigationContract:
@@ -971,7 +972,11 @@ try {
               continue;
             }
             const browserSlotKey = browserKey(engine, configuration.accessibility);
-            if (scenario.memory || !browsers.get(browserSlotKey)!.isConnected()) {
+            if (
+              values["fresh-browser"] ||
+              scenario.memory ||
+              !browsers.get(browserSlotKey)!.isConnected()
+            ) {
               await browsers.get(browserSlotKey)!.close();
               browsers.set(browserSlotKey, await launchEngine(engine, configuration.accessibility));
             }
