@@ -20,6 +20,7 @@ import {
   expectNodeFailure as expectFailure,
   expectNodeReply,
 } from "./nodes.invoke.test-support.js";
+import { publishNodePermissionMissing } from "./nodes.permission-missing.js";
 import type { GatewayNodeInvokeStream, GatewayRequestHandlerOptions } from "./shared-types.js";
 
 const mocks = vi.hoisted(() => ({
@@ -160,6 +161,22 @@ function createNodeInvokeStreamClient(
 }
 
 describe("node.invoke caller cancellation", () => {
+  it.each([
+    ["disabled-in-openclaw", "Settings → This Mac."],
+    ["denied", "Settings → This Mac → Permissions."],
+  ] as const)("routes %s permission recovery to the right Mac setting", (state, path) => {
+    const result = publishNodePermissionMissing({
+      error: {
+        code: "PERMISSION_MISSING",
+        details: { capabilities: ["computerControl"], state },
+      },
+      nodeId: "paired-node",
+      command: "simulator.act",
+      context: { validateAgentRuntimeApprovalAuthority: () => false },
+    });
+    expect(result?.message).toContain(path);
+  });
+
   it.each([true, false])(
     "projects native permissions only into the authenticated session (bound=%s)",
     async (bound) => {
