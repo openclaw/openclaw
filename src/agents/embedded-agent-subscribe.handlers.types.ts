@@ -84,7 +84,7 @@ export type AssistantStreamData = {
 
 /** Incremental tag and Markdown parsing state, owned by one stream lane. */
 export type StreamBlockState = {
-  thinking: boolean;
+  reasoningDepth: number;
   final: boolean;
   inlineCode?: InlineCodeState;
   fence?: FenceScanState;

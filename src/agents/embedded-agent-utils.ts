@@ -1,5 +1,11 @@
 import { stripCompactionReplayCheckpointInPlace } from "@openclaw/ai/transports";
 import { createInlineCodeState } from "../../packages/markdown-core/src/code-spans.js";
+import {
+  findMarkdownCodeSpans,
+  reduceStableReasoningText,
+  type ReductionState,
+} from "../../packages/markdown-core/src/reasoning-tag-parser.js";
+import { createLiveReasoningTagStream } from "../../packages/markdown-core/src/reasoning-tag-stream-owner.js";
 /**
  * Embedded-agent message text utilities.
  * Extracts visible assistant text, reasoning summaries, thinking-tag blocks,
@@ -265,86 +271,45 @@ type ThinkTaggedSplitBlock =
   | { type: "thinking"; thinking: string }
   | { type: "text"; text: string };
 
-const THINKING_TAG_NAME_PATTERN = String.raw`(?:(?:antml:|mm:)?(?:think(?:ing)?|thought)|antthinking)`;
-const THINKING_TAG_OPEN_RE = new RegExp(String.raw`<\s*${THINKING_TAG_NAME_PATTERN}\s*>`, "i");
-const THINKING_TAG_CLOSE_RE = new RegExp(
-  String.raw`<\s*\/\s*${THINKING_TAG_NAME_PATTERN}\s*>`,
-  "i",
-);
-export const THINKING_TAG_SCAN_RE = new RegExp(
-  String.raw`<\s*(\/?)\s*${THINKING_TAG_NAME_PATTERN}\s*>`,
-  "gi",
-);
-const THINKING_TAG_EXACT_RE = new RegExp(
-  String.raw`^<\s*(\/?)\s*${THINKING_TAG_NAME_PATTERN}\s*>$`,
-  "i",
-);
-
 export type ThinkingTagStreamState = {
   scannedOffset: number;
-  pendingTagStart?: number;
-  inThinking: boolean;
-  extracted: string;
-  lastMatchEnd: number;
-  lastTag?: { type: "open" | "close"; end: number };
+  stream: ReturnType<typeof createLiveReasoningTagStream>;
 };
 
 export function createAssistantStreamBlockState() {
-  return { thinking: false, final: false, inlineCode: createInlineCodeState() };
+  return { reasoningDepth: 0, final: false, inlineCode: createInlineCodeState() };
 }
 
 export function createThinkingTagStreamState(): ThinkingTagStreamState {
   return {
     scannedOffset: 0,
-    inThinking: false,
-    extracted: "",
-    lastMatchEnd: 0,
+    stream: createLiveReasoningTagStream(),
   };
 }
 
 function splitThinkingTaggedText(text: string): ThinkTaggedSplitBlock[] | null {
-  const trimmedStart = text.trimStart();
-  // Avoid false positives: only treat it as structured thinking when it begins
-  // with a think tag (common for local/OpenAI-compat providers that emulate
-  // reasoning blocks via tags).
-  if (
-    !trimmedStart.startsWith("<") ||
-    !THINKING_TAG_OPEN_RE.test(trimmedStart) ||
-    !THINKING_TAG_CLOSE_RE.test(text)
-  ) {
+  // Promotion remains limited to provider text that starts with structured markup.
+  if (!text.trimStart().startsWith("<")) {
     return null;
   }
-
-  let inThinking = false;
-  let cursor = 0;
-  const blocks: ThinkTaggedSplitBlock[] = [];
-
-  const pushBlock = (type: ThinkTaggedSplitBlock["type"], value: string) => {
-    const content = type === "thinking" ? value.trim() : value;
-    if (content) {
-      blocks.push(type === "thinking" ? { type, thinking: content } : { type, text: content });
-    }
-  };
-
-  for (const match of text.matchAll(THINKING_TAG_SCAN_RE)) {
-    const index = match.index ?? 0;
-    const isClose = match[1]?.includes("/") ?? false;
-
-    // Ignore nested opens and unmatched closes.
-    if (isClose !== inThinking) {
-      continue;
-    }
-    pushBlock(inThinking ? "thinking" : "text", text.slice(cursor, index));
-    cursor = index + match[0].length;
-    inThinking = !isClose;
-  }
-
-  if (inThinking) {
+  const state: ReductionState = { depth: 0, visibleEver: false };
+  const parts = reduceStableReasoningText(text, findMarkdownCodeSpans(text), state, {
+    final: false,
+    mode: "hide",
+    scope: "all",
+  });
+  if (state.depth > 0 || !parts.some((part) => part.kind === "thinking")) {
     return null;
   }
-  pushBlock("text", text.slice(cursor));
-
-  return blocks.some((block) => block.type === "thinking") ? blocks : null;
+  return parts.flatMap((part): ThinkTaggedSplitBlock[] => {
+    const content = part.kind === "thinking" ? part.text.trim() : part.text;
+    if (!content) {
+      return [];
+    }
+    return part.kind === "thinking"
+      ? [{ type: "thinking", thinking: content }]
+      : [{ type: "text", text: content }];
+  });
 }
 
 export function promoteThinkingTagsToBlocks(message: AssistantMessage): void {
@@ -389,22 +354,16 @@ export function promoteThinkingTagsToBlocks(message: AssistantMessage): void {
 }
 
 export function extractThinkingFromTaggedText(text: string): string {
-  if (!text) {
-    return "";
-  }
-  let result = "";
-  let lastIndex = 0;
-  let inThinking = false;
-  for (const match of text.matchAll(THINKING_TAG_SCAN_RE)) {
-    const idx = match.index ?? 0;
-    if (inThinking) {
-      result += text.slice(lastIndex, idx);
-    }
-    const isClose = match[1] === "/";
-    inThinking = !isClose;
-    lastIndex = idx + match[0].length;
-  }
-  return result.trim();
+  return reduceStableReasoningText(
+    text,
+    findMarkdownCodeSpans(text),
+    { depth: 0, visibleEver: false },
+    { final: false, mode: "hide", scope: "all" },
+  )
+    .filter((part) => part.kind === "thinking")
+    .map((part) => part.text)
+    .join("")
+    .trim();
 }
 
 export function extractThinkingFromTaggedStream(
@@ -412,39 +371,8 @@ export function extractThinkingFromTaggedStream(
   state: ThinkingTagStreamState,
   delta: string,
 ): string {
-  // Indexing the growing rope flattens the entire reply on each token. Scan the
-  // appended chunk directly; a checkpoint reset still needs its unscanned prefix.
-  const unscanned =
-    text.length - state.scannedOffset === delta.length ? delta : text.slice(state.scannedOffset);
-  for (let offset = 0; offset < unscanned.length; offset += 1) {
-    const index = state.scannedOffset + offset;
-    const char = unscanned[offset];
-    if (char === "<") {
-      state.pendingTagStart = index;
-      continue;
-    }
-    if (char !== ">" || state.pendingTagStart === undefined) {
-      continue;
-    }
-    const start = state.pendingTagStart;
-    state.pendingTagStart = undefined;
-    const match = THINKING_TAG_EXACT_RE.exec(text.slice(start, index + 1));
-    if (!match) {
-      continue;
-    }
-    if (state.inThinking) {
-      state.extracted += text.slice(state.lastMatchEnd, start);
-    }
-    const isClose = match[1] === "/";
-    state.inThinking = !isClose;
-    state.lastMatchEnd = index + 1;
-    state.lastTag = { type: isClose ? "close" : "open", end: index + 1 };
-  }
+  const start = state.scannedOffset;
+  const unscanned = text.length - start === delta.length ? delta : text.slice(start);
   state.scannedOffset = text.length;
-
-  const closed = state.extracted.trim();
-  if (closed || state.lastTag?.type !== "open") {
-    return closed;
-  }
-  return text.slice(state.lastTag.end).trim();
+  return state.stream.append(unscanned);
 }

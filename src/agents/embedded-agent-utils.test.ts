@@ -53,7 +53,10 @@ function extractThinkingFromTaggedStreamReference(text: string): string {
   if (lastClose && (lastClose.index ?? -1) > (lastOpen.index ?? -1)) {
     return closed;
   }
-  return text.slice((lastOpen.index ?? 0) + lastOpen[0].length).trim();
+  return text
+    .slice((lastOpen.index ?? 0) + lastOpen[0].length)
+    .replace(/<[^>]*$/, "")
+    .trim();
 }
 
 function randomChunks(text: string, seed: number): string[] {

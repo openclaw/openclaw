@@ -44,12 +44,25 @@ type ReasoningTagScan = {
 
 /** Scans quote-aware provider reasoning tags with iterative malformed recovery. */
 export function scanReasoningTags(text: string, final = true): ReasoningTagScan {
+  return scanReasoningTagMatches(text, 0, final);
+}
+
+function scanReasoningTagMatches(
+  text: string,
+  startOffset: number,
+  final: boolean,
+  codeSpans?: Array<[number, number]>,
+): ReasoningTagScan {
   const tags: ReasoningTagMatch[] = [];
-  let cursor = 0;
+  let cursor = startOffset;
   while (cursor < text.length) {
     const start = text.indexOf("<", cursor);
     if (start === -1) {
       break;
+    }
+    if (codeSpans && isInsideCode(start, codeSpans)) {
+      cursor = start + 1;
+      continue;
     }
     const parsed = parseReasoningTagAt(text, start, final);
     if (parsed.kind === "tag") {
@@ -539,6 +552,45 @@ export function reduceReasoningText(
   state: ReductionState,
   options: ReductionOptions,
 ): ReasoningTagTextDelta[] {
+  const start = options.start ?? 0;
+  const scan = scanReasoningTags(text.slice(start), options.final);
+  const tags: ReasoningTagMatch[] = [];
+  for (const scannedTag of scan.tags) {
+    const index = scannedTag.index + start;
+    if (!isInsideCode(index, codeSpans)) {
+      tags.push({ ...scannedTag, index });
+    }
+  }
+  return reduceReasoningMatches(text, state, options, tags);
+}
+
+/** Internal code-first scan; callers supply parser-proven ownership, not guesses. */
+export function scanStableReasoningTags(
+  text: string,
+  codeSpans: Array<[number, number]>,
+  start: number,
+  final: boolean,
+): ReasoningTagScan {
+  return scanReasoningTagMatches(text, start, final, codeSpans);
+}
+
+/** Internal live/complete reasoning extraction uses code ownership before tag syntax. */
+export function reduceStableReasoningText(
+  text: string,
+  codeSpans: Array<[number, number]>,
+  state: ReductionState,
+  options: ReductionOptions,
+): ReasoningTagTextDelta[] {
+  const scan = scanStableReasoningTags(text, codeSpans, options.start ?? 0, options.final);
+  return reduceReasoningMatches(text, state, options, scan.tags);
+}
+
+function reduceReasoningMatches(
+  text: string,
+  state: ReductionState,
+  options: ReductionOptions,
+  tags: ReasoningTagMatch[],
+): ReasoningTagTextDelta[] {
   const output: ReasoningTagTextDelta[] = [];
   const emit = (kind: ReasoningTagTextDelta["kind"], value: string) => {
     if (!value) {
@@ -567,14 +619,6 @@ export function reduceReasoningText(
   };
 
   const start = options.start ?? 0;
-  const scan = scanReasoningTags(text.slice(start), options.final);
-  const tags: ReasoningTagMatch[] = [];
-  for (const scannedTag of scan.tags) {
-    const index = scannedTag.index + start;
-    if (!isInsideCode(index, codeSpans)) {
-      tags.push({ ...scannedTag, index });
-    }
-  }
   const mustParseRemainder: boolean[] = [];
   if (options.scope === "leading") {
     let mustParse = false;
