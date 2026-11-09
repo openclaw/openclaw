@@ -209,6 +209,13 @@ it.each(
     { committed, kind: "restore", original: [focus], intermediate: [], desired: [focus] },
     {
       committed,
+      kind: "new collection insertion",
+      original: [focus, later],
+      intermediate: [focus, later, { id: "urgent", label: "Urgent", sessionKeys: [] }],
+      desired: [{ id: "urgent", label: "Urgent", sessionKeys: [] }, focus, later],
+    },
+    {
+      committed,
       kind: "label reversal",
       original: [focus],
       intermediate: [{ ...focus, label: "Work" }],

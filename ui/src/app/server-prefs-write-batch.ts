@@ -98,7 +98,9 @@ export function rebasePersonalSessionGroups(
   const merged = rebaseSidebarEntries(
     base.map((group) => group.id),
     desired.map((group) => group.id),
-    [...result.keys()],
+    // Locally added IDs must be inserted at their authored position, including
+    // when an earlier unacknowledged write already put them in the remote map.
+    [...result.keys()].filter((id) => previous.has(id) || !wanted.has(id)),
   ).map((id) => result.get(id)!);
   return prefValuesEqual(normalizePersonalSessionGroups(merged), merged) ? merged : undefined;
 }

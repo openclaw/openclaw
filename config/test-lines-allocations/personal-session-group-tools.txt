@@ -1,3 +1,3 @@
-505
-# Guest collection tooling: dispatcher authority/CAS, browser-local adoption, queued upgrades, durable membership/value/order reversals with lost ACKs, conflict isolation/localization, and real-Gateway reload proof.
-# Exactly 77 + 312 - 2 + 3 + 115 net test LF against prepared base c7499924; shared scalar unchanged.
+546
+# Guest collection tooling: authority/CAS, local adoption, durable inverse and non-tail insertion intent, conflict isolation/localization, real-Gateway lost-ACK/reconnect proof.
+# Exactly 77 + 319 - 2 + 3 + 149 net test LF against prepared base b59c593c; shared scalar unchanged.

@@ -198,7 +198,14 @@ suite.define(() => {
             let hold:
               | { phase: "request" | "response"; captured: boolean; seen: boolean }
               | undefined;
-            await page.routeWebSocket(urls[0]!, (socket) => {
+            let offline = false;
+            let closeGuestConnection = () => Promise.resolve();
+            await page.routeWebSocket(urls[0]!, async (socket) => {
+              if (offline) {
+                await socket.close();
+                return;
+              }
+              closeGuestConnection = () => socket.close();
               const server = socket.connectToServer();
               let blockedResponseId: string | undefined;
               socket.onMessage((message) => {
@@ -357,11 +364,38 @@ suite.define(() => {
             await waitForControlUiGatewayReady(page);
             await group("Later").waitFor();
             await group("Focus").waitFor();
-            await menu("Later", "Move up");
             const order = () =>
               sidebar
                 .locator("[data-personal-session-group] .sidebar-session-group-toggle")
                 .allTextContents();
+            // The UI intentionally disables new sections while disconnected. Queue its
+            // real creation before delivery, reorder it, then lose the connection/tab.
+            hold = { phase: "request", captured: false, seen: false };
+            await create("Pending");
+            await expect.poll(() => hold?.seen).toBe(true);
+            await menu("Pending", "Move up");
+            await menu("Pending", "Move up");
+            await expect.poll(order).toEqual(["Pending", "Focus", "Later"]);
+            offline = true;
+            await closeGuestConnection();
+            await expect
+              .poll(() => evaluateControlUiContext(page, (app) => app.gateway.snapshot.phase))
+              .not.toBe("connected");
+            hold = undefined;
+            offline = false;
+            await page.reload();
+            await waitForControlUiGatewayReady(page);
+            await expect.poll(order).toEqual(["Pending", "Focus", "Later"]);
+            await expect
+              .poll(() => rpc(page, "users.prefs.get", { keys: ["ui.personalSessionGroups"] }))
+              .toMatchObject({
+                entries: { "ui.personalSessionGroups": [{ label: "Pending" }, ...observed, later] },
+              });
+            await menu("Pending", "Remove section");
+            await expect
+              .poll(() => rpc(page, "users.prefs.get", { keys: ["ui.personalSessionGroups"] }))
+              .toMatchObject({ entries: { "ui.personalSessionGroups": [...observed, later] } });
+            await menu("Later", "Move up");
             await expect.poll(order).toEqual(["Later", "Focus"]);
             await menu("Focus", "Edit section");
             const dialog = page.getByRole("dialog", { name: "Edit section", exact: true });
