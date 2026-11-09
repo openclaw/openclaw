@@ -414,14 +414,11 @@ for (const scenario of ["allowed", "revoked"] as const) {
         () => node?.stop(),
         () => operator?.stopAndWait(),
         gracefulStop,
-        () =>
-          fs.writeFile(
-            path.join(
-              process.cwd(),
-              ".openclaw/tmp/recovery-proof/process-proof/gateway-" + scenario + ".log",
-            ),
-            instance.logs(),
-          ),
+        async () => {
+          const directory = path.join(process.cwd(), ".openclaw/tmp/recovery-proof/process-proof");
+          await fs.mkdir(directory, { recursive: true });
+          await fs.writeFile(path.join(directory, "gateway-" + scenario + ".log"), instance.logs());
+        },
         () => instance.cleanup(),
         () => github.close(),
         () => provider.close(),
