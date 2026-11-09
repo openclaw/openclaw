@@ -270,6 +270,25 @@ extension types and both unused-file scans pass. Both dependency phases and all
 three export phases completed with unchanged Gateway, UI and release-tool
 export findings. Exact-head CI and landing remain pending.
 
+Core tool-result classification, pinned main `9b8aa392679f`: consolidate three
+duplicate cases into the existing table that checks both classification APIs.
+Carry all six distinct completed/failure/exit inputs into that table; preserve
+every existing row and network-error, authenticated-error and hostile-reflection
+case. The unchanged baseline passed all 28 cases in
+[CI job 128652430604](https://github.com/openclaw/openclaw/actions/runs/42455052153/job/128652430604)
+at `f4976c968539`; the owner, test, dependency and harness inputs match the pinned
+base. The containing workflow failed elsewhere. The candidate has 31 expanded
+cases, 11 rather than 14 declarations, and 20 fewer test lines; production is
+unchanged. At `32cb09b3f0ee`, all 31 cases passed on both Node and Bun in
+[CI job 128671390378](https://github.com/openclaw/openclaw/actions/runs/42461299705/job/128671390378);
+its separate broker-child exit-code assertion failed. Core types and lint passed.
+All seven removal-scan phases completed in
+[CI job 128671385713](https://github.com/openclaw/openclaw/actions/runs/42461299705/job/128671385713).
+Both unused-file scans were clean; export scans found only the unchanged UI
+`EventLoadProgress` export, removed by incoming main during conflict integration.
+The integration preserved the classification test and both production owners.
+PR: [195114](https://github.com/openclaw/openclaw/pull/195114).
+
 Batches113–118, pinned main `a07facd84480`, used one native checkout and
 separate scoped proofs. Unchanged baselines passed: destinations6, History1,
 read coalescing1, fallback8, dictation33 and annotation lifetime11.
@@ -385,10 +404,91 @@ permission to delete without root qualification.
 
 - Exact root/scripts records cover129 accepted paths (reconciled from the earlier117), including: the seven earlier retention/APNs/appcast/architecture/Buzz/descendant/channel-read records, the ClawRouter managed-Gateway fixture, all ten `cli-json-stdout` entry suites, CLI message authority, SQLite maintenance, provider-stall cancellation and Codex account usage, managed proxy and node cancellation. The latter four retain1/1,1/2,1/3 and1/1 physical/expanded cases respectively. All are source-only records and add no aggregate credit: overlap with older root/docs/scripts summaries is unresolved. The gross test/scripts inventory remains1,606 candidate paths, not certified unread paths.
 
+### Current-source script follow-up
+
+At `e08aa74ea39e35d01ba8e8f84e317747aba1bf3f`, eight suites added after the frozen
+census were reviewed with their owners, relevant callers, support and history.
+All 23 declarations / 36 expanded cases are retained. These are standalone
+counts, not additions to the overlapping root/scripts aggregate. This is source
+review only: no runtime qualification, test removal or production change.
+
+| Suite under `test/scripts/`           | Declarations / cases | Retained contract                                                                                                             |
+| ------------------------------------- | -------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| `generated-output-utils.test.ts`      | 5 / 12               | Exact write/check results, empty output, one-read cost, metadata/mode preservation and real blocked-parent errors.            |
+| `package-root-modules.test.ts`        | 3 / 3                | Independent parser oracle, packaged sibling imports and transitive closure with a missing-file diagnostic.                    |
+| `perf-gc-collections.test.ts`         | 1 / 1                | Inclusive start/exclusive end, append behavior across observer batches and the next measurement window.                       |
+| `setup-node-env-git.test.ts`          | 5 / 7                | Actual setup shell, privilege selection, bounded installation, capability recheck and failure propagation.                    |
+| `shared-fixture-isolation.test.ts`    | 2 / 3                | Real enclosing Git repositories, ignored archive discovery and an authoritative empty root index.                             |
+| `stylelint-selector-indexing.test.ts` | 5 / 5                | Selector semantics and normalized allowances scoped by identity, file, context and occurrence count; stale-allowance removal. |
+| `vitest-declared-inputs.test.ts`      | 1 / 2                | Real dependency recording and selected-versus-full failure oracles for archive and manifest inputs.                           |
+| `vitest-worker-run.test.ts`           | 1 / 3                | Borrowers settle after close, listeners detach and disposal preserves failures, including rejection before readiness.         |
+
+The package parser oracle cannot replace manifest membership or missing-file
+proof. Mocked inventory and UI coordinator tests cannot replace the real nested
+Git and worker-owner boundaries. No safe consolidation was identified.
+
+### Adaptive CI follow-up
+
+At `9bdea97f3c1589841d1c1cf81a9bea7ae70886aa`, eight adaptive-CI suites were
+reviewed with their owners, callers, support and history: 40 declarations / 85
+expanded cases. These standalone counts do not add to the overlapping
+root/scripts aggregate. No safe removal or consolidation was identified.
+
+| Suite under `test/scripts/`      | Declarations / cases | Retained contract                                                                                                 |
+| -------------------------------- | -------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| `ci-adaptive-costs.test.ts`      | 7 / 7                | Setup and audit costs, per-execution billing rounding, unknown prices and real CLI output.                        |
+| `ci-adaptive-selection.test.ts`  | 4 / 11               | Full scheduled inventory, conservative fallback, incomplete history and recommendations that only add candidates. |
+| `ci-adaptive-decisions.test.ts`  | 1 / 2                | Revision/tree-bound comparisons in shallow checkouts and dirty-checkout fallback.                                 |
+| `ci-adaptive-evaluation.test.ts` | 4 / 10               | Project-qualified outcomes, unavailable evidence, source/timing validation and CLI reports.                       |
+| `ci-adaptive-priors.test.ts`     | 8 / 29               | Bounded tree comparisons, artifact provenance, cutoff, consumer identity and unavailable-network fallback.        |
+| `ci-adaptive-model.test.ts`      | 2 / 2                | Project-qualified dependencies, unknown inputs, validated model data and outcome-independent ranking.             |
+| `ci-adaptive-jev.test.ts`        | 5 / 13               | Opaque identity, complete responses, provider fallback, shared deadline and usage accounting.                     |
+| `ci-adaptive-markdown.test.ts`   | 9 / 11               | Content-qualified omissions, changed dependencies, symlinks and a shared selection graph.                         |
+
+Three fixture repairs retain the existing declarations: give same-path projects
+different dependencies; run invalid-tree cases against an isolated, bounded Git
+tree with a successful control; preserve the comparison tree when changing only
+the base revision. Previously the latter two checks could reject at unrelated
+guards. The source classification was R77/F8 expanded cases, with no C/D cases.
+All eight suites passed on the original and repaired tests (85 cases) with
+Node 26.13.0 on macOS. Eight deliberate owner mutations escaped the original
+tests and failed the repaired tests: project identity, tree identity,
+completeness, path, mode, duplicate path, byte bound and comparison base.
+Source bytes were restored after each mutation. No production code changed.
+
+### CI observation and timing follow-up
+
+At `2d5b14db1a64086d838c3f6a096a29900c299dfb`, four suites were reviewed with
+their owners, callers, support, history and CI routing: 23 declarations / 34
+expanded cases. These standalone counts do not add to the overlapping
+root/scripts aggregate. All cases remain; no safe deletion or consolidation
+was identified.
+
+| Suite under `test/scripts/`        | Declarations / cases | Retained contract                                                                                                                                         |
+| ---------------------------------- | -------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ci-test-observations.test.ts`     | 14 / 17              | Checkout identity, immutable launch inputs, native outcomes, dependency graphs, bounded exports, privacy, malformed evidence and the real export command. |
+| `ci-shard-timings-refresh.test.ts` | 3 / 11               | Runtime-specific wall costs, selection identity, runner exclusions and unchanged timing bytes on invalid evidence.                                        |
+| `vitest-shard-timings.test.ts`     | 4 / 4                | Duplicate ownership rejection, whole-config identity, reordered selection history and named-shard duration persistence.                                   |
+| `weighted-test-shards.test.ts`     | 2 / 2                | Deterministic weighted assignment across batches and rejection of an empty shard list.                                                                    |
+
+One mixed declaration retains its interrupted/missing-dependency proof and
+repairs the unavailable-repository control. Previously it sent a terminal event
+without inventory, rejecting before any repository read. It now sends valid
+inventory and requires the existing snapshot to remain byte-identical.
+The named-shard timing test is renamed to describe its duration roundtrip;
+unused persisted metadata fields are not restored as incidental assertions.
+All four suites passed on the original and repaired tests (34 cases) under
+Node 26.13.0 on macOS. A deliberate owner mutation that ignored the configured
+repository root passed the original control and failed the repaired snapshot
+assertion. Production and test bytes were restored after the mutation.
+The baseline took 28.67 seconds and the candidate 22.67 seconds wall time;
+these single runs establish correctness, not a performance improvement.
+
 ## Pending qualification and proof repairs
 
 - Keep source-only candidates separate from applied removals. Obsolete fixture candidates require current-owner and runtime qualification. Pending: Twitch settled flag; it needs current-source and runtime keeper qualification.
-- Transfer rows before consolidating core failed-tool classification, CodeMode deadline duplication, Android loading/blank-auth, persisted outbox keys/epochs, terminal initial projection, and native PCM/decoder/reader cases. Keep typed host-error precedence and active-run settlement.
+- Transfer rows before consolidating Android loading/blank-auth, persisted outbox keys/epochs, terminal initial projection, and native PCM/decoder/reader cases. Keep typed host-error precedence and active-run settlement.
+- Retain the CodeMode worker-leg deadline case: its real warmed worker and interruption path are distinct from the cancellation table's typed host-error precedence. Both suites keep their active-run settlement checks; this is a source-only retention decision.
 - Repair Android runtime/model fixture custody through existing guaranteed closers; no measured leak is claimed. Retarget misleading coroutine/authority/streaming assertions. Qualify Android dropdown arithmetic, IPv6 URL, empty SMS defaults and component-state mapping against their stronger keepers.
 - Repair swallowed/unrelated setup errors, silent auth/symlink skips, SSRF negative controls, content-absence/privacy results, delayed observer proofs, missing CLI fixture cleanup and aggregate-only tool-result fidelity. Retain CI inventory gaps as route repairs, including PostgreSQL conformance and removed Logbook worker paths.
 - Diagnostics OTel: the NodeSDK replay removal is runtime-qualified above; content capture proof remains a separate repair.

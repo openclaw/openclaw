@@ -162,6 +162,12 @@ These pages require the same connected `operator.admin` session as Settings.
 Without that access, they show the native Gateway connection guidance. Instances
 opens **Devices**, the Dashboard owner of paired nodes and connected clients.
 
+If the Gateway answers Settings or one of these pages with a plain-text or JSON
+HTTP error (for example `gateway.controlUi.enabled: false`, or while Control UI
+assets are being prepared), the app shows **Dashboard unavailable** with the
+HTTP status and **Reload** instead of the raw response. HTML error pages, such
+as a proxy's sign-in page, still load in the Dashboard.
+
 The native **New Thread** agent picker shows configured names or agent IDs as
 soon as the roster arrives. Resolved identities update each choice without
 delaying selection; configured names keep precedence and the Gateway's default
@@ -210,6 +216,12 @@ cannot connect, or open native Gateway settings to recover the connection. Acces
 sign-in alone does not grant operator admin access or replace Gateway pairing.
 The share extension asks you to send from OpenClaw for an Access-protected
 Gateway. Access credentials are not exported to Apple Watch or cloud workers.
+
+The share extension reuses the connected Gateway's approved TLS certificate pin
+and saved custom service headers. Header values stay in the shared Keychain,
+not App Group preferences. Reconnect the app after upgrading to refresh the
+extension's saved connection. The extension cannot approve a new certificate or
+complete browser sign-in; open OpenClaw to review changed trust or use Access.
 
 ## Share request admission
 
@@ -358,6 +370,19 @@ creation has a token or password auth path.
    limited for bearer-token safety. If it is limited, configure `wss://` or
    Tailscale Serve, scan a new full-access code from Control UI or `openclaw qr`,
    then reconnect to enable settings and upgrades.
+
+   Full-access connections also prepare the **OpenClaw Share** extension
+   automatically, so sharing a photo or link does not require a second device
+   approval. The extension keeps its own Gateway-scoped, node-only credential;
+   it does not receive the app's administrative credential. Existing Share
+   credentials are not automatically replaced, including after revocation.
+   After upgrading, reconnecting an already full-access app also prepares Share
+   if it has no credential yet. Existing identities and credentials are reused;
+   reconnecting does not restore revoked or removed Share access. To restore it,
+   set up the app again with a new full-access code; a revoked Share identity
+   then needs `openclaw devices approve`.
+   Limited connections still require separate Share approval. Cloudflare Access
+   Gateways continue to require sending from the foreground app.
 
 The Control UI button requires an already paired session with `operator.admin`.
 As a terminal fallback, pick a discovered Gateway in the iOS app (or enable
@@ -709,6 +734,8 @@ Expected operator flow:
 
 When iOS wakes the app for a silent push, background refresh, or significant-location event, the app attempts a short node reconnect and then calls `node.event` with `event: "node.presence.alive"`. The Gateway records this as `lastSeenAtMs`/`lastSeenReason` on the paired node/device metadata only after the authenticated node device identity is known.
 
+When chat messages are waiting in the offline outbox, a silent push or background refresh wake then stays open for up to 8 seconds while they send, in order and with the usual retry backoff; a slow reconnect leaves less of that time, and a wake that does not reach the Gateway does not wait.
+
 The app treats a background wake as successfully recorded only when the Gateway response includes `handled: true`. Older Gateways may acknowledge `node.event` with `{ "ok": true }`; that response is compatible but does not count as a durable last-seen update.
 
 Background refresh wakes are requested through the system BackgroundTasks scheduler whenever the app moves to the background, after a silent push that could not be applied, and again after each refresh run; iOS decides when they actually execute. They stop if Background App Refresh is turned off for OpenClaw in iOS Settings, leaving push and significant-location wakes.
@@ -795,6 +822,7 @@ Agents can still operate the iOS app through OpenClaw by invoking node commands,
 
 - Voice wake and Talk mode are available on the Dashboard's **Settings -> Talk** page.
 - Voice wake sends recognized commands to the active session; use Talk mode for spoken assistant replies.
+- Switching chats or Gateways cancels pending Voice Wake commands and discards buffered recognition from the previous capture.
 - OpenAI realtime Talk uses client-owned WebRTC when `talk.realtime.transport` is `webrtc`; an explicit `gateway-relay` configuration remains Gateway-owned. See [Talk mode](/nodes/talk).
 - Talk-capable iOS nodes advertise the `talk` capability and can declare `talk.ptt.start`, `talk.ptt.stop`, `talk.ptt.cancel`, and `talk.ptt.once`; the Gateway allows those push-to-talk commands by default for trusted Talk-capable nodes.
 - iOS may suspend background audio; treat voice features as best-effort when the app is not active.

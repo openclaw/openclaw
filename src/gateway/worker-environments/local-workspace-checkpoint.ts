@@ -101,7 +101,12 @@ export function createLocalWorkspaceCheckpointRejection(params: {
       // Only changed source files can replace rejection. Its Git ref and guest
       // files remain recoverable; background settlement never retries it.
       const snapshot = await input.scan(input.target);
-      if (replacedRejected && rejected && snapshot.currentManifestRef === rejected.manifestRef) {
+      if (
+        replacedRejected &&
+        rejected &&
+        (snapshot.currentManifestRef === rejected.manifestRef ||
+          snapshot.resultingRoot === rejected.manifestRef)
+      ) {
         throw rejection(rejected.reason);
       }
       if (snapshot.resultingRoot !== snapshot.previousRoot) {

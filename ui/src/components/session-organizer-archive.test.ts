@@ -12,6 +12,7 @@ import {
   waitForConfirmDialogActions,
 } from "../test-helpers/modal-dialog.ts";
 import { waitForFast } from "../test-helpers/wait-for.ts";
+import { isArchiveHeld } from "./session-archive-hold.ts";
 import {
   archiveConfirmedSessionsWithUndo,
   archiveSessionWithUndo,
@@ -302,6 +303,8 @@ describe("held archive Undo window", () => {
       const held = lastToast();
       held.onDismiss?.(reason);
       held.onDismiss?.(reason);
+      // Once sending, the archive can no longer be cancelled from the session.
+      expect(isArchiveHeld(sessionRow(1).key)).toBe(false);
       await waitForFast(() => expect(harness.finishArchive).toHaveBeenCalledOnce());
       expect(harness.patch).toHaveBeenCalledExactlyOnceWith(
         sessionRow(1).key,

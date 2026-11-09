@@ -90,6 +90,7 @@ import {
   filterUnitConfigTestFiles,
 } from "../test/vitest/vitest.unit-paths.mjs";
 import {
+  classifyPackageJsonScriptChange,
   detectChangedLanes,
   listChangedPathsFromGit as listChangedPathsFromGitSource,
 } from "./changed-lanes.mts";
@@ -146,6 +147,7 @@ import {
   resolveShardTimingKey,
   type VitestShardTimingSpec,
 } from "./lib/vitest-shard-metadata.mts";
+import { readWindowsTargets } from "./lib/windows-test-targets.mts";
 
 export { isTestFileTarget } from "./lib/changed-path-facts.mjs";
 
@@ -1526,6 +1528,26 @@ function includePatternMatchesAnyFile(pattern: string, files: string[]) {
       // Keep Node's separator, dot-segment, and platform handling for other paths.
       ((!literalPattern || !isNormalizedLiteralPath(file)) && path.matchesGlob(file, pattern)),
   );
+}
+
+function createIncludePatternMatcher(patterns: string[]) {
+  const literals = new Set<string>();
+  const globs: string[] = [];
+  for (const pattern of patterns) {
+    if (isNormalizedLiteralPath(pattern)) {
+      literals.add(pattern);
+    } else {
+      globs.push(pattern);
+    }
+  }
+  return (file: string) => {
+    if (literals.has(file)) {
+      return true;
+    }
+    // Noncanonical paths retain Node's separator and dot-segment semantics.
+    const candidates = isNormalizedLiteralPath(file) ? globs : patterns;
+    return candidates.some((pattern) => file === pattern || path.matchesGlob(file, pattern));
+  };
 }
 
 function resolveExplicitSourceTestTargets(
@@ -4718,6 +4740,31 @@ function newlyConsumedMockModules(
   );
 }
 
+function changedWindowsTestInventory(cwd: string, baseRef: string | undefined): string[] | null {
+  if (!baseRef) {
+    return null;
+  }
+  const before = spawnSync("git", ["show", `${baseRef}:package.json`], {
+    cwd,
+    encoding: "utf8",
+    maxBuffer: GIT_LS_FILES_MAX_BUFFER_BYTES,
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  if (before.error || before.status !== 0) {
+    return null;
+  }
+  try {
+    const after = fs.readFileSync(path.join(cwd, "package.json"), "utf8");
+    if (classifyPackageJsonScriptChange(before.stdout, after) !== "windowsTestTooling") {
+      return null;
+    }
+    const previous = new Set(readWindowsTargets(JSON.parse(before.stdout).scripts));
+    return readWindowsTargets(JSON.parse(after).scripts).filter((file) => !previous.has(file));
+  } catch {
+    return null;
+  }
+}
+
 function resolveBoundedChangedTestTargetPlan(
   changedPaths: string[],
   options: ChangedTestTargetOptions,
@@ -4891,6 +4938,19 @@ function resolveBoundedChangedTestTargetPlan(
         }),
     );
     for (const manifest of manifests) {
+      const windowsTargets =
+        manifest === "package.json" ? changedWindowsTestInventory(cwd, options.baseRef) : null;
+      if (windowsTargets !== null) {
+        // Windows inventory edits do not change the package's runtime API.
+        // Keep manifest readers above and admit new Windows targets explicitly.
+        targets.push(...windowsTargets);
+        options.onSelection?.({
+          rule: "windows-test-inventory",
+          input: manifest,
+          targets: windowsTargets,
+        });
+        continue;
+      }
       const name = readImportGraphManifest(cwd, manifest).name;
       if (typeof name !== "string") {
         continue;
@@ -5494,8 +5554,8 @@ export function buildVitestRunPlans(
       ? [toScopedIncludePattern(targetArg, cwd)]
       : [];
   });
-  const impliedDatabaseWorkerTargets = databaseWorkerCoreTestFiles.filter((file) =>
-    databaseWorkerPatterns.some((pattern) => includePatternMatchesAnyFile(pattern, [file])),
+  const impliedDatabaseWorkerTargets = databaseWorkerCoreTestFiles.filter(
+    createIncludePatternMatcher(databaseWorkerPatterns),
   );
   const hasPackageFileTarget = classifiedTargets.some(
     ({ kind, relative }) =>
@@ -5599,10 +5659,9 @@ export function buildVitestRunPlans(
   const activeIncludePatterns = activeTargetArgs.map((target) =>
     toScopedIncludePattern(target, cwd),
   );
+  const matchesActiveIncludePattern = createIncludePatternMatcher(activeIncludePatterns);
   const impliedToolingIsolatedTargets = !watchMode
-    ? toolingIsolatedTestFiles.filter((file) =>
-        activeIncludePatterns.some((pattern) => includePatternMatchesAnyFile(pattern, [file])),
-      )
+    ? toolingIsolatedTestFiles.filter(matchesActiveIncludePattern)
     : [];
   if (impliedToolingIsolatedTargets.length > 0) {
     const current = groupedTargets.get("toolingIsolated") ?? [];
@@ -5615,9 +5674,8 @@ export function buildVitestRunPlans(
   }
   const uiTargets = groupedTargets.get("ui") ?? [];
   const uiIncludePatterns = uiTargets.map((target) => toScopedIncludePattern(target, cwd));
-  const impliedUiTimingTargets = uiTimingTestFiles.filter((file) =>
-    uiIncludePatterns.some((pattern) => includePatternMatchesAnyFile(pattern, [file])),
-  );
+  const matchesUiIncludePattern = createIncludePatternMatcher(uiIncludePatterns);
+  const impliedUiTimingTargets = uiTimingTestFiles.filter(matchesUiIncludePattern);
   if (impliedUiTimingTargets.length > 0) {
     groupedTargets.set("uiTiming", [
       ...new Set([...(groupedTargets.get("uiTiming") ?? []), ...impliedUiTimingTargets]),
@@ -5642,9 +5700,7 @@ export function buildVitestRunPlans(
       ]);
     }
   }
-  const impliedUiIsolatedTargets = uiIsolatedTestFiles.filter((file) =>
-    uiIncludePatterns.some((pattern) => includePatternMatchesAnyFile(pattern, [file])),
-  );
+  const impliedUiIsolatedTargets = uiIsolatedTestFiles.filter(matchesUiIncludePattern);
   if (impliedUiIsolatedTargets.length > 0) {
     const current = groupedTargets.get("uiIsolated") ?? [];
     for (const target of impliedUiIsolatedTargets) {
@@ -5656,9 +5712,7 @@ export function buildVitestRunPlans(
   }
   // Source-child ownership can cross shared suites (for example state tests).
   // Match every active target so broad selections cannot silently omit excluded children.
-  const impliedCliProcessTargets = cliProcessTestFiles.filter((file) =>
-    activeIncludePatterns.some((pattern) => includePatternMatchesAnyFile(pattern, [file])),
-  );
+  const impliedCliProcessTargets = cliProcessTestFiles.filter(matchesActiveIncludePattern);
   if (impliedCliProcessTargets.length > 0) {
     const current = groupedTargets.get("cliProcess") ?? [];
     for (const target of impliedCliProcessTargets) {

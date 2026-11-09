@@ -168,16 +168,88 @@ lock, workflow-binding, and merge-outcome owners.
 Native PR tooling already supports an operator-provisioned symlink at the
 canonical `.worktrees` parent. The preflight resolves that target, and provisioning
 uses native Git there while keeping the same canonical repository and state
-owners. An existing allowed target can avoid a full clone. Do not repoint a
+owners. Reuse this object store instead of cloning for each task. Do not repoint a
 shared parent or move existing PR worktrees to solve one task’s access problem;
 provisioning that shared layout belongs to its operator, not the caller.
 
-If no existing supported location is accessible, use a fresh full ordinary
+If no existing supported location is accessible, create a separate ordinary
 checkout inside the allowed workspace **before starting the PR workflow**, then
-repeat this preflight. Preserve full history and blobs; do not use a shallow,
-sparse, or linked checkout as a substitute. Never move an active or uncertain
+repeat this preflight:
+
+```bash
+git clone --filter=blob:none --single-branch --branch main \
+  https://github.com/openclaw/openclaw.git /allowed/workspace/openclaw
+```
+
+Keep full commit history (no `--depth`) and a full working tree (no `--sparse`);
+historical blobs can stay omitted. `--single-branch` alone does **not** limit blob
+history. This fallback still downloads commits, trees, and checkout blobs; use
+the existing base whenever its canonical paths are accessible. `--reference`
+rejects shallow donors, and `--dissociate` copies borrowed objects, so neither is
+the default replacement for a shared worktree. Never move an active or uncertain
 operation to another clone: first reconcile it through the native recovery owner
 in the original repository. A new clone has a different lock/outcome namespace.
+
+## Reuse the base and fetch only needed history
+
+Never use `fetch --depth`, `pull --depth`, `--shallow-since`, or
+`--shallow-exclude` in a managed base or its linked worktrees: their shallow
+boundary is shared. Fetch the required ref without a depth limit. If a managed
+base is already shallow, use `openclaw doctor --fix`; keep `blob:none`.
+
+Start in the assigned managed/task worktree. `scripts/pr review-init <PR>`
+provisions `.worktrees/pr-<PR>` through the worktree owner; it shares the canonical
+object store. Do not manually create that PR directory or clone into scratch to
+obtain main. For ordinary task isolation outside the managed lifecycle, native
+`git -C <base> worktree add -b <task-branch> <allowed-task-path> <start-commit>`
+also shares objects. A linked worktree still requires access to its canonical
+Git directory and does not fix an inaccessible `scripts/pr workspace` result.
+
+PR review and landing need commits and trees for merge-base, ancestry checks,
+and log ranges, plus blobs for the checked-out files, diffs, and merges. They do
+not need every historical blob. The source-acquisition owner retains the base's
+promisor filter; missing checkout/diff blobs are fetched on demand. Do not clear
+promisor settings, fetch with `--no-filter`, or repack just to review a PR.
+
+If ancestry fails, first distinguish a shallow boundary from an unavailable
+commit or genuinely unrelated histories:
+
+```bash
+git rev-parse --is-shallow-repository
+git --no-lazy-fetch merge-base --all "$main_sha" "$head_sha"
+```
+
+Use the exact main and PR head SHAs from the current PR observation. For a
+registry-owned managed base, the existing migration is `openclaw doctor --fix`:
+it fetches full commit history with `blob:none` under the project checkout
+lifecycle lease, skipping busy clones. The operator must own that repair; do not
+manually deepen a live managed base or run a broad Doctor repair outside task
+authority. See [project clone repair](/gateway/doctor/gateway-and-services#11e-project-clone-shape).
+
+For a task-owned ordinary shallow clone, acquire only the required range before
+workflow admission (or after the failed command has exited and its native lock
+is settled):
+
+```bash
+git fetch --deepen=256 --filter=blob:none --no-tags --no-auto-maintenance \
+  --no-write-fetch-head --refmap= origin "$main_sha" "$head_sha"
+git --no-lazy-fetch merge-base --all "$main_sha" "$head_sha"
+```
+
+This preserves shared refs and `FETCH_HEAD`; it extends the shared shallow
+boundary, so coordinate with other users of that object store. Stop once the
+needed merge-base is available. If 256 commits are insufficient, use one larger
+batch (`--deepen=1024`) and check again. A release-wide history audit or an older
+PR may need complete commit history: use `--unshallow` in place of `--deepen`
+while retaining the other flags, then rerun the failed history operation.
+Full commit history and full blob history are different requirements.
+
+A failed fetch, a still-shallow origin, or a missing local-only snapshot parent
+is not repaired by repeatedly cloning GitHub. Preserve the checkout and native
+workflow evidence; report the failing command and missing object/ref, restore
+origin access or recover the parent from its original repository, and retry
+through the same owner. An available merge-base proves that range, not arbitrary
+older ancestry; qualify any older refs required by release or recovery separately.
 
 ## Keep the admitted workflow across commands
 
