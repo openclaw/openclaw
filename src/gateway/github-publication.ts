@@ -651,7 +651,9 @@ export function createGitHubPublicationCoordinator(params: {
     async deferOrphanedRequestsAsync(
       isPendingEmpty?: (kind: "shared" | "repository") => boolean,
     ): Promise<void> {
-      await methods.deferOrphanedRequestsAsync();
+      if (!isPendingEmpty?.("shared")) {
+        await methods.deferOrphanedRequestsAsync();
+      }
       if (!isPendingEmpty?.("repository")) {
         await repository.deferOrphanedRequestsAsync();
       }
