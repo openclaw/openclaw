@@ -53,44 +53,36 @@ suite.define(() => {
           // column and the label starts on the row text column.
           const measureHeader = () =>
             page.locator(".sidebar-session-toolbar").evaluate((toolbar) => {
-              const rect = (selector: string) => {
-                const node = toolbar.querySelector<HTMLElement>(selector);
-                if (!node) {
-                  throw new Error(`missing header element: ${selector}`);
-                }
-                return { node, box: node.getBoundingClientRect() };
-              };
-              const leading = toolbar
-                .querySelector(".picker-select__trigger .picker-select__leading")
-                ?.getBoundingClientRect();
+              const box = (selector: string) =>
+                toolbar.querySelector(selector)?.getBoundingClientRect() ?? null;
+              const leading = box(".picker-select__trigger .picker-select__leading");
               return {
                 controls: [
                   ".sidebar-session-owner-filter .picker-select__trigger",
                   ".sidebar-session-sort",
                   ".sidebar-session-toolbar__collapse",
-                ].map((selector) => {
-                  const { node, box } = rect(selector);
-                  return {
-                    selector,
-                    height: box.height,
-                    radius: getComputedStyle(node).borderRadius,
-                  };
-                }),
+                ].map((selector) => ({
+                  selector,
+                  height: box(selector)!.height,
+                  radius: getComputedStyle(toolbar.querySelector(selector)!).borderRadius,
+                })),
                 radiusToken: getComputedStyle(document.documentElement)
                   .getPropertyValue("--radius-md")
                   .trim(),
                 avatarCenter: leading ? leading.x + leading.width / 2 : null,
-                labelLeft: rect(".picker-select__label").box.x,
+                labelLeft: box(".picker-select__label")!.x,
               };
             });
           const row = await firstRow.evaluate((element) => {
-            const box = (selector: string) =>
-              element.querySelector(selector)!.getBoundingClientRect();
-            const glyph = box(".sidebar-session-indicator");
+            const glyph = element
+              .querySelector(".sidebar-session-indicator")!
+              .getBoundingClientRect();
             return {
               glyphLeft: glyph.x,
               glyphCenter: glyph.x + glyph.width / 2,
-              textLeft: box(".sidebar-recent-session__text").x,
+              textLeft: element
+                .querySelector(".sidebar-recent-session__text")!
+                .getBoundingClientRect().x,
             };
           });
           const allOwners = await measureHeader();
