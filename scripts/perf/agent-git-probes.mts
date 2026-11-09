@@ -24,6 +24,8 @@ const { values } = parseArgs({
     files: { type: "string" },
     commits: { type: "string" },
     samples: { type: "string" },
+    "shared-shallow": { type: "boolean" },
+    "baseline-shim": { type: "string" },
   },
 });
 if (!values["scratch-parent"]) {
@@ -34,6 +36,11 @@ const integer = (name: "files" | "commits" | "samples", fallback: number) =>
 const files = integer("files", 62_000);
 const commits = integer("commits", 20_000);
 const samples = integer("samples", 5);
+const sharedShallow = values["shared-shallow"] === true;
+const baselineShimPath = values["baseline-shim"] ?? "";
+if (sharedShallow && (!baselineShimPath || commits < 4010)) {
+  throw new Error("--shared-shallow requires --baseline-shim and at least 4010 commits");
+}
 const root = mkdtempSync(path.join(values["scratch-parent"], "agent-git-probes-"));
 const env: NodeJS.ProcessEnv = {
   ...Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("GIT_"))),
@@ -66,6 +73,9 @@ type Sample = {
   packBytes: number;
   offeredObjects: number;
   fetchChildren: number;
+  gitStarts: number;
+  transports: number;
+  shallowChanged: number;
   exitCode: number | null;
   hint: boolean;
   load: number[];
@@ -75,11 +85,16 @@ const origin = path.join(root, "origin.git");
 const template = path.join(root, "template");
 const workspace = path.join(root, "workspace");
 const bin = path.join(root, "bin");
+const baselineBin = path.join(root, "baseline-bin");
 const report = (message: string) => process.stderr.write(`${message}\n`);
 try {
   report(`Fixture: ${files} files, ${commits} history commits; ${root}`);
   mkdirSync(bin);
   writeFileSync(path.join(bin, "git"), AGENT_GIT_SHIM, { mode: 0o755 });
+  if (sharedShallow) {
+    mkdirSync(baselineBin);
+    writeFileSync(path.join(baselineBin, "git"), readFileSync(baselineShimPath), { mode: 0o755 });
+  }
   git(root, ["init", "--bare", "--initial-branch=main", origin]);
   git(origin, ["config", "uploadpack.allowFilter", "true"]);
   git(origin, ["config", "uploadpack.allowAnySHA1InWant", "true"]);
@@ -95,7 +110,14 @@ try {
   }
   git(origin, ["fast-import", "--quiet"], input);
   git(origin, ["repack", "-adq"]);
-  git(root, ["clone", "--filter=blob:none", "--no-checkout", pathToFileURL(origin).href, template]);
+  git(root, [
+    "clone",
+    "--filter=blob:none",
+    "--no-checkout",
+    ...(sharedShallow ? ["--depth=10"] : []),
+    pathToFileURL(origin).href,
+    template,
+  ]);
   const base = git(template, ["rev-parse", "HEAD"]);
   // One materialized production-sized workspace; each sample gets isolated private Git metadata.
   git(root, ["clone", "--local", origin, workspace]);
@@ -116,12 +138,32 @@ try {
     const index = rows.length;
     const metadata = path.join(root, `sample-${index}.git`);
     cpSync(path.join(template, ".git"), metadata, { recursive: true });
+    let gitDir = metadata;
+    const shallowFile = path.join(metadata, "shallow");
+    const shallowBefore = existsSync(shallowFile) ? readFileSync(shallowFile, "utf8") : "";
+    if (sharedShallow) {
+      const linked = path.join(root, `linked-${index}`);
+      git(root, [
+        "--git-dir",
+        metadata,
+        "worktree",
+        "add",
+        "--detach",
+        "--no-checkout",
+        linked,
+        "HEAD",
+      ]);
+      gitDir = git(linked, ["rev-parse", "--absolute-git-dir"]);
+    }
     const trace = path.join(root, `trace-${index}.jsonl`);
     const packTrace = path.join(root, `trace-${index}.pack`);
     const sampleEnv = {
       ...env,
-      PATH: guarded ? `${bin}${path.delimiter}${env.PATH}` : env.PATH,
-      GIT_DIR: metadata,
+      PATH:
+        guarded || sharedShallow
+          ? `${guarded ? bin : baselineBin}${path.delimiter}${env.PATH}`
+          : env.PATH,
+      GIT_DIR: gitDir,
       GIT_WORK_TREE: workspace,
       GIT_TRACE2_EVENT: trace,
       GIT_TRACE_PACKFILE: packTrace,
@@ -165,6 +207,14 @@ try {
       fetchChildren: events.filter(
         (event) => event.event === "child_start" && event.argv?.includes("fetch"),
       ).length,
+      gitStarts: events.filter((event) => event.event === "start").length,
+      transports: events.filter(
+        (event) =>
+          event.event === "child_start" && event.argv?.some((arg) => arg.includes("upload-pack")),
+      ).length,
+      shallowChanged: Number(
+        shallowBefore !== (existsSync(shallowFile) ? readFileSync(shallowFile, "utf8") : ""),
+      ),
       exitCode: result.status,
       hint: result.stderr.includes("OpenClaw:"),
       load,
@@ -176,46 +226,80 @@ try {
     rmSync(metadata, { recursive: true });
     return row;
   };
-  report("Fixture prepared; interleaved absent-object samples");
-  for (let index = 0; index < samples; index++) {
-    const before = sample("missing-baseline", false, ["cat-file", "-t", missing], 0);
-    const after = sample("missing-guarded", true, ["cat-file", "-t", missing], 128);
-    if (
-      before.fetchChildren !== 1 ||
-      before.offeredObjects < commits ||
-      after.fetchChildren !== 0 ||
-      after.packBytes !== 0 ||
-      !after.hint
-    ) {
-      throw new Error("Missing-object count contract failed");
-    }
-  }
-  for (let index = 0; index < samples; index++) {
-    sample("present-A1", false, ["cat-file", "-t", base], 0);
-    sample("present-A2", false, ["cat-file", "-t", base], 0);
-    sample("present-guarded", true, ["cat-file", "-t", base], 0);
-    sample("blob-baseline", false, ["show", "HEAD:files/0/file-0.txt"], 0);
-    sample("blob-guarded", true, ["show", "HEAD:files/0/file-0.txt"], 0);
-    sample(
-      "explicit-guarded",
-      true,
-      ["fetch", "origin", missing, "--negotiation-tip=origin/main"],
-      0,
+  if (sharedShallow) {
+    report(
+      "Rule: shared shallow writes and transport 1→0; normal commands add no Git starts; disclose A/A timing controls",
     );
-  }
-  for (const [name, args] of [
-    ["show", ["show", "HEAD~1:history.txt"]],
-    ["log", ["log", "-p", "-2", "--", "history.txt"]],
-    ["blame", ["blame", "HEAD", "--", "history.txt"]],
-    ["diff", ["diff", "HEAD~1", "HEAD", "--", "history.txt"]],
-  ] as const) {
-    const disabled = sample(`global-no-lazy-${name}`, false, [...args], 128, {
-      GIT_NO_LAZY_FETCH: "1",
-    });
-    if (disabled.fetchChildren !== 0 || disabled.packBytes !== 0) {
-      throw new Error("Global no-lazy control fetched objects");
+    for (let index = 0; index < samples; index++) {
+      const args = ["fetch", "-q", "--deepen=4000", "origin", "main"];
+      const before = sample("deepen-baseline", false, args, 0);
+      const after = sample("deepen-guarded", true, args, 2);
+      if (
+        before.shallowChanged !== 1 ||
+        before.transports !== 1 ||
+        before.offeredObjects < 4000 ||
+        after.shallowChanged !== 0 ||
+        after.transports !== 0 ||
+        after.packBytes !== 0 ||
+        !after.hint
+      ) {
+        throw new Error("Shared shallow boundary contract failed");
+      }
+      const control = ["fetch", "-q", "origin", "main"];
+      const a1 = sample("fetch-A1", false, control, 0);
+      const a2 = sample("fetch-A2", false, control, 0);
+      const b = sample("fetch-guarded", true, control, 0);
+      if (
+        a1.shallowChanged ||
+        a2.shallowChanged ||
+        b.shallowChanged ||
+        a1.gitStarts !== b.gitStarts
+      ) {
+        throw new Error("Normal fetch changed its boundary or added Git starts");
+      }
     }
-    sample(`history-guarded-${name}`, true, [...args], 0);
+  } else {
+    report("Fixture prepared; interleaved absent-object samples");
+    for (let index = 0; index < samples; index++) {
+      const before = sample("missing-baseline", false, ["cat-file", "-t", missing], 0);
+      const after = sample("missing-guarded", true, ["cat-file", "-t", missing], 128);
+      if (
+        before.fetchChildren !== 1 ||
+        before.offeredObjects < commits ||
+        after.fetchChildren !== 0 ||
+        after.packBytes !== 0 ||
+        !after.hint
+      ) {
+        throw new Error("Missing-object count contract failed");
+      }
+    }
+    for (let index = 0; index < samples; index++) {
+      sample("present-A1", false, ["cat-file", "-t", base], 0);
+      sample("present-A2", false, ["cat-file", "-t", base], 0);
+      sample("present-guarded", true, ["cat-file", "-t", base], 0);
+      sample("blob-baseline", false, ["show", "HEAD:files/0/file-0.txt"], 0);
+      sample("blob-guarded", true, ["show", "HEAD:files/0/file-0.txt"], 0);
+      sample(
+        "explicit-guarded",
+        true,
+        ["fetch", "origin", missing, "--negotiation-tip=origin/main"],
+        0,
+      );
+    }
+    for (const [name, args] of [
+      ["show", ["show", "HEAD~1:history.txt"]],
+      ["log", ["log", "-p", "-2", "--", "history.txt"]],
+      ["blame", ["blame", "HEAD", "--", "history.txt"]],
+      ["diff", ["diff", "HEAD~1", "HEAD", "--", "history.txt"]],
+    ] as const) {
+      const disabled = sample(`global-no-lazy-${name}`, false, [...args], 128, {
+        GIT_NO_LAZY_FETCH: "1",
+      });
+      if (disabled.fetchChildren !== 0 || disabled.packBytes !== 0) {
+        throw new Error("Global no-lazy control fetched objects");
+      }
+      sample(`history-guarded-${name}`, true, [...args], 0);
+    }
   }
   const stats = (numbers: number[]) => {
     const sorted = numbers.toSorted((left, right) => left - right);
@@ -239,6 +323,9 @@ try {
             "packBytes",
             "offeredObjects",
             "fetchChildren",
+            "gitStarts",
+            "transports",
+            "shallowChanged",
           ] as const
         ).map((metric) => [
           metric,
@@ -251,6 +338,10 @@ try {
     JSON.stringify(
       {
         gitVersion: git(root, ["--version"]),
+        mode: sharedShallow ? "shared-shallow" : "missing-commit",
+        baselineShimSha256: sharedShallow
+          ? createHash("sha256").update(readFileSync(baselineShimPath)).digest("hex")
+          : undefined,
         shimSha256: createHash("sha256").update(AGENT_GIT_SHIM).digest("hex"),
         platform: process.platform,
         files: files + 1,
