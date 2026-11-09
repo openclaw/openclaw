@@ -361,7 +361,7 @@ describe("question custody", () => {
           "The answer was not accepted: question 'budget'",
           "question-response-rejected",
         );
-        const correction = dispatcher.sendFinalReply.mock.calls[0]?.[0]?.text ?? "";
+        const correction = vi.mocked(dispatcher.sendFinalReply).mock.calls[0]?.[0]?.text ?? "";
         const example = correction.split("Example for two questions:\n")[1] ?? "";
         expect(example).toBe("1: <answer for question 1>\n2: <answer for question 2>");
         expect(
