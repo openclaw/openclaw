@@ -14,7 +14,10 @@ import {
   CommandExplanationWorkLimitError,
   explainShellCommand,
 } from "./command-explainer/extract.js";
-import { CommandExplanationUnsupportedControlCharacterError } from "./command-explainer/tree-sitter-runtime.js";
+import {
+  CommandExplanationSourceSizeLimitError,
+  CommandExplanationUnsupportedControlCharacterError,
+} from "./command-explainer/tree-sitter-runtime.js";
 import type { CommandExplanation } from "./command-explainer/types.js";
 import { isPathInside } from "./path-guards.js";
 
@@ -23,11 +26,13 @@ type UnsafeExecControlShellCommandKind =
   | "channel-login"
   | "live-state-sqlite"
   | "incomplete-analysis"
+  | "parser-failure"
   | "unsupported-control-character";
 
 type ExecControlShellCommandContext = {
   stateDir?: string;
   workdir?: string;
+  platform?: string | null;
 };
 
 const SQLITE_OPTIONS_WITH_VALUES = new Map<string, number>([
@@ -290,18 +295,34 @@ export async function detectUnsafeExecControlShellCommand(
   context: ExecControlShellCommandContext = {},
 ): Promise<UnsafeExecControlShellCommandKind | null> {
   // Only trim shell whitespace; CR, VT, and FF must reach the parser for rejection.
-  const rawCommand = trimShellBoundaryWhitespace(command);
+  const windows = normalizeLowercaseStringOrEmpty(context.platform).startsWith("win");
+  if (windows && /[`^]\r?\n/u.test(command)) {
+    // Windows shells join these lines, which the Bash inspection cannot reconstruct.
+    return "unsupported-control-character";
+  }
+  // Windows shells accept CRLF as a line ending. Normalize only the inspection copy;
+  // the caller still executes the original command unchanged.
+  const inspectionCommand = windows ? command.replaceAll("\r\n", "\n") : command;
+  const rawCommand = trimShellBoundaryWhitespace(inspectionCommand);
   let explanation: CommandExplanation | null = null;
   try {
     explanation = await explainShellCommand(rawCommand);
   } catch (error) {
-    if (error instanceof CommandExplanationWorkLimitError) {
+    if (
+      error instanceof CommandExplanationWorkLimitError ||
+      error instanceof CommandExplanationSourceSizeLimitError
+    ) {
       return "incomplete-analysis";
     }
     if (error instanceof CommandExplanationUnsupportedControlCharacterError) {
       return "unsupported-control-character";
     }
-    // Fall back to line-local shell splitting below.
+    // A parser exception leaves no reliable command inventory for the fallback.
+    return "parser-failure";
+  }
+  // A POSIX shell can execute the parsed prefix before a later syntax error.
+  if (explanation?.ok === false && !windows) {
+    return "parser-failure";
   }
   const argvCandidates = (() => {
     if (explanation?.ok) {
@@ -343,10 +364,26 @@ function rejectIncompleteCommandAnalysis(
       "exec cannot run a shell command containing unsupported control characters. Remove them so the complete syntax can be inspected before execution.",
     );
   }
+  if (unsafeKind === "parser-failure") {
+    throw new Error(
+      "exec cannot inspect shell commands because the command parser is unavailable or failed. Check the OpenClaw installation or simplify the command and retry.",
+    );
+  }
 }
 
-export async function rejectUnsafeExecControlShellCommand(command: string): Promise<void> {
-  const unsafeKind = await detectUnsafeExecControlShellCommand(command);
+export async function rejectUnsafeExecControlShellCommand(
+  command: string,
+  host: "gateway" | "node" | "sandbox" | ExecControlShellCommandContext = "sandbox",
+): Promise<void> {
+  if (host === "node") {
+    // The destination platform is resolved in executeNodeHostCommand.
+    return;
+  }
+  const unsafeKind = await detectUnsafeExecControlShellCommand(command, {
+    ...(typeof host === "object"
+      ? host
+      : { platform: host === "gateway" ? process.platform : null }),
+  });
   rejectIncompleteCommandAnalysis(unsafeKind);
   if (unsafeKind === "approve") {
     throw new Error(
@@ -368,9 +405,12 @@ export async function rejectUnsafeExecControlShellCommand(command: string): Prom
 
 export async function rejectUnsafeExecLiveStateSqliteShellCommand(
   command: string,
-  context: Required<ExecControlShellCommandContext>,
+  context: ExecControlShellCommandContext & { stateDir: string; workdir: string },
 ): Promise<void> {
-  const unsafeKind = await detectUnsafeExecControlShellCommand(command, context);
+  const unsafeKind = await detectUnsafeExecControlShellCommand(command, {
+    ...context,
+    platform: process.platform,
+  });
   rejectIncompleteCommandAnalysis(unsafeKind);
   if (unsafeKind !== "live-state-sqlite") {
     return;

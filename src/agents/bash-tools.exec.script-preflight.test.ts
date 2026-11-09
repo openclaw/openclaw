@@ -17,14 +17,17 @@ import { readToolEffectReceipt } from "./tool-effect-receipt.js";
 const processGatewayAllowlistMock = vi.hoisted(() =>
   vi.fn<typeof processGatewayAllowlist>(async () => ({ allowWithoutEnforcedCommand: true })),
 );
+const nodeHostMock = vi.hoisted(() =>
+  vi.fn(async () => {
+    throw new Error("node host reached");
+  }),
+);
 vi.mock("./bash-tools.exec-host-gateway.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./bash-tools.exec-host-gateway.js")>()),
   processGatewayAllowlist: processGatewayAllowlistMock,
 }));
 vi.mock("./bash-tools.exec-host-node.js", () => ({
-  executeNodeHostCommand: async () => {
-    throw new Error("node host execution is not used by script preflight tests");
-  },
+  executeNodeHostCommand: nodeHostMock,
 }));
 vi.mock("../utils/delivery-context.shared.js", () => ({
   normalizeDeliveryContext: (value: unknown) => value,
@@ -79,6 +82,15 @@ it("blocks interactive channel login commands from exec", async () => {
       /exec cannot run interactive OpenClaw channel login commands/,
     );
   }
+});
+
+it("hands CRLF commands to the node host for destination-platform inspection", async () => {
+  const tool = createExecTool({ host: "node", security: "full", ask: "off" });
+
+  await expect(tool.execute("node-crlf", { command: "echo ready\r\necho done" })).rejects.toThrow(
+    "node host reached",
+  );
+  expect(nodeHostMock).toHaveBeenCalledOnce();
 });
 
 describeNonWin("exec script preflight", () => {
@@ -235,6 +247,24 @@ describeNonWin("exec script preflight", () => {
 });
 
 describeWin("exec script preflight on Windows paths", () => {
+  it("runs PowerShell commands separated by CRLF", async () => {
+    const result = await runExecPreflight("Write-Output 1\r\nWrite-Output 2");
+    expect(result.details).toMatchObject({
+      status: "completed",
+      exitCode: 0,
+      aggregated: expect.stringMatching(/1\r?\n2/u),
+    });
+  });
+
+  it.each(["\n", "\r\n"])(
+    "rejects PowerShell backtick newline %j before execution",
+    async (newline) => {
+      await expect(runExecPreflight(`Write-Output 1\`${newline}2`)).rejects.toThrow(
+        /unsupported control characters/,
+      );
+    },
+  );
+
   it.each(["relative", "absolute"])("validates Python %s paths", async (kind) => {
     await withScripts({ "subdir/bad.py": "payload = $DM_JSON" }, async (workdir) => {
       const script =
@@ -446,6 +476,20 @@ describeNonWin("exec shell control-byte preflight", () => {
             ).rejects.toThrow(/unsupported control characters/);
             await expect(fs.stat(marker)).rejects.toMatchObject({ code: "ENOENT" });
           }
+          let nested = String.raw`bash -c $'echo safe\v#; printf started > ${JSON.stringify(marker)}'`;
+          for (let depth = 0; depth < 2; depth += 1) {
+            nested = `bash -c '${nested.replaceAll("'", `'\\''`)}'`;
+          }
+          await expect(
+            tool.execute("call-nested-control-byte", { command: nested, workdir: root }),
+          ).rejects.toThrow(/exceeds the command explanation work limit/);
+          await expect(
+            tool.execute("call-oversized-control-byte", {
+              command: `echo${" ".repeat(128 * 1024)}\v#; printf started > ${JSON.stringify(marker)}`,
+              workdir: root,
+            }),
+          ).rejects.toThrow(/unsupported control characters/);
+          await expect(fs.stat(marker)).rejects.toMatchObject({ code: "ENOENT" });
           await tool.execute("call-ordinary-whitespace", {
             command: `printf started > ${JSON.stringify(marker)}`,
             workdir: root,
