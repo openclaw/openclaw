@@ -159,6 +159,35 @@ beforeEach(async () => {
 });
 
 describe("maybePruneSandboxes", () => {
+  it("drains idle backlogs in bounded passes without charging protected work or skipping failures", async () => {
+    let now = Date.now();
+    vi.spyOn(Date, "now").mockImplementation(() => now);
+    const entries: SandboxRegistryEntry[] = Array.from({ length: 36 }, (_, index) =>
+      entry(`idle-${index}`, "main", { lastUsedAtMs: now - 20 * 60 * 1000 }),
+    );
+    configMocks.getRuntimeConfig.mockReturnValue({
+      agents: { defaults: { sandbox: { prune: { idleHours: 0, maxAgeDays: 0 } } } },
+    });
+    processMocks.listExecSessionsForCancellation.mockReturnValue([
+      { sandboxContainerName: "idle-0", exited: false },
+    ]);
+    registryMocks.readRegistry.mockImplementation(async () => ({ entries }));
+    registryMocks.updateRegistry.mockImplementation(async (updated: SandboxRegistryEntry) => {
+      entries[entries.findIndex((row) => row.containerName === updated.containerName)] = updated;
+    });
+    backendMocks.stopRuntime.mockRejectedValueOnce(new Error("engine busy"));
+    await maybePruneSandboxes();
+    expect(backendMocks.stopRuntime).toHaveBeenCalledTimes(32);
+    expect(entries.filter((row) => row.runtimeState === "stopped")).toHaveLength(31);
+    await maybePruneSandboxes();
+    expect(backendMocks.stopRuntime).toHaveBeenCalledTimes(32);
+    now += 5 * 60 * 1000;
+    await maybePruneSandboxes();
+    expect(backendMocks.stopRuntime).toHaveBeenCalledTimes(36);
+    expect(entries.filter((row) => row.runtimeState === "stopped")).toHaveLength(35);
+    expect(entries[0]!.runtimeState).toBeUndefined();
+  });
+
   it("stops idle containers once, retaining their workspace and active runtime custody", async () => {
     const { acquireSandboxRuntimeUse } = await import("./registry-lifecycle.js");
     const clock = vi.spyOn(Date, "now");

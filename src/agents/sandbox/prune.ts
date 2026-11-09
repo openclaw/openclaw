@@ -37,6 +37,7 @@ import { resolveSandboxAgentId } from "./shared.js";
 import { captureSandboxStateOwner } from "./state-owner.js";
 
 const IDLE_STOP_MS = 15 * 60 * 1000;
+const MAX_IDLE_STOPS_PER_PASS = 32;
 
 function shouldStopIdleContainer(entry: SandboxRegistryEntry, now: number): boolean {
   return (
@@ -125,12 +126,16 @@ async function pruneSandboxContainers(
   entries: SandboxRegistryEntry[],
 ) {
   const assertCurrent = guard.beforeLegacyApply;
+  let idleStops = 0;
   await pruneSandboxRegistryEntries({
     config,
     assertCurrent,
     entries,
-    stopIdle: (entry, prune, assertPruneCurrent) =>
-      withSandboxRegistryEntryLock(entry, () =>
+    stopIdle: (entry, prune, assertPruneCurrent) => {
+      if (idleStops >= MAX_IDLE_STOPS_PER_PASS) {
+        return Promise.resolve();
+      }
+      return withSandboxRegistryEntryLock(entry, () =>
         withSandboxContainerLifecycle(entry.containerName, undefined, async () => {
           const current = await readRegistryEntry(entry.containerName);
           assertCurrent?.();
@@ -159,6 +164,8 @@ async function pruneSandboxContainers(
             current.backendId === "podman"
               ? podmanSandboxBackendManager
               : dockerSandboxBackendManager;
+          // Charge attempts, including failures, but not active/protected runtimes.
+          idleStops++;
           await manager.stopRuntime(current, assertStopCurrent);
           await updateRegistry(
             { ...current, runtimeState: "stopped" },
@@ -168,7 +175,8 @@ async function pruneSandboxContainers(
             },
           );
         }),
-      ),
+      );
+    },
     remove: (entry, prune, assertPruneCurrent) => {
       const assertRemovalCurrent = () => {
         assertCurrent?.();

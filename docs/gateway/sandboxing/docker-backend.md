@@ -108,14 +108,28 @@ These Codex bwrap checks run in standalone `openclaw doctor` and are omitted dur
 ### Idle containers
 
 Docker and Podman tool containers stop after 15 minutes without a new sandbox
-admission, on the Gateway's five-minute housekeeping sweep. Active turns and
-retained persistent executions prevent idle stopping. A long turn can therefore
-stop on the first sweep after it finishes. Stopping frees tmpfs contents and ends
+admission, on the Gateway's five-minute housekeeping sweep. Active turns, retained
+background commands, and persistent executions prevent idle stopping. Each pass
+attempts at most 32 idle stops, sequentially; failed attempts count toward the
+limit. Backlogs drain over multiple sweeps. Dependency-builder cleanup can request
+earlier sweeps. Existing age-based removal is separate from this idle-stop limit.
+A long turn becomes eligible for stopping as soon as it finishes.
+Stopping frees tmpfs contents and ends
 untracked background processes; workspace bind mounts and the container's
 writable layer persist. The next turn starts the same container without rerunning
 one-time setup. Prepared dependency templates remain available for warm reuse.
 The existing `sandbox.prune` policy separately removes old containers; disabling
 removal does not disable idle stopping.
+
+Container creation-policy changes are checked on the next use of each sandbox,
+not by recreating the inventory at startup. A cold container may be replaced on
+that first use; its host workspace and prepared dependency templates persist.
+
+Dependency installation that exhausts storage fails preparation with an actionable
+error rather than publishing a partial dependency template. Check free bytes and
+inodes in the workspace and `/tmp/openclaw-deps`. For a full temporary pnpm store,
+the existing `sandbox.docker.env.PNPM_CONFIG_STORE_DIR` setting can place the store
+on a disk-backed path inside the workspace before retrying.
 
 ### Container user
 
