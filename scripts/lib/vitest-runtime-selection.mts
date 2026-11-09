@@ -43,6 +43,7 @@ const runtimeOnlyUnitFiles = new Set([
   "src/gateway/talk/client-permission-parity.test.ts",
   "src/gateway/tool-resolution.swarm-collector.test.ts",
   "src/plugins/loader.runtime-registry.test.ts",
+  "src/plugins/plugin-generation-source-inspection.worker.test.ts",
   "src/plugins/plugin-generation-worker.test.ts",
   "test/canonical-descendant.integration.test.ts",
   "test/codex-settled-turn-finalization.integration.test.ts",
