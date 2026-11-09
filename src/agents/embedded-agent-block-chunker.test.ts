@@ -528,3 +528,13 @@ describe("EmbeddedBlockChunker", () => {
     });
   });
 });
+
+it("keeps a decimal or version dot inside one block while the stream is open", () => {
+  const source = "| 项目 | 数值 |\n| --- | --- |\n| 内存 | 11.65 GiB |\n| 磁盘 | 42.1 GB |\n";
+  const capture = streamChunks(paragraphChunker(1, 1200), source, 1);
+
+  expect(capture.chunks.join("")).toBe(source);
+  for (const chunk of capture.chunks.slice(0, -1)) {
+    expect(chunk.endsWith(".")).toBe(false);
+  }
+});

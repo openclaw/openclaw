@@ -1,0 +1,2 @@
+# A stream-boundary dot inside a number must not end a block while the stream is open.
+8

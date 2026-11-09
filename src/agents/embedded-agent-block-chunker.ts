@@ -418,7 +418,16 @@ export class EmbeddedBlockChunker {
       const minBreak = Math.max(force ? 1 : minChars, boundaryLength + 1);
       const breakResult =
         force && remainingLength <= maxChars && !openFence
-          ? this.#pickPreferredBreakIndex(view, unsafe, chunking, false, minBreak, start, openFence)
+          ? this.#pickPreferredBreakIndex(
+              view,
+              unsafe,
+              chunking,
+              false,
+              minBreak,
+              start,
+              openFence,
+              true,
+            )
           : this.#pickBreakIndex(
               { ...params, force },
               view,
@@ -550,6 +559,7 @@ export class EmbeddedBlockChunker {
     minCharsOverride?: number,
     offset = 0,
     openFence?: FenceSpan,
+    final = false,
   ): BreakResult {
     const minChars = Math.max(1, Math.floor(minCharsOverride ?? chunking.minChars));
     if (buffer.length < minChars) {
@@ -582,7 +592,10 @@ export class EmbeddedBlockChunker {
     }
 
     if (preference !== "newline") {
-      const matches = buffer.matchAll(/[.!?](?=\s|$)/g);
+      // An open stream's buffer end is not a sentence end: a provider delta may stop
+      // right after the dot of "11.65" or "2026.11.2". Only a final drain may treat
+      // end-of-buffer as a boundary.
+      const matches = buffer.matchAll(final ? /[.!?](?=\s|$)/g : /[.!?](?=\s)/g);
       let sentenceIdx = -1;
       for (const match of matches) {
         const at = match.index;
@@ -630,6 +643,7 @@ export class EmbeddedBlockChunker {
       minChars,
       offset,
       openFence,
+      force,
     );
     if (preferred.index !== -1) {
       return preferred;
