@@ -10,6 +10,7 @@ import {
   readRequestText,
 } from "../../test/helpers/gateway-integration-fixtures.js";
 import { writeOpenAiResponsesText } from "../../test/helpers/openai-responses-sse.js";
+import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import { cliRecoveryEntrypoints } from "../cli/cli-entrypoint.test-support.js";
 import { runCliProcessChild } from "../cli/cli-process-child.test-helpers.js";
 import { runStartupConfigPreflight } from "../commands/startup-config-preflight.js";
@@ -38,6 +39,7 @@ import {
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
 import { acquireTestPortBlock } from "../test-utils/port-claims.js";
+import type { toCronBroadcastEvent } from "./server-cron-plugin-job.js";
 import { installGatewayDatabaseEngine } from "./server-database-engine.js";
 import { prepareGatewayServerBootstrap } from "./server-startup-bootstrap.js";
 import { loadGatewayWorkerEnvironmentStartupState } from "./server-worker-environment-startup.js";
@@ -322,9 +324,9 @@ describe.skipIf(!connection)("Gateway PostgreSQL shared-state bootstrap", () => 
     }));
 
   it(
-    "finishes a retained one-shot through Gateway RPC and persists its disabled state",
+    "keeps a completed retained one-shot disabled across a scheduler-enabled Gateway restart",
     { timeout: 90_000 },
-    async () => {
+    async ({ signal }) => {
       const current = await fixture();
       Object.assign(current.envVars, {
         OPENCLAW_TEST_MINIMAL_GATEWAY: undefined,
@@ -367,15 +369,17 @@ describe.skipIf(!connection)("Gateway PostgreSQL shared-state bootstrap", () => 
           entries: { main: {} },
         },
         models: { mode: "replace", providers: { [provider.providerId]: provider.config } },
+        cron: { enabled: true },
       };
+      await using firstGateway = new AsyncDisposableStack();
       const gateway = await startGatewayWithClient({
         cfg: config,
         configPath: current.configPath,
         token: "postgres-bootstrap-synthetic-token",
         clientDisplayName: "vitest-postgres-cron",
       });
-      resources.defer(() => gateway.server.close({ reason: "PostgreSQL cron test complete" }));
-      resources.defer(() => disconnectGatewayClient(gateway.client));
+      firstGateway.defer(() => gateway.server.close({ reason: "PostgreSQL cron restart" }));
+      firstGateway.defer(() => disconnectGatewayClient(gateway.client));
       const job = await gateway.client.request<{ id: string }>("cron.add", {
         name: "retained-one-shot",
         agentId: "main",
@@ -397,7 +401,6 @@ describe.skipIf(!connection)("Gateway PostgreSQL shared-state bootstrap", () => 
         enqueued: true,
         run: { status: "ok", completionStatus: "succeeded", summary },
       });
-      expect(requests.some((body) => body.includes(prompt))).toBe(true);
       await expect(
         gateway.client.request("cron.runs", { id: job.id, runId: run.runId, limit: 1 }),
       ).resolves.toMatchObject({
@@ -407,12 +410,95 @@ describe.skipIf(!connection)("Gateway PostgreSQL shared-state bootstrap", () => 
         id: job.id,
         enabled: false,
       });
-      await resources.disposeAsync();
+      await firstGateway.disposeAsync();
       await closeStateDatabaseForTest();
       const anchor = await readAnchor(current);
       if (!anchor) {
         throw new Error("Gateway cron did not persist its PostgreSQL anchor");
       }
+      clearSecretsRuntimeSnapshot();
+      resetConfigRuntimeState();
+      resetDatabaseEngineSelectionForTest();
+      current.envVars.OPENCLAW_SKIP_CRON = "0";
+      current.applyEnv();
+
+      const probePrompt = "Report the automatic scheduler probe result.";
+      type BroadcastEvent = ReturnType<typeof toCronBroadcastEvent>;
+      const probeFinished = createDeferred<BroadcastEvent>();
+      const finishedEvents = new Map<string, BroadcastEvent>();
+      let probeId: string | undefined;
+      await using secondGateway = new AsyncDisposableStack();
+      const restarted = await startGatewayWithClient({
+        cfg: config,
+        configPath: current.configPath,
+        token: "postgres-bootstrap-synthetic-token",
+        clientDisplayName: "vitest-postgres-cron-restarted",
+        onEvent: ({ event, payload }) => {
+          if (event !== "cron") {
+            return;
+          }
+          const cronEvent = payload as BroadcastEvent;
+          if (cronEvent.action === "finished") {
+            finishedEvents.set(cronEvent.jobId, cronEvent);
+            if (cronEvent.jobId === probeId) {
+              probeFinished.resolve(cronEvent);
+            }
+          }
+        },
+      });
+      secondGateway.defer(() =>
+        restarted.server.close({ reason: "PostgreSQL cron restart proof complete" }),
+      );
+      secondGateway.defer(() => disconnectGatewayClient(restarted.client));
+      await restarted.server.startupSettled;
+      await expect(restarted.client.request("cron.status", {})).resolves.toMatchObject({
+        enabled: true,
+      });
+      // An automatically completed due job proves the new scheduler generation ran;
+      // startupSettled alone does not join the detached cron startup task.
+      const probe = await restarted.client.request<{ id: string }>("cron.add", {
+        name: "automatic-scheduler-probe",
+        agentId: "main",
+        enabled: true,
+        deleteAfterRun: false,
+        schedule: { kind: "at", at: new Date(Date.now() - 1_000).toISOString() },
+        sessionTarget: "isolated",
+        wakeMode: "now",
+        payload: { kind: "agentTurn", message: probePrompt },
+        delivery: { mode: "none" },
+      });
+      probeId = probe.id;
+      // The broadcast may precede the cron.add response on the same connection.
+      const alreadyFinished = finishedEvents.get(probe.id);
+      if (alreadyFinished) {
+        probeFinished.resolve(alreadyFinished);
+      }
+      expect(await withinTest(probeFinished.promise, signal)).toMatchObject({
+        jobId: probe.id,
+        status: "ok",
+        completionStatus: "succeeded",
+      });
+      await expect(
+        restarted.client.request("cron.runs", { id: probe.id, limit: 1 }),
+      ).resolves.toMatchObject({
+        entries: [{ status: "ok", completionStatus: "succeeded", summary }],
+      });
+      await expect(restarted.client.request("cron.get", { id: job.id })).resolves.toMatchObject({
+        id: job.id,
+        enabled: false,
+      });
+      const history = await restarted.client.request<{ entries: unknown[] }>("cron.runs", {
+        id: job.id,
+        limit: 10,
+      });
+      expect(history.entries).toEqual([
+        expect.objectContaining({ runId: run.runId, status: "ok", completionStatus: "succeeded" }),
+      ]);
+      await secondGateway.disposeAsync();
+      await closeStateDatabaseForTest();
+      expect(await readAnchor(current)).toEqual(anchor);
+      expect(requests.filter((body) => body.includes(prompt))).toHaveLength(1);
+      expect(requests.filter((body) => body.includes(probePrompt))).toHaveLength(1);
       const jobs = await queryRows<{ enabled: string; job_json: string }>(
         `SELECT enabled, job_json FROM ${quoteIdentifier(anchor.namespace)}.cron_jobs WHERE job_id = $1`,
         [job.id],

@@ -1075,6 +1075,8 @@ if (
 }
 const { isPostgresConformanceTestTarget } = postgresConformancePlan;
 const postgresConformancePaths = [
+  "package.json",
+  "pnpm-lock.yaml",
   ".github/actions/postgres-conformance/**",
   "**/*.postgres.test.ts",
   "src/state/openclaw-agent-*",
@@ -1122,6 +1124,7 @@ const postgresConformancePaths = [
   "src/cron/store/row-codec.ts",
   "src/cron/store/runtime-rows.kernel.ts",
   "src/cron/store/run-finalization.worker.ts",
+  "src/cron/store/run-queue.worker.ts",
   "src/cron/service.ts",
   "src/cron/service/ops-run.ts",
   "src/infra/database-engine/**",
