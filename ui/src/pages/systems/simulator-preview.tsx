@@ -24,7 +24,13 @@ function frameFrom(value: unknown): CaptureFrame {
   ) {
     throw new Error("Simulator returned an invalid frame. Reopen the preview.");
   }
-  return frame as CaptureFrame;
+  return {
+    sessionId: frame.sessionId,
+    sequence: frame.sequence,
+    jpegBase64: frame.jpegBase64,
+    width: frame.width,
+    height: frame.height,
+  };
 }
 
 async function invoke(
@@ -88,7 +94,7 @@ export function SimulatorPreview(props: {
   };
 
   const point = (event: PointerEvent) => {
-    const rect = (event.currentTarget as HTMLElement).getBoundingClientRect();
+    const rect = event.currentTarget.getBoundingClientRect();
     return {
       x: Math.min(1, Math.max(0, (event.clientX - rect.left) / rect.width)),
       y: Math.min(1, Math.max(0, (event.clientY - rect.top) / rect.height)),
