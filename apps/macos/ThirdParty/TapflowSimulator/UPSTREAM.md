@@ -5,12 +5,13 @@ The two Swift helpers derive from
 
 SHA-256:
 
-- `touch-helper.swift`: `3fcdaecfbf38bc8ba26097cddc37d82359bb8a590739bff5c635b176514d9d15`
+- `touch-helper.swift`: `6743fe633452c74859405fd5d2433b7ffa9d3bdf775ce642b9a57dfd6b74b8c8`
 - `screencapture-helper.swift`: `4267bdfaeebc433d074b6043db4be06b0f6f6cd978ddd957c0bb589b10833d7c`
 
 `screencapture-helper.swift` is byte-for-byte upstream. `touch-helper.swift`
-adds owner cleanup on stdin EOF and one-byte acknowledgments after touch cancel;
-these let the Mac app wait for a held touch to release before ending the helper.
+adds owner cleanup on stdin EOF, touch-cancel acknowledgments, and a distinct EOF
+fence; these let the Mac app wait for every queued touch to release before ending
+the helper.
 
 The helpers use SimulatorKit from the selected Xcode. The app launches both
 against one exact booted iOS device ID and ends them with the owning desktop

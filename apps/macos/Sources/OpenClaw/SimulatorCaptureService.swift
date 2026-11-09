@@ -51,10 +51,11 @@ final class SimulatorCaptureService {
     private var expiry: Task<Void, Never>?
     private var inputInProgress = false
     private var heldTouch = false
-    private var pendingCancelAckTarget: UInt64?
+    private var pasteboardTransaction: Task<Void, Error>?
+    private var stopTask: Task<Void, Never>?
 
     func start(executionId: String) async throws -> Frame {
-        guard self.reservationId == nil else { throw CaptureError.busy }
+        guard self.reservationId == nil, self.stopTask == nil else { throw CaptureError.busy }
         let reservation = UUID()
         self.reservationId = reservation
         self.executionId = executionId
@@ -245,34 +246,39 @@ final class SimulatorCaptureService {
             let before = try await Self.pasteboard("pbpaste", udid: udid)
             try validate()
             guard self.sessionId == sessionId else { throw CaptureError.staleSession }
-            var inputError: Error?
-            do {
-                _ = try await Self.pasteboard("pbcopy", udid: udid, input: Data(text.utf8))
-                try key(0x19, modifiers: 0x08)
-                try await Task.sleep(for: .milliseconds(100))
-            } catch {
-                inputError = error
-            }
-            do {
-                // Cleanup runs outside the canceled viewer task: revocation may
-                // interrupt input after pbcopy but must not leave its text behind.
-                let restoration = Task.detached {
-                    let current = try await Self.pasteboard("pbpaste", udid: udid)
-                    guard current == Data(text.utf8) else { return }
-                    _ = try await Self.pasteboard("pbcopy", udid: udid, input: before)
+            // Own the entire write/restore transaction before its first suspension.
+            // Closing the execution waits for this task before it acknowledges revoke.
+            let transaction = Task { @MainActor in
+                var inputError: Error?
+                do {
+                    _ = try await Self.pasteboard("pbcopy", udid: udid, input: Data(text.utf8))
+                    try key(0x19, modifiers: 0x08)
+                    try await Task.sleep(for: .milliseconds(100))
+                } catch {
+                    inputError = error
                 }
-                try await restoration.value
-            } catch {
-                let clearing = Task.detached {
-                    let current = try? await Self.pasteboard("pbpaste", udid: udid)
-                    if current == Data(text.utf8) {
-                        _ = try? await Self.pasteboard("pbcopy", udid: udid, input: Data())
+                do {
+                    let restoration = Task.detached {
+                        let current = try await Self.pasteboard("pbpaste", udid: udid)
+                        guard current == Data(text.utf8) else { return }
+                        _ = try await Self.pasteboard("pbcopy", udid: udid, input: before)
                     }
+                    try await restoration.value
+                } catch {
+                    let clearing = Task.detached {
+                        let current = try? await Self.pasteboard("pbpaste", udid: udid)
+                        if current == Data(text.utf8) {
+                            _ = try? await Self.pasteboard("pbcopy", udid: udid, input: Data())
+                        }
+                    }
+                    await clearing.value
+                    throw CaptureError.unavailable("device pasteboard could not be restored after typing")
                 }
-                await clearing.value
-                throw CaptureError.unavailable("device pasteboard could not be restored after typing")
+                if let inputError { throw inputError }
             }
-            if let inputError { throw inputError }
+            self.pasteboardTransaction = transaction
+            defer { self.pasteboardTransaction = nil }
+            try await transaction.value
         default:
             throw CaptureError.invalidInput
         }
@@ -290,23 +296,33 @@ final class SimulatorCaptureService {
     private func cancelHeldTouch(sessionId: String) {
         guard self.sessionId == sessionId, self.heldTouch else { return }
         self.heldTouch = false
-        self.pendingCancelAckTarget = (self.touchReady?.cancelCount ?? 0) + 1
         guard self.touchProcess?.isRunning == true else { return }
         _ = try? self.touchInputPipe?.fileHandleForWriting.write(contentsOf: Data([13, 0, 0, 0, 0, 0, 0, 0, 0]))
     }
 
     func stop(sessionId: String? = nil) async {
+        if let stopTask = self.stopTask {
+            await stopTask.value
+            return
+        }
         if let sessionId, self.sessionId != sessionId { return }
+        // Retain one lifecycle owner across suspension so a new capture cannot
+        // overlap HID release or device pasteboard restoration.
+        let task = Task { @MainActor in await self.finishStop() }
+        self.stopTask = task
+        await task.value
+    }
+
+    private func finishStop() async {
         if let activeSession = self.sessionId { self.cancelHeldTouch(sessionId: activeSession) }
-        let cancelAckTarget = self.pendingCancelAckTarget
         let touchProcess = self.touchProcess
         let captureProcess = self.captureProcess
         let touchInputPipe = self.touchInputPipe
         let touchAckPipe = self.touchAckPipe
         let touchReady = self.touchReady
+        let pasteboardTransaction = self.pasteboardTransaction
         self.reservationId = nil
         self.sessionId = nil
-        self.executionId = nil
         self.expiry?.cancel()
         self.expiry = nil
         self.capturePipe?.fileHandleForReading.readabilityHandler = nil
@@ -323,20 +339,25 @@ final class SimulatorCaptureService {
         self.frames = nil
         self.touchReady = nil
         self.heldTouch = false
-        self.pendingCancelAckTarget = nil
         try? touchInputPipe?.fileHandleForWriting.close()
-        if let cancelAckTarget {
-            let deadline = Date().addingTimeInterval(0.5)
-            while touchProcess?.isRunning == true,
-                  (touchReady?.cancelCount ?? 0) < cancelAckTarget,
-                  Date() < deadline
-            {
-                try? await Task.sleep(for: .milliseconds(10))
-            }
+        // EOF is ordered after every queued HID frame. An earlier cancel ack
+        // cannot stand in for the final release fence.
+        let deadline = Date().addingTimeInterval(1.0)
+        while touchProcess?.isRunning == true,
+              touchReady?.inputEOF != true,
+              Date() < deadline
+        {
+            try? await Task.sleep(for: .milliseconds(10))
         }
         touchAckPipe?.fileHandleForReading.readabilityHandler = nil
         if touchProcess?.isRunning == true { touchProcess?.terminate() }
         if captureProcess?.isRunning == true { captureProcess?.terminate() }
+        // A canceled request can still be finishing pbcopy/conditional restore.
+        // Revocation is complete only after that transaction settles.
+        _ = try? await pasteboardTransaction?.value
+        self.pasteboardTransaction = nil
+        self.executionId = nil
+        self.stopTask = nil
     }
 
     func stop(forExecutionId executionId: String) async {
@@ -456,9 +477,11 @@ final class SimulatorTouchReadiness: @unchecked Sendable {
     private var isReady = false
     private var stoppedReason: String?
     private var acknowledgments: UInt64 = 0
+    private var eofAcknowledged = false
     var ready: Bool { self.lock.withLock { self.isReady } }
     var failure: String? { self.lock.withLock { self.stoppedReason } }
     var cancelCount: UInt64 { self.lock.withLock { self.acknowledgments } }
+    var inputEOF: Bool { self.lock.withLock { self.eofAcknowledged } }
     func append(_ data: Data) {
         self.lock.withLock {
             self.output = String((self.output + String(decoding: data, as: UTF8.self)).suffix(500))
@@ -469,6 +492,9 @@ final class SimulatorTouchReadiness: @unchecked Sendable {
         self.lock.withLock { self.stoppedReason = reason }
     }
     func appendAck(_ data: Data) {
-        self.lock.withLock { self.acknowledgments += UInt64(data.filter { $0 == 1 }.count) }
+        self.lock.withLock {
+            self.acknowledgments += UInt64(data.filter { $0 == 1 }.count)
+            if data.contains(2) { self.eofAcknowledged = true }
+        }
     }
 }

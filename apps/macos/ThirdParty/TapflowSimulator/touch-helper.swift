@@ -553,7 +553,8 @@ func cancelCurrentTouch() {
 
 func exitAfterInputEOF() -> Never {
     cancelCurrentTouch()
-    FileHandle.standardOutput.write(Data([1]))
+    // EOF follows every queued frame; this distinct fence acknowledges final release.
+    FileHandle.standardOutput.write(Data([2]))
     exit(0)
 }
 

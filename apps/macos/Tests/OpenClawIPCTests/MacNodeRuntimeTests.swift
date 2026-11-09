@@ -31,13 +31,20 @@ struct MacNodeRuntimeTests {
         #expect(!frame.isFresh(at: frame.receivedAt.addingTimeInterval(4)))
     }
 
-    @Test func `Simulator HID cancel acknowledgment is tracked`() {
+    @Test func `Simulator HID close waits for EOF beyond delayed cancel acknowledgments`() {
         let readiness = SimulatorTouchReadiness()
         readiness.append(Data("touch-helper ready".utf8))
         #expect(readiness.ready)
         #expect(readiness.cancelCount == 0)
+        #expect(!readiness.inputEOF)
         readiness.appendAck(Data([1]))
         #expect(readiness.cancelCount == 1)
+        // An old cancel can acknowledge after a newer cancel has been queued.
+        readiness.appendAck(Data([1]))
+        #expect(readiness.cancelCount == 2)
+        #expect(!readiness.inputEOF)
+        readiness.appendAck(Data([2]))
+        #expect(readiness.inputEOF)
     }
 
     private actor ComputerProviderWorkerProbe: MacNodeHostWorking {
