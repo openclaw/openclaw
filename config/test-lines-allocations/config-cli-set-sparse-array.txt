@@ -1,0 +1,3 @@
+# config set out-of-range array index regression tests: leaf write, traversal,
+# append-at-length and empty-container append bounds for setAtPath.
+31
