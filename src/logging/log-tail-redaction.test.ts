@@ -225,3 +225,27 @@ describe("PEM tail context", () => {
     });
   });
 });
+
+it.each(["[1]", "[null]", '[1, null, "customer-[0-9]+"]', '"customer-[0-9]+"', '{"length": 1}'])(
+  "keeps configured log tail usable with malformed policy %s",
+  async (patterns) => {
+    const dir = tempDirs.make("openclaw-malformed-log-tail-");
+    const logFile = path.join(dir, "openclaw.log");
+    const configFile = path.join(dir, "openclaw.json");
+    const raw = "ghp_abcdefghijklmnopqrstuvwxyz123456 customer-1234567890\n";
+    await fs.writeFile(configFile, '{"logging":{"redactPatterns":' + patterns + "}}");
+    await fs.writeFile(logFile, raw);
+    setLoggerOverride({ file: logFile });
+    const tail = await withEnvAsync({ OPENCLAW_CONFIG_PATH: configFile }, () =>
+      readConfiguredLogTail({ limit: 10, maxBytes: 1024 }),
+    );
+    const text = tail.lines.join("\n");
+    expect(text).not.toContain("ghp_abcdefghijklmnopqrstuvwxyz123456");
+    expect(text).toContain("ghp_ab…3456");
+    if (patterns.startsWith("[1, null")) {
+      expect(text).toContain("custom…7890");
+    }
+    expect(tail.cursor).toBe(Buffer.byteLength(raw));
+    expect(await fs.readFile(logFile, "utf8")).toBe(raw);
+  },
+);
