@@ -1,0 +1,59 @@
+{
+  "startedAt": "2026-11-09T00:13:22.901Z",
+  "head": "97eba82c932180561354a9a042de65e2e020b44a",
+  "build": {
+    "version": "2026.11.1",
+    "commit": "97eba82c932180561354a9a042de65e2e020b44a",
+    "builtAt": null,
+    "release": false,
+    "commitAt": "2026-11-09T00:05:04.000Z",
+    "branch": "fix/login-gate-ime",
+    "dirty": false,
+    "buildId": "2026.11.1-97eba82c9321"
+  },
+  "indexSha256": "8ee26b243c92a94c22a3c54686200c44a83f17d8cc1d55397f646678ff5adfac",
+  "collectorSha256": "5da1c644e4fdcb2c82228f6dc6967da90827dc1e1dd1df8461e879701946974d",
+  "sourceHashes": {
+    "ui/src/components/login-gate-solid.tsx": "a3768bc368ff6573a18fbd54eaa49764cf95c7fb4cd3bad1d74f5f6c63e23105",
+    "ui/src/lib/ime.ts": "0218b26381a18f2ee579e399bc169653ddc040e0f47c50ac71c5c35e2ef837aa"
+  },
+  "status": "PASS",
+  "errors": [],
+  "limitations": [
+    "Real normally built production Control UI in native Chromium; official synthetic Gateway rejects the stale token and records every connect request. No live Gateway, session, credential or config changed.",
+    "Chromium CDP Input.imeSetComposition creates an actual native browser IME composition; Input.dispatchKeyEvent sends the composing Enter (keyCode 229) and the ordinary committed Enter. Event observation records actual isTrusted/isComposing without manufacturing flags.",
+    "This proves Chromium behavior only, not macOS/Windows IME or WebKit platform compatibility."
+  ],
+  "baseUrl": "http://127.0.0.1:44585/",
+  "served": {
+    "indexSha256": "8ee26b243c92a94c22a3c54686200c44a83f17d8cc1d55397f646678ff5adfac",
+    "entryPath": "./assets/index-7HbWHt-R.js",
+    "entrySha256": "725308ab29aa3142165aa7947265a0e98cebe1035f1a51f403f64b69b8a5b039"
+  },
+  "positiveControl": {
+    "status": "PASS",
+    "baseline": 1,
+    "connectCount": 2,
+    "delta": 1,
+    "urlValue": "ws://127.0.0.1:44585"
+  },
+  "beforeComposing": {
+    "value": "ws://127.0.0.1:44585draft",
+    "connectCount": 1
+  },
+  "composingEnter": {
+    "status": "PASS",
+    "baseline": 1,
+    "connectCount": 1,
+    "delta": 0,
+    "value": "ws://127.0.0.1:44585draft"
+  },
+  "committedEnter": {
+    "status": "PASS",
+    "connectCount": 2,
+    "delta": 1,
+    "value": "ws://127.0.0.1:44585"
+  },
+  "finishedAt": "2026-11-09T00:13:34.139Z",
+  "cleanup": "Closed all isolated browser contexts and owned preview server. Synthetic Gateway rejects the stale token; no real Gateway, session, credential or config was touched."
+}
