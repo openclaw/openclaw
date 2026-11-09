@@ -1,0 +1,3 @@
+# Forced plugin activation honors allowlist aliases and casing.
+# Exact net growth for this branch.
+49

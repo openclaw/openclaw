@@ -4,7 +4,11 @@ import { getRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isDeeplyFrozenPlainData } from "../shared/immutable-data.js";
 import { withBundledPluginEnablementCompat } from "./bundled-compat.js";
-import { createPluginActivationSource, normalizePluginsConfig } from "./config-state.js";
+import {
+  createPluginActivationSource,
+  normalizePluginId,
+  normalizePluginsConfig,
+} from "./config-state.js";
 import {
   getCurrentPluginMetadataSnapshot,
   isCurrentPluginMetadataSnapshotRuntimeGeneration,
@@ -45,14 +49,16 @@ export function withActivatedPluginIds(params: {
   }
   const originalAllow = params.config?.plugins?.allow ?? [];
   const useAllowlistDiscovery = originalAllow.length > 0;
-  const originalAllowSet = useAllowlistDiscovery ? new Set(originalAllow) : undefined;
+  const originalAllowSet = useAllowlistDiscovery
+    ? new Set(originalAllow.map((id) => normalizePluginId(id)))
+    : undefined;
   const allow = new Set(originalAllow);
   const entries = {
     ...params.config?.plugins?.entries,
   };
   let entryChanged = false;
   for (const pluginId of params.pluginIds) {
-    const normalized = pluginId.trim();
+    const normalized = normalizePluginId(pluginId.trim());
     if (!normalized) {
       continue;
     }
@@ -60,9 +66,11 @@ export function withActivatedPluginIds(params: {
       continue;
     }
     allow.add(normalized);
-    const existingEntry = entries[normalized];
+    const existingEntry =
+      entries[normalized] ??
+      Object.entries(entries).find(([key]) => normalizePluginId(key) === normalized)?.[1];
     const enabled = existingEntry?.enabled !== false;
-    entryChanged ||= existingEntry?.enabled !== enabled;
+    entryChanged ||= entries[normalized]?.enabled !== enabled;
     entries[normalized] = {
       ...existingEntry,
       enabled,

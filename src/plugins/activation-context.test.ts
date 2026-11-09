@@ -57,6 +57,33 @@ it.each<[string[], NonNullable<OpenClawConfig["plugins"]>]>([
   expect(withActivatedPluginIds({ config, pluginIds })).toEqual(expected);
   expect(config).toEqual(expected);
 });
+it("activates a canonical plugin when the allowlist differs only by case", () => {
+  const config = configWithAllow("Google");
+  expect(
+    withActivatedPluginIds({ config, pluginIds: ["google"] })?.plugins?.entries?.google?.enabled,
+  ).toBe(true);
+});
+
+it("activates a canonical plugin when the allowlist only names its alias", () => {
+  const config = configWithAllow("google-gemini-cli");
+  const activated = withActivatedPluginIds({ config, pluginIds: ["google"] });
+  expect(activated?.plugins?.entries?.google?.enabled).toBe(true);
+  expect(activated?.plugins?.allow).toContain("google");
+  expect(config.plugins?.entries?.google).toBeUndefined();
+});
+
+it("keeps an explicit alias disable when activating the canonical plugin id", () => {
+  const config: OpenClawConfig = {
+    plugins: {
+      allow: ["google-gemini-cli"],
+      entries: { "google-gemini-cli": { enabled: false } },
+    },
+  };
+  const activated = withActivatedPluginIds({ config, pluginIds: ["google"] });
+  expect(activated?.plugins?.entries?.google?.enabled).toBe(false);
+  expect(activated?.plugins?.entries?.["google-gemini-cli"]?.enabled).toBe(false);
+});
+
 it("passes the current manifest registry into activation auto-enable", () => {
   const manifestRegistry = makeRegistry([{ id: "openai", channels: [], providers: ["openai"] }]);
   const context = { config: {}, workspaceDir };
