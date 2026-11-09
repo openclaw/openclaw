@@ -57,10 +57,9 @@ const controlUiPerformanceBudgets = {
   // Initial shell plus shared route styles and the route's own stylesheet.
   chatBootCssRequests: 3,
   newBootCssRequests: 3,
-  // Coordinator-accepted transcript anchor (#194751): retained drift 27/44 px → 0/0,
-  // WebKit wheel input restored; desktop scroll CPU median/p95 -6.57%/-7.79%.
-  // Current-main 1,296,175 B + 140 B measured growth + 64 B build variance.
-  chatBootJsGzipBytes: 1_296_379,
+  // Coordinator-accepted completed-run anchor fix: keep cold overscan out of flow.
+  // Current-main 1,296,592 B + 159 B measured growth; no startup growth.
+  chatBootJsGzipBytes: 1_296_751,
   // Channels: raw -159 B, served +22 B; coordinator-accepted normalized trade +64 B.
   newBootJsGzipBytes: 803_250,
   startupCssRequests: 1,

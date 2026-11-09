@@ -62,7 +62,12 @@ if [[ "${OPENAI_API_KEY:-}" == "" ]]; then
 fi
 
 if [[ "$out" == "" ]]; then
-  base="${in%.*}"
+  base="$in"
+  name="${in##*/}"
+  # Strip a suffix only when the basename has an extension after any leading dotfile dot.
+  if [[ "$name" == *.* && "${name#.}" == *.* ]]; then
+    base="${in%.*}"
+  fi
   if [[ "$json_output" == "1" ]]; then
     out="${base}.json"
   else

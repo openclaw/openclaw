@@ -71,6 +71,7 @@ const { values } = parseArgs({
     profile: { type: "string", default: "local" },
     "idle-ms": { type: "string", default: "5000" },
     trace: { type: "boolean", default: false },
+    "server-profile": { type: "boolean", default: false },
     "no-rpc-observer": { type: "boolean", default: false },
     "observe-ms": { type: "string", default: "0" },
     "prepare-ms": { type: "string", default: "0" },
@@ -102,6 +103,7 @@ assert(["1", "4"].includes(values["cpu-throttle"]));
 if (values["first-run"]) {
   values["restart-gateway-per-sample"] = true;
 }
+assert(!values["server-profile"] || values["first-run"], "Server profiles require --first-run");
 assert(
   !values["empty-plugin-installation"] || values["first-run"],
   "Empty plugins require --first-run",
@@ -181,7 +183,10 @@ config.gateway = {
   trustedProxies: ["127.0.0.1"],
   controlUi: { enabled: true, root: path.resolve(values["bundle-dir"]), allowedOrigins: [url] },
 };
-config.diagnostics = { enabled: true };
+config.diagnostics = {
+  enabled: true,
+  ...(values["server-profile"] ? { flags: ["timeline", "profiler"] } : {}),
+};
 if (values["empty-plugin-installation"]) {
   values["first-run-plugins"] = true;
   // Activate the on-demand X UI without credentials or a configured account.
@@ -261,6 +266,15 @@ const env = createGatewayBenchEnv(path.join(root, "home"), configPath, {
     OPENCLAW_BENCH_RPC_PARENT: String(process.pid),
     OPENCLAW_BENCH_RPC_ENTRY: entry,
     OPENCLAW_GATEWAY_TOKEN: token,
+    // Fresh homes must not discover the checkout containing the proof directory.
+    ...(values["first-run"] ? { GIT_CEILING_DIRECTORIES: output } : {}),
+    ...(values["server-profile"]
+      ? {
+          OPENCLAW_DIAGNOSTICS_TIMELINE_PATH: path.join(output, "gateway-timeline.jsonl"),
+          OPENCLAW_DIAGNOSTICS: "timeline,profiler",
+          OPENCLAW_BENCH_SERVER_PROFILE: "1",
+        }
+      : {}),
   },
 });
 const seed = createHash("sha256").update("synthetic-rpc-payloads-device").digest();
@@ -444,7 +458,11 @@ const proxy = createServer((socket) => {
   up.connect(socket, target, () => {});
   down.connect(target, socket, () => {});
 });
-async function control(action: "begin" | "end") {
+async function control(
+  action: "begin" | "end" | "profile-start" | "profile-stop",
+  profilePath?: string,
+  captureProcesses = false,
+) {
   assert(child, "Gateway is not running");
   const activeChild = child;
   const id = randomUUID();
@@ -467,7 +485,14 @@ async function control(action: "begin" | "end") {
       }
     }
     activeChild.on("message", receive);
-    activeChild.send({ channel: "gateway-ui-rpc-measure", action, id, countOps: false });
+    activeChild.send({
+      channel: "gateway-ui-rpc-measure",
+      action,
+      id,
+      countOps: false,
+      ...(captureProcesses ? { captureProcesses: true } : {}),
+      ...(profilePath ? { path: profilePath } : {}),
+    });
   });
 }
 const selectors: Partial<Record<RouteId, string>> = {
@@ -628,14 +653,36 @@ async function installFirstRunReadiness(page: Page) {
   await page.addInitScript((traceLayout) => {
     const layouts: unknown[] = [];
     let previousLayout = "";
+    const frameIds = new WeakMap<Element, number>();
+    let nextFrameId = 0;
     function sampleLayout() {
       const shell = document.querySelector(".shell");
+      const main = shell?.querySelector("main.content");
+      if (main && !frameIds.has(main)) {
+        frameIds.set(main, ++nextFrameId);
+      }
       const wizard = document.querySelector(".model-setup-wizard");
       const dialog = wizard?.closest("dialog");
       const bounds = dialog?.getBoundingClientRect();
       const layout = {
         shell: shell?.className,
         columns: shell ? getComputedStyle(shell).gridTemplateColumns : null,
+        main: main
+          ? {
+              id: frameIds.get(main),
+              rect: (() => {
+                const rect = main.getBoundingClientRect();
+                return [rect.x, rect.y, rect.width, rect.height];
+              })(),
+            }
+          : null,
+        chat: [
+          ".chat-pane-cache__pane--active .chat-thread",
+          ".chat-pane-cache__pane--active textarea[aria-label='Chat composer']",
+        ].map((selector) => {
+          const rect = main?.querySelector(selector)?.getBoundingClientRect();
+          return { selector, rect: rect ? [rect.x, rect.y, rect.width, rect.height] : null };
+        }),
         wizard: wizard?.className,
         title: wizard?.querySelector("h2")?.textContent,
         dialog: bounds ? [bounds.x, bounds.y, bounds.width, bounds.height] : null,
@@ -702,6 +749,7 @@ const report: {
   profile: string;
   entry: string;
   rpcObserver: boolean;
+  serverProfile: boolean;
   restartGatewayPerSample: boolean;
   fixtureNow: number;
   observations: unknown[];
@@ -721,6 +769,7 @@ const report: {
   profile: values.profile,
   entry,
   rpcObserver: !values["no-rpc-observer"],
+  serverProfile: values["server-profile"],
   restartGatewayPerSample: values["restart-gateway-per-sample"],
   fixtureNow,
   observations: [],
@@ -907,7 +956,7 @@ try {
           selector: string,
         ) {
           activePhase = name;
-          await control("begin");
+          await control("begin", undefined, values["server-profile"] && name === "first-load");
           const documentBefore = await page.evaluate(() => performance.timeOrigin);
           await resetControlUiPageObserver(page);
           const providerStart = providerRequests.length;
@@ -919,6 +968,14 @@ try {
           }, selector);
           const startedAt = performance.now();
           let error: string | undefined;
+          const serverProfilePath =
+            values["server-profile"] &&
+            ["first-load", "first-message-reply", "second-message-reply"].includes(name)
+              ? path.join(output, `${engine}-${sample}-${name}.cpuprofile`)
+              : undefined;
+          if (serverProfilePath) {
+            await control("profile-start");
+          }
           try {
             await action();
             await page.waitForFunction(
@@ -933,6 +990,10 @@ try {
             );
           } catch (cause) {
             error = String(cause);
+          } finally {
+            if (serverProfilePath) {
+              await control("profile-stop", serverProfilePath);
+            }
           }
           await finishControlUiPageObserver(page);
           const readiness = await page.evaluate(() => {
@@ -949,9 +1010,7 @@ try {
             readiness.startedAt,
             readiness.readyAt ?? undefined,
           );
-          const records = await page.evaluate(
-            () => Reflect.get(window, "openclawRpcPayloads") ?? [],
-          );
+          const records = await page.evaluate(() => window.openclawRpcPayloads?.splice(0) ?? []);
           const resources = await page.evaluate(
             (start) =>
               performance
@@ -980,6 +1039,7 @@ try {
             cpuThrottle: Number(values["cpu-throttle"]),
             sample,
             name,
+            ...(serverProfilePath ? { serverProfilePath } : {}),
             readyMs: readiness.readyAt === null ? null : readiness.readyAt - readiness.startedAt,
             applicationMs:
               readiness.readyAt === null || readiness.inputAt === null
@@ -1006,11 +1066,6 @@ try {
           console.log(
             `${engine} ${name}: ${readiness.readyAt === null ? "unavailable" : (readiness.readyAt - readiness.startedAt).toFixed(1)} ms${error ? ` ERROR ${error}` : ""}`,
           );
-          await page.evaluate(() => {
-            if (window.openclawRpcPayloads) {
-              window.openclawRpcPayloads.length = 0;
-            }
-          });
           if (error) {
             throw new Error(error);
           }
@@ -1343,6 +1398,7 @@ async function compare() {
         ...(values["empty-plugin-installation"] ? ["--empty-plugin-installation"] : []),
         ...(values.screenshots ? ["--screenshots"] : []),
         ...(values.trace ? ["--trace"] : []),
+        ...(values["server-profile"] ? ["--server-profile"] : []),
         ...(values.stream ? ["--stream"] : []),
         ...(values["routes-only"] ? ["--routes-only"] : []),
         ...(values["cold-only"] ? ["--cold-only"] : []),

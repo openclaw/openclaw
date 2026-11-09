@@ -242,6 +242,67 @@ function scrollReader(viewport: HTMLElement, offset: number) {
   flush();
 }
 
+it.each([30, "estimate"] as const)(
+  "keeps retained content still before a new predecessor's first resize delivery (%s)",
+  async (size) => {
+    const messages = [
+      makeMessage("geometry-question", 1, { role: "user" }),
+      ...Array.from({ length: 260 }, (_, index) =>
+        makeMessage(`geometry-work-${index}`, index + 2, { phase: "commentary" }),
+      ),
+      makeMessage("geometry-answer", 262, { phase: "final_answer", stopReason: "stop" }),
+    ];
+    // One 120px question, three 480px fragments, then the viewport's 20px inset.
+    const offset = 120 + 3 * 480 + 20;
+    const { host, viewport, virtualizer } = await mountPane(
+      false,
+      480,
+      undefined,
+      offset,
+      messages,
+    );
+    const retained = requireElement(host, '.chat-virtual-row[data-index="4"]');
+    expect(host.querySelector('.chat-virtual-row[data-index="2"]')).toBeNull();
+    const style = document.createElement("style");
+    const height = size === "estimate" ? virtualizer.options.estimateSize(2) : size;
+    style.textContent = `.geometry-transcript-fixture .chat-virtual-row[data-index="2"] { height: ${height}px; }`;
+    host.append(style);
+    const before = retained.getBoundingClientRect().top;
+    const painted = vi.fn();
+    const frame = requestAnimationFrame(painted);
+    try {
+      scrollReader(viewport, offset - 1);
+      await Promise.resolve();
+      flush();
+      await Promise.resolve();
+      flush();
+      expect(
+        requireElement(host, '.chat-virtual-row[data-index="2"]').getBoundingClientRect().height,
+      ).toBe(height);
+      expect(requireElement(host, '.chat-virtual-row[data-index="4"]')).toBe(retained);
+      expect(painted).not.toHaveBeenCalled();
+      expect(viewport.scrollTop).toBe(offset - 1);
+      expect(Math.abs(retained.getBoundingClientRect().top - before - 1)).toBeLessThanOrEqual(1);
+      await settleLayout();
+      expect(
+        requireElement(host, '.chat-virtual-row[data-index="2"]').hasAttribute("data-prepared-row"),
+      ).toBe(false);
+    } finally {
+      cancelAnimationFrame(frame);
+    }
+  },
+);
+
+it("keeps ordinary incoming rows in normal flow", async () => {
+  const { host, viewport } = await mountPane(false, 120, undefined, 500);
+  scrollReader(viewport, 499);
+  await Promise.resolve();
+  flush();
+  expect(
+    requireElement(host, '.chat-virtual-row[data-index="2"]').hasAttribute("data-prepared-row"),
+  ).toBe(false);
+});
+
 it.each([
   { name: "interior", offset: 100, height: 1600, resize: false, expected: 100 },
   { name: "clamped", offset: 1400, height: 1600, resize: true, expected: 1200 },

@@ -249,9 +249,11 @@ async function keepsWindowControlsClear(page: Page, platform: "linux" | "windows
     [".content", 50],
     [".settings-sidebar__header", 220],
   ] as const) {
-    const bounds = await page.locator(selector).boundingBox();
-    expect(bounds).not.toBeNull();
-    await drag(page, bounds!.x + x, bounds!.y + 26);
+    const bounds = await page.locator(selector).evaluate((element) => {
+      const rect = element.getBoundingClientRect();
+      return { x: rect.left + element.clientLeft, y: rect.top + element.clientTop };
+    });
+    await drag(page, bounds.x + x, bounds.y + 26);
   }
   await expect
     .poll(async () => (await actions()).filter((action) => action === "drag"))
@@ -314,7 +316,10 @@ async function alignsNativeHeaders(
     const history = page.locator(".macos-titlebar-controls");
     const [bar, content, title] = await Promise.all([
       history.boundingBox(),
-      page.locator(".content").boundingBox(),
+      page.locator(".content").evaluate((element) => {
+        const bounds = element.getBoundingClientRect();
+        return { x: bounds.left + element.clientLeft };
+      }),
       page.locator(".chat-pane__crumbs").first().boundingBox(),
     ]);
     expect(bar!.x).toBe(content!.x + 12);
