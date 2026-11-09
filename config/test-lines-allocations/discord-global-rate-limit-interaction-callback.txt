@@ -1,0 +1,2 @@
+# Regression: initial interaction callbacks bypass a global pause while ordinary requests wait.
+44

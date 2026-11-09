@@ -246,6 +246,11 @@ export class RestScheduler<TData> {
   }
 
   private drainQueues(): void {
+    // New work or a response can introduce an earlier route deadline.
+    if (this.drainTimer) {
+      clearTimeout(this.drainTimer);
+      this.drainTimer = undefined;
+    }
     while (this.activeWorkers < MAX_CONCURRENT_WORKERS) {
       const next = this.takeNextQueuedRequest();
       if (!next.queued) {
@@ -268,9 +273,7 @@ export class RestScheduler<TData> {
     | { bucket: BucketState<TData>; queued: ScheduledRequest<TData>; waitMs?: never }
     | { bucket?: never; queued?: never; waitMs?: number } {
     const now = Date.now();
-    if (this.globalRateLimitUntil > now) {
-      return { waitMs: this.globalRateLimitUntil - now };
-    }
+    const globalWaitMs = Math.max(0, this.globalRateLimitUntil - now);
     for (const [key, bucket] of this.buckets) {
       if (bucket.active !== 0 || countPending(bucket) > 0) {
         continue;
@@ -297,18 +300,21 @@ export class RestScheduler<TData> {
       }
       for (const bucket of buckets) {
         const queue = bucket.pending[lane];
-        if (queue.length === 0 || bucket.active > 0) {
+        const queued = queue[0];
+        if (!queued || bucket.active > 0) {
           continue;
         }
-        const waitMs = this.getBucketWaitMs(bucket, now);
+        // Initial interaction callbacks are outside the bot-global limit,
+        // but still wait for their own route bucket.
+        const waitMs = Math.max(
+          this.getBucketWaitMs(bucket, now),
+          isInteractionCallbackPath(queued.path) ? 0 : globalWaitMs,
+        );
         if (waitMs > 0) {
           nextDelayMs = Math.min(nextDelayMs ?? waitMs, waitMs);
           continue;
         }
-        const queued = queue.shift();
-        if (!queued) {
-          continue;
-        }
+        queue.shift();
         queued.state = "dispatched";
         this.queuedByLane[lane] = Math.max(0, this.queuedByLane[lane] - 1);
         this.laneCursor = (this.laneCursor + laneOffset + 1) % laneSchedule.length;
@@ -365,4 +371,11 @@ function isGlobalRateLimit(parsed: unknown): boolean {
   return parsed && typeof parsed === "object" && "global" in parsed
     ? Boolean(parsed.global)
     : false;
+}
+
+const INTERACTION_CALLBACK_PATH_RE = /^\/interactions\/\d+\/[^/]+\/callback$/;
+
+function isInteractionCallbackPath(path: string): boolean {
+  const pathname = path.split("?")[0] ?? path;
+  return INTERACTION_CALLBACK_PATH_RE.test(pathname.toLowerCase());
 }
