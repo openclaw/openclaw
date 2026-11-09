@@ -528,15 +528,16 @@ describe("Muse native MSP harness", () => {
     const { harness, run, log } = setup(true);
     // Inject an invalid decision at the SDK boundary to exercise its real rejection;
     // the harness itself never attaches feedback to an approval choice.
-    const registration = vi
-      .spyOn(Session.prototype, "onApproval")
-      .mockImplementation(function (this: Session, handler) {
-        registration.mockRestore();
-        this.onApproval(async (request) => ({
-          ...(await handler(request)),
-          feedback: "Do not run this command",
-        }));
-      });
+    const registration = vi.spyOn(Session.prototype, "onApproval").mockImplementation(function (
+      this: Session,
+      handler,
+    ) {
+      registration.mockRestore();
+      this.onApproval(async (request) => ({
+        ...(await handler(request)),
+        feedback: "Do not run this command",
+      }));
+    });
     try {
       const result = await run({ prompt: "approval-settle" });
       expectFailure(
