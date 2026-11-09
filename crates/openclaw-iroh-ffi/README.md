@@ -127,8 +127,9 @@ ALPN handshake, identity, bi-stream data/FIN, positive/zero keep-alive inputs,
 interrupts, blocked read/accept/connect shutdown, and watcher termination. A focused
 unit test verifies seed-buffer erasure before either successful or failed validation.
 These are transport proofs, not enrollment, live relay denial, app UI, or mobile
-lifecycle proof. The path-filtered workflow runs on draft PRs and never uploads or
-publishes binary artifacts.
+lifecycle proof. The path-filtered workflow runs on draft PRs and retains the Apple
+XCFramework as a short-lived CI artifact for consumer validation. It does not
+publish packages, releases, or app builds.
 
 A future shared Rust core with the N-API crate may remove duplicated transport
 policy. It requires a separate migration of both adapters; no extraction is done here.
