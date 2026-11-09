@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ResearchFinding, ResearchSource } from "./contract.js";
-import { evidenceProblem, renderResearchDocument } from "./evidence.js";
+import { evidenceProblem, renderResearchDocument, researchPlainText } from "./evidence.js";
 
 const quote = "In 2026, Alpha reported 12 km and Beta reported 4 km of river restoration.";
 const sources: ResearchSource[] = [
@@ -63,5 +63,22 @@ describe("research numerical evidence", () => {
     expect(report).not.toContain("\n- Fake");
     expect(report).not.toMatch(/(?<!\\)<img/u);
     expect(report).toContain("Measured value.");
+  });
+  it.each([
+    { budget: "straddles", statement: `${"a".repeat(999)}\u{1f600}`, expected: "a".repeat(999) },
+    {
+      budget: "ends exactly at",
+      statement: `${"a".repeat(998)}\u{1f600}`,
+      expected: `${"a".repeat(998)}\u{1f600}`,
+    },
+  ])("keeps an astral character whole when it $budget the budget", ({ statement, expected }) => {
+    expect(researchPlainText(statement)).toBe(expected);
+    const { report } = renderResearchDocument(
+      "Question",
+      [{ ...finding(), statement, evidence: [] }],
+      [],
+      [],
+    );
+    expect(report).toContain(`- ${expected}\n`);
   });
 });

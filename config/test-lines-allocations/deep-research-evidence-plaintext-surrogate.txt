@@ -1,0 +1,7 @@
+# deep-research text: keep astral characters whole and finding identity distinct
+# researchPlainText truncated on raw UTF-16 units, so an astral character straddling the 1,000-unit
+# budget left a lone surrogate in the rendered report and in portable-export source titles. The same
+# helper also keyed finding identity, so display truncation and identity normalization are now split.
+# Net +43 test lines: evidence.test.ts boundary it.each (+17), and one portable-engine case that keeps
+# findings differing only past the display cap (+26).
+43

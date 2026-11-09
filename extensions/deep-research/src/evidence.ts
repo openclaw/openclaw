@@ -1,3 +1,4 @@
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { ResearchFinding, ResearchSource } from "./contract.js";
 
 /** Mechanical provenance is independent of the fallible model's support verdict. */
@@ -62,9 +63,18 @@ export function evidenceProblem(
   return undefined;
 }
 
+function normalizeResearchText(value: string): string {
+  return value.replace(/\s+/gu, " ").trim();
+}
+
 /** Bound untrusted labels before prompts; source passages remain byte-for-byte evidence. */
 export function researchPlainText(value: string, maxLength = 1_000): string {
-  return value.replace(/\s+/gu, " ").trim().slice(0, maxLength);
+  return truncateUtf16Safe(normalizeResearchText(value), maxLength);
+}
+
+/** Finding identity keeps the whole statement: the display cap must not merge two findings. */
+export function researchFindingKey(statement: string): string {
+  return normalizeResearchText(statement);
 }
 
 /** Only the renderer may emit citation markers or Markdown structure. */
